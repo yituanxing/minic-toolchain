@@ -706,6 +706,38 @@ GNU/MiniC x86 native 均 exit42）、
 GNU/O2 native 和不连续掩码负例）。仍未运行五目标 Linux
 完整 ELF/QEMU 或联合验收。
 
+## 批次 C22：Core GNU Inline ASM 入口、目标合同与 Structured 效应（仅审读）
+
+**基线：** C21 本地 `296dddb`，2026-11-01。本批全文深读
+Core **4** 个生产文件、原始合计 **1,502 行**：
+`core_lower_asm_internal.h`（102）、`core_lower_asm.c`（322）、
+`core_lower_asm_target.c`（237）、`core_lower_asm_structured.c`（841）。
+累计 **126/339** 全文深读：Frontend **69/69**、Compiler
+**11/11**、Core **46/48**、Target **0/211**；Core 余 **2**、
+Target **211**，合计 **213/339** 待全文深读。
+
+| 接口与所有权边界 | 审读结论 |
+| --- | --- |
+| `core_lower_asm_internal.h` | 只有 Common GNU operand 归一化、Core effect publication 和各 ordered probe 的私有接口；`MINIC_CORE_IMMEDIATE_ASM_LIMIT`、`MINIC_CORE_IMMEDIATE_TEXT_LIMIT` 是固定 Core 输入边界，不是目标 ISA opcode/寄存器表。**KEEP(private effect admission seam)**。 |
+| `core_lower_asm.c` | 先拒绝 output+input 超 Core operand 容量，再按 target register contract、target-required gate、CSR immediate、structured role/goto、atomic、mixed memory、readwrite、empty barrier 的严格 first-claim-wins 顺序处理。最后只接受没有 operand/label/register clobber 的 nonempty volatile opaque ASM。**KEEP(dispatch priority + fail-closed target gate)**。 |
+| Target-qualified contract | `minic_backend_qualify_inline_asm` 和 `minic_backend_requires_qualified_input_asm` 保留目标语言/指令来源；Common Core 用 source integer constant fact 转成 typed IR，但机器端仍检查 register allocation 与 immediate encoding。`asm goto` relocation 不能被普通 SSA scalar 路径吞掉。**KEEP(source/target provenance separation)**。 |
+| `core_lower_asm_target.c` effect commit | 固定寄存器是 **单条 ASM operand placement**，不是 C local 终身物理寄存器保留；纯 `OBJECT_ADDRESS` 才可跨 CFG 重新物化，load/arithmetic/volatile 不能重放。输出与 `+m` readwrite 需显式 memory effect。`source_inline_asm_id` 与 `operand_plan` 分别保留 source contract 与 typed effect。**KEEP(exact ownership + effect identity)**。 |
+| `core_lower_asm_structured.c` preflight | Generic `=r`/`+r`/`=m`/`+m`/`+A`、`r`/`rJ`/`Jr`/`rK`/`m` 先完全分类和 normalize，再产生 Core 值；不认识的 shape 返回未认领。`asm goto` 分 resolved link-time text 和 deferred source ID，二者不可折叠成任意 runtime SSA。**KEEP(no-mutation preflight + deferred immediates)**。 |
+| CSR scalar local tail rewind | 只对同一个 output local、精确 7/8 instruction 尾段、全局 InstructionId/ValueId 连续且 definition 一一相符时撤回死的常量初始化；否则原样不动。这里直接操作 Core function instruction/value counts，和通用 DCE/CSE 的边界高度耦合，不能借清理泛化。**NEEDS_PROOF(rewind transaction and source-local identity)**。 |
+| Debug 与日志消费者 | `MINIC_ASM_BATCH_TRACE`、`MINIC_ASM_FRONTIER_TRACE`、`MINIC_LOCAL_FACT_TRACE` 输出在若干 Linux 源达成率和 regress probe 中被消费；日志位置（例如所有拒绝路径之后才打印 unclaimed）是诊断接口的一部分。**NEEDS_PROOF(trace compatibility)**。 |
+
+**C22 生产源码 +0/-0，净 0 行**，C1～C22 纯清理累计
+**净 -301 行**。没有调整 first-claim-wins、rewind 或跨 ISA
+operand class，留给独立行为证明/正式重构。
+
+**验证 PASS：** `make MODE=release CFLAGS=-Werror -j8
+check-asm-operand-plan`（GNU early clobber 五 ISA、target-qualified
+source identity、x86 futex 原生 exit42、非法 suffix fail-closed、
+LoongArch frontier census）；`check-x86-linux-control-state`、
+`check-linux-three-arch-trap-state`（x86 / AArch64 / LoongArch
+source-to-Core trap/control-state 和 asm-goto reentry）。本批仅审读，
+不计五目标 ELF/QEMU 或联合验收。
+
 ## 后续批次进度规则
 
 每批发布：当前 HEAD、源文件逐目录覆盖（明确深读与只扫的区别）、
