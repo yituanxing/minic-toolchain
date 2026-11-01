@@ -17,6 +17,22 @@ is neither required nor invoked as the cleanup target.
 error exit. A0 exact-head and remote build results must be reported
 separately from the new fixture's local compile result.
 
+### 2026-11-01 macro expansion single-owner failure cleanup
+
+`minias_macro_expand` already owned one `done:` release path for
+`MiniAsSourceLine`, temporary macro-vararg storage and the copied argument
+buffer. Twelve scattered early-return error sites redundantly released
+some subset of those buffers. All pre-expansion failures now branch to the
+same already-established exit, including allocation failure, malformed
+keyword/vararg, required argument, percent evaluation and expansion-depth
+checks. No change to successful expansion, macro registry lifetime, SourceSite
+identity, recursion limit or target parsing.
+
+A mandatory A0 fixture verifies six representative negative paths and the
+absence of partially emitted ELF files, complementing existing positive GNU
+macro tests and optional sanitizer probes. The full strict GNU semantic
+corpus is not part of this cleanup gate.
+
 ## Current refactor dashboard — 2026-11-01 (exact-head recovery and live-path audit)
 
 ### 2026-11-01 Source collector single-pass de-duplication (local batch)

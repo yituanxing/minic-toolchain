@@ -18,6 +18,7 @@ bash tests/assembler/probe-large-expression-gnu.sh
 bash tests/assembler/probe-mcexpr-affine-ast-gnu.sh
 bash tests/assembler/probe-shared-dwarf-leb.sh
 bash tests/assembler/probe-string-decode-cleanup.sh
+bash tests/assembler/probe-macro-failure-cleanup.sh
 bash tests/assembler/probe-common-dwarf-view-size-gnu.sh
 bash tests/assembler/probe-minias-atomic-output.sh
 bash tests/assembler/probe-mc-deferred-shift-gnu.sh

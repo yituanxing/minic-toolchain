@@ -1140,7 +1140,7 @@ static bool minias_macro_expand(MiniAs *as,
 
     if (copy == NULL) {
         minias_set_error(as, "out-of-memory:macro-arguments");
-        return false;
+        goto done;
     }
     supplied = split_macro_arguments(copy,
                                      tokens,
@@ -1150,9 +1150,7 @@ static bool minias_macro_expand(MiniAs *as,
     if(supplied==SIZE_MAX || (!has_vararg && supplied>macro->param_count)) {
         minias_set_error(as, "bad-macro-arguments:%s:line=%zu",
                          macro->name, line);
-        free(vararg_buffer);
-        free(copy);
-        return false;
+        goto done;
     }
     /* GAS .altmacro evaluates %<absolute expression> at MACRO
      * invocation time. This is required by ARM64 fpsimdmacros.h's
@@ -1170,7 +1168,7 @@ static bool minias_macro_expand(MiniAs *as,
                !minias_evaluate_absolute_expression(as,expression,&value)) {
                 minias_set_error(as,"bad-altmacro-percent:%s:line=%zu",
                                  tokens[i],line);
-                free(copy);return false;
+                goto done;
             }
             (void)snprintf(evaluated[i],sizeof(evaluated[i]),"%lld",
                            (long long)value);
@@ -1181,7 +1179,7 @@ static bool minias_macro_expand(MiniAs *as,
         if(!minias_grow_array((void **)&vararg_buffer,&vararg_capacity,
                               sizeof(*vararg_buffer),1U)) {
             minias_set_error(as,"out-of-memory:macro-vararg");
-            free(vararg_buffer);free(copy);return false;
+            goto done;
         }
         vararg_buffer[0]='\0';
     }
@@ -1209,7 +1207,7 @@ static bool minias_macro_expand(MiniAs *as,
             if(!matched || assigned[index]) {
                 minias_set_error(as,"bad-macro-keyword:%s:%s:line=%zu",
                                  macro->name,key,line);
-                free(vararg_buffer);free(copy);return false;
+                goto done;
             }
             {
                 const char *item=strip_macro_argument_quotes(
@@ -1230,7 +1228,7 @@ static bool minias_macro_expand(MiniAs *as,
             if(assigned[index] && values[index]!=vararg_buffer) {
                 minias_set_error(as,"duplicate-macro-vararg:%s:line=%zu",
                                  macro->name,line);
-                free(vararg_buffer);free(copy);return false;
+                goto done;
             }
             /* .altmacro's %expression can be longer than the source
              * spelling; never size substituted output from strlen(args).
@@ -1239,13 +1237,13 @@ static bool minias_macro_expand(MiniAs *as,
             if(vararg_length>SIZE_MAX-1U-separator ||
                len>SIZE_MAX-1U-separator-vararg_length) {
                 minias_set_error(as,"macro-vararg-too-long:line=%zu",line);
-                free(vararg_buffer);free(copy);return false;
+                goto done;
             }
             required=vararg_length+separator+len+1U;
             if(!minias_grow_array((void **)&vararg_buffer,&vararg_capacity,
                                   sizeof(*vararg_buffer),required)) {
                 minias_set_error(as,"out-of-memory:macro-vararg");
-                free(vararg_buffer);free(copy);return false;
+                goto done;
             }
             if(separator)vararg_buffer[vararg_length++]=',';
             memcpy(vararg_buffer+vararg_length,item,len+1U);
@@ -1258,7 +1256,7 @@ static bool minias_macro_expand(MiniAs *as,
             if(positional>=macro->param_count) {
                 minias_set_error(as,"too-many-macro-arguments:%s:line=%zu",
                                  macro->name,line);
-                free(vararg_buffer);free(copy);return false;
+                goto done;
             }
             index=positional++;
             {
@@ -1274,22 +1272,18 @@ static bool minias_macro_expand(MiniAs *as,
            macro->params[i].required) {
             minias_set_error(as,"missing-macro-argument:%s:%s:line=%zu",
                              macro->name,macro->params[i].name,line);
-            free(vararg_buffer);free(copy);return false;
+            goto done;
         }
     if (as->source->macro_expansion_depth >= 64U) {
         minias_set_error(as, "macro-expansion-depth:%s:line=%zu",
                          macro->name, line);
-        free(vararg_buffer);
-        free(copy);
-        return false;
+        goto done;
     }
     if (body_count != 0U) {
         expanded = calloc(body_count, sizeof(*expanded));
         if (expanded == NULL) {
             minias_set_error(as, "out-of-memory:macro-expanded-lines");
-            free(vararg_buffer);
-            free(copy);
-            return false;
+            goto done;
         }
     }
     counter = as->source->macro_expansion_counter++;
