@@ -2,6 +2,37 @@
 
 ## Current refactor dashboard — 2026-11-01 (exact-head recovery and live-path audit)
 
+### 2026-11-01 Source collector single-pass de-duplication (local batch)
+
+`process_source_range` previously copied, stripped comments from and trimmed
+each ordinary active source line **twice**: one allocation/pass for macro
+opener/closer classification, then another for `.rept/.rep/.irp/.endr`.
+The two helper implementations and their duplicated preprocessing were
+replaced by one `classify_collector_line` with independently selectable
+macro and repeat grammar checks. Ordinary lines do one lexical preparation;
+nested macro and nested repeat delimiters still select only their respective
+grammar, as does the inline semicolon-repeat collector. Macro classification
+retains priority over repeat classification, including its original failure
+priority. Macro args remain bounded to 1024 bytes and repeat args to 256;
+the latter still recognizes leading `LABEL:` positions and GNU `.rep`.
+No conditional frame, forced-site graph or codegen path was removed.
+
+**Production delta:** `source_expansion.c` +104/−135 (net −31); tests
++33/−1; documentation separate. Local Release `-Werror`, A0 **30/30**,
+GNU macro lifetime/optional data, disabled `.if` collector, source `.end`,
+SourceContext composite, stable replay binding, and x86/RV SourceGraph
+replay/branch GNU bytes and symbols **PASS**. The extended skipped-collector
+probe checks labelled `.rep` against host GNU, assembles the same Common-only
+source under all four Target profiles, and rejects overlong macro and repeat
+arguments without producing an object. The optional ASan/LSan mode
+was **NOT RUN**, nor were full Linux/Image/QEMU or strict semantic corpus.
+
+The additional 2,206-line ELF Writer/MCLayout/MCEncodeResult and four-Target
+TargetOps read-only re-audit found **no proven removable whole pipeline**:
+ELF liveness/writing, layout fixed-point/validation and target encoding all
+retain different live duties. Do not count that inspection as a deletion or
+pretend the remaining P04/P05 ownership seams are solved.
+
 ### 2026-11-01 SourceGraph dead state and module-private API cleanup
 
 The SourceGraph/SourceContext call-chain review found no removable second

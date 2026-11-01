@@ -460,44 +460,102 @@ static char *substitute_irp_parameter(MiniAs *as,
 enum {
     MINIAS_MACRO_NONE = 0,
     MINIAS_MACRO_BEGIN = 1,
-    MINIAS_MACRO_END = 2
+    MINIAS_MACRO_END = 2,
+    MINIAS_REPEAT_REPT = 3,
+    MINIAS_REPEAT_ENDR = 4,
+    MINIAS_REPEAT_IRP = 5,
+    MINIAS_COLLECTOR_MACRO_ERROR = -1,
+    MINIAS_COLLECTOR_REPEAT_ERROR = -2
 };
 
-static int classify_macro_line(const MiniAs *as, const char *text,
-                               char *argument,
-                               size_t argument_size) {
+/* Macro and repeat collection use different GNU grammars, but both need the
+ * same lexical comment/whitespace pass. A non-NULL argument buffer selects
+ * each grammar; ordinary source checks macro first, nested blocks only their
+ * own delimiter type. Keep their separate truncation/error contracts. */
+static int classify_collector_line(const MiniAs *as, const char *text,
+                                   char *macro_argument, size_t macro_size,
+                                   char *repeat_argument, size_t repeat_size,
+                                   size_t *label_prefix_length) {
     char *copy = minias_strdup(text);
     char *trimmed;
     const char *rest = NULL;
     int kind = MINIAS_MACRO_NONE;
 
-    if (argument_size != 0U) {
-        argument[0] = '\0';
-    }
-    if (copy == NULL) {
-        return -1;
-    }
+    if(macro_argument!=NULL && macro_size!=0U)macro_argument[0]='\0';
+    if(repeat_argument!=NULL && repeat_size!=0U)repeat_argument[0]='\0';
+    if(label_prefix_length!=NULL)*label_prefix_length=0U;
+    if (copy == NULL)
+        return macro_argument!=NULL ? MINIAS_COLLECTOR_MACRO_ERROR :
+                                      MINIAS_COLLECTOR_REPEAT_ERROR;
     strip_comment(copy, as->target);
     trimmed = minias_trim(copy);
-    if (strncmp(trimmed, ".macro", 6U) == 0 &&
-        (trimmed[6] == '\0' || isspace((unsigned char)trimmed[6]))) {
-        rest = trimmed + 6;
-        kind = MINIAS_MACRO_BEGIN;
-    } else if (strcmp(trimmed, ".endm") == 0 ||
-               strcmp(trimmed, ".endmacro") == 0) {
-        kind = MINIAS_MACRO_END;
-    }
-    if (rest != NULL) {
-        while (*rest == ' ' || *rest == '\t') {
-            ++rest;
+    if(macro_argument!=NULL) {
+        if (strncmp(trimmed, ".macro", 6U) == 0 &&
+            (trimmed[6] == '\0' || isspace((unsigned char)trimmed[6]))) {
+            rest = trimmed + 6;
+            kind = MINIAS_MACRO_BEGIN;
+        } else if (strcmp(trimmed, ".endm") == 0 ||
+                   strcmp(trimmed, ".endmacro") == 0) {
+            kind = MINIAS_MACRO_END;
         }
-        if (argument_size != 0U) {
-            int written = snprintf(argument, argument_size, "%s", rest);
-            if (written < 0 || (size_t)written >= argument_size) {
-                free(copy);
-                return -1;
+        if (rest != NULL) {
+            while (*rest == ' ' || *rest == '\t') ++rest;
+            if (macro_size != 0U) {
+                int written = snprintf(macro_argument,macro_size,"%s",rest);
+                if (written < 0 || (size_t)written >= macro_size) {
+                    free(copy);
+                    return MINIAS_COLLECTOR_MACRO_ERROR;
+                }
             }
         }
+    }
+
+    if(kind==MINIAS_MACRO_NONE && repeat_argument!=NULL) {
+        char *cursor=trimmed;
+        rest=NULL;
+        /* GNU permits LABEL: before .rept/.irp; macro openers do not
+         * recognize a leading label. Keep its original byte offset. */
+        for(;;) {
+            char *end=cursor;
+            while(*end && !isspace((unsigned char)*end) && *end!=':')
+                ++end;
+            if(*end!=':' || end==cursor)break;
+            cursor=end+1U;
+            while(isspace((unsigned char)*cursor))++cursor;
+        }
+        if(cursor!=trimmed) {
+            if(label_prefix_length)
+                *label_prefix_length=(size_t)(cursor-copy);
+            trimmed=cursor;
+        }
+        if (strncmp(trimmed, ".rept", 5U) == 0 &&
+            (trimmed[5] == '\0' || isspace((unsigned char)trimmed[5]))) {
+            rest=trimmed+5;
+            kind=MINIAS_REPEAT_REPT;
+        } else if (strncmp(trimmed, ".rep", 4U) == 0 &&
+                   (trimmed[4] == '\0' || isspace((unsigned char)trimmed[4]))) {
+            /* GNU .rep is a lexical alias for .rept, not another engine. */
+            rest=trimmed+4;
+            kind=MINIAS_REPEAT_REPT;
+        } else if (strncmp(trimmed, ".irp", 4U) == 0 &&
+                   (trimmed[4] == '\0' || isspace((unsigned char)trimmed[4]))) {
+            rest=trimmed+4;
+            kind=MINIAS_REPEAT_IRP;
+        } else if (strcmp(trimmed, ".endr") == 0) {
+            kind=MINIAS_REPEAT_ENDR;
+        }
+        if(rest!=NULL) {
+            while(*rest==' ' || *rest=='\t')++rest;
+            if(repeat_size!=0U) {
+                int written=snprintf(repeat_argument,repeat_size,"%s",rest);
+                if(written<0 || (size_t)written>=repeat_size) {
+                    free(copy);
+                    return MINIAS_COLLECTOR_REPEAT_ERROR;
+                }
+            }
+        }
+        if(label_prefix_length && kind!=MINIAS_REPEAT_REPT &&
+           kind!=MINIAS_REPEAT_IRP)*label_prefix_length=0U;
     }
     free(copy);
     return kind;
@@ -1334,92 +1392,6 @@ bool minias_source_try_control_directive(MiniAs *as,const char *op,
     return true;
 }
 
-enum {
-    MINIAS_REPEAT_NONE = 0,
-    MINIAS_REPEAT_REPT = 1,
-    MINIAS_REPEAT_ENDR = 2,
-    MINIAS_REPEAT_IRP = 3
-};
-
-static int classify_repeat_line(const MiniAs *as, const char *text,
-                                char *argument,
-                                size_t argument_size,
-                                size_t *label_prefix_length) {
-    char *copy;
-    char *trimmed;
-    const char *rest = NULL;
-    int kind = MINIAS_REPEAT_NONE;
-
-    if (argument_size != 0U) {
-        argument[0] = '\0';
-    }
-    copy = minias_strdup(text);
-    if (copy == NULL) {
-        return -1;
-    }
-    strip_comment(copy, as->target);
-    trimmed = minias_trim(copy);
-    if(label_prefix_length)*label_prefix_length=0U;
-    /* GNU allows LABEL: .irp/.rept ...; classify the opener after
-     * its lexical labels, while preserving their source offset so
-     * the shared label handler binds them once, BEFORE expansion. */
-    {
-        char *cursor=trimmed;
-        for(;;) {
-            char *end=cursor;
-            while(*end && !isspace((unsigned char)*end) && *end!=':')
-                ++end;
-            if(*end!=':' || end==cursor)break;
-            cursor=end+1U;
-            while(isspace((unsigned char)*cursor))++cursor;
-        }
-        if(cursor!=trimmed) {
-            if(label_prefix_length)
-                *label_prefix_length=(size_t)(cursor-copy);
-            trimmed=cursor;
-        }
-    }
-
-    if (strncmp(trimmed, ".rept", 5U) == 0 &&
-        (trimmed[5] == '\0' || isspace((unsigned char)trimmed[5]))) {
-        rest = trimmed + 5;
-        kind = MINIAS_REPEAT_REPT;
-    } else if (strncmp(trimmed, ".rep", 4U) == 0 &&
-               (trimmed[4] == '\0' || isspace((unsigned char)trimmed[4]))) {
-        /* GNU .rep is the same text repetition directive as .rept.
-         * Resolve only the lexical alias; Common IRP/repetition owns
-         * balanced nesting, numeric evaluation and source fragments. */
-        rest = trimmed + 4;
-        kind = MINIAS_REPEAT_REPT;
-    } else if (strncmp(trimmed, ".irp", 4U) == 0 &&
-               (trimmed[4] == '\0' ||
-                isspace((unsigned char)trimmed[4]))) {
-        rest = trimmed + 4;
-        kind = MINIAS_REPEAT_IRP;
-    } else if (strcmp(trimmed, ".endr") == 0) {
-        kind = MINIAS_REPEAT_ENDR;
-    }
-
-    if (rest != NULL) {
-        while (*rest == ' ' || *rest == '\t') {
-            ++rest;
-        }
-        if (argument_size != 0U) {
-            int written = snprintf(argument, argument_size, "%s", rest);
-            if (written < 0 || (size_t)written >= argument_size) {
-                free(copy);
-                return -1;
-            }
-        }
-    }
-
-    if(label_prefix_length &&
-       kind!=MINIAS_REPEAT_REPT && kind!=MINIAS_REPEAT_IRP)
-        *label_prefix_length=0U;
-    free(copy);
-    return kind;
-}
-
 static char *find_statement_separator(char *text) {
     char quote = '\0';
     bool escaped = false;
@@ -1759,7 +1731,6 @@ static bool process_source_range(MiniAs *as,
         MiniAsStableSiteId line_site;
         bool inline_handled=false;
         char macro_argument[1024];
-        int macro_kind;
         char argument[256];
         size_t repeat_label_prefix=0U;
         int kind;
@@ -1784,28 +1755,33 @@ static bool process_source_range(MiniAs *as,
             continue;
         }
 
-        macro_kind=classify_macro_line(as,lines[i].text,
-                                       macro_argument,sizeof(macro_argument));
-        if (macro_kind < 0) {
-            minias_set_error(as, "out-of-memory:macro-classify");
+        kind=classify_collector_line(as,lines[i].text,
+                                     macro_argument,sizeof(macro_argument),
+                                     argument,sizeof(argument),
+                                     &repeat_label_prefix);
+        if (kind < 0) {
+            minias_set_error(as, "%s",kind==MINIAS_COLLECTOR_MACRO_ERROR ?
+                             "out-of-memory:macro-classify" :
+                             "out-of-memory:repeat-classify");
             return false;
         }
-        if (macro_kind == MINIAS_MACRO_END) {
+        if (kind == MINIAS_MACRO_END) {
             minias_set_error(as,
                              "unmatched-directive:.endm:line=%zu",
                              lines[i].line);
             return false;
         }
-        if (macro_kind == MINIAS_MACRO_BEGIN) {
+        if (kind == MINIAS_MACRO_BEGIN) {
             size_t j = i + 1U;
             size_t depth = 1U;
 
             while (j < end && depth != 0U) {
                 char nested_argument[1024];
                 int nested_kind =
-                    classify_macro_line(as, lines[j].text,
-                                        nested_argument,
-                                        sizeof(nested_argument));
+                    classify_collector_line(as,lines[j].text,
+                                            nested_argument,
+                                            sizeof(nested_argument),
+                                            NULL,0U,NULL);
                 if (nested_kind < 0) {
                     minias_set_error(as, "out-of-memory:macro-classify");
                     return false;
@@ -1834,14 +1810,6 @@ static bool process_source_range(MiniAs *as,
             continue;
         }
 
-        kind = classify_repeat_line(as, lines[i].text,
-                                        argument,
-                                        sizeof(argument),
-                                        &repeat_label_prefix);
-        if (kind < 0) {
-            minias_set_error(as, "out-of-memory:repeat-classify");
-            return false;
-        }
         if (kind == MINIAS_REPEAT_ENDR) {
             minias_set_error(as,
                              "unmatched-directive:.endr:line=%zu",
@@ -1858,9 +1826,9 @@ static bool process_source_range(MiniAs *as,
             while (j < end && depth != 0U) {
                 char nested_argument[256];
                 int nested_kind =
-                    classify_repeat_line(as, lines[j].text,
-                                         nested_argument,
-                                         sizeof(nested_argument),NULL);
+                    classify_collector_line(as,lines[j].text,
+                                            NULL,0U,nested_argument,
+                                            sizeof(nested_argument),NULL);
                 if (nested_kind < 0) {
                     minias_set_error(as, "out-of-memory:repeat-classify");
                     return false;
@@ -1950,7 +1918,8 @@ static bool process_inline_repeat_line(MiniAs *as,const char *source,
         char argument[256];
         int kind;
         if(end!=NULL)*end='\0';
-        kind=classify_repeat_line(as,cursor,argument,sizeof(argument),NULL);
+        kind=classify_collector_line(as,cursor,NULL,0U,
+                                     argument,sizeof(argument),NULL);
         if(kind<0 || !minias_grow_array((void **)&pieces,&capacity,
                                    sizeof(*pieces),count+1U)) {
             minias_set_error(as,"out-of-memory:inline-repeat-segments");

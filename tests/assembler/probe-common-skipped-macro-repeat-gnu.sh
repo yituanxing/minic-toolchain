@@ -39,10 +39,42 @@ hidden_macro
     .endr
 .endif
 .byte 0x75
+repeat_label: .rep 2
+    .byte 0x76
+.endr
 ASM
 as --64 -o "$work/gnu.o" "$work/conditional.s"
 "$MINIAS" --target=x86_64 -o "$work/mini.o" "$work/conditional.s"
 objcopy -O binary -j .text "$work/gnu.o" "$work/gnu.bin"
 objcopy -O binary -j .text "$work/mini.o" "$work/mini.bin"
 cmp "$work/gnu.bin" "$work/mini.bin"
-echo 'MINIAS_SKIPPED_MACRO_REPEAT=PASS GNU_text=exact inactive_macro=not_defined inactive_repeat=not_evaluated active_nested=correct'
+
+# The collector is Common-owned, so exercise the same source without
+# target instruction encoders on the other three object profiles as well.
+for target in riscv aarch64 loongarch64; do
+    case "$target" in
+        riscv) opts=(--target=riscv -march=rv64i -mabi=lp64);;
+        aarch64) opts=(--target=aarch64);;
+        loongarch64) opts=(--target=loongarch64);;
+    esac
+    "$MINIAS" "${opts[@]}" -o "$work/$target.o" "$work/conditional.s"
+    test -s "$work/$target.o"
+done
+
+# The unified collector still applies independent macro (1024) and repeat
+# (256) argument-buffer bounds. An overly long opener must fail before
+# emitting an object, including when the otherwise-valid body is empty.
+macro_arg=$(printf '%01024d' 0)
+repeat_arg=$(printf '%0256d' 0)
+printf '.macro x%s\n.endm\n' "$macro_arg" >"$work/long-macro.s"
+printf '.rept %s\n.endr\n' "$repeat_arg" >"$work/long-repeat.s"
+for kind in macro repeat; do
+    if "$MINIAS" --target=x86_64 -o "$work/long-$kind.o" \
+        "$work/long-$kind.s" 2>"$work/long-$kind.err"; then
+        echo "accepted an oversized $kind collector argument" >&2
+        exit 1
+    fi
+    grep -q "out-of-memory:$kind-classify" "$work/long-$kind.err"
+    test ! -e "$work/long-$kind.o"
+done
+echo 'MINIAS_SKIPPED_MACRO_REPEAT=PASS GNU_text=exact inactive_macro=not_defined inactive_repeat=not_evaluated active_nested=correct label_rep=exact four_targets=assembled macro_repeat_bounds=rejected'
