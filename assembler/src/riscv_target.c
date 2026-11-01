@@ -21,7 +21,6 @@ static bool riscv_emit_code_alignment(MiniAs *as,
     static const unsigned char nop16[] = {0x01U, 0x00U};
     static const unsigned char zero = 0U;
     const MiniAsRiscvState *state = MINIAS_RV_STATE(as);
-    int section_index=owner->section;
     bool allow_c;
 
     if (!as->emitting_fragment || as->emitting_fragment_id >= as->stmt_count ||
@@ -40,7 +39,7 @@ static bool riscv_emit_code_alignment(MiniAs *as,
      * alignment, then (if needed) the single C.NOP BEFORE its 32-bit NOPs.
      * Keeping that ordering also preserves exact .text bytes for 6B gaps. */
     if ((size & 1U) != 0U) {
-        if (!minias_emit_instruction_bytes(as, section_index, &zero, 1U))
+        if (!minias_emit_instruction_bytes(as, &zero, 1U))
             return false;
         --size;
     }
@@ -54,14 +53,14 @@ static bool riscv_emit_code_alignment(MiniAs *as,
                              owner->line);
             return false;
         }
-        if (!minias_emit_instruction_bytes(as, section_index,
+        if (!minias_emit_instruction_bytes(as,
                                            nop16, sizeof(nop16)) ||
             !minias_encode_add_elf_flags(as, 1U)) /* EF_RISCV_RVC */
             return false;
         size -= sizeof(nop16);
     }
     while (size >= sizeof(nop32)) {
-        if (!minias_emit_instruction_bytes(as, section_index,
+        if (!minias_emit_instruction_bytes(as,
                                            nop32, sizeof(nop32))) {
             return false;
         }

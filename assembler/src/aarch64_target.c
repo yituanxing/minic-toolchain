@@ -334,12 +334,12 @@ static bool aarch64_measure_mcinst(const MiniAsMeasureView *view,
     return true;
 }
 
-static bool append_word(MiniAs *as, int section, uint32_t word) {
+static bool append_word(MiniAs *as, uint32_t word) {
     unsigned char bytes[4];
     unsigned i;
     for (i = 0U; i != 4U; ++i)
         bytes[i] = (unsigned char)(word >> (i * 8U));
-    return minias_emit_instruction_bytes(as, section, bytes, sizeof(bytes));
+    return minias_emit_instruction_bytes(as, bytes, sizeof(bytes));
 }
 
 /* First fully typed backend: parse GNU A64 operand syntax once, when the
@@ -5313,7 +5313,7 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
                              inst->opcode, stmt->line);
             return false;
     }
-    if (!append_word(as, stmt->section, code)) return false;
+    if (!append_word(as, code)) return false;
     if(fixup==MINIAS_FIXUP_NONE)return true;
     /* Target describes the binding policy without assuming that the last
      * element of Common's global Fixup array belongs to this instruction.
@@ -5533,13 +5533,13 @@ static bool directive(MiniAs *as, const char *op, const char *args,
 
 static bool code_alignment(MiniAs *as, const MiniAsStmt *stmt, size_t amount) {
     static const unsigned char nop[] = {0x1f, 0x20, 0x03, 0xd5};
-    int section=stmt->section;
+    (void)stmt;
     if (amount % sizeof(nop) != 0U) {
         minias_set_error(as, "unalignable-aarch64-code-gap:%zu", amount);
         return false;
     }
     while (amount != 0U) {
-        if (!minias_emit_instruction_bytes(as, section, nop, sizeof(nop)))
+        if (!minias_emit_instruction_bytes(as, nop, sizeof(nop)))
             return false;
         amount -= sizeof(nop);
     }

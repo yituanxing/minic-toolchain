@@ -292,6 +292,27 @@ relocation-byte, 4-target ABI, GNU link/ELF and source replay tests remain
 required. The `TargetOps.encode(MiniAs*,Stmt*)` callback is **still
 broad**: this is a concrete capability reduction, not P04 closure.
 
+### 2026-11-01 P04 target machine-byte write binds to active Fragment
+
+All **24** Target byte-write call sites (AArch64, x86-64,
+LoongArch64, RISC-V instruction encoder and RISC-V alignment) now
+call `minias_emit_instruction_bytes(as, bytes, size)` without a
+Target-selected Section. Common resolves the destination from the
+active Fragment before staging, checks that the resolved Section is
+valid and not NOBITS, and retains the existing staged byte count,
+write ordering, overflow and commit guards. The old Section-accepting
+signature and all its callers are removed together, with no shim or
+duplicate code emitter. The AArch64 and RISC-V local integer writers
+also drop obsolete Section parameters.
+
+The atomic MCFragment structural gate now requires the owner-derived
+Section and scans all five Target source files against reintroducing
+the wide byte-write API. Combined with the prior section-less Target
+Fixup and anchor APIs this closes another concrete P04 mutation
+path. `TargetOps.encode(MiniAs*,Stmt*)` is still a broad callback:
+this batch does **not** claim complete Encode capability isolation.
+Preserve the four-Target A0/GNU/ELF/link/QEMU gates on the exact HEAD.
+
 ## Current refactor dashboard — 2026-11-01 (exact-head recovery and live-path audit)
 
 ### 2026-11-01 Source collector single-pass de-duplication (local batch)

@@ -2106,7 +2106,7 @@ static bool la_encode(MiniAs *as,const MiniAsStmt *s) {
         for(j=0U;j<plan->count;++j)
             for(i=0U;i<4U;++i)
                 body[4U*j+i]=(unsigned char)(plan->words[j]>>(8U*i));
-        if(!minias_emit_instruction_bytes(as,s->section,body,
+        if(!minias_emit_instruction_bytes(as,body,
                                           4U*plan->count))return false;
         for(k=0U;k<plan->fixup_count;++k) {
             const unsigned index=plan->fixups[k].symbol_operand;
@@ -2198,7 +2198,7 @@ static bool la_encode(MiniAs *as,const MiniAsStmt *s) {
         default: break;
     }
     for(i=0U;i<4U;++i)bytes[i]=(unsigned char)(code>>(8U*i));
-    if(!minias_emit_instruction_bytes(as,s->section,bytes,sizeof(bytes)))
+    if(!minias_emit_instruction_bytes(as,bytes,sizeof(bytes)))
         return false;
     if(kind==MINIAS_FIXUP_NONE)return true;
     if(m->operands[slot].kind!=MINIAS_MC_BOUND_SYMBOL ||
@@ -2212,9 +2212,9 @@ static bool la_encode(MiniAs *as,const MiniAsStmt *s) {
 }
 static bool la_align(MiniAs *as,const MiniAsStmt *stmt,size_t size) {
     static const unsigned char nop[4]={0x00,0x00,0x40,0x03};
-    int section=stmt->section;
+    (void)stmt;
     if(size%4U){minias_set_error(as,"unalignable-loongarch-code-gap");return false;}
-    while(size){if(!minias_emit_instruction_bytes(as,section,nop,4U))return false;size-=4U;}
+    while(size){if(!minias_emit_instruction_bytes(as,nop,4U))return false;size-=4U;}
     return true;
 }
 static bool la_profile(const char *march,const char *mabi,

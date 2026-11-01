@@ -444,22 +444,22 @@ static uint32_t enc_j(int rd, int64_t off) {
            (((value >> 20U) & 1U) << 31U);
 }
 
-static bool append_u16(MiniAs *as, int section, uint16_t value) {
+static bool append_u16(MiniAs *as, uint16_t value) {
     unsigned char bytes[2];
 
     bytes[0] = (unsigned char)(value & 0xffU);
     bytes[1] = (unsigned char)((value >> 8U) & 0xffU);
-    return minias_emit_instruction_bytes(as, section, bytes, sizeof(bytes));
+    return minias_emit_instruction_bytes(as, bytes, sizeof(bytes));
 }
 
-static bool append_u32(MiniAs *as, int section, uint32_t value) {
+static bool append_u32(MiniAs *as, uint32_t value) {
     unsigned char bytes[4];
 
     bytes[0] = (unsigned char)(value & 0xffU);
     bytes[1] = (unsigned char)((value >> 8U) & 0xffU);
     bytes[2] = (unsigned char)((value >> 16U) & 0xffU);
     bytes[3] = (unsigned char)((value >> 24U) & 0xffU);
-    return minias_emit_instruction_bytes(as, section, bytes, sizeof(bytes));
+    return minias_emit_instruction_bytes(as, bytes, sizeof(bytes));
 }
 
 /* Parse-side Target context is immutable; Common owns the opaque service. */
@@ -2349,7 +2349,7 @@ static bool rv_encode_multi_mc(MiniAs *as, const MiniAsStmt *stmt) {
             return false;
         }
         for (i = 0U; i < plan->count; ++i)
-            if (!append_u32(as, stmt->section, plan->words[i])) return false;
+            if (!append_u32(as, plan->words[i])) return false;
         return true;
     }
 
@@ -2360,12 +2360,12 @@ static bool rv_encode_multi_mc(MiniAs *as, const MiniAsStmt *stmt) {
             return false;
         }
         if (m->opcode == RV_MC_CALL) {
-            if (!append_u32(as, stmt->section, 0x00000097U) ||
-                !append_u32(as, stmt->section,
+            if (!append_u32(as, 0x00000097U) ||
+                !append_u32(as,
                             enc_i(0x67U, 1, 0U, 1, 0))) return false;
         } else {
-            if (!append_u32(as, stmt->section, 0x00000317U) ||
-                !append_u32(as, stmt->section,
+            if (!append_u32(as, 0x00000317U) ||
+                !append_u32(as,
                             enc_i(0x67U, 0, 0U, 6, 0))) return false;
         }
         /* Both CALL and TAIL retain @plt as a Target modifier. Existing
@@ -2429,10 +2429,10 @@ static bool rv_encode_multi_mc(MiniAs *as, const MiniAsStmt *stmt) {
                 if (rounded < 0 && rounded % INT64_C(4096) != 0)
                     --hi; /* C division truncates toward zero, not floor. */
                 int64_t lo = delta - hi * INT64_C(4096);
-                return append_u32(as, stmt->section,
+                return append_u32(as,
                                   0x17U | ((uint32_t)rd << 7U) |
                                   (((uint32_t)hi & 0xfffffU) << 12U)) &&
-                       append_u32(as, stmt->section,
+                       append_u32(as,
                                   enc_i(0x13U, rd, 0U, rd, lo));
             }
         }
@@ -2442,14 +2442,14 @@ static bool rv_encode_multi_mc(MiniAs *as, const MiniAsStmt *stmt) {
             return false;
         }
 
-        if (!append_u32(as, stmt->section,
+        if (!append_u32(as,
                         0x17U | ((uint32_t)rd << 7U))) return false;
         if (use_got) {
-            if (!append_u32(as, stmt->section,
+            if (!append_u32(as,
                             enc_i(0x03U, rd,
                                   MINIAS_RV_STATE(as)->target_xlen == 32U ?
                                       2U : 3U, rd, 0))) return false;
-        } else if (!append_u32(as, stmt->section,
+        } else if (!append_u32(as,
                                enc_i(0x13U, rd, 0U, rd, 0))) return false;
         return minias_encode_add_fixup_ref(as, stmt->offset,
                                 use_got ? MINIAS_FIXUP_RV_GOT_HI20 :
@@ -2486,9 +2486,9 @@ static bool rv_encode_mcinst(MiniAs *as, const MiniAsStmt *stmt) {
     const MiniAsMCInst *m=stmt->mcinst;
     uint16_t compressed;
     if (m->opcode == RV_MC_RAW)
-        return append_u32(as, stmt->section, m->encoding);
+        return append_u32(as, m->encoding);
     if (rv_rvc_encode_plain(MINIAS_RV_STATE(as),stmt,&compressed))
-        return append_u16(as,stmt->section,compressed) &&
+        return append_u16(as,compressed) &&
                minias_encode_add_elf_flags(as,1U);
     if (m->opcode == RV_MC_LI || m->opcode == RV_MC_CALL ||
         m->opcode == RV_MC_TAIL || m->opcode == RV_MC_LA)
@@ -2496,7 +2496,7 @@ static bool rv_encode_mcinst(MiniAs *as, const MiniAsStmt *stmt) {
     if (m->opcode == RV_MC_C16) {
         /* The selected 16-bit instruction may have no register operands
          * (c.nop/c.jr), so dispatch before reading operand[0]. */
-        if(!append_u16(as,stmt->section,(uint16_t)m->encoding))return false;
+        if(!append_u16(as,(uint16_t)m->encoding))return false;
         return minias_encode_add_elf_flags(as,1U); /* EF_RISCV_RVC */
     }
     if (stmt->size==2U &&
@@ -2526,7 +2526,7 @@ static bool rv_encode_mcinst(MiniAs *as, const MiniAsStmt *stmt) {
             bits=rv_rvc_jump_bits(disp);
             fixup=MINIAS_FIXUP_RV_RVC_JUMP;
         }
-        return append_u16(as,stmt->section,bits) &&
+        return append_u16(as,bits) &&
                minias_encode_add_elf_flags(as,1U) &&
                minias_encode_add_fixup_ref(as,stmt->offset,
                                             fixup,2U,*symbol,false);
@@ -2554,9 +2554,9 @@ static bool rv_encode_mcinst(MiniAs *as, const MiniAsStmt *stmt) {
         second = base |
                  ((uint32_t)rs1 << 15U) |
                  ((uint32_t)rd << (load ? 7U : 20U));
-        if (!append_u32(as, stmt->section,
+        if (!append_u32(as,
                         0x17U | ((uint32_t)rs1 << 7U)) ||
-            !append_u32(as, stmt->section, second))
+            !append_u32(as, second))
             return false;
         return minias_encode_add_fixup_ref(as, stmt->offset,
                                 MINIAS_FIXUP_RV_PCREL_HI20, 4U, *ref,
@@ -2576,7 +2576,7 @@ static bool rv_encode_mcinst(MiniAs *as, const MiniAsStmt *stmt) {
                 minias_set_error(as,"jal-range:line=%zu",stmt->line);
                 return false;
             }
-            return append_u32(as,stmt->section,
+            return append_u32(as,
                               enc_j(rd,branch.displacement)) &&
                    minias_encode_add_fixup_ref(as,stmt->offset,
                               MINIAS_FIXUP_RV_JAL,4U,*expr,false);
@@ -2593,9 +2593,9 @@ static bool rv_encode_mcinst(MiniAs *as, const MiniAsStmt *stmt) {
                 minias_set_error(as,"riscv-branch-addend-overflow");
                 return false;
             }
-            return append_u32(as,stmt->section,
+            return append_u32(as,
                        enc_b((base>>12U &7U)^1U,rd,rs1,8)) &&
-                   append_u32(as,stmt->section,enc_j(0,jal_displacement)) &&
+                   append_u32(as,enc_j(0,jal_displacement)) &&
                    minias_encode_add_fixup_ref(as,
                        stmt->offset+4U,MINIAS_FIXUP_RV_JAL,4U,*expr,false);
         }
@@ -2604,7 +2604,7 @@ static bool rv_encode_mcinst(MiniAs *as, const MiniAsStmt *stmt) {
                              stmt->op,stmt->line);
             return false;
         }
-        return append_u32(as,stmt->section,
+        return append_u32(as,
                           enc_b((base>>12U)&7U,rd,rs1,
                                 branch.displacement)) &&
                minias_encode_add_fixup_ref(as,stmt->offset,
@@ -2657,11 +2657,11 @@ static bool rv_encode_mcinst(MiniAs *as, const MiniAsStmt *stmt) {
                    ((addend_low & 31U) << 7U) |
                    ((addend_low >> 5U) << 25U);
         }
-        if (!append_u32(as, stmt->section, code)) return false;
+        if (!append_u32(as, code)) return false;
         return minias_encode_add_fixup_ref(as,stmt->offset,
                                             kind,4U,*symbol,false);
     }
-    return append_u32(as,stmt->section,code);
+    return append_u32(as,code);
 invalid_absolute_form:
     minias_set_error(as,"internal:bad-riscv-absolute-reloc-mcinst:%u",
                      m->target_form);

@@ -4350,7 +4350,7 @@ static bool x64_encode_base(MiniAs *as,const MiniAsStmt *s) {
                 register_plan.bytes[register_plan.size-width+i]=
                     (unsigned char)(immediate>>(8U*i));
         }
-        if(!minias_emit_instruction_bytes(as,s->section,
+        if(!minias_emit_instruction_bytes(as,
                 register_plan.bytes,register_plan.size))return false;
         if(difference_relocation)
             return minias_encode_add_fixup_ref(as,
@@ -4393,7 +4393,7 @@ static bool x64_encode_base(MiniAs *as,const MiniAsStmt *s) {
             x64_append_le(code,&n,(uint32_t)imm,plan.immediate_bytes);
             if(symbol) {
                 const MiniAsSymbolRef *expr=m->operands[0].bound_symbol;
-                if(!minias_emit_instruction_bytes(as,s->section,code,n))return false;
+                if(!minias_emit_instruction_bytes(as,code,n))return false;
                 return minias_encode_add_fixup_ref(as,s->offset+1U,
                     (m->encoding&UINT32_C(0x400))?
                         MINIAS_FIXUP_ABS:MINIAS_FIXUP_X64_ABS32S,
@@ -4436,7 +4436,7 @@ static bool x64_encode_base(MiniAs *as,const MiniAsStmt *s) {
             x64_append_le(code,&n,offset,width);
             code[n++]=(unsigned char)seg;
             code[n++]=(unsigned char)(seg>>8U);
-            if(!minias_emit_instruction_bytes(as,s->section,code,n))return false;
+            if(!minias_emit_instruction_bytes(as,code,n))return false;
             if(difference_relocation)
                 return minias_encode_add_fixup_ref(as,
                     s->offset+1U,MINIAS_FIXUP_X64_PC32,width,
@@ -4455,7 +4455,7 @@ static bool x64_encode_base(MiniAs *as,const MiniAsStmt *s) {
             }
             code[n++]=(unsigned char)m->encoding;
             x64_append_le(code,&n,(uint64_t)mem->displacement,width);
-            if(!minias_emit_instruction_bytes(as,s->section,code,n))return false;
+            if(!minias_emit_instruction_bytes(as,code,n))return false;
             if(!mem->has_symbol)return true;
             return minias_encode_add_fixup_ref(as,
                 s->offset+n-width,MINIAS_FIXUP_ABS,width,mem->symbol,false);
@@ -4517,7 +4517,7 @@ static bool x64_encode_base(MiniAs *as,const MiniAsStmt *s) {
                 return false;
             }
             x64_append_le(code,&n,(uint32_t)displacement,disp_width);
-            if(!minias_emit_instruction_bytes(as,s->section,code,n))return false;
+            if(!minias_emit_instruction_bytes(as,code,n))return false;
             if(local)return true;
             {
                 MiniAsSymbolRef pc_relative;
@@ -4582,7 +4582,7 @@ static bool x64_encode_base(MiniAs *as,const MiniAsStmt *s) {
                 minias_set_error(as,"invalid-x86-memory-layout");
                 return false;
             }
-            if(!minias_emit_instruction_bytes(as,s->section,code,n))return false;
+            if(!minias_emit_instruction_bytes(as,code,n))return false;
             if(!x64_emit_memory_fixups(as,s,m,mem,&layout,needs_pc32,
                    displacement_relocation_ref))
                 return false;
@@ -4599,7 +4599,7 @@ static bool x64_encode_base(MiniAs *as,const MiniAsStmt *s) {
             code[n++]=(unsigned char)(0xb8U|(r&7U));
             x64_append_le(code,&n,value->kind==MINIAS_MC_BOUND_SYMBOL?
                           UINT64_C(0):value->immediate,8U);
-            if(!minias_emit_instruction_bytes(as,s->section,code,n))return false;
+            if(!minias_emit_instruction_bytes(as,code,n))return false;
             if(value->kind!=MINIAS_MC_BOUND_SYMBOL)return true;
             return minias_encode_add_fixup_ref(as,s->offset+2U,
                 MINIAS_FIXUP_X64_ABS64,8U,
@@ -4613,7 +4613,7 @@ static bool x64_encode_base(MiniAs *as,const MiniAsStmt *s) {
             code[n++]=(unsigned char)(0xc0U | (r&7U));
             x64_append_le(code,&n,(uint32_t)
                 (src->kind==MINIAS_MC_BOUND_SYMBOL?0U:src->immediate),4U);
-            if(!minias_emit_instruction_bytes(as,s->section,code,n))return false;
+            if(!minias_emit_instruction_bytes(as,code,n))return false;
             if(src->kind!=MINIAS_MC_BOUND_SYMBOL)return true;
             return minias_encode_add_fixup_ref(as,s->offset+3U,
                 MINIAS_FIXUP_X64_ABS32S,4U,*src->bound_symbol,false);
@@ -4654,7 +4654,7 @@ static bool x64_encode_base(MiniAs *as,const MiniAsStmt *s) {
             }
             x64_append_le(code,&n,imm,plan.immediate_bytes);
             if(difference_relocation) {
-                if(!minias_emit_instruction_bytes(as,s->section,code,n))return false;
+                if(!minias_emit_instruction_bytes(as,code,n))return false;
                 return minias_encode_add_fixup_ref(as,
                     s->offset+plan.immediate_offset,
                     MINIAS_FIXUP_X64_PC32,4U,difference_relocation_ref,false);
@@ -4670,7 +4670,7 @@ static bool x64_encode_base(MiniAs *as,const MiniAsStmt *s) {
                     minias_set_error(as,"invalid-x86-alu-symbol-width");
                     return false;
                 }
-                if(!minias_emit_instruction_bytes(as,s->section,code,n))return false;
+                if(!minias_emit_instruction_bytes(as,code,n))return false;
                 /* GNU R_386_GOTPC computes GOT + A - P.  GCC's GOT-base
                  * ADD expects GOT relative to the *instruction start*;
                  * the embedded REL addend therefore includes the byte
@@ -4693,7 +4693,7 @@ static bool x64_encode_base(MiniAs *as,const MiniAsStmt *s) {
         }
         default: minias_set_error(as,"bad-x86_64-mcinst");return false;
     }
-    return minias_emit_instruction_bytes(as,s->section,code,n);
+    return minias_emit_instruction_bytes(as,code,n);
 }
 
 static bool x64_encode(MiniAs *as,const MiniAsStmt *s) {
@@ -4708,7 +4708,7 @@ static bool x64_encode(MiniAs *as,const MiniAsStmt *s) {
     if(s->size<n || s->offset>SIZE_MAX-n) {
         minias_set_error(as,"x86-code16-invalid-prefix-layout");return false;
     }
-    if(!minias_emit_instruction_bytes(as,s->section,prefix,n))return false;
+    if(!minias_emit_instruction_bytes(as,prefix,n))return false;
     native=*s;
     native.offset+=n;
     native.size-=(uint32_t)n;
@@ -4782,7 +4782,7 @@ static bool x64_code_align(MiniAs *as,const MiniAsStmt *stmt,size_t n) {
      * byte-exact Linux .S comparisons. Common owns the predecessor and
      * subsection test; Target only chooses the machine-specific NOP bytes. */
     if(n!=0U && minias_code_alignment_preceded_by_adjacent_data(as,section)) {
-        if(!minias_emit_instruction_bytes(as,section,nops[0],1U))return false;
+        if(!minias_emit_instruction_bytes(as,nops[0],1U))return false;
         --n;
     }
     while(n!=0U) {
@@ -4790,7 +4790,7 @@ static bool x64_code_align(MiniAs *as,const MiniAsStmt *stmt,size_t n) {
         size_t width=n>limit?limit:n;
         const unsigned char *bytes=legacy16?nops16[width-1U]:
             legacy32?nops32[width-1U]:nops[width-1U];
-        if(!minias_emit_instruction_bytes(as,section,bytes,width))
+        if(!minias_emit_instruction_bytes(as,bytes,width))
             return false;
         n-=width;
     }

@@ -1185,15 +1185,11 @@ static bool minias_alignment_emits_target_nops(const MiniAs *as,
                  stmt->align_fill)));
 }
 
-bool minias_emit_instruction_bytes(MiniAs *as, int section_index,
+bool minias_emit_instruction_bytes(MiniAs *as,
                                    const void *data, size_t size) {
     MiniAsSection *sec;
+    int section_index;
     MiniAsEncodeResult *result = as->active_encode_result;
-    if (section_index < 0 || (size_t)section_index >= as->section_count) {
-        minias_set_error(as, "invalid-target-emission-section");
-        return false;
-    }
-    sec = &as->sections[(size_t)section_index];
     if (result == NULL || !as->emitting_fragment) {
         minias_set_error(as, "target-emission-outside-instruction");
         return false;
@@ -1204,12 +1200,18 @@ bool minias_emit_instruction_bytes(MiniAs *as, int section_index,
         return false;
     }
     owner = &as->stmts[as->emitting_fragment_id];
+    /* Machine-code bytes can only enter the current owned Fragment. */
+    section_index=owner->section;
+    if(section_index<0 || (size_t)section_index>=as->section_count) {
+        minias_set_error(as,"invalid-target-emission-section");
+        return false;
+    }
+    sec=&as->sections[(size_t)section_index];
     /* Instruction and executable-padding fragments use the same private
      * byte transaction.  A Target cannot append alignment NOPs directly to
      * the final Section, where a failed encoder would leave partial bytes. */
     if ((owner->fragment_kind != MINIAS_FRAGMENT_INSTRUCTION &&
          !minias_alignment_emits_target_nops(as,owner,sec)) ||
-        owner->section != section_index ||
         sec->type == MINIAS_SHT_NOBITS ||
         size > SIZE_MAX - sec->size) {
         minias_set_error(as, "instruction-emission-section-or-size");

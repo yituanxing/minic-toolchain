@@ -865,7 +865,7 @@ bool minias_decode_string_literals(const char *text,
                                    size_t *size);
 /* All Target instruction and executable-padding bytes are staged into the
  * active fragment result; Common alone publishes its complete transaction. */
-bool minias_emit_instruction_bytes(MiniAs *as, int section_index,
+bool minias_emit_instruction_bytes(MiniAs *as,
                                    const void *data, size_t size);
 /* A target may choose padding bytes based on the preceding Fragment class.
  * Common owns source order, subsection identity and adjacency rules. */
