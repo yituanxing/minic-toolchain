@@ -98,7 +98,7 @@
 | [MC-083](#mc-083-已完整声明的-char-数组再以省略边界字符串定义被错拒) | P2 | FIXED-UNVERIFIED | GNU-NATIVE-DIFF | Frontend external array declarations | `char a[4]; char a[]="abc";` 经 `15b08f4` 修复，GNU/MiniC 原生差分及超长负例 PASS，完整矩阵待验 |
 | [MC-084](#mc-084-x86-record-copy-逐字节展开带来可观机器码膨胀) | P2 | DEBT | GNU-NATIVE-ABI+SIZE | x86-64 aggregate machine emission | 合法 4096B 赋值双方 GNU native 执行均正确，但 MiniC 源汇编 8223 行、`.text` 65264B，GNU 仅 65 行、`.text` 5485B（含相同 driver） |
 | [MC-085](#mc-085-gnu-errorwarning-函数属性被保留但没有可达调用诊断消费者) | P1 | OPEN | LOCAL-COMPILE-DIFF | Frontend/Compiler/Core diagnostics | GNU `__attribute__((error))` 活 CALL 应拒编，MiniC 发出 CALL 且成功；`warning` 活 CALL 的 GNU 诊断被 MiniC 静默丢弃 |
-| [MC-086](#mc-086-x86-pic-隐藏的未定义-weak-对象与函数错用-pc32-重定位) | P1 | OPEN | GNU-LD/ELF-ORACLE | x86 ELF/PIC symbol binding | `weak+hidden+undefined` 在 PIC 中被误判为可 direct PCREL，MiniC `R_X86_64_PC32` 令 GNU PIE 链接失败；GNU GOTPCREL 正常链接运行 |
+| [MC-086](#mc-086-x86-pic-隐藏的未定义-weak-对象与函数错用-pc32-重定位) | P1 | FIXED-UNVERIFIED | GNU-LD/ELF-ORACLE | x86 ELF/PIC symbol binding | `866fa28` 用 TargetInfo 已有 undefined-weak 事实修复 PIC GOT 选路；GNU/MiniC GNU AS/LD PIE 2×2、ELF relocation/native PASS，完整 Linux 矩阵未验 |
 | [MC-087](#mc-087-common-lp64-单函数-257-条合法-inline-asm-硬拒) | P2 | FIXED-UNVERIFIED | LOCAL-COMPILE-DIFF | Common Direct LP64 preflight | 257 人为上限已移除，A64/Loong 255/256/257/512 源汇编与伪造 Core 负例 PASS；目标 GNU ELF 未测 |
 | [MC-088](#mc-088-rv32-宽整数条件分支只检查低-32-位造成静默错编) | P1 | FIXED-UNVERIFIED | GNU-QEMU-DIFF/ELF32 | RV32 Core terminator | 64 位条件仅高 32 位非零时被当作假；修复前 GNU ELF32 QEMU PASS、MiniC exit11；修复后 8 组双 ELF32/QEMU PASS |
 
@@ -756,10 +756,11 @@
 
 ### MC-086 x86 PIC 隐藏的未定义 Weak 对象与函数错用 PC32 重定位
 
-- **状态与证据：** `OPEN`，P1，`GNU-LD/ELF-ORACLE`，A9-08 从 SOURCE/GNU -S 调查升级为**真实 GNU PIE 链接失败**。不能将 RV64 同形 source/ASM 风险直接升级为 RV64 ELF 错码：仍缺该目标 GNU GAS/LD/QEMU 实验。
+- **状态与证据：** `FIXED-UNVERIFIED`，P1，`GNU-LD/ELF-ORACLE`。主线提交 `866fa28`（隔离验证原提交 `ff5d1a7`）仅更改 x86 machine emitter：PIC 的 hidden undefined weak 对象/函数不再走 direct PCREL，复用已有 TargetInfo undefined-weak facts 改走 GOTPCREL；hidden strong 仍 PCREL、default-visible 仍 GOT、非 PIC 不变。**不是**五架构联合验收或 RV64 同问题已解决。
 - **最小源与实际 ELF：** `/tmp/minic-f11-x86-pic-hidden-undef-weak-data.c` 中 `extern int hidden_data __attribute__((weak,visibility("hidden"))); int probe_weak_data(void){return (&hidden_data==0)?42:1;}`；同源 GNU `-fPIC -S` 发 `hidden_data@GOTPCREL(%rip)`，MiniC `--target=x86_64-linux -fPIC -S` 发 `leaq hidden_data(%rip),%rax`。GNU `-fPIC -pie` 链接 PASS，运行 exit42，MiniC `.s` 经 GNU AS 产生 `R_X86_64_PC32 hidden_data -4`，GNU LD 报 `relocation R_X86_64_PC32 against undefined hidden symbol` FAIL。负责人重跑 GNU/MiniC `-S`、GNU LD 差分 4 步确认。
 - **已有仓库 fixture 补强：** `tests/compiler/c0/gnu_weak_undefined_live.c` 原已覆盖 hidden missing **object 和 function**，但 `run-gnu-weak-undefined-live.sh` 只覆盖 `-fno-pie`。将同 fixture+`gnu_weak_undefined_provider.c` 的 `-fPIC -pie` 交 GNU C 或 MiniC `.s`：GNU LINK/RUN exit0，MiniC 因 `hidden_missing_function` 的 PC32 GNU LD FAIL；两个符号的 GNU 均走 GOTPCREL、MiniC 均 direct `leaq`。所以这是**测试矩阵缺 PIC 而非需要发明新样例**。
-- **根因与修复门槛：** `src/target/target_info.c:509–565` 对 hidden symbol 给 `nonpreemptible=true` 且独立给 `undefined_weak=true`；`src/target/x86_64/machine_emit.c:706–710` 只问前者便 direct PCREL，忽略 weak 零地址合法性。AArch64 `residual_emit.c` 已有显式排除 weak 的对照策略。应在统一的 ELF reference fact/TargetInfo 决策中同时考虑 visibility、undefined weak、PIC/PIE、强定义和 GOT/PCREL，保留不同 ISA 的具体 relocation；新增 existing fixture 的 GNU `-fPIC -pie` `.o`、`readelf -Wr`、有/无 provider、static/hidden strong、运行检查。不能通过将 C weak 视为强定义或强行放宽 GNU LD 来掩盖。
+- **修复后持久门禁：** `check-x86-pic-hidden-undefined-weak` 已接 `check-fast`；GNU/MiniC `-fPIC`、MiniC `-fPIE` 产物经 GNU AS/LD PIE/native 正反控制 **PASS**，`readelf -Wr/-Ws` 确认 weak hidden 2 符号 GOTPCREL、保留绑定及不再含 forbidden PC32；strong hidden 2 符号仍 PCREL、default-visible 2 符号仍 GOT。主线额外重跑 `check-elf-hidden-undefined-pic-source` 五 ISA source **PASS**（ELF/QEMU NOT_RUN）。保留完整 Linux 与所有 PIC 合同的后续验收。
+- **根因及未验合同：** `src/target/target_info.c` 对 hidden symbol 给 `nonpreemptible=true` 且独立给 `undefined_weak=true`；旧 x86 machine emitter 只问前者便 direct PCREL，忽略 weak 零地址合法性。AArch64 `residual_emit.c` 已有显式排除 weak 的对照策略。本次在 x86 使用两项现有事实决定发射，未统一 ELF reference fact 或跨 ISA relocation；后续仍须验证有/无 provider、共享库等 PIC/PIE 合同，不能靠强行放宽 GNU LD 掩盖问题。
 
 ### MC-087 Common LP64 单函数 257 条合法 Inline ASM 硬拒
 
