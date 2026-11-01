@@ -658,33 +658,27 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
             } else if (fprintf(out, "  movq %zu(%%rbp), %%rax\n",
                                16U + location->stack_index * 8U) < 0)
                 return false;
-            return x86_one_gp_store(out, location->record_bytes);
+            return x86_one_gp_store(out, location->record_bytes, 0U);
         }
-        if (location->record_bytes != 12U && location->record_bytes != 16U)
+        if (location->record_bytes < 9U || location->record_bytes > 16U)
             return false;
         if (!location->on_stack) {
             if (location->gp_index >= abi->gp_argument_count - 1U) return false;
             if (fprintf(out, "  movq %s, 0(%%r10)\n",
                         abi->gp_arguments[location->gp_index]) < 0)
                 return false;
-            if (location->record_bytes == 12U)
-                return fprintf(out,
-                    "  movq %s, %%rax\n"
-                    "  movl %%eax, 8(%%r10)\n",
-                    abi->gp_arguments[location->gp_index + 1U]) >= 0;
-            return fprintf(out, "  movq %s, 8(%%r10)\n",
-                           abi->gp_arguments[location->gp_index + 1U]) >= 0;
+            return fprintf(out, "  movq %s, %%rax\n",
+                           abi->gp_arguments[location->gp_index + 1U]) >= 0 &&
+                   x86_one_gp_store(out, location->record_bytes - 8U, 8U);
         }
         if (fprintf(out,
             "  movq %zu(%%rbp), %%rax\n"
             "  movq %%rax, 0(%%r10)\n",
             16U + location->stack_index * 8U) < 0)
             return false;
-        return fprintf(out,
-            location->record_bytes == 12U
-              ? "  movl %zu(%%rbp), %%eax\n  movl %%eax, 8(%%r10)\n"
-              : "  movq %zu(%%rbp), %%rax\n  movq %%rax, 8(%%r10)\n",
-            24U + location->stack_index * 8U) >= 0;
+        return fprintf(out, "  movq %zu(%%rbp), %%rax\n",
+                       24U + location->stack_index * 8U) >= 0 &&
+               x86_one_gp_store(out, location->record_bytes - 8U, 8U);
     }
     case MINIC_CORE_INSTRUCTION_GLOBAL_ADDRESS:
         if (ins->value.global_id >= fn->global_count ||
@@ -1508,7 +1502,7 @@ bool minic_x86_64_emit_core_terminator(FILE *out,
                 !x86_object_address(out, frame, term->return_object, "%r11"))
                 return false;
             if (minic_x86_64_one_gp_record(program, target, fn->return_type, &bytes)) {
-                if (!x86_one_gp_load(out,bytes)) return false;
+                if (!x86_one_gp_load(out, bytes, 0U)) return false;
             } else if (minic_x86_64_two_gp_record(program, target, fn->return_type)) {
                 const MinicX86AbiRegisters *abi = minic_x86_64_abi_registers(
                     MINIC_CALLING_CONVENTION_DEFAULT);
@@ -1516,15 +1510,11 @@ bool minic_x86_64_emit_core_terminator(FILE *out,
                 if (abi == NULL || abi->gp_result_count < 2U ||
                     !minic_data_layout_type(target->data_layout, program,
                                             fn->return_type, &bytes, &alignment) ||
-                    (bytes != 12U && bytes != 16U) ||
-                    fprintf(out, "  movq 0(%%r11), %s\n",
-                            abi->gp_results[0]) < 0)
-                    return false;
-                if (bytes == 12U) {
-                    if (fprintf(out, "  movl 8(%%r11), %%edx\n") < 0)
-                        return false;
-                } else if (fprintf(out, "  movq 8(%%r11), %s\n",
-                                   abi->gp_results[1]) < 0)
+                    (bytes < 9U || bytes > 16U) ||
+                    !x86_one_gp_load(out, bytes - 8U, 8U) ||
+                    fprintf(out, "  movq %%rax, %s\n"
+                                 "  movq 0(%%r11), %s\n",
+                            abi->gp_results[1], abi->gp_results[0]) < 0)
                     return false;
             } else if (frame->has_sret && frame->sret_save_offset != 0U &&
                        minic_x86_64_memory_result_record(

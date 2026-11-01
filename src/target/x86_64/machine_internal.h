@@ -4,8 +4,8 @@
 
 /* Native SysV/x87/LP64 scalar frame transport shared by the independently
  * owned machine instruction families. NOT an ISA-independent ABI. */
-bool x86_one_gp_load(FILE *, size_t);
-bool x86_one_gp_store(FILE *, size_t);
+bool x86_one_gp_load(FILE *, size_t, size_t);
+bool x86_one_gp_store(FILE *, size_t, size_t);
 bool x86_normalize(FILE *, const MinicC0Program *, const MinicTargetInfo *, MinicType);
 bool x86_value_load(FILE *, const MinicX86Frame *, MinicCoreValueId, const char *);
 bool minic_x86_64_emit_raid6_simd(FILE *, const MinicCoreFunction *,

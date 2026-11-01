@@ -7,24 +7,48 @@
 /* Machine-local primitives used by the selected native instruction family.
  * Keep the syntax/registers architecture-owned; Core IDs map to the same
  * already-validated frame slots regardless of instruction family. */
-bool x86_one_gp_load(FILE *out, size_t bytes) {
+bool x86_one_gp_load(FILE *out, size_t bytes, size_t offset) {
+    size_t i;
     switch (bytes) {
-    case 1U: return fprintf(out, "  movzbq 0(%%r11), %%rax\n") >= 0;
-    case 2U: return fprintf(out, "  movzwq 0(%%r11), %%rax\n") >= 0;
-    case 4U: return fprintf(out, "  movl 0(%%r11), %%eax\n") >= 0;
-    case 8U: return fprintf(out, "  movq 0(%%r11), %%rax\n") >= 0;
-    default: return false;
+    case 1U: return fprintf(out, "  movzbq %zu(%%r11), %%rax\n", offset) >= 0;
+    case 2U: return fprintf(out, "  movzwq %zu(%%r11), %%rax\n", offset) >= 0;
+    case 4U: return fprintf(out, "  movl %zu(%%r11), %%eax\n", offset) >= 0;
+    case 8U: return fprintf(out, "  movq %zu(%%r11), %%rax\n", offset) >= 0;
+    default: break;
     }
+    if (bytes == 0U || bytes > 8U ||
+        fprintf(out, "  xorl %%eax, %%eax\n") < 0) return false;
+    /* The last partial SysV INTEGER eightbyte still lives in one GP
+     * register. Read only actual object bytes; R10 is non-argument scratch,
+     * so previously marshalled RDI..R9 arguments stay live. */
+    for (i = bytes; i != 0U; --i) {
+        if (fprintf(out,
+                "  shlq $8, %%rax\n"
+                "  movzbq %zu(%%r11), %%r10\n"
+                "  orq %%r10, %%rax\n", offset + i - 1U) < 0)
+            return false;
+    }
+    return true;
 }
 
-bool x86_one_gp_store(FILE *out, size_t bytes) {
+bool x86_one_gp_store(FILE *out, size_t bytes, size_t offset) {
+    size_t i;
     switch (bytes) {
-    case 1U: return fprintf(out, "  movb %%al, 0(%%r10)\n") >= 0;
-    case 2U: return fprintf(out, "  movw %%ax, 0(%%r10)\n") >= 0;
-    case 4U: return fprintf(out, "  movl %%eax, 0(%%r10)\n") >= 0;
-    case 8U: return fprintf(out, "  movq %%rax, 0(%%r10)\n") >= 0;
-    default: return false;
+    case 1U: return fprintf(out, "  movb %%al, %zu(%%r10)\n", offset) >= 0;
+    case 2U: return fprintf(out, "  movw %%ax, %zu(%%r10)\n", offset) >= 0;
+    case 4U: return fprintf(out, "  movl %%eax, %zu(%%r10)\n", offset) >= 0;
+    case 8U: return fprintf(out, "  movq %%rax, %zu(%%r10)\n", offset) >= 0;
+    default: break;
     }
+    if (bytes == 0U || bytes > 8U) return false;
+    /* Only write the final real bytes, never the next packed field or
+     * adjacent stack object. Incoming GP padding bits are unspecified. */
+    for (i = 0U; i < bytes; ++i) {
+        if (fprintf(out, "  movb %%al, %zu(%%r10)\n", offset + i) < 0 ||
+            (i + 1U != bytes && fprintf(out, "  shrq $8, %%rax\n") < 0))
+            return false;
+    }
+    return true;
 }
 
 

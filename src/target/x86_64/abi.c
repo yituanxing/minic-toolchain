@@ -157,8 +157,7 @@ bool minic_x86_64_one_gp_record(const MinicC0Program *program,
         !minic_type_is_record(type) ||
         !minic_common_aggregate_storage_shape(
             program, target->data_layout, type, 8U, &shape) ||
-        (shape.bytes != 1U && shape.bytes != 2U &&
-         shape.bytes != 4U && shape.bytes != 8U) ||
+        shape.bytes == 0U || shape.bytes > 8U ||
         shape.alignment > 8U ||
         !x86_integer_record_tree(program, target, type, 0U, 8U, 0U))
         return false;
@@ -173,12 +172,10 @@ bool minic_x86_64_two_gp_record(const MinicC0Program *program,
         return false;
     return minic_common_aggregate_storage_shape(
                program, target->data_layout, type, 8U, &shape) &&
-           /* A 12-byte all-INTEGER aggregate occupies two SysV eightbytes:
-            * the second register has only four actual object bytes.  Native
-            * ingress/egress must use 32-bit loads/stores for that tail.  Do
-            * not silently admit arbitrary 9..15-byte shapes until their
-            * partial-eightbyte transport is implemented. */
-           (shape.bytes == 12U || shape.bytes == 16U) &&
+           /* A naturally aligned all-INTEGER record has two SysV eightbytes
+            * at sizes 9..16, even when the second one has only 1..7 actual
+            * bytes. Machine marshalling must use exact-byte tail transfers. */
+           shape.bytes > 8U && shape.bytes <= 16U &&
            shape.alignment <= 8U &&
            x86_integer_record_tree(program, target, type, 0U, 16U, 0U);
 }

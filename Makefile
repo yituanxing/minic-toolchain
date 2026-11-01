@@ -1301,6 +1301,13 @@ check-x86_64-one-gp-sysv: $(MINIC_CC_BINARY)
 	HOST_CC="$(CC)" \
 	sh tests/compiler/c0/run-x86_64-one-gp-sysv.sh
 
+.PHONY: check-x86_64-sysv-odd-record-abi
+check-x86_64-sysv-odd-record-abi: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	bash tests/compiler/c0/probe-x86-sysv-odd-record-abi.sh
+
+check-fast: check-x86_64-sysv-odd-record-abi
+
 check-x86_64-m1: $(MINIC_CC_BINARY)
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" \
 	HOST_CC="$(CC)" \

@@ -94,7 +94,7 @@
 | [MC-079](#mc-079-core-取址解引用抵消绕过-local-事实逃逸造成静默错编) | P0 | FIXED-UNVERIFIED | GNU-NATIVE-DIFF | Core local facts | 历史错编 GNU exit22 / MiniC exit11；当前 HEAD 的持久 GNU/MiniC native 回归通过，完整矩阵待验 |
 | [MC-080](#mc-080-函数指针间接变参调用拒绝合法的-aggregate-实参) | P2 | OPEN | LOCAL-COMPILE-DIFF | Frontend/Core/Target call ABI | 函数指针的 GNU `(...)` 非具名参数为 Record 时，五目标 `-S` 0/5；同一 Record 的 direct variadic 和 indirect fixed 各 5/5，通过对照隔离门槛 |
 | [MC-081](#mc-081-rv32-接受-gnu-constructor-却漏发初始化注册) | P1 | FIXED-UNVERIFIED | GNU-QEMU-DIFF/ELF32 | RV32 global/function emission | RV32 缺 `.init_array` 已修，GNU/MiniC 真 ELF32/QEMU 双 constructor PASS，扩展属性/完整 Linux 待验 |
-| [MC-082](#mc-082-x86-sysv-三字节-record-按值参数与返回被拒绝) | P2 | OPEN | LOCAL-COMPILE-DIFF | x86 SysV ABI | 3B INTEGER-class Record 在 incoming/outgoing/return ABI classifier 被限定为 1/2/4/8，GNU native 成功而 MiniC -S 拒编 |
+| [MC-082](#mc-082-x86-sysv-三字节-record-按值参数与返回被拒绝) | P2 | FIXED-UNVERIFIED | GNU-ELF-NATIVE | x86 SysV ABI | 1..16B 自然对齐 INTEGER-class Record 参数/返回完成双向 GNU ELF native 对照 |
 | [MC-083](#mc-083-已完整声明的-char-数组再以省略边界字符串定义被错拒) | P2 | FIXED-UNVERIFIED | GNU-NATIVE-DIFF | Frontend external array declarations | `char a[4]; char a[]="abc";` 经 `15b08f4` 修复，GNU/MiniC 原生差分及超长负例 PASS，完整矩阵待验 |
 | [MC-084](#mc-084-x86-record-copy-逐字节展开带来可观机器码膨胀) | P2 | DEBT | GNU-NATIVE-ABI+SIZE | x86-64 aggregate machine emission | 合法 4096B 赋值双方 GNU native 执行均正确，但 MiniC 源汇编 8223 行、`.text` 65264B，GNU 仅 65 行、`.text` 5485B（含相同 driver） |
 | [MC-085](#mc-085-gnu-errorwarning-函数属性被保留但没有可达调用诊断消费者) | P1 | OPEN | LOCAL-COMPILE-DIFF | Frontend/Compiler/Core diagnostics | GNU `__attribute__((error))` 活 CALL 应拒编，MiniC 发出 CALL 且成功；`warning` 活 CALL 的 GNU 诊断被 MiniC 静默丢弃 |
@@ -766,10 +766,13 @@
 
 ### MC-082 x86 SysV 三字节 Record 按值参数与返回被拒绝
 
-- **状态与证据：** `OPEN`，P2，`LOCAL-COMPILE-DIFF`；同一有效 GNU C 的按值 `struct Three { unsigned char a[3]; }` 参数和返回，宿主 `gcc -std=gnu11 -O0 -no-pie` 编译 PASS、原生 exit42（fixture 预期），MiniC `--target=x86_64-linux -S` exit1 `cannot allocate or verify Core function frame`，不是已发射错误码。
+- **状态：** `FIXED-UNVERIFIED`，P2，`GNU-ELF-NATIVE`；1..16B 自然对齐全 INTEGER-class Record 的参数与返回已完成 GNU/MiniC ABI 双向原生 ELF 差分。完整 Linux/目标矩阵与其他 SysV 类别仍未验收，不将本次扩展泛化为全部 Record 已支持。
+- **历史证据：** 同一有效 GNU C 的按值 `struct Three { unsigned char a[3]; }` 参数和返回，宿主 `gcc -std=gnu11 -O0 -no-pie` 编译 PASS、原生 exit42，旧 MiniC `--target=x86_64-linux -S` exit1，提示 incoming `cannot allocate or verify Core function frame` 或 RETURN terminator unsupported。修复前用 1..16B 统一 fixture 独立复现：GNU native exit42，MiniC 首个 3B `make` 的返回即拒编。
 - **具体门控：** `src/target/x86_64/abi.c:151–168:minic_x86_64_one_gp_record` 仅将恰好 1/2/4/8 字节 Record 放入一个 GP class；`call_plan.c:25–53` 对合法 3B INTEGER-class Record 走到 `bytes<=16` 的拒绝路径。`MINIC_M1_TRACE=1` 确认 `MINIC_X86_ARG_RECORD_CLASS_REJECT record=1 bytes=3 align=1`，`function=sum_three stage=incoming-abi`。证据 `/tmp/minic-f11-x86-abi-record3.c`，负责人再次执行 GCC PASS、MiniC -S FAIL。返回值和 outgoing 调用也须按 SysV class/寄存器合法性审查，不能断言当前三者全都独立错拒。
 - **独立返回门控已补证：** `/tmp/minic-f11-x86-abi-return3.c` 只定义/调用返回 `struct Three` 的 `return_three`，GNU native 编译 PASS；MiniC x86 -S 仍 FAIL，但不同于 incoming，其 trace 为 `Core terminator unsupported: function return_three block=0 kind=0 has_terminator=1 return_object=1`。因此 **incoming 和 return 两个实际消费者** 均已独立拒编；outgoing-only 及跨编译器对象 ABI 仍待核，不把未测分支写成实证。
-- **修复门槛：** 按真实 SysV ABI 的 eightbyte INTEGER classification 和有效 byte extent 定义封装，联动参数装入、outgoing、返回、padding/未初始化高字节保守处理；避免只扩大一个判定集合。以 1..16B 多组 odd-size Record、数组/packed、不同对齐、跨 GCC/MiniC caller–callee 的 `.o` 双向 GNU ELF 和 native 执行验证。与 MC-057 空 Record（大小为零）不同。
+- **最小修复：** `x86_64/abi.c` 保留递归标量叶子/自然对齐/位域 eightbyte 资格门控：对象有效大小 1..8B 使用一个 INTEGER GP、9..16B 使用两个 INTEGER GP，仍拒 SSE、混合类、非自然对齐字段。`x86_64/machine_support.c` 的 GP 装入/写回以真实 `shape.bytes` 为界：1/2/4/8B 保留专用指令，3/5/6/7B 等尾段逐字节低位打包/拆包，高字节显式归零，不读取/写入对象之后的字节，也不覆盖已装好的 RDI..R9 参数。参数 planner、incoming、outgoing、返回以及调用返回的两 GP 尾段都用相同精确 1..8B 转运；stack fallback 保证双 GP record 的不可拆分分配与 8B slot padding。
+- **真实差分：** 新增 `tests/compiler/audit/mc082_sysv_record_abi_{functions,driver}.c` 和头文件，尺寸 1..16B 全覆盖、packed 但字段自然对齐的 5B、显式 align8、含内部 padding 的 8B/16B、寄存器耗尽 one/two-GP 栈回退、间接函数调用。`make MODE=release CFLAGS=-Werror check-x86_64-sysv-odd-record-abi` 对同源 GNU 预处理 C 分别编出 GCC 与 MiniC `.o`，以 GNU AS/LD 形成四组 ELF；**GNU→GNU、GNU caller→MiniC callee、MiniC caller→GNU callee、MiniC→MiniC 均 native exit42**。原有 `check-x86_64-one-gp-sysv`、`check-x86_64-abi-elf`、`check-x86-linux-uaccess-and-abi`、`check-packed-bitfield-field-layout` 也 PASS。
+- **保留边界：** `struct __attribute__((packed)){ unsigned char prefix; unsigned int word; }` 的 5B **非对齐** scalar leaf 在 GNU SysV 是 MEMORY，当前 MiniC 仍明确 fail-closed（永久负控）；不能通过本次 all-INTEGER 分类偷偷放入 GP。小型 SSE/混合类型、特殊 bitfield、显式 16B 过对齐的独立内存分类与 sret 路径仍需单独设计/验收。与 MC-057 空 Record（大小为零）不同，联合验收仍按用户决定推迟。
 
 ### MC-083 已完整声明的 char 数组再以省略边界字符串定义被错拒
 

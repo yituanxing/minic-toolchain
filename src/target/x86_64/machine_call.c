@@ -61,7 +61,7 @@ static bool x86_emit_call_arguments_planned(
             } else if (!x86_object_address(out, frame, object, "%r11"))
                 return false;
             if (loc->kind == MINIC_X86_ARG_RECORD_ONE_GP) {
-                if (!x86_one_gp_load(out, loc->record_bytes)) return false;
+                if (!x86_one_gp_load(out, loc->record_bytes, 0U)) return false;
                 if (!loc->on_stack) {
                     if (loc->gp_index >= abi->gp_argument_count) return false;
                     if (fprintf(out, "  movq %%rax, %s\n",
@@ -90,23 +90,16 @@ static bool x86_emit_call_arguments_planned(
                 continue;
             }
             if (loc->kind != MINIC_X86_ARG_RECORD_TWO_GP) return false;
-            if (loc->record_bytes != 12U && loc->record_bytes != 16U)
+            if (loc->record_bytes < 9U || loc->record_bytes > 16U)
                 return false;
             if (!loc->on_stack) {
                 if (loc->gp_index >= abi->gp_argument_count - 1U) return false;
                 if (fprintf(out, "  movq 0(%%r11), %s\n",
                             abi->gp_arguments[loc->gp_index]) < 0)
                     return false;
-                if (loc->record_bytes == 12U) {
-                    /* Only four bytes exist in the high eightbyte.  A 32-bit
-                     * load zero-extends the padding before GP placement. */
-                    if (fprintf(out,
-                        "  movl 8(%%r11), %%eax\n"
-                        "  movq %%rax, %s\n",
-                        abi->gp_arguments[loc->gp_index + 1U]) < 0)
-                        return false;
-                } else if (fprintf(out, "  movq 8(%%r11), %s\n",
-                                   abi->gp_arguments[loc->gp_index + 1U]) < 0)
+                if (!x86_one_gp_load(out, loc->record_bytes - 8U, 8U) ||
+                    fprintf(out, "  movq %%rax, %s\n",
+                            abi->gp_arguments[loc->gp_index + 1U]) < 0)
                     return false;
             } else {
                 if (fprintf(out,
@@ -114,10 +107,7 @@ static bool x86_emit_call_arguments_planned(
                     "  movq %%rax, %zu(%%rsp)\n",
                     loc->stack_index * 8U) < 0)
                     return false;
-                if (fprintf(out,
-                    loc->record_bytes == 12U
-                      ? "  movl 8(%%r11), %%eax\n"
-                      : "  movq 8(%%r11), %%rax\n") < 0 ||
+                if (!x86_one_gp_load(out, loc->record_bytes - 8U, 8U) ||
                     fprintf(out, "  movq %%rax, %zu(%%rsp)\n",
                             (loc->stack_index + 1U) * 8U) < 0)
                     return false;
@@ -243,20 +233,17 @@ static bool x86_emit_call_record_result(
         return true;
     if (!x86_object_address(out, frame, object, "%r10")) return false;
     if (minic_x86_64_one_gp_record(program, target, return_type, &bytes))
-        return x86_one_gp_store(out, bytes);
+        return x86_one_gp_store(out, bytes, 0U);
     if (minic_x86_64_two_gp_record(program, target, return_type)) {
         size_t alignment;
         if (!minic_data_layout_type(target->data_layout, program,
                                     return_type, &bytes, &alignment) ||
-            (bytes != 12U && bytes != 16U) ||
+            (bytes < 9U || bytes > 16U) ||
             fprintf(out, "  movq %s, 0(%%r10)\n",
                     abi->gp_results[0]) < 0)
             return false;
-        if (bytes == 12U)
-            /* Never overwrite the four bytes immediately after the result. */
-            return fprintf(out, "  movl %%edx, 8(%%r10)\n") >= 0;
-        return fprintf(out, "  movq %s, 8(%%r10)\n",
-                       abi->gp_results[1]) >= 0;
+        return fprintf(out, "  movq %%rdx, %%rax\n") >= 0 &&
+               x86_one_gp_store(out, bytes - 8U, 8U);
     }
     return false;
 }

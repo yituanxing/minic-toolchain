@@ -32,11 +32,11 @@ static bool x86_sysv_place(const MinicC0Program *program,
             else { loc->on_stack = true; ++cursor->stack_slots; }
         } else if (minic_x86_64_two_gp_record(program, target, type)) {
             loc->kind = MINIC_X86_ARG_RECORD_TWO_GP;
-            /* The second eightbyte may be only a four-byte object tail.
-             * Preserve the exact size for native register/stack transport. */
+            /* The second eightbyte may be a 1..8-byte object tail.
+             * Preserve its exact extent for safe native transport. */
             if (!minic_data_layout_type(target->data_layout, program, type,
                                         &loc->record_bytes, &bytes) ||
-                (loc->record_bytes != 12U && loc->record_bytes != 16U))
+                (loc->record_bytes < 9U || loc->record_bytes > 16U))
                 return false;
             if (cursor->gp_used <= abi->gp_argument_count - 2U)
                 cursor->gp_used += 2U;
