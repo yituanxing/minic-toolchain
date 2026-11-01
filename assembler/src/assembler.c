@@ -4613,8 +4613,10 @@ static bool parse_loaded_source_graph(MiniAs *as,
             minias_set_error(as,"fragment-without-source-site:%zu",i);
             return false;
         }
-    if(!minias_finalize_subsection_layout(as))return false;
-    return minias_refresh_symbol_aliases(as);
+    /* Finalization already refreshes the alias DAG after assigning final
+     * subsection bases. Its subsequent .size end-anchor work changes no
+     * alias source values, so a second whole-graph walk is redundant. */
+    return minias_finalize_subsection_layout(as);
 }
 
 typedef struct MiniAsEmitRef {

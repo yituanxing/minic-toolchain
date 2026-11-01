@@ -1266,3 +1266,88 @@ layout and RISC-V tiered branch expansions **PASS**. The dedicated RV GNU
 branch oracle is unavailable locally and was explicitly **SKIPPED**. Full
 Linux and strict GNU semantic checks must be judged by the next exact-head
 CI runs, never inferred from this local subset.
+
+## 29. 2026-11-01 — finalization already owns alias DAG refresh
+
+`parse_loaded_source_graph()` historically performed subsection
+finalization and **again** called `minias_refresh_symbol_aliases(as)`.
+This is demonstrably a redundant pass: finalization in `mc_layout.c`
+normalizes subsection-dependent anchor coordinates, then refreshes all
+alias DAG nodes. Its remaining loop only computes `.size` end anchors;
+it does not change the target value, section, type or source `size` consumed
+by alias graph edges. It is safe for the outer function to return the
+result of `minias_finalize_subsection_layout(as)` directly.
+
+The change preserves the single authoritative O(symbols+edges) topological
+evaluation, its cycle/undefined checks, Common ownership and its error
+propagation. It removes a second full alias graph walk and the temporary
+`calloc`/`malloc` on each source parse/replay, not a real phase-specific
+responsibility. No new structure or public interface is added.
+
+After this local change, Release `-Werror`, 2,048-edge x86 GNU alias DAG,
+1,024 SymbolID relocation GNU oracle, absolute-symbol fixup, SourceGraph
+rebind and `.org` layout tests pass. The mandatory A0 and next exact-head
+CI must be recorded after the batched commit; do not transfer the previous
+head's Linux certificate to these unpushed bytes.
+
+## 30. 2026-11-01 — validate canonical subsections in one ordered pass
+
+The final `minias_validate_fragment_layout` Section check previously
+iterated **every** Subsection anew for each Section. This was O(number of
+Sections × number of Subsections) despite the canonical sort and identity
+checks already performed by `minias_finalize_subsection_layout` and
+`build_anchor_graph`. For the real 4,096-Section / 8,192-Subsection GNU
+probe, this repeatedly examined the same validated input.
+
+The Section sweep now uses one increasing Subsection cursor: empty Sections
+still require `layout_size == 0`, while each owned Subsection must start
+at the previous end; size overflow and final Section size drift are checked
+unchanged. Because the anchor graph already rejects invalid, duplicate and
+out-of-order subsection keys, the cursor cannot skip an unvalidated owner.
+The defensive final cardinality check retains fail-closed behavior if this
+invariant is ever broken. Complexity becomes **O(Sections + Subsections)**.
+
+The change neither modifies Fragment ownership nor inserts another sort or
+per-section lookup table. Local Release `-Werror`, the 4,096-Section GNU
+SectionKey/Subsection oracle, reverse-subsection GNU `.org` snapshot and
+layout ownership probe **PASS**. After provisioning the GNU RISC-V cross
+toolchain, the deferred-relax and RISC-V branch binding GNU exact probes
+also **PASS** (they were previously unavailable). A0 **30/30 PASS** locally;
+exact-head Linux and semantic CI still belong to the next grouped commit.
+
+## 31. 2026-11-01 — GNU-proven local LA lowering and PIC GOT width
+
+Strict GNU semantic artifacts show a high-frequency RISC-V divergence that
+is *not* solved by normalizing symbol names: `fs/proc/util.i.s` has equal
+2,032-byte `.text` and identical `.riscv.attributes`, but five GNU versus
+45 MiniAS relocations. MiniAS always emitted HI20/LO12 for `la/lla` and
+invented a private anchor, even when GNU GAS `-mno-relax` had already
+encoded an unambiguous local address. These are real emitted differences.
+
+The target's local-finalization policy now uses a **strictly scoped** path:
+
+- Only final-layout, same-section, `STB_LOCAL` `.L*` **disposable temporary
+  labels** (not named locals, `.set` aliases, weak or mutable symbols) can
+  become immediate AUIPC+ADDI bytes. The complete signed AUIPC+ADDI range
+  is `[-2147485696,+2147481599]`; overflow retains the old relocation path.
+  A C11-defined floor division handles negative HI20 rounding.
+- GNU retains relocations for ordinary named `STB_LOCAL` symbols even when
+  they are same-section, so the new fold deliberately rejects those.
+  Cross-section, undefined, weak and alias requests remain symbolic.
+- PIC `la` now always uses `R_RISCV_GOT_HI20`, including locally defined
+  targets and addends; the GOT slot load is `LW` on RV32 and `LD` on RV64.
+  PIC `lla` remains a PCREL AUIPC+ADDI pair. GNU confirmed each case via
+  RV32/64 × local/extern/addend probes.
+- GNU default relaxation may retain HI20/LO12 plus `R_RISCV_RELAX`
+  annotations. Our existing explicit relaxation policy does not claim
+  those markers; the exact byte/reloc certificate is **GNU `-mno-relax`**,
+  not all GNU optimization modes.
+
+The new `probe-rv-local-la-gnu.sh` is wired into mandatory A0. It checks
+forward/backward `.L` labels, +/-2048 rounding, named-local and `.set`
+alias exclusions, weak/undefined/cross-section relocations, RV32/RV64 PIC
+GOT details and out-of-range handling. Local `-Werror`, new GNU oracle,
+five related existing GNU probes and A0 **30/30 PASS**. The historical
+3,309 strict semantic DIFF and six native `.option arch,+zbb` failures
+are **not** declared resolved by this one targeted fix; run representative
+Linux `.s` comparisons before any expensive same-head 3,536 replay.

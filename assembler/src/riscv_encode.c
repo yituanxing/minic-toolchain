@@ -2331,21 +2331,57 @@ static bool rv_encode_multi_mc(MiniAs *as, const MiniAsStmt *stmt) {
         MiniAsSymbolRef anchor;
         int rd = (int)m->operands[0].reg;
         bool use_got;
+        bool pic_la;
         if (expr == NULL) {
             minias_set_error(as, "internal:riscv-la-symbol-missing");
             return false;
         }
         target = minias_symbol_ref_lookup(as, *expr);
-        /* Linux early boot: NOPIC is default; PIC external la may use a
-         * GOT reference only if the source did not request an addend. */
+        /* Linux early boot: NOPIC is default. GNU PIC `la` always uses a
+         * GOT reference, even for defined LOCAL symbols or symbol addends;
+         * RV32 loads the GOT slot with LW, RV64 with LD. `lla` stays PCREL. */
         if (m->target_form != RV_PSEUDO_LA &&
             m->target_form != RV_PSEUDO_LLA) {
             minias_set_error(as, "internal:riscv-la-invalid-form");
             return false;
         }
-        use_got = (stmt->site.mode_bits & MINIAS_RISCV_OPTION_PIC) != 0U &&
-                  m->target_form == RV_PSEUDO_LA && expr->addend == 0 &&
-                  (target == NULL || !target->defined);
+        pic_la = (stmt->site.mode_bits & MINIAS_RISCV_OPTION_PIC) != 0U &&
+                 m->target_form == RV_PSEUDO_LA;
+        use_got = pic_la;
+        /* GNU resolves same-section strong local LA/LLA pairs without RELA
+         * when linker relaxation is disabled. MiniAS cannot advertise the
+         * R_RISCV_RELAX contract, so its supported encoding is nonrelaxable.
+         * PIC `la` always follows the GOT relocation path, including for
+         * defined locals; only `lla` may take this fixed PCREL encoding.
+         * GNU retains relocations even for an ELF STB_LOCAL named source
+         * symbol: only its disposable .L temporary labels are folded.
+         * Do not fold weak, named, mutable, aliased or cross-section refs. */
+        if (!pic_la && target != NULL && target->defined &&
+            target->section == stmt->section &&
+            target->bind == MINIAS_STB_LOCAL && !target->alias_pending &&
+            target->name != NULL && target->name[0] == '.' &&
+            target->name[1] == 'L' &&
+            !target->mutable_absolute_set && !target->has_alias_dependency &&
+            target->value <= (uint64_t)INT64_MAX &&
+            stmt->offset <= (uint64_t)INT64_MAX) {
+            int64_t delta;
+            if (minias_checked_add_i64((int64_t)target->value -
+                                      (int64_t)stmt->offset,
+                                      expr->addend, &delta) &&
+                delta >= -INT64_C(2147485696) &&
+                delta <= INT64_C(2147481599)) {
+                int64_t rounded = delta + INT64_C(2048);
+                int64_t hi = rounded / INT64_C(4096);
+                if (rounded < 0 && rounded % INT64_C(4096) != 0)
+                    --hi; /* C division truncates toward zero, not floor. */
+                int64_t lo = delta - hi * INT64_C(4096);
+                return append_u32(as, stmt->section,
+                                  0x17U | ((uint32_t)rd << 7U) |
+                                  (((uint32_t)hi & 0xfffffU) << 12U)) &&
+                       append_u32(as, stmt->section,
+                                  enc_i(0x13U, rd, 0U, rd, lo));
+            }
+        }
         if(!minias_encode_request_anchor_ref(as,stmt,"pcrel",
                                              &anchor)) {
             minias_set_error(as,"riscv-private-pcrel-symbol-overflow");
@@ -2356,7 +2392,9 @@ static bool rv_encode_multi_mc(MiniAs *as, const MiniAsStmt *stmt) {
                         0x17U | ((uint32_t)rd << 7U))) return false;
         if (use_got) {
             if (!append_u32(as, stmt->section,
-                            enc_i(0x03U, rd, 3U, rd, 0))) return false;
+                            enc_i(0x03U, rd,
+                                  MINIAS_RV_STATE(as)->target_xlen == 32U ?
+                                      2U : 3U, rd, 0))) return false;
         } else if (!append_u32(as, stmt->section,
                                enc_i(0x13U, rd, 0U, rd, 0))) return false;
         return minias_encode_add_fixup_ref(as, stmt->section, stmt->offset,

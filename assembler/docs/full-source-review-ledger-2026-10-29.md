@@ -138,6 +138,94 @@ branch comparison still **SKIPPED (cross-GNU unavailable)**. Parser/YAML
 static checks **PASS**. Full 3,536 strict GNU semantic re-evaluation and
 Linux multiarch/QEMU outcomes for the new revision remain **PENDING**.
 
+### 2026-11-01 same-head `7bc9b65c` returns — hard PASS, semantic RED
+
+At this checkpoint, exact-head frozen 3×7 (run `41267765236`, all **21**
+shards and aggregate, 9,645 candidate `.s`) and hard gate (run
+`41267765007`, **3,536/3,536**) **SUCCEEDED**. This is still only the
+assembled/hard-gate contract. The fixed Linux MiniC options produced all
+**3,352 C shard plus 149 C149 inputs**. Strict GNU oracle (run
+`41267765088`) then reported **215 PASS / 3,309 DIFF / 12 MINIAS_FAIL /
+0 GNU_FAIL / 0 INCONCLUSIVE / 0 ORACLE_ERROR** across 3,536 inputs:
+
+* C3,352: 63 PASS, 3,283 DIFF, 6 MINIAS_FAIL (dominant symbols differences
+  require a common-cause diagnosis rather than 3,283 ad hoc patches).
+* C149: 147 PASS, two DIFF under
+  `arch/riscv/kernel/vdso/{hwprobe,vgettimeofday}.i.s` (symbols+relocs).
+* Native35: 5 PASS, 24 DIFF, six MINIAS_FAIL on `.option arch,+zbb`;
+  enabling GNU attributes eliminated only five formerly uniform DIFF.
+
+This run's independent RV64 `linux-single` job **SUCCEEDED** for Linux
+Image assembly and Python-era runtime/P1 assertions. The separate
+`41267765128` x86-64/AArch64/LoongArch64 full GNU Kbuild→MiniAS→GNU
+link→QEMU workflow was still **IN PROGRESS**. Do not infer its result or
+fold older SHAs into this head's Linux certificate.
+
+Later same-head job-level evidence in `41267765128`: **x86-64 SUCCESS**
+(2,841/2,841 production objects, 3,109 MiniAS invocations, MiniAS and GNU
+both QEMU P0 2/2 + P1 12/12); **LoongArch64 SUCCESS** (2,748/2,748
+objects, 3,004 MiniAS invocations, QEMU P0 2/2 + P1 12/12); LoongArch
+and AArch64 independent GNU baselines SUCCESS. The **AArch64 MiniAS**
+Kbuild/boot job was still **IN PROGRESS** at this later checkpoint. No
+cross-SHA aggregation or premature fourth result is allowed.
+
+### Next in-progress production deletion — duplicate alias DAG refresh
+
+`parse_loaded_source_graph()` called
+`minias_finalize_subsection_layout(as)` and then redundantly ran
+`minias_refresh_symbol_aliases(as)` again. Finalization itself refreshes
+the alias DAG after assigning subsection bases; its subsequent `.size`
+end-anchor adjustment updates no symbol value/section/type or source size
+used by alias resolution. Remove the outer second walk; preserve
+finalization's error path and its one necessary alias refresh. This saves
+one O(symbols+edges) graph traversal and two temporary allocations on
+each normal source graph parse/replay.
+
+Local **after deletion**: Release `-Werror` PASS, A0 **30/30 PASS**;
+GNU x86 exact alias
+DAG test **2,048 edges PASS**; 1,024 SymbolID relocations GNU-exact,
+absolute fixup GNU-exact, Source rebind and `.org` lexical GNU-exact PASS.
+Exact-head Linux tests for this *next* revision must be re-run after the
+rest of the grouped source cleanup is ready; the previous
+`7bc9b65c` certificate does not cover this unpushed change.
+
+The same pending batch also replaces `minias_validate_fragment_layout`'s
+quadratic `for Section × for Subsection` end-position check with one ordered
+Subsection cursor. The canonical anchor graph already validates the sorting
+and SectionID; gap/overlap, overflow, and empty Section checks remain.
+The 4,096-Section / 8,192-Subsection GNU oracle, reversed Subsection `.org`
+snapshot and layout ownership tests **PASS** locally. GNU RISC-V deferred
+fragment relaxation and branch binding also **PASS** after the GNU cross
+toolchain was provisioned locally; the earlier unavailable-tool skip is no
+longer the current state. This is an executed validation-pass optimization,
+not a new layout model.
+
+The strict semantic gate's dominant C failure is **not** a single wrong
+symbol spelling: for example `fs/proc/util.i.s` has equal `.text` size
+(2,032 bytes) and identical `.riscv.attributes`, but GNU emitted only five
+relocations while MiniAS emitted 45, mostly unnecessary local PC-relative
+HI20/LO12 fixup pairs and their private anchors. The C149 independent
+`vdso/hwprobe.i.s` likewise has GNU 14 versus MiniAS 80 relocations.
+The local cross-GNU oracle now proves a narrower, safe fix: GNU GAS with
+`-mno-relax` folds **disposable `.L*` temp labels**, not arbitrary ELF
+`STB_LOCAL` symbols; named locals and `.set` aliases keep HI20/LO12 pairs.
+The pending RISC-V encoding patch folds only same-section, defined, strong,
+non-aliased `.L*` references whose PC-relative AUIPC+ADDI immediates fit the
+exact signed HI20/LO12 range. Cross-section, weak, undefined, named local,
+alias and overflow stay on the relocation path. Independent GNU probes also
+exposed and fixed the existing PIC `la` policy: **all** PIC `la` use
+GOT_HI20 even for defined locals/addends; RV32 loads a GOT slot via LW,
+RV64 via LD; PIC `lla` remains PCREL. Default GNU linker-relaxation emits
+additional markers, which MiniAS deliberately does not claim to implement.
+
+New mandatory GNU probe `probe-rv-local-la-gnu.sh` reports **PASS** for
+no-relax `.text` bytes, local fixup removal, retained named/alias/weak/extern
+relocations, +/-2048 rounding, RV32/RV64 PIC GOT/addends and overflow
+behavior. The integrated Release `-Werror` and A0 **30/30 PASS** with GNU
+cross tools. This is a **small, proven subset**, not a claim that all 3,309
+historical DIFF have disappeared. Do **not** disable symbol/relocation
+comparison or fire the 3,536 full gate until this grouped change is ready.
+
 This top section is the **current progress snapshot**. Later sections retain
 their original 2026-10-29 audit/batch evidence as history; their “pending CI”
 labels refer to those historical snapshots, not the current branch HEAD.

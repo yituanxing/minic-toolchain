@@ -1241,27 +1241,36 @@ static bool minias_validate_fragment_layout(MiniAs *as) {
     /* Ensure final sections do not overlap/overflow the accumulated
      * subsections; different source-order subsections are concatenated by
      * their numeric index, never by the time they were first encountered. */
-    for(i=0U;i<as->section_count;++i) {
-        size_t k;
-        uint64_t end=0U;
-        for(k=0U;k<as->subsection_count;++k) {
-            const MiniAsSubsection *sub=&as->subsections[k];
-            if(sub->section!=(int)i)continue;
-            if(sub->base!=end) {
-                minias_set_error(as,"fragment-section-gap-or-overlap:%s",
+    {
+        size_t k=0U;
+        /* build_anchor_graph already checked canonical (section,subsection)
+         * order. Consume each subsection once instead of rescanning the
+         * entire array for every Section (O(S+Sub), not O(S*Sub)). */
+        for(i=0U;i<as->section_count;++i) {
+            uint64_t end=0U;
+            while(k<as->subsection_count &&
+                  (size_t)as->subsections[k].section==i) {
+                const MiniAsSubsection *sub=&as->subsections[k++];
+                if(sub->base!=end) {
+                    minias_set_error(as,"fragment-section-gap-or-overlap:%s",
+                                     as->sections[i].name);
+                    goto done;
+                }
+                if(sub->size>UINT64_MAX-sub->base) {
+                    minias_set_error(as,"fragment-section-overflow:%s",
+                                     as->sections[i].name);
+                    goto done;
+                }
+                end=sub->base+sub->size;
+            }
+            if(end!=as->sections[i].layout_size) {
+                minias_set_error(as,"fragment-section-layout-drift:%s",
                                  as->sections[i].name);
                 goto done;
             }
-            if(sub->size>UINT64_MAX-sub->base) {
-                minias_set_error(as,"fragment-section-overflow:%s",
-                                 as->sections[i].name);
-                goto done;
-            }
-            end=sub->base+sub->size;
         }
-        if(end!=as->sections[i].layout_size) {
-            minias_set_error(as,"fragment-section-layout-drift:%s",
-                             as->sections[i].name);
+        if(k!=as->subsection_count) {
+            minias_set_error(as,"fragment-index-noncanonical-subsection");
             goto done;
         }
     }
