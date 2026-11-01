@@ -860,7 +860,7 @@ x86 native）。本批没有 GNU cross ELF/QEMU 全面验收。
 
 | Common 子域 | 实际合同、耦合与清理决定 |
 | --- | --- |
-| `aggregate_shape` | 依 DataLayout 提供 aggregate 的存储 byte 数、alignment、word 数及整数叶树；**存储形状不能直接代替 psABI 的 FP/整数寄存器分配**，特别是 RV64 LP64D 的 union/FP member。**KEEP(storage facts; ABI belongs to target)**；MC-059 独立修复中。 |
+| `aggregate_shape` | 依 DataLayout 提供 aggregate 的存储 byte 数、alignment、word 数；审读基线上还包含一个公共“整数叶树”判定，但**存储形状不能直接代替 psABI 的 FP/整数寄存器分配**，特别是 RV64 LP64D 的 union/FP member。**KEEP(storage facts; ABI belongs to target)**；随后 MC-059 已删除 Common 整数叶树，并将 union-sensitive ABI 分类收回 RV64。 |
 | `core_call_view` / `core_call_index` | 验证 direct/indirect CALL callee、source 形参/返回值 kind、record/object 及 typed function-pointer 一致性；call index 按 instruction ID 稀疏排序后检索，view 借用 Core function 寿命。这里只有 *Core 合法调用形状*，真正 arg registers/variadic psABI 在各机器端。**KEEP(typed preflight and borrowed lifetime)**；MC-080 间接变参 aggregate 仍需 ABI 证明。 |
 | `core_function_facts` / `core_function_plan` | 一次 Core verifier 产出 immutable verified-function identity、call facts、对象存储和 call index；函数扫描记录直接/间接调用、最大源实参数、inline asm、dynalloc、va_start 与保守保存 RA 的条件；释放路径反向对应所有权。事实按 Core lexical instructions 收集，**不是**源码可达性证明，不能用来实现 MC-085 诊断。**KEEP(one verified handoff)**。 |
 | `core_instruction_family` / `core_block_walk` | 指令族枚举供语义检查、扫描和机器 preflight 复用，族归属不代表任一 ISA 已实现；block walker 可利用 visible bitmap 但仍按 block 链接顺序迭代。**KEEP(semantic classification, not capability)**。 |
@@ -879,6 +879,46 @@ call census 不等于 source reachable diagnostics 的陷阱。
 check-core-ir-shapes check-layout check-rv64-abi`；Core IR shapes
 native 11/11、ASan/UBSan 11/11，DataLayout 与 RV64 ABI 单测
 通过。本批没有进行五目标 GNU ELF/QEMU 联合验收。
+
+## 批次 C27：Direct LP64 两机器的公共控制平面（仅审读）
+
+**基线：** C26 与 MC-059/066/085 已推送 `b6d703c3`，
+2026-11-01。本批全文深读 `src/target/common/direct_*`
+**20 个生产文件、合计 3,503 行**：`direct_block_context.h`、
+`direct_block_register.h`、`direct_call_plan.c/.h`、
+`direct_function_emit.h`、`direct_function_plan.c/.h`、
+`direct_function_profile.c/.h`、
+`direct_instruction_semantics.c/.h`、`direct_linux_bug_asm.h`、
+`direct_lp64_abi.h`、`direct_machine_dispatch.h`、
+`direct_preflight.c/.h`、`direct_program_emit.c/.h`、
+`direct_residual_plan.c/.h`。累计 **191/339** 全文深读：
+Frontend **69/69**、Compiler **11/11**、Core **48/48**、
+Target **63/211**；Target 余 **148** 个文件。此批没有改变实现。
+
+| Direct LP64 子域 | 代码合同、分歧与决定 |
+| --- | --- |
+| `direct_lp64_abi` / `direct_call_plan` | 这里的“公共”只有 AAPCS64 与 LoongArch LP64D：虽然都最多 8 个 GAR，AAPCS64 大记录间接返回用专用 x8，Loong 消耗首个 a0；Record whole-or-stack 与可拆末尾 GAR、wide 偶数对齐与拆 a7、具名 FP 参数与变参 FP 位置各异。共用一份 checked argument location 和 call cache，**不等于共享机器 ABI**。**KEEP(explicit psABI policy)**。 |
+| CALL semantic index / cached machine locations | 从 C26 的 verified Core CallIndex 借用实际 CALL 序列，原参 type/record object 与 source fixed/variadic 语义在这里二次做 ABI 资格验证；最多 64 实参，物理缓存按实际 call/实参个数分配，失败逐层销毁。MC-080 间接调用/变参 aggregate 越界场景仍是拒绝，不可通过统一 classifier 偷放。**KEEP(semantic-vs-placement proof)**。 |
+| `direct_function_profile` / `direct_function_plan` | 函数入口按物理 locations 而非 C 参数个数计算已消耗 GP/FP；AArch64 `va_list` 是独立 32B mutable tag + save banks，Loong 是 linear GP pointer，固定 `double` 的支持范围不同。frame 还保存动态栈入口 SP、大对齐、间接结果、多个 va_start cursor；成功准备不写 ASM，失败中途可含部分分配。**KEEP(per-ABI variadic cursor and rollback)**。 |
+| `direct_instruction_semantics` / `direct_residual_plan` | 两机器共享 Core 值 ID/type、宽整数转换、Record byte copy、浮点/整数运算结果形状和 relaxed-only atomic 资格；核心 family 只是预检分类，不是 ISA 机器 opcode 清单。AArch64 与 Loong 的 rounding、寄存器、原子序、长双精度及 stack addressing 仍由机器 emitter 负责。**KEEP(semantic shape before native emission)**。 |
+| `direct_machine_dispatch` / `direct_block_register` | Core CFG roots 包含外部 source labels、asm-goto 与 computed-goto；不能只遍历 entry 可达块。按 ValueId use-count 仅消除纯 constant 或多余 SSA writeback；GP 相邻直传必须唯一使用、目标显式 opt-in，并允许 target 已证明无 native opcode 的中间节点。x86/Loong 使用 GP 前传，A64 opt-out，说明 `direct_` 命名并不意味着完全只服务两个 LP64 实现。**NEEDS_PROOF(module ownership vs physical GP policy)**。 |
+| `direct_preflight` / `direct_linux_bug_asm` | 2048 block、8192 object、64 参数等界限和一条 Core effect 对应一份 ASM 的所有权是 fail-closed 的；opaque GNU ASM 只可接受 target 精确白名单内的零 operand hardware，Linux bug-table 则严格匹配 section/label/file/short flags 语法。不得为提高 Linux 源覆盖率降级成不透明文本放行。**KEEP(machine qualification and source ownership)**。 |
+| `direct_function_emit` / `direct_program_emit` | FunctionPlan 和 borrowed BlockContext 编排 ELF function/visibility、选定 target prologue/block callbacks、constructor 与失败清理；TU emitter 通过共同 visitor 处理 global、alias 和 function，避免留下部分输出。census 和 verbose reject 只能做归因，不等于机器支持统计。**KEEP(shared control plane, target machine callbacks)**。 |
+| 清理候选 | 发现 `direct_call_plan` 的结果/实参检查有嵌套作用域和较旧的诊断注释、`direct_preflight` census 格式紧凑，但语义分支直接影响拒编边界；本批未证明可删除的重复指令/ABI 代码。若将来移动 x86 的 GP 前传 helper，先覆盖所有可见/不可见 source label 下的单使用与状态测试。**NEEDS_PROOF(semantic cleanup before rewrite)**。 |
+
+**C27 生产源码 +0/-0，净 0 行**；C1～C27 纯清理
+累计仍 **净 -331 行**。这是在完整阅读后保留的独立合同，
+并不意味着 Direct LP64 可直接抽象为通用五机器后端。
+
+**验证：** Release `-Werror` 构建后，
+`check-direct-lp64-asm-preflight-unit`、
+`check-direct-lp64-asm-capacity`（两架构 255/256/257/512
+operand 容量及未认证 ASM 拒编）、
+`check-linux-three-arch-trap-state` 均 PASS。
+`check-four-backend-m18-varargs` 依赖的 cross ELF/QEMU 工具
+在恢复环境中缺失，执行返回 127，**NOT_RUN / 非通过**；
+`DIRECT_LP64_ASM_ELF` 也明确记为 `NOT_TESTED`。
+没有启动推迟中的五目标联合验收。
 
 ## 后续批次进度规则
 
