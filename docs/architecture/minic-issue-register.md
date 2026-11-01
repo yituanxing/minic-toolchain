@@ -81,10 +81,10 @@
 | [MC-060](#mc-060-lp64-两个目标的大聚合-2048-字节硬上限) | P2 | OPEN | LOCAL-COMPILE-DIFF | Common LP64/A64/Loong | 合法 2049B Record 的按值参数/返回在 A64/Loong preflight 错拒，2048B 通过 |
 | [MC-061](#mc-061-record-字段声明中-pointer-to-array-跨扩容借用) | P0 | OPEN | ASAN | Frontend | 声明 Record 的 pointer-to-array 字段遇匿名 Record 时 UAF，无需 initializer |
 | [MC-062](#mc-062-x86-alt-reloc-的-memory-输入源机约束分裂) | P2 | OPEN | LOCAL-COMPILE-DIFF | x86-64 ASM | Source 允许任意 GNU m lvalue，Machine 硬编码唯一符号，合法替代重定位遭拒 |
-| [MC-063](#mc-063-带标签的裸-record-声明被误作匿名成员) | P1 | OPEN | GNU-NATIVE-DIFF | Frontend/DataLayout | GNU 的 `struct Named;` 仅声明不占成员，MiniC 错当匿名成员导致 `sizeof` 错误 |
+| [MC-063](#mc-063-带标签的裸-record-声明被误作匿名成员) | P1 | FIXED-UNVERIFIED | GNU-NATIVE-DIFF | Frontend/DataLayout | `6aac3c1` 区分 direct tagless anonymous 与 tagged/typedef bare declaration；GNU/MiniC x86 native exit48 同值，完整目标 ABI 未验 |
 | [MC-064](#mc-064-inline-asm-仅符号引用的静态函数被错误裁剪) | P1 | OPEN | RV64-ELF-LINK-DIFF | Core Reachability | GNU ASM-only static 函数符号被降成文本后丢失可达性边；同源 GNU ELF/QEMU PASS，MiniC GNU AS PASS、GNU LD undefined，等待 typed Core 引用方案 |
 | [MC-066](#mc-066-aarch64-浮点指针字段被误判为浮点聚合) | P2 | OPEN | LOCAL-COMPILE-DIFF | AArch64 ABI | 32B 聚合的 `double*` 被当 FP 成员拒绝，换成 `int*` 即通过 |
-| [MC-067](#mc-067-带-gnu-属性的-record-前向声明被错判为定义) | P2 | OPEN | LOCAL-COMPILE-DIFF | Frontend | `struct __attribute__((aligned(16))) Forward;` GCC 合法，MiniC 五目标要求 `{` |
+| [MC-067](#mc-067-带-gnu-属性的-record-前向声明被错判为定义) | P2 | FIXED-UNVERIFIED | GNU-NATIVE-DIFF/SOURCE | Frontend | `072ca74` 识别前/后置 GNU 属性的文件/块作用域 struct/union forward；GNU/MiniC x86 native 0/4、四目标 -S PASS，完整矩阵未验 |
 | [MC-069](#mc-069-aarch64-linux-vdso-在-gnu-ld-拒绝动态重定位) | P1 | OPEN | GNU/MiniC-ELF-AB | AArch64 Linux vDSO ELF visibility | 4108 项 MiniC `-S`/GNU AS 通过；GNU 的 HIDDEN 未定义数据符号经 ADR_PREL，而 MiniC 错为 DEFAULT+GOT，GNU LD 拒绝动态重定位 |
 | [MC-070](#mc-070-loongarch64-linux-heado-对-start_secondary-的-b26-越界) | P1 | OPEN | GNU/MiniC-ELF-AB | LoongArch64 Linux 链接/体积 | 2723 项 MiniC `-S`/GNU AS 通过，主 GNU LD B26 越界；同输入 C executable ELF 代码约 16.89MB(GNU)→371.97MB(MiniC)，膨胀 22.03× |
 | [MC-072](#mc-072-static-inline-的-computed-goto-表指向不存在的-source-label) | P1 | OPEN | GCC-DIFF/ASM-ONLY | Compiler/Core/Target | 有效 GNU `static inline` 的静态 `&&label` 表引用 `.Luser_N`，整数特化克隆发射但原函数被裁剪；源标签别名没有任何定义 |
@@ -590,10 +590,10 @@
 
 ### MC-063 带标签的裸 Record 声明被误作匿名成员
 
-- **状态：** `OPEN`，P1，`GNU-NATIVE-DIFF`；与仅有 `-S` 差分的问题不同，已有本机实际执行结果错误。
+- **状态：** `FIXED-UNVERIFIED`，P1，`GNU-NATIVE-DIFF`；主线修复 `6aac3c1` 仅在 `parse_record_field` 判断 direct `struct/union` + tagless record 才放入匿名成员。裸 tagged 声明和 typedef-name-only 不更改布局，现有真正匿名成员仍保留。
 - **位置与语义：** `src/frontend/parser_record.c:parse_record_field` 在 `minic_type_is_record(base_type) && current==SEMICOLON` 时统一向外层 Record 添加匿名字段；但 GNU C `struct Named {int x;}; struct Wrapped {struct Named; int y;};` 的带标签裸类型声明**不声明匿名成员**，GCC `-Wall` 提示 `declaration does not declare anything`。相对地 `struct {int x;};` 是可用的 GNU 匿名 Record 成员，二者必须区分。
 - **持久反例：** `tests/compiler/audit/mc063_tagged_bare_record_field_layout.c` 同时检查两种语法。GCC GNU11 x86 native 得到 `sizeof(Wrapped)=4`、匿名 Record 组合大小8，整程序 exit **48**；同一输入 MiniC x86 `-S`→GNU AS/cc→native exit **88**，两个结构都被算作8；五目标 `-S` 都生成错误的 tagged 结构大小8。GCC tagged case 有警告而非错误，不能称为 ISO C 保证。
-- **修复与验收：** 区分 tagless anonymous definition、tagged bare declaration、record-tag 类型别名，核对字段布局/访问/初始化/bitfield 和 GCC GNU11 本机 ABI；对不同目标 target DataLayout 另补 GCC 对照，避免直接对后端修正 offset。
+- **合入后验收：** `check-tagged-bare-record-members` 接 `check-fast`，历史反例 GNU/MiniC x86 native 现均 exit **48**；新正例对 bare tagged、typedef-name-only、真正匿名 struct/union 的布局分别做 GNU 差分，非法 incomplete named field 拒绝。主线 Release `-Werror` 和上述定点门禁 PASS，其他目标完整 GNU ABI/运行矩阵仍待验。
 
 ### MC-064 Inline ASM 仅符号引用的静态函数被错误裁剪
 
@@ -617,10 +617,10 @@
 
 ### MC-067 带 GNU 属性的 Record 前向声明被错判为定义
 
-- **状态：** `OPEN`，P2，`LOCAL-COMPILE-DIFF`；五目标复现的是 Frontend 入口同一个解析错误。
+- **状态：** `FIXED-UNVERIFIED`，P2，`GNU-NATIVE-DIFF/SOURCE`；主线修复 `072ca74` 在 record、file-scope、block-scope 三个分派 lookahead 中识别 tag 前/后 GNU 属性，实际属性校验仍由 record 解析 owner 完成。没有扩大 Target ABI 支持。
 - **位置/失配：** `src/frontend/parser_record.c:minic_parser_parse_record_definition` 使用浅拷贝 lexer lookahead 仅匹配 `struct IDENTIFIER ;` 为 forward，遇 `struct __attribute__((aligned(16))) Forward;` 时错误调度到 `minic_parser_parse_record_definition_specifier`，后者要求 `{`，报 `expected '{' after record specifier`。其余没有属性的 tag forward 路径可用。
 - **持久反例：** `tests/compiler/audit/mc067_attributed_record_forward_declaration.c`；GCC `-std=gnu11 -Wall` 正常编译无警告、x86 native exit4；MiniC x86/A64/RV32/RV64/Loong `-S` **0/5 PASS**。`-DMC067_PLAIN_CONTROL` 仅移除属性，同一五目标 **5/5 PASS**。
-- **修复与验收：** 将 record declaration-head 的 attribute 和 tag 识别先统一到 tokenizer/parsed-specifier contract，再区分 forward 与 complete definition；覆盖 `struct`/`union`、属性在 tag 前后、重复声明、同名 scope，不要用多个更深的 Parser 浅复制来规避语义状态。
+- **合入后验收：** `check-attributed-record-forward-declarations` 接 `check-fast`；GNU/MiniC 对相同 `.i` 的 x86 native 新正例 exit0、历史 audit exit4 一致，另四目标 `-S` PASS；非法同名 struct/union kind 冲突两者均拒。完整 Linux、不同目标 GNU AS/LD/QEMU 及属性布局 ABI 联合验收未运行。
 
 ### MC-068 always_inline 未实际展开且外部 Clone 造成 init 段生命周期失配
 
