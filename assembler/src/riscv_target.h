@@ -72,6 +72,7 @@ typedef enum MiniAsRiscvSymbolModifier {
 
 struct MiniAs;
 struct MiniAsStmt;
+struct MiniAsSymbolRef;
 struct MiniAsMeasureView;
 struct MiniAsMeasureErrorSink;
 struct MiniAsParseContext;
@@ -110,6 +111,10 @@ bool minias_riscv_compute_branch_plan(const struct MiniAsStmt *stmt,
                                       const struct MiniAsSymbol *symbol,
                                       MiniAsRiscvBranchPlan *result,
                                       const char **diagnostic);
+/* Retained branch/JAL operand binding is immutable across relaxation and
+ * final encoding. Each phase still looks up its own current symbol view. */
+const struct MiniAsSymbolRef *minias_riscv_branch_bound_symbol(
+    const struct MiniAsStmt *stmt);
 
 /* RISC-V-only psABI relocation constants. */
 #define MINIAS_R_RISCV_32 1U

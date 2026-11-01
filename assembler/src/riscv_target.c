@@ -660,15 +660,20 @@ bool minias_riscv_compute_branch_plan(const MiniAsStmt *stmt,
     return true;
 }
 
+const MiniAsSymbolRef *minias_riscv_branch_bound_symbol(
+    const MiniAsStmt *stmt) {
+    const MiniAsMCInst *m=stmt->mcinst;
+    if(m==NULL || (m->opcode!=RV_MC_BRANCH && m->opcode!=RV_MC_JAL))
+        return NULL;
+    return m->operands[m->opcode==RV_MC_BRANCH?2U:1U].bound_symbol;
+}
+
 /* Common owns symbol lookup and diagnostic storage in the relaxation phase.
  * This wrapper only projects current symbol metadata into the pure policy. */
 static bool riscv_relax_branch_plan(MiniAsRelaxContext *ctx,
                                     const MiniAsStmt *stmt,
                                     MiniAsRiscvBranchPlan *result) {
-    const MiniAsMCInst *m=stmt->mcinst;
-    const MiniAsSymbolRef *expr=m!=NULL &&
-        (m->opcode==RV_MC_BRANCH || m->opcode==RV_MC_JAL)
-        ? m->operands[m->opcode==RV_MC_BRANCH?2U:1U].bound_symbol : NULL;
+    const MiniAsSymbolRef *expr=minias_riscv_branch_bound_symbol(stmt);
     const MiniAsSymbol *symbol=expr!=NULL
         ? minias_relax_symbol_ref_lookup(ctx,*expr) : NULL;
     const char *diagnostic=NULL;

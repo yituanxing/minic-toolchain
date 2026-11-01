@@ -880,6 +880,7 @@ jobs:
           work="$GITHUB_WORKSPACE/build/minias-semantic-${{ matrix.label }}"
           CORE_FAST_TRACE=1 python3 tests/external/linux/corpus_replay.py \
             --minic "$compiler" --corpus "$corpus" --work "$work" \
+            --minic-cflag=-fshort-wchar --minic-cflag=-funsigned-char \
             --jobs 4 --offset 0 --limit ${{ matrix.total }} --sample-count 0
           test "$(find "$work/minic-out" -type f -name '*.s' | wc -l)" -eq ${{ matrix.total }}
 
@@ -973,6 +974,7 @@ jobs:
             --minic "$GITHUB_WORKSPACE/build/minias-semantic-c149-toolchain/bin/minic-cc" \
             --corpus "$GITHUB_WORKSPACE/build/minias-ground-truth-c149-corpus" \
             --work "$GITHUB_WORKSPACE/build/minias-semantic-c149-replay" \
+            --minic-cflag=-fshort-wchar --minic-cflag=-funsigned-char \
             --jobs 4 --offset 0 --limit 149 --sample-count 0
           test "$(find build/minias-semantic-c149-replay/minic-out -type f -name '*.s' | wc -l)" -eq 149
 

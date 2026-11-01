@@ -100,7 +100,10 @@ def main() -> int:
                 f"-mabi={mabi}",
                 "-mcmodel=medany",
                 "-mstrict-align",
-                "-Wa,-mno-relax,-mno-arch-attr",
+                # MiniAS emits an ABI-visible .riscv.attributes section for
+                # the requested -march. Keep the GNU oracle's attributes too;
+                # disabling only relaxation still isolates size/reloc policy.
+                "-Wa,-mno-relax",
                 "-x", "assembler", "-c",
                 str(inp), "-o", str(ref),
             ],

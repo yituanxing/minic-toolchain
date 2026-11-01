@@ -69,6 +69,75 @@ still be judged from **same-head CI**, never inferred from local skips.
 See architecture decisions §26. This is a serialization de-duplication
 batch, **not** closure of P04, P05, P09 or P14.
 
+### 2026-11-01 exact-head CI checkpoint — `cb0b4917` (not full semantic parity)
+
+The push carries all five opt-in markers on one production commit. On this
+**same SHA** the frozen 3×7 replay (run `41266803599`, 21 shards / **9,645**
+inputs) **SUCCEEDED**, but means `ASSEMBLED_UNVERIFIED`, not GNU semantic
+equality; the 3,536-object hard gate (run `41266803618`) **SUCCEEDED**;
+four-target GNU GCC single-AS runtime ladder (run `41266803620`), original
+BusyBox four-target runtime (run `41266803595`), and GNU A/B runtime (run
+`41266803600`) **SUCCEEDED**. The Linux 6.6.143 multiarch full runtime run
+`41266803638` was **IN PROGRESS** at this checkpoint; do not reclassify until
+its actual result is recorded. Optional/skipped workflows are not evidence.
+
+The newly reachable **strict 3,536 GNU semantic** workflow run `41266803582`
+**FAILED**. It is independent of the green hard gate:
+
+* C first500 MiniC generation: **496/500 produced, four compiler failures**
+  (indices 0, 22, 47, 50; indirect-call declaration argument mismatch),
+  **before the assembler comparator**. The semantic C shard jobs omitted
+  `-fshort-wchar -funsigned-char`, flags supplied by the existing original
+  Linux hard-gate first500 replay. The C149 semantic generation step also
+  omitted those Linux Kbuild options. Restore both flags in the next workflow
+  batch, then establish the actual strict GNU oracle denominator; do **not**
+  label a failed MiniC generation as a MiniAS instruction mismatch.
+* Native35: **29 DIFF, six MINIAS_FAIL, zero GNU_FAIL**. All six fail on
+  the intentionally unsupported `.option arch,+zbb`; this is an explicit
+  ISA policy gap, not permission to silently accept unknown features. The
+  29 GNU comparisons were configured with `-mno-arch-attr` while MiniAS
+  emits `.riscv.attributes`, guaranteeing a section/attribute difference;
+  however, real `.text` length and relocation differences also remain.
+  Align the oracle attribute policy explicitly and inspect the remaining
+  per-object diffs; never declare all 29 false positives.
+
+Next order: **(1)** restore exact Kbuild MiniC options in semantic replay;
+**(2)** run first500/C149 again with explicit generation and comparison
+denominators; **(3)** separate ELF attribute-policy comparison from real
+instruction/relocation diffs; **(4)** implement a scoped, GNU-tested
+`.option arch,+zbb` target-site feature policy, retaining strict A0 negative
+tests until replaced by feature-specific legality tests. Continue recording
+one exact-head success/failure/skip matrix and artifact IDs per batch.
+
+### Next grouped cleanup — locally verified; new exact-head CI still pending
+
+The original DebugLine implementation sorted each finalized `.loc` anchor
+twice in one emit: once to resolve GNU named views, then immediately again
+to emit `.debug_line`. Both copies validated identical anchors and used the
+same section/offset/subsection/ordinal ordering. The emitter now builds and
+sorts **once**, resolves strict views on that immutable snapshot, and emits
+from it; MCLayout's separate public view resolver remains intact. Error
+ownership and the strict failure checks remain unchanged. The RISC-V Target
+also now projects the immutable branch/JAL `bound_symbol` from one helper,
+while relaxation and final encoding keep independent current-symbol lookups
+and diagnostics. No phase or object owner was merged or deleted.
+
+The semantic oracle's GNU reference now **retains** `.riscv.attributes`
+(removes only `-mno-arch-attr` from `-Wa,-mno-relax,-mno-arch-attr`), matching
+MiniAS' emitted attributes rather than ignoring this ABI-visible section.
+The semantic C shard and C149 replay commands also pass both missing MiniC
+Kbuild flags. No semantic dimension or `--require-equal` condition was
+weakened; remaining native35 instruction/relocation differences and six
+`.option arch,+zbb` failures remain live open work.
+
+Local **after these changes**: Release `-Werror` **PASS**, A0 **30/30 PASS**;
+GNU x86 ELF32/ELF64 named views and optimized real-GCC DWARF5 loclists
+byte-exact, view-size/reject GNU oracle, stable Source rebinding, x86 `.org`
+lexical layout and RISC-V tiered branch expansion **PASS**. The RISC-V GNU
+branch comparison still **SKIPPED (cross-GNU unavailable)**. Parser/YAML
+static checks **PASS**. Full 3,536 strict GNU semantic re-evaluation and
+Linux multiarch/QEMU outcomes for the new revision remain **PENDING**.
+
 This top section is the **current progress snapshot**. Later sections retain
 their original 2026-10-29 audit/batch evidence as history; their “pending CI”
 labels refer to those historical snapshots, not the current branch HEAD.

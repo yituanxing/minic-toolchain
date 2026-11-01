@@ -2378,10 +2378,7 @@ static bool rv_encode_multi_mc(MiniAs *as, const MiniAsStmt *stmt) {
  * pure distance policy used by MCLayout's read-only relaxation callback. */
 static bool rv_encode_branch_plan(MiniAs *as, const MiniAsStmt *stmt,
                                   MiniAsRiscvBranchPlan *result) {
-    const MiniAsMCInst *m=stmt->mcinst;
-    const MiniAsSymbolRef *expr=m!=NULL &&
-        (m->opcode==RV_MC_BRANCH || m->opcode==RV_MC_JAL)
-        ? m->operands[m->opcode==RV_MC_BRANCH?2U:1U].bound_symbol : NULL;
+    const MiniAsSymbolRef *expr=minias_riscv_branch_bound_symbol(stmt);
     const MiniAsSymbol *symbol=expr!=NULL
         ? minias_symbol_ref_lookup(as,*expr) : NULL;
     const char *diagnostic=NULL;

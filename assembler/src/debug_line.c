@@ -308,11 +308,12 @@ static int compare_loc(const void *lhs,const void *rhs) {
  * computed from finalized section positions, not from source line numbers.
  * Keeping the relationship to an anchored .loc event makes branch growth
  * and subsection placement observable in the resulting symbol difference. */
-bool minias_debug_resolve_views(MiniAs *as,bool strict) {
+/* Both layout's view resolution and final .debug_line emission need exactly
+ * this section/offset/subsection/ordinal order. Build it once per caller;
+ * resolving view labels never mutates the location anchors in these keys. */
+static bool debug_sorted_locs(MiniAs *as,MiniAsDebugLocOrder **result) {
     MiniAsDebugLocOrder *order;
     size_t i;
-    uint64_t previous_view=0U;
-    if(as->debug_loc_count==0U)return true;
     if(as->debug_loc_count>SIZE_MAX/sizeof(*order)) {
         minias_set_error(as,"dwarf-view-order-overflow");
         return false;
@@ -336,6 +337,14 @@ bool minias_debug_resolve_views(MiniAs *as,bool strict) {
         order[i].ordinal=i;
     }
     qsort(order,as->debug_loc_count,sizeof(*order),compare_loc);
+    *result=order;
+    return true;
+}
+
+static bool resolve_views_sorted(MiniAs *as,bool strict,
+                                 const MiniAsDebugLocOrder *order) {
+    size_t i;
+    uint64_t previous_view=0U;
     for(i=0U;i<as->debug_loc_count;++i) {
         MiniAsDebugLoc *loc=&as->debug_locs[order[i].ordinal];
         const bool shared_pc=i!=0U &&
@@ -345,18 +354,18 @@ bool minias_debug_resolve_views(MiniAs *as,bool strict) {
             ? previous_view+1U : 0U;
         if(view<previous_view && shared_pc && loc->view_mode!=2U) {
             minias_set_error(as,"dwarf-view-overflow");
-            free(order);return false;
+            return false;
         }
         if(strict && loc->view_mode==1U && view!=0U) {
             minias_set_error(as,"dwarf-view-number-mismatch");
-            free(order);return false;
+            return false;
         }
         loc->view_number=view;
         if(loc->view_symbol_index!=SIZE_MAX) {
             MiniAsSymbol *sym;
             if(loc->view_symbol_index>=as->symbol_count) {
                 minias_set_error(as,"dwarf-view-invalid-symbol");
-                free(order);return false;
+                return false;
             }
             sym=&as->symbols[loc->view_symbol_index];
             sym->section=MINIAS_SECTION_ABS;
@@ -365,8 +374,17 @@ bool minias_debug_resolve_views(MiniAs *as,bool strict) {
         }
         previous_view=view;
     }
-    free(order);
     return true;
+}
+
+bool minias_debug_resolve_views(MiniAs *as,bool strict) {
+    MiniAsDebugLocOrder *order;
+    bool ok;
+    if(as->debug_loc_count==0U)return true;
+    if(!debug_sorted_locs(as,&order))return false;
+    ok=resolve_views_sorted(as,strict,order);
+    free(order);
+    return ok;
 }
 /* GNU GAS records each directory once and refers to it by a 1-based index
  * from the file table. Keep the original file paths owned by MiniAs and
@@ -434,17 +452,13 @@ bool minias_debug_emit(MiniAs *as) {
     int sec;
     unsigned address_width=as->output_elf32?4U:8U;
     if(as->debug_loc_count==0U)return true;
-    if(!minias_debug_resolve_views(as,true))return false;
+    if(!debug_sorted_locs(as,&order))return false;
+    if(!resolve_views_sorted(as,true,order))goto failed;
     for(i=1U;i<=as->debug_file_max;++i)
         if(as->debug_files[i]==NULL) {
             minias_set_error(as,"missing-dwarf-file-index:%zu",i);
-            return false;
+            goto failed;
         }
-    if(as->debug_loc_count>SIZE_MAX/sizeof(*order)) {
-        minias_set_error(as,"dwarf-line-sort-capacity-overflow");return false;
-    }
-    order=malloc(as->debug_loc_count*sizeof(*order));
-    if(!order)return false;
     if(as->debug_file_max==SIZE_MAX ||
        as->debug_file_max+1U>SIZE_MAX/sizeof(*files) ||
        as->debug_file_max>SIZE_MAX/sizeof(*directories))goto failed;
@@ -458,20 +472,6 @@ bool minias_debug_emit(MiniAs *as) {
     if(!files || !directories || !directory_slots)goto failed;
     plan_dwarf_files(as,directories,&directory_count,files,
                      directory_slots,directory_slot_count);
-    for(i=0U;i<as->debug_loc_count;++i) {
-        const size_t symbol=as->debug_locs[i].symbol_index;
-        if(symbol>=as->symbol_count || !as->symbols[symbol].defined ||
-           as->symbols[symbol].section<0 ||
-           (size_t)as->symbols[symbol].section>=as->section_count) {
-            minias_set_error(as,"dwarf-line-invalid-anchor:%zu",i);
-            goto failed;
-        }
-        order[i].section=as->symbols[symbol].section;
-        order[i].offset=as->symbols[symbol].value;
-        order[i].subsection=as->symbols[symbol].subsection;
-        order[i].ordinal=i;
-    }
-    qsort(order,as->debug_loc_count,sizeof(*order),compare_loc);
     sec=minias_ensure_section(as,".debug_line",MINIAS_SHT_PROGBITS,0U,1U);
     if(sec<0)goto failed;
     /* GNU GAS refuses to concatenate a source-owned .debug_line payload

@@ -1195,3 +1195,74 @@ by the existing exact-head CI; **full Linux/3536 are not yet certified by
 these local checks**. Production-only changes: **4 files, +56/−57 (net −1)**.
 Test/CI/docs changes are tracked separately, and no new output model or
 parallel DWARF section writer was introduced.
+
+## 27. 2026-11-01 — classify strict semantic failures before changing Target policy
+
+The first genuinely triggered 3,536 strict GNU semantic run on production
+head `cb0b4917` is **RED** (`41266803582`), despite the independent green
+3,536 *hard* gate (`41266803618`), 21/21 frozen Linux input shards and real
+four-target runtime acceptance. Never infer semantic equality from those
+other check types; see the exact-head matrix in the full-source ledger.
+
+The C first500 semantic generation did not reach an assembler comparison on
+four entries (496/500 compiler outputs). This workflow omitted the two Linux
+Kbuild MiniC flags `-fshort-wchar` and `-funsigned-char` that the older hard
+gate passes to `corpus_replay.py`. Reuse the exact same flags for C shard
+and C149 semantic generation first, and verify compiler output counts
+*separately* from MiniAS/GNU comparisons. Any residual MiniC compiler error
+is a compiler/corpus failure and cannot be reclassified as a MiniAS diff.
+
+The 35 native RISC-V objects gave **29 DIFF / six MINIAS_FAIL**, with zero
+GNU_FAIL. All six are `.option arch,+zbb` rejected by the current explicit
+policy. The GNU comparator also suppressed RISC-V `.attributes` while MiniAS
+retained them, guaranteeing a section-level mismatch among the other 29;
+several of those objects additionally diverge in instruction size and
+relocations. The next owner tasks are **separate**:
+
+1. Align GNU and MiniAS attribute policy (or compare attributes in a
+   clearly isolated dimension) without ignoring real `.text`/relocation
+   differences.
+2. Add scoped per-site `Zbb` feature handling and exact GNU byte/reloc/ELF
+   probes, preserving default-ISA illegal-instruction rejection. Do not
+   globally relax unknown `.option arch` directives to make a gate green.
+3. Re-run the strict oracle and report per-input PASS/DIFF/FAIL, kept
+   separate from runtime and assemble-only denominators.
+
+The immediate workflow repair adds those two Kbuild options to the existing
+semantic MiniC replay commands. The GNU reference now leaves the ABI-visible
+`.riscv.attributes` enabled and disables **only** GNU relaxation; no ELF
+dimension is ignored. The comparator, `--require-equal` condition and MiniAS
+ISA capability policy are unchanged. Both calibration steps are pending
+exact-head CI; they are **not** a parity pass claim.
+
+## 28. 2026-11-01 — one immutable DebugLine order; no duplicate resolution pass
+
+The existing DebugLine emitter called `minias_debug_resolve_views(as,true)`
+and then allocated, validated, materialized, and `qsort`ed the exact same
+`.loc` anchor order a second time. The first pass updates only view numbers
+and the separate view-label symbols; it cannot change the source-position
+anchor keys (section, offset, subsection, original ordinal). This was an
+actual duplicate *executed* sort, not two distinct semantic phases.
+
+`debug_sorted_locs` now owns the one section/offset/subsection/ordinal
+validation+sort, and `resolve_views_sorted` reads that snapshot to preserve
+GNU view assertions, reset behavior and overflow diagnostics. Public
+`minias_debug_resolve_views` keeps its old signature for MCLayout, using
+those private helpers; final `minias_debug_emit` builds one order and shares
+it between strict view resolution and line-program emission. No new
+cross-module interface, source reparse, or extra temporary semantic model
+was introduced. Failed emission still frees that one order.
+
+RISC-V encoding and relaxation had separately copied the same retained
+`RV_MC_BRANCH`/`RV_MC_JAL` bound-symbol operand-selection logic. A small
+Target-private accessor now owns that immutable projection. The two callers
+still independently query final-encoding and layout-relaxation symbol views,
+and own their own error sinks. This is not closure of broad P04 encode.
+
+Local verification after the change: Release `-Werror`, A0 30/30,
+ELF32/ELF64 GNU named views and real GCC optimized DWARF5 location lists
+byte-exact, GNU view reset/rejection and source stable-rebind, x86 GNU `.org`
+layout and RISC-V tiered branch expansions **PASS**. The dedicated RV GNU
+branch oracle is unavailable locally and was explicitly **SKIPPED**. Full
+Linux and strict GNU semantic checks must be judged by the next exact-head
+CI runs, never inferred from this local subset.
