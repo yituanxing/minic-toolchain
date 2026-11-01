@@ -864,13 +864,6 @@ const MiniAsSymbol *minias_symbol_ref_lookup(const MiniAs *as,
 /* Keep staged MCData Fixup widths identical to the committed Section
  * contract. LoongArch uses 8-bit and 24-bit ADD/SUB pairs as well as
  * 16/32/64-bit relocations; staging must not reject a legal typed Fixup. */
-static bool minias_fixup_field_width(MiniAsFixupKind kind,unsigned width) {
-    if(kind==MINIAS_FIXUP_LEB_ADD || kind==MINIAS_FIXUP_LEB_SUB ||
-       kind==MINIAS_FIXUP_LEB_SET)return width==0U;
-    return width==1U || width==2U || width==3U ||
-           width==4U || width==8U;
-}
-
 static bool minias_record_fixup(MiniAs *as,
                       int section,
                       uint64_t offset,
@@ -980,70 +973,6 @@ static bool minias_record_fixup(MiniAs *as,
     fixup->addend = addend;
     fixup->prefer_section_symbol = prefer_section_symbol;
     return true;
-}
-
-/* MCData fixups used to bypass the instruction transaction and publish
- * Section-owned symbol references as the DATA loop ran. Stage them under the
- * same persistent source Fragment, keeping the original SymbolID or a
- * stable NameId; the commit phase alone creates final Fixup records. */
-static bool minias_stage_common_fixup(MiniAs *as,int section,uint64_t offset,
-                                      MiniAsFixupKind kind,unsigned width,
-                                      const char *name,size_t symbol_index,
-                                      int64_t addend) {
-    MiniAsEncodeResult *result=as->active_encode_result;
-    const MiniAsStmt *owner;
-    MiniAsEncodeFixupRequest request={0};
-    MiniAsSymbolNameId name_id=0U;
-    uint64_t relative;
-    if(result==NULL || !as->emitting_fragment ||
-       as->emitting_fragment_id>=as->stmt_count) {
-        minias_set_error(as,"mcdata-fixup-without-fragment");
-        return false;
-    }
-    owner=&as->stmts[as->emitting_fragment_id];
-    if(owner->section!=section || section<0 ||
-       (size_t)section>=as->section_count ||
-       as->sections[(size_t)section].type==MINIAS_SHT_NOBITS ||
-       offset<owner->offset || !minias_fixup_field_width(kind,width) ||
-       (name==NULL && symbol_index>=as->symbol_count)) {
-        minias_set_error(as,"invalid-mcdata-fixup:line=%zu",owner->line);
-        return false;
-    }
-    relative=offset-owner->offset;
-    if(relative>UINT32_MAX || relative>owner->size ||
-       width>owner->size-relative ||
-       result->fixup_count==SIZE_MAX) {
-        minias_set_error(as,"mcdata-fixup-outside-fragment:line=%zu",owner->line);
-        return false;
-    }
-    if(name!=NULL && !minias_symbol_name_intern(as,name,&name_id))
-        return false;
-    request.section=section;
-    request.fragment_offset=(uint32_t)relative;
-    request.kind=kind;
-    request.width=width;
-    request.has_symbol_index=name==NULL;
-    request.symbol_index=symbol_index;
-    request.symbol_ref.name_id=name_id;
-    request.symbol_ref.addend=addend;
-    return minias_encode_result_stage_fixup(as,&request,"mcdata-fixup");
-}
-
-bool minias_add_fixup(MiniAs *as, int section, uint64_t offset,
-                      MiniAsFixupKind kind, unsigned width,
-                      const char *symbol_name, int64_t addend) {
-    return minias_stage_common_fixup(as,section,offset,kind,width,
-                                     symbol_name,SIZE_MAX,addend);
-}
-
-/* Fixed-width MCData already retains an actual SymbolID from its lexical
- * parse. Preserve that identity through emission, including the shared
- * undefined-local binding promotion and original Fixup append order. */
-bool minias_add_fixup_symbol_id(MiniAs *as, int section, uint64_t offset,
-                                MiniAsFixupKind kind, unsigned width,
-                                size_t symbol_index, int64_t addend) {
-    return minias_stage_common_fixup(as,section,offset,kind,width,
-                                     NULL,symbol_index,addend);
 }
 
 bool minias_add_section_fixup(MiniAs *as, MiniAsFixupOrigin origin,

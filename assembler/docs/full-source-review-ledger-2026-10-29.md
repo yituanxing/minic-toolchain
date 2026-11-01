@@ -234,6 +234,27 @@ GNU x86 A0 oracle compares 512 IRP values each containing a nested
 REPT against 1028 exact output bytes. This is allocation/ownership
 cleanup, not closure of remaining P04/P05 phase contracts.
 
+### 2026-11-01 P04 MCData Fixup transaction ownership consolidation
+
+`assembler.c` previously constructed raw `MiniAsEncodeFixupRequest`
+records and called the generic internal `minias_encode_result_stage_fixup`
+vector append. Its entire MCData staging routine, including the two
+existing semantic `minias_add_fixup` / `minias_add_fixup_symbol_id`
+entry points, now lives in `mc_encode_result.c` with the Target fixup
+staging owner. The raw request-vector append becomes file-local
+`static`; its cross-module header declaration is **removed**. Common
+still owns only final SymbolID creation, fragment commit and ELF relocations.
+The checked Fixup field-width policy moves with the request owner and
+remains Common-callable for final Fixup validation; no duplicate width
+checker or shadow staging code survives.
+
+This is a concrete P04 boundary reduction, not closure of P04: all four
+Target encoders still have `encode(MiniAs*,Stmt*)` entry points, and
+the distinct emitting/committing phase guards are still live. Existing
+Fixup ordering, NameId/SymbolID timing, diagnostics and ELF behavior
+are unchanged by this ownership move. Exact-head A0, ISA/ABI and GNU
+Fixup/relocation checks remain mandatory.
+
 ## Current refactor dashboard — 2026-11-01 (exact-head recovery and live-path audit)
 
 ### 2026-11-01 Source collector single-pass de-duplication (local batch)

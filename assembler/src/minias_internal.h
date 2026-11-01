@@ -814,6 +814,8 @@ bool minias_parse_symbol_difference_absolute_tail(
     MiniAs *,const char *,MiniAsSymbolDifference *);
 bool minias_parse_size_end_addend(const char *,const char *,int64_t *);
 /* Target and generic data fixups require an active fragment. */
+/* Common-only checked Fixup field-width contract, no Target state. */
+bool minias_fixup_field_width(MiniAsFixupKind kind,unsigned width);
 bool minias_add_fixup(MiniAs *as,
                       int section,
                       uint64_t offset,
@@ -829,9 +831,6 @@ bool minias_add_fixup_symbol_id(MiniAs *as, int section, uint64_t offset,
 /* Target instructions and executable alignment produce a single staged
  * EncodeResult; no Target may directly insert into global Fixup/Symbol/ELF
  * arrays while its encoder can still fail. Offsets remain fragment-relative. */
-bool minias_encode_result_stage_fixup(MiniAs *as,
-                                      const MiniAsEncodeFixupRequest *request,
-                                      const char *allocation_context);
 bool minias_encode_add_fixup_ref(MiniAs *as, int section, uint64_t offset,
                                  MiniAsFixupKind kind, unsigned width,
                                  MiniAsSymbolRef ref,
