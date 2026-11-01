@@ -65,29 +65,6 @@ static inline MinicSemanticSnapshot minic_semantic_snapshot_capture(const MinicC
     return snapshot;
 }
 
-static inline bool minic_semantic_snapshot_matches(const MinicSemanticSnapshot *snapshot,
-                                                   const MinicC0Program *program) {
-    if (snapshot == NULL || program == NULL) {
-        return false;
-    }
-    return program->expression_count == snapshot->expression_count &&
-           program->local_count == snapshot->local_count &&
-           program->cleanup_context_count == snapshot->cleanup_context_count &&
-           program->statement_count == snapshot->statement_count &&
-           program->inline_asm_count == snapshot->inline_asm_count &&
-           program->file_asm_count == snapshot->file_asm_count &&
-           program->block_count == snapshot->block_count &&
-           program->function_count == snapshot->function_count &&
-           program->record_count == snapshot->record_count &&
-           program->array_type_count == snapshot->array_type_count &&
-           program->function_type_count == snapshot->function_type_count &&
-           program->type_alias_count == snapshot->type_alias_count &&
-           program->enum_count == snapshot->enum_count &&
-           program->enumerator_count == snapshot->enumerator_count &&
-           program->global_object_count == snapshot->global_object_count &&
-           program->fixed_register_binding_count == snapshot->fixed_register_binding_count;
-}
-
 static inline bool
 minic_semantic_snapshot_only_declarator_types_changed(const MinicSemanticSnapshot *snapshot,
                                                       const MinicC0Program *program) {
@@ -113,30 +90,6 @@ minic_semantic_snapshot_only_declarator_types_changed(const MinicSemanticSnapsho
 }
 
 static inline bool
-minic_semantic_snapshot_only_probe_expressions_changed(const MinicSemanticSnapshot *snapshot,
-                                                       const MinicC0Program *program) {
-    if (snapshot == NULL || program == NULL ||
-        program->expression_count < snapshot->expression_count) {
-        return false;
-    }
-    return program->local_count == snapshot->local_count &&
-           program->cleanup_context_count == snapshot->cleanup_context_count &&
-           program->statement_count == snapshot->statement_count &&
-           program->inline_asm_count == snapshot->inline_asm_count &&
-           program->file_asm_count == snapshot->file_asm_count &&
-           program->block_count == snapshot->block_count &&
-           program->function_count == snapshot->function_count &&
-           program->record_count == snapshot->record_count &&
-           program->array_type_count == snapshot->array_type_count &&
-           program->function_type_count == snapshot->function_type_count &&
-           program->type_alias_count == snapshot->type_alias_count &&
-           program->enum_count == snapshot->enum_count &&
-           program->enumerator_count == snapshot->enumerator_count &&
-           program->global_object_count == snapshot->global_object_count &&
-           program->fixed_register_binding_count == snapshot->fixed_register_binding_count;
-}
-
-static inline bool
 minic_semantic_snapshot_rollback_declarator_types(const MinicSemanticSnapshot *snapshot,
                                                   MinicC0Program *program) {
     if (!minic_semantic_snapshot_only_declarator_types_changed(snapshot, program)) {
@@ -145,17 +98,6 @@ minic_semantic_snapshot_rollback_declarator_types(const MinicSemanticSnapshot *s
     program->array_type_count = snapshot->array_type_count;
     program->function_type_count = snapshot->function_type_count;
     return true;
-}
-
-/* Probe rollback releases owned CALL overflow arguments before reducing the
- * visible expression count. IDs from the discarded tail must be unpublished. */
-static inline bool
-minic_semantic_snapshot_rollback_probe_expressions(const MinicSemanticSnapshot *snapshot,
-                                                   MinicC0Program *program) {
-    if (!minic_semantic_snapshot_only_probe_expressions_changed(snapshot, program)) {
-        return false;
-    }
-    return minic_c0_program_discard_expressions_from(program, snapshot->expression_count);
 }
 
 /*

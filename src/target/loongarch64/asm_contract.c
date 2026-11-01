@@ -3526,31 +3526,62 @@ static bool loong_linux_descriptor_template_matches(const MinicInlineAsm *source
         source->template_text, source->template_length) != NULL;
 }
 
+bool minic_loongarch64_descriptor_template_requires_typed_id(
+    const char *text, size_t length) {
+    return loong_linux_form_for_template(text, length) != NULL;
+}
+
 static bool loong_linux_descriptor_qualify(
     const MinicC0Program *program, const MinicInlineAsm *source,
     MinicTargetInlineAsmContract *contract) {
     const LoongLinuxStructuredForm *form = source != NULL ?
         loong_linux_form_for_template(source->template_text, source->template_length) : NULL;
-    return form != NULL && form->source(program, source, contract);
+    if (form == NULL || contract == NULL || !form->source(program, source, contract))
+        return false;
+    /* Source admission owns family selection. The machine uses the stable
+     * table ordinal, but independently checks this immutable template again
+     * before consuming the typed Core witness. */
+    contract->target_machine_form_id =
+        (uint32_t)(form - loong_linux_structured_forms) + 1U;
+    contract->target_machine_form_variant = 0U;
+    return true;
+}
+
+bool minic_loongarch64_typed_descriptor_matches_template(
+    uint32_t id, uint32_t variant, const char *text, size_t length) {
+    size_t index;
+    if (id == 0U || variant != 0U || text == NULL)
+        return false;
+    index = (size_t)(id - 1U);
+    return index < sizeof(loong_linux_structured_forms) /
+                       sizeof(loong_linux_structured_forms[0]) &&
+           loong_linux_structured_forms[index].matches(text, length);
 }
 
 static bool loong_linux_descriptor_emit(
     FILE *out, const MinicDirectLP64BlockContext *ctx,
-    const MinicCoreInstruction *instruction, const MinicCoreInlineAsm *source,
-    bool *matched) {
+    const MinicCoreInstruction *instruction, const MinicCoreInlineAsm *source) {
     const LoongLinuxStructuredForm *form;
-    if (matched == NULL || source == NULL || source->template_text == NULL)
+    size_t index;
+    if (source == NULL || source->template_text == NULL ||
+        source->target_machine_form_id == 0U)
         return false;
-    form = loong_linux_form_for_template(source->template_text, source->template_length);
-    *matched = form != NULL;
-    return form != NULL && form->emit(out, ctx, instruction, source);
+    /* Nonzero typed IDs are dispatched before all unrelated machine paths.
+     * Invalid IDs and mismatched immutable templates cannot fall through. */
+    index = (size_t)(source->target_machine_form_id - 1U);
+    if (!minic_loongarch64_typed_descriptor_matches_template(
+            source->target_machine_form_id,
+            source->target_machine_form_variant,
+            source->template_text, source->template_length))
+        return false;
+    form = &loong_linux_structured_forms[index];
+    return form->emit(out, ctx, instruction, source);
 }
 
 bool minic_loongarch64_emit_qualified_structured_asm(
     FILE *out, const MinicDirectLP64BlockContext *ctx,
     const MinicCoreInstruction *ins) {
     const MinicCoreInlineAsm *info;
-    bool matched;
     if (out == NULL || ctx == NULL || ctx->fn == NULL || ins == NULL ||
         ins->kind != MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM ||
         ins->result != MINIC_CORE_VALUE_INVALID ||
@@ -3558,12 +3589,18 @@ bool minic_loongarch64_emit_qualified_structured_asm(
         ins->value.structured_inline_asm.inline_asm_id >= ctx->fn->inline_asm_count)
         return false;
     info = &ctx->fn->inline_asms[ins->value.structured_inline_asm.inline_asm_id];
+    /* Typed descriptor ownership takes priority over SIMD and the remaining
+     * legacy emitters. A forged ID must fail closed, never fall through. */
+    if (info->target_machine_form_id != 0U)
+        return loong_linux_descriptor_emit(out, ctx, ins, info);
+    /* The old table-owned exact text must not gain a new path merely because
+     * a synthetic Core producer erased the typed ID. This is a *rejection*
+     * guard, never machine-side family classification or emission. */
+    if (minic_loongarch64_descriptor_template_requires_typed_id(
+            info->template_text, info->template_length))
+        return false;
     if (minic_loongarch64_simd_emit_structured(out, ctx, ins, info))
         return true;
-    {
-        const bool emitted = loong_linux_descriptor_emit(out, ctx, ins, info, &matched);
-        if (matched) return emitted;
-    }
     {
         const LoongLinuxClockAsm clock_form = loong_linux_clock_form(
             info->template_text, info->template_length);

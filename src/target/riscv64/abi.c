@@ -138,13 +138,6 @@ bool minic_riscv64_classify_abi_value_profile(
     return false;
 }
 
-bool minic_riscv64_classify_abi_value(
-    const MinicC0Program *program, MinicType type,
-    MinicRiscv64AbiValue *result) {
-    return minic_riscv64_classify_abi_value_profile(
-        program, type, false, result);
-}
-
 #define MINIC_RISCV64_ABI_ARGUMENT_REGISTER_COUNT 8U
 
 void minic_riscv64_abi_cursor_initialize(MinicRiscv64AbiCursor *cursor) {

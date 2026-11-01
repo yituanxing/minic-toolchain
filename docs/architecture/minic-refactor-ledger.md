@@ -209,3 +209,90 @@ Linux runtime、Core 类型事实或 GNU 模板接受域。
 **边界：** R4 没有“统一 x86 ASM”为通用 GNU 支持；未知 GNU
 模板继续拒绝，83 个 legacy 族及其他四架构特化尚在。RV64 死接口删除
 不证明其 enum/Record copy 已经脱离 C0；见 A8-09、A8-25、A9-10、A11-39。
+
+## R5：并行五线复核，x86 六族＋Loong 十四族 typed 化与死接口退休
+
+**基线：** R4 本地 `028ec47`、PR #674 远端 `3bf0969`，Git tree
+完全相同。本批由五线分别负责 x86、Loong、RV64、Frontend/Compiler、
+Core/Common，负责人合并审查、跨模块回归并单次提交推送。没有改
+Frontend/Core IR 的生产表示、五架构 ABI、ELF section 策略或
+Linux runtime 入口；不把“工作线程数”算作覆盖文件数。
+
+### 已接收的四块生产修改
+
+1. **x86 六家族迁移（A8-10/A11-39）：** `VERW_CLEAR`、
+   `TLB_CACHE`、`DELAY_MUL`、`DELAY_WAIT`、`LOWLEVEL_SCALAR`
+   （8 种 form）、`BOOT_FLAGS`（4 种 form）由 Source qualifier
+   携带 typed ID/variant，Machine 按 ID dispatch，独立 immutable
+   模板机器入口及寄存器/内存/volatile/effect 验证仍保留；
+   删除六个 Machine 旧文本分派。Source 表仍为 111 项，
+   **34 typed / 77 legacy**（R4 28/83）。特别核对 CPUID：
+   `4 outputs + 2 tied inputs` 是 typed BOOT_FLAGS 的 Core 6 operand；
+   `4 outputs + 4 tied inputs` 仍由旧 `qualified()` + generic Machine
+   8 operand 入口拥有。不可合并或吞掉后者。
+2. **Loong 十四个 Linux ASM descriptor（A9-10）：** Source 使用
+   原有唯一 descriptor table 选择 form，再传稳定序号 ID、variant0；
+   Machine 合法 typed 路径按 ID 索引该表，独立检查同一 immutable
+   GNU 模板和原物理 emitter，无须再扫描 14 族**选择发射家族**。
+   首次审查发现被伪造的非零 ID 可以在 descriptor 校验前落入 SIMD，
+   或将 ID 擦为零后落入 generic fallback；均已在最终版本关闭：
+   nonzero typed 在 SIMD 前 fail-closed；`ID=0` 若模板属于 descriptor
+   则明确拒绝。**注意：ID=0 的拒绝保护仍扫描 14 族模板**，
+   不能说所有 machine 文本匹配物理消失，更不能把此批虚报为净删。
+3. **RV64 两个死 wrapper（A8-25）：** 退休未被 `src/`/测试 C
+   调用的 `classify_abi_value` 与 `emit_integer_aggregate_load_chunk`
+   及内部声明。`*_profile`、safe scalar、integer conversion、
+   ABI profile 等所有活路径保持；`tools/dev/ci` 历史文字补丁未修改，
+   现行 `.github/Makefile` 无它们的重放入口。
+4. **Frontend semantic snapshot 三 wrapper（A11-05）：** 删除仅在
+   白盒测试调用的 `matches`、`only_probe_expressions_changed`、
+   `rollback_probe_expressions`；现役
+   `rollback_probe_expression_types` 完整保留。白盒测试改为直接
+   验证 16 项 arena 计数、owned CALL overflow buffer 释放、
+   backward-count 与 unrelated-arena 拒绝，并新增 expression+type
+   同时增长正例。不存在剩余 `src/tests/tools/.github/Makefile`
+   调用者。没有碰被现役 CI 源文本锚定的 AST parameter API。
+
+**生产源码（10 个 `.c/.h`）+127 / -145，净 -18 行：**
+
+| 子块 | 生产增加 | 生产删除 | 净变化 | 注释 |
+| --- | ---: | ---: | ---: | --- |
+| x86 typed 六族 | 71 | 48 | +23 | 真实删旧分派，typed 校验有成本 |
+| Loong typed 十四族 | 56 | 12 | +44 | 单表按 ID 选择，ID=0 仍作拒绝性模板扫描 |
+| RV64 零调用 wrapper | 0 | 27 | **−27** | 不触及 live profile |
+| Frontend test-only wrapper | 0 | 58 | **−58** | 白盒覆盖迁至 live 入口 |
+| **合计** | **127** | **145** | **−18** | 不含 Makefile、测试、文档 |
+
+新增 x86 source/native/篡改脚本 2 个文件（160 行）、Loong
+machine-typed 合成测试 1 个文件；现有 Frontend/x86 白盒扩充，
+`Makefile` 将 x86 six 和 Loong descriptor gate 一并接入 `check-fast`。
+Loong 测试在 release `-DNDEBUG` 下显式恢复 `assert`，避免假阳性。
+
+### R4/R5 合并状态上的实测证据
+
+| 门禁 | R5 结果 |
+| --- | --- |
+| Release 全套工具 `all`、`CFLAGS=-Werror` | **PASS** |
+| `make check-fast`（含 x86 six、Loong typed machine、Frontend rollback、RV64 ABI、现有 R4/R3 旧门禁） | **PASS / exit 0**；缺 cross GNU/QEMU 的子项仍 `SKIP`，不能冒充执行通过 |
+| `check-minic-target-boundaries.sh` | **PASS**，历史 review manifest fingerprint `drift=145` 仍另计 |
+| R4/R5 同一 GNU 预处理 global-plan `.i`，五目标 `.s` | **5/5 BYTE_IDENTICAL** |
+| R4/R5 Loong 代表性 `.i`：small-xchg、cpucfg、final opaque、packed hardware、named store、iocsr alias、checked add | **7/7 BYTE_IDENTICAL**；另子任务 8/8 差分 PASS |
+| x86 六族 GNU `.i` 与 R4 baseline、GNU AS/LD/native | **逐字节相同**；GNU C 和 MiniC `.s` 两 ELF 均退出 42，CPUID6 + CPUID8 都保留 |
+| x86 六族篡改模板 | **6/6 新旧均拒绝**、无残留 `.s`；white-box **17 族** ID/variant/template 防伪 PASS |
+| Loong immutable descriptor machine gate | **PASS**：5 组 exact/variant、3 cross-ID、6 组合成 Core 拒绝及无部分 `.s`；已有 CPUCFG/CACOP/nospec/SIMD 负例 PASS |
+| RV64 两 GNU `.i`、RV64I/LP64、ABI/LP64D/Global Plan | **PASS，R4/R5 `.s` 字节相同** |
+| GNU Loong ELF/QEMU、完整五目标 Linux 运行认证 | **NOT_RUN**；不能由 `check-fast` 或 `.s` 差分外推 |
+
+### 第五线复核，明确 KEEP 而不是强删
+
+- `core_lower_if.c` 的 ~20 行 snapshot 看似接近 `local_facts.c`，
+  但特殊事实保留、逃逸/修改 merge 规则不同；不删除。
+- `core_lower.c` normalized-while 标签全表扫描证明**唯一 owner**，
+  `reentry_index` 仅证明没有外部 reentry；不等价。
+- Core `explicit_alignment` 早期 verifier 缺口应另做合成 Core
+  负例和拒绝时机修复；不混进纯清理以改变非法 IR 接受阶段。
+
+**下一批：** x86 还余 77 族；Loong 除这 14 个 descriptor 之外仍有
+带解析载荷的 clock/AMO/futex/uaccess 等路径，需要保存真实 typed
+payload 才能取消机器端重新解析。纯清理不应以“所有 target 字符串
+统一”替换真实 psABI/指令语义差异；交叉 ELF/QEMU 认证另列证据。

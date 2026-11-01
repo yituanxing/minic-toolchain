@@ -48,10 +48,6 @@ typedef struct MinicRiscv64AbiArgumentLocation {
 bool minic_riscv64_classify_abi_value_profile(
     const MinicC0Program *, MinicType, bool lp64_soft_float,
     MinicRiscv64AbiValue *);
-bool minic_riscv64_classify_abi_value(const MinicC0Program *program,
-                                      MinicType type,
-                                      MinicRiscv64AbiValue *result);
-
 void minic_riscv64_abi_cursor_initialize(MinicRiscv64AbiCursor *cursor);
 bool minic_riscv64_abi_cursor_initialize_for_return_profile(
     const MinicC0Program *, MinicType, bool lp64_soft_float,

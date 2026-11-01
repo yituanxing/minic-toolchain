@@ -57,6 +57,32 @@ int main(void) {
     CHECK_FAMILY(MINIC_X86_MACHINE_ASM_IDENTITY_LOAD,
         minic_x86_64_linux_identity_load_form,
         "mov %[address], %%r9", "mov %[address], %%r8");
+    CHECK_FAMILY(MINIC_X86_MACHINE_ASM_VERW_CLEAR,
+        minic_x86_64_linux_verw_clear_form,
+        "verw %[ds]", "verw %[ds]; int3");
+    CHECK_FAMILY(MINIC_X86_MACHINE_ASM_TLB_CACHE,
+        minic_x86_64_linux_tlb_cache_form,
+        "clflush %0", "clflush %0; int3");
+    CHECK_FAMILY(MINIC_X86_MACHINE_ASM_DELAY_MUL,
+        minic_x86_64_linux_delay_mul_form,
+        "mull %%edx", "idivl %%edx");
+    CHECK_FAMILY(MINIC_X86_MACHINE_ASM_DELAY_WAIT,
+        minic_x86_64_linux_delay_wait_form,
+        "tpause %%ecx", "tpause %%eax");
+    CHECK_FAMILY(MINIC_X86_MACHINE_ASM_LOWLEVEL_SCALAR,
+        minic_x86_64_linux_lowlevel_scalar_form,
+        "movntiq %1, %0", "movnti %1, %0");
+    CHECK_FAMILY(MINIC_X86_MACHINE_ASM_BOOT_FLAGS,
+        minic_x86_64_linux_boot_flags_form,
+        "btsl %1,%0", "btcl %1,%0");
+    assert(gate(MINIC_X86_MACHINE_ASM_TLB_CACHE, 1U, "invlpg (%0)"));
+    assert(!gate(MINIC_X86_MACHINE_ASM_TLB_CACHE, 2U, "invlpg (%0)"));
+    assert(gate(MINIC_X86_MACHINE_ASM_DELAY_WAIT, 1U,
+        "test %0,%0\n\tjz 3f\n\tjmp 1f\n\t.align 16\n1:\tjmp 2f\n"
+        "\t.align 16\n2:\tdec %0\n\tjnz 2b\n3:\tdec %0"));
+    assert(gate(MINIC_X86_MACHINE_ASM_BOOT_FLAGS, 3U, "cpuid"));
+    assert(!gate(MINIC_X86_MACHINE_ASM_BOOT_FLAGS, 4U, "cpuid"));
+    assert(!gate(MINIC_X86_MACHINE_ASM_LOWLEVEL_SCALAR, 1U, "mull %%edx"));
     assert(gate(MINIC_X86_MACHINE_ASM_FXSAVE, 2U, "fxsaveq %[fx]"));
     assert(!gate(MINIC_X86_MACHINE_ASM_FXSAVE, 1U, "fxsaveq %[fx]"));
     assert(!gate(MINIC_X86_MACHINE_ASM_ZERO_BARRIER, 2U, "lfence"));
@@ -78,6 +104,6 @@ int main(void) {
     assert(!gate(MINIC_X86_MACHINE_ASM_ATOMIC_CC,
         (unsigned int)minic_x86_64_port_io_form("outb %b0, %w1", 13U),
         "outb %b0, %w1"));
-    puts("PASS eleven x86 typed family exact ID+variant+immutable template gates");
+    puts("PASS seventeen x86 typed family exact ID+variant+immutable template gates");
     return 0;
 }

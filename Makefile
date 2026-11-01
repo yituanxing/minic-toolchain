@@ -2053,3 +2053,28 @@ check-x86-typed-five-legacy: $(MINIC_CC_BINARY)
 	  sh tests/compiler/c0/run-x86-typed-five-legacy-abi.sh
 
 check-fast: check-x86-typed-five-legacy
+
+# R5 x86: six further typed families; GNU native + byte-for-byte R4 parity
+# when MINIC_X86_TYPED_BASELINE_CC points to the preceding compiler.
+.PHONY: check-x86-typed-six-legacy
+check-x86-typed-six-legacy: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" BUILD_DIR="$(abspath $(BUILD_DIR))" \
+	  sh tests/compiler/c0/run-x86-typed-six-legacy-abi.sh
+
+check-fast: check-x86-typed-six-legacy
+
+# Loong Linux descriptor ownership is checked by a real linked machine gate:
+# all backend references remain available, but the compiler CLI main is not.
+LOONG_TYPED_DESCRIPTOR_TEST_BINARY := $(BUILD_DIR)/tests/target/loongarch64-typed-descriptor
+LOONG_TYPED_DESCRIPTOR_TEST_OBJECTS := $(filter-out $(BUILD_DIR)/obj/tools/minic-cc/main.o,$(MINIC_OBJECTS))
+
+.PHONY: check-loong-typed-descriptors
+check-loong-typed-descriptors: $(LOONG_TYPED_DESCRIPTOR_TEST_OBJECTS)
+	mkdir -p "$(BUILD_DIR)/tests/target"
+	$(CC) $(CPPFLAGS) $(MINIC_INCLUDES) $(MINIC_CFLAGS) \
+	  tests/target/loongarch64_typed_descriptor_test.c \
+	  $(LOONG_TYPED_DESCRIPTOR_TEST_OBJECTS) $(MINIC_LDFLAGS) \
+	  -o "$(LOONG_TYPED_DESCRIPTOR_TEST_BINARY)"
+	"$(abspath $(LOONG_TYPED_DESCRIPTOR_TEST_BINARY))"
+
+check-fast: check-loong-typed-descriptors

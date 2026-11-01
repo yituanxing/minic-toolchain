@@ -85,6 +85,24 @@ bool minic_x86_64_typed_machine_form_matches_template(
     case MINIC_X86_MACHINE_ASM_IDENTITY_LOAD:
         return variant == 1U &&
             minic_x86_64_linux_identity_load_form(text, length);
+    case MINIC_X86_MACHINE_ASM_VERW_CLEAR:
+        return variant == 1U &&
+            minic_x86_64_linux_verw_clear_form(text, length);
+    case MINIC_X86_MACHINE_ASM_TLB_CACHE:
+        form = minic_x86_64_linux_tlb_cache_form(text, length);
+        break;
+    case MINIC_X86_MACHINE_ASM_DELAY_MUL:
+        return variant == 1U &&
+            minic_x86_64_linux_delay_mul_form(text, length);
+    case MINIC_X86_MACHINE_ASM_DELAY_WAIT:
+        form = minic_x86_64_linux_delay_wait_form(text, length);
+        break;
+    case MINIC_X86_MACHINE_ASM_LOWLEVEL_SCALAR:
+        form = minic_x86_64_linux_lowlevel_scalar_form(text, length);
+        break;
+    case MINIC_X86_MACHINE_ASM_BOOT_FLAGS:
+        form = minic_x86_64_linux_boot_flags_form(text, length);
+        break;
     case MINIC_X86_MACHINE_ASM_UNWIND_CONTEXT:
         return variant == 0U &&
             minic_x86_64_linux_unwind_context_form(text, length);
@@ -2523,6 +2541,7 @@ static bool x86_linux_tlb_cache_source(const MinicC0Program *program,
     }
     contract->operand_count = 1U;
     contract->implicit_memory_effect = true;
+    contract->target_machine_form_variant = form;
     return true;
 }
 
@@ -4815,6 +4834,7 @@ static bool x86_linux_lowlevel_scalar_source(
         if (source->output_count || source->input_count) return false;
         contract->operand_count = 0U;
         contract->implicit_memory_effect = source->has_memory_clobber;
+        contract->target_machine_form_variant = form;
         return true;
     }
     if (form == 2U || form == 4U) {
@@ -4828,6 +4848,7 @@ static bool x86_linux_lowlevel_scalar_source(
         contract->operand_count = 1U;
         contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
         contract->implicit_memory_effect = true;
+        contract->target_machine_form_variant = form;
         return true;
     }
     if (form == 3U) {
@@ -4844,6 +4865,7 @@ static bool x86_linux_lowlevel_scalar_source(
         contract->operand_count = 1U;
         contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT;
         contract->implicit_memory_effect = true;
+        contract->target_machine_form_variant = form;
         return true;
     }
     if (form == 5U) {
@@ -4863,6 +4885,7 @@ static bool x86_linux_lowlevel_scalar_source(
         contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT;
         contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
         contract->implicit_memory_effect = true;
+        contract->target_machine_form_variant = form;
         return true;
     }
     if (form == 6U) {
@@ -4882,6 +4905,7 @@ static bool x86_linux_lowlevel_scalar_source(
         contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE;
         contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
         contract->implicit_memory_effect = true;
+        contract->target_machine_form_variant = form;
         return true;
     }
     if (form == 7U || form == 8U) {
@@ -4906,6 +4930,7 @@ static bool x86_linux_lowlevel_scalar_source(
         contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT;
         contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
         contract->implicit_memory_effect = true;
+        contract->target_machine_form_variant = form;
         return true;
     }
     return false;
@@ -4967,6 +4992,7 @@ static bool x86_linux_delay_wait_source(
             return false;
         contract->operand_count = 1U;
         contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE;
+        contract->target_machine_form_variant = form;
         return true;
     }
     for (i = 0U; i < 3U; ++i) {
@@ -4979,6 +5005,7 @@ static bool x86_linux_delay_wait_source(
         contract->kinds[i] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     }
     contract->operand_count = 3U;
+    contract->target_machine_form_variant = form;
     return true;
 }
 
@@ -5197,6 +5224,7 @@ static bool x86_linux_delay_mul_source(
             : MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     }
     contract->operand_count = 4U;
+    contract->target_machine_form_variant = 1U;
     return true;
 }
 
@@ -5243,6 +5271,7 @@ static bool x86_linux_boot_flags_source(
         if (form == 1U)
             contract->kinds[2] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
         contract->implicit_memory_effect = true;
+        contract->target_machine_form_variant = form;
         return true;
     }
     if (form == 3U) {
@@ -5277,6 +5306,7 @@ static bool x86_linux_boot_flags_source(
     }
     contract->operand_count = count;
     contract->implicit_memory_effect = form == 4U;
+    contract->target_machine_form_variant = form;
     return true;
 }
 
@@ -8690,6 +8720,7 @@ static bool x86_linux_verw_clear_source(
     contract->operand_count = 1U;
     contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT;
     contract->implicit_memory_effect = true;
+    contract->target_machine_form_variant = 1U;
     return true;
 }
 
@@ -8863,14 +8894,14 @@ static const MinicX86SourceQualifierEntry minic_x86_source_qualifiers[] = {
     X86_SOURCE(x86_linux_idle_clflush_alt_source),
     X86_SOURCE(x86_linux_pat_clflushopt_source),
     X86_SOURCE(x86_linux_futex_extable_source),
-    X86_SOURCE(x86_linux_verw_clear_source),
+    X86_SOURCE_TYPED(x86_linux_verw_clear_source, VERW_CLEAR),
     X86_SOURCE(x86_linux_debug_register_source),
     X86_SOURCE_TYPED(x86_x87_probe_source, X87_PROBE),
     X86_SOURCE_TYPED(x86_fxsave_source, FXSAVE),
     X86_SOURCE_TYPED(x86_xsetbv_source, XSETBV),
     X86_SOURCE(x86_linux_alternative_wrmsr_source),
     X86_SOURCE(x86_linux_control_register_source),
-    X86_SOURCE(x86_linux_tlb_cache_source),
+    X86_SOURCE_TYPED(x86_linux_tlb_cache_source, TLB_CACHE),
     X86_SOURCE(x86_linux_three_call_alternative_source),
     X86_SOURCE(x86_linux_boot_segments_source),
     X86_SOURCE(x86_linux_lidt_source),
@@ -8892,10 +8923,10 @@ static const MinicX86SourceQualifierEntry minic_x86_source_qualifiers[] = {
     X86_SOURCE_TYPED(x86_port_io_source, PORT_IO),
     X86_SOURCE(x86_linux_gs_atomic_source),
     X86_SOURCE(x86_linux_rep_stos_source),
-    X86_SOURCE(x86_linux_lowlevel_scalar_source),
-    X86_SOURCE(x86_linux_boot_flags_source),
-    X86_SOURCE(x86_linux_delay_mul_source),
-    X86_SOURCE(x86_linux_delay_wait_source),
+    X86_SOURCE_TYPED(x86_linux_lowlevel_scalar_source, LOWLEVEL_SCALAR),
+    X86_SOURCE_TYPED(x86_linux_boot_flags_source, BOOT_FLAGS),
+    X86_SOURCE_TYPED(x86_linux_delay_mul_source, DELAY_MUL),
+    X86_SOURCE_TYPED(x86_linux_delay_wait_source, DELAY_WAIT),
     X86_SOURCE_TYPED(x86_linux_identity_load_source, IDENTITY_LOAD),
     X86_SOURCE(x86_linux_ipv6_checksum_source),
     X86_SOURCE(x86_linux_lock_bitcc_source),

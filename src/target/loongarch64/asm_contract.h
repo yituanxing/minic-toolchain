@@ -11,6 +11,13 @@ bool minic_loongarch64_qualify_inline_asm(
 bool minic_loongarch64_emit_qualified_structured_asm(
     FILE *out, const MinicDirectLP64BlockContext *ctx,
     const MinicCoreInstruction *ins);
+/* Immutable GNU template + typed descriptor ID/variant machine ingress. */
+bool minic_loongarch64_typed_descriptor_matches_template(
+    uint32_t id, uint32_t variant, const char *text, size_t length);
+/* A descriptor template without its source-owned typed ID must not fall
+ * through to any other legacy machine emitter. */
+bool minic_loongarch64_descriptor_template_requires_typed_id(
+    const char *text, size_t length);
 bool minic_loongarch64_emit_dbar(
     FILE *out, const MinicDirectLP64BlockContext *ctx,
     const MinicCoreInstruction *ins);

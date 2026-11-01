@@ -135,15 +135,6 @@ bool minic_riscv64_emit_integer_aggregate_load_chunk_profile(
     return true;
 }
 
-bool minic_riscv64_emit_integer_aggregate_load_chunk(
-    FILE *file, const MinicC0Program *program, MinicType type,
-    size_t chunk_index, const char *destination_register,
-    const char *address_register) {
-    return minic_riscv64_emit_integer_aggregate_load_chunk_profile(
-        file, program, type, chunk_index,
-        destination_register, address_register, false, SIZE_MAX);
-}
-
 void minic_riscv64_set_diagnostic(MinicDiagnostic *diagnostic,
                                   const char *path,
                                   const char *message) {

@@ -1277,11 +1277,10 @@ static bool emit_linux_control_register(
 static bool emit_linux_tlb_cache(
     FILE *out, const MinicCoreFunction *fn, const MinicX86Frame *frame,
     const MinicCoreInstruction *ins, const MinicCoreInlineAsm *info) {
-    const unsigned int form = minic_x86_64_linux_tlb_cache_form(
-        info->template_text, info->template_length);
+    const unsigned int form = info ? info->target_machine_form_variant : 0U;
     const MinicCoreStructuredInlineAsmOperand *b =
         ins->value.structured_inline_asm.operands;
-    if (!form || !info->is_volatile || info->is_goto ||
+    if ((form != 1U && form != 2U) || !info->is_volatile || info->is_goto ||
         !info->has_memory_clobber || info->register_clobber_count != 0U ||
         ins->value.structured_inline_asm.operand_count != 1U ||
         b[0].operand_index != 0U || b[0].value >= fn->value_count ||
@@ -2779,14 +2778,14 @@ static bool emit_linux_lowlevel_scalar(
     FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicX86Frame *frame,
     const MinicCoreInstruction *ins, const MinicCoreInlineAsm *info) {
-    const unsigned int form = minic_x86_64_linux_lowlevel_scalar_form(
-        info->template_text, info->template_length);
+    const unsigned int form = info ? info->target_machine_form_variant : 0U;
     const MinicCoreStructuredInlineAsmOperand *b =
         ins->value.structured_inline_asm.operands;
     MinicType type;
     size_t width;
     bool sign;
-    if (!out || !program || !target || !fn || !frame || !form ||
+    if (!out || !program || !target || !fn || !frame ||
+        form == 0U || form > 8U ||
         !info->is_volatile || info->is_goto || info->register_clobber_count)
         return false;
     if (form == 1U)
@@ -2867,14 +2866,14 @@ static bool emit_linux_boot_flags(
     FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicX86Frame *frame,
     const MinicCoreInstruction *ins, const MinicCoreInlineAsm *info) {
-    const unsigned int form = minic_x86_64_linux_boot_flags_form(
-        info->template_text, info->template_length);
+    const unsigned int form = info ? info->target_machine_form_variant : 0U;
     const MinicCoreStructuredInlineAsmOperand *b =
         ins->value.structured_inline_asm.operands;
     size_t i, width, expected;
     bool sign;
     MinicType type;
-    if (!out || !program || !target || !fn || !frame || !form ||
+    if (!out || !program || !target || !fn || !frame ||
+        form == 0U || form > 4U ||
         !info->is_volatile || info->is_goto || info->register_clobber_count ||
         (form <= 2U && ins->value.structured_inline_asm.operand_count !=
             (form == 1U ? 3U : 2U)) ||
@@ -2958,8 +2957,7 @@ static bool emit_linux_delay_mul(
     MinicType high_type, low_type;
     size_t i;
     if (!out || !fn || !frame || !ins || !info || !b ||
-        !minic_x86_64_linux_delay_mul_form(
-            info->template_text, info->template_length) ||
+        info->target_machine_form_variant != 1U ||
         info->is_goto || info->has_memory_clobber ||
         info->register_clobber_count ||
         ins->value.structured_inline_asm.operand_count != 4U)
@@ -2993,11 +2991,11 @@ static bool emit_linux_delay_wait(
     const MinicCoreInstruction *ins, const MinicCoreInlineAsm *info) {
     const MinicCoreStructuredInlineAsmOperand *b =
         ins->value.structured_inline_asm.operands;
-    const unsigned int form = minic_x86_64_linux_delay_wait_form(
-        info->template_text, info->template_length);
+    const unsigned int form = info ? info->target_machine_form_variant : 0U;
     MinicType lvalue_type;
     size_t i;
-    if (!out || !fn || !frame || !ins || !info || !b || !form ||
+    if (!out || !fn || !frame || !ins || !info || !b ||
+        (form != 1U && form != 2U) ||
         !info->is_volatile || info->is_goto || info->has_memory_clobber ||
         info->register_clobber_count ||
         ins->value.structured_inline_asm.operand_count !=
@@ -5359,8 +5357,7 @@ static bool emit_linux_verw_clear(
         ins->value.structured_inline_asm.operands;
     MinicType pointee;
     if (!out || !fn || !frame || !ins || !info ||
-        !minic_x86_64_linux_verw_clear_form(
-            info->template_text, info->template_length) ||
+        info->target_machine_form_variant != 1U ||
         !info->is_volatile || info->is_goto || !info->has_memory_clobber ||
         info->register_clobber_count != 1U || !info->register_clobbers ||
         !clobber_is(&info->register_clobbers[0], "cc") ||
@@ -5752,6 +5749,20 @@ bool minic_x86_64_emit_structured_asm(
             return emit_linux_lar_selector(out, fn, frame, ins, info);
         case MINIC_X86_MACHINE_ASM_IDENTITY_LOAD:
             return emit_linux_identity_load(out, fn, frame, ins, info);
+        case MINIC_X86_MACHINE_ASM_VERW_CLEAR:
+            return emit_linux_verw_clear(out, fn, frame, ins, info);
+        case MINIC_X86_MACHINE_ASM_TLB_CACHE:
+            return emit_linux_tlb_cache(out, fn, frame, ins, info);
+        case MINIC_X86_MACHINE_ASM_DELAY_MUL:
+            return emit_linux_delay_mul(out, fn, frame, ins, info);
+        case MINIC_X86_MACHINE_ASM_DELAY_WAIT:
+            return emit_linux_delay_wait(out, fn, frame, ins, info);
+        case MINIC_X86_MACHINE_ASM_LOWLEVEL_SCALAR:
+            return emit_linux_lowlevel_scalar(
+                out, program, target, fn, frame, ins, info);
+        case MINIC_X86_MACHINE_ASM_BOOT_FLAGS:
+            return emit_linux_boot_flags(
+                out, program, target, fn, frame, ins, info);
         default:
             return false;
         }
@@ -5882,9 +5893,6 @@ bool minic_x86_64_emit_structured_asm(
     if (minic_x86_64_linux_futex_extable_form(
             info->template_text, info->template_length))
         return emit_linux_futex_extable(out, fn, frame, ins, info);
-    if (minic_x86_64_linux_verw_clear_form(
-            info->template_text, info->template_length))
-        return emit_linux_verw_clear(out, fn, frame, ins, info);
     if (minic_x86_64_linux_debug_register_form(
             info->template_text, info->template_length))
         return emit_linux_debug_register(out, fn, frame, ins, info);
@@ -5896,9 +5904,6 @@ bool minic_x86_64_emit_structured_asm(
             info->template_text, info->template_length))
         return emit_linux_control_register(
             out, program, target, fn, frame, ins, info);
-    if (minic_x86_64_linux_tlb_cache_form(
-            info->template_text, info->template_length))
-        return emit_linux_tlb_cache(out, fn, frame, ins, info);
     if (minic_x86_64_linux_three_call_alternative_form(
             info->template_text, info->template_length))
         return emit_linux_three_call_alternative(
@@ -6288,25 +6293,6 @@ bool minic_x86_64_emit_structured_asm(
     if (minic_x86_64_linux_rep_stos_width(
             info->template_text, info->template_length))
         return emit_linux_rep_stos(out, program, target, fn, frame, ins, info);
-    if (minic_x86_64_linux_lowlevel_scalar_form(
-            info->template_text, info->template_length))
-        return emit_linux_lowlevel_scalar(
-            out, program, target, fn, frame, ins, info);
-    {
-        const unsigned int boot_flags_form = minic_x86_64_linux_boot_flags_form(
-            info->template_text, info->template_length);
-        if (boot_flags_form != 0U &&
-            !(boot_flags_form == 3U &&
-              ins->value.structured_inline_asm.operand_count == 8U))
-            return emit_linux_boot_flags(
-                out, program, target, fn, frame, ins, info);
-    }
-    if (minic_x86_64_linux_delay_mul_form(
-            info->template_text, info->template_length))
-        return emit_linux_delay_mul(out, fn, frame, ins, info);
-    if (minic_x86_64_linux_delay_wait_form(
-            info->template_text, info->template_length))
-        return emit_linux_delay_wait(out, fn, frame, ins, info);
     if (minic_x86_64_linux_ipv6_checksum_form(
             info->template_text, info->template_length))
         return emit_linux_ipv6_checksum(out, fn, frame, ins, info);
