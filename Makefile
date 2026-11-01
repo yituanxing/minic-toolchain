@@ -1595,6 +1595,13 @@ check-runtime-record-positional-arena-growth: $(MINIC_CC_BINARY)
 
 check-fast: check-runtime-nested-array-arena-growth check-runtime-record-positional-arena-growth
 
+.PHONY: check-runtime-record-tagged-arena-growth
+check-runtime-record-tagged-arena-growth: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	sh tests/compiler/c0/probe-runtime-record-tagged-arena-growth.sh
+
+check-fast: check-runtime-record-tagged-arena-growth
+
 .PHONY: check-return-assignment-expression
 check-return-assignment-expression: $(MINIC_CC_BINARY)
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \

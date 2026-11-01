@@ -41,7 +41,7 @@
 | --- | --- | --- | --- | --- | --- |
 | [MC-001](#mc-001-符号闭包读取失效的-expression-指针) | P0 | FIXED-UNVERIFIED | ASAN | Compiler | 符号闭包递归后读取扩容前的 Expression 指针；定点修复已通过五目标容量边界测试 |
 | [MC-002](#mc-002-record-字段声明中的悬空指针) | P0 | FIXED-UNVERIFIED | ASAN | Frontend | 旧函数指针参数 Record UAF 由 `449eab2` 的稳定 RecordId 重取覆盖；新增独立函数指针容量回归 |
-| [MC-003](#mc-003-运行时-record-初始化器中的悬空指针) | P0 | OPEN | ASAN | Frontend | 运行时记录初始化器跨字段复用旧 Record 地址 |
+| [MC-003](#mc-003-运行时-record-初始化器中的悬空指针) | P0 | FIXED-UNVERIFIED | ASAN | Frontend | 原 tagged Record 表达式复现已被 MC-056 同根修复覆盖；五目标容量 ASan 与 x86 GNU native 回归通过 |
 | [MC-004](#mc-004-属性探测使-parser-tags-失效) | P0 | OPEN | ASAN | Frontend | `probe=*parser` 的 tags 容器所有权错误 |
 | [MC-005](#mc-005-属性探测使-parser-enum_constants-失效) | P0 | OPEN | ASAN | Frontend | 同一浅拷贝使 enum_constants 容器失效 |
 | [MC-006](#mc-006-传递特化污染共享-call) | P0 | OPEN | ELF-ORACLE | Compiler/Core | 调用实例的 callee 被写进共享 AST CALL |
@@ -163,9 +163,12 @@
 
 ### MC-003 运行时 Record 初始化器中的悬空指针
 
-- **位置：** `src/frontend/parser_runtime_initializer.c:1374–1398`、`src/frontend/ast.c:2191`。
-- **证据：** `struct Outer o = { sizeof(struct Inner { int z; }), 22 };` 在处理首字段时扩容 Record arena，第二字段访问旧 `record`；ASan 在 RV32/RV64/LoongArch64 复现。GCC GNU11 接受该构造。
-- **修复门槛：** 跨字段按 RecordId 重新解析地址，或采用已在静态初始化器中使用的、语义可证明安全的 Record 快照；五目标扩容矩阵。
+- **状态：** `FIXED-UNVERIFIED`，P0，`ASAN`。旧版真实 `heap-use-after-free`，**与 MC-056 是同一运行时顺序 Record 字段循环的同一根因，不是另一处需要重复打补丁的生产代码**。
+- **位置/复现：** 原 `src/frontend/parser_runtime_initializer.c:1409:parse_positional_runtime_record_initializer_from` 持有旧 `Record*` 跨 `sizeof(struct Inner { int z; })` 的嵌套解析；`src/frontend/ast.c:1144` 重新分配 Record arena，下一字段的 `minic_c0_record_field` 读取已释放内存（`ast.c:2185`）。GNU GNU11 接受 `struct Outer outer = { sizeof(struct Inner { int z; }), 22 };`。
+- **原版强证据：** 独立旧 worktree `b8b3e55`、sanitize `-Werror`，原 tagged-Record fixture 在 15 个前置类型、RV64 `-S` 的 ASan 报告 `heap-use-after-free`，READ 8B；栈从 `parse_sizeof` 到 `minic_c0_program_add_record` → `realloc`，随后在下一字段读取旧 Record。此前 RV32/RV64/Loong 的原始记录保持有效。
+- **已有生产修复：** `e36794d` 已为 MC-056 将同一循环改为每次按稳定 `RecordId` 重新获取 Record 并在递归前按值保存 `MinicRecordField`；对 MC-003 原写法自然生效。**本 MC-003 专项没有再改生产代码**。
+- **新增永久回归：** `tests/compiler/audit/mc003_runtime_record_tagged_uaf.c`、`tests/compiler/c0/probe-runtime-record-tagged-arena-growth.sh`，`check-runtime-record-tagged-arena-growth` 已加入 `check-fast`。当前 sanitize `-Werror` 与 Release `-Werror`：五目标 × 14/15/16 arena 相位均 **15/15 PASS**；GNU/MiniC x86_64 原生三个相位均 exit **26**。GNU 报错/正例约束没有放宽。
+- **未覆盖：** 尚未运行全部五 ISA GNU ELF/QEMU/Linux 执行矩阵、与 MiniAS/MiniLD 的联合验收；因此不标记 `VERIFIED`。
 
 ### MC-004 属性探测使 Parser tags 失效
 
