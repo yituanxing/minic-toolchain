@@ -321,6 +321,10 @@ jobs:
             build/rv32-p2-strict/full18-runner.log
             build/rv32-p2-strict/full18-nvme-sha256.txt
             build/rv32-p2-strict/full18-run/qemu-serial.log
+            build/rv32-p2-strict/full18-run/qemu-pci-version.txt
+            build/rv32-p2-strict/full18-run/qemu-pci-gpu-properties.txt
+            build/rv32-p2-strict/full18-run/qemu-pci-guest-errors.log
+            build/rv32-p2-strict/full18-run/qemu-pci-trace-events.txt
             build/rv32-p2-strict/full18-run/rv32-p2-module-sha256.txt
             build/rv32-p2-strict/full18-run/runtime-p2-full18-elf.txt
             build/rv32-p2-strict/full18-run/runtime-p2-full18-disassembly.txt

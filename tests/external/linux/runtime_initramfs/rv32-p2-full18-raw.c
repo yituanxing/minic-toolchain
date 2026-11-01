@@ -280,16 +280,58 @@ static int ifup(const char*name){
  long rc=S3(IOCTL,fd,SIOCGIFFLAGS,req);closefd(fd);
  return rc==0&&(req[16]&1);
 }
+static long br_sysctl_error=-19;
+static void br_trace(const char*stage,long rc,long byte){
+ say("RV32I_P2_F18_BRNETFILTER_TRACE stage=");say(stage);
+ say(" rc=");show_num(rc);say(" byte=");show_num(byte);say("\n");
+}
+static int br_fail(const char*stage,long rc,long byte){
+ if(br_sysctl_error==-19)br_sysctl_error=bad(rc)?rc:-71;
+ br_trace(stage,rc,byte);
+ return 0;
+}
 static int toggle_brnetfilter(void){
  const char*path="/proc/sys/net/bridge/bridge-nf-call-ip6tables";
- long fd=S4(OPENAT,AT_FDCWD,path,O_RDWR,0);if(bad(fd))return 0;
- char old=0,cur=0;int ok=S3(READ,fd,&old,1)==1&&(old=='0'||old=='1');
+ long fd=S4(OPENAT,AT_FDCWD,path,O_RDWR,0);
+ if(bad(fd))return br_fail("open",fd,0);
+ char old=0,cur=0;
+ long rc=S3(READ,fd,&old,1);
+ if(rc!=1||(old!='0'&&old!='1')){
+  closefd(fd);return br_fail("read_previous",rc,(unsigned char)old);
+ }
  char desired=old=='0'?'1':'0';
- if(ok)ok=S3(LSEEK,fd,0,0)==0&&S3(WRITE,fd,&desired,1)==1&&
-  S3(LSEEK,fd,0,0)==0&&S3(READ,fd,&cur,1)==1&&cur==desired;
- int restored=S3(LSEEK,fd,0,0)==0&&S3(WRITE,fd,&old,1)==1&&
-  S3(LSEEK,fd,0,0)==0&&S3(READ,fd,&cur,1)==1&&cur==old;
- closefd(fd);return ok&&restored;
+ int ok=1,restore=1,attempted=0;
+ rc=S3(LSEEK,fd,0,0);
+ if(rc!=0){ok=br_fail("seek_new",rc,0);goto done;}
+ attempted=1;
+ rc=S3(WRITE,fd,&desired,1);
+ if(rc!=1){ok=br_fail("write_new",rc,(unsigned char)desired);goto done;}
+ rc=S3(LSEEK,fd,0,0);
+ if(rc!=0){ok=br_fail("seek_new_readback",rc,0);goto done;}
+ rc=S3(READ,fd,&cur,1);
+ if(rc!=1||cur!=desired){ok=br_fail("read_new",rc,(unsigned char)cur);goto done;}
+ br_trace("changed",rc,(unsigned char)cur);
+done:
+ /* An attempted write may have changed the setting even on error.
+  * Restore the exact old byte and check the actual kernel readback. */
+ if(attempted){
+  rc=S3(LSEEK,fd,0,0);
+  if(rc!=0)restore=br_fail("seek_restore",rc,0);
+  else{
+   rc=S3(WRITE,fd,&old,1);
+   if(rc!=1)restore=br_fail("write_restore",rc,(unsigned char)old);
+   else{
+    rc=S3(LSEEK,fd,0,0);
+    if(rc!=0)restore=br_fail("seek_restore_readback",rc,0);
+    else{
+     rc=S3(READ,fd,&cur,1);
+     if(rc!=1||cur!=old)restore=br_fail("read_restored",rc,(unsigned char)cur);
+     else br_trace("restored",rc,(unsigned char)cur);
+    }
+   }
+  }
+ }
+ closefd(fd);return ok&&restore;
 }
 static void bridge_veth_tests(void){
  long br_rc=create_bridge(),v_rc=create_veth();
@@ -306,7 +348,7 @@ static void bridge_veth_tests(void){
  if(br&&delete_link(br)!=0)bgood=0;
  if(ifindex("p2v0")||ifindex("p2v1"))vgood=0;
  if(ifindex("p2br0"))bgood=0;
- mark("br-netfilter",ngood&&bgood,ngood?0:-19);
+ mark("br-netfilter",ngood&&bgood,ngood?0:br_sysctl_error);
  mark("veth",vgood,v_rc?v_rc:-71);
  mark("bridge",bgood,br_rc?br_rc:-71);
 }

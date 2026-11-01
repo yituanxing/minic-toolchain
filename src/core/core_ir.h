@@ -143,13 +143,15 @@ typedef enum MinicCoreInstructionKind {
     MINIC_CORE_INSTRUCTION_VARIADIC_COPY,
     /* Target-neutral effect, register destination identity plus SSA source.
      * Append after frozen enum values to preserve established IR numbering. */
-    MINIC_CORE_INSTRUCTION_FIXED_REGISTER_WRITE
+    MINIC_CORE_INSTRUCTION_FIXED_REGISTER_WRITE,
+    /* GNU vector_size(16) lvalue storage copy: no SIMD value or call ABI. */
+    MINIC_CORE_INSTRUCTION_GNU_FIXED_VECTOR_STORAGE_COPY
 } MinicCoreInstructionKind;
 
 /* One exclusive upper bound for opcode-indexed tables and diagnostics.
  * Keep this adjacent to the last real opcode as the IR vocabulary grows;
  * it is intentionally not an instruction-kind enum member. */
-enum { MINIC_CORE_INSTRUCTION_KIND_COUNT = MINIC_CORE_INSTRUCTION_FIXED_REGISTER_WRITE + 1U };
+enum { MINIC_CORE_INSTRUCTION_KIND_COUNT = MINIC_CORE_INSTRUCTION_GNU_FIXED_VECTOR_STORAGE_COPY + 1U };
 
 /* M91_BUILTIN_UNREACHABLE_TERMINATOR: unreachable is a CFG fact, not a
    value-producing instruction and not an invented target trap. */
@@ -448,6 +450,10 @@ typedef struct MinicCoreInstruction {
             MinicCoreValueId destination_address;
             MinicCoreValueId source_address;
         } record_copy;
+        struct {
+            MinicCoreValueId destination_address;
+            MinicCoreValueId source_address;
+        } gnu_fixed_vector_storage_copy;
         /* Target ABI state-copy: left=destination cursor pointer, right=source. */
         struct {
             MinicCoreValueId destination;

@@ -536,6 +536,31 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
                minic_type_equal(destination_type, instruction->type) &&
                minic_type_equal(source_type, instruction->type);
     }
+    case MINIC_CORE_INSTRUCTION_GNU_FIXED_VECTOR_STORAGE_COPY: {
+        MinicType destination_pointee, source_pointee;
+        MinicType destination_type, source_type, unqualified_type;
+
+        return instruction->result == MINIC_CORE_VALUE_INVALID &&
+               minic_type_is_gnu_fixed_vector(instruction->type) &&
+               instruction->type.gnu_vector_bytes == 16U &&
+               minic_type_unqualified(instruction->type, &unqualified_type) &&
+               minic_type_equal(unqualified_type, instruction->type) &&
+               available_pointer_pointee(
+                   function, available_values,
+                   instruction->value.gnu_fixed_vector_storage_copy.destination_address,
+                   &destination_pointee) &&
+               available_pointer_pointee(
+                   function, available_values,
+                   instruction->value.gnu_fixed_vector_storage_copy.source_address,
+                   &source_pointee) &&
+               !minic_type_is_const(destination_pointee) &&
+               !minic_type_is_volatile(destination_pointee) &&
+               !minic_type_is_volatile(source_pointee) &&
+               minic_type_unqualified(destination_pointee, &destination_type) &&
+               minic_type_unqualified(source_pointee, &source_type) &&
+               minic_type_equal(destination_type, instruction->type) &&
+               minic_type_equal(source_type, instruction->type);
+    }
     case MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM: {
         const MinicCoreInlineAsm *inline_asm;
 

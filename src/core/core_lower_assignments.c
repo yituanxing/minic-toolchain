@@ -13,6 +13,72 @@
  * effectful storage, local facts, and scalar prefix/postfix updates.
  * Bit-field assignments dispatch to the dedicated semantic owner. */
 
+/* GNU's vector_size(16) is an address-backed storage type here. A vector
+ * assignment statement copies all 16 bytes; it does not introduce vector
+ * arithmetic, a SIMD register value, or a vector call/return ABI. Snapshot
+ * before evaluating the destination address, as for scalar assignments. */
+static MinicCoreLowerStatus core_lower_gnu_vector16_storage_copy(
+    MinicCoreLowerContext *context, const MinicExpression *target,
+    const MinicExpression *source, MinicExpressionId target_id,
+    MinicExpressionId source_id, MinicSourceSpan span,
+    MinicCoreValueId *result_value) {
+    MinicType type, source_type, pointer_type;
+    MinicCoreObjectId snapshot;
+    MinicCoreValueId source_address, snapshot_address, destination_address;
+    MinicCoreInstruction instruction;
+    MinicCoreLowerStatus status;
+    size_t bytes, alignment;
+
+    if (source == NULL || source->value_category != MINIC_VALUE_LVALUE ||
+        result_value != NULL || minic_type_is_const(target->type) ||
+        minic_type_is_volatile(target->type) ||
+        minic_type_is_volatile(source->type) ||
+        !minic_type_unqualified(target->type, &type) ||
+        !minic_type_unqualified(source->type, &source_type) ||
+        !minic_type_equal(type, source_type) ||
+        !minic_type_is_gnu_fixed_vector(type) || type.gnu_vector_bytes != 16U ||
+        !minic_target_info_language_type_supported(
+            context->target, MINIC_TYPE_BASE_GNU_FIXED_VECTOR) ||
+        !minic_data_layout_type(context->target->data_layout,
+                                context->body->program, type, &bytes, &alignment) ||
+        bytes != 16U || alignment != 16U ||
+        !minic_type_pointer_to(type, &pointer_type))
+        return MINIC_CORE_LOWER_UNSUPPORTED;
+
+    status = lower_address(context, source_id, &source_address);
+    if (status != MINIC_CORE_LOWER_OK) return status;
+    if (!minic_core_function_add_object(context->function, span, type, &snapshot))
+        return MINIC_CORE_LOWER_ERROR;
+    (void)memset(&instruction, 0, sizeof(instruction));
+    instruction.kind = MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS;
+    instruction.span = span;
+    instruction.type = pointer_type;
+    instruction.result = MINIC_CORE_VALUE_INVALID;
+    instruction.value.object_id = snapshot;
+    if (!minic_core_function_append_value_instruction(
+            context->function, context->block_id, &instruction, &snapshot_address))
+        return MINIC_CORE_LOWER_ERROR;
+
+    (void)memset(&instruction, 0, sizeof(instruction));
+    instruction.kind = MINIC_CORE_INSTRUCTION_GNU_FIXED_VECTOR_STORAGE_COPY;
+    instruction.span = span;
+    instruction.type = type;
+    instruction.result = MINIC_CORE_VALUE_INVALID;
+    instruction.value.gnu_fixed_vector_storage_copy.destination_address = snapshot_address;
+    instruction.value.gnu_fixed_vector_storage_copy.source_address = source_address;
+    if (!minic_core_function_append_effect_instruction(
+            context->function, context->block_id, &instruction))
+        return MINIC_CORE_LOWER_ERROR;
+
+    status = lower_address(context, target_id, &destination_address);
+    if (status != MINIC_CORE_LOWER_OK) return status;
+    instruction.value.gnu_fixed_vector_storage_copy.destination_address = destination_address;
+    instruction.value.gnu_fixed_vector_storage_copy.source_address = snapshot_address;
+    return minic_core_function_append_effect_instruction(
+               context->function, context->block_id, &instruction)
+               ? MINIC_CORE_LOWER_OK : MINIC_CORE_LOWER_ERROR;
+}
+
 static MinicCoreLowerStatus minic_core_lower_assignment_pair_impl(MinicCoreLowerContext *context,
                                                   MinicExpressionId target_id,
                                                   MinicExpressionId source_id,
@@ -87,6 +153,9 @@ static MinicCoreLowerStatus minic_core_lower_assignment_pair_impl(MinicCoreLower
             context, target, source_id, span, result_value, is_initializer_write, &matched);
         if (matched || status != MINIC_CORE_LOWER_OK) return status;
     }
+    if (minic_type_is_gnu_fixed_vector(target->type))
+        return core_lower_gnu_vector16_storage_copy(
+            context, target, source, target_id, source_id, span, result_value);
     if (!minic_type_unqualified(target->type, &stored_type) ||
         !core_memory_scalar_type(stored_type)) {
         return MINIC_CORE_LOWER_UNSUPPORTED;

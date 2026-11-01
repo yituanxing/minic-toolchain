@@ -924,6 +924,42 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
         }
         return true;
     }
+    case MINIC_CORE_INSTRUCTION_GNU_FIXED_VECTOR_STORAGE_COPY: {
+        MinicType dst_pointee, src_pointee, dst_type, src_type;
+        size_t bytes, alignment;
+        const MinicCoreValueId dst =
+            ins->value.gnu_fixed_vector_storage_copy.destination_address;
+        const MinicCoreValueId src =
+            ins->value.gnu_fixed_vector_storage_copy.source_address;
+        if (ins->result != MINIC_CORE_VALUE_INVALID ||
+            !minic_type_is_gnu_fixed_vector(ins->type) ||
+            ins->type.gnu_vector_bytes != 16U ||
+            !minic_target_info_language_type_supported(
+                target, MINIC_TYPE_BASE_GNU_FIXED_VECTOR) ||
+            dst >= fn->value_count || src >= fn->value_count ||
+            !minic_type_pointee(fn->values[dst].type, &dst_pointee) ||
+            !minic_type_pointee(fn->values[src].type, &src_pointee) ||
+            minic_type_is_const(dst_pointee) ||
+            minic_type_is_volatile(dst_pointee) ||
+            minic_type_is_volatile(src_pointee) ||
+            !minic_type_unqualified(dst_pointee, &dst_type) ||
+            !minic_type_unqualified(src_pointee, &src_type) ||
+            !minic_type_equal(dst_type, ins->type) ||
+            !minic_type_equal(src_type, ins->type) ||
+            !minic_data_layout_type(target->data_layout, program, ins->type,
+                                    &bytes, &alignment) ||
+            bytes != 16U || alignment != 16U ||
+            !x86_value_load(out, frame, dst, "%r10") ||
+            !x86_value_load(out, frame, src, "%r11"))
+            return false;
+        /* Plain integer GPR memory traffic under Linux -mno-sse/-mno-mmx.
+         * Load both halves first to preserve overlapping source storage. */
+        return fprintf(out,
+                       "  movq (%%r11), %%rax\n"
+                       "  movq 8(%%r11), %%rdx\n"
+                       "  movq %%rax, (%%r10)\n"
+                       "  movq %%rdx, 8(%%r10)\n") >= 0;
+    }
     case MINIC_CORE_INSTRUCTION_INTEGER_CONVERSION: {
         MinicCoreValueId source = ins->value.operand;
         MinicType source_type;

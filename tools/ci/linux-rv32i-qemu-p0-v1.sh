@@ -363,6 +363,21 @@ if [[ "$f18" == 1 ]]; then
   : "${RV32I_QEMU_P2_NVME_IMAGE:?full18 requires real QEMU PCI NVMe namespace disk}"
   nvme_disk=$(realpath "$RV32I_QEMU_P2_NVME_IMAGE")
   [[ -s "$nvme_disk" ]] || { echo "RV32I_QEMU_F18=FAIL missing_nvme_disk=$nvme_disk" >&2; exit 3; }
+  # Keep the actual PCI GPU unchanged while diagnosing its modern virtio
+  # feature handshake. QEMU's virtio-gpu-pci forces VIRTIO_F_VERSION_1, so
+  # a kernel -EINVAL here must be investigated at the PCI config/feature
+  # read or guest driver boundary, not waved away as a successful module load.
+  qemu-system-riscv32 --version >"$work/qemu-pci-version.txt" 2>&1
+  qemu-system-riscv32 -device virtio-gpu-pci,help \
+    >"$work/qemu-pci-gpu-properties.txt" 2>&1 || true
+  qemu_args+=( -d guest_errors -D "$work/qemu-pci-guest-errors.log" )
+  qemu-system-riscv32 -trace help >"$work/qemu-pci-trace-events.txt" 2>&1 || true
+  if grep -Fxq virtio_set_status "$work/qemu-pci-trace-events.txt"; then
+    qemu_args+=( -trace virtio_set_status )
+    echo 'RV32I_QEMU_F18_PCI_TRACE=ENABLED event=virtio_set_status stderr=qemu-serial.log guest_errors=qemu-pci-guest-errors.log'
+  else
+    echo 'RV32I_QEMU_F18_PCI_TRACE=UNAVAILABLE event=virtio_set_status guest_errors=qemu-pci-guest-errors.log'
+  fi
   qemu_args+=( -device virtio-gpu-pci
                -drive "if=none,id=rv32p2nvmedisk,file=$nvme_disk,format=raw,snapshot=on"
                -device nvme,id=rv32p2nvme,serial=MINICP2
