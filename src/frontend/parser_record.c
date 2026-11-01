@@ -440,9 +440,14 @@ static bool parse_record_field_declarator(MinicParser *parser,
             parser, field_type, "record field cannot use incomplete type by value")) {
         return false;
     }
-    /* FIXME(MC-061): pointer-to-array/function-pointer declarators above
-     * may append anonymous records, invalidating this borrowed Record*.
-     * Look up record_id again after recursive declarator parsing. */
+    /* A nested pointer-to-array/function declarator or its sizeof bound may
+     * append a Record and realloc Program.records. The stable record_id, not
+     * the earlier borrowed Record*, identifies the enclosing declaration. */
+    record = minic_c0_program_record(parser->program, record_id);
+    if (record == NULL) {
+        minic_parser_error(parser, "invalid record after field declarator parsing");
+        return false;
+    }
     if (record_has_field(parser, record, name_span)) {
         minic_parser_error(parser, "duplicate record field");
         return false;

@@ -1541,6 +1541,13 @@ check-tagged-bare-record-members: $(MINIC_CC_BINARY)
 
 check-fast: check-tagged-bare-record-members
 
+.PHONY: check-record-field-declarator-realloc
+check-record-field-declarator-realloc: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	sh tests/compiler/c0/probe-record-field-declarator-realloc.sh
+
+check-fast: check-record-field-declarator-realloc
+
 .PHONY: check-x86-head-inline-section
 check-x86-head-inline-section: $(MINIC_CC_BINARY)
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \

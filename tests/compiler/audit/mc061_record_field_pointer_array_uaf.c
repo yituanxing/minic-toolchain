@@ -22,6 +22,14 @@ struct R15 { int v; };
 struct R16 { int v; };
 #endif
 struct Outer { int (*field)[sizeof(struct { int z; })]; };
+#ifdef MC061_DUPLICATE_FIELD
+/* The second declarator also crosses nested record parsing, but must still
+ * reject the duplicate name rather than retaining a stale Record pointer. */
+struct DuplicateOuter {
+    int (*field)[sizeof(struct { int z; })];
+    int (*field)[sizeof(struct { int q; })];
+};
+#endif
 int main(void) {
     struct Outer object;
     (void)object;
