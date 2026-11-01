@@ -7,6 +7,49 @@
 > 和早期测试文件数量，均不能自动当作最新 HEAD 的事实。
 > “读过 / 修改过 / 完成清理”必须分别统计。
 
+### 2026-11-02 four-lane MCExpr/Source/four-Target cleanup (batch 34)
+
+**Base:** remote Draft PR #667 head
+`fcfa2d8e59c21eb3f6558a6836c4f73ce5342b18`,
+locally identical-tree parent `001f30e`. Four independent file scopes
+were reconciled into one reviewed change; no public API, ISA allowlist,
+fixup ownership, SourceSite identity or conditional replay contract changed.
+
+- **MCExpr:** deferred binary nodes retain the shared
+  `MiniAsExprBinaryOp` and reuse the checked absolute binary evaluator;
+  section coefficients and cross-section rejection are still enforced by
+  deferred evaluation. Removed the duplicate 18-way operation mapping,
+  never-read node capacity, and five copies of low-endian fixed-DATA
+  serialization. `mc_expr.c` `+41/-115`.
+- **Source:** a conservative lexical substring prefilter skips collector
+  argument-buffer growth and line copies for ordinary source lines.
+  Inline semicolon lines allocate SourceFrame segments only if both repeat
+  delimiters exist; the original full delimiter parser decides semantics.
+  `source_expansion.c` `+47/-7`. A separate macro-counter arithmetic fix
+  was explicitly left out because it changes legacy failure behavior.
+- **x86/AArch64:** the four GPR widths and the AArch64 numbered register
+  banks use one strict per-Target token lookup each, preserving x86
+  AH/CH/DH/BH, AArch64 suffixes and register bounds. Two files `+38/-48`.
+- **RISC-V/LoongArch:** a single RISC-V ULEB encoder computes size or
+  writes bytes; one numeric attribute descriptor binds each of five names,
+  ELF tags and existing state fields. LoongArch removes unused gaps in its
+  private privileged-form IDs, retaining all nine encodings. Two files
+  `+59/-67`.
+
+**Production diff:** six pre-existing C files, `+185/-237`, net **-52**.
+No production source or header was added or removed. Added a reusable
+manual two-binary, four-architecture fixture parity probe (22 cases),
+independent of A0 and GNU oracle routing.
+
+**Local verification:** release `-Werror` and A0 **30/30 PASS**; targeted
+GNU x86/Source and RISC-V/LoongArch/AArch64 available-host probes passed,
+with missing cross GNU assemblers correctly marked SKIP. Independently
+recompiled the exact pre-batch MiniAS: **15 ELF objects byte-identical,
+7 inputs rejected on both sides, 0 mismatches** over 22 target/fixture
+pairs. Remote exact-head CI is not inherited from the parent and must be
+verified for the pushed commit. Full 3,536 strict GNU corpus and Linux
+Image/QEMU were **not** rerun in this batch.
+
 ### 2026-11-02 Source 五处 quote/escape 状态与 CFI 槽状态清理（P05/CFI）
 
 **Base:** exact remote Draft PR #667 head

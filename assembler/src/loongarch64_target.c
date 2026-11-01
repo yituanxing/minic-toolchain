@@ -1439,11 +1439,7 @@ static bool la_materialize_manual_word(const MiniAsMCInst *m,
     int64_t signed_value;
     *recognized=true;
     if(form>=LA_FORM_PRIVILEGED && form<LA_FORM_SCALAR) {
-        if(m->count!=0U ||
-           !((form>=LA_FORM_PRIVILEGED &&
-              form<LA_FORM_PRIVILEGED+7U) ||
-             form==LA_FORM_PRIVILEGED+16U ||
-             form==LA_FORM_PRIVILEGED+17U))return false;
+        if(m->count!=0U || form>=LA_FORM_PRIVILEGED+9U)return false;
         *word=m->encoding;
         return true;
     }
@@ -1748,8 +1744,7 @@ static bool la_parse(MiniAsParseContext *ctx,MiniAsStmt *s) {
         i=mnemonic->index;
         if(*s->args || i>=LA_COUNT(la_privileged))goto fail;
         m->encoding=la_privileged[i].opcode;
-        m->target_form=(uint32_t)LA_FORM_PRIVILEGED+
-            (uint32_t)(i<7U?i:i+9U);
+        m->target_form=(uint32_t)LA_FORM_PRIVILEGED+i;
         goto done;
     }
     if(!la_split(s->args,&tokens))goto fail;

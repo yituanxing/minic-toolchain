@@ -226,16 +226,27 @@ static const X64GprSpelling x64_gpr_spellings[16] = {
     {"r12b","r12w","r12d","r12"},{"r13b","r13w","r13d","r13"},
     {"r14b","r14w","r14d","r14"},{"r15b","r15w","r15d","r15"}
 };
-static bool x64_register(const char *text, unsigned *reg, bool *wide) {
+/* Four operand widths use the same target register numbering. A failed
+ * width-specific lookup must not reinterpret a high-byte AH/CH/DH/BH as a
+ * REX byte GPR; those remain an independent machine register family. */
+static bool x64_gpr_register(const char *text,unsigned bits,unsigned *reg) {
     unsigned i;
-    if (*text != '%') return false;
+    if(*text!='%')return false;
     ++text;
-    for (i = 0U; i < 16U; ++i) {
-        if (strcmp(text, x64_gpr_spellings[i].qword) == 0)
-            { *reg=i; *wide=true; return true; }
-        if (strcmp(text, x64_gpr_spellings[i].dword) == 0)
-            { *reg=i; *wide=false; return true; }
+    for(i=0U;i<16U;++i) {
+        const X64GprSpelling *spelling=&x64_gpr_spellings[i];
+        const char *name=bits==8U?spelling->byte:
+                         bits==16U?spelling->word:
+                         bits==32U?spelling->dword:
+                         bits==64U?spelling->qword:NULL;
+        if(name && !strcmp(text,name)){*reg=i;return true;}
     }
+    return false;
+}
+
+static bool x64_register(const char *text, unsigned *reg, bool *wide) {
+    if(x64_gpr_register(text,64U,reg)){*wide=true;return true;}
+    if(x64_gpr_register(text,32U,reg)){*wide=false;return true;}
     return false;
 }
 
@@ -264,20 +275,11 @@ static bool x64_xmm_register(const char *text,unsigned *reg) {
 }
 
 static bool x64_register16(const char *text,unsigned *reg) {
-    unsigned i;
-    if(*text!='%')return false;
-    for(i=0U;i<16U;++i)
-        if(!strcmp(text+1,x64_gpr_spellings[i].word)){*reg=i;return true;}
-    return false;
+    return x64_gpr_register(text,16U,reg);
 }
 
 static bool x64_register8(const char *text,unsigned *reg) {
-    unsigned i;
-    if(*text!='%')return false;
-    for(i=0U;i<16U;++i)
-        if(strcmp(text+1,x64_gpr_spellings[i].byte)==0)
-            {*reg=i;return true;}
-    return false;
+    return x64_gpr_register(text,8U,reg);
 }
 
 /* Legacy AH/CH/DH/BH occupy ModR/M register IDs 4..7 *without* REX.

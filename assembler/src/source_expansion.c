@@ -450,6 +450,17 @@ enum {
     MINIAS_COLLECTOR_REPEAT_ERROR = -2
 };
 
+/* This is only a conservative allocation prefilter, never a directive
+ * parser: quoted text, comments and longer identifiers may still match.
+ * Every recognized opener/closer necessarily contains one of these exact
+ * substrings, including .rep (the alias for .rept) and .endmacro. */
+static bool source_may_contain_collector(const char *text,
+                                         bool macro,bool repeat) {
+    return (macro && (strstr(text,".macro") || strstr(text,".endm"))) ||
+           (repeat && (strstr(text,".rep") || strstr(text,".irp") ||
+                       strstr(text,".endr")));
+}
+
 /* Macro and repeat collection use different GNU grammars, but both need the
  * same lexical comment/whitespace pass. A non-NULL argument buffer selects
  * each grammar; ordinary source checks macro first, nested blocks only their
@@ -458,7 +469,7 @@ static int classify_collector_line(const MiniAs *as, const char *text,
                                    char *macro_argument, size_t macro_size,
                                    char *repeat_argument, size_t repeat_size,
                                    size_t *label_prefix_length) {
-    char *copy = minias_strdup(text);
+    char *copy;
     char *trimmed;
     const char *rest = NULL;
     int kind = MINIAS_MACRO_NONE;
@@ -466,6 +477,9 @@ static int classify_collector_line(const MiniAs *as, const char *text,
     if(macro_argument!=NULL && macro_size!=0U)macro_argument[0]='\0';
     if(repeat_argument!=NULL && repeat_size!=0U)repeat_argument[0]='\0';
     if(label_prefix_length!=NULL)*label_prefix_length=0U;
+    if(!source_may_contain_collector(text,macro_argument!=NULL,
+                                    repeat_argument!=NULL))return kind;
+    copy=minias_strdup(text);
     if (copy == NULL)
         return macro_argument!=NULL ? MINIAS_COLLECTOR_MACRO_ERROR :
                                       MINIAS_COLLECTOR_REPEAT_ERROR;
@@ -1622,6 +1636,15 @@ static bool process_source_range(MiniAs *as,
             continue;
         }
 
+        /* Ordinary instructions/labels never need the collector's mutable
+         * argument buffer. This conservative substring check cannot hide a
+         * real directive; the full comment/label lexer still decides every
+         * candidate below. */
+        if(!source_may_contain_collector(lines[i].text,true,true)) {
+            if(!process_source_line(as,lines[i].text,lines[i].line))goto failed;
+            ++i;
+            continue;
+        }
         /* The parameter text cannot exceed the source line itself. */
         size_t needed=strlen(lines[i].text)+1U;
         if(!minias_grow_array((void **)&collector_argument,
@@ -1725,7 +1748,7 @@ failed:
 static bool process_inline_repeat_line(MiniAs *as,const char *source,
                                        size_t line,bool *handled) {
     MiniAsSourceLine *pieces=NULL;
-    size_t count=0U,capacity=0U;
+    size_t count=0U;
     char *copy,*cursor;
     bool opener=false,closer=false,ok=true;
     *handled=false;
@@ -1744,20 +1767,36 @@ static bool process_inline_repeat_line(MiniAs *as,const char *source,
         /* Kind-only inline recognition must not copy unused arguments. */
         kind=classify_collector_line(as,cursor,NULL,0U,
                                      &unused_argument,0U,NULL);
-        if(kind<0 || !minias_grow_array((void **)&pieces,&capacity,
-                                   sizeof(*pieces),count+1U)) {
+        if(kind<0 || count==SIZE_MAX) {
             minias_set_error(as,"out-of-memory:inline-repeat-segments");
             ok=false;break;
         }
-        pieces[count].text=cursor;
-        pieces[count].line=line;
-        pieces[count].source_segment=count;
         ++count;
         if(kind==MINIAS_REPEAT_REPT || kind==MINIAS_REPEAT_IRP)opener=true;
         if(kind==MINIAS_REPEAT_ENDR)closer=true;
+        if(end!=NULL)*end=';';
         cursor=end==NULL?NULL:end+1U;
     }
     if(ok && opener && closer) {
+        size_t i;
+        /* Semicolon-separated statements are common, but complete inline
+         * repeat blocks are rare. Materialize the borrowed SourceFrame
+         * segments only when both delimiters are actually present. */
+        if(count>SIZE_MAX/sizeof(*pieces) ||
+           (pieces=malloc(count*sizeof(*pieces)))==NULL) {
+            minias_set_error(as,"out-of-memory:inline-repeat-segments");
+            ok=false;
+            goto done;
+        }
+        cursor=copy;
+        for(i=0U;i<count;++i) {
+            char *end=find_statement_separator(cursor);
+            if(end!=NULL)*end='\0';
+            pieces[i].text=cursor;
+            pieces[i].line=line;
+            pieces[i].source_segment=i;
+            cursor=end==NULL?NULL:end+1U;
+        }
         const MiniAsSourceFrame frame={
             .kind=MINIAS_SOURCE_FRAME_EXPANSION,
             .lines=pieces,
@@ -1769,6 +1808,7 @@ static bool process_inline_repeat_line(MiniAs *as,const char *source,
         *handled=true;
         ok=minias_source_frame_process(as,&frame);
     }
+done:
     free(pieces);
     free(copy);
     return ok;

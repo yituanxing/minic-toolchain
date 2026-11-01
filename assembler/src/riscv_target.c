@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <ctype.h>
 #include <errno.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <string.h>
 #include <stdlib.h>
@@ -317,22 +318,15 @@ static void riscv_store_le32(unsigned char *out, uint32_t value) {
     for (i = 0U; i != 4U; ++i) out[i] = (unsigned char)(value >> (8U * i));
 }
 
-static size_t riscv_uleb32_size(unsigned value) {
-    size_t size = 1U;
-    while (value >= 128U) {
-        value >>= 7U;
-        ++size;
-    }
-    return size;
-}
-
-static size_t riscv_store_uleb32(unsigned char *out, unsigned value) {
+/* One encoder determines both the preflight size and the stored bytes. */
+static size_t riscv_encode_uleb32(unsigned char *out, unsigned value) {
     size_t size = 0U;
     do {
         unsigned char next = (unsigned char)(value & 127U);
         value >>= 7U;
         if (value != 0U) next |= 128U;
-        out[size++] = next;
+        if (out != NULL) out[size] = next;
+        ++size;
     } while (value != 0U);
     return size;
 }
@@ -389,15 +383,15 @@ static const char *riscv_build_attributes(MiniAsRiscvState *state) {
     arch_size = object_isa_length + 1U;
     size = 17U + arch_size +
                         (state->stack_align_present ?
-                            1U + riscv_uleb32_size(state->stack_align) : 0U) +
+                            1U + riscv_encode_uleb32(NULL,state->stack_align) : 0U) +
                         (emit_unaligned ?
-                            1U + riscv_uleb32_size(state->unaligned_access) : 0U) +
+                            1U + riscv_encode_uleb32(NULL,state->unaligned_access) : 0U) +
                         (emit_priv_major ?
-                            1U + riscv_uleb32_size(state->priv_spec) : 0U) +
+                            1U + riscv_encode_uleb32(NULL,state->priv_spec) : 0U) +
                         (emit_priv_minor ?
-                            1U + riscv_uleb32_size(state->priv_spec_minor) : 0U) +
+                            1U + riscv_encode_uleb32(NULL,state->priv_spec_minor) : 0U) +
                         (emit_priv_revision ?
-                            1U + riscv_uleb32_size(state->priv_spec_revision) : 0U);
+                            1U + riscv_encode_uleb32(NULL,state->priv_spec_revision) : 0U);
     if (size > sizeof(state->target_attributes)) {
         return "riscv-attribute-overflow";
     }
@@ -409,26 +403,26 @@ static const char *riscv_build_attributes(MiniAsRiscvState *state) {
     riscv_store_le32(buf + 12U, (uint32_t)(size - 11U));
     if (state->stack_align_present) {
         buf[at++] = 4U;
-        at += riscv_store_uleb32(buf + at, state->stack_align);
+        at += riscv_encode_uleb32(buf + at, state->stack_align);
     }
     buf[at++] = 5U;
     memcpy(buf + at, object_isa, arch_size);
     at += arch_size;
     if (emit_unaligned) {
         buf[at++] = 6U;
-        at += riscv_store_uleb32(buf + at, state->unaligned_access);
+        at += riscv_encode_uleb32(buf + at, state->unaligned_access);
     }
     if (emit_priv_major) {
         buf[at++] = 8U;
-        at += riscv_store_uleb32(buf + at, state->priv_spec);
+        at += riscv_encode_uleb32(buf + at, state->priv_spec);
     }
     if (emit_priv_minor) {
         buf[at++] = 10U;
-        at += riscv_store_uleb32(buf + at, state->priv_spec_minor);
+        at += riscv_encode_uleb32(buf + at, state->priv_spec_minor);
     }
     if (emit_priv_revision) {
         buf[at++] = 12U;
-        at += riscv_store_uleb32(buf + at, state->priv_spec_revision);
+        at += riscv_encode_uleb32(buf + at, state->priv_spec_revision);
     }
     if (at != size) {
         return "internal:riscv-attribute-layout";
@@ -446,39 +440,42 @@ static bool riscv_rebuild_attributes(MiniAs *as, size_t line) {
     return true;
 }
 
-static bool riscv_set_numeric_attribute(MiniAs *as, unsigned tag,
+/* The textual spelling, ELF tag and Target state slot are one attribute
+ * identity. Keep name dispatch and duplicate-value checks in agreement. */
+typedef struct {
+    const char *name;
+    const char *tag_name;
+    unsigned tag;
+    size_t present_offset;
+    size_t value_offset;
+} RiscvNumericAttribute;
+
+#define RISCV_NUMERIC_ATTRIBUTE(name, number, field) \
+    {name, #number, number##U, offsetof(MiniAsRiscvState, field##_present), \
+     offsetof(MiniAsRiscvState, field)}
+static const RiscvNumericAttribute riscv_numeric_attributes[] = {
+    RISCV_NUMERIC_ATTRIBUTE("stack_align", 4, stack_align),
+    RISCV_NUMERIC_ATTRIBUTE("unaligned_access", 6, unaligned_access),
+    RISCV_NUMERIC_ATTRIBUTE("priv_spec", 8, priv_spec),
+    RISCV_NUMERIC_ATTRIBUTE("priv_spec_minor", 10, priv_spec_minor),
+    RISCV_NUMERIC_ATTRIBUTE("priv_spec_revision", 12, priv_spec_revision)
+};
+#undef RISCV_NUMERIC_ATTRIBUTE
+
+static bool riscv_set_numeric_attribute(MiniAs *as,
+                                        const RiscvNumericAttribute *attribute,
                                         unsigned value, size_t line) {
     MiniAsRiscvState *state = MINIAS_RV_STATE(as);
-    bool *present = NULL;
-    unsigned *stored = NULL;
+    bool *present = (bool *)((char *)state + attribute->present_offset);
+    unsigned *stored = (unsigned *)((char *)state + attribute->value_offset);
     if (state->target_attributes_size == 0U) {
         minias_set_error(as, "riscv-attribute-layout-unavailable:line=%zu", line);
-        return false;
-    }
-    if (tag == 4U) {
-        present = &state->stack_align_present;
-        stored = &state->stack_align;
-    } else if (tag == 6U) {
-        present = &state->unaligned_access_present;
-        stored = &state->unaligned_access;
-    } else if (tag == 8U) {
-        present = &state->priv_spec_present;
-        stored = &state->priv_spec;
-    } else if (tag == 10U) {
-        present = &state->priv_spec_minor_present;
-        stored = &state->priv_spec_minor;
-    } else if (tag == 12U) {
-        present = &state->priv_spec_revision_present;
-        stored = &state->priv_spec_revision;
-    } else {
-        minias_set_error(as, "unsupported-riscv-attribute-tag:%u:line=%zu",
-                         tag, line);
         return false;
     }
     if (*present) {
         if (*stored != value) {
             minias_set_error(as, "conflicting-riscv-attribute:%u:line=%zu",
-                             tag, line);
+                             attribute->tag, line);
             return false;
         }
         return true;
@@ -490,11 +487,12 @@ static bool riscv_set_numeric_attribute(MiniAs *as, unsigned tag,
 
 static bool riscv_assemble_attribute(MiniAs *as, const char *args, size_t line) {
     const char *comma = strchr(args, ',');
+    const RiscvNumericAttribute *attribute = NULL;
     char key[48], value[320], *end;
     const char *front, *back;
     size_t len;
     unsigned long number;
-    unsigned numeric_tag;
+    size_t i;
     if (comma == NULL) goto invalid;
     front = args;
     while (isspace((unsigned char)*front)) ++front;
@@ -525,22 +523,21 @@ static bool riscv_assemble_attribute(MiniAs *as, const char *args, size_t line) 
         }
         return true;
     }
-    if (strcmp(key, "stack_align") == 0 || strcmp(key, "4") == 0)
-        numeric_tag = 4U;
-    else if (strcmp(key, "unaligned_access") == 0 || strcmp(key, "6") == 0)
-        numeric_tag = 6U;
-    else if (strcmp(key, "priv_spec") == 0 || strcmp(key, "8") == 0)
-        numeric_tag = 8U;
-    else if (strcmp(key, "priv_spec_minor") == 0 || strcmp(key, "10") == 0)
-        numeric_tag = 10U;
-    else if (strcmp(key, "priv_spec_revision") == 0 || strcmp(key, "12") == 0)
-        numeric_tag = 12U;
-    else goto invalid;
+    for (i = 0U; i < sizeof(riscv_numeric_attributes) /
+                      sizeof(riscv_numeric_attributes[0]); ++i) {
+        const RiscvNumericAttribute *candidate = &riscv_numeric_attributes[i];
+        if (strcmp(key, candidate->name) == 0 ||
+            strcmp(key, candidate->tag_name) == 0) {
+            attribute = candidate;
+            break;
+        }
+    }
+    if (attribute == NULL) goto invalid;
     /* GNU forbids setting the privileged ELF version after an instruction,
      * including an ordinary NOP. Retained Fragments give us that boundary
      * without rescanning source text or touching Common parser state. */
-    if (numeric_tag >= 8U) {
-        for (size_t i = 0U; i < as->stmt_count; ++i) {
+    if (attribute->tag >= 8U) {
+        for (i = 0U; i < as->stmt_count; ++i) {
             if (as->stmts[i].fragment_kind == MINIAS_FRAGMENT_INSTRUCTION) {
                 minias_set_error(as, "riscv-priv-attribute-after-instruction:line=%zu",
                                  line);
@@ -553,7 +550,7 @@ static bool riscv_assemble_attribute(MiniAs *as, const char *args, size_t line) 
     if (end == value || *end != '\0' || errno == ERANGE ||
         number > UINT32_MAX)
         goto invalid;
-    return riscv_set_numeric_attribute(as,numeric_tag,(unsigned)number,line);
+    return riscv_set_numeric_attribute(as,attribute,(unsigned)number,line);
 invalid:
     minias_set_error(as, "unsupported-riscv-attribute:%s:line=%zu", args, line);
     return false;

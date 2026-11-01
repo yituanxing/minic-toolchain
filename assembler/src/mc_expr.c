@@ -562,14 +562,12 @@ bool minias_parse_size_end_addend(const char *text,const char *name,
  * expression parser above; this is not another source-string fallback. */
 typedef enum DeferredOp {
     DEF_LITERAL, DEF_SYMBOL, DEF_DOT,
-    DEF_NEG, DEF_INV, DEF_LNOT,
-    DEF_ADD, DEF_SUB, DEF_MUL, DEF_DIV, DEF_MOD,
-    DEF_SHL, DEF_SHR, DEF_LT, DEF_LE, DEF_GT, DEF_GE,
-    DEF_EQ, DEF_NE, DEF_AND, DEF_XOR, DEF_OR, DEF_LAND, DEF_LOR
+    DEF_NEG, DEF_INV, DEF_LNOT, DEF_BINARY
 } DeferredOp;
 
 typedef struct DeferredNode {
     DeferredOp op;
+    MiniAsExprBinaryOp binary;
     size_t left,right;
     size_t symbol_index;
     int64_t value;
@@ -577,34 +575,8 @@ typedef struct DeferredNode {
 
 struct MiniAsDeferredExpr {
     DeferredNode *nodes;
-    size_t count,capacity,root;
+    size_t count,root;
 };
-
-static DeferredOp deferred_operator(MiniAsExprBinaryOp op) {
-    static const DeferredOp mapping[] = {
-        [MINIAS_EXPR_OP_LOR]=DEF_LOR,
-        [MINIAS_EXPR_OP_LAND]=DEF_LAND,
-        [MINIAS_EXPR_OP_OR]=DEF_OR,
-        [MINIAS_EXPR_OP_XOR]=DEF_XOR,
-        [MINIAS_EXPR_OP_AND]=DEF_AND,
-        [MINIAS_EXPR_OP_EQ]=DEF_EQ,
-        [MINIAS_EXPR_OP_NE]=DEF_NE,
-        [MINIAS_EXPR_OP_LT]=DEF_LT,
-        [MINIAS_EXPR_OP_LE]=DEF_LE,
-        [MINIAS_EXPR_OP_GT]=DEF_GT,
-        [MINIAS_EXPR_OP_GE]=DEF_GE,
-        [MINIAS_EXPR_OP_SHL]=DEF_SHL,
-        [MINIAS_EXPR_OP_SHR]=DEF_SHR,
-        [MINIAS_EXPR_OP_ADD]=DEF_ADD,
-        [MINIAS_EXPR_OP_SUB]=DEF_SUB,
-        [MINIAS_EXPR_OP_MUL]=DEF_MUL,
-        [MINIAS_EXPR_OP_DIV]=DEF_DIV,
-        [MINIAS_EXPR_OP_MOD]=DEF_MOD
-    };
-    return op>MINIAS_EXPR_OP_NONE &&
-           (unsigned)op<sizeof(mapping)/sizeof(mapping[0])?
-           mapping[op]:DEF_LITERAL;
-}
 
 void minias_deferred_expr_destroy(MiniAsDeferredExpr *tree) {
     if(tree!=NULL) {free(tree->nodes);free(tree);}
@@ -621,7 +593,7 @@ MiniAsDeferredExpr *minias_compile_deferred_expr(MiniAs *as,
     if(!tree)goto no_memory;
     tree->nodes=calloc(syntax.count,sizeof(*tree->nodes));
     if(!tree->nodes)goto no_memory;
-    tree->count=tree->capacity=syntax.count;
+    tree->count=syntax.count;
     tree->root=syntax.root;
     /* Node indices are stable and child-first in the shared syntax tree.
      * Bind names to the enduring Symbol table exactly once, then discard
@@ -653,7 +625,8 @@ MiniAsDeferredExpr *minias_compile_deferred_expr(MiniAs *as,
                     node->unary=='~'?DEF_INV:DEF_LNOT;
             break;
         case MINIAS_EXPR_BINARY:
-            out->op=deferred_operator(node->op);
+            out->op=DEF_BINARY;
+            out->binary=node->op;
             break;
         default:goto invalid;
         }
@@ -704,7 +677,6 @@ bool minias_evaluate_deferred_expr(const MiniAs *as,
         int64_t l=0,r=0,v=0;
         int lc=0,rc=0,c=0,section=MINIAS_SECTION_ABS;
         int ls=MINIAS_SECTION_ABS,rs=MINIAS_SECTION_ABS;
-        uint64_t bits;
         if(n->left<i) {
             l=values[n->left];lc=coefficients[n->left];ls=sections[n->left];
         }
@@ -740,53 +712,23 @@ bool minias_evaluate_deferred_expr(const MiniAs *as,
         case DEF_LNOT:
             if(lc!=0)goto invalid;
             v=l==0?1:0;break;
-        case DEF_ADD:case DEF_SUB:
-            /* Cross-section subtraction is not an absolute number, even
-             * when both section-relative st_values happen to be equal. */
-            if(lc!=0 && rc!=0 && ls!=rs)goto invalid;
-            section=lc!=0?ls:rs;
-            c=n->op==DEF_ADD?lc+rc:lc-rc;
-            /* Two same-sign RELOC operands cannot be represented as one
-             * ELF section-relative value: S1+S2 is invalid, S1-S2 is
-             * absolute only when both symbols belong to one section. */
-            if(c>1 || c< -1)goto invalid;
-            if(c==0)section=MINIAS_SECTION_ABS;
-            if(!(n->op==DEF_ADD?
-                 minias_checked_add_i64(l,r,&v):
-                 checked_sub_i64(l,r,&v)))goto invalid;
+        case DEF_BINARY:
+            if(n->binary==MINIAS_EXPR_OP_ADD ||
+               n->binary==MINIAS_EXPR_OP_SUB) {
+                /* A section is an algebraic unit, not merely its current
+                 * numeric address. Only + and - preserve section affinity. */
+                if(lc!=0 && rc!=0 && ls!=rs)goto invalid;
+                section=lc!=0?ls:rs;
+                c=n->binary==MINIAS_EXPR_OP_ADD?lc+rc:lc-rc;
+                if(c>1 || c< -1)goto invalid;
+                if(c==0)section=MINIAS_SECTION_ABS;
+            }else if(lc!=0 || rc!=0)goto invalid;
+            /* Share the checked GNU scalar operators with eager absolute
+             * evaluation; deferred evaluation only adds section policy. */
+            if(!evaluate_absolute_binary(n->binary,l,r,&v))goto invalid;
             break;
-        case DEF_MUL:if(!checked_mul_absolute_i64(l,r,&v))goto invalid;break;
-        case DEF_DIV:case DEF_MOD:
-            if(r==0 || (l==INT64_MIN && r==-1))goto invalid;
-            v=n->op==DEF_DIV?l/r:l%r;break;
-        case DEF_SHL:case DEF_SHR:
-            /* GNU GAS treats right shifts of absolute 64-bit expressions
-             * as logical bit-pattern shifts, even after a same-section
-             * symbolic subtraction yields a negative signed value. Match
-             * the eager absolute grammar: bit 63 is a legal shift amount.
-             * Only resolved absolute operands may reach this path (checked
-             * below); a relocatable shift must never be guessed. */
-            if(r<0 || r>=64)goto invalid;
-            bits=(uint64_t)l;
-            if(n->op==DEF_SHL)bits<<=(unsigned)r;
-            else bits>>=(unsigned)r;
-            v=signed_from_bits(bits);break;
-        case DEF_LT:v=l<r?-1:0;break;
-        case DEF_LE:v=l<=r?-1:0;break;
-        case DEF_GT:v=l>r?-1:0;break;
-        case DEF_GE:v=l>=r?-1:0;break;
-        case DEF_EQ:v=l==r?-1:0;break;
-        case DEF_NE:v=l!=r?-1:0;break;
-        case DEF_AND:v=l&r;break;
-        case DEF_XOR:v=l^r;break;
-        case DEF_OR:v=l|r;break;
-        case DEF_LAND:v=(l!=0 && r!=0)?1:0;break;
-        case DEF_LOR:v=(l!=0 || r!=0)?1:0;break;
         default:goto invalid;
         }
-        /* Only add/sub preserve relocatable section affinity. All other
-         * arithmetic must operate on an already absolute expression. */
-        if(n->op>=DEF_MUL && (lc!=0 || rc!=0))goto invalid;
         values[i]=v;
         sections[i]=section;
         coefficients[i]=c;
@@ -839,12 +781,12 @@ static bool deferred_collect_difference(const MiniAsDeferredExpr *tree,
             parts->has_negative=true;
         }
         return true;
-    case DEF_ADD:
+    case DEF_BINARY:
+        if(node->binary!=MINIAS_EXPR_OP_ADD &&
+           node->binary!=MINIAS_EXPR_OP_SUB)return false;
         return deferred_collect_difference(tree,node->left,sign,parts) &&
-               deferred_collect_difference(tree,node->right,sign,parts);
-    case DEF_SUB:
-        return deferred_collect_difference(tree,node->left,sign,parts) &&
-               deferred_collect_difference(tree,node->right,-sign,parts);
+               deferred_collect_difference(tree,node->right,
+                   node->binary==MINIAS_EXPR_OP_ADD?sign:-sign,parts);
     case DEF_NEG:
         return deferred_collect_difference(tree,node->left,-sign,parts);
     default:
@@ -1052,6 +994,17 @@ static bool target_supports_fixup(const MiniAs *as,
            as->target->supports_fixup(minias_target_abi_view(as),kind,width);
 }
 
+/* Every fixed DATA path writes the same low-order little-endian bits.
+ * Relocation decisions belong to callers; byte serialization does not. */
+static bool append_mc_bits(MiniAs *as,int section,unsigned width,
+                           uint64_t value) {
+    unsigned char bytes[8];
+    unsigned i;
+    for(i=0U;i<width;++i)
+        bytes[i]=(unsigned char)(value>>(8U*i));
+    return minias_section_append(as,section,bytes,width);
+}
+
 static bool emit_symbol_minus_dot(MiniAs *as,
                                   const MiniAsStmt *stmt,
                                   unsigned int width,
@@ -1066,13 +1019,7 @@ static bool emit_symbol_minus_dot(MiniAs *as,
         /* Fixed-width DATA is bit-modular, unlike a signed relocation
          * addend.  This is S+A-P modulo 2^64, with no signed overflow. */
         uint64_t value = target->value + (uint64_t)addend - relocation_offset;
-        unsigned char bytes[8];
-        unsigned int i;
-
-        for (i = 0U; i < width; ++i) {
-            bytes[i] = (unsigned char)((value >> (i * 8U)) & 0xffU);
-        }
-        return minias_section_append(as, stmt->section, bytes, width);
+        return append_mc_bits(as,stmt->section,width,value);
     }
 
     /* ELF64 x86 has a direct signed PC32 relocation for S + A - P.
@@ -1151,9 +1098,6 @@ static bool emit_symbol_minus_dot_divided(
     const MiniAsSymbol *target = &as->symbols[symbol_index];
     int64_t difference;
     int64_t quotient;
-    uint64_t bits;
-    unsigned char bytes[8];
-    unsigned int i;
 
     if (divisor == 0U || divisor > (uint64_t)INT64_MAX ||
         !target->defined ||
@@ -1174,11 +1118,7 @@ static bool emit_symbol_minus_dot_divided(
     difference=signed_from_bits(target->value+(uint64_t)addend-
                                 relocation_offset);
     quotient = difference / (int64_t)divisor;
-    bits = (uint64_t)quotient;
-    for (i = 0U; i < width; ++i) {
-        bytes[i] = (unsigned char)((bits >> (i * 8U)) & 0xffU);
-    }
-    return minias_section_append(as, stmt->section, bytes, width);
+    return append_mc_bits(as,stmt->section,width,(uint64_t)quotient);
 }
 
 static bool emit_symbol_difference(MiniAs *as,
@@ -1207,13 +1147,7 @@ static bool emit_symbol_difference(MiniAs *as,
          * undefined signed overflow for large absolute/forward symbols. */
         uint64_t value=(lhs->value+(uint64_t)lhs_addend)-
                        (rhs->value+(uint64_t)rhs_addend);
-        unsigned char bytes[8];
-        unsigned int i;
-
-        for (i = 0U; i < width; ++i) {
-            bytes[i] = (unsigned char)((value >> (i * 8U)) & 0xffU);
-        }
-        return minias_section_append(as, stmt->section, bytes, width);
+        return append_mc_bits(as,stmt->section,width,value);
     }
 
     /*
@@ -1277,8 +1211,6 @@ static bool emit_symbol_difference_divided(MiniAs *as,
     const MiniAsSymbol *rhs=&as->symbols[rhs_index];
     int64_t diff;
     uint64_t result_bits;
-    unsigned char bytes[8];
-    unsigned i;
     /* A cross-section difference cannot be divided using an ELF fixup.
      * Keep the operation fail-closed rather than fabricating a value. */
     if(!lhs->defined || !rhs->defined ||
@@ -1304,9 +1236,7 @@ static bool emit_symbol_difference_divided(MiniAs *as,
         }
         result_bits=shifted;
     }else result_bits=(uint64_t)(diff/(int64_t)divisor);
-    for(i=0U;i<width;++i)
-        bytes[i]=(unsigned char)(result_bits>>(8U*i));
-    return minias_section_append(as,stmt->section,bytes,width);
+    return append_mc_bits(as,stmt->section,width,result_bits);
 }
 
 /* Shared MCExpr evaluator/materializer: parse-site symbol identities and
@@ -1344,8 +1274,6 @@ bool minias_emit_mc_data(MiniAs *as,const MiniAsStmt *stmt) {
          * plus bytes already staged in the same result. */
         uint64_t at=stmt->offset+as->active_encode_result->byte_count;
         bool literal=x->kind==MINIAS_MC_EXPR_CONSTANT;
-        unsigned j;
-        unsigned char bytes[8];
         if((needs_lhs && !x->has_lhs) || (needs_rhs && !x->has_rhs)) {
             minias_set_error(as,"invalid-mc-expression-symbols:line=%zu",
                              stmt->line);
@@ -1438,9 +1366,7 @@ bool minias_emit_mc_data(MiniAs *as,const MiniAsStmt *stmt) {
                              (unsigned)x->kind,stmt->line);
             return false;
         }
-        for(j=0U;j<data->width;++j)
-            bytes[j]=(unsigned char)(value>>(j*8U));
-        if(!minias_section_append(as,stmt->section,bytes,data->width))
+        if(!append_mc_bits(as,stmt->section,data->width,value))
             return false;
     }
     return true;

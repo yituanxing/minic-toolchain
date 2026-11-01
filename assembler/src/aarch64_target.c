@@ -190,15 +190,24 @@ static const char *a64_resolve_register_alias(const A64AliasState *st,
     return text;
 }
 
-static bool parse_register(const char *text, unsigned *reg, bool *is_64) {
+/* AArch64 register banks have different accepted prefixes and index limits,
+ * but share the same decimal-token grammar. Keep suffix and bounds checks
+ * before exposing the register number to any ISA-family parser. */
+static bool a64_numbered_register(const char *text,const char *prefixes,
+                                  unsigned limit,const char *suffix,unsigned *reg) {
     char *end;
     unsigned long value;
-    if ((text[0] != 'x' && text[0] != 'w') ||
-        !isdigit((unsigned char)text[1])) return false;
+    if(!*text || !strchr(prefixes,*text) ||
+       !isdigit((unsigned char)text[1]))return false;
     errno = 0;
     value = strtoul(text + 1, &end, 10);
-    if (errno != 0 || *end != '\0' || value > 30U) return false;
+    if(errno || value>limit || strcmp(end,suffix))return false;
     *reg = (unsigned)value;
+    return true;
+}
+
+static bool parse_register(const char *text, unsigned *reg, bool *is_64) {
+    if(!a64_numbered_register(text,"xw",30U,"",reg))return false;
     *is_64 = text[0] == 'x';
     return true;
 }
@@ -445,13 +454,8 @@ static bool split_operands(const char *args, char out[4][384], unsigned *n) {
  * identified as a register; arbitrary source symbols remain untouched. */
 static bool parse_a64_q_reg(const A64AliasState *aliases,const char *text,unsigned *number) {
     char resolved[96];
-    char *end;
-    unsigned long n;
     text=a64_resolve_register_alias(aliases,text,resolved,sizeof(resolved));
-    if(text[0]!='q' || !isdigit((unsigned char)text[1]))return false;
-    errno=0;n=strtoul(text+1U,&end,10);
-    if(errno || *end!='\0' || n>31UL)return false;
-    *number=(unsigned)n;return true;
+    return a64_numbered_register(text,"q",31U,"",number);
 }
 
 /* One vector register arrangement for LD1/ST1, no multi-vector lists
@@ -498,13 +502,8 @@ static bool parse_a64_single_v(const A64AliasState *aliases,const char *text,uns
  * ordinary .2D views and from scalar Qn operands. */
 static bool a64_vector_1q(const A64AliasState *aliases,const char *text,unsigned *reg) {
     char resolved[96];
-    char *end;
-    unsigned long value;
     text=a64_resolve_register_alias(aliases,text,resolved,sizeof(resolved));
-    if(text[0]!='v' || !isdigit((unsigned char)text[1]))return false;
-    errno=0;value=strtoul(text+1U,&end,10);
-    if(errno || value>31UL || strcmp(end,".1q"))return false;
-    *reg=(unsigned)value;return true;
+    return a64_numbered_register(text,"v",31U,".1q",reg);
 }
 
 static bool a64_vector_view(const A64AliasState *aliases,const char *text,unsigned *reg,
@@ -522,14 +521,7 @@ static bool a64_vector_view(const A64AliasState *aliases,const char *text,unsign
  * Keep the alias state per assembler target instance and resolve at
  * statement parse; unknown register classes remain rejected. */
 static bool a64_req_vector_bank(const char *text,unsigned *reg) {
-    char *end;
-    unsigned long num;
-    if(!text[0] || !strchr("vqdsbh",text[0]) ||
-       !isdigit((unsigned char)text[1]))
-        return false;
-    errno=0;num=strtoul(text+1U,&end,10);
-    if(errno || *end!='\0' || num>31UL)return false;
-    *reg=(unsigned)num;return true;
+    return a64_numbered_register(text,"vqdsbh",31U,"",reg);
 }
 
 /* AArch64 structure LD1/ST1 register lists are either contiguous
@@ -937,13 +929,9 @@ static bool a64_ins_lane(const A64AliasState *aliases,const char *text,unsigned 
 static bool a64_scalar_fp_reg(const A64AliasState *aliases,const char *text,unsigned *out,
                               bool *wide) {
     char resolved[96];
-    char *end;unsigned long v;
     text=a64_resolve_register_alias(aliases,text,resolved,sizeof(resolved));
-    if((text[0]!='s' && text[0]!='d') ||
-       !isdigit((unsigned char)text[1]))return false;
-    errno=0;v=strtoul(text+1U,&end,10);
-    if(errno || *end!='\0' || v>31UL)return false;
-    *out=(unsigned)v;*wide=text[0]=='d';return true;
+    if(!a64_numbered_register(text,"sd",31U,"",out))return false;
+    *wide=text[0]=='d';return true;
 }
 static bool a64_scalar_fp_d(const A64AliasState *aliases,const char *text,unsigned *out) {
     bool wide;

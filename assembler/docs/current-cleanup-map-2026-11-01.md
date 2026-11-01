@@ -6,6 +6,17 @@
 下表数字是该历史基线的快照，而非每次后续提交的实时计数。
 旧台账保留历史证据，**这里不复用旧“pending CI”状态**。
 
+**2026-11-02 第 34 批并行清理（基于远端 `fcfa2d8`）：**
+六个生产 C 文件同时收敛 MCExpr 重复二元运算和 DATA 小端写入、
+x86/AArch64 的数值寄存器解析、RISC-V 属性 ULEB/状态映射与
+LoongArch 特权 form 编号；Source 为普通行跳过不必要的
+collector 复制/缓冲增长。生产代码 `+185/-237`，净删 **52 行**。
+本地 `-Werror`、A0 30/30 与旧/新四架构 22 组输入差分
+（15 份 ELF 逐字节相同、7 组同时拒绝）通过。
+新增可复用的手动旧/新对象比较脚本。远端新 SHA 的 CI、
+完整 3,536 GNU 和 Linux Image/QEMU 与本地回归是不同验收，
+不得混写；见[完整源码审查台账](full-source-review-ledger-2026-10-29.md)。
+
 **2026-11-02 Source quote/escape 与 CFI 状态清理
 （基于远端 `c9b2904`）：** SourceGraph 的 marker/物理注释
 及 SourceExpansion 的行注释/宏分隔/分号分隔，共五处原本
