@@ -597,10 +597,10 @@
 
 ### MC-064 Inline ASM 仅符号引用的静态函数被错误裁剪
 
-- **状态：** `OPEN`，P1，`ASM-ONLY`；已证**缺失本地函数定义的生成汇编**，当前无 RISC-V 目标 GNU AS/link/QEMU 验收，不能宣称已经实际链接失败。
+- **状态：** `OPEN`，P1，`RV64-ELF-LINK-DIFF`；已由仅生成汇编证据升级为**真实目标 GNU LD undefined static function**。负例无法链接，故不能宣称负例已 QEMU 执行；GNU 同源正例和两个 MiniC 控制例已 QEMU native 运行。
 - **链路：** `src/core/core_lower_asm_operands.c:core_inline_asm_immediate_text` / `core_inline_asm_specialize_immediates` 将 GNU `"i"(asm_only_target)` 的静态函数引用转成裸字符串；`src/core/core_lower_asm_scalar_forms.c` 形成 `OPAQUE_INLINE_ASM`。`src/compiler/core_reachability.c:minic_walk_reachable_core_edges` 只跟 `CALL`、`FUNCTION_ADDRESS`，`minic_prune_inline_specializations_from_core` 把缺少普通 C 引用的静态函数标记不发射。前端/Lower 已通过，缺失发生于可达性身份转换。
-- **持久反例：** `tests/compiler/audit/mc064_asm_only_static_function_reachability.c`。GNU x86 `-O0/-O2` 对象中都保留 LOCAL FUNC `asm_only_target`；MiniC RV64I/LP64 `-S` 输出 `.quad asm_only_target` 但无 `asm_only_target:`。定义宏 `MC064_DIRECT_CALL` 后 MiniC 同时输出 C 调用和函数定义；仅以 ASM 引用的**静态全局变量**也有独立正控，故不能泛化为所有 ASM 符号缺失。
-- **修复与验收：** 将 ASM 中 function/object relocation source identity 保持在 Core 结构化元数据中并加入 reachability roots，不能用全文本符号子串不安全地推测身份；验证有/无普通 C 引用、函数别名、unused/used、多个目标 GNU AS/ELF relocation 与真实链接。
+- **持久反例：** 原 x86 专属 `%c0` 文件 `tests/compiler/audit/mc064_asm_only_static_function_reachability.c`（GNU x86 `-O0/-O2` 保留 LOCAL FUNC）；新目标合法 `%0` 文件 `tests/compiler/audit/mc064_rv64_asm_static_symbol.c` 和 `probe-mc064-rv64-elf-link.sh`。同一个 GNU RV64 预处理 `.i`：GNU GCC→GNU LD→QEMU exit11 PASS；MiniC `-S`→GNU AS PASS，但 GNU LD `.rodata` 报 `undefined reference to asm_only_target`。改为 `MC064_DIRECT_CALL` 时双方 QEMU exit23；ASM-only static object `&asm_only_object` 时双方 exit11。不能泛化为所有 ASM 符号缺失。
+- **修复与验收：** 将 ASM 中 function/object relocation source identity 保持在 Core **独立 typed 符号引用**中并加入 reachable Core block 的 reachability roots，不能用全文本符号子串推测身份，也不能重载现有 `source_inline_asm_id`（RV32/RV64/A64 将其视作 deferred ASM owner，Loong 还会据此回读原 C0）。当前**未修复**，无需碰触 opaque ASM 的文本输出合同；最窄接缝和证据见 `docs/architecture/review-2026-11-01-mc064-rv64-elf-reachability.md`。后续需验有/无普通 C 引用、别名、used、死 Core block、多个目标 GNU AS/ELF relocation 与链接。
 
 ### MC-065 x86 R11 跨调用快照误报排除
 

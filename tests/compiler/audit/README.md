@@ -15,7 +15,7 @@
 | MC-061 | `mc061_record_field_pointer_array_uaf.c` | Record 字段递归声明扩容后借用 UAF | GNU C + 五目标 MiniC ASan 容量矩阵 |
 | MC-062 | `mc062_x86_alt_reloc_memory_operand.c` | GNU 的实际 ALT relocation 随 m 输入符号变化，MiniC 只允许固定符号 | GNU ASM/ELF relocation + x86 `-S` 正反控制 |
 | MC-063 | `mc063_tagged_bare_record_field_layout.c` | tagged bare struct 声明错误产生匿名成员，GNU native exit48，MiniC native exit88 | GNU warning-allowed + x86 native 差分 |
-| MC-064 | `mc064_asm_only_static_function_reachability.c` | GNU `i` 静态函数引用被裁掉定义，`.s` 有 `.quad` 无 label | GNU x86 ELF + RV64 `-S`/直接 C call 正控 |
+| MC-064 | `mc064_asm_only_static_function_reachability.c` / `mc064_rv64_asm_static_symbol.c` | GNU `i` 静态函数引用被裁掉定义；RV64 GNU AS 成功、GNU LD 真实 undefined；普通 CALL 与 ASM-only static object 正控 native PASS | 同源 RV64 `.i`→GNU GCC/MiniC→GNU AS/LD + QEMU；`probe-mc064-rv64-elf-link.sh` |
 | MC-066 | `mc066_aarch64_fp_pointer_aggregate.c` | 32B Record 的 `double*` 被误认成 FP member；`int*` 正控 | GNU C + A64 `-S` |
 | MC-067 | `mc067_attributed_record_forward_declaration.c` | GNU 属性修饰 forward decl 被 MiniC 误认为必须带 `{` | GNU C + 五目标 `-S`/plain 控制 |
 
@@ -86,7 +86,9 @@ cc -no-pie -o /tmp/mc063-minic /tmp/mc063-minic.s
 
 cc -std=gnu11 -E -P -x c tests/compiler/audit/mc064_asm_only_static_function_reachability.c -o /tmp/mc064.i
 build/debug/bin/minic-cc --target=riscv64-linux -march=rv64i -mabi=lp64 -S /tmp/mc064.i -o /tmp/mc064.s
-# 手动比对 `.quad asm_only_target` 与缺失的 `asm_only_target:` label。
+# 上述 `%c0` 源仅用于原有 x86 GCC/RV64 MiniC 汇编对照；GNU RV64 GCC
+# 不接受 x86 风格的 `%c0` 修饰符。以下是真实 RV64 ELF/native 差分：
+MINIC_CC="$PWD/build/release/bin/minic-cc" sh tests/compiler/audit/probe-mc064-rv64-elf-link.sh
 
 cc -std=gnu11 -E -P -x c tests/compiler/audit/mc066_aarch64_fp_pointer_aggregate.c -o /tmp/mc066.i
 build/debug/bin/minic-cc --target=aarch64-linux -S /tmp/mc066.i -o /tmp/mc066.s
@@ -99,4 +101,4 @@ cc -std=gnu11 -E -P -DMC067_PLAIN_CONTROL -x c tests/compiler/audit/mc067_attrib
 build/debug/bin/minic-cc --target=x86_64-linux -S /tmp/mc067-control.i -o /tmp/mc067-control.s
 ```
 
-各阶段非零退出码**需核对准确诊断或退出值**：尤其 MC-063 的 native exit48/88 本身是观测值，不能用 shell 的“非零表示测试失败”把合法对照吞掉；MC-064 目前只有 RV 汇编证据，不能写成目标 GNU 链接已经失败。没有目标 QEMU 证据的条目保持当前证据等级。
+各阶段非零退出码**需核对准确诊断或退出值**：尤其 MC-063 的 native exit48/88 本身是观测值，不能用 shell 的“非零表示测试失败”把合法对照吞掉；MC-064 的原生 RV64 负例在 GNU LD 阶段因 undefined symbol 而无法进入 QEMU，GNU 和 MiniC 两个正控均有 QEMU exit code 验证。没有目标 QEMU 证据的其他条目保持当前证据等级。`probe-mc064`/`probe-mc072` 是已知失败审计探针，不是绿灯修复验收。
