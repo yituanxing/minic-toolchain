@@ -164,14 +164,22 @@ static bool parse_external_integer_array_definition(MinicParser *parser,
         return minic_parser_expect(
             parser, MINIC_TOKEN_SEMICOLON, "expected ';' after external array definition");
     }
-    if (inferred_bound && minic_type_is_char_integer(element_type) &&
+    if (minic_type_is_char_integer(element_type) &&
         parser->current.kind == MINIC_TOKEN_STRING_LITERAL) {
-        size_t string_count;
-        if (!minic_parser_add_string_literal_initializer(parser, object_id, &string_count) ||
-            !minic_c0_program_complete_array_type(
-                parser->program, object->type, string_count)) {
+        if (inferred_bound) {
+            size_t string_count;
+            if (!minic_parser_add_string_literal_initializer(parser, object_id, &string_count) ||
+                !minic_c0_program_complete_array_type(
+                    parser->program, object->type, string_count)) {
+                if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+                    minic_parser_error(parser, "unsupported external string array definition");
+                }
+                return false;
+            }
+        } else if (!minic_parser_add_bounded_string_literal_initializer(
+                       parser, object_id, element_count)) {
             if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
-                minic_parser_error(parser, "unsupported external string array definition");
+                minic_parser_error(parser, "unsupported bounded external string array definition");
             }
             return false;
         }
