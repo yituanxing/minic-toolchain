@@ -68,8 +68,8 @@
 | [MC-044](#mc-044-函数参数列表中的-record-enum-tag-作用域外泄) | P1 | OPEN | LOCAL-COMPILE-DIFF | Frontend | 原型、定义、函数指针参数里的 tag 泄漏到文件作用域 |
 | [MC-045](#mc-045-loong-futex-cmpxchg-覆盖-gnu-可读写输出初始值) | P1 | OPEN | ASM-ONLY | LoongArch64 | GNU `+r` 输入原值未被消费，机器特化无条件写回 0 |
 | [MC-048](#mc-048-rv32-指针到-64-位整数的合法转换被拒绝) | P2 | OPEN | LOCAL-COMPILE-DIFF | RV32 | Core 合法 `SCALAR_BITCAST` pointer→u64 在 RV32 目标发射器被拒绝 |
-| [MC-023](#mc-023-静态聚合后向覆写跨递归借用-record) | P0 | OPEN | ASAN | Frontend | 原调查项升级：静态 Record 后向覆盖跨 Record arena 扩容 UAF |
-| [MC-049](#mc-049-静态链式数组设计符跨-arraytype-扩容借用) | P0 | OPEN | ASAN | Frontend | 静态数组链式设计符解析 `sizeof(int[3])` 后借用 ArrayType 悬空 |
+| [MC-023](#mc-023-静态聚合后向覆写跨递归借用-record) | P0 | FIXED-UNVERIFIED | ASAN | Frontend | `a4b8b71` 后向静态 Record 覆写跨递归重新取 RecordId；五目标容量与 GNU/native 定点 PASS |
+| [MC-049](#mc-049-静态链式数组设计符跨-arraytype-扩容借用) | P0 | FIXED-UNVERIFIED | ASAN | Frontend | `f53f9a9` 链式设计符跨递归按值缓存 ArrayType 信息；五目标三相位、GNU/native PASS |
 | [MC-050](#mc-050-x86-六组-asm-限定符源端与机器端不一致) | P2 | OPEN | LOCAL-COMPILE-DIFF | x86-64 | 六种合法 GNU ASM 的 volatile 结果被机器端不一致准入拒绝 |
 | [MC-051](#mc-051-long-double-一元取负丢失有符号零) | P1 | OPEN | GNU-NATIVE-DIFF | Core | `-0L` 经 `0L - x` 实现，`-(+0L)` 错误变为正零 |
 | [MC-052](#mc-052-aarch64-uaccess-窄输出按八字节写回) | P1 | OPEN | ASM-ONLY | AArch64 | LDTRB/H/W 将1/2/4B输出统一按8B `str x` 写回，越界风险 |
@@ -259,11 +259,11 @@
 
 ### MC-023 静态聚合后向覆写跨递归借用 Record
 
-- **第五轮升级：** `OPEN`、P0、**ASAN**，原调查已被 GNU C 有效源码及真实 heap-use-after-free 堆栈证实。之前那条单点无报警的输入仅说明当时未命中容量边界，**不能再当成反证**。
+- **第五轮升级与现状态：** `FIXED-UNVERIFIED`、P0、**ASAN**，原调查已被 GNU C 有效源码及真实 heap-use-after-free 堆栈证实。之前那条单点无报警的输入仅说明当时未命中容量边界，**不能再当成反证**。局部修复提交 `a4b8b71`。
 - **位置与消费者：** `src/frontend/parser_static_initializer.c:2364–2528`，`overwrite_static_zero_record_value` → `overwrite_static_zero_record_constant`。`parse_static_record_constant` 后向覆写零字段时持有 `program->records[record_id]` 借来的 `MinicRecord *record`，`overwrite_static_zero_field_value` 解析 `sizeof(struct { int z; })` 可追加 Record，`realloc` 释放旧 arena，随后本函数 `:2496` 读取 `record->fields`（ASan READ8）。
 - **独立复现：** 持久用例 `tests/compiler/audit/mc023_static_record_backward_uaf.c`（源自 `/tmp/minic-front-static-record-backward-minimal-20261030.c`），GNU `-std=gnu11` 编译成功。预置 14 个 Record 在 16 容量界、126 个 Record 在 256 容量界均得到 MiniC ASan UAF；RV64 sanitize `-S` 堆栈指向 `overwrite_static_zero_record_constant:2496`。GCC 原生与普通 MiniC x86 生成程序在该反例上都 exit **7**，即目前证明**内存不安全**，不声称已独立观察到输出错编。
 - **其他链路的正当设计：** 正向 `parse_static_record_constant` / `parse_static_union_constant` 使用值型 Record header snapshot，fields heap 独立存在，可跨 Record arena 扩容；不可为了修后向路径删除它们。
-- **修复验收：** 后向路径持有稳定 RecordId 或值型快照，避免任何可扩容后再次解引用 arena pointer；以 16/256 容量和多目标 ASan 验证，再做正向/反向 Record+匿名字段+重定位与 GNU 汇编差分。当前尚未修复。
+- **已修与定点验证：** 后向路径在解析复合字面量类型后重取 Record，取得稳定 RecordId，在字段迭代及设计符/union 递归返回后再次按 ID 取新 Record；不碰正向路径。`check-static-record-backward-arena` 作为 `check-fast` 门禁，grow/no-grow 两类相位、五目标 ASan `-S`、GNU/MiniC x86 原生均 exit7，Release `-Werror` 与邻近 static 回归 PASS。**未做** 256 容量以上多次增长、全目标 GNU ELF/QEMU、匿名字段/重定位全集与联合验收。
 
 ### MC-024 Common Core 中的 rK 约束特例
 
@@ -490,10 +490,10 @@
 
 ### MC-049 静态链式数组设计符跨 ArrayType 扩容借用
 
-- **状态：** `OPEN`，P0，`ASAN`；已证生产源码上的 `heap-use-after-free`，区别于 MC-039 的**运行时嵌套数组**路径。
+- **状态：** `FIXED-UNVERIFIED`，P0，`ASAN`；已证生产源码上的 `heap-use-after-free`，区别于 MC-039 的**运行时嵌套数组**路径。局部修复提交 `f53f9a9`。
 - **位置/链路：** `src/frontend/parser_static_initializer.c:1120–1197:append_static_chained_array_designator_value` 借 `MinicArrayType *array`；递归调用 `minic_parser_parse_array_designator_component` 可解析 `sizeof(int[3])` 并通过 `src/frontend/ast.c:20` 的 arena grow/realloc 移动 `Program.array_types`；`:1156` 再读取先前的 `array->element_type` 引发 ASan `READ size 72`。
 - **反例：** 持久用例 `tests/compiler/audit/mc049_static_chained_array_uaf.c`（源自 `/tmp/minic-front-static-chained-array-borrow-20261030.c`），合法 GNU C 静态前向链式设计符；x86 预置 29 个、RV32/RV64/AArch64/Loong 预置 30 个 typedef 数组类型时可命中容量相位，31 个前置元素可能不触发，**无告警不是安全证明**。ASan 指向上述 read/free 栈。
-- **修复/验收：** 跨任何可能 append 的解析保存稳定 TypeId/ArrayTypeId，之后重新取或在安全时按值保存明确头；以五架构多容量扩容矩阵、GNU 静态初始化值/重定位和 ASan 合验，不能只把这处改成临时 `const`。
+- **已修与定点验证：** 在设计符递归前保存 `element_type` 和 `element_count` 两项纯值元数据，后续前缀/嵌套/后缀填充均不再依赖会被 `realloc` 移动的 `ArrayType*`。持久 `check-static-chained-array-arena` 已加入 `check-fast`；五目标×前置 29/30/31 三容量 `-S` ASan 定点 PASS，GNU/MiniC x86 原生均 exit7，Release `-Werror` 及邻近回归 PASS。**保留** 全目标 GNU ELF/QEMU、复杂多层重定位与联动验收为未覆盖。
 
 ### MC-050 x86 六组 ASM 限定符源端与机器端不一致
 
