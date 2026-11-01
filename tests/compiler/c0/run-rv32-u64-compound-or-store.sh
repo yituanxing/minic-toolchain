@@ -111,8 +111,12 @@ for mode in gnu minic; do
   riscv64-linux-gnu-ld -m elf32lriscv -static -e _start \
     -o "$work/$mode.elf" "$work/start.o" "$work/driver.o" \
     "$work/virtio.$mode.o"
-  if ! timeout 30s qemu-riscv32 "$work/$mode.elf"; then
-    echo "RV32_VIRTIO_FEATURE=FAIL mode=$mode cause=real_qemu_elf32_runtime" >&2
+  set +e
+  timeout 30s qemu-riscv32 "$work/$mode.elf"
+  qemu_rc=$?
+  set -e
+  if [[ "$qemu_rc" -ne 0 ]]; then
+    echo "RV32_VIRTIO_FEATURE=FAIL mode=$mode cause=real_qemu_elf32_runtime qemu_exit=$qemu_rc" >&2
     exit 1
   fi
   echo "RV32_VIRTIO_FEATURE_MODE=PASS mode=$mode GNU_AS=1 GNU_LD=1 ELF32=1 QEMU=1"

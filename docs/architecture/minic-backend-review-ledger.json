@@ -118,6 +118,16 @@
       "review_depth": "inventory",
       "ci_touched_in": []
     },
+    "src/target/aarch64/neon_emit.c": {
+      "blob": "a1e6fd1791d25ceea648197672e891b92abde343",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/aarch64/neon_emit.h": {
+      "blob": "c47a0b8db9566b8dead7cec3d7ff0390f977b9dd",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
     "src/target/aarch64/residual_emit.c": {
       "blob": "b4d8ee90e83bb7a48c1fab7df66369e66b52b2f3",
       "review_depth": "targeted",
