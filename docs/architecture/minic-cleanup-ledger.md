@@ -301,7 +301,7 @@ exit 1，不计 PASS，也不能据此宣称新清理造成运行语义回归；
 | 两条 initializer owner | 实际合同、耦合与决定 |
 | --- | --- |
 | Runtime scalar array | MinicArrayInitializerPlan 接收 designated/positional 写入，Resolved 保存最终 owner；先补未填零槽，再按 action 顺序 lower；GNU range 最终多 owner 通过临时 Local 确保表达式只求值一次，全部覆盖的旧 action 可消除效果。**KEEP(evaluation order/side effects)**，不能与静态字节布局路径合并。 |
-| Runtime record / nested array | local/record lvalue 按稳定 ExpressionId 构造，先做类型转换再发 Statement；记录数组可单次初始化后 record-copy，nested array descriptor 在递归前快照防 arena 扩容。已修 MC-039/056；另有 MC-035 的表达式借用、MC-038 的 designated 恢复字段索引，Record 递归借用由独立 MC-003 调查。**KEEP(lifetime, track risk)**。 |
+| Runtime record / nested array | local/record lvalue 按稳定 ExpressionId 构造，先做类型转换再发 Statement；记录数组可单次初始化后 record-copy，nested array descriptor 在递归前快照防 arena 扩容。已修 MC-039/056；另有 MC-035 的表达式借用、MC-038 的 designated 恢复字段索引，MC-003 旧 Record 悬空借用也已由 MC-056 同根修复覆盖并新增定点回归。**KEEP(lifetime, track risk)**。 |
 | Static scalar / symbolic slot | 常量 bits、pointer/integer relocation 与覆盖/追加必须维持同一 slot identity；CORE_FAST_TRACE 有调试定位消费者，未确认退役前不删。**KEEP(relocation/debug compatibility)**。 |
 | Static aggregate arrays | action payload 保存 scalar bits、relative relocation 和 union selection；capture 撤回 GlobalObject 临时写入，Resolve 后重放并重基址。链式设计符重复覆盖只替换选中子槽，其余保留旧 action。与 Runtime 的求值顺序合同不同。**KEEP(transaction)**。 |
 | Static record/union/backward | 匿名 path、非 canonical union member/active span、GNU zero-length/FAM、前向补零与后向覆盖对应不同布局及拒绝出口；MC-023/049 已有定点快照修复。**KEEP(DataLayout/rollback)**。 |
@@ -329,6 +329,14 @@ static_aggregate_array_designators.c 直接 GNU/MiniC x86 本机编译运行均 
 旧脚本本身仍 **NOT PASS**。run-static-multidimensional-array-relocation.sh
 首次未设置 MINIC_CC 而寻找不存在的 debug 编译器（exit 127），
 更正路径后 PASS。完整 ELF/QEMU 与 MiniAS/MiniLD 联合验收继续推迟。
+
+**独立 P0 小批次（不计入 -204 行）：** C10 期间另外合入 MC-002
+原函数指针 Record UAF 的独立容量回归（03417d6），确认与已合入 MC-061
+同根；MC-001 Symbolic Closure Expression arena UAF 的稳定 ID
+重取修复和容量测试（7656565）；MC-003 原 tagged Record UAF 的独立
+容量回归（e720381），确认已被已合入 MC-056 同根修复覆盖。
+三项均有旧版 ASan 证据与新版五目标 -S/本机专项验证，
+仍统一保持 FIXED-UNVERIFIED，未达到完整 ELF/QEMU/联合验收门槛。
 
 ## 后续批次进度规则
 
