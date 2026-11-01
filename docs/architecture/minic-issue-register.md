@@ -39,7 +39,7 @@
 
 | ID | 优先级 | 状态 | 证据 | 归属 | 简述 |
 | --- | --- | --- | --- | --- | --- |
-| [MC-001](#mc-001-符号闭包读取失效的-expression-指针) | P0 | OPEN | ASAN | Compiler | 符号闭包递归后读取扩容前的 Expression 指针 |
+| [MC-001](#mc-001-符号闭包读取失效的-expression-指针) | P0 | FIXED-UNVERIFIED | ASAN | Compiler | 符号闭包递归后读取扩容前的 Expression 指针；定点修复已通过五目标容量边界测试 |
 | [MC-002](#mc-002-record-字段声明中的悬空指针) | P0 | FIXED-UNVERIFIED | ASAN | Frontend | 旧函数指针参数 Record UAF 由 `449eab2` 的稳定 RecordId 重取覆盖；新增独立函数指针容量回归 |
 | [MC-003](#mc-003-运行时-record-初始化器中的悬空指针) | P0 | OPEN | ASAN | Frontend | 运行时记录初始化器跨字段复用旧 Record 地址 |
 | [MC-004](#mc-004-属性探测使-parser-tags-失效) | P0 | OPEN | ASAN | Frontend | `probe=*parser` 的 tags 容器所有权错误 |
@@ -147,6 +147,11 @@
 - **第十一轮新独立正例：** `/tmp/minic-f11-symbolic-recursion.c` 的嵌套 inline helper `f(1, &g[i])` 由整数 caller 特化进入 symbolic closure，普通 Debug x86/RV64 编译器均 SIGSEGV 139；现有 ASan 编译器报告相同 `inline_symbolic.c:250` use-after-free（由 `ast.c:524` 的 Expression arena 扩容释放）；GNU 编译并执行返回测试预期 7，三个去除闭包条件的对照源码可编译。**属于本 MC-001 的新复现，不再新开一项。**
 - **关联风险：** `inline_symbolic.c:748–825` 在实参循环外借用 `nested` 指针，同样可能跨表达式追加，但此位置尚未独立动态复现（内部 UAF 会先触发）。
 - **修复门槛：** 使用稳定 `ExpressionId` 保存子节点身份，并在任何可能追加之后重新获取地址；双参数场景另补外层 `nested` 复测。避免递归层层拷贝 208B Expression，顾及 RV64 自举栈预算。
+- **2026-11-01 独立定点修复，状态 `FIXED-UNVERIFIED`：**
+  - `src/compiler/inline_symbolic.c` 的 unary/subscript/member/binary 递归分支均在递归前保存稳定的子节点 `ExpressionId`，递归后按父 `ExpressionId` 重新取得当前地址，再复制 `MinicExpression` 并改写子 ID；无需逐层 240B 的 AST 栈快照。transitive CALL 的实参循环也改用稳定 `nested_expression_index` 每次重新取 CALL，以覆盖首参导致 Expression arena 扩容、后续实参再读取的场景。
+  - 永久回归 `tests/compiler/c0/mc001_symbolic_closure_arena.c` / `probe-mc001-symbolic-closure-arena.sh`，接入 `check-mc001-symbolic-closure-arena` 与 `check-fast`，包含单符号参数及双参数嵌套闭包。**修复前**在此文件 `PAD_COUNT=13` 单参数、x86_64 `-S` 的独立 ASan 编译器明确报 `inline_symbolic.c:250` **READ 240B heap-use-after-free**，释放栈由 `ast.c:524` arena `realloc`；不只是源代码推测。
+  - **修复后 SAN+UBSan Release `-Werror`：** `PAD_COUNT={0,12,13,14,29,30,31,62,63}` × 单/双参数 × x86_64/RV32/RV64/AArch64/LoongArch64 **90/90** 通过 `-S`；GNU/MiniC x86_64 原生对照 **6/6** exit0，transitive clone 日志确认真正运行闭包路径。另对 x86_64 使用 SAN 扫描 padding **0..255 × 单/双参数 = 512/512** 通过。邻近 `probe-inline-symbolic-shared-body.sh`、`probe-symbolic-inline-two-callers.sh` 通过。
+  - **未达全面 VERIFIED：** 其他四目标尚未做 GNU/本工具链 ELF、链接/QEMU 运行；完整 Linux corpus 和 MiniAS/MiniLD 联合验收未做。`run-inline-functions.sh` 仍断言 `add_one/add_two` 不可达 inline body 保留 emitted symbol（当前产物只保留 `main`）；用未修改 `508622d` 的 Release `minic` 对照重跑同样 exit1，属于已有脚本文本锚点漂移，本次未将其计为通过或回归。
 
 ### MC-002 Record 字段声明中的悬空指针
 

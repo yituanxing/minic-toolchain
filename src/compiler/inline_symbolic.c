@@ -123,6 +123,8 @@ static bool minic_inline_close_symbolic_expression_depth(
     bool left_used = false;
     bool right_used = false;
 
+    /* All child IDs survive recursive expression appends; the borrowed
+     * Expression pointer does not.  Reacquire it before copying a parent. */
     if (program == NULL || target == NULL || caller == NULL || closed_id == NULL ||
         used_caller_integer_fact == NULL || depth > 32U ||
         !caller->is_integer_specialization ||
@@ -192,11 +194,12 @@ static bool minic_inline_close_symbolic_expression_depth(
         expression->kind == MINIC_EXPRESSION_LVALUE_READ ||
         expression->kind == MINIC_EXPRESSION_ADDRESS_OF ||
         expression->kind == MINIC_EXPRESSION_DEREFERENCE) {
+        MinicExpressionId operand_id = expression->value.unary.operand;
         if (!minic_inline_close_symbolic_expression_depth(
                 program,
                 target,
                 caller,
-                expression->value.unary.operand,
+                operand_id,
                 &left_id,
                 &left_used,
                 depth + 1U)) {
@@ -205,6 +208,10 @@ static bool minic_inline_close_symbolic_expression_depth(
         if (!left_used) {
             *closed_id = expression_id;
             return true;
+        }
+        expression = minic_c0_program_expression(program, expression_id);
+        if (expression == NULL) {
+            return false;
         }
         closed = *expression;
         closed.value.unary.operand = left_id;
@@ -216,28 +223,30 @@ static bool minic_inline_close_symbolic_expression_depth(
     }
 
     if (expression->kind == MINIC_EXPRESSION_SUBSCRIPT) {
+        MinicExpressionId base_id = expression->value.subscript.base;
+        MinicExpressionId index_id = expression->value.subscript.index;
         bool base_static = minic_inline_symbolic_static_expression(
-            program, target, expression->value.subscript.base);
+            program, target, base_id);
         if (base_static) {
-            left_id = expression->value.subscript.base;
+            left_id = base_id;
         } else if (!minic_inline_close_symbolic_expression_depth(
                        program,
                        target,
                        caller,
-                       expression->value.subscript.base,
+                       base_id,
                        &left_id,
                        &left_used,
                        depth + 1U)) {
             return false;
         }
         if (minic_const_eval_integer(
-                program, target, expression->value.subscript.index, &(MinicConstValue){0})) {
-            right_id = expression->value.subscript.index;
+                program, target, index_id, &(MinicConstValue){0})) {
+            right_id = index_id;
         } else if (!minic_inline_close_symbolic_expression_depth(
                        program,
                        target,
                        caller,
-                       expression->value.subscript.index,
+                       index_id,
                        &right_id,
                        &right_used,
                        depth + 1U)) {
@@ -246,6 +255,10 @@ static bool minic_inline_close_symbolic_expression_depth(
         if (!left_used && !right_used) {
             *closed_id = expression_id;
             return true;
+        }
+        expression = minic_c0_program_expression(program, expression_id);
+        if (expression == NULL) {
+            return false;
         }
         closed = *expression;
         closed.value.subscript.base = left_id;
@@ -258,8 +271,9 @@ static bool minic_inline_close_symbolic_expression_depth(
     }
 
     if (expression->kind == MINIC_EXPRESSION_MEMBER) {
+        MinicExpressionId base_id = expression->value.member.base;
         if (minic_inline_symbolic_static_expression(
-                program, target, expression->value.member.base)) {
+                program, target, base_id)) {
             *closed_id = expression_id;
             return true;
         }
@@ -267,7 +281,7 @@ static bool minic_inline_close_symbolic_expression_depth(
                 program,
                 target,
                 caller,
-                expression->value.member.base,
+                base_id,
                 &left_id,
                 &left_used,
                 depth + 1U)) {
@@ -276,6 +290,10 @@ static bool minic_inline_close_symbolic_expression_depth(
         if (!left_used) {
             *closed_id = expression_id;
             return true;
+        }
+        expression = minic_c0_program_expression(program, expression_id);
+        if (expression == NULL) {
+            return false;
         }
         closed = *expression;
         closed.value.member.base = left_id;
@@ -289,27 +307,29 @@ static bool minic_inline_close_symbolic_expression_depth(
     if (expression->kind == MINIC_EXPRESSION_BINARY &&
         (expression->value.binary.operator_kind == MINIC_BINARY_ADD ||
          expression->value.binary.operator_kind == MINIC_BINARY_SUBTRACT)) {
+        MinicExpressionId operand_left = expression->value.binary.left;
+        MinicExpressionId operand_right = expression->value.binary.right;
         if (minic_inline_symbolic_static_expression(
-                program, target, expression->value.binary.left)) {
-            left_id = expression->value.binary.left;
+                program, target, operand_left)) {
+            left_id = operand_left;
         } else if (!minic_inline_close_symbolic_expression_depth(
                        program,
                        target,
                        caller,
-                       expression->value.binary.left,
+                       operand_left,
                        &left_id,
                        &left_used,
                        depth + 1U)) {
             return false;
         }
         if (minic_const_eval_integer(
-                program, target, expression->value.binary.right, &(MinicConstValue){0})) {
-            right_id = expression->value.binary.right;
+                program, target, operand_right, &(MinicConstValue){0})) {
+            right_id = operand_right;
         } else if (!minic_inline_close_symbolic_expression_depth(
                        program,
                        target,
                        caller,
-                       expression->value.binary.right,
+                       operand_right,
                        &right_id,
                        &right_used,
                        depth + 1U)) {
@@ -318,6 +338,10 @@ static bool minic_inline_close_symbolic_expression_depth(
         if (!left_used && !right_used) {
             *closed_id = expression_id;
             return true;
+        }
+        expression = minic_c0_program_expression(program, expression_id);
+        if (expression == NULL) {
+            return false;
         }
         closed = *expression;
         closed.value.binary.left = left_id;
@@ -863,7 +887,9 @@ bool minic_specialize_inline_symbolic_calls(
                             program,
                             target,
                             &caller,
-                            minic_c0_call_argument(nested, i),
+                            /* Earlier arguments may have grown this arena. */
+                            minic_c0_call_argument(
+                                &program->expressions[nested_expression_index], i),
                             &resolved_expression,
                             &argument_used_caller_fact,
                             0U)) {

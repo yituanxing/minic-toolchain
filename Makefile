@@ -1609,6 +1609,13 @@ check-builtin-lexeme-contract: $(MINIC_CC_BINARY)
 
 check-fast: check-builtin-lexeme-contract
 
+.PHONY: check-mc001-symbolic-closure-arena
+check-mc001-symbolic-closure-arena: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	sh tests/compiler/c0/probe-mc001-symbolic-closure-arena.sh
+
+check-fast: check-mc001-symbolic-closure-arena
+
 .PHONY: check-x86-pat-clflushopt-alt
 check-x86-pat-clflushopt-alt: $(MINIC_CC_BINARY)
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
