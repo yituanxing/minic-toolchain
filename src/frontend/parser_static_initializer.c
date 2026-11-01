@@ -1123,6 +1123,8 @@ static bool append_static_chained_array_designator_value(MinicParser *parser,
                                                          size_t *selected_slot,
                                                          size_t *selected_slot_count) {
     const MinicArrayType *array;
+    MinicType element_type;
+    size_t element_count;
     size_t first;
     size_t last;
     size_t index;
@@ -1134,17 +1136,19 @@ static bool append_static_chained_array_designator_value(MinicParser *parser,
         parser->current.kind != MINIC_TOKEN_LBRACKET) {
         return false;
     }
-    /* FIXME(MC-049): the designator expression parsed below can append
-     * ArrayTypes (e.g. sizeof(int[3])) and realloc Program.array_types.
-     * Retaining this borrowed pointer for nested/prefix/suffix work causes
-     * a reproducible ASan UAF; retain stable id/value data across parsing. */
     array = minic_c0_program_array_type(parser->program, array_type.array_type_id);
     if (array == NULL || array->element_count == 0U || array->is_zero_length ||
-        selected_slot == NULL || selected_slot_count == NULL ||
-        !minic_c0_global_initializer_slot_count(
-            parser->program, array->element_type, &element_slots) ||
+        selected_slot == NULL || selected_slot_count == NULL) {
+        return false;
+    }
+    /* Parsing sizeof(int[3]) in the designator may reallocate Program.array_types.
+     * Keep the descriptor's type and bound by value across recursive parsing. */
+    element_type = array->element_type;
+    element_count = array->element_count;
+    if (!minic_c0_global_initializer_slot_count(
+            parser->program, element_type, &element_slots) ||
         !minic_parser_parse_array_designator_component(
-            parser, array->element_count, false, &first, &last)) {
+            parser, element_count, false, &first, &last)) {
         return false;
     }
     if (first != last) {
@@ -1157,15 +1161,15 @@ static bool append_static_chained_array_designator_value(MinicParser *parser,
         return false;
     }
     for (index = 0U; index < first; ++index) {
-        if (!append_static_constant_zero(parser, object_id, array->element_type)) {
+        if (!append_static_constant_zero(parser, object_id, element_type)) {
             minic_parser_error(parser, "cannot zero-fill chained static array prefix");
             return false;
         }
     }
     if (parser->current.kind == MINIC_TOKEN_LBRACKET) {
-        if (!minic_type_is_array(array->element_type) ||
+        if (!minic_type_is_array(element_type) ||
             !append_static_chained_array_designator_value(
-                parser, object_id, array->element_type, &nested_slot, &nested_count)) {
+                parser, object_id, element_type, &nested_slot, &nested_count)) {
             if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
                 minic_parser_error(parser,
                                    "chained array designator requires another array dimension");
@@ -1182,14 +1186,14 @@ static bool append_static_chained_array_designator_value(MinicParser *parser,
         if (!minic_parser_expect(
                 parser, MINIC_TOKEN_EQUAL, "expected '=' after chained array designator") ||
             !minic_parser_parse_static_storage_initializer_value(
-                parser, object_id, array->element_type)) {
+                parser, object_id, element_type)) {
             return false;
         }
         *selected_slot = first * element_slots;
         *selected_slot_count = element_slots;
     }
-    for (index = first + 1U; index < array->element_count; ++index) {
-        if (!append_static_constant_zero(parser, object_id, array->element_type)) {
+    for (index = first + 1U; index < element_count; ++index) {
+        if (!append_static_constant_zero(parser, object_id, element_type)) {
             minic_parser_error(parser, "cannot zero-fill chained static array suffix");
             return false;
         }

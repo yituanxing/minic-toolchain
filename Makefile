@@ -1548,6 +1548,13 @@ check-record-field-declarator-realloc: $(MINIC_CC_BINARY)
 
 check-fast: check-record-field-declarator-realloc
 
+.PHONY: check-static-chained-array-arena
+check-static-chained-array-arena: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	bash tests/compiler/c0/probe-static-chained-array-arena.sh
+
+check-fast: check-static-chained-array-arena
+
 .PHONY: check-x86-head-inline-section
 check-x86-head-inline-section: $(MINIC_CC_BINARY)
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
