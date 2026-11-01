@@ -103,6 +103,42 @@
 | `A11-21` Core scalar predicate | 两个同形判断的持有者分别属于 memory 和 CALL；合并收益极小，邻近的 global-addressable predicate 对 `void` 的语义不同。 | 等输入合同证明和实际简化收益，不为了“统一”引入层级。 |
 | `A11-28/30/32/38/39/47` 目标后端 | RV ELF 分类需要目标 GNU AS/ELF，RV64 destructor 有独立单测，x86 Record cap 与 Common 不同，legacy ASM 与 Loong SIMD 有机端二次防伪消费者。 | 逐族 Oracle / ABI 证明、先迁消费者再删旧实现；不跨 ISA 机械去重。 |
 
+## 批次 C4：Frontend 声明与静态数据路径逐文件通读
+
+**基线：** `b0846c7`，2026-11-01；本批从头到尾逐文件读完以下 **16 个生产 C/H**
+（源码原始约 **9,355 行**）。累计全文深读 **38/336**，其中 Frontend
+**38/69**，Compiler/Core/Target 仍为 **0** 个本轮完整深读；过去的路径扫描和
+关联调用链抽查均不冒充全文读完。清理前代码有两处严格局部的冗余，
+实际生产源码 **+33/-52，净 -19 行**，文档不计。
+
+| 全文阅读文件（均在 `src/frontend/`） | 归属与决定 |
+| --- | --- |
+| `declaration_sema.c/.h` | 外部对象类型兼容的 snapshot→preflight→commit、tentative 数组复合和 TLS 合同有各自失败出口；不能合成无回滚的直接修改。**KEEP(transaction)**。 |
+| `parser_global_lookup.c`、`parser_typedef.c`、`parser_enum.c` | 全局对象、typedef 与枚举常量查找的索引具有不同 first/newest、局部遮蔽语义，并保留索引分配失败时线性回退；表面相似不能强行共享。**KEEP(scope/fallback)**。 |
+| `parser_declarator.c`、`parser_type.c`、`parser_function_parameters.c` | 直接 declarator、类型名抽象 declarator、函数参数 array/function adjustment 共享类型事实，保留各自括号绑定和临时数组 descriptor 的 owner。**DELETE duplicate:** `parser_type.c` 的函数指针/数组指针分类各复制的完整 `(* const ... *)` token 前缀扫描归并成一个 `.c` 私有探针，两个 suffix 判断和诊断路径仍各自运行；`parser_function_parameters.c` 删掉只赋值从不读取的 `has_outer_bound` 标记及其假使用。 |
+| `parser_attribute.c`、`parser_pragma.c` | GNU attributes 的 parse-only/target layout/ABI 是不同准入等级；`#pragma GCC target`、visibility、pack 的堆栈均改变后续声明环境。**KEEP(policy)**，空白/括号扫描相似不足以跨 owner 抽新层。 |
+| `parser_external_object.c/.h` | 旧 extern/tentative 合并需要保留 canonical array descriptor，成功后退役 parser 临时 descriptor；静态初始化器和 symbol metadata 有不同 commit 时序。内部 `CORE_FAST_TRACE` 输出仍可能有脚本消费者。**KEEP(ownership/tooling)**。 |
+| `parser_record.c` | record 内部类型属性、字段属性、bit-field、匿名成员、灵活数组和 pragma pack 独立参与 DataLayout。发现的 `MC-061` 悬空借用、`MC-063` tagged bare member、`MC-067` attributed forward 均已在 MC 台账，**不在清理提交顺手修语义**。 |
+| `parser_string.c`、`parser_static_constants.c/.h` | 字符串 length probe 与 append/replace 的 owner 不同；静态指针可为整数绝对值、global/member 地址、function 或 label relocation，并为复合 initializer 做一致性判定。**KEEP(relocation/ownership)**。 |
+
+### C4 定点验证与风险边界
+
+- **PASS：** `make MODE=release CFLAGS=-Werror BUILD_DIR=build/cleanup-werror
+  -j7 build/cleanup-werror/bin/minic-cc`；增量 `check-record`、`check-type-alias`、
+  `check-static-functions`、`check-global-objects`、`check-pointer-object-const`。
+- **PASS：** `check-cast-expressions`、`check-pointer-arithmetic`、
+  `check-pointer-subscripts`；脚本 `run-function-parameter-adjustment.sh`、
+  `run-gnu-typeof-array-type-name.sh`、`run-gnu-typeof-array-bound-cast.sh`、
+  `run-gnu-typeof-local-declaration.sh`、`run-record-multi-declarators.sh`、
+  `run-gnu-packed-record-field.sh` 和 `run-gnu-function-attributes.sh`。
+  脚本均显式设置本批 Release `MINIC`/`BUILD_DIR`。
+- **基线脚本断言漂移：** `run-typeof-generic.sh` 的 `grep '  li a0, 7'`
+  仍 FAIL；修改前的独立编译器运行同一脚本同样失败，不能计为本批回归，
+  也不能声称此脚本 PASS。首次不带 `MINIC` 环境执行三个脚本时因默认
+  `build/debug/bin/minic` 不存在而 exit 127，已用正确构建产物重测 PASS。
+- **未做：** MiniAS/MiniLD 联合验收、全五架构 Linux ELF/运行矩阵。
+  清理净删行只计上述两处，不把小弟的独立 MC 修复混入 C4。
+
 ## 后续批次进度规则
 
 每批发布：当前 HEAD、源文件逐目录覆盖（明确深读与只扫的区别）、

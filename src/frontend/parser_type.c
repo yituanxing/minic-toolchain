@@ -738,74 +738,60 @@ bool minic_parser_parse_pointer_declarator(MinicParser *parser,
     return true;
 }
 
+/* Both abstract function pointers and pointers to arrays share exactly the
+ * same `(* const ... *)` lexical prefix. Probe it once per classifier shape,
+ * leaving the distinct suffix decisions to the callers. */
+static bool type_name_probe_parenthesized_pointer_prefix(const MinicParser *parser,
+                                                         MinicLexer *lookahead,
+                                                         MinicToken *token,
+                                                         MinicDiagnostic *diagnostic) {
+    if (parser == NULL || parser->current.kind != MINIC_TOKEN_LPAREN) {
+        return false;
+    }
+    *lookahead = parser->lexer;
+    (void)memset(diagnostic, 0, sizeof(*diagnostic));
+    if (!minic_lexer_next(lookahead, token, diagnostic) || token->kind != MINIC_TOKEN_STAR) {
+        return false;
+    }
+    for (;;) {
+        if (!minic_lexer_next(lookahead, token, diagnostic)) {
+            return false;
+        }
+        while (token->kind == MINIC_TOKEN_KW_CONST || token->kind == MINIC_TOKEN_KW_VOLATILE ||
+               minic_parser_token_text_equals(parser, *token, "restrict") ||
+               minic_parser_token_text_equals(parser, *token, "__restrict")) {
+            if (!minic_lexer_next(lookahead, token, diagnostic)) {
+                return false;
+            }
+        }
+        if (token->kind != MINIC_TOKEN_STAR) {
+            break;
+        }
+    }
+    return true;
+}
+
 static bool type_name_starts_parenthesized_function_pointer(const MinicParser *parser) {
     MinicDiagnostic diagnostic;
     MinicLexer lookahead;
     MinicToken token;
 
-    if (parser == NULL || parser->current.kind != MINIC_TOKEN_LPAREN) {
-        return false;
-    }
-    lookahead = parser->lexer;
-    (void)memset(&diagnostic, 0, sizeof(diagnostic));
-    if (!minic_lexer_next(&lookahead, &token, &diagnostic) || token.kind != MINIC_TOKEN_STAR) {
-        return false;
-    }
-    for (;;) {
-        if (!minic_lexer_next(&lookahead, &token, &diagnostic)) {
-            return false;
-        }
-        while (token.kind == MINIC_TOKEN_KW_CONST || token.kind == MINIC_TOKEN_KW_VOLATILE ||
-               minic_parser_token_text_equals(parser, token, "restrict") ||
-               minic_parser_token_text_equals(parser, token, "__restrict")) {
-            if (!minic_lexer_next(&lookahead, &token, &diagnostic)) {
-                return false;
-            }
-        }
-        if (token.kind != MINIC_TOKEN_STAR) {
-            break;
-        }
-    }
-    /* An abstract function-pointer type may itself contain another
-       parenthesized function-pointer declarator, for example
-       R (*(*)(P))(Q).  This is only a lookahead classifier: admit the nested
-       '(' here and let the shared declarator parser validate the full shape. */
-    return token.kind == MINIC_TOKEN_RPAREN || token.kind == MINIC_TOKEN_LPAREN;
+    /* Nested `R (*(*)(P))(Q)` is classified here, then validated by Parser. */
+    return type_name_probe_parenthesized_pointer_prefix(
+               parser, &lookahead, &token, &diagnostic) &&
+           (token.kind == MINIC_TOKEN_RPAREN || token.kind == MINIC_TOKEN_LPAREN);
 }
 
-/* GNU inline-asm memory operands routinely use abstract array pointers such
-   as `(const char (*)[32])address`.  The `(*)` prefix is shared with an
-   abstract function pointer, but the following `[...]` changes the binding:
-   it is a pointer TO an array, not an array OF pointers. */
+/* `(const char (*)[32])address` is a pointer TO an array, not an array
+ * OF pointers; it shares the prefix but requires the following `[` token. */
 static bool type_name_starts_parenthesized_pointer_to_array(const MinicParser *parser) {
     MinicDiagnostic diagnostic;
     MinicLexer lookahead;
     MinicToken token;
 
-    if (parser == NULL || parser->current.kind != MINIC_TOKEN_LPAREN) {
-        return false;
-    }
-    lookahead = parser->lexer;
-    (void)memset(&diagnostic, 0, sizeof(diagnostic));
-    if (!minic_lexer_next(&lookahead, &token, &diagnostic) || token.kind != MINIC_TOKEN_STAR) {
-        return false;
-    }
-    for (;;) {
-        if (!minic_lexer_next(&lookahead, &token, &diagnostic)) {
-            return false;
-        }
-        while (token.kind == MINIC_TOKEN_KW_CONST || token.kind == MINIC_TOKEN_KW_VOLATILE ||
-               minic_parser_token_text_equals(parser, token, "restrict") ||
-               minic_parser_token_text_equals(parser, token, "__restrict")) {
-            if (!minic_lexer_next(&lookahead, &token, &diagnostic)) {
-                return false;
-            }
-        }
-        if (token.kind != MINIC_TOKEN_STAR) {
-            break;
-        }
-    }
-    return token.kind == MINIC_TOKEN_RPAREN &&
+    return type_name_probe_parenthesized_pointer_prefix(
+               parser, &lookahead, &token, &diagnostic) &&
+           token.kind == MINIC_TOKEN_RPAREN &&
            minic_lexer_next(&lookahead, &token, &diagnostic) &&
            token.kind == MINIC_TOKEN_LBRACKET;
 }

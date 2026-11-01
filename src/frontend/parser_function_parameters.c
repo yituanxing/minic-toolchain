@@ -195,12 +195,10 @@ static bool adjust_array_parameter_type(MinicParser *parser,
     }
     if (parser->current.kind == MINIC_TOKEN_LBRACKET) {
         bool saw_static;
-        bool has_outer_bound;
         bool consumed_named_bound;
         size_t ignored_outer_bound;
 
         saw_static = false;
-        has_outer_bound = false;
         consumed_named_bound = false;
         if (!minic_parser_advance(parser)) {
             return false;
@@ -233,10 +231,7 @@ static bool adjust_array_parameter_type(MinicParser *parser,
                 !minic_parser_parse_fixed_array_bound(parser, &ignored_outer_bound)) {
                 return false;
             }
-            has_outer_bound = true;
         }
-        (void)has_outer_bound;
-        (void)ignored_outer_bound;
 
         pointee_type = *parameter_type;
         if (parser->current.kind == MINIC_TOKEN_LBRACKET) {
