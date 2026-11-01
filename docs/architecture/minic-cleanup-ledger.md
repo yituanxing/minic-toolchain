@@ -609,6 +609,37 @@ x86 GNU/MiniC 原生及负例；`run-for-loops.sh`、
 无法链接。需要单独改造旧 oracle 或补 cross libc 才能复验。
 完整联合验收仍推迟。
 
+## 批次 C19：Core 变参 Cursor 与 Packed/Volatile Bit-field
+
+**基线：** C18 和 MC-048 同树验证的远端 `7afbb2e`，
+2026-11-01。本批全文深读 Core **2** 个生产文件、原始
+**2,160 行**：`core_lower_varargs.c`（454）、
+`core_lower_bit_fields.c`（1,706）。累计 **114/339** 全文深读：
+Frontend **69/69**、Compiler **11/11**、Core **34/48**、Target
+**0/211**；Core 余 **14**、Target **211**，合计 **225/339**。
+
+| 调用/存储合同 | 决定 |
+| --- | --- |
+| `core_lower_varargs.c` | GNU `va_list` 对 x86/AArch64 是 **ABI-owned Record/array state**，而 RV/Loong 的现有接受路径是 linear pointer cursor；`va_start` 的 state-copy 和 scalar-store、`va_copy` 的 ABI memcpy 和普通赋值不能只凭类型大小合并。Core 只做线性游标地址、按 DataLayout 对齐和 byte-slot 推进；寄存器 bank 与 overflow 区归 Target。**KEEP(cursor policy split)**。 |
+| `minic_core_lower_vararg_scalar` | 入口已无条件检查 `value_size <= 8` 且 `value_alignment <= 8`，紧随其后的 RV32 LINEAR_SLOT 分支又检查完全相同的两个上限，绝不产生不同结果。`va_start` 已在前面拒绝 `target == NULL`，LINEAR_SLOT 资格再检查一次亦无效。**DELETE(redundant admission predicates)**，保留 4B/8B 对齐与 cursor advance。 |
+| `core_lower_bit_fields.c` | 对 packed、非自然对齐或接近 Record 末端的 bit-field，4/8B 整单元读写会越界或越页，必须按 little-endian 的最小 byte window 逐字节 load/store；volatile 也必须沿每次真实 byte access 传递。**KEEP(window legality + exact access width)**。 |
+| Bit-field 的赋值/read/compound/update | 看似四次重复 mask、偏移和符号扩展，但各条路径存在不同的旧值、字段值、赋值表达式结果、prefix/postfix 返回、LHS 地址快照和 RHS 顺序。Signed field 经窄位截断后需在原语义宽度 sign-extend；shift compound 的 RHS promotion 又不同于 `+=`。**NEEDS_PROOF(typed shared RMW)**；没有做跨 1,706 行的行为性重构。 |
+| 上层耦合 | `core_lower_varargs.c` 的 Source `MinicType`/TargetInfo ABI Cursor layout，与 `core_lower_bit_fields.c` 的 `MinicRecord`/DataLayout byte window 都通过 Core IR 传输；未来拆目标接口时要分别证明 source identity 和 transport representation，不得把两类 `MinicType` 名字相同当 ABI 相同。**KEEP(separate provenance)**。 |
+
+**C19 生产源码：** `core_lower_varargs.c` **+1/-5，净 -4 行**；
+C1～C19 纯清理累计 **净 -279 行**，Bit-field 实现未修改。
+
+**验证 PASS：** Release `-Werror` 重编并链接 minic-cc；
+`run-builtin-va-list.sh`（3 linear pointer、2 ABI cursor proxy
+负例、x86/A64 source layouts）；`probe-gnu-variadic-single-scalar-record.sh`
+五目标 `-S`、x86 GNU/MiniC 原生、ABI Cursor 多成员负例；
+`run-packed-bitfield-cross-word-window.sh` 五 ISA `-S`、GNU/MiniC
+x86 原生、65 位拒绝；`run-packed-bitfield-guard-page.sh`
+五 ISA `-S`、GNU/MiniC x86 页边界原生、Loong byte access。
+旧 `probe-four-backend-bitfield-core.sh` 在当前环境缺
+`aarch64-linux-gnu-gcc`，执行中断**不计 PASS**。完整五目标
+ELF/QEMU 和 MiniAS/MiniLD 联合验收按决定延后。
+
 ## 后续批次进度规则
 
 每批发布：当前 HEAD、源文件逐目录覆盖（明确深读与只扫的区别）、

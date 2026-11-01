@@ -229,10 +229,6 @@ MinicCoreLowerStatus minic_core_lower_vararg_scalar(
                                 &value_size,
                                 &value_alignment) ||
         value_size == 0U || value_size > 8U || value_alignment > 8U ||
-        (context->target->variadic_scalar_read_kind ==
-            MINIC_VARIADIC_SCALAR_READ_LINEAR_SLOT &&
-         context->target->variadic_linear_slot_bytes == 4U &&
-         (value_size > 8U || value_alignment > 8U)) ||
         !minic_type_pointer_to(expression->type, &value_pointer_type)) {
         return MINIC_CORE_LOWER_UNSUPPORTED;
     }
@@ -364,7 +360,7 @@ MinicCoreLowerStatus minic_core_lower_vararg_statement(
          * Preserve its scalar lvalue writeback on RV/Loong. */
         if (context->target->variadic_scalar_read_kind !=
                 MINIC_VARIADIC_SCALAR_READ_LINEAR_SLOT ||
-            target == NULL || target->value_category != MINIC_VALUE_LVALUE ||
+            target->value_category != MINIC_VALUE_LVALUE ||
             !minic_type_is_pointer(target->type) || minic_type_is_const(target->type) ||
             !minic_type_unqualified(target->type, &value_type) ||
             !minic_type_is_pointer(value_type)) {
