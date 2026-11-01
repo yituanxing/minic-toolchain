@@ -1989,3 +1989,10 @@ distclean:
 check-minic-target-abi-options: $(MINIC_BINARY) $(MINIC_CC_BINARY)
 	MINIC="$(abspath $(MINIC_BINARY))" MINIC_CC="$(abspath $(MINIC_CC_BINARY))" \
 	bash tests/compiler/c0/probe-target-language-abi-options.sh
+
+.PHONY: check-rv64-lp64d-union-fp-abi
+check-rv64-lp64d-union-fp-abi: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	bash tests/compiler/c0/probe-rv64-lp64d-union-fp-abi.sh
+
+check-fast: check-rv64-lp64d-union-fp-abi

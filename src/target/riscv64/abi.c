@@ -29,6 +29,37 @@ const char *const minic_riscv64_abi_floating_argument_registers[8] = {
 
 #include <stdint.h>
 
+/* LP64D's integer-convention record path is a psABI classification, not a
+ * structural property of common DataLayout. Unions are opaque integer ABI
+ * leaves even if one alternative is floating-point; never flatten them.
+ * A genuine FP struct/array leaf remains in the separate, not-yet-supported
+ * FPR-aggregate path and must continue to fail closed. */
+static bool rv64_integer_convention_record_tree(const MinicC0Program *program,
+                                                 MinicType type,
+                                                 unsigned int depth) {
+    const MinicRecord *record;
+    const MinicArrayType *array;
+    size_t index;
+
+    if (program == NULL || depth > 256U) return false;
+    if (minic_type_is_integer(type) || minic_type_is_pointer(type)) return true;
+    if (minic_type_is_array(type)) {
+        array = minic_c0_program_array_type(program, type.array_type_id);
+        return array != NULL && rv64_integer_convention_record_tree(
+            program, array->element_type, depth + 1U);
+    }
+    if (!minic_type_is_record(type)) return false;
+    record = minic_c0_program_record(program, type.record_id);
+    if (record == NULL || !record->is_complete) return false;
+    if (record->is_union) return true;
+    for (index = 0U; index < record->field_count; ++index) {
+        const MinicRecordField *field = minic_c0_record_field(record, index);
+        if (field == NULL || !rv64_integer_convention_record_tree(
+                program, field->type, depth + 1U)) return false;
+    }
+    return true;
+}
+
 bool minic_riscv64_classify_abi_value_profile(
     const MinicC0Program *program, MinicType type, bool lp64_soft_float,
     MinicRiscv64AbiValue *result) {
@@ -68,17 +99,13 @@ bool minic_riscv64_classify_abi_value_profile(
             return true;
         }
         if (size <= 16U) {
-            /* FIXME(MC-059): unions with FP members are NOT flattened by
-             * the RISC-V psABI; this integral-tree test also rejects those
-             * legal named arguments/returns in LP64D.
-             * LP64D classifies an aggregate containing FP leaves using
-             * register flattening (faN and sometimes aN), NOT by passing
-             * a pointer. Until the complete mixed FP/GP location model is
-             * implemented, reject that named/return shape rather than
-             * silently emitting a GNU-incompatible indirect argument.
-             * LP64 and unnamed LP64D arguments use the integer convention. */
+            /* LP64D flattens genuine FP struct leaves into FPRs. That
+             * placement is not yet implemented, so keep it rejected.
+             * Unions (including nested fields) are opaque, non-flattened
+             * integer-convention values; LP64 and unnamed LP64D arguments
+             * likewise use integer registers/stack without this filter. */
             if (!lp64_soft_float &&
-                !minic_common_aggregate_integral_tree(program, type))
+                !rv64_integer_convention_record_tree(program, type, 0U))
                 return false;
             result->kind = MINIC_RISCV64_ABI_VALUE_AGGREGATE;
             result->register_chunks = (size + 7U) / 8U;
