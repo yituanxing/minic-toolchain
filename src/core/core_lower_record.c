@@ -583,10 +583,10 @@ MinicCoreLowerStatus minic_core_lower_record_conditional_object(
     MinicCoreLowerContext *context,
     const MinicExpression *expression,
     MinicCoreObjectId *result_object) {
-    /* FIXME(MC-036): both arms currently share local constant facts without
-       the entry restore / exit meet used by scalar conditional lowering. */
     const MinicExpression *false_expression;
     const MinicExpression *true_expression;
+    MinicCoreLocalIntegerConstant *entry_facts = NULL;
+    MinicCoreLocalIntegerConstant *true_facts = NULL;
     MinicCoreBlockId false_block;
     MinicCoreBlockId merge_block;
     MinicCoreBlockId true_block;
@@ -600,7 +600,8 @@ MinicCoreLowerStatus minic_core_lower_record_conditional_object(
     MinicType true_type;
 
     if (context == NULL || context->body == NULL || context->body->program == NULL ||
-        context->function == NULL || expression == NULL || result_object == NULL ||
+        context->function == NULL || context->source_function == NULL ||
+        expression == NULL || result_object == NULL ||
         expression->kind != MINIC_EXPRESSION_CONDITIONAL ||
         expression->value.conditional.uses_condition_value ||
         expression->value.conditional.when_true == MINIC_EXPRESSION_INVALID ||
@@ -639,12 +640,18 @@ MinicCoreLowerStatus minic_core_lower_record_conditional_object(
     if (status != MINIC_CORE_LOWER_OK) {
         return status;
     }
+    /* The condition has executed. Both mutually exclusive aggregate arms
+     * begin with these facts; a write in either arm must not leak into the
+     * other arm or survive the merge without agreement. */
+    entry_facts = minic_core_local_facts_snapshot(context);
+    if (context->source_function->local_count != 0U && entry_facts == NULL)
+        return MINIC_CORE_LOWER_ERROR;
 
     context->block_id = true_block;
     status = minic_core_lower_internal_record_materialized_address(
         context, expression->value.conditional.when_true, &source_address);
     if (status != MINIC_CORE_LOWER_OK) {
-        return status;
+        goto record_conditional_done;
     }
     (void)memset(&operation, 0, sizeof(operation));
     operation.kind = MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS;
@@ -654,7 +661,8 @@ MinicCoreLowerStatus minic_core_lower_record_conditional_object(
     operation.value.object_id = *result_object;
     if (!minic_core_function_append_value_instruction(
             context->function, context->block_id, &operation, &destination_address)) {
-        return MINIC_CORE_LOWER_ERROR;
+        status = MINIC_CORE_LOWER_ERROR;
+        goto record_conditional_done;
     }
     (void)memset(&operation, 0, sizeof(operation));
     operation.kind = MINIC_CORE_INSTRUCTION_RECORD_COPY;
@@ -665,18 +673,25 @@ MinicCoreLowerStatus minic_core_lower_record_conditional_object(
     operation.value.record_copy.source_address = source_address;
     if (!minic_core_function_append_effect_instruction(
             context->function, context->block_id, &operation)) {
-        return MINIC_CORE_LOWER_ERROR;
+        status = MINIC_CORE_LOWER_ERROR;
+        goto record_conditional_done;
     }
     status = minic_core_lower_internal_set_branch(context, context->block_id, expression->span, merge_block);
     if (status != MINIC_CORE_LOWER_OK) {
-        return status;
+        goto record_conditional_done;
     }
+    true_facts = minic_core_local_facts_snapshot(context);
+    if (context->source_function->local_count != 0U && true_facts == NULL) {
+        status = MINIC_CORE_LOWER_ERROR;
+        goto record_conditional_done;
+    }
+    minic_core_local_facts_restore(context, entry_facts);
 
     context->block_id = false_block;
     status = minic_core_lower_internal_record_materialized_address(
         context, expression->value.conditional.when_false, &source_address);
     if (status != MINIC_CORE_LOWER_OK) {
-        return status;
+        goto record_conditional_done;
     }
     (void)memset(&operation, 0, sizeof(operation));
     operation.kind = MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS;
@@ -686,7 +701,8 @@ MinicCoreLowerStatus minic_core_lower_record_conditional_object(
     operation.value.object_id = *result_object;
     if (!minic_core_function_append_value_instruction(
             context->function, context->block_id, &operation, &destination_address)) {
-        return MINIC_CORE_LOWER_ERROR;
+        status = MINIC_CORE_LOWER_ERROR;
+        goto record_conditional_done;
     }
     (void)memset(&operation, 0, sizeof(operation));
     operation.kind = MINIC_CORE_INSTRUCTION_RECORD_COPY;
@@ -697,15 +713,22 @@ MinicCoreLowerStatus minic_core_lower_record_conditional_object(
     operation.value.record_copy.source_address = source_address;
     if (!minic_core_function_append_effect_instruction(
             context->function, context->block_id, &operation)) {
-        return MINIC_CORE_LOWER_ERROR;
+        status = MINIC_CORE_LOWER_ERROR;
+        goto record_conditional_done;
     }
     status = minic_core_lower_internal_set_branch(context, context->block_id, expression->span, merge_block);
     if (status != MINIC_CORE_LOWER_OK) {
-        return status;
+        goto record_conditional_done;
     }
 
     context->block_id = merge_block;
-    return MINIC_CORE_LOWER_OK;
+    if (!minic_core_local_facts_meet(
+            context, true_facts, context->local_integer_constants))
+        status = MINIC_CORE_LOWER_ERROR;
+record_conditional_done:
+    free(true_facts);
+    free(entry_facts);
+    return status;
 }
 
 /* BATCH_M_RECORD_LOAD: turn a record value with a materializable address

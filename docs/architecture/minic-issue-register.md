@@ -58,7 +58,7 @@
 | [MC-033](#mc-033-core-独立自增自减语句保留过时常量事实) | P0 | FIXED-UNVERIFIED | GNU-NATIVE-DIFF | Core | 原语句捷径过时 fact 错码已被现行 invalidation 覆盖；新增五目标与原生运行回归 |
 | [MC-034](#mc-034-静态-record-设计符查找对无关对象做指针相减) | P1 | OPEN | ASAN-POINTER-PAIR | Frontend | 合法静态 `.x` initializer 触发栈 Record 与 heap records 无关指针相减 |
 | [MC-035](#mc-035-运行时范围初始化器借用-expression-跨扩容) | P0 | FIXED-UNVERIFIED | ASAN | Frontend | GNU range initializer 的 Expression arena UAF 已用源 span 按值快照修复；五目标容量门禁通过 |
-| [MC-036](#mc-036-record-条件表达式的-local-facts-分支合流缺口) | P1 | OPEN | GNU-NATIVE-DIFF | Core | 结构体条件式缺 fact fork/meet，实测 `f(1)` 返回值错 10 |
+| [MC-036](#mc-036-record-条件表达式的-local-facts-分支合流缺口) | P1 | FIXED-UNVERIFIED | GNU-NATIVE-DIFF | Core | Record 条件式现有分支 fact snapshot/restore/meet，十路径 GNU/MiniC x86 native 及五目标 `-S` 通过 |
 | [MC-037](#mc-037-loong-特殊-asm-源端与机器端限定符不一致) | P2 | OPEN | LOCAL-COMPILE-DIFF | LoongArch64 | 合法 volatile cpucfg 输出仅因限定符在机器层拒绝 |
 | [MC-038](#mc-038-匿名字段设计符后的位置初始化游标错误) | P1 | OPEN | LOCAL-COMPILE-DIFF | Frontend | 匿名字段 `.b=2,3` GCC 接受、MiniC 错报过多位置初始化 |
 | [MC-039](#mc-039-运行时嵌套数组递归跨-array-type-扩容借用) | P0 | FIXED-UNVERIFIED | ASAN | Frontend | ArrayType 元数据按值快照；五目标容量相位 ASan 与 x86 GNU native 对照通过，完整目标验收待做 |
@@ -351,10 +351,12 @@
 
 ### MC-036 Record 条件表达式的 local facts 分支合流缺口
 
-- **状态：** `OPEN`，P1，`GNU-NATIVE-DIFF`；x86-64 已完成 GNU C 正常执行与 MiniC→GNU AS/link→本机执行的同源双端差分，确认实际错编。
+- **状态：** `FIXED-UNVERIFIED`，P1，`GNU-NATIVE-DIFF`；x86-64 已有旧版错编实证，定点修复后完成专项对照，尚未通过五目标 GNU ELF/QEMU/联合验收。
 - **位置：** `src/core/core_lower_record.c:582–713:minic_core_lower_record_conditional_object` 构建 true/false/merge 三块，两臂依次操作同一个 `context->local_integer_constants`，当前看不到进入 true 臂前的快照、false 臂恢复和 merge 交集。对照 `src/core/core_lower_expr_flow.c` 的标量/void 条件表达式使用 `CoreExpressionFactFork` 进行 fork/meet。
 - **最小差分（2026-10-30，基线 `4f516707d`）：** GNU C：`struct S{int v;}; int f(int c){int x=0;struct S a={1},b={2};struct S r=c?({x=1;a;}):({x=2;b;});if(x==2)return r.v+10;return r.v;}`，独立 harness 调用 `f(1)` 与 `f(0)`。`cc -std=gnu11 -O0` 执行得 `f(1)=1, f(0)=12`，返回成功；`cc -E -P` 冻结 `.i` → `build/debug/bin/minic-cc --target=x86_64-linux -S` → GNU `cc -no-pie` 链接均成功，执行得 **`f(1)=11, f(0)=12`**，harness 返回 1。说明假臂 `x=2` 的 fact 漏回收后污染 merge 处 IF 剪枝。
-- **修复边界：** 应复用既有分支 fact fork/meet 协议，入口 facts 快照应在求值 condition 完成后；真臂成功后记录 then-exit、恢复 entry 再编译假臂，merge 时取交集，并明确分配失败清理。连同 break/goto/reentry 和 side-effect expression 一起检查，不应对 Record 类型另设计一套不相容的 fact 规则。本轮尚未改 Core 算法。
+- **修复边界与实现：** `core_lower_record.c:minic_core_lower_record_conditional_object` 在 condition 求值之后保存 entry facts，true 臂结束后快照 true facts 并恢复 entry；false 臂从原入口事实开始，merge 调用 `minic_core_local_facts_meet`。与 `core_lower_expr_flow.c` 的标量/void 条件式使用同一 snapshot/restore/meet 语义，保留私有局部实现，**未抽象新的事实层或调整 CFG/ABI**。两个快照在所有下游错误出口均释放；若非空 local facts 无法分配则 fail-closed。带 side-effect condition、嵌套 Record、循环 `continue/break` 等覆盖见持久回归。
+- **本轮旧版实证（`5942dcf` 基线）：** `mc036_record_conditional_fact_join.c` 在 GNU `cc -std=gnu11 -O0` 本机执行 exit 0；同源 `.i` 经 MiniC `--target=x86_64-linux -S`、GNU `cc -no-pie` 链接后本机执行 exit 1（第一条 `f(1)` 等价断言失败）。
+- **本轮修复后专项结果：** 新 `probe-mc036-record-conditional-facts.sh` 严格 GNU/MiniC x86 原生对照（十路径）exit 0/0，五 ISA `-S` 5/5；Release `-Werror` 的 `minic-cc`/`minic` 构建通过。邻近 `run-record-conditional-materialization.sh`（Record 赋值、CALL、字段投影、汇编与 native）、`run-gnu-runtime-if-effect-facts.sh`（GNU/MiniC native + RV64 `-S`）、`run-core-reentry-query-contract.sh`（索引与 fallback、五 ISA `-S`、GNU/MiniC native）、MC-033 fact 更新探针均 PASS。新增 Makefile `check-mc036-record-conditional-facts` 进入 `check-fast`，但此处没有声称整套 `check-fast` 全过。
 
 ### MC-037 Loong 特殊 ASM 源端与机器端限定符不一致
 

@@ -1643,6 +1643,13 @@ check-mc033-statement-update-facts: $(MINIC_CC_BINARY)
 
 check-fast: check-mc033-statement-update-facts
 
+.PHONY: check-mc036-record-conditional-facts
+check-mc036-record-conditional-facts: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	sh tests/compiler/c0/probe-mc036-record-conditional-facts.sh
+
+check-fast: check-mc036-record-conditional-facts
+
 .PHONY: check-alignment-attribute-semantic-arena
 check-alignment-attribute-semantic-arena: $(MINIC_CC_BINARY)
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
