@@ -1080,6 +1080,45 @@ PCREL）；`check-target-selection-m0`；
 GNU RISC-V cross 和 QEMU 不在当前环境，相关 runtime 明确
 `SKIP` / ELF-QEMU `NOT_RUN`。推迟的联合验收依旧未启动。
 
+## 批次 C32：RV64 机器准入、ISA 审计、GNU ASM 与全部剩余 emitter（审读并统一容量常量）
+
+**基线：** C31 清理 `af964982` 与 RV32 MC-057 独立修复/测试
+`1d120bcf` 已推送，2026-11-01。本批全文深读 RV64 剩余
+**22 个生产文件、5,298 行**：`asm_plan.c/.h`（421/38）、
+`core_admission.c/.h`（333/15）、`core_codegen.c/.h`（796/51）、
+`fp_emit.c/.h`（246/17）、`global_emit.c/.h`（522/9）、
+`inline_asm_emit.c/.h`（869/18）、`isa.c/.h`（372/38）、
+`legalize.c/.h`（578/70）、`memory_emit.c/.h`（148/13）、
+`overflow_emit.c/.h`（259/16）、`scalar_emit.c/.h`（450/19）。
+至此 **`src/target/riscv64` 42/42** 生产文件逐行审读。
+累计 **273/339**：Frontend **69/69**、Compiler **11/11**、
+Core **48/48**、Target **145/211**；全项目尚余
+**66 个 Target 生产文件**。
+
+| RV64 剩余子域 | 代码合同、耦合与清理判断 |
+| --- | --- |
+| `core_admission` / `core_codegen` | Canonical Core verify、CallIndex、对象 storage 属于 Common；RV64 能力判定只接受提前资格验证的 ABI plan，发射时按同一 ordinal 取 CALL，遇显式 strict ISA 在可发射 CFG block 逐条检查机器资格。外部 source label/asm-goto/computed-goto 是 CFG 根，不能只保留 entry DFS。动态 `alloca`、s0、callee saves、返回入口与 128-bit scalar 分路有成套物理约束。**KEEP(common semantic versus native lowering)**。 |
+| `asm_plan` / `inline_asm_emit` | 10 个 RV64 机器 operand 与 Core 最大 16 个 source role 不同；`x7/t2` 别名、t2/t5/t6 大偏移临时寄存器、早破坏 output、固定 output 和先用后写 input 的同寄存器 phase alias、callee-saved s0-s11 保存掩码均已编码。仅将 plan 与 validator 中分散的 `9/10` 上限引用同一个既有 `MINIC_RISCV64_ASM_MAX_OPERANDS`，**KEEP(10 fixed slots); NORMALIZE(exact existing bound)**，没有新增物理资源。 |
+| `isa` | 用户 file/inline ASM 的 GNU 原样文本与 compiler-generated 指令必须用不可伪造的 marker 分开；source 注释不得伪造 begin/end，机器最终产物拒绝 `.insn`、宏、改 ISA 的 `.option` 和未知 opcode，而 source 段交 GNU AS 自行裁决。strict `rv64i` 不许可 F/D/M 时仅显式审定的 libcall 可以绕过硬件；默认 legacy profile 不做相同机器 ISA gate。**KEEP(two provenance audits and finalizer)**。 |
+| `fp_emit` / `scalar_emit` / `overflow_emit` | RV64 的 32-bit FP bit payload 必须零扩展，LP64D 的 `fa*` 与 LP64 的 raw GP/softfloat 资格不能互换；MC-053 的纯 RV64I 浮点比较/转换仍拒绝，不能因为四则已能 libcall 就宣称完整软件浮点。`__int128` 需 low/high 2×XLEN，宽比较需 `__{u}cmpti2` 的 0/1/2 结果译码；checked overflow 混合有无符号及变宽比普通 ALU 更严格，严格 I 的乘法甚至要二次 libcall 检查全位宽。**KEEP(precise arithmetic semantics and ABI)**。 |
+| `legalize` / `memory_emit` | Scalar bitcast 只允许已证明同宽且不超过 8B 的布局；Record `LOAD` 对不确定对齐的 packed 成员按精确 bytes 拷贝，`COPY` 零字节保留已求值的指针作用而不发物理 load/store；direct/indirect CALL 统一 ABI 资格，但 indirect unnamed Record 保留独立拒编。`ABI_VALUE_IGNORE` 空 Record return/调用结果的独立 MC-057 问题已由小弟提交 fix，**此批审读不掺入修复**。**KEEP(fail-closed ABI); BUG(MC-057 separately)**。 |
+| `global_emit` | 递归 initializer/union 选择、bitfield bytes 和 reloc slot 已复用 C28 的 shared serializer；RV64 仍要负责 `.dword` 8B relocation、`R_RISCV_RELATIVE` 需要 writable `.data.rel.ro`、GNU zero-size symbol `.size 0`、各段 alignment/weak/visibility。撤掉 target emitter 的布局算法会损害精确 GAS 表示。**KEEP(ABI-qualified ELF callbacks)**。 |
+
+**C32 生产源码 +17/-9，净 +8 行**：只把 RV64 GNU ASM
+容量校验、分配与 10-element validation bitmap 中的固定数字统一
+成已有命名常量（换行造成净增加，不是新增路径、寄存器或数据结构）。
+C1～C32 纯清理累计 **净 -348 行**。这一批没有为追求代码行数
+删除 `core_codegen` 中机器准入/帧前提或 GNU ASM register-alias
+约束，也没有将合法 C 的已登记错拒编伪装成“清理”。
+
+**验证 PASS：** Release `-Werror` 受影响目标重编；
+`check-asm-operand-plan`（五目标资格、早破坏/固定寄存器、x86
+futex GNU/MiniC native exit42）；`check-rv64-abi`；
+`check-rv64-lp64d-union-fp-abi`（LP64 11/11、LP64D 10/10）；
+`check-target-selection-m0`。其他 C31 已检的 `check-rv64-pic-elf-nonpreemptible`
+和五目标 hidden-undefined `-S` 未因本批 ASM 常量修改改变。
+RV64 GNU cross ELF/QEMU 未运行，联合验收仍推迟。
+
 ## 后续批次进度规则
 
 每批发布：当前 HEAD、源文件逐目录覆盖（明确深读与只扫的区别）、

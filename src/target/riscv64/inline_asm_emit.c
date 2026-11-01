@@ -138,9 +138,12 @@ static bool core_memory_readwrite_scalar_input_inline_asm_supported(
         !minic_type_is_pointer(function->values[memory_address].type) ||
         (!minic_type_is_integer(function->values[operand].type) &&
          !minic_type_is_pointer(function->values[operand].type)) ||
-        memory_index > 9U || scalar_index > 9U || memory_index == scalar_index ||
+        memory_index >= MINIC_RISCV64_ASM_MAX_OPERANDS ||
+        scalar_index >= MINIC_RISCV64_ASM_MAX_OPERANDS ||
+        memory_index == scalar_index ||
         (has_register_output &&
-         (register_index > 9U || register_index == memory_index || register_index == scalar_index))) {
+         (register_index >= MINIC_RISCV64_ASM_MAX_OPERANDS ||
+          register_index == memory_index || register_index == scalar_index))) {
         return false;
     }
     if (has_register_output) {
@@ -231,7 +234,7 @@ static bool core_structured_inline_asm_supported(const MinicCoreFunction *functi
                                                  const MinicCoreInstruction *instruction) {
     const MinicCoreInlineAsm *inline_asm;
     MinicRiscv64AsmInstructionPlan probe;
-    bool bound[10] = {false};
+    bool bound[MINIC_RISCV64_ASM_MAX_OPERANDS] = {false};
     size_t binding_index;
     size_t template_index;
 
@@ -257,7 +260,8 @@ static bool core_structured_inline_asm_supported(const MinicCoreFunction *functi
         MinicType pointee;
         MinicType value_type;
 
-        if (binding->operand_index > 9U || bound[binding->operand_index] ||
+        if (binding->operand_index >= MINIC_RISCV64_ASM_MAX_OPERANDS ||
+            bound[binding->operand_index] ||
             binding->value >= function->value_count ||
             (binding->early_clobber &&
              binding->kind != MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT &&

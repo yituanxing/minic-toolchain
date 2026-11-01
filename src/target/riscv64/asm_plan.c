@@ -164,7 +164,8 @@ static bool core_structured_fixed_phase_alias_safe(
         bool prior_is_output;
         const MinicCoreStructuredInlineAsmOperand *output;
 
-        if (!prior->has_fixed_register_binding || prior->operand_index > 9U ||
+        if (!prior->has_fixed_register_binding ||
+            prior->operand_index >= MINIC_RISCV64_ASM_MAX_OPERANDS ||
             !core_asm_register_name_equal(
                 operand_registers[prior->operand_index], register_name)) {
             continue;
@@ -232,7 +233,7 @@ static bool core_structured_inline_asm_allocate(
         return false;
     }
     inline_asm = &function->inline_asms[instruction->value.structured_inline_asm.inline_asm_id];
-    for (binding_index = 0U; binding_index < 10U; ++binding_index) {
+    for (binding_index = 0U; binding_index < MINIC_RISCV64_ASM_MAX_OPERANDS; ++binding_index) {
         operand_registers[binding_index] = NULL;
         memory_operand[binding_index] = false;
     }
@@ -275,7 +276,8 @@ static bool core_structured_inline_asm_allocate(
             core_inline_asm_clobbers_register(inline_asm, fixed_binding->register_name)) {
             return false;
         }
-        if (core_asm_register_in_use(operand_registers, 10U, fixed_binding->register_name) &&
+        if (core_asm_register_in_use(operand_registers, MINIC_RISCV64_ASM_MAX_OPERANDS,
+                                     fixed_binding->register_name) &&
             !core_structured_fixed_phase_alias_safe(
                 instruction, binding_index, operand_registers, fixed_binding->register_name)) {
             return false;
@@ -316,7 +318,8 @@ static bool core_structured_inline_asm_allocate(
             return false;
         }
         register_name = core_asm_choose_register(
-            inline_asm, operand_registers, 10U, preferences, preference_count);
+            inline_asm, operand_registers, MINIC_RISCV64_ASM_MAX_OPERANDS,
+            preferences, preference_count);
         if (register_name == NULL) {
             return false;
         }
@@ -332,7 +335,8 @@ static bool core_structured_inline_asm_allocate(
         const char *candidate = core_asm_caller_saved_registers[binding_index].name;
         /* Scratch is used only before/after the asm, so an asm clobber is fine;
            it merely must not alias a live operand register. */
-        if (core_asm_register_in_use(operand_registers, 10U, candidate))
+        if (core_asm_register_in_use(operand_registers,
+                                     MINIC_RISCV64_ASM_MAX_OPERANDS, candidate))
             continue;
         if (*scratch_register == NULL)
             *scratch_register = candidate;
