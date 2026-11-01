@@ -244,7 +244,6 @@ static bool minic_inline_build_local_boolean_domain_cache(
     size_t asm_index;
     size_t local_index;
 
-    (void)minic_inline_local_is_parameter;
     if (program == NULL ||
         program->local_count > SIZE_MAX / sizeof(bool)) {
         return false;

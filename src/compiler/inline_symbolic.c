@@ -34,11 +34,6 @@ static bool minic_inline_symbolic_static_expression_depth(
         return minic_inline_symbolic_static_expression_depth(
             program, target, expression->value.unary.operand, depth + 1U);
     }
-    if (expression->kind == MINIC_EXPRESSION_LVALUE_READ) {
-        const MinicExpression *operand = minic_c0_program_expression(
-            program, expression->value.unary.operand);
-        return operand != NULL && operand->kind == MINIC_EXPRESSION_LOCAL && false;
-    }
     /* A nested constant array subscript is still a static lvalue rooted in the
      * same global object.  This matters for addresses such as
      * &global_matrix[CONST_A][CONST_B]: ADDRESS_OF sees the outer SUBSCRIPT,
@@ -755,7 +750,6 @@ bool minic_specialize_inline_symbolic_calls(
             symbolic_source_bucket_offsets = NULL;
             symbolic_source_bucket_calls = NULL;
         }
-        (void)original_function_count;
         for (caller_index = 0U;
              caller_index < program->function_count;
              ++caller_index) {

@@ -340,6 +340,47 @@ static_aggregate_array_designators.c 直接 GNU/MiniC x86 本机编译运行均 
 三项均有旧版 ASan 证据与新版五目标 -S/本机专项验证，
 仍统一保持 FIXED-UNVERIFIED，未达到完整 ELF/QEMU/联合验收门槛。
 
+## 批次 C11：Compiler 全目录深读，清退符号特化中的无效旧路
+
+**基线：** `d4026e3`，2026-11-01。本批逐行通读 Compiler **11/11**
+生产 C/H 文件、原始共 **4,667 行**：compiler.c、core_function_set.c/.h、
+core_reachability.c/.h、inline_boolean.c、inline_integer.c、
+inline_reference.c、inline_specialize.h、inline_specialize_internal.h、
+inline_symbolic.c。本轮累计 **Frontend 69/69 + Compiler 11/11 = 80/339**
+全文深读；Core **0/48**、Target **0/211**。剩余 **259/339**
+未经本轮逐行审读。只审阅本阶段生产树，不把历史路径扫描冒充全文深读。
+
+| 路径 / 候选 | 合同与判断 |
+| --- | --- |
+| Compiler orchestration | Parser/normalized AST/owner 三重前置验证、四类 inline specialization、Core lower 与 DataLayout 的顺序有依赖；`MINIC_BOOTSTRAP_TRACE` 和失败 census 有外部诊断消费者。**KEEP(pipeline contract)**。 |
+| Core function / static object reachability | 静态对象裁剪会改变回调函数的活跃根，因此函数裁剪必须前后做两次；GNU file ASM、alias、relocation 和残留 AST 引用保守保活。Core block reachability 由 backend 配置。**KEEP(two-pass reachability, fallback)**，旧回调与段符号问题另按 MC 台账核验。 |
+| Integer / symbolic / Boolean inline | 三次特化的来源、section、共享 FunctionBody 与调用方事实不是同一种 identity；布尔 Local domain 的线性旧查询是缓存分配失败时的备用逻辑，符号传递 CALL 按 owner 分桶但共享/不明 owner 仍必扫。**KEEP(OOM fallback, shared AST contract)**；MC-006/007/008/043/058 独立排查，不能用清理名义处理。 |
+| Symbolic static expression | `MINIC_EXPRESSION_LVALUE_READ` 分支只返回 `operand != NULL && ... && false`，恒为 false；后面的默认分支已覆盖该 kind。**DELETE(dead predicate + redundant AST lookup)**。 |
+| Boolean/symbolic unused casts | Boolean cache builder 中 `(void)minic_inline_local_is_parameter` 指向本文件真实调用过的函数，symbolic transitive loop 的 `(void)original_function_count` 指向本函数多次实际使用的局部变量；二者都是无效旧占位。**DELETE(no-op casts)**。 |
+| Reference finalization | Core 层尚未能覆盖所有 GNU file ASM / 源级 label identity，AST 残余与 sub-string ASM 引用保守保留；仅靠 Core 图会漏真实外部引用。**KEEP(conservative roots)**。 |
+
+**C11 生产源码：** inline_symbolic.c **+0/-6**、inline_boolean.c
+**+0/-1**，合计 **净 -7 行**；累计 C1～C11 纯清理 **净 -211 行**。
+所有 P0/P1 独立修复增删不计入该数字。本批仅移除恒假分支与无效语句，
+未改变公开接口、优化预算、ABI、FunctionBody owner 或代码生成时序。
+
+**验证 PASS：** `make MODE=release CFLAGS=-Werror
+BUILD_DIR=build/cleanup-werror` 完成 `minic-cc` 链接；MC-001
+symbolic arena 稳定容量回归（双变体、五目标 90 次 `-S`、GNU/MiniC
+原生六次对照）；symbolic shared body 传递克隆与 GNU 原生对照；
+symbolic two callers 五目标 `-S`、GNU/MiniC x86 原生对照；
+GNU Linux kmalloc Boolean guard（GAS/LD、GNU/MiniC 原生 exit 42、
+不安全路径负向检查）；GNU dead static object callback 图（GNU AS、
+`nm -u`、存活/死根差分）。
+
+**部分验证、不作 PASS 冒报：** `run-static-local-owner-reachability.sh`
+修正入口变量为 `MINIC` 后，x86_64 GNU/MiniC ELF/原生对照 PASS，
+AArch64/LoongArch64 仅 `.s` PASS（缺 GNU 交叉工具链），RV64 源汇编
+与 GNU AS 已通过，但宿主缺 RISC-V `crt1.o`/`-lc` 导致静态
+链接 exit 1；该脚本的全程结果仍为 **NOT PASS(host toolchain)**。
+最初误用 `sh`（脚本要求 bash）、误用 `MINIC_CC`（实际读 `MINIC`）
+两次调用无效，未纳入验证结果。MiniAS/MiniLD/五目标完整联合验收仍延后。
+
 ## 后续批次进度规则
 
 每批发布：当前 HEAD、源文件逐目录覆盖（明确深读与只扫的区别）、
