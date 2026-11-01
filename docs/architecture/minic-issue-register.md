@@ -809,10 +809,10 @@
 
 ### MC-089 x87 long double 大于比较方向错误
 
-- **状态：** `OPEN`，P0，`GNU-NATIVE-DIFF`。2026-11-01 从 MC-041 精度探针拆出的独立**静默错编**：即使操作数为可精确表示的 `2.0L` 和 `1.0L`，`>` 的 x87 路径仍错，不应归罪于十进制字面量被 binary64 舍入。
-- **最小同源复现：** `int main(void){long double a=2.0L,b=1.0L;return a>b?42:1;}`。独立 `cc -std=gnu11 -O0 -no-pie` 本机运行退出 **42**；同源 `cc -E -P` 后当前主线 Release MiniC `--target=x86_64-linux -S` → GNU `cc -no-pie` 链接/本机运行退出 **1**。主代理在合入 MC-038/044 后又独立复跑该差分，确认不是旧日志误报。
-- **可疑调用链（待定位确切故障环）：** `core_lower_expr_scalar.c` 的 ordered binary128 `>` 先交换左右操作数，发出 typed `__lttf2(right,left)` 并以 Core `INTEGER_LESS(helper,0)` 得布尔；`src/target/x86_64/machine_call.c` 的 x87 helper 截获路径用 `fldt`、`fxch`、`fucomip` 转换比较结果。是哪一处操作数映射/状态码方向错，尚需独立 Core dump、GNU x87 汇编对照证据，不能按猜测修。
-- **修复门槛：** 不混入 MC-041 的 parser/常量改造；以 GNU/MiniC x86 原生覆盖 `<`、`<=`、`>`、`>=`、`==`、`!=`、正负有限值、相等、负零和 NaN 有序/无序，另外保证 TF helper 走其他目标的原有路径。完成至少定点回归才列 `FIXED-UNVERIFIED`，完整目标验收继续延后。
+- **状态：** `FIXED-UNVERIFIED`，P0，`GNU-NATIVE-DIFF`。2026-11-01 从 MC-041 字面量精度探针拆出的独立**静默错编**，修复后保留持久回归 `check-mc089-x87-ordered-comparisons`，不把 GNU native 定点验收冒充全目标联合验收。
+- **同源复现与精确根因：** `int main(void){long double a=2.0L,b=1.0L;return a>b?42:1;}` 原 GNU x86 native exit **42**，旧 MiniC exit **1**。Core `__lttf2` / `__letf2` helper 把负的有符号比较结果先写入 32 位 `EAX`；x86-64 的 `movl $-1,%eax` 自动将 RAX **零扩展**为 `0x00000000ffffffff`，下游 `x86_value_store` 放进 Core 64 位 SSA 槽，再由有符号 `INTEGER_LESS` 判断时误视为正数。原怀疑的 x87 `fucomip` 比较次序并非根因。
+- **最小修复与回归：** `src/target/x86_64/machine_call.c` 的 helper 终点在 `x86_value_store` 前加 `movslq %eax,%rax`，保持 `-1/0/+1` 的有符号含义。两个持久测试 TU `mc089_x87_ordered_comparisons{,_support}.c` 用 GNU/MiniC x86 GNU AS/LD 原生差分六运算符 × 十二组正负有限值、`±0`、无穷及 NaN，另含直接 `2.0L > 1.0L`；旧 MiniC **13 个 mismatch**，修后 GNU/MiniC 都 **0**。合入主线后 Release `-Werror`、`check-mc089-x87-ordered-comparisons` 及 x86/RV64/A64/Loong 四目标 `-S` PASS；RV32 的既有 long-double frame 限制不计通过。
+- **验收边界：** MC-051 负零原生独立回归保持通过；不混入 MC-041 的精度变更。未运行完整 Linux 五目标 ELF/QEMU、MiniAS/MiniLD 联合验收，故继续保留 `FIXED-UNVERIFIED`。
 
 ## 已核对并排除的误判（不要在未有新证据时重新打开）
 
