@@ -151,6 +151,15 @@ static void la_set_register_bank(MiniAsMCOperand *operand,
     operand->target_reg_bank = (uint16_t)bank;
 }
 
+static bool la_special_reg(const char *s,const char *prefix,
+                           unsigned maximum,unsigned *reg) {
+    char *end;unsigned long val;size_t len=strlen(prefix);
+    if(strncmp(s,prefix,len)!=0 || !isdigit((unsigned char)s[len]))return false;
+    errno=0;val=strtoul(s+len,&end,10);
+    if(errno || *end || val>maximum)return false;
+    *reg=(unsigned)val;return true;
+}
+
 /* LoongArch64 LA64 basic integer target. GNU binutils tables own the reference
  * encodings; extensions and fixup relocation families are not guessed. */
 static bool la_reg(const char *s,unsigned *r) {
@@ -162,28 +171,17 @@ static bool la_reg(const char *s,unsigned *r) {
         {"t4",16U},{"t5",17U},{"t6",18U},{"t7",19U},
         {"t8",20U},{"u0",21U},{"fp",22U},{"s9",22U}
     };
-    unsigned i;char *end;unsigned long val;
+    unsigned i,ordinal;
     if(*s!='$')return false;
+    if(la_special_reg(s,"$r",31U,r))return true;
     ++s;
-    if(*s=='r' && isdigit((unsigned char)s[1])) {
-        errno=0;val=strtoul(s+1,&end,10);
-        if (!errno && !*end && val<=31U) {*r=(unsigned)val;return true;}
-    }
     for(i=0U;i<sizeof(aliases)/sizeof(aliases[0]);++i)
         if(!strcmp(s,aliases[i].s)){*r=aliases[i].r;return true;}
-    if(s[0]=='s' && isdigit((unsigned char)s[1])) {
-        errno=0;val=strtoul(s+1,&end,10);
-        if(!errno && !*end && val<=8U){*r=(unsigned)(23U+val);return true;}
+    if(la_special_reg(s,"s",8U,&ordinal)) {
+        *r=23U+ordinal;
+        return true;
     }
     return false;
-}
-static bool la_special_reg(const char *s,const char *prefix,
-                           unsigned maximum,unsigned *reg) {
-    char *end;unsigned long val;size_t len=strlen(prefix);
-    if(strncmp(s,prefix,len)!=0 || !isdigit((unsigned char)s[len]))return false;
-    errno=0;val=strtoul(s+len,&end,10);
-    if(errno || *end || val>maximum)return false;
-    *reg=(unsigned)val;return true;
 }
 
 /* All scalar floating-point instruction families share one psABI FPR
@@ -563,30 +561,39 @@ static bool la_plan_li_w(MiniAsParseContext *ctx,MiniAsMCInst *inst,
     return la_attach_lowering_plan(ctx,inst,&plan);
 }
 
-static bool la_plan_pcrel(MiniAsParseContext *ctx,MiniAsMCInst *inst,
-                           unsigned destination) {
+/* The two GNU address-materialization pseudos differ in their load opcode,
+ * relocation family and retained form, but use the same four-fixup RELAX
+ * layout. One producer keeps word indices and zero-symbol markers in sync. */
+static bool la_plan_address(MiniAsParseContext *ctx,MiniAsMCInst *inst,
+                            unsigned destination,uint32_t second_opcode,
+                            MiniAsFixupKind high_kind,
+                            MiniAsFixupKind low_kind,uint32_t form) {
     LaLoweringPlan plan={0};
     plan.count=2U;
     plan.words[0]=UINT32_C(0x1a000000)|destination;
-    plan.words[1]=UINT32_C(0x02c00000)|
-        (destination<<5U)|destination;
-    /* GNU GAS defaults to linker relaxation for the one-register
-     * la.local/la.pcrel macro. Every PCALA relocation is immediately
-     * accompanied by R_LARCH_RELAX against the ELF zero symbol. This is
-     * part of the input object's semantic link contract. */
+    plan.words[1]=second_opcode|(destination<<5U)|destination;
     plan.fixup_count=4U;
-    plan.fixups[0].kind=MINIAS_FIXUP_LARCH_PCALA_HI20;
+    plan.fixups[0].kind=high_kind;
     plan.fixups[0].symbol_operand=1U;
     plan.fixups[1].kind=MINIAS_FIXUP_LARCH_RELAX;
     plan.fixups[1].absolute_zero=true;
     plan.fixups[2].word=1U;
-    plan.fixups[2].kind=MINIAS_FIXUP_LARCH_PCALA_LO12;
+    plan.fixups[2].kind=low_kind;
     plan.fixups[2].symbol_operand=1U;
     plan.fixups[3].word=1U;
     plan.fixups[3].kind=MINIAS_FIXUP_LARCH_RELAX;
     plan.fixups[3].absolute_zero=true;
-    inst->target_form=LA_FORM_PCREL;
+    inst->target_form=form;
     return la_attach_lowering_plan(ctx,inst,&plan);
+}
+
+static bool la_plan_pcrel(MiniAsParseContext *ctx,MiniAsMCInst *inst,
+                           unsigned destination) {
+    /* GNU GAS defaults to linker relaxation for la.local/la.pcrel.
+     * Each PCALA relocation carries a matching R_LARCH_RELAX marker. */
+    return la_plan_address(ctx,inst,destination,UINT32_C(0x02c00000),
+                           MINIAS_FIXUP_LARCH_PCALA_HI20,
+                           MINIAS_FIXUP_LARCH_PCALA_LO12,LA_FORM_PCREL);
 }
 
 /* Under GNU's ordinary LP64D code model, la.global is a GOT-address
@@ -596,24 +603,9 @@ static bool la_plan_pcrel(MiniAsParseContext *ctx,MiniAsMCInst *inst,
  * two-word fragment and optional-linker-relaxation policy. */
 static bool la_plan_global_got(MiniAsParseContext *ctx,MiniAsMCInst *inst,
                                unsigned destination) {
-    LaLoweringPlan plan={0};
-    plan.count=2U;
-    plan.words[0]=UINT32_C(0x1a000000)|destination;
-    plan.words[1]=UINT32_C(0x28c00000)|
-        (destination<<5U)|destination;
-    plan.fixup_count=4U;
-    plan.fixups[0].kind=MINIAS_FIXUP_LARCH_GOT_PC_HI20;
-    plan.fixups[0].symbol_operand=1U;
-    plan.fixups[1].kind=MINIAS_FIXUP_LARCH_RELAX;
-    plan.fixups[1].absolute_zero=true;
-    plan.fixups[2].word=1U;
-    plan.fixups[2].kind=MINIAS_FIXUP_LARCH_GOT_PC_LO12;
-    plan.fixups[2].symbol_operand=1U;
-    plan.fixups[3].word=1U;
-    plan.fixups[3].kind=MINIAS_FIXUP_LARCH_RELAX;
-    plan.fixups[3].absolute_zero=true;
-    inst->target_form=LA_FORM_GOT;
-    return la_attach_lowering_plan(ctx,inst,&plan);
+    return la_plan_address(ctx,inst,destination,UINT32_C(0x28c00000),
+                           MINIAS_FIXUP_LARCH_GOT_PC_HI20,
+                           MINIAS_FIXUP_LARCH_GOT_PC_LO12,LA_FORM_GOT);
 }
 
 /* One LoongArch-owned operand grammar for LSX and LASX.  The two vector

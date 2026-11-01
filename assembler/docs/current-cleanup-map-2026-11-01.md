@@ -6,6 +6,19 @@
 下表数字是该历史基线的快照，而非每次后续提交的实时计数。
 旧台账保留历史证据，**这里不复用旧“pending CI”状态**。
 
+**2026-11-02 联合 Source/Section/Target 清理（基于远端
+`b401be5`）：** 宏体的三套平行数组换成唯一
+`MiniAsSourceLine[]`，宏与 repeat collector 共用参数复制，
+`.fill/.space` 的写入与 NOBITS 规则共用一条 Section
+materializer；x86 GPR 四宽度词表及 XMM 数字解析、
+LoongArch 数字寄存器与 `la.local/.global` 的 Fixup/RELAX
+生产器也各自归并。同批 5 个生产文件 `+149/-192`
+（净 `-43`），2 个结构测试 `+14`；本地 A0、x86 GNU
+及四架构 22 组旧/新对象与拒绝行为差分通过。
+**本批 exact-head CI/严格 GNU/Linux Image 仍须独立核对。**
+之前的宏扫描提交 `b401be5` 的四项关键 CI 已是 SUCCESS，
+不能把此结论直接移植到新批次。
+
 **后续 P04 更新（基于 `e11e7d2` 的编码器批次）：** 四架构
 `encode(MiniAs *, Stmt *)` 已一起迁移至不透明的
 `MiniAsEncodeContext` 和 12 项受限能力，18 条闭合编码调用链

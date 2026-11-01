@@ -69,4 +69,13 @@ for case_name in args keyword vararg required recursion altpercent; do
         exit 1
     fi
 done
+
+# Macro bodies must use the same SourceLine owner as physical/replayed
+# frames. Reintroducing parallel text/line/segment arrays creates three
+# partial-allocation paths and makes failed definitions harder to destroy.
+grep -q 'MiniAsSourceLine \*body;' assembler/src/source_graph_internal.h
+! grep -Eq 'body_lines|body_source_segments' \
+    assembler/src/source_graph_internal.h assembler/src/source_expansion.c
+grep -q 'minias_source_lines_destroy(macro->body,macro->body_count)' \
+    assembler/src/source_expansion.c
 echo 'MINIAS_MACRO_FAILURE_CLEANUP=PASS invalid_paths=6 no_partial_objects=1'

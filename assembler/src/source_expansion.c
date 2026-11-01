@@ -52,11 +52,7 @@ static void minias_macro_destroy(MiniAsMacro *macro) {
         free(macro->params[i].default_value);
     }
     free(macro->params);
-    for(i=0U;i<macro->body_count;++i)
-        free(macro->body[i]);
-    free(macro->body);
-    free(macro->body_lines);
-    free(macro->body_source_segments);
+    minias_source_lines_destroy(macro->body,macro->body_count);
     memset(macro,0,sizeof(*macro));
 }
 
@@ -502,16 +498,6 @@ static int classify_collector_line(const MiniAs *as, const char *text,
                    strcmp(trimmed, ".endmacro") == 0) {
             kind = MINIAS_MACRO_END;
         }
-        if (rest != NULL) {
-            while (*rest == ' ' || *rest == '\t') ++rest;
-            if (macro_size != 0U) {
-                int written = snprintf(macro_argument,macro_size,"%s",rest);
-                if (written < 0 || (size_t)written >= macro_size) {
-                    free(copy);
-                    return MINIAS_COLLECTOR_MACRO_ERROR;
-                }
-            }
-        }
     }
 
     if(kind==MINIAS_MACRO_NONE && repeat_argument!=NULL) {
@@ -548,18 +534,24 @@ static int classify_collector_line(const MiniAs *as, const char *text,
         } else if (strcmp(trimmed, ".endr") == 0) {
             kind=MINIAS_REPEAT_ENDR;
         }
-        if(rest!=NULL) {
-            while(*rest==' ' || *rest=='\t')++rest;
-            if(repeat_size!=0U) {
-                int written=snprintf(repeat_argument,repeat_size,"%s",rest);
-                if(written<0 || (size_t)written>=repeat_size) {
-                    free(copy);
-                    return MINIAS_COLLECTOR_REPEAT_ERROR;
-                }
-            }
-        }
         if(label_prefix_length && kind!=MINIAS_REPEAT_REPT &&
            kind!=MINIAS_REPEAT_IRP)*label_prefix_length=0U;
+    }
+    /* The two collector grammars choose different directives, but neither
+     * needs its own argument-copy and truncation implementation. */
+    if(rest!=NULL) {
+        const bool macro=kind==MINIAS_MACRO_BEGIN;
+        char *destination=macro?macro_argument:repeat_argument;
+        size_t capacity=macro?macro_size:repeat_size;
+        while(*rest==' ' || *rest=='\t')++rest;
+        if(capacity!=0U) {
+            int written=snprintf(destination,capacity,"%s",rest);
+            if(written<0 || (size_t)written>=capacity) {
+                free(copy);
+                return macro?MINIAS_COLLECTOR_MACRO_ERROR:
+                             MINIAS_COLLECTOR_REPEAT_ERROR;
+            }
+        }
     }
     free(copy);
     return kind;
@@ -879,21 +871,17 @@ static bool define_macro(MiniAs *as,
     }
     if (count != 0U) {
         macro->body = calloc(count, sizeof(*macro->body));
-        macro->body_lines = calloc(count, sizeof(*macro->body_lines));
-        macro->body_source_segments=calloc(count,
-                              sizeof(*macro->body_source_segments));
-        if (macro->body == NULL || macro->body_lines == NULL ||
-            macro->body_source_segments == NULL) {
+        if (macro->body == NULL) {
             minias_set_error(as, "out-of-memory:macro-body");
             goto failed;
         }
     }
     macro->body_count = count;
     for (i = 0U; i < count; ++i) {
-        macro->body[i] = minias_strdup(lines[i].text);
-        macro->body_lines[i] = lines[i].line;
-        macro->body_source_segments[i]=lines[i].source_segment;
-        if (macro->body[i] == NULL) {
+        macro->body[i].text = minias_strdup(lines[i].text);
+        macro->body[i].line = lines[i].line;
+        macro->body[i].source_segment=lines[i].source_segment;
+        if (macro->body[i].text == NULL) {
             minias_set_error(as, "out-of-memory:macro-body-line");
             goto failed;
         }
@@ -1190,7 +1178,7 @@ static bool minias_macro_expand(MiniAs *as,
     }
     counter = as->source->macro_expansion_counter++;
     for (i = 0U; i < body_count; ++i) {
-        char *current = substitute_macro_counter(as, macro->body[i], counter);
+        char *current = substitute_macro_counter(as, macro->body[i].text, counter);
         size_t p;
 
         if (current == NULL) {
@@ -1208,8 +1196,8 @@ static bool minias_macro_expand(MiniAs *as,
             current = next;
         }
         expanded[i].text = current;
-        expanded[i].line = macro->body_lines[i];
-        expanded[i].source_segment=macro->body_source_segments[i];
+        expanded[i].line = macro->body[i].line;
+        expanded[i].source_segment=macro->body[i].source_segment;
     }
     ++as->source->macro_expansion_depth;
     {

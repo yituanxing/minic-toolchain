@@ -1018,8 +1018,9 @@ bool minias_add_late_fragment_fixup(MiniAs *as,size_t fragment_id,
     return true;
 }
 
-static bool minias_section_append_fill(MiniAs *,int,size_t,uint8_t,bool);
-static bool emit_common_pattern(MiniAs *,int,const unsigned char *,size_t,size_t);
+static bool minias_section_append_pattern(MiniAs *,int,
+                                          const unsigned char *,size_t,
+                                          size_t,bool);
 static bool minias_stage_fragment_bytes(MiniAs *,int,const void *,size_t,bool);
 
 /* Commit a complete source Fragment's result after its measured length has
@@ -1141,14 +1142,10 @@ static bool minias_commit_encode_result(MiniAs *as, const MiniAsStmt *owner) {
     for(i=0U;i<result->write_count;++i) {
         const MiniAsFragmentWrite *write=&result->writes[i];
         bool materialized;
-        if(write->kind==MINIAS_WRITE_PATTERN && write->repeat_width==1U)
-            materialized=minias_section_append_fill(
-                as,owner->section,write->repeat_count,write->pattern[0],
-                write->ignore_nobits_fill);
-        else if(write->kind==MINIAS_WRITE_PATTERN)
-            materialized=emit_common_pattern(
+        if(write->kind==MINIAS_WRITE_PATTERN)
+            materialized=minias_section_append_pattern(
                 as,owner->section,write->pattern,write->repeat_width,
-                write->repeat_count);
+                write->repeat_count,write->ignore_nobits_fill);
         else
             materialized=minias_section_append(
                 as,owner->section,
@@ -1523,38 +1520,61 @@ bool minias_section_append(MiniAs *as, int section_index, const void *data, size
     return true;
 }
 
-/* The same append-size and allocation invariants apply to zero and nonzero
- * fills.  GNU .space/.skip ignores the nonzero fill in SHT_NOBITS, whereas
- * a literal DATA/.fill element must not quietly discard nonzero bytes. */
-static bool minias_section_append_fill(MiniAs *as,int section_index,
-                                        size_t size,uint8_t fill,
-                                        bool ignore_nobits_fill) {
+/* All repeated fills have one materialization path, including fragment
+ * transaction commits. GNU .space/.skip may ignore the fill in NOBITS;
+ * literal DATA/.fill may not silently discard nonzero bytes. */
+static bool minias_section_append_pattern(MiniAs *as,int section_index,
+                                           const unsigned char *pattern,
+                                           size_t width,size_t repeat,
+                                           bool ignore_nobits_fill) {
     MiniAsSection *sec;
-    size_t need;
-    if(section_index<0 || (size_t)section_index>=as->section_count) {
-        minias_set_error(as,"internal:bad-section");return false;
+    size_t bytes,filled,i;
+    unsigned char *output;
+    if(section_index<0 || (size_t)section_index>=as->section_count ||
+       width==0U || width>8U || repeat>SIZE_MAX/width) {
+        minias_set_error(as,"invalid-data-pattern");
+        return false;
     }
-    sec=&as->sections[(size_t)section_index];
     if(as->emitting_fragment && !as->committing_fragment)
-        return minias_stage_fragment_pattern(
-            as,section_index,&fill,1U,size,ignore_nobits_fill);
-    if(size>SIZE_MAX-sec->size) {
+        return minias_stage_fragment_pattern(as,section_index,pattern,width,
+                                             repeat,ignore_nobits_fill);
+    sec=&as->sections[(size_t)section_index];
+    bytes=width*repeat;
+    if(bytes>SIZE_MAX-sec->size) {
         minias_set_error(as,"section-size-overflow:%s",sec->name);
         return false;
     }
     if(sec->type==MINIAS_SHT_NOBITS) {
-        if(fill!=0U && !ignore_nobits_fill) {
-            minias_set_error(as,"nobits-nonzero-data:%s",sec->name);
-            return false;
-        }
-        sec->size+=size;
+        if(!ignore_nobits_fill)
+            for(i=0U;i<width;++i)
+                if(pattern[i]!=0U) {
+                    minias_set_error(as,"nobits-nonzero-data:%s",sec->name);
+                    return false;
+                }
+        sec->size+=bytes;
         return true;
     }
-    need=sec->size+size;
-    if(!minias_section_reserve(as,sec,need))return false;
-    if(size!=0U)memset(sec->data+sec->size,(int)fill,size);
-    sec->size=need;
+    if(!minias_section_reserve(as,sec,sec->size+bytes))return false;
+    if(bytes!=0U) {
+        output=sec->data+sec->size;
+        /* Seed once and double the already written prefix, O(log repeat). */
+        memcpy(output,pattern,width);
+        filled=width;
+        while(filled<bytes) {
+            size_t chunk=filled<bytes-filled?filled:bytes-filled;
+            memcpy(output+filled,output,chunk);
+            filled+=chunk;
+        }
+    }
+    sec->size+=bytes;
     return true;
+}
+
+static bool minias_section_append_fill(MiniAs *as,int section_index,
+                                        size_t size,uint8_t fill,
+                                        bool ignore_nobits_fill) {
+    return minias_section_append_pattern(as,section_index,&fill,1U,size,
+                                         ignore_nobits_fill);
 }
 
 bool minias_section_append_zero(MiniAs *as,int section_index,size_t size) {
@@ -3028,48 +3048,7 @@ failed:
 static bool emit_common_pattern(MiniAs *as,int section,
                                 const unsigned char *element,
                                 size_t width,size_t repeat) {
-    MiniAsSection *sec;
-    size_t bytes,filled;
-    unsigned char *output;
-    size_t i;
-    if(section<0 || (size_t)section>=as->section_count ||
-       width==0U || width>8U || repeat>SIZE_MAX/width) {
-        minias_set_error(as,"invalid-data-pattern");
-        return false;
-    }
-    sec=&as->sections[(size_t)section];
-    if(as->emitting_fragment && !as->committing_fragment)
-        return minias_stage_fragment_pattern(
-            as,section,element,width,repeat,false);
-    bytes=width*repeat;
-    if(bytes>SIZE_MAX-sec->size) {
-        minias_set_error(as,"section-size-overflow:%s",sec->name);
-        return false;
-    }
-    if(sec->type==MINIAS_SHT_NOBITS) {
-        for(i=0U;i<width;++i)
-            if(element[i]!=0U) {
-                minias_set_error(as,"nobits-nonzero-data:%s",sec->name);
-                return false;
-            }
-        sec->size+=bytes;
-        return true;
-    }
-    if(!minias_section_reserve(as,sec,sec->size+bytes))return false;
-    if(bytes!=0U) {
-        output=sec->data+sec->size;
-        /* A short seed can be doubled with non-overlapping copies. The
-         * number of memcpy calls is logarithmic rather than O(repeat). */
-        memcpy(output,element,width);
-        filled=width;
-        while(filled<bytes) {
-            size_t chunk=filled<bytes-filled?filled:bytes-filled;
-            memcpy(output+filled,output,chunk);
-            filled+=chunk;
-        }
-    }
-    sec->size+=bytes;
-    return true;
+    return minias_section_append_pattern(as,section,element,width,repeat,false);
 }
 
 /* Shared full-width ULEB bytes: DWARF attributes may legitimately contain

@@ -209,21 +209,32 @@ static bool x64_attach_symbol_difference_operand(
     return true;
 }
 
+/* All four low GPR width spellings describe the same 16 hardware register
+ * indices. Keep a single Target-owned inventory so mode and CFI consumers
+ * cannot acquire different register-number mappings. High AH..BH remains a
+ * separate non-REX class below. */
+typedef struct X64GprSpelling {
+    const char *byte, *word, *dword, *qword;
+} X64GprSpelling;
+static const X64GprSpelling x64_gpr_spellings[16] = {
+    {"al","ax","eax","rax"},{"cl","cx","ecx","rcx"},
+    {"dl","dx","edx","rdx"},{"bl","bx","ebx","rbx"},
+    {"spl","sp","esp","rsp"},{"bpl","bp","ebp","rbp"},
+    {"sil","si","esi","rsi"},{"dil","di","edi","rdi"},
+    {"r8b","r8w","r8d","r8"},{"r9b","r9w","r9d","r9"},
+    {"r10b","r10w","r10d","r10"},{"r11b","r11w","r11d","r11"},
+    {"r12b","r12w","r12d","r12"},{"r13b","r13w","r13d","r13"},
+    {"r14b","r14w","r14d","r14"},{"r15b","r15w","r15d","r15"}
+};
 static bool x64_register(const char *text, unsigned *reg, bool *wide) {
-    static const char *const names64[16] = {
-        "rax","rcx","rdx","rbx","rsp","rbp","rsi","rdi",
-        "r8","r9","r10","r11","r12","r13","r14","r15"
-    };
-    static const char *const names32[16] = {
-        "eax","ecx","edx","ebx","esp","ebp","esi","edi",
-        "r8d","r9d","r10d","r11d","r12d","r13d","r14d","r15d"
-    };
     unsigned i;
     if (*text != '%') return false;
     ++text;
     for (i = 0U; i < 16U; ++i) {
-        if (strcmp(text, names64[i]) == 0) { *reg=i; *wide=true; return true; }
-        if (strcmp(text, names32[i]) == 0) { *reg=i; *wide=false; return true; }
+        if (strcmp(text, x64_gpr_spellings[i].qword) == 0)
+            { *reg=i; *wide=true; return true; }
+        if (strcmp(text, x64_gpr_spellings[i].dword) == 0)
+            { *reg=i; *wide=false; return true; }
     }
     return false;
 }
@@ -232,14 +243,6 @@ static bool x64_register(const char *text, unsigned *reg, bool *wide) {
  * cannot coexist with any REX-required byte register. */
 /* Source-width-specific registers belong to x86, not Common MCInst. */
 /* XMM register indices remain Target-owned, not fake GPR widths. */
-static bool x64_xmm_register(const char *text,unsigned *reg) {
-    char *end;unsigned long id;
-    if(strncmp(text,"%xmm",4U) || !isdigit((unsigned char)text[4]))return false;
-    errno=0;id=strtoul(text+4U,&end,10);
-    if(errno || *end!='\0' || id>=16UL)return false;
-    *reg=(unsigned)id;return true;
-}
-
 /* AVX-512 uses an independent 32-register vector file and 8 predicate
  * registers.  Do not pretend ZMM/K operands are GPRs or XMM aliases. */
 static bool x64_vector_register(const char *text,const char *prefix,
@@ -256,27 +259,24 @@ static bool x64_vector_register(const char *text,const char *prefix,
     return true;
 }
 
+static bool x64_xmm_register(const char *text,unsigned *reg) {
+    return x64_vector_register(text,"%xmm",16U,reg);
+}
+
 static bool x64_register16(const char *text,unsigned *reg) {
-    static const char *const names[16]={
-        "ax","cx","dx","bx","sp","bp","si","di",
-        "r8w","r9w","r10w","r11w","r12w","r13w","r14w","r15w"
-    };
     unsigned i;
     if(*text!='%')return false;
     for(i=0U;i<16U;++i)
-        if(!strcmp(text+1,names[i])){*reg=i;return true;}
+        if(!strcmp(text+1,x64_gpr_spellings[i].word)){*reg=i;return true;}
     return false;
 }
 
 static bool x64_register8(const char *text,unsigned *reg) {
-    static const char *const low8[16]={
-        "al","cl","dl","bl","spl","bpl","sil","dil",
-        "r8b","r9b","r10b","r11b","r12b","r13b","r14b","r15b"
-    };
     unsigned i;
     if(*text!='%')return false;
     for(i=0U;i<16U;++i)
-        if(strcmp(text+1,low8[i])==0){*reg=i;return true;}
+        if(strcmp(text+1,x64_gpr_spellings[i].byte)==0)
+            {*reg=i;return true;}
     return false;
 }
 

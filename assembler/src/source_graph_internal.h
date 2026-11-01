@@ -3,6 +3,12 @@
 
 #include "source_graph_common.h"
 
+typedef struct MiniAsSourceLine {
+    char *text;
+    size_t line;
+    size_t source_segment;
+} MiniAsSourceLine;
+
 /* These source-only types intentionally do not appear in the Target-visible
  * MiniAs internal model. Source expansion is their lifetime owner. */
 typedef struct MiniAsConditional {
@@ -23,9 +29,7 @@ typedef struct MiniAsMacro {
     char *name;
     MiniAsMacroParam *params;
     size_t param_count;
-    char **body;
-    size_t *body_lines;
-    size_t *body_source_segments;
+    MiniAsSourceLine *body;
     size_t body_count;
     MiniAsStableSiteId definition_site;
 } MiniAsMacro;
@@ -50,12 +54,6 @@ struct MiniAsSourceContext {
 /* Common's lexical expansion owns source text, while the persistent graph
  * owns cross-replay SiteIDs and forced branch identities. This private header
  * describes their shared ownership contract, never an ISA-specific grammar. */
-typedef struct MiniAsSourceLine {
-    char *text;
-    size_t line;
-    size_t source_segment;
-} MiniAsSourceLine;
-
 /* The physical file and each expanded source body are processed by the
  * same macro/REPT/IRP collector. A SourceFrame owns only its lexical text;
  * the assembler retains typed Fragment/Symbol data independently of it.

@@ -96,5 +96,10 @@ grep -q 'nobits-nonzero-data' "$work/error"
 grep -q 'minias_stage_fragment_bytes' assembler/src/assembler.c
 grep -q 'minias_stage_fragment_pattern' assembler/src/assembler.c
 grep -q 'minias_commit_encode_result(as,stmt)' assembler/src/assembler.c
+# Width-one .space fills and multi-byte .fill element patterns must commit
+# through the same NOBITS/overflow-checked Section materializer.
+grep -q 'static bool minias_section_append_pattern' assembler/src/assembler.c
+grep -q 'return minias_section_append_pattern(as,section,element,width,repeat,false)' \
+    assembler/src/assembler.c
 
 echo 'MINIAS_FRAGMENT_SINGLE_COMMIT=PASS GNU_payload=exact GNU_reloc=exact NOBITS=exact source_bridge=removed'

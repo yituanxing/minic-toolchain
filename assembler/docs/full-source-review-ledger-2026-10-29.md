@@ -7,6 +7,53 @@
 > 和早期测试文件数量，均不能自动当作最新 HEAD 的事实。
 > “读过 / 修改过 / 完成清理”必须分别统计。
 
+### 2026-11-02 Source/Section/Target 重复所有权联合清理（P04/P05）
+
+**Base:** exact remote Draft PR #667 head
+`b401be52dafa7cbbb1ebf93e16b6d276df54b1c1`；
+本地同树清理父提交为 `9153913`。这次以五个生产文件为
+**一批**，只合并已经验证属于同一职责的旧实现，未扩大目标
+指令集、宏语言或 ELF 语义。
+
+- **Source 宏体只保留一个拥有者：** `MiniAsMacro.body` 从
+  文本、物理行号、源段号三套平行堆数组改成唯一
+  `MiniAsSourceLine[]`；定义时一次分配，宏重定义/注销/失败清理
+  复用 SourceFrame 原有逐行析构。扩展时保留每行的 source
+  provenance、宏计数器、参数替换顺序与原有的快照生命周期。
+- **收集器复制只保留一份：** `.macro` 与 `.rept/.irp` 的
+  指令识别、前置标签和闭合语法仍各自独立；公共的空白跳过、
+  动态参数复制、截断检测不再在两条路径实现两次。
+- **Common 填充序列化只保留一条：** 一字节 `.space` 和
+  多字节 `.fill` 的 Section 扩容、尺寸检查、NOBITS 非零拒绝
+  与重复模式增量复制统一为 `minias_section_append_pattern`。
+  Fragment staging/commit 仍是唯一源输出事务；NOBITS 的
+  `.space` 忽略填充值规则不变。
+- **Target 去掉两类重复词表与计划：** x86 四种宽度的 16 个
+  通用 GPR 名称共用一份索引表，XMM 共用已有的受限向量数字
+  解析器（AH/BH/CH/DH 仍独立）；LoongArch `$rN/$sN`
+  复用已有的受限数字寄存器解析器，`la.local/.pcrel` 与
+  `la.global` 两机器字、四 Fixup/RELAX 布局共用一个参数化
+  生成器，仍以不同的 opcode/relocation/form 描述语义。
+
+**Production diff:** 5 个既有 `assembler/src` 文件，
+`+149/-192`，净删 **43 行**；两项结构测试 `+14/-0`；
+生产文件目录仍为 **33**。此前修改覆盖 22 个文件，本批没有
+为了增加覆盖率触及已稳定的其他模块。
+
+**Local verification:** Release `CFLAGS=-Werror` PASS，A0
+`30/30` PASS；GNU x86 源码宏、可选/空参数、复合重放、
+大 collector、IRP 512 值、Fragment 原子提交/数据填充
+与 NOBITS 等定向测试 PASS；Target 侧 x86
+GPR/CFI/code16 及 LoongArch 别名/PCALA/GOT/RELAX、
+  标量与寄存器库正反例 PASS。ASan/UBSan 宏生命周期检查
+  clean，LSan 在本环境不可用（不能宣称 leak check PASS）。
+  单独从清理父提交重编译旧版
+MiniAS，四目标 22 组输入：**15 份 ELF 对象逐字节一致，
+7 组两边均拒绝，状态或对象差异 0**。
+本机 RISC-V/AArch64/LoongArch64 外部 GNU 交叉汇编器
+不可用；严格 3,536 GNU 语义、完整 Linux Image/QEMU
+与新远端 exact-head CI 未在本地宣称通过。
+
 ### 2026-11-02 GNU 宏参数顶层词法扫描统一（P05）
 
 **Base:** exact remote Draft PR #667 head
