@@ -224,6 +224,7 @@ static bool minic_data_layout_record_depth(const MinicDataLayout *layout,
         size_t element_size;
         size_t field_size;
         size_t field_alignment;
+        size_t type_alignment;
         size_t field_offset;
         size_t field_bit_offset;
 
@@ -234,9 +235,16 @@ static bool minic_data_layout_record_depth(const MinicDataLayout *layout,
             element_size > SIZE_MAX / field->element_count) {
             return false;
         }
+        type_alignment = field_alignment;
         if (!minic_data_layout_effective_field_alignment(
                 field, pack_alignment, field_alignment, &field_alignment))
             return false;
+        /* GNU's unnamed zero-width bit-field ends the current storage unit
+         * at the declared type's natural boundary even under packed or
+         * #pragma pack.  This fence does not raise the record's alignment. */
+        if (field->is_bit_field && field->bit_width == 0U &&
+            field->name_length == 0U && type_alignment > field_alignment)
+            field_alignment = type_alignment;
         field_bit_offset = 0U;
         if (field->is_bit_field) {
             size_t type_bits;
@@ -244,10 +252,8 @@ static bool minic_data_layout_record_depth(const MinicDataLayout *layout,
             size_t field_start_bits;
 
             /* Nonzero bit-fields share the member alignment cap with
-             * ordinary fields. FIXME(MC-042): an unnamed zero-width field
-             * is an exception to packed/pragma-pack capping: its natural
-             * type boundary must still align the following member. The
-             * effective alignment above currently loses that boundary. */
+             * ordinary fields. Unnamed zero-width fields keep the natural
+             * boundary established above even under packing. */
             if (!minic_type_is_integer(field->type) || field->element_count != 1U ||
                 field->is_array || field->is_flexible_array || field->is_zero_length_array ||
                 element_size == 0U || element_size > SIZE_MAX / 8U || field_alignment == 0U ||
