@@ -101,6 +101,7 @@
 | [MC-086](#mc-086-x86-pic-隐藏的未定义-weak-对象与函数错用-pc32-重定位) | P1 | FIXED-UNVERIFIED | GNU-LD/ELF-ORACLE | x86 ELF/PIC symbol binding | `866fa28` 用 TargetInfo 已有 undefined-weak 事实修复 PIC GOT 选路；GNU/MiniC GNU AS/LD PIE 2×2、ELF relocation/native PASS，完整 Linux 矩阵未验 |
 | [MC-087](#mc-087-common-lp64-单函数-257-条合法-inline-asm-硬拒) | P2 | FIXED-UNVERIFIED | LOCAL-COMPILE-DIFF | Common Direct LP64 preflight | 257 人为上限已移除，A64/Loong 255/256/257/512 源汇编与伪造 Core 负例 PASS；目标 GNU ELF 未测 |
 | [MC-088](#mc-088-rv32-宽整数条件分支只检查低-32-位造成静默错编) | P1 | FIXED-UNVERIFIED | GNU-QEMU-DIFF/ELF32 | RV32 Core terminator | 64 位条件仅高 32 位非零时被当作假；修复前 GNU ELF32 QEMU PASS、MiniC exit11；修复后 8 组双 ELF32/QEMU PASS |
+| [MC-089](#mc-089-x87-long-double-大于比较方向错误) | P0 | OPEN | GNU-NATIVE-DIFF | Core/x86 x87 | 普通 `2.0L > 1.0L` GNU 原生返回 42、MiniC x86 GNU AS/LD 原生返回 1；独立于字面量精度 MC-041 |
 
 ## 索引：尚待验证的风险
 
@@ -804,6 +805,13 @@
 - **同源反证与修复：** 持久 `tests/compiler/c0/run-rv32-wide-branch-condition.sh` 为 GNU C 与 MiniC 共享预处理 `.i`，均用 GNU GAS/LD 生成 RV32 `ELF32`，真实 `qemu-riscv32` 执行。修复前、未含 RV32 补丁的 MiniC 编译器：GNU mode **PASS**，MiniC mode **exit 11**（高字非零的分支测试）；修复后包含提交 `ae9937d`、持久探针提交 `fa73ff1` 的当前工作分支以 Release `-Werror` 重新构建，GNU/MiniC 两种 mode 均 **PASS**，8 组覆盖 high-only、low-only、mask 和 ternary 条件。
 - **生产者与消费者：** Core 合法携带宽整数值作为 conditional terminator；RV32 `rv32_emit.c:rv32_term` 现经现成 `rv32_scalar_storage_words` 区分 1/2 word，2-word 经 `rv32_pair_slot` 取两半后 `or t0,t0,t1`，再走既有 `beqz`／目标标签输出。未修改 Core 类型合同、其他 ISA 发射器或分支目标布局。
 - **未验证边界：** 测试只覆盖 GNU 32 位目标工具链、RV32 GNU 链接产物与 QEMU 定向样例；完整 RV32 Linux 大程序集成、所有 ABI/优化模式、其他目标矩阵、MiniAS/MiniLD 联合验收未跑。因此不升为 `VERIFIED`。
+
+### MC-089 x87 long double 大于比较方向错误
+
+- **状态：** `OPEN`，P0，`GNU-NATIVE-DIFF`。2026-11-01 从 MC-041 精度探针拆出的独立**静默错编**：即使操作数为可精确表示的 `2.0L` 和 `1.0L`，`>` 的 x87 路径仍错，不应归罪于十进制字面量被 binary64 舍入。
+- **最小同源复现：** `int main(void){long double a=2.0L,b=1.0L;return a>b?42:1;}`。独立 `cc -std=gnu11 -O0 -no-pie` 本机运行退出 **42**；同源 `cc -E -P` 后当前主线 Release MiniC `--target=x86_64-linux -S` → GNU `cc -no-pie` 链接/本机运行退出 **1**。主代理在合入 MC-038/044 后又独立复跑该差分，确认不是旧日志误报。
+- **可疑调用链（待定位确切故障环）：** `core_lower_expr_scalar.c` 的 ordered binary128 `>` 先交换左右操作数，发出 typed `__lttf2(right,left)` 并以 Core `INTEGER_LESS(helper,0)` 得布尔；`src/target/x86_64/machine_call.c` 的 x87 helper 截获路径用 `fldt`、`fxch`、`fucomip` 转换比较结果。是哪一处操作数映射/状态码方向错，尚需独立 Core dump、GNU x87 汇编对照证据，不能按猜测修。
+- **修复门槛：** 不混入 MC-041 的 parser/常量改造；以 GNU/MiniC x86 原生覆盖 `<`、`<=`、`>`、`>=`、`==`、`!=`、正负有限值、相等、负零和 NaN 有序/无序，另外保证 TF helper 走其他目标的原有路径。完成至少定点回归才列 `FIXED-UNVERIFIED`，完整目标验收继续延后。
 
 ## 已核对并排除的误判（不要在未有新证据时重新打开）
 
