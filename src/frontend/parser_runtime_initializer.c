@@ -188,6 +188,7 @@ static bool add_array_object_zero_element(MinicParser *parser,
     }
     if (minic_type_is_array(array_info.element_type)) {
         const MinicArrayType *nested_array;
+        size_t nested_element_count;
 
         nested_array =
             minic_c0_program_array_type(parser->program, array_info.element_type.array_type_id);
@@ -196,10 +197,11 @@ static bool add_array_object_zero_element(MinicParser *parser,
             minic_parser_error(parser, "nested runtime array zero initializer requires fixed extent");
             return false;
         }
+        nested_element_count = nested_array->element_count;
         return add_array_object_element_lvalue(
                    parser, base_id, index, initializer_span, &element_id) &&
                add_array_object_zero_elements(
-                   parser, element_id, nested_array->element_count, initializer_span);
+                   parser, element_id, nested_element_count, initializer_span);
     }
 
     (void)memset(&zero, 0, sizeof(zero));
@@ -651,11 +653,10 @@ static bool parse_runtime_character_array_string_initializer(MinicParser *parser
 
 static bool parse_fixed_runtime_nested_array_initializer(
     MinicParser *parser, MinicExpressionId base_id, size_t element_count) {
-    /* FIXME(MC-039): nested_array borrows Program.array_types across recursive
-       initializer parsing, which can grow the same arena via sizeof(type). */
     const MinicExpression *base;
     MinicArrayObjectInfo array_info;
-    const MinicArrayType *nested_array;
+    const MinicArrayType *nested_array_ref;
+    MinicArrayType nested_array;
     MinicSourceSpan initializer_span;
     size_t index;
 
@@ -672,13 +673,16 @@ static bool parse_fixed_runtime_nested_array_initializer(
         minic_parser_error(parser, "invalid nested runtime array initializer target");
         return false;
     }
-    nested_array =
+    nested_array_ref =
         minic_c0_program_array_type(parser->program, array_info.element_type.array_type_id);
-    if (nested_array == NULL || nested_array->element_count == 0U ||
-        nested_array->is_zero_length) {
+    if (nested_array_ref == NULL || nested_array_ref->element_count == 0U ||
+        nested_array_ref->is_zero_length) {
         minic_parser_error(parser, "nested runtime array initializer requires fixed inner extent");
         return false;
     }
+    /* sizeof(type) in a recursive child may grow Program.array_types.
+     * The descriptor is pure value metadata; do not retain an arena borrow. */
+    nested_array = *nested_array_ref;
 
     initializer_span.begin = parser->current.span.begin;
     if (!minic_parser_advance(parser)) {
@@ -702,16 +706,16 @@ static bool parse_fixed_runtime_nested_array_initializer(
             return false;
         }
         if (minic_parser_static_string_element_compatible(
-                parser, nested_array->element_type, parser->current.kind)) {
+                parser, nested_array.element_type, parser->current.kind)) {
             if (!parse_runtime_character_array_string_initializer(parser,
                                                                   element_id,
-                                                                  nested_array->element_type,
-                                                                  nested_array->element_count)) {
+                                                                  nested_array.element_type,
+                                                                  nested_array.element_count)) {
                 return false;
             }
         } else if (parser->current.kind == MINIC_TOKEN_LBRACE) {
             if (!parse_fixed_runtime_array_initializer(
-                    parser, element_id, nested_array->element_count)) {
+                    parser, element_id, nested_array.element_count)) {
                 if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
                     minic_parser_error(parser,
                                        "invalid nested runtime array initializer element");
@@ -1378,10 +1382,6 @@ static bool parse_positional_runtime_record_initializer_from(MinicParser *parser
         return false;
     }
     record_id = target->type.record_id;
-    /* FIXME(MC-056): Program.records is reallocatable. The borrowed record
-     * below survives nested field-expression parsing (including sizeof an
-     * anonymous struct), so the next field iteration can read freed memory.
-     * Keep the RecordId across parsing and reacquire/snapshot field metadata. */
     record = minic_c0_program_record(parser->program, record_id);
     if (record == NULL || !record->is_complete) {
         minic_parser_error(parser,
@@ -1399,6 +1399,7 @@ static bool parse_positional_runtime_record_initializer_from(MinicParser *parser
 
     while (parser->current.kind != MINIC_TOKEN_RBRACE) {
         const MinicRecordField *field;
+        MinicRecordField field_snapshot;
         MinicExpressionId member_id;
         MinicSourceSpan member_span;
 
@@ -1406,11 +1407,16 @@ static bool parse_positional_runtime_record_initializer_from(MinicParser *parser
             minic_parser_error(parser, "too many positional record initializers");
             return false;
         }
+        /* Recursive sizeof(struct {...}) can realloc Program.records.
+         * Reacquire by stable ID and snapshot this field before parsing. */
+        record = minic_c0_program_record(parser->program, record_id);
         field = minic_c0_record_field(record, field_index);
         if (field == NULL || field->is_flexible_array) {
             minic_parser_error(parser, "unsupported positional record initializer field");
             return false;
         }
+        field_snapshot = *field;
+        field = &field_snapshot;
         member_span.begin = parser->current.span.begin;
         member_span.end = parser->current.span.end;
         if (!add_record_field_lvalue(
