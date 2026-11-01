@@ -26,14 +26,6 @@ static bool x86_frame_preflight_reject(
             fn->parameter_count, fn->value_count, fn->object_count);
     return false;
 }
-
-
-
-
-
-
-
-
 /* Frame is caller-owned and must have no live resources on entry: init resets
  * it before creating plans/offsets. Failure may leave partial allocations;
  * the emitter destroys the frame on both successful and rejected paths. */

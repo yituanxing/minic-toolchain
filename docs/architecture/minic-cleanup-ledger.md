@@ -6,6 +6,10 @@
 > 修正文档漂移。不得在本阶段移动目录、拆出新层、统一不同 ABI、改 IR 合同，
 > 或把 Bug 修复混入“净删行数”。
 
+> **最新覆盖率请看 C33。** C1～C32 所用的 339 文件分母是历史快照，
+> 当前 HEAD 实际为 342 个生产 C/H/def 文件（Frontend 71、Compiler 11、
+> Core 48、Target 212）；旧批次的当时数字不回写，也不把路径扫描算作深读。
+
 ## 工作边界与统计口径
 
 - 2026-11-01 起始源码基线：`refactor/minic-target-language-boundary` / `6934c9e`。
@@ -1118,6 +1122,55 @@ futex GNU/MiniC native exit42）；`check-rv64-abi`；
 `check-target-selection-m0`。其他 C31 已检的 `check-rv64-pic-elf-nonpreemptible`
 和五目标 hidden-undefined `-S` 未因本批 ASM 常量修改改变。
 RV64 GNU cross ELF/QEMU 未运行，联合验收仍推迟。
+
+## 批次 C33：x86-64 ABI/帧与小型机器辅助层、补审新增 Frontend（审读并清重复）
+
+**基线：** C32 `9ef9f440`，2026-11-01。先核对当前实际生产文件
+`rg --files src -g '*.c' -g '*.h' -g '*.def'`，共 **342** 个：
+Frontend **71**、Compiler **11**、Core **48**、Target **212**。
+相对 C1 初始 `6934c9e`，GitHub commit compare 明确新增
+`src/frontend/binary128_literal.c/.h` 两个文件；旧总账的 Target 211
+则比当时真实目录集合少计 1 个。纠正的是**分母/清单**，不是修改
+历史源码，也不是凭 342 路径扫描宣称 342 个都已阅读。
+
+本批全文审读 **17 个生产文件、原始 2,453 行**：
+`src/frontend/binary128_literal.c/.h`（435/15）；
+`src/target/x86_64` 的 `abi.c/.h`（207/46）、
+`call_plan.c/.h`（337/64）、`frame.c/.h`（323/106）、
+`global_emit.c/.h`（81/10）、`machine_support.c`（238）、
+`machine_fp.c`（198）、`raid6_simd.c`（282）、
+`machine_internal.h`（50）、`machine_emit.h`（24）、
+`codegen.h`（23）、`codegen_options.h`（14）。
+累计 **290/342** 全文深读：Frontend **71/71**、Compiler **11/11**、
+Core **48/48**、Target **160/212**，剩余 **52 个 Target 文件**：
+x86-64 **6**、AArch64 **24**、LoongArch64 **22**。x86 的大型
+`asm_contract`、`machine_asm`、`machine_emit`、`machine_call` 和
+`codegen` 等尚不能因为本批关联阅读就算逐行完成。
+
+| 子域 | 真实 owner、清理判断与边界 |
+| --- | --- |
+| `binary128_literal` | 由 Parser 引用，使用独立任意精度整数与精确有理数一次舍入到 64/113-bit significand，不能改走宿主 `double`/`long double`；新文件因旧账统计未纳入，补全文深读且执行 286 例 oracle。**KEEP(exact literal rounding)**。 |
+| x86 `abi` / `call_plan` | SysV GP/SSE 独立 bank、1/2 eightbyte INTEGER Record、x87 16B 栈槽和 Win64 四位置参数/32B home area 是不同资格；大 Record MEMORY 仍限 16..4096B、精确尾部拷贝。发现 MEMORY fallback 对相同 `program/target/type` 的 `minic_data_layout_type` 查询连续做两次；保留第一次结果并复用，**DELETE(duplicate layout query)**，不改 empty Record、失败诊断或 ABI 分类。 |
+| x86 `frame` | Core 借用 StoragePlan/CallIndex，SSA spill 位置再转 rbp 负方向；超 16B 对齐走另行对齐的 rsp 对象基准，incoming `__int128` 先冻结六个 GP，Win64 XMM6..15/RDI/RSI 保存和 SysV va_list save bank 均是独立物理义务。只删多余空行，**KEEP(physical frame and rollback)**。 |
+| x86 `global_emit` / `machine_support` | GlobalEmissionPlan 已管存储形状、reloc/span，目标只给 `.byte/.word/.long/.quad` 与 PIC symbol 拼写；机器助手统一帧地址格式、精确 Record 尾部 1..7B、x87 10B payload、128-bit 低高 limb、retpoline。删除 `machine_support.c` 末尾三段指向已搬迁实现的悬空旧注释，**KEEP(machine transport and ELF spelling)**。 |
+| x86 FP/RAID6 | SSE/x87 Core 指令族独立；RAID6 SIMD 仅匹配白名单精确寄存器、opcode、memory placeholders，不是放行任意 GNU ASM。`codegen_options` 控制 no-SSE、IBT、thunk/patchable-entry，不能当 C 语义。**KEEP(target ISA qualification)**。 |
+| 边界 CI | Native Strict Gate 的旧断言仍要求已由 MC-059 退役的 Common `integral_tree`，独立 program-emit probe 又未链接 C28 已归属的 `global_emit.c`。仅迁检查到真实 RV64 ABI owner 并补测试链接输入；**FIX(test ownership drift only)**，不回添死函数、不改生产目标实现。 |
+
+**C33 生产源码 +5/-28、净 -23 行**：真正去重复计算为
+`call_plan.c` 单次布局查询；其余删除 23 行均是空行/过期注释，
+不得称为删除了 23 行算法。C1～C33 纯清理累计 **净 -371 行**。
+边界测试单独 **+7/-2**，不计清理净删行数；文档独立统计。
+
+**本地验证 PASS：** Release 全目标 `-Werror` 构建；
+`check-x86_64-one-gp-sysv`（GNU/MiniC 双向）、
+`check-x86_64-sysv-odd-record-abi`（4 种 caller/callee、size 1..16、
+栈溢出与拒编）、`check-x86_64-abi-elf`、
+`check-x86-pic-hidden-undefined-weak`、
+`check-x86-kernel-head-link-address`（早期内核地址与实际迁址 runtime）、
+`check-binary128-literal-oracle`（286 例）、
+`check-minic-target-boundaries.sh`（全链 `MINIC_BACKEND_BOUNDARY_CHECK=PASS`）。
+没有启动五目标 Linux Image/QEMU 联合验收，也没有将任何 skipped
+或仅静态 `-S` 断言称为 P2/P3 认证。
 
 ## 后续批次进度规则
 

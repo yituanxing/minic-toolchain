@@ -165,14 +165,18 @@ lacks src/core/core_lower_asm_target.c 'vmalle1is'
 exists src/target/common/aggregate_shape.h
 exists src/target/common/aggregate_shape.c
 has src/target/common/aggregate_shape.c 'bool minic_common_aggregate_storage_shape('
-has src/target/common/aggregate_shape.c 'bool minic_common_aggregate_integral_tree('
+# MC-059: DataLayout owns storage shape, not LP64D integer/FPR ABI eligibility.
+# The old Common leaf classifier was retired; the union-sensitive policy is RV64-owned.
+lacks src/target/common/aggregate_shape.c 'minic_common_aggregate_integral_tree('
+lacks src/target/common/aggregate_shape.h 'minic_common_aggregate_integral_tree('
 for consumer in src/target/x86_64/abi.c \
                 src/target/riscv32/rv32_abi_plan.c \
                 src/target/riscv64/abi.c \
                 src/target/common/lp64_aggregate.c; do
   has "$consumer" 'minic_common_aggregate_storage_shape('
 done
-has src/target/riscv64/abi.c 'minic_common_aggregate_integral_tree('
+has src/target/riscv64/abi.c 'static bool rv64_integer_convention_record_tree('
+has src/target/riscv64/abi.c '!rv64_integer_convention_record_tree('
 lacks src/target/riscv64/abi.c 'minic_riscv64_integer_aggregate_member_type('
 
 # Exhaustive Common Core semantic vocabulary must be used by all five targets.
@@ -955,6 +959,7 @@ cc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror \
   src/frontend/ast_global.c \
   src/target/common/core_function_facts.c \
   src/target/common/core_function_plan.c \
+  src/target/common/global_emit.c \
   -o "$work/program-emit-probe"
 "$work/program-emit-probe" "$work/test-output.s"
 

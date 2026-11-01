@@ -48,9 +48,11 @@ static bool x86_sysv_place(const MinicC0Program *program,
             size_t alignment = 0U;
             const MinicRecord *record = minic_c0_program_record(
                 program, type.record_id);
+            bool has_layout;
             bytes = 0U;
-            if (minic_data_layout_type(target->data_layout, program, type,
-                                       &bytes, &alignment) && bytes == 0U &&
+            has_layout = minic_data_layout_type(
+                target->data_layout, program, type, &bytes, &alignment);
+            if (has_layout && bytes == 0U &&
                 record != NULL && record->is_complete &&
                 record->field_count == 0U) {
                 /* A GNU C `struct empty {}` is omitted from the SysV
@@ -58,9 +60,7 @@ static bool x86_sysv_place(const MinicC0Program *program,
                 loc->kind = MINIC_X86_ARG_RECORD_EMPTY;
                 return true;
             }
-            if (!minic_data_layout_type(target->data_layout, program, type,
-                                        &bytes, &alignment) ||
-                bytes <= 16U || bytes > 4096U ||
+            if (!has_layout || bytes <= 16U || bytes > 4096U ||
                 alignment == 0U || alignment > 16U) {
                 if (getenv("MINIC_M1_TRACE") != NULL)
                     (void)fprintf(stderr,
