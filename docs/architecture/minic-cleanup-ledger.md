@@ -810,6 +810,39 @@ source language/整数模型）；`check-layout`（DataLayout 独立测试）、
 `check-x86-pic-hidden-undefined-weak`（GNU/MiniC PIE ELF/native
 和 GOTPCREL/PCREL weak/strong 分离）。审读不代替机器层全文读码。
 
+## 批次 C25：五个 ISA 的 GNU 源语言/ASM 资格策略（仅审读）
+
+**基线：** C24 本地 `d9772cd`，2026-11-01。本批全文深读
+Target `source_policy` **6** 个生产文件、合计 **693 行**：
+`source_policy.h`（84）、`x86_64.c`（106）、`aarch64.c`
+（148）、`loongarch64.c`（289）、`riscv32.c`（33）、
+`riscv64.c`（33）。累计 **147/339** 全文深读：
+Frontend **69/69**、Compiler **11/11**、Core **48/48**、
+Target **19/211**；Target 余 **192/211**。
+
+| Source policy | 资格与后端分界 |
+| --- | --- |
+| `source_policy.h` | 四个独立 policy：GNU ASM register/constraint 源文法、native builtin signature、named source type/header attributes、受限 alias ABI exceptions；另有 va_list C source cursor shape。一个 spelling 被接纳不等于机器寄存器保留、vector ABI、机器 opcode 可执行。**KEEP(four independent contracts)**。 |
+| x86-64 | 全局 RSP 只可读；GNU `+r` RSP、local scratch register 与 source-only EBX/RBX/flags clobber 分级；`I` 是 0..31 shift count，x86 `nocf_check`/`target` 属性只在列出的 scalar/no-thunk 合同下接受。SysV `va_list` 是 24B 的一元素数组源类型，机器 cursor 独立。**KEEP(x86 source qualification)**。 |
+| AArch64 | SP 全局只读，x0..x17 local 资格不等于 x18/callee-saved 可用；`Q` 是 base-only memory、`I` 是 imm12（可 shift12），与 x86/RISC-V 的同名字母完全不同。Opaque SVE/header type 与已支持的 16B NEON storage 是不同声明能力，均不承诺 vector CALL/ALU；`+nothing+simd` 只是源选项快照。**KEEP(source-vs-machine vector boundary)**。 |
+| LoongArch64 | `$tp`/`$r21` 可按受限源语义读写，`$sp` 只读；GNU `I` 是 signed imm12。`__builtin_loongarch_*` 和少量 header wrapper 从精确表映射到 unspellable machine builtin internal symbol，最终机器 CALL 再核验；`sys_*` 到 `__se_sys_*` 的 ABI 别名只允许同名 syscall family、非变参、1..6 word-sized 受限签名。**KEEP(machine builtin and alias ownership)**。 |
+| RV32 vs RV64 | 两者的 `I` 都是 signed imm12，但 RV32 `a0..a7`/`t0..t6` 以窄语法范围接纳，RV64 通过共有的 GPR identity 检查 caller-saved 集；RV32 不设 `immediate_may_defer`，RV64 也未设，不能因字面相同的 `I` 就移除独立 ISA/物理寄存器资格。**KEEP(distinct ILP32/LP64 source policy)**。 |
+| 已知耦合/风险 | 多处 source-only 接受范围大于 machine emission 是待证明边界（例如 MC-037、MC-050、MC-062）；不能为提高原始 Linux 源码覆盖率把机器拒绝切成泛型 opaque ASM。保留每个 target 的精确 qualifier，下一阶段检查 machine form 与 source form 一一对应。**NEEDS_PROOF(source-to-machine parity)**。 |
+
+**C25 生产源码 +0/-0，净 0 行**；C1～C25 累计
+**净 -331 行**。这批不存在可跨五目标安全合并的 operand
+资格公共模板：`I`、固定寄存器、Clobber 的名字相同并不代表
+物理或 C ABI 语义相同。严格拒绝未证明的 machine forms。
+
+**验证 PASS：** Release `-Werror` 的
+`check-minic-target-abi-options`（五目标 char/wchar 调用选项隔离、
+Loong LP64S、A64 `va_copy` 32B state、RV32 scoped PIC）、
+`check-asm-operand-plan`（五 ISA GNU early/source tie、x86 futex
+GNU native exit42、非法 suffix fail-closed）、
+`check-linux-three-arch-trap-state`（A64/Loong source ASM）、
+`check-builtin-lexeme-contract`（五 ISA 内建词法 source 和 GNU/MiniC
+x86 native）。本批没有 GNU cross ELF/QEMU 全面验收。
+
 ## 后续批次进度规则
 
 每批发布：当前 HEAD、源文件逐目录覆盖（明确深读与只扫的区别）、
