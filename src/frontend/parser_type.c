@@ -860,7 +860,7 @@ bool minic_parser_parse_type_name_preserving_incomplete(MinicParser *parser, Min
         MinicParsedFunctionDeclarator declarator;
 
         if (!minic_parser_parse_parenthesized_function_declarator(
-                parser, false, true, &declarator)) {
+                parser, false, true, &declarator, false)) {
             return false;
         }
         if (!minic_parser_build_function_declarator_type(

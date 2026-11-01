@@ -268,7 +268,7 @@ static bool parse_extern_function_pointer_object_declarator(MinicParser *parser,
     MinicParsedFunctionDeclarator declarator;
 
     if (parser == NULL || name_span == NULL || object_type == NULL ||
-        !minic_parser_parse_parenthesized_function_declarator(parser, true, true, &declarator)) {
+        !minic_parser_parse_parenthesized_function_declarator(parser, true, true, &declarator, false)) {
         return false;
     }
     if (declarator.is_variadic) {

@@ -75,6 +75,35 @@ bool minic_parser_parse_direct_declarator_name(MinicParser *parser, MinicSourceS
     return true;
 }
 
+bool minic_parser_parse_scoped_parameter_list(MinicParser *parser,
+                                               MinicSourceSpan *parameter_name_spans,
+                                               MinicType *parameter_types,
+                                               size_t *parameter_count,
+                                               bool require_names,
+                                               bool *is_variadic) {
+    bool success;
+
+    if (parser == NULL || parameter_types == NULL || parameter_count == NULL ||
+        is_variadic == NULL) {
+        return false;
+    }
+    if (!minic_parser_begin_scope(parser)) {
+        return false;
+    }
+    success = minic_parser_expect(
+                  parser, MINIC_TOKEN_LPAREN, "expected '(' before function parameter list") &&
+              minic_parser_parse_parameter_list(parser,
+                                                parameter_name_spans,
+                                                parameter_types,
+                                                parameter_count,
+                                                require_names,
+                                                is_variadic) &&
+              minic_parser_expect(
+                  parser, MINIC_TOKEN_RPAREN, "expected ')' after function parameter list");
+    minic_parser_end_scope(parser);
+    return success;
+}
+
 bool minic_parser_parse_function_parameter_suffix(MinicParser *parser,
                                                   MinicParsedFunctionDeclarator *declarator) {
     if (parser == NULL || declarator == NULL) {
@@ -82,16 +111,12 @@ bool minic_parser_parse_function_parameter_suffix(MinicParser *parser,
     }
     declarator->parameter_count = 0U;
     declarator->is_variadic = false;
-    return minic_parser_expect(
-               parser, MINIC_TOKEN_LPAREN, "expected '(' before function parameter list") &&
-           minic_parser_parse_parameter_list(parser,
-                                             NULL,
-                                             declarator->parameter_types,
-                                             &declarator->parameter_count,
-                                             false,
-                                             &declarator->is_variadic) &&
-           minic_parser_expect(
-               parser, MINIC_TOKEN_RPAREN, "expected ')' after function parameter list");
+    return minic_parser_parse_scoped_parameter_list(parser,
+                                                    NULL,
+                                                    declarator->parameter_types,
+                                                    &declarator->parameter_count,
+                                                    false,
+                                                    &declarator->is_variadic);
 }
 
 bool minic_parser_parse_parenthesized_pointer_to_array_declarator(
@@ -274,7 +299,8 @@ bool minic_parser_parse_parenthesized_function_declarator(
     MinicParser *parser,
     bool require_name,
     bool require_pointer,
-    MinicParsedFunctionDeclarator *declarator) {
+    MinicParsedFunctionDeclarator *declarator,
+    bool retain_inner_parameter_scope) {
     if (parser == NULL || declarator == NULL) {
         return false;
     }
@@ -317,7 +343,7 @@ bool minic_parser_parse_parenthesized_function_declarator(
            declarator owns the object pointer and P parameter list; the outer
            declarator owns the returned-function pointer and Q parameter list. */
         if (!minic_parser_parse_parenthesized_function_declarator(
-                parser, require_name, true, &nested)) {
+                parser, require_name, true, &nested, false)) {
             return false;
         }
         if (nested.has_inner_function_suffix ||
@@ -367,16 +393,29 @@ bool minic_parser_parse_parenthesized_function_declarator(
         declarator->has_inner_function_suffix = true;
         declarator->inner_parameter_count = 0U;
         declarator->inner_is_variadic = false;
-        if (!minic_parser_expect(
-                parser, MINIC_TOKEN_LPAREN, "expected '(' before inner function parameter list") ||
-            !minic_parser_parse_parameter_list(parser,
-                                               declarator->inner_parameter_name_spans,
-                                               declarator->inner_parameter_types,
-                                               &declarator->inner_parameter_count,
-                                               false,
-                                               &declarator->inner_is_variadic) ||
-            !minic_parser_expect(
-                parser, MINIC_TOKEN_RPAREN, "expected ')' after inner function parameter list")) {
+        /* This is the actual function's P in R (*fn(P))(Q), so a definition
+         * keeps P's tags visible in its body. All other declarators contain
+         * a prototype-scope P that must be discarded at ')'. */
+        if (retain_inner_parameter_scope) {
+            if (!minic_parser_expect(
+                    parser, MINIC_TOKEN_LPAREN, "expected '(' before inner function parameter list") ||
+                !minic_parser_parse_parameter_list(parser,
+                                                   declarator->inner_parameter_name_spans,
+                                                   declarator->inner_parameter_types,
+                                                   &declarator->inner_parameter_count,
+                                                   false,
+                                                   &declarator->inner_is_variadic) ||
+                !minic_parser_expect(
+                    parser, MINIC_TOKEN_RPAREN, "expected ')' after inner function parameter list")) {
+                return false;
+            }
+        } else if (!minic_parser_parse_scoped_parameter_list(
+                       parser,
+                       declarator->inner_parameter_name_spans,
+                       declarator->inner_parameter_types,
+                       &declarator->inner_parameter_count,
+                       false,
+                       &declarator->inner_is_variadic)) {
             return false;
         }
     }

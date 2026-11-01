@@ -195,7 +195,7 @@ static bool parse_parenthesized_function_typedef(MinicParser *parser,
     MinicParsedFunctionDeclarator declarator;
 
     if (parser == NULL || name_span == NULL || aliased_type == NULL ||
-        !minic_parser_parse_parenthesized_function_declarator(parser, true, false, &declarator)) {
+        !minic_parser_parse_parenthesized_function_declarator(parser, true, false, &declarator, false)) {
         return false;
     }
     if (!minic_parser_build_function_declarator_type(

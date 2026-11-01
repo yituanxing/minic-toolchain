@@ -1586,6 +1586,13 @@ check-static-chained-array-arena: $(MINIC_CC_BINARY)
 
 check-fast: check-static-chained-array-arena
 
+.PHONY: check-parameter-tag-scope
+check-parameter-tag-scope: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	bash tests/compiler/c0/probe-parameter-tag-scope.sh
+
+check-fast: check-parameter-tag-scope
+
 .PHONY: check-owned-call-designator-rollback
 check-owned-call-designator-rollback: $(MINIC_CC_BINARY)
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \

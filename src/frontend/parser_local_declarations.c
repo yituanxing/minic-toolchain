@@ -572,7 +572,7 @@ parse_local_declarator(MinicParser *parser,
         MinicParsedFunctionDeclarator declarator;
 
         if (!minic_parser_parse_parenthesized_function_declarator(
-                parser, true, true, &declarator)) {
+                parser, true, true, &declarator, false)) {
             return false;
         }
         if (declarator.is_variadic) {
@@ -967,10 +967,8 @@ static bool parse_block_scope_function_declaration_after_head(
     (void)memset(&function_diagnostic, 0, sizeof(function_diagnostic));
     (void)memset(parameter_types, 0, sizeof(parameter_types));
 
-    if (!minic_parser_expect(parser, MINIC_TOKEN_LPAREN, "expected '('") ||
-        !minic_parser_parse_parameter_list(
+    if (!minic_parser_parse_scoped_parameter_list(
             parser, NULL, parameter_types, &parameter_count, false, &is_variadic) ||
-        !minic_parser_expect(parser, MINIC_TOKEN_RPAREN, "expected ')'") ||
         !minic_parser_parse_gnu_function_attributes(parser, &function_diagnostic) ||
         !minic_parser_expect(
             parser, MINIC_TOKEN_SEMICOLON, "expected ';' after block-scope function declaration")) {
@@ -1225,10 +1223,8 @@ bool minic_parser_local_decl_extern(MinicParser *parser) {
                                        MINIC_TOKEN_SEMICOLON,
                                        "expected ';' after block-scope extern object declaration");
         }
-        if (!minic_parser_expect(parser, MINIC_TOKEN_LPAREN, "expected '('") ||
-            !minic_parser_parse_parameter_list(
+        if (!minic_parser_parse_scoped_parameter_list(
                 parser, NULL, parameter_types, &parameter_count, false, &is_variadic) ||
-            !minic_parser_expect(parser, MINIC_TOKEN_RPAREN, "expected ')'") ||
             !minic_parser_parse_gnu_function_attributes(parser, &function_diagnostic)) {
             return false;
         }
@@ -1539,7 +1535,7 @@ static bool parse_static_local_array_declarator(MinicParser *parser,
         MinicParsedFunctionDeclarator declarator;
 
         if (!minic_parser_parse_parenthesized_function_declarator(
-                parser, true, true, &declarator) ||
+                parser, true, true, &declarator, false) ||
             !minic_parser_build_function_declarator_type(
                 parser, declared_type, &declarator, &declared_type)) {
             if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {

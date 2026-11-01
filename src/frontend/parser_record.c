@@ -167,7 +167,7 @@ static bool parse_function_pointer_field_declarator(MinicParser *parser,
     MinicParsedFunctionDeclarator declarator;
 
     if (parser == NULL || name_span == NULL || field_type == NULL ||
-        !minic_parser_parse_parenthesized_function_declarator(parser, true, true, &declarator)) {
+        !minic_parser_parse_parenthesized_function_declarator(parser, true, true, &declarator, false)) {
         return false;
     }
     if (!minic_parser_build_function_declarator_type(

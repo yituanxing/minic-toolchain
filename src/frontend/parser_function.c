@@ -1289,7 +1289,7 @@ static bool finish_function_declaration_entity(MinicParser *parser,
     return minic_parser_advance(parser);
 }
 
-static bool parse_function(MinicParser *parser, bool is_internal) {
+static bool parse_function_inner(MinicParser *parser, bool is_internal) {
     MinicSourceSpan name_span;
     MinicSourceSpan parameter_name_spans[MINIC_MAX_FUNCTION_PARAMETERS];
     MinicType parameter_types[MINIC_MAX_FUNCTION_PARAMETERS];
@@ -1309,6 +1309,7 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
     bool is_extern_declaration;
     bool is_function_pointer_object;
     bool has_preparsed_function_parameters;
+    bool has_parameter_scope;
     bool is_inline;
     bool is_gnu_extern_inline;
     bool is_noreturn;
@@ -1338,6 +1339,7 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
     is_extern_declaration = false;
     is_function_pointer_object = false;
     has_preparsed_function_parameters = false;
+    has_parameter_scope = false;
     is_inline = false;
     is_gnu_extern_inline = false;
     is_noreturn = false;
@@ -1427,8 +1429,14 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
         if (name_probe.current.kind == MINIC_TOKEN_STAR) {
             MinicParsedFunctionDeclarator declarator;
 
+            /* A function returning a pointer to a function can carry its
+             * own parameter list inside this parenthesized declarator. */
+            if (!minic_parser_begin_scope(parser)) {
+                return false;
+            }
+            has_parameter_scope = true;
             if (!minic_parser_parse_parenthesized_function_declarator(
-                    parser, true, true, &declarator)) {
+                    parser, true, true, &declarator, true)) {
                 return false;
             }
             if (!minic_parser_build_function_declarator_type(
@@ -1951,15 +1959,20 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
         return false;
     }
 
-    /* FIXME(MC-044): parameter tags are currently bound in the caller's
-     * scope. Prototype/function-pointer scopes end at ')', whereas a
-     * definition's parameter tags must remain visible through its body. */
-    if (!has_preparsed_function_parameters &&
-        (!minic_parser_expect(parser, MINIC_TOKEN_LPAREN, "expected '('") ||
-         !minic_parser_parse_parameter_list(
-             parser, parameter_name_spans, parameter_types, &parameter_count, false, &is_variadic) ||
-         !minic_parser_expect(parser, MINIC_TOKEN_RPAREN, "expected ')'"))) {
-        return false;
+    if (!has_preparsed_function_parameters) {
+        /* A definition's parameter scope extends through its body. For a
+         * prototype the wrapper pops this scope on return, before the next
+         * file declaration can see any parameter-only Record/Enum tags. */
+        if (!minic_parser_begin_scope(parser)) {
+            return false;
+        }
+        has_parameter_scope = true;
+        if (!minic_parser_expect(parser, MINIC_TOKEN_LPAREN, "expected '('") ||
+            !minic_parser_parse_parameter_list(
+                parser, parameter_name_spans, parameter_types, &parameter_count, false, &is_variadic) ||
+            !minic_parser_expect(parser, MINIC_TOKEN_RPAREN, "expected ')'")) {
+            return false;
+        }
     }
     if (!parse_gnu_function_asm_label(parser,
                                       assembler_name,
@@ -2117,7 +2130,7 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
 
     local_begin = parser->program->local_count;
     parser->local_begin = local_begin;
-    if (!minic_parser_begin_scope(parser)) {
+    if (!has_parameter_scope && !minic_parser_begin_scope(parser)) {
         return false;
     }
     {
@@ -2282,6 +2295,23 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
     parser->current_function = MINIC_FUNCTION_INVALID;
     parser->current_function_name_object = MINIC_GLOBAL_OBJECT_INVALID;
     return true;
+}
+
+static bool parse_function(MinicParser *parser, bool is_internal) {
+    size_t enclosing_scope_count;
+    bool success;
+
+    if (parser == NULL) {
+        return false;
+    }
+    enclosing_scope_count = parser->scope_count;
+    success = parse_function_inner(parser, is_internal);
+    /* Prototypes and pointer declarators have no function body to close
+     * their parameter scope; unsuccessful parses also leave no live scope. */
+    while (parser->scope_count > enclosing_scope_count) {
+        minic_parser_end_scope(parser);
+    }
+    return success;
 }
 
 static bool top_level_is_gnu_asm(const MinicParser *parser) {

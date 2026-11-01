@@ -287,6 +287,14 @@ bool minic_parser_parse_parameter_list(MinicParser *parser,
                                        size_t *parameter_count,
                                        bool require_names,
                                        bool *is_variadic);
+/* A nested/prototype declarator owns its tags through the closing ')', then
+ * restores the enclosing scope. Definitions use the raw list parser instead. */
+bool minic_parser_parse_scoped_parameter_list(MinicParser *parser,
+                                               MinicSourceSpan *parameter_name_spans,
+                                               MinicType *parameter_types,
+                                               size_t *parameter_count,
+                                               bool require_names,
+                                               bool *is_variadic);
 bool minic_parser_function_signature_matches(const MinicC0Program *program,
                                              const MinicFunction *function,
                                              MinicType return_type,
@@ -409,7 +417,8 @@ bool minic_parser_parse_parenthesized_function_declarator(
     MinicParser *parser,
     bool require_name,
     bool require_pointer,
-    MinicParsedFunctionDeclarator *declarator);
+    MinicParsedFunctionDeclarator *declarator,
+    bool retain_inner_parameter_scope);
 bool minic_parser_parse_parenthesized_pointer_to_array_declarator(
     MinicParser *parser,
     MinicType element_type,

@@ -74,7 +74,7 @@ static bool parse_function_pointer_parameter_declarator(MinicParser *parser,
 
     if (parser == NULL || name_span == NULL || has_name == NULL || parameter_type == NULL ||
         !minic_parser_parse_parenthesized_function_declarator(
-            parser, require_name, false, &declarator)) {
+            parser, require_name, false, &declarator, false)) {
         return false;
     }
     if (!minic_parser_build_function_declarator_type(
