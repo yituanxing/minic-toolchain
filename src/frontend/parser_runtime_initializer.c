@@ -460,14 +460,13 @@ static bool add_runtime_initializer_once_read(MinicParser *parser,
                                               MinicType value_type,
                                               MinicExpressionId value_id,
                                               MinicExpressionId *read_id) {
-    /* FIXME(MC-035): `value` aliases Program.expressions. Creating the local
-       lvalue below can grow that arena before later reads of value->span. */
     const MinicExpression *value;
     MinicExpression lvalue_read;
     MinicExpressionId target_id;
     MinicLocal local;
     MinicLocalId local_id;
     MinicStatement assignment;
+    MinicSourceSpan value_span;
     MinicType temporary_type;
 
     if (parser == NULL || read_id == NULL || !minic_type_unqualified(value_type, &temporary_type) ||
@@ -483,8 +482,11 @@ static bool add_runtime_initializer_once_read(MinicParser *parser,
     if (value == NULL) {
         return false;
     }
+    /* The local lvalue append below can realloc Program.expressions.
+     * Keep its source span by value instead of borrowing the arena entry. */
+    value_span = value->span;
     minic_c0_local_initialize(&local);
-    local.name_span = value->span;
+    local.name_span = value_span;
     local.type = temporary_type;
     local.element_count = 1U;
     local.is_array = false;
@@ -493,14 +495,14 @@ static bool add_runtime_initializer_once_read(MinicParser *parser,
     local.has_declaration_block =
         parser->current_block != MINIC_BLOCK_INVALID;
     if (!minic_c0_program_add_local(parser->program, &local, &local_id) ||
-        !minic_parser_statement_local_lvalue(parser, local_id, value->span, &target_id)) {
+        !minic_parser_statement_local_lvalue(parser, local_id, value_span, &target_id)) {
         minic_parser_error(parser, "cannot create evaluate-once initializer temporary");
         return false;
     }
 
     (void)memset(&assignment, 0, sizeof(assignment));
     assignment.kind = MINIC_STATEMENT_ASSIGN;
-    assignment.span = value->span;
+    assignment.span = value_span;
     assignment.target_expression = target_id;
     assignment.expression = value_id;
     assignment.target_statement = MINIC_STATEMENT_INVALID;
@@ -514,7 +516,7 @@ static bool add_runtime_initializer_once_read(MinicParser *parser,
 
     (void)memset(&lvalue_read, 0, sizeof(lvalue_read));
     lvalue_read.kind = MINIC_EXPRESSION_LVALUE_READ;
-    lvalue_read.span = value->span;
+    lvalue_read.span = value_span;
     lvalue_read.type = temporary_type;
     lvalue_read.value_category = MINIC_VALUE_RVALUE;
     lvalue_read.value.unary.operand = target_id;
