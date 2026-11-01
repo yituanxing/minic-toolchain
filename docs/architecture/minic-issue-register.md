@@ -47,7 +47,7 @@
 | [MC-006](#mc-006-传递特化污染共享-call) | P0 | FIXED-UNVERIFIED | ELF-ORACLE | Compiler/Core | 传递符号特化保留 source CALL，Core 按 caller 实际事实择 clone；正反 caller 顺序均经双 key ELF reloc 验证 |
 | [MC-007](#mc-007-整数与符号特化无法组合) | P1 | OPEN | GCC-DIFF | Compiler/Core | 特化阶段间丢失调用实例的整数事实 |
 | [MC-008](#mc-008-符号特化过度要求整数参数常量化) | P1 | OPEN | GCC-DIFF | Compiler | 符号立即量与运行时整数无法共存 |
-| [MC-009](#mc-009-表达式探测回滚遗漏-owned-call-参数) | P1 | OPEN | SOURCE-TRACE | Frontend | `expression_count` 回滚遗失 CALL 溢出参数 |
+| [MC-009](#mc-009-表达式探测回滚遗漏-owned-call-参数) | P1 | FIXED-UNVERIFIED | SOURCE-TRACE/SAN | Frontend | `expression_count` 回滚前清理 owned CALL tail；真实 12 参数 probe 五 ISA `-S` 与 GNU/MiniC native 通过 |
 | [MC-010](#mc-010-loongarch-特殊-asm-写回绕过对齐保护) | P1 | OPEN | ASM-ONLY | LoongArch64 | 13 个特殊结果写回槽未走安全 store helper |
 | [MC-011](#mc-011-source-only-的-qemu-结果报告不实) | P1 | OPEN | CI-LOG | CI | Source-only 仍报告 `GNU_QEMU=2` |
 | [MC-012](#mc-012-source-only-的-elf-结果报告不实) | P1 | OPEN | CI-LOG | CI | `.s` 字符串检查被表述为 ELF reloc 验证 |
@@ -63,7 +63,7 @@
 | [MC-038](#mc-038-匿名字段设计符后的位置初始化游标错误) | P1 | OPEN | LOCAL-COMPILE-DIFF | Frontend | 匿名字段 `.b=2,3` GCC 接受、MiniC 错报过多位置初始化 |
 | [MC-039](#mc-039-运行时嵌套数组递归跨-array-type-扩容借用) | P0 | FIXED-UNVERIFIED | ASAN | Frontend | ArrayType 元数据按值快照；五目标容量相位 ASan 与 x86 GNU native 对照通过，完整目标验收待做 |
 | [MC-041](#mc-041-long-double-字面量提前按-binary64-舍入) | P0 | OPEN | GNU-NATIVE-DIFF | Frontend/Target | `1.0000000000000001L` 提前按 double 舍入；x86 执行得到错误比较结果 |
-| [MC-042](#mc-042-packed-零宽位域丢失对齐栅栏) | P1 | OPEN | GNU-NATIVE-DIFF | DataLayout | packed Record 的 `int:0` 不再强制下一个字段对齐，`offsetof`/`sizeof` 错误 |
+| [MC-042](#mc-042-packed-零宽位域丢失对齐栅栏) | P1 | FIXED-UNVERIFIED | GNU-NATIVE-DIFF | DataLayout | 保留匿名零宽位域自然对齐栅栏；9 组 GNU layout 断言、五 ISA `-S` 与 x86 原生通过 |
 | [MC-043](#mc-043-inline-整数特化预算耗尽直接拒绝合法-c) | P1 | OPEN | LOCAL-COMPILE-DIFF | Compiler | 2048 个 clone 预算由优化上限变成对合法 C 的硬编译失败 |
 | [MC-044](#mc-044-函数参数列表中的-record-enum-tag-作用域外泄) | P1 | OPEN | LOCAL-COMPILE-DIFF | Frontend | 原型、定义、函数指针参数里的 tag 泄漏到文件作用域 |
 | [MC-045](#mc-045-loong-futex-cmpxchg-覆盖-gnu-可读写输出初始值) | P1 | OPEN | ASM-ONLY | LoongArch64 | GNU `+r` 输入原值未被消费，机器特化无条件写回 0 |
@@ -71,7 +71,7 @@
 | [MC-023](#mc-023-静态聚合后向覆写跨递归借用-record) | P0 | FIXED-UNVERIFIED | ASAN | Frontend | `a4b8b71` 后向静态 Record 覆写跨递归重新取 RecordId；五目标容量与 GNU/native 定点 PASS |
 | [MC-049](#mc-049-静态链式数组设计符跨-arraytype-扩容借用) | P0 | FIXED-UNVERIFIED | ASAN | Frontend | `f53f9a9` 链式设计符跨递归按值缓存 ArrayType 信息；五目标三相位、GNU/native PASS |
 | [MC-050](#mc-050-x86-六组-asm-限定符源端与机器端不一致) | P2 | OPEN | LOCAL-COMPILE-DIFF | x86-64 | 六种合法 GNU ASM 的 volatile 结果被机器端不一致准入拒绝 |
-| [MC-051](#mc-051-long-double-一元取负丢失有符号零) | P1 | OPEN | GNU-NATIVE-DIFF | Core | `-0L` 经 `0L - x` 实现，`-(+0L)` 错误变为正零 |
+| [MC-051](#mc-051-long-double-一元取负丢失有符号零) | P1 | FIXED-UNVERIFIED | GNU-NATIVE-DIFF/RV64-QEMU | Core | `long double` 一元符号翻转改为 x87 `fchs` 或 TF `__negtf2`，x86/native 与 RV64/QEMU 定点通过 |
 | [MC-052](#mc-052-aarch64-uaccess-窄输出按八字节写回) | P1 | OPEN | ASM-ONLY | AArch64 | LDTRB/H/W 将1/2/4B输出统一按8B `str x` 写回，越界风险 |
 | [MC-053](#mc-053-rv64i-lp64-软浮点只覆盖四则) | P2 | OPEN | LOCAL-COMPILE-DIFF | RV64 | LP64 已实现软四则，但比较、取负、转换的 10 个合法函数均无法 `-S` |
 | [MC-056](#mc-056-运行时-record-顺序初始化器跨扩容借用) | P0 | FIXED-UNVERIFIED | ASAN | Frontend | RecordId 重新获取、字段按值快照；五目标容量相位 ASan 与 x86 GNU native 对照通过，完整目标验收待做 |
@@ -210,10 +210,11 @@
 
 ### MC-009 表达式探测回滚遗漏 owned CALL 参数
 
+- **现状：** `FIXED-UNVERIFIED`，修复合入提交 `cbc439a`（独立原提交 `68e2ef9`）。`ast.c` 在回滚表达式尾部前统一释放/清零 owned CALL overflow；两个 semantic snapshot 事务路径调用同一释放入口，析构亦复用。新增真实 12 参数 CALL 单元断言和 `probe-owned-call-designator-rollback.sh`，合入后 Release `-Werror`、semantic snapshot 单测、五 ISA `-S`、GNU/MiniC x86 原生 exit7 一致；独立分支 ASan/UBSan 单测亦通过。LSan 仍因运行环境不可用，故未升 `VERIFIED`。
 - **位置：** `src/frontend/parser_static_initializer.c:3165–3178`、`semantic_snapshot.h:167–194`、`ast.c:499–528,107–111`。
 - **证据：** 对数组 designator 的 `sizeof(func(12 个实参))` 试探解析会给 CALL 分配 `overflow_arguments`；恢复较小的 `expression_count` 后，析构只遍历当前节点计数，旧分配失去所有者。GCC 与 MiniC 均接受相应合法输入。
 - **证据边界：** 源码所有权链确认；此环境 LeakSanitizer 无有效动态泄漏报告。普通值型 ArrayType/FunctionType 计数回滚并没有同类堆所有权，不应一概否定。
-- **测试缺口：** `tests/frontend/semantic_snapshot_test.c` 只手工设置/调整 Program 的计数，不构造拥有 `overflow_arguments` 的真实 CALL；它能验证快照数量门槛，不能反证 owned payload 泄漏。`semantic_snapshot.h` 中原本过度概括“安全回滚”的注释已单独更正，**代码问题仍开放**。
+- **旧测试缺口已补：** 历史 `semantic_snapshot_test.c` 不构造真实 CALL；新回归已补真正的 12 实参 overflow ownership 和表达式 probe，故不能再以旧的薄测试断言修复缺席。
 - **修复门槛：** 回滚前释放所有被撤销表达式的 owned payload，或采用显式事务；补异常/失败路径和 LSan 测试。
 
 ### MC-010 LoongArch 特殊 ASM 写回绕过对齐保护
@@ -466,7 +467,7 @@
 
 ### MC-042 packed 零宽位域丢失对齐栅栏
 
-- **状态：** `OPEN`，P1，`GNU-NATIVE-DIFF`；生成错误字段偏移/Record 大小，实际生成目标汇编和本机运行均差异。
+- **状态：** `FIXED-UNVERIFIED`，P1，`GNU-NATIVE-DIFF`；合入提交 `3f6cd4f`（独立原提交 `2111b87`）。`data_layout.c` 让匿名 `:0` 以其声明类型自然对齐充当边界，即使 Record/field/pragma 为 packed，也不提高 Record 自身对齐。9 组 GNU 对照静态断言、五 ISA `-S`、x86 native exit42、Release `-Werror`/layout/record/packed 相关回归 PASS。目标 ABI 联合验收仍未执行。
 - **位置/根因：** `src/target/data_layout.c:minic_data_layout_record_depth` 在所有位域上先调用 `minic_data_layout_effective_field_alignment`；`record->is_packed` 或 `#pragma pack(1)` 将 `int : 0` 的 `alignment_bits` 压成 8，再用它对齐下一个字段。GNU packed 规则下的**未命名零宽位域是对齐栅栏例外**，不能等同普通非零位域缩窄。
 - **复现（基线 `400f4a611`）：** `struct __attribute__((packed)) P { char a; int : 0; char b; };`；同源 `__builtin_offsetof(struct P,b)` 与 `sizeof(struct P)`，GCC x86 目标得到 **4 / 5**，MiniC 得到 **1 / 2**；两套汇编均成功链接，按 `(offset==4 && size==5)` 构造的 harness，GCC 原生退出 **0**、MiniC→GNU AS/链接原生退出 **1**。`#pragma pack(push,1)`/`pop` 的等价 fixture 同样差分，已排除只由 `__attribute__((packed))` 语法触发；不含 packed 的同形结构，两端均为 4/5。
 - **独立 ELF/跨 TU 反例：** `struct P packed_instance = {.a=1,.b=2};` 由 GCC 或 MiniC 分别发射并用宿主 GNU GAS 组成 `.o`。`readelf -sW` 显示 `packed_instance` 的 `OBJECT Size` 为 **5 / 2**；用 GCC 另行编译的 consumer 链接此对象并访问 `.b`，GNU 定义对象程序退出 0，替换 MiniC 定义对象程序退出 1。证明错误已越过编译期常量，实际破坏 x86 跨 TU 对象布局 ABI。
@@ -531,7 +532,7 @@
 
 ### MC-051 long double 一元取负丢失有符号零
 
-- **状态：** `OPEN`，P1，`GNU-NATIVE-DIFF`；当前证明 x86-64 本机的合法 C 语义错误，独立于 MC-041 的字面量精度 bug。
+- **状态：** `FIXED-UNVERIFIED`，P1，`GNU-NATIVE-DIFF/RV64-QEMU`；合入提交 `a0232f0`（独立原提交 `08a026f`）。x87 用 `fchs`，binary128 目标用 `__negtf2` 做真正符号翻转；扩展 17 个跨 TU 正负零、Infinity、qNaN、有限值/字面量断言。x86 GNU 参照与 MiniC 修后 `failure_mask=0x0`（旧版 `0x2010`），RV64 QEMU 旧 exit1、修后 exit0，四个 64 位目标的 `-S` 亦成功；A64/Loong 运行矩阵未执行。
 - **位置与根因：** `src/core/core_lower_arithmetic.c:12:minic_core_lower_try_arithmetic_unary` 对 `long double -x` 采用 `__subtf3(+0L,x)`。IEEE 浮点有符号零下 `+0L - +0L == +0L`，但 `-(+0L)` 应产生负零；对 `float` 和 `double` 的独立 NEGATE opcode 不受此处影响。
 - **可执行差分：** 持久用例 `tests/compiler/audit/mc051_long_double_negzero.c` + `_support.c`，保留 `/tmp/minic_long_double_negzero_probe.c` 的 11 项双 TU 检查。GNU x86 `failure_mask=0x0`、exit0；MiniC x86 `-S`→ GNU `cc` 链接→本机 `failure_mask=0x10`、exit1。只有 `-(+0L)` 不一致；其他正负值、`-(-0L)`、double/float、跨 TU ABI 基线符合预期。此处不能用浮点普通数值比较验证符号位。
 - **修复验收：** 实现语义上的 unary sign flip（位符号/有正确负零的 TF helper），检查目标 x87/RV64 binary128 与 softfloat，补 +0/-0、NaN、Infinity、有限值及跨 TU 严格差分；仅将 `__subtf3` 换常量不保证 NaN 语义。
