@@ -83,7 +83,7 @@
 | [MC-062](#mc-062-x86-alt-reloc-的-memory-输入源机约束分裂) | P2 | OPEN | LOCAL-COMPILE-DIFF | x86-64 ASM | Source 允许任意 GNU m lvalue，Machine 硬编码唯一符号，合法替代重定位遭拒 |
 | [MC-063](#mc-063-带标签的裸-record-声明被误作匿名成员) | P1 | FIXED-UNVERIFIED | GNU-NATIVE-DIFF | Frontend/DataLayout | `6aac3c1` 区分 direct tagless anonymous 与 tagged/typedef bare declaration；GNU/MiniC x86 native exit48 同值，完整目标 ABI 未验 |
 | [MC-064](#mc-064-inline-asm-仅符号引用的静态函数被错误裁剪) | P1 | OPEN | RV64-ELF-LINK-DIFF | Core Reachability | GNU ASM-only static 函数符号被降成文本后丢失可达性边；同源 GNU ELF/QEMU PASS，MiniC GNU AS PASS、GNU LD undefined，等待 typed Core 引用方案 |
-| [MC-066](#mc-066-aarch64-浮点指针字段被误判为浮点聚合) | P2 | OPEN | LOCAL-COMPILE-DIFF | AArch64 ABI | 32B 聚合的 `double*` 被当 FP 成员拒绝，换成 `int*` 即通过 |
+| [MC-066](#mc-066-aarch64-浮点指针字段被误判为浮点聚合) | P2 | FIXED-UNVERIFIED | GNU-NATIVE/5ISA-S | AArch64 ABI | 现基线 pointer/array 在 FP base_kind 之前分类；134 项五目标 -S 与四种尺寸 GNU native PASS，A64 FP HFA 仍 fail-closed |
 | [MC-067](#mc-067-带-gnu-属性的-record-前向声明被错判为定义) | P2 | FIXED-UNVERIFIED | GNU-NATIVE-DIFF/SOURCE | Frontend | `072ca74` 识别前/后置 GNU 属性的文件/块作用域 struct/union forward；GNU/MiniC x86 native 0/4、四目标 -S PASS，完整矩阵未验 |
 | [MC-069](#mc-069-aarch64-linux-vdso-在-gnu-ld-拒绝动态重定位) | P1 | OPEN | GNU/MiniC-ELF-AB | AArch64 Linux vDSO ELF visibility | 4108 项 MiniC `-S`/GNU AS 通过；GNU 的 HIDDEN 未定义数据符号经 ADR_PREL，而 MiniC 错为 DEFAULT+GOT，GNU LD 拒绝动态重定位 |
 | [MC-070](#mc-070-loongarch64-linux-heado-对-start_secondary-的-b26-越界) | P1 | OPEN | GNU/MiniC-ELF-AB | LoongArch64 Linux 链接/体积 | 2723 项 MiniC `-S`/GNU AS 通过，主 GNU LD B26 越界；同输入 C executable ELF 代码约 16.89MB(GNU)→371.97MB(MiniC)，膨胀 22.03× |
@@ -646,10 +646,10 @@
 
 ### MC-066 AArch64 浮点指针字段被误判为浮点聚合
 
-- **状态：** `OPEN`，P2，`LOCAL-COMPILE-DIFF`；是合法 GNU C 的显式拒绝，不是已证 AArch64 运行时错误。
-- **源/消费链：** `src/target/aarch64/abi.c:aarch64_special_aggregate_member` 先判断 `type.base_kind` 是否 FLOAT/DOUBLE，再判断 pointer/array/record；`double*` 的 base_kind 仍指向 DOUBLE，故错误报告存在 FP aggregate leaf。`minic_aarch64_indirect_record` 用它排除合法一般整数/pointer Record，preflight 的返回 ABI 拒绝该函数。
-- **对照：** `tests/compiler/audit/mc066_aarch64_fp_pointer_aggregate.c`，32 字节 `struct { double *number; unsigned char padding[24]; }` GNU C 编译通过、MiniC `aarch64-linux -S` FAIL；只加 `-DMC066_INTEGER_PTR` 变 `int *number`，对象总长度不变，MiniC PASS。不能因此推断已实现 A64 所有 HFA 参数/返回：本路径只在间接大 Record 分类范围内生效。
-- **验收：** 在 target ABI predicate 先判断 type indirection，再做 FP member 归类；回归 float/double 的值字段 vs 各种 pointer/array/typedef、16B/17B/32B/64B Record、GNU AArch64 ABI args/returns 与 GAS/ELF/QEMU。
+- **状态：** `FIXED-UNVERIFIED`，P2，`GNU-NATIVE/5ISA-S`；历史合法 GNU C 的显式拒编已在所指定基线 `6b1c45cf` 中消失。尚无 AArch64 GNU ELF/QEMU 双向运行验收，不推断完整 HFA/packed ABI 已实现。
+- **历史根因与当前状态：** 原 `src/target/aarch64/abi.c:aarch64_special_aggregate_member` 在 pointer/array 层级消解前检查 `type.base_kind`，将 `double*` 的 DOUBLE pointee 错认 FP aggregate leaf，继而由 `minic_aarch64_indirect_record` 错拒大 Record。当前基线源码**已**将 `minic_type_is_pointer` 和数组递归判定置于 FP base_kind switch 之前，且旧 `tests/compiler/c0/probe-aarch64-abi-audit-mc052-mc066.sh` 的 double*/int*/double*[]、真实四 double HFA 控制全部通过；本任务不重复制造无效源码 diff。
+- **扩展持续回归：** `make MODE=release CFLAGS=-Werror check-aarch64-fp-pointer-record-abi` 以同一合法 GNU C 生成 16/17/32/64 字节精确对象形状，覆盖 double*、int*、double* 数组、double* typedef、pointer-to-double-array、pointer-to-FP-record，以及 17/32/64 字节 `packed` 非自然对齐 double*。五目标 `-S` **134 项全部 PASS**；宿主 GNU C 的独立 caller/callee ELF 原生四种尺寸均 exit42。32B 实际四 double HFA、packed 四 double HFA 以及尚不支持的小尺寸 16B packed 非对齐 pointer Record 均为可核对的 A64 ABI fail-closed（3/3），没有用整数/间接 GP 错误放行。
+- **剩余边界：** 本环境有 `qemu-aarch64`，但缺 `aarch64-linux-gnu-gcc/as/readelf`，脚本明确报告 `A64_GNU_ELF=SKIP A64_GNU_QEMU=SKIP`，故无真正 A64 ABI Caller/Callee 原生或 QEMU 证明。AAPCS64 HFA/HVA 全面传递、`<=16B` 非对齐 packed Record 的合法 ABI marshalling、含 FP value 的非 HFA 大复合 Record 仍属于独立未支持/未验区域，不能因本项通过而放宽准入。
 
 ### MC-067 带 GNU 属性的 Record 前向声明被错判为定义
 

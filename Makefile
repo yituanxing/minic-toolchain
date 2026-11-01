@@ -1783,6 +1783,13 @@ check-aarch64-fixmap-cross-static-const: $(MINIC_CC_BINARY)
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
 	sh tests/compiler/c0/probe-aarch64-fixmap-cross-static-const.sh
 
+.PHONY: check-aarch64-fp-pointer-record-abi
+check-aarch64-fp-pointer-record-abi: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	sh tests/compiler/c0/probe-aarch64-fp-pointer-record-abi.sh
+
+check-fast: check-aarch64-fp-pointer-record-abi
+
 .PHONY: check-static-const-source-boundaries
 check-static-const-source-boundaries: $(MINIC_CC_BINARY)
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
