@@ -1444,8 +1444,10 @@ typedef struct MinicStaticRecordDesignator {
 
 static bool parse_static_record_designator_path(MinicParser *parser,
                                                 const MinicRecord *record,
+                                                MinicRecordId record_id,
                                                 MinicStaticRecordDesignator *designator) {
     const MinicRecord *current_record;
+    MinicRecordId current_record_id;
 
     if (parser == NULL || record == NULL || designator == NULL ||
         parser->current.kind != MINIC_TOKEN_DOT) {
@@ -1453,10 +1455,12 @@ static bool parse_static_record_designator_path(MinicParser *parser,
     }
     (void)memset(designator, 0, sizeof(*designator));
     current_record = record;
+    current_record_id = record_id;
     while (parser->current.kind == MINIC_TOKEN_DOT) {
         MinicRecordFieldPath field_path;
         MinicSourceSpan field_span;
         const MinicRecordField *field;
+        const MinicRecord *owned_record;
         size_t path_index;
 
         if (!minic_parser_advance(parser) || parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
@@ -1464,7 +1468,12 @@ static bool parse_static_record_designator_path(MinicParser *parser,
             return false;
         }
         field_span = parser->current.span;
-        if (!minic_parser_find_record_field_path(parser, current_record, field_span, &field_path) ||
+        /* current_record can be a stack snapshot that survives arena growth.
+         * Member lookup also produces RecordIds, so give it the canonical
+         * Program-owned descriptor by stable ID, not the snapshot address. */
+        owned_record = minic_c0_program_record(parser->program, current_record_id);
+        if (owned_record == NULL || !owned_record->is_complete ||
+            !minic_parser_find_record_field_path(parser, owned_record, field_span, &field_path) ||
             !field_path.found || field_path.ambiguous || field_path.depth == 0U) {
             minic_parser_error(parser,
                                "static record designator requires an unambiguous member path");
@@ -1493,7 +1502,8 @@ static bool parse_static_record_designator_path(MinicParser *parser,
                         "promoted static record designator path requires scalar record members");
                     return false;
                 }
-                current_record = minic_c0_program_record(parser->program, field->type.record_id);
+                current_record_id = field->type.record_id;
+                current_record = minic_c0_program_record(parser->program, current_record_id);
                 if (current_record == NULL || !current_record->is_complete) {
                     minic_parser_error(
                         parser, "static record designator path requires complete record members");
@@ -1536,7 +1546,8 @@ static bool parse_static_record_designator_path(MinicParser *parser,
                 parser, "intermediate static record designator member must be a scalar record");
             return false;
         }
-        current_record = minic_c0_program_record(parser->program, field->type.record_id);
+        current_record_id = field->type.record_id;
+        current_record = minic_c0_program_record(parser->program, current_record_id);
         if (current_record == NULL || !current_record->is_complete) {
             minic_parser_error(parser,
                                "static record designator path requires complete record members");
@@ -2116,7 +2127,7 @@ static bool append_static_chained_record_designator_value(
     }
     record = minic_c0_program_record(parser->program, record_type.record_id);
     if (record == NULL || !record->is_complete ||
-        !parse_static_record_designator_path(parser, record, &designator)) {
+        !parse_static_record_designator_path(parser, record, record_type.record_id, &designator)) {
         return false;
     }
     if (designator.has_array_index) {
@@ -2448,7 +2459,7 @@ static bool overwrite_static_zero_record_constant(MinicParser *parser,
             bool handled_union_zero;
 
             (void)memset(&designator, 0, sizeof(designator));
-            if (!parse_static_record_designator_path(parser, record, &designator) ||
+            if (!parse_static_record_designator_path(parser, record, record_id, &designator) ||
                 designator.depth == 0U || designator.has_array_index) {
                 if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
                     minic_parser_error(
@@ -2594,7 +2605,7 @@ static bool parse_static_union_constant(MinicParser *parser,
     (void)memset(&designator, 0, sizeof(designator));
     has_designator = parser->current.kind == MINIC_TOKEN_DOT;
     if (has_designator) {
-        if (!parse_static_record_designator_path(parser, record, &designator) ||
+        if (!parse_static_record_designator_path(parser, record, record_id, &designator) ||
             designator.depth == 0U) {
             return false;
         }
@@ -2672,7 +2683,7 @@ static bool parse_static_union_constant(MinicParser *parser,
         const MinicRecordField *leaf_field;
         size_t relative_slot;
 
-        if (!parse_static_record_designator_path(parser, record, &next) ||
+        if (!parse_static_record_designator_path(parser, record, record_id, &next) ||
             next.depth <= 1U || next.has_array_index ||
             next.field_indices[0] != selected_index ||
             !static_record_designator_leaf_slot(parser->program,
@@ -2776,7 +2787,7 @@ static bool parse_static_record_constant(MinicParser *parser,
         if (parser->current.kind == MINIC_TOKEN_DOT) {
             size_t designator_index;
 
-            if (!parse_static_record_designator_path(parser, record, &designator)) {
+            if (!parse_static_record_designator_path(parser, record, record_id, &designator)) {
                 return false;
             }
             designator_index = designator.field_indices[0];

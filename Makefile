@@ -1657,6 +1657,13 @@ check-alignment-attribute-semantic-arena: $(MINIC_CC_BINARY)
 
 check-fast: check-alignment-attribute-semantic-arena
 
+.PHONY: check-mc034-static-designator-pointer-pair
+check-mc034-static-designator-pointer-pair: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	sh tests/compiler/c0/probe-mc034-static-designator-pointer-pair.sh
+
+check-fast: check-mc034-static-designator-pointer-pair
+
 .PHONY: check-x86-pat-clflushopt-alt
 check-x86-pat-clflushopt-alt: $(MINIC_CC_BINARY)
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \

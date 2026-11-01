@@ -56,7 +56,7 @@
 | [MC-015](#mc-015-rv64-变参与过对齐栈帧交界) | P0 | OPEN | ASM-ONLY | RV64 | 合法 aligned(64) 变参函数：保存区跨向 caller stack 的物理地址错位 |
 | [MC-028](#mc-028-rv64-的-int128-移位计数类型限制) | P2 | OPEN | LOCAL-COMPILE-DIFF | RV64 | 合法 GNU C 的宽移位计数导致 MiniC `-S` 拒绝，窄计数可过 |
 | [MC-033](#mc-033-core-独立自增自减语句保留过时常量事实) | P0 | FIXED-UNVERIFIED | GNU-NATIVE-DIFF | Core | 原语句捷径过时 fact 错码已被现行 invalidation 覆盖；新增五目标与原生运行回归 |
-| [MC-034](#mc-034-静态-record-设计符查找对无关对象做指针相减) | P1 | OPEN | ASAN-POINTER-PAIR | Frontend | 合法静态 `.x` initializer 触发栈 Record 与 heap records 无关指针相减 |
+| [MC-034](#mc-034-静态-record-设计符查找对无关对象做指针相减) | P1 | FIXED-UNVERIFIED | ASAN-POINTER-PAIR | Frontend | 静态设计符用稳定 RecordId 重取 Program-owned 描述符；六相位五目标 SAN/Release 及 GNU/MiniC native PASS |
 | [MC-035](#mc-035-运行时范围初始化器借用-expression-跨扩容) | P0 | FIXED-UNVERIFIED | ASAN | Frontend | GNU range initializer 的 Expression arena UAF 已用源 span 按值快照修复；五目标容量门禁通过 |
 | [MC-036](#mc-036-record-条件表达式的-local-facts-分支合流缺口) | P1 | FIXED-UNVERIFIED | GNU-NATIVE-DIFF | Core | Record 条件式现有分支 fact snapshot/restore/meet，十路径 GNU/MiniC x86 native 及五目标 `-S` 通过 |
 | [MC-037](#mc-037-loong-特殊-asm-源端与机器端限定符不一致) | P2 | OPEN | LOCAL-COMPILE-DIFF | LoongArch64 | 合法 volatile cpucfg 输出仅因限定符在机器层拒绝 |
@@ -334,10 +334,13 @@
 
 ### MC-034 静态 Record 设计符查找对无关对象做指针相减
 
-- **状态：** `OPEN`，P1，`ASAN-POINTER-PAIR`；在有效源码上已观察到 ASan `invalid-pointer-pair`，**尚未证明输出错编**。
+- **状态：** `FIXED-UNVERIFIED`，P1，`ASAN-POINTER-PAIR`；在有效源码上已观察到 ASan `invalid-pointer-pair`，**未证明输出错编**。原 UB 已定点消除，完整目标 ELF/QEMU/联合验收仍待执行。
 - **位置与链路：** `src/frontend/parser_static_initializer.c:2698–2699` 把 `Program.records[id]` 的 Record 值型头复制到栈上 `record_snapshot`；`:2747` 在 `.field` 设计符下调用 `parse_static_record_designator_path`（约 `:1438–1480`），后者调用 `minic_parser_find_record_field_path` → `src/frontend/parser_member.c:28:search_record_field_path`。该 helper 无条件计算 `(MinicRecordId)(record - parser->program->records)`，但 `record` 此时位于**不相关的栈对象**。
 - **触发输入与检测：** `struct Q { int x; }; struct Q q = { .x = 3 };`；GNU C 合法，MiniC 普通 sanitize `-S` 通过。独立构建 `MODE=sanitize BUILD_DIR=/tmp/minic-audit-20261030/pointer-pairs CFLAGS=-fsanitize=pointer-subtract LDFLAGS=-fsanitize=pointer-subtract` 后设置 `ASAN_OPTIONS=detect_leaks=0:detect_invalid_pointer_pairs=2:halt_on_error=1`，RV64 `-S` 真实报 `AddressSanitizer: invalid-pointer-pair`，栈指向 `search_record_field_path:27` ← `parse_static_record_designator_path:1459` ← `parse_static_record_constant:2747`，地址分别来自 `record_snapshot` 栈与 Program.records heap arena。栈 Record 快照本身是为避免 arena 扩容悬空而设计的，不能因这里有 UB 直接删除快照。
 - **语义边界：** 静态初始化路径目前只使用返回的 field indices，不使用该处生成的 RecordId；其余成员/offsetof 消费者传入 Program-owned Record。修复要保证仍使用稳定 RecordId，或让不需要 RecordId 的消费者避免该运算；再以 ASan pointer-pair 和多架构目标回归验证，不能把“编译结果看似正常”当作 UB 修复。
+- **本轮独立重现（2026-11-01，`5942dcf` 基线）：** 新持久 `mc034_static_designator_pointer_pair.c` phase 0 的 GNU 合法静态 `.x`、匿名提升成员、union `.low` 设计符，在 `MODE=sanitize CFLAGS='-Werror -fsanitize=pointer-subtract' LDFLAGS=-fsanitize=pointer-subtract` 的未修复 `minic-cc --target=x86_64-linux -S`、`ASAN_OPTIONS=detect_leaks=0:detect_invalid_pointer_pairs=2:halt_on_error=1` 下报 `invalid-pointer-pair`，堆地址 `Program.records` 与栈 `record_snapshot`，栈为 `search_record_field_path:30` ← `parse_static_record_designator_path:1467` ← `parse_static_record_constant:2779`，exit 1。该再现独立于源码形式和目标汇编文本锚点。
+- **定点修复：** `parse_static_record_designator_path` 从调用者接收已有稳定 `MinicRecordId`，遇嵌套 member 由 `field->type.record_id` 递进，调用通用 `minic_parser_find_record_field_path` 前以 ID 从 `Program.records` 重取 **实际归属 Program 的** `MinicRecord*`。对静态初始化仍保留必要的栈 Record 快照用于后续 arena 扩容安全；其他普通 member/offsetof 消费者及共用 helper 的 O(1) RecordId 映射均未改变。
+- **修后专项：** 新 `check-mc034-static-designator-pointer-pair` 接入 `check-fast`，六个 Record-arena 占位相位 × 五目标 `-S`：ASan/UBSan+pointer-pair **30/30 PASS**、Release `-Werror` **30/30 PASS**，GNU/MiniC x86 GNU AS/LD 原生各 **6/6 exit 0**。邻近 `run-static-nested-record-designator.sh`、`run-static-union-zero-overlay.sh` Release PASS，MC-023 静态 Record 反向设计符扩容 SAN 五目标和原生差分 PASS。完整多目标 GNU ELF/QEMU 与 MiniAS/MiniLD 联合验收未运行，保持 `FIXED-UNVERIFIED`。
 
 ### MC-035 运行时范围初始化器借用 Expression 跨扩容
 
