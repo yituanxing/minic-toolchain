@@ -11,6 +11,14 @@ static bool storage_shape_is_valid(const void *data, size_t count, size_t capaci
     return count <= capacity && (count == 0U || data != NULL);
 }
 
+/* A Core enum scalar needs its target integer representation snapshot.
+ * Pointers to incomplete enums are permitted and do not need a snapshot. */
+static bool enum_scalar_is_registered(const MinicCoreFunction *function, MinicType type) {
+    MinicType effective;
+    return !minic_type_is_enum(type) ||
+           minic_core_function_effective_integer_type(function, type, &effective);
+}
+
 static bool instruction_result_is_valid(const MinicCoreFunction *function,
                                         const MinicCoreInstruction *instruction) {
     return instruction->result < function->value_count &&
@@ -1242,14 +1250,17 @@ bool minic_core_function_verify(const MinicCoreFunction *function) {
     size_t index;
     bool valid;
 
-    /* FIXME(MC-055): the storage-shape preflight below does not cover
-     * fixed_register_bindings, enum_types or function_symbols. Malformed
-     * external Core structures can escape preflight and crash later reads.
-     * Normal builder-produced Core is not known to violate this invariant. */
-
     if (function == NULL || function->name == NULL || function->name_length == 0U ||
         !minic_function_calling_convention_valid(function->calling_convention) ||
         (function->parameter_count != 0U && function->parameter_types == NULL) ||
+        !storage_shape_is_valid(function->fixed_register_bindings,
+                                function->fixed_register_binding_count,
+                                function->fixed_register_binding_capacity) ||
+        !storage_shape_is_valid(function->enum_types,
+                                function->enum_type_count, function->enum_type_capacity) ||
+        !storage_shape_is_valid(function->function_symbols,
+                                function->function_symbol_count,
+                                function->function_symbol_capacity) ||
         !storage_shape_is_valid(
             function->globals, function->global_count, function->global_capacity) ||
         !storage_shape_is_valid(
@@ -1274,10 +1285,33 @@ bool minic_core_function_verify(const MinicCoreFunction *function) {
         function->value_count > function->instruction_count) {
         return false;
     }
+    if (!enum_scalar_is_registered(function, function->return_type)) return false;
+    for (index = 0U; index < function->parameter_count; ++index) {
+        if (!enum_scalar_is_registered(function, function->parameter_types[index])) return false;
+    }
+    for (index = 0U; index < function->enum_type_count; ++index) {
+        const MinicCoreEnumType *enum_type = &function->enum_types[index];
+        if (enum_type->enum_id == MINIC_ENUM_INVALID ||
+            !minic_type_is_integer(enum_type->effective_integer_type) ||
+            minic_type_is_enum(enum_type->effective_integer_type)) return false;
+    }
+    for (index = 0U; index < function->fixed_register_binding_count; ++index) {
+        const MinicCoreFixedRegisterBinding *binding = &function->fixed_register_bindings[index];
+        if (binding->register_name == NULL || binding->register_name_length == 0U ||
+            (!minic_type_is_integer(binding->type) &&
+             !minic_type_is_pointer(binding->type) &&
+             !minic_type_is_double(binding->type)) ||
+            !enum_scalar_is_registered(function, binding->type)) return false;
+    }
+    for (index = 0U; index < function->function_symbol_count; ++index) {
+        const MinicCoreFunctionSymbol *symbol = &function->function_symbols[index];
+        if (symbol->name == NULL || symbol->name_length == 0U) return false;
+    }
     for (index = 0U; index < function->object_count; ++index) {
         const MinicCoreObject *object = &function->objects[index];
         if (object->element_count == 0U || minic_type_is_void(object->type) ||
-            minic_type_is_function(object->type)) {
+            minic_type_is_function(object->type) ||
+            !enum_scalar_is_registered(function, object->type)) {
             return false;
         }
     }
@@ -1286,7 +1320,8 @@ bool minic_core_function_verify(const MinicCoreFunction *function) {
 
         global = &function->globals[index];
         if (global->name == NULL || global->name_length == 0U ||
-            !minic_core_ir_global_addressable_type(global->type)) {
+            !minic_core_ir_global_addressable_type(global->type) ||
+            !enum_scalar_is_registered(function, global->type)) {
             return false;
         }
     }
@@ -1298,13 +1333,15 @@ bool minic_core_function_verify(const MinicCoreFunction *function) {
         if (callee->name == NULL || callee->name_length == 0U ||
             !minic_function_calling_convention_valid(callee->calling_convention) ||
             !minic_core_ir_direct_call_return_type(callee->return_type) ||
+            !enum_scalar_is_registered(function, callee->return_type) ||
             (callee->parameter_count != 0U && callee->parameter_types == NULL)) {
             return false;
         }
         /* Direct and indirect signatures share one scalar-or-record parameter
          * contract. The Core CALL result_object controls aggregate ownership. */
         for (parameter_index = 0U; parameter_index < callee->parameter_count; ++parameter_index) {
-            if (!minic_core_ir_call_parameter_type(callee->parameter_types[parameter_index])) {
+            if (!minic_core_ir_call_parameter_type(callee->parameter_types[parameter_index]) ||
+                !enum_scalar_is_registered(function, callee->parameter_types[parameter_index])) {
                 return false;
             }
         }
@@ -1317,15 +1354,24 @@ bool minic_core_function_verify(const MinicCoreFunction *function) {
         if (signature->function_type_id == MINIC_FUNCTION_TYPE_INVALID ||
             !minic_function_calling_convention_valid(signature->calling_convention) ||
             (!minic_core_ir_direct_call_return_type(signature->return_type)) ||
+            !enum_scalar_is_registered(function, signature->return_type) ||
             (signature->parameter_count != 0U && signature->parameter_types == NULL)) {
             return false;
         }
         for (parameter_index = 0U; parameter_index < signature->parameter_count;
              ++parameter_index) {
-            if (!minic_core_ir_call_parameter_type(signature->parameter_types[parameter_index])) {
+            if (!minic_core_ir_call_parameter_type(signature->parameter_types[parameter_index]) ||
+                !enum_scalar_is_registered(function,
+                                           signature->parameter_types[parameter_index])) {
                 return false;
             }
         }
+    }
+    for (index = 0U; index < function->value_count; ++index) {
+        if (!enum_scalar_is_registered(function, function->values[index].type)) return false;
+    }
+    for (index = 0U; index < function->instruction_count; ++index) {
+        if (!enum_scalar_is_registered(function, function->instructions[index].type)) return false;
     }
     instruction_seen = function->instruction_count == 0U
                            ? NULL
