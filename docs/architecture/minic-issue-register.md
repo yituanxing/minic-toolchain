@@ -57,7 +57,7 @@
 | [MC-028](#mc-028-rv64-的-int128-移位计数类型限制) | P2 | OPEN | LOCAL-COMPILE-DIFF | RV64 | 合法 GNU C 的宽移位计数导致 MiniC `-S` 拒绝，窄计数可过 |
 | [MC-033](#mc-033-core-独立自增自减语句保留过时常量事实) | P0 | OPEN | GNU-NATIVE-DIFF | Core | `x++`/`x--` 语句捷径漏失效化 local fact，实测错误分支 |
 | [MC-034](#mc-034-静态-record-设计符查找对无关对象做指针相减) | P1 | OPEN | ASAN-POINTER-PAIR | Frontend | 合法静态 `.x` initializer 触发栈 Record 与 heap records 无关指针相减 |
-| [MC-035](#mc-035-运行时范围初始化器借用-expression-跨扩容) | P0 | OPEN | ASAN | Frontend | 合法 GNU range initializer 在 Program Expression 扩容时真实 UAF |
+| [MC-035](#mc-035-运行时范围初始化器借用-expression-跨扩容) | P0 | FIXED-UNVERIFIED | ASAN | Frontend | GNU range initializer 的 Expression arena UAF 已用源 span 按值快照修复；五目标容量门禁通过 |
 | [MC-036](#mc-036-record-条件表达式的-local-facts-分支合流缺口) | P1 | OPEN | GNU-NATIVE-DIFF | Core | 结构体条件式缺 fact fork/meet，实测 `f(1)` 返回值错 10 |
 | [MC-037](#mc-037-loong-特殊-asm-源端与机器端限定符不一致) | P2 | OPEN | LOCAL-COMPILE-DIFF | LoongArch64 | 合法 volatile cpucfg 输出仅因限定符在机器层拒绝 |
 | [MC-038](#mc-038-匿名字段设计符后的位置初始化游标错误) | P1 | OPEN | LOCAL-COMPILE-DIFF | Frontend | 匿名字段 `.b=2,3` GCC 接受、MiniC 错报过多位置初始化 |
@@ -336,10 +336,13 @@
 
 ### MC-035 运行时范围初始化器借用 Expression 跨扩容
 
-- **状态：** `OPEN`，P0，`ASAN`；已由合法 GNU C 生产输入真实复现 `heap-use-after-free`，不再只是源码推测。
+- **状态：** `FIXED-UNVERIFIED`，P0，`ASAN`；合法 GNU C 输入在旧版真实触发 `heap-use-after-free`，现有定点修复通过 ASan/UBSan 与本机差分，完整跨 ISA ELF/QEMU 尚未验收。
 - **位置：** `src/frontend/parser_runtime_initializer.c:457–514:add_runtime_initializer_once_read` 先缓存 `const MinicExpression *value = minic_c0_program_expression(program,value_id)`；`:489` 的 `minic_parser_statement_local_lvalue` 经 `src/frontend/parser_statement.c:15–35` 追加表达式，可能 `realloc program->expressions`，而 `:496` 与 `:510` 仍读旧 `value->span`。
 - **真实 ASan 反例（2026-10-30，基线 `4f516707d`）：** `int testcase(int seed) { seed + 0; seed + 1; int target[16] = {0, [1 ... 15] = seed + 1}; return target[1] + target[15]; }`，由 GNU C 接受。`ASAN_OPTIONS=detect_leaks=0:halt_on_error=1:abort_on_error=1 build/sanitize/bin/minic-cc --target=x86_64-linux -S /tmp/minic-runtime-init-uaf-probe/add_expression_statement_002.i -o ...` 报 `heap-use-after-free`，`READ size 48` 指向本函数 `:496 assignment.span=value->span`；先前 `parser_statement_local_lvalue:33` → `minic_c0_program_add_expression:519` → `minic_grow_array:20` 释放旧 arena。容量探针前置 0..128 个无效效果式时大部分 PASS、特定两个 `seed+i;` 使增长边界准确命中，**PASS 不是安全证明**。
-- **下一步：** 完整容量矩阵和五目标 ASan；在有副作用的 append 前按值保存 `MinicSourceSpan`，并复核同函数/同模块其他跨递归/跨增量存储借用，再集中修这一类所有权问题。本轮未改 Parser 实现。
+- **2026-11-01 当前基线再现：** 独立可持久 fixture `tests/compiler/c0/mc035_runtime_range_once_arena.c` 的 `MC035_PREFIX_PHASE=2` 在修复前 `d4026e3` x86-64 `MODE=sanitize CFLAGS=-Werror` 上再次触发 READ48 UAF，栈位于 `parser_runtime_initializer.c:503`；前缀 0、1、3、4、5 都 PASS，确认容量边界偶发性而非所有输入必崩。
+- **修复：** `5d76e53` 仅在 `add_runtime_initializer_once_read` 借用合法时复制 `MinicSourceSpan value_span`，之后构建临时 Local、目标 lvalue、赋值 Statement 和 LVALUE_READ 全部使用快照，避免 `minic_parser_statement_local_lvalue` 增长 Program.expressions 后读取旧指针；不改对象归属或 GNU range 的求值一次合同。新增 `check-mc035-runtime-range-once-arena` 到 `check-fast`。
+- **修后专项验证：** ASan/UBSan 与 Release 均以 `-Werror` 编译，前缀阶段 0～5 × 五目标 `-S` 各 **30/30 PASS**，GNU/MiniC x86 原生各 6/6 exit 0，核对 range expression 只求值一次。邻近 MC-039/056/003 capacity gates 在 ASan 与 Release 均 PASS，`check-ast-contract`、`check-expression-statements` Release PASS。
+- **尚未验收：** 全五目标 GNU AS/LD、ELF relocation、QEMU/原生运行矩阵及 MiniAS/MiniLD 联合均未做；保留 `FIXED-UNVERIFIED`，同模块其他 borrow/rollback 风险不以这一处修复自动关闭。
 
 ### MC-036 Record 条件表达式的 local facts 分支合流缺口
 
