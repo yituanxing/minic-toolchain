@@ -132,7 +132,10 @@ static int modules(void){
    * drm_get_panel_orientation_quirk, i2c_transfer (all =m in original
    * Image Kconfig). Load their real symbol-providing modules FIRST. */
   "kvm","i2c-core","backlight","drm_panel_orientation_quirks",
-  "drm","drm_kms_helper","drm_shmem_helper","virtio-gpu",
+  "drm","drm_kms_helper","drm_shmem_helper",
+  /* virtio-gpu.ko consumes virtio_dma_buf_export/attach; preserve
+   * the GNU =m provider's actual finit_module order. */
+  "virtio_dma_buf","virtio-gpu",
   "nvme-core","nvme"
  };
  for(word i=0;i<sizeof(names)/sizeof(names[0]);i++)

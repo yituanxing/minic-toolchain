@@ -53,7 +53,7 @@ jobs:
           github-token: ${{ github.token }}
           path: build/rv32-p2-strict/original-kbuild
 
-      - name: Build 37 exact-config GNU ELF32 RISC-V modules, without touching MiniC Image
+      - name: Build 38 exact-config GNU ELF32 RISC-V modules, without touching MiniC Image
         shell: bash
         timeout-minutes: 12
         run: |
@@ -162,6 +162,7 @@ jobs:
             drivers/gpu/drm/drm.ko \
             drivers/gpu/drm/drm_kms_helper.ko \
             drivers/gpu/drm/drm_shmem_helper.ko \
+            drivers/virtio/virtio_dma_buf.ko \
             drivers/gpu/drm/virtio/virtio-gpu.ko \
             drivers/nvme/host/nvme-core.ko drivers/nvme/host/nvme.ko; do
             echo "RV32I_F18_KBUILD_START=$target"
@@ -188,8 +189,8 @@ jobs:
               grep -Eq 'vermagic=6\.6\.143 mod_unload riscv([[:space:]]|$)'
             sha256sum "$file"
           done
-          test "$(find "$modules" -name '*.ko' -type f | wc -l)" -eq 37
-          echo 'RV32I_P2_MODULES=BUILT count=37 original_config_verified=true runtime_load_not_yet_verified=true'
+          test "$(find "$modules" -name '*.ko' -type f | wc -l)" -eq 38
+          echo 'RV32I_P2_MODULES=BUILT count=38 original_config_verified=true runtime_load_not_yet_verified=true'
 
       - name: Execute nine required RV32I/ILP32 P2 operations in real QEMU
         shell: bash
@@ -290,7 +291,7 @@ jobs:
           printf 'qemu_lane_exit=%s\nsource_Image_sha256=%s\ncanonical=18/18_REQUIRED\n' \
             "$rc" "$actual" >"$root/full18-verdict.txt"
           tail -n 190 "$root/full18-runner.log"
-          echo 'RV32_P2_FULL_REQUIRED=18 skip_allowed=0 module_load_required=37 full_P2_only_if_real_QEMU=PASS'
+          echo 'RV32_P2_FULL_REQUIRED=18 skip_allowed=0 module_load_required=38 full_P2_only_if_real_QEMU=PASS'
           exit "$rc"
 
       - name: Retain raw QEMU evidence even on real failure
