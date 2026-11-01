@@ -13,7 +13,9 @@ typedef unsigned long long u64;
 #define IOCTL 29
 #define MKNODAT 33
 #define MKDIRAT 34
-#define LSEEK 62
+/* On RV32 asm-generic syscall 62 is sys_llseek(fd, hi, lo, result*, whence),
+ * NOT the RV64 sys_lseek(fd, offset, whence) three-argument ABI. */
+#define LLSEEK 62
 #define GETDENTS64 61
 #define READLINKAT 78
 #define UNSHARE 97
@@ -290,6 +292,11 @@ static int br_fail(const char*stage,long rc,long byte){
  br_trace(stage,rc,byte);
  return 0;
 }
+static long seek_start(long fd){
+ u64 result=~(u64)0;
+ long rc=S5(LLSEEK,fd,0,0,&result,0);
+ return rc!=0?rc:(result==0?0:-71);
+}
 static int toggle_brnetfilter(void){
  const char*path="/proc/sys/net/bridge/bridge-nf-call-ip6tables";
  long fd=S4(OPENAT,AT_FDCWD,path,O_RDWR,0);
@@ -301,12 +308,12 @@ static int toggle_brnetfilter(void){
  }
  char desired=old=='0'?'1':'0';
  int ok=1,restore=1,attempted=0;
- rc=S3(LSEEK,fd,0,0);
+ rc=seek_start(fd);
  if(rc!=0){ok=br_fail("seek_new",rc,0);goto done;}
  attempted=1;
  rc=S3(WRITE,fd,&desired,1);
  if(rc!=1){ok=br_fail("write_new",rc,(unsigned char)desired);goto done;}
- rc=S3(LSEEK,fd,0,0);
+ rc=seek_start(fd);
  if(rc!=0){ok=br_fail("seek_new_readback",rc,0);goto done;}
  rc=S3(READ,fd,&cur,1);
  if(rc!=1||cur!=desired){ok=br_fail("read_new",rc,(unsigned char)cur);goto done;}
@@ -315,13 +322,13 @@ done:
  /* An attempted write may have changed the setting even on error.
   * Restore the exact old byte and check the actual kernel readback. */
  if(attempted){
-  rc=S3(LSEEK,fd,0,0);
+  rc=seek_start(fd);
   if(rc!=0)restore=br_fail("seek_restore",rc,0);
   else{
    rc=S3(WRITE,fd,&old,1);
    if(rc!=1)restore=br_fail("write_restore",rc,(unsigned char)old);
    else{
-    rc=S3(LSEEK,fd,0,0);
+    rc=seek_start(fd);
     if(rc!=0)restore=br_fail("seek_restore_readback",rc,0);
     else{
      rc=S3(READ,fd,&cur,1);
@@ -423,7 +430,29 @@ static int bound_device(const char*driver,const char*devpath,
  }
  closefd(fd);return found;
 }
+static void trace_gpu_virtio_features(void){
+ /* The GPU must still have a bound driver and DRM/card child to pass.
+  * Sysfs feature/status snapshots here diagnose PCI feature negotiation;
+  * neither a readable features file nor a loaded .ko is a PASS shortcut. */
+ static const char*const paths[]={
+  "/sys/bus/virtio/devices/virtio1/features",
+  "/sys/bus/virtio/devices/virtio1/status",
+  "/sys/bus/virtio/devices/virtio1/device"
+ };
+ for(word i=0;i<sizeof(paths)/sizeof(paths[0]);i++){
+  say("RV32I_P2_F18_GPU_PCI_SYSFS path=");say(paths[i]);
+  long fd=S4(OPENAT,AT_FDCWD,paths[i],O_RDONLY,0);
+  if(bad(fd)){
+   say(" open_rc=");show_num(fd);say("\n");continue;
+  }
+  char data[128];long n=S3(READ,fd,data,sizeof(data));closefd(fd);
+  say(" read_rc=");show_num(n);say(" value=");
+  if(n>0)(void)S3(WRITE,1,data,n);
+  if(n<=0||data[n-1]!='\n')say("\n");
+ }
+}
 static void device_tests(void){
+ trace_gpu_virtio_features();
  mark("virtio-gpu",bound_device("/sys/bus/virtio/drivers/virtio_gpu",
        "/sys/bus/virtio/devices","virtio","drm","card",1),-19);
  mark("nvme",bound_device("/sys/bus/pci/drivers/nvme",

@@ -926,7 +926,7 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
     }
     case MINIC_CORE_INSTRUCTION_GNU_FIXED_VECTOR_STORAGE_COPY: {
         MinicType dst_pointee, src_pointee, dst_type, src_type;
-        size_t bytes, alignment;
+        size_t vector_bytes, vector_alignment;
         const MinicCoreValueId dst =
             ins->value.gnu_fixed_vector_storage_copy.destination_address;
         const MinicCoreValueId src =
@@ -947,8 +947,8 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
             !minic_type_equal(dst_type, ins->type) ||
             !minic_type_equal(src_type, ins->type) ||
             !minic_data_layout_type(target->data_layout, program, ins->type,
-                                    &bytes, &alignment) ||
-            bytes != 16U || alignment != 16U ||
+                                    &vector_bytes, &vector_alignment) ||
+            vector_bytes != 16U || vector_alignment != 16U ||
             !x86_value_load(out, frame, dst, "%r10") ||
             !x86_value_load(out, frame, src, "%r11"))
             return false;
