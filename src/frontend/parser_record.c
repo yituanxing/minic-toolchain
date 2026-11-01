@@ -690,6 +690,7 @@ static bool parse_record_field(MinicParser *parser, MinicRecordId record_id) {
     MinicParsedAttributeList declaration_attributes;
     MinicType base_type;
     const MinicRecord *record;
+    bool direct_record_specifier;
     size_t declaration_alignment;
     bool declaration_packed;
 
@@ -706,8 +707,12 @@ static bool parse_record_field(MinicParser *parser, MinicRecordId record_id) {
         return false;
     }
     (void)memset(&declaration_attributes, 0, sizeof(declaration_attributes));
-    if (!minic_parser_collect_gnu_attribute_lists(parser, &declaration_attributes) ||
-        !minic_parser_parse_type_specifiers(parser, &base_type)) {
+    if (!minic_parser_collect_gnu_attribute_lists(parser, &declaration_attributes)) {
+        return false;
+    }
+    direct_record_specifier = parser->current.kind == MINIC_TOKEN_KW_STRUCT ||
+                              parser->current.kind == MINIC_TOKEN_KW_UNION;
+    if (!minic_parser_parse_type_specifiers(parser, &base_type)) {
         return false;
     }
     /* Attributes between the declaration specifiers and the declarator cannot
@@ -738,9 +743,20 @@ static bool parse_record_field(MinicParser *parser, MinicRecordId record_id) {
     }
     declaration_alignment = 0U;
     declaration_packed = false;
-    /* FIXME(MC-063): tagged `struct Named;` is a GNU memberless declaration,
-     * unlike a tagless anonymous struct member, and must not grow the layout. */
     if (minic_type_is_record(base_type) && parser->current.kind == MINIC_TOKEN_SEMICOLON) {
+        const MinicRecord *field_record =
+            minic_c0_program_record(parser->program, base_type.record_id);
+
+        if (field_record == NULL) {
+            minic_parser_error(parser, "invalid bare record field declaration");
+            return false;
+        }
+        /* GNU anonymous members require a directly written tagless record
+         * definition. A tagged `struct Named;` or typedef-name-only `T;`
+         * declares no member and must not change the outer record layout. */
+        if (!direct_record_specifier || field_record->name_length != 0U) {
+            return minic_parser_advance(parser);
+        }
         if (declaration_attributes.count != 0U) {
             minic_parser_error(
                 parser,
