@@ -117,7 +117,7 @@ bool minias_add_fixup_symbol_id(MiniAs *as, int section, uint64_t offset,
 /* Target SymbolRefs and STN_UNDEF=0 markers differ only in their feature
  * legality and GNU diagnostic spelling. Centralize the shared instruction
  * fragment/field checks, keeping the two public semantic entry points. */
-static bool stage_instruction_fixup(MiniAs *as,int section,uint64_t offset,
+static bool stage_instruction_fixup(MiniAs *as,uint64_t offset,
                                     MiniAsFixupKind kind,unsigned width,
                                     MiniAsSymbolRef ref,
                                     bool prefer_section_symbol,
@@ -126,14 +126,16 @@ static bool stage_instruction_fixup(MiniAs *as,int section,uint64_t offset,
         as,absolute_zero_symbol?"fixup-abs0":"fixup-ref");
     MiniAsEncodeFixupRequest request={0};
     const MiniAsStmt *owner;
+    int section;
     uint64_t relative;
     if(result==NULL)return false;
     owner=&as->stmts[as->emitting_fragment_id];
+    section=owner->section; /* Target cannot select another Section. */
     if(owner->fragment_kind!=MINIAS_FRAGMENT_INSTRUCTION ||
        (!absolute_zero_symbol &&
         (ref.name_id>=as->symbol_name_count ||
          as->symbol_names[ref.name_id].name==NULL)) ||
-       section!=owner->section || section<0 ||
+       section<0 ||
        (size_t)section>=as->section_count ||
        as->sections[(size_t)section].type==MINIAS_SHT_NOBITS ||
        offset<owner->offset ||
@@ -167,20 +169,20 @@ static bool stage_instruction_fixup(MiniAs *as,int section,uint64_t offset,
 /* A SymbolRef is a pure parser-name token. This staging path neither looks
  * up nor creates an Object SymbolID; only a successful Common fragment
  * commit can give the reference an ELF symbol-table identity. */
-bool minias_encode_add_fixup_ref(MiniAs *as,int section,uint64_t offset,
+bool minias_encode_add_fixup_ref(MiniAs *as,uint64_t offset,
                                  MiniAsFixupKind kind,unsigned width,
                                  MiniAsSymbolRef ref,
                                  bool prefer_section_symbol) {
-    return stage_instruction_fixup(as,section,offset,kind,width,ref,
+    return stage_instruction_fixup(as,offset,kind,width,ref,
                                    prefer_section_symbol,false);
 }
 
 /* ELF STN_UNDEF=0 relaxation markers have no SymbolRef, but retain the same
  * fragment-owned atomic commit and byte bounds as normal target fixups. */
-bool minias_encode_add_fixup_abs0(MiniAs *as,int section,uint64_t offset,
+bool minias_encode_add_fixup_abs0(MiniAs *as,uint64_t offset,
                                   MiniAsFixupKind kind,unsigned width) {
     MiniAsSymbolRef absent={0};
-    return stage_instruction_fixup(as,section,offset,kind,width,absent,
+    return stage_instruction_fixup(as,offset,kind,width,absent,
                                    false,true);
 }
 
@@ -188,17 +190,17 @@ bool minias_encode_add_fixup_abs0(MiniAs *as,int section,uint64_t offset,
  * definition request.  Common creates its Object Symbol only at commit,
  * before any associated fixup is recorded.  This preserves old GNU/ELF
  * symbol encounter order without duplicating an owned name string. */
-bool minias_encode_request_anchor_ref(MiniAs *as,const MiniAsStmt *stmt,
-                                      const char *prefix,
+bool minias_encode_request_anchor_ref(MiniAs *as,const char *prefix,
                                       MiniAsSymbolRef *ref) {
     MiniAsEncodeResult *result=active_result(as,"anchor-ref");
     MiniAsEncodeAnchorRequest *request;
+    const MiniAsStmt *stmt;
     char name[96];
     size_t ordinal;
     MiniAsSymbolNameId name_id;
     if(result==NULL)return false;
-    if(ref==NULL || stmt==NULL ||
-       stmt!=&as->stmts[as->emitting_fragment_id] ||
+    stmt=&as->stmts[as->emitting_fragment_id];
+    if(ref==NULL ||
        stmt->fragment_kind!=MINIAS_FRAGMENT_INSTRUCTION ||
        stmt->section<0 || (size_t)stmt->section>=as->section_count ||
        prefix==NULL || *prefix=='\0' ||

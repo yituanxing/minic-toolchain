@@ -268,6 +268,30 @@ MCData and Target producers must both use one private vector append.
 The existing atomic output size/commit guards are preserved. No
 production behavior or verification gates were weakened.
 
+### 2026-11-01 P04 active-fragment-only Target fixup and anchor capability
+
+The four Target encoders previously passed a mutable, arbitrary `section`
+argument to `minias_encode_add_fixup_ref/abs0`. All **30** call sites
+in AArch64, x86-64, LoongArch64 and RISC-V are now owner-bound: the
+EncodeResult private instruction validator derives the section solely
+from `as->stmts[as->emitting_fragment_id]`. No Target can stage a fixup
+into a different section through this capability; offset/width/ISA kind,
+NOBITS checks and retained NameId/fixup ordering are preserved.
+
+RISC-V's two private PC-relative anchor calls also stop passing `stmt`
+to `minias_encode_request_anchor_ref`. The anchor implementation reads
+the sole active fragment itself, retaining the existing fragment kind,
+valid section, prefix, ordinal and duplicate-name guards. Both internal
+API declarations and all old call sites were updated in the same batch:
+there is no parallel compatibility wrapper.
+
+The mandatory atomic MCFragment structural probe now checks all four
+Target sources and the internal declarations for these capabilities,
+and verifies section/anchor identity is owner-derived. Existing A0
+relocation-byte, 4-target ABI, GNU link/ELF and source replay tests remain
+required. The `TargetOps.encode(MiniAs*,Stmt*)` callback is **still
+broad**: this is a concrete capability reduction, not P04 closure.
+
 ## Current refactor dashboard — 2026-11-01 (exact-head recovery and live-path audit)
 
 ### 2026-11-01 Source collector single-pass de-duplication (local batch)

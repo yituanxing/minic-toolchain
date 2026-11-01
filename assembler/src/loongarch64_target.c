@@ -2115,7 +2115,7 @@ static bool la_encode(MiniAs *as,const MiniAsStmt *s) {
             if(plan->fixups[k].absolute_zero) {
                 if(word_index>=plan->count ||
                    plan->fixups[k].kind!=MINIAS_FIXUP_LARCH_RELAX ||
-                   !minias_encode_add_fixup_abs0(as,s->section,
+                   !minias_encode_add_fixup_abs0(as,
                        s->offset+word_index*4U,
                        plan->fixups[k].kind,4U))return false;
                 continue;
@@ -2128,7 +2128,7 @@ static bool la_encode(MiniAs *as,const MiniAsStmt *s) {
                 return false;
             }
             symbol=m->operands[index].bound_symbol;
-            if(!minias_encode_add_fixup_ref(as,s->section,
+            if(!minias_encode_add_fixup_ref(as,
                  s->offset+word_index*4U,plan->fixups[k].kind,4U,
                  *symbol,false))return false;
         }
@@ -2207,7 +2207,7 @@ static bool la_encode(MiniAs *as,const MiniAsStmt *s) {
         return false;
     }
     expr=m->operands[slot].bound_symbol;
-    return minias_encode_add_fixup_ref(as,s->section,s->offset,kind,4U,
+    return minias_encode_add_fixup_ref(as,s->offset,kind,4U,
                                        *expr,false);
 }
 static bool la_align(MiniAs *as,const MiniAsStmt *stmt,size_t size) {

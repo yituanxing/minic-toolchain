@@ -4258,7 +4258,7 @@ static bool x64_emit_memory_fixups(MiniAs *as,const MiniAsStmt *stmt,
                                    bool needs_pc32,
                                    MiniAsSymbolRef difference_relocation) {
     if(mem->has_difference && needs_pc32 &&
-       !minias_encode_add_fixup_ref(as,stmt->section,
+       !minias_encode_add_fixup_ref(as,
            stmt->offset+layout->displacement_offset,
            MINIAS_FIXUP_X64_PC32,4U,difference_relocation,false))
         return false;
@@ -4279,7 +4279,7 @@ static bool x64_emit_memory_fixups(MiniAs *as,const MiniAsStmt *stmt,
             }
             if(!x64_adjust_symbol_ref(as,mem->symbol,
                     -4-(int64_t)layout->immediate_bytes,&relative) ||
-               !minias_encode_add_fixup_ref(as,stmt->section,
+               !minias_encode_add_fixup_ref(as,
                     stmt->offset+layout->displacement_offset,
                     kind,4U,relative,
                     as->output_elf32 && kind==MINIAS_FIXUP_X64_PC32))
@@ -4298,7 +4298,7 @@ static bool x64_emit_memory_fixups(MiniAs *as,const MiniAsStmt *stmt,
             if(kind==MINIAS_FIXUP_X86_GOTPC &&
                !x64_adjust_symbol_ref(as,mem->symbol,
                    (int64_t)layout->displacement_offset,&adjusted))return false;
-            if(!minias_encode_add_fixup_ref(as,stmt->section,
+            if(!minias_encode_add_fixup_ref(as,
                    stmt->offset+layout->displacement_offset,
                    kind,layout->displacement_bytes,
                    kind==MINIAS_FIXUP_X86_GOTPC?adjusted:mem->symbol,
@@ -4312,7 +4312,7 @@ static bool x64_emit_memory_fixups(MiniAs *as,const MiniAsStmt *stmt,
             minias_set_error(as,"invalid-x86-memory-immediate-fixup-width");
             return false;
         }
-        return minias_encode_add_fixup_ref(as,stmt->section,
+        return minias_encode_add_fixup_ref(as,
             stmt->offset+layout->immediate_offset,
             inst->operands[0].register_64 && !as->output_elf32?
                 MINIAS_FIXUP_X64_ABS32S:MINIAS_FIXUP_ABS,
@@ -4353,7 +4353,7 @@ static bool x64_encode_base(MiniAs *as,const MiniAsStmt *s) {
         if(!minias_emit_instruction_bytes(as,s->section,
                 register_plan.bytes,register_plan.size))return false;
         if(difference_relocation)
-            return minias_encode_add_fixup_ref(as,s->section,
+            return minias_encode_add_fixup_ref(as,
                 s->offset+register_plan.size-4U,
                 MINIAS_FIXUP_X64_PC32,4U,difference_relocation_ref,false);
         if(m->opcode==X64_MOV_IMM32 &&
@@ -4370,7 +4370,7 @@ static bool x64_encode_base(MiniAs *as,const MiniAsStmt *s) {
             if(kind==MINIAS_FIXUP_X86_GOTPC &&
                !x64_adjust_symbol_ref(as,*m->operands[1].bound_symbol,
                    (int64_t)(register_plan.size-width),&adjusted))return false;
-            return minias_encode_add_fixup_ref(as,s->section,
+            return minias_encode_add_fixup_ref(as,
                 s->offset+register_plan.size-width,
                 kind,width,kind==MINIAS_FIXUP_X86_GOTPC?
                     adjusted:*m->operands[1].bound_symbol,false);
@@ -4394,7 +4394,7 @@ static bool x64_encode_base(MiniAs *as,const MiniAsStmt *s) {
             if(symbol) {
                 const MiniAsSymbolRef *expr=m->operands[0].bound_symbol;
                 if(!minias_emit_instruction_bytes(as,s->section,code,n))return false;
-                return minias_encode_add_fixup_ref(as,s->section,s->offset+1U,
+                return minias_encode_add_fixup_ref(as,s->offset+1U,
                     (m->encoding&UINT32_C(0x400))?
                         MINIAS_FIXUP_ABS:MINIAS_FIXUP_X64_ABS32S,
                     plan.immediate_bytes,*expr,false);
@@ -4438,11 +4438,11 @@ static bool x64_encode_base(MiniAs *as,const MiniAsStmt *s) {
             code[n++]=(unsigned char)(seg>>8U);
             if(!minias_emit_instruction_bytes(as,s->section,code,n))return false;
             if(difference_relocation)
-                return minias_encode_add_fixup_ref(as,s->section,
+                return minias_encode_add_fixup_ref(as,
                     s->offset+1U,MINIAS_FIXUP_X64_PC32,width,
                     difference_relocation_ref,false);
             if(!symbolic)return true;
-            return minias_encode_add_fixup_ref(as,s->section,
+            return minias_encode_add_fixup_ref(as,
                     s->offset+1U,MINIAS_FIXUP_ABS,width,
                     *m->operands[1].bound_symbol,false);
         }
@@ -4457,7 +4457,7 @@ static bool x64_encode_base(MiniAs *as,const MiniAsStmt *s) {
             x64_append_le(code,&n,(uint64_t)mem->displacement,width);
             if(!minias_emit_instruction_bytes(as,s->section,code,n))return false;
             if(!mem->has_symbol)return true;
-            return minias_encode_add_fixup_ref(as,s->section,
+            return minias_encode_add_fixup_ref(as,
                 s->offset+n-width,MINIAS_FIXUP_ABS,width,mem->symbol,false);
         }
         case X64_BRANCH: {
@@ -4523,7 +4523,7 @@ static bool x64_encode_base(MiniAs *as,const MiniAsStmt *s) {
                 MiniAsSymbolRef pc_relative;
                 if(!x64_adjust_symbol_ref(as,*expr,
                         -(int64_t)disp_width,&pc_relative))return false;
-                return minias_encode_add_fixup_ref(as,s->section,
+                return minias_encode_add_fixup_ref(as,
                     s->offset+width-disp_width,
                     disp_width==2U?MINIAS_FIXUP_PREL32:kind,
                     disp_width,pc_relative,
@@ -4587,7 +4587,7 @@ static bool x64_encode_base(MiniAs *as,const MiniAsStmt *s) {
                    displacement_relocation_ref))
                 return false;
             if(difference_relocation)
-                return minias_encode_add_fixup_ref(as,s->section,
+                return minias_encode_add_fixup_ref(as,
                     s->offset+layout.immediate_offset,
                     MINIAS_FIXUP_X64_PC32,4U,difference_relocation_ref,false);
             return true;
@@ -4601,7 +4601,7 @@ static bool x64_encode_base(MiniAs *as,const MiniAsStmt *s) {
                           UINT64_C(0):value->immediate,8U);
             if(!minias_emit_instruction_bytes(as,s->section,code,n))return false;
             if(value->kind!=MINIAS_MC_BOUND_SYMBOL)return true;
-            return minias_encode_add_fixup_ref(as,s->section,s->offset+2U,
+            return minias_encode_add_fixup_ref(as,s->offset+2U,
                 MINIAS_FIXUP_X64_ABS64,8U,
                 *value->bound_symbol,false);
         }
@@ -4615,7 +4615,7 @@ static bool x64_encode_base(MiniAs *as,const MiniAsStmt *s) {
                 (src->kind==MINIAS_MC_BOUND_SYMBOL?0U:src->immediate),4U);
             if(!minias_emit_instruction_bytes(as,s->section,code,n))return false;
             if(src->kind!=MINIAS_MC_BOUND_SYMBOL)return true;
-            return minias_encode_add_fixup_ref(as,s->section,s->offset+3U,
+            return minias_encode_add_fixup_ref(as,s->offset+3U,
                 MINIAS_FIXUP_X64_ABS32S,4U,*src->bound_symbol,false);
         }
         case X64_ALU_IMM: {
@@ -4655,7 +4655,7 @@ static bool x64_encode_base(MiniAs *as,const MiniAsStmt *s) {
             x64_append_le(code,&n,imm,plan.immediate_bytes);
             if(difference_relocation) {
                 if(!minias_emit_instruction_bytes(as,s->section,code,n))return false;
-                return minias_encode_add_fixup_ref(as,s->section,
+                return minias_encode_add_fixup_ref(as,
                     s->offset+plan.immediate_offset,
                     MINIAS_FIXUP_X64_PC32,4U,difference_relocation_ref,false);
             }
@@ -4679,7 +4679,7 @@ static bool x64_encode_base(MiniAs *as,const MiniAsStmt *s) {
                 if(kind==MINIAS_FIXUP_X86_GOTPC &&
                    !x64_adjust_symbol_ref(as,*expr,
                        (int64_t)plan.immediate_offset,&adjusted))return false;
-                return minias_encode_add_fixup_ref(as,s->section,
+                return minias_encode_add_fixup_ref(as,
                     s->offset+plan.immediate_offset,
                     kind,plan.immediate_bytes,
                     kind==MINIAS_FIXUP_X86_GOTPC?adjusted:*expr,false);

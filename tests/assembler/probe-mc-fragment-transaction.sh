@@ -84,6 +84,31 @@ if 'result->fixups[result->fixup_count++]' in data_stage:
     raise SystemExit('MCData reimplements raw Fixup-vector append')
 if 'bool minias_add_fixup_symbol_id(' not in mc:
     raise SystemExit('moved semantic MCData wrappers missing')
+# A Target cannot choose another Section or Fragment during Fixup staging:
+# its output capability is bound to the active EncodeResult owner.
+if 'section=owner->section;' not in mc:
+    raise SystemExit('encoded Fixup section is not derived from owner')
+if 'stmt=&as->stmts[as->emitting_fragment_id];' not in mc:
+    raise SystemExit('encoded anchor owner is not derived from active fragment')
+for signature in ('minias_encode_add_fixup_ref','minias_encode_add_fixup_abs0'):
+    start=h.index('bool '+signature+'(')
+    stop=h.index(');',start)
+    if 'int section' in h[start:stop]:
+        raise SystemExit('Target can still select Fixup section: '+signature)
+anchor_start=h.index('bool minias_encode_request_anchor_ref(')
+anchor_end=h.index(');',anchor_start)
+if 'MiniAsStmt' in h[anchor_start:anchor_end]:
+    raise SystemExit('Target can still supply arbitrary anchor Fragment')
+for target_path in ('aarch64_target.c','x86_64_target.c',
+                    'loongarch64_target.c','riscv_encode.c'):
+    code=open('assembler/src/'+target_path,encoding='utf-8').read()
+    import re
+    if re.search(r'minias_encode_add_fixup_(ref|abs0)\s*\(\s*as\s*,'
+                 r'\s*(s|stmt)->section\s*,',code):
+        raise SystemExit('legacy Target-controlled Fixup section: '+target_path)
+    if re.search(r'minias_encode_request_anchor_ref\s*\(\s*as\s*,'
+                 r'\s*stmt\s*,',code):
+        raise SystemExit('legacy Target-controlled anchor Fragment: '+target_path)
 start=mc.index('static bool stage_instruction_fixup(')
 end=mc.index('bool minias_encode_request_anchor_ref(',start)
 target_stage=mc[start:end]

@@ -5318,8 +5318,7 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
     /* Target describes the binding policy without assuming that the last
      * element of Common's global Fixup array belongs to this instruction.
      * Both bytes and the relocation request are committed by the MC engine. */
-    return minias_encode_add_fixup_ref(
-        as,stmt->section,stmt->offset,fixup,4U,
+    return minias_encode_add_fixup_ref(as,stmt->offset,fixup,4U,
         *expr,fixup==MINIAS_FIXUP_A64_LD_PREL_LO19);
 }
 
