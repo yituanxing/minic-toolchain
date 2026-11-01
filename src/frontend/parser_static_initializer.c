@@ -2408,25 +2408,30 @@ static bool overwrite_static_zero_record_value(MinicParser *parser,
             return false;
         }
     }
-    return overwrite_static_zero_record_constant(parser, object_id, record, record_base_slot);
+    /* The compound-literal type name may append anonymous records and move
+     * Program.records. Do not forward the borrowed descriptor past parsing. */
+    record = minic_c0_program_record(parser->program, type.record_id);
+    return record != NULL && overwrite_static_zero_record_constant(
+                                 parser, object_id, record, record_base_slot);
 }
 
 static bool overwrite_static_zero_record_constant(MinicParser *parser,
                                                   MinicGlobalObjectId object_id,
                                                   const MinicRecord *record,
                                                   size_t record_base_slot) {
+    MinicRecordId record_id;
     size_t field_index;
     size_t field_limit;
 
     if (parser == NULL || record == NULL || !record->is_complete ||
+        record < parser->program->records ||
+        record >= parser->program->records + parser->program->record_count ||
         !minic_parser_expect(parser, MINIC_TOKEN_LBRACE, "expected '{' in record initializer")) {
         return false;
     }
-    /* FIXME(MC-023): unlike forward static Record initialization, this
-     * backward overwrite retains a Program.records element address while
-     * recursively parsing fields. A nested sizeof(struct {...}) can grow
-     * that arena; subsequent record->fields reads are ASan-confirmed UAF.
-     * Carry a stable RecordId or a verified value snapshot across parsing. */
+    /* Recursive field parsing may grow Program.records (e.g. sizeof(struct
+     * {...})); recover the arena descriptor by its stable ID after each step. */
+    record_id = (MinicRecordId)(record - parser->program->records);
     field_limit = record->is_union ? 1U : record->field_count;
     field_index = 0U;
     while (parser->current.kind != MINIC_TOKEN_RBRACE) {
@@ -2434,6 +2439,10 @@ static bool overwrite_static_zero_record_constant(MinicParser *parser,
         size_t relative_slot;
         size_t field_base_slot;
 
+        record = minic_c0_program_record(parser->program, record_id);
+        if (record == NULL || !record->is_complete) {
+            return false;
+        }
         if (parser->current.kind == MINIC_TOKEN_DOT) {
             MinicStaticRecordDesignator designator;
             bool handled_union_zero;
@@ -2449,6 +2458,11 @@ static bool overwrite_static_zero_record_constant(MinicParser *parser,
                 return false;
             }
 
+            /* A designator can itself parse an array-index expression. */
+            record = minic_c0_program_record(parser->program, record_id);
+            if (record == NULL) {
+                return false;
+            }
             handled_union_zero = false;
             if (!try_overwrite_static_zero_noncanonical_union_designator(parser,
                                                                          object_id,
@@ -2456,6 +2470,11 @@ static bool overwrite_static_zero_record_constant(MinicParser *parser,
                                                                          &designator,
                                                                          record_base_slot,
                                                                          &handled_union_zero)) {
+                return false;
+            }
+            /* Union-member overwrite can recursively parse another aggregate. */
+            record = minic_c0_program_record(parser->program, record_id);
+            if (record == NULL) {
                 return false;
             }
             if (handled_union_zero) {

@@ -1,11 +1,11 @@
-# MiniC 手动审计最小反例（已知失败，非绿灯回归）
+# MiniC 手动审计最小反例（保留失败历史及修复后回归）
 
-本目录保留与 [架构问题台账](../../../docs/architecture/minic-issue-register.md) 中部分 MC 编号绑定的**合法 GNU C 输入**。没有纳入 `make test` 的自动 PASS 集合：在修复前让某些用例失败是预期行为，不能把“仓库含测试文件”写成“问题已修复”。
+本目录保留与 [架构问题台账](../../../docs/architecture/minic-issue-register.md) 中部分 MC 编号绑定的**合法 GNU C 输入**。部分用例仍用于手动审计；已修复的问题必须有独立自动回归和验证证据，不能把“仓库含测试文件”写成“问题已修复”。
 
 | 编号 | 源文件 | 当前核对的差异 | 需要的级别 |
 | --- | --- | --- | --- |
-| MC-023 | `mc023_static_record_backward_uaf.c` | Record arena 扩容后被后向零覆写读取；ASan UAF，不保证可见值错 | GNU11 C + MiniC ASan `-S` |
-| MC-049 | `mc049_static_chained_array_uaf.c` | ArrayType arena 扩容后静态链式设计符 UAF | GNU11 C + MiniC ASan `-S` |
+| MC-023 | `mc023_static_record_backward_uaf.c` | 已修：后向覆写跨 Record arena 扩容的借用 UAF；原始 ASan 反例保留 | GNU x86 native exit7 + MiniC 五目标 ASan `-S`；`make check-static-record-backward-arena` |
+| MC-049 | `mc049_static_chained_array_uaf.c` | 已修：静态链式设计符跨 ArrayType arena 扩容的借用 UAF；保留 29/30/31 容量相位 | GNU x86 native exit7 + MiniC 五目标 ASan `-S`；`make check-static-chained-array-arena` |
 | MC-051 | `mc051_long_double_negzero.c` / `_support.c` | GNU x86 native mask `0`；MiniC `-S`→GNU cc native mask `0x10` | GNU native 双 TU 严格差分 |
 | MC-056 | `mc056_runtime_record_positional_uaf.c` | 普通局部 Record 顺序初始化器跨 Record arena grow UAF | GNU11 C + 五目标 MiniC ASan `-S` |
 | MC-057 | `mc057_gnu_empty_record_abi.c` | GNU empty struct 返回与参数在 RV32/RV64/x86 被不同路径拒绝 | 四种宏 case × 六目标 `-S` |
@@ -36,7 +36,7 @@ cc -no-pie -o /tmp/mc051-minic /tmp/mc051-minic.s tests/compiler/audit/mc051_lon
 /tmp/mc051-minic
 ```
 
-**容量相关：** MC-049 默认 30 预置 typedef 适合 RV32/RV64/A64/Loong 的已观察相位；x86 在 `cc -E -P` 一步添加 `-DMINIC_DROP30` 移除第 30 个；`-DMINIC_EXTRA31` 可检查未命中相位时无报警并不代表修复。MC-023 的 14 个前置 Record 适合 16 容量相位，其他目标/配置应调整容量条件。`-S` 不能证明目标链接/QEMU，ASan PASS 也不能单独证明所有容量无 UAF。
+**容量相关：** MC-049 默认 30 预置 typedef 适合 RV32/RV64/A64/Loong 的已观察相位；x86 在 `cc -E -P` 一步添加 `-DMINIC_DROP30` 移除第 30 个；`-DMINIC_EXTRA31` 为未命中相位的对照。MC-023 的 14 个前置 Record 适合 16 容量相位。两条已修回归把原始反例纳入 `check-fast`，并在单独的 sanitizer 构建上验证。`-S` 不能证明非 x86 目标链接/QEMU，ASan PASS 也不能单独证明所有容量无 UAF。
 
 第六轮 `MC-056/057/058` 复现步骤（先固定 GNU 预处理产物；任何非零退出码都应和精确诊断匹配）：
 

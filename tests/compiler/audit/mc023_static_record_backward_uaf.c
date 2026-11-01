@@ -15,5 +15,10 @@ struct R13 { int a; };
 struct R14 { int a; };
 struct Inner { int p; int q; };
 struct Outer { struct Inner inner; int t; };
-static struct Outer value = { .inner = {0}, .inner = {sizeof(struct {int z;}), 3} };
+#ifdef MINIC_NO_RECORD_GROW
+#define MC023_FIRST 4
+#else
+#define MC023_FIRST sizeof(struct {int z;})
+#endif
+static struct Outer value = { .inner = {0}, .inner = {MC023_FIRST, 3} };
 int main(void) { return value.inner.p + value.inner.q; }

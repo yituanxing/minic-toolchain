@@ -1555,6 +1555,13 @@ check-static-chained-array-arena: $(MINIC_CC_BINARY)
 
 check-fast: check-static-chained-array-arena
 
+.PHONY: check-static-record-backward-arena
+check-static-record-backward-arena: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	bash tests/compiler/c0/probe-static-record-backward-arena.sh
+
+check-fast: check-static-record-backward-arena
+
 .PHONY: check-x86-head-inline-section
 check-x86-head-inline-section: $(MINIC_CC_BINARY)
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
