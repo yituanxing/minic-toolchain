@@ -101,7 +101,7 @@ Core IR 存在函数路径；GlobalObject 作为并行的 TU 全局数据路径�
 | **A8-12 LP64 大聚合复制** | `common/lp64_aggregate.c:124–137` + A64/Loong return helper 2048B 人为上限；A64 ingress 按字节展开，Loong 已循环复制 | `SOURCE`，已有 `MC-060` 差分 | 先复用 A64 本地 counted-copy，修宽长度计数、保留 ABI 隐藏指针；再解除多处 cap 并测 2049B+ |
 | **A8-13 Loong 地址折叠扫描** | `loongarch64/residual_emit.c:45–123` 对每候选重复扫全函数，可构造二次方工作量 | `SOURCE`，无性能基准 | 缓存每函数 use/provenance 判定后替换热路径；保留保守不折叠条件 |
 | **A8-14 Core fact/标签重复扫描** | `core_lower_if.c` 自有 fact snapshot 重叠 `local_facts.c`；`core_lower.c:1074–1123` 标签所有权全表扫描 | `SOURCE`；关联 `MC-029/040` | 先收敛 facts fork/meet 和 reentry owner 查询；不能合并证明强度不同的 Bool oracle |
-| **A8-15 Core 个案打印与死 API** | `core_lower.c`、`core_lower_if.c` 六处无开关 `genl_op_from_split` stderr 输出；两个未调用 parser helper | `SOURCE`；已有 `MC-020/031` | 简单删除须先核对 `rg`/构建；保留其他有环境开关的诊断 |
+| **A8-15 Core 个案打印与死 API** | `core_lower.c`、`core_lower_if.c` 六处无开关 `genl_op_from_split` stderr 输出；两个未调用 parser helper | `SOURCE`；已有 `MC-020/031` | **Core `GENL_*` 日志有现行 CI 诊断脚本消费者**，暂留；不能仅因 stderr 无开关而删，见[清理账](minic-cleanup-ledger.md) |
 | **A8-16 静态对象/标签保活** | Core function prune 与静态对象 prune 相互依赖；GNU ASM symbol 与 computed-goto label 是非显式 CALL 根 | `SOURCE`，已知 `MC-064/072`；`MC-073` 尚调查 | 建立根类型与实际发射关系，不直接删三次剪枝或 GlobalObject owner/force-emit 字段 |
 | **A8-17 现行文档/目录漂移** | 95 份架构材料平铺；living 图谱仍使用旧 332 文件和单次 prune 摘要 | `SOURCE / DOC` | 本入口统一导航、更新当前补注；之后按链接迁移历史文件，不直接丢弃审查记录 |
 | **A8-18 Backend 头文件两种职责** | `target/backend.h:24–110` 同时声明最终 program emission 和源 ASM 资格契约；`core_lower_asm_target.c:17–64` 在 Core 构造期调用资格服务 | `SOURCE / PLAN` | 先拆窄的 source-qualification 声明/头文件与最终 emission API；保留目标判定时序，不新增架构枚举 |
@@ -177,7 +177,7 @@ ASM-only、Source-only 证据一律不互相冒充。
 | **A11-09 String scanner 五入口** | `parser_string.c:274,322,463,587,679` 反复用 Lexer 副本探测 literal 长度再解析 | `SOURCE / DESIGN`；可抽合法编码/长度扫描；静态对象、GNU ASM 字符串、覆零、运行时 commit 不同，正常 lexical lookahead 不是 UAF |
 | **A11-10 Runtime initializer 计划分岔** | `parser_runtime_initializer.c:229–995` 多条数组 plan/Record 分支，对比已共享 `MinicArrayInitializerPlan` 的 static/runtime scalar 路径 | `SOURCE / GNU-REJECT`；后向 designator `GNU PASS/MiniC 明拒` 是功能边界，合流先证明副作用执行及覆写顺序，关联既有 MC-023/035/039 |
 | **A11-11 Compiler 根遍历重复** | `core_reachability.c:211–349` 先 `mark_reachable_blocks` 再自建 CFG BFS，`INDIRECT_BRANCH` 以所有 block 过量入队；五个 emitter 都以 entry＋source_label 根发射 | `SOURCE / CLEANUP`；确认 MC-073 的 BLOCK_ADDRESS 根合同及 object/function 保活后删保守第二遍，不能把三次 function/object prune 合为一次 |
-| **A11-12 Backend policy 旧分支** | `backend.c` 五目标 `emit_reachable_core_blocks_only` 当前全部 `true`，`core_reachability.c:216–240` 的 false 分支无生产 Backend | `SOURCE / CLEANUP`；先确认独立 API/test 是否要求 all-block 模式；已纠正函数台账 FN-C09 的旧说明 |
+| **A11-12 Backend policy 旧分支** | `backend.c` 五目标 `emit_reachable_core_blocks_only` 当前全部 `true`，`core_reachability.c:216–240` 的 false 分支无生产 Backend | `SOURCE / NEEDS_PROOF`；现行 Linux CI 脚本仍有历史 Core Reachability 文字补丁；查清 pinned patch 和 source-label 合同后才删；见[清理账](minic-cleanup-ledger.md) |
 | **A11-13 Inline FunctionBody 重复索引** | Integer/Symbolic/Boolean 三个 specialization 与 residual-reference 各扫 owner/CALL graph，clone 动态追加使索引可能失效 | `SOURCE / PERF`；按 Program 世代/增量事实重用稳定索引，保留 OOM conservative fallback；关联 MC-006～008、A9-05 |
 | **A11-14 Core/TU symbol 根反查** | `core_reachability.c:108–137` 每个 FunctionSymbol 根按名字线性扫 C0 Function，对 global objects 已有有序索引 | `SOURCE / PERF`；共用只读 TU 符号事实表，保留 Core 独立 symbol 与 weak/extern 区别；延续 A9-07 |
 | **A11-15 GNU ASM 引用扫描两语法** | Compiler `inline_reference.c:13–54` substring 认名字；Common `program_emit.h:142–183` token-boundary 认名字，均有真实 scan 调用 | `SOURCE / DESIGN`；需统一符号根/文本引用合同再减少过保留；当前无错误输出实证 |

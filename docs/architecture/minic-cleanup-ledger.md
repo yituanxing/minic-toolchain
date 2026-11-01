@@ -20,6 +20,9 @@
   `已扫路径`、`已追调用链`、`已实际清理`、`已动态验证`，不得将其中一个冒充另一个。
 - 这轮不是 MiniAS/MiniLD 联合验收，完整 Linux 多架构矩阵延后；`-S`、GNU GAS/LD、
   原生运行、目标 QEMU、源码静态推导分别标明，不以单一探针声称 P2 全过。
+- **逐文件阅读统计另算：** C1 的 6 个被改动源码文件只可记为“相关入口、调用者和
+  删除闭包已核”，**不是**这 6 个完整文件的逐行通读。历史 F11 完成 336 路径扫描，
+  而当前 HEAD 上可逐文件追溯的“完整深读”清单仍待重建，暂不宣称 336/336 结束。
 
 ## 批次 C1：高确定性的局部死路与重复计算
 
@@ -53,6 +56,19 @@
 | `A11-01` `ast_global` 八个旧 wrapper | `src/` 仅靠零调用判断为死路不够；历史 Python materialize/PR 脚本仍通过函数名作文本锚点，且头文件对外声明。 | 先清算脚本是否现行、头文件 API 合同，再退役；不能把脚本弄坏而称“纯删”。 |
 | `A11-02` AST 参数计数 | Linux perf CI 的源码补丁脚本仍以其文本为锚点。 | 先迁当前 CI 的字符串匹配，验证精确补丁。 |
 | `A11-12` Core Reachability policy | 五个已注册 Backend 都设 `emit_reachable_core_blocks_only=true`，false 路径当前不启用；但现行 Linux workflow 仍使用关联的历史补丁脚本，且 all-block 与 source-label 根追踪有契约历史。 | 先检查三个 CI 脚本在 pinned commit 上的实际 patch 行为，并证明所有 emitter 的 CFG 根合同，再删虚假策略分支；`minic_enqueue_core_block` 仍有现役 CFG 消费者。 |
+| `A8-15` `GENL_COND_*`/`GENL_IF_PATH` 日志 | Core 中无环境开关的日志虽碍眼，现行 Linux profile 构建仍应用 `apply-netlink-if-control-trace-v0.py`，cohort bisect 脚本实际抽取 `GENL_IF_DECISION/GENL_COND_EMIT`。 | **KEEP(tooling)**；先把现行诊断消费者迁成稳定的可控日志合同并验证 workflow，再决定是否退役硬编码输出。不能按“debug print”直接删。 |
+| `M194_SMALL_LOOP_PROBE` Core 诊断 | `cfg_constant_calls.c` 中约 70 行 debug/probe 代码被 `apply-core-unreachable-reentry-v0.py` 检查，且可被 `apply-small-constant-loop-probe-v0.py` 重新注入；`linux-runtime-earlycon-profile-probe-v1.sh` 为现行 focused workflow 使用。 | **KEEP(tooling)**，待迁移诊断脚本/工作流，再考虑退役，不能把当前 `src/` 调用数当作唯一依据。 |
+| `CORE_SWITCH_DETAIL` stderr 路径 | `core_lower_switch.c` 分散约 25 行细节诊断无已知 CI 文本消费者，但可能是合法源程序拒绝时的用户可见错误合同。 | **NEEDS_PROOF(diagnostics)**；先做 GNU 正反例与诊断快照、确认错误原因归属，不能随意移除。 |
+| `A11-25` Core alignment validation | Core verifier 的 object 循环未检查 `explicit_alignment`，Common storage planner 在后端检查且现有 native boundary gate 真实使用。 | **KEEP(validation hole)**；是验证职责缺口，不是死代码，留到后续合同重构或独立修复，不能计清理。 |
+
+### C2：源函数/CI 消费者证据筛查（无源码删除）
+
+已对 `src/` 内 `static` 函数引用、条件编译/常假分支、Core stderr/诊断字符串，
+以及 `.github/workflows`、`tools/ci` 的脚本锚点做一轮交叉扫描。
+在排除当前测试、历史脚本和潜在公开 API 后，**未再找到两项可独立证明
+“直接删至少 10 行、且没有外部合同”的新目标**；因此 C2 不为了净减行数继续动源码。
+下一步转向按子系统通读整个调用链：Frontend→Compiler→Core→Common Target→五目标，
+逐文件登记输入、owner、失败退出、测试和历史脚本引用，再从证据中选 C3 删除项。
 | `A11-04` AST external traversal | 上层函数虽零内部调用，但底层递归与 remap 现役，可能存在公开 API 合同。 | 明确 ABI / 外部消费者后才删最上层 wrapper。 |
 | `A11-05` semantic snapshot wrappers | 生产无调用但白盒单测使用。 | 若要合并，先迁测试且保存回滚/ownership 断言。 |
 | `A11-21` Core scalar predicate | 两个同形判断的持有者分别属于 memory 和 CALL；合并收益极小，邻近的 global-addressable predicate 对 `void` 的语义不同。 | 等输入合同证明和实际简化收益，不为了“统一”引入层级。 |
