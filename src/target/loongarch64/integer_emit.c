@@ -584,26 +584,9 @@ bool minic_loongarch64_emit_integer_instruction(
             *needs_gp_store = true;
             return true;
         }
-        /* Original cJSON uses ~ on signed/unsigned scalar values.
-         * NOR against zero is the LoongArch native complement; normalize
-         * subword results before storing the Core SSA slot. */
-        case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_NOT: {
-            const MinicCoreValueId operand = ins->value.operand;
-            size_t width;
-            bool sign;
-            if (!minic_multi_direct_integer_unary_shape(
-                    program, target, fn, ins, &width, &sign) ||
-                (!lhs_in_previous_gp &&
-                 !emit_sp_mem(out, width == 8U ? "ld.d" : "ld.w",
-                              "$t0", minic_lp64_frame_value_offset(frame_plan, operand))) ||
-                (lhs_in_previous_gp && width != 8U &&
-                 fputs("  slli.w $t0, $t0, 0\n", out) == EOF) ||
-                fputs("  nor $t0, $t0, $zero\n", out) == EOF ||
-                (width != 8U && !minic_loongarch64_emit_integer_normalize(out, width, sign)))
-                return false;
-            *needs_gp_store = true;
-            return true;
-        }
+        /* Unary ~ and - share operand transport and subword normalization;
+         * only the native NOR/SUB opcode differs. */
+        case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_NOT:
         case MINIC_CORE_INSTRUCTION_INTEGER_NEGATE: {
             const MinicCoreValueId operand = ins->value.operand;
             size_t width;
@@ -615,8 +598,10 @@ bool minic_loongarch64_emit_integer_instruction(
                               "$t0", minic_lp64_frame_value_offset(frame_plan, operand))) ||
                 (lhs_in_previous_gp && width != 8U &&
                  fputs("  slli.w $t0, $t0, 0\n", out) == EOF) ||
-                fputs(width == 8U ? "  sub.d $t0, $zero, $t0\n"
-                                  : "  sub.w $t0, $zero, $t0\n", out) == EOF ||
+                fputs(ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_NOT
+                          ? "  nor $t0, $t0, $zero\n"
+                          : width == 8U ? "  sub.d $t0, $zero, $t0\n"
+                                        : "  sub.w $t0, $zero, $t0\n", out) == EOF ||
                 (width != 8U && !minic_loongarch64_emit_integer_normalize(out, width, sign)))
                 return false;
             *needs_gp_store = true;

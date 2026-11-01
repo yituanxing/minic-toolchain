@@ -65,34 +65,25 @@ bool minic_loongarch64_emit_fp_instruction(
             *needs_gp_store = true;
             return true;
         }
-        /* M37: source-observed cJSON binary64 subtract and multiply. */
+        /* Binary64 arithmetic shares operand loads and SSA result storage. */
         case MINIC_CORE_INSTRUCTION_DOUBLE_ADD:
         case MINIC_CORE_INSTRUCTION_DOUBLE_SUBTRACT:
-        case MINIC_CORE_INSTRUCTION_DOUBLE_MULTIPLY: {
+        case MINIC_CORE_INSTRUCTION_DOUBLE_MULTIPLY:
+        case MINIC_CORE_INSTRUCTION_DOUBLE_DIVIDE: {
             const MinicCoreValueId lhs = ins->value.binary.left;
             const MinicCoreValueId rhs = ins->value.binary.right;
             const char *op = ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_ADD
                 ? "  fadd.d $ft0, $ft0, $ft1\n"
                 : ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_SUBTRACT
                     ? "  fsub.d $ft0, $ft0, $ft1\n"
-                    : "  fmul.d $ft0, $ft0, $ft1\n";
+                    : ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_MULTIPLY
+                        ? "  fmul.d $ft0, $ft0, $ft1\n"
+                        : "  fdiv.d $ft0, $ft0, $ft1\n";
             if (!minic_multi_direct_floating_shape(
                     program, target, fn, ins, NULL, NULL) ||
                 !emit_sp_mem(out, "fld.d", "$ft0", minic_lp64_frame_value_offset(frame_plan, lhs)) ||
                 !emit_sp_mem(out, "fld.d", "$ft1", minic_lp64_frame_value_offset(frame_plan, rhs)) ||
                 fputs(op, out) == EOF ||
-                !emit_sp_mem(out, "fst.d", "$ft0", offset))
-                return false;
-            return true;
-        }
-        case MINIC_CORE_INSTRUCTION_DOUBLE_DIVIDE: {
-            const MinicCoreValueId lhs = ins->value.binary.left;
-            const MinicCoreValueId rhs = ins->value.binary.right;
-            if (!minic_multi_direct_floating_shape(
-                    program, target, fn, ins, NULL, NULL) ||
-                !emit_sp_mem(out, "fld.d", "$ft0", minic_lp64_frame_value_offset(frame_plan, lhs)) ||
-                !emit_sp_mem(out, "fld.d", "$ft1", minic_lp64_frame_value_offset(frame_plan, rhs)) ||
-                fputs("  fdiv.d $ft0, $ft0, $ft1\n", out) == EOF ||
                 !emit_sp_mem(out, "fst.d", "$ft0", offset))
                 return false;
             return true;

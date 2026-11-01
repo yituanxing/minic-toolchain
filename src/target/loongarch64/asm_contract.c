@@ -1262,7 +1262,6 @@ static MinicLoongPerCpuIndexedForm loong_percpu_indexed_form(
      * forms name exactly the same two typed operand roles. */
     for (i = 0U; i < sizeof(words)/sizeof(words[0]); ++i) {
         char numeric[48];
-        const bool read = i < 4U;
         const char *const name = i < 4U ?
             (i == 0U ? "ldx.b" : i == 1U ? "ldx.h" :
              i == 2U ? "ldx.w" : "ldx.d") :
@@ -1272,7 +1271,6 @@ static MinicLoongPerCpuIndexedForm loong_percpu_indexed_form(
         if (snprintf(numeric,sizeof(numeric), "%s%%0,$r21,%%1",name) > 0 &&
             strcmp(compact,numeric) == 0)
             return (MinicLoongPerCpuIndexedForm)(i + 1U);
-        (void)read;
     }
     return LOONG_PERCPU_NONE;
 }

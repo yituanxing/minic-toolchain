@@ -329,7 +329,7 @@ bool minic_loongarch64_simd_qualify_source(
     MinicTargetInlineAsmContract *contract) {
     LoongSimdProgram parsed;
     size_t i;
-    bool named, uses_load = false, uses_store = false;
+    bool named;
     if (!program || !source || !contract || !source->is_volatile ||
         source->is_goto || source->label_count ||
         source->register_clobber_count ||
@@ -365,14 +365,11 @@ bool minic_loongarch64_simd_qualify_source(
         } else if (role == MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE) {
             if (!read || !written) return false;
         } else return false;
-        uses_load |= read;
-        uses_store |= written;
         contract->kinds[i] = role;
     }
-    /* A vector load/store must correspond to a *real* typed memory effect.
+    /* Every admitted operand above has a real typed load/store effect.
      * Named pointer forms carry a GNU `memory` clobber; numeric forms bind
      * exact read/write `m` C lvalues and preserve their volatile ordering. */
-    if (!uses_load && !uses_store) return false;
     contract->operand_count = parsed.operand_count;
     contract->implicit_memory_effect = named;
     return true;

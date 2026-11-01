@@ -408,13 +408,9 @@ static bool emit_integer_memory(FILE *out, bool store,
                   "  addi.d $t4, $t4, -1\n"
                   "  bnez $t4, 3b\n", out) == EOF)
             return false;
-        /* Native ld.w sign-extends to 64 bits even for unsigned C int.
-         * Narrow signed integers need the same sign extension as ld.h. */
+        /* Native ld.w sign-extends even for unsigned C int; the byte
+         * gather must retain that same 64-bit machine representation. */
         if (width == 4U && fputs("  slli.w $t0, $t0, 0\n", out) == EOF)
-            return false;
-        if (width == 2U && sign &&
-            fputs("  slli.d $t0, $t0, 48\n"
-                  "  srai.d $t0, $t0, 48\n", out) == EOF)
             return false;
     }
     return fputs("2:\n", out) != EOF;

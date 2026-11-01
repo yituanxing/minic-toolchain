@@ -366,9 +366,7 @@ static bool loongarch64_emit_compact_assembly(FILE *out,
     if (out == NULL || buffer == NULL) return false;
     memset(cache, 0, sizeof(cache));
     while (line < end) {
-        const char *newline = memchr(line, '\n', (size_t)(end - line));
-        size_t length = newline != NULL
-            ? (size_t)(newline - line) + 1U : (size_t)(end - line);
+        size_t length = loongarch64_machine_line_length(line, end);
         unsigned int reg = 0U;
         char base[3] = {0};
         size_t offset = 0U;

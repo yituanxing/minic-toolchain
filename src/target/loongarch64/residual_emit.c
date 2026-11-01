@@ -315,7 +315,6 @@ bool minic_loongarch64_emit_residual_instruction(
                      !minic_loongarch64_emit_integer_normalize(out, width, sign))) return minic_multi_direct_machine_reject(fn, "loongarch64", name, reject_stage,
                                     reject_block, reject_ins, __LINE__);
             }
-            (void)sign;
             break;
         }
         case MINIC_CORE_INSTRUCTION_GLOBAL_ADDRESS: {

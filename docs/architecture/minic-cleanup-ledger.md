@@ -1271,6 +1271,69 @@ GNU host oracle）；A64 binary128 tail 用 GNU `-E -P` 的
 该环境 A64 cross GNU AS/ELF/QEMU **SKIP/NOT_RUN**，不得
 等同已证 AArch64 P2 运行验收。五架构 Linux 联合验收继续推迟。
 
+## 批次 C36：LoongArch64 全目录逐行深读、重复机器发射合并与死分支清理
+
+**基线：** C35 远端 `1aefb01d`，2026-11-01。本批全文深读
+`src/target/loongarch64` 的 **22 个生产文件、原始 8,589 行**：
+`asm_contract.c/.h`（3,738/27）、`block_emit.c/.h`（495/33）、
+`call_emit.c/.h`（489/17）、`codegen.c/.h`（676/20）、
+`fp_emit.c/.h`（262/20）、`frame_emit.c/.h`（103/16）、
+`integer_emit.c/.h`（815/29）、`memory_emit.c/.h`（569/47）、
+`residual_emit.c/.h`（651/24）、`scalar_normalize.c/.h`（11/10）、
+`simd_asm.c/.h`（516/21）。此批无“扫过就算深读”的文件。
+全项目累计全文深读 **339/342**：Frontend **71/71**、
+Compiler **11/11**、Core **48/48**、Target **209/212**；
+尚余 3 个 Target 大文件：x86-64 `asm_contract.c`（8,975 行）、
+`machine_asm.c`（6,462 行）、AArch64 `asm_contract.c`（7,452 行）。
+
+| 子域 | owner／关联审读／去留决策 |
+| --- | --- |
+| `codegen` / `block_emit` | Common 的 FunctionFacts、StoragePlan、CallIndex、Core block dispatch 只管可证形状；目标持有 LP64D `a0` 隐式 sret、8 GP/8 FP、16B outgoing SP、动态 `s0`、寄存器保活与逐字节 Record。后处理的两遍 SSA 单用 spill-forward／GPR cache 原本各用相同机器行长算法，第二遍改用已存在的只读 helper，**DEDUP(line-length calculation)**；不能合并两遍，因为缓存屏障与短跳转消除条件不同。 |
+| `fp_emit` / `integer_emit` | `double` 的加、减、乘、除四支使用相同 Direct floating shape、两次 `fld.d` 和一次 `fst.d`，唯一差异为 `fadd/fsub/fmul/fdiv.d`；并成单一发射体，不改输出字节。整数一元 `~`／`-` 同样重复 frame load、32-bit 前向窄化、normalize、writeback，仅 NOR/SUB 指令不同，**DEDUP(two exact machine patterns)**。128-bit limb、混合 signed overflow、FP uint64 舍入路径全部 **KEEP**。 |
+| `memory_emit` / `frame_emit` | Core 指针来源和 16-edge alignment proof 仅授权安全的 frame addressing；未知 packed / ASM 地址仍保留宽度匹配的 guarded byte gather/scatter、每函数 outlined slow path、relaxed atomic 宽指令。半字 `width==2` 已在上层分支完全处理并 `return`，通用尾部再次检查 `width==2 && sign` 永不执行，**DELETE(unreachable narrow extension)**；`ldptr`、动态 SP、进入栈参数基准 **KEEP**。 |
+| `simd_asm` / `asm_contract` | LSX/LASX RAID6 源匹配、Core 源 ID/指令操作数/内存效应回证以及 Linux CSR、FCSR、TLB、AMO、LL/SC、futex、uaccess、`__ex_table` / `__jump_table` 同时保有真实机器副作用。SIMD `operand_count>0` 且每个 accepted role 必有读或写效应，末尾 `uses_load/uses_store` 重计数与 `if` 恒真，**DELETE(derived effect tally)**；per-CPU matcher 的 `read` 局部声明后仅 `(void)read`，**DELETE(unused local)**。其他 source/machine 双重核验 **KEEP**，不可因同名而视为冗余。 |
+| `call_emit` / `residual_emit` / `scalar_normalize` | 16B `__int128`／binary128 两半、部分 Record 八字节尾部与 FP HFA、具名参数/栈参数、GNU builtin CSR 立即数验证均为不同 ABI 契约；Residual 地址折叠要求遍历所有 SSA 语义使用，不能仅看 ASM 文本。只删 INTEGER_CONSTANT 中 `sign` 已实际传给 normalize 后的无效 `(void)sign`，**DELETE(no-op cast); KEEP(ABI and exact source proof)**。 |
+
+**C36 生产源码 +18/-54、净 -36 行**：只有等价机器发射去重复、
+可证不可达分支、重复中间计数与未用变量；没有改已接受 ASM
+模板集合、寄存器选择、指令文案、输出帧布局或 GNU 源资格。
+C1～C36 纯清理累计 **净 -437 行**。文档行数不计。
+
+**本地验证 PASS：** Release 五目标 `-Werror` 编译；
+LoongArch `-S` 与 GNU host 正反例：
+`probe-loongarch64-immediate-core-fold`（5 target、x86 GNU/MiniC runtime）、
+`probe-loongarch64-linux-simd-asm`（LSX/LASX 及 4 拒编）、
+`probe-loongarch64-linux-simd-provenance`（128 source decoys）、
+`probe-loongarch64-packed-asm-output`、
+`probe-loongarch64-packed-asm-result-family`、
+`probe-loongarch64-pointer-stride-power-of-two`（GNU/MiniC runtime）、
+`probe-loongarch64-record-copy-size`、`probe-loongarch64-frame-fold`、
+`probe-direct-lp64-abi-policy`、`probe-loongarch64-record-chunk-native-word`；
+大型 ASM 全读后再次 PASS：`probe-loongarch64-linux-final-three`
+（含 60,000 GNU native pair）、`probe-loongarch64-linux-jump-label`、
+`probe-loongarch64-packed-scalar-alignment`、
+`probe-loongarch64-packed-uaccess-output`、
+`probe-loongarch64-linux-cpucfg`、
+`probe-loongarch64-packed-hardware-asm-results`、
+`probe-loong-linux-cache-ops`（source-only）、
+`probe-loongarch-linux-nospec`（source-only）、
+`check-minic-target-boundaries`（`MINIC_BACKEND_BOUNDARY_CHECK=PASS`）。
+另将 `mixed_double_arithmetic`、`core_integer_bitwise_not` 和
+`static_floating_aggregate` GNU 预处理后以 LoongArch `-S` 成功，
+确认 binary64 `fadd/fsub/fmul/fdiv.d` 与 NOR 都实际发射。
+
+**未运行／不冒称 PASS：** 环境缺少 `loongarch64-linux-gnu-gcc-13`
+和 Loong GNU assembler，`percpu-fpu`、`zero-operand-dbar` 整脚本
+因交叉工具链缺失 **NOT_COMPLETE**；SIMD/CPUCFG/jump-label 的
+GNU AS 阶段明确 **SKIP**，cache/nospec 只运行正负例 source gate，
+没有跑其真实 GNU AS/QEMU 阶段。五目标 Linux Image/QEMU 联合
+验收未启动。查询 C35 远端的 Native Strict Backend Gate、四架构
+Compiler Runtime 和 RV32 real software/virtio 均已 `success`；
+AArch64 NEON Stage3 仍 `failure`、x86 nested-KVM preflight 仍
+`failure`（此前已知环境/准入问题），RV32 full18 与 Loong P2
+当次仍 `in_progress`；不能将 Linux 绿灯 workflow 中的 skipped
+runner 等同于五目标 P2/P3 全通过。
+
 ## 后续批次进度规则
 
 每批发布：当前 HEAD、源文件逐目录覆盖（明确深读与只扫的区别）、
