@@ -4,23 +4,19 @@
  * Extracted unchanged: parser-owned synthetic labels, cleanup contexts,
  * and source positions are necessary to avoid false CFG predecessor edges.
  * Deliberately retain the original fail-closed AST tests and recursion. */
-bool minic_core_loop_internal_while_label_pair(const MinicStatement *label, const MinicStatement *loop) {
-    bool same_begin;
+static bool source_position_equal(MinicSourcePosition left, MinicSourcePosition right) {
+    return left.offset == right.offset && left.line == right.line && left.column == right.column;
+}
 
+bool minic_core_loop_internal_while_label_pair(const MinicStatement *label, const MinicStatement *loop) {
     if (label == NULL || loop == NULL) {
         return false;
     }
-    same_begin = label->span.begin.offset == loop->span.begin.offset &&
-                 label->span.begin.line == loop->span.begin.line &&
-                 label->span.begin.column == loop->span.begin.column;
     return label->kind == MINIC_STATEMENT_LABEL && loop->kind == MINIC_STATEMENT_WHILE &&
-           same_begin && label->target_expression == MINIC_EXPRESSION_INVALID &&
+           source_position_equal(label->span.begin, loop->span.begin) &&
+           label->target_expression == MINIC_EXPRESSION_INVALID &&
            label->expression == MINIC_EXPRESSION_INVALID &&
            label->target_statement == MINIC_STATEMENT_INVALID;
-}
-
-static bool source_position_equal(MinicSourcePosition left, MinicSourcePosition right) {
-    return left.offset == right.offset && left.line == right.line && left.column == right.column;
 }
 
 bool minic_core_loop_cleanup_edge_is_empty(const MinicStatement *statement) {

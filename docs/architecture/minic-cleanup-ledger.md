@@ -381,6 +381,33 @@ AArch64/LoongArch64 仅 `.s` PASS（缺 GNU 交叉工具链），RV64 源汇编
 最初误用 `sh`（脚本要求 bash）、误用 `MINIC_CC`（实际读 `MINIC`）
 两次调用无效，未纳入验证结果。MiniAS/MiniLD/五目标完整联合验收仍延后。
 
+## 批次 C12：Core SSA 引用、CFG 重入、局部事实与合成 Loop 形状
+
+**基线：** `dec0155`，2026-11-01。全文深读 Core **8/48** 文件，
+原始合计 **1,564 行**：value_uses.c/.h、reentry_index.c/.h、
+local_facts.c/.h、source_loop_shapes.c/.h。本轮总计
+**88/339**（Frontend **69/69**、Compiler **11/11**、Core **8/48**、
+Target **0/211**）；尚有 Core 40、Target 211，**251/339 未深读**。
+
+| 代码和消费者 | 本轮清理判断 |
+| --- | --- |
+| `value_uses` | 遍历每个 Core Instruction、call 参数与 terminator 的真实 SSA operand，重复 operand 按两次引用记账；未知 op/value ID 和计数溢出 fail-closed。此处无 target stack/register 合同。**KEEP(enum completeness/unknown rejection)**。 |
+| `reentry_index` | 先完整验证 goto、asm goto、label-address，再发布索引；不存在或 OOM 时退回 AST 全表扫描，不能把“索引未命中”当无 CFG 入边。`if` 丢弃、loop label、case/default 的查询强度不同。**KEEP(negative proof fallback)**。 |
+| `local_facts` | known bits、specialization facts、nonnegative range、escape 和 possible-one bits 是不同保守事实；source write/increment 要 invalidate，未知 CFG merge 要 meet 或丢弃，trace 被 Linux 诊断脚本消费。**KEEP(invalidation + trace)**；MC-033 旧错编已由现有生产代码修复，另由独立小批次增加永久验证。 |
+| `source_loop_shapes` | Parser synthetic `do/while` 的 0/true 识别、`for` continue/update tail、cleanup context 和源位置全部参与 CFG 证明。两个看似相同的 `do/while` matcher 合同不同，**KEEP(provenance)**。源位置三字段相等在 while-label 中重复手写，**DELETE(duplicate comparison)**，改复用同文件已存在的 `source_position_equal`，不改变判定次序与字段。 |
+
+**C12 生产源码：** source_loop_shapes.c **+6/-10，净 -4 行**；
+累计 C1～C12 纯清理 **净 -215 行**，不含 MC-033/035 等 Bug
+修复、专项测试或诊断文档。本批没有拆 Core 层、改 SSA 枚举或改变
+任何 source CFG 判活条件。
+
+**验证 PASS：** Release `-Werror` 编译链接；Core typed reentry
+indexed/fallback、AST source-subtree membership、两例五 ISA `-S`
+以及 GNU/MiniC x86 native；SSA value-use-count 单元测试
+（重复 operand、terminator、死结果、异常输入）；runtime IF
+local-effect-facts GNU/MiniC 原生差分、RV64 `-S`。完整 Linux
+QEMU/跨目标 GNU ELF 与联合验收仍待后续阶段执行。
+
 ## 后续批次进度规则
 
 每批发布：当前 HEAD、源文件逐目录覆盖（明确深读与只扫的区别）、
