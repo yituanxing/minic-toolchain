@@ -14,6 +14,21 @@ static bool fp_slot(FILE *out, const MinicA64FrameView *frame,
     return minic_a64_emit_owned_slot(out, frame, store, kind, reg, offset);
 }
 
+/* Both scalar FP bits and the two binary128 limbs use this exact x9
+ * immediate sequence; neither path converts through host floating point. */
+static bool fp_bits_constant(FILE *out, uint64_t bits) {
+    unsigned int shift;
+    if (fprintf(out, "  movz x9, #%" PRIu64 "\n",
+                bits & UINT64_C(0xffff)) < 0)
+        return false;
+    for (shift = 16U; shift <= 48U; shift += 16U)
+        if (((bits >> shift) & UINT64_C(0xffff)) != 0U &&
+            fprintf(out, "  movk x9, #%" PRIu64 ", lsl #%u\n",
+                    (bits >> shift) & UINT64_C(0xffff), shift) < 0)
+            return false;
+    return true;
+}
+
 /* Own the native instruction sequences for the IEEE numeric family.
  * The common DirectLP64 layer owns Core operand admission and types.
  * Comparison and FP->integer leave their result in the ISA's integer
@@ -39,35 +54,16 @@ bool minic_aarch64_emit_fp_instruction(
                     const uint64_t bits = half == 0U
                         ? ins->value.floating128_bits.low
                         : ins->value.floating128_bits.high;
-                    unsigned int shift;
-                    if (fprintf(out, "  movz x9, #%" PRIu64 "\n",
-                                bits & UINT64_C(0xffff)) < 0)
-                        return false;
-                    for (shift = 16U; shift <= 48U; shift += 16U)
-                        if (((bits >> shift) & UINT64_C(0xffff)) != 0U &&
-                            fprintf(out, "  movk x9, #%" PRIu64
-                                         ", lsl #%u\n",
-                                    (bits >> shift) & UINT64_C(0xffff),
-                                    shift) < 0)
-                            return false;
-                    if (!fp_slot(out, frame_view, true, MINIC_A64_REG_X,
+                    if (!fp_bits_constant(out, bits) ||
+                        !fp_slot(out, frame_view, true, MINIC_A64_REG_X,
                                  9U, dst + half * 8U))
                         return false;
                 }
                 return true;
             }
-            const uint64_t bits = ins->value.floating_bits;
-            unsigned int shift;
             if ((!minic_type_is_double(ins->type) &&
                  !minic_type_is_float(ins->type)) ||
-                fprintf(out, "  movz x9, #%" PRIu64 "\n",
-                        bits & UINT64_C(0xffff)) < 0) return false;
-            for (shift = 16U; shift <= 48U; shift += 16U) {
-                if (((bits >> shift) & UINT64_C(0xffff)) != 0U &&
-                    fprintf(out, "  movk x9, #%" PRIu64 ", lsl #%u\n",
-                            (bits >> shift) & UINT64_C(0xffff), shift) < 0)
-                    return false;
-            }
+                !fp_bits_constant(out, ins->value.floating_bits)) return false;
             *needs_gp_store = true;
             return true;
         }
@@ -220,9 +216,9 @@ bool minic_aarch64_emit_fp_instruction(
             size_t width;
             bool sign;
             const char *conversion;
-            /* Lua's lua_Integer is signed LP64; C double-to-integer
-             * conversion truncates toward zero. Keep unsigned64 fail-closed
-             * until its full-range ABI oracle is introduced. */
+            /* C double-to-integer conversion truncates toward zero.
+             * Both signed and unsigned native widths are explicit below;
+             * NaN and out-of-range inputs remain undefined at C level. */
             if (!minic_multi_direct_floating_shape(
                     program, target, fn, ins, &width, &sign))
                 return false;

@@ -1219,6 +1219,58 @@ Linux three-ISA/GNU P0-P1 等绿色 gate 中 producer/boot/runner
 为 SKIPPED 的，不计为本 HEAD 完整 Linux 通过。以上独立问题均未
 混入 C34 源码纯清理。
 
+## 批次 C35：AArch64 非 ASM 契约层全读、x86 GNU ASM 大文件定点梳理（仅清有证重复）
+
+**基线：** C34 远端 `eb8010a3`，2026-11-01。本批全文深读
+`src/target/aarch64` 除 `asm_contract.c` 外的 **23 个生产文件、
+原始 3,900 行**：`abi.c/.h`（70/12）、`block_emit.c/.h`
+（503/30）、`call_emit.c/.h`（468/17）、`codegen.c/.h`
+（165/20）、`fp_emit.c/.h`（248/22）、`frame_emit.c/.h`
+（231/79）、`integer_emit.c/.h`（683/21）、`memory_emit.c/.h`
+（257/19）、`neon_emit.c/.h`（137/39）、`residual_emit.c/.h`
+（803/16）、`scalar_normalize.c/.h`（11/10）、`asm_contract.h`
+（39）。累计全文深读 **317/342**：Frontend **71/71**、
+Compiler **11/11**、Core **48/48**、Target **187/212**，
+尚余 **25 个 Target 文件**：x86-64 **2**、AArch64 **1**
+（大型 `asm_contract.c` 7,452 行）、LoongArch64 **22**。
+
+同时对 x86 `asm_contract.c`（8,975 行）及 `machine_asm.c`
+（6,462 行）做了函数索引、Source rule inventory、typed form
+校验入口、尾部 dispatch 及 `qualified` 真实消费者核查，
+**仅计为定点关联审读，不算 2 个文件全文深读**。
+当前 Source rule table 实数 **111**，其中 **23 typed / 88 legacy**；
+历史表中的 109 是当时快照，不在这次擅自改写源资格集合。
+
+| 子域 | 实际所有权与清理结论 |
+| --- | --- |
+| AArch64 `codegen` / `abi` | 8 GP + 8 FP、专用 x8 sret、32B AAPCS64 `va_list` 与 224B 保存区明确由 Target 提供政策；Common 只做有证的 LP64 shape、CallIndex、StoragePlan。HFA/HVA/向量 Record 不可误判为 GP pointer，`double*` member 已先按完整 pointer identity 拦住。**KEEP(AAPCS64 ABI gate and independent HFA policy)**，MC-060 大 Record 限额另行解决。 |
+| `frame_emit` / `block_emit` | 固定 16B x29/x30 unwind record、动态/过对齐 x19-owned frame、incoming-entry-SP/outgoing-SP 不同身份，x16/x17 的真实 liveness scratch mask；Record copy/return 保持精确 byte extent 与 loop 阈值。Core 指令分族由 Common dispatch，机器指令及 result writeback 仍 A64 本地。**KEEP(typed frame and physical SP invariants)**，只删除 `block_emit` 的 5 个未用 include 和 1 条重复所有权注释。 |
+| `call_emit` / `residual_emit` | 直接/间接 CALL 共享 ABI plan，具名 FP/Q、宽整数两寄存器、超额 stack、sret x8 与可移动 SP 严格区分；`VARIADIC_COPY` 是独立 32B tag 拷贝，不是指针别名。Residual 仍含 Core 数值转换、ELF GOT/weak、GNU ASM 例外、后端错误定位。**KEEP(verified role/ABI and qualified ASM provenance)**；删除 `residual_emit` 两个未用 include。 |
+| `fp_emit` / `memory_emit` / `integer_emit` | 整数算术和混合 signed overflow、int128 limb、二进制浮点和 16B wide payload 分支，均消费 Common shape；NEON 只接受精确 fixed vector + 已限定 SHA3 EOR3，并不代表完整 GCC ACLE/NEON header 准入。普通 FP constant 和 binary128 的每个 64-bit limb 原本复制了相同 x9 `movz/movk` 序列，提成一份 `fp_bits_constant`，**DEDUP(exact instruction strings only)**；同步修正“unsigned64 仍拒绝”这一与现有 `fcvtzu` 实现矛盾的旧注释。 |
+| x86 `asm_contract` / `machine_asm` | Source 资格表按顺序选择首个完整契约；23 typed FormId 必须在 Machine 再验证 source spelling/variant 和 Core operand，88 legacy 仍另匹配完整模板及寄存器/ELF side effect，**不能直接删机器复核**。在 legacy `qualified()` 中 `is_muldiv` 实际只供函数内部类型检查，外部只用 `is_mulacc`；将 `is_muldiv` 收回局部并删两次初值重复赋值，**DELETE(unnecessary out-parameter, no accepted-form change)**。其余跨层 matcher 迁移需先立独立拒编/reloc/runtime 证据，**NEEDS_PROOF(MC-078 ownership)**。 |
+
+**C35 生产源码 +28/-44、净 -16 行**：没有删除任何
+GNU ASM pattern、机器写回、HFA 资格或 Linux exception/alternative
+节输出。C1～C35 纯清理累计 **净 -401 行**。审读进度与
+源码净删行数均不包括文档新增。
+
+**本地验证 PASS：** Release 全目标 `-Werror` 编译；
+`probe-aarch64-typed-frame-path`（Frame API + FP/memory/
+integer/residual/dynamic owned/outgoing `-S`）、
+`probe-aarch64-fp-pointer-record-abi`（134 次五目标 `-S`、
+3 次 A64 negative、GNU native 4 例）、
+`probe-aarch64-variadic-incoming-stack`（静态/动态 cursor、
+GNU host oracle）；A64 binary128 tail 用 GNU `-E -P` 的
+同一 `.i` `-S` 成功，生成预期高低 limb `movz/movk`；
+`probe-x86-linux-muldiv-u64`（72 GNU native differential）、
+`probe-x86-bit-scan-native`（GNU/MiniC runtime）及
+`check-minic-target-boundaries`（Boundary Gate PASS）。
+`probe-aarch64-large-structured-asm-spills` 的第一档
+`updates=45` / 832B `-S` PASS，随后因无
+`aarch64-linux-gnu-gcc` 中止，**全脚本 NOT_COMPLETE**；
+该环境 A64 cross GNU AS/ELF/QEMU **SKIP/NOT_RUN**，不得
+等同已证 AArch64 P2 运行验收。五架构 Linux 联合验收继续推迟。
+
 ## 后续批次进度规则
 
 每批发布：当前 HEAD、源文件逐目录覆盖（明确深读与只扫的区别）、

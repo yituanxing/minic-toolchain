@@ -1,5 +1,4 @@
 #include "target/aarch64/block_emit.h"
-#include "target/aarch64/scalar_normalize.h"
 #include "target/aarch64/residual_emit.h"
 #include "target/aarch64/memory_emit.h"
 #include "target/aarch64/call_emit.h"
@@ -13,13 +12,9 @@
 #include "target/common/lp64_aggregate.h"
 #include "target/common/lp64_scalar.h"
 #include "target/aarch64/abi.h"
-#include "target/data_layout.h"
 #include "target/common/direct_program_emit.h"
-#include <inttypes.h>
 #include <stdint.h>
 #include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
 
 /* The instruction-owned aggregate ingress and CFG terminator cases are
  * independent of the function-level preflight and frame lifetime. Machine
@@ -411,8 +406,6 @@ bool minic_aarch64_emit_terminator(FILE *out,
         }
     return true;
 }
-
-/* All Core blocks and their machine instruction cases are target-owned. */
 
 /* All Core GP-producing instruction families share this final slot
  * transport. The F/D arithmetic and ABI remain native and may opt into

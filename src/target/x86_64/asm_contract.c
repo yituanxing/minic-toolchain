@@ -6066,20 +6066,20 @@ static bool x86_zstd_cpuid_source(
 }
 
 static bool qualified(const MinicC0Program *program,
-                      const MinicInlineAsm *src, bool *is_mulacc, bool *is_muldiv) {
+                      const MinicInlineAsm *src, bool *is_mulacc) {
     static const char *const cpuid_out[4] = {"=a","=b","=c","=d"};
     static const char *const cpuid_in[4] = {"0","1","2","3"};
     static const char *const mul_in[5] = {"0","1","2","a","m"};
     size_t i, n;
     bool generic = false;
     bool bit_scan = false;
+    bool is_muldiv = false;
     MinicX86BitScanForm bit_form = MINIC_X86_BIT_SCAN_NONE;
     MinicType normalized;
     if (!program || !src || !src->template_text || !src->outputs ||
         !src->inputs || src->is_goto || src->label_count != 0U ||
-        !is_mulacc || !is_muldiv) return false;
+        !is_mulacc) return false;
     *is_mulacc = false;
-    *is_muldiv = false;
     /* Original Linux native_cpuid has six operands: four register outputs
      * and only two tied inputs (EAX/ECX), plus a memory compiler barrier.
      * Preserve the legacy eight-operand CPUID contract in the same target
@@ -6093,7 +6093,6 @@ static bool qualified(const MinicC0Program *program,
          (!src->has_memory_clobber && src->clobber_count == 0U) :
          (src->is_volatile && src->has_memory_clobber &&
           src->clobber_count == 1U))) {
-        *is_mulacc = false;
         n = 4U;
         for (i = 0U; i < n; ++i)
             if (!c_is(&src->outputs[i], cpuid_out[i])) return false;
@@ -6126,7 +6125,7 @@ static bool qualified(const MinicC0Program *program,
                c_is(&src->inputs[0], "a") &&
                c_is(&src->inputs[1], "rm") &&
                c_is(&src->inputs[2], "rm")) {
-        *is_muldiv = true;
+        is_muldiv = true;
     } else if (src->output_count == 1U &&
                !src->is_goto && src->label_count == 0U &&
                !src->has_memory_clobber &&
@@ -6155,7 +6154,6 @@ static bool qualified(const MinicC0Program *program,
                 (src->output_count == 3U && src->input_count == 2U) ||
                 (src->output_count == 1U && src->input_count == 1U)) &&
                minic_x86_64_asm_matched_template(src->template_text, src->template_length, src->output_count)) {
-        *is_mulacc = false;
         generic = true;
         n = src->output_count;
         for (i = 0U; i < n; ++i)
@@ -6179,7 +6177,7 @@ static bool qualified(const MinicC0Program *program,
                 ? minic_type_unsigned_long() : minic_type_unsigned_int();
         if (!expr || !minic_type_unqualified(expr->type, &normalized) ||
             (bit_scan ? !x86_bit_scan_operand_type(bit_form, i, normalized)
-                      : (*is_muldiv
+                      : (is_muldiv
                            ? (!minic_type_equal(normalized, minic_type_unsigned_long()) &&
                               !minic_type_equal(normalized, minic_type_unsigned_long_long()))
                            : generic
@@ -8930,7 +8928,7 @@ static const MinicX86SourceQualifierEntry minic_x86_source_qualifiers[] = {
 bool minic_x86_64_qualify_inline_asm(
     const MinicC0Program *program, const MinicInlineAsm *source,
     MinicTargetInlineAsmContract *contract) {
-    bool is_mulacc = false, is_muldiv = false;
+    bool is_mulacc = false;
     size_t i, count;
     if (!contract) return false;
     for (i = 0U;
@@ -8956,8 +8954,7 @@ bool minic_x86_64_qualify_inline_asm(
         contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
         return true;
     }
-    if (!qualified(program, source, &is_mulacc, &is_muldiv)) return false;
-    (void)is_muldiv; /* all four mul/div operand roles are scalar/register */
+    if (!qualified(program, source, &is_mulacc)) return false;
     count = source->output_count + source->input_count;
     if (count > MINIC_CORE_STRUCTURED_INLINE_ASM_OPERAND_LIMIT) return false;
     contract->operand_count = count;

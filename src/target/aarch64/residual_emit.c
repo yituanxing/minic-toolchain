@@ -6,10 +6,8 @@
 #include "target/common/direct_instruction_semantics.h"
 #include "target/common/lp64_scalar.h"
 #include "target/common/direct_program_emit.h"
-#include "target/data_layout.h"
 #include "target/aarch64/abi.h"
 #include <inttypes.h>
-#include <limits.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
