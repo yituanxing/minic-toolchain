@@ -148,8 +148,8 @@ static bool advance_cfi(MiniAs *as,int sec,size_t from_symbol,
         {
             MiniAsFixupKind positive=as->target->cfi_advance_reloc_mode==2U ?
                 MINIAS_FIXUP_CFI_SET6 : MINIAS_FIXUP_CFI_ADD6;
-            if(!as->target->supports_fixup(as,positive,1U) ||
-               !as->target->supports_fixup(as,MINIAS_FIXUP_CFI_SUB6,1U)) {
+            if(!as->target->supports_fixup(minias_target_abi_view(as),positive,1U) ||
+               !as->target->supports_fixup(minias_target_abi_view(as),MINIAS_FIXUP_CFI_SUB6,1U)) {
                 minias_set_error(as,"unsupported-cfi-short-relocation");
                 return false;
             }
@@ -418,7 +418,7 @@ static bool cfi_emit_section_core(MiniAs *as,bool eh,
     if(eh && (!as->target->cfi_implicit_eh_frame ||
               minias_cfi_abi(as).address_size!=(as->output_elf32?4U:8U) ||
               as->target->supports_fixup==NULL ||
-              !as->target->supports_fixup(as,MINIAS_FIXUP_PREL32,4U))) {
+              !as->target->supports_fixup(minias_target_abi_view(as),MINIAS_FIXUP_PREL32,4U))) {
         minias_set_error(as,"unsupported-target-eh-frame");
         return false;
     }

@@ -1049,7 +1049,7 @@ bool minias_compile_data_mc(MiniAs *as, MiniAsStmt *stmt,
 static bool target_supports_fixup(const MiniAs *as,
                                   MiniAsFixupKind kind,unsigned width) {
     return as->target->supports_fixup!=NULL &&
-           as->target->supports_fixup(as,kind,width);
+           as->target->supports_fixup(minias_target_abi_view(as),kind,width);
 }
 
 static bool emit_symbol_minus_dot(MiniAs *as,

@@ -124,16 +124,16 @@ static bool riscv_lookup_fixup_form(MiniAsFixupKind kind, unsigned width,
     return false;
 }
 
-static bool riscv_supports_fixup(const MiniAs *as,MiniAsFixupKind kind,
+static bool riscv_supports_fixup(MiniAsTargetABIView view,MiniAsFixupKind kind,
                                 unsigned width) {
-    (void)as;
+    (void)view;
     return riscv_lookup_fixup_form(kind, width, NULL);
 }
 
-static uint32_t riscv_fixup_relocation_type(const MiniAs *as,MiniAsFixupKind kind,
+static uint32_t riscv_fixup_relocation_type(MiniAsTargetABIView view,MiniAsFixupKind kind,
                                             unsigned width) {
     uint32_t relocation = 0U;
-    (void)as;
+    (void)view;
     (void)riscv_lookup_fixup_form(kind, width, &relocation);
     return relocation;
 }
@@ -723,15 +723,16 @@ unsupported:
 
 /* A selected ISA supplies Tag_RISCV_arch. No -march leaves legacy
  * permissive behavior, so do not invent an ELF ISA attribute. */
-static void riscv_object_attributes(const MiniAs *as, unsigned char elf_class,
+static void riscv_object_attributes(MiniAsTargetABIView view, unsigned char elf_class,
                                     MiniAsObjectAttribute *out) {
+    const MiniAsRiscvState *state=view.target_state;
     (void)elf_class;
     memset(out, 0, sizeof(*out));
-    if (MINIAS_RV_STATE(as)->target_attributes_size != 0U) {
+    if (state->target_attributes_size != 0U) {
         out->name = ".riscv.attributes";
         out->type = UINT32_C(0x70000003);
-        out->data = MINIAS_RV_STATE(as)->target_attributes;
-        out->size = MINIAS_RV_STATE(as)->target_attributes_size;
+        out->data = state->target_attributes;
+        out->size = state->target_attributes_size;
     }
 }
 
@@ -919,8 +920,8 @@ static bool riscv_record_object_mapping_symbols(
 
 /* GAS's riscv_md_finish gates every deferred ULEB pair on the final global
  * relaxation mode, not on the individual source site's .option snapshot. */
-static bool riscv_leb128_relocations_enabled(const MiniAs *as) {
-    const MiniAsRiscvState *state=(const MiniAsRiscvState *)as->target_state;
+static bool riscv_leb128_relocations_enabled(MiniAsTargetABIView view) {
+    const MiniAsRiscvState *state=view.target_state;
     return state!=NULL &&
            (state->options & MINIAS_RISCV_OPTION_NO_RELAX)==0U;
 }
@@ -1024,8 +1025,8 @@ static unsigned riscv_default_exec_alignment_for_site(
     return 4U;
 }
 
-static void riscv_resolve_cfi_abi(const MiniAs *as, MiniAsCfiABI *abi) {
-    const MiniAsRiscvState *state=MINIAS_RV_STATE(as);
+static void riscv_resolve_cfi_abi(MiniAsTargetABIView view, MiniAsCfiABI *abi) {
+    const MiniAsRiscvState *state=view.target_state;
     if(state!=NULL && state->target_xlen==32U) {
         abi->address_size=4U;
         abi->data_align=-4; /* RV32 psABI 32-bit saved slots */

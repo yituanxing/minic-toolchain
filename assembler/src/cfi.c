@@ -29,7 +29,7 @@ MiniAsCfiABI minias_cfi_abi(const MiniAs *as) {
     abi.initial_cfa_offset=as->target->cfi_initial_cfa_offset;
     abi.initial_ra_saved=as->target->cfi_initial_ra_saved;
     if(as->target->resolve_cfi_abi!=NULL)
-        as->target->resolve_cfi_abi(as,&abi);
+        as->target->resolve_cfi_abi(minias_target_abi_view(as),&abi);
     return abi;
 }
 
@@ -66,7 +66,7 @@ static bool cfi_register(MiniAs *as,const char *text,unsigned *reg) {
         return true;
     }
     return as->target->resolve_cfi_register!=NULL &&
-           as->target->resolve_cfi_register(as,text,reg);
+           as->target->resolve_cfi_register(minias_target_abi_view(as),text,reg);
 }
 
 static bool cfi_two(MiniAs *as,const char *text,unsigned *reg,int64_t *value,

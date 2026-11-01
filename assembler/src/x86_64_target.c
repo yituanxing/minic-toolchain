@@ -4846,9 +4846,9 @@ static uint32_t x64_reloc(MiniAsFixupKind kind,unsigned width) {
     return 0U;
 }
 
-static uint32_t x64_reloc_for_object(const MiniAs *as,
+static uint32_t x64_reloc_for_object(MiniAsTargetABIView view,
                                      MiniAsFixupKind kind,unsigned width) {
-    if(!as->output_elf32)return x64_reloc(kind,width);
+    if(!view.elf32)return x64_reloc(kind,width);
     /* ELF32 i386 REL: addends live in their destination sections.  The
      * generic writer handles the object encoding; Target only maps the
      * ABI relocation family, never a Linux/Kbuild filename special case. */
@@ -4898,9 +4898,9 @@ static bool x64_supports_amd64_fixup(MiniAsFixupKind kind,unsigned width) {
             return false;
     }
 }
-static bool x64_supports_fixup(const MiniAs *as,
+static bool x64_supports_fixup(MiniAsTargetABIView view,
                                MiniAsFixupKind kind,unsigned width) {
-    if(!as->output_elf32)return x64_supports_amd64_fixup(kind,width);
+    if(!view.elf32)return x64_supports_amd64_fixup(kind,width);
     /* i386 has no ABS64/GOTPCREL(X) relocation representation. Keep the
      * valid i386 combinations explicit; falling back to AMD64 silently
      * serialized unsupported requests as R_386_NONE. */
@@ -4920,7 +4920,7 @@ static bool x64_supports_fixup(const MiniAs *as,
  * a percent sign). Core parses numeric DWARF registers first; this target
  * provides the ABI-specific name to DWARF register-number mapping only.
  * ModR/M codes deliberately differ from DWARF on AMD64. */
-static bool x64_resolve_cfi_register(const MiniAs *as,const char *name,
+static bool x64_resolve_cfi_register(MiniAsTargetABIView view,const char *name,
                                      unsigned *dwarf_reg) {
     static const unsigned amd64_gpr_dwarf[16]={
         0U,2U,1U,3U,7U,6U,4U,5U,8U,9U,10U,11U,12U,13U,14U,15U
@@ -4941,7 +4941,7 @@ static bool x64_resolve_cfi_register(const MiniAs *as,const char *name,
     if(n==0U || n+2U>sizeof(normalized))return false;
     normalized[0]='%';
     memcpy(normalized+1U,bare,n+1U);
-    if(as->output_elf32) {
+    if(view.elf32) {
         if(x64_register(normalized,&reg,&wide) && !wide && reg<8U) {
             *dwarf_reg=reg;return true;
         }
@@ -4976,8 +4976,8 @@ static bool x64_resolve_cfi_register(const MiniAs *as,const char *name,
     }
     return false;
 }
-static void x64_resolve_cfi_abi(const MiniAs *as,MiniAsCfiABI *abi) {
-    if(as->output_elf32) {
+static void x64_resolve_cfi_abi(MiniAsTargetABIView view,MiniAsCfiABI *abi) {
+    if(view.elf32) {
         /* GNU i386 SysV CFI: EIP=8, ESP=4, 32-bit stack/return slots.
          * .code16/.code32 at individual sites do not alter the object ABI. */
         abi->code_align=1U;
@@ -5078,7 +5078,7 @@ static bool x64_evaluate_target_if(const char *expression, bool *result) {
     *result=(strcmp(left,right)==0)!=unequal;
     return true;
 }
-static bool x64_named_relocation(const MiniAs *as,const char *name,
+static bool x64_named_relocation(MiniAsTargetABIView view,const char *name,
                                   MiniAsFixupKind *kind,unsigned *width) {
     static const struct {
         const char *name;
@@ -5110,16 +5110,16 @@ static bool x64_named_relocation(const MiniAs *as,const char *name,
         {"R_386_GOTOFF",MINIAS_FIXUP_X86_GOTOFF,4U},
         {"R_386_GOT32X",MINIAS_FIXUP_X86_GOT32X,4U}
     };
-    const size_t count=as->output_elf32?
+    const size_t count=view.elf32?
         sizeof(i386_forms)/sizeof(i386_forms[0]):
         sizeof(amd64_forms)/sizeof(amd64_forms[0]);
     unsigned i;
     for(i=0U;i<count;++i) {
-        const char *spelling=as->output_elf32?
+        const char *spelling=view.elf32?
             i386_forms[i].name:amd64_forms[i].name;
         if(!strcmp(name,spelling)) {
-            *kind=as->output_elf32?i386_forms[i].kind:amd64_forms[i].kind;
-            *width=as->output_elf32?i386_forms[i].width:amd64_forms[i].width;
+            *kind=view.elf32?i386_forms[i].kind:amd64_forms[i].kind;
+            *width=view.elf32?i386_forms[i].width:amd64_forms[i].width;
             return true;
         }
     }

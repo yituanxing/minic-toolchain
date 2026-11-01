@@ -636,6 +636,21 @@ typedef struct MiniAs {
     char error[MINIAS_MAX_ERROR];
 } MiniAs;
 
+/* Target object/ABI policies only need the finalized object class and the
+ * Target's private state. Passing this value instead of the whole MiniAs
+ * session prevents read-only policy hooks from depending on Common Symbols,
+ * Sections, Fragment arrays or SourceContext internals. The snapshot is
+ * reconstructed at each call because Target state can change during parse. */
+typedef struct MiniAsTargetABIView {
+    const void *target_state;
+    bool elf32;
+} MiniAsTargetABIView;
+
+static inline MiniAsTargetABIView minias_target_abi_view(const MiniAs *as) {
+    MiniAsTargetABIView view={as->target_state,as->output_elf32};
+    return view;
+}
+
 /* Complete retained source Fragments after parsing/EOF pools, BEFORE any
  * MCLayout relaxation. A Target may derive its own section-wide policies
  * once, without receiving writable Common Section/Fragment storage. */
@@ -982,7 +997,8 @@ typedef struct MiniAsTargetOps {
      * register-token comparisons that are not integer expressions. */
     bool (*evaluate_target_if)(const char *, bool *);
     /* Optional: NULL emits no target-specific attributes section. */
-    void (*object_attributes)(const MiniAs *, unsigned char, MiniAsObjectAttribute *);
+    void (*object_attributes)(MiniAsTargetABIView, unsigned char,
+                              MiniAsObjectAttribute *);
     const char *name;
     /* Each target owns ISA/ABI/ELF profile validation; the CLI is target-neutral. */
     bool (*resolve_profile)(const char *, const char *,
@@ -1009,11 +1025,11 @@ typedef struct MiniAsTargetOps {
     /* Single ABI-aware semantic capability and relocation mapping. ELF32
      * i386 and ELF64 AMD64 are different object profiles despite sharing
      * one target parser; no generic fallback may re-admit a rejected kind. */
-    bool (*supports_fixup)(const MiniAs *,MiniAsFixupKind,unsigned);
-    uint32_t (*fixup_relocation_type)(const MiniAs *,MiniAsFixupKind,unsigned);
+    bool (*supports_fixup)(MiniAsTargetABIView,MiniAsFixupKind,unsigned);
+    uint32_t (*fixup_relocation_type)(MiniAsTargetABIView,MiniAsFixupKind,unsigned);
     /* GNU named relocation spelling is ISA-owned; Common only places the
      * semantic fixup at the explicit section offset. */
-    bool (*parse_named_relocation)(const MiniAs *,const char *,
+    bool (*parse_named_relocation)(MiniAsTargetABIView,const char *,
                                    MiniAsFixupKind *,unsigned *);
     bool supports_literal_pools; /* .ltorg/.pool only for a checked target */
     MiniAsLiteralPoolOrder literal_pool_order;
@@ -1085,7 +1101,7 @@ typedef struct MiniAsTargetOps {
     unsigned leb128_reloc_mode;
     /* GNU GAS's ULEB fixup sweep uses the Target's final relaxation state
      * (which may be changed by .option push/norelax/pop). NULL is enabled. */
-    bool (*leb128_relocations_enabled)(const MiniAs *);
+    bool (*leb128_relocations_enabled)(MiniAsTargetABIView);
     /* Optional Target recognition of fixups that permit the linker to
      * change the encoded code span after assembly (e.g. LoongArch RELAX).
      * CFI events spanning such a fixup need linker-resolved code distances. */
@@ -1094,11 +1110,11 @@ typedef struct MiniAsTargetOps {
     unsigned cfi_negate_ra_opcode;
     unsigned cfi_initial_cfa_offset;
     bool cfi_initial_ra_saved;
-    void (*resolve_cfi_abi)(const MiniAs *, MiniAsCfiABI *);
+    void (*resolve_cfi_abi)(MiniAsTargetABIView, MiniAsCfiABI *);
     /* The DWARF register-number namespace belongs to the target ABI.
      * Common parses numeric expressions first; Target translates GNU
      * symbolic register spellings such as i386 ecx / %ecx. */
-    bool (*resolve_cfi_register)(const MiniAs *, const char *, unsigned *);
+    bool (*resolve_cfi_register)(MiniAsTargetABIView, const char *, unsigned *);
     /* GNU assembler directive dialect belongs to TargetInfo, not Common. */
     unsigned default_exec_alignment; /* zero: 4; x86 GNU .text has alignment 1 */
     /* GNU target parser automatically aligns an instruction after data in

@@ -365,9 +365,49 @@ for file in ('minias_internal.h', 'mc_expr.c', 'elf_writer.c', 'x86_64_target.c'
        'fixup_relocation_type_for_object' in source:
         raise SystemExit(f'{file}: duplicate generic/object Fixup policy remains')
 if not re.search(r'bool\s*\(\*supports_fixup\)\s*\('
-                 r'const\s+MiniAs\s*\*', header):
+                 r'MiniAsTargetABIView', header):
     raise SystemExit('Fixup capability lost Object ABI profile')
 print('MINIAS_MC_FIXUP_ABI=PASS policy=single_object_aware_interface')
+PY
+# Target object/CFI/relocation policy sees only two read-only ABI facts.
+# No callback can directly reach Common's mutable session or SourceGraph.
+python3 - <<'PY'
+from pathlib import Path
+import re
+
+root = Path('assembler/src')
+header = (root / 'minias_internal.h').read_text()
+definition = header.split('typedef struct MiniAsTargetABIView {',1)[1].split('}',1)[0]
+if re.sub(r'/\*.*?\*/', '', definition, flags=re.S).strip() != \
+        'const void *target_state;\n    bool elf32;':
+    raise SystemExit('Target ABI view exposes fields beyond private state and ELF class')
+policies = ('object_attributes','supports_fixup','fixup_relocation_type',
+            'parse_named_relocation','leb128_relocations_enabled',
+            'resolve_cfi_abi','resolve_cfi_register')
+for policy in policies:
+    if not re.search(r'\(\*'+policy+r'\)\s*\(\s*MiniAsTargetABIView',header):
+        raise SystemExit('Target policy still receives MiniAs: '+policy)
+targets = {
+    'riscv_target.c': ('riscv_supports_fixup','riscv_fixup_relocation_type',
+                       'riscv_object_attributes','riscv_leb128_relocations_enabled',
+                       'riscv_resolve_cfi_abi'),
+    'aarch64_target.c': ('aarch64_supports_fixup',
+                         'aarch64_fixup_relocation_type','a64_named_relocation'),
+    'loongarch64_target.c': ('la_supports_fixup','la_reloc'),
+    'x86_64_target.c': ('x64_supports_fixup','x64_reloc_for_object',
+                       'x64_named_relocation','x64_resolve_cfi_abi',
+                       'x64_resolve_cfi_register'),
+}
+for filename, callbacks in targets.items():
+    source = (root / filename).read_text()
+    for callback in callbacks:
+        start = re.search(r'\b'+callback+r'\s*\(\s*MiniAsTargetABIView',source)
+        if start is None:
+            raise SystemExit('Unconverted ABI callback: '+filename+':'+callback)
+        body = source[start.start():source.index('\n}',start.end())+2]
+        if 'as->' in body or re.search(r'\bMiniAs\s*\*',body):
+            raise SystemExit('ABI callback reaches mutable assembler: '+filename+':'+callback)
+print('MINIAS_TARGET_ABI_VIEW=PASS policies=7 target_callbacks=15 session=hidden')
 PY
 # Parse-site AArch64 mapping semantics must not be recovered by comparing
 # source strings during late section finalization. RISC-V's RVE ABI must not

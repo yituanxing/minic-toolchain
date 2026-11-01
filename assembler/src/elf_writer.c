@@ -331,7 +331,8 @@ static bool minias_write_elf(MiniAs *as,
     expected_symbol_count+=as->cu_file_count;
     memset(&attribute, 0, sizeof(attribute));
     if (as->target->object_attributes != NULL) {
-        as->target->object_attributes(as, elf_class, &attribute);
+        as->target->object_attributes(minias_target_abi_view(as), elf_class,
+                                      &attribute);
     }
     emit_attribute = attribute.name != NULL;
     if (emit_attribute && minias_find_section(as, attribute.name) >= 0) {
@@ -578,7 +579,7 @@ static bool minias_write_elf(MiniAs *as,
          * relocation, regardless of a future target's numeric mapping. */
         if (input->kind == MINIAS_FIXUP_NONE ||
             as->target->supports_fixup==NULL ||
-            !as->target->supports_fixup(as,input->kind,input->width)) {
+            !as->target->supports_fixup(minias_target_abi_view(as),input->kind,input->width)) {
             minias_set_error(as, "unsupported-elf-fixup:kind=%u",
                              (unsigned)input->kind);
             goto done;
@@ -588,7 +589,7 @@ static bool minias_write_elf(MiniAs *as,
         output->symbol_index = input->symbol_index == SIZE_MAX ? SIZE_MAX :
                                symbol_map[input->symbol_index];
         output->type = as->target->fixup_relocation_type(
-            as,input->kind,input->width);
+            minias_target_abi_view(as),input->kind,input->width);
         output->field_width = input->width;
         output->addend = input->addend;
         if(section_reloc) {

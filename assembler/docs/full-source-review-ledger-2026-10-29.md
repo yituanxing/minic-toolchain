@@ -7,6 +7,56 @@
 > 和早期测试文件数量，均不能自动当作最新 HEAD 的事实。
 > “读过 / 修改过 / 完成清理”必须分别统计。
 
+### 2026-11-01 Target ABI/Object policy read-only capability batch
+
+**Base:** exact remote Draft PR #667 head
+`fc0cf7e4d5093b72d86f2ee53455ace989414917`.
+An independent scan of all 22 production C files and low-frequency model
+fields did **not** find a demonstrably dead 20+ line implementation to delete:
+the long `.set` clones handle different Section/ABS semantics, while
+SourceGraph replay, CFI vs DebugLine and ELF class policies have distinct
+consumers. This batch therefore tightens an actually overbroad interface
+without inventing an alternative encode/relocation algorithm.
+
+- **One minimal live ABI snapshot:** `MiniAsTargetABIView` carries only a
+  `const void *target_state` and the ELF32/ELF64 selector. Common derives
+  it at each call; no cached state can become stale after RISC-V `.option`
+  changes. It does not contain or return `MiniAs *`, Sections, Symbols,
+  SourceGraph or mutable Fragment storage.
+- **Seven TargetOps policy types narrowed together:** object attributes,
+  semantic Fixup support, Fixup-to-ELF relocation mapping, explicit named
+  relocation parsing, final ULEB128 relocation eligibility, CFI ABI and
+  symbolic CFI register conversion. Four Targets' 15 concrete callbacks
+  now accept the value snapshot instead of a full `const MiniAs *` session.
+  Common's MCExpr, MCLayout, CFI, CFI Writer, Object/ELF Writer and `.reloc`
+  parser consumers call exactly these callbacks; no parallel policy path
+  or compatibility wrapper was introduced.
+- **Semantics preserved:** x86 i386 versus AMD64 relocation and DWARF
+  register mappings still key on the current object ELF class. RISC-V
+  attributes, RV32 CFI stack width and final `NO_RELAX` gate still read
+  current Target-private state. `object_attributes` retains its distinct
+  `elf_class` argument. The four `encode(MiniAs *, Stmt *)` paths, Target
+  directive parsers and CFI mapping-symbol writer remain explicitly outside
+  this batch; full P04 is **not** declared complete.
+- **Guard:** `probe-mc-target-boundary.sh` checks all seven callback
+  signatures, 15 Target implementations and exactly two snapshot fields,
+  rejecting direct `as->` session access in those policy bodies.
+
+**Production diff:** 11 `assembler/src` files, `+73/-55` lines (net `+18`),
+plus one structural test `+41/-1`. This is an ownership/API contract
+change, **not** a claim of net code deletion or ISA support expansion.
+
+**Local proof:** `-Werror` release build; A0 `30/30`; ABI boundary guard;
+GNU x86-64/i386 Fixup legality, ELF32 REL, i386 GOTPC shared link,
+i386 `.eh_frame`/`.debug_frame`, x86 register-name CFI, x86 deferred LEB
+and RISC-V attribute semantic-state oracles PASS. The explicit symbol-zero
+relocation oracle passed x86-64 and i386 phases; AArch64 was **NOT TESTED**
+locally because the cross assembler is missing. RISC-V cross-GNU
+RV32/ULEB, AArch64 GNU machine-byte and LoongArch GNU differential are
+likewise **NOT TESTED** locally. Exact-head remote ISA/ABI and four-Target
+GNU CI, optional strict 3,536 and Linux Image/QEMU require separate reports;
+do not inherit previous-head acceptance.
+
 ### 2026-11-01 Common failure-path consolidation (macro/SourceSite/ALIGN/INCBIN)
 
 **Base:** exact remote Draft PR #667 head
