@@ -117,6 +117,30 @@ register-pair bytes alongside prior BSF/BSR/IMUL/ALU tests. Do not weaken
 the four-target correctness gate or treat the strictly optional Linux
 3,536/corpus jobs as automatically passed.
 
+### 2026-11-01 continued x86 Target register operand ownership cleanup
+
+Full x86 Target call-site search found **47** still-active repetitions
+of the same two-field `MINIAS_MC_REGISTER` kind/register initialization
+(43 for operand #0, four for operand #2) after the earlier 22
+register-pair call sites had already converged. Replace the 47 old
+two-field sequences with calls to one private setter; the existing
+register-pair helper now delegates to that same setter. The callers
+continue to own their register width, target register class, operand
+arity, instruction-mode legality and machine opcode. Other Targets
+retain their distinct ISA-specific encoders: no Common ISA merge.
+
+GNU x86 exact output regression covers 11 positive unary/control/register
+forms, including RDRAND/RDSEED, BSWAP, SETcc, PUSH/POP, MOVABS,
+indirect CALL/JMP and TEST, plus the earlier pair/memory tests.
+This new regression is added to A0; the current branch SHA must pass
+the A0 and x86 GNU CI before any green claim.
+
+**Remaining restrictions (not removed in this batch):** x86 `.code16/.code32`
+mode allowlist (requires equivalence proof), Target Encode's mutable
+Common session (P04), SourceSite/EOF ownership (P05), P09 `.reloc`
+grammar. These are active design or compatibility gates, not confirmed
+dead-code restrictions. Do not inflate modified-file coverage into closure.
+
 ## Current refactor dashboard — 2026-11-01 (exact-head recovery and live-path audit)
 
 ### 2026-11-01 Source collector single-pass de-duplication (local batch)
