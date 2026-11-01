@@ -1588,6 +1588,13 @@ check-runtime-record-positional-arena-growth: $(MINIC_CC_BINARY)
 
 check-fast: check-runtime-nested-array-arena-growth check-runtime-record-positional-arena-growth
 
+.PHONY: check-return-assignment-expression
+check-return-assignment-expression: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	sh tests/compiler/c0/probe-return-assignment-expression.sh
+
+check-fast: check-return-assignment-expression
+
 .PHONY: check-x86-pat-clflushopt-alt
 check-x86-pat-clflushopt-alt: $(MINIC_CC_BINARY)
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \

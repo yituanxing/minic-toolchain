@@ -225,6 +225,33 @@ Compiler/Core/Target 267 个文件本轮尚未全文读完。
 后 EFI wide 测试 PASS；不将 invocation 错误当成源码回归。
 MiniAS/MiniLD 联合验收和完整五架构 Linux 运行继续推迟。
 
+## 批次 C8：完整表达式归属与 `return` 不可达旧分支
+
+**基线：** `9d6e559`，2026-11-01。完整通读另外 **3 个生产 C/H、
+约 3,019 行**：`src/frontend/parser_expression.c`、
+`parser_runtime_initializer.h`、`parser_static_initializer.h`。
+累计全文深读 **65/336**，Frontend **65/69**；未全文读完的四个 Frontend
+大型源文件是 `parser_builtins.c`、`parser_function.c`、
+`parser_runtime_initializer.c` 和 `parser_static_initializer.c`。
+此前为调查 Bug 而抽读其片段不折算为全文通读。
+
+| 审读接缝 | 实际调用闭包与决定 |
+| --- | --- |
+| `parser_expression.c` | 整数常量表达式、GNU compound literal、cast、前后缀、成员/数组和指针运算按 precedence 与 TargetInfo 建立 AST；普通/复合赋值已经由 `minic_parser_expression_parse_internal(..., minimum_precedence=0)` 消费，逗号表达式由 `parse_comma_expression_tail` 完成。**KEEP(source semantics)**：不把不同优先级、值类别、目标宽度的分支当成机械重复。 |
+| `parser_statement.c` 的 `parse_return` | 返回值调用 `minic_parser_parse_full_expression`，其入口是 `parse_comma_expression → minic_parser_expression_parse_internal(..., 0U, ...)`；`=` 分支直接构建 `MINIC_EXPRESSION_ASSIGNMENT` 并递归消费 RHS。故原 `parse_return` 后续再检查 `current.kind == MINIC_TOKEN_EQUAL` 的 37 行旧式 statement assignment 路径，对完整表达式的合法返回入口不可达。C7 的 `NEEDS_PROOF` 在本批由完整源码调用闭包、独立五目标 ASan 15/15 和 gcov 零命中交叉确认；**DELETE(dead branch)**，仅移除该路径，不动表达式 parser。 |
+| 两个 initializer `.h` | runtime/static initializer 的声明仍由 Parser 调用，头部内容短但各有独立所有权/效果合同。**KEEP(interface)**；实现文件只做过专项审查，尚未完成逐行阅读。 |
+
+**C8 生产源码：** `parser_statement.c` **+0/-37，净 -37 行**。
+累计纯清理 **净 -173 行**（C1 -69、C3 -21、C4 -19、C6 -14、
+C7 -13、C8 -37；C2/C5 零）；任何独立 MC 缺陷修复仍不计入。
+
+**验证 PASS：** Release `-Werror` 增量全编译、`check-ast-contract`、
+`check-expression-statements`、新增 `check-return-assignment-expression`。
+新增固定回归核对 GNU/C11 语法、MiniC 五目标 `-S`、GNU/MiniC x86_64
+原生运行（exit 0），覆盖 `return a = b`、嵌套链 `a = b = c`、
+赋值与三元表达式结合；`const int` 非法赋值在 GNU/MiniC 两侧都拒绝。
+`check-fast` 纳入此测试。未声称完成五架构 ELF/运行或 MiniAS/MiniLD 联合验收。
+
 ## 后续批次进度规则
 
 每批发布：当前 HEAD、源文件逐目录覆盖（明确深读与只扫的区别）、
