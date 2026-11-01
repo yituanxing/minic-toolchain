@@ -196,6 +196,35 @@ C2/C5 零），独立 MC Bug 修复不在内。
 本阶段只记录并由独立 MC 小批次按 stable ID/按值快照修补，**不**先实施
 arena/Parser 架构重构，也不将 Bug 行数冲入清理成绩。
 
+## 批次 C7：全局符号/重定位与语句/局部声明合同
+
+**源码改动基线：** `a4b8b71`；本批另外全文读完 **5 个生产 C/H、原始 5,885 行**：
+`src/frontend/ast_global.c`、`parser_global.c`、`parser_statement.c`、
+`parser_local_declarations.c/.h`。累计全文深读 **62/336**，Frontend
+**62/69**；尚未读完的 Frontend 7 个文件均为 Parser 大型主体/初始化器，
+Compiler/Core/Target 267 个文件本轮尚未全文读完。
+
+| 审读接缝 | 证据与判定 |
+| --- | --- |
+| `ast_global.c` | 统一 GlobalObject 的 extern/tentative/definition、按字段/数组槽定位的重定位、union 选择、flexible tail、按 function owner/pruned 状态发射；重定位 binary search 维持有序/不重叠，失败的 owned-map 可退回慢查询。`minic_c0_global_initializer_slot_count` 看似仅包一层，但仍属 `ast.h` 公开调用合同；新建 static relocation helper 可能破坏当前外部脚本锚点。**KEEP(relocation/API/fallback)**。 |
+| `parser_global.c` | static/extern 复合数组边界、声明符链、属性附着与 canonical array descriptor 的生命周期并不同步；已有成功后显式丢弃临时 descriptor 的逻辑。**KEEP(tentative transaction)**，不把 declaration merging 当成重复入口删。 |
+| `parser_statement.c` | GNU statement-expression 移除最后一条 value-statement，把结果变 AST 值；`return` 类型在递归解析前做 snapshot，GNU 属性 lookahead 用 Parser probe，赋值链要求稳定 lvalue。`parse_return` 中旧式 `current == '='` 后处理分支看似有悬空借用风险，但独立五目标 ASan/GNU 对照未复现，覆盖显示当前 assignment 已在 `parse_full_expression` 里吞掉，真分支零命中。**NEEDS_PROOF(dead branch)**：等 C8 全读 `parser_expression.c` 并确认所有入口语法后再考虑纯删除，不误报新的 P0。 |
+| `parser_local_declarations.c/.h` | local VLA `alloca` count/address 隐藏局部、GNU cleanup context、`__auto_type` 先初始化后 bind 名、block extern、static local 的 symbol owner 与 section 均现役。**CLEAN duplicate:** 六种 static-local 构造路径使用完全相同的 `snprintf("__minic_static_local_%zu_%zu")` 与截断判定，统一成文件私有 `format_static_local_symbol_name`；各路径仍保留原报错/array/record/relocation/section 决策。 |
+
+**C7 生产源码：** 仅 `parser_local_declarations.c` **+24/-37，净 -13 行**。
+累计纯清理 **净 -136 行**（C1 -69、C3 -21、C4 -19、C6 -14、C7 -13），
+不混入此间独立合入的 MC-061/039/056/049/023 等 P0 修复。
+
+**验证 PASS：** `-Werror` Release 全编译；12 个 static-local focused 脚本：
+`run-static-local-{scalars,arrays,record-initializers,pointer-arrays,inferred-arrays,fixed-arrays,self-reference,string-arrays}.sh`、
+`run-gnu-static-local-{implicit-zero,interleaved-attribute}.sh`、
+`run-static-local-prefix-attributes.sh`、`run-gnu-efi-static-local-wide-arrays.sh`。
+`run-static-local-owner-reachability.sh` 在 GNU RV64 链接阶段因缺少交叉
+`crt1.o`/`-lc` 失败，属于 **NOT_TESTED（运行环境）**；其前置编译/汇编已通过。
+首用 `sh` 调用两个 `bash -o pipefail` 脚本报 shell option 错，改用 `bash`
+后 EFI wide 测试 PASS；不将 invocation 错误当成源码回归。
+MiniAS/MiniLD 联合验收和完整五架构 Linux 运行继续推迟。
+
 ## 后续批次进度规则
 
 每批发布：当前 HEAD、源文件逐目录覆盖（明确深读与只扫的区别）、

@@ -1295,6 +1295,17 @@ static bool bind_static_local_object(MinicParser *parser,
            minic_parser_bind_scoped_global_object(parser, name_span, object_id);
 }
 
+static int format_static_local_symbol_name(const MinicParser *parser,
+                                           char *buffer,
+                                           size_t capacity) {
+    int length;
+
+    length = snprintf(buffer, capacity, "__minic_static_local_%zu_%zu",
+                      (size_t)parser->current_function,
+                      parser->program->global_object_count);
+    return length > 0 && (size_t)length < capacity ? length : -1;
+}
+
 static bool consume_static_local_interleaved_attribute(MinicParser *parser,
                                                        const MinicParsedAttribute *attribute,
                                                        void *opaque_context);
@@ -1387,12 +1398,8 @@ static bool parse_inferred_static_local_array(MinicParser *parser,
                 "inferred static record array requires a complete element type")) {
             return false;
         }
-        symbol_length = snprintf(symbol_name,
-                                 sizeof(symbol_name),
-                                 "__minic_static_local_%zu_%zu",
-                                 (size_t)parser->current_function,
-                                 parser->program->global_object_count);
-        if (symbol_length <= 0 || (size_t)symbol_length >= sizeof(symbol_name) ||
+        symbol_length = format_static_local_symbol_name(parser, symbol_name, sizeof(symbol_name));
+        if (symbol_length <= 0 ||
             !minic_c0_program_add_incomplete_array_type(
                 parser->program, element_type, &object_type) ||
             !minic_c0_program_add_global_object(parser->program,
@@ -1431,12 +1438,8 @@ static bool parse_static_local_record_initializer(MinicParser *parser,
             parser, declared_type, "static local record requires a complete record type")) {
         return false;
     }
-    symbol_length = snprintf(symbol_name,
-                             sizeof(symbol_name),
-                             "__minic_static_local_%zu_%zu",
-                             (size_t)parser->current_function,
-                             parser->program->global_object_count);
-    if (symbol_length <= 0 || (size_t)symbol_length >= sizeof(symbol_name)) {
+    symbol_length = format_static_local_symbol_name(parser, symbol_name, sizeof(symbol_name));
+    if (symbol_length <= 0) {
         minic_parser_error(parser, "cannot build static local record symbol name");
         return false;
     }
@@ -1474,12 +1477,8 @@ static bool add_implicitly_zero_initialized_static_local(MinicParser *parser,
             "static local object without an initializer requires a complete object type")) {
         return false;
     }
-    symbol_length = snprintf(symbol_name,
-                             sizeof(symbol_name),
-                             "__minic_static_local_%zu_%zu",
-                             (size_t)parser->current_function,
-                             parser->program->global_object_count);
-    if (symbol_length <= 0 || (size_t)symbol_length >= sizeof(symbol_name)) {
+    symbol_length = format_static_local_symbol_name(parser, symbol_name, sizeof(symbol_name));
+    if (symbol_length <= 0) {
         minic_parser_error(parser, "cannot build implicit-zero static local symbol name");
         return false;
     }
@@ -1574,13 +1573,9 @@ static bool parse_static_local_array_declarator(MinicParser *parser,
         MinicGlobalObjectId array_object_id;
         int array_symbol_length;
 
-        array_symbol_length = snprintf(array_symbol_name,
-                                       sizeof(array_symbol_name),
-                                       "__minic_static_local_%zu_%zu",
-                                       (size_t)parser->current_function,
-                                       parser->program->global_object_count);
+        array_symbol_length = format_static_local_symbol_name(
+            parser, array_symbol_name, sizeof(array_symbol_name));
         if (array_symbol_length <= 0 ||
-            (size_t)array_symbol_length >= sizeof(array_symbol_name) ||
             !minic_c0_program_add_global_object(parser->program,
                                                 array_symbol_name,
                                                 (size_t)array_symbol_length,
@@ -1661,13 +1656,9 @@ static bool parse_static_local_array_declarator(MinicParser *parser,
             return false;
         }
 
-        scalar_symbol_length = snprintf(scalar_symbol_name,
-                                        sizeof(scalar_symbol_name),
-                                        "__minic_static_local_%zu_%zu",
-                                        (size_t)parser->current_function,
-                                        parser->program->global_object_count);
-        if (scalar_symbol_length <= 0 ||
-            (size_t)scalar_symbol_length >= sizeof(scalar_symbol_name)) {
+        scalar_symbol_length = format_static_local_symbol_name(
+            parser, scalar_symbol_name, sizeof(scalar_symbol_name));
+        if (scalar_symbol_length <= 0) {
             minic_parser_error(parser, "cannot build static local scalar symbol name");
             return false;
         }
@@ -1730,12 +1721,8 @@ static bool parse_static_local_array_declarator(MinicParser *parser,
         }
     }
 
-    symbol_length = snprintf(symbol_name,
-                             sizeof(symbol_name),
-                             "__minic_static_local_%zu_%zu",
-                             (size_t)parser->current_function,
-                             parser->program->global_object_count);
-    if (symbol_length <= 0 || (size_t)symbol_length >= sizeof(symbol_name)) {
+    symbol_length = format_static_local_symbol_name(parser, symbol_name, sizeof(symbol_name));
+    if (symbol_length <= 0) {
         minic_parser_error(parser, "cannot build static local symbol name");
         return false;
     }
