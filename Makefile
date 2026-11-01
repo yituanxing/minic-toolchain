@@ -440,6 +440,7 @@ help:
 		"  make check-minild-script-a0 Parse the Linux linker-script subset" \
 		"  make check-minild-script-a1 Validate script-directed ET_EXEC symbol semantics" \
 		"  make check-fast         Run the fast frontend and C0 gates" \
+		"  make check-rv32-wide-branch-condition Compare RV32 64-bit branch truth under GNU/MiniC QEMU" \
 		"  make check-token-model  Run the token data-model unit gate" \
 		"  make check-lexer        Run the C0 lexer unit gate" \
 		"  make check-type         Run the frontend type-value unit gate" \
@@ -600,6 +601,12 @@ check-netlink-warn-branch: $(MINIC_CC_BINARY)
 		sh tests/compiler/c0/probe-netlink-warn-branch.sh
 
 check-fast: check-gnu-linux-ioremap-inline-arg-guard check-netlink-warn-branch
+
+.PHONY: check-rv32-wide-branch-condition
+check-rv32-wide-branch-condition: $(MINIC_CC_BINARY)
+	@MINIC_CC="$(abspath $(MINIC_CC_BINARY))" bash tests/compiler/c0/run-rv32-wide-branch-condition.sh
+
+check-fast: check-rv32-wide-branch-condition
 
 # The staged driver invokes the sibling minic-cc at runtime. An order-only
 # prerequisite prevents parallel `make -j check-fast` from launching it while
