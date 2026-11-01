@@ -1002,6 +1002,46 @@ FP struct 继续拒绝）、`check-elf-hidden-undefined-pic-source`
 工具返回 `NOT_TESTED`；MC-059 runtime `SKIP`，没有把这些计为
 GNU ELF/QEMU 验收。
 
+## 批次 C30：RV32I/ILP32 物理 ABI、机器指令与 GNU ASM（仅审读）
+
+**基线：** C29 已推送 `3a876a29`，2026-11-01。本批
+逐文件全文深读 `src/target/riscv32` 全部 **16 个生产文件、
+3,583 行**：`rv32_abi_cursor.c/.h`（29/19）、
+`rv32_abi_plan.c/.h`（258/62）、`rv32_call.c`（324）、
+`rv32_emit.c/.h`（1,009/19）、`rv32_fp_emit.c`（153）、
+`rv32_frame.c`（303）、`rv32_global_emit.c/.h`（289/16）、
+`rv32_integer_emit.c`（562）、`rv32_internal.h`（99）、
+`rv32_memory_emit.c`（198）、`rv32_scalar.c`（96）、
+`rv32_wide_emit.c`（147）。RV32 子目录 **16/16** 全文深读。
+全项目累计 **231/339**：Frontend **69/69**、
+Compiler **11/11**、Core **48/48**、Target **103/211**；
+Target 还剩 **108** 个生产文件。
+
+| ILP32 子域 | 阅读结论与后续边界 |
+| --- | --- |
+| `rv32_abi_cursor` / `rv32_abi_plan` | 以 4B XLEN word 规划一条唯一 incoming/outgoing ABI：zero-sized GNU Record 不占槽，1–8B 按最多两 word 传值，大 Record 保存 by-value snapshot 后传间接指针，隐藏 sret 先占 a0。具名双字可跨 a7/stack，匿名双字只有实际 8B 对齐才跳偶数 GAR；CoreCallIndex 提供稀疏真实 CALL，内存分配与失败回滚有独立 owner。**KEEP(one ILP32 physical plan)**。 |
+| `rv32_frame` / `rv32_call` | RA 即使叶函数也有稳定 4B slot，所有 outgoing stack args 预留于 sp+0 并保持公共 16B 调用对齐；动态 alloca 的 SSA/objects 改由 s0，32/64/256 对齐局部必须保存原 entry SP 才能读取传入 stack args。小 Record 尾部逐 byte 读取/写回，不能越过对象；间接大 Record 保留 C by-value 语义。**KEEP(frame and call coupled by verified plan)**。 |
+| `rv32_scalar` / `rv32_wide_emit` / `rv32_integer_emit` | C long 在 ILP32 是 32-bit，`long long` 是一项 Core value 但两个 little-endian word；Base-I carry/borrow/CLZ/CTZ 和 2×32 shift 独立于 RV64 的 8B 标量。GNU `__builtin_*_overflow` 的 mixed signedness 是数学值域，不许用普通 C promotion 代替；必要时调用既有 libgcc `__muldi3`/除法 oracle。**KEEP(proven narrow vs wide semantics)**。 |
+| `rv32_fp_emit` | `float` 1 GPR，`double` 2 GPR，都是 software ABI raw IEEE bits；单/双精度 add/div/compare 与 integer conversion 委托 pinned compiler-rt/libgcc helpers，不生成硬件 F 或重新实现 IEEE rounding。NaN 的 compare predicate 另行按 helper 返回值转换。**KEEP(softfloat runtime contract)**。 |
+| `rv32_memory_emit` | Core/DataLayout 根证明对齐不足时运行时检查并用 `lbu/sb` byte walk；动态堆栈申请带 32-bit overflow trap；0 stride 的 GNU empty Record 只保留已求值的 index effect；global/function PIC 地址根据 true ELF preemptibility 决定 `la/lla`。**KEEP(address provenance and source effects)**。 |
+| `rv32_global_emit` | 对 weak zero object、section-owned initializer、空尺寸 GNU array、四字节 relocation、computed-goto label 有 ELF32 专属分支，具体 aggregate bytes 仍调用 C28 shared recursive serializer。不能把 RV32 `.4byte` 变成 LP64 `.8byte`，也不能因 data serializer 重叠而抹掉弱符号/显式 section 路径。**KEEP(ELF32 ownership)**。 |
+| `rv32_emit` | 精确区分 source-owned GNU opaque/structured ASM 与 MiniC 机器 Base-I；fixed a-register、显式 clobber alias、memory/readwrite、asm-goto deferred immediates 均由 target 限定，不能把 Core 允许 16 role 误认为 RV32 8 个物理 operand 都可分配。CFG 外部 label root、16B prologue/epilogue、constructor `.init_array` 和临时输出原子发布保留。**KEEP(strict GNU ASM and machine split)**。 |
+| 独立问题 | `rv32_term` 有已登记 **MC-057**：zero-size Record 返回时 `record_return_size == 0` 落入 scalar-return 分支而拒绝合法 C。该问题已交独立 Bug 修复，不作为 C30 的“净减行数”；在修复、GNU 差分及回归前不假称处理完毕。**OPEN / delegated**。 |
+
+**C30 生产源码 +0/-0，净 0 行**；C1～C30 纯清理
+累计 **净 -349 行**。这一批复杂的 `rv32_emit`、
+overflow 和 ILP32 ABI 不能当成纯重复代码删掉；真正的
+重构次序要等各 ISA 全文审读完再决定。
+
+**验证 PASS：** Release `-Werror`，
+`check-packed-bitfield-field-layout`（GNU oracle、五 ISA `-S`、
+x86 native 42）、`check-linux-symbolic-integer-and-record`
+（五目标静态 reloc + x86 native）、`check-asm-operand-plan`
+（RV32 fail-closed、五目标 operand contract、x86 futex native 42）、
+`check-rv32-pointer-widening-source`（五 ISA `-S`）。
+`check-rv32-constructor-init-array` 因缺 RISC-V GNU cross tool
+明确 `NOT_TESTED`，不冒充 RV32 ELF/QEMU 已运行。
+
 ## 后续批次进度规则
 
 每批发布：当前 HEAD、源文件逐目录覆盖（明确深读与只扫的区别）、
