@@ -1450,6 +1450,12 @@ check-loongarch64-frame-fold: $(MINIC_CC_BINARY)
 check-core-value-use-counts:
 	bash tests/compiler/c0/probe-core-value-use-counts.sh
 
+.PHONY: check-core-call-dump
+check-core-call-dump:
+	HOST_CC="$(CC)" bash tests/compiler/c0/probe-core-call-dump.sh
+
+check-fast: check-core-call-dump
+
 .PHONY: check-core-dead-ssa-writeback
 check-core-dead-ssa-writeback: $(MINIC_CC_BINARY)
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \

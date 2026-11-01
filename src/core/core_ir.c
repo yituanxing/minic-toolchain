@@ -603,8 +603,6 @@ bool minic_core_ir_direct_call_return_type(MinicType type) {
 }
 
 static bool callee_signature_equal(const MinicCoreCallee *callee,
-                                   const char *name,
-                                   size_t name_length,
                                    MinicType return_type,
                                    const MinicType *parameter_types,
                                    size_t parameter_count,
@@ -612,9 +610,8 @@ static bool callee_signature_equal(const MinicCoreCallee *callee,
                                    MinicFunctionCallingConvention calling_convention) {
     size_t index;
 
-    if (callee == NULL || name == NULL || callee->name == NULL ||
-        callee->name_length != name_length || memcmp(callee->name, name, name_length) != 0 ||
-        !minic_type_equal(callee->return_type, return_type) ||
+    /* The only caller already found this callee by exact name and length. */
+    if (callee == NULL || !minic_type_equal(callee->return_type, return_type) ||
         callee->parameter_count != parameter_count || callee->is_variadic != is_variadic ||
         callee->calling_convention != calling_convention) {
         return false;
@@ -663,8 +660,6 @@ bool minic_core_function_add_callee(MinicCoreFunction *function,
         if (existing->name_length == name_length &&
             memcmp(existing->name, name, name_length) == 0) {
             if (!callee_signature_equal(existing,
-                                        name,
-                                        name_length,
                                         return_type,
                                         parameter_types,
                                         parameter_count,

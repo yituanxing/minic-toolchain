@@ -408,6 +408,36 @@ indexed/fallback、AST source-subtree membership、两例五 ISA `-S`
 local-effect-facts GNU/MiniC 原生差分、RV64 `-S`。完整 Linux
 QEMU/跨目标 GNU ELF 与联合验收仍待后续阶段执行。
 
+## 批次 C13：Core IR 构造、Verify、Dump 全路径审读与重复调用输出
+
+**基线：** `5942dcf`，2026-11-01。本批全文深读 Core **5/48**
+生产文件、原始 **3,776 行**：core_ir.c/.h、core_ir_internal.h、
+core_ir_verify.c、core_ir_dump.c。累计全文深读 **93/339**：
+Frontend **69/69**、Compiler **11/11**、Core **13/48**、Target
+**0/211**；Core 仍剩 **35** 个、Target **211** 个，合计
+**246/339** 个生产文件待通读。
+
+| 文件/调用关系 | 本批决定与后续重构约束 |
+| --- | --- |
+| `core_ir.h` + `core_ir.c` | Value/Instruction/Block/Object/FunctionSymbol 等 ID 使用固定 `uint32_t` 身份、哨兵值与 `size_t` 容量；builder 先保留空间再提交，指针不能跨 `realloc` 借用。function-address 与 direct callee 不同，Record Call 值/对象是两种存储。**KEEP(stable IDs + append commit)**。 |
+| `core_ir_verify.c` | 每个 block 内验证 SSA 值定义顺序，跨 block 不凭空继承 `available_values`；直接 CALL 的变参 record 与间接 CALL 的变参 scalar 接纳范围不同，不能共享完整参数校验。GNU structured ASM 的 source/target provenance、寄存器早破坏、memory clobber 等也互不等价。**KEEP(fail-closed admission)**。MC-055 不完整 auxiliary shape preflight 保持独立调查。 |
+| Core IR 语言耦合 | `MinicType`、`MinicRecordId`、`MinicEnumId`、`MinicFunctionTypeId`、source label / span 仍被构造器、验证、backend 访问；这是未来目标无关 IR 的边界债，**NEEDS_PROOF(language boundary)**，当前清理不删除承载真实身份的字段。 |
+| `core_ir.c` 私有 callee 比较 | `minic_core_function_add_callee` 已用相同 name_length/memcmp 找到候选，再调 `callee_signature_equal` 反复判断完全相同名字；只有一个内部调用者。**DELETE(redundant name comparison)**，保留返回类型、定参类型、变参与调用约定的比较。 |
+| `core_ir_dump.c` CALL 输出 | 直接/间接 CALL 的参数打印循环完全同构：VALUE `%n`、OBJECT `%on`、逗号分隔与 fprintf 失败传播均相同，差别仅在前缀与 signature 尾缀。**DELETE(two copies)**，改复用唯一私有 `dump_call_arguments`；不改任何 Core 文本格式。 |
+
+**C13 生产源码：** core_ir.c **+2/-7（净 -5）**、
+core_ir_dump.c **+24/-44（净 -20）**，本批 **净 -25 行**；
+C1～C13 纯清理累计 **净 -240 行**。新 Core API 单元测试、
+shell gate 与 Makefile 入口不纳入生产删行统计。
+
+**验证 PASS：** Release `-Werror` 重编 Core IR 并链接 minic-cc；
+新 `check-core-call-dump` 构造含 `VALUE + OBJECT` 两类实参的
+direct/indirect CALL，逐字节比对 Core 文本与预期格式；
+Core literal branch fold 及 malformed fail-closed 单元测试；
+Core reentry indexed/fallback + subtree、五 ISA `-S`、GNU/MiniC
+x86 原生；GNU Linux Boolean guard GNU AS/LD/原生差分和负向检查。
+没有执行全量 CI、五 ISA ELF/QEMU 或 MiniAS/MiniLD 联合验收。
+
 ## 后续批次进度规则
 
 每批发布：当前 HEAD、源文件逐目录覆盖（明确深读与只扫的区别）、

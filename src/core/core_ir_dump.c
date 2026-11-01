@@ -5,6 +5,25 @@
 
 /* The optional textual Core dump is a consumer, never an IR mutation owner.
  * Preserve pre-dump verification and the existing printed format verbatim. */
+static bool dump_call_arguments(FILE *output, const MinicCoreFunction *function,
+                                size_t argument_begin, size_t argument_count) {
+    size_t index;
+
+    for (index = 0U; index < argument_count; ++index) {
+        const MinicCoreCallArgument *argument =
+            &function->call_arguments[argument_begin + index];
+        if (index != 0U && fprintf(output, ", ") < 0) return false;
+        if (argument->kind == MINIC_CORE_CALL_ARGUMENT_VALUE) {
+            if (fprintf(output, "%%%" PRIu32, argument->value.value_id) < 0) return false;
+        } else if (argument->kind == MINIC_CORE_CALL_ARGUMENT_OBJECT) {
+            if (fprintf(output, "%%o%" PRIu32, argument->value.object_id) < 0) return false;
+        } else {
+            return false;
+        }
+    }
+    return true;
+}
+
 static bool dump_instruction(FILE *output,
                              const MinicCoreFunction *function,
                              const MinicCoreInstruction *instruction) {
@@ -518,7 +537,6 @@ static bool dump_instruction(FILE *output,
         return fprintf(output, "  compiler.barrier\n") >= 0;
     case MINIC_CORE_INSTRUCTION_CALL: {
         const MinicCoreCallee *callee;
-        size_t argument_index;
 
         if (function == NULL || instruction->value.call.callee_id >= function->callee_count) {
             return false;
@@ -541,31 +559,11 @@ static bool dump_instruction(FILE *output,
             fprintf(output, "(") < 0) {
             return false;
         }
-        for (argument_index = 0U; argument_index < instruction->value.call.argument_count;
-             ++argument_index) {
-            const MinicCoreCallArgument *argument =
-                &function->call_arguments[instruction->value.call.argument_begin + argument_index];
-
-            if (argument_index != 0U && fprintf(output, ", ") < 0) {
-                return false;
-            }
-            if (argument->kind == MINIC_CORE_CALL_ARGUMENT_VALUE) {
-                if (fprintf(output, "%%%" PRIu32, argument->value.value_id) < 0) {
-                    return false;
-                }
-            } else if (argument->kind == MINIC_CORE_CALL_ARGUMENT_OBJECT) {
-                if (fprintf(output, "%%o%" PRIu32, argument->value.object_id) < 0) {
-                    return false;
-                }
-            } else {
-                return false;
-            }
-        }
+        if (!dump_call_arguments(output, function, instruction->value.call.argument_begin,
+                                 instruction->value.call.argument_count)) return false;
         return fprintf(output, ")\n") >= 0;
     }
     case MINIC_CORE_INSTRUCTION_INDIRECT_CALL: {
-        size_t argument_index;
-
         if (function == NULL ||
             instruction->value.indirect_call.signature_id >= function->call_signature_count ||
             instruction->value.indirect_call.callee >= function->value_count) {
@@ -590,27 +588,9 @@ static bool dump_instruction(FILE *output,
                            instruction->value.indirect_call.callee) < 0) {
             return false;
         }
-        for (argument_index = 0U;
-             argument_index < instruction->value.indirect_call.argument_count;
-             ++argument_index) {
-            const MinicCoreCallArgument *argument = &function->call_arguments[
-                instruction->value.indirect_call.argument_begin + argument_index];
-
-            if (argument_index != 0U && fprintf(output, ", ") < 0) {
-                return false;
-            }
-            if (argument->kind == MINIC_CORE_CALL_ARGUMENT_VALUE) {
-                if (fprintf(output, "%%%" PRIu32, argument->value.value_id) < 0) {
-                    return false;
-                }
-            } else if (argument->kind == MINIC_CORE_CALL_ARGUMENT_OBJECT) {
-                if (fprintf(output, "%%o%" PRIu32, argument->value.object_id) < 0) {
-                    return false;
-                }
-            } else {
-                return false;
-            }
-        }
+        if (!dump_call_arguments(output, function,
+                                 instruction->value.indirect_call.argument_begin,
+                                 instruction->value.indirect_call.argument_count)) return false;
         return fprintf(output,
                        ") signature=%" PRIu32 "\n",
                        instruction->value.indirect_call.signature_id) >= 0;
