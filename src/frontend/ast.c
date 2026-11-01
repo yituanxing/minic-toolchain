@@ -1611,6 +1611,23 @@ const MinicExpression *minic_c0_program_expression(const MinicC0Program *program
     return &program->expressions[expression_id];
 }
 
+static bool minic_c0_materialized_array_object_info(const MinicC0Program *program,
+                                                     MinicType type,
+                                                     MinicArrayObjectInfo *info) {
+    const MinicArrayType *array_type =
+        minic_c0_program_array_type(program, type.array_type_id);
+
+    if (array_type == NULL) {
+        return false;
+    }
+    info->element_type = array_type->element_type;
+    info->element_count = array_type->element_count;
+    info->is_zero_length = array_type->is_zero_length;
+    info->is_incomplete = array_type->element_count == 0U && !array_type->is_zero_length;
+    info->has_materialized_type = true;
+    return true;
+}
+
 bool minic_c0_expression_array_object_info(const MinicC0Program *program,
                                            const MinicExpression *expression,
                                            MinicArrayObjectInfo *info) {
@@ -1670,18 +1687,8 @@ bool minic_c0_expression_array_object_info(const MinicC0Program *program,
             resolved.is_incomplete = local->element_count == 0U && !resolved.is_zero_length;
         } else if (!minic_type_is_array(expression->type)) {
             return false;
-        } else {
-            const MinicArrayType *array_type;
-
-            array_type = minic_c0_program_array_type(program, expression->type.array_type_id);
-            if (array_type == NULL) {
-                return false;
-            }
-            resolved.element_type = array_type->element_type;
-            resolved.element_count = array_type->element_count;
-            resolved.is_zero_length = array_type->is_zero_length;
-            resolved.is_incomplete = array_type->element_count == 0U && !array_type->is_zero_length;
-            resolved.has_materialized_type = true;
+        } else if (!minic_c0_materialized_array_object_info(program, expression->type, &resolved)) {
+            return false;
         }
     } else if (expression->kind == MINIC_EXPRESSION_MEMBER) {
         const MinicRecord *record;
@@ -1696,36 +1703,15 @@ bool minic_c0_expression_array_object_info(const MinicC0Program *program,
             resolved.is_zero_length = field->is_zero_length_array;
         } else if (!minic_type_is_array(expression->type)) {
             return false;
-        } else {
-            const MinicArrayType *array_type;
-
-            array_type = minic_c0_program_array_type(program, expression->type.array_type_id);
-            if (array_type == NULL) {
-                return false;
-            }
-            resolved.element_type = array_type->element_type;
-            resolved.element_count = array_type->element_count;
-            resolved.is_zero_length = array_type->is_zero_length;
-            resolved.is_incomplete = array_type->element_count == 0U && !array_type->is_zero_length;
-            resolved.has_materialized_type = true;
-        }
-    } else if (minic_type_is_array(expression->type)) {
-        const MinicArrayType *array_type;
-
-        array_type = minic_c0_program_array_type(program, expression->type.array_type_id);
-        if (array_type == NULL) {
+        } else if (!minic_c0_materialized_array_object_info(program, expression->type, &resolved)) {
             return false;
         }
-        resolved.element_type = array_type->element_type;
-        resolved.element_count = array_type->element_count;
-        /* GNU `T objects[0]` is a complete zero-extent array, distinct from
-         * `extern T objects[]`. In particular Linux's __ADDRESSABLE macro
-         * takes `&objects` and needs its pointer-to-array type verified as
-         * zero-sized, not as an incomplete declaration. */
-        resolved.is_zero_length = array_type->is_zero_length;
-        resolved.is_incomplete =
-            array_type->element_count == 0U && !array_type->is_zero_length;
-        resolved.has_materialized_type = true;
+    } else if (minic_type_is_array(expression->type)) {
+        /* GNU T[0] is complete, unlike extern T[]: the shared probe keeps
+         * that distinction for &array, including Linux's __ADDRESSABLE. */
+        if (!minic_c0_materialized_array_object_info(program, expression->type, &resolved)) {
+            return false;
+        }
     } else {
         return false;
     }

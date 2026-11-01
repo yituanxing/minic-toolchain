@@ -161,6 +161,41 @@ Compiler/Core/Target 本轮全文深读仍为 0。本批检出多处“外表可
 边界。下一批先完成剩余 Frontend **21/69** 个生产源文件的逐文件深读，
 再审 Compiler→Core→Target，不提前抽出共用层。
 
+## 批次 C6：AST 实体、验证边界与函数/常量只读分析
+
+**起点：** `ede361e`，2026-11-01。本批另从头至尾逐文件阅读 **9 个生产
+C/H，原始源码约 8,613 行**；截至本批累计全文深读 **57/336**，
+Frontend **57/69**，仍有 Frontend 12 个、其他目录 267 个生产文件未在
+本轮全文深读。不是把调用链抽查、自动搜索或先前 Bug 分析折算成通读。
+
+| 全文阅读（`src/frontend/`） | 所有权、消费者与处理决定 |
+| --- | --- |
+| `ast.h`、`ast.c` | Program 含 Expression/Local/Statement/Block/Function/Record/ArrayType/FunctionType/GlobalObject 等可扩容 arena，实体 ID 稳定、借用指针会因 realloc 失效；CALL overflow、函数名及签名、内联 ASM、全局重定位均有独立释放/拷贝合同。**CLEAN duplicate:** `minic_c0_expression_array_object_info` 内针对已物化 ArrayType 的三份同字段提取归并成一个 `.c` 私有 helper；本地/成员的旧形式优先级、零长度与未完成数组、失败返回均保持原样。 |
+| `ast_verifier.c/.h` | PARSED/NORMALIZED 表达式、源语言 TargetInfo 合法性、整数/指针与 record 值类别、ASM 输入输出、全局重定位、完整 Program arena 与详细诊断分阶段校验。未完成数组 owner 的索引为可失败加速器，仍有线性回退；恶意构造 AST 预检查次序另见既有 `MC-032`。**KEEP(validation/fallback)**，不能移掉失败出口或把机器码支持混为源准入。 |
+| `function_body.c/.h` | 稀疏函数 body view、嵌套块/表达式/ASM 的 ownership 验证、静态 inline reachability 与 perf owner 索引各有不同合同；Expression 子节点遍历的浅拷贝可能写共享 CALL overflow，既有 `MC-030`，**KEEP(borrowed state)**。 |
+| `semantic_snapshot.h` | 多种 parser 计数快照与仅类型/仅表达式复位虽样式近似，但不意味着回滚可释放已有 owned payload；对应既有 `MC-009`。**KEEP(transaction)**。 |
+| `const_eval.c/.h` | C 整数常量表达式的有符号溢出、目标宽度、位运算、指针零/成员偏移、builtin overflow、浮点到整数的定义域分别约束；**KEEP(source semantics)**，不随意折叠与 runtime fold 似同的分支。 |
+
+**C6 源码改动：** `ast.c` **+24/-38，净 -14 行**；仅消除三份机械复制的
+materialized array descriptor 读取，不修改类型表示、公开 AST API 或 Parser。
+至 C6 纯清理累计源码净 **-123 行**（C1 -69、C3 -21、C4 -19、C6 -14；
+C2/C5 零），独立 MC Bug 修复不在内。
+
+**验证 PASS：** Release 全源 `-Werror` 编译，`check-type`、
+`check-ast-contract`、`check-pointer-arithmetic`、`check-pointer-subscripts`、
+`check-record`、`check-global-objects`、`check-expression-statements`；
+`run-gnu-zero-length-array.sh` 与 `run-compatible-incomplete-array-pointer.sh`
+（GNU syntax oracle、x86 native、x86/aarch64/loongarch 代码生成、正负例）。
+后一个脚本必须显式 `MINIC_CC=build/cleanup-werror/bin/minic-cc`，首次仅设
+`MINIC` 导致默认 `build/debug/bin/minic-cc` 不存在而 exit 127；改正路径后 PASS，
+不算产品失败。Linux 全架构/与 MiniAS MiniLD 联合验收继续推迟。
+
+**结构性清理结论：** 多个 P0 的共同耦合不是“重复函数”，而是递归 Parser
+跨 `Program` arena 增长操作保留 `Record*`、`ArrayType*`、`RecordField*`
+借用指针，所有权写在 `ast.h` 却靠各调用现场自觉遵守。
+本阶段只记录并由独立 MC 小批次按 stable ID/按值快照修补，**不**先实施
+arena/Parser 架构重构，也不将 Bug 行数冲入清理成绩。
+
 ## 后续批次进度规则
 
 每批发布：当前 HEAD、源文件逐目录覆盖（明确深读与只扫的区别）、
