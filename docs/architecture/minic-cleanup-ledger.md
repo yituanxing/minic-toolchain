@@ -738,6 +738,39 @@ LoongArch frontier census）；`check-x86-linux-control-state`、
 source-to-Core trap/control-state 和 asm-goto reentry）。本批仅审读，
 不计五目标 ELF/QEMU 或联合验收。
 
+## 批次 C23：Core GNU ASM operand/text 与剩余 scalar forms（Core 全部读完）
+
+**基线：** C22 本地 `572ccd3`，2026-11-01。本批全文深读
+Core **2** 个生产文件、原始合计 **2,845 行**：
+`core_lower_asm_operands.c`（1,644）、
+`core_lower_asm_scalar_forms.c`（1,201）。累计 **128/339**
+全文深读：Frontend **69/69**、Compiler **11/11**、
+Core **48/48**、Target **0/211**。**Core 全层清理审读完成，
+余下 Target 211 个生产文件**；全项目仍未完成，联合验收继续延后。
+
+| GNU ASM 边界 | 审读与清理决定 |
+| --- | --- |
+| Typed operand plan publication | Source `gnu_early_clobber`、matching output、`+m` 隐式/显式 memory effect 只有在 `plan` 与 Core binding 数量、索引、类别一致后才能发布；Target owner 和 machine-form ID 不等于 Source `source_form_id`。**KEEP(one canonical typed handoff)**。 |
+| Integer immediate 与 symbolic relocation | `i` 可为纯整数 fact、specialized 参数表达式或 global/function/array/member 加固定 byte offset 的符号地址；`I` 只接受 TargetInfo 认可的 numeric immediate，`rK` 仅 0..31。数组元素 size 0、乘加 overflow、32 层 recursion 以及不匹配的符号来源必须 fail-closed。**KEEP(source constant vs machine encoding split)**。 |
+| Template normalizer | GNU `%[name]`、`%cN`、`%l[label]`、`%%` 以及 `%10` 多位编号分别有不同的 Core-transport 和 asm-goto 链接期占位语义；不能只做普通字符串替换。Immediate batch 最多 8 个、固定 64B 临时文本，内存分配/长度两阶段均有 overflow 护栏。**KEEP(two-pass normalization and relocation placeholders)**。 |
+| Scalar/writeback patterns | 专用 `+A` memory RMW、`=r`/`=&r` output、`+r` readwrite、带 `rK` 的 immediate specialization 和两个 scalar inputs，在 Canonical Structured 已覆盖部分 shape 时仍按驱动的先后次序选择。输出的 SSA value + `STORE` 与 `+m` 的 memory effect 不可误删。**KEEP(ordered accepted-shape semantics)**。 |
+| Empty GNU ASM | 空 volatile 无 operand 是编译器 barrier；非 volatile 无 operand 且无 clobber 才是 no-op。空模板 `=r`/`0` 的 tied copy 必须计算输入、bitcast 和写出；空 `+r` fixed-register、普通 local 与 BPF `+rm` 有不同存储/顺序约束；零文本但有 register inputs 仍逐个求值后保留 barrier。**KEEP(effects before elimination)**。 |
+| 可删除的精确重复 | `core_inline_asm_specialized_integer` 的 `INT64_MIN * -1` 检查重复，后一条独立分支已完全覆盖前者；`core_lower_asm_scalar_forms.c` 三处 output register `=r`/`=&r` 手工比对与同模块已有 private `core_inline_asm_register_output_constraint` 完全一致，`r`/`rK` 两处和 `constraint_is` 一致。**DELETE(exact duplicate admission tests)**，不改何种 constraint 被接受。 |
+| 源文件局部卫生 | `core_lower_asm_operands.c` 因旧切分在函数之间重复引入 3 组标准/项目头，统一至文件首部；修正已有函数声明前多余空格。**DELETE(duplicate includes and declaration drift)**。 |
+| 未来解耦点 | `core_inline_asm_specialized_integer` 自有 signed int64 expression interpreter，和 C21 的 target-aware const fact/overflow 推导重叠，却没有相同的 unsigned width/provenance 合同。只有先证明值域、`i`/`I` 和 symbolic relocation 的全部消费者，才可合并这两个解释器。**NEEDS_PROOF(typed immediate common oracle)**。 |
+
+**C23 生产源码：** 两文件合计 **+20/-50，净 -30 行**；
+C1～C23 纯清理累计 **净 -331 行**。这只涉及完全重复
+constraint 识别、溢出保护和文件头整理，不动 Core/Target
+指令语义、ABI、asm-goto 分发优先级。
+
+**验证 PASS：** Release `-Werror` 重编并链接 `minic-cc`；
+`check-asm-operand-plan`（五 ISA operand-contract，x86 GNU/MiniC
+native futex exit42、非法 suffix fail-closed）、
+`check-x86-linux-control-state` 与
+`check-linux-three-arch-trap-state`（ASM trap/control-state 与
+asm-goto CFG reentry）。不把 -S 代替五目标 ELF/QEMU 验收。
+
 ## 后续批次进度规则
 
 每批发布：当前 HEAD、源文件逐目录覆盖（明确深读与只扫的区别）、

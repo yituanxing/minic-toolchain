@@ -1,7 +1,13 @@
 #include "core/core_lower_asm_internal.h"
+
+#include "frontend/const_eval.h"
+#include "frontend/expression_semantics.h"
+#include "target/data_layout.h"
+
 #include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 /* All source-side GNU constraint identity, matching outputs and memory
  * effects have been classified before Core materialization. Store one
@@ -55,15 +61,6 @@ bool core_asm_publish_operand_plan(MinicCoreInstruction *instruction,
     }
     return true;
 }
-
-#include "frontend/const_eval.h"
-#include "frontend/expression_semantics.h"
-#include "target/data_layout.h"
-
-#include <inttypes.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
 
 /* GNU inline-asm source operand interpretation and template normalization.
  * Target machine dialects remain opaque; normalization creates no Core effects. */
@@ -300,8 +297,6 @@ static bool core_inline_asm_specialized_integer(
                 *value = left - right;
                 return true;
             case MINIC_BINARY_MULTIPLY:
-                if (left != 0 && right != 0 &&
-                    (left == INT64_MIN && right == -1)) return false;
                 if (right > 0 &&
                     (left > INT64_MAX / right || left < INT64_MIN / right))
                     return false;
@@ -796,7 +791,7 @@ static const char *core_inline_asm_specialized_symbolic_name(
     return core_inline_asm_specialized_symbolic_name_depth(context, expression_id, 0U);
 }
 
- bool core_inline_asm_immediate_text(
+bool core_inline_asm_immediate_text(
     const MinicCoreLowerContext *context,
     const MinicInlineAsmOperand *operand,
     char *integer_text,
@@ -1377,7 +1372,7 @@ bool core_inline_asm_numeric_template(const MinicInlineAsm *source,
    one label, one read-only "i" operand whose value requires the existing
    deferred-immediate mechanism, no outputs/clobbers, and only %0/%l[label]/%%
    template references. */
- bool core_inline_asm_single_label_goto_supported(
+bool core_inline_asm_single_label_goto_supported(
     const MinicCoreLowerContext *context, const MinicInlineAsm *source) {
     const MinicExpression *input_expression;
     const MinicInlineAsmLabel *label;
@@ -1483,7 +1478,7 @@ bool core_inline_asm_numeric_template(const MinicInlineAsm *source,
     return saw_input && saw_label;
 }
 
- bool core_inline_asm_single_label_goto_numeric_template(
+bool core_inline_asm_single_label_goto_numeric_template(
     const MinicInlineAsm *source, char **template_out, size_t *template_length_out) {
     char *normalized;
     size_t cursor;
@@ -1531,7 +1526,7 @@ bool core_inline_asm_numeric_template(const MinicInlineAsm *source,
     return true;
 }
 
- bool core_inline_asm_single_label_goto_bake_input(
+bool core_inline_asm_single_label_goto_bake_input(
     const char *template_text,
     size_t template_length,
     const char *replacement,
@@ -1635,7 +1630,7 @@ static bool core_inline_asm_expression_is_local_depth(
     return false;
 }
 
- bool core_inline_asm_expression_is_local(
+bool core_inline_asm_expression_is_local(
     const MinicCoreLowerContext *context,
     MinicExpressionId expression_id,
     MinicLocalId local_id) {

@@ -347,16 +347,9 @@ MinicCoreLowerStatus core_asm_try_mixed_memory_forms(
         input = &source->inputs[0];
         output_expression = minic_c0_program_expression(context->body->program, output->expression);
         input_expression = minic_c0_program_expression(context->body->program, input->expression);
-        output_register_constraint =
-            output->constraint_text != NULL &&
-            ((output->constraint_length == 2U &&
-              memcmp(output->constraint_text, "=r", 2U) == 0) ||
-             (output->constraint_length == 3U &&
-              memcmp(output->constraint_text, "=&r", 3U) == 0));
-        input_register_constraint =
-            input->constraint_text != NULL &&
-            ((input->constraint_length == 1U && memcmp(input->constraint_text, "r", 1U) == 0) ||
-             (input->constraint_length == 2U && memcmp(input->constraint_text, "rK", 2U) == 0));
+        output_register_constraint = core_inline_asm_register_output_constraint(output);
+        input_register_constraint = core_inline_asm_constraint_is(input, "r") ||
+                                    core_inline_asm_constraint_is(input, "rK");
         if (output->access == MINIC_INLINE_ASM_OPERAND_WRITE_ONLY &&
             input->access == MINIC_INLINE_ASM_OPERAND_READ_ONLY &&
             output_register_constraint && input_register_constraint &&
@@ -597,12 +590,7 @@ MinicCoreLowerStatus core_asm_try_readwrite_and_output_specialization(
 
         output = &source->outputs[0];
         output_expression = minic_c0_program_expression(context->body->program, output->expression);
-        register_constraint =
-            output->constraint_text != NULL &&
-            ((output->constraint_length == 2U &&
-              memcmp(output->constraint_text, "=r", 2U) == 0) ||
-             (output->constraint_length == 3U &&
-              memcmp(output->constraint_text, "=&r", 3U) == 0));
+        register_constraint = core_inline_asm_register_output_constraint(output);
         specialized_template = NULL;
         specialized_length = 0U;
         if (output->access == MINIC_INLINE_ASM_OPERAND_WRITE_ONLY && register_constraint &&
@@ -697,12 +685,7 @@ MinicCoreLowerStatus core_asm_try_readwrite_and_output_specialization(
 
         output = &source->outputs[0];
         output_expression = minic_c0_program_expression(context->body->program, output->expression);
-        register_constraint =
-            output->constraint_text != NULL &&
-            ((output->constraint_length == 2U &&
-              memcmp(output->constraint_text, "=r", 2U) == 0) ||
-             (output->constraint_length == 3U &&
-              memcmp(output->constraint_text, "=&r", 3U) == 0));
+        register_constraint = core_inline_asm_register_output_constraint(output);
         if (output->access == MINIC_INLINE_ASM_OPERAND_WRITE_ONLY && register_constraint &&
             output_expression != NULL && output_expression->kind == MINIC_EXPRESSION_LOCAL &&
             output_expression->value_category == MINIC_VALUE_LVALUE &&
@@ -1086,12 +1069,8 @@ MinicCoreLowerStatus core_asm_try_empty_barrier_scalar_forms(
             MinicType input_type;
             bool register_constraint;
 
-            register_constraint =
-                operand->constraint_text != NULL &&
-                ((operand->constraint_length == 1U &&
-                  memcmp(operand->constraint_text, "r", 1U) == 0) ||
-                 (operand->constraint_length == 2U &&
-                  memcmp(operand->constraint_text, "rK", 2U) == 0));
+            register_constraint = core_inline_asm_constraint_is(operand, "r") ||
+                                  core_inline_asm_constraint_is(operand, "rK");
             if (operand->access != MINIC_INLINE_ASM_OPERAND_READ_ONLY ||
                 !register_constraint || input_expression == NULL ||
                 !core_scalar_expression_value_type(context->body, input_expression, &input_type)) {
@@ -1157,12 +1136,8 @@ MinicCoreLowerStatus core_asm_try_empty_barrier_scalar_forms(
 
         input = &source->inputs[0];
         input_expression = minic_c0_program_expression(context->body->program, input->expression);
-        register_constraint =
-            input->constraint_text != NULL &&
-            ((input->constraint_length == 1U &&
-              memcmp(input->constraint_text, "r", 1U) == 0) ||
-             (input->constraint_length == 2U &&
-              memcmp(input->constraint_text, "rK", 2U) == 0));
+        register_constraint = core_inline_asm_constraint_is(input, "r") ||
+                              core_inline_asm_constraint_is(input, "rK");
         if (input->access == MINIC_INLINE_ASM_OPERAND_READ_ONLY && register_constraint &&
             input_expression != NULL &&
             core_scalar_expression_value_type(context->body, input_expression, &input_type)) {
