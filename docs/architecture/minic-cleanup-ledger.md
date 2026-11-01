@@ -570,6 +570,45 @@ Record 与 transparent union）GNU AS/LD；Record conditional 物化
 另通过四目标 `-S`。五目标完整 ELF/QEMU、MiniAS/MiniLD
 联合验收仍按用户决定推迟。
 
+## 批次 C18：Core IF/Loop/Switch 控制流、重入和不可达终结符
+
+**基线：** C17、MC-041/089/052 已推远端并完成同树核对的
+`9c3e6b8`，2026-11-01。本批全文深读 Core **3** 个生产文件，
+原始 **2,666 行**：`core_lower_if.c`（788）、
+`core_lower_loop.c`（523）、`core_lower_switch.c`（1,355）。
+累计 **112/339**：Frontend **69/69**、Compiler **11/11**、
+Core **32/48**、Target **0/211**；Core 余 **16**、Target
+**211**，合计 **227/339** 待全文深读。
+
+| 来源 CFG / 事实边界 | 审读决定 |
+| --- | --- |
+| `core_lower_if.c` | 谓词先后求值与两臂**推测式先构造**不是源语言提前执行；进入 condition block 时必须恢复 incoming 或 effect-filtered branch-entry facts，两个 exit 再 meet，不能继承一臂结束状态。跳过常量假/真分支前还须检查 C label、case/default、asm-goto、label address 的外部重入闭包。**KEEP(condition dominance + reentry)**。 |
+| `core_lower_if.c` 的诊断轨迹 | `MINIC_DMA_IF_TRACE`、`MINIC_SHMEM_IF_TRACE`、固定函数名 `GENL_IF_PATH` 以及无开关 `CORE_FAST_TRACE` 并存，且首项 DMA 的 `\\n` 文本与 SHMEM 真换行不同；看似重复但下游日志消费者和原始调试语义未证明可删。**NEEDS_PROOF(trace/diagnostics consumers)**，与 MC-020 关联，不做偷偷移除。 |
+| `core_lower_loop.c` | Parser 把 GNU `for` / `do while` 归一为 `WHILE`，`continue` 可能必须先执行 update block，零次/常真回边的 exit 是否可达由**真实 Core 前驱**证明而非语法关键字。局部事实的 loop-body 修改掩码 OOM 时保守 invalidate；对无副作用 one-pass `do while(0)` 单独扁平化。**KEEP(parser provenance + backedge facts)**。 |
+| `core_lower_switch.c` | GNU `case lo ... hi` 是严格按 selector 整数类型比较；内嵌 case 的所有权属于最近的 switch，普通标签的 function-level goto 可越过 case dispatch 进入 dead-prefix 或 `break` 后尾部。常量 selector 的 prefix/suffix pruning 需要上述全子树重入的反证，case fallthrough 的事实 meet 不能借 selector 入口事实替代。**KEEP(nested labels + reentry/fallthrough)**。 |
+| 三处 `UNREACHABLE` | Nested switch 的无前驱 exit、主 switch 的被常量证明死掉的 case segment、普通 switch 的无前驱/所有路径终止 exit，都清零构造相同的 `MINIC_CORE_TERMINATOR_UNREACHABLE`，span 和 block ID 为唯一参数。**DELETE(three duplicate terminator builds)**，复用单个本文件私有构造函数，原返回错误与落点不变。 |
+| `MINIC_CORE_SWITCH_LABEL_LIMIT=512` | 固定 nested/flat label 缓冲和递归 scan 上限仍可能拒绝合法超大 C，但本批没有小步等价替代且会触及临时 arena/内存上限设计。**NEEDS_PROOF(capacity policy)**，不在纯清理中擅改。 |
+
+**C18 生产源码：** `core_lower_switch.c` **+20/-27，净 -7 行**，
+C1～C18 纯清理累计 **净 -275 行**。无 IF 或 Loop 源行为改动；
+独立 MC-048 RV32 指针扩展修复和本批源码减行分别记账。
+
+**验证 PASS：** Release `-Werror` 重编 Core Switch 并链接
+minic/minic-cc；`run-core-switch-case-fact-isolation.sh` 的 GNU/MiniC
+x86 原生对照；`run-core-constant-switch-dead-cases.sh` 五目标 `-S`
+与外部 goto/死分支覆盖；`probe-gnu-linux-zoned-constant-switch.sh`
+的 GNU AS/nm 对照；`run-gnu-switch-case-range.sh`；
+`probe-gnu-nested-switch-record-return-5isa.sh` 五 ISA `-S`、
+x86 GNU/MiniC 原生及负例；`run-for-loops.sh`、
+`run-gnu-runtime-if-effect-facts.sh`、`run-core-reentry-query-contract.sh`。
+另独立 MC-048 在合入后通过五 ISA `-S` 与 GNU/MiniC 双 ELF32
+`qemu-riscv32` native exit7。**不计 PASS：** 老
+`run-switch-control-flow.sh` 首个断言仍要求历史
+`.Lswitch_case_`（现 Core label namespace），实际 `-S` 成功后在
+文本 `grep` 退出1；`run-core-switch-m27.sh` 因缺 RV64 `crt1.o/-lc`
+无法链接。需要单独改造旧 oracle 或补 cross libc 才能复验。
+完整联合验收仍推迟。
+
 ## 后续批次进度规则
 
 每批发布：当前 HEAD、源文件逐目录覆盖（明确深读与只扫的区别）、

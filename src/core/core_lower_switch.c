@@ -23,6 +23,21 @@ typedef struct MinicCoreSwitchLabel {
     MinicCoreBlockId test_block;
 } MinicCoreSwitchLabel;
 
+/* A dead switch segment and either form of unreachable switch exit publish
+ * the same Core terminator. Keep this target-neutral shape in one owner. */
+static bool core_switch_set_unreachable(MinicCoreLowerContext *context,
+                                        MinicCoreBlockId block_id,
+                                        MinicSourceSpan span) {
+    MinicCoreTerminator terminator;
+
+    (void)memset(&terminator, 0, sizeof(terminator));
+    terminator.kind = MINIC_CORE_TERMINATOR_UNREACHABLE;
+    terminator.span = span;
+    terminator.return_value = MINIC_CORE_VALUE_INVALID;
+    terminator.return_object = MINIC_CORE_OBJECT_INVALID;
+    return minic_core_function_set_terminator(context->function, block_id, &terminator);
+}
+
 static MinicCoreLowerStatus append_switch_integer_constant(MinicCoreLowerContext *context,
                                                            MinicSourceSpan span,
                                                            MinicType type,
@@ -564,15 +579,7 @@ static MinicCoreLowerStatus lower_nested_case_switch(
 
     context->block_id = exit_block;
     if (!minic_core_lower_internal_block_has_predecessor(context->function, exit_block)) {
-        MinicCoreTerminator exit_terminator;
-
-        (void)memset(&exit_terminator, 0, sizeof(exit_terminator));
-        exit_terminator.kind = MINIC_CORE_TERMINATOR_UNREACHABLE;
-        exit_terminator.span = statement->span;
-        exit_terminator.return_value = MINIC_CORE_VALUE_INVALID;
-        exit_terminator.return_object = MINIC_CORE_OBJECT_INVALID;
-        if (!minic_core_function_set_terminator(
-                context->function, exit_block, &exit_terminator)) {
+        if (!core_switch_set_unreachable(context, exit_block, statement->span)) {
             return MINIC_CORE_LOWER_ERROR;
         }
         *terminated = true;
@@ -1079,18 +1086,12 @@ minic_core_lower_switch(MinicCoreLowerContext *context, const MinicStatement *st
 
         if ((prune_constant_prefix && source_index < constant_entry_label) ||
             (prune_constant_suffix && source_index > constant_entry_label)) {
-            MinicCoreTerminator unreachable;
-            (void)memset(&unreachable, 0, sizeof(unreachable));
-            unreachable.kind = MINIC_CORE_TERMINATOR_UNREACHABLE;
-            unreachable.span = labels[source_index].statement->span;
-            unreachable.return_value = MINIC_CORE_VALUE_INVALID;
-            unreachable.return_object = MINIC_CORE_OBJECT_INVALID;
             /* Constant source entry bypasses these C segments, but each
              * block still has a valid Core terminator. No machine code
              * may represent dead GNU assembly or accidental effects. */
-            if (!minic_core_function_set_terminator(
-                    context->function, labels[source_index].body_block,
-                    &unreachable)) {
+            if (!core_switch_set_unreachable(context,
+                    labels[source_index].body_block,
+                    labels[source_index].statement->span)) {
                 status = MINIC_CORE_LOWER_ERROR;
                 goto switch_case_facts_cleanup;
             }
@@ -1335,15 +1336,7 @@ switch_case_facts_cleanup:
      * independently of case-fallthrough classification. */
     if (all_segments_terminate ||
         !minic_core_lower_internal_block_has_predecessor(context->function, exit_block)) {
-        MinicCoreTerminator exit_terminator;
-
-        (void)memset(&exit_terminator, 0, sizeof(exit_terminator));
-        exit_terminator.kind = MINIC_CORE_TERMINATOR_UNREACHABLE;
-        exit_terminator.span = statement->span;
-        exit_terminator.return_value = MINIC_CORE_VALUE_INVALID;
-        exit_terminator.return_object = MINIC_CORE_OBJECT_INVALID;
-        if (!minic_core_function_set_terminator(
-                context->function, exit_block, &exit_terminator)) {
+        if (!core_switch_set_unreachable(context, exit_block, statement->span)) {
             return MINIC_CORE_LOWER_ERROR;
         }
         *terminated = true;
