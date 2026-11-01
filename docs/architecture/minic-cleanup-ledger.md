@@ -537,6 +537,39 @@ CALL 实参一次求值、x86 GNU AS/LD 原生和 RV64 GAS 静态检查）。
 未运行全五 ISA ELF/QEMU、MiniAS/MiniLD 联合验收；新旧 Core
 表达式分支的动态等价性只以现有定点回归和静态不可达证明为界。
 
+## 批次 C17：Core Call 实参快照、Record 物化与算术/复合赋值
+
+**基线：** C16 和独立 MC-038/044 问题记录远端同树 HEAD `4478f67`，
+2026-11-01。本批全文深读 Core **3** 个生产文件、原始
+**3,093 行**：`core_lower_calls.c`（1,205）、
+`core_lower_record.c`（975）、`core_lower_arithmetic.c`（913）。
+累计 **109/339** 全文深读：Frontend **69/69**、Compiler
+**11/11**、Core **29/48**、Target **0/211**；Core 余 **19**、
+Target 余 **211**，总计 **230/339** 待全文深读。
+
+| 路径与形似代码 | 清理/重构边界判断 |
+| --- | --- |
+| `core_lower_calls.c` | Direct/indirect Call 的签名资格、参值转换、Record by-value 私有对象、scalar spill/reload 和间接 callee 的求值时序不是一项 ABI 泛化规则。透明 Union 由 Frontend/Sema 判兼容、Core 只把选中指针成员物化为声明类型的 OBJECT，Target 独自决定寄存器/栈传递。**KEEP(source legality vs ABI placement + snapshot order)**。 |
+| 透明 Union 成员选择 | `field` 初始化 NULL，只在 `assignment_compatible` 的命中分支写入；本地 `found` 布尔值与 `field != NULL` 完全等价，`field_index` 的循环外赋零又立刻由 `for` 初始化覆盖。**DELETE(redundant duplicate state)**，未改变成员遍历、拒绝条件或物化时序。 |
+| `core_lower_record.c` | Record 的 lvalue 地址、rvalue materialization、conditional 两臂私有快照、MEMBER 字段投影及 copy/load 受不同源语法约束。Record-call 作为值生产者时必须先固定返回对象，再计算目标地址；`?:` 两臂不可同时执行，更不可从一个臂错误继承局部 fact。**KEEP(record provenance + CFG fork/meet)**，此处不抽出共享 ABI 层。 |
+| `core_lower_arithmetic.c` | 整数 promotion、两种 shift promotion、指针之外的 floating helper 和 `float/double/long double` 运算有不同 IR 类型/精度契约；复合赋值先存左侧地址与旧值，求 RHS 后 reload 再 store，volatile 只体现在 load/store。**KEEP(typed arithmetic + LHS snapshot)**。 |
+| 三个 arithmetic probe 尾部 | 函数入口均已把 `*handled = false`，所有将其置 true 的分支都立即 return；末尾重复清 false 不可能改变结果。**DELETE(three dead tail assignments)**，probe 顺序与失败状态原样保留。 |
+| 其他可疑点 | 用 GNU `__addtf3` 等名称承载语言 `long double`、透明 Union 与 ABI fixed-call qualifier 强关联，是**NEEDS_PROOF(source/ABI boundary)**；本批只记录、不把辅助函数搬到 Target。MC-089 的 x87 有符号 helper 错编单独由 Bug 修复提交处理，不计入纯清理。 |
+
+**C17 生产源码：** `core_lower_calls.c` **+1/-5（净 -4）**，
+`core_lower_arithmetic.c` **+0/-3（净 -3）**；合计
+**+1/-8，净 -7 行**。C1～C17 纯清理累计 **净 -268 行**。
+仅记录 `core_lower_record.c` 的真实所有权合同，未更改实现。
+
+**验证 PASS：** Release `-Werror` 重新编译 Core Call、arithmetic
+及 x86 helper 并链接 minic-cc/minic；透明 Union 的正反例、x86 GNU
+SysV 单 INTEGER chunk 的跨编译器双向原生互操作（包含 fixed/variadic
+Record 与 transparent union）GNU AS/LD；Record conditional 物化
+及原生 effects；小 Record copy/return 和 MC-089 比较 helper
+六运算符/NaN/正负零的 GNU/MiniC x86 原生定点回归，MC-089
+另通过四目标 `-S`。五目标完整 ELF/QEMU、MiniAS/MiniLD
+联合验收仍按用户决定推迟。
+
 ## 后续批次进度规则
 
 每批发布：当前 HEAD、源文件逐目录覆盖（明确深读与只扫的区别）、

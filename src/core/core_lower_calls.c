@@ -125,7 +125,6 @@ static MinicCoreLowerStatus lower_record_call_argument_object(
         MinicCoreValueId field_value;
         MinicType abi_type;
         size_t field_index;
-        bool found;
 
         if (!minic_c0_fixed_call_argument_compatible(
                 context->body->program, parameter_type, expression_id) ||
@@ -140,8 +139,6 @@ static MinicCoreLowerStatus lower_record_call_argument_object(
             return MINIC_CORE_LOWER_UNSUPPORTED;
         }
         field = NULL;
-        field_index = 0U;
-        found = false;
         for (field_index = 0U; field_index < record->field_count; ++field_index) {
             const MinicRecordField *candidate;
 
@@ -153,11 +150,10 @@ static MinicCoreLowerStatus lower_record_call_argument_object(
             if (minic_c0_assignment_compatible(
                     context->body->program, candidate->type, expression_id)) {
                 field = candidate;
-                found = true;
                 break;
             }
         }
-        if (!found || field == NULL) {
+        if (field == NULL) {
             return MINIC_CORE_LOWER_UNSUPPORTED;
         }
         status = minic_core_lower_internal_lower_scalar_assignment_value(

@@ -242,7 +242,6 @@ MinicCoreLowerStatus minic_core_lower_try_arithmetic_unary(
                    ? MINIC_CORE_LOWER_OK
                    : MINIC_CORE_LOWER_ERROR;
     }
-    *handled = false;
     return MINIC_CORE_LOWER_OK;
 }
 
@@ -555,7 +554,6 @@ MinicCoreLowerStatus minic_core_lower_try_arithmetic_binary(
                    ? MINIC_CORE_LOWER_OK
                    : MINIC_CORE_LOWER_ERROR;
     }
-    *handled = false;
     return MINIC_CORE_LOWER_OK;
 }
 
@@ -907,7 +905,6 @@ MinicCoreLowerStatus minic_core_lower_try_arithmetic_compound(
         *value_id = stored_value;
         return MINIC_CORE_LOWER_OK;
     }
-    *handled = false;
     return MINIC_CORE_LOWER_OK;
 }
 
