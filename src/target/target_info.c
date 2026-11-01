@@ -176,6 +176,7 @@ static const MinicTargetLanguageDescriptor minic_language_riscv32 = {
             .asm_source_policy = &minic_riscv32_asm_source_policy,
             .integer_model = &minic_ilp32_unsigned_char_integer_model,
             .word_integer_rank = MINIC_INTEGER_RANK_INT,
+            .long_double_significand_bits = 113U,
             .gnu_sizeof_void_is_one = true,
             .gnu_sizeof_function_is_one = true,
             /* No RV64 cursor reuse: RV32 uses its own ILP32 register pairs. */
@@ -198,6 +199,7 @@ static const MinicTargetLanguageDescriptor minic_language_riscv64 = {
             .asm_source_policy = &minic_riscv64_asm_source_policy,
             .integer_model = &minic_lp64_unsigned_char_integer_model,
             .word_integer_rank = MINIC_INTEGER_RANK_LONG,
+            .long_double_significand_bits = 113U,
             .language_type_capabilities = MINIC_TARGET_LANG_EXTENDED_FLOAT_DECLARATIONS,
             .gnu_sizeof_void_is_one = true,
             .gnu_sizeof_function_is_one = true,
@@ -222,6 +224,7 @@ static const MinicTargetLanguageDescriptor minic_language_x86_64 = {
             .va_cursor_source_abi_policy = &minic_x86_64_va_cursor_source_abi_policy,
             .integer_model = &minic_lp64_signed_char_integer_model,
             .word_integer_rank = MINIC_INTEGER_RANK_LONG,
+            .long_double_significand_bits = 64U,
             .language_type_capabilities = MINIC_TARGET_LANG_EXTENDED_FLOAT_DECLARATIONS |
                 MINIC_TARGET_LANG_MS_X64_FUNCTION_POINTER_DECLARATIONS |
                 MINIC_TARGET_LANG_GNU_FIXED_VECTOR_STORAGE,
@@ -247,6 +250,7 @@ static const MinicTargetLanguageDescriptor minic_language_aarch64 = {
             .va_cursor_source_abi_policy = &minic_aarch64_va_cursor_source_abi_policy,
             .integer_model = &minic_lp64_unsigned_char_integer_model,
             .word_integer_rank = MINIC_INTEGER_RANK_LONG,
+            .long_double_significand_bits = 113U,
             .language_type_capabilities = MINIC_TARGET_LANG_EXTENDED_FLOAT_DECLARATIONS |
                 MINIC_TARGET_LANG_OPAQUE_VECTOR_HEADER_DECLARATIONS |
                 MINIC_TARGET_LANG_FIXED_VECTOR128_STORAGE_DECLARATIONS,
@@ -273,6 +277,7 @@ static const MinicTargetLanguageDescriptor minic_language_loongarch64 = {
             .alias_abi_policy = &minic_loongarch64_alias_abi_policy,
             .integer_model = &minic_lp64_signed_char_integer_model,
             .word_integer_rank = MINIC_INTEGER_RANK_LONG,
+            .long_double_significand_bits = 113U,
             .language_type_capabilities = MINIC_TARGET_LANG_EXTENDED_FLOAT_DECLARATIONS,
             .gnu_sizeof_void_is_one = true,
             .gnu_sizeof_function_is_one = true,

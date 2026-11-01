@@ -19,18 +19,16 @@ bool minic_x86_64_emit_fp_instruction(
             const uint64_t fraction_hi = hi & UINT64_C(0x0000ffffffffffff);
             const unsigned int biased_exponent = (unsigned int)((hi >> 48U) & 0x7fffU);
             const unsigned int sign_exponent = (unsigned int)(hi >> 48U);
-            const uint64_t significand = biased_exponent == 0U
-                ? 0U : (UINT64_C(1) << 63U) |
-                    (fraction_hi << 15U) | (lo >> 49U);
+            const uint64_t significand =
+                (biased_exponent == 0U ? 0U : (UINT64_C(1) << 63U)) |
+                (fraction_hi << 15U) | (lo >> 49U);
             size_t off;
-            /* Core literals are currently constructed by converting a
-             * parsed binary64 to binary128. The x87 exponent has the
-             * same bias as binary128, and its explicit 64-bit significand
-             * represents every binary64 value exactly. Reject any wider
-             * binary128 payload rather than silently truncating it. */
+            /* Parser rounds x87 literals directly to 64-bit precision,
+             * stores the exact result as binary128, then this emitter
+             * restores x87's explicit integer bit. Both formats have the
+             * same exponent bias; subnormals keep their integer bit clear. */
             if (ins->result >= fn->value_count || frame->value_offsets == NULL ||
-                (lo & UINT64_C(0x0fffffffffffffff)) != 0U ||
-                (biased_exponent == 0U && (fraction_hi != 0U || lo != 0U)))
+                (lo & UINT64_C(0x0001ffffffffffff)) != 0U)
                 return false;
             off = frame->value_offsets[ins->result];
             if (off < 16U) return false;

@@ -1,5 +1,6 @@
 #include "frontend/parser_internal.h"
 #include "frontend/expression_semantics.h"
+#include "frontend/binary128_literal.h"
 #include "frontend/parser_runtime_initializer.h"
 
 #include <errno.h>
@@ -121,58 +122,6 @@ static bool parse_integer(MinicParser *parser, MinicExpressionId *expression_id)
     return minic_parser_add_expression(parser, &expression, expression_id);
 }
 
-static void minic_binary128_from_binary64(double value, uint64_t *low, uint64_t *high) {
-    uint64_t bits;
-    uint64_t exponent;
-    uint64_t fraction;
-    uint64_t sign;
-
-    (void)memcpy(&bits, &value, sizeof(bits));
-    sign = bits >> 63U;
-    exponent = (bits >> 52U) & UINT64_C(0x7ff);
-    fraction = bits & UINT64_C(0x000fffffffffffff);
-    if (exponent == 0U) {
-        if (fraction == 0U) {
-            *low = 0U;
-            *high = sign << 63U;
-            return;
-        }
-        {
-            unsigned int highest = 51U;
-            int unbiased;
-            uint64_t payload;
-            unsigned int shift;
-            uint64_t high_fraction;
-
-            while ((fraction & (UINT64_C(1) << highest)) == 0U) {
-                --highest;
-            }
-            unbiased = (int)highest - 1074;
-            exponent = (uint64_t)(unbiased + 16383);
-            payload = fraction ^ (UINT64_C(1) << highest);
-            shift = 112U - highest;
-            if (shift >= 64U) {
-                *low = 0U;
-                high_fraction = payload << (shift - 64U);
-            } else {
-                *low = payload << shift;
-                high_fraction = payload >> (64U - shift);
-            }
-            *high = (sign << 63U) | (exponent << 48U) |
-                    (high_fraction & UINT64_C(0x0000ffffffffffff));
-            return;
-        }
-    }
-    if (exponent == UINT64_C(0x7ff)) {
-        *low = fraction << 60U;
-        *high = (sign << 63U) | UINT64_C(0x7fff000000000000) | (fraction >> 4U);
-        return;
-    }
-    exponent = exponent - UINT64_C(1023) + UINT64_C(16383);
-    *low = fraction << 60U;
-    *high = (sign << 63U) | (exponent << 48U) | (fraction >> 4U);
-}
-
 static bool parse_floating(MinicParser *parser, MinicExpressionId *expression_id) {
     MinicExpression expression;
     MinicSourceSpan span;
@@ -242,6 +191,19 @@ static bool parse_floating(MinicParser *parser, MinicExpressionId *expression_id
            subnormal/zero rather than a frontend hard error. */
         (void)memcpy(&float_bits, &float_value, sizeof(float_bits));
         expression.value.floating_bits = (uint64_t)float_bits;
+    } else if (minic_type_is_long_double(literal_type)) {
+        /* x87 long double rounds to 64 significant bits; the other Linux
+         * targets use IEEE binary128's full 113. Both store exact values in
+         * the shared binary128 literal representation after one rounding. */
+        if (!minic_binary128_parse_literal(
+                text, numeric_length,
+                parser->target_info->long_double_significand_bits,
+                &expression.value.floating128_bits.low,
+                &expression.value.floating128_bits.high)) {
+            free(text);
+            minic_parser_error(parser, "invalid or unrepresentable long double constant");
+            return false;
+        }
     } else {
         double_value = strtod(text, &end);
         if (end != text + numeric_length) {
@@ -249,17 +211,7 @@ static bool parse_floating(MinicParser *parser, MinicExpressionId *expression_id
             minic_parser_error(parser, "invalid floating constant");
             return false;
         }
-        if (minic_type_is_long_double(literal_type)) {
-            /* FIXME(MC-041): strtod has already rounded this spelling to
-             * binary64. Expanding the result cannot restore long-double
-             * precision; x87 and binary128 literal emitters must also be
-             * audited before changing the parser's stored representation. */
-            minic_binary128_from_binary64(double_value,
-                                          &expression.value.floating128_bits.low,
-                                          &expression.value.floating128_bits.high);
-        } else {
-            (void)memcpy(&expression.value.floating_bits, &double_value, sizeof(double_value));
-        }
+        (void)memcpy(&expression.value.floating_bits, &double_value, sizeof(double_value));
     }
     free(text);
 

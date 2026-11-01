@@ -113,6 +113,9 @@ typedef struct MinicTargetInfo {
     /* C identity of libc size_t in canonical runtime builtin prototypes. */
     MinicType libc_size_type;
     MinicIntegerRank word_integer_rank;
+    /* C long double literal precision: x87 extended=64; IEEE binary128=113.
+     * Both occupy 16-byte object slots on the supported Linux targets. */
+    unsigned int long_double_significand_bits;
     unsigned int language_type_capabilities;
     unsigned int call_lowering_capabilities;
     bool gnu_sizeof_void_is_one;

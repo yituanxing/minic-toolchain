@@ -598,17 +598,47 @@ bool minic_lexer_next(MinicLexer *lexer, MinicToken *token, MinicDiagnostic *dia
         is_floating = false;
         if (character == '0' &&
             (minic_lexer_peek_next(lexer) == 'x' || minic_lexer_peek_next(lexer) == 'X')) {
+            bool saw_hex_digit = false;
             minic_lexer_advance(lexer);
             minic_lexer_advance(lexer);
-            if (!minic_is_hexadecimal_digit(minic_lexer_peek(lexer))) {
+            while (minic_is_hexadecimal_digit(minic_lexer_peek(lexer))) {
+                saw_hex_digit = true;
+                minic_lexer_advance(lexer);
+            }
+            if (minic_lexer_peek(lexer) == '.') {
+                is_floating = true;
+                minic_lexer_advance(lexer);
+                while (minic_is_hexadecimal_digit(minic_lexer_peek(lexer))) {
+                    saw_hex_digit = true;
+                    minic_lexer_advance(lexer);
+                }
+            }
+            if (!saw_hex_digit) {
                 token->span.end = minic_lexer_position(lexer);
                 minic_lexer_set_message(
                     lexer, diagnostic, begin, "expected hexadecimal digit after 0x");
                 return false;
             }
-            do {
+            if (minic_lexer_peek(lexer) == 'p' || minic_lexer_peek(lexer) == 'P') {
+                is_floating = true;
                 minic_lexer_advance(lexer);
-            } while (minic_is_hexadecimal_digit(minic_lexer_peek(lexer)));
+                if (minic_lexer_peek(lexer) == '+' || minic_lexer_peek(lexer) == '-')
+                    minic_lexer_advance(lexer);
+                if (!minic_is_decimal_digit(minic_lexer_peek(lexer))) {
+                    token->span.end = minic_lexer_position(lexer);
+                    minic_lexer_set_message(lexer, diagnostic, begin,
+                                            "expected decimal digit in hexadecimal exponent");
+                    return false;
+                }
+                do {
+                    minic_lexer_advance(lexer);
+                } while (minic_is_decimal_digit(minic_lexer_peek(lexer)));
+            } else if (is_floating) {
+                token->span.end = minic_lexer_position(lexer);
+                minic_lexer_set_message(lexer, diagnostic, begin,
+                                        "hexadecimal floating constant requires p exponent");
+                return false;
+            }
         } else if (character == '0' &&
                    (minic_lexer_peek_next(lexer) == 'b' ||
                     minic_lexer_peek_next(lexer) == 'B')) {
