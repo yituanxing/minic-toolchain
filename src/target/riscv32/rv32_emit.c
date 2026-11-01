@@ -723,11 +723,24 @@ static bool rv32_term(FILE *out, const MinicCoreFunction *f,
                        "  lla t6, .L%s_rv32_bb%u\n"
                        "  jalr zero, 0(t6)\n",
                        symbol, (unsigned)term->branch_target) >= 0;
-    case MINIC_CORE_TERMINATOR_CONDITIONAL_BRANCH:
-        return term->conditional.when_true < f->block_count &&
-               term->conditional.when_false < f->block_count &&
-               rv32_slot(out, fr, term->conditional.condition, "t0", true) &&
-               fprintf(out,
+    case MINIC_CORE_TERMINATOR_CONDITIONAL_BRANCH: {
+        unsigned words;
+        const MinicCoreValueId cond = term->conditional.condition;
+        if (term->conditional.when_true >= f->block_count ||
+            term->conditional.when_false >= f->block_count ||
+            cond >= f->value_count ||
+            !rv32_scalar_storage_words(f, f->values[cond].type, &words))
+            return false;
+        /* Core permits a wide integer branch condition.  On ILP32 its
+         * truth value is the OR of both halves, not just the low word. */
+        if (words == 2U) {
+            if (!rv32_pair_slot(out, fr, cond, "t0", "t1", true) ||
+                fprintf(out, "  or t0, t0, t1\n") < 0)
+                return false;
+        } else if (!rv32_slot(out, fr, cond, "t0", true)) {
+            return false;
+        }
+        return fprintf(out,
                        "  beqz t0, 1f\n"
                        "  lla t6, .L%s_rv32_bb%u\n"
                        "  jalr zero, 0(t6)\n"
@@ -736,6 +749,7 @@ static bool rv32_term(FILE *out, const MinicCoreFunction *f,
                        "  jalr zero, 0(t6)\n",
                        symbol, (unsigned)term->conditional.when_true,
                        symbol, (unsigned)term->conditional.when_false) >= 0;
+    }
     case MINIC_CORE_TERMINATOR_UNREACHABLE:
         return fprintf(out, "  ebreak\n") >= 0;
     default:
