@@ -1606,6 +1606,17 @@ check-static-chained-array-arena: $(MINIC_CC_BINARY)
 
 check-fast: check-static-chained-array-arena
 
+.PHONY: check-rv32-pointer-widening-source check-rv32-pointer-widening-qemu
+check-rv32-pointer-widening-source: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	bash tests/compiler/c0/probe-rv32-pointer-widening-source.sh
+
+check-rv32-pointer-widening-qemu: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" \
+	bash tests/compiler/c0/probe-rv32-pointer-widening-qemu.sh
+
+check-fast: check-rv32-pointer-widening-source
+
 .PHONY: check-parameter-tag-scope
 check-parameter-tag-scope: $(MINIC_CC_BINARY)
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \

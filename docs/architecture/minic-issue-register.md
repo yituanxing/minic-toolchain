@@ -67,7 +67,7 @@
 | [MC-043](#mc-043-inline-整数特化预算耗尽直接拒绝合法-c) | P1 | OPEN | LOCAL-COMPILE-DIFF | Compiler | 2048 个 clone 预算由优化上限变成对合法 C 的硬编译失败 |
 | [MC-044](#mc-044-函数参数列表中的-record-enum-tag-作用域外泄) | P1 | FIXED-UNVERIFIED | GNU-NATIVE-DIFF | Frontend | prototype/definition/nested callback 形参 tag 改由独立 scope 持有，14 例五 ISA `-S` 与 x86 native 通过 |
 | [MC-045](#mc-045-loong-futex-cmpxchg-覆盖-gnu-可读写输出初始值) | P1 | OPEN | ASM-ONLY | LoongArch64 | GNU `+r` 输入原值未被消费，机器特化无条件写回 0 |
-| [MC-048](#mc-048-rv32-指针到-64-位整数的合法转换被拒绝) | P2 | OPEN | LOCAL-COMPILE-DIFF | RV32 | Core 合法 `SCALAR_BITCAST` pointer→u64 在 RV32 目标发射器被拒绝 |
+| [MC-048](#mc-048-rv32-指针到-64-位整数的合法转换被拒绝) | P2 | FIXED-UNVERIFIED | GNU-RV32-ELF-QEMU | RV32 | 直接 pointer→u64/s64 已按 GNU RV32 **符号扩展**发射；目标 QEMU 对照通过 |
 | [MC-023](#mc-023-静态聚合后向覆写跨递归借用-record) | P0 | FIXED-UNVERIFIED | ASAN | Frontend | `a4b8b71` 后向静态 Record 覆写跨递归重新取 RecordId；五目标容量与 GNU/native 定点 PASS |
 | [MC-049](#mc-049-静态链式数组设计符跨-arraytype-扩容借用) | P0 | FIXED-UNVERIFIED | ASAN | Frontend | `f53f9a9` 链式设计符跨递归按值缓存 ArrayType 信息；五目标三相位、GNU/native PASS |
 | [MC-050](#mc-050-x86-六组-asm-限定符源端与机器端不一致) | P2 | OPEN | LOCAL-COMPILE-DIFF | x86-64 | 六种合法 GNU ASM 的 volatile 结果被机器端不一致准入拒绝 |
@@ -511,10 +511,12 @@
 
 ### MC-048 RV32 指针到 64 位整数的合法转换被拒绝
 
-- **状态：** `OPEN`，P2，`LOCAL-COMPILE-DIFF`；没有目标 GNU RV32 ELF/QEMU 执行证据，问题是 `-S` 接受缺口而非静默错码。
+- **状态：** `FIXED-UNVERIFIED`，P2，`GNU-RV32-ELF-QEMU`；已完成定点 GNU RV32 ELF32/QEMU 真运行双编译器对照，项目级五架构联合验收仍按计划推迟。
 - **输入与差分：** `typedef unsigned long long u64; u64 ptr_to_u64(const void *p){ return (u64)p; }` 是有效 GNU C；宿主 GCC 语法检查成功，同源 `cc -E -P` 后，MiniC `--target=riscv32-linux -S` 失败，具体记录 `<rv32-core>: ... unqualified Core instruction function=ptr_to_u64 ... kind=19 (SCALAR_BITCAST)`。x86/AArch64/Loong/RV64 对照 `-S` 全部通过，**只有 RV32 失败**。同一 RV32 中反向 `void *u64_to_ptr(u64 x){return (void *)x;}` 也可通过；多加一个中间转换 `(u64)(unsigned long)p`，RV32 `-S` 成功并发出低 32 位值、高 32 位零的成对返回，进一步锁定直接 1→2 word 的 BITCAST 路径。没有因此宣称 GNU RV32 目标运行已通过。
 - **源码契约矛盾：** `src/core/core_lower_scalar_values.c` 对合法 pointer→integer cast 形成 Core `SCALAR_BITCAST`；`core_ir_verify.c` 认可这种形状；`src/target/riscv32/rv32_integer_emit.c` 看到 `from_words=1, to_words=2` 时却只准整数扩展而拒绝 BITCAST。ILP32 下 pointer 1 word、`unsigned long long` 2 words，此差异无需假定 RV64 的物理 ABI。
-- **修复门槛：** 明确 C 的 pointer→integer 目标表示/高位扩展规则，在 Core 类型转换或 RV32 lowering 中表达而不滥用无类型 bitcast；验证指针往返、带符号/无符号目标、不同宽度、GNU RV32 GAS/运行时结果，再判断是否可消除特例。
+- **目标语义实证（基线 `8a48099`，GNU RV32）：** `riscv64-linux-gnu-gcc -march=rv32i -mabi=ilp32 -O0 -S` 对 **直接** `(unsigned long long)p` 和 `(signed long long)p` 都发出 `srai high,low,31`，即将 32 位指针表示**符号扩展**到 64 位；但 `(unsigned long long)(unsigned long)p` 则将高 32 位写为零。C 的 pointer→integer 是实现定义转换，不能因为最终目标 `u64` 为无符号就盲目零扩展，也不能套用经过 `unsigned long` 的不同转换路径。故意用 `0xf1234567`（bit31=1）区分二者。
+- **最小修复：** `src/target/riscv32/rv32_integer_emit.c` 仅对合法 Core `SCALAR_BITCAST` 的 1→2 word、source pointer→target integer 路径允许发射，并以 `srai t1,t0,31` 构造高字；原 `INTEGER_CONVERSION` 的有符号/无符号扩展逻辑原样保留，2→1 word 整数→指针低字截取逻辑不变，Core IR 不修改。
+- **持久回归与真运行：** `tests/compiler/audit/mc048_rv32_pointer_widening.c` 覆盖直接 pointer→u64/s64、经 ulong 的零扩展区别、bit31=1/0、64 位转回指针以及 signed/unsigned 往返。`check-rv32-pointer-widening-source` 将同源 GNU 预处理 C 验证五目标 `-S` **5/5 PASS**；严格 `check-rv32-pointer-widening-qemu` 用 GNU RV32 C 编译与 MiniC RV32 编译分别生成对象，均由 GNU RV32 AS/LD 链成 ELF32、在真实 `qemu-riscv32` 上运行，结果 **GNU exit7 / MiniC exit7**。Release `CFLAGS=-Werror` 构建，邻近 `check-target-selection-m0`、`check-long-types`、`check-pointer-arithmetic`、`check-cast-expressions` 均 PASS。未运行其他四架构 ELF/QEMU 或 MiniAS/MiniLD 全联合验收。
 
 ### MC-049 静态链式数组设计符跨 ArrayType 扩容借用
 

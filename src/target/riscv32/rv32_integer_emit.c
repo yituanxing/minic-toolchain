@@ -462,15 +462,21 @@ bool rv32_emit_integer_instruction(FILE *out,
         } else if (!rv32_slot(out, fr, id, "t0", true)) return false;
         if (to_words == 2U) {
             if (from_words == 1U) {
-                /* FIXME(MC-048): Core admits pointer->u64 SCALAR_BITCAST;
-                 * this path rejects it although ILP32 zero-extension is
-                 * already available through an intermediate ulong cast. */
-                if (ins->kind == MINIC_CORE_INSTRUCTION_SCALAR_BITCAST ||
-                    !rv32_scalar(f, f->values[id].type,
-                                 &bits, &is_signed) ||
-                    fprintf(out, is_signed ? "  srai t1, t0, 31\n" :
-                                          "  li t1, 0\n") < 0)
+                if (ins->kind == MINIC_CORE_INSTRUCTION_SCALAR_BITCAST) {
+                    /* GNU RV32 directly casts even a pointer to unsigned
+                     * long long by sign-extending its 32-bit address. A
+                     * separate cast via unsigned long zero-extends instead;
+                     * preserve this implementation-defined distinction. */
+                    if (!minic_type_is_pointer(f->values[id].type) ||
+                        !minic_type_is_integer(ins->type) ||
+                        fprintf(out, "  srai t1, t0, 31\n") < 0)
+                        return false;
+                } else if (!rv32_scalar(f, f->values[id].type,
+                                       &bits, &is_signed) ||
+                           fprintf(out, is_signed ? "  srai t1, t0, 31\n" :
+                                                 "  li t1, 0\n") < 0) {
                     return false;
+                }
             }
             return rv32_pair_slot(out, fr, ins->result,
                                   "t0", "t1", false);
