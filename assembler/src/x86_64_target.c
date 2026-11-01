@@ -1,4 +1,4 @@
-#include "minias_internal.h"
+#include "minias_target_api.h"
 #include "x86_64_fixup_kinds.h"
 
 #include <ctype.h>
@@ -4993,17 +4993,16 @@ static void x64_resolve_cfi_abi(MiniAsTargetABIView view,MiniAsCfiABI *abi) {
         abi->eh_fde_alignment=4U;
     }
 }
-static bool x64_init_target_state(MiniAs *as,
-                                  const MiniAsAssemblyConfig *config) {
+static bool x64_init_target_state(const MiniAsAssemblyConfig *config,
+                                  void **out_state,char *error,size_t error_cap) {
     X64TargetState *state;
-    (void)config;
     state=calloc(1U,sizeof(*state));
     if(state==NULL) {
-        minias_set_error(as,"out-of-memory:x86-target-state");
+        (void)snprintf(error,error_cap,"out-of-memory:x86-target-state");
         return false;
     }
     state->code_mode=config->elf32?X64_CODE32:0U;
-    as->target_state=state;
+    *out_state=state;
     return true;
 }
 
@@ -5015,28 +5014,27 @@ static void x64_capture_site_state(const void *target_state,
     site->mode_bits=state==NULL?0U:state->code_mode;
 }
 
-static void x64_destroy_target_state(MiniAs *as) {
-    free(as->target_state);
-    as->target_state=NULL;
+static void x64_destroy_target_state(void *state) {
+    free(state);
 }
 
 /* The GNU EFI thunk switches to IA-32 *within* ELF64.
  * This is per-statement Target mode, never a driver/Core ELF-class switch. */
-static bool x64_parse_directive(MiniAs *as,const char *op,const char *args,
+static bool x64_parse_directive(MiniAsDirectiveContext *ctx,const char *op,const char *args,
                                 size_t line,bool *handled) {
     bool code32=!strcmp(op,".code32");
     bool code16=!strcmp(op,".code16");
     bool code16gcc=!strcmp(op,".code16gcc");
-    X64TargetState *state=(X64TargetState *)as->target_state;
+    X64TargetState *state=(X64TargetState *)minias_directive_target_state(ctx);
     *handled=code32 || code16 || code16gcc || !strcmp(op,".code64");
     if(!*handled)return true;
     if(*args) {
-        minias_set_error(as,"unsupported-x86_64-code-mode:%s:line=%zu",
+        minias_directive_set_error(ctx,"unsupported-x86_64-code-mode:%s:line=%zu",
                          args,line);
         return false;
     }
     if(state==NULL) {
-        minias_set_error(as,"missing-x86-target-state");
+        minias_directive_set_error(ctx,"missing-x86-target-state");
         return false;
     }
     state->code_mode=code16gcc?X64_CODE16_GCC:

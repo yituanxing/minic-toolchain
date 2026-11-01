@@ -1,5 +1,53 @@
 # MiniAS 当前清理与所有权总览（2026-11-01）
 
+## 执行 TODO（2026-11-02，按依赖顺序推进）
+
+本清单是后续工作的唯一进度入口；具体设计仍在
+`architecture-discussion-decisions-2026-10-31.md`，每批代码与 exact-head
+证据进入 `full-source-review-ledger-2026-10-29.md`。
+完成一项必须同时关闭旧入口并证明原有行为，**移动代码行不算删重**。
+
+- [x] **基准冻结**：Draft PR #667 保持单分支；`49fa189` 的四个
+  核心远端工作流 SUCCESS，本地 A0 30/30，独立旧/新 22 组
+  15 对象逐字节相同、7 对同拒绝。
+- [x] **C0 纯清理封口**：全生产代码消费者复核未发现新的
+  高置信 dead static 函数；根状态/索引容量/CFI/DWARF/重放均有
+  真实读写者。四个公开 `minias_assemble_file*` 在仓库中仅有
+  一条测试消费者，但外部 ABI 消费者未知，保留到兼容迁移契约
+  明确后再删；不为净删数字强行改写不同语义。
+- [ ] **P04 Target 权限硬隔离**：清点所有宽 `MiniAs *` 回调；
+  建立 Target 可见头文件与窄阶段 Context；四架构同批迁移
+  directive、common validation、init/destroy 和 CFI mapping；删除
+  旧入口，让四 Target 不能再包含完整 Common 内部会话头；
+  结构测试 + A0 + 目标定向 GNU/链接/松弛/CFI + 旧新对象比较。
+  **已完成子项：** 宽回调与五个 ISA TU 头文件隔离、本地负向编译、
+  A0/22 组差分；**待完成：** 借用 Section/Symbol/MCInst 的
+  浅 `const` 指针完全只读化，以及本批 exact-head CI 核对。
+- [ ] **P05 Source/Common 解耦**：从 Source 递归调用
+  `minias_statement_process(MiniAs *,...)` 迁移到带来源身份的
+  受限 statement sink；保留 SourceSite、EOF、条件拓扑、强制增长
+  和必要的完整 SourceGraph replay；做宏与 replay 同一批回归。
+- [ ] **Common 职责拆分**：在 P04/P05 接口稳定后，把
+  statement/directive、Section/Symbol、Fragment emit/commit、driver
+  按消费者搬迁；每批删除原实现而非留下桥接双路径。
+- [ ] **Fragment 负载类型化**：按 FragmentKind 收窄
+  `MiniAsStmt` 的 DATA/ALIGN/ORG/INSTRUCTION 等专属 payload；
+  先核对 Parser/Layout/Emitter 的写者，确保 Fixup、SymbolID、
+  NOBITS 与分支松弛不出现第二套表示。
+- [ ] **TargetSpec/ISA/ABI**：将不可变配置、源文件可变 ISA
+  状态和每指令快照分开；以真实 GNU/Linux 输入驱动版本化
+  扩展和 relaxation，不把 MiniC 的主动发射子集当 ISA 上限。
+- [ ] **ObjectModel/多格式预备**：只有前述所有权稳定且存在
+  真实新格式验收时，才将通用 Section/Symbol/Fixup 与 ELF
+  私有序列化拆开；不预建空 COFF/Mach-O 全框架。
+- [ ] **整体验收**：阶段性合并后对同一 SHA 完成多架构
+  原始 GNU `.s` → MiniAS `.o` → GNU ld → QEMU P0/P1；严格
+  3,536 GNU 对照另行定位差异，不替代运行时证明。
+
+执行规则：大批量、按文件范围并行、主代理负责接口/冲突/验证与
+推送；每批记 SHA、生产 `+/-`、受影响文件和精确回归范围。
+有真实正确性故障时可越级修复，但必须在此记录插队原因。
+
 **核对基线 SHA：** `5d8d10408b4ecc6499835aa287028234e8aabdc7`
 （`refactor/minias-target-isa-abi-core`，Draft PR #667）。
 本文是重新检查当前生产源码目录和设计记录后整理出的状态快照；

@@ -7,6 +7,61 @@
 > 和早期测试文件数量，均不能自动当作最新 HEAD 的事实。
 > “读过 / 修改过 / 完成清理”必须分别统计。
 
+### 2026-11-02 P04 Target directive/lifecycle/CFI capability and hard header split
+
+**Base:** remote Draft PR #667 head
+`49fa189472b3b72ff36518fc6c16b322794e2937`,
+identical local source parent `28fbccd`. This is an ownership migration,
+**not** a purported net-deletion batch or an expansion of supported ISA.
+
+- Three Target directive implementations (RISC-V, x86, AArch64) and the
+  RISC-V common-directive audit now take opaque `MiniAsDirectiveContext`
+  rather than `MiniAs *`. Only TargetState mutation, current executable
+  Section query, any-prior-instruction query, the existing absolute-DATA
+  evaluator and a diagnostic sink remain visible. The RV privileged-spec
+  check intentionally searches **all prior instruction fragments**.
+- Four Target initializers now construct private states from immutable
+  `MiniAsAssemblyConfig` and return them to Common, which alone publishes
+  the state after success and destroys any partial failed allocation.
+  Destructors take only `void *target_state`. RISC-V attribute bytes are
+  validated before publication; x86 ELF32, AArch64 aliases and LoongArch
+  mnemonic index failure paths retain their original diagnostics.
+- AArch64's CFI data mapping requests use a separate opaque sink **at the
+  original first EH FDE site**, not a post-emit callback. The sink determines
+  the live Common symbol count and uses the original collision-safe symbol
+  insert operation; $d/$x order and relocation identities are unchanged.
+- One `minias_target_api.h` now owns all Target-visible typed MC, ABI and
+  narrow capability declarations. The existing `minias_internal.h` owns
+  the complete `MiniAs` session and mutable Common Section/Symbol/Fragment
+  APIs. Four ISA Target TUs plus `riscv_encode.c` include only the former;
+  no duplicate type definitions, full-session include or compatibility
+  callback remains. An independent negative C compile verifies the session
+  is incomplete to Target code. Existing structural gates follow their
+  unique owners instead of checking the obsolete header location.
+
+**Production scope:** 10 C/header files (one new Target API header),
+`+1025/-917`, net **+108 lines**. Approximately 780 lines of existing
+typed declarations were **moved** from the private header into their
+unique Target-visible owner; this is not equivalent to 780 new functions.
+Structural test adjustments: six existing scripts, `+71/-23`; docs separate.
+
+**Local proof:** Release `-Werror` and A0 **30/30 PASS**;
+Target compilation-negative hard-isolation guard PASS; RISC-V attribute
+and ISA/ABI profile bytes, x86 GNU code16/i386 relocation, AArch64 aliases
+and local CFI mapping, x86 CFI dual-frame/collision GNU probes PASS.
+Independently compiled pre-batch MiniAS: 22 target/fixture pairs produce
+**15 byte-identical ELF objects, seven mutual rejections, zero mismatches**.
+Cross GNU AArch64/RISC-V/LoongArch tools unavailable locally; no claim of
+complete 3,536 GNU corpus, Linux Image or QEMU from these local tests.
+Exact-head remote CI must be verified on the newly pushed SHA.
+
+**Still-open P04 hardening:** some borrowed `const MiniAsSection *` /
+`const MiniAsSymbol *` views contain shallow mutable pointer fields.
+Target can no longer see the Common session or call its mutators, but a
+fully transitive immutable view needs another stage-specific DTO/accessor
+slice with independent byte and fail-closed regression. Do not label this
+remaining issue closed merely because the include boundary is now hard.
+
 ### 2026-11-02 four-lane MCExpr/Source/four-Target cleanup (batch 34)
 
 **Base:** remote Draft PR #667 head

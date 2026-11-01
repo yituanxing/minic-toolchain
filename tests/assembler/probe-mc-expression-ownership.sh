@@ -7,7 +7,8 @@ s=Path('assembler/src/assembler.c').read_text()
 m=Path('assembler/src/mc_expr.c').read_text()
 legacy=Path('assembler/src/expression.c').read_text()
 syntax=Path('assembler/src/expression_grammar.h').read_text()
-internal=Path('assembler/src/minias_internal.h').read_text()
+internal=(Path('assembler/src/minias_internal.h').read_text() +
+          Path('assembler/src/minias_target_api.h').read_text())
 mk=Path('Makefile').read_text()
 owners=('minias_compile_data_mc','minias_emit_mc_data',
         'minias_parse_absolute_data_bits',

@@ -1,4 +1,4 @@
-#include "minias_internal.h"
+#include "minias_target_api.h"
 #include "aarch64_fixup_kinds.h"
 
 #include <ctype.h>
@@ -87,8 +87,7 @@ typedef struct A64TargetState {
     A64AliasState *aliases;
 } A64TargetState;
 
-static uint32_t a64_features(const MiniAs *as) {
-    const A64TargetState *st=(const A64TargetState *)as->target_state;
+static uint32_t a64_features(const A64TargetState *st) {
     return st?st->features:0U;
 }
 
@@ -99,28 +98,31 @@ static uint32_t a64_parse_features(const MiniAsParseContext *ctx) {
     return state?state->features:0U;
 }
 
-static bool a64_init_target_state(MiniAs *as,
-                                  const MiniAsAssemblyConfig *config) {
+static bool a64_init_target_state(const MiniAsAssemblyConfig *config,
+                                  void **out_state,char *error,size_t error_cap) {
     A64TargetState *st;
     A64ProfileData profile={A64_ARCH_V8_0,0U};
     if(config && config->target_profile_size!=0U) {
         if(config->target_profile_size!=sizeof(profile)) {
-            minias_set_error(as,"invalid-aarch64-target-profile-size");
+            (void)snprintf(error,error_cap,"invalid-aarch64-target-profile-size");
             return false;
         }
         memcpy(&profile,config->target_profile,sizeof(profile));
         if((profile.arch_revision<A64_ARCH_V8_0 ||
             profile.arch_revision>A64_ARCH_V8_5) ||
            (profile.features&~A64_KNOWN_FEATURES)!=0U) {
-            minias_set_error(as,"invalid-aarch64-target-profile");
+            (void)snprintf(error,error_cap,"invalid-aarch64-target-profile");
             return false;
         }
     }
     st=calloc(1U,sizeof(*st));
-    if(!st) {minias_set_error(as,"out-of-memory:aarch64-target-state");return false;}
+    if(!st) {
+        (void)snprintf(error,error_cap,"out-of-memory:aarch64-target-state");
+        return false;
+    }
     st->arch_revision=profile.arch_revision;
     st->features=profile.features;
-    as->target_state=st;
+    *out_state=st;
     return true;
 }
 
@@ -147,11 +149,10 @@ static void a64_capture_site_state(const void *target_state,
         site->provenance_bits|=A64_SITE_EXPLICIT_ALIGN;
 }
 
-static void a64_destroy_target_state(MiniAs *as) {
-    A64TargetState *st=(A64TargetState *)as->target_state;
+static void a64_destroy_target_state(void *state) {
+    A64TargetState *st=(A64TargetState *)state;
     if(st)free(st->aliases);
     free(st);
-    as->target_state=NULL;
 }
 
 /* .req resolution is valid only in a *typed register operand* position.
@@ -5381,9 +5382,9 @@ static bool a64_parse_arch_profile(const char *name,A64ProfileData *profile) {
     return true;
 }
 
-static bool directive(MiniAs *as, const char *op, const char *args,
+static bool directive(MiniAsDirectiveContext *ctx, const char *op, const char *args,
                       size_t line, bool *handled) {
-    A64TargetState *state=(A64TargetState *)as->target_state;
+    A64TargetState *state=(A64TargetState *)minias_directive_target_state(ctx);
     *handled = false;
     if(strcmp(op,".unreq")==0) {
         A64AliasState *st=state?state->aliases:NULL;
@@ -5410,34 +5411,34 @@ static bool directive(MiniAs *as, const char *op, const char *args,
             !a64_req_vector_bank(canonical,&n)) ||
            !isalpha((unsigned char)op[0]) ||
            strlen(op)>=sizeof(((A64AliasState *)0)->entries[0].alias)) {
-            minias_set_error(as,"bad-aarch64-register-alias:%s:%s:line=%zu",
+            minias_directive_set_error(ctx,"bad-aarch64-register-alias:%s:%s:line=%zu",
                              op,canonical,line);
             return false;
         }
         for(i=1U;op[i];++i)
             if(!isalnum((unsigned char)op[i]) && op[i]!='_') {
-                minias_set_error(as,"bad-aarch64-alias-name:%s:line=%zu",
+                minias_directive_set_error(ctx,"bad-aarch64-alias-name:%s:line=%zu",
                                  op,line);
                 return false;
             }
         if(!state) {
-            minias_set_error(as,"missing-aarch64-target-state");
+            minias_directive_set_error(ctx,"missing-aarch64-target-state");
             return false;
         }
         st=state->aliases;
         if(!st) {
             st=calloc(1U,sizeof(*st));
-            if(!st){minias_set_error(as,"out-of-memory:aarch64-aliases");return false;}
+            if(!st){minias_directive_set_error(ctx,"out-of-memory:aarch64-aliases");return false;}
             state->aliases=st;
         }
         for(i=0U;i<st->count;++i)
             if(!strcmp(st->entries[i].alias,op)) {
-                minias_set_error(as,"duplicate-aarch64-alias:%s:line=%zu",
+                minias_directive_set_error(ctx,"duplicate-aarch64-alias:%s:line=%zu",
                                  op,line);
                 return false;
             }
         if(st->count>=128U) {
-            minias_set_error(as,"too-many-aarch64-aliases:line=%zu",line);
+            minias_directive_set_error(ctx,"too-many-aarch64-aliases:line=%zu",line);
             return false;
         }
         strcpy(st->entries[st->count].alias,op);
@@ -5451,14 +5452,14 @@ static bool directive(MiniAs *as, const char *op, const char *args,
         A64ProfileData profile;
         *handled=true;
         if(!a64_parse_arch_profile(args,&profile)) {
-            minias_set_error(as,"unsupported-aarch64-architecture:%s:line=%zu",
+            minias_directive_set_error(ctx,"unsupported-aarch64-architecture:%s:line=%zu",
                              args,line);
             return false;
         }
         /* Commit atomically only after ALL feature names were checked:
          * malformed trailing + and unknown extensions never widen ISA. */
         if(!state) {
-            minias_set_error(as,"missing-aarch64-target-state");
+            minias_directive_set_error(ctx,"missing-aarch64-target-state");
             return false;
         }
         state->arch_revision=profile.arch_revision;
@@ -5466,15 +5467,15 @@ static bool directive(MiniAs *as, const char *op, const char *args,
         return true;
     }
     if(!strcmp(op,".arch_extension")) {
-        uint32_t bits=a64_features(as);
+        uint32_t bits=a64_features(state);
         *handled=true;
         if(!a64_set_isa_feature(&bits,args)) {
-            minias_set_error(as,"unsupported-aarch64-extension:%s:line=%zu",
+            minias_directive_set_error(ctx,"unsupported-aarch64-extension:%s:line=%zu",
                              args,line);
             return false;
         }
         if(!state) {
-            minias_set_error(as,"missing-aarch64-target-state");
+            minias_directive_set_error(ctx,"missing-aarch64-target-state");
             return false;
         }
         state->features=bits;
@@ -5487,7 +5488,7 @@ static bool directive(MiniAs *as, const char *op, const char *args,
          * this target only enforces valid AArch64 word widths. */
         char *copy=minias_strdup(args),*cursor;
         if(!copy) {
-            minias_set_error(as,"out-of-memory:aarch64-inst-list");
+            minias_directive_set_error(ctx,"out-of-memory:aarch64-inst-list");
             return false;
         }
         cursor=copy;
@@ -5497,10 +5498,10 @@ static bool directive(MiniAs *as, const char *op, const char *args,
             uint64_t bits;
             if(comma)*comma='\0';
             word=minias_trim(cursor);
-            if(!*word || !minias_parse_absolute_data_bits(as,word,&bits) ||
+            if(!*word || !minias_directive_parse_absolute_data_bits(ctx,word,&bits) ||
                (bits>UINT32_MAX &&
                 ((int64_t)bits>=0 || (int64_t)bits<INT32_MIN))) {
-                minias_set_error(as,"invalid-aarch64-inst-word:%s:line=%zu",
+                minias_directive_set_error(ctx,"invalid-aarch64-inst-word:%s:line=%zu",
                                  word,line);
                 free(copy);return false;
             }
@@ -5511,7 +5512,7 @@ static bool directive(MiniAs *as, const char *op, const char *args,
         return true;
     }
     if (strcmp(op, ".insn") == 0 || strcmp(op, ".option") == 0) {
-        minias_set_error(as, "unsupported-aarch64-directive:%s:line=%zu",
+        minias_directive_set_error(ctx, "unsupported-aarch64-directive:%s:line=%zu",
                          op, line);
         return false;
     }
@@ -5623,12 +5624,11 @@ static bool a64_record_mapping(MiniAsPostEmitObjectSink *object,
         true,section,offset);
 }
 
-static bool a64_record_cfi_data_mapping(MiniAs *as,int section,
+static bool a64_record_cfi_data_mapping(MiniAsCfiMappingSink *sink,int section,
                                         uint64_t offset) {
-    /* CFI emission precedes the post-emit phase, so this callback retains
-     * the existing Common symbol API; it is not a post-emit Target hook. */
-    return minias_define_target_mapping_symbol(as,"$d",as->symbol_count,
-                                               true,section,offset);
+    /* The CFI writer retains the same pre-FDE insertion order, while
+     * Common owns symbol uniqueness, allocation and ELF identity. */
+    return minias_cfi_mapping_define(sink,"$d",true,section,offset);
 }
 
 typedef struct A64MappingFragment {

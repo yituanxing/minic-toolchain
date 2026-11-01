@@ -1,4 +1,4 @@
-#include "minias_internal.h"
+#include "minias_target_api.h"
 #include "riscv_target.h"
 #include "riscv_profile.h"
 #include <stdio.h>
@@ -288,18 +288,18 @@ bool minias_riscv_validate_parsed_isa(MiniAsParseContext *ctx, const MiniAsStmt 
  * explicitly requested Base-I audit forbids raw executable bytes; ordinary
  * -march profiles retain GNU GAS's DATA/.org semantics. Typed instruction
  * legality is independently checked against the selected ISA features. */
-static bool riscv_validate_common_directive(MiniAs *as,
+static bool riscv_validate_common_directive(MiniAsDirectiveContext *ctx,
                                              MiniAsCommonDirectiveKind kind,
                                              const char *op,size_t line) {
-    if (!MINIAS_RV_STATE(as)->reject_raw_exec_fragments ||
-        (as->sections[(size_t)as->current_section].flags &
-         MINIAS_SHF_EXECINSTR) == 0U) return true;
+    const MiniAsRiscvState *state=minias_directive_target_state(ctx);
+    if (!state->reject_raw_exec_fragments ||
+        !minias_directive_section_executable(ctx)) return true;
     if (kind == MINIAS_COMMON_DIRECTIVE_ORG) {
-        minias_set_error(as, "unsupported-isa-escape:.org:line=%zu", line);
+        minias_directive_set_error(ctx, "unsupported-isa-escape:.org:line=%zu", line);
         return false;
     }
     if (kind == MINIAS_COMMON_DIRECTIVE_RAW_DATA) {
-        minias_set_error(as,
+        minias_directive_set_error(ctx,
                          "unsupported-isa-escape:%s-in-exec:line=%zu",
                          op,line);
         return false;
@@ -431,15 +431,6 @@ static const char *riscv_build_attributes(MiniAsRiscvState *state) {
     return NULL;
 }
 
-static bool riscv_rebuild_attributes(MiniAs *as, size_t line) {
-    const char *error = riscv_build_attributes(MINIAS_RV_STATE(as));
-    if (error != NULL) {
-        minias_set_error(as,"%s:line=%zu",error,line);
-        return false;
-    }
-    return true;
-}
-
 /* The textual spelling, ELF tag and Target state slot are one attribute
  * identity. Keep name dispatch and duplicate-value checks in agreement. */
 typedef struct {
@@ -462,32 +453,42 @@ static const RiscvNumericAttribute riscv_numeric_attributes[] = {
 };
 #undef RISCV_NUMERIC_ATTRIBUTE
 
-static bool riscv_set_numeric_attribute(MiniAs *as,
+static bool riscv_set_numeric_attribute(MiniAsDirectiveContext *ctx,
                                         const RiscvNumericAttribute *attribute,
                                         unsigned value, size_t line) {
-    MiniAsRiscvState *state = MINIAS_RV_STATE(as);
+    MiniAsRiscvState *state = minias_directive_target_state(ctx);
     bool *present = (bool *)((char *)state + attribute->present_offset);
     unsigned *stored = (unsigned *)((char *)state + attribute->value_offset);
+    const char *error;
     if (state->target_attributes_size == 0U) {
-        minias_set_error(as, "riscv-attribute-layout-unavailable:line=%zu", line);
+        minias_directive_set_error(ctx,
+                                   "riscv-attribute-layout-unavailable:line=%zu", line);
         return false;
     }
     if (*present) {
         if (*stored != value) {
-            minias_set_error(as, "conflicting-riscv-attribute:%u:line=%zu",
-                             attribute->tag, line);
+            minias_directive_set_error(ctx,
+                                       "conflicting-riscv-attribute:%u:line=%zu",
+                                       attribute->tag, line);
             return false;
         }
         return true;
     }
     *stored = value;
     *present = true;
-    return riscv_rebuild_attributes(as, line);
+    error=riscv_build_attributes(state);
+    if(error!=NULL) {
+        minias_directive_set_error(ctx,"%s:line=%zu",error,line);
+        return false;
+    }
+    return true;
 }
 
-static bool riscv_assemble_attribute(MiniAs *as, const char *args, size_t line) {
+static bool riscv_assemble_attribute(MiniAsDirectiveContext *ctx,
+                                     const char *args, size_t line) {
     const char *comma = strchr(args, ',');
     const RiscvNumericAttribute *attribute = NULL;
+    const MiniAsRiscvState *state=minias_directive_target_state(ctx);
     char key[48], value[320], *end;
     const char *front, *back;
     size_t len;
@@ -515,10 +516,11 @@ static bool riscv_assemble_attribute(MiniAs *as, const char *args, size_t line) 
             value[len - 1U] = '\0';
             declared = value + 1;
         }
-        if (MINIAS_RV_STATE(as)->target_attributes_size == 0U) goto invalid;
-        if (strcmp(declared, MINIAS_RV_STATE(as)->arch_attribute_isa) != 0) {
-            minias_set_error(as, "riscv-attribute-isa-conflict:%s:line=%zu",
-                             declared, line);
+        if (state->target_attributes_size == 0U) goto invalid;
+        if (strcmp(declared, state->arch_attribute_isa) != 0) {
+            minias_directive_set_error(ctx,
+                                       "riscv-attribute-isa-conflict:%s:line=%zu",
+                                       declared, line);
             return false;
         }
         return true;
@@ -536,23 +538,21 @@ static bool riscv_assemble_attribute(MiniAs *as, const char *args, size_t line) 
     /* GNU forbids setting the privileged ELF version after an instruction,
      * including an ordinary NOP. Retained Fragments give us that boundary
      * without rescanning source text or touching Common parser state. */
-    if (attribute->tag >= 8U) {
-        for (i = 0U; i < as->stmt_count; ++i) {
-            if (as->stmts[i].fragment_kind == MINIAS_FRAGMENT_INSTRUCTION) {
-                minias_set_error(as, "riscv-priv-attribute-after-instruction:line=%zu",
-                                 line);
-                return false;
-            }
-        }
+    if (attribute->tag >= 8U && minias_directive_has_prior_instruction(ctx)) {
+        minias_directive_set_error(ctx,
+                                   "riscv-priv-attribute-after-instruction:line=%zu",
+                                   line);
+        return false;
     }
     errno = 0;
     number = strtoul(value, &end, 0);
     if (end == value || *end != '\0' || errno == ERANGE ||
         number > UINT32_MAX)
         goto invalid;
-    return riscv_set_numeric_attribute(as,attribute,(unsigned)number,line);
+    return riscv_set_numeric_attribute(ctx,attribute,(unsigned)number,line);
 invalid:
-    minias_set_error(as, "unsupported-riscv-attribute:%s:line=%zu", args, line);
+    minias_directive_set_error(ctx,
+                               "unsupported-riscv-attribute:%s:line=%zu", args, line);
     return false;
 }
 
@@ -653,17 +653,17 @@ static uint64_t riscv_arch_add_feature_option(const char *args) {
  * modes. Unsupported modifiers are errors, not ignored compatibility input:
  * in particular GNU .option relax needs R_RISCV_RELAX / R_RISCV_ALIGN
  * relocation contracts that this Target has not implemented. */
-static bool riscv_target_directive(MiniAs *as, const char *op,
+static bool riscv_target_directive(MiniAsDirectiveContext *ctx, const char *op,
                                    const char *args, size_t line, bool *handled) {
-    MiniAsRiscvState *state=MINIAS_RV_STATE(as);
+    MiniAsRiscvState *state=minias_directive_target_state(ctx);
     uint64_t region_feature;
     *handled=false;
     if(strcmp(op,".attribute")==0) {
         *handled=true;
-        return riscv_assemble_attribute(as,args,line);
+        return riscv_assemble_attribute(ctx,args,line);
     }
     if(state->reject_raw_exec_fragments && strcmp(op,".insn")==0) {
-        minias_set_error(as,"unsupported-isa-escape:.insn:line=%zu",line);
+        minias_directive_set_error(ctx,"unsupported-isa-escape:.insn:line=%zu",line);
         return false;
     }
     if(strcmp(op,".option")!=0)return true;
@@ -682,13 +682,13 @@ static bool riscv_target_directive(MiniAs *as, const char *op,
     } else if(strcmp(args,"push")==0) {
         if(state->option_depth>=sizeof(state->option_stack)/
                                 sizeof(state->option_stack[0])) {
-            minias_set_error(as,"option-stack-overflow:line=%zu",line);
+            minias_directive_set_error(ctx,"option-stack-overflow:line=%zu",line);
             return false;
         }
         state->option_stack[state->option_depth++]=state->options;
     } else if(strcmp(args,"pop")==0) {
         if(state->option_depth==0U) {
-            minias_set_error(as,"option-stack-underflow:line=%zu",line);
+            minias_directive_set_error(ctx,"option-stack-underflow:line=%zu",line);
             return false;
         }
         state->options=state->option_stack[--state->option_depth];
@@ -714,7 +714,7 @@ static bool riscv_target_directive(MiniAs *as, const char *op,
     }
     return true;
 unsupported:
-    minias_set_error(as,"unsupported-isa-option:%s:line=%zu",args,line);
+    minias_directive_set_error(ctx,"unsupported-isa-option:%s:line=%zu",args,line);
     return false;
 }
 
@@ -937,18 +937,20 @@ static bool riscv_allow_local_section_symbol_fixup(
 
 /* An opaque config blob belongs to this target; Common neither interprets
  * ISA features nor stores RISC-V-specific strict-mode or psABI fields. */
-static bool riscv_init_target_state(MiniAs *as,
-                                    const MiniAsAssemblyConfig *config) {
+static bool riscv_init_target_state(const MiniAsAssemblyConfig *config,
+                                    void **out,char *error,size_t capacity) {
     MiniAsRiscvState *state;
     MiniAsRiscvProfile profile;
+    const char *attribute_error;
+    *out=NULL;
     if (config->target_profile_size != 0U &&
         config->target_profile_size != sizeof(profile)) {
-        minias_set_error(as, "invalid-riscv-target-profile");
+        if(capacity)snprintf(error,capacity,"invalid-riscv-target-profile");
         return false;
     }
     state = calloc(1U, sizeof(*state));
     if (state == NULL) {
-        minias_set_error(as, "out-of-memory:riscv-target-context");
+        if(capacity)snprintf(error,capacity,"out-of-memory:riscv-target-context");
         return false;
     }
     state->target_xlen = config->elf32 ? 32U : 64U;
@@ -959,7 +961,7 @@ static bool riscv_init_target_state(MiniAs *as,
             memchr(profile.arch_attribute_isa, '\0',
                    sizeof(profile.arch_attribute_isa)) == NULL) {
             free(state);
-            minias_set_error(as, "riscv-target-profile-class-or-isa");
+            if(capacity)snprintf(error,capacity,"riscv-target-profile-class-or-isa");
             return false;
         }
         state->strict_i_xlen = profile.strict_i_xlen;
@@ -969,25 +971,25 @@ static bool riscv_init_target_state(MiniAs *as,
          * serializes ELF Tag_File attributes, including later directives. */
         memcpy(state->arch_attribute_isa, profile.arch_attribute_isa,
                sizeof(profile.arch_attribute_isa));
-        as->target_state = state;
-        if (profile.arch_attribute_isa[0] != '\0' &&
-            !riscv_rebuild_attributes(as, 0U)) {
-            free(state);
-            as->target_state = NULL;
-            return false;
+        if (profile.arch_attribute_isa[0] != '\0') {
+            attribute_error=riscv_build_attributes(state);
+            if(attribute_error!=NULL) {
+                if(capacity)snprintf(error,capacity,"%s:line=0",attribute_error);
+                free(state);
+                return false;
+            }
         }
     }
     /* The explicit legacy Base-I audit is independent of -march. A raw-byte
      * ban must never be activated by ISA selection alone: GCC Linux input
      * legitimately uses `.4byte` instructions inside executable sections. */
     state->reject_raw_exec_fragments = state->strict_i_xlen != 0U;
-    as->target_state = state;
+    *out=state;
     return true;
 }
 
-static void riscv_destroy_target_state(MiniAs *as) {
-    free(as->target_state);
-    as->target_state = NULL;
+static void riscv_destroy_target_state(void *target_state) {
+    free(target_state);
 }
 
 static bool riscv_configure_legacy(MiniAsAssemblyConfig *config,

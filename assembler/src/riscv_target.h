@@ -63,9 +63,6 @@ typedef struct MiniAsRiscvState {
     size_t option_depth;
 } MiniAsRiscvState;
 
-/* Typed target-private accessor; avoids RISC-V downcasts in MC Core. */
-#define MINIAS_RV_STATE(as) ((MiniAsRiscvState *)((as)->target_state))
-
 /* Shared target-owned MC opcode families: used by parser, encoder and
  * relaxation without any mnemonic parsing in the common assembler. */
 enum MiniAsRiscvMCFamily {

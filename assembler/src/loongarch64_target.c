@@ -1,4 +1,4 @@
-#include "minias_internal.h"
+#include "minias_target_api.h"
 #include "loongarch64_fixup_kinds.h"
 
 #include <ctype.h>
@@ -1619,7 +1619,8 @@ static int la_compare_mnemonic(const void *lhs,const void *rhs) {
     return strcmp(a->name,b->name);
 }
 
-static bool la_build_mnemonic_index(MiniAs *as,LaTargetState *state) {
+static bool la_build_mnemonic_index(LaTargetState *state,
+                                    char *error,size_t error_capacity) {
     size_t i,j,n=0U;
     const size_t capacity=LA_COUNT(la_branch_patterns)+
         LA_COUNT(la_vector_patterns)+LA_COUNT(la_special_register_patterns)+
@@ -1628,7 +1629,8 @@ static bool la_build_mnemonic_index(MiniAs *as,LaTargetState *state) {
         LA_COUNT(la_privileged);
     LaMnemonicEntry *entries=calloc(capacity,sizeof(*entries));
     if(entries==NULL) {
-        minias_set_error(as,"out-of-memory:loongarch-mnemonic-index");
+        if(error_capacity!=0U)
+            snprintf(error,error_capacity,"out-of-memory:loongarch-mnemonic-index");
         return false;
     }
     for(i=0U;i<LA_COUNT(la_branch_patterns);++i)
@@ -1677,8 +1679,9 @@ static bool la_build_mnemonic_index(MiniAs *as,LaTargetState *state) {
     qsort(entries,n,sizeof(*entries),la_compare_mnemonic);
     for(i=1U;i<n;++i)
         if(strcmp(entries[i-1U].name,entries[i].name)==0) {
-            minias_set_error(as,"duplicate-loongarch-mnemonic:%s",
-                             entries[i].name);
+            if(error_capacity!=0U)
+                snprintf(error,error_capacity,"duplicate-loongarch-mnemonic:%s",
+                         entries[i].name);
             free(entries);
             return false;
         }
@@ -2229,19 +2232,22 @@ bad:
     if(cap)snprintf(err,cap,"unsupported-loongarch64-isa-abi");
     return false;
 }
-static bool la_init_target_state(MiniAs *as,
-                                  const MiniAsAssemblyConfig *cfg) {
+static bool la_init_target_state(const MiniAsAssemblyConfig *cfg,
+                                 void **out_state,char *error,size_t error_capacity) {
     LaTargetState *state=calloc(1U,sizeof(*state));
     LaTargetProfile profile;
+    *out_state=NULL;
     if(state==NULL) {
-        minias_set_error(as,"out-of-memory:loongarch-target-state");
+        if(error_capacity!=0U)
+            snprintf(error,error_capacity,"out-of-memory:loongarch-target-state");
         return false;
     }
     state->features=LA_FEATURE_LSX|LA_FEATURE_LASX;
     if(cfg->target_profile_size!=0U) {
         if(cfg->target_profile_size!=sizeof(profile)) {
             free(state);
-            minias_set_error(as,"invalid-loongarch-target-profile");
+            if(error_capacity!=0U)
+                snprintf(error,error_capacity,"invalid-loongarch-target-profile");
             return false;
         }
         memcpy(&profile,cfg->target_profile,sizeof(profile));
@@ -2250,26 +2256,26 @@ static bool la_init_target_state(MiniAs *as,
            profile.abi<1U || profile.abi>3U ||
            cfg->elf_flags!=(UINT32_C(0x40)|profile.abi)) {
             free(state);
-            minias_set_error(as,"loongarch-target-profile-abi-features");
+            if(error_capacity!=0U)
+                snprintf(error,error_capacity,"loongarch-target-profile-abi-features");
             return false;
         }
         state->features=profile.features;
     }
-    if(!la_build_mnemonic_index(as,state)) {
+    if(!la_build_mnemonic_index(state,error,error_capacity)) {
         free(state);
         return false;
     }
-    as->target_state=state;
+    *out_state=state;
     return true;
 }
-static void la_destroy_target_state(MiniAs *as) {
-    LaTargetState *state=(LaTargetState *)as->target_state;
+static void la_destroy_target_state(void *target_state) {
+    LaTargetState *state=(LaTargetState *)target_state;
     if(state!=NULL) {
         free(state->mnemonics);
         free(state->relaxable_sections);
         free(state);
     }
-    as->target_state=NULL;
 }
 static bool la_validate(const MiniAsPostEmitView *view,
                         MiniAsPostEmitErrorSink *errors) {

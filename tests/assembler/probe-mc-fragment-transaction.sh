@@ -7,11 +7,12 @@ src=assembler/src/assembler.c
 ! grep -q 'capture_instruction_bytes' "$src"
 grep -q 'minias_stage_fragment_bytes' "$src"
 grep -q 'minias_stage_fragment_pattern' "$src"
-python3 - "$src" assembler/src/mc_encode_result.c assembler/src/minias_internal.h <<'PY'
+python3 - "$src" assembler/src/mc_encode_result.c \
+    assembler/src/minias_internal.h assembler/src/minias_target_api.h <<'PY'
 import sys
 s=open(sys.argv[1],encoding='utf-8').read()
 mc=open(sys.argv[2],encoding='utf-8').read()
-h=open(sys.argv[3],encoding='utf-8').read()
+h=open(sys.argv[3],encoding='utf-8').read()+open(sys.argv[4],encoding='utf-8').read()
 start=s.index('static bool minias_stage_instruction_bytes(')
 end=s.index('bool minias_section_append(',start)
 body=s[start:end]

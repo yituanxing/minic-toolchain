@@ -258,6 +258,8 @@ struct MiniAsPostEmitErrorSink { MiniAs *as; };
 struct MiniAsPostEmitObjectSink { MiniAs *as; };
 struct MiniAsMeasureErrorSink { MiniAs *as; };
 struct MiniAsParseContext { MiniAs *as; };
+struct MiniAsDirectiveContext { MiniAs *as; };
+struct MiniAsCfiMappingSink { MiniAs *as; };
 
 void minias_set_error_va(MiniAs *as, const char *format, va_list ap) {
     if (as->error[0] != '\0') {
@@ -271,6 +273,53 @@ void minias_set_error(MiniAs *as, const char *format, ...) {
     va_start(ap, format);
     minias_set_error_va(as, format, ap);
     va_end(ap);
+}
+
+void *minias_directive_target_state(MiniAsDirectiveContext *ctx) {
+    return ctx->as->target_state;
+}
+
+bool minias_directive_section_executable(const MiniAsDirectiveContext *ctx) {
+    const MiniAs *as=ctx->as;
+    return as->current_section>=0 &&
+           (size_t)as->current_section<as->section_count &&
+           (as->sections[(size_t)as->current_section].flags &
+            MINIAS_SHF_EXECINSTR)!=0U;
+}
+
+bool minias_directive_has_prior_instruction(const MiniAsDirectiveContext *ctx) {
+    const MiniAs *as=ctx->as;
+    size_t i;
+    for(i=0U;i<as->stmt_count;++i)
+        if(as->stmts[i].fragment_kind==MINIAS_FRAGMENT_INSTRUCTION)
+            return true;
+    return false;
+}
+
+bool minias_directive_parse_absolute_data_bits(MiniAsDirectiveContext *ctx,
+                                               const char *text,uint64_t *out) {
+    return minias_parse_absolute_data_bits(ctx->as,text,out);
+}
+
+void minias_directive_set_error(MiniAsDirectiveContext *ctx,
+                                const char *format, ...) {
+    va_list ap;
+    va_start(ap,format);
+    minias_set_error_va(ctx->as,format,ap);
+    va_end(ap);
+}
+
+bool minias_cfi_mapping_define(MiniAsCfiMappingSink *sink,const char *stem,
+                               bool always_suffix,int section,uint64_t offset) {
+    MiniAs *as=sink->as;
+    return minias_define_target_mapping_symbol(as,stem,as->symbol_count,
+                                               always_suffix,section,offset);
+}
+
+bool minias_cfi_record_target_mapping(MiniAs *as,int section,uint64_t offset) {
+    MiniAsCfiMappingSink sink={as};
+    return as->target->record_cfi_data_mapping==NULL ||
+           as->target->record_cfi_data_mapping(&sink,section,offset);
 }
 
 void minias_post_emit_error(MiniAsPostEmitErrorSink *sink,
@@ -1632,7 +1681,8 @@ static void minias_destroy(MiniAs *as) {
     free(as->sections);
     free(as->section_slots);
     if(as->target && as->target->destroy_target_state)
-        as->target->destroy_target_state(as);
+        as->target->destroy_target_state(as->target_state);
+    as->target_state=NULL;
     for (i = 0U; i < as->symbol_count; ++i) {
         free(as->symbols[i].name);
         free(as->symbols[i].alias_section_base);
@@ -4345,7 +4395,8 @@ bool minias_statement_process(MiniAs *as, char *text, size_t line) {
      * instruction then reaches the mandatory parsed-MCInst interface. */
     if (as->target->parse_target_directive != NULL) {
         bool handled = false;
-        if (!as->target->parse_target_directive(as, op, args,
+        MiniAsDirectiveContext directive={as};
+        if (!as->target->parse_target_directive(&directive, op, args,
                                                 line, &handled)) {
             return false;
         }
@@ -4353,10 +4404,12 @@ bool minias_statement_process(MiniAs *as, char *text, size_t line) {
     }
     if (op[0] == '.') {
         directive_kind=common_directive_kind(as,op);
-        if (as->target->validate_common_directive != NULL &&
-            !as->target->validate_common_directive(as,directive_kind,
-                                                   op,line))
-            return false;
+        if (as->target->validate_common_directive != NULL) {
+            MiniAsDirectiveContext directive={as};
+            if(!as->target->validate_common_directive(&directive,
+                                                      directive_kind,op,line))
+                return false;
+        }
     }
     if (op[0] == '.' && strcmp(op, ".insn") != 0) {
         if (strcmp(op, ".cfi_sections") == 0 ||
@@ -4858,10 +4911,18 @@ int minias_assemble_config(const char *input_path,
         as.output_rel_relocations = config->output_rel_relocations;
         if (config->target_profile_size > sizeof(config->target_profile)) {
             minias_set_error(&as, "invalid-target-profile-size");
-        } else if (initialized && as.target->init_target_state != NULL &&
-                   !as.target->init_target_state(&as, config) &&
-                   as.error[0] == '\0') {
-            minias_set_error(&as, "target-initialization-failed");
+        } else if (initialized && as.target->init_target_state != NULL) {
+            void *new_target_state=NULL;
+            if(!as.target->init_target_state(config,&new_target_state,
+                                            as.error,sizeof(as.error))) {
+                /* The Target may return a partial allocation but cannot
+                 * publish it. Common always owns the failure unwind. */
+                if(new_target_state!=NULL &&
+                   as.target->destroy_target_state!=NULL)
+                    as.target->destroy_target_state(new_target_state);
+                if(as.error[0]=='\0')
+                    minias_set_error(&as,"target-initialization-failed");
+            }else as.target_state=new_target_state;
         }
         parsed=initialized && as.error[0]=='\0';
         if(parsed && as.target->default_exec_alignment_for_site!=NULL) {

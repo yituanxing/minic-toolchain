@@ -502,7 +502,7 @@ static bool cfi_emit_section_core(MiniAs *as,bool eh,
         data=&as->sections[(size_t)section];
         base=data->size;
         if(eh && i==0U && as->target->record_cfi_data_mapping!=NULL &&
-           !as->target->record_cfi_data_mapping(as,section,(uint64_t)base))
+           !minias_cfi_record_target_mapping(as,section,(uint64_t)base))
             return false;
         /* Target mapping-symbol creation can reallocate the Symbol table. */
         begin=&as->symbols[proc->begin_symbol];

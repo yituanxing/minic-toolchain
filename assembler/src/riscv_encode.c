@@ -1,4 +1,4 @@
-#include "minias_internal.h"
+#include "minias_target_api.h"
 #include "riscv_fixup_kinds.h"
 #include "riscv_profile.h"
 #include "riscv_target.h"

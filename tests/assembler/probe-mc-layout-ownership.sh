@@ -5,7 +5,8 @@ from pathlib import Path
 driver=Path('assembler/src/assembler.c').read_text()
 layout=Path('assembler/src/mc_layout.c').read_text()
 expr=Path('assembler/src/mc_expr.c').read_text()
-internal=Path('assembler/src/minias_internal.h').read_text()
+internal=(Path('assembler/src/minias_internal.h').read_text() +
+          Path('assembler/src/minias_target_api.h').read_text())
 source=Path('assembler/src/source_graph_internal.h').read_text()
 source_api=Path('assembler/src/source_graph_common.h').read_text()
 expansion=Path('assembler/src/source_expansion.c').read_text()

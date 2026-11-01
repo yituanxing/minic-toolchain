@@ -81,7 +81,7 @@ from pathlib import Path
 import re
 
 root=Path('assembler/src')
-header=(root/'minias_internal.h').read_text()
+header=(root/'minias_target_api.h').read_text()
 core=(root/'assembler.c').read_text()
 if 'bool (*encode)(MiniAsEncodeContext *, const MiniAsStmt *);' not in header:
     raise SystemExit('TargetOps still uses old mutable-session encode callback')
@@ -128,7 +128,7 @@ python3 - <<'PY'
 from pathlib import Path
 import re
 
-core = Path('assembler/src/minias_internal.h').read_text()
+core = Path('assembler/src/minias_target_api.h').read_text()
 driver = Path('assembler/src/assembler.c').read_text()
 targets = {
     'aarch64_target.c': ('validate', 'a64_record_source_mappings'),
@@ -180,7 +180,7 @@ python3 - <<'PY'
 from pathlib import Path
 import re
 
-core = Path('assembler/src/minias_internal.h').read_text()
+core = Path('assembler/src/minias_target_api.h').read_text()
 driver = Path('assembler/src/assembler.c').read_text()
 a64 = Path('assembler/src/aarch64_target.c').read_text()
 rv = Path('assembler/src/riscv_target.c').read_text()
@@ -216,7 +216,7 @@ from pathlib import Path
 import re
 
 root = Path('assembler/src')
-core = (root / 'minias_internal.h').read_text()
+core = (root / 'minias_target_api.h').read_text()
 driver = (root / 'assembler.c').read_text()
 if not re.search(r'typedef struct MiniAsParseContext MiniAsParseContext;', core):
     raise SystemExit('Missing opaque parse capability')
@@ -260,7 +260,7 @@ from pathlib import Path
 import re
 
 root = Path('assembler/src')
-core = (root / 'minias_internal.h').read_text()
+core = (root / 'minias_target_api.h').read_text()
 driver = (root / 'assembler.c').read_text()
 if not re.search(r'void\s*\(\*capture_site_state\)\s*\('
                  r'const void\s*\*target_state\s*,', core):
@@ -297,7 +297,7 @@ from pathlib import Path
 import re
 
 root = Path('assembler/src')
-core = (root / 'minias_internal.h').read_text()
+core = (root / 'minias_target_api.h').read_text()
 driver = (root / 'assembler.c').read_text()
 view = core.split('typedef struct MiniAsMeasureView {', 1)[1].split(
     '} MiniAsMeasureView;', 1)[0]
@@ -341,7 +341,7 @@ from pathlib import Path
 import re
 
 root = Path('assembler/src')
-core = (root / 'minias_internal.h').read_text()
+core = (root / 'minias_target_api.h').read_text()
 layout = (root / 'mc_layout.c').read_text()
 rv = (root / 'riscv_target.c').read_text()
 rv_encoder = (root / 'riscv_encode.c').read_text()
@@ -378,7 +378,7 @@ python3 - <<'PY'
 from pathlib import Path
 import re
 
-core = Path('assembler/src/minias_internal.h').read_text()
+core = Path('assembler/src/minias_target_api.h').read_text()
 driver = Path('assembler/src/assembler.c').read_text()
 la = Path('assembler/src/loongarch64_target.c').read_text()
 if 'typedef struct MiniAsPreLayoutView {' not in core or \
@@ -406,7 +406,7 @@ from pathlib import Path
 import re
 
 root = Path('assembler/src')
-header = (root / 'minias_internal.h').read_text()
+header = (root / 'minias_target_api.h').read_text()
 for file in ('minias_internal.h', 'mc_expr.c', 'elf_writer.c', 'x86_64_target.c'):
     source = (root / file).read_text()
     if 'supports_fixup_for_object' in source or \
@@ -424,7 +424,7 @@ from pathlib import Path
 import re
 
 root = Path('assembler/src')
-header = (root / 'minias_internal.h').read_text()
+header = (root / 'minias_target_api.h').read_text()
 definition = header.split('typedef struct MiniAsTargetABIView {',1)[1].split('}',1)[0]
 if re.sub(r'/\*.*?\*/', '', definition, flags=re.S).strip() != \
         'const void *target_state;\n    bool elf32;':
@@ -487,7 +487,7 @@ grep -q 'return minias_encode_ctx_emit(ctx, bytes, sizeof(bytes));' \
 python3 - <<'PY'
 from pathlib import Path
 import re
-header=Path('assembler/src/minias_internal.h').read_text()
+header=Path('assembler/src/minias_target_api.h').read_text()
 core=Path('assembler/src/assembler.c').read_text()
 if 'minias_emit_instruction_bytes' in header or \
    'struct MiniAsEncodeContext {' in header:
@@ -513,7 +513,7 @@ PY
 python3 - <<'PY'
 from pathlib import Path
 import re
-h=Path('assembler/src/minias_internal.h').read_text()
+h=Path('assembler/src/minias_target_api.h').read_text()
 core=Path('assembler/src/assembler.c').read_text()
 if 'bool (*append_code_alignment)(MiniAsCodeAlignSink *' not in h:
     raise SystemExit('ALIGN callback still exposes mutable MiniAs')
@@ -540,7 +540,7 @@ for header in riscv_fixup_kinds.h aarch64_fixup_kinds.h \
     test -s "assembler/src/$header"
 done
 grep -q 'static bool minias_stage_instruction_bytes' assembler/src/assembler.c
-grep -q 'MiniAsTargetSiteState' assembler/src/minias_internal.h
+grep -q 'MiniAsTargetSiteState' assembler/src/minias_target_api.h
 # LLVM MC-style lexical ownership: balanced operand grouping lives once in
 # Common MC. All four Target parsers consume it, and retain ISA legality.
 test -s assembler/src/mc_lexer.c
@@ -577,21 +577,65 @@ for filename in ('assembler/src/minias_internal.h',
         if re.search(r'\b' + legacy + r'\b', cleaned):
             raise SystemExit(f'{filename}: Common still owns {legacy}')
 PY
-grep -q 'uint32_t mode_bits;' assembler/src/minias_internal.h
+grep -q 'uint32_t mode_bits;' assembler/src/minias_target_api.h
 # AT&T base/index/SIB/FS/GS is not a cross-ISA MC addressing contract.
 # Memory stays a semantic operand kind, while its data layout and nested
 # allocations are private to the owning Target.
 if grep -Eq 'MiniAsMCMemory|has_index|pc_relative|address_space' \
-    assembler/src/minias_internal.h; then
+    assembler/src/minias_target_api.h; then
     echo 'x86 memory addressing representation leaked into MC Core' >&2
     exit 1
 fi
 if grep -Eq 'MiniAsMCMemory|->memory->' \
-    assembler/src/minias_internal.h assembler/src/mc_operand_semantics.c; then
+    assembler/src/minias_target_api.h assembler/src/mc_operand_semantics.c; then
     echo 'Common destructor depends on an ISA memory payload' >&2
     exit 1
 fi
-grep -q 'void (\*dispose_memory)(void \*);' assembler/src/minias_internal.h
+grep -q 'void (\*dispose_memory)(void \*);' assembler/src/minias_target_api.h
 grep -q 'typedef struct X64Memory' assembler/src/x86_64_target.c
 grep -q 'm->dispose_memory=x64_dispose_memory;' assembler/src/x86_64_target.c
+# Unlike a convention-only Context wrapper, the Target-facing header must
+# be independently compilable without ever revealing Common's full session
+# or its mutating Section/Symbol API. The negative compile is deliberate.
+python3 - <<'PY'
+from pathlib import Path
+import re
+import subprocess
+
+root = Path('assembler/src')
+api = (root / 'minias_target_api.h').read_text()
+private = (root / 'minias_internal.h').read_text()
+common = (root / 'assembler.c').read_text()
+if '#include "minias_internal.h"' in api or \
+        '#include "minias_target_api.h"' not in private:
+    raise SystemExit('Target header acquired a Common-private include cycle')
+if 'typedef struct MiniAs {' not in private or \
+        re.search(r'\b(?:struct|typedef\s+struct)\s+MiniAs\s*\{', api):
+    raise SystemExit('Mutable MiniAs session is no longer Common-private')
+for banned in ('minias_get_symbol(', 'minias_section_append(',
+               'minias_set_error(', 'minias_cfi_record_target_mapping('):
+    if banned in api:
+        raise SystemExit('Target header exposes Common mutator: ' + banned)
+for context in ('MiniAsDirectiveContext', 'MiniAsCfiMappingSink',
+                'MiniAsParseContext', 'MiniAsEncodeContext'):
+    if 'struct '+context+' {' in api or 'struct '+context+' {' not in common:
+        raise SystemExit('Context owner is not opaque: '+context)
+for file in ('riscv_target.c', 'riscv_encode.c', 'aarch64_target.c',
+             'x86_64_target.c', 'loongarch64_target.c'):
+    source = (root / file).read_text()
+    if '#include "minias_target_api.h"' not in source or \
+            '#include "minias_internal.h"' in source:
+        raise SystemExit('ISA Target includes private session: '+file)
+    stripped = re.sub(r'/\*[\s\S]*?\*/|//[^\n]*', ' ', source)
+    if re.search(r'\bMiniAs\s*\*|\bas\s*->', stripped):
+        raise SystemExit('ISA Target reaches Common session: '+file)
+negative = subprocess.run(
+    ['cc', '-Iassembler/src', '-std=c11', '-x', 'c', '-fsyntax-only', '-'],
+    input='#include "minias_target_api.h"\n'
+          'int unsafe(void) { return (int)sizeof(struct MiniAs); }\n',
+    text=True, capture_output=True, check=False)
+if negative.returncode == 0:
+    raise SystemExit('Target can compile a direct Common-session access')
+print('MINIAS_TARGET_HEADER_ISOLATION=PASS targets=5 session=incomplete old_callbacks=removed')
+PY
 echo 'MINIAS_MC_TARGET_BOUNDARY=PASS ISA_fixups=private target_bytes=fragment_owned site=immutable shared_lexer=4 DWARF_sort=reentrant memory_payload=target_owned'

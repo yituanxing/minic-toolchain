@@ -4,7 +4,8 @@ python3 - <<'PY'
 from pathlib import Path
 p=Path('assembler/src/cfi.c').read_text()
 w=Path('assembler/src/cfi_writer.c').read_text()
-h=Path('assembler/src/minias_internal.h').read_text()
+h=(Path('assembler/src/minias_internal.h').read_text() +
+   Path('assembler/src/minias_target_api.h').read_text())
 d=Path('assembler/src/assembler.c').read_text()
 m=Path('Makefile').read_text()
 for test,ok in [
