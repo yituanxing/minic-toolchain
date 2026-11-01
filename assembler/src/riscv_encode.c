@@ -468,10 +468,9 @@ static const MiniAsRiscvState *rv_parse_state(const MiniAsParseContext *ctx) {
 }
 
 /* A single RV LI.D/LI.W materialization plan supplies BOTH retained-MCInst
- * measurement and emitted machine bytes. Previously their independent
- * 32/64-bit heuristic branches could silently disagree when a new encoding
- * alternative changed the number of words after layout. At most 15 words:
- * leading ADDI + seven shifts and seven nonzero-byte ADDIs. */
+ * measurement and emitted machine bytes. GNU GAS splits wide RV64 constants
+ * into signed 12-bit tails, then merges zero tails into one SLLI. Keep that
+ * expansion entirely at parse time so layout and emission use one plan. */
 static bool rv_materialize_li(MiniAsParseContext *ctx, const MiniAsStmt *stmt,
                               uint32_t words[16], unsigned *count) {
     const MiniAsMCInst *m = stmt->mcinst;
@@ -513,25 +512,80 @@ static bool rv_materialize_li(MiniAsParseContext *ctx, const MiniAsStmt *stmt,
         lo = signed_value - hi * INT64_C(4096);
         words[(*count)++] = 0x37U | ((uint32_t)rd << 7U) |
                             (((uint32_t)hi & UINT32_C(0xfffff)) << 12U);
-        words[(*count)++] = enc_i(0x1bU, rd, 0U, rd, lo);
+        /* LUI already sign-extends its 32-bit result on RV64. GAS avoids
+         * the redundant ADDIW when the low twelve bits are zero. */
+        if (lo != 0)
+            words[(*count)++] = enc_i(0x1bU, rd, 0U, rd, lo);
         return true;
     }
     {
-        int index = 7, i;
-        uint64_t top;
-        while (index > 0 &&
-               ((bits >> ((unsigned)index * 8U)) & UINT64_C(0xff)) == 0U)
-            --index;
-        top = (bits >> ((unsigned)index * 8U)) & UINT64_C(0xff);
-        words[(*count)++] = enc_i(0x13U, rd, 0U, 0, (int64_t)top);
-        for (i = index - 1; i >= 0; --i) {
-            uint64_t byte = (bits >> ((unsigned)i * 8U)) & UINT64_C(0xff);
-            words[(*count)++] = enc_i(0x13U, rd, 1U, rd, 8);
-            if (byte != 0U)
-                words[(*count)++] = enc_i(0x13U, rd, 0U, rd, (int64_t)byte);
+        struct {
+            unsigned shift;
+            int64_t lower;
+        } tails[16];
+        unsigned tail_count = 0U;
+        uint64_t remaining = bits;
+        uint64_t upper;
+        int64_t lower;
+        unsigned shift;
+
+        /* The unsigned arithmetic is deliberate: a signed INT64_MAX + 1
+         * must wrap exactly as GNU's bfd_vma constant does. Likewise, form
+         * a sign-filling right shift without C11's implementation-defined
+         * right shift of a negative signed integer. */
+        for (;;) {
+            uint64_t low32 = remaining & UINT64_C(0xffffffff);
+            uint64_t extended32 = (low32 & UINT64_C(0x80000000)) != 0U ?
+                low32 | UINT64_C(0xffffffff00000000) : low32;
+            if (remaining == extended32) break;
+            lower = (int64_t)(remaining & UINT64_C(0xfff));
+            if (lower >= 2048) lower -= 4096;
+            upper = remaining - (uint64_t)lower;
+            for (shift = 12U; shift < 64U; ++shift)
+                if (((upper >> shift) & UINT64_C(1)) != 0U) break;
+            if (shift >= 64U || tail_count >=
+                sizeof(tails) / sizeof(tails[0])) goto li_too_many;
+            tails[tail_count].shift = shift;
+            tails[tail_count++].lower = lower;
+            remaining = upper >> shift;
+            if ((upper & UINT64_C(0x8000000000000000)) != 0U)
+                remaining |= UINT64_MAX << (64U - shift);
+        }
+
+        lower = (int64_t)(remaining & UINT64_C(0xfff));
+        if (lower >= 2048) lower -= 4096;
+        upper = remaining - (uint64_t)lower;
+        if (upper != 0U) {
+            if (*count >= 16U) goto li_too_many;
+            words[(*count)++] = 0x37U | ((uint32_t)rd << 7U) |
+                ((((uint32_t)upper >> 12U) & UINT32_C(0xfffff)) << 12U);
+        }
+        if (lower != 0 || upper == 0U) {
+            if (*count >= 16U) goto li_too_many;
+            /* An unsigned spelling of a sign-extended 12-bit number
+             * (0xffffffffffffffff, for example) is a root ADDI. Recursive
+             * bases must use ADDIW, like GAS load_const's ADD32_INSN. */
+            words[(*count)++] = enc_i(upper == 0U && tail_count == 0U ?
+                                      0x13U : 0x1bU, rd, 0U,
+                                      upper != 0U ? rd : 0, lower);
+        }
+        while (tail_count > 0U) {
+            --tail_count;
+            if (*count >= 16U) goto li_too_many;
+            words[(*count)++] = enc_i(0x13U, rd, 1U, rd,
+                                      tails[tail_count].shift);
+            if (tails[tail_count].lower != 0) {
+                if (*count >= 16U) goto li_too_many;
+                words[(*count)++] = enc_i(0x13U, rd, 0U, rd,
+                                          tails[tail_count].lower);
+            }
         }
     }
     return true;
+li_too_many:
+    minias_parse_error(ctx, "internal:riscv-li-plan-overflow:line=%zu",
+                       stmt->line);
+    return false;
 }
 
 static bool parse_vsetvli_vtype(char operands[][128],

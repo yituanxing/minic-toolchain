@@ -1418,3 +1418,52 @@ recompiled, frozen C149 `vgettimeofday.i` local oracle now has GNU-exact
 `CFLAGS=-Werror` and A0 30/30 PASS locally. This change has not yet
 received the 3,536-object **remote exact-head** semantic verdict; C149's
 expected next-head improvement must be confirmed by CI before certification.
+
+The pushed `564f7c33` C149 remote job `41271305459` subsequently **PASS**:
+149/149 semantic equal and 149/149 strict equal, zero failures or
+inconclusive. The overall 3,536 strict semantic gate remains RED
+(723 equal/2,807 DIFF/6 MiniAS failures), independently of this closed C149.
+
+## 34. 2026-11-01 — GNU-compatible RV64 `li` must use one signed-tail plan
+
+The post-local-LA GNU semantic oracle found a second **high-frequency
+machine-byte divergence**, not merely an ELF symbol-name mismatch.
+Frozen Linux real-source samples have identical relocation and symbol
+*counts* but longer MiniAS `.text`: `fdt_early.i.s` +84 bytes,
+`errata/sifive/errata.i.s` +48 bytes and `kernel/cpu.i.s` +16 bytes.
+Each delta is exactly accounted for by old `rv_materialize_li` behavior:
+it emitted a redundant `ADDIW rd,rd,0` after a 32-bit LUI whose low
+12 bits were zero, and expanded wide RV64 constants with a byte-wise
+sequence of repeated `SLLI 8`/`ADDI byte`. GNU GAS `-mno-relax` uses
+sign-aware 12-bit tails and merges zero shifts. For example GNU loads
+`-9223372036854775801` with **3** instructions where the old MiniAS
+required **9**, and `4294967295` with **3** instead of **7**.
+
+The Target's existing immutable `MiniAsRiscvLiPlan` remains **the one
+instruction-size and byte-production owner**: a parse-time, bounded plan
+is retained by MCInst; Common measures `count × 4`, final encode checks
+that exact measured size and emits those same words. No second lowering
+algorithm is added to measure/emit. RV64 signed32 now skips ADDIW for
+zero low12; wide values use the GNU GAS signed12/recurse/shift policy,
+with `uint64_t` modulo arithmetic, explicitly reconstructed sign-filled
+right shift, and array/capacity guards (max 16 emitted words). The root
+wide 12-bit value uses ADDI, not the recursive base's ADDIW, matching
+GNU even for unsigned source spelling `0xffffffffffffffff`.
+
+The three regenerated Linux translation units now have **byte-identical
+`.text`** to GNU, removing all 84/48/16 extra bytes; the first two
+also pass the complete local ELF semantic comparator, while `kernel/cpu`
+retains an **independent strict section-alignment** dimension. Independent
+QA verified 31 boundary constants and **1,024 deterministic random
+64-bit constants** byte-exact against GNU RV64I, plus 19 RV32I constants.
+The new mandatory `probe-rv-li-gnu.sh` covers RV64I/RV64IMA, RV32I/
+RV32IMA, fixed wide constants, CFI/size/reloc checks and overflow
+rejection; it explicitly uses **uncompressed** instruction profiles.
+
+**Scope limit:** `-mno-relax` does **not** disable GNU RVC. GNU RV64GC
+may compress LUI/SLLI *inside* a multi-instruction `li`; the current
+retained plan emits 32-bit words and remains longer there (one GNU
+34-byte vs MiniAS 42-byte controlled example). That is a separate
+RVC lowering policy gap; `.option norvc` gives byte parity. Do not
+claim this batch closes GNU RV64GC compressed `li`, full C3352 or any
+other semantic dimension until the next exact-head CI says so.

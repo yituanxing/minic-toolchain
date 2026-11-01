@@ -258,6 +258,13 @@ and P1 12/12 PASS. The x86/AArch64/LoongArch64 Kbuild/QEMU run
 `41270318051` was still **IN PROGRESS** at this checkpoint; its
 results require separate terminal evidence.
 
+Later job-level results for that **same** `0af59539`: x86-64 MiniAS
+**SUCCESS** (2,841/2,841 Kbuild objects, 3,109 passes, QEMU P0 2/2
+and P1 12/12); LoongArch64 MiniAS **SUCCESS** (2,748/2,748 objects,
+3,004 passes, QEMU P0 2/2 and P1 12/12), with no GNU assembler
+fallback. LoongArch independent GNU baseline **SUCCESS**. AArch64 MiniAS
+and its GNU baseline were **IN PROGRESS** at this later snapshot.
+
 The next targeted production change permits **only** scoped
 `.option arch,+zbb` through the existing RISC-V Target option stack and
 `stmt->site.mode_bits`, without modifying base ISA/ELF attributes or
@@ -278,6 +285,13 @@ the current local six-real-input oracle is therefore **SKIP, not PASS**.
 The next same-head native35 CI must regenerate the inputs and evaluate
 both acceptance and strict GNU semantics.
 
+On the pushed `564f7c33` exact-head GNU semantic run `41271305459`,
+the regenerated native35 **does** clear all six historical parse
+failures: **5 semantic PASS / 30 DIFF / 0 MINIAS_FAIL**, versus the
+previous 5/24/6. The six `lib`/`purgatory` cases remain semantic DIFF,
+not GNU byte-exact certificates. This supersedes the local six-input
+SKIP for *acceptance*, but not for strict semantic parity.
+
 The pending batch also fixes the remaining C149 `vgettimeofday.i.s`
 **metadata-only** divergence: a GNU-verified source CSR/privileged mnemonic
 requires RISC-V Tag_File priv_spec 1.11.0. One Target-owned attributes
@@ -289,6 +303,57 @@ rejections PASS**, and the real regenerated `vgettimeofday.i` has both
 `.text` and `.riscv.attributes` GNU byte-exact. Release `-Werror` and
 A0 30/30 PASS locally; only remote next-head semantic replay can certify
 the expected C149 **149/149** result. See architecture decisions §33.
+
+The pushed `564f7c33` **has now certified C149 149/149** on remote
+strict GNU semantic oracle `41271305459`: 149 semantic equal, **149
+strict equal**, zero DIFF/assembler failures/inconclusive/oracle errors.
+This is a genuine closed C149 subset, not 3,536-source completion.
+Across all 3,536 inputs on that same SHA the nine semantic jobs report
+**723 equal / 2,807 DIFF / 6 MINIAS_FAIL / 0 GNU_FAIL** (604 strict
+equal): **+27 equal**, **−6 MiniAS fails** relative to `0af59539`.
+The first500 still has six other MiniAS failures; 2,807 semantic
+differences are not waived. Its aggregate necessarily remains RED.
+Its independent frozen Linux 3×7 run `41271305472` also **SUCCEEDED**:
+all 21 shards and 22/22 jobs. This is assembly-only coverage, and the
+new SHA's **3,536/3,536 hard gate** run `41271305536` subsequently
+**SUCCEEDED** (11/11 jobs). These are distinct from GNU semantic
+equality. New-head Linux QEMU jobs were still running at this checkpoint.
+
+### Next grouped production correctness batch — RV64 `li` size convergence
+
+The `564f7c33` remaining C3352 GNU DIFF include a reproducible,
+high-frequency **machine-byte** mismatch: the previously shared
+`rv_materialize_li` retained plan was correct as a single layout/encode
+owner, but emitted inefficient non-GNU sequences. Three frozen Linux
+source examples explain their complete `.text` length differences:
+`fdt_early.i` **+84 B** (redundant ADDIW after LUI and successive wide
+LI growth), `sifive/errata.i` **+48 B** (two long negative constants),
+and `kernel/cpu.i` **+16 B** (unsigned `4294967295`). Those original
+objects had equal symbol/relocation counts; size drift propagated into
+section, relocation and symbol offsets.
+
+The pending Target-only fix reuses exactly the existing retained
+`MiniAsRiscvLiPlan` and GNU signed12/shift algorithm. The common
+measurement and Target final encoder still consume the **same** word
+plan; bounded arrays and uint64-defined arithmetic protect worst-case
+64-bit values. The three regenerated source `.text` sections now match
+GNU byte-for-byte at **3,656/3,656**, **7,460/7,460**, and
+**23,088/23,088** bytes; the first two full ELF semantic comparisons
+strict PASS, while `kernel/cpu` has only an independent strict
+`section_alignment` dimension. A new mandatory GNU RV32I/RV32IMA ×
+RV64I/RV64IMA `li` oracle tests signed and unsigned boundaries, 64
+deterministic wide constants, `.size`/CFI/relocations and RV32 overflow.
+Independent QA additionally tested **1,024/1,024 random 64-bit
+constants** byte-exact. Release `-Werror` and A0 **30/30 PASS** on
+the integrated local tree. The existing A0 `li` golden was updated
+*only after* a GNU `-mno-relax` byte oracle proved the new sequence.
+
+This next batch does **not** certify RV64GC compressed multiword `li`:
+GNU RVC may compress its internal LUI/SLLI despite `-mno-relax`
+(observed GNU 34 B vs MiniAS 42 B); `.option norvc` is byte-exact.
+Documented as a separate RVC Target sizing item, not hidden by
+comparator filtering. See architecture decisions §34. Exact-head
+3,536 semantic and Linux P0/P1 remain **PENDING** for this unpushed tree.
 
 This top section is the **current progress snapshot**. Later sections retain
 their original 2026-10-29 audit/batch evidence as history; their “pending CI”

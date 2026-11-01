@@ -11,6 +11,7 @@ sh tests/assembler/probe-riscv-absolute-relocs.sh
 bash tests/assembler/probe-rv-zbb-site-gnu.sh
 bash tests/assembler/probe-rv-priv-spec-gnu.sh
 bash tests/assembler/probe-rv-local-la-gnu.sh
+bash tests/assembler/probe-rv-li-gnu.sh
 bash tests/assembler/probe-common-expr-syntax.sh
 bash tests/assembler/probe-large-expression-gnu.sh
 bash tests/assembler/probe-mcexpr-affine-ast-gnu.sh
@@ -358,7 +359,9 @@ isa_hex="$(
     readelf -x .text "$work/isa-next.o" |
     awk '/0x[0-9a-f]+/ {for (i=2; i<=NF; ++i) if ($i ~ /^[0-9a-f]+$/ && length($i) <= 8 && length($i) % 2 == 0) printf "%s", $i}'
 )"
-test "$isa_hex" = "13052001131585001305450313158500130565051315850013058507131585001305a509131585001305c50b131585001305e50d131585001305050f33d5c5400f003003f3250010730010000f0000012f25b600730050102f35b600732005102f25b66073300e102f35b66067800000"
+# GNU GAS RV64IMA uncompressed -mno-relax sequence: the first LI now uses
+# signed-12 tails and merged shifts, so the old byte-at-a-time golden is stale.
+test "$isa_hex" = "377524001b05d58a1315e5001305d5c41315c5001305755e1315d500130505ef33d5c5400f003003f3250010730010000f0000012f25b600730050102f35b600732005102f25b66073300e102f35b66067800000"
 
 cat >"$work/csr-amo.s" <<'EOF'
 .text
@@ -891,8 +894,9 @@ native_expr_pseudos_hex="$(
     readelf -x .text "$work/native-expr-pseudos.o" |
     awk '/0x[0-9a-f]+/ {for (i=2; i<=NF; ++i) if ($i ~ /^[0-9a-f]{8}$/) printf "%s", $i}'
 )"
-test "$native_expr_pseudos_hex" = "b76204009b820260371300001b0303009303800413f505fc1386760013c7f7ff3b081041f3223000"
-test "$(readelf -Ws "$work/native-expr-pseudos.o" | awk '$8=="native_expr_pseudos" {print $3}')" = "40"
+# GNU GAS omits ADDIW 0 after the second LI's exact LUI materialization.
+test "$native_expr_pseudos_hex" = "b76204009b820260371300009303800413f505fc1386760013c7f7ff3b081041f3223000"
+test "$(readelf -Ws "$work/native-expr-pseudos.o" | awk '$8=="native_expr_pseudos" {print $3}')" = "36"
 
 cat >"$work/native-gas-forms.s" <<'EOF'
 .text
