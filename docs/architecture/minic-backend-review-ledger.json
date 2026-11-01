@@ -472,6 +472,12 @@
         665
       ]
     },
+    "src/target/common/linux_jump_label_asm.h": {
+      "blob": "41bb31c2d1f2eb078c7f6f68d45ca4ce8d4d5764",
+      "review_depth": "targeted",
+      "ci_touched_in": [],
+      "audit_note": "R3 A64/Loong Linux static-key source/Core grammar dedup. Both ISA exact .s baseline diffs and negative modifier tests passed; GNU cross ELF/QEMU not run."
+    },
     "src/target/common/lp64_aggregate.c": {
       "blob": "60e369f815ee81ef41a7f1ba16a7a7d873b4723a",
       "review_depth": "inventory",

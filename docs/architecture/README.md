@@ -225,7 +225,7 @@ ASM-only、Source-only 证据一律不互相冒充。
 | **A11-45 A64 Record bytes 拆装** | `aarch64/block_emit.c:49–126` 对 <=64/>64B 选择两套搬运循环，`call_emit.c:14–34`/return `block_emit.c:197–215` 又用 8 次 `ldrb`/OR 拼 word | `SOURCE / PERF`；目标内部统一 bytes emitter；合格对齐才优化 word load/store，保留 packed/misaligned 和精确字节范围 |
 | **A11-46 A64 frame 保守拆位移** | `aarch64/frame_emit.c:120–180` 普遍按 4095B 限制拆 address，部分 scaled load/store 实际允许更大 | `SOURCE / PERF`；分清指令 immediate class 和对齐，先比较 `.s` 规模，无正确性证据 |
 | **A11-47 Loong SIMD 三次 parse** | `loongarch64/residual_emit.c:176–177` 先 qualify，再经 `simd_asm.c:390–400` 重 qual/parse，typed `LoongSimdProgram` 已存在 | `SOURCE / CLEANUP`；传 typed witness 到 Machine，仍保留 `:424–455` 的后端源资格/效果保护 |
-| **A11-48 跨 A64/Loong ELF DFA** | `aarch64/asm_contract.c:183–204`、`loongarch64/asm_contract.c:46–68` 的跳转键重定位文本 lexer 近乎完全相同 | `SOURCE / DESIGN`；抽 lexical grammar，留 ISA 特定模板、relocation 类型和边界校验 |
+| **A11-48 跨 A64/Loong ELF DFA** | R3 将 Linux __jump_table 模板 DFA、symbol/addend lexer 和 Source/Core 准入集中到 Common 单一实现，退休两个目标重复分类；生产净 -33 行。 | `SOURCE / FIXED-PARTIAL`；A64/Loong 旧新同输入 .s 逐字节相同，恶意节名与 %c0/%0 互换均拒；Common 128B 边界单测和 Release -Werror PASS。ISA 指令/ELF 仍由各目标发射；真 ELF/QEMU 尚待验。见 [R3 账本](minic-refactor-ledger.md)。 |
 | **A11-49 Loong provenance/对齐多扫** | `loongarch64/residual_emit.c:29–42` 与 `memory_emit.c:50–78` 均追最多 16 层 OBJECT/FIELD；memory alignment 又对相同 SSA 链重查 | `SOURCE / PERF`；每函数 memoized typed address provenance，保留 consumer 特有成功条件与保守拒绝 |
 | **A11-50 Loong 发射可变全局状态** | `loongarch64/memory_emit.c:161–229` 静态 label serial，`block_emit.c:251–258` terminator 传 13+ 参数但其 wrapper 已有 BlockContext | `SOURCE / DESIGN`；标签所有权迁 function/emission transaction，terminator 参数归结构 context；当前无并发冲突实证，关联 A9-12 |
 

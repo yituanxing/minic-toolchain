@@ -114,3 +114,38 @@ RV32 global 的本地 ELF 分类尚未迁入 Common；Compiler 的三族 inline
 策略层抽象；不能为了接入 planner 而增加双份 source admission。
 Frontend 其他纯历史模板由各自 pinned checkout 单独验收；本批不清除
 被工具引用的 `set_extern`，不修改 inline、Core prune 或目标 ABI。
+
+## R3：AArch64/LoongArch64 Linux static-key ASM 契约去重
+
+**基线：** R2 本地 8a7132a，PR #674 远端 20ecc354，Git tree
+相同。范围仅 A11-48 的 Linux __jump_table asm-goto Source/Core
+资格合同；不是泛化任意 GNU inline ASM，也不改变
+.altinstructions、异常表或普通指令生成。
+
+### 已退休的重复路径
+
+- target/common/linux_jump_label_asm.h 集中四段相同算法：
+  空白规范化＋严格模板匹配、symbol＋可选十进制加数 lexer、
+  Source asm-goto 约束/标签验证、Core immediate/CFG 双端防伪。
+  删除 A64 与 Loong 各自的重复实现，仍由两边调用同一个校验器。
+- 模板仍由 ISA **分别拥有**：A64 必须为 %c0，Loong 必须为 %0；
+  目标 nop/b、函数/块标签和 __jump_table PREL32/PREL64 汇编发射
+  仍分别留在各自 asm_contract.c 中；不把指令/ELF 输出移到 Common。
+  Source 和 Core 双端资格检查继续保留。
+- A64/Loong 生产 .c 合计 **+16/-153 行**，Common 新 .h 104 行，
+  **生产净 -33 行**。新增 Common 白盒单测 96 行并接入 check-fast；
+  两个原有脚本新增 baseline byte diff、错误 relocation modifier 负例。
+
+### 已执行与未执行
+
+| 门禁 | R3 状态 |
+| --- | --- |
+| Release 全量 -Werror 构建、Target boundary checker | **PASS**（review manifest 旧 fingerprint drift 另计） |
+| A64 Linux jump-label site 3、inline clone、R2/R3 同输入 .s 对照 | **PASS，逐字节相同** |
+| Loong Linux jump-label nop/branch、R2/R3 同输入 .s 对照 | **PASS，逐字节相同** |
+| 两目标 alien section 与交换 %c0/%0 的非法模板 | **PASS**，拒编且未输出半成品 .s |
+| Common source/Core 词法单测 | **PASS**；7 合法/11 非法 key、128 字节边界、两个模板、Core 正反例 |
+| A64/Loong GNU AS、真 ELF relocation、QEMU | **NOT_RUN / 缺目标交叉 GCC**；不能当作 PASS |
+
+**待验：** 五 ISA 最终 GNU ELF/QEMU 联合验收另计。第三个使用者
+不能因共享模板解析器存在而绕过各自 ISA 指令和 relocation 合同。

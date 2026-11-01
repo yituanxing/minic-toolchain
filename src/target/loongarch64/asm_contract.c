@@ -1,6 +1,7 @@
 #include "target/loongarch64/asm_contract.h"
 #include "target/loongarch64/simd_asm.h"
 #include "target/common/direct_linux_bug_asm.h"
+#include "target/common/linux_jump_label_asm.h"
 #include "target/loongarch64/frame_emit.h"
 #include "target/loongarch64/memory_emit.h"
 
@@ -15,94 +16,22 @@
  * must remain an ELF symbolic relocation, never a runtime GPR value. */
 static unsigned int loong_linux_jump_label_form(
     const char *text, size_t length) {
-    static const char shared[] =
+    return minic_multi_linux_jump_label_form(
+        text, length,
         ".pushsection__jump_table,\"aw\".align3"
-        ".long1b-.,%l[l_yes]-..quad%0-..popsection";
-    static const char *const prefixes[] = {
-        "1:nop", "1:b%l[l_yes]"
-    };
-    char compact[256];
-    size_t i, n = 0U;
-    if (text == NULL || length == 0U || length >= sizeof(compact))
-        return 0U;
-    for (i = 0U; i < length; ++i) {
-        const char ch = text[i];
-        if (ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n') continue;
-        if (ch == '\0' || n + 1U >= sizeof(compact)) return 0U;
-        compact[n++] = ch;
-    }
-    compact[n] = '\0';
-    for (i = 0U; i < sizeof(prefixes) / sizeof(prefixes[0]); ++i) {
-        const size_t a = strlen(prefixes[i]), b = sizeof(shared) - 1U;
-        if (n == a + b && memcmp(compact, prefixes[i], a) == 0 &&
-            memcmp(compact + a, shared, b) == 0)
-            return (unsigned int)i + 1U;
-    }
-    return 0U;
-}
-
-/* One symbol with an optional decimal offset; no nested expressions,
- * register names, arbitrary GNU directives or raw textual interpolation. */
-static bool loong_linux_jump_key_relocation(const char *key) {
-    size_t i, length;
-    if (key == NULL) return false;
-    length = strlen(key);
-    if (length == 0U || length > 128U ||
-        !((key[0] >= 'a' && key[0] <= 'z') ||
-          (key[0] >= 'A' && key[0] <= 'Z') ||
-          key[0] == '_' || key[0] == '.')) return false;
-    for (i = 1U; i < length; ++i) {
-        const char ch = key[i];
-        if ((ch >= 'a' && ch <= 'z') ||
-            (ch >= 'A' && ch <= 'Z') ||
-            (ch >= '0' && ch <= '9') ||
-            ch == '_' || ch == '.' || ch == '$') continue;
-        if ((ch == '+' || ch == '-') && i + 1U < length) {
-            for (++i; i < length; ++i)
-                if (key[i] < '0' || key[i] > '9') return false;
-            return true;
-        }
-        return false;
-    }
-    return true;
+        ".long1b-.,%l[l_yes]-..quad%0-..popsection");
 }
 
 bool minic_loongarch64_qualify_inline_asm_goto(
     const MinicC0Program *program, const MinicInlineAsm *source) {
-    const MinicInlineAsmOperand *key;
-    const MinicInlineAsmLabel *label;
-    const MinicExpression *expression;
-    if (!program || !source || !source->is_goto || source->is_volatile ||
-        source->output_count != 0U || source->input_count != 1U ||
-        !source->inputs || source->label_count != 1U || !source->labels ||
-        source->clobber_count != 0U || source->register_clobber_count != 0U ||
-        source->has_memory_clobber ||
-        !loong_linux_jump_label_form(source->template_text,
-                                     source->template_length)) return false;
-    key = &source->inputs[0];
-    label = &source->labels[0];
-    expression = minic_c0_program_expression(program, key->expression);
-    return key->access == MINIC_INLINE_ASM_OPERAND_READ_ONLY &&
-           key->constraint_text != NULL && key->constraint_length == 1U &&
-           key->constraint_text[0] == 'i' &&
-           expression != NULL && minic_type_is_pointer(expression->type) &&
-           label->name != NULL && label->name_length == 5U &&
-           memcmp(label->name, "l_yes", 5U) == 0 &&
-           label->target_statement != MINIC_STATEMENT_INVALID;
+    return minic_multi_qualify_linux_jump_label_asm_goto(
+        program, source, loong_linux_jump_label_form);
 }
 
 bool minic_loongarch64_linux_jump_label_asm_goto_core(
     const MinicCoreInlineAsm *source) {
-    return source != NULL && source->is_goto && source->is_volatile &&
-           source->goto_target != MINIC_CORE_BLOCK_INVALID &&
-           source->goto_second_target == MINIC_CORE_BLOCK_INVALID &&
-           !source->has_memory_clobber &&
-           source->register_clobber_count == 0U &&
-           source->source_inline_asm_id == SIZE_MAX &&
-           source->resolved_immediate_count == 1U &&
-           loong_linux_jump_key_relocation(source->resolved_immediates[0]) &&
-           loong_linux_jump_label_form(source->template_text,
-                                       source->template_length) != 0U;
+    return minic_multi_linux_jump_label_asm_goto_core(
+        source, loong_linux_jump_label_form);
 }
 
 bool minic_loongarch64_emit_linux_jump_label_asm_goto(

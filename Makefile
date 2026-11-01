@@ -2032,3 +2032,15 @@ check-fast: check-rv32-global-plan-source
 check-rv32-global-plan-gnu-elf: $(MINIC_CC_BINARY)
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" BUILD_DIR="$(abspath $(BUILD_DIR))" \
 	  MINIC_RV32_GLOBAL_GNU_ELF=1 sh tests/compiler/c0/run-rv32-global-plan-abi.sh
+
+# Shared Linux static-key ASM source/Core grammar; A64 and Loong keep their
+# own exact %c0/%0, branch spelling and ELF metadata emission.
+.PHONY: check-common-linux-jump-label-contract
+check-common-linux-jump-label-contract:
+	mkdir -p "$(BUILD_DIR)/tests"
+	$(CC) $(MINIC_CFLAGS) $(MINIC_INCLUDES) \
+	  tests/target/common_linux_jump_label_contract.c \
+	  -o "$(BUILD_DIR)/tests/common-linux-jump-label-contract"
+	"$(BUILD_DIR)/tests/common-linux-jump-label-contract"
+
+check-fast: check-common-linux-jump-label-contract

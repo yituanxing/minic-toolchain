@@ -47,6 +47,16 @@ l_yes: return 1;
 int inlined_static_branch_call(void) { return inlined_static_branch(&local_key); }
 SRC
 "$MINIC_CC" --target=aarch64-linux -S "$work/jump.i" -o "$work/jump.s"
+if test -n "${MINIC_JUMP_BASELINE_CC:-}"; then
+    "$MINIC_JUMP_BASELINE_CC" --target=aarch64-linux -S \
+        "$work/jump.i" -o "$work/baseline.s"
+    if ! cmp -s "$work/baseline.s" "$work/jump.s"; then
+        echo 'AARCH64_LINUX_JUMP_LABEL_DIFF=FAIL old/new .s differs' >&2
+        diff -u "$work/baseline.s" "$work/jump.s" || true
+        exit 1
+    fi
+    echo 'AARCH64_LINUX_JUMP_LABEL_DIFF=PASS asm_byte_identical=1'
+fi
 grep -Fq '1: nop' "$work/jump.s"
 grep -Fq '1: b .Lmini_arm_' "$work/jump.s"
 test "$(grep -Fc '.pushsection __jump_table,"aw"' "$work/jump.s")" -eq 3
@@ -70,3 +80,11 @@ if "$MINIC_CC" --target=aarch64-linux -S "$work/invalid.i" \
 fi
 test ! -e "$work/invalid.s"
 echo 'AARCH64_JUMP_LABEL_NEGATIVE=PASS alien_section=rejected'
+sed 's/%c0 - \./%0 - ./g' "$work/jump.i" >"$work/wrong-modifier.i"
+if "$MINIC_CC" --target=aarch64-linux -S "$work/wrong-modifier.i" \
+    -o "$work/wrong-modifier.s" >/dev/null 2>"$work/wrong-modifier.err"; then
+    echo 'AARCH64_JUMP_LABEL=FAIL wrong relocation modifier admitted' >&2
+    exit 1
+fi
+test ! -e "$work/wrong-modifier.s"
+echo 'AARCH64_JUMP_LABEL_MODIFIER=PASS wrong_percent0=rejected'
