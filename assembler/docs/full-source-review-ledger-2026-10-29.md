@@ -7,6 +7,55 @@
 > 和早期测试文件数量，均不能自动当作最新 HEAD 的事实。
 > “读过 / 修改过 / 完成清理”必须分别统计。
 
+### 2026-11-01 fragment-owned request and dead-write cleanup
+
+**Base:** `ce676c16b405ca225e8ab2cf08f41d0355f3165a` on the sole
+`refactor/minias-target-isa-abi-core` branch / Draft PR #667. The commit
+containing this entry is this batch's exact source revision. No Linux
+acceptance or full 3,536-object strict GNU acceptance is inferred.
+
+This is a deletion/ownership batch, not a new MC algorithm or a copied path:
+
+- **EncodeResult:** fixed-width MCData Fixup APIs no longer accept a caller
+  Section selector. Both symbol-name and retained SymbolID paths bind to the
+  active Fragment. Staged Fixup requests no longer store a duplicate Section;
+  staged synthetic anchors no longer store the Fragment's Section, subsection
+  or absolute offset. Common's sole commit reads the authoritative Fragment
+  owner. This removes stale shadow state without changing encoded bytes,
+  relocation order, or the independent section-owned `.reloc`/DWARF path.
+- **MCExpr:** the publicly retained symbol-difference entry point directly
+  consumes the one typed AST; its private intermediate pair-copy wrapper is
+  gone. Wrapping/absolute/deferred expression evaluation modes are unchanged.
+- **MCLayout:** subsection hash allocation no longer zeroes memory twice;
+  its fill clears all slots before use. The private layout scan's two callers
+  always supply a non-null placement-change result, so dead optional branches
+  are removed. Its anchor-graph defensive failure check remains.
+- **Source/lifetime:** macro purge no longer zeroes an already-discarded
+  array slot that `define_macro` resets on reuse. Inline repeat no longer
+  writes NULL into pointers immediately before freeing the pointer array;
+  the backing text remains owned by the same `copy` buffer. `minias_destroy`
+  no longer zeroes its soon-to-be-dead session after freeing its contents;
+  the next source-replay pass performs fresh zero-initialization.
+
+**Production diff:** 6 `assembler/src` files, `+38/-70` lines (net `-32`);
+**test diff:** one existing Fragment transaction guard, `+23/-0` lines.
+Documentation additions are separate from production code. No public
+Invocation API, Target ISA encoding rule, GNU relaxation policy or SourceGraph
+replay algorithm was removed.
+
+**Local verification:** Release `CFLAGS=-Werror` build, A0 30/30,
+GNU x86 SymbolID/Fixup and `.org` byte oracles, 4,096-section/8,192-subsection
+index stress, Source macro lifetime/failure and SourceContext replay,
+x86 Linux page-table GNU linked-content oracle, Fragment atomicity guard,
+and x86 SourceGraph forced-replay oracle all PASS. Standalone RISC-V GNU
+relax oracle is **NOT TESTED** locally (cross `riscv64-linux-gnu-as` absent);
+local RV SourceGraph replay PASS with GNU comparison explicitly skipped.
+ASan/UBSan macro-lifetime checks reported clean; LSan cannot complete in
+this environment. The optional sanitize-mode `-Werror` build hits an existing
+`cfi_writer.c` maybe-uninitialized warning; ordinary sanitize build succeeds.
+Remote exact-head ISA/ABI and four-Target GNU jobs, optional 3,536 and full
+Linux Image/QEMU remain **NOT TESTED** at the time of this entry.
+
 ### 2026-11-01 全局回看：删除 x86 ALIGN 的多余 Section 选择参数
 
 `minias_code_alignment_preceded_by_adjacent_data` 只有 x86

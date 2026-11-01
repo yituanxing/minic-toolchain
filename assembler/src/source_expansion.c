@@ -802,8 +802,6 @@ static void minias_macro_purge(MiniAsSourceContext *source, const char *name) {
             memmove(&source->macros[i],&source->macros[i+1U],
                     (source->macro_count-i-1U)*sizeof(*source->macros));
         --source->macro_count;
-        memset(&source->macros[source->macro_count],0,
-               sizeof(*source->macros));
         return;
     }
 }
@@ -1832,7 +1830,7 @@ failed:
 static bool process_inline_repeat_line(MiniAs *as,const char *source,
                                        size_t line,bool *handled) {
     MiniAsSourceLine *pieces=NULL;
-    size_t count=0U,capacity=0U,i;
+    size_t count=0U,capacity=0U;
     char *copy,*cursor;
     bool opener=false,closer=false,ok=true;
     *handled=false;
@@ -1876,7 +1874,6 @@ static bool process_inline_repeat_line(MiniAs *as,const char *source,
         *handled=true;
         ok=minias_source_frame_process(as,&frame);
     }
-    for(i=0U;i<count;++i)pieces[i].text=NULL; /* owned by copy */
     free(pieces);
     free(copy);
     return ok;

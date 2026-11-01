@@ -1079,10 +1079,7 @@ static bool minias_commit_encode_result(MiniAs *as, const MiniAsStmt *owner) {
         const MiniAsEncodeAnchorRequest *request = &result->anchors[i];
         const char *name=request->name_id < as->symbol_name_count
             ? as->symbol_names[request->name_id].name : NULL;
-        if (name==NULL || request->section != owner->section ||
-            request->subsection != owner->subsection ||
-            request->offset < owner->offset ||
-            request->offset - owner->offset > owner->size ||
+        if (name==NULL ||
             minias_get_symbol(as,name,false) != NULL) {
             minias_set_error(as, "invalid-encoded-anchor:line=%zu",
                              owner->line);
@@ -1091,8 +1088,7 @@ static bool minias_commit_encode_result(MiniAs *as, const MiniAsStmt *owner) {
     }
     for (i = 0U; i < result->fixup_count; ++i) {
         const MiniAsEncodeFixupRequest *request = &result->fixups[i];
-        if (request->section != owner->section ||
-            request->fragment_offset > owner->size ||
+        if (request->fragment_offset > owner->size ||
             request->width > owner->size - request->fragment_offset ||
             (!request->absolute_zero_symbol && (request->has_symbol_index ?
              request->symbol_index>=as->symbol_count :
@@ -1117,16 +1113,16 @@ static bool minias_commit_encode_result(MiniAs *as, const MiniAsStmt *owner) {
         MiniAsSymbol *anchor = minias_get_symbol(as, name, true);
         if (anchor == NULL) return false;
         anchor->defined = true;
-        anchor->section = request->section;
-        anchor->subsection = request->subsection;
-        anchor->value = request->offset;
+        anchor->section = owner->section;
+        anchor->subsection = owner->subsection;
+        anchor->value = owner->offset;
         anchor->bind = MINIAS_STB_LOCAL;
     }
     for (i = 0U; i < result->fixup_count; ++i) {
         const MiniAsEncodeFixupRequest *request = &result->fixups[i];
         const char *name=request->absolute_zero_symbol || request->has_symbol_index ? NULL :
             as->symbol_names[request->symbol_ref.name_id].name;
-        if (!minias_record_fixup(as, request->section,
+        if (!minias_record_fixup(as, owner->section,
                                  owner->offset + request->fragment_offset,
                                  request->kind, request->width,
                                  name,
@@ -1554,7 +1550,6 @@ static void minias_destroy(MiniAs *as) {
         free(as->cu_files[i]);
     free(as->cu_files);
     free(as->debug_locs);
-    memset(as, 0, sizeof(*as));
 }
 
 static bool add_stmt(MiniAs *as,

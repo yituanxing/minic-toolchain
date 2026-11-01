@@ -96,12 +96,14 @@ static bool subsection_index_reserve(MiniAs *as) {
     size_t capacity=as->subsection_slot_capacity;
     size_t *slots;
     if(capacity!=0U && as->subsection_count+1U<capacity/2U)return true;
-    if(capacity>SIZE_MAX/2U) {
+    if(capacity>SIZE_MAX/2U ||
+       (capacity==0U ? 16U : capacity*2U)>SIZE_MAX/sizeof(*slots)) {
         minias_set_error(as,"subsection-index-too-large");
         return false;
     }
     capacity=capacity==0U ? 16U : capacity*2U;
-    slots=calloc(capacity,sizeof(*slots));
+    /* The index fill clears every slot before its first read. */
+    slots=malloc(capacity*sizeof(*slots));
     if(slots==NULL) {
         minias_set_error(as,"out-of-memory:subsection-index");
         return false;
@@ -561,7 +563,7 @@ static bool minias_scan_fragment_layout(MiniAs *as, bool *placement_changed) {
     MiniAsAnchorGraph *graph = build_anchor_graph(as);
     size_t i;
     if (graph == NULL) return false;
-    if (placement_changed != NULL) *placement_changed = false;
+    *placement_changed = false;
     ++graph->relayout_count;
     for (i = 0U; i < graph->subsection_count; ++i)
         as->subsections[i].size = 0U;
@@ -626,7 +628,7 @@ static bool minias_scan_fragment_layout(MiniAs *as, bool *placement_changed) {
                     minias_set_error(as, "fragment-alignment-overflow");
                     return false;
                 }
-                if(placement_changed != NULL && stmt->size!=(uint32_t)pad)
+                if(stmt->size!=(uint32_t)pad)
                     *placement_changed=true;
                 stmt->size = (uint32_t)pad;
             }
@@ -694,12 +696,10 @@ static bool minias_scan_fragment_layout(MiniAs *as, bool *placement_changed) {
     /* Previous subsection bases may differ when an earlier DATA/branch
      * grew. The next fixed-point pass must reevaluate every retained `.org`
      * with the freshly normalized Section-relative symbol snapshot. */
-    if(placement_changed != NULL) {
-        for(i=0U;i<as->subsection_count;++i) {
-            const MiniAsSubsection *sub=&as->subsections[i];
-            if(sub->base!=graph->candidate_base[i])
-                *placement_changed=true;
-        }
+    for(i=0U;i<as->subsection_count;++i) {
+        const MiniAsSubsection *sub=&as->subsections[i];
+        if(sub->base!=graph->candidate_base[i])
+            *placement_changed=true;
     }
     /* Commit all staged anchors together. The public finalizer also serves
      * the parser and expects subsection-local values; it adds the NEW base

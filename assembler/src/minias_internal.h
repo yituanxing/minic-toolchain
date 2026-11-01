@@ -425,7 +425,6 @@ typedef struct MiniAsStmt {
 /* A Target proposes one whole encoded fragment.  Common alone assigns its
  * final SymbolIDs, relocation ownership and Section bytes after validation. */
 typedef struct MiniAsEncodeFixupRequest {
-    int section;
     uint32_t fragment_offset;
     MiniAsFixupKind kind;
     unsigned width;
@@ -440,9 +439,6 @@ typedef struct MiniAsEncodeFixupRequest {
 
 typedef struct MiniAsEncodeAnchorRequest {
     MiniAsSymbolNameId name_id;
-    int section;
-    uint32_t subsection;
-    uint64_t offset;
 } MiniAsEncodeAnchorRequest;
 
 /* Ordered, fragment-owned output operations. One source statement can emit
@@ -817,7 +813,6 @@ bool minias_parse_size_end_addend(const char *,const char *,int64_t *);
 /* Common-only checked Fixup field-width contract, no Target state. */
 bool minias_fixup_field_width(MiniAsFixupKind kind,unsigned width);
 bool minias_add_fixup(MiniAs *as,
-                      int section,
                       uint64_t offset,
                       MiniAsFixupKind kind,
                       unsigned width,
@@ -825,7 +820,7 @@ bool minias_add_fixup(MiniAs *as,
                       int64_t addend);
 /* Fixed-width retained MCData already has a real, stable SymbolID; do not
  * serialize it into a temporary name and ask the object table to find it. */
-bool minias_add_fixup_symbol_id(MiniAs *as, int section, uint64_t offset,
+bool minias_add_fixup_symbol_id(MiniAs *as, uint64_t offset,
                                 MiniAsFixupKind kind, unsigned width,
                                 size_t symbol_index, int64_t addend);
 /* Target instructions and executable alignment produce a single staged

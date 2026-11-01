@@ -396,9 +396,6 @@ static bool affine_form_to_difference(const MiniAsAffineForm *form,
     return true;
 }
 
-static bool parse_symbol_difference(const char *,
-                                    MiniAsSymbolExpr *,MiniAsSymbolExpr *);
-
 /* A GNU expression such as (identity_mapped - relocate_kernel) is
  * absolute only AFTER both label anchors exist and subsection layout is
  * finalized. Preserve the two typed symbols throughout parse and measure:
@@ -406,8 +403,15 @@ static bool parse_symbol_difference(const char *,
  * Common owns syntax and final same-section semantics for all targets. */
 bool minias_parse_symbol_difference(const char *expression,
                                     MiniAsSymbolDifference *out) {
-    return expression && out &&
-           parse_symbol_difference(expression,&out->positive,&out->negative);
+    MiniAsExprSyntax syntax;
+    MiniAsAffineForm form;
+    bool valid;
+    if(!expression || !out ||
+       !minias_expr_parse_syntax(expression,&syntax))return false;
+    valid=affine_lower_syntax(NULL,&syntax,&form) &&
+          affine_form_to_difference(&form,out);
+    minias_expr_syntax_destroy(&syntax);
+    return valid;
 }
 
 /* One Common parser for a retained section-symbol difference followed by
@@ -532,22 +536,6 @@ bool minias_expr_parse_symbol_absolute_tail(MiniAs *as,const char *text,
     valid=affine_lower_syntax(as,&syntax,&form) &&
           form.kind==MINIAS_MC_EXPR_SYMBOL;
     if(valid)*expr=form.lhs;
-    minias_expr_syntax_destroy(&syntax);
-    return valid;
-}
-
-static bool parse_symbol_difference(const char *text,
-                                    MiniAsSymbolExpr *lhs,
-                                    MiniAsSymbolExpr *rhs) {
-    MiniAsExprSyntax syntax;
-    MiniAsAffineForm form;
-    MiniAsSymbolDifference pair;
-    bool valid;
-    if(!text || !lhs || !rhs ||
-       !minias_expr_parse_syntax(text,&syntax))return false;
-    valid=affine_lower_syntax(NULL,&syntax,&form) &&
-          affine_form_to_difference(&form,&pair);
-    if(valid) {*lhs=pair.positive;*rhs=pair.negative;}
     minias_expr_syntax_destroy(&syntax);
     return valid;
 }
@@ -1100,7 +1088,7 @@ static bool emit_symbol_minus_dot(MiniAs *as,
            kind!=MINIAS_FIXUP_NONE &&
            target_supports_fixup(as,kind,width))
             return minias_section_append_zero(as,stmt->section,width) &&
-                   minias_add_fixup_symbol_id(as,stmt->section,relocation_offset,
+                   minias_add_fixup_symbol_id(as,relocation_offset,
                                               kind,width,symbol_index,addend);
     }
 
@@ -1138,14 +1126,12 @@ static bool emit_symbol_minus_dot(MiniAs *as,
 
         return minias_section_append_zero(as, stmt->section, width) &&
                minias_add_fixup_symbol_id(as,
-                                     stmt->section,
                                      relocation_offset,
                                      MINIAS_FIXUP_ADD,
                                      width,
                                      symbol_index,
                                      addend) &&
                minias_add_fixup(as,
-                                     stmt->section,
                                      relocation_offset,
                                      MINIAS_FIXUP_SUB,
                                      width,
@@ -1256,7 +1242,7 @@ static bool emit_symbol_difference(MiniAs *as,
             int64_t delta=signed_from_bits(relocation_offset-rhs->value+
                                (uint64_t)lhs_addend-(uint64_t)rhs_addend);
             return minias_section_append_zero(as,stmt->section,width) &&
-                   minias_add_fixup_symbol_id(as,stmt->section,relocation_offset,
+                   minias_add_fixup_symbol_id(as,relocation_offset,
                                               kind,width,lhs_index,delta);
         }
     }
@@ -1269,14 +1255,12 @@ static bool emit_symbol_difference(MiniAs *as,
     }
     return minias_section_append_zero(as, stmt->section, width) &&
            minias_add_fixup_symbol_id(as,
-                                 stmt->section,
                                  relocation_offset,
                                  MINIAS_FIXUP_ADD,
                                  width,
                                  lhs_index,
                                  lhs_addend) &&
            minias_add_fixup_symbol_id(as,
-                                 stmt->section,
                                  relocation_offset,
                                  MINIAS_FIXUP_SUB,
                                  width,
@@ -1396,7 +1380,7 @@ bool minias_emit_mc_data(MiniAs *as,const MiniAsStmt *stmt) {
                     return false;
                 }
                 if(!minias_section_append_zero(as,stmt->section,data->width) ||
-                   !minias_add_fixup_symbol_id(as,stmt->section,at,
+                   !minias_add_fixup_symbol_id(as,at,
                           MINIAS_FIXUP_ABS,data->width,x->lhs_symbol_index,
                           x->lhs_addend))
                     return false;

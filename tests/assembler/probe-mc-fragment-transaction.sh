@@ -97,6 +97,29 @@ if 'result->fixups[result->fixup_count++]' in data_stage:
     raise SystemExit('MCData reimplements raw Fixup-vector append')
 if 'bool minias_add_fixup_symbol_id(' not in mc:
     raise SystemExit('moved semantic MCData wrappers missing')
+# MCData Fixup Section is owned by the active Fragment, not chosen by its
+# caller. Keep the semantic name/SymbolID entry points, but no selector.
+for signature in ('minias_add_fixup', 'minias_add_fixup_symbol_id'):
+    start=h.index('bool '+signature+'(')
+    stop=h.index(');',start)
+    if 'int section' in h[start:stop]:
+        raise SystemExit('MCData Fixup still exposes Section selector: '+signature)
+if 'section=owner->section;' not in data_stage:
+    raise SystemExit('MCData Fixup Section is not derived from active Fragment')
+# Neither staged Fixup nor anchor may cache an independently mutable
+# Section/subsection/position; Common derives them from the commit owner.
+start=h.index('typedef struct MiniAsEncodeFixupRequest {')
+end=h.index('} MiniAsEncodeFixupRequest;',start)
+if 'int section;' in h[start:end]:
+    raise SystemExit('staged Fixup retains a redundant Section')
+start=h.index('typedef struct MiniAsEncodeAnchorRequest {')
+end=h.index('} MiniAsEncodeAnchorRequest;',start)
+if any(field in h[start:end] for field in ('int section;',
+                                           'uint32_t subsection;',
+                                           'uint64_t offset;')):
+    raise SystemExit('staged anchor retains redundant Fragment position')
+if 'minias_record_fixup(as, owner->section,' not in s:
+    raise SystemExit('Fixup commit is not bound to active Fragment Section')
 # A Target cannot choose another Section or Fragment during Fixup staging:
 # its output capability is bound to the active EncodeResult owner.
 if 'section=owner->section;' not in mc:
