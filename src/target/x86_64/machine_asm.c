@@ -6295,13 +6295,15 @@ bool minic_x86_64_emit_structured_asm(
             info->template_text, info->template_length))
         return emit_linux_lowlevel_scalar(
             out, program, target, fn, frame, ins, info);
-    if (minic_x86_64_linux_boot_flags_form(
-            info->template_text, info->template_length) &&
-        !(minic_x86_64_linux_boot_flags_form(
-              info->template_text, info->template_length) == 3U &&
-          ins->value.structured_inline_asm.operand_count == 8U))
-        return emit_linux_boot_flags(
-            out, program, target, fn, frame, ins, info);
+    {
+        const unsigned int boot_flags_form = minic_x86_64_linux_boot_flags_form(
+            info->template_text, info->template_length);
+        if (boot_flags_form != 0U &&
+            !(boot_flags_form == 3U &&
+              ins->value.structured_inline_asm.operand_count == 8U))
+            return emit_linux_boot_flags(
+                out, program, target, fn, frame, ins, info);
+    }
     if (minic_x86_64_linux_delay_mul_form(
             info->template_text, info->template_length))
         return emit_linux_delay_mul(out, fn, frame, ins, info);
@@ -6349,19 +6351,16 @@ bool minic_x86_64_emit_structured_asm(
         return info->is_volatile &&
                emit_memory_clobber_matched(
                    out, program, target, fn, frame, ins, info);
-    if ((ins->value.structured_inline_asm.operand_count == 2U ||
-         ins->value.structured_inline_asm.operand_count == 3U) &&
-        (minic_x86_64_asm_bit_scan_form(
-             info->template_text, info->template_length) ==
-             MINIC_X86_BIT_SCAN_BSF32_TIED ||
-         minic_x86_64_asm_bit_scan_form(
-             info->template_text, info->template_length) ==
-             MINIC_X86_BIT_SCAN_BSR32_TIED ||
-         minic_x86_64_asm_bit_scan_form(
-             info->template_text, info->template_length) ==
-             MINIC_X86_BIT_SCAN_BSR64_READWRITE))
-        return emit_linux_tied_bit_scan(
-            out, program, target, fn, frame, ins, info);
+    if (ins->value.structured_inline_asm.operand_count == 2U ||
+        ins->value.structured_inline_asm.operand_count == 3U) {
+        const MinicX86BitScanForm bit_scan_form = minic_x86_64_asm_bit_scan_form(
+            info->template_text, info->template_length);
+        if (bit_scan_form == MINIC_X86_BIT_SCAN_BSF32_TIED ||
+            bit_scan_form == MINIC_X86_BIT_SCAN_BSR32_TIED ||
+            bit_scan_form == MINIC_X86_BIT_SCAN_BSR64_READWRITE)
+            return emit_linux_tied_bit_scan(
+                out, program, target, fn, frame, ins, info);
+    }
     if (ins->value.structured_inline_asm.operand_count == 2U &&
         info->register_clobber_count == 0U) {
         if (minic_x86_64_asm_percpu_stable_template(

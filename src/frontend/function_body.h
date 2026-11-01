@@ -18,7 +18,6 @@ bool minic_c0_function_body_view(const MinicC0Program *program,
                                  MinicFunctionBodyView *view);
 const MinicFunction *minic_c0_function_body_function(const MinicFunctionBodyView *view);
 MinicBlockId minic_c0_function_body_root_block(const MinicFunctionBodyView *view);
-bool minic_c0_function_body_owns_local(const MinicFunctionBodyView *view, MinicLocalId local_id);
 
 /* Perf-only helper used by the Linux specialization audit.  Owners are
  * source-function ids; MINIC_FUNCTION_INVALID means unknown/orphan and

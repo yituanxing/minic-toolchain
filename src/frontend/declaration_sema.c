@@ -6,7 +6,7 @@
 #include <stdint.h>
 #include <string.h>
 
-bool minic_declaration_array_suffix_valid(const MinicDeclarationArraySuffix *suffix) {
+static bool minic_declaration_array_suffix_valid(const MinicDeclarationArraySuffix *suffix) {
     unsigned int valid_zero_length_bits;
 
     if (suffix == NULL || suffix->dimension_count > MINIC_DECLARATION_MAX_ARRAY_DIMENSIONS) {
@@ -204,7 +204,7 @@ bool minic_declaration_merge_external_array_composite_type(MinicC0Program *progr
            existing_array->element_count == declared_count;
 }
 
-bool minic_declaration_external_object_attributes_valid(
+static bool minic_declaration_external_object_attributes_valid(
     const MinicDeclarationExternalObjectAttributes *attributes) {
     size_t alignment;
 

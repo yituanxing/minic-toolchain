@@ -17,6 +17,7 @@
 | 一个函数谁调用、借用、修改、释放 | [函数契约台账](minic-function-contract-register.md) | 指向原条目及仍未深读之处 |
 | 完整扫描了哪些文件，还剩哪些盲区 | [第八轮 341 输入文件覆盖清单](minic-source-coverage-f8-2026-10-31.md) | 以 `3d504e7` 冻结文件基线，逐文件追踪 F1/R2/E；现行源码删去旧 `.c` 后另计 |
 | 有哪些 Bug、调查项、架构债、已排除误判 | [MC 问题台账](minic-issue-register.md) | 只组织主题和工作依赖，**不复制状态** |
+| 先纯清理再重构：本批删了什么、没删什么、证据缺口 | [MiniC 纯清理流水账](minic-cleanup-ledger.md) | 按 commit 记录真实删改、KEEP、测试与未验证，不另建 Bug 状态 |
 | 某个旧重构批次当时做了什么 | [历史审查与 RFC](#6-历史资料与专题索引) | 标出它是快照、方案还是现行契约 |
 
 `minic-issue-register.md` 已维护 `MC-001`～`MC-087` **87 个永久编号**：
@@ -166,10 +167,10 @@ ASM-only、Source-only 证据一律不互相冒充。
 | --- | --- | --- |
 | **A11-01 Frontend relocation 旧接口** | `ast_global.c:1359–1527` 八个多形式 relocation/extern wrapper 在 `src/` 无生产 caller；真实 parser 用 `:1329,:1342,:1452`，都下沉到 `:1204` 的统一验证 | `SOURCE`；可按闭包撤约 137 行 C＋头声明，但 `tools/dev/pr75*`、历史 `materialize-*` 字符串模板仍引用这些名字，先标历史脚本退役/迁改，不删三个现役入口 |
 | **A11-02 AST parameter-count 伪死接口** | `ast.c:1077` 无生产调用，**现行** `tools/ci/apply-perf-function-parameter-exact-allocation-v1.py:90,112` 当字符串替换锚点，workflow `linux-runtime-optin-perf-suite-v1.yml` 实际调用 | `SOURCE / KEEP`；不是零消费者，先修改 CI 源码补丁依赖，关联 MC-021 |
-| **A11-03 Frontend Body 零 caller** | `function_body.c:73:function_body_owns_local` 的内部 wrapper 无 `src/tests/tools` caller，Body view/ownership validator 仍活 | `SOURCE / CLEANUP`；删除单个函数和声明，不搬空 FunctionBody 模块 |
+| **A11-03 Frontend Body 零 caller** | `function_body.c:73:function_body_owns_local` 的内部 wrapper 无 `src/tests/tools` caller，Body view/ownership validator 仍活 | **C1 已删除函数和声明**，保留活 Body view/validator；见[清理账](minic-cleanup-ledger.md) |
 | **A11-04 AST traversal API** | `ast_traversal.c:195:visit_external_expression_id_refs` 无调用，但底层 `visit_external_expression_id_refs_unchecked` 被 `:221–240` remap 消费，且专题文档公开声明该 API | `SOURCE / CONTRACT`；决定公开 API 兼容政策后只退上层 wrapper，保留双阶段校验/提交 |
 | **A11-05 Semantic snapshot 三 wrapper** | `semantic_snapshot.h:68,116,154` 无生产调用，却由 `tests/frontend/semantic_snapshot_test.c` 使用；真实生产用 `rollback_probe_expression_types` | `SOURCE / TEST`；先迁白盒测试、维护 MC-009 的 owned CALL rollback 约束，勿删生产回滚 |
-| **A11-06 Header 暴露过宽** | `declaration_sema.c:9,207` 的两种 `*_valid`、`ast_global.c:1042` 的 relocation target type 仅本 `.c` 使用；Parser tag/enum/zero-pointer helper 亦有类似情况 | `SOURCE / CLEANUP`；可收窄静态可见性，enum 名称被 CI text-patch 引用则先迁 CI；内部算法不死 |
+| **A11-06 Header 暴露过宽** | `declaration_sema.c:9,207` 的两种 `*_valid`、`ast_global.c:1042` 的 relocation target type 仅本 `.c` 使用；Parser tag/enum/zero-pointer helper 亦有类似情况 | **C1 已收窄 declaration 两接口**；其他项仍需核对 CI text-patch；见[清理账](minic-cleanup-ledger.md) |
 | **A11-07 Parser 修饰词判定重叠** | `parser_function.c:912–1099` 的声明前/类型后两套 storage/TLS/inline 属性验证由同一声明入口串接 | `SOURCE / DESIGN`；共享 qualifier policy，保留不同上下文合法位置和错误诊断 |
 | **A11-08 Parser 三套 name-index** | `parser_core.c:736–803`、`parser_global_lookup.c:68–140`、`parser_enum.c:130–204` 独立写开放寻址 grow/rebuild/probe | `SOURCE / DESIGN`；共享容量/探针设施前要保存最早声明、scope shadow、enum 顺序和 OOM fallback 的不同语义 |
 | **A11-09 String scanner 五入口** | `parser_string.c:274,322,463,587,679` 反复用 Lexer 副本探测 literal 长度再解析 | `SOURCE / DESIGN`；可抽合法编码/长度扫描；静态对象、GNU ASM 字符串、覆零、运行时 commit 不同，正常 lexical lookahead 不是 UAF |
@@ -185,7 +186,7 @@ ASM-only、Source-only 证据一律不互相冒充。
 
 | A11 索引 / 归属 | 生产者 → 现役消费者 / 被证实的重复或死路 | 证据与清理先决条件 |
 | --- | --- | --- |
-| **A11-19 Core 不可达常量事实分支** | `core_lower_const_facts.c:1736–1837` 的 `MINIC_EXPRESSION_STATEMENT` 首分支所有路径 return，`:2032–2085` 再处理同 kind 约 54 行永远无法执行；同函数约 56 处真实调用 | `SOURCE / DEAD`；只删除后 54 行，先补 GNU statement expression 有/无结果、跳转、副作用测试；不能删前段算法 |
+| **A11-19 Core 不可达常量事实分支** | `core_lower_const_facts.c:1736–1837` 的 `MINIC_EXPRESSION_STATEMENT` 首分支所有路径 return，原 `:2032–2085` 再处理同 kind 54 行永远无法执行；同函数约 56 处真实调用 | **C1 已删后段 54 行**；前段算法保留，定向 GNU probe PASS，跨架构仍有限制；见[清理账](minic-cleanup-ledger.md) |
 | **A11-20 Core subtree 重建索引** | `core_lower.c:942–966` 每次为 TU 所有 statement/block 分配清空位图，`:982–1016` 再线性地址反查；IF 和外部跳转多次调用 | `SOURCE / PERF`；构造函数级稳定 owner 索引，保留 external jump、case 和 label-address 安全证明；无 perf 量测 |
 | **A11-21 Core transport 同义谓词** | `core_lower_types.c:7–15` 的 memory scalar 和 `core_ir.c:584–590` 的 CALL scalar 分类完全一致 | `SOURCE / CLEANUP`；可用一个 checked scalar predicate；邻近的 global addressable type 对 `void` extern 不同，**不可**顺带合并 |
 | **A11-22 Core 五套 ID intern** | `core_ir.c:380–408,501–583,633–693,766–776` 分别对 fixed binding、global、function symbol、callee、signature 线性逐项去重 | `SOURCE / PERF`；可共享 hash/index 容量管理，保留各表不同的名字/类型/ABI 相等性和稳定 Core ID；最坏二次方未做基准 |
@@ -206,7 +207,7 @@ ASM-only、Source-only 证据一律不互相冒充。
 | **A11-37 RV PIC Symbol 再扫 TU** | `riscv64/core_codegen.c:249–282` 每个地址调用 TargetInfo 名字线性查询；hidden undefined weak 与 nonpreemptible 是独立事实 | `SOURCE / PERF`；用 TU 级 ELF symbol 索引，RV64 hidden weak 仍缺 GNU RV LD/运行 oracle，不能把 x86 MC-086 结果跨 ISA 代替 |
 | **A11-38 x86 Record shape/bytes 四路重复** | `machine_emit.c:837–916` LOAD/COPY 再校验+逐字节搬运，`machine_emit.c:637–651` 入参、`machine_call.c:75–90` 出参各另写拷贝 | `SOURCE + MC-084`；复用 Common typed extent 前先核对其 16MiB cap 与 x86 无 cap 之差，之后用 ISA-local bytes copier/large counted loop，保护 `volatile`、aliased/misaligned |
 | **A11-39 x86 88 legacy ASM 仍活** | `asm_contract.c:8709–8829` 109 Source 表项=21 typed/88 legacy；`machine_asm.c:5635–6447` typed 分发后还把旧族按文本重匹配 | `SOURCE / MIGRATION`；优先 `IP_HERE`（现成 native 地址正反例）和 `LAR_SELECTOR`（native/非法 opcode 正反例）；逐族迁 typed ID+variant，保留 qualifier、防伪、异常表 side effects，关联 A8-10 |
-| **A11-40 x86 重复 legacy matcher** | `machine_asm.c:6285–6289` boot_flags 同一候选 matcher 调两遍，`:6341–6350` bit_scan 最多三遍 | `SOURCE / SMALL-CLEANUP`；局部缓存分类结果，保证 match precedence 不变，避免误删仍有效的匹配分支 |
+| **A11-40 x86 重复 legacy matcher** | `machine_asm.c:6285–6289` boot_flags 同一候选 matcher 调两遍，`:6341–6350` bit_scan 最多三遍 | **C1 已缓存分类结果**，保持 match precedence；专属正反例 PASS；见[清理账](minic-cleanup-ledger.md) |
 | **A11-41 x86 Frame/Call fallback** | `call_plan.c` 已对 production CALL 建 plan，但 `machine_call.c` 仍含 standalone 重算；`frame.c:151–180` 无 FrameFacts 时重扫全部 Core `va_start` | `SOURCE / TEST-CONSUMER`；不是生产每次重复；迁移 standalone Machine/Frame 测试后才删 fallback |
 | **A11-42 x86 TF libcalls 假普通 CALL** | `machine_call.c:293–551` 对 `__addtf3` 等 callee 名字重新辨识扩展浮点操作并发 x87 | `SOURCE / IR-BOUNDARY`；Core 的扩展精度 operation 要带 typed semantics，保持 GNU long-double 有符号零/精度 MC-041/051 正反例 |
 | **A11-43 Common LP64 入参二次分类** | `direct_function_profile.c:38–49` 先分 scalar/Record，`direct_call_plan.c:33–87,211–226` 再分类，A64/Loong `call_emit.c` 在已知 PreparedCall 后仍判 object 类别 | `SOURCE / DESIGN`；把 checked shape 与归类写入 plan，再迁 caller；保留 A64 HFA/Loong ABI 类别差异与 error path |

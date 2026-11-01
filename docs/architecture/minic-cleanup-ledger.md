@@ -1,0 +1,67 @@
+# MiniC 纯清理流水账：先通读、补合同，再重构
+
+> 持续维护；以 [架构入口](README.md)、[函数契约](minic-function-contract-register.md) 和
+> [MC 问题台账](minic-issue-register.md) 为事实来源，不复制 Bug 的永久编号与状态。
+> **清理**仅允许：删有调用链证明的死路、收窄私有接口、去同一操作的局部重复计算、
+> 修正文档漂移。不得在本阶段移动目录、拆出新层、统一不同 ABI、改 IR 合同，
+> 或把 Bug 修复混入“净删行数”。
+
+## 工作边界与统计口径
+
+- 2026-11-01 起始源码基线：`refactor/minic-target-language-boundary` / `6934c9e`。
+  当前 `src/` 共 **336 个生产 C/H**：Frontend 69、Compiler 11、Core 48、Target 208，
+  另有两个 CLI。前序 F8 的 337 个是冻结的旧输入集合，不能拿来当本轮分母。
+- 第十一轮 `A11-01～50` 是**有优先级的线索池，不是 50 个已可删除项目**。
+  `minic-function-contract-register.md` 的 212 项是历史函数/函数组审读记录；
+  它们并不自动证明当前 HEAD 的源码已经重新逐函数深读。
+- 旧审查 manifest 的源指纹检查报告 `inventory=211, drift=141`；这是**待复核的
+  历史证据漂移信号**，不等于 141 个缺陷，也不意味着先前 211 项全失效。
+  今后复审应按当前 HEAD 重核 producer、consumer、测试与接口合同，区分
+  `已扫路径`、`已追调用链`、`已实际清理`、`已动态验证`，不得将其中一个冒充另一个。
+- 这轮不是 MiniAS/MiniLD 联合验收，完整 Linux 多架构矩阵延后；`-S`、GNU GAS/LD、
+  原生运行、目标 QEMU、源码静态推导分别标明，不以单一探针声称 P2 全过。
+
+## 批次 C1：高确定性的局部死路与重复计算
+
+**源码基线：** `6934c9e`；**范围：** 四个 `A11` 接缝，6 个生产 C/H 文件。
+源码变更 **+21 / -90 行，净 -69 行**；文档单独统计。每项均事先核对现役消费者，
+仅退役最小可证明路径。
+
+| 接缝 | 本批实际动作 | 保留的活路径 / 证据限制 |
+| --- | --- | --- |
+| `A11-03` FunctionBody ownership | 删零调用的 `minic_c0_function_body_owns_local` 和头声明（共 9 行） | 保留 Body view、root block、整体 ownership validator、遍历和发射策略；没有将 Body 模块整体判死。 |
+| `A11-06` declaration Sema | 两个只在 `.c` 内调用的 `*_valid` 改成 `static`，删头文件暴露（4 行声明） | 实际数组 suffix 与外部对象属性校验仍运行；没有改变其合法输入集合。 |
+| `A11-19` Core local constant facts | 删除重复的后置 GNU statement-expression 分支 54 行 | 同函数较早的 `MINIC_EXPRESSION_STATEMENT` 路径所有分支最终 `return`，因此后段不可达；保留前段完整表达式/副作用/局部事实算法。 |
+| `A11-40` x86 Linux ASM legacy dispatch | 各缓存一次 `boot_flags_form`、`bit_scan_form` 分类结果 | dispatch 的顺序、8 操作数特例、volatile/operand 资格和实际 emitter 不变；两个 matcher 仍是现役入口。 |
+
+### C1 验证与未覆盖
+
+| 类别 | 结果 | 精确边界 |
+| --- | --- | --- |
+| 全量 `-Werror` MiniC Release 构建 | **PASS** | `make MODE=release CFLAGS=-Werror BUILD_DIR=build/cleanup-werror -j7 build/cleanup-werror/bin/minic-cc`；含 MiniC Driver 构建。 |
+| x86 boot flags 与 tied bit scan | **PASS** | `probe-x86-linux-boot-flags-native.sh`；`probe-x86-linux-tied-bit-scan.sh`（3 族 / 33 用例及负例）。 |
+| Core GNU statement-expr 局部事实 | **PASS** | `probe-core-inline-statement-constant-guard.sh`：五目标 GNU `-O2` 编译、GNU AS/LD、两例 x86 native 运行与负例。 |
+| Frontend 静态合同 | **PASS** | `make ... check-type check-ast-contract check-expression-statements`。 |
+| GNU statement-expression 通用脚本 | **基线脚本断言未通过，不计回归** | `run-gnu-statement-expression.sh` 要求输出 `.Lwhile_condition_` 标签；基线编译器与 C1 的同输入 `.s` 字节一致，均无该标签。该脚本的断言需单独审理。 |
+| RISC-V statement-expression 运行测试 | **NOT_TESTED（环境）** | `run-core-statement-expression.sh` 所需 `riscv64-linux-gnu-gcc` 交叉 libc 头 `bits/libc-header-start.h` 缺失；不能将其记为产品 FAIL 或 PASS。 |
+| 完整五架构 Linux / 联合验收 | **NOT_RUN（按计划推迟）** | C1 无全目标 ELF/QEMU、Linux 大程序集成闭环。 |
+
+## 暂不清理：已核实有外部消费者或语义不等价
+
+| 接缝 | 暂留原因 | 下一步证明 |
+| --- | --- | --- |
+| `A11-01` `ast_global` 八个旧 wrapper | `src/` 仅靠零调用判断为死路不够；历史 Python materialize/PR 脚本仍通过函数名作文本锚点，且头文件对外声明。 | 先清算脚本是否现行、头文件 API 合同，再退役；不能把脚本弄坏而称“纯删”。 |
+| `A11-02` AST 参数计数 | Linux perf CI 的源码补丁脚本仍以其文本为锚点。 | 先迁当前 CI 的字符串匹配，验证精确补丁。 |
+| `A11-04` AST external traversal | 上层函数虽零内部调用，但底层递归与 remap 现役，可能存在公开 API 合同。 | 明确 ABI / 外部消费者后才删最上层 wrapper。 |
+| `A11-05` semantic snapshot wrappers | 生产无调用但白盒单测使用。 | 若要合并，先迁测试且保存回滚/ownership 断言。 |
+| `A11-21` Core scalar predicate | 两个同形判断的持有者分别属于 memory 和 CALL；合并收益极小，邻近的 global-addressable predicate 对 `void` 的语义不同。 | 等输入合同证明和实际简化收益，不为了“统一”引入层级。 |
+| `A11-28/30/32/38/39/47` 目标后端 | RV ELF 分类需要目标 GNU AS/ELF，RV64 destructor 有独立单测，x86 Record cap 与 Common 不同，legacy ASM 与 Loong SIMD 有机端二次防伪消费者。 | 逐族 Oracle / ABI 证明、先迁消费者再删旧实现；不跨 ISA 机械去重。 |
+
+## 后续批次进度规则
+
+每批发布：当前 HEAD、源文件逐目录覆盖（明确深读与只扫的区别）、
+候选数与 `KEEP/NEEDS_PROOF/DELETED` 判定、删改行数、验证矩阵、未解决的耦合，
+以及 Git commit。一个批次累计多项再提交；不为单个 helper 刷大量小提交。
+
+遇到真实错编、合法程序拒编或跨 ISA 约束冲突，进入唯一 MC 台账，
+由独立 Bug 修复批次处理；清理账只记录依赖，不把 Bug 修复计入 C1 净减行数。

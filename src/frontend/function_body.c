@@ -70,14 +70,6 @@ MinicBlockId minic_c0_function_body_root_block(const MinicFunctionBodyView *view
     return function != NULL && function->is_defined ? function->body_block : MINIC_BLOCK_INVALID;
 }
 
-bool minic_c0_function_body_owns_local(const MinicFunctionBodyView *view, MinicLocalId local_id) {
-    const MinicFunction *function;
-
-    function = minic_c0_function_body_function(view);
-    return function != NULL && function->is_defined && local_id >= function->local_begin &&
-           local_id - function->local_begin < function->local_count;
-}
-
 static bool visit_read_expression_id(MinicExpressionId *expression_id, void *opaque_context) {
     MinicExpressionIdReadContext *context;
 
