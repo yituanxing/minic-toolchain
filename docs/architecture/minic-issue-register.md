@@ -61,7 +61,7 @@
 | [MC-036](#mc-036-record-条件表达式的-local-facts-分支合流缺口) | P1 | OPEN | GNU-NATIVE-DIFF | Core | 结构体条件式缺 fact fork/meet，实测 `f(1)` 返回值错 10 |
 | [MC-037](#mc-037-loong-特殊-asm-源端与机器端限定符不一致) | P2 | OPEN | LOCAL-COMPILE-DIFF | LoongArch64 | 合法 volatile cpucfg 输出仅因限定符在机器层拒绝 |
 | [MC-038](#mc-038-匿名字段设计符后的位置初始化游标错误) | P1 | OPEN | LOCAL-COMPILE-DIFF | Frontend | 匿名字段 `.b=2,3` GCC 接受、MiniC 错报过多位置初始化 |
-| [MC-039](#mc-039-运行时嵌套数组递归跨-array-type-扩容借用) | P0 | OPEN | ASAN | Frontend | 合法嵌套数组 `sizeof` 扩 ArrayType 时读失效借用指针 |
+| [MC-039](#mc-039-运行时嵌套数组递归跨-array-type-扩容借用) | P0 | FIXED-UNVERIFIED | ASAN | Frontend | ArrayType 元数据按值快照；五目标容量相位 ASan 与 x86 GNU native 对照通过，完整目标验收待做 |
 | [MC-041](#mc-041-long-double-字面量提前按-binary64-舍入) | P0 | OPEN | GNU-NATIVE-DIFF | Frontend/Target | `1.0000000000000001L` 提前按 double 舍入；x86 执行得到错误比较结果 |
 | [MC-042](#mc-042-packed-零宽位域丢失对齐栅栏) | P1 | OPEN | GNU-NATIVE-DIFF | DataLayout | packed Record 的 `int:0` 不再强制下一个字段对齐，`offsetof`/`sizeof` 错误 |
 | [MC-043](#mc-043-inline-整数特化预算耗尽直接拒绝合法-c) | P1 | OPEN | LOCAL-COMPILE-DIFF | Compiler | 2048 个 clone 预算由优化上限变成对合法 C 的硬编译失败 |
@@ -74,7 +74,7 @@
 | [MC-051](#mc-051-long-double-一元取负丢失有符号零) | P1 | OPEN | GNU-NATIVE-DIFF | Core | `-0L` 经 `0L - x` 实现，`-(+0L)` 错误变为正零 |
 | [MC-052](#mc-052-aarch64-uaccess-窄输出按八字节写回) | P1 | OPEN | ASM-ONLY | AArch64 | LDTRB/H/W 将1/2/4B输出统一按8B `str x` 写回，越界风险 |
 | [MC-053](#mc-053-rv64i-lp64-软浮点只覆盖四则) | P2 | OPEN | LOCAL-COMPILE-DIFF | RV64 | LP64 已实现软四则，但比较、取负、转换的 10 个合法函数均无法 `-S` |
-| [MC-056](#mc-056-运行时-record-顺序初始化器跨扩容借用) | P0 | OPEN | ASAN | Frontend | 普通 Record 位置初始化 `sizeof(struct {...})` 扩容后使用失效 Record* |
+| [MC-056](#mc-056-运行时-record-顺序初始化器跨扩容借用) | P0 | FIXED-UNVERIFIED | ASAN | Frontend | RecordId 重新获取、字段按值快照；五目标容量相位 ASan 与 x86 GNU native 对照通过，完整目标验收待做 |
 | [MC-057](#mc-057-gnu-空-record-返回及实参-abi-缺口) | P2 | OPEN | LOCAL-COMPILE-DIFF | RV32/RV64/x86 | 零字节 Record ABI 合法；目标 terminator/call 路径显式拒绝不同子集 |
 | [MC-058](#mc-058-符号指针加常量偏移的传递特化丢失) | P1 | OPEN | LOCAL-COMPILE-DIFF | Compiler | 唯一 caller 的 static pointer+offset 经 inline wrapper 后无法解析 GNU ASM `i` |
 | [MC-059](#mc-059-rv64-lp64d-含浮点成员-union-被误当-fp-aggregate) | P2 | OPEN | LOCAL-COMPILE-DIFF | RV64 ABI | LP64D union 中浮点字段不能触发 FP flatten；具名参数/返回四种 GNU 用例错拒 |
@@ -355,7 +355,7 @@
 
 ### MC-039 运行时嵌套数组递归跨 ArrayType 扩容借用
 
-- **状态：** `OPEN`，P0，`ASAN`；已由合法 GNU C 的真实 Parser 路径和精准容量边界测得 UAF。
+- **状态：** `FIXED-UNVERIFIED`，P0，`ASAN`；原版已由合法 GNU C 的真实 Parser 路径和精准容量边界测得 UAF。修复后的聚焦回归通过，未完成全目标运行时验收。
 - **位置：** `src/frontend/parser_runtime_initializer.c:647–742:parse_fixed_runtime_nested_array_initializer` 在 `:668–674` 保存 `const MinicArrayType *nested_array` 指向 `Program.array_types[]`；循环中 `:706–707` 递归 parse 子数组，随后继续读 `nested_array->element_type/element_count`。合法嵌套初始化器表达式如 `sizeof(int[777])` 可以向 `array_types` 追加 descriptor，经 `src/frontend/ast.c:1273–1298` `minic_grow_array` 使旧地址无效。
 - **真实 ASan 反例（2026-10-30，基线 `4f516707d`）：** 以下是精确输入，共 14 个前置不同 ArrayType 类型。GNU `cc -std=gnu11 -fsyntax-only -x c` 接受：
 
@@ -374,7 +374,8 @@
   ```
 
   `ASAN_OPTIONS=detect_leaks=0:halt_on_error=1 build/sanitize/bin/minic-cc --target=x86_64-linux -S /tmp/minic-nested-array-uaf-probe/sizeofs_014.i -o ...` 命中 `heap-use-after-free`、`READ size 72`，读取为 `parser_runtime_initializer.c:697:nested_array->element_type`；先前 `sizeof(int[777])` 经 `parser_type.c:890` → `declaration_sema.c:54` → `ast.c:1304` 扩容 `Program.array_types`，由 `minic_grow_array:20` 释放旧 arena。其他前置容量样本 PASS 并不能抵消该反例。
-- **后续：** 全五目标 ASan、二层/多层嵌套和包含多种子元素类型的扩容矩阵；递归前按值缓存 ArrayType 描述符或必要的 `element_type`/`element_count`，保持稳定 ArrayTypeId 语义，本轮尚未修复。
+- **修复与新证据（基于 `ede361e`）：** `parse_fixed_runtime_nested_array_initializer` 仅在安全取址后复制 `MinicArrayType` 纯值描述符，整个递归过程不再跨 `Program.array_types` 扩容持有 pointer；同文件 zero-element 分支也在建立 lvalue 前保存 `element_count`。持久回归 `tests/compiler/c0/runtime_nested_array_arena_growth.c` 与 `probe-runtime-nested-array-arena-growth.sh` 按前置不同数组类型数 13/14/15/16 相位执行，`MODE=sanitize CFLAGS=-Werror` 下五目标 `-S` **20/20 PASS**，同一 GNU-preprocessed 输入的 GNU native 与 MiniC x86 GNU AS/LD native 均 **4/4 exit 0**。修复前当前基线在 14 相位 x86 ASan 读已释放 ArrayType header（`READ size 88`），修复后未再复现。
+- **保留门槛：** 全目标 GNU ELF/QEMU 运行、更多深度/字符子数组的递归组合、其它 ArrayType 借用 owner 分别验收；本修复不宣称 MC-049 的静态路径或全部 parser 借用问题已解决。
 
 ### MC-019 两套 Bool 恒零证明扫描重叠
 
@@ -538,11 +539,12 @@
 
 ### MC-056 运行时 Record 顺序初始化器跨扩容借用
 
-- **状态：** `OPEN`，P0，`ASAN`，已在**五目标**合法 GNU C 上按容量相位重现 `heap-use-after-free`；当前证明的是内存安全问题，非已证运行值错编。
+- **状态：** `FIXED-UNVERIFIED`，P0，`ASAN`；原版在**五目标**合法 GNU C 上按容量相位重现 `heap-use-after-free`。本修复已通过聚焦 ASan 与原生对照，尚未全目标运行验收。
 - **位置/链路：** `src/frontend/parser_runtime_initializer.c:1362–1496:parse_positional_runtime_record_initializer_from` 开头借 `program->records[id]` 的 `MinicRecord *record`，解析首字段 `sizeof(struct { int z; })` 在 `:1432` 经 `add_anonymous_record`→`minic_grow_array` 扩容 Record arena，下一字段循环 `:1398 minic_c0_record_field(record,field_index)` 读取旧 header（`ast.c:2194` ASan READ8）。
 - **持久反例与容量矩阵：** `tests/compiler/audit/mc056_runtime_record_positional_uaf.c` 具有 `R1..R15` 前置 Record 和普通 `struct Pair pair={sizeof(struct{int z;}),3}`。GCC GNU11 syntax PASS；三种前置数量 14/15/16 的五目标 sanitize `-S`：x86/AArch64 为 **UAF/PASS/PASS**；RV32/RV64/Loong 为 **PASS/UAF/PASS**。相位依赖 `records` capacity，非命中 PASS 不代表安全。默认 15 数量下 GCC native 与 MiniC x86 native 都退出 7，尚未独立观察到输出值差异。
 - **不同于 MC-023：** 本项是**运行时局部自动对象、普通顺序字段初始化**，不依赖 static backward zero overwrite、重复 designator 或 GNU diagnostic。两处根因可归为借用指针跨递归扩容，必须在修复批次一起检查，但应分别保留回归。
-- **验收：** 从 RecordId 跨 parse 重取、或在证明字段数组生命周期后以值型 header snapshot；全量检查同类 runtime record parser 的字段步进/递归/错误出口；五目标 14/15/16 + 额外扩容周期 ASan、GNU native/ELF/QEMU 再决定关闭。
+- **修复与新证据（基于 `ede361e`）：** `parse_positional_runtime_record_initializer_from` 保留稳定 `RecordId`，**每个字段迭代**重新获取 `MinicRecord`，并在递归解析前复制本字段 `MinicRecordField` 元数据；无更改 union/field_limit/rollback 语义。持久回归 `tests/compiler/c0/probe-runtime-record-positional-arena-growth.sh` 使用原 `tests/compiler/audit/mc056_runtime_record_positional_uaf.c`，前置 Record 14/15/16 相位，`MODE=sanitize CFLAGS=-Werror` 下五目标 `-S` **15/15 PASS**；同一 GNU-preprocessed 输入 GNU native 与 MiniC x86 GNU AS/LD native 各相位均 **exit 7**。当前基线修复前在 RV64 15 相位 ASan `READ size 8` 已复现；修复后未再复现。
+- **保留门槛：** 更多扩容周期、runtime record 设计符续接/异常出口、GNU RV32/RV64/A64/Loong ELF/QEMU 执行及其它 Record 借用 owner 独立审阅；本修复不视为 MC-023 或 MC-061 已解决。
 
 ### MC-057 GNU 空 Record 返回及实参 ABI 缺口
 
