@@ -255,6 +255,19 @@ Fixup ordering, NameId/SymbolID timing, diagnostics and ELF behavior
 are unchanged by this ownership move. Exact-head A0, ISA/ABI and GNU
 Fixup/relocation checks remain mandatory.
 
+### 2026-11-01 fix structural atomic-transaction test for P04 ownership move
+
+The older `probe-mc-fragment-transaction.sh` hardcoded the location
+of `minias_stage_common_fixup` in `assembler.c`; that implementation
+was deliberately deleted in the P04 cleanup. A0 and GNU byte tests
+passed, but this static ownership probe failed on the old source layout.
+Update it to check the stronger new invariants instead of skipping it:
+the raw EncodeResult append must be `static` and absent from the header,
+the old Common MCData request staging must be absent, and the moved
+MCData and Target producers must both use one private vector append.
+The existing atomic output size/commit guards are preserved. No
+production behavior or verification gates were weakened.
+
 ## Current refactor dashboard — 2026-11-01 (exact-head recovery and live-path audit)
 
 ### 2026-11-01 Source collector single-pass de-duplication (local batch)

@@ -7,10 +7,11 @@ src=assembler/src/assembler.c
 ! grep -q 'capture_instruction_bytes' "$src"
 grep -q 'minias_stage_fragment_bytes' "$src"
 grep -q 'minias_stage_fragment_pattern' "$src"
-python3 - "$src" assembler/src/mc_encode_result.c <<'PY'
+python3 - "$src" assembler/src/mc_encode_result.c assembler/src/minias_internal.h <<'PY'
 import sys
 s=open(sys.argv[1],encoding='utf-8').read()
 mc=open(sys.argv[2],encoding='utf-8').read()
+h=open(sys.argv[3],encoding='utf-8').read()
 start=s.index('bool minias_emit_instruction_bytes(')
 end=s.index('bool minias_section_append(',start)
 body=s[start:end]
@@ -59,21 +60,30 @@ if 'as->active_encode_result->byte_count!=stmt->size' not in body:
     raise SystemExit('missing final encoded fragment size check')
 if 'if(!minias_commit_encode_result(as,stmt))' not in body:
     raise SystemExit('MCFragment does not require successful Common commit')
-# Fixed MCData, instruction SymbolRef and absolute-zero relocation markers
-# share the same EncodeResult append owner. Their semantic validity checks
-# deliberately remain different, so this guards ownership, not ISA syntax.
-start=mc.index('bool minias_encode_result_stage_fixup(')
-end=mc.index('static bool stage_instruction_fixup(',start)
+# All MCData and Target Fixups use one private EncodeResult vector owner.
+# The old Common-side request staging and raw exposed append are gone.
+if 'minias_encode_result_stage_fixup' in h:
+    raise SystemExit('raw EncodeResult append exposed in internal header')
+if 'minias_stage_common_fixup' in s:
+    raise SystemExit('legacy Common MCData request staging still present')
+if 'bool minias_add_fixup(' in s or 'bool minias_add_fixup_symbol_id(' in s:
+    raise SystemExit('Common still duplicates semantic MCData staging APIs')
+start=mc.index('static bool minias_encode_result_stage_fixup(')
+end=mc.index('bool minias_fixup_field_width(',start)
 staging=mc[start:end]
 if 'minias_grow_array((void **)&result->fixups' not in staging:
-    raise SystemExit('missing single EncodeResult fixup vector owner')
-start=s.index('static bool minias_stage_common_fixup(')
-end=s.index('bool minias_add_fixup(',start)
-data_stage=s[start:end]
+    raise SystemExit('private EncodeResult Fixup staging owner missing')
+if 'result->fixups[result->fixup_count++]' not in staging:
+    raise SystemExit('ordered Fixup vector append owner missing')
+start=mc.index('static bool minias_stage_common_fixup(')
+end=mc.index('bool minias_add_fixup(',start)
+data_stage=mc[start:end]
 if 'minias_encode_result_stage_fixup(as,&request,' not in data_stage:
-    raise SystemExit('MCData bypasses common EncodeResult fixup owner')
+    raise SystemExit('MCData no longer uses private EncodeResult Fixup owner')
 if 'result->fixups[result->fixup_count++]' in data_stage:
-    raise SystemExit('MCData has a duplicate staged Fixup append')
+    raise SystemExit('MCData reimplements raw Fixup-vector append')
+if 'bool minias_add_fixup_symbol_id(' not in mc:
+    raise SystemExit('moved semantic MCData wrappers missing')
 start=mc.index('static bool stage_instruction_fixup(')
 end=mc.index('bool minias_encode_request_anchor_ref(',start)
 target_stage=mc[start:end]
