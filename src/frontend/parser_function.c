@@ -1575,7 +1575,6 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
         typed_parameter_count = function_type->parameter_count;
         typed_is_variadic = function_type->is_variadic;
         typed_calling_convention = function_type->calling_convention;
-        typed_is_variadic = function_type->is_variadic;
         for (parameter_index = 0U; parameter_index < typed_parameter_count; ++parameter_index) {
             typed_parameter_types[parameter_index] =
                 function_type->parameter_types[parameter_index];

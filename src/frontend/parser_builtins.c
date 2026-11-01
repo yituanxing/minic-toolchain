@@ -301,18 +301,6 @@ static bool parse_builtin_prefetch(MinicParser *parser, MinicExpressionId *expre
     return minic_parser_add_expression(parser, &discard_cast, expression_id);
 }
 
-static bool current_is_builtin_offsetof(const MinicParser *parser) {
-    static const char name[] = "__builtin_offsetof";
-    size_t length;
-
-    if (parser == NULL || parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
-        return false;
-    }
-    length = minic_parser_span_length(parser->current.span);
-    return length == sizeof(name) - 1U &&
-           memcmp(parser->source + parser->current.span.begin.offset, name, length) == 0;
-}
-
 typedef struct MinicOffsetofDesignatorState {
     MinicType type;
     MinicExpressionId offset_id;
@@ -583,11 +571,6 @@ static bool parse_builtin_offsetof(MinicParser *parser, MinicExpressionId *expre
 }
 
 static bool
-generic_types_compatible(const MinicC0Program *program, MinicType left, MinicType right) {
-    return minic_c0_types_compatible(program, left, right);
-}
-
-static bool
 parse_generic_selection(MinicParser *parser, MinicExpressionId *expression_id, bool decay_array) {
     MinicExpressionId controlling_id;
     const MinicExpression *controlling;
@@ -638,7 +621,7 @@ parse_generic_selection(MinicParser *parser, MinicExpressionId *expression_id, b
 
         if (is_default) {
             default_id = association_id;
-        } else if (generic_types_compatible(parser->program, controlling_type, association_type)) {
+        } else if (minic_c0_types_compatible(parser->program, controlling_type, association_type)) {
             if (saw_matching_type) {
                 minic_parser_error(parser, "multiple compatible type associations in _Generic");
                 return false;
@@ -697,7 +680,7 @@ static bool parse_builtin_types_compatible_p(MinicParser *parser,
     expression.type = minic_type_int();
     expression.value_category = MINIC_VALUE_RVALUE;
     expression.value.integer_value =
-        generic_types_compatible(parser->program, left_type, right_type) ? 1 : 0;
+        minic_c0_types_compatible(parser->program, left_type, right_type) ? 1 : 0;
     return minic_parser_expect(
                parser, MINIC_TOKEN_RPAREN, "expected ')' after __builtin_types_compatible_p") &&
            minic_parser_add_expression(parser, &expression, expression_id);
@@ -2195,8 +2178,7 @@ bool minic_parser_try_builtin_primary_late(
         *handled = true;
         return minic_parser_finish_value_expression(parser, primary_id, decay_array, expression_id);
     }
-    if (parser->current.kind == MINIC_TOKEN_IDENTIFIER &&
-        current_is_builtin_offsetof(parser)) {
+    if (minic_parser_current_identifier_lexeme_equals_cstr(parser, "__builtin_offsetof")) {
         *handled = true;
         return parse_builtin_offsetof(parser, expression_id);
     }

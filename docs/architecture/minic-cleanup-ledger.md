@@ -252,6 +252,44 @@ C7 -13、C8 -37；C2/C5 零）；任何独立 MC 缺陷修复仍不计入。
 赋值与三元表达式结合；`const int` 非法赋值在 GNU/MiniC 两侧都拒绝。
 `check-fast` 纳入此测试。未声称完成五架构 ELF/运行或 MiniAS/MiniLD 联合验收。
 
+## 批次 C9：Builtin 语法分派与顶层函数声明事务
+
+**基线：** `508622d`，2026-11-01。本批全文通读 **2 个生产 C 文件、
+原始 4,843 行**：`src/frontend/parser_builtins.c` 与
+`src/frontend/parser_function.c`。累计全文深读 **67/336**，Frontend
+**67/69**；剩余两个 Frontend 文件是 runtime/static initializer 的大型实现。
+
+| 组件与事实 | 清理决定 |
+| --- | --- |
+| `parser_builtins.c` 早/晚分派 | `va_*`、`offsetof`、`_Generic`、GNU `choose_expr`、`constant_p`、`object_size`、溢出与 target builtin 共享入口但结果类型、是否真正求值、TargetInfo 准入、Core 表达式归属完全不同；Target builtin 会增加 Program functions，`va_start` 已在递归前快照 parameter_count。**KEEP(source/target policies)**；不抽统一 builtin 表或更改成功/失败路径。 |
+| `__builtin_offsetof` 判名 | 文件私有 `current_is_builtin_offsetof` 按 token kind、lexeme 长度及字节逐一比对，与已在 `parser_core.c` 实现的 `minic_parser_current_identifier_lexeme_equals_cstr` 完全等价，只有一个站内 caller，外部脚本无该文本锚点。**DELETE(duplicate matcher)**，改直接调用共享 lexer helper。 |
+| `_Generic` / `__builtin_types_compatible_p` | 文件私有 `generic_types_compatible` 仅原样转发 `minic_c0_types_compatible`，无额外 source policy/转换/诊断；两处调用点直接使用原函数。**DELETE(pass-through)**；association 选择与 `_Generic` 控制表达式不求值的合同保留。 |
+| `parser_function.c` 声明属性与对象归属 | `parse_function` 同时决定 file-scope 对象、typed function declarator、prototype、definition、weak/alias/visibility/asm label、constructor、TLS、GNU extern inline，先 collect/defer 属性再根据 entity 定归属；alias 仅 TU 结束解析、诊断字符串先保留 span 再 Program-owned。**KEEP(transaction/metadata)**。`typed_is_variadic` 从同一 FunctionType 连续赋值两次，第二次无写入间隔。**DELETE(identical assignment)**。 |
+| `parser_function.c` 其他判名 | `function_identifier_is` 与 top-level `__extension__` 判名表面也可使用共享 helper，但 `tools/dev/pr75-gnu-function-attributes.py`、`pr77-gnu-format-cold-function-attributes.py`、`pr77-gnu-extension-prefix.py` 等含原函数/调用的字符串锚点。仍未确立这些开发脚本已退役，**NEEDS_PROOF(tooling consumer)**，暂不删；函数声明前后两个 prefix scanner 的 token 准入、属性捕获也不同。 |
+
+**C9 生产源码：** `parser_builtins.c` **+3/-21**，`parser_function.c`
+**+0/-1**，合计 **净 -19 行**；累计纯清理 **净 -192 行**。
+以上仍不包含任何独立 MC 修 Bug 的增删行。
+
+**验证 PASS：** Release 全源 `-Werror` 编译、`check-static-functions`、
+`check-global-objects`、`check-type`、`check-record`；
+`run-function-typed-declarator.sh`、`run-gnu-function-attributes.sh`、
+`run-gnu-function-copy-alias.sh`、`run-gnu-prefix-function-attributes.sh`。
+新 `check-builtin-lexeme-contract` 用现有三份 GNU C fixture 做 GNU 编译
+与 MiniC `-S`、GNU/MiniC x86_64 原生执行对照（均 exit 0）：
+`offsetof` 的硬编码断言仅适用四个 LP64 目标；`_Generic`/
+`__builtin_types_compatible_p` 和 GNU `choose_expr` 覆盖五个目标。
+测试已接入 `check-fast`。
+
+**旧测试的边界：** `run-builtin-offsetof.sh`、
+`run-gnu-compiletime-selection-builtins.sh`、`run-gnu-choose-expr-bitfield.sh`、
+`run-typeof-generic.sh` 的历史汇编文本/符号留存断言在当前优化输出下
+exit 1，不计 PASS，也不能据此宣称新清理造成运行语义回归；首次未设
+`MINIC` 时还发生默认 debug executable 不存在的 exit 127，重设 Release
+路径后上述断言仍不满足。新跨目标汇编/本机运行探针专门覆盖本批触及的
+判名与类型兼容合同。未运行完整五架构 ELF/QEMU，也不启动 MiniAS/MiniLD
+联合验收。
+
 ## 后续批次进度规则
 
 每批发布：当前 HEAD、源文件逐目录覆盖（明确深读与只扫的区别）、

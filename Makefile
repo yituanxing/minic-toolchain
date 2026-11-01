@@ -1595,6 +1595,13 @@ check-return-assignment-expression: $(MINIC_CC_BINARY)
 
 check-fast: check-return-assignment-expression
 
+.PHONY: check-builtin-lexeme-contract
+check-builtin-lexeme-contract: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	sh tests/compiler/c0/probe-builtin-lexeme-contract.sh
+
+check-fast: check-builtin-lexeme-contract
+
 .PHONY: check-x86-pat-clflushopt-alt
 check-x86-pat-clflushopt-alt: $(MINIC_CC_BINARY)
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
