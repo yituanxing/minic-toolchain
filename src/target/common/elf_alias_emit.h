@@ -2,6 +2,7 @@
 #define MINIC_TARGET_COMMON_ELF_ALIAS_EMIT_H
 
 #include "frontend/ast.h"
+#include "target/common/global_emit.h"
 #include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
@@ -10,22 +11,11 @@
  * object equivalent) is a GNU assembler dialect choice. No physical
  * ABI/register rules belong here. Keep RV32/RV64's qualified emitters
  * unchanged until their full Linux Image/P1 gates can be repeated. */
-static inline const char *minic_multi_elf_alias_visibility(
-    MinicSymbolVisibility visibility) {
-    switch (visibility) {
-    case MINIC_SYMBOL_VISIBILITY_DEFAULT: return NULL;
-    case MINIC_SYMBOL_VISIBILITY_HIDDEN: return ".hidden";
-    case MINIC_SYMBOL_VISIBILITY_INTERNAL: return ".internal";
-    case MINIC_SYMBOL_VISIBILITY_PROTECTED: return ".protected";
-    default: return NULL;
-    }
-}
-
 static inline bool minic_multi_elf_emit_alias(
     FILE *out, const char *alias_name, const char *target_name,
     bool internal, bool weak, MinicSymbolVisibility visibility,
     const char *type_directive) {
-    const char *directive = minic_multi_elf_alias_visibility(visibility);
+    const char *directive = minic_multi_elf_visibility_directive(visibility);
     if (out == NULL || alias_name == NULL || target_name == NULL ||
         type_directive == NULL || alias_name[0] == '\0' ||
         target_name[0] == '\0' || strcmp(alias_name, target_name) == 0 ||

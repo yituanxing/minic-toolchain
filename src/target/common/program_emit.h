@@ -321,7 +321,7 @@ static inline bool minic_program_emit_undefined_symbol_visibility(
         const MinicGlobalObject *object = &program->global_objects[index];
         if (object->is_extern && !object->is_internal &&
             object->alias_target == MINIC_GLOBAL_OBJECT_INVALID) {
-            const char *directive = minic_multi_elf_alias_visibility(object->visibility);
+            const char *directive = minic_multi_elf_visibility_directive(object->visibility);
             const bool used =
                 minic_program_symbol_use_has(&uses, object->name) ||
                 minic_program_symbol_used_in_source_asm(program, &uses, object->name);
@@ -342,7 +342,7 @@ static inline bool minic_program_emit_undefined_symbol_visibility(
         const MinicFunction *function = &program->functions[index];
         if (!function->is_defined && !function->is_internal &&
             function->alias_target == MINIC_FUNCTION_INVALID) {
-            const char *directive = minic_multi_elf_alias_visibility(function->visibility);
+            const char *directive = minic_multi_elf_visibility_directive(function->visibility);
             const char *name = function->assembler_name != NULL
                 ? function->assembler_name : function->name;
             const bool used =

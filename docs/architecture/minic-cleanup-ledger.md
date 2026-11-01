@@ -866,14 +866,14 @@ x86 native）。本批没有 GNU cross ELF/QEMU 全面验收。
 | `core_instruction_family` / `core_block_walk` | 指令族枚举供语义检查、扫描和机器 preflight 复用，族归属不代表任一 ISA 已实现；block walker 可利用 visible bitmap 但仍按 block 链接顺序迭代。**KEEP(semantic classification, not capability)**。 |
 | `core_numeric_shape` | 带符号/无符号宽度、mixed signedness、溢出检测、窄结果和 CLZ/CTZ 的 Core 合法性辅助；算术定义不授权宿主有符号 UB，也不保证机器 flags/carry/widen 序列。**KEEP(source legal shape vs target opcode)**。 |
 | `core_object_storage` / `core_frame_layout` | DataLayout extent × element count、额外 alignment、size 算术均在溢出边界做保护；storage plan 的 acquire 可借用共享只读对象，release 只能释放其 own-fallback；frame reserve 只是对齐/区域计算，不决定栈增长方向、callee-save 或 psABI。**KEEP(borrowed/owned distinction)**。 |
-| `core_object_intervals` / `core_object_reuse` | 以 ValueId 反向使用索引和保守单 block 访问判定对象生命区间：只认可直接 LOAD/STORE，derived address、CALL、ASM、跨 block 等均不放行；对 4/8B 单元建冲突图分配可复用栈槽，分配失败 fail-closed。**NEEDS_PROOF(ownership leak)**：虽在 `common`，实为 RV64 私用优化，将来要分清共享算法与 RV64 policy；不可仅因目录名就广泛复用。 |
+| `core_object_intervals` / `core_object_reuse` | 以 ValueId 反向使用索引和保守单 block 访问判定对象生命区间：只认可直接 LOAD/STORE，derived address、CALL、ASM、跨 block 等均不放行；对 4/8B 单元建冲突图分配可复用栈槽，分配失败 fail-closed。**KEEP(shared conservative interval proof)**：C28 继续读到 `lp64_frame` 后，交叉索引确认 RV32、RV64、x86、Direct LP64(A64/Loong) 四种框架规划路径、五个 ISA 都在用；C26 初读时的“RV64 私用”判断已撤销。单元宽度/帧预算仍由调用方传入。 |
 | `core_spill_layout` / `core_value_slots` | 前者服务 RV32/RV64 SSA spill 的 4/8B 单元和最后使用点：先分配指令结果、再释放输入，终结指令消费也计入；后者是 direct A64/Loong 路径给 128-bit、long double、vector 的宽值 sidecar，不是同一个物理槽策略。**KEEP(two distinct consumers)**，不可把不同 ABI 的 slot policy 合并。 |
 | 冗余候选判断 | 此批没有证明可删的生产代码完全重复实现；`core_object_reuse` 的冲突图分配存在潜在二次复杂度，但更换算法须另立性能/正确性证明。**KEEP / NEEDS_PROOF**，不以推测做删除。 |
 
 **C26 生产源码 +0/-0，净 0 行**；C1～C26 纯清理累计
 **净 -331 行**。本批主要产物是对 Core 与机器 ABI 的权责地图，
-特别标记 RV64 私有逻辑放在 common 的耦合，以及 Core lexical
-call census 不等于 source reachable diagnostics 的陷阱。
+特别标记跨五 Target 的保守对象区间证明与机器私有槽预算，
+以及 Core lexical call census 不等于 source reachable diagnostics 的陷阱。
 
 **验证 PASS：** `make MODE=release CFLAGS=-Werror -j8
 check-core-ir-shapes check-layout check-rv64-abi`；Core IR shapes
@@ -919,6 +919,47 @@ operand 容量及未认证 ASM 拒编）、
 在恢复环境中缺失，执行返回 127，**NOT_RUN / 非通过**；
 `DIRECT_LP64_ASM_ELF` 也明确记为 `NOT_TESTED`。
 没有启动推迟中的五目标联合验收。
+
+## 批次 C28：全 Target 的 ELF 全局数据、程序访问与 LP64 帧（审读并精确去重）
+
+**基线：** C27 已推送 `089cb485`，2026-11-01。全文审读
+Target/common 剩余 **11 个生产文件、2,660 行**：
+`elf_alias_emit.h`（94）、`global_emit.c/.h`（1,256/120）、
+`lp64_aggregate.c/.h`（185/31）、`lp64_frame.c/.h`（231/68）、
+`lp64_scalar.c/.h`（75/21）、`program_emit.h`（437）、
+`program_visit.h`（142）。至此 **`src/target/common` 55/55
+已全文审读**。全项目累计 **202/339**：Frontend **69/69**、
+Compiler **11/11**、Core **48/48**、Target **74/211**；Target
+仍剩 **137 个生产文件**。没有启动重构。
+
+| 全局数据与帧合同 | 实际发现及处置 |
+| --- | --- |
+| `program_visit` | 五目标复用同一 source declaration/live definition 选择，静态未引用函数不得意外发射；全局 live-owner 缓存 O(F+G)，分配失败退回原 predicate；每个 emitted Core function 借用一份 verified facts/object storage，再释放。**KEEP(single definition ownership)**。 |
+| `program_emit` | `mkstemp` 在目标 `.s` 同目录暂存，global/ASM/function/trailer/finalizer 完整成功并关闭后才 `rename`；任何 preflight 或机器拒编都删临时文件，不覆盖最后成功输出。file-scope GNU ASM 精确写入非 NUL 原始字节后恢复 `.text`。**KEEP(atomic output transaction)**。 |
+| Undefined ELF symbols | weak、hidden、protected binding 仅为真实 emitted Core/global relocation/source ASM 所使用的 undefined symbol 生成；只声明不引用就输出 `.hidden` 会造成 GNU ld 虚假 undefined。收集带 source label/asm-goto 的可发射 CFG 根和 ASM token 边界，收集器排序符号名。raw ASM token 匹配仍是保守源语法，不应误当完整 GNU assembler parser。**KEEP(ELF source use before binding); NEEDS_PROOF(full ASM token semantics)**。 |
+| `elf_alias_emit` | AST 已证明同 TU target 已定义、函数 alias 非自指、object alias CV/array 表示兼容；ELF `.set` 的符号可见度与 `@/%function` 属于 metadata，非物理 ABI。原 header 的 visibility switch 与 `global_emit.c` 的 `minic_multi_elf_visibility_directive` 五个 case 完全相同。**DELETE(exact duplicate switch)**：改用唯一 canonical helper。 |
+| `global_emit` | DataLayout 控制 `.zero`、flat/recursive Record、nested array/union selector、GNU bitfield packed bytes、trailing flexible initializer 的存储边界；所有 relocation 由 target callback 输出，不通过主机 C struct memcpy。`.bss` 带非零/relocation 先拒绝，128-bit leaf 仅允许确定的全零，尚无高低 limb 源表示。**KEEP(one checked byte serializer; fail-closed wide data)**。 |
+| `lp64_aggregate` / `lp64_scalar` | AAPCS64 与 Loong LP64D 恰好共享小 INTEGER Record、GNU empty Record、部分 1–2 FP return leaf 及参数合法性，但不代表 HFA/vector/unaligned/完整 psABI；`minic_multi_indirect_record` 2,048B cutoff 是机器 emitter 限制（MC-060），不是 C object 限额。**KEEP(narrow two-ABI admission)**。 |
+| `lp64_frame` | 五目标都借同一保守 reuse/last-use Core primitives，Direct LP64 同时有 8B scalar slots、16B wide sidecar、最大 1MiB 和最多 256B 局部对齐；是否保留 entry SP、callee save 和 AAPCS64 tag/Loong linear vararg 保存区由显式 ABI policy 决定。对 shared object storage 只能按 borrowed/owned 标记释放。**KEEP(common proof, LP64 private limits)**。 |
+
+**C28 生产源码 +4/-14，净 -10 行**：移除
+`elf_alias_emit.h` 中完全重复的 ELF visibility 映射，
+`program_emit.h` 两处及 alias helper 一处共用既有
+`minic_multi_elf_visibility_directive`；不改 accepted visibility、
+弱符号强度、GAS 模板或 C/ABI 判断。C1～C28 纯清理累计
+**净 -341 行**。其余布局/递归路径保留，禁止为了精简函数数量
+合并 union selector、bit-field 单元和 relocation provenance。
+
+**验证 PASS：** Release `-Werror` 受影响目标重编，`check-layout`、
+`check-x86-pic-hidden-undefined-weak`（GNU/MiniC PIE 双向、weak
+GOT vs hidden strong PCREL）、`check-elf-hidden-undefined-pic-source`
+（五 ISA `-S`，明确 ELF/QEMU `NOT_RUN`）、
+`check-gnu-linux-bpf-union-zero`（GNU/MiniC 原生 runtime exit42，
+负控 4 组）、`check-x86-vdso-hidden-unused`（GNU shared ELF、
+unused hidden 不生成虚假 undefined）、`check-static-local-owner-reachability`
+（五 ISA `-S`，x86 GNU/MiniC 动态语义）、
+`check-direct-lp64-reachable-source-labels`（五 ISA `-S`、
+x86 GNU/MiniC native exit42）均通过。五目标联合验收依旧延后。
 
 ## 后续批次进度规则
 
