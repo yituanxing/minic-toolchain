@@ -58,6 +58,24 @@ void minic_c0_program_initialize(MinicC0Program *program) {
     program->return_expression = MINIC_EXPRESSION_INVALID;
 }
 
+bool minic_c0_program_discard_expressions_from(MinicC0Program *program, size_t first_discarded) {
+    size_t index;
+
+    if (program == NULL || first_discarded > program->expression_count) {
+        return false;
+    }
+    for (index = first_discarded; index < program->expression_count; ++index) {
+        MinicExpression *expression = &program->expressions[index];
+
+        if (expression->kind == MINIC_EXPRESSION_CALL) {
+            free(expression->value.call.overflow_arguments);
+        }
+        (void)memset(expression, 0, sizeof(*expression));
+    }
+    program->expression_count = first_discarded;
+    return true;
+}
+
 bool minic_c0_program_va_cursor_source_types(const MinicC0Program *program,
                                              MinicType *source_type,
                                              MinicType *state_type) {
@@ -106,11 +124,7 @@ void minic_c0_program_destroy(MinicC0Program *program) {
         free(program->inline_asms[index].labels);
         free(program->inline_asms[index].register_clobbers);
     }
-    for (index = 0U; index < program->expression_count; ++index) {
-        if (program->expressions[index].kind == MINIC_EXPRESSION_CALL) {
-            free(program->expressions[index].value.call.overflow_arguments);
-        }
-    }
+    (void)minic_c0_program_discard_expressions_from(program, 0U);
     for (index = 0U; index < program->function_count; ++index) {
         free(program->functions[index].name);
         free(program->functions[index].assembler_name);

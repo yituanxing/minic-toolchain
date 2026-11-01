@@ -698,6 +698,9 @@ void minic_c0_local_initialize(MinicLocal *local);
 bool minic_c0_program_add_expression(MinicC0Program *program,
                                      const MinicExpression *expression,
                                      MinicExpressionId *expression_id);
+/* Only for unpublished expression tails: release CALL-owned overflow storage
+ * before rewinding IDs. The caller must ensure no discarded ID escapes. */
+bool minic_c0_program_discard_expressions_from(MinicC0Program *program, size_t first_discarded);
 bool minic_c0_program_add_local(MinicC0Program *program,
                                 const MinicLocal *local,
                                 MinicLocalId *local_id);

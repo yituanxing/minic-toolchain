@@ -355,6 +355,13 @@ RECORD_TEST_SOURCES := \
 RECORD_TEST_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(RECORD_TEST_SOURCES))
 RECORD_TEST_BINARY  := $(BUILD_DIR)/tests/frontend/record-test
 
+SEMANTIC_SNAPSHOT_TEST_SOURCES := \
+	src/frontend/ast.c \
+	src/frontend/type.c \
+	tests/frontend/semantic_snapshot_test.c
+SEMANTIC_SNAPSHOT_TEST_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(SEMANTIC_SNAPSHOT_TEST_SOURCES))
+SEMANTIC_SNAPSHOT_TEST_BINARY := $(BUILD_DIR)/tests/frontend/semantic-snapshot-test
+
 TYPE_ALIAS_TEST_SOURCES := \
 	src/frontend/ast.c \
 	src/frontend/type.c \
@@ -403,7 +410,7 @@ RV64_ABI_TEST_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(RV64_ABI_TEST_SOU
 RV64_ABI_TEST_BINARY  := $(BUILD_DIR)/tests/target/riscv64/abi-test
 
 .PHONY: runtime-fourarch runtime-fourarch-reference runtime-rv64i check-rv64i-runtime-archive all help prepare check check-fast check-four-backend-lua-frontier check-four-backend-lua-accept check-four-backend-zlib-frontier check-four-backend-zlib-accept check-target-selection-m0 check-four-backend-m39-lp64-bitops check-four-backend-m15-scalar-return check-four-backend-m14-shift check-four-backend-m13-narrow-arith check-four-backend-m12-bitwise check-four-backend-m11-index check-four-backend-m10-mod check-four-backend-m9-unsigned check-four-backend-m8-narrow check-four-backend-m7-frame check-four-backend-m6-address check-four-backend-m5-pointer check-four-backend-m4-global check-four-backend-m38-fp-varargs check-four-backend-m37-fp-arith check-four-backend-m36-lp64-mul check-four-backend-m35-ptr-to-lp64 check-four-backend-m34-fp-call-result check-four-backend-m33-pointer-less check-four-backend-m32-unreachable check-four-backend-m31-float-promote check-four-backend-m30-fp-call check-four-backend-m29-double-cmp check-four-backend-m28-int-double check-four-backend-m27-fp-parameter check-four-backend-m26-double-div check-four-backend-m25-double-transport check-four-backend-m24-indirect-call check-four-backend-m23-lp64-compare check-four-backend-m22-lp64-conv check-four-backend-m21-lp64-add check-four-backend-m20-lp64-abi check-four-backend-m19-ptr-compare check-four-backend-m18-varargs check-four-backend-m17-record check-four-backend-cjson-accept check-four-backend-cjson-frontier check-four-backend-tinyaes-accept check-four-backend-tinyaes-frontier check-four-backend-m3-call check-four-backend-m2-stack check-four-backend-m2 check-four-backend-m1 check-four-target-model-m0 check-x86_64-busybox-all-eligible check-x86_64-busybox-complex-five check-x86_64-busybox-host-link check-elf-constructors check-x86_64-one-gp-sysv check-x86_64-busybox-allyes-discovery check-x86_64-busybox-12 check-x86_64-sqlite-frontier check-x86_64-m1 check-x86_64-tinyaes check-x86_64-cjson check-x86_64-abi-elf check-x86_64-lua-frontier check-x86_64-zlib-frontier check-minias-a0 check-minipp-a0 check-minielf-reader-a0 check-mininm-a0 check-mininm-a1 check-miniobjcopy-a0 check-miniobjcopy-a1 check-minicstrip-a0 check-miniar-a0 check-miniar-a1 check-minild-a0 check-minild-a1 check-minild-a2 check-minild-a3 check-minild-a4 check-minild-a5 check-minild-a6 check-minild-script-a0 check-minild-script-a1 check-token-model check-lexer \
-	check-type check-record check-type-alias check-ast-contract check-layout check-rv64-abi \
+	check-type check-record check-semantic-snapshot check-type-alias check-ast-contract check-layout check-rv64-abi \
 	check-static-functions \
 	check-unsigned-declarations check-long-types check-for-loops check-unbounded-for-break \
 	check-prefix-decrement-update check-cast-expressions \
@@ -834,6 +841,10 @@ $(RECORD_TEST_BINARY): $(RECORD_TEST_OBJECTS)
 	@mkdir -p "$(dir $@)"
 	$(CC) $(RECORD_TEST_OBJECTS) $(MINIC_LDFLAGS) -o "$@"
 
+$(SEMANTIC_SNAPSHOT_TEST_BINARY): $(SEMANTIC_SNAPSHOT_TEST_OBJECTS)
+	@mkdir -p "$(dir $@)"
+	$(CC) $(SEMANTIC_SNAPSHOT_TEST_OBJECTS) $(MINIC_LDFLAGS) -o "$@"
+
 $(TYPE_ALIAS_TEST_BINARY): $(TYPE_ALIAS_TEST_OBJECTS)
 	@mkdir -p "$(dir $@)"
 	$(CC) $(TYPE_ALIAS_TEST_OBJECTS) $(MINIC_LDFLAGS) -o "$@"
@@ -861,6 +872,9 @@ check-type: $(TYPE_TEST_BINARY)
 
 check-record: $(RECORD_TEST_BINARY)
 	"$(abspath $(RECORD_TEST_BINARY))"
+
+check-semantic-snapshot: $(SEMANTIC_SNAPSHOT_TEST_BINARY)
+	"$(abspath $(SEMANTIC_SNAPSHOT_TEST_BINARY))"
 
 check-type-alias: $(TYPE_ALIAS_TEST_BINARY)
 	"$(abspath $(TYPE_ALIAS_TEST_BINARY))"
@@ -1568,6 +1582,13 @@ check-static-chained-array-arena: $(MINIC_CC_BINARY)
 
 check-fast: check-static-chained-array-arena
 
+.PHONY: check-owned-call-designator-rollback
+check-owned-call-designator-rollback: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	bash tests/compiler/c0/probe-owned-call-designator-rollback.sh
+
+check-fast: check-owned-call-designator-rollback
+
 .PHONY: check-static-record-backward-arena
 check-static-record-backward-arena: $(MINIC_CC_BINARY)
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
@@ -1708,7 +1729,7 @@ check-x86-reachable-vma-assert: $(MINIC_CC_BINARY)
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" BUILD_DIR="$(abspath $(BUILD_DIR))" \
 	sh tests/compiler/c0/probe-x86-reachable-vma-assert.sh
 
-check-fast: check-x86-reachable-vma-assert check-static-const-source-boundaries check-aarch64-fixmap-cross-static-const check-rv64-pic-elf-nonpreemptible check-elf-hidden-undefined-pic-source check-x86-vdso-hidden-unused check-x86-reachable-gnu-runtime check-gnu-if-condition-local-owner check-direct-lp64-reachable-source-labels check-static-local-owner-reachability check-gnu-runtime-if-effect-facts check-gnu-builtin-constant-p-if-guard check-asm-operand-plan check-x86-linux-control-state check-linux-three-arch-trap-state check-x86-linux-uaccess-and-abi check-linux-symbolic-integer-and-record check-packed-bitfield-field-layout check-target-selection-m0 check-x86_64-m1 check-token-model check-lexer check-type check-record check-type-alias check-layout check-rv64-abi check-static-functions check-unsigned-declarations check-long-types check-for-loops check-unbounded-for-break check-prefix-decrement-update check-cast-expressions check-unsigned-char-layout check-pointer-subscripts check-pointer-arithmetic check-pointer-object-const check-const-locals check-global-objects check-bitwise-xor check-integer-bit-operations check-pointer-members check-expression-statements check-postfix-subscripts check-compound-xor-assignment $(MINIC_BINARY)
+check-fast: check-x86-reachable-vma-assert check-static-const-source-boundaries check-aarch64-fixmap-cross-static-const check-rv64-pic-elf-nonpreemptible check-elf-hidden-undefined-pic-source check-x86-vdso-hidden-unused check-x86-reachable-gnu-runtime check-gnu-if-condition-local-owner check-direct-lp64-reachable-source-labels check-static-local-owner-reachability check-gnu-runtime-if-effect-facts check-gnu-builtin-constant-p-if-guard check-asm-operand-plan check-x86-linux-control-state check-linux-three-arch-trap-state check-x86-linux-uaccess-and-abi check-linux-symbolic-integer-and-record check-packed-bitfield-field-layout check-target-selection-m0 check-x86_64-m1 check-token-model check-lexer check-type check-record check-semantic-snapshot check-type-alias check-layout check-rv64-abi check-static-functions check-unsigned-declarations check-long-types check-for-loops check-unbounded-for-break check-prefix-decrement-update check-cast-expressions check-unsigned-char-layout check-pointer-subscripts check-pointer-arithmetic check-pointer-object-const check-const-locals check-global-objects check-bitwise-xor check-integer-bit-operations check-pointer-members check-expression-statements check-postfix-subscripts check-compound-xor-assignment $(MINIC_BINARY)
 	MINIC="$(abspath $(MINIC_BINARY))" \
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" \
 	HOST_CC="$(CC)" \

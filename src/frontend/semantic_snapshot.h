@@ -147,27 +147,24 @@ minic_semantic_snapshot_rollback_declarator_types(const MinicSemanticSnapshot *s
     return true;
 }
 
-/* Count-only probe rollback: callers must not assume this destroys owned
- * Expression payloads. In particular, CALL overflow arguments need separate
- * cleanup before reducing expression_count (MC-009). */
+/* Probe rollback releases owned CALL overflow arguments before reducing the
+ * visible expression count. IDs from the discarded tail must be unpublished. */
 static inline bool
 minic_semantic_snapshot_rollback_probe_expressions(const MinicSemanticSnapshot *snapshot,
                                                    MinicC0Program *program) {
     if (!minic_semantic_snapshot_only_probe_expressions_changed(snapshot, program)) {
         return false;
     }
-    program->expression_count = snapshot->expression_count;
-    return true;
+    return minic_c0_program_discard_expressions_from(program, snapshot->expression_count);
 }
 
 /*
  * Type-query probes such as sizeof(T[N]) may transiently materialize value-only
  * ArrayType/FunctionType descriptors alongside unpublished expressions.
  * The type descriptors have no owned payload, so their counts may rewind.
- * Expressions are different: CALL nodes can own overflow_arguments. Rewinding
- * expression_count alone does NOT release those payloads (tracked as MC-009).
- * Do not treat this count-only rollback as an ownership-safe transaction for
- * arbitrary semantic expressions; a future fix must reclaim discarded payloads.
+ * Expressions are different: CALL nodes can own overflow_arguments. The tail
+ * must be destroyed before rewinding expression_count; this still is not a
+ * general transaction for published semantic expressions or other arenas.
  */
 static inline bool
 minic_semantic_snapshot_rollback_probe_expression_types(const MinicSemanticSnapshot *snapshot,
@@ -191,7 +188,9 @@ minic_semantic_snapshot_rollback_probe_expression_types(const MinicSemanticSnaps
         program->fixed_register_binding_count != snapshot->fixed_register_binding_count) {
         return false;
     }
-    program->expression_count = snapshot->expression_count;
+    if (!minic_c0_program_discard_expressions_from(program, snapshot->expression_count)) {
+        return false;
+    }
     program->array_type_count = snapshot->array_type_count;
     program->function_type_count = snapshot->function_type_count;
     return true;
