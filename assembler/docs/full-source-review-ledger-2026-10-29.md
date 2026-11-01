@@ -206,6 +206,18 @@ The mandatory A0 GNU byte oracle checks a 1300-character macro default,
 byte-exact values. This removes the old 1024/256 *copy caps*, not a
 separately justified argument-count or expression-length constraint.
 
+### 2026-11-01 regression-contract update for retired collector cap
+
+The existing `probe-common-skipped-macro-repeat-gnu.sh` had an explicit
+negative test that rejected a 1024-character macro name and a 256-digit
+`.rept 000...` argument **only because the old scratch buffers truncated
+them**. Both of the identical inputs were independently accepted by
+GNU `as --64`. This old test asserted a now-retired implementation cap,
+not the GNU language contract. It now compiles both inputs with GNU and
+MiniAS and asserts valid object output, preserving all existing skipped
+conditional / source replay / cross-Target tests. The new 250-byte
+large-collector GNU oracle remains mandatory and separate.
+
 ## Current refactor dashboard — 2026-11-01 (exact-head recovery and live-path audit)
 
 ### 2026-11-01 Source collector single-pass de-duplication (local batch)

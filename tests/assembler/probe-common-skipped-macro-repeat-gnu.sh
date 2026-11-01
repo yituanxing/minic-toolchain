@@ -61,20 +61,18 @@ for target in riscv aarch64 loongarch64; do
     test -s "$work/$target.o"
 done
 
-# The unified collector still applies independent macro (1024) and repeat
-# (256) argument-buffer bounds. An overly long opener must fail before
-# emitting an object, including when the otherwise-valid body is empty.
+# These lengths were a scratch-buffer implementation cap, not GNU
+# grammar limits. Both inputs are valid in GNU GAS (checked independently).
+# A Source collector must not reject them before semantic evaluation.
 macro_arg=$(printf '%01024d' 0)
 repeat_arg=$(printf '%0256d' 0)
 printf '.macro x%s\n.endm\n' "$macro_arg" >"$work/long-macro.s"
 printf '.rept %s\n.endr\n' "$repeat_arg" >"$work/long-repeat.s"
 for kind in macro repeat; do
-    if "$MINIAS" --target=x86_64 -o "$work/long-$kind.o" \
-        "$work/long-$kind.s" 2>"$work/long-$kind.err"; then
-        echo "accepted an oversized $kind collector argument" >&2
-        exit 1
-    fi
-    grep -q "out-of-memory:$kind-classify" "$work/long-$kind.err"
-    test ! -e "$work/long-$kind.o"
+    as --64 -o "$work/long-$kind.gnu.o" "$work/long-$kind.s"
+    "$MINIAS" --target=x86_64 -o "$work/long-$kind.o" \
+        "$work/long-$kind.s"
+    test -s "$work/long-$kind.gnu.o"
+    test -s "$work/long-$kind.o"
 done
-echo 'MINIAS_SKIPPED_MACRO_REPEAT=PASS GNU_text=exact inactive_macro=not_defined inactive_repeat=not_evaluated active_nested=correct label_rep=exact four_targets=assembled macro_repeat_bounds=rejected'
+echo 'MINIAS_SKIPPED_MACRO_REPEAT=PASS GNU_text=exact inactive_macro=not_defined inactive_repeat=not_evaluated active_nested=correct label_rep=exact four_targets=assembled macro_repeat_bounds=GNU_accepted'
