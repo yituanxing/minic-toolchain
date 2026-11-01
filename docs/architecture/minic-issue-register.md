@@ -72,7 +72,7 @@
 | [MC-049](#mc-049-静态链式数组设计符跨-arraytype-扩容借用) | P0 | FIXED-UNVERIFIED | ASAN | Frontend | `f53f9a9` 链式设计符跨递归按值缓存 ArrayType 信息；五目标三相位、GNU/native PASS |
 | [MC-050](#mc-050-x86-六组-asm-限定符源端与机器端不一致) | P2 | OPEN | LOCAL-COMPILE-DIFF | x86-64 | 六种合法 GNU ASM 的 volatile 结果被机器端不一致准入拒绝 |
 | [MC-051](#mc-051-long-double-一元取负丢失有符号零) | P1 | FIXED-UNVERIFIED | GNU-NATIVE-DIFF/RV64-QEMU | Core | `long double` 一元符号翻转改为 x87 `fchs` 或 TF `__negtf2`，x86/native 与 RV64/QEMU 定点通过 |
-| [MC-052](#mc-052-aarch64-uaccess-窄输出按八字节写回) | P1 | OPEN | ASM-ONLY | AArch64 | LDTRB/H/W 将1/2/4B输出统一按8B `str x` 写回，越界风险 |
+| [MC-052](#mc-052-aarch64-uaccess-窄输出按八字节写回) | P1 | FIXED-UNVERIFIED | A64-SOURCE | AArch64 | 窄 C 输出的写回宽度已按对象大小选择；GNU A64 ELF/QEMU 尚未验收 |
 | [MC-053](#mc-053-rv64i-lp64-软浮点只覆盖四则) | P2 | OPEN | LOCAL-COMPILE-DIFF | RV64 | LP64 已实现软四则，但比较、取负、转换的 10 个合法函数均无法 `-S` |
 | [MC-056](#mc-056-运行时-record-顺序初始化器跨扩容借用) | P0 | FIXED-UNVERIFIED | ASAN | Frontend | RecordId 重新获取、字段按值快照；五目标容量相位 ASan 与 x86 GNU native 对照通过，完整目标验收待做 |
 | [MC-057](#mc-057-gnu-空-record-返回及实参-abi-缺口) | P2 | OPEN | LOCAL-COMPILE-DIFF | RV32/RV64/x86 | 零字节 Record ABI 合法；目标 terminator/call 路径显式拒绝不同子集 |
@@ -540,10 +540,11 @@
 
 ### MC-052 AArch64 uaccess 窄输出按八字节写回
 
-- **状态：** `OPEN`，P1，`ASM-ONLY`；源 C/机器 `.s` 的物理地址与宽度关系已经定位，**未执行 AArch64 GNU GAS/ELF/QEMU**。可能破坏邻接字段，风险严重但不能冒称运行崩溃已复现。
-- **位置与调用链：** `src/target/aarch64/asm_contract.c:3417:aarch64_linux_uaccess_source` 准入 `ldtrb/ldtrh/ldtr w10` 的 `=r` 1/2/4B C output 和 8B pointer output；`:3467:aarch64_linux_uaccess_emit` 处理 LDTR 后一律 `str x10,[x12]`（8B）写回保存的 C output address，针对 1/2/4B lvalue 都超过对象宽度。8B pointer output 源端允许但机端 raw 整数类型检查拒绝，属同一家族合同不一致。
-- **反例证据：** `/tmp/f5_a64_uaccess_{exact,u16,u32,u64,ptr,packed}.i/.s`；GNU C 语法 + MiniC A64 `-S` 对 1/2/4/8 字节输出均 PASS。1B 例 `.s` 中 `ldtrb w10,[x11]`，目的为 `sp+249` 单字节局部，后续却 `str x10,[x12]`；packed `struct{u8 tag;u8 value;}` 的 value 偏移1，仍 8B store。宿主 GNU x86 `-S` 对 C 8bit output 仅 `movb` 1B；A64 目标未执行。
-- **修复验收：** 确定 C output object 的合法物理宽度及符号扩展，分别选择 `strb/strh/str w/str x` 并复验异常表 PC/寄存器保存；统一源端和机端 pointer/const/volatile 准入。目标 A64 GNU GAS/ELF/QEMU 和 packed 周边 guard 值必须实测才可关闭。
+- **状态：** `FIXED-UNVERIFIED`，P1，`A64-SOURCE`。旧问题有真实的 C lvalue 边界越界风险，但当前主线实现已消除静态错误；**没有在本环境运行 AArch64 GNU GAS/ELF/QEMU**，不能宣称目标运行验收。
+- **原故障：** `src/target/aarch64/asm_contract.c:aarch64_linux_uaccess_source` 准入 `ldtrb/ldtrh/ldtr` 的 1/2/4 字节 C 输出及 8 字节 pointer 输出；旧 `aarch64_linux_uaccess_emit` 无条件使用 `str x10,[x12]` 将 8B 写到窄对象，并在 pointer 输出处额外错拒。
+- **当前代码复核（基线 `1921744`）：** emit 按 `minic_data_layout_type` 得到的**输出对象大小**选择 `strb w10`、`strh w10`、`str w10` 或 `str x10`，不以 LDTR 指令传输宽度误代 C 对象大小；8B pointer output 在源端与机端均放行。错误寄存器写回仍为 `str w9,[x12]`；`1:` 故障 PC、`2:` 续执行 PC 与 `__ex_table` `.short ((9 << 0) | (10 << 5))` 的物理寄存器索引不变。
+- **回归复核：** `tests/compiler/audit/mc052_aarch64_uaccess_narrow_output.c` 保留 packed guard、1/2/4/8B 输出、pointer 和 16B negative；`tests/compiler/c0/probe-aarch64-abi-audit-mc052-mc066.sh` 的 A64 `-S` 宽度检查强化为**每函数唯一 C 输出写回**、异常表 1/2 PC 偏移与 9/10 寄存器索引精确匹配。Release `CFLAGS=-Werror` 构建、宿主 GNU `-fsyntax-only -Werror`、A64 源/汇编检查及 16B negative 均 PASS。GNU GAS/readelf/objcopy/cross GCC 在此容器缺失，虽有 `qemu-aarch64`，本轮 `GNU_AS_ELF=SKIP GNU_QEMU=SKIP`。
+- **关闭门槛：** 按用户延期决定，待全架构联合验收阶段执行 A64 GNU AS/ELF relocation、GNU/MiniC 双二进制 QEMU 差分（packed 邻接 guard 应保持 `0x31`），确认 fault fixup 与 ABI 行为后再由 `FIXED-UNVERIFIED` 转 `CLOSED`。
 
 ### MC-053 RV64I LP64 软浮点只覆盖四则
 

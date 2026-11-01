@@ -30,8 +30,15 @@ for spec in 'read_u8:ldtrb w10:strb w10' \
         $0 == function_name ":" { active = 1; next }
         active && $0 ~ "^\\.size " function_name "," { active = 0 }
         active && index($0, "1: " machine_load) { loads++ }
+        active && $0 == "2:" { fixup_labels++ }
+        active && index($0, "  .long (1b - .)") { fault_pc_offsets++ }
+        active && index($0, "  .long (2b - .)") { continuation_pc_offsets++ }
+        active && index($0, "  .short ((9 << 0) | (10 << 5))") { fixup_registers++ }
         active && index($0, "  " machine_store ", [x12]") { stores++ }
-        END { exit !(loads == 1 && stores == 1) }
+        active && $0 ~ /^  str(b|h)? [wx]10, \[x12\]$/ { all_writebacks++ }
+        END { exit !(loads == 1 && stores == 1 && all_writebacks == 1 &&
+                     fixup_labels == 1 && fault_pc_offsets == 1 &&
+                     continuation_pc_offsets == 1 && fixup_registers == 1) }
     ' "$work/uaccess.s" || {
         echo "AARCH64_UACCESS=FAIL unexpected machine load/store: function=$function_name load=$machine_load store=$machine_store" >&2
         exit 1
