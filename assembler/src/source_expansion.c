@@ -622,19 +622,20 @@ static size_t split_macro_tokens(char *text, char **tokens, size_t capacity) {
     return count;
 }
 
-static bool macro_has_top_level_comma(const char *text) {
+/* Macro comma detection and whitespace fallback used to walk the same
+ * quote/bracket grammar twice. Keep one read-only delimiter scanner; callers
+ * still choose whether commas or whitespace delimit their arguments. */
+static const char *find_macro_top_level_separator(const char *text,
+                                                   bool comma) {
     int depth = 0;
     char quote = '\0';
-
     for (; *text != '\0'; ++text) {
         if (quote != '\0') {
             if (*text == '\\' && text[1] != '\0') {
                 ++text;
                 continue;
             }
-            if (*text == quote) {
-                quote = '\0';
-            }
+            if (*text == quote) quote = '\0';
             continue;
         }
         if (*text == '\'' || *text == '"') {
@@ -642,45 +643,21 @@ static bool macro_has_top_level_comma(const char *text) {
         } else if (*text == '(' || *text == '[' || *text == '{') {
             ++depth;
         } else if (*text == ')' || *text == ']' || *text == '}') {
-            if (depth > 0) {
-                --depth;
-            }
-        } else if (*text == ',' && depth == 0) {
-            return true;
-        }
-    }
-    return false;
-}
-
-static char *find_macro_argument_space(char *text) {
-    int depth = 0;
-    char quote = '\0';
-    char *p;
-
-    for (p = text; *p != '\0'; ++p) {
-        if (quote != '\0') {
-            if (*p == '\\' && p[1] != '\0') {
-                ++p;
-                continue;
-            }
-            if (*p == quote) {
-                quote = '\0';
-            }
-            continue;
-        }
-        if (*p == '\'' || *p == '"') {
-            quote = *p;
-        } else if (*p == '(' || *p == '[' || *p == '{') {
-            ++depth;
-        } else if (*p == ')' || *p == ']' || *p == '}') {
-            if (depth > 0) {
-                --depth;
-            }
-        } else if (depth == 0 && (*p == ' ' || *p == '\t')) {
-            return p;
+            if (depth > 0) --depth;
+        } else if (depth == 0 &&
+                   (comma ? *text == ',' : (*text == ' ' || *text == '\t'))) {
+            return text;
         }
     }
     return NULL;
+}
+
+static bool macro_has_top_level_comma(const char *text) {
+    return find_macro_top_level_separator(text, true) != NULL;
+}
+
+static char *find_macro_argument_space(char *text) {
+    return (char *)find_macro_top_level_separator(text, false);
 }
 
 static size_t split_macro_arguments(char *text,
@@ -1716,6 +1693,41 @@ static bool process_irp_block(MiniAs *as,
     return true;
 }
 
+/* Macro and repeat collectors differ in delimiter grammar, not in their
+ * nesting walk. Preserve their independent argument limits and diagnostics,
+ * but maintain only one matching/end-of-input implementation. */
+static bool find_collector_close(MiniAs *as,const MiniAsSourceLine *lines,
+                                 size_t opening,size_t end,int kind,
+                                 size_t *closing) {
+    const bool macro=kind==MINIAS_MACRO_BEGIN;
+    const char *directive=macro?".macro":
+                          kind==MINIAS_REPEAT_IRP?".irp":".rept";
+    size_t depth=1U,j=opening+1U;
+    for(;j<end;++j) {
+        char argument[1024];
+        int nested=classify_collector_line(as,lines[j].text,
+                    macro?argument:NULL,macro?sizeof(argument):0U,
+                    macro?NULL:argument,macro?0U:256U,NULL);
+        if(nested<0) {
+            minias_set_error(as,"%s",macro?
+                "out-of-memory:macro-classify":
+                "out-of-memory:repeat-classify");
+            return false;
+        }
+        if(macro?nested==MINIAS_MACRO_BEGIN:
+           (nested==MINIAS_REPEAT_REPT || nested==MINIAS_REPEAT_IRP)) {
+            ++depth;
+        }else if(nested==(macro?MINIAS_MACRO_END:MINIAS_REPEAT_ENDR) &&
+                 --depth==0U) {
+            *closing=j;
+            return true;
+        }
+    }
+    minias_set_error(as,"unterminated-directive:%s:line=%zu",
+                     directive,lines[opening].line);
+    return false;
+}
+
 static bool process_source_range(MiniAs *as,
                                  MiniAsSourceLine *lines,
                                  size_t begin,
@@ -1767,35 +1779,8 @@ static bool process_source_range(MiniAs *as,
             return false;
         }
         if (kind == MINIAS_MACRO_BEGIN) {
-            size_t j = i + 1U;
-            size_t depth = 1U;
-
-            while (j < end && depth != 0U) {
-                char nested_argument[1024];
-                int nested_kind =
-                    classify_collector_line(as,lines[j].text,
-                                            nested_argument,
-                                            sizeof(nested_argument),
-                                            NULL,0U,NULL);
-                if (nested_kind < 0) {
-                    minias_set_error(as, "out-of-memory:macro-classify");
-                    return false;
-                }
-                if (nested_kind == MINIAS_MACRO_BEGIN) {
-                    ++depth;
-                } else if (nested_kind == MINIAS_MACRO_END) {
-                    --depth;
-                }
-                if (depth != 0U) {
-                    ++j;
-                }
-            }
-            if (depth != 0U || j >= end) {
-                minias_set_error(as,
-                                 "unterminated-directive:.macro:line=%zu",
-                                 lines[i].line);
-                return false;
-            }
+            size_t j;
+            if(!find_collector_close(as,lines,i,end,kind,&j))return false;
             if (!define_macro(as,
                               macro_argument,
                               lines + i + 1U,
@@ -1812,39 +1797,11 @@ static bool process_source_range(MiniAs *as,
             return false;
         }
         if (kind == MINIAS_REPEAT_REPT || kind == MINIAS_REPEAT_IRP) {
-            size_t j = i + 1U;
-            size_t depth = 1U;
+            size_t j;
             if(!emit_repeat_leading_label(as,lines[i].text,
                                           repeat_label_prefix,
                                           lines[i].line))return false;
-
-            while (j < end && depth != 0U) {
-                char nested_argument[256];
-                int nested_kind =
-                    classify_collector_line(as,lines[j].text,
-                                            NULL,0U,nested_argument,
-                                            sizeof(nested_argument),NULL);
-                if (nested_kind < 0) {
-                    minias_set_error(as, "out-of-memory:repeat-classify");
-                    return false;
-                }
-                if (nested_kind == MINIAS_REPEAT_REPT ||
-                    nested_kind == MINIAS_REPEAT_IRP) {
-                    ++depth;
-                } else if (nested_kind == MINIAS_REPEAT_ENDR) {
-                    --depth;
-                }
-                if (depth != 0U) {
-                    ++j;
-                }
-            }
-            if (depth != 0U || j >= end) {
-                minias_set_error(as,
-                                 "unterminated-directive:%s:line=%zu",
-                                 kind == MINIAS_REPEAT_IRP ? ".irp" : ".rept",
-                                 lines[i].line);
-                return false;
-            }
+            if(!find_collector_close(as,lines,i,end,kind,&j))return false;
             if (kind == MINIAS_REPEAT_REPT) {
                 uint64_t repetitions;
                 uint64_t iteration;

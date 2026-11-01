@@ -36,6 +36,28 @@ absence of partially emitted ELF files, complementing existing positive GNU
 macro tests and optional sanitizer probes. The full strict GNU semantic
 corpus is not part of this cleanup gate.
 
+### 2026-11-01 grouped collector/de-duplication cleanup
+
+The macro parser had *two* identical top-level bracket/quote scans for
+comma detection versus whitespace fallback; they now share one
+read-only lexical separator helper. The source collector also had separate
+macro and repeat nested-body walkers; they now use one matching walk
+parameterized only by the two original grammar families. Macro nesting
+still matches .macro/.endm; .rept/.rep/.irp still share .endr; the different
+1024-byte/256-byte argument limits, label-prefix policy, failure messages,
+and normal SourceSite/EOF behavior are unchanged. The old duplicate loops
+were removed in the same change.
+
+New mandatory A0 GNU fixture checks actual x86 .text bytes for
+macro-with-nested-rept, .rept-with-nested-irp and expression arguments,
+plus each of the three unterminated delimiter errors and absence of partial
+objects. Existing SourceGraph source-replay, macro lifetime and CFI/ELF
+checks remain mandatory. This is source cleanup, not ISA-wide GNU parity.
+
+**Diff:** `assembler/src/source_expansion.c` 1948 -> 1905
+lines (net -43); exact-head CI must determine PASS
+or failure before claiming completion.
+
 ## Current refactor dashboard — 2026-11-01 (exact-head recovery and live-path audit)
 
 ### 2026-11-01 Source collector single-pass de-duplication (local batch)
