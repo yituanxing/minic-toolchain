@@ -961,6 +961,47 @@ unused hidden 不生成虚假 undefined）、`check-static-local-owner-reachabil
 `check-direct-lp64-reachable-source-labels`（五 ISA `-S`、
 x86 GNU/MiniC native exit42）均通过。五目标联合验收依旧延后。
 
+## 批次 C29：RV32/RV64 共享 ISA、GPR、字操作与 GNU ELF 符号（审读并去重）
+
+**基线：** C28 已推送 `066a2fc8`，2026-11-01。
+逐个全文审读 `src/target/riscv` 全部 **13 个生产文件、
+1,046 行**：`frame_address_policy.h`（95）、
+`function_symbol.h`（127）、`gpr_abi_cursor.h`（68）、
+`instruction_select.h`（148）、`isa_features.h`（46）、
+`isa_resolve.c/.h`（66/14）、`record_copy_bytes.c/.h`
+（36/13）、`register_identity.h`（69）、`typed_memory.h`
+（162）、`word_operations.c/.h`（169/33）。至此
+RISC-V 共享子目录 **13/13** 全文审读。全项目累计
+**215/339**：Frontend **69/69**、Compiler **11/11**、
+Core **48/48**、Target **87/211**；Target 剩 **124** 个文件。
+
+| RV 共用层 | 代码合同、清理判断与风险 |
+| --- | --- |
+| `isa_features` / `isa_resolve` | `-march` 允许的硬件能力、MiniC 实发 `codegen_features` 和 psABI `-mabi` 三者独立；RV32 仅 strict `rv32i/ilp32`，RV64 legacy 默认与显式 strict 不能混淆，LP64 即使有 F/D 仍使用整数/soft-float ABI 规则。**KEEP(invocation-scoped ISA and ABI)**。 |
+| `register_identity` / `frame_address_policy` | `x7 == t2`、`x8 == fp/s0` 是物理寄存器同一性，不能按字符串比较 clobber 或 frame scratch；大于 signed 12-bit 的帧偏移需另外 materialize address，scratch 不能别名 base、value 或额外受保护 register。**KEEP(machine alias and live-register proof)**。 |
+| `gpr_abi_cursor` | 两架构同有 8 个 GPR 参数槽，但 slot 单位分别是 32/64 bit；named 两字值可跨 a7/stack，unnamed 对齐双槽要以 even register 起始，spill 后可进入 variadic stack-only，stack 也有对齐空洞。**KEEP(XLEN units; psABI classifier outside cursor)**。 |
+| `instruction_select` | 只选择 RV Base-I scalar opcode、softfloat libgcc symbol、M 扩展 native/libcall 策略和零/单位/移位/乘法的 pointer stride；实际位宽、SSA canonicalization、机器寄存器和返回 ABI 在调用方。**KEEP(strict feature selection vs source-ASM ISA superset)**。 |
+| `typed_memory` / `record_copy_bytes` | Core SSA 证明对齐则直接机器 load/store，否则运行时测试并逐字节拼装；2×XLEN 值采用独立 low/high word transport。Record copy 是 *forward exact byte copy*，不是 memmove，2048B 分块会更新 source/destination GPR，保留 t2/t3 scratch 所有权。`typed_memory.h` TU-local 静态 label counter 用不同 domain 区分标签；跨线程同一 emitter 共享状态仍须独立证明。**KEEP(fail-closed alignment, scratch, nonoverlap); NEEDS_PROOF(concurrent label allocator)**。 |
+| `word_operations` | RV32 的 2×32 和 RV64 的 2×64 共用 t0:t1/t2:t3 寄存器对 protocol：carry/borrow、CLZ/CTZ、跨 XLEN shift 由 Base-I 序列实现；C 的有符号/无符号、越界 shift 行为及调用侧 live scratch 是不同合同。**KEEP(XLEN-neutral proven sequence)**。 |
+| `function_symbol` | 函数名、section/explicit alignment、weak/internal、ELF `.type/.size` 是源/对象属性；独立静态 `minic_riscv_function_visibility_directive` 与 C28 公共 `minic_multi_elf_visibility_directive` 对 default/hidden/internal/protected/invalid 的返回逐项相同。**DELETE(exact duplicate visibility map)**：用 C28 唯一入口，不改变机器或 ABI。 |
+
+**C29 生产源码 +1/-9，净 -8 行**；C1～C29 纯清理
+累计 **净 -349 行**。只删除重复 ELF visibility switch；RV32
+与 RV64 的 GPR 槽位宽、softfloat 资格、指令 emit 和 psABI
+继续各自独立，不以共享目录为由混成一套机器实现。
+
+**验证 PASS：** Release `-Werror` 受影响目标重编；
+`check-target-selection-m0`、`check-minic-target-abi-options`
+（包括 RV32 strict、Loong LP64S、A64 va_copy 隔离）、
+`check-rv32-pointer-widening-source`（五 ISA `-S`）、
+`check-rv64-pic-elf-nonpreemptible`（GOT/PCREL 源与机器选型）、
+`check-rv64-lp64d-union-fp-abi`（LP64 11/11、LP64D 10/10，
+FP struct 继续拒绝）、`check-elf-hidden-undefined-pic-source`
+（五 ISA `-S`、x86 native）通过。
+`check-rv32-wide-branch-condition` 因缺 RISC-V GNU cross
+工具返回 `NOT_TESTED`；MC-059 runtime `SKIP`，没有把这些计为
+GNU ELF/QEMU 验收。
+
 ## 后续批次进度规则
 
 每批发布：当前 HEAD、源文件逐目录覆盖（明确深读与只扫的区别）、

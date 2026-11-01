@@ -48,14 +48,6 @@ static inline bool minic_riscv_function_symbol_from_function(const MinicFunction
     return true;
 }
 
-static inline const char *
-minic_riscv_function_visibility_directive(MinicSymbolVisibility visibility) {
-    return visibility == MINIC_SYMBOL_VISIBILITY_HIDDEN      ? ".hidden"
-           : visibility == MINIC_SYMBOL_VISIBILITY_INTERNAL  ? ".internal"
-           : visibility == MINIC_SYMBOL_VISIBILITY_PROTECTED ? ".protected"
-                                                             : NULL;
-}
-
 /* RISC-V shares the exact GNU ELF alias semantics with x86/Direct LP64.
  * Keep the ABI and ISA emission owned by the target; this is symbol
  * metadata only, no new machine instruction or object format. */
@@ -100,7 +92,7 @@ minic_riscv_emit_function_symbol_begin(FILE *file, const MinicRiscvFunctionSymbo
             return false;
         }
         if (symbol->visibility != MINIC_SYMBOL_VISIBILITY_DEFAULT) {
-            visibility_directive = minic_riscv_function_visibility_directive(symbol->visibility);
+            visibility_directive = minic_multi_elf_visibility_directive(symbol->visibility);
             if (visibility_directive == NULL ||
                 fprintf(file, "%s %s\n", visibility_directive, symbol->symbol_name) < 0) {
                 return false;
