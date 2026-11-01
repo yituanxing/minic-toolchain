@@ -139,6 +139,28 @@
 - **未做：** MiniAS/MiniLD 联合验收、全五架构 Linux ELF/运行矩阵。
   清理净删行只计上述两处，不把小弟的独立 MC 修复混入 C4。
 
+## 批次 C5：Parser 状态与控制流合同全文审读（零生产改动）
+
+**基线：** `3bf0290`，2026-11-01；完整阅读另外 **10 个生产 C/H，
+共 4,000 行**。累计全文深读 **48/336**，Frontend **48/69**，
+Compiler/Core/Target 本轮全文深读仍为 0。本批检出多处“外表可重复、合同却
+不同”的路径，没有达成安全的完整删除闭包，**生产源码 +0/-0**；
+不因追求删行数字而混入新结构或降低输入准入。
+
+| 本批全文阅读（均在 `src/frontend/`） | 决定与保留依据 |
+| --- | --- |
+| `parser.h`、`parser_internal.h` | 公共 parser 入口要求选定 TargetInfo 贯穿后续代码生成；内部 Parser 浅拷贝用于 lookahead，`cache_owner` 将缓存所有权钉在原 Parser，局部标签、tag/ordinary 两命名空间和 cleanup 状态分离。**KEEP(interface/ownership)**。 |
+| `parser_core.c` | scope 退出只倒退可见 binding 数、不释放 Program-owned 类型实体；函数名 hash 早声明胜出、allocator 故障可线性回退；`CORE_FAST_TRACE`、`MINIC_TYPEDEF_INDEX_PERF` 属现行诊断兼容面，未迁消费前不删。**KEEP(scope/fallback/tooling)**。 |
+| `parser_member.c`、`parser_postfix.c` | 匿名 Record field path、rvalue member materialize、数组到指针衰减、函数指针实参 scratch 的生命周期跨表达式构建；`MC-034` 的 Record 快照逆映射不是可清理死路，须独立修。**KEEP(AST/owner)**。 |
+| `parser_constant.c` | `int` 与 `uint64_t` 的整数文本读取虽然有循环重复，但溢出与允许范围不同；字符 escape 与字符串 escape 的输入宽度/报错也不同。**KEEP(validation)**。 |
+| `parser_gnu_inline_asm.c/.h` | GNU output/input/clobber/goto 保留源身份；约束 `I` 可推迟到 Core 特化后判 ISA；`inline_asm_identifier_is` 虽与一般 lexeme helper 同义，但 `tools/dev/pr77-gnu-inline-asm.py` 仍含该 helper 的文本锚点。**NEEDS_PROOF(tooling)**，先确认工具生命周期再考虑合并；ASM-only function identity 脱落另属 `MC-064`。 |
+| `parser_statement_control.c/.h` | `do-while` 通过 WHILE+条件断路构造，`continue` 目标/cleanup 路径必须精确；switch case 的有符号范围交叠检查、for 初始化 scope、延迟 update 均被 Core 消费。**KEEP(CFG/lifetime)**。 |
+
+**C5 验证性质：** 只有只读审查和外部工具文本消费者 `rg` 核对，没有生产
+变更，因此不冒称本批有新的 ELF/运行验收；沿用 C4 和独立 Bug 的各自明确
+边界。下一批先完成剩余 Frontend **21/69** 个生产源文件的逐文件深读，
+再审 Compiler→Core→Target，不提前抽出共用层。
+
 ## 后续批次进度规则
 
 每批发布：当前 HEAD、源文件逐目录覆盖（明确深读与只扫的区别）、
