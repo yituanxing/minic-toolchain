@@ -90,16 +90,16 @@
 | [MC-072](#mc-072-static-inline-的-computed-goto-表指向不存在的-source-label) | P1 | OPEN | GCC-DIFF/ASM-ONLY | Compiler/Core/Target | 有效 GNU `static inline` 的静态 `&&label` 表引用 `.Luser_N`，整数特化克隆发射但原函数被裁剪；源标签别名没有任何定义 |
 | [MC-076](#mc-076-x86-early-head-同一全局符号混合物理访问与链接-vma-地址错编) | P0 | OPEN | GNU-NATIVE-DIFF/ELF-ORACLE | x86-64 early head | 同一 global 用作 pre-MMU 物理存储与链接 VMA 取址时，函数级 per-global 布尔选路把两种地址都发成 RIP-relative；GNU 异址执行 2/2 PASS、MiniC 2/2 FAIL |
 | [MC-077](#mc-077-va_start-首参递归使-function-arena-借用失效) | P0 | FIXED-UNVERIFIED | ASAN | Frontend/Loong builtin | `parse_builtin_va_start` 跨递归解析借用失效的真实 UAF；缓存 `parameter_count` 后原 sanitizer 复现通过，已增持久 probe，尚缺全目标回归 |
-| [MC-078](#mc-078-x86-pat-clflushopt-源端接受却被机器端拒绝的-unused-立即数) | P2 | OPEN | LOCAL-COMPILE-DIFF | x86-64 GNU ASM | Linux PAT `clflushopt` ALT 模板中的未使用 `"i"` 输入为 1 时，GNU C/运行接受，MiniC 源端准入却在 Machine 强制 `==0` 后错误拒编 |
+| [MC-078](#mc-078-x86-pat-clflushopt-源端接受却被机器端拒绝的-unused-立即数) | P2 | FIXED-UNVERIFIED | GNU-NATIVE-DIFF | x86-64 GNU ASM | 历史 `"i"(1)` 错拒已修；GNU/MiniC `0/1/-1` 原生及负例 PASS，全矩阵待验 |
 | [MC-079](#mc-079-core-取址解引用抵消绕过-local-事实逃逸造成静默错编) | P0 | FIXED-UNVERIFIED | GNU-NATIVE-DIFF | Core local facts | 历史错编 GNU exit22 / MiniC exit11；当前 HEAD 的持久 GNU/MiniC native 回归通过，完整矩阵待验 |
 | [MC-080](#mc-080-函数指针间接变参调用拒绝合法的-aggregate-实参) | P2 | OPEN | LOCAL-COMPILE-DIFF | Frontend/Core/Target call ABI | 函数指针的 GNU `(...)` 非具名参数为 Record 时，五目标 `-S` 0/5；同一 Record 的 direct variadic 和 indirect fixed 各 5/5，通过对照隔离门槛 |
-| [MC-081](#mc-081-rv32-接受-gnu-constructor-却漏发初始化注册) | P1 | OPEN | ASM-ONLY | RV32 global/function emission | 合法 GNU `__attribute__((constructor))` 函数在 RV32 有函数体但缺 `.init_array`；其他四目标同输入都有；缺 RV32 ELF/QEMU 运行证据 |
+| [MC-081](#mc-081-rv32-接受-gnu-constructor-却漏发初始化注册) | P1 | FIXED-UNVERIFIED | GNU-QEMU-DIFF/ELF32 | RV32 global/function emission | RV32 缺 `.init_array` 已修，GNU/MiniC 真 ELF32/QEMU 双 constructor PASS，扩展属性/完整 Linux 待验 |
 | [MC-082](#mc-082-x86-sysv-三字节-record-按值参数与返回被拒绝) | P2 | OPEN | LOCAL-COMPILE-DIFF | x86 SysV ABI | 3B INTEGER-class Record 在 incoming/outgoing/return ABI classifier 被限定为 1/2/4/8，GNU native 成功而 MiniC -S 拒编 |
 | [MC-083](#mc-083-已完整声明的-char-数组再以省略边界字符串定义被错拒) | P2 | FIXED-UNVERIFIED | GNU-NATIVE-DIFF | Frontend external array declarations | `char a[4]; char a[]="abc";` 经 `15b08f4` 修复，GNU/MiniC 原生差分及超长负例 PASS，完整矩阵待验 |
 | [MC-084](#mc-084-x86-record-copy-逐字节展开带来可观机器码膨胀) | P2 | DEBT | GNU-NATIVE-ABI+SIZE | x86-64 aggregate machine emission | 合法 4096B 赋值双方 GNU native 执行均正确，但 MiniC 源汇编 8223 行、`.text` 65264B，GNU 仅 65 行、`.text` 5485B（含相同 driver） |
 | [MC-085](#mc-085-gnu-errorwarning-函数属性被保留但没有可达调用诊断消费者) | P1 | OPEN | LOCAL-COMPILE-DIFF | Frontend/Compiler/Core diagnostics | GNU `__attribute__((error))` 活 CALL 应拒编，MiniC 发出 CALL 且成功；`warning` 活 CALL 的 GNU 诊断被 MiniC 静默丢弃 |
 | [MC-086](#mc-086-x86-pic-隐藏的未定义-weak-对象与函数错用-pc32-重定位) | P1 | OPEN | GNU-LD/ELF-ORACLE | x86 ELF/PIC symbol binding | `weak+hidden+undefined` 在 PIC 中被误判为可 direct PCREL，MiniC `R_X86_64_PC32` 令 GNU PIE 链接失败；GNU GOTPCREL 正常链接运行 |
-| [MC-087](#mc-087-common-lp64-单函数-257-条合法-inline-asm-硬拒) | P2 | OPEN | LOCAL-COMPILE-DIFF | Common Direct LP64 preflight | 上游 Core ASM 表动态增长，但 A64/Loong Common `bool used[256]` 使第 257 条合法 `asm volatile("nop")` 被硬拒；255/256 正控均通过 |
+| [MC-087](#mc-087-common-lp64-单函数-257-条合法-inline-asm-硬拒) | P2 | FIXED-UNVERIFIED | LOCAL-COMPILE-DIFF | Common Direct LP64 preflight | 257 人为上限已移除，A64/Loong 255/256/257/512 源汇编与伪造 Core 负例 PASS；目标 GNU ELF 未测 |
 | [MC-088](#mc-088-rv32-宽整数条件分支只检查低-32-位造成静默错编) | P1 | FIXED-UNVERIFIED | GNU-QEMU-DIFF/ELF32 | RV32 Core terminator | 64 位条件仅高 32 位非零时被当作假；修复前 GNU ELF32 QEMU PASS、MiniC exit11；修复后 8 组双 ELF32/QEMU PASS |
 
 ## 索引：尚待验证的风险
@@ -701,7 +701,7 @@
 
 ### MC-078 x86 PAT CLFLUSHOPT 源端接受却被机器端拒绝的 unused 立即数
 
-- **状态与证据：** `OPEN`，P2，`LOCAL-COMPILE-DIFF`。新一轮 F11 基于 `eddd49c` 的**实际 GNU C 可编译输入**，而非仅因两套判定看起来不一致。没有独立证明 Linux 在生产中传非零值，暂不称 Linux 运行错码。
+- **当前状态（2026-11-01）：** `FIXED-UNVERIFIED`，P2；`7d32d43` 消除 Machine PAT 对未使用 `"i"` 输入的 `==0` 误设门槛，保留类型、Core INTEGER_CONSTANT、SSA 结果身份及 ALT 版本防伪。合并后 Release `-Werror` 编译和 `check-x86-pat-clflushopt-alt` PASS：GNU/MiniC→GNU AS/LD x86 native 的 `i(0)`、`i(1)`、`i(-1)` 均 exit42，非常量负例双方拒绝，未知 ALT feature 位仍拒绝。未跑完整 Linux；原 `eddd49c` 的 `OPEN`/错拒是历史发现状态。
 - **真实接缝：** `src/target/x86_64/asm_contract.c:x86_linux_pat_clflushopt_source`（约 `:8365–8395`）要求完整 Linux PAT ALT 模板、一个 `+m` 输出及一个 `"i"` 输入，却仅验证该输入属于整数类型；它不参与模板寻址 `%P0`，因此有效输入数值不受 C/GNU ASM 模板约束。`src/target/x86_64/machine_asm.c:emit_linux_pat_clflushopt`（约 `:5176–5210`）却要求此输入的 Core SSA 定义**必须为 INTEGER_CONSTANT 且 `integer_value==0`**，不满足就让后端将整个 structured ASM 判为 unsupported。源资格、Core 传递和机器执行的判定合同没有统一。
 - **最小有效差分：** 从现有 `tests/compiler/c0/x86_pat_clflushopt_alternative.c` 只把 `: "i" (0)` 换成 `: "i" (1)`，保存 `/tmp/minic-f11-x86-pat-alt-input1.c/.i`。`gcc -std=gnu11 -O0 -no-pie ... -o ...-gnu` **成功**；原生程序 exit **42** 是这个 fixture 自身规定的成功返回码，不是两编译器运行结果对比。MiniC `build/debug/bin/minic-cc --target=x86_64-linux -S ...i` **exit 1**，诊断 `x86-64 Core instruction unsupported: function clflushopt, kind 43`。本轮负责人已再次执行 GNU 编译与 MiniC `-S` 并确认 0/1 差分。
 - **清理/修复门槛：** 先核 template 绑定的 GNU 真实作用及其他 unused immediate 值域，不允许机器端额外私设不可见的 `==0` 条件；需在 Source qualifier 或完整 Machine contract 中表达同一个合规值域，不能只删掉机器端防伪。补永久同源 `i(0)`/`i(1)`、真正引用该输入的反例、GNU AS/ELF 与原生执行差分，随后逐族清掉 Source→Machine 的二次字符串分类（另见 A8-10/A9-10），不能把 MC-050/062 的不同旧问题当作本根因。
@@ -722,7 +722,7 @@
 
 ### MC-081 RV32 接受 GNU constructor 却漏发初始化注册
 
-- **状态与证据：** `OPEN`，P1，`ASM-ONLY`；有效 GNU C 的五目标 `-S` 均成功，RV32 汇编**缺少 `.init_array`**，其他四目标实际存在。宿主 GCC 编译/执行该 C 退出 0；本地无 RV32 GNU GAS/LD/readelf/QEMU，**不能据此说已观察 RV32 运行 exit1 或 ELF 失败**。
+- **当前状态（2026-11-01）：** `FIXED-UNVERIFIED`，P1；提交 `2652738` 在 RV32 函数正文输出后用既有 Function symbol 发射 `.init_array` 的 4 字节注册项。合并后 Release `-Werror` 构建、`check-rv32-constructor-init-array` PASS：同一 `.i` 的 GNU/MiniC 两种生成物经目标 GNU AS/LD ELF32、readelf INIT_ARRAY 检查和真实 `qemu-riscv32` 都 PASS，两 constructor（internal/external）运行且普通函数不误执行。完整 Linux/priority 与复杂 ABI 场景尚未验收；原 `eddd49c` 的 ASM-only 是历史发现证据，当时尚无 RV32 运行环境，现已补齐定向 ELF/QEMU。
 - **同源探针：** `/tmp/minic-rv64-weak-Nfhwou/rv_constructor.c/.i`：`static int seen; __attribute__((constructor)) static void initialize(void){ seen=73; } int main(void){return seen!=73;}`。RV32 `constructor_riscv32-linux.s` 存在 `initialize:`，整份 `.s` 无 `.init_array`；RV64 `constructor_riscv64-linux.s` 同时有 `initialize:` 与 `.section .init_array,"aw",@init_array`，x86/A64/Loong 同样保留注册段。不是把未发射函数误报为未注册。
 - **生产者与消费者：** Frontend `parser_function.c`（约 `:571–575,2193–2195`）已将 GNU constructor 属性保存到 Function 声明。RV32 `rv32_emit.c:908–918` 的函数 visitor 只发函数正文，不输出 init_array 注册；对照 RV64 `codegen_function.c:88–93`、Common Direct A64/Loong `direct_function_emit.h:105–108`、x86 `codegen.c:563–566` 均有真实输出。当前问题是目标发射职责**没消费现成属性**，不是需要发明新 Source AST 或新 Core opcode。
 - **修复门槛：** RV32 使用已有函数声明属性生成符合 GNU ELF32/ILP32 的 `.init_array` 入口，处理 `static`、priority、section/alignment、多个 constructor 的保活/次序，不复制整个 Common 全局分类算法。加入目标 GNU GAS/readelf `-SW -Wr -Ws` 与可运行启动/初始化顺序差分，再升级验证级别。
@@ -763,7 +763,7 @@
 
 ### MC-087 Common LP64 单函数 257 条合法 Inline ASM 硬拒
 
-- **状态与证据：** `OPEN`，P2，`LOCAL-COMPILE-DIFF`；`eddd49c` 的 MiniC、宿主 GCC 同一无依赖 `nop` C 文件，严格 255/256/257 边界差分。合法 source `__asm__ __volatile__("nop");` 逐条出现一次，GCC `-std=gnu11 -fsyntax-only` **3/3 PASS**；MiniC AArch64/LoongArch64 目标 255/256 条 **全部 -S PASS**，发出的机器汇编中恰含 255/256 个 `nop`，**257 条 -S FAIL**，诊断 `Core instruction/ABI not yet supported by M1 emitter`。只是编译拒绝，未跑两 ISA GNU AS/ELF/QEMU。
+- **当前状态（2026-11-01）：** `FIXED-UNVERIFIED`，P2；提交 `fffef59` 将 `bool used[256]` 换为按 `inline_asm_count` checked-`calloc` 的临时位图，成功或任何拒绝路径均释放。合并后 Release `-Werror` 及 `check-direct-lp64-asm-capacity check-direct-lp64-asm-preflight-unit check-direct-lp64-reachable-source-labels` PASS；A64/Loong 两目标 255/256/257/512 个合法 `nop` 的 `-S` 数量相等，伪造 Core 的重复、孤儿、越界 ID、NULL 模板与非法 opcode 仍拒绝。**目标 GNU AS 不在本地，ELF/QEMU=`NOT_TESTED`，没有完整 Linux 证明。** 原 `eddd49c` 257 条错拒是历史发现证据。
 - **根因：** `src/target/common/direct_preflight.c:15–23` 在栈上固定 `bool used[256]` 并把 `fn->inline_asm_count > 256` 拒绝，生产由 `direct_function_plan.c:41–44` 同时供 A64/Loong 使用。`src/core/core_ir.c:822–853` 的 InlineAsm arena 已按实际数量动态扩容，语义和 ISA 没有 256 指令的上限，属于旧实现容量上限泄漏为语言能力。
 - **修复门槛：** 用以 `fn->inline_asm_count` 为界、checked allocation 的位图执行 exactly-once Core ASM ID coverage，保留孤儿/重复引用、越界、内存分配失败时 fail-closed；先测 255/256/257/512 条 valid nop 与 deliberately malformed synthetic Core ASM ID，再做 A64/Loong 真 GNU GAS/readelf、必要时运行 `nop` 正控。测试输入 `/tmp/f11_lp64_asm_{255,256,257}.i`（已移至 /tmp，不在仓库）。
 

@@ -23,8 +23,8 @@
 `minic-issue-register.md` 已维护 `MC-001`～`MC-088` **88 个永久编号**：
 第十一轮 F11 基线 `eddd49c` 大批复扫新增 MC-078～MC-087，原 77 个编号和证据全部保留；
 MC-031 在定向清理后为 `FIXED-UNVERIFIED`，**不将局部资源补漏误计为 MC-043 的语义修复**。
-当前计数：**57 `OPEN`、11 `INVESTIGATING`、11 `DEBT`、7 `FIXED-UNVERIFIED`、
-2 `CLOSED-NOT-A-BUG`**；MC-079、MC-083 已有当前源码定向原生回归，MC-088 有 RV32 ELF32/QEMU 差分；完整矩阵未验；
+当前计数：**54 `OPEN`、11 `INVESTIGATING`、11 `DEBT`、10 `FIXED-UNVERIFIED`、
+2 `CLOSED-NOT-A-BUG`**；MC-078/079/083 有 x86 定向原生回归，MC-081/088 有 RV32 ELF32/QEMU 差分，MC-087 只有 A64/Loong source/白盒证明；完整矩阵未验；
 MC-076 虽通过已知 mixed-use 定向修复仍因间接地址传播不完整而 `OPEN`。
 最新状态及每个编号以[唯一 MC 台账](minic-issue-register.md)为准。
 函数台账最新 F7 的 212 项是函数/函数组级静态审读，不是全仓所有函数均已逐行证明。
