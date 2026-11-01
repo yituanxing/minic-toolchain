@@ -23,6 +23,8 @@
 > [A11 大批清理候选与实证](README.md#第十一轮全编译器复扫实证问题与大量清理候选)
 > 在原 77 个不丢失的前提下追加 **MC-078～MC-087**，区分 Native wrongcode、GNU LD、
 > GNU/MiniC 编译差分、ASM-only 与已测量的代码体积债；无代码修复、无全量 CI。
+> 2026-11-01 的后续独立 RV32 ELF/QEMU 差分补充了 **MC-088**；
+> 不将新 Bug 混计为纯清理删行。
 
 ## 使用约定
 
@@ -89,15 +91,16 @@
 | [MC-076](#mc-076-x86-early-head-同一全局符号混合物理访问与链接-vma-地址错编) | P0 | OPEN | GNU-NATIVE-DIFF/ELF-ORACLE | x86-64 early head | 同一 global 用作 pre-MMU 物理存储与链接 VMA 取址时，函数级 per-global 布尔选路把两种地址都发成 RIP-relative；GNU 异址执行 2/2 PASS、MiniC 2/2 FAIL |
 | [MC-077](#mc-077-va_start-首参递归使-function-arena-借用失效) | P0 | FIXED-UNVERIFIED | ASAN | Frontend/Loong builtin | `parse_builtin_va_start` 跨递归解析借用失效的真实 UAF；缓存 `parameter_count` 后原 sanitizer 复现通过，已增持久 probe，尚缺全目标回归 |
 | [MC-078](#mc-078-x86-pat-clflushopt-源端接受却被机器端拒绝的-unused-立即数) | P2 | OPEN | LOCAL-COMPILE-DIFF | x86-64 GNU ASM | Linux PAT `clflushopt` ALT 模板中的未使用 `"i"` 输入为 1 时，GNU C/运行接受，MiniC 源端准入却在 Machine 强制 `==0` 后错误拒编 |
-| [MC-079](#mc-079-core-取址解引用抵消绕过-local-事实逃逸造成静默错编) | P0 | OPEN | GNU-NATIVE-DIFF | Core local facts | 合法 `*(&x)=2; if(x==1)` 被当作旧局部事实折成 true；GNU x86 原生 exit22，MiniC→GNU AS/LD exit11 |
+| [MC-079](#mc-079-core-取址解引用抵消绕过-local-事实逃逸造成静默错编) | P0 | FIXED-UNVERIFIED | GNU-NATIVE-DIFF | Core local facts | 历史错编 GNU exit22 / MiniC exit11；当前 HEAD 的持久 GNU/MiniC native 回归通过，完整矩阵待验 |
 | [MC-080](#mc-080-函数指针间接变参调用拒绝合法的-aggregate-实参) | P2 | OPEN | LOCAL-COMPILE-DIFF | Frontend/Core/Target call ABI | 函数指针的 GNU `(...)` 非具名参数为 Record 时，五目标 `-S` 0/5；同一 Record 的 direct variadic 和 indirect fixed 各 5/5，通过对照隔离门槛 |
 | [MC-081](#mc-081-rv32-接受-gnu-constructor-却漏发初始化注册) | P1 | OPEN | ASM-ONLY | RV32 global/function emission | 合法 GNU `__attribute__((constructor))` 函数在 RV32 有函数体但缺 `.init_array`；其他四目标同输入都有；缺 RV32 ELF/QEMU 运行证据 |
 | [MC-082](#mc-082-x86-sysv-三字节-record-按值参数与返回被拒绝) | P2 | OPEN | LOCAL-COMPILE-DIFF | x86 SysV ABI | 3B INTEGER-class Record 在 incoming/outgoing/return ABI classifier 被限定为 1/2/4/8，GNU native 成功而 MiniC -S 拒编 |
-| [MC-083](#mc-083-已完整声明的-char-数组再以省略边界字符串定义被错拒) | P2 | OPEN | LOCAL-COMPILE-DIFF | Frontend external array declarations | `char a[4]; char a[]="abc";` GNU 合法；MiniC 对已有完整 bound 清掉 `inferred_bound`，误禁 char string initializer |
+| [MC-083](#mc-083-已完整声明的-char-数组再以省略边界字符串定义被错拒) | P2 | FIXED-UNVERIFIED | GNU-NATIVE-DIFF | Frontend external array declarations | `char a[4]; char a[]="abc";` 经 `15b08f4` 修复，GNU/MiniC 原生差分及超长负例 PASS，完整矩阵待验 |
 | [MC-084](#mc-084-x86-record-copy-逐字节展开带来可观机器码膨胀) | P2 | DEBT | GNU-NATIVE-ABI+SIZE | x86-64 aggregate machine emission | 合法 4096B 赋值双方 GNU native 执行均正确，但 MiniC 源汇编 8223 行、`.text` 65264B，GNU 仅 65 行、`.text` 5485B（含相同 driver） |
 | [MC-085](#mc-085-gnu-errorwarning-函数属性被保留但没有可达调用诊断消费者) | P1 | OPEN | LOCAL-COMPILE-DIFF | Frontend/Compiler/Core diagnostics | GNU `__attribute__((error))` 活 CALL 应拒编，MiniC 发出 CALL 且成功；`warning` 活 CALL 的 GNU 诊断被 MiniC 静默丢弃 |
 | [MC-086](#mc-086-x86-pic-隐藏的未定义-weak-对象与函数错用-pc32-重定位) | P1 | OPEN | GNU-LD/ELF-ORACLE | x86 ELF/PIC symbol binding | `weak+hidden+undefined` 在 PIC 中被误判为可 direct PCREL，MiniC `R_X86_64_PC32` 令 GNU PIE 链接失败；GNU GOTPCREL 正常链接运行 |
 | [MC-087](#mc-087-common-lp64-单函数-257-条合法-inline-asm-硬拒) | P2 | OPEN | LOCAL-COMPILE-DIFF | Common Direct LP64 preflight | 上游 Core ASM 表动态增长，但 A64/Loong Common `bool used[256]` 使第 257 条合法 `asm volatile("nop")` 被硬拒；255/256 正控均通过 |
+| [MC-088](#mc-088-rv32-宽整数条件分支只检查低-32-位造成静默错编) | P1 | FIXED-UNVERIFIED | GNU-QEMU-DIFF/ELF32 | RV32 Core terminator | 64 位条件仅高 32 位非零时被当作假；修复前 GNU ELF32 QEMU PASS、MiniC exit11；修复后 8 组双 ELF32/QEMU PASS |
 
 ## 索引：尚待验证的风险
 
@@ -705,7 +708,7 @@
 
 ### MC-079 Core 取址解引用抵消绕过 Local 事实逃逸造成静默错编
 
-- **状态与证据：** `OPEN`，P0，`GNU-NATIVE-DIFF`；在 `eddd49c` 新一轮 F11 独立发现，负责人重跑两个 native 程序 exit 22/11。仅 x86-64 已得 GNU C vs MiniC→GNU AS/LD 的真实执行证据，根因位于共用 Core，不能未经验证宣称四个其他目标也已错误运行。
+- **当前状态与证据（2026-11-01）：** `FIXED-UNVERIFIED`，P0。该问题在 C1 之前的 `6934c9e` 已有修复及仓内持久测试 `tests/compiler/c0/probe-core-indirect-local-fact-escape.sh`；在含 C1 及 MC-083 的 `15b08f4` 上，以 `-Werror` 构建的 MiniC 运行 `make ... check-core-indirect-local-fact-escape`，得到 `CORE_INDIRECT_LOCAL_FACT_ESCAPE=PASS GNU_C_and_MiniC_GNU_AS_LD_runtime`。**这是 x86 同源 GNU C/MiniC→GNU AS/LD 原生定向回归，不是五目标 Linux 验收。** 原 `eddd49c` F11 的 GNU exit22 / MiniC exit11 是历史发现证据，不再代表当前 HEAD。
 - **最小有效 GNU C：** `int probe(void) { int x=1; *(&x)=2; if (x==1) return 11; return 22; } int main(void){ return probe(); }`。`cc -std=gnu11 -O0 -no-pie -x c ...i -o gnu.bin` 成功、原生退出 **22**；相同预处理 `.i` 经 `build/debug/bin/minic-cc --target=x86_64-linux -S`、宿主 GNU AS/link 成功，运行却退出 **11**。证据临时文件 `/tmp/minic-f11-address-jyoZgd/{indirect.i,gnu.bin,minic.s,minic.bin}`；MiniC `.s` 能看见 `*(&x)=2` 真实写入内存，随后的条件已被 Core 折叠为直接返回常量 11，故不是机器 store 丢失或不同优化级的合理差异。
 - **源码所有权链：** `parser_expression.c` 保留 `ADDRESS_OF`/`DEREFERENCE` 的合法 lvalue；`core_lower_address.c`（约 `:341–353`）将 `*&object` 直接递归降低成底层 `LOCAL` 地址。普通 `ADDRESS_OF LOCAL` 在 `core_lower_expression.c:383–389` 会先调用 `minic_core_local_fact_escape`，但该优化抵消路径完全绕过 escape 记录；`core_lower_assignments.c:174–179` 只对语法上直写 `MINIC_EXPRESSION_LOCAL` 的赋值清旧事实，间接 `*(&x)` 仍被认为 `x==1`；`core_lower.c:674–685` 将 `core_const_eval_integer_with_locals` 的过时结果用来选择单分支。相关 A8-05、MC-033 是不同的 CFG/更新缺口，不能靠另一个局部补丁静默合并编号。
 - **修复门槛：** 明确表达式 canonical lvalue 身份和语义 local write/escape effect，在 `*&` 抵消之前或之后保证 fact invalidation 一致；不要机械关闭地址消除优化以牺牲性能，也不能仅针对 `x` 名称做特例。最少覆盖 `*(&x)`、`&*(&x)`、字段/数组 lvalue、volatile 与嵌套赋值、同一 local 经指针变量/控制流分支重写，逐项 GNU-native diff 后在 Core effect/facts 层收敛，避免每一种 source 表达式各造一种失效处理。
@@ -733,7 +736,7 @@
 
 ### MC-083 已完整声明的 char 数组再以省略边界字符串定义被错拒
 
-- **状态与证据：** `OPEN`，P2，`LOCAL-COMPILE-DIFF`，Frontend source declaration/initializer 分工。合法 GNU `char a[4]; char a[] = "abc";` 的同一 `.i` GNU `gcc -std=gnu11 -c` EXIT0，MiniC x86 `-S` EXIT1，明确报 `external array initializer requires braces or a character string`；没有生成过机器码，不称错码。负责人在本轮复验相同 `/tmp/f11_char_redecl_bound.i`。
+- **当前状态与证据（2026-11-01）：** `FIXED-UNVERIFIED`，P2。独立提交 `15b08f4`（来自子任务 `18df05e`）让已有 complete bound 的 char array 走现成 bounded string initializer；`make MODE=release CFLAGS=-Werror BUILD_DIR=build/cleanup-werror check-external-char-array-redeclaration` **PASS**（GNU/MiniC→GNU AS/LD native 一致、超长字符串负例拒绝）。三个永久 fixture/probe 已入库；完整目标矩阵仍未运行。原 `eddd49c` 的 GNU `-c` PASS / MiniC `-S` FAIL 属历史发现证据，不再代表当前 HEAD。
 - **完整分支原因：** `src/frontend/parser_external_object.c:115–126:parse_external_integer_array_definition` 重用早前的完整 `[4]` GlobalObject 时，合法地把 `element_count` 沿用为 4、`inferred_bound=false`；但后续 `:174–185` 的无花括号字符串专用入口只允许 `if (inferred_bound && char && STRING_LITERAL)`，使“先 incomplete 再推断”与“早已有 complete bound”在词法准入上错误耦合。`char a[]="abc"` 和 `char a[4]="abc"` 两个独立正控当前 MiniC 均 PASS，这个混合 redeclaration 才触发。
 - **修复门槛：** 将“允许 char string initializer”与“是否应推断/完成 ArrayType”分为两个事实；重用已有完整 bound 时验证字节数、结尾 NUL、超限/截断、tentative/extern 多次声明与显式 GNU section 属性，不能只把 `&& inferred_bound` 删除后再次 complete 既有类型。补 GNU C→MiniC -S→GNU AS/ELF/native 和多 TU redeclaration 正反例；Common GlobalObject/initializer 所有权不可复制一份。
 
@@ -763,6 +766,13 @@
 - **状态与证据：** `OPEN`，P2，`LOCAL-COMPILE-DIFF`；`eddd49c` 的 MiniC、宿主 GCC 同一无依赖 `nop` C 文件，严格 255/256/257 边界差分。合法 source `__asm__ __volatile__("nop");` 逐条出现一次，GCC `-std=gnu11 -fsyntax-only` **3/3 PASS**；MiniC AArch64/LoongArch64 目标 255/256 条 **全部 -S PASS**，发出的机器汇编中恰含 255/256 个 `nop`，**257 条 -S FAIL**，诊断 `Core instruction/ABI not yet supported by M1 emitter`。只是编译拒绝，未跑两 ISA GNU AS/ELF/QEMU。
 - **根因：** `src/target/common/direct_preflight.c:15–23` 在栈上固定 `bool used[256]` 并把 `fn->inline_asm_count > 256` 拒绝，生产由 `direct_function_plan.c:41–44` 同时供 A64/Loong 使用。`src/core/core_ir.c:822–853` 的 InlineAsm arena 已按实际数量动态扩容，语义和 ISA 没有 256 指令的上限，属于旧实现容量上限泄漏为语言能力。
 - **修复门槛：** 用以 `fn->inline_asm_count` 为界、checked allocation 的位图执行 exactly-once Core ASM ID coverage，保留孤儿/重复引用、越界、内存分配失败时 fail-closed；先测 255/256/257/512 条 valid nop 与 deliberately malformed synthetic Core ASM ID，再做 A64/Loong 真 GNU GAS/readelf、必要时运行 `nop` 正控。测试输入 `/tmp/f11_lp64_asm_{255,256,257}.i`（已移至 /tmp，不在仓库）。
+
+### MC-088 RV32 宽整数条件分支只检查低 32 位造成静默错编
+
+- **当前状态与证据：** `FIXED-UNVERIFIED`，P1，`GNU-QEMU-DIFF/ELF32`。原 MiniC RV32 `rv32_emit.c:rv32_term` 在 `MINIC_CORE_TERMINATOR_CONDITIONAL_BRANCH` 使用 `rv32_slot`，仅将 64 位 Core 整数条件的低字加载为 `t0` 再执行 `beqz`；当低 32 位零、高 32 位非零时，错误走 false block。无关 C 指针/ABI 的歧义，属于明确的 RV32 ILP32 静默错编。
+- **同源反证与修复：** 持久 `tests/compiler/c0/run-rv32-wide-branch-condition.sh` 为 GNU C 与 MiniC 共享预处理 `.i`，均用 GNU GAS/LD 生成 RV32 `ELF32`，真实 `qemu-riscv32` 执行。修复前、未含 RV32 补丁的 MiniC 编译器：GNU mode **PASS**，MiniC mode **exit 11**（高字非零的分支测试）；修复后包含提交 `ae9937d`、持久探针提交 `fa73ff1` 的当前工作分支以 Release `-Werror` 重新构建，GNU/MiniC 两种 mode 均 **PASS**，8 组覆盖 high-only、low-only、mask 和 ternary 条件。
+- **生产者与消费者：** Core 合法携带宽整数值作为 conditional terminator；RV32 `rv32_emit.c:rv32_term` 现经现成 `rv32_scalar_storage_words` 区分 1/2 word，2-word 经 `rv32_pair_slot` 取两半后 `or t0,t0,t1`，再走既有 `beqz`／目标标签输出。未修改 Core 类型合同、其他 ISA 发射器或分支目标布局。
+- **未验证边界：** 测试只覆盖 GNU 32 位目标工具链、RV32 GNU 链接产物与 QEMU 定向样例；完整 RV32 Linux 大程序集成、所有 ABI/优化模式、其他目标矩阵、MiniAS/MiniLD 联合验收未跑。因此不升为 `VERIFIED`。
 
 ## 已核对并排除的误判（不要在未有新证据时重新打开）
 

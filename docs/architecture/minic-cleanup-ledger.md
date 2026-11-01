@@ -52,6 +52,7 @@
 | --- | --- | --- |
 | `A11-01` `ast_global` 八个旧 wrapper | `src/` 仅靠零调用判断为死路不够；历史 Python materialize/PR 脚本仍通过函数名作文本锚点，且头文件对外声明。 | 先清算脚本是否现行、头文件 API 合同，再退役；不能把脚本弄坏而称“纯删”。 |
 | `A11-02` AST 参数计数 | Linux perf CI 的源码补丁脚本仍以其文本为锚点。 | 先迁当前 CI 的字符串匹配，验证精确补丁。 |
+| `A11-12` Core Reachability policy | 五个已注册 Backend 都设 `emit_reachable_core_blocks_only=true`，false 路径当前不启用；但现行 Linux workflow 仍使用关联的历史补丁脚本，且 all-block 与 source-label 根追踪有契约历史。 | 先检查三个 CI 脚本在 pinned commit 上的实际 patch 行为，并证明所有 emitter 的 CFG 根合同，再删虚假策略分支；`minic_enqueue_core_block` 仍有现役 CFG 消费者。 |
 | `A11-04` AST external traversal | 上层函数虽零内部调用，但底层递归与 remap 现役，可能存在公开 API 合同。 | 明确 ABI / 外部消费者后才删最上层 wrapper。 |
 | `A11-05` semantic snapshot wrappers | 生产无调用但白盒单测使用。 | 若要合并，先迁测试且保存回滚/ownership 断言。 |
 | `A11-21` Core scalar predicate | 两个同形判断的持有者分别属于 memory 和 CALL；合并收益极小，邻近的 global-addressable predicate 对 `void` 的语义不同。 | 等输入合同证明和实际简化收益，不为了“统一”引入层级。 |

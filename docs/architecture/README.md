@@ -20,11 +20,12 @@
 | 先纯清理再重构：本批删了什么、没删什么、证据缺口 | [MiniC 纯清理流水账](minic-cleanup-ledger.md) | 按 commit 记录真实删改、KEEP、测试与未验证，不另建 Bug 状态 |
 | 某个旧重构批次当时做了什么 | [历史审查与 RFC](#6-历史资料与专题索引) | 标出它是快照、方案还是现行契约 |
 
-`minic-issue-register.md` 已维护 `MC-001`～`MC-087` **87 个永久编号**：
+`minic-issue-register.md` 已维护 `MC-001`～`MC-088` **88 个永久编号**：
 第十一轮 F11 基线 `eddd49c` 大批复扫新增 MC-078～MC-087，原 77 个编号和证据全部保留；
 MC-031 在定向清理后为 `FIXED-UNVERIFIED`，**不将局部资源补漏误计为 MC-043 的语义修复**。
-当前计数：**59 `OPEN`、11 `INVESTIGATING`、11 `DEBT`、4 `FIXED-UNVERIFIED`、
-2 `CLOSED-NOT-A-BUG`**；MC-076 虽通过已知 mixed-use 定向修复仍因间接地址传播不完整而 `OPEN`。
+当前计数：**57 `OPEN`、11 `INVESTIGATING`、11 `DEBT`、7 `FIXED-UNVERIFIED`、
+2 `CLOSED-NOT-A-BUG`**；MC-079、MC-083 已有当前源码定向原生回归，MC-088 有 RV32 ELF32/QEMU 差分；完整矩阵未验；
+MC-076 虽通过已知 mixed-use 定向修复仍因间接地址传播不完整而 `OPEN`。
 最新状态及每个编号以[唯一 MC 台账](minic-issue-register.md)为准。
 函数台账最新 F7 的 212 项是函数/函数组级静态审读，不是全仓所有函数均已逐行证明。
 
