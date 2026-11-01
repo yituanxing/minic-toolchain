@@ -5531,15 +5531,15 @@ static bool directive(MiniAs *as, const char *op, const char *args,
     return true;
 }
 
-static bool code_alignment(MiniAs *as, const MiniAsStmt *stmt, size_t amount) {
+static bool code_alignment(MiniAsCodeAlignSink *sink, const MiniAsStmt *stmt, size_t amount) {
     static const unsigned char nop[] = {0x1f, 0x20, 0x03, 0xd5};
     (void)stmt;
     if (amount % sizeof(nop) != 0U) {
-        minias_set_error(as, "unalignable-aarch64-code-gap:%zu", amount);
+        minias_code_align_error(sink, "unalignable-aarch64-code-gap:%zu", amount);
         return false;
     }
     while (amount != 0U) {
-        if (!minias_emit_instruction_bytes(as, nop, sizeof(nop)))
+        if (!minias_code_align_emit(sink, nop, sizeof(nop)))
             return false;
         amount -= sizeof(nop);
     }

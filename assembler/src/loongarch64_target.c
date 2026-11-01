@@ -2210,11 +2210,11 @@ static bool la_encode(MiniAs *as,const MiniAsStmt *s) {
     return minias_encode_add_fixup_ref(as,s->offset,kind,4U,
                                        *expr,false);
 }
-static bool la_align(MiniAs *as,const MiniAsStmt *stmt,size_t size) {
+static bool la_align(MiniAsCodeAlignSink *sink,const MiniAsStmt *stmt,size_t size) {
     static const unsigned char nop[4]={0x00,0x00,0x40,0x03};
     (void)stmt;
-    if(size%4U){minias_set_error(as,"unalignable-loongarch-code-gap");return false;}
-    while(size){if(!minias_emit_instruction_bytes(as,nop,4U))return false;size-=4U;}
+    if(size%4U){minias_code_align_error(sink,"unalignable-loongarch-code-gap");return false;}
+    while(size){if(!minias_code_align_emit(sink,nop,4U))return false;size-=4U;}
     return true;
 }
 static bool la_profile(const char *march,const char *mabi,

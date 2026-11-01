@@ -7,6 +7,42 @@
 > 和早期测试文件数量，均不能自动当作最新 HEAD 的事实。
 > “读过 / 修改过 / 完成清理”必须分别统计。
 
+### 2026-11-01 executable ALIGN capability boundary (P04 partial)
+
+**Base:** remote Draft PR #667 head `8b73344e29d4bf7d3e87755680efb768ac4aed0b`.
+This is a deliberately bounded P04 interface cleanup, not completion of
+the four full Target instruction encoders or a claim of new Linux acceptance.
+
+- **Common owns the mutable session:** `MiniAsTargetOps.append_code_alignment`
+  now receives an opaque `MiniAsCodeAlignSink *`, never `MiniAs *`. Only
+  `assembler.c` defines or constructs that sink and derives active Fragment,
+  output architecture properties and preceding-DATA adjacency from the session.
+- **Target permissions are narrow:** the four architecture callbacks can emit
+  padding bytes into the active EncodeResult, report first errors, request an
+  ELF flag, and query alignment-relevant read-only target/ELF/fragment facts.
+  NOP byte tables, RISC-V RVC policy, x86 16/32-bit mode decisions and GNU
+  DATA-adjacency policy are unchanged. No Target ALIGN callback dereferences
+  `as->`, selects a Section, or receives a mutable `MiniAs` handle.
+- **Guard:** `probe-mc-target-boundary.sh` asserts the callback signature and
+  opaque definition across all four Targets; the x86 DATA-adjacency GNU oracle
+  checks the restricted Common query.
+
+**Production diff:** 6 `assembler/src` files, `+72/-27` lines (net `+45`),
+including the Common-owned permission adapters; tests span two existing
+scripts. This batch is an API/ownership tightening rather than a net line
+deletion. The separate full `encode(MiniAs *, Stmt *)` callback remains in
+place: replacing it correctly requires SymbolID/symbol-difference queries,
+transactional Fixup and anchor requests, target state and diagnostics across
+four encoders, so it must not be represented as already cleaned.
+
+**Local proof:** Release `CFLAGS=-Werror`, A0 `30/30`, the four-Target boundary
+guard, GNU x86 adjacent-DATA alignment and paired-alignment byte oracles,
+and GNU `.code16/.code32` `38/38` PASS. Local AArch64, LoongArch64 and
+RISC-V cross-GNU comparisons are **NOT TESTED** because the needed external
+cross assemblers are absent. Remote ISA/ABI, x86/Loong GNU, strict 3,536,
+and full Linux Image/QEMU results must be reported for this exact head,
+not inherited from the previous commit.
+
 ### 2026-11-01 fragment-owned request and dead-write cleanup
 
 **Base:** `ce676c16b405ca225e8ab2cf08f41d0355f3165a` on the sole

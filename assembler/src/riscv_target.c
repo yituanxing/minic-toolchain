@@ -15,17 +15,17 @@
  * sections, exported symbols and relocations pass the basic oracle.
  *
  * Preserve the existing .org zero-fill semantics and data alignment. */
-static bool riscv_emit_code_alignment(MiniAs *as,
+static bool riscv_emit_code_alignment(MiniAsCodeAlignSink *sink,
                                      const MiniAsStmt *owner,size_t size) {
     static const unsigned char nop32[] = {0x13U, 0x00U, 0x00U, 0x00U};
     static const unsigned char nop16[] = {0x01U, 0x00U};
     static const unsigned char zero = 0U;
-    const MiniAsRiscvState *state = MINIAS_RV_STATE(as);
+    const MiniAsRiscvState *state = minias_code_align_target_state(sink);
     bool allow_c;
 
-    if (!as->emitting_fragment || as->emitting_fragment_id >= as->stmt_count ||
+    if (!minias_code_align_has_active_fragment(sink) ||
         state == NULL) {
-        minias_set_error(as, "internal:riscv-alignment-site-missing");
+        minias_code_align_error(sink, "internal:riscv-alignment-site-missing");
         return false;
     }
     /* GNU GAS treats .option norvc as a source-instruction compression mode.
@@ -39,7 +39,7 @@ static bool riscv_emit_code_alignment(MiniAs *as,
      * alignment, then (if needed) the single C.NOP BEFORE its 32-bit NOPs.
      * Keeping that ordering also preserves exact .text bytes for 6B gaps. */
     if ((size & 1U) != 0U) {
-        if (!minias_emit_instruction_bytes(as, &zero, 1U))
+        if (!minias_code_align_emit(sink, &zero, 1U))
             return false;
         --size;
     }
@@ -49,18 +49,18 @@ static bool riscv_emit_code_alignment(MiniAs *as,
      * according to GNU GAS's riscv_make_nops policy. */
     if ((size & 2U) != 0U) {
         if (!allow_c) {
-            minias_set_error(as,"riscv-alignment-requires-rvc:line=%zu",
+            minias_code_align_error(sink,"riscv-alignment-requires-rvc:line=%zu",
                              owner->line);
             return false;
         }
-        if (!minias_emit_instruction_bytes(as,
+        if (!minias_code_align_emit(sink,
                                            nop16, sizeof(nop16)) ||
-            !minias_encode_add_elf_flags(as, 1U)) /* EF_RISCV_RVC */
+            !minias_code_align_add_elf_flags(sink, 1U)) /* EF_RISCV_RVC */
             return false;
         size -= sizeof(nop16);
     }
     while (size >= sizeof(nop32)) {
-        if (!minias_emit_instruction_bytes(as,
+        if (!minias_code_align_emit(sink,
                                            nop32, sizeof(nop32))) {
             return false;
         }

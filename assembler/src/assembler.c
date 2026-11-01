@@ -1220,10 +1220,46 @@ bool minias_emit_instruction_bytes(MiniAs *as,
 
 }
 
+struct MiniAsCodeAlignSink {
+    MiniAs *as; /* Only Common constructs and dereferences this capability. */
+};
+
+bool minias_code_align_emit(MiniAsCodeAlignSink *sink,
+                            const void *bytes,size_t size) {
+    return sink!=NULL && minias_emit_instruction_bytes(sink->as,bytes,size);
+}
+
+bool minias_code_align_add_elf_flags(MiniAsCodeAlignSink *sink,uint32_t flags) {
+    return sink!=NULL && minias_encode_add_elf_flags(sink->as,flags);
+}
+
+void minias_code_align_error(MiniAsCodeAlignSink *sink,const char *format,...) {
+    va_list ap;
+    if(sink==NULL)return;
+    va_start(ap,format);
+    minias_set_error_va(sink->as,format,ap);
+    va_end(ap);
+}
+
+const void *minias_code_align_target_state(const MiniAsCodeAlignSink *sink) {
+    return sink!=NULL?sink->as->target_state:NULL;
+}
+
+bool minias_code_align_is_elf32(const MiniAsCodeAlignSink *sink) {
+    return sink!=NULL && sink->as->output_elf32;
+}
+
+bool minias_code_align_has_active_fragment(const MiniAsCodeAlignSink *sink) {
+    const MiniAs *as=sink!=NULL?sink->as:NULL;
+    return as!=NULL && as->emitting_fragment &&
+           as->emitting_fragment_id<as->stmt_count;
+}
+
 /* Source-order and final position are Common-owned properties, not private
  * target parser data.  The x86 padding policy queries this site predicate
  * without reaching through MiniAs into neighboring retained statements. */
-bool minias_code_alignment_preceded_by_adjacent_data(const MiniAs *as) {
+bool minias_code_align_preceded_by_adjacent_data(const MiniAsCodeAlignSink *sink) {
+    const MiniAs *as=sink!=NULL?sink->as:NULL;
     const MiniAsStmt *owner, *previous;
     if(as==NULL || !as->emitting_fragment ||
        as->emitting_fragment_id==0U ||
@@ -4654,8 +4690,9 @@ static bool minias_emit_sections(MiniAs *as) {
             stmt->fragment_kind == MINIAS_FRAGMENT_ORIGIN) {
             bool code_nop_align=minias_alignment_emits_target_nops(
                 as,stmt,section);
+            MiniAsCodeAlignSink alignment_sink={as};
             if (!(code_nop_align
-                      ? as->target->append_code_alignment(as,stmt,stmt->size)
+                      ? as->target->append_code_alignment(&alignment_sink,stmt,stmt->size)
                       : stmt->align_has_fill
                       ? minias_section_append_fill(as,stmt->section,stmt->size,
                                                    stmt->align_fill,true)

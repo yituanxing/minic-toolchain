@@ -8,11 +8,11 @@ from pathlib import Path
 core=Path("assembler/src/assembler.c").read_text()
 header=Path("assembler/src/minias_internal.h").read_text()
 x86=Path("assembler/src/x86_64_target.c").read_text()
-if "minias_code_alignment_preceded_by_adjacent_data(const MiniAs *);" not in header:
-    raise SystemExit("alignment still exposes Target Section selector")
-if "minias_code_alignment_preceded_by_adjacent_data(as,section)" in x86:
-    raise SystemExit("x86 still selects Section for Common alignment query")
-begin=core.index("bool minias_code_alignment_preceded_by_adjacent_data(")
+if "minias_code_align_preceded_by_adjacent_data(const MiniAsCodeAlignSink *);" not in header:
+    raise SystemExit("alignment does not use the restricted Common query")
+if "minias_code_align_preceded_by_adjacent_data(sink)" not in x86:
+    raise SystemExit("x86 bypasses the restricted Common alignment query")
+begin=core.index("bool minias_code_align_preceded_by_adjacent_data(")
 end=core.index("static bool minias_section_reserve(",begin)
 body=core[begin:end]
 for invariant in ("previous->section==owner->section",

@@ -862,9 +862,17 @@ bool minias_decode_string_literals(const char *text,
  * active fragment result; Common alone publishes its complete transaction. */
 bool minias_emit_instruction_bytes(MiniAs *as,
                                    const void *data, size_t size);
-/* A target may choose padding bytes based on the preceding Fragment class.
- * Common owns source order, subsection identity and adjacency rules. */
-bool minias_code_alignment_preceded_by_adjacent_data(const MiniAs *);
+/* Executable ALIGN is a Target byte policy, not a general-purpose session
+ * capability. The Target sees no MiniAs or mutable Fragment/Section array. */
+typedef struct MiniAsCodeAlignSink MiniAsCodeAlignSink;
+bool minias_code_align_emit(MiniAsCodeAlignSink *, const void *, size_t);
+bool minias_code_align_add_elf_flags(MiniAsCodeAlignSink *, uint32_t);
+void minias_code_align_error(MiniAsCodeAlignSink *, const char *, ...);
+const void *minias_code_align_target_state(const MiniAsCodeAlignSink *);
+bool minias_code_align_is_elf32(const MiniAsCodeAlignSink *);
+bool minias_code_align_has_active_fragment(const MiniAsCodeAlignSink *);
+/* Common owns source order, subsection identity and adjacency rules. */
+bool minias_code_align_preceded_by_adjacent_data(const MiniAsCodeAlignSink *);
 bool minias_section_append(MiniAs *as, int section_index, const void *data, size_t size);
 bool minias_section_append_zero(MiniAs *as, int section_index, size_t size);
 void minias_set_error(MiniAs *as, const char *format, ...);
@@ -993,7 +1001,7 @@ typedef struct MiniAsTargetOps {
                                         MiniAsTargetRelaxPlan *);
     /* Keep the lexical ISA/mode snapshot of the ALIGN site: a Target may
      * need different NOP encodings for different source-selected CPU modes. */
-    bool (*append_code_alignment)(MiniAs *,const MiniAsStmt *,size_t);
+    bool (*append_code_alignment)(MiniAsCodeAlignSink *,const MiniAsStmt *,size_t);
     /* Some targets interpret an explicit alignment fill as the canonical
      * executable NOP sequence (e.g. GNU x86 `balign 16,0x90`). Common
      * must not choose machine-code bytes or hardcode a target's fill value. */

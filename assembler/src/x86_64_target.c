@@ -4715,7 +4715,7 @@ static bool x64_encode(MiniAs *as,const MiniAsStmt *s) {
     return x64_encode_base(as,&native);
 }
 
-static bool x64_code_align(MiniAs *as,const MiniAsStmt *stmt,size_t n) {
+static bool x64_code_align(MiniAsCodeAlignSink *sink,const MiniAsStmt *stmt,size_t n) {
     /* GNU as x86-64 code alignment uses Intel multi-byte NOPs, not a run
      * of 0x90 bytes. Keep the exact GNU profile (1..11 bytes) in the Target,
      * while Common owns the ALIGN fragment and atomically commits its bytes.
@@ -4771,8 +4771,8 @@ static bool x64_code_align(MiniAs *as,const MiniAsStmt *stmt,size_t n) {
         {0x2e,0x8d,0xb4,0x00,0x00,0x2e,0x8d,0xb4,0x00,0x00,0x8d,0xb4,0x00,0x00},
         {0xeb,0x0d,0x2e,0x8d,0xb4,0x00,0x00,0x2e,0x8d,0xb4,0x00,0x00,0x8d,0x74,0x00}
     };
-    const bool legacy32=as->output_elf32 && stmt->site.mode_bits==X64_CODE32;
-    const bool legacy16=as->output_elf32 &&
+    const bool legacy32=minias_code_align_is_elf32(sink) && stmt->site.mode_bits==X64_CODE32;
+    const bool legacy16=minias_code_align_is_elf32(sink) &&
         x64_mode16(stmt->site.mode_bits);
     /* GNU GAS leaves a single 0x90 at the beginning of a code-alignment
      * fragment immediately following a raw DATA fragment, then fills the
@@ -4780,8 +4780,8 @@ static bool x64_code_align(MiniAs *as,const MiniAsStmt *stmt,size_t n) {
      * alignment after a machine INSN (or another ALIGN) and matters to
      * byte-exact Linux .S comparisons. Common owns the predecessor and
      * subsection test; Target only chooses the machine-specific NOP bytes. */
-    if(n!=0U && minias_code_alignment_preceded_by_adjacent_data(as)) {
-        if(!minias_emit_instruction_bytes(as,nops[0],1U))return false;
+    if(n!=0U && minias_code_align_preceded_by_adjacent_data(sink)) {
+        if(!minias_code_align_emit(sink,nops[0],1U))return false;
         --n;
     }
     while(n!=0U) {
@@ -4789,7 +4789,7 @@ static bool x64_code_align(MiniAs *as,const MiniAsStmt *stmt,size_t n) {
         size_t width=n>limit?limit:n;
         const unsigned char *bytes=legacy16?nops16[width-1U]:
             legacy32?nops32[width-1U]:nops[width-1U];
-        if(!minias_emit_instruction_bytes(as,bytes,width))
+        if(!minias_code_align_emit(sink,bytes,width))
             return false;
         n-=width;
     }

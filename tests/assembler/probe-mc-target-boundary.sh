@@ -406,7 +406,7 @@ signature=header.split('bool minias_emit_instruction_bytes(',1)[1].split(');',1)
 if re.search(r'\b(?:int\s+section|section_index)\b',signature):
     raise SystemExit('Target-visible byte emission still selects Section')
 start=core.index('bool minias_emit_instruction_bytes(')
-end=core.index('bool minias_code_alignment_preceded_by_adjacent_data(',start)
+end=core.index('struct MiniAsCodeAlignSink {',start)
 body=core[start:end]
 if 'section_index=owner->section;' not in body:
     raise SystemExit('CodeEmitter does not derive Section from active Fragment')
@@ -418,9 +418,32 @@ for name in ('riscv_target.c','riscv_encode.c','aarch64_target.c',
         raise SystemExit('Target supplies a Section for code bytes: '+name)
 print('MINIAS_MC_BYTE_OUTPUT_OWNER=PASS target_sections=none fragment_owner=1')
 PY
-grep -q 'minias_emit_instruction_bytes' assembler/src/riscv_target.c
-grep -q 'minias_emit_instruction_bytes' assembler/src/x86_64_target.c
-grep -q 'minias_emit_instruction_bytes' assembler/src/loongarch64_target.c
+# Executable ALIGN callbacks cannot receive the mutable assembler session.
+# The capability remains opaque in the Target-visible internal header.
+python3 - <<'PY'
+from pathlib import Path
+import re
+h=Path('assembler/src/minias_internal.h').read_text()
+core=Path('assembler/src/assembler.c').read_text()
+if 'bool (*append_code_alignment)(MiniAsCodeAlignSink *' not in h:
+    raise SystemExit('ALIGN callback still exposes mutable MiniAs')
+if 'struct MiniAsCodeAlignSink {' in h or 'struct MiniAsCodeAlignSink {' not in core:
+    raise SystemExit('ALIGN sink is not opaque to Targets')
+for file,name in (('riscv_target.c','riscv_emit_code_alignment'),
+                  ('aarch64_target.c','code_alignment'),
+                  ('x86_64_target.c','x64_code_align'),
+                  ('loongarch64_target.c','la_align')):
+    source=Path('assembler/src',file).read_text()
+    if not re.search(r'(?:static\s+)?bool\s+'+name+
+                     r'\s*\(\s*MiniAsCodeAlignSink\s*\*',source):
+        raise SystemExit('Target ALIGN callback not converted: '+file)
+    start=source.index('bool '+name+'(')
+    end=source.index('\n}\n',start)+2
+    body=source[start:end]
+    if re.search(r'\bas->|\bMiniAs\s*\*|minias_emit_instruction_bytes\s*\(',body):
+        raise SystemExit('ALIGN callback reaches mutable session: '+file)
+print('MINIAS_ALIGN_SINK_BOUNDARY=PASS targets=4 mutable_session=hidden')
+PY
 # Each Target must reserve a separate kind namespace.
 for header in riscv_fixup_kinds.h aarch64_fixup_kinds.h \
               x86_64_fixup_kinds.h loongarch64_fixup_kinds.h; do
