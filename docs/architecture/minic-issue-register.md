@@ -82,7 +82,7 @@
 | [MC-061](#mc-061-record-字段声明中-pointer-to-array-跨扩容借用) | P0 | OPEN | ASAN | Frontend | 声明 Record 的 pointer-to-array 字段遇匿名 Record 时 UAF，无需 initializer |
 | [MC-062](#mc-062-x86-alt-reloc-的-memory-输入源机约束分裂) | P2 | OPEN | LOCAL-COMPILE-DIFF | x86-64 ASM | Source 允许任意 GNU m lvalue，Machine 硬编码唯一符号，合法替代重定位遭拒 |
 | [MC-063](#mc-063-带标签的裸-record-声明被误作匿名成员) | P1 | OPEN | GNU-NATIVE-DIFF | Frontend/DataLayout | GNU 的 `struct Named;` 仅声明不占成员，MiniC 错当匿名成员导致 `sizeof` 错误 |
-| [MC-064](#mc-064-inline-asm-仅符号引用的静态函数被错误裁剪) | P1 | OPEN | ASM-ONLY | Core Reachability | `"i"` ASM 引用静态函数被降为文本后丢失函数可达性边，汇编有引用无定义 |
+| [MC-064](#mc-064-inline-asm-仅符号引用的静态函数被错误裁剪) | P1 | OPEN | RV64-ELF-LINK-DIFF | Core Reachability | GNU ASM-only static 函数符号被降成文本后丢失可达性边；同源 GNU ELF/QEMU PASS，MiniC GNU AS PASS、GNU LD undefined，等待 typed Core 引用方案 |
 | [MC-066](#mc-066-aarch64-浮点指针字段被误判为浮点聚合) | P2 | OPEN | LOCAL-COMPILE-DIFF | AArch64 ABI | 32B 聚合的 `double*` 被当 FP 成员拒绝，换成 `int*` 即通过 |
 | [MC-067](#mc-067-带-gnu-属性的-record-前向声明被错判为定义) | P2 | OPEN | LOCAL-COMPILE-DIFF | Frontend | `struct __attribute__((aligned(16))) Forward;` GCC 合法，MiniC 五目标要求 `{` |
 | [MC-069](#mc-069-aarch64-linux-vdso-在-gnu-ld-拒绝动态重定位) | P1 | OPEN | GNU/MiniC-ELF-AB | AArch64 Linux vDSO ELF visibility | 4108 项 MiniC `-S`/GNU AS 通过；GNU 的 HIDDEN 未定义数据符号经 ADR_PREL，而 MiniC 错为 DEFAULT+GOT，GNU LD 拒绝动态重定位 |
