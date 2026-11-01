@@ -640,6 +640,39 @@ x86 原生、65 位拒绝；`run-packed-bitfield-guard-page.sh`
 `aarch64-linux-gnu-gcc`，执行中断**不计 PASS**。完整五目标
 ELF/QEMU 和 MiniAS/MiniLD 联合验收按决定延后。
 
+## 批次 C20：Core 纯值 CFG 证明、静态 Record 事实和边界小接口（仅审读）
+
+**基线：** C19 与独立 MC-043/068 负向证据提交之前的
+远端 `7afbb2e`，2026-11-01。本批全文深读 Core **7** 个
+生产文件、原始合计 **1,485 行**：`cfg_constant_calls.c`（987）、
+`cfg_constant_calls.h`（14）、`core_const_global_record.c`（275）、
+`core_const_global_record.h`（13）、`opt_pure_statement.h`（139）、
+`address_alignment.h`（39）、`linear_vararg_cursor.h`（18）。
+累计 **121/339** 全文深读：Frontend **69/69**、Compiler
+**11/11**、Core **41/48**、Target **0/211**；Core 余 **7**、
+Target **211**，合计 **218/339** 待全文深读。
+
+| 小模块/消费者 | 审读与决策 |
+| --- | --- |
+| `cfg_constant_calls.c/.h` | `pure_call_argument` 是效果证明而非一切表达式的 `const_eval`；`__builtin_constant_p` 不求值实参，普通 direct Call 只有 bounded static-inline constant-return 或受限 pointer getter 才可当纯。Zero-argument tiny loop 64 步以内、最多 32 local、8 语句和整数 overflow 检查，任意违约都 fail-closed。**KEEP(effect proof + interpreter limits)**。 |
+| `opt_pure_statement.h` | GNU `({ ... })` 在递归 12 层内，只接受每句可证明 no-effect；`do { BUILD_BUG_ON(false); } while(0)` 需要精确 IF(false)、synthetic LABEL、IF(true) BREAK 形状，且 reentry index/fallback 无外部 goto/asm-goto/label-address。不能把“值固定”替代“执行无效果”的证明。**KEEP(no-effect/no-reentry proof)**。 |
+| `core_const_global_record.c/.h` | 只折叠 TU 内 `is_internal && is_read_only` 且无 reloc/union selector 的完整 Record array，固定整数下标、单个非 volatile integer field；要求 initializer slot 数与 Record 实际形状精确一致，避免被地址/强制转换制造出的未证实常量。可透过不超过 16 层静态 inline getter，但所选 RETURN 与参数都要再次证明纯。**KEEP(immutable-object provenance)**。 |
+| `address_alignment.h` | Core root 地址最小对齐只由 OBJECT/GLOBAL 的真实 storage 合同给出；指针的 C pointee type 或 cast 不能证明 packed address 自然对齐。64-edge 默认上限与更紧的 caller bound 可共存，1 表示未知而非已证明只有 1B 安全。**KEEP(target-neutral root proof API)**，具体实现/消费待 Target 全文审读。 |
+| `linear_vararg_cursor.h` | 只暴露与 C19 复核一致的 prepare/advance source-to-Core 接口；slot 宽度/寄存器分配来自具体 TargetInfo。**KEEP(shared linear cursor ABI contract)**。 |
+| 剩余复杂耦合 | `cfg_constant_calls` 与 `core_const_global_record` 都把 `MinicCoreLowerContext` 的 `local_integer_constants` 换为 callee 的短生命周期快照，但调用次数/入口形状、Record 地址证明均不等同；且固定名字 `SMALL_LOOP_PROBE` 的追踪文本和纯辅助判断被日志消费。**NEEDS_PROOF(caller-context recursion + diagnostics)**，本批不合并两个解释器、不擅删 Debug trace。 |
+
+**C20 生产源码 +0/-0，净 0 行**；C1～C20 纯清理累计仍为
+**净 -279 行**。本批 **KEEP 5 / NEEDS_PROOF 1 / DELETE 0**。
+优先把未审完的语义证明写清楚，为下一轮正式拆解 Core
+source/Target interface 提供证据；不是每读一个文件就要强行删代码。
+
+**验证 PASS：** `probe-gnu-constant-bitfield-helper-cfg.sh`
+使用 GNU `-O2`/MiniC `-S`、GNU AS/LD 和 x86 本机运行验证
+常量不保留不可达诊断调用、两个应有诊断仍保留；
+`run-core-local-effect-summary.sh` 的 AST 单元、GNU/MiniC
+x86 原生和五 ISA `-S`。本批没有修改生产语义，故上述是邻近
+定向复验；不等于五目标完整 ELF/QEMU 或联合验收。
+
 ## 后续批次进度规则
 
 每批发布：当前 HEAD、源文件逐目录覆盖（明确深读与只扫的区别）、
