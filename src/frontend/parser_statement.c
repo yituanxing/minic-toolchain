@@ -897,6 +897,7 @@ static bool parse_gnu_statement_attribute(MinicParser *parser) {
 
 static bool block_record_starts_standalone_declaration(MinicParser *parser, bool *is_standalone) {
     MinicParser probe;
+    MinicParsedAttributeList tag_attributes;
     size_t brace_depth;
 
     if (parser == NULL || is_standalone == NULL ||
@@ -908,7 +909,14 @@ static bool block_record_starts_standalone_declaration(MinicParser *parser, bool
     if (!minic_parser_advance(&probe)) {
         return false;
     }
+    (void)memset(&tag_attributes, 0, sizeof(tag_attributes));
+    if (!minic_parser_collect_gnu_attribute_lists(&probe, &tag_attributes)) {
+        return false;
+    }
     if (probe.current.kind == MINIC_TOKEN_IDENTIFIER && !minic_parser_advance(&probe)) {
+        return false;
+    }
+    if (!minic_parser_collect_gnu_attribute_lists(&probe, &tag_attributes)) {
         return false;
     }
     if (probe.current.kind == MINIC_TOKEN_SEMICOLON) {

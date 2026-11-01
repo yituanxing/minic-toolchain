@@ -2409,6 +2409,17 @@ static bool record_keyword_starts_standalone_declaration(MinicParser *parser, bo
         if (!minic_parser_advance(&probe)) {
             return false;
         }
+        /* A forward tag may carry GNU attributes after its spelling:
+         *     struct Forward __attribute__((aligned(16)));
+         * Consume only for classification; the record owner validates them. */
+        {
+            MinicParsedAttributeList tag_attributes;
+
+            (void)memset(&tag_attributes, 0, sizeof(tag_attributes));
+            if (!minic_parser_collect_gnu_attribute_lists(&probe, &tag_attributes)) {
+                return false;
+            }
+        }
     }
     if (probe.current.kind == MINIC_TOKEN_SEMICOLON) {
         *is_standalone = true;

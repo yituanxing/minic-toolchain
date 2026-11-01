@@ -952,12 +952,17 @@ static bool parse_record_forward_declaration(MinicParser *parser) {
     const MinicParserTagBinding *tag;
     MinicRecordId record_id;
     MinicTokenKind keyword;
+    size_t explicit_alignment = 0U;
+    bool is_packed;
     bool is_union;
 
     keyword = parser->current.kind;
     is_union = keyword == MINIC_TOKEN_KW_UNION;
+    is_packed = parser->record_pack_alignment == 1U;
     if ((keyword != MINIC_TOKEN_KW_STRUCT && keyword != MINIC_TOKEN_KW_UNION) ||
-        !minic_parser_advance(parser) || parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
+        !minic_parser_advance(parser) ||
+        !parse_record_type_attributes(parser, is_union, &explicit_alignment, &is_packed) ||
+        parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
         minic_parser_error(parser, "expected record tag in forward declaration");
         return false;
     }
@@ -984,23 +989,44 @@ static bool parse_record_forward_declaration(MinicParser *parser) {
         return false;
     }
     return minic_parser_advance(parser) &&
+           parse_record_type_attributes(parser, is_union, &explicit_alignment, &is_packed) &&
            minic_parser_expect(
                parser, MINIC_TOKEN_SEMICOLON, "expected ';' after record declaration");
 }
 
 bool minic_parser_parse_record_definition(MinicParser *parser) {
-    MinicParser probe;
+    MinicLexer saved_lexer;
+    MinicToken saved_token;
+    MinicParsedAttributeList probe_attributes;
     MinicType record_type;
+    bool lookahead_ok;
+    bool is_forward;
 
     if (parser == NULL) {
         return false;
     }
 
-    /* FIXME(MC-067): this lookahead misses GNU attributes before a forward
-     * tag and misroutes the declaration to a required-`{` definition. */
-    probe = *parser;
-    if (minic_parser_advance(&probe) && probe.current.kind == MINIC_TOKEN_IDENTIFIER &&
-        minic_parser_advance(&probe) && probe.current.kind == MINIC_TOKEN_SEMICOLON) {
+    /* Probe only the token/lexer cursor. Attribute parsing never mutates
+     * the AST, and this route must not copy the entire Parser arena state. */
+    saved_lexer = parser->lexer;
+    saved_token = parser->current;
+    (void)memset(&probe_attributes, 0, sizeof(probe_attributes));
+    lookahead_ok = minic_parser_advance(parser) &&
+                   minic_parser_collect_gnu_attribute_lists(parser, &probe_attributes);
+    is_forward = false;
+    if (lookahead_ok && parser->current.kind == MINIC_TOKEN_IDENTIFIER) {
+        lookahead_ok = minic_parser_advance(parser) &&
+                       minic_parser_collect_gnu_attribute_lists(parser, &probe_attributes);
+        if (lookahead_ok) {
+            is_forward = parser->current.kind == MINIC_TOKEN_SEMICOLON;
+        }
+    }
+    parser->lexer = saved_lexer;
+    parser->current = saved_token;
+    if (!lookahead_ok) {
+        return false;
+    }
+    if (is_forward) {
         return parse_record_forward_declaration(parser);
     }
 

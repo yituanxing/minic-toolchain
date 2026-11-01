@@ -1548,6 +1548,13 @@ check-x86-head-inline-section: $(MINIC_CC_BINARY)
 
 check-fast: check-x86-head-inline-section
 
+.PHONY: check-attributed-record-forward-declarations
+check-attributed-record-forward-declarations: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	bash tests/compiler/c0/probe-attributed-record-forward-declarations.sh
+
+check-fast: check-attributed-record-forward-declarations
+
 .PHONY: check-x86-pat-clflushopt-alt
 check-x86-pat-clflushopt-alt: $(MINIC_CC_BINARY)
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
