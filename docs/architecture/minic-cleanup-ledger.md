@@ -1334,6 +1334,60 @@ AArch64 NEON Stage3 仍 `failure`、x86 nested-KVM preflight 仍
 当次仍 `in_progress`；不能将 Linux 绿灯 workflow 中的 skipped
 runner 等同于五目标 P2/P3 全通过。
 
+## 批次 C37：AArch64 ASM 源资格及 x86 机器 ASM 全文深读、纯冗余收敛
+
+**基线：** C36 远端 `536cf133`，2026-11-01。本批将剩余三个
+大型 Target 源码中的 **2 个**完成逐行全文深读：
+`src/target/aarch64/asm_contract.c`（原始 **7,452 行**）与
+`src/target/x86_64/machine_asm.c`（原始 **6,462 行**），合计
+**13,914 行**。两者均经过完整首尾逐段审阅，之前 C35 的定点扫描
+未重复计数。全项目累计全文深读 **341/342**：Frontend **71/71**、
+Compiler **11/11**、Core **48/48**、Target **211/212**；最后
+仅余 `src/target/x86_64/asm_contract.c`（现约 **8,972 行**，
+C35 原始审计 8,975 行），其规则索引与边界已核查、**不冒充全文深读**。
+
+| 证明对象 | 所有权、清理与保留决定 |
+| --- | --- |
+| AArch64 源 ASM admission | `requires_qualified_input_asm` 的精确前缀表连续出现两次 `"prfm"`；任一命中均返回同一布尔结果，**DEDUP(1 duplicate entry)**。Linux uaccess 的 `output_count ∈ {1,2}` 且 `output_count + input_count == 3` 已唯一确定输入数，额外 `output_count == 2 - (input_count == 2)` 判定被完全蕴含，**DELETE(redundant count gate)**。其余 `.irp` 及 GNU 模板完全匹配保留。 |
+| AArch64 机器 ISA / Core 中介 | KVM `__kvm_ex_table`、`.altinstructions`、DAIF/PSTATE、TLBI、LSE/LLSC、自旋锁、SMCCC、系统寄存器写入、缓存/uaccess 的异常类型与物理 GPR/帧槽均有独立约束，**KEEP(source qualification ≠ Core machine revalidation)**，未删任何指令或节元数据。 |
+| x86 机器 ASM 小冗余 | PM trace `file_symbol` 已在上一分支判非空，范围检查处重复判空不可达；PV 间接 CALL 的输出/输入物理寄存器数组逐项同值，合并成一份；flushcache 的 `count` 始终为 2，直接用编译期常量。**DEDUP/DELETE(no ABI/register change)**。 |
+| x86 MSR、遗留注释与可信边界 | `emit_linux_msr` 的外层守卫已判 `is_volatile`、非 goto、无 register clobber、按 form 推得 clobber 与 count；在 `form ∈ {3,4}` 再检查同一五项不会改变任何返回值，**DELETE(unreachable nested gate)**；相同 `%rcx/%rax/%rdx` 写入表直接引用外层表。删除误贴在 bit-scan 上方的旧 mul/div 注释与多余空行。x86 typed FormId / 88 legacy source 资格、ELF exception/alternative、内核授权 ISA 仍 **KEEP**；最后一份源端 `asm_contract.c` 尚需全文核对，跨层迁移 **NEEDS_PROOF(MC-078)**。 |
+
+**C37 生产源码 +8/-28、净 -20 行**，仅变动上述两文件；
+严格没有扩大 GNU ASM 模板集合、移除关键寄存器/异常检查、
+改指令字符串或改 ABI。C1～C37 纯清理累计 **净 -457 行**；
+文档行数不计。
+
+**本地验证 PASS：** Release 全目标 `-Werror` 构建；
+`probe-x86-linux-paravirt-patch-site`（GNU/MiniC native exit42、
+ELF site size/type）、`probe-x86-linux-pm-tracedata-elf`、
+`probe-x86-linux-msr-extable`、`probe-x86-linux-control-cache-isa`、
+`probe-x86-pat-clflushopt-alt`（三种 immediate 及拒编）、
+`probe-x86-linux-native-cpuid`（20 native pairs）、
+`probe-x86-linux-kexec-crash-regs`、`probe-x86-linux-bitops`、
+`probe-x86-linux-atomic-cc`；AArch64
+`probe-aarch64-linux-smccc-v11-full`、
+`probe-aarch64-linux-atomic-alt-matrix`、
+`probe-aarch64-linux-kvm-at-fixup`、
+`probe-aarch64-linux-lse-atomic-full`、
+`probe-aarch64-linux-hyp-spinlock-lse`；
+`check-minic-target-boundaries`（`MINIC_BACKEND_BOUNDARY_CHECK=PASS`）。
+同一 GNU 预处理输入分别以 C36 既有二进制和 C37 二进制 `-S`：
+x86 paravirt patch site 与 AArch64 LSE/CASP fixture 的输出 `.s`
+均 **`cmp` 逐字节相同**。
+
+**未完成／环境阻断：** `probe-aarch64-linux-alt-cap-bounds`
+在 9 个合法 capability 与 5 个越界拒编检查通过后因
+`aarch64-linux-gnu-gcc` 缺失中断，整个脚本 **NOT_COMPLETE**；
+`probe-aarch64-linux-encoded-sysreg`、`probe-aarch64-linux-io-dependency`、
+`probe-aarch64-linux-cmpwait`、`probe-aarch64-linux-volatile-mrs`
+同受交叉 GCC 缺失影响，均 **NOT_COMPLETE**。有 PASS 输出的
+AArch64 probes 明示 `GNU_GAS=SKIP` / `GAS=SKIP` 者只计源 `-S`
+和其已运行的负例，不计 A64 目标机运行。未启动 Linux Image/QEMU
+五目标联合验收；此前远端 A64 NEON Stage3 准入失败及 x86 nested-KVM
+preflight 仍不由本清理批次处理。本 C37 新提交的远端 CI 状态
+将在下一次按精确 HEAD 核查，不能沿用 C35 的绿色证据。
+
 ## 后续批次进度规则
 
 每批发布：当前 HEAD、源文件逐目录覆盖（明确深读与只扫的区别）、

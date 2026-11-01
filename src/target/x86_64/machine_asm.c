@@ -135,7 +135,7 @@ static bool emit_linux_pm_trace_record(
         !file_symbol) return false;
     source_line = line_def->value.integer_value;
     if (source_line < 0 || source_line > 65535 ||
-        !file_symbol || !file_symbol[0]) return false;
+        !file_symbol[0]) return false;
     return fputs("  movq $1f, %rax\n"
                  "  .section .tracedata,\"a\"\n"
                  "1:\n", out) != EOF &&
@@ -328,8 +328,7 @@ static bool emit_linux_real_mode_far_jump(
 static bool emit_linux_pv_indirect_call(
     FILE *out, const MinicCoreFunction *fn, const MinicX86Frame *frame,
     const MinicCoreInstruction *ins, const MinicCoreInlineAsm *info) {
-    static const char *const outputs[] = {"%rdi", "%rsi", "%rdx", "%rcx"};
-    static const char *const inputs[] = {"%rdi", "%rsi", "%rdx", "%rcx"};
+    static const char *const registers[] = {"%rdi", "%rsi", "%rdx", "%rcx"};
     static const char *const clobbers[] = {"cc", "rax", "r8", "r9", "r10", "r11"};
     const MinicCoreStructuredInlineAsmOperand *b =
         ins->value.structured_inline_asm.operands;
@@ -377,7 +376,7 @@ static bool emit_linux_pv_indirect_call(
      * so loading them does not violate C evaluation order. The x86 SysV
      * paravirtual callback receives 0..4 arguments, *not* stack args. */
     for (i = 7U; i < ins->value.structured_inline_asm.operand_count; ++i)
-        if (!x86_value_load(out, frame, b[i].value, inputs[i - 7U]))
+        if (!x86_value_load(out, frame, b[i].value, registers[i - 7U]))
             return false;
     if (!x86_value_load(out, frame, b[6].value, "%r11") ||
         fputs("771:\n999:\n"
@@ -401,7 +400,7 @@ static bool emit_linux_pv_indirect_call(
               "  .popsection\n", out) == EOF) return false;
     for (i = 0U; i < 4U; ++i)
         if (!x86_value_load(out, frame, b[i].value, "%r10") ||
-            fprintf(out, "  movq %s, (%%r10)\n", outputs[i]) < 0) return false;
+            fprintf(out, "  movq %s, (%%r10)\n", registers[i]) < 0) return false;
     return true;
 }
 
@@ -859,16 +858,15 @@ static bool emit_linux_flushcache_copy(
         ins->value.structured_inline_asm.operands;
     const unsigned int form = info ? minic_x86_64_linux_flushcache_copy_form(
         info->template_text, info->template_length) : 0U;
-    const size_t count = 2U;
     size_t i;
 
     if (!out || !fn || !frame || !ins || !info || !b || !form ||
         info->is_goto || !info->is_volatile ||
         !info->has_memory_clobber ||
-        ins->value.structured_inline_asm.operand_count != count ||
+        ins->value.structured_inline_asm.operand_count != 2U ||
         info->register_clobber_count != (form == 4U ? 0U : (form == 1U ? 4U : 1U)))
         return false;
-    for (i = 0U; i < count; ++i) {
+    for (i = 0U; i < 2U; ++i) {
         if (b[i].operand_index != i || b[i].value >= fn->value_count ||
             b[i].early_clobber || b[i].has_fixed_register_binding ||
             b[i].kind != (form == 4U && i == 0U
@@ -1406,10 +1404,6 @@ static bool emit_matched_register_template(
     return fputc('\n', out) != EOF;
 }
 
-/* 64x64 unsigned multiply into RDX:RAX, then 128/64 unsigned divide.
- * Exact GNU "=a"/"a"/"rm"/"rm"/"rdx" operand ownership is checked again
- * against Core binding roles. No hidden register allocator policy escapes
- * the x86 machine emitter and the output still lands in its SSA lvalue. */
 /* Core's structured ASM describes output address + scalar input, not
  * an instruction string to be forwarded. The machine rechecks the entire
  * x86 64-bit shape, chooses physical caller-scratch R10/R11/RAX, and emits
@@ -1582,14 +1576,6 @@ static bool emit_linux_bitops(
            x86_value_load(out,frame,b[flagindex].value,"%r10")&&
            fputs("  movb %al, (%r10)\n",out)!=EOF;
 }
-
-
-
-
-
-
-
-
 
 /* True CF carry-out propagation on 32-bit original Linux csum_add:
  * select GNU rm's register alternative. ALL inputs are materialized
@@ -2284,12 +2270,7 @@ static bool emit_linux_msr(FILE *out,const MinicC0Program *program,
        ins->value.structured_inline_asm.operand_count!=count)return false;
     if(form==3U || form==4U) {
         static const char *const in_regs_read[]={"%rcx"};
-        static const char *const in_regs_write[]={"%rcx","%rax","%rdx"};
-        const char *const *regs=form==3U?in_regs_read:in_regs_write;
-        if(!info->is_volatile || info->is_goto ||
-           info->has_memory_clobber!=(form==4U) ||
-           info->register_clobber_count ||
-           ins->value.structured_inline_asm.operand_count!=4U)return false;
+        const char *const *regs=form==3U?in_regs_read:input_registers;
         for(i=0U;i<4U;++i){
             const bool output=i<outputs;
             if(ops[i].value>=fn->value_count || ops[i].operand_index!=i ||

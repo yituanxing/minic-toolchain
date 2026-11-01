@@ -1177,7 +1177,7 @@ bool minic_aarch64_requires_qualified_input_asm(const MinicInlineAsm *src) {
         "strb", "strh", "str",
         /* Original Linux CMPXCHG begins with PRFM and named operands;
          * rejected constraints/modes must not escape into generic Core. */
-        "prfm", "prfm", "1:", ".arch_extension lse", "rbit"
+        "prfm", "1:", ".arch_extension lse", "rbit"
     };
     char prefix[64];
     const char *const single[] = {prefix};
@@ -3475,7 +3475,6 @@ static bool aarch64_linux_uaccess_source(
     size_t data_bytes, data_alignment;
 
     if (!program || !src || !contract || !src->is_volatile || src->is_goto ||
-        src->output_count != (size_t)(2U - (src->input_count == 2U)) ||
         (src->output_count != 1U && src->output_count != 2U) ||
         src->output_count + src->input_count != 3U ||
         !src->outputs || !src->inputs || src->clobber_count != 0U ||
