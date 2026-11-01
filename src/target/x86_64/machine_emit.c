@@ -9,7 +9,6 @@
 #include "target/x86_64/asm_contract.h"
 #include "target/data_layout.h"
 #include <inttypes.h>
-#include <limits.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -1095,8 +1094,7 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
                    x86_i128_load(out, frame, src, "%rax", "%rdx") &&
                    fprintf(out, "  movq %%rax, (%%r10)\n"
                                 "  movq %%rdx, 8(%%r10)\n") >= 0;
-        if (src >= fn->value_count ||
-            !minic_x86_64_storage_width(program, target, fn->values[src].type, &bytes, &sign))
+        if (!minic_x86_64_storage_width(program, target, fn->values[src].type, &bytes, &sign))
             return false;
         if (frame->direct_object_address_consumer &&
             frame->direct_object_address_value_id == ins->value.store.address) {

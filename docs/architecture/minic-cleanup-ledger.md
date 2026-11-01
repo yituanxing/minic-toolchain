@@ -1172,6 +1172,53 @@ x86-64 **6**、AArch64 **24**、LoongArch64 **22**。x86 的大型
 没有启动五目标 Linux Image/QEMU 联合验收，也没有将任何 skipped
 或仅静态 `-S` 断言称为 P2/P3 认证。
 
+## 批次 C34：x86-64 Core dispatch、早期地址角色、SysV CALL 与 GNU ASM 公共契约（审读并去重复）
+
+**基线：** C33 已推送 `69a2c705`，2026-11-01。逐文件全文深读
+`src/target/x86_64/codegen.c`（917 行）、
+`machine_emit.c`（1,587 行）、`machine_call.c`（658 行）和
+`asm_contract.h`（390 行），共 **4 个生产文件、原始 3,552 行**。
+全项目累计 **294/342** 全文深读：Frontend **71/71**、
+Compiler **11/11**、Core **48/48**、Target **164/212**，
+仍余 **48 个 Target 文件**：x86-64 **2**（大型
+`asm_contract.c` 8,975 行、`machine_asm.c` 6,462 行）、
+AArch64 **24**、LoongArch64 **22**。对 x86 余下两文件的函数名
+索引和调用关系扫描**不算**全文深读。
+
+| 子域 | 真实语义、耦合与纯清理决策 |
+| --- | --- |
+| `codegen` / early head | Core FunctionFacts/StoragePlan、CFG source-label 根与可达性由 Common 维护；x86 函数体负责 frame、参数寄存器、函数段、ELF 属性以及同 basic block 单用值的 GP 直通。早期 `.head.text` 特有的物理 RIP 地址与链接 VMA 整数值，必须先统计直接数据使用、后决定 cast/rebase 两种角色；静态 helper 只从 head-only CALL 闭包继承此角色。两遍原本各有相同的 LOAD/STORE/ATOMIC 地址操作数 switch，抽成单一只读提取函数，**DEDUP(address decoding only); KEEP(two-pass ordering, SSA roles and closure)**。 |
+| `machine_emit` | Core opcode 到 x86 物理指令的唯一通路，保持 128-bit 双寄存器、SysV `va_list` 24B cursor、精确 Record byte copy、固定 16B GNU vector copy、仅 relaxed 的 atomic MOV、运行时 thunk/IBT、早期 memory rebase 和 FPU/x87 分支。STORE 在入口已检查 `src < value_count`，标量路径同一个 `src` 重复判断无作用，**DELETE(one duplicate guard)**，不碰任何发射模板与异常/reloc side effect。 |
+| `machine_call` | Direct/indirect CALL 同时消费已认证语义 CallIndex 和 ABI argument snapshot；独立 standalone fallback 仍可规划。SysV/Win64、x87 的 80-bit helper 对 GNU TFmode 名称映射、sret 的 RSP 校正以及栈上传递 16B、4096B 以内 Record 都是目标 ABI 的实义。**KEEP(cached semantic site, exact outgoing stack, x87 helper whitelist)**；未证的调用边界元数据风险不直接登记错编。 |
+| `asm_contract.h` | 枚举 FormId/variant、GS/percpu/bitops、CMPXCHG、uaccess、exception table、KVM、RAID6 的 source qualification 入口；真正匹配实现仍在两份大型 `.c` 中。无法仅凭重复 API 名称判定可以删去旧匹配，因为 source admission 与 machine 防伪各有调用者和副作用。**KEEP(qualified template identity); NEEDS_PROOF(source/machine ownership convergence)**。 |
+
+**C34 生产源码 +23/-37、净 -14 行**：两个 early-head switch
+合一、STORE 一个冗余 bounds check、三个无使用的 `limits.h`
+和 `codegen.c` 一项无使用的 `data_layout.h` include；
+未改变 GNU 可接受的 C 源、机器指令模板、前后端对象布局或诊断。
+C1～C34 纯清理累计 **净 -385 行**。
+
+**本地验证 PASS：** Release `-Werror` 全目标编译；
+`probe-x86-kernel-head-link-address`（PC32/32S mixed relocation、
+GNU/MiniC 双原生异址 runtime）、`probe-x86-head-inline-section`
+（head/init clone、GNU native）、`probe-x86-reachable-vma-assert`
+（GNU/MiniC exit42）、`run-x86_64-one-gp-sysv`、
+`probe-x86-int128-runtime-abi`、`check-minic-target-boundaries`
+（`MINIC_BACKEND_BOUNDARY_CHECK=PASS`）。未启动五目标
+Linux Image/QEMU 联合验收。
+
+**精确远端证据复核（C33 头 `69a2c705`）：** Native Strict
+Backend Gate 真正执行并 PASS，四架构 compiler-runtime 4/4 PASS；
+RV32I Real Software（含 cJSON/zlib/Zstd/BusyBox/Lua 的 QEMU 双
+运行差分）与 RV32 virtio differential 真正 PASS。AArch64 NEON
+Stage3 仍在 GCC `#pragma GCC aarch64 "arm_neon.h"` 准入处 FAIL，
+现有负例明确标完整 NEON header 未认证，不能无条件忽略 pragma
+刷绿；x86 KVM guest 未暴露 nested VMX，属于 preflight 环境
+BLOCKED。RV32 full 18 / Loong GNU P2 查询时尚在运行；
+Linux three-ISA/GNU P0-P1 等绿色 gate 中 producer/boot/runner
+为 SKIPPED 的，不计为本 HEAD 完整 Linux 通过。以上独立问题均未
+混入 C34 源码纯清理。
+
 ## 后续批次进度规则
 
 每批发布：当前 HEAD、源文件逐目录覆盖（明确深读与只扫的区别）、

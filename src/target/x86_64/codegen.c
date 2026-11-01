@@ -8,7 +8,6 @@
 #include "target/common/elf_alias_emit.h"
 #include "target/common/global_emit.h"
 
-#include "target/data_layout.h"
 #include "target/x86_64/global_emit.h"
 #include "target/x86_64/abi.h"
 #include "target/x86_64/frame.h"
@@ -16,7 +15,6 @@
 #include "core/value_uses.h"
 
 #include <inttypes.h>
-#include <limits.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -109,6 +107,24 @@ static MinicCoreGlobalId x86_head_address_global(
     return MINIC_CORE_GLOBAL_INVALID;
 }
 
+/* Both head-address passes inspect the same memory-address operand. Keep
+ * the census and the cast/rebase decision separate, but not their decoding. */
+static MinicCoreValueId x86_head_memory_address(
+    const MinicCoreInstruction *ins) {
+    switch (ins->kind) {
+    case MINIC_CORE_INSTRUCTION_LOAD:
+        return ins->value.load.address;
+    case MINIC_CORE_INSTRUCTION_STORE:
+        return ins->value.store.address;
+    case MINIC_CORE_INSTRUCTION_ATOMIC_LOAD:
+        return ins->value.atomic_load.address;
+    case MINIC_CORE_INSTRUCTION_ATOMIC_STORE:
+        return ins->value.atomic_store.address;
+    default:
+        return MINIC_CORE_VALUE_INVALID;
+    }
+}
+
 /* Direct global pointers, including those passed to access helpers, retain
  * their physical RIP representation. A pointer-to-integer cast is the VMA
  * *consumer*: translate that cast's result from physical to link VMA. This
@@ -138,27 +154,11 @@ static bool x86_head_plan_address_roles(
         for (j = 0U; j < block->instruction_count; ++j) {
             const MinicCoreInstructionId id = block->instructions[j];
             const MinicCoreInstruction *ins;
-            MinicCoreValueId address = MINIC_CORE_VALUE_INVALID;
             MinicCoreGlobalId global;
             if (id >= fn->instruction_count) { free(defs); return false; }
             ins = &fn->instructions[id];
-            switch (ins->kind) {
-            case MINIC_CORE_INSTRUCTION_LOAD:
-                address = ins->value.load.address;
-                break;
-            case MINIC_CORE_INSTRUCTION_STORE:
-                address = ins->value.store.address;
-                break;
-            case MINIC_CORE_INSTRUCTION_ATOMIC_LOAD:
-                address = ins->value.atomic_load.address;
-                break;
-            case MINIC_CORE_INSTRUCTION_ATOMIC_STORE:
-                address = ins->value.atomic_store.address;
-                break;
-            default:
-                break;
-            }
-            global = x86_head_address_global(fn, defs, address, NULL);
+            global = x86_head_address_global(
+                fn, defs, x86_head_memory_address(ins), NULL);
             if (global < fn->global_count) direct[global] = true;
         }
     }
@@ -170,24 +170,13 @@ static bool x86_head_plan_address_roles(
         for (j = 0U; j < block->instruction_count; ++j) {
             const MinicCoreInstructionId id = block->instructions[j];
             const MinicCoreInstruction *ins;
-            MinicCoreValueId address = MINIC_CORE_VALUE_INVALID;
+            MinicCoreValueId address;
             MinicCoreGlobalId global;
             bool crossed_vma_cast = false;
             if (id >= fn->instruction_count) { free(defs); return false; }
             ins = &fn->instructions[id];
+            address = x86_head_memory_address(ins);
             switch (ins->kind) {
-            case MINIC_CORE_INSTRUCTION_LOAD:
-                address = ins->value.load.address;
-                break;
-            case MINIC_CORE_INSTRUCTION_STORE:
-                address = ins->value.store.address;
-                break;
-            case MINIC_CORE_INSTRUCTION_ATOMIC_LOAD:
-                address = ins->value.atomic_load.address;
-                break;
-            case MINIC_CORE_INSTRUCTION_ATOMIC_STORE:
-                address = ins->value.atomic_store.address;
-                break;
             case MINIC_CORE_INSTRUCTION_SCALAR_BITCAST:
                 if (ins->result < fn->value_count &&
                     ins->value.operand < fn->value_count &&

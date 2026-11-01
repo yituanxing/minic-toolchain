@@ -4,7 +4,6 @@
 #include "target/x86_64/call_plan.h"
 #include "target/common/core_call_view.h"
 #include <inttypes.h>
-#include <limits.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
