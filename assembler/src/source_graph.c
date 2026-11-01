@@ -1,9 +1,11 @@
+#define _POSIX_C_SOURCE 200809L
 #include "source_graph_internal.h"
 
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/types.h>
 
 /* The frame owns its lexical lines regardless of which source expansion
  * borrowed its body. The SourceGraph destructor calls this once for the
@@ -79,7 +81,8 @@ static void strip_gnu_c_comments(const MiniAsTargetOps *target, char *line,
 bool minias_source_graph_load_physical(MiniAs *as, const char *path,
                                       MiniAsSourceGraph *graph) {
     FILE *file;
-    char linebuf[65536];
+    char *linebuf=NULL;
+    size_t line_capacity=0U;
     size_t line_no=0U;
     bool ok=true;
     bool comment_active=false;
@@ -96,19 +99,15 @@ bool minias_source_graph_load_physical(MiniAs *as, const char *path,
     }
     frame=&graph->physical;
     frame->kind=MINIAS_SOURCE_FRAME_FILE;
-    while(fgets(linebuf,sizeof(linebuf),file)!=NULL) {
-        size_t len;
+    /* Reuse one dynamically sized physical-line buffer for the whole file.
+     * Fixed 64 KiB fgets chunks rejected otherwise valid GNU source lines. */
+    while(getline(&linebuf,&line_capacity,file)>=0) {
         MiniAsSourceLine *line;
         ++line_no;
         if(!validate_user_source_private_marker(as,linebuf,line_no)) {
             ok=false;break;
         }
         strip_gnu_c_comments(as->target,linebuf,&comment_active);
-        len=strlen(linebuf);
-        if(len==sizeof(linebuf)-1U && linebuf[len-1U]!='\n') {
-            minias_set_error(as,"line-too-long:line=%zu",line_no);
-            ok=false;break;
-        }
         if(!minias_grow_array((void **)&frame->lines,
                               &frame->capacity,sizeof(*frame->lines),
                               frame->count+1U)) {
@@ -125,10 +124,12 @@ bool minias_source_graph_load_physical(MiniAs *as, const char *path,
         line->source_segment=0U;
         ++frame->count;
     }
-    if(ok && ferror(file)) {
+    /* getline can return -1 on allocation failure without EOF. */
+    if(ok && (ferror(file) || !feof(file))) {
         minias_set_error(as,"input-read:%s",path);
         ok=false;
     }
+    free(linebuf);
     fclose(file);
     if(ok && comment_active) {
         minias_set_error(as,"unterminated-gnu-block-comment");

@@ -141,6 +141,26 @@ Common session (P04), SourceSite/EOF ownership (P05), P09 `.reloc`
 grammar. These are active design or compatibility gates, not confirmed
 dead-code restrictions. Do not inflate modified-file coverage into closure.
 
+### 2026-11-01 physical-line restriction removal (SourceGraph)
+
+The physical input collector still used a fixed 65,536-byte `fgets`
+buffer, rejected valid long physical GNU source lines, and duplicated
+line-length logic around a chunked read. Replace it with one reusable
+POSIX `getline` buffer. Keep the same Source-owned physical frame,
+private marker validation, C block-comment state, line identity and
+one-file-read replay contract. Always release the temporary input
+buffer after read or error; distinguish an ordinary EOF from `getline`
+failure using `feof/ferror`. No separate Source parser was added.
+
+The new A0 GNU exact-byte fixture contains a single >70 KiB C-comment
+line followed by a far conditional branch and 200-repeat source
+expansion. It checks the resulting x86 .text and single physical read
+under the existing `MINIAS_TRACE_RELAYOUT` mechanism. This removes
+one **unnecessary physical input line cap**, not a genuine ISA/ABI
+constraint. The per-instruction Target legality, 64 macro argument
+slots, x86 code16/32 allowlist and Target encode-ownership restrictions
+remain intact until separately proven redundant.
+
 ## Current refactor dashboard — 2026-11-01 (exact-head recovery and live-path audit)
 
 ### 2026-11-01 Source collector single-pass de-duplication (local batch)
