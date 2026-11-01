@@ -793,6 +793,7 @@ bool minias_encode_leb_integer(int64_t, bool, unsigned char[10], size_t *);
  * path accepts all uint64_t values, including those above INT64_MAX. */
 bool minias_encode_uleb_integer(uint64_t, unsigned char[10], size_t *);
 bool minias_section_append_le32(MiniAs *, int, uint32_t);
+bool minias_section_patch_le32(MiniAs *, int, size_t, uint64_t);
 bool minias_section_append_uleb(MiniAs *, int, uint64_t);
 bool minias_section_append_sleb(MiniAs *, int, int64_t);
 /* Inspect the retained expression program, never source text. Only a

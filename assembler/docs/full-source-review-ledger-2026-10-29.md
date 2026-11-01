@@ -2,7 +2,7 @@
 
 ## Current refactor dashboard — 2026-11-01 (exact-head recovery and live-path audit)
 
-### 2026-11-01 follow-up — private wrapper/visibility cleanup (local batch)
+### 2026-11-01 follow-up — private wrapper/visibility cleanup (`13eac49f`)
 
 The renewed call-site review distinguishes **32 production files scanned for
 references** from a completed function-by-function proof. Only three private
@@ -24,12 +24,42 @@ surfaces were changed, with their consumers traced before deletion:
 **Local verification on the modified tree:** Release build and A0 30/30
 PASS, MCExpr ownership gate PASS, public four-Target invocation PASS, CFI
 absolute-expression and 4,096-section/8,192-subsection oracles PASS.
+The verified tree was pushed to the original PR #667 branch as `13eac49f`
+(8 files total: production +16/−40; tests +10/−1; docs +29/−0).
 Cross-Target GNU checks unavailable in some A0 subtests remain skips, not
 passes. No Linux Image/QEMU or complete GNU semantic corpus rerun is claimed.
 This batch is **private API/obsolete forwarding cleanup, not an architecture
 redesign**. The next deep-reading pass should continue seeking genuinely
 unused private chains; keep P04 encode, P05 SourceSite/EOF, conditional
 replay and historical public entry points until their consumers move.
+
+### 2026-11-01 next cleanup — one checked Common LE32 section patch
+
+The cross-producer byte scan found exactly one remaining duplicated Section
+write algorithm in this slice: CFI record-length completion and `.debug_line`
+header/record-length completion both encoded a little-endian 32-bit value
+directly into existing Section bytes. Both now call a single checked Common
+`minias_section_patch_le32` owner, which shares its byte encoder with the
+existing LE32 append function. The CFI alignment policy, LoongArch synthetic
+length relocations and DWARF-line state machine are **unchanged**. This is
+not a second output writer or a new phase boundary.
+
+The shared patch checks Section identity, 32-bit value range, a real data
+buffer and `at <= size && size - at >= 4` before writing; it avoids the
+old debug-line `at+4` overflow risk. The CFI caller checks at least four
+remaining bytes before subtracting the record-length field. A direct
+production-code probe covers middle/tail writes, invalid Sections, out-of-
+bounds `SIZE_MAX`, value overflow, null data, and no output mutation on
+failure.
+
+**Local evidence on the modified tree:** full Release `-Werror` build and
+A0 30/30 PASS; GNU exact optimized `.debug_line`/named-view ELF32/64
+oracles PASS; CFI source-section collision GNU byte/reloc checks PASS for
+x86-64, i386, RV32 and RV64 (three prefixes each). The optional AArch64 and
+LoongArch64 cross-GNU CFI checks were **NOT TESTED locally** because their
+tools are absent. No full Linux Image, QEMU P1, or 3,536 semantic equality
+is claimed for this unpushed batch. Continue targeted, source-backed
+cleanup; strict GNU-all equality is not a product completion requirement.
 
 ### 2026-11-01 continuation checkpoint — `4ca932b4`
 

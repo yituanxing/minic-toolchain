@@ -249,14 +249,6 @@ static bool append_leb(MiniAs *as,int sec,uint64_t value) {
 static bool append_sleb(MiniAs *as,int sec,int64_t value) {
     return minias_section_append_sleb(as,sec,value);
 }
-static bool patch32(MiniAs *as,int sec,size_t at,uint64_t value) {
-    size_t i;
-    MiniAsSection *s=&as->sections[(size_t)sec];
-    if(value>UINT32_MAX || at+4U>s->size)return false;
-    for(i=0U;i<4U;++i)
-        s->data[at+i]=(unsigned char)(value>>(i*8U));
-    return true;
-}
 static bool end_sequence(MiniAs *as,int sec) {
     return append_byte(as,sec,0U) && append_leb(as,sec,1U) &&
            append_byte(as,sec,1U);
@@ -502,7 +494,7 @@ bool minias_debug_emit(MiniAs *as) {
            !append_leb(as,sec,0U) ||
            !append_leb(as,sec,0U))goto failed;
     if(!append_byte(as,sec,0U) ||
-       !patch32(as,sec,header_len_at,
+       !minias_section_patch_le32(as,sec,header_len_at,
                 as->sections[(size_t)sec].size-header_start))goto failed;
     for(begin=0U;begin<as->debug_loc_count;) {
         const MiniAsDebugLoc *first=&as->debug_locs[order[begin].ordinal];
@@ -574,7 +566,8 @@ bool minias_debug_emit(MiniAs *as) {
            !end_sequence(as,sec))goto failed;
         begin=j;
     }
-    if(!patch32(as,sec,0U,as->sections[(size_t)sec].size-4U))goto failed;
+    if(!minias_section_patch_le32(as,sec,0U,
+                                 as->sections[(size_t)sec].size-4U))goto failed;
     free(directory_slots);free(files);free(directories);free(order);return true;
 failed:
     if(as->error[0]=='\0')minias_set_error(as,"dwarf-line-emission-failed");

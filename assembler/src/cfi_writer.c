@@ -50,7 +50,6 @@ static bool finish_length_aligned(MiniAs *as,int sec,size_t begin,
                                   unsigned alignment,bool section_relative) {
     MiniAsSection *section=&as->sections[(size_t)sec];
     uint32_t length;
-    unsigned i;
     if(alignment==0U || section->size<begin ||
        (alignment&(alignment-1U))!=0U)return false;
     while((section_relative?section->size:section->size-begin)%alignment!=0U) {
@@ -58,11 +57,10 @@ static bool finish_length_aligned(MiniAs *as,int sec,size_t begin,
         section=&as->sections[(size_t)sec];
     }
     section=&as->sections[(size_t)sec];
-    if(section->size-begin-4U>UINT32_MAX)return false;
+    if(section->size-begin<4U ||
+       section->size-begin-4U>UINT32_MAX)return false;
     length=(uint32_t)(section->size-begin-4U);
-    for(i=0U;i<4U;++i)
-        section->data[begin+i]=(unsigned char)(length>>(i*8U));
-    return true;
+    return minias_section_patch_le32(as,sec,begin,length);
 }
 static bool finish_length(MiniAs *as,int sec,size_t begin) {
     return finish_length_aligned(as,sec,begin,4U,false);

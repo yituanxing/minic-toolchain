@@ -3066,11 +3066,28 @@ bool minias_encode_leb_integer(int64_t number,bool signed_leb,
     }
 }
 
-bool minias_section_append_le32(MiniAs *as,int sec,uint32_t value) {
-    unsigned char bytes[4];
+static void minias_store_le32(unsigned char bytes[4],uint32_t value) {
     unsigned i;
     for(i=0U;i<4U;++i)bytes[i]=(unsigned char)(value>>(i*8U));
+}
+
+bool minias_section_append_le32(MiniAs *as,int sec,uint32_t value) {
+    unsigned char bytes[4];
+    minias_store_le32(bytes,value);
     return minias_section_append(as,sec,bytes,4U);
+}
+
+/* CFI and DWARF-line record headers are patched after their final size is
+ * known. Check subtraction bounds before touching the Common Section bytes. */
+bool minias_section_patch_le32(MiniAs *as,int sec,size_t at,uint64_t value) {
+    MiniAsSection *section;
+    if(as==NULL || sec<0 || (size_t)sec>=as->section_count ||
+       value>UINT32_MAX)return false;
+    section=&as->sections[(size_t)sec];
+    if(section->data==NULL || at>section->size ||
+       section->size-at<4U)return false;
+    minias_store_le32(section->data+at,(uint32_t)value);
+    return true;
 }
 
 bool minias_section_append_uleb(MiniAs *as,int sec,uint64_t value) {
