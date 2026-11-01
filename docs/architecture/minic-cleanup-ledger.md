@@ -1042,6 +1042,44 @@ x86 native 42）、`check-linux-symbolic-integer-and-record`
 `check-rv32-constructor-init-array` 因缺 RISC-V GNU cross tool
 明确 `NOT_TESTED`，不冒充 RV32 ELF/QEMU 已运行。
 
+## 批次 C31：RV64 ABI、帧、CALL 与有限对象快照复用（审读并清依赖）
+
+**基线：** C30 已推送 `44ef1d72`，2026-11-01。本批逐文件
+全文深读 `src/target/riscv64` 的 **20 个生产文件、原始 3,275 行**：
+`abi.c/.h`（306/78）、`function_abi_plan.c/.h`（151/27）、
+`frame_layout.c/.h`（468/80）、`frame_access.c/.h`（223/22）、
+`frame_requirements.c/.h`（85/29）、`codegen_function.c`（184）、
+`codegen_support.c`（354）、`codegen_internal.h`（65）、
+`codegen.h`（20）、`record_snapshot.c/.h`（219/11）、
+`call_emit.c/.h`（753/24）、`runtime_libcall.c/.h`（146/30）。
+RV64 子目录 **20/42**；全项目累计 **251/339**，Frontend
+**69/69**、Compiler **11/11**、Core **48/48**、Target
+**123/211**，Target 余 **88** 个文件。这里的 20 个是逐行审读，
+不是仅凭文件名或搜索统计。
+
+| RV64 子域 | 真实合同、耦合及纯清理决策 |
+| --- | --- |
+| `abi` / `function_abi_plan` | 默认 LP64 soft ABI 与严格 `lp64d` 机器寄存器分配有实质差异：前者 FP raw bits 随整数槽走，后者具名标量 FP 可用 `fa0..fa7`，匿名变参不同；MC-059 已验证 FP 成员 union 必须走 INTEGER 而不能仅按叶子 FP 判断。返回 Record、两字宽标量、具名参数游标和隐藏 a0 sret 必须一次性从已认证的 CallIndex 布置；失败时分别释放 plan/call cache。**KEEP(psABI profile and checked cursor)**。 |
+| `frame_requirements` / `frame_layout` | 函数事实的真实 CALL ordinal 被借用或在独立入口生成快照，随后 ABI plan 转移入帧，不在机器 emit 二次重新分类；出参栈最大值和动态 `alloca` call area、RA、s0、可变参数 GP save bank、过度对齐的 entry SP 都影响物理偏移。scalar reuse 与按块 spill 的大小/偏移要保持同一块布局证明。**KEEP(semantic ownership vs machine stack geometry)**。 |
+| `frame_access` / `codegen_support` | 非 12-bit 偏移必须使用不会覆盖 live base/value 的 RISC-V scratch；有证据的已对齐帧可发 `ld/lwu/lhu`，未知/packed record 尾部用按字节 gather，禁止读过真实对象边界。`float` raw 32-bit、`double` raw 64-bit 与 int128 双寄存器不等于 FP 硬件值。**KEEP(alignment and register alias discipline)**。 |
+| `record_snapshot` | 额外的 RV64-only by-value record 复用限定：原 snapshot 必须同 basic block 的单次 `RECORD_LOAD` 定义，仅一次作为指定 direct CALL 的对象实参、无地址逃逸；结果对象需同 type、alignment、element count 且更晚建立。与五目标共用的通用 Core object reuse **不是同一优化**。函数只依赖自身声明与 `core_ir.h`，原来额外的合法化、DataLayout、use-analysis、C 标准库头均未实际使用。**DELETE(7 redundant includes)**，保留完整候选资格检查。 |
+| `call_emit` | Direct/indirect 共享已规划的实参位置和有限 record 返回块 transport；但间接 `jalr` 必须先在实参寄存器安排后从帧加载目标，hidden sret 的 a0 提前占位，by-value indirect record 在被调入口拷入局部。宽值/软浮点、named FPR、栈溢出和空 Record 需要不同通路。**KEEP(transport invariants); NEEDS_PROOF(zero-sized returned record edge across RV64)**。 |
+| `runtime_libcall` / `codegen_function` | 严格 RV64I 的乘除、128-bit 比较和软浮点必需 compiler-rt/libgcc，并据此预留 RA；`-march` 的可用 M/F/D 与 `-mabi` LP64/LP64D 是两重独立门。函数 emit 借通用 visitor 和原子文件输出，但 ELF section/alias、8-byte `.init_array`、机器 ISA finalize 仍由 RV64 管。**KEEP(external runtime and target-specific ELF)**。 |
+
+**C31 生产源码 +0/-7，净 -7 行**，仅删除 `record_snapshot.c`
+中 7 个未引用的 include，没有更改分支、ABI、可接受的 C 源、
+生成的汇编文本或诊断。C1～C31 纯清理累计 **净 -356 行**。
+较大潜在清理是 CALL / frame 两侧的状态交接与 snapshot reuse
+所有权，但需要构造失败路径和别名生存期的测试证据，**现在不改**。
+
+**验证 PASS：** Release `-Werror` 重编及 `check-rv64-abi`；
+`check-rv64-lp64d-union-fp-abi`（LP64 11/11、LP64D 10/10，
+FP struct 仍拒绝）；`check-rv64-pic-elf-nonpreemptible`（GOT/
+PCREL）；`check-target-selection-m0`；
+`check-elf-hidden-undefined-pic-source`（五 ISA `-S`、x86 native）。
+GNU RISC-V cross 和 QEMU 不在当前环境，相关 runtime 明确
+`SKIP` / ELF-QEMU `NOT_RUN`。推迟的联合验收依旧未启动。
+
 ## 后续批次进度规则
 
 每批发布：当前 HEAD、源文件逐目录覆盖（明确深读与只扫的区别）、

@@ -1,11 +1,4 @@
 #include "target/riscv64/record_snapshot.h"
-#include "target/riscv64/legalize.h"
-#include "core/value_uses.h"
-#include "target/data_layout.h"
-#include <stdint.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
 
 /* Reuse the original optional cache and same per-function liveness
  * heuristics; no new machine representation or changed ABI constraints. */
