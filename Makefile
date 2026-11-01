@@ -608,6 +608,13 @@ check-rv32-wide-branch-condition: $(MINIC_CC_BINARY)
 
 check-fast: check-rv32-wide-branch-condition
 
+.PHONY: check-rv32-constructor-init-array
+check-rv32-constructor-init-array: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" \
+	bash tests/compiler/c0/run-rv32-constructor-init-array.sh
+
+check-fast: check-rv32-constructor-init-array
+
 # The staged driver invokes the sibling minic-cc at runtime. An order-only
 # prerequisite prevents parallel `make -j check-fast` from launching it while
 # the compiler binary is still being relinked, without relinking the driver

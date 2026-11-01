@@ -926,9 +926,19 @@ static bool rv32_visit_function(
     const MinicCoreObjectStoragePlan *storage, size_t index,
     bool function_sections, void *opaque) {
     Rv32ProgramContext *ctx = opaque;
+    const char *name;
     (void)index;
-    return rv32_func(out, program, fn, decl, function_sections,
-                     target, facts, storage, ctx->diagnostic);
+    if (!rv32_func(out, program, fn, decl, function_sections,
+                   target, facts, storage, ctx->diagnostic))
+        return false;
+    if (!decl->is_constructor) return true;
+    /* GNU ELF32 startup traverses four-byte .init_array function pointers.
+     * The function body is already emitted; registration is a separate
+     * target-owned ELF record, including for static constructors. */
+    name = minic_c0_function_symbol_name(decl);
+    return name != NULL && name[0] != '\0' &&
+           fprintf(out, ".section .init_array,\"aw\",@init_array\n"
+                        ".p2align 2\n  .4byte %s\n.text\n", name) >= 0;
 }
 
 static bool rv32_prefix(FILE *out, const MinicC0Program *program,
