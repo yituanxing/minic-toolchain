@@ -2778,7 +2778,7 @@ static bool parse_align_args(MiniAs *as,const char *op,const char *args,
     if(!copy)return false;
     cursor=copy;
     for(;;) {
-        if(n>=3U){free(copy);return false;}
+        if(n>=3U)goto failed;
         parts[n++]=minias_trim(cursor);
         comma=strchr(cursor,',');
         if(!comma)break;
@@ -2786,27 +2786,27 @@ static bool parse_align_args(MiniAs *as,const char *op,const char *args,
     }
     if(!*parts[0] ||
        !minias_evaluate_absolute_expression(as,parts[0],&value) ||
-       value<0){free(copy);return false;}
+       value<0)goto failed;
     if(!strcmp(op,".p2align") ||
        (!strcmp(op,".align") && !as->target->align_directive_bytes)){
-        if(value>=63){free(copy);return false;}
+        if(value>=63)goto failed;
         *align=UINT64_C(1)<<(unsigned)value;
     }else *align=(uint64_t)value;
-    if(!*align || (*align&(*align-1U)) || *align>UINT32_MAX){
-        free(copy);return false;
-    }
+    if(!*align || (*align&(*align-1U)) || *align>UINT32_MAX)goto failed;
     *has_fill=false;*fill=0U;*has_max=false;*max_skip=0U;
     if(n>=2U && *parts[1]){
         if(!minias_evaluate_absolute_expression(as,parts[1],&value) ||
-           value<-128 || value>255){free(copy);return false;}
+           value<-128 || value>255)goto failed;
         *has_fill=true;*fill=(uint8_t)value;
     }
     if(n>=3U && *parts[2]){
         if(!minias_evaluate_absolute_expression(as,parts[2],&value) ||
-           value<0){free(copy);return false;}
+           value<0)goto failed;
         *has_max=true;*max_skip=(uint64_t)value;
     }
     free(copy);return true;
+failed:
+    free(copy);return false;
 }
 
 static bool handle_align(MiniAs *as,const char *op,char *args,size_t line){
@@ -2909,7 +2909,7 @@ static bool capture_incbin(MiniAs *as,const char *args,size_t line,
     char *path=decode_incbin_path(as,args,line);
     FILE *file;
     long end;
-    unsigned char *buffer;
+    unsigned char *buffer=NULL;
     size_t count,used=0U;
     if(!path)return false;
     file=fopen(path,"rb");
@@ -2921,32 +2921,37 @@ static bool capture_incbin(MiniAs *as,const char *args,size_t line,
     if(fseek(file,0L,SEEK_END)!=0 || (end=ftell(file))<0L ||
        (uint64_t)end>UINT32_MAX || fseek(file,0L,SEEK_SET)!=0) {
         minias_set_error(as,"incbin-size:%s:line=%zu",path,line);
-        fclose(file);free(path);return false;
+        goto failed;
     }
     count=(size_t)end;
     buffer=malloc(count?count:1U);
     if(!buffer) {
         minias_set_error(as,"out-of-memory:incbin-snapshot");
-        fclose(file);free(path);return false;
+        goto failed;
     }
     while(used<count) {
         size_t got=fread(buffer+used,1U,count-used,file);
         if(got==0U) {
             minias_set_error(as,"incbin-read:%s:line=%zu",path,line);
-            free(buffer);fclose(file);free(path);return false;
+            goto failed;
         }
         used+=got;
     }
     if(fgetc(file)!=EOF || ferror(file)) {
         minias_set_error(as,"incbin-mutated-during-read:%s:line=%zu",
                          path,line);
-        free(buffer);fclose(file);free(path);return false;
+        goto failed;
     }
     fclose(file);
     free(path);
     *data=buffer;
     *size=count;
     return true;
+failed:
+    free(buffer);
+    fclose(file);
+    free(path);
+    return false;
 }
 
 static bool emit_common_pattern(MiniAs *as,int section,

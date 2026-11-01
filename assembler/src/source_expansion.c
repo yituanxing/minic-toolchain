@@ -846,21 +846,18 @@ static bool define_macro(MiniAs *as,
     if (token_count == SIZE_MAX || token_count == 0U ||
         !valid_irp_parameter_name(tokens[0])) {
         minias_set_error(as, "bad-directive:.macro:line=%zu", line);
-        free(copy);
-        return false;
+        goto failed;
     }
     if (minias_macro_find(as, tokens[0]) != NULL) {
         minias_set_error(as, "duplicate-macro:%s:line=%zu", tokens[0], line);
-        free(copy);
-        return false;
+        goto failed;
     }
     if (!minias_grow_array((void **)&as->source->macros,
                     &as->source->macro_capacity,
                     sizeof(*as->source->macros),
                     as->source->macro_count + 1U)) {
         minias_set_error(as, "out-of-memory:macro");
-        free(copy);
-        return false;
+        goto failed;
     }
     macro = &as->source->macros[as->source->macro_count];
     memset(macro, 0, sizeof(*macro));
@@ -871,15 +868,13 @@ static bool define_macro(MiniAs *as,
     macro->name = minias_strdup(tokens[0]);
     if (macro->name == NULL) {
         minias_set_error(as, "out-of-memory:macro-name");
-        free(copy);
-        return false;
+        goto failed;
     }
     if (token_count > 1U) {
         macro->params = calloc(token_count - 1U, sizeof(*macro->params));
         if (macro->params == NULL) {
             minias_set_error(as, "out-of-memory:macro-params");
-            free(copy);
-            return false;
+            goto failed;
         }
     }
     macro->param_count = token_count - 1U;
@@ -896,14 +891,12 @@ static bool define_macro(MiniAs *as,
         if (!valid_irp_parameter_name(spec)) {
             minias_set_error(as, "bad-macro-parameter:%s:line=%zu",
                              spec, line);
-            free(copy);
-            return false;
+            goto failed;
         }
         macro->params[i - 1U].name = minias_strdup(spec);
         if (macro->params[i - 1U].name == NULL) {
             minias_set_error(as, "out-of-memory:macro-param-name");
-            free(copy);
-            return false;
+            goto failed;
         }
         if (qualifier != NULL) {
             if(!strcmp(qualifier,"vararg") &&
@@ -914,16 +907,14 @@ static bool define_macro(MiniAs *as,
             }else {
                 minias_set_error(as,"unsupported-macro-qualifier:%s:line=%zu",
                                  qualifier,line);
-                free(copy);
-                return false;
+                goto failed;
             }
         }
         if (equal != NULL) {
             macro->params[i - 1U].default_value = minias_strdup(equal);
             if (macro->params[i - 1U].default_value == NULL) {
                 minias_set_error(as, "out-of-memory:macro-param-default");
-                free(copy);
-                return false;
+                goto failed;
             }
         }
     }
@@ -935,8 +926,7 @@ static bool define_macro(MiniAs *as,
         if (macro->body == NULL || macro->body_lines == NULL ||
             macro->body_source_segments == NULL) {
             minias_set_error(as, "out-of-memory:macro-body");
-            free(copy);
-            return false;
+            goto failed;
         }
     }
     macro->body_count = count;
@@ -946,12 +936,14 @@ static bool define_macro(MiniAs *as,
         macro->body_source_segments[i]=lines[i].source_segment;
         if (macro->body[i] == NULL) {
             minias_set_error(as, "out-of-memory:macro-body-line");
-            free(copy);
-            return false;
+            goto failed;
         }
     }
     free(copy);
     return true;
+failed:
+    free(copy);
+    return false;
 }
 
 static char *substitute_macro_counter(MiniAs *as,
@@ -1374,6 +1366,7 @@ static bool process_source_line(MiniAs *as, const char *source, size_t line) {
     MiniAsStableSiteId source_site=as->source->current_site;
     size_t segment=0U;
     bool split;
+    bool success=false;
 
     if (copy == NULL) {
         minias_set_error(as, "out-of-memory:source-line");
@@ -1391,26 +1384,24 @@ static bool process_source_line(MiniAs *as, const char *source, size_t line) {
                 .kind=MINIAS_SOURCE_SITE_SEGMENT
             };
             if(!minias_source_graph_intern(as,key,&as->source->current_site)) {
-                free(copy);
-                as->source->current_site=source_site;
-                return false;
+                goto finished;
             }
         }
         if (semicolon != NULL) {
             *semicolon = '\0';
         }
         if (!minias_statement_process(as, cursor, line)) {
-            free(copy);
-            as->source->current_site=source_site;
-            return false;
+            goto finished;
         }
         cursor = semicolon == NULL ? NULL : semicolon + 1;
         semicolon = cursor == NULL ? NULL : find_statement_separator(cursor);
         ++segment;
     }
+    success=true;
+finished:
     free(copy);
     as->source->current_site=source_site;
-    return true;
+    return success;
 }
 
 /* A .irp/.rept opener's leading label binds once at the

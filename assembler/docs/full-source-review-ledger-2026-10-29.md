@@ -7,6 +7,45 @@
 > 和早期测试文件数量，均不能自动当作最新 HEAD 的事实。
 > “读过 / 修改过 / 完成清理”必须分别统计。
 
+### 2026-11-01 Common failure-path consolidation (macro/SourceSite/ALIGN/INCBIN)
+
+**Base:** exact remote Draft PR #667 head
+`695a8805824e6383648687d9c0e34bbcad61c928`.
+This batch converges **23 existing error branches** across four Common
+functions; it does not add a parser, relax ISA restrictions, or change how
+SourceGraph identities, machine-code bytes or GNU ELF Fixups are produced.
+
+- `source_expansion.c` **`define_macro`**: eleven preexisting allocation,
+  invalid parameter and duplicate-definition failures now share one
+  `free(copy)` exit. The already-registered partial `MiniAsMacro` remains
+  owned by the existing source destructor; diagnostic text is unchanged.
+- `source_expansion.c` **`process_source_line`**: both segment interning and
+  statement-processing failures share one release/SourceSite restoration
+  epilogue. Successful semicolon segments also use that epilogue, preserving
+  the original SourceSite for callers and exactly one source text buffer.
+- `assembler.c` **`parse_align_args`**: six malformed-expression/width/fill
+  failures use one scratch-string release. The original acceptance rules,
+  caller error text, fill bytes and maximum-skip treatment are unchanged.
+- `assembler.c` **`capture_incbin`**: four seek/size/allocation/read/mutation
+  failure paths release the snapshot, file and pathname in one exit;
+  `buffer` starts at `NULL` for early failure. A successful snapshot still
+  transfers exactly the original bytes once. Its final `fgetc` / `ferror`
+  concurrent-mutation check is explicitly retained.
+
+**Production diff:** 2 `assembler/src` files, `+38/-42` lines, net `-4`.
+It is a batch of ownership-path deduplication, not a claimed large byte-code
+shrink. No public ABI, Target opcode or SourceGraph replay criterion changed.
+
+**Local verification:** `-Werror` release build and A0 `30/30` PASS;
+GNU x86 immutable `.incbin` (`49,160` bytes exact), adjacent-DATA alignment,
+macro optional/data, SourceGraph cache/replay/stable rebind, SourceContext
+composite and x86 Linux page-table content oracles PASS. Both macro failure
+cleanup and macro lifetime/diagnostic oracles PASS. The optional sanitized
+macro suite reports ASan/UBSan clean but LSan **UNAVAILABLE**, not full
+sanitizer PASS. Cross-GNU architectures and remote exact-head CI require
+independent verification; strict 3,536 and full Linux Image/QEMU remain
+**NOT TESTED** for this batch.
+
 ### 2026-11-01 executable ALIGN capability boundary (P04 partial)
 
 **Base:** remote Draft PR #667 head `8b73344e29d4bf7d3e87755680efb768ac4aed0b`.
