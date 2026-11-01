@@ -218,6 +218,22 @@ MiniAS and asserts valid object output, preserving all existing skipped
 conditional / source replay / cross-Target tests. The new 250-byte
 large-collector GNU oracle remains mandatory and separate.
 
+### 2026-11-01 retire per-value IRP SourceFrame reallocation
+
+The `process_irp_block` owner allocated and destroyed an entire
+`MiniAsSourceLine[count]` array for every IRP iteration, although each
+recursive `minias_source_frame_process` invocation borrows the array
+synchronously. The array is now allocated only once per IRP invocation;
+only the substituted strings are freed and reset after each value.
+A single `done:` exit handles partial substitution and nested-expansion
+failures, releasing the strings, line container and argument copy.
+
+Keep GNU comma/space lexing, SourceSite iteration identity, empty
+trailing comma and the previous error diagnostics intact. A mandatory
+GNU x86 A0 oracle compares 512 IRP values each containing a nested
+REPT against 1028 exact output bytes. This is allocation/ownership
+cleanup, not closure of remaining P04/P05 phase contracts.
+
 ## Current refactor dashboard — 2026-11-01 (exact-head recovery and live-path audit)
 
 ### 2026-11-01 Source collector single-pass de-duplication (local batch)

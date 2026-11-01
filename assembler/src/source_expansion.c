@@ -1564,77 +1564,64 @@ static char *substitute_irp_parameter(MiniAs *as,
     return output;
 }
 
+/* The .irp invocation owns one reusable expansion-line container. Recursed
+ * frames borrow the array synchronously; only substituted text changes. */
 static bool process_irp_block(MiniAs *as,
                               const MiniAsSourceLine *lines,
                               size_t count,
                               const char *argument,
                               size_t line,
                               MiniAsStableSiteId invocation_site) {
-    char *copy = minias_strdup(argument);
-    char *comma;
-    char *name;
-    char *cursor;
+    char *copy=minias_strdup(argument);
+    char *comma,*name,*cursor;
+    MiniAsSourceLine *expanded=NULL;
     size_t iteration=0U;
+    bool ok=false;
 
-    if (copy == NULL) {
-        minias_set_error(as, "out-of-memory:irp-argument");
+    if(copy==NULL) {
+        minias_set_error(as,"out-of-memory:irp-argument");
         return false;
     }
-    comma = strchr(copy, ',');
-    if (comma == NULL) {
-        minias_set_error(as, "bad-directive:.irp:line=%zu", line);
-        free(copy);
-        return false;
+    comma=strchr(copy,',');
+    if(comma==NULL) {
+        minias_set_error(as,"bad-directive:.irp:line=%zu",line);
+        goto done;
     }
-    *comma = '\0';
-    name = minias_trim(copy);
-    if (!valid_irp_parameter_name(name)) {
-        minias_set_error(as, "bad-directive:.irp:line=%zu", line);
-        free(copy);
-        return false;
+    *comma='\0';
+    name=minias_trim(copy);
+    if(!valid_irp_parameter_name(name)) {
+        minias_set_error(as,"bad-directive:.irp:line=%zu",line);
+        goto done;
     }
 
-    cursor = comma + 1;
-    for (; !as->source->source_ended;) {
-        char *next_comma;
-        char *next_space;
-        char *next;
-        char *value;
+    cursor=comma+1U;
+    for(;!as->source->source_ended;) {
+        char *next_comma,*next_space,*next,*value;
         bool comma_delimited;
-        MiniAsSourceLine *expanded = NULL;
         size_t i;
+        /* Keep the existing GNU comma/whitespace delimiter policy. */
+        while(*cursor==' ' || *cursor=='\t')++cursor;
+        next_comma=strchr(cursor,',');
+        next_space=find_macro_argument_space(cursor);
+        comma_delimited=next_comma!=NULL &&
+                       (next_space==NULL || next_comma<next_space);
+        next=comma_delimited?next_comma:next_space;
+        if(next!=NULL)*next='\0';
+        value=minias_trim(cursor);
 
-        /* GNU GAS .irp accepts BOTH commas and unquoted whitespace
-         * between values, even in the same list. Original Linux GHASH:
-         *   .irp key, K0, K1, K2, K3, K4 K5
-         * must expand K4 and K5 separately. Reuse the shared macro
-         * whitespace lexer (which respects quotes and brackets). */
-        while (*cursor == ' ' || *cursor == '\t') ++cursor;
-        next_comma = strchr(cursor, ',');
-        next_space = find_macro_argument_space(cursor);
-        comma_delimited = next_comma != NULL &&
-                          (next_space == NULL || next_comma < next_space);
-        next = comma_delimited ? next_comma : next_space;
-        if (next != NULL) *next = '\0';
-        value = minias_trim(cursor);
-        if (count != 0U) {
-            expanded = calloc(count, sizeof(*expanded));
-            if (expanded == NULL) {
-                minias_set_error(as, "out-of-memory:irp-lines");
-                free(copy);
-                return false;
+        if(count!=0U && expanded==NULL) {
+            expanded=calloc(count,sizeof(*expanded));
+            if(expanded==NULL) {
+                minias_set_error(as,"out-of-memory:irp-lines");
+                goto done;
             }
         }
-        for (i = 0U; i < count; ++i) {
-            expanded[i].line = lines[i].line;
+        for(i=0U;i<count;++i) {
+            expanded[i].line=lines[i].line;
             expanded[i].source_segment=lines[i].source_segment;
-            expanded[i].text =
-                substitute_irp_parameter(as, lines[i].text, name, value);
-            if (expanded[i].text == NULL) {
-                minias_source_lines_destroy(expanded, count);
-                free(copy);
-                return false;
-            }
+            expanded[i].text=substitute_irp_parameter(as,lines[i].text,
+                                                      name,value);
+            if(expanded[i].text==NULL)goto done;
         }
         const MiniAsSourceFrame frame={
             .kind=MINIAS_SOURCE_FRAME_EXPANSION,
@@ -1645,28 +1632,28 @@ static bool process_irp_block(MiniAs *as,
             .definition_site=invocation_site,
             .iteration=iteration
         };
-        if (!minias_source_frame_process(as,&frame)) {
-            minias_source_lines_destroy(expanded, count);
-            free(copy);
-            return false;
+        if(!minias_source_frame_process(as,&frame))goto done;
+        /* The borrowed SourceFrame has returned; release the strings but
+         * preserve the zero-owned array slots for the following value. */
+        for(i=0U;i<count;++i) {
+            free(expanded[i].text);
+            expanded[i].text=NULL;
         }
-        minias_source_lines_destroy(expanded, count);
         ++iteration;
-        if (next == NULL) {
-            break;
-        }
-        cursor = next + 1;
-        /* Do not manufacture a blank final argument from trailing
-         * whitespace. A genuine trailing comma still carries an empty
-         * GNU positional value, as it did before this change. */
-        if (!comma_delimited) {
-            while (*cursor == ' ' || *cursor == '\t') ++cursor;
-            if (*cursor == '\0') break;
+        if(next==NULL)break;
+        cursor=next+1U;
+        /* Real trailing commas produce empty arguments; trailing whitespace
+         * without a comma does not invent a new positional argument. */
+        if(!comma_delimited) {
+            while(*cursor==' ' || *cursor=='\t')++cursor;
+            if(*cursor=='\0')break;
         }
     }
-
+    ok=true;
+done:
+    if(expanded!=NULL)minias_source_lines_destroy(expanded,count);
     free(copy);
-    return true;
+    return ok;
 }
 
 /* Macro and repeat collectors differ in delimiter grammar, not in their
