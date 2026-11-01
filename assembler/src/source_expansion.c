@@ -1324,7 +1324,8 @@ static bool minias_macro_expand(MiniAs *as,
     --as->source->macro_expansion_depth;
 
 done:
-    minias_source_lines_destroy(expanded, body_count);
+    if (expanded != NULL)
+        minias_source_lines_destroy(expanded, body_count);
     free(vararg_buffer);
     free(copy);
     return ok;

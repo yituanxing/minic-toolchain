@@ -23,7 +23,10 @@ separately from the new fixture's local compile result.
 `MiniAsSourceLine`, temporary macro-vararg storage and the copied argument
 buffer. Twelve scattered early-return error sites redundantly released
 some subset of those buffers. All pre-expansion failures now branch to the
-same already-established exit, including allocation failure, malformed
+same already-established exit. An unallocated expanded-line vector is
+explicitly skipped even when the recorded macro body count is nonzero;
+this protects pre-expansion errors from dereferencing NULL. Covered cases
+include allocation failure, malformed
 keyword/vararg, required argument, percent evaluation and expansion-depth
 checks. No change to successful expansion, macro registry lifetime, SourceSite
 identity, recursion limit or target parsing.
