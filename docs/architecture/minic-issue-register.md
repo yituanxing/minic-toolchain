@@ -40,7 +40,7 @@
 | ID | 优先级 | 状态 | 证据 | 归属 | 简述 |
 | --- | --- | --- | --- | --- | --- |
 | [MC-001](#mc-001-符号闭包读取失效的-expression-指针) | P0 | OPEN | ASAN | Compiler | 符号闭包递归后读取扩容前的 Expression 指针 |
-| [MC-002](#mc-002-record-字段声明中的悬空指针) | P0 | OPEN | ASAN | Frontend | Record 字段声明递归后引用旧 Record 地址 |
+| [MC-002](#mc-002-record-字段声明中的悬空指针) | P0 | FIXED-UNVERIFIED | ASAN | Frontend | 旧函数指针参数 Record UAF 由 `449eab2` 的稳定 RecordId 重取覆盖；新增独立函数指针容量回归 |
 | [MC-003](#mc-003-运行时-record-初始化器中的悬空指针) | P0 | OPEN | ASAN | Frontend | 运行时记录初始化器跨字段复用旧 Record 地址 |
 | [MC-004](#mc-004-属性探测使-parser-tags-失效) | P0 | OPEN | ASAN | Frontend | `probe=*parser` 的 tags 容器所有权错误 |
 | [MC-005](#mc-005-属性探测使-parser-enum_constants-失效) | P0 | OPEN | ASAN | Frontend | 同一浅拷贝使 enum_constants 容器失效 |
@@ -152,7 +152,9 @@
 
 - **位置：** `src/frontend/parser_record.c:385–443`，`record_has_field()` 在 `:443` 读旧地址；`src/frontend/ast.c:1136` 使 Record arena 扩容。
 - **证据：** 带函数指针字段、嵌套 `struct Inner { ... }` 参数类型的有效 GNU C 输入；ASan 在 RV32、RV64、LoongArch64 复现 UAF。x86/AArch64 同一容量边界未触发，**不能据此宣称安全**。
-- **修复门槛：** 递归解析前后使用稳定 `RecordId` 再取 Record，测试多种记录预置数量及五目标 ASan。
+- **状态：** `FIXED-UNVERIFIED`（尚缺完整五架构 ELF/QEMU/Linux 与 MiniAS/MiniLD 联合验收）。
+- **与 MC-061 的关系：** 并非新的一处待修生产指针：同样是 `parse_record_field_declarator` 在递归 declarator 之前借用 `Record*`，后续 `record_has_field` 读旧地址。MC-061 修复 `449eab2`（原隔离提交 `33ac095`）已按稳定 `record_id` 在递归返回后重取 Record，**覆盖 MC-002 的函数指针参数写法**；没有再为同一 bug 叠加生产代码修改。
+- **独立复现与回归：** `tests/compiler/audit/mc002_record_field_function_pointer_uaf.c` 保留 `int (*callback)(struct Inner { int value; } *inner)` 原形。修复前 `72e301d` 的 ASan/UBSan `-Werror` 编译器以容量 14 的 x86 触发 `heap-use-after-free`，`record_has_field` READ8；释放栈从 `minic_parser_parse_parameter_list`→`minic_parser_parse_record_definition_specifier`→`minic_c0_program_add_record`→`realloc`，与已报告 MC-002 同根。当前修复版五目标×14/15/16 三种容量相位 ASan/UBSan **15/15 PASS**，GNU/MiniC x86 原生 exit7，重复字段负例双方拒绝；`check-record-field-function-pointer-realloc` 已纳入 `check-fast`。GCC 接受该 GNU11 定义，但会提示 prototype-scope tag 不对外可见，所以单独运行对照时关闭宿主编译警告，不改变 MiniC `-Werror` 构建。该测试与 MC-061 的 pointer-to-array 测试分别固定两条递归入口。
 
 ### MC-003 运行时 Record 初始化器中的悬空指针
 
@@ -582,7 +584,7 @@
 - **失效链：** `src/frontend/parser_record.c:parse_record_field_declarator` 在开头保存借用 `MinicRecord *record`；字段 `int (*field)[sizeof(struct {int z;})]` 经 `parse_pointer_to_array_field_declarator`→`parse_array_declarator_suffix`→`parse_sizeof`→`minic_c0_program_add_anonymous_record` 增长 `Program.records`；返回后 `parser_record.c:443:record_has_field(parser, record, name_span)` 读失效 header（ASan READ8）。
 - **持久反例：** `tests/compiler/audit/mc061_record_field_pointer_array_uaf.c`；GNU11 `-fsyntax-only` 与原生可执行控制通过；五目标 ASan `-S` 的前置类型数量 14/15/16：x86/AArch64 = **UAF/PASS/PASS**，RV32/RV64/Loong = **PASS/UAF/PASS**，证明与 arena capacity 相位相关。未触发相位上的 PASS 不代表该借用安全。
 - **已实施：** `parse_record_field_declarator` 在递归 field declarator 和尺寸/完整性检查之后，以稳定的 `record_id` 重新从 `Program.records` 获取 `Record*`，再执行重复字段判定；没有改变 AST 类型或 ABI。持久门禁 `check-record-field-declarator-realloc` 已接 `check-fast`。修复前可见 ASan READ8→`realloc` 栈；修复后五目标×14/15/16 三种容量相位 ASan/UBSan `-Werror -S` **15/15 PASS**，GNU/MiniC x86 原生均 exit12，重复字段负例双方拒绝；Release `-Werror` 与原 MC-063/067 正控亦 PASS。
-- **未覆盖：** 仍未跑完整五架构 GNU ELF/QEMU/Linux 与 MiniAS/MiniLD 联合验收。此项是局部已修，不能将整个链条标为全验收完成；同类 MC-002/003/023/056 另行跟进。
+- **未覆盖：** 仍未跑完整五架构 GNU ELF/QEMU/Linux 与 MiniAS/MiniLD 联合验收。此项是局部已修，不能将整个链条标为全验收完成；MC-002 已确认共用本修复并有单独入口回归，MC-003/023/056 各有独立生命周期路径。
 
 ### MC-062 x86 ALT Reloc 的 Memory 输入源机约束分裂
 

@@ -1548,6 +1548,13 @@ check-record-field-declarator-realloc: $(MINIC_CC_BINARY)
 
 check-fast: check-record-field-declarator-realloc
 
+.PHONY: check-record-field-function-pointer-realloc
+check-record-field-function-pointer-realloc: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	sh tests/compiler/c0/probe-record-field-function-pointer-realloc.sh
+
+check-fast: check-record-field-function-pointer-realloc
+
 .PHONY: check-static-chained-array-arena
 check-static-chained-array-arena: $(MINIC_CC_BINARY)
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
