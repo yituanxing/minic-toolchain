@@ -1452,6 +1452,7 @@ static char *find_statement_separator(char *text) {
 static bool process_source_line(MiniAs *as, const char *source, size_t line) {
     char *copy = minias_strdup(source);
     char *cursor;
+    char *semicolon;
     MiniAsStableSiteId source_site=as->source->current_site;
     size_t segment=0U;
     bool split;
@@ -1461,10 +1462,10 @@ static bool process_source_line(MiniAs *as, const char *source, size_t line) {
         return false;
     }
     strip_comment(copy, as->target);
-    split=find_statement_separator(copy)!=NULL;
+    semicolon=find_statement_separator(copy);
+    split=semicolon!=NULL;
     cursor = copy;
     while (cursor != NULL && !as->source->source_ended) {
-        char *semicolon = find_statement_separator(cursor);
         if(split) {
             const MiniAsSourceSiteKey key={
                 .parent=source_site,
@@ -1486,6 +1487,7 @@ static bool process_source_line(MiniAs *as, const char *source, size_t line) {
             return false;
         }
         cursor = semicolon == NULL ? NULL : semicolon + 1;
+        semicolon = cursor == NULL ? NULL : find_statement_separator(cursor);
         ++segment;
     }
     free(copy);
@@ -1757,15 +1759,12 @@ static bool process_source_range(MiniAs *as,
         MiniAsStableSiteId line_site;
         bool inline_handled=false;
         char macro_argument[1024];
-        int macro_kind =
-            classify_macro_line(as, lines[i].text,
-                                macro_argument,
-                                sizeof(macro_argument));
+        int macro_kind;
         char argument[256];
         size_t repeat_label_prefix=0U;
         int kind;
 
-        if(!minias_source_graph_line_site(as,&lines[i],0U,&line_site))return false;
+        if(!minias_source_graph_line_site(as,&lines[i],&line_site))return false;
         as->source->current_site=line_site;
 
         /* File and expansion frames must agree on the semicolon-separated
@@ -1785,6 +1784,8 @@ static bool process_source_range(MiniAs *as,
             continue;
         }
 
+        macro_kind=classify_macro_line(as,lines[i].text,
+                                       macro_argument,sizeof(macro_argument));
         if (macro_kind < 0) {
             minias_set_error(as, "out-of-memory:macro-classify");
             return false;

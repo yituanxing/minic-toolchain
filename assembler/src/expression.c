@@ -49,7 +49,8 @@ bool minias_expr_symbol_continue(char ch) {
     return minias_expr_symbol_start(ch) || isdigit((unsigned char)ch);
 }
 
-bool minias_expr_scan_binary(const char *cursor,MiniAsExprBinary *out) {
+/* Parser-local lexer for the one shared operator precedence table. */
+static bool minias_expr_scan_binary(const char *cursor,MiniAsExprBinary *out) {
     size_t i;
     if(!cursor || !out)return false;
     for(i=0U;i<sizeof(minias_expr_binary_ops)/

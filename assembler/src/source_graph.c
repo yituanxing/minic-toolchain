@@ -237,15 +237,12 @@ bool minias_source_graph_intern(MiniAs *as,MiniAsSourceSiteKey key,
 
 bool minias_source_graph_line_site(MiniAs *as,
                                    const MiniAsSourceLine *line,
-                                   size_t segment,
                                    MiniAsStableSiteId *site_id) {
     const MiniAsSourceSiteKey key={
         .parent=as->source->current_expansion_site,
         .origin_line=line->line,
         .origin_segment=line->source_segment,
-        .iteration=segment,
-        .kind=segment==0U ? MINIAS_SOURCE_SITE_LINE :
-                             MINIAS_SOURCE_SITE_SEGMENT
+        .kind=MINIAS_SOURCE_SITE_LINE
     };
     return minias_source_graph_intern(as,key,site_id);
 }

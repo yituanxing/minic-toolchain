@@ -709,8 +709,6 @@ bool minias_post_emit_define_mapping_symbol(MiniAsPostEmitObjectSink *,
 bool minias_post_emit_raise_section_alignment(MiniAsPostEmitObjectSink *,
                                               int, uint64_t);
 
-void minias_destroy(MiniAs *as);
-bool minias_emit_sections(MiniAs *as);
 bool minias_write_elf64(MiniAs *as, const char *path);
 bool minias_cfi_directive(MiniAs *as, const char *op,
                           const char *args, size_t line);
@@ -732,8 +730,6 @@ bool minias_define_target_mapping_symbol(MiniAs *as, const char *stem,
                                          size_t first_ordinal,
                                          bool always_suffix,
                                          int section, uint64_t offset);
-bool minias_require_target_section_alignment(MiniAs *, int section,
-                                              uint64_t alignment);
 bool minias_symbol_name_intern(MiniAs *as, const char *name,
                                MiniAsSymbolNameId *name_id);
 bool minias_bind_symbol_ref(MiniAs *as, const MiniAsSymbolExpr *expr,
@@ -817,8 +813,6 @@ bool minias_parse_symbol_difference(const char *,MiniAsSymbolDifference *);
 bool minias_parse_symbol_difference_absolute_tail(
     MiniAs *,const char *,MiniAsSymbolDifference *);
 bool minias_parse_size_end_addend(const char *,const char *,int64_t *);
-bool minias_queue_literal(MiniAs *as,const MiniAsSymbolExpr *expression,
-                          unsigned width,MiniAsSymbolExpr *pool_label);
 /* Target and generic data fixups require an active fragment. */
 bool minias_add_fixup(MiniAs *as,
                       int section,

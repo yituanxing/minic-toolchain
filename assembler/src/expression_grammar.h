@@ -76,9 +76,6 @@ void minias_expr_syntax_destroy(MiniAsExprSyntax *syntax);
 bool minias_expr_eval_integer(const MiniAsExprSyntax *syntax,
                               bool signed_shift,uint64_t *result);
 
-/* Caller must pass an operator-start position; longest tokens win. */
-bool minias_expr_scan_binary(const char *cursor, MiniAsExprBinary *out);
-
 static inline void minias_expr_skip_space(const char **cursor) {
     while (**cursor == ' ' || **cursor == '\t') ++*cursor;
 }

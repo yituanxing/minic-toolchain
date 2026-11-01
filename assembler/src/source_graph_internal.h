@@ -154,7 +154,7 @@ struct MiniAsSourceGraph {
 bool minias_source_graph_intern(MiniAs *as, MiniAsSourceSiteKey key,
                          MiniAsStableSiteId *site_id);
 bool minias_source_graph_line_site(MiniAs *as, const MiniAsSourceLine *line,
-                            size_t segment, MiniAsStableSiteId *site_id);
+                            MiniAsStableSiteId *site_id);
 void minias_source_graph_record_condition(MiniAs *as, MiniAsStableSiteId owner,
                                    bool active);
 void minias_source_graph_destroy(MiniAsSourceGraph *graph);

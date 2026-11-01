@@ -2,6 +2,43 @@
 
 ## Current refactor dashboard — 2026-11-01 (exact-head recovery and live-path audit)
 
+### 2026-11-01 SourceGraph dead state and module-private API cleanup
+
+The SourceGraph/SourceContext call-chain review found no removable second
+parser or obsolete conditional replay: persistent forced-branch sites, fresh
+expansion frames, inline repeat handling, and `.if/.org/.set` source replay
+remain live. Four strictly scoped reductions were made instead:
+
+* `minias_source_graph_line_site` no longer accepts a `segment` selector:
+  both production callers always passed zero. The real semicolon statement
+  site creation in `process_source_line` still interns `SEGMENT` explicitly.
+* The invocation's `source_loaded` flag was equivalent to the persistent
+  graph's `file_reads != 0`. Physical loading increments that counter only
+  on success; failure exits the assembly without another pass.
+* A statement's first semicolon position is reused by the per-segment loop
+  instead of rescanning the same unmodified text immediately.
+* Macro classification is deferred until after inline-repeat dispatch and
+  inactive-conditional handling. The active macro/repeat classifiers retain
+  their different label, argument-size and error contracts; no risky
+  whole-parser merge was attempted.
+* The global symbol scan found five purely same-file services with no
+  cross-module consumer: Core destroy, section emission, finalization
+  section-alignment request and literal-pool queueing; plus the expression
+  operator-token scanner. They are now `static`; the five declarations were
+  removed from broad internal headers. The corresponding Target-facing
+  ParseContext and PostEmit sink services, and public assembly APIs, remain.
+  The direct shared ULEB encoder and the Common SymbolID binding API are
+  deliberately still exposed to their real consumers and boundary tests.
+
+**Production delta:** 7 files, +24/−32 lines (net −8); documentation
+tracked separately. Release `-Werror`, A0 **30/30**, SourceGraph x86/RV GNU
+byte/symbol replay, stable forced-branch rebinding, skipped macro/repeat,
+SourceContext composite, `.end` GNU cases, MC ownership/fragment transaction
+guards and shared expression grammar **PASS**. No Linux/Image/QEMU or strict
+3,536-object semantic gate was rerun; cross-target GNU tests absent from
+these scoped probes are **NOT TESTED**, not assumed passing. The changes
+do not claim closure of P04/P05 coupling or GNU strict-parity debt.
+
 ### 2026-11-01 follow-up — private wrapper/visibility cleanup (`13eac49f`)
 
 The renewed call-site review distinguishes **32 production files scanned for
@@ -57,8 +94,9 @@ A0 30/30 PASS; GNU exact optimized `.debug_line`/named-view ELF32/64
 oracles PASS; CFI source-section collision GNU byte/reloc checks PASS for
 x86-64, i386, RV32 and RV64 (three prefixes each). The optional AArch64 and
 LoongArch64 cross-GNU CFI checks were **NOT TESTED locally** because their
-tools are absent. No full Linux Image, QEMU P1, or 3,536 semantic equality
-is claimed for this unpushed batch. Continue targeted, source-backed
+tools are absent. This batch was subsequently pushed on the same PR #667
+branch as `46db7242`. No full Linux Image, QEMU P1, or 3,536 semantic
+equality is claimed for that commit. Continue targeted, source-backed
 cleanup; strict GNU-all equality is not a product completion requirement.
 
 ### 2026-11-01 continuation checkpoint — `4ca932b4`
