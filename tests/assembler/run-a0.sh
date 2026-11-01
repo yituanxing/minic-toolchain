@@ -9,6 +9,7 @@ mkdir -p "$work"
 
 sh tests/assembler/probe-riscv-absolute-relocs.sh
 bash tests/assembler/probe-rv-zbb-site-gnu.sh
+bash tests/assembler/probe-rv-v-site-gnu.sh
 bash tests/assembler/probe-rv-priv-spec-gnu.sh
 bash tests/assembler/probe-rv-local-la-gnu.sh
 bash tests/assembler/probe-rv-li-gnu.sh
@@ -113,7 +114,7 @@ for bad in mul div fadd.s fadd.d amoadd.w c.li csrrw fence.i pause; do
         exit 1
     }
 done
-for escape in '.option arch,+m' '.option arch, +v' \
+for escape in '.option arch,+m' \
               '.option rvc'; do
     printf '.text\n.globl test_i\ntest_i:\n    %s\n' "$escape" >"$work/strict-i-escape.s"
     rm -f "$work/strict-i-escape.o"
@@ -176,7 +177,7 @@ grep -q 'incompatible-riscv-isa-abi' "$work/strict-i-bad-abi.err" || {
         cat "$work/strict-i-bad-abi.err" >&2
         exit 1
     }
-echo 'MINIAS_RV64I_ISA=PASS pseudos=1 negative_m_f_d_a_c_csr_zifencei=1 unsupported_options=3 raw_gnu=4 wrong_abi=1'
+echo 'MINIAS_RV64I_ISA=PASS pseudos=1 negative_m_f_d_a_c_csr_zifencei=1 unsupported_options=2 raw_gnu=4 wrong_abi=1'
 
 # Regression: GNU RISC-V assembler fills executable .p2align with NOPs,
 # not 0x0000 (C.UNIMP). A zero-fill bug in the Zbb strcmp fast path passes

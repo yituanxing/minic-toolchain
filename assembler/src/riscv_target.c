@@ -247,6 +247,11 @@ bool minias_riscv_validate_parsed_isa(MiniAsParseContext *ctx, const MiniAsStmt 
     uint64_t effective_features=state->isa_features;
     if ((stmt->site.mode_bits & MINIAS_RISCV_OPTION_SITE_ZBB) != 0U)
         effective_features|=RISCV_ISA_ZBB;
+    /* GAS +v grants its architectural dependencies at this instruction
+     * site too: F, D and Zicsr. They are not file-wide -march additions. */
+    if ((stmt->site.mode_bits & MINIAS_RISCV_OPTION_SITE_V) != 0U)
+        effective_features|=RISCV_ISA_V | RISCV_ISA_F |
+                            RISCV_ISA_D | RISCV_ISA_ZICSR;
     /* `.option norvc` is an instruction-site state even in the historical
      * implicit ISA mode. Do not bury the C opcode gate behind explicit
      * -march validation: GNU rejects c.* after norvc in either mode. */
@@ -692,13 +697,13 @@ static bool riscv_target_directive(MiniAs *as, const char *op,
         }
         state->options=state->option_stack[--state->option_depth];
     } else if((region_feature=riscv_arch_add_feature_option(args)) != 0U) {
-        /* GNU permits +zbb at an instruction site even with explicit -march
-         * lacking Zbb. push/pop restores this target-private lexical bit;
-         * ELF Tag_RISCV_arch always describes the selected file ISA. */
+        /* GNU permits +zbb/+v at an instruction site even with explicit
+         * -march lacking the feature. push/pop restores these lexical bits;
+         * ELF Tag_RISCV_arch still describes the selected file ISA. */
         if (region_feature == RISCV_ISA_ZBB)
             state->options|=MINIAS_RISCV_OPTION_SITE_ZBB;
-        else if (state->isa_explicit)
-            goto unsupported; /* +v needs its own verified site policy. */
+        else if (region_feature == RISCV_ISA_V)
+            state->options|=MINIAS_RISCV_OPTION_SITE_V;
         /* Legacy implicit ISA already permits V and Zbb instructions. */
     } else if(strcmp(args,"norelax")==0) {
         /* GNU GAS retains the final target .option relax state through

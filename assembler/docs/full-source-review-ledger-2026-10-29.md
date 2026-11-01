@@ -264,6 +264,11 @@ and P1 12/12); LoongArch64 MiniAS **SUCCESS** (2,748/2,748 objects,
 3,004 passes, QEMU P0 2/2 and P1 12/12), with no GNU assembler
 fallback. LoongArch independent GNU baseline **SUCCESS**. AArch64 MiniAS
 and its GNU baseline were **IN PROGRESS** at this later snapshot.
+The latter subsequently both **SUCCEEDED**, including AArch64 MiniAS
+4,171/4,171 Kbuild objects, 4,415 passes and QEMU P0 2/2 + P1 12/12.
+Matched production Kconfig provenance also succeeded: run `41270318051`
+is a complete four-target P0/P1 certificate on `0af59539` (with its
+separate same-SHA RV64 single run), not a certificate for later SHAs.
 
 The next targeted production change permits **only** scoped
 `.option arch,+zbb` through the existing RISC-V Target option stack and
@@ -317,7 +322,11 @@ Its independent frozen Linux 3×7 run `41271305472` also **SUCCEEDED**:
 all 21 shards and 22/22 jobs. This is assembly-only coverage, and the
 new SHA's **3,536/3,536 hard gate** run `41271305536` subsequently
 **SUCCEEDED** (11/11 jobs). These are distinct from GNU semantic
-equality. New-head Linux QEMU jobs were still running at this checkpoint.
+equality. Its RV64 linux-single job (run `41271305459`) subsequently
+**SUCCEEDED**: 2,099/2,099 Kbuild objects, 2,225 MiniAS passes,
+14 expected compatibility probes, no bypasses, QEMU P0 init/sh and
+P1 12/12. The other architecture jobs on `564f7c33` were still
+running at this checkpoint.
 
 ### Next grouped production correctness batch — RV64 `li` size convergence
 
@@ -354,6 +363,72 @@ GNU RVC may compress its internal LUI/SLLI despite `-mno-relax`
 Documented as a separate RVC Target sizing item, not hidden by
 comparator filtering. See architecture decisions §34. Exact-head
 3,536 semantic and Linux P0/P1 remain **PENDING** for this unpushed tree.
+
+The above LI batch was pushed as `27a620da`, tree exactly verified
+against the local commit. On this SHA, **3,536/3,536 hard gate**
+(run `41271812214`, 11/11 jobs) and **frozen 3×7**
+(run `41271812121`, all 21 shards and 22/22 jobs) have **SUCCEEDED**.
+The 3,536 GNU strict semantic run `41271812069` and real Linux 6.6.143
+QEMU runs were still **IN PROGRESS** at this checkpoint. No LI-related
+semantic improvement is booked until their exact-head comparison returns.
+
+That remote `27a620da` strict semantic corpus has now completed all
+nine comparison jobs: **1,766 semantic equal / 1,764 DIFF / 6
+MINIAS_FAIL / 0 GNU_FAIL / 0 inconclusive / 0 oracle error**; 1,286
+are strict equal. Compared with `564f7c33`, the single shared LI policy
+fix gained **1,043 more semantic-equal objects**; examples include
+first500 **111→388/500**, next500 **194→460/500**, new500
+**127→348/500**. The six surviving MiniAS failures are the known
+`.option arch,+v` first500 subset, not LI plan failures. This is a
+substantial but **still RED** strict semantic result; no dimension was
+removed from the GNU comparison. RV64 Linux and multiarch QEMU remain
+separate exact-head gates.
+
+The same `27a620da` run `41271812069` also finished its independent
+RV64 **linux-single SUCCESS**: 2,099/2,099 production Kbuild objects,
+2,225 MiniAS passes, 14 expected compatibility probes, zero bypasses,
+QEMU P0 boot and P1 **12/12** PASS. This certifies the LI batch's
+RV64 real Linux execution only; other target jobs are not inferred.
+
+### Next targeted zero-hard-failure batch — scoped V sites
+
+All **six** `27a620da` first500 `MINIAS_FAIL` are the exact same
+`unsupported-isa-option:arch, +v` diagnostic, across five RISC-V
+kernel/KVM vector uses and `kernel/sched/core`. Each of the six frozen
+preprocessed `.i` inputs reproduces through MiniC with original Kbuild
+`-fshort-wchar -funsigned-char` flags, and GNU accepts all six assembled
+`.s`. The emitted code uses `vsetvl` (5), `vsetvli` (9), `vle8.v`
+(16), `vse8.v` (16) and `vmv.v.i` (4), which already have typed Target
+encoders. No need for a broad fallback or silent option acceptance.
+
+The pending RISC-V-only patch grants `SITE_V` through the existing
+instruction-site option stack, preserving ISA/file attributes and Common
+ownership. GNU RV32I/RV64I exact probes cover scope, nested Zbb+V
+push/pop, bytes, attr stability and fail-closed unknown options. GNU
+also proves scoped `+v` implies F/D/Zicsr feature permission in
+addition to V, but **not** M/A/Zifencei; only the immutable effective
+site mask receives that verified closure. Strict Base-I still rejects
+the emitted V words. In six real local source oracles, MiniAS now
+assembles **6/6**, yet five remain `mapping_symbols_compatible` DIFF
+and `kernel/sched/core` has additional genuine section/reloc/symbol
+differences. Full 3,536 GNU equality is **not** claimed by removing
+the former parse failures. See architecture decisions §35.
+
+The exact-head local GNU A0 oracle for this pending patch reports
+**8/8 byte-exact RV32I/RV64I cases and 38/38 negative cases**, with
+GNU `-march=rv*i2p1` pinning to avoid I2p0's legacy implicit CSR
+permissions. All eight file ISA attributes remain unchanged. Both
+Release `-Werror` and A0 **30/30** pass; full remote Linux and 3,536
+semantic results are still required on the pushed SHA.
+
+Follow-up source owner audit of all 32 production files found **no
+additional high-value deletion with proven safe phase semantics**.
+NameId vs SymbolID indexes, SourceGraph vs MCLayout replay and x86
+measure vs encode have distinct consumers; the small RISC-V register
+number parser repetition has marginal benefit, while repeated target
+relax-plan queries would require a new cache/lifetime model. Those
+paths are **audited/retained**, not artificially removed to inflate
+cleanup progress. The next priority remains GNU-real-source correctness.
 
 This top section is the **current progress snapshot**. Later sections retain
 their original 2026-10-29 audit/batch evidence as history; their “pending CI”

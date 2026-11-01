@@ -12,6 +12,8 @@
 #define MINIAS_RISCV_OPTION_NO_RELAX 4U
 /* .option arch,+zbb is lexical instruction permission, never Tag_RISCV_arch. */
 #define MINIAS_RISCV_OPTION_SITE_ZBB 8U
+/* .option arch,+v likewise grants V at instruction sites only. */
+#define MINIAS_RISCV_OPTION_SITE_V 16U
 
 /* LI is a parsed, immutable target instruction plan. The MCInst pointer is
  * stable across stmt-vector relocation and layout retries. MCInst owns the

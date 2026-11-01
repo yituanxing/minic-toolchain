@@ -1467,3 +1467,59 @@ retained plan emits 32-bit words and remains longer there (one GNU
 RVC lowering policy gap; `.option norvc` gives byte parity. Do not
 claim this batch closes GNU RV64GC compressed `li`, full C3352 or any
 other semantic dimension until the next exact-head CI says so.
+
+The `27a620da` exact-head semantic CI run `41271812069` subsequently
+recorded **1,766/3,536 semantic equal**, up from **723/3,536** on
+`564f7c33` (**+1,043**), with 1,764 remaining DIFF and six remaining
+MiniAS errors. Thus GNU confirms the broad LI effect on actual frozen
+Linux C inputs, but the total strict oracle is still RED.
+
+## 35. 2026-11-01 — lexical `.option arch,+v` permission with GNU dependencies
+
+The `27a620da` strict 3,536 GNU corpus still had **six** `MINIAS_FAIL`,
+all in the first500 C shard. The exact frozen Linux sources
+`arch/riscv/kernel/{ptrace,signal,traps,vector}.i.s`,
+`arch/riscv/kvm/vcpu_vector.i.s` and `kernel/sched/core.i.s` all compile
+through MiniC and succeed through GNU GAS with the original Kbuild
+options; all six MiniAS attempts stopped at `.option arch, +v` before
+their vector code. The matched first-error line numbers in the
+regenerated `.s` prove this is a **Target ISA site-permission gap**,
+not a MiniC generation or generic expression-parser defect.
+
+The existing RISC-V Target `options` push/pop and immutable
+`stmt->site.mode_bits` model is extended by one private `SITE_V` bit;
+the file's base `isa_features`, ELF `.riscv.attributes` and Common
+representation do **not** change. GNU accepts scoped `vsetvl/vsetvli`,
+`vle8.v/vse8.v` and `vmv.v.i` under an explicit base-I `-march`, and
+rejects those same instructions when the lexical region closes.
+The Target already has typed machine forms for those instructions,
+so this change does not install a second V encoder or turn the option
+directive into an unchecked no-op.
+
+GNU `rv32i2p1`/`rv64i2p1` experiments also establish that `arch,+v`
+grants the site-level prerequisite set **V + F + D + Zicsr**: both
+architectures accept floating add S/D and CSR reads only in the +v
+region, while `fence.i`, multiply and atomic operations remain
+unavailable. The Target's effective instruction-site feature mask
+uses exactly those verified bits without widening file-level ISA/ABI.
+The existing explicit strict RV32I/RV64I **post-emission raw-word audit**
+continues to reject V machine bytes even when source-site +v permits
+parsing. Unknown extensions, +m and arch,-zbb remain fail-closed.
+
+The mandatory `probe-rv-v-site-gnu.sh` exercises RV32/RV64 byte-exact
+`.text` and attributes, local scope, nested push/pop with +zbb,
+after-pop rejection, verified dependency closure and negative options.
+GNU versions are pinned to `rv32i2p1`/`rv64i2p1` because an unversioned
+GAS `rv*i` would select legacy I2p0 and implicitly allow CSR instructions
+outside the scope; MiniAS `-march=rv*i` already selects I2p1. With
+source arch attributes pinned, the oracle reports **8/8 byte-exact
+successful objects, 8/8 stable file ISA attrs, 38/38 GNU-matched or
+deliberate fail-closed negatives**, including +v's F/D/Zicsr dependencies.
+All **six** regenerated real Linux sources now assemble with both
+GNU and MiniAS. Their semantics are **not yet** GNU-equal: five retain
+only ISA mapping-symbol differences; `kernel/sched/core` also differs
+in section/content/relocation/symbol dimensions. Mapping-symbol
+transitions require their own GNU-tested RISC-V Target policy, and are
+not erased by comparator normalization. Local Release `-Werror` and
+A0 30/30 PASS; the new exact-head remote 3,536 semantic and Linux QEMU
+status must be recorded after the grouped push.

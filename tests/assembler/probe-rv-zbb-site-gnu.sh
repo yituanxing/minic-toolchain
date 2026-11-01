@@ -111,10 +111,10 @@ for xlen in 32 64; do
             "$work/$xlen-$stem.mini.err"
     done
 
-    # A local +zbb grant cannot turn into a generic arbitrary ISA escape.
-    # +v still requires a separate verified site policy, despite GNU's
-    # broader support; unknown extensions and +m remain fail-closed.
-    for option in 'arch,+v' 'arch,+m' 'arch,+xunknown' 'arch,-zbb'; do
+    # A local +zbb/+v grant cannot become a generic arbitrary ISA escape.
+    # +v has its own GNU site-policy oracle; unknown extensions and +m
+    # remain fail-closed.
+    for option in 'arch,+m' 'arch,+xunknown' 'arch,-zbb'; do
         printf '.text\n.option %s\n' "$option" >"$work/unsupported.s"
         if "$MINIAS" "-march=$march" "-mabi=$mabi" \
             -o "$work/$xlen-unsupported.mini.o" "$work/unsupported.s" \
@@ -188,4 +188,4 @@ for xlen in 32 64; do
     grep -q 'unsupported-isa-feature:ctz' "$work/base-i-outside.mini.err"
 done
 
-echo 'MINIAS_RV_ZBB_SITE=PASS RV32_RV64_GNU_text=exact reloc=0 file_arch=unchanged nested_push_pop=2 outside_rejected=4 unsupported_options=8 pure_I_scopes=2'
+echo 'MINIAS_RV_ZBB_SITE=PASS RV32_RV64_GNU_text=exact reloc=0 file_arch=unchanged nested_push_pop=2 outside_rejected=4 unsupported_options=6 pure_I_scopes=2'
