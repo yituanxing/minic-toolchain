@@ -842,18 +842,6 @@ static bool parse_local_character_array_string_initializer(MinicParser *parser,
     return success;
 }
 
-static bool grow_runtime_array_action_values(MinicParser *parser,
-                                             MinicExpressionId **values,
-                                             size_t *capacity,
-                                             size_t required);
-static bool lower_runtime_scalar_array_plan(MinicParser *parser,
-                                            MinicExpressionId base_id,
-                                            MinicType element_type,
-                                            size_t element_count,
-                                            MinicSourceSpan initializer_span,
-                                            const MinicArrayInitializerPlan *plan,
-                                            const MinicExpressionId *action_values);
-
 static bool parse_inferred_runtime_array_initializer(MinicParser *parser,
                                                      MinicLocalId local_id,
                                                      MinicType element_type,

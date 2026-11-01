@@ -290,6 +290,46 @@ exit 1，不计 PASS，也不能据此宣称新清理造成运行语义回归；
 判名与类型兼容合同。未运行完整五架构 ELF/QEMU，也不启动 MiniAS/MiniLD
 联合验收。
 
+## 批次 C10：Runtime/Static Initializer 双实现完整深读，Frontend 收官
+
+**基线：** 03417d6，2026-11-01。本批全文通读最后 **2 个 Frontend
+生产 C 文件、原始 5,356 行**：parser_runtime_initializer.c（1,776 行）
+与 parser_static_initializer.c（3,580 行）。至此本轮 **Frontend 69/69
+全部全文深读**，全生产树 **69/336**；Compiler/Core/Target/Driver 等
+**267 个文件尚未按本轮标准全文深读**。阅读覆盖数不等于联合验收。
+
+| 两条 initializer owner | 实际合同、耦合与决定 |
+| --- | --- |
+| Runtime scalar array | MinicArrayInitializerPlan 接收 designated/positional 写入，Resolved 保存最终 owner；先补未填零槽，再按 action 顺序 lower；GNU range 最终多 owner 通过临时 Local 确保表达式只求值一次，全部覆盖的旧 action 可消除效果。**KEEP(evaluation order/side effects)**，不能与静态字节布局路径合并。 |
+| Runtime record / nested array | local/record lvalue 按稳定 ExpressionId 构造，先做类型转换再发 Statement；记录数组可单次初始化后 record-copy，nested array descriptor 在递归前快照防 arena 扩容。已修 MC-039/056；另有 MC-035 的表达式借用、MC-038 的 designated 恢复字段索引，Record 递归借用由独立 MC-003 调查。**KEEP(lifetime, track risk)**。 |
+| Static scalar / symbolic slot | 常量 bits、pointer/integer relocation 与覆盖/追加必须维持同一 slot identity；CORE_FAST_TRACE 有调试定位消费者，未确认退役前不删。**KEEP(relocation/debug compatibility)**。 |
+| Static aggregate arrays | action payload 保存 scalar bits、relative relocation 和 union selection；capture 撤回 GlobalObject 临时写入，Resolve 后重放并重基址。链式设计符重复覆盖只替换选中子槽，其余保留旧 action。与 Runtime 的求值顺序合同不同。**KEEP(transaction)**。 |
+| Static record/union/backward | 匿名 path、非 canonical union member/active span、GNU zero-length/FAM、前向补零与后向覆盖对应不同布局及拒绝出口；MC-023/049 已有定点快照修复。**KEEP(DataLayout/rollback)**。 |
+| Runtime 重复声明 | grow_runtime_array_action_values 和 lower_runtime_scalar_array_plan 在同一 C 文件上半部已有完整定义，后面又重复出现相同静态原型共 12 行；无工具文本消费者。**DELETE(redundant declarations)**，无公开接口变动。 |
+
+**C10 生产源码：** parser_runtime_initializer.c **+0/-12，净 -12 行**；
+累计 C1～C10 纯清理 **净 -204 行**，完全排除并行 MC 修复的增删行。
+两类 initializer 仍共享 AST/arena，但清理期只输出映射与问题，
+不提前抽新的 Initializer 架构层。
+
+**验证 PASS：** Release 全源 -Werror 编译；MC-039/056/023/049/061/002
+六个已合入的容量门禁（五目标 -S、GNU/MiniC x86 native）；
+run-runtime-local-array-initializer.sh、run-runtime-record-array-initializers.sh、
+run-runtime-record-zero-shorthand.sh、run-static-union-zero-overlay.sh、
+run-static-nested-record-designator.sh、
+run-static-record-nested-designator-string-overlay.sh、
+run-static-record-array-member-designator.sh、
+run-static-storage-scalar-array-owner.sh、
+run-static-multidimensional-array-relocation.sh（五 ISA 源汇编）。
+static_aggregate_array_designators.c 直接 GNU/MiniC x86 本机编译运行均 exit 0。
+
+**旧脚本不冒报：** run-static-aggregate-array-designators.sh 在
+“.size sparse_records, 32” 保留符号文本检查处 exit 1，
+当前优化输出无该静态符号；对应 fixture GNU/MiniC 原生执行核对通过，
+旧脚本本身仍 **NOT PASS**。run-static-multidimensional-array-relocation.sh
+首次未设置 MINIC_CC 而寻找不存在的 debug 编译器（exit 127），
+更正路径后 PASS。完整 ELF/QEMU 与 MiniAS/MiniLD 联合验收继续推迟。
+
 ## 后续批次进度规则
 
 每批发布：当前 HEAD、源文件逐目录覆盖（明确深读与只扫的区别）、
