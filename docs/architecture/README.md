@@ -1,7 +1,10 @@
 # MiniC 编译器架构总入口：事实、问题、清理与文档导航
 
-> **持续维护的入口，不是第五份问题台账。** 第八轮复扫基线：
+> **持续维护的入口，不是第五份问题台账。** 第八轮复扫冻结基线：
 > `refactor/minic-target-language-boundary` / `3d504e7ee4a7`，2026-10-31。
+> 现行 C38 纯清理覆盖口径见[清理流水账](minic-cleanup-ledger.md)（基线 `400c1e7`）：
+> `src/` 内 C/H/def 共 342/342 个文件已登记全文审读；两个 CLI 入口另计，
+> 且全文审读不等于全部 MC 缺陷已修或五架构 Linux 运行认证。
 > 本页 A8-01～A8-20 的初次源码取证基线是 `f6e9eb870d80`；
 > 新旧完整 `src/` 对照只有 x86-64 的三个源文件变化，其他路径逐文件内容相同。
 > 范围仅为 MiniC **编译器**：`tools/minic`、`tools/minic-cc`、
@@ -15,16 +18,19 @@
 | 项目的设计边界是什么 | [架构原则](principles.md) | 列出偏离与验收条件，不另立原则 |
 | `.i` 如何流过 AST、Core、全局对象与后端 | [生产数据流及所有权图谱](minic-global-contract-map.md) | 更新当前源码核验的变化，不复制完整图谱 |
 | 一个函数谁调用、借用、修改、释放 | [函数契约台账](minic-function-contract-register.md) | 指向原条目及仍未深读之处 |
-| 完整扫描了哪些文件，还剩哪些盲区 | [第八轮 341 输入文件覆盖清单](minic-source-coverage-f8-2026-10-31.md) | 以 `3d504e7` 冻结文件基线，逐文件追踪 F1/R2/E；现行源码删去旧 `.c` 后另计 |
+| 完整扫描了哪些文件，还剩哪些盲区 | [第八轮 341 输入文件冻结覆盖清单](minic-source-coverage-f8-2026-10-31.md) · [现行 C38 纯清理流水账](minic-cleanup-ledger.md) | 前者是 `3d504e7` 的历史输入集合；后者按现行 `src/` 342 个 C/H/def 文件另计全文审读、测试和待证明项 |
 | 有哪些 Bug、调查项、架构债、已排除误判 | [MC 问题台账](minic-issue-register.md) | 只组织主题和工作依赖，**不复制状态** |
 | 先纯清理再重构：本批删了什么、没删什么、证据缺口 | [MiniC 纯清理流水账](minic-cleanup-ledger.md) | 按 commit 记录真实删改、KEEP、测试与未验证，不另建 Bug 状态 |
+| C38 之后每批架构重构：迁了哪个 owner、删了哪条旧路径 | [架构收敛批次账本](minic-refactor-ledger.md) | 从 R1 开始按真实 producer/consumer、代码行数和同源差分记账，独立于 C1～C38 纯清理 |
 | 某个旧重构批次当时做了什么 | [历史审查与 RFC](#6-历史资料与专题索引) | 标出它是快照、方案还是现行契约 |
 
-`minic-issue-register.md` 已维护 `MC-001`～`MC-088` **88 个永久编号**：
+`minic-issue-register.md` 已维护 `MC-001`～`MC-089` **89 个永久编号**：
 第十一轮 F11 基线 `eddd49c` 大批复扫新增 MC-078～MC-087，原 77 个编号和证据全部保留；
 MC-031 在定向清理后为 `FIXED-UNVERIFIED`，**不将局部资源补漏误计为 MC-043 的语义修复**。
-当前计数：**54 `OPEN`、11 `INVESTIGATING`、11 `DEBT`、10 `FIXED-UNVERIFIED`、
-2 `CLOSED-NOT-A-BUG`**；MC-078/079/083 有 x86 定向原生回归，MC-081/088 有 RV32 ELF32/QEMU 差分，MC-087 只有 A64/Loong source/白盒证明；完整矩阵未验；
+按索引的**总项主状态**逐项去重计数：**26 `OPEN`、11 `INVESTIGATING`、10 `DEBT`、
+40 `FIXED-UNVERIFIED`、2 `CLOSED-NOT-A-BUG`**，合计 89。MC-057 总项仍算 `OPEN`（仅 RV32 子项局部修复）；
+MC-068 的 `OPEN/DEBT` 按尚待处理的 `OPEN` 计一次，不在 `DEBT` 中重复计算。
+MC-078/079/083 有 x86 定向原生回归，MC-081/088 有 RV32 ELF32/QEMU 差分，MC-087 只有 A64/Loong source/白盒证明；完整矩阵未验；
 MC-076 虽通过已知 mixed-use 定向修复仍因间接地址传播不完整而 `OPEN`。
 最新状态及每个编号以[唯一 MC 台账](minic-issue-register.md)为准。
 函数台账最新 F7 的 212 项是函数/函数组级静态审读，不是全仓所有函数均已逐行证明。
@@ -36,9 +42,12 @@ MC-076 虽通过已知 mixed-use 定向修复仍因间接地址传播不完整�
 
 ## 1. 当前代码与真实数据流
 
-`src/` 第十轮当前有 **336 个 C/H 文件**：Frontend 69、Compiler 11、Core 48、Target 208；
+`src/` 第十轮**历史快照**有 **336 个 C/H 文件**：Frontend 69、Compiler 11、Core 48、Target 208；
 另外单独审查两个编译器入口。第八轮 `3d504e7` 基线为 337 个
 （Frontend 70），随后退役的 `parser_type_query.c` **不从冻结的 F8 覆盖清单中抹掉**。
+现行 C38 `src/` 实有 **342 个 C/H/def**：Frontend 71、Compiler 11、Core 48、Target 212
+（其中 Target 的 `target_registration.def` 单独占 1）；若只算 C/H 则为 341。
+两个编译器 CLI 入口、测试、脚本和其他工具链不计入 342 分母。
 旧图谱中的 332 个是更早历史口径，不能作为本 HEAD 的覆盖率。
 
 ```mermaid
@@ -96,7 +105,7 @@ Core IR 存在函数路径；GlobalObject 作为并行的 TU 全局数据路径�
 | **A8-07 RV 全局 ELF 分类** | RV32 `rv32_global_emit.c:40–61`、RV64 `global_emit.c:429–453` 的 `.bss.* @progbits`、默认零对象 `.data` 与 Common Plan 的 `@nobits`/`.bss` 不同 | `SOURCE`，**缺 RV GNU AS/readelf**；相关 `MC-025/046` 不同根因 | 先做真实 RV32/64 ELF oracle；保留 alias/extern 先行分流，再接现有 GlobalEmissionPlan，最后删旧分类 |
 | **A8-08 RV64 TargetInfo 传递** | `riscv64/codegen_function.c:27–40` 尚丢弃传入 target；global emit 内有 default layout/重新选目标 | `SOURCE / PLAN` | 显式传 invocation Target 与 Layout，保持产物后再迁移 Common Plan |
 | **A8-09 RV enum/record copy** | `riscv64/codegen_support.c:242–325` 机器查询 C0 enum；`call_emit.c:233–260`、`core_codegen.c:388–415` 手写 byte-copy，对应现成 `riscv/record_copy_bytes.c` | `SOURCE / PLAN` | 先迁移 Core enum facts；按寄存器活性/别名核对复制原语，再删除重复循环 |
-| **A8-10 x86 ASM 双契约** | `x86_64/asm_contract.c` 109 组源 policy：21 typed、88 legacy；机器端仍重新按字符串分类 | `SOURCE`；相关 `MC-050/062` 已有既存差分 | 每家族迁入 typed form + 正反例/ELF，删除对应旧 matcher；保留机器端防伪校验和异常表语义 |
+| **A8-10 x86 ASM 双契约** | A8 历史快照为 109 组源 policy（21 typed、88 legacy）；C35～C38 现行清单为 **111 组（23 typed、88 legacy）**，机器端仍有独立可信性复核 | `SOURCE`；相关 `MC-050/062` 已有既存差分 | 每家族迁入 typed form + 正反例/ELF，删除对应旧 matcher；保留机器端防伪校验和异常表语义 |
 | **A8-11 x87 运算身份** | `x86_64/machine_call.c:288–551` 从 `__addtf3` 等名字重新辨认 `long double` 运算 | `SOURCE`；关联 `MC-041/051` | 明确 Core 的扩展浮点操作身份，再决定 x87/软浮点 lowering；不能先删现役 helper |
 | **A8-12 LP64 大聚合复制** | `common/lp64_aggregate.c:124–137` + A64/Loong return helper 2048B 人为上限；A64 ingress 按字节展开，Loong 已循环复制 | `SOURCE`，已有 `MC-060` 差分 | 先复用 A64 本地 counted-copy，修宽长度计数、保留 ABI 隐藏指针；再解除多处 cap 并测 2049B+ |
 | **A8-13 Loong 地址折叠扫描** | `loongarch64/residual_emit.c:45–123` 对每候选重复扫全函数，可构造二次方工作量 | `SOURCE`，无性能基准 | 缓存每函数 use/provenance 判定后替换热路径；保留保守不折叠条件 |
@@ -207,7 +216,7 @@ ASM-only、Source-only 证据一律不互相冒充。
 | **A11-36 RV Record extent 旧 Program 依赖** | `riscv64/legalize.c:43–114` 在 Core RECORD_LOAD/COPY 查 Program+default DataLayout，RV32 `rv32_memory_emit.c:131–168` 重查 target layout；CoreObjectStoragePlan 已有部分 object extent | `SOURCE / IR-BOUNDARY`；RECORD_LOAD 可接 object storage，RECORD_COPY 两个 SSA 地址无 object ID 需新增 type storage extent；空 GNU Record 定向通过，不能误报 |
 | **A11-37 RV PIC Symbol 再扫 TU** | `riscv64/core_codegen.c:249–282` 每个地址调用 TargetInfo 名字线性查询；hidden undefined weak 与 nonpreemptible 是独立事实 | `SOURCE / PERF`；用 TU 级 ELF symbol 索引，RV64 hidden weak 仍缺 GNU RV LD/运行 oracle，不能把 x86 MC-086 结果跨 ISA 代替 |
 | **A11-38 x86 Record shape/bytes 四路重复** | `machine_emit.c:837–916` LOAD/COPY 再校验+逐字节搬运，`machine_emit.c:637–651` 入参、`machine_call.c:75–90` 出参各另写拷贝 | `SOURCE + MC-084`；复用 Common typed extent 前先核对其 16MiB cap 与 x86 无 cap 之差，之后用 ISA-local bytes copier/large counted loop，保护 `volatile`、aliased/misaligned |
-| **A11-39 x86 88 legacy ASM 仍活** | `asm_contract.c:8709–8829` 109 Source 表项=21 typed/88 legacy；`machine_asm.c:5635–6447` typed 分发后还把旧族按文本重匹配 | `SOURCE / MIGRATION`；优先 `IP_HERE`（现成 native 地址正反例）和 `LAR_SELECTOR`（native/非法 opcode 正反例）；逐族迁 typed ID+variant，保留 qualifier、防伪、异常表 side effects，关联 A8-10 |
+| **A11-39 x86 88 legacy ASM 仍活** | A11 历史快照 `asm_contract.c` 为 109 Source 表项（21 typed/88 legacy）；C38 现行为 **111 项（23 typed/88 legacy）**，`machine_asm.c` 仍保留旧族文本复核 | `SOURCE / MIGRATION`；优先 `IP_HERE`（现成 native 地址正反例）和 `LAR_SELECTOR`（native/非法 opcode 正反例）；逐族迁 typed ID+variant，保留 qualifier、防伪、异常表 side effects，关联 A8-10 |
 | **A11-40 x86 重复 legacy matcher** | `machine_asm.c:6285–6289` boot_flags 同一候选 matcher 调两遍，`:6341–6350` bit_scan 最多三遍 | **C1 已缓存分类结果**，保持 match precedence；专属正反例 PASS；见[清理账](minic-cleanup-ledger.md) |
 | **A11-41 x86 Frame/Call fallback** | `call_plan.c` 已对 production CALL 建 plan，但 `machine_call.c` 仍含 standalone 重算；`frame.c:151–180` 无 FrameFacts 时重扫全部 Core `va_start` | `SOURCE / TEST-CONSUMER`；不是生产每次重复；迁移 standalone Machine/Frame 测试后才删 fallback |
 | **A11-42 x86 TF libcalls 假普通 CALL** | `machine_call.c:293–551` 对 `__addtf3` 等 callee 名字重新辨识扩展浮点操作并发 x87 | `SOURCE / IR-BOUNDARY`；Core 的扩展精度 operation 要带 typed semantics，保持 GNU long-double 有符号零/精度 MC-041/051 正反例 |

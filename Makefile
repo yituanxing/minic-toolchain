@@ -2003,3 +2003,17 @@ check-rv64-lp64d-union-fp-abi: $(MINIC_CC_BINARY)
 	bash tests/compiler/c0/probe-rv64-lp64d-union-fp-abi.sh
 
 check-fast: check-rv64-lp64d-union-fp-abi
+
+# RV64 GlobalEmissionPlan migration: the source/differential gate does not
+# need cross GNU tools and is included in check-fast. The separate opt-in
+# ELF/QEMU gate fails closed (BLOCKED/2) when cross tools are unavailable.
+.PHONY: check-rv64-global-plan-source check-rv64-global-plan-gnu-elf
+check-rv64-global-plan-source: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" BUILD_DIR="$(abspath $(BUILD_DIR))" \
+	  sh tests/compiler/c0/run-rv64-global-plan-abi.sh
+
+check-fast: check-rv64-global-plan-source
+
+check-rv64-global-plan-gnu-elf: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" BUILD_DIR="$(abspath $(BUILD_DIR))" \
+	  MINIC_RV64_GLOBAL_GNU_ELF=1 sh tests/compiler/c0/run-rv64-global-plan-abi.sh

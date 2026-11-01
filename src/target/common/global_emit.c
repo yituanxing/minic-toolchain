@@ -981,7 +981,7 @@ bool minic_multi_emit_elf_global_binding(FILE *out,
         obj->is_weak ? ".weak" : ".globl", obj->name) >= 0;
 }
 
-bool minic_multi_global_emission_plan_build(
+bool minic_multi_global_payload_plan_build(
     const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicGlobalObject *obj, MinicMultiGlobalEmissionPlan *plan) {
     MinicType scalar;
@@ -1000,20 +1000,6 @@ bool minic_multi_global_emission_plan_build(
     memset(plan, 0, sizeof(*plan));
     plan->storage_size = size;
     plan->storage_alignment = alignment;
-
-    /* GNU C rejects nonzero values and symbolic relocations in .bss / .bss.*
-     * even when explicitly selected by a section attribute. A NOBITS ELF
-     * object must have a bytewise zero payload; fail before writing GAS. */
-    if (minic_multi_elf_section_is_bss(obj->section_name)) {
-        if (obj->relocation_count != 0U) {
-            return false;
-        }
-        for (index = 0U; index < obj->initializer_count; ++index) {
-            if (obj->initializer_values[index] != 0U) {
-                return false;
-            }
-        }
-    }
 
     /* Zero payloads need no fabricated record/array initializer slots.
      * A fully zero record remains bytewise zero including bitfield padding. */
@@ -1148,6 +1134,27 @@ bool minic_multi_global_emission_plan_build(
     plan->default_elf_section = obj->is_read_only ? ".section .rodata"
         : ((obj->is_zero_initialized || obj->is_tentative) &&
            obj->initializer_count == 0U ? ".bss" : ".data");
+    return true;
+}
+
+bool minic_multi_global_emission_plan_build(
+    const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicGlobalObject *obj, MinicMultiGlobalEmissionPlan *plan) {
+    size_t index;
+    if (!minic_multi_global_payload_plan_build(program, target, obj, plan))
+        return false;
+    /* The Common ELF section writer uses NOBITS for .bss/.bss.*. Its
+     * stricter admission remains separate from the payload data walk: an
+     * RV64 emitter with its existing @progbits spelling cannot silently
+     * inherit a different section contract during a structural migration. */
+    if (minic_multi_elf_section_is_bss(obj->section_name)) {
+        if (obj->relocation_count != 0U)
+            return false;
+        for (index = 0U; index < obj->initializer_count; ++index) {
+            if (obj->initializer_values[index] != 0U)
+                return false;
+        }
+    }
     return true;
 }
 

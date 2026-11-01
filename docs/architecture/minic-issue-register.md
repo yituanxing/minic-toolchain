@@ -25,6 +25,8 @@
 > GNU/MiniC 编译差分、ASM-only 与已测量的代码体积债；无代码修复、无全量 CI。
 > 2026-11-01 的后续独立 RV32 ELF/QEMU 差分补充了 **MC-088**；
 > 不将新 Bug 混计为纯清理删行。
+> 后续 x87 有序比较的独立 GNU native 差分另立 **MC-089**；
+> 当前 89 个编号的状态以本页索引与正文一致更新，局部修复不等于跨目标完整验收。
 
 ## 使用约定
 
@@ -62,7 +64,7 @@
 | [MC-037](#mc-037-loong-特殊-asm-源端与机器端限定符不一致) | P2 | OPEN | LOCAL-COMPILE-DIFF | LoongArch64 | 合法 volatile cpucfg 输出仅因限定符在机器层拒绝 |
 | [MC-038](#mc-038-匿名字段设计符后的位置初始化游标错误) | P1 | FIXED-UNVERIFIED | GNU-NATIVE-DIFF/RV64-QEMU | Frontend | 匿名/嵌套设计符后按真实 Record 成员路径续接游标；13 例双编译器 x86 native 与 RV64 QEMU 通过 |
 | [MC-039](#mc-039-运行时嵌套数组递归跨-array-type-扩容借用) | P0 | FIXED-UNVERIFIED | ASAN | Frontend | ArrayType 元数据按值快照；五目标容量相位 ASan 与 x86 GNU native 对照通过，完整目标验收待做 |
-| [MC-041](#mc-041-long-double-字面量提前按-binary64-舍入) | P0 | OPEN | GNU-NATIVE-DIFF | Frontend/Target | `1.0000000000000001L` 提前按 double 舍入；x86 执行得到错误比较结果 |
+| [MC-041](#mc-041-long-double-字面量提前按-binary64-舍入) | P0 | FIXED-UNVERIFIED | GNU-NATIVE-DIFF / RV64-QEMU-DIFF | Frontend/Target | 原 `L` 字面量先经 binary64 舍入的错编已改为精确 binary128 literal parser；286 组 oracle 与定向运行通过，完整矩阵待验 |
 | [MC-042](#mc-042-packed-零宽位域丢失对齐栅栏) | P1 | FIXED-UNVERIFIED | GNU-NATIVE-DIFF | DataLayout | 保留匿名零宽位域自然对齐栅栏；9 组 GNU layout 断言、五 ISA `-S` 与 x86 原生通过 |
 | [MC-043](#mc-043-inline-整数特化预算耗尽直接拒绝合法-c) | P1 | OPEN | LOCAL-COMPILE-DIFF | Compiler | 2048 个 clone 预算由优化上限变成对合法 C 的硬编译失败 |
 | [MC-044](#mc-044-函数参数列表中的-record-enum-tag-作用域外泄) | P1 | FIXED-UNVERIFIED | GNU-NATIVE-DIFF | Frontend | prototype/definition/nested callback 形参 tag 改由独立 scope 持有，14 例五 ISA `-S` 与 x86 native 通过 |
@@ -77,7 +79,7 @@
 | [MC-056](#mc-056-运行时-record-顺序初始化器跨扩容借用) | P0 | FIXED-UNVERIFIED | ASAN | Frontend | RecordId 重新获取、字段按值快照；五目标容量相位 ASan 与 x86 GNU native 对照通过，完整目标验收待做 |
 | [MC-057](#mc-057-gnu-空-record-返回及实参-abi-缺口) | P2 | OPEN（RV32 子项 FIXED-UNVERIFIED） | GNU-NATIVE/5ISA-S | RV32/RV64/x86 | RV32 空 Record 定义/返回已过多路径回归；RV64、x86 独立拒编仍 OPEN，不能整项结案 |
 | [MC-058](#mc-058-符号指针加常量偏移的传递特化丢失) | P1 | OPEN | LOCAL-COMPILE-DIFF | Compiler | 唯一 caller 的 static pointer+offset 经 inline wrapper 后无法解析 GNU ASM `i` |
-| [MC-059](#mc-059-rv64-lp64d-含浮点成员-union-被误当-fp-aggregate) | P2 | OPEN | LOCAL-COMPILE-DIFF | RV64 ABI | LP64D union 中浮点字段不能触发 FP flatten；具名参数/返回四种 GNU 用例错拒 |
+| [MC-059](#mc-059-rv64-lp64d-含浮点成员-union-被误当-fp-aggregate) | P2 | FIXED-UNVERIFIED | LOCAL-COMPILE-DIFF | RV64 ABI | 已按 psABI 让含 FP 字段 union 走 INTEGER convention；LP64 11/11、LP64D 10/10 定点通过，完整目标 GNU ELF/QEMU 待验 |
 | [MC-060](#mc-060-lp64-两个目标的大聚合-2048-字节硬上限) | P2 | OPEN | LOCAL-COMPILE-DIFF | Common LP64/A64/Loong | 合法 2049B Record 的按值参数/返回在 A64/Loong preflight 错拒，2048B 通过 |
 | [MC-061](#mc-061-record-字段声明中-pointer-to-array-跨扩容借用) | P0 | FIXED-UNVERIFIED | ASAN | Frontend | `449eab2` 递归 field declarator 后按 RecordId 重新取指针；五目标×三容量 ASan、GNU/MiniC native 通过，完整 Linux 未验 |
 | [MC-062](#mc-062-x86-alt-reloc-的-memory-输入源机约束分裂) | P2 | OPEN | LOCAL-COMPILE-DIFF | x86-64 ASM | Source 允许任意 GNU m lvalue，Machine 硬编码唯一符号，合法替代重定位遭拒 |
@@ -101,7 +103,7 @@
 | [MC-086](#mc-086-x86-pic-隐藏的未定义-weak-对象与函数错用-pc32-重定位) | P1 | FIXED-UNVERIFIED | GNU-LD/ELF-ORACLE | x86 ELF/PIC symbol binding | `866fa28` 用 TargetInfo 已有 undefined-weak 事实修复 PIC GOT 选路；GNU/MiniC GNU AS/LD PIE 2×2、ELF relocation/native PASS，完整 Linux 矩阵未验 |
 | [MC-087](#mc-087-common-lp64-单函数-257-条合法-inline-asm-硬拒) | P2 | FIXED-UNVERIFIED | LOCAL-COMPILE-DIFF | Common Direct LP64 preflight | 257 人为上限已移除，A64/Loong 255/256/257/512 源汇编与伪造 Core 负例 PASS；目标 GNU ELF 未测 |
 | [MC-088](#mc-088-rv32-宽整数条件分支只检查低-32-位造成静默错编) | P1 | FIXED-UNVERIFIED | GNU-QEMU-DIFF/ELF32 | RV32 Core terminator | 64 位条件仅高 32 位非零时被当作假；修复前 GNU ELF32 QEMU PASS、MiniC exit11；修复后 8 组双 ELF32/QEMU PASS |
-| [MC-089](#mc-089-x87-long-double-大于比较方向错误) | P0 | OPEN | GNU-NATIVE-DIFF | Core/x86 x87 | 普通 `2.0L > 1.0L` GNU 原生返回 42、MiniC x86 GNU AS/LD 原生返回 1；独立于字面量精度 MC-041 |
+| [MC-089](#mc-089-x87-long-double-大于比较方向错误) | P0 | FIXED-UNVERIFIED | GNU-NATIVE-DIFF | Core/x86 x87 | x87 比较 helper 的 32→64 位有符号扩展错编已修；GNU/MiniC 原生有序比较回归通过，完整目标矩阵待验 |
 
 ## 索引：尚待验证的风险
 
@@ -599,11 +601,11 @@
 
 ### MC-059 RV64 LP64D 含浮点成员 Union 被误当 FP Aggregate
 
-- **状态：** `OPEN`，P2，`LOCAL-COMPILE-DIFF`；RV64 目标以两种明确 ABI/ISA profile 的 `-S` 对照检测到的可复现实例；目前表现为**合法 GNU C 的显式拒绝**，非静默 ABI 运行错误。
+- **状态：** `FIXED-UNVERIFIED`，P2，`LOCAL-COMPILE-DIFF`。历史错拒已作独立 RV64 ABI 定点修复，永久回归现可通过；**未做当前修复的完整 RV64 Linux/GNU ELF/QEMU 联合认证**，不能提升为 `VERIFIED`。
 - **规则：** [RISC-V ratified psABI，Procedure Calling Convention](https://docs.riscv.org/reference/abi/v1.0/riscv-cc-procedure-calling-convention.html)明确规定 union **永不 flatten**，始终按整数调用约定传递；不能因为 union 任一字段是 `double`/`float` 就当作可 flatten 的 FP struct。
-- **根因：** `src/target/riscv64/abi.c:minic_riscv64_classify_abi_value_profile` 的 `size<=16` Record 分支在 LP64D 使用 `minic_common_aggregate_integral_tree`，后者在 `src/target/common/aggregate_shape.c` 对含 FP 字段的 union 递归返回 false；具名参数、返回、direct call 都在真正机器 ABI placement 前被挡住。无名变参却明确按 integer convention，实测可 `-S`。
-- **永久反例：** `tests/compiler/audit/mc059_rv64_lp64d_union_float_abi.c`，独立宏 `PROBE_RETURN/PARAM/FLOAT32/CALL/CONTROL`。GNU11 所有 case 合法且可编译；MiniC `--target=riscv64-linux -march=rv64imafd -mabi=lp64d -S` 前四项 FAIL、纯 integer union CONTROL PASS；同输入 `-march=rv64i -mabi=lp64` **5/5 PASS**。原始更广探针还对比 RV32I/ILP32。
-- **区分：** `struct { double d; }` 的 LP64D FP flatten 属另一 ABI 分支，当前未全面实现属于既有能力边界；不可为了开放 union 一概放行所有含浮点的 Record。修复需明确 `is_union` 语义，回归具名/变参、参数/返回/嵌套调用、整数 vs FP 物理寄存器、GNU 目标 GAS/ELF/QEMU。
+- **历史根因与反例（修复前）：** `minic_riscv64_classify_abi_value_profile` 的 `size<=16` Record 分支曾使用 Common 的 `minic_common_aggregate_integral_tree`，把含 FP 字段的 union 当作需要 FP flatten 而错拒。持久输入 `tests/compiler/audit/mc059_rv64_lp64d_union_float_abi.c` 的 `PROBE_RETURN/PARAM/FLOAT32/CALL` 在 GNU11 合法、MiniC LP64D `-S` 失败；纯整数 union CONTROL 与 RV64I/LP64 对照通过。该旧 Common integral-tree helper **现已删除**，不能将历史失败描述成当前 HEAD 仍未动。
+- **现行修复与消费链：** `src/target/riscv64/abi.c:rv64_integer_convention_record_tree` 对完整 union（包括嵌套字段）显式按整数约定分类，`minic_riscv64_classify_abi_value_profile` 的 LP64D 小 Record 路径调用它；对真正 FP struct/array 仍保守拒绝。源码由 RV64 ABI owner 而非 Common DataLayout 决定 psABI 类别，不修改 LP64 soft-float 与 LP64D 具名 FP 标量的不同寄存器规则。
+- **永久回归与验收边界：** `check-rv64-lp64d-union-fp-abi` 已接入 `Makefile` 的 `check-fast`，脚本 `tests/compiler/c0/probe-rv64-lp64d-union-fp-abi.sh` 覆盖 RETURN、PARAM、FLOAT32、CALL、NESTED、ARRAY、FP_ONLY_UNION、VARIADIC、CONTROL、SCALAR、TRUE_FP_STRUCT；现行清理账 C29/C31/C32 记录 **LP64 11/11、LP64D 10/10 PASS**，真正 FP struct 的 LP64D 负例继续拒绝。脚本在有 GNU cross GCC 和 `qemu-riscv64` 时还会执行 GNU/MiniC caller/callee 四向 ELF/QEMU 差分；清理环境缺少交叉工具，该阶段 `runtime=skipped_no_cross_toolchain_or_qemu`，**不能写成 QEMU PASS**。完整 Linux Image/P1、更多 ABI 组合及五架构联合验收仍待证明。
 
 ### MC-060 LP64 两个目标的大聚合 2048 字节硬上限
 

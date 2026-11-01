@@ -99,6 +99,9 @@ static bool minic_riscv64_emit_shared_bits(
            minic_riscv64_emit_typed_bits(file, program, type, bits);
 }
 
+/* Keep the preexisting RV64 source-admission envelope independent of the
+ * shared payload plan. In particular, an uninitialized unsupported scalar
+ * leaf must not become accepted merely because its payload is all zero. */
 static bool minic_riscv64_global_scalar_type(const MinicC0Program *program,
                                              MinicType object_type,
                                              MinicType *scalar_type,
@@ -106,33 +109,25 @@ static bool minic_riscv64_global_scalar_type(const MinicC0Program *program,
     MinicType type;
     size_t alignment;
 
-    if (program == NULL || scalar_type == NULL || scalar_width == NULL) {
+    if (program == NULL || scalar_type == NULL || scalar_width == NULL)
         return false;
-    }
     type = object_type;
     while (minic_type_is_array(type)) {
-        const MinicArrayType *array_type;
-
-        array_type = minic_c0_program_array_type(program, type.array_type_id);
-        if (array_type == NULL) {
-            return false;
-        }
+        const MinicArrayType *array_type =
+            minic_c0_program_array_type(program, type.array_type_id);
+        if (array_type == NULL) return false;
         type = array_type->element_type;
     }
     if ((!minic_type_is_integer(type) && !minic_type_is_pointer(type) &&
          !minic_type_is_float(type) && !minic_type_is_double(type)) ||
-        !minic_data_layout_type(minic_default_data_layout(), program, type, scalar_width, &alignment) ||
-        (*scalar_width != 1U && *scalar_width != 2U && *scalar_width != 4U &&
-         *scalar_width != 8U)) {
+        !minic_data_layout_type(minic_default_data_layout(), program, type,
+                                scalar_width, &alignment) ||
+        (*scalar_width != 1U && *scalar_width != 2U &&
+         *scalar_width != 4U && *scalar_width != 8U))
         return false;
-    }
     (void)alignment;
     *scalar_type = type;
     return true;
-}
-
-static bool minic_riscv64_emit_zero_bytes(FILE *file, size_t size) {
-    return size == 0U || fprintf(file, "  .zero %zu\n", size) >= 0;
 }
 
 static bool minic_riscv64_emit_symbol_value(FILE *file,
@@ -178,114 +173,6 @@ static bool minic_riscv64_emit_symbol_relocation(
            minic_riscv64_emit_symbol_value(file, program, relocation, width);
 }
 
-static bool
-emit_symbol_relocs(FILE *file, const MinicC0Program *program, const MinicGlobalObject *object) {
-    const MinicTargetInfo *target =
-        minic_target_info_for_architecture(MINIC_TARGET_ARCH_RISCV64);
-    size_t size, alignment;
-
-    if (file == NULL || program == NULL || object == NULL || target == NULL ||
-        !minic_data_layout_global_object(
-            target->data_layout, program, object, &size, &alignment))
-        return false;
-    (void)alignment;
-    return minic_multi_emit_zero_relocation_global(
-        file, program, target, object, size,
-        minic_riscv64_emit_symbol_relocation);
-}
-
-static bool minic_riscv64_record_has_bit_fields(const MinicRecord *record) {
-    size_t field_index;
-
-    if (record == NULL) {
-        return false;
-    }
-    for (field_index = 0U; field_index < record->field_count; ++field_index) {
-        if (record->fields[field_index].is_bit_field) {
-            return true;
-        }
-    }
-    return false;
-}
-
-/* Full recursive GlobalObject layout is now owned by common/global_emit.c:
- * nested arrays, selected unions, bitfields, GNU flexible tails and empty
- * records all use one DataLayout/slot walk. RV64 only formats scalar data
- * directives and symbol relocations. No parallel fallback algorithm. */
-static bool minic_riscv64_emit_complete_recursive_global(
-    FILE *file, const MinicC0Program *program, const MinicGlobalObject *object) {
-    const MinicTargetInfo *target =
-        minic_target_info_for_architecture(MINIC_TARGET_ARCH_RISCV64);
-    size_t storage_size, alignment;
-    if (file == NULL || program == NULL || object == NULL || target == NULL ||
-        !minic_data_layout_global_object(
-            target->data_layout, program, object, &storage_size, &alignment))
-        return false;
-    (void)alignment;
-    return minic_multi_emit_recursive_aggregate_global(
-        file, program, target, object, storage_size,
-        minic_riscv64_emit_symbol_relocation,
-        minic_riscv64_emit_shared_bits);
-}
-
-static bool minic_riscv64_emit_record_values(FILE *file,
-                                             const MinicC0Program *program,
-                                             const MinicGlobalObject *object) {
-    const MinicRecord *record;
-
-    if (file == NULL || program == NULL || object == NULL || !minic_type_is_record(object->type) ||
-        object->is_zero_initialized) {
-        return false;
-    }
-    record = minic_c0_program_record(program, object->type.record_id);
-    if (record == NULL || !record->is_complete) {
-        return false;
-    }
-    {
-        bool has_recursive_relocation;
-        bool has_nonscalar_field;
-        size_t index;
-
-        has_recursive_relocation = false;
-        for (index = 0U; index < object->relocation_count; ++index) {
-            if (object->relocations[index].location_kind ==
-                MINIC_GLOBAL_RELOCATION_LOCATION_AGGREGATE_SCALAR) {
-                has_recursive_relocation = true;
-                break;
-            }
-        }
-        has_nonscalar_field = false;
-        for (index = 0U; index < record->field_count; ++index) {
-            const MinicRecordField *field;
-
-            field = minic_c0_record_field(record, index);
-            if (field == NULL || field->element_count != 1U ||
-                (!minic_type_is_integer(field->type) && !minic_type_is_pointer(field->type))) {
-                has_nonscalar_field = true;
-                break;
-            }
-        }
-        if (!record->is_union && object->initializer_count == record->field_count &&
-            !has_recursive_relocation && !has_nonscalar_field &&
-            !minic_riscv64_record_has_bit_fields(record)) {
-            const MinicTargetInfo *target =
-                minic_target_info_for_architecture(MINIC_TARGET_ARCH_RISCV64);
-            size_t storage_size, object_alignment;
-            if (target == NULL ||
-                !minic_data_layout_global_object(
-                    target->data_layout, program, object,
-                    &storage_size, &object_alignment))
-                return false;
-            (void)object_alignment;
-            return minic_multi_emit_flat_record_global(
-                file, program, target, object, storage_size,
-                minic_riscv64_emit_symbol_relocation,
-                minic_riscv64_emit_shared_bits);
-        }
-    }
-    return minic_riscv64_emit_complete_recursive_global(file, program, object);
-}
-
 static bool minic_riscv64_array_uses_recursive_initializer(
     const MinicC0Program *program, MinicType type) {
     const MinicArrayType *array_type;
@@ -299,26 +186,24 @@ static bool minic_riscv64_array_uses_recursive_initializer(
             minic_type_is_array(array_type->element_type));
 }
 
-/* Only homogeneous scalar relocations are eligible for the common slot
- * walker; nested records, unions and arrays still use the RV64 recursion. */
-static bool minic_riscv64_is_flat_relocation_array(
-    const MinicC0Program *program, const MinicGlobalObject *object) {
-    const MinicArrayType *array;
-    if (program == NULL || object == NULL || !minic_type_is_array(object->type) ||
-        object->relocation_count == 0U)
-        return false;
-    array = minic_c0_program_array_type(program, object->type.array_type_id);
-    return array != NULL &&
-           (minic_type_is_integer(array->element_type) ||
-            minic_type_is_pointer(array->element_type));
-}
-
-static bool minic_riscv64_emit_recursive_array_values(
-    FILE *file, const MinicC0Program *program, const MinicGlobalObject *object) {
-    if (file == NULL || program == NULL || object == NULL ||
-        object->is_zero_initialized || !minic_type_is_array(object->type))
-        return false;
-    return minic_riscv64_emit_complete_recursive_global(file, program, object);
+/* Common decides payload shape and walks bytes. The generic record-array and
+ * recursive-record wrappers use common scalar spelling; RV64 has historically
+ * used .half/.word/.dword, so pass the native scalar callback directly to
+ * that very same recursive walker for these three planned payload kinds. */
+static bool minic_riscv64_emit_planned_payload(
+    FILE *file, const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicGlobalObject *object, const MinicMultiGlobalEmissionPlan *plan) {
+    if (plan->payload_kind == MINIC_MULTI_GLOBAL_PAYLOAD_RECORD_RECURSIVE ||
+        plan->payload_kind == MINIC_MULTI_GLOBAL_PAYLOAD_RECORD_FLEXIBLE ||
+        plan->payload_kind == MINIC_MULTI_GLOBAL_PAYLOAD_ARRAY_RECORD)
+        return minic_multi_emit_recursive_aggregate_global(
+            file, program, target, object, plan->storage_size,
+            minic_riscv64_emit_symbol_relocation,
+            minic_riscv64_emit_shared_bits);
+    return minic_multi_emit_global_payload(
+        file, program, target, object, plan,
+        minic_riscv64_emit_symbol_relocation,
+        minic_riscv64_emit_shared_bits);
 }
 
 bool minic_riscv64_emit_file_asm(FILE *file, const MinicFileAsm *file_asm) {
@@ -366,19 +251,21 @@ static bool minic_riscv64_zero_size_object_definition(const MinicC0Program *prog
 bool minic_riscv64_emit_global_object(FILE *file,
                                              const MinicC0Program *program,
                                              const MinicGlobalObject *object) {
+    const MinicTargetInfo *target =
+        minic_target_info_for_architecture(MINIC_TARGET_ARCH_RISCV64);
+    MinicMultiGlobalEmissionPlan plan;
     size_t object_alignment;
     size_t storage_size;
 
-    if (!minic_data_layout_global_object(
-            minic_default_data_layout(), program, object, &storage_size, &object_alignment)) {
+    if (target == NULL || !minic_data_layout_global_object(
+            target->data_layout, program, object,
+            &storage_size, &object_alignment)) {
         return false;
     }
 
     MinicType scalar_type;
-    const char *directive;
     unsigned int alignment_power;
     size_t scalar_width;
-    size_t initializer_index;
     bool zero_size_object_definition;
 
     if (file == NULL || program == NULL || object == NULL || object->name_length == 0U ||
@@ -391,7 +278,6 @@ bool minic_riscv64_emit_global_object(FILE *file,
         return false;
     }
 
-    directive = NULL;
     scalar_width = 0U;
     if (zero_size_object_definition) {
         if (object->initializer_count != 0U || object->relocation_count != 0U) {
@@ -420,11 +306,19 @@ bool minic_riscv64_emit_global_object(FILE *file,
             scalar_width == 0U || object->initializer_count > storage_size / scalar_width) {
             return false;
         }
-        directive = minic_riscv64_integer_data_directive(scalar_width);
-        if (directive == NULL) {
+        if (minic_riscv64_integer_data_directive(scalar_width) == NULL) {
             return false;
         }
     }
+
+    /* RV64 deliberately emits explicit source sections as @progbits,
+     * including .bss.* names, rather than inheriting Common's NOBITS source
+     * policy. The payload-only API leaves that independent ELF policy alone. */
+    if (!minic_multi_global_payload_plan_build(
+            program, target, object, &plan) ||
+        plan.storage_size != storage_size ||
+        plan.storage_alignment != object_alignment)
+        return false;
 
     if (object->section_name != NULL) {
         if (!minic_multi_elf_safe_section_name(object->section_name))
@@ -472,51 +366,9 @@ bool minic_riscv64_emit_global_object(FILE *file,
     if (zero_size_object_definition) {
         /* GNU zero-length objects still own a symbol and type, but have no
            payload bytes. The label plus .size 0 is the complete definition. */
-    } else if (minic_type_is_record(object->type) && object->initializer_count != 0U) {
-        if (!minic_riscv64_emit_record_values(file, program, object)) {
-            return false;
-        }
-    } else if (minic_riscv64_is_flat_relocation_array(program, object) &&
-               object->initializer_count != 0U) {
-        const MinicTargetInfo *target =
-            minic_target_info_for_architecture(MINIC_TARGET_ARCH_RISCV64);
-        if (target == NULL ||
-            !minic_multi_emit_relocatable_scalar_array(
-                file, program, target, object, storage_size,
-                minic_riscv64_emit_symbol_relocation,
-                minic_riscv64_emit_shared_bits))
-            return false;
-    } else if ((minic_riscv64_array_uses_recursive_initializer(program, object->type) ||
-                (minic_type_is_array(object->type) && object->relocation_count != 0U)) &&
-               object->initializer_count != 0U) {
-        if (!minic_riscv64_emit_recursive_array_values(file, program, object)) {
-            return false;
-        }
-    } else if (object->relocation_count != 0U) {
-        if (!emit_symbol_relocs(file, program, object)) {
-            return false;
-        }
-    } else if (object->is_zero_initialized || object->is_tentative) {
-        if (!minic_riscv64_emit_zero_bytes(file, storage_size)) {
-            return false;
-        }
-    } else if (minic_type_is_record(object->type)) {
-        if (!minic_riscv64_emit_record_values(file, program, object)) {
-            return false;
-        }
-    } else {
-        for (initializer_index = 0U; initializer_index < object->initializer_count;
-             ++initializer_index) {
-            if (!minic_riscv64_emit_typed_bits(
-                    file, program, scalar_type, object->initializer_values[initializer_index])) {
-                return false;
-            }
-        }
-        if (!minic_riscv64_emit_zero_bytes(
-                file, storage_size - object->initializer_count * scalar_width)) {
-            return false;
-        }
-    }
+    } else if (!minic_riscv64_emit_planned_payload(
+                   file, program, target, object, &plan))
+        return false;
     return fprintf(file, ".size %s, %zu\n", object->name, storage_size) >= 0;
 }
 

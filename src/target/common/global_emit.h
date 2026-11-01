@@ -48,6 +48,16 @@ typedef struct MinicMultiGlobalEmissionPlan {
     const char *default_elf_section;
 } MinicMultiGlobalEmissionPlan;
 
+/* Classify the ABI-neutral payload without imposing the Common ELF section
+ * encoding policy. A target that keeps its own section directives (RV64's
+ * historical explicit @progbits policy) still uses the exact same payload
+ * plan and serializer; it must validate/emit sections independently. */
+bool minic_multi_global_payload_plan_build(
+    const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicGlobalObject *object, MinicMultiGlobalEmissionPlan *plan);
+
+/* Common ELF emission additionally requires bytewise-zero data in explicit
+ * .bss/.bss.* sections, which it emits as NOBITS. */
 bool minic_multi_global_emission_plan_build(
     const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicGlobalObject *object, MinicMultiGlobalEmissionPlan *plan);
