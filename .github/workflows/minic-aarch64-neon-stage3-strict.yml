@@ -1,0 +1,53 @@
+name: MiniC AArch64 NEON Stage3 Strict
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/minic-aarch64-neon-stage3-strict.yml'
+      - 'src/frontend/type.*'
+      - 'src/frontend/parser_expression.c'
+      - 'src/frontend/parser_pragma.c'
+      - 'src/frontend/ast_verifier.c'
+      - 'src/core/core_ir.*'
+      - 'src/core/core_ir_verify.c'
+      - 'src/core/core_ir_dump.c'
+      - 'src/core/value_uses.c'
+      - 'src/core/core_lower*.c'
+      - 'src/target/aarch64/**'
+      - 'src/target/common/core_value_slots.c'
+      - 'src/target/common/core_instruction_family.h'
+      - 'src/target/source_policy/aarch64.c'
+      - 'src/target/target_info.c'
+      - 'src/target/data_layout.c'
+      - 'tests/compiler/c0/aarch64_neon*'
+      - 'tests/compiler/c0/run-aarch64-neon-*'
+      - 'Makefile'
+  workflow_dispatch:
+
+jobs:
+  aarch64-neon-real-gnu-minic-qemu:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install real AArch64 GNU assembler, compiler and QEMU
+        run: |
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu qemu-user make
+      - name: Build MiniC native host compiler
+        run: make -j2 MODE=release BUILD_DIR=build/aarch-neon-ci build/aarch-neon-ci/bin/minic-cc
+      - name: Native typed 128-bit machine emitter contract
+        run: |
+          BUILD_DIR=build/aarch-neon-ci \
+            sh tests/compiler/c0/run-aarch64-neon-machine-contract.sh
+      - name: Typed AArch64 128-bit Core and native Q assembly preflight
+        run: |
+          MINIC_CC="$GITHUB_WORKSPACE/build/aarch-neon-ci/bin/minic-cc" \
+          BUILD_DIR=build/aarch-neon-ci \
+            sh tests/compiler/c0/run-aarch64-neon-core-vector128.sh
+      - name: Strict same-GNU-i, two-ELF, GNU/MiniC/QEMU real machine differential
+        run: |
+          MINIC_CC="$GITHUB_WORKSPACE/build/aarch-neon-ci/bin/minic-cc" \
+          BUILD_DIR=build/aarch-neon-ci \
+            sh tests/compiler/c0/run-aarch64-neon-stage3-strict.sh

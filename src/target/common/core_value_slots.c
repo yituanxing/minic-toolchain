@@ -25,7 +25,8 @@ bool minic_core_wide_value_slots_build(
     for (i = 0U; i < function->value_count; ++i) {
         const MinicType type = function->values[i].type;
         const bool wide = minic_type_is_int128_integer(type) ||
-                          minic_type_is_long_double(type);
+                          minic_type_is_long_double(type) ||
+                          minic_type_is_aarch64_fixed_vector128(type);
         const size_t bytes = wide ? 16U : 0U;
         if (bytes > maximum_bytes || cursor > maximum_bytes - bytes) {
             free(offsets);

@@ -49,24 +49,33 @@ if "$minic_cc" --target=aarch64-linux -S "$work/xor.i" \
 fi
 grep -F 'unsupported GCC pragma directive' "$work/xor.minic.stderr" >/dev/null
 
-# A source-level vector object declaration and sizeof do not authorize either
-# vector arithmetic or the by-value AAPCS64 V-register argument/return ABI.
-for family in alu abi; do
-    "$gnu_cc" -E -P -x c \
-        "$root/tests/compiler/c0/aarch64_neon_unsupported_$family.c" \
-        -o "$work/unsupported-$family.i"
-    "$gnu_cc" -O2 -c \
-        "$root/tests/compiler/c0/aarch64_neon_unsupported_$family.c" \
-        -o "$work/unsupported-$family.gnu.o"
-    if "$minic_cc" --target=aarch64-linux -S \
-        "$work/unsupported-$family.i" -o "$work/unsupported-$family.minic.s" \
-        >"$work/unsupported-$family.stdout" \
-        2>"$work/unsupported-$family.stderr"; then
-        printf '%s\n' "FAIL MiniC silently admitted unfinished vector $family" >&2
-        exit 1
-    fi
-done
-grep -F 'binary operator requires int operands' "$work/unsupported-alu.stderr" >/dev/null
+# The former ALU negative case now has genuine 128-bit Core/Q-register XOR
+# lowering. Its C function ABI is still scalar pointers, not vector by value.
+"$gnu_cc" -E -P -x c \
+    "$root/tests/compiler/c0/aarch64_neon_unsupported_alu.c" \
+    -o "$work/alu.i"
+"$gnu_cc" -O2 -c \
+    "$root/tests/compiler/c0/aarch64_neon_unsupported_alu.c" \
+    -o "$work/alu.gnu.o"
+"$minic_cc" --target=aarch64-linux -S "$work/alu.i" \
+    -o "$work/alu.minic.s"
+grep -F '  eor v16.16b, v16.16b, v17.16b' "$work/alu.minic.s" >/dev/null
+"$gnu_cc" -c "$work/alu.minic.s" -o "$work/alu.minic.o"
+
+# AAPCS64 V-register by-value function ABI remains independently gated.
+"$gnu_cc" -E -P -x c \
+    "$root/tests/compiler/c0/aarch64_neon_unsupported_abi.c" \
+    -o "$work/unsupported-abi.i"
+"$gnu_cc" -O2 -c \
+    "$root/tests/compiler/c0/aarch64_neon_unsupported_abi.c" \
+    -o "$work/unsupported-abi.gnu.o"
+if "$minic_cc" --target=aarch64-linux -S \
+    "$work/unsupported-abi.i" -o "$work/unsupported-abi.minic.s" \
+    >"$work/unsupported-abi.stdout" \
+    2>"$work/unsupported-abi.stderr"; then
+    printf '%s\n' 'FAIL MiniC silently admitted unfinished vector by-value ABI' >&2
+    exit 1
+fi
 grep -F 'unsupported function return type' "$work/unsupported-abi.stderr" >/dev/null
 
-printf '%s\n' 'PASS AArch64 NEON stage2 layout=MiniC+GNU/QEMU(native) intrinsics=GNU/QEMU(reference) MiniC-intrinsic/ALU/ABI=honest-FAIL other-ISA=reject'
+printf '%s\n' 'PASS AArch64 NEON stage2 layout=MiniC+GNU/QEMU(native) ALU=MiniC-Q-object intrinsics=GNU/QEMU(reference) MiniC-full-header/ABI=honest-FAIL other-ISA=reject'

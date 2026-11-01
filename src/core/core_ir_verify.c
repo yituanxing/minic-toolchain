@@ -27,6 +27,24 @@ static bool available_pointer_pointee(const MinicCoreFunction *function,
     return minic_type_pointee(function->values[address].type, pointee);
 }
 
+/* Source ACLE load/store can operate on a uint64_t/uint8_t array pointer;
+ * plain C vector lvalues can instead use a pointer to the full vector.
+ * Core only proves typed bounds. AArch64 alone owns the Q instruction. */
+static bool vector128_memory_pointee(MinicType vector, MinicType pointee) {
+    MinicType effective;
+    if (!minic_type_is_aarch64_fixed_vector128(vector) ||
+        !minic_type_unqualified(pointee, &effective)) return false;
+    if (minic_type_equal(vector, effective)) return true;
+    if (!minic_type_is_integer(effective)) return false;
+    if (vector.base_kind == MINIC_TYPE_BASE_AARCH64_UINT64X2)
+        return minic_type_is_unsigned_integer(effective) &&
+               (effective.integer_rank == MINIC_INTEGER_RANK_LONG ||
+                effective.integer_rank == MINIC_INTEGER_RANK_LONG_LONG);
+    return effective.integer_rank == MINIC_INTEGER_RANK_CHAR &&
+           (vector.base_kind != MINIC_TYPE_BASE_AARCH64_UINT8X16 ||
+            minic_type_is_unsigned_integer(effective));
+}
+
 bool minic_core_scalar_bitcast_types_valid(MinicType target_type, MinicType source_type) {
     return (minic_type_is_pointer(target_type) &&
             (minic_type_is_pointer(source_type) || minic_type_is_integer(source_type))) ||
@@ -560,6 +578,62 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
                minic_type_unqualified(source_pointee, &source_type) &&
                minic_type_equal(destination_type, instruction->type) &&
                minic_type_equal(source_type, instruction->type);
+    }
+    case MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_LOAD: {
+        MinicType pointee, unqualified;
+        return instruction_result_is_valid(function, instruction) &&
+               minic_type_is_aarch64_fixed_vector128(instruction->type) &&
+               minic_type_unqualified(instruction->type, &unqualified) &&
+               minic_type_equal(instruction->type, unqualified) &&
+               available_pointer_pointee(function, available_values,
+                   instruction->value.load.address, &pointee) &&
+               vector128_memory_pointee(instruction->type, pointee) &&
+               instruction->value.load.is_volatile == minic_type_is_volatile(pointee);
+    }
+    case MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_STORE: {
+        MinicType pointee;
+        const MinicCoreValueId value = instruction->value.store.stored_value;
+        return instruction->result == MINIC_CORE_VALUE_INVALID &&
+               minic_type_is_void(instruction->type) &&
+               value < function->value_count && available_values[value] &&
+               minic_type_is_aarch64_fixed_vector128(function->values[value].type) &&
+               available_pointer_pointee(function, available_values,
+                   instruction->value.store.address, &pointee) &&
+               !minic_type_is_const(pointee) &&
+               vector128_memory_pointee(function->values[value].type, pointee) &&
+               instruction->value.store.is_volatile == minic_type_is_volatile(pointee);
+    }
+    case MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_XOR:
+        if (!instruction_result_is_valid(function, instruction) ||
+            !minic_type_is_aarch64_fixed_vector128(instruction->type) ||
+            instruction->value.binary.left >= function->value_count ||
+            instruction->value.binary.right >= function->value_count ||
+            !available_values[instruction->value.binary.left] ||
+            !available_values[instruction->value.binary.right]) return false;
+        return minic_type_equal(
+                   function->values[instruction->value.binary.left].type,
+                   instruction->type) &&
+               minic_type_equal(
+                   function->values[instruction->value.binary.right].type,
+                   instruction->type);
+    case MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_EOR3: {
+        const MinicCoreValueId first = instruction->value.vector_ternary.first;
+        const MinicCoreValueId second = instruction->value.vector_ternary.second;
+        const MinicCoreValueId third = instruction->value.vector_ternary.third;
+        const MinicCoreInlineAsmId source =
+            instruction->value.vector_ternary.source_inline_asm;
+        return instruction_result_is_valid(function, instruction) &&
+               instruction->type.base_kind == MINIC_TYPE_BASE_AARCH64_UINT64X2 &&
+               minic_type_is_aarch64_fixed_vector128(instruction->type) &&
+               first < function->value_count && second < function->value_count &&
+               third < function->value_count &&
+               available_values[first] && available_values[second] &&
+               available_values[third] &&
+               minic_type_equal(function->values[first].type, instruction->type) &&
+               minic_type_equal(function->values[second].type, instruction->type) &&
+               minic_type_equal(function->values[third].type, instruction->type) &&
+               source < function->inline_asm_count &&
+               function->inline_asms[source].source_inline_asm_id != SIZE_MAX;
     }
     case MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM: {
         const MinicCoreInlineAsm *inline_asm;

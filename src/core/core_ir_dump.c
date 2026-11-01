@@ -373,6 +373,26 @@ static bool dump_instruction(FILE *output,
                        "  gnu.vector16.copy %%%" PRIu32 ", %%%" PRIu32 "\n",
                        instruction->value.gnu_fixed_vector_storage_copy.source_address,
                        instruction->value.gnu_fixed_vector_storage_copy.destination_address) >= 0;
+    case MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_LOAD:
+        return fprintf(output, "  %%%" PRIu32 " = vector128.load %%%" PRIu32 "\n",
+                       instruction->result, instruction->value.load.address) >= 0;
+    case MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_STORE:
+        return fprintf(output, "  vector128.store %%%" PRIu32 ", %%%" PRIu32 "\n",
+                       instruction->value.store.stored_value,
+                       instruction->value.store.address) >= 0;
+    case MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_XOR:
+        return fprintf(output, "  %%%" PRIu32 " = vector128.xor %%%" PRIu32 ", %%%" PRIu32 "\n",
+                       instruction->result, instruction->value.binary.left,
+                       instruction->value.binary.right) >= 0;
+    case MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_EOR3:
+        return fprintf(output,
+                       "  %%%" PRIu32 " = vector128.eor3 %%%" PRIu32 ", %%%" PRIu32
+                       ", %%%" PRIu32 " source_asm=%" PRIu32 "\n",
+                       instruction->result,
+                       instruction->value.vector_ternary.first,
+                       instruction->value.vector_ternary.second,
+                       instruction->value.vector_ternary.third,
+                       instruction->value.vector_ternary.source_inline_asm) >= 0;
     case MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM: {
         const MinicCoreInlineAsm *inline_asm;
 

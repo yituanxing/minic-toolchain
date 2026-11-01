@@ -156,6 +156,38 @@ static MinicCoreLowerStatus minic_core_lower_assignment_pair_impl(MinicCoreLower
     if (minic_type_is_gnu_fixed_vector(target->type))
         return core_lower_gnu_vector16_storage_copy(
             context, target, source, target_id, source_id, span, result_value);
+    if (minic_type_is_aarch64_fixed_vector128(target->type)) {
+        MinicCoreInstruction store;
+        MinicCoreValueId vector_value, target_address;
+        if (source == NULL ||
+            !minic_target_info_language_type_supported(
+                context->target, target->type.base_kind) ||
+            minic_type_is_const(target->type) ||
+            !minic_type_unqualified(target->type, &stored_type) ||
+            !minic_type_assignment_compatible(stored_type, source->type))
+            return MINIC_CORE_LOWER_UNSUPPORTED;
+        status = lower_expression(context, source_id, &vector_value);
+        if (status != MINIC_CORE_LOWER_OK) return status;
+        if (vector_value >= context->function->value_count ||
+            !minic_type_equal(context->function->values[vector_value].type,
+                              stored_type))
+            return MINIC_CORE_LOWER_UNSUPPORTED;
+        status = lower_address(context, target_id, &target_address);
+        if (status != MINIC_CORE_LOWER_OK) return status;
+        (void)memset(&store, 0, sizeof(store));
+        store.kind = MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_STORE;
+        store.span = span;
+        store.type = minic_type_void();
+        store.result = MINIC_CORE_VALUE_INVALID;
+        store.value.store.address = target_address;
+        store.value.store.stored_value = vector_value;
+        store.value.store.is_volatile = minic_type_is_volatile(target->type);
+        if (!minic_core_function_append_effect_instruction(
+                context->function, context->block_id, &store))
+            return MINIC_CORE_LOWER_ERROR;
+        if (result_value != NULL) *result_value = vector_value;
+        return MINIC_CORE_LOWER_OK;
+    }
     if (!minic_type_unqualified(target->type, &stored_type) ||
         !core_memory_scalar_type(stored_type)) {
         return MINIC_CORE_LOWER_UNSUPPORTED;

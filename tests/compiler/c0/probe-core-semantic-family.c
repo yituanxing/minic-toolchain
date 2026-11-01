@@ -20,6 +20,18 @@ int main(void) {
         minic_core_instruction_semantic_family(
             MINIC_CORE_INSTRUCTION_GNU_FIXED_VECTOR_STORAGE_COPY) !=
             MINIC_CORE_FAMILY_MEMORY ||
+        minic_core_instruction_semantic_family(
+            MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_LOAD) !=
+            MINIC_CORE_FAMILY_MEMORY ||
+        minic_core_instruction_semantic_family(
+            MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_STORE) !=
+            MINIC_CORE_FAMILY_MEMORY ||
+        minic_core_instruction_semantic_family(
+            MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_XOR) !=
+            MINIC_CORE_FAMILY_MEMORY ||
+        minic_core_instruction_semantic_family(
+            MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_EOR3) !=
+            MINIC_CORE_FAMILY_MEMORY ||
         !minic_core_instruction_is_call(MINIC_CORE_INSTRUCTION_INDIRECT_CALL) ||
         !minic_core_instruction_is_integer_scalar(MINIC_CORE_INSTRUCTION_INTEGER_CLZ) ||
         !minic_core_instruction_is_floating_scalar(MINIC_CORE_INSTRUCTION_FLOAT_DIVIDE) ||

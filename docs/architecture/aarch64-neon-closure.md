@@ -19,34 +19,49 @@ configuration and removes selected owner objects; it is **not** 4377/4377.
   rejected; `+simd` is **not** a MiniC vector-codegen capability.
 - The source identities `__Uint8x16_t`, `__Int8x16_t`, `__Poly8x16_t`,
   `__Uint64x2_t` have target-owned **16-byte C storage and 16-byte alignment**.
-  Other ISAs reject those names. This does not enable vector SSA values,
-  operator semantics, call ABI or inline-asm constraints.
+  Other ISAs reject those names. A subsequent dedicated Core vertical slice
+  now admits same-identity 128-bit `^`, typed local/global vector loads and
+  stores, independent 16-byte Core values and native AArch64 `ldr/str q16` /
+  `eor v16.16b, v16.16b, v17.16b`. The caller-clobbered v16-v18 preserve
+  AAPCS64's callee-saved low halves of v8-v15. Real GNU `arm_neon.h` and PCS remain
+  separate closed gates. `run-aarch64-neon-core-vector128.sh` compiles the
+  emitted MiniC assembly and checks both u64 and byte-vector operations,
+  the original const-pointer XOR form, and negative unsupported operations;
+  this is native **assembly inspection**, not an executed ARM ELF pass.
 - `tests/compiler/c0/run-aarch64-neon-stage2.sh` uses the **same GNU-preprocessed
   layout translation unit** for GNU and MiniC; both link and execute under
   QEMU. An independent GCC `<arm_neon.h>` load/XOR/store program runs under
-  QEMU. The same test additionally verifies GCC accepts vector ALU/ABI source
-  while MiniC **rejects** `^` on vector values, by-value vector returns, and
-  the original GCC `arm_neon.h` pragma. These explicit negative tests must
-  flip to positive runtime tests only when the corresponding ISA/ABI stages
-  have real machine implementations.
+  QEMU. The updated test now verifies the MiniC 128-bit XOR instruction is
+  emitted and assembled, while MiniC still **rejects** by-value vector
+  returns and the original GCC `arm_neon.h` pragma. Negative tests become
+  positive runtime gates only after the corresponding ISA/ABI implementation.
+
+- `run-aarch64-neon-machine-contract.sh` validates emitted Q-register syntax,
+  dynamic/large stack offsets, the strict SHA3 `eor3` source constraints
+  (`"=w"` plus three `"w"` operands), and fail-closed invalid types/feature
+  permission. `run-aarch64-neon-stage3-strict.sh` tests the *same GNU `.i`*
+  for GNU/MiniC, GNU AS/LD and QEMU (`-cpu max`) on the real `<arm_neon.h>`
+  XOR and SHA3 `eor3` programs. Missing cross tools, missing header semantics,
+  or any runtime failure is an unconditional **FAIL**; there is no SKIP.
+  `.github/workflows/minic-aarch64-neon-stage3-strict.yml` installs genuine
+  cross GNU/QEMU tools and runs this fail-closed gate on relevant changes.
 
 ## Required next gates (must pass sequentially)
 
-1. **Vector128 expression/IR**: add one target-neutral `fixed_vector128`
-   classification, preserving the four distinct lane/polynomial C identities;
-   verify casts are bit-preserving. Admit only same-identity `^` initially.
-   Add a typed Core vector-XOR opcode, 128-bit SSA value/temporary storage,
-   and exact 16-byte load/store effects. Do **not** broaden existing
+1. **Vector128 expression/IR**: completed initial same-identity XOR and
+   dedicated target-neutral typed Core load/store/XOR/EOR3 opcodes; distinct
+   lane/polynomial identities preserved. Do **not** broaden existing
    `core_memory_scalar_type()` globally: its users include scalar calling
-   conventions and inline assembly and would silently claim an ABI.
+   conventions and inline assembly and would silently claim an ABI. Vector
+   cast/bitcast semantics and ACLE builtin registration are still incomplete.
 2. **AArch64 native lowering**: Q-register frame load/store already exists
    for long double (`aarch64/frame_emit.c`, `memory_emit.c`), while shared
    Core spill planning already reserves two 8-byte units for a 16-byte value.
    Reuse these audited mechanisms, but preserve semantic vector identity.
-   Emit `ldr/str qN`, `eor vD.16b,vN.16b,vM.16b`. Verify real output bytes,
+   Native Q-value loads/stores and `eor vD.16b,vN.16b,vM.16b` now emit and
+   pass host assembly checks. **Still required:** verify real output bytes,
    assembler opcodes and GCC-vs-MiniC/QEMU differential executions, including
-   unaligned pointers and aliasing. Do not map vector operations through an
-   `__int128` or record shortcut.
+   unaligned pointers and aliasing. No `__int128` or record shortcut is used.
 3. **Front-end GCC intrinsic-header semantics**: the GCC 13 `arm_neon.h`
    begins with `#pragma GCC aarch64 "arm_neon.h"`, which registers builtin
    types and operations. That directive cannot be silently discarded. It

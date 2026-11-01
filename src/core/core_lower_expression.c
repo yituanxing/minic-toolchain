@@ -183,6 +183,28 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
                    : MINIC_CORE_LOWER_ERROR;
     }
     if (expression->value_category == MINIC_VALUE_LVALUE &&
+        minic_type_is_aarch64_fixed_vector128(expression->type)) {
+        MinicCoreValueId address_id;
+        MinicType unqualified_type;
+        MinicCoreLowerStatus status;
+        if (!minic_target_info_language_type_supported(
+                context->target, expression->type.base_kind) ||
+            !minic_type_unqualified(expression->type, &unqualified_type))
+            return MINIC_CORE_LOWER_UNSUPPORTED;
+        status = lower_address(context, expression_id, &address_id);
+        if (status != MINIC_CORE_LOWER_OK) return status;
+        (void)memset(&instruction, 0, sizeof(instruction));
+        instruction.kind = MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_LOAD;
+        instruction.span = expression->span;
+        instruction.type = unqualified_type;
+        instruction.result = MINIC_CORE_VALUE_INVALID;
+        instruction.value.load.address = address_id;
+        instruction.value.load.is_volatile = minic_type_is_volatile(expression->type);
+        return minic_core_function_append_value_instruction(
+                   context->function, context->block_id, &instruction,
+                   value_id) ? MINIC_CORE_LOWER_OK : MINIC_CORE_LOWER_ERROR;
+    }
+    if (expression->value_category == MINIC_VALUE_LVALUE &&
         core_memory_scalar_type(expression->type)) {
         MinicCoreValueId address_id;
         MinicCoreLowerStatus status;
@@ -200,6 +222,19 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
     }
     if (expression->value_category != MINIC_VALUE_RVALUE) {
         return MINIC_CORE_LOWER_UNSUPPORTED;
+    }
+    if (expression->kind == MINIC_EXPRESSION_LVALUE_READ &&
+        minic_type_is_aarch64_fixed_vector128(expression->type)) {
+        const MinicExpression *operand = minic_c0_program_expression(
+            context->body->program, expression->value.unary.operand);
+        MinicType operand_value_type;
+        if (operand == NULL || operand->value_category != MINIC_VALUE_LVALUE ||
+            !minic_type_is_aarch64_fixed_vector128(operand->type) ||
+            !minic_type_unqualified(operand->type, &operand_value_type) ||
+            !minic_type_equal(operand_value_type, expression->type))
+            return MINIC_CORE_LOWER_UNSUPPORTED;
+        return lower_expression(context, expression->value.unary.operand,
+                                value_id);
     }
     if (expression->kind == MINIC_EXPRESSION_LVALUE_READ &&
         core_memory_scalar_type(expression->type)) {

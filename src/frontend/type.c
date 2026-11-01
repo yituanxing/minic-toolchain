@@ -300,6 +300,14 @@ MinicType minic_type_aarch64_fixed_vector128(MinicTypeBaseKind base_kind) {
     return minic_type_scalar(base_kind);
 }
 
+bool minic_type_is_aarch64_fixed_vector128(MinicType type) {
+    if (type.pointer_depth != 0U ||
+        minic_type_builtin_declaration_role(type.base_kind) !=
+            MINIC_BUILTIN_DECLARATION_FIXED_VECTOR128_STORAGE)
+        return false;
+    return true;
+}
+
 MinicType minic_type_function(MinicFunctionTypeId function_type_id) {
     MinicType type;
 

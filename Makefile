@@ -230,6 +230,7 @@ MINIC_SOURCES := \
 	src/target/aarch64/abi.c \
 	src/target/aarch64/codegen.c \
 	src/target/aarch64/frame_emit.c \
+	src/target/aarch64/neon_emit.c \
 	src/target/aarch64/block_emit.c \
 	src/target/aarch64/asm_contract.c \
 	src/target/aarch64/residual_emit.c \

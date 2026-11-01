@@ -274,6 +274,34 @@ MinicCoreLowerStatus minic_core_lower_try_arithmetic_binary(
     instruction.result = MINIC_CORE_VALUE_INVALID;
 
     if (expression->kind == MINIC_EXPRESSION_BINARY &&
+        expression->value.binary.operator_kind == MINIC_BINARY_BITWISE_XOR &&
+        minic_type_is_aarch64_fixed_vector128(expression->type)) {
+        MinicCoreValueId left, right;
+        MinicCoreLowerStatus status;
+        *handled = true;
+        if (!minic_target_info_language_type_supported(
+                context->target, expression->type.base_kind))
+            return MINIC_CORE_LOWER_UNSUPPORTED;
+        status = lower_expression(context, expression->value.binary.left, &left);
+        if (status != MINIC_CORE_LOWER_OK) return status;
+        status = lower_expression(context, expression->value.binary.right, &right);
+        if (status != MINIC_CORE_LOWER_OK) return status;
+        if (left >= context->function->value_count ||
+            right >= context->function->value_count ||
+            !minic_type_equal(context->function->values[left].type,
+                              expression->type) ||
+            !minic_type_equal(context->function->values[right].type,
+                              expression->type))
+            return MINIC_CORE_LOWER_UNSUPPORTED;
+        instruction.kind = MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_XOR;
+        instruction.value.binary.left = left;
+        instruction.value.binary.right = right;
+        return minic_core_function_append_value_instruction(
+                   context->function, context->block_id, &instruction, value_id)
+            ? MINIC_CORE_LOWER_OK : MINIC_CORE_LOWER_ERROR;
+    }
+
+    if (expression->kind == MINIC_EXPRESSION_BINARY &&
         (expression->value.binary.operator_kind == MINIC_BINARY_SUBTRACT ||
          expression->value.binary.operator_kind == MINIC_BINARY_MULTIPLY ||
          expression->value.binary.operator_kind == MINIC_BINARY_DIVIDE ||

@@ -1,4 +1,5 @@
 #include "target/aarch64/memory_emit.h"
+#include "target/aarch64/neon_emit.h"
 #include "target/common/direct_instruction_semantics.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -68,6 +69,75 @@ bool minic_aarch64_emit_memory_instruction(
         needs_gp_store == NULL)
         return false;
     *needs_gp_store = false;
+    if (ins->kind == MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_LOAD ||
+        ins->kind == MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_STORE ||
+        ins->kind == MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_XOR ||
+        ins->kind == MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_EOR3) {
+        MinicType vector_type;
+        MinicCoreValueId operand;
+        size_t value_slot, result_slot, second_slot;
+        if (target->architecture != MINIC_TARGET_ARCH_AARCH64)
+            return false;
+        if (ins->kind == MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_LOAD) {
+            operand = ins->value.load.address;
+            if (ins->result >= fn->value_count || operand >= fn->value_count ||
+                !minic_aarch64_neon_vector128_type(ins->type) ||
+                !minic_lp64_frame_plan_wide_slot(frame_plan, ins->result,
+                                                  &result_slot)) return false;
+            return minic_aarch64_neon_emit_load(out, frame_view, ins->type,
+                minic_lp64_frame_value_offset(frame_plan, operand), result_slot);
+        }
+        if (ins->kind == MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_STORE) {
+            operand = ins->value.store.stored_value;
+            if (operand >= fn->value_count ||
+                ins->value.store.address >= fn->value_count ||
+                !minic_aarch64_neon_vector128_type(fn->values[operand].type) ||
+                !minic_lp64_frame_plan_wide_slot(frame_plan, operand,
+                                                  &value_slot)) return false;
+            return minic_aarch64_neon_emit_store(out, frame_view,
+                fn->values[operand].type,
+                minic_lp64_frame_value_offset(frame_plan,
+                    ins->value.store.address), value_slot);
+        }
+        operand = ins->kind == MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_XOR
+            ? ins->value.binary.left : ins->value.vector_ternary.first;
+        const MinicCoreValueId second =
+            ins->kind == MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_XOR
+                ? ins->value.binary.right : ins->value.vector_ternary.second;
+        vector_type = ins->type;
+        if (!minic_aarch64_neon_vector128_type(vector_type) ||
+            operand >= fn->value_count || second >= fn->value_count ||
+            ins->result >= fn->value_count ||
+            !minic_lp64_frame_plan_wide_slot(frame_plan, operand, &value_slot) ||
+            !minic_lp64_frame_plan_wide_slot(frame_plan, second, &second_slot) ||
+            !minic_lp64_frame_plan_wide_slot(frame_plan, ins->result,
+                                              &result_slot)) return false;
+        if (ins->kind == MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_XOR)
+            return minic_aarch64_neon_emit_xor(out, frame_view, vector_type,
+                                               value_slot, second_slot,
+                                               result_slot);
+        if (ins->kind == MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_EOR3) {
+            const MinicCoreValueId third = ins->value.vector_ternary.third;
+            const MinicCoreInlineAsmId core_source =
+                ins->value.vector_ternary.source_inline_asm;
+            size_t third_slot;
+            size_t source_id;
+            if (third >= fn->value_count ||
+                core_source >= fn->inline_asm_count ||
+                (source_id = fn->inline_asms[core_source].source_inline_asm_id) >=
+                    program->inline_asm_count ||
+                !minic_aarch64_neon_sha3_eor3_source_form(
+                    program, &program->inline_asms[source_id]) ||
+                !minic_lp64_frame_plan_wide_slot(frame_plan, third, &third_slot))
+                return false;
+            /* The original kernel owns the CPU-feature conditional call.
+             * This verifies the native ASM *syntax/operands*, not that the
+             * caller's execution path observes the SHA3 hardware guard. */
+            return minic_aarch64_neon_emit_eor3(out, frame_view, vector_type,
+                true, value_slot, second_slot, third_slot, result_slot);
+        }
+        return false;
+    }
         if (ins->kind == MINIC_CORE_INSTRUCTION_STORE &&
             ins->value.store.stored_value < fn->value_count &&
             minic_type_is_int128_integer(

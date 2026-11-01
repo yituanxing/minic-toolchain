@@ -162,6 +162,8 @@ MinicType minic_type_float64x(void);
 /* Header-only opaque AArch64 builtin SIMD identities, not scalar aliases. */
 MinicType minic_type_aarch64_header_builtin(MinicTypeBaseKind base_kind);
 MinicType minic_type_aarch64_fixed_vector128(MinicTypeBaseKind base_kind);
+/* Typed source identity, not a generic scalar or an ISA codegen permit. */
+bool minic_type_is_aarch64_fixed_vector128(MinicType type);
 MinicType minic_type_function(MinicFunctionTypeId function_type_id);
 MinicType minic_type_record(MinicRecordId record_id);
 MinicType minic_type_array(MinicArrayTypeId array_type_id);
