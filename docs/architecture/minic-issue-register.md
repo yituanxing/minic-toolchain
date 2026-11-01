@@ -60,12 +60,12 @@
 | [MC-035](#mc-035-运行时范围初始化器借用-expression-跨扩容) | P0 | FIXED-UNVERIFIED | ASAN | Frontend | GNU range initializer 的 Expression arena UAF 已用源 span 按值快照修复；五目标容量门禁通过 |
 | [MC-036](#mc-036-record-条件表达式的-local-facts-分支合流缺口) | P1 | FIXED-UNVERIFIED | GNU-NATIVE-DIFF | Core | Record 条件式现有分支 fact snapshot/restore/meet，十路径 GNU/MiniC x86 native 及五目标 `-S` 通过 |
 | [MC-037](#mc-037-loong-特殊-asm-源端与机器端限定符不一致) | P2 | OPEN | LOCAL-COMPILE-DIFF | LoongArch64 | 合法 volatile cpucfg 输出仅因限定符在机器层拒绝 |
-| [MC-038](#mc-038-匿名字段设计符后的位置初始化游标错误) | P1 | OPEN | LOCAL-COMPILE-DIFF | Frontend | 匿名字段 `.b=2,3` GCC 接受、MiniC 错报过多位置初始化 |
+| [MC-038](#mc-038-匿名字段设计符后的位置初始化游标错误) | P1 | FIXED-UNVERIFIED | GNU-NATIVE-DIFF/RV64-QEMU | Frontend | 匿名/嵌套设计符后按真实 Record 成员路径续接游标；13 例双编译器 x86 native 与 RV64 QEMU 通过 |
 | [MC-039](#mc-039-运行时嵌套数组递归跨-array-type-扩容借用) | P0 | FIXED-UNVERIFIED | ASAN | Frontend | ArrayType 元数据按值快照；五目标容量相位 ASan 与 x86 GNU native 对照通过，完整目标验收待做 |
 | [MC-041](#mc-041-long-double-字面量提前按-binary64-舍入) | P0 | OPEN | GNU-NATIVE-DIFF | Frontend/Target | `1.0000000000000001L` 提前按 double 舍入；x86 执行得到错误比较结果 |
 | [MC-042](#mc-042-packed-零宽位域丢失对齐栅栏) | P1 | FIXED-UNVERIFIED | GNU-NATIVE-DIFF | DataLayout | 保留匿名零宽位域自然对齐栅栏；9 组 GNU layout 断言、五 ISA `-S` 与 x86 原生通过 |
 | [MC-043](#mc-043-inline-整数特化预算耗尽直接拒绝合法-c) | P1 | OPEN | LOCAL-COMPILE-DIFF | Compiler | 2048 个 clone 预算由优化上限变成对合法 C 的硬编译失败 |
-| [MC-044](#mc-044-函数参数列表中的-record-enum-tag-作用域外泄) | P1 | OPEN | LOCAL-COMPILE-DIFF | Frontend | 原型、定义、函数指针参数里的 tag 泄漏到文件作用域 |
+| [MC-044](#mc-044-函数参数列表中的-record-enum-tag-作用域外泄) | P1 | FIXED-UNVERIFIED | GNU-NATIVE-DIFF | Frontend | prototype/definition/nested callback 形参 tag 改由独立 scope 持有，14 例五 ISA `-S` 与 x86 native 通过 |
 | [MC-045](#mc-045-loong-futex-cmpxchg-覆盖-gnu-可读写输出初始值) | P1 | OPEN | ASM-ONLY | LoongArch64 | GNU `+r` 输入原值未被消费，机器特化无条件写回 0 |
 | [MC-048](#mc-048-rv32-指针到-64-位整数的合法转换被拒绝) | P2 | OPEN | LOCAL-COMPILE-DIFF | RV32 | Core 合法 `SCALAR_BITCAST` pointer→u64 在 RV32 目标发射器被拒绝 |
 | [MC-023](#mc-023-静态聚合后向覆写跨递归借用-record) | P0 | FIXED-UNVERIFIED | ASAN | Frontend | `a4b8b71` 后向静态 Record 覆写跨递归重新取 RecordId；五目标容量与 GNU/native 定点 PASS |
@@ -375,10 +375,10 @@
 
 ### MC-038 匿名字段设计符后的位置初始化游标错误
 
-- **状态：** `OPEN`，P1，`LOCAL-COMPILE-DIFF`；合法 GNU C 在当前 MiniC x86-64 `-S` 错误拒绝，尚无已发射错码证据。
+- **状态：** `FIXED-UNVERIFIED`，P1，`GNU-NATIVE-DIFF/RV64-QEMU`；主线 `2045467`（独立原提交 `9be159e`）。修复在 runtime designator 中沿 MEMBER/ADDRESS_OF 祖先路径保存 Record 游标，优先续接仍有成员的最内层，耗尽后才逐层向外；只修 Record 路径，保留数组下标的原有 fallback。新 13 个 GNU 合法案例/非法 overflow、x86 GNU/MiniC native mask0、RV64 freestanding QEMU exit0、五 ISA `-S`、相邻匿名提升/聚合初始化和 Release `-Werror` 全 PASS。跨 ISA 完整 ABI/ELF 联合验收仍未做。
 - **最小反例（2026-10-30，基线 `4f516707d`）：** `struct Outer{struct{int a;int b;};int c;}; int f(void){struct Outer x={.b=2,3};return x.b*10+x.c;}`。GNU `cc -std=gnu11` 接受、执行返回 `23`，MiniC `--target=x86_64-linux -S` 报 `too many positional record initializers`。若只初始化 `{.b=2}` 或显式写 `{.b=2,.c=3}`，MiniC `-S` 和 GNU 链接/执行均通过，说明主要缺口是 `.b` 后的**隐式位置续接**，不是匿名成员查找能力。
 - **源码候选根因：** `src/frontend/parser_runtime_initializer.c:1513–1579:parse_runtime_record_designator_target` 从提升的最终 `MEMBER` expression 读取 `field_index` 并用作 `top_level_field_index`；但 `src/frontend/parser_member.c:113–195` 对匿名成员返回的最内层 `field_index` 是内层 Record 的索引。`parser_runtime_initializer.c:1658–1679` 将该值 `+1` 作为下一个顶层位置游标，可能跳错位置。
-- **验收门槛：** 建带匿名 struct/union、连续/嵌套 designator、隐式位置续接与显式位置设计符的 GNU C 差分；由明确的顶层路径第一段确定游标，不依赖最后一个递归 MEMBER；多目标 `-S` 与可执行语义测试后再关闭。
+- **后续验收：** 旧记录中的“只按顶层路径第一段”不足以覆盖多层匿名成员——真实 GNU 语义优先继续最内层未耗尽 Record。持久定点已覆盖此分支；完整五 ISA GNU ELF/QEMU 和更深层数组混合场景待验后才升 `VERIFIED`。
 
 ### MC-039 运行时嵌套数组递归跨 ArrayType 扩容借用
 
@@ -483,7 +483,7 @@
 
 ### MC-044 函数参数列表中的 Record/Enum tag 作用域外泄
 
-- **状态：** `OPEN`，P1，`LOCAL-COMPILE-DIFF`；合法 GNU C 的 namespace/scope 规则被 MiniC 前端错拒。
+- **状态：** `FIXED-UNVERIFIED`，P1，`GNU-NATIVE-DIFF`；主线 `1921744`（独立原提交 `570ab2f`）。分别为原型、定义、内层函数指针/typedef/block-scope 形参建立隔离的 tag scope；函数定义的形参 scope 必须延续到 body，区分 `R (*fn(P))(Q)` 的 P/Q 两层绑定。14 个 GNU 合法样本五 ISA 70/70 `-S`，x86 GNU/MiniC native exit7/7，两个独立 prototype tag 的非法声明 GNU/MiniC 均拒；Release `-Werror` 与相关 7 项回归 PASS。联合 ABI/ELF 验收仍待后续阶段。
 - **位置/调用链：** `src/frontend/parser_declarator.c` 与 `parser_function.c:parse_function` 调 `src/frontend/parser_function_parameters.c:minic_parser_parse_parameter_list` 解析含 `struct/enum` 定义的参数类型；`parser_record.c`/`parser_enum.c` 经 `minic_parser_bind_record_tag` / enum bind 修改**当前** Parser scope。`parser_function.c` 直到函数定义 `{` 后才 `minic_parser_begin_scope`（约 `:2083`），而函数原型、定义参数以及嵌套函数指针形参从未获得正确隔离的 prototype/parameter scope。
 - **三类有效反例（2026-10-30）：** `void prototype(struct OnlyInside{int a;} value); struct OnlyInside{char b;};`；`int f(struct OnlyInside{int a;} x){return x.a;} struct OnlyInside{char b;};`；`typedef int(*Callback)(struct HiddenPointer{int a;}*p); struct HiddenPointer{char b;};`。GNU `cc -std=gnu11 -fsyntax-only` 全部 PASS（会警告 prototype-scope tag 不对外可见），MiniC x86 `-S` 全部报 `duplicate record definition`。将第一条 Record 替为 `enum Hidden {P=1}` 后，文件级 `enum Hidden {Q=2}` 也报 `duplicate enum definition`。这些是同一参数作用域所有权错误，不按四个测试变成四个 Bug。
 - **反向边界：** 两次声明把 prototype-scope `struct P` 当同一完整类型的无效 C 输入，GCC 拒绝而 MiniC 错接受，印证 tag 身份被错误共享；但这不是有效 GNU C 拒编的主要证据。反过来 `int f(struct BodyTag{int a;} x){return sizeof(struct BodyTag)==sizeof(x);}` 在函数 body 中引用该 tag 的 GNU/MiniC 正例均可通过；不能为消除泄漏把 body 内的正确可见性一起删掉。枚举常量被后续 file-level 同名普通对象遮蔽的单一样本执行正常，不能泛称所有 enum ordinary binding 均错。
