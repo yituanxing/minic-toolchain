@@ -565,72 +565,16 @@ static int classify_collector_line(const MiniAs *as, const char *text,
     return kind;
 }
 
-static size_t split_macro_tokens(char *text, char **tokens, size_t capacity) {
-    size_t count = 0U;
-    char *p = text;
+enum {
+    MINIAS_MACRO_SEPARATOR_COMMA=1U,
+    MINIAS_MACRO_SEPARATOR_SPACE=2U
+};
 
-    while (*p != '\0') {
-        char *start;
-        int depth = 0;
-        char quote = '\0';
-
-        while (*p == ' ' || *p == '\t' || *p == ',') {
-            ++p;
-        }
-        if (*p == '\0') {
-            break;
-        }
-        if (count == capacity) {
-            return SIZE_MAX;
-        }
-        start = p;
-        while (*p != '\0') {
-            if (quote != '\0') {
-                if (*p == '\\' && p[1] != '\0') {
-                    p += 2;
-                    continue;
-                }
-                if (*p == quote) {
-                    quote = '\0';
-                }
-                ++p;
-                continue;
-            }
-            if (*p == '\'' || *p == '"') {
-                quote = *p++;
-                continue;
-            }
-            if (*p == '(' || *p == '[' || *p == '{') {
-                ++depth;
-                ++p;
-                continue;
-            }
-            if (*p == ')' || *p == ']' || *p == '}') {
-                if (depth > 0) {
-                    --depth;
-                }
-                ++p;
-                continue;
-            }
-            if (depth == 0 &&
-                (*p == ',' || *p == ' ' || *p == '\t')) {
-                break;
-            }
-            ++p;
-        }
-        if (*p != '\0') {
-            *p++ = '\0';
-        }
-        tokens[count++] = start;
-    }
-    return count;
-}
-
-/* Macro comma detection and whitespace fallback used to walk the same
- * quote/bracket grammar twice. Keep one read-only delimiter scanner; callers
- * still choose whether commas or whitespace delimit their arguments. */
+/* GNU macro declaration and invocation tokenization share a single lexical
+ * quote/escape/bracket scanner. Each caller selects comma, whitespace, or
+ * both as top-level delimiters; quoted and nested text is never split. */
 static const char *find_macro_top_level_separator(const char *text,
-                                                   bool comma) {
+                                                   unsigned separators) {
     int depth = 0;
     char quote = '\0';
     for (; *text != '\0'; ++text) {
@@ -649,19 +593,42 @@ static const char *find_macro_top_level_separator(const char *text,
         } else if (*text == ')' || *text == ']' || *text == '}') {
             if (depth > 0) --depth;
         } else if (depth == 0 &&
-                   (comma ? *text == ',' : (*text == ' ' || *text == '\t'))) {
+                   (((separators&MINIAS_MACRO_SEPARATOR_COMMA)!=0U &&
+                     *text==',') ||
+                    ((separators&MINIAS_MACRO_SEPARATOR_SPACE)!=0U &&
+                     (*text==' ' || *text=='\t')))) {
             return text;
         }
     }
     return NULL;
 }
 
+static size_t split_macro_tokens(char *text, char **tokens, size_t capacity) {
+    size_t count=0U;
+    char *p=text;
+    while(*p!='\0') {
+        char *separator;
+        while(*p==' ' || *p=='\t' || *p==',')++p;
+        if(*p=='\0')break;
+        if(count==capacity)return SIZE_MAX;
+        tokens[count++]=p;
+        separator=(char *)find_macro_top_level_separator(
+            p,MINIAS_MACRO_SEPARATOR_COMMA|MINIAS_MACRO_SEPARATOR_SPACE);
+        if(separator==NULL)break;
+        *separator='\0';
+        p=separator+1U;
+    }
+    return count;
+}
+
 static bool macro_has_top_level_comma(const char *text) {
-    return find_macro_top_level_separator(text, true) != NULL;
+    return find_macro_top_level_separator(text,MINIAS_MACRO_SEPARATOR_COMMA)
+           !=NULL;
 }
 
 static char *find_macro_argument_space(char *text) {
-    return (char *)find_macro_top_level_separator(text, false);
+    return (char *)find_macro_top_level_separator(
+        text,MINIAS_MACRO_SEPARATOR_SPACE);
 }
 
 static size_t split_macro_arguments(char *text,
@@ -693,10 +660,7 @@ static size_t split_macro_arguments(char *text,
     }
 
     for (;;) {
-        char *start;
         char *p;
-        int depth = 0;
-        char quote = '\0';
 
         while (*cursor == ' ' || *cursor == '\t') {
             ++cursor;
@@ -714,46 +678,13 @@ static size_t split_macro_arguments(char *text,
         if (segment_count == sizeof(segments) / sizeof(segments[0])) {
             return SIZE_MAX;
         }
-        start = cursor;
-        p = cursor;
-        while (*p != '\0') {
-            if (quote != '\0') {
-                if (*p == '\\' && p[1] != '\0') {
-                    p += 2;
-                    continue;
-                }
-                if (*p == quote) {
-                    quote = '\0';
-                }
-                ++p;
-                continue;
-            }
-            if (*p == '\'' || *p == '"') {
-                quote = *p++;
-                continue;
-            }
-            if (*p == '(' || *p == '[' || *p == '{') {
-                ++depth;
-                ++p;
-                continue;
-            }
-            if (*p == ')' || *p == ']' || *p == '}') {
-                if (depth > 0) {
-                    --depth;
-                }
-                ++p;
-                continue;
-            }
-            if (*p == ',' && depth == 0) {
-                break;
-            }
-            ++p;
-        }
-        last_was_comma=*p==',';
-        if(last_was_comma)*p++ = '\0';
-        segments[segment_count++] = minias_trim(start);
-        cursor = p;
+        p=(char *)find_macro_top_level_separator(
+            cursor,MINIAS_MACRO_SEPARATOR_COMMA);
+        last_was_comma=p!=NULL;
+        if(last_was_comma)*p='\0';
+        segments[segment_count++] = minias_trim(cursor);
         if(!last_was_comma)break;
+        cursor=p+1U;
     }
 
     needed = expected_count > segment_count

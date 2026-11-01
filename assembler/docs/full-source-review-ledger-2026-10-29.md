@@ -7,6 +7,41 @@
 > 和早期测试文件数量，均不能自动当作最新 HEAD 的事实。
 > “读过 / 修改过 / 完成清理”必须分别统计。
 
+### 2026-11-02 GNU 宏参数顶层词法扫描统一（P05）
+
+**Base:** exact remote Draft PR #667 head
+`a7c63be2bc7feedc9bda0c705f79b7be98fcc292`。
+这次找到的是确实重复、且语义可一一核对的旧实现：
+`split_macro_tokens` 和逗号分隔的 `split_macro_arguments`
+各自重复处理引号、反斜杠转义和 `()[]{}` 深度；
+`find_macro_top_level_separator` 已实现同一完整语法。
+
+- **删除两套重复扫描循环：** 唯一的
+  `find_macro_top_level_separator` 使用分隔位 `COMMA/SPACE`
+  或两者组合；GNU `.macro` 形参、普通空格形参、逗号调用
+  和缺省参数的补位均复用它。引号内的逗号、括号内表达式、
+  转义字符、显式尾随空参数与无逗号单参数算式保持原本判断。
+- **没有新词法解析器或 Target 分支：** `split_macro_arguments`
+  的空槽/关键字/vararg/表达式运算符规则原样保留，
+  `.irp` 值列表和 `find_statement_separator` 的不同 GNU 语法
+  仍由各自消费者负责。新结构守卫要求声明及调用共用唯一
+  顶层扫描器，拒绝再次引入单独的 quote/depth 解析循环。
+
+**Production diff:** 1 个既有 `assembler/src/source_expansion.c`，
+`+40/-109`，净删 **69 行**；已有宏/REPT/IRP 结构测试
+`+14/-0`。目录仍为 33 个生产文件。
+
+**Local verification:** `-Werror` release、A0 `30/30`；
+GNU x86 宏/可选参数/空参数/嵌套 collector、宏注销与失败清理、
+大收集器、复合 SourceContext、条件/EOF、SourceSite 重放与
+70,004 字节物理行定向测试均 PASS。另独立重新编译改动前 MiniAS，
+四架构 18 份合法输入的 ELF 对象逐字节一致，5 份非法/不适配
+输入两版均拒绝，行为状态差异 `0`。
+本机 AArch64/RISC-V/LoongArch64 外部 GNU cross assembler
+缺失，其外部逐字节差分 **NOT TESTED**；当前提交的远端
+exact-head CI、严格 3,536 和完整 Linux Image/QEMU
+仍须单独报告，不能套用旧提交结论。
+
 ### 2026-11-01 SourceGraph ↔ MCLayout 分支增长交接清理（P05）
 
 **Base:** exact remote Draft PR #667 head

@@ -3,6 +3,20 @@
 set -Eeuo pipefail
 : "$MINIAS"
 for tool in as objcopy cmp; do command -v "$tool" >/dev/null; done
+python3 - <<'PY'
+from pathlib import Path
+s=Path('assembler/src/source_expansion.c').read_text()
+if (s.count('find_macro_top_level_separator(')!=5 or
+    'MINIAS_MACRO_SEPARATOR_COMMA|MINIAS_MACRO_SEPARATOR_SPACE' not in s):
+    raise SystemExit('macro declaration/invocation delimiter scanner duplicated')
+tokens=s[s.index('static size_t split_macro_tokens('):
+         s.index('static bool macro_has_top_level_comma(')]
+arguments=s[s.index('static size_t split_macro_arguments('):
+            s.index('static MiniAsMacro *minias_macro_find(')]
+if "char quote = '\\0'" in tokens or "char quote = '\\0'" in arguments:
+    raise SystemExit('macro tokenization reintroduced a private quote parser')
+print('MINIAS_MACRO_SEPARATOR_OWNER=PASS declaration=1 invocation=1 grammar=shared')
+PY
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 cat >"$work/nested.s" <<'SRC'
