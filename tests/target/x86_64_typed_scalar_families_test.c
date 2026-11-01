@@ -43,6 +43,24 @@ int main(void) {
         minic_x86_64_linux_bitops_form,
         "btq %2,%1\n\t/* output condition code c */",
         "btq %2,%1; cli\n\t/* output condition code c */");
+    CHECK_FAMILY(MINIC_X86_MACHINE_ASM_ZERO_BARRIER,
+        minic_x86_64_linux_zero_barrier_form, "mfence", "mfence; int3");
+    CHECK_FAMILY(MINIC_X86_MACHINE_ASM_FXSAVE,
+        minic_x86_64_linux_fxsave_form, "fxsave %0", "fxsave %0; int3");
+    CHECK_FAMILY(MINIC_X86_MACHINE_ASM_IP_HERE,
+        minic_x86_64_linux_ip_here_template,
+        "lea 0(%%rip), %0", "lea 0(%%rip), %0; int3");
+    CHECK_FAMILY(MINIC_X86_MACHINE_ASM_LAR_SELECTOR,
+        minic_x86_64_linux_lar_selector_form,
+        "lar %1, %0\n\tjz 1f\n\txorl %0, %0\n\t1:",
+        "lsl %1, %0\n\tjz 1f\n\txorl %0, %0\n\t1:");
+    CHECK_FAMILY(MINIC_X86_MACHINE_ASM_IDENTITY_LOAD,
+        minic_x86_64_linux_identity_load_form,
+        "mov %[address], %%r9", "mov %[address], %%r8");
+    assert(gate(MINIC_X86_MACHINE_ASM_FXSAVE, 2U, "fxsaveq %[fx]"));
+    assert(!gate(MINIC_X86_MACHINE_ASM_FXSAVE, 1U, "fxsaveq %[fx]"));
+    assert(!gate(MINIC_X86_MACHINE_ASM_ZERO_BARRIER, 2U, "lfence"));
+    assert(!gate(MINIC_X86_MACHINE_ASM_IP_HERE, 1U, "mov %[address], %%r9"));
 
     assert(cc_form != 0U);
     assert((unsigned int)minic_x86_64_atomic_cc_form(
@@ -60,6 +78,6 @@ int main(void) {
     assert(!gate(MINIC_X86_MACHINE_ASM_ATOMIC_CC,
         (unsigned int)minic_x86_64_port_io_form("outb %b0, %w1", 13U),
         "outb %b0, %w1"));
-    puts("PASS six x86 typed family exact ID+variant+immutable template gates");
+    puts("PASS eleven x86 typed family exact ID+variant+immutable template gates");
     return 0;
 }

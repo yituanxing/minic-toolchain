@@ -2044,3 +2044,12 @@ check-common-linux-jump-label-contract:
 	"$(BUILD_DIR)/tests/common-linux-jump-label-contract"
 
 check-fast: check-common-linux-jump-label-contract
+
+# x86 Linux structured ASM families retire legacy machine-side template
+# dispatch; GNU ELF/native is available on the host, no cross toolchain.
+.PHONY: check-x86-typed-five-legacy
+check-x86-typed-five-legacy: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" BUILD_DIR="$(abspath $(BUILD_DIR))" \
+	  sh tests/compiler/c0/run-x86-typed-five-legacy-abi.sh
+
+check-fast: check-x86-typed-five-legacy

@@ -34,16 +34,6 @@ bool minic_riscv64_emit_integer_conversion_for_program(FILE *file,
                                                        const MinicC0Program *program,
                                                        MinicType type,
                                                        const char *register_name);
-bool minic_riscv64_emit_scalar_load_for_program(FILE *file,
-                                                const MinicC0Program *program,
-                                                MinicType type,
-                                                const char *destination_register,
-                                                const char *address_register);
-bool minic_riscv64_emit_scalar_store_for_program(FILE *file,
-                                                 const MinicC0Program *program,
-                                                 MinicType type,
-                                                 const char *source_register,
-                                                 const char *address_register);
 /* Typed Core pointer memory, distinct from aligned machine-owned frame
  * slots. All source pointer effects must use this proven-or-guarded form. */
 bool minic_riscv64_emit_safe_scalar_load(FILE *, const MinicC0Program *,

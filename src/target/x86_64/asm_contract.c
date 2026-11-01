@@ -70,6 +70,21 @@ bool minic_x86_64_typed_machine_form_matches_template(
     case MINIC_X86_MACHINE_ASM_KVM_MOVDQA:
         form = minic_x86_64_kvm_movdqa_form(text, length);
         return form != 0U && variant == form;
+    case MINIC_X86_MACHINE_ASM_IP_HERE:
+        return variant == 1U &&
+            minic_x86_64_linux_ip_here_template(text, length);
+    case MINIC_X86_MACHINE_ASM_ZERO_BARRIER:
+        form = minic_x86_64_linux_zero_barrier_form(text, length);
+        break;
+    case MINIC_X86_MACHINE_ASM_FXSAVE:
+        form = minic_x86_64_linux_fxsave_form(text, length);
+        break;
+    case MINIC_X86_MACHINE_ASM_LAR_SELECTOR:
+        return variant == 1U &&
+            minic_x86_64_linux_lar_selector_form(text, length);
+    case MINIC_X86_MACHINE_ASM_IDENTITY_LOAD:
+        return variant == 1U &&
+            minic_x86_64_linux_identity_load_form(text, length);
     case MINIC_X86_MACHINE_ASM_UNWIND_CONTEXT:
         return variant == 0U &&
             minic_x86_64_linux_unwind_context_form(text, length);
@@ -2657,6 +2672,7 @@ static bool x86_linux_ip_here_source(
         return false;
     contract->operand_count = 1U;
     contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
+    contract->target_machine_form_variant = 1U;
     return true;
 }
 
@@ -2780,6 +2796,7 @@ static bool x86_linux_zero_barrier_source(
         return false;
     }
     contract->operand_count = 0U;
+    contract->target_machine_form_variant = form;
     return true;
 }
 
@@ -2946,6 +2963,7 @@ static bool x86_fxsave_source(const MinicC0Program *program,
     contract->kinds[0] = form == 1U ?
         MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE :
         MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT;
+    contract->target_machine_form_variant = form;
     return true;
 }
 
@@ -4992,6 +5010,7 @@ static bool x86_linux_identity_load_source(
     contract->operand_count = 1U;
     contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT;
     contract->implicit_memory_effect = true;
+    contract->target_machine_form_variant = 1U;
     return true;
 }
 
@@ -7796,6 +7815,7 @@ static bool x86_linux_lar_selector_source(
     contract->operand_count = 2U;
     contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
     contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    contract->target_machine_form_variant = 1U;
     return true;
 }
 
@@ -8823,7 +8843,7 @@ static const MinicX86SourceQualifierEntry minic_x86_source_qualifiers[] = {
     X86_SOURCE(x86_linux_segment_load_extable_source),
     X86_SOURCE(x86_linux_lkgs_extable_source),
     X86_SOURCE(x86_linux_load_unaligned_zeropad_source),
-    X86_SOURCE(x86_linux_lar_selector_source),
+    X86_SOURCE_TYPED(x86_linux_lar_selector_source, LAR_SELECTOR),
     X86_SOURCE_TYPED(x86_linux_random_seed_source, RANDOM_SEED),
     X86_SOURCE_TYPED(x86_linux_fsgsbase_source, FSGSBASE),
     X86_SOURCE(x86_linux_kernel_nofault_goto_source),
@@ -8846,7 +8866,7 @@ static const MinicX86SourceQualifierEntry minic_x86_source_qualifiers[] = {
     X86_SOURCE(x86_linux_verw_clear_source),
     X86_SOURCE(x86_linux_debug_register_source),
     X86_SOURCE_TYPED(x86_x87_probe_source, X87_PROBE),
-    X86_SOURCE(x86_fxsave_source),
+    X86_SOURCE_TYPED(x86_fxsave_source, FXSAVE),
     X86_SOURCE_TYPED(x86_xsetbv_source, XSETBV),
     X86_SOURCE(x86_linux_alternative_wrmsr_source),
     X86_SOURCE(x86_linux_control_register_source),
@@ -8859,8 +8879,8 @@ static const MinicX86SourceQualifierEntry minic_x86_source_qualifiers[] = {
     X86_SOURCE(x86_prefetchw_alt_source),
     X86_SOURCE(x86_apic_amd_alt_source),
     X86_SOURCE(x86_gs_tied_alu_source),
-    X86_SOURCE(x86_linux_zero_barrier_qualifier),
-    X86_SOURCE(x86_linux_ip_here_source),
+    X86_SOURCE_TYPED(x86_linux_zero_barrier_qualifier, ZERO_BARRIER),
+    X86_SOURCE_TYPED(x86_linux_ip_here_source, IP_HERE),
     X86_SOURCE(x86_add32_carry_source),
     X86_SOURCE(x86_linux_tcpudp_nofold_source),
     X86_SOURCE(x86_percpu_gs_source),
@@ -8876,7 +8896,7 @@ static const MinicX86SourceQualifierEntry minic_x86_source_qualifiers[] = {
     X86_SOURCE(x86_linux_boot_flags_source),
     X86_SOURCE(x86_linux_delay_mul_source),
     X86_SOURCE(x86_linux_delay_wait_source),
-    X86_SOURCE(x86_linux_identity_load_source),
+    X86_SOURCE_TYPED(x86_linux_identity_load_source, IDENTITY_LOAD),
     X86_SOURCE(x86_linux_ipv6_checksum_source),
     X86_SOURCE(x86_linux_lock_bitcc_source),
     X86_SOURCE(x86_linux_boot_string_source),

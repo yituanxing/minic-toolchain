@@ -254,61 +254,6 @@ bool minic_riscv64_emit_integer_conversion_for_program(FILE *file,
     return minic_riscv64_emit_integer_conversion(file, type, register_name);
 }
 
-static bool minic_riscv64_emit_scalar_load(FILE *file,
-                                    MinicType type,
-                                    const char *destination_register,
-                                    const char *address_register) {
-    const char *instruction;
-
-    instruction = minic_riscv64_load_instruction(type);
-    return instruction != NULL && destination_register != NULL && address_register != NULL &&
-           fprintf(file, "  %s %s, 0(%s)\n", instruction, destination_register, address_register) >=
-               0;
-}
-
-static bool minic_riscv64_emit_scalar_store(FILE *file,
-                                     MinicType type,
-                                     const char *source_register,
-                                     const char *address_register) {
-    const char *instruction;
-
-    instruction = minic_riscv64_store_instruction(type);
-    return instruction != NULL && source_register != NULL && address_register != NULL &&
-           fprintf(file, "  %s %s, 0(%s)\n", instruction, source_register, address_register) >= 0;
-}
-
-bool minic_riscv64_emit_scalar_load_for_program(FILE *file,
-                                                const MinicC0Program *program,
-                                                MinicType type,
-                                                const char *destination_register,
-                                                const char *address_register) {
-    MinicType effective_type;
-
-    if (minic_type_is_enum(type)) {
-        if (!minic_c0_type_effective_integer_type(program, type, &effective_type)) {
-            return false;
-        }
-        type = effective_type;
-    }
-    return minic_riscv64_emit_scalar_load(file, type, destination_register, address_register);
-}
-
-bool minic_riscv64_emit_scalar_store_for_program(FILE *file,
-                                                 const MinicC0Program *program,
-                                                 MinicType type,
-                                                 const char *source_register,
-                                                 const char *address_register) {
-    MinicType effective_type;
-
-    if (minic_type_is_enum(type)) {
-        if (!minic_c0_type_effective_integer_type(program, type, &effective_type)) {
-            return false;
-        }
-        type = effective_type;
-    }
-    return minic_riscv64_emit_scalar_store(file, type, source_register, address_register);
-}
-
 static bool minic_riscv64_emit_safe_scalar(
     FILE *file, const MinicC0Program *program, MinicType type,
     bool store, const char *value_register, const char *address_register,

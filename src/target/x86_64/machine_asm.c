@@ -2496,12 +2496,13 @@ static bool emit_linux_fxsave(FILE *out, const MinicC0Program *program,
                               const MinicX86Frame *frame,
                               const MinicCoreInstruction *instruction,
                               const MinicCoreInlineAsm *source) {
-    const unsigned int form = source ? minic_x86_64_linux_fxsave_form(
-        source->template_text, source->template_length) : 0U;
+    const unsigned int form = source ?
+        source->target_machine_form_variant : 0U;
     const MinicCoreStructuredInlineAsmOperand *operand;
     MinicType pointee;
     size_t image_size, image_alignment;
-    if (!form || !out || !program || !target || !function || !frame ||
+    if ((form != 1U && form != 2U) ||
+        !out || !program || !target || !function || !frame ||
         !instruction || !source || !source->is_volatile || source->is_goto ||
         source->has_memory_clobber != (form == 1U) ||
         source->register_clobber_count != 0U ||
@@ -3035,8 +3036,7 @@ static bool emit_linux_identity_load(
         ins->value.structured_inline_asm.operands;
     MinicType type;
     if (!out || !fn || !frame || !ins || !info || !b ||
-        !minic_x86_64_linux_identity_load_form(
-            info->template_text, info->template_length) ||
+        info->target_machine_form_variant != 1U ||
         !info->is_volatile || info->is_goto || !info->has_memory_clobber ||
         info->register_clobber_count != 1U ||
         !clobber_is(&info->register_clobbers[0], "r9") ||
@@ -4262,8 +4262,7 @@ static bool emit_linux_lar_selector(
         ins->value.structured_inline_asm.operands;
     MinicType type;
     if (!out || !fn || !frame || !info ||
-        !minic_x86_64_linux_lar_selector_form(
-            info->template_text, info->template_length) ||
+        info->target_machine_form_variant != 1U ||
         !info->is_volatile || info->is_goto || info->has_memory_clobber ||
         info->register_clobber_count ||
         ins->value.structured_inline_asm.operand_count != 2U || !b ||
@@ -5608,6 +5607,59 @@ static bool emit_zstd_cpuid(
     return fputs("  popq %rbx\n", out) != EOF;
 }
 
+/* The immutable typed form was checked against the exact GNU template at
+ * machine ingress. These helpers validate the *physical* operand/effect
+ * contract without repeating source-template family dispatch. */
+static bool emit_linux_zero_barrier(
+    FILE *out, const MinicCoreInstruction *ins,
+    const MinicCoreInlineAsm *info) {
+    static const char *const emit[] = {
+        "  lock; addl $0, -4(%rsp)\n",
+        "  mfence\n", "  lfence\n", "  sfence\n",
+        "  pause\n", "  rep; nop\n", "  fninit\n"
+    };
+    const unsigned int form = info ? info->target_machine_form_variant : 0U;
+    if (!out || !ins || !info || form == 0U ||
+        form > sizeof(emit) / sizeof(emit[0]) ||
+        !info->is_volatile || info->is_goto ||
+        ins->value.structured_inline_asm.operand_count != 0U ||
+        (form <= 4U && !info->has_memory_clobber) ||
+        (form == 1U
+            ? info->register_clobber_count != 1U ||
+              info->register_clobbers == NULL ||
+              !clobber_is(&info->register_clobbers[0], "cc")
+            : info->register_clobber_count != 0U))
+        return false;
+    return fputs(emit[form - 1U], out) != EOF;
+}
+
+static bool emit_linux_ip_here(
+    FILE *out, const MinicCoreFunction *fn, const MinicX86Frame *frame,
+    const MinicCoreInstruction *ins, const MinicCoreInlineAsm *info) {
+    const MinicCoreStructuredInlineAsmOperand *bindings;
+    MinicType pointee;
+    if (!out || !fn || !frame || !ins || !info ||
+        info->target_machine_form_variant != 1U ||
+        info->is_goto || info->register_clobber_count != 0U ||
+        info->has_memory_clobber ||
+        ins->value.structured_inline_asm.operand_count != 1U)
+        return false;
+    bindings = ins->value.structured_inline_asm.operands;
+    if (!bindings ||
+        bindings[0].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT ||
+        bindings[0].operand_index != 0U ||
+        bindings[0].value >= fn->value_count ||
+        !minic_type_pointee(fn->values[bindings[0].value].type, &pointee) ||
+        (!minic_type_equal(pointee, minic_type_unsigned_long()) &&
+         !minic_type_equal(pointee, minic_type_long()) &&
+         !minic_type_equal(pointee, minic_type_unsigned_long_long()) &&
+         !minic_type_equal(pointee, minic_type_long_long())))
+        return false;
+    return fputs("  leaq 0(%rip), %rax\n", out) != EOF &&
+           x86_value_load(out, frame, bindings[0].value, "%r11") &&
+           fputs("  movq %rax, (%r11)\n", out) != EOF;
+}
+
 bool minic_x86_64_emit_structured_asm(
     FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicX86Frame *frame,
@@ -5690,6 +5742,16 @@ bool minic_x86_64_emit_structured_asm(
             return minic_x86_64_emit_raid6_simd(out, fn, frame, ins, info);
         case MINIC_X86_MACHINE_ASM_KVM_MOVDQA:
             return minic_x86_64_emit_kvm_movdqa(out, fn, frame, ins, info);
+        case MINIC_X86_MACHINE_ASM_IP_HERE:
+            return emit_linux_ip_here(out, fn, frame, ins, info);
+        case MINIC_X86_MACHINE_ASM_ZERO_BARRIER:
+            return emit_linux_zero_barrier(out, ins, info);
+        case MINIC_X86_MACHINE_ASM_FXSAVE:
+            return emit_linux_fxsave(out, program, target, fn, frame, ins, info);
+        case MINIC_X86_MACHINE_ASM_LAR_SELECTOR:
+            return emit_linux_lar_selector(out, fn, frame, ins, info);
+        case MINIC_X86_MACHINE_ASM_IDENTITY_LOAD:
+            return emit_linux_identity_load(out, fn, frame, ins, info);
         default:
             return false;
         }
@@ -5796,9 +5858,6 @@ bool minic_x86_64_emit_structured_asm(
     if (minic_x86_64_linux_load_unaligned_zeropad_form(
             info->template_text, info->template_length))
         return emit_linux_load_unaligned_zeropad(out, fn, frame, ins, info);
-    if (minic_x86_64_linux_lar_selector_form(
-            info->template_text, info->template_length))
-        return emit_linux_lar_selector(out, fn, frame, ins, info);
     if (minic_x86_64_linux_smap_alternative_form(
             info->template_text, info->template_length))
         return minic_x86_64_emit_linux_smap_alternative(
@@ -5829,9 +5888,6 @@ bool minic_x86_64_emit_structured_asm(
     if (minic_x86_64_linux_debug_register_form(
             info->template_text, info->template_length))
         return emit_linux_debug_register(out, fn, frame, ins, info);
-    if (minic_x86_64_linux_fxsave_form(
-            info->template_text, info->template_length))
-        return emit_linux_fxsave(out, program, target, fn, frame, ins, info);
     if (minic_x86_64_linux_alternative_wrmsr_form(
             info->template_text, info->template_length))
         return emit_linux_alternative_wrmsr(
@@ -6157,49 +6213,6 @@ bool minic_x86_64_emit_structured_asm(
         }
     }
     {
-        const unsigned int form = minic_x86_64_linux_zero_barrier_form(
-            info->template_text, info->template_length);
-        if (form != 0U) {
-            static const char *const emit[] = {
-                "  lock; addl $0, -4(%rsp)\n",
-                "  mfence\n", "  lfence\n", "  sfence\n",
-                "  pause\n", "  rep; nop\n", "  fninit\n"
-            };
-            if (!info->is_volatile || info->is_goto ||
-                ins->value.structured_inline_asm.operand_count != 0U ||
-                (form <= 4U && !info->has_memory_clobber) ||
-                (form == 1U
-                 ? info->register_clobber_count != 1U ||
-                   info->register_clobbers == NULL ||
-                   !clobber_is(&info->register_clobbers[0], "cc")
-                 : info->register_clobber_count != 0U))
-                return false;
-            return fputs(emit[form - 1U], out) != EOF;
-        }
-    }
-    if (minic_x86_64_linux_ip_here_template(
-            info->template_text, info->template_length)) {
-        MinicType pointee;
-        if (info->is_goto || info->register_clobber_count != 0U ||
-            info->has_memory_clobber ||
-            ins->value.structured_inline_asm.operand_count != 1U ||
-            bindings[0].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT ||
-            bindings[0].operand_index != 0U ||
-            bindings[0].value >= fn->value_count ||
-            !minic_type_pointee(fn->values[bindings[0].value].type, &pointee) ||
-            (!minic_type_equal(pointee, minic_type_unsigned_long()) &&
-             !minic_type_equal(pointee, minic_type_long()) &&
-             !minic_type_equal(pointee, minic_type_unsigned_long_long()) &&
-             !minic_type_equal(pointee, minic_type_long_long())))
-            return false;
-        /* GNU LEA obtains the address of its own following instruction.
-         * Emit the same PC-relative machine semantics, then write the
-         * result into the Core address-backed C output local. */
-        return fputs("  leaq 0(%rip), %rax\n", out) != EOF &&
-            x86_value_load(out, frame, bindings[0].value, "%r11") &&
-            fputs("  movq %rax, (%r11)\n", out) != EOF;
-    }
-    {
         unsigned int percpu_op=0U;size_t percpu_width=0U;
         if (minic_x86_64_linux_percpu_form(info->template_text,
               info->template_length,&percpu_op,&percpu_width))
@@ -6294,9 +6307,6 @@ bool minic_x86_64_emit_structured_asm(
     if (minic_x86_64_linux_delay_wait_form(
             info->template_text, info->template_length))
         return emit_linux_delay_wait(out, fn, frame, ins, info);
-    if (minic_x86_64_linux_identity_load_form(
-            info->template_text, info->template_length))
-        return emit_linux_identity_load(out, fn, frame, ins, info);
     if (minic_x86_64_linux_ipv6_checksum_form(
             info->template_text, info->template_length))
         return emit_linux_ipv6_checksum(out, fn, frame, ins, info);

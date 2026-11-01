@@ -149,3 +149,63 @@ Frontend 其他纯历史模板由各自 pinned checkout 单独验收；本批不
 
 **待验：** 五 ISA 最终 GNU ELF/QEMU 联合验收另计。第三个使用者
 不能因共享模板解析器存在而绕过各自 ISA 指令和 relocation 合同。
+
+## R4：x86 五组 legacy ASM 分派退休；RV64 死 scalar API 移除
+
+**基线：** R3 本地 `bd176cd`，PR #674 远端 `bb38f326`，Git tree
+相同。本批分成两个可分别检验的改变：x86 ASM Source→Core→Machine
+资格归属迁移，以及 RV64 零生产调用者的旧接口删除；不改五目标 ABI、
+Linux runtime、Core 类型事实或 GNU 模板接受域。
+
+### x86：同一份 Source 资格，五族改用独立防伪的 typed Machine form
+
+- `asm_contract.c` 的 `IP_HERE`、`ZERO_BARRIER`（7 个 form）、
+  `FXSAVE`（普通/64-bit 两种 form）、`LAR_SELECTOR`、
+  `IDENTITY_LOAD` 五个 Source qualifier 在 admission 时携带
+  `target_machine_form_id/variant`，Source 表仍保持原有顺序、
+  操作数约束与 memory/cc/fixed-register effects。
+- `asm_contract.c` 的 **machine ingress** 使用独立的 immutable
+  GNU 模板→ID/variant 匹配，阻止被改写的 Core metadata 冒充
+  可信 Source。`machine_asm.c` 不再重复按模板选择这五族；仍对
+  clobber、volatile、binding 种类/索引/类型、FXSAVE image 尺寸与
+  `LAR` 的 ZF 语义做原有物理检查。
+- 五族 Machine 旧文本分派全部删除，`emit_linux_zero_barrier` 与
+  `emit_linux_ip_here` 只是把原生产指令原样移入 typed helper。
+  现行 Source 表 **111 项：28 typed / 83 legacy**（R3 是
+  23 typed / 88 legacy）；剩下 83 族的 source 准入与 old dispatch
+  不能因本批而跳过。
+
+### RV64：真正零调用者的旧 unsafe scalar wrappers
+
+- `codegen_support.c` 删除静态 `emit_scalar_load/store` 与唯一使用
+  它们的公开内部 `emit_scalar_load/store_for_program`；
+  `codegen_internal.h` 同步撤销两组内部声明。生产 `src/` 与测试
+  无 C 调用者，热路径一直经 `emit_safe_scalar_load/store` 和
+  `emit_integer_conversion_for_program`，这些现役路径未动。
+- `tools/dev` 的 PR75/77/m105/materialize 和 `tools/ci` 的旧
+  source-patching 脚本仍含历史文字模板；`.github/workflows` / 当前
+  `Makefile` 无直接执行这些脚本的入口。保留历史文件以供审计，
+  **不保证其在 R4 源树上重放成功**，也不为旧脚本恢复死 API。
+
+### 代码量及等价证据
+
+| 实体 | R4 生产 C/H 变化 |
+| --- | --- |
+| x86 `asm_contract.{c,h}` + `machine_asm.c` | **+100 / -65，净 +35 行**；五份机器文本分类已被退休，但 typed dispatch/校验有成本，不虚称净删 |
+| RV64 `codegen_support.c` + `codegen_internal.h` | **+0 / -65，净 -65 行**；四个死函数及两组声明 |
+| **生产合计** | **+100 / -130，净 -30 行**；另新增两个测试 fixture/脚本 136 行并更新白盒测试、Makefile、文档 |
+
+| 门禁 | R4 实测 |
+| --- | --- |
+| Release `-Werror` 构建；Target boundary checker | **PASS**；review manifest 仍有 144 个历史 stale fingerprint，checker 报 `PASS`，不是消除 drift |
+| `make MODE=release CFLAGS=-Werror all` 后运行 `check-fast` | **PASS**；完整 `check-fast` 退出码 0，环境缺 GNU/QEMU 的子项明确 `SKIP`，非运行认证 |
+| 五目标同一 GNU 预处理 `rv32_global_plan_abi.c` `.i`，R3/R4 `.s` | **5/5 逐字节相同**：x86-64、A64、Loong、RV32、RV64；这只是源级汇编差分 |
+| 新五家族 `x86_typed_five_legacy_abi.c` GNU `.i`，R3/R4 `.s` | **逐字节相同**；全部 7 种 zero barrier / 2 种 FXSAVE 指令、RIP、LAR/ZF、identity load |
+| 新五家族 GNU AS/LD/native 与 GNU C/native | **PASS**，两 ELF 均退出码 42、stdout/stderr 相同；Linux x86-64 宿主执行 |
+| 对五家族各篡改一种模板；检查部分 `.s` | **5/5 拒绝**，R3/R4 同拒、无残留输出；white-box 额外验证 11 个 typed family 的伪造 ID/variant/模板 |
+| RIP PC、zero barrier、x86 control-state/FXSAVE、x86 uaccess/LAR 的既有 GNU 定点探针 | **PASS**；与 R3 字节等价之外的目标语义证据 |
+| x86/其他四目标 GNU 交叉 ELF/QEMU 全覆盖 | **NOT_RUN**；不得把 x86 native 与五目标 `.s` 对照冒充五架构运行认证 |
+
+**边界：** R4 没有“统一 x86 ASM”为通用 GNU 支持；未知 GNU
+模板继续拒绝，83 个 legacy 族及其他四架构特化尚在。RV64 死接口删除
+不证明其 enum/Record copy 已经脱离 C0；见 A8-09、A8-25、A9-10、A11-39。
