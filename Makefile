@@ -1472,6 +1472,13 @@ check-core-value-use-counts:
 check-core-call-dump:
 	HOST_CC="$(CC)" bash tests/compiler/c0/probe-core-call-dump.sh
 
+.PHONY: check-mc089-x87-ordered-comparisons
+check-mc089-x87-ordered-comparisons: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	sh tests/compiler/c0/probe-mc089-x87-ordered-comparisons.sh
+
+check-fast: check-mc089-x87-ordered-comparisons
+
 check-fast: check-core-call-dump
 
 .PHONY: check-core-dead-ssa-writeback

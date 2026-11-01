@@ -492,7 +492,11 @@ static bool x86_emit_x87_core_helper(FILE *out, const MinicCoreFunction *fn,
                 "  jmp 1f\n"
                 "3:\n"
                 "  xorl %%eax, %%eax\n"
-                "1:\n") < 0) return false;
+                "1:\n"
+                /* A 32-bit write zero-extends RAX on x86-64. The -1 helper
+                 * result must be sign-extended before Core's 64-bit SSA slot
+                 * and its signed INTEGER_LESS consume it. */
+                "  movslq %%eax, %%rax\n") < 0) return false;
     return x86_value_store(out, frame, ins->result);
 }
 
