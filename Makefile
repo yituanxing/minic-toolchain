@@ -617,6 +617,13 @@ check-rv32-wide-branch-condition: $(MINIC_CC_BINARY)
 
 check-fast: check-rv32-wide-branch-condition
 
+.PHONY: check-rv32-empty-record-return
+check-rv32-empty-record-return: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	sh tests/compiler/c0/probe-rv32-empty-record-return.sh
+
+check-fast: check-rv32-empty-record-return
+
 .PHONY: check-rv32-constructor-init-array
 check-rv32-constructor-init-array: $(MINIC_CC_BINARY)
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" \

@@ -694,11 +694,16 @@ static bool rv32_term(FILE *out, const MinicCoreFunction *f,
                        const char *symbol) {
     switch (term->kind) {
     case MINIC_CORE_TERMINATOR_RETURN:
-        /* FIXME(MC-057): an empty GNU Record has size 0 but is still a
-         * Record return. Falling through to scalar return rejects valid C. */
-        if (fr->abi.record_return_size != 0U)
-            return rv32_emit_record_return(out, fr, term, symbol);
-        if (!minic_type_is_void(f->return_type)) {
+        if (minic_type_is_record(f->return_type)) {
+            /* GNU empty records have a real Core return object, but RISC-V
+             * psABI ignores their zero-byte value: no a0/a1 payload and no
+             * hidden sret pointer. Keep nonempty transport unchanged. */
+            if (fr->abi.record_return_size != 0U)
+                return rv32_emit_record_return(out, fr, term, symbol);
+            if (fr->abi.indirect_return ||
+                term->return_object >= fr->object_count)
+                return false;
+        } else if (!minic_type_is_void(f->return_type)) {
             unsigned words;
             if (!rv32_scalar_storage_words(f, f->return_type, &words))
                 return false;

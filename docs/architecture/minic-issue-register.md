@@ -75,7 +75,7 @@
 | [MC-052](#mc-052-aarch64-uaccess-窄输出按八字节写回) | P1 | FIXED-UNVERIFIED | A64-SOURCE | AArch64 | 窄 C 输出的写回宽度已按对象大小选择；GNU A64 ELF/QEMU 尚未验收 |
 | [MC-053](#mc-053-rv64i-lp64-软浮点只覆盖四则) | P2 | OPEN | LOCAL-COMPILE-DIFF | RV64 | LP64 已实现软四则，但比较、取负、转换的 10 个合法函数均无法 `-S` |
 | [MC-056](#mc-056-运行时-record-顺序初始化器跨扩容借用) | P0 | FIXED-UNVERIFIED | ASAN | Frontend | RecordId 重新获取、字段按值快照；五目标容量相位 ASan 与 x86 GNU native 对照通过，完整目标验收待做 |
-| [MC-057](#mc-057-gnu-空-record-返回及实参-abi-缺口) | P2 | OPEN | LOCAL-COMPILE-DIFF | RV32/RV64/x86 | 零字节 Record ABI 合法；目标 terminator/call 路径显式拒绝不同子集 |
+| [MC-057](#mc-057-gnu-空-record-返回及实参-abi-缺口) | P2 | OPEN（RV32 子项 FIXED-UNVERIFIED） | GNU-NATIVE/5ISA-S | RV32/RV64/x86 | RV32 空 Record 定义/返回已过多路径回归；RV64、x86 独立拒编仍 OPEN，不能整项结案 |
 | [MC-058](#mc-058-符号指针加常量偏移的传递特化丢失) | P1 | OPEN | LOCAL-COMPILE-DIFF | Compiler | 唯一 caller 的 static pointer+offset 经 inline wrapper 后无法解析 GNU ASM `i` |
 | [MC-059](#mc-059-rv64-lp64d-含浮点成员-union-被误当-fp-aggregate) | P2 | OPEN | LOCAL-COMPILE-DIFF | RV64 ABI | LP64D union 中浮点字段不能触发 FP flatten；具名参数/返回四种 GNU 用例错拒 |
 | [MC-060](#mc-060-lp64-两个目标的大聚合-2048-字节硬上限) | P2 | OPEN | LOCAL-COMPILE-DIFF | Common LP64/A64/Loong | 合法 2049B Record 的按值参数/返回在 A64/Loong preflight 错拒，2048B 通过 |
@@ -583,8 +583,11 @@
 
 - **状态：** `OPEN`，P2，`LOCAL-COMPILE-DIFF`；是 GNU C extension 的目标 ABI **显式编译拒绝**，非已证静默 wrong-code。
 - **有效输入：** `tests/compiler/audit/mc057_gnu_empty_record_abi.c`，分别 `-DTEST_RETURN`（定义空结构体返回函数）、`-DTEST_PARAM`（定义空结构体参数函数）、`-DTEST_CALL_RETURN`（调用空 Record 返回者）、`-DTEST_CALL_PARAM`（调用空 Record 参数者）；四个 case 均通过 `cc -std=gnu11 -fsyntax-only` 和预处理。RISC-V GNU psABI 对支持此扩展的 C 编译器明确规定 empty struct/union 参数和返回在物理 ABI 中被忽略（[psABI 规范](https://riscv-non-isa.github.io/riscv-elf-psabi-doc/)），不是需要凭空分配一个物理返回寄存器。
-- **`-S` 六目标×四 case：** RV32I = FAIL/FAIL/PASS/PASS；RV64I/LP64、RV64IMAFD/LP64D、x86-64 均 FAIL×4；AArch64、LoongArch64 均 PASS×4。RV32 的调用侧两项能通过，不能概括为 RV32 全部不支持。
-- **结构原因：** `riscv32/rv32_abi_plan.c:rv32_plan_shape` 正确识别 `words=0`，但 `rv32_emit.c:rv32_term` 的返回路径仅在 `record_return_size!=0` 时接管 Record，否则误进入 scalar-only 检查而失败。RV64 `abi.c` 将 empty Record 归为 `MINIC_RISCV64_ABI_VALUE_IGNORE`，而 `core_codegen.c:emit_terminator` 只处理 aggregate/indirect，IGNORE 未实现；x86 的独立拒绝路径仍需逐函数关闭定位。
+- **历史 `-S` 六目标×四 case：** RV32I = FAIL/FAIL/PASS/PASS；RV64I/LP64、RV64IMAFD/LP64D、x86-64 均 FAIL×4；AArch64、LoongArch64 均 PASS×4。RV32 的调用侧两项能通过，不能概括为 RV32 全部不支持。
+- **历史结构原因：** `riscv32/rv32_abi_plan.c:rv32_plan_shape` 正确识别 `words=0`，但 `rv32_emit.c:rv32_term` 的返回路径仅在 `record_return_size!=0` 时接管 Record，否则误进入 scalar-only 检查而失败。RV64 `abi.c` 将 empty Record 归为 `MINIC_RISCV64_ABI_VALUE_IGNORE`，而 `core_codegen.c:emit_terminator` 只处理 aggregate/indirect，IGNORE 未实现；x86 的独立拒绝路径仍需逐函数关闭定位。
+- **RV32 子项修复与定点证据：** 基于 `3a876a290c53f476` 单独复现：原四项 `TEST_RETURN/TEST_PARAM/TEST_CALL_RETURN/TEST_CALL_PARAM` 的 GNU C 均 PASS，RV32 `-S` 原为 FAIL/FAIL/PASS/PASS，拒编点 `rv32i: unsupported terminator or CFG edge`。`riscv32/rv32_emit.c:rv32_term` 现在先按**真实 Record 返回类型**分流；非空 Record 仍走原有 `rv32_emit_record_return`，零字节 Record 必须持有合法 Core object、无 hidden sret，直接跳既有函数返回块，**不凭空读写 a0/a1**，scalar/void 路径未变。修后原四项 RV32 4/4 PASS。
+- **持续回归：** `make MODE=release CFLAGS=-Werror check-rv32-empty-record-return` 在 Release -Werror 下 PASS。新增 GNU-valid struct/union+typedef fixture，覆盖三个 `if` 出口、直接返回、入参原样转发、函数指针间接返回调用、空 Record 穿插三个整数实参；宿主 GNU native 的 empty 与 one-byte nonempty sibling 均 exit42。RV32 empty `-S` PASS，静态检查空返回无 a0/a1 payload，穿插的整数参数仍在 a0/a1/a2；union typedef 另有 RV32/A64/Loong `-S` 3/3 PASS。nonempty sibling 五 ISA `-S` 5/5 PASS，MiniC x86 GNU AS/ELF native exit42；A64、Loong empty `-S` PASS。x86 与 RV64 empty 当前仍明确拒编，本次不触碰其独立 ABI 消费者。
+- **未验边界：** 环境没有 RV32 GNU cross assembler/compiler 与 `qemu-riscv32`，所以真正 RV32 GNU GAS/ELF/QEMU 运行证据标为 `SKIP`；宿主 GNU native 和 RV32 静态汇编检查不能替代该验收。其它目标 empty Record 以及更多变参/间接外部函数 ABI 留在 MC-057 的整体 OPEN 范围内。
 - **验收：** 将 ABI `IGNORE` 明确映射到无物理参数/返回、无隐藏指针；分别验证定义和调用，兼顾 GNU 空对象的 C 层身份与 Core record 值，追加 GNU GCC 汇编与目标 GNU AS/ELF/QEMU ABI 差分。不要在 Common aggregate shape 中硬造1字或让 x86/RV64 共用机器返回算法。
 
 ### MC-058 符号指针加常量偏移的传递特化丢失
