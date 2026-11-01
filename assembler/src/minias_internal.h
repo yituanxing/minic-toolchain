@@ -790,6 +790,12 @@ bool minias_compile_variable_exprs(MiniAs *, MiniAsStmt *);
 bool minias_resolve_variable_exprs(MiniAs *, const MiniAsStmt *,
                                   uint64_t *, unsigned *, uint64_t *);
 bool minias_encode_leb_integer(int64_t, bool, unsigned char[10], size_t *);
+/* One checked DWARF byte serializer for CFI and .debug_line. The unsigned
+ * path accepts all uint64_t values, including those above INT64_MAX. */
+bool minias_encode_uleb_integer(uint64_t, unsigned char[10], size_t *);
+bool minias_section_append_le32(MiniAs *, int, uint32_t);
+bool minias_section_append_uleb(MiniAs *, int, uint64_t);
+bool minias_section_append_sleb(MiniAs *, int, int64_t);
 /* Inspect the retained expression program, never source text. Only a
  * canonical symbolic difference (with optional absolute addend) qualifies
  * for a linker-visible paired ULEB relocation. */

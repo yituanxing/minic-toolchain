@@ -48,6 +48,27 @@ have separate opt-in push triggers; they must still be reported as two
 different checks. Preserve run IDs, object denominators,
 GNU baselines, P0/P1 and skipped/error states in the next checkpoint.
 
+### 2026-11-01 production batch — shared DWARF section serialization
+
+The follow-up targeted audit found **three genuine duplicated encoding
+loops** in two live producers, not dead P04/P05 callbacks: CFI and
+`.debug_line` separately serialized ULEB128, SLEB128 and little-endian
+32-bit section values. The loops are removed and both producers call the
+existing Common section owner through one LE32/ULEB/SLEB byte contract.
+Source `.uleb128` retains negative-unsigned rejection; a new full-width
+`uint64_t` encoder preserves DWARF values above `INT64_MAX` without casting
+them to signed. No new section writer, CFI event model or SourceGraph exists.
+
+Production scope: **4 files, +56/−57 lines (net −1)**. The direct encoder
+boundary regression is added to mandatory A0 (new `.c` + `.sh` fixture),
+including `UINT64_MAX`, `2^63`, `INT64_MIN`, signed 127 and negative-as-unsigned.
+Local `-Werror` build, 30-object A0, x86/i386 GNU CFI section byte/reloc
+oracles, ELF32/ELF64 `.debug_line` GNU named-view/size and CFI linker probes
+pass. The four other GNU CFI cross profiles and full Linux/corpus gates must
+still be judged from **same-head CI**, never inferred from local skips.
+See architecture decisions §26. This is a serialization de-duplication
+batch, **not** closure of P04, P05, P09 or P14.
+
 This top section is the **current progress snapshot**. Later sections retain
 their original 2026-10-29 audit/batch evidence as history; their “pending CI”
 labels refer to those historical snapshots, not the current branch HEAD.
@@ -62,7 +83,7 @@ and **architecturally closed**. A file changed once is not necessarily done.
 | Recent convergence from `ccf939f` | **24/32 = 75.0%** | 24 commits including parse, GNU binding, scoped relaxation, SourceContext and CFI; independent recent-iteration footprint, **not** total completion |
 | Full historical audited baseline | **35/35 read** | At `1d9db17`: 29 `assembler/src`, CLI, 5 shared ELF files; older source-read certificate, not a claim that every current line was reread today |
 | Shared CLI/ELF audited neighbors | **2/6 modified** | `elf/include/minielf.h`, `elf/src/relocatable_writer.c`; unchanged consumers retain independent roles |
-| MiniAS-facing tests | **210 tracked files** | Includes two new GNU CFI/relocation oracles and five source fixtures; not part of the production denominator |
+| MiniAS-facing tests | **212 tracked files** | Includes the shared DWARF LEB unit/oracle files; not part of the production denominator |
 
 The 99 commits after `1d9db17` changed 29 current source files with
 **+11,855/−6,325** lines in the baseline-to-HEAD diff (net +5,530).

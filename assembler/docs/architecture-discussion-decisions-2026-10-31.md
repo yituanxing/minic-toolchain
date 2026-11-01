@@ -1165,3 +1165,33 @@ SKIPPED; the new trigger is not a PASS certificate until the actual marked
 commit and its complete job/aggregate results are inspected. P04/P05 remain
 partial: the live Target encode and Source/EOF paths have real consumers,
 so they must not be misreported as dead duplicate code.
+
+## 26. 2026-11-01 — remove duplicated CFI / .debug_line DWARF byte encoders
+
+The full-source caller audit found a real duplicated algorithm, rather than
+an apparently unused but still-live P04/P05 interface: `cfi_writer.c` and
+`debug_line.c` each independently wrote ULEB128, SLEB128 and little-endian
+32-bit fields one byte at a time. Both have live output consumers, but the
+byte-encoding algorithm is ISA-neutral and belongs in the existing Common
+section/LEB owner, alongside `minias_encode_leb_integer`.
+
+The duplicate encoding loops are now deleted from both DWARF producers.
+The producers retain thin locally named section helpers for their distinct
+CFI and line-state operations, but delegate byte serialization to
+`minias_section_append_uleb/sleb/le32`. A dedicated full-`uint64_t` ULEB
+encoder is necessary: the existing source-expression `.uleb128` helper
+rejects negative signed inputs, and casting arbitrary DWARF `uint64_t`
+values to `int64_t` would silently break values above `INT64_MAX`.
+The old signed/unsigned literal encoder retains its negative-unsigned
+rejection and delegates nonnegative ULEB values to this one implementation.
+
+The mandatory A0 script now runs a direct production-function byte oracle
+for `0`, `128`, `2^63`, `UINT64_MAX`, `-1`, `127` and `INT64_MIN`, plus the
+negative-as-unsigned rejection. Local `-Werror`, A0 30/30, the new boundary
+oracle, GNU ELF32/ELF64 named-view and symbol-size oracles, x86/i386 CFI
+source-collision byte/relocation differential and CFI GNU linker probe pass.
+Other cross-GNU profiles are unavailable on this host and must be checked
+by the existing exact-head CI; **full Linux/3536 are not yet certified by
+these local checks**. Production-only changes: **4 files, +56/−57 (net −1)**.
+Test/CI/docs changes are tracked separately, and no new output model or
+parallel DWARF section writer was introduced.

@@ -15,10 +15,7 @@ static bool put8(MiniAs *as,int sec,uint8_t value) {
     return minias_section_append(as,sec,&value,1U);
 }
 static bool put32(MiniAs *as,int sec,uint32_t value) {
-    unsigned char b[4];
-    unsigned i;
-    for (i=0U;i<4U;++i)b[i]=(unsigned char)(value>>(i*8U));
-    return minias_section_append(as,sec,b,4U);
+    return minias_section_append_le32(as,sec,value);
 }
 static bool put64(MiniAs *as,int sec,uint64_t value) {
     unsigned char b[8];
@@ -39,25 +36,10 @@ static bool put_cfi_address(MiniAs *as,int sec,uint64_t value) {
     return false;
 }
 static bool uleb(MiniAs *as,int sec,uint64_t value) {
-    do {
-        uint8_t byte=(uint8_t)(value&0x7fU);
-        value>>=7U;
-        if(value)byte|=0x80U;
-        if(!put8(as,sec,byte))return false;
-    }while(value);
-    return true;
+    return minias_section_append_uleb(as,sec,value);
 }
 static bool sleb(MiniAs *as,int sec,int64_t value) {
-    for(;;) {
-        uint8_t byte=(uint8_t)((uint64_t)value&0x7fU);
-        bool last;
-        value>>=7U;
-        last=(value==0 && (byte&0x40U)==0U) ||
-             (value==-1 && (byte&0x40U)!=0U);
-        if(!last)byte|=0x80U;
-        if(!put8(as,sec,byte))return false;
-        if(last)return true;
-    }
+    return minias_section_append_sleb(as,sec,value);
 }
 /* A CIE ends at a section-relative alignment boundary: four for
  * .eh_frame, address size for .debug_frame. Source-authored bytes before

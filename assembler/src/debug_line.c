@@ -241,30 +241,13 @@ static bool append_u16(MiniAs *as,int sec,uint16_t value) {
     return minias_section_append(as,sec,b,2U);
 }
 static bool append_u32(MiniAs *as,int sec,uint32_t value) {
-    unsigned char b[4];unsigned i;
-    for(i=0U;i<4U;++i)b[i]=(unsigned char)(value>>(i*8U));
-    return minias_section_append(as,sec,b,4U);
+    return minias_section_append_le32(as,sec,value);
 }
 static bool append_leb(MiniAs *as,int sec,uint64_t value) {
-    do {
-        uint8_t b=(uint8_t)(value&0x7fU);
-        value>>=7U;
-        if(value)b|=0x80U;
-        if(!append_byte(as,sec,b))return false;
-    }while(value);
-    return true;
+    return minias_section_append_uleb(as,sec,value);
 }
 static bool append_sleb(MiniAs *as,int sec,int64_t value) {
-    for(;;) {
-        uint8_t b=(uint8_t)((uint64_t)value&0x7fU);
-        bool last;
-        value>>=7U;
-        last=(value==0 && (b&0x40U)==0U) ||
-             (value==-1 && (b&0x40U)!=0U);
-        if(!last)b|=0x80U;
-        if(!append_byte(as,sec,b))return false;
-        if(last)return true;
-    }
+    return minias_section_append_sleb(as,sec,value);
 }
 static bool patch32(MiniAs *as,int sec,size_t at,uint64_t value) {
     size_t i;
