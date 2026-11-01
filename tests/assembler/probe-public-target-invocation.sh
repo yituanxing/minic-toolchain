@@ -14,6 +14,14 @@ if grep -Eq 'minias_internal\.h|minias_find_target|minias_assemble_config|MiniAs
     exit 1
 fi
 grep -q 'minias_supported_target_name' "$repo/tools/minic-as/main.c"
+# The historical public APIs remain exported, but their one-use private
+# multi-target forwarding bridge must not be reinstated.
+if grep -q 'minias_assemble_with_target' \
+        "$repo/assembler/src/assembler.c" \
+        "$repo/assembler/src/minias_internal.h"; then
+    echo 'unused private legacy forwarding bridge survived' >&2
+    exit 1
+fi
 
 cc -I"$repo/assembler/src" -std=c11 -Wall -Wextra -Werror \
     -x c -fsyntax-only - <<'C'

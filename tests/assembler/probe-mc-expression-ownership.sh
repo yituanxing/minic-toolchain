@@ -42,7 +42,8 @@ if 'deferred_text' in internal:
     raise SystemExit('fixed-width MCExpr still stores source strings')
 for removed in ('minias_evaluate_same_subsection_difference(',
                 'minias_fold_local_difference_addend(',
-                'minias_resolve_symbol_difference('):
+                'minias_resolve_symbol_difference(',
+                'minias_evaluate_absolute_operand('):
     if removed in m or removed in internal:
         raise SystemExit('unreferenced expression compatibility API survived '+removed)
 if 'MINIAS_EXPRESSION_GRAMMAR_H' not in syntax:

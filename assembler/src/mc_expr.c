@@ -196,11 +196,6 @@ bool minias_evaluate_absolute_expression(MiniAs *as,
     return valid;
 }
 
-bool minias_evaluate_absolute_operand(MiniAs *as,const char *text,
-                                      int64_t *value) {
-    return text && value && minias_evaluate_absolute_expression(as,text,value);
-}
-
 /* GNU DATA relocation expressions are affine programs over at most two
  * symbols and one Fragment dot. Lower the shared typed syntax directly;
  * never split source strings at the first '-' or scan parentheses again.

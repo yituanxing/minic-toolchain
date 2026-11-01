@@ -2,6 +2,35 @@
 
 ## Current refactor dashboard — 2026-11-01 (exact-head recovery and live-path audit)
 
+### 2026-11-01 follow-up — private wrapper/visibility cleanup (local batch)
+
+The renewed call-site review distinguishes **32 production files scanned for
+references** from a completed function-by-function proof. Only three private
+surfaces were changed, with their consumers traced before deletion:
+
+* `minias_evaluate_absolute_operand` was a redundant delegating function:
+  its two non-null checks are already performed by the one Common
+  `minias_evaluate_absolute_expression` owner. Its only consumers (CFI and
+  the Target parse service) now call that owner directly; the declaration
+  and definition were deleted, without merging different evaluation modes.
+* `minias_assemble_with_target` was a non-public legacy forwarding bridge
+  whose sole caller selected RISC-V. The caller now fills the identical
+  configuration directly. All four `minias_assemble_file*` **public APIs**
+  remain intact, as does the canonical `minias_assemble_config` path.
+* `minias_find_subsection` has one same-file consumer in `mc_layout.c`;
+  its declaration was removed from the broad internal header and the
+  function made `static`. The subsection index and lookup are unchanged.
+
+**Local verification on the modified tree:** Release build and A0 30/30
+PASS, MCExpr ownership gate PASS, public four-Target invocation PASS, CFI
+absolute-expression and 4,096-section/8,192-subsection oracles PASS.
+Cross-Target GNU checks unavailable in some A0 subtests remain skips, not
+passes. No Linux Image/QEMU or complete GNU semantic corpus rerun is claimed.
+This batch is **private API/obsolete forwarding cleanup, not an architecture
+redesign**. The next deep-reading pass should continue seeking genuinely
+unused private chains; keep P04 encode, P05 SourceSite/EOF, conditional
+replay and historical public entry points until their consumers move.
+
 ### 2026-11-01 continuation checkpoint — `4ca932b4`
 
 This checkpoint is **read-only source triage plus local verification**, not a

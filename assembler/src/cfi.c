@@ -48,7 +48,7 @@ static bool cfi_integer(MiniAs *as,const char *text,int64_t *value) {
      * prevents that second interpretation. */
     if(*text=='\0' || !minias_parse_absolute_data_bits(as,text,&bits))
         return false;
-    if(minias_evaluate_absolute_operand(as,text,value))return true;
+    if(minias_evaluate_absolute_expression(as,text,value))return true;
     *value=bits<=(uint64_t)INT64_MAX ? (int64_t)bits :
            -1-(int64_t)(UINT64_MAX-bits);
     return true;

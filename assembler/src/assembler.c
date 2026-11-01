@@ -332,7 +332,7 @@ bool minias_parse_eval_absolute_data_bits(MiniAsParseContext *ctx,
 
 bool minias_parse_evaluate_absolute_operand(MiniAsParseContext *ctx,
                                             const char *text, int64_t *value) {
-    return minias_evaluate_absolute_operand(ctx->as, text, value);
+    return minias_evaluate_absolute_expression(ctx->as, text, value);
 }
 
 bool minias_parse_eval_symbol_difference_absolute_tail(
@@ -4947,37 +4947,24 @@ int minias_assemble_config(const char *input_path,
     return rc;
 }
 
-int minias_assemble_with_target(const char *input_path,
-                                const char *output_path,
-                                const MiniAsTargetOps *target,
-                                bool elf32,
-                                uint32_t elf_flags,
-                                unsigned strict_i_xlen,
-                                FILE *diagnostic) {
-    MiniAsAssemblyConfig config;
-    memset(&config, 0, sizeof(config));
-    config.target = target;
-    config.elf32 = elf32;
-    config.elf_flags = elf_flags;
-    if (strict_i_xlen != 0U &&
-        (target->configure_legacy_target == NULL ||
-         !target->configure_legacy_target(&config, strict_i_xlen))) {
-        if (diagnostic != NULL)
-            fprintf(diagnostic, "minic-as: unsupported-legacy-target-configuration\n");
-        return 1;
-    }
-    return minias_assemble_config(input_path, output_path, &config, diagnostic);
-}
-
 int minias_assemble_file_target_isa(const char *input_path,
                                     const char *output_path,
                                     bool elf32,
                                     uint32_t elf_flags,
                                     unsigned strict_i_xlen,
                                     FILE *diagnostic) {
-    return minias_assemble_with_target(input_path, output_path,
-                                       minias_target_riscv(), elf32,
-                                       elf_flags, strict_i_xlen, diagnostic);
+    MiniAsAssemblyConfig config={0};
+    config.target=minias_target_riscv();
+    config.elf32=elf32;
+    config.elf_flags=elf_flags;
+    if(strict_i_xlen!=0U &&
+       (config.target->configure_legacy_target==NULL ||
+        !config.target->configure_legacy_target(&config,strict_i_xlen))) {
+        if(diagnostic!=NULL)
+            fprintf(diagnostic,"minic-as: unsupported-legacy-target-configuration\n");
+        return 1;
+    }
+    return minias_assemble_config(input_path,output_path,&config,diagnostic);
 }
 
 /* Historical API stays permissive. ISA-feature checks belong to invocations

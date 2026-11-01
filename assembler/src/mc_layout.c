@@ -101,7 +101,8 @@ static bool subsection_index_reserve(MiniAs *as) {
     return true;
 }
 
-MiniAsSubsection *minias_find_subsection(MiniAs *as,int section,uint32_t number) {
+static MiniAsSubsection *minias_find_subsection(MiniAs *as,int section,
+                                               uint32_t number) {
     size_t slot;
     const size_t capacity=as->subsection_slot_capacity;
     if(capacity==0U)return NULL;

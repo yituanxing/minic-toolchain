@@ -765,7 +765,6 @@ const MiniAsSymbol *minias_symbol_ref_lookup(const MiniAs *as,
  * evaluation. CFI, directives, and all four Targets use these APIs. */
 /* Common persistent Fragment/Layout subsystem. */
 bool minias_grow_array(void **, size_t *, size_t, size_t);
-MiniAsSubsection *minias_find_subsection(MiniAs *, int, uint32_t);
 MiniAsSubsection *minias_ensure_subsection(MiniAs *, int, uint32_t);
 bool minias_finalize_subsection_layout(MiniAs *);
 bool minias_refresh_symbol_aliases(MiniAs *);
@@ -810,7 +809,6 @@ bool minias_emit_deferred_leb_relocations(MiniAs *);
 bool minias_span_has_linker_relaxation(MiniAs *,size_t,size_t,bool *);
 bool minias_emit_mc_data(MiniAs *, const MiniAsStmt *);
 void minias_mcdata_destroy(MiniAsMCData *);
-bool minias_evaluate_absolute_operand(MiniAs *,const char *,int64_t *);
 /* Parsed syntax may name forward symbols; resolve only after final
  * same-section layout and fail closed on missing/cross-section anchors. */
 bool minias_parse_symbol_difference(const char *,MiniAsSymbolDifference *);
@@ -1145,10 +1143,5 @@ typedef struct MiniAsAssemblyConfig {
 } MiniAsAssemblyConfig;
 int minias_assemble_config(const char *, const char *,
                            const MiniAsAssemblyConfig *, FILE *);
-
-/* Internal multi-target driver (legacy public API remains RISC-V). */
-int minias_assemble_with_target(const char *, const char *,
-                                const MiniAsTargetOps *, bool, uint32_t,
-                                unsigned, FILE *);
 
 #endif
