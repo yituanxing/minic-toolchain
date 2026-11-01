@@ -84,74 +84,50 @@ void minias_source_context_destroy(MiniAsSourceContext *source) {
     free(source);
 }
 
-/* GAS conditional expressions share the Common absolute arithmetic and
- * symbol resolver. A separate numeric-only parser rejected macro constants
- * such as .if docfi=0 and prematurely fragmented Linux target assembly.
- * Operators are recognized only at top-level, never in shifts or parens. */
+/* Conditional comparisons use the same Common MCExpr precedence grammar as
+ * data and target operands. Keep only the historical single '=' spelling
+ * accepted by MiniAS source files: it is a compatibility fallback, not a
+ * second parser for ==, !=, <=, >=, shifts, or logical operators. */
 static bool evaluate_if_expression(MiniAs *as,const char *text,bool *result) {
-    char *copy,*p,*lhs,*rhs=NULL;
-    const char *compare=NULL;
-    char op='\0';
+    int64_t value;
+    const char *p,*equal=NULL;
     unsigned depth=0U;
-    unsigned width=0U;
-    int64_t left,right;
+    char *copy,*left,*right;
+    int64_t lhs,rhs;
+    bool ok;
     if(!text || !result)return false;
-    copy=minias_strdup(text);
-    if(!copy)return false;
-    lhs=minias_trim(copy);
-    /* Delegate logical expressions to the one Common precedence parser
-     * rather than splitting an inner '==' away from its '||' RHS. */
-    if(strstr(lhs,"||") || strstr(lhs,"&&")) {
-        bool ok=minias_evaluate_absolute_expression(as,lhs,&left);
-        free(copy);
-        if(ok)*result=left!=0;
-        return ok;
+    if(minias_evaluate_absolute_expression(as,text,&value)) {
+        *result=value!=0;
+        return true;
     }
-    for(p=lhs;*p;++p) {
-        if(*p=='('){++depth;continue;}
+    /* Historic '.if name=0' can only compare at top level. The standard
+     * expression grammar handles every other operator, including '=='. */
+    if(strstr(text,"&&")!=NULL || strstr(text,"||")!=NULL)return false;
+    for(p=text;*p!='\0';++p) {
+        if(*p=='(') {++depth;continue;}
         if(*p==')') {
-            if(depth==0U){free(copy);return false;}
+            if(depth==0U)return false;
             --depth;continue;
         }
-        if(depth)continue;
-        if((p[0]=='<' && p[1]=='<') ||
-           (p[0]=='>' && p[1]=='>')) {++p;continue;}
-        if((p[0]=='=' && p[1]=='=') ||
-           (p[0]=='!' && p[1]=='=') ||
-           (p[0]=='<' && p[1]=='=') ||
-           (p[0]=='>' && p[1]=='=')) {
-            compare=p;width=2U;break;
-        }
-        if(*p=='=' || *p=='<' || *p=='>') {
-            compare=p;width=1U;break;
+        if(depth==0U && *p=='=' && p[1]!='=' &&
+           (p==text || (p[-1]!='=' && p[-1]!='!' &&
+                        p[-1]!='<' && p[-1]!='>'))) {
+            equal=p;
+            break;
         }
     }
-    if(depth!=0U){free(copy);return false;}
-    if(compare) {
-        p=(char *)compare;
-        rhs=p+width;
-        op=*p;
-        *p='\0';
-        lhs=minias_trim(lhs);rhs=minias_trim(rhs);
-        if(*lhs=='\0' || *rhs=='\0' ||
-           !minias_evaluate_absolute_expression(as,lhs,&left) ||
-           !minias_evaluate_absolute_expression(as,rhs,&right)) {
-            free(copy);return false;
-        }
-        switch(op) {
-            case '=':*result=left==right;break;
-            case '!':*result=left!=right;break;
-            case '<':*result=width==2U?left<=right:left<right;break;
-            case '>':*result=width==2U?left>=right:left>right;break;
-            default:free(copy);return false;
-        }
-    } else {
-        if(!minias_evaluate_absolute_expression(as,lhs,&left)) {
-            free(copy);return false;
-        }
-        *result=left!=0;
-    }
-    free(copy);return true;
+    if(equal==NULL)return false;
+    copy=minias_strdup(text);
+    if(copy==NULL)return false;
+    copy[equal-text]='\0';
+    left=minias_trim(copy);
+    right=minias_trim(copy+(equal-text)+1U);
+    ok=*left!='\0' && *right!='\0' &&
+       minias_evaluate_absolute_expression(as,left,&lhs) &&
+       minias_evaluate_absolute_expression(as,right,&rhs);
+    if(ok)*result=lhs==rhs;
+    free(copy);
+    return ok;
 }
 
 static bool minias_source_push_conditional_value(MiniAs *as,bool condition_true) {

@@ -58,6 +58,29 @@ checks remain mandatory. This is source cleanup, not ISA-wide GNU parity.
 lines (net -43); exact-head CI must determine PASS
 or failure before claiming completion.
 
+### 2026-11-01 conditional expression parser consolidation
+
+The SourceContext conditional evaluator retained a second lexical
+comparison parser that manually walked parentheses/shifts and split
+equality, inequality and ordering expressions into two substrings.
+The existing Common MCExpr parser already handles all standard operators
+with a proper precedence AST. Source .if/.elseif now consumes it directly.
+The only retained compatibility exception is historical MiniAS
+`.if name=0` (single equals), handled by a narrow top-level fallback;
+the standard evaluator remains the sole owner for ==, !=, <, <=, >, >=,
+<<, >>, && and ||. Do not expand this exception into all parsers.
+
+A mandatory GNU x86 oracle verifies seven conditional outcomes including
+nested logical/shift/arithmetic comparisons and .elseif selection. A
+separate MiniAS-only compatibility test guards the historical single-equals
+form that GNU GAS itself rejects. Existing SourceGraph replay/conditional
+tests remain active.
+
+**Diff:** `source_expansion.c` legacy comparison scan 70
+lines -> Common delegator + narrow fallback 46 lines (delta
+-24); this is a deletion of a duplicate semantic parser.
+No Target ISA, CFI, ELF writer or source-site ownership was redesigned.
+
 ## Current refactor dashboard — 2026-11-01 (exact-head recovery and live-path audit)
 
 ### 2026-11-01 Source collector single-pass de-duplication (local batch)
