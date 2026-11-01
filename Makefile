@@ -255,6 +255,7 @@ MINIC_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(MINIC_SOURCES))
 MINIC_CC_BINARY := $(BUILD_DIR)/bin/minic-cc
 FUNCTION_DIAGNOSTIC_TEST_OBJECT := $(BUILD_DIR)/obj/tests/frontend/function_diagnostic_attribute_test.o
 FUNCTION_DIAGNOSTIC_TEST_BINARY := $(BUILD_DIR)/tests/frontend/function-diagnostic-attribute-test
+DIRECT_LP64_ASM_UNIT_BINARY := $(BUILD_DIR)/tests/compiler/c0/direct-lp64-asm-preflight-unit
 MINIC_DRIVER_OBJECTS := $(BUILD_DIR)/obj/tools/minic/main.o \
 	$(BUILD_DIR)/obj/src/target/target_catalog.o
 # The compiler boundary stays in minic-cc. minic is the user-facing staged
@@ -614,6 +615,27 @@ check-rv32-constructor-init-array: $(MINIC_CC_BINARY)
 	bash tests/compiler/c0/run-rv32-constructor-init-array.sh
 
 check-fast: check-rv32-constructor-init-array
+
+.PHONY: check-direct-lp64-asm-capacity
+check-direct-lp64-asm-capacity: $(MINIC_CC_BINARY)
+	@MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+		bash tests/compiler/c0/probe-direct-lp64-asm-capacity.sh
+
+check-fast: check-direct-lp64-asm-capacity
+
+$(DIRECT_LP64_ASM_UNIT_BINARY): tests/compiler/c0/direct_lp64_asm_preflight_unit.c \
+		$(BUILD_DIR)/obj/src/frontend/type.o
+	@mkdir -p "$(dir $@)"
+	$(CC) $(CPPFLAGS) $(MINIC_INCLUDES) $(MINIC_CFLAGS) \
+		-ffunction-sections -fdata-sections "$<" \
+		"$(BUILD_DIR)/obj/src/frontend/type.o" $(MINIC_LDFLAGS) \
+		-Wl,--gc-sections -o "$@"
+
+.PHONY: check-direct-lp64-asm-preflight-unit
+check-direct-lp64-asm-preflight-unit: $(DIRECT_LP64_ASM_UNIT_BINARY)
+	"$(DIRECT_LP64_ASM_UNIT_BINARY)"
+
+check-fast: check-direct-lp64-asm-preflight-unit
 
 # The staged driver invokes the sibling minic-cc at runtime. An order-only
 # prerequisite prevents parallel `make -j check-fast` from launching it while

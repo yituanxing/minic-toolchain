@@ -15,12 +15,17 @@
 static bool direct_lp64_only_structured_asm(
     const MinicCoreFunction *fn,
     MinicDirectLP64OpaqueAsmQualifier qualify_opaque_asm) {
-    bool used[256] = {false};
+    bool *used;
     size_t i, count = 0U;
+    bool accepted = false;
     if (!fn) return false;
     if (fn->inline_asm_count == 0U) return true;
-    if (fn->inline_asm_count > 256U || fn->inline_asms == NULL)
+    if (fn->inline_asms == NULL ||
+        (fn->instruction_count != 0U && fn->instructions == NULL) ||
+        fn->inline_asm_count > SIZE_MAX / sizeof(*used))
         return false;
+    used = (bool *)calloc(fn->inline_asm_count, sizeof(*used));
+    if (used == NULL) return false;
     for (i = 0U; i < fn->instruction_count; ++i) {
         const MinicCoreInstruction *ins = &fn->instructions[i];
         if (ins->kind == MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM) {
@@ -30,7 +35,7 @@ static bool direct_lp64_only_structured_asm(
                 fn->inline_asms[id].template_text == NULL ||
                 ins->result != MINIC_CORE_VALUE_INVALID ||
                 !minic_type_is_void(ins->type))
-                return false;
+                goto done;
             used[id] = true;
             ++count;
         } else if (ins->kind == MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM) {
@@ -40,17 +45,21 @@ static bool direct_lp64_only_structured_asm(
                 ins->result != MINIC_CORE_VALUE_INVALID ||
                 !minic_type_is_void(ins->type) ||
                 !qualify_opaque_asm(&fn->inline_asms[id]))
-                return false;
+                goto done;
             used[id] = true;
             ++count;
         } else if (ins->kind == MINIC_CORE_INSTRUCTION_REGISTER_OUTPUT_INLINE_ASM ||
                    ins->kind == MINIC_CORE_INSTRUCTION_REGISTER_OUTPUT_INPUT_INLINE_ASM ||
                    ins->kind == MINIC_CORE_INSTRUCTION_MEMORY_READWRITE_SCALAR_INPUT_INLINE_ASM ||
                    ins->kind == MINIC_CORE_INSTRUCTION_SCALAR_INPUT_INLINE_ASM) {
-            return false;
+            goto done;
         }
     }
-    return count == fn->inline_asm_count;
+    accepted = count == fn->inline_asm_count;
+
+done:
+    free(used);
+    return accepted;
 }
 
 
