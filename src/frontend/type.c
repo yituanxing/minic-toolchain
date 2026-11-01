@@ -21,27 +21,6 @@ static bool minic_type_pointer_qualifiers_are_valid(MinicType type) {
            (type.pointer_volatile_qualifiers >> type.pointer_depth) == 0U;
 }
 
-static MinicType minic_type_integer(MinicIntegerSign sign, MinicIntegerRank rank) {
-    MinicType type;
-
-    type.base_kind = MINIC_TYPE_BASE_INT;
-    type.record_id = MINIC_RECORD_INVALID;
-    type.array_type_id = MINIC_ARRAY_TYPE_INVALID;
-    type.function_type_id = MINIC_FUNCTION_TYPE_INVALID;
-    type.enum_id = MINIC_ENUM_INVALID;
-    type.integer_sign = sign;
-    type.integer_rank = rank;
-    type.is_plain_char = false;
-    type.base_qualifiers = MINIC_TYPE_QUALIFIER_NONE;
-    type.pointer_qualifiers = MINIC_TYPE_QUALIFIER_NONE;
-    type.pointer_volatile_qualifiers = MINIC_TYPE_QUALIFIER_NONE;
-    type.pointer_depth = 0U;
-    type.explicit_alignment = 0U;
-    type.gnu_vector_element_kind = MINIC_TYPE_BASE_VOID;
-    type.gnu_vector_bytes = 0U;
-    return type;
-}
-
 static MinicType minic_type_scalar(MinicTypeBaseKind base_kind) {
     MinicType type;
 
@@ -60,6 +39,14 @@ static MinicType minic_type_scalar(MinicTypeBaseKind base_kind) {
     type.explicit_alignment = 0U;
     type.gnu_vector_element_kind = MINIC_TYPE_BASE_VOID;
     type.gnu_vector_bytes = 0U;
+    return type;
+}
+
+static MinicType minic_type_integer(MinicIntegerSign sign, MinicIntegerRank rank) {
+    MinicType type = minic_type_scalar(MINIC_TYPE_BASE_INT);
+
+    type.integer_sign = sign;
+    type.integer_rank = rank;
     return type;
 }
 

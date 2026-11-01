@@ -125,21 +125,20 @@ bool minic_c0_program_set_function_variadic(MinicC0Program *program,
     return true;
 }
 
-bool minic_c0_program_set_function_assembler_name(MinicC0Program *program,
-                                                  MinicFunctionId function_id,
-                                                  const char *name,
-                                                  size_t name_length) {
-    MinicFunction *function;
+/* Both asm symbol spelling and section spelling are owned, immutable
+ * strings. Keep one checked copy/compare path; diagnostics have different
+ * replacement semantics and deliberately do not use this helper. */
+static bool set_function_owned_name(char **storage,
+                                    size_t *storage_length,
+                                    const char *name,
+                                    size_t name_length) {
     char *copy;
-
-    if (program == NULL || function_id >= program->function_count || name == NULL ||
-        name_length == 0U || name_length == SIZE_MAX) {
+    if (name == NULL || name_length == 0U || name_length == SIZE_MAX) {
         return false;
     }
-    function = &program->functions[function_id];
-    if (function->assembler_name != NULL) {
-        return function->assembler_name_length == name_length &&
-               memcmp(function->assembler_name, name, name_length) == 0;
+    if (*storage != NULL) {
+        return *storage_length == name_length &&
+               memcmp(*storage, name, name_length) == 0;
     }
     copy = (char *)malloc(name_length + 1U);
     if (copy == NULL) {
@@ -147,9 +146,19 @@ bool minic_c0_program_set_function_assembler_name(MinicC0Program *program,
     }
     (void)memcpy(copy, name, name_length);
     copy[name_length] = '\0';
-    function->assembler_name = copy;
-    function->assembler_name_length = name_length;
+    *storage = copy;
+    *storage_length = name_length;
     return true;
+}
+
+bool minic_c0_program_set_function_assembler_name(MinicC0Program *program,
+                                                  MinicFunctionId function_id,
+                                                  const char *name,
+                                                  size_t name_length) {
+    return program != NULL && function_id < program->function_count &&
+           set_function_owned_name(&program->functions[function_id].assembler_name,
+                                   &program->functions[function_id].assembler_name_length,
+                                   name, name_length);
 }
 
 const char *minic_c0_function_symbol_name(const MinicFunction *function) {
@@ -182,27 +191,10 @@ bool minic_c0_program_set_function_section(MinicC0Program *program,
                                            MinicFunctionId function_id,
                                            const char *name,
                                            size_t name_length) {
-    MinicFunction *function;
-    char *copy;
-
-    if (program == NULL || function_id >= program->function_count || name == NULL ||
-        name_length == 0U || name_length == SIZE_MAX) {
-        return false;
-    }
-    function = &program->functions[function_id];
-    if (function->section_name != NULL) {
-        return function->section_name_length == name_length &&
-               memcmp(function->section_name, name, name_length) == 0;
-    }
-    copy = (char *)malloc(name_length + 1U);
-    if (copy == NULL) {
-        return false;
-    }
-    (void)memcpy(copy, name, name_length);
-    copy[name_length] = '\0';
-    function->section_name = copy;
-    function->section_name_length = name_length;
-    return true;
+    return program != NULL && function_id < program->function_count &&
+           set_function_owned_name(&program->functions[function_id].section_name,
+                                   &program->functions[function_id].section_name_length,
+                                   name, name_length);
 }
 
 bool minic_c0_program_set_function_diagnostic(MinicC0Program *program,

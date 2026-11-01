@@ -69,6 +69,35 @@
 “直接删至少 10 行、且没有外部合同”的新目标**；因此 C2 不为了净减行数继续动源码。
 下一步转向按子系统通读整个调用链：Frontend→Compiler→Core→Common Target→五目标，
 逐文件登记输入、owner、失败退出、测试和历史脚本引用，再从证据中选 C3 删除项。
+
+## 批次 C3：Frontend 基础层全文审读与两处现成实现复用
+
+**源基线：** `fa68367`，2026-11-01；**逐文件全文阅读：22/336 个生产 C/H**
+（Frontend **22/69**，本批源码约 **4,854 行**）。这次数字的含义是已从头至尾读取以下
+当前文件并核对关键外部消费者，**不**代表每个行为已有跨架构动态证明；其他
+314 个文件暂不计入本轮全文阅读。C1 的局部调用链阅读也不回填进全文计数。
+
+| 全文阅读路径（均在 `src/frontend/`） | 生产者、消费者和本批结论 |
+| --- | --- |
+| `token.c/.h`、`lexer.c/.h` | Token 编号→诊断名，Lexer 借用 `source/path`，在 Parser 和词法测试中消费；GNU 预处理行标记和未预处理指令显式分流。**KEEP**，无死扫描器。 |
+| `type.c/.h` | C 类型身份、pointer qualifiers、GNU vector/source builtin、构造与相容性；TargetInfo/Parser/Verifier 消费。**DELETE duplicate:** `minic_type_integer` 原来重复初始化 14 个字段，现调用已有 `minic_type_scalar`，再写 sign/rank，保持所有字段值。 |
+| `attribute.c/.h` | GNU 属性拼写→语义级别→允许的声明位置/参数数；Parser 多个入口共享。别名拼写都是现役语法数据，不因数据行重复删；**KEEP**。 |
+| `ast_traversal.c/.h`、`cast_normalization.c/.h` | child/external ID 遍历与先验后改写；Cast 归一化独立构造新 Expression arena，成功后移交 owned CALL overflow、失败时不替换旧 owner。公开 external visitor 虽无仓内调用仍有头文件合同；**KEEP(contract/transaction)**。 |
+| `expression_semantics.c/.h` | Source ASM value/constraint、GNU null-pointer ICE、条件类型、pointer arithmetic stride；Parser 与 AST verifier 的共享准入，TargetInfo 供目标事实；**KEEP**，不把源许可冒充机器码能力。 |
+| `initializer.c/.h` | 数组指定初始化的 last-write-wins 行为和逆序 skip-set；static/runtime 两类消费者共享，失败时清理暂态分配；**KEEP**，不是可删除的额外索引。 |
+| `parser_builtin_memory.c/.h`、`parser_labels.c/.h`、`parser_static_assert.c` | builtin libc signature 归 Frontend、标签/asm-goto 回填和 GNU cleanup lifetime、静态断言常量值诊断；**KEEP**，保留独立错误与合法语法条件。 |
+| `ast_function.c` | 函数 symbol/section/visibility/alias/constructor metadata 的 owner；两个 immutable owned-string setter 原各复制一次分配/字节拷贝/同名重声明校验，改为一个 `.c` 私有 `set_function_owned_name`；`error/warning` 可替换诊断的不同所有权保持原实现。 |
+
+**C3 实际源码：2 个 `.c`，`+35/-56`，净 **-21 行**。不移动目录、
+不改变 AST API、Type 结构体字段、GNU 语义准入、错误诊断或 Target ABI。
+
+**本地验证：** Release 全源 `-Werror` 增量编译、`check-lexer`、`check-type`、
+`check-type-alias`、`check-ast-contract`、`check-function-diagnostic-attribute`，
+以及 `run-gnu-section-symbol-attribute.sh`、`run-gnu-function-visibility.sh` 均 PASS。
+`run-gnu-function-asm-labels.sh` 的 `grep '  la a0, __real_renamed_api'` 在修改前
+的独立旧编译器上**同样失败**；当前真实汇编仍有 `call __real_renamed_api`、
+`lla t0, __real_renamed_api`，旧脚本的寄存器/助记符形状断言已漂移。
+应单独修测试 oracle，不能把该脚本 FAIL 算作 C3 回归或声称它通过。
 | `A11-04` AST external traversal | 上层函数虽零内部调用，但底层递归与 remap 现役，可能存在公开 API 合同。 | 明确 ABI / 外部消费者后才删最上层 wrapper。 |
 | `A11-05` semantic snapshot wrappers | 生产无调用但白盒单测使用。 | 若要合并，先迁测试且保存回滚/ownership 断言。 |
 | `A11-21` Core scalar predicate | 两个同形判断的持有者分别属于 memory 和 CALL；合并收益极小，邻近的 global-addressable predicate 对 `void` 的语义不同。 | 等输入合同证明和实际简化收益，不为了“统一”引入层级。 |
