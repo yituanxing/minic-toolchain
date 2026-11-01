@@ -771,6 +771,45 @@ native futex exit42、非法 suffix fail-closed）、
 `check-linux-three-arch-trap-state`（ASM trap/control-state 与
 asm-goto CFG reentry）。不把 -S 代替五目标 ELF/QEMU 验收。
 
+## 批次 C24：Target 注册、数据布局、C 语义与 ABI 入口（仅审读）
+
+**基线：** C23 + MC-082/055 推送远端 `a1ae70f`，2026-11-01。
+本批全文深读 Target 根目录 **13** 个生产文件、原始共
+**3,564 行**：`backend.c/.h`（290/141）、
+`backend_core_usage.c/.h`（177/18）、`data_layout.c/.h`
+（1,094/98）、`target_catalog.c/.h`（93/69）、
+`target_info.c/.h`（1,090/321）、`target_machine_options.c/.h`
+（126/23）、`target_registration.def`（24）。累计
+**141/339** 全文深读：Frontend **69/69**、Compiler
+**11/11**、Core **48/48**、Target **13/211**；Target 还剩
+**198** 个文件。纯清理阶段持续，不进入正式重构/联合验收。
+
+| Target 根契约 | 审读与决策 |
+| --- | --- |
+| `target_registration.def` / `target_catalog.c/.h` / `backend.c/.h` | 同一 X-macro 注册精确五个 ISA，Driver stage、C language descriptor 和实际 emitter 的顺序通过 catalog 对齐；默认 RV64 是显式选择，不是列表首元素。只有 RV64 宣称 staged MiniAS/MiniLD，其余仅 GNU `-S`。**KEEP(one inventory, explicit backend)**。 |
+| `backend.c` GNU ASM operand plan | `source_form_id` 是约束/模板/flags 的 diagnostic fingerprint，既不覆盖单个 symbolic operand 的 identity，也不证明 machine opcode 可编码；target-owned machine form/variant、GNU ties/early clobber/隐式 memory effect 要经 captured plan 转运。源资格失败的 plan 允许部分改写但必须丢弃。**KEEP(source-vs-machine proof)**。 |
+| `backend_core_usage` | opt-in census 按 Core opcode/类型位宽分类，但输出明示 `support_verified=0`，且遍历未计 ABI 或机器真实 legalize 成功；不得因汇总中出现某 opcode 就宣称 Target 已支持。**KEEP(diagnostic-only census)**。 |
+| `data_layout.c/.h` | 五个独立 C object layout：RV32 ILP32、RV64、x86 SysV、AAPCS64、Loong LP64；相同 sizeof 不代表 ABI 或 long double 机器格式相同。Record packed/pragma-pack、显式 aligned、GNU 零宽位域 fence、匿名 union、零长度/flexible tail 等必须按同一 field layout 算法推导并溢出检查。**KEEP(single C layout oracle)**。 |
+| DataLayout global relocations | 来源 scalar/array/record/aggregate-slot 的 relocation offset 分开校验，union selector 和 initializer span 不能视作普通 C 字段遍历；target member path 加数组 subscript 的 `target_byte_addend` 单独累计，避免索引重复。**KEEP(source subobject identity + exact bounds)**。 |
+| `target_info.c/.h` language model | C semantic integer width 与物理存储 size/alignment 分离，`_Bool` 位宽为 1、`long` 在 RV32 为 32、x86 plain char 有符号、A64 `wchar_t` 无符号；整数 usual conversion 与 decimal/nondecimal literal 的候选顺序不能按宿主或同为 LP64 合并。**KEEP(language model provenance)**。 |
+| TargetInfo invocation | Canonical descriptor 初次获取会惰性写入静态 `canonical_targets`（见既有 MC-027 并发契约风险）；每次 invocation 再复制 `integer_model` 和 wchar/cf-protection/PIC 等机器选项，避免一次编译改污染下次。**NEEDS_PROOF(thread-safe canonical initialization)**，本批不改运行时缓存。 |
+| ELF source facts | 同 TU 定义、hidden/internal 非抢占、undefined weak 可落零地址是三个不同布尔事实；MC-086 已以 x86 PIC GNU ELF 证明 `nonpreemptible` 不能单独决定 `PC32`。目标实发 relocation 和 GOT 是 machine 权限。**KEEP(local/hidden/weak separate)**。 |
+| Source va_list / machine options | x86 SysV 与 AAPCS64 cursor 是 ABI-owned record/array，RV32/RV64/Loong 是 linear pointer；source形状不等于机器 register bank。`-march/-mabi` 按 target/ISA family 解析，Loong LP64S 不可当 RISC-V profile，x86 mitigations 不能溢到其他目标。**KEEP(source cursor + machine option separation)**。 |
+| Target 后续划分 | `source_policy` 决定 GNU register/source spelling，`common` 负责 Frame/Record/Direct preflight，五套子目录负责机器 ABI/ASM/relocs。下一批从 source_policy 进入，最后逐 ISA 检查 capability 是否有真正机器消费者。**NEEDS_PROOF(source admission vs machine realization)**。 |
+
+**C24 生产源码 +0/-0，净 0 行**；C1～C24 累计仍为
+**净 -331 行**。本批不为压行数合并不同 target 的 ABI
+布局、`wchar_t`、长双精度或 ELF weak 路径，也不改变公开 API。
+
+**验证 PASS：** Release `-Werror` 的
+`check-target-selection-m0`（RV64 默认、RV32 strict ISA、五目标
+source language/整数模型）；`check-layout`（DataLayout 独立测试）、
+`check-rv64-abi`（GNU aggregate ABI classifier 单测）、
+`check-elf-hidden-undefined-pic-source`（五 ISA `-S`、x86 native，
+明确 `ELF_and_QEMU=NOT_RUN`）、
+`check-x86-pic-hidden-undefined-weak`（GNU/MiniC PIE ELF/native
+和 GOTPCREL/PCREL weak/strong 分离）。审读不代替机器层全文读码。
+
 ## 后续批次进度规则
 
 每批发布：当前 HEAD、源文件逐目录覆盖（明确深读与只扫的区别）、
