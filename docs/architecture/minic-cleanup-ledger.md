@@ -470,6 +470,43 @@ x86 原生与五 ISA `-S`；`run-gnu-runtime-if-effect-facts.sh`
 的 x86 GNU/MiniC 原生差分和 RV64 `-S`。无实际生产改动，
 完整五 ISA ELF/QEMU 与联合验收仍推迟。
 
+## 批次 C15：Core 函数入口、源 CFG 与逻辑值落盘（清理 + 审读）
+
+**基线：** 远端 C14 同树提交 `e57f2a0`，叠加独立 MC-009/042/051
+定点修复 `cbc439a` / `3f6cd4f` / `a0232f0`，2026-11-01。
+本批全文深读 Core **4** 个生产文件、原始 **3,087 行**：
+`core_lower.h`（22）、`core_lower.c`（1,639）、
+`core_lower_expr_flow.c`（747）、`core_lower_assignments.c`（679）。
+累计 **103/339**：Frontend **69/69**、Compiler **11/11**、Core
+**23/48**、Target **0/211**；Core 余 **25**、Target 余 **211**，
+合计 **236/339** 文件待全文深读。
+
+| 语义/所有权边界 | 清理判断与后续重构提醒 |
+| --- | --- |
+| `core_lower.h` / `core_lower.c` | `FunctionBodyView` 传入源函数、`TargetInfo` 只读布局、Core builder 接受固定 ID；带索引与不带索引两个入口共享主体。参数入口要先把定义局部类型规范化到 IR signature，再 materialize stack object；不能把 frontend 兼容类型误当 Core 严格类型身份。**KEEP(source/Core signature normalization)**。 |
+| `core_lower.c` 的 Return/Cleanup | GNU return 表达式必须先求值再执行 cleanup；标量返回 spill/reload 跨清理调用，Record 返回带 cleanup 尚未建模，应保持 fail-closed。后半部的 unreachable tail、parser synthetic while label、外部 goto/asm goto/label-address 用 reentry membership 证明，不能把字符串/行号近似当 CFG 入边。**KEEP(evaluation order + reentry proof)**。 |
+| `core_lower_assignments.c` | 普通赋值是 RHS 求值并 spill → 目标地址求值 → reload/store；GNU vector16 先 snapshot 16B 后才评估目标，指针 `+=` 先保留旧地址/指针值后才执行可能分裂 CFG 的 RHS；bit-field 和固定寄存器另有精确 owner。赋值后清除/重建 local facts 的顺序是真正数据流约束。**KEEP(distinct lvalue owners / fact invalidation)**。 |
+| `core_lower_expr_flow.c` | void/scalar/GNU `a ?: b` 走不同结果表示，但互斥臂共用 snapshot/restore/meet；不能为减少重复行数混同 GNU omitted-middle 的一次求值语义。`&&/||` 物化真/假结果时，两臂的 INTEGER_CONSTANT → OBJECT_ADDRESS → STORE 三条 Core 指令完全同构。**DELETE(duplicate logical result store)**，抽为该文件私有 helper，保持 0/1、类型、span、volatile=false 和分支顺序不变。 |
+| `GENL_COND_*` 与 `CORE_ASSIGN_STAGE` | 部分失败和 Linux 定点 trace 是无开关 stderr，现列入 MC-020 的诊断债。尚未证明下游脚本/用户诊断不消费，**NEEDS_PROOF(diagnostic consumers)**；本次不删。 |
+
+**C15 生产代码：** `core_lower_expr_flow.c` **+52/-63，净 -11 行**；
+C1～C15 纯清理累计 **净 -251 行**。三项 MC Bug 修复、专项测试
+和本文档变更不纳入纯清理删行；联合验收仍按约定后移。
+
+**验证 PASS：** 合并后 Release `-Werror` 完整 minic-cc 构建；
+`check-semantic-snapshot`、`check-packed-zero-width-bitfield-barrier`
+（9 组 GNU layout/五 ISA `-S`/x86 native）、`check-layout`、
+`check-record`、真实 MC-009 12 参数 CALL 的五 ISA `-S` + x86
+GNU/MiniC native exit7；MC-051 `long double` 取负跨 TU 的 x86
+GNU/MiniC 原生 `failure_mask=0x0`；Core CALL dump exact-text、runtime IF facts
+和 GNU IF condition-local owner 的 x86 GNU/MiniC 原生差分及 RV64
+静态测试。旧 `core_short_circuit_or` 用例追加 x86 GNU/MiniC 原生
+stdout 完全一致 `7 0 3 1`，五 ISA `-S` 全过。AND 用例在 RV32/RV64
+`-S` 通过，A64/Loong 的旧 Core 限制及 x86 源内 RV fence 不作为
+新失败归因；原两个 RV64 native/QEMU shell 脚本因交叉 libc 缺
+`bits/libc-header-start.h` 未执行完成，**不计 PASS**。五目标完整
+ELF/QEMU、MiniAS/MiniLD 和联合验收均未进行。
+
 ## 后续批次进度规则
 
 每批发布：当前 HEAD、源文件逐目录覆盖（明确深读与只扫的区别）、
