@@ -7,6 +7,8 @@ on:
     branches: [refactor/minias-target-isa-abi-core]
     paths:
       - '.github/workflows/minias-a0-focused-diagnostics-v1.yml'
+      # A real source batch with [minias-semantic-3536] in its commit
+      # message runs the 3536 GNU semantic oracle on that exact head.
       # Explicit multiarch Linux pushes can opt into the existing successful
       # RV64 P0/P1 lane at that same head, without running it on every push.
       - '.github/workflows/minias-linux-fourarch-runtime.yml'
@@ -777,7 +779,7 @@ jobs:
           if-no-files-found: error
 
   c-shards:
-    if: (github.event_name == 'workflow_dispatch' || github.event_name == 'push') && inputs.mode == 'semantic'
+    if: ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && inputs.mode == 'semantic') || (github.event_name == 'push' && contains(github.event.head_commit.message, '[minias-semantic-3536]'))
     strategy:
       fail-fast: false
       matrix:
@@ -904,7 +906,7 @@ jobs:
           if-no-files-found: warn
 
   c149:
-    if: (github.event_name == 'workflow_dispatch' || github.event_name == 'push') && inputs.mode == 'semantic'
+    if: ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && inputs.mode == 'semantic') || (github.event_name == 'push' && contains(github.event.head_commit.message, '[minias-semantic-3536]'))
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     steps:
@@ -997,7 +999,7 @@ jobs:
           if-no-files-found: warn
 
   native35:
-    if: (github.event_name == 'workflow_dispatch' || github.event_name == 'push') && inputs.mode == 'semantic'
+    if: ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && inputs.mode == 'semantic') || (github.event_name == 'push' && contains(github.event.head_commit.message, '[minias-semantic-3536]'))
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
@@ -1210,7 +1212,7 @@ jobs:
           if-no-files-found: warn
 
   aggregate:
-    if: always() && (github.event_name == 'workflow_dispatch' || github.event_name == 'push') && inputs.mode == 'semantic'
+    if: always() && (((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && inputs.mode == 'semantic') || (github.event_name == 'push' && contains(github.event.head_commit.message, '[minias-semantic-3536]')))
     needs: [c-shards, c149, native35]
     runs-on: ubuntu-24.04
     steps:

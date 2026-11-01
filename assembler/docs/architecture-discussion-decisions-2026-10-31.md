@@ -1141,3 +1141,27 @@ new 18/18 GNU CFI, three ELF symbol-zero profiles, three source-dot
 relocations, prior focused CFI/GNU probes and the existing ownership
 guards all pass locally. Full Linux kernel, optional 3536 suites and
 other object formats are not newly certified by this focused batch.
+
+## 25. 2026-11-01 — one exact-head batch can require the 3536 GNU semantic oracle
+
+The older `minias-a0-focused-diagnostics-v1.yml` declared a `workflow_call`
+`mode=semantic` entry but its four semantic jobs (C shards, C149, native35,
+aggregate) excluded `workflow_call` in their `if` expressions. On push,
+the same jobs tested `inputs.mode`, which has no value for push, so the
+ordinary green focused workflow **skipped** all 3536 semantic checks.
+This is a CI routing gap, not evidence that the semantic oracle passed.
+
+Those four **existing** jobs now accept an explicit push-head commit marker
+`[minias-semantic-3536]` in addition to dispatch/call `mode=semantic`.
+No semantic oracle, artifact, comparator or frozen corpus has been copied or
+weakened. The aggregate continues to require all three classification
+jobs to succeed and to enforce exact 3536 GNU semantic equality. The marker
+belongs on a real grouped source change, alongside the independent
+Linux/3×7/hard-gate markers, not on every small cleanup commit.
+
+Scope is CI control flow only: **zero MiniAS production files changed by
+this decision**. The previous exact-head Linux and semantic jobs were
+SKIPPED; the new trigger is not a PASS certificate until the actual marked
+commit and its complete job/aggregate results are inspected. P04/P05 remain
+partial: the live Target encode and Source/EOF paths have real consumers,
+so they must not be misreported as dead duplicate code.

@@ -1,6 +1,52 @@
 # MiniAS full production-source review ledger — 2026-10-29
 
-## Current refactor dashboard — 2026-10-31 (P16 CFI source collision and P09 explicit symbol zero)
+## Current refactor dashboard — 2026-11-01 (exact-head recovery and live-path audit)
+
+### 2026-11-01 continuation checkpoint — `4ca932b4`
+
+This checkpoint is **read-only source triage plus local verification**, not a
+new production cleanup claim. The branch is still
+`refactor/minias-target-isa-abi-core` (Draft PR #667). After the prior
+`c1a5f8fa` Linux checkpoint, 26 commits touched 24 production files under
+`assembler/src`: **+3,658/−3,712, net −54 lines**. The old Source-owned
+directive dispatch and broad Target parse/relax callbacks were removed;
+the single SourceGraph/frame collector and MCEncodeResult transaction remain.
+The two superseded cached/generated 3×7 workflow YAML files were removed,
+**not** the frozen 3×7 validation requirement.
+
+The current head's focused GitHub Actions checks pass, including the ISA/ABI
+contract and x86/Loong GNU oracles. Its full Linux 6.6.143, frozen 3×7 and
+3536 opt-in jobs were **SKIPPED** and are **not acceptance evidence**. The
+last same-commit three-architecture Linux Image/QEMU P0/P1 certificate is
+`ae709208`, run `41211136425` (x86-64/AArch64/LoongArch64). RV64 uses a
+separate Linux single-toolchain workflow; do not combine different SHAs into
+a fictional four-target exact-head certificate.
+
+On this checkout, Release `CFLAGS=-Werror` built successfully and A0 produced
+30/30 objects. Some A0 GNU oracles explicitly skipped unavailable cross-GNU
+assemblers on the local host; this local result is **not** full cross-ISA GNU
+parity. A focused lexical/call-site audit of all 32 current production files
+found no obviously orphaned static function or unused TargetOps field:
+
+* P04's broad `encode(MiniAs *)` remains live, but all Targets use the one
+  Common MCEncodeResult transaction. Do not create a second one.
+* P05's EOF literal-pool/local `.comm` fragment generation and SourceSite
+  checks in `assembler.c`, and SourceFrame/SourceSite expansion in
+  `source_expansion.c`, are different live responsibilities, **not** duplicate
+  implementations. Position-sensitive `.if/.org/.set` replay is likewise a
+  currently necessary correctness fallback.
+* The public `minias_assemble_file[_target]` legacy entries require an
+  explicit external consumer migration before removal; no unverified deletion.
+
+The next **real production batch** must demonstrate an obsolete consumer/owner
+that it actually removes, or fix a GNU/real-source counterexample. Accumulate
+such changes, then put `[minias-linux-four] [minias-linux-gcc-single]
+[minias-replay-3x7] [minias-gate-v1] [minias-semantic-3536]` on one actual
+`assembler/**` commit so the expensive Linux and corpus gates verify the
+**same SHA**. The 3536 hard gate and the 3536 GNU *semantic* oracle now
+have separate opt-in push triggers; they must still be reported as two
+different checks. Preserve run IDs, object denominators,
+GNU baselines, P0/P1 and skipped/error states in the next checkpoint.
 
 This top section is the **current progress snapshot**. Later sections retain
 their original 2026-10-29 audit/batch evidence as history; their “pending CI”
