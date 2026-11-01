@@ -44,7 +44,7 @@
 | [MC-003](#mc-003-运行时-record-初始化器中的悬空指针) | P0 | FIXED-UNVERIFIED | ASAN | Frontend | 原 tagged Record 表达式复现已被 MC-056 同根修复覆盖；五目标容量 ASan 与 x86 GNU native 回归通过 |
 | [MC-004](#mc-004-属性探测使-parser-tags-失效) | P0 | FIXED-UNVERIFIED | ASAN | Frontend | 移除 attribute 语义浅拷贝；tags 容量边界五目标 SAN/Release `-S` 与 GNU/MiniC x86 原生通过 |
 | [MC-005](#mc-005-属性探测使-parser-enum_constants-失效) | P0 | FIXED-UNVERIFIED | ASAN | Frontend | 同源 enum_constants owner 修复；独立枚举容量回归与五目标 SAN/Release `-S` 通过 |
-| [MC-006](#mc-006-传递特化污染共享-call) | P0 | OPEN | ELF-ORACLE | Compiler/Core | 调用实例的 callee 被写进共享 AST CALL |
+| [MC-006](#mc-006-传递特化污染共享-call) | P0 | FIXED-UNVERIFIED | ELF-ORACLE | Compiler/Core | 传递符号特化保留 source CALL，Core 按 caller 实际事实择 clone；正反 caller 顺序均经双 key ELF reloc 验证 |
 | [MC-007](#mc-007-整数与符号特化无法组合) | P1 | OPEN | GCC-DIFF | Compiler/Core | 特化阶段间丢失调用实例的整数事实 |
 | [MC-008](#mc-008-符号特化过度要求整数参数常量化) | P1 | OPEN | GCC-DIFF | Compiler | 符号立即量与运行时整数无法共存 |
 | [MC-009](#mc-009-表达式探测回滚遗漏-owned-call-参数) | P1 | OPEN | SOURCE-TRACE | Frontend | `expression_count` 回滚遗失 CALL 溢出参数 |
@@ -191,7 +191,10 @@
 - **位置：** `src/compiler/inline_symbolic.c:874–878` 与 `src/core/core_lower_calls.c` 的候选选择。
 - **证据：** 两个 caller 通过共享的 `mid` 函数体传入不同静态 key。GCC x86 目标文件的 `__jump_table` 有两种 key 重定位（`keys+2`、`keys+0xa`）；MiniC 只有一种。反转 caller 顺序，MiniC 保留的地址也反转，说明共享 CALL 被后写者覆盖。
 - **根因：** `(caller FunctionId, CALL ExpressionId)` 的实例专属 callee 被降为单个共享 `ExpressionId → callee`。
-- **修复门槛：** 共享 AST 保留源码静态关系；实例特化事实表以稳定 `(caller_id, call_id)` 为键，Core 在具体调用实例上选目标。正反顺序均应保留两种 ELF 重定位；不能依靠“生成 clone 数量大于零”作为正确性证据。
+- **修复门槛（行为合同）：** 共享 AST 保留源码静态关系；实例化 callee 必须随 `(caller_id, call_id)` 的实际调用上下文确定，不能覆盖一个全局 CALL。此合同可由显式实例事实表或 Core 当前具备的 caller-local selector 履行，无须为了修此 Bug 强制新增表。正反顺序均应保留两种 ELF 重定位；不能依靠“生成 clone 数量大于零”作为正确性证据。
+- **2026-11-01 最小修复（`FIXED-UNVERIFIED`）：** `inline_symbolic.c` 传递规划仍按 caller 创建各自的符号 clone，**不再把 clone FunctionId 写回共享 source AST 的 CALL**。现有 `core_select_transitive_symbolic_specialization` 已根据 `context->source_function` 的符号参数事实，在对应 caller 的实际 Core lowering 中选择具体 clone，故无须新增全局可变映射表；原始 CallId/FunctionBody identity 保持不变。先在独立 worktree 证明此闭包对两个 caller 分别解析正确，未扩成重构。
+- **永久 ELF 差分：** `tests/compiler/audit/mc006_shared_call_relocation.c` 和 `tests/compiler/c0/probe-mc006-shared-call-relocations.sh` 对正反两个 source caller 次序，分别用 GNU `-O2 -c` 与 MiniC `-S`→GNU AS 生成 x86 ELF。修复前同一 fixture 的 GNU `.rela__jump_table` 含 `R_X86_64_PC64 .bss + 2` 和 `.bss + a`，MiniC 仅一条 `.bss + a`（单向次序）/反向仍仅一条；MiniC x86 原生 **exit0** 但 **ELF 语义错**，所以不能靠运行退出码宣称通过。修复后正反两种次序的 GNU/MiniC **4/4 ELF** 均明确包含这两个不同 key addend，GNU/MiniC x86 原生 **4/4 exit0**；`check-mc006-shared-call-relocations` 纳入 `check-fast`。
+- **邻近回归：** Release `-Werror` 构建；MC-001 单/双符号闭包五目标 90 次 `-S`、原生六次；symbolic shared body、two callers、GNU Linux ioremap inline guard、x86 Linux static-key ASM-goto 的专项均 PASS。**保留范围限制：** 本 fixture 是 x86 Linux GNU ASM-goto 语法，其他 ISA 源汇编 preflight 不支持该 x86 指令模板，不应将其写成“五 ISA PASS”；本轮未完成 Linux corpus、五目标 GNU ELF/QEMU 或 MiniAS/MiniLD 联合验收。MC-007（整数＋符号组合）的独立事实缺口仍 `OPEN`，不能由 MC-006 的双 key 通过反推其已修复。
 
 ### MC-007 整数与符号特化无法组合
 

@@ -1636,6 +1636,13 @@ check-mc001-symbolic-closure-arena: $(MINIC_CC_BINARY)
 
 check-fast: check-mc001-symbolic-closure-arena
 
+.PHONY: check-mc006-shared-call-relocations
+check-mc006-shared-call-relocations: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	sh tests/compiler/c0/probe-mc006-shared-call-relocations.sh
+
+check-fast: check-mc006-shared-call-relocations
+
 .PHONY: check-mc033-statement-update-facts
 check-mc033-statement-update-facts: $(MINIC_CC_BINARY)
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
