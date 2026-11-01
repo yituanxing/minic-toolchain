@@ -7,6 +7,48 @@
 > 和早期测试文件数量，均不能自动当作最新 HEAD 的事实。
 > “读过 / 修改过 / 完成清理”必须分别统计。
 
+### 2026-11-02 Source 五处 quote/escape 状态与 CFI 槽状态清理（P05/CFI）
+
+**Base:** exact remote Draft PR #667 head
+`c9b29041e72a02b005c409c4496041f89a1a8c98`；
+本地同树基准为 `3f971ca`。独立检查 Common/MC 的 SectionKey、
+Subsection、SymbolID、别名解析和两套 Fixup staging 后，确认多数
+相似检查有独立语义，未为凑删行数移除合法性证明。
+
+- **唯一 Source 引号/转义状态：** 在 Source 私有头文件中提供
+  `MiniAsSourceQuoteState`；SourceGraph 的私有符号标记检测、
+  物理 GNU C 块注释剔除，以及 SourceExpansion 的行注释、
+  宏顶层 COMMA/SPACE 分隔、分号语句分隔，共 **5 个消费者**
+  复用相同 quote/escape 状态机。各消费者仍分别处理是否递归
+  括号、是否终止物理注释、是否出现来源私有标记和 GNU 行分隔，
+  没有引入另一条语义解析链。
+- **CFI CIE 选择不保留幽灵状态：** `cfi_writer.c` 移除两处
+  没有后续读取的 Section 指针赋值；CIE 哈希槽查找/插入在
+  得到唯一槽位后读取 `variant_index`，不再依赖分支中不明显的
+  初始化；EH/debug FDE 只读取一次对应 CIE offset。
+  `eh_frame` 与 `debug_frame` 的指针和重定位规则保持不同，
+  ELF Writer/DebugLine/字符串解析仍保留各自的必要职责。
+
+**Production diff:** 4 个既有生产文件
+`source_expansion.c`, `source_graph.c`, `source_graph_internal.h`,
+`cfi_writer.c` 合计 `+46/-78`、净删 **32 行**；
+一个已有 GNU 结构/功能测试 `+25/-0`。生产目录仍为 33 文件，
+当前基准起实际修改覆盖仍为 22/33，不把覆盖数当完成率。
+
+**Local verification:** Release `-Werror` 与 A0 `30/30` PASS；
+SourceGraph 物理文件只读一次与跨重放 SiteID、宏/REPT/IRP、
+70,004 字节长行、GNU 注释中带引号/转义/分号/块标记、
+EOF、条件和嵌套展开的 GNU x86 对照 PASS；
+CFI 初始/扩展状态、ELF32/64 `.debug_frame`、x86 CFI
+register 和 vDSO `.eh_frame` 的本地 GNU 对照 PASS。
+ASan/UBSan 宏生命周期检查 clean；LSan 在当前执行环境
+不可用，不能声明泄漏检查已通过。
+独立重编译修改前 MiniAS，四架构 **22 组**输入中
+15 份 ELF 对象逐字节一致、7 组同样拒绝，差异 0。
+跨目标 GNU binutils 缺失时明确标记 NOT_TESTED；
+完整 3,536 GNU 与 Linux Image/QEMU 不由本轮 A0 代替。
+新提交 exact-head CI 需在远端确认。
+
 ### 2026-11-02 Source/Section/Target 重复所有权联合清理（P04/P05）
 
 **Base:** exact remote Draft PR #667 head

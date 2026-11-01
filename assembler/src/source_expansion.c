@@ -10,29 +10,11 @@
 /* Source-level comments are target-prefix-aware, but never Target syntax.
  * Macro/repeat classification and logical statement splitting share it. */
 static void strip_comment(char *line, const MiniAsTargetOps *target) {
-    char quote = '\0';
-    bool escaped = false;
+    MiniAsSourceQuoteState quotes={0};
     char *p;
 
     for (p = line; *p != '\0'; ++p) {
-        if (escaped) {
-            escaped = false;
-            continue;
-        }
-        if (quote != '\0') {
-            if (*p == '\\') {
-                escaped = true;
-                continue;
-            }
-            if (*p == quote) {
-                quote = '\0';
-            }
-            continue;
-        }
-        if (*p == '\'' || *p == '"') {
-            quote = *p;
-            continue;
-        }
+        if(minias_source_quote_consumes(&quotes,*p))continue;
         if ((target->comment_prefix == '/' && *p == '/' && p[1] == '/') ||
             (target->comment_prefix != '/' && *p == target->comment_prefix)) {
             *p = '\0';
@@ -568,19 +550,10 @@ enum {
 static const char *find_macro_top_level_separator(const char *text,
                                                    unsigned separators) {
     int depth = 0;
-    char quote = '\0';
+    MiniAsSourceQuoteState quotes={0};
     for (; *text != '\0'; ++text) {
-        if (quote != '\0') {
-            if (*text == '\\' && text[1] != '\0') {
-                ++text;
-                continue;
-            }
-            if (*text == quote) quote = '\0';
-            continue;
-        }
-        if (*text == '\'' || *text == '"') {
-            quote = *text;
-        } else if (*text == '(' || *text == '[' || *text == '{') {
+        if(minias_source_quote_consumes(&quotes,*text))continue;
+        if (*text == '(' || *text == '[' || *text == '{') {
             ++depth;
         } else if (*text == ')' || *text == ']' || *text == '}') {
             if (depth > 0) --depth;
@@ -1278,27 +1251,11 @@ bool minias_source_try_control_directive(MiniAs *as,const char *op,
 }
 
 static char *find_statement_separator(char *text) {
-    char quote = '\0';
-    bool escaped = false;
+    MiniAsSourceQuoteState quotes={0};
     char *p;
 
     for (p = text; *p != '\0'; ++p) {
-        if (escaped) {
-            escaped = false;
-            continue;
-        }
-        if (quote != '\0') {
-            if (*p == '\\') {
-                escaped = true;
-            } else if (*p == quote) {
-                quote = '\0';
-            }
-            continue;
-        }
-        if (*p == '\'' || *p == '"') {
-            quote = *p;
-            continue;
-        }
+        if(minias_source_quote_consumes(&quotes,*p))continue;
         if (*p == ';') {
             return p;
         }

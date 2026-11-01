@@ -6,6 +6,16 @@
 下表数字是该历史基线的快照，而非每次后续提交的实时计数。
 旧台账保留历史证据，**这里不复用旧“pending CI”状态**。
 
+**2026-11-02 Source quote/escape 与 CFI 状态清理
+（基于远端 `c9b2904`）：** SourceGraph 的 marker/物理注释
+及 SourceExpansion 的行注释/宏分隔/分号分隔，共五处原本
+重复的 quote/escape 状态机改为唯一 Source 私有函数，
+保留消费者自己的不同 GNU 词法规则；CFI writer 删除死赋值，
+并从唯一 CIE 哈希槽确定 variant index。四个生产文件
+`+46/-78`（净 `-32`），GNU 词法结构与字节回归 `+25`。
+独立旧/新 22 组四架构对象/拒绝行为无差异，本地 A0 和
+CFI GNU 对照通过；新 exact-head CI/完整 Linux 另核。
+
 **2026-11-02 联合 Source/Section/Target 清理（基于远端
 `b401be5`）：** 宏体的三套平行数组换成唯一
 `MiniAsSourceLine[]`，宏与 repeat collector 共用参数复制，

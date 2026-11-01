@@ -9,6 +9,32 @@ typedef struct MiniAsSourceLine {
     size_t source_segment;
 } MiniAsSourceLine;
 
+/* All Source-only lexers agree on GNU single/double quote and backslash
+ * state. Return true when a byte belongs to a quoted/escaped region; each
+ * consumer still owns its own comments, bracket and delimiter grammar. */
+typedef struct MiniAsSourceQuoteState {
+    char quote;
+    bool escaped;
+} MiniAsSourceQuoteState;
+
+static inline bool minias_source_quote_consumes(MiniAsSourceQuoteState *state,
+                                                char byte) {
+    if(state->escaped) {
+        state->escaped=false;
+        return true;
+    }
+    if(state->quote!='\0') {
+        if(byte=='\\')state->escaped=true;
+        else if(byte==state->quote)state->quote='\0';
+        return true;
+    }
+    if(byte=='\'' || byte=='"') {
+        state->quote=byte;
+        return true;
+    }
+    return false;
+}
+
 /* These source-only types intentionally do not appear in the Target-visible
  * MiniAs internal model. Source expansion is their lifetime owner. */
 typedef struct MiniAsConditional {

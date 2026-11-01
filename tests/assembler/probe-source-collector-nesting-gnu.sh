@@ -6,6 +6,12 @@ for tool in as objcopy cmp; do command -v "$tool" >/dev/null; done
 python3 - <<'PY'
 from pathlib import Path
 s=Path('assembler/src/source_expansion.c').read_text()
+graph=Path('assembler/src/source_graph.c').read_text()
+owner=Path('assembler/src/source_graph_internal.h').read_text()
+if (s.count('minias_source_quote_consumes(')!=3 or
+    graph.count('minias_source_quote_consumes(')!=2 or
+    owner.count('static inline bool minias_source_quote_consumes(')!=1):
+    raise SystemExit('Source lexers reintroduced a duplicate quote/escape grammar')
 if (s.count('find_macro_top_level_separator(')!=5 or
     'MINIAS_MACRO_SEPARATOR_COMMA|MINIAS_MACRO_SEPARATOR_SPACE' not in s):
     raise SystemExit('macro declaration/invocation delimiter scanner duplicated')
@@ -16,6 +22,7 @@ arguments=s[s.index('static size_t split_macro_arguments('):
 if "char quote = '\\0'" in tokens or "char quote = '\\0'" in arguments:
     raise SystemExit('macro tokenization reintroduced a private quote parser')
 print('MINIAS_MACRO_SEPARATOR_OWNER=PASS declaration=1 invocation=1 grammar=shared')
+print('MINIAS_SOURCE_QUOTE_OWNER=PASS consumers=5 state=source_private')
 PY
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
@@ -48,6 +55,24 @@ done
 cmp "$work/gnu.bin" "$work/mini.bin"
 expected=$(printf '\020\041\041\061\062\061\062\003\004\167')
 cmp "$work/mini.bin" <(printf '%s' "$expected")
+
+# Physical C comments, source comments, macro delimiters and semicolon
+# statement splitting must agree on escaped quotes and literal separators.
+cat >"$work/quotes.s" <<'SRC'
+.text
+.ascii "A;#/*B*/"
+.ascii "q\"r;#"
+/* GNU block comment spans physical lines;
+   quoted markers above must not start one. */
+.byte 0x24 # ordinary source comment
+.byte 0x25 ; .byte 0x26
+SRC
+as --64 -o "$work/quote-gnu.o" "$work/quotes.s"
+"$MINIAS" --target=x86_64 -o "$work/quote-mini.o" "$work/quotes.s"
+for kind in gnu mini; do
+    objcopy -j .text -O binary "$work/quote-$kind.o" "$work/quote-$kind.bin"
+done
+cmp "$work/quote-gnu.bin" "$work/quote-mini.bin"
 
 for kind in macro rept irp; do
     case "$kind" in

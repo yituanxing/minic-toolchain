@@ -44,17 +44,11 @@ void minias_source_lines_destroy(MiniAsSourceLine *lines, size_t count) {
 static bool validate_user_source_private_marker(MiniAs *as,
                                                 const char *line,
                                                 size_t source_line) {
-    char quote='\0';
-    bool escaped=false;
+    MiniAsSourceQuoteState quotes={0};
     const unsigned char *p=(const unsigned char *)line;
     for(;*p!='\0';++p) {
-        if(escaped) {escaped=false;continue;}
-        if(quote!='\0') {
-            if(*p=='\\')escaped=true;
-            else if(*p==(unsigned char)quote)quote='\0';
-        }else if(*p=='"' || *p=='\'') {
-            quote=(char)*p;
-        }else if(*p==1U) {
+        if(minias_source_quote_consumes(&quotes,(char)*p))continue;
+        if(*p==1U) {
             minias_set_error(as,"private-symbol-marker-in-source:line=%zu",
                              source_line);
             return false;
@@ -67,8 +61,7 @@ static bool validate_user_source_private_marker(MiniAs *as,
  * ISA operand parsing and stable across physical input lines. */
 static void strip_gnu_c_comments(const MiniAsTargetOps *target, char *line,
                                  bool *comment_active) {
-    char quote='\0';
-    bool escaped=false;
+    MiniAsSourceQuoteState quotes={0};
     size_t i;
     for(i=0U;line[i]!='\0';++i) {
         if(*comment_active) {
@@ -78,15 +71,7 @@ static void strip_gnu_c_comments(const MiniAsTargetOps *target, char *line,
             }else if(line[i]!='\n' && line[i]!='\r')line[i]=' ';
             continue;
         }
-        if(escaped){escaped=false;continue;}
-        if(quote) {
-            if(line[i]=='\\')escaped=true;
-            else if(line[i]==quote)quote='\0';
-            continue;
-        }
-        if(line[i]=='"' || line[i]=='\'') {
-            quote=line[i];continue;
-        }
+        if(minias_source_quote_consumes(&quotes,line[i]))continue;
         if((target->comment_prefix=='/' &&
             line[i]=='/' && line[i+1U]=='/') ||
            (target->comment_prefix!='/' &&

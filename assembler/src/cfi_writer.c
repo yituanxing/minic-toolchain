@@ -441,7 +441,6 @@ static bool cfi_emit_section_core(MiniAs *as,bool eh,
         debug_base->value=0U;
         debug_base->visibility=MINIAS_STV_HIDDEN;
     }
-    data=&as->sections[(size_t)section];
     for(i=0U;i<as->cfi_proc_count;++i) {
         const MiniAsCfiProc *proc=&as->cfi_procs[i];
         const MiniAsSymbol *begin,*end;
@@ -473,13 +472,13 @@ static bool cfi_emit_section_core(MiniAs *as,bool eh,
         signature=cfi_initial_hash(as,proc,initial_count,eh);
         slot=(size_t)(signature&(uint64_t)(slot_count-1U));
         while(variant_slots[slot]!=0U) {
-            variant_index=variant_slots[slot]-1U;
-            if(cfi_same_initial(as,&variants[variant_index],proc,
+            const size_t candidate=variant_slots[slot]-1U;
+            if(cfi_same_initial(as,&variants[candidate],proc,
                                 initial_count,eh))break;
             slot=(slot+1U)&(slot_count-1U);
         }
         if(variant_slots[slot]==0U) {
-            variant_index=variant_count;
+            const size_t new_index=variant_count;
             MiniAsCfiCieVariant *new_variant=&variants[variant_count++];
             new_variant->first_op=proc->first_op;
             new_variant->prefix_count=initial_count;
@@ -495,8 +494,11 @@ static bool cfi_emit_section_core(MiniAs *as,bool eh,
                                       proc->return_column,
                                       proc->first_op,initial_count,
                                       &new_variant->offset))return false;
-            variant_slots[slot]=variant_index+1U;
+            variant_slots[slot]=new_index+1U;
         }
+        /* Both insertion and reuse now resolve through the one canonical
+         * CIE slot; no branch-dependent variant_index assignment. */
+        variant_index=variant_slots[slot]-1U;
         data=&as->sections[(size_t)section];
         base=data->size;
         if(eh && i==0U && as->target->record_cfi_data_mapping!=NULL &&
@@ -505,8 +507,8 @@ static bool cfi_emit_section_core(MiniAs *as,bool eh,
         /* Target mapping-symbol creation can reallocate the Symbol table. */
         begin=&as->symbols[proc->begin_symbol];
         end=&as->symbols[proc->end_symbol];
+        const size_t cie=variants[variant_index].offset;
         if(eh) {
-            size_t cie=variants[variant_index].offset;
             if(base+4U<cie || base+4U-cie>UINT32_MAX)return false;
             if(!put32(as,section,0U) ||
                !put32(as,section,(uint32_t)(base+4U-cie)))return false;
@@ -526,7 +528,6 @@ static bool cfi_emit_section_core(MiniAs *as,bool eh,
                  MINIAS_FIXUP_ORIGIN_SYNTHETIC_SECTION,section,ptr+4U,
                  MINIAS_FIXUP_SUB,4U,begin->name,0,false)))return false;
         } else {
-            size_t cie=variants[variant_index].offset;
             const unsigned address_size=minias_cfi_abi(as).address_size;
             if(cie>UINT32_MAX)return false;
             if(!put32(as,section,0U) ||
@@ -589,7 +590,6 @@ static bool cfi_emit_section_core(MiniAs *as,bool eh,
         }
         if(!finish_length(as,section,base) ||
            (!eh && !cfi_finalize_debug_length(as,section,base)))return false;
-        data=&as->sections[(size_t)section];
     }
     return true;
 }
