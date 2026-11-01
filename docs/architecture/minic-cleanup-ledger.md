@@ -438,6 +438,38 @@ Core reentry indexed/fallback + subtree、五 ISA `-S`、GNU/MiniC
 x86 原生；GNU Linux Boolean guard GNU AS/LD/原生差分和负向检查。
 没有执行全量 CI、五 ISA ELF/QEMU 或 MiniAS/MiniLD 联合验收。
 
+## 批次 C14：Core source-to-IR 私有边界与地址/事实扫描（仅记录）
+
+**基线：** `394385b`，2026-11-01。本批全文深读 Core **6**
+生产文件、原始 **1,836 行**：core_lower_internal.h（360）、
+core_lower_types.c（185）、core_lower_metadata.c（115）、
+core_lower_bool.c（199）、core_lower_local_effects.c（371）、
+core_lower_address.c（606）。累计 **99/339** 全文深读：
+Frontend **69/69**、Compiler **11/11**、Core **19/48**、Target
+**0/211**。Core 余 **29** 个，Target **211** 个，合计 **240/339**
+待全文深读；接口消费关系核对不能替代五目标运行。
+
+| 主路径 | 合同与清理决定 |
+| --- | --- |
+| `core_lower_internal.h` | 私有接口仍按 assignment、record、varargs、ASM、CFG、fact 等 source-to-Core 语义家族分治；`MinicCoreLowerContext` 借用 FunctionBody 和重入索引，不持有 Target ABI 寄存器。**KEEP(current consumers)**，后续边界重构需把 API 依赖从源语言事实逐步隔离。 |
+| `core_lower_types` 与 `core_ir` | memory scalar transport 与 call scalar transport 当前恰好接受同类标量，但未来 target ABI、GNU `extern void` 对象取址的合同不同；源码 addressable global 不包括普通 void，Core IR symbol table 可承载特殊外部 void。**KEEP(distinct admission contracts)**，不因为当前谓词相似就统一。 |
+| `core_lower_metadata` | Enum 的有效整数 representation 从 Parser snapshot 到 Core、固定寄存器 binding 从 Frontend owner 复制到 Core；不允许 backend 重新读取 C AST 兼容类型。**KEEP(semantic metadata)**。 |
+| `core_lower_bool` | Whole-source 零值 `_Bool` 不变量依赖入口赋零、全部写入纯零、无逃逸/RMW/asm 输出及后续 CFG 重入；每次全程序扫描虽贵，但缺审计证据不能缓存错误阴性结论。**KEEP(fail-closed scan)**。 |
+| `core_lower_local_effects` | AST 子树批量 effect mask 对未知表达式/过深递归保守 poison 全部 local；GNU `__builtin_constant_p` 不执行操作数，不能误报写副作用。更新类 unary 目前以 `operator_kind > MINIC_UNARY_BITWISE_NOT` 区分，依赖历史 4～7 运算符编号；**NEEDS_PROOF(enum ordinal coupling)**，还不是已证明真实 Bug。 |
+| `core_lower_address` | 三种 compound literal 地址都暴露 storage，但数组旧表示、标量 temporary 和 Record snapshot 初始化合同各异；`*&` 快捷路径还必须逃逸 local fact，subscript 对静态 global+纯 0 下标保留 relocation 身份。**KEEP(sequence/provenance)**，不合并为一个地址 emitter。 |
+
+**C14 生产源码 +0/-0，净 0 行**；累计 C1～C14 纯清理仍为
+**净 -240 行**。本批候选 6 组中 **KEEP 5 / NEEDS_PROOF 1 /
+DELETE 0**；明确记录不应删除的逻辑，避免之后凭重复外观破坏语义。
+另有 MC-036 Record 条件表达式两臂事实隔离已由独立 Bug 分支修复，
+复用现有 scalar/void fork/meet 规则而未迁移公共层；重构阶段再审其重复协议。
+
+**验证 PASS：** 当前 Release `-Werror` minic-cc 全源链接；
+`run-core-local-effect-summary.sh` 的 AST 白盒单元、GNU/MiniC
+x86 原生与五 ISA `-S`；`run-gnu-runtime-if-effect-facts.sh`
+的 x86 GNU/MiniC 原生差分和 RV64 `-S`。无实际生产改动，
+完整五 ISA ELF/QEMU 与联合验收仍推迟。
+
 ## 后续批次进度规则
 
 每批发布：当前 HEAD、源文件逐目录覆盖（明确深读与只扫的区别）、
