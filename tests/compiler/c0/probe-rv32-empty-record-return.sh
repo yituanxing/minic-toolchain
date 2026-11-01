@@ -34,6 +34,7 @@ for target in riscv32-linux aarch64-linux loongarch64-linux; do
         -o "$work/union-$target.s" || fail "union target=$target"
 done
 
+independent_pending=0
 for variant in empty nonempty; do
     set --
     if [ "$variant" = nonempty ]; then set -- -DMC057_NONEMPTY_CONTROL; fi
@@ -47,15 +48,19 @@ for variant in empty nonempty; do
     for target in x86_64-linux riscv32-linux riscv64-linux aarch64-linux loongarch64-linux; do
         if [ "$variant" = empty ] && \
            { [ "$target" = x86_64-linux ] || [ "$target" = riscv64-linux ]; }; then
-            # MC-057 still OPEN globally: x86/RV64 are independent ABI gaps.
+            # Other targets own their own MC-057 fixes: either a successful
+            # compile or the existing specific rejection is acceptable here.
+            # Never make the RV32 regression fail when those targets improve.
             if "$mini" --target="$target" -S "$work/$variant.i" \
                 -o "$work/$variant-$target.s" \
                 >"$work/$variant-$target.log" 2>&1; then
-                fail "unexpectedly changed independent ABI target=$target"
+                :
+            else
+                grep -Eq 'Core terminator unsupported|cannot emit RISC-V function' \
+                    "$work/$variant-$target.log" || \
+                    fail "unrelated target failure=$target"
+                independent_pending=$((independent_pending + 1))
             fi
-            grep -Eq 'Core terminator unsupported|cannot emit RISC-V function' \
-                "$work/$variant-$target.log" || \
-                fail "unrelated target failure=$target"
             continue
         fi
         "$mini" --target="$target" -S "$work/$variant.i" \
@@ -119,4 +124,4 @@ if [ "$rv32_elf" = PASS ] && command -v "$gnu_cc" >/dev/null 2>&1 && \
         echo 'MC057_RV32_QEMU=SKIP GNU cross lacks linkable ILP32 runtime' >&2
     fi
 fi
-echo "MC057_RV32_EMPTY_RETURN=PASS historical_RV32=4 GNU_native=2 RV32_empty_S=1 union_typedef_S=3 nonempty_five_ISA_S=5 A64_Loong_empty_S=2 x86_RV64_unfixed=2 x86_nonempty_native=42 RV32_GNU_ELF=$rv32_elf RV32_QEMU=$rv32_qemu"
+echo "MC057_RV32_EMPTY_RETURN=PASS historical_RV32=4 GNU_native=2 RV32_empty_S=1 union_typedef_S=3 nonempty_five_ISA_S=5 A64_Loong_empty_S=2 x86_RV64_pending=$independent_pending x86_nonempty_native=42 RV32_GNU_ELF=$rv32_elf RV32_QEMU=$rv32_qemu"
