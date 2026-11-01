@@ -62,3 +62,55 @@ RV32 global 的本地 ELF 分类尚未迁入 Common；Compiler 的三族 inline
 特化与函数→静态对象→函数裁剪闭包、x86 typed/legacy ASM 双端契约、
 五目标各自 psABI 均未在 R1 修改。特别不应把一次目标 payload 收敛
 解释为“Core 已去 C 化”或“五架构 ABI 已统一”。
+
+## R2：Frontend relocation 旧入口退休；RV32 Global source 契约冻结
+
+**基线：** R1 本地 `df910fd`，PR #674 远端 `dac24b6`，Git tree 相同。
+本批分开核对两个清理接缝，不能把新增 RV32 测试当成 RV32 payload
+重构已完成：`src/target/riscv32/rv32_global_emit.c` 与 R1 **完全一致**。
+
+### 已实际删除的旧接口（A11-01）
+
+- `frontend/ast_global.c` 删掉七个零生产调用者的 relocation 包装函数；
+  `frontend/ast.h` 同步撤掉七组公开声明，**生产 C/H 净删 172 行**。
+  留存 `minic_c0_global_object_add_relocation` 统一 replay/slot/type/duplicate
+  验证，及 Parser 实际调用的 function relocation、integer-object relocation
+  两个有区别的入口。没有改变 canonical `add_global_symbol_relocation`。
+- 历史 `materialize-linux-first500-aggregate-array-v1.py` 从 target-kind
+  七路文本文档模板改为按值复制 relocation、只重定位目标 slot，调用
+  canonical replay；两个手工 `pr75` 脚本也改用带显式 `location_kind`
+  的 canonical relocation 结构。这三个工具不是当前 CI 自动消费者；
+  本批只做 Python 语法验证，**没有声称在旧 pinned checkout 上重演**。
+- `minic_c0_global_object_set_extern` 仍被其他手工历史脚本用作文本模板，
+  本批没有借“零生产 caller”理由误删；它不是已退役的七个 relocation API。
+
+### RV32 迁移止损与新等价门禁（A8-07/A9-09/A11-28/30）
+
+- R2 试接 Common payload planner 的三个 RV32 分支，在保存 Record 全零
+  字段指令、nested Record-array 旧拒绝、weak/显式 section 分流的前提下
+  试验补丁 **+72/-24、净增 48 行**，产生两层分类；**已全部撤回，未提交**。
+  当前 RV32 Record、Record-array、relocation 早已使用 Common walker；
+  remaining section owner 与 ELF32 relocation、弱符号、`.half/.word/.8byte`
+  是真差异，不能拿 RV64 的 R1 删除量套算为 RV32 的重复实现。
+- 新增 14 个 RV32 全局对象 source/ELF/QEMU fixture、恶意 section 负例、
+  裸 ELF32 `_start`，及 `run-rv32-global-plan-abi.sh`；`check-fast` 接入
+  `check-rv32-global-plan-source`，交叉 GNU ELF32/QEMU 另设严格显式目标。
+  同一宿主 GNU 预处理 `.i` 可选 C39/R1 baseline 逐字节对照 `.s`；
+  保留历史 `.bss.* @progbits` 与 GNU NOBITS 不同的事实，不把它算 PASS。
+
+### 已执行的证据与边界
+
+| 证据 | R2 结果 |
+| --- | --- |
+| Release 全量 `-Werror` 构建，Frontend 七接口全树源码消费者检索 | **PASS**；生产调用者零；历史脚本三个模板已迁 |
+| 同一 GNU `.i`，R1 baseline 与 R2，x86-64/A64/Loong/RV32/RV64 五 ISA `.s` | **5/5 逐字节相同**（一个 14 全局对象样本；不是 ELF/QEMU） |
+| RV32 14 object source gate + section 注入拒绝 + baseline 对照 | **PASS**（14/14、同 `.i`、`.s` byte identical） |
+| RV64 R1 source gate、GNU constant record、shared CALL relocation、static const、dead static graph、global object 目标检查 | **PASS**（现有定点门禁） |
+| `check-minic-target-boundaries.sh` | **PASS**；历史 review manifest `drift=144` stale fingerprints 仍另计 |
+| 历史 Python 脚本语法、`sh -n`、`git diff --check` | **PASS**；历史 materializer end-to-end **NOT_RUN** |
+| RV32 GNU `as/ld/readelf`、ELF32 symbol/relocation、QEMU 双二进制 | **BLOCKED / exit 2**（缺 `riscv64-linux-gnu-gcc`）；不冒充 PASS |
+
+**下批门槛：** RV32 真 GNU ELF32 oracle 装齐后再考虑 section/weak
+策略层抽象；不能为了接入 planner 而增加双份 source admission。
+Frontend 其他纯历史模板由各自 pinned checkout 单独验收；本批不清除
+被工具引用的 `set_extern`，不修改 inline、Core prune 或目标 ABI。

@@ -195,7 +195,7 @@ static bool materialize_static_aggregate_array_action(
     for (index = 0U; index < action->relocation_count; ++index) {
         const MinicGlobalRelocation *relocation;
         size_t location_index;
-        bool recorded;
+        MinicGlobalRelocation rebased;
 
         relocation = &action->relocations[index];
         if (relocation->location_index > SIZE_MAX - destination_begin) {
@@ -203,49 +203,10 @@ static bool materialize_static_aggregate_array_action(
             return false;
         }
         location_index = destination_begin + relocation->location_index;
-        if (relocation->target_kind == MINIC_GLOBAL_RELOCATION_LABEL) {
-            recorded = minic_c0_global_object_add_label_relocation(
-                parser->program,
-                object_id,
-                relocation->location_kind,
-                location_index,
-                (MinicStatementId)relocation->target_id);
-        } else if (relocation->target_kind == MINIC_GLOBAL_RELOCATION_FUNCTION) {
-            recorded = relocation->has_explicit_pointer_cast
-                           ? minic_c0_global_object_add_function_relocation_cast(
-                                 parser->program,
-                                 object_id,
-                                 relocation->location_kind,
-                                 location_index,
-                                 (MinicFunctionId)relocation->target_id)
-                           : minic_c0_global_object_add_function_relocation(
-                                 parser->program,
-                                 object_id,
-                                 relocation->location_kind,
-                                 location_index,
-                                 (MinicFunctionId)relocation->target_id);
-        } else {
-            recorded = relocation->has_explicit_pointer_cast
-                           ? minic_c0_global_object_add_object_relocation_path_addend_cast(
-                                 parser->program,
-                                 object_id,
-                                 relocation->location_kind,
-                                 location_index,
-                                 (MinicGlobalObjectId)relocation->target_id,
-                                 relocation->target_member_indices,
-                                 relocation->target_member_depth,
-                                 relocation->target_byte_addend)
-                           : minic_c0_global_object_add_object_relocation_path_addend(
-                                 parser->program,
-                                 object_id,
-                                 relocation->location_kind,
-                                 location_index,
-                                 (MinicGlobalObjectId)relocation->target_id,
-                                 relocation->target_member_indices,
-                                 relocation->target_member_depth,
-                                 relocation->target_byte_addend);
-        }
-        if (!recorded) {
+        rebased = *relocation;
+        rebased.location_index = location_index;
+        if (!minic_c0_global_object_add_relocation(
+                parser->program, object_id, &rebased)) {
             minic_parser_error(parser, "cannot materialize static aggregate array relocation");
             return false;
         }

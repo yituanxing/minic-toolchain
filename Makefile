@@ -2017,3 +2017,18 @@ check-fast: check-rv64-global-plan-source
 check-rv64-global-plan-gnu-elf: $(MINIC_CC_BINARY)
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" BUILD_DIR="$(abspath $(BUILD_DIR))" \
 	  MINIC_RV64_GLOBAL_GNU_ELF=1 sh tests/compiler/c0/run-rv64-global-plan-abi.sh
+
+# RV32 GlobalEmissionPlan migration: same GNU-preprocessed C -> MiniC .s
+# source gate (optionally byte-diff C39), plus a strict GNU ELF32/QEMU target.
+# Source is short and requires no cross tools; the full gate fails BLOCKED/2
+# when GNU RV32 as/ld/readelf or qemu-riscv32 is missing.
+.PHONY: check-rv32-global-plan-source check-rv32-global-plan-gnu-elf
+check-rv32-global-plan-source: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" BUILD_DIR="$(abspath $(BUILD_DIR))" \
+	  sh tests/compiler/c0/run-rv32-global-plan-abi.sh
+
+check-fast: check-rv32-global-plan-source
+
+check-rv32-global-plan-gnu-elf: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" BUILD_DIR="$(abspath $(BUILD_DIR))" \
+	  MINIC_RV32_GLOBAL_GNU_ELF=1 sh tests/compiler/c0/run-rv32-global-plan-abi.sh

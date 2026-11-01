@@ -1356,41 +1356,6 @@ bool minic_c0_global_object_add_function_relocation(MinicC0Program *program,
                                         false);
 }
 
-bool minic_c0_global_object_add_function_relocation_cast(
-    MinicC0Program *program,
-    MinicGlobalObjectId global_object_id,
-    MinicGlobalRelocationLocationKind location_kind,
-    size_t location_index,
-    MinicFunctionId function_id) {
-    return add_global_symbol_relocation(program,
-                                        global_object_id,
-                                        location_kind,
-                                        location_index,
-                                        MINIC_GLOBAL_RELOCATION_FUNCTION,
-                                        function_id,
-                                        NULL,
-                                        0U,
-                                        0,
-                                        true);
-}
-
-bool minic_c0_global_object_add_label_relocation(MinicC0Program *program,
-                                                 MinicGlobalObjectId global_object_id,
-                                                 MinicGlobalRelocationLocationKind location_kind,
-                                                 size_t location_index,
-                                                 MinicStatementId label_statement_id) {
-    return add_global_symbol_relocation(program,
-                                        global_object_id,
-                                        location_kind,
-                                        location_index,
-                                        MINIC_GLOBAL_RELOCATION_LABEL,
-                                        label_statement_id,
-                                        NULL,
-                                        0U,
-                                        0,
-                                        false);
-}
-
 bool minic_c0_global_object_set_extern(MinicC0Program *program,
                                        MinicGlobalObjectId global_object_id) {
     MinicGlobalObject *object;
@@ -1405,48 +1370,6 @@ bool minic_c0_global_object_set_extern(MinicC0Program *program,
     }
     object->is_extern = true;
     return true;
-}
-
-bool minic_c0_global_object_add_object_relocation_path_addend(
-    MinicC0Program *program,
-    MinicGlobalObjectId global_object_id,
-    MinicGlobalRelocationLocationKind location_kind,
-    size_t location_index,
-    MinicGlobalObjectId target_object_id,
-    const size_t *target_member_indices,
-    size_t target_member_depth,
-    int64_t target_byte_addend) {
-    return add_global_symbol_relocation(program,
-                                        global_object_id,
-                                        location_kind,
-                                        location_index,
-                                        MINIC_GLOBAL_RELOCATION_OBJECT,
-                                        target_object_id,
-                                        target_member_indices,
-                                        target_member_depth,
-                                        target_byte_addend,
-                                        false);
-}
-
-bool minic_c0_global_object_add_object_relocation_path_addend_cast(
-    MinicC0Program *program,
-    MinicGlobalObjectId global_object_id,
-    MinicGlobalRelocationLocationKind location_kind,
-    size_t location_index,
-    MinicGlobalObjectId target_object_id,
-    const size_t *target_member_indices,
-    size_t target_member_depth,
-    int64_t target_byte_addend) {
-    return add_global_symbol_relocation(program,
-                                        global_object_id,
-                                        location_kind,
-                                        location_index,
-                                        MINIC_GLOBAL_RELOCATION_OBJECT,
-                                        target_object_id,
-                                        target_member_indices,
-                                        target_member_depth,
-                                        target_byte_addend,
-                                        true);
 }
 
 bool minic_c0_global_object_add_integer_object_relocation_path_addend(
@@ -1479,51 +1402,6 @@ bool minic_c0_global_object_add_integer_object_relocation_path_addend(
                                         target_member_depth,
                                         target_byte_addend,
                                         false);
-}
-
-bool minic_c0_global_object_add_object_relocation_path(
-    MinicC0Program *program,
-    MinicGlobalObjectId global_object_id,
-    MinicGlobalRelocationLocationKind location_kind,
-    size_t location_index,
-    MinicGlobalObjectId target_object_id,
-    const size_t *target_member_indices,
-    size_t target_member_depth) {
-    return minic_c0_global_object_add_object_relocation_path_addend(program,
-                                                                    global_object_id,
-                                                                    location_kind,
-                                                                    location_index,
-                                                                    target_object_id,
-                                                                    target_member_indices,
-                                                                    target_member_depth,
-                                                                    0);
-}
-
-bool minic_c0_global_object_add_object_relocation_path_cast(
-    MinicC0Program *program,
-    MinicGlobalObjectId global_object_id,
-    MinicGlobalRelocationLocationKind location_kind,
-    size_t location_index,
-    MinicGlobalObjectId target_object_id,
-    const size_t *target_member_indices,
-    size_t target_member_depth) {
-    return minic_c0_global_object_add_object_relocation_path_addend_cast(program,
-                                                                         global_object_id,
-                                                                         location_kind,
-                                                                         location_index,
-                                                                         target_object_id,
-                                                                         target_member_indices,
-                                                                         target_member_depth,
-                                                                         0);
-}
-
-bool minic_c0_global_object_add_object_relocation(MinicC0Program *program,
-                                                  MinicGlobalObjectId global_object_id,
-                                                  MinicGlobalRelocationLocationKind location_kind,
-                                                  size_t location_index,
-                                                  MinicGlobalObjectId target_object_id) {
-    return minic_c0_global_object_add_object_relocation_path(
-        program, global_object_id, location_kind, location_index, target_object_id, NULL, 0U);
 }
 
 bool minic_c0_global_object_set_flexible_array_initializer_count(

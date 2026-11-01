@@ -1037,56 +1037,6 @@ bool minic_c0_global_object_add_function_relocation(MinicC0Program *program,
                                                     MinicGlobalRelocationLocationKind location_kind,
                                                     size_t location_index,
                                                     MinicFunctionId function_id);
-bool minic_c0_global_object_add_function_relocation_cast(
-    MinicC0Program *program,
-    MinicGlobalObjectId global_object_id,
-    MinicGlobalRelocationLocationKind location_kind,
-    size_t location_index,
-    MinicFunctionId function_id);
-bool minic_c0_global_object_add_label_relocation(MinicC0Program *program,
-                                                 MinicGlobalObjectId global_object_id,
-                                                 MinicGlobalRelocationLocationKind location_kind,
-                                                 size_t location_index,
-                                                 MinicStatementId label_statement_id);
-bool minic_c0_global_object_add_object_relocation(MinicC0Program *program,
-                                                  MinicGlobalObjectId global_object_id,
-                                                  MinicGlobalRelocationLocationKind location_kind,
-                                                  size_t location_index,
-                                                  MinicGlobalObjectId target_object_id);
-bool minic_c0_global_object_add_object_relocation_path(
-    MinicC0Program *program,
-    MinicGlobalObjectId global_object_id,
-    MinicGlobalRelocationLocationKind location_kind,
-    size_t location_index,
-    MinicGlobalObjectId target_object_id,
-    const size_t *target_member_indices,
-    size_t target_member_depth);
-bool minic_c0_global_object_add_object_relocation_path_cast(
-    MinicC0Program *program,
-    MinicGlobalObjectId global_object_id,
-    MinicGlobalRelocationLocationKind location_kind,
-    size_t location_index,
-    MinicGlobalObjectId target_object_id,
-    const size_t *target_member_indices,
-    size_t target_member_depth);
-bool minic_c0_global_object_add_object_relocation_path_addend(
-    MinicC0Program *program,
-    MinicGlobalObjectId global_object_id,
-    MinicGlobalRelocationLocationKind location_kind,
-    size_t location_index,
-    MinicGlobalObjectId target_object_id,
-    const size_t *target_member_indices,
-    size_t target_member_depth,
-    int64_t target_byte_addend);
-bool minic_c0_global_object_add_object_relocation_path_addend_cast(
-    MinicC0Program *program,
-    MinicGlobalObjectId global_object_id,
-    MinicGlobalRelocationLocationKind location_kind,
-    size_t location_index,
-    MinicGlobalObjectId target_object_id,
-    const size_t *target_member_indices,
-    size_t target_member_depth,
-    int64_t target_byte_addend);
 bool minic_c0_global_object_add_integer_object_relocation_path_addend(
     MinicC0Program *program,
     MinicGlobalObjectId global_object_id,
