@@ -507,6 +507,36 @@ stdout 完全一致 `7 0 3 1`，五 ISA `-S` 全过。AND 用例在 RV32/RV64
 `bits/libc-header-start.h` 未执行完成，**不计 PASS**。五目标完整
 ELF/QEMU、MiniAS/MiniLD 和联合验收均未进行。
 
+## 批次 C16：Core 表达式总分发、标量比较与跨块值快照
+
+**基线：** C15 远端提交 `6d21e85`，2026-11-01。本批全文深读
+Core **3** 个生产文件、原始 **3,693 行**：
+`core_lower_expression.c`（1,360）、`core_lower_expr_scalar.c`（1,360）、
+`core_lower_scalar_values.c`（973）。累计 **106/339** 全文深读：
+Frontend **69/69**、Compiler **11/11**、Core **26/48**、Target
+**0/211**。Core 余 **22** 个、Target **211** 个，合计 **233/339**
+生产文件待全文深读。
+
+| 消费链/重复外观 | 本批清理决定 |
+| --- | --- |
+| `lower_expression` 分发次序 | Bit-field read、record member、fixed register、vector/普通 lvalue、`discard`、statement/conditional/sequenced、Call、更新类 Unary、arithmetic 是有重叠前提的有序语义 owner。`ADDRESS_OF(function)` 的函数设计符指针和 `ADDRESS_OF(local)` 的存储地址不能共用路径；丢弃非 volatile lvalue 不需要读值，但仍须计算带副作用的地址。**KEEP(admission + evaluation order)**。 |
+| `minic_core_lower_internal_lower_expression_statement` | Direct Record-return CALL 已在上方的 `record_materialized_address` 分支 **无条件返回**（包括失败状态）；下方普通 CALL 分支内再次检测完全相同的 direct Record-return 谓词，其 `minic_core_lower_direct_record_call_object` 调用永远不可达。**DELETE(unreachable duplicate handler)**，一并去掉该分支内多余作用域，不改变任何真正执行的 Call。 |
+| `core_lower_expr_scalar.c` | popcount 由目标宽度 32/64 的 SWAR 常数运算实现，`ffsll` 必须按 64 位 unsigned 计算；bswap 在做多次移位前只求值一次。整数、指针、binary64 与 binary128 关系比较各自的转换/NaN/交换规则不同，尤其 `long double` 比较的 helper 返回条件不能与整数 `LESS` 机械统一。**KEEP(typed comparison owners)**。 |
+| `core_lower_scalar_values.c` | `core_scalar_rhs_stays_in_block` 是**不产生新 Core basic block**的保守结构证明，不是纯度检查；证明为真时可免左值 spill，但仍在 RHS lowering 后复核 block ID。未知 AST、过深递归及 short circuit 均 fail-closed；浮点二元、指针运算、Runtime helper 需保留先计算 LHS → spill → RHS → reload 的 Core SSA 语义。**KEEP(block-local proof + snapshot)**。 |
+| 隐含结构耦合 | `core_scalar_rhs_stays_in_block` 依赖 `MINIC_UNARY_BITWISE_NOT` 运算符排序认定纯 Unary，呼应 C14 的 `core_lower_local_effects` ordinal 线索。**NEEDS_PROOF(enum ordinal coupling)**；枚举排序改变前需补不变量/探针，但当前不擅自替换为假设相同的判断。`MINIC_OPT_PURE_DISCARDED_ADDRESS_EQ` 仍是显式 opt-in，不视为可无条件开启的死开关。 |
+
+**C16 生产源码：** `core_lower_expression.c` **+32/-42，净 -10 行**；
+C1～C16 纯清理累计 **净 -261 行**。没有改表达式静态可接受集合、
+Call/Record ABI、Core IR enum、Target 规则或 Linux 诊断。独立 MC
+修复不计入本次删行。
+
+**验证 PASS：** Release `-Werror` minic-cc、minic 完整链接；
+`run-small-record-copy-return.sh`（真实 source → Core → RV64 `-S`）；
+`run-record-conditional-materialization.sh`（Record 条件值、直接 Record
+CALL 实参一次求值、x86 GNU AS/LD 原生和 RV64 GAS 静态检查）。
+未运行全五 ISA ELF/QEMU、MiniAS/MiniLD 联合验收；新旧 Core
+表达式分支的动态等价性只以现有定点回归和静态不可达证明为界。
+
 ## 后续批次进度规则
 
 每批发布：当前 HEAD、源文件逐目录覆盖（明确深读与只扫的区别）、
