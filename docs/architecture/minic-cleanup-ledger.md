@@ -843,6 +843,43 @@ GNU native exit42、非法 suffix fail-closed）、
 `check-builtin-lexeme-contract`（五 ISA 内建词法 source 和 GNU/MiniC
 x86 native）。本批没有 GNU cross ELF/QEMU 全面验收。
 
+## 批次 C26：Target/common 的 Core 事实、对象区间与栈槽（仅审读）
+
+**基线：** C25 已推送 `6b1c45cf`，2026-11-01。本批逐文件全文
+深读 `src/target/common` 的 `core_*` 与 `aggregate_shape.*`，共
+**24 个生产文件、2,365 行**：`aggregate_shape.c/.h`、
+`core_block_walk.h`、`core_call_index.c`、`core_call_view.c/.h`、
+`core_frame_layout.h`、`core_function_facts.c/.h`、
+`core_function_plan.c/.h`、`core_instruction_family.h`、
+`core_numeric_shape.c/.h`、`core_object_intervals.c/.h`、
+`core_object_reuse.c/.h`、`core_object_storage.c/.h`、
+`core_spill_layout.c/.h`、`core_value_slots.c/.h`。
+累计 **171/339** 全文深读：Frontend **69/69**、Compiler
+**11/11**、Core **48/48**、Target **43/211**；Target 余
+**168** 个文件。这里只做合同/耦合清点，不提前移动 owner。
+
+| Common 子域 | 实际合同、耦合与清理决定 |
+| --- | --- |
+| `aggregate_shape` | 依 DataLayout 提供 aggregate 的存储 byte 数、alignment、word 数及整数叶树；**存储形状不能直接代替 psABI 的 FP/整数寄存器分配**，特别是 RV64 LP64D 的 union/FP member。**KEEP(storage facts; ABI belongs to target)**；MC-059 独立修复中。 |
+| `core_call_view` / `core_call_index` | 验证 direct/indirect CALL callee、source 形参/返回值 kind、record/object 及 typed function-pointer 一致性；call index 按 instruction ID 稀疏排序后检索，view 借用 Core function 寿命。这里只有 *Core 合法调用形状*，真正 arg registers/variadic psABI 在各机器端。**KEEP(typed preflight and borrowed lifetime)**；MC-080 间接变参 aggregate 仍需 ABI 证明。 |
+| `core_function_facts` / `core_function_plan` | 一次 Core verifier 产出 immutable verified-function identity、call facts、对象存储和 call index；函数扫描记录直接/间接调用、最大源实参数、inline asm、dynalloc、va_start 与保守保存 RA 的条件；释放路径反向对应所有权。事实按 Core lexical instructions 收集，**不是**源码可达性证明，不能用来实现 MC-085 诊断。**KEEP(one verified handoff)**。 |
+| `core_instruction_family` / `core_block_walk` | 指令族枚举供语义检查、扫描和机器 preflight 复用，族归属不代表任一 ISA 已实现；block walker 可利用 visible bitmap 但仍按 block 链接顺序迭代。**KEEP(semantic classification, not capability)**。 |
+| `core_numeric_shape` | 带符号/无符号宽度、mixed signedness、溢出检测、窄结果和 CLZ/CTZ 的 Core 合法性辅助；算术定义不授权宿主有符号 UB，也不保证机器 flags/carry/widen 序列。**KEEP(source legal shape vs target opcode)**。 |
+| `core_object_storage` / `core_frame_layout` | DataLayout extent × element count、额外 alignment、size 算术均在溢出边界做保护；storage plan 的 acquire 可借用共享只读对象，release 只能释放其 own-fallback；frame reserve 只是对齐/区域计算，不决定栈增长方向、callee-save 或 psABI。**KEEP(borrowed/owned distinction)**。 |
+| `core_object_intervals` / `core_object_reuse` | 以 ValueId 反向使用索引和保守单 block 访问判定对象生命区间：只认可直接 LOAD/STORE，derived address、CALL、ASM、跨 block 等均不放行；对 4/8B 单元建冲突图分配可复用栈槽，分配失败 fail-closed。**NEEDS_PROOF(ownership leak)**：虽在 `common`，实为 RV64 私用优化，将来要分清共享算法与 RV64 policy；不可仅因目录名就广泛复用。 |
+| `core_spill_layout` / `core_value_slots` | 前者服务 RV32/RV64 SSA spill 的 4/8B 单元和最后使用点：先分配指令结果、再释放输入，终结指令消费也计入；后者是 direct A64/Loong 路径给 128-bit、long double、vector 的宽值 sidecar，不是同一个物理槽策略。**KEEP(two distinct consumers)**，不可把不同 ABI 的 slot policy 合并。 |
+| 冗余候选判断 | 此批没有证明可删的生产代码完全重复实现；`core_object_reuse` 的冲突图分配存在潜在二次复杂度，但更换算法须另立性能/正确性证明。**KEEP / NEEDS_PROOF**，不以推测做删除。 |
+
+**C26 生产源码 +0/-0，净 0 行**；C1～C26 纯清理累计
+**净 -331 行**。本批主要产物是对 Core 与机器 ABI 的权责地图，
+特别标记 RV64 私有逻辑放在 common 的耦合，以及 Core lexical
+call census 不等于 source reachable diagnostics 的陷阱。
+
+**验证 PASS：** `make MODE=release CFLAGS=-Werror -j8
+check-core-ir-shapes check-layout check-rv64-abi`；Core IR shapes
+native 11/11、ASan/UBSan 11/11，DataLayout 与 RV64 ABI 单测
+通过。本批没有进行五目标 GNU ELF/QEMU 联合验收。
+
 ## 后续批次进度规则
 
 每批发布：当前 HEAD、源文件逐目录覆盖（明确深读与只扫的区别）、
