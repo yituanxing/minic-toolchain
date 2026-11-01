@@ -869,7 +869,7 @@ bool minias_emit_instruction_bytes(MiniAs *as,
                                    const void *data, size_t size);
 /* A target may choose padding bytes based on the preceding Fragment class.
  * Common owns source order, subsection identity and adjacency rules. */
-bool minias_code_alignment_preceded_by_adjacent_data(const MiniAs *, int section);
+bool minias_code_alignment_preceded_by_adjacent_data(const MiniAs *);
 bool minias_section_append(MiniAs *as, int section_index, const void *data, size_t size);
 bool minias_section_append_zero(MiniAs *as, int section_index, size_t size);
 void minias_set_error(MiniAs *as, const char *format, ...);

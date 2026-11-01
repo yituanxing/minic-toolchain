@@ -22,6 +22,7 @@ bash tests/assembler/probe-macro-failure-cleanup.sh
 bash tests/assembler/probe-source-collector-nesting-gnu.sh
 bash tests/assembler/probe-source-if-common-gnu.sh
 bash tests/assembler/probe-x86-pair-alignment-gnu.sh
+bash tests/assembler/probe-x86-adjacent-data-alignment-gnu.sh
 bash tests/assembler/probe-x86-unary-register-gnu.sh
 bash tests/assembler/probe-source-long-physical-line-gnu.sh
 bash tests/assembler/probe-source-eof-owner-gnu.sh

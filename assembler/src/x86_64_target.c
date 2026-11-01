@@ -4774,14 +4774,13 @@ static bool x64_code_align(MiniAs *as,const MiniAsStmt *stmt,size_t n) {
     const bool legacy32=as->output_elf32 && stmt->site.mode_bits==X64_CODE32;
     const bool legacy16=as->output_elf32 &&
         x64_mode16(stmt->site.mode_bits);
-    const int section=stmt->section;
     /* GNU GAS leaves a single 0x90 at the beginning of a code-alignment
      * fragment immediately following a raw DATA fragment, then fills the
      * remainder with its canonical multi-byte table. This differs from
      * alignment after a machine INSN (or another ALIGN) and matters to
      * byte-exact Linux .S comparisons. Common owns the predecessor and
      * subsection test; Target only chooses the machine-specific NOP bytes. */
-    if(n!=0U && minias_code_alignment_preceded_by_adjacent_data(as,section)) {
+    if(n!=0U && minias_code_alignment_preceded_by_adjacent_data(as)) {
         if(!minias_emit_instruction_bytes(as,nops[0],1U))return false;
         --n;
     }

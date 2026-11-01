@@ -1,5 +1,23 @@
 # MiniAS full production-source review ledger — 2026-10-29
 
+> **最新状态导航（2026-11-01）**：先阅读
+> [当前清理与所有权总览](current-cleanup-map-2026-11-01.md)。
+> 本文保留带 SHA 的历史证据；下文旧条目出现的“等待 CI”、
+> 1024/256 字节收集器上限、完全不支持 RV `.option arch,+zbb/+v`
+> 和早期测试文件数量，均不能自动当作最新 HEAD 的事实。
+> “读过 / 修改过 / 完成清理”必须分别统计。
+
+### 2026-11-01 全局回看：删除 x86 ALIGN 的多余 Section 选择参数
+
+`minias_code_alignment_preceded_by_adjacent_data` 只有 x86
+Target 调用，而且调用者传入的 `section` 恒为活动 Fragment 的
+`stmt->section`。因此删除这个重复参数和 `owner->section==section`
+恒等判断，Common 只检查前驱 Fragment 的
+`previous->section==owner->section`、子段和真实字节相邻条件。
+x86 机器 NOP 策略与原有布局算法都保留。A0 增加独立的 GNU
+逐字节对照，覆盖 DATA 后 .p2align、max-skip 以及显式 0x90 填充。
+这是对 P04 的一次实际接口收口，不是重构或完成全部 P04。
+
 ### 2026-11-01 shared literal decoder failure-path cleanup
 
 The single Common string-literal decoder `assembler/src/string_literal.c` had

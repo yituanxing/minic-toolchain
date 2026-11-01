@@ -1227,21 +1227,20 @@ bool minias_emit_instruction_bytes(MiniAs *as,
 /* Source-order and final position are Common-owned properties, not private
  * target parser data.  The x86 padding policy queries this site predicate
  * without reaching through MiniAs into neighboring retained statements. */
-bool minias_code_alignment_preceded_by_adjacent_data(const MiniAs *as,
-                                                      int section) {
+bool minias_code_alignment_preceded_by_adjacent_data(const MiniAs *as) {
     const MiniAsStmt *owner, *previous;
     if(as==NULL || !as->emitting_fragment ||
        as->emitting_fragment_id==0U ||
        as->emitting_fragment_id>=as->stmt_count)return false;
     owner=&as->stmts[as->emitting_fragment_id];
     previous=&as->stmts[as->emitting_fragment_id-1U];
+    /* Active Fragment owns Section; only predecessor needs comparison. */
     return owner->fragment_kind==MINIAS_FRAGMENT_ALIGNMENT &&
-           owner->section==section &&
            (previous->fragment_kind==MINIAS_FRAGMENT_FIXED_DATA ||
             previous->fragment_kind==MINIAS_FRAGMENT_FILL ||
             previous->fragment_kind==MINIAS_FRAGMENT_SPACE ||
             previous->fragment_kind==MINIAS_FRAGMENT_BYTES) &&
-           previous->section==section &&
+           previous->section==owner->section &&
            previous->subsection==owner->subsection &&
            previous->offset<=UINT64_MAX-previous->size &&
            previous->offset+previous->size==owner->offset;
