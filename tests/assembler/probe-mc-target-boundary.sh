@@ -392,8 +392,32 @@ PY
 # Code alignment is a Target-owned NOP policy but still emits through the
 # identical MC byte transaction as every instruction. No architecture gets
 # a special direct-Section bridge for ALIGN or for an instruction emitter.
-grep -q 'return minias_emit_instruction_bytes(as, section, bytes, sizeof(bytes));' \
+grep -q 'return minias_emit_instruction_bytes(as, bytes, sizeof(bytes));' \
     assembler/src/aarch64_target.c
+# All CodeEmitters now bind the destination Section internally to the
+# active fragment. No Target is permitted to pass an explicit Section
+# argument, including during executable ALIGN/NOP production.
+python3 - <<'PY'
+from pathlib import Path
+import re
+header=Path('assembler/src/minias_internal.h').read_text()
+core=Path('assembler/src/assembler.c').read_text()
+signature=header.split('bool minias_emit_instruction_bytes(',1)[1].split(');',1)[0]
+if re.search(r'\b(?:int\s+section|section_index)\b',signature):
+    raise SystemExit('Target-visible byte emission still selects Section')
+start=core.index('bool minias_emit_instruction_bytes(')
+end=core.index('bool minias_code_alignment_preceded_by_adjacent_data(',start)
+body=core[start:end]
+if 'section_index=owner->section;' not in body:
+    raise SystemExit('CodeEmitter does not derive Section from active Fragment')
+for name in ('riscv_target.c','riscv_encode.c','aarch64_target.c',
+             'x86_64_target.c','loongarch64_target.c'):
+    code=Path('assembler/src',name).read_text()
+    if re.search(r'minias_emit_instruction_bytes\s*\(\s*as\s*,\s*'
+                 r'(?:section|section_index|stmt->section|s->section)\s*,',code):
+        raise SystemExit('Target supplies a Section for code bytes: '+name)
+print('MINIAS_MC_BYTE_OUTPUT_OWNER=PASS target_sections=none fragment_owner=1')
+PY
 grep -q 'minias_emit_instruction_bytes' assembler/src/riscv_target.c
 grep -q 'minias_emit_instruction_bytes' assembler/src/x86_64_target.c
 grep -q 'minias_emit_instruction_bytes' assembler/src/loongarch64_target.c

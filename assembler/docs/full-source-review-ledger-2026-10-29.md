@@ -313,6 +313,20 @@ path. `TargetOps.encode(MiniAs*,Stmt*)` is still a broad callback:
 this batch does **not** claim complete Encode capability isolation.
 Preserve the four-Target A0/GNU/ELF/link/QEMU gates on the exact HEAD.
 
+### 2026-11-01 update target-boundary test after byte output capability reduction
+
+The preexisting `probe-mc-target-boundary.sh` still required the old
+`minias_emit_instruction_bytes(as, section, bytes, size)` spelling
+in the AArch64 source. The new byte emitter intentionally **cannot
+accept a Target-selected section**, so this stale text assertion
+failed the exact-head ISA/ABI workflow after the production code had
+built with `-Werror`. Replace the old check with a stronger
+contract: AArch64 must use the new two-operand byte payload API,
+Common must derive Section from the active Fragment, the internal
+header must not expose a Section selector, and no one of the five
+Target files may pass a Section as a byte-output argument.
+Do not skip any existing A0, GNU, semantic Fixup or runtime probe.
+
 ## Current refactor dashboard — 2026-11-01 (exact-head recovery and live-path audit)
 
 ### 2026-11-01 Source collector single-pass de-duplication (local batch)
