@@ -1357,7 +1357,9 @@ static bool parse_runtime_record_designated_tail(MinicParser *parser, MinicExpre
 static bool parse_positional_runtime_record_initializer_from(MinicParser *parser,
                                                              MinicExpressionId target_id,
                                                              MinicSourcePosition begin,
-                                                             size_t initial_field_index) {
+                                                             size_t initial_field_index,
+                                                             MinicExpressionId designator_root_id,
+                                                             bool *closed) {
     const MinicExpression *target;
     const MinicRecord *record;
     MinicRecordId record_id;
@@ -1394,6 +1396,13 @@ static bool parse_positional_runtime_record_initializer_from(MinicParser *parser
         MinicSourceSpan member_span;
 
         if (field_index >= field_limit) {
+            /* Designator continuations can exhaust a nested anonymous or
+             * named aggregate before reaching the enclosing record. Leave
+             * the next positional token for that enclosing record. */
+            if (closed != NULL) {
+                *closed = false;
+                return true;
+            }
             minic_parser_error(parser, "too many positional record initializers");
             return false;
         }
@@ -1493,7 +1502,11 @@ static bool parse_positional_runtime_record_initializer_from(MinicParser *parser
             }
             if (parser->current.kind == MINIC_TOKEN_DOT) {
                 initializer_span.end = parser->current.span.end;
-                if (!zero_runtime_record_fields_from(parser,
+                /* Designated roots were zero-filled before any designator.
+                 * Do not clear fields already written by earlier designators
+                 * when this continuation switches back to dotted syntax. */
+                if (closed == NULL &&
+                    !zero_runtime_record_fields_from(parser,
                                                      target_id,
                                                      record_id,
                                                      &field_index,
@@ -1501,7 +1514,9 @@ static bool parse_positional_runtime_record_initializer_from(MinicParser *parser
                                                      initializer_span)) {
                     return false;
                 }
-                return parse_runtime_record_designated_tail(parser, target_id);
+                if (closed != NULL) *closed = true;
+                return parse_runtime_record_designated_tail(parser,
+                    closed != NULL ? designator_root_id : target_id);
             }
         } else if (parser->current.kind != MINIC_TOKEN_RBRACE) {
             minic_parser_error(parser, "expected ',' or '}' in positional record initializer");
@@ -1510,11 +1525,87 @@ static bool parse_positional_runtime_record_initializer_from(MinicParser *parser
     }
     initializer_span.end = parser->current.span.end;
 
-    if (!zero_runtime_record_fields_from(
+    if (closed == NULL &&
+        !zero_runtime_record_fields_from(
             parser, target_id, record_id, &field_index, field_limit, initializer_span)) {
         return false;
     }
+    if (closed != NULL) *closed = true;
     return minic_parser_advance(parser);
+}
+
+/* The last MEMBER of a promoted designator belongs to the innermost
+ * anonymous record, not necessarily the record being initialized. Resume
+ * positional entries at the deepest record with an available next field,
+ * and move outward when a braceless nested aggregate is exhausted. */
+static bool parse_runtime_record_designator_positional_resume(
+    MinicParser *parser,
+    MinicExpressionId root_id,
+    MinicExpressionId designated_id,
+    MinicSourcePosition begin,
+    size_t legacy_top_level_index) {
+    struct RecordCursor {
+        MinicExpressionId record_id;
+        size_t field_index;
+    } cursors[MINIC_RECORD_MEMBER_MAX_DEPTH];
+    MinicExpressionId current_id = designated_id;
+    size_t depth = 0U;
+    size_t index;
+
+    /* Array designators can end in a subscript rather than MEMBER. Preserve
+     * their existing top-level continuation until array-element cursors are
+     * modeled separately. */
+    for (;;) {
+        const MinicExpression *member =
+            minic_c0_program_expression(parser->program, current_id);
+        const MinicExpression *address;
+        MinicExpressionId owner_id;
+
+        if (member == NULL || member->kind != MINIC_EXPRESSION_MEMBER ||
+            depth >= MINIC_RECORD_MEMBER_MAX_DEPTH) break;
+        address = minic_c0_program_expression(parser->program,
+                                               member->value.member.base);
+        if (address == NULL || address->kind != MINIC_EXPRESSION_ADDRESS_OF) break;
+        owner_id = address->value.unary.operand;
+        cursors[depth].record_id = owner_id;
+        cursors[depth].field_index = member->value.member.field_index;
+        ++depth;
+        if (owner_id == root_id) break;
+        current_id = owner_id;
+    }
+    if (depth == 0U || cursors[depth - 1U].record_id != root_id) {
+        return parse_positional_runtime_record_initializer_from(
+            parser, root_id, begin, legacy_top_level_index + 1U, root_id, NULL);
+    }
+
+    for (index = 0U; index < depth; ++index) {
+        const MinicExpression *owner =
+            minic_c0_program_expression(parser->program, cursors[index].record_id);
+        const MinicRecord *record =
+            owner != NULL && minic_type_is_record(owner->type)
+                ? minic_c0_program_record(parser->program, owner->type.record_id)
+                : NULL;
+        size_t limit;
+        size_t next_field;
+        bool closed;
+
+        if (record == NULL || !record->is_complete) return false;
+        limit = record->is_union ? (record->field_count == 0U ? 0U : 1U)
+                                 : record->field_count;
+        /* Any selected union field exhausts the union; its physical field
+         * index can exceed zero despite the positional limit being one. */
+        if (record->is_union) continue;
+        next_field = cursors[index].field_index + 1U;
+        if (next_field >= limit) continue;
+        if (!parse_positional_runtime_record_initializer_from(
+                parser, cursors[index].record_id, begin, next_field,
+                root_id, &closed)) {
+            return false;
+        }
+        if (closed) return true;
+    }
+    minic_parser_error(parser, "too many positional record initializers");
+    return false;
 }
 
 static bool parse_runtime_record_designator_target(MinicParser *parser,
@@ -1543,9 +1634,8 @@ static bool parse_runtime_record_designator_target(MinicParser *parser,
                 minic_parser_error(parser, "invalid top-level record designator member");
                 return false;
             }
-            /* FIXME(MC-038): an anonymous promoted member returns the leaf
-               field index here, not the outermost field used to resume the
-               next positional initializer. */
+            /* Legacy cursor for subscript designators; promoted member paths
+             * are reconstructed at the positional-resume boundary. */
             *top_level_field_index = top_member->value.member.field_index;
         }
         current_id = member_id;
@@ -1672,21 +1762,15 @@ static bool parse_runtime_record_designated_tail(MinicParser *parser, MinicExpre
                     root != NULL && minic_type_is_record(root->type)
                         ? minic_c0_program_record(parser->program, root->type.record_id)
                         : NULL;
-                size_t field_limit =
-                    root_record == NULL ? 0U
-                                        : (root_record->is_union
-                                               ? (root_record->field_count == 0U ? 0U : 1U)
-                                               : root_record->field_count);
-                size_t next_field = top_level_field_index + 1U;
 
-                if (root_record == NULL || top_level_field_index == SIZE_MAX ||
-                    next_field > field_limit) {
+                if (root_record == NULL || top_level_field_index == SIZE_MAX) {
                     minic_parser_error(
                         parser, "cannot resume positional initializer after record designator");
                     return false;
                 }
-                return parse_positional_runtime_record_initializer_from(
-                    parser, target_id, member_begin, next_field);
+                return parse_runtime_record_designator_positional_resume(
+                    parser, target_id, member_id, member_begin,
+                    top_level_field_index);
             }
             continue;
         }
@@ -1756,7 +1840,7 @@ bool minic_parser_parse_runtime_record_initializer(MinicParser *parser,
                    add_zero_initialized_record_lvalue(parser, target_id, initializer_span);
         }
         return parse_positional_runtime_record_initializer_from(
-            parser, target_id, initializer_span.begin, 0U);
+            parser, target_id, initializer_span.begin, 0U, target_id, NULL);
     }
     if (!add_zero_initialized_record_lvalue(parser, target_id, zero_span)) {
         return false;

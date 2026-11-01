@@ -1682,6 +1682,13 @@ check-mc036-record-conditional-facts: $(MINIC_CC_BINARY)
 
 check-fast: check-mc036-record-conditional-facts
 
+.PHONY: check-mc038-anonymous-designator-runtime
+check-mc038-anonymous-designator-runtime: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	sh tests/compiler/c0/probe-mc038-anonymous-designator-runtime.sh
+
+check-fast: check-mc038-anonymous-designator-runtime
+
 .PHONY: check-alignment-attribute-semantic-arena
 check-alignment-attribute-semantic-arena: $(MINIC_CC_BINARY)
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
