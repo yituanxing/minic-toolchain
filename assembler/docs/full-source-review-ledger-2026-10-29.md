@@ -1,5 +1,22 @@
 # MiniAS full production-source review ledger — 2026-10-29
 
+### 2026-11-01 shared literal decoder failure-path cleanup
+
+The single Common string-literal decoder `assembler/src/string_literal.c` had
+eight separate copies of the identical partial-buffer teardown (free, NULL,
+reset length, return false). All eight failure paths now converge to one
+`invalid:` exit, without changing successful .ascii/.asciz tokenization,
+escaping, per-string NUL termination or allocation ownership. The direct
+C regression checks successful decoding, empty strings, mixed escapes and
+malformed/trailing input; it checks that every failed partial decode releases
+and resets the output. The test runs within mandatory MiniAS A0. No Target
+ISA code, SourceGraph or ELF semantics changed. Full GNU 3536 strict equality
+is neither required nor invoked as the cleanup target.
+
+**Production delta:** 1 file, eight teardown copies folded into one
+error exit. A0 exact-head and remote build results must be reported
+separately from the new fixture's local compile result.
+
 ## Current refactor dashboard — 2026-11-01 (exact-head recovery and live-path audit)
 
 ### 2026-11-01 Source collector single-pass de-duplication (local batch)
