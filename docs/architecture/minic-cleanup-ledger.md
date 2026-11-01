@@ -673,6 +673,39 @@ source/Target interface 提供证据；不是每读一个文件就要强行删�
 x86 原生和五 ISA `-S`。本批没有修改生产语义，故上述是邻近
 定向复验；不等于五目标完整 ELF/QEMU 或联合验收。
 
+## 批次 C21：Core 常量事实解释、指针身份与有界 CFG 否证
+
+**基线：** C20 远端 `d198957`，2026-11-01。本批全文深读
+Core **1** 个生产文件、原始 **2,682 行**：
+`core_lower_const_facts.c`。累计 **122/339** 全文深读：
+Frontend **69/69**、Compiler **11/11**、Core **42/48**、
+Target **0/211**；Core 余 **6**、Target **211**，
+合计 **217/339** 待全文深读。
+
+| 事实推导域 | 清理决定与耦合记录 |
+| --- | --- |
+| Whole-program `_Bool` 稳零 | 入口必须显式置零、所有可达写入仍为零、无地址逃逸、asm output、非零更新；死 return 后写只有无 goto/asm-goto/case reentry 才可忽略。全函数扫描昂贵但保守是合法性条件。**KEEP(entry/write/reentry closed proof)**。 |
+| Local fact 与 specialized function identity | Local integer constant、null pointer、bool range 和 symbolic function pointer 是不同 fact 类型；callee clone 参数通过固定 source-local ID 映射，不能从调用者沿同名 local 继承。Direct function designator 与 weak symbol 的 NULL 语义也不能统一。**KEEP(symbolic provenance + nonweak rule)**。 |
+| Target-independent pointer/Record facts | 一个 global object 的两个地址可按 DataLayout 相对 byte offset 比较，但两个不同 object 的绝对 linker 地址不可猜；integer-origin pointer bits、constant global Record 的 field slot、compound literal 的已知字节 mask、初始化 zero union 的唯一可达写入，都是互相独立的单向证明。**KEEP(same-object identity + fully-known bytes)**。 |
+| Bound 与可能为一的 bit | `possible_one_bits` 只证明可能置一、不能代替真实值；nonnegative min/max 数值范围与 OR bitmask 的 max 不同。对不纯表达式的不可达诊断分支，caller 必须仍降低完整原表达式并保留 effects，才可丢掉不可能的 successor。**KEEP(one-sided bounds/effect preservation)**。 |
+| `core_const_eval_integer_with_locals` 整数比较 | 该文件更早定义并已由 Boolean-range 的 0/1 双值证明使用 `core_boolean_compare_values`，其 signed/unsigned/equal/not-equal 逻辑与末尾普通双常量比较分支字面相同，包括先做 target-aware common-conversion。**DELETE(second comparison implementation)**：复用同文件已验证 helper，不改 NULL/weak/同对象优先级。 |
+| 诊断与枚举耦合 | `MINIC_DMA_ZERO_TRACE`、`MINIC_SHMEM_IF_TRACE` 和特定 Linux 函数名的输出既是诊断消费者线索，也是未来反向依赖；`MINIC_UNARY_BITWISE_NOT` 的枚举次序仍被当 pure/impure 的范围分界，见 C14/C16。**NEEDS_PROOF(logging consumers + enum ordinal)**，本批不关开关、不移效应 oracle。 |
+
+**C21 生产源码：** `core_lower_const_facts.c` **+6/-28，净 -22 行**；
+C1～C21 纯清理累计 **净 -301 行**。无新 Target 分支，
+保持 signed overflow/shift-UB、bit-mask OOM 及未知 AST fail-closed。
+
+**验证 PASS：** Release `-Werror` 重编并链接、
+`check-semantic-snapshot`；`check-core-same-global-address-order`
+（五 ISA `-S`、同对象与不同对象的 GNU AS/LD/native）、
+`check-core-compound-record-byte-layout`（五 ISA、GNU native）、
+`check-gnu-const-global-record`（五 ISA、严格负例）、
+`check-gnu-linux-kbuild-disjoint-bitmask-assert`（五 ISA、
+GNU/MiniC x86 native 均 exit42）、
+`check-core-field-get-contiguous-mask-guard`（五 ISA、
+GNU/O2 native 和不连续掩码负例）。仍未运行五目标 Linux
+完整 ELF/QEMU 或联合验收。
+
 ## 后续批次进度规则
 
 每批发布：当前 HEAD、源文件逐目录覆盖（明确深读与只扫的区别）、

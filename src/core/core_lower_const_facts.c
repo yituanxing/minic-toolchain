@@ -2645,34 +2645,12 @@ statement_expression_done:
                                                &right_common)) {
             return false;
         }
-        if (expression->value.binary.operator_kind == MINIC_BINARY_EQUAL ||
-            expression->value.binary.operator_kind == MINIC_BINARY_NOT_EQUAL) {
-            predicate = left_common.bits == right_common.bits;
-            if (expression->value.binary.operator_kind == MINIC_BINARY_NOT_EQUAL) {
-                predicate = !predicate;
-            }
-        } else if (minic_type_is_signed_integer(common_type)) {
-            int64_t left_signed;
-            int64_t right_signed;
-            if (!core_const_signed_value(context, &left_common, &left_signed) ||
-                !core_const_signed_value(context, &right_common, &right_signed)) {
-                return false;
-            }
-            switch (expression->value.binary.operator_kind) {
-            case MINIC_BINARY_LESS: predicate = left_signed < right_signed; break;
-            case MINIC_BINARY_LESS_EQUAL: predicate = left_signed <= right_signed; break;
-            case MINIC_BINARY_GREATER: predicate = left_signed > right_signed; break;
-            case MINIC_BINARY_GREATER_EQUAL: predicate = left_signed >= right_signed; break;
-            default: return false;
-            }
-        } else {
-            switch (expression->value.binary.operator_kind) {
-            case MINIC_BINARY_LESS: predicate = left_common.bits < right_common.bits; break;
-            case MINIC_BINARY_LESS_EQUAL: predicate = left_common.bits <= right_common.bits; break;
-            case MINIC_BINARY_GREATER: predicate = left_common.bits > right_common.bits; break;
-            case MINIC_BINARY_GREATER_EQUAL: predicate = left_common.bits >= right_common.bits; break;
-            default: return false;
-            }
+        /* The boolean-range proof above and ordinary two-constant folding
+         * must agree on target-aware signedness and comparison results. */
+        if (!core_boolean_compare_values(
+                context, expression->value.binary.operator_kind, common_type,
+                &left_common, &right_common, &predicate)) {
+            return false;
         }
         value->type = expression->type;
         value->bits = predicate ? 1U : 0U;
