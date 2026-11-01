@@ -461,10 +461,10 @@
 
 ### MC-041 long double 字面量提前按 binary64 舍入
 
-- **状态：** `OPEN`，P0，`GNU-NATIVE-DIFF`；x86-64 同一有效 GNU C 源文件已经完成 **GCC 本机** 与 **MiniC `-S` → GNU 汇编/链接 → 本机运行** 对照，绝不是源级字符串检查。
-- **位置/根因：** `src/frontend/parser_expression.c:parse_floating`（约 176–259）识别 `L` 后仍调用 `strtod` 产生 binary64，再由 `minic_binary128_from_binary64` 扩展为内部 binary128；超出 53 位有效精度的尾数在第一步不可逆丢失。`src/target/x86_64/machine_fp.c:minic_x86_64_emit_fp_instruction` 的 x87 80-bit 常量发射明确依赖此前输入来自 binary64 并拒绝更宽的 payload，所以**只修改 Parser 为真正 binary128 而不联动 Target 并不构成完整修复**。
-- **独立复现（2026-10-30，基线 `400f4a611`）：** `int main(void){ long double a=1.0000000000000001L,b=1.0L; return a>b?7:99; }`；`cc -std=gnu11 -O0 -no-pie source.c -o gnu` 运行退出 **7**；`cc -E -P source.c -o source.i`、`build/debug/bin/minic-cc --target=x86_64-linux -S source.i -o mini.s`、`cc -no-pie mini.s -o mini` 均通过，运行退出 **99**。本仓库 x86 `long double` 机器 ABI 为 x87 extended/16B slot，因此两端不是不同 ABI 的伪差分。
-- **修复门槛：** 先明确各目标 `long double` 语义和内部 literal 精度，解析 decimal/hex、极大/极小与舍入边界时保留目标精度；更新 x87 literal 转码规则和其他四目标消费者，再做原生/目标 GNU 差分。当前未修改语义代码。
+- **状态：** `FIXED-UNVERIFIED`，P0，`GNU-NATIVE-DIFF / RV64-QEMU-DIFF`。旧主线的 `parse_floating` 把 `L` 字面量先过 `strtod` binary64，再扩成内部 binary128，已丢失超 53 位尾数；x87 80-bit 常量端也只接受 binary64 payload。这一真实源→目标跨层缺陷已由独立 MC 修复，不计入 C17 纯清理删行。
+- **历史同源证据：** `int main(void){ long double a=1.0000000000000001L,b=1.0L; return a>b?7:99; }` 在原 x86 GNU C native exit **7**、MiniC `-S`→GNU AS/LD native exit **99**。本仓库 x86 `long double` 为 x87 extended/16B slot，非 ABI 差异。另有独立 MC-089 比较 helper 的有符号扩展错误，已分开修复。
+- **修复所有权：** 新 `src/frontend/binary128_literal.c/.h` 用 ISO C11 整数大数实现 decimal/hex 的准确就近偶数舍入，依据 `TargetInfo` 的 x87 **64** 位或其他目标 binary128 **113** 位有效精度直接形成内部 binary128；Lexer 补合法十六进制浮点；x87 常量发射现完整处理尾数及次正规数。不存在先经过宿主 `double` 的不可逆截断，Target 仍拥有机器精度解释。
+- **验收证据：** `check-binary128-literal-oracle` 与 glibc `strtof128`/`strtold` 对照 **286 组逐位一致**，含 near-tie、极值、随机；独立 ASan+UBSan 定向回归（运行器下 LSan 关闭）PASS。`check-long-double-literal-precision` 的 GNU/MiniC x86 本机程序均 exit **42**，decimal/hex/tie/subnormal/float+double 路径覆盖；RV64 GNU 与 MiniC `-nostdlib`+GNU libgcc+QEMU 均 exit **42**；x86/RV64/A64/Loong 四目标 `-S` PASS，Release `-Werror`、lexer/type/layout、x86 M1 定向测试 PASS。RV32 的既有 long-double Core frame 局限仍在；完整五 ISA ELF/QEMU、MiniAS/MiniLD 联合验收不在本轮，故不升 `VERIFIED`。
 
 ### MC-042 packed 零宽位域丢失对齐栅栏
 
