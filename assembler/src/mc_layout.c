@@ -5,6 +5,18 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* Scan and final verification use one subsection-local alignment and
+ * GNU max-skip calculation, with stage-specific diagnostics at each call. */
+static bool fragment_alignment_padding(const MiniAsStmt *stmt,
+                                       uint64_t cursor,uint64_t *padding) {
+    const uint64_t alignment=stmt->align;
+    if(alignment==0U || (alignment&(alignment-1U))!=0U)return false;
+    *padding=(alignment-(cursor&(alignment-1U)))&(alignment-1U);
+    if(stmt->align_has_max_skip && *padding>stmt->align_max_skip)
+        *padding=0U;
+    return true;
+}
+
 /* Common MCLayout subsystem. Fragment identities are immutable; Target
  * hooks give ISA instruction widths and relaxation ranges. */
 
@@ -605,17 +617,11 @@ static bool minias_scan_fragment_layout(MiniAs *as, bool *placement_changed) {
             }
             stmt->offset = sub->size;
             if (stmt->fragment_kind == MINIAS_FRAGMENT_ALIGNMENT) {
-                const uint64_t alignment = stmt->align;
                 uint64_t pad;
-                if (alignment == 0U ||
-                    (alignment & (alignment - 1U)) != 0U) {
+                if(!fragment_alignment_padding(stmt,sub->size,&pad)) {
                     minias_set_error(as, "bad-fragment-alignment");
                     return false;
                 }
-                pad = (alignment - (sub->size & (alignment - 1U))) &
-                      (alignment - 1U);
-                if (stmt->align_has_max_skip &&
-                    pad > stmt->align_max_skip) pad = 0U;
                 if (pad > UINT32_MAX) {
                     minias_set_error(as, "fragment-alignment-overflow");
                     return false;
@@ -1191,16 +1197,12 @@ static bool minias_validate_fragment_layout(MiniAs *as) {
                     goto done;
                 }
             } else if(stmt->fragment_kind==MINIAS_FRAGMENT_ALIGNMENT) {
-                uint64_t alignment=stmt->align,padding;
-                if(alignment==0U || (alignment&(alignment-1U))!=0U) {
+                uint64_t padding;
+                if(!fragment_alignment_padding(stmt,cursor[sub_index],&padding)) {
                     minias_set_error(as,"invalid-layout-alignment:line=%zu",
                                      stmt->line);
                     goto done;
                 }
-                padding=(alignment-(cursor[sub_index]&(alignment-1U)))&
-                        (alignment-1U);
-                if(stmt->align_has_max_skip &&
-                   padding>stmt->align_max_skip)padding=0U;
                 if(padding!=stmt->size) {
                     minias_set_error(as,"fragment-alignment-drift:line=%zu",
                                      stmt->line);

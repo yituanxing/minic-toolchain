@@ -81,6 +81,25 @@ lines -> Common delegator + narrow fallback 46 lines (delta
 -24); this is a deletion of a duplicate semantic parser.
 No Target ISA, CFI, ELF writer or source-site ownership was redesigned.
 
+### 2026-11-01 grouped MCLayout/x86 parser de-duplication
+
+x86 Target had nine repeated five-field MCInst register-pair initialization
+blocks (SSE/GPR transfer, BSF/BSR, IMUL, POPCNT/LZCNT/TZCNT, ALU and
+XADD/XCHG). They are now one private helper, retaining the individual
+descriptor opcode/width legality. Its absolute and base-index memory
+grammars likewise duplicated the same retained NameId and difference binding:
+one shared binder replaces both without changing the distinct displacement
+fixup policies.
+
+Common MCLayout's scan and post-layout verifier duplicated the same
+subsection-local power-of-two alignment/max-skip calculation. One pure
+helper is now called by both while stage-specific diagnostics and 32-bit
+size checks remain. Neither Target relaxation nor SourceGraph changes.
+
+Mandatory A0 GNU x86 byte oracle checks the affected register families
+and .p2align/.balign max-skip. Strict 3,536 GNU corpus and Linux Image/QEMU
+were not explicitly triggered. Report exact-head CI, not hypothetical PASS.
+
 ## Current refactor dashboard — 2026-11-01 (exact-head recovery and live-path audit)
 
 ### 2026-11-01 Source collector single-pass de-duplication (local batch)

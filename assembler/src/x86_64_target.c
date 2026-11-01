@@ -501,6 +501,25 @@ static bool x64_symbolic_displacement(const char *raw,
     return false;
 }
 
+/* Both memory syntaxes bind the same NameId and symbol-difference payload;
+ * their displacement and relocation policies remain separate. */
+static bool x64_bind_memory_expression(MiniAsParseContext *ctx,
+                                       X64Memory *out,bool symbolic,
+                                       const MiniAsSymbolExpr *symbol,
+                                       bool difference,
+                                       const MiniAsSymbolDifference *delta) {
+    if(symbolic) {
+        if(!minias_parse_bind_symbol_ref(ctx,symbol,&out->symbol))return false;
+        out->has_symbol=true;
+    }
+    if(difference) {
+        if(!minias_parse_bind_symbol_difference_ref(ctx,delta,
+                &out->difference))return false;
+        out->has_difference=true;
+    }
+    return true;
+}
+
 static bool x64_parse_base_memory(MiniAsParseContext *ctx,const char *text, X64Memory *out) {
     /* GNU Kbuild emits horizontal space around AT&T displacement operators,
      * parentheses and even register prefix punctuation ("(% rip)").
@@ -585,16 +604,8 @@ static bool x64_parse_base_memory(MiniAsParseContext *ctx,const char *text, X64M
         out->scale=1U;out->address_space=space;
         out->displacement=(int64_t)displacement;
         out->reloc_flavor=reloc_flavor;
-        if(symbolic) {
-            if(!minias_parse_bind_symbol_ref(ctx,&expr,&out->symbol))return false;
-            out->has_symbol=true;
-        }
-        if(difference) {
-            if(!minias_parse_bind_symbol_difference_ref(ctx,&difference_expr,
-                    &out->difference))return false;
-            out->has_difference=true;
-        }
-        return true;
+        return x64_bind_memory_expression(ctx,out,symbolic,&expr,
+                                          difference,&difference_expr);
     }
     close=strchr(open+1,')');
     if (!close || close[1]!='\0') return false;
@@ -707,19 +718,9 @@ static bool x64_parse_base_memory(MiniAsParseContext *ctx,const char *text, X64M
     out->index=index;out->scale=(unsigned)scale;
     out->displacement=(int64_t)displacement;
     out->reloc_flavor=reloc_flavor;
-    if(symbolic) {
-        /* GNU sym+addend(%base,%index,scale) uses an ELF ABS32S relocation
-         * in a forced disp32 slot. This is distinct from RIP+PC32; target
-         * uses existing typed memory and the same reloc/fixup producer. */
-        if(!minias_parse_bind_symbol_ref(ctx,&symbolic_expr,&out->symbol))return false;
-        out->has_symbol=true;
-    }
-    if(difference) {
-        if(!minias_parse_bind_symbol_difference_ref(ctx,&difference_expr,
-                &out->difference))return false;
-        out->has_difference=true;
-    }
-    return true;
+    /* Symbolic base/index still selects the original disp32 relocation. */
+    return x64_bind_memory_expression(ctx,out,symbolic,&symbolic_expr,
+                                      difference,&difference_expr);
 }
 
 static unsigned x64_disp_bytes(const X64Memory *mem) {
@@ -889,6 +890,17 @@ static unsigned x64_legacy_operand_bits(const MiniAsStmt *s,
     suffix=name[length-1U];
     return suffix=='b'?8U:suffix=='w'?16U:
            suffix=='l'?32U:suffix=='q'?64U:0U;
+}
+
+/* Target-owned instruction encoding stays with each descriptor;
+ * one private helper initializes the identical MCInst register-pair shape. */
+static void x64_register_pair(MiniAsMCInst *inst,unsigned source,
+                              bool source_64,unsigned destination) {
+    inst->operands[0].kind=MINIAS_MC_REGISTER;
+    inst->operands[0].reg=source;
+    inst->operands[0].register_64=source_64;
+    inst->operands[1].kind=MINIAS_MC_REGISTER;
+    inst->operands[1].reg=destination;
 }
 
 static bool x64_parse(MiniAsParseContext *ctx, MiniAsStmt *s) {
@@ -1319,11 +1331,7 @@ static bool x64_parse(MiniAsParseContext *ctx, MiniAsStmt *s) {
         if(x64_xmm_register(src,&xmm_reg)) {
             m->opcode=X64_REG_BINARY;m->count=2U;
             m->encoding=X64_ENCODING_F2|UINT32_C(0x0012c)|UINT32_C(0x800);
-            m->operands[0].kind=MINIAS_MC_REGISTER;
-            m->operands[0].reg=xmm_reg;
-            m->operands[0].register_64=want_wide;
-            m->operands[1].kind=MINIAS_MC_REGISTER;
-            m->operands[1].reg=integer_reg;
+            x64_register_pair(m,xmm_reg,want_wide,integer_reg);
             goto done;
         }
         if(!x64_is_mem_candidate(src) ||
@@ -1830,11 +1838,7 @@ static bool x64_parse(MiniAsParseContext *ctx, MiniAsStmt *s) {
         m->encoding=(shrd?(use_imm?0xacU:0xadU):
                             (use_imm?0xa4U:0xa5U))|
                     (word?0x400U:0U)|(use_imm?0x200U:0U);
-        m->operands[0].kind=MINIAS_MC_REGISTER;
-        m->operands[0].reg=src_reg;
-        m->operands[0].register_64=qword;
-        m->operands[1].kind=MINIAS_MC_REGISTER;
-        m->operands[1].reg=dst_reg;
+        x64_register_pair(m,src_reg,qword,dst_reg);
         m->operands[1].register_64=qword;
         m->operands[2].kind=MINIAS_MC_IMMEDIATE;
         m->operands[2].immediate=imm;
@@ -2066,11 +2070,7 @@ static bool x64_parse(MiniAsParseContext *ctx, MiniAsStmt *s) {
         }
         m->opcode=X64_IMUL_IMM;m->count=3U;
         m->encoding=word?UINT32_C(0x400):0U;
-        m->operands[0].kind=MINIAS_MC_REGISTER;
-        m->operands[0].reg=imul_src;
-        m->operands[0].register_64=!word && imul_ws;
-        m->operands[1].kind=MINIAS_MC_REGISTER;
-        m->operands[1].reg=imul_dst;
+        x64_register_pair(m,imul_src,!word && imul_ws,imul_dst);
         m->operands[1].register_64=!word && imul_wd;
         m->operands[2].kind=MINIAS_MC_IMMEDIATE;
         m->operands[2].immediate=bits;
@@ -2366,11 +2366,7 @@ static bool x64_parse(MiniAsParseContext *ctx, MiniAsStmt *s) {
                 if(x64_cond_code(cond,&cc)) {
                     m->opcode=X64_CMOV_REG;m->count=2U;
                     m->encoding=cc|(word?UINT32_C(0x400):0U);
-                    m->operands[0].kind=MINIAS_MC_REGISTER;
-                    m->operands[0].reg=first;
-                    m->operands[0].register_64=!word && ws;
-                    m->operands[1].kind=MINIAS_MC_REGISTER;
-                    m->operands[1].reg=second;
+                    x64_register_pair(m,first,!word && ws,second);
                     goto done;
                 }
             }
@@ -2433,11 +2429,7 @@ static bool x64_parse(MiniAsParseContext *ctx, MiniAsStmt *s) {
             m->opcode=X64_REG_BINARY;m->count=2U;
             /* 0x800: reverse 0F BC/BD ModR/M REG/RM direction. */
             m->encoding=0x900U|(s->op[2]=='f'?0xbcU:0xbdU);
-            m->operands[0].kind=MINIAS_MC_REGISTER;
-            m->operands[0].reg=first;
-            m->operands[0].register_64=wd;
-            m->operands[1].kind=MINIAS_MC_REGISTER;
-            m->operands[1].reg=second;
+            x64_register_pair(m,first,wd,second);
             goto done;
         }
         /* GNU two-register IMUL: 0F AF /r with destination in ModR/M.reg.
@@ -2453,11 +2445,7 @@ static bool x64_parse(MiniAsParseContext *ctx, MiniAsStmt *s) {
             m->opcode=X64_REG_BINARY;m->count=2U;
             m->encoding=UINT32_C(0x9af) |
                 (!strcmp(s->op,"imulw")?UINT32_C(0x400):0U);
-            m->operands[0].kind=MINIAS_MC_REGISTER;
-            m->operands[0].reg=first;
-            m->operands[0].register_64=!strcmp(s->op,"imulw")?false:ws;
-            m->operands[1].kind=MINIAS_MC_REGISTER;
-            m->operands[1].reg=second;
+            x64_register_pair(m,first,!strcmp(s->op,"imulw")?false:ws,second);
             goto done;
         }
         /* F3 0F B8 /r with existing reversed ModR/M register encoding. */
@@ -2472,11 +2460,7 @@ static bool x64_parse(MiniAsParseContext *ctx, MiniAsStmt *s) {
                 (!strncmp(s->op,"lzcnt",5U)?UINT32_C(0xbd):
                  !strncmp(s->op,"tzcnt",5U)?UINT32_C(0xbc):
                  UINT32_C(0xb8));
-            m->operands[0].kind=MINIAS_MC_REGISTER;
-            m->operands[0].reg=first;
-            m->operands[0].register_64=wd;
-            m->operands[1].kind=MINIAS_MC_REGISTER;
-            m->operands[1].reg=second;
+            x64_register_pair(m,first,wd,second);
             goto done;
         }
         /* Legacy 8-bit high registers share ModR/M IDs 4..7 with SPL,
@@ -2553,11 +2537,7 @@ static bool x64_parse(MiniAsParseContext *ctx, MiniAsStmt *s) {
                 m->opcode=X64_REG_BINARY;m->count=2U;
                 m->encoding=x64_binary_opcode(form,false,width)|
                     (width==16U?UINT32_C(0x400):0U);
-                m->operands[0].kind=MINIAS_MC_REGISTER;
-                m->operands[0].reg=rs;
-                m->operands[0].register_64=width==64U;
-                m->operands[1].kind=MINIAS_MC_REGISTER;
-                m->operands[1].reg=rd;
+                x64_register_pair(m,rs,width==64U,rd);
                 goto done;
             }
         }
@@ -2613,11 +2593,7 @@ static bool x64_parse(MiniAsParseContext *ctx, MiniAsStmt *s) {
         if(is_xchg && width!=8U && (rs==0U || rd==0U) &&
            !(width==32U && rs==0U && rd==0U))
             m->encoding|=UINT32_C(0x4000);
-        m->operands[0].kind=MINIAS_MC_REGISTER;
-        m->operands[0].reg=rs;
-        m->operands[0].register_64=width==64U;
-        m->operands[1].kind=MINIAS_MC_REGISTER;
-        m->operands[1].reg=rd;
+        x64_register_pair(m,rs,width==64U,rd);
         goto done;
     }
     /* Far immediate transfer is distinct from near PC-relative branches:
