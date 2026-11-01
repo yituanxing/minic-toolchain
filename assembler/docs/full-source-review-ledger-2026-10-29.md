@@ -100,6 +100,23 @@ Mandatory A0 GNU x86 byte oracle checks the affected register families
 and .p2align/.balign max-skip. Strict 3,536 GNU corpus and Linux Image/QEMU
 were not explicitly triggered. Report exact-head CI, not hypothetical PASS.
 
+### 2026-11-01 x86 register-pair legacy sites removed (second pass)
+
+After the shared x86 register-pair setter landed, a call-site census exposed
+13 further copies of the same two-register MCInst shape, previously written
+with a different assignment order or without an explicit source width.
+Their old blocks were removed: all 13 now use the same Target-private
+`x64_register_pair` helper. These paths covered SSE/AVX source+dest
+operands, MOVSLQ/MOVZX, system register instructions, and BMI multi-source
+operands; the third operands and post-assignment width overrides remain
+intact. The helper's false default corresponds to the previous zero-initialized
+MCInst operand slot, and any explicit caller override remains after it.
+
+The existing mandatory A0 x86 GNU oracle now adds MOVSLQ, MOVZX and SHA
+register-pair bytes alongside prior BSF/BSR/IMUL/ALU tests. Do not weaken
+the four-target correctness gate or treat the strictly optional Linux
+3,536/corpus jobs as automatically passed.
+
 ## Current refactor dashboard — 2026-11-01 (exact-head recovery and live-path audit)
 
 ### 2026-11-01 Source collector single-pass de-duplication (local batch)

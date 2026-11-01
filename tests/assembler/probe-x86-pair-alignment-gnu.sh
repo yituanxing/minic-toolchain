@@ -20,6 +20,9 @@ register_pair_check:
   addq %r10, %r11
   xaddq %r10, %r11
   xchgq %rax, %r13
+  movslq %eax, %r8
+  movzbl %al, %eax
+  sha1msg1 %xmm2, %xmm1
   .p2align 4,,4
   .byte 0x7f
   .balign 8,,3
@@ -31,4 +34,4 @@ for name in gnu mini; do
     objcopy -j .text -O binary "$work/$name.o" "$work/$name.bin"
 done
 cmp "$work/gnu.bin" "$work/mini.bin"
-echo 'MINIAS_X86_PAIR_ALIGNMENT=PASS GNU_text=exact register_families=11 max_skip=2'
+echo 'MINIAS_X86_PAIR_ALIGNMENT=PASS GNU_text=exact register_families=14 max_skip=2'

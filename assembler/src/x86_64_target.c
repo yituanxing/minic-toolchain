@@ -1034,10 +1034,7 @@ static bool x64_parse(MiniAsParseContext *ctx, MiniAsStmt *s) {
         m->opcode=X64_SIMD_EXT;
         m->encoding=!strcmp(s->op,"sha1msg1")?0U:1U;
         m->count=2U;
-        m->operands[0].kind=MINIAS_MC_REGISTER;
-        m->operands[0].reg=rs;
-        m->operands[1].kind=MINIAS_MC_REGISTER;
-        m->operands[1].reg=rd;
+        x64_register_pair(m,rs,false,rd);
         goto done;
     }
     if(!strcmp(s->op,"vgf2p8mulb")) {
@@ -1048,10 +1045,7 @@ static bool x64_parse(MiniAsParseContext *ctx, MiniAsStmt *s) {
            !x64_xmm_register(second,&rd) ||
            !x64_xmm_register(dst,&third))goto invalid;
         m->opcode=X64_SIMD_EXT;m->encoding=2U;m->count=3U;
-        m->operands[0].kind=MINIAS_MC_REGISTER;
-        m->operands[0].reg=rs;
-        m->operands[1].kind=MINIAS_MC_REGISTER;
-        m->operands[1].reg=rd;
+        x64_register_pair(m,rs,false,rd);
         m->operands[2].kind=MINIAS_MC_REGISTER;
         m->operands[2].reg=third;
         goto done;
@@ -1065,10 +1059,7 @@ static bool x64_parse(MiniAsParseContext *ctx, MiniAsStmt *s) {
         else if(x64_vector_register(dst,"%zmm",32U,&rd))vector_width=512U;
         else goto invalid;
         m->opcode=X64_SIMD_EXT;m->encoding=3U;m->count=3U;
-        m->operands[0].kind=MINIAS_MC_REGISTER;
-        m->operands[0].reg=rs;
-        m->operands[1].kind=MINIAS_MC_REGISTER;
-        m->operands[1].reg=rd;
+        x64_register_pair(m,rs,false,rd);
         m->operands[2].kind=MINIAS_MC_IMMEDIATE;
         m->operands[2].immediate=vector_width;
         goto done;
@@ -1295,10 +1286,7 @@ static bool x64_parse(MiniAsParseContext *ctx, MiniAsStmt *s) {
             if(rm_is_register) {
                 m->opcode=X64_REG_BINARY;m->count=2U;
                 m->encoding=conversions[k].encoding|UINT32_C(0x800);
-                m->operands[0].kind=MINIAS_MC_REGISTER;
-                m->operands[1].kind=MINIAS_MC_REGISTER;
-                m->operands[0].reg=rm;
-                m->operands[1].reg=reg;
+                x64_register_pair(m,rm,false,reg);
                 /* ModR/M.reg is XMM for MOVD/Q, CVTSI2SD and their
                  * register-reversed transfer forms. */
                 m->operands[0].register_64=conversions[k].gpr_wide;
@@ -1382,10 +1370,7 @@ static bool x64_parse(MiniAsParseContext *ctx, MiniAsStmt *s) {
             if(x64_xmm_register(src,&source)) {
                 m->opcode=X64_XMM_IMM_REG;m->count=3U;
                 m->encoding=X64_ENCODING_F2|UINT32_C(0xc2);
-                m->operands[0].kind=MINIAS_MC_REGISTER;
-                m->operands[0].reg=source;
-                m->operands[1].kind=MINIAS_MC_REGISTER;
-                m->operands[1].reg=rd;
+                x64_register_pair(m,source,false,rd);
                 m->operands[2].kind=MINIAS_MC_IMMEDIATE;
                 m->operands[2].immediate=compares[k].predicate;
                 goto done;
@@ -1464,10 +1449,7 @@ static bool x64_parse(MiniAsParseContext *ctx, MiniAsStmt *s) {
                    !strcmp(vec[k].name,"movntdq"))continue;
                 m->opcode=X64_REG_BINARY;m->count=2U;
                 m->encoding=vec[k].op|UINT32_C(0x800);
-                m->operands[0].kind=MINIAS_MC_REGISTER;
-                m->operands[0].reg=other;
-                m->operands[1].kind=MINIAS_MC_REGISTER;
-                m->operands[1].reg=xmm;
+                x64_register_pair(m,other,false,xmm);
                 goto done;
             }
             if(!x64_is_mem_candidate(memptr) ||
@@ -1530,10 +1512,7 @@ static bool x64_parse(MiniAsParseContext *ctx, MiniAsStmt *s) {
         } else {
             m->opcode=X64_BMI2_SHIFT;m->count=3U;
             m->encoding=pp;
-            m->operands[0].kind=MINIAS_MC_REGISTER;
-            m->operands[0].reg=count_reg;
-            m->operands[1].kind=MINIAS_MC_REGISTER;
-            m->operands[1].reg=source_reg;
+            x64_register_pair(m,count_reg,false,source_reg);
             m->operands[2].kind=MINIAS_MC_REGISTER;
             m->operands[2].reg=dest_reg;
             m->operands[2].register_64=dest_wide;
@@ -1565,10 +1544,7 @@ static bool x64_parse(MiniAsParseContext *ctx, MiniAsStmt *s) {
         m->opcode=X64_BMI2_SHIFT;m->count=3U;
         m->encoding=UINT32_C(0x10000)|
                     ((andn?UINT32_C(0xf2):UINT32_C(0xf5))<<8U);
-        m->operands[0].kind=MINIAS_MC_REGISTER;
-        m->operands[0].reg=andn?r1:r0;
-        m->operands[1].kind=MINIAS_MC_REGISTER;
-        m->operands[1].reg=andn?r0:r1;
+        x64_register_pair(m,andn?r1:r0,false,andn?r0:r1);
         m->operands[2].kind=MINIAS_MC_REGISTER;
         m->operands[2].reg=bmi_dst;
         m->operands[2].register_64=bmi_wide;
@@ -1702,10 +1678,7 @@ static bool x64_parse(MiniAsParseContext *ctx, MiniAsStmt *s) {
         m->encoding=UINT32_C(0x100)|UINT32_C(0x800)|
                     (dstword?UINT32_C(0x400):0U)|
                     (!strcmp(s->op,"lar")?2U:3U);
-        m->operands[0].kind=MINIAS_MC_REGISTER;
-        m->operands[0].reg=sys_source;
-        m->operands[1].kind=MINIAS_MC_REGISTER;
-        m->operands[1].reg=sys_destination;
+        x64_register_pair(m,sys_source,false,sys_destination);
         goto done;
     }
     /* GCC x86 CPU-local descriptor table and invalidation instructions
@@ -1901,10 +1874,7 @@ static bool x64_parse(MiniAsParseContext *ctx, MiniAsStmt *s) {
                                    (sys_source?0x21U:0x23U))|
                         (kind==0U?0U:0x100U)|
                         (kind==0U && gpr16 && sys_source?0x400U:0U);
-            m->operands[0].kind=MINIAS_MC_REGISTER;
-            m->operands[0].reg=sys;
-            m->operands[1].kind=MINIAS_MC_REGISTER;
-            m->operands[1].reg=gpr;
+            x64_register_pair(m,sys,false,gpr);
             goto done;
         }
     }
@@ -2397,10 +2367,7 @@ static bool x64_parse(MiniAsParseContext *ctx, MiniAsStmt *s) {
                          (s->op[3]=='z'?0xb7U:0xbfU))|
                         (legacy_high?0x800U:0U)|
                          (s->op[5]=='w'?0x400U:0U);
-            m->operands[0].kind=MINIAS_MC_REGISTER;
-            m->operands[0].reg=first;
-            m->operands[1].kind=MINIAS_MC_REGISTER;
-            m->operands[1].reg=second;
+            x64_register_pair(m,first,false,second);
             m->operands[1].register_64=(s->op[5]=='w')?false:wd;
             goto done;
         }
@@ -2485,10 +2452,7 @@ static bool x64_parse(MiniAsParseContext *ctx, MiniAsStmt *s) {
                     m->encoding=x64_binary_opcode(form,false,width)|
                                 (highsrc?UINT32_C(0x1000):0U)|
                                 (highdst?UINT32_C(0x2000):0U);
-                    m->operands[0].kind=MINIAS_MC_REGISTER;
-                    m->operands[0].reg=first;
-                    m->operands[1].kind=MINIAS_MC_REGISTER;
-                    m->operands[1].reg=second;
+                    x64_register_pair(m,first,false,second);
                     goto done;
                 }
             }
@@ -2497,9 +2461,7 @@ static bool x64_parse(MiniAsParseContext *ctx, MiniAsStmt *s) {
            x64_register(src,&first,&ws) && !ws &&
            x64_register(dst,&second,&wd) && wd) {
             m->opcode=X64_MOVSLQ;m->count=2U;
-            m->operands[0].kind=MINIAS_MC_REGISTER;
-            m->operands[1].kind=MINIAS_MC_REGISTER;
-            m->operands[0].reg=first;m->operands[1].reg=second;
+            x64_register_pair(m,first,false,second);
             goto done;
         }
     }
