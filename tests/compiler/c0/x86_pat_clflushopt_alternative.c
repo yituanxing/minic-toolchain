@@ -1,5 +1,9 @@
 /* Original Linux 6.6.143 arch/x86/include/asm/special_insns.h ALT owner:
  * selector 9*32+23, actual cache flush and 66-prefix CLFLUSHOPT replacement. */
+#ifndef PAT_CLFLUSHOPT_UNUSED_IMM
+#define PAT_CLFLUSHOPT_UNUSED_IMM 0
+#endif
+
 static void clflushopt(volatile void *p)
 {
     asm volatile (
@@ -17,7 +21,7 @@ static void clflushopt(volatile void *p)
         "# ALT: replacement 1\n" "6641:\n\t"
         ".byte 0x66; clflush %P0"
         "\n6651:\n" ".popsection\n"
-        : "+m" (*(volatile char *)p) : "i" (0));
+        : "+m" (*(volatile char *)p) : "i" (PAT_CLFLUSHOPT_UNUSED_IMM));
 }
 
 int main(void)

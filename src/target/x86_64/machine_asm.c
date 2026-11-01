@@ -5187,7 +5187,7 @@ static bool emit_linux_pat_clflushopt(
     const MinicCoreInstruction *ins, const MinicCoreInlineAsm *info) {
     const MinicCoreStructuredInlineAsmOperand *b =
         ins->value.structured_inline_asm.operands;
-    const MinicCoreInstruction *zero;
+    const MinicCoreInstruction *unused_immediate;
     MinicType pointee;
     if (!out || !fn || !frame || !info || !info->is_volatile ||
         info->is_goto || !info->has_memory_clobber ||
@@ -5206,11 +5206,14 @@ static bool emit_linux_pat_clflushopt(
         pointee.base_kind != MINIC_TYPE_BASE_INT ||
         pointee.integer_rank != MINIC_INTEGER_RANK_CHAR ||
         pointee.pointer_depth != 0U ||
+        !minic_type_is_integer(fn->values[b[1].value].type) ||
         fn->values[b[1].value].definition >= fn->instruction_count)
         return false;
-    zero = &fn->instructions[fn->values[b[1].value].definition];
-    if (zero->kind != MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT ||
-        zero->result != b[1].value || zero->value.integer_value != 0)
+    unused_immediate = &fn->instructions[fn->values[b[1].value].definition];
+    /* The `"i"` operand must be a constant, but this exact ALT template
+     * never references it: only the `+m` output is used by the emitter. */
+    if (unused_immediate->kind != MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT ||
+        unused_immediate->result != b[1].value)
         return false;
     /* Original ALTERNATIVE_2 relative 32-bit references and the paired
        old/replacement lengths are emitted intact for the kernel patcher. */
