@@ -776,6 +776,19 @@ MinicCoreLowerStatus minic_core_lower_internal_append_long_double_binary_helper(
                                       parameter_types, argument_values, 2U, value_id);
 }
 
+MinicCoreLowerStatus minic_core_lower_internal_append_long_double_negate(
+    MinicCoreLowerContext *context,
+    MinicSourceSpan span,
+    MinicCoreValueId operand,
+    MinicCoreValueId *value_id) {
+    MinicType parameter_type = minic_type_long_double();
+    /* TFmode runtime helper is an exact sign-bit operation. The x86 target
+     * intercepts the same typed call and performs x87 FCHS on its 80-bit
+     * long-double representation. */
+    return append_runtime_scalar_call(context, span, "__negtf2", parameter_type,
+                                      &parameter_type, &operand, 1U, value_id);
+}
+
 MinicCoreLowerStatus minic_core_lower_internal_lower_scalar_assignment_value(MinicCoreLowerContext *context,
                                                           MinicType target_type,
                                                           MinicExpressionId expression_id,

@@ -44,31 +44,16 @@ MinicCoreLowerStatus minic_core_lower_try_arithmetic_unary(
         expression->value.unary.operator_kind == MINIC_UNARY_NEGATE &&
         minic_type_is_long_double(expression->type)) {
         *handled = true;
-        MinicCoreInstruction zero_instruction;
         MinicCoreValueId operand_value;
-        MinicCoreValueId zero_value;
         MinicCoreLowerStatus status;
 
         status = minic_core_lower_internal_lower_scalar_assignment_value(context, minic_type_long_double(),
                                                expression->value.unary.operand, &operand_value);
         if (status != MINIC_CORE_LOWER_OK) return status;
-        (void)memset(&zero_instruction, 0, sizeof(zero_instruction));
-        /* FIXME(MC-051): 0L - x is not the semantic equivalent of unary
-         * -x for signed zero: nearest-mode +0L - +0L gives +0L, but GNU C
-         * unary negation must produce -0L. Preserve the sign operation. */
-        zero_instruction.kind = MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT;
-        zero_instruction.span = expression->span;
-        zero_instruction.type = minic_type_long_double();
-        zero_instruction.result = MINIC_CORE_VALUE_INVALID;
-        zero_instruction.value.floating128_bits.low = 0U;
-        zero_instruction.value.floating128_bits.high = 0U;
-        if (!minic_core_function_append_value_instruction(
-                context->function, context->block_id, &zero_instruction, &zero_value)) {
-            return MINIC_CORE_LOWER_ERROR;
-        }
-        return minic_core_lower_internal_append_long_double_binary_helper(
-            context, expression->span, "__subtf3", zero_value, operand_value,
-            minic_type_long_double(), value_id);
+        /* Negation flips the sign even for zero and NaNs. Subtracting from
+         * +0L is not equivalent, and may raise arithmetic exceptions. */
+        return minic_core_lower_internal_append_long_double_negate(
+            context, expression->span, operand_value, value_id);
     }
     if (expression->kind == MINIC_EXPRESSION_UNARY &&
         expression->value.unary.operator_kind == MINIC_UNARY_NEGATE &&

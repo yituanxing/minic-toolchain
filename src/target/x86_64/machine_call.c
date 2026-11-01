@@ -343,6 +343,10 @@ static bool x86_emit_x87_core_helper(FILE *out, const MinicCoreFunction *fn,
     if (!minic_type_equal(fn->values[ins->result].type, callee->return_type))
         return false;
     if (count == 1U) {
+        if (result_ld && source_ld && strcmp(name, "__negtf2") == 0)
+            return x86_x87_load(out, frame, a) &&
+                   fprintf(out, "  fchs\n") >= 0 &&
+                   x86_x87_store(out, frame, ins->result);
         if (result_ld && !source_ld && minic_type_is_double(fn->values[a].type) &&
             strcmp(name, "__extenddftf2") == 0)
             return fprintf(out, "  fldl -%zu(%%rbp)\n",

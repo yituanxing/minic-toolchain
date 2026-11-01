@@ -140,6 +140,11 @@ MinicCoreLowerStatus minic_core_lower_internal_append_long_double_binary_helper(
     MinicCoreValueId right,
     MinicType return_type,
     MinicCoreValueId *value_id);
+MinicCoreLowerStatus minic_core_lower_internal_append_long_double_negate(
+    MinicCoreLowerContext *context,
+    MinicSourceSpan span,
+    MinicCoreValueId operand,
+    MinicCoreValueId *value_id);
 
 /* Private Core-lowering facts: no target-specific machine state. */
 void core_local_constant_set(MinicCoreLowerContext *, MinicLocalId,

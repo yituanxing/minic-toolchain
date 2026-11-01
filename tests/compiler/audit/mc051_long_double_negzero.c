@@ -3,9 +3,15 @@ extern double get_test_zero(void);
 extern double get_test_negative_zero(void);
 extern double get_test_positive(void);
 extern double get_test_negative(void);
+extern long double get_test_infinity(void);
+extern long double get_test_nan(void);
 extern int check_negative_zero(long double);
 extern int check_positive_zero(long double);
 extern int check_exact_value(long double, double);
+extern int check_negative_infinity(long double);
+extern int check_positive_infinity(long double);
+extern int check_negative_nan(long double);
+extern int check_positive_nan(long double);
 extern int check_negative_zero_float(float);
 extern int check_negative_zero_double(double);
 extern int report_mask(int);
@@ -27,6 +33,12 @@ static int f(void) {
     if (!check_exact_value(-minus_number, 2.5)) failure |= 256;
     if (!check_negative_zero_float(-(float)get_test_zero())) failure |= 512;
     if (!check_negative_zero_double(-get_test_zero())) failure |= 1024;
+    if (!check_negative_infinity(-get_test_infinity())) failure |= 2048;
+    if (!check_positive_infinity(-(-get_test_infinity()))) failure |= 4096;
+    if (!check_negative_nan(-get_test_nan())) failure |= 8192;
+    if (!check_positive_nan(-(-get_test_nan()))) failure |= 16384;
+    if (!check_negative_zero(-0.0L)) failure |= 32768;
+    if (!check_positive_zero(-(-0.0L))) failure |= 65536;
     return failure;
 }
 int main(void) { return report_mask(f()); }
