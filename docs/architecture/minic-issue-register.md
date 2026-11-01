@@ -55,7 +55,7 @@
 | [MC-014](#mc-014-rv32-变参与过对齐栈帧交界) | P0 | OPEN | ASM-ONLY | RV32 | 合法 aligned(64) 变参函数：保存区与 caller stack 不连续；零剩余 GPR 的首址也错位 |
 | [MC-015](#mc-015-rv64-变参与过对齐栈帧交界) | P0 | OPEN | ASM-ONLY | RV64 | 合法 aligned(64) 变参函数：保存区跨向 caller stack 的物理地址错位 |
 | [MC-028](#mc-028-rv64-的-int128-移位计数类型限制) | P2 | OPEN | LOCAL-COMPILE-DIFF | RV64 | 合法 GNU C 的宽移位计数导致 MiniC `-S` 拒绝，窄计数可过 |
-| [MC-033](#mc-033-core-独立自增自减语句保留过时常量事实) | P0 | OPEN | GNU-NATIVE-DIFF | Core | `x++`/`x--` 语句捷径漏失效化 local fact，实测错误分支 |
+| [MC-033](#mc-033-core-独立自增自减语句保留过时常量事实) | P0 | FIXED-UNVERIFIED | GNU-NATIVE-DIFF | Core | 原语句捷径过时 fact 错码已被现行 invalidation 覆盖；新增五目标与原生运行回归 |
 | [MC-034](#mc-034-静态-record-设计符查找对无关对象做指针相减) | P1 | OPEN | ASAN-POINTER-PAIR | Frontend | 合法静态 `.x` initializer 触发栈 Record 与 heap records 无关指针相减 |
 | [MC-035](#mc-035-运行时范围初始化器借用-expression-跨扩容) | P0 | FIXED-UNVERIFIED | ASAN | Frontend | GNU range initializer 的 Expression arena UAF 已用源 span 按值快照修复；五目标容量门禁通过 |
 | [MC-036](#mc-036-record-条件表达式的-local-facts-分支合流缺口) | P1 | OPEN | GNU-NATIVE-DIFF | Core | 结构体条件式缺 fact fork/meet，实测 `f(1)` 返回值错 10 |
@@ -321,11 +321,12 @@
 
 ### MC-033 Core 独立自增自减语句保留过时常量事实
 
-- **状态：** `OPEN`，P0；`GNU-NATIVE-DIFF`。这是已在 x86-64 GNU 工具链完整链接、本机执行中复现的**真实控制流错编**；并非仅靠源码猜测。RV32/RV64/AArch64/Loong 的相同输入也都成功 `-S`，汇编里仅保留错误的返回 99 分支，**未在这些目标上执行**。
+- **状态：** `FIXED-UNVERIFIED`，P0；历史 `GNU-NATIVE-DIFF` 是已在 x86-64 GNU 工具链完整链接、本机执行中复现的**真实控制流错编**；并非仅靠源码猜测。旧版 RV32/RV64/AArch64/Loong 的相同输入都成功 `-S`，汇编里仅保留错误的返回 99 分支，**未在这些目标上执行**。
 - **位置：** `src/core/core_lower_expression.c:1237–1246` 对独立 `i++/--i` 表达式语句直接走 `minic_core_lower_scalar_update`；同文件 `:423–435` 的通用 `lower_expression` 入口先执行 `minic_core_local_fact_invalidate`。`src/core/core_lower_assignments.c:233–435` 的更新器只生成 load/算术/store，不自身处理 fact 失效。
 - **独立最小复现（2026-10-30，基线 `4f516707d`）：** `int main(void) { int x=0; x++; if (x==0) return 99; return 7; }`。`build/debug/bin/minic-cc --target=x86_64-linux -S input.i -o minic.s` 成功，`cc -no-pie minic.s -o minic` 成功，运行 `minic` 返回 **99**；GNU `cc -std=gnu11 -O0 -x c input.i -o gnu` 运行返回 **7**。MiniC 汇编确实先把递增值写回，又无条件选择旧事实 `x==0` 的分支。负向例 `--` 的相同错判也在联合探针里观察到。
-- **根因判断：** statement-only 优化捷径与普通表达式事实失效策略分叉。下一次修复须审计其他有副作用的快捷路径、合流后的事实，而非只让此单一 probe 通过。
-- **验收门槛：** 建永久 `x++/x--/++x/--x`、语句形式和嵌套表达式形式、分支真/假两路的 GNU 输出/exit-code 差分；x86-64 本机和 RV32/RV64/A64/Loong 可用目标回归；复验现存 Core CFG 优化及 `continue/goto` reentry 语义。**本轮先记录，尚未修改 Core 实现。**
+- **根因判断：** statement-only 优化捷径曾与普通表达式事实失效策略分叉；当前两处路径都在更新前失效化直接 local fact，仍需审计其他有副作用的快捷路径和合流事实。
+- **2026-11-01 复核（当前基线 `d4026e3`）：** `core_lower_expression.c` 的 statement-only 四种更新捷径现已在调用 `minic_core_lower_scalar_update` 前，针对 `MINIC_EXPRESSION_LOCAL` 执行 `minic_core_local_fact_invalidate`（与普通 value-expression 路径同义）。未取得这一修复的原始引入提交，不冒称本批新修生产代码。新增永久 `mc033_statement_updates_local_facts.c` 和 `check-mc033-statement-update-facts`：GNU C `-Wall -Wextra -Werror` 对照，四种更新语句、嵌套更新值、`goto`、`continue`，MiniC 五目标 `-S` PASS；GNU/MiniC x86_64 GNU AS/LD 本机 exit 0 一致；邻近 `run-gnu-runtime-if-effect-facts.sh` PASS。
+- **验证缺口：** RV64 既有 `run-core-postfix-update-m24.sh` 受环境缺失交叉 `crt1.o`/`-lc` 阻断；`run-core-for-postincrement-m20.sh` 受缺失 RISC-V libc headers 阻断；`run-prefix-update-expressions.sh` 的固定汇编文本断言 exit 1（当前产物已成功 `-S`，不作为新增语义回归证明）。本次**不新增生产修复**，仅补永久回归与台账；尚未做五目标 ELF/QEMU、完整 Core CFG/所有 goto reentry 验收，因此保持 `FIXED-UNVERIFIED`。
 
 ### MC-034 静态 Record 设计符查找对无关对象做指针相减
 
