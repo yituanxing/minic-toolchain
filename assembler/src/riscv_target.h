@@ -10,6 +10,8 @@
 #define MINIAS_RISCV_OPTION_PIC 1U
 #define MINIAS_RISCV_OPTION_NO_RVC 2U
 #define MINIAS_RISCV_OPTION_NO_RELAX 4U
+/* .option arch,+zbb is lexical instruction permission, never Tag_RISCV_arch. */
+#define MINIAS_RISCV_OPTION_SITE_ZBB 8U
 
 /* LI is a parsed, immutable target instruction plan. The MCInst pointer is
  * stable across stmt-vector relocation and layout retries. MCInst owns the
@@ -43,6 +45,15 @@ typedef struct MiniAsRiscvState {
     unsigned stack_align;
     bool unaligned_access_present;
     unsigned unaligned_access;
+    /* GNU GAS infers Privileged ISA 1.11 from source CSR/privileged forms,
+     * while an explicit .attribute 8/10/12 tuple can select another known
+     * version. Both policies remain private to this TargetContext. */
+    bool priv_spec_present;
+    unsigned priv_spec;
+    bool priv_spec_minor_present;
+    unsigned priv_spec_minor;
+    bool priv_spec_revision_present;
+    unsigned priv_spec_revision;
     unsigned char target_attributes[512];
     size_t target_attributes_size;
     /* GNU RISC-V .option push/pop is target-local, never shared state. */

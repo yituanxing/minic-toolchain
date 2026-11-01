@@ -244,6 +244,9 @@ bool minias_riscv_validate_parsed_isa(MiniAsParseContext *ctx, const MiniAsStmt 
                                       bool rv64_only) {
     const MiniAsRiscvState *state=minias_parse_target_state(ctx);
     const char *op=stmt->op;
+    uint64_t effective_features=state->isa_features;
+    if ((stmt->site.mode_bits & MINIAS_RISCV_OPTION_SITE_ZBB) != 0U)
+        effective_features|=RISCV_ISA_ZBB;
     /* `.option norvc` is an instruction-site state even in the historical
      * implicit ISA mode. Do not bury the C opcode gate behind explicit
      * -march validation: GNU rejects c.* after norvc in either mode. */
@@ -262,7 +265,7 @@ bool minias_riscv_validate_parsed_isa(MiniAsParseContext *ctx, const MiniAsStmt 
      * ISA instructions. Strict Base-I audits the encoded words separately. */
     if (state->isa_explicit &&
         required_features != UINT64_MAX && required_features != 0U &&
-        (state->isa_features & required_features) != required_features) {
+        (effective_features & required_features) != required_features) {
         minias_parse_error(ctx,"unsupported-isa-feature:%s:line=%zu",
                          op,stmt->line);
         return false;
@@ -354,8 +357,11 @@ static bool riscv_canonical_object_isa(const MiniAsRiscvState *state,
     return true;
 }
 
-static bool riscv_rebuild_attributes(MiniAs *as, size_t line) {
-    MiniAsRiscvState *state = MINIAS_RV_STATE(as);
+/* The only ELF attribute serializer: mutable Target semantic fields enter,
+ * one complete canonical blob leaves. Common never sees a partly edited
+ * attribute payload, and the SourceGraph pre-layout policy uses this same
+ * builder as explicit .attribute directives. NULL denotes success. */
+static const char *riscv_build_attributes(MiniAsRiscvState *state) {
     /* GAS canonicalizes M as also declaring its implied Zmmul subset even
      * when GCC's source .attribute arch omits that extension. The source
      * contract stays verbatim for .attribute conflict checks; only the
@@ -366,23 +372,30 @@ static bool riscv_rebuild_attributes(MiniAs *as, size_t line) {
     /* GNU omits an explicitly declared zero default access mode. */
     const bool emit_unaligned = state->unaligned_access_present &&
                                 state->unaligned_access != 0U;
+    const bool emit_priv_major = state->priv_spec != 0U;
+    const bool emit_priv_minor = state->priv_spec_minor != 0U;
+    const bool emit_priv_revision = state->priv_spec_revision != 0U;
     size_t size;
     unsigned char *buf = state->target_attributes;
     size_t at = 16U;
     if (!riscv_canonical_object_isa(state,object_isa,
                                     &object_isa_length)) {
-        minias_set_error(as, "riscv-object-isa-overflow:line=%zu", line);
-        return false;
+        return "riscv-object-isa-overflow";
     }
     arch_size = object_isa_length + 1U;
     size = 17U + arch_size +
                         (state->stack_align_present ?
                             1U + riscv_uleb32_size(state->stack_align) : 0U) +
                         (emit_unaligned ?
-                            1U + riscv_uleb32_size(state->unaligned_access) : 0U);
+                            1U + riscv_uleb32_size(state->unaligned_access) : 0U) +
+                        (emit_priv_major ?
+                            1U + riscv_uleb32_size(state->priv_spec) : 0U) +
+                        (emit_priv_minor ?
+                            1U + riscv_uleb32_size(state->priv_spec_minor) : 0U) +
+                        (emit_priv_revision ?
+                            1U + riscv_uleb32_size(state->priv_spec_revision) : 0U);
     if (size > sizeof(state->target_attributes)) {
-        minias_set_error(as, "riscv-attribute-overflow:line=%zu", line);
-        return false;
+        return "riscv-attribute-overflow";
     }
     memset(buf, 0, size);
     buf[0] = 'A';
@@ -401,11 +414,31 @@ static bool riscv_rebuild_attributes(MiniAs *as, size_t line) {
         buf[at++] = 6U;
         at += riscv_store_uleb32(buf + at, state->unaligned_access);
     }
+    if (emit_priv_major) {
+        buf[at++] = 8U;
+        at += riscv_store_uleb32(buf + at, state->priv_spec);
+    }
+    if (emit_priv_minor) {
+        buf[at++] = 10U;
+        at += riscv_store_uleb32(buf + at, state->priv_spec_minor);
+    }
+    if (emit_priv_revision) {
+        buf[at++] = 12U;
+        at += riscv_store_uleb32(buf + at, state->priv_spec_revision);
+    }
     if (at != size) {
-        minias_set_error(as, "internal:riscv-attribute-layout");
-        return false;
+        return "internal:riscv-attribute-layout";
     }
     state->target_attributes_size = size;
+    return NULL;
+}
+
+static bool riscv_rebuild_attributes(MiniAs *as, size_t line) {
+    const char *error = riscv_build_attributes(MINIAS_RV_STATE(as));
+    if (error != NULL) {
+        minias_set_error(as,"%s:line=%zu",error,line);
+        return false;
+    }
     return true;
 }
 
@@ -424,6 +457,15 @@ static bool riscv_set_numeric_attribute(MiniAs *as, unsigned tag,
     } else if (tag == 6U) {
         present = &state->unaligned_access_present;
         stored = &state->unaligned_access;
+    } else if (tag == 8U) {
+        present = &state->priv_spec_present;
+        stored = &state->priv_spec;
+    } else if (tag == 10U) {
+        present = &state->priv_spec_minor_present;
+        stored = &state->priv_spec_minor;
+    } else if (tag == 12U) {
+        present = &state->priv_spec_revision_present;
+        stored = &state->priv_spec_revision;
     } else {
         minias_set_error(as, "unsupported-riscv-attribute-tag:%u:line=%zu",
                          tag, line);
@@ -448,6 +490,7 @@ static bool riscv_assemble_attribute(MiniAs *as, const char *args, size_t line) 
     const char *front, *back;
     size_t len;
     unsigned long number;
+    unsigned numeric_tag;
     if (comma == NULL) goto invalid;
     front = args;
     while (isspace((unsigned char)*front)) ++front;
@@ -478,39 +521,131 @@ static bool riscv_assemble_attribute(MiniAs *as, const char *args, size_t line) 
         }
         return true;
     }
-    if (strcmp(key, "stack_align") != 0 && strcmp(key, "4") != 0 &&
-        strcmp(key, "unaligned_access") != 0 && strcmp(key, "6") != 0)
-        goto invalid;
+    if (strcmp(key, "stack_align") == 0 || strcmp(key, "4") == 0)
+        numeric_tag = 4U;
+    else if (strcmp(key, "unaligned_access") == 0 || strcmp(key, "6") == 0)
+        numeric_tag = 6U;
+    else if (strcmp(key, "priv_spec") == 0 || strcmp(key, "8") == 0)
+        numeric_tag = 8U;
+    else if (strcmp(key, "priv_spec_minor") == 0 || strcmp(key, "10") == 0)
+        numeric_tag = 10U;
+    else if (strcmp(key, "priv_spec_revision") == 0 || strcmp(key, "12") == 0)
+        numeric_tag = 12U;
+    else goto invalid;
+    /* GNU forbids setting the privileged ELF version after an instruction,
+     * including an ordinary NOP. Retained Fragments give us that boundary
+     * without rescanning source text or touching Common parser state. */
+    if (numeric_tag >= 8U) {
+        for (size_t i = 0U; i < as->stmt_count; ++i) {
+            if (as->stmts[i].fragment_kind == MINIAS_FRAGMENT_INSTRUCTION) {
+                minias_set_error(as, "riscv-priv-attribute-after-instruction:line=%zu",
+                                 line);
+                return false;
+            }
+        }
+    }
     errno = 0;
     number = strtoul(value, &end, 0);
     if (end == value || *end != '\0' || errno == ERANGE ||
         number > UINT32_MAX)
         goto invalid;
-    return riscv_set_numeric_attribute(
-        as, (strcmp(key, "stack_align") == 0 || strcmp(key, "4") == 0) ? 4U : 6U,
-        (unsigned)number, line);
+    return riscv_set_numeric_attribute(as,numeric_tag,(unsigned)number,line);
 invalid:
     minias_set_error(as, "unsupported-riscv-attribute:%s:line=%zu", args, line);
     return false;
 }
 
-/* Recognize only documented legacy-region ISA additions. GNU accepts
+/* GAS marks a file as using the privileged specification for the source CSR
+ * instruction family and selected privileged instructions. The *spelling*
+ * matters: rdcycle/rdtime aliases, floating CSR aliases, ECALL/EBREAK and
+ * literal .insn bytes do not trigger Tag_RISCV_priv_spec even if some encode
+ * with the same system opcode. Match only verified, successfully parsed
+ * instruction Fragments, never the broad 0x73 encoding or arbitrary text. */
+static bool riscv_source_uses_priv_spec(const char *op) {
+    static const char *const csr_forms[] = {
+        "csrr", "csrrw", "csrrs", "csrrc", "csrrwi", "csrrsi", "csrrci",
+        "csrw", "csrs", "csrc", "csrwi", "csrsi", "csrci",
+        "sret", "wfi", "sfence.vma"
+    };
+    size_t i;
+    for (i = 0U; i < sizeof(csr_forms) / sizeof(csr_forms[0]); ++i)
+        if (strcmp(op,csr_forms[i]) == 0) return true;
+    return false;
+}
+
+/* Complete parsed instruction graph, but mutable TargetContext only. GNU
+ * defaults to privileged version 1.11.0 on an inferred use, unless the
+ * source supplied a nonzero, supported version tuple. A requested partial
+ * tuple (e.g. 1.0.0) is an error, not permission to fill missing components.
+ * The common SourceGraph and MCLayout are only borrowed, never modified. */
+static bool riscv_prepare_layout(const MiniAsPreLayoutView *view,
+                                 char *error, size_t error_size) {
+    MiniAsRiscvState *state = (MiniAsRiscvState *)view->target_state;
+    bool uses_priv_spec = false;
+    size_t i;
+    for (i = 0U; i < view->stmt_count; ++i) {
+        const MiniAsStmt *stmt = &view->stmts[i];
+        if (stmt->fragment_kind == MINIAS_FRAGMENT_INSTRUCTION &&
+            riscv_source_uses_priv_spec(stmt->op)) {
+            uses_priv_spec = true;
+            break;
+        }
+    }
+    if (state->priv_spec == 0U && state->priv_spec_minor == 0U &&
+        state->priv_spec_revision == 0U && uses_priv_spec &&
+        state->target_attributes_size != 0U) {
+        /* All-zero explicit tags are also GNU's default-selection sentinel. */
+        state->priv_spec = 1U;
+        state->priv_spec_minor = 11U;
+    }
+    if (state->priv_spec != 0U || state->priv_spec_minor != 0U ||
+        state->priv_spec_revision != 0U) {
+        const unsigned major = state->priv_spec;
+        const unsigned minor = state->priv_spec_minor;
+        const unsigned revision = state->priv_spec_revision;
+        if (major != 1U ||
+            !((minor == 9U && revision == 1U) ||
+              (minor == 10U && revision == 0U) ||
+              (minor == 11U && revision == 0U) ||
+              (minor == 12U && revision == 0U))) {
+            snprintf(error,error_size,
+                     "unknown-riscv-priv-spec:%u.%u.%u",major,minor,revision);
+            return false;
+        }
+    }
+    if (state->target_attributes_size != 0U) {
+        const char *build_error = riscv_build_attributes(state);
+        if (build_error != NULL) {
+            snprintf(error,error_size,"%s",build_error);
+            return false;
+        }
+    }
+    return true;
+}
+
+/* Recognize only documented region ISA additions. GNU accepts
  * whitespace around the comma (`arch,+v` and `arch, +v` are equivalent);
- * do not turn other .option arch operands into silent no-ops. */
-static bool riscv_legacy_arch_add_option(const char *args) {
+ * do not turn other .option arch operands into silent no-ops. The returned
+ * feature is NOT a file-wide Tag_RISCV_arch attribute update. */
+static uint64_t riscv_arch_add_feature_option(const char *args) {
     const char *p = args;
     while (isspace((unsigned char)*p)) ++p;
-    if (strncmp(p, "arch", 4U) != 0) return false;
+    if (strncmp(p, "arch", 4U) != 0) return 0U;
     p += 4U;
     while (isspace((unsigned char)*p)) ++p;
-    if (*p++ != ',') return false;
+    if (*p++ != ',') return 0U;
     while (isspace((unsigned char)*p)) ++p;
-    if (*p++ != '+') return false;
-    if (strncmp(p, "zbb", 3U) == 0) p += 3U;
-    else if (*p == 'v') ++p;
-    else return false;
+    if (*p++ != '+') return 0U;
+    uint64_t feature;
+    if (strncmp(p, "zbb", 3U) == 0) {
+        feature=RISCV_ISA_ZBB;
+        p += 3U;
+    } else if (*p == 'v') {
+        feature=RISCV_ISA_V;
+        ++p;
+    } else return 0U;
     while (isspace((unsigned char)*p)) ++p;
-    return *p == '\0';
+    return *p == '\0' ? feature : 0U;
 }
 
 /* One option-state transition function for both legacy and explicit ISA
@@ -520,6 +655,7 @@ static bool riscv_legacy_arch_add_option(const char *args) {
 static bool riscv_target_directive(MiniAs *as, const char *op,
                                    const char *args, size_t line, bool *handled) {
     MiniAsRiscvState *state=MINIAS_RV_STATE(as);
+    uint64_t region_feature;
     *handled=false;
     if(strcmp(op,".attribute")==0) {
         *handled=true;
@@ -555,11 +691,15 @@ static bool riscv_target_directive(MiniAs *as, const char *op,
             return false;
         }
         state->options=state->option_stack[--state->option_depth];
-    } else if(!state->isa_explicit && riscv_legacy_arch_add_option(args)) {
-        /* In the permissive legacy profile V/Zbb are already available.
-         * GNU .option arch,+ext is a local region's instruction permission,
-         * not a file-wide Tag_RISCV_arch declaration.  Do not rewrite ELF
-         * attributes or relax explicit -march ISA restrictions here. */
+    } else if((region_feature=riscv_arch_add_feature_option(args)) != 0U) {
+        /* GNU permits +zbb at an instruction site even with explicit -march
+         * lacking Zbb. push/pop restores this target-private lexical bit;
+         * ELF Tag_RISCV_arch always describes the selected file ISA. */
+        if (region_feature == RISCV_ISA_ZBB)
+            state->options|=MINIAS_RISCV_OPTION_SITE_ZBB;
+        else if (state->isa_explicit)
+            goto unsupported; /* +v needs its own verified site policy. */
+        /* Legacy implicit ISA already permits V and Zbb instructions. */
     } else if(strcmp(args,"norelax")==0) {
         /* GNU GAS retains the final target .option relax state through
          * push/pop and gates deferred ULEB relocation emission with it.
@@ -894,6 +1034,7 @@ static const MiniAsTargetOps riscv_ops = {
     .destroy_target_state = riscv_destroy_target_state,
     .configure_legacy_target = riscv_configure_legacy,
     .capture_site_state = riscv_capture_site_state,
+    .prepare_layout = riscv_prepare_layout,
     .default_exec_alignment_for_site = riscv_default_exec_alignment_for_site,
     .elf_machine = 243U, /* EM_RISCV */
     .parse_target_directive = riscv_target_directive,

@@ -166,8 +166,12 @@ Later same-head job-level evidence in `41267765128`: **x86-64 SUCCESS**
 both QEMU P0 2/2 + P1 12/12); **LoongArch64 SUCCESS** (2,748/2,748
 objects, 3,004 MiniAS invocations, QEMU P0 2/2 + P1 12/12); LoongArch
 and AArch64 independent GNU baselines SUCCESS. The **AArch64 MiniAS**
-Kbuild/boot job was still **IN PROGRESS** at this later checkpoint. No
-cross-SHA aggregation or premature fourth result is allowed.
+job subsequently also **SUCCEEDED**: 4,171/4,171 Kbuild assembler
+objects, 4,415/4,415 MiniAS invocations, no bypasses, QEMU P0 2/2 and
+P1 12/12. Together with the same-SHA `41267765088` RV64 linux-single
+success, all four real Linux targets have P0/P1 success on `7bc9b65c`.
+The four targets use two separately triggered workflows; no result may
+be transferred to later SHAs.
 
 ### Next in-progress production deletion — duplicate alias DAG refresh
 
@@ -225,6 +229,66 @@ behavior. The integrated Release `-Werror` and A0 **30/30 PASS** with GNU
 cross tools. This is a **small, proven subset**, not a claim that all 3,309
 historical DIFF have disappeared. Do **not** disable symbol/relocation
 comparison or fire the 3,536 full gate until this grouped change is ready.
+
+### 2026-11-01 `0af59539` semantic return; next scoped Zbb batch
+
+The actual re-run on `0af59539` confirms the local-LA fix affects
+real Linux C assembly, not only synthetic tests: C149 improves from
+**147/149 to 148/149** GNU semantic equality (`hwprobe.i.s` fixed);
+`vgettimeofday.i.s` remains a `.riscv.attributes` metadata-only difference
+despite byte-identical `.text` and equal relocations. Example C shards
+improve `next500` **31→185/500**, `new500` **11→125/500**,
+`first500` **10→97/500**, `next500b` **3→18/500**. Full strict 3,536
+comparison (run `41270318021`, all nine GNU comparison jobs completed)
+totals **696 semantic equal / 2,828 semantic DIFF / 12 MINIAS_FAIL /
+0 GNU_FAIL / 0 inconclusive / 0 oracle error**. Relative to `7bc9b65c`
+this is **+481 exact semantic matches**, but remains a RED strict gate.
+The failing native35 cases still include six unsupported scoped `+zbb`
+inputs; first500 has six other MiniAS failures. Aggregate remains RED,
+without weakening `--require-equal` or any ELF semantic dimension.
+
+On the same `0af59539` SHA, **3,536/3,536 hard gate** (run
+`41270318037`, 11/11 jobs) and **frozen 3×7** (run `41270318023`,
+22/22 jobs including 21/21 shards) **SUCCEEDED**. Those confirm assembly
+and frozen replay only, not GNU equality. Its independent RV64
+`linux-single` job (run `41270318021`) subsequently **SUCCEEDED**:
+2,099/2,099 Kbuild object matches, 2,225 MiniAS passes, expected 14
+compatibility probes and one compiler query, no bypasses, QEMU P0 init/sh
+and P1 12/12 PASS. The x86/AArch64/LoongArch64 Kbuild/QEMU run
+`41270318051` was still **IN PROGRESS** at this checkpoint; its
+results require separate terminal evidence.
+
+The next targeted production change permits **only** scoped
+`.option arch,+zbb` through the existing RISC-V Target option stack and
+`stmt->site.mode_bits`, without modifying base ISA/ELF attributes or
+Common. It is GNU byte-tested under RV32/RV64, including pure Base-I
+profiles, nested push/pop and post-pop failures. Unknown options and
+strict Base-I executable-word audit remain fail-closed. New GNU oracle is
+mandatory A0, local Release `-Werror` and A0 **30/30 PASS**. It does
+**not** implement full Zbb; only the already-supported `ctz`, `orc.b`,
+`rev8` forms can benefit. Native35's six files must be re-measured on
+the next head, not assumed fixed before real input tests.
+
+Independent native35 evidence inspection confirms the prior six
+`lib/purgatory` `strcmp`/`strlen`/`strncmp` failures each stopped first at
+`unsupported-isa-option:arch,+zbb`. They represent only **three distinct
+input SHA256s** reused by purgatory. Historical CI artifacts preserve
+manifest/semantic reports but **not** their six original `.s` byte streams;
+the current local six-real-input oracle is therefore **SKIP, not PASS**.
+The next same-head native35 CI must regenerate the inputs and evaluate
+both acceptance and strict GNU semantics.
+
+The pending batch also fixes the remaining C149 `vgettimeofday.i.s`
+**metadata-only** divergence: a GNU-verified source CSR/privileged mnemonic
+requires RISC-V Tag_File priv_spec 1.11.0. One Target-owned attributes
+builder now emits the explicit or inferred Tag 8/10/12 fields, using the
+existing immutable pre-layout Fragment view for source-form inference;
+there is no second ELF byte-appending implementation or Common policy.
+GNU RV32/RV64 `-mno-relax` oracle **30 exact objects + 10 expected
+rejections PASS**, and the real regenerated `vgettimeofday.i` has both
+`.text` and `.riscv.attributes` GNU byte-exact. Release `-Werror` and
+A0 30/30 PASS locally; only remote next-head semantic replay can certify
+the expected C149 **149/149** result. See architecture decisions §33.
 
 This top section is the **current progress snapshot**. Later sections retain
 their original 2026-10-29 audit/batch evidence as history; their “pending CI”

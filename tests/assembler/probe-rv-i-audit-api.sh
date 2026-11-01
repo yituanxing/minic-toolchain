@@ -21,7 +21,8 @@ for xlen in 32 64; do
     test -s "$work/good-$xlen.o"
 
     for escaped in '.word 0x02050533' '.org 8' \
-                   '.insn r 0x33, 0, 1, a0, a0, a1' 'mul a0, a0, a1'; do
+                   '.insn r 0x33, 0, 1, a0, a0, a1' 'mul a0, a0, a1' \
+                   $'.option arch,+zbb\nctz a0, a0'; do
         printf '.text\n%s\n' "$escaped" >"$work/input.s"
         if "$work/rv-i-audit" "$work/input.s" "$work/bad-$xlen.o" "$xlen" \
                 2>"$work/audit.err"; then
@@ -29,7 +30,7 @@ for xlen in 32 64; do
             exit 1
         fi
         test ! -e "$work/bad-$xlen.o"
-        if [[ "$escaped" == mul* ]]; then
+        if [[ "$escaped" == mul* || "$escaped" == '.option arch,+zbb'* ]]; then
             grep -Fq "rv${xlen}i-unsupported-machine-encoding" "$work/audit.err"
         else
             grep -Fq 'unsupported-isa-escape:' "$work/audit.err"

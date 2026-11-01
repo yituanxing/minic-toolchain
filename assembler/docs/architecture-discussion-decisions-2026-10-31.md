@@ -1351,3 +1351,70 @@ five related existing GNU probes and A0 **30/30 PASS**. The historical
 3,309 strict semantic DIFF and six native `.option arch,+zbb` failures
 are **not** declared resolved by this one targeted fix; run representative
 Linux `.s` comparisons before any expensive same-head 3,536 replay.
+
+## 32. 2026-11-01 — `.option arch,+zbb` belongs to immutable instruction-site policy
+
+The strict native35 GNU corpus reached six genuine MiniAS failures on
+`.option arch,+zbb`, before the succeeding `ctz`/`orc.b`/`rev8` instructions
+could be evaluated. GNU GAS proves a region-scoped contract even under
+explicit base-I `-march`: `.option push; .option arch,+zbb; ...; .option pop`
+permits region instructions, then again rejects Zbb outside the region;
+it does **not** add Zbb to file-wide `Tag_RISCV_arch`.
+
+The existing RISC-V Target `options` stack already records lexical PIC,
+RVC and relaxation mode and snapshots `stmt->site.mode_bits` per MCInst.
+A new private `MINIAS_RISCV_OPTION_SITE_ZBB` bit extends that existing
+state. `riscv_validate_parsed_isa` uses the union of base ISA features and
+the **instruction's immutable site Zbb bit**. No Common IR field, second
+parse pass, global `state->isa_features` rewrite or ELF attribute mutation
+is required. Unknown `.option arch` values, explicit `+m`/`+v`, and
+unsupported `arch,-zbb` remain errors; `.option push/pop` handles scope.
+
+The new mandatory `probe-rv-zbb-site-gnu.sh` verifies RV32/RV64 GNU bytes,
+pure `rv32i`/`rv64i` scoped positives, nested push/pop, post-pop and
+unknown-extension negatives, zero unexpected relocations and each assembler's
+**own** ELF arch string unchanged by the region. The old A0 blanket
+`+zbb` negative test becomes a scoped positive while `+m/+v/rvc` negatives
+remain, and strict Base-I raw-word audit newly rejects a Zbb word even
+inside a permitted source region. Local Release `-Werror`, GNU oracle,
+and A0 30/30 **PASS**. The current Zbb **encoder** implements only
+`ctz`, `orc.b` and `rev8`; `clz/cpop/andn` and the rest of the extension
+are not certified and need independent forms and GNU tests.
+
+The next remote exact-head 35-native oracle must confirm whether these
+six real source files contain only the supported subset. This phase is
+pending grouped push/CI; it is not yet a native35 result.
+
+## 33. 2026-11-01 — infer GNU privileged ELF metadata through one Target builder
+
+The remaining `arch/riscv/kernel/vdso/vgettimeofday.i.s` C149 GNU semantic
+DIFF is **not** machine instruction or relocation output: on the generated
+real Linux input the GNU and MiniAS `.text` bytes, relocations and symbols
+already agree. Only `.riscv.attributes` differs: GNU emits
+`Tag_RISCV_priv_spec=1` and `Tag_RISCV_priv_spec_minor=11` (privileged
+version 1.11) in response to source CSR and selected privileged instruction
+forms; MiniAS previously emitted only the ISA/stack/unaligned tags.
+
+The RISC-V Target now records semantic numeric Tag_File fields 8/10/12,
+alongside the existing 4/5/6 fields. Its **same** Target-owned
+`riscv_build_attributes` produces ELF bytes for both explicit `.attribute`
+directives and implicit privileged-version inference. No second byte
+append/offset-patch serializer is retained. The existing `prepare_layout`
+hook has immutable access to the complete retained instruction Fragments
+and mutable access only to the selected Target state; it detects a narrow
+GNU-verified mnemonic set, infers version 1.11.0 when no explicit tuple
+was set, and rebuilds attributes through that one builder. Raw system
+opcodes, generic `ecall`/`ebreak`, floating-CSR aliases and time/cycle
+pseudos do not cause blanket inference. Explicit source tags are parsed,
+ordered canonically and checked against GNU-valid version tuples; a late
+privileged `.attribute` after any instruction is rejected like GNU.
+
+The new mandatory `probe-rv-priv-spec-gnu.sh` compares **both** `.text`
+and `.riscv.attributes` bytes against GNU `-mno-relax` for RV32 and RV64:
+30 successful cases spanning automatic triggers, negative-trigger controls,
+version 1.9.1/1.10/1.12, zero defaults and 10 GNU-matched errors. The
+recompiled, frozen C149 `vgettimeofday.i` local oracle now has GNU-exact
+`.text` **and attributes**, not an assumed semantic-ignore rule. Release
+`CFLAGS=-Werror` and A0 30/30 PASS locally. This change has not yet
+received the 3,536-object **remote exact-head** semantic verdict; C149's
+expected next-head improvement must be confirmed by CI before certification.
