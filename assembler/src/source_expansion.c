@@ -1712,23 +1712,24 @@ static bool process_source_range(MiniAs *as,
                                  size_t begin,
                                  size_t end) {
     size_t i = begin;
+    /* Reuse one checked buffer for mutually exclusive macro/repeat args. */
+    char *collector_argument=NULL;
+    size_t collector_capacity=0U;
 
     while (i < end && !as->source->source_ended) {
         MiniAsStableSiteId line_site;
         bool inline_handled=false;
-        char macro_argument[1024];
-        char argument[256];
         size_t repeat_label_prefix=0U;
         int kind;
 
-        if(!minias_source_graph_line_site(as,&lines[i],&line_site))return false;
+        if(!minias_source_graph_line_site(as,&lines[i],&line_site))goto failed;
         as->source->current_site=line_site;
 
         /* File and expansion frames must agree on the semicolon-separated
          * GNU inline `.rept/.irp ... .endr` grammar. Dispatch that one
          * lexical special case before collector classification in BOTH. */
         if(!process_inline_repeat_line(as,lines[i].text,lines[i].line,
-                                       &inline_handled))return false;
+                                       &inline_handled))goto failed;
         if(inline_handled) {++i;continue;}
 
         /* GAS does not lex .macro/.rept/.irp at all in an inactive .if
@@ -1736,35 +1737,42 @@ static bool process_source_range(MiniAs *as,
          * particular, an unterminated .macro and unmatched .endm/.endr in
          * skipped text are harmless source, not collector syntax. */
         if(!as->source->conditional_active) {
-            if(!process_source_line(as,lines[i].text,lines[i].line))return false;
+            if(!process_source_line(as,lines[i].text,lines[i].line))goto failed;
             ++i;
             continue;
         }
 
+        /* The parameter text cannot exceed the source line itself. */
+        size_t needed=strlen(lines[i].text)+1U;
+        if(!minias_grow_array((void **)&collector_argument,
+                              &collector_capacity,1U,needed)) {
+            minias_set_error(as,"out-of-memory:source-collector-arguments");
+            goto failed;
+        }
         kind=classify_collector_line(as,lines[i].text,
-                                     macro_argument,sizeof(macro_argument),
-                                     argument,sizeof(argument),
+                                     collector_argument,collector_capacity,
+                                     collector_argument,collector_capacity,
                                      &repeat_label_prefix);
         if (kind < 0) {
             minias_set_error(as, "%s",kind==MINIAS_COLLECTOR_MACRO_ERROR ?
                              "out-of-memory:macro-classify" :
                              "out-of-memory:repeat-classify");
-            return false;
+            goto failed;
         }
         if (kind == MINIAS_MACRO_END) {
             minias_set_error(as,
                              "unmatched-directive:.endm:line=%zu",
                              lines[i].line);
-            return false;
+            goto failed;
         }
         if (kind == MINIAS_MACRO_BEGIN) {
             size_t j;
-            if(!find_collector_close(as,lines,i,end,kind,&j))return false;
+            if(!find_collector_close(as,lines,i,end,kind,&j))goto failed;
             if (!define_macro(as,
-                              macro_argument,
+                              collector_argument,
                               lines + i + 1U,
                               j - i - 1U,
-                              lines[i].line))return false;
+                              lines[i].line))goto failed;
             i = j + 1U;
             continue;
         }
@@ -1773,23 +1781,23 @@ static bool process_source_range(MiniAs *as,
             minias_set_error(as,
                              "unmatched-directive:.endr:line=%zu",
                              lines[i].line);
-            return false;
+            goto failed;
         }
         if (kind == MINIAS_REPEAT_REPT || kind == MINIAS_REPEAT_IRP) {
             size_t j;
             if(!emit_repeat_leading_label(as,lines[i].text,
                                           repeat_label_prefix,
-                                          lines[i].line))return false;
-            if(!find_collector_close(as,lines,i,end,kind,&j))return false;
+                                          lines[i].line))goto failed;
+            if(!find_collector_close(as,lines,i,end,kind,&j))goto failed;
             if (kind == MINIAS_REPEAT_REPT) {
                 uint64_t repetitions;
                 uint64_t iteration;
 
                 if (!repeat_count_value(as,
-                                        argument,
+                                        collector_argument,
                                         lines[i].line,
                                         &repetitions)) {
-                    return false;
+                    goto failed;
                 }
                 for (iteration = 0U;
                      iteration < repetitions && !as->source->source_ended;
@@ -1804,26 +1812,30 @@ static bool process_source_range(MiniAs *as,
                         .iteration=(size_t)iteration
                     };
                     if (!minias_source_frame_process(as,&body)) {
-                        return false;
+                        goto failed;
                     }
                 }
             } else if (!process_irp_block(as,
                                           lines + i + 1U,
                                           j - i - 1U,
-                                          argument,
+                                          collector_argument,
                                           lines[i].line,
                                           line_site)) {
-                return false;
+                goto failed;
             }
             i = j + 1U;
             continue;
         }
         if (!process_source_line(as, lines[i].text, lines[i].line)) {
-            return false;
+            goto failed;
         }
         ++i;
     }
+    free(collector_argument);
     return true;
+failed:
+    free(collector_argument);
+    return false;
 }
 
 /* GNU GAS permits semicolon-separated assignments and complete .rept/.irp
@@ -1846,11 +1858,12 @@ static bool process_inline_repeat_line(MiniAs *as,const char *source,
     cursor=copy;
     while(cursor!=NULL) {
         char *end=find_statement_separator(cursor);
-        char argument[256];
+        char unused_argument;
         int kind;
         if(end!=NULL)*end='\0';
+        /* Kind-only inline recognition must not copy unused arguments. */
         kind=classify_collector_line(as,cursor,NULL,0U,
-                                     argument,sizeof(argument),NULL);
+                                     &unused_argument,0U,NULL);
         if(kind<0 || !minias_grow_array((void **)&pieces,&capacity,
                                    sizeof(*pieces),count+1U)) {
             minias_set_error(as,"out-of-memory:inline-repeat-segments");

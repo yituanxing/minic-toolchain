@@ -188,6 +188,24 @@ also removed: the preceding check already rejects it while the
 fragment-id bounds check remains. P04's live transaction phases and
 encode callback are otherwise unchanged.
 
+### 2026-11-01 retire fixed outer collector argument caps
+
+The SourceFrame active collector still used two independent on-stack
+`macro_argument[1024]` / `argument[256]` copies for mutually exclusive
+directive kinds. One checked per-frame, reusable `minias_grow_array`
+scratch buffer now accepts the entire line without an arbitrary copy
+limit. Every error branch in this precise source collection function
+releases the buffer through one `failed:` exit. The semicolon-inline
+collector also stops copying a 256-byte parameter argument that it
+never consumes, matching the already cleaned nested kind-only scanner.
+The macro/repeat semantic evaluators, source replay, recursion and
+Target ISA limits are intentionally not changed.
+
+The mandatory A0 GNU byte oracle checks a 1300-character macro default,
+130-element outer IRP and 120-element inline semicolon IRP, with 250
+byte-exact values. This removes the old 1024/256 *copy caps*, not a
+separately justified argument-count or expression-length constraint.
+
 ## Current refactor dashboard — 2026-11-01 (exact-head recovery and live-path audit)
 
 ### 2026-11-01 Source collector single-pass de-duplication (local batch)
