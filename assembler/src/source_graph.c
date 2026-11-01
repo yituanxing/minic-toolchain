@@ -248,6 +248,40 @@ bool minias_source_graph_line_site(MiniAs *as,
     return minias_source_graph_intern(as,key,site_id);
 }
 
+/* EOF is a synthetic LINE site with origin_line=file_line_count+1.
+ * Keep that identity inside SourceGraph: it must match previous replays
+ * exactly even though Common materializes pools and local .comm fragments. */
+bool minias_source_graph_begin_eof(MiniAs *as) {
+    MiniAsSourceGraph *graph=as->source->graph;
+    MiniAsSourceLine eof={0};
+    if(graph==NULL || graph->physical.count==SIZE_MAX) {
+        minias_set_error(as,"invalid-source-graph-eof");
+        return false;
+    }
+    eof.line=graph->physical.count+1U;
+    return minias_source_graph_line_site(as,&eof,&as->source->current_site);
+}
+
+/* A fragment without a stable source owner makes forced-branch rebinding
+ * unsafe. Keep the full identity proof with the persistent SourceGraph,
+ * rather than inspecting its private site cardinality from the lowerer. */
+bool minias_source_graph_validate_fragment_sites(MiniAs *as) {
+    const MiniAsSourceGraph *graph=as->source->graph;
+    size_t i;
+    if(graph==NULL) {
+        minias_set_error(as,"invalid-source-graph-state");
+        return false;
+    }
+    for(i=0U;i<as->stmt_count;++i) {
+        const MiniAsStableSiteId site=as->stmts[i].source_site;
+        if(site==MINIAS_SITE_NONE || site>graph->site_count) {
+            minias_set_error(as,"fragment-without-source-site:%zu",i);
+            return false;
+        }
+    }
+    return true;
+}
+
 void minias_source_graph_record_condition(MiniAs *as,
                                           MiniAsStableSiteId owner,
                                           bool active) {

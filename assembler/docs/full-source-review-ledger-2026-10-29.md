@@ -161,6 +161,33 @@ constraint. The per-instruction Target legality, 64 macro argument
 slots, x86 code16/32 allowlist and Target encode-ownership restrictions
 remain intact until separately proven redundant.
 
+### 2026-11-01 SourceGraph EOF ownership and stale nested-argument limit cleanup
+
+P05 narrowing: the Common source loader used to manufacture a temporary
+`MiniAsSourceLine eof` and directly validate `graph->site_count` against
+each Fragment's retained SourceSiteID. Both responsibilities now live inside
+the existing SourceGraph owner: its EOF site constructor preserves the same
+`LINE(parent, line=count+1, segment=0)` identity, and its Fragment-site
+validator preserves the existing fail-closed diagnostic. Common continues
+to own final literal pools, local .comm fragments and alias/layout updates.
+This removes direct SourceGraph site-table inspection from the loader; it
+does **not** claim that all remaining P05 Source/Fragment coupling is gone.
+
+The source collector's nested delimiter scan also allocated and discarded
+1024/256-byte argument scratch buffers, inadvertently rejecting long
+nested directives before they were actually consumed. It now requests
+**kind-only** classification (capacity zero), while outer live macro and
+repeat argument length rules remain unchanged. This deletes one false
+parsing restriction without weakening any Target ISA/ABI feature gate.
+
+A mandatory A0 GNU x86 probe checks a nested long directive in an
+unexpanded macro, local .comm EOF-origin materialization, exact .text
+bytes and the single physical-read SourceGraph contract. The one redundant
+`!emitting_fragment` check in the Target instruction byte guard was
+also removed: the preceding check already rejects it while the
+fragment-id bounds check remains. P04's live transaction phases and
+encode callback are otherwise unchanged.
+
 ## Current refactor dashboard — 2026-11-01 (exact-head recovery and live-path audit)
 
 ### 2026-11-01 Source collector single-pass de-duplication (local batch)

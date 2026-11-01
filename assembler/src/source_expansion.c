@@ -1670,8 +1670,8 @@ static bool process_irp_block(MiniAs *as,
 }
 
 /* Macro and repeat collectors differ in delimiter grammar, not in their
- * nesting walk. Preserve their independent argument limits and diagnostics,
- * but maintain only one matching/end-of-input implementation. */
+ * nesting walk. Only outer collectors consume arguments; nested scans
+ * identify delimiters without imposing a second parameter-length limit. */
 static bool find_collector_close(MiniAs *as,const MiniAsSourceLine *lines,
                                  size_t opening,size_t end,int kind,
                                  size_t *closing) {
@@ -1680,10 +1680,13 @@ static bool find_collector_close(MiniAs *as,const MiniAsSourceLine *lines,
                           kind==MINIAS_REPEAT_IRP?".irp":".rept";
     size_t depth=1U,j=opening+1U;
     for(;j<end;++j) {
-        char argument[1024];
+        /* Only the delimiter kind is used during nesting. Do not copy
+         * discarded arguments into a capped 1 KiB/256-byte scratch array
+         * or reject nested directives just because their text is long. */
+        char unused_argument;
         int nested=classify_collector_line(as,lines[j].text,
-                    macro?argument:NULL,macro?sizeof(argument):0U,
-                    macro?NULL:argument,macro?0U:256U,NULL);
+                    macro?&unused_argument:NULL,0U,
+                    macro?NULL:&unused_argument,0U,NULL);
         if(nested<0) {
             minias_set_error(as,"%s",macro?
                 "out-of-memory:macro-classify":
