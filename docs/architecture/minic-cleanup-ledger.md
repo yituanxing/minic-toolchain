@@ -1388,6 +1388,56 @@ AArch64 probes 明示 `GNU_GAS=SKIP` / `GAS=SKIP` 者只计源 `-S`
 preflight 仍不由本清理批次处理。本 C37 新提交的远端 CI 状态
 将在下一次按精确 HEAD 核查，不能沿用 C35 的绿色证据。
 
+## 批次 C38：x86 ASM 源端最后一份全文深读、同值匹配及死守卫收敛
+
+**基线：** C37 远端 `af5b72e8`，2026-11-01。本批将最后未完成全文
+审读的 `src/target/x86_64/asm_contract.c`（基线 **8,972 行**）
+按 1–4,800 / 4,501–8,972 重叠分段逐段读完并交叉检查，
+先前 C35 只计索引扫描、不重复计入深读。至此生产源码全文审读
+**342/342**：Frontend **71/71**、Compiler **11/11**、
+Core **48/48**、Target **212/212**。这意味着逐文件首轮盘点完成，
+**不意味着所有跨层迁移、Linux 运行验收或记录的问题已经解决**。
+
+| 证明对象 | 所有权与本批决定 |
+| --- | --- |
+| x86 source admission 与机器边界 | 23 个 typed FormId 的模板、variant、operand roles 及 88 个 legacy source qualifier 仍由 x86 Target 准入；Core FormId 可被独立客户端构造，machine owner 仍必须复核可信模板、固定物理寄存器和 ISA。**KEEP(source≠machine)**；跨层消重 **NEEDS_PROOF(MC-078)**，不移除任何机器层 gate。 |
+| KVM、控制流、寄存器绑定 | Hypercall 函数入口已拒绝 `!src`，后续第二次判空恒假；MOVDQA 对应一元操作数数组及 count 已验证，`&array[0]` 非空；exception-stack/IRQ-stack 7 个或 `operand_count` 个 slot 均赋同一 `SCALAR_INPUT`，前两项单独赋值可并入从零开始的循环。**DELETE/DEDUP(no role change)**。 |
+| Cache alternative / MSR | 704/712 字节 `clwb` 两条分支的 4 个 ELF/ISA sentinel 完全相同，仅长度与完整 FNV64 常量不同；保留两个 `(length, hash)` 对并将相同条件收敛为一次。Form4 的第一个 `"a"` 约束在稍后遍历所有输入时必查；alternative WRMSR 4 个输入中前三个的同型 `unsigned int` 判定合并；MSR 函数早已判定 program/src/contract/form 非空，第二个主分支的四重重复守卫删除。**DEDUP/DELETE(unchanged boolean acceptance)**。704/712 历史模板缺独立定点 fixture，暂记 **NEEDS_PROOF(dedicated test)**，不把近邻 cache probe 冒充该完整覆盖。 |
+| GNU bitops 表与约束 | 14 个目录项中 12 项 `literal` 与 `canonical` 原本逐字相同，额外匹配等价于第一次比较；只保留主字符串及可选的不同 `canonical_alias`，两个 named→numeric 真别名原样保留。Legacy bit-scan 中 `is_goto`/`label_count` 已在 `qualified()` 总入口拒绝；segment `short_selector` 已定义且相同布尔式再次出现，改为复用。**DEDUP(12 equal aliases)/DELETE(derived gates)**。 |
+| 循环、容量及输出证据 | REP STOSB/MOVSB 固定迭代 3/4 次后已将最后的 RSP 输出表达式保存为非空 `expr`，删除重复 AST lookup；两种 mulacc/muldiv compact buffer 外层已经限制 `template_length < sizeof(buffer)`，循环中 `j <= i < length`，额外空间检查永远不触发。**DELETE(unreachable checks)**。 |
+| 仍保留或待证明 | Linux `.altinstructions`、`__ex_table`、`__jump_table`、SMP lock metadata、GS/FS、FPU、futex、SMAP 与 uaccess 仍 **KEEP(real ISA/ELF side effects)**。2,048 字节 XSAVE alternative 的 FNV 摘要与某 SMAP 分支的数组前置检查需独立负例/证明，记 **NEEDS_PROOF**，不能作为纯清理顺手改准入。 |
+
+**C38 生产源码 +33/-66、净 -33 行**，只改 x86
+`asm_contract.c`；没有更改指令字面量、section/relocation 负载、
+FormId 枚举、GNU 约束或 Core/Target API。C1～C38 累计纯清理
+**净 -490 行**（文档不计）。
+
+**本地验证 PASS：** 五目标 Release `-Werror` 构建、
+`check-minic-target-boundaries`、`run-x86-typed-asm-forms`、
+`run-linux-x86-uaccess-and-abi`（GAS/ELF/relocations，**不执行特权 ISA**），
+15 个定点脚本：KVM hypercall full ABI、softirq stack、MSR extable、
+muldiv u64、bitops、GS tied ALU、segment u32、typed machine qualification、
+typed MMIO/atomic oracle、atomic CC、atomic RMW、control/cache ISA、
+paravirt patch site、preempt call、REP STOS GNU-native。
+另以同一 GNU 预处理 `.i` 对比 C37 与 C38 的 KVM hypercall、
+paravirt、SMAP REP、XSTATE alternative、thread-state 共 5 个 `.s`，
+**`cmp` 逐字节相同**。
+
+**不可误计的缺口：** `probe-x86-kvm-movdqa-asm` 已执行 GNU/MiniC
+32/32 MOVDQA 生成和静态二进制构建，至 `qemu-x86_64` 因本机命令缺失
+中止，故脚本为 **NOT_COMPLETE**；另手动执行两份 x86 宿主机
+static ELF 均退出 0、5 个负例均拒绝，仅作为额外本机证明，
+**不写为 QEMU PASS**。704/712 cache alternative 缺独立 fixture。
+未启动五目标 Linux Image/QEMU 联合验收。
+
+**上一提交 C37 远端精确 HEAD 回查：** Native Strict Gate、四架构
+Compiler Runtime 4/4、RV32 picolibc 与 virtio 均有真实 PASS；
+三个三 ISA Linux workflow 仅 gate 成功，GNU boot/seven-runner 等
+producer jobs 实际 **SKIPPED**，不可算 Linux P0/P1 PASS；
+RV32 full18、AArch64 NEON Stage3、x86 nested-KVM preflight 均有失败，
+LoongArch P2 当次仍运行中。C38 的 Actions 需以本批**新远端 SHA**
+重新取证，不能继承 C37 绿色状态。
+
 ## 后续批次进度规则
 
 每批发布：当前 HEAD、源文件逐目录覆盖（明确深读与只扫的区别）、

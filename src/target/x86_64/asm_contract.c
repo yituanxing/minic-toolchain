@@ -616,7 +616,7 @@ static bool x86_linux_kvm_hypercall_alt_source(
     if (!src) return false;
     alt = minic_x86_64_linux_kvm_hypercall_alt_form(
         src->template_text, src->template_length);
-    if (!program || !src || !contract || !src->is_volatile || src->is_goto ||
+    if (!program || !contract || !src->is_volatile || src->is_goto ||
         (!alt && !minic_x86_64_linux_kvm_hypercall_direct_form(
             src->template_text, src->template_length)) ||
         src->output_count != 1U || !src->outputs ||
@@ -718,9 +718,7 @@ static bool x86_linux_exception_stack_call_source(
     contract->operand_count = 7U;
     /* Both GNU +r outputs keep the original values unchanged after this
      * balanced stack operation; Core keeps their scalar input identities. */
-    contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
-    contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
-    for (i = 2U; i < 7U; ++i)
+    for (i = 0U; i < 7U; ++i)
         contract->kinds[i] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     contract->implicit_memory_effect = true;
     return true;
@@ -1174,7 +1172,7 @@ static bool x86_linux_kvm_movdqa_source(
         src->output_count != (read ? 0U : 1U) ||
         (read ? !src->inputs : !src->outputs)) return false;
     operand = read ? &src->inputs[0] : &src->outputs[0];
-    if (!operand || !target_constraint_is(operand, read ? "m" : "=m"))
+    if (!target_constraint_is(operand, read ? "m" : "=m"))
         return false;
     expr = minic_c0_program_expression(program, operand->expression);
     if (!expr || expr->value_category != MINIC_VALUE_LVALUE ||
@@ -1251,23 +1249,15 @@ unsigned int minic_x86_64_linux_flushcache_copy_form(const char *text, size_t le
         "movq(%0),%%r8movnti%%r8,(%1)")) return 2U;
     if (x86_linux_compact_asm_equals(text, length,
         "movl(%0),%%r8dmovnti%%r8d,(%1)")) return 3U;
-    /* The source names its memory/pointer operands; Core consistently
-       rewrites %[pax] to %1, shortening the otherwise identical template.
-       Accept both exact source and normalized alternatives, never a partial
-       prefix that might lose one of the two feature records. */
-    if (text && length == 704U &&
-        x86_linux_template_fingerprint(text, length) == UINT64_C(0xd4e9ddad388cfc52) &&
-        strstr(text, "# ALT: oldinstr2") == text &&
-        strstr(text, ".altinstructions") != NULL &&
-        strstr(text, ".altinstr_replacement") != NULL &&
-        strstr(text, "0x66, 0x0f, 0xae, 0x30") != NULL)
-        return 4U;
-    /* The 712-byte Linux `clwb` alternative preserves both CPU-feature
-       replacement records; using a 64-bit full-text fingerprint plus the
-       exact documented section/instruction sentinels avoids classifying an
-       arbitrary inline template as privileged cache-maintenance ASM. */
-    if (text && length == 712U &&
-        x86_linux_template_fingerprint(text, length) == UINT64_C(0xef6513d224b5c286) &&
+    /* The 704/712-byte source and Core-normalized `clwb` alternatives both
+       retain two CPU-feature replacement records. Distinct full-text hashes
+       identify the spelling; the mandatory section/instruction sentinels
+       have the same meaning for both variants. */
+    if (text &&
+        ((length == 704U && x86_linux_template_fingerprint(text, length) ==
+            UINT64_C(0xd4e9ddad388cfc52)) ||
+         (length == 712U && x86_linux_template_fingerprint(text, length) ==
+            UINT64_C(0xef6513d224b5c286))) &&
         strstr(text, "# ALT: oldinstr2") == text &&
         strstr(text, ".altinstructions") != NULL &&
         strstr(text, ".altinstr_replacement") != NULL &&
@@ -1295,8 +1285,7 @@ static bool x86_linux_flushcache_copy_source(
         expr = minic_c0_program_expression(program, src->outputs[0].expression);
         if (!target_constraint_is(&src->outputs[0], "+m") || !expr ||
             expr->value_category != MINIC_VALUE_LVALUE ||
-            !minic_type_is_record(expr->type) ||
-            !target_constraint_is(&src->inputs[0], "a")) return false;
+            !minic_type_is_record(expr->type)) return false;
     }
     for (i = 0U; i < src->input_count; ++i) {
         expr = minic_c0_program_expression(program, src->inputs[i].expression);
@@ -2324,9 +2313,7 @@ static bool x86_linux_irq_stack_call_source(
     /* ASM never writes the R11 `tos` value and restores RSP before exit.
      * GNU's +r modes are register-liveness contracts, not C stores. Keep
      * both in their live SSA form so address-of a register local is avoided. */
-    contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
-    contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
-    for (i = 2U; i < contract->operand_count; ++i)
+    for (i = 0U; i < contract->operand_count; ++i)
         contract->kinds[i] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     contract->implicit_memory_effect = true;
     return true;
@@ -2589,9 +2576,7 @@ static bool x86_linux_alternative_wrmsr_source(
         value = minic_c0_program_expression(program, src->inputs[i].expression);
         if (!value || !minic_type_unqualified(value->type, &plain) ||
             !minic_type_is_integer(plain)) return false;
-        if (i == 0U && !minic_type_equal(plain, minic_type_unsigned_int()))
-            return false;
-        if ((i == 1U || i == 2U) &&
+        if (i < 3U &&
             !minic_type_equal(plain, minic_type_unsigned_int())) return false;
         contract->kinds[i] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     }
@@ -3312,8 +3297,7 @@ static bool x86_linux_msr_source(const MinicC0Program *program,
                 MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
         return true;
     }
-    if(!program||!src||!contract||!form||!src->is_volatile||
-       src->is_goto||src->label_count||
+    if(!src->is_volatile||src->is_goto||src->label_count||
        src->output_count!=((form==1U||form==5U)?2U:0U)||
        src->input_count!=((form==1U||form==5U)?1U:3U)||
        ((form==1U||form==5U)&&!src->outputs)||!src->inputs||
@@ -3966,7 +3950,6 @@ bool minic_x86_64_asm_mulacc_template(const char *template_text,
     for (i = 0U; i < template_length; ++i) {
         const char c = template_text[i];
         if (c == ' ' || c == '\t' || c == '\r' || c == '\n') continue;
-        if (j >= sizeof(text)-1U) return false;
         text[j++] = c;
     }
     text[j] = '\0';
@@ -3987,7 +3970,6 @@ bool minic_x86_64_asm_muldiv_template(const char *text, size_t length) {
     for (i = 0U; i < length; ++i) {
         const char c = text[i];
         if (c == ' ' || c == '\t' || c == '\r' || c == '\n') continue;
-        if (j + 1U >= sizeof(normalized)) return false;
         normalized[j++] = c;
     }
     normalized[j] = '\0';
@@ -5680,28 +5662,20 @@ static bool x86_linux_atomic_cc_source(
  * Names become canonical numeric operands in shared Core. */
 static const struct {
     const char *literal;
-    const char *canonical;
+    const char *canonical_alias;
     MinicX86BitopsDesc desc;
 } x86_linux_bitops[] = {
-    {"btq%2,%1/*outputconditioncodec*/",
-     "btq%2,%1/*outputconditioncodec*/",
-     {"btq",0,1,0,0}},
-    {"btsq%2,%1/*outputconditioncodec*/",
-     "btsq%2,%1/*outputconditioncodec*/",
-     {"btsq",0,1,0,1}},
-    {"btrq%2,%1/*outputconditioncodec*/",
-     "btrq%2,%1/*outputconditioncodec*/",
-     {"btrq",0,1,0,1}},
-    {"btcq%2,%1/*outputconditioncodec*/",
-     "btcq%2,%1/*outputconditioncodec*/",
-     {"btcq",0,1,0,1}},
-    {"btsq%1,%0","btsq%1,%0",{"btsq",0,0,0,1}},
-    {"btrq%1,%0","btrq%1,%0",{"btrq",0,0,0,1}},
+    {"btq%2,%1/*outputconditioncodec*/", NULL, {"btq",0,1,0,0}},
+    {"btsq%2,%1/*outputconditioncodec*/", NULL, {"btsq",0,1,0,1}},
+    {"btrq%2,%1/*outputconditioncodec*/", NULL, {"btrq",0,1,0,1}},
+    {"btcq%2,%1/*outputconditioncodec*/", NULL, {"btcq",0,1,0,1}},
+    {"btsq%1,%0", NULL, {"btsq",0,0,0,1}},
+    {"btrq%1,%0", NULL, {"btrq",0,0,0,1}},
     {".pushsection.smp_locks,\"a\".balign4.long671f-..popsection671:lock;btsq%1,%0",
-     ".pushsection.smp_locks,\"a\".balign4.long671f-..popsection671:lock;btsq%1,%0",
+     NULL,
      {"btsq",1,0,0,1}},
     {".pushsection.smp_locks,\"a\".balign4.long671f-..popsection671:lock;btrq%1,%0",
-     ".pushsection.smp_locks,\"a\".balign4.long671f-..popsection671:lock;btrq%1,%0",
+     NULL,
      {"btrq",1,0,0,1}},
     {".pushsection.smp_locks,\"a\".balign4.long671f-..popsection671:lock;btsq%[val],%[var]/*outputconditioncodec*/",
      ".pushsection.smp_locks,\"a\".balign4.long671f-..popsection671:lock;btsq%2,%0/*outputconditioncodec*/",
@@ -5710,16 +5684,16 @@ static const struct {
      ".pushsection.smp_locks,\"a\".balign4.long671f-..popsection671:lock;btrq%2,%0/*outputconditioncodec*/",
      {"btrq",1,1,1,1}},
     {".pushsection.smp_locks,\"a\".balign4.long671f-..popsection671:lock;orb%b1,%0",
-     ".pushsection.smp_locks,\"a\".balign4.long671f-..popsection671:lock;orb%b1,%0",
+     NULL,
      {"orb",1,0,1,1}},
     {".pushsection.smp_locks,\"a\".balign4.long671f-..popsection671:lock;andb%b1,%0",
-     ".pushsection.smp_locks,\"a\".balign4.long671f-..popsection671:lock;andb%b1,%0",
+     NULL,
      {"andb",1,0,1,1}},
     {".pushsection.smp_locks,\"a\".balign4.long671f-..popsection671:lock;xorb%b1,%0",
-     ".pushsection.smp_locks,\"a\".balign4.long671f-..popsection671:lock;xorb%b1,%0",
+     NULL,
      {"xorb",1,0,1,1}},
     {".pushsection.smp_locks,\"a\".balign4.long671f-..popsection671:lock;btcq%1,%0",
-     ".pushsection.smp_locks,\"a\".balign4.long671f-..popsection671:lock;btcq%1,%0",
+     NULL,
      {"btcq",1,0,0,1}}
 };
 MinicX86BitopsForm minic_x86_64_linux_bitops_form(
@@ -5737,7 +5711,8 @@ MinicX86BitopsForm minic_x86_64_linux_bitops_form(
     compact[j]='\0';
     for(i=0U;i<sizeof(x86_linux_bitops)/sizeof(x86_linux_bitops[0]);++i)
         if(strcmp(compact,x86_linux_bitops[i].literal)==0||
-           strcmp(compact,x86_linux_bitops[i].canonical)==0)
+           (x86_linux_bitops[i].canonical_alias &&
+            strcmp(compact,x86_linux_bitops[i].canonical_alias)==0))
             return (MinicX86BitopsForm)(i+1U);
     return MINIC_X86_BITOPS_NONE;
 }
@@ -6126,9 +6101,7 @@ static bool qualified(const MinicC0Program *program,
                c_is(&src->inputs[1], "rm") &&
                c_is(&src->inputs[2], "rm")) {
         is_muldiv = true;
-    } else if (src->output_count == 1U &&
-               !src->is_goto && src->label_count == 0U &&
-               !src->has_memory_clobber &&
+    } else if (src->output_count == 1U && !src->has_memory_clobber &&
                src->clobber_count == 0U && src->register_clobber_count == 0U &&
                (bit_form = minic_x86_64_asm_bit_scan_form(
                    src->template_text, src->template_length)) !=
@@ -6313,7 +6286,7 @@ static bool x86_linux_segment_read_source(
            * with an unsigned 32-bit fsave->fos lvalue. GAS accepts the
            * 32-bit GPR destination and zero-extends the selector; the C
            * storage width, not the bare assembly mnemonic, owns the store. */
-          ((form <= 2U || form >= 7U) && minic_type_equal(
+          (short_selector && minic_type_equal(
               plain, minic_type_unsigned_int()))))
         return false;
     contract->operand_count = 1U;
@@ -6701,9 +6674,6 @@ static bool x86_linux_rep_stosb_alternative_source(
                        !minic_type_equal(expr->type, minic_type_unsigned_long())))
             return false;
     }
-    expr = minic_c0_program_expression(
-        program, source->outputs[2].expression);
-    if (!expr) return false;
     if (expr->kind == MINIC_EXPRESSION_FIXED_REGISTER)
         stack = minic_c0_program_fixed_register_binding(
             program, expr->value.fixed_register_binding_id);
@@ -7949,9 +7919,6 @@ static bool x86_linux_rep_movsb_alternative_source(
                 !minic_type_is_pointer(expression->type)))
             return false;
     }
-    expression = minic_c0_program_expression(
-        program, source->outputs[3].expression);
-    if (!expression) return false;
     if (expression->kind == MINIC_EXPRESSION_FIXED_REGISTER)
         stack_binding = minic_c0_program_fixed_register_binding(
             program, expression->value.fixed_register_binding_id);
