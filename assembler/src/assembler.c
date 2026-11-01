@@ -1181,8 +1181,8 @@ static bool minias_alignment_emits_target_nops(const MiniAs *as,
                  stmt->align_fill)));
 }
 
-bool minias_emit_instruction_bytes(MiniAs *as,
-                                   const void *data, size_t size) {
+static bool minias_stage_instruction_bytes(MiniAs *as,
+                                           const void *data, size_t size) {
     MiniAsSection *sec;
     int section_index;
     MiniAsEncodeResult *result = as->active_encode_result;
@@ -1220,13 +1220,84 @@ bool minias_emit_instruction_bytes(MiniAs *as,
 
 }
 
+struct MiniAsEncodeContext {
+    MiniAs *as; /* Only Common constructs and dereferences this capability. */
+};
+
+bool minias_encode_ctx_emit(MiniAsEncodeContext *ctx,
+                            const void *bytes,size_t size) {
+    return minias_stage_instruction_bytes(ctx->as,bytes,size);
+}
+
+bool minias_encode_ctx_fixup_ref(MiniAsEncodeContext *ctx,uint64_t offset,
+                                 MiniAsFixupKind kind,unsigned width,
+                                 MiniAsSymbolRef ref,bool section_symbol) {
+    return minias_encode_add_fixup_ref(ctx->as,offset,kind,width,ref,
+                                       section_symbol);
+}
+
+bool minias_encode_ctx_fixup_abs0(MiniAsEncodeContext *ctx,uint64_t offset,
+                                  MiniAsFixupKind kind,unsigned width) {
+    return minias_encode_add_fixup_abs0(ctx->as,offset,kind,width);
+}
+
+bool minias_encode_ctx_anchor_ref(MiniAsEncodeContext *ctx,const char *prefix,
+                                  MiniAsSymbolRef *ref) {
+    return minias_encode_request_anchor_ref(ctx->as,prefix,ref);
+}
+
+bool minias_encode_ctx_elf_flags(MiniAsEncodeContext *ctx,uint32_t flags) {
+    return minias_encode_add_elf_flags(ctx->as,flags);
+}
+
+void minias_encode_ctx_error(MiniAsEncodeContext *ctx,const char *format,...) {
+    va_list ap;
+    va_start(ap,format);
+    minias_set_error_va(ctx->as,format,ap);
+    va_end(ap);
+}
+
+const MiniAsSymbol *minias_encode_ctx_symbol_lookup(
+    MiniAsEncodeContext *ctx,MiniAsSymbolRef ref) {
+    return minias_symbol_ref_lookup(ctx->as,ref);
+}
+
+bool minias_encode_ctx_resolve_difference(
+    MiniAsEncodeContext *ctx,const MiniAsSymbolDifferenceRef *difference,
+    int64_t *value) {
+    return minias_resolve_symbol_difference_ref(ctx->as,difference,value);
+}
+
+bool minias_encode_ctx_resolve_difference_field(
+    MiniAsEncodeContext *ctx,const MiniAsSymbolDifferenceRef *difference,
+    int section,uint64_t offset,int64_t *value,bool *has_reloc,
+    MiniAsSymbolRef *ref) {
+    return minias_resolve_symbol_difference_field(ctx->as,difference,section,
+                                                  offset,value,has_reloc,ref);
+}
+
+bool minias_encode_ctx_symbol_is_dot(MiniAsEncodeContext *ctx,
+                                     MiniAsSymbolRef ref) {
+    const MiniAs *as=ctx->as;
+    return ref.name_id<as->symbol_name_count &&
+           strcmp(as->symbol_names[ref.name_id].name,".")==0;
+}
+
+const void *minias_encode_ctx_target_state(const MiniAsEncodeContext *ctx) {
+    return ctx->as->target_state;
+}
+
+bool minias_encode_ctx_is_elf32(const MiniAsEncodeContext *ctx) {
+    return ctx->as->output_elf32;
+}
+
 struct MiniAsCodeAlignSink {
     MiniAs *as; /* Only Common constructs and dereferences this capability. */
 };
 
 bool minias_code_align_emit(MiniAsCodeAlignSink *sink,
                             const void *bytes,size_t size) {
-    return sink!=NULL && minias_emit_instruction_bytes(sink->as,bytes,size);
+    return sink!=NULL && minias_stage_instruction_bytes(sink->as,bytes,size);
 }
 
 bool minias_code_align_add_elf_flags(MiniAsCodeAlignSink *sink,uint32_t flags) {
@@ -4726,7 +4797,7 @@ static bool minias_emit_sections(MiniAs *as) {
                 free(refs);
                 return false;
             }
-        } else if (!as->target->encode(as, stmt)) {
+        } else if (!as->target->encode(&(MiniAsEncodeContext){as}, stmt)) {
             if (as->error[0] == '\0') {
                 minias_set_error(as,
                                  "encode-failed:%s:%s:line=%zu",

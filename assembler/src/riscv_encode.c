@@ -444,22 +444,22 @@ static uint32_t enc_j(int rd, int64_t off) {
            (((value >> 20U) & 1U) << 31U);
 }
 
-static bool append_u16(MiniAs *as, uint16_t value) {
+static bool append_u16(MiniAsEncodeContext *ctx, uint16_t value) {
     unsigned char bytes[2];
 
     bytes[0] = (unsigned char)(value & 0xffU);
     bytes[1] = (unsigned char)((value >> 8U) & 0xffU);
-    return minias_emit_instruction_bytes(as, bytes, sizeof(bytes));
+    return minias_encode_ctx_emit(ctx, bytes, sizeof(bytes));
 }
 
-static bool append_u32(MiniAs *as, uint32_t value) {
+static bool append_u32(MiniAsEncodeContext *ctx, uint32_t value) {
     unsigned char bytes[4];
 
     bytes[0] = (unsigned char)(value & 0xffU);
     bytes[1] = (unsigned char)((value >> 8U) & 0xffU);
     bytes[2] = (unsigned char)((value >> 16U) & 0xffU);
     bytes[3] = (unsigned char)((value >> 24U) & 0xffU);
-    return minias_emit_instruction_bytes(as, bytes, sizeof(bytes));
+    return minias_encode_ctx_emit(ctx, bytes, sizeof(bytes));
 }
 
 /* Parse-side Target context is immutable; Common owns the opaque service. */
@@ -2333,49 +2333,50 @@ bool minias_riscv_parse_mcinst(MiniAsParseContext *ctx, MiniAsStmt *stmt) {
 /* Typed variable-size RISC-V fragments: source operands were parsed once.
  * Layout owns size; this Target writes instructions and stages relocations
  * from MCInst, without reopening source or mutating final symbols/fixups. */
-static bool rv_encode_multi_mc(MiniAs *as, const MiniAsStmt *stmt) {
+static bool rv_encode_multi_mc(MiniAsEncodeContext *ctx, const MiniAsStmt *stmt) {
     const MiniAsMCInst *m = stmt->mcinst;
+    const MiniAsRiscvState *state=minias_encode_ctx_target_state(ctx);
     if (m->opcode == RV_MC_LI) {
         const MiniAsRiscvLiPlan *plan = m->target_payload;
         unsigned i;
         if (plan == NULL) {
-            minias_set_error(as, "internal:riscv-li-plan-missing:line=%zu",
+            minias_encode_ctx_error(ctx, "internal:riscv-li-plan-missing:line=%zu",
                              stmt->line);
             return false;
         }
         if (stmt->size != plan->count * 4U) {
-            minias_set_error(as, "internal:riscv-li-plan-layout-mismatch:line=%zu",
+            minias_encode_ctx_error(ctx, "internal:riscv-li-plan-layout-mismatch:line=%zu",
                              stmt->line);
             return false;
         }
         for (i = 0U; i < plan->count; ++i)
-            if (!append_u32(as, plan->words[i])) return false;
+            if (!append_u32(ctx, plan->words[i])) return false;
         return true;
     }
 
     if (m->opcode == RV_MC_CALL || m->opcode == RV_MC_TAIL) {
         const MiniAsSymbolRef *expr = m->operands[0].bound_symbol;
         if (expr == NULL) {
-            minias_set_error(as, "internal:riscv-call-symbol-missing");
+            minias_encode_ctx_error(ctx, "internal:riscv-call-symbol-missing");
             return false;
         }
         if (m->opcode == RV_MC_CALL) {
-            if (!append_u32(as, 0x00000097U) ||
-                !append_u32(as,
+            if (!append_u32(ctx, 0x00000097U) ||
+                !append_u32(ctx,
                             enc_i(0x67U, 1, 0U, 1, 0))) return false;
         } else {
-            if (!append_u32(as, 0x00000317U) ||
-                !append_u32(as,
+            if (!append_u32(ctx, 0x00000317U) ||
+                !append_u32(ctx,
                             enc_i(0x67U, 0, 0U, 6, 0))) return false;
         }
         /* Both CALL and TAIL retain @plt as a Target modifier. Existing
          * psABI lowering emits CALL_PLT even without an explicit suffix. */
         if (m->target_form != MINIAS_RV_SYM_NONE &&
             m->target_form != MINIAS_RV_SYM_PLT) {
-            minias_set_error(as, "internal:riscv-call-modifier");
+            minias_encode_ctx_error(ctx, "internal:riscv-call-modifier");
             return false;
         }
-        return minias_encode_add_fixup_ref(as, stmt->offset,
+        return minias_encode_ctx_fixup_ref(ctx, stmt->offset,
                                 MINIAS_FIXUP_RV_CALL_PLT, 4U, *expr, false);
     }
 
@@ -2387,16 +2388,16 @@ static bool rv_encode_multi_mc(MiniAs *as, const MiniAsStmt *stmt) {
         bool use_got;
         bool pic_la;
         if (expr == NULL) {
-            minias_set_error(as, "internal:riscv-la-symbol-missing");
+            minias_encode_ctx_error(ctx, "internal:riscv-la-symbol-missing");
             return false;
         }
-        target = minias_symbol_ref_lookup(as, *expr);
+        target = minias_encode_ctx_symbol_lookup(ctx, *expr);
         /* Linux early boot: NOPIC is default. GNU PIC `la` always uses a
          * GOT reference, even for defined LOCAL symbols or symbol addends;
          * RV32 loads the GOT slot with LW, RV64 with LD. `lla` stays PCREL. */
         if (m->target_form != RV_PSEUDO_LA &&
             m->target_form != RV_PSEUDO_LLA) {
-            minias_set_error(as, "internal:riscv-la-invalid-form");
+            minias_encode_ctx_error(ctx, "internal:riscv-la-invalid-form");
             return false;
         }
         pic_la = (stmt->site.mode_bits & MINIAS_RISCV_OPTION_PIC) != 0U &&
@@ -2429,75 +2430,76 @@ static bool rv_encode_multi_mc(MiniAs *as, const MiniAsStmt *stmt) {
                 if (rounded < 0 && rounded % INT64_C(4096) != 0)
                     --hi; /* C division truncates toward zero, not floor. */
                 int64_t lo = delta - hi * INT64_C(4096);
-                return append_u32(as,
+                return append_u32(ctx,
                                   0x17U | ((uint32_t)rd << 7U) |
                                   (((uint32_t)hi & 0xfffffU) << 12U)) &&
-                       append_u32(as,
+                       append_u32(ctx,
                                   enc_i(0x13U, rd, 0U, rd, lo));
             }
         }
-        if(!minias_encode_request_anchor_ref(as,"pcrel",
+        if(!minias_encode_ctx_anchor_ref(ctx,"pcrel",
                                              &anchor)) {
-            minias_set_error(as,"riscv-private-pcrel-symbol-overflow");
+            minias_encode_ctx_error(ctx,"riscv-private-pcrel-symbol-overflow");
             return false;
         }
 
-        if (!append_u32(as,
+        if (!append_u32(ctx,
                         0x17U | ((uint32_t)rd << 7U))) return false;
         if (use_got) {
-            if (!append_u32(as,
+            if (!append_u32(ctx,
                             enc_i(0x03U, rd,
-                                  MINIAS_RV_STATE(as)->target_xlen == 32U ?
+                                  state->target_xlen == 32U ?
                                       2U : 3U, rd, 0))) return false;
-        } else if (!append_u32(as,
+        } else if (!append_u32(ctx,
                                enc_i(0x13U, rd, 0U, rd, 0))) return false;
-        return minias_encode_add_fixup_ref(as, stmt->offset,
+        return minias_encode_ctx_fixup_ref(ctx, stmt->offset,
                                 use_got ? MINIAS_FIXUP_RV_GOT_HI20 :
                                           MINIAS_FIXUP_RV_PCREL_HI20,
                                 4U, *expr, false) &&
-               minias_encode_add_fixup_ref(as,
+               minias_encode_ctx_fixup_ref(ctx,
                                 stmt->offset + 4U,
                                 MINIAS_FIXUP_RV_PCREL_LO12_I, 4U, anchor,
                                 false);
     }
 
-    minias_set_error(as, "internal:unknown-riscv-multi-mcinst:%u",
+    minias_encode_ctx_error(ctx, "internal:unknown-riscv-multi-mcinst:%u",
                      m->opcode);
     return false;
 }
 
 /* Encoding queries the FINAL Common symbol snapshot and invokes the same
  * pure distance policy used by MCLayout's read-only relaxation callback. */
-static bool rv_encode_branch_plan(MiniAs *as, const MiniAsStmt *stmt,
+static bool rv_encode_branch_plan(MiniAsEncodeContext *ctx, const MiniAsStmt *stmt,
                                   MiniAsRiscvBranchPlan *result) {
     const MiniAsSymbolRef *expr=minias_riscv_branch_bound_symbol(stmt);
     const MiniAsSymbol *symbol=expr!=NULL
-        ? minias_symbol_ref_lookup(as,*expr) : NULL;
+        ? minias_encode_ctx_symbol_lookup(ctx,*expr) : NULL;
     const char *diagnostic=NULL;
     if(!minias_riscv_compute_branch_plan(stmt,symbol,result,&diagnostic)) {
-        minias_set_error(as,"%s",diagnostic!=NULL?diagnostic:
+        minias_encode_ctx_error(ctx,"%s",diagnostic!=NULL?diagnostic:
                          "internal:riscv-branch-plan");
         return false;
     }
     return true;
 }
 
-static bool rv_encode_mcinst(MiniAs *as, const MiniAsStmt *stmt) {
+static bool rv_encode_mcinst(MiniAsEncodeContext *ctx, const MiniAsStmt *stmt) {
     const MiniAsMCInst *m=stmt->mcinst;
+    const MiniAsRiscvState *state=minias_encode_ctx_target_state(ctx);
     uint16_t compressed;
     if (m->opcode == RV_MC_RAW)
-        return append_u32(as, m->encoding);
-    if (rv_rvc_encode_plain(MINIAS_RV_STATE(as),stmt,&compressed))
-        return append_u16(as,compressed) &&
-               minias_encode_add_elf_flags(as,1U);
+        return append_u32(ctx, m->encoding);
+    if (rv_rvc_encode_plain(state,stmt,&compressed))
+        return append_u16(ctx,compressed) &&
+               minias_encode_ctx_elf_flags(ctx,1U);
     if (m->opcode == RV_MC_LI || m->opcode == RV_MC_CALL ||
         m->opcode == RV_MC_TAIL || m->opcode == RV_MC_LA)
-        return rv_encode_multi_mc(as, stmt);
+        return rv_encode_multi_mc(ctx, stmt);
     if (m->opcode == RV_MC_C16) {
         /* The selected 16-bit instruction may have no register operands
          * (c.nop/c.jr), so dispatch before reading operand[0]. */
-        if(!append_u16(as,(uint16_t)m->encoding))return false;
-        return minias_encode_add_elf_flags(as,1U); /* EF_RISCV_RVC */
+        if(!append_u16(ctx,(uint16_t)m->encoding))return false;
+        return minias_encode_ctx_elf_flags(ctx,1U); /* EF_RISCV_RVC */
     }
     if (stmt->size==2U &&
         (m->opcode==RV_MC_BRANCH || m->opcode==RV_MC_JAL)) {
@@ -2506,12 +2508,12 @@ static bool rv_encode_mcinst(MiniAs *as, const MiniAsStmt *stmt) {
             m->opcode==RV_MC_BRANCH?2U:1U].bound_symbol;
         uint16_t bits;
         MiniAsFixupKind fixup;
-        if(symbol==NULL || !rv_encode_branch_plan(as,stmt,&branch))
+        if(symbol==NULL || !rv_encode_branch_plan(ctx,stmt,&branch))
             return false;
         if(m->opcode==RV_MC_BRANCH) {
             int64_t disp=branch.local?branch.displacement:0;
             if((disp&1)!=0 || disp< -256 || disp>254) {
-                minias_set_error(as,"riscv-rvc-branch-range:line=%zu",stmt->line);
+                minias_encode_ctx_error(ctx,"riscv-rvc-branch-range:line=%zu",stmt->line);
                 return false;
             }
             bits=rv_rvc_branch_bits(disp,m->operands[0].reg,
@@ -2520,15 +2522,15 @@ static bool rv_encode_mcinst(MiniAs *as, const MiniAsStmt *stmt) {
         } else {
             int64_t disp=branch.local?branch.displacement:0;
             if((disp&1)!=0 || disp< -2048 || disp>2046) {
-                minias_set_error(as,"riscv-rvc-jump-range:line=%zu",stmt->line);
+                minias_encode_ctx_error(ctx,"riscv-rvc-jump-range:line=%zu",stmt->line);
                 return false;
             }
             bits=rv_rvc_jump_bits(disp);
             fixup=MINIAS_FIXUP_RV_RVC_JUMP;
         }
-        return append_u16(as,bits) &&
-               minias_encode_add_elf_flags(as,1U) &&
-               minias_encode_add_fixup_ref(as,stmt->offset,
+        return append_u16(ctx,bits) &&
+               minias_encode_ctx_elf_flags(ctx,1U) &&
+               minias_encode_ctx_fixup_ref(ctx,stmt->offset,
                                             fixup,2U,*symbol,false);
     }
     int rd=(int)m->operands[0].reg,rs1=0;
@@ -2543,25 +2545,25 @@ static bool rv_encode_mcinst(MiniAs *as, const MiniAsStmt *stmt) {
         MiniAsSymbolRef anchor;
         uint32_t second;
         if (ref == NULL) {
-            minias_set_error(as, "internal:missing-riscv-symbol-fragment");
+            minias_encode_ctx_error(ctx, "internal:missing-riscv-symbol-fragment");
             return false;
         }
-        if(!minias_encode_request_anchor_ref(as,
+        if(!minias_encode_ctx_anchor_ref(ctx,
                                              load?"load":"store",&anchor)) {
-            minias_set_error(as,"riscv-private-memory-symbol-overflow");
+            minias_encode_ctx_error(ctx,"riscv-private-memory-symbol-overflow");
             return false;
         }
         second = base |
                  ((uint32_t)rs1 << 15U) |
                  ((uint32_t)rd << (load ? 7U : 20U));
-        if (!append_u32(as,
+        if (!append_u32(ctx,
                         0x17U | ((uint32_t)rs1 << 7U)) ||
-            !append_u32(as, second))
+            !append_u32(ctx, second))
             return false;
-        return minias_encode_add_fixup_ref(as, stmt->offset,
+        return minias_encode_ctx_fixup_ref(ctx, stmt->offset,
                                 MINIAS_FIXUP_RV_PCREL_HI20, 4U, *ref,
                                 false) &&
-               minias_encode_add_fixup_ref(as,
+               minias_encode_ctx_fixup_ref(ctx,
                                 stmt->offset + 4U,
                                 load ? MINIAS_FIXUP_RV_PCREL_LO12_I :
                                        MINIAS_FIXUP_RV_PCREL_LO12_S,
@@ -2570,47 +2572,47 @@ static bool rv_encode_mcinst(MiniAs *as, const MiniAsStmt *stmt) {
     if(m->opcode==RV_MC_BRANCH || m->opcode==RV_MC_JAL) {
         MiniAsRiscvBranchPlan branch;
         expr=m->operands[m->opcode==RV_MC_BRANCH ? 2U : 1U].bound_symbol;
-        if(!rv_encode_branch_plan(as,stmt,&branch))return false;
+        if(!rv_encode_branch_plan(ctx,stmt,&branch))return false;
         if(m->opcode==RV_MC_JAL){
             if(branch.local && !branch.jal_legal){
-                minias_set_error(as,"jal-range:line=%zu",stmt->line);
+                minias_encode_ctx_error(ctx,"jal-range:line=%zu",stmt->line);
                 return false;
             }
-            return append_u32(as,
+            return append_u32(ctx,
                               enc_j(rd,branch.displacement)) &&
-                   minias_encode_add_fixup_ref(as,stmt->offset,
+                   minias_encode_ctx_fixup_ref(ctx,stmt->offset,
                               MINIAS_FIXUP_RV_JAL,4U,*expr,false);
         }
         if(stmt->size==8U){
             int64_t jal_displacement;
             if(branch.local && !branch.long_legal){
-                minias_set_error(as,"branch-long-jal-range:%s:line=%zu",
+                minias_encode_ctx_error(ctx,"branch-long-jal-range:%s:line=%zu",
                                  stmt->op,stmt->line);
                 return false;
             }
             if(!minias_checked_add_i64(branch.displacement,-4,
                                        &jal_displacement)){
-                minias_set_error(as,"riscv-branch-addend-overflow");
+                minias_encode_ctx_error(ctx,"riscv-branch-addend-overflow");
                 return false;
             }
-            return append_u32(as,
+            return append_u32(ctx,
                        enc_b((base>>12U &7U)^1U,rd,rs1,8)) &&
-                   append_u32(as,enc_j(0,jal_displacement)) &&
-                   minias_encode_add_fixup_ref(as,
+                   append_u32(ctx,enc_j(0,jal_displacement)) &&
+                   minias_encode_ctx_fixup_ref(ctx,
                        stmt->offset+4U,MINIAS_FIXUP_RV_JAL,4U,*expr,false);
         }
         if(!branch.local || !branch.short_legal){
-            minias_set_error(as,"branch-range:%s:line=%zu",
+            minias_encode_ctx_error(ctx,"branch-range:%s:line=%zu",
                              stmt->op,stmt->line);
             return false;
         }
-        return append_u32(as,
+        return append_u32(ctx,
                           enc_b((base>>12U)&7U,rd,rs1,
                                 branch.displacement)) &&
-               minias_encode_add_fixup_ref(as,stmt->offset,
+               minias_encode_ctx_fixup_ref(ctx,stmt->offset,
                            MINIAS_FIXUP_RV_BRANCH,4U,*expr,false);
     } else if(!rv_scalar_machine_word(m,true,&code)) {
-        minias_set_error(as,"unknown-riscv-mcinst");
+        minias_encode_ctx_error(ctx,"unknown-riscv-mcinst");
         return false;
     }
     if (m->target_form != RV_ABS_RELOC_NONE) {
@@ -2657,22 +2659,22 @@ static bool rv_encode_mcinst(MiniAs *as, const MiniAsStmt *stmt) {
                    ((addend_low & 31U) << 7U) |
                    ((addend_low >> 5U) << 25U);
         }
-        if (!append_u32(as, code)) return false;
-        return minias_encode_add_fixup_ref(as,stmt->offset,
+        if (!append_u32(ctx, code)) return false;
+        return minias_encode_ctx_fixup_ref(ctx,stmt->offset,
                                             kind,4U,*symbol,false);
     }
-    return append_u32(as,code);
+    return append_u32(ctx,code);
 invalid_absolute_form:
-    minias_set_error(as,"internal:bad-riscv-absolute-reloc-mcinst:%u",
+    minias_encode_ctx_error(ctx,"internal:bad-riscv-absolute-reloc-mcinst:%u",
                      m->target_form);
     return false;
 }
 
-bool minias_riscv_encode(MiniAs *as, const MiniAsStmt *stmt) {
+bool minias_riscv_encode(MiniAsEncodeContext *ctx, const MiniAsStmt *stmt) {
     if (stmt->mcinst == NULL) {
-        minias_set_error(as, "internal:riscv-missing-typed-instruction:%s:line=%zu",
+        minias_encode_ctx_error(ctx, "internal:riscv-missing-typed-instruction:%s:line=%zu",
                          stmt->op, stmt->line);
         return false;
     }
-    return rv_encode_mcinst(as, stmt);
+    return rv_encode_mcinst(ctx, stmt);
 }

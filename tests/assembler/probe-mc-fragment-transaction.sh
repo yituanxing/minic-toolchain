@@ -12,7 +12,7 @@ import sys
 s=open(sys.argv[1],encoding='utf-8').read()
 mc=open(sys.argv[2],encoding='utf-8').read()
 h=open(sys.argv[3],encoding='utf-8').read()
-start=s.index('bool minias_emit_instruction_bytes(')
+start=s.index('static bool minias_stage_instruction_bytes(')
 end=s.index('bool minias_section_append(',start)
 body=s[start:end]
 if 'sec->size +=' in body or 'sec->size++' in body:
@@ -21,10 +21,9 @@ if 'minias_stage_fragment_bytes(as,section_index,data,size,true)' not in body:
     raise SystemExit('machine CodeEmitter bypasses fragment-owned byte staging')
 if 'section_index=owner->section;' not in body:
     raise SystemExit('CodeEmitter Section not derived from active Fragment')
-start=h.index('bool minias_emit_instruction_bytes(')
-end=h.index(');',start)
-if 'int section' in h[start:end] or 'section_index' in h[start:end]:
-    raise SystemExit('byte-emission API still exposes a Section selector')
+if 'minias_emit_instruction_bytes' in h or \
+   'bool minias_encode_ctx_emit(MiniAsEncodeContext *' not in h:
+    raise SystemExit('old Target byte API survives the opaque EncodeContext')
 for target_file in ('aarch64_target.c','x86_64_target.c',
                     'loongarch64_target.c','riscv_encode.c','riscv_target.c'):
     code=open('assembler/src/'+target_file,encoding='utf-8').read()
@@ -48,7 +47,7 @@ for invariant in (
 if 'minias_section_append(' in stage or 'sec->size +=' in stage:
     raise SystemExit('private fragment staging mutated the final Section')
 start=s.index('static bool minias_commit_encode_result(')
-end=s.index('bool minias_emit_instruction_bytes(',start)
+end=s.index('static bool minias_stage_instruction_bytes(',start)
 commit=s[start:end]
 for invariant in (
     'result->byte_count != owner->size',

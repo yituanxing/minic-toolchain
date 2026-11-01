@@ -73,6 +73,54 @@ for legacy in ('minias_encode_add_fixup', 'minias_encode_request_anchor',
         raise SystemExit('Legacy dual-track transaction API remains: ' + legacy)
 print('MINIAS_MC_ENCODE_BOUNDARY=PASS target_mutation=none requests=typed')
 PY
+# The four complete instruction encoder call chains now receive only an
+# opaque Common transaction capability. Never hide an old encode(MiniAs*)
+# callback behind a context wrapper that exposes ctx->as to a Target.
+python3 - <<'PY'
+from pathlib import Path
+import re
+
+root=Path('assembler/src')
+header=(root/'minias_internal.h').read_text()
+core=(root/'assembler.c').read_text()
+if 'bool (*encode)(MiniAsEncodeContext *, const MiniAsStmt *);' not in header:
+    raise SystemExit('TargetOps still uses old mutable-session encode callback')
+if 'struct MiniAsEncodeContext {' in header or \
+   'struct MiniAsEncodeContext {' not in core or \
+   'as->target->encode(&(MiniAsEncodeContext){as}, stmt)' not in core:
+    raise SystemExit('EncodeContext is not constructed privately by Common')
+services=('emit','fixup_ref','fixup_abs0','anchor_ref','elf_flags',
+          'error','symbol_lookup','resolve_difference',
+          'resolve_difference_field','symbol_is_dot','target_state','is_elf32')
+for service in services:
+    if not re.search(r'\bminias_encode_ctx_'+service+r'\s*\(',header):
+        raise SystemExit('missing restricted encode service: '+service)
+targets={
+    'aarch64_target.c':('encode','append_word','a64_resolve_address_offset',
+                        'a64_resolve_immediate'),
+    'x86_64_target.c':('x64_encode','x64_encode_base',
+                       'x64_adjust_symbol_ref','x64_resolve_memory_displacement',
+                       'x64_emit_memory_fixups'),
+    'riscv_encode.c':('minias_riscv_encode','rv_encode_mcinst',
+                      'rv_encode_multi_mc','rv_encode_branch_plan',
+                      'append_u16','append_u32'),
+    'loongarch64_target.c':('la_encode','la_resolve_branch_plan',
+                            'la_section_is_linker_relaxable'),
+}
+for filename, functions in targets.items():
+    source=(root/filename).read_text()
+    for name in functions:
+        match=re.search(r'\b'+name+r'\s*\(\s*MiniAsEncodeContext\s*\*',source)
+        if match is None:
+            raise SystemExit('unconverted Target encoder/helper: '+filename+':'+name)
+        body=source[match.start():source.index('\n}',match.end())+2]
+        if re.search(r'\bMiniAs\s*\*|\bas\s*->|\bctx\s*->\s*as\b|'
+                     r'\bminias_(?:emit_instruction_bytes|encode_add_fixup_ref|'
+                     r'encode_add_fixup_abs0|encode_request_anchor_ref|'
+                     r'encode_add_elf_flags|set_error)\s*\(',body):
+            raise SystemExit('Target encoder bypasses capability: '+filename+':'+name)
+print('MINIAS_OPAQUE_ENCODE_CONTEXT=PASS targets=4 helpers=18 services=12 old_callback=removed')
+PY
 # A post-emit validation hook must not hide object mutations. AArch64 and RV
 # add mapping symbols through an explicit finalization stage, while LoongArch
 # retains its separate validation. The writer runs after both phases.
@@ -276,8 +324,8 @@ for file, fn in targets.items():
                      r'\s*\(\s*const MiniAsMeasureView\s*\*', source):
         raise SystemExit(f'{file}: measurement still takes mutable Core')
 rv = (root / 'riscv_encode.c').read_text()
-if rv.count('rv_rvc_encode_plain(state,stmt,&compressed)') != 1 or \
-        'rv_rvc_encode_plain(MINIAS_RV_STATE(as),stmt,&compressed)' not in rv:
+if rv.count('rv_rvc_encode_plain(state,stmt,&compressed)') != 2 or \
+        'const MiniAsRiscvState *state=minias_encode_ctx_target_state(ctx);' not in rv:
     raise SystemExit('RVC measure/encode diverged from their common plan')
 x86 = (root / 'x86_64_target.c').read_text()
 if x86.count('x64_legacy_mode_prefixes(') != 4 or \
@@ -429,10 +477,9 @@ if 'state->rv32e_abi' not in rv_encoder:
     raise SystemExit('RISC-V MC parser lost the target-owned E ABI gate')
 print('MINIAS_MC_SITE_PROVENANCE=PASS AArch64_late_semantics=typed RV_E_ABI=target_owned')
 PY
-# Code alignment is a Target-owned NOP policy but still emits through the
-# identical MC byte transaction as every instruction. No architecture gets
-# a special direct-Section bridge for ALIGN or for an instruction emitter.
-grep -q 'return minias_emit_instruction_bytes(as, bytes, sizeof(bytes));' \
+# Code alignment and instructions share the same Common-owned byte
+# transaction, but no Target can call the former public MiniAs* emitter.
+grep -q 'return minias_encode_ctx_emit(ctx, bytes, sizeof(bytes));' \
     assembler/src/aarch64_target.c
 # All CodeEmitters now bind the destination Section internally to the
 # active fragment. No Target is permitted to pass an explicit Section
@@ -442,10 +489,13 @@ from pathlib import Path
 import re
 header=Path('assembler/src/minias_internal.h').read_text()
 core=Path('assembler/src/assembler.c').read_text()
-signature=header.split('bool minias_emit_instruction_bytes(',1)[1].split(');',1)[0]
-if re.search(r'\b(?:int\s+section|section_index)\b',signature):
-    raise SystemExit('Target-visible byte emission still selects Section')
-start=core.index('bool minias_emit_instruction_bytes(')
+if 'minias_emit_instruction_bytes' in header or \
+   'struct MiniAsEncodeContext {' in header:
+    raise SystemExit('Target can still access a general MiniAs byte emitter')
+signature=header.split('bool minias_encode_ctx_emit(',1)[1].split(');',1)[0]
+if re.search(r'\b(?:MiniAs\s*\*|int\s+section|section_index)\b',signature):
+    raise SystemExit('Target-visible byte emission still selects Core or Section')
+start=core.index('static bool minias_stage_instruction_bytes(')
 end=core.index('struct MiniAsCodeAlignSink {',start)
 body=core[start:end]
 if 'section_index=owner->section;' not in body:
@@ -453,9 +503,9 @@ if 'section_index=owner->section;' not in body:
 for name in ('riscv_target.c','riscv_encode.c','aarch64_target.c',
              'x86_64_target.c','loongarch64_target.c'):
     code=Path('assembler/src',name).read_text()
-    if re.search(r'minias_emit_instruction_bytes\s*\(\s*as\s*,\s*'
-                 r'(?:section|section_index|stmt->section|s->section)\s*,',code):
-        raise SystemExit('Target supplies a Section for code bytes: '+name)
+    if re.search(r'\bminias_emit_instruction_bytes\s*\(|'
+                 r'\bminias_stage_instruction_bytes\s*\(',code):
+        raise SystemExit('Target bypasses the restricted byte sink: '+name)
 print('MINIAS_MC_BYTE_OUTPUT_OWNER=PASS target_sections=none fragment_owner=1')
 PY
 # Executable ALIGN callbacks cannot receive the mutable assembler session.
@@ -489,7 +539,7 @@ for header in riscv_fixup_kinds.h aarch64_fixup_kinds.h \
               x86_64_fixup_kinds.h loongarch64_fixup_kinds.h; do
     test -s "assembler/src/$header"
 done
-grep -q 'minias_emit_instruction_bytes' assembler/src/assembler.c
+grep -q 'static bool minias_stage_instruction_bytes' assembler/src/assembler.c
 grep -q 'MiniAsTargetSiteState' assembler/src/minias_internal.h
 # LLVM MC-style lexical ownership: balanced operand grouping lives once in
 # Common MC. All four Target parsers consume it, and retain ISA legality.

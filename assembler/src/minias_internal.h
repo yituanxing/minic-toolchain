@@ -873,10 +873,30 @@ bool minias_decode_string_literals(const char *text,
                                    bool nul_terminate,
                                    unsigned char **data,
                                    size_t *size);
-/* All Target instruction and executable-padding bytes are staged into the
- * active fragment result; Common alone publishes its complete transaction. */
-bool minias_emit_instruction_bytes(MiniAs *as,
-                                   const void *data, size_t size);
+/* Encoding is a Common-owned Fragment transaction. A Target may inspect
+ * stable Symbol snapshots and private ISA state, then request bytes, Fixups
+ * and private anchors; it cannot dereference or mutate the MiniAs session.
+ * No compatibility callback taking MiniAs* is part of TargetOps. */
+typedef struct MiniAsEncodeContext MiniAsEncodeContext;
+bool minias_encode_ctx_emit(MiniAsEncodeContext *, const void *, size_t);
+bool minias_encode_ctx_fixup_ref(MiniAsEncodeContext *, uint64_t,
+                                MiniAsFixupKind, unsigned, MiniAsSymbolRef, bool);
+bool minias_encode_ctx_fixup_abs0(MiniAsEncodeContext *, uint64_t,
+                                 MiniAsFixupKind, unsigned);
+bool minias_encode_ctx_anchor_ref(MiniAsEncodeContext *, const char *,
+                                 MiniAsSymbolRef *);
+bool minias_encode_ctx_elf_flags(MiniAsEncodeContext *, uint32_t);
+void minias_encode_ctx_error(MiniAsEncodeContext *, const char *, ...);
+const MiniAsSymbol *minias_encode_ctx_symbol_lookup(
+    MiniAsEncodeContext *, MiniAsSymbolRef);
+bool minias_encode_ctx_resolve_difference(MiniAsEncodeContext *,
+    const MiniAsSymbolDifferenceRef *, int64_t *);
+bool minias_encode_ctx_resolve_difference_field(MiniAsEncodeContext *,
+    const MiniAsSymbolDifferenceRef *, int, uint64_t, int64_t *, bool *,
+    MiniAsSymbolRef *);
+bool minias_encode_ctx_symbol_is_dot(MiniAsEncodeContext *, MiniAsSymbolRef);
+const void *minias_encode_ctx_target_state(const MiniAsEncodeContext *);
+bool minias_encode_ctx_is_elf32(const MiniAsEncodeContext *);
 /* Executable ALIGN is a Target byte policy, not a general-purpose session
  * capability. The Target sees no MiniAs or mutable Fragment/Section array. */
 typedef struct MiniAsCodeAlignSink MiniAsCodeAlignSink;
@@ -1009,7 +1029,7 @@ typedef struct MiniAsTargetOps {
     bool (*measure_mcinst)(const MiniAsMeasureView *,
                            MiniAsMeasureErrorSink *,
                            const MiniAsStmt *, uint32_t *);
-    bool (*encode)(MiniAs *, const MiniAsStmt *);
+    bool (*encode)(MiniAsEncodeContext *, const MiniAsStmt *);
     /* One typed TargetRelaxPlan supplies both the range requirement and
      * the longest legal encoding. No Common mnemonic/argument reparse. */
     bool (*plan_instruction_relaxation)(MiniAsRelaxContext *,

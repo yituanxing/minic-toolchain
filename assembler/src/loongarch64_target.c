@@ -1966,7 +1966,7 @@ typedef struct {
     int64_t displacement;
 } LaBranchPlan;
 
-static bool la_resolve_branch_plan(MiniAs *as,const MiniAsStmt *s,
+static bool la_resolve_branch_plan(MiniAsEncodeContext *ctx,const MiniAsStmt *s,
                                    LaBranchPlan *plan) {
     const MiniAsMCInst *m=s->mcinst;
     const MiniAsSymbolRef *ref;
@@ -1977,26 +1977,26 @@ static bool la_resolve_branch_plan(MiniAs *as,const MiniAsStmt *s,
     if(m==NULL || (m->opcode!=LA_MC_BRANCH16 &&
                    m->opcode!=LA_MC_BRANCH21 &&
                    m->opcode!=LA_MC_BRANCH26) || m->count==0U) {
-        minias_set_error(as,"invalid-loongarch-branch-plan");
+        minias_encode_ctx_error(ctx,"invalid-loongarch-branch-plan");
         return false;
     }
     slot=m->count-1U;
     if(m->operands[slot].kind!=MINIAS_MC_BOUND_SYMBOL ||
        (ref=m->operands[slot].bound_symbol)==NULL) {
-        minias_set_error(as,"invalid-loongarch-bound-branch");
+        minias_encode_ctx_error(ctx,"invalid-loongarch-bound-branch");
         return false;
     }
-    target=minias_symbol_ref_lookup(as,*ref);
+    target=minias_encode_ctx_symbol_lookup(ctx,*ref);
     if(target==NULL || !target->defined || target->section!=s->section ||
        target->bind==MINIAS_STB_WEAK)return true;
     if(target->value>INT64_MAX || s->offset>INT64_MAX) {
-        minias_set_error(as,"loong-branch-offset-overflow");
+        minias_encode_ctx_error(ctx,"loong-branch-offset-overflow");
         return false;
     }
     diff=(int64_t)target->value-(int64_t)s->offset;
     if((ref->addend>0 && diff>INT64_MAX-ref->addend) ||
        (ref->addend<0 && diff<INT64_MIN-ref->addend)) {
-        minias_set_error(as,"loong-branch-addend-overflow");
+        minias_encode_ctx_error(ctx,"loong-branch-addend-overflow");
         return false;
     }
     diff+=ref->addend;
@@ -2047,12 +2047,12 @@ static bool la_prepare_layout(const MiniAsPreLayoutView *view,
 
 /* The encoder consumes a stable Target-owned answer; it never scans the
  * Common statement graph or changes section relaxation policy mid-emit. */
-static bool la_section_is_linker_relaxable(MiniAs *as,int section,
+static bool la_section_is_linker_relaxable(MiniAsEncodeContext *ctx,int section,
                                            bool *relaxable) {
-    const LaTargetState *state=(const LaTargetState *)as->target_state;
+    const LaTargetState *state=minias_encode_ctx_target_state(ctx);
     if(state==NULL || state->relaxable_sections==NULL || section<0 ||
        (size_t)section>=state->relaxable_section_count) {
-        minias_set_error(as,"missing-loongarch-layout-policy");
+        minias_encode_ctx_error(ctx,"missing-loongarch-layout-policy");
         return false;
     }
     *relaxable=state->relaxable_sections[(size_t)section];
@@ -2084,7 +2084,7 @@ static bool la_measure(const MiniAsMeasureView *view,
     *size=4U;
     return true;
 }
-static bool la_encode(MiniAs *as,const MiniAsStmt *s) {
+static bool la_encode(MiniAsEncodeContext *ctx,const MiniAsStmt *s) {
     unsigned char bytes[4];
     const MiniAsMCInst *m=s->mcinst;
     uint32_t code;
@@ -2092,7 +2092,7 @@ static bool la_encode(MiniAs *as,const MiniAsStmt *s) {
     MiniAsFixupKind kind=MINIAS_FIXUP_NONE;
     const MiniAsSymbolRef *expr=NULL;
     bool table_form=false,manual_form=false;
-    if(!m){minias_set_error(as,"missing-la-mcinst");return false;}
+    if(!m){minias_encode_ctx_error(ctx,"missing-la-mcinst");return false;}
     code=m->encoding;
     if(m->target_payload!=NULL) {
         const LaLoweringPlan *plan=
@@ -2100,13 +2100,13 @@ static bool la_encode(MiniAs *as,const MiniAsStmt *s) {
         unsigned j,k;
         unsigned char body[16];
         if(!la_valid_lowering_plan(m) || s->size!=4U*plan->count) {
-            minias_set_error(as,"invalid-la-lowering-layout:line=%zu",s->line);
+            minias_encode_ctx_error(ctx,"invalid-la-lowering-layout:line=%zu",s->line);
             return false;
         }
         for(j=0U;j<plan->count;++j)
             for(i=0U;i<4U;++i)
                 body[4U*j+i]=(unsigned char)(plan->words[j]>>(8U*i));
-        if(!minias_emit_instruction_bytes(as,body,
+        if(!minias_encode_ctx_emit(ctx,body,
                                           4U*plan->count))return false;
         for(k=0U;k<plan->fixup_count;++k) {
             const unsigned index=plan->fixups[k].symbol_operand;
@@ -2115,7 +2115,7 @@ static bool la_encode(MiniAs *as,const MiniAsStmt *s) {
             if(plan->fixups[k].absolute_zero) {
                 if(word_index>=plan->count ||
                    plan->fixups[k].kind!=MINIAS_FIXUP_LARCH_RELAX ||
-                   !minias_encode_add_fixup_abs0(as,
+                   !minias_encode_ctx_fixup_abs0(ctx,
                        s->offset+word_index*4U,
                        plan->fixups[k].kind,4U))return false;
                 continue;
@@ -2123,32 +2123,32 @@ static bool la_encode(MiniAs *as,const MiniAsStmt *s) {
             if(index>=m->count || word_index>=plan->count ||
                m->operands[index].kind!=MINIAS_MC_BOUND_SYMBOL ||
                m->operands[index].bound_symbol==NULL) {
-                minias_set_error(as,"invalid-la-lowering-fixup:line=%zu",
+                minias_encode_ctx_error(ctx,"invalid-la-lowering-fixup:line=%zu",
                                  s->line);
                 return false;
             }
             symbol=m->operands[index].bound_symbol;
-            if(!minias_encode_add_fixup_ref(as,
+            if(!minias_encode_ctx_fixup_ref(ctx,
                  s->offset+word_index*4U,plan->fixups[k].kind,4U,
                  *symbol,false))return false;
         }
         return true;
     }
     if(!la_materialize_table_word(m,&code,&table_form)) {
-        minias_set_error(as,"invalid-loongarch-typed-form:line=%zu",s->line);
+        minias_encode_ctx_error(ctx,"invalid-loongarch-typed-form:line=%zu",s->line);
         return false;
     }
     if(!table_form &&
        !la_materialize_manual_word(m,&code,&manual_form)) {
-        minias_set_error(as,"invalid-loongarch-manual-form:line=%zu",s->line);
+        minias_encode_ctx_error(ctx,"invalid-loongarch-manual-form:line=%zu",s->line);
         return false;
     }
     if(!table_form && !manual_form) {
-        minias_set_error(as,"missing-loongarch-encoder-form:line=%zu",s->line);
+        minias_encode_ctx_error(ctx,"missing-loongarch-encoder-form:line=%zu",s->line);
         return false;
     }
     if(table_form && m->opcode!=LA_MC_FIXED) {
-        minias_set_error(as,"loongarch-typed-form-opcode-mismatch");
+        minias_encode_ctx_error(ctx,"loongarch-typed-form-opcode-mismatch");
         return false;
     }
     switch(m->opcode) {
@@ -2169,11 +2169,11 @@ static bool la_encode(MiniAs *as,const MiniAsStmt *s) {
                  m->opcode==LA_MC_BRANCH21 ?
                  MINIAS_FIXUP_LARCH_B21 : MINIAS_FIXUP_LARCH_B26;
             slot=m->count-1U;
-            if(!la_resolve_branch_plan(as,s,&branch))return false;
-            if(!la_section_is_linker_relaxable(as,s->section,
+            if(!la_resolve_branch_plan(ctx,s,&branch))return false;
+            if(!la_section_is_linker_relaxable(ctx,s->section,
                                                &linker_relaxable))return false;
             if(s->size!=4U || (branch.local && !branch.short_legal)) {
-                minias_set_error(as,"loong-branch-out-of-range:%s:line=%zu",
+                minias_encode_ctx_error(ctx,"loong-branch-out-of-range:%s:line=%zu",
                                  s->args,s->line);
                 return false;
             }
@@ -2198,16 +2198,16 @@ static bool la_encode(MiniAs *as,const MiniAsStmt *s) {
         default: break;
     }
     for(i=0U;i<4U;++i)bytes[i]=(unsigned char)(code>>(8U*i));
-    if(!minias_emit_instruction_bytes(as,bytes,sizeof(bytes)))
+    if(!minias_encode_ctx_emit(ctx,bytes,sizeof(bytes)))
         return false;
     if(kind==MINIAS_FIXUP_NONE)return true;
     if(m->operands[slot].kind!=MINIAS_MC_BOUND_SYMBOL ||
        m->operands[slot].bound_symbol==NULL) {
-        minias_set_error(as,"invalid-loongarch-bound-fixup");
+        minias_encode_ctx_error(ctx,"invalid-loongarch-bound-fixup");
         return false;
     }
     expr=m->operands[slot].bound_symbol;
-    return minias_encode_add_fixup_ref(as,s->offset,kind,4U,
+    return minias_encode_ctx_fixup_ref(ctx,s->offset,kind,4U,
                                        *expr,false);
 }
 static bool la_align(MiniAsCodeAlignSink *sink,const MiniAsStmt *stmt,size_t size) {

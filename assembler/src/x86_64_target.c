@@ -4171,11 +4171,11 @@ static bool x64_plan_instruction_relaxation(MiniAsRelaxContext *ctx,
 /* The ISA owns the relocation field's PC bias; the Common SymbolRef owns
  * only stable name identity and its adjusted addend. Avoid signed overflow
  * while constructing a deferred fixup proposal. */
-static bool x64_adjust_symbol_ref(MiniAs *as,MiniAsSymbolRef input,
+static bool x64_adjust_symbol_ref(MiniAsEncodeContext *ctx,MiniAsSymbolRef input,
                                   int64_t correction,MiniAsSymbolRef *out) {
     if((correction>0 && input.addend>INT64_MAX-correction) ||
        (correction<0 && input.addend<INT64_MIN-correction)) {
-        minias_set_error(as,"x86-symbol-fixup-addend-overflow");
+        minias_encode_ctx_error(ctx,"x86-symbol-fixup-addend-overflow");
         return false;
     }
     *out=input;
@@ -4186,7 +4186,7 @@ static bool x64_adjust_symbol_ref(MiniAs *as,MiniAsSymbolRef input,
 /* One memory-displacement policy for every ModR/M form. A RIP-relative
  * reference to a preemptible same-section symbol must keep its PC32 record;
  * the displacement is folded only for genuinely local references. */
-static bool x64_resolve_memory_displacement(MiniAs *as,const MiniAsStmt *stmt,
+static bool x64_resolve_memory_displacement(MiniAsEncodeContext *ctx,const MiniAsStmt *stmt,
                                             const X64Memory *mem,
                                             uint32_t displacement_offset,
                                             uint32_t *displacement,
@@ -4197,7 +4197,7 @@ static bool x64_resolve_memory_displacement(MiniAs *as,const MiniAsStmt *stmt,
     if(mem->has_difference) {
         int64_t resolved;
         bool relocation;
-        if(!minias_resolve_symbol_difference_field(as,&mem->difference,
+        if(!minias_encode_ctx_resolve_difference_field(ctx,&mem->difference,
                 stmt->section,stmt->offset+displacement_offset,&resolved,
                 &relocation,difference_relocation) ||
            (relocation && mem->address_16) ||
@@ -4205,7 +4205,7 @@ static bool x64_resolve_memory_displacement(MiniAs *as,const MiniAsStmt *stmt,
             (resolved<INT16_MIN || resolved>UINT16_MAX)) ||
            (!relocation && !mem->address_16 &&
             (resolved<INT32_MIN || resolved>UINT32_MAX))) {
-            minias_set_error(as,"invalid-x86-memory-symbol-difference");
+            minias_encode_ctx_error(ctx,"invalid-x86-memory-symbol-difference");
             return false;
         }
         *displacement=relocation?0U:(uint32_t)resolved;
@@ -4220,7 +4220,7 @@ static bool x64_resolve_memory_displacement(MiniAs *as,const MiniAsStmt *stmt,
         *needs_pc32=true;
         return true;
     }
-    const MiniAsSymbol *symbol=minias_symbol_ref_lookup(as,mem->symbol);
+    const MiniAsSymbol *symbol=minias_encode_ctx_symbol_lookup(ctx,mem->symbol);
     int64_t distance;
     if(!x64_can_resolve_same_section(symbol,stmt,true)) {
         *displacement=0U;
@@ -4229,18 +4229,18 @@ static bool x64_resolve_memory_displacement(MiniAs *as,const MiniAsStmt *stmt,
     }
     if(symbol->value>INT64_MAX || stmt->offset>INT64_MAX ||
        stmt->offset>(uint64_t)INT64_MAX-(uint64_t)stmt->size) {
-        minias_set_error(as,"x86-rip-address-overflow");
+        minias_encode_ctx_error(ctx,"x86-rip-address-overflow");
         return false;
     }
     distance=(int64_t)symbol->value-(int64_t)(stmt->offset+stmt->size);
     if((mem->symbol.addend>0 && distance>INT64_MAX-mem->symbol.addend) ||
        (mem->symbol.addend<0 && distance<INT64_MIN-mem->symbol.addend)) {
-        minias_set_error(as,"x86-rip-addend-overflow");
+        minias_encode_ctx_error(ctx,"x86-rip-addend-overflow");
         return false;
     }
     distance+=mem->symbol.addend;
     if(distance<INT32_MIN || distance>INT32_MAX) {
-        minias_set_error(as,"x86-rip-rel32-out-of-range");
+        minias_encode_ctx_error(ctx,"x86-rip-rel32-out-of-range");
         return false;
     }
     *displacement=(uint32_t)distance;
@@ -4251,14 +4251,14 @@ static bool x64_resolve_memory_displacement(MiniAs *as,const MiniAsStmt *stmt,
  * absolute symbolic displacement, RIP-relative PC32, and symbolic immediate.
  * The immediate field's ELF signedness is determined solely by its ISA
  * operand width; it must not change with the addressing mode. */
-static bool x64_emit_memory_fixups(MiniAs *as,const MiniAsStmt *stmt,
+static bool x64_emit_memory_fixups(MiniAsEncodeContext *ctx,const MiniAsStmt *stmt,
                                    const MiniAsMCInst *inst,
                                    const X64Memory *mem,
                                    const X64MemoryLayout *layout,
                                    bool needs_pc32,
                                    MiniAsSymbolRef difference_relocation) {
     if(mem->has_difference && needs_pc32 &&
-       !minias_encode_add_fixup_ref(as,
+       !minias_encode_ctx_fixup_ref(ctx,
            stmt->offset+layout->displacement_offset,
            MINIAS_FIXUP_X64_PC32,4U,difference_relocation,false))
         return false;
@@ -4277,16 +4277,16 @@ static bool x64_emit_memory_fixups(MiniAs *as,const MiniAsStmt *stmt,
                 else
                     kind=MINIAS_FIXUP_X64_GOTPCREL;
             }
-            if(!x64_adjust_symbol_ref(as,mem->symbol,
+            if(!x64_adjust_symbol_ref(ctx,mem->symbol,
                     -4-(int64_t)layout->immediate_bytes,&relative) ||
-               !minias_encode_add_fixup_ref(as,
+               !minias_encode_ctx_fixup_ref(ctx,
                     stmt->offset+layout->displacement_offset,
                     kind,4U,relative,
-                    as->output_elf32 && kind==MINIAS_FIXUP_X64_PC32))
+                    minias_encode_ctx_is_elf32(ctx) && kind==MINIAS_FIXUP_X64_PC32))
                 return false;
         } else if(!mem->pc_relative) {
             MiniAsFixupKind kind=
-                (as->output_elf32 || layout->displacement_bytes==2U)?
+                (minias_encode_ctx_is_elf32(ctx) || layout->displacement_bytes==2U)?
                     MINIAS_FIXUP_ABS:MINIAS_FIXUP_X64_ABS32S;
             if(mem->reloc_flavor==X64_DISP_I386_GOT32X)
                 kind=MINIAS_FIXUP_X86_GOT32X;
@@ -4296,9 +4296,9 @@ static bool x64_emit_memory_fixups(MiniAs *as,const MiniAsStmt *stmt,
                 kind=MINIAS_FIXUP_X86_GOTPC;
             MiniAsSymbolRef adjusted;
             if(kind==MINIAS_FIXUP_X86_GOTPC &&
-               !x64_adjust_symbol_ref(as,mem->symbol,
+               !x64_adjust_symbol_ref(ctx,mem->symbol,
                    (int64_t)layout->displacement_offset,&adjusted))return false;
-            if(!minias_encode_add_fixup_ref(as,
+            if(!minias_encode_ctx_fixup_ref(ctx,
                    stmt->offset+layout->displacement_offset,
                    kind,layout->displacement_bytes,
                    kind==MINIAS_FIXUP_X86_GOTPC?adjusted:mem->symbol,
@@ -4309,24 +4309,24 @@ static bool x64_emit_memory_fixups(MiniAs *as,const MiniAsStmt *stmt,
        inst->operands[2].kind==MINIAS_MC_BOUND_SYMBOL) {
         if((layout->immediate_bytes!=2U && layout->immediate_bytes!=4U) ||
            inst->operands[2].bound_symbol==NULL) {
-            minias_set_error(as,"invalid-x86-memory-immediate-fixup-width");
+            minias_encode_ctx_error(ctx,"invalid-x86-memory-immediate-fixup-width");
             return false;
         }
-        return minias_encode_add_fixup_ref(as,
+        return minias_encode_ctx_fixup_ref(ctx,
             stmt->offset+layout->immediate_offset,
-            inst->operands[0].register_64 && !as->output_elf32?
+            inst->operands[0].register_64 && !minias_encode_ctx_is_elf32(ctx)?
                 MINIAS_FIXUP_X64_ABS32S:MINIAS_FIXUP_ABS,
             layout->immediate_bytes,*inst->operands[2].bound_symbol,false);
     }
     return true;
 }
 
-static bool x64_encode_base(MiniAs *as,const MiniAsStmt *s) {
+static bool x64_encode_base(MiniAsEncodeContext *ctx,const MiniAsStmt *s) {
     const MiniAsMCInst *m=s->mcinst;
     X64RegisterEncodingPlan register_plan;
     X64EncodingPlan plan;
     unsigned char code[16];size_t n=0;unsigned r;
-    if (!m) {minias_set_error(as,"missing-x86_64-mcinst");return false;}
+    if (!m) {minias_encode_ctx_error(ctx,"missing-x86_64-mcinst");return false;}
     if(x64_register_encoding_plan(m,s->site.mode_bits,&register_plan)) {
         x64_apply_code16_register_default(s,&register_plan);
         bool difference_relocation=false;
@@ -4336,13 +4336,13 @@ static bool x64_encode_base(MiniAs *as,const MiniAsStmt *s) {
             const unsigned width=m->encoding&UINT32_C(0x400)?2U:4U;
             int64_t resolved;
             if(width!=4U || register_plan.size<width ||
-               !minias_resolve_symbol_difference_field(
-                   as,m->operands[1].bound_difference,s->section,
+               !minias_encode_ctx_resolve_difference_field(
+                   ctx,m->operands[1].bound_difference,s->section,
                    s->offset+register_plan.size-width,&resolved,
                    &difference_relocation,&difference_relocation_ref) ||
                (!difference_relocation &&
                 (resolved<INT32_MIN || resolved>UINT32_MAX))) {
-                minias_set_error(as,"invalid-x86-movl-symbol-difference");
+                minias_encode_ctx_error(ctx,"invalid-x86-movl-symbol-difference");
                 return false;
             }
             uint32_t immediate=difference_relocation?0U:(uint32_t)resolved;
@@ -4350,10 +4350,10 @@ static bool x64_encode_base(MiniAs *as,const MiniAsStmt *s) {
                 register_plan.bytes[register_plan.size-width+i]=
                     (unsigned char)(immediate>>(8U*i));
         }
-        if(!minias_emit_instruction_bytes(as,
+        if(!minias_encode_ctx_emit(ctx,
                 register_plan.bytes,register_plan.size))return false;
         if(difference_relocation)
-            return minias_encode_add_fixup_ref(as,
+            return minias_encode_ctx_fixup_ref(ctx,
                 s->offset+register_plan.size-4U,
                 MINIAS_FIXUP_X64_PC32,4U,difference_relocation_ref,false);
         if(m->opcode==X64_MOV_IMM32 &&
@@ -4361,16 +4361,16 @@ static bool x64_encode_base(MiniAs *as,const MiniAsStmt *s) {
             const unsigned width=m->encoding&UINT32_C(0x400)?2U:4U;
             if((m->encoding!=0U && m->encoding!=UINT32_C(0x400)) ||
                register_plan.size<width) {
-                minias_set_error(as,"invalid-x86-movl-symbolic-imm32-layout");
+                minias_encode_ctx_error(ctx,"invalid-x86-movl-symbolic-imm32-layout");
                 return false;
             }
             MiniAsSymbolRef adjusted;
             MiniAsFixupKind kind=X64_FORM_VALUE(m)==X64_FORM_I386_GOTPC?
                 MINIAS_FIXUP_X86_GOTPC:MINIAS_FIXUP_ABS;
             if(kind==MINIAS_FIXUP_X86_GOTPC &&
-               !x64_adjust_symbol_ref(as,*m->operands[1].bound_symbol,
+               !x64_adjust_symbol_ref(ctx,*m->operands[1].bound_symbol,
                    (int64_t)(register_plan.size-width),&adjusted))return false;
-            return minias_encode_add_fixup_ref(as,
+            return minias_encode_ctx_fixup_ref(ctx,
                 s->offset+register_plan.size-width,
                 kind,width,kind==MINIAS_FIXUP_X86_GOTPC?
                     adjusted:*m->operands[1].bound_symbol,false);
@@ -4393,8 +4393,8 @@ static bool x64_encode_base(MiniAs *as,const MiniAsStmt *s) {
             x64_append_le(code,&n,(uint32_t)imm,plan.immediate_bytes);
             if(symbol) {
                 const MiniAsSymbolRef *expr=m->operands[0].bound_symbol;
-                if(!minias_emit_instruction_bytes(as,code,n))return false;
-                return minias_encode_add_fixup_ref(as,s->offset+1U,
+                if(!minias_encode_ctx_emit(ctx,code,n))return false;
+                return minias_encode_ctx_fixup_ref(ctx,s->offset+1U,
                     (m->encoding&UINT32_C(0x400))?
                         MINIAS_FIXUP_ABS:MINIAS_FIXUP_X64_ABS32S,
                     plan.immediate_bytes,*expr,false);
@@ -4411,12 +4411,12 @@ static bool x64_encode_base(MiniAs *as,const MiniAsStmt *s) {
             uint64_t offset=symbolic || difference?0U:m->operands[1].immediate;
             const uint16_t seg=(uint16_t)m->operands[0].immediate;
             if(width!=2U && width!=4U) {
-                minias_set_error(as,"x86-far-invalid-offset-width");
+                minias_encode_ctx_error(ctx,"x86-far-invalid-offset-width");
                 return false;
             }
             if(difference) {
                 int64_t resolved;
-                if(!minias_resolve_symbol_difference_field(as,
+                if(!minias_encode_ctx_resolve_difference_field(ctx,
                        m->operands[1].bound_difference,s->section,
                        s->offset+1U,&resolved,&difference_relocation,
                        &difference_relocation_ref) ||
@@ -4426,7 +4426,7 @@ static bool x64_encode_base(MiniAs *as,const MiniAsStmt *s) {
                                     resolved>UINT16_MAX)) ||
                      (width==4U && (resolved<INT32_MIN ||
                                     resolved>UINT32_MAX))))) {
-                    minias_set_error(as,"invalid-x86-far-symbol-difference:%s",
+                    minias_encode_ctx_error(ctx,"invalid-x86-far-symbol-difference:%s",
                                      s->args);
                     return false;
                 }
@@ -4436,13 +4436,13 @@ static bool x64_encode_base(MiniAs *as,const MiniAsStmt *s) {
             x64_append_le(code,&n,offset,width);
             code[n++]=(unsigned char)seg;
             code[n++]=(unsigned char)(seg>>8U);
-            if(!minias_emit_instruction_bytes(as,code,n))return false;
+            if(!minias_encode_ctx_emit(ctx,code,n))return false;
             if(difference_relocation)
-                return minias_encode_add_fixup_ref(as,
+                return minias_encode_ctx_fixup_ref(ctx,
                     s->offset+1U,MINIAS_FIXUP_X64_PC32,width,
                     difference_relocation_ref,false);
             if(!symbolic)return true;
-            return minias_encode_add_fixup_ref(as,
+            return minias_encode_ctx_fixup_ref(ctx,
                     s->offset+1U,MINIAS_FIXUP_ABS,width,
                     *m->operands[1].bound_symbol,false);
         }
@@ -4451,18 +4451,18 @@ static bool x64_encode_base(MiniAs *as,const MiniAsStmt *s) {
             const unsigned width=mem && mem->address_16?2U:4U;
             if(mem==NULL ||
                mem->has_base || mem->has_index) {
-                minias_set_error(as,"x86-moffs-invalid-address");return false;
+                minias_encode_ctx_error(ctx,"x86-moffs-invalid-address");return false;
             }
             code[n++]=(unsigned char)m->encoding;
             x64_append_le(code,&n,(uint64_t)mem->displacement,width);
-            if(!minias_emit_instruction_bytes(as,code,n))return false;
+            if(!minias_encode_ctx_emit(ctx,code,n))return false;
             if(!mem->has_symbol)return true;
-            return minias_encode_add_fixup_ref(as,
+            return minias_encode_ctx_fixup_ref(ctx,
                 s->offset+n-width,MINIAS_FIXUP_ABS,width,mem->symbol,false);
         }
         case X64_BRANCH: {
             const MiniAsSymbolRef *expr=m->operands[0].bound_symbol;
-            const MiniAsSymbol *target=minias_symbol_ref_lookup(as,*expr);
+            const MiniAsSymbol *target=minias_encode_ctx_symbol_lookup(ctx,*expr);
             const bool defined_local_cross_section=target && target->defined &&
                 target->bind==MINIAS_STB_LOCAL && target->section>=0 &&
                 target->section!=s->section;
@@ -4471,7 +4471,7 @@ static bool x64_encode_base(MiniAs *as,const MiniAsStmt *s) {
              * GNU uses PC32 instead. Defined local cross-section targets
              * also use PC32; explicit @PLT always overrides either mode. */
             const bool use_plt=X64_FORM_VALUE(m)==1U ||
-                (s->site.mode_bits==0U && !as->output_elf32 &&
+                (s->site.mode_bits==0U && !minias_encode_ctx_is_elf32(ctx) &&
                  !defined_local_cross_section);
             MiniAsFixupKind kind=use_plt?MINIAS_FIXUP_X64_PLT32:
                 MINIAS_FIXUP_X64_PC32;
@@ -4482,18 +4482,18 @@ static bool x64_encode_base(MiniAs *as,const MiniAsStmt *s) {
             if(width!=2U && width!=x64_branch_near_width(s) &&
                !(m->encoding==0xe8U && width==5U &&
                  s->site.mode_bits==X64_CODE16_GCC)) {
-                minias_set_error(as,"x86-branch-invalid-layout:line=%zu",s->line);
+                minias_encode_ctx_error(ctx,"x86-branch-invalid-layout:line=%zu",s->line);
                 return false;
             }
             resolution=x64_branch_distance(target,s,(uint32_t)width,&displacement);
             local=resolution!=X64_BRANCH_EXTERNAL;
             if(resolution==X64_BRANCH_LOCAL_OVERFLOW) {
-                minias_set_error(as,"x86-branch-address-or-addend-overflow:line=%zu",
+                minias_encode_ctx_error(ctx,"x86-branch-address-or-addend-overflow:line=%zu",
                                  s->line);
                 return false;
             }
             if(width==2U && (!local || m->encoding==0xe8U)) {
-                minias_set_error(as,"x86-branch-unrelaxed:line=%zu",s->line);
+                minias_encode_ctx_error(ctx,"x86-branch-unrelaxed:line=%zu",s->line);
                 return false;
             }
             if(width==2U) {
@@ -4512,18 +4512,18 @@ static bool x64_encode_base(MiniAs *as,const MiniAsStmt *s) {
                  (displacement<INT16_MIN || displacement>INT16_MAX)) ||
                 (disp_width==4U &&
                  (displacement<INT32_MIN || displacement>INT32_MAX)))) {
-                minias_set_error(as,"x86-branch-displacement-range:line=%zu",
+                minias_encode_ctx_error(ctx,"x86-branch-displacement-range:line=%zu",
                                  s->line);
                 return false;
             }
             x64_append_le(code,&n,(uint32_t)displacement,disp_width);
-            if(!minias_emit_instruction_bytes(as,code,n))return false;
+            if(!minias_encode_ctx_emit(ctx,code,n))return false;
             if(local)return true;
             {
                 MiniAsSymbolRef pc_relative;
-                if(!x64_adjust_symbol_ref(as,*expr,
+                if(!x64_adjust_symbol_ref(ctx,*expr,
                         -(int64_t)disp_width,&pc_relative))return false;
-                return minias_encode_add_fixup_ref(as,
+                return minias_encode_ctx_fixup_ref(ctx,
                     s->offset+width-disp_width,
                     disp_width==2U?MINIAS_FIXUP_PREL32:kind,
                     disp_width,pc_relative,
@@ -4541,7 +4541,7 @@ static bool x64_encode_base(MiniAs *as,const MiniAsStmt *s) {
             MiniAsSymbolRef displacement_relocation_ref={0};
             uint32_t disp=0U;
             if(layout.instruction_bytes>sizeof(code)) {
-                minias_set_error(as,"x86-memory-instruction-exceeds-encoder-capacity");
+                minias_encode_ctx_error(ctx,"x86-memory-instruction-exceeds-encoder-capacity");
                 return false;
             }
             const unsigned extra=layout.immediate_bytes;
@@ -4551,19 +4551,19 @@ static bool x64_encode_base(MiniAs *as,const MiniAsStmt *s) {
                m->operands[2].kind==MINIAS_MC_BOUND_SYMBOL_DIFFERENCE) {
                 int64_t resolved;
                 if(extra!=4U ||
-                   !minias_resolve_symbol_difference_field(
-                       as,m->operands[2].bound_difference,s->section,
+                   !minias_encode_ctx_resolve_difference_field(
+                       ctx,m->operands[2].bound_difference,s->section,
                        s->offset+layout.immediate_offset,&resolved,
                        &difference_relocation,&difference_relocation_ref) ||
                    (!difference_relocation &&
                     (resolved<INT32_MIN || resolved>UINT32_MAX))) {
-                    minias_set_error(as,"invalid-x86-memory-immediate-difference:%s:line=%zu",
+                    minias_encode_ctx_error(ctx,"invalid-x86-memory-immediate-difference:%s:line=%zu",
                                      s->args,s->line);
                     return false;
                 }
                 immediate=difference_relocation?0U:(uint32_t)resolved;
             }
-            if(!x64_resolve_memory_displacement(as,s,mem,
+            if(!x64_resolve_memory_displacement(ctx,s,mem,
                    layout.displacement_offset,&disp,&needs_pc32,
                    &displacement_relocation_ref))
                 return false;
@@ -4573,21 +4573,21 @@ static bool x64_encode_base(MiniAs *as,const MiniAsStmt *s) {
             code[n++]=layout.modrm;
             if(layout.has_sib)code[n++]=layout.sib;
             if(n!=layout.displacement_offset) {
-                minias_set_error(as,"invalid-x86-memory-plan-offset");
+                minias_encode_ctx_error(ctx,"invalid-x86-memory-plan-offset");
                 return false;
             }
             x64_append_le(code,&n,disp,layout.displacement_bytes);
             x64_append_le(code,&n,immediate,extra);
             if(n!=layout.instruction_bytes || n!=s->size) {
-                minias_set_error(as,"invalid-x86-memory-layout");
+                minias_encode_ctx_error(ctx,"invalid-x86-memory-layout");
                 return false;
             }
-            if(!minias_emit_instruction_bytes(as,code,n))return false;
-            if(!x64_emit_memory_fixups(as,s,m,mem,&layout,needs_pc32,
+            if(!minias_encode_ctx_emit(ctx,code,n))return false;
+            if(!x64_emit_memory_fixups(ctx,s,m,mem,&layout,needs_pc32,
                    displacement_relocation_ref))
                 return false;
             if(difference_relocation)
-                return minias_encode_add_fixup_ref(as,
+                return minias_encode_ctx_fixup_ref(ctx,
                     s->offset+layout.immediate_offset,
                     MINIAS_FIXUP_X64_PC32,4U,difference_relocation_ref,false);
             return true;
@@ -4599,9 +4599,9 @@ static bool x64_encode_base(MiniAs *as,const MiniAsStmt *s) {
             code[n++]=(unsigned char)(0xb8U|(r&7U));
             x64_append_le(code,&n,value->kind==MINIAS_MC_BOUND_SYMBOL?
                           UINT64_C(0):value->immediate,8U);
-            if(!minias_emit_instruction_bytes(as,code,n))return false;
+            if(!minias_encode_ctx_emit(ctx,code,n))return false;
             if(value->kind!=MINIAS_MC_BOUND_SYMBOL)return true;
-            return minias_encode_add_fixup_ref(as,s->offset+2U,
+            return minias_encode_ctx_fixup_ref(ctx,s->offset+2U,
                 MINIAS_FIXUP_X64_ABS64,8U,
                 *value->bound_symbol,false);
         }
@@ -4613,9 +4613,9 @@ static bool x64_encode_base(MiniAs *as,const MiniAsStmt *s) {
             code[n++]=(unsigned char)(0xc0U | (r&7U));
             x64_append_le(code,&n,(uint32_t)
                 (src->kind==MINIAS_MC_BOUND_SYMBOL?0U:src->immediate),4U);
-            if(!minias_emit_instruction_bytes(as,code,n))return false;
+            if(!minias_encode_ctx_emit(ctx,code,n))return false;
             if(src->kind!=MINIAS_MC_BOUND_SYMBOL)return true;
-            return minias_encode_add_fixup_ref(as,s->offset+3U,
+            return minias_encode_ctx_fixup_ref(ctx,s->offset+3U,
                 MINIAS_FIXUP_X64_ABS32S,4U,*src->bound_symbol,false);
         }
         case X64_ALU_IMM: {
@@ -4627,8 +4627,8 @@ static bool x64_encode_base(MiniAs *as,const MiniAsStmt *s) {
             MiniAsSymbolRef difference_relocation_ref;
             if(difference) {
                 if((plan.immediate_bytes!=1U && plan.immediate_bytes!=4U) ||
-                   !minias_resolve_symbol_difference_field(
-                       as,m->operands[1].bound_difference,s->section,
+                   !minias_encode_ctx_resolve_difference_field(
+                       ctx,m->operands[1].bound_difference,s->section,
                        s->offset+plan.immediate_offset,&resolved_diff,
                        &difference_relocation,&difference_relocation_ref) ||
                    (difference_relocation && plan.immediate_bytes!=4U) ||
@@ -4636,7 +4636,7 @@ static bool x64_encode_base(MiniAs *as,const MiniAsStmt *s) {
                     (plan.immediate_bytes==1U?
                         (resolved_diff<-128 || resolved_diff>127):
                         (resolved_diff<INT32_MIN || resolved_diff>UINT32_MAX)))) {
-                    minias_set_error(as,"invalid-x86-alu-symbol-difference:%s",
+                    minias_encode_ctx_error(ctx,"invalid-x86-alu-symbol-difference:%s",
                                      s->args);
                     return false;
                 }
@@ -4650,12 +4650,12 @@ static bool x64_encode_base(MiniAs *as,const MiniAsStmt *s) {
             code[n++]=plan.alu_opcode;
             if(!plan.alu_accumulator)code[n++]=plan.alu_modrm;
             if(n!=plan.immediate_offset) {
-                minias_set_error(as,"invalid-x86-alu-plan-offset");return false;
+                minias_encode_ctx_error(ctx,"invalid-x86-alu-plan-offset");return false;
             }
             x64_append_le(code,&n,imm,plan.immediate_bytes);
             if(difference_relocation) {
-                if(!minias_emit_instruction_bytes(as,code,n))return false;
-                return minias_encode_add_fixup_ref(as,
+                if(!minias_encode_ctx_emit(ctx,code,n))return false;
+                return minias_encode_ctx_fixup_ref(ctx,
                     s->offset+plan.immediate_offset,
                     MINIAS_FIXUP_X64_PC32,4U,difference_relocation_ref,false);
             }
@@ -4664,55 +4664,55 @@ static bool x64_encode_base(MiniAs *as,const MiniAsStmt *s) {
                 MiniAsSymbolRef adjusted;
                 MiniAsFixupKind kind=X64_FORM_VALUE(m)==X64_FORM_I386_GOTPC?
                     MINIAS_FIXUP_X86_GOTPC:
-                    m->operands[0].register_64 && !as->output_elf32?
+                    m->operands[0].register_64 && !minias_encode_ctx_is_elf32(ctx)?
                         MINIAS_FIXUP_X64_ABS32S:MINIAS_FIXUP_ABS;
                 if(plan.immediate_bytes!=2U && plan.immediate_bytes!=4U) {
-                    minias_set_error(as,"invalid-x86-alu-symbol-width");
+                    minias_encode_ctx_error(ctx,"invalid-x86-alu-symbol-width");
                     return false;
                 }
-                if(!minias_emit_instruction_bytes(as,code,n))return false;
+                if(!minias_encode_ctx_emit(ctx,code,n))return false;
                 /* GNU R_386_GOTPC computes GOT + A - P.  GCC's GOT-base
                  * ADD expects GOT relative to the *instruction start*;
                  * the embedded REL addend therefore includes the byte
                  * distance to the immediate field (1 for accumulator
                  * opcode, 2 for opcode+ModR/M). */
                 if(kind==MINIAS_FIXUP_X86_GOTPC &&
-                   !x64_adjust_symbol_ref(as,*expr,
+                   !x64_adjust_symbol_ref(ctx,*expr,
                        (int64_t)plan.immediate_offset,&adjusted))return false;
-                return minias_encode_add_fixup_ref(as,
+                return minias_encode_ctx_fixup_ref(ctx,
                     s->offset+plan.immediate_offset,
                     kind,plan.immediate_bytes,
                     kind==MINIAS_FIXUP_X86_GOTPC?adjusted:*expr,false);
             }
             if(n!=s->size) {
-                minias_set_error(as,"x86-alu-layout-size-drift:%zu!=%u:%s",
+                minias_encode_ctx_error(ctx,"x86-alu-layout-size-drift:%zu!=%u:%s",
                                  n,s->size,s->args);
                 return false;
             }
             break;
         }
-        default: minias_set_error(as,"bad-x86_64-mcinst");return false;
+        default: minias_encode_ctx_error(ctx,"bad-x86_64-mcinst");return false;
     }
-    return minias_emit_instruction_bytes(as,code,n);
+    return minias_encode_ctx_emit(ctx,code,n);
 }
 
-static bool x64_encode(MiniAs *as,const MiniAsStmt *s) {
+static bool x64_encode(MiniAsEncodeContext *ctx,const MiniAsStmt *s) {
     MiniAsStmt native;
     unsigned char prefix[4];size_t n;
     const char *prefix_error=x64_legacy_mode_prefixes(s,prefix,&n);
     if(prefix_error!=NULL) {
-        minias_set_error(as,"%s",prefix_error);
+        minias_encode_ctx_error(ctx,"%s",prefix_error);
         return false;
     }
-    if(n==0U)return x64_encode_base(as,s);
+    if(n==0U)return x64_encode_base(ctx,s);
     if(s->size<n || s->offset>SIZE_MAX-n) {
-        minias_set_error(as,"x86-code16-invalid-prefix-layout");return false;
+        minias_encode_ctx_error(ctx,"x86-code16-invalid-prefix-layout");return false;
     }
-    if(!minias_emit_instruction_bytes(as,prefix,n))return false;
+    if(!minias_encode_ctx_emit(ctx,prefix,n))return false;
     native=*s;
     native.offset+=n;
     native.size-=(uint32_t)n;
-    return x64_encode_base(as,&native);
+    return x64_encode_base(ctx,&native);
 }
 
 static bool x64_code_align(MiniAsCodeAlignSink *sink,const MiniAsStmt *stmt,size_t n) {

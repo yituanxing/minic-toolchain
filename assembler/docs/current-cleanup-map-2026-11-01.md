@@ -3,8 +3,17 @@
 **核对基线 SHA：** `5d8d10408b4ecc6499835aa287028234e8aabdc7`
 （`refactor/minias-target-isa-abi-core`，Draft PR #667）。
 本文是重新检查当前生产源码目录和设计记录后整理出的状态快照；
-随后的 ALIGN 接口清理应以其新提交和新 CI 单独验收。
+下表数字是该历史基线的快照，而非每次后续提交的实时计数。
 旧台账保留历史证据，**这里不复用旧“pending CI”状态**。
+
+**后续 P04 更新（基于 `e11e7d2` 的编码器批次）：** 四架构
+`encode(MiniAs *, Stmt *)` 已一起迁移至不透明的
+`MiniAsEncodeContext` 和 12 项受限能力，18 条闭合编码调用链
+不再持有完整 Common 会话；旧 Target 字节发射入口也已私有化。
+本地 `-Werror`、A0 30/30、重点事务/GNU 探针与旧版/新版四架构
+18 份对象逐字节比较均 PASS。该批的远端 exact-head CI
+以及跨 GNU/完整 Linux Image 验收必须单独报告；明细见
+[完整源码审查台账](full-source-review-ledger-2026-10-29.md)。
 
 ## 一、读、改、完成必须分开
 
@@ -46,7 +55,7 @@ COFF/Mach-O 是后续格式扩展，不允许反向污染当前 MC 语义。
 | Source | `source_graph.c`、`source_expansion.c` | **P05 部分收敛**：缓存、宏展开、EOF 的归属已明确，仍需处理调用者耦合 |
 | Common/MC 基础 | `assembler.c`、`mc_lexer.c`、`mc_operand_semantics.c` | **保留单路径**：Section/Symbol/Fragment 生命周期由 Common 管；`assembler.c` 仍是大型聚合点 |
 | 表达式/布局 | `expression.c`、`mc_expr.c`、`mc_layout.c` | **合理分工**：共享语法，但 wrapping、绝对、延迟重定位求值语义不同 |
-| 编码/目标 | `mc_encode_result.c`、`riscv_target.c`、`riscv_encode.c`、`aarch64_target.c`、`x86_64_target.c`、`loongarch64_target.c` | **P04 部分收敛**：输出事务唯一；四个 `encode(MiniAs*,Stmt*)` 回调仍过宽 |
+| 编码/目标 | `mc_encode_result.c`、`riscv_target.c`、`riscv_encode.c`、`aarch64_target.c`、`x86_64_target.c`、`loongarch64_target.c` | **P04 后续更新**：输出事务唯一；四个宽权限 `encode` 已换成受限上下文，其余能力边界仍需持续审计 |
 | CFI/DWARF | `cfi.c`、`cfi_writer.c`、`debug_line.c` | **保留**：CFI 语义状态与两个 DWARF 消费端不同，不能只因字节写法相似就合并 |
 | 对象/输入 | `elf_writer.c`、`string_literal.c` | **保留**：最终序列化与字符串解析职责独立 |
 
@@ -73,14 +82,13 @@ COFF/Mach-O 是后续格式扩展，不允许反向污染当前 MC 语义。
 
 ## 五、开放问题按依赖排序，而不是按文件数量
 
-**P04 — 当前主阻塞。** Parse 已使用受限上下文，
-Measure/Relax/PostEmit 也有阶段能力；Fixup、锚点、机器字节
-写入均被活动 Fragment 限制。但四架构
-`TargetOps.encode(MiniAs*, const MiniAsStmt*)` 仍有过大的
-Common 状态访问权限。应先精确统计编码阶段所需的只读属性、
-符号查找、目标私有状态和错误/输出能力，再**同时迁移消费者
-并删除旧签名**。新接口如果只是重新取回 `MiniAs*`，
-不算重构成功。
+**P04 — 编码主阻塞已解除，其他边界仍要审计。** Parse 已使用受限
+上下文，Measure/Relax/PostEmit 也有阶段能力；Fixup、锚点、
+机器字节写入均被活动 Fragment 限制。后续批次将四架构
+`TargetOps.encode` 与内部 18 个调用者统一迁移到真正不透明的
+`MiniAsEncodeContext`，没有暴露 `MiniAs *` 的回退入口。
+后续重点是验证剩余 Target 生命周期/策略边界，不能直接推断
+完整 P04、跨 GNU 或 Linux Image 已全量验收。
 
 **P05 — Source/Fragment provenance。** SourceGraph 现负责
 物理行、SourceSite、EOF 和稳定重放；Common/SourceContext
@@ -107,10 +115,9 @@ CFI 与 DebugLine 不同语义消费端、ELF 最终 Writer。
 
 ## 六、下一批怎样算真正“清理完成”
 
-1. P04：逐架构核对读写能力，最终把四个宽权限编码器签名
-   改成真正受限的上下文/输出接口，**旧调用链全部消失**；
-   用 A0、RV32/RV64、AArch64 真链接/QEMU、
-   x86/LoongArch GNU、原子提交测试验收。
+1. P04：四个宽权限编码器签名与旧调用链已替换。继续对新受限
+   Context、RV32/RV64、AArch64 真链接/QEMU、x86/LoongArch GNU
+   和原子提交做 exact-head 验收，逐项关闭其余生命周期边界。
 2. P05：只在 SourceSite/EOF/条件重放输入可保持身份时删旧路径，
    不能另起一套 SourceGraph。
 3. 统一删除证据：清掉无消费者的声明/字段/包装；

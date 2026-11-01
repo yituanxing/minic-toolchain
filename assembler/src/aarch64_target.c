@@ -334,12 +334,12 @@ static bool aarch64_measure_mcinst(const MiniAsMeasureView *view,
     return true;
 }
 
-static bool append_word(MiniAs *as, uint32_t word) {
+static bool append_word(MiniAsEncodeContext *ctx, uint32_t word) {
     unsigned char bytes[4];
     unsigned i;
     for (i = 0U; i != 4U; ++i)
         bytes[i] = (unsigned char)(word >> (i * 8U));
-    return minias_emit_instruction_bytes(as, bytes, sizeof(bytes));
+    return minias_encode_ctx_emit(ctx, bytes, sizeof(bytes));
 }
 
 /* First fully typed backend: parse GNU A64 operand syntax once, when the
@@ -744,15 +744,15 @@ static bool a64_parse_address_offset(MiniAsParseContext *ctx,const char *source,
     return true;
 }
 
-static bool a64_resolve_address_offset(MiniAs *as,const A64Memory *memory,
+static bool a64_resolve_address_offset(MiniAsEncodeContext *ctx,const A64Memory *memory,
                                        int64_t *value) {
     if(memory->offset.kind==A64_OFFSET_CONSTANT) {
         *value=memory->offset.constant;
         return true;
     }
     if(memory->offset.kind==A64_OFFSET_DIFFERENCE)
-        return minias_resolve_symbol_difference_ref(
-                   as,&memory->offset.difference,value);
+        return minias_encode_ctx_resolve_difference(
+                   ctx,&memory->offset.difference,value);
     return false;
 }
 
@@ -786,14 +786,14 @@ static bool a64_attach_difference(MiniAsParseContext *ctx,MiniAsMCInst *inst,
     return true;
 }
 
-static bool a64_resolve_immediate(MiniAs *as,const MiniAsMCOperand *operand,
+static bool a64_resolve_immediate(MiniAsEncodeContext *ctx,const MiniAsMCOperand *operand,
                                   int64_t *value) {
     if(operand->kind==MINIAS_MC_IMMEDIATE) {
         *value=(int64_t)operand->immediate;
         return true;
     }
     if(operand->kind==MINIAS_MC_BOUND_SYMBOL_DIFFERENCE)
-        return minias_resolve_symbol_difference_ref(as,
+        return minias_encode_ctx_resolve_difference(ctx,
                    operand->bound_difference,value);
     return false;
 }
@@ -4393,27 +4393,27 @@ lane_complete:;
     return true;
 }
 
-static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
+static bool encode(MiniAsEncodeContext *ctx, const MiniAsStmt *stmt) {
     const MiniAsMCInst *inst = stmt->mcinst;
     uint32_t code;
     MiniAsFixupKind fixup = MINIAS_FIXUP_NONE;
     const MiniAsSymbolRef *expr = NULL;
     MiniAsSymbolRef resolved_branch_expr;
     if (inst == NULL) {
-        minias_set_error(as, "missing-aarch64-mcinst:line=%zu", stmt->line);
+        minias_encode_ctx_error(ctx, "missing-aarch64-mcinst:line=%zu", stmt->line);
         return false;
     }
     switch (inst->opcode) {
         case A64_MC_LDR_LITERAL: {
             const MiniAsSymbolRef *literal=inst->operands[1].bound_symbol;
             const MiniAsSymbol *target=literal?
-                minias_symbol_ref_lookup(as,*literal):NULL;
+                minias_encode_ctx_symbol_lookup(ctx,*literal):NULL;
             int64_t displacement;
             bool direct=inst->target_form==1U;
             if(!literal || (!direct &&
                (!target || !target->defined ||
                 target->section!=stmt->section))) {
-                minias_set_error(as,"bad-aarch64-literal-pool-target:%s",
+                minias_encode_ctx_error(ctx,"bad-aarch64-literal-pool-target:%s",
                                  stmt->args);return false;
             }
             code=(inst->operands[0].register_64?
@@ -4435,21 +4435,21 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
                 (int64_t)target->value>INT64_MAX-literal->addend) ||
                (literal->addend<0 &&
                 (int64_t)target->value<INT64_MIN-literal->addend)) {
-                minias_set_error(as,"aarch64-literal-address-overflow");
+                minias_encode_ctx_error(ctx,"aarch64-literal-address-overflow");
                 return false;
             }
             {
                 int64_t target_address=(int64_t)target->value+
                                        literal->addend;
                 if(target_address<INT64_MIN+(int64_t)stmt->offset) {
-                    minias_set_error(as,"aarch64-literal-pcrel-overflow");
+                    minias_encode_ctx_error(ctx,"aarch64-literal-pcrel-overflow");
                     return false;
                 }
                 displacement=target_address-(int64_t)stmt->offset;
             }
             if((displacement&3)!=0 || displacement<-1048576 ||
                displacement>1048572) {
-                minias_set_error(as,"aarch64-literal-load-out-of-range:%s",
+                minias_encode_ctx_error(ctx,"aarch64-literal-load-out-of-range:%s",
                                  stmt->args);return false;
             }
             code|=((uint32_t)(displacement/4)&UINT32_C(0x7ffff))<<5U;
@@ -4551,14 +4551,14 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
             if(inst->operands[0].kind==MINIAS_MC_BOUND_SYMBOL) {
                 const MiniAsSymbolRef *hint_expr=inst->operands[0].bound_symbol;
                 const MiniAsSymbol *symbol=hint_expr?
-                    minias_symbol_ref_lookup(as,*hint_expr):NULL;
+                    minias_encode_ctx_symbol_lookup(ctx,*hint_expr):NULL;
                 int64_t addend=hint_expr?hint_expr->addend:0;
                 if(!symbol || !symbol->defined ||
                    symbol->section!=MINIAS_SECTION_ABS ||
                    symbol->value>127U ||
                    addend<-(int64_t)symbol->value ||
                    addend>127-(int64_t)symbol->value) {
-                    minias_set_error(as,
+                    minias_encode_ctx_error(ctx,
                         "invalid-aarch64-absolute-hint:%s:line=%zu",
                         stmt->args,stmt->line);
                     return false;
@@ -4567,7 +4567,7 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
             }else {
                 hint=(uint32_t)inst->operands[0].immediate;
                 if(hint>127U) {
-                    minias_set_error(as,"aarch64-hint-imm7-out-of-range");
+                    minias_encode_ctx_error(ctx,"aarch64-hint-imm7-out-of-range");
                     return false;
                 }
             }
@@ -4587,7 +4587,7 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
             expr=inst->operands[1].bound_symbol;
             code=UINT32_C(0x10000000)|inst->operands[0].reg;
             fixup=MINIAS_FIXUP_A64_ADR_LO21;
-            target=minias_symbol_ref_lookup(as,*expr);
+            target=minias_encode_ctx_symbol_lookup(ctx,*expr);
             /* GNU GAS emits ADR_PREL_LO21 relocations for GLOBAL/WEAK
              * references even when their definitions reside in .text.
              * Resolve only non-preemptible section-local symbol targets. */
@@ -4599,17 +4599,17 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
                 (int64_t)target->value>INT64_MAX-expr->addend) ||
                (expr->addend<0 &&
                 (int64_t)target->value<INT64_MIN-expr->addend)) {
-                minias_set_error(as,"aarch64-adr-overflow");return false;
+                minias_encode_ctx_error(ctx,"aarch64-adr-overflow");return false;
             }
             displacement=(int64_t)target->value+expr->addend;
             if(displacement<INT64_MIN+(int64_t)stmt->offset) {
-                minias_set_error(as,"aarch64-adr-pcrel-overflow");
+                minias_encode_ctx_error(ctx,"aarch64-adr-pcrel-overflow");
                 return false;
             }
             displacement-=(int64_t)stmt->offset;
             if(displacement<-(INT64_C(1)<<20U) ||
                displacement>=(INT64_C(1)<<20U)) {
-                minias_set_error(as,"aarch64-adr-range");return false;
+                minias_encode_ctx_error(ctx,"aarch64-adr-range");return false;
             }
             code|=(((uint32_t)displacement&3U)<<29U)|
                   ((((uint32_t)displacement>>2U)&UINT32_C(0x7ffff))<<5U);
@@ -4648,7 +4648,7 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
                     if(inst->target_form==0U ||
                        inst->target_form>sizeof(a64_scalar_memory_forms)/
                                           sizeof(a64_scalar_memory_forms[0])) {
-                        minias_set_error(as,"missing-aarch64-lo12-memory-form");
+                        minias_encode_ctx_error(ctx,"missing-aarch64-lo12-memory-form");
                         return false;
                     }
                     form=&a64_scalar_memory_forms[inst->target_form-1U];
@@ -4678,7 +4678,7 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
                 const MiniAsSymbol *symbol;
                 MiniAsFixupKind kind=(MiniAsFixupKind)inst->target_form;
                 expr=inst->operands[1].bound_symbol;
-                symbol=minias_symbol_ref_lookup(as,*expr);
+                symbol=minias_encode_ctx_symbol_lookup(ctx,*expr);
                 if(symbol && symbol->defined &&
                    symbol->section==MINIAS_SECTION_ABS) {
                     uint64_t bits=symbol->value+(uint64_t)expr->addend;
@@ -4694,14 +4694,14 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
                     if(checked_signed && width<64U) {
                         int64_t bound=INT64_C(1)<<(width-1U);
                         if(signed_bits< -bound || signed_bits>=bound) {
-                            minias_set_error(as,
+                            minias_encode_ctx_error(ctx,
                                 "aarch64-movw-absolute-range:%s:line=%zu",
                                 stmt->args,stmt->line);
                             return false;
                         }
                     }else if(checked_unsigned && width<64U &&
                              bits>=(UINT64_C(1)<<width)) {
-                        minias_set_error(as,
+                        minias_encode_ctx_error(ctx,
                             "aarch64-movw-absolute-overflow:%s:line=%zu",
                             stmt->args,stmt->line);
                         return false;
@@ -4775,9 +4775,9 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
         case A64_MC_MTE_STGM: {
             const A64Memory *memory=a64_memory_at(inst,1U);
             int64_t offset;
-            if(!memory || !a64_resolve_address_offset(as,memory,&offset) ||
+            if(!memory || !a64_resolve_address_offset(ctx,memory,&offset) ||
                offset%16!=0 || offset<-4096 || offset>4080) {
-                minias_set_error(as,"aarch64-final-mte-memory-offset-out-of-range");
+                minias_encode_ctx_error(ctx,"aarch64-final-mte-memory-offset-out-of-range");
                 return false;
             }
             code=inst->encoding|
@@ -4858,9 +4858,9 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
         case A64_MC_PRFM: {
             const A64Memory *memory=a64_memory_at(inst,1U);
             int64_t offset;
-            if(!memory || !a64_resolve_address_offset(as,memory,&offset) ||
+            if(!memory || !a64_resolve_address_offset(ctx,memory,&offset) ||
                offset<0 || offset%8!=0 || offset/8>4095) {
-                minias_set_error(as,"aarch64-final-prfm-memory-offset-out-of-range");
+                minias_encode_ctx_error(ctx,"aarch64-final-prfm-memory-offset-out-of-range");
                 return false;
             }
             code=UINT32_C(0xf9800000) |
@@ -4953,7 +4953,7 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
                 case 6U:opcode=wide?UINT32_C(0xf8bfc000):UINT32_C(0xb8bfc000);break;
                 case 7U:opcode=UINT32_C(0x38bfc000);break;
                 case 8U:opcode=UINT32_C(0x78bfc000);break;
-                default:minias_set_error(as,"bad-aarch64-acquire-size");return false;
+                default:minias_encode_ctx_error(ctx,"bad-aarch64-acquire-size");return false;
             }
             code=opcode | (memory->base<<5U) |
                  inst->operands[0].reg;
@@ -5018,12 +5018,12 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
             int64_t value;
             uint64_t resolved_imm;
             unsigned imm;
-            if(!a64_resolve_immediate(as,&inst->operands[2],&value))return false;
+            if(!a64_resolve_immediate(ctx,&inst->operands[2],&value))return false;
             resolved_imm=(uint64_t)value;
             if(value<0 ||
                (resolved_imm>4095U &&
                 (resolved_imm%4096U!=0U || resolved_imm/4096U>4095U))) {
-                minias_set_error(as,"aarch64-final-alu-imm-out-of-range:line=%zu",
+                minias_encode_ctx_error(ctx,"aarch64-final-alu-imm-out-of-range:line=%zu",
                                  stmt->line);
                 return false;
             }
@@ -5055,11 +5055,11 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
             bool sf = inst->operands[0].register_64;
             int64_t value;
             uint64_t imm;
-            if(!a64_resolve_immediate(as,&inst->operands[1],&value))return false;
+            if(!a64_resolve_immediate(ctx,&inst->operands[1],&value))return false;
             imm=(uint64_t)value;
             if(value<0 ||
                (imm>4095U && (imm%4096U!=0U || imm/4096U>4095U))) {
-                minias_set_error(as,"aarch64-final-compare-imm-out-of-range:line=%zu",
+                minias_encode_ctx_error(ctx,"aarch64-final-compare-imm-out-of-range:line=%zu",
                                  stmt->line);
                 return false;
             }
@@ -5076,9 +5076,9 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
         case A64_MC_LDST_UNPRIV: {
             const A64Memory *memory=a64_memory_at(inst,1U);
             int64_t offset;
-            if(!memory || !a64_resolve_address_offset(as,memory,&offset) ||
+            if(!memory || !a64_resolve_address_offset(ctx,memory,&offset) ||
                offset<-256 || offset>255) {
-                minias_set_error(as,"aarch64-final-unprivileged-offset-out-of-range");
+                minias_encode_ctx_error(ctx,"aarch64-final-unprivileged-offset-out-of-range");
                 return false;
             }
             code=(inst->encoding-UINT32_C(0x00fff800))|
@@ -5089,8 +5089,8 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
         case A64_MC_LDST_SCALED: {
             const A64Memory *memory=a64_memory_at(inst,1U);
             int64_t offset;
-            if(!memory || !a64_resolve_address_offset(as,memory,&offset)) {
-                minias_set_error(as,"aarch64-unresolved-memory-offset");
+            if(!memory || !a64_resolve_address_offset(ctx,memory,&offset)) {
+                minias_encode_ctx_error(ctx,"aarch64-unresolved-memory-offset");
                 return false;
             }
             if(memory->offset.kind==A64_OFFSET_DIFFERENCE &&
@@ -5102,7 +5102,7 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
                     break;
                 }
                 if(scalar_matched) {
-                    minias_set_error(as,
+                    minias_encode_ctx_error(ctx,
                         "aarch64-final-memory-offset-out-of-range:line=%zu",
                         stmt->line);
                     return false;
@@ -5111,7 +5111,7 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
             if(memory->access_bytes==0U || offset<0 ||
                offset%(int64_t)memory->access_bytes!=0 ||
                offset/(int64_t)memory->access_bytes>4095) {
-                minias_set_error(as,"aarch64-final-scaled-offset-out-of-range");
+                minias_encode_ctx_error(ctx,"aarch64-final-scaled-offset-out-of-range");
                 return false;
             }
             code=inst->encoding|
@@ -5136,9 +5136,9 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
         case A64_MC_LDST_UNSCALED: {
             const A64Memory *memory=a64_memory_at(inst,1U);
             int64_t offset;
-            if(!memory || !a64_resolve_address_offset(as,memory,&offset) ||
+            if(!memory || !a64_resolve_address_offset(ctx,memory,&offset) ||
                offset<-256 || offset>255) {
-                minias_set_error(as,"aarch64-final-unscaled-offset-out-of-range");
+                minias_encode_ctx_error(ctx,"aarch64-final-unscaled-offset-out-of-range");
                 return false;
             }
             code=(inst->encoding-UINT32_C(0x01000000))|
@@ -5156,12 +5156,12 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
             bool qpair=inst->operands[0].target_reg_bank==A64_BANK_SIMD_Q;
             unsigned mode;
             int64_t offset,pair_imm;
-            if(!memory || !a64_resolve_address_offset(as,memory,&offset) ||
+            if(!memory || !a64_resolve_address_offset(ctx,memory,&offset) ||
                memory->access_bytes==0U ||
                offset%(int64_t)memory->access_bytes!=0 ||
                offset/(int64_t)memory->access_bytes < -64 ||
                offset/(int64_t)memory->access_bytes > 63) {
-                minias_set_error(as,"aarch64-final-pair-offset-out-of-range");
+                minias_encode_ctx_error(ctx,"aarch64-final-pair-offset-out-of-range");
                 return false;
             }
             pair_imm=offset/(int64_t)memory->access_bytes;
@@ -5221,11 +5221,11 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
             if(inst->target_payload!=NULL) {
                 const A64BranchAdjustment *adjustment=inst->target_payload;
                 int64_t value;
-                if(!minias_resolve_symbol_difference_ref(
-                       as,&adjustment->difference,&value) ||
+                if(!minias_encode_ctx_resolve_difference(
+                       ctx,&adjustment->difference,&value) ||
                    !minias_checked_add_i64(expr->addend,value,
                                            &resolved_branch_expr.addend)) {
-                    minias_set_error(as,"aarch64-final-branch-addend-overflow");
+                    minias_encode_ctx_error(ctx,"aarch64-final-branch-addend-overflow");
                     return false;
                 }
                 resolved_branch_expr.name_id=expr->name_id;
@@ -5260,12 +5260,11 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
              * nVHE symbol prefixing would otherwise turn it into the even
              * less meaningful `__kvm_nvhe_.`.  All branches share this one
              * Target-owned PC-relative lowering path. */
-            location_counter=expr->name_id<as->symbol_name_count &&
-                strcmp(as->symbol_names[expr->name_id].name,".")==0;
+            location_counter=minias_encode_ctx_symbol_is_dot(ctx,*expr);
             if(location_counter) {
                 distance=expr->addend;
             }else {
-                target=minias_symbol_ref_lookup(as,*expr);
+                target=minias_encode_ctx_symbol_lookup(ctx,*expr);
                 /* A section-equal GLOBAL or WEAK branch still needs its
                  * symbol identity at final link: strong definitions can
                  * override a weak placeholder, and GNU GAS emits the
@@ -5278,13 +5277,13 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
                     target->section != stmt->section ||
                     target->bind != MINIAS_STB_LOCAL) break;
                 if (target->value > INT64_MAX || stmt->offset > INT64_MAX) {
-                    minias_set_error(as, "aarch64-branch-address-overflow");
+                    minias_encode_ctx_error(ctx, "aarch64-branch-address-overflow");
                     return false;
                 }
                 distance = (int64_t)target->value - (int64_t)stmt->offset;
                 if ((expr->addend > 0 && distance > INT64_MAX - expr->addend) ||
                     (expr->addend < 0 && distance < INT64_MIN - expr->addend)) {
-                    minias_set_error(as, "aarch64-branch-addend-overflow");
+                    minias_encode_ctx_error(ctx, "aarch64-branch-addend-overflow");
                     return false;
                 }
                 distance += expr->addend;
@@ -5296,7 +5295,7 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
                 distance > (testbit ? INT64_C(32764):
                              conditional ? INT64_C(1048572) :
                                            INT64_C(134217724))) {
-                minias_set_error(as, "aarch64-branch-out-of-range:%s:line=%zu",
+                minias_encode_ctx_error(ctx, "aarch64-branch-out-of-range:%s:line=%zu",
                                  stmt->args, stmt->line);
                 return false;
             }
@@ -5309,16 +5308,16 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
             break;
         }
         default:
-            minias_set_error(as, "unknown-aarch64-mc-opcode:%u:line=%zu",
+            minias_encode_ctx_error(ctx, "unknown-aarch64-mc-opcode:%u:line=%zu",
                              inst->opcode, stmt->line);
             return false;
     }
-    if (!append_word(as, code)) return false;
+    if (!append_word(ctx, code)) return false;
     if(fixup==MINIAS_FIXUP_NONE)return true;
     /* Target describes the binding policy without assuming that the last
      * element of Common's global Fixup array belongs to this instruction.
      * Both bytes and the relocation request are committed by the MC engine. */
-    return minias_encode_add_fixup_ref(as,stmt->offset,fixup,4U,
+    return minias_encode_ctx_fixup_ref(ctx,stmt->offset,fixup,4U,
         *expr,fixup==MINIAS_FIXUP_A64_LD_PREL_LO19);
 }
 

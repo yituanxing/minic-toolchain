@@ -7,6 +7,49 @@
 > 和早期测试文件数量，均不能自动当作最新 HEAD 的事实。
 > “读过 / 修改过 / 完成清理”必须分别统计。
 
+### 2026-11-01 四架构完整编码回调的受限能力迁移（P04）
+
+**Base:** exact remote Draft PR #667 head
+`e11e7d28a3aab81766b86cac902e82dff3c935d5`。
+本批一次性替换四架构 `TargetOps.encode(MiniAs *, Stmt *)` 的宽权限入口，
+不改变 ISA 指令表、布局/松弛策略或 ELF 重定位算法。
+
+- **Common 独占可变会话：** `MiniAsEncodeContext` 仅在
+  `assembler.c` 定义、构造并持有 `MiniAs *`。Target 只见不透明声明，
+  `encode` 和递归调用的 **18 个函数/辅助函数**全部接收该上下文；
+  无 `ctx->as` 或另一条旧 `MiniAs *` 编码回调路径。
+- **12 项窄能力：** 活动 Fragment 字节写入、符号 Fixup、ABS0 Fixup、
+  锚点、ELF flags、错误报告、符号查询、两种符号差值求值、
+  `. / SymbolID` 判断、只读 Target 私有状态、ELF32 类别判断。
+  Common 仍负责 Fixup 顺序、符号/Section 归属、单次事务提交、
+  诊断首错及实际 SymbolID 转换；Target 不获得 Section、SourceGraph
+  或可变 Fragment 的裸指针。
+- **移除旧的 Target 字节发射入口：** 原
+  `minias_emit_instruction_bytes(MiniAs *,...)` 仅剩
+  Common-private `minias_stage_instruction_bytes`，ALIGN sink 和受限
+  Encode Context 共用现有字节事务。RISC-V 的即时 RVC/XLEN 状态、
+  x86 i386 ELF32 判别、AArch64 对 `.` 的解析、LoongArch
+  可松弛 Section 缓存仍读取原本的实时状态。
+- **结构守卫：** 两份已有探针校验四架构签名、18 条闭合编码调用链、
+  恰好 12 项能力、Common-private context/byte stage、旧入口消失。
+
+**Production diff:** 7 个 `assembler/src` 文件，`+341/-249`
+（净 `+92`）；两个结构测试 `+69/-20`（净 `+49`）。这是确实收紧
+所有权的接口迁移，**不是净代码缩短**，也不意味着其他 P04/P05
+任务或跨工具链全量验收已完成。
+
+**Local verification:** `-Werror` release、A0 `30/30`、
+Fragment/EncodeResult 原子事务、四架构 Target 边界、GNU x86/i386
+字节/REL/GOTPC 真实链接、`.code16/.code32` `38/38`、
+AArch64 `.` 分支真链接、RISC-V 2/4/8 字节松弛、
+Linux x86 页表以及主机 CFI/COMDAT 探针 PASS。
+**独立旧/新二进制差分：** 将迁移前源树重新编译成单独的 MiniAS，
+18 份来自四架构的成功汇编 ELF `.o` 逐字节一致；另 5 份非法/不适配
+输入两版均拒绝，没有不同的成功/失败状态。
+本机缺少 AArch64/RISC-V/LoongArch GNU cross assembler，相关
+外部 GNU 字节差分 **NOT TESTED**。本批 exact-head remote CI、
+严格 3,536 GNU 及完整 Linux Image/QEMU 验收需另行报告。
+
 ### 2026-11-01 Target ABI/Object policy read-only capability batch
 
 **Base:** exact remote Draft PR #667 head
