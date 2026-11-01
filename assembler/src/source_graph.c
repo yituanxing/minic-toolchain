@@ -7,6 +7,29 @@
 #include <string.h>
 #include <sys/types.h>
 
+MiniAsSourceGraph *minias_source_graph_create(void) {
+    return calloc(1U,sizeof(MiniAsSourceGraph));
+}
+
+bool minias_source_graph_is_loaded(const MiniAsSourceGraph *graph) {
+    return graph!=NULL && graph->file_reads!=0U;
+}
+
+size_t minias_source_graph_physical_lines(const MiniAsSourceGraph *graph) {
+    return graph->physical.count;
+}
+
+/* Trace belongs to the owner of this persistent state, not to Common's
+ * Fragment lowerer. Preserve the existing machine-readable diagnostic. */
+void minias_source_graph_trace(const MiniAsSourceGraph *graph,
+                               size_t replay_passes,FILE *diagnostic) {
+    if(diagnostic==NULL || getenv("MINIAS_TRACE_RELAYOUT")==NULL)return;
+    fprintf(diagnostic,
+            "minias-source-graph:file-reads=%zu sites=%zu expansions=%zu replay-passes=%zu site-drifts=%zu conditional-changes=%zu\n",
+            graph->file_reads,graph->site_count,graph->expansion_count,
+            replay_passes,graph->ordinal_drifts,graph->conditional_changes);
+}
+
 /* The frame owns its lexical lines regardless of which source expansion
  * borrowed its body. The SourceGraph destructor calls this once for the
  * physical input; expansion frames release their own temporary copies. */
@@ -311,7 +334,7 @@ void minias_source_graph_destroy(MiniAsSourceGraph *graph) {
         free(graph->forced_branches[i].operands);
     }
     free(graph->forced_branches);
-    memset(graph,0,sizeof(*graph));
+    free(graph);
 }
 
 static bool source_graph_forced_shape_matches(

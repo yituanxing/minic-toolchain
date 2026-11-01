@@ -15,6 +15,15 @@
 以及跨 GNU/完整 Linux Image 验收必须单独报告；明细见
 [完整源码审查台账](full-source-review-ledger-2026-10-29.md)。
 
+**后续 P05 更新（基于 `c85a6960` 的 Source 所有权批次）：**
+`assembler.c` 已不再包含 Source 私有头文件，也不直接访问
+`as->source->...` 或 `graph->...`；通过新建的
+`source_graph_common.h` 使用有限的处理帧、SiteID、EOF、重放
+和统计能力。新增一个头文件后，当前目录为 **33 个生产文件
+（22 C、11 头文件）**；下表 32 文件仍是旧基线的历史数据。
+本地 A0、SourceGraph 单次文件读取与完整重放、EOF/宏/条件
+定向测试及四架构 18 份对象差分通过，新批 CI 必须单独核对。
+
 ## 一、读、改、完成必须分开
 
 | 指标 | 基线结果 | 正确含义 |
@@ -47,12 +56,12 @@ Common 管源码语义、数据模型与最终对象；Target 管具体 ISA/ABI�
 指令宽度和机器码；ELF Writer 负责序列化，不重新解释源语法。
 COFF/Mach-O 是后续格式扩展，不允许反向污染当前 MC 语义。
 
-## 三、32 文件清单：哪些要保留，哪里还有债
+## 三、旧基线 32 文件清单：哪些要保留，哪里还有债
 
 | 模块 | C 源文件 | 判断 |
 | --- | --- | --- |
 | Invocation/配置 | `invocation.c`、`target_registry.c`、`riscv_profile.c` | **保留**：通用注册与 RISC-V profile 不重复 |
-| Source | `source_graph.c`、`source_expansion.c` | **P05 部分收敛**：缓存、宏展开、EOF 的归属已明确，仍需处理调用者耦合 |
+| Source | `source_graph.c`、`source_expansion.c` | **P05 后续更新**：缓存、宏展开、EOF 与私有类型归 Source；Common 已切换到窄接口，但 SourceGraph 与 MCLayout 的增长/重放契约仍需核对 |
 | Common/MC 基础 | `assembler.c`、`mc_lexer.c`、`mc_operand_semantics.c` | **保留单路径**：Section/Symbol/Fragment 生命周期由 Common 管；`assembler.c` 仍是大型聚合点 |
 | 表达式/布局 | `expression.c`、`mc_expr.c`、`mc_layout.c` | **合理分工**：共享语法，但 wrapping、绝对、延迟重定位求值语义不同 |
 | 编码/目标 | `mc_encode_result.c`、`riscv_target.c`、`riscv_encode.c`、`aarch64_target.c`、`x86_64_target.c`、`loongarch64_target.c` | **P04 后续更新**：输出事务唯一；四个宽权限 `encode` 已换成受限上下文，其余能力边界仍需持续审计 |
@@ -90,10 +99,12 @@ COFF/Mach-O 是后续格式扩展，不允许反向污染当前 MC 语义。
 后续重点是验证剩余 Target 生命周期/策略边界，不能直接推断
 完整 P04、跨 GNU 或 Linux Image 已全量验收。
 
-**P05 — Source/Fragment provenance。** SourceGraph 现负责
-物理行、SourceSite、EOF 和稳定重放；Common/SourceContext
-仍有跨层互访。继续清理要验证宏递归、条件拓扑、EOF literal
-pool/local COMMON、Fragment 稳定身份以及单次物理读取。
+**P05 — Source/Fragment provenance。** SourceGraph 负责物理行、
+SourceSite、EOF 和稳定重放；最新 Source 能力边界已消除
+Common 对私有帧/条件栈/图索引的直接访问。SourceGraph
+仍须与 MCLayout 交换被强制增长的分支身份，因此下一步要验证
+该契约的失配拒绝、Fragment 稳定身份、宏递归、条件拓扑和
+EOF literal pool/local COMMON，不随意移除必要的全帧重放。
 
 **P02/P07、X1 — 目标 ISA/模式合法性。** 已有局部
 RISC-V Zbb/V 站点支持，不代表完整版本化扩展语义；

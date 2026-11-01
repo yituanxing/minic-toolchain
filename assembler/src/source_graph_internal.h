@@ -1,7 +1,7 @@
 #ifndef MINIAS_SOURCE_GRAPH_INTERNAL_H
 #define MINIAS_SOURCE_GRAPH_INTERNAL_H
 
-#include "minias_internal.h"
+#include "source_graph_common.h"
 
 /* These source-only types intentionally do not appear in the Target-visible
  * MiniAs internal model. Source expansion is their lifetime owner. */
@@ -150,42 +150,16 @@ struct MiniAsSourceGraph {
 };
 
 
-/* SourceGraph (persists across layout-sensitive semantic source replays). */
+/* Source-only SiteID interning and expansion/condition provenance. */
 bool minias_source_graph_intern(MiniAs *as, MiniAsSourceSiteKey key,
                          MiniAsStableSiteId *site_id);
 bool minias_source_graph_line_site(MiniAs *as, const MiniAsSourceLine *line,
                             MiniAsStableSiteId *site_id);
-bool minias_source_graph_begin_eof(MiniAs *as);
-bool minias_source_graph_validate_fragment_sites(MiniAs *as);
 void minias_source_graph_record_condition(MiniAs *as, MiniAsStableSiteId owner,
                                    bool active);
-void minias_source_graph_destroy(MiniAsSourceGraph *graph);
-bool minias_source_graph_load_physical(MiniAs *as, const char *path,
-                                      MiniAsSourceGraph *graph);
-bool minias_source_graph_lookup_forced_branch(MiniAs *as, const MiniAsStmt *stmt,
-                                       size_t *minimum_size);
-bool minias_source_graph_rebind_forced_branches(MiniAs *as, size_t **ids,
-                                         size_t *count, size_t *capacity);
-bool minias_source_graph_capture_forced_branches(MiniAs *as, const size_t *ids,
-                                          size_t count);
 
 /* Source lexical/macro/repeat expansion (fresh inside each semantic pass). */
 void minias_source_lines_destroy(MiniAsSourceLine *lines, size_t count);
-bool minias_source_context_init(MiniAs *as);
-void minias_source_context_destroy(MiniAsSourceContext *source);
-bool minias_source_try_conditional(MiniAs *as, char *text, size_t line,
-                                   bool *handled);
-bool minias_source_conditional_active(const MiniAs *as);
-bool minias_source_try_macro_invocation(MiniAs *as, char *op, char *args,
-                                        size_t line, bool *handled);
-bool minias_source_try_control_directive(MiniAs *as, const char *op,
-                                         const char *args, size_t line,
-                                         bool *handled);
 bool minias_source_frame_process(MiniAs *as, const MiniAsSourceFrame *frame);
-
-/* The intentionally recursive parser boundary; both sides live in Common. */
-bool minias_statement_process(MiniAs *as, char *text, size_t line);
-bool minias_numeric_refs_rewrite(MiniAs *as, const char *text,
-                                char **out, size_t line);
 
 #endif

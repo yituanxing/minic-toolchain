@@ -84,6 +84,34 @@ void minias_source_context_destroy(MiniAsSourceContext *source) {
     free(source);
 }
 
+MiniAsStableSiteId minias_source_current_site(const MiniAs *as) {
+    return as->source->current_site;
+}
+
+void minias_source_restore_site(MiniAs *as,MiniAsStableSiteId site) {
+    as->source->current_site=site;
+}
+
+/* Bind the persistent SourceGraph to this fresh lexical pass. Common only
+ * receives the processed Fragment stream, never the FILE/expansion frame or
+ * the conditional stack. Errors and the replay pass counter are unchanged. */
+bool minias_source_context_process_graph(MiniAs *as,MiniAsSourceGraph *graph) {
+    if(as->source->graph!=NULL || graph==NULL ||
+       graph->physical.kind!=MINIAS_SOURCE_FRAME_FILE) {
+        minias_set_error(as,"invalid-source-graph-state");
+        return false;
+    }
+    as->source->graph=graph;
+    ++graph->parse_passes;
+    if(!minias_source_frame_process(as,&graph->physical))return false;
+    if(as->source->conditional_count!=0U) {
+        minias_set_error(as,"unterminated-directive:.if:depth=%zu",
+                         as->source->conditional_count);
+        return false;
+    }
+    return true;
+}
+
 /* Conditional comparisons use the same Common MCExpr precedence grammar as
  * data and target operands. Keep only the historical single '=' spelling
  * accepted by MiniAS source files: it is a compatibility fallback, not a

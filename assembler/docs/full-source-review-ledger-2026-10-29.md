@@ -7,6 +7,53 @@
 > 和早期测试文件数量，均不能自动当作最新 HEAD 的事实。
 > “读过 / 修改过 / 完成清理”必须分别统计。
 
+### 2026-11-01 SourceGraph/SourceContext 不透明 Common 边界（P05）
+
+**Base:** exact remote Draft PR #667 head
+`c85a6960d4ff1bb170d2cfbfe216e918716ab0f5`。
+本批清理的是 Source 所有权的实际泄露，不删掉为保证 GNU
+`.if/.set` 和长分支反馈正确性而保留的整帧语义重放。
+
+- **Common 不再包含 Source 私有布局：** 新的
+  `source_graph_common.h` 仅声明不透明 `MiniAsSourceGraph` /
+  `MiniAsSourceContext` 的能力。`assembler.c` 不再包含
+  `source_graph_internal.h`，且不再使用 `as->source->...`
+  或 `graph->...` 读写条件栈、SiteID、FILE frame、图统计。
+  详细 frame、macro、conditional 和稳定索引仅在 Source 的
+  两个 `.c` 与私有头文件可见。
+- **SourceGraph 唯一负责持久图生命周期和统计：** Source 层
+  `create/destroy` 自行分配、释放图，判定物理文件是否已经加载，
+  提供只读物理行数并原样输出重放 trace。Common 依旧只要求
+  读取物理文件一次，失败与成功路径都释放持久图。
+- **SourceContext 唯一处理 pass-local frame：** Source 层把
+  持久 graph 绑定到新语义 pass，递增原有 `parse_passes`，通过
+  同一 `minias_source_frame_process` 处理 FILE/扩展帧并检查
+  `.if` 栈是否闭合。Common 仍独立处理 CFI 完结、EOF 的
+  literal-pool/local `.comm` Fragment、layout 和 ELF 输出。
+  SourceSite 获取/恢复仅供 Common 记录普通 Fragment 和恢复
+  EOF 延迟 local `.comm` 的原始语法位置，不提供可变 Source
+  栈或图索引指针。
+- **守卫：** `probe-mc-layout-ownership.sh` 强制 Common 只能
+  包含受限头文件，拒绝直接访问 Source 内部，确认展开/文件帧
+  仍共用同一处理器；旧的源码条件/宏解析器没有重生。
+
+**Production diff:** 5 个 `assembler/src` 文件（含新增 1 个
+受限头文件），`+125/-62` 行，净 `+63`；结构测试
+`+17/-4`。目录随之由 32 个生产源码/头文件变为 **33**
+（22 `.c`、11 `.h`）；这是消除 Common 私有类型依赖，不是
+净删代码或关闭全部 P05。
+
+**Local verification:** `-Werror` release 与 A0 `30/30` PASS；
+x86/RISC-V SourceGraph 单次物理读取、稳定 SourceSite、
+完整 SourceFrame 重放/分支增长、x86 GNU 字节+符号对照、
+EOF local `.comm`、复合宏/条件/`.end`、大型收集器、
+70,004 字节物理行等定向回归 PASS。独立重编译迁移前
+MiniAS 与新版本比较，四架构 **18 份 ELF 对象逐字节一致**，
+其余 5 份输入两版均拒绝；无成功/失败状态差异。
+RISC-V、AArch64、LoongArch64 本机外部 GNU 差分因缺少
+cross assembler **NOT TESTED**。新提交 exact-head CI、
+严格 3,536 GNU 和完整 Linux Image/QEMU 仍待独立报告。
+
 ### 2026-11-01 四架构完整编码回调的受限能力迁移（P04）
 
 **Base:** exact remote Draft PR #667 head

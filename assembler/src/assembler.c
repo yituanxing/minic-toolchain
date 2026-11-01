@@ -1,5 +1,5 @@
 #include "minias_internal.h"
-#include "source_graph_internal.h"
+#include "source_graph_common.h"
 #include "minias.h"
 
 #include <ctype.h>
@@ -1678,7 +1678,7 @@ static bool add_stmt(MiniAs *as,
     st = &as->stmts[as->stmt_count];
     memset(st, 0, sizeof(*st));
     st->fragment_kind = fragment_kind;
-    st->source_site = as->source->current_site;
+    st->source_site = minias_source_current_site(as);
     st->op = minias_strdup(op);
     st->args = minias_strdup(args == NULL ? "" : args);
     st->line = line;
@@ -4028,7 +4028,7 @@ static bool parse_comm(MiniAs *as, const char *args, size_t line) {
         pending->size=(uint64_t)size;
         pending->alignment=alignment;
         pending->line=line;
-        pending->source_site=as->source->current_site;
+        pending->source_site=minias_source_current_site(as);
         /* Mark this SymbolID as defined immediately, preserving GNU's
          * duplicate-symbol and late .globl/.hidden semantics, but do not
          * anchor its BSS offset until the complete subsection-0 source
@@ -4063,7 +4063,7 @@ invalid:
 static bool flush_pending_local_commons(MiniAs *as) {
     int saved_section=as->current_section;
     uint32_t saved_subsection=as->current_subsection;
-    MiniAsStableSiteId saved_source_site=as->source->current_site;
+    MiniAsStableSiteId saved_source_site=minias_source_current_site(as);
     bool ok=true;
     size_t i;
     int bss;
@@ -4091,7 +4091,7 @@ static bool flush_pending_local_commons(MiniAs *as) {
             minias_set_error(as,"pending-local-common-mutated:%s",symbol->name);
             ok=false;break;
         }
-        as->source->current_site=pending->source_site;
+        minias_source_restore_site(as,pending->source_site);
         (void)snprintf(align_buf,sizeof(align_buf),"%llu",
                        (unsigned long long)pending->alignment);
         (void)snprintf(size_buf,sizeof(size_buf),"%llu",
@@ -4111,7 +4111,7 @@ static bool flush_pending_local_commons(MiniAs *as) {
     }
     as->current_section=saved_section;
     as->current_subsection=saved_subsection;
-    as->source->current_site=saved_source_site;
+    minias_source_restore_site(as,saved_source_site);
     return ok;
 }
 
@@ -4632,21 +4632,7 @@ bool minias_statement_process(MiniAs *as, char *text, size_t line) {
 
 static bool parse_loaded_source_graph(MiniAs *as,
                                        MiniAsSourceGraph *graph) {
-    bool parsed;
-    if(as->source->graph!=NULL || graph==NULL ||
-       graph->physical.kind!=MINIAS_SOURCE_FRAME_FILE) {
-        minias_set_error(as,"invalid-source-graph-state");
-        return false;
-    }
-    as->source->graph=graph;
-    ++graph->parse_passes;
-    parsed=minias_source_frame_process(as,&graph->physical);
-    if(!parsed)return false;
-    if(as->source->conditional_count!=0U) {
-        minias_set_error(as,"unterminated-directive:.if:depth=%zu",
-                         as->source->conditional_count);
-        return false;
-    }
+    if(!minias_source_context_process_graph(as,graph))return false;
     if(as->cfi_active) {
         minias_set_error(as,"unterminated-directive:.cfi_startproc");
         return false;
@@ -4655,7 +4641,8 @@ static bool parse_loaded_source_graph(MiniAs *as,
      * the actual literal-pool and local-COMMON fragment materialization. */
     if(!minias_source_graph_begin_eof(as))return false;
     if(as->target->supports_literal_pools &&
-       !flush_literal_pools(as,graph->physical.count,true))return false;
+       !flush_literal_pools(as,minias_source_graph_physical_lines(graph),true))
+        return false;
     if(!flush_pending_local_commons(as))return false;
     if(!minias_source_graph_validate_fragment_sites(as))return false;
     /* Finalization already refreshes the alias DAG after assigning final
@@ -4873,8 +4860,14 @@ int minias_assemble_config(const char *input_path,
     size_t long_branch_count = 0U;
     size_t long_branch_capacity = 0U;
     size_t source_reparse_pass = 0U;
-    MiniAsSourceGraph graph={0};
+    MiniAsSourceGraph *graph=minias_source_graph_create();
     int rc = 1;
+
+    if(graph==NULL) {
+        if(diagnostic!=NULL)
+            fprintf(diagnostic,"minic-as: out-of-memory:source-graph\n");
+        return 1;
+    }
 
     for (;;) {
         MiniAs as;
@@ -4907,10 +4900,10 @@ int minias_assemble_config(const char *input_path,
                 as.sections[(size_t)text_section].align=align;
             }
         }
-        if(parsed && graph.file_reads==0U) {
-            parsed=minias_source_graph_load_physical(&as,input_path,&graph);
+        if(parsed && !minias_source_graph_is_loaded(graph)) {
+            parsed=minias_source_graph_load_physical(&as,input_path,graph);
         }
-        if(parsed)parsed=parse_loaded_source_graph(&as,&graph);
+        if(parsed)parsed=parse_loaded_source_graph(&as,graph);
         if(parsed && as.target->prepare_layout!=NULL) {
             const MiniAsPreLayoutView parsed_fragments = {
                 .stmts = as.stmts,
@@ -4980,13 +4973,8 @@ int minias_assemble_config(const char *input_path,
         minias_destroy(&as);
         break;
     }
-    if(diagnostic!=NULL && getenv("MINIAS_TRACE_RELAYOUT")!=NULL)
-        fprintf(diagnostic,
-                "minias-source-graph:file-reads=%zu sites=%zu expansions=%zu replay-passes=%zu site-drifts=%zu conditional-changes=%zu\n",
-                graph.file_reads,graph.site_count,graph.expansion_count,
-                source_reparse_pass,graph.ordinal_drifts,
-                graph.conditional_changes);
-    minias_source_graph_destroy(&graph);
+    minias_source_graph_trace(graph,source_reparse_pass,diagnostic);
+    minias_source_graph_destroy(graph);
     free(long_branch_ids);
     return rc;
 }
