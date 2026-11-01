@@ -74,7 +74,7 @@ flowchart TD
 | `MinicC0Program` | Compiler 入口，`ast.c` 维护各 arena | Parser 构造，Normalize/Inline/prune 定向修改；Core/Target 读取 | Program 独占记录字段、名字、CALL overflow、各语义实体的析构责任。 |
 | `FunctionId`/`RecordId`/`ExpressionId` | Program append 时的稳定整数身份 | 所有上游转换和下游 Core | ID 稳定，**元素内存地址不稳定**：arena `realloc` 后重新用 ID 获取；MC-001–003 违背的是借用指针有效期。 |
 | `FunctionBody` 逻辑树/图 | `Function.body_block` 作为语义根 | `function_body.c` 校验跨函数 Block/Statement/Local/ASM/cleanup 边 | Program-wide arena 是物理储存，不等于每个 Function 拥有一段连续 ExpressionId；parser-time orphan expression 合法。详见 [FunctionBody 契约](function-body-ownership-v1.md)。 |
-| Parser tags、enum、scope 等 | `MinicParser` 单独拥有的动态容器 | Tag/Enum 查找返借用指针，bind/add 会扩容 | 纯词法 probe 的浅拷贝未必有害；语义 parse 会写共享拥有型字段，MC-004/005 的浅拷贝确实违规。 |
+| Parser tags、enum、scope 等 | `MinicParser` 单独拥有的动态容器 | Tag/Enum 查找返借用指针，bind/add 会扩容 | 纯词法 probe 的浅拷贝未必有害；语义 parse 会写共享拥有型字段。历史 MC-004/005 attribute 浅拷贝确实违规，现已改为 owning Parser 解析（FIXED-UNVERIFIED）。 |
 | Core reentry index | CoreSet 生成期间创建、销毁 | 各函数 CoreLower 只借用索引；query 可更新统计器 | 原 Program 不可写；OOM 或证据不足时保守回扫，不能据不完整索引证明「无 reentry」。 |
 | `MinicCoreFunctionSet` | Compiler 拥有，数组槽与状态一一对应 Program 函数序号 | 各函数 Lower 成功发表 Core IR；validate/Target 借用 | `function_count` 必须相同；未定义和无需发射的函数槽仍保留。并行数组同下标**不是偶然一致**。 |
 | `MinicCoreFunction` | CoreSet 槽独占；函数 Lower 使用私有 `lowered` 构造 | Core API append/verify；Target 只借用 | Lower 成功验证后才 move 到输出；失败析构暂态且旧输出不变。**已发表 ID 稳定**；特殊 CSR `rK` 尾部消除会在严格验证后回退未发表的 Instruction/Value 计数并复用尾部 ID，不能泛称所有 Core ID 绝对单调。裸指针也不宜跨 append。 |
@@ -117,7 +117,7 @@ flowchart TD
 | Inline 实例事实 | shared CALL 被跨 caller 修改、整数+符号事实不能组合 | **已证缺陷 MC-006/007/008**；重构需把 `(caller FunctionId, Call ExpressionId)` 的实例事实归属单独表达。 |
 | FunctionBody 只读接口 | `visit_expression_child_ids` 的浅拷贝仍通过可写 visitor 给 CALL overflow 同值赋值 | **MC-030 设计债**；单线程目前未证错编，未来并发读取不能依赖当前物理 const。 |
 | Core 特殊尾部回退 | `core_inline_asm_rewind_dead_local_assignment` 同时检查 block 和全局连续尾部 ID/definitions 后缩小可见计数 | **合理但特殊**；已更正“全局始终单调、只留 tombstone”的旧误导注释，不应按普通 append-only 规则理解。 |
-| Parser 语义 probe | `probe=*parser` 的 attribute 语义求值跨 owned 容器扩容 | **已证缺陷 MC-004/005**；其他词法 probe 不受同一判定影响。 |
+| Parser 语义 probe | 原 `probe=*parser` 的 attribute 语义求值跨 owned 容器扩容 | **已证且已定点修复 MC-004/005（FIXED-UNVERIFIED）**；现在仅暂存/恢复词法游标，在 owning Parser 上执行完整语义解析。其他词法 probe 不受同一判定影响。 |
 | Parser Record 快照身份 | 静态 aggregate 使用栈上 `record_snapshot` 避免 Program arena 扩容使借用地址失效；字段路径 helper 却反算 `record - Program.records` | **MC-034 ASan pointer-pair 证实真实 UB**；快照本身有正确目的，应分离 Record 描述与稳定 RecordId 的传递。 |
 | 字面量语义精度 | `parse_floating` 为 `long double` 先 `strtod`（binary64）再扩为内部 binary128；x86 x87 发射假定源是 binary64 | **MC-041 新增 P0 GNU-NATIVE-DIFF**；有效十进制 `L` 字面量与 GCC 本机执行结果不同，单改 Parser 而不检查 x87/四目标机器消费者会引出新问题。 |
 | Record 零宽位域对齐 | `minic_data_layout_record_depth` 对所有位域同样先压缩 pack alignment，`int:0` 对齐栅栏被削弱 | **MC-042 P1 GNU-NATIVE-DIFF**：packed/pragma pack 下 GCC `offsetof/sizeof=4/5`、MiniC `1/2`；非 packed 输入正确；共享 DataLayout 可能影响其他 ISA，但仅 x86 有运行证据。 |

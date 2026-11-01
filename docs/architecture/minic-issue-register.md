@@ -42,8 +42,8 @@
 | [MC-001](#mc-001-符号闭包读取失效的-expression-指针) | P0 | FIXED-UNVERIFIED | ASAN | Compiler | 符号闭包递归后读取扩容前的 Expression 指针；定点修复已通过五目标容量边界测试 |
 | [MC-002](#mc-002-record-字段声明中的悬空指针) | P0 | FIXED-UNVERIFIED | ASAN | Frontend | 旧函数指针参数 Record UAF 由 `449eab2` 的稳定 RecordId 重取覆盖；新增独立函数指针容量回归 |
 | [MC-003](#mc-003-运行时-record-初始化器中的悬空指针) | P0 | FIXED-UNVERIFIED | ASAN | Frontend | 原 tagged Record 表达式复现已被 MC-056 同根修复覆盖；五目标容量 ASan 与 x86 GNU native 回归通过 |
-| [MC-004](#mc-004-属性探测使-parser-tags-失效) | P0 | OPEN | ASAN | Frontend | `probe=*parser` 的 tags 容器所有权错误 |
-| [MC-005](#mc-005-属性探测使-parser-enum_constants-失效) | P0 | OPEN | ASAN | Frontend | 同一浅拷贝使 enum_constants 容器失效 |
+| [MC-004](#mc-004-属性探测使-parser-tags-失效) | P0 | FIXED-UNVERIFIED | ASAN | Frontend | 移除 attribute 语义浅拷贝；tags 容量边界五目标 SAN/Release `-S` 与 GNU/MiniC x86 原生通过 |
+| [MC-005](#mc-005-属性探测使-parser-enum_constants-失效) | P0 | FIXED-UNVERIFIED | ASAN | Frontend | 同源 enum_constants owner 修复；独立枚举容量回归与五目标 SAN/Release `-S` 通过 |
 | [MC-006](#mc-006-传递特化污染共享-call) | P0 | OPEN | ELF-ORACLE | Compiler/Core | 调用实例的 callee 被写进共享 AST CALL |
 | [MC-007](#mc-007-整数与符号特化无法组合) | P1 | OPEN | GCC-DIFF | Compiler/Core | 特化阶段间丢失调用实例的整数事实 |
 | [MC-008](#mc-008-符号特化过度要求整数参数常量化) | P1 | OPEN | GCC-DIFF | Compiler | 符号立即量与运行时整数无法共存 |
@@ -172,15 +172,19 @@
 
 ### MC-004 属性探测使 Parser tags 失效
 
-- **位置：** `src/frontend/parser_attribute.c:745–751`、`src/frontend/parser_core.c:937,973`。
-- **证据：** `MinicParser probe = *parser` 浅拷贝后解析 `aligned(sizeof(struct Probe { int p; }))`，新 tag 的 `realloc` 仅更新副本、释放原 Parser 的旧 `tags`；ASan 五目标均复现。
-- **修复门槛：** 完整语义探测应使用唯一拥有动态元数据的 Parser，明确保存/恢复词法游标和 tag 可见性；不能把词法副本当成语义事务。
+- **状态：** `FIXED-UNVERIFIED`（2026-11-01 独立定点修复；非纯清理工作量）。
+- **根因与修复前证据：** `src/frontend/parser_attribute.c` 的 `MinicParser probe = *parser` 在 `aligned(sizeof(struct AttributeProbeTag { int field; }))` 完整语义解析时拷贝动态 `tags` arena 所有权；扩容 `realloc` 更新副本但使原 Parser 的 tag 指针悬空。基线 `d4026e3` 的 sanitize/UBSan `-Werror` 编译器在 x86_64 `-S`、前置 16 个 tag 的有效 GNU11 输入触发明确的 ASan **heap-use-after-free READ 48B**，读取栈从 `minic_parser_find_tag` → `resolve_tag` → `parse_type_specifiers`，释放栈从 `bind_tag` → `minic_parser_grow_array`。不以新版本不崩溃代替旧版复现。
+- **生产修复：** `src/frontend/parser_attribute.c:minic_parser_apply_alignment_attribute` 不再按值复制 Parser；只保存/恢复 `MinicLexer`、`MinicToken`，在唯一拥有语义容器的原 Parser 上解析属性整数表达式，恢复词法游标后检查精确参数结尾与常量值。不重构 Parser。GNU C 允许该属性表达式定义的具名 tag 在同一作用域后续使用；修复保留这些语义绑定而不盲目回滚。
+- **永久回归：** `tests/compiler/audit/mc004_attribute_tag_probe_uaf.c`，由 `tests/compiler/c0/probe-alignment-attribute-semantic-arena.sh` 覆盖前置 15/16/17 个 tag 的扩容边界，接入 `check-alignment-attribute-semantic-arena` 和 `check-fast`。当前 ASan/UBSan 与 Release **均 `-Werror`**，三个容量相位 × x86_64/RV32/RV64/AArch64/LoongArch64 **各 15/15 次 `-S` PASS**；GNU 与 MiniC x86_64 原生 **各 3/3 次 exit0**，验证后续具名 tag 仍可见。宿主 GNU11 语法、编译器警告检查通过。
+- **验收边界：** 尚未运行其他四目标 ELF/QEMU 的行为对照、完整 Linux corpus 或 MiniAS/MiniLD 联合验收；不升 `VERIFIED`。
 
 ### MC-005 属性探测使 Parser enum_constants 失效
 
-- **位置：** 同一 `parser_attribute.c:745–751`；释放在 `src/frontend/parser_enum.c:309`，旧地址读取在 `:114`。
-- **证据：** `aligned(sizeof(enum ProbeEnum { A16 = 4 }))` 导致 `enum_constants` 在副本中扩容，原 Parser 随后查询既有枚举常量触发 UAF；GCC 接受，ASan 五目标复现。
-- **修复门槛：** 与 MC-004 统一修 Parser 事务所有权，检查 `tags`、`enum_constants`、scope/index 等所有可分配字段；不要逐字段零碎补丁。
+- **状态：** `FIXED-UNVERIFIED`（与 MC-004 同一 Parser 所有权根因、同一最小生产修复；保留独立证据）。
+- **根因与修复前证据：** `aligned(sizeof(enum AttributeProbeEnum { AttributeProbeConstant = 4 }))` 在浅拷贝 Parser 中触发 `enum_constants` arena 扩容。基线 `d4026e3` 的 sanitize/UBSan `-Werror` 编译器在 x86_64 `-S`、预置 16 个枚举常量时触发 ASan **attempting double-free**：新指针仅写入副本，原 Parser 析构时在 `src/frontend/parser_enum.c` 释放旧地址，而该地址此前已经被 `realloc` 释放。此为独立的真实 old-version ASan 崩溃，不只与 MC-004 类比。
+- **修复与作用域约束：** 同 MC-004，属性完整语义解析只借用/恢复词法状态，动态语义表始终由真实 Parser 唯一持有。GNU C 接受并允许 `sizeof(enum {...})` 中定义的枚举 tag/常量在同作用域后续使用；修复保留该可见性。
+- **永久回归：** `tests/compiler/audit/mc005_attribute_enum_probe_uaf.c` 测前置 15/16/17 个枚举常量容量相位，沿用 `check-alignment-attribute-semantic-arena`/`check-fast`。当前 ASan/UBSan 与 Release **均 `-Werror`**，三个相位 × 五目标 **各 15/15 次 `-S` PASS**；GNU/MiniC x86_64 原生 **各 3/3 次 exit0**，校验 `AttributeProbeConstant` 和具名 enum 在属性之后仍有效。
+- **验收边界：** 没有执行全部五 ISA ELF/QEMU/Linux 执行矩阵，也没有 MiniAS/MiniLD 联合验收；仍为 `FIXED-UNVERIFIED`。
 
 ### MC-006 传递特化污染共享 CALL
 

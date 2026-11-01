@@ -739,25 +739,39 @@ bool minic_parser_apply_alignment_attribute(MinicParser *parser,
                                             const MinicParsedAttribute *attribute,
                                             const char *subject,
                                             size_t *explicit_alignment) {
-    MinicParser probe;
+    MinicLexer saved_lexer;
+    MinicToken saved_token;
     MinicExpressionId expression_id;
     const MinicExpression *expression;
     MinicConstValue constant_value;
     int64_t parsed_alignment;
     size_t alignment;
+    bool parsed_expression;
+    bool exact_argument_end;
 
     if (parser == NULL || attribute == NULL || subject == NULL || explicit_alignment == NULL ||
         !attribute->has_arguments ||
         attribute->arguments_span.end.offset <= attribute->arguments_span.begin.offset + 1U) {
         return false;
     }
-    probe = *parser;
-    minic_lexer_initialize(&probe.lexer, parser->path, parser->source, parser->lexer.length);
-    probe.lexer.cursor = attribute->arguments_span.begin.offset + 1U;
-    probe.lexer.line = attribute->arguments_span.begin.line;
-    probe.lexer.column = attribute->arguments_span.begin.column + 1U;
-    if (!minic_parser_advance(&probe) ||
-        !minic_parser_parse_expression(&probe, &expression_id, 0U)) {
+    /* An aligned(sizeof(struct/enum {...})) operand performs real semantic
+     * parsing: it may grow Parser-owned tag, enum-constant, or scope tables.
+     * Use the sole owning Parser, not a shallow Parser copy with dangling
+     * arena pointers; only its lexical cursor is speculative. The source
+     * tag/enumerator declarations remain visible at their C scope. */
+    saved_lexer = parser->lexer;
+    saved_token = parser->current;
+    minic_lexer_initialize(&parser->lexer, parser->path, parser->source, saved_lexer.length);
+    parser->lexer.cursor = attribute->arguments_span.begin.offset + 1U;
+    parser->lexer.line = attribute->arguments_span.begin.line;
+    parser->lexer.column = attribute->arguments_span.begin.column + 1U;
+    parsed_expression = minic_parser_advance(parser) &&
+                        minic_parser_parse_expression(parser, &expression_id, 0U);
+    exact_argument_end = parsed_expression && parser->current.kind == MINIC_TOKEN_RPAREN &&
+                         parser->current.span.end.offset == attribute->arguments_span.end.offset;
+    parser->lexer = saved_lexer;
+    parser->current = saved_token;
+    if (!parsed_expression) {
         if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
             minic_parser_error(
                 parser, "GNU %s alignment requires one integer constant expression", subject);
@@ -765,8 +779,7 @@ bool minic_parser_apply_alignment_attribute(MinicParser *parser,
         return false;
     }
     expression = minic_c0_program_expression(parser->program, expression_id);
-    if (probe.current.kind != MINIC_TOKEN_RPAREN ||
-        probe.current.span.end.offset != attribute->arguments_span.end.offset ||
+    if (!exact_argument_end ||
         expression == NULL || !minic_type_is_integer(expression->type) ||
         !minic_const_eval_integer(
             parser->program, parser->target_info, expression_id, &constant_value) ||

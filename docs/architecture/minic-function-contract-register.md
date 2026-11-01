@@ -99,8 +99,8 @@
 | `FN-F04` `minic_c0_program_add_expression` — `src/frontend/ast.c` | R input Expression，W Program；返回稳定 ExpressionId | 深拷贝 CALL overflow（由 Program OWN），再追加/可扩容 expressions；失败释放暂态并维持有效数量。**稳定 ID ≠ 稳定 Expression 指针**，见 MC-001。 | TRACE · CONFIRMED-DESIGN |
 | `FN-F05` `minic_c0_program_add_function` — `src/frontend/ast.c` | R name、W Program，返回稳定 FunctionId | 拷贝 name 到 Program OWN；append 可 realloc `functions`；失败不增加 count；同一源 Body 被 clone 共享是另一个明确契约。 | TRACE |
 | `FN-F06` `minic_c0_program_add_record` — `src/frontend/ast.c` | R name、W Program，返回稳定 RecordId | 复制 name 并可 realloc `records`；同名 Record 在不同 tag scope 合法；跨递归创建记录后不得再用旧 Record*，见 MC-002/003。 | TRACE |
-| `FN-F07` `minic_parser_resolve_tag` / `minic_parser_bind_tag` — `src/frontend/parser_core.c` | R/W Parser 自有 tag 表 | resolve 返回 tags 内借用 pointer，bind 可重新分配表；函数本身的借用规则成立，attribute probe 的复制破坏该规则（MC-004）。 | TRACE · KNOWN-ISSUE |
-| `FN-F08` `minic_parser_apply_alignment_attribute` — `src/frontend/parser_attribute.c` | W 原 Parser 和 Program，创建 `probe=*parser` | probe 进行完整语义 expression parse，而非纯 lexer peek；扩容 tag/enum 元表释放原 owner 指针，MC-004/005 ASan 确认。 | TRACE · KNOWN-ISSUE |
+| `FN-F07` `minic_parser_resolve_tag` / `minic_parser_bind_tag` — `src/frontend/parser_core.c` | R/W Parser 自有 tag 表 | resolve 返回 tags 内借用 pointer，bind 可重新分配表；借用规则成立。历史 attribute 语义浅拷贝破坏该规则，见已定点修复 MC-004。 | TRACE · FIXED-UNVERIFIED |
+| `FN-F08` `minic_parser_apply_alignment_attribute` — `src/frontend/parser_attribute.c` | W 唯一原 Parser 和 Program；只保存/恢复 Lexer、Token | 完整语义 expression parse 可扩容 tag/enum 元表，不能浅复制 owner；已改为原 Parser 解析，保留合法属性内声明的 tag/enum 可见性。MC-004/005 独立 ASan 回归。 | TRACE · FIXED-UNVERIFIED |
 | `FN-F09` `minic_parser_parse_static_storage_initializer_value` — `src/frontend/parser_static_initializer.c` | W Parser/Program；依对象 Type/Record/Global 初始化 | 递归处理 aggregate/designator，失败可留下由 Program 管理的中间实体；下层 backward overwrite 路径还须复核（MC-023）。 | PARTIAL |
 | `FN-F10` `parse_static_record_constant` — `src/frontend/parser_static_initializer.c` | R Program RecordId，W 全局 initializer | 递归前 snapshot `MinicRecord` 值型头；fields 指向独立分配区，故 Program.records 扩容不影响当前快照。**不能误报为 UAF**。 | TRACE · CONFIRMED-DESIGN |
 | `FN-F11` `parse_static_union_constant` — 同上 | 同 F10 | 递归前 snapshot record 与 ID；与未快照的 backward overwrite 分支不是同一个实现。 | TRACE · CONFIRMED-DESIGN |
@@ -584,7 +584,7 @@
 | `F5-F06` `parser_enum.c:create_named_enum/get_or_create_enum_tag` | OWN Program Enum entity，Parser scoped tag identity；部分失败实体由 Program 析构。 | R2/U2/E1 |
 | `F5-F07` `parser_enum.c:enum_name_hash/global_slot_insert/global_index_rebuild/sync` | OWN Parser 全局枚举名 cache；分配成功再替换，OOM 退回线性搜索。 | R2/U2/E1 |
 | `F5-F08` `parser_enum.c:global_linear_fallback/find_enum_constant` | R 局部 enum binding + 全局 index；probe owner 不匹配时线性退回。 | R2/U2/E1 |
-| `F5-F09` `parser_enum.c:bind_enum_constant/destroy_enum_constants` | OWN Parser 动态 binding 表，不拥有 Program EnumeratorId；attribute probe 浅拷贝会导致 MC-005。 | R2/U2/E1 · MC-005 |
+| `F5-F09` `parser_enum.c:bind_enum_constant/destroy_enum_constants` | OWN Parser 动态 binding 表，不拥有 Program EnumeratorId；历史 attribute probe 浅拷贝导致 MC-005 double-free，已移除该浅拷贝，仍须守 owner 约束。 | R2/U2/E1 · MC-005 FIXED-UNVERIFIED |
 | `F5-F10` `parser_enum.c:signed_type_fits/unsigned_type_fits/enum_value_type/normalize_value_bits/const_value_to_numeric/parse_enum_integer_value/next_enum_numeric` | R Target 整数宽度，值型规范化并判 overflow；没有跨 arena 借用。 | R2/U2/E1 |
 | `F5-F11` `parser_enum.c:choose_enum_compatible_type/choose_packed_enum_compatible_type/enum_mode_argument_is_byte/consume_enum_attribute` | R enum 候选类型及 GNU packed/mode；按 TargetInfo 选择，未知 mode 拒绝。 | R2/U2/E1 |
 | `F5-F12` `parser_enum.c:parse_enum_specifier/parse_enum_definition` | OWN Program Enum/Enumerator IDs；所有元素写完再选择兼容底层类型。 | R2/U2/E1 |
@@ -595,7 +595,7 @@
 | `F5-F17` `parser_attribute.c:parse_object_visibility_argument/apply_object_visibility_attribute` | 识别四种 visibility，W caller object metadata，拒冲突值。 | R2/U2/E1 |
 | `F5-F18` `parser_attribute.c:resolve_object_alias_attribute/consume_object_attribute` | R Program globals IDs，解析 alias/SECTION/WEAK/ALIGNED 等，未定义 target fail closed。 | R2/U2/E1 |
 | `F5-F19` `parser_attribute.c:init_object_attribute_context/parse_object_attribute_lists/apply_object_attribute_lists` | W caller 栈 out-parameters；无拥有的 heap，外层 global parser 消费。 | R2/U2/E1 |
-| `F5-F20` `parser_attribute.c:apply_alignment_attribute` | `probe=*parser` 语义解析会扩容 tags/enum_constants，浅拷贝破坏 owner（MC-004/005）。 | R2/U2/ASAN |
+| `F5-F20` `parser_attribute.c:apply_alignment_attribute` | 用唯一 owning Parser 解析 `aligned(...)` 的语义表达式，保存/恢复 Lexer 和 current Token；原 `probe=*parser` 的 tags/enum_constants 悬空根因已修复，MC-004/005 五目标 SAN 容量回归。 | R2/U2/ASAN · FIXED-UNVERIFIED |
 | `F5-F21` `parser_record.c:record_has_field/record_field_starts_parenthesized_pointer_array/_object/_attributed_function_pointer` | 词法 lookahead 的浅复制只读 token；不是 MC-004 的有副作用语义 probe。 | R2/U2/E1 |
 | `F5-F22` `parser_record.c:parse_pointer_to_array_field_declarator/parse_function_pointer_field_declarator` | R type IDs/ABI 属性，构 pointer type；字段名 SourceSpan 借稳定 SourceBuffer。 | R2/U2/E1 |
 | `F5-F23` `parser_record.c:consume_record_field_attribute/parse_typed_record_field_attributes/apply_record_field_declaration_attributes` | W caller 临时字段属性，布局语义经 DataLayout，错误时不发布半成品。 | R2/U2/E1 |
@@ -1315,7 +1315,7 @@ Source 是 `src/target/x86_64/asm_contract.c`；Machine 是 `src/target/x86_64/m
 | `F8-06` `frontend/cast_normalization.c:minic_c0_program_normalize_casts` | PARSED→NORMALIZED 新表达式 arena 经过 remap 验证后替换旧 arena；这是同一语义 Program 的替换事务，不是两棵常驻 mutable AST。 | R2/U2/SOURCE；排除错误重构前提 |
 | `F8-07` `frontend/parser_postfix.c:minic_parser_materialize_array_object_type` | 旧 Local/Record `is_array+count` 需要时新建 ArrayType；正式 `MinicArrayTypeId` 同时存在，所有 consumer 迁移后才能删除桥接。 | R2/U2/SOURCE；A8-01/02 |
 | `F8-08` `frontend/parser_global.c` / `parser_static_initializer.c` 的三路数组声明 | 直接 scalar/record 与 preformed typedef 入口重复 begin/merge 属性和 bound 推断，但各有有效 GNU tentative/zero-length/incomplete 语义。 | R2/U2/SOURCE；A8-03 |
-| `F8-09` `frontend/parser_attribute.c` semantic probe / `semantic_snapshot.h` | Lexer-only peek 可浅拷贝位置；会扩容 tag/enum/Expression 的语义 probe 没有完整所有权回滚。 | R2/U2/SOURCE + 既存 ASan；MC-004/005/009 |
+| `F8-09` `frontend/parser_attribute.c` semantic probe / `semantic_snapshot.h` | Lexer-only peek 可浅拷贝位置；attribute 的 tag/enum 语义 probe 已改为原 Parser 解析并保持合法语义绑定（MC-004/005 FIXED-UNVERIFIED）；其他语义快照或 Expression 影响仍需独立审查（MC-009）。 | R2/U2/SOURCE + 既存 ASan；MC-004/005/009 |
 | `F8-10` `core_lower_loop.c:minic_core_lower_loop_statement` 与 `_loop_cfg` | 普通 while 进入 CFG 前失效化 loop-mutated 特化参数事实；`core_lower.c:1302–1325` 由 referenced LABEL 直接进 CFG，漏该屏障。 | R2/U2/SOURCE；A8-05，**未动态复现** |
 | `F8-11` `core_lower_record.c` 与 `core_lower_expr_flow.c` | Record conditional 尚未与 scalar CFG 一样 fork/restore/meet local facts；零/非零 Bool 证明另有不同的保守政策不能直接替换。 | R2/U2/SOURCE + 既存 GNU native；MC-036/019/029 |
 | `F8-12` `core_ir.c` / `core_lower_metadata.c` / `riscv64/legalize.c` | enum effective integer metadata 已进 Core；RECORD_LOAD/COPY 的存储 extent/alignment 仍通过 Program/DataLayout 回查。 | R2/U2/SOURCE；A8-06 |
