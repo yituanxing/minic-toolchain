@@ -148,3 +148,12 @@ cc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow \
   tests/assembler/source-replay-projection-unit.c assembler/src/source_graph.c \
   -Wl,--gc-sections -o "$work/replay-projection-unit"
 "$work/replay-projection-unit"
+# The fake SourceGraph reader above checks replay algorithms. Independently
+# link the actual Common projector to enforce the read-capability semantics
+# on the real mutable Fragment/MCInst representation.
+cc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow \
+  -Wstrict-prototypes -Wmissing-prototypes -Werror \
+  -ffunction-sections -fdata-sections -Iassembler/src \
+  tests/assembler/source-replay-live-common-contract.c assembler/src/common_lowering.c \
+  -Wl,--gc-sections -o "$work/replay-live-common-contract"
+"$work/replay-live-common-contract"
