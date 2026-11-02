@@ -88,6 +88,18 @@ preserve_failure() {
         printf '\n'
     } >"$MINIAS_FAILURE_DIR/$id.replay.txt"
 }
+# Kconfig probes GCC/binutils capabilities by emitting generated /tmp/cc*.s
+# into an ephemeral .tmp_<pid>/tmp[.o].  Their result affects the original
+# kernel configuration, so GNU and MiniAS lanes must use the same GNU probe
+# oracle.  This exception is restricted to the Kbuild root and that exact
+# temporary file shape; no production .cmd object can take this path.
+if [[ "$PWD" == "${MINIAS_KBUILD_OUT:?}" &&
+      "$input" =~ ^/tmp/cc[[:alnum:]]+\.s$ &&
+      "$output" =~ ^\.tmp_[0-9]+/tmp(\.o)?$ ]]; then
+    printf 'delegate-kconfig-probe cwd=%q input=%q output=%q\n' \
+      "$PWD" "$input" "$output" >>"$MINIAS_AS_TRACE"
+    exec "${REAL_AS:-/usr/bin/riscv64-linux-gnu-as}" "$@"
+fi
 if ((query)); then
     # GCC's Kconfig as-version test includes ordinary GAS flags such as
     # --traditional-format, -fpic and -misa-spec=20191213.  They are safe to
@@ -182,6 +194,7 @@ config() {
 export MINIAS="$minias"
 export MINIAS_AS_TRACE="$work/minias-as.trace"
 export MINIAS_FAILURE_DIR="$work/failure-inputs"
+export MINIAS_KBUILD_OUT="$mini_out"
 export REAL_AS=$(command -v riscv64-linux-gnu-as)
 mini_cc="riscv64-linux-gnu-gcc -B$bindir/"
 mini_as="$bindir/riscv64-linux-gnu-as"
