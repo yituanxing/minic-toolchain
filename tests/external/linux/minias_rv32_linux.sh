@@ -305,9 +305,18 @@ gnu_control_image="$gnu_out/arch/riscv/boot/Image"
 case "${RV32_GNU_GOLDEN_CACHE_HIT:-false}" in
     true)
         : "${RV32_GNU_GOLDEN_ROOT:?cached GNU golden root required on cache hit}"
-        golden=$(realpath "$RV32_GNU_GOLDEN_ROOT")
-        gold_out="$golden/out"
-        gold_prov="$golden/provenance"
+        golden=$(realpath -m "$RV32_GNU_GOLDEN_ROOT")
+        if [[ -s "$golden/out/arch/riscv/boot/Image" ]]; then
+            # Existing original GNU golden from the independent RV32I job.
+            gold_out="$golden/out"
+            gold_prov="$golden/provenance"
+        else
+            # Separate cache written by a previous MiniAS Linux run after
+            # its original GNU image passed real QEMU P0.  No GNU/MiniAS
+            # mixed object is ever stored in this control.
+            gold_out="$gnu_out"
+            gold_prov="$work/gnu-provenance"
+        fi
         baseline="$gold_prov/gcc-baseline.txt"
         test -s "$baseline" && test -s "$gold_out/.config" && \
           test -s "$gold_out/vmlinux" && \
@@ -367,6 +376,61 @@ RV32I_QEMU_KERNEL_PROVENANCE=gnu-gcc-gnu-as \
     exit 5
   }
 echo 'MINIAS_RV32_GNU_P0=PASS original_GNU_Image=1'
+
+# Freeze the unmodified original GNU Kbuild output only AFTER real GNU P0.
+# The independent cache key includes exact Kconfig and full GNU compiler,
+# assembler and linker executable identity. This receipt and complete ELF32
+# ET_REL digest manifest are rechecked before every future cached QEMU run.
+# Saving happens in a separate always() workflow step even if MiniAS fails.
+if [[ "${RV32_GNU_GOLDEN_CACHE_HIT:-false}" != true ]]; then
+    gold_prov="$work/gnu-provenance"
+    mkdir -p "$gold_prov"
+    python3 - "$gnu_out" "$gold_prov/gcc-objects.sha256" <<'PY_GNU_CONTROL_OBJECTS'
+from pathlib import Path
+import hashlib
+import struct
+import sys
+out, manifest = map(Path, sys.argv[1:])
+count = 0
+with manifest.open('w', encoding='utf-8') as f:
+    for obj in sorted(out.rglob('*.o')):
+        with obj.open('rb') as data:
+            header = data.read(20)
+        if (len(header) < 20 or header[:6] != b'\x7fELF\x01\x01'
+                or struct.unpack_from('<H', header, 16)[0] != 1
+                or struct.unpack_from('<H', header, 18)[0] != 243):
+            continue
+        f.write(f'{hashlib.sha256(obj.read_bytes()).hexdigest()}  {obj.relative_to(out)}\n')
+        count += 1
+if count < 1200:
+    raise SystemExit(f'MINIAS_RV32_GNU_CACHE=BLOCKED incomplete_ELF32_objects={count}')
+print(f'MINIAS_RV32_GNU_OBJECT_MANIFEST=PASS ELF32_ET_REL={count}')
+PY_GNU_CONTROL_OBJECTS
+    python3 "$repo/tools/ci/linux-runtime-gcc-full-c-objects-v1.py" \
+      --out "$gnu_out" --manifest "$gold_prov/gcc-objects.sha256" \
+      --output "$gold_prov/full-c-objects.txt" \
+      --excluded "$gold_prov/non-c-objects.tsv" --min-c-objects 1200
+    c_owner_count=$(sed '/^#/d;/^$/d' "$gold_prov/full-c-objects.txt" | wc -l)
+    {
+        echo 'schema=linux-gnu-exact-config-v1'
+        echo "linux_release=$version"
+        echo 'linux_archive_sha256=dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932'
+        echo 'elf_class=ELF32'
+        echo 'isa=rv32i'
+        echo 'abi=ilp32'
+        echo "config_sha256=$(sha256sum "$gnu_out/.config" | cut -d' ' -f1)"
+        echo "gcc_binary_sha256=$(sha256sum "$(command -v riscv64-linux-gnu-gcc)" | cut -d' ' -f1)"
+        echo "gnu_ld_binary_sha256=$(sha256sum "$(command -v riscv64-linux-gnu-ld)" | cut -d' ' -f1)"
+        echo "gnu_as_binary_sha256=$(sha256sum "$(command -v riscv64-linux-gnu-as)" | cut -d' ' -f1)"
+        echo "image_sha256=$(sha256sum "$gnu_control_image" | cut -d' ' -f1)"
+        echo "c_owner_count=$c_owner_count"
+        echo 'qemu_contract=P0_passed_in_producer'
+    } >"$gold_prov/gcc-baseline.txt"
+    cp "$gold_prov/gcc-baseline.txt" "$work/evidence/gnu-original-golden-receipt.txt"
+    printf 'GNU_P0=PASS independent_original_GNU=1 ELF32=1 all_object_sha256=sealed\n' \
+      >"$work/evidence/gnu-cache-ready.txt"
+    echo "MINIAS_RV32_GNU_CACHE=READY original_ELF32_objects_sealed=1 gcc_C_owners=$c_owner_count"
+fi
 
 run_image "$mini_out" "$mini_cc" "$mini_as" minias
 python3 "$repo/tests/external/linux/minias_as_provenance_check.py" \

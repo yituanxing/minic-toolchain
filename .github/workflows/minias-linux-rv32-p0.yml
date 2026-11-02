@@ -64,6 +64,9 @@ jobs:
           ld=$(sha256sum "$(command -v riscv64-linux-gnu-ld)" | cut -c1-16)
           as=$(sha256sum "$(command -v riscv64-linux-gnu-as)" | cut -c1-16)
           echo "key=linux-gnu-golden-rv32i-v1-6.6.143-$cfg-$gcc-$ld-$as" >>"$GITHUB_OUTPUT"
+          # The existing historical cache remains read-only and unchanged.
+          # Save a separately named MiniAS GNU control on a cold-cache run.
+          echo "minias_key=minias-rv32-original-gnu-v1-6.6.143-$cfg-$gcc-$ld-$as" >>"$GITHUB_OUTPUT"
       - name: Restore exact independent GNU RV32 control (if present)
         id: original
         uses: actions/cache/restore@v4
@@ -72,6 +75,15 @@ jobs:
             build/rv32i-linux-entry/out
             build/rv32i-linux-entry/provenance
           key: ${{ steps.golden.outputs.key }}
+      - name: Restore independently certified MiniAS GNU control (on historical miss)
+        if: steps.original.outputs.cache-hit != 'true'
+        id: minias_original
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            build/minias-linux-rv32/gnu-out
+            build/minias-linux-rv32/gnu-provenance
+          key: ${{ steps.golden.outputs.minias_key }}
       - name: Build exact-head MiniAS
         shell: bash
         run: |
@@ -86,7 +98,7 @@ jobs:
           WORK_DIR: ${{ github.workspace }}/build/minias-linux-rv32
           LINUX_VERSION: 6.6.143
           MINIAS_RV32_P1: '1'
-          RV32_GNU_GOLDEN_CACHE_HIT: ${{ steps.original.outputs.cache-hit }}
+          RV32_GNU_GOLDEN_CACHE_HIT: ${{ steps.original.outputs.cache-hit == 'true' || steps.minias_original.outputs.cache-hit == 'true' }}
           RV32_GNU_GOLDEN_ROOT: ${{ github.workspace }}/build/rv32i-linux-entry
         run: bash tests/external/linux/minias_rv32_linux.sh
       - name: Preserve original GNU baseline, MiniAS traces, Kconfig and guest proof
@@ -115,3 +127,28 @@ jobs:
           include-hidden-files: true
           if-no-files-found: warn
           retention-days: 7
+      - name: Check exact GNU baseline eligibility independently of later MiniAS failure
+        if: always() && steps.original.outputs.cache-hit != 'true' && steps.minias_original.outputs.cache-hit != 'true'
+        id: golden_ready
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          golden=build/minias-linux-rv32
+          if [[ -s "$golden/evidence/gnu-cache-ready.txt" &&
+                -s "$golden/gnu-provenance/gcc-baseline.txt" &&
+                -s "$golden/gnu-provenance/gcc-objects.sha256" &&
+                -s "$golden/gnu-out/arch/riscv/boot/Image" ]]; then
+            echo 'save=true' >>"$GITHUB_OUTPUT"
+            echo 'MINIAS_RV32_GNU_CACHE=ELIGIBLE authentic_GNU_P0=PASS'
+          else
+            echo 'MINIAS_RV32_GNU_CACHE=SKIP unverified_or_incomplete_control'
+          fi
+      - name: Save independently certified GNU baseline for the next RV32 MiniAS fix
+        if: always() && steps.golden_ready.outputs.save == 'true'
+        uses: actions/cache/save@v4
+        continue-on-error: true
+        with:
+          path: |
+            build/minias-linux-rv32/gnu-out
+            build/minias-linux-rv32/gnu-provenance
+          key: ${{ steps.golden.outputs.minias_key }}
