@@ -1,5 +1,20 @@
 # MiniAS 当前清理与所有权总览（2026-11-01）
 
+> **2026-11-02 ELF ObjectModel 只读终结视图（基于
+> `b2f0bfbe`）：** Context/Emission 刚完成 Section 元数据与输出字节
+> 的所有权分离后，Driver 现在只在 Target finalization 成功后构造
+> 一份**栈上借用**的 `MiniAsElfObjectView`；ELF Writer 整条符号
+> 生存性、COMDAT/LINK_ORDER、重定位和原子写盘调用链均不再接收
+> `MiniAs *` 或直接调用 Emission/Context。它只读既有 SectionID、
+> SymbolID、Fixup 和 CFI/DWARF 结果，通过有界回调查询
+> Fragment 位置、Section 字节及源 CU 文件；Target ELF 策略只投影
+> 实际消费的值/回调，不带 parser、encoder 或生命周期能力。
+> 移除旧 `minias_write_elf32/64(MiniAs *,...)` 签名，不复制第二份
+> Section/Symbol 表。新增 7 个编译期拒绝、一个正向测试及 CI 门禁。
+> `-Werror`、A0 30/30、四目标 26 例（18 对象 byte-exact、8 对
+> 同拒绝）、GNU COMDAT/LINK_ORDER/符号生存性本地通过；
+> exact-head CI/完整 GNU Linux 原始 `.s` 待本批提交验证。
+
 > **2026-11-02 P06 Section 身份与输出字节整批分离（基于已发布
 > `ebe366e8`）：** SectionID 和唯一 SectionKey 元数据向量归 Context，
 > 全 Common 仅能获得 `const MiniAsSection *`；原 Section 记录中
@@ -201,8 +216,9 @@
   及查找/intern 分离均完成；本批又将 Section 元数据与 Emission
   字节缓冲按 SectionID 分离，关闭全部跨域 Section 可写指针和
   Layout 的直接 LEB 字节补丁。**剩余是更窄的 SymbolID-only
-  值查询、Driver/ELF 的宽 Session 读取，以及与 P04 共同收口
-  的 Target 生命周期边界，不再重复做上述完成的所有权工作。
+  值查询、Driver 内部调度状态与其它模块边界，以及与 P04 共同
+  收口的 Target 生命周期边界。**本批已经关闭 ELF 整条序列化
+  调用链对宽 Session 的读取**，不再重复上述所有权工作。
 - [x] **Fragment 负载类型化**：按 FragmentKind 收窄
   `MiniAsStmt` 的 DATA/ALIGN/ORG/INSTRUCTION 等专属 payload；
   Parser/Layout/Emitter/Target/SourceGraph 整批迁移，删除旧字段，
@@ -213,7 +229,9 @@
   扩展和 relaxation，不把 MiniC 的主动发射子集当 ISA 上限。
 - [ ] **ObjectModel/多格式预备**：只有前述所有权稳定且存在
   真实新格式验收时，才将通用 Section/Symbol/Fixup 与 ELF
-  私有序列化拆开；不预建空 COFF/Mach-O 全框架。
+  私有序列化拆开；**本批先完成 ObjectModel→ELF 写器的只读
+  终结期边界**，仍非通用 COFF/Mach-O 写器。不预建空的
+  COFF/Mach-O 全框架。
 - [ ] **整体验收**：阶段性合并后对同一 SHA 完成多架构
   原始 GNU `.s` → MiniAS `.o` → GNU ld → QEMU P0/P1；严格
   3,536 GNU 对照另行定位差异，不替代运行时证明。

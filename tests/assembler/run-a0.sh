@@ -7,6 +7,7 @@ set -eu
 work="$BUILD_DIR/tests/assembler/a0"
 mkdir -p "$work"
 
+bash tests/assembler/probe-elf-object-view-boundary.sh
 sh tests/assembler/probe-riscv-absolute-relocs.sh
 bash tests/assembler/probe-rv-zbb-site-gnu.sh
 bash tests/assembler/probe-rv-v-site-gnu.sh

@@ -228,7 +228,6 @@ static inline MiniAsTargetABIView minias_target_abi_view(const MiniAs *as) {
 }
 
 
-bool minias_write_elf64(MiniAs *as, const char *path);
 bool minias_cfi_directive(MiniAs *as, const char *op,
                           const char *args, size_t line);
 bool minias_cfi_emit(MiniAs *as);
@@ -237,7 +236,6 @@ bool minias_debug_directive(MiniAs *as,const char *op,
                             const char *args,size_t line);
 bool minias_debug_emit(MiniAs *as);
 bool minias_debug_resolve_views(MiniAs *as, bool strict);
-bool minias_write_elf32(MiniAs *as, const char *path);
 
 int minias_find_section(const MiniAs *as, const char *name);
 int minias_ensure_section(MiniAs *as, const char *name, uint32_t type, uint64_t flags, uint64_t align);

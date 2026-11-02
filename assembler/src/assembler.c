@@ -3,6 +3,7 @@
 #include "minias_common_context.h"
 #include "minias_common_emission.h"
 #include "minias_common_layout.h"
+#include "minias_elf_object_view.h"
 #include "source_graph_common.h"
 #include "minias_source_semantic_services.h"
 #include "minias.h"
@@ -417,6 +418,91 @@ static bool minias_finalize_target_output(
     return ok;
 }
 
+/* The Driver publishes one terminal ObjectModel borrow after Target
+ * finalization. ELF cannot inspect or mutate the live Common session:
+ * symbolic identity remains Context-owned and bytes remain Emission-owned. */
+static const MiniAsSymbol *minias_elf_find_symbol(const void *reader,
+                                                 const char *name) {
+    return minias_common_context_find_symbol(reader,name);
+}
+
+static const char *minias_elf_cu_file(const void *reader,size_t index) {
+    const MiniAs *as=reader;
+    return index<as->cu_file_count?as->cu_files[index]:NULL;
+}
+
+static int minias_elf_find_section(const void *reader,const char *name) {
+    return minias_find_section(reader,name);
+}
+
+static bool minias_elf_fragment_location(
+    const void *reader,size_t index,MiniAsElfFragmentLocation *out) {
+    const MiniAs *as=reader;
+    const MiniAsStmt *stmt;
+    if(as==NULL || out==NULL || index>=as->stmt_count)return false;
+    stmt=&as->stmts[index];
+    *out=(MiniAsElfFragmentLocation){
+        .section=stmt->section,.offset=stmt->offset,
+        .size=stmt->size,.line=stmt->line
+    };
+    return true;
+}
+
+static bool minias_elf_section_bytes(const void *reader,int section,
+                                     const unsigned char **data,size_t *size) {
+    MiniAsEmittedSectionView bytes;
+    if(data==NULL || size==NULL ||
+       !minias_emission_section_view(reader,section,&bytes))return false;
+    *data=bytes.data;
+    *size=bytes.size;
+    return true;
+}
+
+static bool minias_write_final_object(MiniAs *as,const char *path,bool elf32) {
+    const MiniAsFixupSpan fixups=minias_emission_fixups(as);
+    MiniAsElfObjectView object={0};
+    bool ok;
+    object.sections=as->sections;
+    object.section_count=as->section_count;
+    object.symbols=as->symbols;
+    object.symbol_count=as->symbol_count;
+    object.fixups=fixups.data;
+    object.fixup_count=fixups.count;
+    object.cu_file_count=as->cu_file_count;
+    object.cu_file=minias_elf_cu_file;
+    object.policy=(MiniAsElfTargetPolicy){
+        .elf_machine=as->target->elf_machine,
+        .emit_all_section_symbols=as->target->emit_all_section_symbols,
+        .fold_defined_local_relocation_to_section=
+            as->target->fold_defined_local_relocation_to_section,
+        .fold_local_pcrel_relocation_to_section=
+            as->target->fold_local_pcrel_relocation_to_section,
+        .fold_synthetic_local_relocation_to_section=
+            as->target->fold_synthetic_local_relocation_to_section,
+        .fold_local_abs_relocation_to_section=
+            as->target->fold_local_abs_relocation_to_section,
+        .allow_local_section_symbol_fixup=
+            as->target->allow_local_section_symbol_fixup,
+        .supports_fixup=as->target->supports_fixup,
+        .fixup_relocation_type=as->target->fixup_relocation_type,
+        .object_attributes=as->target->object_attributes
+    };
+    object.target_abi=minias_target_abi_view(as);
+    object.object_machine=as->object_machine;
+    object.output_rel_relocations=as->output_rel_relocations;
+    object.elf_flags=as->elf_flags;
+    object.reader=as;
+    object.find_symbol=minias_elf_find_symbol;
+    object.find_section=minias_elf_find_section;
+    object.fragment_location=minias_elf_fragment_location;
+    object.section_bytes=minias_elf_section_bytes;
+    ok=elf32?minias_write_elf32(&object,path):
+             minias_write_elf64(&object,path);
+    if(!ok)minias_set_error(as,"%s",object.error[0]!='\0'?
+                            object.error:"elf-object-write-failed");
+    return ok;
+}
+
 int minias_assemble_config(const char *input_path,
                            const char *output_path,
                            const MiniAsAssemblyConfig *config,
@@ -526,8 +612,7 @@ int minias_assemble_config(const char *input_path,
             if ((as.target->validate_output == NULL ||
                  as.target->validate_output(&final_layout, &errors)) &&
                 minias_finalize_target_output(&as,&final_layout,&errors,&object) &&
-                (config->elf32 ? minias_write_elf32(&as, output_path)
-                       : minias_write_elf64(&as, output_path))) {
+                minias_write_final_object(&as,output_path,config->elf32)) {
                 rc = 0;
             }
         }

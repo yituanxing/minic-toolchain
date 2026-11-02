@@ -2266,3 +2266,44 @@ Production change: **11 C/header files**, **+289/−66 lines** (net +223),
 with tests/fixtures, CI and documentation counted separately. This is an
 intentional correctness extension to the existing Target/MC boundary, not
 a net-removal cleanup metric.
+
+## 11. 2026-11-02 terminal ObjectModel / ELF serializer boundary
+
+Exact implementation baseline: `b2f0bfbebe0bce6ccfeceacdbb3dda46366e087b`.
+This batch closes one entire consumer call graph, not a collection of
+one-off field wrappers:
+
+1. **Driver owns the only Session borrow.** After successful Source/MCLayout,
+   Emission and Target object finalization, Driver builds one stack-scoped
+   `MiniAsElfObjectView`. Its const SectionID/SymbolID/Fixup array borrows
+   refer to the original Context/Emission stores, with no copying, retained
+   shadow collection or new symbol graph. CU filename, source Fragment
+   layout and emitted Section payload use narrow const/scalar callbacks.
+2. **The serializer cannot reach upstream mutable ownership.** Every
+   `elf_writer.c` function now accepts only this terminal ObjectModel view.
+   No original `MiniAs *` entry point, `as->stmts`, direct Context lookup,
+   direct Emission mutation, or Session-wide error write remains. The
+   writer's bounded diagnostic is returned to Driver, preserving first-error
+   behavior and atomic-output failure semantics.
+3. **Target ELF policy is a projection, not full TargetOps.** The value view
+   contains only machine, symbol-folding policy, relocation validation/type,
+   attribute emission and section-symbol choice. Parse, encode, relaxation,
+   mutable TargetState lifecycle and directive callbacks are inaccessible.
+4. **No semantic rewrite.** ELF symbol liveness and duplicate local handling,
+   1024-element LINK_ORDER name index, COMDAT grouping, relocation folding,
+   ABI/class/flags, NOBITS extents, private labels, and safe on-disk atomic
+   publication remain in their original algorithms. The old broad writer
+   signatures have been deleted, not retained as a fallback.
+
+**Independent local proof:** Release `-Werror` builds, MiniAS A0 **30/30**,
+7 negative + 1 positive compiler capability checks, old/new 4-target 26
+fixture comparison (**18 exact ELF bytes, 8 matching failures**), 2048
+temporary/relocation symbol liveness pairs, 1024 LINK_ORDER section pairs,
+SectionKey and GNU COMDAT semantic checks all PASS. Remote exact-head,
+whole 3,536 GNU corpus, Linux original `.s`, and runtime link/QEMU still
+need separate proof on the pushed SHA.
+
+Production C/header delta: **4 files, +271/−102 lines (net +169)**;
+new boundary tests, CI and docs are reported separately. This is the
+necessary interface replacement for ObjectModel ownership, not a claim
+that a second object format has already been implemented.
