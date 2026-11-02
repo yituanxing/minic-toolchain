@@ -248,7 +248,7 @@ const void *minias_parse_target_state(const MiniAsParseContext *ctx) {
 }
 
 bool minias_parse_is_elf32(const MiniAsParseContext *ctx) {
-    return ctx->as->output_elf32;
+    return ctx->as->target_spec->object.elf32;
 }
 
 bool minias_parse_has_error(const MiniAsParseContext *ctx) {
@@ -312,10 +312,12 @@ bool minias_parse_queue_literal(MiniAsParseContext *ctx,
  * against a partial Common object. A failed init is destroyed by the caller
  * without parsing or emitting an output ELF. */
 static bool minias_init_for_target(MiniAs *as,
-                                   const MiniAsTargetOps *target) {
+                                   const MiniAsTargetSpec *spec) {
+    const MiniAsTargetOps *target=spec->target;
     int text;
     memset(as,0,sizeof(*as));
     as->target=target;
+    as->target_spec=spec;
     if(target==NULL) {
         minias_set_error(as,"missing-assembler-target");
         return false;
@@ -488,8 +490,8 @@ static bool minias_write_final_object(MiniAs *as,const char *path,bool elf32) {
         .object_attributes=as->target->object_attributes
     };
     object.target_abi=minias_target_abi_view(as);
-    object.object_machine=as->object_machine;
-    object.output_rel_relocations=as->output_rel_relocations;
+    object.object_machine=as->target_spec->object.machine;
+    object.output_rel_relocations=as->target_spec->object.rel_relocations;
     object.elf_flags=as->elf_flags;
     object.reader=as;
     object.find_symbol=minias_elf_find_symbol;
@@ -505,13 +507,19 @@ static bool minias_write_final_object(MiniAs *as,const char *path,bool elf32) {
 
 int minias_assemble_config(const char *input_path,
                            const char *output_path,
-                           const MiniAsAssemblyConfig *config,
+                           const MiniAsTargetSpec *config,
                            FILE *diagnostic) {
     MiniAsFragmentGrowthSet branch_growth={0};
     size_t source_reparse_pass = 0U;
-    MiniAsSourceGraph *graph=minias_source_graph_create();
+    MiniAsSourceGraph *graph;
     int rc = 1;
 
+    if(config==NULL) {
+        if(diagnostic!=NULL)
+            fprintf(diagnostic,"minic-as: missing-target-spec\n");
+        return 2;
+    }
+    graph=minias_source_graph_create();
     if(graph==NULL) {
         if(diagnostic!=NULL)
             fprintf(diagnostic,"minic-as: out-of-memory:source-graph\n");
@@ -523,12 +531,9 @@ int minias_assemble_config(const char *input_path,
         bool parsed;
         bool added_long_branches = false;
 
-        const bool initialized=minias_init_for_target(&as,config->target);
-        as.elf_flags = config->elf_flags;
-        as.output_elf32 = config->elf32;
-        as.object_machine = config->object_machine;
-        as.output_rel_relocations = config->output_rel_relocations;
-        if (config->target_profile_size > sizeof(config->target_profile)) {
+        const bool initialized=minias_init_for_target(&as,config);
+        as.elf_flags = config->object.initial_elf_flags;
+        if (config->profile_size > sizeof(config->profile)) {
             minias_set_error(&as, "invalid-target-profile-size");
         } else if (initialized && as.target->init_target_state != NULL) {
             void *new_target_state=NULL;
@@ -612,7 +617,7 @@ int minias_assemble_config(const char *input_path,
             if ((as.target->validate_output == NULL ||
                  as.target->validate_output(&final_layout, &errors)) &&
                 minias_finalize_target_output(&as,&final_layout,&errors,&object) &&
-                minias_write_final_object(&as,output_path,config->elf32)) {
+                minias_write_final_object(&as,output_path,config->object.elf32)) {
                 rc = 0;
             }
         }
@@ -636,10 +641,10 @@ int minias_assemble_file_target_isa(const char *input_path,
                                     uint32_t elf_flags,
                                     unsigned strict_i_xlen,
                                     FILE *diagnostic) {
-    MiniAsAssemblyConfig config={0};
+    MiniAsTargetSpec config={0};
     config.target=minias_target_riscv();
-    config.elf32=elf32;
-    config.elf_flags=elf_flags;
+    config.object.elf32=elf32;
+    config.object.initial_elf_flags=elf_flags;
     if(strict_i_xlen!=0U &&
        (config.target->configure_legacy_target==NULL ||
         !config.target->configure_legacy_target(&config,strict_i_xlen))) {

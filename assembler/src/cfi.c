@@ -250,7 +250,7 @@ bool minias_cfi_directive(MiniAs *as,const char *op,
         if (minias_cfi_abi(as).code_align == 0U ||
             minias_cfi_abi(as).data_align == 0 ||
             minias_cfi_abi(as).address_size !=
-                (as->output_elf32 ? 4U : 8U) ||
+                (as->target_spec->object.elf32 ? 4U : 8U) ||
             (eh && !as->target->cfi_implicit_eh_frame)) {
             minias_set_error(as,"unsupported-target-dwarf-cfi:line=%zu",line);
             return false;

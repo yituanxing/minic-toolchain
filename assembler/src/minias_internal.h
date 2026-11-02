@@ -157,6 +157,9 @@ typedef struct MiniAsDebugLoc {
 
 typedef struct MiniAs {
     const struct MiniAsTargetOps *target;
+    /* Borrowed immutable configuration survives all SourceGraph replays.
+     * The driver owns the value; Target alone interprets its profile bytes. */
+    const MiniAsTargetSpec *target_spec;
     /* Read-only projection of Context's single metadata allocation. */
     const MiniAsSection *sections;
     size_t section_count;
@@ -205,13 +208,9 @@ typedef struct MiniAs {
     size_t debug_loc_count;
     size_t debug_loc_capacity;
     bool debug_is_stmt;
+    /* Emission's additive ELF flags are runtime output, not a mutable
+     * TargetSpec or a second copy of its immutable object configuration. */
     uint32_t elf_flags;
-    bool output_elf32; /* Common object layout, not target ISA XLEN. */
-    /* Target-resolved object format overrides. Zero means the TargetOps
-     * default machine and RELA; the emitter never infers an ABI from
-     * instruction spellings or an ELF numeric class. */
-    uint16_t object_machine;
-    bool output_rel_relocations;
     /* Only the Target object-finalization callback may request late
      * section alignment changes. Common retains the actual Section owner. */
     bool finalizing_target_output;
@@ -223,7 +222,7 @@ typedef struct MiniAs {
 } MiniAs;
 
 static inline MiniAsTargetABIView minias_target_abi_view(const MiniAs *as) {
-    MiniAsTargetABIView view={as->target_state,as->output_elf32};
+    MiniAsTargetABIView view={as->target_state,as->target_spec->object.elf32};
     return view;
 }
 
@@ -397,6 +396,6 @@ bool minias_query_target_relax_plan(MiniAs *,const MiniAsStmt *,
 MiniAsCfiABI minias_cfi_abi(const MiniAs *);
 bool minias_cfi_record_target_mapping(MiniAs *,int section,uint64_t offset);
 int minias_assemble_config(const char *, const char *,
-                           const MiniAsAssemblyConfig *, FILE *);
+                           const MiniAsTargetSpec *, FILE *);
 
 #endif

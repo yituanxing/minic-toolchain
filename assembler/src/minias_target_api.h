@@ -463,7 +463,7 @@ typedef struct MiniAsObjectAttribute {
     size_t size;
 } MiniAsObjectAttribute;
 
-struct MiniAsAssemblyConfig;
+struct MiniAsTargetSpec;
 /* Effective CFI ABI of a TargetSpec. Target can override only the fields
  * affected by its ISA/ABI profile (e.g. RV32 vs RV64), while Common owns
  * the CFI stream, stable location anchors and ELF object fields. */
@@ -548,9 +548,9 @@ typedef struct MiniAsTargetOps {
     /* Fully target-owned ISA/ABI state lifecycle and per-fragment snapshot.
      * Site capture only reads Target state and the immutable source site;
      * Common owns the Fragment array and its placement. */
-    bool (*init_target_state)(const struct MiniAsAssemblyConfig *,
+    bool (*init_target_state)(const struct MiniAsTargetSpec *,
                               void **,char *,size_t);
-    bool (*configure_legacy_target)(struct MiniAsAssemblyConfig *, unsigned);
+    bool (*configure_legacy_target)(struct MiniAsTargetSpec *, unsigned);
     void (*capture_site_state)(const void *target_state, const MiniAsSourceSiteView *,
                                MiniAsTargetSiteState *);
     void (*destroy_target_state)(void *);
@@ -571,7 +571,7 @@ typedef struct MiniAsTargetOps {
     const char *name;
     /* Each target owns ISA/ABI/ELF profile validation; the CLI is target-neutral. */
     bool (*resolve_profile)(const char *, const char *,
-                            struct MiniAsAssemblyConfig *, char *, size_t);
+                            struct MiniAsTargetSpec *, char *, size_t);
     /* Mandatory target instruction path: parse once, measure its retained
      * typed operands, then encode. Core owns fragment address and growth. */
     bool (*parse_mcinst)(MiniAsParseContext *, MiniAsParseInstruction *);
@@ -712,16 +712,23 @@ const MiniAsTargetOps *minias_target_x86_64(void);
 const MiniAsTargetOps *minias_target_loongarch64(void);
 const MiniAsTargetOps *minias_find_target(const char *name);
 
-typedef struct MiniAsAssemblyConfig {
-    const MiniAsTargetOps *target;
+/* Resolved before opening SourceGraph and immutable throughout every layout
+ * replay.  The initial ELF flags are not the final emitted e_flags: Target
+ * encoders may OR in flags such as EF_RISCV_RVC during Emission. */
+typedef struct MiniAsObjectSpec {
     bool elf32;
-    uint32_t elf_flags;
-    uint16_t object_machine; /* 0: use Target's ELF machine. */
-    bool output_rel_relocations; /* false: RELA; true: REL. */
-    /* Serialized TargetSpec, interpreted only by the owning Target.
+    uint32_t initial_elf_flags;
+    uint16_t machine; /* 0: use Target's ELF machine. */
+    bool rel_relocations; /* false: RELA; true: REL. */
+} MiniAsObjectSpec;
+
+typedef struct MiniAsTargetSpec {
+    const MiniAsTargetOps *target;
+    MiniAsObjectSpec object;
+    /* Serialized Target-private ISA/ABI profile, read only by that Target.
      * A fixed inline buffer avoids caller-owned borrowed pointers. */
-    unsigned char target_profile[1024];
-    size_t target_profile_size;
-} MiniAsAssemblyConfig;
+    unsigned char profile[1024];
+    size_t profile_size;
+} MiniAsTargetSpec;
 
 #endif

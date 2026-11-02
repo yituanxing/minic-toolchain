@@ -4817,7 +4817,7 @@ static bool x64_explicit_alignment_fill_is_code_nop(uint8_t fill) {
 }
 
 static bool x64_profile(const char *march,const char *mabi,
-                        MiniAsAssemblyConfig *cfg,char *err,size_t cap) {
+                        MiniAsTargetSpec *cfg,char *err,size_t cap) {
     bool i386=(mabi && !strcmp(mabi,"i386"));
     if ((march && strcmp(march,"x86-64") && strcmp(march,"i386")) ||
         (mabi && strcmp(mabi,"sysv") && !i386) ||
@@ -4829,9 +4829,9 @@ static bool x64_profile(const char *march,const char *mabi,
     if(i386) {
         /* GNU --32 is an object-format profile, independent of a later
          * source-local `.code16gcc` / `.code32` CPU mode switch. */
-        cfg->elf32=true;
-        cfg->object_machine=3U; /* EM_386 */
-        cfg->output_rel_relocations=true;
+        cfg->object.elf32=true;
+        cfg->object.machine=3U; /* EM_386 */
+        cfg->object.rel_relocations=true;
     }
     return true;
 }
@@ -5005,7 +5005,7 @@ static void x64_resolve_cfi_abi(MiniAsTargetABIView view,MiniAsCfiABI *abi) {
         abi->eh_fde_alignment=4U;
     }
 }
-static bool x64_init_target_state(const MiniAsAssemblyConfig *config,
+static bool x64_init_target_state(const MiniAsTargetSpec *config,
                                   void **out_state,char *error,size_t error_cap) {
     X64TargetState *state;
     state=calloc(1U,sizeof(*state));
@@ -5013,7 +5013,7 @@ static bool x64_init_target_state(const MiniAsAssemblyConfig *config,
         (void)snprintf(error,error_cap,"out-of-memory:x86-target-state");
         return false;
     }
-    state->code_mode=config->elf32?X64_CODE32:0U;
+    state->code_mode=config->object.elf32?X64_CODE32:0U;
     *out_state=state;
     return true;
 }

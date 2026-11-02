@@ -436,7 +436,7 @@ bool minias_debug_emit(MiniAs *as) {
     size_t directory_slot_count=16U;
     size_t i,j,begin,header_len_at,header_start;
     int sec;
-    unsigned address_width=as->output_elf32?4U:8U;
+    unsigned address_width=as->target_spec->object.elf32?4U:8U;
     if(as->debug_loc_count==0U)return true;
     if(!debug_sorted_locs(as,&order))return false;
     if(!resolve_views_sorted(as,true,order))goto failed;

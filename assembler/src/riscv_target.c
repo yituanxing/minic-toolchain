@@ -863,7 +863,7 @@ static bool riscv_plan_instruction_relaxation(MiniAsRelaxContext *ctx,
 }
 
 static bool riscv_resolve_profile(const char *march, const char *mabi,
-                                  MiniAsAssemblyConfig *config,
+                                  MiniAsTargetSpec *config,
                                   char *error, size_t capacity) {
     MiniAsRiscvProfile profile;
     if (!minias_riscv_resolve_profile(march, mabi, &profile,
@@ -872,14 +872,14 @@ static bool riscv_resolve_profile(const char *march, const char *mabi,
     }
     memset(config, 0, sizeof(*config));
     config->target = minias_target_riscv();
-    config->elf32 = profile.elf32;
-    config->elf_flags = profile.elf_flags;
-    if (sizeof(profile) > sizeof(config->target_profile)) {
+    config->object.elf32 = profile.elf32;
+    config->object.initial_elf_flags = profile.elf_flags;
+    if (sizeof(profile) > sizeof(config->profile)) {
         (void)snprintf(error, capacity, "riscv-target-profile-overflow");
         return false;
     }
-    memcpy(config->target_profile, &profile, sizeof(profile));
-    config->target_profile_size = sizeof(profile);
+    memcpy(config->profile, &profile, sizeof(profile));
+    config->profile_size = sizeof(profile);
     return true;
 }
 
@@ -1039,14 +1039,14 @@ static bool riscv_allow_local_section_symbol_fixup(
 
 /* An opaque config blob belongs to this target; Common neither interprets
  * ISA features nor stores RISC-V-specific strict-mode or psABI fields. */
-static bool riscv_init_target_state(const MiniAsAssemblyConfig *config,
+static bool riscv_init_target_state(const MiniAsTargetSpec *config,
                                     void **out,char *error,size_t capacity) {
     MiniAsRiscvState *state;
     MiniAsRiscvProfile profile;
     const char *attribute_error;
     *out=NULL;
-    if (config->target_profile_size != 0U &&
-        config->target_profile_size != sizeof(profile)) {
+    if (config->profile_size != 0U &&
+        config->profile_size != sizeof(profile)) {
         if(capacity)snprintf(error,capacity,"invalid-riscv-target-profile");
         return false;
     }
@@ -1055,11 +1055,11 @@ static bool riscv_init_target_state(const MiniAsAssemblyConfig *config,
         if(capacity)snprintf(error,capacity,"out-of-memory:riscv-target-context");
         return false;
     }
-    state->target_xlen = config->elf32 ? 32U : 64U;
-    state->rv32e_abi = (config->elf_flags & 8U) != 0U; /* EF_RISCV_RVE */
-    if (config->target_profile_size != 0U) {
-        memcpy(&profile, config->target_profile, sizeof(profile));
-        if (profile.elf32 != config->elf32 ||
+    state->target_xlen = config->object.elf32 ? 32U : 64U;
+    state->rv32e_abi = (config->object.initial_elf_flags & 8U) != 0U; /* EF_RISCV_RVE */
+    if (config->profile_size != 0U) {
+        memcpy(&profile, config->profile, sizeof(profile));
+        if (profile.elf32 != config->object.elf32 ||
             memchr(profile.arch_attribute_isa, '\0',
                    sizeof(profile.arch_attribute_isa)) == NULL) {
             free(state);
@@ -1094,17 +1094,17 @@ static void riscv_destroy_target_state(void *target_state) {
     free(target_state);
 }
 
-static bool riscv_configure_legacy(MiniAsAssemblyConfig *config,
+static bool riscv_configure_legacy(MiniAsTargetSpec *config,
                                    unsigned strict_i_xlen) {
     MiniAsRiscvProfile profile;
     if (strict_i_xlen != 32U && strict_i_xlen != 64U) return false;
-    if (config->elf32 != (strict_i_xlen == 32U)) return false;
+    if (config->object.elf32 != (strict_i_xlen == 32U)) return false;
     memset(&profile, 0, sizeof(profile));
-    profile.elf32 = config->elf32;
+    profile.elf32 = config->object.elf32;
     profile.strict_i_xlen = strict_i_xlen;
-    if (sizeof(profile) > sizeof(config->target_profile)) return false;
-    memcpy(config->target_profile, &profile, sizeof(profile));
-    config->target_profile_size = sizeof(profile);
+    if (sizeof(profile) > sizeof(config->profile)) return false;
+    memcpy(config->profile, &profile, sizeof(profile));
+    config->profile_size = sizeof(profile);
     return true;
 }
 

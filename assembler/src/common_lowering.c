@@ -616,7 +616,7 @@ static bool parse_section_directive(MiniAs *as, char *args, size_t line) {
     if(entry_size==0U &&
        (type==MINIAS_SHT_INIT_ARRAY || type==MINIAS_SHT_FINI_ARRAY ||
         type==MINIAS_SHT_PREINIT_ARRAY))
-        entry_size=as->output_elf32?4U:8U;
+        entry_size=as->target_spec->object.elf32?4U:8U;
     if ((flags & MINIAS_SHF_MERGE)!=0U && entry_size==0U) {
         minias_set_error(as,"missing-merge-entry-size:%s:line=%zu",name,line);
         return false;

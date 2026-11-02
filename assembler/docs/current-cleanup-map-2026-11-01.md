@@ -15,6 +15,19 @@
 > 同拒绝）、GNU COMDAT/LINK_ORDER/符号生存性本地通过；
 > exact-head CI/完整 GNU Linux 原始 `.s` 待本批提交验证。
 
+> **2026-11-02 P04 TargetSpec/对象 ABI 只读所有权批次（基于
+> `b2f0bfbeb`）：** 四 Target 的 resolver/init、Common Driver、CFI、
+> DWARF、Emission 与 ELF Writer 已统一消费分组的不可变
+> `MiniAsTargetSpec.object`；删去 Session 的三份可写 ELF class、
+> machine、REL/RELA 副本。Emission 的 `elf_flags` 仍是从配置初始值
+> 派生的唯一增量输出，绝不回写 ISA/ABI 配置。保留既有 Target 私有
+> 动态状态与 Fragment Site，不生成影子状态机。新增七个负向/一个
+> 正向编译门禁和四架构六种对象配置、i386 REL/AMD64 RELA、RVC 标志
+> 测试；本地 `-Werror`、A0 30/30、五个旧新对象字节差分均 PASS。
+> GNU RISC-V cross/pyelftools/AArch64 GNU 或跨架构 QEMU 无本地通过
+> 结论；新 SHA 的 exact-head CI 仍须单独核对。详细见
+> [TargetSpec 所有权记录](target-spec-ownership-2026-11-02.md)。
+
 > **2026-11-02 P06 Section 身份与输出字节整批分离（基于已发布
 > `ebe366e8`）：** SectionID 和唯一 SectionKey 元数据向量归 Context，
 > 全 Common 仅能获得 `const MiniAsSection *`；原 Section 记录中

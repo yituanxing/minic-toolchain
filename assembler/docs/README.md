@@ -13,6 +13,7 @@
 | [MC 架构 RFC](architecture-rfc-mc-core-2026-10-28.md) | 理想骨架、非目标与未来格式 | 提案不等于已经实现 |
 | [四目标架构审计](architecture-audit-2026-10-29.md) | 最初跨模块问题和验收分类 | 仅用作基线参考 |
 | [Target 边界](target-boundary.md) | ISA/ABI 的单目标修复历史 | 不自动推广到其他 ISA |
+| [TargetSpec 只读所有权](target-spec-ownership-2026-11-02.md) | 对象 ABI 的不可变配置与运行期 ELF flags 独立状态 | 本轮四架构结构收口 |
 | [Linux 验收证据](linux-6.6.143-runtime-acceptance-2026-10-31.md) | GNU 链接与 QEMU 的实际验收 | 必须核对当时的 SHA |
 | [AArch64 垂直切片](aarch64-vertical-slice.md) | 目标初期实现参考 | 历史材料 |
 | [自审记录](self-audit-2026-10-28.md) | 早期源码检查 | 历史材料 |

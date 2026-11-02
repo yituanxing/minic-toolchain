@@ -14,7 +14,7 @@ int minias_assemble_invocation(const char *input_path,
     const char *march = NULL;
     const char *mabi = NULL;
     const MiniAsTargetOps *target;
-    MiniAsAssemblyConfig config;
+    MiniAsTargetSpec config;
     char error[256] = {0};
 
     if (invocation != NULL) {

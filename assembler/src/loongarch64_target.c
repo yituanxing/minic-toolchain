@@ -2216,7 +2216,7 @@ static bool la_align(MiniAsCodeAlignSink *sink,const MiniAsCodeAlignmentView *st
     return true;
 }
 static bool la_profile(const char *march,const char *mabi,
-                       MiniAsAssemblyConfig *cfg,char *err,size_t cap) {
+                       MiniAsTargetSpec *cfg,char *err,size_t cap) {
     LaTargetProfile profile;
     uint32_t abi;
     if(march && strcmp(march,"loongarch64"))goto bad;
@@ -2226,21 +2226,21 @@ static bool la_profile(const char *march,const char *mabi,
     else goto bad;
     memset(cfg,0,sizeof(*cfg));
     cfg->target=minias_target_loongarch64();
-    cfg->elf_flags=UINT32_C(0x40)|abi; /* psABI v1 + precise LP64 FPU ABI */
+    cfg->object.initial_elf_flags=UINT32_C(0x40)|abi; /* psABI v1 + precise LP64 FPU ABI */
     /* Keep the existing accepted -march spellings and extension behavior.
      * Once a target-owned directive/policy exposes narrower feature modes,
      * this profile becomes its single capability source. */
     profile.features=LA_FEATURE_LSX|LA_FEATURE_LASX;
     profile.abi=abi;
-    if(sizeof(profile)>sizeof(cfg->target_profile))goto bad;
-    memcpy(cfg->target_profile,&profile,sizeof(profile));
-    cfg->target_profile_size=sizeof(profile);
+    if(sizeof(profile)>sizeof(cfg->profile))goto bad;
+    memcpy(cfg->profile,&profile,sizeof(profile));
+    cfg->profile_size=sizeof(profile);
     return true;
 bad:
     if(cap)snprintf(err,cap,"unsupported-loongarch64-isa-abi");
     return false;
 }
-static bool la_init_target_state(const MiniAsAssemblyConfig *cfg,
+static bool la_init_target_state(const MiniAsTargetSpec *cfg,
                                  void **out_state,char *error,size_t error_capacity) {
     LaTargetState *state=calloc(1U,sizeof(*state));
     LaTargetProfile profile;
@@ -2251,18 +2251,18 @@ static bool la_init_target_state(const MiniAsAssemblyConfig *cfg,
         return false;
     }
     state->features=LA_FEATURE_LSX|LA_FEATURE_LASX;
-    if(cfg->target_profile_size!=0U) {
-        if(cfg->target_profile_size!=sizeof(profile)) {
+    if(cfg->profile_size!=0U) {
+        if(cfg->profile_size!=sizeof(profile)) {
             free(state);
             if(error_capacity!=0U)
                 snprintf(error,error_capacity,"invalid-loongarch-target-profile");
             return false;
         }
-        memcpy(&profile,cfg->target_profile,sizeof(profile));
+        memcpy(&profile,cfg->profile,sizeof(profile));
         if((profile.features &
             ~(uint32_t)(LA_FEATURE_LSX|LA_FEATURE_LASX))!=0U ||
            profile.abi<1U || profile.abi>3U ||
-           cfg->elf_flags!=(UINT32_C(0x40)|profile.abi)) {
+           cfg->object.initial_elf_flags!=(UINT32_C(0x40)|profile.abi)) {
             free(state);
             if(error_capacity!=0U)
                 snprintf(error,error_capacity,"loongarch-target-profile-abi-features");

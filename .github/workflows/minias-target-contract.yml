@@ -109,6 +109,10 @@ jobs:
         run: bash tests/assembler/probe-common-section-owners-const.sh
       - name: ELF serializer consumes only terminal ObjectModel borrows
         run: bash tests/assembler/probe-elf-object-view-boundary.sh
+      - name: Immutable TargetSpec and output ABI retain independent owners
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-target-spec-const-abi.sh
       - name: Context owns all source, layout and synthetic Symbol state
         run: bash tests/assembler/probe-common-context-symbol-owner.sh
       - name: Context Symbol table is compiler-enforced const outside its owner

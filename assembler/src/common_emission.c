@@ -572,7 +572,7 @@ const void *minias_encode_ctx_target_state(const MiniAsEncodeContext *ctx) {
 }
 
 bool minias_encode_ctx_is_elf32(const MiniAsEncodeContext *ctx) {
-    return ctx->as->output_elf32;
+    return ctx->as->target_spec->object.elf32;
 }
 
 struct MiniAsCodeAlignSink {
@@ -601,7 +601,7 @@ const void *minias_code_align_target_state(const MiniAsCodeAlignSink *sink) {
 }
 
 bool minias_code_align_is_elf32(const MiniAsCodeAlignSink *sink) {
-    return sink!=NULL && sink->as->output_elf32;
+    return sink!=NULL && sink->as->target_spec->object.elf32;
 }
 
 bool minias_code_align_has_active_fragment(const MiniAsCodeAlignSink *sink) {

@@ -98,16 +98,16 @@ static uint32_t a64_parse_features(const MiniAsParseContext *ctx) {
     return state?state->features:0U;
 }
 
-static bool a64_init_target_state(const MiniAsAssemblyConfig *config,
+static bool a64_init_target_state(const MiniAsTargetSpec *config,
                                   void **out_state,char *error,size_t error_cap) {
     A64TargetState *st;
     A64ProfileData profile={A64_ARCH_V8_0,0U};
-    if(config && config->target_profile_size!=0U) {
-        if(config->target_profile_size!=sizeof(profile)) {
+    if(config && config->profile_size!=0U) {
+        if(config->profile_size!=sizeof(profile)) {
             (void)snprintf(error,error_cap,"invalid-aarch64-target-profile-size");
             return false;
         }
-        memcpy(&profile,config->target_profile,sizeof(profile));
+        memcpy(&profile,config->profile,sizeof(profile));
         if((profile.arch_revision<A64_ARCH_V8_0 ||
             profile.arch_revision>A64_ARCH_V8_5) ||
            (profile.features&~A64_KNOWN_FEATURES)!=0U) {
@@ -5853,7 +5853,7 @@ static bool validate(const MiniAsPostEmitView *view,
 }
 
 static bool aarch64_resolve_profile(const char *march, const char *mabi,
-                                    MiniAsAssemblyConfig *config,
+                                    MiniAsTargetSpec *config,
                                     char *error, size_t capacity) {
     A64ProfileData profile;
     if (!a64_parse_arch_profile(march?march:"armv8-a",&profile) ||
@@ -5865,8 +5865,8 @@ static bool aarch64_resolve_profile(const char *march, const char *mabi,
     }
     memset(config, 0, sizeof(*config));
     config->target = minias_target_aarch64();
-    memcpy(config->target_profile,&profile,sizeof(profile));
-    config->target_profile_size=sizeof(profile);
+    memcpy(config->profile,&profile,sizeof(profile));
+    config->profile_size=sizeof(profile);
     return true;
 }
 
