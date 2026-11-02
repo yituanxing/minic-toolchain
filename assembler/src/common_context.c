@@ -342,7 +342,7 @@ int minias_ensure_section_key(MiniAs *as,
                                      const MiniAsSectionIdentity *key,
                                      uint32_t group_flags,
                                      uint32_t type,uint64_t flags,
-                                     uint64_t align) {
+                                     uint64_t align,uint64_t entry_size) {
     const int found=minias_find_section_key(as,key);
     MiniAsSection *sec;
     size_t slot;
@@ -356,10 +356,11 @@ int minias_ensure_section_key(MiniAs *as,
             minias_set_error(as,"conflicting-section-group-linkage:%s",key->name);
             return -1;
         }
-        /* Preserve GAS first declaration; later conflicting metadata must
-         * never silently change ELF section type or discard stored bytes. */
+        /* Preserve GAS first declaration, including sh_entsize. Later
+         * conflicting metadata cannot rewrite a live Section identity. */
         (void)type;
         (void)flags;
+        (void)entry_size;
         if(align>sec->align)sec->align=align;
         return found;
     }
@@ -403,6 +404,7 @@ int minias_ensure_section_key(MiniAs *as,
     sec->has_unique_id=key->has_unique_id;
     sec->unique_id=key->unique_id;
     sec->align=align==0U ? 1U : align;
+    sec->entry_size=entry_size;
     /* No failure point remains: publish SectionID and hash entry together. */
     slot=minias_section_index_slot(as,key);
     as->context_indexes->section_slots[slot]=as->section_count+1U;
@@ -416,7 +418,50 @@ int minias_ensure_section(MiniAs *as,
                           uint64_t flags,
                           uint64_t align) {
     const MiniAsSectionIdentity key={name,NULL,NULL,false,0U};
-    return minias_ensure_section_key(as,&key,0U,type,flags,align);
+    return minias_ensure_section_key(as,&key,0U,type,flags,align,0U);
+}
+
+bool minias_common_context_raise_section_alignment(MiniAs *as,int section,
+                                                    uint64_t alignment) {
+    MiniAsSection *sec;
+    if(as==NULL)return false;
+    if(section<0 || (size_t)section>=as->section_count ||
+       alignment==0U || (alignment&(alignment-1U))!=0U) {
+        minias_set_error(as,"invalid-source-section-alignment");
+        return false;
+    }
+    sec=&as->sections[(size_t)section];
+    if(sec->align<alignment)sec->align=alignment;
+    return true;
+}
+
+bool minias_common_context_apply_ident_comment(MiniAs *as,int section) {
+    MiniAsSection *sec;
+    if(as==NULL)return false;
+    if(section<0 || (size_t)section>=as->section_count ||
+       strcmp(as->sections[(size_t)section].name,".comment")!=0) {
+        minias_set_error(as,"invalid-ident-comment-section");
+        return false;
+    }
+    sec=&as->sections[(size_t)section];
+    /* GAS upgrades an existing .comment regardless of its prior flags;
+     * this is intentionally different from an ordinary .section reopen. */
+    sec->flags|=MINIAS_SHF_MERGE|MINIAS_SHF_STRINGS;
+    sec->entry_size=1U;
+    return true;
+}
+
+bool minias_common_context_publish_layout_sizes(MiniAs *as,
+                                                 const uint64_t *sizes,
+                                                 size_t count) {
+    size_t i;
+    if(as==NULL)return false;
+    if(count!=as->section_count || (count!=0U && sizes==NULL)) {
+        minias_set_error(as,"invalid-section-layout-snapshot");
+        return false;
+    }
+    for(i=0U;i<count;++i)as->sections[i].layout_size=sizes[i];
+    return true;
 }
 
 bool minias_common_context_set_section_alignment(MiniAs *as,int section,

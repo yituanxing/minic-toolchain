@@ -299,9 +299,8 @@ static bool minias_maybe_align_instruction(MiniAs *as,size_t line) {
     if(!advance_current_location(as,pad))return false;
     if(!minias_layout_clear_instruction_alignment(
            as,as->current_section,as->current_subsection))return false;
-    if(as->sections[(size_t)as->current_section].align<alignment)
-        as->sections[(size_t)as->current_section].align=alignment;
-    return true;
+    return minias_common_context_raise_section_alignment(
+        as,as->current_section,alignment);
 }
 
 bool minias_parse_u64(const char *text, uint64_t *out) {
@@ -332,12 +331,13 @@ static bool switch_section(MiniAs *as,
                            uint32_t group_flags,
                            uint32_t type,
                            uint64_t flags,
-                           uint64_t align) {
+                           uint64_t align,
+                           uint64_t entry_size) {
     const MiniAsSectionIdentity key={name,group_signature,
                                       link_order_reference,
                                       has_unique_id,unique_id};
     int index = minias_ensure_section_key(as,&key,group_flags,
-                                          type,flags,align);
+                                          type,flags,align,entry_size);
 
     if (index < 0) {
         return false;
@@ -634,11 +634,7 @@ static bool parse_section_directive(MiniAs *as, char *args, size_t line) {
         bool ok=switch_section(as,name,group_signature,link_order_reference,
                 has_unique_id,unique_id,group_flags,type,flags,
                 (flags & MINIAS_SHF_EXECINSTR)!=0U ?
-                   minias_target_exec_alignment(as):1U);
-        /* sh_entsize is a property of the *first* ELF section creation.
-         * Later incompatible .section definitions are ignored by GAS. */
-        if(ok && prior<0 && entry_size!=0U)
-            as->sections[(size_t)as->current_section].entry_size=entry_size;
+                   minias_target_exec_alignment(as):1U,entry_size);
         if (ok) {
             if (group_signature!=NULL && prior<0) {
                 MiniAsSymbol *signature;
@@ -1446,9 +1442,8 @@ static bool handle_align(MiniAs *as,const char *op,char *args,size_t line){
     stmt->payload.alignment.fill=fill;
     stmt->payload.alignment.has_max_skip=has_max;stmt->payload.alignment.max_skip=max_skip;
     if(!advance_current_location(as,pad))return false;
-    if(alignment>as->sections[(size_t)as->current_section].align)
-        as->sections[(size_t)as->current_section].align=alignment;
-    return true;
+    return minias_common_context_raise_section_alignment(
+        as,as->current_section,alignment);
 }
 
 static unsigned int data_width(const MiniAs *as, const char *op) {
@@ -2289,8 +2284,8 @@ static bool flush_literal_pools(MiniAs *as,size_t line,bool all) {
         fragment=&as->stmts[as->stmt_count-1U];
         fragment->payload.alignment.has_fill=true;
         fragment->payload.alignment.fill=0U;
-        if((uint64_t)entry->width>as->sections[(size_t)entry->section].align)
-            as->sections[(size_t)entry->section].align=entry->width;
+        if(!minias_common_context_raise_section_alignment(
+                as,entry->section,entry->width))goto failure;
         if(!advance_current_location(as,pad) ||
            !define_label(as,entry->label,line))goto failure;
 
@@ -2553,9 +2548,7 @@ static bool handle_ident(MiniAs *as,char *args,size_t line) {
     /* GAS upgrades an existing .comment to SHF_MERGE|SHF_STRINGS and
      * sh_entsize=1 when `.ident` is used, preserving any explicit flags
      * such as SHF_ALLOC. A later section declaration does not undo that. */
-    as->sections[(size_t)section].flags |=
-        MINIAS_SHF_MERGE|MINIAS_SHF_STRINGS;
-    as->sections[(size_t)section].entry_size=1U;
+    if(!minias_common_context_apply_ident_comment(as,section))return false;
     as->current_section=section;
     as->current_subsection=0U;
     ok=minias_layout_touch_subsection(as,section,0U) &&
@@ -2748,7 +2741,7 @@ static bool lower_source_statement(MiniAs *as, char *text, size_t line) {
                                   false,0U,0U,
                                   MINIAS_SHT_PROGBITS,
                                   MINIAS_SHF_ALLOC | MINIAS_SHF_EXECINSTR,
-                                  minias_target_exec_alignment(as));
+                                  minias_target_exec_alignment(as),0U);
         }
         if (strcmp(op, ".data") == 0) {
             return switch_section(as,
@@ -2758,7 +2751,7 @@ static bool lower_source_statement(MiniAs *as, char *text, size_t line) {
                                   false,0U,0U,
                                   MINIAS_SHT_PROGBITS,
                                   MINIAS_SHF_ALLOC | MINIAS_SHF_WRITE,
-                                  1U);
+                                  1U,0U);
         }
         if (strcmp(op, ".bss") == 0) {
             return switch_section(as,
@@ -2768,7 +2761,7 @@ static bool lower_source_statement(MiniAs *as, char *text, size_t line) {
                                   false,0U,0U,
                                   MINIAS_SHT_NOBITS,
                                   MINIAS_SHF_ALLOC | MINIAS_SHF_WRITE,
-                                  1U);
+                                  1U,0U);
         }
         if (strcmp(op, ".section") == 0) {
             return parse_section_directive(as, args, line);

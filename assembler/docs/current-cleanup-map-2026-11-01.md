@@ -1,5 +1,16 @@
 # MiniAS 当前清理与所有权总览（2026-11-01）
 
+> **2026-11-02 P06 Section 元数据归属后续：** 解析期
+> Section 对齐、首次 `.section` 的 `sh_entsize` 与 GNU `.ident`
+> 的 `.comment` 属性升级统一归 Common Context；MCLayout 计算
+> 一次性临时大小快照，在 Subsection/Symbol/别名/`.size` 归一化
+> 后向 Context 一次发布所有 Section 的 `layout_size`。Lowering
+> 和 Layout 不再直接改这些 Section 属性，未引入持久影子表。
+> 结构门禁已加入远端工作流。已发布的 `356a9b2d` 在 x86/GNU
+> 及 AArch64/QEMU 工作流成功，但 RV native 停在将 MCExpr 枚举
+> 错误地要求出现在 Target 公共头的旧源码检查；下一提交同步修正
+> 该检查以符合前一批 P04 私有类型边界，不能把旧 SHA 判为全绿。
+
 > **2026-11-02 P05 重放/Target 公共类型继续收口（基于已发布
 > `7d562531`）：** SourceGraph 的 Site 校验、强制分支查找、跨完整
 > 重解析的 rebind/capture 已统一消费 Common 按当前 Fragment ordinal

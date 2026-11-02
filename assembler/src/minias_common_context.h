@@ -19,7 +19,17 @@ struct MiniAsPostEmitObjectSink { MiniAs *as; };
 bool minias_common_context_init(MiniAs *);
 int minias_find_section_key(const MiniAs *, const MiniAsSectionIdentity *);
 int minias_ensure_section_key(MiniAs *, const MiniAsSectionIdentity *,
-                              uint32_t, uint32_t, uint64_t, uint64_t);
+                              uint32_t, uint32_t, uint64_t, uint64_t,
+                              uint64_t);
+/* Source alignment is monotone; unlike bootstrap alignment it can run
+ * after Fragments exist and never lowers an ELF section requirement. */
+bool minias_common_context_raise_section_alignment(MiniAs *,int,uint64_t);
+/* GNU .ident is the one source directive that upgrades an existing .comment
+ * Section's mergeable-string attributes, without changing its SectionKey. */
+bool minias_common_context_apply_ident_comment(MiniAs *,int);
+/* MCLayout computes a complete transient measurement; Context publishes the
+ * Section-visible layout sizes together, preserving one SectionID graph. */
+bool minias_common_context_publish_layout_sizes(MiniAs *,const uint64_t *,size_t);
 /* Only for bootstrap, before any source Fragment/output is present: the
  * target's configured default .text alignment may lower or raise the
  * pre-Target placeholder. This does not change Section identity. */

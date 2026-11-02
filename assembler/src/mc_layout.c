@@ -1,5 +1,6 @@
 #include "minias_internal.h"
 #include "minias_common_emission.h"
+#include "minias_common_context.h"
 #include "minias_common_layout.h"
 #include "minias_common_lowering.h"
 
@@ -329,6 +330,22 @@ bool minias_finalize_subsection_layout(MiniAs *as) {
     size_t i;
     int active_section = -1;
     uint64_t cursor = 0U;
+    uint64_t *section_layout_sizes=NULL;
+
+    /* Measure one complete SectionID-indexed snapshot before publishing it.
+     * This is transient MCLayout scratch, not a second persistent graph. */
+    if(as->section_count!=0U) {
+        if(as->section_count>SIZE_MAX/sizeof(*section_layout_sizes)) {
+            minias_set_error(as,"section-layout-overflow");
+            return false;
+        }
+        section_layout_sizes=calloc(as->section_count,
+                                    sizeof(*section_layout_sizes));
+        if(section_layout_sizes==NULL) {
+            minias_set_error(as,"out-of-memory:section-layout-snapshot");
+            return false;
+        }
+    }
 
     if (as->layout->subsection_count != 0U) {
         qsort(as->layout->subsections,
@@ -339,15 +356,17 @@ bool minias_finalize_subsection_layout(MiniAs *as) {
          * before any later consumer can request a subsection. */
         if(as->layout->subsection_slot_capacity!=0U)subsection_index_fill(as);
     }
-    for (i = 0U; i < as->section_count; ++i) {
-        as->sections[i].layout_size = 0U;
-    }
     for (i = 0U; i < as->layout->subsection_count; ++i) {
         MiniAsSubsection *sub = &as->layout->subsections[i];
 
+        if(sub->section<0 || (size_t)sub->section>=as->section_count) {
+            minias_set_error(as,"internal:subsection-section-id");
+            goto failed;
+        }
+
         if (sub->section != active_section) {
             if (active_section >= 0) {
-                as->sections[(size_t)active_section].layout_size = cursor;
+                section_layout_sizes[(size_t)active_section]=cursor;
             }
             active_section = sub->section;
             cursor = 0U;
@@ -355,12 +374,12 @@ bool minias_finalize_subsection_layout(MiniAs *as) {
         sub->base = cursor;
         if (sub->size > UINT64_MAX - cursor) {
             minias_set_error(as, "section-layout-overflow");
-            return false;
+            goto failed;
         }
         cursor += sub->size;
     }
     if (active_section >= 0) {
-        as->sections[(size_t)active_section].layout_size = cursor;
+        section_layout_sizes[(size_t)active_section]=cursor;
     }
 
     for (i = 0U; i < as->stmt_count; ++i) {
@@ -369,7 +388,7 @@ bool minias_finalize_subsection_layout(MiniAs *as) {
             find_canonical_subsection(as, stmt->section, stmt->subsection);
         if (sub == NULL || stmt->offset > UINT64_MAX - sub->base) {
             minias_set_error(as, "internal:stmt-subsection-layout");
-            return false;
+            goto failed;
         }
         stmt->offset += sub->base;
     }
@@ -388,7 +407,7 @@ bool minias_finalize_subsection_layout(MiniAs *as) {
                                         symbol->subsection);
         if (sub == NULL || symbol->value > UINT64_MAX - sub->base) {
             minias_set_error(as, "internal:symbol-subsection-layout:%s", symbol->name);
-            return false;
+            goto failed;
         }
         symbol->value += sub->base;
         /* Parse-site .size records the span, not an already normalized
@@ -400,12 +419,12 @@ bool minias_finalize_subsection_layout(MiniAs *as) {
             if (symbol->size > UINT64_MAX - symbol->value) {
                 minias_set_error(as, "fragment-size-end-overflow:%s",
                                  symbol->name);
-                return false;
+                goto failed;
             }
             symbol->size_end_value = symbol->value + symbol->size;
         }
     }
-    if(!minias_refresh_symbol_aliases(as))return false;
+    if(!minias_refresh_symbol_aliases(as))goto failed;
     /* The end anchor may be measured from a distinct same-section label,
      * e.g. GNU .size public,.-.Lfunction_start.  Resolve that SymbolID
      * only AFTER every subsection's symbols have their final bases. */
@@ -413,16 +432,22 @@ bool minias_finalize_subsection_layout(MiniAs *as) {
         MiniAsSymbol *sym=&as->symbols[i];
         const MiniAsSymbol *start;
         if(!sym->has_size_end_anchor || !sym->has_size_start_symbol)continue;
-        if(sym->size_start_symbol_index>=as->symbol_count)return false;
+        if(sym->size_start_symbol_index>=as->symbol_count)goto failed;
         start=&as->symbols[sym->size_start_symbol_index];
         if(!start->defined || start->section!=sym->section ||
            start->value>UINT64_MAX-sym->size) {
             minias_set_error(as,"fragment-size-start-mismatch:%s",sym->name);
-            return false;
+            goto failed;
         }
         sym->size_end_value=start->value+sym->size;
     }
+    if(!minias_common_context_publish_layout_sizes(
+            as,section_layout_sizes,as->section_count))goto failed;
+    free(section_layout_sizes);
     return true;
+failed:
+    free(section_layout_sizes);
+    return false;
 }
 
 

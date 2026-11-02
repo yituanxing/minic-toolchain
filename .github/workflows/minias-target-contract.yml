@@ -103,6 +103,8 @@ jobs:
         run: bash tests/assembler/probe-common-lowering-boundary.sh
       - name: P06 Common Context and Emission single-owner boundary
         run: bash tests/assembler/probe-common-context-emission-boundary.sh
+      - name: Context owns Section metadata and one post-layout size commit
+        run: bash tests/assembler/probe-common-context-section-metadata-owner.sh
       - name: SourceGraph opaque-session semantic service isolation
         run: bash tests/assembler/probe-source-session-isolation.sh
       - name: Source statement events enforce Source/Common parser ownership
@@ -307,8 +309,10 @@ jobs:
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=riscv \
             bash tests/assembler/probe-mcexpr-size-end-anchor.sh
-      - name: MCExpr data oracle in all A0 and ISA tests
-        run: grep -q "MINIAS_MC_EXPR_DIFFERENCE" assembler/src/minias_target_api.h
+      - name: MCExpr data oracle retained privately in Common, not Target ABI
+        run: |
+          grep -q "MINIAS_MC_EXPR_DIFFERENCE" assembler/src/minias_fragment_internal.h
+          ! grep -q "MINIAS_MC_EXPR_DIFFERENCE" assembler/src/minias_target_api.h
       - name: Verify atomic MCFragment transactions across four CodeEmitters
         run: bash tests/assembler/probe-mc-fragment-transaction.sh
       - name: Validate MCExpr stable interned Symbol IDs and 1024-relocation GNU oracle

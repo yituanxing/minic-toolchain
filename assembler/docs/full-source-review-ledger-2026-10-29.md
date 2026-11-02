@@ -7,6 +7,53 @@
 > 和早期测试文件数量，均不能自动当作最新 HEAD 的事实。
 > “读过 / 修改过 / 完成清理”必须分别统计。
 
+### 2026-11-02 P06 Context Section metadata + workflow ownership check
+
+**Immediate published base:** `356a9b2d590bec7d85170ec1720a3ed44a2d97b8`
+on Draft PR #667. This continues the existing P06 Context/Lowering/
+MCLayout split; no new object format or second Section table was added.
+
+1. **One Common Context owner for Section attributes.** The first
+   `.section` creation now initializes `sh_entsize` in the existing
+   SectionKey-indexed allocation transaction; reopening the same key
+   preserves the original type, flags and entry size. Implicit code,
+   explicit `.align`, and GNU literal-pool alignment all request the same
+   validated monotone Context transition. `.ident` uses a dedicated
+   `.comment`-only transition that upgrades merge/string flags and
+   `sh_entsize=1`, retaining unrelated attributes, as GNU GAS does.
+   Lowering no longer writes those Section fields directly.
+2. **One final layout-size publication.** MCLayout measures all SectionID
+   sizes in a temporary, freed work array, computes subsection bases,
+   normalizes Fragment/Symbol positions, refreshes the existing alias
+   DAG and size-end anchors, then submits the complete sizes to Context.
+   Context alone writes the persistent `layout_size` fields. Neither
+   Section nor Symbol is copied into a persistent mirror; output bytes
+   still belong to Emission and ELF serialization still reads the shared
+   Section records.
+3. **Exact-head workflow migration.** SHA `356a9b2d` passed the x86-64/
+   LoongArch64 GNU/Four-Target job and AArch64 real-link/QEMU job. Its
+   native RV job passed the prior 73 steps but stopped at a stale
+   structural grep expecting `MINIAS_MC_EXPR_DIFFERENCE` in the public
+   Target API: the immediately preceding P04 batch intentionally moved
+   that enum into Common's private Fragment header. The workflow now
+   checks both the required private presence and forbidden public
+   exposure, without relaxing any GNU byte/relocation tests. The new
+   Context Section ownership probe is wired into the same strict job.
+
+**Local source delta versus `356a9b2d`:** four existing production
+files **+111/-38**, net **+73**, exclusively Context/Lowering/MCLayout
+and their private interface. One new Section metadata structural probe
+and one updated exact-head workflow are separate test/CI changes.
+
+**Local proof:** strict Release `-Werror` A0 **30/30**; 26 pre/post
+four-target fixtures **18 byte-identical ELF + eight equal rejects**;
+the new sole-Section-owner probe, GNU `.ident` including preexisting
+`.comment`, SectionKey unique/COMDAT/link-order and real GNU `ld -r`,
+4096-Section/8192-Subsection pressure, `.org` fixed-point, symbol alias
+DAG, `.size` cross-subsection, DWARF/CFI and Source replay oracles all
+**PASS**. Full strict GNU 3,536-case/Linux Image/QEMU coverage and the
+*next* remote exact-head SHA must be evaluated separately.
+
 ### 2026-11-02 P05 scalar replay + P04 final public-type downshift
 
 **Immediate base:** published Draft PR #667 branch head
