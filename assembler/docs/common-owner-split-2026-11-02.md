@@ -15,14 +15,21 @@ Source replay algorithm, ISA/ABI policy or ObjectModel writer.
    read-only validation, Target finalization and ELF writer in that order.
 2. **Common Context** (`common_context.c`) maintains the SectionKey-to-ID
    and Symbol/name-to-ID indexes, symbol alias dependencies, binding and
-   mapping-symbol allocation. Its two release functions preserve the
-   established Target-state destruction order.
+   mapping-symbol allocation. Hash slots and capacity bookkeeping live in an
+   opaque `MiniAsContextIndexState` and are inaccessible to Layout/Writer.
+   Its two release functions preserve the established Target-state
+   destruction order.
 3. **Lowering** (`common_lowering.c`) is the only statement/directive parser.
    It creates semantic Fragments, including immutable DATA snapshots and
    retained variable-size expression programs. It does not materialize
-   output Section bytes.
+   output Section bytes. An opaque `MiniAsLoweringState` owns all parser
+   worklists and the source-Fragment destructor, publishing only a value-type
+   layout-control plan after parsing.
 4. **MCLayout** decides final Fragment offsets and validates placement;
-   it retains its own replay anchor graph and is not merged into Context.
+   an opaque `MiniAsLayoutState` owns Subsection storage, the SectionID +
+   numbered-subsection lookup index and the persistent replay anchor graph.
+   CFI reads the current Subsection through a `const` lookup, never by
+   traversing or mutating Layout's private vector.
 5. **Emission** (`common_emission.c`) sorts Fragment references, checks
    measured sizes, stages all instruction and typed DATA writes, validates
    fragment-relative Fixups and synthetic anchors, and commits complete
@@ -59,21 +66,32 @@ materializer named `minias_emit_data_fragment` in Emission.
   requests, fragment guards and synthetic-anchor ordinal are absent from the
   shared `MiniAs` definition. They have one private definition, included by
   exactly two transaction owner files.
+- Context, Lowering and MCLayout similarly own their allocation metadata,
+  vectors and caches privately. Every pass constructs all three before
+  SourceGraph parsing or the initial `.text` subsection; the existing failure
+  unwind destroys Layout first, then Context/Target/Lowering/Emission in the
+  established order. An absent state fails before parsing, not during an
+  unguarded partial assembly.
+- The shared SectionID/SymbolID/Stmt records are intentionally **not** copied
+  or boxed: Layout must adjust offsets/aliases, Lowering must create typed
+  Fragments, CFI/DWARF must attach symbols and Emission must materialize
+  Section bytes. No second object graph or forwarding getter layer appears.
 
 ## Validation and limitations
 
 The structural gate `probe-common-context-emission-boundary.sh` checks
 unique function owners, compiles a negative opaque-field access, verifies
-read-only query consumers and rejects a renewed Lowering/emitter cycle.
+read-only query consumers, tests Context/Lowering/Layout negative C field
+accesses and rejects a renewed Lowering/emitter cycle.
 Existing Fragment transaction, Source replay, Target capability, GNU
 byte/relocation and DWARF/CFI probes must also pass at the exact commit.
 Full 3x7 Linux GNU Kbuild replay, 3,536 opt-in semantics and Image/QEMU
 P1 are separate milestone gates, not implicit results of a local build.
 
-This increment encapsulates the complete mutable Emission transaction, not
-the shared mutable Section, Symbol or Fragment arrays. Context, Lowering,
-MCLayout and Writer still have legitimate but overly broad access to those
-other Common-private arrays. Separating their true ownership is the next
-field-level task before type-complete Fragment payloads and a neutral
-ObjectModel. A `const` Fixup span also carries a lifetime constraint: it
-cannot be retained across subsequent Emission appends/reallocations.
+These increments encapsulate the Emission transaction, persistent identity
+indexes, parser-local worklists and MCLayout subsection/anchor storage—not
+the shared mutable Section, Symbol or Fragment records. Separating the
+records' true phase-aware ownership (without duplicating or returning mutable
+raw pointers to Targets) is the next boundary before type-complete Fragment
+payloads and a neutral ObjectModel. A `const` Fixup span also carries a
+lifetime constraint: it cannot be retained across later Emission appends.

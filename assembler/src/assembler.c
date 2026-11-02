@@ -2,6 +2,7 @@
 #include "minias_common_lowering.h"
 #include "minias_common_context.h"
 #include "minias_common_emission.h"
+#include "minias_common_layout.h"
 #include "source_graph_common.h"
 #include "minias_source_semantic_services.h"
 #include "minias.h"
@@ -243,6 +244,9 @@ static bool minias_init_for_target(MiniAs *as,
         return false;
     }
     if(!minias_common_emission_init(as))return false;
+    if(!minias_common_context_init(as) ||
+       !minias_common_lowering_init(as) ||
+       !minias_layout_init(as))return false;
     as->source=minias_source_context_create();
     if(as->source==NULL) {
         minias_set_error(as,"out-of-memory:source-context");
@@ -281,24 +285,8 @@ static void minias_destroy(MiniAs *as) {
         as->target->destroy_target_state(as->target_state);
     as->target_state=NULL;
     minias_common_context_destroy_symbols(as);
-    for (i = 0U; i < as->stmt_count; ++i) {
-        free(as->stmts[i].op);
-        free(as->stmts[i].args);
-        minias_deferred_expr_destroy(as->stmts[i].org_expr);
-        free(as->stmts[i].static_data);
-        minias_mcdata_destroy(as->stmts[i].mcdata);
-        for (size_t k=0U;k<3U;++k)
-            minias_deferred_expr_destroy(as->stmts[i].variable_exprs[k]);
-        minias_mcinst_destroy(as->stmts[i].mcinst);
-    }
-    free(as->stmts);
-    free(as->pending_local_commons);
+    minias_common_lowering_destroy(as);
     minias_common_emission_destroy(as);
-    free(as->literals);
-    free(as->subsections);
-    free(as->subsection_slots);
-    free(as->section_stack);
-    free(as->numeric_label_counts);
     minias_source_context_destroy(as->source);
     free(as->cfi_procs);
     for(i=0U;i<as->cfi_op_count;++i)

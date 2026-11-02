@@ -1,5 +1,14 @@
 # MiniAS 当前清理与所有权总览（2026-11-01）
 
+> **2026-11-02 P06 最新所有权批次：** 在 Emission 事务已经不透明的
+> 基础上，Context 的 Section/Symbol/name 哈希及容量、Lowering 的 GNU
+> 临时表与布局控制标记、MCLayout 的 Subsection/index/AnchorGraph
+> 整批迁入各自私有状态；CFI 只通过 Layout 的 const 查找读取，Layout
+> 只通过 Lowering 的值类型计划读取。Section/Symbol/Stmt 语义记录
+> 继续保留稳定共享 ID，避免第二套对象模型。每轮源构建和失败销毁都
+> 由现有 Driver 调度。见 [P06 明细](common-owner-split-2026-11-02.md)。
+> 本段记录实现范围；实际远端验收以该批推送后 exact-head CI 为准。
+
 ## 执行 TODO（2026-11-02，按依赖顺序推进）
 
 本清单是后续工作的唯一进度入口；具体设计仍在

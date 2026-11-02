@@ -5,6 +5,35 @@
 #include <string.h>
 #include <stdio.h>
 
+/* The identity maps and their vector capacities never escape Context.
+ * Section/Symbol entity IDs remain shared because Layout, CFI and ELF need
+ * their semantic records; hash slots are not semantic object state. */
+struct MiniAsContextIndexState {
+    size_t section_capacity;
+    size_t *section_slots;
+    size_t section_slot_capacity;
+    size_t symbol_capacity;
+    size_t *symbol_slots;
+    size_t symbol_slot_capacity;
+    size_t symbol_name_capacity;
+    size_t *symbol_name_slots;
+    size_t symbol_name_slot_capacity;
+};
+
+bool minias_common_context_init(MiniAs *as) {
+    if(as==NULL)return false;
+    if(as->context_indexes!=NULL) {
+        minias_set_error(as,"context-index-already-initialized");
+        return false;
+    }
+    as->context_indexes=calloc(1U,sizeof(*as->context_indexes));
+    if(as->context_indexes==NULL) {
+        minias_set_error(as,"out-of-memory:context-index-state");
+        return false;
+    }
+    return true;
+}
+
 void minias_common_context_destroy_sections(MiniAs *as) {
     size_t i;
     for (i = 0U; i < as->section_count; ++i) {
@@ -14,7 +43,7 @@ void minias_common_context_destroy_sections(MiniAs *as) {
         free(as->sections[i].data);
     }
     free(as->sections);
-    free(as->section_slots);
+    if(as->context_indexes!=NULL)free(as->context_indexes->section_slots);
 }
 
 void minias_common_context_destroy_symbols(MiniAs *as) {
@@ -24,11 +53,15 @@ void minias_common_context_destroy_symbols(MiniAs *as) {
         free(as->symbols[i].alias_section_base);
     }
     free(as->symbols);
-    free(as->symbol_slots);
+    if(as->context_indexes!=NULL)free(as->context_indexes->symbol_slots);
     for (i = 0U; i < as->symbol_name_count; ++i)
         free(as->symbol_names[i].name);
     free(as->symbol_names);
-    free(as->symbol_name_slots);
+    if(as->context_indexes!=NULL) {
+        free(as->context_indexes->symbol_name_slots);
+        free(as->context_indexes);
+        as->context_indexes=NULL;
+    }
 }
 
 bool minias_current_location(MiniAs *as, uint64_t *value) {
@@ -272,14 +305,14 @@ static bool minias_rebuild_section_index(MiniAs *as,size_t capacity) {
         while(slots[slot]!=0U)slot=(slot+1U)&(capacity-1U);
         slots[slot]=i+1U;
     }
-    free(as->section_slots);
-    as->section_slots=slots;
-    as->section_slot_capacity=capacity;
+    free(as->context_indexes->section_slots);
+    as->context_indexes->section_slots=slots;
+    as->context_indexes->section_slot_capacity=capacity;
     return true;
 }
 
 static bool minias_reserve_section_index(MiniAs *as) {
-    const size_t cap=as->section_slot_capacity;
+    const size_t cap=as->context_indexes->section_slot_capacity;
     size_t next;
     if(cap!=0U && as->section_count+1U<cap/2U)return true;
     if(cap>SIZE_MAX/2U) {
@@ -293,13 +326,13 @@ static bool minias_reserve_section_index(MiniAs *as) {
 static size_t minias_section_index_slot(const MiniAs *as,
                                         const MiniAsSectionIdentity *key) {
     size_t slot=section_key_hash(key)&
-                (as->section_slot_capacity-1U);
+                (as->context_indexes->section_slot_capacity-1U);
     /* At most half of the table is occupied. An empty slot always exists. */
-    while(as->section_slots[slot]!=0U) {
-        const size_t section_id=as->section_slots[slot]-1U;
+    while(as->context_indexes->section_slots[slot]!=0U) {
+        const size_t section_id=as->context_indexes->section_slots[slot]-1U;
         if(section_key_equal(&as->sections[section_id],key))
             break;
-        slot=(slot+1U)&(as->section_slot_capacity-1U);
+        slot=(slot+1U)&(as->context_indexes->section_slot_capacity-1U);
     }
     return slot;
 }
@@ -307,10 +340,11 @@ static size_t minias_section_index_slot(const MiniAs *as,
 int minias_find_section_key(const MiniAs *as,
                                    const MiniAsSectionIdentity *key) {
     size_t slot;
-    if(as->section_slot_capacity==0U)return -1;
+    if(as==NULL || as->context_indexes==NULL || key==NULL)return -1;
+    if(as->context_indexes->section_slot_capacity==0U)return -1;
     slot=minias_section_index_slot(as,key);
-    return as->section_slots[slot]==0U ? -1 :
-           (int)(as->section_slots[slot]-1U);
+    return as->context_indexes->section_slots[slot]==0U ? -1 :
+           (int)(as->context_indexes->section_slots[slot]-1U);
 }
 
 int minias_find_section(const MiniAs *as,const char *name) {
@@ -326,6 +360,10 @@ int minias_ensure_section_key(MiniAs *as,
     const int found=minias_find_section_key(as,key);
     MiniAsSection *sec;
     size_t slot;
+    if(as==NULL || as->context_indexes==NULL || key==NULL) {
+        if(as!=NULL)minias_set_error(as,"section-without-context-index");
+        return -1;
+    }
     if(found>=0) {
         sec=&as->sections[(size_t)found];
         if(sec->group_flags!=group_flags) {
@@ -344,7 +382,7 @@ int minias_ensure_section_key(MiniAs *as,
         return -1;
     }
     if(!minias_reserve_section_index(as))return -1;
-    if(!minias_grow_array((void **)&as->sections,&as->section_capacity,
+    if(!minias_grow_array((void **)&as->sections,&as->context_indexes->section_capacity,
                           sizeof(*as->sections),as->section_count+1U)) {
         minias_set_error(as,"out-of-memory:section");
         return -1;
@@ -381,7 +419,7 @@ int minias_ensure_section_key(MiniAs *as,
     sec->align=align==0U ? 1U : align;
     /* No failure point remains: publish SectionID and hash entry together. */
     slot=minias_section_index_slot(as,key);
-    as->section_slots[slot]=as->section_count+1U;
+    as->context_indexes->section_slots[slot]=as->section_count+1U;
     ++as->section_count;
     return (int)(as->section_count-1U);
 }
@@ -430,9 +468,9 @@ static bool rebuild_symbol_index(MiniAs *as, size_t minimum_capacity) {
         }
         slots[slot] = i + 1U;
     }
-    free(as->symbol_slots);
-    as->symbol_slots = slots;
-    as->symbol_slot_capacity = capacity;
+    free(as->context_indexes->symbol_slots);
+    as->context_indexes->symbol_slots = slots;
+    as->context_indexes->symbol_slot_capacity = capacity;
     return true;
 }
 
@@ -443,13 +481,13 @@ static bool find_symbol_slot(const MiniAs *as,
     size_t slot;
     size_t scanned;
 
-    if (as->symbol_slot_capacity == 0U) {
+    if (as->context_indexes->symbol_slot_capacity == 0U) {
         *slot_out = 0U;
         return false;
     }
-    slot = symbol_name_hash(name) & (as->symbol_slot_capacity - 1U);
-    for (scanned = 0U; scanned < as->symbol_slot_capacity; ++scanned) {
-        size_t encoded = as->symbol_slots[slot];
+    slot = symbol_name_hash(name) & (as->context_indexes->symbol_slot_capacity - 1U);
+    for (scanned = 0U; scanned < as->context_indexes->symbol_slot_capacity; ++scanned) {
+        size_t encoded = as->context_indexes->symbol_slots[slot];
         if (encoded == 0U) {
             *slot_out = slot;
             return false;
@@ -459,7 +497,7 @@ static bool find_symbol_slot(const MiniAs *as,
             *index_out = encoded - 1U;
             return true;
         }
-        slot = (slot + 1U) & (as->symbol_slot_capacity - 1U);
+        slot = (slot + 1U) & (as->context_indexes->symbol_slot_capacity - 1U);
     }
     *slot_out = 0U;
     return false;
@@ -469,6 +507,10 @@ MiniAsSymbol *minias_get_symbol(MiniAs *as, const char *name, bool create) {
     size_t slot = 0U;
     size_t index = 0U;
     MiniAsSymbol *sym;
+    if(as==NULL || as->context_indexes==NULL || name==NULL) {
+        if(as!=NULL && create)minias_set_error(as,"symbol-without-context-index");
+        return NULL;
+    }
 
     if (find_symbol_slot(as, name, &slot, &index)) {
         return &as->symbols[index];
@@ -476,12 +518,12 @@ MiniAsSymbol *minias_get_symbol(MiniAs *as, const char *name, bool create) {
     if (!create) {
         return NULL;
     }
-    if (as->symbol_slot_capacity == 0U ||
-        as->symbol_count + 1U >= as->symbol_slot_capacity / 2U) {
+    if (as->context_indexes->symbol_slot_capacity == 0U ||
+        as->symbol_count + 1U >= as->context_indexes->symbol_slot_capacity / 2U) {
         size_t next_capacity =
-            as->symbol_slot_capacity == 0U ? 16U
-                                          : as->symbol_slot_capacity * 2U;
-        if (next_capacity < as->symbol_slot_capacity ||
+            as->context_indexes->symbol_slot_capacity == 0U ? 16U
+                                          : as->context_indexes->symbol_slot_capacity * 2U;
+        if (next_capacity < as->context_indexes->symbol_slot_capacity ||
             !rebuild_symbol_index(as, next_capacity)) {
             return NULL;
         }
@@ -490,7 +532,7 @@ MiniAsSymbol *minias_get_symbol(MiniAs *as, const char *name, bool create) {
         }
     }
     if (!minias_grow_array((void **)&as->symbols,
-                    &as->symbol_capacity,
+                    &as->context_indexes->symbol_capacity,
                     sizeof(*as->symbols),
                     as->symbol_count + 1U)) {
         minias_set_error(as, "out-of-memory:symbol");
@@ -508,7 +550,7 @@ MiniAsSymbol *minias_get_symbol(MiniAs *as, const char *name, bool create) {
     sym->type = MINIAS_STT_NOTYPE;
     sym->visibility = MINIAS_STV_DEFAULT;
     ++as->symbol_count;
-    as->symbol_slots[slot] = as->symbol_count;
+    as->context_indexes->symbol_slots[slot] = as->symbol_count;
     return sym;
 }
 
@@ -613,9 +655,9 @@ static bool rebuild_symbol_name_index(MiniAs *as,size_t minimum) {
         while(slots[slot]!=0U)slot=(slot+1U)&(capacity-1U);
         slots[slot]=i+1U;
     }
-    free(as->symbol_name_slots);
-    as->symbol_name_slots=slots;
-    as->symbol_name_slot_capacity=capacity;
+    free(as->context_indexes->symbol_name_slots);
+    as->context_indexes->symbol_name_slots=slots;
+    as->context_indexes->symbol_name_slot_capacity=capacity;
     return true;
 }
 
@@ -623,41 +665,45 @@ bool minias_symbol_name_intern(MiniAs *as,const char *name,
                                MiniAsSymbolNameId *name_id) {
     size_t slot,scanned;
     if(as==NULL || name==NULL || *name=='\0' || name_id==NULL)return false;
+    if(as->context_indexes==NULL) {
+        minias_set_error(as,"symbol-name-without-context-index");
+        return false;
+    }
     /* A repeated operand must not trigger a table expansion merely because
      * the pool is near its load threshold.  Name lookup has no side effect. */
-    if(as->symbol_name_slot_capacity!=0U) {
-        slot=symbol_name_hash(name)&(as->symbol_name_slot_capacity-1U);
-        for(scanned=0U;scanned<as->symbol_name_slot_capacity;++scanned) {
-            size_t encoded=as->symbol_name_slots[slot];
+    if(as->context_indexes->symbol_name_slot_capacity!=0U) {
+        slot=symbol_name_hash(name)&(as->context_indexes->symbol_name_slot_capacity-1U);
+        for(scanned=0U;scanned<as->context_indexes->symbol_name_slot_capacity;++scanned) {
+            size_t encoded=as->context_indexes->symbol_name_slots[slot];
             if(encoded==0U)break;
             if(strcmp(as->symbol_names[encoded-1U].name,name)==0) {
                 *name_id=encoded-1U;
                 return true;
             }
-            slot=(slot+1U)&(as->symbol_name_slot_capacity-1U);
+            slot=(slot+1U)&(as->context_indexes->symbol_name_slot_capacity-1U);
         }
     }
     if(as->symbol_name_count==SIZE_MAX) {
         minias_set_error(as,"symbol-name-count-overflow");
         return false;
     }
-    if(as->symbol_name_slot_capacity==0U ||
-       as->symbol_name_count+1U>=as->symbol_name_slot_capacity/2U) {
-        size_t next=as->symbol_name_slot_capacity==0U?16U:
-                    as->symbol_name_slot_capacity*2U;
-        if(next<as->symbol_name_slot_capacity ||
+    if(as->context_indexes->symbol_name_slot_capacity==0U ||
+       as->symbol_name_count+1U>=as->context_indexes->symbol_name_slot_capacity/2U) {
+        size_t next=as->context_indexes->symbol_name_slot_capacity==0U?16U:
+                    as->context_indexes->symbol_name_slot_capacity*2U;
+        if(next<as->context_indexes->symbol_name_slot_capacity ||
            !rebuild_symbol_name_index(as,next))return false;
     }
-    slot=symbol_name_hash(name)&(as->symbol_name_slot_capacity-1U);
-    for(scanned=0U;scanned<as->symbol_name_slot_capacity;++scanned) {
-        size_t encoded=as->symbol_name_slots[slot];
+    slot=symbol_name_hash(name)&(as->context_indexes->symbol_name_slot_capacity-1U);
+    for(scanned=0U;scanned<as->context_indexes->symbol_name_slot_capacity;++scanned) {
+        size_t encoded=as->context_indexes->symbol_name_slots[slot];
         if(encoded==0U)break;
-        slot=(slot+1U)&(as->symbol_name_slot_capacity-1U);
+        slot=(slot+1U)&(as->context_indexes->symbol_name_slot_capacity-1U);
     }
-    if(scanned==as->symbol_name_slot_capacity ||
+    if(scanned==as->context_indexes->symbol_name_slot_capacity ||
        as->symbol_name_count==SIZE_MAX ||
        !minias_grow_array((void **)&as->symbol_names,
-                          &as->symbol_name_capacity,
+                          &as->context_indexes->symbol_name_capacity,
                           sizeof(*as->symbol_names),
                           as->symbol_name_count+1U)) {
         minias_set_error(as,"out-of-memory:symbol-name-pool");
@@ -669,7 +715,7 @@ bool minias_symbol_name_intern(MiniAs *as,const char *name,
         return false;
     }
     *name_id=as->symbol_name_count;
-    as->symbol_name_slots[slot]=++as->symbol_name_count;
+    as->context_indexes->symbol_name_slots[slot]=++as->symbol_name_count;
     return true;
 }
 

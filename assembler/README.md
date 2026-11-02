@@ -34,9 +34,11 @@ The C implementation is split by ownership:
 - `source_graph.c`, `source_expansion.c`: source-site identity and GNU source expansion.
 - `assembler.c`: assembly-session lifecycle, Target finalization and output driver.
 - `common_lowering.c`: the sole Common statement/directive lowerer and
-  creation of typed source Fragments.
+  creation of typed source Fragments; its private pass state owns GNU numeric
+  labels, literal pools, section stacks and deferred layout-control flags.
 - `common_context.c`: stable SectionID/SymbolID identities, aliases, names
-  and their indexes; `minias_common_context.h` is the Common-only contract.
+  and their indexes; hash tables and vector capacities are opaque Context
+  state, while semantic Section/Symbol records retain stable shared IDs.
 - `common_emission.c`: fragment-owned Fixup/EncodeResult transaction,
   typed DATA materialization, Section byte commits and final emission;
   `minias_common_emission.h` exposes read-only Fixup/cursor queries and
@@ -44,7 +46,10 @@ The C implementation is split by ownership:
   Emission plus the shared request encoder.
 - `mc_leb.c`: one reusable signed/unsigned LEB byte serializer for source,
   layout and DWARF consumers, independent of Section storage.
-- `mc_layout.c`, `mc_expr.c`: retained layout and expression semantics.
+- `mc_layout.c`: owns canonical Subsections, their parser hash index and
+  persistent Fragment anchor graph; exposes only a const subsection lookup
+  for CFI, and consumes Lowering's parse-complete layout plan snapshot.
+- `mc_expr.c`: retained symbolic expression semantics.
 - `riscv_encode.c`, `aarch64_target.c`, `x86_64_target.c`, `loongarch64_target.c`:
   target-specific instruction parsing, measuring and encoding.
 - `elf_writer.c`: relocatable ELF object construction through `minielf`.
@@ -56,9 +61,11 @@ physical code template.
 The Common domain split changes function ownership and destructor delegation,
 not the SourceGraph replay/Target encode protocol. Emission's Fixup vector,
 fragment transaction, EncodeResult and anchor ordinal now live behind an
-opaque state; `MiniAs` still contains shared mutable Section/Symbol/Fragment
-arrays. Their stricter field-level ownership and a format-neutral ObjectModel
-remain future work. See
+opaque state. Context indexes, Lowering worklists and MCLayout subsection
+storage likewise have their own private lifetime; the shared `MiniAs` carries
+only their opaque handles and the semantically shared Section/Symbol/Fragment
+records. Those remaining entity records need type-aware ownership before a
+format-neutral ObjectModel is introduced. See
 [the P06 owner-split record](docs/common-owner-split-2026-11-02.md).
 
 ## Explicit strict RV64I profile

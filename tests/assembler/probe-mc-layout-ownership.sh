@@ -110,7 +110,10 @@ if 'variable_data_resolved' not in emitter:
     raise SystemExit('not emitting cached typed variable DATA')
 if 'assembler/src/mc_layout.c' not in mk:raise SystemExit('missing MCLayout build')
 if ('unsigned char *branch_membership;' not in layout or
-    'layout_anchor_graph' not in layout or
+    'struct MiniAsLayoutState {' not in layout or
+    'as->layout->anchor_graph' not in layout or
+    'MiniAsLayoutState *layout;' not in internal or
+    'layout_anchor_graph' in internal or
     'forced_long_branch_bitmap' in internal or
     'forced_long_branch_bitmap' in layout):
     raise SystemExit('MCLayout branch membership escaped its private graph')

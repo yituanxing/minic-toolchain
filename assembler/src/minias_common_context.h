@@ -16,6 +16,7 @@ typedef struct MiniAsSectionIdentity {
 /* The Target only sees an opaque object-finalization capability. */
 struct MiniAsPostEmitObjectSink { MiniAs *as; };
 
+bool minias_common_context_init(MiniAs *);
 bool advance_current_location(MiniAs *, uint64_t);
 int minias_find_section_key(const MiniAs *, const MiniAsSectionIdentity *);
 int minias_ensure_section_key(MiniAs *, const MiniAsSectionIdentity *,

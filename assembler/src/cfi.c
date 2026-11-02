@@ -1,4 +1,5 @@
 #include "minias_internal.h"
+#include "minias_common_layout.h"
 
 #include <inttypes.h>
 #include <limits.h>
@@ -97,7 +98,7 @@ done:
 bool minias_anchor_here(MiniAs *as, size_t *index) {
     char name[72];
     MiniAsSymbol *sym;
-    size_t i;
+    const MiniAsSubsection *sub;
     if(!minias_make_private_symbol_name(name,sizeof(name),"cfi",
                                         as->cfi_anchor_counter++))return false;
     sym = minias_get_symbol(as,name,true);
@@ -110,12 +111,12 @@ bool minias_anchor_here(MiniAs *as, size_t *index) {
     sym->subsection = as->current_subsection;
     sym->has_fragment_anchor = true;
     sym->fragment_anchor = as->stmt_count;
-    for (i = 0U; i < as->subsection_count; ++i)
-        if (as->subsections[i].section == as->current_section &&
-            as->subsections[i].number == as->current_subsection) {
-            sym->value = as->subsections[i].size;
-            return true;
-        }
+    sub=minias_layout_find_subsection(as,as->current_section,
+                                      as->current_subsection);
+    if(sub!=NULL) {
+        sym->value=sub->size;
+        return true;
+    }
     minias_set_error(as,"cfi-no-active-subsection");
     return false;
 }

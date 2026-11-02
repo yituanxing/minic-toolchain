@@ -20,6 +20,9 @@ mk=Path('Makefile').read_text()
 internal=(root/'minias_internal.h').read_text()
 private=(root/'minias_common_emission_private.h').read_text()
 contract=(root/'minias_common_emission.h').read_text()
+layout=(root/'mc_layout.c').read_text()
+layout_api=(root/'minias_common_layout.h').read_text()
+cfi=(root/'cfi.c').read_text()
 
 for name in ('common_context.c','common_emission.c','common_lowering.c',
              'mc_leb.c'):
@@ -119,5 +122,66 @@ result=subprocess.run([os.environ.get('CC','cc'),'-std=c11','-fsyntax-only',
 if result.returncode==0 or 'incomplete' not in result.stderr and \
    'undefined' not in result.stderr:
     raise SystemExit('opaque emission field unexpectedly accessible: '+result.stderr)
-print('MINIAS_COMMON_P06_DOMAINS=PASS context=single emission=opaque lowering=single leb=pure fixups=const driver=session')
+
+# Three independent ownership domains: Context keeps hash/capacity plumbing,
+# Lowering keeps GNU source/statement worklists and parse-to-layout flags,
+# MCLayout keeps canonical subsection storage and its anchor graph. Their
+# semantic Section/Symbol/Stmt identities are still shared, deliberately.
+states={
+  'context_indexes':('MiniAsContextIndexState','common_context.c',
+                     ('section_slots','section_slot_capacity',
+                      'symbol_slots','symbol_name_slots','symbol_capacity')),
+  'lowering':('MiniAsLoweringState','common_lowering.c',
+              ('stmt_capacity','pending_local_commons','literals',
+               'section_stack','numeric_label_counts','layout_sensitive')),
+  'layout':('MiniAsLayoutState','mc_layout.c',
+            ('subsections','subsection_count','subsection_slots',
+             'anchor_graph')),
+}
+for field,(kind,owner,privates) in states.items():
+    if f'{kind} *{field};' not in internal or f'struct {kind} {{' in internal:
+        raise SystemExit('Common session exposed private '+kind)
+    source=(root/owner).read_text()
+    if f'struct {kind} {{' not in source:
+        raise SystemExit('missing unique private definition '+kind)
+    for name in privates:
+        if not re.search(r'\b'+name+r'\b',source):
+            raise SystemExit('private state lost member '+name)
+for filename in ('assembler.c','elf_writer.c','cfi.c','mc_expr.c'):
+    source=(root/filename).read_text()
+    if any(f'as->{f}->' in source for f in states):
+        raise SystemExit('private owner dereferenced outside domain: '+filename)
+for old in ('section_slots','symbol_slots','symbol_name_slots',
+            'numeric_label_counts','pending_local_commons','subsections',
+            'subsection_slot_capacity','layout_anchor_graph',
+            'layout_sensitive','has_deferred_data','has_org_constraints'):
+    if re.search(r'\bas->'+old+r'\b','\n'.join(
+            path.read_text() for path in root.glob('*.c'))):
+        raise SystemExit('old root-level mutable state remains: '+old)
+    if re.search(r'\b'+old+r'\s*;',internal):
+        raise SystemExit('old mutable session field remains: '+old)
+for method in ('minias_common_context_init(as)',
+               'minias_common_lowering_init(as)',
+               'minias_layout_init(as)'):
+    if method not in driver or driver.index(method)>driver.index('minias_source_context_create()'):
+        raise SystemExit('owner state not initialized before parsing: '+method)
+for method in ('minias_common_lowering_destroy(as)',
+               'minias_layout_destroy(as)'):
+    if method not in driver:
+        raise SystemExit('driver failed to delegate destruction: '+method)
+if ('minias_common_lowering_layout_plan(as,&plan)' not in layout or
+    'minias_common_lowering_layout_plan(as,&lowering_plan)' not in layout or
+    'minias_common_lowering_layout_plan(' not in lowering or
+    'minias_layout_find_subsection(as,' not in cfi or
+    'const MiniAsSubsection *minias_layout_find_subsection(' not in layout_api):
+    raise SystemExit('cross-domain read interface bypassed')
+for field,(kind,_,_) in states.items():
+    bad=f'#include "minias_internal.h"\nint probe(MiniAs *as) {{ return (int)as->{field}->not_public; }}\n'
+    rejected=subprocess.run([os.environ.get('CC','cc'),'-std=c11',
+       '-fsyntax-only','-x','c','-Iassembler/src','-'],input=bad,
+       text=True,capture_output=True,check=False)
+    if rejected.returncode==0 or 'incomplete' not in rejected.stderr and \
+       'undefined' not in rejected.stderr:
+        raise SystemExit('private '+kind+' unexpectedly accessible')
+print('MINIAS_COMMON_P06_DOMAINS=PASS context=index_private emission=opaque lowering=worklist_private layout=subsection_private leb=pure fixups=const driver=session')
 PY

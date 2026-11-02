@@ -1,4 +1,7 @@
 #include "minias_common_lowering.h"
+#include "minias_common_context.h"
+#include "minias_common_emission.h"
+#include "source_graph_common.h"
 
 #include <ctype.h>
 #include <errno.h>
@@ -11,6 +14,75 @@
  * local numeric symbols, literal-pool fragments and source EOF commit.
  * No duplicate parser or fallback pipeline is introduced by this split. */
 
+struct MiniAsLoweringState {
+    size_t stmt_capacity;
+    MiniAsPendingLocalCommon *pending_local_commons;
+    size_t pending_local_common_count, pending_local_common_capacity;
+    MiniAsLiteral *literals;
+    size_t literal_count, literal_capacity;
+    MiniAsSectionState *section_stack;
+    size_t section_stack_count, section_stack_capacity;
+    size_t *numeric_label_counts;
+    size_t numeric_label_capacity;
+    bool layout_sensitive;
+    bool has_deferred_data;
+    bool has_org_constraints;
+    bool has_cross_subsection_size_end;
+    bool has_mutable_absolute_sets;
+};
+
+bool minias_common_lowering_init(MiniAs *as) {
+    if(as==NULL)return false;
+    if(as->lowering!=NULL) {
+        minias_set_error(as,"lowering-state-already-initialized");
+        return false;
+    }
+    as->lowering=calloc(1U,sizeof(*as->lowering));
+    if(as->lowering==NULL) {
+        minias_set_error(as,"out-of-memory:lowering-state");
+        return false;
+    }
+    return true;
+}
+
+void minias_common_lowering_destroy(MiniAs *as) {
+    size_t i;
+    if(as==NULL)return;
+    for(i=0U;i<as->stmt_count;++i) {
+        MiniAsStmt *stmt=&as->stmts[i];
+        size_t k;
+        free(stmt->op);
+        free(stmt->args);
+        minias_deferred_expr_destroy(stmt->org_expr);
+        free(stmt->static_data);
+        minias_mcdata_destroy(stmt->mcdata);
+        for(k=0U;k<3U;++k)
+            minias_deferred_expr_destroy(stmt->variable_exprs[k]);
+        minias_mcinst_destroy(stmt->mcinst);
+    }
+    free(as->stmts);
+    as->stmts=NULL;
+    as->stmt_count=0U;
+    if(as->lowering==NULL)return;
+    free(as->lowering->pending_local_commons);
+    free(as->lowering->literals);
+    free(as->lowering->section_stack);
+    free(as->lowering->numeric_label_counts);
+    free(as->lowering);
+    as->lowering=NULL;
+}
+
+bool minias_common_lowering_layout_plan(const MiniAs *as,
+                                        MiniAsLoweringLayoutPlan *plan) {
+    const MiniAsLoweringState *state=as!=NULL ? as->lowering : NULL;
+    if(state==NULL || plan==NULL)return false;
+    *plan=(MiniAsLoweringLayoutPlan){
+        state->layout_sensitive,state->has_deferred_data,
+        state->has_org_constraints,state->has_cross_subsection_size_end
+    };
+    return true;
+}
+
 static bool add_stmt(MiniAs *as,
                      MiniAsFragmentKind fragment_kind,
                      const char *op,
@@ -21,7 +93,7 @@ static bool add_stmt(MiniAs *as,
     MiniAsStmt *st;
 
     if (!minias_grow_array((void **)&as->stmts,
-                    &as->stmt_capacity,
+                    &as->lowering->stmt_capacity,
                     sizeof(*as->stmts),
                     as->stmt_count + 1U)) {
         minias_set_error(as, "out-of-memory:stmt");
@@ -634,7 +706,7 @@ static bool parse_size(MiniAs *as, char *args, size_t line) {
         symbol->size_end_subsection=as->current_subsection;
         symbol->size_end_addend=size_addend;
         symbol->size=0U;
-        as->has_cross_subsection_size_end=true;
+        as->lowering->has_cross_subsection_size_end=true;
         return true;
     }
     {
@@ -885,7 +957,7 @@ static bool parse_set(MiniAs *as, char *args, size_t line) {
             alias->subsection=0U;
             alias->value=(uint64_t)value;
             alias->mutable_absolute_set=true;
-            as->has_mutable_absolute_sets=true;
+            as->lowering->has_mutable_absolute_sets=true;
             return true;
         }
     }
@@ -1058,7 +1130,7 @@ static bool handle_org_position(MiniAs *as, const char *args,
         MiniAsStmt *fragment=&as->stmts[as->stmt_count-1U];
         fragment->org_expr=deferred;
         fragment->org_mode=MINIAS_ORG_TYPED_EXPR;
-        as->has_org_constraints=true;
+        as->lowering->has_org_constraints=true;
         return true; /* Zero-size placeholder; MCLayout owns its padding. */
     }
     /* Preserve the GNU expression as a typed position constraint. A source
@@ -1068,14 +1140,14 @@ static bool handle_org_position(MiniAs *as, const char *args,
         MiniAsStmt *fragment = &as->stmts[as->stmt_count - 1U];
         fragment->org_mode = MINIAS_ORG_ABSOLUTE;
         fragment->org_target = desired;
-        as->has_org_constraints = true;
+        as->lowering->has_org_constraints = true;
     } else if (minias_parse_symbol_addend(args, &symbolic) &&
                strcmp(symbolic.name, ".") == 0 &&
                symbolic.addend >= 0) {
         MiniAsStmt *fragment = &as->stmts[as->stmt_count - 1U];
         fragment->org_mode = MINIAS_ORG_DOT_ADDEND;
         fragment->org_target = (uint64_t)symbolic.addend;
-        as->has_org_constraints = true;
+        as->lowering->has_org_constraints = true;
     } else if (minias_parse_symbol_addend(args, &symbolic) &&
                (symbol = minias_get_symbol(as, symbolic.name, false)) != NULL &&
                symbol->defined && symbol->section == MINIAS_SECTION_ABS) {
@@ -1083,7 +1155,7 @@ static bool handle_org_position(MiniAs *as, const char *args,
         MiniAsStmt *fragment = &as->stmts[as->stmt_count - 1U];
         fragment->org_mode = MINIAS_ORG_ABSOLUTE;
         fragment->org_target = desired;
-        as->has_org_constraints = true;
+        as->lowering->has_org_constraints = true;
     } else if (symbol != NULL && symbol->defined &&
                symbol->has_fragment_anchor &&
                symbol->section == as->current_section &&
@@ -1095,7 +1167,7 @@ static bool handle_org_position(MiniAs *as, const char *args,
         fragment->org_mode = MINIAS_ORG_SYMBOL_ADDEND;
         fragment->org_symbol_index = (size_t)(symbol - as->symbols);
         fragment->org_addend = symbolic.addend;
-        as->has_org_constraints = true;
+        as->lowering->has_org_constraints = true;
     } else {
         /* Retain the complete GNU expression as stable SymbolID operations.
          * Its dot and symbol values are evaluated only from MCLayout, not
@@ -1104,7 +1176,7 @@ static bool handle_org_position(MiniAs *as, const char *args,
         fragment->org_expr=minias_compile_deferred_expr(as,args);
         if(fragment->org_expr==NULL)return false;
         fragment->org_mode=MINIAS_ORG_TYPED_EXPR;
-        as->has_org_constraints=true;
+        as->lowering->has_org_constraints=true;
     }
     return advance_current_location(as, pad);
 }
@@ -1154,8 +1226,8 @@ bool minias_queue_literal(MiniAs *as,const MiniAsSymbolExpr *expression,
         minias_set_error(as,"unsupported-target-literal-pool");return false;
     }
     if(!minias_bind_symbol_ref(as,expression,&bound))return false;
-    for(i=0U;i<as->literal_count;++i) {
-        entry=&as->literals[i];
+    for(i=0U;i<as->lowering->literal_count;++i) {
+        entry=&as->lowering->literals[i];
         if(!entry->emitted && entry->section==as->current_section &&
            entry->subsection==as->current_subsection &&
            entry->width==width &&
@@ -1168,21 +1240,21 @@ bool minias_queue_literal(MiniAs *as,const MiniAsSymbolExpr *expression,
             pool_label->addend=0;return true;
         }
     }
-    if(as->literal_count==SIZE_MAX ||
-       !minias_grow_array((void **)&as->literals,&as->literal_capacity,
-                   sizeof(*as->literals),as->literal_count+1U)) {
+    if(as->lowering->literal_count==SIZE_MAX ||
+       !minias_grow_array((void **)&as->lowering->literals,&as->lowering->literal_capacity,
+                   sizeof(*as->lowering->literals),as->lowering->literal_count+1U)) {
         minias_set_error(as,"out-of-memory:literal-pool");return false;
     }
-    entry=&as->literals[as->literal_count];
+    entry=&as->lowering->literals[as->lowering->literal_count];
     memset(entry,0,sizeof(*entry));
     entry->section=as->current_section;
     entry->subsection=as->current_subsection;
     entry->width=width;entry->expression=bound;
     if(!minias_make_private_symbol_name(entry->label,sizeof(entry->label),
-                                        "literal",as->literal_count)) {
+                                        "literal",as->lowering->literal_count)) {
         minias_set_error(as,"literal-label-overflow");return false;
     }
-    ++as->literal_count;
+    ++as->lowering->literal_count;
     written=snprintf(pool_label->name,sizeof(pool_label->name),
                      "%s",entry->label);
     if(written<0 || (size_t)written>=sizeof(pool_label->name))return false;
@@ -1605,7 +1677,7 @@ static bool add_data_stmt(MiniAs *as, const char *op, char *args, size_t line) {
      * those parsed constants in the retained DATA statement string.
      * Leave all relocatable/forward references intact for layout/fixups.
      */
-    if(width && as->has_mutable_absolute_sets && count) {
+    if(width && as->lowering->has_mutable_absolute_sets && count) {
         size_t original_len=strlen(args),capacity;
         char *walk,*out;
         bool changed=false;
@@ -1679,7 +1751,7 @@ static bool add_data_stmt(MiniAs *as, const char *op, char *args, size_t line) {
         free(copy);copy=NULL;
         if(!changed){free(snapshot);snapshot=NULL;}
     }
-    if(!snapshot && as->has_mutable_absolute_sets &&
+    if(!snapshot && as->lowering->has_mutable_absolute_sets &&
        (fragment_kind==MINIAS_FRAGMENT_FILL ||
         fragment_kind==MINIAS_FRAGMENT_SPACE ||
         (fragment_kind==MINIAS_FRAGMENT_BYTES && delayed)) &&
@@ -1760,7 +1832,7 @@ static bool add_data_stmt(MiniAs *as, const char *op, char *args, size_t line) {
     }
     if(delayed) {
         as->stmts[as->stmt_count-1U].deferred_data_size=true;
-        as->has_deferred_data=true;
+        as->lowering->has_deferred_data=true;
         /* A deferred size is a persistent Fragment property. It need not
          * trigger a second source parse: the shared layout solver can
          * recompute it after branch growth using final symbol anchors.
@@ -1795,23 +1867,23 @@ static bool parse_numeric_label_id(const char *text, size_t *id) {
 }
 
 static bool ensure_numeric_label_slot(MiniAs *as, size_t id) {
-    if (id < as->numeric_label_capacity) {
+    if (id < as->lowering->numeric_label_capacity) {
         return true;
     }
-    if (id >= SIZE_MAX/sizeof(*as->numeric_label_counts)) {
+    if (id >= SIZE_MAX/sizeof(*as->lowering->numeric_label_counts)) {
         minias_set_error(as, "numeric-label-too-large:%zu", id);
         return false;
     }
-    size_t old_capacity=as->numeric_label_capacity;
-    if (!minias_grow_array((void **)&as->numeric_label_counts,
-                          &as->numeric_label_capacity,
-                          sizeof(*as->numeric_label_counts),id+1U)) {
+    size_t old_capacity=as->lowering->numeric_label_capacity;
+    if (!minias_grow_array((void **)&as->lowering->numeric_label_counts,
+                          &as->lowering->numeric_label_capacity,
+                          sizeof(*as->lowering->numeric_label_counts),id+1U)) {
         minias_set_error(as, "out-of-memory:numeric-labels");
         return false;
     }
-    memset(as->numeric_label_counts + old_capacity, 0,
-           (as->numeric_label_capacity - old_capacity) *
-           sizeof(*as->numeric_label_counts));
+    memset(as->lowering->numeric_label_counts + old_capacity, 0,
+           (as->lowering->numeric_label_capacity - old_capacity) *
+           sizeof(*as->lowering->numeric_label_counts));
     return true;
 }
 
@@ -1904,7 +1976,7 @@ bool minias_numeric_refs_rewrite(MiniAs *as,
                     return false;
                 }
                 if (*p == 'b') {
-                    if (as->numeric_label_counts[label_id] == 0U) {
+                    if (as->lowering->numeric_label_counts[label_id] == 0U) {
                         minias_set_error(as,
                                          "undefined-numeric-label:%zub:line=%zu",
                                          label_id,
@@ -1912,9 +1984,9 @@ bool minias_numeric_refs_rewrite(MiniAs *as,
                         free(buffer);
                         return false;
                     }
-                    generation = as->numeric_label_counts[label_id];
+                    generation = as->lowering->numeric_label_counts[label_id];
                 } else {
-                    generation = as->numeric_label_counts[label_id] + 1U;
+                    generation = as->lowering->numeric_label_counts[label_id] + 1U;
                 }
                 {
                     char kind[40];
@@ -1960,18 +2032,18 @@ oom:
 }
 
 static bool push_section(MiniAs *as, char *args, size_t line) {
-    if (!minias_grow_array((void **)&as->section_stack,
-                    &as->section_stack_capacity,
-                    sizeof(*as->section_stack),
-                    as->section_stack_count + 1U)) {
+    if (!minias_grow_array((void **)&as->lowering->section_stack,
+                    &as->lowering->section_stack_capacity,
+                    sizeof(*as->lowering->section_stack),
+                    as->lowering->section_stack_count + 1U)) {
         minias_set_error(as, "out-of-memory:section-stack");
         return false;
     }
-    as->section_stack[as->section_stack_count].section = as->current_section;
-    as->section_stack[as->section_stack_count].subsection = as->current_subsection;
-    ++as->section_stack_count;
+    as->lowering->section_stack[as->lowering->section_stack_count].section = as->current_section;
+    as->lowering->section_stack[as->lowering->section_stack_count].subsection = as->current_subsection;
+    ++as->lowering->section_stack_count;
     if (!parse_section_directive(as, args, line)) {
-        --as->section_stack_count;
+        --as->lowering->section_stack_count;
         return false;
     }
     return true;
@@ -1980,13 +2052,13 @@ static bool push_section(MiniAs *as, char *args, size_t line) {
 static bool pop_section(MiniAs *as, size_t line) {
     int old_current;
 
-    if (as->section_stack_count == 0U) {
+    if (as->lowering->section_stack_count == 0U) {
         minias_set_error(as, "bad-directive:.popsection:line=%zu", line);
         return false;
     }
     {
         uint32_t old_subsection = as->current_subsection;
-        MiniAsSectionState restored = as->section_stack[--as->section_stack_count];
+        MiniAsSectionState restored = as->lowering->section_stack[--as->lowering->section_stack_count];
 
         old_current = as->current_section;
         as->current_section = restored.section;
@@ -2014,7 +2086,7 @@ static bool define_label(MiniAs *as, char *label, size_t line) {
         if (!ensure_numeric_label_slot(as, numeric_id)) {
             return false;
         }
-        generation = ++as->numeric_label_counts[numeric_id];
+        generation = ++as->lowering->numeric_label_counts[numeric_id];
         {
             char kind[40];
             written=snprintf(kind,sizeof(kind),"num_%zu",numeric_id);
@@ -2063,8 +2135,8 @@ static bool flush_literal_pools(MiniAs *as,size_t line,bool all) {
      * owned ALIGN fragment, symbol anchor, and typed DATA fragment below;
      * no synthetic .balign/.long/.quad source text is reparsed. */
     for(width=4U;width<=8U;width*=2U) {
-      for(i=0U;i<as->literal_count;++i) {
-        MiniAsLiteral *entry=&as->literals[i];
+      for(i=0U;i<as->lowering->literal_count;++i) {
+        MiniAsLiteral *entry=&as->lowering->literals[i];
         MiniAsStmt *fragment;
         MiniAsMCData *data;
         MiniAsSymbol *target;
@@ -2194,14 +2266,14 @@ static bool parse_comm(MiniAs *as, const char *args, size_t line) {
         bss=minias_ensure_section(as,".bss",MINIAS_SHT_NOBITS,
                                   MINIAS_SHF_ALLOC|MINIAS_SHF_WRITE,1U);
         if(bss<0){free(copy);return false;}
-        if(!minias_grow_array((void **)&as->pending_local_commons,
-                &as->pending_local_common_capacity,
-                sizeof(*as->pending_local_commons),
-                as->pending_local_common_count+1U)) {
+        if(!minias_grow_array((void **)&as->lowering->pending_local_commons,
+                &as->lowering->pending_local_common_capacity,
+                sizeof(*as->lowering->pending_local_commons),
+                as->lowering->pending_local_common_count+1U)) {
             minias_set_error(as,"out-of-memory:pending-local-common");
             free(copy);return false;
         }
-        pending=&as->pending_local_commons[as->pending_local_common_count++];
+        pending=&as->lowering->pending_local_commons[as->lowering->pending_local_common_count++];
         pending->symbol_index=(size_t)(symbol-as->symbols);
         pending->size=(uint64_t)size;
         pending->alignment=alignment;
@@ -2245,7 +2317,7 @@ static bool flush_pending_local_commons(MiniAs *as) {
     bool ok=true;
     size_t i;
     int bss;
-    if(as->pending_local_common_count==0U)return true;
+    if(as->lowering->pending_local_common_count==0U)return true;
     bss=minias_find_section(as,".bss");
     if(bss<0) {
         minias_set_error(as,"pending-local-common-missing-bss");
@@ -2254,8 +2326,8 @@ static bool flush_pending_local_commons(MiniAs *as) {
     as->current_section=bss;
     as->current_subsection=0U;
     if(minias_ensure_subsection(as,bss,0U)==NULL)ok=false;
-    for(i=0U;ok && i<as->pending_local_common_count;++i) {
-        const MiniAsPendingLocalCommon *pending=&as->pending_local_commons[i];
+    for(i=0U;ok && i<as->lowering->pending_local_common_count;++i) {
+        const MiniAsPendingLocalCommon *pending=&as->lowering->pending_local_commons[i];
         MiniAsSymbol *symbol;
         uint64_t here;
         char align_buf[32],size_buf[32];
@@ -2511,7 +2583,7 @@ static bool lower_source_statement(MiniAs *as, char *text, size_t line) {
         set_args[name_len]=',';
         memcpy(set_args+name_len+1U,rhs,rhs_len+1U);
         if (!is_persistent_symbol_assignment(rhs))
-            as->layout_sensitive=true;
+            as->lowering->layout_sensitive=true;
         ok=parse_set(as,set_args,line);
         free(set_args);
         return ok;
@@ -2527,7 +2599,7 @@ static bool lower_source_statement(MiniAs *as, char *text, size_t line) {
         const char *comma = strchr(args, ',');
         if (comma == NULL ||
             !is_persistent_symbol_assignment(comma + 1U))
-            as->layout_sensitive = true;
+            as->lowering->layout_sensitive = true;
     }
     /* Space/skip/zero depend on Fragment layout, not parser control flow:
      * the shared MCLayout fixed point resolves dot and forward symbols.
@@ -2535,7 +2607,7 @@ static bool lower_source_statement(MiniAs *as, char *text, size_t line) {
     if ((strcmp(op, ".align") == 0 || strcmp(op, ".balign") == 0 ||
          strcmp(op, ".p2align") == 0) &&
         strchr(args, '.') != NULL) {
-        as->layout_sensitive = true;
+        as->lowering->layout_sensitive = true;
     }
     /* Target syntax can be a dotted directive (`.option`) or a bare
      * identifier followed by a target directive (`alias .req x0`). Common
@@ -2661,7 +2733,7 @@ static bool lower_source_statement(MiniAs *as, char *text, size_t line) {
                                  op,line);
                 return false;
             }
-            as->layout_sensitive=true;
+            as->lowering->layout_sensitive=true;
             return flush_literal_pools(as,line,false);
         }
         if (strcmp(op, ".previous") == 0) {
@@ -2835,7 +2907,7 @@ bool minias_common_parse_source_graph(MiniAs *as,
     if(!minias_source_context_process_graph(as,graph,&statements))
         return false;
     if(minias_source_context_layout_sensitive(as->source))
-        as->layout_sensitive=true;
+        as->lowering->layout_sensitive=true;
     if(as->cfi_active) {
         minias_set_error(as,"unterminated-directive:.cfi_startproc");
         return false;

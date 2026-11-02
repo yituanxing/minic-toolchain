@@ -7,6 +7,9 @@
 /* Common-only mutable Section/Symbol/Fragment state and ownership APIs. */
 /* The SourceGraph/MCLayout replay worklist is declared in its own contract. */
 typedef struct MiniAsEmissionState MiniAsEmissionState;
+typedef struct MiniAsContextIndexState MiniAsContextIndexState;
+typedef struct MiniAsLoweringState MiniAsLoweringState;
+typedef struct MiniAsLayoutState MiniAsLayoutState;
 
 /* Common deferred DWARF .debug_frame CFI fragments. Target psABI owns register
  * identities and alignment; Common owns symbolic anchors and serialization. */
@@ -65,53 +68,25 @@ typedef struct MiniAs {
     const struct MiniAsTargetOps *target;
     MiniAsSection *sections;
     size_t section_count;
-    size_t section_capacity;
-    /* Full SectionKey (name, COMDAT signature, LINK_ORDER anchor). */
-    size_t *section_slots;
-    size_t section_slot_capacity;
     MiniAsSymbol *symbols;
     size_t symbol_count;
-    size_t symbol_capacity;
-    size_t *symbol_slots;
-    size_t symbol_slot_capacity;
     MiniAsInternedSymbolName *symbol_names;
     size_t symbol_name_count;
-    size_t symbol_name_capacity;
-    size_t *symbol_name_slots;
-    size_t symbol_name_slot_capacity;
+    /* SectionKey, SymbolID and interned-name indexes are Context-owned. */
+    MiniAsContextIndexState *context_indexes;
     MiniAsStmt *stmts;
     size_t stmt_count;
-    size_t stmt_capacity;
-    MiniAsPendingLocalCommon *pending_local_commons;
-    size_t pending_local_common_count;
-    size_t pending_local_common_capacity;
+    /* GNU parser worklists and statement allocation belong to Lowering. */
+    MiniAsLoweringState *lowering;
     /* Opaque output transaction: Fixups and the active source Fragment are
      * writable only by Emission / its typed request-staging helper. */
     MiniAsEmissionState *emission;
-    MiniAsLiteral *literals;
-    size_t literal_count;
-    size_t literal_capacity;
-    MiniAsSubsection *subsections;
-    size_t subsection_count;
-    size_t subsection_capacity;
-    /* Parser subsection (SectionID, number) -> slot index. Rebuilt when
-     * canonical layout sorts the owned subsection array. */
-    size_t *subsection_slots;
-    size_t subsection_slot_capacity;
-    MiniAsSectionState *section_stack;
-    size_t section_stack_count;
-    size_t section_stack_capacity;
+    /* Subsection identity/index and retained relayout graph are MCLayout. */
+    MiniAsLayoutState *layout;
     size_t expr_anchor_counter;
-    size_t *numeric_label_counts;
-    size_t numeric_label_capacity;
     /* SourceContext is opaque to the Target/ELF layers, which cannot mutate
      * its macro, conditional or SourceGraph implementation details. */
     MiniAsSourceContext *source;
-    bool layout_sensitive; /* position-dependent parser-control fallback */
-    bool has_deferred_data; /* forward-symbol data-size fragments */
-    bool has_org_constraints; /* typed position-dependent .org fragments */
-    bool has_cross_subsection_size_end; /* retained .size cross-subsection span */
-    bool has_mutable_absolute_sets; /* snapshot mutable .set in data */
     /* Opaque per-assembly backend parser state, owned and freed by Target. */
     void *target_state;
     bool cfi_active;
@@ -146,9 +121,6 @@ typedef struct MiniAs {
     /* Only the Target object-finalization callback may request late
      * section alignment changes. Common retains the actual Section owner. */
     bool finalizing_target_output;
-    /* Opaque MCLayout-owned cache for stable symbol anchors and current-pass
-     * branch membership. Cross-replay identities live in SourceGraph. */
-    void *layout_anchor_graph;
     int current_section;
     uint32_t current_subsection;
     int previous_section;
@@ -218,7 +190,6 @@ bool minias_grow_array(void **, size_t *, size_t, size_t);
 MiniAsSubsection *minias_ensure_subsection(MiniAs *, int, uint32_t);
 bool minias_finalize_subsection_layout(MiniAs *);
 bool minias_refresh_symbol_aliases(MiniAs *);
-void minias_layout_destroy(MiniAs *);
 bool minias_solve_fragment_layout(MiniAs *, MiniAsFragmentGrowthSet *,
                                   bool *, FILE *);
 bool minias_validate_fragment_semantics(MiniAs *);
