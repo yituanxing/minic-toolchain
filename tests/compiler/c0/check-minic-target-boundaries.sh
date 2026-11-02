@@ -1107,6 +1107,35 @@ has src/target/loongarch64/fp_emit.c 'minic_multi_direct_floating_shape('
 lacks src/target/riscv32/rv32_fp_emit.c 'rv32_resolved_'
 lacks src/target/riscv64/fp_emit.c 'minic_riscv64_emit_integer_conversion_for_program('
 
+# Every machine CALL/INDIRECT_CALL/PARAMETER/return consumer reads the
+# sealed ABI value shape. Old C descriptors may remain in the Core IR for
+# source-level LoongArch builtin signature validation, never ABI selection.
+has src/target/common/core_abi_value_shape.h 'minic_core_abi_value_shape('
+for source in src/target/aarch64/call_emit.c \
+              src/target/loongarch64/call_emit.c \
+              src/target/x86_64/machine_call.c \
+              src/target/riscv32/rv32_call.c \
+              src/target/riscv64/call_emit.c; do
+  has "$source" 'core_abi_value_shape.h'
+  lacks "$source" 'minic_type_is_'
+  lacks "$source" 'minic_data_layout_type('
+done
+for source in src/target/aarch64/call_emit.c \
+              src/target/x86_64/machine_call.c \
+              src/target/riscv32/rv32_call.c \
+              src/target/riscv64/call_emit.c; do
+  lacks "$source" 'ins->type'
+  lacks "$source" 'instruction->type'
+done
+has src/target/loongarch64/call_emit.c 'minic_target_info_machine_builtin_signature('
+has src/target/loongarch64/call_emit.c 'minic_type_equal(ins->type, result_type)'
+lacks src/target/riscv32/rv32_call.c 'rv32_resolved_'
+lacks src/target/riscv64/call_emit.c 'minic_riscv64_emit_integer_conversion_for_program('
+
+if [[ -n "${MINIC_BASELINE_CC:-}" ]]; then
+  bash tests/compiler/c0/probe-five-backend-core-abi-call-diff.sh
+fi
+
 cc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror \
   -ffunction-sections -fdata-sections -Wl,--gc-sections \
   -Iinclude -Isrc tests/compiler/c0/probe-program-emit-transaction.c \

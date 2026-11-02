@@ -1,5 +1,6 @@
 #include "target/riscv32/rv32_internal.h"
 #include "target/riscv/record_copy_bytes.h"
+#include "target/common/core_abi_value_shape.h"
 
 /* Load one little-endian ILP32 record word without reading past the
  * actual object extent. Each record Core argument is already a separate
@@ -176,12 +177,11 @@ bool rv32_emit_call(FILE *out, const MinicCoreFunction *f,
         return true;
     }
     if (ins->result == MINIC_CORE_VALUE_INVALID) return true;
-    if (!rv32_resolved_scalar_storage_words(f, ins->type,
-                                             ins->core_type_id, &words)) return false;
+    if (!rv32_core_scalar_storage_words(f, ins->core_type_id, &words))
+        return false;
     if (words == 2U)
         return rv32_pair_slot(out, fr, ins->result, "a0", "a1", false);
-    return rv32_resolved_canon(out, f, ins->type,
-                               ins->core_type_id, "a0") &&
+    return rv32_core_canon(out, f, ins->core_type_id, "a0") &&
            rv32_slot(out, fr, ins->result, "a0", false);
 }
 
@@ -203,15 +203,13 @@ bool rv32_emit_parameter_object(FILE *out, const MinicCoreFunction *f,
     if (idx >= fr->abi.parameter_count ||
         object_id >= fr->object_count || idx >= f->parameter_count)
         return false;
-    if (f->type_context != NULL) {
-        const MinicCoreType *record = minic_core_type_get(f->type_context,
-            minic_core_type_unqualified(f->type_context,
-                f->core_parameter_type_ids != NULL
-                    ? f->core_parameter_type_ids[idx]
-                    : MINIC_CORE_TYPE_INVALID));
-        if (record == NULL || record->kind != MINIC_CORE_TYPE_RECORD)
-            return false;
-    } else if (!minic_type_is_record(f->parameter_types[idx])) {
+    if (f->core_parameter_type_ids == NULL ||
+        !minic_core_abi_kind(f, f->core_parameter_type_ids[idx],
+                             MINIC_CORE_TYPE_RECORD) ||
+        minic_core_type_unqualified(f->type_context,
+            f->core_parameter_type_ids[idx]) !=
+        minic_core_type_unqualified(f->type_context,
+            f->objects[object_id].core_type_id)) {
         return false;
     }
     entry = &fr->abi.parameters[idx];
@@ -331,7 +329,6 @@ bool rv32_emit_parameter(FILE *out, const MinicCoreFunction *f,
     if (entry->words == 2U)
         return rv32_pair_slot(out, fr, ins->result,
                               reg[0], reg[1], false);
-    return rv32_resolved_canon(out, f, ins->type,
-                               ins->core_type_id, reg[0]) &&
+    return rv32_core_canon(out, f, ins->core_type_id, reg[0]) &&
            rv32_slot(out, fr, ins->result, reg[0], false);
 }

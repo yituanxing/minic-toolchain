@@ -626,3 +626,58 @@ Release `-Werror`、`make check-fast`、目标边界测试分别独立
 内存与 call 族、RV64 `runtime_libcall` 的旧整数 liveness fallback
 仍需按各自完整族消除，禁止通过本次 FP 收口把其它模块冒充
 成已纯 Core。
+
+## IR-P5：五目标 CALL/参数/返回值 ABI 标量形状与聚合分类收口
+
+起点：`eeb4839`（IR-P4）。这次以**双向调用边界**而非 RV64
+单架构为单位：`CALL`、`INDIRECT_CALL` 的参数与结果、
+`PARAMETER`/`PARAMETER_OBJECT` 的接收都要保持唯一的 Core 类型解释。
+先核对五个 target 已存在的 ABI plan：每个目标均已独立完成
+GP/FP/stack 分配，Common **不能**复制或覆盖 psABI 寄存器算法。
+真正的未收口对象是发射器内的 Core-first/C-fallback 适配层。
+
+1. 新建 `target/common/core_abi_value_shape.h`，把 void、完整 Record、
+   ILP32/LP64 pointer、bool/整数宽度和符号、i128、binary32/64、
+   extended 的已封存 Core layout 校验为共同值形状。`_Bool`
+   Core `bit_width=8`、ABI canonicalization 可以是 1-bit，这是两层
+   不同语义；拒绝错误 size/bit-width、非完整 Record 与空上下文。
+2. AArch64 的 `MinicA64ScalarShape` 成为 shared Core shape 的
+   AAPCS64 机器投影，删除其 Source `MinicType` 分支；四个 Record
+   包装也全部只消费 Core 聚合分类。sret `x8`、HFA、`x0/x1`、
+   weak GOT 的机器差异未动。
+3. LoongArch64 的 wide/FP/integer/pointer/Record 分类剔除 Source
+   fallback，参数和返回值的整数宽度只读取 Core；八个 GAR/FAR、
+   hidden `$a0`、stack vararg slot 与指令选取继续保留原样。
+   **例外是必要的 Source/Target 合约：** LoongArch machine builtin
+   按 TargetInfo 返回的 `MinicType` 签名检查 C 参数、返回类型，
+   并核立即数约束，这不是可退休的 ABI 布局回退。
+4. x86-64 的 SysV/MS x64 Call Plan、x87 helper 和间接调用沿用
+   既有物理 ABI；机器边界去掉 C 类型比对、DataLayout sret 回退、
+   aggregate result 回退，调试输出的类型标记也改读 Core。
+   x87 80-bit/TFmode helper 替代、调用前堆栈空间与无 SSE 策略不动。
+5. RV32 的参数/结果 `rv32_resolved_*` 转为 `rv32_core_*`；
+   记录参数采用 Core Record 判定和实体身份核验。RV64 的进入参数
+   浮点/宽标量、整数结果 canonicalization 与 Record 入参移除
+   C fallback，并复用公共形状；LP64/LP64D、软硬浮点配置和
+   `a0/a1` 双字传送仍由 RV64 plan/机器控制。
+
+**证据：** `probe-core-call-coretypes.c` 添加 bool ABI、i128、
+ILP32 pointer、错误整数宽度/FP layout、完整/未完整 Record、
+缺上下文的独立负例，原有 poisoned C/Direct/Indirect/名义 Record
+身份测试保持；边界静态检查锁住五个机器模块不再使用
+`minic_type_is_*`/DataLayout，LoongArch builtin Source 签名作为
+有名字的特例。新增可选 baseline 差分脚本，以一次 GNU `-E -P`
+的 `.i` 同时输入新旧编译器：**24 份 × 五目标共 120 组，98 组
+`.s` 逐字节相同、22 组两边均拒编、0 差异**；双方拒绝不算通过
+运行。`make -j8 check-fast`、`check-minic-target-boundaries.sh`、
+Debug 与全新 Release `-Werror` 构建均 PASS。`src/` 生产代码
+**+342/−453，净 −111 行**，新增一个 91 行公共 header；
+`tests/` **+177/−1**，含可重跑的 24×5 差分脚本。
+当前环境缺部分 GNU 交叉汇编器、链接器和 QEMU；`.s` 等价
+不等于五 ISA 真实 ELF/runtime 验收。
+
+**下一批要连读而非局部补洞：** RV32 非 call 的 memory/integer/
+wide emit 仍借 `rv32_resolved_*`，RV64 `runtime_libcall` 和
+其余可执行核心机器类仍有 C descriptor 查询。应按整类值消费
+路径收口并在五目标上横向比对；既有 Linux runtime/ABI Bug
+暂时留在独立 MC 跟踪中，勿混入 Core 边界重构。

@@ -4,6 +4,7 @@
 #include "target/riscv64/frame_access.h"
 #include "target/riscv64/frame_requirements.h"
 #include "target/riscv64/codegen_internal.h"
+#include "target/common/core_abi_value_shape.h"
 #include "target/riscv64/legalize.h"
 #include <stdint.h>
 #include <stdio.h>
@@ -17,23 +18,19 @@ static const MinicCoreType *rv64_call_core_base(
 
 static bool rv64_call_core_wide_scalar(
     const MinicCoreFunction *function, MinicCoreTypeId id) {
-    const MinicCoreType *type = rv64_call_core_base(function, id);
-    return type != NULL &&
-        ((type->kind == MINIC_CORE_TYPE_INTEGER &&
-          type->value.integer.bit_width == 128U) ||
-         (type->kind == MINIC_CORE_TYPE_FLOAT &&
-          type->value.floating.format == MINIC_CORE_FLOAT_EXTENDED));
+    return minic_core_abi_wide_scalar(function, id);
 }
 
 static bool rv64_call_core_fp_scalar(
     const MinicCoreFunction *function, MinicCoreTypeId id,
     bool *is_double) {
-    const MinicCoreType *type = rv64_call_core_base(function, id);
-    if (type == NULL || type->kind != MINIC_CORE_TYPE_FLOAT ||
-        (type->value.floating.format != MINIC_CORE_FLOAT_BINARY32 &&
-         type->value.floating.format != MINIC_CORE_FLOAT_BINARY64)) return false;
+    MinicCoreAbiValueShape value;
+    if (!minic_core_abi_value_shape(function, id, &value) ||
+        value.kind != MINIC_CORE_TYPE_FLOAT ||
+        (value.float_format != MINIC_CORE_FLOAT_BINARY32 &&
+         value.float_format != MINIC_CORE_FLOAT_BINARY64)) return false;
     if (is_double != NULL)
-        *is_double = type->value.floating.format == MINIC_CORE_FLOAT_BINARY64;
+        *is_double = value.float_format == MINIC_CORE_FLOAT_BINARY64;
     return true;
 }
 
@@ -89,34 +86,26 @@ bool minic_riscv64_emit_incoming_parameter(FILE *file,
                            const MinicCoreInstruction *instruction) {
     size_t parameter_index;
     bool is_fp, is_double, is_wide;
-    const MinicCoreType *core = NULL;
+    MinicCoreAbiValueShape core;
 
+    if (file == NULL || function == NULL || frame == NULL ||
+        instruction == NULL || function->type_context == NULL ||
+        !minic_core_abi_value_shape(function, instruction->core_type_id, &core))
+        return false;
     parameter_index = instruction->value.parameter_index;
     if (parameter_index >= function->parameter_count) {
         return false;
     }
-    if (function->type_context != NULL) {
-        core = rv64_call_core_base(function, instruction->core_type_id);
-        if (core == NULL || function->core_parameter_type_ids == NULL ||
-            minic_core_type_unqualified(function->type_context,
-                function->core_parameter_type_ids[parameter_index]) !=
-            minic_core_type_unqualified(function->type_context,
-                instruction->core_type_id)) return false;
-    }
-    is_fp = core != NULL
-        ? core->kind == MINIC_CORE_TYPE_FLOAT &&
-          (core->value.floating.format == MINIC_CORE_FLOAT_BINARY32 ||
-           core->value.floating.format == MINIC_CORE_FLOAT_BINARY64)
-        : minic_type_is_float(instruction->type) ||
-          minic_type_is_double(instruction->type);
-    is_double = core != NULL
-        ? core->kind == MINIC_CORE_TYPE_FLOAT &&
-          core->value.floating.format == MINIC_CORE_FLOAT_BINARY64
-        : minic_type_is_double(instruction->type);
-    is_wide = core != NULL
-        ? rv64_call_core_wide_scalar(function, instruction->core_type_id)
-        : minic_type_is_long_double(instruction->type) ||
-          minic_type_is_int128_integer(instruction->type);
+    if (function->core_parameter_type_ids == NULL ||
+        minic_core_type_unqualified(function->type_context,
+            function->core_parameter_type_ids[parameter_index]) !=
+        minic_core_type_unqualified(function->type_context,
+            instruction->core_type_id)) return false;
+    is_fp = core.kind == MINIC_CORE_TYPE_FLOAT &&
+            (core.float_format == MINIC_CORE_FLOAT_BINARY32 ||
+             core.float_format == MINIC_CORE_FLOAT_BINARY64);
+    is_double = is_fp && core.float_format == MINIC_CORE_FLOAT_BINARY64;
+    is_wide = rv64_call_core_wide_scalar(function, instruction->core_type_id);
     if (program != NULL) {
         MinicRiscv64AbiArgumentLocation location;
 
@@ -213,14 +202,10 @@ bool minic_riscv64_emit_incoming_parameter(FILE *file,
             return false;
         }
     }
-    if (core != NULL) {
-        if (core->kind == MINIC_CORE_TYPE_INTEGER &&
-            !minic_riscv64_emit_core_integer_conversion(
-                file, function->type_context, instruction->core_type_id, "t0"))
-            return false;
-    } else if (minic_type_is_integer(instruction->type) &&
-               !minic_riscv64_emit_integer_conversion_for_program(
-                   file, program, instruction->type, "t0")) return false;
+    if (core.kind == MINIC_CORE_TYPE_INTEGER &&
+        !minic_riscv64_emit_core_integer_conversion(
+            file, function->type_context, instruction->core_type_id, "t0"))
+        return false;
     return minic_riscv64_frame_store_value(file, frame, instruction->result, "t0");
 }
 
@@ -246,23 +231,18 @@ bool minic_riscv64_emit_incoming_parameter_object(FILE *file,
         !minic_riscv64_core_frame_object_offset(program, function, frame, object_id, &object_offset)) {
         return false;
     }
-    if (function->type_context != NULL) {
-        if (function->core_parameter_type_ids == NULL ||
-            minic_core_type_unqualified(function->type_context,
-                function->objects[object_id].core_type_id) !=
-            minic_core_type_unqualified(function->type_context,
-                function->core_parameter_type_ids[
-                    instruction->value.parameter_object.parameter_index]))
-            return false;
-    } else {
-        MinicType object_value_type;
-        if (!minic_type_unqualified(function->objects[object_id].type,
-                                   &object_value_type) ||
-            !minic_type_equal(object_value_type,
-                function->parameter_types[
-                    instruction->value.parameter_object.parameter_index]))
-            return false;
-    }
+    if (function->type_context == NULL ||
+        function->core_parameter_type_ids == NULL ||
+        !minic_core_abi_kind(function,
+            function->core_parameter_type_ids[
+                instruction->value.parameter_object.parameter_index],
+            MINIC_CORE_TYPE_RECORD) ||
+        minic_core_type_unqualified(function->type_context,
+            function->objects[object_id].core_type_id) !=
+        minic_core_type_unqualified(function->type_context,
+            function->core_parameter_type_ids[
+                instruction->value.parameter_object.parameter_index]))
+        return false;
     if (location.value.kind == MINIC_RISCV64_ABI_VALUE_IGNORE) {
         return location.value.slot_count == 0U && location.integer_register_count == 0U &&
                location.stack_slot_count == 0U;

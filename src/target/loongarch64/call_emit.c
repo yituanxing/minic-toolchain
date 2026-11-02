@@ -5,6 +5,7 @@
 #include "target/common/direct_call_plan.h"
 #include "target/common/lp64_scalar.h"
 #include "target/common/lp64_aggregate.h"
+#include "target/common/core_abi_value_shape.h"
 #include "target/loongarch64/frame_emit.h"
 #include <stdio.h>
 #include <stdint.h>
@@ -15,101 +16,56 @@
 #define emit_sp_mem(_out, _op, _reg, _offset) \
     minic_loongarch64_emit_frame_mem((_out), (_op), (_reg), (_offset), dynamic_frame)
 
-static const MinicCoreType *loongarch64_call_core_base(
-    const MinicCoreFunction *fn, MinicCoreTypeId id) {
-    return minic_core_type_get(fn->type_context,
-                               minic_core_type_unqualified(fn->type_context, id));
-}
-
 static bool loongarch64_call_type_is(
-    const MinicCoreFunction *fn, MinicType source, MinicCoreTypeId id,
+    const MinicCoreFunction *fn, MinicCoreTypeId id,
     MinicCoreTypeKind kind) {
-    const MinicCoreType *type;
-    if (fn->type_context != NULL)
-        return (type = loongarch64_call_core_base(fn, id)) != NULL &&
-               type->kind == kind;
-    switch (kind) {
-    case MINIC_CORE_TYPE_RECORD: return minic_type_is_record(source);
-    case MINIC_CORE_TYPE_VOID: return minic_type_is_void(source);
-    case MINIC_CORE_TYPE_INTEGER: return minic_type_is_integer(source);
-    case MINIC_CORE_TYPE_POINTER: return minic_type_is_pointer(source);
-    default: return false;
-    }
+    return minic_core_abi_kind(fn, id, kind);
 }
 
 static bool loongarch64_call_type_wide(
-    const MinicCoreFunction *fn, MinicType source, MinicCoreTypeId id) {
-    const MinicCoreType *type;
-    if (fn->type_context == NULL)
-        return minic_type_is_long_double(source) ||
-               minic_type_is_int128_integer(source);
-    type = loongarch64_call_core_base(fn, id);
-    return type != NULL &&
-           ((type->kind == MINIC_CORE_TYPE_INTEGER && type->size == 16U) ||
-            (type->kind == MINIC_CORE_TYPE_FLOAT &&
-             type->value.floating.format == MINIC_CORE_FLOAT_EXTENDED));
+    const MinicCoreFunction *fn, MinicCoreTypeId id) {
+    return minic_core_abi_wide_scalar(fn, id);
 }
 
 static bool loongarch64_call_float_format(
-    const MinicCoreFunction *fn, MinicType source, MinicCoreTypeId id,
+    const MinicCoreFunction *fn, MinicCoreTypeId id,
     MinicCoreFloatFormat format) {
-    const MinicCoreType *type;
-    if (fn->type_context == NULL)
-        return format == MINIC_CORE_FLOAT_BINARY32 ? minic_type_is_float(source)
-             : format == MINIC_CORE_FLOAT_BINARY64 ? minic_type_is_double(source)
-             : format == MINIC_CORE_FLOAT_EXTENDED ? minic_type_is_long_double(source)
-             : false;
-    type = loongarch64_call_core_base(fn, id);
-    return type != NULL && type->kind == MINIC_CORE_TYPE_FLOAT &&
-           type->value.floating.format == format;
+    return minic_core_abi_float_format(fn, id, format);
 }
 
 static bool loongarch64_call_register64(
-    const MinicCoreFunction *fn, const MinicC0Program *program,
-    const MinicTargetInfo *target, MinicType source, MinicCoreTypeId id) {
-    const MinicCoreType *type;
-    if (fn->type_context == NULL)
-        return minic_lp64_register64_type(program, target, source);
-    type = loongarch64_call_core_base(fn, id);
-    return type != NULL &&
-           (type->kind == MINIC_CORE_TYPE_POINTER ||
-            (type->kind == MINIC_CORE_TYPE_INTEGER && type->has_layout &&
-             type->size == 8U));
+    const MinicCoreFunction *fn, MinicCoreTypeId id) {
+    MinicCoreAbiValueShape value;
+    return minic_core_abi_value_shape(fn, id, &value) && value.bytes == 8U &&
+           (value.kind == MINIC_CORE_TYPE_POINTER ||
+            value.kind == MINIC_CORE_TYPE_INTEGER);
 }
 
 static bool loongarch64_call_record_gp(
-    const MinicCoreFunction *fn, const MinicC0Program *program,
-    const MinicTargetInfo *target, MinicType source, MinicCoreTypeId id,
+    const MinicCoreFunction *fn, MinicCoreTypeId id,
     size_t *bytes, size_t *slots) {
-    return fn->type_context != NULL
-        ? minic_multi_gp_record_core(fn->type_context, id, bytes, slots)
-        : minic_multi_gp_record(program, target, source, bytes, slots);
+    return fn->type_context != NULL &&
+           minic_multi_gp_record_core(fn->type_context, id, bytes, slots);
 }
 
 static bool loongarch64_call_record_indirect(
-    const MinicCoreFunction *fn, const MinicC0Program *program,
-    const MinicTargetInfo *target, MinicType source, MinicCoreTypeId id,
+    const MinicCoreFunction *fn, MinicCoreTypeId id,
     size_t *bytes) {
-    return fn->type_context != NULL
-        ? minic_multi_indirect_record_core(fn->type_context, id, bytes)
-        : minic_multi_indirect_record(program, target, source, bytes);
+    return fn->type_context != NULL &&
+           minic_multi_indirect_record_core(fn->type_context, id, bytes);
 }
 
 static bool loongarch64_call_record_empty(
-    const MinicCoreFunction *fn, const MinicC0Program *program,
-    const MinicTargetInfo *target, MinicType source, MinicCoreTypeId id) {
-    return fn->type_context != NULL
-        ? minic_multi_empty_record_core(fn->type_context, id)
-        : minic_multi_empty_record(program, target, source);
+    const MinicCoreFunction *fn, MinicCoreTypeId id) {
+    return fn->type_context != NULL &&
+           minic_multi_empty_record_core(fn->type_context, id);
 }
 
 static bool loongarch64_call_record_fp_return(
-    const MinicCoreFunction *fn, const MinicC0Program *program,
-    const MinicTargetInfo *target, MinicType source, MinicCoreTypeId id,
+    const MinicCoreFunction *fn, MinicCoreTypeId id,
     size_t *elements, size_t *width) {
-    return fn->type_context != NULL
-        ? minic_multi_fp_return_record_core(fn->type_context, id, elements, width)
-        : minic_multi_fp_return_record(program, target, source, elements, width);
+    return fn->type_context != NULL &&
+           minic_multi_fp_return_record_core(fn->type_context, id, elements, width);
 }
 
 /* LP64D integral aggregate bytes travel in one/two a-registers or
@@ -170,7 +126,6 @@ bool minic_loongarch64_emit_abi_instruction(
     FILE *out, const MinicDirectLP64BlockContext *ctx,
     const MinicCoreInstruction *ins, size_t offset,
     bool *needs_gp_store) {
-    const MinicC0Program *program;
     const MinicTargetInfo *target;
     const MinicCoreFunction *fn;
     const MinicLP64FramePlan *frame_plan;
@@ -183,7 +138,6 @@ bool minic_loongarch64_emit_abi_instruction(
         ins == NULL ||
         needs_gp_store == NULL)
         return false;
-    program = ctx->program;
     target = ctx->target;
     fn = ctx->fn;
     frame_plan = ctx->frame_plan;
@@ -230,8 +184,7 @@ bool minic_loongarch64_emit_abi_instruction(
                     const MinicCoreObjectId object_id = arg->value.object_id;
                     if (location->kind == MINIC_LP64_ARGUMENT_EMPTY_RECORD) {
                         if (object_id >= fn->object_count ||
-                            !loongarch64_call_record_empty(fn, program, target,
-                                fn->objects[object_id].type,
+                            !loongarch64_call_record_empty(fn,
                                 fn->objects[object_id].core_type_id) ||
                             location->size_bytes != 0U ||
                             location->chunks != 0U ||
@@ -243,14 +196,12 @@ bool minic_loongarch64_emit_abi_instruction(
                     }
                     if (!minic_lp64_frame_plan_object(frame_plan, object_id, &object_offset))
                         return false;
-                    if (!loongarch64_call_record_gp(fn, program, target,
-                            fn->objects[object_id].type,
+                    if (!loongarch64_call_record_gp(fn,
                             fn->objects[object_id].core_type_id,
                             &record_size, &slots)) {
                         const size_t src = object_offset +
                             (dynamic_frame ? 0U : stack_bytes);
-                        if (!loongarch64_call_record_indirect(fn, program, target,
-                                fn->objects[object_id].type,
+                        if (!loongarch64_call_record_indirect(fn,
                                 fn->objects[object_id].core_type_id,
                                 &record_size) ||
                             !minic_loongarch64_emit_frame_address(
@@ -276,12 +227,11 @@ bool minic_loongarch64_emit_abi_instruction(
                     }
                     continue;
                 }
-                const MinicType type = fn->values[arg->value.value_id].type;
                 const MinicCoreTypeId type_id =
                     fn->values[arg->value.value_id].core_type_id;
                 const size_t slot = minic_lp64_frame_value_offset(frame_plan, arg->value.value_id) +
                     (dynamic_frame ? 0U : stack_bytes);
-                if (loongarch64_call_type_wide(fn, type, type_id)) {
+                if (loongarch64_call_type_wide(fn, type_id)) {
                     size_t src, chunk;
                     const size_t used = location->gp_registers;
                     if (!minic_lp64_frame_plan_wide_slot(frame_plan, arg->value.value_id, &src))
@@ -302,18 +252,15 @@ bool minic_loongarch64_emit_abi_instruction(
                 }
                 if (location->fp_registers != 0U) {
                     if (!emit_sp_mem(out, loongarch64_call_float_format(
-                                fn, type, type_id, MINIC_CORE_FLOAT_BINARY32)
+                                fn, type_id, MINIC_CORE_FLOAT_BINARY32)
                                            ? "fld.s" : "fld.d",
                                      fp_regs[location->fp_first], slot))
                         return false;
                 } else {
-                    const bool wide = loongarch64_call_float_format(
-                        fn, type, type_id, MINIC_CORE_FLOAT_BINARY64) ||
-                        (fn->type_context != NULL
-                             ? minic_lp64_core_valid_parameter_type(
-                                   fn->type_context, type_id) &&
-                               (loongarch64_call_core_base(fn, type_id)->size == 8U)
-                             : minic_lp64_register64_type(program, target, type));
+                    MinicCoreAbiValueShape value;
+                    const bool valid = minic_core_abi_value_shape(fn, type_id, &value);
+                    const bool wide = valid && value.bytes == 8U;
+                    if (!valid) return false;
                     if (location->gp_registers != 0U) {
                         if (!emit_sp_mem(out, wide ? "ld.d" : "ld.w",
                                          gp_regs[location->gp_first], slot))
@@ -331,11 +278,11 @@ bool minic_loongarch64_emit_abi_instruction(
                         return false;
                 }
             }
-            if (loongarch64_call_type_is(fn, ins->type, ins->core_type_id,
+            if (loongarch64_call_type_is(fn, ins->core_type_id,
                                          MINIC_CORE_TYPE_RECORD)) {
                 size_t result_bytes, dst;
-                if (loongarch64_call_record_indirect(fn, program, target,
-                        ins->type, ins->core_type_id, &result_bytes) &&
+                if (loongarch64_call_record_indirect(fn,
+                        ins->core_type_id, &result_bytes) &&
                     result_bytes > 16U) {
                     /* The ABI planner reserved $a0 BEFORE placing explicit
                      * parameters in $a1..$a7. Write the hidden destination
@@ -459,23 +406,22 @@ bool minic_loongarch64_emit_abi_instruction(
             }
             if (stack_bytes != 0U && !minic_loongarch64_emit_sp_adjust(out, stack_bytes, true))
                 return false;
-            if (loongarch64_call_type_is(fn, ins->type, ins->core_type_id,
+            if (loongarch64_call_type_is(fn, ins->core_type_id,
                                          MINIC_CORE_TYPE_VOID)) return true;
-            if (loongarch64_call_type_is(fn, ins->type, ins->core_type_id,
+            if (loongarch64_call_type_is(fn, ins->core_type_id,
                                          MINIC_CORE_TYPE_RECORD)) {
                 const MinicCoreObjectId object_id = result_object;
                 size_t bytes, slots, dst, chunk, fp_elements, fp_width;
                 if (object_id >= fn->object_count ||
                     !minic_lp64_frame_plan_object(frame_plan, object_id, &dst))
                     return false;
-                if (loongarch64_call_record_empty(fn, program, target,
-                                                    ins->type, ins->core_type_id))
+                if (loongarch64_call_record_empty(fn, ins->core_type_id))
                     return true;
-                if (loongarch64_call_record_indirect(fn, program, target,
-                        ins->type, ins->core_type_id, &bytes) && bytes > 16U)
+                if (loongarch64_call_record_indirect(fn, ins->core_type_id,
+                                                     &bytes) && bytes > 16U)
                     return true; /* GNU LP64D callee filled caller's buffer. */
-                if (loongarch64_call_record_fp_return(fn, program, target,
-                        ins->type, ins->core_type_id, &fp_elements, &fp_width)) {
+                if (loongarch64_call_record_fp_return(fn, ins->core_type_id,
+                                                     &fp_elements, &fp_width)) {
                     for (chunk = 0U; chunk < fp_elements; ++chunk) {
                         const char *reg = chunk == 0U ? "$fa0" : "$fa1";
                         if (!emit_sp_mem(out, fp_width == 4U ? "fst.s" : "fst.d",
@@ -484,8 +430,7 @@ bool minic_loongarch64_emit_abi_instruction(
                     }
                     return true;
                 }
-                if (!loongarch64_call_record_gp(fn, program, target,
-                                                ins->type, ins->core_type_id,
+                if (!loongarch64_call_record_gp(fn, ins->core_type_id,
                                                 &bytes, &slots) ||
                     bytes == 0U || bytes > 16U || slots > 2U)
                     return false;
@@ -499,7 +444,7 @@ bool minic_loongarch64_emit_abi_instruction(
                 }
                 return true;
             }
-            if (loongarch64_call_type_wide(fn, ins->type, ins->core_type_id)) {
+            if (loongarch64_call_type_wide(fn, ins->core_type_id)) {
                 size_t dst;
                 if (!minic_lp64_frame_plan_wide_slot(frame_plan, ins->result, &dst) ||
                     !emit_sp_mem(out, "st.d", "$a0", dst) ||
@@ -508,24 +453,21 @@ bool minic_loongarch64_emit_abi_instruction(
                 return true;
             }
             if (fputs(loongarch64_call_float_format(
-                         fn, ins->type, ins->core_type_id,
+                         fn, ins->core_type_id,
                          MINIC_CORE_FLOAT_BINARY64)
                           ? "  movfr2gr.d $t0, $fa0\n"
                           : loongarch64_call_float_format(
-                                fn, ins->type, ins->core_type_id,
+                                fn, ins->core_type_id,
                                 MINIC_CORE_FLOAT_BINARY32)
                               ? "  movfr2gr.s $t0, $fa0\n"
                           : "  or $t0, $a0, $zero\n", out) == EOF)
                 return false;
-            if (loongarch64_call_type_is(fn, ins->type, ins->core_type_id,
+            if (loongarch64_call_type_is(fn, ins->core_type_id,
                                          MINIC_CORE_TYPE_INTEGER)) {
                 size_t width;
                 bool sign;
-                if (!(fn->type_context != NULL
-                        ? minic_lp64_core_integer_width(fn->type_context,
-                              ins->core_type_id, &width, &sign)
-                        : minic_lp64_scalar_integer_width(program, target,
-                              ins->type, &width, &sign)) ||
+                if (!minic_lp64_core_integer_width(fn->type_context,
+                              ins->core_type_id, &width, &sign) ||
                     (width != 8U && !minic_loongarch64_emit_integer_normalize(out, width, sign)))
                     return false;
             }
@@ -541,7 +483,7 @@ bool minic_loongarch64_emit_abi_instruction(
             if (!minic_multi_direct_scalar_parameter_location(
                     fn, ins, incoming_plan, &location))
                 return false;
-            if (loongarch64_call_type_wide(fn, ins->type, ins->core_type_id)) {
+            if (loongarch64_call_type_wide(fn, ins->core_type_id)) {
                 size_t dst, chunk;
                 const size_t used = location->gp_registers;
                 if (!minic_lp64_frame_plan_wide_slot(frame_plan, ins->result, &dst))
@@ -564,22 +506,22 @@ bool minic_loongarch64_emit_abi_instruction(
                 }
                 return true;
             }
-            if ((loongarch64_call_float_format(fn, ins->type, ins->core_type_id,
+            if ((loongarch64_call_float_format(fn, ins->core_type_id,
                                               MINIC_CORE_FLOAT_BINARY64) ||
-                 loongarch64_call_float_format(fn, ins->type, ins->core_type_id,
+                 loongarch64_call_float_format(fn, ins->core_type_id,
                                               MINIC_CORE_FLOAT_BINARY32)) &&
                 location->fp_registers != 0U) {
                 if (!emit_sp_mem(out, loongarch64_call_float_format(
-                                    fn, ins->type, ins->core_type_id,
+                                    fn, ins->core_type_id,
                                     MINIC_CORE_FLOAT_BINARY32)
                                       ? "fst.s" : "fst.d",
                                  fp_regs[location->fp_first], offset))
                     return false;
             } else if (location->gp_registers != 0U) {
                 if (!emit_sp_mem(out,
-                                 loongarch64_call_register64(fn, program, target,
-                                     ins->type, ins->core_type_id) ||
-                                 loongarch64_call_float_format(fn, ins->type,
+                                 loongarch64_call_register64(fn,
+                                     ins->core_type_id) ||
+                                 loongarch64_call_float_format(fn,
                                      ins->core_type_id, MINIC_CORE_FLOAT_BINARY64)
                                      ? "st.d" : "st.w",
                                  gp_regs[location->gp_first], offset))
@@ -593,15 +535,13 @@ bool minic_loongarch64_emit_abi_instruction(
                     return false;
             } else {
                 const char *const load =
-                    loongarch64_call_register64(fn, program, target,
-                        ins->type, ins->core_type_id) ||
-                    loongarch64_call_float_format(fn, ins->type,
+                    loongarch64_call_register64(fn, ins->core_type_id) ||
+                    loongarch64_call_float_format(fn,
                         ins->core_type_id, MINIC_CORE_FLOAT_BINARY64)
                         ? "ld.d" : "ld.w";
                 const char *const store =
-                    loongarch64_call_register64(fn, program, target,
-                        ins->type, ins->core_type_id) ||
-                    loongarch64_call_float_format(fn, ins->type,
+                    loongarch64_call_register64(fn, ins->core_type_id) ||
+                    loongarch64_call_float_format(fn,
                         ins->core_type_id, MINIC_CORE_FLOAT_BINARY64)
                         ? "st.d" : "st.w";
                 if (!(ctx->saved_entry_sp_offset != SIZE_MAX

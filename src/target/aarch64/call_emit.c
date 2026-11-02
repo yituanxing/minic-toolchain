@@ -5,6 +5,7 @@
 #include "target/common/direct_call_plan.h"
 #include "target/common/lp64_scalar.h"
 #include "target/common/lp64_aggregate.h"
+#include "target/common/core_abi_value_shape.h"
 #include "target/aarch64/abi.h"
 #include <stdio.h>
 
@@ -21,106 +22,66 @@ typedef struct MinicA64ScalarShape {
     bool integer_signed;
 } MinicA64ScalarShape;
 
-/* The machine emitter reads Core execution types after the compiler has
- * attached a context. C descriptors remain solely for unattached old native
- * probe callers. Never retry a failed bound Core query against C metadata. */
-static bool a64_scalar_shape(const MinicC0Program *program,
-                             const MinicTargetInfo *target,
-                             const MinicCoreFunction *fn, MinicType old_type,
+/* AAPCS64-specific register widths are derived from the common sealed ABI
+ * value shape; register placement remains in the prepared AAPCS64 plan. */
+static bool a64_scalar_shape(const MinicCoreFunction *fn,
                              MinicCoreTypeId id, MinicA64ScalarShape *shape) {
-    const MinicCoreType *type;
-    if (fn == NULL || shape == NULL) return false;
+    MinicCoreAbiValueShape value;
+    if (shape == NULL || !minic_core_abi_value_shape(fn, id, &value))
+        return false;
     *shape = (MinicA64ScalarShape){0};
-    if (fn->type_context == NULL) {
-        shape->is_void = minic_type_is_void(old_type);
-        shape->is_record = minic_type_is_record(old_type);
-        shape->is_int128 = minic_type_is_int128_integer(old_type);
-        shape->is_long_double = minic_type_is_long_double(old_type);
-        shape->is_double = minic_type_is_double(old_type);
-        shape->is_float = minic_type_is_float(old_type);
-        shape->is_integer = minic_type_is_integer(old_type);
-        shape->register64 = minic_lp64_register64_type(program, target, old_type);
-        if (shape->is_integer && !shape->is_int128 &&
-            !minic_lp64_scalar_integer_width(program, target, old_type,
-                                             &shape->integer_width,
-                                             &shape->integer_signed)) return false;
-        return shape->is_void || shape->is_record || shape->is_int128 ||
-               shape->is_long_double || shape->is_double || shape->is_float ||
-               shape->is_integer || minic_type_is_pointer(old_type);
-    }
-    id = minic_core_type_unqualified(fn->type_context, id);
-    type = minic_core_type_get(fn->type_context, id);
-    if (type == NULL) return false;
-    switch (type->kind) {
+    switch (value.kind) {
     case MINIC_CORE_TYPE_VOID:
         shape->is_void = true;
         return true;
     case MINIC_CORE_TYPE_RECORD:
         shape->is_record = true;
-        return type->value.record.is_complete && type->has_layout;
+        return true;
     case MINIC_CORE_TYPE_INTEGER:
-        if (!type->has_layout) return false;
         shape->is_integer = true;
-        if (type->value.integer.bit_width == 128U && type->size == 16U) {
+        if (value.bytes == 16U) {
             shape->is_int128 = true;
             return true;
         }
-        if (!minic_lp64_core_integer_width(fn->type_context, id,
-                                            &shape->integer_width,
-                                            &shape->integer_signed)) return false;
+        shape->integer_width = value.integer_width;
+        shape->integer_signed = value.integer_signed;
         shape->register64 = shape->integer_width == 8U;
         return true;
     case MINIC_CORE_TYPE_POINTER:
-        shape->register64 = type->has_layout && type->size == 8U;
+        shape->register64 = value.bytes == 8U;
         return shape->register64;
     case MINIC_CORE_TYPE_FLOAT:
-        if (!type->has_layout) return false;
-        shape->is_float = type->value.floating.format == MINIC_CORE_FLOAT_BINARY32 &&
-                          type->size == 4U;
-        shape->is_double = type->value.floating.format == MINIC_CORE_FLOAT_BINARY64 &&
-                           type->size == 8U;
-        shape->is_long_double = type->value.floating.format == MINIC_CORE_FLOAT_EXTENDED &&
-                                type->size == 16U;
-        return shape->is_float || shape->is_double || shape->is_long_double;
+        shape->is_float = value.float_format == MINIC_CORE_FLOAT_BINARY32;
+        shape->is_double = value.float_format == MINIC_CORE_FLOAT_BINARY64;
+        shape->is_long_double = value.float_format == MINIC_CORE_FLOAT_EXTENDED;
+        return true;
     default:
         return false;
     }
 }
 
-static bool a64_empty_record(const MinicC0Program *program,
-                             const MinicTargetInfo *target,
-                             const MinicCoreFunction *fn, MinicType old_type,
-                             MinicCoreTypeId id) {
-    return fn->type_context != NULL
-        ? minic_multi_empty_record_core(fn->type_context, id)
-        : minic_multi_empty_record(program, target, old_type);
+static bool a64_empty_record(const MinicCoreFunction *fn, MinicCoreTypeId id) {
+    return fn->type_context != NULL &&
+           minic_multi_empty_record_core(fn->type_context, id);
 }
 
-static bool a64_gp_record(const MinicC0Program *program,
-                          const MinicTargetInfo *target,
-                          const MinicCoreFunction *fn, MinicType old_type,
-                          MinicCoreTypeId id, size_t *bytes, size_t *slots) {
-    return fn->type_context != NULL
-        ? minic_multi_gp_record_core(fn->type_context, id, bytes, slots)
-        : minic_multi_gp_record(program, target, old_type, bytes, slots);
+static bool a64_gp_record(const MinicCoreFunction *fn, MinicCoreTypeId id,
+                          size_t *bytes, size_t *slots) {
+    return fn->type_context != NULL &&
+           minic_multi_gp_record_core(fn->type_context, id, bytes, slots);
 }
 
-static bool a64_indirect_record(const MinicC0Program *program,
-                                const MinicTargetInfo *target,
-                                const MinicCoreFunction *fn, MinicType old_type,
-                                MinicCoreTypeId id, size_t *bytes) {
-    return fn->type_context != NULL
-        ? minic_aarch64_indirect_record_core(fn->type_context, id, bytes)
-        : minic_aarch64_indirect_record(program, target, old_type, bytes);
+static bool a64_indirect_record(const MinicCoreFunction *fn, MinicCoreTypeId id,
+                                size_t *bytes) {
+    return fn->type_context != NULL &&
+           minic_aarch64_indirect_record_core(fn->type_context, id, bytes);
 }
 
-static bool a64_fp_return_record(const MinicC0Program *program,
-                                 const MinicTargetInfo *target,
-                                 const MinicCoreFunction *fn, MinicType old_type,
-                                 MinicCoreTypeId id, size_t *count, size_t *width) {
-    return fn->type_context != NULL
-        ? minic_multi_fp_return_record_core(fn->type_context, id, count, width)
-        : minic_multi_fp_return_record(program, target, old_type, count, width);
+static bool a64_fp_return_record(const MinicCoreFunction *fn,
+                                 MinicCoreTypeId id, size_t *count,
+                                 size_t *width) {
+    return fn->type_context != NULL &&
+           minic_multi_fp_return_record_core(fn->type_context, id, count, width);
 }
 
 /* One or two INTEGER-class ABI eightbytes. Serialize actual record bytes,
@@ -174,7 +135,6 @@ bool minic_aarch64_emit_abi_instruction(
     const MinicCoreInstruction *ins, size_t offset,
     bool *needs_gp_store) {
     const MinicC0Program *program;
-    const MinicTargetInfo *target;
     const MinicCoreFunction *fn;
     const MinicLP64FramePlan *frame_plan;
     const MinicLP64ArgumentPlan *incoming_plan;
@@ -189,7 +149,6 @@ bool minic_aarch64_emit_abi_instruction(
         needs_gp_store == NULL)
         return false;
     program = ctx->program;
-    target = ctx->target;
     fn = ctx->fn;
     frame_plan = ctx->frame_plan;
     incoming_plan = ctx->incoming_plan;
@@ -219,8 +178,7 @@ bool minic_aarch64_emit_abi_instruction(
             call_plan = minic_lp64_function_call_plan(
                 ctx->outgoing_calls, call_id);
             if (call_plan == NULL || call_plan->argument_count != count ||
-                !a64_scalar_shape(program, target, fn, ins->type,
-                                  ins->core_type_id, &result_shape))
+                !a64_scalar_shape(fn, ins->core_type_id, &result_shape))
                 return false;
             stack_bytes = call_plan->stack_bytes;
             call_view.outgoing_sp_bytes = stack_bytes;
@@ -242,20 +200,17 @@ bool minic_aarch64_emit_abi_instruction(
                             location->gp_registers != 0U ||
                             location->fp_registers != 0U ||
                             location->stack_slots != 0U ||
-                            !a64_empty_record(program, target, fn,
-                                fn->objects[object_id].type,
+                            !a64_empty_record(fn,
                                 fn->objects[object_id].core_type_id))
                             return false;
                         continue;
                     }
                     if (!minic_lp64_frame_plan_object(frame_plan, object_id, &object_offset))
                         return false;
-                    if (!a64_gp_record(program, target, fn,
-                            fn->objects[object_id].type,
+                    if (!a64_gp_record(fn,
                             fn->objects[object_id].core_type_id,
                             &record_size, &slots)) {
-                        if (!a64_indirect_record(program, target, fn,
-                                fn->objects[object_id].type,
+                        if (!a64_indirect_record(fn,
                                 fn->objects[object_id].core_type_id, &record_size) ||
                             !minic_a64_emit_owned_address(
                                 out, &call_view, object_offset, 9U) ||
@@ -281,13 +236,11 @@ bool minic_aarch64_emit_abi_instruction(
                     }
                     continue;
                 }
-                const MinicType type = fn->values[arg->value.value_id].type;
                 const MinicCoreTypeId core_id =
                     fn->values[arg->value.value_id].core_type_id;
                 MinicA64ScalarShape arg_shape;
                 const size_t slot = minic_lp64_frame_value_offset(frame_plan, arg->value.value_id);
-                if (!a64_scalar_shape(program, target, fn, type, core_id,
-                                      &arg_shape)) return false;
+                if (!a64_scalar_shape(fn, core_id, &arg_shape)) return false;
                 if (arg_shape.is_int128) {
                     size_t src, limb;
                     if (location->kind != MINIC_LP64_ARGUMENT_WIDE ||
@@ -380,9 +333,8 @@ bool minic_aarch64_emit_abi_instruction(
                  * all normal arguments (including stack spills). A nested
                  * callee writes directly to the caller's Core record object.
                  * The same result-object contract covers indirect calls. */
-                if (a64_indirect_record(
-                        program, target, fn, ins->type, ins->core_type_id,
-                        &bytes) && bytes > 16U) {
+                if (a64_indirect_record(fn, ins->core_type_id,
+                                        &bytes) && bytes > 16U) {
                     if (result_object >= fn->object_count ||
                         !minic_lp64_frame_plan_object(
                             frame_plan, result_object, &dst) ||
@@ -425,21 +377,17 @@ bool minic_aarch64_emit_abi_instruction(
                 size_t bytes, slots, dst, chunk, fp_elements, fp_width;
                 if (object_id >= fn->object_count)
                     return false;
-                if (a64_empty_record(program, target, fn, ins->type,
-                                     ins->core_type_id))
-                    return a64_empty_record(program, target, fn,
-                        fn->objects[object_id].type,
+                if (a64_empty_record(fn, ins->core_type_id))
+                    return a64_empty_record(fn,
                         fn->objects[object_id].core_type_id);
                 if (
                     !minic_lp64_frame_plan_object(frame_plan, object_id, &dst))
                     return false;
-                if (a64_indirect_record(
-                        program, target, fn, ins->type, ins->core_type_id,
-                        &bytes) && bytes > 16U)
+                if (a64_indirect_record(fn, ins->core_type_id,
+                                        &bytes) && bytes > 16U)
                     return true; /* callee already filled result_object via x8 */
-                if (a64_fp_return_record(
-                        program, target, fn, ins->type, ins->core_type_id,
-                        &fp_elements, &fp_width)) {
+                if (a64_fp_return_record(fn, ins->core_type_id,
+                                         &fp_elements, &fp_width)) {
                     for (chunk = 0U; chunk < fp_elements; ++chunk) {
                         const size_t off = dst + chunk * fp_width;
                         if (off > UINT32_MAX ||
@@ -453,8 +401,7 @@ bool minic_aarch64_emit_abi_instruction(
                     }
                     return true;
                 }
-                if (!a64_gp_record(program, target, fn, ins->type,
-                                   ins->core_type_id, &bytes, &slots) ||
+                if (!a64_gp_record(fn, ins->core_type_id, &bytes, &slots) ||
                     bytes == 0U || bytes > 16U || slots > 2U)
                     return false;
                 for (chunk = 0U; chunk < slots; ++chunk) {
@@ -511,8 +458,7 @@ bool minic_aarch64_emit_abi_instruction(
             MinicA64ScalarShape parameter_shape;
             if (!minic_multi_direct_scalar_parameter_location(
                     fn, ins, incoming_plan, &location) ||
-                !a64_scalar_shape(program, target, fn, ins->type,
-                                  ins->core_type_id, &parameter_shape))
+                !a64_scalar_shape(fn, ins->core_type_id, &parameter_shape))
                 return false;
             if (parameter_shape.is_int128) {
                 size_t dst, limb;

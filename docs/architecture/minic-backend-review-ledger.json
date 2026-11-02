@@ -182,6 +182,12 @@
       "review_depth": "inventory",
       "ci_touched_in": []
     },
+    "src/target/common/core_abi_value_shape.h": {
+      "blob": "2392d450379ed754da7015cf07ea8cd49659dfd7",
+      "review_depth": "full",
+      "ci_touched_in": [],
+      "note": "2026-11-02: sealed Core ABI value classification reviewed across CALL/INDIRECT_CALL and PARAMETER paths on five ISA. Register placement and LoongArch Source builtin signature contracts remain target-owned."
+    },
     "src/target/common/core_block_walk.h": {
       "blob": "30dd44ed6ca87dac76f782b9256b4fe2a428a76d",
       "review_depth": "inventory",

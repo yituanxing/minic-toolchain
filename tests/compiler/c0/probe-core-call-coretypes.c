@@ -1,4 +1,5 @@
 #include "target/common/core_call_view.h"
+#include "target/common/core_abi_value_shape.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -7,6 +8,75 @@
 static bool register_type(MinicCoreTypeContext *context, MinicCoreType type,
                           MinicCoreTypeId *result) {
     return minic_core_type_register(context, &type, result);
+}
+
+/* Call marshaling must follow the same already-sealed Core scalar layout on
+ * every ISA, even when Source MinicType still contains contradictory data. */
+static bool probe_abi_value_shapes(void) {
+    MinicCoreTypeContext context;
+    MinicCoreFunction function = {0};
+    MinicCoreType type = {0};
+    MinicCoreTypeId id;
+    MinicCoreAbiValueShape shape;
+    minic_core_type_context_initialize(&context);
+    function.type_context = &context;
+    type.kind = MINIC_CORE_TYPE_INTEGER;
+    type.has_layout = true;
+    type.size = 1U;
+    type.alignment = 1U;
+    type.value.integer.bit_width = 8U;
+    type.value.integer.is_bool = true;
+    if (!register_type(&context, type, &id) ||
+        !minic_core_abi_value_shape(&function, id, &shape) ||
+        shape.kind != MINIC_CORE_TYPE_INTEGER || shape.bytes != 1U ||
+        !shape.integer_bool || shape.integer_width != 1U) return false;
+    type.value.integer.bit_width = 16U; /* forged layout */
+    if (!register_type(&context, type, &id) ||
+        minic_core_abi_value_shape(&function, id, &shape)) return false;
+    type.value.integer.bit_width = 128U;
+    type.value.integer.is_bool = false;
+    type.size = 16U;
+    type.alignment = 16U;
+    if (!register_type(&context, type, &id) ||
+        !minic_core_abi_wide_scalar(&function, id)) return false;
+    type.kind = MINIC_CORE_TYPE_POINTER;
+    type.value.pointer.pointee = id;
+    type.size = 4U;
+    type.alignment = 4U;
+    if (!register_type(&context, type, &id) ||
+        !minic_core_abi_value_shape(&function, id, &shape) ||
+        shape.kind != MINIC_CORE_TYPE_POINTER || shape.bytes != 4U) return false;
+    type.kind = MINIC_CORE_TYPE_FLOAT;
+    type.size = 8U;
+    type.alignment = 8U;
+    type.value.floating.format = MINIC_CORE_FLOAT_BINARY64;
+    if (!register_type(&context, type, &id) ||
+        !minic_core_abi_float_format(&function, id, MINIC_CORE_FLOAT_BINARY64) ||
+        minic_core_abi_float_format(&function, id, MINIC_CORE_FLOAT_BINARY32))
+        return false;
+    type.value.floating.format = MINIC_CORE_FLOAT_EXTENDED; /* wrong size */
+    if (!register_type(&context, type, &id) ||
+        minic_core_abi_wide_scalar(&function, id)) return false;
+    type.size = 16U;
+    type.alignment = 16U;
+    if (!register_type(&context, type, &id) ||
+        !minic_core_abi_wide_scalar(&function, id)) return false;
+    type.kind = MINIC_CORE_TYPE_RECORD;
+    type.size = 0U;
+    type.alignment = 1U;
+    type.value.record.is_complete = true;
+    if (!register_type(&context, type, &id) ||
+        !minic_core_abi_kind(&function, id, MINIC_CORE_TYPE_RECORD))
+        return false;
+    type.value.record.is_complete = false;
+    if (!register_type(&context, type, &id) ||
+        minic_core_abi_value_shape(&function, id, &shape)) return false;
+    if (minic_core_abi_value_shape(&function, MINIC_CORE_TYPE_INVALID, &shape))
+        return false;
+    function.type_context = NULL;
+    if (minic_core_abi_value_shape(&function, id, &shape)) return false;
+    minic_core_type_context_destroy(&context);
+    return true;
 }
 
 int main(void) {
@@ -28,6 +98,7 @@ int main(void) {
      * target-neutral CALL identity and argument admission. */
     MinicType legacy_scalar = {0};
 
+    if (!probe_abi_value_shapes()) return 23;
     minic_core_type_context_initialize(&context);
     legacy_scalar.base_kind = MINIC_TYPE_BASE_DOUBLE;
     (void)memset(values, 0, sizeof(values));
@@ -191,6 +262,6 @@ int main(void) {
     if (minic_core_call_view_build(&function, &call, &view)) return 14;
 
     minic_core_type_context_destroy(&context);
-    puts("MINIC_CORE_CALL_CORETYPE=PASS direct_indirect_nominal_record_return_qualifiers");
+    puts("MINIC_CORE_CALL_CORETYPE=PASS direct_indirect_nominal_record_return_qualifiers_abi_shapes");
     return 0;
 }
