@@ -426,7 +426,7 @@ static bool minias_finalize_target_output(
 /* The Driver publishes one terminal ObjectModel borrow after Target
  * finalization. ELF cannot inspect or mutate the live Common session:
  * symbolic identity remains Context-owned and bytes remain Emission-owned. */
-static const MiniAsSymbol *minias_elf_find_symbol(const void *reader,
+static const MiniAsSymbol *minias_object_find_symbol(const void *reader,
                                                  const char *name) {
     const MiniAs *as=reader;
     size_t id;
@@ -436,29 +436,34 @@ static const MiniAsSymbol *minias_elf_find_symbol(const void *reader,
     return &as->symbols[id];
 }
 
-static const char *minias_elf_cu_file(const void *reader,size_t index) {
+static const char *minias_object_cu_file(const void *reader,size_t index) {
     const MiniAs *as=reader;
     return index<as->cu_file_count?as->cu_files[index]:NULL;
 }
 
-static int minias_elf_find_section(const void *reader,const char *name) {
+static int minias_object_find_section(const void *reader,const char *name) {
     return minias_find_section(reader,name);
 }
 
-static bool minias_elf_fragment_location(
-    const void *reader,size_t index,MiniAsElfFragmentLocation *out) {
+static bool minias_object_numeric_reference(const char *text) {
+    uint64_t number;
+    return minias_parse_u64(text,&number);
+}
+
+static bool minias_object_fragment_location(
+    const void *reader,size_t index,MiniAsObjectFragmentLocation *out) {
     const MiniAs *as=reader;
     const MiniAsStmt *stmt;
     if(as==NULL || out==NULL || index>=as->stmt_count)return false;
     stmt=&as->stmts[index];
-    *out=(MiniAsElfFragmentLocation){
+    *out=(MiniAsObjectFragmentLocation){
         .section=stmt->section,.offset=stmt->offset,
         .size=stmt->size,.line=stmt->line
     };
     return true;
 }
 
-static bool minias_elf_section_bytes(const void *reader,int section,
+static bool minias_object_section_bytes(const void *reader,int section,
                                      const unsigned char **data,size_t *size) {
     MiniAsEmittedSectionView bytes;
     if(data==NULL || size==NULL ||
@@ -472,14 +477,14 @@ static bool minias_write_final_object(MiniAs *as,const char *path,bool elf32) {
     const MiniAsFixupSpan fixups=minias_emission_fixups(as);
     MiniAsElfObjectView object={0};
     bool ok;
-    object.sections=as->sections;
-    object.section_count=as->section_count;
-    object.symbols=as->symbols;
-    object.symbol_count=as->symbol_count;
-    object.fixups=fixups.data;
-    object.fixup_count=fixups.count;
-    object.cu_file_count=as->cu_file_count;
-    object.cu_file=minias_elf_cu_file;
+    object.model.sections=as->sections;
+    object.model.section_count=as->section_count;
+    object.model.symbols=as->symbols;
+    object.model.symbol_count=as->symbol_count;
+    object.model.fixups=fixups.data;
+    object.model.fixup_count=fixups.count;
+    object.model.cu_file_count=as->cu_file_count;
+    object.model.cu_file=minias_object_cu_file;
     object.policy=(MiniAsElfTargetPolicy){
         .elf_machine=as->target->elf_machine,
         .emit_all_section_symbols=as->target->emit_all_section_symbols,
@@ -501,11 +506,12 @@ static bool minias_write_final_object(MiniAs *as,const char *path,bool elf32) {
     object.object_machine=as->target_spec->object.machine;
     object.output_rel_relocations=as->target_spec->object.rel_relocations;
     object.elf_flags=as->elf_flags;
-    object.reader=as;
-    object.find_symbol=minias_elf_find_symbol;
-    object.find_section=minias_elf_find_section;
-    object.fragment_location=minias_elf_fragment_location;
-    object.section_bytes=minias_elf_section_bytes;
+    object.model.reader=as;
+    object.model.find_symbol=minias_object_find_symbol;
+    object.model.find_section=minias_object_find_section;
+    object.model.numeric_reference=minias_object_numeric_reference;
+    object.model.fragment_location=minias_object_fragment_location;
+    object.model.section_bytes=minias_object_section_bytes;
     ok=elf32?minias_write_elf32(&object,path):
              minias_write_elf64(&object,path);
     if(!ok)minias_set_error(as,"%s",object.error[0]!='\0'?

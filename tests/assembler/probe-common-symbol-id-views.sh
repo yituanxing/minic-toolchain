@@ -75,7 +75,7 @@ for name in ('minias_parse_symbol_pair_same_defined_section',
 for name,code in (('common_emission.c',emission),('mc_layout.c',layout)):
     if 'return minias_common_context_symbol_ref_view(ctx->as,ref,out);' not in code:
         raise SystemExit(name+' duplicates Context Target projection')
-if 'object.symbols=as->symbols' not in driver:
+if 'object.model.symbols=as->symbols' not in driver:
     raise SystemExit('ELF lost its separate terminal const Symbol borrow')
 if 'MiniAsLayoutSymbolView' not in api or \
    'minias_symbol_ref_lookup(' in (root/'minias_internal.h').read_text() or \

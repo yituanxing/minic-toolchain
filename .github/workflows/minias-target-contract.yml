@@ -109,6 +109,8 @@ jobs:
         run: bash tests/assembler/probe-common-section-owners-const.sh
       - name: ELF serializer consumes only terminal ObjectModel borrows
         run: bash tests/assembler/probe-elf-object-view-boundary.sh
+      - name: ObjectModel owns terminal references and generic atomic publication
+        run: bash tests/assembler/probe-object-model-transaction.sh
       - name: Immutable TargetSpec and output ABI retain independent owners
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \

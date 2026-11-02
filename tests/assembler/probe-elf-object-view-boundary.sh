@@ -27,7 +27,7 @@ import sys
 root = Path(sys.argv[1])
 writer = (root / 'assembler/src/elf_writer.c').read_text()
 driver = (root / 'assembler/src/assembler.c').read_text()
-header = (root / 'assembler/src/minias_elf_object_view.h').read_text()
+header = (root / 'assembler/src/minias_object_model.h').read_text()
 
 # The serializer's entire call graph receives only one borrowed ObjectModel
 # projection. This is not a spare MiniAs layout with writable ownership.
@@ -36,10 +36,14 @@ for pattern in (r'\bMiniAs\s*\*', r'\bas->stmts\b', r'\bas->emission\b',
                 r'\bminias_set_error\s*\('):
     if re.search(pattern, writer):
         raise SystemExit('MINIAS_ELF_OBJECT_VIEW=FAIL broad_serializer:' + pattern)
-for name in ('sections', 'symbols', 'fixups', 'cu_file', 'policy', 'target_abi',
-             'find_symbol', 'find_section', 'fragment_location', 'section_bytes'):
-    if not re.search(r'object\.' + name + r'\s*=', driver):
+for name in ('sections', 'symbols', 'fixups', 'cu_file',
+             'find_symbol', 'find_section', 'numeric_reference',
+             'fragment_location', 'section_bytes'):
+    if not re.search(r'object\.model\.' + name + r'\s*=', driver):
         raise SystemExit('MINIAS_ELF_OBJECT_VIEW=FAIL missing_projection:' + name)
+for name in ('policy', 'target_abi'):
+    if not re.search(r'object\.' + name + r'\s*=', driver):
+        raise SystemExit('MINIAS_ELF_OBJECT_VIEW=FAIL missing_policy:' + name)
 if not (driver.index('minias_finalize_target_output(&as,') <
         driver.index('minias_write_final_object(&as,')):
     raise SystemExit('MINIAS_ELF_OBJECT_VIEW=FAIL wrong_finalization_order')

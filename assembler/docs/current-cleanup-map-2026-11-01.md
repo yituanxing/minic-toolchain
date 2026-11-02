@@ -1,5 +1,21 @@
 # MiniAS 当前清理与所有权总览（2026-11-01）
 
+> **2026-11-02 ObjectModel 终结期引用/原子输出整批迁移（基于
+> `5d47f4f7`，新提交以发布 SHA 为准）：** 完整复核 Driver→
+> 终结期对象借用→ELF symbol/fixup planner→minielf 后，将最终
+> Fragment Fixup 定位与边界检查、Section 名称/关联及 COMDAT
+> 签名 SymbolID 解析，统一搬到 `object_model.c` 的短生命周期
+> 只读引用计划；对象落盘事务搬到 `object_output.c`。ELF Writer
+> 删除旧的直接定位/关联/临时文件实现，只翻译逻辑 IDs 到
+> STT/SHN/SHT/REL(A) 并序列化；不会再建一份持久
+> Section/Symbol/Fixup 图。新增独立事务 C 探针、编译期 const
+> 门禁升级及 exact-head CI 检查。已通过 `-Werror`、A0 30/30、
+> GNU ELF32/x86 COMDAT+`ld -r`、1,024 LINK_ORDER、同名
+> SectionKey 与原子输出；远端及四架构旧新差分以本批最终结果
+> 为准。仍保留源 Section 上的 ELF 格式标记，不能宣称已支持
+> COFF/Mach-O。详见
+> [ObjectModel 终结期记录](object-model-terminal-plan-2026-11-02.md)。
+
 > **2026-11-02 P06 MCExpr/MCLayout/Lowering SymbolID 整链收口
 > （基于 `e7d76ee9`，本批提交待发布）：** 沿表达式语法树→延迟 DATA→
 > Fragment 锚点固定点→`.size/.set/.equ/.org`→终结 ELF 的真实消费者
@@ -299,8 +315,10 @@
 - [ ] **ObjectModel/多格式预备**：只有前述所有权稳定且存在
   真实新格式验收时，才将通用 Section/Symbol/Fixup 与 ELF
   私有序列化拆开；**本批先完成 ObjectModel→ELF 写器的只读
-  终结期边界**，仍非通用 COFF/Mach-O 写器。不预建空的
-  COFF/Mach-O 全框架。
+  终结期边界，后续又将 Fragment Fixup 位置、Section 逻辑引用
+  和原子输出迁到共用 ObjectModel 事务**，仍非 COFF/Mach-O
+  写器。余下是 ELF 风格的 Section 属性与格式私有符号/
+  重定位编码的真正拆解，不预建空的 COFF/Mach-O 全框架。
 - [ ] **整体验收**：阶段性合并后对同一 SHA 完成多架构
   原始 GNU `.s` → MiniAS `.o` → GNU ld → QEMU P0/P1；严格
   3,536 GNU 对照另行定位差异，不替代运行时证明。

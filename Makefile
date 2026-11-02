@@ -279,6 +279,8 @@ MINIAS_SOURCES := \
 	assembler/src/riscv_encode.c \
 	assembler/src/string_literal.c \
 	assembler/src/elf_writer.c \
+	assembler/src/object_model.c \
+	assembler/src/object_output.c \
 	tools/minic-as/main.c
 MINIAS_OBJECTS := $(MINIELF_REL_OBJECTS) $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(MINIAS_SOURCES))
 MINIAS_BINARY := $(BUILD_DIR)/bin/minic-as

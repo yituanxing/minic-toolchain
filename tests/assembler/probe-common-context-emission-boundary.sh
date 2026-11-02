@@ -108,12 +108,12 @@ source=(root/'mc_layout.c').read_text()
 if 'minias_emission_fixups(as)' not in source or \
    'const MiniAsFixup *fixup=' not in source:
     raise SystemExit('MCLayout Fixup consumer bypasses immutable view')
-object_view=(root/'minias_elf_object_view.h').read_text()
+object_view=(root/'minias_object_model.h').read_text()
 writer=(root/'elf_writer.c').read_text()
 if 'minias_emission_fixups(as)' not in driver or \
-   'object.fixups=fixups.data' not in driver or \
+   'object.model.fixups=fixups.data' not in driver or \
    not re.search(r'const MiniAsFixup\s*\*fixups;',object_view) or \
-   'const MiniAsFixup *input = &as->fixups[i]' not in writer:
+   'const MiniAsFixup *input = &as->model.fixups[i]' not in writer:
     raise SystemExit('ELF Fixup consumer bypasses terminal immutable ObjectModel')
 expr=(root/'mc_expr.c').read_text()
 if expr.count('minias_emission_mcdata_cursor(as,stmt,')!=2 or \
