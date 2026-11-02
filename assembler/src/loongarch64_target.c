@@ -2227,7 +2227,8 @@ static bool la_profile(const char *march,const char *mabi,
     else goto bad;
     memset(cfg,0,sizeof(*cfg));
     cfg->target=minias_target_loongarch64();
-    cfg->object.initial_elf_flags=UINT32_C(0x40)|abi; /* psABI v1 + precise LP64 FPU ABI */
+    cfg->layout.address_size=8U;
+    cfg->object.elf.initial_flags=UINT32_C(0x40)|abi; /* psABI v1 + precise LP64 FPU ABI */
     /* Keep the existing accepted -march spellings and extension behavior.
      * Once a target-owned directive/policy exposes narrower feature modes,
      * this profile becomes its single capability source. */
@@ -2263,7 +2264,7 @@ static bool la_init_target_state(const MiniAsTargetSpec *cfg,
         if((profile.features &
             ~(uint32_t)(LA_FEATURE_LSX|LA_FEATURE_LASX))!=0U ||
            profile.abi<1U || profile.abi>3U ||
-           cfg->object.initial_elf_flags!=(UINT32_C(0x40)|profile.abi)) {
+           cfg->object.elf.initial_flags!=(UINT32_C(0x40)|profile.abi)) {
             free(state);
             if(error_capacity!=0U)
                 snprintf(error,error_capacity,"loongarch-target-profile-abi-features");

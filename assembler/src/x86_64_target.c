@@ -592,7 +592,7 @@ static bool x64_parse_base_memory(MiniAsParseContext *ctx,const char *text, X64M
                 displacement=(long long)arithmetic;
             else {
                 if(x64_symbolic_displacement(operand,&expr,
-                       &reloc_flavor,minias_parse_is_elf32(ctx)) &&
+                       &reloc_flavor,(minias_parse_address_size(ctx)==4U)) &&
                    reloc_flavor!=X64_DISP_GOTPCREL)symbolic=true;
                 else if(minias_parse_symbol_difference(operand,
                         &difference_expr))difference=true;
@@ -625,7 +625,7 @@ static bool x64_parse_base_memory(MiniAsParseContext *ctx,const char *text, X64M
                 displacement=(long long)arithmetic;
             else {
                 if(x64_symbolic_displacement(dispbuf,&symbolic_expr,
-                       &reloc_flavor,minias_parse_is_elf32(ctx)) &&
+                       &reloc_flavor,(minias_parse_address_size(ctx)==4U)) &&
                    symbolic_expr.addend>=INT64_MIN+4)
                     symbolic=true;
                 else if(minias_parse_symbol_difference(dispbuf,
@@ -2770,7 +2770,7 @@ static bool x64_parse(MiniAsParseContext *ctx, MiniAsParseInstruction *s) {
         uint64_t imm16;
         MiniAsSymbolExpr sym;
         bool numeric=minias_eval_u64_expression(src+1U,&imm16);
-        bool symbolic=!numeric && minias_parse_is_elf32(ctx) &&
+        bool symbolic=!numeric && (minias_parse_address_size(ctx)==4U) &&
             minias_parse_symbol_addend(src+1U,&sym);
         if((!numeric && !symbolic) ||
            (numeric && ((int64_t)imm16<-32768 || (int64_t)imm16>65535)))
@@ -2816,7 +2816,7 @@ static bool x64_parse(MiniAsParseContext *ctx, MiniAsParseInstruction *s) {
                     minias_mcinst_destroy(m);return false;
                 }
             } else if(symbolic) {
-                if(minias_parse_is_elf32(ctx) &&
+                if((minias_parse_address_size(ctx)==4U) &&
                    !strcmp(symbol.name,"_GLOBAL_OFFSET_TABLE_"))
                     m->target_form=X64_FORM_I386_GOTPC;
                 if(!x64_attach_symbol_operand(ctx,m,1U,&symbol,
@@ -2926,10 +2926,10 @@ static bool x64_parse(MiniAsParseContext *ctx, MiniAsParseInstruction *s) {
          * Group-1 32/64-bit immediate-to-memory instructions. */
         if(!numeric &&
            (!strcmp(s->op,"movq") || !strcmp(s->op,"movl") ||
-            (minias_parse_is_elf32(ctx) && !strcmp(s->op,"movw")) ||
+            ((minias_parse_address_size(ctx)==4U) && !strcmp(s->op,"movw")) ||
             (has_group && (s->op[strlen(s->op)-1U]=='q' ||
                            s->op[strlen(s->op)-1U]=='l' ||
-                           (minias_parse_is_elf32(ctx) &&
+                           ((minias_parse_address_size(ctx)==4U) &&
                             s->op[strlen(s->op)-1U]=='w')))) &&
            minias_parse_symbol_addend(src+1,&sym))is_sym=true;
         if(!numeric && !is_sym && x64_is_mem_candidate(dst) &&
@@ -3019,7 +3019,7 @@ static bool x64_parse(MiniAsParseContext *ctx, MiniAsParseInstruction *s) {
         size_t n=strlen(s->op);
         if((n==4U || n==3U) &&
            (s->op[n-1U]=='l' || s->op[n-1U]=='q' ||
-            (minias_parse_is_elf32(ctx) && s->op[n-1U]=='w')) &&
+            ((minias_parse_address_size(ctx)==4U) && s->op[n-1U]=='w')) &&
            !minias_eval_u64_expression(src+1,&m->operands[1].immediate) &&
            minias_parse_symbol_addend(src+1,&expr) &&
            (s->op[n-1U]=='w'?x64_register16(dst,&reg):
@@ -3029,7 +3029,7 @@ static bool x64_parse(MiniAsParseContext *ctx, MiniAsParseInstruction *s) {
             m->encoding=group|(s->op[n-1U]=='w'?UINT32_C(0x400):0U);
             x64_set_register_operand(m,0U,reg);
             m->operands[0].register_64=wide;
-            if(minias_parse_is_elf32(ctx) && s->op[n-1U]=='l' &&
+            if((minias_parse_address_size(ctx)==4U) && s->op[n-1U]=='l' &&
                !strcmp(expr.name,"_GLOBAL_OFFSET_TABLE_"))
                 m->target_form=X64_FORM_I386_GOTPC;
             if(!x64_attach_symbol_operand(ctx,m,1U,&expr,
@@ -4294,11 +4294,11 @@ static bool x64_emit_memory_fixups(MiniAsEncodeContext *ctx,const MiniAsInstruct
                !minias_encode_ctx_fixup_ref(ctx,
                     stmt->offset+layout->displacement_offset,
                     kind,4U,relative,
-                    minias_encode_ctx_is_elf32(ctx) && kind==MINIAS_FIXUP_X64_PC32))
+                    (minias_encode_ctx_address_size(ctx)==4U) && kind==MINIAS_FIXUP_X64_PC32))
                 return false;
         } else if(!mem->pc_relative) {
             MiniAsFixupKind kind=
-                (minias_encode_ctx_is_elf32(ctx) || layout->displacement_bytes==2U)?
+                ((minias_encode_ctx_address_size(ctx)==4U) || layout->displacement_bytes==2U)?
                     MINIAS_FIXUP_ABS:MINIAS_FIXUP_X64_ABS32S;
             if(mem->reloc_flavor==X64_DISP_I386_GOT32X)
                 kind=MINIAS_FIXUP_X86_GOT32X;
@@ -4326,7 +4326,7 @@ static bool x64_emit_memory_fixups(MiniAsEncodeContext *ctx,const MiniAsInstruct
         }
         return minias_encode_ctx_fixup_ref(ctx,
             stmt->offset+layout->immediate_offset,
-            inst->operands[0].register_64 && !minias_encode_ctx_is_elf32(ctx)?
+            inst->operands[0].register_64 && !(minias_encode_ctx_address_size(ctx)==4U)?
                 MINIAS_FIXUP_X64_ABS32S:MINIAS_FIXUP_ABS,
             layout->immediate_bytes,*inst->operands[2].bound_symbol,false);
     }
@@ -4486,7 +4486,7 @@ static bool x64_encode_base(MiniAsEncodeContext *ctx,const MiniAsInstructionView
              * GNU uses PC32 instead. Defined local cross-section targets
              * also use PC32; explicit @PLT always overrides either mode. */
             const bool use_plt=X64_FORM_VALUE(m)==1U ||
-                (s->site.mode_bits==0U && !minias_encode_ctx_is_elf32(ctx) &&
+                (s->site.mode_bits==0U && !(minias_encode_ctx_address_size(ctx)==4U) &&
                  !defined_local_cross_section);
             MiniAsFixupKind kind=use_plt?MINIAS_FIXUP_X64_PLT32:
                 MINIAS_FIXUP_X64_PC32;
@@ -4679,7 +4679,7 @@ static bool x64_encode_base(MiniAsEncodeContext *ctx,const MiniAsInstructionView
                 MiniAsSymbolRef adjusted;
                 MiniAsFixupKind kind=X64_FORM_VALUE(m)==X64_FORM_I386_GOTPC?
                     MINIAS_FIXUP_X86_GOTPC:
-                    m->operands[0].register_64 && !minias_encode_ctx_is_elf32(ctx)?
+                    m->operands[0].register_64 && !(minias_encode_ctx_address_size(ctx)==4U)?
                         MINIAS_FIXUP_X64_ABS32S:MINIAS_FIXUP_ABS;
                 if(plan.immediate_bytes!=2U && plan.immediate_bytes!=4U) {
                     minias_encode_ctx_error(ctx,"invalid-x86-alu-symbol-width");
@@ -4786,8 +4786,8 @@ static bool x64_code_align(MiniAsCodeAlignSink *sink,const MiniAsCodeAlignmentVi
         {0x2e,0x8d,0xb4,0x00,0x00,0x2e,0x8d,0xb4,0x00,0x00,0x8d,0xb4,0x00,0x00},
         {0xeb,0x0d,0x2e,0x8d,0xb4,0x00,0x00,0x2e,0x8d,0xb4,0x00,0x00,0x8d,0x74,0x00}
     };
-    const bool legacy32=minias_code_align_is_elf32(sink) && stmt->site.mode_bits==X64_CODE32;
-    const bool legacy16=minias_code_align_is_elf32(sink) &&
+    const bool legacy32=(minias_code_align_address_size(sink)==4U) && stmt->site.mode_bits==X64_CODE32;
+    const bool legacy16=(minias_code_align_address_size(sink)==4U) &&
         x64_mode16(stmt->site.mode_bits);
     /* GNU GAS leaves a single 0x90 at the beginning of a code-alignment
      * fragment immediately following a raw DATA fragment, then fills the
@@ -4828,12 +4828,13 @@ static bool x64_profile(const char *march,const char *mabi,
         return false;
     }
     memset(cfg,0,sizeof(*cfg));cfg->target=minias_target_x86_64();
+    cfg->layout.address_size=8U;
     if(i386) {
         /* GNU --32 is an object-format profile, independent of a later
          * source-local `.code16gcc` / `.code32` CPU mode switch. */
-        cfg->object.elf32=true;
-        cfg->object.machine=3U; /* EM_386 */
-        cfg->object.rel_relocations=true;
+        cfg->layout.address_size=4U;
+        cfg->object.elf.machine=3U; /* EM_386 */
+        cfg->object.elf.rel_relocations=true;
     }
     return true;
 }
@@ -4864,7 +4865,7 @@ static uint32_t x64_reloc(MiniAsFixupKind kind,unsigned width) {
 
 static uint32_t x64_reloc_for_object(MiniAsTargetABIView view,
                                      MiniAsFixupKind kind,unsigned width) {
-    if(!view.elf32)return x64_reloc(kind,width);
+    if(!(view.address_size==4U))return x64_reloc(kind,width);
     /* ELF32 i386 REL: addends live in their destination sections.  The
      * generic writer handles the object encoding; Target only maps the
      * ABI relocation family, never a Linux/Kbuild filename special case. */
@@ -4916,7 +4917,7 @@ static bool x64_supports_amd64_fixup(MiniAsFixupKind kind,unsigned width) {
 }
 static bool x64_supports_fixup(MiniAsTargetABIView view,
                                MiniAsFixupKind kind,unsigned width) {
-    if(!view.elf32)return x64_supports_amd64_fixup(kind,width);
+    if(!(view.address_size==4U))return x64_supports_amd64_fixup(kind,width);
     /* i386 has no ABS64/GOTPCREL(X) relocation representation. Keep the
      * valid i386 combinations explicit; falling back to AMD64 silently
      * serialized unsupported requests as R_386_NONE. */
@@ -4957,7 +4958,7 @@ static bool x64_resolve_cfi_register(MiniAsTargetABIView view,const char *name,
     if(n==0U || n+2U>sizeof(normalized))return false;
     normalized[0]='%';
     memcpy(normalized+1U,bare,n+1U);
-    if(view.elf32) {
+    if((view.address_size==4U)) {
         if(x64_register(normalized,&reg,&wide) && !wide && reg<8U) {
             *dwarf_reg=reg;return true;
         }
@@ -4993,7 +4994,7 @@ static bool x64_resolve_cfi_register(MiniAsTargetABIView view,const char *name,
     return false;
 }
 static void x64_resolve_cfi_abi(MiniAsTargetABIView view,MiniAsCfiABI *abi) {
-    if(view.elf32) {
+    if((view.address_size==4U)) {
         /* GNU i386 SysV CFI: EIP=8, ESP=4, 32-bit stack/return slots.
          * .code16/.code32 at individual sites do not alter the object ABI. */
         abi->code_align=1U;
@@ -5015,7 +5016,7 @@ static bool x64_init_target_state(const MiniAsTargetSpec *config,
         (void)snprintf(error,error_cap,"out-of-memory:x86-target-state");
         return false;
     }
-    state->code_mode=config->object.elf32?X64_CODE32:0U;
+    state->code_mode=(config->layout.address_size==4U)?X64_CODE32:0U;
     *out_state=state;
     return true;
 }
@@ -5124,16 +5125,16 @@ static bool x64_named_relocation(MiniAsTargetABIView view,const char *name,
         {"R_386_GOTOFF",MINIAS_FIXUP_X86_GOTOFF,4U},
         {"R_386_GOT32X",MINIAS_FIXUP_X86_GOT32X,4U}
     };
-    const size_t count=view.elf32?
+    const size_t count=(view.address_size==4U)?
         sizeof(i386_forms)/sizeof(i386_forms[0]):
         sizeof(amd64_forms)/sizeof(amd64_forms[0]);
     unsigned i;
     for(i=0U;i<count;++i) {
-        const char *spelling=view.elf32?
+        const char *spelling=(view.address_size==4U)?
             i386_forms[i].name:amd64_forms[i].name;
         if(!strcmp(name,spelling)) {
-            *kind=view.elf32?i386_forms[i].kind:amd64_forms[i].kind;
-            *width=view.elf32?i386_forms[i].width:amd64_forms[i].width;
+            *kind=(view.address_size==4U)?i386_forms[i].kind:amd64_forms[i].kind;
+            *width=(view.address_size==4U)?i386_forms[i].width:amd64_forms[i].width;
             return true;
         }
     }

@@ -873,8 +873,8 @@ static bool riscv_resolve_profile(const char *march, const char *mabi,
     }
     memset(config, 0, sizeof(*config));
     config->target = minias_target_riscv();
-    config->object.elf32 = profile.elf32;
-    config->object.initial_elf_flags = profile.elf_flags;
+    config->layout.address_size = (uint8_t)(profile.elf32 ? 4U : 8U);
+    config->object.elf.initial_flags = profile.elf_flags;
     if (sizeof(profile) > sizeof(config->profile)) {
         (void)snprintf(error, capacity, "riscv-target-profile-overflow");
         return false;
@@ -1056,11 +1056,11 @@ static bool riscv_init_target_state(const MiniAsTargetSpec *config,
         if(capacity)snprintf(error,capacity,"out-of-memory:riscv-target-context");
         return false;
     }
-    state->target_xlen = config->object.elf32 ? 32U : 64U;
-    state->rv32e_abi = (config->object.initial_elf_flags & 8U) != 0U; /* EF_RISCV_RVE */
+    state->target_xlen = config->layout.address_size == 4U ? 32U : 64U;
+    state->rv32e_abi = (config->object.elf.initial_flags & 8U) != 0U; /* EF_RISCV_RVE */
     if (config->profile_size != 0U) {
         memcpy(&profile, config->profile, sizeof(profile));
-        if (profile.elf32 != config->object.elf32 ||
+        if (profile.elf32 != (config->layout.address_size == 4U) ||
             memchr(profile.arch_attribute_isa, '\0',
                    sizeof(profile.arch_attribute_isa)) == NULL) {
             free(state);
@@ -1099,9 +1099,9 @@ static bool riscv_configure_legacy(MiniAsTargetSpec *config,
                                    unsigned strict_i_xlen) {
     MiniAsRiscvProfile profile;
     if (strict_i_xlen != 32U && strict_i_xlen != 64U) return false;
-    if (config->object.elf32 != (strict_i_xlen == 32U)) return false;
+    if ((config->layout.address_size == 4U) != (strict_i_xlen == 32U)) return false;
     memset(&profile, 0, sizeof(profile));
-    profile.elf32 = config->object.elf32;
+    profile.elf32 = config->layout.address_size == 4U;
     profile.strict_i_xlen = strict_i_xlen;
     if (sizeof(profile) > sizeof(config->profile)) return false;
     memcpy(config->profile, &profile, sizeof(profile));

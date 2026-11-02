@@ -16,21 +16,25 @@ reject() {
     test -n "$output"
 }
 
-reject object_class '
+reject data_layout '
 #include "minias_internal.h"
-void mutate(MiniAs *as) { as->target_spec->object.elf32 = true; }
+void mutate(MiniAs *as) { as->target_spec->layout.address_size = 4U; }
+'
+reject object_format '
+#include "minias_internal.h"
+void mutate(MiniAs *as) { as->target_spec->object.format = MINIAS_OBJECT_FORMAT_ELF; }
 '
 reject initial_flags '
 #include "minias_internal.h"
-void mutate(MiniAs *as) { as->target_spec->object.initial_elf_flags |= 1U; }
+void mutate(MiniAs *as) { as->target_spec->object.elf.initial_flags |= 1U; }
 '
 reject object_machine '
 #include "minias_internal.h"
-void mutate(MiniAs *as) { as->target_spec->object.machine = 3U; }
+void mutate(MiniAs *as) { as->target_spec->object.elf.machine = 3U; }
 '
 reject relocation_format '
 #include "minias_internal.h"
-void mutate(MiniAs *as) { as->target_spec->object.rel_relocations = true; }
+void mutate(MiniAs *as) { as->target_spec->object.elf.rel_relocations = true; }
 '
 reject private_profile '
 #include "minias_internal.h"
@@ -50,7 +54,7 @@ printf '%s\n' '
 MiniAsTargetABIView observe(const MiniAs *as) {
     const MiniAsTargetSpec *spec = as->target_spec;
     MiniAsTargetABIView abi = minias_target_abi_view(as);
-    if (spec->object.elf32 != abi.elf32) abi.elf32 = false;
+    if (spec->layout.address_size != abi.address_size) abi.address_size = 0U;
     return abi;
 }
 ' | "$compiler" "${flags[@]}"
@@ -97,4 +101,4 @@ printf '.text\n.option rvc\nc.li a0,1\n' >"$work/rvc.s"
     -o "$work/rvc.o" "$work/rvc.s"
 readelf -h "$work/rvc.o" | grep -Eq 'Flags:.*0x1([^[:xdigit:]]|$)'
 
-echo 'MINIAS_TARGET_SPEC=PASS negative_compiles=7 positive=1 object_profiles=6 REL_RELA=2 source_RVC=1'
+echo 'MINIAS_TARGET_SPEC=PASS negative_compiles=8 positive=1 object_profiles=6 REL_RELA=2 source_RVC=1 data_layout=owned'

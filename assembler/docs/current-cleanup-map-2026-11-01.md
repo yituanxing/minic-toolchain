@@ -1,5 +1,24 @@
 # MiniAS 当前清理与所有权总览（2026-11-01）
 
+> **2026-11-02 Target DataLayout × ObjectFormat 终结边界合批
+> （`352537a1` ELF policy 批次之后；新 SHA 的远端结果另核）：**
+> 已将 `TargetSpec.layout.address_size` 设为四目标六配置唯一的机器
+> 地址宽度来源（i386/RV32=4，amd64/RV64/A64/Loong=8）；动态
+> 指令模式与 RISC-V 源内 ISA 选项仍由 Target/Site 独立管理。
+> `TargetSpec.object` 只保存格式选择和 ELF 专有 flags/machine/REL
+> 策略；ELF Target 的固定回调表继续唯一保存在 Target 私有
+> `MiniAsElfTargetPolicy`，Driver 只借用，不复制。CFI、DWARF、
+> ctor 数组、Target ABI 快照统一消费 DataLayout；一个 ELF Writer
+> 从该宽度推导 ELFCLASS32/64，未知格式/非法宽度 fail-closed。
+> ObjectModel 的 Section/Symbol 原生实体声明移到唯一独立
+> `minias_object_records.h`，终结只读头不再引入 Common Session。
+> 本地 `-Werror`、A0 30/30、旧新四目标 22 例和六配置 GNU
+> section/CFI/DWARF、五配置 GNU `.debug_frame` 均已通过；
+> **真正 COFF/Mach-O writer 未实现，四架构原始 Linux/GNU ld/QEMU
+> P0/P1 以新 SHA 实际运行的 opt-in 证据为准，不自动声称通过**。
+> 详见 [本批 DataLayout/格式边界](target-datalayout-objectformat-closure-2026-11-02.md)
+> 与 [exact-head Linux 验收矩阵](minias-exact-head-full-acceptance-2026-11-02.md)。
+
 > **2026-11-02 ObjectModel/源实体格式语义整链迁移（本批待发布 SHA）：**
 > 从 GNU `.section/.type/.globl` 输入→Common Context 保留的
 > SectionID/SymbolID→Target/Emission/Layout 消费→终结 ObjectModel

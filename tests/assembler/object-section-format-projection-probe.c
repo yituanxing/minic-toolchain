@@ -87,7 +87,7 @@ static const MiniAsElfTargetPolicy fixture_elf_policy={
 
 static bool write_section(MiniAsElfObjectView *view,const char *path) {
     view->error[0]='\0';
-    return minias_write_elf64(view,path);
+    return minias_write_elf_object(view,path);
 }
 
 int main(int argc,char **argv) {
@@ -114,6 +114,7 @@ int main(int argc,char **argv) {
     view.model.fragment_location=fragment_location;
     view.model.section_bytes=section_bytes;
     view.object_machine=EM_X86_64;
+    view.target_abi.address_size=8U;
     if(write_section(&view,"/dev/null") ||
        strcmp(view.error,"missing-elf-target-policy")!=0) {
         fputs("missing ELF Target policy escaped terminal Writer\n",stderr);
@@ -142,6 +143,16 @@ int main(int argc,char **argv) {
         fputs("unknown semantic Section flag escaped ELF projection\n",stderr);
         return 1;
     }
+    section.flags=0U;
+    for(i=0U;i<3U;++i) {
+        const unsigned char invalid_widths[]={0U,3U,16U};
+        view.target_abi.address_size=invalid_widths[i];
+        if(write_section(&view,"/dev/null") || view.error[0]=='\0') {
+            fputs("unknown target address size escaped ELF projection\n",stderr);
+            return 1;
+        }
+    }
+    view.target_abi.address_size=8U;
     section.flags=0U;
     section.group_comdat=true;
     if(write_section(&view,"/dev/null") || view.error[0]=='\0') {
@@ -188,7 +199,7 @@ int main(int argc,char **argv) {
         fputs("unknown Symbol visibility escaped ELF projection\n",stderr);
         return 1;
     }
-    puts("MINIAS_SECTION_ELF_PROJECTION=PASS kinds=6 invalid_kind=reject invalid_flag=reject invalid_group=2");
+    puts("MINIAS_SECTION_ELF_PROJECTION=PASS kinds=6 invalid_kind=reject invalid_flag=reject invalid_group=2 invalid_width=3");
     puts("MINIAS_SYMBOL_ELF_PROJECTION=PASS semantics=4 invalid_binding_kind_visibility=reject");
     return 0;
 }

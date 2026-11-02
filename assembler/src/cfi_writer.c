@@ -406,7 +406,7 @@ static bool cfi_emit_section_core(MiniAs *as,bool eh,
     char debug_base_name[72]={0};
     int section;
     if(eh && (!as->target->cfi_implicit_eh_frame ||
-              minias_cfi_abi(as).address_size!=(as->target_spec->object.elf32?4U:8U) ||
+              minias_cfi_abi(as).address_size!=as->target_spec->layout.address_size ||
               as->target->elf_policy->supports_fixup==NULL ||
               !as->target->elf_policy->supports_fixup(minias_target_abi_view(as),MINIAS_FIXUP_PREL32,4U))) {
         minias_set_error(as,"unsupported-target-eh-frame");

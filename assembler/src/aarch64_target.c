@@ -5866,6 +5866,7 @@ static bool aarch64_resolve_profile(const char *march, const char *mabi,
     }
     memset(config, 0, sizeof(*config));
     config->target = minias_target_aarch64();
+    config->layout.address_size=8U;
     memcpy(config->profile,&profile,sizeof(profile));
     config->profile_size=sizeof(profile);
     return true;

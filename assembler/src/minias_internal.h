@@ -1,8 +1,8 @@
 #ifndef MINIAS_INTERNAL_H
 #define MINIAS_INTERNAL_H
 
-#include "minias_target_api.h"
 #include "minias_elf_target_policy.h"
+#include "minias_object_records.h"
 #include "minias_fragment_internal.h"
 #include "minias_source_replay_contract.h"
 
@@ -10,26 +10,6 @@
 typedef struct MiniAsInternedSymbolName {
     char *name;
 } MiniAsInternedSymbolName;
-
-typedef struct MiniAsSection {
-    const char *name;
-    /* GNU ELF SHT_GROUP signature; absent for ordinary Sections. */
-    const char *group_signature;
-    /* Logical group selection is distinct from Section attributes. */
-    bool group_comdat;
-    /* SHF_LINK_ORDER references the original symbol, not just SectionID. */
-    const char *link_order_reference;
-    /* Explicit GNU unique ID is part of identity; zero is meaningful. */
-    bool has_unique_id;
-    uint32_t unique_id;
-    MiniAsSectionKind type;
-    MiniAsSectionFlags flags;
-    uint64_t align;
-    uint64_t entry_size;
-    /* Output bytes/length/capacity belong exclusively to Emission, indexed
-     * by this SectionID. This record is metadata and identity only. */
-    uint64_t layout_size;
-} MiniAsSection;
 
 typedef struct MiniAsSubsection {
     int section;
@@ -46,51 +26,6 @@ typedef struct MiniAsSectionState {
     uint32_t subsection;
 } MiniAsSectionState;
 
-typedef struct MiniAsSymbol {
-    const char *name;
-    /* GNU RISC-V may emit the same mapping name at several code sites.
-     * These finalization-only object symbols are not source-name bindings. */
-    bool unindexed_mapping;
-    int section;
-    uint64_t value;
-    uint64_t size;
-    /* GNU alias `.size NAME,0` still inherits its target's current size;
-     * a nonzero explicit size or anchored `.size` span remains independent
-     * of its target across repeated MCLayout generations. */
-    bool has_explicit_size;
-    /* An alias follows a forward target or a target with live `.size` span;
-     * a defined target without dynamic size gives a lexical size snapshot.
-     * Explicit nonzero alias sizes override the inherited result. */
-    bool alias_size_tracks_target;
-    /* `.loc view NAME` can be updated after relaxation, unlike `.equ`. */
-    bool named_dwarf_view;
-    MiniAsSymbolBinding bind;
-    MiniAsSymbolKind type;
-    MiniAsSymbolVisibility visibility;
-    uint32_t subsection;
-    bool defined;
-    bool alias_pending;
-    bool mutable_absolute_set;
-    bool explicit_local_binding;
-    size_t alias_target_index;
-    bool has_alias_dependency;
-    int64_t alias_addend;
-    size_t alias_line;
-    const char *alias_section_base;
-    bool has_fragment_anchor;
-    size_t fragment_anchor;
-    int64_t fragment_anchor_addend;
-    bool has_size_end_anchor;
-    size_t size_end_anchor;
-    uint32_t size_end_subsection;
-    int64_t size_end_addend;
-    bool has_size_start_symbol;
-    size_t size_start_symbol_index;
-    uint64_t size_end_value;
-} MiniAsSymbol;
-
-/* One Common conversion for a phase-scoped Target value projection. */
-bool minias_project_symbol(const MiniAsSymbol *,MiniAsSymbolView *);
 /* Common-only stack projector. Operand storage is supplied by each caller
  * and lives only for the target callback's dynamic extent. */
 bool minias_project_instruction(const MiniAsStmt *, MiniAsInstructionView *,
@@ -223,7 +158,7 @@ typedef struct MiniAs {
 } MiniAs;
 
 static inline MiniAsTargetABIView minias_target_abi_view(const MiniAs *as) {
-    MiniAsTargetABIView view={as->target_state,as->target_spec->object.elf32};
+    MiniAsTargetABIView view={as->target_state,as->target_spec->layout.address_size};
     return view;
 }
 
@@ -376,13 +311,11 @@ bool minias_section_append_zero(MiniAs *as, int section_index, size_t size);
 void minias_set_error(MiniAs *as, const char *format, ...);
 /* Shared first-error-wins formatter for phase-limited Common-owned sinks. */
 void minias_set_error_va(MiniAs *, const char *, va_list);
-char *minias_strdup(const char *text);
 /* Synthetic labels use a namespace unavailable to GNU source tokens.
  * ELF serialization gives them collision-free printable names without
  * changing their stable internal SymbolIDs. */
 bool minias_make_private_symbol_name(char *out, size_t capacity,
                                      const char *kind, size_t ordinal);
-bool minias_is_private_symbol_name(const char *name);
 char *minias_trim(char *text);
 /* Common balanced lexical grouping, Target-private operand grammar. */
 bool minias_split_mc_operands(const char *,char *const [],const size_t [],

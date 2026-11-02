@@ -529,10 +529,13 @@ done:
     return ok;
 }
 
-bool minias_write_elf64(MiniAsElfObjectView *as, const char *path) {
-    return minias_write_elf(as, path, ELFCLASS64);
-}
-
-bool minias_write_elf32(MiniAsElfObjectView *as, const char *path) {
-    return minias_write_elf(as, path, ELFCLASS32);
+bool minias_write_elf_object(MiniAsElfObjectView *as, const char *path) {
+    if(as==NULL || path==NULL)return false;
+    if(as->target_abi.address_size==4U)
+        return minias_write_elf(as,path,ELFCLASS32);
+    if(as->target_abi.address_size==8U)
+        return minias_write_elf(as,path,ELFCLASS64);
+    elf_object_error(as,"invalid-elf-address-size:%u",
+                     (unsigned)as->target_abi.address_size);
+    return false;
 }

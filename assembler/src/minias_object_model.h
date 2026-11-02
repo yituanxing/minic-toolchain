@@ -1,7 +1,7 @@
 #ifndef MINIAS_OBJECT_MODEL_H
 #define MINIAS_OBJECT_MODEL_H
 
-#include "minias_internal.h"
+#include "minias_object_records.h"
 
 /* The object-format-neutral terminal borrow. SectionID, SymbolID and Fixup
  * records stay in their existing Context/Emission owners. This reader has no

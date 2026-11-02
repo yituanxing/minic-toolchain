@@ -248,8 +248,8 @@ const void *minias_parse_target_state(const MiniAsParseContext *ctx) {
     return ctx->as->target_state;
 }
 
-bool minias_parse_is_elf32(const MiniAsParseContext *ctx) {
-    return ctx->as->target_spec->object.elf32;
+unsigned minias_parse_address_size(const MiniAsParseContext *ctx) {
+    return ctx->as->target_spec->layout.address_size;
 }
 
 bool minias_parse_has_error(const MiniAsParseContext *ctx) {
@@ -482,10 +482,14 @@ static bool minias_object_section_bytes(const void *reader,int section,
     return true;
 }
 
-static bool minias_write_final_object(MiniAs *as,const char *path,bool elf32) {
+static bool minias_write_final_object(MiniAs *as,const char *path) {
     const MiniAsFixupSpan fixups=minias_emission_fixups(as);
     MiniAsElfObjectView object={0};
     bool ok;
+    if(as->target_spec->object.format!=MINIAS_OBJECT_FORMAT_ELF) {
+        minias_set_error(as,"unsupported-object-format");
+        return false;
+    }
     object.model.sections=as->sections;
     object.model.section_count=as->section_count;
     object.model.symbols=as->symbols;
@@ -496,8 +500,8 @@ static bool minias_write_final_object(MiniAs *as,const char *path,bool elf32) {
     object.model.cu_file=minias_object_cu_file;
     object.policy=as->target->elf_policy;
     object.target_abi=minias_target_abi_view(as);
-    object.object_machine=as->target_spec->object.machine;
-    object.output_rel_relocations=as->target_spec->object.rel_relocations;
+    object.object_machine=as->target_spec->object.elf.machine;
+    object.output_rel_relocations=as->target_spec->object.elf.rel_relocations;
     object.elf_flags=as->elf_flags;
     object.model.reader=as;
     object.model.find_symbol_id=minias_object_find_symbol_id;
@@ -505,8 +509,7 @@ static bool minias_write_final_object(MiniAs *as,const char *path,bool elf32) {
     object.model.numeric_reference=minias_object_numeric_reference;
     object.model.fragment_location=minias_object_fragment_location;
     object.model.section_bytes=minias_object_section_bytes;
-    ok=elf32?minias_write_elf32(&object,path):
-             minias_write_elf64(&object,path);
+    ok=minias_write_elf_object(&object,path);
     if(!ok)minias_set_error(as,"%s",object.error[0]!='\0'?
                             object.error:"elf-object-write-failed");
     return ok;
@@ -526,6 +529,13 @@ int minias_assemble_config(const char *input_path,
             fprintf(diagnostic,"minic-as: missing-target-spec\n");
         return 2;
     }
+    if((config->layout.address_size!=4U &&
+        config->layout.address_size!=8U) ||
+       config->object.format!=MINIAS_OBJECT_FORMAT_ELF) {
+        if(diagnostic!=NULL)
+            fprintf(diagnostic,"minic-as: unsupported-target-layout-or-object-format\n");
+        return 2;
+    }
     graph=minias_source_graph_create();
     if(graph==NULL) {
         if(diagnostic!=NULL)
@@ -539,7 +549,7 @@ int minias_assemble_config(const char *input_path,
         bool added_long_branches = false;
 
         const bool initialized=minias_init_for_target(&as,config);
-        as.elf_flags = config->object.initial_elf_flags;
+        as.elf_flags = config->object.elf.initial_flags;
         if (config->profile_size > sizeof(config->profile)) {
             minias_set_error(&as, "invalid-target-profile-size");
         } else if (initialized && as.target->init_target_state != NULL) {
@@ -624,7 +634,7 @@ int minias_assemble_config(const char *input_path,
             if ((as.target->validate_output == NULL ||
                  as.target->validate_output(&final_layout, &errors)) &&
                 minias_finalize_target_output(&as,&final_layout,&errors,&object) &&
-                minias_write_final_object(&as,output_path,config->object.elf32)) {
+                minias_write_final_object(&as,output_path)) {
                 rc = 0;
             }
         }
@@ -650,8 +660,8 @@ int minias_assemble_file_target_isa(const char *input_path,
                                     FILE *diagnostic) {
     MiniAsTargetSpec config={0};
     config.target=minias_target_riscv();
-    config.object.elf32=elf32;
-    config.object.initial_elf_flags=elf_flags;
+    config.layout.address_size=(uint8_t)(elf32?4U:8U);
+    config.object.elf.initial_flags=elf_flags;
     if(strict_i_xlen!=0U &&
        (config.target->configure_legacy_target==NULL ||
         !config.target->configure_legacy_target(&config,strict_i_xlen))) {

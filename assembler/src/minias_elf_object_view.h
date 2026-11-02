@@ -18,7 +18,8 @@ typedef struct MiniAsElfObjectView {
     char error[MINIAS_MAX_ERROR];
 } MiniAsElfObjectView;
 
-bool minias_write_elf64(MiniAsElfObjectView *,const char *path);
-bool minias_write_elf32(MiniAsElfObjectView *,const char *path);
+/* ELF class is a projection of the single immutable target address-size
+ * layout; neither the Driver nor the object view keeps a second elf32 bit. */
+bool minias_write_elf_object(MiniAsElfObjectView *,const char *path);
 
 #endif

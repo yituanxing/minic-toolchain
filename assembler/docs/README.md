@@ -14,8 +14,10 @@
 | [四目标架构审计](architecture-audit-2026-10-29.md) | 最初跨模块问题和验收分类 | 仅用作基线参考 |
 | [Target 边界](target-boundary.md) | ISA/ABI 的单目标修复历史 | 不自动推广到其他 ISA |
 | [TargetSpec 只读所有权](target-spec-ownership-2026-11-02.md) | 对象 ABI 的不可变配置与运行期 ELF flags 独立状态 | 本轮四架构结构收口 |
+| [Target DataLayout / ObjectFormat 终结边界](target-datalayout-objectformat-closure-2026-11-02.md) | 唯一 4/8 地址宽度、四 Target ABI、ELF policy 与单 Writer 全链关系 | 当前目标布局与格式边界 |
 | [ObjectModel 格式语义边界](object-format-semantic-boundary-2026-11-02.md) | Section/Symbol 从源码语义到 ELF 磁盘编码的唯一投影 | 新格式不能复用 ELF 编码常量 |
 | [Linux 验收证据](linux-6.6.143-runtime-acceptance-2026-10-31.md) | GNU 链接与 QEMU 的实际验收 | 必须核对当时的 SHA |
+| [本批 exact-head 完整验收](minias-exact-head-full-acceptance-2026-11-02.md) | 4 架构真实 GNU Kbuild/ld/system QEMU、3×7、3,536 与运行时矩阵 | 未完成即不得宣称 P1 PASS |
 | [AArch64 垂直切片](aarch64-vertical-slice.md) | 目标初期实现参考 | 历史材料 |
 | [自审记录](self-audit-2026-10-28.md) | 早期源码检查 | 历史材料 |
 

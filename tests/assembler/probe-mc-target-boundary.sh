@@ -96,7 +96,7 @@ if 'struct MiniAsEncodeContext {' in header or \
     raise SystemExit('EncodeContext is not constructed privately by Common')
 services=('emit','fixup_ref','fixup_abs0','anchor_ref','elf_flags',
           'error','symbol_lookup','resolve_difference',
-          'resolve_difference_field','symbol_is_dot','target_state','is_elf32')
+          'resolve_difference_field','symbol_is_dot','target_state','address_size')
 for service in services:
     if not re.search(r'\bminias_encode_ctx_'+service+r'\s*\(',header):
         raise SystemExit('missing restricted encode service: '+service)
@@ -147,7 +147,7 @@ if not re.search(r'bool\s*\(\*finalize_output\)\s*\(const MiniAsPostEmitView\s*\
 steps = ('minias_emit_sections(&as)',
          'as.target->validate_output(&final_layout, &errors)',
          'minias_finalize_target_output(&as,&final_layout,&errors,&object)',
-         'minias_write_final_object(&as,output_path,config->object.elf32)')
+         'minias_write_final_object(&as,output_path)')
 offsets = [driver.find(step) for step in steps]
 if -1 in offsets or offsets != sorted(offsets):
     raise SystemExit('Target validation/finalization/ELF output order drifted')
@@ -241,7 +241,7 @@ if 'MiniAsParseContext parsing = { .as=as };' not in lowering or \
         'as->target->parse_mcinst(&parsing,&instruction)' not in lowering or \
         'st->payload.instruction.inst=instruction.inst;' not in lowering:
     raise SystemExit('Common failed to provide its single parse owner')
-required = ('target_state', 'is_elf32', 'has_error', 'error',
+required = ('target_state', 'address_size', 'has_error', 'error',
             'bind_symbol_ref', 'bind_symbol_difference_ref',
             'symbol_pair_same_defined_section', 'eval_absolute_data_bits',
             'evaluate_absolute_operand',
@@ -462,9 +462,9 @@ root = Path('assembler/src')
 header = (root / 'minias_target_api.h').read_text()
 elf_header = (root / 'minias_elf_target_policy.h').read_text()
 definition = header.split('typedef struct MiniAsTargetABIView {',1)[1].split('}',1)[0]
-if re.sub(r'/\*.*?\*/', '', definition, flags=re.S).strip() != \
-        'const void *target_state;\n    bool elf32;':
-    raise SystemExit('Target ABI view exposes fields beyond private state and ELF class')
+if ' '.join(re.sub(r'/\*.*?\*/', '', definition, flags=re.S).split()) != \
+        'const void *target_state; uint8_t address_size;':
+    raise SystemExit('Target ABI view exposes fields beyond private state and address width')
 policies = ('object_attributes','supports_fixup','fixup_relocation_type',
             'parse_named_relocation','leb128_relocations_enabled',
             'resolve_cfi_abi','resolve_cfi_register')
@@ -644,11 +644,13 @@ import subprocess
 root = Path('assembler/src')
 api = (root / 'minias_target_api.h').read_text()
 private = (root / 'minias_internal.h').read_text()
+records = (root / 'minias_object_records.h').read_text()
 common = (root / 'assembler.c').read_text()
 emission = (root / 'common_emission.c').read_text()
 common_lowering = (root / 'minias_common_lowering.h').read_text()
 if '#include "minias_internal.h"' in api or \
-        '#include "minias_target_api.h"' not in private:
+        '#include "minias_object_records.h"' not in private or \
+        '#include "minias_target_api.h"' not in records:
     raise SystemExit('Target header acquired a Common-private include cycle')
 if 'typedef struct MiniAs {' not in private or \
         re.search(r'\b(?:struct|typedef\s+struct)\s+MiniAs\s*\{', api):

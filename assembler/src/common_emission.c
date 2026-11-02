@@ -576,8 +576,8 @@ const void *minias_encode_ctx_target_state(const MiniAsEncodeContext *ctx) {
     return ctx->as->target_state;
 }
 
-bool minias_encode_ctx_is_elf32(const MiniAsEncodeContext *ctx) {
-    return ctx->as->target_spec->object.elf32;
+unsigned minias_encode_ctx_address_size(const MiniAsEncodeContext *ctx) {
+    return ctx->as->target_spec->layout.address_size;
 }
 
 struct MiniAsCodeAlignSink {
@@ -605,8 +605,8 @@ const void *minias_code_align_target_state(const MiniAsCodeAlignSink *sink) {
     return sink!=NULL?sink->as->target_state:NULL;
 }
 
-bool minias_code_align_is_elf32(const MiniAsCodeAlignSink *sink) {
-    return sink!=NULL && sink->as->target_spec->object.elf32;
+unsigned minias_code_align_address_size(const MiniAsCodeAlignSink *sink) {
+    return sink!=NULL?sink->as->target_spec->layout.address_size:0U;
 }
 
 bool minias_code_align_has_active_fragment(const MiniAsCodeAlignSink *sink) {

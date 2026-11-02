@@ -338,14 +338,15 @@ typedef struct MiniAsSectionView {
 } MiniAsSectionView;
 
 
-/* Target object/ABI policies only need the finalized object class and the
+/* Target ABI policies only need the immutable address width and the
  * Target's private state. Passing this value instead of the whole MiniAs
  * session prevents read-only policy hooks from depending on Common Symbols,
  * Sections, Fragment arrays or SourceContext internals. The snapshot is
  * reconstructed at each call because Target state can change during parse. */
 typedef struct MiniAsTargetABIView {
     const void *target_state;
-    bool elf32;
+    /* Target address width is independent of any object's ELF class. */
+    uint8_t address_size;
 } MiniAsTargetABIView;
 
 /* Complete retained source Fragments after parsing/EOF pools, BEFORE any
@@ -374,7 +375,7 @@ void minias_measure_error(MiniAsMeasureErrorSink *, const char *, ...);
  * or a target-accessible writable MiniAs graph. */
 typedef struct MiniAsParseContext MiniAsParseContext;
 const void *minias_parse_target_state(const MiniAsParseContext *);
-bool minias_parse_is_elf32(const MiniAsParseContext *);
+unsigned minias_parse_address_size(const MiniAsParseContext *);
 bool minias_parse_has_error(const MiniAsParseContext *);
 void minias_parse_error(MiniAsParseContext *, const char *, ...);
 bool minias_parse_bind_symbol_ref(MiniAsParseContext *,
@@ -446,7 +447,7 @@ bool minias_encode_ctx_resolve_difference_field(MiniAsEncodeContext *,
     MiniAsSymbolRef *);
 bool minias_encode_ctx_symbol_is_dot(MiniAsEncodeContext *, MiniAsSymbolRef);
 const void *minias_encode_ctx_target_state(const MiniAsEncodeContext *);
-bool minias_encode_ctx_is_elf32(const MiniAsEncodeContext *);
+unsigned minias_encode_ctx_address_size(const MiniAsEncodeContext *);
 /* Executable ALIGN is a Target byte policy, not a general-purpose session
  * capability. The Target sees no MiniAs or mutable Fragment/Section array. */
 typedef struct MiniAsCodeAlignSink MiniAsCodeAlignSink;
@@ -454,7 +455,7 @@ bool minias_code_align_emit(MiniAsCodeAlignSink *, const void *, size_t);
 bool minias_code_align_add_elf_flags(MiniAsCodeAlignSink *, uint32_t);
 void minias_code_align_error(MiniAsCodeAlignSink *, const char *, ...);
 const void *minias_code_align_target_state(const MiniAsCodeAlignSink *);
-bool minias_code_align_is_elf32(const MiniAsCodeAlignSink *);
+unsigned minias_code_align_address_size(const MiniAsCodeAlignSink *);
 bool minias_code_align_has_active_fragment(const MiniAsCodeAlignSink *);
 /* Common owns source order, subsection identity and adjacency rules. */
 bool minias_code_align_preceded_by_adjacent_data(const MiniAsCodeAlignSink *);
@@ -685,18 +686,31 @@ const MiniAsTargetOps *minias_target_x86_64(void);
 const MiniAsTargetOps *minias_target_loongarch64(void);
 const MiniAsTargetOps *minias_find_target(const char *name);
 
-/* Resolved before opening SourceGraph and immutable throughout every layout
- * replay.  The initial ELF flags are not the final emitted e_flags: Target
- * encoders may OR in flags such as EF_RISCV_RVC during Emission. */
-typedef struct MiniAsObjectSpec {
-    bool elf32;
-    uint32_t initial_elf_flags;
+/* Exactly one address-width owner for Common directives, DWARF, CFI and
+ * Target ABI callbacks. The object format must never be its width source. */
+typedef struct MiniAsTargetDataLayout {
+    uint8_t address_size; /* 4 for ILP32, 8 for LP64 */
+} MiniAsTargetDataLayout;
+
+/* Format policy stays separate from the common machine data layout.
+ * Only ELF has a writer today; unknown format values fail closed. */
+typedef enum MiniAsObjectFormat {
+    MINIAS_OBJECT_FORMAT_ELF = 0
+} MiniAsObjectFormat;
+typedef struct MiniAsElfObjectSpec {
+    /* Target encoders may OR output-only ELF flags during Emission. */
+    uint32_t initial_flags;
     uint16_t machine; /* 0: use Target's ELF machine. */
     bool rel_relocations; /* false: RELA; true: REL. */
+} MiniAsElfObjectSpec;
+typedef struct MiniAsObjectSpec {
+    MiniAsObjectFormat format;
+    MiniAsElfObjectSpec elf;
 } MiniAsObjectSpec;
 
 typedef struct MiniAsTargetSpec {
     const MiniAsTargetOps *target;
+    MiniAsTargetDataLayout layout;
     MiniAsObjectSpec object;
     /* Serialized Target-private ISA/ABI profile, read only by that Target.
      * A fixed inline buffer avoids caller-owned borrowed pointers. */

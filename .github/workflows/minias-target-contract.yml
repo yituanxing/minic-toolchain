@@ -119,6 +119,10 @@ jobs:
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
             bash tests/assembler/probe-target-spec-const-abi.sh
+      - name: Five-profile data layout and object format boundary against GNU
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-target-datalayout-format-boundary.sh
       - name: GNU x86 ELF32 i386 ISA and object ABI must agree in both directions
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \

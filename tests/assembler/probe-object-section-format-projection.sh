@@ -26,7 +26,7 @@ import sys
 
 root = Path(sys.argv[1]) / 'assembler/src'
 api = (root / 'minias_target_api.h').read_text()
-internal = (root / 'minias_internal.h').read_text()
+records = (root / 'minias_object_records.h').read_text()
 writer = (root / 'elf_writer.c').read_text()
 source = '\n'.join(p.read_text() for p in root.glob('*.[ch]'))
 
@@ -48,13 +48,13 @@ for token in ('MINIAS_SYMBOL_BINDING_GNU_UNIQUE',
               'MINIAS_SYMBOL_VISIBILITY_HIDDEN'):
     if token not in api or token not in writer:
         raise SystemExit('Symbol semantics lack explicit ELF projection: ' + token)
-if 'MiniAsSectionKind type;' not in internal or \
-   'MiniAsSectionFlags flags;' not in internal or \
-   'bool group_comdat;' not in internal or 'group_flags;' in internal:
+if 'MiniAsSectionKind type;' not in records or \
+   'MiniAsSectionFlags flags;' not in records or \
+   'bool group_comdat;' not in records or 'group_flags;' in records:
     raise SystemExit('Context retains ELF wire metadata or duplicate group flags')
 for token in ('MiniAsSymbolBinding bind;', 'MiniAsSymbolKind type;',
               'MiniAsSymbolVisibility visibility;'):
-    if token not in internal:
+    if token not in records:
         raise SystemExit('Context Symbol record retains ELF wire value: ' + token)
 print('MINIAS_SECTION_SEMANTIC_OWNER=PASS kinds=6 flags=9 group=bool '\
       'ELF_numeric=writer_only')
