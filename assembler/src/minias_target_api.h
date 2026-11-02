@@ -46,91 +46,21 @@
 #define MINIAS_SECTION_COMMON (-3) /* semantic ELF SHN_COMMON */
 #define MINIAS_MAX_ERROR 256U
 
-typedef struct MiniAsSection {
-    char *name;
-    /* GNU ELF SHT_GROUP signature; absent for ordinary Sections. */
-    char *group_signature;
-    /* SHT_GROUP flags are distinct from section flags. A named group may be
-     * non-COMDAT (zero) or COMDAT (GRP_COMDAT), and `?` inherits the current
-     * source group's policy. The ELF writer merges policy by signature. */
-    uint32_t group_flags;
-    /* SHF_LINK_ORDER identity is the original referenced *symbol*, not the
-     * resolved SectionID: two distinct patchable-function anchors in one
-     * .text still require two distinct, same-named output sections.  Resolve
-     * this reference after all labels and section groups are finalized. */
-    char *link_order_reference;
-    /* Explicit GNU `unique,<u32>` is a Section identity component, not an
-     * output flag. ID zero is valid and differs from no unique argument. */
-    bool has_unique_id;
-    uint32_t unique_id;
-    uint32_t type;
-    uint64_t flags;
-    uint64_t align;
-    uint64_t entry_size; /* ELF sh_entsize: GNU mergeable constants/strings */
-    unsigned char *data;
-    size_t size;
-    size_t capacity;
-    uint64_t layout_size;
-} MiniAsSection;
-
-typedef struct MiniAsSubsection {
-    int section;
-    uint32_t number;
-    uint64_t size;
-    uint64_t base;
-    /* A data or placement fragment may change width during MC relaxation.
-     * Insert one target-advertised code alignment at the next instruction,
-     * not one alignment fragment per instruction in large Linux sources. */
-    bool pending_instruction_alignment;
-} MiniAsSubsection;
-
-typedef struct MiniAsSectionState {
+/* Section and Symbol are Common-owned mutable records, defined only in
+ * minias_internal.h. Targets receive phase-scoped value projections below,
+ * never their allocation capacities, mutable names or backing buffers. */
+typedef struct MiniAsSymbolView {
+    const char *name;
     int section;
     uint32_t subsection;
-} MiniAsSectionState;
-
-
-typedef struct MiniAsSymbol {
-    char *name;
-    int section;
     uint64_t value;
-    uint64_t size;
     uint8_t bind;
     uint8_t type;
-    uint8_t visibility;
-    uint32_t subsection;
     bool defined;
     bool alias_pending;
-    bool mutable_absolute_set; /* GNU .set reassignment, unlike .equ */
-    bool explicit_local_binding; /* .local before .comm denotes real BSS */
-    size_t alias_target_index;
-    /* A resolved section-relative alias still depends on its target's
-     * Fragment anchor.  Preserve that edge across every MCLayout pass. */
+    bool mutable_absolute_set;
     bool has_alias_dependency;
-    int64_t alias_addend;
-    size_t alias_line;
-    /* GNU .set CONST + symbol - .section: deferred absolute offset
-     * relative to the *named* target section, never a PC-relative RELA. */
-    char *alias_section_base;
-    /* Location anchors in the parsed fragment stream. Repeated labels and
-     * macro expansions must not use source-line numbers as identities. */
-    bool has_fragment_anchor;
-    size_t fragment_anchor;
-    /* GNU .set name, .+N is a location symbol, not a frozen integer. */
-    int64_t fragment_anchor_addend;
-    bool has_size_end_anchor;
-    size_t size_end_anchor;
-    /* A .size end may be in another numbered subsection of the SAME ELF
-     * Section. Its Fragment owner is independent of the symbol's start. */
-    uint32_t size_end_subsection;
-    int64_t size_end_addend; /* .size sym, .-sym+N is a retained end MCExpr */
-    /* GNU permits .size public_symbol, .-local_entry_label.  The source
-     * SymbolID owns the start Fragment even when the ELF symbol whose size
-     * we report is a distinct global alias. */
-    bool has_size_start_symbol;
-    size_t size_start_symbol_index;
-    uint64_t size_end_value;
-} MiniAsSymbol;
+} MiniAsSymbolView;
 
 /* The sole persistent Fragment discriminator.  Both Target-facing emission
  * and Common layout consume this semantic kind, not directive spelling or
@@ -453,6 +383,32 @@ typedef struct MiniAsStmt {
     MiniAsFragmentPayload payload;
 } MiniAsStmt;
 
+/* Ephemeral value projections. No pointer to writable Common Fragments,
+ * Sections or Symbol records crosses a Target stage boundary. A borrowed
+ * source name and finalized bytes remain const for the duration of the
+ * callback. Each query observes the current MCLayout/Emission generation. */
+typedef struct MiniAsFragmentView {
+    MiniAsFragmentKind kind;
+    const char *op;
+    size_t line;
+    int section;
+    uint64_t offset;
+    uint32_t size;
+    MiniAsTargetSiteState site;
+    bool has_instruction;
+    unsigned instruction_opcode;
+    bool alignment_has_fill;
+} MiniAsFragmentView;
+
+typedef struct MiniAsSectionView {
+    const char *name;
+    uint32_t type;
+    uint64_t flags;
+    uint64_t align;
+    const unsigned char *data;
+    size_t size;
+} MiniAsSectionView;
+
 
 /* Target object/ABI policies only need the finalized object class and the
  * Target's private state. Passing this value instead of the whole MiniAs
@@ -467,12 +423,12 @@ typedef struct MiniAsTargetABIView {
 /* Complete retained source Fragments after parsing/EOF pools, BEFORE any
  * MCLayout relaxation. A Target may derive its own section-wide policies
  * once, without receiving writable Common Section/Fragment storage. */
-typedef struct MiniAsPreLayoutView {
-    const MiniAsStmt *stmts;
-    size_t stmt_count;
-    size_t section_count;
-    void *target_state; /* owned and mutable only by the selected Target */
-} MiniAsPreLayoutView;
+typedef struct MiniAsPreLayoutView MiniAsPreLayoutView;
+size_t minias_pre_layout_fragment_count(const MiniAsPreLayoutView *);
+size_t minias_pre_layout_section_count(const MiniAsPreLayoutView *);
+void *minias_pre_layout_target_state(const MiniAsPreLayoutView *);
+bool minias_pre_layout_fragment(const MiniAsPreLayoutView *,size_t,
+                                MiniAsFragmentView *);
 
 /* Instruction width is a Target-owned property of retained MCInst and its
  * parse-site ISA/mode. Measuring cannot mutate Common source, layout,
@@ -514,13 +470,14 @@ bool minias_parse_queue_literal(MiniAsParseContext *,
  * cannot reach the mutable Common section/symbol/fixup graph through this
  * interface. Only the object-finalization sink below can request the two
  * currently needed ELF changes; Common remains their sole owner. */
-typedef struct MiniAsPostEmitView {
-    const MiniAsStmt *stmts;
-    size_t stmt_count;
-    const MiniAsSection *sections;
-    size_t section_count;
-    const void *target_state;
-} MiniAsPostEmitView;
+typedef struct MiniAsPostEmitView MiniAsPostEmitView;
+size_t minias_post_emit_fragment_count(const MiniAsPostEmitView *);
+size_t minias_post_emit_section_count(const MiniAsPostEmitView *);
+const void *minias_post_emit_target_state(const MiniAsPostEmitView *);
+bool minias_post_emit_fragment(const MiniAsPostEmitView *,size_t,
+                               MiniAsFragmentView *);
+bool minias_post_emit_section(const MiniAsPostEmitView *,size_t,
+                              MiniAsSectionView *);
 
 typedef struct MiniAsPostEmitErrorSink MiniAsPostEmitErrorSink;
 typedef struct MiniAsPostEmitObjectSink MiniAsPostEmitObjectSink;
@@ -547,8 +504,8 @@ bool minias_encode_ctx_anchor_ref(MiniAsEncodeContext *, const char *,
                                  MiniAsSymbolRef *);
 bool minias_encode_ctx_elf_flags(MiniAsEncodeContext *, uint32_t);
 void minias_encode_ctx_error(MiniAsEncodeContext *, const char *, ...);
-const MiniAsSymbol *minias_encode_ctx_symbol_lookup(
-    MiniAsEncodeContext *, MiniAsSymbolRef);
+bool minias_encode_ctx_symbol_lookup(MiniAsEncodeContext *,MiniAsSymbolRef,
+                                    MiniAsSymbolView *);
 bool minias_encode_ctx_resolve_difference(MiniAsEncodeContext *,
     const MiniAsSymbolDifferenceRef *, int64_t *);
 bool minias_encode_ctx_resolve_difference_field(MiniAsEncodeContext *,
@@ -628,8 +585,8 @@ typedef struct MiniAsTargetRelaxPlan {
  * service. Targets can query symbols and checked differences or report a
  * diagnostic, but cannot obtain a writable MiniAs or mutate layout. */
 typedef struct MiniAsRelaxContext MiniAsRelaxContext;
-const MiniAsSymbol *minias_relax_symbol_ref_lookup(
-    MiniAsRelaxContext *, MiniAsSymbolRef);
+bool minias_relax_symbol_ref_lookup(MiniAsRelaxContext *,MiniAsSymbolRef,
+                                   MiniAsSymbolView *);
 bool minias_relax_resolve_symbol_difference_ref(
     MiniAsRelaxContext *, const MiniAsSymbolDifferenceRef *, int64_t *);
 void minias_relax_error(MiniAsRelaxContext *, const char *, ...);
@@ -762,7 +719,7 @@ typedef struct MiniAsTargetOps {
      * sensitive relocation semantics (e.g. AArch64 function veneers and GOT
      * entry identity). A NULL callback imposes no additional restriction. */
     bool (*allow_local_section_symbol_fixup)(const MiniAsFixup *,
-                                            const MiniAsSymbol *);
+                                            const MiniAsSymbolView *);
     /* Section-symbol density is ABI/assembler policy, not an ELF constant. */
     bool emit_all_section_symbols;
     /* Target mapping symbols for data synthesized by the Common CFI writer.

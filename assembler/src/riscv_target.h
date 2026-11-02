@@ -118,7 +118,7 @@ typedef struct MiniAsRiscvBranchPlan {
 /* Pure range/relocation policy. Caller supplies a current-layout symbol
  * snapshot and owns diagnostics; no Common state is read or modified. */
 bool minias_riscv_compute_branch_plan(const struct MiniAsStmt *stmt,
-                                      const struct MiniAsSymbol *symbol,
+                                      const struct MiniAsSymbolView *symbol,
                                       MiniAsRiscvBranchPlan *result,
                                       const char **diagnostic);
 /* Retained branch/JAL operand binding is immutable across relaxation and

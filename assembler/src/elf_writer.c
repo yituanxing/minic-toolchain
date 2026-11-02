@@ -125,6 +125,7 @@ done:
  * ELF logic lives here. */
 static bool section_symbol_fixup(const MiniAs *as,const MiniAsFixup *fixup) {
     const MiniAsSymbol *sym;
+    MiniAsSymbolView target_symbol;
     bool requested=fixup->prefer_section_symbol ||
         as->target->fold_defined_local_relocation_to_section ||
         (as->target->fold_local_pcrel_relocation_to_section &&
@@ -141,7 +142,8 @@ static bool section_symbol_fixup(const MiniAs *as,const MiniAsFixup *fixup) {
     return sym->defined && sym->bind==MINIAS_STB_LOCAL &&
            sym->section>=0 && (size_t)sym->section<as->section_count &&
            (as->target->allow_local_section_symbol_fixup==NULL ||
-            as->target->allow_local_section_symbol_fixup(fixup,sym));
+            (minias_project_symbol(sym,&target_symbol) &&
+             as->target->allow_local_section_symbol_fixup(fixup,&target_symbol)));
 }
 
 /* Symbol-table membership is an ELF ObjectModel decision, not a Target

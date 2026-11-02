@@ -186,9 +186,12 @@ driver = Path('assembler/src/assembler.c').read_text()
 a64 = Path('assembler/src/aarch64_target.c').read_text()
 rv = Path('assembler/src/riscv_target.c').read_text()
 la = Path('assembler/src/loongarch64_target.c').read_text()
-view = core.split('typedef struct MiniAsPostEmitView {', 1)[1].split('} MiniAsPostEmitView;', 1)[0]
-if re.search(r'\bMiniAs\s*\*|\bMiniAsSymbol\s*\*|\bMiniAsFixup\s*\*', view):
-    raise SystemExit('Post-emit view exposes a mutable Common object')
+if ('typedef struct MiniAsPostEmitView MiniAsPostEmitView;' not in core or
+    'struct MiniAsPostEmitView {' in core or
+    'struct MiniAsPostEmitView { const MiniAs *as; };' not in driver or
+    'minias_post_emit_fragment(' not in core or
+    'minias_post_emit_section(' not in core):
+    raise SystemExit('Post-emit view must be opaque with value-only projections')
 if 'struct MiniAsPostEmitObjectSink { MiniAs *as; };' not in (Path('assembler/src/minias_common_context.h').read_text()) or \
         'struct MiniAsPostEmitObjectSink {' in core:
     raise SystemExit('Post-emit mutation handle is not Common-private')
@@ -368,7 +371,7 @@ for source, name in ((rv, 'riscv_plan_instruction_relaxation'),
     if not re.search(r'static bool\s+' + name +
                      r'\s*\(MiniAsRelaxContext\s*\*', source):
         raise SystemExit(name + ' still borrows mutable Common')
-if not re.search(r'x64_branch_distance\s*\(const MiniAsSymbol\s*\*', x86):
+if not re.search(r'x64_branch_distance\s*\(const MiniAsSymbolView\s*\*', x86):
     raise SystemExit('x86 relaxation and encoding lost shared pure distance')
 if 'minias_riscv_compute_branch_plan(' not in rv_encoder or \
         'minias_riscv_compute_branch_plan(' not in rv:
@@ -387,7 +390,8 @@ import re
 core = Path('assembler/src/minias_target_api.h').read_text()
 driver = Path('assembler/src/assembler.c').read_text()
 la = Path('assembler/src/loongarch64_target.c').read_text()
-if 'typedef struct MiniAsPreLayoutView {' not in core or \
+if 'typedef struct MiniAsPreLayoutView MiniAsPreLayoutView;' not in core or \
+        'struct MiniAsPreLayoutView { const MiniAs *as; };' not in driver or \
         not re.search(r'bool\s*\(\*prepare_layout\)\s*\(const MiniAsPreLayoutView\s*\*', core):
     raise SystemExit('Target layout policy lacks a read-only parsed-source view')
 steps = ('minias_common_parse_source_graph(&as,graph)',
@@ -397,7 +401,7 @@ positions = [driver.find(step) for step in steps]
 if -1 in positions or positions != sorted(positions):
     raise SystemExit('Target prepare-layout hook did not precede MCLayout')
 if '.prepare_layout=la_prepare_layout' not in la or \
-        'view->stmts[i]' not in la:
+        'minias_pre_layout_fragment(view,i,&stmt)' not in la:
     raise SystemExit('LoongArch did not precompute section relaxability from view')
 encoder = la.split('static bool la_section_is_linker_relaxable(', 1)[1]
 encoder = encoder.split('static bool la_measure(', 1)[0]

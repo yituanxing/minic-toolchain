@@ -4082,7 +4082,7 @@ typedef enum X64BranchDistanceKind {
  * strong GLOBAL JMP/Jcc retain GNU's same-section short-branch relaxation.
  * Treat unknown/nonlocal bindings conservatively rather than silently
  * fixing a potentially preemptible symbol to a private displacement. */
-static bool x64_can_resolve_same_section(const MiniAsSymbol *symbol,
+static bool x64_can_resolve_same_section(const MiniAsSymbolView *symbol,
                                          const MiniAsStmt *stmt,
                                          bool call_or_rip) {
     if(symbol==NULL || !symbol->defined || symbol->section!=stmt->section)
@@ -4095,7 +4095,7 @@ static bool x64_can_resolve_same_section(const MiniAsSymbol *symbol,
  * planner and emitter.  Internal addresses are ELF section offsets, and the
  * target ISA defines the PC base as the byte after the entire instruction.
  * External/cross-section references retain an explicit PC32/PLT32 fixup. */
-static X64BranchDistanceKind x64_branch_distance(const MiniAsSymbol *symbol,
+static X64BranchDistanceKind x64_branch_distance(const MiniAsSymbolView *symbol,
                                                  const MiniAsStmt *stmt,
                                                  uint32_t instruction_width,
                                                  int64_t *distance) {
@@ -4163,7 +4163,10 @@ static bool x64_plan_instruction_relaxation(MiniAsRelaxContext *ctx,
     if(inst->encoding==0xe8U || stmt->size!=2U)return true;
     plan->terminal_size=x64_branch_near_width(stmt);
     const MiniAsSymbolRef *expr=inst->operands[0].bound_symbol;
-    const MiniAsSymbol *symbol=minias_relax_symbol_ref_lookup(ctx,*expr);
+    MiniAsSymbolView symbol_snapshot;
+    const MiniAsSymbolView *symbol=
+        minias_relax_symbol_ref_lookup(ctx,*expr,&symbol_snapshot)?
+        &symbol_snapshot:NULL;
     result=x64_branch_distance(symbol,stmt,2U,&distance);
     if(result!=X64_BRANCH_LOCAL || distance<-128 || distance>127)
         plan->required_size=plan->terminal_size;
@@ -4222,7 +4225,10 @@ static bool x64_resolve_memory_displacement(MiniAsEncodeContext *ctx,const MiniA
         *needs_pc32=true;
         return true;
     }
-    const MiniAsSymbol *symbol=minias_encode_ctx_symbol_lookup(ctx,mem->symbol);
+    MiniAsSymbolView symbol_snapshot;
+    const MiniAsSymbolView *symbol=
+        minias_encode_ctx_symbol_lookup(ctx,mem->symbol,&symbol_snapshot)?
+        &symbol_snapshot:NULL;
     int64_t distance;
     if(!x64_can_resolve_same_section(symbol,stmt,true)) {
         *displacement=0U;
@@ -4325,6 +4331,7 @@ static bool x64_emit_memory_fixups(MiniAsEncodeContext *ctx,const MiniAsStmt *st
 
 static bool x64_encode_base(MiniAsEncodeContext *ctx,const MiniAsStmt *s) {
     const MiniAsMCInst *m=s->payload.instruction.inst;
+    MiniAsSymbolView symbol_snapshot;
     X64RegisterEncodingPlan register_plan;
     X64EncodingPlan plan;
     unsigned char code[16];size_t n=0;unsigned r;
@@ -4464,7 +4471,9 @@ static bool x64_encode_base(MiniAsEncodeContext *ctx,const MiniAsStmt *s) {
         }
         case X64_BRANCH: {
             const MiniAsSymbolRef *expr=m->operands[0].bound_symbol;
-            const MiniAsSymbol *target=minias_encode_ctx_symbol_lookup(ctx,*expr);
+            const MiniAsSymbolView *target=
+                minias_encode_ctx_symbol_lookup(ctx,*expr,&symbol_snapshot)?
+                &symbol_snapshot:NULL;
             const bool defined_local_cross_section=target && target->defined &&
                 target->bind==MINIAS_STB_LOCAL && target->section>=0 &&
                 target->section!=s->section;

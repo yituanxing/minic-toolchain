@@ -235,6 +235,12 @@ jobs:
         run: bash tests/assembler/probe-mc-layout-ownership.sh
       - name: Enforce discriminated Fragment payload and safe Target pre-layout reads
         run: bash tests/assembler/probe-mc-fragment-payload-union.sh
+      - name: Reject mutable Common records and raw arrays from phase-limited Targets
+        run: bash tests/assembler/probe-mc-target-readonly-projections.sh
+      - name: Verify live AArch64 finalization after readonly Section projection
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-mc-target-readonly-finalization.sh
       - name: Enforce unique Common MCExpr grammar and emission ownership
         run: bash tests/assembler/probe-mc-expression-ownership.sh
       - name: GNU expression precedence oracle across four Target data sections

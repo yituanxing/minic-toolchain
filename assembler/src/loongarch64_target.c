@@ -1960,7 +1960,8 @@ static bool la_resolve_branch_plan(MiniAsEncodeContext *ctx,const MiniAsStmt *s,
                                    LaBranchPlan *plan) {
     const MiniAsMCInst *m=s->payload.instruction.inst;
     const MiniAsSymbolRef *ref;
-    const MiniAsSymbol *target;
+    const MiniAsSymbolView *target;
+    MiniAsSymbolView symbol_snapshot;
     int64_t diff,limit;
     unsigned slot;
     memset(plan,0,sizeof(*plan));
@@ -1976,7 +1977,8 @@ static bool la_resolve_branch_plan(MiniAsEncodeContext *ctx,const MiniAsStmt *s,
         minias_encode_ctx_error(ctx,"invalid-loongarch-bound-branch");
         return false;
     }
-    target=minias_encode_ctx_symbol_lookup(ctx,*ref);
+    target=minias_encode_ctx_symbol_lookup(ctx,*ref,&symbol_snapshot)?
+        &symbol_snapshot:NULL;
     if(target==NULL || !target->defined || target->section!=s->section ||
        target->bind==MINIAS_STB_WEAK)return true;
     if(target->value>INT64_MAX || s->offset>INT64_MAX) {
@@ -2005,34 +2007,39 @@ static bool la_resolve_branch_plan(MiniAsEncodeContext *ctx,const MiniAsStmt *s,
  * Target may mutate only its private cache, not the borrowed Fragments. */
 static bool la_prepare_layout(const MiniAsPreLayoutView *view,
                               char *error,size_t error_capacity) {
-    LaTargetState *state=(LaTargetState *)view->target_state;
+    LaTargetState *state=minias_pre_layout_target_state(view);
+    const size_t section_count=minias_pre_layout_section_count(view);
     bool *sections;
     size_t i;
-    if(state==NULL || view->section_count==0U ||
-       view->section_count>SIZE_MAX/sizeof(*sections)) {
+    if(state==NULL || section_count==0U ||
+       section_count>SIZE_MAX/sizeof(*sections)) {
         (void)snprintf(error,error_capacity,
                        "invalid-loongarch-layout-preparation");
         return false;
     }
-    sections=calloc(view->section_count,sizeof(*sections));
+    sections=calloc(section_count,sizeof(*sections));
     if(sections==NULL) {
         (void)snprintf(error,error_capacity,
                        "out-of-memory:loongarch-relaxable-sections");
         return false;
     }
-    for(i=0U;i<view->stmt_count;++i) {
-        const MiniAsStmt *stmt=&view->stmts[i];
-        if(stmt->fragment_kind==MINIAS_FRAGMENT_INSTRUCTION &&
-           stmt->section>=0 &&
-           (size_t)stmt->section<view->section_count &&
-           stmt->payload.instruction.inst!=NULL &&
-           (stmt->payload.instruction.inst->opcode==LA_MC_PCREL_PSEUDO ||
-            stmt->payload.instruction.inst->opcode==LA_MC_GOT_PSEUDO))
-            sections[(size_t)stmt->section]=true;
+    for(i=0U;i<minias_pre_layout_fragment_count(view);++i) {
+        MiniAsFragmentView stmt;
+        if(!minias_pre_layout_fragment(view,i,&stmt)) {
+            free(sections);
+            (void)snprintf(error,error_capacity,"invalid-loongarch-fragment-view");
+            return false;
+        }
+        if(stmt.kind==MINIAS_FRAGMENT_INSTRUCTION &&
+           stmt.section>=0 && (size_t)stmt.section<section_count &&
+           stmt.has_instruction &&
+           (stmt.instruction_opcode==LA_MC_PCREL_PSEUDO ||
+            stmt.instruction_opcode==LA_MC_GOT_PSEUDO))
+            sections[(size_t)stmt.section]=true;
     }
     free(state->relaxable_sections);
     state->relaxable_sections=sections;
-    state->relaxable_section_count=view->section_count;
+    state->relaxable_section_count=section_count;
     return true;
 }
 
@@ -2281,21 +2288,26 @@ static void la_destroy_target_state(void *target_state) {
 static bool la_validate(const MiniAsPostEmitView *view,
                         MiniAsPostEmitErrorSink *errors) {
     size_t i;
+    const size_t section_count=minias_post_emit_section_count(view);
     /* GNU GAS accepts raw byte payloads in executable sections and does not
      * implicitly pad odd-position instruction fragments.  Its ELF section
      * alignment is a directive/section property, not a reason to rewrite
      * source offsets here (Ubuntu 24 LoongArch GAS emits .text align=1 for
      * the real CFI short-relax instruction fixture).  Enforce only the
      * target MCInst's fixed-width encoding contract. */
-    for(i=0U;i<view->stmt_count;++i) {
-        const MiniAsStmt *stmt=&view->stmts[i];
-        if(stmt->fragment_kind!=MINIAS_FRAGMENT_INSTRUCTION)continue;
-        if(stmt->section<0 ||
-           (size_t)stmt->section>=view->section_count ||
-           stmt->size==0U || (stmt->size&3U)!=0U) {
+    for(i=0U;i<minias_post_emit_fragment_count(view);++i) {
+        MiniAsFragmentView stmt;
+        if(!minias_post_emit_fragment(view,i,&stmt)) {
+            minias_post_emit_error(errors,"invalid-loongarch-fragment-view");
+            return false;
+        }
+        if(stmt.kind!=MINIAS_FRAGMENT_INSTRUCTION)continue;
+        if(stmt.section<0 ||
+           (size_t)stmt.section>=section_count ||
+           stmt.size==0U || (stmt.size&3U)!=0U) {
             minias_post_emit_error(errors,
                                    "invalid-loongarch-instruction-width:line=%zu",
-                                   stmt->line);
+                                   stmt.line);
             return false;
         }
     }
@@ -2368,7 +2380,7 @@ static bool la_cfi_linker_relaxation_marker(MiniAsFixupKind kind) {
  * identity that the linker/debug consumers must observe.  Keep the target
  * ABI decision here instead of special-casing ELF's generic symbol planner. */
 static bool la_allow_local_section_symbol_fixup(const MiniAsFixup *fixup,
-                                                const MiniAsSymbol *symbol) {
+                                                const MiniAsSymbolView *symbol) {
     (void)symbol;
     return fixup->kind!=MINIAS_FIXUP_LEB_ADD &&
            fixup->kind!=MINIAS_FIXUP_LEB_SUB;

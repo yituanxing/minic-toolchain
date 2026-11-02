@@ -2382,7 +2382,8 @@ static bool rv_encode_multi_mc(MiniAsEncodeContext *ctx, const MiniAsStmt *stmt)
 
     if (m->opcode == RV_MC_LA) {
         const MiniAsSymbolRef *expr = m->operands[1].bound_symbol;
-        const MiniAsSymbol *target;
+        const MiniAsSymbolView *target;
+        MiniAsSymbolView symbol_snapshot;
         MiniAsSymbolRef anchor;
         int rd = (int)m->operands[0].reg;
         bool use_got;
@@ -2391,7 +2392,8 @@ static bool rv_encode_multi_mc(MiniAsEncodeContext *ctx, const MiniAsStmt *stmt)
             minias_encode_ctx_error(ctx, "internal:riscv-la-symbol-missing");
             return false;
         }
-        target = minias_encode_ctx_symbol_lookup(ctx, *expr);
+        target = minias_encode_ctx_symbol_lookup(ctx,*expr,&symbol_snapshot)?
+            &symbol_snapshot:NULL;
         /* Linux early boot: NOPIC is default. GNU PIC `la` always uses a
          * GOT reference, even for defined LOCAL symbols or symbol addends;
          * RV32 loads the GOT slot with LW, RV64 with LD. `lla` stays PCREL. */
@@ -2472,8 +2474,10 @@ static bool rv_encode_multi_mc(MiniAsEncodeContext *ctx, const MiniAsStmt *stmt)
 static bool rv_encode_branch_plan(MiniAsEncodeContext *ctx, const MiniAsStmt *stmt,
                                   MiniAsRiscvBranchPlan *result) {
     const MiniAsSymbolRef *expr=minias_riscv_branch_bound_symbol(stmt);
-    const MiniAsSymbol *symbol=expr!=NULL
-        ? minias_encode_ctx_symbol_lookup(ctx,*expr) : NULL;
+    MiniAsSymbolView symbol_snapshot;
+    const MiniAsSymbolView *symbol=expr!=NULL &&
+        minias_encode_ctx_symbol_lookup(ctx,*expr,&symbol_snapshot)?
+        &symbol_snapshot:NULL;
     const char *diagnostic=NULL;
     if(!minias_riscv_compute_branch_plan(stmt,symbol,result,&diagnostic)) {
         minias_encode_ctx_error(ctx,"%s",diagnostic!=NULL?diagnostic:

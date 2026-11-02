@@ -1,5 +1,14 @@
 # MiniAS 当前清理与所有权总览（2026-11-01）
 
+> **2026-11-02 Target 只读查询收口：** 在 Fragment union 的基础上，
+> PreLayout/PostEmit 原本直接借用的 `MiniAsStmt[]`/`MiniAsSection[]`
+> 改成不透明阶段句柄 + 当前所有权对象的值类型投影；Relax/Encode 和
+> ELF Fixup policy 的 Symbol 裸指针改为统一 Context 投影。可变
+> Section/Symbol 实体类型不再定义在 Target 公开头文件；所有四架构
+> 同批迁移，新增负向编译与 Target CI 门禁。保留原 SymbolID、
+> SourceGraph、ELF、Fixup 单一路径。见
+> [只读视图记录](target-readonly-views-2026-11-02.md)。
+
 > **2026-11-02 Fragment 负载类型化：** `MiniAsStmt` 现有七类
 > `FragmentKind` 共用一个带判别类型的 payload union（六个负载臂）；
 > Parser、四目标、SourceGraph、MCExpr、MCLayout、Emission 和失败销毁
@@ -40,8 +49,9 @@
   旧入口，让四 Target 不能再包含完整 Common 内部会话头；
   结构测试 + A0 + 目标定向 GNU/链接/松弛/CFI + 旧新对象比较。
   **已完成子项：** 宽回调与五个 ISA TU 头文件隔离、本地负向编译、
-  A0/22 组差分；**待完成：** 借用 Section/Symbol/MCInst 的
-  浅 `const` 指针完全只读化，以及本批 exact-head CI 核对。
+  A0/22 组差分、PreLayout/PostEmit 只读投影、Relax/Encode 符号
+  值快照；**待完成：** Parse/Measure/Encode 所需 MCInst 的递归
+  只读约束和本批 exact-head CI 核对，不能把语义只读误作已经完成。
 - [ ] **P05 Source/Common 解耦**：从 Source 递归调用
   `minias_statement_process(MiniAs *,...)` 迁移到带来源身份的
   受限 statement sink；保留 SourceSite、EOF、条件拓扑、强制增长

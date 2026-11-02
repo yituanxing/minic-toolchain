@@ -72,6 +72,12 @@ phase-aware access still need further tightening before a format-neutral
 ObjectModel. See [the P06 owner-split record](docs/common-owner-split-2026-11-02.md)
 and [the Fragment payload migration](docs/fragment-payload-2026-11-02.md).
 
+The subsequent [Target read-projection boundary](docs/target-readonly-views-2026-11-02.md)
+removes raw Common Section/Symbol definitions from the Target header and
+replaces the PreLayout/PostEmit array borrows and Relax/Encode Symbol pointers
+with live phase-scoped scalar/const views; no alternate persistent object
+graph is constructed.
+
 ## Explicit strict RV64I profile
 
 MiniAS historically accepts a broad set of RISC-V instructions and GNU

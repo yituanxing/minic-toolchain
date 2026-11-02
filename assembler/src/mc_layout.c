@@ -1023,9 +1023,10 @@ bool minias_emit_deferred_leb_relocations(MiniAs *as) {
 
 struct MiniAsRelaxContext { MiniAs *as; };
 
-const MiniAsSymbol *minias_relax_symbol_ref_lookup(
-    MiniAsRelaxContext *ctx, MiniAsSymbolRef ref) {
-    return minias_symbol_ref_lookup(ctx->as, ref);
+bool minias_relax_symbol_ref_lookup(MiniAsRelaxContext *ctx,
+                                    MiniAsSymbolRef ref,
+                                    MiniAsSymbolView *out) {
+    return minias_project_symbol(minias_symbol_ref_lookup(ctx->as,ref),out);
 }
 
 bool minias_relax_resolve_symbol_difference_ref(

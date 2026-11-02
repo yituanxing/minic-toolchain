@@ -20,6 +20,23 @@ struct MiniAsContextIndexState {
     size_t symbol_name_slot_capacity;
 };
 
+bool minias_project_symbol(const MiniAsSymbol *symbol,MiniAsSymbolView *out) {
+    if(symbol==NULL || out==NULL)return false;
+    *out=(MiniAsSymbolView){
+        .name=symbol->name,
+        .section=symbol->section,
+        .subsection=symbol->subsection,
+        .value=symbol->value,
+        .bind=symbol->bind,
+        .type=symbol->type,
+        .defined=symbol->defined,
+        .alias_pending=symbol->alias_pending,
+        .mutable_absolute_set=symbol->mutable_absolute_set,
+        .has_alias_dependency=symbol->has_alias_dependency
+    };
+    return true;
+}
+
 bool minias_common_context_init(MiniAs *as) {
     if(as==NULL)return false;
     if(as->context_indexes!=NULL) {

@@ -71,10 +71,12 @@ if ('fragment_has_deferred_data(stmt)' not in layout or
 start=la.index('static bool la_prepare_layout(')
 end=la.index('static bool la_section_is_linker_relaxable(',start)
 prelayout=la[start:end]
-kind=prelayout.find('stmt->fragment_kind==MINIAS_FRAGMENT_INSTRUCTION')
-inst=prelayout.find('stmt->payload.instruction.inst')
-if kind<0 or inst<0 or kind>inst:
-    raise SystemExit('LoongArch pre-layout inspects inactive MCInst union arm')
+kind=prelayout.find('stmt.kind==MINIAS_FRAGMENT_INSTRUCTION')
+inst=prelayout.find('stmt.instruction_opcode')
+if (kind<0 or inst<0 or kind>inst or
+    'minias_pre_layout_fragment(view,i,&stmt)' not in prelayout or
+    'stmt.has_instruction' not in prelayout):
+    raise SystemExit('LoongArch pre-layout bypassed guarded instruction projection')
 start=source.index('static bool source_graph_forced_shape_matches(')
 end=source.index('bool minias_source_graph_rebind_forced_branches(',start)
 forced=source[start:end]

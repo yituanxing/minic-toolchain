@@ -450,9 +450,10 @@ void minias_encode_ctx_error(MiniAsEncodeContext *ctx,const char *format,...) {
     va_end(ap);
 }
 
-const MiniAsSymbol *minias_encode_ctx_symbol_lookup(
-    MiniAsEncodeContext *ctx,MiniAsSymbolRef ref) {
-    return minias_symbol_ref_lookup(ctx->as,ref);
+bool minias_encode_ctx_symbol_lookup(MiniAsEncodeContext *ctx,
+                                     MiniAsSymbolRef ref,
+                                     MiniAsSymbolView *out) {
+    return minias_project_symbol(minias_symbol_ref_lookup(ctx->as,ref),out);
 }
 
 bool minias_encode_ctx_resolve_difference(

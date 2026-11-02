@@ -5,6 +5,75 @@
 #include "minias_source_replay_contract.h"
 
 /* Common-only mutable Section/Symbol/Fragment state and ownership APIs. */
+typedef struct MiniAsSection {
+    char *name;
+    /* GNU ELF SHT_GROUP signature; absent for ordinary Sections. */
+    char *group_signature;
+    /* SHT_GROUP flags are distinct from Section flags. */
+    uint32_t group_flags;
+    /* SHF_LINK_ORDER references the original symbol, not just SectionID. */
+    char *link_order_reference;
+    /* Explicit GNU unique ID is part of identity; zero is meaningful. */
+    bool has_unique_id;
+    uint32_t unique_id;
+    uint32_t type;
+    uint64_t flags;
+    uint64_t align;
+    uint64_t entry_size;
+    unsigned char *data;
+    size_t size;
+    size_t capacity;
+    uint64_t layout_size;
+} MiniAsSection;
+
+typedef struct MiniAsSubsection {
+    int section;
+    uint32_t number;
+    uint64_t size;
+    uint64_t base;
+    /* One alignment Fragment after preceding variable-width data, not one
+     * per instruction in a large GNU/Linux source Section. */
+    bool pending_instruction_alignment;
+} MiniAsSubsection;
+
+typedef struct MiniAsSectionState {
+    int section;
+    uint32_t subsection;
+} MiniAsSectionState;
+
+typedef struct MiniAsSymbol {
+    char *name;
+    int section;
+    uint64_t value;
+    uint64_t size;
+    uint8_t bind;
+    uint8_t type;
+    uint8_t visibility;
+    uint32_t subsection;
+    bool defined;
+    bool alias_pending;
+    bool mutable_absolute_set;
+    bool explicit_local_binding;
+    size_t alias_target_index;
+    bool has_alias_dependency;
+    int64_t alias_addend;
+    size_t alias_line;
+    char *alias_section_base;
+    bool has_fragment_anchor;
+    size_t fragment_anchor;
+    int64_t fragment_anchor_addend;
+    bool has_size_end_anchor;
+    size_t size_end_anchor;
+    uint32_t size_end_subsection;
+    int64_t size_end_addend;
+    bool has_size_start_symbol;
+    size_t size_start_symbol_index;
+    uint64_t size_end_value;
+} MiniAsSymbol;
+
+/* One Common conversion for a phase-scoped Target value projection. */
+bool minias_project_symbol(const MiniAsSymbol *,MiniAsSymbolView *);
+
 /* The SourceGraph/MCLayout replay worklist is declared in its own contract. */
 typedef struct MiniAsEmissionState MiniAsEmissionState;
 typedef struct MiniAsContextIndexState MiniAsContextIndexState;

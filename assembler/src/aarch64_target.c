@@ -4384,6 +4384,7 @@ lane_complete:;
 
 static bool encode(MiniAsEncodeContext *ctx, const MiniAsStmt *stmt) {
     const MiniAsMCInst *inst = stmt->payload.instruction.inst;
+    MiniAsSymbolView symbol_snapshot;
     uint32_t code;
     MiniAsFixupKind fixup = MINIAS_FIXUP_NONE;
     const MiniAsSymbolRef *expr = NULL;
@@ -4395,8 +4396,9 @@ static bool encode(MiniAsEncodeContext *ctx, const MiniAsStmt *stmt) {
     switch (inst->opcode) {
         case A64_MC_LDR_LITERAL: {
             const MiniAsSymbolRef *literal=inst->operands[1].bound_symbol;
-            const MiniAsSymbol *target=literal?
-                minias_encode_ctx_symbol_lookup(ctx,*literal):NULL;
+            const MiniAsSymbolView *target=literal &&
+                minias_encode_ctx_symbol_lookup(ctx,*literal,&symbol_snapshot)?
+                &symbol_snapshot:NULL;
             int64_t displacement;
             bool direct=inst->target_form==1U;
             if(!literal || (!direct &&
@@ -4539,8 +4541,9 @@ static bool encode(MiniAsEncodeContext *ctx, const MiniAsStmt *stmt) {
             uint32_t hint;
             if(inst->operands[0].kind==MINIAS_MC_BOUND_SYMBOL) {
                 const MiniAsSymbolRef *hint_expr=inst->operands[0].bound_symbol;
-                const MiniAsSymbol *symbol=hint_expr?
-                    minias_encode_ctx_symbol_lookup(ctx,*hint_expr):NULL;
+                const MiniAsSymbolView *symbol=hint_expr &&
+                    minias_encode_ctx_symbol_lookup(ctx,*hint_expr,&symbol_snapshot)?
+                    &symbol_snapshot:NULL;
                 int64_t addend=hint_expr?hint_expr->addend:0;
                 if(!symbol || !symbol->defined ||
                    symbol->section!=MINIAS_SECTION_ABS ||
@@ -4571,12 +4574,13 @@ static bool encode(MiniAsEncodeContext *ctx, const MiniAsStmt *stmt) {
                 UINT32_C(0xd65f0000) | (inst->operands[0].reg << 5U);
             break;
         case A64_MC_ADR: {
-            const MiniAsSymbol *target;
+            const MiniAsSymbolView *target;
             int64_t displacement;
             expr=inst->operands[1].bound_symbol;
             code=UINT32_C(0x10000000)|inst->operands[0].reg;
             fixup=MINIAS_FIXUP_A64_ADR_LO21;
-            target=minias_encode_ctx_symbol_lookup(ctx,*expr);
+            target=minias_encode_ctx_symbol_lookup(ctx,*expr,&symbol_snapshot)?
+                &symbol_snapshot:NULL;
             /* GNU GAS emits ADR_PREL_LO21 relocations for GLOBAL/WEAK
              * references even when their definitions reside in .text.
              * Resolve only non-preemptible section-local symbol targets. */
@@ -4664,10 +4668,11 @@ static bool encode(MiniAsEncodeContext *ctx, const MiniAsStmt *stmt) {
             bool wide=inst->operands[0].register_64;
             uint32_t imm16=(uint32_t)inst->operands[1].immediate;
             if(inst->operands[1].kind==MINIAS_MC_BOUND_SYMBOL) {
-                const MiniAsSymbol *symbol;
+                const MiniAsSymbolView *symbol;
                 MiniAsFixupKind kind=(MiniAsFixupKind)inst->target_form;
                 expr=inst->operands[1].bound_symbol;
-                symbol=minias_encode_ctx_symbol_lookup(ctx,*expr);
+                symbol=minias_encode_ctx_symbol_lookup(ctx,*expr,&symbol_snapshot)?
+                    &symbol_snapshot:NULL;
                 if(symbol && symbol->defined &&
                    symbol->section==MINIAS_SECTION_ABS) {
                     uint64_t bits=symbol->value+(uint64_t)expr->addend;
@@ -5196,7 +5201,7 @@ static bool encode(MiniAsEncodeContext *ctx, const MiniAsStmt *stmt) {
         case A64_MC_CBNZ:
         case A64_MC_B:
         case A64_MC_BL: {
-            const MiniAsSymbol *target;
+            const MiniAsSymbolView *target;
             int64_t distance;
             bool location_counter;
             bool cbz=inst->opcode==A64_MC_CBZ ||
@@ -5253,7 +5258,8 @@ static bool encode(MiniAsEncodeContext *ctx, const MiniAsStmt *stmt) {
             if(location_counter) {
                 distance=expr->addend;
             }else {
-                target=minias_encode_ctx_symbol_lookup(ctx,*expr);
+                target=minias_encode_ctx_symbol_lookup(ctx,*expr,&symbol_snapshot)?
+                    &symbol_snapshot:NULL;
                 /* A section-equal GLOBAL or WEAK branch still needs its
                  * symbol identity at final link: strong definitions can
                  * override a weak placeholder, and GNU GAS emits the
@@ -5606,7 +5612,7 @@ static uint32_t aarch64_fixup_relocation_type(MiniAsTargetABIView view,MiniAsFix
  * added section-relative offset and require the original symbol identity.
  * Keep this target ABI rule outside the Common ELF symbol planner. */
 static bool a64_allow_local_section_symbol_fixup(const MiniAsFixup *fixup,
-                                                 const MiniAsSymbol *symbol) {
+                                                 const MiniAsSymbolView *symbol) {
     if(symbol->type==MINIAS_STT_FUNC ||
        symbol->type==MINIAS_STT_GNU_IFUNC)return false;
     return fixup->kind!=MINIAS_FIXUP_A64_ADR_GOT_PAGE &&
@@ -5654,27 +5660,39 @@ static bool a64_record_source_mappings(const MiniAsPostEmitView *view,
                                       MiniAsPostEmitObjectSink *object) {
     A64MappingFragment *points;
     size_t i,count=0U;
+    const size_t fragment_count=minias_post_emit_fragment_count(view);
+    const size_t section_count=minias_post_emit_section_count(view);
     int previous_section=-1;
     bool previous_executable=false,has_mapping=false;
     bool pending_initial_data=false;
     uint64_t pending_initial_offset=0U;
-    if(view->stmt_count==0U)return true;
-    if(view->stmt_count>SIZE_MAX/sizeof(*points)) {
+    if(fragment_count==0U)return true;
+    if(fragment_count>SIZE_MAX/sizeof(*points)) {
         minias_post_emit_error(errors,"aarch64-mapping-capacity-overflow");
         return false;
     }
-    points=malloc(view->stmt_count*sizeof(*points));
+    points=malloc(fragment_count*sizeof(*points));
     if(points==NULL) {
         minias_post_emit_error(errors,"out-of-memory:aarch64-mapping");
         return false;
     }
-    for(i=0U;i<view->stmt_count;++i) {
-        const MiniAsStmt *stmt=&view->stmts[i];
-        const MiniAsSection *section;
+    for(i=0U;i<fragment_count;++i) {
+        MiniAsFragmentView fragment_snapshot;
+        MiniAsSectionView section_snapshot;
+        const MiniAsFragmentView *stmt=&fragment_snapshot;
+        const MiniAsSectionView *section=&section_snapshot;
         bool executable;
+        if(!minias_post_emit_fragment(view,i,&fragment_snapshot)) {
+            minias_post_emit_error(errors,"invalid-aarch64-fragment-view");
+            goto mapping_failure;
+        }
         if(stmt->section<0 ||
-           (size_t)stmt->section>=view->section_count)continue;
-        section=&view->sections[(size_t)stmt->section];
+           (size_t)stmt->section>=section_count)continue;
+        if(!minias_post_emit_section(view,(size_t)stmt->section,
+                                     &section_snapshot)) {
+            minias_post_emit_error(errors,"invalid-aarch64-section-view");
+            goto mapping_failure;
+        }
         /* Explicit alignment can establish MAP_DATA even with zero bytes;
          * retain it until final-layout mapping reconciliation. Ordinary
          * zero-sized statements do not contribute source mapping state. */
@@ -5699,11 +5717,11 @@ static bool a64_record_source_mappings(const MiniAsPostEmitView *view,
          * Common intentionally parses .inst as a raw 32-bit data list,
          * but that storage choice must not misclassify its ELF mapping as
          * $d: an instruction word remains executable code to AArch64. */
-        executable=stmt->fragment_kind==MINIAS_FRAGMENT_INSTRUCTION ||
+        executable=stmt->kind==MINIAS_FRAGMENT_INSTRUCTION ||
             (stmt->site.provenance_bits&A64_SITE_INST_DATA)!=0U ||
-            (stmt->fragment_kind==MINIAS_FRAGMENT_ALIGNMENT &&
+            (stmt->kind==MINIAS_FRAGMENT_ALIGNMENT &&
              (section->flags&MINIAS_SHF_EXECINSTR)!=0U &&
-             !stmt->payload.alignment.has_fill);
+             !stmt->alignment_has_fill);
         /* GAS starts even the default .text with sh_addralign=1 and only
          * records AArch64's 4-byte instruction alignment on the first
          * actual instruction/mapping transition. Empty .text must stay 1. */
@@ -5722,8 +5740,14 @@ static bool a64_record_source_mappings(const MiniAsPostEmitView *view,
     for(i=0U;i<count;++i) {
         const A64MappingFragment *point=&points[i];
         bool new_section=point->section!=previous_section;
-        bool section_executable=(view->sections[(size_t)point->section].flags&
-                                 MINIAS_SHF_EXECINSTR)!=0U;
+        MiniAsSectionView section_snapshot;
+        bool section_executable;
+        if(!minias_post_emit_section(view,(size_t)point->section,
+                                     &section_snapshot)) {
+            minias_post_emit_error(errors,"invalid-aarch64-section-view");
+            goto mapping_failure;
+        }
+        section_executable=(section_snapshot.flags&MINIAS_SHF_EXECINSTR)!=0U;
         if(new_section) {
             previous_section=point->section;
             previous_executable=false;
@@ -5793,28 +5817,35 @@ mapping_failure:
 static bool validate(const MiniAsPostEmitView *view,
                      MiniAsPostEmitErrorSink *errors) {
     size_t i;
+    const size_t section_count=minias_post_emit_section_count(view);
     /* The AArch64 instruction stream is word-aligned, but GNU GAS permits
      * arbitrary BYTE DATA in an executable section (e.g. Kbuild's forward
      * .uleb128 feature probe).  A total section-size modulo-four check
      * mistakenly rejects valid data-only .text.  Validate actual instruction
      * sites, including GNU .inst words, independently of section byte count. */
-    for (i = 0U; i < view->stmt_count; ++i) {
-        const MiniAsStmt *stmt=&view->stmts[i];
-        if(stmt->fragment_kind!=MINIAS_FRAGMENT_INSTRUCTION &&
+    for (i = 0U; i < minias_post_emit_fragment_count(view); ++i) {
+        MiniAsFragmentView stmt_snapshot;
+        MiniAsSectionView section;
+        const MiniAsFragmentView *stmt=&stmt_snapshot;
+        if(!minias_post_emit_fragment(view,i,&stmt_snapshot)) {
+            minias_post_emit_error(errors,"invalid-aarch64-fragment-view");
+            return false;
+        }
+        if(stmt->kind!=MINIAS_FRAGMENT_INSTRUCTION &&
            (stmt->site.provenance_bits&A64_SITE_INST_DATA)==0U)continue;
-        if(stmt->section<0 || (size_t)stmt->section>=view->section_count)
+        if(stmt->section<0 || (size_t)stmt->section>=section_count)
             continue;
+        if(!minias_post_emit_section(view,(size_t)stmt->section,&section)) {
+            minias_post_emit_error(errors,"invalid-aarch64-section-view");
+            return false;
+        }
         /* GAS leaves instructions in non-executable sections byte-packed;
          * its implicit four-byte alignment only applies to code sections. */
-        if((view->sections[(size_t)stmt->section].flags&
-            MINIAS_SHF_EXECINSTR)!=0U &&
+        if((section.flags&MINIAS_SHF_EXECINSTR)!=0U &&
            (stmt->offset&UINT64_C(3))!=0U) {
-            const char *section_name=(stmt->section>=0 &&
-                (size_t)stmt->section<view->section_count)?
-                view->sections[(size_t)stmt->section].name:"<unknown>";
             minias_post_emit_error(errors,
                                    "unaligned-aarch64-instruction:%s:line=%zu",
-                                   section_name, stmt->line);
+                                   section.name,stmt->line);
             return false;
         }
     }

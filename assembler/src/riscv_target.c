@@ -199,16 +199,22 @@ static bool strict_base_i_word(uint32_t w, unsigned xlen) {
 static bool strict_base_i_check_sections(const MiniAsPostEmitView *view,
                                          MiniAsPostEmitErrorSink *errors) {
     const MiniAsRiscvState *state =
-        (const MiniAsRiscvState *)view->target_state;
+        minias_post_emit_target_state(view);
+    const size_t section_count=minias_post_emit_section_count(view);
     size_t i;
     if (state->strict_i_xlen == 0U) return true;
     if (state->strict_i_xlen != 32U && state->strict_i_xlen != 64U) {
         minias_post_emit_error(errors, "unsupported-strict-riscv-xlen");
         return false;
     }
-    for (i = 0U; i < view->section_count; ++i) {
-        const MiniAsSection *section = &view->sections[i];
+    for (i = 0U; i < section_count; ++i) {
+        MiniAsSectionView snapshot;
+        const MiniAsSectionView *section=&snapshot;
         size_t offset;
+        if(!minias_post_emit_section(view,i,&snapshot)) {
+            minias_post_emit_error(errors,"invalid-riscv-section-view");
+            return false;
+        }
         if ((section->flags & MINIAS_SHF_EXECINSTR) == 0U) continue;
         if (section->size % 4U != 0U) {
             minias_post_emit_error(errors,
@@ -581,13 +587,17 @@ static bool riscv_source_uses_priv_spec(const char *op) {
  * The common SourceGraph and MCLayout are only borrowed, never modified. */
 static bool riscv_prepare_layout(const MiniAsPreLayoutView *view,
                                  char *error, size_t error_size) {
-    MiniAsRiscvState *state = (MiniAsRiscvState *)view->target_state;
+    MiniAsRiscvState *state = minias_pre_layout_target_state(view);
     bool uses_priv_spec = false;
     size_t i;
-    for (i = 0U; i < view->stmt_count; ++i) {
-        const MiniAsStmt *stmt = &view->stmts[i];
-        if (stmt->fragment_kind == MINIAS_FRAGMENT_INSTRUCTION &&
-            riscv_source_uses_priv_spec(stmt->op)) {
+    for (i = 0U; i < minias_pre_layout_fragment_count(view); ++i) {
+        MiniAsFragmentView fragment;
+        if(!minias_pre_layout_fragment(view,i,&fragment)) {
+            (void)snprintf(error,error_size,"invalid-riscv-fragment-view");
+            return false;
+        }
+        if (fragment.kind == MINIAS_FRAGMENT_INSTRUCTION &&
+            riscv_source_uses_priv_spec(fragment.op)) {
             uses_priv_spec = true;
             break;
         }
@@ -738,7 +748,7 @@ static void riscv_object_attributes(MiniAsTargetABIView view, unsigned char elf_
  * final emission invoke this identical distance/range algorithm; neither
  * retains the result across MCLayout passes. */
 bool minias_riscv_compute_branch_plan(const MiniAsStmt *stmt,
-                                      const MiniAsSymbol *symbol,
+                                      const MiniAsSymbolView *symbol,
                                       MiniAsRiscvBranchPlan *result,
                                       const char **diagnostic) {
     const MiniAsMCInst *m = stmt!=NULL &&
@@ -821,8 +831,10 @@ static bool riscv_relax_branch_plan(MiniAsRelaxContext *ctx,
                                     const MiniAsStmt *stmt,
                                     MiniAsRiscvBranchPlan *result) {
     const MiniAsSymbolRef *expr=minias_riscv_branch_bound_symbol(stmt);
-    const MiniAsSymbol *symbol=expr!=NULL
-        ? minias_relax_symbol_ref_lookup(ctx,*expr) : NULL;
+    MiniAsSymbolView symbol_snapshot;
+    const MiniAsSymbolView *symbol=expr!=NULL &&
+        minias_relax_symbol_ref_lookup(ctx,*expr,&symbol_snapshot)?
+        &symbol_snapshot:NULL;
     const char *diagnostic=NULL;
     if(!minias_riscv_compute_branch_plan(stmt,symbol,result,&diagnostic)) {
         minias_relax_error(ctx,"%s",diagnostic!=NULL?diagnostic:
@@ -894,7 +906,7 @@ static bool riscv_record_object_mapping_symbols(
     const MiniAsPostEmitView *view, MiniAsPostEmitErrorSink *errors,
     MiniAsPostEmitObjectSink *object) {
     const MiniAsRiscvState *state =
-        (const MiniAsRiscvState *)view->target_state;
+        minias_post_emit_target_state(view);
     char canonical[512], name[576];
     size_t isa_length, section_index;
     if (state == NULL || state->arch_attribute_isa[0] == '\0') return true;
@@ -902,9 +914,15 @@ static bool riscv_record_object_mapping_symbols(
         minias_post_emit_error(errors,"riscv-mapping-isa-overflow");
         return false;
     }
-    for (section_index = 0U; section_index < view->section_count;
+    for (section_index = 0U;
+         section_index < minias_post_emit_section_count(view);
          ++section_index) {
-        const MiniAsSection *section = &view->sections[section_index];
+        MiniAsSectionView snapshot;
+        const MiniAsSectionView *section=&snapshot;
+        if(!minias_post_emit_section(view,section_index,&snapshot)) {
+            minias_post_emit_error(errors,"invalid-riscv-section-view");
+            return false;
+        }
         if ((section->flags & MINIAS_SHF_EXECINSTR) == 0U ||
             section->type != MINIAS_SHT_PROGBITS || section->size == 0U)
             continue;
@@ -934,7 +952,7 @@ static bool riscv_leb128_relocations_enabled(MiniAsTargetABIView view) {
  * too early loses the symbol that GNU's relocation refers to.  This is a
  * Target ELF rule, not a generic Common symbol-folding exception. */
 static bool riscv_allow_local_section_symbol_fixup(
-    const MiniAsFixup *fixup, const MiniAsSymbol *symbol) {
+    const MiniAsFixup *fixup, const MiniAsSymbolView *symbol) {
     (void)symbol;
     return fixup->kind!=MINIAS_FIXUP_LEB_SET &&
            fixup->kind!=MINIAS_FIXUP_LEB_SUB;

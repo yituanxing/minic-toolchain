@@ -14,6 +14,80 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* These stack-scoped phase views borrow the live Common owner. Targets see
+ * only the opaque handle and scalar/const projections, never a raw Session,
+ * Fragment, Section or Symbol array. No shadow object graph is constructed. */
+struct MiniAsPreLayoutView { const MiniAs *as; };
+struct MiniAsPostEmitView { const MiniAs *as; };
+
+static bool minias_project_fragment(const MiniAs *as,size_t index,
+                                    MiniAsFragmentView *out) {
+    const MiniAsStmt *stmt;
+    if(as==NULL || out==NULL || index>=as->stmt_count)return false;
+    stmt=&as->stmts[index];
+    *out=(MiniAsFragmentView){
+        .kind=stmt->fragment_kind,
+        .op=stmt->op,
+        .line=stmt->line,
+        .section=stmt->section,
+        .offset=stmt->offset,
+        .size=stmt->size,
+        .site=stmt->site
+    };
+    if(stmt->fragment_kind==MINIAS_FRAGMENT_INSTRUCTION &&
+       stmt->payload.instruction.inst!=NULL) {
+        out->has_instruction=true;
+        out->instruction_opcode=stmt->payload.instruction.inst->opcode;
+    }else if(stmt->fragment_kind==MINIAS_FRAGMENT_ALIGNMENT) {
+        out->alignment_has_fill=stmt->payload.alignment.has_fill;
+    }
+    return true;
+}
+
+size_t minias_pre_layout_fragment_count(const MiniAsPreLayoutView *view) {
+    return view!=NULL && view->as!=NULL?view->as->stmt_count:0U;
+}
+size_t minias_pre_layout_section_count(const MiniAsPreLayoutView *view) {
+    return view!=NULL && view->as!=NULL?view->as->section_count:0U;
+}
+void *minias_pre_layout_target_state(const MiniAsPreLayoutView *view) {
+    return view!=NULL && view->as!=NULL?view->as->target_state:NULL;
+}
+bool minias_pre_layout_fragment(const MiniAsPreLayoutView *view,size_t index,
+                                MiniAsFragmentView *out) {
+    return view!=NULL && minias_project_fragment(view->as,index,out);
+}
+
+size_t minias_post_emit_fragment_count(const MiniAsPostEmitView *view) {
+    return view!=NULL && view->as!=NULL?view->as->stmt_count:0U;
+}
+size_t minias_post_emit_section_count(const MiniAsPostEmitView *view) {
+    return view!=NULL && view->as!=NULL?view->as->section_count:0U;
+}
+const void *minias_post_emit_target_state(const MiniAsPostEmitView *view) {
+    return view!=NULL && view->as!=NULL?view->as->target_state:NULL;
+}
+bool minias_post_emit_fragment(const MiniAsPostEmitView *view,size_t index,
+                               MiniAsFragmentView *out) {
+    return view!=NULL && minias_project_fragment(view->as,index,out);
+}
+bool minias_post_emit_section(const MiniAsPostEmitView *view,size_t index,
+                              MiniAsSectionView *out) {
+    const MiniAsSection *section;
+    if(view==NULL || view->as==NULL || out==NULL ||
+       index>=view->as->section_count)return false;
+    section=&view->as->sections[index];
+    *out=(MiniAsSectionView){
+        .name=section->name,
+        .type=section->type,
+        .flags=section->flags,
+        .align=section->align,
+        .data=section->data,
+        .size=section->size
+    };
+    return true;
+}
+
 bool minias_grow_array(void **ptr, size_t *capacity, size_t elem_size, size_t need) {
     size_t next;
     void *p;
@@ -400,12 +474,7 @@ int minias_assemble_config(const char *input_path,
         }
         if(parsed)parsed=minias_common_parse_source_graph(&as,graph);
         if(parsed && as.target->prepare_layout!=NULL) {
-            const MiniAsPreLayoutView parsed_fragments = {
-                .stmts = as.stmts,
-                .stmt_count = as.stmt_count,
-                .section_count = as.section_count,
-                .target_state = as.target_state
-            };
+            const MiniAsPreLayoutView parsed_fragments = { .as=&as };
             parsed=as.target->prepare_layout(&parsed_fragments,
                                               as.error,sizeof(as.error));
             if(!parsed && as.error[0]=='\0')
@@ -441,13 +510,7 @@ int minias_assemble_config(const char *input_path,
             continue;
         }
         if (parsed && as.error[0] == '\0' && minias_emit_sections(&as)) {
-            const MiniAsPostEmitView final_layout = {
-                .stmts = as.stmts,
-                .stmt_count = as.stmt_count,
-                .sections = as.sections,
-                .section_count = as.section_count,
-                .target_state = as.target_state
-            };
+            const MiniAsPostEmitView final_layout = { .as=&as };
             MiniAsPostEmitErrorSink errors = { &as };
             MiniAsPostEmitObjectSink object = { &as };
             if ((as.target->validate_output == NULL ||
