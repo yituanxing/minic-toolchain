@@ -103,29 +103,29 @@ static bool cfi_advance_fixups(MiniAs *as,int sec,size_t field,
                               unsigned width) {
     MiniAsFixupKind positive=as->target->cfi_advance_reloc_mode==2U ?
         MINIAS_FIXUP_SET : MINIAS_FIXUP_ADD;
-    if(from_symbol>=as->symbol_count || to_symbol>=as->symbol_count ||
+    MiniAsSymbolView from,to;
+    if(!minias_common_context_symbol_view(as,from_symbol,&from) ||
+       !minias_common_context_symbol_view(as,to_symbol,&to) ||
        (as->target->cfi_advance_reloc_mode!=1U &&
         as->target->cfi_advance_reloc_mode!=2U))return false;
     return minias_add_section_fixup(as,MINIAS_FIXUP_ORIGIN_SYNTHETIC_SECTION,
-               sec,field,positive,width,as->symbols[to_symbol].name,0,false) &&
+               sec,field,positive,width,to.name,0,false) &&
            minias_add_section_fixup(as,MINIAS_FIXUP_ORIGIN_SYNTHETIC_SECTION,
-               sec,field,MINIAS_FIXUP_SUB,width,as->symbols[from_symbol].name,0,false);
+               sec,field,MINIAS_FIXUP_SUB,width,from.name,0,false);
 }
 
 static bool advance_cfi(MiniAs *as,int sec,size_t from_symbol,
                         size_t to_symbol,bool eh) {
     uint64_t delta;
     unsigned align=minias_cfi_abi(as).code_align;
-    uint64_t from,to;
+    MiniAsSymbolView from,to;
     bool reloc=eh && as->target->cfi_advance_reloc_mode!=0U;
     bool crosses_relaxation=false;
     size_t field;
-    if(from_symbol>=as->symbol_count || to_symbol>=as->symbol_count)
-        return false;
-    from=as->symbols[from_symbol].value;
-    to=as->symbols[to_symbol].value;
-    if(to<from || (to-from)%align!=0U)return false;
-    delta=(to-from)/align;
+    if(!minias_common_context_symbol_view(as,from_symbol,&from) ||
+       !minias_common_context_symbol_view(as,to_symbol,&to))return false;
+    if(to.value<from.value || (to.value-from.value)%align!=0U)return false;
+    delta=(to.value-from.value)/align;
     if(delta==0U)return true;
     if(delta<=63U) {
         if(!reloc)return put8(as,sec,(uint8_t)(0x40U|(uint8_t)delta));
@@ -148,11 +148,11 @@ static bool advance_cfi(MiniAs *as,int sec,size_t from_symbol,
             return put8(as,sec,0x40U) &&
                    minias_add_section_fixup(as,
                      MINIAS_FIXUP_ORIGIN_SYNTHETIC_SECTION,
-                     sec,field,positive,1U,as->symbols[to_symbol].name,0,false) &&
+                     sec,field,positive,1U,to.name,0,false) &&
                    minias_add_section_fixup(as,
                      MINIAS_FIXUP_ORIGIN_SYNTHETIC_SECTION,
                      sec,field,MINIAS_FIXUP_CFI_SUB6,1U,
-                     as->symbols[from_symbol].name,0,false);
+                     from.name,0,false);
         }
     }
     if(reloc && align!=1U) {
@@ -428,17 +428,16 @@ static bool cfi_emit_section_core(MiniAs *as,bool eh,
     }
     for(i=0U;i<as->cfi_proc_count;++i) {
         const MiniAsCfiProc *proc=&as->cfi_procs[i];
-        const MiniAsSymbol *begin,*end;
+        MiniAsSymbolView begin,end;
         size_t j,base,ptr,initial_count=0U,variant_index,slot;
         uint64_t signature;
-        if(proc->begin_symbol>=as->symbol_count ||
-           proc->end_symbol>=as->symbol_count)return false;
-        begin=&as->symbols[proc->begin_symbol];
-        end=&as->symbols[proc->end_symbol];
-        if(!begin->defined || !end->defined ||
-           begin->section<0 || begin->section!=end->section ||
-           end->value<begin->value ||
-           end->value-begin->value>UINT32_MAX) {
+        if(!minias_common_context_symbol_view(as,proc->begin_symbol,&begin) ||
+           !minias_common_context_symbol_view(as,proc->end_symbol,&end))
+            return false;
+        if(!begin.defined || !end.defined ||
+           begin.section<0 || begin.section!=end.section ||
+           end.value<begin.value ||
+           end.value-begin.value>UINT32_MAX) {
             minias_set_error(as,"invalid-cfi-procedure-layout");
             return false;
         }
@@ -446,12 +445,12 @@ static bool cfi_emit_section_core(MiniAs *as,bool eh,
            proc->op_count>as->cfi_op_count-proc->first_op)return false;
         for(j=0U;j<proc->op_count;++j) {
             const MiniAsCfiOp *op=&as->cfi_ops[proc->first_op+j];
-            const MiniAsSymbol *anchor;
-            if(op->symbol_index>=as->symbol_count)return false;
-            anchor=&as->symbols[op->symbol_index];
-            if(!anchor->defined || anchor->section!=begin->section ||
-               anchor->value<begin->value || anchor->value>end->value)return false;
-            if(anchor->value!=begin->value)break;
+            MiniAsSymbolView anchor;
+            if(!minias_common_context_symbol_view(as,op->symbol_index,&anchor))
+                return false;
+            if(!anchor.defined || anchor.section!=begin.section ||
+               anchor.value<begin.value || anchor.value>end.value)return false;
+            if(anchor.value!=begin.value)break;
             ++initial_count;
         }
         signature=cfi_initial_hash(as,proc,initial_count,eh);
@@ -488,9 +487,8 @@ static bool cfi_emit_section_core(MiniAs *as,bool eh,
         if(eh && i==0U && as->target->record_cfi_data_mapping!=NULL &&
            !minias_cfi_record_target_mapping(as,section,(uint64_t)base))
             return false;
-        /* Target mapping-symbol creation can reallocate the Symbol table. */
-        begin=&as->symbols[proc->begin_symbol];
-        end=&as->symbols[proc->end_symbol];
+        /* Mapping-symbol creation may reallocate Context's table. These
+         * stack values retain only immutable interned names and coordinates. */
         const size_t cie=variants[variant_index].offset;
         if(eh) {
             if(base+4U<cie || base+4U-cie>UINT32_MAX)return false;
@@ -499,18 +497,18 @@ static bool cfi_emit_section_core(MiniAs *as,bool eh,
             ptr=minias_emission_section_size(as,section);
             if(!put32(as,section,0U) ||
                !put32(as,section,as->target->cfi_fde_range_relocations ?
-                     0U : (uint32_t)(end->value-begin->value)) ||
+                     0U : (uint32_t)(end.value-begin.value)) ||
                !uleb(as,section,0U) ||
                !minias_add_section_fixup(as,
                MINIAS_FIXUP_ORIGIN_SYNTHETIC_SECTION,section,ptr,MINIAS_FIXUP_PREL32,4U,
-                                 begin->name,0,false))return false;
+                                 begin.name,0,false))return false;
             if(as->target->cfi_fde_range_relocations &&
                (!minias_add_section_fixup(as,
                  MINIAS_FIXUP_ORIGIN_SYNTHETIC_SECTION,section,ptr+4U,
-                 MINIAS_FIXUP_ADD,4U,end->name,0,false) ||
+                 MINIAS_FIXUP_ADD,4U,end.name,0,false) ||
                 !minias_add_section_fixup(as,
                  MINIAS_FIXUP_ORIGIN_SYNTHETIC_SECTION,section,ptr+4U,
-                 MINIAS_FIXUP_SUB,4U,begin->name,0,false)))return false;
+                 MINIAS_FIXUP_SUB,4U,begin.name,0,false)))return false;
         } else {
             const unsigned address_size=minias_cfi_abi(as).address_size;
             if(cie>UINT32_MAX)return false;
@@ -522,7 +520,7 @@ static bool cfi_emit_section_core(MiniAs *as,bool eh,
             if(!put_cfi_address(as,section,0U) ||
                !put_cfi_address(as,section,
                    as->target->cfi_fde_range_relocations ?
-                   0U : end->value-begin->value) ||
+                   0U : end.value-begin.value) ||
                !minias_add_section_fixup(as,
                MINIAS_FIXUP_ORIGIN_SYNTHETIC_SECTION,section,base+4U,
                                  MINIAS_FIXUP_ABS,4U,
@@ -530,25 +528,25 @@ static bool cfi_emit_section_core(MiniAs *as,bool eh,
             if(!minias_add_section_fixup(as,
                MINIAS_FIXUP_ORIGIN_SYNTHETIC_SECTION,section,ptr,
                MINIAS_FIXUP_ABS,address_size,
-               begin->name,0,false))return false;
+               begin.name,0,false))return false;
             if(as->target->cfi_fde_range_relocations &&
                (!minias_add_section_fixup(as,
                  MINIAS_FIXUP_ORIGIN_SYNTHETIC_SECTION,section,
                  ptr+address_size,MINIAS_FIXUP_ADD,address_size,
-                 end->name,0,false) ||
+                 end.name,0,false) ||
                 !minias_add_section_fixup(as,
                  MINIAS_FIXUP_ORIGIN_SYNTHETIC_SECTION,section,
                  ptr+address_size,MINIAS_FIXUP_SUB,address_size,
-                 begin->name,0,false)))return false;
+                 begin.name,0,false)))return false;
         }
         size_t loc_symbol=proc->begin_symbol;
         for(j=initial_count;j<proc->op_count;++j) {
             const MiniAsCfiOp *op=&as->cfi_ops[proc->first_op+j];
-            const MiniAsSymbol *symbol;
-            if(op->symbol_index>=as->symbol_count)return false;
-            symbol=&as->symbols[op->symbol_index];
-            if(!symbol->defined || symbol->section!=begin->section ||
-               symbol->value>end->value ||
+            MiniAsSymbolView symbol;
+            if(!minias_common_context_symbol_view(as,op->symbol_index,&symbol))
+                return false;
+            if(!symbol.defined || symbol.section!=begin.section ||
+               symbol.value>end.value ||
                !advance_cfi(as,section,loc_symbol,op->symbol_index,eh) ||
                !encode_cfi(as,section,op)) {
                 minias_set_error(as,"invalid-cfi-event-layout");

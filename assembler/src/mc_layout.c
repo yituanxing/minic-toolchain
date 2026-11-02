@@ -1106,7 +1106,7 @@ struct MiniAsRelaxContext { MiniAs *as; };
 bool minias_relax_symbol_ref_lookup(MiniAsRelaxContext *ctx,
                                     MiniAsSymbolRef ref,
                                     MiniAsSymbolView *out) {
-    return minias_project_symbol(minias_symbol_ref_lookup(ctx->as,ref),out);
+    return minias_common_context_symbol_ref_view(ctx->as,ref,out);
 }
 
 bool minias_relax_resolve_symbol_difference_ref(

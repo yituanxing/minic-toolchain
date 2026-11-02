@@ -141,7 +141,6 @@ static bool minias_record_fixup(MiniAs *as,
                       MiniAsFixupOrigin origin,bool absolute_zero_symbol,
                       bool prefer_section_symbol,
                       size_t retained_fragment_id) {
-    const MiniAsSymbol *symbol=NULL;
     MiniAsFixup *fixup;
     size_t symbol_index;
     uint32_t relative_offset = 0U;
@@ -204,21 +203,22 @@ static bool minias_record_fixup(MiniAs *as,
         }
         symbol_index=SIZE_MAX;
     } else if (existing_symbol_index != SIZE_MAX) {
-        if (existing_symbol_index >= as->symbol_count) {
+        MiniAsSymbolView ignored;
+        if (!minias_common_context_symbol_view(as,existing_symbol_index,
+                                               &ignored)) {
             minias_set_error(as, "invalid-fixup-symbol-id:%zu",
                              existing_symbol_index);
             return false;
         }
-        symbol = &as->symbols[existing_symbol_index];
+        symbol_index=existing_symbol_index;
     } else {
         if (symbol_name == NULL) {
             minias_set_error(as, "missing-fixup-symbol");
             return false;
         }
-        symbol = minias_common_context_intern_symbol(as,symbol_name);
+        if(!minias_common_context_intern_symbol_id(as,symbol_name,
+                                                   &symbol_index))return false;
     }
-    if (!absolute_zero_symbol && symbol == NULL) return false;
-    if (!absolute_zero_symbol)symbol_index = (size_t)(symbol - as->symbols);
     if (!absolute_zero_symbol &&
         !minias_common_context_bind_fixup_reference(as,symbol_index))
         return false;
@@ -274,9 +274,11 @@ bool minias_add_late_fragment_fixup(MiniAs *as,size_t fragment_id,
                                    MiniAsFixupKind kind,size_t symbol_index,
                                    int64_t addend) {
     const MiniAsStmt *stmt;
+    MiniAsSymbolView ignored;
     if(as==NULL || as->emission==NULL ||
        as->emission->emitting_fragment || as->emission->committing_fragment ||
-       fragment_id>=as->stmt_count || symbol_index>=as->symbol_count) {
+       fragment_id>=as->stmt_count ||
+       !minias_common_context_symbol_view(as,symbol_index,&ignored)) {
         if(as!=NULL)minias_set_error(as,"invalid-late-fragment-fixup");
         return false;
     }
@@ -360,8 +362,9 @@ static bool minias_commit_encode_result(MiniAs *as, const MiniAsStmt *owner) {
         const MiniAsEncodeAnchorRequest *request = &result->anchors[i];
         const char *name=request->name_id < as->symbol_name_count
             ? as->symbol_names[request->name_id].name : NULL;
+        MiniAsSymbolView existing;
         if (name==NULL ||
-            minias_common_context_find_symbol(as,name) != NULL) {
+            minias_common_context_find_symbol_view(as,name,&existing)) {
             minias_set_error(as, "invalid-encoded-anchor:line=%zu",
                              owner->line);
             return false;
@@ -379,10 +382,12 @@ static bool minias_commit_encode_result(MiniAs *as, const MiniAsStmt *owner) {
     }
     for (i = 0U; i < result->fixup_count; ++i) {
         const MiniAsEncodeFixupRequest *request = &result->fixups[i];
+        MiniAsSymbolView valid_symbol;
         if (request->fragment_offset > owner->size ||
             request->width > owner->size - request->fragment_offset ||
             (!request->absolute_zero_symbol && (request->has_symbol_index ?
-             request->symbol_index>=as->symbol_count :
+             !minias_common_context_symbol_view(as,request->symbol_index,
+                                                &valid_symbol) :
              request->symbol_ref.name_id>=as->symbol_name_count ||
              as->symbol_names[request->symbol_ref.name_id].name==NULL))) {
             minias_set_error(as, "invalid-encoded-fixup-commit:line=%zu",
@@ -543,7 +548,7 @@ void minias_encode_ctx_error(MiniAsEncodeContext *ctx,const char *format,...) {
 bool minias_encode_ctx_symbol_lookup(MiniAsEncodeContext *ctx,
                                      MiniAsSymbolRef ref,
                                      MiniAsSymbolView *out) {
-    return minias_project_symbol(minias_symbol_ref_lookup(ctx->as,ref),out);
+    return minias_common_context_symbol_ref_view(ctx->as,ref,out);
 }
 
 bool minias_encode_ctx_resolve_difference(

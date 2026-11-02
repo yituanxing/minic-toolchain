@@ -8,6 +8,7 @@ work="$BUILD_DIR/tests/assembler/a0"
 mkdir -p "$work"
 
 bash tests/assembler/probe-elf-object-view-boundary.sh
+bash tests/assembler/probe-common-symbol-id-views.sh
 sh tests/assembler/probe-riscv-absolute-relocs.sh
 bash tests/assembler/probe-rv-versioned-target-profile.sh
 bash tests/assembler/probe-rv-zbb-site-gnu.sh

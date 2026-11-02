@@ -2307,3 +2307,53 @@ Production C/header delta: **4 files, +271/−102 lines (net +169)**;
 new boundary tests, CI and docs are reported separately. This is the
 necessary interface replacement for ObjectModel ownership, not a claim
 that a second object format has already been implemented.
+
+## 12. 2026-11-02 P06 checked SymbolID / value consumers
+
+Implementation baseline: `5d47f4f7bc233188914ff29ab75b5c486c35575e`,
+after the concurrent immutable TargetSpec and versioned ISA splits. The earlier `913f6dae`
+passed Target ISA ABI, x86/LoongArch GNU/Four-Target, MiniC Native Strict
+and MiniC Four-Architecture Runtime; this batch must independently prove
+those gates at its final SHA.
+
+- **Single owner and three read shapes:** `common_context.c` owns the only
+  Symbol table, ID, name and bound SymbolRef lookups. It projects the existing
+  Target-compatible `MiniAsSymbolView` by value, with no persistent second
+  array, new name cache, alternate SymbolID or fresh alias DAG. A separate
+  Context intern operation returns a stable ID, not an entity pointer.
+- **Complete CFI/DWARF consumers:** both writers now resolve anchors,
+  location ordering, FDE ranges and Fixup names from checked ID snapshots.
+  CFI can generate a Target mapping symbol mid-write without holding a
+  dangling pointer into the reallocated Symbol table. Interned `name`
+  strings remain Context-owned and stable during one assembly.
+- **Emission/Driver/Target boundaries:** preflight checks, late LEB Fixups
+  and synthetic anchor commits no longer use `as->symbols`, `symbol_count`
+  or pointer subtraction to reconstruct IDs. Driver's parser SymbolRef pair
+  and SourceGraph conditional check also use values; Encode/Relax only
+  forwards the Context-owned bound-ref projector. The final ELF writer
+  deliberately retains the separate terminal immutable `MiniAsSymbol`
+  array borrow, since its full ELF-only symbol model is a real consumer.
+- **Old APIs not duplicated:** no new broad getter/shim; the old const
+  Context entity APIs remain temporarily for MCExpr/Layout/Lowering and the
+  terminal ELF projection. These stages consume alias DAG, size anchors,
+  or final symbol-table metadata that `MiniAsSymbolView` intentionally does
+  not expose. Removing those borrows needs its own semantic interface design.
+- **Boundary gate:** six negative compilation cases reject access to alias
+  indices, section bases, fragment/size anchors, name mutation and a false
+  entity-return assumption; one positive compilation uses all four Context
+  services. The script checks all three converted translation units and
+  the two target bridge functions, and is wired into A0 and Target CI.
+
+Local acceptance: release `-Werror`, A0 **30/30** with GNU RISC-V
+toolchain enabled, exact RV32/RV64 mapping **12/12**, 26 four-target
+old/new fixtures (**18 byte-identical objects, 8 matching rejects**), GNU
+x86 CFI extended and return column checks, and ELF32/ELF64 named DWARF
+view bytes plus real optimized GCC `.debug_loclists` all PASS.
+The full four-target GNU CFI collision script completed six x86/i386
+cases; this host lacks the aarch64/LoongArch GNU assemblers, so the
+remaining cases are not counted locally. Exact-head remote and original
+Linux `.s`→GNU ld→QEMU proof remain independently pending.
+
+Production change: **7 C/header files, +146/−86 lines (net +60)**;
+tests, CI and docs counted separately. This is permission and ownership
+cleanup, not a claim of new ISA acceptance or full P06 completion.

@@ -35,10 +35,11 @@ for service in ('minias_pre_layout_fragment','minias_post_emit_fragment',
     if service+'(' not in public:
         raise SystemExit('Missing phase read service: '+service)
 if ('bool minias_project_symbol(' not in context or
-    'minias_project_symbol(minias_symbol_ref_lookup(' not in emission or
-    'minias_project_symbol(minias_symbol_ref_lookup(' not in layout or
+    'minias_project_symbol(minias_symbol_ref_lookup(' not in context or
+    'minias_common_context_symbol_ref_view(ctx->as,ref,out)' not in emission or
+    'minias_common_context_symbol_ref_view(ctx->as,ref,out)' not in layout or
     'minias_project_symbol(sym,&target_symbol)' not in writer):
-    raise SystemExit('Symbol snapshot conversion duplicated or bypassed')
+    raise SystemExit('Symbol snapshot conversion bypassed its Context owner')
 if ('static bool minias_project_fragment(' not in driver or
     'minias_project_fragment(view->as,index,out)' not in driver or
     '*out=(MiniAsSectionView){' not in driver or

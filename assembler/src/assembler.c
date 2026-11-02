@@ -277,10 +277,11 @@ bool minias_parse_bind_symbol_difference_ref(
 bool minias_parse_symbol_pair_same_defined_section(
     MiniAsParseContext *ctx, MiniAsSymbolRef positive,
     MiniAsSymbolRef negative) {
-    const MiniAsSymbol *lhs=minias_symbol_ref_lookup(ctx->as, positive);
-    const MiniAsSymbol *rhs=minias_symbol_ref_lookup(ctx->as, negative);
-    return lhs!=NULL && rhs!=NULL && lhs->defined && rhs->defined &&
-           lhs->section>=0 && lhs->section==rhs->section;
+    MiniAsSymbolView lhs,rhs;
+    return minias_common_context_symbol_ref_view(ctx->as,positive,&lhs) &&
+           minias_common_context_symbol_ref_view(ctx->as,negative,&rhs) &&
+           lhs.defined && rhs.defined && lhs.section>=0 &&
+           lhs.section==rhs.section;
 }
 
 bool minias_parse_eval_absolute_data_bits(MiniAsParseContext *ctx,
@@ -403,8 +404,9 @@ bool minias_source_target_evaluate_if(const MiniAs *as,
 }
 
 bool minias_common_source_symbol_defined(MiniAs *as,const char *name) {
-    const MiniAsSymbol *symbol=minias_common_context_find_symbol(as,name);
-    return symbol!=NULL && (symbol->defined || symbol->alias_pending);
+    MiniAsSymbolView symbol;
+    return minias_common_context_find_symbol_view(as,name,&symbol) &&
+           (symbol.defined || symbol.alias_pending);
 }
 
 /* Finalization is the only phase allowed to raise Target-driven ELF Section

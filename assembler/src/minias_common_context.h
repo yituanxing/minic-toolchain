@@ -58,6 +58,18 @@ bool minias_common_context_reserve_named_dwarf_view(MiniAs *,const char *,size_t
 bool minias_common_context_publish_dwarf_view(MiniAs *,size_t,uint64_t);
 bool minias_common_context_bind_fixup_reference(MiniAs *,size_t);
 
+/* A checked SymbolID query returns a stack value, never a borrow into the
+ * reallocatable Context table. Only the symbol's interned name is borrowed;
+ * it remains stable through later SymbolID creation. These APIs let CFI,
+ * DWARF and Emission use IDs without seeing alias/layout ownership fields. */
+bool minias_common_context_symbol_view(const MiniAs *,size_t,
+                                       MiniAsSymbolView *);
+bool minias_common_context_find_symbol_view(const MiniAs *,const char *,
+                                            MiniAsSymbolView *);
+bool minias_common_context_symbol_ref_view(const MiniAs *,MiniAsSymbolRef,
+                                           MiniAsSymbolView *);
+bool minias_common_context_intern_symbol_id(MiniAs *,const char *,size_t *);
+
 /* Each MCLayout work pass stages Symbol values in scratch arrays. Context
  * applies them to its one live Symbol table and refreshes its alias DAG. */
 typedef struct MiniAsSymbolLocalAnchorPlan {

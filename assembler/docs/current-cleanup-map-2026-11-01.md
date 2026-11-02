@@ -17,6 +17,24 @@
 > 版本策略与剩余边界见
 > [ISA 版本记录](target-isa-version-2026-11-02.md)。
 
+> **2026-11-02 P06 SymbolID 消费者值查询批次（接在
+> `5d47f4f7` TargetSpec/ISA 版本批次后）：** Context 在唯一 SymbolID 表上提供三种只读
+> `MiniAsSymbolView` 值查询（ID、名称、已绑定 SymbolRef）及
+> 显式 `intern_symbol_id`。CFI 和 DWARF 的整个 Section/地址/
+> Fixup 消费链不再直接索引 `as->symbols`，也不保存可被新建
+> Target mapping symbol 重分配而失效的 Symbol 记录指针；
+> Emission 的合成锚点预检、Fixup 和后期 LEB 提交改用 ID
+> 检查/创建，删除跨域 `symbol - as->symbols` 反算 ID；Driver 的
+> parser SymbolRef 对比和 SourceGraph 定义检查以及 Target 的
+> Encode/Relax 投影一起走 Context。未建立影子表，已存在的
+> ELF 终结期 const 实体借用保持不变。增加六种拒绝编译、
+> 一个正向编译和跨生产 TU 的结构门禁；本地 `-Werror`、
+> A0 30/30、RV32/RV64 GNU mapping 12/12、四目标 26 例旧新
+> 差分（18 对象 byte-exact、8 对同拒绝）、GNU x86 CFI/DWARF
+> 专项通过。**MCExpr、MCLayout 的完整别名/锚点规划仍有真实
+> 消费者，尚未强行统一为贫化值视图；后续按独立子图处理。**
+> exact-head 远端及 Linux 原始源/QEMU 仍按最终 SHA 单独核对。
+
 > **2026-11-02 ELF ObjectModel 只读终结视图（基于
 > `b2f0bfbe`）：** Context/Emission 刚完成 Section 元数据与输出字节
 > 的所有权分离后，Driver 现在只在 Target finalization 成功后构造
@@ -245,10 +263,12 @@
   **Symbol 唯一可写数组已收归 Context 私有，外部 const 借用
   及查找/intern 分离均完成；本批又将 Section 元数据与 Emission
   字节缓冲按 SectionID 分离，关闭全部跨域 Section 可写指针和
-  Layout 的直接 LEB 字节补丁。**剩余是更窄的 SymbolID-only
-  值查询、Driver 内部调度状态与其它模块边界，以及与 P04 共同
-  收口的 Target 生命周期边界。**本批已经关闭 ELF 整条序列化
-  调用链对宽 Session 的读取**，不再重复上述所有权工作。
+  Layout 的直接 LEB 字节补丁。**此批收口 CFI、DWARF、Emission、
+  Driver Source/Parse 和 Target Encode/Relax 的 SymbolID 值查询，
+  仍需继续审计 MCExpr/Layout 的完整别名查询及 Driver 内部调度；
+  Target 生命周期窄回调接口已通过 P04 审计，不重复造一层包装。**
+  ELF 整条序列化调用链对宽 Session 的读取也已关闭，不再重复上述
+  所有权工作。
 - [x] **Fragment 负载类型化**：按 FragmentKind 收窄
   `MiniAsStmt` 的 DATA/ALIGN/ORG/INSTRUCTION 等专属 payload；
   Parser/Layout/Emitter/Target/SourceGraph 整批迁移，删除旧字段，

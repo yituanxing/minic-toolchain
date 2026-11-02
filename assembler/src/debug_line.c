@@ -195,17 +195,20 @@ static bool parse_loc(MiniAs *as,const char *args,size_t source_line) {
        !minias_anchor_here(as,&symbol))goto bad;
     loc.symbol_index=symbol;
     {
-        const MiniAsSymbol *here=&as->symbols[symbol];
+        MiniAsSymbolView here;
         size_t i=as->debug_loc_count;
+        if(!minias_common_context_symbol_view(as,symbol,&here))goto bad;
         /* The parse-time value is a provisional absolute symbol usable by
          * expressions in subsequent debug sections. Final MCLayout owns the
          * actual ordinal, as instruction lengths can relax. */
         while(i!=0U) {
             const MiniAsDebugLoc *previous=&as->debug_locs[--i];
-            const MiniAsSymbol *anchor=&as->symbols[previous->symbol_index];
-            if(anchor->section==here->section &&
-               anchor->subsection==here->subsection &&
-               anchor->value==here->value) {
+            MiniAsSymbolView anchor;
+            if(!minias_common_context_symbol_view(as,previous->symbol_index,
+                                                  &anchor))goto bad;
+            if(anchor.section==here.section &&
+               anchor.subsection==here.subsection &&
+               anchor.value==here.value) {
                 loc.view_number=previous->view_number+1U;
                 break;
             }
@@ -255,9 +258,8 @@ static bool set_address(MiniAs *as,int sec,size_t symbol_index,
                         unsigned address_width) {
     size_t at;
     size_t i;
-    const MiniAsSymbol *symbol;
-    if(symbol_index>=as->symbol_count)return false;
-    symbol=&as->symbols[symbol_index];
+    MiniAsSymbolView symbol;
+    if(!minias_common_context_symbol_view(as,symbol_index,&symbol))return false;
     if(!append_byte(as,sec,0U) ||
        !append_leb(as,sec,(uint64_t)address_width+1U) ||
        !append_byte(as,sec,2U))return false;
@@ -266,7 +268,7 @@ static bool set_address(MiniAs *as,int sec,size_t symbol_index,
         if(!append_byte(as,sec,0U))return false;
     return minias_add_section_fixup(as,
                MINIAS_FIXUP_ORIGIN_SYNTHETIC_SECTION,sec,at,MINIAS_FIXUP_ABS,address_width,
-                            symbol->name,0,false);
+                            symbol.name,0,false);
 }
 /* No file-scope pointer to the assembly being serialized. qsort callbacks
  * that consult a mutable global would race when two independent MiniAs
@@ -312,15 +314,16 @@ static bool debug_sorted_locs(MiniAs *as,MiniAsDebugLocOrder **result) {
     }
     for(i=0U;i<as->debug_loc_count;++i) {
         const size_t symbol=as->debug_locs[i].symbol_index;
-        if(symbol>=as->symbol_count || !as->symbols[symbol].defined ||
-           as->symbols[symbol].section<0 ||
-           (size_t)as->symbols[symbol].section>=as->section_count) {
+        MiniAsSymbolView anchor;
+        if(!minias_common_context_symbol_view(as,symbol,&anchor) ||
+           !anchor.defined || anchor.section<0 ||
+           (size_t)anchor.section>=as->section_count) {
             minias_set_error(as,"dwarf-line-invalid-anchor:%zu",i);
             free(order);return false;
         }
-        order[i].section=as->symbols[symbol].section;
-        order[i].offset=as->symbols[symbol].value;
-        order[i].subsection=as->symbols[symbol].subsection;
+        order[i].section=anchor.section;
+        order[i].offset=anchor.value;
+        order[i].subsection=anchor.subsection;
         order[i].ordinal=i;
     }
     qsort(order,as->debug_loc_count,sizeof(*order),compare_loc);
@@ -349,7 +352,9 @@ static bool resolve_views_sorted(MiniAs *as,bool strict,
         }
         loc->view_number=view;
         if(loc->view_symbol_index!=SIZE_MAX) {
-            if(loc->view_symbol_index>=as->symbol_count) {
+            MiniAsSymbolView ignored;
+            if(!minias_common_context_symbol_view(as,loc->view_symbol_index,
+                                                  &ignored)) {
                 minias_set_error(as,"dwarf-view-invalid-symbol");
                 return false;
             }
@@ -492,33 +497,39 @@ bool minias_debug_emit(MiniAs *as) {
                 minias_emission_section_size(as,sec)-header_start))goto failed;
     for(begin=0U;begin<as->debug_loc_count;) {
         const MiniAsDebugLoc *first=&as->debug_locs[order[begin].ordinal];
-        const MiniAsSymbol *first_sym=&as->symbols[first->symbol_index];
+        MiniAsSymbolView first_sym;
         unsigned cur_file=1U,cur_col=0U,cur_isa=0U;
         int64_t cur_line=1;
         bool cur_stmt=true;
         bool seen_row=false;
-        uint64_t position=first_sym->value;
-        int source_section=first_sym->section;
+        uint64_t position;
+        int source_section;
+        if(!minias_common_context_symbol_view(as,first->symbol_index,
+                                              &first_sym))goto failed;
+        position=first_sym.value;
+        source_section=first_sym.section;
         if(source_section<0 || (size_t)source_section>=as->section_count ||
            !set_address(as,sec,first->symbol_index,address_width))goto failed;
         for(j=begin;j<as->debug_loc_count;++j) {
             const MiniAsDebugLoc *loc=&as->debug_locs[order[j].ordinal];
-            const MiniAsSymbol *sym=&as->symbols[loc->symbol_index];
+            MiniAsSymbolView sym;
             int64_t line_diff;
-            if(sym->section!=source_section)break;
+            if(!minias_common_context_symbol_view(as,loc->symbol_index,
+                                                  &sym))goto failed;
+            if(sym.section!=source_section)break;
             /* GNU's location view is an address-identity constraint, not
              * a decorative .loc token: `view 0` asserts this row is view
              * zero, while `view -0` resets a repeated-PC view by emitting
              * a new DW_LNE_set_address at the same section SymbolID. */
-            if(seen_row && sym->value==position && loc->view_mode==1U) {
+            if(seen_row && sym.value==position && loc->view_mode==1U) {
                 minias_set_error(as,"dwarf-view-number-mismatch");
                 goto failed;
             }
-            if(seen_row && sym->value==position && loc->view_mode==2U &&
+            if(seen_row && sym.value==position && loc->view_mode==2U &&
                !set_address(as,sec,loc->symbol_index,address_width))goto failed;
-            if(sym->value<position ||
-               !advance_pc(as,sec,sym->value-position))goto failed;
-            position=sym->value;
+            if(sym.value<position ||
+               !advance_pc(as,sec,sym.value-position))goto failed;
+            position=sym.value;
             seen_row=true;
             if(loc->file!=cur_file &&
                (!append_byte(as,sec,4U) ||

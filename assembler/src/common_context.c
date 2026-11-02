@@ -699,6 +699,38 @@ const MiniAsSymbol *minias_common_context_intern_symbol(MiniAs *as,
     return context_get_symbol_mut(as,name,true);
 }
 
+bool minias_common_context_symbol_view(const MiniAs *as,size_t id,
+                                       MiniAsSymbolView *out) {
+    if(as==NULL || out==NULL || id>=as->symbol_count)return false;
+    return minias_project_symbol(&as->symbols[id],out);
+}
+
+bool minias_common_context_find_symbol_view(const MiniAs *as,
+                                            const char *name,
+                                            MiniAsSymbolView *out) {
+    size_t slot=0U,id=0U;
+    if(as==NULL || as->context_indexes==NULL || name==NULL || out==NULL ||
+       !find_symbol_slot(as,name,&slot,&id))return false;
+    return minias_common_context_symbol_view(as,id,out);
+}
+
+bool minias_common_context_symbol_ref_view(const MiniAs *as,
+                                           MiniAsSymbolRef ref,
+                                           MiniAsSymbolView *out) {
+    if(out==NULL)return false;
+    return minias_project_symbol(minias_symbol_ref_lookup(as,ref),out);
+}
+
+bool minias_common_context_intern_symbol_id(MiniAs *as,const char *name,
+                                           size_t *id) {
+    MiniAsSymbol *symbol;
+    if(as==NULL || id==NULL)return false;
+    symbol=context_get_symbol_mut(as,name,true);
+    if(symbol==NULL)return false;
+    *id=(size_t)(symbol-as->context_indexes->symbol_records);
+    return true;
+}
+
 bool minias_common_context_declare_symbol_binding(MiniAs *as,const char *name,
                                                   bool update_binding,uint8_t bind,
                                                   bool update_visibility,
