@@ -56,6 +56,7 @@ int main(void) {
     MinicTargetInfo target = {0};
     size_t width, lw, rw;
     bool sign, ls, rs, pointer, ptr_to_int, source_pointer, left_signed;
+    bool wide_left, right_signed, result_signed;
 
     minic_core_type_context_initialize(&types);
     REQUIRE(add_integer(&types, 8U, true, &i8));
@@ -85,14 +86,14 @@ int main(void) {
     ins.value.integer_overflow.left = 0U;
     ins.value.integer_overflow.right = 1U;
     ins.value.integer_overflow.result_address = 2U;
-    REQUIRE(minic_core_integer_overflow_shape(&program, &target, &fn, &ins,
+    REQUIRE(minic_core_integer_overflow_shape(&fn, &ins,
                                                &width, &sign));
     REQUIRE(width == 4U && sign);
     values[1].core_type_id = u64;
     REQUIRE(minic_core_integer_overflow_mixed_add_i32_shape(
-        &program, &target, &fn, &ins, &left_signed));
+        &fn, &ins, &left_signed));
     REQUIRE(left_signed);
-    REQUIRE(!minic_core_integer_overflow_shape(&program, &target, &fn, &ins,
+    REQUIRE(!minic_core_integer_overflow_shape(&fn, &ins,
                                                 &width, &sign));
     values[1].core_type_id = i32;
 
@@ -102,23 +103,59 @@ int main(void) {
      * the source proof, not the untrusted frontend descriptor. */
     values[2].core_type_id = p_i8;
     REQUIRE(minic_core_integer_overflow_narrow_result_shape(
-        &program, &target, &fn, &ins, &narrow));
+        &fn, &ins, &narrow));
     REQUIRE(narrow.result_width == 1U && narrow.result_signed);
     REQUIRE(minic_type_pointer_to(minic_type_enum(7U), &values[2].type));
     ins.value.integer_overflow.source_overflow_destination_ineligible = true;
     REQUIRE(!minic_core_integer_overflow_narrow_result_shape(
-        &program, &target, &fn, &ins, &narrow));
+        &fn, &ins, &narrow));
     REQUIRE(!minic_core_integer_overflow_shape(
-        &program, &target, &fn, &ins, &width, &sign));
+        &fn, &ins, &width, &sign));
     REQUIRE(legacy_integer_queries == 0U);
     ins.value.integer_overflow.source_overflow_destination_ineligible = false;
     values[2].core_type_id = p_i32;
     ins.value.integer_overflow.source_overflow_destination_ineligible = true;
     REQUIRE(!minic_core_integer_overflow_shape(
-        &program, &target, &fn, &ins, &width, &sign));
+        &fn, &ins, &width, &sign));
     ins.value.integer_overflow.source_overflow_destination_ineligible = false;
     REQUIRE(minic_core_integer_overflow_shape(
-        &program, &target, &fn, &ins, &width, &sign));
+        &fn, &ins, &width, &sign));
+
+    /* Exercise every Common overflow consumer with poisoned C descriptors.
+     * Their successful and rejected shapes are properties of Core alone. */
+    values[0].core_type_id = u64;
+    values[1].core_type_id = u32;
+    REQUIRE(minic_core_integer_overflow_u64_u32_to_i32_shape(
+        &fn, &ins, &wide_left) && wide_left);
+    values[0].core_type_id = u32;
+    values[1].core_type_id = u64;
+    REQUIRE(minic_core_integer_overflow_u64_u32_to_i32_shape(
+        &fn, &ins, &wide_left) && !wide_left);
+    values[0].core_type_id = i32;
+    values[1].core_type_id = u32;
+    ins.value.integer_overflow.operator_kind = MINIC_CORE_INTEGER_OVERFLOW_MULTIPLY;
+    REQUIRE(minic_core_integer_overflow_mixed_multiply_i32_shape(
+        &fn, &ins, &left_signed, &right_signed, &result_signed));
+    REQUIRE(left_signed && !right_signed && result_signed);
+    values[1].core_type_id = i32;
+    REQUIRE(!minic_core_integer_overflow_mixed_multiply_i32_shape(
+        &fn, &ins, &left_signed, &right_signed, &result_signed));
+    values[2].core_type_id = p_i8;
+    REQUIRE(minic_core_integer_overflow_narrow_result_shape(&fn, &ins, &narrow));
+    fn.type_context = NULL;
+    REQUIRE(!minic_core_integer_overflow_narrow_result_shape(&fn, &ins, &narrow));
+    REQUIRE(!minic_core_integer_overflow_mixed_multiply_i32_shape(
+        &fn, &ins, &left_signed, &right_signed, &result_signed));
+    ins.value.integer_overflow.operator_kind = MINIC_CORE_INTEGER_OVERFLOW_ADD;
+    REQUIRE(!minic_core_integer_overflow_mixed_add_i32_shape(&fn, &ins, &left_signed));
+    REQUIRE(!minic_core_integer_overflow_u64_u32_to_i32_shape(&fn, &ins, &wide_left));
+    fn.type_context = &types;
+    values[2].core_type_id = p_i32;
+    values[1].core_type_id = i32;
+    fn.type_context = NULL;
+    REQUIRE(!minic_core_integer_overflow_shape(
+        &fn, &ins, &width, &sign));
+    fn.type_context = &types;
 
     ins.kind = MINIC_CORE_INSTRUCTION_INTEGER_CLZ;
     ins.core_type_id = i32;
@@ -126,12 +163,15 @@ int main(void) {
     ins.value.operand = 1U;
     {
         unsigned int bits;
-        REQUIRE(minic_core_integer_bitscan_shape(&program, &target, &fn,
+        REQUIRE(minic_core_integer_bitscan_shape(&fn,
                                                   &ins, &bits));
         REQUIRE(bits == 32U);
         values[1].core_type_id = i32;
-        REQUIRE(!minic_core_integer_bitscan_shape(&program, &target, &fn,
+        REQUIRE(!minic_core_integer_bitscan_shape(&fn,
                                                    &ins, &bits));
+        fn.type_context = NULL;
+        REQUIRE(!minic_core_integer_bitscan_shape(&fn, &ins, &bits));
+        fn.type_context = &types;
     }
 
     ins.kind = MINIC_CORE_INSTRUCTION_INTEGER_NEGATE;

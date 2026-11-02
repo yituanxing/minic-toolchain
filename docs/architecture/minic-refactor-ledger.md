@@ -681,3 +681,60 @@ wide emit 仍借 `rv32_resolved_*`，RV64 `runtime_libcall` 和
 其余可执行核心机器类仍有 C descriptor 查询。应按整类值消费
 路径收口并在五目标上横向比对；既有 Linux runtime/ABI Bug
 暂时留在独立 MC 跟踪中，勿混入 Core 边界重构。
+
+## IR-P6：Core 数值执行形状与 RV32 整族机器消费封口
+
+起点：`edea518`（IR-P5）。先从 Core 的 operand/result/pointee、
+ILP32 实参/返回值双字传输、RV32 wide/memory/structured ASM、RV64
+strict ISA 的 saved-RA libcall 条件，沿五目标共同数值形状一直读到
+实际机器发射，确认所有路径在生产态已有 `CoreTypeContext`。本批
+**按执行语义整族迁移并退休同一族的旧 C 分支**，没有为减小 diff
+保留一套无人负责的 `resolved` 适配层。
+
+1. Common 数值形状的六个整数溢出、窄结果与 CLZ/CTZ 判定改为
+   `CoreFunction + CoreInstruction` 唯一接口，删除
+   `MinicC0Program`/`MinicTargetInfo` 参数与所有 C 整数宽度和类型
+   fallback；x86-64、AArch64、LoongArch64、RV64 的调用点同步改签。
+   GNU overflow 对 enum 目的地的源语义禁入仍由 Core 上已封存
+   `source_overflow_destination_ineligible` 证明，不能误把 enum
+   降到普通 i8 后重新放行。
+2. RV32 `scalar`、`integer`、`wide`、`memory`、`emit` 六文件及其
+   internal 合约一次性删去 `rv32_resolved_*`、C scalar/width/canon/
+   load/store/is-wide 实现。统一只用 Core ID 判断 ILP32 一/二
+   字寄存器、signed/unsigned 装载、布尔规范化、动态 `alloca`
+   计数和结果类型、Record copy 布局、指针步长、宽算术 helper、
+   `%zN` 结构化 ASM 与 SBI 固定寄存器类型；pointee 读取也要求
+   真正的 4 字节 ILP32 Core pointer。源程序的符号来源与地址
+   对齐策略未擅自迁入 Core，保留现有 `program` 入参。
+3. RV32 frame 的失败诊断也停止读取 `return_type`、`object.type`
+   这类旧 C 字段，改为只输出 Core type ID/布局；帧 ABI 和栈槽
+   几何保持原样。RV64 strict ISA 的 i128 除法、余数与比较
+   libcall saved-RA 预判改用共享 `core_abi_value_shape`，不再
+   依赖 `instruction->type`，仍使用原 compiler-rt helper。
+4. 新增 RV32 CoreType poison 单测（原生 + ASan/UBSan），验证
+   signed 8/16/32、bool、u64 双字、float/double、限定指针、
+   invalid pointer layout 与无类型上下文的 fail-closed，并核对
+   实际 `lb`、`lbu`、canonicalizer 指令。Common 数值单测覆盖
+   六个 overflow/bitscan 入口及 source-qualifier 禁入负例；
+   静态边界门禁禁止 C fallback 重生。RV32 单测接入 `check-fast`。
+
+**对照与构建证据：** 用旧 `edea518` 编译器和本批编译器消费同
+一份 GNU `-E -P` 输出。20 个执行类型 fixture × 五目标共 100
+组：**91 组 `.s` 字节相同、9 组双方拒绝、0 差异**；并重跑前批
+24 × 五目标 CALL ABI 差分：**98 相同、22 双方拒绝、0 差异**。
+不同的诊断不算同字节行为，双方拒绝也不计成运行 PASS。
+Debug 构建、全新 Release `-Werror`、`make check-fast`、
+`check-minic-target-boundaries.sh`、原生与 ASan/UBSan 单测分别
+PASS。生产 `src/` **+334/−659、净 −325 行（14 文件）**；
+删除旧路径是这次的主要结果，保留五目标物理 ABI 与 runtime
+选型，并未宣称 GNU 交叉 AS/LD 和 QEMU 已覆盖。
+
+**下一大批的真实依赖：** `direct_instruction_semantics`、
+`core_object_storage`/`lp64_scalar` 中还存在 standalone C fallback；
+若要让 Module→Target 最终退出 `MinicC0Program`，必须先把
+AArch64/LoongArch64 Linux inline ASM 的源资格证明和 typed operand
+效果封存进 Core，之后再一次性迁移 common visitor、backend、
+五目标 module writer 及旧测试适配器。当前 `MinicCoreModule` 已
+拥有全局片段、symbol/section/alias/file ASM，不另造第二套 IR。
+Linux NEON、RV32 Zstd 与 KVM 等机器/runtime 失败仍分开跟踪，
+不能用边界检查通过冒充五 ISA runtime 全绿。

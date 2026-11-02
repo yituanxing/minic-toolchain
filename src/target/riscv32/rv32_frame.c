@@ -16,12 +16,23 @@
 /* A failed real-world frame should identify the ownership boundary
  * in the same grouped acceptance run, rather than spend a CI cycle per
  * source file. This prints only on actual rejection when explicitly enabled. */
-static bool rv32_frame_reject(const char *stage, size_t index, MinicType type) {
-    if (getenv("MINIC_RV32_FRAME_TRACE") != NULL)
+static bool rv32_frame_reject(const char *stage, size_t index,
+                             const MinicCoreFunction *function,
+                             MinicCoreTypeId type_id) {
+    if (getenv("MINIC_RV32_FRAME_TRACE") != NULL) {
+        const MinicCoreType *type = function != NULL &&
+            function->type_context != NULL
+            ? minic_core_type_get(function->type_context,
+                  minic_core_type_unqualified(function->type_context, type_id))
+            : NULL;
         (void)fprintf(stderr,
-            "RV32_FRAME_REJECT stage=%s index=%zu kind=%d depth=%u rank=%d\n",
-            stage, index, (int)type.base_kind,
-            (unsigned)type.pointer_depth, (int)type.integer_rank);
+            "RV32_FRAME_REJECT stage=%s index=%zu core_type=%u kind=%d size=%zu bits=%u\n",
+            stage, index, (unsigned)type_id,
+            type != NULL ? (int)type->kind : -1,
+            type != NULL && type->has_layout ? type->size : 0U,
+            type != NULL && type->kind == MINIC_CORE_TYPE_INTEGER
+                ? type->value.integer.bit_width : 0U);
+    }
     return false;
 }
 
@@ -45,7 +56,8 @@ bool rv32_frame_init_with_storage(Rv32Frame *frame, const MinicC0Program *progra
      * its precomputed stack bound and individual argument placements. */
     frame->has_dynamic_stack = facts->uses_dynamic_stack_alloc;
     if (!rv32_function_abi_plan_build(program, t, f, facts->call_index, &frame->abi))
-        return rv32_frame_reject("abi_plan", 0U, minic_type_void());
+        return rv32_frame_reject("abi_plan", 0U, f,
+                                 MINIC_CORE_TYPE_INVALID);
     max_stack_args = frame->abi.max_outgoing_stack_words;
     frame->is_variadic = is_variadic;
     if (frame->abi.named_gpr_words > 8U ||
@@ -64,7 +76,8 @@ bool rv32_frame_init_with_storage(Rv32Frame *frame, const MinicC0Program *progra
     if (!minic_core_object_storage_plan_acquire(
             program, t->data_layout, f, storage,
             &frame->object_storage, &frame->borrows_object_storage))
-        return rv32_frame_reject("core_object_storage", 0U, minic_type_void());
+        return rv32_frame_reject("core_object_storage", 0U, f,
+                                 MINIC_CORE_TYPE_INVALID);
     frame->object_count = f->object_count;
     frame->value_count = f->value_count;
     if (f->value_count != 0U) {
@@ -80,12 +93,14 @@ bool rv32_frame_init_with_storage(Rv32Frame *frame, const MinicC0Program *progra
     /* Slot zero saves ra even in a leaf; a stable ABI-oriented frame makes
      * lowering of calls and arithmetic runtime helpers deterministic. */
     if (frame->outgoing_size > SIZE_MAX - (frame->abi.indirect_return ? 8U : 4U))
-        return rv32_frame_reject("sret_frame_overflow", 0U, f->return_type);
+        return rv32_frame_reject("sret_frame_overflow", 0U, f,
+                                 f->core_return_type_id);
     frame->sret_offset = frame->outgoing_size + 4U;
     frame->saved_base_offset = frame->outgoing_size +
                                (frame->abi.indirect_return ? 8U : 4U);
     if (frame->has_dynamic_stack && frame->saved_base_offset > SIZE_MAX - 4U)
-        return rv32_frame_reject("saved_base", 0U, f->return_type);
+        return rv32_frame_reject("saved_base", 0U, f,
+                                 f->core_return_type_id);
     next = frame->saved_base_offset + (frame->has_dynamic_stack ? 4U : 0U);
     /* The already merged RV64 P1 first-write/escape/lifetime proof is
      * target-independent and lives in common CoreObject analysis.
@@ -100,7 +115,8 @@ bool rv32_frame_init_with_storage(Rv32Frame *frame, const MinicC0Program *progra
             !minic_core_object_reuse_plan_get(
                 &reuse, MINIC_CORE_OBJECT_INVALID, NULL, NULL, &pool_slots)) {
             minic_core_object_reuse_plan_destroy(&reuse);
-            return rv32_frame_reject("core_object_plan", 0U, minic_type_void());
+            return rv32_frame_reject("core_object_plan", 0U, f,
+                                     MINIC_CORE_TYPE_INVALID);
         }
         for (i = 0U; i < f->object_count; ++i) {
             const MinicCoreObject *obj = &f->objects[i];
@@ -112,7 +128,8 @@ bool rv32_frame_init_with_storage(Rv32Frame *frame, const MinicC0Program *progra
                     &reuse, (MinicCoreObjectId)i, &reusable, &slot, &peak) ||
                 peak != pool_slots) {
                 minic_core_object_reuse_plan_destroy(&reuse);
-                return rv32_frame_reject("core_object_layout", i, obj->type);
+                return rv32_frame_reject("core_object_layout", i, f,
+                                         obj->core_type_id);
             }
             size = object_slot->extent;
             align = object_slot->alignment;
@@ -124,13 +141,15 @@ bool rv32_frame_init_with_storage(Rv32Frame *frame, const MinicC0Program *progra
                     &next, align, size != 0U ? size : 1U, SIZE_MAX,
                     &frame->object_offsets[i])) {
                 minic_core_object_reuse_plan_destroy(&reuse);
-                return rv32_frame_reject("object_offset", i, obj->type);
+                return rv32_frame_reject("object_offset", i, f,
+                                         obj->core_type_id);
             }
         }
         if (!rv32_align(next, 8U, &pool_base) ||
             pool_slots > (SIZE_MAX - pool_base) / 8U) {
             minic_core_object_reuse_plan_destroy(&reuse);
-            return rv32_frame_reject("object_pool", 0U, minic_type_void());
+            return rv32_frame_reject("object_pool", 0U, f,
+                                     MINIC_CORE_TYPE_INVALID);
         }
         next = pool_base + pool_slots * 8U;
         for (i = 0U; i < f->object_count; ++i) {
@@ -140,7 +159,8 @@ bool rv32_frame_init_with_storage(Rv32Frame *frame, const MinicC0Program *progra
                     &reuse, (MinicCoreObjectId)i, &reusable, &slot, &peak) ||
                 peak != pool_slots || (reusable && slot >= pool_slots)) {
                 minic_core_object_reuse_plan_destroy(&reuse);
-                return rv32_frame_reject("object_pool_slot", i, f->objects[i].type);
+                return rv32_frame_reject("object_pool_slot", i, f,
+                                         f->objects[i].core_type_id);
             }
             if (reusable) frame->object_offsets[i] = pool_base + 8U * slot;
         }
@@ -150,17 +170,19 @@ bool rv32_frame_init_with_storage(Rv32Frame *frame, const MinicC0Program *progra
      * values use 4-byte physical units. CoreObject cross-block eligibility
      * is handled separately by the shared first-write safety proof above. */
     if (!rv32_align(next, 8U, &value_base))
-        return rv32_frame_reject("spill_base", next, minic_type_void());
+        return rv32_frame_reject("spill_base", next, f,
+                                 MINIC_CORE_TYPE_INVALID);
     {
         size_t failed_block = SIZE_MAX;
         if (!minic_core_function_reused_spill_layout(
                 program, f, t->data_layout, 4U, value_base,
                 frame->value_offsets, &peak_bytes, &failed_block))
-            return rv32_frame_reject("spill_layout", failed_block,
-                                     minic_type_void());
+            return rv32_frame_reject("spill_layout", failed_block, f,
+                                     MINIC_CORE_TYPE_INVALID);
     }
     if (value_base > SIZE_MAX - peak_bytes)
-        return rv32_frame_reject("spill_total", 0U, minic_type_void());
+        return rv32_frame_reject("spill_total", 0U, f,
+                                 MINIC_CORE_TYPE_INVALID);
     next = value_base + peak_bytes;
     /* RV64 already handled over-aligned Core locals: the incoming sp only
      * guarantees 16-byte ABI alignment, even when object offsets align to
@@ -173,14 +195,16 @@ bool rv32_frame_init_with_storage(Rv32Frame *frame, const MinicC0Program *progra
     if (frame->has_dynamic_stack_alignment) {
         if (!rv32_align(next, 4U, &frame->entry_sp_offset) ||
             frame->entry_sp_offset > SIZE_MAX - 4U)
-            return rv32_frame_reject("entry_sp_slot", 0U, minic_type_void());
+            return rv32_frame_reject("entry_sp_slot", 0U, f,
+                                     MINIC_CORE_TYPE_INVALID);
         next = frame->entry_sp_offset + 4U;
     }
     if (next > SIZE_MAX - frame->varargs_size ||
         !rv32_align(next + frame->varargs_size, 16U, &frame->frame_size) ||
         frame->frame_size > (size_t)INT32_MAX ||
         frame->frame_size < frame->varargs_size)
-        return rv32_frame_reject("frame_size", next, minic_type_void());
+        return rv32_frame_reject("frame_size", next, f,
+                                 MINIC_CORE_TYPE_INVALID);
     frame->varargs_offset = frame->frame_size - frame->varargs_size;
     return frame->varargs_offset >= next;
 }

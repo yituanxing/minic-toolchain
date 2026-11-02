@@ -60,29 +60,17 @@ bool rv32_incoming_word(FILE *, const Rv32Frame *, size_t, const char *);
 bool rv32_outgoing_word(FILE *, const Rv32Frame *, size_t, const char *);
 
 /* Type widths and scalar transport: rv32_scalar.c */
-bool rv32_scalar_storage_words(const MinicCoreFunction *, MinicType, unsigned *);
-bool rv32_scalar(const MinicCoreFunction *, MinicType, unsigned *, bool *);
-/* Attached Core producer path: classify the execution type, never a C rank. */
+/* Every machine scalar is classified from its sealed Core type ID. */
 bool rv32_core_scalar_storage_words(const MinicCoreFunction *, MinicCoreTypeId,
                                     unsigned *);
 bool rv32_core_scalar(const MinicCoreFunction *, MinicCoreTypeId,
                       unsigned *, bool *);
-bool rv32_resolved_scalar_storage_words(const MinicCoreFunction *, MinicType,
-                                        MinicCoreTypeId, unsigned *);
-bool rv32_resolved_scalar(const MinicCoreFunction *, MinicType,
-                          MinicCoreTypeId, unsigned *, bool *);
-bool rv32_resolved_canon(FILE *, const MinicCoreFunction *, MinicType,
-                         MinicCoreTypeId, const char *);
 bool rv32_core_canon(FILE *, const MinicCoreFunction *, MinicCoreTypeId,
                      const char *);
-bool rv32_resolved_load_mem(FILE *, const MinicCoreFunction *, MinicType,
-                            MinicCoreTypeId, const char *, size_t);
-bool rv32_resolved_store_mem(FILE *, const MinicCoreFunction *, MinicType,
-                             MinicCoreTypeId, size_t);
-bool rv32_canon(FILE *, const MinicCoreFunction *, MinicType, const char *);
-bool rv32_load_mem(FILE *, const MinicCoreFunction *, MinicType,
-                   const char *, size_t);
-bool rv32_store_mem(FILE *, const MinicCoreFunction *, MinicType, size_t);
+bool rv32_core_load_mem(FILE *, const MinicCoreFunction *, MinicCoreTypeId,
+                        const char *, size_t);
+bool rv32_core_store_mem(FILE *, const MinicCoreFunction *, MinicCoreTypeId,
+                         size_t);
 bool rv32_load2(FILE *, const Rv32Frame *, const MinicCoreInstruction *);
 
 /* Typed machine family lowering; all transport stays behind Target. */
@@ -90,15 +78,12 @@ bool rv32_emit_integer_instruction(FILE *, const MinicC0Program *,
                                    const MinicTargetInfo *, const MinicCoreFunction *,
                                    const Rv32Frame *, const MinicCoreInstruction *,
                                    const char *);
-bool rv32_is_wide_integer(const MinicCoreFunction *, MinicType);
-bool rv32_resolved_is_wide_integer(const MinicCoreFunction *, MinicType,
-                                   MinicCoreTypeId);
-bool rv32_resolved_unsigned_integer(const MinicCoreFunction *, MinicType,
-                                    MinicCoreTypeId);
-bool rv32_resolved_integer_type(const MinicCoreFunction *, MinicType,
-                                MinicCoreTypeId);
-bool rv32_resolved_pointer_type(const MinicCoreFunction *, MinicType,
-                                MinicCoreTypeId);
+bool rv32_core_is_wide_integer(const MinicCoreFunction *, MinicCoreTypeId);
+bool rv32_core_unsigned_integer(const MinicCoreFunction *, MinicCoreTypeId);
+bool rv32_core_integer_type(const MinicCoreFunction *, MinicCoreTypeId);
+bool rv32_core_pointer_type(const MinicCoreFunction *, MinicCoreTypeId);
+MinicCoreTypeId rv32_core_pointee_type(const MinicCoreFunction *,
+                                      MinicCoreTypeId);
 bool rv32_emit_wide_integer(FILE *, const MinicCoreFunction *,
                             const Rv32Frame *, const MinicCoreInstruction *,
                             const char *);

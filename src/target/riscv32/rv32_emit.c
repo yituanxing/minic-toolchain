@@ -257,19 +257,17 @@ static bool rv32_emit_source_legacy_asm(
                               MINIC_CORE_TYPE_INTEGER) &&
            !rv32_emit_type_is(f, f->values[input].core_type_id,
                               MINIC_CORE_TYPE_POINTER)) ||
-          !rv32_resolved_scalar(f, f->values[input].type,
-                f->values[input].core_type_id, &bits, &is_signed))) ||
+          !rv32_core_scalar(f, f->values[input].core_type_id,
+                            &bits, &is_signed))) ||
         (address != MINIC_CORE_VALUE_INVALID &&
          (address >= f->value_count ||
-          !rv32_resolved_pointer_type(f, f->values[address].type,
-                                      f->values[address].core_type_id))) ||
+          !rv32_core_pointer_type(f, f->values[address].core_type_id))) ||
         (output_reg != NULL &&
          (ins->result >= f->value_count ||
           (!rv32_emit_type_is(f, ins->core_type_id,
                               MINIC_CORE_TYPE_INTEGER) &&
-           !rv32_resolved_pointer_type(f, ins->type, ins->core_type_id)) ||
-          !rv32_resolved_scalar(f, ins->type,
-                                 ins->core_type_id, &bits, &is_signed))) ||
+           !rv32_core_pointer_type(f, ins->core_type_id)) ||
+          !rv32_core_scalar(f, ins->core_type_id, &bits, &is_signed))) ||
         (output_reg == NULL &&
          (ins->result != MINIC_CORE_VALUE_INVALID ||
           !rv32_emit_type_is(f, ins->core_type_id,
@@ -286,8 +284,7 @@ static bool rv32_emit_source_legacy_asm(
         !rv32_emit_source_template(out, source, bindings, memory, false))
         return false;
     return output_reg == NULL ||
-           (rv32_resolved_canon(out, f, ins->type,
-                                ins->core_type_id, output_reg) &&
+           (rv32_core_canon(out, f, ins->core_type_id, output_reg) &&
             rv32_slot(out, fr, ins->result, output_reg, false));
 }
 
@@ -300,7 +297,7 @@ static bool rv32_emit_source_legacy_asm(
 static bool rv32_emit_source_asm_scalar_transfer(
     FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *f, MinicCoreValueId address,
-    MinicType value_type, bool store, const char *value_register,
+    MinicCoreTypeId value_type, bool store, const char *value_register,
     const char *address_register, const char *scratch_register) {
     unsigned bits;
     bool is_signed;
@@ -308,7 +305,7 @@ static bool rv32_emit_source_asm_scalar_transfer(
     size_t known_alignment;
     if (out == NULL || program == NULL || target == NULL ||
         target->data_layout == NULL || f == NULL ||
-        !rv32_scalar(f, value_type, &bits, &is_signed))
+        !rv32_core_scalar(f, value_type, &bits, &is_signed))
         return false;
     opcode = store
         ? (bits <= 8U ? "sb" : bits <= 16U ? "sh" : "sw")
@@ -376,7 +373,8 @@ static bool rv32_emit_source_structured_asm(
                     b->has_fixed_register_binding ||
                     b->kind != MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT ||
                     b->value >= f->value_count ||
-                    !rv32_scalar(f, f->values[b->value].type, &bits, &is_signed) ||
+                    !rv32_core_scalar(f, f->values[b->value].core_type_id,
+                                      &bits, &is_signed) ||
                     bits != 32U ||
                     !rv32_slot(out, fr, b->value,
                                scratch_regs[b->operand_index], true))
@@ -421,7 +419,7 @@ static bool rv32_emit_source_structured_asm(
                 const MinicCoreFixedRegisterBinding *fixed;
                 unsigned reg_index, bits;
                 bool is_signed;
-                MinicType pointee;
+                MinicCoreTypeId pointee;
                 if (!b->has_fixed_register_binding ||
                     b->fixed_register_binding_id >= f->fixed_register_binding_count ||
                     b->operand_index >= n || seen[b->operand_index] ||
@@ -439,16 +437,20 @@ static bool rv32_emit_source_structured_asm(
                 seen[b->operand_index] = true;
                 bindings[b->operand_index] = abi_registers[reg_index];
                 if (b->kind == MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT) {
-                    if (!minic_type_equal(f->values[b->value].type, fixed->type) ||
-                        !rv32_scalar(f, fixed->type, &bits, &is_signed) ||
+                    if (f->values[b->value].core_type_id != fixed->core_type_id ||
+                        !rv32_core_scalar(f, fixed->core_type_id,
+                                          &bits, &is_signed) ||
                         bits != 32U ||
                         !rv32_slot(out, fr, b->value, abi_registers[reg_index], true))
                         return false;
                 } else if (b->kind == MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE ||
                            b->kind == MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT) {
-                    if (!minic_type_pointee(f->values[b->value].type, &pointee) ||
-                        !minic_type_equal(pointee, fixed->type) ||
-                        !rv32_scalar(f, pointee, &bits, &is_signed) || bits != 32U)
+                    pointee = rv32_core_pointee_type(
+                        f, f->values[b->value].core_type_id);
+                    if (pointee == MINIC_CORE_TYPE_INVALID ||
+                        pointee != fixed->core_type_id ||
+                        !rv32_core_scalar(f, pointee, &bits, &is_signed) ||
+                        bits != 32U)
                         return false;
                     if (b->kind == MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE &&
                         (!rv32_slot(out, fr, b->value, "t0", true) ||
@@ -467,8 +469,9 @@ static bool rv32_emit_source_structured_asm(
                     &ins->value.structured_inline_asm.operands[i];
                 if (b->kind == MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE ||
                     b->kind == MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT) {
-                    MinicType pointee;
-                    if (!minic_type_pointee(f->values[b->value].type, &pointee) ||
+                    const MinicCoreTypeId pointee = rv32_core_pointee_type(
+                        f, f->values[b->value].core_type_id);
+                    if (pointee == MINIC_CORE_TYPE_INVALID ||
                         !rv32_slot(out, fr, b->value, "t0", true) ||
                         !rv32_emit_source_asm_scalar_transfer(
                             out, program, target, f, b->value, pointee,
@@ -488,7 +491,7 @@ static bool rv32_emit_source_structured_asm(
             &ins->value.structured_inline_asm.operands[i];
         unsigned bits = 0U;
         bool is_signed;
-        MinicType pointee;
+        MinicCoreTypeId pointee;
         if (b->operand_index >= n || seen[b->operand_index] ||
             b->has_fixed_register_binding || b->value >= f->value_count)
             return false;
@@ -496,15 +499,17 @@ static bool rv32_emit_source_structured_asm(
         bindings[b->operand_index] = regs[b->operand_index];
         switch (b->kind) {
         case MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT:
-            if (!rv32_scalar(f, f->values[b->value].type, &bits, &is_signed)) {
+            if (!rv32_core_scalar(f, f->values[b->value].core_type_id,
+                                  &bits, &is_signed)) {
                 unsigned words;
                 /* A GNU RV32 "rJ" input may be a 64-bit integer while the
                  * source asm names only its low register (Linux's two 32-bit
                  * user-access stores use %zN for each separately shifted
                  * half). The ILP32 frame is low-word first; rv32_slot loads
                  * exactly that register. Wide output/RMW stays rejected. */
-                if (!minic_type_is_integer(f->values[b->value].type) ||
-                    !rv32_scalar_storage_words(f, f->values[b->value].type, &words) ||
+                if (!rv32_core_integer_type(f, f->values[b->value].core_type_id) ||
+                    !rv32_core_scalar_storage_words(f,
+                         f->values[b->value].core_type_id, &words) ||
                     words != 2U)
                     return false;
             } else if (bits == 0U || bits > 32U)
@@ -512,19 +517,23 @@ static bool rv32_emit_source_structured_asm(
             break;
         case MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT:
         case MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE:
-            if (!minic_type_pointee(f->values[b->value].type, &pointee) ||
-                (!rv32_scalar(f, pointee, &bits, &is_signed) &&
+            pointee = rv32_core_pointee_type(
+                f, f->values[b->value].core_type_id);
+            if (pointee == MINIC_CORE_TYPE_INVALID ||
+                (!rv32_core_scalar(f, pointee, &bits, &is_signed) &&
                  !(b->kind == MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT &&
-                   rv32_is_wide_integer(f, pointee))) ||
+                   rv32_core_is_wide_integer(f, pointee))) ||
                 ((bits != 8U && bits != 16U && bits != 32U) &&
                  !(b->kind == MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT &&
-                   rv32_is_wide_integer(f, pointee))))
+                   rv32_core_is_wide_integer(f, pointee))))
                 return false;
             break;
         case MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT:
         case MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT:
         case MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE:
-            if (!minic_type_pointee(f->values[b->value].type, &pointee))
+            if (rv32_core_pointee_type(
+                    f, f->values[b->value].core_type_id) ==
+                MINIC_CORE_TYPE_INVALID)
                 return false;
             memory[b->operand_index] = true;
             break;
@@ -550,9 +559,10 @@ static bool rv32_emit_source_structured_asm(
         if (b->kind == MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE) {
             unsigned bits;
             bool is_signed;
-            MinicType pointee;
-            if (!minic_type_pointee(f->values[b->value].type, &pointee) ||
-                !rv32_scalar(f, pointee, &bits, &is_signed))
+            const MinicCoreTypeId pointee = rv32_core_pointee_type(
+                f, f->values[b->value].core_type_id);
+            if (pointee == MINIC_CORE_TYPE_INVALID ||
+                !rv32_core_scalar(f, pointee, &bits, &is_signed))
                 return false;
             if (!rv32_emit_source_asm_scalar_transfer(
                     out, program, target, f, b->value, pointee,
@@ -567,13 +577,15 @@ static bool rv32_emit_source_structured_asm(
             &ins->value.structured_inline_asm.operands[i];
         unsigned bits = 0U;
         bool is_signed;
-        MinicType pointee;
+        MinicCoreTypeId pointee;
         if (b->kind != MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT &&
             b->kind != MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE)
             continue;
-        if (!minic_type_pointee(f->values[b->value].type, &pointee) ||
-            (!rv32_scalar(f, pointee, &bits, &is_signed) &&
-             !rv32_is_wide_integer(f, pointee)))
+        pointee = rv32_core_pointee_type(f,
+            f->values[b->value].core_type_id);
+        if (pointee == MINIC_CORE_TYPE_INVALID ||
+            (!rv32_core_scalar(f, pointee, &bits, &is_signed) &&
+             !rv32_core_is_wide_integer(f, pointee)))
             return false;
         if (!rv32_slot(out, fr, b->value, "a2", true))
             return false;
@@ -581,7 +593,7 @@ static bool rv32_emit_source_structured_asm(
          * can designate its low register via %N.  A template which only
          * writes that low word leaves the upper register unspecified; choose
          * zero as a stable value for the otherwise uninitialized half. */
-        if (rv32_is_wide_integer(f, pointee)) {
+        if (rv32_core_is_wide_integer(f, pointee)) {
             size_t proven_alignment = minic_riscv_address_alignment(
                 program, target->data_layout, f, b->value);
             if (!minic_riscv_emit_typed_word_pair(
@@ -634,11 +646,9 @@ static bool rv32_emit_ins(FILE *out, const MinicC0Program *program,
               (binding->is_local &&
                minic_target_info_local_fixed_register_supported(
                    target, binding->register_name, binding->register_name_length))) ||
-            !(f->type_context != NULL
-                ? binding->core_type_id == ins->core_type_id
-                : minic_type_equal(binding->type, ins->type)) ||
-            !rv32_resolved_scalar(f, ins->type, ins->core_type_id,
-                                   &bits, &is_signed) || bits != 32U)
+            binding->core_type_id != ins->core_type_id ||
+            !rv32_core_scalar(f, ins->core_type_id,
+                              &bits, &is_signed) || bits != 32U)
             return false;
         /* Architectural tp/sp are read-only C register variables. Use
          * RV32I mv (ADDI), then the existing ILP32 SSA value transport.
@@ -678,7 +688,7 @@ static bool rv32_emit_ins(FILE *out, const MinicC0Program *program,
          * the saved 32-bit ra slot, moving stack and frame-pointer policy.
          * This is a base-I lw/mv operation, not an architecture-wide unwind. */
         if (ins->value.call_frame_address.level != 0U ||
-            !rv32_resolved_pointer_type(f, ins->type, ins->core_type_id))
+            !rv32_core_pointer_type(f, ins->core_type_id))
             return false;
         switch (ins->value.call_frame_address.kind) {
         case MINIC_CORE_CALL_FRAME_ADDRESS_RETURN:
@@ -729,7 +739,7 @@ static bool rv32_term(FILE *out, const MinicCoreFunction *f,
         } else if (!rv32_emit_type_is(f, f->core_return_type_id,
                                       MINIC_CORE_TYPE_VOID)) {
             unsigned words;
-            if (!rv32_resolved_scalar_storage_words(f, f->return_type,
+            if (!rv32_core_scalar_storage_words(f,
                     f->core_return_type_id, &words))
                 return false;
             if (words == 2U) {
@@ -759,7 +769,7 @@ static bool rv32_term(FILE *out, const MinicCoreFunction *f,
         if (term->conditional.when_true >= f->block_count ||
             term->conditional.when_false >= f->block_count ||
             cond >= f->value_count ||
-            !rv32_resolved_scalar_storage_words(f, f->values[cond].type,
+            !rv32_core_scalar_storage_words(f,
                 f->values[cond].core_type_id, &words))
             return false;
         /* Core permits a wide integer branch condition.  On ILP32 its

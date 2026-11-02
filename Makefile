@@ -624,6 +624,14 @@ check-rv32-wide-branch-condition: $(MINIC_CC_BINARY)
 
 check-fast: check-rv32-wide-branch-condition
 
+# The RV32 integer/memory emitter accepts only sealed ILP32 CoreType, even
+# when a deliberately contradictory source-C descriptor is present.
+.PHONY: check-rv32-coretype-scalar
+check-rv32-coretype-scalar:
+	HOST_CC="$(CC)" bash tests/target/riscv32/run-coretype-scalar.sh
+
+check-fast: check-rv32-coretype-scalar
+
 .PHONY: check-rv32-empty-record-return
 check-rv32-empty-record-return: $(MINIC_CC_BINARY)
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \

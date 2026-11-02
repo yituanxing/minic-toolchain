@@ -1184,10 +1184,10 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
         bool signed_result;
         const char *opcode = NULL, *flag = NULL;
         if (!minic_core_integer_overflow_shape(
-                program, target, fn, ins, &width, &signed_result)) {
+                fn, ins, &width, &signed_result)) {
             bool signed_left;
             if (!minic_core_integer_overflow_mixed_add_i32_shape(
-                    program, target, fn, ins, &signed_left))
+                    fn, ins, &signed_left))
                 return x86_emit_mixed_integer_overflow(
                     out, program, target, fn, frame, ins);
             if (!x86_value_load(out, frame, lhs, "%rax") ||
@@ -1260,7 +1260,7 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
          * The Core operand is the promoted unsigned integer type, not
          * necessarily 64 bits: clz(unsigned int) must return 31 for 1. */
         if (!minic_core_integer_bitscan_shape(
-                program, target, fn, ins, &width) ||
+                fn, ins, &width) ||
             !x86_value_load(out, frame, operand, "%rax"))
             return false;
         if (ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_CLZ) {

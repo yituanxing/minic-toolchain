@@ -4,61 +4,52 @@
 #include <inttypes.h>
 #include <stdint.h>
 
-/* RV32I 2-XLEN integer machine lowering. One C long long is one Core
- * semantic scalar with low/high words in ILP32 frame and a0/a1 ABI.
+/* RV32I 2-XLEN integer machine lowering. One Core i64 is one semantic
+ * scalar with low/high words in ILP32 frame and a0/a1 ABI.
  * No M/Z-extension instructions are synthesized here. */
-bool rv32_is_wide_integer(const MinicCoreFunction *f, MinicType type) {
-    MinicType effective = type;
-    if (minic_type_is_enum(type) &&
-        !minic_core_function_effective_integer_type(f, type, &effective))
-        return false;
-    return minic_type_is_integer(effective) &&
-           effective.integer_rank == MINIC_INTEGER_RANK_LONG_LONG;
+static const MinicCoreType *rv32_core_wide_type(
+    const MinicCoreFunction *f, MinicCoreTypeId id) {
+    if (f == NULL || f->type_context == NULL) return NULL;
+    return minic_core_type_get(f->type_context,
+        minic_core_type_unqualified(f->type_context, id));
 }
 
-bool rv32_resolved_is_wide_integer(const MinicCoreFunction *f,
-                                   MinicType legacy, MinicCoreTypeId id) {
+bool rv32_core_is_wide_integer(const MinicCoreFunction *f,
+                               MinicCoreTypeId id) {
     const MinicCoreType *type;
-    if (f == NULL) return false;
-    if (f->type_context == NULL) return rv32_is_wide_integer(f, legacy);
-    type = minic_core_type_get(f->type_context,
-                               minic_core_type_unqualified(f->type_context, id));
+    type = rv32_core_wide_type(f, id);
     return type != NULL && type->has_layout &&
            type->kind == MINIC_CORE_TYPE_INTEGER && type->size == 8U &&
            type->value.integer.bit_width == 64U &&
            !type->value.integer.is_bool;
 }
 
-bool rv32_resolved_unsigned_integer(const MinicCoreFunction *f,
-                                    MinicType legacy, MinicCoreTypeId id) {
-    const MinicCoreType *type;
-    if (f == NULL) return false;
-    if (f->type_context == NULL) return minic_type_is_unsigned_integer(legacy);
-    type = minic_core_type_get(f->type_context,
-                               minic_core_type_unqualified(f->type_context, id));
+bool rv32_core_unsigned_integer(const MinicCoreFunction *f,
+                                MinicCoreTypeId id) {
+    const MinicCoreType *type = rv32_core_wide_type(f, id);
     return type != NULL && type->kind == MINIC_CORE_TYPE_INTEGER &&
            !type->value.integer.is_signed && !type->value.integer.is_bool;
 }
 
-bool rv32_resolved_integer_type(const MinicCoreFunction *f,
-                                MinicType legacy, MinicCoreTypeId id) {
-    const MinicCoreType *type;
-    if (f == NULL) return false;
-    if (f->type_context == NULL) return minic_type_is_integer(legacy);
-    type = minic_core_type_get(f->type_context,
-                               minic_core_type_unqualified(f->type_context, id));
+bool rv32_core_integer_type(const MinicCoreFunction *f,
+                            MinicCoreTypeId id) {
+    const MinicCoreType *type = rv32_core_wide_type(f, id);
     return type != NULL && type->kind == MINIC_CORE_TYPE_INTEGER;
 }
 
-bool rv32_resolved_pointer_type(const MinicCoreFunction *f,
-                                MinicType legacy, MinicCoreTypeId id) {
-    const MinicCoreType *type;
-    if (f == NULL) return false;
-    if (f->type_context == NULL) return minic_type_is_pointer(legacy);
-    type = minic_core_type_get(f->type_context,
-                               minic_core_type_unqualified(f->type_context, id));
+bool rv32_core_pointer_type(const MinicCoreFunction *f,
+                            MinicCoreTypeId id) {
+    const MinicCoreType *type = rv32_core_wide_type(f, id);
     return type != NULL && type->kind == MINIC_CORE_TYPE_POINTER &&
            type->has_layout && type->size == 4U;
+}
+
+MinicCoreTypeId rv32_core_pointee_type(const MinicCoreFunction *f,
+                                      MinicCoreTypeId id) {
+    const MinicCoreType *type = rv32_core_wide_type(f, id);
+    return type != NULL && type->kind == MINIC_CORE_TYPE_POINTER &&
+        type->has_layout && type->size == 4U
+        ? type->value.pointer.pointee : MINIC_CORE_TYPE_INVALID;
 }
 
 static bool wide_pair_operands(FILE *out, const MinicCoreFunction *f,
@@ -67,10 +58,8 @@ static bool wide_pair_operands(FILE *out, const MinicCoreFunction *f,
     MinicCoreValueId left = ins->value.binary.left;
     MinicCoreValueId right = ins->value.binary.right;
     return left < f->value_count && right < f->value_count &&
-           rv32_resolved_is_wide_integer(f, f->values[left].type,
-                                          f->values[left].core_type_id) &&
-           rv32_resolved_is_wide_integer(f, f->values[right].type,
-                                          f->values[right].core_type_id) &&
+           rv32_core_is_wide_integer(f, f->values[left].core_type_id) &&
+           rv32_core_is_wide_integer(f, f->values[right].core_type_id) &&
            rv32_pair_slot(out, fr, left, "t0", "t1", true) &&
            rv32_pair_slot(out, fr, right, "t2", "t3", true);
 }
@@ -88,17 +77,13 @@ static bool wide_shift(FILE *out, const MinicCoreFunction *f,
     unsigned shift_words;
     if (symbol == NULL || left >= f->value_count ||
         right >= f->value_count ||
-        !rv32_resolved_is_wide_integer(f, f->values[left].type,
-                                        f->values[left].core_type_id) ||
-        !rv32_resolved_integer_type(f, f->values[right].type,
-                                     f->values[right].core_type_id) ||
-        !rv32_resolved_scalar_storage_words(f, f->values[right].type,
-                                              f->values[right].core_type_id,
-                                              &shift_words))
+        !rv32_core_is_wide_integer(f, f->values[left].core_type_id) ||
+        !rv32_core_integer_type(f, f->values[right].core_type_id) ||
+        !rv32_core_scalar_storage_words(f,
+             f->values[right].core_type_id, &shift_words))
         return false;
     signed_shift = right_shift &&
-                   !rv32_resolved_unsigned_integer(f, f->values[left].type,
-                                                    f->values[left].core_type_id);
+                   !rv32_core_unsigned_integer(f, f->values[left].core_type_id);
     if (!rv32_pair_slot(out, fr, left, "t0", "t1", true))
         return false;
     if (shift_words == 2U) {
@@ -127,17 +112,16 @@ bool rv32_emit_wide_integer(FILE *out, const MinicCoreFunction *f,
     case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND:
     case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_OR:
     case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_XOR:
-        if (!rv32_resolved_is_wide_integer(f, ins->type, ins->core_type_id) ||
+        if (!rv32_core_is_wide_integer(f, ins->core_type_id) ||
             !wide_pair_operands(out, f, fr, ins)) return false;
         if (!minic_riscv_emit_word_pair_binary(out, kind)) return false;
         return rv32_pair_slot(out, fr, ins->result, "t0", "t1", false);
     case MINIC_CORE_INSTRUCTION_INTEGER_NEGATE:
     case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_NOT: {
         const MinicCoreValueId id = ins->value.operand;
-        if (!rv32_resolved_is_wide_integer(f, ins->type, ins->core_type_id) ||
+        if (!rv32_core_is_wide_integer(f, ins->core_type_id) ||
             id >= f->value_count ||
-            !rv32_resolved_is_wide_integer(f, f->values[id].type,
-                                            f->values[id].core_type_id) ||
+            !rv32_core_is_wide_integer(f, f->values[id].core_type_id) ||
             !rv32_pair_slot(out, fr, id, "t0", "t1", true))
             return false;
         if (!minic_riscv_emit_word_pair_unary(out, kind)) return false;
@@ -149,10 +133,9 @@ bool rv32_emit_wide_integer(FILE *out, const MinicCoreFunction *f,
         /* Pinned original LLVM compiler-rt DI arithmetic. We select the
          * standard symbol and implement only the psABI register transfer. */
         const char *helper = minic_riscv_integer_arithmetic_symbol(
-            kind, rv32_resolved_unsigned_integer(f, ins->type,
-                                                  ins->core_type_id), 64U);
+            kind, rv32_core_unsigned_integer(f, ins->core_type_id), 64U);
         if (helper == NULL ||
-            !rv32_resolved_is_wide_integer(f, ins->type, ins->core_type_id) ||
+            !rv32_core_is_wide_integer(f, ins->core_type_id) ||
             !wide_pair_operands(out, f, fr, ins))
             return false;
         return fprintf(out,
@@ -163,14 +146,12 @@ bool rv32_emit_wide_integer(FILE *out, const MinicCoreFunction *f,
     }
     case MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_LEFT:
     case MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_RIGHT:
-        return rv32_resolved_is_wide_integer(f, ins->type,
-                                             ins->core_type_id) &&
+        return rv32_core_is_wide_integer(f, ins->core_type_id) &&
                wide_shift(out, f, fr, ins, symbol);
     case MINIC_CORE_INSTRUCTION_INTEGER_LESS: {
         bool is_unsigned;
         if (!wide_pair_operands(out, f, fr, ins)) return false;
-        is_unsigned = rv32_resolved_unsigned_integer(f,
-            f->values[ins->value.binary.left].type,
+        is_unsigned = rv32_core_unsigned_integer(f,
             f->values[ins->value.binary.left].core_type_id);
         if (fprintf(out,
                 "  xor t4, t1, t3\n"
@@ -194,8 +175,7 @@ bool rv32_emit_wide_integer(FILE *out, const MinicCoreFunction *f,
     case MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO: {
         const MinicCoreValueId id = ins->value.operand;
         return id < f->value_count &&
-               rv32_resolved_is_wide_integer(f, f->values[id].type,
-                                               f->values[id].core_type_id) &&
+               rv32_core_is_wide_integer(f, f->values[id].core_type_id) &&
                rv32_pair_slot(out, fr, id, "t0", "t1", true) &&
                fprintf(out, "  or t0, t0, t1\n  seqz t0, t0\n") >= 0 &&
                rv32_slot(out, fr, ins->result, "t0", false);

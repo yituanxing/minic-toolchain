@@ -1,8 +1,17 @@
 #include "target/riscv64/runtime_libcall.h"
 #include "target/riscv/instruction_select.h"
-#include "frontend/type.h"
+#include "target/common/core_abi_value_shape.h"
 
 #include <stdio.h>
+
+/* Saved-ra planning must use the same sealed execution shape as RV64 CALL
+ * legalization. A C source descriptor is not a fallback for malformed Core. */
+static bool rv64_core_int128(const MinicCoreFunction *function,
+                             MinicCoreTypeId type_id) {
+    MinicCoreAbiValueShape shape;
+    return minic_core_abi_value_shape(function, type_id, &shape) &&
+           shape.kind == MINIC_CORE_TYPE_INTEGER && shape.bytes == 16U;
+}
 
 /* Strict RV64I chooses the existing compiler-runtime ABI, never an
  * implementation-specific algorithm in MiniC. The non-strict and RV64IM
@@ -81,7 +90,7 @@ bool minic_riscv64_needs_arithmetic_libcall(const MinicRiscvIsa *isa,
         /* TI division and remainder always require compiler-rt, even on
          * RV64IM where native DIV handles only XLEN operands. Their call
          * must reserve the saved return-address slot in every strict ABI. */
-        if (minic_type_is_int128_integer(instruction->type) &&
+        if (rv64_core_int128(function, instruction->core_type_id) &&
             (instruction->kind == MINIC_CORE_INSTRUCTION_INTEGER_DIVIDE ||
              instruction->kind == MINIC_CORE_INSTRUCTION_INTEGER_REMAINDER))
             return true;
@@ -91,8 +100,8 @@ bool minic_riscv64_needs_arithmetic_libcall(const MinicRiscvIsa *isa,
         if ((instruction->kind == MINIC_CORE_INSTRUCTION_INTEGER_LESS ||
              instruction->kind == MINIC_CORE_INSTRUCTION_SCALAR_EQUAL) &&
             instruction->value.binary.left < function->value_count &&
-            minic_type_is_int128_integer(
-                function->values[instruction->value.binary.left].type))
+            rv64_core_int128(function,
+                function->values[instruction->value.binary.left].core_type_id))
             return true;
         if (!minic_riscv64_uses_arithmetic_libcall(isa)) continue;
         switch (instruction->kind) {

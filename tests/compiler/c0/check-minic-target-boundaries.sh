@@ -71,6 +71,9 @@ for source in src/target/riscv64/scalar_emit.c \
   lacks "$source" 'instruction->type'
   lacks "$source" '].type'
 done
+has src/target/riscv64/runtime_libcall.c 'rv64_core_int128('
+lacks src/target/riscv64/runtime_libcall.c 'minic_type_'
+lacks src/target/riscv64/runtime_libcall.c 'instruction->type'
 has src/target/riscv64/overflow_emit.c 'minic_riscv64_emit_safe_core_scalar_store('
 has src/target/riscv64/scalar_emit.c 'minic_riscv64_emit_core_integer_conversion('
 # One Common interval index covers small and large Core functions.
@@ -571,7 +574,25 @@ lacks src/target/riscv32/rv32_emit.c 'static bool rv32_frame_init('
 lacks src/target/riscv32/rv32_emit.c 'static bool rv32_emit_scalar_call_arguments('
 lacks src/target/riscv32/rv32_emit.c 'rv32_call_info('
 has src/target/riscv32/rv32_abi_plan.c 'minic_riscv32_abi_place('
-has src/target/riscv32/rv32_scalar.c 'rv32_scalar_storage_words('
+has src/target/riscv32/rv32_scalar.c 'rv32_core_scalar_storage_words('
+exists tests/target/riscv32/coretype_scalar_test.c
+exists tests/target/riscv32/run-coretype-scalar.sh
+# RV32 integer, wide, pointer and memory execution share one sealed Core
+# width/pointee oracle. No per-opcode C descriptor escape hatch remains.
+for source in src/target/riscv32/rv32_scalar.c \
+              src/target/riscv32/rv32_integer_emit.c \
+              src/target/riscv32/rv32_wide_emit.c \
+              src/target/riscv32/rv32_memory_emit.c \
+              src/target/riscv32/rv32_emit.c \
+              src/target/riscv32/rv32_internal.h; do
+  lacks "$source" 'rv32_resolved_'
+  lacks "$source" 'minic_type_'
+  lacks "$source" 'rv32_scalar_storage_words('
+done
+lacks src/target/riscv32/rv32_frame.c 'minic_type_'
+lacks src/target/riscv32/rv32_frame.c 'f->return_type'
+lacks src/target/riscv32/rv32_frame.c 'obj->type'
+lacks src/target/riscv32/rv32_frame.c 'f->objects[i].type'
 has src/target/riscv/instruction_select.h 'minic_riscv_integer_arithmetic_symbol('
 has src/target/riscv32/rv32_integer_emit.c 'rv32_emit_wide_integer('
 has src/target/riscv32/rv32_wide_emit.c 'minic_riscv_integer_arithmetic_symbol('
@@ -719,6 +740,14 @@ lacks src/target/common/lp64_frame.c 'plan->wide_offsets[i] = pos;'
 exists src/target/common/core_numeric_shape.c
 has src/target/common/core_numeric_shape.c 'bool minic_core_integer_overflow_shape('
 has src/target/common/core_numeric_shape.c 'bool minic_core_integer_bitscan_shape('
+# Numeric shape admission is now wholly Core-owned across the five targets:
+# C Program/DataLayout and C type operations must not be reintroduced.
+for source in src/target/common/core_numeric_shape.c \
+              src/target/common/core_numeric_shape.h; do
+  lacks "$source" 'MinicC0Program'
+  lacks "$source" 'MinicTargetInfo'
+  lacks "$source" 'minic_type_'
+done
 has src/target/x86_64/machine_emit.c 'minic_core_integer_bitscan_shape('
 has src/target/riscv64/scalar_emit.c 'minic_core_integer_bitscan_shape('
 has src/target/aarch64/integer_emit.c 'minic_core_integer_overflow_shape('

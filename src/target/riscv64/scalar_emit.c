@@ -450,7 +450,6 @@ bool minic_riscv64_emit_scalar_instruction(
     case MINIC_CORE_INSTRUCTION_INTEGER_CTZ: {
         unsigned int width;
         if (!minic_core_integer_bitscan_shape(
-                program, minic_target_info_for_architecture(MINIC_TARGET_ARCH_RISCV64),
                 function, instruction, &width) ||
             !minic_riscv64_frame_load_value(file, frame, instruction->value.operand, "t0") ||
             !minic_riscv_emit_word_bitscan(

@@ -384,7 +384,7 @@ bool minic_loongarch64_emit_integer_instruction(
             size_t width;
             bool is_signed;
             if (!minic_core_integer_overflow_shape(
-                    program, target, fn, ins, &width, &is_signed)) {
+                    fn, ins, &width, &is_signed)) {
                 bool multiply_signed_left, multiply_signed_right;
                 bool multiply_signed_result;
                 bool add_signed_left;
@@ -411,7 +411,7 @@ bool minic_loongarch64_emit_integer_instruction(
                     return true;
                 }
                 if (minic_core_integer_overflow_mixed_multiply_i32_shape(
-                        program, target, fn, ins,
+                        fn, ins,
                         &multiply_signed_left, &multiply_signed_right,
                         &multiply_signed_result)) {
                     /* Each input is exactly 32 bits, possibly signed. Their
@@ -439,7 +439,7 @@ bool minic_loongarch64_emit_integer_instruction(
                 }
                 bool wide_left;
                 if (minic_core_integer_overflow_u64_u32_to_i32_shape(
-                        program, target, fn, ins, &wide_left)) {
+                        fn, ins, &wide_left)) {
                     /* Exact GNU arithmetic: the mathematical sum has up
                      * to 65 unsigned bits, even though the machine has
                      * 64-bit GPRs. Include the high carry AND the loss
@@ -468,7 +468,7 @@ bool minic_loongarch64_emit_integer_instruction(
                 }
                 bool signed_left;
                 if (!minic_core_integer_overflow_mixed_add_i32_shape(
-                        program, target, fn, ins, &signed_left) ||
+                        fn, ins, &signed_left) ||
                     !emit_sp_mem(out, "ld.d", "$t0", minic_lp64_frame_value_offset(frame_plan, lhs)) ||
                     !emit_sp_mem(out, "ld.d", "$t1", minic_lp64_frame_value_offset(frame_plan, rhs)) ||
                     !emit_sp_mem(out, "ld.d", "$t2", minic_lp64_frame_value_offset(frame_plan, address)) ||
@@ -565,7 +565,7 @@ bool minic_loongarch64_emit_integer_instruction(
             const MinicCoreValueId operand = ins->value.operand;
             unsigned int width;
             if (!minic_core_integer_bitscan_shape(
-                    program, target, fn, ins, &width) ||
+                    fn, ins, &width) ||
                 !emit_sp_mem(out, width == 64U ? "ld.d" : "ld.w",
                              "$t0", minic_lp64_frame_value_offset(frame_plan, operand)))
                 return false;

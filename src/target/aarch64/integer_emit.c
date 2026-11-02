@@ -250,10 +250,10 @@ bool minic_aarch64_emit_integer_instruction(
             size_t width;
             bool is_signed;
             if (!minic_core_integer_overflow_shape(
-                    program, target, fn, ins, &width, &is_signed)) {
+                    fn, ins, &width, &is_signed)) {
                 MinicCoreIntegerOverflowNarrowShape narrow;
                 if (minic_core_integer_overflow_narrow_result_shape(
-                        program, target, fn, ins, &narrow)) {
+                        fn, ins, &narrow)) {
                     const int op = ins->value.integer_overflow.operator_kind;
                     const char *operation =
                         op == MINIC_CORE_INTEGER_OVERFLOW_ADD
@@ -307,7 +307,7 @@ bool minic_aarch64_emit_integer_instruction(
                 bool multiply_signed_left, multiply_signed_right;
                 bool multiply_signed_result;
                 if (minic_core_integer_overflow_mixed_multiply_i32_shape(
-                        program, target, fn, ins,
+                        fn, ins,
                         &multiply_signed_left, &multiply_signed_right,
                         &multiply_signed_result)) {
                     /* GNU checked arithmetic uses the mathematical product,
@@ -338,7 +338,7 @@ bool minic_aarch64_emit_integer_instruction(
                 }
                 bool signed_left;
                 if (!minic_core_integer_overflow_mixed_add_i32_shape(
-                        program, target, fn, ins, &signed_left) ||
+                        fn, ins, &signed_left) ||
                     !minic_a64_emit_owned_slot(out, view, false,
                         MINIC_A64_REG_X, 9U, minic_lp64_frame_value_offset(frame_plan, lhs)) ||
                     !minic_a64_emit_owned_slot(out, view, false,
@@ -414,7 +414,7 @@ bool minic_aarch64_emit_integer_instruction(
             const MinicCoreValueId operand = ins->value.operand;
             unsigned int width;
             if (!minic_core_integer_bitscan_shape(
-                    program, target, fn, ins, &width) ||
+                    fn, ins, &width) ||
                 !minic_a64_emit_owned_slot(out, view, false,
                     width == 64U ? MINIC_A64_REG_X : MINIC_A64_REG_W,
                     9U, minic_lp64_frame_value_offset(frame_plan, operand)) ||
