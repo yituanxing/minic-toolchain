@@ -90,7 +90,8 @@ mutable=('fixups','fixup_count','fixup_capacity','active_encode_result',
          'synthetic_anchor_counter')
 for field in mutable:
     if re.search(r'\bas\s*->\s*'+field+r'\b', '\n'.join(
-            path.read_text() for path in root.glob('*.c'))):
+            path.read_text() for path in root.glob('*.c')
+            if path.name!='elf_writer.c')):
         raise SystemExit('legacy session-level Emission write: '+field)
     if re.search(r'\b'+field+r'\s*;',internal):
         raise SystemExit('exposed Emission state field: '+field)
@@ -102,11 +103,17 @@ if private_users!=['common_emission.c','mc_encode_result.c']:
 if 'const MiniAsFixup *data;' not in contract or \
    'MiniAsFixupSpan minias_emission_fixups(' not in contract:
     raise SystemExit('read-only committed Fixup view missing')
-for filename in ('mc_layout.c','elf_writer.c'):
-    source=(root/filename).read_text()
-    if 'minias_emission_fixups(as)' not in source or \
-       'const MiniAsFixup *fixup=' not in source and filename=='mc_layout.c':
-        raise SystemExit('Fixup consumer bypasses immutable view: '+filename)
+source=(root/'mc_layout.c').read_text()
+if 'minias_emission_fixups(as)' not in source or \
+   'const MiniAsFixup *fixup=' not in source:
+    raise SystemExit('MCLayout Fixup consumer bypasses immutable view')
+object_view=(root/'minias_elf_object_view.h').read_text()
+writer=(root/'elf_writer.c').read_text()
+if 'minias_emission_fixups(as)' not in driver or \
+   'object.fixups=fixups.data' not in driver or \
+   not re.search(r'const MiniAsFixup\s*\*fixups;',object_view) or \
+   'const MiniAsFixup *input = &as->fixups[i]' not in writer:
+    raise SystemExit('ELF Fixup consumer bypasses terminal immutable ObjectModel')
 expr=(root/'mc_expr.c').read_text()
 if expr.count('minias_emission_mcdata_cursor(as,stmt,')!=2 or \
    'as->emission->' in expr:
