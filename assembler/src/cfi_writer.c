@@ -413,7 +413,7 @@ static bool cfi_emit_section_core(MiniAs *as,bool eh,
         return false;
     }
     section=minias_ensure_section(as,eh?".eh_frame":".debug_frame",
-        MINIAS_SHT_PROGBITS,eh?MINIAS_SHF_ALLOC:0U,
+        MINIAS_SECTION_KIND_PROGBITS,eh?MINIAS_SECTION_FLAG_ALLOC:0U,
         minias_cfi_abi(as).address_size);
     if(section<0)return false;
     if(!eh) {

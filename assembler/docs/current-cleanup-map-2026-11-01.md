@@ -1,5 +1,19 @@
 # MiniAS 当前清理与所有权总览（2026-11-01）
 
+> **2026-11-02 ObjectModel/源实体格式语义整链迁移（本批待发布 SHA）：**
+> 从 GNU `.section/.type/.globl` 输入→Common Context 保留的
+> SectionID/SymbolID→Target/Emission/Layout 消费→终结 ObjectModel
+> →ELF Writer 全链收回类型/属性/符号的**语义值**。
+> 六种 SectionKind、九种 SectionFlags、COMDAT 选择、Symbol 的
+> binding/kind/visibility 不再是 ELF 磁盘 SHT/SHF/GRP/STB/STT/STV
+> 数字；只有 `elf_writer.c` 做完整且拒绝未知码的格式投影，旧宏
+> 与直通字段删除。ObjectModel 名称查询改为稳定 SymbolID，删除
+> 对 const Symbol 指针反算序号的路径；仍复用原唯一 Context 实体，
+> 不造影子图。新增独立生产 Writer 格式投影/GNU 严格对照门禁，
+> 与旧测试一起验证。**真正 COFF/Mach-O writer 和独立地址宽度、
+> 完整 Linux/QEMU P1 仍未完成**。详见
+> [格式语义边界记录](object-format-semantic-boundary-2026-11-02.md)。
+
 > **2026-11-02 P06 SourceGraph/SourceContext 语义能力整链迁移
 > （基于 `a8035f88`，本批待发布）：** Source 物理行缓存、条件栈、
 > 宏/REPT/IRP、稳定 SiteID、强制分支重绑和跨布局重放，整个递归调用链
@@ -330,8 +344,11 @@
   私有序列化拆开；**本批先完成 ObjectModel→ELF 写器的只读
   终结期边界，后续又将 Fragment Fixup 位置、Section 逻辑引用
   和原子输出迁到共用 ObjectModel 事务**，仍非 COFF/Mach-O
-  写器。余下是 ELF 风格的 Section 属性与格式私有符号/
-  重定位编码的真正拆解，不预建空的 COFF/Mach-O 全框架。
+  写器。**本批又将 Common 的 Section/Symbol 持久 ELF 数字字段
+  迁移为独立语义编码，ELF Writer 独占磁盘投影，ObjectModel 逻辑
+  符号查询使用受检 SymbolID。**余下是格式专属符号/重定位策略、
+  ABI 地址布局分层以及真正新格式后端；不预建空的 COFF/Mach-O
+  全框架。
 - [ ] **整体验收**：阶段性合并后对同一 SHA 完成多架构
   原始 GNU `.s` → MiniAS `.o` → GNU ld → QEMU P0/P1；严格
   3,536 GNU 对照另行定位差异，不替代运行时证明。

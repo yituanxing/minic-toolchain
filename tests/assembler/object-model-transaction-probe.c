@@ -9,16 +9,19 @@ typedef struct Fixture {
     unsigned char data[16];
     unsigned char metadata[4];
     bool fragment_valid;
+    bool bad_symbol_id;
     uint64_t fragment_offset;
 } Fixture;
 
-static const MiniAsSymbol *find_symbol(const void *reader,const char *name) {
+static bool find_symbol_id(const void *reader,const char *name,size_t *id) {
     const Fixture *fixture=reader;
     size_t i;
     for(i=0U;i<2U;++i)
-        if(strcmp(fixture->symbols[i].name,name)==0)
-            return &fixture->symbols[i];
-    return NULL;
+        if(strcmp(fixture->symbols[i].name,name)==0) {
+            *id=fixture->bad_symbol_id ? 7U : i;
+            return true;
+        }
+    return false;
 }
 
 static bool numeric_reference(const char *text) {
@@ -78,7 +81,7 @@ int main(void) {
         .sections=sections,.section_count=2U,
         .symbols=symbols,.symbol_count=2U,
         .fixups=fixups,.fixup_count=1U,
-        .reader=&fixture,.find_symbol=find_symbol,
+        .reader=&fixture,.find_symbol_id=find_symbol_id,
         .numeric_reference=numeric_reference,
         .fragment_location=fragment_location,.section_bytes=section_bytes
     };
@@ -107,6 +110,10 @@ int main(void) {
     sections[1].link_order_reference="not_defined";
     assert(plan_failed(&view,"undefined-link-order-reference"));
     sections[1].link_order_reference="anchor";
+    sections[1].group_signature=NULL;
+    fixture.bad_symbol_id=true;
+    assert(plan_failed(&view,"invalid-link-order-symbol-id"));
+    fixture.bad_symbol_id=false;
     sections[1].group_signature="missing_sig";
     assert(plan_failed(&view,"missing-group-signature"));
     sections[1].group_signature="sig";
@@ -126,6 +133,6 @@ int main(void) {
     assert(plan_failed(&view,"invalid-fixup-origin"));
 
     puts("MINIAS_OBJECT_MODEL_PLAN=PASS logical_group=1 link_order=3 "
-         "fragment_fixup=1 byte_borrows=1 failures=7 cleanup=7");
+         "fragment_fixup=1 byte_borrows=1 failures=8 cleanup=8");
     return 0;
 }

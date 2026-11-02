@@ -215,7 +215,7 @@ static bool strict_base_i_check_sections(const MiniAsPostEmitView *view,
             minias_post_emit_error(errors,"invalid-riscv-section-view");
             return false;
         }
-        if ((section->flags & MINIAS_SHF_EXECINSTR) == 0U) continue;
+        if ((section->flags & MINIAS_SECTION_FLAG_EXECINSTR) == 0U) continue;
         if (section->size % 4U != 0U) {
             minias_post_emit_error(errors,
                                    "rv%ui-unaligned-executable-section:%s",
@@ -775,7 +775,7 @@ bool minias_riscv_compute_branch_plan(const MiniAsInstructionView *stmt,
         return false;
     }
     result->displacement=displacement;
-    result->local=same_section && symbol->bind!=MINIAS_STB_WEAK &&
+    result->local=same_section && symbol->bind!=MINIAS_SYMBOL_BINDING_WEAK &&
                   (m->opcode!=RV_MC_JAL ||
                    symbol->subsection==stmt->subsection);
     if(!result->local)return true;
@@ -955,8 +955,8 @@ static bool riscv_record_object_mapping_symbols(
             minias_post_emit_error(errors,"invalid-riscv-mapping-section");
             goto done;
         }
-        if(section.type!=MINIAS_SHT_PROGBITS ||
-           (section.flags&MINIAS_SHF_EXECINSTR)==0U || section.size==0U)
+        if(section.type!=MINIAS_SECTION_KIND_PROGBITS ||
+           (section.flags&MINIAS_SECTION_FLAG_EXECINSTR)==0U || section.size==0U)
             continue;
         previous=&sections[(size_t)fragment.section];
         kind=riscv_mapping_is_code(&fragment)?RISCV_MAP_CODE:RISCV_MAP_DATA;

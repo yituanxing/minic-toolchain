@@ -189,7 +189,7 @@ bool minias_directive_section_executable(const MiniAsDirectiveContext *ctx) {
     return as->current_section>=0 &&
            (size_t)as->current_section<as->section_count &&
            (as->sections[(size_t)as->current_section].flags &
-            MINIAS_SHF_EXECINSTR)!=0U;
+            MINIAS_SECTION_FLAG_EXECINSTR)!=0U;
 }
 
 bool minias_directive_has_prior_instruction(const MiniAsDirectiveContext *ctx) {
@@ -369,14 +369,14 @@ static bool minias_init_for_target(MiniAs *as,
         minias_set_error(as,"out-of-memory:source-context");
         return false;
     }
-    text=minias_ensure_section(as,".text",MINIAS_SHT_PROGBITS,
-            MINIAS_SHF_ALLOC|MINIAS_SHF_EXECINSTR,
+    text=minias_ensure_section(as,".text",MINIAS_SECTION_KIND_PROGBITS,
+            MINIAS_SECTION_FLAG_ALLOC|MINIAS_SECTION_FLAG_EXECINSTR,
             target->default_exec_alignment!=0U ?
             target->default_exec_alignment:4U);
-    if(text<0 || minias_ensure_section(as,".data",MINIAS_SHT_PROGBITS,
-                     MINIAS_SHF_ALLOC|MINIAS_SHF_WRITE,1U)<0 ||
-       minias_ensure_section(as,".bss",MINIAS_SHT_NOBITS,
-                     MINIAS_SHF_ALLOC|MINIAS_SHF_WRITE,1U)<0)
+    if(text<0 || minias_ensure_section(as,".data",MINIAS_SECTION_KIND_PROGBITS,
+                     MINIAS_SECTION_FLAG_ALLOC|MINIAS_SECTION_FLAG_WRITE,1U)<0 ||
+       minias_ensure_section(as,".bss",MINIAS_SECTION_KIND_NOBITS,
+                     MINIAS_SECTION_FLAG_ALLOC|MINIAS_SECTION_FLAG_WRITE,1U)<0)
         return false;
     as->current_section=text;
     as->current_subsection=0U;
@@ -434,14 +434,9 @@ static bool minias_finalize_target_output(
 /* The Driver publishes one terminal ObjectModel borrow after Target
  * finalization. ELF cannot inspect or mutate the live Common session:
  * symbolic identity remains Context-owned and bytes remain Emission-owned. */
-static const MiniAsSymbol *minias_object_find_symbol(const void *reader,
-                                                 const char *name) {
-    const MiniAs *as=reader;
-    size_t id;
-    if(!minias_common_context_find_symbol_id(as,name,&id))return NULL;
-    /* The terminal ELF serializer alone receives the original const
-     * SymbolID entity array; Context still owns all mutation. */
-    return &as->symbols[id];
+static bool minias_object_find_symbol_id(const void *reader,
+                                        const char *name,size_t *id) {
+    return minias_common_context_find_symbol_id(reader,name,id);
 }
 
 static const char *minias_object_cu_file(const void *reader,size_t index) {
@@ -515,7 +510,7 @@ static bool minias_write_final_object(MiniAs *as,const char *path,bool elf32) {
     object.output_rel_relocations=as->target_spec->object.rel_relocations;
     object.elf_flags=as->elf_flags;
     object.model.reader=as;
-    object.model.find_symbol=minias_object_find_symbol;
+    object.model.find_symbol_id=minias_object_find_symbol_id;
     object.model.find_section=minias_object_find_section;
     object.model.numeric_reference=minias_object_numeric_reference;
     object.model.fragment_location=minias_object_fragment_location;

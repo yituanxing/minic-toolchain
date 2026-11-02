@@ -4411,7 +4411,7 @@ static bool encode(MiniAsEncodeContext *ctx, const MiniAsInstructionView *stmt) 
                   UINT32_C(0x58000000):UINT32_C(0x18000000))|
                  inst->operands[0].reg;
             if(!target || !target->defined || target->section!=stmt->section ||
-               (direct && target->bind!=MINIAS_STB_LOCAL)) {
+               (direct && target->bind!=MINIAS_SYMBOL_BINDING_LOCAL)) {
                 /* A direct LDR to a GLOBAL/WEAK name remains relocatable
                  * even when defined in this input .text: GNU ld can select
                  * an overriding definition. A private =literal pool label
@@ -4586,7 +4586,7 @@ static bool encode(MiniAsEncodeContext *ctx, const MiniAsInstructionView *stmt) 
              * Resolve only non-preemptible section-local symbol targets. */
             if(!target || !target->defined ||
                target->section!=stmt->section ||
-               target->bind!=MINIAS_STB_LOCAL)break;
+               target->bind!=MINIAS_SYMBOL_BINDING_LOCAL)break;
             if(target->value>INT64_MAX || stmt->offset>INT64_MAX ||
                (expr->addend>0 &&
                 (int64_t)target->value>INT64_MAX-expr->addend) ||
@@ -5270,7 +5270,7 @@ static bool encode(MiniAsEncodeContext *ctx, const MiniAsInstructionView *stmt) 
                  * must call the architecture's strong implementations. */
                 if (target == NULL || !target->defined ||
                     target->section != stmt->section ||
-                    target->bind != MINIAS_STB_LOCAL) break;
+                    target->bind != MINIAS_SYMBOL_BINDING_LOCAL) break;
                 if (target->value > INT64_MAX || stmt->offset > INT64_MAX) {
                     minias_encode_ctx_error(ctx, "aarch64-branch-address-overflow");
                     return false;
@@ -5613,8 +5613,8 @@ static uint32_t aarch64_fixup_relocation_type(MiniAsTargetABIView view,MiniAsFix
  * Keep this target ABI rule outside the Common ELF symbol planner. */
 static bool a64_allow_local_section_symbol_fixup(const MiniAsFixup *fixup,
                                                  const MiniAsSymbolView *symbol) {
-    if(symbol->type==MINIAS_STT_FUNC ||
-       symbol->type==MINIAS_STT_GNU_IFUNC)return false;
+    if(symbol->type==MINIAS_SYMBOL_KIND_FUNC ||
+       symbol->type==MINIAS_SYMBOL_KIND_GNU_IFUNC)return false;
     return fixup->kind!=MINIAS_FIXUP_A64_ADR_GOT_PAGE &&
            fixup->kind!=MINIAS_FIXUP_A64_LD64_GOT_LO12;
 }
@@ -5703,7 +5703,7 @@ static bool a64_record_source_mappings(const MiniAsPostEmitView *view,
          * Data sections retain the zero-width alignment as MAP_DATA state. */
         if(stmt->size==0U &&
            (!explicit_alignment ||
-            (section->flags&MINIAS_SHF_EXECINSTR)!=0U))continue;
+            (section->flags&MINIAS_SECTION_FLAG_EXECINSTR)!=0U))continue;
         /* GAS mapping_state(MAP_INSN) records a four-byte input-section
          * alignment for .inst even in non-executable .data. This is a
          * Target directive property, not generic raw-data alignment. */
@@ -5711,8 +5711,8 @@ static bool a64_record_source_mappings(const MiniAsPostEmitView *view,
            section->align<4U &&
            !minias_post_emit_raise_section_alignment(object,stmt->section,4U))
             goto mapping_failure;
-        if(section->type!=MINIAS_SHT_PROGBITS ||
-           (section->flags&MINIAS_SHF_ALLOC)==0U)continue;
+        if(section->type!=MINIAS_SECTION_KIND_PROGBITS ||
+           (section->flags&MINIAS_SECTION_FLAG_ALLOC)==0U)continue;
         /* AArch64 GAS's s_aarch64_inst() calls mapping_state(MAP_INSN).
          * Common intentionally parses .inst as a raw 32-bit data list,
          * but that storage choice must not misclassify its ELF mapping as
@@ -5720,7 +5720,7 @@ static bool a64_record_source_mappings(const MiniAsPostEmitView *view,
         executable=stmt->kind==MINIAS_FRAGMENT_INSTRUCTION ||
             (stmt->site.provenance_bits&A64_SITE_INST_DATA)!=0U ||
             (stmt->kind==MINIAS_FRAGMENT_ALIGNMENT &&
-             (section->flags&MINIAS_SHF_EXECINSTR)!=0U &&
+             (section->flags&MINIAS_SECTION_FLAG_EXECINSTR)!=0U &&
              !stmt->alignment_has_fill);
         /* GAS starts even the default .text with sh_addralign=1 and only
          * records AArch64's 4-byte instruction alignment on the first
@@ -5747,7 +5747,7 @@ static bool a64_record_source_mappings(const MiniAsPostEmitView *view,
             minias_post_emit_error(errors,"invalid-aarch64-section-view");
             goto mapping_failure;
         }
-        section_executable=(section_snapshot.flags&MINIAS_SHF_EXECINSTR)!=0U;
+        section_executable=(section_snapshot.flags&MINIAS_SECTION_FLAG_EXECINSTR)!=0U;
         if(new_section) {
             previous_section=point->section;
             previous_executable=false;
@@ -5841,7 +5841,7 @@ static bool validate(const MiniAsPostEmitView *view,
         }
         /* GAS leaves instructions in non-executable sections byte-packed;
          * its implicit four-byte alignment only applies to code sections. */
-        if((section.flags&MINIAS_SHF_EXECINSTR)!=0U &&
+        if((section.flags&MINIAS_SECTION_FLAG_EXECINSTR)!=0U &&
            (stmt->offset&UINT64_C(3))!=0U) {
             minias_post_emit_error(errors,
                                    "unaligned-aarch64-instruction:%s:line=%zu",

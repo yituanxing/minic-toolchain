@@ -9,37 +9,51 @@
 #include <stdint.h>
 #include <stdio.h>
 
-#define MINIAS_SHF_WRITE 1ULL
-#define MINIAS_SHF_ALLOC 2ULL
-#define MINIAS_SHF_EXECINSTR 4ULL
-#define MINIAS_SHF_MERGE 16ULL
-#define MINIAS_SHF_STRINGS 32ULL
-#define MINIAS_SHF_LINK_ORDER 128ULL
-#define MINIAS_SHF_TLS 1024ULL
-#define MINIAS_SHF_GROUP 512ULL
-#define MINIAS_SHF_GNU_RETAIN (1ULL << 21)
-#define MINIAS_GRP_COMDAT 1U
-#define MINIAS_SHT_PROGBITS 1U
-#define MINIAS_SHT_NOTE 7U
-#define MINIAS_SHT_INIT_ARRAY 14U
-#define MINIAS_SHT_FINI_ARRAY 15U
-#define MINIAS_SHT_PREINIT_ARRAY 16U
-#define MINIAS_SHT_NOBITS 8U
+/* Format-neutral Section intent, not the ELF wire type/flag values.
+ * Source parsers and Targets share these semantic codes. Only an object
+ * format writer translates them into its on-disk representation. */
+typedef enum MiniAsSectionKind {
+    MINIAS_SECTION_KIND_PROGBITS = 0,
+    MINIAS_SECTION_KIND_NOBITS,
+    MINIAS_SECTION_KIND_NOTE,
+    MINIAS_SECTION_KIND_INIT_ARRAY,
+    MINIAS_SECTION_KIND_FINI_ARRAY,
+    MINIAS_SECTION_KIND_PREINIT_ARRAY
+} MiniAsSectionKind;
+typedef uint64_t MiniAsSectionFlags;
+#define MINIAS_SECTION_FLAG_ALLOC (UINT64_C(1) << 0)
+#define MINIAS_SECTION_FLAG_WRITE (UINT64_C(1) << 1)
+#define MINIAS_SECTION_FLAG_EXECINSTR (UINT64_C(1) << 2)
+#define MINIAS_SECTION_FLAG_MERGE (UINT64_C(1) << 3)
+#define MINIAS_SECTION_FLAG_STRINGS (UINT64_C(1) << 4)
+#define MINIAS_SECTION_FLAG_TLS (UINT64_C(1) << 5)
+#define MINIAS_SECTION_FLAG_GROUP (UINT64_C(1) << 6)
+#define MINIAS_SECTION_FLAG_LINK_ORDER (UINT64_C(1) << 7)
+#define MINIAS_SECTION_FLAG_GNU_RETAIN (UINT64_C(1) << 8)
 
-#define MINIAS_STB_LOCAL 0U
-#define MINIAS_STB_GLOBAL 1U
-#define MINIAS_STB_WEAK 2U
-#define MINIAS_STB_GNU_UNIQUE 10U
-#define MINIAS_STT_NOTYPE 0U
-#define MINIAS_STT_OBJECT 1U
-#define MINIAS_STT_FUNC 2U
-#define MINIAS_STT_FILE 4U
-#define MINIAS_STT_TLS 6U
-#define MINIAS_STT_GNU_IFUNC 10U
-#define MINIAS_STV_DEFAULT 0U
-#define MINIAS_STV_INTERNAL 1U
-#define MINIAS_STV_HIDDEN 2U
-#define MINIAS_STV_PROTECTED 3U
+/* Retained Symbol semantics are independent of ELF st_info/st_other
+ * encodings. GNU_UNIQUE and GNU_IFUNC are explicit source-level extensions;
+ * an object format that cannot represent them must reject them. STT_FILE
+ * is generated only by the ELF writer for CU records, not retained here. */
+typedef enum MiniAsSymbolBinding {
+    MINIAS_SYMBOL_BINDING_LOCAL = 0,
+    MINIAS_SYMBOL_BINDING_GLOBAL,
+    MINIAS_SYMBOL_BINDING_WEAK,
+    MINIAS_SYMBOL_BINDING_GNU_UNIQUE
+} MiniAsSymbolBinding;
+typedef enum MiniAsSymbolKind {
+    MINIAS_SYMBOL_KIND_NOTYPE = 0,
+    MINIAS_SYMBOL_KIND_OBJECT,
+    MINIAS_SYMBOL_KIND_FUNC,
+    MINIAS_SYMBOL_KIND_TLS,
+    MINIAS_SYMBOL_KIND_GNU_IFUNC
+} MiniAsSymbolKind;
+typedef enum MiniAsSymbolVisibility {
+    MINIAS_SYMBOL_VISIBILITY_DEFAULT = 0,
+    MINIAS_SYMBOL_VISIBILITY_INTERNAL,
+    MINIAS_SYMBOL_VISIBILITY_HIDDEN,
+    MINIAS_SYMBOL_VISIBILITY_PROTECTED
+} MiniAsSymbolVisibility;
 
 #define MINIAS_SECTION_UNDEF (-1)
 #define MINIAS_SECTION_ABS (-2)
@@ -54,8 +68,8 @@ typedef struct MiniAsSymbolView {
     int section;
     uint32_t subsection;
     uint64_t value;
-    uint8_t bind;
-    uint8_t type;
+    MiniAsSymbolBinding bind;
+    MiniAsSymbolKind type;
     bool defined;
     bool alias_pending;
     bool mutable_absolute_set;
@@ -316,8 +330,8 @@ typedef struct MiniAsFragmentView {
 
 typedef struct MiniAsSectionView {
     const char *name;
-    uint32_t type;
-    uint64_t flags;
+    MiniAsSectionKind type;
+    MiniAsSectionFlags flags;
     uint64_t align;
     const unsigned char *data;
     size_t size;

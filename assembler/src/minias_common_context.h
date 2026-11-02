@@ -33,9 +33,11 @@ typedef struct MiniAsCommonDeclaration {
     int bss_section;
 } MiniAsCommonDeclaration;
 bool minias_common_context_declare_symbol_binding(MiniAs *,const char *,
-                                                   bool,uint8_t,bool,uint8_t);
+                                                   bool,MiniAsSymbolBinding,
+                                                   bool,MiniAsSymbolVisibility);
 bool minias_common_context_declare_symbol_type(MiniAs *,const char *,
-                                                uint8_t,bool,uint8_t);
+                                                MiniAsSymbolKind,bool,
+                                                MiniAsSymbolBinding);
 bool minias_common_context_declare_symbol_size(MiniAs *,const char *,uint64_t);
 bool minias_common_context_capture_symbol_size_end(MiniAs *,size_t,size_t,
                                                     uint32_t,size_t,int64_t,
@@ -120,8 +122,8 @@ struct MiniAsPostEmitObjectSink { MiniAs *as; };
 bool minias_common_context_init(MiniAs *);
 int minias_find_section_key(const MiniAs *, const MiniAsSectionIdentity *);
 int minias_ensure_section_key(MiniAs *, const MiniAsSectionIdentity *,
-                              uint32_t, uint32_t, uint64_t, uint64_t,
-                              uint64_t);
+                              bool, MiniAsSectionKind, MiniAsSectionFlags,
+                              uint64_t, uint64_t);
 /* Source alignment is monotone; unlike bootstrap alignment it can run
  * after Fragments exist and never lowers an ELF section requirement. */
 bool minias_common_context_raise_section_alignment(MiniAs *,int,uint64_t);

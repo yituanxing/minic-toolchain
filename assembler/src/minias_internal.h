@@ -14,15 +14,15 @@ typedef struct MiniAsSection {
     const char *name;
     /* GNU ELF SHT_GROUP signature; absent for ordinary Sections. */
     const char *group_signature;
-    /* SHT_GROUP flags are distinct from Section flags. */
-    uint32_t group_flags;
+    /* Logical group selection is distinct from Section attributes. */
+    bool group_comdat;
     /* SHF_LINK_ORDER references the original symbol, not just SectionID. */
     const char *link_order_reference;
     /* Explicit GNU unique ID is part of identity; zero is meaningful. */
     bool has_unique_id;
     uint32_t unique_id;
-    uint32_t type;
-    uint64_t flags;
+    MiniAsSectionKind type;
+    MiniAsSectionFlags flags;
     uint64_t align;
     uint64_t entry_size;
     /* Output bytes/length/capacity belong exclusively to Emission, indexed
@@ -63,9 +63,9 @@ typedef struct MiniAsSymbol {
     bool alias_size_tracks_target;
     /* `.loc view NAME` can be updated after relaxation, unlike `.equ`. */
     bool named_dwarf_view;
-    uint8_t bind;
-    uint8_t type;
-    uint8_t visibility;
+    MiniAsSymbolBinding bind;
+    MiniAsSymbolKind type;
+    MiniAsSymbolVisibility visibility;
     uint32_t subsection;
     bool defined;
     bool alias_pending;
@@ -237,7 +237,9 @@ bool minias_debug_emit(MiniAs *as);
 bool minias_debug_resolve_views(MiniAs *as, bool strict);
 
 int minias_find_section(const MiniAs *as, const char *name);
-int minias_ensure_section(MiniAs *as, const char *name, uint32_t type, uint64_t flags, uint64_t align);
+int minias_ensure_section(MiniAs *as, const char *name,
+                          MiniAsSectionKind type, MiniAsSectionFlags flags,
+                          uint64_t align);
 /* Persistent SymbolID identity and the only mutable Symbol table are owned
  * by Context. Consumers use the checked value/ID services declared in
  * minias_common_context.h; only terminal ELF borrows the full const array. */

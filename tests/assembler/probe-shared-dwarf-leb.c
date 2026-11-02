@@ -35,7 +35,7 @@ static int expect_checked_le32_patch(void) {
     MiniAs as={0};
     MiniAsEmittedSectionView view;
     int ok;
-    section.type=MINIAS_SHT_PROGBITS;
+    section.type=MINIAS_SECTION_KIND_PROGBITS;
     as.sections=&section;
     as.section_count=1U;
     if(!minias_common_emission_init(&as))return 0;
@@ -70,10 +70,10 @@ static int expect_section_owner_split(void) {
     int ok=0;
     if(!minias_common_context_init(&as))return 0;
     if(!minias_common_emission_init(&as))goto done;
-    text_id=minias_ensure_section(&as,".text",MINIAS_SHT_PROGBITS,
-                                  MINIAS_SHF_ALLOC|MINIAS_SHF_EXECINSTR,4U);
-    bss_id=minias_ensure_section(&as,".bss",MINIAS_SHT_NOBITS,
-                                 MINIAS_SHF_ALLOC|MINIAS_SHF_WRITE,1U);
+    text_id=minias_ensure_section(&as,".text",MINIAS_SECTION_KIND_PROGBITS,
+                  MINIAS_SECTION_FLAG_ALLOC|MINIAS_SECTION_FLAG_EXECINSTR,4U);
+    bss_id=minias_ensure_section(&as,".bss",MINIAS_SECTION_KIND_NOBITS,
+                    MINIAS_SECTION_FLAG_ALLOC|MINIAS_SECTION_FLAG_WRITE,1U);
     if(text_id!=0 || bss_id!=1 ||
        !minias_section_append(&as,text_id,payload,sizeof(payload)) ||
        !minias_section_append_zero(&as,bss_id,19U))goto done;
@@ -82,12 +82,12 @@ static int expect_section_owner_split(void) {
     for(int i=0;i<80;++i) {
         char name[32];
         snprintf(name,sizeof(name),".probe.%d",i);
-        if(minias_ensure_section(&as,name,MINIAS_SHT_PROGBITS,0U,1U)<0)
+        if(minias_ensure_section(&as,name,MINIAS_SECTION_KIND_PROGBITS,0U,1U)<0)
             goto done;
     }
     if(as.section_count!=82U ||
-       as.sections[0].type!=MINIAS_SHT_PROGBITS ||
-       as.sections[1].type!=MINIAS_SHT_NOBITS ||
+       as.sections[0].type!=MINIAS_SECTION_KIND_PROGBITS ||
+       as.sections[1].type!=MINIAS_SECTION_KIND_NOBITS ||
        !minias_emission_section_view(&as,text_id,&text) ||
        !minias_emission_section_view(&as,bss_id,&bss) ||
        text.size!=sizeof(payload) || bss.size!=19U || bss.data!=NULL ||

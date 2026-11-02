@@ -2415,7 +2415,7 @@ static bool rv_encode_multi_mc(MiniAsEncodeContext *ctx, const MiniAsInstruction
          * Do not fold weak, named, mutable, aliased or cross-section refs. */
         if (!pic_la && target != NULL && target->defined &&
             target->section == stmt->section &&
-            target->bind == MINIAS_STB_LOCAL && !target->alias_pending &&
+            target->bind == MINIAS_SYMBOL_BINDING_LOCAL && !target->alias_pending &&
             target->name != NULL && target->name[0] == '.' &&
             target->name[1] == 'L' &&
             !target->mutable_absolute_set && !target->has_alias_dependency &&

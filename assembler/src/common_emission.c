@@ -92,7 +92,7 @@ bool minias_emission_clear_leb_payload(MiniAs *as,int section,
                                        uint64_t offset,size_t width) {
     MiniAsEmittedSection *bytes;
     if(as==NULL || section<0 || (size_t)section>=as->section_count ||
-       as->sections[(size_t)section].type==MINIAS_SHT_NOBITS ||
+       as->sections[(size_t)section].type==MINIAS_SECTION_KIND_NOBITS ||
        offset>SIZE_MAX)return false;
     bytes=emission_existing_section(as,section);
     if(bytes==NULL || bytes->data==NULL ||
@@ -186,7 +186,7 @@ static bool minias_record_fixup(MiniAs *as,
     /* Keep semantic fixups typed until finalization. The object builder
      * must decide whether this field needs an ELF relocation at all. */
     if (section < 0 || (size_t)section >= as->section_count ||
-        as->sections[(size_t)section].type==MINIAS_SHT_NOBITS ||
+        as->sections[(size_t)section].type==MINIAS_SECTION_KIND_NOBITS ||
         !minias_fixup_field_width(kind,width) ||
         offset > UINT64_MAX - width) {
         minias_set_error(as, "invalid-fixup-range:%s",
@@ -462,7 +462,7 @@ static bool minias_alignment_emits_target_nops(const MiniAs *as,
                                                const MiniAsStmt *stmt,
                                                const MiniAsSection *sec) {
     return stmt->fragment_kind==MINIAS_FRAGMENT_ALIGNMENT &&
-           (sec->flags & MINIAS_SHF_EXECINSTR)!=0U &&
+           (sec->flags & MINIAS_SECTION_FLAG_EXECINSTR)!=0U &&
            (!stmt->payload.alignment.has_fill ||
             (as->target->explicit_alignment_fill_is_code_nop &&
              as->target->explicit_alignment_fill_is_code_nop(
@@ -496,7 +496,7 @@ static bool minias_stage_instruction_bytes(MiniAs *as,
      * the final Section, where a failed encoder would leave partial bytes. */
     if ((owner->fragment_kind != MINIAS_FRAGMENT_INSTRUCTION &&
          !minias_alignment_emits_target_nops(as,owner,sec)) ||
-        sec->type == MINIAS_SHT_NOBITS ||
+        sec->type == MINIAS_SECTION_KIND_NOBITS ||
         size > SIZE_MAX - minias_emission_section_size(as,section_index)) {
         minias_set_error(as, "instruction-emission-section-or-size");
         return false;
@@ -680,7 +680,7 @@ static bool minias_stage_fragment_bytes(MiniAs *as,int section,
         minias_set_error(as,"fragment-byte-stage-conflict:line=%zu",owner->line);
         return false;
     }
-    if(sec->type==MINIAS_SHT_NOBITS)
+    if(sec->type==MINIAS_SECTION_KIND_NOBITS)
         for(i=0U;i<size;++i)
             if(bytes[i]!=0U) {
                 minias_set_error(as,"nobits-nonzero-data:%s",sec->name);
@@ -746,7 +746,7 @@ static bool minias_stage_fragment_pattern(MiniAs *as,int section,
                          owner->line);
         return false;
     }
-    if(sec->type==MINIAS_SHT_NOBITS && !ignore_nobits_fill)
+    if(sec->type==MINIAS_SECTION_KIND_NOBITS && !ignore_nobits_fill)
         for(i=0U;i<width;++i)
             if(pattern[i]!=0U) {
                 minias_set_error(as,"nobits-nonzero-data:%s",sec->name);
@@ -785,7 +785,7 @@ bool minias_section_append(MiniAs *as, int section_index, const void *data, size
         return minias_stage_fragment_bytes(as,section_index,data,size,false);
     sec=emission_mutable_section(as,section_index);
     if(sec==NULL)return false;
-    if (meta->type == MINIAS_SHT_NOBITS) {
+    if (meta->type == MINIAS_SECTION_KIND_NOBITS) {
         const unsigned char *bytes=(const unsigned char *)data;
         size_t i;
         if(size>SIZE_MAX-sec->size) {
@@ -844,7 +844,7 @@ static bool minias_section_append_pattern(MiniAs *as,int section_index,
         minias_set_error(as,"section-size-overflow:%s",meta->name);
         return false;
     }
-    if(meta->type==MINIAS_SHT_NOBITS) {
+    if(meta->type==MINIAS_SECTION_KIND_NOBITS) {
         if(!ignore_nobits_fill)
             for(i=0U;i<width;++i)
                 if(pattern[i]!=0U) {

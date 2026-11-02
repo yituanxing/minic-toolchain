@@ -48,11 +48,18 @@ static bool resolve_link_order(const MiniAsObjectModelView *view,size_t owner,
     const MiniAsSection *section=&view->sections[owner];
     const char *reference=section->link_order_reference;
     const MiniAsSymbol *symbol;
+    size_t symbol_id;
     size_t i,candidate=SIZE_MAX;
     *target=SIZE_MAX;
     if(reference==NULL || *reference=='\0')return true;
     if(view->numeric_reference(reference))return true;
-    symbol=view->find_symbol(view->reader,reference);
+    if(view->find_symbol_id(view->reader,reference,&symbol_id)) {
+        if(symbol_id>=view->symbol_count) {
+            object_error(error,capacity,"invalid-link-order-symbol-id:%s",reference);
+            return false;
+        }
+        symbol=&view->symbols[symbol_id];
+    } else symbol=NULL;
     if(symbol!=NULL && symbol->defined) {
         if(symbol->section==MINIAS_SECTION_ABS)return true;
         if(symbol->section>=0 &&
@@ -106,7 +113,7 @@ bool minias_object_plan(const MiniAsObjectModelView *view,
        (view->section_count!=0U && view->sections==NULL) ||
        (view->symbol_count!=0U && view->symbols==NULL) ||
        (view->fixup_count!=0U && view->fixups==NULL) ||
-       view->find_symbol==NULL || view->numeric_reference==NULL ||
+       view->find_symbol_id==NULL || view->numeric_reference==NULL ||
        view->section_bytes==NULL ||
        view->fragment_location==NULL) {
         object_error(error,capacity,"invalid-object-model-view");
@@ -133,7 +140,7 @@ bool minias_object_plan(const MiniAsObjectModelView *view,
     for(i=0U;i<view->section_count;++i) {
         const MiniAsSection *section=&view->sections[i];
         MiniAsObjectSectionPlan *output=&plan->sections[i];
-        const MiniAsSymbol *signature;
+        size_t signature_id;
         if(section->name==NULL) {
             object_error(error,capacity,"unnamed-elf-section");
             goto done;
@@ -147,13 +154,14 @@ bool minias_object_plan(const MiniAsObjectModelView *view,
             goto done;
         }
         if(section->group_signature==NULL)continue;
-        signature=view->find_symbol(view->reader,section->group_signature);
-        if(signature==NULL) {
+        if(!view->find_symbol_id(view->reader,section->group_signature,
+                                 &signature_id) ||
+           signature_id>=view->symbol_count) {
             object_error(error,capacity,"missing-group-signature:%s",
                          section->name);
             goto done;
         }
-        output->signature_symbol=(size_t)(signature-view->symbols);
+        output->signature_symbol=signature_id;
     }
     qsort(names,view->section_count,sizeof(*names),compare_section_name);
     for(i=0U;i<view->section_count;++i)

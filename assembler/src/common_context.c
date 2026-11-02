@@ -107,7 +107,7 @@ static bool resolve_symbol_alias_edge(MiniAs *as, size_t alias_id) {
         alias->section = MINIAS_SECTION_ABS;
         alias->subsection = 0U;
         alias->value = (uint64_t)absolute;
-        alias->type = MINIAS_STT_NOTYPE;
+        alias->type = MINIAS_SYMBOL_KIND_NOTYPE;
         alias->alias_pending = false;
         return true;
     }
@@ -428,8 +428,9 @@ int minias_find_section(const MiniAs *as,const char *name) {
 
 int minias_ensure_section_key(MiniAs *as,
                                      const MiniAsSectionIdentity *key,
-                                     uint32_t group_flags,
-                                     uint32_t type,uint64_t flags,
+                                     bool group_comdat,
+                                     MiniAsSectionKind type,
+                                     MiniAsSectionFlags flags,
                                      uint64_t align,uint64_t entry_size) {
     const int found=minias_find_section_key(as,key);
     MiniAsSection *sec;
@@ -440,7 +441,7 @@ int minias_ensure_section_key(MiniAs *as,
     }
     if(found>=0) {
         sec=&as->context_indexes->section_records[(size_t)found];
-        if(sec->group_flags!=group_flags) {
+        if(sec->group_comdat!=group_comdat) {
             minias_set_error(as,"conflicting-section-group-linkage:%s",key->name);
             return -1;
         }
@@ -490,7 +491,7 @@ int minias_ensure_section_key(MiniAs *as,
     }
     sec->type=type;
     sec->flags=flags;
-    sec->group_flags=group_flags;
+    sec->group_comdat=group_comdat;
     sec->has_unique_id=key->has_unique_id;
     sec->unique_id=key->unique_id;
     sec->align=align==0U ? 1U : align;
@@ -504,11 +505,11 @@ int minias_ensure_section_key(MiniAs *as,
 
 int minias_ensure_section(MiniAs *as,
                           const char *name,
-                          uint32_t type,
-                          uint64_t flags,
+                          MiniAsSectionKind type,
+                          MiniAsSectionFlags flags,
                           uint64_t align) {
     const MiniAsSectionIdentity key={name,NULL,NULL,false,0U};
-    return minias_ensure_section_key(as,&key,0U,type,flags,align,0U);
+    return minias_ensure_section_key(as,&key,false,type,flags,align,0U);
 }
 
 bool minias_common_context_raise_section_alignment(MiniAs *as,int section,
@@ -536,7 +537,7 @@ bool minias_common_context_apply_ident_comment(MiniAs *as,int section) {
     sec=&as->context_indexes->section_records[(size_t)section];
     /* GAS upgrades an existing .comment regardless of its prior flags;
      * this is intentionally different from an ordinary .section reopen. */
-    sec->flags|=MINIAS_SHF_MERGE|MINIAS_SHF_STRINGS;
+    sec->flags|=MINIAS_SECTION_FLAG_MERGE|MINIAS_SECTION_FLAG_STRINGS;
     sec->entry_size=1U;
     return true;
 }
@@ -678,9 +679,9 @@ static MiniAsSymbol *context_get_symbol_mut(MiniAs *as, const char *name,
         return NULL;
     }
     sym->section = MINIAS_SECTION_UNDEF;
-    sym->bind = MINIAS_STB_LOCAL;
-    sym->type = MINIAS_STT_NOTYPE;
-    sym->visibility = MINIAS_STV_DEFAULT;
+    sym->bind = MINIAS_SYMBOL_BINDING_LOCAL;
+    sym->type = MINIAS_SYMBOL_KIND_NOTYPE;
+    sym->visibility = MINIAS_SYMBOL_VISIBILITY_DEFAULT;
     ++as->symbol_count;
     as->context_indexes->symbol_slots[slot] = as->symbol_count;
     return sym;
@@ -756,24 +757,26 @@ bool minias_common_context_intern_symbol_id(MiniAs *as,const char *name,
 }
 
 bool minias_common_context_declare_symbol_binding(MiniAs *as,const char *name,
-                                                  bool update_binding,uint8_t bind,
+                                                  bool update_binding,
+                                                  MiniAsSymbolBinding bind,
                                                   bool update_visibility,
-                                                  uint8_t visibility) {
+                                                  MiniAsSymbolVisibility visibility) {
     MiniAsSymbol *symbol=context_get_symbol_mut(as,name,true);
     if(symbol==NULL)return false;
-    if(update_binding && !(bind==MINIAS_STB_LOCAL && symbol->defined &&
+    if(update_binding && !(bind==MINIAS_SYMBOL_BINDING_LOCAL && symbol->defined &&
                            symbol->section==MINIAS_SECTION_COMMON)) {
         /* A late `.local` does not retag a GNU tentative SHN_COMMON. */
         symbol->bind=bind;
-        symbol->explicit_local_binding=bind==MINIAS_STB_LOCAL;
+        symbol->explicit_local_binding=bind==MINIAS_SYMBOL_BINDING_LOCAL;
     }
     if(update_visibility)symbol->visibility=visibility;
     return true;
 }
 
 bool minias_common_context_declare_symbol_type(MiniAs *as,const char *name,
-                                               uint8_t type,bool force_binding,
-                                               uint8_t binding) {
+                                               MiniAsSymbolKind type,
+                                               bool force_binding,
+                                               MiniAsSymbolBinding binding) {
     MiniAsSymbol *symbol=context_get_symbol_mut(as,name,true);
     if(symbol==NULL)return false;
     symbol->type=type;
@@ -843,7 +846,7 @@ bool minias_common_context_define_source_fragment_anchor(MiniAs *as,
         symbol->fragment_anchor=fragment_ordinal;
         symbol->fragment_anchor_addend=addend;
     }
-    if(hidden)symbol->visibility=MINIAS_STV_HIDDEN;
+    if(hidden)symbol->visibility=MINIAS_SYMBOL_VISIBILITY_HIDDEN;
     if(id_out!=NULL)*id_out=(size_t)(symbol-as->symbols);
     return true;
 }
@@ -944,8 +947,8 @@ bool minias_common_context_declare_common(MiniAs *as,const char *name,
     symbol=context_get_symbol_mut(as,name,true);
     if(symbol==NULL)return false;
     if(symbol->named_dwarf_view || symbol->alias_pending ||
-       symbol->type==MINIAS_STT_FUNC ||
-       symbol->bind==MINIAS_STB_WEAK)goto invalid;
+       symbol->type==MINIAS_SYMBOL_KIND_FUNC ||
+       symbol->bind==MINIAS_SYMBOL_BINDING_WEAK)goto invalid;
     out->symbol_id=(size_t)(symbol-as->symbols);
     if(symbol->defined) {
         if(symbol->section!=MINIAS_SECTION_COMMON)goto invalid;
@@ -954,22 +957,22 @@ bool minias_common_context_declare_common(MiniAs *as,const char *name,
     }
     if(symbol->explicit_local_binding) {
         if(size>UINT32_MAX || alignment>UINT32_MAX)goto invalid;
-        bss=minias_ensure_section(as,".bss",MINIAS_SHT_NOBITS,
-                                  MINIAS_SHF_ALLOC|MINIAS_SHF_WRITE,1U);
+        bss=minias_ensure_section(as,".bss",MINIAS_SECTION_KIND_NOBITS,
+                                  MINIAS_SECTION_FLAG_ALLOC|MINIAS_SECTION_FLAG_WRITE,1U);
         if(bss<0)return false;
         symbol->defined=true;
         symbol->section=bss;
         symbol->subsection=0U;
         symbol->value=0U;
-        symbol->type=MINIAS_STT_OBJECT;
+        symbol->type=MINIAS_SYMBOL_KIND_OBJECT;
         symbol->size=size;
         out->defer_local_bss=true;
         out->bss_section=bss;
         return true;
     }
     symbol->defined=true;
-    symbol->bind=MINIAS_STB_GLOBAL;
-    symbol->type=MINIAS_STT_OBJECT;
+    symbol->bind=MINIAS_SYMBOL_BINDING_GLOBAL;
+    symbol->type=MINIAS_SYMBOL_KIND_OBJECT;
     symbol->section=MINIAS_SECTION_COMMON;
     symbol->subsection=0U;
     symbol->size=size;
@@ -1022,8 +1025,8 @@ bool minias_common_context_define_output_anchor(MiniAs *as,const char *name,
     symbol->section=section;
     symbol->subsection=subsection;
     symbol->value=offset;
-    symbol->bind=MINIAS_STB_LOCAL;
-    if(hidden)symbol->visibility=MINIAS_STV_HIDDEN;
+    symbol->bind=MINIAS_SYMBOL_BINDING_LOCAL;
+    if(hidden)symbol->visibility=MINIAS_SYMBOL_VISIBILITY_HIDDEN;
     if(id_out!=NULL)*id_out=(size_t)(symbol-as->symbols);
     return true;
 }
@@ -1063,10 +1066,10 @@ bool minias_common_context_bind_fixup_reference(MiniAs *as,size_t id) {
         return false;
     }
     symbol=&as->context_indexes->symbol_records[id];
-    if(!symbol->defined && symbol->bind==MINIAS_STB_LOCAL &&
+    if(!symbol->defined && symbol->bind==MINIAS_SYMBOL_BINDING_LOCAL &&
        !symbol->explicit_local_binding &&
        strncmp(symbol->name,".L",2U)!=0)
-        symbol->bind=MINIAS_STB_GLOBAL;
+        symbol->bind=MINIAS_SYMBOL_BINDING_GLOBAL;
     return true;
 }
 
@@ -1103,8 +1106,8 @@ bool minias_define_target_mapping_symbol(MiniAs *as, const char *stem,
     symbol->defined = true;
     symbol->section = section;
     symbol->value = offset;
-    symbol->bind = MINIAS_STB_LOCAL;
-    symbol->type = MINIAS_STT_NOTYPE;
+    symbol->bind = MINIAS_SYMBOL_BINDING_LOCAL;
+    symbol->type = MINIAS_SYMBOL_KIND_NOTYPE;
     return true;
 }
 
@@ -1173,8 +1176,8 @@ bool minias_post_emit_append_exact_mapping_symbol(
     symbol->defined=true;
     symbol->section=section;
     symbol->value=offset;
-    symbol->bind=MINIAS_STB_LOCAL;
-    symbol->type=MINIAS_STT_NOTYPE;
+    symbol->bind=MINIAS_SYMBOL_BINDING_LOCAL;
+    symbol->type=MINIAS_SYMBOL_KIND_NOTYPE;
     ++as->symbol_count;
     return true;
 }

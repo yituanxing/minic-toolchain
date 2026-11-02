@@ -74,7 +74,7 @@ static bool minias_stage_common_fixup(MiniAs *as,uint64_t offset,
     section=owner->section; /* MCData cannot select another Section. */
     if(section<0 ||
        (size_t)section>=as->section_count ||
-       as->sections[(size_t)section].type==MINIAS_SHT_NOBITS ||
+       as->sections[(size_t)section].type==MINIAS_SECTION_KIND_NOBITS ||
        offset<owner->offset || !minias_fixup_field_width(kind,width) ||
        (name==NULL && symbol_index>=minias_common_context_symbol_count(as))) {
         minias_set_error(as,"invalid-mcdata-fixup:line=%zu",owner->line);
@@ -139,7 +139,7 @@ static bool stage_instruction_fixup(MiniAs *as,uint64_t offset,
          as->symbol_names[ref.name_id].name==NULL)) ||
        section<0 ||
        (size_t)section>=as->section_count ||
-       as->sections[(size_t)section].type==MINIAS_SHT_NOBITS ||
+       as->sections[(size_t)section].type==MINIAS_SECTION_KIND_NOBITS ||
        offset<owner->offset ||
        (absolute_zero_symbol ? width!=4U :
         (width!=2U && width!=4U && width!=8U))) {

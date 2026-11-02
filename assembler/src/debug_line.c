@@ -189,7 +189,7 @@ static bool parse_loc(MiniAs *as,const char *args,size_t source_line) {
     }
     if(as->current_section<0 ||
        (as->sections[(size_t)as->current_section].flags &
-        MINIAS_SHF_EXECINSTR)==0U)goto bad;
+        MINIAS_SECTION_FLAG_EXECINSTR)==0U)goto bad;
     if(!minias_grow_array((void **)&as->debug_locs,&as->debug_loc_capacity,
                           sizeof(*as->debug_locs),as->debug_loc_count+1U) ||
        !minias_anchor_here(as,&symbol))goto bad;
@@ -463,7 +463,7 @@ bool minias_debug_emit(MiniAs *as) {
     if(!files || !directories || !directory_slots)goto failed;
     plan_dwarf_files(as,directories,&directory_count,files,
                      directory_slots,directory_slot_count);
-    sec=minias_ensure_section(as,".debug_line",MINIAS_SHT_PROGBITS,0U,1U);
+    sec=minias_ensure_section(as,".debug_line",MINIAS_SECTION_KIND_PROGBITS,0U,1U);
     if(sec<0)goto failed;
     /* GNU GAS refuses to concatenate a source-owned .debug_line payload
      * with the synthesized .file/.loc line program: their headers, row

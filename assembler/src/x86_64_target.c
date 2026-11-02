@@ -4090,8 +4090,8 @@ static bool x64_can_resolve_same_section(const MiniAsSymbolView *symbol,
                                          bool call_or_rip) {
     if(symbol==NULL || !symbol->defined || symbol->section!=stmt->section)
         return false;
-    if(symbol->bind==MINIAS_STB_LOCAL)return true;
-    return symbol->bind==MINIAS_STB_GLOBAL && !call_or_rip;
+    if(symbol->bind==MINIAS_SYMBOL_BINDING_LOCAL)return true;
+    return symbol->bind==MINIAS_SYMBOL_BINDING_GLOBAL && !call_or_rip;
 }
 
 /* Resolve the final target displacement once for both the MC layout range
@@ -4478,7 +4478,7 @@ static bool x64_encode_base(MiniAsEncodeContext *ctx,const MiniAsInstructionView
                 minias_encode_ctx_symbol_lookup(ctx,*expr,&symbol_snapshot)?
                 &symbol_snapshot:NULL;
             const bool defined_local_cross_section=target && target->defined &&
-                target->bind==MINIAS_STB_LOCAL && target->section>=0 &&
+                target->bind==MINIAS_SYMBOL_BINDING_LOCAL && target->section>=0 &&
                 target->section!=s->section;
             /* GNU's ELF64 native .code64 external JMP/Jcc/CALL all default
              * to PLT32. Inside lexical .code32 (even in an ELF64 object),

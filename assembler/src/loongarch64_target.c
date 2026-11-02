@@ -1980,7 +1980,7 @@ static bool la_resolve_branch_plan(MiniAsEncodeContext *ctx,const MiniAsInstruct
     target=minias_encode_ctx_symbol_lookup(ctx,*ref,&symbol_snapshot)?
         &symbol_snapshot:NULL;
     if(target==NULL || !target->defined || target->section!=s->section ||
-       target->bind==MINIAS_STB_WEAK)return true;
+       target->bind==MINIAS_SYMBOL_BINDING_WEAK)return true;
     if(target->value>INT64_MAX || s->offset>INT64_MAX) {
         minias_encode_ctx_error(ctx,"loong-branch-offset-overflow");
         return false;

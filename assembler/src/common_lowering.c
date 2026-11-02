@@ -280,7 +280,7 @@ static bool minias_maybe_align_instruction(MiniAs *as,size_t line) {
     MiniAsStmt *stmt;
     uint64_t pad;
     if(alignment==0U ||
-       (as->sections[(size_t)as->current_section].flags&MINIAS_SHF_EXECINSTR)==0U)
+       (as->sections[(size_t)as->current_section].flags&MINIAS_SECTION_FLAG_EXECINSTR)==0U)
         return true;
     if((alignment&(alignment-1U))!=0U || alignment>UINT32_MAX) {
         minias_set_error(as,"invalid-target-implicit-code-alignment");
@@ -329,15 +329,15 @@ static bool switch_section(MiniAs *as,
                            const char *link_order_reference,
                            bool has_unique_id,
                            uint32_t unique_id,
-                           uint32_t group_flags,
-                           uint32_t type,
-                           uint64_t flags,
+                           bool group_comdat,
+                           MiniAsSectionKind type,
+                           MiniAsSectionFlags flags,
                            uint64_t align,
                            uint64_t entry_size) {
     const MiniAsSectionIdentity key={name,group_signature,
                                       link_order_reference,
                                       has_unique_id,unique_id};
-    int index = minias_ensure_section_key(as,&key,group_flags,
+    int index = minias_ensure_section_key(as,&key,group_comdat,
                                           type,flags,align,entry_size);
 
     if (index < 0) {
@@ -365,9 +365,9 @@ static bool parse_section_directive(MiniAs *as, char *args, size_t line) {
     char *comma = NULL,*scan=args;
     char *name;
     bool quoted=false,escaped=false;
-    uint64_t flags = 0U;
-    uint32_t type = MINIAS_SHT_PROGBITS;
-    uint32_t group_flags = 0U;
+    MiniAsSectionFlags flags = 0U;
+    MiniAsSectionKind type = MINIAS_SECTION_KIND_PROGBITS;
+    bool group_comdat=false;
     uint64_t entry_size=0U;
     bool has_unique_id=false,inherit_group=false;
     uint32_t unique_id=0U;
@@ -405,16 +405,16 @@ static bool parse_section_directive(MiniAs *as, char *args, size_t line) {
 
     if (gnu_section_family(name,".bss") ||
         gnu_section_family(name,".tbss")) {
-        type=MINIAS_SHT_NOBITS;
+        type=MINIAS_SECTION_KIND_NOBITS;
     } else if(gnu_section_family(name,".note") &&
               strcmp(name,".note.GNU-stack")!=0) {
-        type=MINIAS_SHT_NOTE;
+        type=MINIAS_SECTION_KIND_NOTE;
     } else if(gnu_section_family(name,".init_array")) {
-        type=MINIAS_SHT_INIT_ARRAY;
+        type=MINIAS_SECTION_KIND_INIT_ARRAY;
     } else if(gnu_section_family(name,".fini_array")) {
-        type=MINIAS_SHT_FINI_ARRAY;
+        type=MINIAS_SECTION_KIND_FINI_ARRAY;
     } else if(gnu_section_family(name,".preinit_array")) {
-        type=MINIAS_SHT_PREINIT_ARRAY;
+        type=MINIAS_SECTION_KIND_PREINIT_ARRAY;
     }
 
     if (comma != NULL) {
@@ -428,25 +428,25 @@ static bool parse_section_directive(MiniAs *as, char *args, size_t line) {
             ++q;
             while (*q != '\0' && *q != '"') {
                 if (*q == 'a') {
-                    flags |= MINIAS_SHF_ALLOC;
+                    flags |= MINIAS_SECTION_FLAG_ALLOC;
                 } else if (*q == 'w') {
-                    flags |= MINIAS_SHF_WRITE;
+                    flags |= MINIAS_SECTION_FLAG_WRITE;
                 } else if (*q == 'x') {
-                    flags |= MINIAS_SHF_EXECINSTR;
+                    flags |= MINIAS_SECTION_FLAG_EXECINSTR;
                 } else if (*q == 'M') {
-                    flags |= MINIAS_SHF_MERGE;
+                    flags |= MINIAS_SECTION_FLAG_MERGE;
                 } else if (*q == 'S') {
-                    flags |= MINIAS_SHF_STRINGS;
+                    flags |= MINIAS_SECTION_FLAG_STRINGS;
                 } else if (*q == 'T') {
-                    flags |= MINIAS_SHF_TLS;
+                    flags |= MINIAS_SECTION_FLAG_TLS;
                 } else if (*q == 'G') {
-                    flags |= MINIAS_SHF_GROUP;
+                    flags |= MINIAS_SECTION_FLAG_GROUP;
                 } else if (*q == '?') {
                     inherit_group=true;
                 } else if (*q == 'R') {
-                    flags |= MINIAS_SHF_GNU_RETAIN;
+                    flags |= MINIAS_SECTION_FLAG_GNU_RETAIN;
                 } else if (*q == 'o') {
-                    flags |= MINIAS_SHF_LINK_ORDER;
+                    flags |= MINIAS_SECTION_FLAG_LINK_ORDER;
                 } else {
                     /* A silently dropped flag can change ELF selection,
                      * merging, relocation or linker garbage collection.
@@ -484,7 +484,7 @@ static bool parse_section_directive(MiniAs *as, char *args, size_t line) {
             }
             /* Extra section arguments are consumed in ELF syntax order:
              * M entsize, o linked-to symbol, G signature and linkage. */
-            if((flags & MINIAS_SHF_MERGE)!=0U) {
+            if((flags & MINIAS_SECTION_FLAG_MERGE)!=0U) {
                 if(next>=field_count ||
                    !minias_parse_u64(fields[next++],&entry_size) ||
                    entry_size==0U) {
@@ -492,7 +492,7 @@ static bool parse_section_directive(MiniAs *as, char *args, size_t line) {
                     return false;
                 }
             }
-            if((flags & MINIAS_SHF_LINK_ORDER)!=0U) {
+            if((flags & MINIAS_SECTION_FLAG_LINK_ORDER)!=0U) {
                 /* A missing anchor is accepted by GAS as sh_link=0.  An
                  * explicit empty argument is not a valid symbol.  Store a
                  * unique empty identity so this never aliases a plain
@@ -510,7 +510,7 @@ static bool parse_section_directive(MiniAs *as, char *args, size_t line) {
                     link_order_reference=linked;
                 }
             }
-            if((flags & MINIAS_SHF_GROUP)!=0U) {
+            if((flags & MINIAS_SECTION_FLAG_GROUP)!=0U) {
                 const char *sig;
                 if(next>=field_count) {
                     minias_set_error(as,"missing-group-signature:%s:line=%zu",name,line);
@@ -527,7 +527,7 @@ static bool parse_section_directive(MiniAs *as, char *args, size_t line) {
                 if(next<field_count &&
                    (strcmp(fields[next],"comdat")==0 ||
                     strcmp(fields[next],".gnu.linkonce")==0)) {
-                    group_flags=MINIAS_GRP_COMDAT;
+                    group_comdat=true;
                     ++next;
                 }
             }
@@ -554,52 +554,52 @@ static bool parse_section_directive(MiniAs *as, char *args, size_t line) {
                 ++kind;
             }
             if (strcmp(kind, "note") == 0) {
-                type = MINIAS_SHT_NOTE;
+                type = MINIAS_SECTION_KIND_NOTE;
             } else if (strcmp(kind, "nobits") == 0) {
-                type = MINIAS_SHT_NOBITS;
+                type = MINIAS_SECTION_KIND_NOBITS;
             } else if (strcmp(kind, "progbits") == 0) {
-                type = MINIAS_SHT_PROGBITS;
+                type = MINIAS_SECTION_KIND_PROGBITS;
             } else if (strcmp(kind, "init_array") == 0) {
-                type = MINIAS_SHT_INIT_ARRAY;
+                type = MINIAS_SECTION_KIND_INIT_ARRAY;
             } else if (strcmp(kind, "fini_array") == 0) {
-                type = MINIAS_SHT_FINI_ARRAY;
+                type = MINIAS_SECTION_KIND_FINI_ARRAY;
             } else if (strcmp(kind, "preinit_array") == 0) {
-                type = MINIAS_SHT_PREINIT_ARRAY;
+                type = MINIAS_SECTION_KIND_PREINIT_ARRAY;
             } else {
                 minias_set_error(as,"unsupported-section-type:%s:line=%zu",name,line);
                 return false;
             }
-        } else if((flags & MINIAS_SHF_LINK_ORDER)!=0U ||
-                  (flags & MINIAS_SHF_GROUP)!=0U ||
-                  (flags & MINIAS_SHF_MERGE)!=0U) {
+        } else if((flags & MINIAS_SECTION_FLAG_LINK_ORDER)!=0U ||
+                  (flags & MINIAS_SECTION_FLAG_GROUP)!=0U ||
+                  (flags & MINIAS_SECTION_FLAG_MERGE)!=0U) {
             minias_set_error(as,"missing-section-type:%s:line=%zu",name,line);
             return false;
         }
     }
 
-    if(inherit_group && (flags & MINIAS_SHF_GROUP)!=0U) {
+    if(inherit_group && (flags & MINIAS_SECTION_FLAG_GROUP)!=0U) {
         minias_set_error(as,"conflicting-section-group-inheritance:%s:line=%zu",name,line);
         return false;
     }
-    if ((flags & MINIAS_SHF_GROUP)!=0U && group_signature==NULL) {
+    if ((flags & MINIAS_SECTION_FLAG_GROUP)!=0U && group_signature==NULL) {
         minias_set_error(as,"missing-section-group:%s:line=%zu",name,line);
         return false;
     }
     if (flags == 0U) {
         if(gnu_section_family(name,".text")) {
-            flags=MINIAS_SHF_ALLOC | MINIAS_SHF_EXECINSTR;
+            flags=MINIAS_SECTION_FLAG_ALLOC | MINIAS_SECTION_FLAG_EXECINSTR;
         } else if(gnu_section_family(name,".rodata")) {
-            flags=MINIAS_SHF_ALLOC;
+            flags=MINIAS_SECTION_FLAG_ALLOC;
         } else if(gnu_section_family(name,".data") ||
                   gnu_section_family(name,".bss")) {
-            flags=MINIAS_SHF_ALLOC | MINIAS_SHF_WRITE;
+            flags=MINIAS_SECTION_FLAG_ALLOC | MINIAS_SECTION_FLAG_WRITE;
         } else if(gnu_section_family(name,".tdata") ||
                   gnu_section_family(name,".tbss")) {
-            flags=MINIAS_SHF_ALLOC | MINIAS_SHF_WRITE | MINIAS_SHF_TLS;
-        } else if(type==MINIAS_SHT_INIT_ARRAY ||
-                  type==MINIAS_SHT_FINI_ARRAY ||
-                  type==MINIAS_SHT_PREINIT_ARRAY) {
-            flags=MINIAS_SHF_ALLOC | MINIAS_SHF_WRITE;
+            flags=MINIAS_SECTION_FLAG_ALLOC | MINIAS_SECTION_FLAG_WRITE | MINIAS_SECTION_FLAG_TLS;
+        } else if(type==MINIAS_SECTION_KIND_INIT_ARRAY ||
+                  type==MINIAS_SECTION_KIND_FINI_ARRAY ||
+                  type==MINIAS_SECTION_KIND_PREINIT_ARRAY) {
+            flags=MINIAS_SECTION_FLAG_ALLOC | MINIAS_SECTION_FLAG_WRITE;
         }
         /* GNU note sections are NOT implicitly SHF_ALLOC; only an
          * explicit 'a' allocates .note.* payloads. */
@@ -608,16 +608,16 @@ static bool parse_section_directive(MiniAs *as, char *args, size_t line) {
        (size_t)as->current_section<as->section_count) {
         const MiniAsSection *prior=&as->sections[(size_t)as->current_section];
         if(prior->group_signature!=NULL) {
-            flags|=MINIAS_SHF_GROUP;
+            flags|=MINIAS_SECTION_FLAG_GROUP;
             group_signature=prior->group_signature;
-            group_flags=prior->group_flags;
+            group_comdat=prior->group_comdat;
         }
     }
     if(entry_size==0U &&
-       (type==MINIAS_SHT_INIT_ARRAY || type==MINIAS_SHT_FINI_ARRAY ||
-        type==MINIAS_SHT_PREINIT_ARRAY))
+       (type==MINIAS_SECTION_KIND_INIT_ARRAY || type==MINIAS_SECTION_KIND_FINI_ARRAY ||
+        type==MINIAS_SECTION_KIND_PREINIT_ARRAY))
         entry_size=as->target_spec->object.elf32?4U:8U;
-    if ((flags & MINIAS_SHF_MERGE)!=0U && entry_size==0U) {
+    if ((flags & MINIAS_SECTION_FLAG_MERGE)!=0U && entry_size==0U) {
         minias_set_error(as,"missing-merge-entry-size:%s:line=%zu",name,line);
         return false;
     }
@@ -633,8 +633,8 @@ static bool parse_section_directive(MiniAs *as, char *args, size_t line) {
                                           has_unique_id,unique_id};
         int prior=minias_find_section_key(as,&key);
         bool ok=switch_section(as,name,group_signature,link_order_reference,
-                has_unique_id,unique_id,group_flags,type,flags,
-                (flags & MINIAS_SHF_EXECINSTR)!=0U ?
+                has_unique_id,unique_id,group_comdat,type,flags,
+                (flags & MINIAS_SECTION_FLAG_EXECINSTR)!=0U ?
                    minias_target_exec_alignment(as):1U,entry_size);
         if (ok) {
             if (group_signature!=NULL && prior<0) {
@@ -652,9 +652,9 @@ static bool parse_section_directive(MiniAs *as, char *args, size_t line) {
 
 static bool handle_symbol_list(MiniAs *as,
                                char *args,
-                               uint8_t bind,
+                               MiniAsSymbolBinding bind,
                                bool binding,
-                               uint8_t visibility,
+                               MiniAsSymbolVisibility visibility,
                                bool set_visibility) {
     char *cursor = args;
 
@@ -678,8 +678,8 @@ static bool parse_type(MiniAs *as, char *args, size_t line) {
     char *separator = strchr(args, ',');
     const char *name;
     char *kind;
-    uint8_t type=MINIAS_STT_NOTYPE;
-    uint8_t binding=MINIAS_STB_LOCAL;
+    MiniAsSymbolKind type=MINIAS_SYMBOL_KIND_NOTYPE;
+    MiniAsSymbolBinding binding=MINIAS_SYMBOL_BINDING_LOCAL;
     bool force_binding=false;
 
     if (separator == NULL) {
@@ -698,32 +698,32 @@ static bool parse_type(MiniAs *as, char *args, size_t line) {
     kind = minias_trim(separator + 1);
     if (strcmp(kind, "@function") == 0 || strcmp(kind, "%function") == 0 ||
         strcmp(kind, "STT_FUNC") == 0) {
-        type=MINIAS_STT_FUNC;
+        type=MINIAS_SYMBOL_KIND_FUNC;
     } else if (strcmp(kind, "@object") == 0 || strcmp(kind, "%object") == 0 ||
                strcmp(kind, "STT_OBJECT") == 0) {
-        type=MINIAS_STT_OBJECT;
+        type=MINIAS_SYMBOL_KIND_OBJECT;
     } else if(strcmp(kind,"@notype")==0 || strcmp(kind,"%notype")==0 ||
               strcmp(kind,"STT_NOTYPE")==0) {
-        type=MINIAS_STT_NOTYPE;
+        type=MINIAS_SYMBOL_KIND_NOTYPE;
     } else if(strcmp(kind,"@tls_object")==0 || strcmp(kind,"%tls_object")==0 ||
               strcmp(kind,"STT_TLS")==0) {
-        type=MINIAS_STT_TLS;
+        type=MINIAS_SYMBOL_KIND_TLS;
     } else if(strcmp(kind,"@common")==0 || strcmp(kind,"%common")==0 ||
               strcmp(kind,"STT_COMMON")==0) {
         /* GAS treats @common as STT_OBJECT + GLOBAL binding, not as
          * an ELF STT_COMMON (5) symbol. This is observable in symtab. */
-        type=MINIAS_STT_OBJECT;
-        binding=MINIAS_STB_GLOBAL;
+        type=MINIAS_SYMBOL_KIND_OBJECT;
+        binding=MINIAS_SYMBOL_BINDING_GLOBAL;
         force_binding=true;
     } else if(strcmp(kind,"@gnu_unique_object")==0 ||
               strcmp(kind,"%gnu_unique_object")==0) {
-        type=MINIAS_STT_OBJECT;
-        binding=MINIAS_STB_GNU_UNIQUE;
+        type=MINIAS_SYMBOL_KIND_OBJECT;
+        binding=MINIAS_SYMBOL_BINDING_GNU_UNIQUE;
         force_binding=true;
     } else if(strcmp(kind,"@gnu_indirect_function")==0 ||
               strcmp(kind,"%gnu_indirect_function")==0 ||
               strcmp(kind,"STT_GNU_IFUNC")==0) {
-        type=MINIAS_STT_GNU_IFUNC;
+        type=MINIAS_SYMBOL_KIND_GNU_IFUNC;
     } else {
         minias_set_error(as,"unsupported-elf-symbol-type:%s:line=%zu",
                          kind,line);
@@ -2399,8 +2399,8 @@ invalid:
 static bool handle_ident(MiniAs *as,char *args,size_t line) {
     const int prior=minias_find_section(as,".comment");
     const int section=minias_ensure_section(as,".comment",
-                      MINIAS_SHT_PROGBITS,
-                      MINIAS_SHF_MERGE|MINIAS_SHF_STRINGS,1U);
+                      MINIAS_SECTION_KIND_PROGBITS,
+                      MINIAS_SECTION_FLAG_MERGE|MINIAS_SECTION_FLAG_STRINGS,1U);
     const int saved_section=as->current_section;
     const uint32_t saved_subsection=as->current_subsection;
     bool ok;
@@ -2600,8 +2600,8 @@ static bool lower_source_statement(MiniAs *as, char *text, size_t line) {
                                   NULL,
                                   NULL,
                                   false,0U,0U,
-                                  MINIAS_SHT_PROGBITS,
-                                  MINIAS_SHF_ALLOC | MINIAS_SHF_EXECINSTR,
+                                  MINIAS_SECTION_KIND_PROGBITS,
+                                  MINIAS_SECTION_FLAG_ALLOC | MINIAS_SECTION_FLAG_EXECINSTR,
                                   minias_target_exec_alignment(as),0U);
         }
         if (strcmp(op, ".data") == 0) {
@@ -2610,8 +2610,8 @@ static bool lower_source_statement(MiniAs *as, char *text, size_t line) {
                                   NULL,
                                   NULL,
                                   false,0U,0U,
-                                  MINIAS_SHT_PROGBITS,
-                                  MINIAS_SHF_ALLOC | MINIAS_SHF_WRITE,
+                                  MINIAS_SECTION_KIND_PROGBITS,
+                                  MINIAS_SECTION_FLAG_ALLOC | MINIAS_SECTION_FLAG_WRITE,
                                   1U,0U);
         }
         if (strcmp(op, ".bss") == 0) {
@@ -2620,33 +2620,40 @@ static bool lower_source_statement(MiniAs *as, char *text, size_t line) {
                                   NULL,
                                   NULL,
                                   false,0U,0U,
-                                  MINIAS_SHT_NOBITS,
-                                  MINIAS_SHF_ALLOC | MINIAS_SHF_WRITE,
+                                  MINIAS_SECTION_KIND_NOBITS,
+                                  MINIAS_SECTION_FLAG_ALLOC | MINIAS_SECTION_FLAG_WRITE,
                                   1U,0U);
         }
         if (strcmp(op, ".section") == 0) {
             return parse_section_directive(as, args, line);
         }
         if (strcmp(op, ".globl") == 0 || strcmp(op, ".global") == 0) {
-            return handle_symbol_list(as, args, MINIAS_STB_GLOBAL, true, 0U, false);
+            return handle_symbol_list(as, args, MINIAS_SYMBOL_BINDING_GLOBAL, true,
+                                      MINIAS_SYMBOL_VISIBILITY_DEFAULT, false);
         }
         if (strcmp(op, ".local") == 0) {
-            return handle_symbol_list(as,args,MINIAS_STB_LOCAL,true,0U,false);
+            return handle_symbol_list(as,args,MINIAS_SYMBOL_BINDING_LOCAL,true,
+                                      MINIAS_SYMBOL_VISIBILITY_DEFAULT,false);
         }
         if (strcmp(op, ".weak") == 0) {
-            return handle_symbol_list(as, args, MINIAS_STB_WEAK, true, 0U, false);
+            return handle_symbol_list(as, args, MINIAS_SYMBOL_BINDING_WEAK, true,
+                                      MINIAS_SYMBOL_VISIBILITY_DEFAULT, false);
         }
         if (strcmp(op, ".extern") == 0) {
-            return handle_symbol_list(as, args, MINIAS_STB_GLOBAL, true, 0U, false);
+            return handle_symbol_list(as, args, MINIAS_SYMBOL_BINDING_GLOBAL, true,
+                                      MINIAS_SYMBOL_VISIBILITY_DEFAULT, false);
         }
         if (strcmp(op, ".hidden") == 0) {
-            return handle_symbol_list(as, args, 0U, false, MINIAS_STV_HIDDEN, true);
+            return handle_symbol_list(as, args, MINIAS_SYMBOL_BINDING_LOCAL, false,
+                                      MINIAS_SYMBOL_VISIBILITY_HIDDEN, true);
         }
         if (strcmp(op, ".internal") == 0) {
-            return handle_symbol_list(as, args, 0U, false, MINIAS_STV_INTERNAL, true);
+            return handle_symbol_list(as, args, MINIAS_SYMBOL_BINDING_LOCAL, false,
+                                      MINIAS_SYMBOL_VISIBILITY_INTERNAL, true);
         }
         if (strcmp(op, ".protected") == 0) {
-            return handle_symbol_list(as, args, 0U, false, MINIAS_STV_PROTECTED, true);
+            return handle_symbol_list(as, args, MINIAS_SYMBOL_BINDING_LOCAL, false,
+                                      MINIAS_SYMBOL_VISIBILITY_PROTECTED, true);
         }
         if (strcmp(op, ".type") == 0) {
             return parse_type(as, args, line);

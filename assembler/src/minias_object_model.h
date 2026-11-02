@@ -23,7 +23,9 @@ typedef struct MiniAsObjectModelView {
     size_t cu_file_count;
     const void *reader;
     const char *(*cu_file)(const void *,size_t);
-    const MiniAsSymbol *(*find_symbol)(const void *,const char *);
+    /* Context resolves a name to a checked stable SymbolID. Never derive an
+     * ID by subtracting unrelated or potentially reallocated pointers. */
+    bool (*find_symbol_id)(const void *,const char *,size_t *);
     int (*find_section)(const void *,const char *);
     bool (*numeric_reference)(const char *);
     bool (*fragment_location)(const void *,size_t,MiniAsObjectFragmentLocation *);

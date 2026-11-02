@@ -37,7 +37,7 @@ for pattern in (r'\bMiniAs\s*\*', r'\bas->stmts\b', r'\bas->emission\b',
     if re.search(pattern, writer):
         raise SystemExit('MINIAS_ELF_OBJECT_VIEW=FAIL broad_serializer:' + pattern)
 for name in ('sections', 'symbols', 'fixups', 'cu_file',
-             'find_symbol', 'find_section', 'numeric_reference',
+             'find_symbol_id', 'find_section', 'numeric_reference',
              'fragment_location', 'section_bytes'):
     if not re.search(r'object\.model\.' + name + r'\s*=', driver):
         raise SystemExit('MINIAS_ELF_OBJECT_VIEW=FAIL missing_projection:' + name)

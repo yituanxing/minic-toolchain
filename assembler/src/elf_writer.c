@@ -15,9 +15,93 @@ static void elf_object_error(MiniAsElfObjectView *object,const char *format,...)
     va_end(ap);
 }
 
-static const MiniAsSymbol *elf_find_symbol(const MiniAsElfObjectView *object,
-                                           const char *name) {
-    return object->model.find_symbol(object->model.reader,name);
+static bool elf_has_symbol(const MiniAsElfObjectView *object,
+                           const char *name) {
+    size_t id;
+    return object->model.find_symbol_id(object->model.reader,name,&id);
+}
+
+/* Section semantics are retained in Common independently of the ELF wire
+ * numbers. This is the only SectionKind/SectionFlags -> SHT/SHF conversion;
+ * a future format writer must implement its own explicit projection. */
+static bool project_elf_section(MiniAsElfObjectView *object,
+                                const MiniAsSection *input,
+                                MiniElfWriteSection *output) {
+    const MiniAsSectionFlags supported=
+        MINIAS_SECTION_FLAG_ALLOC|MINIAS_SECTION_FLAG_WRITE|
+        MINIAS_SECTION_FLAG_EXECINSTR|MINIAS_SECTION_FLAG_MERGE|
+        MINIAS_SECTION_FLAG_STRINGS|MINIAS_SECTION_FLAG_TLS|
+        MINIAS_SECTION_FLAG_GROUP|MINIAS_SECTION_FLAG_LINK_ORDER|
+        MINIAS_SECTION_FLAG_GNU_RETAIN;
+    const MiniAsSectionFlags flags=input->flags;
+    uint64_t elf_flags=0U;
+    switch(input->type) {
+        case MINIAS_SECTION_KIND_PROGBITS:output->type=SHT_PROGBITS;break;
+        case MINIAS_SECTION_KIND_NOBITS:output->type=SHT_NOBITS;break;
+        case MINIAS_SECTION_KIND_NOTE:output->type=SHT_NOTE;break;
+        case MINIAS_SECTION_KIND_INIT_ARRAY:output->type=SHT_INIT_ARRAY;break;
+        case MINIAS_SECTION_KIND_FINI_ARRAY:output->type=SHT_FINI_ARRAY;break;
+        case MINIAS_SECTION_KIND_PREINIT_ARRAY:output->type=SHT_PREINIT_ARRAY;break;
+        default:
+            elf_object_error(object,"unsupported-elf-section-kind:%s",input->name);
+            return false;
+    }
+    if((flags & ~supported)!=0U ||
+       ((flags & MINIAS_SECTION_FLAG_GROUP)!=0U)!=
+           (input->group_signature!=NULL) ||
+       (input->group_comdat && input->group_signature==NULL)) {
+        elf_object_error(object,"invalid-elf-section-flags:%s",input->name);
+        return false;
+    }
+    if((flags & MINIAS_SECTION_FLAG_ALLOC)!=0U)elf_flags|=SHF_ALLOC;
+    if((flags & MINIAS_SECTION_FLAG_WRITE)!=0U)elf_flags|=SHF_WRITE;
+    if((flags & MINIAS_SECTION_FLAG_EXECINSTR)!=0U)elf_flags|=SHF_EXECINSTR;
+    if((flags & MINIAS_SECTION_FLAG_MERGE)!=0U)elf_flags|=SHF_MERGE;
+    if((flags & MINIAS_SECTION_FLAG_STRINGS)!=0U)elf_flags|=SHF_STRINGS;
+    if((flags & MINIAS_SECTION_FLAG_TLS)!=0U)elf_flags|=SHF_TLS;
+    if((flags & MINIAS_SECTION_FLAG_GROUP)!=0U)elf_flags|=SHF_GROUP;
+    if((flags & MINIAS_SECTION_FLAG_LINK_ORDER)!=0U)elf_flags|=SHF_LINK_ORDER;
+    if((flags & MINIAS_SECTION_FLAG_GNU_RETAIN)!=0U)elf_flags|=SHF_GNU_RETAIN;
+    output->flags=elf_flags;
+    output->has_group=input->group_signature!=NULL;
+    output->group_flags=input->group_comdat?GRP_COMDAT:0U;
+    return true;
+}
+
+/* Core retains symbolic binding/kind/visibility semantics. Mapping to ELF
+ * STB/STT/STV codes is an explicit operation, including GNU extensions. */
+static bool project_elf_symbol(MiniAsElfObjectView *object,
+                               const MiniAsSymbol *input,
+                               MiniElfWriteSymbol *output) {
+    unsigned char bind,type,visibility;
+    switch(input->bind) {
+        case MINIAS_SYMBOL_BINDING_LOCAL:bind=STB_LOCAL;break;
+        case MINIAS_SYMBOL_BINDING_GLOBAL:bind=STB_GLOBAL;break;
+        case MINIAS_SYMBOL_BINDING_WEAK:bind=STB_WEAK;break;
+        case MINIAS_SYMBOL_BINDING_GNU_UNIQUE:bind=STB_GNU_UNIQUE;break;
+        default:goto invalid;
+    }
+    switch(input->type) {
+        case MINIAS_SYMBOL_KIND_NOTYPE:type=STT_NOTYPE;break;
+        case MINIAS_SYMBOL_KIND_OBJECT:type=STT_OBJECT;break;
+        case MINIAS_SYMBOL_KIND_FUNC:type=STT_FUNC;break;
+        case MINIAS_SYMBOL_KIND_TLS:type=STT_TLS;break;
+        case MINIAS_SYMBOL_KIND_GNU_IFUNC:type=STT_GNU_IFUNC;break;
+        default:goto invalid;
+    }
+    switch(input->visibility) {
+        case MINIAS_SYMBOL_VISIBILITY_DEFAULT:visibility=STV_DEFAULT;break;
+        case MINIAS_SYMBOL_VISIBILITY_INTERNAL:visibility=STV_INTERNAL;break;
+        case MINIAS_SYMBOL_VISIBILITY_HIDDEN:visibility=STV_HIDDEN;break;
+        case MINIAS_SYMBOL_VISIBILITY_PROTECTED:visibility=STV_PROTECTED;break;
+        default:goto invalid;
+    }
+    output->info=(unsigned char)((bind<<4U)|type);
+    output->other=visibility;
+    return true;
+invalid:
+    elf_object_error(object,"unsupported-elf-symbol-semantics:%s",input->name);
+    return false;
 }
 
 /* Generic ELF STT_SECTION relocation for a target-selected, defined local
@@ -40,7 +124,7 @@ static bool section_symbol_fixup(const MiniAsElfObjectView *as,const MiniAsFixup
     if(!requested || fixup->symbol_index>=as->model.symbol_count)
         return false;
     sym=&as->model.symbols[fixup->symbol_index];
-    return sym->defined && sym->bind==MINIAS_STB_LOCAL &&
+    return sym->defined && sym->bind==MINIAS_SYMBOL_BINDING_LOCAL &&
            sym->section>=0 && (size_t)sym->section<as->model.section_count &&
            (as->policy.allow_local_section_symbol_fixup==NULL ||
             (minias_project_symbol(sym,&target_symbol) &&
@@ -95,7 +179,7 @@ static bool plan_elf_symbols(MiniAsElfObjectView *as,MiniAsELFSymbolState *state
     }
     for(i=0U;i<as->model.symbol_count;++i) {
         const MiniAsSymbol *symbol=&as->model.symbols[i];
-        const bool temporary=symbol->bind==MINIAS_STB_LOCAL &&
+        const bool temporary=symbol->bind==MINIAS_SYMBOL_BINDING_LOCAL &&
             symbol->defined &&
             (strncmp(symbol->name,".L",2U)==0 ||
              minias_is_private_symbol_name(symbol->name));
@@ -218,7 +302,7 @@ static bool minias_write_elf(MiniAsElfObjectView *as,
     for(i=0U;i<as->model.cu_file_count;++i) {
         MiniElfWriteSymbol *output=&symbols[output_symbol_count++];
         output->name=as->model.cu_file(as->model.reader,i);
-        output->info=(unsigned char)((MINIAS_STB_LOCAL<<4U)|MINIAS_STT_FILE);
+        output->info=(unsigned char)((STB_LOCAL<<4U)|STT_FILE);
         output->section_index=SHN_ABS;
     }
 
@@ -228,10 +312,7 @@ static bool minias_write_elf(MiniAsElfObjectView *as,
         MiniElfWriteSection *output = &sections[i];
 
         output->name = input->name;
-        output->type = input->type;
-        output->has_group = input->group_signature != NULL;
-        output->group_flags = input->group_flags;
-        output->flags = input->flags;
+        if(!project_elf_section(as,input,output))goto done;
         if(planned->linked_section!=SIZE_MAX) {
             output->has_link_order_target=true;
             output->linked_target_section=planned->linked_section;
@@ -261,9 +342,9 @@ static bool minias_write_elf(MiniAsElfObjectView *as,
         if (!symbol_states[i].emit) {
             continue;
         }
-        local_group_signature=input->bind==MINIAS_STB_LOCAL &&
+        local_group_signature=input->bind==MINIAS_SYMBOL_BINDING_LOCAL &&
             !input->defined && symbol_states[i].group_signature;
-        if (input->bind == MINIAS_STB_LOCAL && !input->defined &&
+        if (input->bind == MINIAS_SYMBOL_BINDING_LOCAL && !input->defined &&
             !local_group_signature) {
             elf_object_error(as,
                              "undefined-local-symbol:%s",
@@ -292,7 +373,7 @@ static bool minias_write_elf(MiniAsElfObjectView *as,
                     elf_object_error(as,"private-symbol-name-capacity");
                     goto done;
                 }
-            }while(elf_find_symbol(as,visible)!=NULL);
+            }while(elf_has_symbol(as,visible));
             private_names[i]=minias_strdup(visible);
             if(private_names[i]==NULL) {
                 elf_object_error(as,"out-of-memory:elf-private-symbol");
@@ -300,9 +381,7 @@ static bool minias_write_elf(MiniAsElfObjectView *as,
             }
             output->name=private_names[i];
         }else output->name=input->name;
-        output->info =
-            (unsigned char)((input->bind << 4U) | (input->type & 0x0fU));
-        output->other = input->visibility;
+        if(!project_elf_symbol(as,input,output))goto done;
         if (!input->defined) {
             output->section_index = SHN_UNDEF;
             output->group_signature_section=local_group_signature;
@@ -394,8 +473,8 @@ static bool minias_write_elf(MiniAsElfObjectView *as,
      * symbols; ordinary RV/other ELF objects retain System V. */
     spec.osabi = ELFOSABI_NONE;
     for (i = 0U; i < output_symbol_count; ++i) {
-        if ((symbols[i].info & 0x0fU) == MINIAS_STT_GNU_IFUNC ||
-            (symbols[i].info >> 4U) == MINIAS_STB_GNU_UNIQUE) {
+        if ((symbols[i].info & 0x0fU) == STT_GNU_IFUNC ||
+            (symbols[i].info >> 4U) == STB_GNU_UNIQUE) {
             spec.osabi = ELFOSABI_GNU;
             break;
         }

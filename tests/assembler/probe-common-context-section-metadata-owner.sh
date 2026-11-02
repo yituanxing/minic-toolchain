@@ -30,7 +30,7 @@ if not re.search(r'as->context_indexes->section_records\[i\]\.layout_size\s*=\s*
     raise SystemExit('Context must publish all Section sizes after Symbol normalization')
 if 'sec->entry_size=entry_size;' not in context:
     raise SystemExit('new SectionKey lacks first-declaration sh_entsize')
-if 'minias_ensure_section_key(as,&key,group_flags,' not in lowering or \
+if 'minias_ensure_section_key(as,&key,group_comdat,' not in lowering or \
    'type,flags,align,entry_size)' not in lowering:
     raise SystemExit('source .section failed to pass first-declaration metadata')
 
