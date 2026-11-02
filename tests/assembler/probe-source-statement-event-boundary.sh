@@ -36,9 +36,9 @@ if 'minias_source_session(as)->statements=(MiniAsSourceStatementSink){0};' not i
 graph=(root/'source_graph.c').read_text()
 if re.search(r'\bas->(?:stmts|stmt_count)\b',graph):
     raise SystemExit('SourceGraph directly reads Common mutable statement vector')
-for call in ('as,as->stmts,as->stmt_count','&as,as.stmts,as.stmt_count'):
-    if call not in core:
-        raise SystemExit('Common omitted explicit immutable Fragment span: '+call)
+if 'as,as->stmts,as->stmt_count' not in lowering or \
+   '&as,as.stmts,as.stmt_count' not in core:
+    raise SystemExit('Common omitted immutable Fragment spans across lowering/driver')
 if 'as->layout_sensitive' in source or 'minias_get_symbol(' in source:
     raise SystemExit('Source bypasses Common semantic ownership')
 if 'minias_common_source_symbol_defined(as,args)' not in source:
