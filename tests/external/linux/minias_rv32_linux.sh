@@ -88,16 +88,11 @@ preserve_failure() {
         printf '\n'
     } >"$MINIAS_FAILURE_DIR/$id.replay.txt"
 }
-if ((${#unsupported[@]})); then
-    {
-        printf 'MINIAS_RV32_AS=FAIL unsupported_GNU_AS_flags'
-        printf ' %q' "${unsupported[@]}"
-        printf '\n'
-    } >&2
-    preserve_failure unsupported_flags
-    exit 2
-fi
 if ((query)); then
+    # GCC's Kconfig as-version test includes ordinary GAS flags such as
+    # --traditional-format, -fpic and -misa-spec=20191213.  They are safe to
+    # forward ONLY for a proven version query whose output is discarded.
+    # Production invocations still reject every unsupported option below.
     valid=0
     if [[ -z "$input" && -z "$output" ]]; then
         valid=1
@@ -114,6 +109,15 @@ if ((query)); then
     fi
     printf 'delegate-query argc=%s\n' "${#args[@]}" >>"$MINIAS_AS_TRACE"
     exec "${REAL_AS:-/usr/bin/riscv64-linux-gnu-as}" "$@"
+fi
+if ((${#unsupported[@]})); then
+    {
+        printf 'MINIAS_RV32_AS=FAIL unsupported_GNU_AS_flags'
+        printf ' %q' "${unsupported[@]}"
+        printf '\n'
+    } >&2
+    preserve_failure unsupported_flags
+    exit 2
 fi
 if [[ -z "$input" || -z "$output" ]]; then
     printf 'MINIAS_RV32_AS=FAIL missing_input_or_output' >&2
@@ -146,13 +150,23 @@ gnu_out="$work/gnu-out"
 mini_out="$work/mini-out"
 config() {
     local out=$1 cc=$2 as=$3
-    make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE="$cross" \
-      CC="$cc" AS="$as" defconfig >"$work/evidence/$(basename "$out")-defconfig.log" 2>&1
+    local log="$work/evidence/$(basename "$out")-defconfig.log"
+    if ! make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE="$cross" \
+        CC="$cc" AS="$as" defconfig >"$log" 2>&1; then
+        echo "MINIAS_RV32_CONFIG=FAIL lane=$out stage=defconfig" >&2
+        tail -n 75 "$log" >&2
+        return 2
+    fi
     "$src/scripts/config" --file "$out/.config" \
       -e NONPORTABLE -e ARCH_RV32I -d ARCH_RV64I \
       -d EFI -d RISCV_ISA_C -d FPU -d SMP -d VGA_CONSOLE
-    make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE="$cross" \
-      CC="$cc" AS="$as" olddefconfig >"$work/evidence/$(basename "$out")-olddefconfig.log" 2>&1
+    log="$work/evidence/$(basename "$out")-olddefconfig.log"
+    if ! make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE="$cross" \
+        CC="$cc" AS="$as" olddefconfig >"$log" 2>&1; then
+        echo "MINIAS_RV32_CONFIG=FAIL lane=$out stage=olddefconfig" >&2
+        tail -n 75 "$log" >&2
+        return 2
+    fi
     for expected in NONPORTABLE ARCH_RV32I 32BIT; do
         grep -Fxq "CONFIG_$expected=y" "$out/.config" || {
             echo "MINIAS_RV32_CONFIG=FAIL required=$expected lane=$out" >&2; return 1;
