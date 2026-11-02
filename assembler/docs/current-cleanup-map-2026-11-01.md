@@ -1,5 +1,20 @@
 # MiniAS 当前清理与所有权总览（2026-11-01）
 
+> **2026-11-02 P06 MCExpr/MCLayout/Lowering SymbolID 整链收口
+> （基于 `e7d76ee9`，本批提交待发布）：** 沿表达式语法树→延迟 DATA→
+> Fragment 锚点固定点→`.size/.set/.equ/.org`→终结 ELF 的真实消费者
+> 一次清走跨模块 `MiniAsSymbol *` 借用和实体指针反算 ID。Context
+> 保留唯一可写 SymbolID 表与别名 DAG，新增稳定 ID 查询和只含
+> Fragment/size 锚点的栈上布局值投影；MCExpr、MCLayout、
+> Lowering、EncodeResult 不再读整个 `as->symbols`，旧跨模块
+> `find/intern Symbol*` 与 `symbol_ref_lookup` 入口彻底删除。Driver
+> 只在 ELF 终结视图中借用原 const Symbol 表；它的重放、初始化、
+> 销毁生命周期经核对无需另造会话对象。新增布局视图正反编译门禁；
+> 本地 `-Werror`、A0 30/30、四目标 26 例（18 个 ELF 字节一致、
+> 8 个同样拒绝）、23 道 CI 结构脚本、GNU 表达式/.size/CFI/
+> DWARF/RISC-V ULEB 组合回归通过。本批远端 exact-head CI 与
+> Linux 原始 `.s`→ld→QEMU 仍须在新 SHA 上单独验证。
+
 > **2026-11-02 P04 ISA 版本/ABI 入口成组迁移（基于 `639b6ffa`，
 > 本批最终提交待发布）：** 上批已完成不可变 `TargetSpec.object`。
 > 此批沿 Target 私有解析、文件 ISA、指令编码许可与 Fragment 现场

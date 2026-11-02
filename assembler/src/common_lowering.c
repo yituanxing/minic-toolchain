@@ -638,9 +638,9 @@ static bool parse_section_directive(MiniAs *as, char *args, size_t line) {
                    minias_target_exec_alignment(as):1U,entry_size);
         if (ok) {
             if (group_signature!=NULL && prior<0) {
-                const MiniAsSymbol *signature;
-                signature=minias_common_context_intern_symbol(as,group_signature);
-                if(signature==NULL)return false;
+                size_t signature_id;
+                if(!minias_common_context_intern_symbol_id(
+                       as,group_signature,&signature_id))return false;
                 /* GAS synthesizes an undefined default-local group
                  * signature as a LOCAL symbol in the new SHT_GROUP section.
                  * An explicitly .globl signature remains GLOBAL UND. */
@@ -735,8 +735,7 @@ static bool parse_type(MiniAs *as, char *args, size_t line) {
 
 static bool parse_size(MiniAs *as, char *args, size_t line) {
     char *comma = strchr(args, ',');
-    const MiniAsSymbol *symbol;
-    const MiniAsSymbol *start_symbol;
+    MiniAsLayoutSymbolView symbol,start_symbol;
     char *expr;
     int64_t size_addend;
     size_t symbol_index;
@@ -747,14 +746,14 @@ static bool parse_size(MiniAs *as, char *args, size_t line) {
         return false;
     }
     *comma = '\0';
-    symbol=minias_common_context_intern_symbol(as,minias_trim(args));
-    if (symbol == NULL) {
-        return false;
-    }
+    if(!minias_common_context_intern_symbol_id(
+           as,minias_trim(args),&symbol_index) ||
+       !minias_common_context_layout_symbol_view(
+           as,symbol_index,&symbol))return false;
     expr = minias_trim(comma + 1);
     {
         uint64_t explicit_size;
-        const MiniAsSymbol *size_symbol;
+        MiniAsSymbolView size_symbol;
         if (minias_parse_u64(expr, &explicit_size)) {
             /*
              * GNU GCC commonly emits .size before the object's label:
@@ -768,42 +767,41 @@ static bool parse_size(MiniAs *as, char *args, size_t line) {
              * and section ownership.
              */
             return minias_common_context_declare_symbol_size(
-                as,symbol->name,explicit_size);
+                as,symbol.name,explicit_size);
         }
-        size_symbol=minias_common_context_find_symbol(as,expr);
-        if (size_symbol != NULL && size_symbol->defined &&
-            size_symbol->section == MINIAS_SECTION_ABS) {
+        if (minias_common_context_find_symbol_view(as,expr,&size_symbol) &&
+            size_symbol.defined && size_symbol.section == MINIAS_SECTION_ABS) {
             return minias_common_context_declare_symbol_size(
-                as,symbol->name,size_symbol->value);
+                as,symbol.name,size_symbol.value);
         }
     }
-    if (!symbol->defined) {
-        minias_set_error(as, "bad-size-symbol:%s:line=%zu", symbol->name, line);
+    if (!symbol.defined) {
+        minias_set_error(as, "bad-size-symbol:%s:line=%zu", symbol.name, line);
         return false;
     }
     start_symbol=symbol;
-    symbol_index=(size_t)(symbol-as->symbols);
     start_symbol_index=symbol_index;
-    if (!minias_parse_size_end_addend(expr,symbol->name,&size_addend)) {
+    if (!minias_parse_size_end_addend(expr,symbol.name,&size_addend)) {
         MiniAsSymbolDifference difference;
         if(!minias_parse_symbol_difference_absolute_tail(as,expr,&difference) ||
            strcmp(difference.positive.name,".")!=0 ||
-           (start_symbol=minias_common_context_find_symbol(
-                as,difference.negative.name))==NULL ||
-           !start_symbol->defined || !start_symbol->has_fragment_anchor ||
-           !minias_parse_size_end_addend(expr,start_symbol->name,&size_addend)) {
+           !minias_common_context_find_symbol_id(
+               as,difference.negative.name,&start_symbol_index) ||
+           !minias_common_context_layout_symbol_view(
+               as,start_symbol_index,&start_symbol) ||
+           !start_symbol.defined || !start_symbol.has_fragment_anchor ||
+           !minias_parse_size_end_addend(expr,start_symbol.name,&size_addend)) {
             minias_set_error(as,"unsupported-expression:.size:%s:line=%zu",expr,line);
             return false;
         }
-        start_symbol_index=(size_t)(start_symbol-as->symbols);
     }
-    if (symbol->section != as->current_section ||
-        start_symbol->section != as->current_section) {
-        minias_set_error(as, "size-section-mismatch:%s:line=%zu", symbol->name, line);
+    if (symbol.section != as->current_section ||
+        start_symbol.section != as->current_section) {
+        minias_set_error(as, "size-section-mismatch:%s:line=%zu", symbol.name, line);
         return false;
     }
-    if(symbol->subsection!=as->current_subsection ||
-       start_symbol->subsection!=as->current_subsection) {
+    if(symbol.subsection!=as->current_subsection ||
+       start_symbol.subsection!=as->current_subsection) {
         /* GAS joins numbered subsections before evaluating symbol sizes.
          * A span from subsection 0 to subsection 1 cannot be computed from
          * parse-site LOCAL offsets: capture its end owner and let MCLayout
@@ -820,13 +818,13 @@ static bool parse_size(MiniAs *as, char *args, size_t line) {
         if (!minias_current_location(as, &here) ||
             here>(uint64_t)INT64_MAX ||
             !minias_checked_add_i64((int64_t)here,size_addend,&end) ||
-            end<0 || (uint64_t)end < start_symbol->value) {
-            minias_set_error(as, "size-location-mismatch:%s:line=%zu", symbol->name, line);
+            end<0 || (uint64_t)end < start_symbol.value) {
+            minias_set_error(as, "size-location-mismatch:%s:line=%zu", symbol.name, line);
             return false;
         }
         return minias_common_context_capture_symbol_size_end(
             as,symbol_index,start_symbol_index,as->current_subsection,
-            as->stmt_count,size_addend,(uint64_t)end-start_symbol->value,false);
+            as->stmt_count,size_addend,(uint64_t)end-start_symbol.value,false);
     }
 }
 
@@ -876,12 +874,13 @@ static bool parse_equ(MiniAs *as, char *args, size_t line) {
                 line,false,NULL);
         }
         {
-            const MiniAsSymbol *target=
-                minias_common_context_intern_symbol(as,expr.name);
+            MiniAsSymbolView target;
             size_t target_index;
-            if(!target)return false;
-            target_index=(size_t)(target-as->symbols);
-            if(!target->defined || target->section!=MINIAS_SECTION_ABS)
+            if(!minias_common_context_intern_symbol_id(
+                   as,expr.name,&target_index) ||
+               !minias_common_context_symbol_view(
+                   as,target_index,&target))return false;
+            if(!target.defined || target.section!=MINIAS_SECTION_ABS)
                 return minias_common_context_bind_symbol_alias(
                     as,name,target_index,expr.addend,NULL,line);
         }
@@ -900,7 +899,7 @@ static bool parse_set(MiniAs *as, char *args, size_t line) {
     char *name;
     char *expression;
     MiniAsSymbolExpr expr;
-    const MiniAsSymbol *target;
+    MiniAsSymbolView target;
     size_t target_index;
 
     if (comma == NULL) {
@@ -982,10 +981,11 @@ static bool parse_set(MiniAs *as, char *args, size_t line) {
      * their identity first; only known ABS .set counters are snapshotted. */
     if (minias_parse_symbol_addend(expression,&expr) &&
         strcmp(expr.name,".")!=0) {
-        target=minias_common_context_intern_symbol(as,expr.name);
-        if(!target)return false;
-        target_index=(size_t)(target-as->symbols);
-        if(!target->defined || target->section!=MINIAS_SECTION_ABS)
+        if(!minias_common_context_intern_symbol_id(
+               as,expr.name,&target_index) ||
+           !minias_common_context_symbol_view(
+               as,target_index,&target))return false;
+        if(!target.defined || target.section!=MINIAS_SECTION_ABS)
             return minias_common_context_bind_symbol_alias(
                 as,name,target_index,expr.addend,NULL,line);
     }
@@ -1005,11 +1005,8 @@ static bool parse_set(MiniAs *as, char *args, size_t line) {
         }
     }
     if (minias_parse_symbol_addend(expression, &expr)) {
-        target=minias_common_context_intern_symbol(as,expr.name);
-        if (target == NULL) {
-            return false;
-        }
-        target_index = (size_t)(target - as->symbols);
+        if(!minias_common_context_intern_symbol_id(
+               as,expr.name,&target_index))return false;
 
         return minias_common_context_bind_symbol_alias(
             as,name,target_index,expr.addend,NULL,line);
@@ -1038,10 +1035,9 @@ static bool parse_set(MiniAs *as, char *args, size_t line) {
                minias_eval_i64_expression(minias_trim(copy),&number) &&
                minias_parse_symbol_addend(target_name,&base) &&
                base.addend==0) {
-                const MiniAsSymbol *ref=
-                    minias_common_context_intern_symbol(as,base.name);
-                if(ref!=NULL) {
-                    size_t ref_index=(size_t)(ref-as->symbols);
+                size_t ref_index;
+                if(minias_common_context_intern_symbol_id(
+                       as,base.name,&ref_index)) {
                     matched=true;
                     valid=minias_common_context_bind_symbol_alias(
                         as,name,ref_index,number,section_name,line);
@@ -1092,7 +1088,9 @@ static bool handle_org_position(MiniAs *as, const char *args,
     int64_t evaluated;
     int64_t lexical_target;
     MiniAsSymbolExpr symbolic = {0};
-    const MiniAsSymbol *symbol = NULL;
+    MiniAsLayoutSymbolView symbol;
+    size_t symbol_index=SIZE_MAX;
+    bool has_symbol=false;
     MiniAsDeferredExpr *deferred = NULL;
     bool ready;
     uint64_t desired;
@@ -1168,24 +1166,26 @@ static bool handle_org_position(MiniAs *as, const char *args,
         fragment->payload.origin.target = (uint64_t)symbolic.addend;
         as->lowering->has_org_constraints = true;
     } else if (minias_parse_symbol_addend(args, &symbolic) &&
-               (symbol = minias_common_context_find_symbol(
-                        as,symbolic.name)) != NULL &&
-               symbol->defined && symbol->section == MINIAS_SECTION_ABS) {
+               (has_symbol=(minias_common_context_find_symbol_id(
+                        as,symbolic.name,&symbol_index) &&
+                   minias_common_context_layout_symbol_view(
+                        as,symbol_index,&symbol))) &&
+               symbol.defined && symbol.section == MINIAS_SECTION_ABS) {
         /* Lexically resolved .set/.equ values are frozen at this site. */
         MiniAsStmt *fragment = &as->stmts[as->stmt_count - 1U];
         fragment->payload.origin.mode = MINIAS_ORG_ABSOLUTE;
         fragment->payload.origin.target = desired;
         as->lowering->has_org_constraints = true;
-    } else if (symbol != NULL && symbol->defined &&
-               symbol->has_fragment_anchor &&
-               symbol->section == as->current_section &&
+    } else if (has_symbol && symbol.defined &&
+               symbol.has_fragment_anchor &&
+               symbol.section == as->current_section &&
                /* Lower-numbered subsections precede this output location;
                 * a later subsection would create a circular .org dependency. */
-               symbol->subsection <= as->current_subsection &&
-               symbol->fragment_anchor < as->stmt_count) {
+               symbol.subsection <= as->current_subsection &&
+               symbol.fragment_anchor < as->stmt_count) {
         MiniAsStmt *fragment = &as->stmts[as->stmt_count - 1U];
         fragment->payload.origin.mode = MINIAS_ORG_SYMBOL_ADDEND;
-        fragment->payload.origin.symbol_index = (size_t)(symbol - as->symbols);
+        fragment->payload.origin.symbol_index = symbol_index;
         fragment->payload.origin.addend = symbolic.addend;
         as->lowering->has_org_constraints = true;
     } else {
@@ -1513,13 +1513,13 @@ static bool data_references_mutable_set(MiniAs *as,const char *expr) {
             const char *start=p;
             size_t len;
             char name[256];
-            const MiniAsSymbol *sym;
+            MiniAsSymbolView sym;
             do {++p;} while(minias_expr_symbol_continue(*p));
             len=(size_t)(p-start);
             if(len>=sizeof(name))continue;
             memcpy(name,start,len);name[len]='\0';
-            sym=minias_common_context_find_symbol(as,name);
-            if(sym && sym->mutable_absolute_set)return true;
+            if(minias_common_context_find_symbol_view(as,name,&sym) &&
+               sym.mutable_absolute_set)return true;
         }else ++p;
     }
     return false;
@@ -1552,22 +1552,22 @@ static bool snapshot_mutable_data_tokens(MiniAs *as,const char *input,
                 p=end;
             }else ++p;
         }else if(minias_expr_symbol_start(*p)) {
-            char name[256];const MiniAsSymbol *sym;
+            char name[256];MiniAsSymbolView sym;
             while(minias_expr_symbol_continue(*p))++p;
             part=(size_t)(p-start);
             if(part<sizeof(name)) {
                 int n;
                 memcpy(name,start,part);name[part]='\0';
-                sym=minias_common_context_find_symbol(as,name);
-                if(sym && sym->defined && sym->mutable_absolute_set &&
-                   sym->section==MINIAS_SECTION_ABS) {
-                    if(sym->value<=INT64_MAX)
+                if(minias_common_context_find_symbol_view(as,name,&sym) &&
+                   sym.defined && sym.mutable_absolute_set &&
+                   sym.section==MINIAS_SECTION_ABS) {
+                    if(sym.value<=INT64_MAX)
                         n=snprintf(representation,sizeof(representation),
-                                   "%llu",(unsigned long long)sym->value);
+                                   "%llu",(unsigned long long)sym.value);
                     else
                         n=snprintf(representation,sizeof(representation),
                                    "-%llu",(unsigned long long)
-                                   (UINT64_MAX-sym->value+UINT64_C(1)));
+                                   (UINT64_MAX-sym.value+UINT64_C(1)));
                     if(n<0 || (size_t)n>=sizeof(representation)) {
                         free(result);return false;
                     }
@@ -2151,7 +2151,6 @@ static bool flush_literal_pools(MiniAs *as,size_t line,bool all) {
         MiniAsLiteral *entry=&as->lowering->literals[i];
         MiniAsStmt *fragment;
         MiniAsMCData *data;
-        const MiniAsSymbol *target;
         uint64_t current,pad;
         if(width_order && entry->width!=width)continue;
         if(!width_order && width!=4U)continue;
@@ -2201,12 +2200,13 @@ static bool flush_literal_pools(MiniAs *as,size_t line,bool all) {
             minias_set_error(as,"literal-pool-symbol-ref-invalid");
             minias_mcdata_destroy(data);goto failure;
         }
-        target=minias_common_context_intern_symbol(as,
-                     as->symbol_names[entry->expression.name_id].name);
-        if(target==NULL) {minias_mcdata_destroy(data);goto failure;}
+        size_t target_index;
+        if(!minias_common_context_intern_symbol_id(as,
+               as->symbol_names[entry->expression.name_id].name,
+               &target_index)) {minias_mcdata_destroy(data);goto failure;}
         data->fields[0].kind=MINIAS_MC_EXPR_SYMBOL;
         data->fields[0].has_lhs=true;
-        data->fields[0].lhs_symbol_index=(size_t)(target-as->symbols);
+        data->fields[0].lhs_symbol_index=target_index;
         data->fields[0].lhs_addend=entry->expression.addend;
         fragment->payload.fixed_data.data=data;
         if(!advance_current_location(as,entry->width))goto failure;
@@ -2314,17 +2314,17 @@ static bool flush_pending_local_commons(MiniAs *as) {
     if(!minias_layout_touch_subsection(as,bss,0U))ok=false;
     for(i=0U;ok && i<as->lowering->pending_local_common_count;++i) {
         const MiniAsPendingLocalCommon *pending=&as->lowering->pending_local_commons[i];
-        const MiniAsSymbol *symbol;
+        MiniAsLayoutSymbolView symbol;
         uint64_t here;
         char align_buf[32],size_buf[32];
-        if(pending->symbol_index>=as->symbol_count) {
+        if(!minias_common_context_layout_symbol_view(
+               as,pending->symbol_index,&symbol)) {
             minias_set_error(as,"pending-local-common-invalid-symbol");
             ok=false;break;
         }
-        symbol=&as->symbols[pending->symbol_index];
-        if(!symbol->defined || symbol->section!=bss ||
-           symbol->has_fragment_anchor) {
-            minias_set_error(as,"pending-local-common-mutated:%s",symbol->name);
+        if(!symbol.defined || symbol.section!=bss ||
+           symbol.has_fragment_anchor) {
+            minias_set_error(as,"pending-local-common-mutated:%s",symbol.name);
             ok=false;break;
         }
         minias_source_restore_site(as,pending->source_site);

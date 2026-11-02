@@ -2357,3 +2357,55 @@ Linux `.s`→GNU ld→QEMU proof remain independently pending.
 Production change: **7 C/header files, +146/−86 lines (net +60)**;
 tests, CI and docs counted separately. This is permission and ownership
 cleanup, not a claim of new ISA acceptance or full P06 completion.
+
+## 13. 2026-11-02 P06 MCExpr / MCLayout / Lowering SymbolID closure
+
+Implementation baseline: `e7d76ee9ef7cd31e429afb2a4d7820c2936e20d4`.
+The remaining pre-ELF `MiniAsSymbol *` consumers formed one dependent
+semantic chain, so they were migrated in one transaction rather than
+adding separate adapters on each call site:
+
+1. **Context retains the sole identity and alias graph.** A checked name
+   to SymbolID query, SymbolID count, and stack-local `MiniAsLayoutSymbolView`
+   expose exactly the Fragment/size anchor attributes needed by Layout and
+   Lowering. The existing general `MiniAsSymbolView` continues to serve
+   absolute expressions, fixup differences, LEB and MCData. Neither value
+   snapshot retains mutable Symbol storage; the interned name alone is a
+   stable Context-owned borrow. There is no second symbol collection.
+2. **Expression and DATA identity is always an ID.** Affine/absolute syntax,
+   unresolved external operands, deferred expressions and MCData fixed-width
+   relocation paths all use checked value queries or explicit SymbolID
+   interning. The retired `symbol_ref_lookup` and pointer-derived ID paths
+   cannot survive Symbol table growth while Target mapping symbols are
+   created.
+3. **Fragment/size anchors stay with the layout transaction.** AnchorGraph
+   construction, per-pass Jacobi candidate scans, `.org` padding, size-end
+   evaluation, relaxation spans, late LEB relocations and invariant checks
+   consume the anchor value projection. Context still commits and refreshes
+   the one alias DAG; Layout does not import its recursive ownership.
+4. **Lowering and Driver are closed at the same boundary.** Section group
+   signatures, `.size`, `.equ`, mutable `.set` token snapshots, `.org`,
+   literal pools and pending `.lcomm` use stable IDs/values. Driver's Target
+   mapping ordinal and MCData staging count use Context scalars. Driver
+   constructs and destroys each replayed session as before; the full const
+   `MiniAsSymbol[]` survives only as the deliberately borrowed terminal ELF
+   ObjectModel view. Deleted `find/intern Symbol*` API declarations and
+   definitions have no compatibility fallback.
+5. **Enforced consumer boundary.** Two positive and nine negative compile
+   cases check Context/MCLayout projections, reject alias DAG pointers and
+   writable identity, and reject entity-return assumptions. The production
+   gate rejects raw Symbol tables, old getter names and `MiniAsSymbol *`
+   declarations in six converted consumers.
+
+Local acceptance on this source: release `-Werror`; A0 **30/30** with
+RISC-V cross GNU enabled; **23** standalone Target/Source/Context gates;
+**26** four-target baseline fixtures (**18 byte-identical ELF**, **8 same
+rejections**); GNU x86/RISC-V variable MCExpr fixed-point, lexical `.set`,
+`.size` anchor, affine/overflow, CFI, ELF32/ELF64 DWARF and RV64 linker
+relax ULEB relocation checks. Original Linux kernel source/ld/QEMU and
+remote exact-head CI require separate proof after publication.
+
+Production C/header delta: **8 files, +278/−204 lines (net +74)**;
+tests and these two documents are excluded. The intent is one ownership
+boundary and removal of unsafe capability borrows, not a source-line
+count reduction or new GNU dialect coverage.

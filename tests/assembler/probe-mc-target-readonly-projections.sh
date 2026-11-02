@@ -35,7 +35,8 @@ for service in ('minias_pre_layout_fragment','minias_post_emit_fragment',
     if service+'(' not in public:
         raise SystemExit('Missing phase read service: '+service)
 if ('bool minias_project_symbol(' not in context or
-    'minias_project_symbol(minias_symbol_ref_lookup(' not in context or
+    'minias_common_context_find_symbol_id(' not in context or
+    'minias_common_context_symbol_view(as,id,out)' not in context or
     'minias_common_context_symbol_ref_view(ctx->as,ref,out)' not in emission or
     'minias_common_context_symbol_ref_view(ctx->as,ref,out)' not in layout or
     'minias_project_symbol(sym,&target_symbol)' not in writer):

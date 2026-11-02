@@ -69,6 +69,32 @@ bool minias_common_context_find_symbol_view(const MiniAs *,const char *,
 bool minias_common_context_symbol_ref_view(const MiniAs *,MiniAsSymbolRef,
                                            MiniAsSymbolView *);
 bool minias_common_context_intern_symbol_id(MiniAs *,const char *,size_t *);
+bool minias_common_context_find_symbol_id(const MiniAs *,const char *,size_t *);
+size_t minias_common_context_symbol_count(const MiniAs *);
+
+/* MCLayout alone needs retained source Fragment/size anchors. Keep this
+ * stack value separate from general Symbol semantics and Context's alias DAG;
+ * no caller borrows the reallocatable underlying entity or mutable array. */
+typedef struct MiniAsLayoutSymbolView {
+    const char *name;
+    int section;
+    uint32_t subsection;
+    uint64_t value;
+    uint64_t size;
+    uint64_t size_end_value;
+    bool defined;
+    bool has_fragment_anchor;
+    size_t fragment_anchor;
+    int64_t fragment_anchor_addend;
+    bool has_size_end_anchor;
+    size_t size_end_anchor;
+    uint32_t size_end_subsection;
+    int64_t size_end_addend;
+    bool has_size_start_symbol;
+    size_t size_start_symbol_index;
+} MiniAsLayoutSymbolView;
+bool minias_common_context_layout_symbol_view(const MiniAs *,size_t,
+                                              MiniAsLayoutSymbolView *);
 
 /* Each MCLayout work pass stages Symbol values in scratch arrays. Context
  * applies them to its one live Symbol table and refreshes its alias DAG. */

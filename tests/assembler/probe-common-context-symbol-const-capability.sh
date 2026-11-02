@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Context is the sole mutable Symbol owner. Every other Common TU borrows a
-# const projection of the ONE table; interning and lookup are distinct APIs.
+# Context is the sole mutable Symbol owner. Source/MC consumers use checked
+# SymbolID values; only the terminal ELF writer borrows original const data.
 set -Eeuo pipefail
 
 flags=(-std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow
@@ -46,14 +46,23 @@ reject old_split_semantics '
 #include "minias_internal.h"
 void old_getter(MiniAs *as) { (void)minias_get_symbol(as,"candidate",true); }
 '
+reject old_const_getter '
+#include "minias_common_context.h"
+void old_borrow(MiniAs *as) {
+    const MiniAsSymbol *symbol=minias_common_context_find_symbol(as,"candidate");
+    (void)symbol;
+}
+'
 
 printf '%s\n' '
-#include "minias_internal.h"
+#include "minias_common_context.h"
 bool valid(MiniAs *as) {
-    const MiniAsSymbol *a=minias_common_context_intern_symbol(as,"a");
-    const MiniAsSymbol *b=minias_common_context_find_symbol(as,"b");
-    if(!a || a->section!=MINIAS_SECTION_UNDEF)return false;
-    return b==NULL || b->defined;
+    size_t id;
+    MiniAsSymbolView a,b;
+    if(!minias_common_context_intern_symbol_id(as,"a",&id) ||
+       !minias_common_context_symbol_view(as,id,&a) ||
+       a.section!=MINIAS_SECTION_UNDEF)return false;
+    return !minias_common_context_find_symbol_view(as,"b",&b) || b.defined;
 }
 ' | "$compiler" "${flags[@]}"
 
@@ -64,19 +73,25 @@ import re
 root=Path('assembler/src')
 private=(root/'common_context.c').read_text()
 internal=(root/'minias_internal.h').read_text()
+api=(root/'minias_common_context.h').read_text()
 assert 'const MiniAsSymbol *symbols;' in internal
 assert 'MiniAsSymbol *symbol_records;' in private
 assert 'as->symbols=as->context_indexes->symbol_records;' in private
 assert 'context_get_symbol_mut(' in private
 assert re.search(r'\bstatic MiniAsSymbol \*context_get_symbol_mut\(',private)
-assert re.search(r'\bconst MiniAsSymbol \*minias_common_context_find_symbol\(',private)
-assert re.search(r'\bconst MiniAsSymbol \*minias_common_context_intern_symbol\(',private)
+assert re.search(r'\bbool minias_common_context_find_symbol_id\(',private)
+assert re.search(r'\bbool minias_common_context_intern_symbol_id\(',private)
+assert re.search(r'\bbool minias_common_context_layout_symbol_view\(',private)
+assert 'MiniAsLayoutSymbolView' in api
 for path in root.glob('*.[ch]'):
     text=path.read_text()
-    if 'minias_get_symbol(' in text:
-        raise SystemExit('obsolete mutable Symbol getter: '+str(path))
+    for old in ('minias_get_symbol(', 'minias_common_context_find_symbol(',
+                'minias_common_context_intern_symbol(',
+                'minias_symbol_ref_lookup('):
+        if old in text:
+            raise SystemExit('obsolete Symbol borrow: '+str(path)+' '+old)
     if path.name!='common_context.c' and 'symbol_records' in text:
         raise SystemExit('Context private Symbol allocation escaped: '+str(path))
-print('MINIAS_CONTEXT_SYMBOL_CONST=PASS negative_compiles=6 '
-      'positive_compiles=1 tables=1 getter=removed intern=Context')
+print('MINIAS_CONTEXT_SYMBOL_CONST=PASS negative_compiles=7 '
+      'positive_compiles=1 tables=1 entity_getters=removed ids=Context')
 PY

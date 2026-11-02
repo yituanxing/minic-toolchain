@@ -686,17 +686,16 @@ static MiniAsSymbol *context_get_symbol_mut(MiniAs *as, const char *name,
     return sym;
 }
 
-const MiniAsSymbol *minias_common_context_find_symbol(const MiniAs *as,
-                                                       const char *name) {
-    size_t slot=0U,index=0U;
-    if(as==NULL || as->context_indexes==NULL || name==NULL ||
-       !find_symbol_slot(as,name,&slot,&index))return NULL;
-    return &as->symbols[index];
+size_t minias_common_context_symbol_count(const MiniAs *as) {
+    return as!=NULL?as->symbol_count:0U;
 }
 
-const MiniAsSymbol *minias_common_context_intern_symbol(MiniAs *as,
-                                                         const char *name) {
-    return context_get_symbol_mut(as,name,true);
+bool minias_common_context_find_symbol_id(const MiniAs *as,
+                                          const char *name,size_t *id) {
+    size_t slot=0U;
+    if(as==NULL || as->context_indexes==NULL || name==NULL || id==NULL)
+        return false;
+    return find_symbol_slot(as,name,&slot,id);
 }
 
 bool minias_common_context_symbol_view(const MiniAs *as,size_t id,
@@ -705,20 +704,45 @@ bool minias_common_context_symbol_view(const MiniAs *as,size_t id,
     return minias_project_symbol(&as->symbols[id],out);
 }
 
+bool minias_common_context_layout_symbol_view(const MiniAs *as,size_t id,
+                                              MiniAsLayoutSymbolView *out) {
+    const MiniAsSymbol *sym;
+    if(as==NULL || out==NULL || id>=as->symbol_count)return false;
+    sym=&as->symbols[id];
+    *out=(MiniAsLayoutSymbolView){
+        .name=sym->name,.section=sym->section,
+        .subsection=sym->subsection,.value=sym->value,.size=sym->size,
+        .size_end_value=sym->size_end_value,.defined=sym->defined,
+        .has_fragment_anchor=sym->has_fragment_anchor,
+        .fragment_anchor=sym->fragment_anchor,
+        .fragment_anchor_addend=sym->fragment_anchor_addend,
+        .has_size_end_anchor=sym->has_size_end_anchor,
+        .size_end_anchor=sym->size_end_anchor,
+        .size_end_subsection=sym->size_end_subsection,
+        .size_end_addend=sym->size_end_addend,
+        .has_size_start_symbol=sym->has_size_start_symbol,
+        .size_start_symbol_index=sym->size_start_symbol_index
+    };
+    return true;
+}
+
 bool minias_common_context_find_symbol_view(const MiniAs *as,
                                             const char *name,
                                             MiniAsSymbolView *out) {
-    size_t slot=0U,id=0U;
-    if(as==NULL || as->context_indexes==NULL || name==NULL || out==NULL ||
-       !find_symbol_slot(as,name,&slot,&id))return false;
+    size_t id=0U;
+    if(!minias_common_context_find_symbol_id(as,name,&id))return false;
     return minias_common_context_symbol_view(as,id,out);
 }
 
 bool minias_common_context_symbol_ref_view(const MiniAs *as,
                                            MiniAsSymbolRef ref,
                                            MiniAsSymbolView *out) {
-    if(out==NULL)return false;
-    return minias_project_symbol(minias_symbol_ref_lookup(as,ref),out);
+    size_t id;
+    if(as==NULL || ref.name_id>=as->symbol_name_count ||
+       as->symbol_names[ref.name_id].name==NULL ||
+       !minias_common_context_find_symbol_id(
+           as,as->symbol_names[ref.name_id].name,&id))return false;
+    return minias_common_context_symbol_view(as,id,out);
 }
 
 bool minias_common_context_intern_symbol_id(MiniAs *as,const char *name,
@@ -1066,7 +1090,8 @@ bool minias_define_target_mapping_symbol(MiniAs *as, const char *stem,
             minias_set_error(as, "target-mapping-symbol-name-overflow");
             return false;
         }
-        if (minias_common_context_find_symbol(as,name) == NULL) break;
+        size_t existing_id;
+        if (!minias_common_context_find_symbol_id(as,name,&existing_id)) break;
         if (ordinal == SIZE_MAX) {
             minias_set_error(as, "target-mapping-symbol-ordinal-overflow");
             return false;
@@ -1266,14 +1291,4 @@ bool minias_bind_symbol_difference_ref(MiniAs *as,
     if(expr==NULL || ref==NULL)return false;
     return minias_bind_symbol_ref(as,&expr->positive,&ref->positive) &&
            minias_bind_symbol_ref(as,&expr->negative,&ref->negative);
-}
-
-const MiniAsSymbol *minias_symbol_ref_lookup(const MiniAs *as,
-                                             MiniAsSymbolRef ref) {
-    size_t slot=0U,index=0U;
-    const char *name;
-    if(as==NULL || ref.name_id>=as->symbol_name_count)return NULL;
-    name=as->symbol_names[ref.name_id].name;
-    if(name==NULL || !find_symbol_slot(as,name,&slot,&index))return NULL;
-    return &as->symbols[index];
 }

@@ -15,6 +15,13 @@ bool intern_symbol(MiniAs *as,const char *name,size_t *id) {
     return minias_common_context_intern_symbol_id(as,name,id);
 }
 
+bool layout_anchor(const MiniAs *as,size_t id) {
+    MiniAsLayoutSymbolView anchor;
+    return minias_common_context_layout_symbol_view(as,id,&anchor) &&
+           anchor.name!=NULL &&
+           (!anchor.has_size_end_anchor || anchor.size_end_anchor>=anchor.fragment_anchor);
+}
+
 #if defined(TRY_ALIAS_EDGE)
 size_t alias_edge(MiniAsSymbolView value) {return value.alias_target_index;}
 #elif defined(TRY_ALIAS_BASE)
@@ -29,4 +36,10 @@ void change_name(MiniAsSymbolView *value) {value->name[0]='x';}
 const MiniAsSymbol *borrow(const MiniAs *as,size_t id) {
     return minias_common_context_symbol_view(as,id,NULL);
 }
+#elif defined(TRY_LAYOUT_ALIAS_EDGE)
+size_t layout_alias(MiniAsLayoutSymbolView view) {return view.alias_target_index;}
+#elif defined(TRY_LAYOUT_ALIAS_BASE)
+const char *layout_base(MiniAsLayoutSymbolView view) {return view.alias_section_base;}
+#elif defined(TRY_LAYOUT_NAME_WRITE)
+void change_layout_name(MiniAsLayoutSymbolView *view) {view->name[0]='x';}
 #endif

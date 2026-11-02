@@ -144,17 +144,16 @@ static bool evaluate_absolute_syntax(MiniAs *as,
             break;
         case MINIAS_EXPR_SYMBOL: {
             char name[256];
-            const MiniAsSymbol *symbol;
+            MiniAsSymbolView symbol;
             if(!minias_expr_copy_symbol_name(syntax,node,name,
                                              sizeof(name)))
                 goto invalid;
-            symbol=minias_common_context_find_symbol(as,name);
-            if(!symbol || !symbol->defined ||
-               symbol->section==MINIAS_SECTION_COMMON ||
-               (symbol->section!=MINIAS_SECTION_ABS &&
-                symbol->value>(uint64_t)INT64_MAX))goto invalid;
-            if(symbol->section!=MINIAS_SECTION_ABS)*only_abs=false;
-            next=signed_from_bits(symbol->value);
+            if(!minias_common_context_find_symbol_view(as,name,&symbol) ||
+               !symbol.defined || symbol.section==MINIAS_SECTION_COMMON ||
+               (symbol.section!=MINIAS_SECTION_ABS &&
+                symbol.value>(uint64_t)INT64_MAX))goto invalid;
+            if(symbol.section!=MINIAS_SECTION_ABS)*only_abs=false;
+            next=signed_from_bits(symbol.value);
             break;
         }
         case MINIAS_EXPR_UNARY:
@@ -276,12 +275,11 @@ static bool affine_lower_syntax(MiniAs *as,const MiniAsExprSyntax *syntax,
             break;
         case MINIAS_EXPR_SYMBOL: {
             MiniAsSymbolExpr name;
-            const MiniAsSymbol *symbol;
+            MiniAsSymbolView symbol;
             if(!affine_copy_symbol(syntax,node,&name))goto invalid;
-            symbol=minias_common_context_find_symbol(as,name.name);
-            if(symbol && symbol->defined &&
-               symbol->section==MINIAS_SECTION_ABS)
-                out->constant=signed_from_bits(symbol->value);
+            if(minias_common_context_find_symbol_view(as,name.name,&symbol) &&
+               symbol.defined && symbol.section==MINIAS_SECTION_ABS)
+                out->constant=signed_from_bits(symbol.value);
             else {
                 out->symbols[0]=node;
                 out->signs[0]=1;
@@ -436,18 +434,17 @@ bool minias_parse_symbol_difference_absolute_tail(
 bool minias_resolve_symbol_difference_ref(const MiniAs *as,
                                           const MiniAsSymbolDifferenceRef *pair,
                                           int64_t *value) {
-    const MiniAsSymbol *positive,*negative;
+    MiniAsSymbolView positive,negative;
     int64_t first,second,delta;
     if(!as || !pair || !value)return false;
-    positive=minias_symbol_ref_lookup(as,pair->positive);
-    negative=minias_symbol_ref_lookup(as,pair->negative);
-    if(!positive || !negative ||
-       !positive->defined || !negative->defined ||
-       positive->section<0 || positive->section!=negative->section ||
-       positive->value>INT64_MAX || negative->value>INT64_MAX)
+    if(!minias_common_context_symbol_ref_view(as,pair->positive,&positive) ||
+       !minias_common_context_symbol_ref_view(as,pair->negative,&negative) ||
+       !positive.defined || !negative.defined ||
+       positive.section<0 || positive.section!=negative.section ||
+       positive.value>INT64_MAX || negative.value>INT64_MAX)
         return false;
-    first=(int64_t)positive->value;
-    second=(int64_t)negative->value;
+    first=(int64_t)positive.value;
+    second=(int64_t)negative.value;
     if(!minias_checked_add_i64(first,pair->positive.addend,&first) ||
        !minias_checked_add_i64(second,pair->negative.addend,&second) ||
        !checked_sub_i64(first,second,&delta))return false;
@@ -466,22 +463,23 @@ bool minias_resolve_symbol_difference_field(MiniAs *as,
                                             int section,uint64_t field_offset,
                                             int64_t *absolute,bool *has_reloc,
                                             MiniAsSymbolRef *reloc_ref) {
-    const MiniAsSymbol *positive,*negative;
+    MiniAsSymbolView positive,negative;
+    bool positive_exists;
     int64_t field_minus_negative,with_positive,addend;
     if(!as || !pair || !absolute || !has_reloc || !reloc_ref)return false;
     *has_reloc=false;
     if(minias_resolve_symbol_difference_ref(as,pair,absolute))return true;
-    positive=minias_symbol_ref_lookup(as,pair->positive);
-    negative=minias_symbol_ref_lookup(as,pair->negative);
+    positive_exists=minias_common_context_symbol_ref_view(
+        as,pair->positive,&positive);
     /* The positive SymbolID may not exist yet: a first reference to an
      * external is materialized by the fixup, never by name interning. */
-    if(!negative || !negative->defined ||
-       negative->section!=section || section<0 ||
-       (positive && positive->defined &&
-        positive->section==negative->section) ||
-       field_offset>INT64_MAX || negative->value>INT64_MAX)return false;
+    if(!minias_common_context_symbol_ref_view(as,pair->negative,&negative) ||
+       !negative.defined || negative.section!=section || section<0 ||
+       (positive_exists && positive.defined &&
+        positive.section==negative.section) ||
+       field_offset>INT64_MAX || negative.value>INT64_MAX)return false;
     if(!checked_sub_i64((int64_t)field_offset,
-                        (int64_t)negative->value,&field_minus_negative) ||
+                        (int64_t)negative.value,&field_minus_negative) ||
        !minias_checked_add_i64(field_minus_negative,
                               pair->positive.addend,&with_positive) ||
        !checked_sub_i64(with_positive,pair->negative.addend,&addend))
@@ -608,13 +606,11 @@ MiniAsDeferredExpr *minias_compile_deferred_expr(MiniAs *as,
         case MINIAS_EXPR_DOT:out->op=DEF_DOT;break;
         case MINIAS_EXPR_SYMBOL: {
             char name[256];
-            const MiniAsSymbol *symbol;
             if(!minias_expr_copy_symbol_name(&syntax,node,name,sizeof(name)))
                 goto invalid;
-            symbol=minias_common_context_intern_symbol(as,name);
-            if(!symbol)goto invalid;
             out->op=DEF_SYMBOL;
-            out->symbol_index=(size_t)(symbol-as->symbols);
+            if(!minias_common_context_intern_symbol_id(
+                   as,name,&out->symbol_index))goto invalid;
             break;
         }
         case MINIAS_EXPR_UNARY:
@@ -687,16 +683,15 @@ bool minias_evaluate_deferred_expr(const MiniAs *as,
             v=(int64_t)dot;c=1;section=dot_section;
             break;
         case DEF_SYMBOL: {
-            const MiniAsSymbol *sym;
-            if(n->symbol_index>=as->symbol_count)goto invalid;
-            sym=&as->symbols[n->symbol_index];
-            if(!sym->defined || sym->section==MINIAS_SECTION_COMMON ||
-               (sym->section!=MINIAS_SECTION_ABS &&
-                sym->value>(uint64_t)INT64_MAX))goto invalid;
-            v=signed_from_bits(sym->value);
-            if(sym->section!=MINIAS_SECTION_ABS) {
-                if(sym->section<0)goto invalid;
-                c=1;section=sym->section;
+            MiniAsSymbolView sym;
+            if(!minias_common_context_symbol_view(as,n->symbol_index,&sym) ||
+               !sym.defined || sym.section==MINIAS_SECTION_COMMON ||
+               (sym.section!=MINIAS_SECTION_ABS &&
+                sym.value>(uint64_t)INT64_MAX))goto invalid;
+            v=signed_from_bits(sym.value);
+            if(sym.section!=MINIAS_SECTION_ABS) {
+                if(sym.section<0)goto invalid;
+                c=1;section=sym.section;
             }
             break;
         }
@@ -950,25 +945,22 @@ bool minias_compile_data_mc(MiniAs *as, MiniAsStmt *stmt,
             minias_set_error(as,"unsupported-mc-expression:%s:line=%zu",
                              token,stmt->line);
         if(matched && out->kind!=MINIAS_MC_EXPR_CONSTANT) {
-            const MiniAsSymbol *symbol;
             out->lhs_addend=lhs.addend;
             if(out->kind!=MINIAS_MC_EXPR_DOT_MINUS_SYMBOL) {
-                symbol=minias_common_context_intern_symbol(as,lhs.name);
-                if(symbol==NULL)matched=false;
+                if(!minias_common_context_intern_symbol_id(
+                       as,lhs.name,&out->lhs_symbol_index))matched=false;
                 else {
                     out->has_lhs=true;
-                    out->lhs_symbol_index=(size_t)(symbol-as->symbols);
                 }
             }
             if(matched &&
                (out->kind==MINIAS_MC_EXPR_DIFFERENCE ||
                 out->kind==MINIAS_MC_EXPR_DIFFERENCE_DIV ||
                 out->kind==MINIAS_MC_EXPR_DOT_MINUS_SYMBOL)) {
-                symbol=minias_common_context_intern_symbol(as,rhs.name);
-                if(symbol==NULL)matched=false;
+                if(!minias_common_context_intern_symbol_id(
+                       as,rhs.name,&out->rhs_symbol_index))matched=false;
                 else {
                     out->has_rhs=true;
-                    out->rhs_symbol_index=(size_t)(symbol-as->symbols);
                     out->rhs_addend=rhs.addend;
                 }
             }
@@ -1017,9 +1009,12 @@ static bool emit_symbol_minus_dot(MiniAs *as,
                                   uint64_t relocation_offset,
                                   size_t symbol_index,
                                   int64_t addend) {
-    const MiniAsSymbol *target=&as->symbols[symbol_index];
+    MiniAsSymbolView target_value;
+    const MiniAsSymbolView *target=&target_value;
     bool can_add=target_supports_fixup(as,MINIAS_FIXUP_ADD,width);
     bool can_sub=target_supports_fixup(as,MINIAS_FIXUP_SUB,width);
+    if(!minias_common_context_symbol_view(as,symbol_index,&target_value))
+        return false;
 
     if (target->defined && target->section == stmt->section) {
         /* Fixed-width DATA is bit-modular, unlike a signed relocation
@@ -1093,9 +1088,13 @@ static bool emit_symbol_minus_dot_divided(
     size_t symbol_index,
     int64_t addend,
     uint64_t divisor) {
-    const MiniAsSymbol *target = &as->symbols[symbol_index];
+    MiniAsSymbolView target_value;
+    const MiniAsSymbolView *target=&target_value;
     int64_t difference;
     int64_t quotient;
+
+    if(!minias_common_context_symbol_view(as,symbol_index,&target_value))
+        return false;
 
     if (divisor == 0U || divisor > (uint64_t)INT64_MAX ||
         !target->defined ||
@@ -1125,10 +1124,12 @@ static bool emit_symbol_difference(MiniAs *as,
                                    uint64_t relocation_offset,
                                    size_t lhs_index, int64_t lhs_addend,
                                    size_t rhs_index, int64_t rhs_addend) {
-    const MiniAsSymbol *lhs = &as->symbols[lhs_index];
-    const MiniAsSymbol *rhs = &as->symbols[rhs_index];
+    MiniAsSymbolView lhs_value,rhs_value;
+    const MiniAsSymbolView *lhs=&lhs_value,*rhs=&rhs_value;
     bool can_add=target_supports_fixup(as,MINIAS_FIXUP_ADD,width);
     bool can_sub=target_supports_fixup(as,MINIAS_FIXUP_SUB,width);
+    if(!minias_common_context_symbol_view(as,lhs_index,&lhs_value) ||
+       !minias_common_context_symbol_view(as,rhs_index,&rhs_value))return false;
 
     if (lhs->defined && rhs->defined &&
         /* If both names resolve to the same real section, its load
@@ -1205,10 +1206,12 @@ static bool emit_symbol_difference_divided(MiniAs *as,
         size_t lhs_index,int64_t lhs_addend,
         size_t rhs_index,int64_t rhs_addend,uint64_t divisor,
         bool arithmetic_shift) {
-    const MiniAsSymbol *lhs=&as->symbols[lhs_index];
-    const MiniAsSymbol *rhs=&as->symbols[rhs_index];
+    MiniAsSymbolView lhs_value,rhs_value;
+    const MiniAsSymbolView *lhs=&lhs_value,*rhs=&rhs_value;
     int64_t diff;
     uint64_t result_bits;
+    if(!minias_common_context_symbol_view(as,lhs_index,&lhs_value) ||
+       !minias_common_context_symbol_view(as,rhs_index,&rhs_value))return false;
     /* A cross-section difference cannot be divided using an ELF fixup.
      * Keep the operation fail-closed rather than fabricating a value. */
     if(!lhs->defined || !rhs->defined ||
@@ -1258,7 +1261,8 @@ bool minias_emit_mc_data(MiniAs *as,const MiniAsStmt *stmt) {
     if(!minias_emission_mcdata_cursor(as,stmt,&initial_cursor))return false;
     for(i=0U;i<data->count;++i) {
         const MiniAsMCExpr *x=&data->fields[i];
-        const MiniAsSymbol *lhs=NULL,*rhs=NULL;
+        MiniAsSymbolView lhs_value,rhs_value;
+        const MiniAsSymbolView *lhs=NULL,*rhs=NULL;
         const bool needs_lhs=x->kind==MINIAS_MC_EXPR_SYMBOL ||
                              x->kind==MINIAS_MC_EXPR_SYMBOL_MINUS_DOT ||
                              x->kind==MINIAS_MC_EXPR_SYMBOL_MINUS_DOT_DIV ||
@@ -1280,20 +1284,22 @@ bool minias_emit_mc_data(MiniAs *as,const MiniAsStmt *stmt) {
             return false;
         }
         if(x->has_lhs) {
-            if(x->lhs_symbol_index>=as->symbol_count) {
+            if(!minias_common_context_symbol_view(as,x->lhs_symbol_index,
+                                                  &lhs_value)) {
                 minias_set_error(as,"mc-lhs-symbol-out-of-range:line=%zu",
                                  stmt->line);
                 return false;
             }
-            lhs=&as->symbols[x->lhs_symbol_index];
+            lhs=&lhs_value;
         }
         if(x->has_rhs) {
-            if(x->rhs_symbol_index>=as->symbol_count) {
+            if(!minias_common_context_symbol_view(as,x->rhs_symbol_index,
+                                                  &rhs_value)) {
                 minias_set_error(as,"mc-rhs-symbol-out-of-range:line=%zu",
                                  stmt->line);
                 return false;
             }
-            rhs=&as->symbols[x->rhs_symbol_index];
+            rhs=&rhs_value;
         }
         if(x->kind==MINIAS_MC_EXPR_SYMBOL) {
             if(lhs && lhs->defined && lhs->section==MINIAS_SECTION_ABS) {

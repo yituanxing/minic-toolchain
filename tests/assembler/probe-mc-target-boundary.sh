@@ -64,10 +64,13 @@ if bad:
 
 core = Path('assembler/src/minias_internal.h').read_text(encoding='utf-8')
 for api in ('minias_encode_add_elf_flags', 'minias_encode_add_fixup_ref',
-            'minias_encode_request_anchor_ref', 'minias_bind_symbol_ref',
-            'minias_symbol_ref_lookup'):
+            'minias_encode_request_anchor_ref', 'minias_bind_symbol_ref'):
     if not re.search(r'\b' + api + r'\s*\(', core):
         raise SystemExit('Missing Common transaction API: ' + api)
+context_api=Path('assembler/src/minias_common_context.h').read_text()
+if ('minias_common_context_symbol_ref_view(' not in context_api or
+    'minias_symbol_ref_lookup(' in core):
+    raise SystemExit('Old Symbol entity query survived Context value boundary')
 for legacy in ('minias_encode_add_fixup', 'minias_encode_request_anchor',
                'has_symbol_ref'):
     if re.search(r'\b' + legacy + r'\b', core):

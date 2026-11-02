@@ -477,7 +477,7 @@ void minias_layout_destroy(MiniAs *as) {
 static MiniAsAnchorGraph *build_anchor_graph(MiniAs *as) {
     MiniAsAnchorGraph *graph = (MiniAsAnchorGraph *)as->layout->anchor_graph;
     const size_t n = as->stmt_count;
-    const size_t symbols = as->symbol_count;
+    const size_t symbols = minias_common_context_symbol_count(as);
     const size_t subsections = as->layout->subsection_count;
     size_t i;
 
@@ -560,9 +560,11 @@ static MiniAsAnchorGraph *build_anchor_graph(MiniAs *as) {
         graph->statement_subsection[i] = (size_t)(sub - as->layout->subsections);
     }
     for (i = 0U; i < symbols; ++i) {
-        const MiniAsSymbol *sym = &as->symbols[i];
+        MiniAsLayoutSymbolView sym_value;
+        const MiniAsLayoutSymbolView *sym=&sym_value;
         MiniAsSubsection *sub = NULL;
         MiniAsSubsection *end_sub = NULL;
+        if(!minias_common_context_layout_symbol_view(as,i,&sym_value))goto fail;
         graph->start_next[i] = SIZE_MAX;
         graph->end_next[i] = SIZE_MAX;
         graph->symbol_subsection[i] = SIZE_MAX;
@@ -637,14 +639,15 @@ static bool org_fragment_padding(MiniAs *as, const MiniAsStmt *stmt,
         }
         target = location + stmt->payload.origin.target;
     } else if (stmt->payload.origin.mode == MINIAS_ORG_SYMBOL_ADDEND) {
-        const MiniAsSymbol *symbol;
+        MiniAsLayoutSymbolView symbol_value;
+        const MiniAsLayoutSymbolView *symbol=&symbol_value;
         const MiniAsSubsection *sub;
         uint64_t value;
-        if (stmt->payload.origin.symbol_index >= as->symbol_count) {
+        if (!minias_common_context_layout_symbol_view(
+                as,stmt->payload.origin.symbol_index,&symbol_value)) {
             minias_set_error(as,"org-symbol-index-invalid:line=%zu",stmt->line);
             return false;
         }
-        symbol = &as->symbols[stmt->payload.origin.symbol_index];
         sub = find_canonical_subsection(as,symbol->section,
                                         symbol->subsection);
         if (sub == NULL || !symbol->defined ||
@@ -717,33 +720,39 @@ static bool minias_scan_fragment_layout(MiniAs *as, bool *placement_changed) {
         for (symbol = graph->start_head[i]; symbol != SIZE_MAX;
              symbol = graph->start_next[symbol]) {
             const size_t subsection = graph->symbol_subsection[symbol];
+            MiniAsLayoutSymbolView anchor;
             if (subsection >= graph->subsection_count) {
                 minias_set_error(as, "internal:fragment-start-subsection");
                 return false;
             }
+            if(!minias_common_context_layout_symbol_view(as,symbol,&anchor))
+                return false;
             /* Jacobi-style relayout: staged subsection-local candidates
              * cannot mutate the previous Section-relative symbols seen by
              * expressions and aliases in later statements of this pass. */
             if (!add_signed_u64(as->layout->subsections[subsection].size,
-                                as->symbols[symbol].fragment_anchor_addend,
+                                anchor.fragment_anchor_addend,
                                 &graph->start_local[symbol])) {
                 minias_set_error(as,"fragment-anchor-addend-overflow:%s",
-                                 as->symbols[symbol].name);
+                                 anchor.name);
                 return false;
             }
         }
         for (symbol = graph->end_head[i]; symbol != SIZE_MAX;
              symbol = graph->end_next[symbol]) {
             const size_t subsection = graph->end_subsection[symbol];
+            MiniAsLayoutSymbolView anchor;
             if (subsection >= graph->subsection_count) {
                 minias_set_error(as, "internal:fragment-end-subsection");
                 return false;
             }
+            if(!minias_common_context_layout_symbol_view(as,symbol,&anchor))
+                return false;
             if(!add_signed_u64(as->layout->subsections[subsection].size,
-                               as->symbols[symbol].size_end_addend,
+                               anchor.size_end_addend,
                                &graph->end_local[symbol])) {
                 minias_set_error(as,"fragment-size-addend-overflow:%s",
-                                 as->symbols[symbol].name);
+                                 anchor.name);
                 return false;
             }
         }
@@ -805,9 +814,12 @@ static bool minias_scan_fragment_layout(MiniAs *as, bool *placement_changed) {
         }
     }
     for (i = 0U; i < graph->symbol_count; ++i) {
-        const MiniAsSymbol *symbol = &as->symbols[i];
+        MiniAsLayoutSymbolView symbol_value;
+        const MiniAsLayoutSymbolView *symbol=&symbol_value;
         size_t start_idx,end_idx,source;
         uint64_t start,end;
+        if(!minias_common_context_layout_symbol_view(as,i,&symbol_value))
+            return false;
         if (!symbol->has_size_end_anchor) continue;
         source=symbol->has_size_start_symbol?
                symbol->size_start_symbol_index:i;
@@ -990,15 +1002,15 @@ static bool minias_resolve_deferred_data(MiniAs *as) {
  * subsections whose serialized order differs from parser encounter order. */
 bool minias_span_has_linker_relaxation(MiniAs *as,size_t from_symbol,
                                       size_t to_symbol,bool *crosses) {
-    const MiniAsSymbol *from,*to;
+    MiniAsSymbolView from_value,to_value;
+    const MiniAsSymbolView *from=&from_value,*to=&to_value;
     uint64_t begin,end;
     size_t i;
     const MiniAsFixupSpan fixups=minias_emission_fixups(as);
-    if(as==NULL || crosses==NULL || from_symbol>=as->symbol_count ||
-       to_symbol>=as->symbol_count)return false;
+    if(as==NULL || crosses==NULL ||
+       !minias_common_context_symbol_view(as,from_symbol,&from_value) ||
+       !minias_common_context_symbol_view(as,to_symbol,&to_value))return false;
     *crosses=false;
-    from=&as->symbols[from_symbol];
-    to=&as->symbols[to_symbol];
     if(!from->defined || !to->defined || from->section<0 ||
        from->section!=to->section)return false;
     if(as->target->cfi_linker_relaxation_marker==NULL)return true;
@@ -1041,7 +1053,8 @@ bool minias_emit_deferred_leb_relocations(MiniAs *as) {
     }
     for(i=0U;i<as->stmt_count;++i) {
         const MiniAsStmt *stmt=&as->stmts[i];
-        const MiniAsSymbol *positive,*negative;
+        MiniAsSymbolView positive_value,negative_value;
+        const MiniAsSymbolView *positive=&positive_value,*negative=&negative_value;
         size_t pos_id,neg_id;
         int64_t addend;
         bool crosses=false;
@@ -1054,9 +1067,9 @@ bool minias_emit_deferred_leb_relocations(MiniAs *as) {
            !minias_deferred_symbol_difference(stmt->payload.bytes.leb_expr,
                                                &pos_id,&neg_id,&addend))
             continue;
-        if(pos_id>=as->symbol_count || neg_id>=as->symbol_count)return false;
-        positive=&as->symbols[pos_id];
-        negative=&as->symbols[neg_id];
+        if(!minias_common_context_symbol_view(as,pos_id,&positive_value) ||
+           !minias_common_context_symbol_view(as,neg_id,&negative_value))
+            return false;
         /* The Common LEB byte solver has already rejected unrelated or
          * undefined symbols; the ELF difference must retain that invariant.
          * A separate future target contract may admit cross-section pairs. */
@@ -1249,10 +1262,13 @@ static bool minias_validate_fragment_layout(MiniAs *as) {
             size_t symbol;
             for(symbol=graph->start_head[i];symbol!=SIZE_MAX;
                 symbol=graph->start_next[symbol]) {
-                const MiniAsSymbol *sym=&as->symbols[symbol];
+                MiniAsLayoutSymbolView sym_value;
+                const MiniAsLayoutSymbolView *sym=&sym_value;
                 size_t sub_index=graph->symbol_subsection[symbol];
                 MiniAsSubsection *sub;
                 uint64_t expected;
+                if(!minias_common_context_layout_symbol_view(
+                       as,symbol,&sym_value))goto done;
                 if(sub_index>=as->layout->subsection_count) {
                     minias_set_error(as,"fragment-symbol-subsection-missing:%s",
                                      sym->name);
@@ -1289,9 +1305,12 @@ static bool minias_validate_fragment_layout(MiniAs *as) {
             size_t symbol;
             for(symbol=graph->end_head[i];symbol!=SIZE_MAX;
                 symbol=graph->end_next[symbol]) {
-                const MiniAsSymbol *sym=&as->symbols[symbol];
+                MiniAsLayoutSymbolView sym_value,start_value;
+                const MiniAsLayoutSymbolView *sym=&sym_value,*start;
                 const size_t sub_index=graph->end_subsection[symbol];
                 uint64_t expected;
+                if(!minias_common_context_layout_symbol_view(
+                       as,symbol,&sym_value))goto done;
                 if(sub_index>=as->layout->subsection_count ||
                    cursor[sub_index]>UINT64_MAX-as->layout->subsections[sub_index].base) {
                     minias_set_error(as,"fragment-size-end-overflow:%s",
@@ -1305,8 +1324,12 @@ static bool minias_validate_fragment_layout(MiniAs *as) {
                                      sym->name);
                     goto done;
                 }
-                const MiniAsSymbol *start=sym->has_size_start_symbol?
-                    &as->symbols[sym->size_start_symbol_index]:sym;
+                start=sym;
+                if(sym->has_size_start_symbol) {
+                    if(!minias_common_context_layout_symbol_view(
+                           as,sym->size_start_symbol_index,&start_value))goto done;
+                    start=&start_value;
+                }
                 if(sym->size_end_value!=expected ||
                    start->value>expected ||
                    sym->size!=expected-start->value) {

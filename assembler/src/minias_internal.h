@@ -238,10 +238,9 @@ bool minias_debug_resolve_views(MiniAs *as, bool strict);
 
 int minias_find_section(const MiniAs *as, const char *name);
 int minias_ensure_section(MiniAs *as, const char *name, uint32_t type, uint64_t flags, uint64_t align);
-/* Lookup never interns. Interning is a distinct Context mutation; both
- * return read-only, short-lived borrows invalidated by later interning. */
-const MiniAsSymbol *minias_common_context_find_symbol(const MiniAs *,const char *);
-const MiniAsSymbol *minias_common_context_intern_symbol(MiniAs *,const char *);
+/* Persistent SymbolID identity and the only mutable Symbol table are owned
+ * by Context. Consumers use the checked value/ID services declared in
+ * minias_common_context.h; only terminal ELF borrows the full const array. */
 /* A Target supplies the ISA mapping kind and final section position; Common
  * exclusively owns collision-safe Object Symbol creation and definition.
  * With always_suffix=false, ordinal zero uses the bare stem. */
@@ -269,10 +268,6 @@ bool minias_resolve_symbol_difference_field(MiniAs *as,
                                             int section,uint64_t field_offset,
                                             int64_t *absolute,bool *has_reloc,
                                             MiniAsSymbolRef *reloc_ref);
-/* Borrowed; no actual Symbol is created by lookup. Pointer is invalidated
- * by any subsequent symbol-table allocation; retain NameId across passes. */
-const MiniAsSymbol *minias_symbol_ref_lookup(const MiniAs *as,
-                                             MiniAsSymbolRef ref);
 /* Shared absolute expression evaluator for target-specific operand syntax.
  * Only already-resolved numeric/.set expressions succeed: no guessing
  * relocatable values or mirroring Core symbol algorithms per backend. */

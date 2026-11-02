@@ -1,4 +1,5 @@
 #include "minias_common_emission_private.h"
+#include "minias_common_context.h"
 
 #include <stdint.h>
 #include <stdlib.h>
@@ -75,7 +76,7 @@ static bool minias_stage_common_fixup(MiniAs *as,uint64_t offset,
        (size_t)section>=as->section_count ||
        as->sections[(size_t)section].type==MINIAS_SHT_NOBITS ||
        offset<owner->offset || !minias_fixup_field_width(kind,width) ||
-       (name==NULL && symbol_index>=as->symbol_count)) {
+       (name==NULL && symbol_index>=minias_common_context_symbol_count(as))) {
         minias_set_error(as,"invalid-mcdata-fixup:line=%zu",owner->line);
         return false;
     }
@@ -213,7 +214,8 @@ bool minias_encode_request_anchor_ref(MiniAs *as,const char *prefix,
         minias_set_error(as,"encoded-anchor-name-overflow");
         return false;
     }
-    if(minias_common_context_find_symbol(as,name)!=NULL) {
+    MiniAsSymbolView existing;
+    if(minias_common_context_find_symbol_view(as,name,&existing)) {
         minias_set_error(as,"duplicate-encoded-anchor");
         return false;
     }

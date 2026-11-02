@@ -217,7 +217,8 @@ void minias_directive_set_error(MiniAsDirectiveContext *ctx,
 bool minias_cfi_mapping_define(MiniAsCfiMappingSink *sink,const char *stem,
                                bool always_suffix,int section,uint64_t offset) {
     MiniAs *as=sink->as;
-    return minias_define_target_mapping_symbol(as,stem,as->symbol_count,
+    return minias_define_target_mapping_symbol(
+        as,stem,minias_common_context_symbol_count(as),
                                                always_suffix,section,offset);
 }
 
@@ -427,7 +428,12 @@ static bool minias_finalize_target_output(
  * symbolic identity remains Context-owned and bytes remain Emission-owned. */
 static const MiniAsSymbol *minias_elf_find_symbol(const void *reader,
                                                  const char *name) {
-    return minias_common_context_find_symbol(reader,name);
+    const MiniAs *as=reader;
+    size_t id;
+    if(!minias_common_context_find_symbol_id(as,name,&id))return NULL;
+    /* The terminal ELF serializer alone receives the original const
+     * SymbolID entity array; Context still owns all mutation. */
+    return &as->symbols[id];
 }
 
 static const char *minias_elf_cu_file(const void *reader,size_t index) {
