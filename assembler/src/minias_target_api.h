@@ -702,6 +702,8 @@ typedef struct MiniAsElfObjectSpec {
     uint32_t initial_flags;
     uint16_t machine; /* 0: use Target's ELF machine. */
     bool rel_relocations; /* false: RELA; true: REL. */
+    /* Format-owned output policy, orthogonal to the Target's ISA state. */
+    bool suppress_target_attributes;
 } MiniAsElfObjectSpec;
 typedef struct MiniAsObjectSpec {
     MiniAsObjectFormat format;

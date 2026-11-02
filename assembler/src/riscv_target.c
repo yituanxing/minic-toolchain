@@ -485,7 +485,7 @@ static bool riscv_assemble_attribute(MiniAsDirectiveContext *ctx,
                                      const char *args, size_t line) {
     const char *comma = strchr(args, ',');
     const RiscvNumericAttribute *attribute = NULL;
-    const MiniAsRiscvState *state=minias_directive_target_state(ctx);
+    MiniAsRiscvState *state=minias_directive_target_state(ctx);
     char key[48], value[320], *end;
     const char *front, *back;
     size_t len;
@@ -520,6 +520,7 @@ static bool riscv_assemble_attribute(MiniAsDirectiveContext *ctx,
                                        declared, line);
             return false;
         }
+        state->source_attribute_seen = true;
         return true;
     }
     for (i = 0U; i < sizeof(riscv_numeric_attributes) /
@@ -546,7 +547,10 @@ static bool riscv_assemble_attribute(MiniAsDirectiveContext *ctx,
     if (end == value || *end != '\0' || errno == ERANGE ||
         number > UINT32_MAX)
         goto invalid;
-    return riscv_set_numeric_attribute(ctx,attribute,(unsigned)number,line);
+    if (!riscv_set_numeric_attribute(ctx,attribute,(unsigned)number,line))
+        return false;
+    state->source_attribute_seen = true;
+    return true;
 invalid:
     minias_directive_set_error(ctx,
                                "unsupported-riscv-attribute:%s:line=%zu", args, line);
@@ -728,6 +732,7 @@ static void riscv_object_attributes(MiniAsTargetABIView view, unsigned char elf_
         out->type = UINT32_C(0x70000003);
         out->data = state->target_attributes;
         out->size = state->target_attributes_size;
+        out->source_explicit = state->source_attribute_seen;
     }
 }
 

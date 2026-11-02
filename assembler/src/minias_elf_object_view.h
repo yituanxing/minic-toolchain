@@ -13,6 +13,7 @@ typedef struct MiniAsElfObjectView {
     MiniAsTargetABIView target_abi;
     uint16_t object_machine;
     bool output_rel_relocations;
+    bool suppress_target_attributes;
     uint32_t elf_flags;
 
     char error[MINIAS_MAX_ERROR];

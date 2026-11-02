@@ -24,6 +24,30 @@ for xlen in 32 64; do
             -o "$work/rv${xlen}.${order}.o" "$file"
     done
 
+    # GAS -mno-arch-attr suppresses only the generated attribute section:
+    # an explicit .attribute directive must still be retained.  Check both
+    # cases against real GNU GAS for ELF32 and ELF64.
+    printf '.text\n.globl auto_attr_probe\nauto_attr_probe:\n  nop\n' \
+        >"$work/rv${xlen}.auto.s"
+    for kind in auto ascending; do
+        "$MINIAS" --target=riscv "-march=rv${xlen}i" "-mabi=$abi" \
+            -mno-arch-attr \
+            -o "$work/rv${xlen}.${kind}.noattr-mini.o" "$work/rv${xlen}.${kind}.s"
+        riscv64-linux-gnu-as "-march=rv${xlen}i" "-mabi=$abi" \
+            -mno-arch-attr \
+            -o "$work/rv${xlen}.${kind}.noattr-gnu.o" "$work/rv${xlen}.${kind}.s"
+    done
+    if readelf -SW "$work/rv${xlen}.auto.noattr-mini.o" | \
+            grep -q '\.riscv\.attributes'; then
+        echo "MINIAS_RV_ATTRIBUTE=FAIL automatic_attr_not_suppressed xlen=$xlen" >&2
+        exit 1
+    fi
+    if readelf -SW "$work/rv${xlen}.auto.noattr-gnu.o" | \
+            grep -q '\.riscv\.attributes'; then
+        echo "MINIAS_RV_ATTRIBUTE=FAIL GNU_automatic_attr_not_suppressed xlen=$xlen" >&2
+        exit 1
+    fi
+
     # Idempotent duplicate attributes must not alter the binary.
     printf '.attribute 4,16\n.attribute 6,1\n.attribute 4,16\n.attribute 6,1\n.text\n' \
         >"$work/rv${xlen}.duplicate.s"
@@ -88,10 +112,18 @@ for xlen in (32, 64):
     path = work / f'rv{xlen}.duplicate.o'
     assert dump(path, '.riscv.attributes') == expected, xlen
     count += 1
+    actual_explicit = dump(work / f'rv{xlen}.ascending.noattr-mini.o',
+                           '.riscv.attributes')
+    golden_explicit = dump(work / f'rv{xlen}.ascending.noattr-gnu.o',
+                           '.riscv.attributes')
+    assert actual_explicit == golden_explicit, (xlen, actual_explicit.hex(),
+                                                golden_explicit.hex())
+    count += 1
     assert dump(work / f'rv{xlen}.csr.o', '.text') == \
         struct.pack('<II', 0x30402573, 0x30402573), xlen
 
 print(f'MINIAS_RV_ATTRIBUTE_SEMANTIC_STATE=PASS byte_exact={count} '
       'profiles=RV32I/RV64I orders=ascending,descending,arch_first,duplicate '
+      'no_arch_attr=auto_suppressed_explicit_retained_GNU_parity '
       'csr_constant_expr=4 conflicts_rejected=2 csr_range_rejected=2')
 PY

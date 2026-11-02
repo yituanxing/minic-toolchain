@@ -12,6 +12,9 @@ typedef struct MiniAsObjectAttribute {
     uint32_t type;
     const unsigned char *data;
     size_t size;
+    /* Explicit source .attribute survives a request to suppress only the
+     * automatically synthesized Target attribute section. */
+    bool source_explicit;
 } MiniAsObjectAttribute;
 
 /* Exactly one static, immutable ELF policy per Target. The Driver and ELF

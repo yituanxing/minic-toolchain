@@ -58,11 +58,25 @@ set -Eeuo pipefail
 args=("$@")
 opts=()
 unsupported=()
+include_dirs=()
 input= output= query=0
 for ((i=0;i<${#args[@]};++i)); do
     arg=${args[i]}
     case "$arg" in
         -march=*|-mabi=*) opts+=("$arg") ;;
+        # GNU GCC passes its C/CPP include roots through to GAS as well.
+        # The generated .s may not use GAS .include/.incbin search paths;
+        # those cases are explicitly rejected before assembling below.
+        -I)
+            if ((i+1<${#args[@]})); then
+                include_dirs+=("${args[i+1]}")
+                ((i+=1))
+            else unsupported+=("$arg"); fi ;;
+        -I?*) include_dirs+=("${arg#-I}") ;;
+        # MiniAS's ISA version inventory is fixed to the GNU 20191213
+        # canonical profile. Reject a different requested spec, don't guess.
+        -misa-spec=20191213|--traditional-format) ;;
+        -mno-arch-attr) opts+=("$arg") ;;
         --version|--help|-v) query=1 ;;
         -o) if ((i+1<${#args[@]})); then output=${args[i+1]}; ((i+=1)); fi ;;
         -o?*) output=${arg#-o} ;;
@@ -141,6 +155,12 @@ if [[ -z "$input" || -z "$output" ]]; then
     preserve_failure missing_input_or_output
     exit 2
 fi
+if ((${#include_dirs[@]})) &&
+   grep -Eq '^[[:space:]]*\.(include|incbin)([[:space:]]|$)' "$input"; then
+    echo 'MINIAS_RV32_AS=FAIL assembler_include_search_not_implemented' >&2
+    preserve_failure assembler_include_search_not_implemented
+    exit 2
+fi
 printf 'assemble cwd=%q input=%q output=%q\n' "$PWD" "$input" "$output" >>"$MINIAS_AS_TRACE"
 if "$MINIAS" "${opts[@]}" -o "$output" "$input"; then
     if [[ "$output" != /dev/null && ! -s "$output" ]]; then
@@ -217,6 +237,23 @@ if ! cmp -s "$gnu_out/.config" "$mini_out/.config"; then
 fi
 printf 'MINIAS_RV32_CONFIG_PARITY=PASS sha256=%s\n' \
   "$(sha256sum "$mini_out/.config" | cut -d' ' -f1)"
+
+# Catch real GNU-GCC-to-MiniAS production argument/ELF32 blockers on one
+# original Kbuild C owner before spending minutes rebuilding the whole GNU
+# control Image. The successful .cmd/.o stays in mini-out and participates
+# in the eventual complete provenance audit; this is not a separate fixture.
+preflight_log="$work/evidence/minias-owner-preflight.log"
+if ! make -C "$src" O="$mini_out" ARCH=riscv CROSS_COMPILE="$cross" \
+    CC="$mini_cc" AS="$mini_as" -j"$jobs" init/main.o \
+    >"$preflight_log" 2>&1; then
+    echo 'MINIAS_RV32_PREFLIGHT=FAIL authentic_owner=init/main.o' >&2
+    grep -nEi 'MINIAS_RV32_AS=|minic-as:|error:|Error [0-9]+' \
+      "$preflight_log" | head -n 60 >&2 || true
+    tail -n 65 "$preflight_log" >&2 || true
+    exit 4
+fi
+test -s "$mini_out/init/main.o"
+echo 'MINIAS_RV32_PREFLIGHT=PASS authentic_owner=init/main.o MiniAS_only=1'
 
 run_image() {
     local out=$1 cc=$2 as=$3 label=$4

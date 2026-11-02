@@ -262,7 +262,9 @@ static bool minias_write_elf(MiniAsElfObjectView *as,
         as->policy->object_attributes(as->target_abi, elf_class,
                                       &attribute);
     }
-    emit_attribute = attribute.name != NULL;
+    emit_attribute = attribute.name != NULL &&
+                     (!as->suppress_target_attributes ||
+                      attribute.source_explicit);
     if (emit_attribute && as->model.find_section(as->model.reader,attribute.name)>=0) {
         elf_object_error(as,"duplicate-target-attribute-section:%s",attribute.name);
         goto done;

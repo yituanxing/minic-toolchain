@@ -13,6 +13,7 @@ int minias_assemble_invocation(const char *input_path,
     const char *target_name = "riscv";
     const char *march = NULL;
     const char *mabi = NULL;
+    bool suppress_target_attributes = false;
     const MiniAsTargetOps *target;
     MiniAsTargetSpec config;
     char error[256] = {0};
@@ -21,6 +22,7 @@ int minias_assemble_invocation(const char *input_path,
         if (invocation->target != NULL) target_name = invocation->target;
         march = invocation->march;
         mabi = invocation->mabi;
+        suppress_target_attributes = invocation->suppress_target_attributes;
     }
     if (input_path == NULL || output_path == NULL) {
         if (diagnostic != NULL)
@@ -47,5 +49,8 @@ int minias_assemble_invocation(const char *input_path,
             fprintf(diagnostic, "minic-as: internal:profile-target-mismatch\n");
         return 2;
     }
+    /* Output-attribute suppression is an ELF format policy; Common does not
+     * decide which ISA's attributes exist or own their serialization. */
+    config.object.elf.suppress_target_attributes = suppress_target_attributes;
     return minias_assemble_config(input_path, output_path, &config, diagnostic);
 }

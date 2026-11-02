@@ -35,6 +35,7 @@ typedef struct MiniAsRiscvState {
     bool reject_raw_exec_fragments;
     unsigned strict_i_xlen;
     bool isa_explicit;
+    bool source_attribute_seen;
     unsigned target_xlen;
     MiniAsRiscvISA file_isa;
     /* The E calling convention may be selected by -mabi=ilp32e even when

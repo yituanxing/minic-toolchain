@@ -502,6 +502,8 @@ static bool minias_write_final_object(MiniAs *as,const char *path) {
     object.target_abi=minias_target_abi_view(as);
     object.object_machine=as->target_spec->object.elf.machine;
     object.output_rel_relocations=as->target_spec->object.elf.rel_relocations;
+    object.suppress_target_attributes=
+        as->target_spec->object.elf.suppress_target_attributes;
     object.elf_flags=as->elf_flags;
     object.model.reader=as;
     object.model.find_symbol_id=minias_object_find_symbol_id;
