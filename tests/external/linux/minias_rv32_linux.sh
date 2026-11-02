@@ -295,10 +295,69 @@ run_image() {
     echo "MINIAS_RV32_KBUILD=PASS lane=$label Image_ELF32=1"
 }
 
-# GNU control is independent and must boot on this exact kernel/config/QEMU
-# before a MiniAS failure can be attributed to the replacement assembler.
-run_image "$gnu_out" riscv64-linux-gnu-gcc riscv64-linux-gnu-as gnu
-RV32I_QEMU_IMAGE="$gnu_out/arch/riscv/boot/Image" \
+# The repository already has an original GNU golden built from the same
+# pinned Linux archive, original RV32 Kconfig, and exact GNU tool binaries.
+# Reusing it removes repeated GNU full kernel builds, but ONLY when every
+# recorded input and original ELF32 object's digest still agrees.  A cache
+# miss always builds the control from scratch.  Even a verified cache hit
+# MUST boot the original GNU Image under this run's actual QEMU/PID1 script.
+gnu_control_image="$gnu_out/arch/riscv/boot/Image"
+case "${RV32_GNU_GOLDEN_CACHE_HIT:-false}" in
+    true)
+        : "${RV32_GNU_GOLDEN_ROOT:?cached GNU golden root required on cache hit}"
+        golden=$(realpath "$RV32_GNU_GOLDEN_ROOT")
+        gold_out="$golden/out"
+        gold_prov="$golden/provenance"
+        baseline="$gold_prov/gcc-baseline.txt"
+        test -s "$baseline" && test -s "$gold_out/.config" && \
+          test -s "$gold_out/vmlinux" && \
+          test -s "$gold_out/arch/riscv/boot/Image" && \
+          test -s "$gold_prov/gcc-objects.sha256" && \
+          test -s "$gold_prov/full-c-objects.txt" || {
+            echo 'MINIAS_RV32_GNU_BASELINE=BLOCKED incomplete_exact_golden_cache' >&2
+            exit 5
+          }
+        cmp -s "$gold_out/.config" "$gnu_out/.config" || {
+            echo 'MINIAS_RV32_GNU_BASELINE=BLOCKED cached_original_Kconfig_mismatch' >&2
+            exit 5
+        }
+        exact_baseline() {
+            grep -Fxq "$1=$2" "$baseline" || {
+                echo "MINIAS_RV32_GNU_BASELINE=BLOCKED cache_receipt_mismatch_field=$1" >&2
+                exit 5
+            }
+        }
+        exact_baseline schema linux-gnu-exact-config-v1
+        exact_baseline linux_release "$version"
+        exact_baseline linux_archive_sha256 dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932
+        exact_baseline elf_class ELF32
+        exact_baseline isa rv32i
+        exact_baseline abi ilp32
+        exact_baseline config_sha256 "$(sha256sum "$gnu_out/.config" | cut -d' ' -f1)"
+        exact_baseline gcc_binary_sha256 "$(sha256sum "$(command -v riscv64-linux-gnu-gcc)" | cut -d' ' -f1)"
+        exact_baseline gnu_ld_binary_sha256 "$(sha256sum "$(command -v riscv64-linux-gnu-ld)" | cut -d' ' -f1)"
+        exact_baseline gnu_as_binary_sha256 "$(sha256sum "$(command -v riscv64-linux-gnu-as)" | cut -d' ' -f1)"
+        gnu_control_image="$gold_out/arch/riscv/boot/Image"
+        exact_baseline image_sha256 "$(sha256sum "$gnu_control_image" | cut -d' ' -f1)"
+        riscv64-linux-gnu-readelf -h "$gold_out/vmlinux" \
+          >"$work/evidence/gnu-vmlinux-elf.txt"
+        grep -Eq 'Class:[[:space:]]+ELF32' "$work/evidence/gnu-vmlinux-elf.txt"
+        grep -Eq 'Machine:[[:space:]]+RISC-V' "$work/evidence/gnu-vmlinux-elf.txt"
+        if ! (cd "$gold_out" && sha256sum --quiet -c "$gold_prov/gcc-objects.sha256"); then
+            echo 'MINIAS_RV32_GNU_BASELINE=BLOCKED cached_original_objects_changed' >&2
+            exit 5
+        fi
+        cp "$baseline" "$work/evidence/gnu-original-golden-receipt.txt"
+        echo 'MINIAS_RV32_GNU_BASELINE=PASS source=verified_original_GNU_cache all_objects_sha256=PASS'
+        ;;
+    false|'')
+        run_image "$gnu_out" riscv64-linux-gnu-gcc riscv64-linux-gnu-as gnu
+        echo 'MINIAS_RV32_GNU_BASELINE=PASS source=fresh_original_GNU_Kbuild'
+        ;;
+    *) echo 'MINIAS_RV32_GNU_BASELINE=BLOCKED invalid_cache_hit_flag' >&2; exit 5 ;;
+esac
+sha256sum "$gnu_control_image" >"$work/evidence/gnu-control-Image.sha256"
+RV32I_QEMU_IMAGE="$gnu_control_image" \
 RV32I_QEMU_WORK="$work/qemu-gnu" \
 RV32I_QEMU_KERNEL_PROVENANCE=gnu-gcc-gnu-as \
   bash "$repo/tools/ci/linux-rv32i-qemu-p0-v1.sh" \
@@ -334,7 +393,7 @@ fi
 # GNU-compiled ELF32/ILP32 guest. Both must pass the same exact P1 manifest,
 # 12/12 syscalls, execve and clean-powerdown checks; neither kernel's P0
 # result is sufficient for a P1 verdict.
-RV32I_QEMU_IMAGE="$gnu_out/arch/riscv/boot/Image" \
+RV32I_QEMU_IMAGE="$gnu_control_image" \
 RV32I_QEMU_WORK="$work/qemu-gnu-p1" \
 RV32I_QEMU_KERNEL_PROVENANCE=gnu-gcc-gnu-as \
 RV32I_QEMU_P1=1 \

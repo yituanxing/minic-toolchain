@@ -23,24 +23,48 @@ jobs:
           ref: ${{ github.sha }}
       - name: Install GNU cross Kbuild, RV32 QEMU, firmware and DTB tools
         shell: bash
-        timeout-minutes: 17
+        timeout-minutes: 12
         run: |
           set -Eeuo pipefail
-          # The established RV32 CI uses the primary Ubuntu mirror: Azure's
-          # apt mirror has stalled runners in this same cross/QEMU setup.
+          # The established RV32 QEMU receiver bounds stalled mirror/package
+          # operations; an unavailable runner must fail visibly, not consume
+          # the 120-minute Linux test timeout before MiniAS even runs.
           for sources in /etc/apt/apt-mirrors.txt /etc/apt/sources.list.d/ubuntu.sources; do
             if [[ -f "$sources" ]] && grep -q 'azure.archive.ubuntu.com' "$sources"; then
               sudo sed -i 's#azure.archive.ubuntu.com#archive.ubuntu.com#g' "$sources"
             fi
           done
-          timeout 120s sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 update -qq
-          timeout 600s sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 \
+          timeout 100s sudo apt-get -o Acquire::Retries=2 \
+            -o Acquire::http::Timeout=30 update -qq
+          timeout 480s sudo apt-get -o Acquire::Retries=2 \
+            -o Acquire::http::Timeout=30 -o DPkg::Lock::Timeout=60 \
             install -y --no-install-recommends \
             gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
             bc bison flex libssl-dev libelf-dev make curl xz-utils cpio gzip \
             qemu-system-misc opensbi device-tree-compiler
           command -v qemu-system-riscv32
           test -s /usr/lib/riscv32-linux-gnu/opensbi/generic/fw_dynamic.bin
+      - name: Identify identical original GNU ELF32 baseline by pinned config and tool bytes
+        id: golden
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          # Same original Linux 6.6.143 RV32 Kconfig as the preexisting
+          # independent GNU golden. The driver later compares real .config
+          # bytes and verifies the cached object's complete SHA manifest.
+          cfg=4c6c19f79741a8a31ec52ad57b1a6bc56b81dd6996cbf5e1bdc63f587d85244c
+          gcc=$(sha256sum "$(command -v riscv64-linux-gnu-gcc)" | cut -c1-16)
+          ld=$(sha256sum "$(command -v riscv64-linux-gnu-ld)" | cut -c1-16)
+          as=$(sha256sum "$(command -v riscv64-linux-gnu-as)" | cut -c1-16)
+          echo "key=linux-gnu-golden-rv32i-v1-6.6.143-$cfg-$gcc-$ld-$as" >>"$GITHUB_OUTPUT"
+      - name: Restore exact independent GNU RV32 control (if present)
+        id: original
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            build/rv32i-linux-entry/out
+            build/rv32i-linux-entry/provenance
+          key: ${{ steps.golden.outputs.key }}
       - name: Build exact-head MiniAS
         shell: bash
         run: |
@@ -55,6 +79,8 @@ jobs:
           WORK_DIR: ${{ github.workspace }}/build/minias-linux-rv32
           LINUX_VERSION: 6.6.143
           MINIAS_RV32_P1: '1'
+          RV32_GNU_GOLDEN_CACHE_HIT: ${{ steps.original.outputs.cache-hit }}
+          RV32_GNU_GOLDEN_ROOT: ${{ github.workspace }}/build/rv32i-linux-entry
         run: bash tests/external/linux/minias_rv32_linux.sh
       - name: Preserve original GNU baseline, MiniAS traces, Kconfig and guest proof
         if: always()
