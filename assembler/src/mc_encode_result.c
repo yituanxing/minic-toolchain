@@ -213,7 +213,7 @@ bool minias_encode_request_anchor_ref(MiniAs *as,const char *prefix,
         minias_set_error(as,"encoded-anchor-name-overflow");
         return false;
     }
-    if(minias_get_symbol(as,name,false)!=NULL) {
+    if(minias_common_context_find_symbol(as,name)!=NULL) {
         minias_set_error(as,"duplicate-encoded-anchor");
         return false;
     }

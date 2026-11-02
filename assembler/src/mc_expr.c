@@ -144,11 +144,11 @@ static bool evaluate_absolute_syntax(MiniAs *as,
             break;
         case MINIAS_EXPR_SYMBOL: {
             char name[256];
-            MiniAsSymbol *symbol;
+            const MiniAsSymbol *symbol;
             if(!minias_expr_copy_symbol_name(syntax,node,name,
                                              sizeof(name)))
                 goto invalid;
-            symbol=minias_get_symbol(as,name,false);
+            symbol=minias_common_context_find_symbol(as,name);
             if(!symbol || !symbol->defined ||
                symbol->section==MINIAS_SECTION_COMMON ||
                (symbol->section!=MINIAS_SECTION_ABS &&
@@ -276,9 +276,9 @@ static bool affine_lower_syntax(MiniAs *as,const MiniAsExprSyntax *syntax,
             break;
         case MINIAS_EXPR_SYMBOL: {
             MiniAsSymbolExpr name;
-            MiniAsSymbol *symbol;
+            const MiniAsSymbol *symbol;
             if(!affine_copy_symbol(syntax,node,&name))goto invalid;
-            symbol=as!=NULL?minias_get_symbol(as,name.name,false):NULL;
+            symbol=minias_common_context_find_symbol(as,name.name);
             if(symbol && symbol->defined &&
                symbol->section==MINIAS_SECTION_ABS)
                 out->constant=signed_from_bits(symbol->value);
@@ -608,10 +608,10 @@ MiniAsDeferredExpr *minias_compile_deferred_expr(MiniAs *as,
         case MINIAS_EXPR_DOT:out->op=DEF_DOT;break;
         case MINIAS_EXPR_SYMBOL: {
             char name[256];
-            MiniAsSymbol *symbol;
+            const MiniAsSymbol *symbol;
             if(!minias_expr_copy_symbol_name(&syntax,node,name,sizeof(name)))
                 goto invalid;
-            symbol=minias_get_symbol(as,name,true);
+            symbol=minias_common_context_intern_symbol(as,name);
             if(!symbol)goto invalid;
             out->op=DEF_SYMBOL;
             out->symbol_index=(size_t)(symbol-as->symbols);
@@ -950,10 +950,10 @@ bool minias_compile_data_mc(MiniAs *as, MiniAsStmt *stmt,
             minias_set_error(as,"unsupported-mc-expression:%s:line=%zu",
                              token,stmt->line);
         if(matched && out->kind!=MINIAS_MC_EXPR_CONSTANT) {
-            MiniAsSymbol *symbol;
+            const MiniAsSymbol *symbol;
             out->lhs_addend=lhs.addend;
             if(out->kind!=MINIAS_MC_EXPR_DOT_MINUS_SYMBOL) {
-                symbol=minias_get_symbol(as,lhs.name,true);
+                symbol=minias_common_context_intern_symbol(as,lhs.name);
                 if(symbol==NULL)matched=false;
                 else {
                     out->has_lhs=true;
@@ -964,7 +964,7 @@ bool minias_compile_data_mc(MiniAs *as, MiniAsStmt *stmt,
                (out->kind==MINIAS_MC_EXPR_DIFFERENCE ||
                 out->kind==MINIAS_MC_EXPR_DIFFERENCE_DIV ||
                 out->kind==MINIAS_MC_EXPR_DOT_MINUS_SYMBOL)) {
-                symbol=minias_get_symbol(as,rhs.name,true);
+                symbol=minias_common_context_intern_symbol(as,rhs.name);
                 if(symbol==NULL)matched=false;
                 else {
                     out->has_rhs=true;

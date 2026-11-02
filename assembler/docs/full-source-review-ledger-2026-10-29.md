@@ -7,6 +7,54 @@
 > 和早期测试文件数量，均不能自动当作最新 HEAD 的事实。
 > “读过 / 修改过 / 完成清理”必须分别统计。
 
+### 2026-11-02 P06 compiler-enforced Symbol const capability
+
+**Exact prior published head:** `bc2a6bb39c68bc013c3243b48649ae801f3bd76e`
+on Draft PR #667. All four relevant exact-head workflows were SUCCESS:
+MiniAS Target ISA ABI (RV/native + AArch64 link/QEMU), MiniAS x86/Loong
+GNU/Four-Target, MiniC Native Strict and MiniC Four-Architecture Runtime.
+The corresponding Source/Context/synthetic Symbol owner gates passed on
+that remote SHA.
+
+1. **One mutable allocation, one read-only view.** The opaque Context
+   index state alone holds `MiniAsSymbol *symbol_records` and its capacity.
+   `MiniAs.symbols` publishes a `const MiniAsSymbol *` to the very same
+   allocation after every successful growth. Context alone updates values,
+   bindings, aliases and anchors. Existing stable SymbolIDs and the sole
+   alias DAG remain unchanged; no persistent mirror or copying projection
+   was added. Interned symbol spelling and alias section names are const
+   through the borrowed Symbol record, too.
+2. **Remove the overloaded old getter.** The old mutable
+   `minias_get_symbol(as,name,create)` entry and its public declaration
+   are gone. Every caller across Lowering, MCExpr, Emission, MCEncode,
+   Driver and ELF was migrated to an explicit `find` (no mutation) or
+   `intern` (Context-owned allocation), with *const-only* returned borrows.
+   Context's mutable `context_get_symbol_mut` is `static`; other Common
+   translation units cannot inspect `MiniAsContextIndexState` storage.
+3. **Compiler proof, not just grep.** Six deliberate negative C11 builds
+   must reject Symbol field writes, name/alias-name byte writes, private
+   Context access, an attempt to regain a mutable result, and the
+   deleted getter; one valid const find/intern consumer must compile.
+   The older ownership gate still examines all 25 production C units,
+   and the P06 owner declaration gate now recognizes the new private
+   getter and two public const capabilities.
+
+**Production source delta against `bc2a6bb3`:** eight modified
+`assembler/src` files, **+101/-74**, net **+27** lines; tests, CI
+workflow and this ledger counted separately.
+
+**Independent local proof:** strict Release `-Werror` MiniAS A0
+**30/30 PASS**, independent old/new **26 four-target fixtures with 18
+byte-identical ELF and eight matching rejects**, GNU 2048 alias DAG with
+branch-relayout `st_size` and explicit zero/eleven order exact; Source
+replay and stable rebind PASS; Context/Emission owner, Symbol all-TU
+owner, new six-negative-one-positive const boundary and synthetic owner
+gates PASS. A newly published exact-head remote CI result is required
+separately. Remaining design debt includes broad read-only Section
+borrows and eventual opaque SymbolID-only APIs for consumers that do
+not actually need the full record; this batch enforces *immutability*,
+not opacity.
+
 ### 2026-11-02 P06 entire Symbol lifecycle committed by Common Context
 
 **Exact previous published head:** `0ccb65f85f16487e94c981550902039dc6f66505`

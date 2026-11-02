@@ -47,7 +47,7 @@ typedef struct MiniAsSectionState {
 } MiniAsSectionState;
 
 typedef struct MiniAsSymbol {
-    char *name;
+    const char *name;
     int section;
     uint64_t value;
     uint64_t size;
@@ -73,7 +73,7 @@ typedef struct MiniAsSymbol {
     bool has_alias_dependency;
     int64_t alias_addend;
     size_t alias_line;
-    char *alias_section_base;
+    const char *alias_section_base;
     bool has_fragment_anchor;
     size_t fragment_anchor;
     int64_t fragment_anchor_addend;
@@ -157,7 +157,9 @@ typedef struct MiniAs {
     const struct MiniAsTargetOps *target;
     MiniAsSection *sections;
     size_t section_count;
-    MiniAsSymbol *symbols;
+    /* Borrowed read-only view of Context's ONE SymbolID array. Its mutable
+     * allocation lives only in the opaque Context index owner. */
+    const MiniAsSymbol *symbols;
     size_t symbol_count;
     MiniAsInternedSymbolName *symbol_names;
     size_t symbol_name_count;
@@ -236,7 +238,10 @@ bool minias_write_elf32(MiniAs *as, const char *path);
 
 int minias_find_section(const MiniAs *as, const char *name);
 int minias_ensure_section(MiniAs *as, const char *name, uint32_t type, uint64_t flags, uint64_t align);
-MiniAsSymbol *minias_get_symbol(MiniAs *as, const char *name, bool create);
+/* Lookup never interns. Interning is a distinct Context mutation; both
+ * return read-only, short-lived borrows invalidated by later interning. */
+const MiniAsSymbol *minias_common_context_find_symbol(const MiniAs *,const char *);
+const MiniAsSymbol *minias_common_context_intern_symbol(MiniAs *,const char *);
 /* A Target supplies the ISA mapping kind and final section position; Common
  * exclusively owns collision-safe Object Symbol creation and definition.
  * With always_suffix=false, ordinal zero uses the bare stem. */

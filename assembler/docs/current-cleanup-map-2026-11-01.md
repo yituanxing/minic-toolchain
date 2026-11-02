@@ -1,5 +1,19 @@
 # MiniAS 当前清理与所有权总览（2026-11-01）
 
+> **2026-11-02 P06 Symbol 编译期只读边界（基于已发布
+> `bc2a6bb3`）：** 上一批已统一 Symbol 语义写入，这一批连同
+> 25 个生产翻译单元的读路径与所有创建路径一起迁移。唯一可写
+> Symbol 向量现归 Context 私有 `symbol_records` 持有；共享
+> `MiniAs.symbols` 只是同一块内存的 `const MiniAsSymbol *` 视图，
+> 名字与 alias section base 也只读。不复制实体、不造缓存图。
+> 旧 `minias_get_symbol(name,create)` 已删除，分成只读查找与
+> 由 Context 实施的显式 intern，两者都只返回 const 借用。
+> 负向编译门禁覆盖六种非法写入/私有访问/旧接口，另有正向查询；
+> 全生产编译、四架构旧新对象差分及 GNU alias 大小回归通过。
+> 待本批远端 exact-head CI 验证后再确认全目标成功。后续余项
+> 为 Section 借用/Target 最后权限、ISA 现场配置与对象格式扩展，
+> **不把只读 Symbol 记录等同于完全 opaque SymbolID 值视图。**
+
 > **2026-11-02 P06 Symbol 语义所有权整批收口（基于已发布
 > `0ccb65f8`）：** Common Lowering 中的九类 Symbol 定义/声明操作、
 > MCLayout 的每轮 Fragment 锚点与最终大小提交，以及 CFI、DWARF、
@@ -10,10 +24,11 @@
 > 新的全生产 TU 所有权门禁和合成符号门禁纳入 Target 工作流。
 > GNU 验证发现并覆盖分支松弛导致别名 `st_size` 过期的旧缺陷，
 > `.size alias,0/11`、别名前后定义顺序以及动态大小锚已按
-> GNU 精确对象对照。**当前仍保留 Common 内部可写
-> `MiniAsSymbol` 记录/`minias_get_symbol` 读借用，尚未完成
-> 编译期的 const/ID 查询硬隔离；也未宣称 P04/P06 全部结束。**
-> 本批 exact-head 远端结果应以新推送的 SHA 为准。
+> GNU 精确对象对照。**在 `bc2a6bb3` 这一 SHA 上仍保留 Common
+> 内部可写 `MiniAsSymbol` 记录与旧 `minias_get_symbol` 借用；
+> 后续只读边界见上段，P04/P06 仍未整体结束。**
+> 本批 `bc2a6bb3` 的 Target ISA ABI、x86/Loong GNU/Four-Target、
+> MiniC Native Strict、MiniC Four-Architecture Runtime 均 SUCCESS。
 
 > **2026-11-02 P06 Section 元数据归属后续：** 解析期
 > Section 对齐、首次 `.section` 的 `sh_entsize` 与 GNU `.ident`
@@ -149,9 +164,10 @@
   本批进一步关闭可写 Subsection、raw Fixup/pattern 和 bootstrap
   alignment 外泄。**本轮已完成 Symbol 语义写入集中到 Context：**
   前端、Layout、CFI/DWARF、MCExpr、Emission 不再直接修改 Symbol；
-  仍待把 Common 消费者的可写 `MiniAsSymbol *` 读借用收成 const/
-  SymbolID 查询接口，并清点余下 Section 宽借用。每批删除原实现
-  而非留下桥接双路径。
+  **本批进一步把唯一可写 Symbol 数组收归 Context 私有，外部
+  const 借用及查找/intern 分离均完成。**仍待清点余下 Section
+  宽借用和可进一步收成纯 SymbolID 值查询的消费者，每批删除
+  原实现而非留下桥接双路径。
 - [x] **Fragment 负载类型化**：按 FragmentKind 收窄
   `MiniAsStmt` 的 DATA/ALIGN/ORG/INSTRUCTION 等专属 payload；
   Parser/Layout/Emitter/Target/SourceGraph 整批迁移，删除旧字段，

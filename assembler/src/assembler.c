@@ -398,7 +398,7 @@ bool minias_source_target_evaluate_if(const MiniAs *as,
 }
 
 bool minias_common_source_symbol_defined(MiniAs *as,const char *name) {
-    const MiniAsSymbol *symbol=minias_get_symbol(as,name,false);
+    const MiniAsSymbol *symbol=minias_common_context_find_symbol(as,name);
     return symbol!=NULL && (symbol->defined || symbol->alias_pending);
 }
 

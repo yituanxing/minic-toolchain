@@ -70,7 +70,7 @@ static bool minias_record_fixup(MiniAs *as,
                       MiniAsFixupOrigin origin,bool absolute_zero_symbol,
                       bool prefer_section_symbol,
                       size_t retained_fragment_id) {
-    MiniAsSymbol *symbol=NULL;
+    const MiniAsSymbol *symbol=NULL;
     MiniAsFixup *fixup;
     size_t symbol_index;
     uint32_t relative_offset = 0U;
@@ -144,7 +144,7 @@ static bool minias_record_fixup(MiniAs *as,
             minias_set_error(as, "missing-fixup-symbol");
             return false;
         }
-        symbol = minias_get_symbol(as, symbol_name, true);
+        symbol = minias_common_context_intern_symbol(as,symbol_name);
     }
     if (!absolute_zero_symbol && symbol == NULL) return false;
     if (!absolute_zero_symbol)symbol_index = (size_t)(symbol - as->symbols);
@@ -290,7 +290,7 @@ static bool minias_commit_encode_result(MiniAs *as, const MiniAsStmt *owner) {
         const char *name=request->name_id < as->symbol_name_count
             ? as->symbol_names[request->name_id].name : NULL;
         if (name==NULL ||
-            minias_get_symbol(as,name,false) != NULL) {
+            minias_common_context_find_symbol(as,name) != NULL) {
             minias_set_error(as, "invalid-encoded-anchor:line=%zu",
                              owner->line);
             return false;

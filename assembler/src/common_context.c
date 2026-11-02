@@ -13,6 +13,7 @@ struct MiniAsContextIndexState {
     size_t *section_slots;
     size_t section_slot_capacity;
     size_t symbol_capacity;
+    MiniAsSymbol *symbol_records; /* same allocation as as->symbols */
     size_t *symbol_slots;
     size_t symbol_slot_capacity;
     size_t symbol_name_capacity;
@@ -66,10 +67,10 @@ void minias_common_context_destroy_sections(MiniAs *as) {
 void minias_common_context_destroy_symbols(MiniAs *as) {
     size_t i;
     for (i = 0U; i < as->symbol_count; ++i) {
-        free(as->symbols[i].name);
-        free(as->symbols[i].alias_section_base);
+        free((void *)as->symbols[i].name);
+        free((void *)as->symbols[i].alias_section_base);
     }
-    free(as->symbols);
+    if(as->context_indexes!=NULL)free(as->context_indexes->symbol_records);
     if(as->context_indexes!=NULL)free(as->context_indexes->symbol_slots);
     for (i = 0U; i < as->symbol_name_count; ++i)
         free(as->symbol_names[i].name);
@@ -86,7 +87,7 @@ void minias_common_context_destroy_symbols(MiniAs *as) {
  * This has no ISA knowledge: section-relative aliases and section-cancelled
  * absolute aliases share the same dependency graph and overflow contract. */
 static bool resolve_symbol_alias_edge(MiniAs *as, size_t alias_id) {
-    MiniAsSymbol *alias = &as->symbols[alias_id];
+    MiniAsSymbol *alias = &as->context_indexes->symbol_records[alias_id];
     const MiniAsSymbol *target = &as->symbols[alias->alias_target_index];
     uint64_t value = target->value;
 
@@ -177,7 +178,7 @@ static bool minias_refresh_symbol_aliases(MiniAs *as) {
     }
     for (i = 0U; i < count; ++i) {
         if (as->symbols[i].has_alias_dependency)
-            as->symbols[i].alias_pending = true;
+            as->context_indexes->symbol_records[i].alias_pending = true;
     }
     for (i = 0U; i < count; ++i) {
         size_t cursor = i;
@@ -238,7 +239,7 @@ bool minias_common_context_commit_local_symbol_anchors(
      * size. Commit ONLY phase-local positions into the original SymbolIDs.
      * The next Context finalizer adds current subsection bases once. */
     for(i=0U;i<plan->symbol_count;++i) {
-        MiniAsSymbol *symbol=&as->symbols[i];
+        MiniAsSymbol *symbol=&as->context_indexes->symbol_records[i];
         if(symbol->has_size_end_anchor)
             symbol->size=plan->size_candidate[i];
         if(!symbol->has_fragment_anchor || !symbol->defined ||
@@ -261,7 +262,7 @@ bool minias_common_context_finalize_symbol_layout(
         return false;
     }
     for(i=0U;i<as->symbol_count;++i) {
-        MiniAsSymbol *symbol=&as->symbols[i];
+        MiniAsSymbol *symbol=&as->context_indexes->symbol_records[i];
         uint64_t base;
         /* Alias values are owned by the dependency resolver below. Their
          * previous Section-relative values must not get another base. */
@@ -286,7 +287,7 @@ bool minias_common_context_finalize_symbol_layout(
     }
     if(!minias_refresh_symbol_aliases(as))return false;
     for(i=0U;i<as->symbol_count;++i) {
-        MiniAsSymbol *symbol=&as->symbols[i];
+        MiniAsSymbol *symbol=&as->context_indexes->symbol_records[i];
         const MiniAsSymbol *start;
         if(!symbol->has_size_end_anchor ||
            !symbol->has_size_start_symbol)continue;
@@ -626,7 +627,8 @@ static bool find_symbol_slot(const MiniAs *as,
     return false;
 }
 
-MiniAsSymbol *minias_get_symbol(MiniAs *as, const char *name, bool create) {
+static MiniAsSymbol *context_get_symbol_mut(MiniAs *as, const char *name,
+                                            bool create) {
     size_t slot = 0U;
     size_t index = 0U;
     MiniAsSymbol *sym;
@@ -636,7 +638,7 @@ MiniAsSymbol *minias_get_symbol(MiniAs *as, const char *name, bool create) {
     }
 
     if (find_symbol_slot(as, name, &slot, &index)) {
-        return &as->symbols[index];
+        return &as->context_indexes->symbol_records[index];
     }
     if (!create) {
         return NULL;
@@ -651,17 +653,20 @@ MiniAsSymbol *minias_get_symbol(MiniAs *as, const char *name, bool create) {
             return NULL;
         }
         if (find_symbol_slot(as, name, &slot, &index)) {
-            return &as->symbols[index];
+            return &as->context_indexes->symbol_records[index];
         }
     }
-    if (!minias_grow_array((void **)&as->symbols,
+    if (!minias_grow_array((void **)&as->context_indexes->symbol_records,
                     &as->context_indexes->symbol_capacity,
                     sizeof(*as->symbols),
                     as->symbol_count + 1U)) {
         minias_set_error(as, "out-of-memory:symbol");
         return NULL;
     }
-    sym = &as->symbols[as->symbol_count];
+    /* Reallocation can move the sole table; publish its const projection
+     * immediately, including the failed-name case below. */
+    as->symbols=as->context_indexes->symbol_records;
+    sym = &as->context_indexes->symbol_records[as->symbol_count];
     memset(sym, 0, sizeof(*sym));
     sym->name = minias_strdup(name);
     if (sym->name == NULL) {
@@ -677,11 +682,24 @@ MiniAsSymbol *minias_get_symbol(MiniAs *as, const char *name, bool create) {
     return sym;
 }
 
+const MiniAsSymbol *minias_common_context_find_symbol(const MiniAs *as,
+                                                       const char *name) {
+    size_t slot=0U,index=0U;
+    if(as==NULL || as->context_indexes==NULL || name==NULL ||
+       !find_symbol_slot(as,name,&slot,&index))return NULL;
+    return &as->symbols[index];
+}
+
+const MiniAsSymbol *minias_common_context_intern_symbol(MiniAs *as,
+                                                         const char *name) {
+    return context_get_symbol_mut(as,name,true);
+}
+
 bool minias_common_context_declare_symbol_binding(MiniAs *as,const char *name,
                                                   bool update_binding,uint8_t bind,
                                                   bool update_visibility,
                                                   uint8_t visibility) {
-    MiniAsSymbol *symbol=minias_get_symbol(as,name,true);
+    MiniAsSymbol *symbol=context_get_symbol_mut(as,name,true);
     if(symbol==NULL)return false;
     if(update_binding && !(bind==MINIAS_STB_LOCAL && symbol->defined &&
                            symbol->section==MINIAS_SECTION_COMMON)) {
@@ -696,7 +714,7 @@ bool minias_common_context_declare_symbol_binding(MiniAs *as,const char *name,
 bool minias_common_context_declare_symbol_type(MiniAs *as,const char *name,
                                                uint8_t type,bool force_binding,
                                                uint8_t binding) {
-    MiniAsSymbol *symbol=minias_get_symbol(as,name,true);
+    MiniAsSymbol *symbol=context_get_symbol_mut(as,name,true);
     if(symbol==NULL)return false;
     symbol->type=type;
     if(force_binding)symbol->bind=binding;
@@ -705,7 +723,7 @@ bool minias_common_context_declare_symbol_type(MiniAs *as,const char *name,
 
 bool minias_common_context_declare_symbol_size(MiniAs *as,const char *name,
                                                uint64_t size) {
-    MiniAsSymbol *symbol=minias_get_symbol(as,name,true);
+    MiniAsSymbol *symbol=context_get_symbol_mut(as,name,true);
     if(symbol==NULL)return false;
     symbol->size=size;
     symbol->has_explicit_size=size!=0U;
@@ -722,7 +740,7 @@ bool minias_common_context_capture_symbol_size_end(MiniAs *as,
         if(as!=NULL)minias_set_error(as,"invalid-symbol-size-end-id");
         return false;
     }
-    symbol=&as->symbols[symbol_id];
+    symbol=&as->context_indexes->symbol_records[symbol_id];
     if(!symbol->defined || !as->symbols[start_id].defined ||
        symbol->section!=as->symbols[start_id].section) {
         minias_set_error(as,"invalid-symbol-size-end-state");
@@ -750,7 +768,7 @@ bool minias_common_context_define_source_fragment_anchor(MiniAs *as,
         if(as!=NULL)minias_set_error(as,"invalid-source-symbol-anchor");
         return false;
     }
-    symbol=minias_get_symbol(as,name,true);
+    symbol=context_get_symbol_mut(as,name,true);
     if(symbol==NULL)return false;
     if(symbol->defined || symbol->alias_pending || symbol->named_dwarf_view) {
         minias_set_error(as,"duplicate-symbol:%s:line=%zu",name,line);
@@ -772,7 +790,7 @@ bool minias_common_context_define_source_fragment_anchor(MiniAs *as,
 
 bool minias_common_context_assign_symbol_absolute(MiniAs *as,const char *name,
              uint64_t bits,MiniAsAbsoluteAssignKind kind,size_t line) {
-    MiniAsSymbol *symbol=minias_get_symbol(as,name,true);
+    MiniAsSymbol *symbol=context_get_symbol_mut(as,name,true);
     if(symbol==NULL)return false;
     if(symbol->named_dwarf_view)goto duplicate;
     switch(kind) {
@@ -833,7 +851,7 @@ bool minias_common_context_bind_symbol_alias(MiniAs *as,const char *name,
             return false;
         }
     }
-    symbol=minias_get_symbol(as,name,true);
+    symbol=context_get_symbol_mut(as,name,true);
     if(symbol==NULL) {
         free(base_copy);
         return false;
@@ -863,7 +881,7 @@ bool minias_common_context_declare_common(MiniAs *as,const char *name,
     if(as==NULL || out==NULL || alignment==0U ||
        (alignment&(alignment-1U))!=0U || name==NULL)return false;
     *out=(MiniAsCommonDeclaration){0};
-    symbol=minias_get_symbol(as,name,true);
+    symbol=context_get_symbol_mut(as,name,true);
     if(symbol==NULL)return false;
     if(symbol->named_dwarf_view || symbol->alias_pending ||
        symbol->type==MINIAS_STT_FUNC ||
@@ -911,7 +929,7 @@ bool minias_common_context_finish_local_common(MiniAs *as,size_t symbol_id,
         if(as!=NULL)minias_set_error(as,"pending-local-common-invalid-symbol");
         return false;
     }
-    symbol=&as->symbols[symbol_id];
+    symbol=&as->context_indexes->symbol_records[symbol_id];
     if(!symbol->defined || symbol->section!=bss_section ||
        symbol->has_fragment_anchor) {
         minias_set_error(as,"pending-local-common-mutated:%s",symbol->name);
@@ -934,7 +952,7 @@ bool minias_common_context_define_output_anchor(MiniAs *as,const char *name,
         if(as!=NULL)minias_set_error(as,"invalid-final-symbol-anchor");
         return false;
     }
-    symbol=minias_get_symbol(as,name,true);
+    symbol=context_get_symbol_mut(as,name,true);
     if(symbol==NULL)return false;
     if(symbol->defined || symbol->alias_pending || symbol->named_dwarf_view) {
         minias_set_error(as,"duplicate-final-symbol-anchor:%s",name);
@@ -954,7 +972,7 @@ bool minias_common_context_reserve_named_dwarf_view(MiniAs *as,
                        const char *name,size_t *id_out) {
     MiniAsSymbol *symbol;
     if(as==NULL || name==NULL || id_out==NULL)return false;
-    symbol=minias_get_symbol(as,name,true);
+    symbol=context_get_symbol_mut(as,name,true);
     if(symbol==NULL || symbol->defined || symbol->alias_pending ||
        symbol->named_dwarf_view)return false;
     symbol->named_dwarf_view=true;
@@ -970,7 +988,7 @@ bool minias_common_context_publish_dwarf_view(MiniAs *as,size_t id,
         if(as!=NULL)minias_set_error(as,"dwarf-view-invalid-symbol");
         return false;
     }
-    symbol=&as->symbols[id];
+    symbol=&as->context_indexes->symbol_records[id];
     symbol->defined=true;
     symbol->section=MINIAS_SECTION_ABS;
     symbol->subsection=0U;
@@ -984,7 +1002,7 @@ bool minias_common_context_bind_fixup_reference(MiniAs *as,size_t id) {
         if(as!=NULL)minias_set_error(as,"invalid-fixup-symbol-id:%zu",id);
         return false;
     }
-    symbol=&as->symbols[id];
+    symbol=&as->context_indexes->symbol_records[id];
     if(!symbol->defined && symbol->bind==MINIAS_STB_LOCAL &&
        !symbol->explicit_local_binding &&
        strncmp(symbol->name,".L",2U)!=0)
@@ -1012,14 +1030,14 @@ bool minias_define_target_mapping_symbol(MiniAs *as, const char *stem,
             minias_set_error(as, "target-mapping-symbol-name-overflow");
             return false;
         }
-        if (minias_get_symbol(as, name, false) == NULL) break;
+        if (minias_common_context_find_symbol(as,name) == NULL) break;
         if (ordinal == SIZE_MAX) {
             minias_set_error(as, "target-mapping-symbol-ordinal-overflow");
             return false;
         }
         ++ordinal;
     }
-    symbol = minias_get_symbol(as, name, true);
+    symbol = context_get_symbol_mut(as,name,true);
     if (symbol == NULL) return false;
     symbol->defined = true;
     symbol->section = section;
@@ -1072,7 +1090,7 @@ bool minias_post_emit_raise_section_alignment(MiniAsPostEmitObjectSink *sink,
  * machine operand may name a forward or external symbol during parsing,
  * while the historical ELF symbol order is determined later by definitions
  * and committed fixups.  Interning here may allocate only this name pool;
- * it must never call minias_get_symbol(...,true). */
+ * it must never intern a new SymbolID. */
 static bool rebuild_symbol_name_index(MiniAs *as,size_t minimum) {
     size_t capacity=16U,i;
     size_t *slots;

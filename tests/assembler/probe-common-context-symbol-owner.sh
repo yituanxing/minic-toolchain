@@ -38,6 +38,10 @@ if ('bool has_explicit_size;' not in internal or
 if 'minias_refresh_symbol_aliases(' in internal or \
    'minias_common_context_publish_layout_sizes(' in header:
     raise SystemExit('obsolete cross-owner Symbol/layout mutation entry survived')
+if ('const MiniAsSymbol *symbols;' not in internal or
+    'MiniAsSymbol *symbol_records;' not in context or
+    'minias_get_symbol(' in internal+context):
+    raise SystemExit('Context did not hide its one mutable Symbol storage')
 if 'minias_common_context_commit_local_symbol_anchors(' not in layout or \
    'minias_common_context_finalize_symbol_layout(' not in layout:
     raise SystemExit('MCLayout did not commit its complete Symbol plan via Context')
@@ -55,8 +59,8 @@ fields=(
     'size_end_anchor|size_end_subsection|size_end_addend|'
     'has_size_start_symbol|size_start_symbol_index|size_end_value'
 )
-# The few names below designate MiniAsSymbol * in these seven translation
-# units. Avoid flagging unrelated Target state, Fragment or Literal records.
+# These names designate Symbol borrows; unrelated Target/Fragment fields have
+# their own owners. Compiler checks separately enforce const for *any* name.
 direct=re.compile(r'\b(?:symbol|sym|alias|anchor|debug_base|view_symbol|view)\s*->\s*'
                   r'(?:'+fields+r')\s*(?:\+=|\|=|=(?!=))')
 indexed=re.compile(r'\bas->symbols\s*\[[^\n]*?\]\s*\.\s*'

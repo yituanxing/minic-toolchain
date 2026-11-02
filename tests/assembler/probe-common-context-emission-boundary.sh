@@ -33,7 +33,10 @@ for name in ('common_context.c','common_emission.c','common_lowering.c',
 # shim may re-create an old parser, symbol table or materializer.
 functions={
   'common_context.c':('minias_find_section_key','minias_ensure_section_key',
-                      'minias_get_symbol','minias_symbol_name_intern',
+                      'context_get_symbol_mut',
+                      'minias_common_context_find_symbol',
+                      'minias_common_context_intern_symbol',
+                      'minias_symbol_name_intern',
                       'minias_refresh_symbol_aliases',
                       'minias_common_context_destroy_sections',
                       'minias_common_context_destroy_symbols'),
@@ -49,7 +52,7 @@ functions={
 }
 for owner, names in functions.items():
     for name in names:
-        signature=r'(?m)^(?:static\s+)?(?:bool|int|void|size_t|uint64_t|MiniAsSymbol)\s*\*?\s*'+name+r'\s*\('
+        signature=r'(?m)^(?:static\s+)?(?:const\s+)?(?:bool|int|void|size_t|uint64_t|MiniAsSymbol)\s*\*?\s*'+name+r'\s*\('
         hits=[path for path,code in owners.items() if re.search(signature,code)]
         if hits!=[owner]:
             raise SystemExit(f'{name} owner mismatch: {hits}, expected {owner}')

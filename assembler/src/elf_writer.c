@@ -215,7 +215,7 @@ static bool plan_elf_symbols(MiniAs *as,MiniAsELFSymbolState *states,
         const MiniAsSymbol *symbol;
         group_plan[i].signature_symbol_index=SIZE_MAX;
         if(signature==NULL)continue;
-        symbol=minias_get_symbol(as,signature,false);
+        symbol=minias_common_context_find_symbol(as,signature);
         if(symbol==NULL) {
             minias_set_error(as,"missing-group-signature:%s",
                              as->sections[i].name);
@@ -274,7 +274,7 @@ static bool resolve_link_order_target(MiniAs *as, size_t owner,
          * (including a deliberately supplied zero index). */
         return true;
     }
-    symbol=minias_get_symbol(as,reference,false);
+    symbol=minias_common_context_find_symbol(as,reference);
     if(symbol!=NULL && symbol->defined) {
         if(symbol->section==MINIAS_SECTION_ABS)return true;
         if(symbol->section>=0 &&
@@ -474,7 +474,7 @@ static bool minias_write_elf(MiniAs *as,
     }
 
     for (i = 0U; i < as->symbol_count; ++i) {
-        MiniAsSymbol *input = &as->symbols[i];
+        const MiniAsSymbol *input = &as->symbols[i];
         MiniElfWriteSymbol *output;
         bool local_group_signature=false;
 
@@ -512,7 +512,7 @@ static bool minias_write_elf(MiniAs *as,
                     minias_set_error(as,"private-symbol-name-capacity");
                     goto done;
                 }
-            }while(minias_get_symbol(as,visible,false)!=NULL);
+            }while(minias_common_context_find_symbol(as,visible)!=NULL);
             private_names[i]=minias_strdup(visible);
             if(private_names[i]==NULL) {
                 minias_set_error(as,"out-of-memory:elf-private-symbol");
