@@ -6,6 +6,13 @@ on:
     branches: [refactor/minias-target-isa-abi-core]
     paths:
       - '.github/workflows/minias-linux-rv32-p0.yml'
+      # Production RISC-V ISA/ABI changes must rerun the real Linux receiver;
+      # a successful unit oracle alone does not certify a GNU Kbuild Image.
+      - 'assembler/src/riscv_*.c'
+      - 'assembler/src/elf_writer.c'
+      - 'assembler/src/object_model.c'
+      - 'assembler/src/object_output.c'
+      - 'tests/assembler/run-a0.sh'
       - 'tests/external/linux/minias_rv32_linux.sh'
       - 'tools/ci/linux-rv32i-qemu-p0-v1.sh'
       - 'tests/external/linux/minias_as_provenance_check.py'
