@@ -4674,6 +4674,9 @@ static bool lower_source_statement(MiniAs *as, char *text, size_t line) {
 MiniAsSourceContext *minias_source_session(MiniAs *as) {
     return as->source;
 }
+const MiniAsSourceContext *minias_source_const_session(const MiniAs *as) {
+    return as->source;
+}
 char minias_source_target_comment_prefix(const MiniAs *as) {
     return as->target->comment_prefix;
 }

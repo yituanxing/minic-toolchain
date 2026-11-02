@@ -4,6 +4,7 @@
 /* Opaque Common session; no writable Section/Symbol/Fragment/TargetOps here. */
 typedef struct MiniAs MiniAs;
 MiniAsSourceContext *minias_source_session(MiniAs *as);
+const MiniAsSourceContext *minias_source_const_session(const MiniAs *as);
 /* Target-independent source lexer consumes immutable Target lexical policy. */
 char minias_source_target_comment_prefix(const MiniAs *as);
 bool minias_source_target_preserve_macro_parentheses(const MiniAs *as);

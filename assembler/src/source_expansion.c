@@ -58,7 +58,7 @@ void minias_source_context_destroy(MiniAsSourceContext *source) {
 }
 
 MiniAsStableSiteId minias_source_current_site(const MiniAs *as) {
-    return minias_source_session(as)->current_site;
+    return minias_source_const_session(as)->current_site;
 }
 
 void minias_source_restore_site(MiniAs *as,MiniAsStableSiteId site) {
@@ -434,7 +434,7 @@ bool minias_source_try_conditional(MiniAs *as,char *text,size_t line,
 }
 
 bool minias_source_conditional_active(const MiniAs *as) {
-    return minias_source_session(as)->conditional_active;
+    return minias_source_const_session(as)->conditional_active;
 }
 
 static bool valid_irp_parameter_name(const char *name);
