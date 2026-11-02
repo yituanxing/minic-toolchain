@@ -11,6 +11,7 @@ root=Path('assembler/src')
 context=(root/'common_context.c').read_text()
 header=(root/'minias_common_context.h').read_text()
 internal=(root/'minias_internal.h').read_text()
+records=(root/'minias_object_records.h').read_text()
 layout=(root/'mc_layout.c').read_text()
 lowering=(root/'common_lowering.c').read_text()
 
@@ -30,8 +31,8 @@ for suffix in front+synthetic+relayout:
     if not re.search(r'\bbool\s+'+name+r'\s*\(',context) or name not in header:
         raise SystemExit('missing unique Context Symbol transition: '+name)
 
-if ('bool has_explicit_size;' not in internal or
-    'bool alias_size_tracks_target;' not in internal or
+if ('bool has_explicit_size;' not in records or
+    'bool alias_size_tracks_target;' not in records or
     not re.search(r'alias->alias_size_tracks_target\s*&&\s*'
                   r'!alias->has_explicit_size',context)):
     raise SystemExit('alias size must track forward/dynamic sizes, not frozen snapshots')

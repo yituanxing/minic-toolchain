@@ -11,6 +11,7 @@ import subprocess
 root=Path('assembler/src')
 public=(root/'minias_target_api.h').read_text()
 private=(root/'minias_internal.h').read_text()
+records=(root/'minias_object_records.h').read_text()
 driver=(root/'assembler.c').read_text()
 context=(root/'common_context.c').read_text()
 emission=(root/'common_emission.c').read_text()
@@ -19,7 +20,7 @@ writer=(root/'elf_writer.c').read_text()
 
 for record in ('MiniAsSection','MiniAsSymbol'):
     if 'typedef struct '+record+' {' in public or \
-       'typedef struct '+record+' {' not in private:
+       'typedef struct '+record+' {' not in records:
         raise SystemExit('Common mutable record escaped into Target ABI: '+record)
 for phase in ('MiniAsPreLayoutView','MiniAsPostEmitView'):
     if ('typedef struct '+phase+' '+phase+';' not in public or
