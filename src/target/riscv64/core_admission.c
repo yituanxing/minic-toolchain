@@ -113,12 +113,12 @@ static bool core_instruction_supported(const MinicC0Program *program,
     case MINIC_CORE_INSTRUCTION_FUNCTION_ADDRESS:
         return true;
     case MINIC_CORE_INSTRUCTION_INTEGER_OVERFLOW: {
-        MinicType result_type;
+        MinicCoreTypeId result_type;
         size_t result_size;
         bool is_unsigned;
 
         return minic_riscv64_core_integer_overflow_supported(
-            program, function, instruction, &result_type, &result_size, &is_unsigned);
+            function, instruction, &result_type, &result_size, &is_unsigned);
     }
     case MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM:
     case MINIC_CORE_INSTRUCTION_REGISTER_OUTPUT_INLINE_ASM:

@@ -3,6 +3,7 @@
 #include "target/riscv64/legalize.h"
 #include "target/riscv64/frame_access.h"
 #include "target/riscv64/runtime_libcall.h"
+#include "target/common/lp64_scalar.h"
 #include "target/riscv/typed_memory.h"
 #include <inttypes.h>
 #include <stdint.h>
@@ -18,7 +19,7 @@ static bool emit_strict_i_checked_multiply(
     const MinicCoreFunction *function,
     const MinicRiscv64CoreFrame *frame,
     const MinicCoreInstruction *instruction, const MinicRiscvIsa *isa,
-    MinicType result_type, size_t result_size, bool is_unsigned) {
+    MinicCoreTypeId result_type, size_t result_size, bool is_unsigned) {
     MinicCoreValueId lhs = instruction->value.integer_overflow.left;
     MinicCoreValueId rhs = instruction->value.integer_overflow.right;
     MinicCoreValueId output = instruction->value.integer_overflow.result_address;
@@ -35,8 +36,8 @@ static bool emit_strict_i_checked_multiply(
         /* All admitted <=32-bit operand combinations fit in 64 bits.
          * Compare the full product to its narrow canonicalized value. */
         if (fprintf(file, "  mv t4, t2\n") < 0 ||
-            !minic_riscv64_emit_integer_conversion_for_program(
-                file, program, result_type, "t2") ||
+            !minic_riscv64_emit_core_integer_conversion(
+                file, function->type_context, result_type, "t2") ||
             fprintf(file, "  xor t4, t4, t2\n  snez t4, t4\n") < 0)
             return false;
     } else {
@@ -46,14 +47,14 @@ static bool emit_strict_i_checked_multiply(
          * Subsequent libcalls clobber all t-registers, so reread the source
          * values and the result pointer from their owned frame locations. */
         if (!minic_riscv64_frame_load_value(file, frame, output, "t3") ||
-            !minic_riscv64_emit_safe_scalar_store(
-                file, program, result_type, "t2", "t3", "t6",
+            !minic_riscv64_emit_safe_core_scalar_store(
+                file, function->type_context, result_type, "t2", "t3", "t6",
                 proven_alignment) ||
             !minic_riscv64_frame_load_value(file, frame, rhs, "t1") ||
             fprintf(file, "  beqz t1, 1f\n") < 0 ||
             !minic_riscv64_frame_load_value(file, frame, output, "t3") ||
-            !minic_riscv64_emit_safe_scalar_load(
-                file, program, result_type, "t0", "t3", "t6",
+            !minic_riscv64_emit_safe_core_scalar_load(
+                file, function->type_context, result_type, "t0", "t3", "t6",
                 proven_alignment) ||
             !minic_riscv64_emit_arithmetic_libcall(
                 file, isa, is_unsigned ? MINIC_RISCV64_LIBCALL_UDIV :
@@ -80,8 +81,8 @@ static bool emit_strict_i_checked_multiply(
 
     /* A helper call invalidates t3; never reuse the pre-call output address. */
     if (!minic_riscv64_frame_load_value(file, frame, output, "t3") ||
-        !minic_riscv64_emit_safe_scalar_store(
-            file, program, result_type, "t2", "t3", "t6",
+        !minic_riscv64_emit_safe_core_scalar_store(
+            file, function->type_context, result_type, "t2", "t3", "t6",
             proven_alignment))
         return false;
     return minic_riscv64_frame_store_value(file, frame, instruction->result, "t4");
@@ -99,15 +100,15 @@ bool minic_riscv64_emit_overflow_instruction(
         return false;
     switch (instruction->kind) {
     case MINIC_CORE_INSTRUCTION_INTEGER_OVERFLOW: {
-        MinicType left_type;
-        MinicType result_type;
-        MinicType right_type;
+        MinicCoreTypeId left_type;
+        MinicCoreTypeId result_type;
+        MinicCoreTypeId right_type;
         size_t result_size;
         bool is_unsigned;
         size_t proven_alignment;
 
         if (!minic_riscv64_core_integer_overflow_supported(
-                program, function, instruction, &result_type, &result_size, &is_unsigned))
+                function, instruction, &result_type, &result_size, &is_unsigned))
             return false;
         proven_alignment = minic_riscv_address_alignment(
             program, minic_default_data_layout(), function,
@@ -125,14 +126,14 @@ bool minic_riscv64_emit_overflow_instruction(
             !minic_riscv64_frame_load_value(
                 file, frame, instruction->value.integer_overflow.result_address, "t3"))
             return false;
-        left_type = function->values[instruction->value.integer_overflow.left].type;
-        right_type = function->values[instruction->value.integer_overflow.right].type;
-        if ((!minic_type_equal(left_type, result_type) ||
-             !minic_type_equal(right_type, result_type)) &&
-            !(minic_riscv64_core_integer_type_range_fits(program, function, left_type, result_type) &&
-              minic_riscv64_core_integer_type_range_fits(program, function, right_type, result_type)) &&
+        left_type = function->values[instruction->value.integer_overflow.left].core_type_id;
+        right_type = function->values[instruction->value.integer_overflow.right].core_type_id;
+        if ((!minic_lp64_core_equal_unqualified(function->type_context, left_type, result_type) ||
+             !minic_lp64_core_equal_unqualified(function->type_context, right_type, result_type)) &&
+            !(minic_riscv64_core_integer_type_range_fits(function, left_type, result_type) &&
+              minic_riscv64_core_integer_type_range_fits(function, right_type, result_type)) &&
             !minic_riscv64_core_integer_overflow_xlen_scratch_exact(
-                program, left_type, right_type, result_size)) {
+                function, left_type, right_type, result_size)) {
             const char *signed_register;
             const char *unsigned_register;
             uint64_t maximum;
@@ -143,11 +144,11 @@ bool minic_riscv64_emit_overflow_instruction(
             if (instruction->value.integer_overflow.operator_kind ==
                 MINIC_CORE_INTEGER_OVERFLOW_MULTIPLY) {
                 if (fprintf(file, "  mul t2, t0, t1\n  mv t4, t2\n") < 0 ||
-                    !minic_riscv64_emit_integer_conversion_for_program(
-                        file, program, result_type, "t2") ||
+                    !minic_riscv64_emit_core_integer_conversion(
+                        file, function->type_context, result_type, "t2") ||
                     fprintf(file, "  xor t4, t4, t2\n  snez t4, t4\n") < 0 ||
-                    !minic_riscv64_emit_safe_scalar_store(
-                        file, program, result_type, "t2", "t3", "t6",
+                    !minic_riscv64_emit_safe_core_scalar_store(
+                        file, function->type_context, result_type, "t2", "t3", "t6",
                         proven_alignment)) {
                     return false;
                 }
@@ -157,8 +158,10 @@ bool minic_riscv64_emit_overflow_instruction(
                 MINIC_CORE_INTEGER_OVERFLOW_ADD) {
                 return false;
             }
-            signed_register = minic_type_equal(left_type, result_type) ? "t0" : "t1";
-            unsigned_register = minic_type_equal(left_type, result_type) ? "t1" : "t0";
+            signed_register = minic_lp64_core_equal_unqualified(
+                function->type_context, left_type, result_type) ? "t0" : "t1";
+            unsigned_register = minic_lp64_core_equal_unqualified(
+                function->type_context, left_type, result_type) ? "t1" : "t0";
             maximum = (UINT64_C(1) << (result_size * 8U - 1U)) - UINT64_C(1);
             if (fprintf(file,
                         "  li t5, %" PRIu64 "\n"
@@ -168,10 +171,10 @@ bool minic_riscv64_emit_overflow_instruction(
                         maximum,
                         signed_register,
                         unsigned_register) < 0 ||
-                !minic_riscv64_emit_integer_conversion_for_program(
-                    file, program, result_type, "t2") ||
-                !minic_riscv64_emit_safe_scalar_store(
-                    file, program, result_type, "t2", "t3", "t6",
+                !minic_riscv64_emit_core_integer_conversion(
+                    file, function->type_context, result_type, "t2") ||
+                !minic_riscv64_emit_safe_core_scalar_store(
+                    file, function->type_context, result_type, "t2", "t3", "t6",
                     proven_alignment)) {
                 return false;
             }
@@ -181,8 +184,8 @@ bool minic_riscv64_emit_overflow_instruction(
         if (instruction->value.integer_overflow.operator_kind == MINIC_CORE_INTEGER_OVERFLOW_ADD) {
             if (result_size < 8U) {
                 if (fprintf(file, "  add t2, t0, t1\n  mv t4, t2\n") < 0 ||
-                    !minic_riscv64_emit_integer_conversion_for_program(
-                        file, program, result_type, "t2") ||
+                    !minic_riscv64_emit_core_integer_conversion(
+                        file, function->type_context, result_type, "t2") ||
                     fprintf(file, "  xor t4, t4, t2\n  snez t4, t4\n") < 0) {
                     return false;
                 }
@@ -205,8 +208,8 @@ bool minic_riscv64_emit_overflow_instruction(
                    MINIC_CORE_INTEGER_OVERFLOW_SUBTRACT) {
             if (result_size < 8U) {
                 if (fprintf(file, "  sub t2, t0, t1\n  mv t4, t2\n") < 0 ||
-                    !minic_riscv64_emit_integer_conversion_for_program(
-                        file, program, result_type, "t2") ||
+                    !minic_riscv64_emit_core_integer_conversion(
+                        file, function->type_context, result_type, "t2") ||
                     fprintf(file, "  xor t4, t4, t2\n  snez t4, t4\n") < 0) {
                     return false;
                 }
@@ -226,8 +229,8 @@ bool minic_riscv64_emit_overflow_instruction(
             }
         } else if (result_size < 8U) {
             if (fprintf(file, "  mul t2, t0, t1\n  mv t4, t2\n") < 0 ||
-                !minic_riscv64_emit_integer_conversion_for_program(
-                    file, program, result_type, "t2") ||
+                !minic_riscv64_emit_core_integer_conversion(
+                    file, function->type_context, result_type, "t2") ||
                 fprintf(file, "  xor t4, t4, t2\n  snez t4, t4\n") < 0) {
                 return false;
             }
@@ -246,8 +249,8 @@ bool minic_riscv64_emit_overflow_instruction(
                            "  snez t4, t4\n") < 0) {
             return false;
         }
-        if (!minic_riscv64_emit_safe_scalar_store(
-                file, program, result_type, "t2", "t3", "t6",
+        if (!minic_riscv64_emit_safe_core_scalar_store(
+                file, function->type_context, result_type, "t2", "t3", "t6",
                 proven_alignment)) {
             return false;
         }

@@ -486,3 +486,49 @@ CoreModule 或 Machine IR 已经实现。
   当前迁移只证明 initializer 算法单一所有者。
 - **历史 `module == NULL` 独立 API 与五 ISA 交叉运行认证**分别
   等消费者改造和具备交叉工具链的 CI；删兼容入口前须先更新测试。
+
+## IR-P2：RV64 整数标量与 checked-overflow 语义族整体切换
+
+起点：`5031631`（IR-P1）。本批按**准入—合法化—机器发射—测试**
+一起迁移 RV64 整数标量，而不是在 old/new 类型分支中选择性开洞。
+同一批不修与类型所有权无关的 Linux/Zstd/NEON 行为缺陷。
+
+1. `scalar_emit.c` 的整数常量、算术/位运算、比较、移位、
+   `__int128` 双寄存器和 strict-I libcall、整数转换与 bitcast
+   全部只读 `MinicCoreTypeId`、有符号性及 CoreType 布局；
+   普通整数的寄存器规范化复用现有
+   `minic_riscv64_emit_core_integer_conversion`，删除这个发射
+   单元里所有 C `minic_type_` 查询和 `instruction->type` 决策。
+2. `INTEGER_OVERFLOW` 完整族在 `legalize.[ch]`、
+   `core_admission.c`、`overflow_emit.c` 同时切换。
+   结果指针指向的整数类型、bool 标志、mixed signedness 的范围
+   与 XLEN scratch 判定、狭窄整数规范化、strict RV64I 乘法
+   libcall、最终未对齐安全存储均使用 CoreType。
+   不再把 CoreTypeId 转回 C `MinicType` 后调用旧存取函数。
+3. 专项原生准入测试将全部 C descriptor 保持为 void/零值，
+   用真实 CoreType 构造有符号/无符号混合、16 字节拒绝、错误
+   bool 返回以及未附着 TypeContext 的负例。
+   静态边界门禁禁止两个机器发射单元重新引用 C 类型字段。
+   补登记 P1 新建但尚未列入 backend-review manifest 的
+   `core_type_query.h`，保留其他已变化源码的历史 drift 状态，
+   不把测试通过冒充全模块深读认证。
+
+| 验证 | 结果 |
+| --- | --- |
+| `make all`（Debug）和全新 `MODE=release CFLAGS=-Werror all` | **PASS** |
+| `make -j8 check-fast`、`check-minic-target-boundaries.sh` | **PASS / exit 0** |
+| `check-rv64-abi`、`check-rv64-coretype-target-admission` | **PASS** |
+| P1 编译器与 P2 编译器同输入 RV64 `.s` | **11/11 BYTE_IDENTICAL**：加/减/乘溢出、mixed/packed、整数比较/位运算、`__int128`；历史 narrow-enum 禁止准入两边一致拒绝 |
+| `-march=rv64i -mabi=lp64` 严格 Base-I `.s` | **5/5 BYTE_IDENTICAL**，含 overflow、packed 与 `__int128` |
+| GNU 交叉 AS/LD、QEMU/Linux 五目标端到端 | **NOT_RUN**，仍需有工具链的后续验收 |
+
+**本批变更统计（不含文档）：生产 `src/` +239/−255，净 −16 行；
+`tests/` +67/−1，净 +66 行。** 这是单个 RV64 整数/溢出族
+所有权迁移，非整个 Core IR 已去 C 的完成比例。
+
+**本批尚未切完的边界：** `fp_emit.c` 的浮点/整数转换、
+`inline_asm_emit.c` 中历史未封闭调用兼容分支、以及
+`call_emit.c`/`memory_emit.c` 等其它 machine family 尚有 C
+借用；它们不能因这批整数迁移就被声明为 Core-only。
+下一批应把这一组同 ABI、Source ASM 契约一起核实，不引入
+第二份整数宽度算法。

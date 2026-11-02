@@ -37,10 +37,25 @@ static bool register_pointer(MinicCoreTypeContext *ctx, MinicCoreTypeId pointee,
     return minic_core_type_register(ctx, &type, id);
 }
 
+static bool register_overflow_scalar(MinicCoreTypeContext *ctx, size_t size,
+                                     bool is_signed, bool is_bool,
+                                     MinicCoreTypeId *id) {
+    MinicCoreType type = {0};
+    type.kind = MINIC_CORE_TYPE_INTEGER;
+    type.has_layout = true;
+    type.size = size;
+    type.alignment = size;
+    type.value.integer.bit_width = (unsigned int)(size * 8U);
+    type.value.integer.is_signed = is_signed;
+    type.value.integer.is_bool = is_bool;
+    return minic_core_type_register(ctx, &type, id);
+}
+
 static int run(void) {
     MinicCoreTypeContext types;
     MinicCoreTypeId void_id, int_id, wide_id, record_id, pointer_id, record_pointer_id;
     MinicCoreTypeId volatile_record_id, volatile_record_pointer_id;
+    MinicCoreTypeId bool_id, unsigned_id;
     MinicCoreType qualifier = {0};
     MinicCoreValue values[4];
     MinicCoreObject objects[1];
@@ -68,6 +83,8 @@ static int run(void) {
     REQUIRE(register_type(&types, MINIC_CORE_TYPE_RECORD, 4U, 4U, &record_id));
     REQUIRE(register_pointer(&types, int_id, &pointer_id));
     REQUIRE(register_pointer(&types, record_id, &record_pointer_id));
+    REQUIRE(register_overflow_scalar(&types, 1U, false, true, &bool_id));
+    REQUIRE(register_overflow_scalar(&types, 4U, false, false, &unsigned_id));
     qualifier.kind = MINIC_CORE_TYPE_QUALIFIED;
     qualifier.has_layout = true;
     qualifier.size = 4U;
@@ -93,6 +110,45 @@ static int run(void) {
     values[2].core_type_id = pointer_id;
     values[3].core_type_id = int_id;
 
+    /* Checked arithmetic is one CoreType-only admission+emission family:
+     * all C descriptors are deliberately void, including the bool result,
+     * operand signedness and pointer destination type. */
+    {
+        MinicCoreTypeId result_id = MINIC_CORE_TYPE_INVALID;
+        size_t result_bytes = 0U;
+        bool result_unsigned = true;
+        ins = (MinicCoreInstruction){0};
+        ins.kind = MINIC_CORE_INSTRUCTION_INTEGER_OVERFLOW;
+        ins.core_type_id = bool_id;
+        ins.value.integer_overflow.operator_kind = MINIC_CORE_INTEGER_OVERFLOW_ADD;
+        ins.value.integer_overflow.left = 3U;
+        ins.value.integer_overflow.right = 1U;
+        ins.value.integer_overflow.result_address = 2U;
+        values[1].core_type_id = int_id;
+        REQUIRE(minic_riscv64_core_integer_overflow_supported(
+            &function, &ins, &result_id, &result_bytes, &result_unsigned));
+        REQUIRE(result_id == int_id && result_bytes == 4U && !result_unsigned);
+        values[1].core_type_id = unsigned_id;
+        REQUIRE(minic_riscv64_core_integer_overflow_supported(
+            &function, &ins, &result_id, &result_bytes, &result_unsigned));
+        REQUIRE(result_id == int_id && result_bytes == 4U);
+        values[1].core_type_id = wide_id;
+        REQUIRE(!minic_riscv64_core_integer_overflow_supported(
+            &function, &ins, &result_id, &result_bytes, &result_unsigned));
+        values[1].core_type_id = int_id;
+        ins.core_type_id = int_id;
+        REQUIRE(!minic_riscv64_core_integer_overflow_supported(
+            &function, &ins, &result_id, &result_bytes, &result_unsigned));
+        ins.core_type_id = bool_id;
+        function.type_context = NULL;
+        REQUIRE(!minic_riscv64_core_integer_overflow_supported(
+            &function, &ins, &result_id, &result_bytes, &result_unsigned));
+        function.type_context = &types;
+    }
+
+    values[0].core_type_id = record_pointer_id;
+    values[1].core_type_id = volatile_record_pointer_id;
+    ins = (MinicCoreInstruction){0};
     ins.kind = MINIC_CORE_INSTRUCTION_RECORD_LOAD;
     ins.core_type_id = record_id;
     ins.result = MINIC_CORE_VALUE_INVALID;
@@ -250,6 +306,6 @@ int main(void) {
         fprintf(stderr, "RV64_CORETYPE_TARGET_ADMISSION=FAIL line=%d\n", line);
         return 1;
     }
-    puts("RV64_CORETYPE_TARGET_ADMISSION=PASS record_load_copy volatile bitcast asm call_abi core_only_scalar_transport strict_isa_frame_type");
+    puts("RV64_CORETYPE_TARGET_ADMISSION=PASS record_load_copy volatile bitcast asm call_abi core_only_scalar_transport overflow_poison_C strict_isa_frame_type");
     return 0;
 }

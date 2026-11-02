@@ -9,22 +9,43 @@
 #include "target/common/core_numeric_shape.h"
 #include "target/riscv64/frame_access.h"
 #include "target/riscv64/runtime_libcall.h"
+#include "target/riscv64/core_type_query.h"
+#include "target/common/lp64_scalar.h"
 #include <inttypes.h>
 #include <stdint.h>
 #include <stdio.h>
 
+static const MinicCoreType *rv64_scalar_integer(
+    const MinicCoreFunction *function, MinicCoreTypeId id) {
+    const MinicCoreType *type = minic_riscv64_core_base_type(function, id);
+    return type != NULL && type->kind == MINIC_CORE_TYPE_INTEGER ? type : NULL;
+}
+
+static bool rv64_scalar_unsigned(
+    const MinicCoreFunction *function, MinicCoreTypeId id) {
+    const MinicCoreType *type = rv64_scalar_integer(function, id);
+    return type != NULL && !type->value.integer.is_signed;
+}
+
+static bool rv64_scalar_same_type(
+    const MinicCoreFunction *function, MinicCoreTypeId left,
+    MinicCoreTypeId right) {
+    return function != NULL && function->type_context != NULL &&
+           minic_lp64_core_equal_unqualified(function->type_context, left, right);
+}
+
 /* Six RV64 integer operations share the same SSA transfer and width fixup.
  * Only the ISA opcode varies. Preserve Core's per-instruction legalization. */
 static bool emit_simple_integer_binary(
-    FILE *file, const MinicC0Program *program, const MinicRiscv64CoreFrame *frame,
+    FILE *file, const MinicCoreFunction *function, const MinicRiscv64CoreFrame *frame,
     const MinicCoreInstruction *instruction, const char *opcode) {
     if (file == NULL || frame == NULL ||
         instruction == NULL || opcode == NULL ||
         !minic_riscv64_frame_load_value(file, frame, instruction->value.binary.left, "t0") ||
         !minic_riscv64_frame_load_value(file, frame, instruction->value.binary.right, "t1") ||
         fprintf(file, "  %s t0, t0, t1\n", opcode) < 0 ||
-        !minic_riscv64_emit_integer_conversion_for_program(
-            file, program, instruction->type, "t0")) {
+        !minic_riscv64_emit_core_integer_conversion(
+            file, function->type_context, instruction->core_type_id, "t0")) {
         return false;
     }
     return minic_riscv64_frame_store_value(file, frame, instruction->result, "t0");
@@ -47,8 +68,8 @@ static bool emit_int128_runtime_call(
     left = instruction->value.binary.left;
     right = instruction->value.binary.right;
     if (left >= function->value_count || right >= function->value_count ||
-        !minic_type_is_int128_integer(function->values[left].type) ||
-        !minic_type_is_int128_integer(function->values[right].type) ||
+        !minic_riscv64_core_is_i128(function, function->values[left].core_type_id) ||
+        !minic_riscv64_core_is_i128(function, function->values[right].core_type_id) ||
         !minic_riscv64_frame_load_int128(file, frame, left, "a0", "a1") ||
         !minic_riscv64_frame_load_int128(file, frame, right, "a2", "a3") ||
         fprintf(file, "  call %s\n", symbol) < 0)
@@ -75,8 +96,8 @@ static bool emit_int128_pair_binary(
     MinicCoreValueId left = instruction->value.binary.left;
     MinicCoreValueId right = instruction->value.binary.right;
     if (left >= function->value_count || right >= function->value_count ||
-        !minic_type_is_int128_integer(function->values[left].type) ||
-        !minic_type_is_int128_integer(function->values[right].type) ||
+        !minic_riscv64_core_is_i128(function, function->values[left].core_type_id) ||
+        !minic_riscv64_core_is_i128(function, function->values[right].core_type_id) ||
         !minic_riscv64_frame_load_int128(file, frame, left, "t0", "t1") ||
         !minic_riscv64_frame_load_int128(file, frame, right, "t2", "t3") ||
         !minic_riscv_emit_word_pair_binary(file, instruction->kind))
@@ -90,7 +111,7 @@ static bool emit_int128_pair_unary(
     const MinicCoreFunction *function, const MinicCoreInstruction *instruction) {
     const MinicCoreValueId operand = instruction->value.operand;
     if (operand >= function->value_count ||
-        !minic_type_is_int128_integer(function->values[operand].type) ||
+        !minic_riscv64_core_is_i128(function, function->values[operand].core_type_id) ||
         !minic_riscv64_frame_load_int128(file, frame, operand, "t0", "t1") ||
         !minic_riscv_emit_word_pair_unary(file, instruction->kind))
         return false;
@@ -105,9 +126,9 @@ static bool emit_int128_pair_shift_left(
     const MinicCoreValueId left = instruction->value.binary.left;
     const MinicCoreValueId right = instruction->value.binary.right;
     if (left >= function->value_count || right >= function->value_count ||
-        !minic_type_is_int128_integer(function->values[left].type) ||
-        !minic_type_is_integer(function->values[right].type) ||
-        minic_type_is_int128_integer(function->values[right].type) ||
+        !minic_riscv64_core_is_i128(function, function->values[left].core_type_id) ||
+        rv64_scalar_integer(function, function->values[right].core_type_id) == NULL ||
+        minic_riscv64_core_is_i128(function, function->values[right].core_type_id) ||
         !minic_riscv64_frame_load_int128(file, frame, left, "t0", "t1") ||
         !minic_riscv64_frame_load_value(file, frame, right, "t2") ||
         !minic_riscv_emit_word_pair_shift(
@@ -123,7 +144,7 @@ bool minic_riscv64_emit_scalar_instruction(
     const MinicCoreFunction *function, const MinicRiscv64CoreFrame *frame,
     const char *symbol_name, const MinicCoreInstruction *instruction,
     const MinicRiscvIsa *isa) {
-    if (file == NULL || function == NULL ||
+    if (file == NULL || function == NULL || function->type_context == NULL ||
         frame == NULL || symbol_name == NULL || instruction == NULL)
         return false;
     /* The four ISA backends agree on the semantic FP family.
@@ -136,7 +157,7 @@ bool minic_riscv64_emit_scalar_instruction(
             file, program, function, frame, instruction, isa);
     /* The ordinary scalar emitters consume only one XLEN word.
      * The pair emitter is the unique selection seam for wide I operations. */
-    if (minic_type_is_int128_integer(instruction->type)) {
+    if (minic_riscv64_core_is_i128(function, instruction->core_type_id)) {
         switch (instruction->kind) {
         case MINIC_CORE_INSTRUCTION_INTEGER_ADD:
         case MINIC_CORE_INSTRUCTION_INTEGER_SUBTRACT:
@@ -154,7 +175,7 @@ bool minic_riscv64_emit_scalar_instruction(
         case MINIC_CORE_INSTRUCTION_INTEGER_REMAINDER:
             if (isa != NULL && isa->strict_isa) {
                 const bool is_unsigned =
-                    minic_type_is_unsigned_integer(instruction->type);
+                    rv64_scalar_unsigned(function, instruction->core_type_id);
                 const char *sym =
                     instruction->kind == MINIC_CORE_INSTRUCTION_INTEGER_DIVIDE
                         ? (is_unsigned ? "__udivti3" : "__divti3")
@@ -169,7 +190,7 @@ bool minic_riscv64_emit_scalar_instruction(
     }
     switch (instruction->kind) {
     case MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT:
-        if (minic_type_is_int128_integer(instruction->type)) {
+        if (minic_riscv64_core_is_i128(function, instruction->core_type_id)) {
             /* Core immediate storage is signed int64. Sign-extend this
              * mathematical integer into the LP64 low/high register pair.
              * Wider literals must be built from separate Core operations. */
@@ -182,8 +203,8 @@ bool minic_riscv64_emit_scalar_instruction(
                 file, frame, instruction->result, "t0", "t1");
         }
         if (fprintf(file, "  li t0, %" PRId64 "\n", instruction->value.integer_value) < 0 ||
-            !minic_riscv64_emit_integer_conversion_for_program(
-                file, program, instruction->type, "t0")) {
+            !minic_riscv64_emit_core_integer_conversion(
+                file, function->type_context, instruction->core_type_id, "t0")) {
             return false;
         }
         return minic_riscv64_frame_store_value(file, frame, instruction->result, "t0");
@@ -194,10 +215,10 @@ bool minic_riscv64_emit_scalar_instruction(
     case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_OR:
     case MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_LEFT:
         return emit_simple_integer_binary(
-            file, program, frame, instruction,
+            file, function, frame, instruction,
             minic_riscv_scalar_binary_opcode(instruction->kind, false));
     case MINIC_CORE_INSTRUCTION_INTEGER_MULTIPLY:
-        if (minic_type_is_int128_integer(instruction->type)) {
+        if (minic_riscv64_core_is_i128(function, instruction->core_type_id)) {
             if (minic_riscv64_uses_arithmetic_libcall(isa))
                 return emit_int128_runtime_call(
                     file, frame, function, instruction, "__multi3", true, false);
@@ -205,8 +226,8 @@ bool minic_riscv64_emit_scalar_instruction(
             MinicCoreValueId right = instruction->value.binary.right;
 
             if (left >= function->value_count || right >= function->value_count ||
-                !minic_type_is_int128_integer(function->values[left].type) ||
-                !minic_type_is_int128_integer(function->values[right].type) ||
+                !minic_riscv64_core_is_i128(function, function->values[left].core_type_id) ||
+                !minic_riscv64_core_is_i128(function, function->values[right].core_type_id) ||
                 !minic_riscv64_frame_load_int128(file, frame, left, "t0", "t1") ||
                 !minic_riscv64_frame_load_int128(file, frame, right, "t2", "t3") ||
                 fprintf(file,
@@ -224,59 +245,57 @@ bool minic_riscv64_emit_scalar_instruction(
             !minic_riscv64_frame_load_value(file, frame, instruction->value.binary.right, "t1") ||
             !minic_riscv64_emit_arithmetic_libcall(
                 file, isa, MINIC_RISCV64_LIBCALL_MUL, "t0", "t0", "t1") ||
-            !minic_riscv64_emit_integer_conversion_for_program(
-                file, program, instruction->type, "t0")) {
+            !minic_riscv64_emit_core_integer_conversion(
+                file, function->type_context, instruction->core_type_id, "t0")) {
             return false;
         }
         return minic_riscv64_frame_store_value(file, frame, instruction->result, "t0");
     case MINIC_CORE_INSTRUCTION_INTEGER_DIVIDE:
     case MINIC_CORE_INSTRUCTION_INTEGER_REMAINDER: {
-        MinicType effective_type;
-        if (!minic_core_function_effective_integer_type(
-                function, instruction->type, &effective_type)) {
-            return false;
-        }
+        const MinicCoreType *effective_type =
+            rv64_scalar_integer(function, instruction->core_type_id);
+        if (effective_type == NULL) return false;
         if (!minic_riscv64_frame_load_value(file, frame, instruction->value.binary.left, "t0") ||
             !minic_riscv64_frame_load_value(file, frame, instruction->value.binary.right, "t1") ||
             /* LP64 libcalls consume full XLEN inputs. Canonicalize 32-bit
              * signed/unsigned operands before entering libgcc/compiler-rt.
              * Leave the historical M hardware path byte-for-byte intact. */
             (minic_riscv64_uses_arithmetic_libcall(isa) &&
-             (!minic_riscv64_emit_integer_conversion_for_program(
-                  file, program, effective_type, "t0") ||
-              !minic_riscv64_emit_integer_conversion_for_program(
-                  file, program, effective_type, "t1"))) ||
+             (!minic_riscv64_emit_core_integer_conversion(
+                  file, function->type_context, instruction->core_type_id, "t0") ||
+              !minic_riscv64_emit_core_integer_conversion(
+                  file, function->type_context, instruction->core_type_id, "t1"))) ||
             !minic_riscv64_emit_arithmetic_libcall(
                 file, isa,
                 instruction->kind == MINIC_CORE_INSTRUCTION_INTEGER_REMAINDER
-                  ? (minic_type_is_unsigned_integer(effective_type)
+                  ? (!effective_type->value.integer.is_signed
                        ? MINIC_RISCV64_LIBCALL_UMOD : MINIC_RISCV64_LIBCALL_SMOD)
-                  : (minic_type_is_unsigned_integer(effective_type)
+                  : (!effective_type->value.integer.is_signed
                        ? MINIC_RISCV64_LIBCALL_UDIV : MINIC_RISCV64_LIBCALL_SDIV),
                 "t0", "t0", "t1") ||
-            !minic_riscv64_emit_integer_conversion_for_program(
-                file, program, instruction->type, "t0")) {
+            !minic_riscv64_emit_core_integer_conversion(
+                file, function->type_context, instruction->core_type_id, "t0")) {
             return false;
         }
         return minic_riscv64_frame_store_value(file, frame, instruction->result, "t0");
     }
     case MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_RIGHT: {
-        MinicType effective_type;
+        const MinicCoreType *effective_type;
         const char *opcode;
 
-        if (!minic_core_function_effective_integer_type(function, instruction->type, &effective_type)) {
-            return false;
-        }
-        if (minic_type_is_int128_integer(instruction->type)) {
+        effective_type = rv64_scalar_integer(function, instruction->core_type_id);
+        if (effective_type == NULL) return false;
+        if (minic_riscv64_core_is_i128(function, instruction->core_type_id)) {
             bool is_signed;
             MinicCoreValueId left = instruction->value.binary.left;
             MinicCoreValueId right = instruction->value.binary.right;
 
             if (left >= function->value_count || right >= function->value_count ||
-                !minic_type_is_int128_integer(function->values[left].type) ||
-                !minic_type_is_integer(function->values[right].type) ||
-                minic_type_is_int128_integer(function->values[right].type) ||
-                !minic_riscv64_core_integer_type_is_signed(function, instruction->type, &is_signed) ||
+                !minic_riscv64_core_is_i128(function, function->values[left].core_type_id) ||
+                rv64_scalar_integer(function, function->values[right].core_type_id) == NULL ||
+                minic_riscv64_core_is_i128(function, function->values[right].core_type_id) ||
+                !minic_riscv64_core_integer_type_is_signed(
+                    function, instruction->core_type_id, &is_signed) ||
                 !minic_riscv64_frame_load_int128(file, frame, left, "t0", "t1") ||
                 !minic_riscv64_frame_load_value(file, frame, right, "t2") ||
                 !minic_riscv_emit_word_pair_shift(
@@ -287,12 +306,12 @@ bool minic_riscv64_emit_scalar_instruction(
             return minic_riscv64_frame_store_int128(file, frame, instruction->result, "t0", "t1");
         }
         opcode = minic_riscv_scalar_binary_opcode(
-            instruction->kind, minic_type_is_unsigned_integer(effective_type));
+            instruction->kind, !effective_type->value.integer.is_signed);
         if (!minic_riscv64_frame_load_value(file, frame, instruction->value.binary.left, "t0") ||
             !minic_riscv64_frame_load_value(file, frame, instruction->value.binary.right, "t1") ||
             fprintf(file, "  %s t0, t0, t1\n", opcode) < 0 ||
-            !minic_riscv64_emit_integer_conversion_for_program(
-                file, program, instruction->type, "t0")) {
+            !minic_riscv64_emit_core_integer_conversion(
+                file, function->type_context, instruction->core_type_id, "t0")) {
             return false;
         }
         return minic_riscv64_frame_store_value(file, frame, instruction->result, "t0");
@@ -300,32 +319,30 @@ bool minic_riscv64_emit_scalar_instruction(
     case MINIC_CORE_INSTRUCTION_INTEGER_LESS: {
         if (isa != NULL && isa->strict_isa &&
             instruction->value.binary.left < function->value_count &&
-            minic_type_is_int128_integer(
-                function->values[instruction->value.binary.left].type)) {
-            const MinicType wide_type =
-                function->values[instruction->value.binary.left].type;
+            minic_riscv64_core_is_i128(
+                function, function->values[instruction->value.binary.left].core_type_id)) {
+            const MinicCoreTypeId wide_type =
+                function->values[instruction->value.binary.left].core_type_id;
             return emit_int128_runtime_call(
                 file, frame, function, instruction,
-                minic_type_is_unsigned_integer(wide_type)
+                rv64_scalar_unsigned(function, wide_type)
                     ? "__ucmpti2" : "__cmpti2", false, false);
         }
-        MinicType effective_type;
-        MinicType operand_type;
+        const MinicCoreType *effective_type;
+        MinicCoreTypeId operand_type;
         const char *opcode;
 
         if (instruction->value.binary.left >= function->value_count ||
             instruction->value.binary.right >= function->value_count) {
             return false;
         }
-        operand_type = function->values[instruction->value.binary.left].type;
-        if (!minic_type_is_integer(operand_type) ||
-            !minic_type_equal(operand_type,
-                              function->values[instruction->value.binary.right].type) ||
-            !minic_core_function_effective_integer_type(function, operand_type, &effective_type)) {
-            return false;
-        }
+        operand_type = function->values[instruction->value.binary.left].core_type_id;
+        effective_type = rv64_scalar_integer(function, operand_type);
+        if (effective_type == NULL || !rv64_scalar_same_type(
+                function, operand_type,
+                function->values[instruction->value.binary.right].core_type_id)) return false;
         opcode = minic_riscv_scalar_binary_opcode(
-            instruction->kind, minic_type_is_unsigned_integer(effective_type));
+            instruction->kind, !effective_type->value.integer.is_signed);
         if (!minic_riscv64_frame_load_value(file, frame, instruction->value.binary.left, "t0") ||
             !minic_riscv64_frame_load_value(file, frame, instruction->value.binary.right, "t1") ||
             fprintf(file, "  %s t0, t0, t1\n", opcode) < 0) {
@@ -336,9 +353,14 @@ bool minic_riscv64_emit_scalar_instruction(
     case MINIC_CORE_INSTRUCTION_POINTER_LESS:
         if (instruction->value.binary.left >= function->value_count ||
             instruction->value.binary.right >= function->value_count ||
-            !minic_type_is_pointer(function->values[instruction->value.binary.left].type) ||
-            !minic_type_equal(function->values[instruction->value.binary.left].type,
-                              function->values[instruction->value.binary.right].type) ||
+            minic_riscv64_core_base_type(
+                function, function->values[instruction->value.binary.left].core_type_id) == NULL ||
+            minic_riscv64_core_base_type(
+                function, function->values[instruction->value.binary.left].core_type_id)->kind !=
+                MINIC_CORE_TYPE_POINTER ||
+            !rv64_scalar_same_type(
+                function, function->values[instruction->value.binary.left].core_type_id,
+                function->values[instruction->value.binary.right].core_type_id) ||
             !minic_riscv64_frame_load_value(file, frame, instruction->value.binary.left, "t0") ||
             !minic_riscv64_frame_load_value(file, frame, instruction->value.binary.right, "t1") ||
             fprintf(file, "  sltu t0, t0, t1\n") < 0) {
@@ -348,8 +370,8 @@ bool minic_riscv64_emit_scalar_instruction(
     case MINIC_CORE_INSTRUCTION_SCALAR_EQUAL:
         if (isa != NULL && isa->strict_isa &&
             instruction->value.binary.left < function->value_count &&
-            minic_type_is_int128_integer(
-                function->values[instruction->value.binary.left].type))
+            minic_riscv64_core_is_i128(
+                function, function->values[instruction->value.binary.left].core_type_id))
             return emit_int128_runtime_call(
                 file, frame, function, instruction, "__ucmpti2", false, true);
         if (!minic_riscv64_frame_load_value(file, frame, instruction->value.binary.left, "t0") ||
@@ -360,21 +382,21 @@ bool minic_riscv64_emit_scalar_instruction(
         return minic_riscv64_frame_store_value(file, frame, instruction->result, "t0");
     case MINIC_CORE_INSTRUCTION_INTEGER_CONVERSION: {
         MinicCoreValueId operand = instruction->value.operand;
-        MinicType source_type;
+        MinicCoreTypeId source_type;
 
         if (operand >= function->value_count) {
             return false;
         }
-        source_type = function->values[operand].type;
-        if (minic_type_is_int128_integer(instruction->type)) {
-            if (minic_type_is_int128_integer(source_type)) {
+        source_type = function->values[operand].core_type_id;
+        if (minic_riscv64_core_is_i128(function, instruction->core_type_id)) {
+            if (minic_riscv64_core_is_i128(function, source_type)) {
                 if (!minic_riscv64_frame_load_int128(file, frame, operand, "t0", "t1")) {
                     return false;
                 }
             } else {
                 bool source_signed;
 
-                if (!minic_type_is_integer(source_type) ||
+                if (rv64_scalar_integer(function, source_type) == NULL ||
                     !minic_riscv64_frame_load_value(file, frame, operand, "t0") ||
                     !minic_riscv64_core_integer_type_is_signed(function, source_type, &source_signed) ||
                     fprintf(file,
@@ -384,17 +406,17 @@ bool minic_riscv64_emit_scalar_instruction(
             }
             return minic_riscv64_frame_store_int128(file, frame, instruction->result, "t0", "t1");
         }
-        if (minic_type_is_int128_integer(source_type)) {
+        if (minic_riscv64_core_is_i128(function, source_type)) {
             if (!minic_riscv64_frame_load_int128(file, frame, operand, "t0", "t1") ||
-                !minic_riscv64_emit_integer_conversion_for_program(
-                    file, program, instruction->type, "t0")) {
+                !minic_riscv64_emit_core_integer_conversion(
+                    file, function->type_context, instruction->core_type_id, "t0")) {
                 return false;
             }
             return minic_riscv64_frame_store_value(file, frame, instruction->result, "t0");
         }
         if (!minic_riscv64_frame_load_value(file, frame, operand, "t0") ||
-            !minic_riscv64_emit_integer_conversion_for_program(
-                file, program, instruction->type, "t0")) {
+            !minic_riscv64_emit_core_integer_conversion(
+                file, function->type_context, instruction->core_type_id, "t0")) {
             return false;
         }
         return minic_riscv64_frame_store_value(file, frame, instruction->result, "t0");
@@ -403,25 +425,25 @@ bool minic_riscv64_emit_scalar_instruction(
         if (!minic_riscv64_frame_load_value(file, frame, instruction->value.operand, "t0")) {
             return false;
         }
-        if (minic_type_is_integer(instruction->type) &&
-            !minic_riscv64_emit_integer_conversion_for_program(
-                file, program, instruction->type, "t0")) {
+        if (rv64_scalar_integer(function, instruction->core_type_id) != NULL &&
+            !minic_riscv64_emit_core_integer_conversion(
+                file, function->type_context, instruction->core_type_id, "t0")) {
             return false;
         }
         return minic_riscv64_frame_store_value(file, frame, instruction->result, "t0");
     case MINIC_CORE_INSTRUCTION_INTEGER_NEGATE:
         if (!minic_riscv64_frame_load_value(file, frame, instruction->value.operand, "t0") ||
             fprintf(file, "  neg t0, t0\n") < 0 ||
-            !minic_riscv64_emit_integer_conversion_for_program(
-                file, program, instruction->type, "t0")) {
+            !minic_riscv64_emit_core_integer_conversion(
+                file, function->type_context, instruction->core_type_id, "t0")) {
             return false;
         }
         return minic_riscv64_frame_store_value(file, frame, instruction->result, "t0");
     case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_NOT:
         if (!minic_riscv64_frame_load_value(file, frame, instruction->value.operand, "t0") ||
             fprintf(file, "  xori t0, t0, -1\n") < 0 ||
-            !minic_riscv64_emit_integer_conversion_for_program(
-                file, program, instruction->type, "t0")) {
+            !minic_riscv64_emit_core_integer_conversion(
+                file, function->type_context, instruction->core_type_id, "t0")) {
             return false;
         }
         return minic_riscv64_frame_store_value(file, frame, instruction->result, "t0");

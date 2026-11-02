@@ -2,10 +2,7 @@
 #include "target/common/core_call_view.h"
 #include "target/riscv64/abi.h"
 #include "target/riscv64/core_type_query.h"
-#include "target/data_layout.h"
 #include "target/common/lp64_scalar.h"
-#include <stdint.h>
-#include <limits.h>
 
 /* Original target scalar gate remains shared by RV64 object analysis
  * and instruction-admission queries. */
@@ -19,15 +16,12 @@ bool minic_riscv64_scalar_type(MinicType type) {
  * Moved from core_codegen.c without changing any comparisons or fallbacks.
  * ISA emission and actual register/stack placement remain target-owned. */
 bool minic_riscv64_core_integer_type_is_signed(const MinicCoreFunction *function,
-                                        MinicType type,
+                                        MinicCoreTypeId type_id,
                                         bool *is_signed) {
-    MinicType effective_type;
-
-    if (is_signed == NULL ||
-        !minic_core_function_effective_integer_type(function, type, &effective_type)) {
-        return false;
-    }
-    *is_signed = minic_type_is_signed_integer(effective_type);
+    const MinicCoreType *type = minic_riscv64_core_base_type(function, type_id);
+    if (is_signed == NULL || type == NULL ||
+        type->kind != MINIC_CORE_TYPE_INTEGER) return false;
+    *is_signed = type->value.integer.is_signed;
     return true;
 }
 
@@ -152,91 +146,57 @@ bool minic_riscv64_core_scalar_bitcast_supported(const MinicC0Program *program,
             source_core_type->kind == MINIC_CORE_TYPE_POINTER);
 }
 
-bool minic_riscv64_core_integer_type_range_fits(const MinicC0Program *program,
-                                         const MinicCoreFunction *function,
-                                         MinicType source_type,
-                                         MinicType result_type) {
-    MinicType effective_source;
-    MinicType effective_result;
-    size_t source_alignment;
-    size_t source_size;
-    size_t result_alignment;
-    size_t result_size;
+bool minic_riscv64_core_integer_type_range_fits(
+    const MinicCoreFunction *function, MinicCoreTypeId source_type,
+    MinicCoreTypeId result_type) {
+    const MinicCoreType *source = minic_riscv64_core_base_type(function, source_type);
+    const MinicCoreType *result = minic_riscv64_core_base_type(function, result_type);
     bool source_signed;
     bool result_signed;
 
-    if (program == NULL || function == NULL ||
-        !minic_type_is_integer(source_type) || !minic_type_is_integer(result_type) ||
-        !minic_core_function_effective_integer_type(function, source_type, &effective_source) ||
-        !minic_core_function_effective_integer_type(function, result_type, &effective_result) ||
-        !minic_data_layout_type(
-            minic_default_data_layout(), program, source_type, &source_size, &source_alignment) ||
-        !minic_data_layout_type(
-            minic_default_data_layout(), program, result_type, &result_size, &result_alignment) ||
-        source_size == 0U || source_size > 8U || result_size == 0U || result_size > 8U) {
+    if (source == NULL || result == NULL ||
+        source->kind != MINIC_CORE_TYPE_INTEGER ||
+        result->kind != MINIC_CORE_TYPE_INTEGER ||
+        !source->has_layout || !result->has_layout ||
+        source->size == 0U || source->size > 8U ||
+        result->size == 0U || result->size > 8U) {
         return false;
     }
-    (void)source_alignment;
-    (void)result_alignment;
-    source_signed = minic_type_is_signed_integer(effective_source);
-    result_signed = minic_type_is_signed_integer(effective_result);
-    if ((!source_signed && !minic_type_is_unsigned_integer(effective_source)) ||
-        (!result_signed && !minic_type_is_unsigned_integer(effective_result))) {
-        return false;
-    }
+    source_signed = source->value.integer.is_signed;
+    result_signed = result->value.integer.is_signed;
     if (source_signed == result_signed) {
-        return source_size <= result_size;
+        return source->size <= result->size;
     }
     /* Every unsigned N-bit value fits a signed result only when the result has
        strictly more value bits. A signed range never wholly fits unsigned. */
-    return !source_signed && result_signed && source_size < result_size;
+    return !source_signed && result_signed && source->size < result->size;
 }
 
 bool minic_riscv64_core_integer_overflow_xlen_scratch_exact(
-    const MinicC0Program *program,
-    MinicType left_type,
-    MinicType right_type,
-    size_t result_size) {
-    size_t left_alignment;
-    size_t left_size;
-    size_t right_alignment;
-    size_t right_size;
-
-    if (program == NULL || result_size == 0U || result_size >= 8U ||
-        !minic_data_layout_type(
-            minic_default_data_layout(), program, left_type, &left_size, &left_alignment) ||
-        !minic_data_layout_type(
-            minic_default_data_layout(), program, right_type, &right_size, &right_alignment)) {
-        return false;
-    }
-    (void)left_alignment;
-    (void)right_alignment;
-    return left_size != 0U && right_size != 0U &&
-           left_size <= result_size && right_size <= result_size;
+    const MinicCoreFunction *function, MinicCoreTypeId left_type,
+    MinicCoreTypeId right_type, size_t result_size) {
+    const MinicCoreType *left = minic_riscv64_core_base_type(function, left_type);
+    const MinicCoreType *right = minic_riscv64_core_base_type(function, right_type);
+    return result_size > 0U && result_size < 8U &&
+           left != NULL && right != NULL &&
+           left->kind == MINIC_CORE_TYPE_INTEGER &&
+           right->kind == MINIC_CORE_TYPE_INTEGER &&
+           left->has_layout && right->has_layout &&
+           left->size > 0U && right->size > 0U &&
+           left->size <= result_size && right->size <= result_size;
 }
 
-bool minic_riscv64_core_integer_overflow_supported(const MinicC0Program *program,
-                                            const MinicCoreFunction *function,
-                                            const MinicCoreInstruction *instruction,
-                                            MinicType *result_type,
-                                            size_t *result_size,
-                                            bool *is_unsigned) {
-    MinicType effective_left_type;
-    MinicType effective_result_type;
-    MinicType effective_right_type;
-    MinicType left_type;
-    MinicType pointee;
-    MinicType right_type;
-    size_t alignment;
-    size_t left_alignment;
-    size_t left_size;
-    size_t right_alignment;
-    size_t right_size;
+bool minic_riscv64_core_integer_overflow_supported(
+    const MinicCoreFunction *function, const MinicCoreInstruction *instruction,
+    MinicCoreTypeId *result_type, size_t *result_size, bool *is_unsigned) {
+    const MinicCoreType *result, *pointee, *left, *right, *flag;
+    MinicCoreTypeId pointee_id, left_id, right_id;
+    size_t left_size, right_size;
     bool result_is_unsigned;
 
-    if (program == NULL || function == NULL || instruction == NULL ||
+    if (function == NULL || function->type_context == NULL ||
+        instruction == NULL || result_size == NULL ||
         instruction->kind != MINIC_CORE_INSTRUCTION_INTEGER_OVERFLOW ||
-        !minic_type_equal(instruction->type, minic_type_bool()) ||
         (instruction->value.integer_overflow.operator_kind != MINIC_CORE_INTEGER_OVERFLOW_ADD &&
          instruction->value.integer_overflow.operator_kind !=
              MINIC_CORE_INTEGER_OVERFLOW_SUBTRACT &&
@@ -245,57 +205,62 @@ bool minic_riscv64_core_integer_overflow_supported(const MinicC0Program *program
         instruction->value.integer_overflow.left >= function->value_count ||
         instruction->value.integer_overflow.right >= function->value_count ||
         instruction->value.integer_overflow.result_address >= function->value_count ||
-        !minic_type_pointee(
-            function->values[instruction->value.integer_overflow.result_address].type, &pointee) ||
-        !minic_type_is_integer(pointee) || minic_type_is_bool_integer(pointee) ||
-        minic_type_is_const(pointee) || minic_type_is_volatile(pointee) ||
-        !minic_data_layout_type(
-            minic_default_data_layout(), program, pointee, result_size, &alignment) ||
-        *result_size == 0U || *result_size > 8U ||
-        !minic_core_function_effective_integer_type(function, pointee, &effective_result_type)) {
+        !minic_lp64_core_pointer_pointee(
+            function->type_context,
+            function->values[instruction->value.integer_overflow.result_address].core_type_id,
+            &pointee_id)) {
         return false;
     }
-    (void)alignment;
-    left_type = function->values[instruction->value.integer_overflow.left].type;
-    right_type = function->values[instruction->value.integer_overflow.right].type;
-    if (!minic_type_is_integer(left_type) || !minic_type_is_integer(right_type) ||
-        !minic_core_function_effective_integer_type(function, left_type, &effective_left_type) ||
-        !minic_core_function_effective_integer_type(function, right_type, &effective_right_type) ||
-        !minic_data_layout_type(
-            minic_default_data_layout(), program, left_type, &left_size, &left_alignment) ||
-        !minic_data_layout_type(
-            minic_default_data_layout(), program, right_type, &right_size, &right_alignment) ||
-        left_size == 0U || left_size > 8U || right_size == 0U || right_size > 8U) {
-        return false;
-    }
-    (void)left_alignment;
-    (void)right_alignment;
-    result_is_unsigned = minic_type_is_unsigned_integer(effective_result_type);
+    flag = minic_riscv64_core_base_type(function, instruction->core_type_id);
+    pointee = minic_core_type_get(function->type_context, pointee_id);
+    result = minic_riscv64_core_base_type(function, pointee_id);
+    left_id = function->values[instruction->value.integer_overflow.left].core_type_id;
+    right_id = function->values[instruction->value.integer_overflow.right].core_type_id;
+    left = minic_riscv64_core_base_type(function, left_id);
+    right = minic_riscv64_core_base_type(function, right_id);
+    if (flag == NULL || flag->kind != MINIC_CORE_TYPE_INTEGER ||
+        !flag->value.integer.is_bool ||
+        pointee == NULL || pointee->is_read_only || pointee->is_volatile ||
+        result == NULL || result->kind != MINIC_CORE_TYPE_INTEGER ||
+        result->value.integer.is_bool || !result->has_layout ||
+        result->size == 0U || result->size > 8U ||
+        left == NULL || right == NULL ||
+        left->kind != MINIC_CORE_TYPE_INTEGER ||
+        right->kind != MINIC_CORE_TYPE_INTEGER ||
+        !left->has_layout || !right->has_layout ||
+        left->size == 0U || left->size > 8U ||
+        right->size == 0U || right->size > 8U) return false;
+    *result_size = result->size;
+    left_size = left->size;
+    right_size = right->size;
+    result_is_unsigned = !result->value.integer.is_signed;
 
-    if ((!minic_type_equal(left_type, pointee) || !minic_type_equal(right_type, pointee)) &&
-        !(minic_riscv64_core_integer_type_range_fits(program, function, left_type, pointee) &&
-          minic_riscv64_core_integer_type_range_fits(program, function, right_type, pointee)) &&
+    if ((!minic_lp64_core_equal_unqualified(function->type_context, left_id, pointee_id) ||
+         !minic_lp64_core_equal_unqualified(function->type_context, right_id, pointee_id)) &&
+        !(minic_riscv64_core_integer_type_range_fits(function, left_id, pointee_id) &&
+          minic_riscv64_core_integer_type_range_fits(function, right_id, pointee_id)) &&
         !minic_riscv64_core_integer_overflow_xlen_scratch_exact(
-            program, left_type, right_type, *result_size)) {
+            function, left_id, right_id, *result_size)) {
         bool left_is_result;
         bool right_is_result;
-        const MinicType *other_effective_type;
+        const MinicCoreType *other;
 
         /* Preserve the established narrow signed-result extension for the
            one mixed case whose full unsigned operand range does not fit. */
-        left_is_result = minic_type_equal(left_type, pointee);
-        right_is_result = minic_type_equal(right_type, pointee);
+        left_is_result = minic_lp64_core_equal_unqualified(
+            function->type_context, left_id, pointee_id);
+        right_is_result = minic_lp64_core_equal_unqualified(
+            function->type_context, right_id, pointee_id);
         if ((instruction->value.integer_overflow.operator_kind !=
                  MINIC_CORE_INTEGER_OVERFLOW_ADD &&
              instruction->value.integer_overflow.operator_kind !=
                  MINIC_CORE_INTEGER_OVERFLOW_MULTIPLY) ||
             result_is_unsigned || *result_size >= 8U || left_is_result == right_is_result ||
-            !minic_type_is_signed_integer(effective_result_type)) {
+            !result->value.integer.is_signed) {
             return false;
         }
-        other_effective_type =
-            left_is_result ? &effective_right_type : &effective_left_type;
-        if (!minic_type_is_unsigned_integer(*other_effective_type)) {
+        other = left_is_result ? right : left;
+        if (other->value.integer.is_signed) {
             return false;
         }
         if (instruction->value.integer_overflow.operator_kind ==
@@ -305,7 +270,7 @@ bool minic_riscv64_core_integer_overflow_supported(const MinicC0Program *program
         }
     }
     if (result_type != NULL) {
-        *result_type = pointee;
+        *result_type = pointee_id;
     }
     if (is_unsigned != NULL) {
         *is_unsigned = result_is_unsigned;

@@ -63,6 +63,16 @@ for source in src/target/riscv64/isa.c src/target/riscv64/frame_layout.c; do
 done
 has src/target/riscv64/isa.c 'minic_riscv64_core_is_i128('
 has src/target/riscv64/frame_layout.c 'minic_riscv64_core_is_record('
+# All RV64 integer/overflow machine decisions now use sealed CoreType IDs.
+# The source-C descriptor must not silently return through an emitter branch.
+for source in src/target/riscv64/scalar_emit.c \
+              src/target/riscv64/overflow_emit.c; do
+  lacks "$source" 'minic_type_'
+  lacks "$source" 'instruction->type'
+  lacks "$source" '].type'
+done
+has src/target/riscv64/overflow_emit.c 'minic_riscv64_emit_safe_core_scalar_store('
+has src/target/riscv64/scalar_emit.c 'minic_riscv64_emit_core_integer_conversion('
 # One Common interval index covers small and large Core functions.
 # Never resurrect per-object repeated scans on optional allocation failure.
 exists src/target/common/core_object_intervals.c

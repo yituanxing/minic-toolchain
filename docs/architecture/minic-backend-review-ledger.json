@@ -938,6 +938,12 @@
         666
       ]
     },
+    "src/target/riscv64/core_type_query.h": {
+      "blob": "fba968edaa22546e67e8f380ce9c6d3c9244e5c5",
+      "review_depth": "full",
+      "ci_touched_in": [],
+      "note": "2026-11-02: 29-line sealed CoreType query header reviewed; production RV64 scalar, overflow, frame and admission uses verified separately."
+    },
     "src/target/riscv64/fp_emit.c": {
       "blob": "f3ae57fd71db6f202b5381dd96de7c0c42496858",
       "review_depth": "inventory",

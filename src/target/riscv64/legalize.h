@@ -15,7 +15,7 @@
 bool minic_riscv64_scalar_type(MinicType);
 
 bool minic_riscv64_core_integer_type_is_signed(const MinicCoreFunction *function,
-                                        MinicType type,
+                                        MinicCoreTypeId type_id,
                                         bool *is_signed);
 
 bool minic_riscv64_core_field_address_supported(const MinicCoreInstruction *instruction,
@@ -37,23 +37,17 @@ bool minic_riscv64_core_scalar_bitcast_supported(const MinicC0Program *program,
                                           const MinicCoreFunction *function,
                                           const MinicCoreInstruction *instruction);
 
-bool minic_riscv64_core_integer_type_range_fits(const MinicC0Program *program,
-                                         const MinicCoreFunction *function,
-                                         MinicType source_type,
-                                         MinicType result_type);
+bool minic_riscv64_core_integer_type_range_fits(
+    const MinicCoreFunction *function, MinicCoreTypeId source_type,
+    MinicCoreTypeId result_type);
 
 bool minic_riscv64_core_integer_overflow_xlen_scratch_exact(
-    const MinicC0Program *program,
-    MinicType left_type,
-    MinicType right_type,
-    size_t result_size);
+    const MinicCoreFunction *function, MinicCoreTypeId left_type,
+    MinicCoreTypeId right_type, size_t result_size);
 
-bool minic_riscv64_core_integer_overflow_supported(const MinicC0Program *program,
-                                            const MinicCoreFunction *function,
-                                            const MinicCoreInstruction *instruction,
-                                            MinicType *result_type,
-                                            size_t *result_size,
-                                            bool *is_unsigned);
+bool minic_riscv64_core_integer_overflow_supported(
+    const MinicCoreFunction *function, const MinicCoreInstruction *instruction,
+    MinicCoreTypeId *result_type, size_t *result_size, bool *is_unsigned);
 
 bool minic_riscv64_core_direct_call_supported(const MinicC0Program *program,
                                        const MinicCoreFunction *function,
