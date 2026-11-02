@@ -25,6 +25,9 @@ void minias_common_emission_destroy(MiniAs *as) {
     MiniAsEmissionState *state;
     if(as==NULL || as->emission==NULL)return;
     state=as->emission;
+    for(size_t i=0U;i<state->section_byte_count;++i)
+        free(state->section_bytes[i].data);
+    free(state->section_bytes);
     free(state->fixups);
     if(state->active_encode_result!=NULL) {
         minias_encode_result_destroy(state->active_encode_result);
@@ -32,6 +35,74 @@ void minias_common_emission_destroy(MiniAs *as) {
     }
     free(state);
     as->emission=NULL;
+}
+
+static MiniAsEmittedSection *emission_mutable_section(MiniAs *as,int section) {
+    MiniAsEmissionState *state;
+    size_t index,old_count;
+    if(as==NULL || as->emission==NULL || section<0 ||
+       (size_t)section>=as->section_count) {
+        if(as!=NULL)minias_set_error(as,"invalid-emission-section-id");
+        return NULL;
+    }
+    state=as->emission;
+    index=(size_t)section;
+    old_count=state->section_byte_count;
+    if(!minias_grow_array((void **)&state->section_bytes,
+                          &state->section_byte_capacity,
+                          sizeof(*state->section_bytes),index+1U)) {
+        minias_set_error(as,"out-of-memory:emission-section-buffers");
+        return NULL;
+    }
+    if(index>=old_count) {
+        memset(state->section_bytes+old_count,0,
+               (index+1U-old_count)*sizeof(*state->section_bytes));
+        state->section_byte_count=index+1U;
+    }
+    return &state->section_bytes[index];
+}
+
+/* A failed patch must not allocate an empty output payload. Only append or
+ * full source emission may materialize a SectionID's byte owner. */
+static MiniAsEmittedSection *emission_existing_section(MiniAs *as,int section) {
+    if(as==NULL || as->emission==NULL || section<0 ||
+       (size_t)section>=as->section_count ||
+       (size_t)section>=as->emission->section_byte_count)return NULL;
+    return &as->emission->section_bytes[(size_t)section];
+}
+
+bool minias_emission_section_view(const MiniAs *as,int section,
+                                  MiniAsEmittedSectionView *out) {
+    if(as==NULL || out==NULL || section<0 ||
+       (size_t)section>=as->section_count)return false;
+    *out=(MiniAsEmittedSectionView){NULL,0U};
+    if(as->emission!=NULL && (size_t)section<as->emission->section_byte_count) {
+        const MiniAsEmittedSection *bytes=&as->emission->section_bytes[(size_t)section];
+        *out=(MiniAsEmittedSectionView){bytes->data,bytes->size};
+    }
+    return true;
+}
+
+size_t minias_emission_section_size(const MiniAs *as,int section) {
+    MiniAsEmittedSectionView view;
+    return minias_emission_section_view(as,section,&view)?view.size:0U;
+}
+
+bool minias_emission_clear_leb_payload(MiniAs *as,int section,
+                                       uint64_t offset,size_t width) {
+    MiniAsEmittedSection *bytes;
+    if(as==NULL || section<0 || (size_t)section>=as->section_count ||
+       as->sections[(size_t)section].type==MINIAS_SHT_NOBITS ||
+       offset>SIZE_MAX)return false;
+    bytes=emission_existing_section(as,section);
+    if(bytes==NULL || bytes->data==NULL ||
+       (size_t)offset>bytes->size || width>bytes->size-(size_t)offset) {
+        minias_set_error(as,"uleb-relocation-field-overflow");
+        return false;
+    }
+    for(size_t i=0U;i<width;++i)
+        bytes->data[(size_t)offset+i]&=0x80U;
+    return true;
 }
 
 MiniAsFixupSpan minias_emission_fixups(const MiniAs *as) {
@@ -395,7 +466,7 @@ static bool minias_alignment_emits_target_nops(const MiniAs *as,
 
 static bool minias_stage_instruction_bytes(MiniAs *as,
                                            const void *data, size_t size) {
-    MiniAsSection *sec;
+    const MiniAsSection *sec;
     int section_index;
     MiniAsEncodeResult *result = as->emission->active_encode_result;
     if (result == NULL || !as->emission->emitting_fragment) {
@@ -421,7 +492,7 @@ static bool minias_stage_instruction_bytes(MiniAs *as,
     if ((owner->fragment_kind != MINIAS_FRAGMENT_INSTRUCTION &&
          !minias_alignment_emits_target_nops(as,owner,sec)) ||
         sec->type == MINIAS_SHT_NOBITS ||
-        size > SIZE_MAX - sec->size) {
+        size > SIZE_MAX - minias_emission_section_size(as,section_index)) {
         minias_set_error(as, "instruction-emission-section-or-size");
         return false;
     }
@@ -564,7 +635,7 @@ bool minias_code_align_preceded_by_adjacent_data(const MiniAsCodeAlignSink *sink
 
 /* Materialized Section data uses the same checked capacity owner as every
  * Common vector. NOBITS remains each caller's semantic contract. */
-static bool minias_section_reserve(MiniAs *as,MiniAsSection *sec,size_t need) {
+static bool minias_section_reserve(MiniAs *as,MiniAsEmittedSection *sec,size_t need) {
     if(!minias_grow_array((void **)&sec->data,&sec->capacity,1U,need)) {
         minias_set_error(as,"out-of-memory:section-data");
         return false;
@@ -582,7 +653,7 @@ static bool minias_stage_fragment_bytes(MiniAs *as,int section,
                                          bool target_bytes) {
     MiniAsEncodeResult *result=as->emission->active_encode_result;
     const MiniAsStmt *owner;
-    MiniAsSection *sec=&as->sections[(size_t)section];
+    const MiniAsSection *sec=&as->sections[(size_t)section];
     const unsigned char *bytes=(const unsigned char *)data;
     MiniAsFragmentWrite *write;
     size_t i,needed;
@@ -652,7 +723,7 @@ static bool minias_stage_fragment_pattern(MiniAs *as,int section,
                                            bool ignore_nobits_fill) {
     MiniAsEncodeResult *result=as->emission->active_encode_result;
     const MiniAsStmt *owner;
-    MiniAsSection *sec=&as->sections[(size_t)section];
+    const MiniAsSection *sec=&as->sections[(size_t)section];
     MiniAsFragmentWrite *write;
     size_t size,i;
     if(result==NULL || as->emission->emitting_fragment_id>=as->stmt_count ||
@@ -696,28 +767,31 @@ static bool minias_stage_fragment_pattern(MiniAs *as,int section,
 }
 
 bool minias_section_append(MiniAs *as, int section_index, const void *data, size_t size) {
-    MiniAsSection *sec;
+    const MiniAsSection *meta;
+    MiniAsEmittedSection *sec;
     size_t need;
     if (section_index < 0 || (size_t)section_index >= as->section_count) {
         minias_set_error(as, "internal:bad-section");
         return false;
     }
-    sec = &as->sections[(size_t)section_index];
+    meta=&as->sections[(size_t)section_index];
     if(as->emission!=NULL && as->emission->emitting_fragment &&
        !as->emission->committing_fragment)
         return minias_stage_fragment_bytes(as,section_index,data,size,false);
-    if (sec->type == MINIAS_SHT_NOBITS) {
+    sec=emission_mutable_section(as,section_index);
+    if(sec==NULL)return false;
+    if (meta->type == MINIAS_SHT_NOBITS) {
         const unsigned char *bytes=(const unsigned char *)data;
         size_t i;
         if(size>SIZE_MAX-sec->size) {
-            minias_set_error(as,"section-size-overflow:%s",sec->name);
+            minias_set_error(as,"section-size-overflow:%s",meta->name);
             return false;
         }
         /* GNU rejects real nonzero data in SHT_NOBITS. Previously this
          * branch silently threw it away and produced a success ELF. */
         for(i=0U;i<size;++i) {
             if(bytes[i]!=0U) {
-                minias_set_error(as,"nobits-nonzero-data:%s",sec->name);
+                minias_set_error(as,"nobits-nonzero-data:%s",meta->name);
                 return false;
             }
         }
@@ -725,7 +799,7 @@ bool minias_section_append(MiniAs *as, int section_index, const void *data, size
         return true;
     }
     if (size > SIZE_MAX - sec->size) {
-        minias_set_error(as, "section-size-overflow:%s", sec->name);
+        minias_set_error(as, "section-size-overflow:%s", meta->name);
         return false;
     }
     need = sec->size + size;
@@ -744,7 +818,8 @@ static bool minias_section_append_pattern(MiniAs *as,int section_index,
                                            const unsigned char *pattern,
                                            size_t width,size_t repeat,
                                            bool ignore_nobits_fill) {
-    MiniAsSection *sec;
+    const MiniAsSection *meta;
+    MiniAsEmittedSection *sec;
     size_t bytes,filled,i;
     unsigned char *output;
     if(section_index<0 || (size_t)section_index>=as->section_count ||
@@ -756,17 +831,19 @@ static bool minias_section_append_pattern(MiniAs *as,int section_index,
        !as->emission->committing_fragment)
         return minias_stage_fragment_pattern(as,section_index,pattern,width,
                                              repeat,ignore_nobits_fill);
-    sec=&as->sections[(size_t)section_index];
+    meta=&as->sections[(size_t)section_index];
+    sec=emission_mutable_section(as,section_index);
+    if(sec==NULL)return false;
     bytes=width*repeat;
     if(bytes>SIZE_MAX-sec->size) {
-        minias_set_error(as,"section-size-overflow:%s",sec->name);
+        minias_set_error(as,"section-size-overflow:%s",meta->name);
         return false;
     }
-    if(sec->type==MINIAS_SHT_NOBITS) {
+    if(meta->type==MINIAS_SHT_NOBITS) {
         if(!ignore_nobits_fill)
             for(i=0U;i<width;++i)
                 if(pattern[i]!=0U) {
-                    minias_set_error(as,"nobits-nonzero-data:%s",sec->name);
+                    minias_set_error(as,"nobits-nonzero-data:%s",meta->name);
                     return false;
                 }
         sec->size+=bytes;
@@ -821,10 +898,11 @@ bool minias_section_append_le32(MiniAs *as,int sec,uint32_t value) {
 /* CFI and DWARF-line record headers are patched after their final size is
  * known. Check subtraction bounds before touching the Common Section bytes. */
 bool minias_section_patch_le32(MiniAs *as,int sec,size_t at,uint64_t value) {
-    MiniAsSection *section;
+    MiniAsEmittedSection *section;
     if(as==NULL || sec<0 || (size_t)sec>=as->section_count ||
        value>UINT32_MAX)return false;
-    section=&as->sections[(size_t)sec];
+    section=emission_existing_section(as,sec);
+    if(section==NULL)return false;
     if(section->data==NULL || at>section->size ||
        section->size-at<4U)return false;
     minias_store_le32(section->data+at,(uint32_t)value);
@@ -952,7 +1030,9 @@ bool minias_emit_sections(MiniAs *as) {
     }
 
     for (i = 0U; i < as->section_count; ++i) {
-        as->sections[i].size = 0U;
+        MiniAsEmittedSection *bytes=emission_mutable_section(as,(int)i);
+        if(bytes==NULL)return false;
+        bytes->size=0U;
     }
     if (as->stmt_count != 0U) {
         refs = malloc(as->stmt_count * sizeof(*refs));
@@ -969,8 +1049,9 @@ bool minias_emit_sections(MiniAs *as) {
 
     for (i = 0U; i < as->stmt_count; ++i) {
         MiniAsStmt *stmt = refs[i].stmt;
-        MiniAsSection *section = &as->sections[(size_t)stmt->section];
-        if ((uint64_t)section->size > stmt->offset) {
+        const MiniAsSection *section=&as->sections[(size_t)stmt->section];
+        size_t emitted=minias_emission_section_size(as,stmt->section);
+        if ((uint64_t)emitted > stmt->offset) {
             /* The offset invariant must fail CLOSED, but record the
              * exact preceding fragment to locate the real producer that
              * emitted > its measured size. Never hide overlap by
@@ -982,7 +1063,7 @@ bool minias_emit_sections(MiniAs *as) {
                 "previous_line=%zu:previous_source=%.35s",
                 stmt->op,stmt->line,
                 (unsigned long long)stmt->offset,
-                (unsigned long long)section->size,
+                (unsigned long long)emitted,
                 previous?previous->op:"none",
                 previous?(unsigned long long)previous->offset:0ULL,
                 previous?previous->size:0U,
@@ -991,8 +1072,8 @@ bool minias_emit_sections(MiniAs *as) {
             free(refs);
             return false;
         }
-        if ((uint64_t)section->size < stmt->offset) {
-            uint64_t gap = stmt->offset - (uint64_t)section->size;
+        if ((uint64_t)emitted < stmt->offset) {
+            uint64_t gap = stmt->offset - (uint64_t)emitted;
             if (gap > SIZE_MAX ||
                 !minias_section_append_zero(as, stmt->section, (size_t)gap)) {
                 free(refs);
@@ -1086,14 +1167,15 @@ bool minias_emit_sections(MiniAs *as) {
     free(refs);
 
     for (i = 0U; i < as->section_count; ++i) {
-        MiniAsSection *section = &as->sections[i];
+        const MiniAsSection *section=&as->sections[i];
+        size_t emitted=minias_emission_section_size(as,(int)i);
 
-        if ((uint64_t)section->size > section->layout_size) {
+        if ((uint64_t)emitted > section->layout_size) {
             minias_set_error(as, "internal:section-layout-size:%s", section->name);
             return false;
         }
-        if ((uint64_t)section->size < section->layout_size) {
-            uint64_t gap = section->layout_size - (uint64_t)section->size;
+        if ((uint64_t)emitted < section->layout_size) {
+            uint64_t gap = section->layout_size - (uint64_t)emitted;
             if (gap > SIZE_MAX ||
                 !minias_section_append_zero(as, (int)i, (size_t)gap)) {
                 if (as->error[0] == '\0') {

@@ -57,10 +57,21 @@ typedef struct MiniAsEncodeResult {
     uint32_t elf_flags_or;
 } MiniAsEncodeResult;
 
+/* Bytes are not Section metadata. The Emission owner retains the sole
+ * materialized payload for each Context SectionID, including NOBITS size. */
+typedef struct MiniAsEmittedSection {
+    unsigned char *data;
+    size_t size;
+    size_t capacity;
+} MiniAsEmittedSection;
+
 /* The Emission owner allocates/releases this whole graph. Only the output
  * transaction and its shared MCData/Target request encoder include this
  * definition. No generic parser, layout or ELF writer can mutate it. */
 struct MiniAsEmissionState {
+    MiniAsEmittedSection *section_bytes;
+    size_t section_byte_count;
+    size_t section_byte_capacity;
     MiniAsFixup *fixups;
     size_t fixup_count;
     size_t fixup_capacity;

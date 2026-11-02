@@ -1,5 +1,6 @@
 #include "minias_internal.h"
 #include "minias_common_context.h"
+#include "minias_common_emission.h"
 
 #include <limits.h>
 #include <stdint.h>
@@ -49,18 +50,16 @@ static bool sleb(MiniAs *as,int sec,int64_t value) {
  * Both paths patch the same four-byte record length field. */
 static bool finish_length_aligned(MiniAs *as,int sec,size_t begin,
                                   unsigned alignment,bool section_relative) {
-    MiniAsSection *section=&as->sections[(size_t)sec];
+    size_t emitted=minias_emission_section_size(as,sec);
     uint32_t length;
-    if(alignment==0U || section->size<begin ||
+    if(alignment==0U || emitted<begin ||
        (alignment&(alignment-1U))!=0U)return false;
-    while((section_relative?section->size:section->size-begin)%alignment!=0U) {
+    while((section_relative?emitted:emitted-begin)%alignment!=0U) {
         if(!put8(as,sec,0U))return false;
-        section=&as->sections[(size_t)sec];
+        emitted=minias_emission_section_size(as,sec);
     }
-    section=&as->sections[(size_t)sec];
-    if(section->size-begin<4U ||
-       section->size-begin-4U>UINT32_MAX)return false;
-    length=(uint32_t)(section->size-begin-4U);
+    if(emitted-begin<4U || emitted-begin-4U>UINT32_MAX)return false;
+    length=(uint32_t)(emitted-begin-4U);
     return minias_section_patch_le32(as,sec,begin,length);
 }
 static bool finish_length(MiniAs *as,int sec,size_t begin) {
@@ -79,11 +78,9 @@ static bool cfi_length_anchor(MiniAs *as,int sec,size_t offset,
 }
 static bool cfi_finalize_debug_length(MiniAs *as,int sec,size_t begin) {
     char end_name[72],start_name[72];
-    MiniAsSection *data;
     size_t end;
     if(!as->target->cfi_debug_length_relocations)return true;
-    data=&as->sections[(size_t)sec];
-    end=data->size;
+    end=minias_emission_section_size(as,sec);
     if(end<4U || begin>end-4U)return false;
     if(!cfi_length_anchor(as,sec,end,end_name,sizeof(end_name)) ||
        !cfi_length_anchor(as,sec,begin+4U,start_name,
@@ -147,7 +144,7 @@ static bool advance_cfi(MiniAs *as,int sec,size_t from_symbol,
                 minias_set_error(as,"unsupported-cfi-short-relocation");
                 return false;
             }
-            field=as->sections[(size_t)sec].size;
+            field=minias_emission_section_size(as,sec);
             return put8(as,sec,0x40U) &&
                    minias_add_section_fixup(as,
                      MINIAS_FIXUP_ORIGIN_SYNTHETIC_SECTION,
@@ -164,14 +161,14 @@ static bool advance_cfi(MiniAs *as,int sec,size_t from_symbol,
     }
     if(delta<=255U) {
         if(!put8(as,sec,2U))return false;
-        field=as->sections[(size_t)sec].size;
+        field=minias_emission_section_size(as,sec);
         return put8(as,sec,reloc?0U:(uint8_t)delta) &&
                (!reloc || cfi_advance_fixups(as,sec,field,from_symbol,
                                               to_symbol,1U));
     }
     if(delta<=65535U) {
         if(!put8(as,sec,3U))return false;
-        field=as->sections[(size_t)sec].size;
+        field=minias_emission_section_size(as,sec);
         return put8(as,sec,reloc?0U:(uint8_t)delta) &&
                put8(as,sec,reloc?0U:(uint8_t)(delta>>8U)) &&
                (!reloc || cfi_advance_fixups(as,sec,field,from_symbol,
@@ -179,7 +176,7 @@ static bool advance_cfi(MiniAs *as,int sec,size_t from_symbol,
     }
     if(delta>UINT32_MAX)return false;
     if(!put8(as,sec,4U))return false;
-    field=as->sections[(size_t)sec].size;
+    field=minias_emission_section_size(as,sec);
     return put32(as,sec,reloc?0U:(uint32_t)delta) &&
            (!reloc || cfi_advance_fixups(as,sec,field,from_symbol,
                                           to_symbol,4U));
@@ -279,7 +276,7 @@ static bool emit_eh_cie(MiniAs *as,int sec,bool simple,bool signal,
                         unsigned return_column,
                         size_t first,size_t count,size_t *cie_begin) {
     MiniAsCfiABI abi=minias_cfi_abi(as);
-    size_t begin=as->sections[(size_t)sec].size;
+    size_t begin=minias_emission_section_size(as,sec);
     *cie_begin=begin;
     if(abi.code_align==0U || abi.data_align>=0 ||
        abi.return_reg>255U || return_column>255U ||
@@ -310,7 +307,7 @@ static bool emit_debug_cie(MiniAs *as,int sec,bool simple,
     const MiniAsCfiABI abi=minias_cfi_abi(as);
     unsigned version=as->target->cfi_cie_version!=0U ?
                      as->target->cfi_cie_version : 1U;
-    size_t begin=as->sections[(size_t)sec].size;
+    size_t begin=minias_emission_section_size(as,sec);
     *cie_begin=begin;
     if(abi.code_align==0U || abi.data_align>=0 ||
        abi.address_size==0U || version>UINT8_MAX ||
@@ -408,7 +405,6 @@ static bool cfi_emit_section_core(MiniAs *as,bool eh,
     size_t i,variant_count=0U;
     char debug_base_name[72]={0};
     int section;
-    MiniAsSection *data;
     if(eh && (!as->target->cfi_implicit_eh_frame ||
               minias_cfi_abi(as).address_size!=(as->output_elf32?4U:8U) ||
               as->target->supports_fixup==NULL ||
@@ -488,8 +484,7 @@ static bool cfi_emit_section_core(MiniAs *as,bool eh,
         /* Both insertion and reuse now resolve through the one canonical
          * CIE slot; no branch-dependent variant_index assignment. */
         variant_index=variant_slots[slot]-1U;
-        data=&as->sections[(size_t)section];
-        base=data->size;
+        base=minias_emission_section_size(as,section);
         if(eh && i==0U && as->target->record_cfi_data_mapping!=NULL &&
            !minias_cfi_record_target_mapping(as,section,(uint64_t)base))
             return false;
@@ -501,7 +496,7 @@ static bool cfi_emit_section_core(MiniAs *as,bool eh,
             if(base+4U<cie || base+4U-cie>UINT32_MAX)return false;
             if(!put32(as,section,0U) ||
                !put32(as,section,(uint32_t)(base+4U-cie)))return false;
-            ptr=as->sections[(size_t)section].size;
+            ptr=minias_emission_section_size(as,section);
             if(!put32(as,section,0U) ||
                !put32(as,section,as->target->cfi_fde_range_relocations ?
                      0U : (uint32_t)(end->value-begin->value)) ||
@@ -521,7 +516,7 @@ static bool cfi_emit_section_core(MiniAs *as,bool eh,
             if(cie>UINT32_MAX)return false;
             if(!put32(as,section,0U) ||
                !put32(as,section,0U))return false;
-            ptr=as->sections[(size_t)section].size;
+            ptr=minias_emission_section_size(as,section);
             /* GNU uses STT_SECTION rather than the private CIE label.
              * Keep this identity independent of Target fold heuristics. */
             if(!put_cfi_address(as,section,0U) ||
@@ -573,7 +568,7 @@ static bool cfi_emit_section_core(MiniAs *as,bool eh,
                 (abi.eh_fde_alignment!=0U ?
                  abi.eh_fde_alignment : abi.address_size);
             if(align==0U || (align&(align-1U))!=0U)return false;
-            while((as->sections[(size_t)section].size&
+            while((minias_emission_section_size(as,section)&
                    (size_t)(align-1U))!=0U)
                 if(!put8(as,section,0U))return false;
         }

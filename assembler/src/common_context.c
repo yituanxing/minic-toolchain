@@ -1,4 +1,5 @@
 #include "minias_common_context.h"
+#include "minias_common_emission.h"
 
 #include <limits.h>
 #include <stdlib.h>
@@ -10,6 +11,7 @@
  * their semantic records; hash slots are not semantic object state. */
 struct MiniAsContextIndexState {
     size_t section_capacity;
+    MiniAsSection *section_records; /* same allocation as as->sections */
     size_t *section_slots;
     size_t section_slot_capacity;
     size_t symbol_capacity;
@@ -55,12 +57,11 @@ bool minias_common_context_init(MiniAs *as) {
 void minias_common_context_destroy_sections(MiniAs *as) {
     size_t i;
     for (i = 0U; i < as->section_count; ++i) {
-        free(as->sections[i].name);
-        free(as->sections[i].group_signature);
-        free(as->sections[i].link_order_reference);
-        free(as->sections[i].data);
+        free((void *)as->sections[i].name);
+        free((void *)as->sections[i].group_signature);
+        free((void *)as->sections[i].link_order_reference);
     }
-    free(as->sections);
+    if(as->context_indexes!=NULL)free(as->context_indexes->section_records);
     if(as->context_indexes!=NULL)free(as->context_indexes->section_slots);
 }
 
@@ -302,7 +303,7 @@ bool minias_common_context_finalize_symbol_layout(
         symbol->size_end_value=start->value+symbol->size;
     }
     for(i=0U;i<section_count;++i)
-        as->sections[i].layout_size=section_sizes[i];
+        as->context_indexes->section_records[i].layout_size=section_sizes[i];
     return true;
 }
 
@@ -438,7 +439,7 @@ int minias_ensure_section_key(MiniAs *as,
         return -1;
     }
     if(found>=0) {
-        sec=&as->sections[(size_t)found];
+        sec=&as->context_indexes->section_records[(size_t)found];
         if(sec->group_flags!=group_flags) {
             minias_set_error(as,"conflicting-section-group-linkage:%s",key->name);
             return -1;
@@ -456,12 +457,14 @@ int minias_ensure_section_key(MiniAs *as,
         return -1;
     }
     if(!minias_reserve_section_index(as))return -1;
-    if(!minias_grow_array((void **)&as->sections,&as->context_indexes->section_capacity,
+    if(!minias_grow_array((void **)&as->context_indexes->section_records,
+                          &as->context_indexes->section_capacity,
                           sizeof(*as->sections),as->section_count+1U)) {
         minias_set_error(as,"out-of-memory:section");
         return -1;
     }
-    sec=&as->sections[as->section_count];
+    as->sections=as->context_indexes->section_records;
+    sec=&as->context_indexes->section_records[as->section_count];
     memset(sec,0,sizeof(*sec));
     sec->name=minias_strdup(key->name);
     if(sec->name==NULL) {
@@ -471,7 +474,7 @@ int minias_ensure_section_key(MiniAs *as,
     if(key->group_signature!=NULL) {
         sec->group_signature=minias_strdup(key->group_signature);
         if(sec->group_signature==NULL) {
-            free(sec->name);sec->name=NULL;
+            free((void *)sec->name);sec->name=NULL;
             minias_set_error(as,"out-of-memory:group-signature");
             return -1;
         }
@@ -479,8 +482,8 @@ int minias_ensure_section_key(MiniAs *as,
     if(key->link_order_reference!=NULL) {
         sec->link_order_reference=minias_strdup(key->link_order_reference);
         if(sec->link_order_reference==NULL) {
-            free(sec->group_signature);sec->group_signature=NULL;
-            free(sec->name);sec->name=NULL;
+            free((void *)sec->group_signature);sec->group_signature=NULL;
+            free((void *)sec->name);sec->name=NULL;
             minias_set_error(as,"out-of-memory:link-order-reference");
             return -1;
         }
@@ -517,7 +520,7 @@ bool minias_common_context_raise_section_alignment(MiniAs *as,int section,
         minias_set_error(as,"invalid-source-section-alignment");
         return false;
     }
-    sec=&as->sections[(size_t)section];
+    sec=&as->context_indexes->section_records[(size_t)section];
     if(sec->align<alignment)sec->align=alignment;
     return true;
 }
@@ -530,7 +533,7 @@ bool minias_common_context_apply_ident_comment(MiniAs *as,int section) {
         minias_set_error(as,"invalid-ident-comment-section");
         return false;
     }
-    sec=&as->sections[(size_t)section];
+    sec=&as->context_indexes->section_records[(size_t)section];
     /* GAS upgrades an existing .comment regardless of its prior flags;
      * this is intentionally different from an ordinary .section reopen. */
     sec->flags|=MINIAS_SHF_MERGE|MINIAS_SHF_STRINGS;
@@ -548,8 +551,8 @@ bool minias_common_context_set_section_alignment(MiniAs *as,int section,
         minias_set_error(as,"invalid-initial-section-alignment");
         return false;
     }
-    sec=&as->sections[(size_t)section];
-    if(sec->size!=0U || sec->layout_size!=0U) {
+    sec=&as->context_indexes->section_records[(size_t)section];
+    if(minias_emission_section_size(as,section)!=0U || sec->layout_size!=0U) {
         minias_set_error(as,"section-already-materialized");
         return false;
     }
@@ -1059,7 +1062,7 @@ static bool minias_require_target_section_alignment(MiniAs *as, int section,
         return false;
     }
     if(as->sections[(size_t)section].align<alignment)
-        as->sections[(size_t)section].align=alignment;
+        as->context_indexes->section_records[(size_t)section].align=alignment;
     return true;
 }
 

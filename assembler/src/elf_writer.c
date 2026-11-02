@@ -439,8 +439,10 @@ static bool minias_write_elf(MiniAs *as,
     }
 
     for (i = 0U; i < as->section_count; ++i) {
-        MiniAsSection *input = &as->sections[i];
+        const MiniAsSection *input=&as->sections[i];
+        MiniAsEmittedSectionView bytes;
         MiniElfWriteSection *output = &sections[i];
+        if(!minias_emission_section_view(as,(int)i,&bytes))goto done;
 
         output->name = input->name;
         output->type = input->type;
@@ -458,8 +460,8 @@ static bool minias_write_elf(MiniAs *as,
         }
         output->alignment = input->align == 0U ? 1U : input->align;
         output->entry_size = input->entry_size;
-        output->data = input->data;
-        output->size = input->size;
+        output->data=bytes.data;
+        output->size=bytes.size;
     }
 
     if (emit_attribute) {
@@ -599,9 +601,9 @@ static bool minias_write_elf(MiniAs *as,
         /* Finalization of the target-owned, typed fixup.
          * Check the actual emitted section extent before exposing an ELF
          * relocation; do not allow an out-of-bounds machine-field patch. */
-        if (input->width > as->sections[(size_t)input->section].size ||
+        if (input->width > minias_emission_section_size(as,input->section) ||
             final_offset >
-            as->sections[(size_t)input->section].size - input->width) {
+            minias_emission_section_size(as,input->section) - input->width) {
             minias_set_error(as, "fixup-field-out-of-bounds:kind=%u",
                              (unsigned)input->kind);
             goto done;

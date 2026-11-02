@@ -7,6 +7,55 @@
 > 和早期测试文件数量，均不能自动当作最新 HEAD 的事实。
 > “读过 / 修改过 / 完成清理”必须分别统计。
 
+### 2026-11-02 P06 Section metadata and payload become distinct owners
+
+**Exact previous published head:** `ebe366e89aa2aca8e4e494cf0966b01c1ebb182e`
+on Draft PR #667. The MiniAS Target ISA ABI, x86/Loong GNU/Four-Target,
+MiniC Native Strict and MiniC Four-Architecture Runtime workflows were
+all SUCCESS at that SHA, including the compiler-enforced Symbol const gate.
+
+1. **Keep one SectionID, split actual ownership.** Common Context still
+   allocates the sole SectionKey/metadata table and publishes one const
+   `MiniAsSection *` view. The old shared `MiniAsSection.data/size/capacity`
+   fields are deleted. Emission's private state now owns the only emitted
+   payload allocation, its byte count (also the NOBITS size) and capacity,
+   indexed by the original SectionID. There is no second identity table,
+   metadata mirror, copied object or reverse Section map.
+2. **All consumers move together.** Source Fragments, direct CFI/DWARF
+   synthetic emit, post-emit Target projections and ELF serialization join
+   the same metadata/byte snapshots. Context adjusts first declaration,
+   alignment, `.ident` and final layout sizes; Emission materializes and
+   patches bytes. CFI/DWARF/ELF/Driver cannot modify metadata or bytes
+   through the published const handles. Context bootstrap alignment checks
+   current output size through the Emission read API.
+3. **Delete MCLayout's cross-domain byte edit.** LoongArch's special LEB
+   ADD/SUB relocation policy still chooses to preserve only continuation
+   bits, but now invokes one range-checked Emission payload patch. RISC-V's
+   resolved LEB bytes remain untouched. Layout does not borrow a mutable
+   Section or byte vector; no synthesized source or fallback is introduced.
+4. **Actual invariants enforced.** Eight negative C11 compilations reject
+   metadata/name writes, old byte fields, mutable borrow, private Context/
+   Emission capacity access and mutation through a read view; one valid
+   consumer compiles. The production LEB/LE32 test now instantiates the
+   real Emission owner and verifies 82 SectionIDs after Context growth,
+   cross-Section payload independence, NOBITS size and LEB bit masking.
+   It no longer fabricates writable `MiniAsSection.data` in a test harness.
+
+**Production source delta against `ebe366e8`:** ten modified
+`assembler/src` files, **+203/-98**, net **+105** lines. The addition is
+the new private emitted-byte owner and typed views replacing scattered
+direct Section byte/state access. Tests, CI and documentation are extra.
+
+**Local proof:** strict release `-Werror` A0 **30/30 PASS**; old/new
+four-target **26 fixtures (18 byte-identical ELF, eight matched
+rejects)**; GNU ELF32/64 CFI real linker and DWARF named views;
+4096-SectionKey/8192-Subsection, `.org` branch fixed-point and Fixup
+transactions; eight negative/one positive compilation and runtime
+82-SectionID owner test; Section/Symbol/Emission and Target boundary
+gates all PASS. Local GNU cross-assembler and `pyelftools` gaps remain
+explicit (not silently counted); the new exact-head remote CI and full
+GNU/Linux execution need separate verification.
+
 ### 2026-11-02 P06 compiler-enforced Symbol const capability
 
 **Exact prior published head:** `bc2a6bb39c68bc013c3243b48649ae801f3bd76e`

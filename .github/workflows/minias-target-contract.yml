@@ -105,6 +105,8 @@ jobs:
         run: bash tests/assembler/probe-common-context-emission-boundary.sh
       - name: Context owns Section metadata and one post-layout size commit
         run: bash tests/assembler/probe-common-context-section-metadata-owner.sh
+      - name: Section metadata and emitted bytes have compile-time distinct owners
+        run: bash tests/assembler/probe-common-section-owners-const.sh
       - name: Context owns all source, layout and synthetic Symbol state
         run: bash tests/assembler/probe-common-context-symbol-owner.sh
       - name: Context Symbol table is compiler-enforced const outside its owner

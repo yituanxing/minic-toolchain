@@ -1,5 +1,6 @@
 #include "minias_internal.h"
 #include "minias_common_context.h"
+#include "minias_common_emission.h"
 
 #include <ctype.h>
 #include <errno.h>
@@ -260,7 +261,7 @@ static bool set_address(MiniAs *as,int sec,size_t symbol_index,
     if(!append_byte(as,sec,0U) ||
        !append_leb(as,sec,(uint64_t)address_width+1U) ||
        !append_byte(as,sec,2U))return false;
-    at=as->sections[(size_t)sec].size;
+    at=minias_emission_section_size(as,sec);
     for(i=0U;i<address_width;++i)
         if(!append_byte(as,sec,0U))return false;
     return minias_add_section_fixup(as,
@@ -463,14 +464,14 @@ bool minias_debug_emit(MiniAs *as) {
      * with the synthesized .file/.loc line program: their headers, row
      * ordering and relocation ownership are independent object producers.
      * An explicitly selected but empty section is not a conflicting owner. */
-    if(as->sections[(size_t)sec].size!=0U) {
+    if(minias_emission_section_size(as,sec)!=0U) {
         minias_set_error(as,"duplicate-dwarf-line-section");
         goto failed;
     }
     if(!append_u32(as,sec,0U) || !append_u16(as,sec,4U))goto failed;
-    header_len_at=as->sections[(size_t)sec].size;
+    header_len_at=minias_emission_section_size(as,sec);
     if(!append_u32(as,sec,0U))goto failed;
-    header_start=as->sections[(size_t)sec].size;
+    header_start=minias_emission_section_size(as,sec);
     if(!append_byte(as,sec,1U) || !append_byte(as,sec,1U) ||
        !append_byte(as,sec,1U) || !append_byte(as,sec,(uint8_t)-5) ||
        !append_byte(as,sec,14U) || !append_byte(as,sec,13U) ||
@@ -488,7 +489,7 @@ bool minias_debug_emit(MiniAs *as) {
            !append_leb(as,sec,0U))goto failed;
     if(!append_byte(as,sec,0U) ||
        !minias_section_patch_le32(as,sec,header_len_at,
-                as->sections[(size_t)sec].size-header_start))goto failed;
+                minias_emission_section_size(as,sec)-header_start))goto failed;
     for(begin=0U;begin<as->debug_loc_count;) {
         const MiniAsDebugLoc *first=&as->debug_locs[order[begin].ordinal];
         const MiniAsSymbol *first_sym=&as->symbols[first->symbol_index];
@@ -560,7 +561,7 @@ bool minias_debug_emit(MiniAs *as) {
         begin=j;
     }
     if(!minias_section_patch_le32(as,sec,0U,
-                                 as->sections[(size_t)sec].size-4U))goto failed;
+                                 minias_emission_section_size(as,sec)-4U))goto failed;
     free(directory_slots);free(files);free(directories);free(order);return true;
 failed:
     if(as->error[0]=='\0')minias_set_error(as,"dwarf-line-emission-failed");

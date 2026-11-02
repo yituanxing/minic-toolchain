@@ -74,16 +74,18 @@ bool minias_post_emit_fragment(const MiniAsPostEmitView *view,size_t index,
 bool minias_post_emit_section(const MiniAsPostEmitView *view,size_t index,
                               MiniAsSectionView *out) {
     const MiniAsSection *section;
+    MiniAsEmittedSectionView bytes;
     if(view==NULL || view->as==NULL || out==NULL ||
-       index>=view->as->section_count)return false;
+       index>=view->as->section_count ||
+       !minias_emission_section_view(view->as,(int)index,&bytes))return false;
     section=&view->as->sections[index];
     *out=(MiniAsSectionView){
         .name=section->name,
         .type=section->type,
         .flags=section->flags,
         .align=section->align,
-        .data=section->data,
-        .size=section->size
+        .data=bytes.data,
+        .size=bytes.size
     };
     return true;
 }

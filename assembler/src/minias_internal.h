@@ -11,13 +11,13 @@ typedef struct MiniAsInternedSymbolName {
 } MiniAsInternedSymbolName;
 
 typedef struct MiniAsSection {
-    char *name;
+    const char *name;
     /* GNU ELF SHT_GROUP signature; absent for ordinary Sections. */
-    char *group_signature;
+    const char *group_signature;
     /* SHT_GROUP flags are distinct from Section flags. */
     uint32_t group_flags;
     /* SHF_LINK_ORDER references the original symbol, not just SectionID. */
-    char *link_order_reference;
+    const char *link_order_reference;
     /* Explicit GNU unique ID is part of identity; zero is meaningful. */
     bool has_unique_id;
     uint32_t unique_id;
@@ -25,9 +25,8 @@ typedef struct MiniAsSection {
     uint64_t flags;
     uint64_t align;
     uint64_t entry_size;
-    unsigned char *data;
-    size_t size;
-    size_t capacity;
+    /* Output bytes/length/capacity belong exclusively to Emission, indexed
+     * by this SectionID. This record is metadata and identity only. */
     uint64_t layout_size;
 } MiniAsSection;
 
@@ -158,7 +157,8 @@ typedef struct MiniAsDebugLoc {
 
 typedef struct MiniAs {
     const struct MiniAsTargetOps *target;
-    MiniAsSection *sections;
+    /* Read-only projection of Context's single metadata allocation. */
+    const MiniAsSection *sections;
     size_t section_count;
     /* Borrowed read-only view of Context's ONE SymbolID array. Its mutable
      * allocation lives only in the opaque Context index owner. */

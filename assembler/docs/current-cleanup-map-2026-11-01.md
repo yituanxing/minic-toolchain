@@ -1,5 +1,20 @@
 # MiniAS 当前清理与所有权总览（2026-11-01）
 
+> **2026-11-02 P06 Section 身份与输出字节整批分离（基于已发布
+> `ebe366e8`）：** SectionID 和唯一 SectionKey 元数据向量归 Context，
+> 全 Common 仅能获得 `const MiniAsSection *`；原 Section 记录中
+> `data/size/capacity` 三个字段彻底删除。Emission 私有的
+> `MiniAsEmittedSection[]` 只保存对应 SectionID 的输出字节、NOBITS
+> 长度与容量；ELF Writer、CFI、DWARF、Driver 消费临时 const
+> bytes 视图，不复制第二套 Section 元数据。MCLayout 的
+> LoongArch deferred LEB payload 清零也迁到 Emission 有界补丁，
+> 不再直写 Section 字节。新增八个负向/一个正向编译检查与
+> 82-SectionID + NOBITS + LEB mask 运行时所有权测试；旧测试的
+> 伪造可写 Section fixture 已换成真实 Emission 事务。
+> 本地 A0 30/30、26 组四目标旧新对象差分、GNU CFI/DWARF、
+> SectionKey/`.org`/Fixup 和上下游结构门禁均 PASS；
+> 本批远端 exact-head、交叉 GNU/Linux 仍按新 SHA 独立确认。
+
 > **2026-11-02 P06 Symbol 编译期只读边界（基于已发布
 > `bc2a6bb3`）：** 上一批已统一 Symbol 语义写入，这一批连同
 > 25 个生产翻译单元的读路径与所有创建路径一起迁移。唯一可写
@@ -182,10 +197,12 @@
   本批进一步关闭可写 Subsection、raw Fixup/pattern 和 bootstrap
   alignment 外泄。**本轮已完成 Symbol 语义写入集中到 Context：**
   前端、Layout、CFI/DWARF、MCExpr、Emission 不再直接修改 Symbol；
-  **本批进一步把唯一可写 Symbol 数组收归 Context 私有，外部
-  const 借用及查找/intern 分离均完成。**仍待清点余下 Section
-  宽借用和可进一步收成纯 SymbolID 值查询的消费者，每批删除
-  原实现而非留下桥接双路径。
+  **Symbol 唯一可写数组已收归 Context 私有，外部 const 借用
+  及查找/intern 分离均完成；本批又将 Section 元数据与 Emission
+  字节缓冲按 SectionID 分离，关闭全部跨域 Section 可写指针和
+  Layout 的直接 LEB 字节补丁。**剩余是更窄的 SymbolID-only
+  值查询、Driver/ELF 的宽 Session 读取，以及与 P04 共同收口
+  的 Target 生命周期边界，不再重复做上述完成的所有权工作。
 - [x] **Fragment 负载类型化**：按 FragmentKind 收窄
   `MiniAsStmt` 的 DATA/ALIGN/ORG/INSTRUCTION 等专属 payload；
   Parser/Layout/Emitter/Target/SourceGraph 整批迁移，删除旧字段，

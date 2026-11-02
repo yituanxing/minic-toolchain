@@ -1042,12 +1042,11 @@ bool minias_emit_deferred_leb_relocations(MiniAs *as) {
     for(i=0U;i<as->stmt_count;++i) {
         const MiniAsStmt *stmt=&as->stmts[i];
         const MiniAsSymbol *positive,*negative;
-        size_t pos_id,neg_id,j;
+        size_t pos_id,neg_id;
         int64_t addend;
         bool crosses=false;
         MiniAsFixupKind positive_fixup=mode==2U ?
             MINIAS_FIXUP_LEB_SET:MINIAS_FIXUP_LEB_ADD;
-        MiniAsSection *section;
         if(stmt->fragment_kind!=MINIAS_FRAGMENT_BYTES ||
            stmt->payload.bytes.leb_mode!=1U ||
            !stmt->payload.bytes.deferred_size ||
@@ -1081,9 +1080,9 @@ bool minias_emit_deferred_leb_relocations(MiniAs *as) {
                              stmt->line);
             return false;
         }
-        section=&as->sections[(size_t)stmt->section];
-        if(stmt->size==0U || stmt->offset>section->size ||
-           stmt->size>section->size-stmt->offset) {
+        size_t emitted=minias_emission_section_size(as,stmt->section);
+        if(stmt->size==0U || stmt->offset>emitted ||
+           stmt->size>emitted-stmt->offset) {
             minias_set_error(as,"uleb-relocation-field-overflow:line=%zu",
                              stmt->line);
             return false;
@@ -1096,10 +1095,8 @@ bool minias_emit_deferred_leb_relocations(MiniAs *as) {
          * ADD/SUB relocation policy clears the payload while retaining the
          * LEB continuation-bit width.  Applying that rule to RISC-V changes
          * the original object bytes (e.g. 129 -> 0) before GNU ld sees it. */
-        if(mode==3U) {
-            for(j=0U;j<stmt->size;++j)
-                section->data[(size_t)stmt->offset+j]&=0x80U;
-        }
+        if(mode==3U && !minias_emission_clear_leb_payload(
+                as,stmt->section,stmt->offset,stmt->size))return false;
     }
     return true;
 }
