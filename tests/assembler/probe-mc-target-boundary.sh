@@ -207,7 +207,8 @@ for source, fn in ((a64, 'a64_record_source_mappings'),
         raise SystemExit(fn + ' still reaches into the mutable Core')
 if 'minias_post_emit_raise_section_alignment(object,' not in a64 or \
         'minias_post_emit_define_mapping_symbol(object,' not in a64 or \
-        'minias_post_emit_define_mapping_symbol(' not in rv:
+        not re.search(r'minias_post_emit_append_exact_mapping_symbol\s*\(\s*object\s*,',rv) or \
+        'minias_post_emit_append_exact_mapping_symbol(' not in core:
     raise SystemExit('Target object mutation bypassed the finalization sink')
 if not re.search(r'static bool la_validate\s*\(const MiniAsPostEmitView\s*\*', la):
     raise SystemExit('LoongArch output validator still receives writable Core')

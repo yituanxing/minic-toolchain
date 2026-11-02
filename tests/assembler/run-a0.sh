@@ -10,6 +10,7 @@ mkdir -p "$work"
 sh tests/assembler/probe-riscv-absolute-relocs.sh
 bash tests/assembler/probe-rv-zbb-site-gnu.sh
 bash tests/assembler/probe-rv-v-site-gnu.sh
+bash tests/assembler/probe-rv-site-mapping-gnu.sh
 bash tests/assembler/probe-rv-priv-spec-gnu.sh
 bash tests/assembler/probe-rv-local-la-gnu.sh
 bash tests/assembler/probe-rv-li-gnu.sh

@@ -48,6 +48,9 @@ typedef struct MiniAsSectionState {
 
 typedef struct MiniAsSymbol {
     const char *name;
+    /* GNU RISC-V may emit the same mapping name at several code sites.
+     * These finalization-only object symbols are not source-name bindings. */
+    bool unindexed_mapping;
     int section;
     uint64_t value;
     uint64_t size;

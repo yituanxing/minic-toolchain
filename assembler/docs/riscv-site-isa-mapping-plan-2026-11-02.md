@@ -1,5 +1,18 @@
 # RISC-V lexical ISA 与 `$x` mapping：下一批闭环实施计划（2026-11-02）
 
+> **实施更新（2026-11-02，本批提交）：** 下文第 1 节及第 3–4 节
+> 描述的是 `37394c1d` **历史基线与当时计划**，不是最新代码事实。
+> 本次已按该链路完成 supported lexical `arch,+zbb/+v`、`rvc/norvc`
+> 的 Target 私有 effective ISA 投影：file `Tag_RISCV_arch` 不受
+> local option 污染；SourceGraph forced replay 现校验 provenance；
+> PostEmit 已移除单 Section 起始 `$x` 实现，改为源事件顺序的
+> section mapping state machine，以最终 layout offset 和 Common
+> exact-name sink 输出真实 GNU 重复名/转换。GNU 2.42 RV32/64
+> `transition/rvc/alignment/profile/profile_g/profile_v` **12/12
+> 严格通过**，并作为可用 GNU toolchain 时的 A0/CI gate。
+> 原始 Linux 六份 `.s` 及任意版本化 `.option arch`、多架构真实
+> link/QEMU 未在本次证明；后续验收不得凭该 12 组推定全域等价。
+
 > 状态：**设计/审查记录，不是已实现功能或验收证明。**
 > 基线：`37394c1d`，`refactor/minias-target-isa-abi-core`。
 > 本记录不修改当前 cleanup map、历史账本或任何 ISA 行为。

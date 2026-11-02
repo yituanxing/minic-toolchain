@@ -14,6 +14,9 @@
 #define MINIAS_RISCV_OPTION_SITE_ZBB 8U
 /* .option arch,+v likewise grants V at instruction sites only. */
 #define MINIAS_RISCV_OPTION_SITE_V 16U
+/* GAS treats .insn as code for $x/$d mapping regardless of which retained
+ * Fragment representation supplies its machine bytes. No alternate graph. */
+#define MINIAS_RISCV_SITE_INSN_DATA 1U
 
 /* LI is a parsed, immutable target instruction plan. The MCInst pointer is
  * stable across stmt-vector relocation and layout retries. MCInst owns the

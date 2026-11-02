@@ -60,6 +60,87 @@ static uint64_t riscv_lookup_extension(char letter, const char *spelling,
     return 0U;
 }
 
+uint64_t minias_riscv_lookup_site_extension(const char *name,size_t length) {
+    uint64_t feature;
+    if(name==NULL || length==0U)return 0U;
+    feature=length==1U?riscv_lookup_extension(name[0],NULL,0U):
+                        riscv_lookup_extension('\0',name,length);
+    /* Only these two lexical additions have instruction and GNU oracle
+     * coverage. Other inventory entries are recognized for -march, but
+     * must not silently become untested .option arch permissions. */
+    return (feature==RISCV_ISA_ZBB || feature==RISCV_ISA_V)?feature:0U;
+}
+
+uint64_t minias_riscv_site_features(uint64_t file_features,
+                                   uint64_t site_additions,bool no_rvc) {
+    uint64_t features=file_features|site_additions;
+    if((features&RISCV_ISA_V)!=0U)
+        features|=RISCV_ISA_F|RISCV_ISA_D|RISCV_ISA_ZICSR;
+    if(no_rvc)features&=~(uint64_t)RISCV_ISA_C;
+    return features;
+}
+
+static bool append_mapping_suffix(char *out,size_t cap,size_t *length,
+                                  const char *suffix) {
+    return append_isa(out,cap,length,suffix);
+}
+
+/* The supported profile inventory has exactly one version per file-level
+ * extension. GNU 2.42's local +v instead inserts F2p0/D2p0 and the full
+ * vector-implied Zve/Zvl list. Build this *projection* from the file profile
+ * and the stable per-Fragment delta, never mutate Tag_RISCV_arch. */
+bool minias_riscv_mapping_isa(const char *file_isa,uint64_t file_features,
+                              uint64_t site_additions,bool no_rvc,
+                              char *out,size_t capacity) {
+    static const char *const vector_dependencies[]={
+        "_zve32f1p0","_zve32x1p0","_zve64d1p0",
+        "_zve64f1p0","_zve64x1p0",
+        "_zvl128b1p0","_zvl32b1p0","_zvl64b1p0"
+    };
+    const uint64_t effective=minias_riscv_site_features(
+        file_features,site_additions,no_rvc);
+    const char *first_extension;
+    size_t len, i;
+    bool has_v=(effective&RISCV_ISA_V)!=0U;
+    if(file_isa==NULL || out==NULL || capacity==0U)return false;
+    first_extension=strchr(file_isa,'_');
+    len=first_extension!=NULL?(size_t)(first_extension-file_isa):
+        strlen(file_isa);
+    if(len==0U || len>=capacity)return false;
+    memcpy(out,file_isa,len);
+    out[len]='\0';
+    /* Single-letter canonical order matches the Target's extension table. */
+    for(i=0U;i<sizeof(riscv_extensions)/sizeof(riscv_extensions[0]);++i) {
+        const RiscvExtensionSpec *ext=&riscv_extensions[i];
+        const char *suffix=ext->attribute_suffix;
+        if(ext->letter=='\0' || (effective&ext->bit)==0U)continue;
+        if((ext->bit==RISCV_ISA_F || ext->bit==RISCV_ISA_D) &&
+           (file_features&ext->bit)==0U && has_v)
+            suffix=ext->bit==RISCV_ISA_F?"_f2p0":"_d2p0";
+        if(!append_mapping_suffix(out,capacity,&len,suffix))return false;
+    }
+    /* GNU's implied Zmmul follows the initial Zicsr/Zifencei group but
+     * precedes explicit Zbb. Both rv64gc and rv64im_zbb need this order;
+     * blindly appending Zmmul (or putting it first) breaks one of them. */
+    if((file_features&RISCV_ISA_ZICSR)!=0U &&
+       !append_mapping_suffix(out,capacity,&len,"_zicsr2p0"))return false;
+    if((file_features&RISCV_ISA_ZIFENCEI)!=0U &&
+       !append_mapping_suffix(out,capacity,&len,"_zifencei2p0"))return false;
+    if((effective&RISCV_ISA_M)!=0U &&
+       !append_mapping_suffix(out,capacity,&len,"_zmmul1p0"))return false;
+    /* The +v Zicsr *parse permission* does not add the file-level Zicsr
+     * token. Keep that source/ELF distinction even when composing mappings. */
+    if((effective&RISCV_ISA_ZBB)!=0U &&
+       !append_mapping_suffix(out,capacity,&len,"_zbb1p0"))return false;
+    if((file_features&RISCV_ISA_ZIHINTPAUSE)!=0U &&
+       !append_mapping_suffix(out,capacity,&len,"_zihintpause2p0"))return false;
+    if(has_v)for(i=0U;i<sizeof(vector_dependencies)/
+                             sizeof(vector_dependencies[0]);++i)
+        if(!append_mapping_suffix(out,capacity,&len,vector_dependencies[i]))
+            return false;
+    return true;
+}
+
 static bool parse_isa(const char *arch, MiniAsRiscvProfile *out,
                       char *error, size_t cap) {
     uint64_t features = 0U;

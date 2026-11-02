@@ -2171,3 +2171,49 @@ The 35-file baseline and prior six-domain read are historical coverage
 claims. This comparison reruns whole-inventory/module-boundary scans
 and focused call-chain review; it does not claim separately scheduled
 subagents or an independent fresh line-by-line pass of each file.
+
+## 10. 2026-11-02 combined P04 + RISC-V site ISA/mapping implementation
+
+Implementation baseline: `cf3be55a` on
+`refactor/minias-target-isa-abi-core`; the final commit and remote exact-head
+CI must be checked separately. This is one integrated change, not two
+independently cherry-picked or overlapping batches.
+
+- **P04 permission audit:** all four Target entry-point families have narrow
+  stage contexts/views and none of the five Target/ISA translation units
+  includes Common's private session root. Existing parse, measure, relax,
+  encode, alignment, finalization and Target header isolation checks pass.
+  There is no remaining wide callback to replace by an invented wrapper.
+- **One ISA policy, two projections:** `riscv_profile.c` now owns supported
+  local `+zbb/+v` extension lookup, site feature closure, and the canonical
+  GNU mapping ISA. Immutable file ISA/ABI still defines the ELF architecture
+  attribute; source option push/pop and `rvc/norvc` remain mutable, while
+  Fragment site mode/provenance remains frozen at source capture.
+- **One mapping producer:** old one-`$x`-per-executable-section logic is
+  removed. The RISC-V PostEmit consumer walks source-ordinal Fragment value
+  views with final layout offsets, maintains Section mapping state across
+  subsections, and requests only exact-name Common-owned ELF mapping symbols.
+  Same-name local duplicates remain distinct, outside source symbol lookup.
+  The special GNU zero-width fill transition and `.insn` provenance are
+  covered without introducing a second persistent fragment graph.
+- **Replay validity:** forced SourceGraph branch shape additionally checks
+  the opaque site provenance bits, with negative mutation and live projector
+  tests; it does not inspect Target-private ISA internals.
+- **Independent GNU 2.42 oracle:** RV32/RV64 `transition`, `rvc`,
+  `alignment`, `profile` (M+Zbb), `profile_g`, `profile_v`: **12/12** exact
+  ordered mapping symbol tuples `(Section, offset, name)` plus byte-identical
+  text / applicable extra section and `.riscv.attributes`. Existing local
+  `+zbb/+v`, RVC GNU text, privileged, profile, relocation probes also pass.
+  The strict mapping gate now runs in A0 and Target CI when GNU binutils
+  are installed; missing GNU remains an explicit SKIP, not simulated parity.
+- **Local acceptance:** release `-Werror`, full MiniAS A0 30/30,
+  Target boundary/readonly/fragment-private compile guards and
+  SourceEvent/replay contract probes all PASS. No claim of remote exact-head
+  CI, original six Linux `.s` strict whole-object equality, complete 9,645
+  source inventory, real cross-link/QEMU, or general versioned `.option arch`
+  acceptance is made for this commit.
+
+Production change: **11 C/header files**, **+289/−66 lines** (net +223),
+with tests/fixtures, CI and documentation counted separately. This is an
+intentional correctness extension to the existing Target/MC boundary, not
+a net-removal cleanup metric.

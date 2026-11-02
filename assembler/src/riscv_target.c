@@ -250,14 +250,14 @@ bool minias_riscv_validate_parsed_isa(MiniAsParseContext *ctx, const MiniAsParse
                                       bool rv64_only) {
     const MiniAsRiscvState *state=minias_parse_target_state(ctx);
     const char *op=stmt->op;
-    uint64_t effective_features=state->isa_features;
-    if ((stmt->site.mode_bits & MINIAS_RISCV_OPTION_SITE_ZBB) != 0U)
-        effective_features|=RISCV_ISA_ZBB;
-    /* GAS +v grants its architectural dependencies at this instruction
-     * site too: F, D and Zicsr. They are not file-wide -march additions. */
-    if ((stmt->site.mode_bits & MINIAS_RISCV_OPTION_SITE_V) != 0U)
-        effective_features|=RISCV_ISA_V | RISCV_ISA_F |
-                            RISCV_ISA_D | RISCV_ISA_ZICSR;
+    const uint64_t additions =
+        ((stmt->site.mode_bits & MINIAS_RISCV_OPTION_SITE_ZBB)!=0U?
+         RISCV_ISA_ZBB:0U) |
+        ((stmt->site.mode_bits & MINIAS_RISCV_OPTION_SITE_V)!=0U?
+         RISCV_ISA_V:0U);
+    uint64_t effective_features=minias_riscv_site_features(
+        state->isa_features,additions,
+        (stmt->site.mode_bits&MINIAS_RISCV_OPTION_NO_RVC)!=0U);
     /* `.option norvc` is an instruction-site state even in the historical
      * implicit ISA mode. Do not bury the C opcode gate behind explicit
      * -march validation: GNU rejects c.* after norvc in either mode. */
@@ -337,27 +337,17 @@ static size_t riscv_encode_uleb32(unsigned char *out, unsigned value) {
     return size;
 }
 
-/* Both the ELF architecture attribute and GNU instruction mapping symbols
- * describe the same canonical ISA. Keep its implied-feature expansion in
- * one Target-private place rather than inventing two spellings. */
+/* File attributes and initial site mappings share the same canonical ISA
+ * inventory. The site projection may add lexical extensions; the immutable
+ * file projection never does. In particular GNU inserts implied Zmmul next
+ * to M, before explicit Z extensions such as Zbb. */
 static bool riscv_canonical_object_isa(const MiniAsRiscvState *state,
                                        char output[512], size_t *length) {
-    const char implied_mul[] = "_zmmul1p0";
-    size_t source_length;
-    bool append_mul;
     if (state == NULL || output == NULL || length == NULL) return false;
-    source_length = strlen(state->arch_attribute_isa);
-    append_mul = source_length != 0U &&
-        (state->isa_features & RISCV_ISA_M) != 0U &&
-        strstr(state->arch_attribute_isa, "_zmmul") == NULL;
-    *length = source_length +
-        (append_mul ? sizeof(implied_mul) - 1U : 0U);
-    if (*length >= 512U) return false;
-    memcpy(output, state->arch_attribute_isa, source_length);
-    if (append_mul)
-        memcpy(output + source_length, implied_mul,
-               sizeof(implied_mul) - 1U);
-    output[*length] = '\0';
+    if(!minias_riscv_mapping_isa(state->arch_attribute_isa,
+                                 state->isa_features,0U,false,output,512U))
+        return false;
+    *length=strlen(output);
     return true;
 }
 
@@ -640,6 +630,8 @@ static bool riscv_prepare_layout(const MiniAsPreLayoutView *view,
  * feature is NOT a file-wide Tag_RISCV_arch attribute update. */
 static uint64_t riscv_arch_add_feature_option(const char *args) {
     const char *p = args;
+    const char *start;
+    uint64_t feature;
     while (isspace((unsigned char)*p)) ++p;
     if (strncmp(p, "arch", 4U) != 0) return 0U;
     p += 4U;
@@ -647,16 +639,11 @@ static uint64_t riscv_arch_add_feature_option(const char *args) {
     if (*p++ != ',') return 0U;
     while (isspace((unsigned char)*p)) ++p;
     if (*p++ != '+') return 0U;
-    uint64_t feature;
-    if (strncmp(p, "zbb", 3U) == 0) {
-        feature=RISCV_ISA_ZBB;
-        p += 3U;
-    } else if (*p == 'v') {
-        feature=RISCV_ISA_V;
-        ++p;
-    } else return 0U;
+    start=p;
+    while (*p!='\0' && !isspace((unsigned char)*p))++p;
+    feature=minias_riscv_lookup_site_extension(start,(size_t)(p-start));
     while (isspace((unsigned char)*p)) ++p;
-    return *p == '\0' ? feature : 0U;
+    return *p=='\0'?feature:0U;
 }
 
 /* One option-state transition function for both legacy and explicit ISA
@@ -896,44 +883,138 @@ static bool riscv_resolve_profile(const char *march, const char *mabi,
     return true;
 }
 
-/* GAS records the effective ISA on its first instruction in executable
- * sections, rather than treating a .riscv.attributes blob as a substitute
- * for local `$x<isa>` mapping symbols. Common serializes this ordinary
- * Target-authored symbol, preserving the final MCLayout section offsets. */
+/* GNU GAS 2.42 mapping_state is a SOURCE-EVENT state machine per Section,
+ * not an offset-sorted stream. A .subsection switch retains the Section's
+ * last map/arch state; source-order symbols may therefore have nonmonotonic
+ * final values. Their values still come from the one final MCLayout.
+ * The Target never owns Section, Symbol or Fragment storage. */
+typedef enum RiscvMappingKind {
+    RISCV_MAP_NONE,
+    RISCV_MAP_DATA,
+    RISCV_MAP_CODE
+} RiscvMappingKind;
+
+typedef struct RiscvMappingSectionState {
+    RiscvMappingKind kind;
+    int last_arch_key; /* -1 before the Section's first mapped instruction */
+    bool pending_zero_data;
+} RiscvMappingSectionState;
+
+static unsigned riscv_mapping_site_key(MiniAsTargetSiteState site) {
+    return ((site.mode_bits&MINIAS_RISCV_OPTION_NO_RVC)!=0U?1U:0U) |
+           ((site.mode_bits&MINIAS_RISCV_OPTION_SITE_ZBB)!=0U?2U:0U) |
+           ((site.mode_bits&MINIAS_RISCV_OPTION_SITE_V)!=0U?4U:0U);
+}
+
+static bool riscv_mapping_is_code(const MiniAsFragmentView *fragment) {
+    return fragment->kind==MINIAS_FRAGMENT_INSTRUCTION ||
+           (fragment->site.provenance_bits&MINIAS_RISCV_SITE_INSN_DATA)!=0U ||
+           (fragment->kind==MINIAS_FRAGMENT_ALIGNMENT &&
+            !fragment->alignment_has_fill);
+}
+
 static bool riscv_record_object_mapping_symbols(
     const MiniAsPostEmitView *view, MiniAsPostEmitErrorSink *errors,
     MiniAsPostEmitObjectSink *object) {
     const MiniAsRiscvState *state =
         minias_post_emit_target_state(view);
-    char canonical[512], name[576];
-    size_t isa_length, section_index;
+    const size_t section_count=minias_post_emit_section_count(view);
+    const size_t fragment_count=minias_post_emit_fragment_count(view);
+    RiscvMappingSectionState *sections;
+    char site_names[8][512]={{0}};
+    bool cached[8]={false};
+    size_t i;
+    bool ok=false;
     if (state == NULL || state->arch_attribute_isa[0] == '\0') return true;
-    if (!riscv_canonical_object_isa(state, canonical, &isa_length)) {
-        minias_post_emit_error(errors,"riscv-mapping-isa-overflow");
+    if(section_count>SIZE_MAX/sizeof(*sections)) {
+        minias_post_emit_error(errors,"riscv-mapping-section-overflow");
         return false;
     }
-    for (section_index = 0U;
-         section_index < minias_post_emit_section_count(view);
-         ++section_index) {
-        MiniAsSectionView snapshot;
-        const MiniAsSectionView *section=&snapshot;
-        if(!minias_post_emit_section(view,section_index,&snapshot)) {
-            minias_post_emit_error(errors,"invalid-riscv-section-view");
-            return false;
-        }
-        if ((section->flags & MINIAS_SHF_EXECINSTR) == 0U ||
-            section->type != MINIAS_SHT_PROGBITS || section->size == 0U)
-            continue;
-        if (snprintf(name, sizeof(name), "$x%s", canonical) >=
-            (int)sizeof(name)) {
-            minias_post_emit_error(errors,"riscv-mapping-symbol-overflow");
-            return false;
-        }
-        if (!minias_post_emit_define_mapping_symbol(
-                object, name, section_index, false, (int)section_index, 0U))
-            return false;
+    sections=calloc(section_count==0U?1U:section_count,sizeof(*sections));
+    if(sections==NULL) {
+        minias_post_emit_error(errors,"out-of-memory:riscv-mapping-sections");
+        return false;
     }
-    return true;
+    for(i=0U;i<section_count;++i)sections[i].last_arch_key=-1;
+    for(i=0U;i<fragment_count;++i) {
+        MiniAsFragmentView fragment;
+        MiniAsSectionView section;
+        RiscvMappingSectionState *previous;
+        RiscvMappingKind kind;
+        const char *name;
+        char arch_name[576];
+        unsigned key;
+        bool changed;
+        if(!minias_post_emit_fragment(view,i,&fragment)) {
+            minias_post_emit_error(errors,"invalid-riscv-mapping-fragment");
+            goto done;
+        }
+        if(fragment.section<0 || (size_t)fragment.section>=section_count)
+            continue;
+        if(!minias_post_emit_section(view,(size_t)fragment.section,&section)) {
+            minias_post_emit_error(errors,"invalid-riscv-mapping-section");
+            goto done;
+        }
+        if(section.type!=MINIAS_SHT_PROGBITS ||
+           (section.flags&MINIAS_SHF_EXECINSTR)==0U || section.size==0U)
+            continue;
+        previous=&sections[(size_t)fragment.section];
+        kind=riscv_mapping_is_code(&fragment)?RISCV_MAP_CODE:RISCV_MAP_DATA;
+        if(fragment.size==0U) {
+            /* GAS may pass a zero-width .fill/.space through MAP_DATA.
+             * Its transient $d is replaced by the next code symbol at the
+             * same position. Retain that transition intent, not a zero-byte
+             * output symbol that would survive after the Section ends. */
+            if(kind==RISCV_MAP_DATA && previous->kind!=RISCV_MAP_DATA) {
+                previous->kind=RISCV_MAP_DATA;
+                previous->pending_zero_data=true;
+            }
+            continue;
+        }
+        if(kind==RISCV_MAP_DATA) {
+            if(previous->kind==RISCV_MAP_DATA &&
+               !previous->pending_zero_data)continue;
+            name="$d";
+        }else {
+            const uint64_t additions=
+                ((fragment.site.mode_bits&MINIAS_RISCV_OPTION_SITE_ZBB)!=0U?
+                 RISCV_ISA_ZBB:0U) |
+                ((fragment.site.mode_bits&MINIAS_RISCV_OPTION_SITE_V)!=0U?
+                 RISCV_ISA_V:0U);
+            key=riscv_mapping_site_key(fragment.site);
+            if(!cached[key]) {
+                if(!minias_riscv_mapping_isa(state->arch_attribute_isa,
+                        state->isa_features,additions,(key&1U)!=0U,
+                        site_names[key],sizeof(site_names[key]))) {
+                    minias_post_emit_error(errors,"riscv-mapping-isa-overflow");
+                    goto done;
+                }
+                cached[key]=true;
+            }
+            changed=previous->last_arch_key<0 ||
+                strcmp(site_names[key],site_names[previous->last_arch_key])!=0;
+            if(!changed && previous->kind==RISCV_MAP_CODE)continue;
+            if(changed) {
+                int n=snprintf(arch_name,sizeof(arch_name),"$x%s",site_names[key]);
+                if(n<0 || (size_t)n>=sizeof(arch_name)) {
+                    minias_post_emit_error(errors,"riscv-mapping-symbol-overflow");
+                    goto done;
+                }
+                name=arch_name;
+                previous->last_arch_key=(int)key;
+            }else name="$x";
+        }
+        /* GNU permits repeated, identical LOCAL names. The Common sink
+         * appends exact object symbols outside the source-name hash. */
+        if(!minias_post_emit_append_exact_mapping_symbol(
+                object,name,fragment.section,fragment.offset))goto done;
+        previous->kind=kind;
+        previous->pending_zero_data=false;
+    }
+    ok=true;
+done:
+    free(sections);
+    return ok;
 }
 
 /* GAS's riscv_md_finish gates every deferred ULEB pair on the final global
@@ -1031,8 +1112,9 @@ static void riscv_capture_site_state(const void *target_state,
                                       const MiniAsSourceSiteView *stmt,
                                       MiniAsTargetSiteState *site) {
     const MiniAsRiscvState *state=target_state;
-    (void)stmt;
     site->mode_bits = state->options;
+    if(strcmp(stmt->op,".insn")==0)
+        site->provenance_bits|=MINIAS_RISCV_SITE_INSN_DATA;
 }
 
 static unsigned riscv_default_exec_alignment_for_site(

@@ -401,6 +401,11 @@ size_t minias_post_emit_symbol_count(const MiniAsPostEmitObjectSink *);
 bool minias_post_emit_define_mapping_symbol(MiniAsPostEmitObjectSink *,
                                             const char *, size_t, bool,
                                             int, uint64_t);
+/* Append an exact ELF mapping name even if another mapping symbol already
+ * bears that name. Unlike the collision-safe source symbol namespace, GNU
+ * RISC-V mapping symbols may repeat across sites and Sections. */
+bool minias_post_emit_append_exact_mapping_symbol(MiniAsPostEmitObjectSink *,
+                                                  const char *, int, uint64_t);
 bool minias_post_emit_raise_section_alignment(MiniAsPostEmitObjectSink *,
                                               int, uint64_t);
 

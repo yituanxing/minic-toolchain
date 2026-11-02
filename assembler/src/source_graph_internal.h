@@ -137,6 +137,7 @@ typedef struct MiniAsForcedBranchSite {
     uint32_t opcode;
     uint32_t target_form;
     uint32_t mode_bits;
+    uint32_t provenance_bits;
     size_t minimum_size;
     unsigned operand_count;
     MiniAsForcedOperandShape *operands;

@@ -586,6 +586,7 @@ static bool rebuild_symbol_index(MiniAs *as, size_t minimum_capacity) {
         return false;
     }
     for (i = 0U; i < as->symbol_count; ++i) {
+        if (as->symbols[i].unindexed_mapping) continue;
         size_t slot = symbol_name_hash(as->symbols[i].name) & (capacity - 1U);
         while (slots[slot] != 0U) {
             slot = (slot + 1U) & (capacity - 1U);
@@ -1077,6 +1078,45 @@ bool minias_post_emit_define_mapping_symbol(MiniAsPostEmitObjectSink *sink,
     }
     return minias_define_target_mapping_symbol(sink->as, stem, first_ordinal,
                                                always_suffix, section, offset);
+}
+
+bool minias_post_emit_append_exact_mapping_symbol(
+    MiniAsPostEmitObjectSink *sink,const char *name,int section,uint64_t offset) {
+    MiniAs *as;
+    MiniAsSymbol *symbol;
+    if(sink==NULL || sink->as==NULL)return false;
+    as=sink->as;
+    if(!as->finalizing_target_output || name==NULL || *name=='\0' ||
+       section<0 || (size_t)section>=as->section_count) {
+        minias_set_error(as,"invalid-exact-target-mapping-symbol");
+        return false;
+    }
+    /* Keep these ELF-only symbols out of the source-name hash: a repeated
+     * $x<isa> is a distinct source transition, not a redefinition. */
+    if(!minias_grow_array((void **)&as->context_indexes->symbol_records,
+                          &as->context_indexes->symbol_capacity,
+                          sizeof(*as->symbols),as->symbol_count+1U)) {
+        minias_set_error(as,"out-of-memory:exact-target-mapping");
+        return false;
+    }
+    /* The Context owns the only mutable table. Publish its const view
+     * after growth, exactly as ordinary Context interning does. */
+    as->symbols=as->context_indexes->symbol_records;
+    symbol=&as->context_indexes->symbol_records[as->symbol_count];
+    memset(symbol,0,sizeof(*symbol));
+    symbol->name=minias_strdup(name);
+    if(symbol->name==NULL) {
+        minias_set_error(as,"out-of-memory:exact-target-mapping-name");
+        return false;
+    }
+    symbol->unindexed_mapping=true;
+    symbol->defined=true;
+    symbol->section=section;
+    symbol->value=offset;
+    symbol->bind=MINIAS_STB_LOCAL;
+    symbol->type=MINIAS_STT_NOTYPE;
+    ++as->symbol_count;
+    return true;
 }
 
 bool minias_post_emit_raise_section_alignment(MiniAsPostEmitObjectSink *sink,

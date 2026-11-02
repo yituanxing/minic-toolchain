@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
-# Opt-in *diagnostic* GNU oracle for RISC-V lexical ISA mapping transitions.
-# It is not a mandatory PASS gate until MiniAS implements all measured GNU
-# $x<effective ISA> / $d transitions. A known mapping-only discrepancy is
-# reported as EXPECTED_GAP, never disguised as GNU semantic parity.
+# Exact GNU 2.42 oracle for RISC-V lexical ISA mapping transitions. Compare
+# original symbol-table order, names, Section IDs and final offsets, not just
+# bytes or unordered mapping-symbol counts. Missing GNU tools are visible SKIP.
 set -Eeuo pipefail
 : "${MINIAS:?point MINIAS at the exact candidate minic-as executable}"
 
@@ -14,36 +13,55 @@ for program in riscv64-linux-gnu-as riscv64-linux-gnu-objcopy readelf cmp python
 done
 
 repo=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
-fixture="$repo/tests/assembler/fixtures/rv-site-mapping-transition-gnu.S"
 work=$(mktemp -d)
 trap 'rm -rf -- "$work"' EXIT
 
-for xlen in 32 64; do
+for scenario in transition rvc alignment profile profile_g profile_v; do
+  fixture="$repo/tests/assembler/fixtures/rv-site-mapping-${scenario}-gnu.S"
+  if test "$scenario" = profile || test "$scenario" = profile_g || test "$scenario" = profile_v; then
+      fixture="$repo/tests/assembler/fixtures/rv-site-mapping-alignment-gnu.S"
+  fi
+  sections='.text .riscv.attributes'
+  test "$scenario" = transition && sections="$sections .text.mapping_extra"
+  for xlen in 32 64; do
     if test "$xlen" = 32; then mabi=ilp32; else mabi=lp64; fi
     # GNU GAS needs explicit I2p1: unversioned rv*i implies legacy I2p0
     # and would admit CSR outside the scoped +v region. MiniAS currently
     # accepts its unversioned rv*i spelling and selects I2p1 internally.
     gnu_march="rv${xlen}i2p1"
     mini_march="rv${xlen}i"
-    source="$work/$xlen.S"
-    printf '.attribute arch,"rv%si2p1"\n' "$xlen" >"$source"
+    if test "$scenario" = rvc; then
+        gnu_march="${gnu_march}_c2p0"
+        mini_march="${mini_march}c"
+    elif test "$scenario" = profile; then
+        gnu_march="${gnu_march}_m2p0_zbb1p0"
+        mini_march="${mini_march}m_zbb"
+    elif test "$scenario" = profile_g; then
+        gnu_march="${gnu_march}_m2p0_a2p1_f2p2_d2p2_zicsr2p0_zifencei2p0"
+        mini_march="rv${xlen}g"
+    elif test "$scenario" = profile_v; then
+        gnu_march="${gnu_march}_v1p0"
+        mini_march="${mini_march}v"
+    fi
+    source="$work/$scenario-$xlen.S"
+    printf '.attribute arch,"%s"\n' "$gnu_march" >"$source"
     cat "$fixture" >>"$source"
 
     riscv64-linux-gnu-as "-march=$gnu_march" "-mabi=$mabi" -mno-relax \
-        -o "$work/$xlen.gnu.o" "$source"
+        -o "$work/$scenario-$xlen.gnu.o" "$source"
     "$MINIAS" "-march=$mini_march" "-mabi=$mabi" \
-        -o "$work/$xlen.mini.o" "$source"
+        -o "$work/$scenario-$xlen.mini.o" "$source"
 
-    for section in .text .text.mapping_extra .riscv.attributes; do
+    for section in $sections; do
         suffix="${section#.}"
         for producer in gnu mini; do
             riscv64-linux-gnu-objcopy -O binary -j "$section" \
-                "$work/$xlen.$producer.o" \
-                "$work/$xlen.$producer.$suffix"
+                "$work/$scenario-$xlen.$producer.o" \
+                "$work/$scenario-$xlen.$producer.$suffix"
         done
-        if ! cmp -s "$work/$xlen.gnu.$suffix" \
-                    "$work/$xlen.mini.$suffix"; then
-            echo "MINIAS_RV_SITE_MAPPING=FAIL xlen=$xlen section=$section bytes_or_file_attribute" >&2
+        if ! cmp -s "$work/$scenario-$xlen.gnu.$suffix" \
+                    "$work/$scenario-$xlen.mini.$suffix"; then
+            echo "MINIAS_RV_SITE_MAPPING=FAIL scenario=$scenario xlen=$xlen section=$section bytes_or_file_attribute" >&2
             exit 1
         fi
     done
@@ -51,12 +69,13 @@ for xlen in 32 64; do
     # Preserve the original symtab sequence: sorting by offset would erase
     # observable same-offset transition order. Report both numeric Section
     # IDs and Section names; do not filter absent/extra mapping symbols.
-    python3 - "$work/$xlen.gnu.o" "$work/$xlen.mini.o" "$xlen" <<'PY'
+    python3 - "$work/$scenario-$xlen.gnu.o" \
+        "$work/$scenario-$xlen.mini.o" "$xlen" "$scenario" <<'PY'
 import re
 import subprocess
 import sys
 
-gnu, mini, xlen = sys.argv[1:]
+gnu, mini, xlen, scenario = sys.argv[1:]
 
 def section_names(path):
     output = subprocess.check_output(['readelf', '-SW', path], text=True)
@@ -89,10 +108,10 @@ mini_map = mapping(mini)
 if not gnu_map:
     raise SystemExit(f'MINIAS_RV_SITE_MAPPING=FAIL xlen={xlen} GNU_no_mapping_symbols')
 if gnu_map == mini_map:
-    print(f'MINIAS_RV_SITE_MAPPING=PASS xlen={xlen} '
+    print(f'MINIAS_RV_SITE_MAPPING=PASS scenario={scenario} xlen={xlen} '
           f'mapping_symbols={len(gnu_map)} ordered_section_offset_name=exact')
 else:
-    print(f'MINIAS_RV_SITE_MAPPING=EXPECTED_GAP xlen={xlen} '
+    print(f'MINIAS_RV_SITE_MAPPING=FAIL scenario={scenario} xlen={xlen} '
           f'GNU={len(gnu_map)} MiniAS={len(mini_map)} '
           'ordered_section_offset_name=DIFF')
     for producer, rows in [('GNU', gnu_map), ('MiniAS', mini_map)]:
@@ -100,7 +119,9 @@ else:
             print(f'  {producer} ordinal={ordinal} '
                   f'section={section_id}:{section_name} '
                   f'offset={offset} name={name}')
+    raise SystemExit(1)
 PY
+  done
 done
 
-echo 'MINIAS_RV_SITE_MAPPING_ORACLE=DIAGNOSTIC_ONLY RV32_RV64=2 byte_sections=6 mapping_gap_not_suppressed=1'
+echo 'MINIAS_RV_SITE_MAPPING_ORACLE=PASS cases=12 RV32_RV64=2 exact_order=1 zero_width=covered'

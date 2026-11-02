@@ -34,4 +34,15 @@ typedef struct MiniAsRiscvProfile {
 bool minias_riscv_resolve_profile(const char *march, const char *mabi,
                                   MiniAsRiscvProfile *out,
                                   char *error, size_t capacity);
+/* One Target-private extension inventory serves -march and supported lexical
+ * .option arch,+extension spellings. Unrecognized site additions fail closed. */
+uint64_t minias_riscv_lookup_site_extension(const char *name,size_t length);
+uint64_t minias_riscv_site_features(uint64_t file_features,
+                                   uint64_t site_additions,bool no_rvc);
+/* GNU GAS 2.42 per-instruction mapping ISA; never changes file attributes.
+ * The V dependency closure in mapping names carries its own default version
+ * numbers, distinct from the file-wide profile's F/D defaults. */
+bool minias_riscv_mapping_isa(const char *file_isa,uint64_t file_features,
+                              uint64_t site_additions,bool no_rvc,
+                              char *out,size_t capacity);
 #endif

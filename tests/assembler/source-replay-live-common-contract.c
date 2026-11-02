@@ -62,6 +62,7 @@ int main(void) {
     fragments[1].line=29U;
     fragments[1].size=4U;
     fragments[1].site.mode_bits=0x1234U;
+    fragments[1].site.provenance_bits=0x5678U;
     fragments[1].payload.instruction.inst=inst;
     inst->opcode=37U;
     inst->target_form=42U;
@@ -79,6 +80,7 @@ int main(void) {
     assert(snapshot.instruction && snapshot.source_site==11U);
     assert(snapshot.op==fragments[1].op && snapshot.line==29U);
     assert(snapshot.size==4U && snapshot.mode_bits==0x1234U);
+    assert(snapshot.provenance_bits==0x5678U);
     assert(snapshot.opcode==37U && snapshot.target_form==42U);
     assert(snapshot.operand_count==2U);
     assert(reader.operand(reader.owner,1U,0U,&operand));

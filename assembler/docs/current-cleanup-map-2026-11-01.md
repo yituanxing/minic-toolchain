@@ -30,6 +30,22 @@
 > 本批 `bc2a6bb3` 的 Target ISA ABI、x86/Loong GNU/Four-Target、
 > MiniC Native Strict、MiniC Four-Architecture Runtime 均 SUCCESS。
 
+> **2026-11-02 P04 + 现场 ISA/mapping 一次性实现批次（以本批提交
+> SHA 为准）：** 复核四 Target callback、头文件包含和阶段投影后，
+> P04 的宽 `MiniAs *` 能力泄露已无待迁移入口；不为完成形式另建
+> Context 或影子图。RISC-V 复用同一个 Target 私有 extension inventory，
+> 将 file ISA/ABI、push/pop mutable option 与 Fragment site snapshot
+> 分离；PostEmit 按**源事件顺序**读取最终 MCLayout offset，整块替换
+> 原本 Section offset 0 单 `$x` 的旧生产者，生成 GNU 对应的
+> `$x<site ISA>` / `$x` / `$d`，保留 subsection 顺序、重复同名符号、
+> RVC 和 zero-width data 过渡。Common 只提供 exact-name 终结期
+> symbol sink；SourceGraph forced replay 同时校验 mode/provenance。
+> GNU binutils 2.42 的 RV32/RV64、六个 scenario 共 **12 组严格
+> mapping/节字节/file attribute 对照通过**，本地 A0 30/30 与
+> P04 结构门禁通过。该结论限已支持的 `+zbb/+v` 和相关 profile；
+> 任意版本化 `.option arch` 及远端 exact-head、Linux 原始源对象、
+> 四架构真实链接/QEMU 仍需独立验收，不能直接写作整体完成。
+
 > **2026-11-02 P06 Section 元数据归属后续：** 解析期
 > Section 对齐、首次 `.section` 的 `sh_entsize` 与 GNU `.ident`
 > 的 `.comment` 属性升级统一归 Common Context；MCLayout 计算
@@ -135,7 +151,7 @@
   真实读写者。四个公开 `minias_assemble_file*` 在仓库中仅有
   一条测试消费者，但外部 ABI 消费者未知，保留到兼容迁移契约
   明确后再删；不为净删数字强行改写不同语义。
-- [ ] **P04 Target 权限硬隔离**：清点所有宽 `MiniAs *` 回调；
+- [x] **P04 Target 权限硬隔离（源码接口/本地结构门禁）**：清点所有宽 `MiniAs *` 回调；
   建立 Target 可见头文件与窄阶段 Context；四架构同批迁移
   directive、common validation、init/destroy 和 CFI mapping；删除
   旧入口，让四 Target 不能再包含完整 Common 内部会话头；
@@ -146,9 +162,11 @@
   ALIGN 的私有 Fragment 裸借用已由受限 Request/View 代替，Fragment
   唯一定义收回 Common 私有头，Common-only 的 MCExpr/Org/Deferred、
   literal、PendingLocalCommon 和 interned-name 类型也已从 Target API
-  收回，增加编译期边界门禁。**待完成：**
-  最终 Target 生命周期/策略接口扫尾和 exact-head CI/跨架构 GNU/链接
-  验收；不把局部硬化冒充完整 P04 结束。
+  收回，增加编译期边界门禁。经最终代码审计，四 Target 所有
+  `MiniAsTargetOps` 回调均为受限阶段 API，不再 include Common
+  会话私有根头。**本地接口关闭，综合验收另计：** 本批 exact-head
+  CI 与跨架构 GNU/链接/QEMU 尚未在最终 SHA 上全部运行；不把
+  权限接口收口与整个工程整体验收混同。
 - [x] **P05 Source/Common statement 边界**：旧
   `minias_statement_process(MiniAs *,...)` 已在先前批次删除；本批
   连同 Source→Common 的反向 conditional/macro/control 回调、

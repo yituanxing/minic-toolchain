@@ -357,6 +357,7 @@ static bool source_graph_forced_shape_matches(
        fragment->opcode!=saved->opcode ||
        fragment->target_form!=saved->target_form ||
        fragment->mode_bits!=saved->mode_bits ||
+       fragment->provenance_bits!=saved->provenance_bits ||
        fragment->operand_count!=saved->operand_count)return false;
     /* Operand spelling is NOT a stable source identity. GNU 1f/1b refs
      * become private generation names, while macro \@ counters can shift
@@ -567,6 +568,7 @@ bool minias_source_graph_capture_forced_branches(
         saved->opcode=fragment.opcode;
         saved->target_form=fragment.target_form;
         saved->mode_bits=fragment.mode_bits;
+        saved->provenance_bits=fragment.provenance_bits;
         /* Required is a lower bound; terminal is the actual Target-owned
          * alternative size committed by the MCLayout growth operation. */
         saved->minimum_size=terminal_size;

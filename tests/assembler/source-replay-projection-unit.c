@@ -121,7 +121,7 @@ int main(void) {
     branch=(MiniAsSourceReplayFragment){
         .source_site=1U,.op=op,.line=17U,.size=2U,
         .instruction=true,.opcode=91U,.target_form=11U,
-        .mode_bits=32U,.operand_count=1U
+        .mode_bits=32U,.provenance_bits=64U,.operand_count=1U
     };
     register_shape=(MiniAsForcedOperandShape){
         .kind=MINIAS_MC_REGISTER,.reg_class=MINIAS_MC_REG_GPR,
@@ -174,6 +174,10 @@ int main(void) {
            && strstr(as.error,"changed-forced-branch-shape:")!=NULL,
            "changed opcode must fail closed");
     fixture.fragments[1].opcode--;
+    fixture.fragments[1].provenance_bits++;
+    expect(!minias_source_graph_lookup_forced_branch(&as,&reader,1U,&minimum_size),
+           "changed ISA/provenance site must fail closed");
+    fixture.fragments[1].provenance_bits--;
     fixture.operands[1][0].reg++;
     expect(!minias_source_graph_lookup_forced_branch(&as,&reader,1U,&minimum_size),
            "changed typed operand register must fail closed");
@@ -211,6 +215,6 @@ int main(void) {
 
     free(growth.ids);
     minias_source_graph_destroy(context.graph);
-    puts("MINIAS_SOURCE_REPLAY_READER=PASS ordinal_insertion=1 typed_shape_drift=3 callback_failure=2 vanished=1 ambiguous=1 terminal_growth=6");
+    puts("MINIAS_SOURCE_REPLAY_READER=PASS ordinal_insertion=1 typed_shape_drift=4 callback_failure=2 vanished=1 ambiguous=1 terminal_growth=6");
     return EXIT_SUCCESS;
 }

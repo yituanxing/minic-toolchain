@@ -76,6 +76,7 @@ static bool common_replay_fragment(void *owner,size_t ordinal,
     out->opcode=inst->opcode;
     out->target_form=inst->target_form;
     out->mode_bits=stmt->site.mode_bits;
+    out->provenance_bits=stmt->site.provenance_bits;
     out->operand_count=inst->count;
     return true;
 }
