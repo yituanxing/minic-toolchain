@@ -1,6 +1,7 @@
 #ifndef MINIAS_SOURCE_GRAPH_INTERNAL_H
 #define MINIAS_SOURCE_GRAPH_INTERNAL_H
 
+#include "minias_internal.h"
 #include "source_graph_common.h"
 
 typedef struct MiniAsSourceLine {
@@ -73,6 +74,9 @@ struct MiniAsSourceContext {
     bool conditional_active;
     bool source_ended;
     MiniAsSourceGraph *graph; /* borrowed from assembly invocation */
+    /* Bound only during the synchronous source traversal. Recursive macro,
+     * repeat and inline statement expansion share this sole event consumer. */
+    MiniAsSourceStatementSink statements;
     MiniAsStableSiteId current_site;
     MiniAsStableSiteId current_expansion_site;
 };

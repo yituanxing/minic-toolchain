@@ -4220,7 +4220,7 @@ static bool handle_ident(MiniAs *as,char *args,size_t line) {
 }
 
 
-bool minias_statement_process(MiniAs *as, char *text, size_t line) {
+static bool lower_source_statement(MiniAs *as, char *text, size_t line) {
     char *space;
     char *op;
     char *args;
@@ -4280,7 +4280,7 @@ bool minias_statement_process(MiniAs *as, char *text, size_t line) {
     /* A GNU statement after LABEL: still starts a fresh directive.
      * Reenter the same shared conditional dispatcher instead of treating
      * '0: .ifc \arg,x' as an unknown target instruction/directive. */
-    if(had_leading_label)return minias_statement_process(as,text,line);
+    if(had_leading_label)return lower_source_statement(as,text,line);
 
     {
         char *glued=NULL;
@@ -4662,9 +4662,29 @@ bool minias_statement_process(MiniAs *as, char *text, size_t line) {
     return advance_current_location(as, size);
 }
 
+/* Common consumes one Source-owned, stable-site statement event. No private
+ * session pointer or lowerer function is exported into the Source module.
+ * Label recursion stays within the same single Common parser. */
+static bool consume_source_statement(void *user,
+                                     const MiniAsSourceStatementEvent *event) {
+    MiniAs *as=(MiniAs *)user;
+    if(as==NULL || event==NULL || event->text==NULL ||
+       event->site==MINIAS_SITE_NONE ||
+       event->site!=minias_source_current_site(as)) {
+        if(as!=NULL)minias_set_error(as,"invalid-source-statement-site");
+        return false;
+    }
+    return lower_source_statement(as,event->text,event->line);
+}
+
 static bool parse_loaded_source_graph(MiniAs *as,
                                        MiniAsSourceGraph *graph) {
-    if(!minias_source_context_process_graph(as,graph))return false;
+    const MiniAsSourceStatementSink statements={
+        .user=as,
+        .consume=consume_source_statement
+    };
+    if(!minias_source_context_process_graph(as,graph,&statements))
+        return false;
     if(as->cfi_active) {
         minias_set_error(as,"unterminated-directive:.cfi_startproc");
         return false;

@@ -73,21 +73,29 @@ void minias_source_restore_site(MiniAs *as,MiniAsStableSiteId site) {
 /* Bind the persistent SourceGraph to this fresh lexical pass. Common only
  * receives the processed Fragment stream, never the FILE/expansion frame or
  * the conditional stack. Errors and the replay pass counter are unchanged. */
-bool minias_source_context_process_graph(MiniAs *as,MiniAsSourceGraph *graph) {
-    if(as->source->graph!=NULL || graph==NULL ||
-       graph->physical.kind!=MINIAS_SOURCE_FRAME_FILE) {
-        minias_set_error(as,"invalid-source-graph-state");
+bool minias_source_context_process_graph(
+    MiniAs *as,MiniAsSourceGraph *graph,
+    const MiniAsSourceStatementSink *statements) {
+    bool ok;
+    if(as==NULL || as->source==NULL || as->source->graph!=NULL ||
+       graph==NULL || graph->physical.kind!=MINIAS_SOURCE_FRAME_FILE ||
+       statements==NULL || statements->consume==NULL) {
+        if(as!=NULL)minias_set_error(as,"invalid-source-graph-state");
         return false;
     }
     as->source->graph=graph;
+    as->source->statements=*statements;
     ++graph->parse_passes;
-    if(!minias_source_frame_process(as,&graph->physical))return false;
-    if(as->source->conditional_count!=0U) {
+    ok=minias_source_frame_process(as,&graph->physical);
+    if(ok && as->source->conditional_count!=0U) {
         minias_set_error(as,"unterminated-directive:.if:depth=%zu",
                          as->source->conditional_count);
-        return false;
+        ok=false;
     }
-    return true;
+    /* No Common callback may survive the synchronous parse or failure unwind.
+     * The persistent graph is retained for EOF and branch rebinding only. */
+    as->source->statements=(MiniAsSourceStatementSink){0};
+    return ok;
 }
 
 /* Conditional comparisons use the same Common MCExpr precedence grammar as
@@ -1308,9 +1316,20 @@ static bool process_source_line(MiniAs *as, const char *source, size_t line) {
         if (semicolon != NULL) {
             *semicolon = '\0';
         }
-        if (!minias_statement_process(as, cursor, line)) {
+        /* One stable source event for every logical segment, including
+         * recursive macro/repeat expansion. The mutable text is borrowed
+         * only for the duration of this synchronous callback. */
+        const MiniAsSourceStatementEvent event={
+            .text=cursor,
+            .line=line,
+            .site=as->source->current_site
+        };
+        if(as->source->statements.consume==NULL) {
+            minias_set_error(as,"unbound-source-statement-sink");
             goto finished;
         }
+        if(!as->source->statements.consume(
+               as->source->statements.user,&event))goto finished;
         cursor = semicolon == NULL ? NULL : semicolon + 1;
         semicolon = cursor == NULL ? NULL : find_statement_separator(cursor);
         ++segment;

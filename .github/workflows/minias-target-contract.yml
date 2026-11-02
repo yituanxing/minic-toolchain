@@ -99,6 +99,8 @@ jobs:
           command -v as
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
             bash tests/assembler/probe-mc-source-stable-rebind.sh
+      - name: Source statement events enforce Source/Common parser ownership
+        run: bash tests/assembler/probe-source-statement-event-boundary.sh
       - name: GNU SourceContext replay, macro lifetime and source-site identity
         run: |
           command -v as

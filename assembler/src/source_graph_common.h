@@ -1,7 +1,14 @@
 #ifndef MINIAS_SOURCE_GRAPH_COMMON_H
 #define MINIAS_SOURCE_GRAPH_COMMON_H
 
-#include "minias_internal.h"
+#include "minias_target_api.h"
+#include "source_statement_event.h"
+
+/* This interface deliberately does not expose the mutable Common session.
+ * The Source implementation itself explicitly includes minias_internal.h
+ * until MCExpr/Symbol query capabilities are factored out. */
+typedef struct MiniAs MiniAs;
+typedef struct MiniAsFragmentGrowthSet MiniAsFragmentGrowthSet;
 
 /* Common may drive the source pass and retain a persistent graph, but does
  * not own or inspect SourceFrame, macro/conditional stacks or SiteID tables.
@@ -14,7 +21,9 @@ bool minias_source_graph_load_physical(MiniAs *as, const char *path,
 size_t minias_source_graph_physical_lines(const MiniAsSourceGraph *graph);
 void minias_source_graph_trace(const MiniAsSourceGraph *graph,
                                size_t replay_passes, FILE *diagnostic);
-bool minias_source_context_process_graph(MiniAs *as,MiniAsSourceGraph *graph);
+bool minias_source_context_process_graph(
+    MiniAs *as,MiniAsSourceGraph *graph,
+    const MiniAsSourceStatementSink *statements);
 bool minias_source_graph_begin_eof(MiniAs *as);
 bool minias_source_graph_validate_fragment_sites(MiniAs *as);
 bool minias_source_graph_lookup_forced_branch(MiniAs *as,
@@ -42,7 +51,7 @@ bool minias_source_try_control_directive(MiniAs *as,const char *op,
                                          bool *handled);
 bool minias_numeric_refs_rewrite(MiniAs *as,const char *text,
                                 char **out,size_t line);
-/* Source expansion recursively calls the one Common statement lowerer. */
-bool minias_statement_process(MiniAs *as,char *text,size_t line);
+/* The Source module emits statement events through the borrowed sink;
+ * the Common statement lowerer remains private to assembler.c. */
 
 #endif
