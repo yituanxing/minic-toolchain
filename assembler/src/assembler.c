@@ -4696,7 +4696,8 @@ static bool parse_loaded_source_graph(MiniAs *as,
        !flush_literal_pools(as,minias_source_graph_physical_lines(graph),true))
         return false;
     if(!flush_pending_local_commons(as))return false;
-    if(!minias_source_graph_validate_fragment_sites(as))return false;
+    if(!minias_source_graph_validate_fragment_sites(
+           as,as->stmts,as->stmt_count))return false;
     /* Finalization already refreshes the alias DAG after assigning final
      * subsection bases. Its subsequent .size end-anchor work changes no
      * alias source values, so a second whole-graph walk is redundant. */
@@ -4976,13 +4977,13 @@ int minias_assemble_config(const char *input_path,
             if(as.error[0]!='\0')parsed=false;
         }
         if(parsed)parsed=minias_source_graph_rebind_forced_branches(
-                &as,&branch_growth);
+                &as,as.stmts,as.stmt_count,&branch_growth);
         if(parsed && !minias_solve_fragment_layout(
               &as,&branch_growth,&added_long_branches,diagnostic))
             parsed=false;
         if(parsed && added_long_branches) {
             parsed=minias_source_graph_capture_forced_branches(
-                &as,&branch_growth);
+                &as,as.stmts,as.stmt_count,&branch_growth);
         }
         if(parsed && added_long_branches) {
             ++source_reparse_pass;

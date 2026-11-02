@@ -30,9 +30,15 @@ if '.consume=consume_source_statement' not in core or \
     raise SystemExit('Missing bound event sink or source identity')
 if 'as->source->statements=(MiniAsSourceStatementSink){0};' not in source:
     raise SystemExit('Source callback lifetime not cleared at parse exit')
+graph=(root/'source_graph.c').read_text()
+if re.search(r'\bas->(?:stmts|stmt_count)\b',graph):
+    raise SystemExit('SourceGraph directly reads Common mutable statement vector')
+for call in ('as,as->stmts,as->stmt_count','&as,as.stmts,as.stmt_count'):
+    if call not in core:
+        raise SystemExit('Common omitted explicit immutable Fragment span: '+call)
 if 'size_t site;' not in events or 'char *text;' not in events:
     raise SystemExit('Statement event loses writable text or stable identity')
-print('MINIAS_SOURCE_EVENT_STRUCTURE=PASS one_lowerer=1 stable_site=1 no_legacy_parser=1 sink_unbound=1')
+print('MINIAS_SOURCE_EVENT_STRUCTURE=PASS one_lowerer=1 stable_site=1 no_legacy_parser=1 sink_unbound=1 fragments=borrowed')
 PY
 # Standalone contract clients can hold an opaque session, but cannot
 # dereference it through this header. No Common private include is allowed.

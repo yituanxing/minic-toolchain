@@ -273,15 +273,16 @@ bool minias_source_graph_begin_eof(MiniAs *as) {
 /* A fragment without a stable source owner makes forced-branch rebinding
  * unsafe. Keep the full identity proof with the persistent SourceGraph,
  * rather than inspecting its private site cardinality from the lowerer. */
-bool minias_source_graph_validate_fragment_sites(MiniAs *as) {
+bool minias_source_graph_validate_fragment_sites(
+    MiniAs *as,const MiniAsStmt *fragments,size_t fragment_count) {
     const MiniAsSourceGraph *graph=as->source->graph;
     size_t i;
     if(graph==NULL) {
         minias_set_error(as,"invalid-source-graph-state");
         return false;
     }
-    for(i=0U;i<as->stmt_count;++i) {
-        const MiniAsStableSiteId site=as->stmts[i].source_site;
+    for(i=0U;i<fragment_count;++i) {
+        const MiniAsStableSiteId site=fragments[i].source_site;
         if(site==MINIAS_SITE_NONE || site>graph->site_count) {
             minias_set_error(as,"fragment-without-source-site:%zu",i);
             return false;
@@ -385,8 +386,9 @@ bool minias_source_graph_lookup_forced_branch(MiniAs *as,
  * One SourceSite may not ambiguously denote multiple machine instructions.
  * Missing branches (e.g. a changed conditional arm) fail CLOSED rather than
  * forcing an unrelated instruction that inherited its old ordinal. */
-bool minias_source_graph_rebind_forced_branches(MiniAs *as,
-                                                MiniAsFragmentGrowthSet *growth) {
+bool minias_source_graph_rebind_forced_branches(
+    MiniAs *as,const MiniAsStmt *fragments,size_t fragment_count,
+    MiniAsFragmentGrowthSet *growth) {
     MiniAsSourceGraph *graph=as->source->graph;
     size_t *site_to_stmt;
     size_t i;
@@ -404,8 +406,8 @@ bool minias_source_graph_rebind_forced_branches(MiniAs *as,
         minias_set_error(as,"out-of-memory:forced-source-index");
         return false;
     }
-    for(i=0U;i<as->stmt_count;++i) {
-        const MiniAsStmt *stmt=&as->stmts[i];
+    for(i=0U;i<fragment_count;++i) {
+        const MiniAsStmt *stmt=&fragments[i];
         size_t *slot;
         if(stmt->fragment_kind!=MINIAS_FRAGMENT_INSTRUCTION)continue;
         if(stmt->source_site==MINIAS_SITE_NONE ||
@@ -429,7 +431,7 @@ bool minias_source_graph_rebind_forced_branches(MiniAs *as,
         size_t entry=saved->source_site<=graph->site_count ?
             site_to_stmt[saved->source_site] : 0U;
         if(entry==0U || entry==SIZE_MAX ||
-           !source_graph_forced_shape_matches(saved,&as->stmts[entry-1U])) {
+           !source_graph_forced_shape_matches(saved,&fragments[entry-1U])) {
             ++graph->ordinal_drifts;
             minias_set_error(as,"lost-or-ambiguous-forced-source-site:%zu",
                              (size_t)saved->source_site);
@@ -443,8 +445,9 @@ bool minias_source_graph_rebind_forced_branches(MiniAs *as,
     return true;
 }
 
-bool minias_source_graph_capture_forced_branches(MiniAs *as,
-                                         const MiniAsFragmentGrowthSet *growth) {
+bool minias_source_graph_capture_forced_branches(
+    MiniAs *as,const MiniAsStmt *fragments,size_t fragment_count,
+    const MiniAsFragmentGrowthSet *growth) {
     MiniAsSourceGraph *graph=as->source->graph;
     const size_t *ids=growth->ids;
     const size_t count=growth->count;
@@ -465,15 +468,15 @@ bool minias_source_graph_capture_forced_branches(MiniAs *as,
         MiniAsForcedBranchSite *saved;
         MiniAsTargetRelaxPlan plan;
         unsigned j;
-        if(ids[i]>=as->stmt_count ||
-           as->stmts[ids[i]].fragment_kind!=MINIAS_FRAGMENT_INSTRUCTION ||
-           as->stmts[ids[i]].mcinst==NULL ||
-           as->stmts[ids[i]].mcinst->count>
-               as->stmts[ids[i]].mcinst->capacity) {
+        if(ids[i]>=fragment_count ||
+           fragments[ids[i]].fragment_kind!=MINIAS_FRAGMENT_INSTRUCTION ||
+           fragments[ids[i]].mcinst==NULL ||
+           fragments[ids[i]].mcinst->count>
+               fragments[ids[i]].mcinst->capacity) {
             minias_set_error(as,"invalid-forced-branch-fragment:%zu",ids[i]);
             return false;
         }
-        stmt=&as->stmts[ids[i]];
+        stmt=&fragments[ids[i]];
         if(stmt->source_site==MINIAS_SITE_NONE ||
            stmt->source_site>graph->site_count) {
             minias_set_error(as,"invalid-forced-branch-source-site");

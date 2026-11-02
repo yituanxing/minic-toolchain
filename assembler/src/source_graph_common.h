@@ -25,14 +25,19 @@ bool minias_source_context_process_graph(
     MiniAs *as,MiniAsSourceGraph *graph,
     const MiniAsSourceStatementSink *statements);
 bool minias_source_graph_begin_eof(MiniAs *as);
-bool minias_source_graph_validate_fragment_sites(MiniAs *as);
+bool minias_source_graph_validate_fragment_sites(
+    MiniAs *as,const MiniAsStmt *fragments,size_t fragment_count);
+/* All Fragment reads arrive as borrowed, immutable spans from Common.
+ * SourceGraph never owns or mutates the Common statement vector. */
 bool minias_source_graph_lookup_forced_branch(MiniAs *as,
                                               const MiniAsStmt *stmt,
                                               size_t *minimum_size);
 bool minias_source_graph_rebind_forced_branches(
-    MiniAs *as, MiniAsFragmentGrowthSet *growth);
+    MiniAs *as,const MiniAsStmt *fragments,size_t fragment_count,
+    MiniAsFragmentGrowthSet *growth);
 bool minias_source_graph_capture_forced_branches(
-    MiniAs *as, const MiniAsFragmentGrowthSet *growth);
+    MiniAs *as,const MiniAsStmt *fragments,size_t fragment_count,
+    const MiniAsFragmentGrowthSet *growth);
 
 /* SourceContext owns the pass-local lexical state and the current SiteID.
  * Common saves/restores that ID only when materializing deferred fragments
