@@ -3,6 +3,7 @@ set -Eeuo pipefail
 python3 - <<'PY'
 from pathlib import Path
 driver=Path('assembler/src/assembler.c').read_text()
+lowering=Path('assembler/src/common_lowering.c').read_text()
 layout=Path('assembler/src/mc_layout.c').read_text()
 expr=Path('assembler/src/mc_expr.c').read_text()
 internal=(Path('assembler/src/minias_internal.h').read_text() +
@@ -25,7 +26,7 @@ if ('typedef struct MiniAsSourceFrame' not in source or
     'MiniAsSourceFrame physical;' not in source or
     expansion.count('bool minias_source_frame_process(') != 1 or
     'minias_source_frame_process(as,&graph->physical)' not in expansion or
-    'minias_source_context_process_graph(as,graph,&statements)' not in driver or
+    'minias_source_context_process_graph(as,graph,&statements)' not in lowering or
     expansion.count('minias_source_frame_process(as,&frame)') < 3 or
     'assembler/src/source_graph.c' not in mk or
     'assembler/src/source_expansion.c' not in mk):
@@ -49,8 +50,8 @@ if ('#include "source_graph_common.h"' not in driver or
     'minias_source_graph_create()' not in driver or
     'minias_source_graph_destroy(graph)' not in driver or
     'minias_source_graph_trace(graph,' not in driver or
-    'minias_source_current_site(as)' not in driver or
-    'minias_source_restore_site(as,' not in driver):
+    'minias_source_current_site(as)' not in lowering or
+    'minias_source_restore_site(as,' not in lowering):
     raise SystemExit('Common bypasses opaque SourceGraph/SourceContext boundary')
 for old_stack in ('static bool push_conditional(',
                   'static bool elseif_conditional(',
@@ -94,13 +95,13 @@ for n in ('minias_compile_deferred_expr','minias_evaluate_deferred_expr',
     if n+'(' not in expr:raise SystemExit('persistent MCExpr owner missing: '+n)
 if 'minias_resolve_variable_exprs(' not in layout:
     raise SystemExit('MCLayout failed to consume persistent variable expressions')
-if driver.count('minias_compile_variable_exprs(as,stmt)') != 1 or \
-   'minias_resolve_variable_exprs(as,stmt' not in driver:
+if lowering.count('minias_compile_variable_exprs(as,stmt)') != 1 or \
+   'minias_resolve_variable_exprs(as,stmt' not in lowering:
     raise SystemExit('variable DATA first pass must use one retained MCExpr AST')
 if 'minias_compile_variable_mc(' in expr or 'minias_resolve_variable_mc(' in layout:
     raise SystemExit('obsolete variable DATA text/legacy MC path survived')
-emitter=driver[driver.index('static bool emit_data_stmt('):
-               driver.index('static bool parse_numeric_label_id(')]
+emitter=lowering[lowering.index('bool minias_common_emit_data_stmt('):
+                 lowering.index('static bool parse_numeric_label_id(')]
 if 'minias_parse_common_fill(' in emitter or 'minias_parse_common_space(' in emitter:
     raise SystemExit('DATA re-parsed on final emission')
 if 'variable_data_resolved' not in emitter:

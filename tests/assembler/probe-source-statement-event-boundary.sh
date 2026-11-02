@@ -13,21 +13,22 @@ events=(root/'source_statement_event.h').read_text()
 source=(root/'source_expansion.c').read_text()
 private=(root/'source_graph_internal.h').read_text()
 core=(root/'assembler.c').read_text()
+lowering=(root/'common_lowering.c').read_text()
 if '#include "minias_internal.h"' in common:
     raise SystemExit('Source/Common contract exposes private session layout')
 if '#include "minias_internal.h"' in private:
     raise SystemExit('Source private implementation imports Common session')
 if '#include "minias_source_semantic_services.h"' not in private:
     raise SystemExit('Missing Source-only semantic service contract')
-if 'minias_statement_process' in (common+source+core):
+if 'minias_statement_process' in (common+source+core+lowering):
     raise SystemExit('Legacy exported statement parser survives')
 if re.search(r'\b(?:lower_source_statement|consume_source_statement)\s*\(',source):
     raise SystemExit('Source calls Common statement parser directly')
-if len(re.findall(r'\bstatic bool lower_source_statement\s*\(',core))!=1:
+if len(re.findall(r'\bstatic bool lower_source_statement\s*\(',lowering))!=1:
     raise SystemExit('Common must have one private statement lowerer')
-if 'return lower_source_statement(as,text,line);' not in core:
+if 'return lower_source_statement(as,text,line);' not in lowering:
     raise SystemExit('Common local label recursion changed')
-if '.consume=consume_source_statement' not in core or \
+if '.consume=consume_source_statement' not in lowering or \
    '.site=minias_source_session(as)->current_site' not in source:
     raise SystemExit('Missing bound event sink or source identity')
 if 'minias_source_session(as)->statements=(MiniAsSourceStatementSink){0};' not in source:
@@ -42,7 +43,7 @@ if 'as->layout_sensitive' in source or 'minias_get_symbol(' in source:
     raise SystemExit('Source bypasses Common semantic ownership')
 if 'minias_common_source_symbol_defined(as,args)' not in source:
     raise SystemExit('Source conditional lacks Common definition predicate')
-if 'minias_source_context_layout_sensitive(as->source)' not in core:
+if 'minias_source_context_layout_sensitive(as->source)' not in lowering:
     raise SystemExit('Common did not import Source conditional replay signal')
 if re.search(r'\bas\s*->',source+graph):
     raise SystemExit('Source dereferences private Common session')
