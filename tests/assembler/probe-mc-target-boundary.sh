@@ -218,16 +218,18 @@ import re
 root = Path('assembler/src')
 core = (root / 'minias_target_api.h').read_text()
 driver = (root / 'assembler.c').read_text()
+lowering = (root / 'common_lowering.c').read_text()
+private_lowering = (root / 'minias_common_lowering.h').read_text()
 if not re.search(r'typedef struct MiniAsParseContext MiniAsParseContext;', core):
     raise SystemExit('Missing opaque parse capability')
 if 'struct MiniAsParseContext {' in core or \
-        'struct MiniAsParseContext { MiniAs *as; };' not in driver:
+        'struct MiniAsParseContext { MiniAs *as; };' not in private_lowering:
     raise SystemExit('Parse context exposed its mutable Common owner')
 if not re.search(r'bool\s*\(\*parse_mcinst\)\s*\('
                  r'MiniAsParseContext\s*\*\s*,\s*MiniAsStmt\s*\*', core):
     raise SystemExit('Target parser still receives full mutable MiniAs')
-if 'MiniAsParseContext parsing = { .as=as };' not in driver or \
-        'as->target->parse_mcinst(&parsing, st)' not in driver:
+if 'MiniAsParseContext parsing = { .as=as };' not in lowering or \
+        'as->target->parse_mcinst(&parsing, st)' not in lowering:
     raise SystemExit('Common failed to provide its single parse owner')
 required = ('target_state', 'is_elf32', 'has_error', 'error',
             'bind_symbol_ref', 'bind_symbol_difference_ref',
@@ -283,7 +285,8 @@ rv = (root / 'riscv_target.c').read_text()
 if not re.search(r'static unsigned\s+riscv_default_exec_alignment_for_site'
                  r'\s*\(\s*const void\s*\*target_state\s*\)', rv):
     raise SystemExit('RISC-V execution alignment still reads Common')
-if 'capture_site_state(as->target_state, st, &st->site)' not in driver or \
+if 'capture_site_state(as->target_state, st, &st->site)' not in \
+        (root / 'common_lowering.c').read_text() or \
         'default_exec_alignment_for_site(as->target_state)' not in driver:
     raise SystemExit('Common did not pass private Target context')
 print('MINIAS_MC_SITE_TARGET_STATE=PASS capture=3 alignment=1 common_root=none')
@@ -307,10 +310,12 @@ if not re.search(r'bool\s*\(\*measure_mcinst\)\s*\('
                  r'const MiniAsMeasureView\s*\*\s*,\s*'
                  r'MiniAsMeasureErrorSink\s*\*', core):
     raise SystemExit('Measurement callback still borrows mutable MiniAs')
-if 'struct MiniAsMeasureErrorSink { MiniAs *as; };' not in driver or \
+if 'struct MiniAsMeasureErrorSink { MiniAs *as; };' not in \
+        (root / 'minias_common_lowering.h').read_text() or \
         'struct MiniAsMeasureErrorSink {' in core:
     raise SystemExit('Measurement diagnostic sink must remain Common-private')
-if 'const MiniAsMeasureView measure = { .target_state=as->target_state };' not in driver:
+if 'const MiniAsMeasureView measure = { .target_state=as->target_state };' not in \
+        (root / 'common_lowering.c').read_text():
     raise SystemExit('Measurement view does not borrow Target state at parse site')
 targets = {
     'aarch64_target.c': 'aarch64_measure_mcinst',
@@ -606,6 +611,7 @@ root = Path('assembler/src')
 api = (root / 'minias_target_api.h').read_text()
 private = (root / 'minias_internal.h').read_text()
 common = (root / 'assembler.c').read_text()
+common_lowering = (root / 'minias_common_lowering.h').read_text()
 if '#include "minias_internal.h"' in api or \
         '#include "minias_target_api.h"' not in private:
     raise SystemExit('Target header acquired a Common-private include cycle')
@@ -618,8 +624,10 @@ for banned in ('minias_get_symbol(', 'minias_section_append(',
         raise SystemExit('Target header exposes Common mutator: ' + banned)
 for context in ('MiniAsDirectiveContext', 'MiniAsCfiMappingSink',
                 'MiniAsParseContext', 'MiniAsEncodeContext'):
-    if 'struct '+context+' {' in api or 'struct '+context+' {' not in common:
-        raise SystemExit('Context owner is not opaque: '+context)
+    owner=common_lowering if context in ('MiniAsDirectiveContext',
+                                         'MiniAsParseContext') else common
+    if 'struct '+context+' {' in api or 'struct '+context+' {' not in owner:
+        raise SystemExit('Context owner is not Common-private: '+context)
 for file in ('riscv_target.c', 'riscv_encode.c', 'aarch64_target.c',
              'x86_64_target.c', 'loongarch64_target.c'):
     source = (root / file).read_text()
