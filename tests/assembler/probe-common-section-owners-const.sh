@@ -71,11 +71,12 @@ import re
 
 root=Path('assembler/src')
 internal=(root/'minias_internal.h').read_text()
+records=(root/'minias_object_records.h').read_text()
 context=(root/'common_context.c').read_text()
 private=(root/'minias_common_emission_private.h').read_text()
 emission=(root/'common_emission.c').read_text()
 layout=(root/'mc_layout.c').read_text()
-meta=internal.split('typedef struct MiniAsSection {',1)[1].split('} MiniAsSection;',1)[0]
+meta=records.split('typedef struct MiniAsSection {',1)[1].split('} MiniAsSection;',1)[0]
 if re.search(r'\b(?:data|size|capacity)\s*;',meta):
     raise SystemExit('Section metadata still contains byte-owner fields')
 if 'const MiniAsSection *sections;' not in internal or \
