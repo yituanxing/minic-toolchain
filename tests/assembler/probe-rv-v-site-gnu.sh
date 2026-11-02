@@ -179,7 +179,9 @@ for xlen in 32 64; do
         done
     done
 
-    for suffix in +m +unknown +v1p0; do
+    # +v1p0 is now a verified alias of +v. Other V revisions still fail
+    # closed; this negative case must exercise an unsupported version.
+    for suffix in +m +unknown +v1p1; do
         name="rv$xlen-unsupported-${suffix#+}"
         printf '.text\n.option arch,%s\nnop\n' "$suffix" >"$work/$name.s"
         reject_mini_option "$name"

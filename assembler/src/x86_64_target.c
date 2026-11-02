@@ -4821,7 +4821,8 @@ static bool x64_profile(const char *march,const char *mabi,
     bool i386=(mabi && !strcmp(mabi,"i386"));
     if ((march && strcmp(march,"x86-64") && strcmp(march,"i386")) ||
         (mabi && strcmp(mabi,"sysv") && !i386) ||
-        (i386 && march && strcmp(march,"i386"))) {
+        (i386 && march && strcmp(march,"i386")) ||
+        (march && !strcmp(march,"i386") && !i386)) {
         if(cap) snprintf(err,cap,"unsupported-x86_64-isa-abi");
         return false;
     }

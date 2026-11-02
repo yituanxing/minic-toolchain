@@ -1,5 +1,22 @@
 # MiniAS 当前清理与所有权总览（2026-11-01）
 
+> **2026-11-02 P04 ISA 版本/ABI 入口成组迁移（基于 `639b6ffa`，
+> 本批最终提交待发布）：** 上批已完成不可变 `TargetSpec.object`。
+> 此批沿 Target 私有解析、文件 ISA、指令编码许可与 Fragment 现场
+> mapping 真实调用链，把 RISC-V 11 个既有扩展的默认规范版本
+> 纳入同一份带版本的 `MiniAsRiscvISA`。`-march` 可显式拼写已验证
+> 默认版本（如 `rv64i2p1m2p0_zbb1p0`），GNU 2.42 的 ISA
+> 属性与本地隐式版本对象一致；现有 `.option arch,+v/+zbb`
+> 接受等价 `+v1p0/+zbb1p0`，但不扩展未覆盖的编码能力。
+> ELF file attribute 不随源局部选项升级，现场 mapping 仍从
+> Fragment 快照计算。x86 同时修复 `-march=i386` 被错误地配成
+> ELF64 SysV 的对称 ISA/ABI 验证。`-Werror`、A0 30/30（GNU
+> 本地 oracle 启用）、22 组旧新差分（15 byte-exact、7 对拒绝）、
+> 四目标 TargetSpec 门禁、RISC-V 版本正反矩阵、x86 GNU ELF32
+> 均 PASS；**远端 exact-head、原始 Linux / QEMU 仍待本批发布核对**。
+> 版本策略与剩余边界见
+> [ISA 版本记录](target-isa-version-2026-11-02.md)。
+
 > **2026-11-02 ELF ObjectModel 只读终结视图（基于
 > `b2f0bfbe`）：** Context/Emission 刚完成 Section 元数据与输出字节
 > 的所有权分离后，Driver 现在只在 Target finalization 成功后构造
@@ -240,6 +257,10 @@
 - [ ] **TargetSpec/ISA/ABI**：将不可变配置、源文件可变 ISA
   状态和每指令快照分开；以真实 GNU/Linux 输入驱动版本化
   扩展和 relaxation，不把 MiniC 的主动发射子集当 ISA 上限。
+  **阶段结果：** TargetSpec/ELF ABI 已单所有者化；RISC-V 现有
+  11 扩展的已验证默认版本、`+v1p0/+zbb1p0` 词法别名已由
+  Target 私有 ISA 值驱动，四架构配置验证保留统一入口；
+  其他 `.option arch`、非默认版本/relaxation 与 Linux 验收未完成。
 - [ ] **ObjectModel/多格式预备**：只有前述所有权稳定且存在
   真实新格式验收时，才将通用 Section/Symbol/Fixup 与 ELF
   私有序列化拆开；**本批先完成 ObjectModel→ELF 写器的只读

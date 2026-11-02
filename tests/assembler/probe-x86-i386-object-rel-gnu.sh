@@ -31,6 +31,26 @@ objcopy -j .data -O binary "$work/mini.o" "$work/mini.data"
 objcopy -j .data -O binary "$work/gnu.o" "$work/gnu.data"
 cmp "$work/mini.data" "$work/gnu.data"
 
+# ISA width and ELF object ABI must agree in both directions. The explicit
+# i386 object is valid, but a 32-bit -march cannot be emitted as ELF64 by
+# default or by spelling SysV; conversely a 64-bit ISA cannot use i386 ABI.
+for profile in 'i386|' 'i386|sysv' 'x86-64|i386'; do
+    IFS='|' read -r march abi <<<"$profile"
+    args=("-march=$march")
+    if [[ -n "$abi" ]]; then args+=("-mabi=$abi"); fi
+    if "$minias" --target=x86_64 "${args[@]}" \
+        -o "$work/incompatible.o" "$work/i386.s" 2>"$work/incompatible.err"; then
+        echo "MiniAS accepted conflicting x86 ISA/ABI: $profile" >&2
+        exit 1
+    fi
+    test ! -e "$work/incompatible.o"
+    grep -q 'unsupported-x86_64-isa-abi' "$work/incompatible.err"
+done
+# ABI-only i386 remains an intentional shorthand for an ELF32 target.
+"$minias" --target=x86_64 -mabi=i386 \
+    -o "$work/i386-abi-only.o" "$work/i386.s"
+cmp "$work/i386-abi-only.o" "$work/mini.o"
+
 # Source-local mode and the ELF object ABI remain independent. GCC's
 # real-mode 32-bit prologue has a validated 16-bit code-section encoding,
 # including explicit 66 operand-size prefixes.
@@ -57,4 +77,4 @@ if "$minias" --target=x86_64 -march=i386 -mabi=i386 \
     exit 1
 fi
 grep -q 'unsupported-x86-code32-operand' "$work/code32.err"
-echo 'MINIAS_X86_I386_OBJECT=PASS ELF32_EM386_REL R_386_32 GNU_bytes=equal code16gcc_accepted=1 extended_register_rejected=1'
+echo 'MINIAS_X86_I386_OBJECT=PASS ELF32_EM386_REL R_386_32 GNU_bytes=equal isa_abi_rejected=3 code16gcc_accepted=1 extended_register_rejected=1'

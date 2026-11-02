@@ -2,6 +2,7 @@
 #define MINIAS_RISCV_TARGET_H
 
 #include "riscv_fixup_kinds.h"
+#include "riscv_profile.h"
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -35,7 +36,7 @@ typedef struct MiniAsRiscvState {
     unsigned strict_i_xlen;
     bool isa_explicit;
     unsigned target_xlen;
-    uint64_t isa_features;
+    MiniAsRiscvISA file_isa;
     /* The E calling convention may be selected by -mabi=ilp32e even when
      * -march is omitted. Keep this legality policy in the Target state,
      * not in Core's mutable ELF output flags. */

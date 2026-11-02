@@ -918,7 +918,7 @@ static bool rv_rvc_encode_plain(const MiniAsRiscvState *state,
     int32_t imm;
     uint16_t out;
     if(state==NULL || !state->isa_explicit ||
-       (state->isa_features&RISCV_ISA_C)==0U ||
+       (state->file_isa.features&RISCV_ISA_C)==0U ||
        (stmt->site.mode_bits&MINIAS_RISCV_OPTION_NO_RVC)!=0U ||
        m==NULL || !rv_scalar_machine_word(m,false,&w))return false;
     op=w&127U;
@@ -1006,7 +1006,7 @@ static bool rv_rvc_branch_form(const MiniAsRiscvState *state,
                                 bool *jump) {
     const MiniAsMCInstView *m=stmt->inst;
     if(state==NULL || !state->isa_explicit ||
-       (state->isa_features&RISCV_ISA_C)==0U ||
+       (state->file_isa.features&RISCV_ISA_C)==0U ||
        (stmt->site.mode_bits&MINIAS_RISCV_OPTION_NO_RVC)!=0U ||
        m==NULL)return false;
     if(m->opcode==RV_MC_JAL && m->operands[0].reg==0U) {
@@ -1333,7 +1333,7 @@ static bool rv_parse_simple_mc(MiniAsParseContext *ctx, MiniAsParseInstruction *
             if (n != 0U) goto invalid;
             if (selected->compressed_encoding != 0U &&
                 rv_parse_state(ctx)->isa_explicit &&
-                (rv_parse_state(ctx)->isa_features & RISCV_ISA_C) != 0U &&
+                (rv_parse_state(ctx)->file_isa.features & RISCV_ISA_C) != 0U &&
                 (rv_parse_state(ctx)->options & MINIAS_RISCV_OPTION_NO_RVC) == 0U) {
                 MiniAsMCInst *m = minias_mcinst_alloc(0U);
                 if (m == NULL) goto oom;
@@ -2315,7 +2315,7 @@ bool minias_riscv_parse_mcinst(MiniAsParseContext *ctx, MiniAsParseInstruction *
                                           policy.required_features,
                                           policy.rv64_only)) return false;
     if (state == NULL ||
-        ((state->isa_features & RISCV_ISA_E) == 0U &&
+        ((state->file_isa.features & RISCV_ISA_E) == 0U &&
          !state->rv32e_abi)) return true;
     for (index = 0U; index < inst->count; ++index) {
         const MiniAsMCOperand *operand = &inst->operands[index];

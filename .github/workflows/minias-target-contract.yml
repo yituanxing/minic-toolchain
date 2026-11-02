@@ -113,6 +113,10 @@ jobs:
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
             bash tests/assembler/probe-target-spec-const-abi.sh
+      - name: GNU x86 ELF32 i386 ISA and object ABI must agree in both directions
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-x86-i386-object-rel-gnu.sh
       - name: Context owns all source, layout and synthetic Symbol state
         run: bash tests/assembler/probe-common-context-symbol-owner.sh
       - name: Context Symbol table is compiler-enforced const outside its owner
@@ -168,6 +172,11 @@ jobs:
           command -v riscv64-linux-gnu-as
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
             bash tests/assembler/probe-rv-target-profile-single-source.sh
+      - name: Target-owned RISC-V ISA versions and lexical aliases match GNU
+        run: |
+          command -v riscv64-linux-gnu-as
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-rv-versioned-target-profile.sh
       - name: GNU RV32/RV64 .option RVC push pop and ISA feature-state boundaries
         run: |
           command -v riscv64-linux-gnu-as

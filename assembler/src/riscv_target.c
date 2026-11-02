@@ -34,7 +34,7 @@ static bool riscv_emit_code_alignment(MiniAsCodeAlignSink *sink,
      * alignment must fill with C.NOP after switching to norvc.  The ISA
      * capability and ELF RVC flag are separate from that lexical mode. */
     allow_c = (!state->isa_explicit ||
-               (state->isa_features & RISCV_ISA_C) != 0U);
+               (state->file_isa.features & RISCV_ISA_C) != 0U);
 
     /* GNU GAS riscv_make_nops emits one non-instruction zero byte for odd
      * alignment, then (if needed) the single C.NOP BEFORE its 32-bit NOPs.
@@ -256,7 +256,7 @@ bool minias_riscv_validate_parsed_isa(MiniAsParseContext *ctx, const MiniAsParse
         ((stmt->site.mode_bits & MINIAS_RISCV_OPTION_SITE_V)!=0U?
          RISCV_ISA_V:0U);
     uint64_t effective_features=minias_riscv_site_features(
-        state->isa_features,additions,
+        state->file_isa.features,additions,
         (stmt->site.mode_bits&MINIAS_RISCV_OPTION_NO_RVC)!=0U);
     /* `.option norvc` is an instruction-site state even in the historical
      * implicit ISA mode. Do not bury the C opcode gate behind explicit
@@ -344,8 +344,8 @@ static size_t riscv_encode_uleb32(unsigned char *out, unsigned value) {
 static bool riscv_canonical_object_isa(const MiniAsRiscvState *state,
                                        char output[512], size_t *length) {
     if (state == NULL || output == NULL || length == NULL) return false;
-    if(!minias_riscv_mapping_isa(state->arch_attribute_isa,
-                                 state->isa_features,0U,false,output,512U))
+    if(!minias_riscv_mapping_isa(&state->file_isa,
+                                 0U,false,output,512U))
         return false;
     *length=strlen(output);
     return true;
@@ -673,7 +673,7 @@ static bool riscv_target_directive(MiniAsDirectiveContext *ctx, const char *op,
         state->options|=MINIAS_RISCV_OPTION_NO_RVC;
     else if(strcmp(args,"rvc")==0) {
         /* Restoring C cannot add an extension absent from the ISA. */
-        if(state->isa_explicit && !(state->isa_features&RISCV_ISA_C))
+        if(state->isa_explicit && !(state->file_isa.features&RISCV_ISA_C))
             goto unsupported;
         state->options&=~(uint32_t)MINIAS_RISCV_OPTION_NO_RVC;
     } else if(strcmp(args,"push")==0) {
@@ -983,8 +983,8 @@ static bool riscv_record_object_mapping_symbols(
                  RISCV_ISA_V:0U);
             key=riscv_mapping_site_key(fragment.site);
             if(!cached[key]) {
-                if(!minias_riscv_mapping_isa(state->arch_attribute_isa,
-                        state->isa_features,additions,(key&1U)!=0U,
+                if(!minias_riscv_mapping_isa(&state->file_isa,
+                        additions,(key&1U)!=0U,
                         site_names[key],sizeof(site_names[key]))) {
                     minias_post_emit_error(errors,"riscv-mapping-isa-overflow");
                     goto done;
@@ -1068,7 +1068,7 @@ static bool riscv_init_target_state(const MiniAsTargetSpec *config,
         }
         state->strict_i_xlen = profile.strict_i_xlen;
         state->isa_explicit = profile.explicit_isa;
-        state->isa_features = profile.features;
+        state->file_isa = profile.isa;
         /* Profile resolution passes semantic ISA spelling. Only the Target
          * serializes ELF Tag_File attributes, including later directives. */
         memcpy(state->arch_attribute_isa, profile.arch_attribute_isa,
@@ -1121,7 +1121,7 @@ static unsigned riscv_default_exec_alignment_for_site(
     const void *target_state) {
     const MiniAsRiscvState *state = target_state;
     if (state != NULL && state->isa_explicit &&
-        (state->isa_features & RISCV_ISA_C) != 0U &&
+        (state->file_isa.features & RISCV_ISA_C) != 0U &&
         (state->options & MINIAS_RISCV_OPTION_NO_RVC) == 0U)
         return 2U;
     return 4U;

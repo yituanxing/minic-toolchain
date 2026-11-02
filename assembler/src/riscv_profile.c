@@ -1,4 +1,5 @@
 #include "riscv_profile.h"
+#include <ctype.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -29,46 +30,134 @@ typedef struct RiscvExtensionSpec {
     uint64_t bit;
     char letter;
     const char *long_name;
-    const char *attribute_suffix;
+    MiniAsRiscvVersion version;
 } RiscvExtensionSpec;
 static const RiscvExtensionSpec riscv_extensions[] = {
-    {RISCV_ISA_M, 'm', NULL, "_m2p0"},
-    {RISCV_ISA_A, 'a', NULL, "_a2p1"},
-    {RISCV_ISA_F, 'f', NULL, "_f2p2"},
-    {RISCV_ISA_D, 'd', NULL, "_d2p2"},
-    {RISCV_ISA_Q, 'q', NULL, "_q2p2"},
-    {RISCV_ISA_C, 'c', NULL, "_c2p0"},
-    {RISCV_ISA_V, 'v', NULL, "_v1p0"},
-    {RISCV_ISA_ZICSR, '\0', "zicsr", "_zicsr2p0"},
-    {RISCV_ISA_ZIFENCEI, '\0', "zifencei", "_zifencei2p0"},
-    {RISCV_ISA_ZBB, '\0', "zbb", "_zbb1p0"},
-    {RISCV_ISA_ZIHINTPAUSE, '\0', "zihintpause", "_zihintpause2p0"}
+    {RISCV_ISA_M, 'm', NULL, {2U,0U}},
+    {RISCV_ISA_A, 'a', NULL, {2U,1U}},
+    {RISCV_ISA_F, 'f', NULL, {2U,2U}},
+    {RISCV_ISA_D, 'd', NULL, {2U,2U}},
+    {RISCV_ISA_Q, 'q', NULL, {2U,2U}},
+    {RISCV_ISA_C, 'c', NULL, {2U,0U}},
+    {RISCV_ISA_V, 'v', NULL, {1U,0U}},
+    {RISCV_ISA_ZICSR, '\0', "zicsr", {2U,0U}},
+    {RISCV_ISA_ZIFENCEI, '\0', "zifencei", {2U,0U}},
+    {RISCV_ISA_ZIHINTPAUSE, '\0', "zihintpause", {2U,0U}},
+    {RISCV_ISA_ZBB, '\0', "zbb", {1U,0U}}
 };
+_Static_assert(sizeof(riscv_extensions)/sizeof(riscv_extensions[0])==
+               MINIAS_RISCV_EXTENSION_COUNT,"RISC-V version inventory drift");
 
-static uint64_t riscv_lookup_extension(char letter, const char *spelling,
-                                       size_t length) {
+static bool riscv_version_matches(const char *text,size_t length,
+                                  MiniAsRiscvVersion version) {
+    char expected[32];
+    int n=snprintf(expected,sizeof(expected),"%up%u",
+                   (unsigned)version.major,(unsigned)version.minor);
+    return n>=0 && (size_t)n==length &&
+           memcmp(text,expected,length)==0;
+}
+
+static bool riscv_consume_version(const char **text,
+                                  MiniAsRiscvVersion version) {
+    const char *begin=*text,*p=begin;
+    if(!isdigit((unsigned char)*p))return true;
+    while(isdigit((unsigned char)*p))++p;
+    if(*p++!='p' || !isdigit((unsigned char)*p))return false;
+    while(isdigit((unsigned char)*p))++p;
+    if(!riscv_version_matches(begin,(size_t)(p-begin),version))return false;
+    *text=p;
+    return true;
+}
+
+static const RiscvExtensionSpec *riscv_lookup_letter(char letter) {
     size_t i;
     for (i = 0U; i < sizeof(riscv_extensions) /
                         sizeof(riscv_extensions[0]); ++i) {
         const RiscvExtensionSpec *ext = &riscv_extensions[i];
-        if (letter != '\0' && ext->letter == letter) return ext->bit;
-        if (spelling != NULL && ext->long_name != NULL &&
-            strlen(ext->long_name) == length &&
-            strncmp(spelling, ext->long_name, length) == 0)
-            return ext->bit;
+        if (ext->letter != '\0' && ext->letter == letter)return ext;
     }
-    return 0U;
+    return NULL;
+}
+
+static const RiscvExtensionSpec *riscv_lookup_name(const char *spelling,
+                                                   size_t length,
+                                                   bool *invalid_version) {
+    size_t i;
+    for(i=0U;i<MINIAS_RISCV_EXTENSION_COUNT;++i) {
+        const RiscvExtensionSpec *ext=&riscv_extensions[i];
+        size_t name_length;
+        if(ext->long_name==NULL)continue;
+        name_length=strlen(ext->long_name);
+        if(length<name_length ||
+           strncmp(spelling,ext->long_name,name_length)!=0)continue;
+        if(length==name_length ||
+           riscv_version_matches(spelling+name_length,length-name_length,
+                                 ext->version))return ext;
+        *invalid_version=true;
+    }
+    return NULL;
+}
+
+static bool riscv_append_extension(char *out,size_t cap,size_t *length,
+                                   const RiscvExtensionSpec *ext,
+                                   MiniAsRiscvVersion version) {
+    int n;
+    if(*length>=cap)return false;
+    if(ext->letter!='\0')
+        n=snprintf(out+*length,cap-*length,"_%c%up%u",ext->letter,
+                   (unsigned)version.major,(unsigned)version.minor);
+    else n=snprintf(out+*length,cap-*length,"_%s%up%u",ext->long_name,
+                    (unsigned)version.major,(unsigned)version.minor);
+    if(n<0 || (size_t)n>=cap-*length)return false;
+    *length+=(size_t)n;
+    return true;
+}
+
+static bool riscv_append_feature(char *out,size_t cap,size_t *length,
+                                 const MiniAsRiscvISA *isa,uint64_t bit,
+                                 const MiniAsRiscvVersion *override) {
+    size_t i;
+    for(i=0U;i<MINIAS_RISCV_EXTENSION_COUNT;++i)
+        if(riscv_extensions[i].bit==bit)
+            return riscv_append_extension(out,cap,length,&riscv_extensions[i],
+                   override!=NULL?*override:isa->extension_versions[i]);
+    return false;
+}
+
+static bool riscv_format_base(char *out,size_t capacity,size_t *length,
+                              const MiniAsRiscvISA *isa) {
+    int n;
+    if(out==NULL || capacity==0U ||
+       (isa->xlen!=32U && isa->xlen!=64U))return false;
+    n=snprintf(out,capacity,"rv%u%c%up%u",isa->xlen,
+               isa->base_e?'e':'i',(unsigned)isa->base_version.major,
+               (unsigned)isa->base_version.minor);
+    if(n<0 || (size_t)n>=capacity)return false;
+    *length=(size_t)n;
+    return true;
+}
+
+static void riscv_default_versions(MiniAsRiscvISA *isa) {
+    size_t i;
+    isa->base_version=(MiniAsRiscvVersion){2U,1U};
+    for(i=0U;i<MINIAS_RISCV_EXTENSION_COUNT;++i)
+        isa->extension_versions[i]=riscv_extensions[i].version;
 }
 
 uint64_t minias_riscv_lookup_site_extension(const char *name,size_t length) {
-    uint64_t feature;
+    const RiscvExtensionSpec *ext=NULL;
+    bool invalid_version=false;
     if(name==NULL || length==0U)return 0U;
-    feature=length==1U?riscv_lookup_extension(name[0],NULL,0U):
-                        riscv_lookup_extension('\0',name,length);
+    if(name[0]=='v' && length>0U) {
+        ext=riscv_lookup_letter('v');
+        if(length>1U &&
+           !riscv_version_matches(name+1U,length-1U,ext->version))ext=NULL;
+    } else ext=riscv_lookup_name(name,length,&invalid_version);
     /* Only these two lexical additions have instruction and GNU oracle
      * coverage. Other inventory entries are recognized for -march, but
      * must not silently become untested .option arch permissions. */
-    return (feature==RISCV_ISA_ZBB || feature==RISCV_ISA_V)?feature:0U;
+    return ext!=NULL && (ext->bit==RISCV_ISA_ZBB ||
+                         ext->bit==RISCV_ISA_V)?ext->bit:0U;
 }
 
 uint64_t minias_riscv_site_features(uint64_t file_features,
@@ -80,16 +169,11 @@ uint64_t minias_riscv_site_features(uint64_t file_features,
     return features;
 }
 
-static bool append_mapping_suffix(char *out,size_t cap,size_t *length,
-                                  const char *suffix) {
-    return append_isa(out,cap,length,suffix);
-}
-
 /* The supported profile inventory has exactly one version per file-level
  * extension. GNU 2.42's local +v instead inserts F2p0/D2p0 and the full
  * vector-implied Zve/Zvl list. Build this *projection* from the file profile
  * and the stable per-Fragment delta, never mutate Tag_RISCV_arch. */
-bool minias_riscv_mapping_isa(const char *file_isa,uint64_t file_features,
+bool minias_riscv_mapping_isa(const MiniAsRiscvISA *file_isa,
                               uint64_t site_additions,bool no_rvc,
                               char *out,size_t capacity) {
     static const char *const vector_dependencies[]={
@@ -97,46 +181,42 @@ bool minias_riscv_mapping_isa(const char *file_isa,uint64_t file_features,
         "_zve64f1p0","_zve64x1p0",
         "_zvl128b1p0","_zvl32b1p0","_zvl64b1p0"
     };
+    const uint64_t file_features=file_isa!=NULL?file_isa->features:0U;
     const uint64_t effective=minias_riscv_site_features(
         file_features,site_additions,no_rvc);
-    const char *first_extension;
+    const MiniAsRiscvVersion implied_vector_f_d={2U,0U};
     size_t len, i;
     bool has_v=(effective&RISCV_ISA_V)!=0U;
     if(file_isa==NULL || out==NULL || capacity==0U)return false;
-    first_extension=strchr(file_isa,'_');
-    len=first_extension!=NULL?(size_t)(first_extension-file_isa):
-        strlen(file_isa);
-    if(len==0U || len>=capacity)return false;
-    memcpy(out,file_isa,len);
-    out[len]='\0';
+    if(!riscv_format_base(out,capacity,&len,file_isa))return false;
     /* Single-letter canonical order matches the Target's extension table. */
     for(i=0U;i<sizeof(riscv_extensions)/sizeof(riscv_extensions[0]);++i) {
         const RiscvExtensionSpec *ext=&riscv_extensions[i];
-        const char *suffix=ext->attribute_suffix;
+        MiniAsRiscvVersion version=file_isa->extension_versions[i];
         if(ext->letter=='\0' || (effective&ext->bit)==0U)continue;
         if((ext->bit==RISCV_ISA_F || ext->bit==RISCV_ISA_D) &&
            (file_features&ext->bit)==0U && has_v)
-            suffix=ext->bit==RISCV_ISA_F?"_f2p0":"_d2p0";
-        if(!append_mapping_suffix(out,capacity,&len,suffix))return false;
+            version=implied_vector_f_d;
+        if(!riscv_append_extension(out,capacity,&len,ext,version))return false;
     }
-    /* GNU's implied Zmmul follows the initial Zicsr/Zifencei group but
-     * precedes explicit Zbb. Both rv64gc and rv64im_zbb need this order;
-     * blindly appending Zmmul (or putting it first) breaks one of them. */
+    /* GNU's canonical named-extension group puts Zihintpause before the
+     * implied Zmmul, and Zbb after it. The explicit versioned ISA oracle
+     * also covers Zihintpause and Zbb together rather than only alone. */
     if((file_features&RISCV_ISA_ZICSR)!=0U &&
-       !append_mapping_suffix(out,capacity,&len,"_zicsr2p0"))return false;
+       !riscv_append_feature(out,capacity,&len,file_isa,RISCV_ISA_ZICSR,NULL))return false;
     if((file_features&RISCV_ISA_ZIFENCEI)!=0U &&
-       !append_mapping_suffix(out,capacity,&len,"_zifencei2p0"))return false;
+       !riscv_append_feature(out,capacity,&len,file_isa,RISCV_ISA_ZIFENCEI,NULL))return false;
+    if((file_features&RISCV_ISA_ZIHINTPAUSE)!=0U &&
+       !riscv_append_feature(out,capacity,&len,file_isa,RISCV_ISA_ZIHINTPAUSE,NULL))return false;
     if((effective&RISCV_ISA_M)!=0U &&
-       !append_mapping_suffix(out,capacity,&len,"_zmmul1p0"))return false;
+       !append_isa(out,capacity,&len,"_zmmul1p0"))return false;
     /* The +v Zicsr *parse permission* does not add the file-level Zicsr
      * token. Keep that source/ELF distinction even when composing mappings. */
     if((effective&RISCV_ISA_ZBB)!=0U &&
-       !append_mapping_suffix(out,capacity,&len,"_zbb1p0"))return false;
-    if((file_features&RISCV_ISA_ZIHINTPAUSE)!=0U &&
-       !append_mapping_suffix(out,capacity,&len,"_zihintpause2p0"))return false;
+       !riscv_append_feature(out,capacity,&len,file_isa,RISCV_ISA_ZBB,NULL))return false;
     if(has_v)for(i=0U;i<sizeof(vector_dependencies)/
                              sizeof(vector_dependencies[0]);++i)
-        if(!append_mapping_suffix(out,capacity,&len,vector_dependencies[i]))
+        if(!append_isa(out,capacity,&len,vector_dependencies[i]))
             return false;
     return true;
 }
@@ -152,35 +232,48 @@ static bool parse_isa(const char *arch, MiniAsRiscvProfile *out,
     else if (strncmp(arch, "rv64", 4U) == 0) xlen = 64U;
     else return reject(error, cap, "unsupported-arch", arch);
     p = arch + 4U;
+    riscv_default_versions(&out->isa);
+    out->isa.xlen=xlen;
     if (*p == 'i') features = RISCV_ISA_I;
-    else if (*p == 'e' && xlen == 32U) features = RISCV_ISA_E;
+    else if (*p == 'e' && xlen == 32U) {
+        features = RISCV_ISA_E;
+        out->isa.base_e=true;
+        out->isa.base_version=(MiniAsRiscvVersion){2U,0U};
+    }
     else if (*p == 'g') {
         features = RISCV_ISA_I | RISCV_ISA_M | RISCV_ISA_A |
                    RISCV_ISA_F | RISCV_ISA_D |
                    RISCV_ISA_ZICSR | RISCV_ISA_ZIFENCEI;
     } else return reject(error, cap, "unsupported-riscv-base", arch);
     ++p;
+    if(!riscv_consume_version(&p,out->isa.base_version))
+        return reject(error,cap,"unsupported-riscv-base-version",arch);
     while (*p != '\0' && *p != '_') {
-        uint64_t ext = riscv_lookup_extension(*p, NULL, 0U);
-        if (ext == 0U)
-            return reject(error, cap, "unqualified-riscv-extension", arch);
-        if ((features & ext) != 0U)
+        const RiscvExtensionSpec *ext=riscv_lookup_letter(*p);
+        if(ext==NULL)
+            return reject(error,cap,"unqualified-riscv-extension",arch);
+        if ((features & ext->bit) != 0U)
             return reject(error, cap, "duplicate-riscv-extension", arch);
-        features |= ext;
         ++p;
+        if(!riscv_consume_version(&p,ext->version))
+            return reject(error,cap,"unsupported-riscv-extension-version",arch);
+        features |= ext->bit;
     }
     while (*p == '_') {
         const char *start = ++p;
         size_t n;
-        uint64_t ext;
+        const RiscvExtensionSpec *ext;
+        bool invalid_version=false;
         while (*p != '\0' && *p != '_') ++p;
         n = (size_t)(p - start);
-        ext = riscv_lookup_extension('\0', start, n);
-        if (ext == 0U)
-            return reject(error, cap, "unqualified-riscv-extension", arch);
-        if ((features & ext) != 0U)
+        ext = riscv_lookup_name(start,n,&invalid_version);
+        if (ext == NULL)
+            return reject(error,cap,invalid_version?
+                          "unsupported-riscv-extension-version":
+                          "unqualified-riscv-extension",arch);
+        if ((features & ext->bit) != 0U)
             return reject(error, cap, "duplicate-riscv-extension", arch);
-        features |= ext;
+        features |= ext->bit;
     }
     if ((features & RISCV_ISA_D) && !(features & RISCV_ISA_F))
         return reject(error, cap, "riscv-d-requires-f", arch);
@@ -191,21 +284,20 @@ static bool parse_isa(const char *arch, MiniAsRiscvProfile *out,
         return reject(error, cap, "unsupported-riscv-e-extension-combination", arch);
 
     out->elf32 = xlen == 32U;
-    out->features = features;
+    out->isa.features = features;
     out->explicit_isa = true;
     /* -march selects legal typed instructions; it does not opt in to a
      * raw executable-byte audit. Only the explicit legacy audit entry point
      * may set strict_i_xlen, independently of the selected ISA. */
     if ((features & RISCV_ISA_C) != 0U) out->elf_flags |= EF_RVC;
-    used = (size_t)snprintf(normalized, sizeof(normalized), "rv%u%s",
-                           xlen, (features & RISCV_ISA_E) ? "e2p0" : "i2p1");
-    if (used >= sizeof(normalized))
+    if(!riscv_format_base(normalized,sizeof(normalized),&used,&out->isa))
         return reject(error, cap, "riscv-arch-too-long", arch);
     for (i = 0U; i < sizeof(riscv_extensions) /
                       sizeof(riscv_extensions[0]); ++i)
         if ((features & riscv_extensions[i].bit) != 0U &&
-            !append_isa(normalized, sizeof(normalized),
-                        &used, riscv_extensions[i].attribute_suffix))
+            !riscv_append_extension(normalized,sizeof(normalized),&used,
+                                    &riscv_extensions[i],
+                                    out->isa.extension_versions[i]))
             return reject(error, cap, "riscv-arch-too-long", arch);
     if (strlen(normalized) + 1U > sizeof(out->arch_attribute_isa))
         return reject(error, cap, "riscv-arch-too-long", arch);
@@ -219,6 +311,7 @@ bool minias_riscv_resolve_profile(const char *march, const char *mabi,
     unsigned xlen = 0U, float_abi = 0U;
     bool eabi = false;
     memset(out, 0, sizeof(*out));
+    riscv_default_versions(&out->isa);
     if (cap != 0U) error[0] = '\0';
     if (march != NULL && !parse_isa(march, out, error, cap)) return false;
     if (mabi != NULL) {
@@ -236,15 +329,16 @@ bool minias_riscv_resolve_profile(const char *march, const char *mabi,
         else return reject(error, cap, "unsupported-abi", mabi);
         if (march != NULL &&
             (out->elf32 != (xlen == 32U) ||
-             (((out->features & RISCV_ISA_E) != 0U) != eabi) ||
-             (float_abi >= EF_FLOAT_SINGLE && !(out->features & RISCV_ISA_F)) ||
-             (float_abi >= EF_FLOAT_DOUBLE && !(out->features & RISCV_ISA_D)) ||
-             (float_abi == EF_FLOAT_QUAD && !(out->features & RISCV_ISA_Q))))
+             (((out->isa.features & RISCV_ISA_E) != 0U) != eabi) ||
+             (float_abi >= EF_FLOAT_SINGLE && !(out->isa.features & RISCV_ISA_F)) ||
+             (float_abi >= EF_FLOAT_DOUBLE && !(out->isa.features & RISCV_ISA_D)) ||
+             (float_abi == EF_FLOAT_QUAD && !(out->isa.features & RISCV_ISA_Q))))
             return reject(error, cap, "incompatible-riscv-isa-abi", mabi);
         out->elf32 = xlen == 32U;
+        out->isa.xlen=xlen;
         out->elf_flags &= ~(uint32_t)(EF_FLOAT_MASK | EF_RVE);
         out->elf_flags |= float_abi | (eabi ? EF_RVE : 0U);
-    } else if (march != NULL && (out->features & RISCV_ISA_E)) {
+    } else if (march != NULL && (out->isa.features & RISCV_ISA_E)) {
         out->elf_flags |= EF_RVE;
     }
     return true;

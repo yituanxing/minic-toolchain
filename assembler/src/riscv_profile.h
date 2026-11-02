@@ -20,12 +20,29 @@ typedef enum MiniAsRiscvFeature {
     RISCV_ISA_ZIHINTPAUSE = UINT64_C(1) << 12
 } MiniAsRiscvFeature;
 
+/* One private extension order is shared by feature resolution, versions,
+ * file attributes and per-site GNU mapping symbols.  Only versions with
+ * verified encoding/ABI semantics are accepted; others fail closed. */
+enum { MINIAS_RISCV_EXTENSION_COUNT = 11 };
+typedef struct MiniAsRiscvVersion {
+    uint16_t major;
+    uint16_t minor;
+} MiniAsRiscvVersion;
+
+typedef struct MiniAsRiscvISA {
+    uint64_t features;
+    unsigned xlen;
+    bool base_e;
+    MiniAsRiscvVersion base_version;
+    MiniAsRiscvVersion extension_versions[MINIAS_RISCV_EXTENSION_COUNT];
+} MiniAsRiscvISA;
+
 typedef struct MiniAsRiscvProfile {
     bool elf32;
     uint32_t elf_flags;
     unsigned strict_i_xlen;
     bool explicit_isa;
-    uint64_t features;
+    MiniAsRiscvISA isa;
     /* Canonical target ISA spelling, not a serialized ELF vendor section.
      * Object output owns the one and only attribute serializer. */
     char arch_attribute_isa[512];
@@ -42,7 +59,7 @@ uint64_t minias_riscv_site_features(uint64_t file_features,
 /* GNU GAS 2.42 per-instruction mapping ISA; never changes file attributes.
  * The V dependency closure in mapping names carries its own default version
  * numbers, distinct from the file-wide profile's F/D defaults. */
-bool minias_riscv_mapping_isa(const char *file_isa,uint64_t file_features,
+bool minias_riscv_mapping_isa(const MiniAsRiscvISA *file_isa,
                               uint64_t site_additions,bool no_rvc,
                               char *out,size_t capacity);
 #endif
