@@ -2867,8 +2867,18 @@ static bool lower_source_statement(MiniAs *as, char *text, size_t line) {
         if (ok) {
             const MiniAsMeasureView measure = { .target_state=as->target_state };
             MiniAsMeasureErrorSink errors = { .as=as };
-            ok = as->target->measure_mcinst(
-                &measure, &errors, &as->stmts[statement_id], &size);
+            const MiniAsStmt *retained = &as->stmts[statement_id];
+            const MiniAsMCInst *source = retained->payload.instruction.inst;
+            const size_t count=source && source->count<=source->capacity?
+                               source->count:0U;
+            MiniAsMCOperandView operands[count?count:1U];
+            MiniAsMCInstView instruction;
+            MiniAsInstructionView snapshot;
+            ok = minias_project_instruction(retained, &snapshot, &instruction,
+                                            operands, count);
+            if (ok) ok = as->target->measure_mcinst(
+                &measure, &errors, &snapshot, &size);
+            else minias_set_error(as, "invalid-measure-instruction:line=%zu",line);
         }
         if (!ok) {
             free(rewritten_args);

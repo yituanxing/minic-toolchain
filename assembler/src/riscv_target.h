@@ -82,6 +82,7 @@ typedef enum MiniAsRiscvSymbolModifier {
 
 struct MiniAs;
 struct MiniAsStmt;
+struct MiniAsInstructionView;
 struct MiniAsSymbolRef;
 struct MiniAsMeasureView;
 struct MiniAsMeasureErrorSink;
@@ -91,9 +92,9 @@ struct MiniAsParseContext;
  * No other ISA or the assembler driver needs these concrete symbols. */
 bool minias_riscv_measure_mcinst(const struct MiniAsMeasureView *,
                                 struct MiniAsMeasureErrorSink *,
-                                const struct MiniAsStmt *, uint32_t *);
+                                const struct MiniAsInstructionView *, uint32_t *);
 bool minias_riscv_parse_mcinst(struct MiniAsParseContext *, struct MiniAsStmt *);
-bool minias_riscv_encode(struct MiniAsEncodeContext *, const struct MiniAsStmt *);
+bool minias_riscv_encode(struct MiniAsEncodeContext *, const struct MiniAsInstructionView *);
 
 /* Parser already chose a fixed descriptor or dynamic Target form; validate
  * its typed feature/XLEN policy once, after MCInst construction. An explicitly
@@ -117,14 +118,14 @@ typedef struct MiniAsRiscvBranchPlan {
 } MiniAsRiscvBranchPlan;
 /* Pure range/relocation policy. Caller supplies a current-layout symbol
  * snapshot and owns diagnostics; no Common state is read or modified. */
-bool minias_riscv_compute_branch_plan(const struct MiniAsStmt *stmt,
+bool minias_riscv_compute_branch_plan(const struct MiniAsInstructionView *stmt,
                                       const struct MiniAsSymbolView *symbol,
                                       MiniAsRiscvBranchPlan *result,
                                       const char **diagnostic);
 /* Retained branch/JAL operand binding is immutable across relaxation and
  * final encoding. Each phase still looks up its own current symbol view. */
 const struct MiniAsSymbolRef *minias_riscv_branch_bound_symbol(
-    const struct MiniAsStmt *stmt);
+    const struct MiniAsInstructionView *stmt);
 
 /* RISC-V-only psABI relocation constants. */
 #define MINIAS_R_RISCV_32 1U

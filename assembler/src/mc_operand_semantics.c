@@ -23,6 +23,73 @@ MiniAsMCInst *minias_mcinst_alloc(unsigned capacity) {
     return inst;
 }
 
+/* The write authority ends at parse. Rebuild only scalar/const-borrowed
+ * operand projections at each phase entry, directly from the one retained
+ * MCInst. The caller's stack owns the projections; pointers to symbol refs,
+ * ISA memory and ISA lowering plans remain borrowed from that MCInst. */
+bool minias_project_instruction(const MiniAsStmt *stmt,
+                                MiniAsInstructionView *out,
+                                MiniAsMCInstView *instruction,
+                                MiniAsMCOperandView *operands,
+                                size_t operand_capacity) {
+    const MiniAsMCInst *source;
+    size_t i;
+    if (stmt == NULL || out == NULL || instruction == NULL ||
+        stmt->fragment_kind != MINIAS_FRAGMENT_INSTRUCTION ||
+        (source = stmt->payload.instruction.inst) == NULL ||
+        source->count > source->capacity ||
+        source->count > operand_capacity ||
+        (source->count != 0U && operands == NULL))
+        return false;
+    for (i = 0U; i < source->count; ++i) {
+        const MiniAsMCOperand *original = &source->operands[i];
+        MiniAsMCOperandView *projected = &operands[i];
+        projected->kind = original->kind;
+        projected->reg = original->reg;
+        projected->reg_class = original->reg_class;
+        projected->target_reg_bank = original->target_reg_bank;
+        projected->register_64 = original->register_64;
+        projected->immediate = original->immediate;
+        /* Only the active union arm is borrowed. A stale inactive pointer
+         * must never be interpreted by a later encoding phase. */
+        projected->memory = NULL;
+        switch (original->kind) {
+        case MINIAS_MC_MEMORY:
+            projected->memory = original->memory;
+            break;
+        case MINIAS_MC_BOUND_SYMBOL:
+            projected->bound_symbol = original->bound_symbol;
+            break;
+        case MINIAS_MC_BOUND_SYMBOL_DIFFERENCE:
+            projected->bound_difference = original->bound_difference;
+            break;
+        default:
+            break;
+        }
+    }
+    *instruction = (MiniAsMCInstView){
+        .opcode = source->opcode,
+        .encoding = source->encoding,
+        .target_form = source->target_form,
+        .target_payload = source->target_payload,
+        .count = source->count,
+        .operands = operands
+    };
+    *out = (MiniAsInstructionView){
+        .source_site = stmt->source_site,
+        .op = stmt->op,
+        .args = stmt->args,
+        .line = stmt->line,
+        .section = stmt->section,
+        .subsection = stmt->subsection,
+        .offset = stmt->offset,
+        .size = stmt->size,
+        .site = stmt->site,
+        .inst = instruction
+    };
+    return true;
+}
+
 /* Ownership is determined by the *typed kind*, not operand position, source
  * spelling or a target-specific list of heap allocations.  Every pointer in
  * the union is exclusively owned by its parent operand.  Common never sees

@@ -1024,16 +1024,24 @@ bool minias_emit_sections(MiniAs *as) {
                 free(refs);
                 return false;
             }
-        } else if (!as->target->encode(&(MiniAsEncodeContext){as}, stmt)) {
-            if (as->error[0] == '\0') {
-                minias_set_error(as,
-                                 "encode-failed:%s:%s:line=%zu",
-                                 stmt->op,
-                                 stmt->args,
-                                 stmt->line);
+        } else {
+            const MiniAsMCInst *source=stmt->payload.instruction.inst;
+            const size_t count=source && source->count<=source->capacity?
+                               source->count:0U;
+            MiniAsMCOperandView operands[count?count:1U];
+            MiniAsMCInstView instruction;
+            MiniAsInstructionView snapshot;
+            if (!minias_project_instruction(stmt,&snapshot,&instruction,
+                                            operands,count) ||
+                !as->target->encode(&(MiniAsEncodeContext){as},&snapshot)) {
+                if (as->error[0] == '\0') {
+                    minias_set_error(as,
+                                     "encode-failed:%s:%s:line=%zu",
+                                     stmt->op,stmt->args,stmt->line);
+                }
+                free(refs);
+                return false;
             }
-            free(refs);
-            return false;
         }
         /* Every source Fragment uses the same measured-size validation
          * and commit. No fixed DATA, ALIGN, FILL or SPACE bypass remains. */

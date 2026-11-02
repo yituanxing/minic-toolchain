@@ -251,6 +251,35 @@ typedef struct MiniAsMCInst {
 MiniAsMCInst *minias_mcinst_alloc(unsigned capacity);
 void minias_mcinst_destroy(MiniAsMCInst *mcinst);
 
+/* Parse owns the writable MCInst above. Measure, MCLayout and Emission
+ * receive only these by-value, phase-scoped operand snapshots. In particular
+ * neither a const MCInst* (whose nested pointers are writable) nor the
+ * lifetime/destructor fields escape into those three callbacks. Target-private
+ * memory and lowering plans are borrowed as const void* and remain owned by
+ * the single retained MCInst. No second persistent instruction graph exists. */
+typedef struct MiniAsMCOperandView {
+    MiniAsMCOperandKind kind;
+    unsigned reg;
+    MiniAsMCRegisterClass reg_class;
+    uint16_t target_reg_bank;
+    bool register_64;
+    uint64_t immediate;
+    union {
+        const MiniAsSymbolRef *bound_symbol;
+        const MiniAsSymbolDifferenceRef *bound_difference;
+        const void *memory;
+    };
+} MiniAsMCOperandView;
+
+typedef struct MiniAsMCInstView {
+    unsigned opcode;
+    uint32_t encoding;
+    uint32_t target_form;
+    const void *target_payload;
+    unsigned count;
+    const MiniAsMCOperandView *operands;
+} MiniAsMCInstView;
+
 /* Target-requested GNU literal pool entry. Common owns Section/Layout
  * fragments and ABS32/ABS64 ELF relocations; Target owns LDR encoding.
  * Queued references are deduplicated only inside the same pending pool. */
@@ -272,6 +301,19 @@ typedef struct MiniAsTargetSiteState {
      * and never interprets the bits during layout or output finalization. */
     uint32_t provenance_bits;
 } MiniAsTargetSiteState;
+
+typedef struct MiniAsInstructionView {
+    MiniAsStableSiteId source_site;
+    const char *op;
+    const char *args;
+    size_t line;
+    int section;
+    uint32_t subsection;
+    uint64_t offset;
+    uint32_t size;
+    MiniAsTargetSiteState site;
+    const MiniAsMCInstView *inst;
+} MiniAsInstructionView;
 
 /* MCExpr owns semantic operands, not source spelling. Compile each fixed-
  * width data operand once at its lexical site; the output pass resolves
@@ -658,12 +700,12 @@ typedef struct MiniAsTargetOps {
     bool (*parse_mcinst)(MiniAsParseContext *, MiniAsStmt *);
     bool (*measure_mcinst)(const MiniAsMeasureView *,
                            MiniAsMeasureErrorSink *,
-                           const MiniAsStmt *, uint32_t *);
-    bool (*encode)(MiniAsEncodeContext *, const MiniAsStmt *);
+                           const MiniAsInstructionView *, uint32_t *);
+    bool (*encode)(MiniAsEncodeContext *, const MiniAsInstructionView *);
     /* One typed TargetRelaxPlan supplies both the range requirement and
      * the longest legal encoding. No Common mnemonic/argument reparse. */
     bool (*plan_instruction_relaxation)(MiniAsRelaxContext *,
-                                        const MiniAsStmt *,
+                                        const MiniAsInstructionView *,
                                         MiniAsTargetRelaxPlan *);
     /* Keep the lexical ISA/mode snapshot of the ALIGN site: a Target may
      * need different NOP encodings for different source-selected CPU modes. */

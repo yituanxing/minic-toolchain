@@ -500,7 +500,7 @@ typedef struct {
 
 enum { LA_LOWERING_PLAN_TAG=0x4c41504cU };
 
-static bool la_valid_lowering_plan(const MiniAsMCInst *inst) {
+static bool la_valid_lowering_plan(const MiniAsMCInstView *inst) {
     const LaLoweringPlan *plan=(const LaLoweringPlan *)inst->target_payload;
     return plan!=NULL && plan->tag==LA_LOWERING_PLAN_TAG &&
         plan->count>0U && plan->count<=4U && plan->fixup_count<=4U &&
@@ -1306,7 +1306,7 @@ static bool la_parse_scalar_pattern(MiniAsMCInst *m,char *args[4],
 /* Table-backed encoders consume semantic MC operands, not the parser's
  * machine-word cache.  Both the descriptor ID and register-bank ID remain
  * private to LoongArch; Common is agnostic about the ISA's form layout. */
-static bool la_encoded_reg(const MiniAsMCOperand *operand,
+static bool la_encoded_reg(const MiniAsMCOperandView *operand,
                            LaRegisterBank bank,uint32_t *value) {
     if(operand->kind!=MINIAS_MC_REGISTER ||
        operand->target_reg_bank!=(uint16_t)bank || operand->reg>31U)
@@ -1315,7 +1315,7 @@ static bool la_encoded_reg(const MiniAsMCOperand *operand,
     return true;
 }
 
-static bool la_encoded_imm(const MiniAsMCOperand *operand,
+static bool la_encoded_imm(const MiniAsMCOperandView *operand,
                            unsigned bits,uint32_t *value) {
     if(operand->kind!=MINIAS_MC_IMMEDIATE || bits==0U || bits>20U)
         return false;
@@ -1326,7 +1326,7 @@ static bool la_encoded_imm(const MiniAsMCOperand *operand,
 /* Shared checked bit placement for vector and FP/control/system patterns.
  * Immediate width zero means a typed register bank, never a raw field. */
 static bool la_encode_typed_field(uint32_t *word,
-                                  const MiniAsMCOperand *operand,
+                                  const MiniAsMCOperandView *operand,
                                   const LaTypedFieldSpec *spec,
                                   unsigned shift) {
     uint32_t value;
@@ -1338,7 +1338,7 @@ static bool la_encode_typed_field(uint32_t *word,
     return true;
 }
 
-static bool la_materialize_table_word(const MiniAsMCInst *m,
+static bool la_materialize_table_word(const MiniAsMCInstView *m,
                                       uint32_t *word,bool *recognized) {
     uint32_t form=m->target_form;
     unsigned i;
@@ -1433,7 +1433,7 @@ static bool la_materialize_table_word(const MiniAsMCInst *m,
 /* The remaining compact instruction families retain their semantic operands
  * and a private Form ID. The parser records only an opcode template; this
  * encoder is the sole owner of field placement for every one-word family. */
-static bool la_materialize_manual_word(const MiniAsMCInst *m,
+static bool la_materialize_manual_word(const MiniAsMCInstView *m,
                                        uint32_t *word,bool *recognized) {
     uint32_t form=m->target_form,rd=0U,rj=0U,rk=0U,immediate=0U;
     int64_t signed_value;
@@ -1956,9 +1956,9 @@ typedef struct {
     int64_t displacement;
 } LaBranchPlan;
 
-static bool la_resolve_branch_plan(MiniAsEncodeContext *ctx,const MiniAsStmt *s,
+static bool la_resolve_branch_plan(MiniAsEncodeContext *ctx,const MiniAsInstructionView *s,
                                    LaBranchPlan *plan) {
-    const MiniAsMCInst *m=s->payload.instruction.inst;
+    const MiniAsMCInstView *m=s->inst;
     const MiniAsSymbolRef *ref;
     const MiniAsSymbolView *target;
     MiniAsSymbolView symbol_snapshot;
@@ -2059,32 +2059,32 @@ static bool la_section_is_linker_relaxable(MiniAsEncodeContext *ctx,int section,
 
 static bool la_measure(const MiniAsMeasureView *view,
                        MiniAsMeasureErrorSink *errors,
-                       const MiniAsStmt *s,uint32_t *size) {
+                       const MiniAsInstructionView *s,uint32_t *size) {
     (void)view;
-    if(!s->payload.instruction.inst){minias_measure_error(errors,"missing-la-mcinst");return false;}
-    if(s->payload.instruction.inst->target_payload!=NULL) {
+    if(!s->inst){minias_measure_error(errors,"missing-la-mcinst");return false;}
+    if(s->inst->target_payload!=NULL) {
         const LaLoweringPlan *plan=
-            (const LaLoweringPlan *)s->payload.instruction.inst->target_payload;
-        if(!la_valid_lowering_plan(s->payload.instruction.inst)) {
+            (const LaLoweringPlan *)s->inst->target_payload;
+        if(!la_valid_lowering_plan(s->inst)) {
             minias_measure_error(errors,"invalid-loongarch-lowering-plan");
             return false;
         }
         *size=plan->count*4U;
         return true;
     }
-    if(s->payload.instruction.inst->opcode==LA_MC_PCREL_PSEUDO ||
-       s->payload.instruction.inst->opcode==LA_MC_GOT_PSEUDO ||
-       s->payload.instruction.inst->opcode==LA_MC_LI32_SEQUENCE ||
-       s->payload.instruction.inst->opcode==LA_MC_LI64_SEQUENCE) {
+    if(s->inst->opcode==LA_MC_PCREL_PSEUDO ||
+       s->inst->opcode==LA_MC_GOT_PSEUDO ||
+       s->inst->opcode==LA_MC_LI32_SEQUENCE ||
+       s->inst->opcode==LA_MC_LI64_SEQUENCE) {
         minias_measure_error(errors,"missing-loongarch-lowering-plan");
         return false;
     }
     *size=4U;
     return true;
 }
-static bool la_encode(MiniAsEncodeContext *ctx,const MiniAsStmt *s) {
+static bool la_encode(MiniAsEncodeContext *ctx,const MiniAsInstructionView *s) {
     unsigned char bytes[4];
-    const MiniAsMCInst *m=s->payload.instruction.inst;
+    const MiniAsMCInstView *m=s->inst;
     uint32_t code;
     unsigned i, slot=0U;
     MiniAsFixupKind kind=MINIAS_FIXUP_NONE;

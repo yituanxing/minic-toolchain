@@ -73,6 +73,11 @@ typedef struct MiniAsSymbol {
 
 /* One Common conversion for a phase-scoped Target value projection. */
 bool minias_project_symbol(const MiniAsSymbol *,MiniAsSymbolView *);
+/* Common-only stack projector. Operand storage is supplied by each caller
+ * and lives only for the target callback's dynamic extent. */
+bool minias_project_instruction(const MiniAsStmt *, MiniAsInstructionView *,
+                                MiniAsMCInstView *, MiniAsMCOperandView *,
+                                size_t operand_capacity);
 
 /* The SourceGraph/MCLayout replay worklist is declared in its own contract. */
 typedef struct MiniAsEmissionState MiniAsEmissionState;

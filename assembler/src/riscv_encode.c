@@ -854,7 +854,7 @@ static bool rv_bind_symbol_operand(MiniAsParseContext *ctx, MiniAsMCInst *m,
  * RVC rejects relocation-bearing forms because their I/U fields have a
  * different psABI contract; ELF emission retains the zero-immediate word
  * placeholder and attaches the typed Fixup afterward. */
-static bool rv_scalar_machine_word(const MiniAsMCInst *m,
+static bool rv_scalar_machine_word(const MiniAsMCInstView *m,
                                    bool allow_reloc_placeholder,
                                    uint32_t *word) {
     uint32_t base=m->encoding;
@@ -911,9 +911,9 @@ static bool rv_scalar_machine_word(const MiniAsMCInst *m,
 }
 
 static bool rv_rvc_encode_plain(const MiniAsRiscvState *state,
-                                const MiniAsStmt *stmt,
+                                const MiniAsInstructionView *stmt,
                                  uint16_t *compressed) {
-    const MiniAsMCInst *m=stmt->payload.instruction.inst;
+    const MiniAsMCInstView *m=stmt->inst;
     uint32_t w,op,rd,rs1,rs2,f3,imm12;
     int32_t imm;
     uint16_t out;
@@ -1002,9 +1002,9 @@ static bool rv_rvc_encode_plain(const MiniAsRiscvState *state,
 /* Branch width is initially selected from the ISA/register form; MCLayout
  * may grow a short form if its eventual target is out of C range. */
 static bool rv_rvc_branch_form(const MiniAsRiscvState *state,
-                                const MiniAsStmt *stmt,
+                                const MiniAsInstructionView *stmt,
                                 bool *jump) {
-    const MiniAsMCInst *m=stmt->payload.instruction.inst;
+    const MiniAsMCInstView *m=stmt->inst;
     if(state==NULL || !state->isa_explicit ||
        (state->isa_features&RISCV_ISA_C)==0U ||
        (stmt->site.mode_bits&MINIAS_RISCV_OPTION_NO_RVC)!=0U ||
@@ -1045,8 +1045,8 @@ static uint16_t rv_rvc_jump_bits(int64_t d) {
  * symbol spelling nor source-level expression grammar is revisited. */
 bool minias_riscv_measure_mcinst(const MiniAsMeasureView *view,
                                  MiniAsMeasureErrorSink *errors,
-                                 const MiniAsStmt *stmt, uint32_t *size) {
-    const MiniAsMCInst *m = stmt->payload.instruction.inst;
+                                 const MiniAsInstructionView *stmt, uint32_t *size) {
+    const MiniAsMCInstView *m = stmt->inst;
     const MiniAsRiscvState *state = view->target_state;
     uint16_t compressed;
     bool compressed_jump;
@@ -2333,8 +2333,8 @@ bool minias_riscv_parse_mcinst(MiniAsParseContext *ctx, MiniAsStmt *stmt) {
 /* Typed variable-size RISC-V fragments: source operands were parsed once.
  * Layout owns size; this Target writes instructions and stages relocations
  * from MCInst, without reopening source or mutating final symbols/fixups. */
-static bool rv_encode_multi_mc(MiniAsEncodeContext *ctx, const MiniAsStmt *stmt) {
-    const MiniAsMCInst *m = stmt->payload.instruction.inst;
+static bool rv_encode_multi_mc(MiniAsEncodeContext *ctx, const MiniAsInstructionView *stmt) {
+    const MiniAsMCInstView *m = stmt->inst;
     const MiniAsRiscvState *state=minias_encode_ctx_target_state(ctx);
     if (m->opcode == RV_MC_LI) {
         const MiniAsRiscvLiPlan *plan = m->target_payload;
@@ -2471,7 +2471,7 @@ static bool rv_encode_multi_mc(MiniAsEncodeContext *ctx, const MiniAsStmt *stmt)
 
 /* Encoding queries the FINAL Common symbol snapshot and invokes the same
  * pure distance policy used by MCLayout's read-only relaxation callback. */
-static bool rv_encode_branch_plan(MiniAsEncodeContext *ctx, const MiniAsStmt *stmt,
+static bool rv_encode_branch_plan(MiniAsEncodeContext *ctx, const MiniAsInstructionView *stmt,
                                   MiniAsRiscvBranchPlan *result) {
     const MiniAsSymbolRef *expr=minias_riscv_branch_bound_symbol(stmt);
     MiniAsSymbolView symbol_snapshot;
@@ -2487,8 +2487,8 @@ static bool rv_encode_branch_plan(MiniAsEncodeContext *ctx, const MiniAsStmt *st
     return true;
 }
 
-static bool rv_encode_mcinst(MiniAsEncodeContext *ctx, const MiniAsStmt *stmt) {
-    const MiniAsMCInst *m=stmt->payload.instruction.inst;
+static bool rv_encode_mcinst(MiniAsEncodeContext *ctx, const MiniAsInstructionView *stmt) {
+    const MiniAsMCInstView *m=stmt->inst;
     const MiniAsRiscvState *state=minias_encode_ctx_target_state(ctx);
     uint16_t compressed;
     if (m->opcode == RV_MC_RAW)
@@ -2674,8 +2674,8 @@ invalid_absolute_form:
     return false;
 }
 
-bool minias_riscv_encode(MiniAsEncodeContext *ctx, const MiniAsStmt *stmt) {
-    if (stmt->payload.instruction.inst == NULL) {
+bool minias_riscv_encode(MiniAsEncodeContext *ctx, const MiniAsInstructionView *stmt) {
+    if (stmt->inst == NULL) {
         minias_encode_ctx_error(ctx, "internal:riscv-missing-typed-instruction:%s:line=%zu",
                          stmt->op, stmt->line);
         return false;

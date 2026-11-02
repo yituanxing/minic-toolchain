@@ -1057,12 +1057,23 @@ bool minias_query_target_relax_plan(MiniAs *as,const MiniAsStmt *stmt,
     plan->current_size=stmt->size;
     plan->required_size=stmt->size;
     plan->terminal_size=stmt->size;
-    if(as->target->plan_instruction_relaxation!=NULL &&
-       !as->target->plan_instruction_relaxation(&context,stmt,plan)) {
-        if(as->error[0]=='\0')
-            minias_set_error(as,"target-relaxation-plan-failed:line=%zu",
-                             stmt->line);
-        return false;
+    if(as->target->plan_instruction_relaxation!=NULL) {
+        const MiniAsMCInst *source=stmt->payload.instruction.inst;
+        const size_t count=source->count<=source->capacity?source->count:0U;
+        MiniAsMCOperandView operands[count?count:1U];
+        MiniAsMCInstView instruction;
+        MiniAsInstructionView snapshot;
+        if(!minias_project_instruction(stmt,&snapshot,&instruction,
+                                       operands,count)) {
+            minias_set_error(as,"invalid-relax-instruction:line=%zu",stmt->line);
+            return false;
+        }
+        if(!as->target->plan_instruction_relaxation(&context,&snapshot,plan)) {
+            if(as->error[0]=='\0')
+                minias_set_error(as,"target-relaxation-plan-failed:line=%zu",
+                                 stmt->line);
+            return false;
+        }
     }
     if(plan->current_size!=stmt->size ||
        plan->required_size<plan->current_size ||

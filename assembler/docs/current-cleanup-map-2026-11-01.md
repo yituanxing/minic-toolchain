@@ -1,5 +1,14 @@
 # MiniAS 当前清理与所有权总览（2026-11-01）
 
+> **2026-11-02 MCInst 阶段权限收口：** 四 Target 的 Measure、Relax、
+> Encode 已由 `const MiniAsStmt *` 改为 `const MiniAsInstructionView *`。
+> Common 从唯一已解析的 MCInst 在阶段调用栈上生成操作数值投影：
+> 源字段、bound SymbolRef、ISA 内存和 Target plan 仅 const 借用，
+> 不暴露容量/析构函数或可写嵌套指针，不缓存第二套指令图。
+> 增加 8 种编译期拒绝、运行时投影/重新投影/容量契约和 CI 门禁。
+> Parse 仍保留唯一构建权；Site capture、ALIGN 读回调尚待收窄。
+> 见 [MCInst 阶段只读记录](instruction-readonly-phases-2026-11-02.md)。
+
 > **2026-11-02 Target 只读查询收口：** 在 Fragment union 的基础上，
 > PreLayout/PostEmit 原本直接借用的 `MiniAsStmt[]`/`MiniAsSection[]`
 > 改成不透明阶段句柄 + 当前所有权对象的值类型投影；Relax/Encode 和
@@ -50,8 +59,9 @@
   结构测试 + A0 + 目标定向 GNU/链接/松弛/CFI + 旧新对象比较。
   **已完成子项：** 宽回调与五个 ISA TU 头文件隔离、本地负向编译、
   A0/22 组差分、PreLayout/PostEmit 只读投影、Relax/Encode 符号
-  值快照；**待完成：** Parse/Measure/Encode 所需 MCInst 的递归
-  只读约束和本批 exact-head CI 核对，不能把语义只读误作已经完成。
+  值快照、Measure/Relax/Encode MCInst 深层 const 借用视图；
+  **待完成：** Site capture/ALIGN 一般 Fragment 回调的只读收口、
+  解析期 MCInst 写权限的头文件级隔离以及本批 exact-head CI 核对。
 - [ ] **P05 Source/Common 解耦**：从 Source 递归调用
   `minias_statement_process(MiniAs *,...)` 迁移到带来源身份的
   受限 statement sink；保留 SourceSite、EOF、条件拓扑、强制增长

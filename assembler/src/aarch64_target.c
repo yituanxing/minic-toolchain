@@ -333,9 +333,9 @@ static bool split_two(const char *args, char *first, size_t cap1,
  * or operand parsing is necessary before the instruction fragment exists. */
 static bool aarch64_measure_mcinst(const MiniAsMeasureView *view,
                                    MiniAsMeasureErrorSink *errors,
-                                   const MiniAsStmt *stmt, uint32_t *size) {
+                                   const MiniAsInstructionView *stmt, uint32_t *size) {
     (void)view;
-    if (stmt->payload.instruction.inst == NULL) {
+    if (stmt->inst == NULL) {
         minias_measure_error(errors, "missing-aarch64-mcinst:line=%zu",
                              stmt->line);
         return false;
@@ -779,7 +779,7 @@ static bool a64_attach_difference(MiniAsParseContext *ctx,MiniAsMCInst *inst,
     return true;
 }
 
-static bool a64_resolve_immediate(MiniAsEncodeContext *ctx,const MiniAsMCOperand *operand,
+static bool a64_resolve_immediate(MiniAsEncodeContext *ctx,const MiniAsMCOperandView *operand,
                                   int64_t *value) {
     if(operand->kind==MINIAS_MC_IMMEDIATE) {
         *value=(int64_t)operand->immediate;
@@ -791,7 +791,7 @@ static bool a64_resolve_immediate(MiniAsEncodeContext *ctx,const MiniAsMCOperand
     return false;
 }
 
-static const A64Memory *a64_memory_at(const MiniAsMCInst *inst,unsigned slot) {
+static const A64Memory *a64_memory_at(const MiniAsMCInstView *inst,unsigned slot) {
     return slot<inst->count && inst->operands[slot].kind==MINIAS_MC_MEMORY?
            (const A64Memory *)inst->operands[slot].memory:NULL;
 }
@@ -1208,7 +1208,7 @@ static const A64ScalarMemoryForm *a64_scalar_memory_form(const char *op,
  * displacement takes unsigned-scaled imm12 where possible, otherwise signed
  * unscaled imm9.  The memory operand itself retains the symbolic difference;
  * an explicitly unscaled/unprivileged instruction never enters this chooser. */
-static bool a64_encode_deferred_scalar_memory(const MiniAsMCInst *inst,
+static bool a64_encode_deferred_scalar_memory(const MiniAsMCInstView *inst,
                                                const A64Memory *memory,
                                                int64_t offset,
                                                bool *matched,
@@ -4382,8 +4382,8 @@ lane_complete:;
     return true;
 }
 
-static bool encode(MiniAsEncodeContext *ctx, const MiniAsStmt *stmt) {
-    const MiniAsMCInst *inst = stmt->payload.instruction.inst;
+static bool encode(MiniAsEncodeContext *ctx, const MiniAsInstructionView *stmt) {
+    const MiniAsMCInstView *inst = stmt->inst;
     MiniAsSymbolView symbol_snapshot;
     uint32_t code;
     MiniAsFixupKind fixup = MINIAS_FIXUP_NONE;

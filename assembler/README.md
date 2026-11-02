@@ -78,6 +78,13 @@ replaces the PreLayout/PostEmit array borrows and Relax/Encode Symbol pointers
 with live phase-scoped scalar/const views; no alternate persistent object
 graph is constructed.
 
+The [MCInst phase read-only migration](docs/instruction-readonly-phases-2026-11-02.md)
+now also makes Parse the sole builder of the retained instruction. All four
+Targets measure, relax and encode from a stack-scoped, recursively const-
+borrowed operand projection; lifetime/destructor fields never cross those
+three stage interfaces. Generic ALIGN and site-capture callback narrowing
+is still separate work.
+
 ## Explicit strict RV64I profile
 
 MiniAS historically accepts a broad set of RISC-V instructions and GNU

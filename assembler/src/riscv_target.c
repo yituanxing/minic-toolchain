@@ -747,13 +747,11 @@ static void riscv_object_attributes(MiniAsTargetABIView view, unsigned char elf_
  * snapshot of the CURRENT Common layout generation. Both relaxation and
  * final emission invoke this identical distance/range algorithm; neither
  * retains the result across MCLayout passes. */
-bool minias_riscv_compute_branch_plan(const MiniAsStmt *stmt,
+bool minias_riscv_compute_branch_plan(const MiniAsInstructionView *stmt,
                                       const MiniAsSymbolView *symbol,
                                       MiniAsRiscvBranchPlan *result,
                                       const char **diagnostic) {
-    const MiniAsMCInst *m = stmt!=NULL &&
-        stmt->fragment_kind==MINIAS_FRAGMENT_INSTRUCTION ?
-        stmt->payload.instruction.inst : NULL;
+    const MiniAsMCInstView *m = stmt != NULL ? stmt->inst : NULL;
     const MiniAsSymbolRef *expr;
     bool same_section;
     int64_t displacement;
@@ -815,11 +813,11 @@ bool minias_riscv_compute_branch_plan(const MiniAsStmt *stmt,
 }
 
 const MiniAsSymbolRef *minias_riscv_branch_bound_symbol(
-    const MiniAsStmt *stmt) {
-    const MiniAsMCInst *m;
-    if(stmt==NULL || stmt->fragment_kind!=MINIAS_FRAGMENT_INSTRUCTION)
+    const MiniAsInstructionView *stmt) {
+    const MiniAsMCInstView *m;
+    if(stmt==NULL)
         return NULL;
-    m=stmt->payload.instruction.inst;
+    m=stmt->inst;
     if(m==NULL || (m->opcode!=RV_MC_BRANCH && m->opcode!=RV_MC_JAL))
         return NULL;
     return m->operands[m->opcode==RV_MC_BRANCH?2U:1U].bound_symbol;
@@ -828,7 +826,7 @@ const MiniAsSymbolRef *minias_riscv_branch_bound_symbol(
 /* Common owns symbol lookup and diagnostic storage in the relaxation phase.
  * This wrapper only projects current symbol metadata into the pure policy. */
 static bool riscv_relax_branch_plan(MiniAsRelaxContext *ctx,
-                                    const MiniAsStmt *stmt,
+                                    const MiniAsInstructionView *stmt,
                                     MiniAsRiscvBranchPlan *result) {
     const MiniAsSymbolRef *expr=minias_riscv_branch_bound_symbol(stmt);
     MiniAsSymbolView symbol_snapshot;
@@ -847,20 +845,20 @@ static bool riscv_relax_branch_plan(MiniAsRelaxContext *ctx,
 /* One retained MCInst determines the range-dependent minimum and terminal
  * encoding alternative.  Common only applies the requested fragment size. */
 static bool riscv_plan_instruction_relaxation(MiniAsRelaxContext *ctx,
-                                              const MiniAsStmt *stmt,
+                                              const MiniAsInstructionView *stmt,
                                               MiniAsTargetRelaxPlan *plan) {
     MiniAsRiscvBranchPlan branch;
     plan->current_size = stmt->size;
     plan->required_size = stmt->size;
     plan->terminal_size = stmt->size;
-    if (stmt->size == 2U && stmt->payload.instruction.inst != NULL &&
-        (stmt->payload.instruction.inst->opcode == RV_MC_BRANCH ||
-         stmt->payload.instruction.inst->opcode == RV_MC_JAL)) {
+    if (stmt->size == 2U && stmt->inst != NULL &&
+        (stmt->inst->opcode == RV_MC_BRANCH ||
+         stmt->inst->opcode == RV_MC_JAL)) {
         plan->terminal_size = 4U;
         if (!riscv_relax_branch_plan(ctx,stmt,&branch))return false;
         if (!branch.local ||
             ((branch.displacement & 1) != 0) ||
-            (stmt->payload.instruction.inst->opcode == RV_MC_JAL ?
+            (stmt->inst->opcode == RV_MC_JAL ?
                 (branch.displacement < -2048 ||
                  branch.displacement > 2046) :
                 (branch.displacement < -256 ||
@@ -868,8 +866,8 @@ static bool riscv_plan_instruction_relaxation(MiniAsRelaxContext *ctx,
             plan->required_size = 4U;
         return true;
     }
-    if (stmt->size != 4U || stmt->payload.instruction.inst == NULL ||
-        stmt->payload.instruction.inst->opcode != RV_MC_BRANCH)
+    if (stmt->size != 4U || stmt->inst == NULL ||
+        stmt->inst->opcode != RV_MC_BRANCH)
         return true;
     plan->terminal_size = 8U;
     if (!riscv_relax_branch_plan(ctx,stmt,&branch))return false;

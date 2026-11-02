@@ -3347,7 +3347,7 @@ static const unsigned char x64_segment_prefixes[]={
     0U,0x64U,0x65U,0x2eU,0x3eU,0x26U,0x36U
 };
 
-static X64MemoryLayout x64_memory_layout(const MiniAsMCInst *m,
+static X64MemoryLayout x64_memory_layout(const MiniAsMCInstView *m,
                                           uint32_t mode_bits) {
     const X64Memory *mem=m->operands[1].memory;
     const unsigned opcode=m->encoding&UINT32_C(0xff);
@@ -3464,11 +3464,14 @@ typedef struct X64EncodingPlan {
 } X64EncodingPlan;
 
 static X64EncodingPlan x64_encoding_plan_variant(
-    const MiniAsMCInst *m,uint32_t mode_bits,bool promote_alu_imm) {
+    const MiniAsMCInstView *m,uint32_t mode_bits,bool promote_alu_imm) {
     X64EncodingPlan plan = {0};
-    const unsigned first=m->operands[0].reg;
-    const unsigned second=m->operands[1].reg;
-    const bool wide=m->operands[0].register_64;
+    /* A no-operand MCInst can still use this shared register-plan query.
+     * The old flexible buffer had three allocated (but semantically absent)
+     * slots; the read-only projection intentionally contains only count. */
+    const unsigned first=m->count>0U?m->operands[0].reg:0U;
+    const unsigned second=m->count>1U?m->operands[1].reg:0U;
+    const bool wide=m->count>0U && m->operands[0].register_64;
     switch(m->opcode) {
         case X64_REG_MEMORY:
         case X64_IMM_MEMORY:
@@ -3579,7 +3582,7 @@ static X64EncodingPlan x64_encoding_plan_variant(
 }
 
 static X64EncodingPlan x64_encoding_plan(
-    const MiniAsMCInst *m,uint32_t mode_bits) {
+    const MiniAsMCInstView *m,uint32_t mode_bits) {
     return x64_encoding_plan_variant(m,mode_bits,false);
 }
 
@@ -3613,7 +3616,7 @@ static void x64_append_le(unsigned char *code,size_t *size,uint64_t bits,
         code[(*size)++]=(unsigned char)(bits>>(8U*i));
 }
 
-static bool x64_register_encoding_plan(const MiniAsMCInst *m,
+static bool x64_register_encoding_plan(const MiniAsMCInstView *m,
                                        uint32_t mode_bits,
                                        X64RegisterEncodingPlan *result) {
     const X64EncodingPlan plan=x64_encoding_plan(m,0U);
@@ -3933,9 +3936,9 @@ static bool x64_register_encoding_plan(const MiniAsMCInst *m,
  * Legacy 16-bit operands use the CPU default, even where the shared native
  * encoder produced 66 for MOVW, TESTW, REP STOSW, INW, and other families.
  * Decode recorded the semantic width; no opcode name/list is needed here. */
-static void x64_apply_code16_register_default(const MiniAsStmt *s,
+static void x64_apply_code16_register_default(const MiniAsInstructionView *s,
                                               X64RegisterEncodingPlan *plan) {
-    const MiniAsMCInst *m=s->payload.instruction.inst;
+    const MiniAsMCInstView *m=s->inst;
     if(x64_mode16(s->site.mode_bits) &&
        X64_FORM_OPERAND_BITS(m)==16U &&
        plan->size>1U && plan->bytes[0]==0x66U) {
@@ -3950,10 +3953,10 @@ static void x64_apply_code16_register_default(const MiniAsStmt *s,
  * Each prefix is a Target-owned machine alternative counted before layout. */
 /* Returns a diagnostic, or NULL on success. Both measurement and emission
  * consume this one Target-owned prefix plan without exposing Common state. */
-static const char *x64_legacy_mode_prefixes(const MiniAsStmt *s,
+static const char *x64_legacy_mode_prefixes(const MiniAsInstructionView *s,
                                             unsigned char prefix[4],
                                             size_t *count) {
-    const MiniAsMCInst *m=s->payload.instruction.inst;
+    const MiniAsMCInstView *m=s->inst;
     bool operand32=false,address32=false;
     *count=0U;
     if(s->site.mode_bits==X64_CODE32) {
@@ -4000,8 +4003,8 @@ static const char *x64_legacy_mode_prefixes(const MiniAsStmt *s,
 }
 
 static bool x64_measure_base(MiniAsMeasureErrorSink *errors,
-                             const MiniAsStmt *s,uint32_t *size) {
-    const MiniAsMCInst *m=s->payload.instruction.inst;
+                             const MiniAsInstructionView *s,uint32_t *size) {
+    const MiniAsMCInstView *m=s->inst;
     X64RegisterEncodingPlan register_plan;
     X64EncodingPlan plan;
     if (!m) {minias_measure_error(errors,"missing-x86_64-mcinst");return false;}
@@ -4042,7 +4045,7 @@ static bool x64_measure_base(MiniAsMeasureErrorSink *errors,
 
 static bool x64_measure(const MiniAsMeasureView *view,
                          MiniAsMeasureErrorSink *errors,
-                         const MiniAsStmt *s,uint32_t *size) {
+                         const MiniAsInstructionView *s,uint32_t *size) {
     unsigned char prefix[4];size_t n;
     const char *prefix_error=x64_legacy_mode_prefixes(s,prefix,&n);
     (void)view;
@@ -4061,8 +4064,8 @@ static bool x64_measure(const MiniAsMeasureView *view,
 /* A branch is classified once by the x86 parser: X64_BRANCH and its retained
  * opcode carry every short/near alternative.  Neither relaxation nor final
  * encoding may consult a source mnemonic a second time. */
-static uint32_t x64_branch_near_width(const MiniAsStmt *stmt) {
-    const MiniAsMCInst *m=stmt->payload.instruction.inst;
+static uint32_t x64_branch_near_width(const MiniAsInstructionView *stmt) {
+    const MiniAsMCInstView *m=stmt->inst;
     const bool mode16=x64_mode16(stmt->site.mode_bits);
     if(m->encoding==0xe8U && X64_FORM_OPERAND_BITS(m)==32U)
         return 5U;
@@ -4083,7 +4086,7 @@ typedef enum X64BranchDistanceKind {
  * Treat unknown/nonlocal bindings conservatively rather than silently
  * fixing a potentially preemptible symbol to a private displacement. */
 static bool x64_can_resolve_same_section(const MiniAsSymbolView *symbol,
-                                         const MiniAsStmt *stmt,
+                                         const MiniAsInstructionView *stmt,
                                          bool call_or_rip) {
     if(symbol==NULL || !symbol->defined || symbol->section!=stmt->section)
         return false;
@@ -4096,10 +4099,10 @@ static bool x64_can_resolve_same_section(const MiniAsSymbolView *symbol,
  * target ISA defines the PC base as the byte after the entire instruction.
  * External/cross-section references retain an explicit PC32/PLT32 fixup. */
 static X64BranchDistanceKind x64_branch_distance(const MiniAsSymbolView *symbol,
-                                                 const MiniAsStmt *stmt,
+                                                 const MiniAsInstructionView *stmt,
                                                  uint32_t instruction_width,
                                                  int64_t *distance) {
-    const MiniAsMCInst *inst=stmt->payload.instruction.inst;
+    const MiniAsMCInstView *inst=stmt->inst;
     const MiniAsSymbolRef *expr=inst->operands[0].bound_symbol;
     int64_t delta;
     if(X64_FORM_VALUE(inst)==1U ||
@@ -4122,9 +4125,9 @@ static X64BranchDistanceKind x64_branch_distance(const MiniAsSymbolView *symbol,
  * for a forced near branch; required_size depends on this layout iteration.
  * Every non-branch is an identity plan and never invents an alternative. */
 static bool x64_plan_instruction_relaxation(MiniAsRelaxContext *ctx,
-                                             const MiniAsStmt *stmt,
+                                             const MiniAsInstructionView *stmt,
                                              MiniAsTargetRelaxPlan *plan) {
-    const MiniAsMCInst *inst=stmt->payload.instruction.inst;
+    const MiniAsMCInstView *inst=stmt->inst;
     int64_t distance=0;
     X64BranchDistanceKind result;
     if(!inst || !plan) {
@@ -4191,7 +4194,7 @@ static bool x64_adjust_symbol_ref(MiniAsEncodeContext *ctx,MiniAsSymbolRef input
 /* One memory-displacement policy for every ModR/M form. A RIP-relative
  * reference to a preemptible same-section symbol must keep its PC32 record;
  * the displacement is folded only for genuinely local references. */
-static bool x64_resolve_memory_displacement(MiniAsEncodeContext *ctx,const MiniAsStmt *stmt,
+static bool x64_resolve_memory_displacement(MiniAsEncodeContext *ctx,const MiniAsInstructionView *stmt,
                                             const X64Memory *mem,
                                             uint32_t displacement_offset,
                                             uint32_t *displacement,
@@ -4259,8 +4262,8 @@ static bool x64_resolve_memory_displacement(MiniAsEncodeContext *ctx,const MiniA
  * absolute symbolic displacement, RIP-relative PC32, and symbolic immediate.
  * The immediate field's ELF signedness is determined solely by its ISA
  * operand width; it must not change with the addressing mode. */
-static bool x64_emit_memory_fixups(MiniAsEncodeContext *ctx,const MiniAsStmt *stmt,
-                                   const MiniAsMCInst *inst,
+static bool x64_emit_memory_fixups(MiniAsEncodeContext *ctx,const MiniAsInstructionView *stmt,
+                                   const MiniAsMCInstView *inst,
                                    const X64Memory *mem,
                                    const X64MemoryLayout *layout,
                                    bool needs_pc32,
@@ -4329,8 +4332,8 @@ static bool x64_emit_memory_fixups(MiniAsEncodeContext *ctx,const MiniAsStmt *st
     return true;
 }
 
-static bool x64_encode_base(MiniAsEncodeContext *ctx,const MiniAsStmt *s) {
-    const MiniAsMCInst *m=s->payload.instruction.inst;
+static bool x64_encode_base(MiniAsEncodeContext *ctx,const MiniAsInstructionView *s) {
+    const MiniAsMCInstView *m=s->inst;
     MiniAsSymbolView symbol_snapshot;
     X64RegisterEncodingPlan register_plan;
     X64EncodingPlan plan;
@@ -4604,7 +4607,7 @@ static bool x64_encode_base(MiniAsEncodeContext *ctx,const MiniAsStmt *s) {
             return true;
         }
         case X64_MOVABS_IMMREG: {
-            const MiniAsMCOperand *value=&m->operands[1];
+            const MiniAsMCOperandView *value=&m->operands[1];
             r=m->operands[0].reg;
             code[n++]=(unsigned char)(0x48U|(r>>3U));
             code[n++]=(unsigned char)(0xb8U|(r&7U));
@@ -4617,7 +4620,7 @@ static bool x64_encode_base(MiniAsEncodeContext *ctx,const MiniAsStmt *s) {
                 *value->bound_symbol,false);
         }
         case X64_MOVQ_IMMREG: {
-            const MiniAsMCOperand *src=&m->operands[1];
+            const MiniAsMCOperandView *src=&m->operands[1];
             r=m->operands[0].reg;
             code[n++]=(unsigned char)(0x48U | (r>>3U));
             code[n++]=0xc7U;
@@ -4707,8 +4710,8 @@ static bool x64_encode_base(MiniAsEncodeContext *ctx,const MiniAsStmt *s) {
     return minias_encode_ctx_emit(ctx,code,n);
 }
 
-static bool x64_encode(MiniAsEncodeContext *ctx,const MiniAsStmt *s) {
-    MiniAsStmt native;
+static bool x64_encode(MiniAsEncodeContext *ctx,const MiniAsInstructionView *s) {
+    MiniAsInstructionView native;
     unsigned char prefix[4];size_t n;
     const char *prefix_error=x64_legacy_mode_prefixes(s,prefix,&n);
     if(prefix_error!=NULL) {
