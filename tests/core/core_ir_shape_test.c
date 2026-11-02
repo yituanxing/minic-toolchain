@@ -1,6 +1,6 @@
 /* MC-055: these are deliberately malformed public Core API objects, NOT
  * cases claimed to be emitted by a valid C frontend producer. */
-#include "core/core_ir.h"
+#include "core/core_ir_internal.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -107,41 +107,41 @@ static int run_case(const char *case_name) {
     if (strcmp(case_name, "fixed-null") == 0) {
         MinicCoreFixedRegisterBinding *saved = function.fixed_register_bindings;
         function.fixed_register_bindings = NULL;
-        verified = minic_core_function_verify(&function);
+        verified = minic_core_function_verify_source_ingress(&function);
         function.fixed_register_bindings = saved;
         expected = false;
     } else if (strcmp(case_name, "fixed-overcapacity") == 0) {
         size_t saved = function.fixed_register_binding_count;
         function.fixed_register_binding_count = function.fixed_register_binding_capacity + 1U;
-        verified = minic_core_function_verify(&function);
+        verified = minic_core_function_verify_source_ingress(&function);
         function.fixed_register_binding_count = saved;
         expected = false;
     } else if (strcmp(case_name, "symbol-null") == 0) {
         MinicCoreFunctionSymbol *saved = function.function_symbols;
         function.function_symbols = NULL;
-        verified = minic_core_function_verify(&function);
+        verified = minic_core_function_verify_source_ingress(&function);
         function.function_symbols = saved;
         expected = false;
     } else if (strcmp(case_name, "symbol-overcapacity") == 0) {
         size_t saved = function.function_symbol_count;
         function.function_symbol_count = function.function_symbol_capacity + 1U;
-        verified = minic_core_function_verify(&function);
+        verified = minic_core_function_verify_source_ingress(&function);
         function.function_symbol_count = saved;
         expected = false;
     } else if (strcmp(case_name, "enum-null") == 0) {
         MinicCoreEnumType *saved = function.enum_types;
         function.enum_types = NULL;
-        verified = minic_core_function_verify(&function);
+        verified = minic_core_function_verify_source_ingress(&function);
         function.enum_types = saved;
         expected = false;
     } else if (strcmp(case_name, "enum-overcapacity") == 0) {
         size_t saved = function.enum_type_count;
         function.enum_type_count = function.enum_type_capacity + 1U;
-        verified = minic_core_function_verify(&function);
+        verified = minic_core_function_verify_source_ingress(&function);
         function.enum_type_count = saved;
         expected = false;
     } else {
-        verified = minic_core_function_verify(&function);
+        verified = minic_core_function_verify_source_ingress(&function);
         expected = strcmp(case_name, "enum-missing") != 0;
     }
     minic_core_function_destroy(&function);

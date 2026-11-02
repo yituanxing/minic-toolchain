@@ -8,17 +8,10 @@
 #include <stdio.h>
 
 static bool loong_fp_type(const MinicCoreFunction *fn,
-                           MinicType legacy, MinicCoreTypeId id,
+                           MinicCoreTypeId id,
                            MinicCoreFloatFormat format) {
     const MinicCoreType *type;
-    if (fn->type_context == NULL) {
-        switch (format) {
-        case MINIC_CORE_FLOAT_BINARY32: return minic_type_is_float(legacy);
-        case MINIC_CORE_FLOAT_BINARY64: return minic_type_is_double(legacy);
-        case MINIC_CORE_FLOAT_EXTENDED: return minic_type_is_long_double(legacy);
-        default: return false;
-        }
-    }
+    if (fn == NULL || fn->type_context == NULL) return false;
     id = minic_core_type_unqualified(fn->type_context, id);
     type = minic_core_type_get(fn->type_context, id);
     return type != NULL && type->kind == MINIC_CORE_TYPE_FLOAT &&
@@ -47,7 +40,7 @@ bool minic_loongarch64_emit_fp_instruction(
     *needs_gp_store = false;
     switch (ins->kind) {
         case MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT:
-            if (loong_fp_type(fn, ins->type, ins->core_type_id,
+            if (loong_fp_type(fn, ins->core_type_id,
                               MINIC_CORE_FLOAT_EXTENDED)) {
                 size_t dst;
                 if (!minic_lp64_frame_plan_wide_slot(frame_plan, ins->result, &dst) ||
@@ -60,9 +53,9 @@ bool minic_loongarch64_emit_fp_instruction(
                     return false;
                 return true;
             }
-            if ((!loong_fp_type(fn, ins->type, ins->core_type_id,
+            if ((!loong_fp_type(fn, ins->core_type_id,
                                 MINIC_CORE_FLOAT_BINARY64) &&
-                 !loong_fp_type(fn, ins->type, ins->core_type_id,
+                 !loong_fp_type(fn, ins->core_type_id,
                                 MINIC_CORE_FLOAT_BINARY32)) ||
                 fprintf(out, "  li.d $t0, 0x%016" PRIx64 "\n",
                         ins->value.floating_bits) < 0) return false;

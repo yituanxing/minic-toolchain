@@ -5,6 +5,10 @@
 
 static int check_asm_ids(size_t count) {
     MinicCoreFunction function = {0};
+    MinicCoreType void_type = {.kind = MINIC_CORE_TYPE_VOID};
+    MinicCoreTypeContext types = {
+        .types = &void_type, .type_count = 1U, .type_capacity = 1U
+    };
     MinicCoreInstruction *instructions = NULL;
     MinicCoreInlineAsm *asms = NULL;
     size_t i;
@@ -16,13 +20,17 @@ static int check_asm_ids(size_t count) {
     if (instructions == NULL || asms == NULL) goto done;
     for (i = 0U; i < count; ++i) {
         instructions[i].kind = MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM;
-        instructions[i].type = minic_type_void();
+        /* The obsolete C descriptor is poisoned; only the sealed Core void
+         * identity may authorize a machine-neutral ASM effect. */
+        instructions[i].type = minic_type_int();
+        instructions[i].core_type_id = 0U;
         instructions[i].result = MINIC_CORE_VALUE_INVALID;
         instructions[i].value.structured_inline_asm.inline_asm_id = (MinicCoreInlineAsmId)i;
         asms[i].template_text = nop;
         asms[i].template_length = 3U;
     }
     function.inline_asm_count = count;
+    function.type_context = &types;
     function.inline_asms = asms;
     function.instruction_count = count;
     function.instructions = instructions;

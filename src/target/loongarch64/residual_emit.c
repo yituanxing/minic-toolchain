@@ -29,23 +29,15 @@ static const MinicCoreType *loong_residual_core_type(
 }
 
 static bool loong_residual_kind(const MinicCoreFunction *fn,
-                                MinicType legacy, MinicCoreTypeId id,
+                                MinicCoreTypeId id,
                                 MinicCoreTypeKind kind) {
-    const MinicCoreType *type;
-    if (fn->type_context == NULL) {
-        if (kind == MINIC_CORE_TYPE_POINTER) return minic_type_is_pointer(legacy);
-        if (kind == MINIC_CORE_TYPE_INTEGER) return minic_type_is_integer(legacy);
-        return false;
-    }
-    type = loong_residual_core_type(fn, id);
+    const MinicCoreType *type = loong_residual_core_type(fn, id);
     return type != NULL && type->kind == kind;
 }
 
 static bool loong_residual_unsigned_long_register(
     const MinicCoreFunction *fn, const MinicCoreFixedRegisterBinding *binding) {
     const MinicCoreType *type;
-    if (fn->type_context == NULL)
-        return minic_type_equal(binding->type, minic_type_unsigned_long());
     type = loong_residual_core_type(fn, binding->core_type_id);
     return type != NULL && type->kind == MINIC_CORE_TYPE_INTEGER &&
            type->has_layout && type->size == 8U &&
@@ -54,14 +46,10 @@ static bool loong_residual_unsigned_long_register(
 }
 
 static bool loong_residual_integer_bits(
-    const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, MinicCoreValueId id,
     unsigned int *bits) {
     const MinicCoreType *type;
-    if (id >= fn->value_count || bits == NULL) return false;
-    if (fn->type_context == NULL)
-        return minic_target_info_integer_width(
-            target, program, fn->values[id].type, bits);
+    if (fn == NULL || id >= fn->value_count || bits == NULL) return false;
     type = loong_residual_core_type(fn, fn->values[id].core_type_id);
     if (type == NULL || type->kind != MINIC_CORE_TYPE_INTEGER ||
         !type->has_layout || type->value.integer.bit_width == 0U)
@@ -295,8 +283,8 @@ bool minic_loongarch64_emit_residual_instruction(
                    loong_residual_unsigned_long_register(fn, binding)) ||
                   (binding->register_name_length == 3U &&
                    memcmp(binding->register_name, "$tp", 3U) == 0 &&
-                   loong_residual_kind(fn, binding->type,
-                       binding->core_type_id, MINIC_CORE_TYPE_POINTER))))
+                   loong_residual_kind(fn, binding->core_type_id,
+                       MINIC_CORE_TYPE_POINTER))))
                 return minic_multi_direct_machine_reject(
                     fn, "loongarch64", name, "fixed_register_write",
                     reject_block, reject_ins, __LINE__);
@@ -350,7 +338,7 @@ bool minic_loongarch64_emit_residual_instruction(
              * type determines narrowing, not the original int64 payload.
              * Lua exercises out-of-range literals in cast/enum contexts. */
             if (!minic_multi_direct_constant_integer_shape(
-                    program, target, ins, &width, &sign))
+                    program, target, fn, ins, &width, &sign))
                 return minic_multi_direct_machine_reject(
                     fn, "loongarch64", name, reject_stage, reject_block, reject_ins, __LINE__);
             if (width == 8U) {
@@ -465,18 +453,15 @@ bool minic_loongarch64_emit_residual_instruction(
             if (getenv("MINIC_M1_TRACE") != NULL && base < fn->value_count &&
                 index < fn->value_count) {
                 unsigned int bits = 0U;
-                bool have_bits = loong_residual_integer_bits(
-                    program, target, fn, index, &bits);
+                bool have_bits = loong_residual_integer_bits(fn, index, &bits);
                 (void)fprintf(stderr,
                     "MINIC_M11_POINTER_DIAG arch=loongarch64 function=%s block=%zu ins=%u base=%u base_pointer=%d index=%u index_integer=%d width_known=%d index_bits=%u stride=%zu subtract=%d\n",
                     name, block_id, (unsigned int)ins_id,
                     (unsigned int)base,
-                    loong_residual_kind(fn, fn->values[base].type,
-                        fn->values[base].core_type_id,
+                    loong_residual_kind(fn, fn->values[base].core_type_id,
                         MINIC_CORE_TYPE_POINTER) ? 1 : 0,
                     (unsigned int)index,
-                    loong_residual_kind(fn, fn->values[index].type,
-                        fn->values[index].core_type_id,
+                    loong_residual_kind(fn, fn->values[index].core_type_id,
                         MINIC_CORE_TYPE_INTEGER) ? 1 : 0,
                     have_bits ? 1 : 0, bits, stride,
                     ins->value.pointer_offset.subtract ? 1 : 0);
@@ -566,7 +551,7 @@ bool minic_loongarch64_emit_residual_instruction(
              * into the caller's overflow stack slots at entry SP. */
             if (va_count == 0U ||
                 ins->value.variadic_address.copy_destination ||
-                !loong_residual_kind(fn, ins->type, ins->core_type_id,
+                !loong_residual_kind(fn, ins->core_type_id,
                                      MINIC_CORE_TYPE_POINTER) ||
                 ins->result >= fn->value_count ||
                 fprintf(out, "  li.d $t0, %zu\n",

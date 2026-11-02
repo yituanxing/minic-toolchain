@@ -208,13 +208,12 @@ bool minic_multi_direct_fixed_register_write_shape(
         ? ins->value.fixed_register_write.binding_id : SIZE_MAX;
     const MinicCoreValueId source = ins != NULL
         ? ins->value.fixed_register_write.source : MINIC_CORE_VALUE_INVALID;
-    if (program == NULL || target == NULL || fn == NULL || ins == NULL ||
+    if (program == NULL || target == NULL || fn == NULL ||
+        fn->type_context == NULL || ins == NULL ||
         binding_out == NULL ||
         ins->kind != MINIC_CORE_INSTRUCTION_FIXED_REGISTER_WRITE ||
         ins->result != MINIC_CORE_VALUE_INVALID ||
-        !(fn->type_context != NULL
-            ? direct_core_kind(fn, ins->core_type_id, MINIC_CORE_TYPE_VOID)
-            : minic_type_is_void(ins->type)) ||
+        !direct_core_kind(fn, ins->core_type_id, MINIC_CORE_TYPE_VOID) ||
         index >= fn->fixed_register_binding_count ||
         fn->fixed_register_bindings == NULL || source >= fn->value_count)
         return false;
@@ -223,12 +222,8 @@ bool minic_multi_direct_fixed_register_write_shape(
         binding->register_name_length == 0U ||
         !minic_target_info_fixed_register_write_supported(
             target, binding->register_name, binding->register_name_length) ||
-        !(fn->type_context != NULL
-            ? binding->core_type_id == fn->values[source].core_type_id
-            : minic_type_equal(binding->type, fn->values[source].type)) ||
-        !(fn->type_context != NULL
-            ? direct_core_register64(fn, binding->core_type_id)
-            : minic_lp64_register64_type(program, target, binding->type)))
+        binding->core_type_id != fn->values[source].core_type_id ||
+        !direct_core_register64(fn, binding->core_type_id))
         return false;
     *binding_out = binding;
     return true;
@@ -240,7 +235,8 @@ bool minic_multi_direct_fixed_register_read_shape(
     const MinicCoreFixedRegisterBinding **binding_out) {
     const MinicCoreFixedRegisterBinding *binding;
     const size_t index = ins != NULL ? ins->value.fixed_register_binding_id : 0U;
-    if (!program || !target || !fn || !ins || !binding_out ||
+    if (!program || !target || !fn || fn->type_context == NULL ||
+        !ins || !binding_out ||
         ins->kind != MINIC_CORE_INSTRUCTION_FIXED_REGISTER_READ ||
         ins->result >= fn->value_count ||
         index >= fn->fixed_register_binding_count ||
@@ -251,14 +247,9 @@ bool minic_multi_direct_fixed_register_read_shape(
         binding->register_name_length == 0U ||
         !minic_target_info_fixed_register_supported(
             target, binding->register_name, binding->register_name_length) ||
-        !(fn->type_context != NULL
-            ? binding->core_type_id == ins->core_type_id &&
-              fn->values[ins->result].core_type_id == ins->core_type_id
-            : minic_type_equal(binding->type, ins->type) &&
-              minic_type_equal(fn->values[ins->result].type, ins->type)) ||
-        !(fn->type_context != NULL
-            ? direct_core_register64(fn, ins->core_type_id)
-            : minic_lp64_register64_type(program, target, ins->type)))
+        binding->core_type_id != ins->core_type_id ||
+        fn->values[ins->result].core_type_id != ins->core_type_id ||
+        !direct_core_register64(fn, ins->core_type_id))
         return false;
     *binding_out = binding;
     return true;
@@ -269,49 +260,34 @@ bool minic_multi_direct_record_copy_extent(
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
     size_t *bytes) {
     MinicCoreValueId dst, src;
-    MinicType dst_type, src_type, dst_unqualified, src_unqualified;
-    size_t alignment;
-    if (program == NULL || target == NULL || fn == NULL || ins == NULL ||
+    MinicCoreTypeId dst_pointee, src_pointee;
+    const MinicCoreType *record;
+    if (program == NULL || target == NULL || fn == NULL ||
+        fn->type_context == NULL || ins == NULL ||
         bytes == NULL)
         return false;
     dst = ins->value.record_copy.destination_address;
     src = ins->value.record_copy.source_address;
-    if (fn->type_context != NULL) {
-        MinicCoreTypeId dst_pointee, src_pointee;
-        const MinicCoreType *record = direct_core_type(fn, ins->core_type_id);
-        if (ins->kind != MINIC_CORE_INSTRUCTION_RECORD_COPY ||
-            ins->result != MINIC_CORE_VALUE_INVALID ||
-            record == NULL || record->kind != MINIC_CORE_TYPE_RECORD ||
-            !record->has_layout || record->alignment == 0U ||
-            dst >= fn->value_count || src >= fn->value_count ||
-            !direct_core_pointer_pointee(fn, fn->values[dst].core_type_id,
-                                         &dst_pointee) ||
-            !direct_core_pointer_pointee(fn, fn->values[src].core_type_id,
-                                         &src_pointee) ||
-            !direct_core_equal_unqualified(fn, dst_pointee, ins->core_type_id) ||
-            !direct_core_equal_unqualified(fn, src_pointee, ins->core_type_id) ||
-            record->size > (16U * 1024U * 1024U)) return false;
-        *bytes = record->size;
-        return true;
-    }
+    record = direct_core_type(fn, ins->core_type_id);
     if (ins->kind != MINIC_CORE_INSTRUCTION_RECORD_COPY ||
         ins->result != MINIC_CORE_VALUE_INVALID ||
-        !minic_type_is_record(ins->type) ||
+        record == NULL || record->kind != MINIC_CORE_TYPE_RECORD ||
+        !record->has_layout || record->alignment == 0U ||
         dst >= fn->value_count || src >= fn->value_count ||
-        !minic_type_pointee(fn->values[dst].type, &dst_type) ||
-        !minic_type_pointee(fn->values[src].type, &src_type) ||
-        !minic_type_unqualified(dst_type, &dst_unqualified) ||
-        !minic_type_unqualified(src_type, &src_unqualified) ||
-        !minic_type_equal(dst_unqualified, ins->type) ||
-        !minic_type_equal(src_unqualified, ins->type) ||
-        !minic_data_layout_type(target->data_layout, program, ins->type,
-                                bytes, &alignment) ||
+        fn->values == NULL ||
+        !direct_core_pointer_pointee(fn, fn->values[dst].core_type_id,
+                                     &dst_pointee) ||
+        !direct_core_pointer_pointee(fn, fn->values[src].core_type_id,
+                                     &src_pointee) ||
+        !direct_core_equal_unqualified(fn, dst_pointee, ins->core_type_id) ||
+        !direct_core_equal_unqualified(fn, src_pointee, ins->core_type_id) ||
         /* Kernel task_struct and other compound records are often many
          * KiB. Native emitters use counted byte loops for large transfers;
          * this cap bounds the requested runtime copy without imposing the
          * former 2-KiB single-instruction-source expansion limit. */
-        alignment == 0U || *bytes > (16U * 1024U * 1024U))
+        record->size > (16U * 1024U * 1024U))
         return false;
+    *bytes = record->size;
     return true;
 }
 
@@ -324,49 +300,33 @@ bool minic_multi_direct_record_load_extent(
     const MinicLP64FramePlan *frame_plan,
     MinicCoreValueId *source, size_t *object_offset, size_t *bytes) {
     MinicCoreObjectId dst;
-    MinicType source_pointee, source_unqualified;
-    size_t alignment;
-    if (!program || !target || !fn || !ins || !frame_plan ||
+    MinicCoreTypeId pointee_id;
+    const MinicCoreType *source_type, *record;
+    if (!program || !target || !fn || fn->type_context == NULL ||
+        !ins || !frame_plan ||
         !source || !object_offset || !bytes ||
         ins->kind != MINIC_CORE_INSTRUCTION_RECORD_LOAD ||
         ins->result != MINIC_CORE_VALUE_INVALID ||
-        !(fn->type_context != NULL
-            ? direct_core_kind(fn, ins->core_type_id, MINIC_CORE_TYPE_RECORD)
-            : minic_type_is_record(ins->type))) return false;
+        !direct_core_kind(fn, ins->core_type_id, MINIC_CORE_TYPE_RECORD)) return false;
     dst = ins->value.record_load.destination_object;
     *source = ins->value.record_load.source_address;
-    if (fn->type_context != NULL) {
-        MinicCoreTypeId pointee_id;
-        const MinicCoreType *source_type, *record;
-        if (dst >= fn->object_count || *source >= fn->value_count ||
-            fn->objects[dst].element_count != 1U ||
-            !direct_core_equal_unqualified(fn, fn->objects[dst].core_type_id,
-                                           ins->core_type_id) ||
-            !direct_core_pointer_pointee(fn, fn->values[*source].core_type_id,
-                                         &pointee_id) ||
-            !direct_core_equal_unqualified(fn, pointee_id, ins->core_type_id) ||
-            (source_type = minic_core_type_get(fn->type_context, pointee_id)) == NULL ||
-            ins->value.record_load.is_volatile != source_type->is_volatile ||
-            !minic_lp64_frame_plan_object(frame_plan, dst, object_offset) ||
-            (record = direct_core_type(fn, ins->core_type_id)) == NULL ||
-            record->kind != MINIC_CORE_TYPE_RECORD || !record->has_layout ||
-            record->size == 0U || record->alignment == 0U ||
-            record->size > (16U * 1024U * 1024U)) return false;
-        *bytes = record->size;
-        return true;
-    }
     if (dst >= fn->object_count || *source >= fn->value_count ||
+        fn->objects == NULL || fn->values == NULL ||
         fn->objects[dst].element_count != 1U ||
-        !minic_type_equal(fn->objects[dst].type, ins->type) ||
-        !minic_type_pointee(fn->values[*source].type, &source_pointee) ||
-        !minic_type_unqualified(source_pointee, &source_unqualified) ||
-        !minic_type_equal(source_unqualified, ins->type) ||
-        ins->value.record_load.is_volatile != minic_type_is_volatile(source_pointee) ||
+        !direct_core_equal_unqualified(fn, fn->objects[dst].core_type_id,
+                                       ins->core_type_id) ||
+        !direct_core_pointer_pointee(fn, fn->values[*source].core_type_id,
+                                     &pointee_id) ||
+        !direct_core_equal_unqualified(fn, pointee_id, ins->core_type_id) ||
+        (source_type = minic_core_type_get(fn->type_context, pointee_id)) == NULL ||
+        ins->value.record_load.is_volatile != source_type->is_volatile ||
         !minic_lp64_frame_plan_object(frame_plan, dst, object_offset) ||
-        !minic_data_layout_type(target->data_layout, program, ins->type,
-                                bytes, &alignment) ||
-        !*bytes || !alignment || *bytes > (16U * 1024U * 1024U))
+        (record = direct_core_type(fn, ins->core_type_id)) == NULL ||
+        record->kind != MINIC_CORE_TYPE_RECORD || !record->has_layout ||
+        record->size == 0U || record->alignment == 0U ||
+        record->size > (16U * 1024U * 1024U))
         return false;
+    *bytes = record->size;
     return true;
 }
 
@@ -378,8 +338,8 @@ bool minic_multi_direct_parameter_object_location(
     size_t position;
     MinicCoreObjectId obj_id;
     const MinicLP64ArgumentLocation *loc;
-    MinicType object_value_type, parameter_value_type;
-    if (fn == NULL || ins == NULL || incoming_plan == NULL ||
+    if (fn == NULL || fn->type_context == NULL ||
+        ins == NULL || incoming_plan == NULL ||
         frame_plan == NULL || location == NULL || object_offset == NULL)
         return false;
     position = ins->value.parameter_object.parameter_index;
@@ -389,29 +349,15 @@ bool minic_multi_direct_parameter_object_location(
         position >= fn->parameter_count)
         return false;
     loc = &incoming_plan->arguments[position];
-    if (fn->type_context != NULL) {
-        if (ins->result != MINIC_CORE_VALUE_INVALID ||
-            obj_id >= fn->object_count ||
-            fn->core_parameter_type_ids == NULL ||
-            !direct_core_equal_unqualified(fn, fn->objects[obj_id].core_type_id,
-                                           fn->core_parameter_type_ids[position]) ||
-            fn->objects[obj_id].element_count != 1U ||
-            (loc->kind != MINIC_LP64_ARGUMENT_RECORD &&
-             loc->kind != MINIC_LP64_ARGUMENT_INDIRECT_RECORD &&
-             loc->kind != MINIC_LP64_ARGUMENT_EMPTY_RECORD) ||
-            !minic_lp64_frame_plan_object(frame_plan, obj_id, object_offset))
-            return false;
-        *location = loc;
-        return true;
-    }
     if (ins->result != MINIC_CORE_VALUE_INVALID ||
         obj_id >= fn->object_count ||
+        fn->objects == NULL ||
+        fn->core_parameter_type_ids == NULL ||
         /* GNU top-level const on a by-value parameter has no ABI effect.
          * Only remove top-level qualification, preserving nested pointee
          * and member qualifiers and the exact record identity. */
-        !minic_type_unqualified(fn->objects[obj_id].type, &object_value_type) ||
-        !minic_type_unqualified(fn->parameter_types[position], &parameter_value_type) ||
-        !minic_type_equal(object_value_type, parameter_value_type) ||
+        !direct_core_equal_unqualified(fn, fn->objects[obj_id].core_type_id,
+                                       fn->core_parameter_type_ids[position]) ||
         fn->objects[obj_id].element_count != 1U ||
         (loc->kind != MINIC_LP64_ARGUMENT_RECORD &&
          loc->kind != MINIC_LP64_ARGUMENT_INDIRECT_RECORD &&
@@ -677,49 +623,45 @@ bool minic_multi_direct_scalar_bitcast_shape(
     bool *pointer_to_integer, size_t *source_width,
     bool *source_signed, bool *source_pointer) {
     MinicCoreValueId source;
-    MinicType input;
+    MinicCoreTypeId source_id;
     size_t output_width;
     bool output_signed;
-    if (program == NULL || target == NULL || fn == NULL || ins == NULL ||
+    if (program == NULL || target == NULL || fn == NULL ||
+        fn->type_context == NULL || ins == NULL ||
         pointer_to_integer == NULL || source_width == NULL ||
         source_signed == NULL || source_pointer == NULL ||
         ins->kind != MINIC_CORE_INSTRUCTION_SCALAR_BITCAST)
         return false;
     source = ins->value.operand;
-    if (source >= fn->value_count)
+    if (source >= fn->value_count || fn->values == NULL)
         return false;
-    input = fn->values[source].type;
-    if (fn->type_context != NULL
-            ? !((direct_type_pointer(fn, ins->core_type_id, ins->type) &&
-                 (direct_type_pointer(fn, fn->values[source].core_type_id, input) ||
-                  direct_type_integer(fn, fn->values[source].core_type_id, input))) ||
-                (direct_type_integer(fn, ins->core_type_id, ins->type) &&
-                 direct_type_pointer(fn, fn->values[source].core_type_id, input)))
-            : !minic_core_scalar_bitcast_types_valid(ins->type, input))
+    source_id = fn->values[source].core_type_id;
+    if (!((direct_core_kind(fn, ins->core_type_id, MINIC_CORE_TYPE_POINTER) &&
+           (direct_core_kind(fn, source_id, MINIC_CORE_TYPE_POINTER) ||
+            direct_core_kind(fn, source_id, MINIC_CORE_TYPE_INTEGER))) ||
+          (direct_core_kind(fn, ins->core_type_id, MINIC_CORE_TYPE_INTEGER) &&
+           direct_core_kind(fn, source_id, MINIC_CORE_TYPE_POINTER))))
         return false;
-    *source_pointer = direct_type_pointer(fn, fn->values[source].core_type_id, input);
+    *source_pointer = direct_core_kind(fn, source_id, MINIC_CORE_TYPE_POINTER);
     *pointer_to_integer = *source_pointer &&
-                          direct_type_integer(fn, ins->core_type_id, ins->type);
+                          direct_core_kind(fn, ins->core_type_id, MINIC_CORE_TYPE_INTEGER);
     *source_width = 0U;
     *source_signed = false;
     if (*pointer_to_integer) {
-        if (!direct_type_integer_width(program, target, fn,
-                                       ins->core_type_id, ins->type,
-                                       &output_width, &output_signed) ||
+        if (!direct_core_int_width(fn, ins->core_type_id,
+                                   &output_width, &output_signed) ||
             (output_width != 8U && output_width != 4U &&
              !(output_width == 1U &&
-               direct_type_bool(fn, ins->core_type_id, ins->type))))
+               direct_core_bool(fn, ins->core_type_id))))
             return false;
         *source_width = output_width;
         *source_signed = output_signed;
         return true;
     }
-    if (!direct_type_pointer(fn, ins->core_type_id, ins->type))
+    if (!direct_core_kind(fn, ins->core_type_id, MINIC_CORE_TYPE_POINTER))
         return false;
     return *source_pointer ||
-           direct_type_integer_width(program, target, fn,
-                                     fn->values[source].core_type_id, input,
-                                     source_width, source_signed);
+           direct_core_int_width(fn, source_id, source_width, source_signed);
 }
 
 /* POINTER_LESS compares two identically typed pointer Core values and

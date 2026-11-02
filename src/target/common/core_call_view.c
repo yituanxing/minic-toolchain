@@ -63,13 +63,15 @@ static bool minic_core_call_view_core_signature_valid(
     }
     return true;
 }
-
 bool minic_core_call_view_build(const MinicCoreFunction *function,
                                 const MinicCoreInstruction *instruction,
                                 MinicCoreCallView *result) {
     MinicCoreCallView view;
     size_t begin, count;
-    if (function == NULL || instruction == NULL || result == NULL)
+    /* Executable call semantics belong to the sealed Core type graph.
+     * An unbound source descriptor is never an alternative admission path. */
+    if (function == NULL || function->type_context == NULL ||
+        instruction == NULL || result == NULL)
         return false;
     (void)memset(&view, 0, sizeof(view));
     view.function_pointer = MINIC_CORE_VALUE_INVALID;
@@ -92,31 +94,23 @@ bool minic_core_call_view_build(const MinicCoreFunction *function,
     } else if (instruction->kind == MINIC_CORE_INSTRUCTION_INDIRECT_CALL) {
         const size_t id = instruction->value.indirect_call.signature_id;
         const MinicCoreValueId pointer = instruction->value.indirect_call.callee;
-        MinicType function_type;
         if (id >= function->call_signature_count ||
             function->call_signatures == NULL ||
             pointer >= function->value_count || function->values == NULL)
             return false;
         view.signature = &function->call_signatures[id];
-        if (function->type_context != NULL) {
-            const MinicCoreType *pointer_type = minic_core_call_type(function,
+        const MinicCoreType *pointer_type = minic_core_call_type(function,
+            minic_core_type_unqualified(function->type_context,
+                function->values[pointer].core_type_id));
+        if (pointer_type == NULL || pointer_type->kind != MINIC_CORE_TYPE_POINTER ||
+            minic_core_type_unqualified(function->type_context,
+                pointer_type->value.pointer.pointee) !=
                 minic_core_type_unqualified(function->type_context,
-                    function->values[pointer].core_type_id));
-            if (pointer_type == NULL || pointer_type->kind != MINIC_CORE_TYPE_POINTER ||
-                minic_core_type_unqualified(function->type_context,
-                    pointer_type->value.pointer.pointee) !=
-                    minic_core_type_unqualified(function->type_context,
-                    view.signature->core_function_type_id) ||
-                !minic_core_call_is_kind(function,
-                                         view.signature->core_function_type_id,
-                                         MINIC_CORE_TYPE_FUNCTION))
-                return false;
-        } else {
-            if (!minic_type_pointee(function->values[pointer].type, &function_type) ||
-                !minic_type_is_function(function_type) ||
-                function_type.function_type_id != view.signature->function_type_id)
-                return false;
-        }
+                view.signature->core_function_type_id) ||
+            !minic_core_call_is_kind(function,
+                                     view.signature->core_function_type_id,
+                                     MINIC_CORE_TYPE_FUNCTION))
+            return false;
         view.function_pointer = pointer;
         view.return_type = view.signature->return_type;
         view.parameter_types = view.signature->parameter_types;
@@ -135,40 +129,28 @@ bool minic_core_call_view_build(const MinicCoreFunction *function,
         begin > function->call_argument_count ||
         count > function->call_argument_count - begin ||
         (count != 0U && function->call_arguments == NULL) ||
-        (view.parameter_count != 0U && view.parameter_types == NULL) ||
         view.parameter_count > count ||
         (!view.is_variadic && view.parameter_count != count))
         return false;
-    if (function->type_context != NULL) {
-        if (!minic_core_call_view_core_signature_valid(function, &view,
-                                                       instruction))
-            return false;
-    } else if (!minic_type_equal(view.return_type, instruction->type)) {
+    if (!minic_core_call_view_core_signature_valid(function, &view,
+                                                  instruction))
         return false;
-    }
     const MinicCoreObjectId result_object =
         instruction->kind == MINIC_CORE_INSTRUCTION_CALL
             ? instruction->value.call.result_object
             : instruction->value.indirect_call.result_object;
-    if (function->type_context != NULL
-            ? minic_core_call_is_kind(function, instruction->core_type_id,
-                                      MINIC_CORE_TYPE_VOID)
-            : minic_type_is_void(instruction->type)) {
+    if (minic_core_call_is_kind(function, instruction->core_type_id,
+                                MINIC_CORE_TYPE_VOID)) {
         if (instruction->result != MINIC_CORE_VALUE_INVALID ||
             result_object != MINIC_CORE_OBJECT_INVALID)
             return false;
         view.return_form = MINIC_CORE_CALL_RETURN_VOID;
-    } else if (function->type_context != NULL
-                   ? minic_core_call_is_kind(function, instruction->core_type_id,
-                                             MINIC_CORE_TYPE_RECORD)
-                   : minic_type_is_record(instruction->type)) {
+    } else if (minic_core_call_is_kind(function, instruction->core_type_id,
+                                       MINIC_CORE_TYPE_RECORD)) {
         if (result_object >= function->object_count ||
             function->objects == NULL ||
-            (function->type_context != NULL
-                 ? function->objects[result_object].core_type_id !=
-                       instruction->core_type_id
-                 : !minic_type_equal(function->objects[result_object].type,
-                                     instruction->type)) ||
+            function->objects[result_object].core_type_id !=
+                instruction->core_type_id ||
             instruction->result != MINIC_CORE_VALUE_INVALID)
             return false;
         view.return_form = MINIC_CORE_CALL_RETURN_OBJECT;
@@ -176,11 +158,8 @@ bool minic_core_call_view_build(const MinicCoreFunction *function,
         if (result_object != MINIC_CORE_OBJECT_INVALID ||
             instruction->result >= function->value_count ||
             function->values == NULL ||
-            (function->type_context != NULL
-                 ? function->values[instruction->result].core_type_id !=
-                       instruction->core_type_id
-                 : !minic_type_equal(function->values[instruction->result].type,
-                                     instruction->type)))
+            function->values[instruction->result].core_type_id !=
+                instruction->core_type_id)
             return false;
         view.return_form = MINIC_CORE_CALL_RETURN_VALUE;
     }
@@ -192,42 +171,15 @@ bool minic_core_call_view_build(const MinicCoreFunction *function,
      * placement; no machine ISA or psABI choice occurs during this check. */
     {
         size_t i;
-        MinicType actual;
         MinicCoreTypeId core_actual;
         for (i = 0U; i < count; ++i) {
-            if (function->type_context != NULL) {
-                if (!minic_core_call_view_argument_core_type(function, &view,
-                                                              i, &core_actual))
-                    return false;
-            } else if (!minic_core_call_view_argument_type(function, &view, i, &actual)) {
+            if (!minic_core_call_view_argument_core_type(function, &view,
+                                                         i, &core_actual))
                 return false;
-            }
         }
     }
     *result = view;
     return true;
-}
-
-bool minic_core_call_argument_actual_type(const MinicCoreFunction *function,
-                                           const MinicCoreCallArgument *argument,
-                                           MinicType *type) {
-    if (function == NULL || argument == NULL || type == NULL)
-        return false;
-    if (argument->kind == MINIC_CORE_CALL_ARGUMENT_VALUE) {
-        const MinicCoreValueId id = argument->value.value_id;
-        if (id >= function->value_count || function->values == NULL)
-            return false;
-        *type = function->values[id].type;
-        return !minic_type_is_record(*type);
-    }
-    if (argument->kind == MINIC_CORE_CALL_ARGUMENT_OBJECT) {
-        const MinicCoreObjectId id = argument->value.object_id;
-        if (id >= function->object_count || function->objects == NULL)
-            return false;
-        *type = function->objects[id].type;
-        return minic_type_is_record(*type);
-    }
-    return false;
 }
 
 bool minic_core_call_argument_actual_core_type(
@@ -284,37 +236,6 @@ bool minic_core_call_view_argument_core_type(
         if (minic_core_call_type(function, expected) == NULL ||
             expected_record != actual_record ||
             (expected_record && expected != *actual))
-            return false;
-    }
-    return true;
-}
-
-bool minic_core_call_view_argument_type(const MinicCoreFunction *function,
-                                        const MinicCoreCallView *view,
-                                        size_t index, MinicType *actual) {
-    const MinicCoreCallArgument *arg;
-    if (function == NULL || view == NULL || actual == NULL ||
-        index >= view->argument_count || view->arguments == NULL ||
-        view->parameter_count > view->argument_count ||
-        (view->parameter_count != 0U && view->parameter_types == NULL))
-        return false;
-    if (function->type_context != NULL) {
-        MinicCoreTypeId validated;
-        if (!minic_core_call_view_argument_core_type(function, view, index,
-                                                     &validated))
-            return false;
-    }
-    arg = &view->arguments[index];
-    if (!minic_core_call_argument_actual_type(function, arg, actual))
-        return false;
-    if (function->type_context == NULL && index < view->parameter_count) {
-        const MinicType expected = view->parameter_types[index];
-        /* Aggregate identity is a Core invariant. Scalar promotions and
-         * physical register/stack placement remain target-owned. */
-        if (minic_type_is_record(expected) != minic_type_is_record(*actual))
-            return false;
-        if (minic_type_is_record(expected) &&
-            !minic_type_equal(expected, *actual))
             return false;
     }
     return true;

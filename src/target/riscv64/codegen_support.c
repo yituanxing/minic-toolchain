@@ -353,4 +353,61 @@ bool minic_riscv64_emit_safe_scalar_store(
         address_register, scratch_register, proven_alignment);
 }
 
+static bool rv64_emit_safe_core_scalar(
+    FILE *file, const MinicCoreTypeContext *types, MinicCoreTypeId type_id,
+    bool store, const char *value_register, const char *address_register,
+    const char *scratch_register, size_t proven_alignment) {
+    const MinicCoreType *type = minic_core_type_get(
+        types, minic_core_type_unqualified(types, type_id));
+    const char *opcode;
+    size_t bytes;
+    bool is_signed = false;
+    if (type == NULL || !type->has_layout) return false;
+    bytes = type->size;
+    if (type->kind == MINIC_CORE_TYPE_POINTER) {
+        if (bytes != 8U) return false;
+        opcode = store ? "sd" : "ld";
+    } else if (type->kind == MINIC_CORE_TYPE_FLOAT) {
+        if (type->value.floating.format == MINIC_CORE_FLOAT_BINARY32 && bytes == 4U)
+            opcode = store ? "sw" : "lwu";
+        else if (type->value.floating.format == MINIC_CORE_FLOAT_BINARY64 && bytes == 8U)
+            opcode = store ? "sd" : "ld";
+        else return false;
+    } else if (type->kind == MINIC_CORE_TYPE_INTEGER) {
+        if (bytes < 1U || bytes > 8U ||
+            type->value.integer.bit_width != bytes * 8U ||
+            (type->value.integer.is_bool && bytes != 1U)) return false;
+        is_signed = !type->value.integer.is_bool && type->value.integer.is_signed;
+        switch (bytes) {
+        case 1U: opcode = store ? "sb" : (is_signed ? "lb" : "lbu"); break;
+        case 2U: opcode = store ? "sh" : (is_signed ? "lh" : "lhu"); break;
+        case 4U: opcode = store ? "sw" : (is_signed ? "lw" : "lwu"); break;
+        case 8U: opcode = store ? "sd" : "ld"; break;
+        default: return false;
+        }
+    } else return false;
+    return minic_riscv_emit_typed_memory(
+        file, store, 64U, bytes, !store && is_signed, opcode,
+        value_register, address_register, scratch_register,
+        proven_alignment, "rv64_scalar");
+}
+
+bool minic_riscv64_emit_safe_core_scalar_load(
+    FILE *file, const MinicCoreTypeContext *types, MinicCoreTypeId type_id,
+    const char *destination_register, const char *address_register,
+    const char *scratch_register, size_t proven_alignment) {
+    return rv64_emit_safe_core_scalar(file, types, type_id, false,
+        destination_register, address_register, scratch_register,
+        proven_alignment);
+}
+
+bool minic_riscv64_emit_safe_core_scalar_store(
+    FILE *file, const MinicCoreTypeContext *types, MinicCoreTypeId type_id,
+    const char *source_register, const char *address_register,
+    const char *scratch_register, size_t proven_alignment) {
+    return rv64_emit_safe_core_scalar(file, types, type_id, true,
+        source_register, address_register, scratch_register,
+        proven_alignment);
+}
+
 /* RV64_INT128_PAIR_V1: keep the address stable while a0 becomes the low half. */

@@ -44,6 +44,14 @@ bool minic_riscv64_emit_safe_scalar_load(FILE *, const MinicC0Program *,
     MinicType, const char *, const char *, const char *, size_t);
 bool minic_riscv64_emit_safe_scalar_store(FILE *, const MinicC0Program *,
     MinicType, const char *, const char *, const char *, size_t);
+/* Core-only machine scalar transport for attached functions. The target
+ * chooses RV64I opcodes from frozen execution type width/signedness. */
+bool minic_riscv64_emit_safe_core_scalar_load(FILE *,
+    const MinicCoreTypeContext *, MinicCoreTypeId,
+    const char *, const char *, const char *, size_t);
+bool minic_riscv64_emit_safe_core_scalar_store(FILE *,
+    const MinicCoreTypeContext *, MinicCoreTypeId,
+    const char *, const char *, const char *, size_t);
 bool minic_riscv64_emit_integer_aggregate_load_chunk_profile(
     FILE *file, const MinicC0Program *program, MinicType type,
     size_t chunk_index, const char *destination_register,

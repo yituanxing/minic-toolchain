@@ -1,4 +1,4 @@
-#include "core/core_ir.h"
+#include "core/core_ir_internal.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -203,7 +203,6 @@ static bool build_field_fixture(MinicCoreFunction *function, const TypeIds *ids)
     instruction.kind = MINIC_CORE_INSTRUCTION_FIELD_ADDRESS;
     instruction.type = source_pointer_int;
     instruction.value.field_address.base = base;
-    instruction.value.field_address.record_id = 0U;
     instruction.value.field_address.field_index = 0U;
     instruction.value.field_address.byte_offset = 8U;
     if (!minic_core_function_append_value_instruction(function, block, &instruction,
@@ -222,15 +221,30 @@ static bool build_field_fixture(MinicCoreFunction *function, const TypeIds *ids)
 
 static bool build_object_fixture(MinicCoreFunction *function, const TypeIds *ids) {
     MinicCoreObjectId object_id;
+    MinicCoreBlockId block;
+    MinicCoreValueId result;
+    MinicCoreInstruction instruction = {0};
+    MinicCoreTerminator terminator = {0};
     MinicSourceSpan span = {0};
     minic_core_function_initialize(function);
     if (!minic_core_function_set_signature(function, "storage", 7U,
                                            minic_type_int(), NULL, 0U) ||
         !set_snapshot_signature(function, ids->i32, NULL) ||
         !minic_core_function_add_repeated_object(function, span, minic_type_int(),
-                                                 2U, &object_id)) return false;
+                                                 2U, &object_id) ||
+        !minic_core_function_add_block(function, &block)) return false;
     function->objects[object_id].core_type_id = ids->i32;
-    return true;
+    instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
+    instruction.type = minic_type_int();
+    instruction.value.integer_value = 0;
+    if (!minic_core_function_append_value_instruction(function, block, &instruction,
+                                                       &result)) return false;
+    function->values[result].core_type_id = ids->i32;
+    function->instructions[0].core_type_id = ids->i32;
+    terminator.kind = MINIC_CORE_TERMINATOR_RETURN;
+    terminator.return_value = result;
+    terminator.return_object = MINIC_CORE_OBJECT_INVALID;
+    return minic_core_function_set_terminator(function, block, &terminator);
 }
 
 typedef struct ResolverState {
@@ -362,6 +376,27 @@ int main(void) {
     CHECK(build_field_fixture(&function, &ids));
     CHECK(minic_core_function_attach_type_context(&function, &context));
     CHECK(minic_core_function_verify_core_type_snapshot(&function));
+    CHECK(minic_core_function_verify(&function));
+    /* A record member's pointer type is a sealed Core constraint, not an
+     * arbitrary carrier of the same byte displacement. The frontend may
+     * choose array-element or bit-field storage only for matching members. */
+    function.instructions[1].value.field_address.access_form =
+        MINIC_CORE_FIELD_ACCESS_ARRAY_ELEMENT;
+    CHECK(!minic_core_function_verify(&function));
+    function.instructions[1].value.field_address.access_form =
+        MINIC_CORE_FIELD_ACCESS_BITFIELD_STORAGE;
+    CHECK(!minic_core_function_verify(&function));
+    function.instructions[1].value.field_address.access_form =
+        (MinicCoreFieldAccessForm)99;
+    CHECK(!minic_core_function_verify(&function));
+    function.instructions[1].value.field_address.access_form =
+        MINIC_CORE_FIELD_ACCESS_EXACT;
+    function.values[1].core_type_id = ids.ptr_i8;
+    function.instructions[1].core_type_id = ids.ptr_i8;
+    CHECK(!minic_core_function_verify(&function));
+    function.values[1].core_type_id = ids.ptr_i32;
+    function.instructions[1].core_type_id = ids.ptr_i32;
+    CHECK(minic_core_function_verify(&function));
     saved = function.instructions[1].value.field_address.core_record_type_id;
     function.instructions[1].value.field_address.core_record_type_id = ids.record_b;
     CHECK(!minic_core_function_verify_core_type_snapshot(&function));
@@ -392,7 +427,8 @@ int main(void) {
 
     /* The bulk-ingress callback must roll back ALL snapshots on failure. */
     CHECK(build_simple_function(&function));
-    CHECK(minic_core_function_verify(&function));
+    CHECK(minic_core_function_verify_source_ingress(&function));
+    CHECK(!minic_core_function_verify(&function)); /* unattached source is not Core */
     resolver.i32 = ids.i32;
     resolver.call_count = 0U;
     resolver.fail_on_call = 2U;
@@ -412,7 +448,7 @@ int main(void) {
     minic_core_function_destroy(&function);
 
     CHECK(build_enum_overflow_function(&function));
-    CHECK(minic_core_function_verify(&function));
+    CHECK(minic_core_function_verify_source_ingress(&function));
     function.instructions[3].value.integer_overflow.source_overflow_destination_ineligible = false;
     CHECK(!minic_core_function_snapshot_types(&function, &context,
                                               resolve_enum_overflow_type, &ids));

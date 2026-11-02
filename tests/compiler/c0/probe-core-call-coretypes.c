@@ -24,10 +24,12 @@ int main(void) {
     MinicCoreCallView view;
     MinicCoreTypeId actual;
     MinicCoreFunction function = {0};
+    /* Deliberately contradictory C descriptors. Only Core IDs may govern
+     * target-neutral CALL identity and argument admission. */
     MinicType legacy_scalar = {0};
 
     minic_core_type_context_initialize(&context);
-    legacy_scalar.base_kind = MINIC_TYPE_BASE_INT;
+    legacy_scalar.base_kind = MINIC_TYPE_BASE_DOUBLE;
     (void)memset(values, 0, sizeof(values));
     (void)memset(objects, 0, sizeof(objects));
     type.kind = MINIC_CORE_TYPE_INTEGER;
@@ -94,17 +96,23 @@ int main(void) {
     function.call_argument_count = 1U;
     values[0].core_type_id = integer;
     values[1].core_type_id = pointer_type;
+    values[0].type = legacy_scalar;
+    values[1].type = legacy_scalar;
     objects[0].core_type_id = record;
     objects[1].core_type_id = other_record;
+    objects[0].type = legacy_scalar;
+    objects[1].type = legacy_scalar;
 
     callee.core_return_type_id = integer;
     callee.core_parameter_type_ids = &integer;
+    callee.return_type = legacy_scalar;
     callee.parameter_types = &legacy_scalar;
     callee.parameter_count = 1U;
     argument.kind = MINIC_CORE_CALL_ARGUMENT_VALUE;
     argument.value.value_id = 0U;
     call.kind = MINIC_CORE_INSTRUCTION_CALL;
     call.core_type_id = integer;
+    call.type = legacy_scalar;
     call.result = 0U;
     call.value.call.callee_id = 0U;
     call.value.call.argument_count = 1U;
@@ -155,6 +163,7 @@ int main(void) {
     signature.core_function_type_id = signature_type;
     signature.core_return_type_id = integer;
     signature.core_parameter_type_ids = &integer;
+    signature.return_type = legacy_scalar;
     signature.parameter_types = &legacy_scalar;
     signature.parameter_count = 1U;
     argument.kind = MINIC_CORE_CALL_ARGUMENT_VALUE;

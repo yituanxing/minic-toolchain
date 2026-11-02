@@ -149,7 +149,7 @@ static bool emit_instruction(FILE *file,
         return minic_riscv64_frame_store_value(file, frame, instruction->result, "t0");
     }
     case MINIC_CORE_INSTRUCTION_CALL_FRAME_ADDRESS:
-        if (!minic_riscv64_core_call_frame_address_supported(instruction)) {
+        if (!minic_riscv64_core_call_frame_address_supported(function, instruction)) {
             return false;
         }
         if (instruction->value.call_frame_address.kind == MINIC_CORE_CALL_FRAME_ADDRESS_RETURN) {

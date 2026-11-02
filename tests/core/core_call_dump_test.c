@@ -1,7 +1,78 @@
-#include "core/core_ir.h"
+#include "core/core_ir_internal.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+
+typedef struct DumpTypes {
+    MinicCoreTypeId integer, record, function, pointer_function;
+} DumpTypes;
+
+static bool make_dump_types(MinicCoreTypeContext *context, DumpTypes *types) {
+    MinicCoreType type = {0};
+    MinicCoreTypeId params[2];
+    minic_core_type_context_initialize(context);
+    type.kind = MINIC_CORE_TYPE_INTEGER;
+    type.has_layout = true;
+    type.size = 4U;
+    type.alignment = 4U;
+    type.value.integer.bit_width = 32U;
+    type.value.integer.is_signed = true;
+    if (!minic_core_type_register(context, &type, &types->integer)) return false;
+    (void)memset(&type, 0, sizeof(type));
+    type.kind = MINIC_CORE_TYPE_RECORD;
+    type.has_layout = true;
+    type.size = 8U;
+    type.alignment = 8U;
+    type.value.record.is_complete = true;
+    if (!minic_core_type_register(context, &type, &types->record)) return false;
+    (void)memset(&type, 0, sizeof(type));
+    params[0] = types->integer;
+    params[1] = types->record;
+    type.kind = MINIC_CORE_TYPE_FUNCTION;
+    type.value.function.return_type = types->integer;
+    type.value.function.parameters = params;
+    type.value.function.parameter_count = 2U;
+    if (!minic_core_type_register(context, &type, &types->function)) return false;
+    (void)memset(&type, 0, sizeof(type));
+    type.kind = MINIC_CORE_TYPE_POINTER;
+    type.has_layout = true;
+    type.size = 8U;
+    type.alignment = 8U;
+    type.value.pointer.pointee = types->function;
+    return minic_core_type_register(context, &type, &types->pointer_function);
+}
+
+static bool attach_dump_types(MinicCoreFunction *function,
+                              const MinicCoreTypeContext *context,
+                              const DumpTypes *types) {
+    size_t i;
+    MinicCoreCallee *callee = &function->callees[0];
+    MinicCoreCallSignature *signature = &function->call_signatures[0];
+    if (function->value_count != 4U || function->instruction_count != 4U ||
+        function->object_count != 1U || function->callee_count != 1U ||
+        function->call_signature_count != 1U) return false;
+    function->core_return_type_id = types->integer;
+    function->objects[0].core_type_id = types->record;
+    function->values[0].core_type_id = types->pointer_function;
+    function->instructions[0].core_type_id = types->pointer_function;
+    for (i = 1U; i < 4U; ++i) {
+        function->values[i].core_type_id = types->integer;
+        function->instructions[i].core_type_id = types->integer;
+    }
+    callee->core_return_type_id = types->integer;
+    signature->core_function_type_id = types->function;
+    signature->core_return_type_id = types->integer;
+    callee->core_parameter_type_ids = malloc(2U * sizeof(MinicCoreTypeId));
+    signature->core_parameter_type_ids = malloc(2U * sizeof(MinicCoreTypeId));
+    if (callee->core_parameter_type_ids == NULL ||
+        signature->core_parameter_type_ids == NULL) return false;
+    callee->core_parameter_type_ids[0] = types->integer;
+    callee->core_parameter_type_ids[1] = types->record;
+    signature->core_parameter_type_ids[0] = types->integer;
+    signature->core_parameter_type_ids[1] = types->record;
+    return minic_core_function_attach_type_context(function, context);
+}
 
 static bool build_call_dump_function(MinicCoreFunction *function) {
     MinicType parameters[2] = {minic_type_int(), minic_type_record(0U)};
@@ -93,17 +164,26 @@ int main(void) {
         "  %3 = call.indirect %0(%1, %o0) signature=0\n"
         "  return %3\n";
     MinicCoreFunction function;
+    MinicCoreTypeContext type_context;
+    DumpTypes types = {0};
     FILE *output;
     char buffer[sizeof(expected) + 8U];
     size_t length;
     int status = 0;
+    bool type_context_ready;
+    bool built, attached, verified, dumped;
 
     minic_core_function_initialize(&function);
+    type_context_ready = make_dump_types(&type_context, &types);
     output = tmpfile();
-    if (output == NULL || !build_call_dump_function(&function) ||
-        !minic_core_function_verify(&function) ||
-        !minic_core_function_dump(output, &function) ||
-        fflush(output) != 0 || fseek(output, 0L, SEEK_SET) != 0) {
+    built = type_context_ready && build_call_dump_function(&function);
+    attached = built && attach_dump_types(&function, &type_context, &types);
+    verified = attached && minic_core_function_verify(&function);
+    dumped = verified && output != NULL && minic_core_function_dump(output, &function);
+    if (!dumped || fflush(output) != 0 || fseek(output, 0L, SEEK_SET) != 0) {
+        (void)fprintf(stderr,
+                      "CORE_CALL_DUMP=FAIL typed=%d built=%d attached=%d verified=%d dumped=%d\n",
+                      type_context_ready, built, attached, verified, dumped);
         status = 1;
     } else {
         length = fread(buffer, 1U, sizeof(buffer) - 1U, output);
@@ -112,6 +192,7 @@ int main(void) {
     }
     if (output != NULL) (void)fclose(output);
     minic_core_function_destroy(&function);
+    minic_core_type_context_destroy(&type_context);
     if (status == 0) (void)puts("CORE_CALL_DUMP=PASS direct+indirect value+object exact-text");
     return status;
 }

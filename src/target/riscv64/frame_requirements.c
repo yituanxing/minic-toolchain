@@ -14,7 +14,8 @@ bool minic_riscv64_call_plan_cache_build(
     bool lp64_soft_float, const MinicCoreCallIndex *calls,
     MinicRiscv64CallPlanCache *cache) {
     size_t ordinal, previous = SIZE_MAX, maximum_stack_slots = 0U;
-    if (program == NULL || function == NULL || calls == NULL || cache == NULL ||
+    if (program == NULL || function == NULL || function->type_context == NULL ||
+        calls == NULL || cache == NULL ||
         cache->sites != NULL || cache->count != 0U ||
         calls->count > function->instruction_count ||
         (calls->count != 0U && calls->sites == NULL) ||
@@ -45,40 +46,23 @@ bool minic_riscv64_call_plan_cache_build(
         prepared->instruction_id = id;
         prepared->argument_count = call->argument_count;
         cache->sites[ordinal] = prepared;
-        if (!(function->type_context != NULL
-                  ? minic_riscv64_abi_cursor_initialize_for_core_return_profile(
-                        function->type_context, call->core_return_type_id,
-                        lp64_soft_float, &cursor, &prepared->return_value)
-                  : minic_riscv64_abi_cursor_initialize_for_return_profile(
-                        program, call->return_type, lp64_soft_float,
-                        &cursor, &prepared->return_value)))
+        if (!minic_riscv64_abi_cursor_initialize_for_core_return_profile(
+                function->type_context, call->core_return_type_id,
+                lp64_soft_float, &cursor, &prepared->return_value))
             goto fail;
         for (argument_index = 0U; argument_index < call->argument_count;
              ++argument_index) {
             const bool fixed = argument_index < call->parameter_count;
-            if (function->type_context != NULL) {
-                MinicCoreTypeId actual_type;
-                if (!minic_core_call_view_argument_core_type(
-                        function, call, argument_index, &actual_type) ||
-                    (fixed && call->core_parameter_type_ids == NULL) ||
-                    !minic_riscv64_abi_place_core_argument(
-                        function->type_context,
-                        fixed ? call->core_parameter_type_ids[argument_index]
-                              : actual_type,
-                        fixed, &cursor, &prepared->arguments[argument_index]))
-                    goto fail;
-            } else {
-                MinicType actual_type, placement_type;
-                if (!minic_core_call_view_argument_type(
-                        function, call, argument_index, &actual_type))
-                    goto fail;
-                placement_type = fixed
-                    ? call->parameter_types[argument_index] : actual_type;
-                if (!minic_riscv64_abi_place_argument(
-                        program, placement_type, fixed, &cursor,
-                        &prepared->arguments[argument_index]))
-                    goto fail;
-            }
+            MinicCoreTypeId actual_type;
+            if (!minic_core_call_view_argument_core_type(
+                    function, call, argument_index, &actual_type) ||
+                (fixed && call->core_parameter_type_ids == NULL) ||
+                !minic_riscv64_abi_place_core_argument(
+                    function->type_context,
+                    fixed ? call->core_parameter_type_ids[argument_index]
+                          : actual_type,
+                    fixed, &cursor, &prepared->arguments[argument_index]))
+                goto fail;
         }
         if (cursor.stack_slot_count > maximum_stack_slots)
             maximum_stack_slots = cursor.stack_slot_count;

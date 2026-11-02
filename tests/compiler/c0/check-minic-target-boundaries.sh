@@ -30,14 +30,25 @@ has src/target/common/direct_instruction_semantics.c \
   'minic_multi_direct_machine_instruction_shape('
 has src/target/common/direct_residual_plan.c \
   'minic_multi_direct_integer_cast_plan('
+# Once attached, Common/Direct admission and AArch64 integer lowering only
+# inspect sealed CoreTypeId. C type operations belong to the source ingress.
+for source in \
+  src/target/common/direct_residual_plan.c \
+  src/target/common/direct_preflight.c \
+  src/target/common/direct_block_register.h \
+  src/target/aarch64/integer_emit.c; do
+  lacks "$source" 'minic_type_'
+done
 has src/target/x86_64/machine_call.c \
   'minic_x86_64_plan_outgoing_arguments('
 has src/target/riscv64/core_codegen.c \
   'minic_riscv64_core_function_admit_profile('
 # RV32 fixed-arity psABI placement must follow the declared parameter, not
 # the expression's potentially narrower actual type (RV64/x86 already do).
-has src/target/riscv32/rv32_abi_plan.c 'type = i < view.parameter_count ? view.parameter_types[i] : actual;'
-has src/target/riscv32/rv32_abi_plan.c 'call_fixed_type'
+has src/target/riscv32/rv32_abi_plan.c 'declared_core = i < view.parameter_count'
+has src/target/riscv32/rv32_abi_plan.c 'minic_core_call_view_argument_core_type('
+lacks src/target/riscv32/rv32_abi_plan.c 'minic_core_call_view_argument_type('
+has src/target/riscv32/rv32_abi_plan.c 'call_fixed_core_type'
 has src/target/riscv32/rv32_frame.c 'off == SIZE_MAX'
 has src/target/riscv32/rv32_frame.c 'minic_riscv_gpr_name_equal(reg, "t6")'
 
@@ -170,11 +181,12 @@ has src/target/common/aggregate_shape.c 'bool minic_common_aggregate_storage_sha
 lacks src/target/common/aggregate_shape.c 'minic_common_aggregate_integral_tree('
 lacks src/target/common/aggregate_shape.h 'minic_common_aggregate_integral_tree('
 for consumer in src/target/x86_64/abi.c \
-                src/target/riscv32/rv32_abi_plan.c \
                 src/target/riscv64/abi.c \
                 src/target/common/lp64_aggregate.c; do
   has "$consumer" 'minic_common_aggregate_storage_shape('
 done
+has src/target/riscv32/rv32_abi_plan.c 'minic_common_aggregate_storage_shape_core('
+lacks src/target/riscv32/rv32_abi_plan.c 'minic_common_aggregate_storage_shape('
 has src/target/riscv64/abi.c 'static bool rv64_integer_convention_record_tree('
 has src/target/riscv64/abi.c '!rv64_integer_convention_record_tree('
 lacks src/target/riscv64/abi.c 'minic_riscv64_integer_aggregate_member_type('
@@ -559,8 +571,10 @@ has src/target/riscv64/frame_requirements.c 'calls->sites[ordinal]'
 # The fifth target no longer has a private Core VALUE/OBJECT type resolver:
 # CoreCallView checks real argument provenance and the RV64 psABI decides
 # fixed declared types versus unnamed promoted argument placement.
-has src/target/riscv64/frame_requirements.c 'minic_core_call_view_argument_type('
-has src/target/riscv64/call_emit.c 'minic_core_call_view_argument_type('
+has src/target/riscv64/frame_requirements.c 'minic_core_call_view_argument_core_type('
+has src/target/riscv64/call_emit.c 'minic_core_call_view_argument_core_type('
+lacks src/target/riscv64/frame_requirements.c 'minic_core_call_view_argument_type('
+lacks src/target/riscv64/call_emit.c 'minic_core_call_view_argument_type('
 lacks src/target/riscv64/frame_requirements.c 'bool minic_riscv64_core_call_argument_type('
 lacks src/target/riscv64/frame_requirements.h 'bool minic_riscv64_core_call_argument_type('
 # The Direct LP64 pair must also use a compact real CALL site cache.
@@ -757,12 +771,17 @@ has src/target/riscv32/rv32_frame.c 'facts->call_index'
 has src/target/riscv64/frame_layout.c 'facts->call_index'
 has src/target/common/direct_function_plan.c 'facts->call_index'
 has src/target/common/core_call_view.c 'view.return_form = MINIC_CORE_CALL_RETURN_OBJECT'
-has src/target/common/core_call_view.c 'minic_core_call_view_argument_type(function, &view, i, &actual)'
-has src/target/x86_64/call_plan.c 'minic_core_call_view_argument_type(fn, view, i, &type)'
+has src/target/common/core_call_view.c 'minic_core_call_view_argument_core_type(function, &view,'
+lacks src/target/common/core_call_view.c 'minic_core_call_view_argument_type(function, &view,'
+lacks src/target/common/core_call_view.c 'minic_core_call_argument_actual_type('
+lacks src/target/common/core_call_view.h 'minic_core_call_view_argument_type('
+has src/target/x86_64/call_plan.c 'minic_core_call_view_argument_core_type('
+lacks src/target/x86_64/call_plan.c 'minic_core_call_view_argument_type('
 has src/target/x86_64/frame.c 'frame->semantic_calls = facts->call_index'
 has src/target/x86_64/machine_call.c 'minic_core_call_index_find('
-has src/target/riscv32/rv32_abi_plan.c 'minic_core_call_view_argument_type('
-has src/target/common/direct_call_plan.c 'minic_core_call_view_argument_type(fn, &call, j, &actual)'
+has src/target/riscv32/rv32_abi_plan.c 'minic_core_call_view_argument_core_type('
+has src/target/common/direct_call_plan.c 'minic_core_call_view_argument_core_type('
+lacks src/target/common/direct_call_plan.c 'minic_core_call_view_argument_type('
 has src/target/riscv64/call_emit.c 'call->return_form != MINIC_CORE_CALL_RETURN_OBJECT'
 has src/target/riscv64/frame_layout.c 'frame->semantic_calls = frame->call_index.index'
 has src/target/riscv64/call_emit.c 'minic_core_call_index_find('
@@ -832,13 +851,13 @@ has src/target/riscv64/call_emit.c 'rv64_resolve_prepared_call('
 # RV64 direct and indirect 128-bit returns must share the two-GPR store;
 # a regression to the 64-bit scalar result silently loses a1.
 has src/target/riscv64/call_emit.c 'static bool emit_core_call_wide_result('
-has src/target/riscv64/legalize.c 'static bool rv64_wide_call_argument_supported('
+lacks src/target/riscv64/legalize.c 'static bool rv64_wide_call_argument_supported('
 has src/target/riscv64/legalize.c 'static bool rv64_core_call_return_supported('
 has src/target/riscv64/legalize.c 'case MINIC_RISCV64_ABI_VALUE_WIDE_SCALAR:'
 has src/target/riscv64/abi.c 'minic_type_is_int128_integer(type)) && size == 16U'
 lacks src/target/riscv64/abi.c '(lp64_soft_float && minic_type_is_int128_integer(type))'
-if [[ "$(grep -Fc 'return emit_core_call_wide_result(' src/target/riscv64/call_emit.c)" != 2 ]]; then
-  fail 'RV64 direct and indirect CALL no longer share dual-word return'
+if [[ "$(grep -Fc 'return emit_core_call_wide_result(' src/target/riscv64/call_emit.c)" != 1 ]]; then
+  fail 'RV64 unified direct/indirect CALL lost its dual-word result'
 fi
 has src/target/riscv64/frame_layout.c 'minic_riscv64_call_plan_cache_destroy('
 lacks src/target/riscv64/frame_requirements.c 'while (low < high)'
@@ -894,7 +913,7 @@ has src/target/riscv32/rv32_abi_plan.c 'minic_core_call_index_handle_destroy('
 lacks Makefile 'src/target/common/direct_call_preflight.c'
 lacks tests/compiler/bootstrap/b0-sources.txt 'src/target/common/direct_call_preflight.c'
 has src/target/common/direct_call_plan.c 'static bool minic_lp64_admit_call('
-has src/target/common/direct_call_plan.c 'types[j] = actual;'
+has src/target/common/direct_call_plan.c 'core_ids[j] = core_actual;'
 lacks src/target/common/direct_call_plan.c 'minic_lp64_plan_direct_call('
 has src/target/common/direct_function_plan.c 'failed_preflight ? "call_preflight" : "call_planning"'
 has src/target/common/direct_call_plan.c 'minic_core_call_index_handle_prepare('
@@ -1030,7 +1049,7 @@ cc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror \
 cc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror \
   -ffunction-sections -fdata-sections -Wl,--gc-sections \
   -Iinclude -Isrc tests/compiler/c0/probe-direct-lp64-dispatch.c \
-  src/core/core_ir.c src/core/value_uses.c \
+  src/core/core_ir.c src/core/core_type.c src/core/value_uses.c \
   src/frontend/type.c \
   src/target/common/lp64_frame.c \
   -o "$work/direct-lp64-dispatch-probe"
@@ -1091,7 +1110,7 @@ cc -std=c11 -Wall -Wextra -Wpedantic -Werror \
 # Exercise Direct LP64's separate wide sidecar with checked rollback.
 cc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror \
   -Iinclude -Isrc tests/compiler/c0/probe-core-value-slots.c \
-  src/target/common/core_value_slots.c src/frontend/type.c \
+  src/target/common/core_value_slots.c src/core/core_type.c src/frontend/type.c \
   -o "$work/core-value-slots-probe"
 "$work/core-value-slots-probe"
 

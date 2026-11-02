@@ -14,23 +14,16 @@ static bool fp_slot(FILE *out, const MinicA64FrameView *frame,
     return minic_a64_emit_owned_slot(out, frame, store, kind, reg, offset);
 }
 
-static bool a64_fp_matches(const MinicCoreFunction *fn, MinicType legacy,
+static bool a64_fp_matches(const MinicCoreFunction *fn,
                            MinicCoreTypeId id, MinicCoreFloatFormat format,
                            size_t width) {
     const MinicCoreType *type;
-    if (fn->type_context != NULL) {
-        id = minic_core_type_unqualified(fn->type_context, id);
-        type = minic_core_type_get(fn->type_context, id);
-        return type != NULL && type->kind == MINIC_CORE_TYPE_FLOAT &&
-               type->has_layout && type->size == width &&
-               type->value.floating.format == format;
-    }
-    switch (format) {
-    case MINIC_CORE_FLOAT_BINARY32: return minic_type_is_float(legacy);
-    case MINIC_CORE_FLOAT_BINARY64: return minic_type_is_double(legacy);
-    case MINIC_CORE_FLOAT_EXTENDED: return minic_type_is_long_double(legacy);
-    default: return false;
-    }
+    if (fn == NULL || fn->type_context == NULL) return false;
+    id = minic_core_type_unqualified(fn->type_context, id);
+    type = minic_core_type_get(fn->type_context, id);
+    return type != NULL && type->kind == MINIC_CORE_TYPE_FLOAT &&
+           type->has_layout && type->size == width &&
+           type->value.floating.format == format;
 }
 
 /* Both scalar FP bits and the two binary128 limbs use this exact x9
@@ -65,7 +58,7 @@ bool minic_aarch64_emit_fp_instruction(
     *needs_gp_store = false;
     switch (ins->kind) {
         case MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT: {
-            if (a64_fp_matches(fn, ins->type, ins->core_type_id,
+            if (a64_fp_matches(fn, ins->core_type_id,
                                MINIC_CORE_FLOAT_EXTENDED, 16U)) {
                 size_t dst, half;
                 if (!minic_lp64_frame_plan_wide_slot(frame_plan, ins->result, &dst))
@@ -81,9 +74,9 @@ bool minic_aarch64_emit_fp_instruction(
                 }
                 return true;
             }
-            if ((!a64_fp_matches(fn, ins->type, ins->core_type_id,
+            if ((!a64_fp_matches(fn, ins->core_type_id,
                                  MINIC_CORE_FLOAT_BINARY64, 8U) &&
-                 !a64_fp_matches(fn, ins->type, ins->core_type_id,
+                 !a64_fp_matches(fn, ins->core_type_id,
                                  MINIC_CORE_FLOAT_BINARY32, 4U)) ||
                 !fp_bits_constant(out, ins->value.floating_bits)) return false;
             *needs_gp_store = true;

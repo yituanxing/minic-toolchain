@@ -31,7 +31,7 @@ bool minic_riscv64_core_record_copy_supported(const MinicC0Program *program,
                                        const MinicCoreInstruction *instruction);
 
 bool minic_riscv64_core_call_frame_address_supported(
-    const MinicCoreInstruction *instruction);
+    const MinicCoreFunction *function, const MinicCoreInstruction *instruction);
 
 bool minic_riscv64_core_scalar_bitcast_supported(const MinicC0Program *program,
                                           const MinicCoreFunction *function,

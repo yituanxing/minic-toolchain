@@ -11,4 +11,9 @@ bool minic_core_ir_call_scalar_type(MinicType type);
 bool minic_core_ir_call_parameter_type(MinicType type);
 bool minic_core_ir_direct_call_return_type(MinicType type);
 
+/* C-language ingress preflight: validates ownership/array/index safety before
+ * the source descriptors are imported into the CoreType arena. Full semantic
+ * verification runs on the sealed, CoreType-backed function after import. */
+bool minic_core_function_verify_source_ingress(const MinicCoreFunction *function);
+
 #endif

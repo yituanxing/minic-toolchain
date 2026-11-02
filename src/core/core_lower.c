@@ -1,4 +1,5 @@
 #include "core/core_lower_internal.h"
+#include "core/core_ir_internal.h"
 #include "core/source_loop_shapes.h"
 #include "core/local_facts.h"
 #include "core/cfg_constant_calls.h"
@@ -360,6 +361,7 @@ MinicCoreLowerStatus minic_core_lower_internal_append_field_address(MinicCoreLow
                                                  MinicCoreValueId *address_id) {
     MinicCoreInstruction instruction;
     MinicType base_pointee;
+    MinicType actual_field_type, declared_field_type;
     const MinicRecord *record;
     const MinicRecordField *field;
     size_t byte_offset;
@@ -375,6 +377,11 @@ MinicCoreLowerStatus minic_core_lower_internal_append_field_address(MinicCoreLow
     record = minic_c0_program_record(context->body->program, record_id);
     field = minic_c0_record_field(record, field_index);
     if (record == NULL || field == NULL ||
+        !minic_type_unqualified(field_type, &actual_field_type) ||
+        !minic_type_unqualified(field->type, &declared_field_type) ||
+        (field->is_bit_field
+            ? !minic_type_is_integer(actual_field_type)
+            : !minic_type_equal(actual_field_type, declared_field_type)) ||
         !minic_data_layout_record_field_offset(core_data_layout(context),
                                                context->body->program,
                                                record,
@@ -387,8 +394,11 @@ MinicCoreLowerStatus minic_core_lower_internal_append_field_address(MinicCoreLow
     instruction.span = span;
     instruction.result = MINIC_CORE_VALUE_INVALID;
     instruction.value.field_address.base = base_id;
-    instruction.value.field_address.record_id = record_id;
     instruction.value.field_address.field_index = field_index;
+    instruction.value.field_address.access_form = field->is_bit_field
+        ? MINIC_CORE_FIELD_ACCESS_BITFIELD_STORAGE
+        : (field->is_array ? MINIC_CORE_FIELD_ACCESS_ARRAY_ELEMENT
+                           : MINIC_CORE_FIELD_ACCESS_EXACT);
     instruction.value.field_address.byte_offset = byte_offset;
     if (!minic_type_pointer_to(field_type, &instruction.type)) {
         return MINIC_CORE_LOWER_ERROR;
@@ -1624,7 +1634,8 @@ MinicCoreLowerStatus minic_core_lower_function_with_index(const MinicFunctionBod
         minic_core_function_destroy(&lowered);
         return MINIC_CORE_LOWER_UNSUPPORTED;
     }
-    if (!core_capture_enum_metadata(&context) || !minic_core_function_verify(&lowered)) {
+    if (!core_capture_enum_metadata(&context) ||
+        !minic_core_function_verify_source_ingress(&lowered)) {
         minic_core_function_destroy(&lowered);
         return MINIC_CORE_LOWER_ERROR;
     }

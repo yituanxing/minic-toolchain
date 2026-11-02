@@ -14,12 +14,10 @@ static bool memory_slot(FILE *out, const MinicA64FrameView *frame,
 }
 
 static bool a64_memory_wide_type(const MinicCoreFunction *fn,
-                                 MinicType legacy, MinicCoreTypeId id,
+                                 MinicCoreTypeId id,
                                  bool integer128) {
     const MinicCoreType *type;
-    if (fn->type_context == NULL)
-        return integer128 ? minic_type_is_int128_integer(legacy)
-                          : minic_type_is_long_double(legacy);
+    if (fn == NULL || fn->type_context == NULL) return false;
     id = minic_core_type_unqualified(fn->type_context, id);
     type = minic_core_type_get(fn->type_context, id);
     return type != NULL && type->has_layout && type->size == 16U &&
@@ -31,10 +29,9 @@ static bool a64_memory_wide_type(const MinicCoreFunction *fn,
 }
 
 static bool a64_memory_vector_type(const MinicCoreFunction *fn,
-                                   MinicType legacy, MinicCoreTypeId id) {
-    return fn->type_context != NULL
-        ? minic_aarch64_neon_vector128_core_type(fn->type_context, id)
-        : minic_aarch64_neon_vector128_type(legacy);
+                                   MinicCoreTypeId id) {
+    return fn != NULL && fn->type_context != NULL &&
+        minic_aarch64_neon_vector128_core_type(fn->type_context, id);
 }
 
 /* The full Linux frontier reports failing Core instruction IDs. When a
@@ -44,18 +41,22 @@ static void report_load_shape_reject(const MinicCoreFunction *fn,
                                      const MinicCoreInstruction *ins,
                                      MinicCoreValueId address) {
     if (getenv("MINIC_BACKEND_CENSUS") != NULL) {
-        const MinicType *address_type = address < fn->value_count
-            ? &fn->values[address].type : NULL;
+        const MinicCoreType *result_type = fn->type_context != NULL
+            ? minic_core_type_get(fn->type_context, ins->core_type_id) : NULL;
+        const MinicCoreType *address_type = fn->type_context != NULL &&
+                address < fn->value_count
+            ? minic_core_type_get(fn->type_context,
+                fn->values[address].core_type_id) : NULL;
         (void)fprintf(stderr,
-                      "MINIC_AARCH64_LOAD_SHAPE_REJECT result_base=%d "
-                      "result_rank=%d result_ptr=%u result_enum=%zu "
-                      "address_id=%zu address_base=%d address_ptr=%u\n",
-                      (int)ins->type.base_kind,
-                      (int)ins->type.integer_rank,
-                      ins->type.pointer_depth, (size_t)ins->type.enum_id,
+                      "MINIC_AARCH64_LOAD_SHAPE_REJECT result_kind=%d "
+                      "result_type_id=%zu address_id=%zu "
+                      "address_kind=%d address_type_id=%zu\n",
+                      result_type ? (int)result_type->kind : -1,
+                      (size_t)ins->core_type_id,
                       (size_t)address,
-                      address_type ? (int)address_type->base_kind : -1,
-                      address_type ? address_type->pointer_depth : 0U);
+                      address_type ? (int)address_type->kind : -1,
+                      address < fn->value_count
+                          ? (size_t)fn->values[address].core_type_id : SIZE_MAX);
     }
 }
 
@@ -97,7 +98,6 @@ bool minic_aarch64_emit_memory_instruction(
         ins->kind == MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_STORE ||
         ins->kind == MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_XOR ||
         ins->kind == MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_EOR3) {
-        MinicType vector_type;
         MinicCoreValueId operand;
         size_t value_slot, result_slot, second_slot;
         if (target->architecture != MINIC_TARGET_ARCH_AARCH64)
@@ -105,31 +105,22 @@ bool minic_aarch64_emit_memory_instruction(
         if (ins->kind == MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_LOAD) {
             operand = ins->value.load.address;
             if (ins->result >= fn->value_count || operand >= fn->value_count ||
-                !a64_memory_vector_type(fn, ins->type, ins->core_type_id) ||
+                !a64_memory_vector_type(fn, ins->core_type_id) ||
                 !minic_lp64_frame_plan_wide_slot(frame_plan, ins->result,
                                                   &result_slot)) return false;
-            return fn->type_context != NULL
-                ? minic_aarch64_neon_emit_load_core(out, frame_view,
+            return minic_aarch64_neon_emit_load_core(out, frame_view,
                     fn->type_context, ins->core_type_id,
-                    minic_lp64_frame_value_offset(frame_plan, operand), result_slot)
-                : minic_aarch64_neon_emit_load(out, frame_view, ins->type,
                     minic_lp64_frame_value_offset(frame_plan, operand), result_slot);
         }
         if (ins->kind == MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_STORE) {
             operand = ins->value.store.stored_value;
             if (operand >= fn->value_count ||
                 ins->value.store.address >= fn->value_count ||
-                !a64_memory_vector_type(fn, fn->values[operand].type,
-                                        fn->values[operand].core_type_id) ||
+                !a64_memory_vector_type(fn, fn->values[operand].core_type_id) ||
                 !minic_lp64_frame_plan_wide_slot(frame_plan, operand,
                                                   &value_slot)) return false;
-            return fn->type_context != NULL
-                ? minic_aarch64_neon_emit_store_core(out, frame_view,
+            return minic_aarch64_neon_emit_store_core(out, frame_view,
                     fn->type_context, fn->values[operand].core_type_id,
-                    minic_lp64_frame_value_offset(frame_plan,
-                        ins->value.store.address), value_slot)
-                : minic_aarch64_neon_emit_store(out, frame_view,
-                    fn->values[operand].type,
                     minic_lp64_frame_value_offset(frame_plan,
                         ins->value.store.address), value_slot);
         }
@@ -138,8 +129,7 @@ bool minic_aarch64_emit_memory_instruction(
         const MinicCoreValueId second =
             ins->kind == MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_XOR
                 ? ins->value.binary.right : ins->value.vector_ternary.second;
-        vector_type = ins->type;
-        if (!a64_memory_vector_type(fn, vector_type, ins->core_type_id) ||
+        if (!a64_memory_vector_type(fn, ins->core_type_id) ||
             operand >= fn->value_count || second >= fn->value_count ||
             ins->result >= fn->value_count ||
             !minic_lp64_frame_plan_wide_slot(frame_plan, operand, &value_slot) ||
@@ -147,11 +137,8 @@ bool minic_aarch64_emit_memory_instruction(
             !minic_lp64_frame_plan_wide_slot(frame_plan, ins->result,
                                               &result_slot)) return false;
         if (ins->kind == MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_XOR)
-            return fn->type_context != NULL
-                ? minic_aarch64_neon_emit_xor_core(out, frame_view,
+            return minic_aarch64_neon_emit_xor_core(out, frame_view,
                     fn->type_context, ins->core_type_id,
-                    value_slot, second_slot, result_slot)
-                : minic_aarch64_neon_emit_xor(out, frame_view, vector_type,
                     value_slot, second_slot, result_slot);
         if (ins->kind == MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_EOR3) {
             const MinicCoreValueId third = ins->value.vector_ternary.third;
@@ -170,21 +157,16 @@ bool minic_aarch64_emit_memory_instruction(
             /* The original kernel owns the CPU-feature conditional call.
              * This verifies the native ASM *syntax/operands*, not that the
              * caller's execution path observes the SHA3 hardware guard. */
-            return fn->type_context != NULL
-                ? minic_aarch64_neon_emit_eor3_core(out, frame_view,
+            return minic_aarch64_neon_emit_eor3_core(out, frame_view,
                     fn->type_context, ins->core_type_id, true,
-                    value_slot, second_slot, third_slot, result_slot)
-                : minic_aarch64_neon_emit_eor3(out, frame_view, vector_type,
-                    true, value_slot, second_slot, third_slot, result_slot);
+                    value_slot, second_slot, third_slot, result_slot);
         }
         return false;
     }
         if (ins->kind == MINIC_CORE_INSTRUCTION_STORE &&
             ins->value.store.stored_value < fn->value_count &&
             a64_memory_wide_type(fn,
-                fn->values[ins->value.store.stored_value].type,
-                fn->values[ins->value.store.stored_value].core_type_id,
-                true)) {
+                fn->values[ins->value.store.stored_value].core_type_id, true)) {
             const MinicCoreValueId addr = ins->value.store.address;
             size_t src;
             if (!minic_multi_direct_wide_store_shape(
@@ -202,9 +184,7 @@ bool minic_aarch64_emit_memory_instruction(
         if (ins->kind == MINIC_CORE_INSTRUCTION_STORE &&
             ins->value.store.stored_value < fn->value_count &&
             a64_memory_wide_type(fn,
-                fn->values[ins->value.store.stored_value].type,
-                fn->values[ins->value.store.stored_value].core_type_id,
-                false)) {
+                fn->values[ins->value.store.stored_value].core_type_id, false)) {
             const MinicCoreValueId addr = ins->value.store.address;
             size_t src;
             if (!minic_multi_direct_wide_store_shape(
@@ -241,7 +221,7 @@ bool minic_aarch64_emit_memory_instruction(
         case MINIC_CORE_INSTRUCTION_LOAD:
         case MINIC_CORE_INSTRUCTION_ATOMIC_LOAD: {
             if (ins->kind == MINIC_CORE_INSTRUCTION_LOAD &&
-                a64_memory_wide_type(fn, ins->type, ins->core_type_id, true)) {
+                a64_memory_wide_type(fn, ins->core_type_id, true)) {
                 MinicCoreValueId addr;
                 size_t dst;
                 if (!minic_multi_direct_wide_scalar_load_location(
@@ -261,7 +241,7 @@ bool minic_aarch64_emit_memory_instruction(
                 return true;
             }
             if (ins->kind == MINIC_CORE_INSTRUCTION_LOAD &&
-                a64_memory_wide_type(fn, ins->type, ins->core_type_id, false)) {
+                a64_memory_wide_type(fn, ins->core_type_id, false)) {
                 MinicCoreValueId addr;
                 size_t dst;
                 if (!minic_multi_direct_wide_scalar_load_location(

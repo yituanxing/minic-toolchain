@@ -23,7 +23,7 @@ bool minic_multi_direct_integer_cast_plan(
     const MinicLP64FramePlan *, MinicDirectIntegerCastPlan *);
 bool minic_multi_direct_constant_integer_shape(
     const MinicC0Program *, const MinicTargetInfo *,
-    const MinicCoreInstruction *, size_t *, bool *);
+    const MinicCoreFunction *, const MinicCoreInstruction *, size_t *, bool *);
 bool minic_multi_direct_global_address_symbol(
     const MinicCoreFunction *, const MinicCoreInstruction *, const char **);
 bool minic_multi_direct_function_address_symbol(

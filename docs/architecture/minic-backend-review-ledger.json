@@ -458,6 +458,11 @@
       "ci_touched_in": [],
       "audit_note": "New checked common ELF symbol declaration stage. Source reviewed with x86/Direct LP64 global/function owners, the strict GNU AS and negative symbol contract; exact HEAD CI acceptance still required."
     },
+    "src/target/common/elf_section_name.h": {
+      "blob": "9312067aed42034352856e3cca25e964abdd1029",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
     "src/target/common/global_emit.c": {
       "blob": "3b96609b8971c1ee80b0b186cf0e05ae0491df63",
       "review_depth": "inventory",
@@ -515,6 +520,16 @@
       "ci_touched_in": [
         665
       ]
+    },
+    "src/target/common/module_global_emit.c": {
+      "blob": "07ff30e742fe2e17e1099c57a29ef14fe29585eb",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/common/module_global_emit.h": {
+      "blob": "68de4aad4c23a7fd86ba3db97981f8414d1b7d5d",
+      "review_depth": "inventory",
+      "ci_touched_in": []
     },
     "src/target/common/program_emit.h": {
       "blob": "492717f6c9d0f4c8cd0fa9cf1d8bfa8415429ad1",

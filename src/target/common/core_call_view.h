@@ -43,20 +43,12 @@ bool minic_core_call_view_build(const MinicCoreFunction *,
                                 const MinicCoreInstruction *,
                                 MinicCoreCallView *);
 
-/* The actual Core value/object type. Declared fixed-parameter types are
- * separate: psABI-specific type matching remains with target validation. */
-bool minic_core_call_argument_actual_type(const MinicCoreFunction *,
-                                           const MinicCoreCallArgument *,
-                                           MinicType *);
-/* Core-owned type counterpart, usable by all target ABI plans after their
- * C-type shape readers have migrated. Requires a bound CoreTypeContext. */
+/* The actual value/object type is a CoreType identity, never a parallel
+ * source descriptor. Requires an attached CoreTypeContext. */
 bool minic_core_call_argument_actual_core_type(const MinicCoreFunction *,
                                                const MinicCoreCallArgument *,
                                                MinicCoreTypeId *);
 /* Common checked argument/record identity, all five backend call planners. */
-bool minic_core_call_view_argument_type(const MinicCoreFunction *,
-                                        const MinicCoreCallView *, size_t,
-                                        MinicType *);
 bool minic_core_call_view_argument_core_type(const MinicCoreFunction *,
                                              const MinicCoreCallView *, size_t,
                                              MinicCoreTypeId *);

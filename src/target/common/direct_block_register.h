@@ -74,13 +74,37 @@ static inline bool minic_multi_direct_gp_scalar_consumer(
 }
 }
 
+static inline const MinicCoreType *minic_multi_direct_gp_core_type(
+    const MinicCoreFunction *fn, MinicCoreTypeId id) {
+    return fn != NULL && fn->type_context != NULL
+        ? minic_core_type_get(fn->type_context,
+            minic_core_type_unqualified(fn->type_context, id)) : NULL;
+}
+
+static inline bool minic_multi_direct_gp_scalar_type(
+    const MinicCoreFunction *fn, MinicCoreTypeId id) {
+    const MinicCoreType *type = minic_multi_direct_gp_core_type(fn, id);
+    return type != NULL && (type->kind == MINIC_CORE_TYPE_POINTER ||
+        (type->kind == MINIC_CORE_TYPE_INTEGER && type->has_layout &&
+         type->size != 0U && type->size <= 8U &&
+         type->value.integer.bit_width <= 64U));
+}
+
+static inline bool minic_multi_direct_gp_not_int128(
+    const MinicCoreFunction *fn, MinicCoreTypeId id) {
+    const MinicCoreType *type = minic_multi_direct_gp_core_type(fn, id);
+    return type != NULL && !(type->kind == MINIC_CORE_TYPE_INTEGER &&
+                             type->value.integer.bit_width == 128U);
+}
+
 static inline bool minic_multi_direct_gp_adjacent_chain(
     const MinicCoreFunction *fn,
     const MinicCoreInstruction *producer,
     const MinicCoreInstruction *consumer,
     const size_t *value_use_counts) {
     MinicCoreValueId result;
-    if (fn == NULL || producer == NULL || consumer == NULL ||
+    if (fn == NULL || fn->type_context == NULL || fn->values == NULL ||
+        producer == NULL || consumer == NULL ||
         value_use_counts == NULL ||
         !minic_multi_direct_gp_scalar_producer(producer->kind) ||
         !minic_multi_direct_gp_scalar_consumer(consumer, producer->result))
@@ -88,15 +112,12 @@ static inline bool minic_multi_direct_gp_adjacent_chain(
     result = producer->result;
     return result != MINIC_CORE_VALUE_INVALID &&
            result < fn->value_count && value_use_counts[result] == 1U &&
-           ((minic_type_is_integer(fn->values[result].type) &&
-             !minic_type_is_int128_integer(fn->values[result].type)) ||
-            minic_type_is_pointer(fn->values[result].type)) &&
-           !minic_type_is_int128_integer(producer->type) &&
-           !minic_type_is_int128_integer(consumer->type) &&
+           minic_multi_direct_gp_scalar_type(fn,
+               fn->values[result].core_type_id) &&
+           minic_multi_direct_gp_not_int128(fn, producer->core_type_id) &&
+           minic_multi_direct_gp_not_int128(fn, consumer->core_type_id) &&
            (consumer->kind != MINIC_CORE_INSTRUCTION_INTEGER_CONVERSION ||
-            ((minic_type_is_integer(consumer->type) &&
-              !minic_type_is_int128_integer(consumer->type)) ||
-             minic_type_is_pointer(consumer->type)));
+            minic_multi_direct_gp_scalar_type(fn, consumer->core_type_id));
 }
 
 /* A scalar LOAD or pure integer ALU result followed by its only STORE
@@ -108,8 +129,8 @@ static inline bool minic_multi_direct_gp_adjacent_result_store(
     const MinicCoreInstruction *consumer,
     const size_t *value_use_counts) {
     MinicCoreValueId result;
-    MinicType type;
-    if (fn == NULL || producer == NULL || consumer == NULL ||
+    if (fn == NULL || fn->type_context == NULL || fn->values == NULL ||
+        producer == NULL || consumer == NULL ||
         value_use_counts == NULL ||
         !minic_multi_direct_gp_scalar_producer(producer->kind) ||
         consumer->kind != MINIC_CORE_INSTRUCTION_STORE)
@@ -119,10 +140,8 @@ static inline bool minic_multi_direct_gp_adjacent_result_store(
         value_use_counts[result] != 1U ||
         consumer->value.store.stored_value != result)
         return false;
-    type = fn->values[result].type;
-    return (minic_type_is_integer(type) &&
-            !minic_type_is_int128_integer(type)) ||
-           minic_type_is_pointer(type);
+    return minic_multi_direct_gp_scalar_type(fn,
+               fn->values[result].core_type_id);
 }
 
 static inline bool minic_multi_direct_gp_adjacent_forward(

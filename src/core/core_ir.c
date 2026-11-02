@@ -14,6 +14,14 @@ static size_t core_address_alignment_gcd(size_t base, size_t offset) {
     return base == 0U ? 1U : base;
 }
 
+/* C-ingress compatibility predicate. Frozen IR verifies SCALAR_BITCAST using
+ * CoreTypeId; only the pre-snapshot source builder still takes MinicType. */
+bool minic_core_scalar_bitcast_types_valid(MinicType target_type, MinicType source_type) {
+    return (minic_type_is_pointer(target_type) &&
+            (minic_type_is_pointer(source_type) || minic_type_is_integer(source_type))) ||
+           (minic_type_is_integer(target_type) && minic_type_is_pointer(source_type));
+}
+
 static size_t core_address_known_alignment_visit(
     const MinicCoreFunction *function, MinicCoreValueId address,
     MinicCoreAddressRootAlignment root_alignment, void *context,
@@ -71,7 +79,8 @@ size_t minic_core_address_known_alignment_bounded(
 
 size_t minic_core_function_fold_literal_branches(MinicCoreFunction *function) {
     size_t block_id, count = 0U;
-    if (function == NULL || function->blocks == NULL ||
+    if (function == NULL || function->type_context == NULL ||
+        function->blocks == NULL ||
         (function->value_count != 0U && function->values == NULL) ||
         (function->instruction_count != 0U && function->instructions == NULL))
         return 0U;
@@ -79,6 +88,7 @@ size_t minic_core_function_fold_literal_branches(MinicCoreFunction *function) {
         MinicCoreTerminator *term = &function->blocks[block_id].terminator;
         MinicCoreValueId condition;
         const MinicCoreInstruction *definition;
+        const MinicCoreType *type;
         MinicCoreBlockId selected;
         if (!function->blocks[block_id].has_terminator ||
             term->kind != MINIC_CORE_TERMINATOR_CONDITIONAL_BRANCH)
@@ -88,11 +98,13 @@ size_t minic_core_function_fold_literal_branches(MinicCoreFunction *function) {
             function->values[condition].definition >= function->instruction_count)
             continue;
         definition = &function->instructions[function->values[condition].definition];
+        type = minic_core_type_get(function->type_context,
+            minic_core_type_unqualified(function->type_context,
+                function->values[condition].core_type_id));
         if (definition->kind != MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT ||
             definition->result != condition ||
-            !minic_type_is_integer(function->values[condition].type) ||
-            !minic_type_equal(definition->type,
-                              function->values[condition].type) ||
+            type == NULL || type->kind != MINIC_CORE_TYPE_INTEGER ||
+            definition->core_type_id != function->values[condition].core_type_id ||
             term->conditional.when_true >= function->block_count ||
             term->conditional.when_false >= function->block_count)
             continue;
@@ -1100,6 +1112,155 @@ static bool snapshot_type_array(const MinicCoreTypeContext *context,
     return true;
 }
 
+static bool ingress_storage_valid(const void *items, size_t count, size_t capacity) {
+    return count <= capacity && (capacity == 0U || items != NULL);
+}
+
+static bool ingress_enum_scalar_registered(const MinicCoreFunction *function,
+                                           MinicType type) {
+    MinicType effective;
+    return !minic_type_is_enum(type) ||
+           minic_core_function_effective_integer_type(function, type, &effective);
+}
+
+/* Validate the unsealed source descriptors, enum ingress compatibility table
+ * and storage/index shapes needed for safe translation. Detailed source
+ * semantics belong to the front end/lowerer; opcode, SSA, CFG and execution
+ * type contracts belong to the CoreType-only verifier AFTER attachment.
+ * Deliberately keep this ingress check separate from a C-type opcode verifier. */
+bool minic_core_function_verify_source_ingress(const MinicCoreFunction *function) {
+    size_t i, j;
+
+    if (function == NULL || function->type_context != NULL ||
+        function->name == NULL || function->name_length == 0U ||
+        function->name_length == SIZE_MAX ||
+        (function->parameter_count != 0U && function->parameter_types == NULL) ||
+        function->parameter_count > SIZE_MAX / sizeof(*function->parameter_types) ||
+        !ingress_storage_valid(function->fixed_register_bindings,
+                               function->fixed_register_binding_count,
+                               function->fixed_register_binding_capacity) ||
+        !ingress_storage_valid(function->enum_types, function->enum_type_count,
+                               function->enum_type_capacity) ||
+        !ingress_storage_valid(function->objects, function->object_count,
+                               function->object_capacity) ||
+        !ingress_storage_valid(function->globals, function->global_count,
+                               function->global_capacity) ||
+        !ingress_storage_valid(function->function_symbols,
+                               function->function_symbol_count,
+                               function->function_symbol_capacity) ||
+        !ingress_storage_valid(function->callees, function->callee_count,
+                               function->callee_capacity) ||
+        !ingress_storage_valid(function->call_signatures,
+                               function->call_signature_count,
+                               function->call_signature_capacity) ||
+        !ingress_storage_valid(function->inline_asms, function->inline_asm_count,
+                               function->inline_asm_capacity) ||
+        !ingress_storage_valid(function->call_arguments,
+                               function->call_argument_count,
+                               function->call_argument_capacity) ||
+        !ingress_storage_valid(function->values, function->value_count,
+                               function->value_capacity) ||
+        !ingress_storage_valid(function->instructions,
+                               function->instruction_count,
+                               function->instruction_capacity) ||
+        !ingress_storage_valid(function->blocks, function->block_count,
+                               function->block_capacity) ||
+        function->block_count == 0U || function->entry_block != 0U ||
+        function->value_count >= (size_t)UINT32_MAX ||
+        function->instruction_count >= (size_t)UINT32_MAX ||
+        function->block_count >= (size_t)UINT32_MAX ||
+        function->value_count > function->instruction_count ||
+        !minic_function_calling_convention_valid(function->calling_convention) ||
+        !ingress_enum_scalar_registered(function, function->return_type))
+        return false;
+    for (i = 0U; i < function->parameter_count; ++i)
+        if (!ingress_enum_scalar_registered(function, function->parameter_types[i]))
+            return false;
+    for (i = 0U; i < function->enum_type_count; ++i)
+        if (function->enum_types[i].enum_id == MINIC_ENUM_INVALID ||
+            !minic_type_is_integer(function->enum_types[i].effective_integer_type) ||
+            minic_type_is_enum(function->enum_types[i].effective_integer_type))
+            return false;
+    for (i = 0U; i < function->fixed_register_binding_count; ++i) {
+        const MinicCoreFixedRegisterBinding *binding =
+            &function->fixed_register_bindings[i];
+        if (binding->register_name == NULL || binding->register_name_length == 0U ||
+            (!minic_type_is_integer(binding->type) &&
+             !minic_type_is_pointer(binding->type) &&
+             !minic_type_is_double(binding->type)) ||
+            !ingress_enum_scalar_registered(function, binding->type))
+            return false;
+    }
+    for (i = 0U; i < function->function_symbol_count; ++i)
+        if (function->function_symbols[i].name == NULL ||
+            function->function_symbols[i].name_length == 0U) return false;
+    for (i = 0U; i < function->object_count; ++i)
+        if (function->objects[i].element_count == 0U ||
+            minic_type_is_void(function->objects[i].type) ||
+            minic_type_is_function(function->objects[i].type) ||
+            !ingress_enum_scalar_registered(function, function->objects[i].type))
+            return false;
+    for (i = 0U; i < function->global_count; ++i)
+        if (function->globals[i].name == NULL ||
+            function->globals[i].name_length == 0U ||
+            !minic_core_ir_global_addressable_type(function->globals[i].type) ||
+            !ingress_enum_scalar_registered(function, function->globals[i].type))
+            return false;
+    for (i = 0U; i < function->callee_count; ++i)
+        if (function->callees[i].name == NULL ||
+            (function->callees[i].parameter_count != 0U &&
+             function->callees[i].parameter_types == NULL) ||
+            function->callees[i].parameter_count >
+                SIZE_MAX / sizeof(*function->callees[i].parameter_types) ||
+            !minic_function_calling_convention_valid(function->callees[i].calling_convention) ||
+            !minic_core_ir_direct_call_return_type(function->callees[i].return_type) ||
+            !ingress_enum_scalar_registered(function, function->callees[i].return_type))
+            return false;
+    for (i = 0U; i < function->callee_count; ++i)
+        for (j = 0U; j < function->callees[i].parameter_count; ++j)
+            if (!minic_core_ir_call_parameter_type(function->callees[i].parameter_types[j]) ||
+                !ingress_enum_scalar_registered(function, function->callees[i].parameter_types[j]))
+                return false;
+    for (i = 0U; i < function->call_signature_count; ++i)
+        if ((function->call_signatures[i].parameter_count != 0U &&
+             function->call_signatures[i].parameter_types == NULL) ||
+            function->call_signatures[i].parameter_count >
+                SIZE_MAX / sizeof(*function->call_signatures[i].parameter_types) ||
+            function->call_signatures[i].function_type_id == MINIC_FUNCTION_TYPE_INVALID ||
+            !minic_function_calling_convention_valid(
+                function->call_signatures[i].calling_convention) ||
+            !minic_core_ir_direct_call_return_type(function->call_signatures[i].return_type) ||
+            !ingress_enum_scalar_registered(function, function->call_signatures[i].return_type))
+            return false;
+    for (i = 0U; i < function->call_signature_count; ++i)
+        for (j = 0U; j < function->call_signatures[i].parameter_count; ++j)
+            if (!minic_core_ir_call_parameter_type(
+                    function->call_signatures[i].parameter_types[j]) ||
+                !ingress_enum_scalar_registered(
+                    function, function->call_signatures[i].parameter_types[j]))
+                return false;
+    for (i = 0U; i < function->value_count; ++i)
+        if (function->values[i].definition >= function->instruction_count ||
+            !ingress_enum_scalar_registered(function, function->values[i].type))
+            return false;
+    for (i = 0U; i < function->instruction_count; ++i)
+        if ((unsigned int)function->instructions[i].kind >=
+                MINIC_CORE_INSTRUCTION_KIND_COUNT ||
+            (function->instructions[i].result != MINIC_CORE_VALUE_INVALID &&
+             function->instructions[i].result >= function->value_count) ||
+            !ingress_enum_scalar_registered(function, function->instructions[i].type))
+            return false;
+    for (i = 0U; i < function->block_count; ++i) {
+        const MinicCoreBlock *block = &function->blocks[i];
+        if (!ingress_storage_valid(block->instructions, block->instruction_count,
+                                   block->instruction_capacity) ||
+            !block->has_terminator) return false;
+        for (j = 0U; j < block->instruction_count; ++j)
+            if (block->instructions[j] >= function->instruction_count) return false;
+    }
+    return true;
+}
+
 bool minic_core_function_snapshot_types(MinicCoreFunction *function,
                                         const MinicCoreTypeContext *context,
                                         MinicCoreTypeSnapshotResolver resolver,
@@ -1107,7 +1268,8 @@ bool minic_core_function_snapshot_types(MinicCoreFunction *function,
     size_t index;
 
     if (function == NULL || context == NULL || resolver == NULL ||
-        function->type_context != NULL || !minic_core_function_verify(function))
+        function->type_context != NULL ||
+        !minic_core_function_verify_source_ingress(function))
         return false;
     /* This cleanup is deliberately idempotent. It also permits a caller to
      * retry with a fresh importer after an earlier failed translation. */
@@ -1144,9 +1306,7 @@ bool minic_core_function_snapshot_types(MinicCoreFunction *function,
         MinicCoreCallSignature *signature = &function->call_signatures[index];
         /* C's declaration-table ID lives only in this migration adapter.
          * The resulting Core FUNCTION ID is an executable call contract. */
-        MinicType source_function = {0};
-        source_function.base_kind = MINIC_TYPE_BASE_FUNCTION;
-        source_function.function_type_id = signature->function_type_id;
+        const MinicType source_function = minic_type_function(signature->function_type_id);
         if (!snapshot_one_type(context, resolver, user_data, source_function,
                                &signature->core_function_type_id) ||
             !snapshot_one_type(context, resolver, user_data, signature->return_type,
@@ -1177,12 +1337,23 @@ bool minic_core_function_snapshot_types(MinicCoreFunction *function,
         if (!snapshot_one_type(context, resolver, user_data, instruction->type,
                                &instruction->core_type_id)) goto failed;
         if (instruction->kind == MINIC_CORE_INSTRUCTION_FIELD_ADDRESS) {
-            MinicType source_record = {0};
-            source_record.base_kind = MINIC_TYPE_BASE_RECORD;
-            source_record.record_id = instruction->value.field_address.record_id;
-            if (!snapshot_one_type(context, resolver, user_data, source_record,
-                                   &instruction->value.field_address.core_record_type_id))
+            const MinicCoreType *pointer, *record;
+            const MinicCoreValueId base = instruction->value.field_address.base;
+            MinicCoreTypeId pointer_id, record_id;
+            if (base >= function->value_count) goto failed;
+            pointer_id = minic_core_type_unqualified(
+                context, function->values[base].core_type_id);
+            pointer = minic_core_type_get(context, pointer_id);
+            if (pointer == NULL || pointer->kind != MINIC_CORE_TYPE_POINTER)
                 goto failed;
+            record_id = minic_core_type_unqualified(context, pointer->value.pointer.pointee);
+            record = minic_core_type_get(context, record_id);
+            if (record == NULL || record->kind != MINIC_CORE_TYPE_RECORD)
+                goto failed;
+            /* The lowerer already checked the source nominal record ID.
+             * After import the base pointer owns that identity; no C
+             * RecordId needs to cross the Core boundary. */
+            instruction->value.field_address.core_record_type_id = record_id;
         }
     }
     if (minic_core_function_attach_type_context(function, context)) return true;
@@ -1196,7 +1367,8 @@ bool minic_core_function_attach_type_context(MinicCoreFunction *function,
     if (function == NULL || context == NULL || function->type_context != NULL)
         return false;
     function->type_context = context;
-    if (minic_core_function_verify_core_type_snapshot(function)) return true;
+    if (minic_core_function_verify_core_type_snapshot(function) &&
+        minic_core_function_verify(function)) return true;
     function->type_context = NULL;
     return false;
 }

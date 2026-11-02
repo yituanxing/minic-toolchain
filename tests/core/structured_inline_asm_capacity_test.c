@@ -1,4 +1,5 @@
 #include "core/core_lower_asm_internal.h"
+#include "core/core_ir_internal.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -37,6 +38,9 @@ static bool must_reject(MinicInlineAsm *source, const char *raw) {
 
 static bool verify_core_roles(size_t count, bool corrupt_index, bool expected) {
     MinicCoreFunction function;
+    MinicCoreTypeContext context;
+    MinicCoreType type = {0};
+    MinicCoreTypeId integer_type, void_type;
     MinicCoreInstruction integer;
     MinicCoreInstruction asm_effect;
     MinicCoreTerminator terminator;
@@ -47,6 +51,23 @@ static bool verify_core_roles(size_t count, bool corrupt_index, bool expected) {
     bool initialized;
     bool verified = false;
 
+    minic_core_type_context_initialize(&context);
+    type.kind = MINIC_CORE_TYPE_INTEGER;
+    type.has_layout = true;
+    type.size = 4U;
+    type.alignment = 4U;
+    type.value.integer.bit_width = 32U;
+    type.value.integer.is_signed = true;
+    if (!minic_core_type_register(&context, &type, &integer_type)) {
+        minic_core_type_context_destroy(&context);
+        return false;
+    }
+    (void)memset(&type, 0, sizeof(type));
+    type.kind = MINIC_CORE_TYPE_VOID;
+    if (!minic_core_type_register(&context, &type, &void_type)) {
+        minic_core_type_context_destroy(&context);
+        return false;
+    }
     minic_core_function_initialize(&function);
     (void)memset(&integer, 0, sizeof(integer));
     (void)memset(&asm_effect, 0, sizeof(asm_effect));
@@ -87,9 +108,16 @@ static bool verify_core_roles(size_t count, bool corrupt_index, bool expected) {
                       minic_core_function_set_terminator(
                           &function, block, &terminator);
     }
-    if (initialized)
-        verified = minic_core_function_verify(&function);
+    if (initialized) {
+        function.core_return_type_id = void_type;
+        function.values[0].core_type_id = integer_type;
+        function.instructions[0].core_type_id = integer_type;
+        function.instructions[1].core_type_id = void_type;
+        verified = minic_core_function_attach_type_context(&function, &context) &&
+                   minic_core_function_verify(&function);
+    }
     minic_core_function_destroy(&function);
+    minic_core_type_context_destroy(&context);
     return initialized && verified == expected;
 }
 

@@ -19,18 +19,9 @@ typedef enum X86AbiCoreClass {
 } X86AbiCoreClass;
 
 static X86AbiCoreClass x86_plan_class(const MinicCoreFunction *fn,
-                                     MinicCoreTypeId core_id,
-                                     MinicType legacy_type) {
+                                     MinicCoreTypeId core_id) {
     const MinicCoreType *type;
-    if (fn == NULL || fn->type_context == NULL) {
-        if (minic_type_is_record(legacy_type)) return X86_ABI_CLASS_RECORD;
-        if (minic_type_is_float(legacy_type)) return X86_ABI_CLASS_FLOAT;
-        if (minic_type_is_double(legacy_type)) return X86_ABI_CLASS_DOUBLE;
-        if (minic_type_is_long_double(legacy_type)) return X86_ABI_CLASS_LONG_DOUBLE;
-        if (minic_type_is_int128_integer(legacy_type)) return X86_ABI_CLASS_INT128;
-        if (minic_type_is_void(legacy_type)) return X86_ABI_CLASS_VOID;
-        return X86_ABI_CLASS_SCALAR;
-    }
+    if (fn == NULL || fn->type_context == NULL) return X86_ABI_CLASS_INVALID;
     core_id = minic_core_type_unqualified(fn->type_context, core_id);
     type = minic_core_type_get(fn->type_context, core_id);
     if (type == NULL ||
@@ -61,60 +52,46 @@ static X86AbiCoreClass x86_plan_class(const MinicCoreFunction *fn,
     }
 }
 
-static bool x86_plan_scalar_width(const MinicC0Program *program,
-                                  const MinicTargetInfo *target,
-                                  const MinicCoreFunction *fn,
-                                  MinicCoreTypeId id, MinicType type,
+static bool x86_plan_scalar_width(const MinicCoreFunction *fn,
+                                  MinicCoreTypeId id,
                                   size_t *bytes, bool *sign) {
-    return fn != NULL && fn->type_context != NULL
-        ? minic_x86_64_core_scalar_width(fn->type_context, id, bytes, sign)
-        : minic_x86_64_scalar_width(program, target, type, bytes, sign);
+    return fn != NULL && fn->type_context != NULL &&
+           minic_x86_64_core_scalar_width(fn->type_context, id, bytes, sign);
 }
 
-static bool x86_plan_one_gp_record(const MinicC0Program *program,
-                                   const MinicTargetInfo *target,
-                                   const MinicCoreFunction *fn,
-                                   MinicCoreTypeId id, MinicType type,
+static bool x86_plan_one_gp_record(const MinicCoreFunction *fn,
+                                   MinicCoreTypeId id,
                                    size_t *bytes) {
-    return fn != NULL && fn->type_context != NULL
-        ? minic_x86_64_core_one_gp_record(fn->type_context, id, bytes)
-        : minic_x86_64_one_gp_record(program, target, type, bytes);
+    return fn != NULL && fn->type_context != NULL &&
+           minic_x86_64_core_one_gp_record(fn->type_context, id, bytes);
 }
 
-static bool x86_plan_two_gp_record(const MinicC0Program *program,
-                                   const MinicTargetInfo *target,
-                                   const MinicCoreFunction *fn,
-                                   MinicCoreTypeId id, MinicType type) {
-    return fn != NULL && fn->type_context != NULL
-        ? minic_x86_64_core_two_gp_record(fn->type_context, id)
-        : minic_x86_64_two_gp_record(program, target, type);
+static bool x86_plan_two_gp_record(const MinicCoreFunction *fn,
+                                   MinicCoreTypeId id) {
+    return fn != NULL && fn->type_context != NULL &&
+           minic_x86_64_core_two_gp_record(fn->type_context, id);
 }
 
-static bool x86_plan_memory_result_record(const MinicC0Program *program,
-                                          const MinicTargetInfo *target,
-                                          const MinicCoreFunction *fn,
-                                          MinicCoreTypeId id, MinicType type,
+static bool x86_plan_memory_result_record(const MinicCoreFunction *fn,
+                                          MinicCoreTypeId id,
                                           size_t *bytes) {
-    return fn != NULL && fn->type_context != NULL
-        ? minic_x86_64_core_memory_result_record(fn->type_context, id, bytes)
-        : minic_x86_64_memory_result_record(program, target, type, bytes);
+    return fn != NULL && fn->type_context != NULL &&
+           minic_x86_64_core_memory_result_record(fn->type_context, id, bytes);
 }
 
 /* One ABI classifier for both incoming and outgoing SysV argument streams.
  * A two-GPR record is indivisible: both registers or both stack slots.
  * x87 long double starts on an even eightbyte stack index. */
-static bool x86_sysv_place(const MinicC0Program *program,
-                          const MinicTargetInfo *target,
-                          const MinicCoreFunction *fn,
-                          MinicCoreTypeId core_id, MinicType type,
+static bool x86_sysv_place(const MinicCoreFunction *fn,
+                          MinicCoreTypeId core_id,
                           MinicX86ArgCursor *cursor, MinicX86ArgLocation *loc) {
     const MinicX86AbiRegisters *abi = minic_x86_64_abi_registers(
         MINIC_CALLING_CONVENTION_DEFAULT);
     size_t bytes;
     bool sign;
-    const X86AbiCoreClass type_class = x86_plan_class(fn, core_id, type);
-    if (abi == NULL || abi->gp_argument_count < 2U || program == NULL ||
-        target == NULL || cursor == NULL || loc == NULL ||
+    const X86AbiCoreClass type_class = x86_plan_class(fn, core_id);
+    if (abi == NULL || abi->gp_argument_count < 2U ||
+        cursor == NULL || loc == NULL ||
         type_class == X86_ABI_CLASS_INVALID || type_class == X86_ABI_CLASS_VOID)
         return false;
     (void)memset(loc, 0, sizeof(*loc));
@@ -122,23 +99,22 @@ static bool x86_sysv_place(const MinicC0Program *program,
     loc->fp_index = cursor->fp_used;
     loc->stack_index = cursor->stack_slots;
     if (type_class == X86_ABI_CLASS_RECORD) {
-        if (x86_plan_one_gp_record(program, target, fn, core_id, type, &bytes)) {
+        if (x86_plan_one_gp_record(fn, core_id, &bytes)) {
             loc->kind = MINIC_X86_ARG_RECORD_ONE_GP;
             loc->record_bytes = bytes;
             if (cursor->gp_used < abi->gp_argument_count) ++cursor->gp_used;
             else { loc->on_stack = true; ++cursor->stack_slots; }
-        } else if (x86_plan_two_gp_record(program, target, fn, core_id, type)) {
+        } else if (x86_plan_two_gp_record(fn, core_id)) {
             loc->kind = MINIC_X86_ARG_RECORD_TWO_GP;
             /* The second eightbyte may be a 1..8-byte object tail.
              * Preserve its exact extent for safe native transport. */
-            if (fn != NULL && fn->type_context != NULL) {
+            {
                 const MinicCoreType *resolved = minic_core_type_get(
                     fn->type_context,
                     minic_core_type_unqualified(fn->type_context, core_id));
                 if (resolved == NULL || !resolved->has_layout) return false;
                 loc->record_bytes = resolved->size;
-            } else if (!minic_data_layout_type(target->data_layout, program, type,
-                                               &loc->record_bytes, &bytes)) return false;
+            }
             if (loc->record_bytes < 9U || loc->record_bytes > 16U) return false;
             if (cursor->gp_used <= abi->gp_argument_count - 2U)
                 cursor->gp_used += 2U;
@@ -150,7 +126,7 @@ static bool x86_sysv_place(const MinicC0Program *program,
             size_t alignment = 0U;
             bool has_layout;
             bytes = 0U;
-            if (fn != NULL && fn->type_context != NULL) {
+            {
                 const MinicCoreType *resolved_record = minic_core_type_get(
                     fn->type_context,
                     minic_core_type_unqualified(fn->type_context, core_id));
@@ -170,24 +146,14 @@ static bool x86_sysv_place(const MinicC0Program *program,
                     loc->kind = MINIC_X86_ARG_RECORD_EMPTY;
                     return true;
                 }
-            } else {
-                const MinicRecord *record = minic_c0_program_record(
-                    program, type.record_id);
-                has_layout = minic_data_layout_type(
-                    target->data_layout, program, type, &bytes, &alignment);
-                if (has_layout && bytes == 0U && record != NULL &&
-                    record->is_complete && record->field_count == 0U) {
-                    loc->kind = MINIC_X86_ARG_RECORD_EMPTY;
-                    return true;
-                }
             }
             if (!has_layout || bytes <= 16U || bytes > 4096U ||
                 alignment == 0U || alignment > 16U) {
                 if (getenv("MINIC_M1_TRACE") != NULL)
                     (void)fprintf(stderr,
-                        "MINIC_X86_ARG_RECORD_CLASS_REJECT record=%zu "
+                        "MINIC_X86_ARG_RECORD_CLASS_REJECT core_type=%zu "
                         "bytes=%zu align=%zu\n",
-                        (size_t)type.record_id, bytes, alignment);
+                        (size_t)core_id, bytes, alignment);
                 return false;
             }
             loc->kind = MINIC_X86_ARG_RECORD_MEMORY;
@@ -227,8 +193,7 @@ static bool x86_sysv_place(const MinicC0Program *program,
             cursor->stack_slots += 2U;
         }
     } else {
-        if (!x86_plan_scalar_width(program, target, fn, core_id,
-                                   type, &bytes, &sign))
+        if (!x86_plan_scalar_width(fn, core_id, &bytes, &sign))
             return false;
         loc->kind = MINIC_X86_ARG_INTEGER;
         if (cursor->gp_used < abi->gp_argument_count) ++cursor->gp_used;
@@ -241,17 +206,15 @@ static bool x86_sysv_place(const MinicC0Program *program,
  * arguments. Stack arguments start after the compulsory 32-byte home area;
  * carrying their source position as stack_index makes position four land at
  * 32(%rsp) on calls and at 48(%rbp) on function entry. */
-static bool x86_ms_x64_place(const MinicC0Program *program,
-                            const MinicTargetInfo *target,
-                            const MinicCoreFunction *fn,
-                            MinicCoreTypeId core_id, MinicType type,
+static bool x86_ms_x64_place(const MinicCoreFunction *fn,
+                            MinicCoreTypeId core_id,
                             size_t position, MinicX86ArgLocation *loc) {
     const MinicX86AbiRegisters *abi = minic_x86_64_abi_registers(
         MINIC_CALLING_CONVENTION_MS_X64);
     size_t bytes;
     bool sign;
-    const X86AbiCoreClass type_class = x86_plan_class(fn, core_id, type);
-    if (abi == NULL || program == NULL || target == NULL || loc == NULL ||
+    const X86AbiCoreClass type_class = x86_plan_class(fn, core_id);
+    if (abi == NULL || loc == NULL ||
         position > ((size_t)INT32_MAX - 16U) / 8U ||
         type_class == X86_ABI_CLASS_INVALID ||
         type_class == X86_ABI_CLASS_VOID ||
@@ -268,25 +231,21 @@ static bool x86_ms_x64_place(const MinicC0Program *program,
         loc->kind = MINIC_X86_ARG_SSE;
         return true;
     }
-    if (!x86_plan_scalar_width(program, target, fn, core_id,
-                               type, &bytes, &sign))
+    if (!x86_plan_scalar_width(fn, core_id, &bytes, &sign))
         return false;
     loc->kind = MINIC_X86_ARG_INTEGER;
     return true;
 }
 
-static bool x86_ms_x64_scalar_return(const MinicC0Program *program,
-                                    const MinicTargetInfo *target,
-                                    const MinicCoreFunction *fn,
-                                    MinicCoreTypeId core_id, MinicType type) {
+static bool x86_ms_x64_scalar_return(const MinicCoreFunction *fn,
+                                    MinicCoreTypeId core_id) {
     size_t bytes;
     bool sign;
-    const X86AbiCoreClass cls = x86_plan_class(fn, core_id, type);
+    const X86AbiCoreClass cls = x86_plan_class(fn, core_id);
     return cls == X86_ABI_CLASS_VOID || cls == X86_ABI_CLASS_FLOAT ||
            cls == X86_ABI_CLASS_DOUBLE ||
            (cls == X86_ABI_CLASS_SCALAR &&
-            x86_plan_scalar_width(program, target, fn, core_id,
-                                  type, &bytes, &sign));
+            x86_plan_scalar_width(fn, core_id, &bytes, &sign));
 }
 
 static bool x86_sysv_plan_alloc(size_t count, MinicX86ArgumentPlan *plan) {
@@ -307,26 +266,21 @@ bool minic_x86_64_plan_incoming_arguments(
     const MinicCoreFunction *fn, MinicX86ArgumentPlan *plan) {
     MinicX86ArgCursor cursor = {0};
     size_t i;
-    if (program == NULL || target == NULL || fn == NULL || plan == NULL ||
+    if (program == NULL || target == NULL || fn == NULL ||
+        fn->type_context == NULL || plan == NULL ||
         !minic_function_calling_convention_valid(fn->calling_convention) ||
         (fn->parameter_count != 0U &&
-         (fn->parameter_types == NULL ||
-          (fn->type_context != NULL && fn->core_parameter_type_ids == NULL))) ||
+         fn->core_parameter_type_ids == NULL) ||
         !x86_sysv_plan_alloc(fn->parameter_count, plan)) return false;
     plan->calling_convention = fn->calling_convention;
     if (fn->calling_convention == MINIC_CALLING_CONVENTION_MS_X64) {
         const MinicX86AbiRegisters *abi = minic_x86_64_abi_registers(
             MINIC_CALLING_CONVENTION_MS_X64);
         if (abi == NULL) goto failed;
-        if (!x86_ms_x64_scalar_return(program, target, fn,
-                                     fn->core_return_type_id, fn->return_type))
+        if (!x86_ms_x64_scalar_return(fn, fn->core_return_type_id))
             goto failed;
         for (i = 0U; i < fn->parameter_count; ++i)
-            if (!x86_ms_x64_place(program, target, fn,
-                                  fn->type_context != NULL ?
-                                      fn->core_parameter_type_ids[i]
-                                    : MINIC_CORE_TYPE_INVALID,
-                                  fn->parameter_types[i], i,
+            if (!x86_ms_x64_place(fn, fn->core_parameter_type_ids[i], i,
                                   &plan->locations[i])) goto failed;
         if (fn->parameter_count > abi->gp_argument_count)
             cursor.stack_slots = fn->parameter_count - abi->gp_argument_count;
@@ -335,17 +289,12 @@ bool minic_x86_64_plan_incoming_arguments(
     }
     {
         size_t result_bytes;
-        if (x86_plan_memory_result_record(program, target, fn,
-                                          fn->core_return_type_id,
-                                          fn->return_type, &result_bytes))
+        if (x86_plan_memory_result_record(fn, fn->core_return_type_id,
+                                          &result_bytes))
             cursor.gp_used = 1U;
     }
     for (i = 0U; i < fn->parameter_count; ++i)
-        if (!x86_sysv_place(program, target, fn,
-                            fn->type_context != NULL ?
-                                fn->core_parameter_type_ids[i]
-                              : MINIC_CORE_TYPE_INVALID,
-                            fn->parameter_types[i], &cursor,
+        if (!x86_sysv_place(fn, fn->core_parameter_type_ids[i], &cursor,
                             &plan->locations[i])) goto failed;
     plan->end = cursor;
     return true;
@@ -361,12 +310,12 @@ bool minic_x86_64_plan_outgoing_arguments(
     MinicX86ArgCursor cursor = {0};
     size_t i, bytes;
     if (program == NULL || target == NULL || fn == NULL ||
+        fn->type_context == NULL ||
         view == NULL || plan == NULL ||
         view->parameter_count > view->argument_count ||
         (view->argument_count != 0U && view->arguments == NULL) ||
         (view->parameter_count != 0U &&
-         (view->parameter_types == NULL ||
-          (fn->type_context != NULL && view->core_parameter_type_ids == NULL))) ||
+         view->core_parameter_type_ids == NULL) ||
         !minic_function_calling_convention_valid(view->calling_convention) ||
         !x86_sysv_plan_alloc(view->argument_count, plan)) return false;
     plan->calling_convention = view->calling_convention;
@@ -378,28 +327,19 @@ bool minic_x86_64_plan_outgoing_arguments(
          * integer/FP cursors. Every call, including zero-arg, reserves 32B
          * home space. Slots 4+ occupy the stack above that home space. */
         if (abi == NULL || view->is_variadic ||
-            !x86_ms_x64_scalar_return(program, target, fn,
-                                     view->core_return_type_id,
-                                     view->return_type) ||
+            !x86_ms_x64_scalar_return(fn, view->core_return_type_id) ||
             (view->argument_count > ((size_t)INT32_MAX - 47U) / 8U))
             goto failed;
         plan->is_variadic = false;
         for (i = 0U; i < view->argument_count; ++i) {
-            MinicType type = {0};
             MinicCoreTypeId core_type = MINIC_CORE_TYPE_INVALID;
-            if (fn->type_context != NULL) {
-                if (!minic_core_call_view_argument_core_type(
-                        fn, view, i, &core_type)) goto failed;
-            } else if (!minic_core_call_view_argument_type(fn, view, i, &type))
+            if (!minic_core_call_view_argument_core_type(
+                    fn, view, i, &core_type))
                 goto failed;
             if (i < view->parameter_count) {
-                core_type = fn->type_context != NULL
-                                ? view->core_parameter_type_ids[i]
-                                : MINIC_CORE_TYPE_INVALID;
-                if (fn->type_context == NULL) type = view->parameter_types[i];
+                core_type = view->core_parameter_type_ids[i];
             }
-            if (!x86_ms_x64_place(program, target, fn, core_type,
-                                  type, i, &plan->locations[i]))
+            if (!x86_ms_x64_place(fn, core_type, i, &plan->locations[i]))
                 goto failed;
         }
         if (view->argument_count > abi->gp_argument_count)
@@ -412,29 +352,22 @@ bool minic_x86_64_plan_outgoing_arguments(
     {
         size_t result_bytes;
         if (view->return_form == MINIC_CORE_CALL_RETURN_OBJECT &&
-            x86_plan_memory_result_record(program, target, fn,
-                                          view->core_return_type_id,
-                                          view->return_type, &result_bytes))
+            x86_plan_memory_result_record(fn, view->core_return_type_id,
+                                          &result_bytes))
             cursor.gp_used = 1U;
     }
     plan->is_variadic = view->is_variadic;
     for (i = 0U; i < view->argument_count; ++i) {
-        MinicType type = {0};
         MinicCoreTypeId core_type = MINIC_CORE_TYPE_INVALID;
-        if (fn->type_context != NULL) {
-            if (!minic_core_call_view_argument_core_type(
-                    fn, view, i, &core_type)) goto failed;
-        } else if (!minic_core_call_view_argument_type(fn, view, i, &type))
+        if (!minic_core_call_view_argument_core_type(
+                fn, view, i, &core_type))
             goto failed;
         /* SysV placement intentionally uses the fixed declared type.
          * Shared Core checks already enforce aggregate identity. */
         if (i < view->parameter_count) {
-            if (fn->type_context != NULL)
-                core_type = view->core_parameter_type_ids[i];
-            else type = view->parameter_types[i];
+            core_type = view->core_parameter_type_ids[i];
         }
-        if (!x86_sysv_place(program, target, fn, core_type, type,
-                            &cursor, &plan->locations[i]))
+        if (!x86_sysv_place(fn, core_type, &cursor, &plan->locations[i]))
             goto failed;
     }
     bytes = cursor.stack_slots * 8U;

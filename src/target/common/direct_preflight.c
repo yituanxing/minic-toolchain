@@ -18,7 +18,7 @@ static bool direct_lp64_only_structured_asm(
     bool *used;
     size_t i, count = 0U;
     bool accepted = false;
-    if (!fn) return false;
+    if (!fn || fn->type_context == NULL) return false;
     if (fn->inline_asm_count == 0U) return true;
     if (fn->inline_asms == NULL ||
         (fn->instruction_count != 0U && fn->instructions == NULL) ||
@@ -34,10 +34,8 @@ static bool direct_lp64_only_structured_asm(
                 fn->inline_asms[id].is_goto ||
                 fn->inline_asms[id].template_text == NULL ||
                 ins->result != MINIC_CORE_VALUE_INVALID ||
-                !(fn->type_context != NULL
-                      ? minic_lp64_core_kind(fn->type_context, ins->core_type_id,
-                                             MINIC_CORE_TYPE_VOID)
-                      : minic_type_is_void(ins->type)))
+                !minic_lp64_core_kind(fn->type_context, ins->core_type_id,
+                                      MINIC_CORE_TYPE_VOID))
                 goto done;
             used[id] = true;
             ++count;
@@ -46,10 +44,8 @@ static bool direct_lp64_only_structured_asm(
             if (qualify_opaque_asm == NULL ||
                 id >= fn->inline_asm_count || used[id] ||
                 ins->result != MINIC_CORE_VALUE_INVALID ||
-                !(fn->type_context != NULL
-                      ? minic_lp64_core_kind(fn->type_context, ins->core_type_id,
-                                             MINIC_CORE_TYPE_VOID)
-                      : minic_type_is_void(ins->type)) ||
+                !minic_lp64_core_kind(fn->type_context, ins->core_type_id,
+                                      MINIC_CORE_TYPE_VOID) ||
                 !qualify_opaque_asm(&fn->inline_asms[id]))
                 goto done;
             used[id] = true;
@@ -121,14 +117,13 @@ bool minic_multi_direct_lp64_function_preflight(
     bool verified;
     bool return_valid;
     if (program == NULL || target == NULL || decl == NULL || fn == NULL ||
+        fn->type_context == NULL ||
         arch == NULL || !minic_direct_lp64_abi_policy_valid(abi)) return false;
     verified = minic_core_function_facts_verified(facts, fn) ||
                minic_core_function_verify(fn);
-    return_valid = fn->type_context != NULL
-        ? minic_lp64_core_valid_return_with_indirect(
-              fn->type_context, fn->core_return_type_id, abi->core_indirect_return)
-        : minic_lp64_valid_return_with_indirect(
-              program, target, fn->return_type, indirect_return);
+    return_valid = minic_lp64_core_valid_return_with_indirect(
+        fn->type_context, fn->core_return_type_id, abi->core_indirect_return);
+    (void)indirect_return;
     /* Collect the ENTIRE admission error class for each failed function.
      * This is not a feature gate or permissive fallback: all original
      * policy checks below stay intact. The 3x7 GNU corpus aggregates
@@ -202,7 +197,9 @@ bool minic_multi_direct_lp64_cfg_preflight(
     const MinicDirectLP64AbiPolicy *abi) {
     size_t i;
     if (program == NULL || target == NULL || fn == NULL ||
+        fn->type_context == NULL ||
         failed_block == NULL || !minic_direct_lp64_abi_policy_valid(abi)) return false;
+    (void)indirect_return;
     *failed_block = SIZE_MAX;
     /* M2: verify every CFG successor and return before emitting anything.
      * A function's SSA values and local objects retain unique stack slots
@@ -216,45 +213,27 @@ bool minic_multi_direct_lp64_cfg_preflight(
          * machine-supported return modes and condition widths. */
         switch (term->kind) {
         case MINIC_CORE_TERMINATOR_RETURN:
-            if (fn->type_context != NULL
-                    ? minic_lp64_core_kind(fn->type_context,
-                          fn->core_return_type_id, MINIC_CORE_TYPE_RECORD)
-                    : minic_type_is_record(fn->return_type)) {
+            if (minic_lp64_core_kind(fn->type_context,
+                    fn->core_return_type_id, MINIC_CORE_TYPE_RECORD)) {
                 size_t bytes, slots, fp_elements, fp_width;
-                MinicType object_type;
                 size_t indirect_bytes = 0U;
                 const MinicCoreTypeContext *types = fn->type_context;
-                if ((!(types != NULL
-                           ? minic_multi_empty_record_core(types, fn->core_return_type_id)
-                           : minic_multi_empty_record(program, target, fn->return_type)) &&
-                     !(types != NULL
-                           ? minic_multi_gp_record_core(types, fn->core_return_type_id,
-                                                         &bytes, &slots)
-                           : minic_multi_gp_record(program, target, fn->return_type,
-                                                    &bytes, &slots)) &&
-                     !(types != NULL
-                           ? minic_multi_fp_return_record_core(types, fn->core_return_type_id,
-                                    &fp_elements, &fp_width)
-                           : minic_multi_fp_return_record(program, target,
-                                    fn->return_type, &fp_elements, &fp_width)) &&
-                     !(indirect_return != NULL &&
-                       (types != NULL
-                            ? abi->core_indirect_return != NULL &&
-                              abi->core_indirect_return(types, fn->core_return_type_id,
-                                                         &indirect_bytes)
-                            : indirect_return(program, target, fn->return_type,
-                                              &indirect_bytes)) &&
+                if ((!minic_multi_empty_record_core(types, fn->core_return_type_id) &&
+                     !minic_multi_gp_record_core(types, fn->core_return_type_id,
+                                                 &bytes, &slots) &&
+                     !minic_multi_fp_return_record_core(types, fn->core_return_type_id,
+                                                        &fp_elements, &fp_width) &&
+                     !(abi->core_indirect_return != NULL &&
+                       abi->core_indirect_return(types, fn->core_return_type_id,
+                                                 &indirect_bytes) &&
                        indirect_bytes > 16U)) ||
                     term->return_value != MINIC_CORE_VALUE_INVALID ||
                     term->return_object >= fn->object_count ||
+                    fn->objects == NULL ||
                     fn->objects[term->return_object].element_count != 1U ||
-                    !(types != NULL
-                        ? minic_core_type_unqualified(types,
-                            fn->objects[term->return_object].core_type_id) ==
-                          minic_core_type_unqualified(types, fn->core_return_type_id)
-                        : minic_type_unqualified(
-                            fn->objects[term->return_object].type, &object_type) &&
-                          minic_type_equal(object_type, fn->return_type)))
+                    minic_core_type_unqualified(types,
+                            fn->objects[term->return_object].core_type_id) !=
+                        minic_core_type_unqualified(types, fn->core_return_type_id))
                     return false;
             } else if (term->return_object != MINIC_CORE_OBJECT_INVALID) {
                 return false;
@@ -274,17 +253,11 @@ bool minic_multi_direct_lp64_cfg_preflight(
             /* A Core condition can be an original C narrow integer:
              * cJSON's input-byte loop tests unsigned char directly.
              * The branch emission zero-tests the low 32-bit SSA slot. */
-            if (!(fn->type_context != NULL
-                      ? minic_lp64_core_integer_width(fn->type_context,
-                            fn->values[term->conditional.condition].core_type_id,
-                            &condition_width, &condition_signed)
-                      : minic_lp64_valid_int_or_bool(
-                            fn->values[term->conditional.condition].type) ||
-                        minic_lp64_register64_type(program, target,
-                            fn->values[term->conditional.condition].type) ||
-                        minic_lp64_scalar_integer_width(program, target,
-                            fn->values[term->conditional.condition].type,
-                            &condition_width, &condition_signed)))
+            if (term->conditional.condition >= fn->value_count ||
+                fn->values == NULL ||
+                !minic_lp64_core_integer_width(fn->type_context,
+                    fn->values[term->conditional.condition].core_type_id,
+                    &condition_width, &condition_signed))
                 return false;
             break;
         }

@@ -53,7 +53,7 @@ static bool core_instruction_supported(const MinicC0Program *program,
         return true;
     switch (instruction->kind) {
     case MINIC_CORE_INSTRUCTION_CALL_FRAME_ADDRESS:
-        return minic_riscv64_core_call_frame_address_supported(instruction);
+        return minic_riscv64_core_call_frame_address_supported(function, instruction);
     case MINIC_CORE_INSTRUCTION_DYNAMIC_STACK_ALLOC:
         /* Pointer result and unsigned-long operand were checked by the
          * canonical Core verifier before entering target admission. */
@@ -176,13 +176,26 @@ static bool core_function_can_emit_with_index(
     /* Only the verified immutable function and Common's sorted CALL views
      * reach this routine. ABI and ISA capability remain RV64-owned. */
     if (program == NULL) {
-        if (!minic_type_is_void(function->return_type) &&
-            !minic_riscv64_scalar_type(function->return_type)) {
-            return core_rv64_capability_reject(function, "legacy-return", 0U, -1);
-        }
-        for (index = 0U; index < function->parameter_count; ++index) {
-            if (!minic_riscv64_scalar_type(function->parameter_types[index])) {
-                return core_rv64_capability_reject(function, "legacy-parameter", index, -1);
+        if (function->type_context != NULL) {
+            const MinicCoreType *ret = rv64_admit_core_base(
+                function, function->core_return_type_id);
+            if (ret == NULL ||
+                (function->parameter_count != 0U &&
+                 function->core_parameter_type_ids == NULL) ||
+                (ret->kind != MINIC_CORE_TYPE_VOID && !rv64_admit_core_scalar(ret)))
+                return core_rv64_capability_reject(function, "core-return", 0U, -1);
+            for (index = 0U; index < function->parameter_count; ++index) {
+                if (!rv64_admit_core_scalar(rv64_admit_core_base(
+                        function, function->core_parameter_type_ids[index])))
+                    return core_rv64_capability_reject(function, "core-parameter", index, -1);
+            }
+        } else {
+            if (!minic_type_is_void(function->return_type) &&
+                !minic_riscv64_scalar_type(function->return_type))
+                return core_rv64_capability_reject(function, "legacy-return", 0U, -1);
+            for (index = 0U; index < function->parameter_count; ++index) {
+                if (!minic_riscv64_scalar_type(function->parameter_types[index]))
+                    return core_rv64_capability_reject(function, "legacy-parameter", index, -1);
             }
         }
     } else if (abi_plan == NULL || !abi_plan->prepared ||
@@ -206,20 +219,20 @@ static bool core_function_can_emit_with_index(
          (storage->count != 0U && storage->objects == NULL)))
         return core_rv64_capability_reject(function, "object-plan", 0U, -1);
     for (index = 0U; index < function->object_count; ++index) {
-        const MinicType type = function->objects[index].type;
         const MinicCoreType *core_type = function->type_context != NULL
             ? rv64_admit_core_base(function, function->objects[index].core_type_id)
             : NULL;
         const bool is_record = function->type_context != NULL
             ? core_type != NULL && core_type->kind == MINIC_CORE_TYPE_RECORD
-            : minic_type_is_record(type);
+            : minic_type_is_record(function->objects[index].type);
         MinicCoreObjectStorage calculated = {0};
         const MinicCoreObjectStorage *shape = NULL;
         if (function->type_context != NULL
                 ? !(rv64_admit_core_scalar(core_type) || is_record ||
                     (core_type != NULL && core_type->kind == MINIC_CORE_TYPE_ARRAY))
-                : (!minic_riscv64_scalar_type(type) &&
-                   !minic_type_is_record(type) && !minic_type_is_array(type)))
+                : (!minic_riscv64_scalar_type(function->objects[index].type) &&
+                   !minic_type_is_record(function->objects[index].type) &&
+                   !minic_type_is_array(function->objects[index].type)))
             return core_rv64_capability_reject(function, "object-type", index, -1);
         if (storage != NULL) {
             shape = &storage->objects[index];
@@ -240,7 +253,8 @@ static bool core_function_can_emit_with_index(
             /* Legacy no-program API cannot resolve record layouts. */
             size_t size, alignment;
             if (!minic_data_layout_type(
-                    minic_default_data_layout(), NULL, type, &size, &alignment) ||
+                    minic_default_data_layout(), NULL,
+                    function->objects[index].type, &size, &alignment) ||
                 function->objects[index].element_count == 0U ||
                 size > SIZE_MAX / function->objects[index].element_count ||
                 (function->objects[index].explicit_alignment != 0U &&

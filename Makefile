@@ -903,6 +903,22 @@ check-core-ir-shapes: check-core-types
 check-core-ir-shapes-source: $(MINIC_CC_BINARY)
 	bash tests/core/run-core-ir-shapes-source.sh "$(abspath $(MINIC_CC_BINARY))"
 
+.PHONY: check-core-type-verifier
+check-core-type-verifier:
+	bash tests/core/run-core-type-verifier.sh "$(CC)"
+
+RV64_CORETYPE_TARGET_ADMISSION_BINARY := $(BUILD_DIR)/tests/target/riscv64/coretype-target-admission
+$(RV64_CORETYPE_TARGET_ADMISSION_BINARY): tests/target/riscv64/coretype_target_admission_test.c $(MINIC_OBJECTS)
+	@mkdir -p "$(dir $@)"
+	$(CC) $(CPPFLAGS) $(MINIC_INCLUDES) $(MINIC_CFLAGS) \
+		tests/target/riscv64/coretype_target_admission_test.c \
+		$(filter-out $(BUILD_DIR)/obj/tools/minic-cc/main.o,$(MINIC_OBJECTS)) \
+		$(MINIC_LDFLAGS) -o "$@"
+
+.PHONY: check-rv64-coretype-target-admission
+check-rv64-coretype-target-admission: $(RV64_CORETYPE_TARGET_ADMISSION_BINARY)
+	sh tests/target/riscv64/probe-coretype-target-admission.sh "$(abspath $(RV64_CORETYPE_TARGET_ADMISSION_BINARY))"
+
 check-type: $(TYPE_TEST_BINARY)
 	"$(abspath $(TYPE_TEST_BINARY))"
 
@@ -1854,7 +1870,7 @@ check-x86-reachable-vma-assert: $(MINIC_CC_BINARY)
 
 check-fast: check-packed-zero-width-bitfield-barrier
 check-fast: check-binary128-literal-oracle check-long-double-literal-precision
-check-fast: check-core-ir-shapes check-core-ir-shapes-source
+check-fast: check-core-ir-shapes check-core-ir-shapes-source check-core-type-verifier check-rv64-coretype-target-admission
 check-fast: check-x86-reachable-vma-assert check-static-const-source-boundaries check-aarch64-fixmap-cross-static-const check-rv64-pic-elf-nonpreemptible check-elf-hidden-undefined-pic-source check-x86-vdso-hidden-unused check-x86-reachable-gnu-runtime check-gnu-if-condition-local-owner check-direct-lp64-reachable-source-labels check-static-local-owner-reachability check-gnu-runtime-if-effect-facts check-gnu-builtin-constant-p-if-guard check-asm-operand-plan check-x86-linux-control-state check-linux-three-arch-trap-state check-x86-linux-uaccess-and-abi check-linux-symbolic-integer-and-record check-packed-bitfield-field-layout check-target-selection-m0 check-x86_64-m1 check-token-model check-lexer check-type check-record check-semantic-snapshot check-type-alias check-layout check-rv64-abi check-static-functions check-unsigned-declarations check-long-types check-for-loops check-unbounded-for-break check-prefix-decrement-update check-cast-expressions check-unsigned-char-layout check-pointer-subscripts check-pointer-arithmetic check-pointer-object-const check-const-locals check-global-objects check-bitwise-xor check-integer-bit-operations check-pointer-members check-expression-statements check-postfix-subscripts check-compound-xor-assignment $(MINIC_BINARY)
 	MINIC="$(abspath $(MINIC_BINARY))" \
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" \

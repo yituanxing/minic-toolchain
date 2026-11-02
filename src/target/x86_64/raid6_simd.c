@@ -26,6 +26,19 @@ typedef struct Raid6Operand {
     unsigned int number;
 } Raid6Operand;
 
+static const MinicCoreType *raid6_core_type(const MinicCoreFunction *fn,
+                                            MinicCoreTypeId id) {
+    if (fn == NULL || fn->type_context == NULL) return NULL;
+    return minic_core_type_get(fn->type_context,
+        minic_core_type_unqualified(fn->type_context, id));
+}
+
+static bool raid6_core_pointer(const MinicCoreFunction *fn,
+                                MinicCoreTypeId id) {
+    const MinicCoreType *type = raid6_core_type(fn, id);
+    return type != NULL && type->kind == MINIC_CORE_TYPE_POINTER;
+}
+
 static bool raid6_parse_operand(const char *p, size_t n, size_t count,
                                 Raid6Operand *operand, unsigned int *seen) {
     unsigned int reg = 0U;
@@ -214,7 +227,7 @@ bool minic_x86_64_emit_raid6_simd(
             b[i].kind != (i < info->source_output_count
                  ? MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT
                  : MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT) ||
-            !minic_type_is_pointer(fn->values[b[i].value].type) ||
+            !raid6_core_pointer(fn, fn->values[b[i].value].core_type_id) ||
             !x86_value_load(out, frame, b[i].value, scratch[i]))
             return false;
     }
@@ -253,7 +266,9 @@ bool minic_x86_64_emit_kvm_movdqa(
     FILE *out, const MinicCoreFunction *fn, const MinicX86Frame *frame,
     const MinicCoreInstruction *ins, const MinicCoreInlineAsm *info) {
     const MinicCoreStructuredInlineAsmOperand *b;
-    MinicType type;
+    const MinicCoreType *pointer_type;
+    const MinicCoreType *vector_type;
+    const MinicCoreType *element_type;
     const unsigned int form = info ? minic_x86_64_kvm_movdqa_form(
         info->template_text, info->template_length) : 0U;
     const bool load = form <= 16U;
@@ -271,8 +286,19 @@ bool minic_x86_64_emit_kvm_movdqa(
         b[0].kind != (load
             ? MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT
             : MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT) ||
-        !minic_type_pointee(fn->values[b[0].value].type, &type) ||
-        !minic_x86_64_kvm_movdqa_u32x4_type(type) ||
+        fn->type_context == NULL) return false;
+    pointer_type = raid6_core_type(fn, fn->values[b[0].value].core_type_id);
+    if (pointer_type == NULL || pointer_type->kind != MINIC_CORE_TYPE_POINTER)
+        return false;
+    vector_type = raid6_core_type(fn, pointer_type->value.pointer.pointee);
+    if (vector_type == NULL || vector_type->kind != MINIC_CORE_TYPE_VECTOR ||
+        vector_type->value.vector.is_builtin || !vector_type->has_layout ||
+        vector_type->size != 16U || vector_type->value.vector.element_count != 4U)
+        return false;
+    element_type = raid6_core_type(fn, vector_type->value.vector.element);
+    if (element_type == NULL || element_type->kind != MINIC_CORE_TYPE_INTEGER ||
+        element_type->value.integer.bit_width != 32U ||
+        element_type->value.integer.is_signed ||
         !x86_value_load(out, frame, b[0].value, "%r11")) return false;
     /* Deliberately no general vector register codegen: Linux KVM's fixed
      * XMM load/store is an ISA-controlled 16-byte aligned memory transfer. */

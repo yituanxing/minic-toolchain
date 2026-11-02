@@ -6,12 +6,10 @@
 #include <string.h>
 
 static bool loong_memory_wide_type(const MinicCoreFunction *fn,
-                                   MinicType legacy, MinicCoreTypeId id,
+                                   MinicCoreTypeId id,
                                    bool integer128) {
     const MinicCoreType *type;
-    if (fn->type_context == NULL)
-        return integer128 ? minic_type_is_int128_integer(legacy)
-                          : minic_type_is_long_double(legacy);
+    if (fn == NULL || fn->type_context == NULL) return false;
     id = minic_core_type_unqualified(fn->type_context, id);
     type = minic_core_type_get(fn->type_context, id);
     return type != NULL && type->has_layout && type->size == 16U &&
@@ -104,32 +102,22 @@ bool minic_loongarch64_memory_helpers_end(FILE *out) {
  * Loong 16-edge proof budget and its existing DataLayout root policy,
  * including GLOBAL_ADDRESS (RV deliberately has a different global policy).
  * Unknown/arbitrary pointer provenance still keeps the guarded native path. */
-typedef struct LoongAddressAlignmentContext {
-    const MinicC0Program *program;
-    const MinicTargetInfo *target;
-} LoongAddressAlignmentContext;
-
 static size_t loong_address_root_alignment(
     const MinicCoreFunction *fn, const MinicCoreInstruction *origin,
     void *opaque) {
-    const LoongAddressAlignmentContext *ctx = opaque;
-    size_t size, alignment;
-    if (ctx == NULL || ctx->program == NULL || ctx->target == NULL ||
-        ctx->target->data_layout == NULL || fn == NULL || origin == NULL)
+    size_t alignment;
+    (void)opaque;
+    if (fn == NULL || fn->type_context == NULL || origin == NULL)
         return 1U;
     switch (origin->kind) {
     case MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS: {
         const MinicCoreObjectId id = origin->value.object_id;
         if (id >= fn->object_count || fn->objects == NULL) return 1U;
-        if (fn->type_context != NULL) {
-            const MinicCoreType *type = minic_core_type_get(
-                fn->type_context, fn->objects[id].core_type_id);
-            if (type == NULL || !type->has_layout || type->alignment == 0U)
-                return 1U;
-            alignment = type->alignment;
-        } else if (!minic_data_layout_type(ctx->target->data_layout,
-                                           ctx->program, fn->objects[id].type,
-                                           &size, &alignment)) return 1U;
+        const MinicCoreType *type = minic_core_type_get(
+            fn->type_context, fn->objects[id].core_type_id);
+        if (type == NULL || !type->has_layout || type->alignment == 0U)
+            return 1U;
+        alignment = type->alignment;
         if (fn->objects[id].explicit_alignment > alignment)
             alignment = fn->objects[id].explicit_alignment;
         return alignment;
@@ -137,15 +125,9 @@ static size_t loong_address_root_alignment(
     case MINIC_CORE_INSTRUCTION_GLOBAL_ADDRESS: {
         const MinicCoreGlobalId id = origin->value.global_id;
         if (id >= fn->global_count || fn->globals == NULL) return 1U;
-        if (fn->type_context != NULL) {
-            const MinicCoreType *type = minic_core_type_get(
-                fn->type_context, fn->globals[id].core_type_id);
-            return type != NULL && type->has_layout ? type->alignment : 1U;
-        }
-        return id < fn->global_count && fn->globals != NULL &&
-               minic_data_layout_type(ctx->target->data_layout, ctx->program,
-                   fn->globals[id].type, &size, &alignment)
-            ? alignment : 1U;
+        const MinicCoreType *type = minic_core_type_get(
+            fn->type_context, fn->globals[id].core_type_id);
+        return type != NULL && type->has_layout ? type->alignment : 1U;
     }
     default: return 1U;
     }
@@ -206,11 +188,9 @@ static const char *loong_frame_store_op(size_t width) {
  * shared Core alignment proof keeps the target's DataLayout root policy;
  * unknown/arbitrary pointers retain the original guarded access path. */
 static size_t loong_known_address_alignment(
-    const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, MinicCoreValueId value_id) {
-    LoongAddressAlignmentContext context = {program, target};
     return minic_core_address_known_alignment_bounded(
-        fn, value_id, loong_address_root_alignment, &context, 16U);
+        fn, value_id, loong_address_root_alignment, NULL, 16U);
 }
 
 bool minic_loongarch64_direct_frame_memory_use(
@@ -232,10 +212,8 @@ bool minic_loongarch64_direct_frame_memory_use(
              ins->value.store.stored_value >= fn->value_count) ||
             (ins->kind == MINIC_CORE_INSTRUCTION_STORE &&
              (loong_memory_wide_type(fn,
-                 fn->values[ins->value.store.stored_value].type,
                  fn->values[ins->value.store.stored_value].core_type_id, true) ||
               loong_memory_wide_type(fn,
-                 fn->values[ins->value.store.stored_value].type,
                  fn->values[ins->value.store.stored_value].core_type_id, false))) ||
             !minic_multi_direct_scalar_store_shape(
                 program, target, fn, ins, &width, &sign, &pointer))
@@ -246,8 +224,8 @@ bool minic_loongarch64_direct_frame_memory_use(
         address = ins->kind == MINIC_CORE_INSTRUCTION_LOAD
             ? ins->value.load.address : ins->value.atomic_load.address;
         if ((ins->kind == MINIC_CORE_INSTRUCTION_LOAD &&
-             (loong_memory_wide_type(fn, ins->type, ins->core_type_id, true) ||
-              loong_memory_wide_type(fn, ins->type, ins->core_type_id, false))) ||
+             (loong_memory_wide_type(fn, ins->core_type_id, true) ||
+              loong_memory_wide_type(fn, ins->core_type_id, false))) ||
             !minic_multi_direct_scalar_load_shape(
                 program, target, fn, ins, &width, &sign, &pointer))
             return false;
@@ -255,8 +233,7 @@ bool minic_loongarch64_direct_frame_memory_use(
     default: return false;
     }
     width = pointer ? 8U : width;
-    return loong_known_address_alignment(
-               program, target, fn, address) >= width &&
+    return loong_known_address_alignment(fn, address) >= width &&
            loong_static_frame_address(
                fn, plan, address, 0U, &direct_offset);
 }
@@ -359,9 +336,11 @@ bool minic_loongarch64_emit_asm_output_store(
     const MinicCoreFunction *fn, MinicCoreValueId address,
     size_t width, const char *value_reg, const char *address_reg,
     const char *scratch_reg) {
+    (void)program;
+    (void)target;
     return loong_emit_scalar_store(out, width, value_reg, address_reg,
-        scratch_reg, loong_known_address_alignment(program, target, fn,
-            address) >= width, true, false);
+        scratch_reg, loong_known_address_alignment(fn, address) >= width,
+        true, false);
 }
 
 /* Core LOAD/STORE deliberately carries no trusted alignment metadata: an
@@ -457,8 +436,7 @@ bool minic_loongarch64_emit_asm_input_scalar(
     /* Both native ld.w and byte-gather must extend the word to the same
      * 64-bit GPR representation; ld.d transports the entire wide carrier. */
     return emit_integer_memory(out, false, width, width == 4U, false,
-        loong_known_address_alignment(program, target, fn,
-                                      address) >= width, false);
+        loong_known_address_alignment(fn, address) >= width, false);
 }
 
 
@@ -480,15 +458,13 @@ bool minic_loongarch64_emit_memory_instruction(
         if (ins->kind == MINIC_CORE_INSTRUCTION_STORE &&
             ins->value.store.stored_value < fn->value_count &&
             (loong_memory_wide_type(fn,
-                fn->values[ins->value.store.stored_value].type,
                 fn->values[ins->value.store.stored_value].core_type_id, true) ||
              loong_memory_wide_type(fn,
-                fn->values[ins->value.store.stored_value].type,
                 fn->values[ins->value.store.stored_value].core_type_id, false))) {
             const MinicCoreValueId addr = ins->value.store.address;
             size_t src;
             const bool aligned = loong_known_address_alignment(
-                program, target, fn, addr) >= 8U;
+                fn, addr) >= 8U;
             if (!minic_multi_direct_wide_store_shape(
                     fn, ins, frame_plan, &src) ||
                 !emit_sp_mem(out, "ld.d", "$t1", minic_lp64_frame_value_offset(frame_plan, addr)) ||
@@ -533,16 +509,16 @@ bool minic_loongarch64_emit_memory_instruction(
                              minic_lp64_frame_value_offset(frame_plan, value))) ||
                 !emit_integer_memory(out, true, pointer ? 8U : width, sign,
                                      atomic,
-                     loong_known_address_alignment(program, target, fn,
-                         addr) >= (pointer ? 8U : width), true)) return false;
+                     loong_known_address_alignment(fn, addr) >=
+                         (pointer ? 8U : width), true)) return false;
             return true;
         }
     switch (ins->kind) {
         case MINIC_CORE_INSTRUCTION_LOAD:
         case MINIC_CORE_INSTRUCTION_ATOMIC_LOAD: {
             if (ins->kind == MINIC_CORE_INSTRUCTION_LOAD &&
-                (loong_memory_wide_type(fn, ins->type, ins->core_type_id, true) ||
-                 loong_memory_wide_type(fn, ins->type, ins->core_type_id, false))) {
+                (loong_memory_wide_type(fn, ins->core_type_id, true) ||
+                 loong_memory_wide_type(fn, ins->core_type_id, false))) {
                 MinicCoreValueId addr;
                 size_t dst;
                 bool aligned;
@@ -551,7 +527,7 @@ bool minic_loongarch64_emit_memory_instruction(
                     !emit_sp_mem(out, "ld.d", "$t1", minic_lp64_frame_value_offset(frame_plan, addr)))
                     return false;
                 aligned = loong_known_address_alignment(
-                    program, target, fn, addr) >= 8U;
+                    fn, addr) >= 8U;
                 if (!emit_integer_memory(out, false, 8U, false, false, aligned, true) ||
                     !emit_sp_mem(out, "st.d", "$t0", dst) ||
                     !emit_sp_mem(out, "ld.d", "$t1", minic_lp64_frame_value_offset(frame_plan, addr)) ||
@@ -585,8 +561,8 @@ bool minic_loongarch64_emit_memory_instruction(
                 !emit_sp_mem(out, "ld.d", "$t1", minic_lp64_frame_value_offset(frame_plan, addr)) ||
                 !emit_integer_memory(out, false, pointer ? 8U : width, sign,
                                      atomic,
-                     loong_known_address_alignment(program, target, fn,
-                         addr) >= (pointer ? 8U : width), true))
+                     loong_known_address_alignment(fn, addr) >=
+                         (pointer ? 8U : width), true))
                 return false;
             *needs_gp_store = true;
             return true;

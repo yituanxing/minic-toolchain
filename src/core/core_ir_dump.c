@@ -13,20 +13,14 @@ static const MinicCoreType *dump_base_type(const MinicCoreFunction *function,
 }
 
 static bool dump_type_is_record(const MinicCoreFunction *function,
-                                MinicCoreTypeId core_id, MinicType legacy) {
-    const MinicCoreType *type;
-    if (function == NULL || function->type_context == NULL)
-        return minic_type_is_record(legacy);
-    type = dump_base_type(function, core_id);
+                                MinicCoreTypeId core_id) {
+    const MinicCoreType *type = dump_base_type(function, core_id);
     return type != NULL && type->kind == MINIC_CORE_TYPE_RECORD;
 }
 
 static bool dump_type_is_volatile(const MinicCoreFunction *function,
-                                  MinicCoreTypeId core_id, MinicType legacy) {
-    const MinicCoreType *type;
-    if (function == NULL || function->type_context == NULL)
-        return minic_type_is_volatile(legacy);
-    type = minic_core_function_type_get(function, core_id);
+                                  MinicCoreTypeId core_id) {
+    const MinicCoreType *type = minic_core_function_type_get(function, core_id);
     return type != NULL && type->is_volatile;
 }
 
@@ -59,7 +53,7 @@ static bool dump_instruction(FILE *output,
                        instruction->result,
                        instruction->value.integer_value) >= 0;
     case MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT:
-        if (function != NULL && function->type_context != NULL) {
+        {
             const MinicCoreType *type = dump_base_type(function, instruction->core_type_id);
             if (type == NULL || type->kind != MINIC_CORE_TYPE_FLOAT ||
                 !type->has_layout || type->size == 0U) return false;
@@ -76,19 +70,6 @@ static bool dump_instruction(FILE *output,
                     : "  %%%" PRIu32 " = const.double.bits 0x%016" PRIx64 "\n",
                 instruction->result, instruction->value.floating_bits) >= 0;
         }
-        if (minic_type_is_long_double(instruction->type)) {
-            return fprintf(output,
-                           "  %%%" PRIu32 " = const.long_double.bits 0x%016" PRIx64 "%016" PRIx64 "\n",
-                           instruction->result,
-                           instruction->value.floating128_bits.high,
-                           instruction->value.floating128_bits.low) >= 0;
-        }
-        return fprintf(output,
-                       minic_type_is_float(instruction->type)
-                           ? "  %%%" PRIu32 " = const.float.bits 0x%08" PRIx64 "\n"
-                           : "  %%%" PRIu32 " = const.double.bits 0x%016" PRIx64 "\n",
-                       instruction->result,
-                       instruction->value.floating_bits) >= 0;
     case MINIC_CORE_INSTRUCTION_FLOAT_ADD:
         return fprintf(output,
                        "  %%%" PRIu32 " = add.float %%%" PRIu32 ", %%%" PRIu32 "\n",
@@ -386,10 +367,10 @@ static bool dump_instruction(FILE *output,
                        function->function_symbols[instruction->value.function_symbol_id].name) >= 0;
     case MINIC_CORE_INSTRUCTION_FIELD_ADDRESS:
         return fprintf(output,
-                       "  %%%" PRIu32 " = field.addr %%%" PRIu32 ", record=%zu, field=%zu\n",
+                       "  %%%" PRIu32 " = field.addr %%%" PRIu32 ", core_record=%zu, field=%zu\n",
                        instruction->result,
                        instruction->value.field_address.base,
-                       instruction->value.field_address.record_id,
+                       instruction->value.field_address.core_record_type_id,
                        instruction->value.field_address.field_index) >= 0;
     case MINIC_CORE_INSTRUCTION_POINTER_OFFSET:
         return fprintf(output,
@@ -584,8 +565,7 @@ static bool dump_instruction(FILE *output,
             return false;
         }
         callee = &function->callees[instruction->value.call.callee_id];
-        if (dump_type_is_record(function, callee->core_return_type_id,
-                                callee->return_type)) {
+        if (dump_type_is_record(function, callee->core_return_type_id)) {
             if (fprintf(output,
                         "  %%o%" PRIu32 " = call @",
                         instruction->value.call.result_object) < 0) {
@@ -612,8 +592,7 @@ static bool dump_instruction(FILE *output,
             instruction->value.indirect_call.callee >= function->value_count) {
             return false;
         }
-        if (dump_type_is_record(function, instruction->core_type_id,
-                                instruction->type)) {
+        if (dump_type_is_record(function, instruction->core_type_id)) {
             if (fprintf(output,
                         "  %%o%" PRIu32 " = call.indirect %%%" PRIu32 "(",
                         instruction->value.indirect_call.result_object,
@@ -648,9 +627,7 @@ static bool dump_terminator(FILE *output,
                             const MinicCoreTerminator *terminator) {
     switch (terminator->kind) {
     case MINIC_CORE_TERMINATOR_RETURN:
-        if (function != NULL &&
-            dump_type_is_record(function, function->core_return_type_id,
-                                function->return_type)) {
+        if (dump_type_is_record(function, function->core_return_type_id)) {
             return fprintf(output, "  return.object %%o%" PRIu32 "\n", terminator->return_object) >=
                    0;
         }
@@ -690,8 +667,7 @@ bool minic_core_function_dump(FILE *output, const MinicCoreFunction *function) {
                     "object %%o%" PRIu32 "%s\n",
                     (MinicCoreObjectId)index,
                     dump_type_is_volatile(function,
-                        function->objects[index].core_type_id,
-                        function->objects[index].type) ? " volatile" : "") < 0) {
+                        function->objects[index].core_type_id) ? " volatile" : "") < 0) {
             return false;
         }
     }

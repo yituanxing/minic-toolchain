@@ -1,4 +1,4 @@
-#include "core/core_ir.h"
+#include "core/core_ir_internal.h"
 #include "core/core_lower.h"
 #include "frontend/ast.h"
 #include "frontend/function_body.h"
@@ -182,7 +182,7 @@ static int test_scalar_shadow_lowering(void) {
     minic_core_function_initialize(&core);
     if (minic_core_lower_function(&view, minic_default_target_info(), &core) !=
             MINIC_CORE_LOWER_OK ||
-        !minic_core_function_verify(&core) || core.block_count != 1U ||
+        !minic_core_function_verify_source_ingress(&core) || core.block_count != 1U ||
         core.instruction_count != 3U || core.value_count != 3U) {
         minic_core_function_destroy(&core);
         minic_c0_program_destroy(&program);
@@ -217,7 +217,7 @@ static int test_parameter_ingress_and_conversion_lowering(void) {
     minic_core_function_initialize(&core);
     if (minic_core_lower_function(&view, minic_default_target_info(), &core) !=
             MINIC_CORE_LOWER_OK ||
-        !minic_core_function_verify(&core) || core.object_count != 1U ||
+        !minic_core_function_verify_source_ingress(&core) || core.object_count != 1U ||
         core.instruction_count != 6U || core.value_count != 5U) {
         minic_core_function_destroy(&core);
         minic_c0_program_destroy(&program);

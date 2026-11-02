@@ -44,6 +44,16 @@ typedef enum MinicCoreCallFrameAddressKind {
     MINIC_CORE_CALL_FRAME_ADDRESS_FRAME
 } MinicCoreCallFrameAddressKind;
 
+/* A FIELD_ADDRESS names one nominal Core record field, but the typed
+ * address may represent either the member itself, its first array element,
+ * or a scalar storage carrier for packed bit-field extraction. These are
+ * source-proven, target-independent memory-access forms, not C RecordIds. */
+typedef enum MinicCoreFieldAccessForm {
+    MINIC_CORE_FIELD_ACCESS_EXACT = 0,
+    MINIC_CORE_FIELD_ACCESS_ARRAY_ELEMENT,
+    MINIC_CORE_FIELD_ACCESS_BITFIELD_STORAGE
+} MinicCoreFieldAccessForm;
+
 /* M158_FINAL_STRICT_TAIL */
 typedef enum MinicCoreInstructionKind {
     MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT = 0,
@@ -438,10 +448,9 @@ typedef struct MinicCoreInstruction {
         MinicCoreBlockId block_id;
         struct {
             MinicCoreValueId base;
-            /* Migration-only source RecordId; Core owns the nominal type. */
-            MinicRecordId record_id;
             MinicCoreTypeId core_record_type_id;
             size_t field_index;
+            MinicCoreFieldAccessForm access_form;
             /* Target-neutral DataLayout result captured at AST -> Core lowering.
                Backends consume the byte displacement without reopening record AST. */
             size_t byte_offset;

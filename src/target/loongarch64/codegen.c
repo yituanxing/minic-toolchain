@@ -467,11 +467,6 @@ static const MinicDirectLP64AbiPolicy loongarch64_abi_policy = {
     .variadic_requires_public_stack_alignment = true
 };
 
-static bool loongarch64_executed_fp_type(MinicType type) {
-    return minic_type_is_float(type) || minic_type_is_double(type) ||
-           minic_type_is_long_double(type) || minic_type_is_float128(type);
-}
-
 static bool loongarch64_core_executed_fp_type(
     const MinicCoreTypeContext *types, MinicCoreTypeId id) {
     const MinicCoreType *type = minic_core_type_get(
@@ -492,68 +487,46 @@ static bool loongarch64_lp64s_executable_supported(
     size_t i;
     size_t count, width, j;
     if (fn == NULL || program == NULL || target == NULL ||
-        (fn->type_context != NULL
-            ? loongarch64_core_executed_fp_type(fn->type_context,
-                                                fn->core_return_type_id)
-            : loongarch64_executed_fp_type(fn->return_type))) return false;
-    if ((fn->type_context != NULL
-             ? minic_multi_fp_return_record_core(fn->type_context,
-                    fn->core_return_type_id, &count, &width)
-             : minic_type_is_record(fn->return_type) &&
-               minic_multi_fp_return_record(program, target, fn->return_type,
-                                            &count, &width))) return false;
+        fn->type_context == NULL ||
+        loongarch64_core_executed_fp_type(fn->type_context,
+                                         fn->core_return_type_id)) return false;
+    if (minic_multi_fp_return_record_core(fn->type_context,
+            fn->core_return_type_id, &count, &width)) return false;
     for (i = 0U; i < fn->parameter_count; ++i)
-        if (fn->type_context != NULL
-                ? loongarch64_core_executed_fp_type(fn->type_context,
-                      fn->core_parameter_type_ids[i])
-                : loongarch64_executed_fp_type(fn->parameter_types[i])) return false;
+        if (loongarch64_core_executed_fp_type(fn->type_context,
+                fn->core_parameter_type_ids[i])) return false;
     /* Validate actual Core call signatures, not every source declaration.
      * An FP formal type can exist even when argument conversion was folded
      * or no FP-typed SSA operand survives in the call lowering. */
     for (i = 0U; i < fn->callee_count; ++i) {
         const MinicCoreCallee *call = &fn->callees[i];
-        if (fn->type_context != NULL
-                ? loongarch64_core_executed_fp_type(fn->type_context,
-                      call->core_return_type_id)
-                : loongarch64_executed_fp_type(call->return_type)) return false;
+        if (loongarch64_core_executed_fp_type(fn->type_context,
+                call->core_return_type_id)) return false;
         for (j = 0U; j < call->parameter_count; ++j)
-            if (fn->type_context != NULL
-                    ? loongarch64_core_executed_fp_type(fn->type_context,
-                          call->core_parameter_type_ids[j])
-                    : loongarch64_executed_fp_type(call->parameter_types[j]))
+            if (loongarch64_core_executed_fp_type(fn->type_context,
+                    call->core_parameter_type_ids[j]))
                 return false;
     }
     for (i = 0U; i < fn->call_signature_count; ++i) {
         const MinicCoreCallSignature *call = &fn->call_signatures[i];
-        if (fn->type_context != NULL
-                ? loongarch64_core_executed_fp_type(fn->type_context,
-                      call->core_return_type_id)
-                : loongarch64_executed_fp_type(call->return_type)) return false;
+        if (loongarch64_core_executed_fp_type(fn->type_context,
+                call->core_return_type_id)) return false;
         for (j = 0U; j < call->parameter_count; ++j)
-            if (fn->type_context != NULL
-                    ? loongarch64_core_executed_fp_type(fn->type_context,
-                          call->core_parameter_type_ids[j])
-                    : loongarch64_executed_fp_type(call->parameter_types[j]))
+            if (loongarch64_core_executed_fp_type(fn->type_context,
+                    call->core_parameter_type_ids[j]))
                 return false;
     }
     for (i = 0U; i < fn->value_count; ++i)
-        if (fn->type_context != NULL
-                ? loongarch64_core_executed_fp_type(fn->type_context,
-                      fn->values[i].core_type_id)
-                : loongarch64_executed_fp_type(fn->values[i].type)) return false;
+        if (loongarch64_core_executed_fp_type(fn->type_context,
+                fn->values[i].core_type_id)) return false;
     for (i = 0U; i < fn->instruction_count; ++i) {
         const MinicCoreInstruction *ins = &fn->instructions[i];
-        if (fn->type_context != NULL
-                ? loongarch64_core_executed_fp_type(fn->type_context, ins->core_type_id)
-                : loongarch64_executed_fp_type(ins->type)) return false;
+        if (loongarch64_core_executed_fp_type(fn->type_context,
+                ins->core_type_id)) return false;
         if ((ins->kind == MINIC_CORE_INSTRUCTION_CALL ||
              ins->kind == MINIC_CORE_INSTRUCTION_INDIRECT_CALL) &&
-            (fn->type_context != NULL
-                ? minic_multi_fp_return_record_core(fn->type_context,
-                      ins->core_type_id, &count, &width)
-                : minic_type_is_record(ins->type) &&
-                  minic_multi_fp_return_record(program, target, ins->type,
-                                                &count, &width))) return false;
+            minic_multi_fp_return_record_core(fn->type_context,
+                ins->core_type_id, &count, &width)) return false;
     }
     return true;
 }
