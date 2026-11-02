@@ -25,7 +25,7 @@ if ('typedef struct MiniAsSourceFrame' not in source or
     'MiniAsSourceFrame physical;' not in source or
     expansion.count('bool minias_source_frame_process(') != 1 or
     'minias_source_frame_process(as,&graph->physical)' not in expansion or
-    'minias_source_context_process_graph(as,graph)' not in driver or
+    'minias_source_context_process_graph(as,graph,&statements)' not in driver or
     expansion.count('minias_source_frame_process(as,&frame)') < 3 or
     'assembler/src/source_graph.c' not in mk or
     'assembler/src/source_expansion.c' not in mk):
