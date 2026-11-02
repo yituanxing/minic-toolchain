@@ -378,6 +378,66 @@ typedef struct MiniAsMCData {
     MiniAsMCExpr *fields;
 } MiniAsMCData;
 
+/* One discriminated source Fragment payload. The kind in MiniAsStmt selects
+ * exactly one active member, including on a failed partial parse. Source
+ * spelling, site identity and final placement remain shared metadata. */
+typedef struct MiniAsInstructionFragment {
+    MiniAsMCInst *inst;
+} MiniAsInstructionFragment;
+
+typedef struct MiniAsAlignmentFragment {
+    uint64_t alignment;
+    bool has_fill;
+    unsigned char fill;
+    bool has_max_skip;
+    uint64_t max_skip;
+} MiniAsAlignmentFragment;
+
+typedef struct MiniAsOriginFragment {
+    MiniAsOrgMode mode;
+    MiniAsDeferredExpr *expr;
+    uint64_t target;
+    size_t symbol_index;
+    int64_t addend;
+    bool has_fill;
+    unsigned char fill;
+} MiniAsOriginFragment;
+
+typedef struct MiniAsFixedDataFragment {
+    MiniAsMCData *data;
+} MiniAsFixedDataFragment;
+
+/* FILL and SPACE share the same retained GNU expression program but the
+ * FragmentKind determines which value/width combinations are legal. */
+typedef struct MiniAsVariableDataFragment {
+    bool deferred_size;
+    bool resolved;
+    uint64_t repeat;
+    uint64_t value;
+    unsigned element_width;
+    MiniAsDeferredExpr *exprs[3];
+    unsigned expr_count;
+} MiniAsVariableDataFragment;
+
+/* Raw strings/incbin and fixed LEB snapshots share immutable bytes. Only a
+ * deferred symbolic LEB carries an expression and changes its byte length. */
+typedef struct MiniAsBytesFragment {
+    bool deferred_size;
+    unsigned char *data;
+    size_t data_size;
+    unsigned leb_mode;
+    MiniAsDeferredExpr *leb_expr;
+} MiniAsBytesFragment;
+
+typedef union MiniAsFragmentPayload {
+    MiniAsInstructionFragment instruction;
+    MiniAsAlignmentFragment alignment;
+    MiniAsOriginFragment origin;
+    MiniAsFixedDataFragment fixed_data;
+    MiniAsVariableDataFragment variable;
+    MiniAsBytesFragment bytes;
+} MiniAsFragmentPayload;
+
 typedef struct MiniAsStmt {
     MiniAsFragmentKind fragment_kind;
     MiniAsStableSiteId source_site;
@@ -388,40 +448,9 @@ typedef struct MiniAsStmt {
     uint32_t subsection;
     uint64_t offset;
     uint32_t size;
-    uint64_t align;
-    /* GNU alignment fragment semantics, shared by all backends. */
-    bool align_has_fill;
-    unsigned char align_fill;
-    bool align_has_max_skip;
-    uint64_t align_max_skip;
-    /* Common MCLayout owns every captured .org expression, never Target. */
-    MiniAsOrgMode org_mode;
-    MiniAsDeferredExpr *org_expr;
-    uint64_t org_target;
-    size_t org_symbol_index;
-    int64_t org_addend;
     /* Immutable parse-site state: meaningful bits are defined by Target. */
     struct MiniAsTargetSiteState site;
-    /* Common variable-size data fragment resolved after symbol layout. */
-    bool deferred_data_size;
-    /* Semantic payload for variable DATA fragments. Filled after the
-     * fixed point; emission must never reparse the source string. */
-    bool variable_data_resolved;
-    uint64_t variable_repeat;
-    uint64_t variable_value;
-    unsigned variable_element_width;
-    /* Typed machine-independent DATA byte payloads. String/incbin and
-     * literal LEB bytes are parse-time snapshots; symbolic LEB bytes are
-     * finalized by MCLayout, never re-decoded from source on emission. */
-    unsigned char *static_data;
-    size_t static_data_size;
-    /* Typed LEB payload: 0=other bytes, 1=unsigned, 2=signed.
-     * Deferred expressions change this payload's length at MCLayout. */
-    unsigned leb_mode;
-    MiniAsMCData *mcdata; /* fixed-width DATA: retained typed expressions */
-    MiniAsDeferredExpr *variable_exprs[3]; /* .fill/.space size/value */
-    unsigned variable_expr_count;
-    MiniAsMCInst *mcinst; /* allocated by target parser, freed by core */
+    MiniAsFragmentPayload payload;
 } MiniAsStmt;
 
 

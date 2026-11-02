@@ -741,7 +741,9 @@ bool minias_riscv_compute_branch_plan(const MiniAsStmt *stmt,
                                       const MiniAsSymbol *symbol,
                                       MiniAsRiscvBranchPlan *result,
                                       const char **diagnostic) {
-    const MiniAsMCInst *m = stmt!=NULL ? stmt->mcinst : NULL;
+    const MiniAsMCInst *m = stmt!=NULL &&
+        stmt->fragment_kind==MINIAS_FRAGMENT_INSTRUCTION ?
+        stmt->payload.instruction.inst : NULL;
     const MiniAsSymbolRef *expr;
     bool same_section;
     int64_t displacement;
@@ -804,7 +806,10 @@ bool minias_riscv_compute_branch_plan(const MiniAsStmt *stmt,
 
 const MiniAsSymbolRef *minias_riscv_branch_bound_symbol(
     const MiniAsStmt *stmt) {
-    const MiniAsMCInst *m=stmt->mcinst;
+    const MiniAsMCInst *m;
+    if(stmt==NULL || stmt->fragment_kind!=MINIAS_FRAGMENT_INSTRUCTION)
+        return NULL;
+    m=stmt->payload.instruction.inst;
     if(m==NULL || (m->opcode!=RV_MC_BRANCH && m->opcode!=RV_MC_JAL))
         return NULL;
     return m->operands[m->opcode==RV_MC_BRANCH?2U:1U].bound_symbol;
@@ -836,14 +841,14 @@ static bool riscv_plan_instruction_relaxation(MiniAsRelaxContext *ctx,
     plan->current_size = stmt->size;
     plan->required_size = stmt->size;
     plan->terminal_size = stmt->size;
-    if (stmt->size == 2U && stmt->mcinst != NULL &&
-        (stmt->mcinst->opcode == RV_MC_BRANCH ||
-         stmt->mcinst->opcode == RV_MC_JAL)) {
+    if (stmt->size == 2U && stmt->payload.instruction.inst != NULL &&
+        (stmt->payload.instruction.inst->opcode == RV_MC_BRANCH ||
+         stmt->payload.instruction.inst->opcode == RV_MC_JAL)) {
         plan->terminal_size = 4U;
         if (!riscv_relax_branch_plan(ctx,stmt,&branch))return false;
         if (!branch.local ||
             ((branch.displacement & 1) != 0) ||
-            (stmt->mcinst->opcode == RV_MC_JAL ?
+            (stmt->payload.instruction.inst->opcode == RV_MC_JAL ?
                 (branch.displacement < -2048 ||
                  branch.displacement > 2046) :
                 (branch.displacement < -256 ||
@@ -851,8 +856,8 @@ static bool riscv_plan_instruction_relaxation(MiniAsRelaxContext *ctx,
             plan->required_size = 4U;
         return true;
     }
-    if (stmt->size != 4U || stmt->mcinst == NULL ||
-        stmt->mcinst->opcode != RV_MC_BRANCH)
+    if (stmt->size != 4U || stmt->payload.instruction.inst == NULL ||
+        stmt->payload.instruction.inst->opcode != RV_MC_BRANCH)
         return true;
     plan->terminal_size = 8U;
     if (!riscv_relax_branch_plan(ctx,stmt,&branch))return false;

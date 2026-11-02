@@ -92,6 +92,7 @@ These increments encapsulate the Emission transaction, persistent identity
 indexes, parser-local worklists and MCLayout subsection/anchor storage—not
 the shared mutable Section, Symbol or Fragment records. Separating the
 records' true phase-aware ownership (without duplicating or returning mutable
-raw pointers to Targets) is the next boundary before type-complete Fragment
-payloads and a neutral ObjectModel. A `const` Fixup span also carries a
+raw pointers to Targets) remains a boundary. The subsequent
+[Fragment payload migration](fragment-payload-2026-11-02.md) has now completed
+the kind-discriminated union without adding an ObjectModel. A `const` Fixup span also carries a
 lifetime constraint: it cannot be retained across later Emission appends.

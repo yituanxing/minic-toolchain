@@ -810,9 +810,14 @@ bool minias_deferred_symbol_difference(const MiniAsDeferredExpr *tree,
 }
 
 bool minias_compile_variable_exprs(MiniAs *as,MiniAsStmt *stmt) {
-    char *copy=minias_strdup(stmt->args),*cursor,*start;
+    char *copy,*cursor,*start;
     unsigned count=0U,depth=0U;
     bool fill=stmt->fragment_kind==MINIAS_FRAGMENT_FILL;
+    if(!fill && stmt->fragment_kind!=MINIAS_FRAGMENT_SPACE) {
+        minias_set_error(as,"invalid-variable-fragment-kind");
+        return false;
+    }
+    copy=minias_strdup(stmt->args);
     if(!copy) {
         minias_set_error(as,"out-of-memory:variable-expression");
         return false;
@@ -828,19 +833,19 @@ bool minias_compile_variable_exprs(MiniAs *as,MiniAsStmt *stmt) {
         if(ch==',' && depth==0U) {
             *cursor='\0';
             if(count>=3U || (!fill && count>=2U))goto invalid;
-            stmt->variable_exprs[count]=
+            stmt->payload.variable.exprs[count]=
                 minias_compile_deferred_expr(as,minias_trim(start));
-            if(stmt->variable_exprs[count]==NULL)goto invalid;
+            if(stmt->payload.variable.exprs[count]==NULL)goto invalid;
             ++count;start=cursor+1U;
             continue;
         }
         if(ch=='\0')break;
     }
     if(depth!=0U || count>=3U || (!fill && count>=2U))goto invalid;
-    stmt->variable_exprs[count]=
+    stmt->payload.variable.exprs[count]=
         minias_compile_deferred_expr(as,minias_trim(start));
-    if(stmt->variable_exprs[count]==NULL)goto invalid;
-    stmt->variable_expr_count=count+1U;
+    if(stmt->payload.variable.exprs[count]==NULL)goto invalid;
+    stmt->payload.variable.expr_count=count+1U;
     free(copy);
     return true;
 invalid:
@@ -856,11 +861,12 @@ bool minias_resolve_variable_exprs(MiniAs *as,const MiniAsStmt *stmt,
     int64_t fields[3]={0,1,0};
     unsigned i;
     bool fill=stmt->fragment_kind==MINIAS_FRAGMENT_FILL;
-    if(stmt->variable_expr_count==0U ||
-       stmt->variable_expr_count>(fill?3U:2U))return false;
+    if(!fill && stmt->fragment_kind!=MINIAS_FRAGMENT_SPACE)return false;
+    if(stmt->payload.variable.expr_count==0U ||
+       stmt->payload.variable.expr_count>(fill?3U:2U))return false;
     if(!fill)fields[1]=0;
-    for(i=0U;i<stmt->variable_expr_count;++i)
-        if(!minias_evaluate_deferred_expr(as,stmt->variable_exprs[i],
+    for(i=0U;i<stmt->payload.variable.expr_count;++i)
+        if(!minias_evaluate_deferred_expr(as,stmt->payload.variable.exprs[i],
                                           stmt->offset,stmt->section,false,
                                           &fields[i]))
             return false;
@@ -882,7 +888,10 @@ bool minias_compile_data_mc(MiniAs *as, MiniAsStmt *stmt,
     MiniAsMCData *data;
     char *copy,*walk;
     size_t count=0U,i=0U;
-    if(width==0U)return true;
+    if(stmt->fragment_kind!=MINIAS_FRAGMENT_FIXED_DATA || width==0U) {
+        minias_set_error(as,"invalid-fixed-data-fragment-kind:line=%zu",stmt->line);
+        return false;
+    }
     copy=minias_strdup(stmt->args);
     if(!copy){minias_set_error(as,"out-of-memory:mc-data-copy");return false;}
     /* Keep MCData's semantic field count identical to the source producer:
@@ -897,7 +906,7 @@ bool minias_compile_data_mc(MiniAs *as, MiniAsStmt *stmt,
     if(!data) {
         free(copy);minias_set_error(as,"out-of-memory:mc-data");return false;
     }
-    stmt->mcdata=data; /* destructor owns partial parse on failure */
+    stmt->payload.fixed_data.data=data; /* destructor owns partial parse on failure */
     data->fields=count?calloc(count,sizeof(*data->fields)):NULL;
     if(count && !data->fields) {
         free(copy);minias_set_error(as,"out-of-memory:mc-data-fields");
@@ -1244,9 +1253,14 @@ static bool emit_symbol_difference_divided(MiniAs *as,
  * addends are immutable, while section-dependent values are resolved from
  * the final layout. No Target owns this section/data semantics. */
 bool minias_emit_mc_data(MiniAs *as,const MiniAsStmt *stmt) {
-    const MiniAsMCData *data=stmt->mcdata;
+    const MiniAsMCData *data;
     size_t i;
     uint64_t initial_cursor;
+    if(stmt->fragment_kind!=MINIAS_FRAGMENT_FIXED_DATA) {
+        minias_set_error(as,"invalid-fixed-data-fragment-kind:line=%zu",stmt->line);
+        return false;
+    }
+    data=stmt->payload.fixed_data.data;
     if(!data || data->width==0U ||
        data->count>(size_t)UINT32_MAX/data->width ||
        data->count*data->width!=stmt->size) {

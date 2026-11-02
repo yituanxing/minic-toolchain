@@ -106,7 +106,7 @@ emitter=emission[emission.index('static bool minias_emit_data_fragment('):
                  emission.index('typedef struct MiniAsEmitRef {')]
 if 'minias_parse_common_fill(' in emitter or 'minias_parse_common_space(' in emitter:
     raise SystemExit('DATA re-parsed on final emission')
-if 'variable_data_resolved' not in emitter:
+if 'stmt->payload.variable.resolved' not in emitter:
     raise SystemExit('not emitting cached typed variable DATA')
 if 'assembler/src/mc_layout.c' not in mk:raise SystemExit('missing MCLayout build')
 if ('unsigned char *branch_membership;' not in layout or

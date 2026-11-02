@@ -1,5 +1,15 @@
 # MiniAS 当前清理与所有权总览（2026-11-01）
 
+> **2026-11-02 Fragment 负载类型化：** `MiniAsStmt` 现有七类
+> `FragmentKind` 共用一个带判别类型的 payload union（六个负载臂）；
+> Parser、四目标、SourceGraph、MCExpr、MCLayout、Emission 和失败销毁
+> 已整批迁移，删除旧顶层 `mcinst/mcdata/org/align/variable/bytes`
+> 平铺字段，无双表示。LoongArch pre-layout 与 SourceGraph 在读取
+> MCInst 前强制判别种类。新增负向编译结构门禁并加入 Target workflow；
+> 本地 `-Werror` A0 30/30、延迟移位四目标 ASan/UBSan 和专项结构/GNU
+> 回归已通过；远端 exact-head CI 仍须对应推送后核对。
+> 见 [Fragment payload 明细](fragment-payload-2026-11-02.md)。
+
 > **2026-11-02 P06 最新所有权批次：** 在 Emission 事务已经不透明的
 > 基础上，Context 的 Section/Symbol/name 哈希及容量、Lowering 的 GNU
 > 临时表与布局控制标记、MCLayout 的 Subsection/index/AnchorGraph
@@ -39,10 +49,11 @@
 - [ ] **Common 职责拆分**：在 P04/P05 接口稳定后，把
   statement/directive、Section/Symbol、Fragment emit/commit、driver
   按消费者搬迁；每批删除原实现而非留下桥接双路径。
-- [ ] **Fragment 负载类型化**：按 FragmentKind 收窄
+- [x] **Fragment 负载类型化**：按 FragmentKind 收窄
   `MiniAsStmt` 的 DATA/ALIGN/ORG/INSTRUCTION 等专属 payload；
-  先核对 Parser/Layout/Emitter 的写者，确保 Fixup、SymbolID、
-  NOBITS 与分支松弛不出现第二套表示。
+  Parser/Layout/Emitter/Target/SourceGraph 整批迁移，删除旧字段，
+  保留原 Fixup、SymbolID、NOBITS 与分支松弛单一表示；
+  exact-head 远端工作流仍须独立验证。
 - [ ] **TargetSpec/ISA/ABI**：将不可变配置、源文件可变 ISA
   状态和每指令快照分开；以真实 GNU/Linux 输入驱动版本化
   扩展和 relaxation，不把 MiniC 的主动发射子集当 ISA 上限。

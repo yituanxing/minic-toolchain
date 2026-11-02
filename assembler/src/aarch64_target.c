@@ -141,7 +141,7 @@ static void a64_capture_site_state(const void *target_state,
     site->mode_bits=state==NULL?0U:state->features;
     if(stmt->op!=NULL && strcmp(stmt->op,".inst")==0)
         site->provenance_bits|=A64_SITE_INST_DATA;
-    if(stmt->fragment_kind==MINIAS_FRAGMENT_ALIGNMENT && stmt->align>1U &&
+    if(stmt->fragment_kind==MINIAS_FRAGMENT_ALIGNMENT && stmt->payload.alignment.alignment>1U &&
        stmt->op!=NULL &&
        (strcmp(stmt->op,".align")==0 ||
         strcmp(stmt->op,".p2align")==0 ||
@@ -335,7 +335,7 @@ static bool aarch64_measure_mcinst(const MiniAsMeasureView *view,
                                    MiniAsMeasureErrorSink *errors,
                                    const MiniAsStmt *stmt, uint32_t *size) {
     (void)view;
-    if (stmt->mcinst == NULL) {
+    if (stmt->payload.instruction.inst == NULL) {
         minias_measure_error(errors, "missing-aarch64-mcinst:line=%zu",
                              stmt->line);
         return false;
@@ -4378,12 +4378,12 @@ lane_complete:;
      * The AArch64 integer/memory family is parsed into typed operands.
      * No instruction is silently translated through a RISC-V pipeline.
      */
-    stmt->mcinst = inst;
+    stmt->payload.instruction.inst = inst;
     return true;
 }
 
 static bool encode(MiniAsEncodeContext *ctx, const MiniAsStmt *stmt) {
-    const MiniAsMCInst *inst = stmt->mcinst;
+    const MiniAsMCInst *inst = stmt->payload.instruction.inst;
     uint32_t code;
     MiniAsFixupKind fixup = MINIAS_FIXUP_NONE;
     const MiniAsSymbolRef *expr = NULL;
@@ -5703,7 +5703,7 @@ static bool a64_record_source_mappings(const MiniAsPostEmitView *view,
             (stmt->site.provenance_bits&A64_SITE_INST_DATA)!=0U ||
             (stmt->fragment_kind==MINIAS_FRAGMENT_ALIGNMENT &&
              (section->flags&MINIAS_SHF_EXECINSTR)!=0U &&
-             !stmt->align_has_fill);
+             !stmt->payload.alignment.has_fill);
         /* GAS starts even the default .text with sh_addralign=1 and only
          * records AArch64's 4-byte instruction alignment on the first
          * actual instruction/mapping transition. Empty .text must stay 1. */

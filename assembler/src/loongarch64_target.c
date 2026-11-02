@@ -1943,7 +1943,7 @@ done:
             return false;
         }
     free(tokens.overflow);
-    s->mcinst=m;return true;
+    s->payload.instruction.inst=m;return true;
 }
 
 /* Branch decisions are re-evaluated from the retained SymbolRef after each
@@ -1958,7 +1958,7 @@ typedef struct {
 
 static bool la_resolve_branch_plan(MiniAsEncodeContext *ctx,const MiniAsStmt *s,
                                    LaBranchPlan *plan) {
-    const MiniAsMCInst *m=s->mcinst;
+    const MiniAsMCInst *m=s->payload.instruction.inst;
     const MiniAsSymbolRef *ref;
     const MiniAsSymbol *target;
     int64_t diff,limit;
@@ -2022,11 +2022,12 @@ static bool la_prepare_layout(const MiniAsPreLayoutView *view,
     }
     for(i=0U;i<view->stmt_count;++i) {
         const MiniAsStmt *stmt=&view->stmts[i];
-        if(stmt->section>=0 &&
+        if(stmt->fragment_kind==MINIAS_FRAGMENT_INSTRUCTION &&
+           stmt->section>=0 &&
            (size_t)stmt->section<view->section_count &&
-           stmt->mcinst!=NULL &&
-           (stmt->mcinst->opcode==LA_MC_PCREL_PSEUDO ||
-            stmt->mcinst->opcode==LA_MC_GOT_PSEUDO))
+           stmt->payload.instruction.inst!=NULL &&
+           (stmt->payload.instruction.inst->opcode==LA_MC_PCREL_PSEUDO ||
+            stmt->payload.instruction.inst->opcode==LA_MC_GOT_PSEUDO))
             sections[(size_t)stmt->section]=true;
     }
     free(state->relaxable_sections);
@@ -2053,21 +2054,21 @@ static bool la_measure(const MiniAsMeasureView *view,
                        MiniAsMeasureErrorSink *errors,
                        const MiniAsStmt *s,uint32_t *size) {
     (void)view;
-    if(!s->mcinst){minias_measure_error(errors,"missing-la-mcinst");return false;}
-    if(s->mcinst->target_payload!=NULL) {
+    if(!s->payload.instruction.inst){minias_measure_error(errors,"missing-la-mcinst");return false;}
+    if(s->payload.instruction.inst->target_payload!=NULL) {
         const LaLoweringPlan *plan=
-            (const LaLoweringPlan *)s->mcinst->target_payload;
-        if(!la_valid_lowering_plan(s->mcinst)) {
+            (const LaLoweringPlan *)s->payload.instruction.inst->target_payload;
+        if(!la_valid_lowering_plan(s->payload.instruction.inst)) {
             minias_measure_error(errors,"invalid-loongarch-lowering-plan");
             return false;
         }
         *size=plan->count*4U;
         return true;
     }
-    if(s->mcinst->opcode==LA_MC_PCREL_PSEUDO ||
-       s->mcinst->opcode==LA_MC_GOT_PSEUDO ||
-       s->mcinst->opcode==LA_MC_LI32_SEQUENCE ||
-       s->mcinst->opcode==LA_MC_LI64_SEQUENCE) {
+    if(s->payload.instruction.inst->opcode==LA_MC_PCREL_PSEUDO ||
+       s->payload.instruction.inst->opcode==LA_MC_GOT_PSEUDO ||
+       s->payload.instruction.inst->opcode==LA_MC_LI32_SEQUENCE ||
+       s->payload.instruction.inst->opcode==LA_MC_LI64_SEQUENCE) {
         minias_measure_error(errors,"missing-loongarch-lowering-plan");
         return false;
     }
@@ -2076,7 +2077,7 @@ static bool la_measure(const MiniAsMeasureView *view,
 }
 static bool la_encode(MiniAsEncodeContext *ctx,const MiniAsStmt *s) {
     unsigned char bytes[4];
-    const MiniAsMCInst *m=s->mcinst;
+    const MiniAsMCInst *m=s->payload.instruction.inst;
     uint32_t code;
     unsigned i, slot=0U;
     MiniAsFixupKind kind=MINIAS_FIXUP_NONE;

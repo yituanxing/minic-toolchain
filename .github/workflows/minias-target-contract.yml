@@ -233,6 +233,8 @@ jobs:
             bash tests/assembler/probe-x86-i386-gotpc-gnu.sh
       - name: Enforce one Common MCFragment layout engine and shared variable DATA
         run: bash tests/assembler/probe-mc-layout-ownership.sh
+      - name: Enforce discriminated Fragment payload and safe Target pre-layout reads
+        run: bash tests/assembler/probe-mc-fragment-payload-union.sh
       - name: Enforce unique Common MCExpr grammar and emission ownership
         run: bash tests/assembler/probe-mc-expression-ownership.sh
       - name: GNU expression precedence oracle across four Target data sections

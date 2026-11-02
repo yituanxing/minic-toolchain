@@ -200,7 +200,7 @@ bool minias_add_late_fragment_fixup(MiniAs *as,size_t fragment_id,
         return false;
     }
     stmt=&as->stmts[fragment_id];
-    if(stmt->fragment_kind!=MINIAS_FRAGMENT_BYTES || stmt->leb_mode!=1U ||
+    if(stmt->fragment_kind!=MINIAS_FRAGMENT_BYTES || stmt->payload.bytes.leb_mode!=1U ||
        (kind!=MINIAS_FIXUP_LEB_ADD && kind!=MINIAS_FIXUP_LEB_SUB &&
         kind!=MINIAS_FIXUP_LEB_SET)) {
         minias_set_error(as,"late-fixup-non-uleb-fragment:line=%zu",
@@ -368,10 +368,10 @@ static bool minias_alignment_emits_target_nops(const MiniAs *as,
                                                const MiniAsSection *sec) {
     return stmt->fragment_kind==MINIAS_FRAGMENT_ALIGNMENT &&
            (sec->flags & MINIAS_SHF_EXECINSTR)!=0U &&
-           (!stmt->align_has_fill ||
+           (!stmt->payload.alignment.has_fill ||
             (as->target->explicit_alignment_fill_is_code_nop &&
              as->target->explicit_alignment_fill_is_code_nop(
-                 stmt->align_fill)));
+                 stmt->payload.alignment.fill)));
 }
 
 static bool minias_stage_instruction_bytes(MiniAs *as,
@@ -592,7 +592,7 @@ static bool minias_stage_fragment_bytes(MiniAs *as,int section,
             }
     if(size==0U)return true;
     borrow=!target_bytes && owner->fragment_kind==MINIAS_FRAGMENT_BYTES &&
-           data==owner->static_data && size==owner->static_data_size;
+           data==owner->payload.bytes.data && size==owner->payload.bytes.data_size;
     if(!borrow) {
         if(size>SIZE_MAX-result->byte_storage_size) {
             minias_set_error(as,"fragment-copied-size-overflow");
@@ -832,11 +832,11 @@ static bool minias_emit_data_fragment(MiniAs *as, const MiniAsStmt *stmt) {
      * its semantic FragmentKind while parsing, once and for all. */
     switch(stmt->fragment_kind) {
     case MINIAS_FRAGMENT_FILL: {
-        uint64_t repeat=stmt->variable_repeat;
-        uint64_t value=stmt->variable_value;
-        unsigned width_bytes=stmt->variable_element_width,j;
+        uint64_t repeat=stmt->payload.variable.repeat;
+        uint64_t value=stmt->payload.variable.value;
+        unsigned width_bytes=stmt->payload.variable.element_width,j;
         unsigned char element[8];
-        if(!stmt->variable_data_resolved || width_bytes>8U ||
+        if(!stmt->payload.variable.resolved || width_bytes>8U ||
            (width_bytes!=0U &&
             (repeat>UINT32_MAX/width_bytes ||
              repeat*width_bytes!=(uint64_t)stmt->size))) {
@@ -851,8 +851,8 @@ static bool minias_emit_data_fragment(MiniAs *as, const MiniAsStmt *stmt) {
                                    (size_t)repeat);
     }
     case MINIAS_FRAGMENT_BYTES:
-        if(stmt->static_data_size!=stmt->size ||
-           (stmt->size!=0U && !stmt->static_data)) {
+        if(stmt->payload.bytes.data_size!=stmt->size ||
+           (stmt->size!=0U && !stmt->payload.bytes.data)) {
             minias_set_error(as,"immutable-data-fragment-size:line=%zu",
                              stmt->line);
             return false;
@@ -860,18 +860,18 @@ static bool minias_emit_data_fragment(MiniAs *as, const MiniAsStmt *stmt) {
         /* DATA emission consumes the owned byte snapshot (lexical bytes or
          * fixed-point-resolved LEB), never reinterpreting source text. */
         return minias_section_append(as,stmt->section,
-                                     stmt->static_data,stmt->static_data_size);
+                                     stmt->payload.bytes.data,stmt->payload.bytes.data_size);
     case MINIAS_FRAGMENT_SPACE:
-        if(!stmt->variable_data_resolved ||
-           stmt->variable_element_width!=1U ||
-           stmt->variable_repeat!=(uint64_t)stmt->size ||
-           stmt->variable_value>255U) {
+        if(!stmt->payload.variable.resolved ||
+           stmt->payload.variable.element_width!=1U ||
+           stmt->payload.variable.repeat!=(uint64_t)stmt->size ||
+           stmt->payload.variable.value>255U) {
             minias_set_error(as,"invalid-typed-space-fragment:line=%zu",
                              stmt->line);
             return false;
         }
         return minias_section_append_fill(as,stmt->section,stmt->size,
-                                          (uint8_t)stmt->variable_value,true);
+                                          (uint8_t)stmt->payload.variable.value,true);
     case MINIAS_FRAGMENT_FIXED_DATA:
         return minias_emit_mc_data(as,stmt);
     default:
@@ -986,14 +986,18 @@ bool minias_emit_sections(MiniAs *as) {
         as->emission->committing_fragment=false;
         if (stmt->fragment_kind == MINIAS_FRAGMENT_ALIGNMENT ||
             stmt->fragment_kind == MINIAS_FRAGMENT_ORIGIN) {
+            const bool has_fill=stmt->fragment_kind==MINIAS_FRAGMENT_ALIGNMENT ?
+                stmt->payload.alignment.has_fill:stmt->payload.origin.has_fill;
+            const unsigned char fill=stmt->fragment_kind==MINIAS_FRAGMENT_ALIGNMENT ?
+                stmt->payload.alignment.fill:stmt->payload.origin.fill;
             bool code_nop_align=minias_alignment_emits_target_nops(
                 as,stmt,section);
             MiniAsCodeAlignSink alignment_sink={as};
             if (!(code_nop_align
                       ? as->target->append_code_alignment(&alignment_sink,stmt,stmt->size)
-                      : stmt->align_has_fill
+                      : has_fill
                       ? minias_section_append_fill(as,stmt->section,stmt->size,
-                                                   stmt->align_fill,true)
+                                                   fill,true)
                       : minias_section_append_zero(as,stmt->section,stmt->size))) {
                 if (as->error[0] == '\0') {
                     minias_set_error(as,

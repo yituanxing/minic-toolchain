@@ -12,12 +12,24 @@
  * GNU max-skip calculation, with stage-specific diagnostics at each call. */
 static bool fragment_alignment_padding(const MiniAsStmt *stmt,
                                        uint64_t cursor,uint64_t *padding) {
-    const uint64_t alignment=stmt->align;
+    const uint64_t alignment=stmt->payload.alignment.alignment;
     if(alignment==0U || (alignment&(alignment-1U))!=0U)return false;
     *padding=(alignment-(cursor&(alignment-1U)))&(alignment-1U);
-    if(stmt->align_has_max_skip && *padding>stmt->align_max_skip)
+    if(stmt->payload.alignment.has_max_skip && *padding>stmt->payload.alignment.max_skip)
         *padding=0U;
     return true;
+}
+
+static bool fragment_has_deferred_data(const MiniAsStmt *stmt) {
+    switch(stmt->fragment_kind) {
+    case MINIAS_FRAGMENT_BYTES:
+        return stmt->payload.bytes.deferred_size;
+    case MINIAS_FRAGMENT_FILL:
+    case MINIAS_FRAGMENT_SPACE:
+        return stmt->payload.variable.deferred_size;
+    default:
+        return false;
+    }
 }
 
 /* Common MCLayout subsystem. Fragment identities are immutable; Target
@@ -55,28 +67,30 @@ bool minias_validate_fragment_semantics(MiniAs *as) {
         bool valid=false;
         switch(stmt->fragment_kind) {
         case MINIAS_FRAGMENT_INSTRUCTION:
-            valid=stmt->mcinst!=NULL;
+            valid=stmt->payload.instruction.inst!=NULL;
             break;
         case MINIAS_FRAGMENT_ALIGNMENT:
-            valid=stmt->org_mode==MINIAS_ORG_SOURCE &&
-                  stmt->align!=0U &&
-                  (stmt->align&(stmt->align-1U))==0U;
+            valid=stmt->payload.alignment.alignment!=0U &&
+                  (stmt->payload.alignment.alignment&(stmt->payload.alignment.alignment-1U))==0U;
             break;
         case MINIAS_FRAGMENT_ORIGIN:
-            valid=stmt->org_mode!=MINIAS_ORG_SOURCE &&
-                  (stmt->org_mode!=MINIAS_ORG_TYPED_EXPR ||
-                   stmt->org_expr!=NULL);
+            valid=stmt->payload.origin.mode!=MINIAS_ORG_SOURCE &&
+                  (stmt->payload.origin.mode!=MINIAS_ORG_TYPED_EXPR ||
+                   stmt->payload.origin.expr!=NULL);
             break;
         case MINIAS_FRAGMENT_FIXED_DATA:
-            valid=stmt->mcdata!=NULL;
+            valid=stmt->payload.fixed_data.data!=NULL;
             break;
         case MINIAS_FRAGMENT_FILL:
         case MINIAS_FRAGMENT_SPACE:
-            valid=stmt->variable_expr_count!=0U;
+            valid=stmt->payload.variable.expr_count!=0U;
             break;
         case MINIAS_FRAGMENT_BYTES:
-            valid=stmt->static_data_size==(size_t)stmt->size &&
-                  (stmt->size==0U || stmt->static_data!=NULL);
+            valid=stmt->payload.bytes.data_size==(size_t)stmt->size &&
+                  (stmt->size==0U || stmt->payload.bytes.data!=NULL) &&
+                  (!stmt->payload.bytes.deferred_size ||
+                   (stmt->payload.bytes.leb_mode!=0U &&
+                    stmt->payload.bytes.leb_expr!=NULL));
             break;
         }
         if(!valid) {
@@ -531,23 +545,23 @@ static bool org_fragment_padding(MiniAs *as, const MiniAsStmt *stmt,
                                  uint64_t location, uint32_t *padding) {
     uint64_t target = 0U;
     uint64_t gap;
-    if (stmt->org_mode == MINIAS_ORG_ABSOLUTE) {
-        target = stmt->org_target;
-    } else if (stmt->org_mode == MINIAS_ORG_DOT_ADDEND) {
-        if (stmt->org_target > UINT64_MAX - location) {
+    if (stmt->payload.origin.mode == MINIAS_ORG_ABSOLUTE) {
+        target = stmt->payload.origin.target;
+    } else if (stmt->payload.origin.mode == MINIAS_ORG_DOT_ADDEND) {
+        if (stmt->payload.origin.target > UINT64_MAX - location) {
             minias_set_error(as,"org-dot-overflow:line=%zu",stmt->line);
             return false;
         }
-        target = location + stmt->org_target;
-    } else if (stmt->org_mode == MINIAS_ORG_SYMBOL_ADDEND) {
+        target = location + stmt->payload.origin.target;
+    } else if (stmt->payload.origin.mode == MINIAS_ORG_SYMBOL_ADDEND) {
         const MiniAsSymbol *symbol;
         const MiniAsSubsection *sub;
         uint64_t value;
-        if (stmt->org_symbol_index >= as->symbol_count) {
+        if (stmt->payload.origin.symbol_index >= as->symbol_count) {
             minias_set_error(as,"org-symbol-index-invalid:line=%zu",stmt->line);
             return false;
         }
-        symbol = &as->symbols[stmt->org_symbol_index];
+        symbol = &as->symbols[stmt->payload.origin.symbol_index];
         sub = find_canonical_subsection(as,symbol->section,
                                         symbol->subsection);
         if (sub == NULL || !symbol->defined ||
@@ -560,12 +574,12 @@ static bool org_fragment_padding(MiniAs *as, const MiniAsStmt *stmt,
         /* MCLayout reads only a coherent Section-relative SymbolID snapshot.
          * New anchor candidates stay private until this pass commits. */
         value = symbol->value;
-        if (!add_signed_u64(value,stmt->org_addend,&target)) {
+        if (!add_signed_u64(value,stmt->payload.origin.addend,&target)) {
             minias_set_error(as,"org-symbol-addend-overflow:line=%zu",stmt->line);
             return false;
         }
-    } else if (stmt->org_mode == MINIAS_ORG_TYPED_EXPR &&
-               stmt->org_expr != NULL) {
+    } else if (stmt->payload.origin.mode == MINIAS_ORG_TYPED_EXPR &&
+               stmt->payload.origin.expr != NULL) {
         /* A retained, stable SymbolID expression. Its dot is supplied
          * explicitly by MCLayout: there is no source reparsing and no
          * temporary mutation of lexical parser state during fixed point. */
@@ -574,7 +588,7 @@ static bool org_fragment_padding(MiniAs *as, const MiniAsStmt *stmt,
             minias_set_error(as,"org-location-overflow:line=%zu",stmt->line);
             return false;
         }
-        if(!minias_evaluate_deferred_expr(as,stmt->org_expr,
+        if(!minias_evaluate_deferred_expr(as,stmt->payload.origin.expr,
                                          location,stmt->section,true,&resolved) ||
            resolved<0) {
             minias_set_error(as,"org-expression-unresolved:line=%zu",stmt->line);
@@ -837,26 +851,26 @@ static bool minias_resolve_deferred_data(MiniAs *as) {
         for(i=0U;i<as->stmt_count;++i) {
             MiniAsStmt *stmt=&as->stmts[i];
             uint64_t n=0U;
-            if(!stmt->deferred_data_size)continue;
-            if(stmt->fragment_kind==MINIAS_FRAGMENT_BYTES &&
-               stmt->leb_mode!=0U) {
+            if(!fragment_has_deferred_data(stmt))continue;
+            if(stmt->fragment_kind==MINIAS_FRAGMENT_BYTES) {
                 int64_t value;
                 unsigned char encoded[10];
                 size_t length=0U;
-                if(stmt->leb_mode>2U || stmt->variable_expr_count!=1U ||
-                   stmt->variable_exprs[0]==NULL ||
-                   !minias_evaluate_deferred_expr(as,stmt->variable_exprs[0],
+                if(stmt->payload.bytes.leb_mode==0U ||
+                   stmt->payload.bytes.leb_mode>2U ||
+                   stmt->payload.bytes.leb_expr==NULL ||
+                   !minias_evaluate_deferred_expr(as,stmt->payload.bytes.leb_expr,
                                                   stmt->offset,stmt->section,
                                                   false,&value) ||
-                   !minias_encode_leb_integer(value,stmt->leb_mode==2U,
+                   !minias_encode_leb_integer(value,stmt->payload.bytes.leb_mode==2U,
                                               encoded,&length) ||
-                   stmt->static_data==NULL) {
+                   stmt->payload.bytes.data==NULL) {
                     minias_set_error(as,"unresolved-typed-leb-data:line=%zu",
                                      stmt->line);
                     return false;
                 }
-                memcpy(stmt->static_data,encoded,length);
-                stmt->static_data_size=length;
+                memcpy(stmt->payload.bytes.data,encoded,length);
+                stmt->payload.bytes.data_size=length;
                 n=(uint64_t)length;
             }else {
                 uint64_t repeat=0U,bits=0U;
@@ -868,10 +882,10 @@ static bool minias_resolve_deferred_data(MiniAs *as) {
                     return false;
                 }
                 n=repeat*width;
-                stmt->variable_repeat=repeat;
-                stmt->variable_element_width=width;
-                stmt->variable_value=bits;
-                stmt->variable_data_resolved=true;
+                stmt->payload.variable.repeat=repeat;
+                stmt->payload.variable.element_width=width;
+                stmt->payload.variable.value=bits;
+                stmt->payload.variable.resolved=true;
             }
             if(n!=(uint64_t)stmt->size) {
                 stmt->size=(uint32_t)n;
@@ -952,10 +966,10 @@ bool minias_emit_deferred_leb_relocations(MiniAs *as) {
             MINIAS_FIXUP_LEB_SET:MINIAS_FIXUP_LEB_ADD;
         MiniAsSection *section;
         if(stmt->fragment_kind!=MINIAS_FRAGMENT_BYTES ||
-           stmt->leb_mode!=1U || !stmt->deferred_data_size ||
-           stmt->variable_expr_count!=1U ||
-           stmt->variable_exprs[0]==NULL ||
-           !minias_deferred_symbol_difference(stmt->variable_exprs[0],
+           stmt->payload.bytes.leb_mode!=1U ||
+           !stmt->payload.bytes.deferred_size ||
+           stmt->payload.bytes.leb_expr==NULL ||
+           !minias_deferred_symbol_difference(stmt->payload.bytes.leb_expr,
                                                &pos_id,&neg_id,&addend))
             continue;
         if(pos_id>=as->symbol_count || neg_id>=as->symbol_count)return false;
@@ -1035,7 +1049,7 @@ bool minias_query_target_relax_plan(MiniAs *as,const MiniAsStmt *stmt,
     MiniAsRelaxContext context={.as=as};
     if(as==NULL || stmt==NULL || plan==NULL ||
        stmt->fragment_kind!=MINIAS_FRAGMENT_INSTRUCTION ||
-       stmt->mcinst==NULL) {
+       stmt->payload.instruction.inst==NULL) {
         if(as!=NULL)minias_set_error(as,"invalid-target-relaxation-owner");
         return false;
     }
@@ -1262,11 +1276,11 @@ static bool minias_validate_fragment_layout(MiniAs *as) {
                     goto done;
                 }
             }
-            if(stmt->variable_data_resolved &&
-               (stmt->fragment_kind==MINIAS_FRAGMENT_FILL ||
-                stmt->fragment_kind==MINIAS_FRAGMENT_SPACE)) {
-                uint64_t count=stmt->variable_repeat;
-                unsigned width=stmt->variable_element_width;
+            if((stmt->fragment_kind==MINIAS_FRAGMENT_FILL ||
+                stmt->fragment_kind==MINIAS_FRAGMENT_SPACE) &&
+               stmt->payload.variable.resolved) {
+                uint64_t count=stmt->payload.variable.repeat;
+                unsigned width=stmt->payload.variable.element_width;
                 if(width>8U || (width!=0U &&
                    (count>UINT32_MAX/width ||
                     count*(uint64_t)width!=stmt->size)) ||
@@ -1397,8 +1411,13 @@ bool minias_solve_fragment_layout(MiniAs *as,
             (const MiniAsAnchorGraph *)as->layout->anchor_graph;
         size_t typed_variable=0U,source_variable=0U,i;
         for(i=0U;i<as->stmt_count;++i) {
-            if(!as->stmts[i].deferred_data_size)continue;
-            if(as->stmts[i].variable_expr_count!=0U)++typed_variable;
+            const MiniAsStmt *stmt=&as->stmts[i];
+            if(!fragment_has_deferred_data(stmt))continue;
+            if((stmt->fragment_kind==MINIAS_FRAGMENT_BYTES &&
+                stmt->payload.bytes.leb_expr!=NULL) ||
+               ((stmt->fragment_kind==MINIAS_FRAGMENT_FILL ||
+                 stmt->fragment_kind==MINIAS_FRAGMENT_SPACE) &&
+                stmt->payload.variable.expr_count!=0U))++typed_variable;
             else ++source_variable;
         }
         if(passes!=0U)

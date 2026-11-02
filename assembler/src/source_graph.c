@@ -327,10 +327,11 @@ void minias_source_graph_destroy(MiniAsSourceGraph *graph) {
 static bool source_graph_forced_shape_matches(
                            const MiniAsForcedBranchSite *saved,
                            const MiniAsStmt *stmt) {
-    const MiniAsMCInst *inst=stmt->mcinst;
+    const MiniAsMCInst *inst;
     unsigned i;
-    if(stmt->fragment_kind!=MINIAS_FRAGMENT_INSTRUCTION || inst==NULL ||
-       stmt->source_site!=saved->source_site ||
+    if(stmt->fragment_kind!=MINIAS_FRAGMENT_INSTRUCTION)return false;
+    inst=stmt->payload.instruction.inst;
+    if(inst==NULL || stmt->source_site!=saved->source_site ||
        strcmp(stmt->op,saved->op)!=0 ||
        inst->opcode!=saved->opcode ||
        inst->target_form!=saved->target_form ||
@@ -471,9 +472,9 @@ bool minias_source_graph_capture_forced_branches(
         unsigned j;
         if(ids[i]>=fragment_count ||
            fragments[ids[i]].fragment_kind!=MINIAS_FRAGMENT_INSTRUCTION ||
-           fragments[ids[i]].mcinst==NULL ||
-           fragments[ids[i]].mcinst->count>
-               fragments[ids[i]].mcinst->capacity) {
+           fragments[ids[i]].payload.instruction.inst==NULL ||
+           fragments[ids[i]].payload.instruction.inst->count>
+               fragments[ids[i]].payload.instruction.inst->capacity) {
             minias_set_error(as,"invalid-forced-branch-fragment:%zu",ids[i]);
             return false;
         }
@@ -512,13 +513,13 @@ bool minias_source_graph_capture_forced_branches(
         memset(saved,0,sizeof(*saved));
         saved->source_site=stmt->source_site;
         saved->op=minias_strdup(stmt->op);
-        saved->opcode=stmt->mcinst->opcode;
-        saved->target_form=stmt->mcinst->target_form;
+        saved->opcode=stmt->payload.instruction.inst->opcode;
+        saved->target_form=stmt->payload.instruction.inst->target_form;
         saved->mode_bits=stmt->site.mode_bits;
         /* Required is a lower bound; terminal is the actual Target-owned
          * alternative size committed by the MCLayout growth operation. */
         saved->minimum_size=plan.terminal_size;
-        saved->operand_count=stmt->mcinst->count;
+        saved->operand_count=stmt->payload.instruction.inst->count;
         if(saved->operand_count!=0U) {
             saved->operands=calloc(saved->operand_count,
                                    sizeof(*saved->operands));
@@ -531,7 +532,7 @@ bool minias_source_graph_capture_forced_branches(
             return false;
         }
         for(j=0U;j<saved->operand_count;++j) {
-            const MiniAsMCOperand *operand=&stmt->mcinst->operands[j];
+            const MiniAsMCOperand *operand=&stmt->payload.instruction.inst->operands[j];
             MiniAsForcedOperandShape *shape=&saved->operands[j];
             shape->kind=operand->kind;
             shape->reg_class=operand->reg_class;

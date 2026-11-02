@@ -1099,17 +1099,17 @@ static bool x64_parse(MiniAsParseContext *ctx, MiniAsStmt *s) {
            !isspace((unsigned char)operand[4]))goto invalid;
         operand+=4U;
         while(isspace((unsigned char)*operand))++operand;
-        alias=*s;alias.op="btsl";alias.args=(char *)operand;alias.mcinst=NULL;
+        alias=*s;alias.op="btsl";alias.args=(char *)operand;alias.payload.instruction.inst=NULL;
         minias_mcinst_destroy(m);
         if(!x64_parse(ctx,&alias))return false;
-        m=alias.mcinst;
+        m=alias.payload.instruction.inst;
         if(m==NULL || m->opcode!=X64_IMM_MEMORY) {
             minias_mcinst_destroy(m);
             minias_parse_error(ctx,"invalid-x86-lock-rmw:line=%zu",s->line);
             return false;
         }
         m->encoding|=X64_ENCODING_LOCK;
-        original->mcinst=m;
+        original->payload.instruction.inst=m;
         return true;
     }
     /* GNU GCC emits CET `notrack jmp *table(,%rax,8)` for indirect
@@ -1133,10 +1133,10 @@ static bool x64_parse(MiniAsParseContext *ctx, MiniAsStmt *s) {
         while(isspace((unsigned char)*operand))++operand;
         if(*operand!='*')goto invalid;
         alias=*s;alias.op=(char *)mnemonic;
-        alias.args=(char *)operand;alias.mcinst=NULL;
+        alias.args=(char *)operand;alias.payload.instruction.inst=NULL;
         minias_mcinst_destroy(m);
         if(!x64_parse(ctx,&alias))return false;
-        m=alias.mcinst;
+        m=alias.payload.instruction.inst;
         if(m==NULL || (m->opcode!=X64_INDIRECT_REG &&
            !(m->opcode==X64_REG_MEMORY &&
              (m->encoding&UINT32_C(0xff))==UINT32_C(0xff)))) {
@@ -1145,7 +1145,7 @@ static bool x64_parse(MiniAsParseContext *ctx, MiniAsStmt *s) {
             return false;
         }
         m->encoding|=X64_ENCODING_NOTRACK;
-        original->mcinst=m;
+        original->payload.instruction.inst=m;
         return true;
     }
     /* GNU REP BSF/BSR spell the F3-prefixed BMI bit-scan instructions.
@@ -1169,10 +1169,10 @@ static bool x64_parse(MiniAsParseContext *ctx, MiniAsStmt *s) {
             while(*suffix==' ' || *suffix=='\t')++suffix;
             if(!*suffix)goto invalid;
             alias=*s;alias.op=(char *)canonical;
-            alias.args=(char *)suffix;alias.mcinst=NULL;
+            alias.args=(char *)suffix;alias.payload.instruction.inst=NULL;
             minias_mcinst_destroy(m);
             if(!x64_parse(ctx,&alias))return false;
-            original->mcinst=alias.mcinst;
+            original->payload.instruction.inst=alias.payload.instruction.inst;
             return true;
         }
     }
@@ -3317,7 +3317,7 @@ done:
             }
         }
     }
-    original->mcinst=m;return true;
+    original->payload.instruction.inst=m;return true;
 }
 
 /* One target-owned memory-instruction layout, consumed by sizing and
@@ -3935,7 +3935,7 @@ static bool x64_register_encoding_plan(const MiniAsMCInst *m,
  * Decode recorded the semantic width; no opcode name/list is needed here. */
 static void x64_apply_code16_register_default(const MiniAsStmt *s,
                                               X64RegisterEncodingPlan *plan) {
-    const MiniAsMCInst *m=s->mcinst;
+    const MiniAsMCInst *m=s->payload.instruction.inst;
     if(x64_mode16(s->site.mode_bits) &&
        X64_FORM_OPERAND_BITS(m)==16U &&
        plan->size>1U && plan->bytes[0]==0x66U) {
@@ -3953,7 +3953,7 @@ static void x64_apply_code16_register_default(const MiniAsStmt *s,
 static const char *x64_legacy_mode_prefixes(const MiniAsStmt *s,
                                             unsigned char prefix[4],
                                             size_t *count) {
-    const MiniAsMCInst *m=s->mcinst;
+    const MiniAsMCInst *m=s->payload.instruction.inst;
     bool operand32=false,address32=false;
     *count=0U;
     if(s->site.mode_bits==X64_CODE32) {
@@ -4001,7 +4001,7 @@ static const char *x64_legacy_mode_prefixes(const MiniAsStmt *s,
 
 static bool x64_measure_base(MiniAsMeasureErrorSink *errors,
                              const MiniAsStmt *s,uint32_t *size) {
-    const MiniAsMCInst *m=s->mcinst;
+    const MiniAsMCInst *m=s->payload.instruction.inst;
     X64RegisterEncodingPlan register_plan;
     X64EncodingPlan plan;
     if (!m) {minias_measure_error(errors,"missing-x86_64-mcinst");return false;}
@@ -4062,7 +4062,7 @@ static bool x64_measure(const MiniAsMeasureView *view,
  * opcode carry every short/near alternative.  Neither relaxation nor final
  * encoding may consult a source mnemonic a second time. */
 static uint32_t x64_branch_near_width(const MiniAsStmt *stmt) {
-    const MiniAsMCInst *m=stmt->mcinst;
+    const MiniAsMCInst *m=stmt->payload.instruction.inst;
     const bool mode16=x64_mode16(stmt->site.mode_bits);
     if(m->encoding==0xe8U && X64_FORM_OPERAND_BITS(m)==32U)
         return 5U;
@@ -4099,7 +4099,7 @@ static X64BranchDistanceKind x64_branch_distance(const MiniAsSymbol *symbol,
                                                  const MiniAsStmt *stmt,
                                                  uint32_t instruction_width,
                                                  int64_t *distance) {
-    const MiniAsMCInst *inst=stmt->mcinst;
+    const MiniAsMCInst *inst=stmt->payload.instruction.inst;
     const MiniAsSymbolRef *expr=inst->operands[0].bound_symbol;
     int64_t delta;
     if(X64_FORM_VALUE(inst)==1U ||
@@ -4124,7 +4124,7 @@ static X64BranchDistanceKind x64_branch_distance(const MiniAsSymbol *symbol,
 static bool x64_plan_instruction_relaxation(MiniAsRelaxContext *ctx,
                                              const MiniAsStmt *stmt,
                                              MiniAsTargetRelaxPlan *plan) {
-    const MiniAsMCInst *inst=stmt->mcinst;
+    const MiniAsMCInst *inst=stmt->payload.instruction.inst;
     int64_t distance=0;
     X64BranchDistanceKind result;
     if(!inst || !plan) {
@@ -4324,7 +4324,7 @@ static bool x64_emit_memory_fixups(MiniAsEncodeContext *ctx,const MiniAsStmt *st
 }
 
 static bool x64_encode_base(MiniAsEncodeContext *ctx,const MiniAsStmt *s) {
-    const MiniAsMCInst *m=s->mcinst;
+    const MiniAsMCInst *m=s->payload.instruction.inst;
     X64RegisterEncodingPlan register_plan;
     X64EncodingPlan plan;
     unsigned char code[16];size_t n=0;unsigned r;

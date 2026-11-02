@@ -64,9 +64,13 @@ fragment transaction, EncodeResult and anchor ordinal now live behind an
 opaque state. Context indexes, Lowering worklists and MCLayout subsection
 storage likewise have their own private lifetime; the shared `MiniAs` carries
 only their opaque handles and the semantically shared Section/Symbol/Fragment
-records. Those remaining entity records need type-aware ownership before a
-format-neutral ObjectModel is introduced. See
-[the P06 owner-split record](docs/common-owner-split-2026-11-02.md).
+records. `MiniAsStmt` now holds one `FragmentKind`-discriminated payload
+union rather than 22 mutually exclusive flat fields; Target pre-layout,
+SourceGraph, Lowering, MCExpr, MCLayout and Emission all consume the same
+variant, and Common destroys only its active arm. Section/Symbol and Fragment
+phase-aware access still need further tightening before a format-neutral
+ObjectModel. See [the P06 owner-split record](docs/common-owner-split-2026-11-02.md)
+and [the Fragment payload migration](docs/fragment-payload-2026-11-02.md).
 
 ## Explicit strict RV64I profile
 

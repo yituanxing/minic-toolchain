@@ -50,15 +50,30 @@ void minias_common_lowering_destroy(MiniAs *as) {
     if(as==NULL)return;
     for(i=0U;i<as->stmt_count;++i) {
         MiniAsStmt *stmt=&as->stmts[i];
-        size_t k;
         free(stmt->op);
         free(stmt->args);
-        minias_deferred_expr_destroy(stmt->org_expr);
-        free(stmt->static_data);
-        minias_mcdata_destroy(stmt->mcdata);
-        for(k=0U;k<3U;++k)
-            minias_deferred_expr_destroy(stmt->variable_exprs[k]);
-        minias_mcinst_destroy(stmt->mcinst);
+        switch(stmt->fragment_kind) {
+        case MINIAS_FRAGMENT_INSTRUCTION:
+            minias_mcinst_destroy(stmt->payload.instruction.inst);
+            break;
+        case MINIAS_FRAGMENT_ORIGIN:
+            minias_deferred_expr_destroy(stmt->payload.origin.expr);
+            break;
+        case MINIAS_FRAGMENT_FIXED_DATA:
+            minias_mcdata_destroy(stmt->payload.fixed_data.data);
+            break;
+        case MINIAS_FRAGMENT_FILL:
+        case MINIAS_FRAGMENT_SPACE:
+            for(size_t k=0U;k<3U;++k)
+                minias_deferred_expr_destroy(stmt->payload.variable.exprs[k]);
+            break;
+        case MINIAS_FRAGMENT_BYTES:
+            free(stmt->payload.bytes.data);
+            minias_deferred_expr_destroy(stmt->payload.bytes.leb_expr);
+            break;
+        case MINIAS_FRAGMENT_ALIGNMENT:
+            break;
+        }
     }
     free(as->stmts);
     as->stmts=NULL;
@@ -116,7 +131,8 @@ static bool add_stmt(MiniAs *as,
         return false;
     }
     st->size = size;
-    st->align = align;
+    if(fragment_kind==MINIAS_FRAGMENT_ALIGNMENT)
+        st->payload.alignment.alignment = align;
     if (as->target->capture_site_state != NULL)
         as->target->capture_site_state(as->target_state, st, &st->site);
     if (st->op == NULL || st->args == NULL) {
@@ -175,8 +191,8 @@ static bool minias_maybe_align_instruction(MiniAs *as,size_t line) {
     stmt=&as->stmts[as->stmt_count-1U];
     /* GNU inserts zero bytes here, not 4-byte NOP instructions. Mark this
      * as explicit DATA fill to prevent the target NOP alignment callback. */
-    stmt->align_has_fill=true;
-    stmt->align_fill=0U;
+    stmt->payload.alignment.has_fill=true;
+    stmt->payload.alignment.fill=0U;
     if(!advance_current_location(as,pad))return false;
     sub->pending_instruction_alignment=false;
     if(as->sections[(size_t)as->current_section].align<alignment)
@@ -1124,12 +1140,12 @@ static bool handle_org_position(MiniAs *as, const char *args,
         minias_deferred_expr_destroy(deferred);
         return false;
     }
-    as->stmts[as->stmt_count - 1U].align_has_fill = has_fill;
-    as->stmts[as->stmt_count - 1U].align_fill = fill;
+    as->stmts[as->stmt_count - 1U].payload.origin.has_fill = has_fill;
+    as->stmts[as->stmt_count - 1U].payload.origin.fill = fill;
     if(deferred!=NULL) {
         MiniAsStmt *fragment=&as->stmts[as->stmt_count-1U];
-        fragment->org_expr=deferred;
-        fragment->org_mode=MINIAS_ORG_TYPED_EXPR;
+        fragment->payload.origin.expr=deferred;
+        fragment->payload.origin.mode=MINIAS_ORG_TYPED_EXPR;
         as->lowering->has_org_constraints=true;
         return true; /* Zero-size placeholder; MCLayout owns its padding. */
     }
@@ -1138,23 +1154,23 @@ static bool handle_org_position(MiniAs *as, const char *args,
     if (minias_eval_i64_expression(args, &lexical_target) &&
         lexical_target == evaluated) {
         MiniAsStmt *fragment = &as->stmts[as->stmt_count - 1U];
-        fragment->org_mode = MINIAS_ORG_ABSOLUTE;
-        fragment->org_target = desired;
+        fragment->payload.origin.mode = MINIAS_ORG_ABSOLUTE;
+        fragment->payload.origin.target = desired;
         as->lowering->has_org_constraints = true;
     } else if (minias_parse_symbol_addend(args, &symbolic) &&
                strcmp(symbolic.name, ".") == 0 &&
                symbolic.addend >= 0) {
         MiniAsStmt *fragment = &as->stmts[as->stmt_count - 1U];
-        fragment->org_mode = MINIAS_ORG_DOT_ADDEND;
-        fragment->org_target = (uint64_t)symbolic.addend;
+        fragment->payload.origin.mode = MINIAS_ORG_DOT_ADDEND;
+        fragment->payload.origin.target = (uint64_t)symbolic.addend;
         as->lowering->has_org_constraints = true;
     } else if (minias_parse_symbol_addend(args, &symbolic) &&
                (symbol = minias_get_symbol(as, symbolic.name, false)) != NULL &&
                symbol->defined && symbol->section == MINIAS_SECTION_ABS) {
         /* Lexically resolved .set/.equ values are frozen at this site. */
         MiniAsStmt *fragment = &as->stmts[as->stmt_count - 1U];
-        fragment->org_mode = MINIAS_ORG_ABSOLUTE;
-        fragment->org_target = desired;
+        fragment->payload.origin.mode = MINIAS_ORG_ABSOLUTE;
+        fragment->payload.origin.target = desired;
         as->lowering->has_org_constraints = true;
     } else if (symbol != NULL && symbol->defined &&
                symbol->has_fragment_anchor &&
@@ -1164,18 +1180,18 @@ static bool handle_org_position(MiniAs *as, const char *args,
                symbol->subsection <= as->current_subsection &&
                symbol->fragment_anchor < as->stmt_count) {
         MiniAsStmt *fragment = &as->stmts[as->stmt_count - 1U];
-        fragment->org_mode = MINIAS_ORG_SYMBOL_ADDEND;
-        fragment->org_symbol_index = (size_t)(symbol - as->symbols);
-        fragment->org_addend = symbolic.addend;
+        fragment->payload.origin.mode = MINIAS_ORG_SYMBOL_ADDEND;
+        fragment->payload.origin.symbol_index = (size_t)(symbol - as->symbols);
+        fragment->payload.origin.addend = symbolic.addend;
         as->lowering->has_org_constraints = true;
     } else {
         /* Retain the complete GNU expression as stable SymbolID operations.
          * Its dot and symbol values are evaluated only from MCLayout, not
          * by re-entering a source parser with mutable current-section. */
         MiniAsStmt *fragment=&as->stmts[as->stmt_count - 1U];
-        fragment->org_expr=minias_compile_deferred_expr(as,args);
-        if(fragment->org_expr==NULL)return false;
-        fragment->org_mode=MINIAS_ORG_TYPED_EXPR;
+        fragment->payload.origin.expr=minias_compile_deferred_expr(as,args);
+        if(fragment->payload.origin.expr==NULL)return false;
+        fragment->payload.origin.mode=MINIAS_ORG_TYPED_EXPR;
         as->lowering->has_org_constraints=true;
     }
     return advance_current_location(as, pad);
@@ -1321,8 +1337,9 @@ static bool handle_align(MiniAs *as,const char *op,char *args,size_t line){
     if(!add_stmt(as,MINIAS_FRAGMENT_ALIGNMENT,op,"",line,(uint32_t)pad,alignment))
         return false;
     stmt=&as->stmts[as->stmt_count-1U];
-    stmt->align_has_fill=has_fill;stmt->align_fill=fill;
-    stmt->align_has_max_skip=has_max;stmt->align_max_skip=max_skip;
+    stmt->payload.alignment.has_fill=has_fill;
+    stmt->payload.alignment.fill=fill;
+    stmt->payload.alignment.has_max_skip=has_max;stmt->payload.alignment.max_skip=max_skip;
     if(!advance_current_location(as,pad))return false;
     if(alignment>as->sections[(size_t)as->current_section].align)
         as->sections[(size_t)as->current_section].align=alignment;
@@ -1766,22 +1783,22 @@ static bool add_data_stmt(MiniAs *as, const char *op, char *args, size_t line) {
     if(has_leb_snapshot || has_binary_snapshot || string_snapshot!=NULL) {
         MiniAsStmt *stmt=&as->stmts[as->stmt_count-1U];
         if(has_leb_snapshot) {
-            stmt->static_data=malloc(leb_snapshot_size);
-            if(!stmt->static_data) {
+            stmt->payload.bytes.data=malloc(leb_snapshot_size);
+            if(!stmt->payload.bytes.data) {
                 minias_set_error(as,"out-of-memory:leb-snapshot:line=%zu",line);
                 return false;
             }
-            memcpy(stmt->static_data,leb_snapshot,leb_snapshot_size);
-            stmt->static_data_size=leb_snapshot_size;
+            memcpy(stmt->payload.bytes.data,leb_snapshot,leb_snapshot_size);
+            stmt->payload.bytes.data_size=leb_snapshot_size;
         }else {
-            stmt->static_data=string_snapshot;
-            stmt->static_data_size=string_snapshot_size;
+            stmt->payload.bytes.data=string_snapshot;
+            stmt->payload.bytes.data_size=string_snapshot_size;
             string_snapshot=NULL;
         }
     }
     if(fragment_kind==MINIAS_FRAGMENT_BYTES &&
        (strcmp(op,".uleb128")==0 || strcmp(op,".sleb128")==0))
-        as->stmts[as->stmt_count-1U].leb_mode=
+        as->stmts[as->stmt_count-1U].payload.bytes.leb_mode=
             strcmp(op,".sleb128")==0?2U:1U;
     if(fragment_kind==MINIAS_FRAGMENT_FILL ||
        fragment_kind==MINIAS_FRAGMENT_SPACE) {
@@ -1809,29 +1826,34 @@ static bool add_data_stmt(MiniAs *as, const char *op, char *args, size_t line) {
     }
     if(variable_parsed) {
         MiniAsStmt *fragment=&as->stmts[as->stmt_count-1U];
-        fragment->variable_data_resolved=true;
-        fragment->variable_repeat=variable_repeat;
-        fragment->variable_value=variable_value;
-        fragment->variable_element_width=variable_width;
+        fragment->payload.variable.resolved=true;
+        fragment->payload.variable.repeat=variable_repeat;
+        fragment->payload.variable.value=variable_value;
+        fragment->payload.variable.element_width=variable_width;
     }
     if(width!=0U &&
        !minias_compile_data_mc(as,&as->stmts[as->stmt_count-1U],width))
         return false;
     if(fragment_kind==MINIAS_FRAGMENT_BYTES && delayed) {
         MiniAsStmt *stmt=&as->stmts[as->stmt_count-1U];
-        stmt->variable_exprs[0]=minias_compile_deferred_expr(as,stmt->args);
-        if(stmt->variable_exprs[0]==NULL)return false;
-        stmt->variable_expr_count=1U;
+        stmt->payload.bytes.leb_expr=
+            minias_compile_deferred_expr(as,stmt->args);
+        if(stmt->payload.bytes.leb_expr==NULL)return false;
         /* The retained payload changes size during the Fragment fixed
          * point; allocate its maximum encoded width only once. */
-        stmt->static_data=malloc(10U);
-        if(!stmt->static_data) {
+        stmt->payload.bytes.data=malloc(10U);
+        if(!stmt->payload.bytes.data) {
             minias_set_error(as,"out-of-memory:deferred-leb:line=%zu",line);
             return false;
         }
     }
     if(delayed) {
-        as->stmts[as->stmt_count-1U].deferred_data_size=true;
+        MiniAsStmt *stmt=&as->stmts[as->stmt_count-1U];
+        if(fragment_kind==MINIAS_FRAGMENT_BYTES)
+            stmt->payload.bytes.deferred_size=true;
+        else if(fragment_kind==MINIAS_FRAGMENT_FILL ||
+                fragment_kind==MINIAS_FRAGMENT_SPACE)
+            stmt->payload.variable.deferred_size=true;
         as->lowering->has_deferred_data=true;
         /* A deferred size is a persistent Fragment property. It need not
          * trigger a second source parse: the shared layout solver can
@@ -2158,8 +2180,8 @@ static bool flush_literal_pools(MiniAs *as,size_t line,bool all) {
         if(!add_stmt(as,MINIAS_FRAGMENT_ALIGNMENT,".literal_pool_align","",line,
                      (uint32_t)pad,entry->width))goto failure;
         fragment=&as->stmts[as->stmt_count-1U];
-        fragment->align_has_fill=true;
-        fragment->align_fill=0U;
+        fragment->payload.alignment.has_fill=true;
+        fragment->payload.alignment.fill=0U;
         if((uint64_t)entry->width>as->sections[(size_t)entry->section].align)
             as->sections[(size_t)entry->section].align=entry->width;
         if(!advance_current_location(as,pad) ||
@@ -2195,7 +2217,7 @@ static bool flush_literal_pools(MiniAs *as,size_t line,bool all) {
         data->fields[0].has_lhs=true;
         data->fields[0].lhs_symbol_index=(size_t)(target-as->symbols);
         data->fields[0].lhs_addend=entry->expression.addend;
-        fragment->mcdata=data;
+        fragment->payload.fixed_data.data=data;
         if(!advance_current_location(as,entry->width))goto failure;
         entry->emitted=true;
       }
