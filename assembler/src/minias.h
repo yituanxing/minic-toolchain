@@ -13,9 +13,6 @@ typedef struct MiniAsInvocation {
     const char *target;
     const char *march;
     const char *mabi;
-    /* ELF output policy: suppress the Target's automatic attribute section.
-     * RISC-V GAS spells this -mno-arch-attr. */
-    bool suppress_target_attributes;
 } MiniAsInvocation;
 
 /* The target list is obtained from the one internal Target registry.
@@ -26,6 +23,13 @@ int minias_assemble_invocation(const char *input_path,
                                const char *output_path,
                                const MiniAsInvocation *invocation,
                                FILE *diagnostic);
+/* Opt-in ELF output policy without changing the historical three-field
+ * MiniAsInvocation ABI or breaking existing aggregate initializers. */
+int minias_assemble_invocation_with_policy(const char *input_path,
+                                          const char *output_path,
+                                          const MiniAsInvocation *invocation,
+                                          bool suppress_target_attributes,
+                                          FILE *diagnostic);
 
 int minias_assemble_file(const char *input_path, const char *output_path, FILE *diagnostic);
 int minias_assemble_file_class(const char *input_path,

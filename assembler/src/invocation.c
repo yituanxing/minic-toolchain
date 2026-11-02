@@ -10,10 +10,18 @@ int minias_assemble_invocation(const char *input_path,
                                const char *output_path,
                                const MiniAsInvocation *invocation,
                                FILE *diagnostic) {
+    return minias_assemble_invocation_with_policy(
+        input_path, output_path, invocation, false, diagnostic);
+}
+
+int minias_assemble_invocation_with_policy(const char *input_path,
+                                          const char *output_path,
+                                          const MiniAsInvocation *invocation,
+                                          bool suppress_target_attributes,
+                                          FILE *diagnostic) {
     const char *target_name = "riscv";
     const char *march = NULL;
     const char *mabi = NULL;
-    bool suppress_target_attributes = false;
     const MiniAsTargetOps *target;
     MiniAsTargetSpec config;
     char error[256] = {0};
@@ -22,7 +30,6 @@ int minias_assemble_invocation(const char *input_path,
         if (invocation->target != NULL) target_name = invocation->target;
         march = invocation->march;
         mabi = invocation->mabi;
-        suppress_target_attributes = invocation->suppress_target_attributes;
     }
     if (input_path == NULL || output_path == NULL) {
         if (diagnostic != NULL)

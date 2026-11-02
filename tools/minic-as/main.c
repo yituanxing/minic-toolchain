@@ -55,6 +55,6 @@ int main(int argc, char **argv) {
     invocation.target = target_name;
     invocation.march = march;
     invocation.mabi = mabi;
-    invocation.suppress_target_attributes = suppress_target_attributes;
-    return minias_assemble_invocation(input, output, &invocation, stderr);
+    return minias_assemble_invocation_with_policy(
+        input, output, &invocation, suppress_target_attributes, stderr);
 }

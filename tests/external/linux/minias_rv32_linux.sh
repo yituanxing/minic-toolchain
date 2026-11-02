@@ -59,7 +59,7 @@ args=("$@")
 opts=()
 unsupported=()
 include_dirs=()
-input= output= query=0
+input= output= query=0 pic_driver=0
 for ((i=0;i<${#args[@]};++i)); do
     arg=${args[i]}
     case "$arg" in
@@ -77,6 +77,7 @@ for ((i=0;i<${#args[@]};++i)); do
         # canonical profile. Reject a different requested spec, don't guess.
         -misa-spec=20191213|--traditional-format) ;;
         -mno-arch-attr) opts+=("$arg") ;;
+        -fpic) pic_driver=1 ;;
         --version|--help|-v) query=1 ;;
         -o) if ((i+1<${#args[@]})); then output=${args[i+1]}; ((i+=1)); fi ;;
         -o?*) output=${arg#-o} ;;
@@ -159,6 +160,22 @@ if ((${#include_dirs[@]})) &&
    grep -Eq '^[[:space:]]*\.(include|incbin)([[:space:]]|$)' "$input"; then
     echo 'MINIAS_RV32_AS=FAIL assembler_include_search_not_implemented' >&2
     preserve_failure assembler_include_search_not_implemented
+    exit 2
+fi
+if ((pic_driver)) && ! awk '
+    /^[[:space:]]*\.option[[:space:]]+(pic|nopic)([[:space:]]|$)/ {
+        found=1; exit 0
+    }
+    /^[[:space:]]*([#;].*|\.file[[:space:]].*)?$/ { next }
+    { exit 1 }
+    END { if (!found) exit 1 }
+    ' "$input"; then
+    # GCC may pass -fpic even when the generated source explicitly begins
+    # with .option pic/nopic.  Only that proven source-level override makes
+    # the driver option redundant; otherwise do NOT silently change GOT/LA
+    # relocations by treating an unmodeled PIC default as nop.
+    echo 'MINIAS_RV32_AS=FAIL pic_driver_without_initial_source_option' >&2
+    preserve_failure pic_driver_without_initial_source_option
     exit 2
 fi
 printf 'assemble cwd=%q input=%q output=%q\n' "$PWD" "$input" "$output" >>"$MINIAS_AS_TRACE"
