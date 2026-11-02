@@ -13,7 +13,7 @@ projection, while leaving the one existing parse-time MCInst graph intact:
 
 | Stage | Ownership/permission | Representation |
 | --- | --- | --- |
-| Parse | Construct and own retained machine operands and Target payloads | Writable `MiniAsStmt` / `MiniAsMCInst` with explicit capacity and destructors |
+| Parse | Construct retained machine operands and Target payloads | `MiniAsParseInstruction` with writable output `MiniAsMCInst *`, published into Common's private Fragment after return |
 | Measure | Read current instruction, report byte count | `const MiniAsInstructionView *` |
 | MCLayout/relax | Read the same retained operands and current layout generation, request a monotone plan | `const MiniAsInstructionView *` and opaque `MiniAsRelaxContext` |
 | Emission/encode | Read final operands and placement, emit only through the Common transaction | `const MiniAsInstructionView *` and opaque `MiniAsEncodeContext` |
@@ -61,8 +61,9 @@ heap graph or second machine-encoding parser.
   ISAs, including matching rejections; exact-head GitHub results must be
   checked *after* pushing this commit.
 - GNU opt-in 3,536 cases and Linux/QEMU P1 are **not** claimed by this batch.
-- The parse-only builder still uses writable `MiniAsStmt` / `MiniAsMCInst`;
-  that is intentional. Generic source-site capture and executable ALIGN
-  policies still receive `const MiniAsStmt *`, although neither requires
-  MCInst. Those callbacks are a later narrowing opportunity, along with
-  moving mutable parse constructors out of the read-phase header entirely.
+- **Subsequent P04 boundary update:** all four Target parsers now receive
+  only the parse-stage request, not a writable `MiniAsStmt`; site capture
+  and executable ALIGN receive still narrower value projections. The
+  canonical `MiniAsStmt` and its Fragment payload definitions are now
+  Common/SourceGraph-private, with an independent negative compiler CI
+  guard. See [Target/Fragment private boundary](target-fragment-private-2026-11-02.md).

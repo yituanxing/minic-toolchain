@@ -7,6 +7,51 @@
 > 和早期测试文件数量，均不能自动当作最新 HEAD 的事实。
 > “读过 / 修改过 / 完成清理”必须分别统计。
 
+### 2026-11-02 P04 parse/site/alignment Target/Fragment private boundary
+
+**Base:** Draft PR #667 remote head `510d7931292b361550d0c90de7d973d0aed23f7e`
+(local identical-tree parent `e2fa007245ff4d18319d28f8f6bf6681b8fbd3ff`).
+All five ISA target translation units, Common lowering/emission and the
+shared internal headers were read against the live callbacks before edits.
+
+- The old writable `MiniAsStmt *` parser callback became a narrow
+  `MiniAsParseInstruction *` owning one MCInst output; Common publishes
+  the output even on failure to retain its unique destructor path.
+  x86 recursive lock/notrack/rep alias parsing copies only this request.
+- The two remaining Fragment-wide callbacks now accept immutable
+  source-site and alignment value projections. A canonical private
+  Fragment union/record header is shared by Common and the SourceGraph
+  replay borrow; no Target TU includes it, and no duplicate Fragment
+  exists. The SourceGraph replay raw record dependency remains P05 debt.
+- A new 10-negative/2-positive compiler contract joins required CI;
+  three x86 recursive-alias rejection cases extend the failure-unwind
+  probe. Existing Fragment/Target/readonly guards follow the moved owner.
+
+**Production diff:** twelve C/header files, `+198/-147`, net **+51**.
+The 77-line new private Fragment header replaces declarations removed from
+the Target-visible header, not a second record graph. Overall pre-commit
+scope is 22 files `+439/-166`, including required workflow, five tests and
+four doc files. This is a coherent cross-ISA boundary migration, not a
+claim that line additions are feature coverage.
+
+**Local proof:** strict release `-Werror` A0 **30/30 PASS**;
+Target/Fragment 10-negative/2-positive compiler contract, parser
+failure-unwind nine cases, Target/Source/Fragment structural contracts,
+four-target SymbolRef/EncodeResult/lowering and AArch64 finalization PASS.
+An independently compiled pre-migration baseline matches **26/26** fixtures
+across four targets: **18 byte-identical ELF objects and eight matching
+rejections**. GNU x86 code16 **38/38**, i386 PIC real shared link,
+SourceGraph macro/replay/conditional stable-site checks and x86 typed-relax
+stress PASS. ASan/UBSan Target lowering, four-target SymbolRefs, parser
+failures, AArch64 finalization and SourceGraph replay PASS with leak
+detection disabled; LSan is unavailable in this runtime. Sanitizer build
+uses its ordinary warning policy because an existing unrelated
+`elf_writer.c` sign-conversion warning appears only with sanitizer flags.
+RISC-V cross-GNU replay/stress cannot run locally without
+`riscv64-linux-gnu-as` and remains a required remote-CI check. Exact-head
+CI results belong only to the remote commit actually pushed; strict 3,536
+GNU cases and Linux/QEMU remain separately outstanding.
+
 ### 2026-11-02 P04 Target directive/lifecycle/CFI capability and hard header split
 
 **Base:** remote Draft PR #667 head

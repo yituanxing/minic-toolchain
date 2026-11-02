@@ -2,6 +2,7 @@
 #define MINIAS_INTERNAL_H
 
 #include "minias_target_api.h"
+#include "minias_fragment_internal.h"
 #include "minias_source_replay_contract.h"
 
 /* Common-only mutable Section/Symbol/Fragment state and ownership APIs. */

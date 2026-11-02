@@ -1732,7 +1732,7 @@ static bool la_parse_li(MiniAsParseContext *ctx,MiniAsMCInst *m,char *args[4],
     return true;
 }
 
-static bool la_parse(MiniAsParseContext *ctx,MiniAsStmt *s) {
+static bool la_parse(MiniAsParseContext *ctx,MiniAsParseInstruction *s) {
     MiniAsMCInst *m=minias_mcinst_alloc(4U);
     LaOperandTokens tokens={0};
     char **t=tokens.slots;
@@ -1943,7 +1943,7 @@ done:
             return false;
         }
     free(tokens.overflow);
-    s->payload.instruction.inst=m;return true;
+    s->inst=m;return true;
 }
 
 /* Branch decisions are re-evaluated from the retained SymbolRef after each
@@ -2208,7 +2208,7 @@ static bool la_encode(MiniAsEncodeContext *ctx,const MiniAsInstructionView *s) {
     return minias_encode_ctx_fixup_ref(ctx,s->offset,kind,4U,
                                        *expr,false);
 }
-static bool la_align(MiniAsCodeAlignSink *sink,const MiniAsStmt *stmt,size_t size) {
+static bool la_align(MiniAsCodeAlignSink *sink,const MiniAsCodeAlignmentView *stmt,size_t size) {
     static const unsigned char nop[4]={0x00,0x00,0x40,0x03};
     (void)stmt;
     if(size%4U){minias_code_align_error(sink,"unalignable-loongarch-code-gap");return false;}

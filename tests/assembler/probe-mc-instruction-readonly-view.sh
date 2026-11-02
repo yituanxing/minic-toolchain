@@ -24,8 +24,12 @@ for signature in (
     'const MiniAsInstructionView *,\n                                        MiniAsTargetRelaxPlan *);'):
     if signature not in api:
         raise SystemExit('Old writable MC phase callback survives: '+signature)
-if 'bool (*parse_mcinst)(MiniAsParseContext *, MiniAsStmt *);' not in api:
+if 'bool (*parse_mcinst)(MiniAsParseContext *, MiniAsParseInstruction *);' not in api:
     raise SystemExit('Parse lost its unique construction authority')
+if 'typedef struct MiniAsStmt {' in api or \
+   'MiniAsFragmentPayload' in api or \
+   'typedef struct MiniAsStmt {' not in (root/'minias_fragment_internal.h').read_text():
+    raise SystemExit('Raw Common Fragment escaped into Target-visible ABI')
 for phase,source in (('Measure',lowering),('Relax',layout),('Encode',emission)):
     if 'minias_project_instruction(' not in source:
         raise SystemExit(phase+' bypasses the one Common instruction projector')

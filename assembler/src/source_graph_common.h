@@ -2,6 +2,7 @@
 #define MINIAS_SOURCE_GRAPH_COMMON_H
 
 #include "minias_target_api.h"
+#include "minias_fragment_internal.h"
 #include "source_statement_event.h"
 #include "minias_source_replay_contract.h"
 

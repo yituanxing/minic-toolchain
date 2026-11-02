@@ -17,7 +17,7 @@
  *
  * Preserve the existing .org zero-fill semantics and data alignment. */
 static bool riscv_emit_code_alignment(MiniAsCodeAlignSink *sink,
-                                     const MiniAsStmt *owner,size_t size) {
+                                     const MiniAsCodeAlignmentView *owner,size_t size) {
     static const unsigned char nop32[] = {0x13U, 0x00U, 0x00U, 0x00U};
     static const unsigned char nop16[] = {0x01U, 0x00U};
     static const unsigned char zero = 0U;
@@ -245,7 +245,7 @@ static bool strict_base_i_check_sections(const MiniAsPostEmitView *view,
  * validate_instruction hook must not re-parse the opcode as a second source
  * of truth. Strict base-I retains its independent post-encoding raw-word
  * validator, so no .insn/pseudo/relocation placeholder bypass is possible. */
-bool minias_riscv_validate_parsed_isa(MiniAsParseContext *ctx, const MiniAsStmt *stmt,
+bool minias_riscv_validate_parsed_isa(MiniAsParseContext *ctx, const MiniAsParseInstruction *stmt,
                                       uint64_t required_features,
                                       bool rv64_only) {
     const MiniAsRiscvState *state=minias_parse_target_state(ctx);
@@ -1028,7 +1028,7 @@ static bool riscv_configure_legacy(MiniAsAssemblyConfig *config,
 }
 
 static void riscv_capture_site_state(const void *target_state,
-                                      const MiniAsStmt *stmt,
+                                      const MiniAsSourceSiteView *stmt,
                                       MiniAsTargetSiteState *site) {
     const MiniAsRiscvState *state=target_state;
     (void)stmt;

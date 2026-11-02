@@ -133,8 +133,15 @@ static bool add_stmt(MiniAs *as,
     st->size = size;
     if(fragment_kind==MINIAS_FRAGMENT_ALIGNMENT)
         st->payload.alignment.alignment = align;
-    if (as->target->capture_site_state != NULL)
-        as->target->capture_site_state(as->target_state, st, &st->site);
+    if (as->target->capture_site_state != NULL) {
+        const MiniAsSourceSiteView source_site={
+            .kind=st->fragment_kind,
+            .op=st->op,
+            .alignment=st->fragment_kind==MINIAS_FRAGMENT_ALIGNMENT?
+                       st->payload.alignment.alignment:0U
+        };
+        as->target->capture_site_state(as->target_state,&source_site,&st->site);
+    }
     if (st->op == NULL || st->args == NULL) {
         minias_set_error(as, "out-of-memory:stmt-text");
         return false;
@@ -142,7 +149,17 @@ static bool add_stmt(MiniAs *as,
     ++as->stmt_count;
     if (fragment_kind == MINIAS_FRAGMENT_INSTRUCTION) {
         MiniAsParseContext parsing = { .as=as };
-        if (!as->target->parse_mcinst(&parsing, st))return false;
+        MiniAsParseInstruction instruction={
+            .op=st->op,
+            .args=st->args,
+            .line=st->line,
+            .site=st->site
+        };
+        const bool parsed=as->target->parse_mcinst(&parsing,&instruction);
+        /* Publish even a failed parser's partially retained instruction so
+         * the one Common destructor can unwind it by owned capacity. */
+        st->payload.instruction.inst=instruction.inst;
+        if (!parsed)return false;
     }
     /* Code-after-data needs a GNU target-defined implicit alignment. Record
      * the transition per subsection so enormous instruction-only Linux

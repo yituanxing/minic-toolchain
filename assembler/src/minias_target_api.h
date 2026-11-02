@@ -315,6 +315,31 @@ typedef struct MiniAsInstructionView {
     const MiniAsMCInstView *inst;
 } MiniAsInstructionView;
 
+/* Only the ISA parser constructs a retained instruction. Its lexical source
+ * site is borrowed read-only from Common; the Target may install exactly one
+ * owned MCInst. Common publishes that pointer to its private Fragment only
+ * after the parser returns, including failure paths for correct cleanup. */
+typedef struct MiniAsParseInstruction {
+    const char *op;
+    const char *args;
+    size_t line;
+    MiniAsTargetSiteState site;
+    MiniAsMCInst *inst;
+} MiniAsParseInstruction;
+
+/* Capture and code alignment need neither the mutable Fragment record nor
+ * its variant payload. Give them the source intent that they actually read. */
+typedef struct MiniAsSourceSiteView {
+    MiniAsFragmentKind kind;
+    const char *op;
+    uint64_t alignment;
+} MiniAsSourceSiteView;
+
+typedef struct MiniAsCodeAlignmentView {
+    size_t line;
+    MiniAsTargetSiteState site;
+} MiniAsCodeAlignmentView;
+
 /* MCExpr owns semantic operands, not source spelling. Compile each fixed-
  * width data operand once at its lexical site; the output pass resolves
  * relocatable references using the final Fragment/Symbol layout. */
@@ -349,81 +374,6 @@ typedef struct MiniAsMCData {
     size_t count;
     MiniAsMCExpr *fields;
 } MiniAsMCData;
-
-/* One discriminated source Fragment payload. The kind in MiniAsStmt selects
- * exactly one active member, including on a failed partial parse. Source
- * spelling, site identity and final placement remain shared metadata. */
-typedef struct MiniAsInstructionFragment {
-    MiniAsMCInst *inst;
-} MiniAsInstructionFragment;
-
-typedef struct MiniAsAlignmentFragment {
-    uint64_t alignment;
-    bool has_fill;
-    unsigned char fill;
-    bool has_max_skip;
-    uint64_t max_skip;
-} MiniAsAlignmentFragment;
-
-typedef struct MiniAsOriginFragment {
-    MiniAsOrgMode mode;
-    MiniAsDeferredExpr *expr;
-    uint64_t target;
-    size_t symbol_index;
-    int64_t addend;
-    bool has_fill;
-    unsigned char fill;
-} MiniAsOriginFragment;
-
-typedef struct MiniAsFixedDataFragment {
-    MiniAsMCData *data;
-} MiniAsFixedDataFragment;
-
-/* FILL and SPACE share the same retained GNU expression program but the
- * FragmentKind determines which value/width combinations are legal. */
-typedef struct MiniAsVariableDataFragment {
-    bool deferred_size;
-    bool resolved;
-    uint64_t repeat;
-    uint64_t value;
-    unsigned element_width;
-    MiniAsDeferredExpr *exprs[3];
-    unsigned expr_count;
-} MiniAsVariableDataFragment;
-
-/* Raw strings/incbin and fixed LEB snapshots share immutable bytes. Only a
- * deferred symbolic LEB carries an expression and changes its byte length. */
-typedef struct MiniAsBytesFragment {
-    bool deferred_size;
-    unsigned char *data;
-    size_t data_size;
-    unsigned leb_mode;
-    MiniAsDeferredExpr *leb_expr;
-} MiniAsBytesFragment;
-
-typedef union MiniAsFragmentPayload {
-    MiniAsInstructionFragment instruction;
-    MiniAsAlignmentFragment alignment;
-    MiniAsOriginFragment origin;
-    MiniAsFixedDataFragment fixed_data;
-    MiniAsVariableDataFragment variable;
-    MiniAsBytesFragment bytes;
-} MiniAsFragmentPayload;
-
-typedef struct MiniAsStmt {
-    MiniAsFragmentKind fragment_kind;
-    MiniAsStableSiteId source_site;
-    char *op;
-    char *args;
-    size_t line;
-    int section;
-    uint32_t subsection;
-    uint64_t offset;
-    uint32_t size;
-    /* Immutable parse-site state: meaningful bits are defined by Target. */
-    struct MiniAsTargetSiteState site;
-    MiniAsFragmentPayload payload;
-} MiniAsStmt;
 
 /* Ephemeral value projections. No pointer to writable Common Fragments,
  * Sections or Symbol records crosses a Target stage boundary. A borrowed
@@ -674,7 +624,7 @@ typedef struct MiniAsTargetOps {
     bool (*init_target_state)(const struct MiniAsAssemblyConfig *,
                               void **,char *,size_t);
     bool (*configure_legacy_target)(struct MiniAsAssemblyConfig *, unsigned);
-    void (*capture_site_state)(const void *target_state, const MiniAsStmt *,
+    void (*capture_site_state)(const void *target_state, const MiniAsSourceSiteView *,
                                MiniAsTargetSiteState *);
     void (*destroy_target_state)(void *);
     /* Optional one-shot analysis over the complete parsed SourceGraph.
@@ -697,7 +647,7 @@ typedef struct MiniAsTargetOps {
                             struct MiniAsAssemblyConfig *, char *, size_t);
     /* Mandatory target instruction path: parse once, measure its retained
      * typed operands, then encode. Core owns fragment address and growth. */
-    bool (*parse_mcinst)(MiniAsParseContext *, MiniAsStmt *);
+    bool (*parse_mcinst)(MiniAsParseContext *, MiniAsParseInstruction *);
     bool (*measure_mcinst)(const MiniAsMeasureView *,
                            MiniAsMeasureErrorSink *,
                            const MiniAsInstructionView *, uint32_t *);
@@ -709,7 +659,8 @@ typedef struct MiniAsTargetOps {
                                         MiniAsTargetRelaxPlan *);
     /* Keep the lexical ISA/mode snapshot of the ALIGN site: a Target may
      * need different NOP encodings for different source-selected CPU modes. */
-    bool (*append_code_alignment)(MiniAsCodeAlignSink *,const MiniAsStmt *,size_t);
+    bool (*append_code_alignment)(MiniAsCodeAlignSink *,
+                                  const MiniAsCodeAlignmentView *,size_t);
     /* Some targets interpret an explicit alignment fill as the canonical
      * executable NOP sequence (e.g. GNU x86 `balign 16,0x90`). Common
      * must not choose machine-code bytes or hardcode a target's fill value. */

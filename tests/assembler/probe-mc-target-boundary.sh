@@ -230,10 +230,11 @@ if 'struct MiniAsParseContext {' in core or \
         'struct MiniAsParseContext { MiniAs *as; };' not in private_lowering:
     raise SystemExit('Parse context exposed its mutable Common owner')
 if not re.search(r'bool\s*\(\*parse_mcinst\)\s*\('
-                 r'MiniAsParseContext\s*\*\s*,\s*MiniAsStmt\s*\*', core):
+                 r'MiniAsParseContext\s*\*\s*,\s*MiniAsParseInstruction\s*\*', core):
     raise SystemExit('Target parser still receives full mutable MiniAs')
 if 'MiniAsParseContext parsing = { .as=as };' not in lowering or \
-        'as->target->parse_mcinst(&parsing, st)' not in lowering:
+        'as->target->parse_mcinst(&parsing,&instruction)' not in lowering or \
+        'st->payload.instruction.inst=instruction.inst;' not in lowering:
     raise SystemExit('Common failed to provide its single parse owner')
 required = ('target_state', 'is_elf32', 'has_error', 'error',
             'bind_symbol_ref', 'bind_symbol_difference_ref',
@@ -289,7 +290,7 @@ rv = (root / 'riscv_target.c').read_text()
 if not re.search(r'static unsigned\s+riscv_default_exec_alignment_for_site'
                  r'\s*\(\s*const void\s*\*target_state\s*\)', rv):
     raise SystemExit('RISC-V execution alignment still reads Common')
-if 'capture_site_state(as->target_state, st, &st->site)' not in \
+if 'capture_site_state(as->target_state,&source_site,&st->site)' not in \
         (root / 'common_lowering.c').read_text() or \
         'default_exec_alignment_for_site(as->target_state)' not in driver:
     raise SystemExit('Common did not pass private Target context')

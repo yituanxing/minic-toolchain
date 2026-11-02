@@ -471,9 +471,9 @@ static const MiniAsRiscvState *rv_parse_state(const MiniAsParseContext *ctx) {
  * measurement and emitted machine bytes. GNU GAS splits wide RV64 constants
  * into signed 12-bit tails, then merges zero tails into one SLLI. Keep that
  * expansion entirely at parse time so layout and emission use one plan. */
-static bool rv_materialize_li(MiniAsParseContext *ctx, const MiniAsStmt *stmt,
+static bool rv_materialize_li(MiniAsParseContext *ctx, const MiniAsParseInstruction *stmt,
                               uint32_t words[16], unsigned *count) {
-    const MiniAsMCInst *m = stmt->payload.instruction.inst;
+    const MiniAsMCInst *m = stmt->inst;
     const uint64_t bits = m->operands[1].immediate;
     const int64_t signed_value = (int64_t)m->operands[2].immediate;
     const bool fits_signed32 = m->target_form == RV_PSEUDO_LI_SIGNED32;
@@ -1231,7 +1231,7 @@ static void rv_set_imm(MiniAsMCOperand *op, int64_t num) {
  * once and retain individual architectural registers in MCInst; preserve
  * CSR numbers, vector vtype, and memory/AMO width in the opcode template.
  * No source string is accessed by the final instruction writer. */
-static bool rv_mc_word(MiniAsParseContext *ctx, MiniAsStmt *stmt,
+static bool rv_mc_word(MiniAsParseContext *ctx, MiniAsParseInstruction *stmt,
                        uint32_t skeleton, int rd, int rs1, int rs2) {
     MiniAsMCInst *m = minias_mcinst_alloc(3U);
     if (m == NULL) {
@@ -1244,14 +1244,14 @@ static bool rv_mc_word(MiniAsParseContext *ctx, MiniAsStmt *stmt,
     rv_set_reg(&m->operands[0], rd);
     rv_set_reg(&m->operands[1], rs1);
     rv_set_reg(&m->operands[2], rs2);
-    stmt->payload.instruction.inst = m;
+    stmt->inst = m;
     return true;
 }
 
-static bool rv_mc_vector_word(MiniAsParseContext *ctx, MiniAsStmt *stmt,
+static bool rv_mc_vector_word(MiniAsParseContext *ctx, MiniAsParseInstruction *stmt,
                                uint32_t base, int vd, int rs1) {
     if (!rv_mc_word(ctx, stmt, base, vd, rs1, 0)) return false;
-    stmt->payload.instruction.inst->operands[0].reg_class = MINIAS_MC_REG_VECTOR;
+    stmt->inst->operands[0].reg_class = MINIAS_MC_REG_VECTOR;
     return true;
 }
 
@@ -1260,7 +1260,7 @@ static bool rv_mc_vector_word(MiniAsParseContext *ctx, MiniAsStmt *stmt,
  * parsers specialize it for suffix-dependent widths/FP formats. There is no
  * second mnemonic decode after an MCInst has been constructed. */
 typedef struct RvParsedIsaPolicy RvParsedIsaPolicy;
-typedef bool (*RvFormParser)(MiniAsParseContext *, MiniAsStmt *, char [][128], size_t,
+typedef bool (*RvFormParser)(MiniAsParseContext *, MiniAsParseInstruction *, char [][128], size_t,
                              RvParsedIsaPolicy *);
 typedef enum RvSimpleFormKind {
     RV_SIMPLE_NONE,
@@ -1293,7 +1293,7 @@ struct RvParsedIsaPolicy {
 /* Common integer, supervisor, CSR aliases and compressed instructions share
  * typed MCInst ownership.  Multiword, position-dependent pseudos also retain
  * an instruction; the Target supplies their expansion-size plan. */
-static bool rv_parse_simple_mc(MiniAsParseContext *ctx, MiniAsStmt *stmt,
+static bool rv_parse_simple_mc(MiniAsParseContext *ctx, MiniAsParseInstruction *stmt,
                                char ops[][128], size_t n,
                                RvParsedIsaPolicy *policy) {
     const char *op = stmt->op;
@@ -1322,7 +1322,7 @@ static bool rv_parse_simple_mc(MiniAsParseContext *ctx, MiniAsStmt *stmt,
                     goto invalid;
                 if (!rv_mc_word(ctx, stmt, (csr << 20U) | 0x5073U,
                                 rd, (int)imm, 0)) return false;
-                rv_set_imm(&stmt->payload.instruction.inst->operands[1], imm);
+                rv_set_imm(&stmt->inst->operands[1], imm);
                 return true;
             }
             if ((rs1 = reg_number(ops[n-1U])) < 0) goto invalid;
@@ -1339,7 +1339,7 @@ static bool rv_parse_simple_mc(MiniAsParseContext *ctx, MiniAsStmt *stmt,
                 if (m == NULL) goto oom;
                 m->opcode = RV_MC_C16;
                 m->encoding = selected->compressed_encoding;
-                stmt->payload.instruction.inst = m;
+                stmt->inst = m;
                 return true;
             }
             return rv_mc_word(ctx, stmt, selected->simple_encoding, 0, 0, 0);
@@ -1363,7 +1363,7 @@ static bool rv_parse_simple_mc(MiniAsParseContext *ctx, MiniAsStmt *stmt,
         if (m == NULL) goto oom;
         m->opcode = RV_MC_RAW;
         m->encoding = word;
-        stmt->payload.instruction.inst = m;
+        stmt->inst = m;
         return true;
     }
     if (strcmp(op,"c.li")==0) {
@@ -1381,7 +1381,7 @@ static bool rv_parse_simple_mc(MiniAsParseContext *ctx, MiniAsStmt *stmt,
         m->count=2U;
         rv_set_reg(&m->operands[0],rd);
         rv_set_imm(&m->operands[1],imm);
-        stmt->payload.instruction.inst=m;
+        stmt->inst=m;
         return true;
     }
     if(strcmp(op,"fence")==0) {
@@ -1426,7 +1426,7 @@ oom:
 /* GNU multiword pseudos retain one layout-sized fragment, but their
  * registers, bit-patterns and symbolic expressions are parsed only once.
  * The serializer must never re-split their original source strings. */
-static bool rv_parse_multi_mc(MiniAsParseContext *ctx, MiniAsStmt *stmt,
+static bool rv_parse_multi_mc(MiniAsParseContext *ctx, MiniAsParseInstruction *stmt,
                               char ops[][128], size_t n,
                               RvParsedIsaPolicy *policy) {
     const char *op = stmt->op;
@@ -1485,12 +1485,12 @@ static bool rv_parse_multi_mc(MiniAsParseContext *ctx, MiniAsStmt *stmt,
             return false;
         }
     }
-    stmt->payload.instruction.inst = m;
+    stmt->inst = m;
     if (family == RV_MC_LI) {
         MiniAsRiscvLiPlan *plan = malloc(sizeof(*plan));
         if (plan == NULL) {
             minias_parse_error(ctx, "out-of-memory:riscv-li-lowering-plan");
-            stmt->payload.instruction.inst = NULL;
+            stmt->inst = NULL;
             minias_mcinst_destroy(m);
             return false;
         }
@@ -1500,7 +1500,7 @@ static bool rv_parse_multi_mc(MiniAsParseContext *ctx, MiniAsStmt *stmt,
         m->target_payload = plan;
         m->dispose_target_payload = free;
         if (!rv_materialize_li(ctx, stmt, plan->words, &plan->count)) {
-            stmt->payload.instruction.inst = NULL;
+            stmt->inst = NULL;
             minias_mcinst_destroy(m);
             return false;
         }
@@ -1512,7 +1512,7 @@ invalid:
     return false;
 }
 
-static bool rv_parse_vector_mc(MiniAsParseContext *ctx, MiniAsStmt *stmt,
+static bool rv_parse_vector_mc(MiniAsParseContext *ctx, MiniAsParseInstruction *stmt,
                                char operands[][128], size_t count,
                                RvParsedIsaPolicy *policy) {
     bool store;
@@ -1566,7 +1566,7 @@ invalid:
     return false;
 }
 
-static bool rv_parse_atomic_mc(MiniAsParseContext *ctx, MiniAsStmt *stmt,
+static bool rv_parse_atomic_mc(MiniAsParseContext *ctx, MiniAsParseInstruction *stmt,
                                char operands[][128], size_t count,
                                RvParsedIsaPolicy *policy) {
     bool lr = false, recognized;
@@ -1632,7 +1632,7 @@ static const RvCsrDesc *rv_find_csr_form(const char *name) {
     return NULL;
 }
 
-static bool rv_parse_csr_mc(MiniAsParseContext *ctx, MiniAsStmt *stmt,
+static bool rv_parse_csr_mc(MiniAsParseContext *ctx, MiniAsParseInstruction *stmt,
                             char operands[][128], size_t count,
                             RvParsedIsaPolicy *policy) {
     const RvCsrDesc *form = rv_find_csr_form(stmt->op);
@@ -1670,7 +1670,7 @@ static bool rv_parse_csr_mc(MiniAsParseContext *ctx, MiniAsStmt *stmt,
                     (csr << 20U), rd, rs1, 0)) return false;
     /* zimm occupies the same five instruction bits as rs1, but it is NOT
      * an integer register and must not trip RV32E's x16..x31 restriction. */
-    if (immediate) rv_set_imm(&stmt->payload.instruction.inst->operands[1], rs1);
+    if (immediate) rv_set_imm(&stmt->inst->operands[1], rs1);
     return true;
 invalid:
     minias_parse_error(ctx, "bad-csr-mcinst:%s:%s:line=%zu",
@@ -1679,14 +1679,14 @@ invalid:
 }
 
 
-static bool rv_mc_fp_word(MiniAsParseContext *ctx, MiniAsStmt *stmt,
+static bool rv_mc_fp_word(MiniAsParseContext *ctx, MiniAsParseInstruction *stmt,
                           uint32_t base, int rd, int rs1, int rs2,
                           unsigned fpr_mask) {
     unsigned i;
     if (!rv_mc_word(ctx, stmt, base, rd, rs1, rs2)) return false;
     for (i = 0U; i < 3U; ++i)
         if ((fpr_mask & (1U << i)) != 0U)
-            stmt->payload.instruction.inst->operands[i].reg_class = MINIAS_MC_REG_FPR;
+            stmt->inst->operands[i].reg_class = MINIAS_MC_REG_FPR;
     return true;
 }
 
@@ -1803,7 +1803,7 @@ static const RvFpDesc *rv_find_fp_form(const char *op) {
     return NULL;
 }
 
-static bool rv_parse_fp_mc(MiniAsParseContext *ctx, MiniAsStmt *stmt,
+static bool rv_parse_fp_mc(MiniAsParseContext *ctx, MiniAsParseInstruction *stmt,
                             char operands[][128], size_t count,
                             RvParsedIsaPolicy *policy) {
     const RvFpDesc *form = rv_find_fp_form(stmt->op);
@@ -1847,7 +1847,7 @@ static bool rv_parse_fp_mc(MiniAsParseContext *ctx, MiniAsStmt *stmt,
         rv_set_reg(&m->operands[3], rs3);
         for (i = 0U; i < 4U; ++i)
             m->operands[i].reg_class = MINIAS_MC_REG_FPR;
-        stmt->payload.instruction.inst = m;
+        stmt->inst = m;
         return true;
     }
     if (form->kind == RV_FP_LOAD || form->kind == RV_FP_STORE) {
@@ -1881,7 +1881,7 @@ static bool rv_parse_fp_mc(MiniAsParseContext *ctx, MiniAsStmt *stmt,
                 return false;
             }
         } else rv_set_imm(&m->operands[2],offset);
-        stmt->payload.instruction.inst=m;
+        stmt->inst=m;
         return true;
     }
     if (form->kind == RV_FP_BINARY || form->kind == RV_FP_R3_FIXED ||
@@ -2019,7 +2019,7 @@ static const RvParseForm *rv_find_parse_form(const char *op) {
     return NULL;
 }
 
-static bool rv_parse_mcinst_impl(MiniAsParseContext *ctx, MiniAsStmt *stmt,
+static bool rv_parse_mcinst_impl(MiniAsParseContext *ctx, MiniAsParseInstruction *stmt,
                                   RvParsedIsaPolicy *policy) {
     const RvMCDesc *desc;
     char operands[8][128];
@@ -2167,7 +2167,7 @@ static bool rv_parse_mcinst_impl(MiniAsParseContext *ctx, MiniAsStmt *stmt,
                 minias_mcinst_destroy(inst);
                 return false;
             }
-            stmt->payload.instruction.inst = inst;
+            stmt->inst = inst;
             return true;
         }
     } else if (family == RV_MC_U) {
@@ -2215,7 +2215,7 @@ static bool rv_parse_mcinst_impl(MiniAsParseContext *ctx, MiniAsStmt *stmt,
                 minias_mcinst_destroy(inst);
                 return false;
             }
-            stmt->payload.instruction.inst=inst;
+            stmt->inst=inst;
         }
         return true;
     } else if (family == RV_MC_JAL) {
@@ -2241,7 +2241,7 @@ static bool rv_parse_mcinst_impl(MiniAsParseContext *ctx, MiniAsStmt *stmt,
                 minias_mcinst_destroy(inst);
                 return false;
             }
-            stmt->payload.instruction.inst=inst;
+            stmt->inst=inst;
         }
         return true;
     } else {
@@ -2282,7 +2282,7 @@ static bool rv_parse_mcinst_impl(MiniAsParseContext *ctx, MiniAsStmt *stmt,
             return false;
         }
     } else rv_set_imm(&inst->operands[1],imm);
-    stmt->payload.instruction.inst=inst;
+    stmt->inst=inst;
     return true;
 invalid:
     minias_parse_error(ctx,"invalid-riscv-mcinst:%s:%s:line=%zu",
@@ -2299,14 +2299,14 @@ oom:
  * Check those typed operands after parsing, never a lexical sweep over the
  * original assembly text. The Target's ABI snapshot also covers
  * -mabi=ilp32e without an explicit -march. */
-bool minias_riscv_parse_mcinst(MiniAsParseContext *ctx, MiniAsStmt *stmt) {
+bool minias_riscv_parse_mcinst(MiniAsParseContext *ctx, MiniAsParseInstruction *stmt) {
     const MiniAsRiscvState *state = rv_parse_state(ctx);
     RvParsedIsaPolicy policy={0};
     const MiniAsMCInst *inst;
     size_t index;
 
     if (!rv_parse_mcinst_impl(ctx, stmt, &policy)) return false;
-    inst = stmt->payload.instruction.inst;
+    inst = stmt->inst;
     if (inst == NULL) {
         minias_parse_error(ctx, "internal:riscv-parse-form-without-mcinst");
         return false;

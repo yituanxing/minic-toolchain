@@ -81,7 +81,7 @@ typedef enum MiniAsRiscvSymbolModifier {
 } MiniAsRiscvSymbolModifier;
 
 struct MiniAs;
-struct MiniAsStmt;
+struct MiniAsParseInstruction;
 struct MiniAsInstructionView;
 struct MiniAsSymbolRef;
 struct MiniAsMeasureView;
@@ -93,14 +93,14 @@ struct MiniAsParseContext;
 bool minias_riscv_measure_mcinst(const struct MiniAsMeasureView *,
                                 struct MiniAsMeasureErrorSink *,
                                 const struct MiniAsInstructionView *, uint32_t *);
-bool minias_riscv_parse_mcinst(struct MiniAsParseContext *, struct MiniAsStmt *);
+bool minias_riscv_parse_mcinst(struct MiniAsParseContext *, struct MiniAsParseInstruction *);
 bool minias_riscv_encode(struct MiniAsEncodeContext *, const struct MiniAsInstructionView *);
 
 /* Parser already chose a fixed descriptor or dynamic Target form; validate
  * its typed feature/XLEN policy once, after MCInst construction. An explicitly
  * requested Base-I output-word audit remains an independent check. */
 bool minias_riscv_validate_parsed_isa(struct MiniAsParseContext *ctx,
-                                     const struct MiniAsStmt *stmt,
+                                     const struct MiniAsParseInstruction *stmt,
                                      uint64_t required_features,
                                      bool rv64_only);
 

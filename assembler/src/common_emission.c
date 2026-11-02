@@ -994,8 +994,12 @@ bool minias_emit_sections(MiniAs *as) {
             bool code_nop_align=minias_alignment_emits_target_nops(
                 as,stmt,section);
             MiniAsCodeAlignSink alignment_sink={as};
+            const MiniAsCodeAlignmentView site={
+                .line=stmt->line,
+                .site=stmt->site
+            };
             if (!(code_nop_align
-                      ? as->target->append_code_alignment(&alignment_sink,stmt,stmt->size)
+                      ? as->target->append_code_alignment(&alignment_sink,&site,stmt->size)
                       : has_fill
                       ? minias_section_append_fill(as,stmt->section,stmt->size,
                                                    fill,true)

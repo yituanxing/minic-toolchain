@@ -235,6 +235,8 @@ jobs:
         run: bash tests/assembler/probe-mc-layout-ownership.sh
       - name: Enforce discriminated Fragment payload and safe Target pre-layout reads
         run: bash tests/assembler/probe-mc-fragment-payload-union.sh
+      - name: Target Parse, site capture and ALIGN cannot borrow Common Fragments
+        run: bash tests/assembler/probe-mc-target-fragment-private.sh
       - name: Reject mutable Common records and raw arrays from phase-limited Targets
         run: bash tests/assembler/probe-mc-target-readonly-projections.sh
       - name: Reject mutable MCInst and nested operand payloads in all four Target read phases

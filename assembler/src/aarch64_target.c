@@ -135,13 +135,13 @@ enum {
  * available. Late mapping/ELF finalization must consume this typed site
  * state rather than reinterpret a raw mnemonic or directive string. */
 static void a64_capture_site_state(const void *target_state,
-                                   const MiniAsStmt *stmt,
+                                   const MiniAsSourceSiteView *stmt,
                                    MiniAsTargetSiteState *site) {
     const A64TargetState *state=target_state;
     site->mode_bits=state==NULL?0U:state->features;
     if(stmt->op!=NULL && strcmp(stmt->op,".inst")==0)
         site->provenance_bits|=A64_SITE_INST_DATA;
-    if(stmt->fragment_kind==MINIAS_FRAGMENT_ALIGNMENT && stmt->payload.alignment.alignment>1U &&
+    if(stmt->kind==MINIAS_FRAGMENT_ALIGNMENT && stmt->alignment>1U &&
        stmt->op!=NULL &&
        (strcmp(stmt->op,".align")==0 ||
         strcmp(stmt->op,".p2align")==0 ||
@@ -2709,7 +2709,7 @@ static const A64NamedForm a64_sha3_forms[] = {
     {"sha512su1",UINT32_C(0xce608800),0U}
 };
 
-static bool parse_mcinst(MiniAsParseContext *ctx, MiniAsStmt *stmt) {
+static bool parse_mcinst(MiniAsParseContext *ctx, MiniAsParseInstruction *stmt) {
     const A64TargetState *state=(const A64TargetState *)minias_parse_target_state(ctx);
     const A64AliasState *aliases=state?state->aliases:NULL;
     /* Alias state belongs to this lexical parse site. Typed register
@@ -4378,7 +4378,7 @@ lane_complete:;
      * The AArch64 integer/memory family is parsed into typed operands.
      * No instruction is silently translated through a RISC-V pipeline.
      */
-    stmt->payload.instruction.inst = inst;
+    stmt->inst = inst;
     return true;
 }
 
@@ -5525,7 +5525,7 @@ static bool directive(MiniAsDirectiveContext *ctx, const char *op, const char *a
     return true;
 }
 
-static bool code_alignment(MiniAsCodeAlignSink *sink, const MiniAsStmt *stmt, size_t amount) {
+static bool code_alignment(MiniAsCodeAlignSink *sink, const MiniAsCodeAlignmentView *stmt, size_t amount) {
     static const unsigned char nop[] = {0x1f, 0x20, 0x03, 0xd5};
     (void)stmt;
     if (amount % sizeof(nop) != 0U) {

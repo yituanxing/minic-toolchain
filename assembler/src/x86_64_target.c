@@ -824,7 +824,7 @@ static bool x64_alu_group(const char *name,unsigned *group) {
  * normalize the instruction before parsing.  Capture that final ISA width
  * exactly once in the retained target form.  Emission/relaxation must never
  * rediscover operand sizes by comparing original source spellings. */
-static unsigned x64_legacy_operand_bits(const MiniAsStmt *s,
+static unsigned x64_legacy_operand_bits(const MiniAsParseInstruction *s,
                                         const MiniAsMCInst *m) {
     const char *name=s->op;
     size_t length;
@@ -911,7 +911,7 @@ static void x64_register_pair(MiniAsMCInst *inst,unsigned source,
     x64_set_register_operand(inst,1U,destination);
 }
 
-static bool x64_parse(MiniAsParseContext *ctx, MiniAsStmt *s) {
+static bool x64_parse(MiniAsParseContext *ctx, MiniAsParseInstruction *s) {
     static const struct {const char *op; unsigned char bytes[3]; unsigned size;} zeros[]={
         {"nop",{0x90},1}, {"ret",{0xc3},1}, {"retq",{0xc3},1},
         {"retl",{0xc3},1}, {"lretw",{0xcb},1},
@@ -1018,7 +1018,7 @@ static bool x64_parse(MiniAsParseContext *ctx, MiniAsStmt *s) {
     unsigned i, rs, rd;
     bool ws, wd;
     char src[X64_OPERAND_CAP],dst[X64_OPERAND_CAP];
-    MiniAsStmt normalized, *const original=s;
+    MiniAsParseInstruction normalized, *const original=s;
     char suffixed_op[24];
     if (!m) {minias_parse_error(ctx,"out-of-memory:x86_64-mcinst");return false;}
     m->dispose_memory=x64_dispose_memory;
@@ -1092,24 +1092,24 @@ static bool x64_parse(MiniAsParseContext *ctx, MiniAsStmt *s) {
     }
     if(!strcmp(s->op,"lock") && s->args[0]!='\0') {
         const char *operand=s->args;
-        MiniAsStmt alias;
+        MiniAsParseInstruction alias;
         /* LOCK must prefix one retained read-modify-write MCInst; it
          * cannot be emitted as an unrelated standalone instruction. */
         if(strncmp(operand,"btsl",4U) ||
            !isspace((unsigned char)operand[4]))goto invalid;
         operand+=4U;
         while(isspace((unsigned char)*operand))++operand;
-        alias=*s;alias.op="btsl";alias.args=(char *)operand;alias.payload.instruction.inst=NULL;
+        alias=*s;alias.op="btsl";alias.args=operand;alias.inst=NULL;
         minias_mcinst_destroy(m);
         if(!x64_parse(ctx,&alias))return false;
-        m=alias.payload.instruction.inst;
+        m=alias.inst;
         if(m==NULL || m->opcode!=X64_IMM_MEMORY) {
             minias_mcinst_destroy(m);
             minias_parse_error(ctx,"invalid-x86-lock-rmw:line=%zu",s->line);
             return false;
         }
         m->encoding|=X64_ENCODING_LOCK;
-        original->payload.instruction.inst=m;
+        original->inst=m;
         return true;
     }
     /* GNU GCC emits CET `notrack jmp *table(,%rax,8)` for indirect
@@ -1119,7 +1119,7 @@ static bool x64_parse(MiniAsParseContext *ctx, MiniAsStmt *s) {
     if(!strcmp(s->op,"notrack")) {
         const char *p=s->args,*operand;
         const char *mnemonic=NULL;
-        MiniAsStmt alias;
+        MiniAsParseInstruction alias;
         while(isspace((unsigned char)*p))++p;
         if(!strncmp(p,"jmpq",4U) && isspace((unsigned char)p[4]))
             {mnemonic="jmpq";operand=p+4U;}
@@ -1132,11 +1132,11 @@ static bool x64_parse(MiniAsParseContext *ctx, MiniAsStmt *s) {
         if(mnemonic==NULL)goto invalid;
         while(isspace((unsigned char)*operand))++operand;
         if(*operand!='*')goto invalid;
-        alias=*s;alias.op=(char *)mnemonic;
-        alias.args=(char *)operand;alias.payload.instruction.inst=NULL;
+        alias=*s;alias.op=mnemonic;
+        alias.args=operand;alias.inst=NULL;
         minias_mcinst_destroy(m);
         if(!x64_parse(ctx,&alias))return false;
-        m=alias.payload.instruction.inst;
+        m=alias.inst;
         if(m==NULL || (m->opcode!=X64_INDIRECT_REG &&
            !(m->opcode==X64_REG_MEMORY &&
              (m->encoding&UINT32_C(0xff))==UINT32_C(0xff)))) {
@@ -1145,7 +1145,7 @@ static bool x64_parse(MiniAsParseContext *ctx, MiniAsStmt *s) {
             return false;
         }
         m->encoding|=X64_ENCODING_NOTRACK;
-        original->payload.instruction.inst=m;
+        original->inst=m;
         return true;
     }
     /* GNU REP BSF/BSR spell the F3-prefixed BMI bit-scan instructions.
@@ -1155,7 +1155,7 @@ static bool x64_parse(MiniAsParseContext *ctx, MiniAsStmt *s) {
     if(!strcmp(s->op,"rep") || !strcmp(s->op,"repz") ||
        !strcmp(s->op,"repe")) {
         const char *p=s->args,*suffix=NULL,*canonical=NULL;
-        MiniAsStmt alias;
+        MiniAsParseInstruction alias;
         while(*p==' ' || *p=='\t')++p;
         if(!strncmp(p,"bsfq",4U) && isspace((unsigned char)p[4]))
             {canonical="tzcntq";suffix=p+4U;}
@@ -1168,11 +1168,11 @@ static bool x64_parse(MiniAsParseContext *ctx, MiniAsStmt *s) {
         if(canonical) {
             while(*suffix==' ' || *suffix=='\t')++suffix;
             if(!*suffix)goto invalid;
-            alias=*s;alias.op=(char *)canonical;
-            alias.args=(char *)suffix;alias.payload.instruction.inst=NULL;
+            alias=*s;alias.op=canonical;
+            alias.args=suffix;alias.inst=NULL;
             minias_mcinst_destroy(m);
             if(!x64_parse(ctx,&alias))return false;
-            original->payload.instruction.inst=alias.payload.instruction.inst;
+            original->inst=alias.inst;
             return true;
         }
     }
@@ -3317,7 +3317,7 @@ done:
             }
         }
     }
-    original->payload.instruction.inst=m;return true;
+    original->inst=m;return true;
 }
 
 /* One target-owned memory-instruction layout, consumed by sizing and
@@ -4729,7 +4729,7 @@ static bool x64_encode(MiniAsEncodeContext *ctx,const MiniAsInstructionView *s) 
     return x64_encode_base(ctx,&native);
 }
 
-static bool x64_code_align(MiniAsCodeAlignSink *sink,const MiniAsStmt *stmt,size_t n) {
+static bool x64_code_align(MiniAsCodeAlignSink *sink,const MiniAsCodeAlignmentView *stmt,size_t n) {
     /* GNU as x86-64 code alignment uses Intel multi-byte NOPs, not a run
      * of 0x90 bytes. Keep the exact GNU profile (1..11 bytes) in the Target,
      * while Common owns the ALIGN fragment and atomically commits its bytes.
@@ -5019,7 +5019,7 @@ static bool x64_init_target_state(const MiniAsAssemblyConfig *config,
 }
 
 static void x64_capture_site_state(const void *target_state,
-                                   const MiniAsStmt *stmt,
+                                   const MiniAsSourceSiteView *stmt,
                                    MiniAsTargetSiteState *site) {
     const X64TargetState *state=target_state;
     (void)stmt;

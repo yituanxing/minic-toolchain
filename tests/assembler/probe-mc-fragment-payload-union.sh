@@ -12,6 +12,7 @@ import subprocess
 
 root=Path('assembler/src')
 api=(root/'minias_target_api.h').read_text()
+private=(root/'minias_fragment_internal.h').read_text()
 lowering=(root/'common_lowering.c').read_text()
 layout=(root/'mc_layout.c').read_text()
 expr=(root/'mc_expr.c').read_text()
@@ -27,12 +28,15 @@ required={
     'variable':'MiniAsVariableDataFragment',
     'bytes':'MiniAsBytesFragment',
 }
-body=api.split('typedef union MiniAsFragmentPayload {',1)[1].split(
+if 'typedef union MiniAsFragmentPayload {' in api or \
+   'typedef struct MiniAsStmt {' in api:
+    raise SystemExit('Mutable Fragment records escaped into Target header')
+body=private.split('typedef union MiniAsFragmentPayload {',1)[1].split(
     '} MiniAsFragmentPayload;',1)[0]
 for member, type_name in required.items():
     if not re.search(r'\b'+type_name+r'\s+'+member+r'\s*;',body):
         raise SystemExit('Fragment union member missing: '+member)
-stmt=api.split('typedef struct MiniAsStmt {',1)[1].split('} MiniAsStmt;',1)[0]
+stmt=private.split('typedef struct MiniAsStmt {',1)[1].split('} MiniAsStmt;',1)[0]
 if not re.search(r'\bMiniAsFragmentPayload\s+payload\s*;',stmt):
     raise SystemExit('MiniAsStmt has no discriminated payload')
 if stmt.count('MiniAsFragmentPayload')!=1:
@@ -84,9 +88,9 @@ if forced.find('stmt->fragment_kind!=MINIAS_FRAGMENT_INSTRUCTION') > \
    forced.find('inst=stmt->payload.instruction.inst'):
     raise SystemExit('SourceGraph reads instruction arm before kind check')
 
-# Compile a negative consumer against the actual public header. This catches
-# accidental compatibility fields that a textual test might overlook.
-code='#include "minias_target_api.h"\nvoid probe(MiniAsStmt *stmt) {\n'
+# Compile against the private Fragment contract to reject stale flat fields.
+# The Target-only header is separately checked to lack this type entirely.
+code='#include "minias_fragment_internal.h"\nvoid probe(MiniAsStmt *stmt) {\n'
 for field in old:
     code+='(void)stmt->'+field+';\n'
 code+='}\n'
