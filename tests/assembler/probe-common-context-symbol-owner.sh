@@ -33,6 +33,8 @@ for suffix in front+synthetic+relayout:
 
 if ('bool has_explicit_size;' not in records or
     'bool alias_size_tracks_target;' not in records or
+    'typedef struct MiniAsSymbol {' in internal or
+    '#include "minias_object_records.h"' not in internal or
     not re.search(r'alias->alias_size_tracks_target\s*&&\s*'
                   r'!alias->has_explicit_size',context)):
     raise SystemExit('alias size must track forward/dynamic sizes, not frozen snapshots')

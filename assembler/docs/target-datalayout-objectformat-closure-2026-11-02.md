@@ -42,7 +42,9 @@ RISC-V Profile 既有 `elf32` 私有解析位是输入解码缓存，并非 Comm
   i386 GNU REL CFI、RV32 GNU COMDAT 和 `ld -r`。
 - 新结构门禁：非法 address_size 0/3/16 逐项拒绝，格式未知拒绝；
   8 个 TargetSpec 负向编译和 Section/Symbol 11 节 GNU 投影通过；
-  已接入 `.github/workflows/minias-target-contract.yml`。
+  已接入 `.github/workflows/minias-target-contract.yml`。CI 在原生
+  套件中安装 AArch64/RISC-V/LoongArch GNU 汇编器，并要求六配置
+  GNU 对照全数运行，缺失任一跨架构工具不再默默按 SKIP 通过。
 
 上述证据只支持边界、单编译单链接 GNU 对照，不支持将**未运行的**
 Linux original Kbuild→GNU ld→system QEMU P0/P1 标为通过。对应的

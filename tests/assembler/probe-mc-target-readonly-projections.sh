@@ -20,7 +20,9 @@ writer=(root/'elf_writer.c').read_text()
 
 for record in ('MiniAsSection','MiniAsSymbol'):
     if 'typedef struct '+record+' {' in public or \
-       'typedef struct '+record+' {' not in records:
+       records.count('typedef struct '+record+' {')!=1 or \
+       'typedef struct '+record+' {' in private or \
+       '#include "minias_object_records.h"' not in private:
         raise SystemExit('Common mutable record escaped into Target ABI: '+record)
 for phase in ('MiniAsPreLayoutView','MiniAsPostEmitView'):
     if ('typedef struct '+phase+' '+phase+';' not in public or

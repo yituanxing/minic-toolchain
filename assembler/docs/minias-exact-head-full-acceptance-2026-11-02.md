@@ -1,9 +1,9 @@
 # MiniAS exact-HEAD release acceptance: original Linux and real programs (2026-11-02)
 
-This is an execution and evidence checklist for PR #667, **not** an assertion
-that the currently unpushed refactor has passed four-architecture Linux P1.
-The final result must be attached to one Git commit SHA. Historical passes
-at older revisions are regression references, not substitutes.
+This is an execution and evidence ledger for PR #667. The completed
+four-architecture Linux results below belong to refactor commit `5381dc63`.
+Any later code/test-only HEAD needs its own exact-head verification; an
+earlier success is regression evidence, not a substitute for that check.
 
 ## One final-commit trigger
 
@@ -80,6 +80,28 @@ The immutable 3536, 3x7, and original Linux P0/P1 workflows at this
 intermediate SHA were correctly **skipped** (their opt-in markers were not
 present). QEMU-user library/BusyBox success does not replace system-QEMU
 Linux P1 or final SHA recertification.
+
+## Actual four-architecture acceptance at `5381dc63`
+
+Commit [`5381dc63ca2334f9235e62ce34946df6f335a2c7`](https://github.com/yituanxing/minic-toolchain/commit/5381dc63ca2334f9235e62ce34946df6f335a2c7)
+triggered the four opt-in gates. Unlike intermediate results above, **every
+requested heavy `push` workflow completed successfully** at this SHA:
+
+| Independent dimension | Official run | Exact evidence |
+| --- | --- | --- |
+| Original Linux 6.6.143 GNU Kbuild `.s` → MiniAS-only `.o` → GNU BFD → **system-QEMU P0/P1** | [x86/A64/Loong + GNU controls](https://github.com/yituanxing/minic-toolchain/actions/runs/41453062804), [RV64](https://github.com/yituanxing/minic-toolchain/actions/runs/41453062525) | Original Kbuild owners x86 **2841/2841**, A64 **4171/4171**, Loong **2748/2748**, RV64 **2099/2099**, assembler bypass **0** throughout; each architecture **P0 2/2, P1 12/12** with 22 guest checks and fatal=0. |
+| Independent GNU kernel controls and config provenance | Same three-target workflow | x86 GNU baseline also boots P0/P1; A64 and Loong GNU baseline boots P0/P1 and PRE/FINAL `.config` SHA matches corresponding MiniAS build exactly; `MINIAS_LINUX_MATCHED_CONTROL=PASS`. |
+| 21 immutable original Linux shards (3×7) | [3×7](https://github.com/yituanxing/minic-toolchain/actions/runs/41453062725) | **21/21 shards + aggregate SUCCESS**, `MINIAS_LINUX_S_STRICT_GATE=PASS candidates=9645` (assembly-only: `GNU_ORACLE=NOT_TESTED P1=NOT_TESTED`). |
+| Frozen 3,536 | [3536](https://github.com/yituanxing/minic-toolchain/actions/runs/41453062602) | **11/11 jobs SUCCESS**, `MINIAS_A0_GATE_V1=PASS c_frozen=3352 c149=149 native=35 selected=3536 pass=3536 fail=0`. |
+| Original GCC programs, cJSON, full zlib and Lua 5.5 | [QEMU-user runtime ladder](https://github.com/yituanxing/minic-toolchain/actions/runs/41453062722) | All four architectures **4/4 SUCCESS**: 5/5 stages, cJSON 3 units/2 workloads, zlib 16 units, Lua 33 units, GNU/MiniAS real execution equal. |
+| GNU/MiniAS GCC A/B and original BusyBox | [A/B](https://github.com/yituanxing/minic-toolchain/actions/runs/41453062619), [BusyBox](https://github.com/yituanxing/minic-toolchain/actions/runs/41453062814) | Both **4/4 architecture jobs SUCCESS**; BusyBox 154 original assembler owners, 10/10 applets, no fallback, QEMU-user. |
+
+One PR-only native Target contract failed in an old test structural matcher
+looking for the canonical Section/Symbol record in `minias_internal.h`
+after its declaration moved to `minias_object_records.h`. The follow-up
+corrects three affected ownership gates and makes the six GNU DataLayout
+profiles mandatory in CI; **production assembler code does not change**.
+This follow-up must complete its own exact-head CI and optional workflows.
 
 ## Final-SHA proof and fail-closed interpretation
 

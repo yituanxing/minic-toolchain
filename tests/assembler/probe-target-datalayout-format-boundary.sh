@@ -1,11 +1,19 @@
 #!/usr/bin/env bash
 # One immutable target data layout drives GNU .init_array, DWARF and CFI
 # independently of ELF's object format/class/relo policy. Validate the
-# complete five-profile source-to-object path against GNU GAS.
+# complete six-profile source-to-object path against GNU GAS.
 set -Eeuo pipefail
 repo=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
 : "${MINIAS:=$repo/build/release/bin/minic-as}"
 test -x "$MINIAS"
+if [[ ${MINIAS_REQUIRE_SIX_GNU:-0} == 1 ]]; then
+    for gas in riscv64-linux-gnu-as aarch64-linux-gnu-as loongarch64-linux-gnu-as; do
+        if ! command -v "$gas" >/dev/null; then
+            echo "required six-profile GNU oracle unavailable: $gas" >&2
+            exit 1
+        fi
+    done
+fi
 work=$(mktemp -d)
 trap 'rm -rf -- "$work"' EXIT
 

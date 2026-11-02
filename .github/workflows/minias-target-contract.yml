@@ -39,6 +39,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             binutils-riscv64-linux-gnu gcc-riscv64-linux-gnu \
+            binutils-aarch64-linux-gnu \
             binutils-loongarch64-linux-gnu qemu-user python3-pyelftools
       - name: Build MiniAS from this exact PR head
         run: |
@@ -119,9 +120,9 @@ jobs:
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
             bash tests/assembler/probe-target-spec-const-abi.sh
-      - name: Five-profile data layout and object format boundary against GNU
+      - name: Six-profile data layout and object format boundary against GNU
         run: |
-          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+          MINIAS_REQUIRE_SIX_GNU=1 MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
             bash tests/assembler/probe-target-datalayout-format-boundary.sh
       - name: GNU x86 ELF32 i386 ISA and object ABI must agree in both directions
         run: |

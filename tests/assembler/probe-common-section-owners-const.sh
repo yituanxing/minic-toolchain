@@ -76,6 +76,10 @@ context=(root/'common_context.c').read_text()
 private=(root/'minias_common_emission_private.h').read_text()
 emission=(root/'common_emission.c').read_text()
 layout=(root/'mc_layout.c').read_text()
+if records.count('typedef struct MiniAsSection {')!=1 or \
+   'typedef struct MiniAsSection {' in internal or \
+   '#include "minias_object_records.h"' not in internal:
+    raise SystemExit('Section metadata has no unique Context/terminal record')
 meta=records.split('typedef struct MiniAsSection {',1)[1].split('} MiniAsSection;',1)[0]
 if re.search(r'\b(?:data|size|capacity)\s*;',meta):
     raise SystemExit('Section metadata still contains byte-owner fields')
