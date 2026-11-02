@@ -36,9 +36,15 @@ if re.search(r'\bas->(?:stmts|stmt_count)\b',graph):
 for call in ('as,as->stmts,as->stmt_count','&as,as.stmts,as.stmt_count'):
     if call not in core:
         raise SystemExit('Common omitted explicit immutable Fragment span: '+call)
+if 'as->layout_sensitive' in source or 'minias_get_symbol(' in source:
+    raise SystemExit('Source bypasses Common semantic ownership')
+if 'minias_common_source_symbol_defined(as,args)' not in source:
+    raise SystemExit('Source conditional lacks Common definition predicate')
+if 'minias_source_context_layout_sensitive(as->source)' not in core:
+    raise SystemExit('Common did not import Source conditional replay signal')
 if 'size_t site;' not in events or 'char *text;' not in events:
     raise SystemExit('Statement event loses writable text or stable identity')
-print('MINIAS_SOURCE_EVENT_STRUCTURE=PASS one_lowerer=1 stable_site=1 no_legacy_parser=1 sink_unbound=1 fragments=borrowed')
+print('MINIAS_SOURCE_EVENT_STRUCTURE=PASS one_lowerer=1 stable_site=1 no_legacy_parser=1 sink_unbound=1 fragments=borrowed semantic_state=owned')
 PY
 # Standalone contract clients can hold an opaque session, but cannot
 # dereference it through this header. No Common private include is allowed.

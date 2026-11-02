@@ -72,6 +72,7 @@ struct MiniAsSourceContext {
     size_t macro_expansion_depth;
     bool altmacro_active;
     bool conditional_active;
+    bool conditional_layout_sensitive;
     bool source_ended;
     MiniAsSourceGraph *graph; /* borrowed from assembly invocation */
     /* Bound only during the synchronous source traversal. Recursive macro,

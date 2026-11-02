@@ -70,6 +70,10 @@ void minias_source_restore_site(MiniAs *as,MiniAsStableSiteId site) {
     as->source->current_site=site;
 }
 
+bool minias_source_context_layout_sensitive(const MiniAsSourceContext *source) {
+    return source!=NULL && source->conditional_layout_sensitive;
+}
+
 /* Bind the persistent SourceGraph to this fresh lexical pass. Common only
  * receives the processed Fragment stream, never the FILE/expansion frame or
  * the conditional stack. Errors and the replay pass counter are unchanged. */
@@ -217,7 +221,6 @@ static bool minias_source_push_conditional_numeric(MiniAs *as,const char *args,
 static bool minias_source_push_conditional_defined(MiniAs *as,const char *args,
                                       bool negate,size_t line) {
     const char *p=args;
-    MiniAsSymbol *symbol;
     bool defined;
     if(!as->source->conditional_active)
         return minias_source_push_conditional_value(as,false);
@@ -233,8 +236,7 @@ static bool minias_source_push_conditional_defined(MiniAs *as,const char *args,
             return false;
         }
     }
-    symbol=minias_get_symbol(as,args,false);
-    defined=symbol && (symbol->defined || symbol->alias_pending);
+    defined=minias_common_source_symbol_defined(as,args);
     return minias_source_push_conditional_value(as,negate?!defined:defined);
 }
 
@@ -409,7 +411,7 @@ bool minias_source_try_conditional(MiniAs *as,char *text,size_t line,
                (text[width]=='\0' || isspace((unsigned char)text[width]))) {
                 int64_t literal;
                 if(!minias_eval_i64_expression(text+width,&literal))
-                    as->layout_sensitive=true;
+                    as->source->conditional_layout_sensitive=true;
                 return minias_source_push_conditional_numeric(as,
                            minias_trim(text+width),name,line);
             }
@@ -421,14 +423,14 @@ bool minias_source_try_conditional(MiniAs *as,char *text,size_t line,
          * can change their Fragment set after MCLayout. */
         int64_t literal;
         if(!minias_eval_i64_expression(text+3U,&literal))
-            as->layout_sensitive=true;
+            as->source->conditional_layout_sensitive=true;
         return minias_source_push_conditional(as,minias_trim(text+3U),line);
     }
     if (strncmp(text,".elseif",7U)==0 &&
         (text[7]=='\0' || isspace((unsigned char)text[7]))) {
         int64_t literal;
         if(!minias_eval_i64_expression(text+7U,&literal))
-            as->layout_sensitive=true;
+            as->source->conditional_layout_sensitive=true;
         return minias_source_elseif_conditional(as,minias_trim(text+7U),line);
     }
     if(strcmp(text,".else")==0)return minias_source_else_conditional(as,line);

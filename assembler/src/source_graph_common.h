@@ -45,6 +45,12 @@ bool minias_source_graph_capture_forced_branches(
 bool minias_source_context_init(MiniAs *as);
 void minias_source_context_destroy(MiniAsSourceContext *source);
 MiniAsStableSiteId minias_source_current_site(const MiniAs *as);
+/* Source records syntax whose condition may change after MCLayout; Common
+ * imports the pass result without Source mutating Common layout flags. */
+bool minias_source_context_layout_sensitive(const MiniAsSourceContext *source);
+/* .ifdef/.ifndef consume a read-only Common symbol-defined predicate.
+ * Source never allocates Symbols or inspects Common Symbol internals. */
+bool minias_common_source_symbol_defined(MiniAs *as,const char *name);
 void minias_source_restore_site(MiniAs *as,MiniAsStableSiteId site);
 bool minias_source_try_conditional(MiniAs *as,char *text,size_t line,
                                    bool *handled);

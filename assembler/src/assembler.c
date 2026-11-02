@@ -4662,6 +4662,13 @@ static bool lower_source_statement(MiniAs *as, char *text, size_t line) {
     return advance_current_location(as, size);
 }
 
+/* Read-only .ifdef/.ifndef query: a declaration or relocation reference
+ * alone cannot create a defined symbol in the Source conditional grammar. */
+bool minias_common_source_symbol_defined(MiniAs *as,const char *name) {
+    const MiniAsSymbol *symbol=minias_get_symbol(as,name,false);
+    return symbol!=NULL && (symbol->defined || symbol->alias_pending);
+}
+
 /* Common consumes one Source-owned, stable-site statement event. No private
  * session pointer or lowerer function is exported into the Source module.
  * Label recursion stays within the same single Common parser. */
@@ -4685,6 +4692,8 @@ static bool parse_loaded_source_graph(MiniAs *as,
     };
     if(!minias_source_context_process_graph(as,graph,&statements))
         return false;
+    if(minias_source_context_layout_sensitive(as->source))
+        as->layout_sensitive=true;
     if(as->cfi_active) {
         minias_set_error(as,"unterminated-directive:.cfi_startproc");
         return false;
