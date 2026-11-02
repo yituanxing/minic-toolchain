@@ -176,6 +176,8 @@ static int run(void) {
     ins = (MinicCoreInstruction){0};
     ins.kind = MINIC_CORE_INSTRUCTION_SCALAR_BITCAST;
     ins.core_type_id = int_id;
+    /* Shared Core shape now checks the result SSA ID as well as operands. */
+    ins.result = 3U;
     ins.value.operand = 2U;
     REQUIRE(minic_riscv64_core_scalar_bitcast_supported(NULL, &function, &ins));
     ins.value.operand = 3U;

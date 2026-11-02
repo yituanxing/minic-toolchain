@@ -3,6 +3,7 @@
 #include "target/common/core_call_view.h"
 #include "target/common/core_instruction_family.h"
 #include "target/common/core_numeric_shape.h"
+#include "target/common/core_scalar_conversion.h"
 #include "target/common/direct_residual_plan.h"
 #include "target/common/direct_instruction_semantics.h"
 #include "target/x86_64/abi.h"
@@ -1034,50 +1035,41 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
                        "  movq %%rdx, 8(%%r10)\n") >= 0;
     }
     case MINIC_CORE_INSTRUCTION_INTEGER_CONVERSION: {
-        MinicCoreValueId source = ins->value.operand;
-        MinicType source_type;
-        if (source >= fn->value_count) return false;
-        source_type = fn->values[source].type;
-        if (minic_type_is_int128_integer(ins->type)) {
-            if (minic_type_is_int128_integer(source_type)) {
+        MinicCoreIntegerConversionShape cast;
+        if (!minic_core_integer_conversion_shape(fn, ins, &cast))
+            return false;
+        const MinicCoreValueId source = ins->value.operand;
+        if (cast.target_bytes == 16U) {
+            if (cast.source_bytes == 16U) {
                 if (!x86_i128_load(out, frame, source, "%rax", "%rdx"))
                     return false;
             } else {
-                size_t source_bytes;
-                bool signed_source;
-                if (!minic_x86_64_scalar_width(program, target, source_type,
-                                      &source_bytes, &signed_source) ||
-                    !x86_value_load(out, frame, source, "%rax") ||
-                    fprintf(out, signed_source
+                if (!x86_value_load(out, frame, source, "%rax") ||
+                    fprintf(out, cast.source_signed
                                 ? "  movq %%rax, %%rdx\n  sarq $63, %%rdx\n"
                                 : "  xorq %%rdx, %%rdx\n") < 0)
                     return false;
             }
             return x86_i128_store(out, frame, ins->result, "%rax", "%rdx");
         }
-        if (minic_type_is_int128_integer(source_type))
+        if (cast.source_bytes == 16U)
             return x86_i128_load(out, frame, source, "%rax", "%rdx") &&
-                   x86_normalize(out, program, target, ins->type) &&
+                   x86_core_normalize(out, fn->type_context, cast.target_id) &&
                    x86_value_store(out, frame, ins->result);
         return x86_value_load(out, frame, source, "%rax") &&
-               x86_normalize(out, program, target, ins->type) &&
+               x86_core_normalize(out, fn->type_context, cast.target_id) &&
                x86_value_store(out, frame, ins->result);
     }
     case MINIC_CORE_INSTRUCTION_SCALAR_BITCAST: {
         const MinicCoreValueId operand = ins->value.operand;
         MinicCoreGlobalId vma_global = MINIC_CORE_GLOBAL_INVALID;
-        size_t src_bytes;
-        bool src_sign;
-        if (operand >= fn->value_count ||
-            !minic_core_scalar_bitcast_types_valid(ins->type, fn->values[operand].type) ||
-            !minic_x86_64_scalar_width(program, target, fn->values[operand].type,
-                              &src_bytes, &src_sign) ||
-            !minic_x86_64_scalar_width(program, target, ins->type, &bytes, &sign)) return false;
+        MinicCoreScalarBitcastShape cast;
+        if (!minic_core_scalar_bitcast_shape(fn, ins, &cast) ||
+            cast.source_bytes > 8U || cast.target_bytes > 8U)
+            return false;
         /* Core bitcast models pointer/integer conversions, not only same-width
          * reinterpretation. Source values are already canonical in 64-bit
          * Core slots, and the destination normalization applies truncation. */
-        (void)src_bytes;
-        (void)src_sign;
         if (frame->kernel_head_link_addresses &&
             frame->kernel_head_vma_cast_globals != NULL &&
             ins->result < fn->value_count)
@@ -1096,11 +1088,11 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
                        "  subq %%r11, %%rax\n"
                        "  movq $%s, %%r11\n"
                        "  addq %%r11, %%rax\n", symbol, symbol) >= 0 &&
-                   x86_normalize(out, program, target, ins->type) &&
+                   x86_core_normalize(out, fn->type_context, cast.target_id) &&
                    x86_value_store(out, frame, ins->result);
         }
         return x86_value_load(out, frame, operand, "%rax") &&
-               x86_normalize(out, program, target, ins->type) &&
+               x86_core_normalize(out, fn->type_context, cast.target_id) &&
                x86_value_store(out, frame, ins->result);
     }
     case MINIC_CORE_INSTRUCTION_LOAD:

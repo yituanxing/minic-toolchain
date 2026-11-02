@@ -532,3 +532,50 @@ CoreModule 或 Machine IR 已经实现。
 借用；它们不能因这批整数迁移就被声明为 Core-only。
 下一批应把这一组同 ABI、Source ASM 契约一起核实，不引入
 第二份整数宽度算法。
+
+## IR-P3：五目标整数转换与 pointer/int bitcast 的 CoreType 形状归一
+
+起点：`54b313f`（IR-P2）。本批不以 RV64 为唯一迁移边界：
+`INTEGER_CONVERSION` 和 `SCALAR_BITCAST` 是同一个跨目标的
+**Core 语义形状族**，一次性覆盖 x86-64、RV32、RV64、AArch64、
+LoongArch64。前端 C `MinicType` 只保留在 Source→Core ingress，
+两类转换内的 C `MinicType` 查询退出后端，目标独立维护寄存器、
+指令、ABI 和架构特有的转换规则。
+
+1. 新建 `target/common/core_scalar_conversion.h`，共用且只消费
+   `CoreTypeContext` 的类型合法性、整数 bit-width/size、bool、
+   signedness、指针与整数的转换方向、Core SSA operand/result 一致性。
+   禁止类型已封存后再用 C rank/enum/char 重新求一次宽度。
+2. AArch64/LoongArch64 经已有 Direct LP64 整数计划与 bitcast
+   判定消费共同形状；`direct_instruction_semantics.c` 的旧
+   bitcast 独立类型判定被替换为轻量 ABI 子集限制。
+3. x86-64 的整数转换/bitcast 两种机器分支均切换到 CoreShape，
+   使用既有 `x86_core_normalize`，保留 kernel-head VMA 数值地址
+   变换及 i128 寄存器对，不重新解释 C 描述符。
+4. RV32 共用一组 Core 分类和 word canonicalizer，把整数转换与
+   bitcast 从 `rv32_resolved_*` 的 C 回退分支迁出；**32 位指针
+   直接转 unsigned long long 的 GNU 符号扩展特例**仍由 RV32
+   机器发射负责，其它 ILP32 宽度与双字传递保持原样。
+5. RV64 整数转换消费相同 Shape，bitcast 准入共用另一 Shape，
+   仍由 ISA/目标拒绝当前不支持的 128 位 bitcast。单测补齐一个
+   原来只有类型、缺失合法结果 SSA 的假指令；共享形状现要求
+   operand/result 双向一致，这不是机器语义变更。
+
+**验证：** poisoned C `MinicType` 的独立 Core 单测覆盖
+LP64/ILP32 指针、signed8、unsigned64、i128、bool、错误宽度及
+缺失上下文；静态门禁锁住五目标消费点。10 份 GNU 预处理
+`.i` × 5 目标的新旧 `.s` 比对结果为 **47/47 BYTE_IDENTICAL、
+3/3 SAME_REJECT、0 DIFFERENT**（其中 LoongArch64 拒绝两个
+旧本来就不支持的样例）；Debug 构建和全新 Release `-Werror`
+构建通过。交叉 GNU AS/LD 与 QEMU 工具在当前环境不可用，
+不得把 `.s` 一致性称为运行时认证。
+`make -j8 check-fast`、`check-minic-target-boundaries.sh` 及
+专项 AArch64 GNU native 指针样本、RV32 五目标扩宽源码检查也
+已通过。源代码 `src/` **+241/−130，净 +111 行**；
+`tests/` **+160/−0**；账本文档 `docs/` **+53/−0**。
+新公共 header 纳入 review manifest；历史其他源码的 stale
+记录保持原有状态，不把本次 CI 当作全面审计完成。
+
+**界限：** x86/RV32 其他 Machine 族以及 RV64 的浮点↔整数
+转换仍混合使用旧 C 或已封存 Core 查询，待同一语义族的下一批
+整体迁走；本批不改 Zstd/NEON 等已知 Linux 行为缺陷。

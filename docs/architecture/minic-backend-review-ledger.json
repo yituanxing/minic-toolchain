@@ -319,6 +319,12 @@
         665
       ]
     },
+    "src/target/common/core_scalar_conversion.h": {
+      "blob": "4cf12e8d2ff89563306537fe8f3e08186d853879",
+      "review_depth": "full",
+      "ci_touched_in": [],
+      "note": "2026-11-02: full new Core scalar-conversion shape reviewed for integer conversion and pointer/integer bitcast; machine widths, normalizers and ABI remain target-owned."
+    },
     "src/target/common/core_value_slots.c": {
       "blob": "0f5c4b8f786cdfb1ea019290308a65f48d00830e",
       "review_depth": "inventory",

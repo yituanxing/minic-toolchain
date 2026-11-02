@@ -1064,6 +1064,27 @@ cc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror \
   -o "$work/module-function-owner-probe"
 "$work/module-function-owner-probe"
 
+# Integer conversion and scalar pointer/int bitcast share the same CoreType
+# semantic boundary on all five targets. ISA-owned normalization stays local;
+# poisoned C descriptors cannot alter widths, signs or bool semantics.
+cc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror \
+  -Iinclude -Isrc tests/compiler/c0/probe-core-scalar-conversion-shape.c \
+  src/core/core_type.c src/frontend/type.c \
+  -o "$work/core-scalar-conversion-shape-probe"
+"$work/core-scalar-conversion-shape-probe"
+has src/target/common/direct_residual_plan.c 'minic_core_integer_conversion_shape('
+has src/target/x86_64/machine_emit.c 'minic_core_integer_conversion_shape('
+has src/target/riscv32/rv32_integer_emit.c 'minic_core_integer_conversion_shape('
+has src/target/riscv64/scalar_emit.c 'minic_core_integer_conversion_shape('
+has src/target/common/direct_instruction_semantics.c 'minic_core_scalar_bitcast_shape('
+has src/target/x86_64/machine_emit.c 'minic_core_scalar_bitcast_shape('
+has src/target/riscv32/rv32_integer_emit.c 'minic_core_scalar_bitcast_shape('
+has src/target/riscv64/legalize.c 'minic_core_scalar_bitcast_shape('
+lacks src/target/x86_64/machine_emit.c 'minic_core_scalar_bitcast_types_valid('
+has src/target/x86_64/machine_emit.c 'x86_core_normalize(out, fn->type_context, cast.target_id)'
+has src/target/riscv32/rv32_integer_emit.c 'rv32_core_canon(out, f, cast.target_id'
+has src/target/riscv32/rv32_integer_emit.c 'rv32_core_canon(out, f, bitcast.target_id'
+
 cc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror \
   -ffunction-sections -fdata-sections -Wl,--gc-sections \
   -Iinclude -Isrc tests/compiler/c0/probe-program-emit-transaction.c \

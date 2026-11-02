@@ -73,6 +73,8 @@ bool rv32_resolved_scalar(const MinicCoreFunction *, MinicType,
                           MinicCoreTypeId, unsigned *, bool *);
 bool rv32_resolved_canon(FILE *, const MinicCoreFunction *, MinicType,
                          MinicCoreTypeId, const char *);
+bool rv32_core_canon(FILE *, const MinicCoreFunction *, MinicCoreTypeId,
+                     const char *);
 bool rv32_resolved_load_mem(FILE *, const MinicCoreFunction *, MinicType,
                             MinicCoreTypeId, const char *, size_t);
 bool rv32_resolved_store_mem(FILE *, const MinicCoreFunction *, MinicType,

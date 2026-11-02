@@ -1,6 +1,7 @@
 #include "target/common/direct_instruction_semantics.h"
 #include "core/core_ir.h"
 #include "target/common/core_instruction_family.h"
+#include "target/common/core_scalar_conversion.h"
 #include "target/common/lp64_scalar.h"
 #include "target/data_layout.h"
 
@@ -622,46 +623,25 @@ bool minic_multi_direct_scalar_bitcast_shape(
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
     bool *pointer_to_integer, size_t *source_width,
     bool *source_signed, bool *source_pointer) {
-    MinicCoreValueId source;
-    MinicCoreTypeId source_id;
-    size_t output_width;
-    bool output_signed;
+    MinicCoreScalarBitcastShape cast;
     if (program == NULL || target == NULL || fn == NULL ||
-        fn->type_context == NULL || ins == NULL ||
         pointer_to_integer == NULL || source_width == NULL ||
         source_signed == NULL || source_pointer == NULL ||
-        ins->kind != MINIC_CORE_INSTRUCTION_SCALAR_BITCAST)
+        !minic_core_scalar_bitcast_shape(fn, ins, &cast))
         return false;
-    source = ins->value.operand;
-    if (source >= fn->value_count || fn->values == NULL)
-        return false;
-    source_id = fn->values[source].core_type_id;
-    if (!((direct_core_kind(fn, ins->core_type_id, MINIC_CORE_TYPE_POINTER) &&
-           (direct_core_kind(fn, source_id, MINIC_CORE_TYPE_POINTER) ||
-            direct_core_kind(fn, source_id, MINIC_CORE_TYPE_INTEGER))) ||
-          (direct_core_kind(fn, ins->core_type_id, MINIC_CORE_TYPE_INTEGER) &&
-           direct_core_kind(fn, source_id, MINIC_CORE_TYPE_POINTER))))
-        return false;
-    *source_pointer = direct_core_kind(fn, source_id, MINIC_CORE_TYPE_POINTER);
-    *pointer_to_integer = *source_pointer &&
-                          direct_core_kind(fn, ins->core_type_id, MINIC_CORE_TYPE_INTEGER);
-    *source_width = 0U;
-    *source_signed = false;
+    *source_pointer = cast.source_pointer;
+    *pointer_to_integer = cast.source_pointer && !cast.target_pointer;
     if (*pointer_to_integer) {
-        if (!direct_core_int_width(fn, ins->core_type_id,
-                                   &output_width, &output_signed) ||
-            (output_width != 8U && output_width != 4U &&
-             !(output_width == 1U &&
-               direct_core_bool(fn, ins->core_type_id))))
+        if (cast.target_bytes != 8U && cast.target_bytes != 4U &&
+            !(cast.target_bytes == 1U && cast.target_bool))
             return false;
-        *source_width = output_width;
-        *source_signed = output_signed;
+        *source_width = cast.target_bytes;
+        *source_signed = cast.target_signed;
         return true;
     }
-    if (!direct_core_kind(fn, ins->core_type_id, MINIC_CORE_TYPE_POINTER))
-        return false;
-    return *source_pointer ||
-           direct_core_int_width(fn, source_id, source_width, source_signed);
+    *source_width = cast.source_pointer ? 0U : cast.source_bytes;
+    *source_signed = cast.source_signed;
+    return true;
 }
 
 /* POINTER_LESS compares two identically typed pointer Core values and

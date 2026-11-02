@@ -122,18 +122,25 @@ bool rv32_scalar(const MinicCoreFunction *f, MinicType t,
     *sign = effective.integer_sign == MINIC_INTEGER_SIGN_SIGNED;
     return true;
 }
+static bool rv32_normalize_bits(FILE *out, unsigned bits,
+                                bool is_signed, const char *reg) {
+    if (out == NULL || reg == NULL) return false;
+    if (bits == 32U) return true;
+    if (bits == 1U)
+        return fprintf(out, "  snez %s, %s\n", reg, reg) >= 0;
+    if (bits != 8U && bits != 16U) return false;
+    return fprintf(out, "  slli %s, %s, %u\n  %s %s, %s, %u\n",
+                   reg, reg, 32U - bits,
+                   is_signed ? "srai" : "srli",
+                   reg, reg, 32U - bits) >= 0;
+}
+
 bool rv32_canon(FILE *out, const MinicCoreFunction *f,
                         MinicType t, const char *reg) {
     unsigned bits;
     bool is_signed;
     if (!rv32_scalar(f, t, &bits, &is_signed)) return false;
-    if (bits == 32U) return true;
-    if (bits == 1U)
-        return fprintf(out, "  snez %s, %s\n", reg, reg) >= 0;
-    return fprintf(out, "  slli %s, %s, %u\n  %s %s, %s, %u\n",
-                   reg, reg, 32U - bits,
-                   is_signed ? "srai" : "srli",
-                   reg, reg, 32U - bits) >= 0;
+    return rv32_normalize_bits(out, bits, is_signed, reg);
 }
 bool rv32_load_mem(FILE *out, const MinicCoreFunction *f,
                    MinicType t, const char *dst, size_t alignment) {
@@ -183,12 +190,15 @@ bool rv32_resolved_canon(FILE *out, const MinicCoreFunction *f,
     bool sign;
     if (!rv32_resolved_scalar(f, legacy, type_id, &bits, &sign))
         return false;
-    if (bits == 32U) return true;
-    if (bits == 1U)
-        return fprintf(out, "  snez %s, %s\n", reg, reg) >= 0;
-    return fprintf(out, "  slli %s, %s, %u\n  %s %s, %s, %u\n",
-                   reg, reg, 32U - bits, sign ? "srai" : "srli",
-                   reg, reg, 32U - bits) >= 0;
+    return rv32_normalize_bits(out, bits, sign, reg);
+}
+
+bool rv32_core_canon(FILE *out, const MinicCoreFunction *function,
+                     MinicCoreTypeId type_id, const char *reg) {
+    unsigned bits;
+    bool sign;
+    return rv32_core_scalar(function, type_id, &bits, &sign) &&
+           rv32_normalize_bits(out, bits, sign, reg);
 }
 
 bool rv32_resolved_load_mem(FILE *out, const MinicCoreFunction *f,

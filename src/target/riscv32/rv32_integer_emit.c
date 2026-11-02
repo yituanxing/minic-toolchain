@@ -2,6 +2,7 @@
 #include "target/riscv/instruction_select.h"
 #include "target/riscv/typed_memory.h"
 #include "target/riscv/word_operations.h"
+#include "target/common/core_scalar_conversion.h"
 #include <inttypes.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -530,12 +531,22 @@ bool rv32_emit_integer_instruction(FILE *out,
     case MINIC_CORE_INSTRUCTION_SCALAR_BITCAST: {
         const MinicCoreValueId id = ins->value.operand;
         unsigned from_words, to_words;
-        if (id >= f->value_count ||
-            !rv32_resolved_scalar_storage_words(f, f->values[id].type,
-                f->values[id].core_type_id, &from_words) ||
-            !rv32_resolved_scalar_storage_words(f, ins->type,
-                ins->core_type_id, &to_words))
-            return false;
+        MinicCoreIntegerConversionShape cast = {0};
+        MinicCoreScalarBitcastShape bitcast = {0};
+        const bool conversion = ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_CONVERSION;
+        if (conversion) {
+            if (!minic_core_integer_conversion_shape(f, ins, &cast) ||
+                cast.source_bytes > 8U || cast.target_bytes > 8U)
+                return false;
+            from_words = cast.source_bytes > 4U ? 2U : 1U;
+            to_words = cast.target_bytes > 4U ? 2U : 1U;
+        } else {
+            if (!minic_core_scalar_bitcast_shape(f, ins, &bitcast) ||
+                bitcast.source_bytes > 8U || bitcast.target_bytes > 8U ||
+                !rv32_core_scalar_storage_words(f, bitcast.source_id, &from_words) ||
+                !rv32_core_scalar_storage_words(f, bitcast.target_id, &to_words))
+                return false;
+        }
         if (from_words == 2U) {
             if (!rv32_pair_slot(out, fr, id, "t0", "t1", true)) return false;
         } else if (!rv32_slot(out, fr, id, "t0", true)) return false;
@@ -546,16 +557,11 @@ bool rv32_emit_integer_instruction(FILE *out,
                      * long long by sign-extending its 32-bit address. A
                      * separate cast via unsigned long zero-extends instead;
                      * preserve this implementation-defined distinction. */
-                    if (!rv32_resolved_pointer_type(f, f->values[id].type,
-                                                     f->values[id].core_type_id) ||
-                        !rv32_resolved_integer_type(f, ins->type,
-                                                     ins->core_type_id) ||
+                    if (!bitcast.source_pointer || bitcast.target_pointer ||
                         fprintf(out, "  srai t1, t0, 31\n") < 0)
                         return false;
-                } else if (!rv32_resolved_scalar(f, f->values[id].type,
-                                f->values[id].core_type_id,
-                                &bits, &is_signed) ||
-                           fprintf(out, is_signed ? "  srai t1, t0, 31\n" :
+                } else if (fprintf(out, cast.source_signed
+                                                ? "  srai t1, t0, 31\n" :
                                                  "  li t1, 0\n") < 0) {
                     return false;
                 }
@@ -563,8 +569,9 @@ bool rv32_emit_integer_instruction(FILE *out,
             return rv32_pair_slot(out, fr, ins->result,
                                   "t0", "t1", false);
         }
-        return rv32_resolved_canon(out, f, ins->type,
-                                   ins->core_type_id, "t0") &&
+        return (conversion
+                   ? rv32_core_canon(out, f, cast.target_id, "t0")
+                   : rv32_core_canon(out, f, bitcast.target_id, "t0")) &&
                rv32_slot(out, fr, ins->result, "t0", false);
     }
     /* RV32I provides no Zbb CLZ/CTZ. Preserve the target-neutral

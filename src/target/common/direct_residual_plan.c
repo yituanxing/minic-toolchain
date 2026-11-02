@@ -1,4 +1,5 @@
 #include "target/common/direct_residual_plan.h"
+#include "target/common/core_scalar_conversion.h"
 #include <limits.h>
 #include <stdint.h>
 #include <string.h>
@@ -16,13 +17,6 @@ static bool residual_kind(const MinicCoreFunction *fn, MinicCoreTypeId id,
     return type != NULL && type->kind == kind;
 }
 
-static bool residual_int128(const MinicCoreFunction *fn, MinicCoreTypeId id) {
-    const MinicCoreType *type = residual_type(fn, id);
-    return type != NULL && type->kind == MINIC_CORE_TYPE_INTEGER &&
-           type->value.integer.bit_width == 128U && type->has_layout &&
-           type->size == 16U;
-}
-
 /* The only Core integer-conversion admission path for direct LP64.
  * The former block emitters each classified scalar widths/sign, detected
  * binary128 and independently looked up both wide frame slots. */
@@ -30,37 +24,31 @@ bool minic_multi_direct_integer_cast_plan(
     const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
     const MinicLP64FramePlan *frame, MinicDirectIntegerCastPlan *plan) {
-    if (program == NULL || target == NULL || fn == NULL ||
-        fn->type_context == NULL || ins == NULL ||
+    MinicCoreIntegerConversionShape shape;
+    if (program == NULL || target == NULL ||
         frame == NULL || plan == NULL ||
-        ins->kind != MINIC_CORE_INSTRUCTION_INTEGER_CONVERSION ||
-        ins->value.operand >= fn->value_count || fn->values == NULL ||
-        ins->result >= fn->value_count)
+        !minic_core_integer_conversion_shape(fn, ins, &shape))
         return false;
     (void)memset(plan, 0, sizeof(*plan));
     plan->operand = ins->value.operand;
-    const MinicCoreTypeId source_id = fn->values[plan->operand].core_type_id;
-    plan->source_wide = residual_int128(fn, source_id);
-    plan->target_wide = residual_int128(fn, ins->core_type_id);
-    const MinicCoreType *target_type = residual_type(fn, ins->core_type_id);
-    if (target_type == NULL || target_type->kind != MINIC_CORE_TYPE_INTEGER)
-        return false;
-    plan->target_boolean = target_type->value.integer.is_bool;
+    plan->source_wide = shape.source_bytes == 16U;
+    plan->target_wide = shape.target_bytes == 16U;
+    plan->target_boolean = shape.target_bool;
     if (plan->source_wide) {
         if (!minic_lp64_frame_plan_wide_slot(
                 frame, plan->operand, &plan->source_wide_offset))
             return false;
-    } else if (!minic_lp64_core_integer_width(fn->type_context, source_id,
-                                               &plan->source_width, &plan->source_signed)) {
-        return false;
+    } else {
+        plan->source_width = shape.source_bytes;
+        plan->source_signed = shape.source_signed;
     }
     if (plan->target_wide) {
         if (!minic_lp64_frame_plan_wide_slot(
                 frame, ins->result, &plan->target_wide_offset))
             return false;
-    } else if (!minic_lp64_core_integer_width(fn->type_context, ins->core_type_id,
-                                               &plan->target_width, &plan->target_signed)) {
-        return false;
+    } else {
+        plan->target_width = shape.target_bytes;
+        plan->target_signed = shape.target_signed;
     }
     return true;
 }

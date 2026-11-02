@@ -3,6 +3,7 @@
 #include "target/riscv64/abi.h"
 #include "target/riscv64/core_type_query.h"
 #include "target/common/lp64_scalar.h"
+#include "target/common/core_scalar_conversion.h"
 
 /* Original target scalar gate remains shared by RV64 object analysis
  * and instruction-admission queries. */
@@ -128,22 +129,10 @@ bool minic_riscv64_core_call_frame_address_supported(
 bool minic_riscv64_core_scalar_bitcast_supported(const MinicC0Program *program,
                                           const MinicCoreFunction *function,
                                           const MinicCoreInstruction *instruction) {
-    const MinicCoreType *target, *source_core_type;
+    MinicCoreScalarBitcastShape cast;
     (void)program;
-    if (function == NULL || function->type_context == NULL || instruction == NULL ||
-        instruction->kind != MINIC_CORE_INSTRUCTION_SCALAR_BITCAST ||
-        instruction->value.operand >= function->value_count) return false;
-    target = minic_riscv64_core_base_type(function, instruction->core_type_id);
-    source_core_type = minic_riscv64_core_base_type(
-        function, function->values[instruction->value.operand].core_type_id);
-    if (target == NULL || source_core_type == NULL || !target->has_layout ||
-        !source_core_type->has_layout || !target->size || !source_core_type->size ||
-        target->size > 8U || source_core_type->size > 8U) return false;
-    return (target->kind == MINIC_CORE_TYPE_POINTER &&
-            (source_core_type->kind == MINIC_CORE_TYPE_POINTER ||
-             source_core_type->kind == MINIC_CORE_TYPE_INTEGER)) ||
-           (target->kind == MINIC_CORE_TYPE_INTEGER &&
-            source_core_type->kind == MINIC_CORE_TYPE_POINTER);
+    return minic_core_scalar_bitcast_shape(function, instruction, &cast) &&
+           cast.source_bytes <= 8U && cast.target_bytes <= 8U;
 }
 
 bool minic_riscv64_core_integer_type_range_fits(

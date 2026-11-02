@@ -11,6 +11,7 @@
 #include "target/riscv64/runtime_libcall.h"
 #include "target/riscv64/core_type_query.h"
 #include "target/common/lp64_scalar.h"
+#include "target/common/core_scalar_conversion.h"
 #include <inttypes.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -382,12 +383,10 @@ bool minic_riscv64_emit_scalar_instruction(
         return minic_riscv64_frame_store_value(file, frame, instruction->result, "t0");
     case MINIC_CORE_INSTRUCTION_INTEGER_CONVERSION: {
         MinicCoreValueId operand = instruction->value.operand;
-        MinicCoreTypeId source_type;
-
-        if (operand >= function->value_count) {
+        MinicCoreIntegerConversionShape cast;
+        if (!minic_core_integer_conversion_shape(function, instruction, &cast))
             return false;
-        }
-        source_type = function->values[operand].core_type_id;
+        const MinicCoreTypeId source_type = cast.source_id;
         if (minic_riscv64_core_is_i128(function, instruction->core_type_id)) {
             if (minic_riscv64_core_is_i128(function, source_type)) {
                 if (!minic_riscv64_frame_load_int128(file, frame, operand, "t0", "t1")) {
