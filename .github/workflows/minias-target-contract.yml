@@ -101,6 +101,8 @@ jobs:
             bash tests/assembler/probe-mc-source-stable-rebind.sh
       - name: Common lowering independent translation-unit ownership
         run: bash tests/assembler/probe-common-lowering-boundary.sh
+      - name: P06 Common Context and Emission single-owner boundary
+        run: bash tests/assembler/probe-common-context-emission-boundary.sh
       - name: SourceGraph opaque-session semantic service isolation
         run: bash tests/assembler/probe-source-session-isolation.sh
       - name: Source statement events enforce Source/Common parser ownership

@@ -32,7 +32,16 @@ source coverage, touched files, closed ownership boundaries and deferred work.
 The C implementation is split by ownership:
 
 - `source_graph.c`, `source_expansion.c`: source-site identity and GNU source expansion.
-- `assembler.c`: common statements, sections, symbols and assembly orchestration.
+- `assembler.c`: assembly-session lifecycle, Target finalization and output driver.
+- `common_lowering.c`: the sole Common statement/directive lowerer and
+  creation of typed source Fragments.
+- `common_context.c`: stable SectionID/SymbolID identities, aliases, names
+  and their indexes; `minias_common_context.h` is the Common-only contract.
+- `common_emission.c`: fragment-owned Fixup/EncodeResult transaction,
+  typed DATA materialization, Section byte commits and final emission;
+  `minias_common_emission.h` is the Common-only contract.
+- `mc_leb.c`: one reusable signed/unsigned LEB byte serializer for source,
+  layout and DWARF consumers, independent of Section storage.
 - `mc_layout.c`, `mc_expr.c`: retained layout and expression semantics.
 - `riscv_encode.c`, `aarch64_target.c`, `x86_64_target.c`, `loongarch64_target.c`:
   target-specific instruction parsing, measuring and encoding.
@@ -41,6 +50,12 @@ The C implementation is split by ownership:
 
 The older Python MiniAS is used as a semantic and bug-history reference, not as a
 physical code template.
+
+The Common domain split changes function ownership and destructor delegation,
+not the SourceGraph replay/Target encode protocol. `MiniAs` still contains
+shared mutable Section/Symbol/Fragment arrays; stricter field-level MCContext
+encapsulation and the format-neutral ObjectModel remain future work. See
+[the P06 owner-split record](docs/common-owner-split-2026-11-02.md).
 
 ## Explicit strict RV64I profile
 

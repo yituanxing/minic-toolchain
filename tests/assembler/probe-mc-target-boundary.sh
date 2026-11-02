@@ -4,6 +4,7 @@
 set -Eeuo pipefail
 if grep -Eq 'MINIAS_FIXUP_(RV_|A64_|X64_|LARCH_)' \
     assembler/src/minias_internal.h assembler/src/assembler.c \
+    assembler/src/common_context.c assembler/src/common_emission.c \
     assembler/src/elf_writer.c; then
     echo 'Target FixupKind leaked into MC Core' >&2
     exit 1
@@ -82,7 +83,7 @@ import re
 
 root=Path('assembler/src')
 header=(root/'minias_target_api.h').read_text()
-core=(root/'assembler.c').read_text()
+core=(root/'common_emission.c').read_text()
 if 'bool (*encode)(MiniAsEncodeContext *, const MiniAsStmt *);' not in header:
     raise SystemExit('TargetOps still uses old mutable-session encode callback')
 if 'struct MiniAsEncodeContext {' in header or \
@@ -150,7 +151,7 @@ if not re.search(r'as->finalizing_target_output\s*=\s*true;\s*'
                  r'ok\s*=\s*as->target->finalize_output\(layout,errors,object\);\s*'
                  r'as->finalizing_target_output\s*=\s*false;', driver):
     raise SystemExit('Target finalization capability guard is missing')
-for filename in ('assembler.c', 'cfi_writer.c'):
+for filename in ('assembler.c', 'common_emission.c', 'cfi_writer.c'):
     source = (Path('assembler/src') / filename).read_text()
     if re.search(r'as->fixups\[as->fixup_count\s*-\s*1U?\]', source):
         raise SystemExit(f'{filename}: post-creation Fixup mutation remains')
@@ -163,7 +164,7 @@ if 'A64_SITE_INST_DATA' not in planner or \
    'A64_SITE_EXPLICIT_ALIGN' not in planner or \
    'minias_post_emit_raise_section_alignment' not in planner:
     raise SystemExit('AArch64 finalizer omitted typed intent or Common alignment API')
-if 'return minias_require_target_section_alignment(sink->as, section, align);' not in driver:
+if 'return minias_require_target_section_alignment(sink->as, section, align);' not in (Path('assembler/src/common_context.c').read_text()):
     raise SystemExit('Post-emit sink bypassed guarded Common alignment owner')
 for target, (validator, finalizer) in targets.items():
     source = (Path('assembler/src') / target).read_text()
@@ -188,7 +189,7 @@ la = Path('assembler/src/loongarch64_target.c').read_text()
 view = core.split('typedef struct MiniAsPostEmitView {', 1)[1].split('} MiniAsPostEmitView;', 1)[0]
 if re.search(r'\bMiniAs\s*\*|\bMiniAsSymbol\s*\*|\bMiniAsFixup\s*\*', view):
     raise SystemExit('Post-emit view exposes a mutable Common object')
-if 'struct MiniAsPostEmitObjectSink { MiniAs *as; };' not in driver or \
+if 'struct MiniAsPostEmitObjectSink { MiniAs *as; };' not in (Path('assembler/src/minias_common_context.h').read_text()) or \
         'struct MiniAsPostEmitObjectSink {' in core:
     raise SystemExit('Post-emit mutation handle is not Common-private')
 for source, fn in ((a64, 'a64_record_source_mappings'),
@@ -493,7 +494,7 @@ python3 - <<'PY'
 from pathlib import Path
 import re
 header=Path('assembler/src/minias_target_api.h').read_text()
-core=Path('assembler/src/assembler.c').read_text()
+core=Path('assembler/src/common_emission.c').read_text()
 if 'minias_emit_instruction_bytes' in header or \
    'struct MiniAsEncodeContext {' in header:
     raise SystemExit('Target can still access a general MiniAs byte emitter')
@@ -519,7 +520,7 @@ python3 - <<'PY'
 from pathlib import Path
 import re
 h=Path('assembler/src/minias_target_api.h').read_text()
-core=Path('assembler/src/assembler.c').read_text()
+core=Path('assembler/src/common_emission.c').read_text()
 if 'bool (*append_code_alignment)(MiniAsCodeAlignSink *' not in h:
     raise SystemExit('ALIGN callback still exposes mutable MiniAs')
 if 'struct MiniAsCodeAlignSink {' in h or 'struct MiniAsCodeAlignSink {' not in core:
@@ -544,7 +545,7 @@ for header in riscv_fixup_kinds.h aarch64_fixup_kinds.h \
               x86_64_fixup_kinds.h loongarch64_fixup_kinds.h; do
     test -s "assembler/src/$header"
 done
-grep -q 'static bool minias_stage_instruction_bytes' assembler/src/assembler.c
+grep -q 'static bool minias_stage_instruction_bytes' assembler/src/common_emission.c
 grep -q 'MiniAsTargetSiteState' assembler/src/minias_target_api.h
 # LLVM MC-style lexical ownership: balanced operand grouping lives once in
 # Common MC. All four Target parsers consume it, and retain ISA legality.
@@ -573,7 +574,9 @@ python3 - <<'PY'
 from pathlib import Path
 import re
 for filename in ('assembler/src/minias_internal.h',
-                 'assembler/src/assembler.c'):
+                 'assembler/src/assembler.c',
+                 'assembler/src/common_context.c',
+                 'assembler/src/common_emission.c'):
     source = Path(filename).read_text(encoding='utf-8')
     cleaned = re.sub(
         r'/\*[\s\S]*?\*/|//[^\n]*|"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'',
@@ -611,6 +614,7 @@ root = Path('assembler/src')
 api = (root / 'minias_target_api.h').read_text()
 private = (root / 'minias_internal.h').read_text()
 common = (root / 'assembler.c').read_text()
+emission = (root / 'common_emission.c').read_text()
 common_lowering = (root / 'minias_common_lowering.h').read_text()
 if '#include "minias_internal.h"' in api or \
         '#include "minias_target_api.h"' not in private:
@@ -624,8 +628,9 @@ for banned in ('minias_get_symbol(', 'minias_section_append(',
         raise SystemExit('Target header exposes Common mutator: ' + banned)
 for context in ('MiniAsDirectiveContext', 'MiniAsCfiMappingSink',
                 'MiniAsParseContext', 'MiniAsEncodeContext'):
-    owner=common_lowering if context in ('MiniAsDirectiveContext',
-                                         'MiniAsParseContext') else common
+    owner=(common_lowering if context in ('MiniAsDirectiveContext',
+                                          'MiniAsParseContext') else
+           emission if context=='MiniAsEncodeContext' else common)
     if 'struct '+context+' {' in api or 'struct '+context+' {' not in owner:
         raise SystemExit('Context owner is not Common-private: '+context)
 for file in ('riscv_target.c', 'riscv_encode.c', 'aarch64_target.c',

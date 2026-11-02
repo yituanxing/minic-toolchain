@@ -34,7 +34,9 @@ Do not reintroduce a second state machine, text parser or legacy callback.
 ## Validation and next step
 Use compile-time negative boundary tests, GNU macro/conditional/replay
 oracles and exact-head four-target/strict runtime CI; Linux Image/QEMU P1
-is a separate milestone. Next split Common by semantic ownership and
-callgraph, not by line number. Source services still receive an opaque
+is a separate milestone. P06 now splits Common by semantic ownership:
+Section/Symbol context, typed source lowering, Fragment emission and shared
+LEB serialization have distinct translation units (see
+common-owner-split-2026-11-02.md). Source services still receive an opaque
 Common session token for expression/layout queries; this is intentionally
 not claimed as a completely independent MCContext implementation.

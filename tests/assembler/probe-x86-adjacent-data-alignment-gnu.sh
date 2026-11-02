@@ -5,7 +5,7 @@ set -Eeuo pipefail
 for tool in python3 as objcopy cmp; do command -v "$tool" >/dev/null; done
 python3 - <<'PY'
 from pathlib import Path
-core=Path("assembler/src/assembler.c").read_text()
+core=Path("assembler/src/common_emission.c").read_text()
 header=Path("assembler/src/minias_target_api.h").read_text()
 x86=Path("assembler/src/x86_64_target.c").read_text()
 if "minias_code_align_preceded_by_adjacent_data(const MiniAsCodeAlignSink *);" not in header:

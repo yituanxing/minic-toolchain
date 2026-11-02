@@ -4,6 +4,7 @@ python3 - <<'PY'
 from pathlib import Path
 driver=Path('assembler/src/assembler.c').read_text()
 lowering=Path('assembler/src/common_lowering.c').read_text()
+emission=Path('assembler/src/common_emission.c').read_text()
 layout=Path('assembler/src/mc_layout.c').read_text()
 expr=Path('assembler/src/mc_expr.c').read_text()
 internal=(Path('assembler/src/minias_internal.h').read_text() +
@@ -17,7 +18,7 @@ for fragment in ('INSTRUCTION','ALIGNMENT','ORIGIN','FIXED_DATA',
                  'FILL','SPACE','BYTES'):
     if 'MINIAS_FRAGMENT_'+fragment not in internal:
         raise SystemExit('Common Fragment discriminator missing '+fragment)
-if 'fragment_kind' not in driver or 'fragment_kind' not in layout:
+if 'fragment_kind' not in emission or 'fragment_kind' not in layout:
     raise SystemExit('layout/emission still ignores persistent FragmentKind')
 for legacy in ('strcmp(stmt->op', 'strncmp(stmt->op'):
     if legacy in layout:
@@ -101,8 +102,8 @@ if lowering.count('minias_compile_variable_exprs(as,stmt)') != 1 or \
     raise SystemExit('variable DATA first pass must use one retained MCExpr AST')
 if 'minias_compile_variable_mc(' in expr or 'minias_resolve_variable_mc(' in layout:
     raise SystemExit('obsolete variable DATA text/legacy MC path survived')
-emitter=lowering[lowering.index('bool minias_common_emit_data_stmt('):
-                 lowering.index('static bool parse_numeric_label_id(')]
+emitter=emission[emission.index('static bool minias_emit_data_fragment('):
+                 emission.index('typedef struct MiniAsEmitRef {')]
 if 'minias_parse_common_fill(' in emitter or 'minias_parse_common_space(' in emitter:
     raise SystemExit('DATA re-parsed on final emission')
 if 'variable_data_resolved' not in emitter:

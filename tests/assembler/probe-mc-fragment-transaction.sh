@@ -2,7 +2,7 @@
 # Semantic ownership: four target CodeEmitters must not advance Section
 # cursors or write partial machine instructions into finalized Sections.
 set -Eeuo pipefail
-src=assembler/src/assembler.c
+src=assembler/src/common_emission.c
 # The old capture_instruction_bytes switch was the two-commit-path bridge.
 ! grep -q 'capture_instruction_bytes' "$src"
 grep -q 'minias_stage_fragment_bytes' "$src"
@@ -65,8 +65,7 @@ for invariant in (
 if 'as->committing_fragment=false' not in commit:
     raise SystemExit('commit guard not released after final Section materialization')
 start=s.index('bool minias_emit_sections(')
-end=s.index('int minias_assemble_config(',start)
-body=s[start:end]
+body=s[start:]
 if 'section->size = (size_t)stmt->offset' in body:
     raise SystemExit('MCFragment still restores a virtual Section cursor')
 if 'as->active_encode_result->byte_count!=stmt->size' not in body:
