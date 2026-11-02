@@ -5,6 +5,7 @@
 #include "target/riscv64/frame_requirements.h"
 #include "target/common/core_spill_layout.h"
 #include "target/riscv64/record_snapshot.h"
+#include "target/riscv64/core_type_query.h"
 #include "target/data_layout.h"
 #include <stdint.h>
 #include <stdio.h>
@@ -100,7 +101,8 @@ bool minic_riscv64_core_frame_initialize_with_storage(
         const size_t object_size = object->extent;
         const size_t object_alignment = object->alignment;
         if (object_size == 0U &&
-            !minic_type_is_record(function->objects[object_index].type))
+            !minic_riscv64_core_is_record(
+                function, function->objects[object_index].core_type_id))
             return false;
         if (object_alignment > maximum_object_alignment) {
             maximum_object_alignment = object_alignment;
@@ -213,7 +215,8 @@ bool minic_riscv64_core_frame_initialize_with_storage(
         ready->prepared = false;
         minic_riscv64_function_abi_plan_destroy(&local_plan);
         if (return_value.kind == MINIC_RISCV64_ABI_VALUE_INDIRECT) {
-            if (!minic_type_is_record(function->return_type) ||
+            if (!minic_riscv64_core_is_record(
+                    function, function->core_return_type_id) ||
                 return_value.storage_size <= 16U || return_value.slot_count != 1U ||
                 !minic_core_frame_align_up(storage_size, 8U, &frame->hidden_result_pointer_offset) ||
                 frame->hidden_result_pointer_offset > SIZE_MAX - 8U) {

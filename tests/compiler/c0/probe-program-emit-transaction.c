@@ -34,12 +34,13 @@ static bool between(FILE *out, const MinicC0Program *p,
 }
 static bool function(FILE *out, const MinicC0Program *p,
                      const MinicTargetInfo *t, const MinicFunction *decl,
+                     const MinicCoreModuleFunctionSymbol *module_decl,
                      const MinicCoreFunction *f,
                      const MinicCoreFunctionFacts *facts,
                      const MinicCoreObjectStoragePlan *storage, size_t index,
                      bool sections, void *opaque) {
     TestContext *ctx = opaque;
-    (void)p; (void)t; (void)decl; (void)f; (void)sections;
+    (void)p; (void)t; (void)decl; (void)module_decl; (void)f; (void)sections;
     if (index != 0U || facts == NULL || storage == NULL ||
         storage->count != 0U ||
         facts->direct_call_count != 1U ||

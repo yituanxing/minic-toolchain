@@ -12,6 +12,7 @@
 #include <stdio.h>
 
 typedef struct MinicCoreModule MinicCoreModule;
+typedef struct MinicCoreModuleFunctionSymbol MinicCoreModuleFunctionSymbol;
 
 /* Two tested direct LP64 backends share the TU-level failure/cleanup and
  * GNU/ELF output lifecycle, NOT instruction selection or ABI register banks.
@@ -19,7 +20,8 @@ typedef struct MinicCoreModule MinicCoreModule;
  * target-neutral object/function serialization loop. */
 typedef bool (*MinicMultiDirectEmitFunction)(
     FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
-    const MinicFunction *decl, const MinicCoreFunction *fn,
+    const MinicFunction *decl, const MinicCoreModuleFunctionSymbol *module_decl,
+    const MinicCoreFunction *fn,
     const MinicCoreFunctionFacts *facts,
     const MinicCoreObjectStoragePlan *storage, size_t function_id,
     bool function_sections);

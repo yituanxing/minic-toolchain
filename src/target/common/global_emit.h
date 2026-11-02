@@ -1,8 +1,7 @@
 #ifndef MINIC_TARGET_COMMON_GLOBAL_EMIT_H
 #define MINIC_TARGET_COMMON_GLOBAL_EMIT_H
 
-#include "frontend/ast.h"
-#include "target/target_info.h"
+#include "compiler/global_payload.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -19,60 +18,6 @@ typedef bool (*MinicMultiRelocEmitter)(FILE *, const MinicC0Program *,
 typedef bool (*MinicMultiScalarBitsEmitter)(FILE *, const MinicC0Program *,
                                             const MinicTargetInfo *, MinicType,
                                             uint64_t);
-
-/* One checked language/DataLayout decision for a global object's payload.
- * No ISA register, relocation encoding or assembly spelling enters the plan.
- * Native backends can select their directives from this same classification
- * while retaining their own relocation callbacks and ELF symbol policy. */
-typedef enum MinicMultiGlobalPayloadKind {
-    MINIC_MULTI_GLOBAL_PAYLOAD_ZERO,
-    MINIC_MULTI_GLOBAL_PAYLOAD_ZERO_RELOCATIONS,
-    MINIC_MULTI_GLOBAL_PAYLOAD_RECORD_FLAT,
-    MINIC_MULTI_GLOBAL_PAYLOAD_RECORD_RECURSIVE,
-    MINIC_MULTI_GLOBAL_PAYLOAD_RECORD_FLEXIBLE,
-    MINIC_MULTI_GLOBAL_PAYLOAD_ARRAY_RECORD,
-    MINIC_MULTI_GLOBAL_PAYLOAD_ARRAY_RECURSIVE,
-    MINIC_MULTI_GLOBAL_PAYLOAD_ARRAY_SCALAR_RELOCATIONS,
-    MINIC_MULTI_GLOBAL_PAYLOAD_SCALAR_RELOCATION,
-    MINIC_MULTI_GLOBAL_PAYLOAD_SCALAR_BITS
-} MinicMultiGlobalPayloadKind;
-
-typedef struct MinicMultiGlobalEmissionPlan {
-    MinicMultiGlobalPayloadKind payload_kind;
-    size_t storage_size;
-    size_t storage_alignment;
-    size_t scalar_width;
-    MinicType scalar_type;
-    /* Default ELF section only; an explicit validated section attribute
-     * remains the owner's choice.  It is not target-specific GAS syntax. */
-    const char *default_elf_section;
-} MinicMultiGlobalEmissionPlan;
-
-/* Source-side DataLayout walks emit semantic data fragments, not GAS text.
- * An ingress builder can retain them in a module-owned immutable data stream;
- * the legacy FILE API below is a thin adapter over the SAME checked walker.
- * All callback arguments are borrowed for the duration of the call. */
-typedef struct MinicMultiGlobalPayloadSink {
-    void *context;
-    bool (*emit_zero)(void *context, size_t bytes);
-    bool (*emit_bits)(void *context, MinicType source_type,
-                      size_t width, uint64_t bits);
-    bool (*emit_relocation)(void *context,
-                            const MinicGlobalRelocation *source, size_t width);
-} MinicMultiGlobalPayloadSink;
-
-bool minic_multi_global_payload_visit(
-    const MinicC0Program *program, const MinicTargetInfo *target,
-    const MinicGlobalObject *object, const MinicMultiGlobalEmissionPlan *plan,
-    const MinicMultiGlobalPayloadSink *sink);
-
-/* Classify the ABI-neutral payload without imposing the Common ELF section
- * encoding policy. A target that keeps its own section directives (RV64's
- * historical explicit @progbits policy) still uses the exact same payload
- * plan and serializer; it must validate/emit sections independently. */
-bool minic_multi_global_payload_plan_build(
-    const MinicC0Program *program, const MinicTargetInfo *target,
-    const MinicGlobalObject *object, MinicMultiGlobalEmissionPlan *plan);
 
 /* Common ELF emission additionally requires bytewise-zero data in explicit
  * .bss/.bss.* sections, which it emits as NOBITS. */
@@ -100,9 +45,8 @@ bool minic_multi_emit_relocatable_scalar_array(
     const MinicGlobalObject *object, size_t storage_size,
     MinicMultiRelocEmitter emit_relocation,
     MinicMultiScalarBitsEmitter emit_bits);
-/* Canonical flat-record layout walk; target callbacks retain assembly syntax. */
-bool minic_multi_record_initializer_needs_recursive(
-    const MinicRecord *record, const MinicGlobalObject *object);
+/* Legacy FILE adapters delegate to the Compiler-owned byte walker; no
+ * DataLayout or aggregate traversal is duplicated in the target layer. */
 bool minic_multi_emit_flat_record_global(
     FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicGlobalObject *object, size_t storage_size,
@@ -133,10 +77,6 @@ bool minic_multi_emit_record_array_global(
 bool minic_multi_emit_simple_global(
     FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicGlobalObject *object, MinicMultiRelocEmitter emit_relocation);
-/* Resolve function/object AST identity for target-owned ELF relocations. */
-const char *minic_multi_global_relocation_target_name(
-    const MinicC0Program *program, const MinicGlobalRelocation *relocation);
-
 bool minic_multi_emit_elf_relocation(
     FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicGlobalRelocation *relocation, size_t width);

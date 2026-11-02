@@ -69,6 +69,7 @@ MINIC_SOURCES := \
 	src/compiler/compiler.c \
 	src/compiler/core_function_set.c \
 	src/compiler/module_ir_build.c \
+	src/compiler/global_payload.c \
 	src/compiler/inline_integer.c \
 	src/compiler/inline_symbolic.c \
 	src/compiler/inline_boolean.c \

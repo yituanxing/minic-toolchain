@@ -2,6 +2,8 @@
 #include "target/riscv64/legalize.h"
 #include "target/riscv64/inline_asm_emit.h"
 #include "target/riscv64/codegen_internal.h"
+#include "target/riscv64/core_type_query.h"
+#include "target/riscv64/isa.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -37,7 +39,7 @@ static bool register_pointer(MinicCoreTypeContext *ctx, MinicCoreTypeId pointee,
 
 static int run(void) {
     MinicCoreTypeContext types;
-    MinicCoreTypeId void_id, int_id, record_id, pointer_id, record_pointer_id;
+    MinicCoreTypeId void_id, int_id, wide_id, record_id, pointer_id, record_pointer_id;
     MinicCoreTypeId volatile_record_id, volatile_record_pointer_id;
     MinicCoreType qualifier = {0};
     MinicCoreValue values[4];
@@ -51,6 +53,9 @@ static int run(void) {
     MinicCoreCallSite call_site = {0};
     MinicCoreCallIndex call_index = {0};
     MinicRiscv64CallPlanCache call_cache = {0};
+    MinicRiscvIsa strict_isa = {64U, MINIC_RISCV_ABI_LP64, 0U, 0U, true};
+    MinicCoreInstruction isa_ins = {0};
+    char reason[256];
     char output[2048];
     size_t record_size;
     FILE *stream;
@@ -59,6 +64,7 @@ static int run(void) {
     minic_core_type_context_initialize(&types);
     REQUIRE(register_type(&types, MINIC_CORE_TYPE_VOID, 0U, 0U, &void_id));
     REQUIRE(register_type(&types, MINIC_CORE_TYPE_INTEGER, 4U, 4U, &int_id));
+    REQUIRE(register_type(&types, MINIC_CORE_TYPE_INTEGER, 16U, 16U, &wide_id));
     REQUIRE(register_type(&types, MINIC_CORE_TYPE_RECORD, 4U, 4U, &record_id));
     REQUIRE(register_pointer(&types, int_id, &pointer_id));
     REQUIRE(register_pointer(&types, record_id, &record_pointer_id));
@@ -201,6 +207,39 @@ static int run(void) {
     REQUIRE(strstr(output, "lw t0, 0(t1)") != NULL);
     REQUIRE(strstr(output, "sw t0, 0(t1)") != NULL);
     REQUIRE(fclose(stream) == 0);
+
+    /* Strict ISA admission and frame predicates must not read the C type
+     * once a complete CoreType arena has been attached. Deliberately make
+     * the legacy descriptor disagree in both directions. */
+    REQUIRE(minic_riscv64_core_is_record(&function, record_id));
+    REQUIRE(!minic_riscv64_core_is_record(&function, int_id));
+    REQUIRE(minic_riscv64_core_is_i128(&function, wide_id));
+    REQUIRE(!minic_riscv64_core_is_i128(&function, int_id));
+    isa_ins.kind = MINIC_CORE_INSTRUCTION_INTEGER_CLZ;
+    isa_ins.type = minic_type_int128();
+    isa_ins.core_type_id = int_id;
+    REQUIRE(minic_riscv_isa_admit_core_instruction(
+        &strict_isa, &function, &isa_ins, reason, sizeof(reason)));
+    isa_ins.type = minic_type_int();
+    isa_ins.core_type_id = wide_id;
+    REQUIRE(!minic_riscv_isa_admit_core_instruction(
+        &strict_isa, &function, &isa_ins, reason, sizeof(reason)));
+    REQUIRE(strstr(reason, "__int128") != NULL);
+    isa_ins.kind = MINIC_CORE_INSTRUCTION_SCALAR_BITCAST;
+    isa_ins.core_type_id = int_id;
+    isa_ins.value.operand = 0U;
+    values[0].core_type_id = wide_id;
+    REQUIRE(!minic_riscv_isa_admit_core_instruction(
+        &strict_isa, &function, &isa_ins, reason, sizeof(reason)));
+    REQUIRE(strstr(reason, "__int128") != NULL);
+    values[0].core_type_id = int_id;
+    REQUIRE(minic_riscv_isa_admit_core_instruction(
+        &strict_isa, &function, &isa_ins, reason, sizeof(reason)));
+    function.type_context = NULL;
+    REQUIRE(!minic_riscv_isa_admit_core_instruction(
+        &strict_isa, &function, &isa_ins, reason, sizeof(reason)));
+    REQUIRE(strstr(reason, "sealed Core") != NULL);
+
     minic_core_type_context_destroy(&types);
     return 0;
 }
@@ -211,6 +250,6 @@ int main(void) {
         fprintf(stderr, "RV64_CORETYPE_TARGET_ADMISSION=FAIL line=%d\n", line);
         return 1;
     }
-    puts("RV64_CORETYPE_TARGET_ADMISSION=PASS record_load_copy volatile bitcast asm call_abi core_only_scalar_transport");
+    puts("RV64_CORETYPE_TARGET_ADMISSION=PASS record_load_copy volatile bitcast asm call_abi core_only_scalar_transport strict_isa_frame_type");
     return 0;
 }

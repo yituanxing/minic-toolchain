@@ -1,6 +1,7 @@
 #include "target/common/direct_preflight.h"
 
 #include "target/common/global_emit.h"
+#include "target/common/elf_alias_emit.h"
 #include "target/common/lp64_scalar.h"
 #include "target/common/lp64_aggregate.h"
 #include "target/common/lp64_frame.h"
@@ -109,13 +110,17 @@ static void direct_lp64_trace_asm_owners(
  * Caller owns target ABI, registers, frame and any failure diagnostics. */
 bool minic_multi_direct_lp64_function_preflight(
     const MinicC0Program *program, const MinicTargetInfo *target,
-    const MinicFunction *decl, const MinicCoreFunction *fn,
+    const MinicFunction *decl, const MinicCoreModuleFunctionSymbol *module_decl,
+    const MinicCoreFunction *fn,
     const MinicCoreFunctionFacts *facts, const char *arch, const char *name,
     MinicDirectLP64OpaqueAsmQualifier qualify_opaque_asm,
     MinicDirectLP64IndirectRecord indirect_return,
     const MinicDirectLP64AbiPolicy *abi) {
     bool verified;
     bool return_valid;
+    bool visibility_valid, alias_present, constructor, weak;
+    bool has_section;
+    unsigned int visibility;
     if (program == NULL || target == NULL || decl == NULL || fn == NULL ||
         fn->type_context == NULL ||
         arch == NULL || !minic_direct_lp64_abi_policy_valid(abi)) return false;
@@ -123,6 +128,20 @@ bool minic_multi_direct_lp64_function_preflight(
                minic_core_function_verify(fn);
     return_valid = minic_lp64_core_valid_return_with_indirect(
         fn->type_context, fn->core_return_type_id, abi->core_indirect_return);
+    visibility_valid = module_decl != NULL
+        ? (module_decl->visibility == MINIC_CORE_MODULE_VISIBILITY_DEFAULT ||
+           minic_multi_elf_module_visibility_directive(module_decl->visibility) != NULL)
+        : (decl->visibility == MINIC_SYMBOL_VISIBILITY_DEFAULT ||
+           minic_multi_elf_visibility_directive(decl->visibility) != NULL);
+    alias_present = module_decl != NULL
+        ? module_decl->alias_target_index != SIZE_MAX
+        : decl->alias_target != MINIC_FUNCTION_INVALID;
+    constructor = module_decl != NULL ? module_decl->is_constructor : decl->is_constructor;
+    weak = module_decl != NULL ? module_decl->is_weak : decl->is_weak;
+    has_section = module_decl != NULL ? module_decl->section_name != NULL
+        : decl->section_name != NULL;
+    visibility = module_decl != NULL ? (unsigned int)module_decl->visibility
+        : (unsigned int)decl->visibility;
     (void)indirect_return;
     /* Collect the ENTIRE admission error class for each failed function.
      * This is not a feature gate or permissive fallback: all original
@@ -132,10 +151,8 @@ bool minic_multi_direct_lp64_function_preflight(
         const char *reason=NULL;
         if(name==NULL||name[0]=='\0')reason="symbol_name";
         else if(!verified)reason="core_verify";
-        else if(decl->visibility!=MINIC_SYMBOL_VISIBILITY_DEFAULT &&
-                minic_multi_elf_visibility_directive(decl->visibility)==NULL)
-            reason="elf_visibility";
-        else if(decl->alias_target!=MINIC_FUNCTION_INVALID)
+        else if(!visibility_valid) reason="elf_visibility";
+        else if(alias_present)
             reason="function_alias";
         else if(!return_valid)
             reason="return_abi";
@@ -157,9 +174,8 @@ bool minic_multi_direct_lp64_function_preflight(
     }
     if (name == NULL || name[0] == '\0' ||
         !verified ||
-        (decl->visibility != MINIC_SYMBOL_VISIBILITY_DEFAULT &&
-         minic_multi_elf_visibility_directive(decl->visibility) == NULL) ||
-        decl->alias_target != MINIC_FUNCTION_INVALID ||
+        !visibility_valid ||
+        alias_present ||
         !return_valid ||
         fn->block_count > 2048U ||
         !direct_lp64_only_structured_asm(fn, qualify_opaque_asm) ||
@@ -182,9 +198,8 @@ bool minic_multi_direct_lp64_function_preflight(
                               fn->inline_asm_count,
                               return_valid ? 1 : 0,
                               verified ? 1 : 0,
-                              decl->is_constructor ? 1 : 0, decl->is_weak ? 1 : 0,
-                              (int)decl->visibility,
-                              decl->section_name != NULL ? 1 : 0);
+                              constructor ? 1 : 0, weak ? 1 : 0,
+                              (int)visibility, has_section ? 1 : 0);
             return false;
         }
     return true;

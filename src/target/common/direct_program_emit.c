@@ -149,13 +149,14 @@ static bool direct_visit_module_global(
 
 static bool direct_visit_function(
     FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
-    const MinicFunction *decl, const MinicCoreFunction *fn,
+    const MinicFunction *decl, const MinicCoreModuleFunctionSymbol *module_decl,
+    const MinicCoreFunction *fn,
     const MinicCoreFunctionFacts *facts,
     const MinicCoreObjectStoragePlan *storage, size_t index,
     bool function_sections, void *opaque) {
     MinicDirectVisitContext *ctx = opaque;
     ++ctx->scanned_functions;
-    if (ctx->config->emit_function(out, program, target, decl, fn,
+    if (ctx->config->emit_function(out, program, target, decl, module_decl, fn,
                                    facts, storage, index, function_sections))
         return true;
     ++ctx->rejected_functions;

@@ -1,6 +1,6 @@
 #include "compiler/module_ir_build.h"
 
-#include "target/common/global_emit.h"
+#include "compiler/global_payload.h"
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -226,12 +226,8 @@ static bool module_capture_global(MinicCoreModuleGlobal *destination,
         !module_default_section(plan.default_elf_section,
                                 &destination->default_section))
         return false;
-    {
-        MinicMultiGlobalEmissionPlan common_plan;
-        destination->common_elf_bss_admitted =
-            minic_multi_global_emission_plan_build(
-                program, target, source, &common_plan);
-    }
+    destination->common_elf_bss_admitted =
+        minic_multi_global_explicit_bss_admitted(source);
     destination->storage_size = plan.storage_size;
     destination->storage_alignment = plan.storage_alignment;
     sink.global = destination;

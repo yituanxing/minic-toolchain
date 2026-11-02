@@ -86,7 +86,7 @@ static bool symbol_default_case(void) {
         symbol.explicit_alignment == 0U &&
         symbol.section_name == NULL && !symbol.function_sections &&
         !symbol.is_internal && !symbol.is_weak &&
-        symbol.visibility == MINIC_SYMBOL_VISIBILITY_DEFAULT &&
+        symbol.visibility == MINIC_CORE_MODULE_VISIBILITY_DEFAULT &&
         file != NULL && minic_riscv_emit_function_symbol_begin(file, &symbol) &&
         emitted_contains(file, ".type frame_policy_test, @function\n",
                          ".balign ");

@@ -1,6 +1,7 @@
 #include "target/riscv64/legalize.h"
 #include "target/common/core_call_view.h"
 #include "target/riscv64/abi.h"
+#include "target/riscv64/core_type_query.h"
 #include "target/data_layout.h"
 #include "target/common/lp64_scalar.h"
 #include <stdint.h>
@@ -45,201 +46,110 @@ bool minic_riscv64_core_record_load_supported(const MinicC0Program *program,
                                        const MinicCoreFunction *function,
                                        const MinicCoreInstruction *instruction,
                                        size_t *record_size) {
-    MinicCoreObjectId destination_object;
-    MinicCoreValueId source_address;
-    MinicType record_type;
-    MinicType source_pointee;
-    MinicType source_type;
-    size_t alignment;
-    size_t size;
-
-    if (function != NULL && function->type_context != NULL) {
-        const MinicCoreTypeContext *types = function->type_context;
-        const MinicCoreType *record, *pointee;
-        MinicCoreTypeId source_pointee_id;
-        if (instruction == NULL ||
-            instruction->kind != MINIC_CORE_INSTRUCTION_RECORD_LOAD ||
-            instruction->result != MINIC_CORE_VALUE_INVALID ||
-            instruction->value.record_load.destination_object >= function->object_count ||
-            instruction->value.record_load.source_address >= function->value_count ||
-            !minic_lp64_core_kind(types, instruction->core_type_id,
-                                  MINIC_CORE_TYPE_RECORD) ||
-            !minic_lp64_core_equal_unqualified(
-                types, function->objects[
-                    instruction->value.record_load.destination_object].core_type_id,
-                instruction->core_type_id) ||
-            !minic_lp64_core_pointer_pointee(
-                types, function->values[
-                    instruction->value.record_load.source_address].core_type_id,
-                &source_pointee_id) ||
-            !minic_lp64_core_equal_unqualified(
-                types, source_pointee_id, instruction->core_type_id)) return false;
-        record = minic_core_type_get(types, minic_core_type_unqualified(
-            types, instruction->core_type_id));
-        pointee = minic_core_type_get(types, source_pointee_id);
-        if (record == NULL || pointee == NULL || !record->has_layout ||
-            record->size == 0U || record->alignment == 0U ||
-            instruction->value.record_load.is_volatile != pointee->is_volatile)
-            return false;
-        if (record_size != NULL) *record_size = record->size;
-        return true;
-    }
-
-    if (program == NULL || function == NULL || instruction == NULL ||
+    const MinicCoreTypeContext *types;
+    const MinicCoreType *record, *pointee;
+    MinicCoreTypeId source_pointee_id;
+    (void)program;
+    if (function == NULL || function->type_context == NULL || instruction == NULL ||
         instruction->kind != MINIC_CORE_INSTRUCTION_RECORD_LOAD ||
         instruction->result != MINIC_CORE_VALUE_INVALID ||
-        !minic_type_is_record(instruction->type) ||
-        !minic_type_unqualified(instruction->type, &record_type) ||
-        !minic_type_equal(record_type, instruction->type)) {
+        instruction->value.record_load.destination_object >= function->object_count ||
+        instruction->value.record_load.source_address >= function->value_count)
         return false;
-    }
-    destination_object = instruction->value.record_load.destination_object;
-    source_address = instruction->value.record_load.source_address;
-    if (destination_object >= function->object_count || source_address >= function->value_count ||
-        !minic_type_equal(function->objects[destination_object].type, instruction->type) ||
-        !minic_type_pointee(function->values[source_address].type, &source_pointee) ||
-        !minic_type_unqualified(source_pointee, &source_type) ||
-        !minic_type_equal(source_type, instruction->type) ||
-        instruction->value.record_load.is_volatile != minic_type_is_volatile(source_pointee) ||
-        !minic_data_layout_type(
-            minic_default_data_layout(), program, instruction->type, &size, &alignment) ||
-        size == 0U) {
+    types = function->type_context;
+    if (!minic_lp64_core_kind(types, instruction->core_type_id,
+                             MINIC_CORE_TYPE_RECORD) ||
+        !minic_lp64_core_equal_unqualified(
+            types, function->objects[
+                instruction->value.record_load.destination_object].core_type_id,
+            instruction->core_type_id) ||
+        !minic_lp64_core_pointer_pointee(
+            types, function->values[
+                instruction->value.record_load.source_address].core_type_id,
+            &source_pointee_id) ||
+        !minic_lp64_core_equal_unqualified(
+            types, source_pointee_id, instruction->core_type_id)) return false;
+    record = minic_riscv64_core_base_type(function, instruction->core_type_id);
+    pointee = minic_core_type_get(types, source_pointee_id);
+    if (record == NULL || pointee == NULL || !record->has_layout ||
+        record->size == 0U || record->alignment == 0U ||
+        instruction->value.record_load.is_volatile != pointee->is_volatile)
         return false;
-    }
-    (void)alignment;
-    if (record_size != NULL) {
-        *record_size = size;
-    }
+    if (record_size != NULL) *record_size = record->size;
     return true;
 }
 
 bool minic_riscv64_core_record_copy_supported(const MinicC0Program *program,
                                        const MinicCoreFunction *function,
                                        const MinicCoreInstruction *instruction) {
-    MinicType destination_pointee;
-    MinicType destination_type;
-    MinicType source_pointee;
-    MinicType source_type;
-    size_t alignment;
-    size_t size;
-
-    if (function != NULL && function->type_context != NULL) {
-        const MinicCoreTypeContext *types = function->type_context;
-        const MinicCoreType *record;
-        MinicCoreTypeId destination_pointee_id, source_pointee_id;
-        if (instruction == NULL ||
-            instruction->kind != MINIC_CORE_INSTRUCTION_RECORD_COPY ||
-            instruction->result != MINIC_CORE_VALUE_INVALID ||
-            instruction->value.record_copy.destination_address >= function->value_count ||
-            instruction->value.record_copy.source_address >= function->value_count ||
-            !minic_lp64_core_kind(types, instruction->core_type_id,
-                                  MINIC_CORE_TYPE_RECORD) ||
-            !minic_lp64_core_pointer_pointee(
-                types, function->values[
-                    instruction->value.record_copy.destination_address].core_type_id,
-                &destination_pointee_id) ||
-            !minic_lp64_core_pointer_pointee(
-                types, function->values[
-                    instruction->value.record_copy.source_address].core_type_id,
-                &source_pointee_id) ||
-            !minic_lp64_core_equal_unqualified(
-                types, destination_pointee_id, instruction->core_type_id) ||
-            !minic_lp64_core_equal_unqualified(
-                types, source_pointee_id, instruction->core_type_id)) return false;
-        record = minic_core_type_get(types, minic_core_type_unqualified(
-            types, instruction->core_type_id));
-        /* A zero-sized GNU record copy remains an intentional no-op. */
-        return record != NULL && record->has_layout && record->alignment != 0U;
-    }
-
-    if (program == NULL || function == NULL || instruction == NULL ||
+    const MinicCoreTypeContext *types;
+    const MinicCoreType *record;
+    MinicCoreTypeId destination_pointee_id, source_pointee_id;
+    (void)program;
+    if (function == NULL || function->type_context == NULL || instruction == NULL ||
         instruction->kind != MINIC_CORE_INSTRUCTION_RECORD_COPY ||
-        instruction->result != MINIC_CORE_VALUE_INVALID || !minic_type_is_record(instruction->type) ||
+        instruction->result != MINIC_CORE_VALUE_INVALID ||
         instruction->value.record_copy.destination_address >= function->value_count ||
-        instruction->value.record_copy.source_address >= function->value_count ||
-        !minic_type_pointee(
-            function->values[instruction->value.record_copy.destination_address].type,
-            &destination_pointee) ||
-        !minic_type_pointee(function->values[instruction->value.record_copy.source_address].type,
-                            &source_pointee) ||
-        !minic_type_unqualified(destination_pointee, &destination_type) ||
-        !minic_type_unqualified(source_pointee, &source_type) ||
-        !minic_type_equal(destination_type, instruction->type) ||
-        !minic_type_equal(source_type, instruction->type) ||
-        !minic_data_layout_type(
-            minic_default_data_layout(), program, instruction->type, &size, &alignment)) {
+        instruction->value.record_copy.source_address >= function->value_count)
         return false;
-    }
+    types = function->type_context;
+    if (!minic_lp64_core_kind(types, instruction->core_type_id,
+                             MINIC_CORE_TYPE_RECORD) ||
+        !minic_lp64_core_pointer_pointee(
+            types, function->values[
+                instruction->value.record_copy.destination_address].core_type_id,
+            &destination_pointee_id) ||
+        !minic_lp64_core_pointer_pointee(
+            types, function->values[
+                instruction->value.record_copy.source_address].core_type_id,
+            &source_pointee_id) ||
+        !minic_lp64_core_equal_unqualified(
+            types, destination_pointee_id, instruction->core_type_id) ||
+        !minic_lp64_core_equal_unqualified(
+            types, source_pointee_id, instruction->core_type_id)) return false;
+    record = minic_riscv64_core_base_type(function, instruction->core_type_id);
     /* M167_ZERO_RECORD_COPY: GNU empty records are addressable semantic
        objects. RECORD_COPY has already evaluated both address operands; with
        zero storage bytes the target action is an intentional no-op. */
-    return alignment != 0U;
+    return record != NULL && record->has_layout && record->alignment != 0U;
 }
 
 bool minic_riscv64_core_call_frame_address_supported(
     const MinicCoreFunction *function, const MinicCoreInstruction *instruction) {
-    MinicType pointee;
     if (instruction == NULL ||
         instruction->kind != MINIC_CORE_INSTRUCTION_CALL_FRAME_ADDRESS ||
         (instruction->value.call_frame_address.kind != MINIC_CORE_CALL_FRAME_ADDRESS_RETURN &&
          instruction->value.call_frame_address.kind != MINIC_CORE_CALL_FRAME_ADDRESS_FRAME) ||
-        instruction->value.call_frame_address.level != 0U) return false;
-    if (function != NULL && function->type_context != NULL) {
+        instruction->value.call_frame_address.level != 0U ||
+        function == NULL || function->type_context == NULL) return false;
+    {
         MinicCoreTypeId core_pointee;
         return minic_lp64_core_pointer_pointee(
                    function->type_context, instruction->core_type_id, &core_pointee) &&
                minic_lp64_core_kind(function->type_context, core_pointee,
                                     MINIC_CORE_TYPE_VOID);
     }
-    return minic_type_pointee(instruction->type, &pointee) && minic_type_is_void(pointee);
 }
 
 bool minic_riscv64_core_scalar_bitcast_supported(const MinicC0Program *program,
                                           const MinicCoreFunction *function,
                                           const MinicCoreInstruction *instruction) {
-    const MinicCoreValue *source;
-    size_t source_size;
-    size_t source_alignment;
-    size_t target_size;
-    size_t target_alignment;
-    if (function != NULL && function->type_context != NULL) {
-        const MinicCoreTypeContext *types = function->type_context;
-        const MinicCoreType *target, *source_core_type;
-        if (instruction == NULL ||
-            instruction->kind != MINIC_CORE_INSTRUCTION_SCALAR_BITCAST ||
-            instruction->value.operand >= function->value_count) return false;
-        target = minic_core_type_get(types, minic_core_type_unqualified(
-            types, instruction->core_type_id));
-        source_core_type = minic_core_type_get(types, minic_core_type_unqualified(
-            types, function->values[instruction->value.operand].core_type_id));
-        if (target == NULL || source_core_type == NULL || !target->has_layout ||
-            !source_core_type->has_layout || !target->size || !source_core_type->size ||
-            target->size > 8U || source_core_type->size > 8U) return false;
-        return (target->kind == MINIC_CORE_TYPE_POINTER &&
-                (source_core_type->kind == MINIC_CORE_TYPE_POINTER ||
-                 source_core_type->kind == MINIC_CORE_TYPE_INTEGER)) ||
-               (target->kind == MINIC_CORE_TYPE_INTEGER &&
-                source_core_type->kind == MINIC_CORE_TYPE_POINTER);
-    }
-    if (program == NULL || function == NULL || instruction == NULL ||
+    const MinicCoreType *target, *source_core_type;
+    (void)program;
+    if (function == NULL || function->type_context == NULL || instruction == NULL ||
         instruction->kind != MINIC_CORE_INSTRUCTION_SCALAR_BITCAST ||
-        instruction->value.operand >= function->value_count) {
-        return false;
-    }
-    source = &function->values[instruction->value.operand];
-    if (!minic_core_scalar_bitcast_types_valid(instruction->type, source->type) ||
-        !minic_data_layout_type(
-            minic_default_data_layout(), program, source->type, &source_size, &source_alignment) ||
-        !minic_data_layout_type(minic_default_data_layout(),
-                                program,
-                                instruction->type,
-                                &target_size,
-                                &target_alignment)) {
-        return false;
-    }
-    (void)source_alignment;
-    (void)target_alignment;
-    return source_size != 0U && source_size <= 8U && target_size != 0U && target_size <= 8U;
+        instruction->value.operand >= function->value_count) return false;
+    target = minic_riscv64_core_base_type(function, instruction->core_type_id);
+    source_core_type = minic_riscv64_core_base_type(
+        function, function->values[instruction->value.operand].core_type_id);
+    if (target == NULL || source_core_type == NULL || !target->has_layout ||
+        !source_core_type->has_layout || !target->size || !source_core_type->size ||
+        target->size > 8U || source_core_type->size > 8U) return false;
+    return (target->kind == MINIC_CORE_TYPE_POINTER &&
+            (source_core_type->kind == MINIC_CORE_TYPE_POINTER ||
+             source_core_type->kind == MINIC_CORE_TYPE_INTEGER)) ||
+           (target->kind == MINIC_CORE_TYPE_INTEGER &&
+            source_core_type->kind == MINIC_CORE_TYPE_POINTER);
 }
 
 bool minic_riscv64_core_integer_type_range_fits(const MinicC0Program *program,
@@ -404,13 +314,6 @@ bool minic_riscv64_core_integer_overflow_supported(const MinicC0Program *program
 }
 
 
-static const MinicCoreType *rv64_abi_core_base(
-    const MinicCoreFunction *function, MinicCoreTypeId id) {
-    if (function == NULL || function->type_context == NULL) return NULL;
-    return minic_core_type_get(function->type_context,
-        minic_core_type_unqualified(function->type_context, id));
-}
-
 static bool rv64_core_abi_scalar(const MinicCoreType *type) {
     return type != NULL &&
         (type->kind == MINIC_CORE_TYPE_INTEGER ||
@@ -455,7 +358,7 @@ static bool rv64_core_call_arguments_resolved_supported(
         if (!minic_core_call_view_argument_core_type(
                 function, call, index, &actual_type)) return false;
         type_id = fixed ? call->core_parameter_type_ids[index] : actual_type;
-        type = rv64_abi_core_base(function, type_id);
+        type = minic_riscv64_core_base_type(function, type_id);
         if (type == NULL || (!fixed &&
             (!call->is_variadic ||
              (!rv64_core_abi_scalar(type) &&
@@ -555,7 +458,7 @@ static bool rv64_core_call_return_supported(
     if (function == NULL || function->type_context == NULL ||
         call == NULL || value == NULL)
         return false;
-    core = rv64_abi_core_base(function, call->core_return_type_id);
+    core = minic_riscv64_core_base_type(function, call->core_return_type_id);
     if (core == NULL) return false;
     switch (value->kind) {
     case MINIC_RISCV64_ABI_VALUE_VOID:
@@ -596,7 +499,7 @@ static bool rv64_core_preparedless_call_supported(
         call->argument_count > 8U ||
         (call->parameter_count != 0U && call->core_parameter_type_ids == NULL))
         return false;
-    return_type = rv64_abi_core_base(function, call->core_return_type_id);
+    return_type = minic_riscv64_core_base_type(function, call->core_return_type_id);
     if (return_type == NULL ||
         (return_type->kind != MINIC_CORE_TYPE_VOID &&
          !rv64_core_abi_scalar(return_type))) return false;
@@ -610,7 +513,7 @@ static bool rv64_core_preparedless_call_supported(
         if (argument_index < call->parameter_count)
             type_id = call->core_parameter_type_ids[argument_index];
         else if (!call->is_variadic) return false;
-        if (!rv64_core_abi_scalar(rv64_abi_core_base(function, type_id)))
+        if (!rv64_core_abi_scalar(minic_riscv64_core_base_type(function, type_id)))
             return false;
     }
     return true;
@@ -623,7 +526,6 @@ bool minic_riscv64_core_direct_call_supported(const MinicC0Program *program,
                                        const MinicRiscv64PreparedCall *prepared) {
     MinicCoreCallView call;
     const MinicCoreCallee *callee;
-    size_t argument_index;
 
     /* The already-admitted Common FunctionPlan supplies an immutable
      * semantic view. A standalone caller still builds a checked view once. */
@@ -634,32 +536,9 @@ bool minic_riscv64_core_direct_call_supported(const MinicC0Program *program,
     callee = call.callee;
     if (callee->name == NULL || callee->name_length == 0U)
         return false;
-    if (program == NULL) {
-        if (function != NULL && function->type_context != NULL)
-            return rv64_core_preparedless_call_supported(function, &call);
-        if ((!minic_type_is_void(callee->return_type) &&
-             !minic_riscv64_scalar_type(callee->return_type)) ||
-            instruction->value.call.argument_count > 8U) {
-            return false;
-        }
-        for (argument_index = 0U; argument_index < instruction->value.call.argument_count;
-             ++argument_index) {
-            const MinicCoreCallArgument *argument = &function->call_arguments[
-                instruction->value.call.argument_begin + argument_index];
-            if (argument->kind != MINIC_CORE_CALL_ARGUMENT_VALUE) {
-                return false;
-            }
-            if (argument_index < callee->parameter_count) {
-                if (!minic_riscv64_scalar_type(callee->parameter_types[argument_index])) {
-                    return false;
-                }
-            } else if (argument->value.value_id >= function->value_count ||
-                       !minic_riscv64_scalar_type(function->values[argument->value.value_id].type)) {
-                return false;
-            }
-        }
-        return true;
-    }
+    if (program == NULL)
+        return function != NULL && function->type_context != NULL &&
+               rv64_core_preparedless_call_supported(function, &call);
     if (prepared == NULL ||
         !rv64_core_call_return_supported(function, &call, &prepared->return_value)) {
         return false;
@@ -675,42 +554,14 @@ bool minic_riscv64_core_indirect_call_supported(const MinicC0Program *program,
                                          const MinicCoreCallView *semantic_view,
                                          const MinicRiscv64PreparedCall *prepared) {
     MinicCoreCallView call;
-    const MinicCoreCallSignature *signature;
-    size_t argument_index;
 
     if (!(semantic_view != NULL ? (call = *semantic_view, true) :
           minic_core_call_view_build(function, instruction, &call)) ||
         call.signature == NULL)
         return false;
-    signature = call.signature;
-    if (program == NULL) {
-        if (function != NULL && function->type_context != NULL)
-            return rv64_core_preparedless_call_supported(function, &call);
-        if ((!minic_type_is_void(signature->return_type) &&
-             !minic_riscv64_scalar_type(signature->return_type)) ||
-            instruction->value.indirect_call.argument_count > 8U) {
-            return false;
-        }
-        for (argument_index = 0U;
-             argument_index < instruction->value.indirect_call.argument_count;
-             ++argument_index) {
-            const MinicCoreCallArgument *argument = &function->call_arguments[
-                instruction->value.indirect_call.argument_begin + argument_index];
-            if (argument->kind != MINIC_CORE_CALL_ARGUMENT_VALUE ||
-                argument->value.value_id >= function->value_count) {
-                return false;
-            }
-            if (argument_index < signature->parameter_count) {
-                if (!minic_riscv64_scalar_type(signature->parameter_types[argument_index])) {
-                    return false;
-                }
-            } else if (!signature->is_variadic ||
-                       !minic_riscv64_scalar_type(function->values[argument->value.value_id].type)) {
-                return false;
-            }
-        }
-        return true;
-    }
+    if (program == NULL)
+        return function != NULL && function->type_context != NULL &&
+               rv64_core_preparedless_call_supported(function, &call);
     if (prepared == NULL ||
         !rv64_core_call_return_supported(function, &call, &prepared->return_value)) {
         return false;

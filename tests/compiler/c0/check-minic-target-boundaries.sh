@@ -54,6 +54,15 @@ has src/target/riscv32/rv32_frame.c 'minic_riscv_gpr_name_equal(reg, "t6")'
 
 has src/target/riscv64/frame_layout.c \
   'minic_core_object_reuse_plan_build('
+# Strict RV64 ISA admission and frame geometry must not resurrect the
+# discarded source-C type after an executable CoreType has been sealed.
+for source in src/target/riscv64/isa.c src/target/riscv64/frame_layout.c; do
+  lacks "$source" 'minic_type_'
+  lacks "$source" 'instruction->type'
+  lacks "$source" 'function->return_type'
+done
+has src/target/riscv64/isa.c 'minic_riscv64_core_is_i128('
+has src/target/riscv64/frame_layout.c 'minic_riscv64_core_is_record('
 # One Common interval index covers small and large Core functions.
 # Never resurrect per-object repeated scans on optional allocation failure.
 exists src/target/common/core_object_intervals.c
@@ -83,6 +92,14 @@ lacks src/core/core_lower_asm_target.c 'sltu'
 has src/target/common/global_emit.c 'minic_multi_emit_elf_global_section('
 has src/target/common/global_emit.c 'minic_multi_emit_elf_global_binding('
 has src/target/common/global_emit.c 'minic_multi_elf_safe_section_name('
+# The only C/DataLayout global byte walk belongs to Compiler ingress.
+# Target/Common retains output serialization adapters, not a second walker.
+exists src/compiler/global_payload.c
+exists src/compiler/global_payload.h
+has src/compiler/global_payload.c 'minic_multi_global_payload_visit('
+has src/target/common/global_emit.c 'minic_multi_global_payload_visit('
+lacks src/compiler/module_ir_build.c 'target/common/global_emit.h'
+lacks src/target/common/global_emit.c 'static bool minic_multi_visit_record_bit_field_run('
 
 # GNU Linux local_add(long) + atomic64_t.counter(long long) is a
 # cross-C-rank 8-byte machine operand, not a fake ABI identity.
@@ -789,7 +806,9 @@ has src/target/riscv64/core_admission.c 'view = &semantic_calls->sites[call_site
 has src/target/riscv64/core_admission.c 'prepared = abi_plan->outgoing_calls.sites[call_site]'
 has src/target/riscv64/core_admission.c 'prepared->instruction_id != index'
 has src/target/riscv64/core_admission.c 'shape = &storage->objects[index]'
-has src/target/riscv64/core_admission.c 'minic_core_object_storage('
+# Admission consumes the prepared Core storage plan; old C-object layout
+# queries are no longer part of the sealed RV64 target boundary.
+lacks src/target/riscv64/core_admission.c 'minic_core_object_storage('
 has src/target/riscv64/core_codegen.c 'isa->abi == MINIC_RISCV_ABI_LP64, facts, storage)'
 lacks src/target/riscv64/core_admission.c 'static bool core_global_addressable_type('
 # Both production and standalone RV64 callers now have a prepared
@@ -922,7 +941,8 @@ lacks src/target/riscv32/rv32_abi_plan.c 'while (i < function->instruction_count
 lacks src/target/common/direct_call_plan.c 'while (id < fn->instruction_count'
 # SysV VA cursors must match the prepared Common fact count exactly.
 has src/target/x86_64/frame.c 'if (count != frame->varargs_count) return false;'
-has src/target/common/direct_function_plan.c 'program, target, decl, fn, facts, abi, indirect_record,'
+has src/target/common/direct_function_plan.c 'program, target, fn, facts, abi, indirect_record,'
+has src/target/common/direct_function_plan.c 'program, target, decl, module_decl, fn, facts, architecture_name, name,'
 has src/target/common/direct_function_emit.h 'minic_multi_direct_lp64_function_plan_prepare('
 lacks src/target/loongarch64/codegen.c 'minic_multi_direct_lp64_function_plan_prepare('
 # All five targets must own only target callbacks. File lifetime,
@@ -1021,9 +1041,18 @@ cc -std=c11 -O2 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror \
   -ffunction-sections -fdata-sections -Wl,--gc-sections \
   -Iinclude -Isrc tests/compiler/c0/probe-module-global-fragments.c \
   src/target/common/module_global_emit.c \
+  src/compiler/global_payload.c \
   src/target/common/global_emit.c \
   -o "$work/module-global-fragments-probe"
 "$work/module-global-fragments-probe"
+
+# In an attached module, function selection and symbol metadata come from
+# ModuleIR, even when a deliberately poisoned legacy C declaration disagrees.
+# Both definitions and declarations must follow the sealed module decision.
+cc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror \
+  -Iinclude -Isrc tests/compiler/c0/probe-module-function-visitor.c \
+  -o "$work/module-function-owner-probe"
+"$work/module-function-owner-probe"
 
 cc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror \
   -ffunction-sections -fdata-sections -Wl,--gc-sections \
@@ -1032,6 +1061,7 @@ cc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror \
   src/frontend/ast_global.c \
   src/target/common/core_function_facts.c \
   src/target/common/core_function_plan.c \
+  src/compiler/global_payload.c \
   src/target/common/global_emit.c \
   -o "$work/program-emit-probe"
 "$work/program-emit-probe" "$work/test-output.s"

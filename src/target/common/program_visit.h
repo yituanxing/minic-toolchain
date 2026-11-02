@@ -34,7 +34,8 @@ typedef bool (*MinicProgramVisitFunction)(
  * Physical locations and ISA admission remain target responsibilities. */
 typedef bool (*MinicProgramVisitPreparedFunction)(
     FILE *, const MinicC0Program *, const MinicTargetInfo *,
-    const MinicFunction *, const MinicCoreFunction *,
+    const MinicFunction *, const MinicCoreModuleFunctionSymbol *,
+    const MinicCoreFunction *,
     const MinicCoreFunctionFacts *, const MinicCoreObjectStoragePlan *,
     size_t, bool function_sections, void *);
 
@@ -167,23 +168,26 @@ static inline bool minic_program_visit_prepared_functions_module(
         return false;
     for (i = 0U; i < function_count; ++i) {
         const MinicFunction *decl = &program->functions[i];
+        const MinicCoreModuleFunctionSymbol *module_decl = module != NULL
+            ? &module->function_symbols[i] : NULL;
+        const bool is_defined = module_decl != NULL
+            ? module_decl->is_defined : decl->is_defined;
         MinicCoreFunctionPlan plan = {0};
         bool ready = true;
-        if (!(module != NULL
-                  ? minic_program_module_function_selected(
-                        &module->function_symbols[i], selection)
+        if (!(module_decl != NULL
+                  ? minic_program_module_function_selected(module_decl, selection)
                   : minic_program_function_selected(decl, selection)))
             continue;
         /* One common, ABI-neutral function-plan owner. Target frames borrow
          * the immutable layout/semantic snapshot for this visitor call only.
          * No physical ABI state escapes into the Core definition. */
-        if (decl->is_defined)
+        if (is_defined)
             ready = minic_core_function_plan_build(
                 program, target, &functions[i], &plan);
         if (ready)
-            ready = visit(out, program, target, decl, &functions[i],
-                          decl->is_defined ? &plan.facts : NULL,
-                          decl->is_defined ? &plan.objects : NULL, i,
+            ready = visit(out, program, target, decl, module_decl, &functions[i],
+                          is_defined ? &plan.facts : NULL,
+                          is_defined ? &plan.objects : NULL, i,
                           function_sections, context);
         minic_core_function_plan_destroy(&plan);
         if (!ready) {

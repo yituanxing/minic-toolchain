@@ -789,6 +789,7 @@ static bool rv32_term(FILE *out, const MinicCoreFunction *f,
 }
 static bool rv32_func(FILE *out, const MinicC0Program *program,
                        const MinicCoreFunction *f, const MinicFunction *def,
+                       const MinicCoreModuleFunctionSymbol *module_decl,
                        bool function_sections, const MinicTargetInfo *target,
                        const MinicCoreFunctionFacts *facts,
                        const MinicCoreObjectStoragePlan *storage,
@@ -809,7 +810,8 @@ static bool rv32_func(FILE *out, const MinicC0Program *program,
         if (getenv("MINIC_RV32_FRAME_TRACE") != NULL)
             (void)fprintf(stderr,
                 "RV32_FRAME_OWNER function=%s parameters=%zu values=%zu objects=%zu instructions=%zu\n",
-                def->name != NULL ? def->name : "<unnamed>",
+                module_decl != NULL ? module_decl->name :
+                    (def->name != NULL ? def->name : "<unnamed>"),
                 f->parameter_count, f->value_count, f->object_count,
                 f->instruction_count);
         rv32_diag(diag, "<rv32-frame>", "rv32i: cannot allocate an ILP32 Core frame");
@@ -822,7 +824,9 @@ static bool rv32_func(FILE *out, const MinicC0Program *program,
         rv32_diag(diag, "<rv32-core>", "rv32i: cannot classify Core CFG reachability");
         goto done;
     }
-    if (!minic_riscv_function_symbol_from_function(def, &sym)) goto done;
+    if (!(module_decl != NULL
+              ? minic_riscv_function_symbol_from_module(module_decl, &sym)
+              : minic_riscv_function_symbol_from_function(def, &sym))) goto done;
     sym.function_sections = function_sections;
     if (!minic_riscv_emit_function_symbol_begin(out, &sym)) goto done;
     if (fr.has_dynamic_stack_alignment) {
@@ -976,21 +980,24 @@ static bool rv32_visit_declaration(
 
 static bool rv32_visit_function(
     FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
-    const MinicFunction *decl, const MinicCoreFunction *fn,
+    const MinicFunction *decl, const MinicCoreModuleFunctionSymbol *module_decl,
+    const MinicCoreFunction *fn,
     const MinicCoreFunctionFacts *facts,
     const MinicCoreObjectStoragePlan *storage, size_t index,
     bool function_sections, void *opaque) {
     Rv32ProgramContext *ctx = opaque;
     const char *name;
     (void)index;
-    if (!rv32_func(out, program, fn, decl, function_sections,
+    if (!rv32_func(out, program, fn, decl, module_decl, function_sections,
                    target, facts, storage, ctx->diagnostic))
         return false;
-    if (!decl->is_constructor) return true;
+    if (!(module_decl != NULL ? module_decl->is_constructor
+                              : decl->is_constructor)) return true;
     /* GNU ELF32 startup traverses four-byte .init_array function pointers.
      * The function body is already emitted; registration is a separate
      * target-owned ELF record, including for static constructors. */
-    name = minic_c0_function_symbol_name(decl);
+    name = module_decl != NULL ? module_decl->name
+                               : minic_c0_function_symbol_name(decl);
     return name != NULL && name[0] != '\0' &&
            fprintf(out, ".section .init_array,\"aw\",@init_array\n"
                         ".p2align 2\n  .4byte %s\n.text\n", name) >= 0;

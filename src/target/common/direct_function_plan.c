@@ -15,7 +15,8 @@
  * own partial allocations that the caller must destroy. */
 bool minic_multi_direct_lp64_function_plan_prepare(
     const MinicC0Program *program, const MinicTargetInfo *target,
-    const MinicFunction *decl, const MinicCoreFunction *fn,
+    const MinicFunction *decl, const MinicCoreModuleFunctionSymbol *module_decl,
+    const MinicCoreFunction *fn,
     const MinicCoreFunctionFacts *facts,
     const MinicCoreObjectStoragePlan *storage,
     const char *architecture_name, const MinicDirectLP64AbiPolicy *abi,
@@ -37,13 +38,14 @@ bool minic_multi_direct_lp64_function_plan_prepare(
         architecture_name == NULL || indirect_record == NULL ||
         !minic_direct_lp64_abi_policy_valid(abi))
         return false;
-    name = minic_c0_function_symbol_name(decl);
+    name = module_decl != NULL ? module_decl->name
+        : minic_c0_function_symbol_name(decl);
     if (!minic_multi_direct_lp64_function_preflight(
-            program, target, decl, fn, facts, architecture_name, name,
+            program, target, decl, module_decl, fn, facts, architecture_name, name,
             qualify_opaque_asm, indirect_return, abi))
         return false;
     profile_result = minic_multi_direct_lp64_profile_function(
-        program, target, decl, fn, facts, abi, indirect_record,
+        program, target, fn, facts, abi, indirect_record,
         &plan->incoming_plan, &profile);
     if (profile_result != MINIC_DIRECT_LP64_PROFILE_OK) {
         plan->failed_stage =

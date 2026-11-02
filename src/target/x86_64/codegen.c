@@ -7,6 +7,7 @@
 #include "target/common/program_emit.h"
 #include "target/common/elf_alias_emit.h"
 #include "target/common/global_emit.h"
+#include "target/common/module_global_emit.h"
 
 #include "target/x86_64/global_emit.h"
 #include "target/x86_64/abi.h"
@@ -299,13 +300,25 @@ static bool x86_no_sse_function_safe(
 
 static bool x86_emit_function(FILE *out, const MinicC0Program *program,
                               const MinicTargetInfo *target, const MinicFunction *declaration,
+                              const MinicCoreModuleFunctionSymbol *module_decl,
                               const MinicCoreFunction *fn, const MinicCoreFunctionFacts *facts,
                               const MinicCoreObjectStoragePlan *storage,
                               size_t function_id, bool function_sections,
                               bool inherited_head_address_context,
                               MinicDiagnostic *diag, const char *path) {
     MinicX86Frame frame = {0};
-    const char *name = minic_c0_function_symbol_name(declaration);
+    const char *name = module_decl != NULL ? module_decl->name
+                                            : minic_c0_function_symbol_name(declaration);
+    const char *section_name = module_decl != NULL ? module_decl->section_name
+        : declaration->section_name;
+    const size_t explicit_alignment = module_decl != NULL
+        ? module_decl->explicit_alignment : declaration->explicit_alignment;
+    const bool is_internal = module_decl != NULL ? module_decl->is_internal
+        : declaration->is_internal;
+    const bool is_weak = module_decl != NULL ? module_decl->is_weak
+        : declaration->is_weak;
+    const bool is_constructor = module_decl != NULL ? module_decl->is_constructor
+        : declaration->is_constructor;
     size_t block_index;
     MinicCoreBlockWalk walk = {0};
     bool *reachable = NULL;
@@ -379,8 +392,7 @@ static bool x86_emit_function(FILE *out, const MinicC0Program *program,
     frame.function_value_use_counts = function_value_use_counts;
     frame.kernel_head_link_addresses = !target->position_independent &&
         (inherited_head_address_context ||
-         (declaration->section_name != NULL &&
-          strcmp(declaration->section_name, ".head.text") == 0));
+         (section_name != NULL && strcmp(section_name, ".head.text") == 0));
     if (frame.kernel_head_link_addresses) {
         size_t i;
         if (fn->value_count > SIZE_MAX / sizeof(*head_memory_rebase_globals) ||
@@ -417,20 +429,23 @@ static bool x86_emit_function(FILE *out, const MinicC0Program *program,
         frame.kernel_head_vma_cast_globals = head_vma_cast_globals;
         frame.kernel_head_memory_rebase_globals = head_memory_rebase_globals;
     }
-    if (declaration->section_name != NULL) {
-        if (fprintf(out, ".section %s,\"ax\",@progbits\n", declaration->section_name) < 0)
+    if (section_name != NULL) {
+        if (fprintf(out, ".section %s,\"ax\",@progbits\n", section_name) < 0)
             goto done;
     } else if (function_sections) {
         if (fprintf(out, ".section .text.%s,\"ax\",@progbits\n", name) < 0) goto done;
     } else if (fprintf(out, ".text\n") < 0) goto done;
-    if (!declaration->is_internal) {
-        if (fprintf(out, declaration->is_weak ? ".weak %s\n" : ".globl %s\n", name) < 0)
+    if (!is_internal) {
+        if (fprintf(out, is_weak ? ".weak %s\n" : ".globl %s\n", name) < 0)
             goto done;
-        if (!minic_multi_emit_elf_symbol_visibility(
-                out, declaration->visibility, name)) goto done;
+        if (!(module_decl != NULL
+              ? minic_multi_module_emit_elf_symbol_visibility(
+                    out, module_decl->visibility, name)
+              : minic_multi_emit_elf_symbol_visibility(
+                    out, declaration->visibility, name))) goto done;
     }
-    if (declaration->explicit_alignment != 0U &&
-        fprintf(out, ".balign %zu\n", declaration->explicit_alignment) < 0)
+    if (explicit_alignment != 0U &&
+        fprintf(out, ".balign %zu\n", explicit_alignment) < 0)
         goto done;
     /* GNU Linux's 16-byte entry patch area is emitted before the function
      * symbol, and its start is 16-byte aligned for live ftrace patching. */
@@ -666,7 +681,7 @@ static bool x86_emit_function(FILE *out, const MinicC0Program *program,
         goto done;
     /* GNU constructor: ELF startup loader traverses .init_array before main.
      * Do not use ordinary .data; register a relocated function pointer. */
-    if (declaration->is_constructor &&
+    if (is_constructor &&
         fprintf(out, ".section .init_array,\"aw\",@init_array\n"
                      ".p2align 3\n  .quad %s\n", name) < 0) goto done;
     success = true;
@@ -715,7 +730,7 @@ static size_t x86_find_function_name(
  * code or whose address escapes through a function pointer. */
 static bool *x86_head_address_call_closure(
     const MinicC0Program *program, const MinicCoreFunction *functions,
-    size_t function_count) {
+    size_t function_count, const MinicCoreModule *module) {
     MinicX86FunctionNameIndex *names = NULL;
     bool *head = NULL, *head_call = NULL, *normal_call = NULL, *address_taken = NULL;
     bool changed;
@@ -731,12 +746,16 @@ static bool *x86_head_address_call_closure(
     if (!names || !head || !head_call || !normal_call || !address_taken)
         goto fail;
     for (i = 0U; i < function_count; ++i) {
-        const MinicFunction *decl = &program->functions[i];
-        names[i].name = minic_c0_function_symbol_name(decl);
+        const MinicFunction *decl = module == NULL ? &program->functions[i] : NULL;
+        const MinicCoreModuleFunctionSymbol *module_decl = module != NULL
+            ? &module->function_symbols[i] : NULL;
+        const char *section = module_decl != NULL
+            ? module_decl->section_name : decl->section_name;
+        names[i].name = module_decl != NULL ? module_decl->name
+            : minic_c0_function_symbol_name(decl);
         names[i].index = i;
         if (names[i].name == NULL) goto fail;
-        head[i] = decl->section_name != NULL &&
-                  strcmp(decl->section_name, ".head.text") == 0;
+        head[i] = section != NULL && strcmp(section, ".head.text") == 0;
     }
     qsort(names, function_count, sizeof(*names), x86_compare_function_names);
     /* Taking a function's address permits an opaque, possibly non-head
@@ -779,10 +798,15 @@ static bool *x86_head_address_call_closure(
             }
         }
         for (i = 0U; i < function_count; ++i) {
-            const MinicFunction *decl = &program->functions[i];
+            const MinicFunction *decl = module == NULL ? &program->functions[i] : NULL;
+            const MinicCoreModuleFunctionSymbol *module_decl = module != NULL
+                ? &module->function_symbols[i] : NULL;
+            const bool internal = module_decl != NULL
+                ? module_decl->is_internal : decl->is_internal;
+            const char *section = module_decl != NULL
+                ? module_decl->section_name : decl->section_name;
             if (!head[i] && head_call[i] && !normal_call[i] &&
-                !address_taken[i] && decl->is_internal &&
-                decl->section_name == NULL) {
+                !address_taken[i] && internal && section == NULL) {
                 head[i] = true;
                 changed = true;
             }
@@ -904,12 +928,14 @@ static bool x86_visit_module_global(
 
 static bool x86_visit_function(
     FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
-    const MinicFunction *decl, const MinicCoreFunction *fn,
+    const MinicFunction *decl, const MinicCoreModuleFunctionSymbol *module_decl,
+    const MinicCoreFunction *fn,
     const MinicCoreFunctionFacts *facts,
     const MinicCoreObjectStoragePlan *storage, size_t index,
     bool function_sections, void *opaque) {
     const MinicX86VisitContext *ctx = opaque;
-    return x86_emit_function(out, program, target, decl, fn, facts, storage, index,
+    return x86_emit_function(out, program, target, decl, module_decl,
+                             fn, facts, storage, index,
                              function_sections,
                              ctx->head_address_context != NULL &&
                              ctx->head_address_context[index],
@@ -974,7 +1000,7 @@ static bool x86_write_core_program_impl(
     }
     if (!target->position_independent) {
         visits.head_address_context = x86_head_address_call_closure(
-            program, core_functions, core_function_count);
+            program, core_functions, core_function_count, module);
         if (visits.head_address_context == NULL) {
             x86_error(diagnostic, path, "x86-64 cannot plan early head call roles");
             return false;

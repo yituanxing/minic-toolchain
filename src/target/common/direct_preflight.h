@@ -2,6 +2,7 @@
 #define MINIC_TARGET_COMMON_DIRECT_PREFLIGHT_H
 
 #include "core/core_ir.h"
+#include "core/module_ir.h"
 #include "target/common/core_function_facts.h"
 #include "target/common/direct_call_plan.h"
 #include "frontend/ast.h"
@@ -17,7 +18,8 @@ typedef bool (*MinicDirectLP64OpaqueAsmQualifier)(const MinicCoreInlineAsm *);
 
 bool minic_multi_direct_lp64_function_preflight(
     const MinicC0Program *program, const MinicTargetInfo *target,
-    const MinicFunction *decl, const MinicCoreFunction *fn,
+    const MinicFunction *decl, const MinicCoreModuleFunctionSymbol *module_decl,
+    const MinicCoreFunction *fn,
     const MinicCoreFunctionFacts *facts, const char *arch, const char *name,
     MinicDirectLP64OpaqueAsmQualifier qualify_opaque_asm,
     MinicDirectLP64IndirectRecord indirect_return,

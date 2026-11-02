@@ -419,3 +419,70 @@ CoreModule 或 Machine IR 已经实现。
 台账独立跟踪。下一批进入现有 Core IR 的类型身份/所有权迁移，
 按标量、聚合、函数签名及五目标消费者分批切换；每个切片同时
 删除已被替代的 C 查询路径，不保留永久平行 Core IR v2。
+
+## IR-P1：CoreType 消费端、Module 函数符号与 Global payload 单一所有者
+
+起点：`06ab1bc`（`refactor/minic-target-language-boundary`）。这是
+**边界迁移批**，不把重构中暴露的 Zstd/NEON/Linux 行为风险混成
+临时补丁；也不声称 Target 已完全摆脱 C `MinicType`/`MinicC0Program`。
+
+### 生产代码迁移
+
+1. **Module 函数元数据进入五目标实际发射路径。** 通用 prepared
+   visitor 向 target 显式传递已封闭的 `MinicCoreModuleFunctionSymbol`；
+   函数定义/声明选择与 FunctionPlan 准备由 Module 定义状态决定。
+   x86-64、AArch64、LoongArch64、RV32、RV64 的函数名、section、
+   weak/internal/visibility、alignment、constructor 等符号决策，
+   在附着 Module 时读取 Module 快照。x86 `.head.text` 闭包和
+   Direct LP64 preflight 同步改为 Module 符号事实，Direct LP64
+   variadic profile 改用 `MinicCoreFunction.is_variadic`。
+   `module == NULL` 的旧独立测试入口暂留，不能把它当成生产双所有者。
+2. **全局初始化语义上移到 Compiler。** `src/compiler/global_payload.c/.h`
+   成为唯一的 C/DataLayout initializer 分类与递归字节/重定位 walker；
+   `src/target/common/global_emit.c` 退为约 330 行的 ELF/GAS `FILE *`
+   适配器。`module_ir_build.c` 不再反向包含 `target/common/global_emit.h`，
+   Module 与历史 Common FILE 路径复用同一份显式 BSS 准入规则。
+   构建源清单和 bootstrap B0 清单已同步登记。
+3. **RV64 CoreType 消费端收口。** ISA i128、Frame sret/Record、
+   函数 ABI plan、已覆盖的 admission 与 record load/copy、bitcast、
+   frame-address/call 路径从 CoreTypeContext 查询；在该语义路径上
+   清除 C 类型兜底。`core_type_query.h` 统一只读查询。
+   原独立 `abi_test` 夹具改为真实 TypeContext/TypeId，并增加
+   未封闭函数和非法形状回滚负例；没有为通过老测试恢复旧 fallback。
+
+### 完成验证与统计
+
+| 门禁 | 本批结果与限制 |
+| --- | --- |
+| `make all`（Debug） | **PASS**，全部工具构建 |
+| `make MODE=release CFLAGS=-Werror BUILD_DIR=build/refactor-werror -j8 all` | **PASS**，全新严格 Release 全工具编译/链接 |
+| `make -j8 check-fast` | **PASS / exit 0**，含既有大量回归测试；部分交叉运行项 SKIP |
+| `check-minic-target-boundaries.sh` | **PASS**，新增 Module/C 互相矛盾的 poison probe、RV64 CoreType 与 compiler walker 所有权检查 |
+| `make check-rv64-abi`、`make check-rv64-coretype-target-admission` | **PASS**，含真实 CoreType 和 rollback 负例 |
+| `check-rv64-global-plan-source`、`check-rv32-global-plan-source` | **PASS**，保留各目标原数据/重定位准入 |
+| `git diff --check` | **PASS** |
+| GNU 交叉汇编/链接、QEMU 和五目标 Linux 端到端 | **NOT_RUN**；本地工具链不全，禁止从本机 `check-fast` 推断认证通过 |
+
+本批变更（提交前统计；不含本节文档）：**生产 `src/` +1644/−1658，
+净 −14 行；`tests/` +267/−25，净 +242 行；Makefile +1 行**。
+生产统计含约 1100 行从 Target 移至 Compiler 的代码搬迁，不能把
+这个表面净减少量误当成已删除 1600 行无用逻辑；价值是单一所有者
+和消费路径切换。未单独修复 Linux/Zstd/NEON 缺陷。
+
+### KEEP / 下一批必须整体处理的边界
+
+- **Core 类型身份仍有两层。** CoreTypeId 已在部分生产消费者生效，
+  但其他 Core 指令/操作数的 `MinicType` 字段和 target 家族仍未完整
+  迁移；不得为一条旧类型分支补新的永久 fallback。
+- **函数局部 ABI/Source ASM 仍借 C Program。** Module 已拥有
+  函数符号/定义选择，不等于所有 target emitter 都不再需要源 AST；
+  要按 ABI 语义族与 structured ASM 来源契约整体替换借用。
+- **RV64 `INTEGER_OVERFLOW` 完整族仍属旧路径**，横跨
+  `legalize.c`、`overflow_emit.c` 等，不拆成 admission 新、发射老的
+  半迁移状态；其他 scalar/inline-asm 的类型查询另列后续批次。
+- **Global 表示尚有格式泄漏。** Compiler global plan 的
+  `default_elf_section`、Module 的 `common_elf_bss_admitted`、
+  GAS 表示及 C statement label ID 需要下一轮按格式抽象切开；
+  当前迁移只证明 initializer 算法单一所有者。
+- **历史 `module == NULL` 独立 API 与五 ISA 交叉运行认证**分别
+  等消费者改造和具备交叉工具链的 CI；删兼容入口前须先更新测试。

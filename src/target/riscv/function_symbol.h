@@ -11,7 +11,7 @@ typedef struct MinicRiscvFunctionSymbol {
     const char *symbol_name;
     const char *section_name;
     size_t explicit_alignment;
-    MinicSymbolVisibility visibility;
+    MinicCoreModuleVisibility visibility;
     bool is_internal;
     bool is_weak;
     bool function_sections;
@@ -25,8 +25,24 @@ static inline bool minic_riscv_function_symbol_for_name(
     if (name == NULL || name[0] == '\0' || symbol == NULL) return false;
     *symbol = (MinicRiscvFunctionSymbol){0};
     symbol->symbol_name = name;
-    symbol->visibility = MINIC_SYMBOL_VISIBILITY_DEFAULT;
+    symbol->visibility = MINIC_CORE_MODULE_VISIBILITY_DEFAULT;
     return true;
+}
+
+static inline bool minic_riscv_function_visibility_from_source(
+    MinicSymbolVisibility source, MinicCoreModuleVisibility *result) {
+    if (result == NULL) return false;
+    switch (source) {
+    case MINIC_SYMBOL_VISIBILITY_DEFAULT:
+        *result = MINIC_CORE_MODULE_VISIBILITY_DEFAULT; return true;
+    case MINIC_SYMBOL_VISIBILITY_HIDDEN:
+        *result = MINIC_CORE_MODULE_VISIBILITY_HIDDEN; return true;
+    case MINIC_SYMBOL_VISIBILITY_INTERNAL:
+        *result = MINIC_CORE_MODULE_VISIBILITY_INTERNAL; return true;
+    case MINIC_SYMBOL_VISIBILITY_PROTECTED:
+        *result = MINIC_CORE_MODULE_VISIBILITY_PROTECTED; return true;
+    }
+    return false;
 }
 
 static inline bool minic_riscv_function_symbol_from_function(const MinicFunction *function,
@@ -40,6 +56,22 @@ static inline bool minic_riscv_function_symbol_from_function(const MinicFunction
     if (!minic_riscv_function_symbol_for_name(symbol_name, symbol)) {
         return false;
     }
+    symbol->section_name = function->section_name;
+    symbol->explicit_alignment = function->explicit_alignment;
+    if (!minic_riscv_function_visibility_from_source(
+            function->visibility, &symbol->visibility)) return false;
+    symbol->is_internal = function->is_internal;
+    symbol->is_weak = function->is_weak;
+    return true;
+}
+
+/* Production sealed ModuleIR descriptor. Never reopen C declarations for
+ * symbol identity, visibility, section, alignment or linkage attributes. */
+static inline bool minic_riscv_function_symbol_from_module(
+    const MinicCoreModuleFunctionSymbol *function,
+    MinicRiscvFunctionSymbol *symbol) {
+    if (function == NULL || symbol == NULL ||
+        !minic_riscv_function_symbol_for_name(function->name, symbol)) return false;
     symbol->section_name = function->section_name;
     symbol->explicit_alignment = function->explicit_alignment;
     symbol->visibility = function->visibility;
@@ -91,8 +123,9 @@ minic_riscv_emit_function_symbol_begin(FILE *file, const MinicRiscvFunctionSymbo
             0) {
             return false;
         }
-        if (symbol->visibility != MINIC_SYMBOL_VISIBILITY_DEFAULT) {
-            visibility_directive = minic_multi_elf_visibility_directive(symbol->visibility);
+        if (symbol->visibility != MINIC_CORE_MODULE_VISIBILITY_DEFAULT) {
+            visibility_directive = minic_multi_elf_module_visibility_directive(
+                symbol->visibility);
             if (visibility_directive == NULL ||
                 fprintf(file, "%s %s\n", visibility_directive, symbol->symbol_name) < 0) {
                 return false;

@@ -24,7 +24,7 @@ typedef enum MinicDirectLP64ProfileResult {
  * and incoming register/stack locations. No machine instructions are emitted. */
 MinicDirectLP64ProfileResult minic_multi_direct_lp64_profile_function(
     const MinicC0Program *program, const MinicTargetInfo *target,
-    const MinicFunction *decl, const MinicCoreFunction *fn,
+    const MinicCoreFunction *fn,
     const MinicCoreFunctionFacts *facts,
     const MinicDirectLP64AbiPolicy *abi,
     MinicDirectLP64IndirectRecord indirect_record,

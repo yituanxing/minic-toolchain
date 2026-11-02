@@ -80,25 +80,29 @@ static bool rv64_visit_module_global(
 
 static bool rv64_visit_function(
     FILE *file, const MinicC0Program *program, const MinicTargetInfo *target,
-    const MinicFunction *function, const MinicCoreFunction *core_function,
+    const MinicFunction *function, const MinicCoreModuleFunctionSymbol *module_decl,
+    const MinicCoreFunction *core_function,
     const MinicCoreFunctionFacts *facts,
     const MinicCoreObjectStoragePlan *storage, size_t index,
     bool function_sections, void *opaque) {
     Rv64ProgramContext *ctx = opaque;
+    const char *name = module_decl != NULL ? module_decl->name
+        : minic_c0_function_symbol_name(function);
+    const bool is_defined = module_decl != NULL ? module_decl->is_defined
+        : function->is_defined;
+    const bool is_constructor = module_decl != NULL ? module_decl->is_constructor
+        : function->is_constructor;
     bool success = true;
-    if (getenv("MINIC_BOOTSTRAP_TRACE") != NULL && function->is_defined) {
-        const char *name = minic_c0_function_symbol_name(function);
+    if (getenv("MINIC_BOOTSTRAP_TRACE") != NULL && is_defined) {
         (void)fprintf(stderr,
             "MINIC_BOOTSTRAP_TRACE stage=codegen-function state=begin "
             "index=%zu function=%s\n",
             index, name != NULL ? name : "?");
         (void)fflush(stderr);
     }
-    if (!(ctx->module != NULL
-              ? ctx->module->function_symbols[index].is_defined
-              : function->is_defined)) {
-        if (ctx->module != NULL
-                ? ctx->module->function_symbols[index].alias_target_index != SIZE_MAX
+    if (!is_defined) {
+        if (module_decl != NULL
+                ? module_decl->alias_target_index != SIZE_MAX
                 : function->alias_target != MINIC_FUNCTION_INVALID)
             return ctx->module != NULL
                 ? minic_multi_elf_emit_module_function_alias(
@@ -109,22 +113,22 @@ static bool rv64_visit_function(
     {
         MinicRiscvFunctionSymbol symbol;
         /* The machine emitter owns capability admission, not this visitor. */
-        success = minic_riscv_function_symbol_from_function(function, &symbol);
+        success = module_decl != NULL
+            ? minic_riscv_function_symbol_from_module(module_decl, &symbol)
+            : minic_riscv_function_symbol_from_function(function, &symbol);
         symbol.function_sections = function_sections;
         success = success && minic_riscv64_emit_core_function_for_program_with_symbol_with_storage(
                       file, program, core_function, &symbol, facts, storage,
                       target != NULL && target->position_independent,
                       target != NULL ? &target->riscv_isa : NULL,
                       ctx->diagnostic);
-        if (success && function->is_constructor) {
-            const char *name = minic_c0_function_symbol_name(function);
+        if (success && is_constructor) {
             success = name != NULL && name[0] != '\0' &&
                       fprintf(file, ".section .init_array,\"aw\",@init_array\n"
                                     ".p2align 3\n  .dword %s\n.text\n", name) >= 0;
         }
     }
     if (getenv("MINIC_BOOTSTRAP_TRACE") != NULL) {
-        const char *name = minic_c0_function_symbol_name(function);
         (void)fprintf(stderr,
             "MINIC_BOOTSTRAP_TRACE stage=codegen-function state=end "
             "index=%zu function=%s success=%d blocks=%zu instructions=%zu\n",
@@ -135,7 +139,6 @@ static bool rv64_visit_function(
     if (!success &&
         ctx->diagnostic != NULL && ctx->diagnostic->message[0] == '\0') {
         char message[256];
-        const char *name = minic_c0_function_symbol_name(function);
         (void)snprintf(message, sizeof(message),
                        "cannot emit RISC-V function '%s' (index=%zu)",
                        name != NULL ? name : "<unnamed>", index);

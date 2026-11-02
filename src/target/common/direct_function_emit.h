@@ -5,6 +5,7 @@
 #include "target/common/direct_block_context.h"
 #include "target/common/direct_program_emit.h"
 #include "target/common/global_emit.h"
+#include "target/common/module_global_emit.h"
 #include <stdint.h>
 #include <stdio.h>
 
@@ -31,7 +32,8 @@ typedef struct MinicDirectLP64FunctionEmitter {
 
 static inline bool minic_multi_direct_lp64_emit_function(
     FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
-    const MinicFunction *decl, const MinicCoreFunction *fn,
+    const MinicFunction *decl, const MinicCoreModuleFunctionSymbol *module_decl,
+    const MinicCoreFunction *fn,
     const MinicCoreFunctionFacts *facts,
     const MinicCoreObjectStoragePlan *storage,
     size_t id, bool function_sections,
@@ -39,6 +41,9 @@ static inline bool minic_multi_direct_lp64_emit_function(
     MinicDirectLP64FunctionPlan plan = {0};
     MinicDirectLP64BlockContext ctx = {0};
     const char *name;
+    const char *section;
+    size_t alignment;
+    bool internal, weak, constructor;
     bool ok = false;
 
     if (config == NULL || config->architecture == NULL ||
@@ -48,9 +53,21 @@ static inline bool minic_multi_direct_lp64_emit_function(
         config->init_word_directive == NULL || config->emit_prologue == NULL ||
         config->emit_core_blocks == NULL || out == NULL || decl == NULL)
         return false;
-    name = minic_c0_function_symbol_name(decl);
+    /* Once ModuleIR is attached, function identity and ELF declarations
+     * have a single sealed owner. The source declaration survives only for
+     * the not-yet-migrated, function-local ABI/source-ASM preflight. */
+    name = module_decl != NULL ? module_decl->name
+                               : minic_c0_function_symbol_name(decl);
+    section = module_decl != NULL ? module_decl->section_name : decl->section_name;
+    alignment = module_decl != NULL ? module_decl->explicit_alignment
+                                    : decl->explicit_alignment;
+    internal = module_decl != NULL ? module_decl->is_internal : decl->is_internal;
+    weak = module_decl != NULL ? module_decl->is_weak : decl->is_weak;
+    constructor = module_decl != NULL ? module_decl->is_constructor
+                                      : decl->is_constructor;
+    if (name == NULL || name[0] == '\0') return false;
     if (!minic_multi_direct_lp64_function_plan_prepare(
-            program, target, decl, fn, facts, storage, config->architecture,
+            program, target, decl, module_decl, fn, facts, storage, config->architecture,
             config->abi, config->indirect_record, config->indirect_return,
             config->qualify_opaque_asm,
             &plan)) {
@@ -61,22 +78,25 @@ static inline bool minic_multi_direct_lp64_emit_function(
     }
 
     /* A GNU explicit section overrides compiler-generated function sections. */
-    if (decl->section_name != NULL) {
+    if (section != NULL) {
         if (fprintf(out, ".section %s,\"ax\",%s\n",
-                    decl->section_name, config->text_section_type) < 0)
+                    section, config->text_section_type) < 0)
             goto output_failed;
     } else if (function_sections) {
         if (fprintf(out, ".section .text.%s,\"ax\",%s\n",
                     name, config->text_section_type) < 0) goto output_failed;
     } else if (fputs(".text\n", out) == EOF) goto output_failed;
 
-    if ((!decl->is_internal &&
-         fprintf(out, decl->is_weak ? ".weak %s\n" : ".globl %s\n", name) < 0) ||
-        (!decl->is_internal &&
-         !minic_multi_emit_elf_symbol_visibility(
-             out, decl->visibility, name)) ||
+    if ((!internal &&
+         fprintf(out, weak ? ".weak %s\n" : ".globl %s\n", name) < 0) ||
+        (!internal &&
+         !(module_decl != NULL
+             ? minic_multi_module_emit_elf_symbol_visibility(
+                   out, module_decl->visibility, name)
+             : minic_multi_emit_elf_symbol_visibility(
+                   out, decl->visibility, name))) ||
         fprintf(out, ".balign %zu\n.type %s,%s\n%s:\n",
-                decl->explicit_alignment > 4U ? decl->explicit_alignment : 4U,
+                alignment > 4U ? alignment : 4U,
                 name, config->elf_function_type, name) < 0)
         goto output_failed;
 
@@ -102,7 +122,7 @@ static inline bool minic_multi_direct_lp64_emit_function(
     if (!config->emit_core_blocks(out, &ctx)) goto cleanup;
 
     if (fprintf(out, ".size %s,.-%s\n", name, name) < 0 ||
-        (decl->is_constructor &&
+        (constructor &&
          fprintf(out,
                  ".section .init_array,\"aw\",%s\n.p2align 3\n  .%s %s\n",
                  config->init_array_type, config->init_word_directive, name) < 0))
