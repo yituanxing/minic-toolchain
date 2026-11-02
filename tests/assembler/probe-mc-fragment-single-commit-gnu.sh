@@ -98,8 +98,16 @@ grep -q 'minias_stage_fragment_pattern' assembler/src/common_emission.c
 grep -q 'minias_commit_encode_result(as,stmt)' assembler/src/common_emission.c
 # Width-one .space fills and multi-byte .fill element patterns must commit
 # through the same NOBITS/overflow-checked Section materializer.
-grep -q '^bool minias_section_append_pattern' assembler/src/common_emission.c
-grep -q 'return minias_section_append_pattern(as,section,element,width,repeat,false)' \
+# The materializer is an Emission-private helper, not a public Section writer.
+# Both source DATA/.fill and width-one .space reach it, as does the single
+# committed Fragment transaction. Assert these relationships without relying
+# on parameter spelling or the old exported function signature.
+grep -Eq '^static bool minias_section_append_pattern\(MiniAs \*as,' \
     assembler/src/common_emission.c
+sed -n '/^static bool emit_common_pattern(/,/^}/p' assembler/src/common_emission.c |
+    grep -q 'minias_section_append_pattern'
+sed -n '/^static bool minias_section_append_fill(/,/^}/p' assembler/src/common_emission.c |
+    grep -q 'minias_section_append_pattern'
+grep -q 'materialized=minias_section_append_pattern(' assembler/src/common_emission.c
 
 echo 'MINIAS_FRAGMENT_SINGLE_COMMIT=PASS GNU_payload=exact GNU_reloc=exact NOBITS=exact source_bridge=removed'

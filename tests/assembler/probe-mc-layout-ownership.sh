@@ -67,9 +67,14 @@ for api in ('minias_source_try_conditional',
             'minias_source_conditional_active',
             'minias_source_try_macro_invocation',
             'minias_source_try_control_directive'):
-    if api+'(' not in source_api or api+'(' not in expansion or \
-       api+'(' not in (driver+lowering):
-        raise SystemExit('SourceContext routing bypasses its owner: '+api)
+    if ('static bool '+api+'(' not in expansion or
+        api+'(' in source_api or api+'(' in (driver+lowering)):
+        raise SystemExit('Source-owned lexical router escaped into Common: '+api)
+if ('dispatch_source_statement(' not in expansion or
+    'MINIAS_SOURCE_STATEMENT_LABEL' not in expansion or
+    'MINIAS_SOURCE_STATEMENT_TEXT' not in expansion or
+    'consume_source_statement(' not in lowering):
+    raise SystemExit('typed Source statement event has no single owner')
 for private in ('minias_macro_find(', 'minias_macro_expand(',
                 'minias_macro_purge(', 'minias_source_push_conditional(',
                 'as->source->altmacro_active', 'as->source->source_ended',

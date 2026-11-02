@@ -1,5 +1,20 @@
 # MiniAS 当前清理与所有权总览（2026-11-01）
 
+> **2026-11-02 P05 重放/Target 公共类型继续收口（基于已发布
+> `7d562531`）：** SourceGraph 的 Site 校验、强制分支查找、跨完整
+> 重解析的 rebind/capture 已统一消费 Common 按当前 Fragment ordinal
+> 提供的 `MiniAsSourceReplayReader` 标量快照。Source 不再包含私有
+> Fragment 头，不拿 `MiniAsStmt *`、可写 MCInst、操作数数组或
+> `growth_plan` 的 Target 上下文；只检查站点/操作数形状，并由
+> Common 转交唯一 MCLayout typed relax plan。不缓存第二份图，
+> 不改变原有 fail-closed 重放。旧 Source 词法逆向回调和同批
+> Common/Emission `static` 改造导致的两处过时 CI 结构匹配也已
+> 随新所有权更新；GNU payload、重定位、NOBITS 功能检查保留。
+> Target 公开头继续移除八个仅 Common 使用的类型，分别下沉到
+> Fragment/Session/Lowering 私有域，并增加负向编译测试。
+> 本批的完整本地与 exact-head CI 结论见下方历史台账新记录，
+> 不与 `7d562531` 的旧流水线混同。
+
 > **2026-11-02 P04/P05/P06 联合边界批次（基于 `37394c1d`）：**
 > 四目标在完成 parse 构造后统一通过 `InstructionView` 内
 > `MCInstView/OperandView` 的栈上值投影进行 Measure/Relax/Encode；
@@ -86,7 +101,9 @@
   只读投影、Relax/Encode 符号值快照、四架构 Measure/Relax/Encode
   `MCInstView/OperandView` 栈上深层 const 投影；Parse、Site capture、
   ALIGN 的私有 Fragment 裸借用已由受限 Request/View 代替，Fragment
-  唯一定义收回 Common 私有头，增加编译期边界门禁。**待完成：**
+  唯一定义收回 Common 私有头，Common-only 的 MCExpr/Org/Deferred、
+  literal、PendingLocalCommon 和 interned-name 类型也已从 Target API
+  收回，增加编译期边界门禁。**待完成：**
   最终 Target 生命周期/策略接口扫尾和 exact-head CI/跨架构 GNU/链接
   验收；不把局部硬化冒充完整 P04 结束。
 - [x] **P05 Source/Common statement 边界**：旧
@@ -94,9 +111,10 @@
   连同 Source→Common 的反向 conditional/macro/control 回调、
   Common 重复标签 lexer 一起删除。唯一受限 `LABEL/TEXT` sink
   保留 SourceSite、EOF、条件拓扑、强制增长和必要的完整
-  SourceGraph replay。**剩余独立工作：** 动态条件依赖读集/增量
-  SourceGraph（不能无证明删除正确性兜底）、SourceGraph 重放对原始
-  Common Fragment 的借用剥离，以及本批 exact-head CI。
+  SourceGraph replay。强制分支 Site 形状校验、rebind/capture 对
+  原始 Common Fragment 的借用已替换为只读标量 Reader，无双图。
+  **剩余独立工作：** 动态条件依赖读集/增量 SourceGraph（不能无
+  证明删除正确性兜底）、本批 exact-head CI。
 - [ ] **Common 职责拆分**：在 P04/P05 接口稳定后，把
   statement/directive、Section/Symbol、Fragment emit/commit、driver
   按消费者搬迁；Context/Lowering/Layout/Emission 已各有独立状态，

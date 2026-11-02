@@ -6,6 +6,10 @@
 #include "minias_source_replay_contract.h"
 
 /* Common-only mutable Section/Symbol/Fragment state and ownership APIs. */
+typedef struct MiniAsInternedSymbolName {
+    char *name;
+} MiniAsInternedSymbolName;
+
 typedef struct MiniAsSection {
     char *name;
     /* GNU ELF SHT_GROUP signature; absent for ordinary Sections. */

@@ -62,11 +62,34 @@ if '.consume=consume_source_statement' not in lowering or \
 if 'minias_source_session(as)->statements=(MiniAsSourceStatementSink){0};' not in source:
     raise SystemExit('Source callback lifetime not cleared at parse exit')
 graph=(root/'source_graph.c').read_text()
+replay=(root/'minias_source_replay_contract.h').read_text()
+semantic=(root/'minias_source_semantic_services.h').read_text()
 if re.search(r'\bas->(?:stmts|stmt_count)\b',graph):
     raise SystemExit('SourceGraph directly reads Common mutable statement vector')
-if 'as,as->stmts,as->stmt_count' not in lowering or \
-   '&as,as.stmts,as.stmt_count' not in core:
-    raise SystemExit('Common omitted immutable Fragment spans across lowering/driver')
+if 'minias_fragment_internal.h' in (common+graph+private+semantic+replay) or \
+   re.search(r'\bMiniAs(?:Stmt|MCInst|MCOperand)\s*\*',common+graph+replay):
+    raise SystemExit('Source replay contract retains a raw Common Fragment/MCInst borrow')
+if re.search(r'\bminias_query_target_relax_plan\b',graph+semantic):
+    raise SystemExit('Source replay invokes Common Target relax planning directly')
+if 'typedef struct MiniAsSourceReplayReader' not in replay or \
+   'typedef struct MiniAsForcedOperandShape' not in replay or \
+   'typedef struct MiniAsForcedOperandShape' in private or \
+   'MiniAsSourceReplayReader' not in common:
+    raise SystemExit('Source replay lacks a single value-projection contract')
+for callback in ('fragment','operand','growth_plan'):
+    if not re.search(r'\(\*'+callback+r'\)\s*\(',replay):
+        raise SystemExit('Missing replay reader capability: '+callback)
+for api in ('validate_fragment_sites','lookup_forced_branch',
+            'rebind_forced_branches','capture_forced_branches'):
+    signature=common.split('minias_source_graph_'+api+'(',1)[1].split(');',1)[0]
+    if 'MiniAsSourceReplayReader *reader' not in signature or 'MiniAsStmt' in signature:
+        raise SystemExit('Source replay API still borrows a Fragment: '+api)
+if 'minias_common_source_replay_reader(' not in lowering or \
+   'minias_common_source_replay_reader(' not in core or \
+   '.fragment=common_replay_fragment' not in lowering or \
+   '.operand=common_replay_operand' not in lowering or \
+   '.growth_plan=common_replay_growth_plan' not in lowering:
+    raise SystemExit('Common did not bind its live Fragment reader for replay')
 if 'as->layout_sensitive' in source or 'minias_get_symbol(' in source:
     raise SystemExit('Source bypasses Common semantic ownership')
 if 'minias_common_source_symbol_defined(as,args)' not in source:
@@ -81,7 +104,7 @@ if 'as->source=minias_source_context_create();' not in core:
     raise SystemExit('Common no longer owns Source session lifetime binding')
 if 'size_t site;' not in events or 'char *text;' not in events:
     raise SystemExit('Statement event loses writable text or stable identity')
-print('MINIAS_SOURCE_EVENT_STRUCTURE=PASS one_lowerer=1 stable_site=1 label_text_typed=1 source_lexical_dispatch=1 private_router=4 no_common_label_lexer=1 no_reverse_source_callback=1 sink_unbound=1 fragments=borrowed semantic_state=owned')
+print('MINIAS_SOURCE_EVENT_STRUCTURE=PASS one_lowerer=1 stable_site=1 label_text_typed=1 source_lexical_dispatch=1 private_router=4 no_common_label_lexer=1 no_reverse_source_callback=1 sink_unbound=1 replay=value_projection semantic_state=owned')
 PY
 # Standalone contract clients can hold an opaque session, but cannot
 # dereference it through this header. No Common private include is allowed.
@@ -115,3 +138,13 @@ C
     exit 1
 fi
 echo 'MINIAS_SOURCE_EVENT_BOUNDARY=PASS common_session=opaque label_text=typed consumer=typed no_shadow_label=1'
+# The fake reader exercises SourceGraph replay safety without creating a
+# second persistent Common Fragment graph or using a real Target parser.
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+cc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow \
+  -Wstrict-prototypes -Wmissing-prototypes -Werror \
+  -ffunction-sections -fdata-sections -Iassembler/src \
+  tests/assembler/source-replay-projection-unit.c assembler/src/source_graph.c \
+  -Wl,--gc-sections -o "$work/replay-projection-unit"
+"$work/replay-projection-unit"

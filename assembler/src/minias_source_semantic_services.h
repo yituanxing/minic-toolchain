@@ -14,8 +14,6 @@ bool minias_source_target_evaluate_if(const MiniAs *as,
  * parser or Target relaxer is introduced by this boundary. */
 bool minias_evaluate_absolute_expression(MiniAs *as,const char *text,
                                          int64_t *value);
-bool minias_query_target_relax_plan(MiniAs *as,const MiniAsStmt *stmt,
-                                    MiniAsTargetRelaxPlan *plan);
 bool minias_grow_array(void **ptr,size_t *capacity,size_t size,size_t need);
 void minias_set_error(MiniAs *as,const char *format,...);
 char *minias_strdup(const char *text);

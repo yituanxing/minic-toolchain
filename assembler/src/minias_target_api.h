@@ -75,21 +75,6 @@ typedef enum MiniAsFragmentKind {
     MINIAS_FRAGMENT_BYTES
 } MiniAsFragmentKind;
 
-/* A typed position constraint, comparable to LLVM MCOrgFragment. */
-typedef enum MiniAsOrgMode {
-    MINIAS_ORG_SOURCE = 0,
-    MINIAS_ORG_ABSOLUTE,
-    MINIAS_ORG_DOT_ADDEND,
-    MINIAS_ORG_SYMBOL_ADDEND,
-    MINIAS_ORG_TYPED_EXPR
-} MiniAsOrgMode;
-
-/* Persistent, owned expression trees for layout-sensitive GNU directives.
- * Each tree binds symbols to stable SymbolIDs while the source is parsed;
- * layout evaluates it with a supplied Fragment address, never a mutable
- * parser's global current_section or a second copy of the source text. */
-typedef struct MiniAsDeferredExpr MiniAsDeferredExpr;
-
 /* Semantic statement identity is independent of its changing Fragment
  * ordinal. A SiteID is interned from the complete source/expansion path by
  * an assembly-session SourceGraph; zero is the absent/root sentinel. */
@@ -97,18 +82,6 @@ typedef size_t MiniAsStableSiteId;
 #define MINIAS_SITE_NONE ((MiniAsStableSiteId)0U)
 typedef struct MiniAsSourceGraph MiniAsSourceGraph;
 typedef struct MiniAsSourceContext MiniAsSourceContext;
-
-/* GNU local .comm reserves BSS storage at the end of subsection zero,
- * after all ordinary source fragments regardless of declaration order.
- * Keep the original SymbolID and source site while deferring its allocation
- * until the complete source Fragment graph has been parsed. */
-typedef struct MiniAsPendingLocalCommon {
-    size_t symbol_index;
-    uint64_t size;
-    uint64_t alignment;
-    size_t line;
-    MiniAsStableSiteId source_site;
-} MiniAsPendingLocalCommon;
 
 /* Common fixup kinds describe generic byte-addressed data semantics.
  * Machine-specific kinds are opaque uint32_t values owned by the Target.
@@ -173,10 +146,6 @@ typedef struct MiniAsSymbolRef {
     MiniAsSymbolNameId name_id;
     int64_t addend;
 } MiniAsSymbolRef;
-
-typedef struct MiniAsInternedSymbolName {
-    char *name;
-} MiniAsInternedSymbolName;
 
 /* A symbol subtraction is only absolute after BOTH final section-local
  * fragment anchors have been laid out. One shared layout owner computes
@@ -280,18 +249,6 @@ typedef struct MiniAsMCInstView {
     const MiniAsMCOperandView *operands;
 } MiniAsMCInstView;
 
-/* Target-requested GNU literal pool entry. Common owns Section/Layout
- * fragments and ABS32/ABS64 ELF relocations; Target owns LDR encoding.
- * Queued references are deduplicated only inside the same pending pool. */
-typedef struct MiniAsLiteral {
-    MiniAsSymbolRef expression;
-    char label[64];
-    int section;
-    uint32_t subsection;
-    unsigned width;
-    bool emitted;
-} MiniAsLiteral;
-
 /* Common never interprets these bits: only the emitting Target knows their
  * meaning. Preserve the exact directive-selected mode at the parse site,
  * rather than reading mutable TargetContext during later relaxation. */
@@ -339,41 +296,6 @@ typedef struct MiniAsCodeAlignmentView {
     size_t line;
     MiniAsTargetSiteState site;
 } MiniAsCodeAlignmentView;
-
-/* MCExpr owns semantic operands, not source spelling. Compile each fixed-
- * width data operand once at its lexical site; the output pass resolves
- * relocatable references using the final Fragment/Symbol layout. */
-typedef enum MiniAsMCExprKind {
-    MINIAS_MC_EXPR_CONSTANT,
-    MINIAS_MC_EXPR_SYMBOL,
-    MINIAS_MC_EXPR_SYMBOL_MINUS_DOT,
-    MINIAS_MC_EXPR_DOT_MINUS_SYMBOL, /* stable current fragment site - label */
-    MINIAS_MC_EXPR_SYMBOL_MINUS_DOT_DIV,
-    MINIAS_MC_EXPR_DIFFERENCE,
-    MINIAS_MC_EXPR_DIFFERENCE_DIV
-} MiniAsMCExprKind;
-
-typedef struct MiniAsMCExpr {
-    MiniAsMCExprKind kind;
-    uint64_t constant;
-    uint64_t divisor;
-    int64_t lhs_addend;
-    int64_t rhs_addend;
-    /* Stable symbol table indices, never heap copies of symbol names.
-     * Symbols may move during parsing, but ordinals are immutable. '.'
-     * is a Fragment anchor, not an interned ELF symbol. */
-    bool has_lhs;
-    bool has_rhs;
-    size_t lhs_symbol_index;
-    size_t rhs_symbol_index;
-    bool logical_shift;
-} MiniAsMCExpr;
-
-typedef struct MiniAsMCData {
-    unsigned width;
-    size_t count;
-    MiniAsMCExpr *fields;
-} MiniAsMCData;
 
 /* Ephemeral value projections. No pointer to writable Common Fragments,
  * Sections or Symbol records crosses a Target stage boundary. A borrowed

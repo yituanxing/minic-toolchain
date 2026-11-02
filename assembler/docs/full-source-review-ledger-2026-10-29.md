@@ -7,6 +7,61 @@
 > 和早期测试文件数量，均不能自动当作最新 HEAD 的事实。
 > “读过 / 修改过 / 完成清理”必须分别统计。
 
+### 2026-11-02 P05 scalar replay + P04 final public-type downshift
+
+**Immediate base:** published Draft PR #667 branch head
+`7d562531632f123aabf182f9637eac8f5e169e66`. This is one
+ownership-completion batch, not a new ISA/ABI semantic capability.
+
+1. **P05 retained SourceGraph, borrowed scalars only.** The original
+   persistent physical-source graph, SourceSite table and complete
+   reparse/rebind/capture algorithm remain unique. Source's four replay
+   entry points no longer accept `MiniAsStmt *`/Fragment vectors: Common
+   supplies an ephemeral ordinal-indexed `MiniAsSourceReplayReader` with
+   copied SiteID, opcode, target form, captured mode, operand shape,
+   size and lexical name. Only Common projects its live MCInst; the
+   growth-plan callback delegates to the original validated MCLayout
+   Target relaxation plan. The driver resnapshots the reader after layout
+   before capture, preserving the old live-vector cardinality semantics.
+   Shape mismatch, lost/ambiguous SourceSite and silent callback failures
+   remain fail-closed; Source never imports the private Fragment header.
+   No parallel instruction/Fragment graph, source cache or fallback path.
+2. **P04 capability/type ownership.** Eight types used only by Common
+   (`OrgMode`, `DeferredExpr`, `MCExprKind`, `MCExpr`, `MCData`, interned
+   symbol name, pending local COMMON and literal-pool entry) have one
+   declaration in the Fragment, Session or Lowering private owner; none
+   remain in `minias_target_api.h`. All five ISA compilation units are
+   structurally forbidden to use these internals. The prior Target
+   parse/measure/relax/encode/align/CFI callbacks stay narrow; there is
+   no old ABI adapter left behind.
+3. **Same-architecture CI guard maintenance.** Two jobs on exact previous
+   `7d562531` reached source-shape checks that still required the old
+   public Source reverse callbacks or non-`static` Section pattern writer.
+   Their checks now enforce the *new* sole owners. Existing GNU bytes,
+   relocations, NOBITS and Source replay comparisons were not relaxed.
+   This is a test expectation migration, not an unrelated product fix.
+
+**Working-tree production diff versus immediate base:** eleven existing
+`assembler/src` files, **+355/-182**, net **+173** source lines, largely
+the one-time Source replay Reader and Common scalar projector. Four
+existing probe scripts were updated; a standalone SourceGraph replay
+Reader unit test was added, including ordinal insertion/rebinding,
+typed shape drift, missing/ambiguous sites, and fail-closed callback
+failure/terminal-size behavior. Target public/private header gates now
+run **18 negative and four positive** compilations.
+
+**Local proof on the integrated batch:** strict release `-Werror` build
+and A0 **30/30 PASS**; independently rebuilt pre-batch `37394c1d`
+assembler versus candidate **26 four-target fixtures, 18 byte-identical
+ELF and eight mutually rejected, zero mismatch**. GNU Source
+LABEL/TEXT+macro/conditional composite, x86 typed branch growth,
+RISC-V tiered 2/4/8-byte branch growth with full replay, stable SiteID
+rebind (including rejection cases), GNU single Fragment commit and
+Source value-projection/negative session boundary all **PASS**.
+The GNU RISC-V site ISA mapping oracle still **SKIPs** without a local
+cross-assembler. Remote exact-head CI must be reported against the
+*new* published SHA, not inherited from `7d562531`.
+
 ### 2026-11-02 P04/P05/P06 + expression/ELF integrated ownership batch
 
 **Exact pre-batch source:** `37394c1db82d8578bee3bad7aca07ac4475424c3`

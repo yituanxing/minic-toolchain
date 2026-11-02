@@ -482,14 +482,21 @@ int minias_assemble_config(const char *input_path,
                 minias_set_error(&as,"target-layout-preparation-failed");
             if(as.error[0]!='\0')parsed=false;
         }
+        const MiniAsSourceReplayReader replay=
+            minias_common_source_replay_reader(&as);
         if(parsed)parsed=minias_source_graph_rebind_forced_branches(
-                &as,as.stmts,as.stmt_count,&branch_growth);
+                &as,&replay,&branch_growth);
         if(parsed && !minias_solve_fragment_layout(
               &as,&branch_growth,&added_long_branches,diagnostic))
             parsed=false;
         if(parsed && added_long_branches) {
+            /* Layout may have materialized more Fragments. Re-snapshot the
+             * borrowed count just as the old live-vector API did, while
+             * keeping the Source boundary scalar-only. */
+            const MiniAsSourceReplayReader after_layout=
+                minias_common_source_replay_reader(&as);
             parsed=minias_source_graph_capture_forced_branches(
-                &as,as.stmts,as.stmt_count,&branch_growth);
+                &as,&after_layout,&branch_growth);
         }
         if(parsed && added_long_branches) {
             ++source_reparse_pass;

@@ -15,6 +15,30 @@
  * local numeric symbols, literal-pool fragments and source EOF commit.
  * No duplicate parser or fallback pipeline is introduced by this split. */
 
+/* GNU local .comm reserves BSS storage at the end of subsection zero,
+ * after all ordinary source fragments regardless of declaration order.
+ * Keep the original SymbolID and source site while deferring its allocation
+ * until the complete source Fragment graph has been parsed. */
+typedef struct MiniAsPendingLocalCommon {
+    size_t symbol_index;
+    uint64_t size;
+    uint64_t alignment;
+    size_t line;
+    MiniAsStableSiteId source_site;
+} MiniAsPendingLocalCommon;
+
+/* Target-requested GNU literal pool entry. Common owns Section/Layout
+ * fragments and ABS32/ABS64 ELF relocations; Target owns LDR encoding.
+ * Queued references are deduplicated only inside the same pending pool. */
+typedef struct MiniAsLiteral {
+    MiniAsSymbolRef expression;
+    char label[64];
+    int section;
+    uint32_t subsection;
+    unsigned width;
+    bool emitted;
+} MiniAsLiteral;
+
 struct MiniAsLoweringState {
     size_t stmt_capacity;
     MiniAsPendingLocalCommon *pending_local_commons;
@@ -31,6 +55,78 @@ struct MiniAsLoweringState {
     bool has_cross_subsection_size_end;
     bool has_mutable_absolute_sets;
 };
+
+static bool common_replay_fragment(void *owner,size_t ordinal,
+                                   MiniAsSourceReplayFragment *out) {
+    const MiniAs *as=(const MiniAs *)owner;
+    const MiniAsStmt *stmt;
+    const MiniAsMCInst *inst;
+    if(as==NULL || out==NULL || ordinal>=as->stmt_count)return false;
+    stmt=&as->stmts[ordinal];
+    *out=(MiniAsSourceReplayFragment){
+        .source_site=stmt->source_site,
+        .op=stmt->op,
+        .line=stmt->line,
+        .size=stmt->size,
+        .instruction=stmt->fragment_kind==MINIAS_FRAGMENT_INSTRUCTION
+    };
+    if(!out->instruction)return true;
+    inst=stmt->payload.instruction.inst;
+    if(inst==NULL || inst->count>inst->capacity)return false;
+    out->opcode=inst->opcode;
+    out->target_form=inst->target_form;
+    out->mode_bits=stmt->site.mode_bits;
+    out->operand_count=inst->count;
+    return true;
+}
+
+static bool common_replay_operand(void *owner,size_t ordinal,
+                                  unsigned operand_index,
+                                  MiniAsForcedOperandShape *out) {
+    const MiniAs *as=(const MiniAs *)owner;
+    const MiniAsStmt *stmt;
+    const MiniAsMCInst *inst;
+    const MiniAsMCOperand *operand;
+    if(as==NULL || out==NULL || ordinal>=as->stmt_count)return false;
+    stmt=&as->stmts[ordinal];
+    if(stmt->fragment_kind!=MINIAS_FRAGMENT_INSTRUCTION)return false;
+    inst=stmt->payload.instruction.inst;
+    if(inst==NULL || inst->count>inst->capacity ||
+       operand_index>=inst->count)return false;
+    operand=&inst->operands[operand_index];
+    *out=(MiniAsForcedOperandShape){
+        .kind=operand->kind,
+        .reg_class=operand->reg_class,
+        .target_reg_bank=operand->target_reg_bank,
+        .reg=operand->reg,
+        .register_64=operand->register_64
+    };
+    return true;
+}
+
+static bool common_replay_growth_plan(void *owner,size_t ordinal,
+                                      uint32_t *required_size,
+                                      uint32_t *terminal_size) {
+    MiniAs *as=(MiniAs *)owner;
+    MiniAsTargetRelaxPlan plan;
+    if(as==NULL || ordinal>=as->stmt_count || required_size==NULL ||
+       terminal_size==NULL ||
+       !minias_query_target_relax_plan(as,&as->stmts[ordinal],&plan))
+        return false;
+    *required_size=plan.required_size;
+    *terminal_size=plan.terminal_size;
+    return true;
+}
+
+MiniAsSourceReplayReader minias_common_source_replay_reader(MiniAs *as) {
+    return (MiniAsSourceReplayReader){
+        .owner=as,
+        .fragment_count=as!=NULL?as->stmt_count:0U,
+        .fragment=common_replay_fragment,
+        .operand=common_replay_operand,
+        .growth_plan=common_replay_growth_plan
+    };
+}
 
 bool minias_common_lowering_init(MiniAs *as) {
     if(as==NULL)return false;
@@ -2847,9 +2943,10 @@ static bool lower_source_statement(MiniAs *as, char *text, size_t line) {
             return false;
         }
         size_t forced_minimum_size=0U;
-        if(!minias_source_graph_lookup_forced_branch(as,
-                                              &as->stmts[statement_id],
-                                              &forced_minimum_size)) {
+        const MiniAsSourceReplayReader replay=
+            minias_common_source_replay_reader(as);
+        if(!minias_source_graph_lookup_forced_branch(
+               as,&replay,statement_id,&forced_minimum_size)) {
             free(rewritten_args);
             return false;
         }
@@ -2921,8 +3018,9 @@ bool minias_common_parse_source_graph(MiniAs *as,
        !flush_literal_pools(as,minias_source_graph_physical_lines(graph),true))
         return false;
     if(!flush_pending_local_commons(as))return false;
-    if(!minias_source_graph_validate_fragment_sites(
-           as,as->stmts,as->stmt_count))return false;
+    const MiniAsSourceReplayReader replay=
+        minias_common_source_replay_reader(as);
+    if(!minias_source_graph_validate_fragment_sites(as,&replay))return false;
     /* Finalization already refreshes the alias DAG after assigning final
      * subsection bases. Its subsequent .size end-anchor work changes no
      * alias source values, so a second whole-graph walk is redundant. */

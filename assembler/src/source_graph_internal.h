@@ -131,14 +131,6 @@ typedef struct MiniAsSourceSiteEntry {
  * shape prevents a branch from being accidentally attached to a different
  * instruction after a .if/.elseif changes the emitted Fragment topology.
  * All fields here are semantic parse-time values, never an output offset. */
-typedef struct MiniAsForcedOperandShape {
-    MiniAsMCOperandKind kind;
-    MiniAsMCRegisterClass reg_class;
-    uint16_t target_reg_bank;
-    unsigned reg;
-    bool register_64;
-} MiniAsForcedOperandShape;
-
 typedef struct MiniAsForcedBranchSite {
     MiniAsStableSiteId source_site;
     char *op;

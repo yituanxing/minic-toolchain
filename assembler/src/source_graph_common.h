@@ -2,7 +2,6 @@
 #define MINIAS_SOURCE_GRAPH_COMMON_H
 
 #include "minias_target_api.h"
-#include "minias_fragment_internal.h"
 #include "source_statement_event.h"
 #include "minias_source_replay_contract.h"
 
@@ -26,17 +25,18 @@ bool minias_source_context_process_graph(
     const MiniAsSourceStatementSink *statements);
 bool minias_source_graph_begin_eof(MiniAs *as);
 bool minias_source_graph_validate_fragment_sites(
-    MiniAs *as,const MiniAsStmt *fragments,size_t fragment_count);
-/* All Fragment reads arrive as borrowed, immutable spans from Common.
- * SourceGraph never owns or mutates the Common statement vector. */
+    MiniAs *as,const MiniAsSourceReplayReader *reader);
+/* SourceGraph receives only pass-local value projections from the live
+ * Common reader. No Common Fragment/MCInst record crosses the boundary. */
 bool minias_source_graph_lookup_forced_branch(MiniAs *as,
-                                              const MiniAsStmt *stmt,
+                                              const MiniAsSourceReplayReader *reader,
+                                              size_t fragment_ordinal,
                                               size_t *minimum_size);
 bool minias_source_graph_rebind_forced_branches(
-    MiniAs *as,const MiniAsStmt *fragments,size_t fragment_count,
+    MiniAs *as,const MiniAsSourceReplayReader *reader,
     MiniAsFragmentGrowthSet *growth);
 bool minias_source_graph_capture_forced_branches(
-    MiniAs *as,const MiniAsStmt *fragments,size_t fragment_count,
+    MiniAs *as,const MiniAsSourceReplayReader *reader,
     const MiniAsFragmentGrowthSet *growth);
 
 /* SourceContext owns the pass-local lexical state and the current SiteID.

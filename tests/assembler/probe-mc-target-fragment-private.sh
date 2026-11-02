@@ -11,6 +11,7 @@ import subprocess
 root=Path('assembler/src')
 public=(root/'minias_target_api.h').read_text()
 private=(root/'minias_fragment_internal.h').read_text()
+internal=(root/'minias_internal.h').read_text()
 lowering=(root/'common_lowering.c').read_text()
 emission=(root/'common_emission.c').read_text()
 source=(root/'source_graph_common.h').read_text()
@@ -23,6 +24,32 @@ for record in ('MiniAsStmt', 'MiniAsFragmentPayload',
        not re.search(r'\b(?:struct|union)\s+'+record+r'\s*\{',private):
         raise SystemExit('Fragment record not private and canonical: '+record)
 
+# Persistent MCExpr, position constraints, and Common worklists are never
+# Target-facing APIs. Keep each definition in its one owning layer; an
+# unneeded public forward typedef is also a capability leak.
+owned_types={
+    'MiniAsOrgMode':('enum',private),
+    'MiniAsDeferredExpr':('forward',private),
+    'MiniAsMCExprKind':('enum',private),
+    'MiniAsMCExpr':('struct',private),
+    'MiniAsMCData':('struct',private),
+    'MiniAsInternedSymbolName':('struct',internal),
+    'MiniAsPendingLocalCommon':('struct',lowering),
+    'MiniAsLiteral':('struct',lowering),
+}
+for name,(kind,owner) in owned_types.items():
+    if re.search(r'\b'+name+r'\b',public):
+        raise SystemExit('Common-private type leaked to Target API: '+name)
+    if kind=='forward':
+        pattern=r'\btypedef\s+struct\s+'+name+r'\s+'+name+r'\s*;'
+    else:
+        pattern=r'\btypedef\s+'+kind+r'\s+'+name+r'\s*\{'
+    if not re.search(pattern,owner):
+        raise SystemExit('Common-private type missing from unique owner: '+name)
+    if sum(len(re.findall(pattern,text)) for text in
+           (public,private,internal,lowering))!=1:
+        raise SystemExit('Common-private type has duplicate declarations: '+name)
+
 for name in ('aarch64_target.c','loongarch64_target.c','riscv_target.c',
              'riscv_encode.c','x86_64_target.c'):
     body=(root/name).read_text()
@@ -33,11 +60,14 @@ for name in ('aarch64_target.c','loongarch64_target.c','riscv_target.c',
                    r'\bpayload\.instruction\.inst\b'):
         if re.search(banned,body):
             raise SystemExit(name+' bypasses private Fragment boundary: '+banned)
+    for private_type in owned_types:
+        if re.search(r'\b'+private_type+r'\b',body):
+            raise SystemExit(name+' reads Common-private type: '+private_type)
 
-if '#include "minias_fragment_internal.h"' not in \
-   (root/'minias_internal.h').read_text() or \
-   '#include "minias_fragment_internal.h"' not in source:
-    raise SystemExit('Common/SourceGraph lost one shared, private Fragment record')
+if ('#include "minias_fragment_internal.h"' not in internal or
+    '#include "minias_fragment_internal.h"' in source or
+    '#include "minias_source_replay_contract.h"' not in source):
+    raise SystemExit('Common Fragment owner or Source replay projection boundary regressed')
 if ('MiniAsParseInstruction instruction={' not in lowering or
     'st->payload.instruction.inst=instruction.inst;' not in lowering or
     'if (!parsed)return false;' not in lowering or
@@ -59,10 +89,22 @@ compile_source('Common Fragment available privately',
     '#include "minias_fragment_internal.h"\n'
     'size_t good(void) {return sizeof(MiniAsStmt)+sizeof(MiniAsFragmentPayload);}\n',
     True)
+compile_source('Common MCExpr and origin payloads available privately',
+    '#include "minias_fragment_internal.h"\n'
+    'MiniAsDeferredExpr *deferred;\n'
+    'size_t good(void) {return sizeof(MiniAsOrgMode)+sizeof(MiniAsMCExprKind)'
+    '+sizeof(MiniAsMCExpr)+sizeof(MiniAsMCData);}\n',True)
+compile_source('Common symbol internals available privately',
+    '#include "minias_internal.h"\n'
+    'size_t good(void) {return sizeof(MiniAsInternedSymbolName);}\n',True)
 for record in ('MiniAsStmt','MiniAsFragmentPayload'):
     compile_source(record+' hidden from Target',
         '#include "minias_target_api.h"\n'
         'size_t bad(void) {return sizeof('+record+');}\n',False)
+for name in owned_types:
+    compile_source(name+' hidden from Target',
+        '#include "minias_target_api.h"\n'
+        +name+' *bad(void) {return 0;}\n',False)
 for record,field in (('MiniAsParseInstruction','op'),
                      ('MiniAsParseInstruction','args'),
                      ('MiniAsSourceSiteView','op')):
@@ -93,6 +135,7 @@ compile_source('new phase contracts typecheck',
     'MiniAsTargetOps ops={.parse_mcinst=parse,.append_code_alignment=align};\n',
     True)
 print('MINIAS_TARGET_FRAGMENT_PRIVATE=PASS targets=5 '
-      'hidden_records=8 negative_compiles=10 positive_compiles=2 '
+      'hidden_records=8 hidden_common_types=8 '
+      'negative_compiles=18 positive_compiles=4 '
       'Common=sole_fragment_owner')
 PY

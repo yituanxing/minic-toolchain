@@ -273,18 +273,39 @@ bool minias_source_graph_begin_eof(MiniAs *as) {
 
 /* A fragment without a stable source owner makes forced-branch rebinding
  * unsafe. Keep the full identity proof with the persistent SourceGraph,
- * rather than inspecting its private site cardinality from the lowerer. */
+ * rather than inspecting its private site cardinality from the lowerer.
+ * Source reads one pass-local projection per ordinal; it never borrows a
+ * Common Fragment array, mutable MCInst or Target-owned operand payload. */
+static bool source_replay_reader_valid(const MiniAsSourceReplayReader *reader) {
+    return reader!=NULL && reader->owner!=NULL &&
+           reader->fragment!=NULL && reader->operand!=NULL &&
+           reader->growth_plan!=NULL;
+}
+
+static bool source_replay_fragment(const MiniAsSourceReplayReader *reader,
+                                   size_t ordinal,
+                                   MiniAsSourceReplayFragment *out) {
+    return source_replay_reader_valid(reader) && out!=NULL &&
+           ordinal<reader->fragment_count &&
+           reader->fragment(reader->owner,ordinal,out);
+}
+
 bool minias_source_graph_validate_fragment_sites(
-    MiniAs *as,const MiniAsStmt *fragments,size_t fragment_count) {
+    MiniAs *as,const MiniAsSourceReplayReader *reader) {
     const MiniAsSourceGraph *graph=minias_source_session(as)->graph;
     size_t i;
-    if(graph==NULL) {
-        minias_set_error(as,"invalid-source-graph-state");
+    if(graph==NULL || !source_replay_reader_valid(reader)) {
+        minias_set_error(as,"invalid-source-graph-replay-reader");
         return false;
     }
-    for(i=0U;i<fragment_count;++i) {
-        const MiniAsStableSiteId site=fragments[i].source_site;
-        if(site==MINIAS_SITE_NONE || site>graph->site_count) {
+    for(i=0U;i<reader->fragment_count;++i) {
+        MiniAsSourceReplayFragment fragment;
+        if(!source_replay_fragment(reader,i,&fragment)) {
+            minias_set_error(as,"invalid-source-replay-fragment:%zu",i);
+            return false;
+        }
+        if(fragment.source_site==MINIAS_SITE_NONE ||
+           fragment.source_site>graph->site_count) {
             minias_set_error(as,"fragment-without-source-site:%zu",i);
             return false;
         }
@@ -326,31 +347,31 @@ void minias_source_graph_destroy(MiniAsSourceGraph *graph) {
 
 static bool source_graph_forced_shape_matches(
                            const MiniAsForcedBranchSite *saved,
-                           const MiniAsStmt *stmt) {
-    const MiniAsMCInst *inst;
+                           const MiniAsSourceReplayReader *reader,
+                           size_t ordinal,
+                           const MiniAsSourceReplayFragment *fragment) {
     unsigned i;
-    if(stmt->fragment_kind!=MINIAS_FRAGMENT_INSTRUCTION)return false;
-    inst=stmt->payload.instruction.inst;
-    if(inst==NULL || stmt->source_site!=saved->source_site ||
-       strcmp(stmt->op,saved->op)!=0 ||
-       inst->opcode!=saved->opcode ||
-       inst->target_form!=saved->target_form ||
-       stmt->site.mode_bits!=saved->mode_bits ||
-       inst->count>inst->capacity ||
-       inst->count!=saved->operand_count)return false;
+    if(!fragment->instruction || fragment->op==NULL || saved->op==NULL ||
+       fragment->source_site!=saved->source_site ||
+       strcmp(fragment->op,saved->op)!=0 ||
+       fragment->opcode!=saved->opcode ||
+       fragment->target_form!=saved->target_form ||
+       fragment->mode_bits!=saved->mode_bits ||
+       fragment->operand_count!=saved->operand_count)return false;
     /* Operand spelling is NOT a stable source identity. GNU 1f/1b refs
      * become private generation names, while macro \@ counters can shift
      * when an earlier conditional inserts a new macro expansion. The same
      * lexical SourceSite and typed opcode/form/register classes remain
      * stable; all symbol values are rebound by the fresh MC parser. */
-    for(i=0U;i<inst->count;++i) {
-        const MiniAsMCOperand *operand=&inst->operands[i];
+    for(i=0U;i<fragment->operand_count;++i) {
+        MiniAsForcedOperandShape operand;
         const MiniAsForcedOperandShape *shape=&saved->operands[i];
-        if(operand->kind!=shape->kind ||
-           operand->reg_class!=shape->reg_class ||
-           operand->target_reg_bank!=shape->target_reg_bank ||
-           operand->reg!=shape->reg ||
-           operand->register_64!=shape->register_64)return false;
+        if(!reader->operand(reader->owner,ordinal,i,&operand) ||
+           operand.kind!=shape->kind ||
+           operand.reg_class!=shape->reg_class ||
+           operand.target_reg_bank!=shape->target_reg_bank ||
+           operand.reg!=shape->reg ||
+           operand.register_64!=shape->register_64)return false;
     }
     return true;
 }
@@ -360,24 +381,32 @@ static bool source_graph_forced_shape_matches(
  * at the same site or a reused expansion identity is an error, even when its
  * current branch size happens to match the previous pass. */
 bool minias_source_graph_lookup_forced_branch(MiniAs *as,
-                                              const MiniAsStmt *stmt,
+                                              const MiniAsSourceReplayReader *reader,
+                                              size_t fragment_ordinal,
                                               size_t *minimum_size) {
     MiniAsSourceGraph *graph=minias_source_session(as)->graph;
+    MiniAsSourceReplayFragment fragment;
     size_t encoded;
+    if(minimum_size==NULL)return false;
     *minimum_size=0U;
     if(graph==NULL)return true;
-    if(stmt->source_site==MINIAS_SITE_NONE ||
-       stmt->source_site>graph->site_count) {
+    if(!source_replay_fragment(reader,fragment_ordinal,&fragment) ||
+       !fragment.instruction) {
+        minias_set_error(as,"invalid-branch-replay-fragment");
+        return false;
+    }
+    if(fragment.source_site==MINIAS_SITE_NONE ||
+       fragment.source_site>graph->site_count) {
         minias_set_error(as,"invalid-branch-source-site");
         return false;
     }
-    encoded=graph->sites[stmt->source_site-1U].forced_branch_index;
+    encoded=graph->sites[fragment.source_site-1U].forced_branch_index;
     if(encoded==0U)return true;
     if(encoded>graph->forced_branch_count ||
        !source_graph_forced_shape_matches(&graph->forced_branches[encoded-1U],
-                                         stmt)) {
+                                         reader,fragment_ordinal,&fragment)) {
         ++graph->ordinal_drifts;
-        minias_set_error(as,"changed-forced-branch-shape:line=%zu",stmt->line);
+        minias_set_error(as,"changed-forced-branch-shape:line=%zu",fragment.line);
         return false;
     }
     *minimum_size=graph->forced_branches[encoded-1U].minimum_size;
@@ -389,11 +418,15 @@ bool minias_source_graph_lookup_forced_branch(MiniAs *as,
  * Missing branches (e.g. a changed conditional arm) fail CLOSED rather than
  * forcing an unrelated instruction that inherited its old ordinal. */
 bool minias_source_graph_rebind_forced_branches(
-    MiniAs *as,const MiniAsStmt *fragments,size_t fragment_count,
+    MiniAs *as,const MiniAsSourceReplayReader *reader,
     MiniAsFragmentGrowthSet *growth) {
     MiniAsSourceGraph *graph=minias_source_session(as)->graph;
     size_t *site_to_stmt;
     size_t i;
+    if(!source_replay_reader_valid(reader) || growth==NULL) {
+        minias_set_error(as,"invalid-source-rebind-reader");
+        return false;
+    }
     if(graph==NULL || graph->forced_branch_count==0U) {
         growth->count=0U;
         return true;
@@ -408,17 +441,22 @@ bool minias_source_graph_rebind_forced_branches(
         minias_set_error(as,"out-of-memory:forced-source-index");
         return false;
     }
-    for(i=0U;i<fragment_count;++i) {
-        const MiniAsStmt *stmt=&fragments[i];
+    for(i=0U;i<reader->fragment_count;++i) {
+        MiniAsSourceReplayFragment fragment;
         size_t *slot;
-        if(stmt->fragment_kind!=MINIAS_FRAGMENT_INSTRUCTION)continue;
-        if(stmt->source_site==MINIAS_SITE_NONE ||
-           stmt->source_site>graph->site_count) {
+        if(!source_replay_fragment(reader,i,&fragment)) {
+            minias_set_error(as,"invalid-source-replay-fragment:%zu",i);
+            free(site_to_stmt);
+            return false;
+        }
+        if(!fragment.instruction)continue;
+        if(fragment.source_site==MINIAS_SITE_NONE ||
+           fragment.source_site>graph->site_count) {
             minias_set_error(as,"invalid-source-instruction-site");
             free(site_to_stmt);
             return false;
         }
-        slot=&site_to_stmt[stmt->source_site];
+        slot=&site_to_stmt[fragment.source_site];
         *slot=*slot==0U?i+1U:SIZE_MAX;
     }
     if(!minias_grow_array((void **)&growth->ids,&growth->capacity,
@@ -432,8 +470,10 @@ bool minias_source_graph_rebind_forced_branches(
         const MiniAsForcedBranchSite *saved=&graph->forced_branches[i];
         size_t entry=saved->source_site<=graph->site_count ?
             site_to_stmt[saved->source_site] : 0U;
+        MiniAsSourceReplayFragment fragment;
         if(entry==0U || entry==SIZE_MAX ||
-           !source_graph_forced_shape_matches(saved,&fragments[entry-1U])) {
+           !source_replay_fragment(reader,entry-1U,&fragment) ||
+           !source_graph_forced_shape_matches(saved,reader,entry-1U,&fragment)) {
             ++graph->ordinal_drifts;
             minias_set_error(as,"lost-or-ambiguous-forced-source-site:%zu",
                              (size_t)saved->source_site);
@@ -448,12 +488,19 @@ bool minias_source_graph_rebind_forced_branches(
 }
 
 bool minias_source_graph_capture_forced_branches(
-    MiniAs *as,const MiniAsStmt *fragments,size_t fragment_count,
+    MiniAs *as,const MiniAsSourceReplayReader *reader,
     const MiniAsFragmentGrowthSet *growth) {
     MiniAsSourceGraph *graph=minias_source_session(as)->graph;
-    const size_t *ids=growth->ids;
-    const size_t count=growth->count;
+    const size_t *ids;
+    size_t count;
     size_t i;
+    if(!source_replay_reader_valid(reader) || growth==NULL ||
+       (growth->count!=0U && growth->ids==NULL)) {
+        minias_set_error(as,"invalid-source-capture-reader");
+        return false;
+    }
+    ids=growth->ids;
+    count=growth->count;
     if(graph==NULL)return true;
     if(count<graph->forced_branch_count) {
         minias_set_error(as,"lost-forced-branch-after-layout");
@@ -466,60 +513,64 @@ bool minias_source_graph_capture_forced_branches(
         return false;
     }
     for(i=0U;i<count;++i) {
-        const MiniAsStmt *stmt;
+        MiniAsSourceReplayFragment fragment;
         MiniAsForcedBranchSite *saved;
-        MiniAsTargetRelaxPlan plan;
+        uint32_t required_size,terminal_size;
         unsigned j;
-        if(ids[i]>=fragment_count ||
-           fragments[ids[i]].fragment_kind!=MINIAS_FRAGMENT_INSTRUCTION ||
-           fragments[ids[i]].payload.instruction.inst==NULL ||
-           fragments[ids[i]].payload.instruction.inst->count>
-               fragments[ids[i]].payload.instruction.inst->capacity) {
+        if(!source_replay_fragment(reader,ids[i],&fragment) ||
+           !fragment.instruction || fragment.op==NULL) {
             minias_set_error(as,"invalid-forced-branch-fragment:%zu",ids[i]);
             return false;
         }
-        stmt=&fragments[ids[i]];
-        if(stmt->source_site==MINIAS_SITE_NONE ||
-           stmt->source_site>graph->site_count) {
+        if(fragment.source_site==MINIAS_SITE_NONE ||
+           fragment.source_site>graph->site_count) {
             minias_set_error(as,"invalid-forced-branch-source-site");
             return false;
         }
-        if(!minias_query_target_relax_plan(as,stmt,&plan))return false;
-        if(i<graph->forced_branch_count) {
-            if(!source_graph_forced_shape_matches(&graph->forced_branches[i],
-                                                  stmt)) {
-                ++graph->ordinal_drifts;
-                minias_set_error(as,"changed-forced-branch-order:line=%zu",
-                                 stmt->line);
-                return false;
-            }
-            if(plan.required_size>stmt->size &&
-               graph->forced_branches[i].minimum_size<plan.terminal_size)
-                graph->forced_branches[i].minimum_size=plan.terminal_size;
-            continue;
-        }
-        if(plan.required_size<=stmt->size) {
-            minias_set_error(as,"invalid-forced-source-growth:line=%zu",
-                             stmt->line);
+        if(!reader->growth_plan(reader->owner,ids[i],&required_size,
+                                &terminal_size)) {
+            /* Common's first-error-wins sink preserves a Target diagnostic
+             * when one exists, while giving a failed opaque reader a
+             * deterministic error even if its callback was silent. */
+            minias_set_error(as,"invalid-forced-branch-growth-plan:line=%zu",
+                             fragment.line);
             return false;
         }
-        if(graph->sites[stmt->source_site-1U].forced_branch_index!=0U) {
+        if(i<graph->forced_branch_count) {
+            if(!source_graph_forced_shape_matches(&graph->forced_branches[i],
+                                                  reader,ids[i],&fragment)) {
+                ++graph->ordinal_drifts;
+                minias_set_error(as,"changed-forced-branch-order:line=%zu",
+                                 fragment.line);
+                return false;
+            }
+            if(required_size>fragment.size &&
+               graph->forced_branches[i].minimum_size<terminal_size)
+                graph->forced_branches[i].minimum_size=terminal_size;
+            continue;
+        }
+        if(required_size<=fragment.size) {
+            minias_set_error(as,"invalid-forced-source-growth:line=%zu",
+                             fragment.line);
+            return false;
+        }
+        if(graph->sites[fragment.source_site-1U].forced_branch_index!=0U) {
             ++graph->ordinal_drifts;
             minias_set_error(as,"ambiguous-forced-branch-source-site:line=%zu",
-                             stmt->line);
+                             fragment.line);
             return false;
         }
         saved=&graph->forced_branches[graph->forced_branch_count];
         memset(saved,0,sizeof(*saved));
-        saved->source_site=stmt->source_site;
-        saved->op=minias_strdup(stmt->op);
-        saved->opcode=stmt->payload.instruction.inst->opcode;
-        saved->target_form=stmt->payload.instruction.inst->target_form;
-        saved->mode_bits=stmt->site.mode_bits;
+        saved->source_site=fragment.source_site;
+        saved->op=minias_strdup(fragment.op);
+        saved->opcode=fragment.opcode;
+        saved->target_form=fragment.target_form;
+        saved->mode_bits=fragment.mode_bits;
         /* Required is a lower bound; terminal is the actual Target-owned
          * alternative size committed by the MCLayout growth operation. */
-        saved->minimum_size=plan.terminal_size;
-        saved->operand_count=stmt->payload.instruction.inst->count;
+        saved->minimum_size=terminal_size;
+        saved->operand_count=fragment.operand_count;
         if(saved->operand_count!=0U) {
             saved->operands=calloc(saved->operand_count,
                                    sizeof(*saved->operands));
@@ -532,15 +583,16 @@ bool minias_source_graph_capture_forced_branches(
             return false;
         }
         for(j=0U;j<saved->operand_count;++j) {
-            const MiniAsMCOperand *operand=&stmt->payload.instruction.inst->operands[j];
             MiniAsForcedOperandShape *shape=&saved->operands[j];
-            shape->kind=operand->kind;
-            shape->reg_class=operand->reg_class;
-            shape->target_reg_bank=operand->target_reg_bank;
-            shape->reg=operand->reg;
-            shape->register_64=operand->register_64;
+            if(!reader->operand(reader->owner,ids[i],j,shape)) {
+                free(saved->op);free(saved->operands);
+                memset(saved,0,sizeof(*saved));
+                minias_set_error(as,"invalid-forced-branch-operand:%zu:%u",
+                                 ids[i],j);
+                return false;
+            }
         }
-        graph->sites[stmt->source_site-1U].forced_branch_index=
+        graph->sites[fragment.source_site-1U].forced_branch_index=
             ++graph->forced_branch_count;
     }
     return true;
