@@ -213,6 +213,12 @@
       "review_depth": "inventory",
       "ci_touched_in": []
     },
+    "src/target/common/core_floating_shape.h": {
+      "blob": "141d592993ac003080a857b357bf3fa25a44613f",
+      "review_depth": "full",
+      "ci_touched_in": [],
+      "note": "2026-11-02: reviewed the complete 17-opcode Core floating-scalar shape with operand/result and integer width/sign admission. ISA instructions and soft-float ABI remain per-target."
+    },
     "src/target/common/core_function_facts.c": {
       "blob": "79f31a46b24744fc55dfe14645e9d4330b6c0298",
       "review_depth": "full",

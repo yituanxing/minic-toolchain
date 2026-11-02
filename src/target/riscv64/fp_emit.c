@@ -3,6 +3,7 @@
 #include "target/riscv64/frame_access.h"
 #include "target/riscv64/runtime_libcall.h"
 #include "target/common/core_instruction_family.h"
+#include "target/common/core_floating_shape.h"
 #include <inttypes.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -28,9 +29,7 @@ static bool rv64_emit_fp_binary(
     case MINIC_CORE_INSTRUCTION_DOUBLE_DIVIDE: op = "fdiv"; is_double = true; break;
     default: return false;
     }
-    if (!(is_double ? minic_type_is_double(instruction->type)
-                    : minic_type_is_float(instruction->type)) ||
-        !minic_riscv64_frame_load_value(
+    if (!minic_riscv64_frame_load_value(
             file, frame, instruction->value.binary.left, "t0") ||
         !minic_riscv64_frame_load_value(
             file, frame, instruction->value.binary.right, "t1"))
@@ -75,16 +74,18 @@ static bool rv64_emit_fp_binary(
 }
 
 bool minic_riscv64_emit_fp_instruction(
-    FILE *file, const MinicC0Program *program,
-    const MinicCoreFunction *function, const MinicRiscv64CoreFrame *frame,
+    FILE *file, const MinicCoreFunction *function,
+    const MinicRiscv64CoreFrame *frame,
     const MinicCoreInstruction *instruction, const MinicRiscvIsa *isa) {
+    MinicCoreFloatingShape shape;
     if (file == NULL || function == NULL || frame == NULL ||
         instruction == NULL ||
-        !minic_core_instruction_is_floating_scalar(instruction->kind))
+        !minic_core_instruction_is_floating_scalar(instruction->kind) ||
+        !minic_core_floating_shape(function, instruction, &shape))
         return false;
     switch (instruction->kind) {
     case MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT:
-        if (minic_type_is_long_double(instruction->type)) {
+        if (shape.result_format == MINIC_CORE_FLOAT_EXTENDED) {
             if (fprintf(file,
                         "  li t0, 0x%016" PRIx64 "\n"
                         "  li t1, 0x%016" PRIx64 "\n",
@@ -94,13 +95,13 @@ bool minic_riscv64_emit_fp_instruction(
             }
             return minic_riscv64_frame_store_int128(file, frame, instruction->result, "t0", "t1");
         }
-        if (minic_type_is_double(instruction->type)) {
+        if (shape.result_format == MINIC_CORE_FLOAT_BINARY64) {
             if (fprintf(file,
                         "  li t0, 0x%016" PRIx64 "\n",
                         instruction->value.floating_bits) < 0) {
                 return false;
             }
-        } else if (minic_type_is_float(instruction->type)) {
+        } else if (shape.result_format == MINIC_CORE_FLOAT_BINARY32) {
             if (fprintf(file,
                         "  li t0, 0x%08" PRIx64 "\n",
                         instruction->value.floating_bits & UINT64_C(0xffffffff)) < 0) {
@@ -124,13 +125,6 @@ bool minic_riscv64_emit_fp_instruction(
     case MINIC_CORE_INSTRUCTION_DOUBLE_LESS_EQUAL: {
         const char *opcode;
 
-        if (instruction->value.binary.left >= function->value_count ||
-            instruction->value.binary.right >= function->value_count ||
-            !minic_type_is_double(function->values[instruction->value.binary.left].type) ||
-            !minic_type_equal(function->values[instruction->value.binary.left].type,
-                              function->values[instruction->value.binary.right].type)) {
-            return false;
-        }
         opcode = instruction->kind == MINIC_CORE_INSTRUCTION_DOUBLE_EQUAL
                      ? "feq.d"
                  : instruction->kind == MINIC_CORE_INSTRUCTION_DOUBLE_LESS
@@ -149,19 +143,13 @@ bool minic_riscv64_emit_fp_instruction(
     }
     case MINIC_CORE_INSTRUCTION_INTEGER_TO_DOUBLE: {
         MinicCoreValueId operand = instruction->value.operand;
-        MinicType source_type;
         const char *opcode;
-
-        if (operand >= function->value_count ||
-            !minic_core_function_effective_integer_type(function, function->values[operand].type, &source_type) ||
-            minic_type_is_int128_integer(source_type) ||
-            !minic_type_is_double(instruction->type)) {
+        if (shape.integer_bytes > 8U)
             return false;
-        }
-        if (minic_type_is_long_integer(source_type)) {
-            opcode = minic_type_is_unsigned_integer(source_type) ? "fcvt.d.lu" : "fcvt.d.l";
+        if (shape.integer_bytes == 8U) {
+            opcode = shape.integer_signed ? "fcvt.d.l" : "fcvt.d.lu";
         } else {
-            opcode = minic_type_is_unsigned_integer(source_type) ? "fcvt.d.wu" : "fcvt.d.w";
+            opcode = shape.integer_signed ? "fcvt.d.w" : "fcvt.d.wu";
         }
         if (!minic_riscv64_frame_load_value(file, frame, operand, "t0") ||
             fprintf(file,
@@ -175,10 +163,7 @@ bool minic_riscv64_emit_fp_instruction(
     case MINIC_CORE_INSTRUCTION_FLOAT_TO_DOUBLE: {
         MinicCoreValueId operand = instruction->value.operand;
 
-        if (operand >= function->value_count ||
-            !minic_type_is_float(function->values[operand].type) ||
-            !minic_type_is_double(instruction->type) ||
-            !minic_riscv64_frame_load_value(file, frame, operand, "t0") ||
+        if (!minic_riscv64_frame_load_value(file, frame, operand, "t0") ||
             fprintf(file,
                     "  fmv.w.x ft0, t0\n"
                     "  fcvt.d.s ft1, ft0\n"
@@ -190,10 +175,7 @@ bool minic_riscv64_emit_fp_instruction(
     case MINIC_CORE_INSTRUCTION_DOUBLE_TO_FLOAT: {
         MinicCoreValueId operand = instruction->value.operand;
 
-        if (operand >= function->value_count ||
-            !minic_type_is_double(function->values[operand].type) ||
-            !minic_type_is_float(instruction->type) ||
-            !minic_riscv64_frame_load_value(file, frame, operand, "t0") ||
+        if (!minic_riscv64_frame_load_value(file, frame, operand, "t0") ||
             fprintf(file,
                     "  fmv.d.x ft0, t0\n"
                     "  fcvt.s.d ft1, ft0\n"
@@ -206,27 +188,21 @@ bool minic_riscv64_emit_fp_instruction(
     }
     case MINIC_CORE_INSTRUCTION_DOUBLE_TO_INTEGER: {
         MinicCoreValueId operand = instruction->value.operand;
-        MinicType target_type;
         const char *opcode;
-
-        if (operand >= function->value_count ||
-            !minic_type_is_double(function->values[operand].type) ||
-            !minic_core_function_effective_integer_type(function, instruction->type, &target_type) ||
-            minic_type_is_int128_integer(target_type)) {
+        if (shape.integer_bytes > 8U)
             return false;
-        }
-        if (minic_type_is_long_integer(target_type)) {
-            opcode = minic_type_is_unsigned_integer(target_type) ? "fcvt.lu.d" : "fcvt.l.d";
+        if (shape.integer_bytes == 8U) {
+            opcode = shape.integer_signed ? "fcvt.l.d" : "fcvt.lu.d";
         } else {
-            opcode = minic_type_is_unsigned_integer(target_type) ? "fcvt.wu.d" : "fcvt.w.d";
+            opcode = shape.integer_signed ? "fcvt.w.d" : "fcvt.wu.d";
         }
         if (!minic_riscv64_frame_load_value(file, frame, operand, "t0") ||
             fprintf(file,
                     "  fmv.d.x ft0, t0\n"
                     "  %s t1, ft0, rtz\n",
                     opcode) < 0 ||
-            !minic_riscv64_emit_integer_conversion_for_program(
-                file, program, instruction->type, "t1")) {
+            !minic_riscv64_emit_core_integer_conversion(
+                file, function->type_context, shape.result_id, "t1")) {
             return false;
         }
         return minic_riscv64_frame_store_value(file, frame, instruction->result, "t1");

@@ -1085,6 +1085,28 @@ has src/target/x86_64/machine_emit.c 'x86_core_normalize(out, fn->type_context, 
 has src/target/riscv32/rv32_integer_emit.c 'rv32_core_canon(out, f, cast.target_id'
 has src/target/riscv32/rv32_integer_emit.c 'rv32_core_canon(out, f, bitcast.target_id'
 
+# All 17 floating-scalar Core opcodes use one sealed shape across five
+# architectures. RV32/RV64 numeric machines must not resurrect the old
+# MinicType fallback while choosing FCVT or compiler-rt ABI words.
+cc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror \
+  -Iinclude -Isrc tests/compiler/c0/probe-core-floating-shape.c \
+  src/core/core_type.c src/frontend/type.c \
+  -o "$work/core-floating-shape-probe"
+"$work/core-floating-shape-probe"
+for source in src/target/riscv32/rv32_fp_emit.c \
+              src/target/riscv64/fp_emit.c \
+              src/target/x86_64/machine_fp.c; do
+  has "$source" 'minic_core_floating_shape('
+  lacks "$source" 'minic_type_'
+  lacks "$source" 'instruction->type'
+  lacks "$source" 'ins->type'
+done
+has src/target/common/direct_instruction_semantics.c 'minic_core_floating_shape('
+has src/target/aarch64/fp_emit.c 'minic_multi_direct_floating_shape('
+has src/target/loongarch64/fp_emit.c 'minic_multi_direct_floating_shape('
+lacks src/target/riscv32/rv32_fp_emit.c 'rv32_resolved_'
+lacks src/target/riscv64/fp_emit.c 'minic_riscv64_emit_integer_conversion_for_program('
+
 cc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror \
   -ffunction-sections -fdata-sections -Wl,--gc-sections \
   -Iinclude -Isrc tests/compiler/c0/probe-program-emit-transaction.c \

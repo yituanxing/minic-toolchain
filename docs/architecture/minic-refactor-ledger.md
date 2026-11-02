@@ -579,3 +579,50 @@ LP64/ILP32 指针、signed8、unsigned64、i128、bool、错误宽度及
 **界限：** x86/RV32 其他 Machine 族以及 RV64 的浮点↔整数
 转换仍混合使用旧 C 或已封存 Core 查询，待同一语义族的下一批
 整体迁走；本批不改 Zstd/NEON 等已知 Linux 行为缺陷。
+
+## IR-P4：17 个 FLOATING_SCALAR 操作作为一个五目标语义族迁移
+
+起点：`440d7ad`（IR-P3）。沿 Core IR 指令家族先读五目标完整
+FP 发射、Direct LP64 准入、RV32 softfloat、RV64 native F/D 和
+frame/libcall 所有权后，确定浮点常量、float/double 四则运算、
+double 比较/取负及四类数值转换**必须一起收**：只改整数↔浮点
+转换会让紧邻的常量/算术仍留两套 C/Core 类型判断，无法保证
+同一个 sealed Core 值在生产者和消费者间具有唯一解释。
+
+1. `target/common/core_floating_shape.h` 归纳全部 17 种 Core 操作：
+   `CoreTypeId` 的 binary32/binary64/extended 布局、整数宽度
+   signedness、operand/result SSA 形状、比较结果 signed i32，
+   非法类型/错配 fail-closed。Core 类型语义一次判定，具体
+   rounding、物理寄存器、ISA 和 softfloat libcall 不进入 Common。
+2. `direct_instruction_semantics.c` 删除原来逐 opcode 重复的
+   FP 形状判定，AArch64/LoongArch64 保留相同的薄 ABI 限制层，
+   原有 FP 指令和 frame-relative 访存完全不动。
+3. x86-64 SSE/x87 发射通过这一公共形状去掉本地重复类型
+   检查，入口不再接收 C `program`/`target`；已有无符号 u64
+   修正、x87 扩展精度、NaN 有序比较保持机器私有。
+4. RV32 的整个 FP 发射器移除 C `MinicType` fallback 与
+   `rv32_resolved_*`：软浮点 helper 符号、ILP32 一/双寄存器
+   传递、结果 narrow canonicalizer 均由 Core 的 signedness 和
+   width 驱动，继续调用既有 LLVM compiler-rt，不复制算法。
+5. RV64 的整个 FP 发射器不再使用 C `instruction->type`，
+   FCVT 选择源于 Core 整数尺寸/符号，`DOUBLE_TO_INTEGER` 的
+   最终规范化调用已封存 CoreType；strict Base-I softfloat
+   与 native F/D 的机器策略原样保留。
+
+**验证：** 17 opcode 全枚举 C-descriptor poison 单测及非法
+binary 格式/整数布局/结果 SSA/缺失上下文的负例，五目标源码
+边界防回退。16 份 GNU 预处理 `.i` × 5 目标的 P3→P4
+汇编差分为 **76/76 BYTE_IDENTICAL、4/4 SAME_REJECT、
+0 DIFFERENT**。不把双方拒绝的 unsupported case 算作运行通过。
+Release `-Werror`、`make check-fast`、目标边界测试分别独立
+核验；交叉 GNU AS/LD、QEMU 在当前环境仍不可用，待有工具链
+后用同一套 `.i` 做真正的运行时差分。
+本批 `src/` **+231/−255、净 −24 行**；
+`tests/` **+194/−0 行**。新增 1 个公共 Core shape header，
+其余生产差异主要是逐目标的旧判定与 C 回退退休。
+
+**仍未迁移的边界：** FP 参数/返回值的 ABI 分类是另一组
+跨指令的 psABI 语义，不能塞进 FP 指令 shape。RV32 的其他
+内存与 call 族、RV64 `runtime_libcall` 的旧整数 liveness fallback
+仍需按各自完整族消除，禁止通过本次 FP 收口把其它模块冒充
+成已纯 Core。

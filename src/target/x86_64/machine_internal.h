@@ -33,8 +33,7 @@ bool x86_load_memory(FILE *, size_t, bool);
 bool x86_store_memory(FILE *, size_t);
 
 bool minic_x86_64_emit_fp_instruction(
-    FILE *, const MinicC0Program *, const MinicTargetInfo *,
-    const MinicCoreFunction *, const MinicX86Frame *,
+    FILE *, const MinicCoreFunction *, const MinicX86Frame *,
     const MinicCoreInstruction *);
 bool minic_x86_64_emit_structured_asm(
     FILE *, const MinicC0Program *, const MinicTargetInfo *,

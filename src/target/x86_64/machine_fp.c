@@ -1,38 +1,20 @@
 #include "target/x86_64/machine_internal.h"
-#include "target/x86_64/abi.h"
+#include "target/common/core_floating_shape.h"
 #include <inttypes.h>
 #include <stdint.h>
 #include <stdio.h>
 
-static bool x86_fp_format(const MinicCoreFunction *fn, MinicCoreTypeId id,
-                          MinicCoreFloatFormat format) {
-    const MinicCoreType *type;
-    if (fn == NULL || fn->type_context == NULL) return false;
-    type = minic_core_type_get(fn->type_context,
-        minic_core_type_unqualified(fn->type_context, id));
-    return type != NULL && type->kind == MINIC_CORE_TYPE_FLOAT &&
-           type->value.floating.format == format;
-}
-
-static bool x86_fp_integer(const MinicCoreFunction *fn, MinicCoreTypeId id) {
-    const MinicCoreType *type;
-    if (fn == NULL || fn->type_context == NULL) return false;
-    type = minic_core_type_get(fn->type_context,
-        minic_core_type_unqualified(fn->type_context, id));
-    return type != NULL && type->kind == MINIC_CORE_TYPE_INTEGER;
-}
-
 /* The complete x86 SSE/x87 scalar Core instruction family. No ELF/TU work. */
 bool minic_x86_64_emit_fp_instruction(
-    FILE *out, const MinicC0Program *program,
-    const MinicTargetInfo *target, const MinicCoreFunction *fn,
+    FILE *out, const MinicCoreFunction *fn,
     const MinicX86Frame *frame, const MinicCoreInstruction *ins) {
-    if (out == NULL || program == NULL || target == NULL ||
-        fn == NULL || fn->type_context == NULL || frame == NULL || ins == NULL)
+    MinicCoreFloatingShape shape;
+    if (out == NULL || fn == NULL || frame == NULL || ins == NULL ||
+        !minic_core_floating_shape(fn, ins, &shape))
         return false;
     switch (ins->kind) {
     case MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT:
-        if (x86_fp_format(fn, ins->core_type_id, MINIC_CORE_FLOAT_EXTENDED)) {
+        if (shape.result_format == MINIC_CORE_FLOAT_EXTENDED) {
             const uint64_t hi = ins->value.floating128_bits.high;
             const uint64_t lo = ins->value.floating128_bits.low;
             const uint64_t fraction_hi = hi & UINT64_C(0x0000ffffffffffff);
@@ -57,9 +39,6 @@ bool minic_x86_64_emit_fp_instruction(
                 "  movq $%u, -%zu(%%rbp)\n",
                 significand, off, sign_exponent, off - 8U) >= 0;
         }
-        if (!x86_fp_format(fn, ins->core_type_id, MINIC_CORE_FLOAT_BINARY32) &&
-            !x86_fp_format(fn, ins->core_type_id, MINIC_CORE_FLOAT_BINARY64))
-            return false;
         return fprintf(out, "  movabsq $%" PRIu64 ", %%rax\n",
                        ins->value.floating_bits) >= 0 &&
                x86_value_store(out, frame, ins->result);
@@ -71,10 +50,7 @@ bool minic_x86_64_emit_fp_instruction(
             ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_ADD ? "addsd" :
             ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_SUBTRACT ? "subsd" :
             ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_MULTIPLY ? "mulsd" : "divsd";
-        if (!x86_fp_format(fn, ins->core_type_id, MINIC_CORE_FLOAT_BINARY64) ||
-            ins->value.binary.left >= fn->value_count ||
-            ins->value.binary.right >= fn->value_count ||
-            !x86_value_load(out, frame, ins->value.binary.left, "%rax") ||
+        if (!x86_value_load(out, frame, ins->value.binary.left, "%rax") ||
             !x86_value_load(out, frame, ins->value.binary.right, "%r10") ||
             fprintf(out,
                     "  movq %%rax, %%xmm0\n"
@@ -86,13 +62,9 @@ bool minic_x86_64_emit_fp_instruction(
     }
     case MINIC_CORE_INSTRUCTION_INTEGER_TO_DOUBLE: {
         const MinicCoreValueId operand = ins->value.operand;
-        size_t source_bytes;
-        bool source_signed;
-        if (operand >= fn->value_count ||
-            !x86_fp_format(fn, ins->core_type_id, MINIC_CORE_FLOAT_BINARY64) ||
-            !minic_x86_64_core_scalar_width(fn->type_context,
-                                            fn->values[operand].core_type_id,
-                              &source_bytes, &source_signed) ||
+        const size_t source_bytes = shape.integer_bytes;
+        const bool source_signed = shape.integer_signed;
+        if (source_bytes > 8U ||
             !x86_value_load(out, frame, operand, "%rax"))
             return false;
         if (fprintf(out, "  cvtsi2sdq %%rax, %%xmm0\n") < 0) return false;
@@ -113,14 +85,9 @@ bool minic_x86_64_emit_fp_instruction(
     }
     case MINIC_CORE_INSTRUCTION_DOUBLE_TO_INTEGER: {
         const MinicCoreValueId operand = ins->value.operand;
-        size_t dst_bytes;
-        bool dst_signed;
-        if (operand >= fn->value_count ||
-            !x86_fp_format(fn, fn->values[operand].core_type_id,
-                           MINIC_CORE_FLOAT_BINARY64) ||
-            !x86_fp_integer(fn, ins->core_type_id) ||
-            !minic_x86_64_core_scalar_width(fn->type_context,
-                ins->core_type_id, &dst_bytes, &dst_signed) ||
+        const size_t dst_bytes = shape.integer_bytes;
+        const bool dst_signed = shape.integer_signed;
+        if (dst_bytes > 8U ||
             !x86_value_load(out, frame, operand, "%rax") ||
             fprintf(out, "  movq %%rax, %%xmm0\n") < 0)
             return false;
@@ -151,16 +118,7 @@ bool minic_x86_64_emit_fp_instruction(
     case MINIC_CORE_INSTRUCTION_DOUBLE_TO_FLOAT: {
         const MinicCoreValueId operand = ins->value.operand;
         const bool widening = ins->kind == MINIC_CORE_INSTRUCTION_FLOAT_TO_DOUBLE;
-        if (operand >= fn->value_count ||
-            (widening &&
-             (!x86_fp_format(fn, fn->values[operand].core_type_id,
-                             MINIC_CORE_FLOAT_BINARY32) ||
-              !x86_fp_format(fn, ins->core_type_id, MINIC_CORE_FLOAT_BINARY64))) ||
-            (!widening &&
-             (!x86_fp_format(fn, fn->values[operand].core_type_id,
-                             MINIC_CORE_FLOAT_BINARY64) ||
-              !x86_fp_format(fn, ins->core_type_id, MINIC_CORE_FLOAT_BINARY32))) ||
-            !x86_value_load(out, frame, operand, "%rax"))
+        if (!x86_value_load(out, frame, operand, "%rax"))
             return false;
         if (fprintf(out,
                     widening ? "  movd %%eax, %%xmm0\n"
@@ -180,10 +138,7 @@ bool minic_x86_64_emit_fp_instruction(
             ins->kind == MINIC_CORE_INSTRUCTION_FLOAT_ADD ? "addss" :
             ins->kind == MINIC_CORE_INSTRUCTION_FLOAT_SUBTRACT ? "subss" :
             ins->kind == MINIC_CORE_INSTRUCTION_FLOAT_MULTIPLY ? "mulss" : "divss";
-        if (!x86_fp_format(fn, ins->core_type_id, MINIC_CORE_FLOAT_BINARY32) ||
-            ins->value.binary.left >= fn->value_count ||
-            ins->value.binary.right >= fn->value_count ||
-            !x86_value_load(out, frame, ins->value.binary.left, "%rax") ||
+        if (!x86_value_load(out, frame, ins->value.binary.left, "%rax") ||
             !x86_value_load(out, frame, ins->value.binary.right, "%r10") ||
             fprintf(out, "  movd %%eax, %%xmm0\n"
                          "  movd %%r10d, %%xmm1\n"
@@ -193,8 +148,7 @@ bool minic_x86_64_emit_fp_instruction(
         return x86_value_store(out, frame, ins->result);
     }
     case MINIC_CORE_INSTRUCTION_DOUBLE_NEGATE:
-        if (!x86_fp_format(fn, ins->core_type_id, MINIC_CORE_FLOAT_BINARY64) ||
-            !x86_value_load(out, frame, ins->value.operand, "%rax") ||
+        if (!x86_value_load(out, frame, ins->value.operand, "%rax") ||
             fprintf(out, "  movabsq $9223372036854775808, %%r10\n"
                          "  xorq %%r10, %%rax\n") < 0) return false;
         return x86_value_store(out, frame, ins->result);
@@ -204,15 +158,7 @@ bool minic_x86_64_emit_fp_instruction(
         const char *test =
             ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_EQUAL ? "sete" :
             ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_LESS ? "setb" : "setbe";
-        if (ins->value.binary.left >= fn->value_count ||
-            ins->value.binary.right >= fn->value_count ||
-            !x86_fp_format(fn,
-                fn->values[ins->value.binary.left].core_type_id,
-                MINIC_CORE_FLOAT_BINARY64) ||
-            !x86_fp_format(fn,
-                fn->values[ins->value.binary.right].core_type_id,
-                MINIC_CORE_FLOAT_BINARY64) ||
-            !x86_value_load(out, frame, ins->value.binary.left, "%rax") ||
+        if (!x86_value_load(out, frame, ins->value.binary.left, "%rax") ||
             !x86_value_load(out, frame, ins->value.binary.right, "%r10") ||
             fprintf(out, "  movq %%rax, %%xmm0\n"
                          "  movq %%r10, %%xmm1\n"

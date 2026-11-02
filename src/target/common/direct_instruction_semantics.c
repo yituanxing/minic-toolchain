@@ -2,6 +2,7 @@
 #include "core/core_ir.h"
 #include "target/common/core_instruction_family.h"
 #include "target/common/core_scalar_conversion.h"
+#include "target/common/core_floating_shape.h"
 #include "target/common/lp64_scalar.h"
 #include "target/data_layout.h"
 
@@ -527,89 +528,20 @@ bool minic_multi_direct_floating_shape(
     const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
     size_t *integer_width, bool *integer_signed) {
-    MinicCoreValueId left, right, operand;
-    if (fn == NULL || ins == NULL)
+    MinicCoreFloatingShape shape;
+    if (!minic_core_floating_shape(fn, ins, &shape))
         return false;
-    switch (ins->kind) {
-    case MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT:
-        return direct_type_float(fn, ins->core_type_id, ins->type) ||
-               direct_type_double(fn, ins->core_type_id, ins->type) ||
-               direct_type_long_double(fn, ins->core_type_id, ins->type);
-    case MINIC_CORE_INSTRUCTION_DOUBLE_EQUAL:
-    case MINIC_CORE_INSTRUCTION_DOUBLE_LESS:
-    case MINIC_CORE_INSTRUCTION_DOUBLE_LESS_EQUAL:
-    case MINIC_CORE_INSTRUCTION_DOUBLE_ADD:
-    case MINIC_CORE_INSTRUCTION_DOUBLE_SUBTRACT:
-    case MINIC_CORE_INSTRUCTION_DOUBLE_MULTIPLY:
-    case MINIC_CORE_INSTRUCTION_DOUBLE_DIVIDE:
-        left = ins->value.binary.left;
-        right = ins->value.binary.right;
-        return (ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_EQUAL ||
-                ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_LESS ||
-                ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_LESS_EQUAL
-                    ? (fn->type_context != NULL
-                          ? direct_core_i32(fn, ins->core_type_id)
-                          : minic_type_equal(ins->type, minic_type_int()))
-                    : direct_type_double(fn, ins->core_type_id, ins->type)) &&
-               left < fn->value_count && right < fn->value_count &&
-               direct_type_double(fn, fn->values[left].core_type_id,
-                                  fn->values[left].type) &&
-               direct_type_double(fn, fn->values[right].core_type_id,
-                                  fn->values[right].type);
-    case MINIC_CORE_INSTRUCTION_FLOAT_ADD:
-    case MINIC_CORE_INSTRUCTION_FLOAT_SUBTRACT:
-    case MINIC_CORE_INSTRUCTION_FLOAT_MULTIPLY:
-    case MINIC_CORE_INSTRUCTION_FLOAT_DIVIDE:
-        left = ins->value.binary.left;
-        right = ins->value.binary.right;
-        return direct_type_float(fn, ins->core_type_id, ins->type) &&
-               left < fn->value_count && right < fn->value_count &&
-               direct_type_float(fn, fn->values[left].core_type_id,
-                                 fn->values[left].type) &&
-               direct_type_float(fn, fn->values[right].core_type_id,
-                                 fn->values[right].type);
-    case MINIC_CORE_INSTRUCTION_DOUBLE_NEGATE:
-        operand = ins->value.operand;
-        return direct_type_double(fn, ins->core_type_id, ins->type) &&
-               operand < fn->value_count &&
-               direct_type_double(fn, fn->values[operand].core_type_id,
-                                  fn->values[operand].type);
-    case MINIC_CORE_INSTRUCTION_DOUBLE_TO_FLOAT:
-        operand = ins->value.operand;
-        return direct_type_float(fn, ins->core_type_id, ins->type) &&
-               operand < fn->value_count &&
-               direct_type_double(fn, fn->values[operand].core_type_id,
-                                  fn->values[operand].type);
-    case MINIC_CORE_INSTRUCTION_FLOAT_TO_DOUBLE:
-        operand = ins->value.operand;
-        return direct_type_double(fn, ins->core_type_id, ins->type) &&
-               operand < fn->value_count &&
-               direct_type_float(fn, fn->values[operand].core_type_id,
-                                 fn->values[operand].type);
-    case MINIC_CORE_INSTRUCTION_INTEGER_TO_DOUBLE:
-        operand = ins->value.operand;
-        return program != NULL && target != NULL &&
-               integer_width != NULL && integer_signed != NULL &&
-               direct_type_double(fn, ins->core_type_id, ins->type) &&
-               operand < fn->value_count &&
-               direct_type_integer_width(program, target, fn,
-                   fn->values[operand].core_type_id, fn->values[operand].type,
-                   integer_width, integer_signed);
-    case MINIC_CORE_INSTRUCTION_DOUBLE_TO_INTEGER:
-        operand = ins->value.operand;
+    if (ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_TO_DOUBLE ||
+        ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_TO_INTEGER) {
         if (program == NULL || target == NULL ||
-            integer_width == NULL || integer_signed == NULL ||
-            operand >= fn->value_count ||
-            !direct_type_double(fn, fn->values[operand].core_type_id,
-                                fn->values[operand].type) ||
-            !direct_type_integer_width(program, target, fn,
-                ins->core_type_id, ins->type, integer_width, integer_signed))
+            integer_width == NULL || integer_signed == NULL)
             return false;
-        return *integer_width == 1U || *integer_width == 2U ||
-               *integer_width == 4U || *integer_width == 8U;
-    default:
-        return false;
+        *integer_width = shape.integer_bytes;
+        *integer_signed = shape.integer_signed;
+        if (ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_TO_INTEGER)
+            return *integer_width <= 8U;
     }
+    return true;
 }
 
 /* Scalar bitcast shape for direct LP64 lowering. Pointer->integer preserves
