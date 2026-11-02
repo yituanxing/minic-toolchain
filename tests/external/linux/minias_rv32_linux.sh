@@ -65,8 +65,8 @@ for ((i=0;i<${#args[@]};++i)); do
     case "$arg" in
         -march=*|-mabi=*) opts+=("$arg") ;;
         # GNU GCC passes its C/CPP include roots through to GAS as well.
-        # The generated .s may not use GAS .include/.incbin search paths;
-        # those cases are explicitly rejected before assembling below.
+        # GAS .include search is not implemented by MiniAS.  .incbin is
+        # supported from Kbuild's cwd; a missing data file fails closed.
         -I)
             if ((i+1<${#args[@]})); then
                 include_dirs+=("${args[i+1]}")
@@ -157,7 +157,7 @@ if [[ -z "$input" || -z "$output" ]]; then
     exit 2
 fi
 if ((${#include_dirs[@]})) &&
-   grep -Eq '^[[:space:]]*\.(include|incbin)([[:space:]]|$)' "$input"; then
+   grep -Eq '^[[:space:]]*\.include([[:space:]]|$)' "$input"; then
     echo 'MINIAS_RV32_AS=FAIL assembler_include_search_not_implemented' >&2
     preserve_failure assembler_include_search_not_implemented
     exit 2
