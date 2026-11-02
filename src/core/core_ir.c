@@ -1160,6 +1160,20 @@ bool minic_core_function_snapshot_types(MinicCoreFunction *function,
                                &function->values[index].core_type_id)) goto failed;
     for (index = 0U; index < function->instruction_count; ++index) {
         MinicCoreInstruction *instruction = &function->instructions[index];
+        if (instruction->kind == MINIC_CORE_INSTRUCTION_INTEGER_OVERFLOW) {
+            MinicType source_pointee;
+            const MinicCoreValueId address =
+                instruction->value.integer_overflow.result_address;
+            /* Verify ingress proof against the original source descriptor
+             * before publishing a Core-only function. No target re-queries
+             * C or treats an enum's underlying integer as an ordinary
+             * narrow-result ABI permission. */
+            if (address >= function->value_count ||
+                !minic_type_pointee(function->values[address].type,
+                                    &source_pointee) ||
+                instruction->value.integer_overflow.source_overflow_destination_ineligible !=
+                    minic_type_is_enum(source_pointee)) goto failed;
+        }
         if (!snapshot_one_type(context, resolver, user_data, instruction->type,
                                &instruction->core_type_id)) goto failed;
         if (instruction->kind == MINIC_CORE_INSTRUCTION_FIELD_ADDRESS) {

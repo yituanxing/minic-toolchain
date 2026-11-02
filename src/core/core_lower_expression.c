@@ -830,6 +830,8 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
         instruction.value.integer_overflow.left = left;
         instruction.value.integer_overflow.right = right;
         instruction.value.integer_overflow.result_address = result_address;
+        instruction.value.integer_overflow.source_overflow_destination_ineligible =
+            minic_type_is_enum(result_type);
         return minic_core_function_append_value_instruction(
                    context->function, context->block_id, &instruction, value_id)
                    ? MINIC_CORE_LOWER_OK

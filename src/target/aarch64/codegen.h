@@ -9,6 +9,8 @@
 #include <stdbool.h>
 #include <stddef.h>
 
+typedef struct MinicCoreModule MinicCoreModule;
+
 /* Real M1 narrow integer Core -> AArch64 GNU ELF emitter.
  * Unsupported operations never silently become another target's code. */
 bool minic_aarch64_write_c0_program_with_core_functions(
@@ -16,5 +18,11 @@ bool minic_aarch64_write_c0_program_with_core_functions(
     const MinicTargetInfo *target, const MinicCoreFunction *core_functions,
     size_t core_function_count, bool function_sections,
     MinicDiagnostic *diagnostic);
+
+bool minic_aarch64_write_c0_program_with_core_module(
+    const char *path, const MinicC0Program *program,
+    const MinicTargetInfo *target, const MinicCoreFunction *core_functions,
+    size_t core_function_count, bool function_sections,
+    const MinicCoreModule *module, MinicDiagnostic *diagnostic);
 
 #endif

@@ -921,6 +921,7 @@ done:
  * aliases, source asm and the physical ILP32 function ABI remain RV32-owned. */
 typedef struct Rv32ProgramContext {
     MinicDiagnostic *diagnostic;
+    const MinicCoreModule *module;
 } Rv32ProgramContext;
 
 static bool rv32_visit_global(
@@ -940,6 +941,29 @@ static bool rv32_visit_global(
             obj->name == NULL ? "<unnamed>" : obj->name,
             obj->initializer_count, obj->relocation_count,
             obj->is_zero_initialized ? 1U : 0U);
+        rv32_diag(ctx->diagnostic, "<rv32-global>", message);
+    }
+    return false;
+}
+
+static bool rv32_visit_module_global(
+    FILE *out, const MinicCoreModule *module, const MinicTargetInfo *target,
+    const MinicCoreModuleGlobal *global, size_t index, void *opaque) {
+    Rv32ProgramContext *ctx = opaque;
+    if (global->is_extern) {
+        if (global->is_alias)
+            return minic_multi_elf_emit_module_object_alias(
+                out, module, global, "@object");
+        return true;
+    }
+    if (minic_riscv32_emit_module_global(out, target, module, index))
+        return true;
+    {
+        char message[256];
+        (void)snprintf(message, sizeof(message),
+            "rv32i: unsupported module global object=%s fragments=%zu",
+            global->name != NULL ? global->name : "<unnamed>",
+            global->fragment_count);
         rv32_diag(ctx->diagnostic, "<rv32-global>", message);
     }
     return false;
@@ -1000,6 +1024,22 @@ static bool rv32_between(FILE *out, const MinicC0Program *program,
                          const MinicCoreFunction *functions, size_t count,
                          bool function_sections, void *opaque) {
     size_t i;
+    const Rv32ProgramContext *ctx = opaque;
+    if (ctx != NULL && ctx->module != NULL) {
+        const MinicCoreModule *module = ctx->module;
+        if (module->file_asm_count != 0U && fprintf(out, ".text\n") < 0)
+            return false;
+        for (i = 0U; i < module->file_asm_count; ++i) {
+            const MinicCoreModuleFileAsm *source = &module->file_asms[i];
+            if (source->text == NULL ||
+                fprintf(out, "# MINIC_SOURCE_FILE_ASM_BEGIN\n") < 0 ||
+                fwrite(source->text, 1U, source->length, out) != source->length ||
+                fprintf(out, "\n# MINIC_SOURCE_FILE_ASM_END\n") < 0)
+                return false;
+        }
+        return minic_multi_elf_emit_module_function_aliases(
+                   out, module, "@function") && fprintf(out, ".text\n") >= 0;
+    }
     if (program->file_asm_count != 0U && fprintf(out, ".text\n") < 0)
         return false;
     for (i = 0U; i < program->file_asm_count; ++i) {
@@ -1019,6 +1059,45 @@ static bool rv32_between(FILE *out, const MinicC0Program *program,
            fprintf(out, ".text\n") >= 0;
 }
 
+static bool rv32_write_core_program_impl(const char *path,
+                                      const MinicC0Program *program,
+                                      const MinicTargetInfo *target,
+                                      const MinicCoreFunction *functions,
+                                      size_t function_count,
+                                      bool function_sections,
+                                      const MinicCoreModule *module,
+                                      MinicDiagnostic *diagnostic) {
+    static const MinicProgramEmitConfig config = {
+        rv32_visit_global, rv32_visit_function, rv32_prefix, rv32_between,
+        NULL, NULL, MINIC_PROGRAM_FUNCTION_LIVE_DEFINITIONS, false
+    };
+    bool ok;
+    Rv32ProgramContext context = { diagnostic, module };
+    if (path == NULL || program == NULL || target == NULL ||
+        target->riscv_isa.xlen != 32U ||
+        target->riscv_isa.abi != MINIC_RISCV_ABI_ILP32 ||
+        function_count != program->function_count ||
+        (module != NULL &&
+         (module->global_count != program->global_object_count ||
+          module->function_count != function_count)) ||
+        (function_count != 0U && functions == NULL)) {
+        rv32_diag(diagnostic, "<rv32-abi>",
+                  "rv32i: unsupported file-scope inline ASM or invalid Core function map");
+        return false;
+    }
+    ok = module != NULL
+        ? minic_program_emit_write_module(
+            path, program, target, functions, function_count,
+            function_sections, &config, &context,
+            module, rv32_visit_module_global)
+        : minic_program_emit_write(
+            path, program, target, functions, function_count,
+            function_sections, &config, &context);
+    if (!ok && diagnostic != NULL && diagnostic->message[0] == '\0')
+        rv32_diag(diagnostic, path, "rv32i: emission failed");
+    return ok;
+}
+
 bool minic_riscv32_write_core_program(const char *path,
                                       const MinicC0Program *program,
                                       const MinicTargetInfo *target,
@@ -1026,25 +1105,19 @@ bool minic_riscv32_write_core_program(const char *path,
                                       size_t function_count,
                                       bool function_sections,
                                       MinicDiagnostic *diagnostic) {
-    static const MinicProgramEmitConfig config = {
-        rv32_visit_global, rv32_visit_function, rv32_prefix, rv32_between,
-        NULL, NULL, MINIC_PROGRAM_FUNCTION_LIVE_DEFINITIONS, false
-    };
-    bool ok;
-    Rv32ProgramContext context = { diagnostic };
-    if (path == NULL || program == NULL || target == NULL ||
-        target->riscv_isa.xlen != 32U ||
-        target->riscv_isa.abi != MINIC_RISCV_ABI_ILP32 ||
-        function_count != program->function_count ||
-        (function_count != 0U && functions == NULL)) {
-        rv32_diag(diagnostic, "<rv32-abi>",
-                  "rv32i: unsupported file-scope inline ASM or invalid Core function map");
-        return false;
-    }
-    ok = minic_program_emit_write(
+    return rv32_write_core_program_impl(path, program, target, functions,
+        function_count, function_sections, NULL, diagnostic);
+}
+
+bool minic_riscv32_write_core_module(const char *path,
+                                      const MinicC0Program *program,
+                                      const MinicTargetInfo *target,
+                                      const MinicCoreFunction *functions,
+                                      size_t function_count,
+                                      bool function_sections,
+                                      const MinicCoreModule *module,
+                                      MinicDiagnostic *diagnostic) {
+    return module != NULL && rv32_write_core_program_impl(
         path, program, target, functions, function_count,
-        function_sections, &config, &context);
-    if (!ok && diagnostic != NULL && diagnostic->message[0] == '\0')
-        rv32_diag(diagnostic, path, "rv32i: emission failed");
-    return ok;
+        function_sections, module, diagnostic);
 }

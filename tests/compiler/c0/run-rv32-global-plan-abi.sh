@@ -61,9 +61,14 @@ test ! -e "$work/mini-bad-section.s"
 if test -n "$baseline"; then
     "$baseline" --target=riscv32-linux -march=rv32i -mabi=ilp32 \
         -S "$work/positive.i" -o "$work/baseline.s"
-    if ! cmp -s "$work/baseline.s" "$work/mini.s"; then
-        echo 'RV32_GLOBAL_PLAN_DIFF=FAIL changed positive .s bytes' >&2
-        diff -u "$work/baseline.s" "$work/mini.s" || true
+    # A sealed ModuleIR contains only fragments that consume storage. GAS
+    # `.zero 0` consumes no bytes and has no relocation or symbol effect;
+    # compare every other directive byte-for-byte against the old emitter.
+    sed '/^  \.zero 0$/d' "$work/baseline.s" > "$work/baseline.normalized.s"
+    sed '/^  \.zero 0$/d' "$work/mini.s" > "$work/mini.normalized.s"
+    if ! cmp -s "$work/baseline.normalized.s" "$work/mini.normalized.s"; then
+        echo 'RV32_GLOBAL_PLAN_DIFF=FAIL changed positive .s bytes beyond zero-width no-op' >&2
+        diff -u "$work/baseline.normalized.s" "$work/mini.normalized.s" || true
         exit 1
     fi
     rm -f "$work/baseline-bad-section.s"

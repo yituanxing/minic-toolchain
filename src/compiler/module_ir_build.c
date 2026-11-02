@@ -1,0 +1,337 @@
+#include "compiler/module_ir_build.h"
+
+#include "target/common/global_emit.h"
+#include <stdint.h>
+#include <stdlib.h>
+#include <string.h>
+
+typedef struct MinicModuleFragmentSinkContext {
+    MinicCoreModuleGlobal *global;
+    const MinicC0Program *program;
+    const MinicTargetInfo *target;
+    size_t cursor;
+} MinicModuleFragmentSinkContext;
+
+static char *module_owned_string(const char *text, size_t length) {
+    char *copy;
+    if (text == NULL || length == SIZE_MAX) return NULL;
+    copy = malloc(length + 1U);
+    if (copy == NULL) return NULL;
+    if (length != 0U) (void)memcpy(copy, text, length);
+    copy[length] = '\0';
+    return copy;
+}
+
+static char *module_c_string(const char *text) {
+    return text != NULL ? module_owned_string(text, strlen(text)) : NULL;
+}
+
+static bool module_visibility(MinicSymbolVisibility source,
+                              MinicCoreModuleVisibility *output) {
+    if (output == NULL) return false;
+    switch (source) {
+    case MINIC_SYMBOL_VISIBILITY_DEFAULT:
+        *output = MINIC_CORE_MODULE_VISIBILITY_DEFAULT; return true;
+    case MINIC_SYMBOL_VISIBILITY_HIDDEN:
+        *output = MINIC_CORE_MODULE_VISIBILITY_HIDDEN; return true;
+    case MINIC_SYMBOL_VISIBILITY_INTERNAL:
+        *output = MINIC_CORE_MODULE_VISIBILITY_INTERNAL; return true;
+    case MINIC_SYMBOL_VISIBILITY_PROTECTED:
+        *output = MINIC_CORE_MODULE_VISIBILITY_PROTECTED; return true;
+    }
+    return false;
+}
+
+static bool module_default_section(const char *text,
+                                   MinicCoreModuleDefaultSection *output) {
+    if (text == NULL || output == NULL) return false;
+    if (strcmp(text, ".bss") == 0) *output = MINIC_CORE_MODULE_SECTION_BSS;
+    else if (strcmp(text, ".data") == 0) *output = MINIC_CORE_MODULE_SECTION_DATA;
+    else if (strcmp(text, ".section .rodata") == 0)
+        *output = MINIC_CORE_MODULE_SECTION_RODATA;
+    else if (strcmp(text, ".section .data.rel.ro") == 0)
+        *output = MINIC_CORE_MODULE_SECTION_RELRO;
+    else return false;
+    return true;
+}
+
+static bool module_payload_kind(MinicMultiGlobalPayloadKind source,
+                                MinicCoreModulePayloadKind *output) {
+    if (output == NULL) return false;
+    switch (source) {
+    case MINIC_MULTI_GLOBAL_PAYLOAD_ZERO:
+        *output = MINIC_CORE_MODULE_PAYLOAD_ZERO; return true;
+    case MINIC_MULTI_GLOBAL_PAYLOAD_ZERO_RELOCATIONS:
+        *output = MINIC_CORE_MODULE_PAYLOAD_ZERO_RELOCATIONS; return true;
+    case MINIC_MULTI_GLOBAL_PAYLOAD_RECORD_FLAT:
+        *output = MINIC_CORE_MODULE_PAYLOAD_RECORD_FLAT; return true;
+    case MINIC_MULTI_GLOBAL_PAYLOAD_RECORD_RECURSIVE:
+        *output = MINIC_CORE_MODULE_PAYLOAD_RECORD_RECURSIVE; return true;
+    case MINIC_MULTI_GLOBAL_PAYLOAD_RECORD_FLEXIBLE:
+        *output = MINIC_CORE_MODULE_PAYLOAD_RECORD_FLEXIBLE; return true;
+    case MINIC_MULTI_GLOBAL_PAYLOAD_ARRAY_RECORD:
+        *output = MINIC_CORE_MODULE_PAYLOAD_ARRAY_RECORD; return true;
+    case MINIC_MULTI_GLOBAL_PAYLOAD_ARRAY_RECURSIVE:
+        *output = MINIC_CORE_MODULE_PAYLOAD_ARRAY_RECURSIVE; return true;
+    case MINIC_MULTI_GLOBAL_PAYLOAD_ARRAY_SCALAR_RELOCATIONS:
+        *output = MINIC_CORE_MODULE_PAYLOAD_ARRAY_SCALAR_RELOCATIONS; return true;
+    case MINIC_MULTI_GLOBAL_PAYLOAD_SCALAR_RELOCATION:
+        *output = MINIC_CORE_MODULE_PAYLOAD_SCALAR_RELOCATION; return true;
+    case MINIC_MULTI_GLOBAL_PAYLOAD_SCALAR_BITS:
+        *output = MINIC_CORE_MODULE_PAYLOAD_SCALAR_BITS; return true;
+    }
+    return false;
+}
+
+static MinicCoreModuleFragment *module_push_fragment(
+    MinicModuleFragmentSinkContext *sink, size_t bytes,
+    MinicCoreModuleFragmentKind kind) {
+    MinicCoreModuleGlobal *global;
+    MinicCoreModuleFragment *fragment;
+    size_t capacity;
+    void *next;
+    if (sink == NULL || (global = sink->global) == NULL ||
+        bytes == 0U || sink->cursor > global->storage_size ||
+        bytes > global->storage_size - sink->cursor)
+        return NULL;
+    if (global->fragment_count == global->fragment_capacity) {
+        capacity = global->fragment_capacity == 0U
+            ? 16U : global->fragment_capacity * 2U;
+        if (capacity < global->fragment_capacity ||
+            capacity > SIZE_MAX / sizeof(*global->fragments)) return NULL;
+        next = realloc(global->fragments, capacity * sizeof(*global->fragments));
+        if (next == NULL) return NULL;
+        global->fragments = next;
+        global->fragment_capacity = capacity;
+    }
+    fragment = &global->fragments[global->fragment_count++];
+    (void)memset(fragment, 0, sizeof(*fragment));
+    fragment->kind = kind;
+    fragment->byte_offset = sink->cursor;
+    fragment->byte_count = bytes;
+    sink->cursor += bytes;
+    return fragment;
+}
+
+static bool module_sink_zero(void *context, size_t bytes) {
+    if (bytes == 0U) return true;
+    /* Preserve every semantic DataLayout segment boundary. In particular,
+     * independent 16-byte zeroed slots remain separate .zero directives. */
+    return module_push_fragment(context, bytes,
+                 MINIC_CORE_MODULE_FRAGMENT_ZERO) != NULL;
+}
+
+static bool module_sink_bits(void *context, MinicType source_type,
+                             size_t width, uint64_t bits) {
+    MinicCoreModuleFragment *fragment = module_push_fragment(
+        context, width, MINIC_CORE_MODULE_FRAGMENT_BITS);
+    if (fragment == NULL) return false;
+    fragment->bits = bits;
+    fragment->bits_signed_integer = width > 1U &&
+        !minic_type_is_float(source_type) &&
+        !minic_type_is_double(source_type) &&
+        !(minic_type_is_integer(source_type) &&
+          minic_type_is_unsigned_integer(source_type));
+    return true;
+}
+
+static bool module_sink_relocation(void *context,
+                                  const MinicGlobalRelocation *source,
+                                  size_t width) {
+    MinicModuleFragmentSinkContext *sink = context;
+    MinicCoreModuleFragment *fragment;
+    const char *symbol;
+    int64_t addend;
+    if (sink == NULL || source == NULL) return false;
+    fragment = module_push_fragment(sink, width,
+                                    MINIC_CORE_MODULE_FRAGMENT_RELOCATION);
+    if (fragment == NULL) return false;
+    if (source->target_kind == MINIC_GLOBAL_RELOCATION_LABEL) {
+        const MinicStatement *label = minic_c0_program_statement(
+            sink->program, source->target_id);
+        if (label == NULL || label->kind != MINIC_STATEMENT_LABEL) return false;
+        fragment->relocation_kind = MINIC_CORE_MODULE_RELOCATION_LABEL;
+        fragment->relocation_label_id = source->target_id;
+        return true;
+    }
+    symbol = minic_multi_global_relocation_target_name(sink->program, source);
+    if (symbol == NULL || symbol[0] == '\0' ||
+        !minic_data_layout_global_relocation_target_addend(
+            sink->target->data_layout, sink->program, source, &addend))
+        return false;
+    fragment->relocation_symbol = module_c_string(symbol);
+    if (fragment->relocation_symbol == NULL) return false;
+    fragment->relocation_addend = addend;
+    fragment->relocation_kind = source->target_kind == MINIC_GLOBAL_RELOCATION_OBJECT
+        ? MINIC_CORE_MODULE_RELOCATION_OBJECT
+        : MINIC_CORE_MODULE_RELOCATION_FUNCTION;
+    return source->target_kind == MINIC_GLOBAL_RELOCATION_OBJECT ||
+           source->target_kind == MINIC_GLOBAL_RELOCATION_FUNCTION;
+}
+
+static bool module_capture_global(MinicCoreModuleGlobal *destination,
+                                  const MinicC0Program *program,
+                                  const MinicTargetInfo *target,
+                                  MinicCoreTypeImporter *importer,
+                                  const MinicGlobalObject *source, size_t index) {
+    MinicMultiGlobalEmissionPlan plan;
+    MinicModuleFragmentSinkContext sink;
+    const MinicMultiGlobalPayloadSink callbacks = {
+        &sink, module_sink_zero, module_sink_bits, module_sink_relocation
+    };
+    const MinicGlobalObject *alias_target;
+    if (source->name == NULL ||
+        (destination->name = module_c_string(source->name)) == NULL ||
+        !module_visibility(source->visibility, &destination->visibility))
+        return false;
+    destination->section_name = module_c_string(source->section_name);
+    if (source->section_name != NULL && destination->section_name == NULL)
+        return false;
+    destination->alias_target_index = SIZE_MAX;
+    destination->owner_function_index = source->owner_function == MINIC_FUNCTION_INVALID
+        ? SIZE_MAX : (size_t)source->owner_function;
+    destination->is_extern = source->is_extern;
+    destination->is_internal = source->is_internal;
+    destination->is_weak = source->is_weak;
+    destination->is_read_only = source->is_read_only;
+    destination->is_zero_initialized = source->is_zero_initialized;
+    destination->is_tentative = source->is_tentative;
+    destination->is_block_scope_extern_only = source->is_block_scope_extern_only;
+    destination->force_emit = source->force_emit;
+    destination->is_thread_local = source->is_thread_local;
+    destination->explicit_alignment = source->explicit_alignment;
+    destination->initializer_slot_count = source->initializer_count;
+    destination->relocation_slot_count = source->relocation_count;
+    destination->emittable = minic_c0_program_global_object_emittable(program, source);
+    destination->is_alias = source->alias_target != MINIC_GLOBAL_OBJECT_INVALID;
+    destination->core_type_id = MINIC_CORE_TYPE_INVALID;
+    if (destination->is_alias) {
+        if (!source->is_extern || source->alias_target >= program->global_object_count ||
+            source->alias_target == index) return false;
+        alias_target = &program->global_objects[source->alias_target];
+        if (alias_target->is_extern || alias_target->is_tentative ||
+            !minic_c0_object_alias_types_compatible(program, source->type,
+                                                      alias_target->type))
+            return false;
+        destination->alias_target_index = source->alias_target;
+        destination->alias_target_name = module_c_string(alias_target->name);
+        if (destination->alias_target_name == NULL) return false;
+    }
+    if (!destination->emittable) return true;
+    if (!minic_core_type_import(importer, source->type,
+                                &destination->core_type_id)) return false;
+    if (destination->is_extern) return true;
+    if (!minic_multi_global_payload_plan_build(program, target, source, &plan) ||
+        !module_payload_kind(plan.payload_kind, &destination->payload_kind) ||
+        !module_default_section(plan.default_elf_section,
+                                &destination->default_section))
+        return false;
+    {
+        MinicMultiGlobalEmissionPlan common_plan;
+        destination->common_elf_bss_admitted =
+            minic_multi_global_emission_plan_build(
+                program, target, source, &common_plan);
+    }
+    destination->storage_size = plan.storage_size;
+    destination->storage_alignment = plan.storage_alignment;
+    sink.global = destination;
+    sink.program = program;
+    sink.target = target;
+    sink.cursor = 0U;
+    if (!minic_multi_global_payload_visit(program, target, source, &plan,
+                                         &callbacks) ||
+        sink.cursor != destination->storage_size)
+        return false;
+    return true;
+}
+
+static bool module_capture_function(MinicCoreModuleFunctionSymbol *destination,
+                                    const MinicC0Program *program,
+                                    const MinicFunction *source, size_t index) {
+    const char *symbol = minic_c0_function_symbol_name(source);
+    if (symbol == NULL || (destination->name = module_c_string(symbol)) == NULL ||
+        !module_visibility(source->visibility, &destination->visibility))
+        return false;
+    destination->section_name = module_c_string(source->section_name);
+    if (source->section_name != NULL && destination->section_name == NULL)
+        return false;
+    destination->explicit_alignment = source->explicit_alignment;
+    destination->is_defined = source->is_defined;
+    destination->is_internal = source->is_internal;
+    destination->is_referenced = source->is_referenced;
+    destination->is_weak = source->is_weak;
+    destination->is_constructor = source->is_constructor;
+    destination->is_variadic = source->is_variadic;
+    destination->is_noreturn = source->is_noreturn;
+    destination->alias_target_index = SIZE_MAX;
+    if (source->alias_target != MINIC_FUNCTION_INVALID) {
+        const MinicFunction *target;
+        if (source->is_defined || source->alias_target >= program->function_count ||
+            source->alias_target == index) return false;
+        target = &program->functions[source->alias_target];
+        if (!target->is_defined || target->alias_target != MINIC_FUNCTION_INVALID)
+            return false;
+        destination->alias_target_index = source->alias_target;
+        destination->alias_target_name = module_c_string(
+            minic_c0_function_symbol_name(target));
+        if (destination->alias_target_name == NULL) return false;
+    }
+    return true;
+}
+
+bool minic_core_module_build_from_program(MinicCoreModule *output,
+                                          const MinicC0Program *program,
+                                          const MinicTargetInfo *target,
+                                          MinicCoreTypeImporter *importer) {
+    MinicCoreModule staged;
+    size_t index;
+    if (output == NULL || program == NULL || target == NULL ||
+        target->data_layout == NULL || importer == NULL || importer->failed ||
+        importer->program != program || importer->context == NULL ||
+        program->global_object_count > SIZE_MAX / sizeof(*staged.globals) ||
+        program->function_count > SIZE_MAX / sizeof(*staged.function_symbols) ||
+        program->file_asm_count > SIZE_MAX / sizeof(*staged.file_asms))
+        return false;
+    minic_core_module_initialize(&staged);
+    staged.type_context = importer->context;
+    staged.global_count = program->global_object_count;
+    staged.function_count = program->function_count;
+    staged.file_asm_count = program->file_asm_count;
+    if (staged.global_count != 0U) {
+        staged.globals = calloc(staged.global_count, sizeof(*staged.globals));
+        if (staged.globals == NULL) goto failed;
+    }
+    if (staged.function_count != 0U) {
+        staged.function_symbols = calloc(staged.function_count,
+                                         sizeof(*staged.function_symbols));
+        if (staged.function_symbols == NULL) goto failed;
+    }
+    if (staged.file_asm_count != 0U) {
+        staged.file_asms = calloc(staged.file_asm_count, sizeof(*staged.file_asms));
+        if (staged.file_asms == NULL) goto failed;
+    }
+    for (index = 0U; index < staged.global_count; ++index)
+        if (!module_capture_global(&staged.globals[index], program, target,
+                                   importer, &program->global_objects[index], index))
+            goto failed;
+    for (index = 0U; index < staged.function_count; ++index)
+        if (!module_capture_function(&staged.function_symbols[index], program,
+                                     &program->functions[index], index))
+            goto failed;
+    for (index = 0U; index < staged.file_asm_count; ++index) {
+        const MinicFileAsm *source = &program->file_asms[index];
+        if (source->text == NULL || source->length == SIZE_MAX) goto failed;
+        staged.file_asms[index].text = module_owned_string(source->text,
+                                                            source->length);
+        staged.file_asms[index].length = source->length;
+        if (staged.file_asms[index].text == NULL) goto failed;
+    }
+    staged.finalized = true;
+    if (!minic_core_module_verify(&staged)) goto failed;
+    minic_core_module_destroy(output);
+    *output = staged;
+    return true;
+failed:
+    minic_core_module_destroy(&staged);
+    return false;
+}

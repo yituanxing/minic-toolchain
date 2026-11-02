@@ -404,6 +404,11 @@ typedef struct MinicCoreInstruction {
             MinicCoreValueId left;
             MinicCoreValueId right;
             MinicCoreValueId result_address;
+            /* Source admission proof captured once by lowering. Some source
+             * destinations (notably enums) have a valid Core integer
+             * execution representation but are ineligible for GNU checked
+             * arithmetic. Target never reopens the C pointee descriptor. */
+            bool source_overflow_destination_ineligible;
         } integer_overflow;
         MinicCoreValueId operand;
         /* An ABI cursor has independently addressable state. va_start

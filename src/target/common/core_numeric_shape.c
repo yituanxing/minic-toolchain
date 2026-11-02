@@ -25,6 +25,7 @@ static bool core_numeric_overflow_result(const MinicCoreFunction *fn,
     const MinicCoreType *type, *base;
     if (fn == NULL || fn->type_context == NULL || ins == NULL || pointee == NULL ||
         ins->kind != MINIC_CORE_INSTRUCTION_INTEGER_OVERFLOW ||
+        ins->value.integer_overflow.source_overflow_destination_ineligible ||
         (ins->value.integer_overflow.operator_kind != MINIC_CORE_INTEGER_OVERFLOW_ADD &&
          ins->value.integer_overflow.operator_kind != MINIC_CORE_INTEGER_OVERFLOW_SUBTRACT &&
          ins->value.integer_overflow.operator_kind != MINIC_CORE_INTEGER_OVERFLOW_MULTIPLY) ||
@@ -278,11 +279,9 @@ bool minic_core_integer_overflow_narrow_result_shape(
     address = ins->value.integer_overflow.result_address;
     if (fn->type_context != NULL) {
         MinicCoreTypeId result_id;
-        /* Narrow-overflow admission deliberately excludes source enums.
-         * Core flattens enums to ABI integers today; keep this sole source
-         * veto until enum-origin policy is captured at Core ingress. */
+        /* The shared Core overflow contract already excludes source-only
+         * ineligible destinations, including enum representation aliases. */
         if (address >= fn->value_count ||
-            minic_type_is_enum(fn->values[address].type) ||
             !core_numeric_overflow_result(fn, ins, &result_id) ||
             !core_numeric_integer(fn, result_id, &shape->result_width,
                                   &shape->result_signed) ||

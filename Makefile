@@ -68,6 +68,7 @@ TARGET_SOURCE_POLICY_SOURCES := \
 MINIC_SOURCES := \
 	src/compiler/compiler.c \
 	src/compiler/core_function_set.c \
+	src/compiler/module_ir_build.c \
 	src/compiler/inline_integer.c \
 	src/compiler/inline_symbolic.c \
 	src/compiler/inline_boolean.c \
@@ -75,6 +76,7 @@ MINIC_SOURCES := \
 	src/compiler/core_reachability.c \
 	src/core/core_ir.c \
 	src/core/core_type.c \
+	src/core/module_ir.c \
 	src/core/core_type_import.c \
 	src/core/core_ir_verify.c \
 	src/core/core_ir_dump.c \
@@ -162,6 +164,7 @@ MINIC_SOURCES := \
 	src/target/backend.c \
 	src/target/backend_core_usage.c \
 	src/target/common/global_emit.c \
+	src/target/common/module_global_emit.c \
 	src/target/common/direct_program_emit.c \
 	src/target/common/direct_preflight.c \
 	src/target/common/direct_function_profile.c \
@@ -1805,6 +1808,32 @@ check-aarch64-fp-pointer-record-abi: $(MINIC_CC_BINARY)
 	sh tests/compiler/c0/probe-aarch64-fp-pointer-record-abi.sh
 
 check-fast: check-aarch64-fp-pointer-record-abi
+
+.PHONY: check-core-overflow-enum-origin
+check-core-overflow-enum-origin: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" \
+	bash tests/compiler/c0/probe-core-overflow-enum-origin.sh
+
+check-fast: check-core-overflow-enum-origin
+
+.PHONY: check-recursive-zero-int128-global-source
+check-recursive-zero-int128-global-source: $(MINIC_CC_BINARY)
+	MINIC_RECURSIVE_INT128_SOURCE_ONLY=1 \
+	bash tests/compiler/c0/probe-recursive-zero-int128-global.sh \
+	"$(abspath $(MINIC_CC_BINARY))"
+
+check-fast: check-recursive-zero-int128-global-source
+
+.PHONY: check-core-module-rollback
+check-core-module-rollback:
+	@mkdir -p "$(BUILD_DIR)/tests/core"
+	$(CC) $(CPPFLAGS) $(MINIC_INCLUDES) $(MINIC_CFLAGS) \
+		tests/core/module_ir_rollback_test.c \
+		src/core/module_ir.c src/core/core_type.c $(MINIC_LDFLAGS) \
+		-o "$(BUILD_DIR)/tests/core/module-ir-rollback"
+	"$(abspath $(BUILD_DIR))/tests/core/module-ir-rollback"
+
+check-fast: check-core-module-rollback
 
 .PHONY: check-loongarch64-linux-va-fixed-overflow
 check-loongarch64-linux-va-fixed-overflow: $(MINIC_CC_BINARY)

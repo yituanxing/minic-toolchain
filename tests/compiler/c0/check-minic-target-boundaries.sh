@@ -691,6 +691,8 @@ has src/target/common/direct_instruction_semantics.c 'MINIC_CORE_FAMILY_FLOATING
 has src/target/common/program_visit.h 'minic_program_visit_globals('
 has src/target/common/program_visit.h 'minic_program_visit_functions('
 has src/target/common/program_visit.h 'minic_program_visit_prepared_functions('
+has src/target/common/program_visit.h 'minic_program_visit_prepared_functions_module('
+has src/target/common/program_visit.h 'minic_program_visit_module_globals('
 # All five machine backends must borrow one visitor-owned per-function Core
 # object plan, not repeat layout scans. Each target keeps its own psABI frame.
 has src/target/common/core_function_plan.c 'minic_core_object_storage_plan_build('
@@ -908,17 +910,18 @@ lacks src/target/loongarch64/codegen.c 'minic_multi_direct_lp64_function_plan_pr
 # global/Core visit order and partial-output removal are ONE common transaction.
 exists src/target/common/program_emit.h
 has src/target/common/program_emit.h 'minic_program_visit_globals('
-has src/target/common/program_emit.h 'minic_program_visit_prepared_functions('
+has src/target/common/program_emit.h 'minic_program_visit_prepared_functions_module('
+has src/target/common/program_emit.h 'minic_program_emit_write_module('
 has src/target/common/program_emit.h 'if (!ok) (void)remove(temporary);'
 lacks src/target/common/program_emit.h 'out = fopen(path, "wb");'
-has src/target/common/direct_program_emit.c 'minic_program_emit_write('
+has src/target/common/direct_program_emit.c 'minic_program_emit_write_module('
 for backend in x86_64 riscv32 riscv64; do
   case "$backend" in
     x86_64) owner=src/target/x86_64/codegen.c ;;
     riscv32) owner=src/target/riscv32/rv32_emit.c ;;
     riscv64) owner=src/target/riscv64/codegen_function.c ;;
   esac
-  has "$owner" 'minic_program_emit_write('
+  has "$owner" 'minic_program_emit_write_module('
   lacks "$owner" 'fopen(path, "wb")'
   lacks "$owner" '(void)remove(path)'
 done
@@ -992,6 +995,16 @@ cc -std=c11 -O2 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror \
 # RV64 LP64/LP64D call and return classification depends on the attached
 # neutral CoreType graph, including union and soft/hard-float exceptions.
 bash tests/compiler/c0/probe-rv64-coretype-abi.sh
+
+# Immutable ModuleIR globals have one byte-accurate fragment walk shared by
+# all five targets; malformed ordering, size and relocation widths fail.
+cc -std=c11 -O2 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror \
+  -ffunction-sections -fdata-sections -Wl,--gc-sections \
+  -Iinclude -Isrc tests/compiler/c0/probe-module-global-fragments.c \
+  src/target/common/module_global_emit.c \
+  src/target/common/global_emit.c \
+  -o "$work/module-global-fragments-probe"
+"$work/module-global-fragments-probe"
 
 cc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror \
   -ffunction-sections -fdata-sections -Wl,--gc-sections \

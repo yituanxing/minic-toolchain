@@ -73,6 +73,131 @@ static bool finalize(const char *path, const MinicTargetInfo *t,
            strcmp(data, "P\nG\nB\nF\nT\n") == 0 &&
            ctx->fail_stage != 5U;
 }
+
+typedef struct ModuleTestContext {
+    const MinicCoreModule *module;
+    size_t globals;
+} ModuleTestContext;
+
+static bool module_global(FILE *out, const MinicCoreModule *module,
+                          const MinicTargetInfo *target,
+                          const MinicCoreModuleGlobal *object,
+                          size_t ordinal, void *opaque) {
+    ModuleTestContext *context = opaque;
+    (void)target;
+    if (module != context->module || ordinal != 0U || object == NULL ||
+        object->name == NULL || strcmp(object->name, "owned") != 0)
+        return false;
+    ++context->globals;
+    return fprintf(out, "G:%s\n", object->name) >= 0;
+}
+
+static bool module_between(FILE *out, const MinicC0Program *program,
+                           const MinicTargetInfo *target,
+                           const MinicCoreFunction *functions,
+                           size_t function_count, bool sections, void *opaque) {
+    const ModuleTestContext *context = opaque;
+    (void)program; (void)target; (void)functions; (void)function_count;
+    (void)sections;
+    return minic_program_emit_source_file_asm_module(out, context->module);
+}
+
+/* An attached program transaction must be immune to C Program global,
+ * relocation, function declaration and file-ASM mutation after ModuleIR
+ * publication. The Core module alone owns its symbol-use evidence. */
+static int check_module_snapshot_output(const char *path) {
+    MinicCoreModuleFragment fragment = {
+        .kind = MINIC_CORE_MODULE_FRAGMENT_RELOCATION,
+        .byte_count = 8U,
+        .relocation_kind = MINIC_CORE_MODULE_RELOCATION_OBJECT,
+        .relocation_symbol = "weak_ext"
+    };
+    MinicCoreModuleGlobal globals[4] = {
+        { .name = "owned", .emittable = true, .fragments = &fragment,
+          .fragment_count = 1U },
+        { .name = "weak_ext", .is_extern = true, .is_weak = true,
+          .visibility = MINIC_CORE_MODULE_VISIBILITY_HIDDEN },
+        { .name = "unused_hidden", .is_extern = true,
+          .visibility = MINIC_CORE_MODULE_VISIBILITY_HIDDEN },
+        { .name = "asm_weak", .is_extern = true, .is_weak = true,
+          .visibility = MINIC_CORE_MODULE_VISIBILITY_HIDDEN }
+    };
+    MinicCoreModuleFileAsm file_asm = { " .quad asm_weak", 15U };
+    MinicCoreModule module = {
+        .globals = globals, .global_count = 4U,
+        .file_asms = &file_asm, .file_asm_count = 1U,
+        .finalized = true
+    };
+    MinicGlobalObject poison = { .name = "poison_source_global" };
+    MinicFileAsm poison_asm = { .text = ".quad poison_source_asm", .length = 23U };
+    MinicC0Program program = {
+        .global_objects = &poison, .global_object_count = 1U,
+        .file_asms = &poison_asm, .file_asm_count = 1U
+    };
+    MinicTargetInfo target = {0};
+    MinicProgramEmitConfig config = {
+        .emit_global = global,
+        .emit_function = function,
+        .between = module_between,
+        .trailer = "T\n",
+        .selection = MINIC_PROGRAM_FUNCTION_LIVE_DEFINITIONS
+    };
+    ModuleTestContext context = { .module = &module };
+    FILE *in;
+    char data[4096] = {0};
+    size_t count;
+    if (!minic_program_emit_write_module(
+            path, &program, &target, NULL, 0U, false,
+            &config, &context, &module, module_global)) return 1;
+    in = fopen(path, "rb");
+    if (in == NULL) return 2;
+    count = fread(data, 1U, sizeof(data) - 1U, in);
+    if (fclose(in) != 0 || count == 0U || context.globals != 1U ||
+        strstr(data, ".weak weak_ext\n.hidden weak_ext\n") == NULL ||
+        strstr(data, ".weak asm_weak\n.hidden asm_weak\n") == NULL ||
+        strstr(data, "G:owned\n") == NULL ||
+        strstr(data, ".text\n .quad asm_weak\n.text\n") == NULL ||
+        strstr(data, "unused_hidden") != NULL ||
+        strstr(data, "poison_source") != NULL) return 3;
+    module.finalized = false;
+    if (minic_program_emit_write_module(
+            path, &program, &target, NULL, 0U, false,
+            &config, &context, &module, module_global)) return 4;
+    module.finalized = true;
+    fragment.relocation_symbol = NULL;
+    if (minic_program_emit_write_module(
+            path, &program, &target, NULL, 0U, false,
+            &config, &context, &module, module_global)) return 8;
+    fragment.relocation_symbol = "weak_ext";
+    {
+        MinicCoreModuleFunctionSymbol symbols[2] = {
+            { .name = "real_fn", .is_defined = true, .alias_target_index = SIZE_MAX },
+            { .name = "alias_fn", .alias_target_index = 0U,
+              .alias_target_name = "real_fn" }
+        };
+        MinicCoreModuleGlobal alias = {
+            .name = "alias_obj", .is_extern = true, .is_alias = true,
+            .alias_target_index = 0U, .alias_target_name = "owned"
+        };
+        FILE *tmp = tmpfile();
+        if (tmp == NULL) return 5;
+        module.function_symbols = symbols;
+        module.function_count = 2U;
+        if (!minic_multi_elf_emit_module_object_alias(
+                tmp, &module, &alias, "@object") ||
+            !minic_multi_elf_emit_module_function_aliases(
+                tmp, &module, "@function") || fseek(tmp, 0L, SEEK_SET) != 0)
+            { (void)fclose(tmp); return 6; }
+        (void)memset(data, 0, sizeof(data));
+        count = fread(data, 1U, sizeof(data) - 1U, tmp);
+        if (fclose(tmp) != 0 || count == 0U ||
+            strstr(data, ".set alias_obj, owned\n") == NULL ||
+            strstr(data, ".set alias_fn, real_fn\n") == NULL) return 7;
+    }
+    (void)remove(path);
+    return 0;
+}
+
 int main(int argc, char **argv) {
     MinicGlobalObject object = {0};
     MinicFunction declaration = {0};
@@ -158,6 +283,8 @@ int main(int argc, char **argv) {
             return 21;
         }
     }
+    if (check_module_snapshot_output(path) != 0) return 50;
+    puts("MINIC_CORE_MODULE_SYMBOL_TRANSACTION=PASS no_C_program_global=file_asm=1 weak_hidden=2 alias=2 invalid_reject=2");
     (void)remove(path);
     /* Errors at every stage must leave the previous successful output
      * untouched; this distinguishes atomic replacement from unlink rollback. */

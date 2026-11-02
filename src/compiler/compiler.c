@@ -402,10 +402,22 @@ int minic_compile_preprocessed_file_for_target(const char *input_path,
                                     program.function_count);
     }
     if (success) {
+        /* Finalize TU globals only after both Core reachability pruning
+         * and C DataLayout validation. All target consumers then see a
+         * sealed, source-independent global/relocation fragment stream. */
+        if (!minic_finalize_core_function_set_module(
+                &program, target_info, &core_set)) {
+            minic_set_diagnostic(diagnostic, input_path, 1U, 1U,
+                                 "cannot snapshot Core module globals");
+            success = false;
+        }
+    }
+    if (success) {
         minic_bootstrap_trace_stage(input_path, "codegen", "begin", program.function_count);
-        success = minic_backend_emit_assembly(
+        success = minic_backend_emit_assembly_with_module(
             backend, output_path, &program, target_info, core_set.functions,
-            core_set.function_count, function_sections, diagnostic);
+            core_set.function_count, function_sections, &core_set.module,
+            diagnostic);
         minic_bootstrap_trace_stage(input_path,
                                     "codegen",
                                     success ? "end-ok" : "end-fail",

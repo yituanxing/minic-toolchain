@@ -2,6 +2,7 @@
 #include "target/riscv64/global_emit.h"
 #include "target/riscv64/isa.h"
 #include "target/common/global_emit.h"
+#include "target/common/module_global_emit.h"
 #include "target/riscv64/abi.h"
 #include "target/riscv64/codegen_internal.h"
 #include "target/riscv64/core_codegen.h"
@@ -206,16 +207,22 @@ static bool minic_riscv64_emit_planned_payload(
         minic_riscv64_emit_shared_bits);
 }
 
-bool minic_riscv64_emit_file_asm(FILE *file, const MinicFileAsm *file_asm) {
-    if (file == NULL || file_asm == NULL ||
-        !minic_riscv64_source_asm_marker_safe(file_asm->text, file_asm->length)) {
+bool minic_riscv64_emit_file_asm_bytes(FILE *file, const char *text,
+                                       size_t length) {
+    if (file == NULL || text == NULL ||
+        !minic_riscv64_source_asm_marker_safe(text, length)) {
         return false;
     }
-    if (file_asm->length != 0U &&
-        fwrite(file_asm->text, 1U, file_asm->length, file) != file_asm->length) {
+    if (length != 0U && fwrite(text, 1U, length, file) != length) {
         return false;
     }
     return fputc('\n', file) != EOF;
+}
+
+bool minic_riscv64_emit_file_asm(FILE *file, const MinicFileAsm *file_asm) {
+    return file_asm != NULL &&
+        minic_riscv64_emit_file_asm_bytes(
+            file, file_asm->text, file_asm->length);
 }
 
 static bool minic_riscv64_zero_size_object_definition(const MinicC0Program *program,
@@ -370,5 +377,154 @@ bool minic_riscv64_emit_global_object(FILE *file,
                    file, program, target, object, &plan))
         return false;
     return fprintf(file, ".size %s, %zu\n", object->name, storage_size) >= 0;
+}
+
+/* The legacy C global serializer above remains for standalone source-policy
+ * fixtures. A production translation unit hands us a sealed ModuleIR object:
+ * byte spans, final ABI layout, symbols and checked relocation addends are
+ * already owned by Core. RV64 still independently enforces its historical
+ * narrower admission envelope before selecting GNU data directives. */
+static const MinicCoreType *rv64_module_core_base(
+    const MinicCoreTypeContext *types, MinicCoreTypeId id) {
+    return minic_core_type_get(types, minic_core_type_unqualified(types, id));
+}
+
+static bool rv64_module_symbol_safe(const char *name) {
+    const unsigned char *p = (const unsigned char *)name;
+    if (p == NULL || *p == '\0') return false;
+    for (; *p != '\0'; ++p)
+        if (!((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') ||
+              (*p >= '0' && *p <= '9') || *p == '_' || *p == '.' || *p == '$'))
+            return false;
+    return true;
+}
+
+static bool rv64_module_array_recursive(
+    const MinicCoreTypeContext *types, const MinicCoreType *type) {
+    const MinicCoreType *element;
+    if (type == NULL || type->kind != MINIC_CORE_TYPE_ARRAY) return false;
+    element = rv64_module_core_base(types, type->value.array.element);
+    return element != NULL && (element->kind == MINIC_CORE_TYPE_RECORD ||
+                               element->kind == MINIC_CORE_TYPE_ARRAY);
+}
+
+static bool rv64_module_scalar_width(
+    const MinicCoreTypeContext *types, const MinicCoreType *type,
+    size_t *width) {
+    while (type != NULL && type->kind == MINIC_CORE_TYPE_ARRAY)
+        type = rv64_module_core_base(types, type->value.array.element);
+    if (type == NULL || !type->has_layout ||
+        (type->kind != MINIC_CORE_TYPE_INTEGER &&
+         type->kind != MINIC_CORE_TYPE_POINTER &&
+         !(type->kind == MINIC_CORE_TYPE_FLOAT &&
+           (type->value.floating.format == MINIC_CORE_FLOAT_BINARY32 ||
+            type->value.floating.format == MINIC_CORE_FLOAT_BINARY64))) ||
+        (type->size != 1U && type->size != 2U &&
+         type->size != 4U && type->size != 8U)) return false;
+    *width = type->size;
+    return true;
+}
+
+static bool rv64_module_zero_extent_legal(const MinicCoreType *type) {
+    return type != NULL &&
+        ((type->kind == MINIC_CORE_TYPE_RECORD &&
+          type->value.record.is_complete && type->value.record.field_count == 0U) ||
+         (type->kind == MINIC_CORE_TYPE_ARRAY &&
+          (type->value.array.is_zero_length || type->value.array.count != 0U)));
+}
+
+static bool rv64_module_admit_global(const MinicCoreModule *module,
+                                    const MinicCoreModuleGlobal *global) {
+    const MinicCoreType *type;
+    size_t scalar_width;
+    bool zero_extent;
+    if (module == NULL || module->type_context == NULL || global == NULL ||
+        !rv64_module_symbol_safe(global->name) || global->is_extern ||
+        global->is_alias || global->is_thread_local ||
+        (global->is_internal && global->is_weak) ||
+        global->storage_alignment == 0U ||
+        (type = rv64_module_core_base(module->type_context,
+                                      global->core_type_id)) == NULL)
+        return false;
+    zero_extent = global->storage_size == 0U && rv64_module_zero_extent_legal(type);
+    if (global->storage_size == 0U && !zero_extent) return false;
+    if (zero_extent) {
+        if (global->initializer_slot_count != 0U ||
+            global->relocation_slot_count != 0U) return false;
+    } else if (global->is_zero_initialized || global->is_tentative) {
+        if (global->initializer_slot_count != 0U) return false;
+    } else if (type->kind == MINIC_CORE_TYPE_RECORD) {
+        if (!type->value.record.is_complete ||
+            global->initializer_slot_count == 0U) return false;
+    } else if (rv64_module_array_recursive(module->type_context, type) ||
+               (type->kind == MINIC_CORE_TYPE_ARRAY &&
+                global->relocation_slot_count != 0U)) {
+        if (global->initializer_slot_count == 0U) return false;
+    } else if (global->relocation_slot_count != 0U ||
+               !rv64_module_scalar_width(module->type_context, type,
+                                          &scalar_width) ||
+               global->initializer_slot_count >
+                    global->storage_size / scalar_width) {
+        return false;
+    }
+    return true;
+}
+
+static const char *rv64_module_visibility(MinicCoreModuleVisibility visibility) {
+    switch (visibility) {
+    case MINIC_CORE_MODULE_VISIBILITY_DEFAULT: return NULL;
+    case MINIC_CORE_MODULE_VISIBILITY_HIDDEN: return ".hidden";
+    case MINIC_CORE_MODULE_VISIBILITY_INTERNAL: return ".internal";
+    case MINIC_CORE_MODULE_VISIBILITY_PROTECTED: return ".protected";
+    default: return NULL;
+    }
+}
+
+bool minic_riscv64_emit_module_global(FILE *file, const MinicTargetInfo *target,
+                                      const MinicCoreModule *module, size_t ordinal) {
+    const MinicCoreModuleGlobal *global;
+    unsigned int alignment_power;
+    const char *visibility;
+    if (file == NULL || target == NULL ||
+        target->architecture != MINIC_TARGET_ARCH_RISCV64 ||
+        target->data_layout == NULL || target->data_layout->pointer_size != 8U ||
+        module == NULL || !module->finalized ||
+        ordinal >= module->global_count || module->globals == NULL)
+        return false;
+    global = &module->globals[ordinal];
+    if (!rv64_module_admit_global(module, global) ||
+        !minic_riscv64_alignment_power(global->storage_alignment, &alignment_power) ||
+        (global->visibility != MINIC_CORE_MODULE_VISIBILITY_DEFAULT &&
+         rv64_module_visibility(global->visibility) == NULL)) return false;
+    if (global->section_name != NULL) {
+        if (!minic_multi_elf_safe_section_name(global->section_name) ||
+            fprintf(file, ".section %s,\"%s\",@progbits\n",
+                    global->section_name,
+                    global->is_read_only ? "a" : "aw") < 0) return false;
+    } else if (fprintf(file, "%s\n",
+                       global->is_read_only
+                           ? (global->relocation_slot_count != 0U
+                                ? ".section .data.rel.ro" : ".section .rodata")
+                           : ".data") < 0) {
+        return false;
+    }
+    if (!global->is_internal) {
+        visibility = rv64_module_visibility(global->visibility);
+        if (fprintf(file, "%s %s\n", global->is_weak ? ".weak" : ".globl",
+                    global->name) < 0 ||
+            (visibility != NULL &&
+             fprintf(file, "%s %s\n", visibility, global->name) < 0))
+            return false;
+    }
+    if (fprintf(file, ".type %s, @object\n.align %u\n%s:\n",
+                global->name, alignment_power, global->name) < 0)
+        return false;
+    /* GNU zero-extent definitions contain no payload directives. */
+    if (global->storage_size != 0U &&
+        !minic_multi_module_emit_global_fragments(
+            file, global, minic_riscv64_integer_data_directive, true, 8U))
+        return false;
+    return fprintf(file, ".size %s, %zu\n",
+                   global->name, global->storage_size) >= 0;
 }
 

@@ -1,5 +1,6 @@
 #include "compiler/core_function_set.h"
 #include "core/core_type_import.h"
+#include "compiler/module_ir_build.h"
 #include "core/reentry_index.h"
 #include "frontend/function_body.h"
 #include <stdint.h>
@@ -30,6 +31,8 @@ void minic_core_function_set_initialize(MinicCoreFunctionSet *set) {
     set->statuses = NULL;
     set->function_count = 0U;
     set->type_context = NULL;
+    set->type_importer = NULL;
+    minic_core_module_initialize(&set->module);
 }
 
 void minic_core_function_set_destroy(MinicCoreFunctionSet *set) {
@@ -45,6 +48,11 @@ void minic_core_function_set_destroy(MinicCoreFunctionSet *set) {
     }
     free(set->functions);
     free(set->statuses);
+    minic_core_module_destroy(&set->module);
+    if (set->type_importer != NULL) {
+        minic_core_type_importer_destroy(set->type_importer);
+        free(set->type_importer);
+    }
     if (set->type_context != NULL) {
         minic_core_type_context_destroy(set->type_context);
         free(set->type_context);
@@ -59,7 +67,7 @@ bool minic_prepare_core_function_set(const MinicC0Program *program,
                                             const MinicTargetInfo *target,
                                             MinicCoreFunctionSet *output) {
     MinicCoreFunctionSet set;
-    MinicCoreTypeImporter importer;
+    MinicCoreTypeImporter *importer;
     MinicCoreReentryIndex *index;
     size_t function_index;
 
@@ -72,9 +80,14 @@ bool minic_prepare_core_function_set(const MinicC0Program *program,
     set.type_context = (MinicCoreTypeContext *)malloc(sizeof(*set.type_context));
     if (set.type_context == NULL) return false;
     minic_core_type_context_initialize(set.type_context);
-    if (!minic_core_type_importer_initialize(&importer, program,
+    set.type_importer = malloc(sizeof(*set.type_importer));
+    if (set.type_importer == NULL) {
+        minic_core_function_set_destroy(&set);
+        return false;
+    }
+    importer = set.type_importer;
+    if (!minic_core_type_importer_initialize(importer, program,
                                             target->data_layout, set.type_context)) {
-        minic_core_type_importer_destroy(&importer);
         minic_core_function_set_destroy(&set);
         return false;
     }
@@ -85,7 +98,6 @@ bool minic_prepare_core_function_set(const MinicC0Program *program,
         set.statuses = (MinicCoreLowerStatus *)malloc(set.function_count *
                                                        sizeof(*set.statuses));
         if (set.functions == NULL || set.statuses == NULL) {
-            minic_core_type_importer_destroy(&importer);
             minic_core_function_set_destroy(&set);
             return false;
         }
@@ -130,7 +142,7 @@ bool minic_prepare_core_function_set(const MinicC0Program *program,
         if (set.statuses[function_index] == MINIC_CORE_LOWER_OK &&
             (!minic_core_function_snapshot_types(
                 &set.functions[function_index], set.type_context,
-                minic_core_set_import_type, &importer) ||
+                minic_core_set_import_type, importer) ||
              !minic_core_function_verify(&set.functions[function_index]))) {
             set.statuses[function_index] = MINIC_CORE_LOWER_ERROR;
         }
@@ -150,8 +162,25 @@ bool minic_prepare_core_function_set(const MinicC0Program *program,
         }
     }
     minic_core_reentry_index_destroy(index);
-    minic_core_type_importer_destroy(&importer);
     minic_core_function_set_destroy(output);
     *output = set;
     return true;
+}
+
+bool minic_finalize_core_function_set_module(const MinicC0Program *program,
+                                            const MinicTargetInfo *target,
+                                            MinicCoreFunctionSet *set) {
+    bool ok;
+    if (program == NULL || target == NULL || set == NULL ||
+        set->type_importer == NULL || set->type_context == NULL ||
+        set->module.finalized || set->function_count != program->function_count)
+        return false;
+    ok = minic_core_module_build_from_program(
+        &set->module, program, target, set->type_importer);
+    /* The Core module is immutable after construction. Release the last
+     * compiler-only AST importer before entering target emission. */
+    minic_core_type_importer_destroy(set->type_importer);
+    free(set->type_importer);
+    set->type_importer = NULL;
+    return ok;
 }

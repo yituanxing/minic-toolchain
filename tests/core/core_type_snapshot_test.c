@@ -13,8 +13,8 @@
 } while (0)
 
 typedef struct TypeIds {
-    MinicCoreTypeId i32, u32, record_a, record_b, incomplete_record;
-    MinicCoreTypeId ptr_record_a, ptr_record_b, ptr_i32;
+    MinicCoreTypeId boolean, i8, i32, u32, record_a, record_b, incomplete_record;
+    MinicCoreTypeId ptr_record_a, ptr_record_b, ptr_i8, ptr_i32;
     MinicCoreTypeId function_a, function_b, ptr_function_a;
 } TypeIds;
 
@@ -25,6 +25,15 @@ static bool make_type_context(MinicCoreTypeContext *context, TypeIds *ids) {
     minic_core_type_context_initialize(context);
     type.kind = MINIC_CORE_TYPE_INTEGER;
     type.has_layout = true;
+    type.size = 1U;
+    type.alignment = 1U;
+    type.value.integer.bit_width = 1U;
+    type.value.integer.is_bool = true;
+    if (!minic_core_type_register(context, &type, &ids->boolean)) return false;
+    type.value.integer.bit_width = 8U;
+    type.value.integer.is_bool = false;
+    type.value.integer.is_signed = true;
+    if (!minic_core_type_register(context, &type, &ids->i8)) return false;
     type.size = 4U;
     type.alignment = 4U;
     type.value.integer.bit_width = 32U;
@@ -49,6 +58,8 @@ static bool make_type_context(MinicCoreTypeContext *context, TypeIds *ids) {
     if (!minic_core_type_register(context, &type, &ids->ptr_record_b)) return false;
     type.value.pointer.pointee = ids->i32;
     if (!minic_core_type_register(context, &type, &ids->ptr_i32)) return false;
+    type.value.pointer.pointee = ids->i8;
+    if (!minic_core_type_register(context, &type, &ids->ptr_i8)) return false;
 
     field.type_id = ids->i32;
     field.byte_offset = 8U;
@@ -257,6 +268,59 @@ static bool build_simple_function(MinicCoreFunction *function) {
     return minic_core_function_set_terminator(function, block, &terminator);
 }
 
+/* A source enum pointer is represented as a plain Core i8 pointer. The
+ * ingress must authenticate its source-eligibility fact before attaching
+ * the function; otherwise AArch64's supported i8 overflow mode could
+ * silently accept a C-invalid enum destination. */
+static bool build_enum_overflow_function(MinicCoreFunction *function) {
+    MinicType parameter_types[3];
+    MinicCoreBlockId block;
+    MinicCoreValueId values[3], result;
+    MinicCoreInstruction instruction = {0};
+    MinicCoreTerminator terminator = {0};
+    size_t i;
+    minic_core_function_initialize(function);
+    parameter_types[0] = minic_type_int();
+    parameter_types[1] = minic_type_int();
+    if (!minic_type_pointer_to(minic_type_enum(17U), &parameter_types[2]) ||
+        !minic_core_function_set_signature(function, "enumcheck", 9U,
+                                           minic_type_bool(), parameter_types, 3U) ||
+        !minic_core_function_add_block(function, &block)) return false;
+    for (i = 0U; i < 3U; ++i) {
+        instruction.kind = MINIC_CORE_INSTRUCTION_PARAMETER;
+        instruction.type = parameter_types[i];
+        instruction.value.parameter_index = i;
+        if (!minic_core_function_append_value_instruction(
+                function, block, &instruction, &values[i])) return false;
+    }
+    (void)memset(&instruction, 0, sizeof(instruction));
+    instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_OVERFLOW;
+    instruction.type = minic_type_bool();
+    instruction.value.integer_overflow.operator_kind = MINIC_CORE_INTEGER_OVERFLOW_ADD;
+    instruction.value.integer_overflow.left = values[0];
+    instruction.value.integer_overflow.right = values[1];
+    instruction.value.integer_overflow.result_address = values[2];
+    instruction.value.integer_overflow.source_overflow_destination_ineligible = true;
+    if (!minic_core_function_append_value_instruction(
+            function, block, &instruction, &result)) return false;
+    terminator.kind = MINIC_CORE_TERMINATOR_RETURN;
+    terminator.return_value = result;
+    terminator.return_object = MINIC_CORE_OBJECT_INVALID;
+    return minic_core_function_set_terminator(function, block, &terminator);
+}
+
+static bool resolve_enum_overflow_type(void *data, MinicType source,
+                                       MinicCoreTypeId *id) {
+    const TypeIds *ids = data;
+    MinicType pointee;
+    if (minic_type_equal(source, minic_type_bool())) *id = ids->boolean;
+    else if (minic_type_equal(source, minic_type_int())) *id = ids->i32;
+    else if (minic_type_pointee(source, &pointee) && minic_type_is_enum(pointee))
+        *id = ids->ptr_i8;
+    else return false;
+    return true;
+}
+
 int main(void) {
     MinicCoreTypeContext context;
     TypeIds ids = {0};
@@ -346,7 +410,19 @@ int main(void) {
     CHECK(function.values[value].core_type_id == ids.i32);
     CHECK(function.instructions[0].core_type_id == ids.i32);
     minic_core_function_destroy(&function);
+
+    CHECK(build_enum_overflow_function(&function));
+    CHECK(minic_core_function_verify(&function));
+    function.instructions[3].value.integer_overflow.source_overflow_destination_ineligible = false;
+    CHECK(!minic_core_function_snapshot_types(&function, &context,
+                                              resolve_enum_overflow_type, &ids));
+    CHECK(function.type_context == NULL);
+    function.instructions[3].value.integer_overflow.source_overflow_destination_ineligible = true;
+    CHECK(minic_core_function_snapshot_types(&function, &context,
+                                             resolve_enum_overflow_type, &ids));
+    CHECK(minic_core_function_verify_core_type_snapshot(&function));
+    minic_core_function_destroy(&function);
     minic_core_type_context_destroy(&context);
-    (void)puts("CORE_TYPE_SNAPSHOT=PASS valid malformed indirect_nominal field_nominal overflow rollback");
+    (void)puts("CORE_TYPE_SNAPSHOT=PASS valid malformed indirect_nominal field_nominal overflow enum_source_proof rollback");
     return 0;
 }

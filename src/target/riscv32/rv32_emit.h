@@ -1,6 +1,7 @@
 #ifndef MINIC_RISCV_RV32_EMIT_H
 #define MINIC_RISCV_RV32_EMIT_H
 #include "core/core_ir.h"
+#include "core/module_ir.h"
 #include "frontend/ast.h"
 #include "minic/compiler.h"
 #include "target/target_info.h"
@@ -15,5 +16,14 @@ bool minic_riscv32_write_core_program(const char *path,
                                       const MinicCoreFunction *functions,
                                       size_t function_count,
                                       bool function_sections,
+                                      MinicDiagnostic *diagnostic);
+
+bool minic_riscv32_write_core_module(const char *path,
+                                      const MinicC0Program *program,
+                                      const MinicTargetInfo *target,
+                                      const MinicCoreFunction *functions,
+                                      size_t function_count,
+                                      bool function_sections,
+                                      const MinicCoreModule *module,
                                       MinicDiagnostic *diagnostic);
 #endif

@@ -47,19 +47,22 @@ static bool add_pointer(MinicCoreTypeContext *types, MinicCoreTypeId pointee,
 
 int main(void) {
     MinicCoreTypeContext types;
-    MinicCoreTypeId i32, u32, u64, p_i32;
+    MinicCoreTypeId i8, i32, u32, u64, p_i8, p_i32;
     MinicCoreValue values[4] = {0};
     MinicCoreFunction fn = {0};
     MinicCoreInstruction ins = {0};
+    MinicCoreIntegerOverflowNarrowShape narrow;
     MinicC0Program program = {0};
     MinicTargetInfo target = {0};
     size_t width, lw, rw;
     bool sign, ls, rs, pointer, ptr_to_int, source_pointer, left_signed;
 
     minic_core_type_context_initialize(&types);
+    REQUIRE(add_integer(&types, 8U, true, &i8));
     REQUIRE(add_integer(&types, 32U, true, &i32));
     REQUIRE(add_integer(&types, 32U, false, &u32));
     REQUIRE(add_integer(&types, 64U, false, &u64));
+    REQUIRE(add_pointer(&types, i8, &p_i8));
     REQUIRE(add_pointer(&types, i32, &p_i32));
     REQUIRE(minic_lp64_core_valid_parameter_type(&types, i32));
     REQUIRE(minic_lp64_core_valid_parameter_type(&types, p_i32));
@@ -92,6 +95,30 @@ int main(void) {
     REQUIRE(!minic_core_integer_overflow_shape(&program, &target, &fn, &ins,
                                                 &width, &sign));
     values[1].core_type_id = i32;
+
+    /* An enum's Core representation may be an ordinary i8. Lowering must
+     * capture the source restriction because checking the C *pointer* for
+     * enum origin would always return false. The attached target reads only
+     * the source proof, not the untrusted frontend descriptor. */
+    values[2].core_type_id = p_i8;
+    REQUIRE(minic_core_integer_overflow_narrow_result_shape(
+        &program, &target, &fn, &ins, &narrow));
+    REQUIRE(narrow.result_width == 1U && narrow.result_signed);
+    REQUIRE(minic_type_pointer_to(minic_type_enum(7U), &values[2].type));
+    ins.value.integer_overflow.source_overflow_destination_ineligible = true;
+    REQUIRE(!minic_core_integer_overflow_narrow_result_shape(
+        &program, &target, &fn, &ins, &narrow));
+    REQUIRE(!minic_core_integer_overflow_shape(
+        &program, &target, &fn, &ins, &width, &sign));
+    REQUIRE(legacy_integer_queries == 0U);
+    ins.value.integer_overflow.source_overflow_destination_ineligible = false;
+    values[2].core_type_id = p_i32;
+    ins.value.integer_overflow.source_overflow_destination_ineligible = true;
+    REQUIRE(!minic_core_integer_overflow_shape(
+        &program, &target, &fn, &ins, &width, &sign));
+    ins.value.integer_overflow.source_overflow_destination_ineligible = false;
+    REQUIRE(minic_core_integer_overflow_shape(
+        &program, &target, &fn, &ins, &width, &sign));
 
     ins.kind = MINIC_CORE_INSTRUCTION_INTEGER_CLZ;
     ins.core_type_id = i32;
@@ -177,6 +204,6 @@ int main(void) {
     REQUIRE(!minic_multi_direct_scalar_load_shape(
         &program, &target, &fn, &ins, &width, &sign, &pointer));
     minic_core_type_context_destroy(&types);
-    (void)puts("CORE_NUMERIC_CORETYPE=PASS overflow bitscan LP64_scalar bitcast atomic_no_C_query");
+    (void)puts("CORE_NUMERIC_CORETYPE=PASS overflow enum_source_proof bitscan LP64_scalar bitcast atomic_no_C_query");
     return 0;
 }

@@ -11,6 +11,8 @@
 #include <stddef.h>
 #include <stdio.h>
 
+typedef struct MinicCoreModule MinicCoreModule;
+
 /* Two tested direct LP64 backends share the TU-level failure/cleanup and
  * GNU/ELF output lifecycle, NOT instruction selection or ABI register banks.
  * Machine IR would replace the individual function callbacks, not this
@@ -37,6 +39,16 @@ bool minic_multi_direct_write_program(
     const MinicTargetInfo *target, const MinicCoreFunction *core_functions,
     size_t core_function_count, bool function_sections,
     const MinicMultiDirectProgramConfig *config,
+    MinicDiagnostic *diagnostic);
+
+/* A fully snapshotted ModuleIR takes ownership of translation-unit global
+ * data and symbols. The source Program is still borrowed for function-side
+ * source policy during migration, not for global payload classification. */
+bool minic_multi_direct_write_program_with_module(
+    const char *path, const MinicC0Program *program,
+    const MinicTargetInfo *target, const MinicCoreFunction *core_functions,
+    size_t core_function_count, bool function_sections,
+    const MinicCoreModule *module, const MinicMultiDirectProgramConfig *config,
     MinicDiagnostic *diagnostic);
 
 /* Shared byte-identical opt-in Core reject diagnostics. The caller passes

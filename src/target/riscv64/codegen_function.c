@@ -22,6 +22,7 @@
 typedef struct Rv64ProgramContext {
     const char *path;
     MinicDiagnostic *diagnostic;
+    const MinicCoreModule *module;
 } Rv64ProgramContext;
 
 static bool rv64_visit_global(
@@ -54,6 +55,29 @@ static bool rv64_visit_global(
     return false;
 }
 
+static bool rv64_visit_module_global(
+    FILE *file, const MinicCoreModule *module, const MinicTargetInfo *target,
+    const MinicCoreModuleGlobal *global, size_t index, void *opaque) {
+    Rv64ProgramContext *ctx = opaque;
+    if (global->is_extern) {
+        if (global->is_alias)
+            return minic_multi_elf_emit_module_object_alias(
+                file, module, global, "@object");
+        return true;
+    }
+    if (minic_riscv64_emit_module_global(file, target, module, index))
+        return true;
+    {
+        char message[256];
+        (void)snprintf(message, sizeof(message),
+            "cannot emit RISC-V Core module global '%s' (index=%zu fragments=%zu)",
+            global->name != NULL ? global->name : "<unnamed>",
+            index, global->fragment_count);
+        minic_riscv64_set_diagnostic(ctx->diagnostic, ctx->path, message);
+    }
+    return false;
+}
+
 static bool rv64_visit_function(
     FILE *file, const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicFunction *function, const MinicCoreFunction *core_function,
@@ -70,9 +94,16 @@ static bool rv64_visit_function(
             index, name != NULL ? name : "?");
         (void)fflush(stderr);
     }
-    if (!function->is_defined) {
-        if (function->alias_target != MINIC_FUNCTION_INVALID)
-            return minic_riscv_emit_function_alias(file, program, function);
+    if (!(ctx->module != NULL
+              ? ctx->module->function_symbols[index].is_defined
+              : function->is_defined)) {
+        if (ctx->module != NULL
+                ? ctx->module->function_symbols[index].alias_target_index != SIZE_MAX
+                : function->alias_target != MINIC_FUNCTION_INVALID)
+            return ctx->module != NULL
+                ? minic_multi_elf_emit_module_function_alias(
+                    file, ctx->module, index, "@function")
+                : minic_riscv_emit_function_alias(file, program, function);
         return true;
     }
     {
@@ -118,11 +149,28 @@ static bool rv64_between(FILE *file, const MinicC0Program *program,
                          const MinicCoreFunction *functions, size_t count,
                          bool function_sections, void *opaque) {
     size_t i;
+    Rv64ProgramContext *ctx = opaque;
     (void)target;
     (void)functions;
     (void)count;
     (void)function_sections;
-    (void)opaque;
+    if (ctx != NULL && ctx->module != NULL) {
+        const MinicCoreModule *module = ctx->module;
+        if (module->file_asm_count != 0U && fprintf(file, ".text\n") < 0)
+            return false;
+        for (i = 0U; i < module->file_asm_count; ++i) {
+            const MinicCoreModuleFileAsm *source = &module->file_asms[i];
+            if (!minic_riscv64_source_asm_marker_safe(source->text,
+                                                       source->length) ||
+                !minic_riscv64_asm_audit_marker(file, true) ||
+                !minic_riscv64_emit_file_asm_bytes(file, source->text,
+                                                    source->length) ||
+                fputc('\n', file) == EOF ||
+                !minic_riscv64_asm_audit_marker(file, false))
+                return false;
+        }
+        return true;
+    }
     if (program->file_asm_count != 0U) {
         if (fprintf(file, ".text\n") < 0) return false;
         for (i = 0U; i < program->file_asm_count; ++i) {
@@ -150,24 +198,28 @@ static bool rv64_finalize(const char *path, const MinicTargetInfo *target,
     return false;
 }
 
-bool minic_riscv64_write_c0_program_with_core_functions(const char *path,
+static bool rv64_write_core_program_impl(const char *path,
                                                         const MinicC0Program *program,
                                                         const MinicCoreFunction *core_functions,
                                                         size_t core_function_count,
                                                         bool function_sections,
                                                         const MinicTargetInfo *target,
+                                                        const MinicCoreModule *module,
                                                         MinicDiagnostic *diagnostic) {
     static const MinicProgramEmitConfig config = {
         rv64_visit_global, rv64_visit_function, NULL, rv64_between,
         NULL, rv64_finalize, MINIC_PROGRAM_FUNCTION_ALL, false
     };
-    Rv64ProgramContext context = { path, diagnostic };
+    Rv64ProgramContext context = { path, diagnostic, module };
     bool success;
     if (program == NULL || target == NULL || path == NULL) {
         minic_riscv64_set_diagnostic(diagnostic, path, "program/target/path is required");
         return false;
     }
     if (core_function_count != program->function_count ||
+        (module != NULL &&
+         (module->global_count != program->global_object_count ||
+          module->function_count != core_function_count)) ||
         (core_function_count != 0U && core_functions == NULL)) {
         minic_riscv64_set_diagnostic(diagnostic, path,
             "Core function map does not match program functions");
@@ -175,10 +227,34 @@ bool minic_riscv64_write_c0_program_with_core_functions(const char *path,
     }
     /* GNU source-asm provenance and strict-I audits remain target-owned.
      * The common transaction removes partial output in ALL ISA profiles. */
-    success = minic_program_emit_write(
-        path, program, target, core_functions, core_function_count,
-        function_sections, &config, &context);
+    success = module != NULL
+        ? minic_program_emit_write_module(
+            path, program, target, core_functions, core_function_count,
+            function_sections, &config, &context,
+            module, rv64_visit_module_global)
+        : minic_program_emit_write(
+            path, program, target, core_functions, core_function_count,
+            function_sections, &config, &context);
     if (!success && diagnostic != NULL && diagnostic->message[0] == '\0')
         minic_riscv64_set_diagnostic(diagnostic, path, "cannot write RISC-V assembly");
     return success;
+}
+
+bool minic_riscv64_write_c0_program_with_core_functions(
+    const char *path, const MinicC0Program *program,
+    const MinicCoreFunction *core_functions, size_t core_function_count,
+    bool function_sections, const MinicTargetInfo *target,
+    MinicDiagnostic *diagnostic) {
+    return rv64_write_core_program_impl(path, program, core_functions,
+        core_function_count, function_sections, target, NULL, diagnostic);
+}
+
+bool minic_riscv64_write_c0_program_with_core_module(
+    const char *path, const MinicC0Program *program,
+    const MinicCoreFunction *core_functions, size_t core_function_count,
+    bool function_sections, const MinicTargetInfo *target,
+    const MinicCoreModule *module, MinicDiagnostic *diagnostic) {
+    return module != NULL && rv64_write_core_program_impl(path, program,
+        core_functions, core_function_count, function_sections,
+        target, module, diagnostic);
 }

@@ -48,6 +48,24 @@ typedef struct MinicMultiGlobalEmissionPlan {
     const char *default_elf_section;
 } MinicMultiGlobalEmissionPlan;
 
+/* Source-side DataLayout walks emit semantic data fragments, not GAS text.
+ * An ingress builder can retain them in a module-owned immutable data stream;
+ * the legacy FILE API below is a thin adapter over the SAME checked walker.
+ * All callback arguments are borrowed for the duration of the call. */
+typedef struct MinicMultiGlobalPayloadSink {
+    void *context;
+    bool (*emit_zero)(void *context, size_t bytes);
+    bool (*emit_bits)(void *context, MinicType source_type,
+                      size_t width, uint64_t bits);
+    bool (*emit_relocation)(void *context,
+                            const MinicGlobalRelocation *source, size_t width);
+} MinicMultiGlobalPayloadSink;
+
+bool minic_multi_global_payload_visit(
+    const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicGlobalObject *object, const MinicMultiGlobalEmissionPlan *plan,
+    const MinicMultiGlobalPayloadSink *sink);
+
 /* Classify the ABI-neutral payload without imposing the Common ELF section
  * encoding policy. A target that keeps its own section directives (RV64's
  * historical explicit @progbits policy) still uses the exact same payload

@@ -636,6 +636,7 @@ typedef struct MinicX86VisitContext {
     MinicDiagnostic *diagnostic;
     const char *path;
     const bool *head_address_context;
+    const MinicCoreModule *module;
 } MinicX86VisitContext;
 
 typedef struct MinicX86FunctionNameIndex {
@@ -829,6 +830,30 @@ static bool x86_visit_global(
     return false;
 }
 
+/* Production ModuleIR path: global payload and source symbol facts were
+ * already sealed before target emission.  No C AST/global descriptor reads. */
+static bool x86_visit_module_global(
+    FILE *out, const MinicCoreModule *module, const MinicTargetInfo *target,
+    const MinicCoreModuleGlobal *global, size_t index, void *opaque) {
+    MinicX86VisitContext *ctx = opaque;
+    if (global->is_extern) {
+        if (global->is_alias)
+            return minic_multi_elf_emit_module_object_alias(
+                out, module, global, "@object");
+        return true;
+    }
+    if (minic_x86_64_emit_module_global(out, target, module, index))
+        return true;
+    if (getenv("MINIC_X86_GLOBAL_TRACE") != NULL)
+        (void)fprintf(stderr,
+            "MINIC_X86_MODULE_GLOBAL_REJECT object=%s index=%zu fragments=%zu\n",
+            global->name != NULL ? global->name : "<unnamed>",
+            index, global->fragment_count);
+    x86_error(ctx->diagnostic, ctx->path,
+              "x86-64 cannot emit Core module global");
+    return false;
+}
+
 static bool x86_visit_function(
     FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicFunction *decl, const MinicCoreFunction *fn,
@@ -847,10 +872,17 @@ static bool x86_between(
     FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *functions, size_t function_count,
     bool function_sections, void *context) {
-    if (!minic_program_emit_source_file_asm_stage(
-            out, program, target, functions, function_count,
-            function_sections, context) ||
-        !minic_multi_elf_emit_function_aliases(out, program, "@function"))
+    const MinicX86VisitContext *ctx = context;
+    const bool module_bound = ctx != NULL && ctx->module != NULL;
+    if (!(module_bound
+            ? minic_program_emit_source_file_asm_module(out, ctx->module) &&
+              minic_multi_elf_emit_module_function_aliases(
+                  out, ctx->module, "@function")
+            : minic_program_emit_source_file_asm_stage(
+                  out, program, target, functions, function_count,
+                  function_sections, context) &&
+              minic_multi_elf_emit_function_aliases(
+                  out, program, "@function")))
         return false;
     if ((target->x86_codegen_options & MINIC_X86_CODEGEN_IBT_ENDBR) != 0U &&
         fputs(".section .note.gnu.property,\"a\"\n"
@@ -869,10 +901,11 @@ static bool x86_between(
     return true;
 }
 
-bool minic_x86_64_write_c0_program_with_core_functions(
+static bool x86_write_core_program_impl(
     const char *path, const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *core_functions, size_t core_function_count,
-    bool function_sections, MinicDiagnostic *diagnostic) {
+    bool function_sections, const MinicCoreModule *module,
+    MinicDiagnostic *diagnostic) {
     static const MinicProgramEmitConfig config = {
         x86_visit_global, x86_visit_function, NULL,
         x86_between,
@@ -880,10 +913,13 @@ bool minic_x86_64_write_c0_program_with_core_functions(
         MINIC_PROGRAM_FUNCTION_LIVE_DEFINITIONS, false
     };
     bool success;
-    MinicX86VisitContext visits = { diagnostic, path, NULL };
+    MinicX86VisitContext visits = { diagnostic, path, NULL, module };
     if (path == NULL || program == NULL || target == NULL ||
         target->architecture != MINIC_TARGET_ARCH_X86_64 ||
         (core_function_count != 0U && core_functions == NULL) ||
+        (module != NULL &&
+         (module->global_count != program->global_object_count ||
+          module->function_count != core_function_count)) ||
         core_function_count != program->function_count) {
         x86_error(diagnostic, path, "x86-64 invalid program or target");
         return false;
@@ -896,11 +932,36 @@ bool minic_x86_64_write_c0_program_with_core_functions(
             return false;
         }
     }
-    success = minic_program_emit_write(
-        path, program, target, core_functions, core_function_count,
-        function_sections, &config, (void *)&visits);
+    success = module != NULL
+        ? minic_program_emit_write_module(
+            path, program, target, core_functions, core_function_count,
+            function_sections, &config, (void *)&visits,
+            module, x86_visit_module_global)
+        : minic_program_emit_write(
+            path, program, target, core_functions, core_function_count,
+            function_sections, &config, (void *)&visits);
     free((void *)visits.head_address_context);
     if (!success && diagnostic != NULL && diagnostic->message[0] == '\0')
         x86_error(diagnostic, path, "x86-64 cannot emit assembly");
     return success;
+}
+
+bool minic_x86_64_write_c0_program_with_core_functions(
+    const char *path, const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicCoreFunction *core_functions, size_t core_function_count,
+    bool function_sections, MinicDiagnostic *diagnostic) {
+    return x86_write_core_program_impl(path, program, target, core_functions,
+                                       core_function_count, function_sections,
+                                       NULL, diagnostic);
+}
+
+bool minic_x86_64_write_c0_program_with_core_module(
+    const char *path, const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicCoreFunction *core_functions, size_t core_function_count,
+    bool function_sections, const MinicCoreModule *module,
+    MinicDiagnostic *diagnostic) {
+    return module != NULL &&
+           x86_write_core_program_impl(path, program, target, core_functions,
+                                       core_function_count, function_sections,
+                                       module, diagnostic);
 }
