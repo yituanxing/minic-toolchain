@@ -1,4 +1,4 @@
-#include "minias_internal.h"
+#include "minias_common_emission_private.h"
 
 #include <stdint.h>
 #include <stdlib.h>
@@ -10,15 +10,15 @@
  * object. A Common commit failure aborts assembly without writing an ELF.
  */
 static MiniAsEncodeResult *active_result(MiniAs *as, const char *operation) {
-    if (as == NULL || !as->emitting_fragment ||
-        as->active_encode_result == NULL ||
-        as->emitting_fragment_id >= as->stmt_count) {
+    if (as == NULL || as->emission==NULL || !as->emission->emitting_fragment ||
+        as->emission->active_encode_result == NULL ||
+        as->emission->emitting_fragment_id >= as->stmt_count) {
         if (as != NULL)
             minias_set_error(as, "encode-result-without-fragment:%s",
                              operation);
         return NULL;
     }
-    return as->active_encode_result;
+    return as->emission->active_encode_result;
 }
 
 /* The sole EncodeResult Fixup vector owner. MCData, ordinary target SymbolRef
@@ -58,18 +58,18 @@ static bool minias_stage_common_fixup(MiniAs *as,uint64_t offset,
                                       MiniAsFixupKind kind,unsigned width,
                                       const char *name,size_t symbol_index,
                                       int64_t addend) {
-    MiniAsEncodeResult *result=as->active_encode_result;
+    MiniAsEncodeResult *result=as->emission->active_encode_result;
     const MiniAsStmt *owner;
     MiniAsEncodeFixupRequest request={0};
     MiniAsSymbolNameId name_id=0U;
     uint64_t relative;
     int section;
-    if(result==NULL || !as->emitting_fragment ||
-       as->emitting_fragment_id>=as->stmt_count) {
+    if(result==NULL || !as->emission->emitting_fragment ||
+       as->emission->emitting_fragment_id>=as->stmt_count) {
         minias_set_error(as,"mcdata-fixup-without-fragment");
         return false;
     }
-    owner=&as->stmts[as->emitting_fragment_id];
+    owner=&as->stmts[as->emission->emitting_fragment_id];
     section=owner->section; /* MCData cannot select another Section. */
     if(section<0 ||
        (size_t)section>=as->section_count ||
@@ -130,7 +130,7 @@ static bool stage_instruction_fixup(MiniAs *as,uint64_t offset,
     int section;
     uint64_t relative;
     if(result==NULL)return false;
-    owner=&as->stmts[as->emitting_fragment_id];
+    owner=&as->stmts[as->emission->emitting_fragment_id];
     section=owner->section; /* Target cannot select another Section. */
     if(owner->fragment_kind!=MINIAS_FRAGMENT_INSTRUCTION ||
        (!absolute_zero_symbol &&
@@ -199,16 +199,16 @@ bool minias_encode_request_anchor_ref(MiniAs *as,const char *prefix,
     size_t ordinal;
     MiniAsSymbolNameId name_id;
     if(result==NULL)return false;
-    stmt=&as->stmts[as->emitting_fragment_id];
+    stmt=&as->stmts[as->emission->emitting_fragment_id];
     if(ref==NULL ||
        stmt->fragment_kind!=MINIAS_FRAGMENT_INSTRUCTION ||
        stmt->section<0 || (size_t)stmt->section>=as->section_count ||
        prefix==NULL || *prefix=='\0' ||
-       result->anchor_count>=SIZE_MAX-as->synthetic_anchor_counter) {
+       result->anchor_count>=SIZE_MAX-as->emission->synthetic_anchor_counter) {
         minias_set_error(as,"invalid-encoded-anchor-request");
         return false;
     }
-    ordinal=as->synthetic_anchor_counter+result->anchor_count+1U;
+    ordinal=as->emission->synthetic_anchor_counter+result->anchor_count+1U;
     if(!minias_make_private_symbol_name(name,sizeof(name),prefix,ordinal)) {
         minias_set_error(as,"encoded-anchor-name-overflow");
         return false;

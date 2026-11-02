@@ -1,4 +1,5 @@
 #include "minias_internal.h"
+#include "minias_common_emission.h"
 
 #include <limits.h>
 #include <stdio.h>
@@ -845,6 +846,7 @@ bool minias_span_has_linker_relaxation(MiniAs *as,size_t from_symbol,
     const MiniAsSymbol *from,*to;
     uint64_t begin,end;
     size_t i;
+    const MiniAsFixupSpan fixups=minias_emission_fixups(as);
     if(as==NULL || crosses==NULL || from_symbol>=as->symbol_count ||
        to_symbol>=as->symbol_count)return false;
     *crosses=false;
@@ -855,8 +857,8 @@ bool minias_span_has_linker_relaxation(MiniAs *as,size_t from_symbol,
     if(as->target->cfi_linker_relaxation_marker==NULL)return true;
     begin=from->value<to->value?from->value:to->value;
     end=from->value>to->value?from->value:to->value;
-    for(i=0U;i<as->fixup_count;++i) {
-        const MiniAsFixup *fixup=&as->fixups[i];
+    for(i=0U;i<fixups.count;++i) {
+        const MiniAsFixup *fixup=&fixups.data[i];
         uint64_t site;
         if(fixup->section!=from->section ||
            !as->target->cfi_linker_relaxation_marker(fixup->kind))continue;

@@ -153,7 +153,7 @@ if not re.search(r'as->finalizing_target_output\s*=\s*true;\s*'
     raise SystemExit('Target finalization capability guard is missing')
 for filename in ('assembler.c', 'common_emission.c', 'cfi_writer.c'):
     source = (Path('assembler/src') / filename).read_text()
-    if re.search(r'as->fixups\[as->fixup_count\s*-\s*1U?\]', source):
+    if re.search(r'as->(?:emission->)?fixups\[as->(?:emission->)?fixup_count\s*-\s*1U?\]', source):
         raise SystemExit(f'{filename}: post-creation Fixup mutation remains')
 a64 = (Path('assembler/src') / 'aarch64_target.c').read_text()
 planner = a64.split('static bool a64_record_source_mappings(', 1)[1].split(

@@ -39,7 +39,9 @@ The C implementation is split by ownership:
   and their indexes; `minias_common_context.h` is the Common-only contract.
 - `common_emission.c`: fragment-owned Fixup/EncodeResult transaction,
   typed DATA materialization, Section byte commits and final emission;
-  `minias_common_emission.h` is the Common-only contract.
+  `minias_common_emission.h` exposes read-only Fixup/cursor queries and
+  `minias_common_emission_private.h` confines mutable transaction state to
+  Emission plus the shared request encoder.
 - `mc_leb.c`: one reusable signed/unsigned LEB byte serializer for source,
   layout and DWARF consumers, independent of Section storage.
 - `mc_layout.c`, `mc_expr.c`: retained layout and expression semantics.
@@ -52,9 +54,11 @@ The older Python MiniAS is used as a semantic and bug-history reference, not as 
 physical code template.
 
 The Common domain split changes function ownership and destructor delegation,
-not the SourceGraph replay/Target encode protocol. `MiniAs` still contains
-shared mutable Section/Symbol/Fragment arrays; stricter field-level MCContext
-encapsulation and the format-neutral ObjectModel remain future work. See
+not the SourceGraph replay/Target encode protocol. Emission's Fixup vector,
+fragment transaction, EncodeResult and anchor ordinal now live behind an
+opaque state; `MiniAs` still contains shared mutable Section/Symbol/Fragment
+arrays. Their stricter field-level ownership and a format-neutral ObjectModel
+remain future work. See
 [the P06 owner-split record](docs/common-owner-split-2026-11-02.md).
 
 ## Explicit strict RV64I profile

@@ -1,4 +1,5 @@
 #include "minias_internal.h"
+#include "minias_common_emission.h"
 #include "expression_grammar.h"
 
 #include <ctype.h>
@@ -1245,18 +1246,14 @@ static bool emit_symbol_difference_divided(MiniAs *as,
 bool minias_emit_mc_data(MiniAs *as,const MiniAsStmt *stmt) {
     const MiniAsMCData *data=stmt->mcdata;
     size_t i;
+    uint64_t initial_cursor;
     if(!data || data->width==0U ||
        data->count>(size_t)UINT32_MAX/data->width ||
        data->count*data->width!=stmt->size) {
         minias_set_error(as,"invalid-mc-data-layout:line=%zu",stmt->line);
         return false;
     }
-    if(!as->emitting_fragment || as->active_encode_result==NULL ||
-       as->emitting_fragment_id>=as->stmt_count ||
-       &as->stmts[as->emitting_fragment_id]!=stmt) {
-        minias_set_error(as,"mcdata-emission-without-fragment");
-        return false;
-    }
+    if(!minias_emission_mcdata_cursor(as,stmt,&initial_cursor))return false;
     for(i=0U;i<data->count;++i) {
         const MiniAsMCExpr *x=&data->fields[i];
         const MiniAsSymbol *lhs=NULL,*rhs=NULL;
@@ -1272,8 +1269,9 @@ bool minias_emit_mc_data(MiniAs *as,const MiniAsStmt *stmt) {
         /* The Section cursor stays unchanged until this DATA fragment's
          * transaction commits. Locate '.' from the owned fragment offset
          * plus bytes already staged in the same result. */
-        uint64_t at=stmt->offset+as->active_encode_result->byte_count;
+        uint64_t at;
         bool literal=x->kind==MINIAS_MC_EXPR_CONSTANT;
+        if(!minias_emission_mcdata_cursor(as,stmt,&at))return false;
         if((needs_lhs && !x->has_lhs) || (needs_rhs && !x->has_rhs)) {
             minias_set_error(as,"invalid-mc-expression-symbols:line=%zu",
                              stmt->line);

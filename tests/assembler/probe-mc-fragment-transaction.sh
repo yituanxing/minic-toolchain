@@ -8,11 +8,14 @@ src=assembler/src/common_emission.c
 grep -q 'minias_stage_fragment_bytes' "$src"
 grep -q 'minias_stage_fragment_pattern' "$src"
 python3 - "$src" assembler/src/mc_encode_result.c \
-    assembler/src/minias_internal.h assembler/src/minias_target_api.h <<'PY'
+    assembler/src/minias_internal.h assembler/src/minias_target_api.h \
+    assembler/src/minias_common_emission_private.h <<'PY'
 import sys
 s=open(sys.argv[1],encoding='utf-8').read()
 mc=open(sys.argv[2],encoding='utf-8').read()
-h=open(sys.argv[3],encoding='utf-8').read()+open(sys.argv[4],encoding='utf-8').read()
+h=(open(sys.argv[3],encoding='utf-8').read()+
+   open(sys.argv[4],encoding='utf-8').read()+
+   open(sys.argv[5],encoding='utf-8').read())
 start=s.index('static bool minias_stage_instruction_bytes(')
 end=s.index('bool minias_section_append(',start)
 body=s[start:end]
@@ -54,21 +57,21 @@ for invariant in (
     'result->byte_count != owner->size',
     'logical_size!=result->byte_count',
     'result->write_count',
-    'minias_grow_array((void **)&as->fixups',
+    'minias_grow_array((void **)&as->emission->fixups',
     'minias_record_fixup(as,',
     'minias_section_append(',
-    'as->committing_fragment=true',
+    'as->emission->committing_fragment=true',
     'minias_encode_result_destroy(result)',
 ):
     if invariant not in commit:
         raise SystemExit('missing complete EncodeResult commit invariant: '+invariant)
-if 'as->committing_fragment=false' not in commit:
+if 'as->emission->committing_fragment=false' not in commit:
     raise SystemExit('commit guard not released after final Section materialization')
 start=s.index('bool minias_emit_sections(')
 body=s[start:]
 if 'section->size = (size_t)stmt->offset' in body:
     raise SystemExit('MCFragment still restores a virtual Section cursor')
-if 'as->active_encode_result->byte_count!=stmt->size' not in body:
+if 'as->emission->active_encode_result->byte_count!=stmt->size' not in body:
     raise SystemExit('missing final encoded fragment size check')
 if 'if(!minias_commit_encode_result(as,stmt))' not in body:
     raise SystemExit('MCFragment does not require successful Common commit')
@@ -123,7 +126,7 @@ if 'minias_record_fixup(as, owner->section,' not in s:
 # its output capability is bound to the active EncodeResult owner.
 if 'section=owner->section;' not in mc:
     raise SystemExit('encoded Fixup section is not derived from owner')
-if 'stmt=&as->stmts[as->emitting_fragment_id];' not in mc:
+if 'stmt=&as->stmts[as->emission->emitting_fragment_id];' not in mc:
     raise SystemExit('encoded anchor owner is not derived from active fragment')
 for signature in ('minias_encode_add_fixup_ref','minias_encode_add_fixup_abs0'):
     start=h.index('bool '+signature+'(')

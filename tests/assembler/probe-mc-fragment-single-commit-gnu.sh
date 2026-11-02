@@ -92,7 +92,7 @@ test ! -e "$work/invalid.o"
 grep -q 'nobits-nonzero-data' "$work/error"
 
 # Structural guard: reject a regression to the old two-path source emission.
-! grep -q 'capture_instruction_bytes' assembler/src/{assembler.c,common_emission.c,minias_internal.h,mc_encode_result.c}
+! grep -q 'capture_instruction_bytes' assembler/src/{assembler.c,common_emission.c,minias_internal.h,minias_common_emission_private.h,mc_encode_result.c}
 grep -q 'minias_stage_fragment_bytes' assembler/src/common_emission.c
 grep -q 'minias_stage_fragment_pattern' assembler/src/common_emission.c
 grep -q 'minias_commit_encode_result(as,stmt)' assembler/src/common_emission.c

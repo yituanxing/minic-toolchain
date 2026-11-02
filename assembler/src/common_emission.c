@@ -1,4 +1,4 @@
-#include "minias_common_emission.h"
+#include "minias_common_emission_private.h"
 
 #include <limits.h>
 #include <stdarg.h>
@@ -6,12 +6,53 @@
 #include <string.h>
 #include <stdio.h>
 
-void minias_common_emission_destroy(MiniAs *as) {
-    free(as->fixups);
-    if (as->active_encode_result != NULL) {
-        minias_encode_result_destroy(as->active_encode_result);
-        free(as->active_encode_result);
+bool minias_common_emission_init(MiniAs *as) {
+    if(as==NULL)return false;
+    if(as->emission!=NULL) {
+        minias_set_error(as,"emission-state-already-initialized");
+        return false;
     }
+    as->emission=calloc(1U,sizeof(*as->emission));
+    if(as->emission==NULL) {
+        minias_set_error(as,"out-of-memory:emission-state");
+        return false;
+    }
+    return true;
+}
+
+void minias_common_emission_destroy(MiniAs *as) {
+    MiniAsEmissionState *state;
+    if(as==NULL || as->emission==NULL)return;
+    state=as->emission;
+    free(state->fixups);
+    if(state->active_encode_result!=NULL) {
+        minias_encode_result_destroy(state->active_encode_result);
+        free(state->active_encode_result);
+    }
+    free(state);
+    as->emission=NULL;
+}
+
+MiniAsFixupSpan minias_emission_fixups(const MiniAs *as) {
+    const MiniAsEmissionState *state=as!=NULL ? as->emission : NULL;
+    const MiniAsFixupSpan empty={NULL,0U};
+    if(state==NULL)return empty;
+    return (MiniAsFixupSpan){state->fixups,state->fixup_count};
+}
+
+bool minias_emission_mcdata_cursor(MiniAs *as,const MiniAsStmt *stmt,
+                                  uint64_t *cursor) {
+    const MiniAsEmissionState *state=as!=NULL ? as->emission : NULL;
+    if(state==NULL || stmt==NULL || cursor==NULL ||
+       !state->emitting_fragment || state->active_encode_result==NULL ||
+       state->emitting_fragment_id>=as->stmt_count ||
+       &as->stmts[state->emitting_fragment_id]!=stmt ||
+       stmt->offset>UINT64_MAX-state->active_encode_result->byte_count) {
+        if(as!=NULL)minias_set_error(as,"mcdata-emission-without-fragment");
+        return false;
+    }
+    *cursor=stmt->offset+state->active_encode_result->byte_count;
+    return true;
 }
 
 /* Keep staged MCData Fixup widths identical to the committed Section
@@ -33,16 +74,20 @@ bool minias_record_fixup(MiniAs *as,
     size_t symbol_index;
     uint32_t relative_offset = 0U;
     size_t fragment_id = SIZE_MAX;
+    if(as==NULL || as->emission==NULL) {
+        if(as!=NULL)minias_set_error(as,"fixup-without-emission-state");
+        return false;
+    }
     if (origin == MINIAS_FIXUP_ORIGIN_FRAGMENT) {
         const MiniAsStmt *owner;
         uint64_t delta;
-        if ((as->emitting_fragment && retained_fragment_id!=SIZE_MAX) ||
-            (!as->emitting_fragment && retained_fragment_id==SIZE_MAX)) {
+        if ((as->emission->emitting_fragment && retained_fragment_id!=SIZE_MAX) ||
+            (!as->emission->emitting_fragment && retained_fragment_id==SIZE_MAX)) {
             minias_set_error(as, "fixup-without-fragment-owner");
             return false;
         }
         fragment_id = retained_fragment_id!=SIZE_MAX ? retained_fragment_id :
-                     as->emitting_fragment_id;
+                     as->emission->emitting_fragment_id;
         if(fragment_id>=as->stmt_count) {
             minias_set_error(as,"invalid-retained-fixup-fragment-id");
             return false;
@@ -63,7 +108,7 @@ bool minias_record_fixup(MiniAs *as,
         relative_offset = (uint32_t)delta;
     } else if ((origin != MINIAS_FIXUP_ORIGIN_EXPLICIT_SECTION &&
                 origin != MINIAS_FIXUP_ORIGIN_SYNTHETIC_SECTION) ||
-               as->emitting_fragment) {
+               as->emission->emitting_fragment) {
         minias_set_error(as, "invalid-section-fixup-owner");
         return false;
     }
@@ -107,14 +152,14 @@ bool minias_record_fixup(MiniAs *as,
         strncmp(symbol->name, ".L", 2U) != 0)
         symbol->bind = MINIAS_STB_GLOBAL;
 
-    if (!minias_grow_array((void **)&as->fixups,
-                    &as->fixup_capacity,
-                    sizeof(*as->fixups),
-                    as->fixup_count + 1U)) {
+    if (!minias_grow_array((void **)&as->emission->fixups,
+                    &as->emission->fixup_capacity,
+                    sizeof(*as->emission->fixups),
+                    as->emission->fixup_count + 1U)) {
         minias_set_error(as, "out-of-memory:fixup");
         return false;
     }
-    fixup = &as->fixups[as->fixup_count++];
+    fixup = &as->emission->fixups[as->emission->fixup_count++];
     fixup->section = section;
     fixup->origin = origin;
     fixup->fragment_id = fragment_id;
@@ -148,7 +193,8 @@ bool minias_add_late_fragment_fixup(MiniAs *as,size_t fragment_id,
                                    MiniAsFixupKind kind,size_t symbol_index,
                                    int64_t addend) {
     const MiniAsStmt *stmt;
-    if(as==NULL || as->emitting_fragment || as->committing_fragment ||
+    if(as==NULL || as->emission==NULL ||
+       as->emission->emitting_fragment || as->emission->committing_fragment ||
        fragment_id>=as->stmt_count || symbol_index>=as->symbol_count) {
         if(as!=NULL)minias_set_error(as,"invalid-late-fragment-fixup");
         return false;
@@ -184,10 +230,10 @@ static bool minias_stage_fragment_bytes(MiniAs *,int,const void *,size_t,bool);
  * semantic state never becomes visible to a subsequent Target invocation.
  */
 static bool minias_commit_encode_result(MiniAs *as, const MiniAsStmt *owner) {
-    MiniAsEncodeResult *result = as->active_encode_result;
+    MiniAsEncodeResult *result = as->emission->active_encode_result;
     size_t i,logical_size=0U;
-    if (result == NULL || !as->emitting_fragment ||
-        owner != &as->stmts[as->emitting_fragment_id]) {
+    if (result == NULL || !as->emission->emitting_fragment ||
+        owner != &as->stmts[as->emission->emitting_fragment_id]) {
         minias_set_error(as, "encode-commit-without-fragment");
         return false;
     }
@@ -221,8 +267,8 @@ static bool minias_commit_encode_result(MiniAs *as, const MiniAsStmt *owner) {
         return false;
     }
     /* Validate requests before the first global mutation. */
-    if (result->anchor_count > SIZE_MAX - as->synthetic_anchor_counter ||
-        result->fixup_count > SIZE_MAX - as->fixup_count) {
+    if (result->anchor_count > SIZE_MAX - as->emission->synthetic_anchor_counter ||
+        result->fixup_count > SIZE_MAX - as->emission->fixup_count) {
         minias_set_error(as, "encoded-request-count-overflow");
         return false;
     }
@@ -252,9 +298,9 @@ static bool minias_commit_encode_result(MiniAs *as, const MiniAsStmt *owner) {
     }
     /* Reserve the Fixup backing storage before defining synthetic symbols.
      * Their final indices and relocation bindings still belong to Common. */
-    if (!minias_grow_array((void **)&as->fixups, &as->fixup_capacity,
-                           sizeof(*as->fixups),
-                           as->fixup_count + result->fixup_count)) {
+    if (!minias_grow_array((void **)&as->emission->fixups, &as->emission->fixup_capacity,
+                           sizeof(*as->emission->fixups),
+                           as->emission->fixup_count + result->fixup_count)) {
         minias_set_error(as, "out-of-memory:encoded-fixup-commit");
         return false;
     }
@@ -288,7 +334,7 @@ static bool minias_commit_encode_result(MiniAs *as, const MiniAsStmt *owner) {
     /* One ordered commit protocol handles any mixture of fixed DATA fields,
      * deferred relocations, borrowed source bytes and compact repeated fills.
      * There is no alternate direct-append path for a source Fragment. */
-    as->committing_fragment=true;
+    as->emission->committing_fragment=true;
     for(i=0U;i<result->write_count;++i) {
         const MiniAsFragmentWrite *write=&result->writes[i];
         bool materialized;
@@ -303,12 +349,12 @@ static bool minias_commit_encode_result(MiniAs *as, const MiniAsStmt *owner) {
                     write->borrowed_bytes : result->bytes+write->copied_offset,
                 write->size);
         if(!materialized) {
-            as->committing_fragment=false;
+            as->emission->committing_fragment=false;
             return false;
         }
     }
-    as->committing_fragment=false;
-    as->synthetic_anchor_counter += result->anchor_count;
+    as->emission->committing_fragment=false;
+    as->emission->synthetic_anchor_counter += result->anchor_count;
     as->elf_flags |= result->elf_flags_or;
     minias_encode_result_destroy(result);
     return true;
@@ -332,17 +378,17 @@ static bool minias_stage_instruction_bytes(MiniAs *as,
                                            const void *data, size_t size) {
     MiniAsSection *sec;
     int section_index;
-    MiniAsEncodeResult *result = as->active_encode_result;
-    if (result == NULL || !as->emitting_fragment) {
+    MiniAsEncodeResult *result = as->emission->active_encode_result;
+    if (result == NULL || !as->emission->emitting_fragment) {
         minias_set_error(as, "target-emission-outside-instruction");
         return false;
     }
     const MiniAsStmt *owner;
-    if (as->emitting_fragment_id >= as->stmt_count) {
+    if (as->emission->emitting_fragment_id >= as->stmt_count) {
         minias_set_error(as, "instruction-bytes-without-fragment");
         return false;
     }
-    owner = &as->stmts[as->emitting_fragment_id];
+    owner = &as->stmts[as->emission->emitting_fragment_id];
     /* Machine-code bytes can only enter the current owned Fragment. */
     section_index=owner->section;
     if(section_index<0 || (size_t)section_index>=as->section_count) {
@@ -469,8 +515,8 @@ bool minias_code_align_is_elf32(const MiniAsCodeAlignSink *sink) {
 
 bool minias_code_align_has_active_fragment(const MiniAsCodeAlignSink *sink) {
     const MiniAs *as=sink!=NULL?sink->as:NULL;
-    return as!=NULL && as->emitting_fragment &&
-           as->emitting_fragment_id<as->stmt_count;
+    return as!=NULL && as->emission!=NULL && as->emission->emitting_fragment &&
+           as->emission->emitting_fragment_id<as->stmt_count;
 }
 
 /* Source-order and final position are Common-owned properties, not private
@@ -479,11 +525,11 @@ bool minias_code_align_has_active_fragment(const MiniAsCodeAlignSink *sink) {
 bool minias_code_align_preceded_by_adjacent_data(const MiniAsCodeAlignSink *sink) {
     const MiniAs *as=sink!=NULL?sink->as:NULL;
     const MiniAsStmt *owner, *previous;
-    if(as==NULL || !as->emitting_fragment ||
-       as->emitting_fragment_id==0U ||
-       as->emitting_fragment_id>=as->stmt_count)return false;
-    owner=&as->stmts[as->emitting_fragment_id];
-    previous=&as->stmts[as->emitting_fragment_id-1U];
+    if(as==NULL || as->emission==NULL || !as->emission->emitting_fragment ||
+       as->emission->emitting_fragment_id==0U ||
+       as->emission->emitting_fragment_id>=as->stmt_count)return false;
+    owner=&as->stmts[as->emission->emitting_fragment_id];
+    previous=&as->stmts[as->emission->emitting_fragment_id-1U];
     /* Active Fragment owns Section; only predecessor needs comparison. */
     return owner->fragment_kind==MINIAS_FRAGMENT_ALIGNMENT &&
            (previous->fragment_kind==MINIAS_FRAGMENT_FIXED_DATA ||
@@ -514,19 +560,19 @@ static bool minias_section_reserve(MiniAs *as,MiniAsSection *sec,size_t need) {
 static bool minias_stage_fragment_bytes(MiniAs *as,int section,
                                          const void *data,size_t size,
                                          bool target_bytes) {
-    MiniAsEncodeResult *result=as->active_encode_result;
+    MiniAsEncodeResult *result=as->emission->active_encode_result;
     const MiniAsStmt *owner;
     MiniAsSection *sec=&as->sections[(size_t)section];
     const unsigned char *bytes=(const unsigned char *)data;
     MiniAsFragmentWrite *write;
     size_t i,needed;
     bool borrow;
-    if(result==NULL || as->emitting_fragment_id>=as->stmt_count ||
+    if(result==NULL || as->emission->emitting_fragment_id>=as->stmt_count ||
        (size!=0U && data==NULL)) {
         minias_set_error(as,"invalid-fragment-bytes");
         return false;
     }
-    owner=&as->stmts[as->emitting_fragment_id];
+    owner=&as->stmts[as->emission->emitting_fragment_id];
     if(owner->section!=section ||
        (target_bytes ?
         (owner->fragment_kind!=MINIAS_FRAGMENT_INSTRUCTION &&
@@ -584,17 +630,17 @@ static bool minias_stage_fragment_pattern(MiniAs *as,int section,
                                            const unsigned char *pattern,
                                            size_t width,size_t count,
                                            bool ignore_nobits_fill) {
-    MiniAsEncodeResult *result=as->active_encode_result;
+    MiniAsEncodeResult *result=as->emission->active_encode_result;
     const MiniAsStmt *owner;
     MiniAsSection *sec=&as->sections[(size_t)section];
     MiniAsFragmentWrite *write;
     size_t size,i;
-    if(result==NULL || as->emitting_fragment_id>=as->stmt_count ||
+    if(result==NULL || as->emission->emitting_fragment_id>=as->stmt_count ||
        width==0U || width>8U || count>SIZE_MAX/width) {
         minias_set_error(as,"invalid-fragment-pattern");
         return false;
     }
-    owner=&as->stmts[as->emitting_fragment_id];
+    owner=&as->stmts[as->emission->emitting_fragment_id];
     size=width*count;
     if(owner->section!=section ||
        owner->fragment_kind==MINIAS_FRAGMENT_INSTRUCTION ||
@@ -637,7 +683,8 @@ bool minias_section_append(MiniAs *as, int section_index, const void *data, size
         return false;
     }
     sec = &as->sections[(size_t)section_index];
-    if(as->emitting_fragment && !as->committing_fragment)
+    if(as->emission!=NULL && as->emission->emitting_fragment &&
+       !as->emission->committing_fragment)
         return minias_stage_fragment_bytes(as,section_index,data,size,false);
     if (sec->type == MINIAS_SHT_NOBITS) {
         const unsigned char *bytes=(const unsigned char *)data;
@@ -685,7 +732,8 @@ bool minias_section_append_pattern(MiniAs *as,int section_index,
         minias_set_error(as,"invalid-data-pattern");
         return false;
     }
-    if(as->emitting_fragment && !as->committing_fragment)
+    if(as->emission!=NULL && as->emission->emitting_fragment &&
+       !as->emission->committing_fragment)
         return minias_stage_fragment_pattern(as,section_index,pattern,width,
                                              repeat,ignore_nobits_fill);
     sec=&as->sections[(size_t)section_index];
@@ -868,13 +916,17 @@ bool minias_emit_sections(MiniAs *as) {
     size_t i;
     MiniAsEmitRef *refs = NULL;
 
+    if(as==NULL || as->emission==NULL) {
+        if(as!=NULL)minias_set_error(as,"emit-without-emission-state");
+        return false;
+    }
     if(!minias_validate_fragment_semantics(as))return false;
-    if (as->active_encode_result != NULL) {
+    if (as->emission->active_encode_result != NULL) {
         minias_set_error(as, "encode-result-reentered");
         return false;
     }
-    as->active_encode_result = calloc(1U, sizeof(*as->active_encode_result));
-    if (as->active_encode_result == NULL) {
+    as->emission->active_encode_result = calloc(1U, sizeof(*as->emission->active_encode_result));
+    if (as->emission->active_encode_result == NULL) {
         minias_set_error(as, "out-of-memory:encode-result");
         return false;
     }
@@ -929,9 +981,9 @@ bool minias_emit_sections(MiniAs *as) {
         }
         /* The engine owns the complete fragment transaction. No direct
          * DATA/ALIGN/FILL append path survives inside source emission. */
-        as->emitting_fragment = true;
-        as->emitting_fragment_id = refs[i].order;
-        as->committing_fragment=false;
+        as->emission->emitting_fragment = true;
+        as->emission->emitting_fragment_id = refs[i].order;
+        as->emission->committing_fragment=false;
         if (stmt->fragment_kind == MINIAS_FRAGMENT_ALIGNMENT ||
             stmt->fragment_kind == MINIAS_FRAGMENT_ORIGIN) {
             bool code_nop_align=minias_alignment_emits_target_nops(
@@ -980,12 +1032,12 @@ bool minias_emit_sections(MiniAs *as) {
         }
         /* Every source Fragment uses the same measured-size validation
          * and commit. No fixed DATA, ALIGN, FILL or SPACE bypass remains. */
-        if(as->active_encode_result->byte_count!=stmt->size ||
+        if(as->emission->active_encode_result->byte_count!=stmt->size ||
            stmt->offset>SIZE_MAX) {
             minias_set_error(as,
                 "fragment-emitted-size-mismatch:line=%zu:expected=%u:actual=%zu",
                 stmt->line,stmt->size,
-                as->active_encode_result->byte_count);
+                as->emission->active_encode_result->byte_count);
             free(refs);
             return false;
         }
@@ -993,7 +1045,7 @@ bool minias_emit_sections(MiniAs *as) {
             free(refs);
             return false;
         }
-        as->emitting_fragment = false;
+        as->emission->emitting_fragment = false;
     }
     free(refs);
 

@@ -6,61 +6,7 @@
 
 /* Common-only mutable Section/Symbol/Fragment state and ownership APIs. */
 /* The SourceGraph/MCLayout replay worklist is declared in its own contract. */
-
-/* A Target proposes one whole encoded fragment.  Common alone assigns its
- * final SymbolIDs, relocation ownership and Section bytes after validation. */
-typedef struct MiniAsEncodeFixupRequest {
-    uint32_t fragment_offset;
-    MiniAsFixupKind kind;
-    unsigned width;
-    MiniAsSymbolRef symbol_ref;
-    /* Common MCData may refer to a final parse-site SymbolID without
-     * recreating its textual symbol name. Targets continue using NameIds. */
-    bool has_symbol_index;
-    size_t symbol_index;
-    bool absolute_zero_symbol; /* ELF STN_UNDEF=0 linker marker */
-    bool prefer_section_symbol;
-} MiniAsEncodeFixupRequest;
-
-typedef struct MiniAsEncodeAnchorRequest {
-    MiniAsSymbolNameId name_id;
-} MiniAsEncodeAnchorRequest;
-
-/* Ordered, fragment-owned output operations. One source statement can emit
- * several fixed DATA fields, a borrowed .incbin snapshot and compact fills
- * without copying a large pattern into an intermediate contiguous buffer. */
-typedef enum MiniAsFragmentWriteKind {
-    MINIAS_WRITE_COPIED_BYTES,
-    MINIAS_WRITE_BORROWED_BYTES,
-    MINIAS_WRITE_PATTERN
-} MiniAsFragmentWriteKind;
-typedef struct MiniAsFragmentWrite {
-    MiniAsFragmentWriteKind kind;
-    size_t size;
-    size_t copied_offset;
-    const unsigned char *borrowed_bytes;
-    unsigned char pattern[8];
-    size_t repeat_count;
-    unsigned repeat_width;
-    bool ignore_nobits_fill;
-} MiniAsFragmentWrite;
-
-typedef struct MiniAsEncodeResult {
-    unsigned char *bytes;
-    size_t byte_count; /* logical fragment size, including compact writes */
-    size_t byte_storage_size; /* copied bytes only; never counts fills */
-    size_t byte_capacity;
-    MiniAsFragmentWrite *writes;
-    size_t write_count;
-    size_t write_capacity;
-    MiniAsEncodeFixupRequest *fixups;
-    size_t fixup_count;
-    size_t fixup_capacity;
-    MiniAsEncodeAnchorRequest *anchors;
-    size_t anchor_count;
-    size_t anchor_capacity;
-    uint32_t elf_flags_or;
-} MiniAsEncodeResult;
+typedef struct MiniAsEmissionState MiniAsEmissionState;
 
 /* Common deferred DWARF .debug_frame CFI fragments. Target psABI owns register
  * identities and alignment; Common owns symbolic anchors and serialization. */
@@ -139,16 +85,9 @@ typedef struct MiniAs {
     MiniAsPendingLocalCommon *pending_local_commons;
     size_t pending_local_common_count;
     size_t pending_local_common_capacity;
-    MiniAsFixup *fixups;
-    size_t fixup_count;
-    size_t fixup_capacity;
-    /* All source Fragments stage bytes/fills/fixups before Common commits.
-     * CFI/.reloc/DWARF are deliberately separate, section-owned operations.
-     * The commit guard prevents the final materializer from re-staging. */
-    bool emitting_fragment;
-    bool committing_fragment;
-    size_t emitting_fragment_id;
-    MiniAsEncodeResult *active_encode_result;
+    /* Opaque output transaction: Fixups and the active source Fragment are
+     * writable only by Emission / its typed request-staging helper. */
+    MiniAsEmissionState *emission;
     MiniAsLiteral *literals;
     size_t literal_count;
     size_t literal_capacity;
@@ -162,8 +101,6 @@ typedef struct MiniAs {
     MiniAsSectionState *section_stack;
     size_t section_stack_count;
     size_t section_stack_capacity;
-    /* Global private-name ordinal allocated at successful MC commit. */
-    size_t synthetic_anchor_counter;
     size_t expr_anchor_counter;
     size_t *numeric_label_counts;
     size_t numeric_label_capacity;
@@ -354,7 +291,6 @@ bool minias_encode_add_fixup_abs0(MiniAs *as, uint64_t offset,
 bool minias_encode_request_anchor_ref(MiniAs *as, const char *prefix,
                                       MiniAsSymbolRef *ref);
 bool minias_encode_add_elf_flags(MiniAs *as, uint32_t flags);
-void minias_encode_result_destroy(MiniAsEncodeResult *result);
 /* Section-owned relocations are explicit .reloc directives or generated
  * DWARF records. Never silently fall back here from a Target encoder. */
 bool minias_add_section_fixup(MiniAs *as, MiniAsFixupOrigin origin,

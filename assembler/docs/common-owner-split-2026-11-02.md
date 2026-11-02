@@ -27,7 +27,9 @@ Source replay algorithm, ISA/ABI policy or ObjectModel writer.
    measured sizes, stages all instruction and typed DATA writes, validates
    fragment-relative Fixups and synthetic anchors, and commits complete
    EncodeResult transactions to Sections. Explicit section relocations and
-   generated DWARF retain their deliberate section-owned path.
+   generated DWARF retain their deliberate section-owned path. Its mutable
+   `MiniAsEmissionState` is opaque outside `common_emission.c` and the shared
+   request encoder `mc_encode_result.c`.
 6. **Shared LEB** (`mc_leb.c`) encodes signed/unsigned 64-bit integers for
    source expressions and DWARF producers without touching Section state.
 
@@ -48,18 +50,30 @@ materializer named `minias_emit_data_fragment` in Emission.
   their actual owner modules.
 - The SourceGraph replay, Target ISA state and ELF serialization policies
   are unchanged in this pass.
+- The driver allocates an Emission state before SourceGraph parsing and
+  releases it on every success/failure path. Layout and ELF serialization
+  borrow a `const MiniAsFixupSpan` over committed Fixups; they cannot append
+  or alter them. MCData obtains its staged-byte cursor per field from the
+  Emission owner so `.` still advances within an uncommitted DATA Fragment.
+- The private `MiniAsEncodeResult`, transactional write kinds, Fixup
+  requests, fragment guards and synthetic-anchor ordinal are absent from the
+  shared `MiniAs` definition. They have one private definition, included by
+  exactly two transaction owner files.
 
 ## Validation and limitations
 
 The structural gate `probe-common-context-emission-boundary.sh` checks
-unique function owners and rejects a renewed Lowering/emitter cycle.
+unique function owners, compiles a negative opaque-field access, verifies
+read-only query consumers and rejects a renewed Lowering/emitter cycle.
 Existing Fragment transaction, Source replay, Target capability, GNU
 byte/relocation and DWARF/CFI probes must also pass at the exact commit.
 Full 3x7 Linux GNU Kbuild replay, 3,536 opt-in semantics and Image/QEMU
 P1 are separate milestone gates, not implicit results of a local build.
 
-P06 does **not** yet make `MiniAs` fields opaque between Common domains:
-Lowering, MCLayout, Context, Emission and Writer still share their mutable
-arrays through the Common-private session. That remaining field-level
-capability reduction is the next architecture boundary, before type-complete
-Fragment payload and neutral ObjectModel work.
+This increment encapsulates the complete mutable Emission transaction, not
+the shared mutable Section, Symbol or Fragment arrays. Context, Lowering,
+MCLayout and Writer still have legitimate but overly broad access to those
+other Common-private arrays. Separating their true ownership is the next
+field-level task before type-complete Fragment payloads and a neutral
+ObjectModel. A `const` Fixup span also carries a lifetime constraint: it
+cannot be retained across subsequent Emission appends/reallocations.

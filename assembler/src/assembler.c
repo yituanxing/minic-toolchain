@@ -242,6 +242,7 @@ static bool minias_init_for_target(MiniAs *as,
         minias_set_error(as,"missing-assembler-target");
         return false;
     }
+    if(!minias_common_emission_init(as))return false;
     as->source=minias_source_context_create();
     if(as->source==NULL) {
         minias_set_error(as,"out-of-memory:source-context");

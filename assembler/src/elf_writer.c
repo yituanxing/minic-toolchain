@@ -1,5 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 #include "minias_internal.h"
+#include "minias_common_emission.h"
 #include "minielf.h"
 
 #include <errno.h>
@@ -190,6 +191,7 @@ static bool plan_elf_symbols(MiniAs *as,MiniAsELFSymbolState *states,
                              size_t *emitted_count) {
     size_t i;
     size_t count=0U;
+    const MiniAsFixupSpan fixups=minias_emission_fixups(as);
     for(i=0U;i<as->section_count;++i) {
         const char *signature=as->sections[i].group_signature;
         const MiniAsSymbol *symbol;
@@ -202,8 +204,8 @@ static bool plan_elf_symbols(MiniAs *as,MiniAsELFSymbolState *states,
         }
         states[(size_t)(symbol-as->symbols)].group_signature=true;
     }
-    for(i=0U;i<as->fixup_count;++i) {
-        const MiniAsFixup *fixup=&as->fixups[i];
+    for(i=0U;i<fixups.count;++i) {
+        const MiniAsFixup *fixup=&fixups.data[i];
         if(fixup->symbol_index<as->symbol_count &&
            !section_symbol_fixup(as,fixup))
             states[fixup->symbol_index].referenced_by_relocation=true;
@@ -293,6 +295,7 @@ static bool resolve_link_order_target(MiniAs *as, size_t owner,
 static bool minias_write_elf(MiniAs *as,
                              const char *path,
                              unsigned char elf_class) {
+    const MiniAsFixupSpan fixups=minias_emission_fixups(as);
     MiniElfWriteSection *sections = NULL;
     MiniElfWriteSymbol *symbols = NULL;
     MiniElfWriteRela *relocations = NULL;
@@ -351,7 +354,7 @@ static bool minias_write_elf(MiniAs *as,
     if(section_count>SIZE_MAX/sizeof(*sections) ||
        as->section_count>SIZE_MAX/sizeof(*name_index) ||
        expected_symbol_count>SIZE_MAX/sizeof(*symbols) ||
-       as->fixup_count>SIZE_MAX/sizeof(*relocations) ||
+       fixups.count>SIZE_MAX/sizeof(*relocations) ||
        as->symbol_count>SIZE_MAX/sizeof(*symbol_map) ||
        as->symbol_count>SIZE_MAX/sizeof(*private_names)) {
         minias_set_error(as,"elf-object-capacity-overflow");
@@ -361,7 +364,7 @@ static bool minias_write_elf(MiniAs *as,
                       sizeof(*sections));
     symbols = calloc(expected_symbol_count == 0U ? 1U : expected_symbol_count,
                      sizeof(*symbols));
-    relocations = calloc(as->fixup_count == 0U ? 1U : as->fixup_count,
+    relocations = calloc(fixups.count == 0U ? 1U : fixups.count,
                          sizeof(*relocations));
     symbol_map = malloc((as->symbol_count == 0U ? 1U : as->symbol_count) *
                         sizeof(*symbol_map));
@@ -526,8 +529,8 @@ static bool minias_write_elf(MiniAs *as,
         }
     }
 
-    for (i = 0U; i < as->fixup_count; ++i) {
-        MiniAsFixup *input = &as->fixups[i];
+    for (i = 0U; i < fixups.count; ++i) {
+        const MiniAsFixup *input = &fixups.data[i];
         MiniElfWriteRela *output = &relocations[i];
         uint64_t final_offset;
         bool section_reloc=section_symbol_fixup(as,input);
@@ -633,7 +636,7 @@ static bool minias_write_elf(MiniAs *as,
     spec.symbols = symbols;
     spec.symbol_count = output_symbol_count;
     spec.relocations = relocations;
-    spec.relocation_count = as->fixup_count;
+    spec.relocation_count = fixups.count;
     spec.emit_section_symbols = true;
     spec.emit_all_section_symbols = as->target->emit_all_section_symbols;
 
