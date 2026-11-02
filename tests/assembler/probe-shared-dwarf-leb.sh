@@ -9,9 +9,13 @@ compiler=${CC:-cc}
 "$compiler" -std=c11 -O2 -ffunction-sections -fdata-sections \
   -Iassembler/src -Ielf/include \
   -c assembler/src/assembler.c -o "$work/assembler.o"
+"$compiler" -std=c11 -O2 -ffunction-sections -fdata-sections \
+  -Iassembler/src -Ielf/include \
+  -c assembler/src/common_lowering.c -o "$work/common_lowering.o"
 "$compiler" -std=c11 -Wall -Wextra -Werror \
   -ffunction-sections -fdata-sections -Wl,--gc-sections \
   -Iassembler/src -Ielf/include \
-  tests/assembler/probe-shared-dwarf-leb.c "$work/assembler.o" \
+  tests/assembler/probe-shared-dwarf-leb.c \
+  "$work/assembler.o" "$work/common_lowering.o" \
   -o "$work/probe"
 "$work/probe"
