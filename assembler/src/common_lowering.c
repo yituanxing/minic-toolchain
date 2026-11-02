@@ -215,7 +215,7 @@ static bool add_stmt(MiniAs *as,
     st = &as->stmts[as->stmt_count];
     memset(st, 0, sizeof(*st));
     st->fragment_kind = fragment_kind;
-    st->source_site = minias_source_current_site(as);
+    st->source_site = minias_source_current_site(as->source);
     st->op = minias_strdup(op);
     st->args = minias_strdup(args == NULL ? "" : args);
     st->line = line;
@@ -2281,7 +2281,7 @@ static bool parse_comm(MiniAs *as, const char *args, size_t line) {
         pending->size=(uint64_t)size;
         pending->alignment=alignment;
         pending->line=line;
-        pending->source_site=minias_source_current_site(as);
+        pending->source_site=minias_source_current_site(as->source);
         free(copy);return true;
     }
     free(copy);return true;
@@ -2299,7 +2299,7 @@ invalid:
 static bool flush_pending_local_commons(MiniAs *as) {
     int saved_section=as->current_section;
     uint32_t saved_subsection=as->current_subsection;
-    MiniAsStableSiteId saved_source_site=minias_source_current_site(as);
+    MiniAsStableSiteId saved_source_site=minias_source_current_site(as->source);
     bool ok=true;
     size_t i;
     int bss;
@@ -2327,7 +2327,7 @@ static bool flush_pending_local_commons(MiniAs *as) {
             minias_set_error(as,"pending-local-common-mutated:%s",symbol.name);
             ok=false;break;
         }
-        minias_source_restore_site(as,pending->source_site);
+        minias_source_restore_site(as->source,pending->source_site);
         (void)snprintf(align_buf,sizeof(align_buf),"%llu",
                        (unsigned long long)pending->alignment);
         (void)snprintf(size_buf,sizeof(size_buf),"%llu",
@@ -2346,7 +2346,7 @@ static bool flush_pending_local_commons(MiniAs *as) {
     }
     as->current_section=saved_section;
     as->current_subsection=saved_subsection;
-    minias_source_restore_site(as,saved_source_site);
+    minias_source_restore_site(as->source,saved_source_site);
     return ok;
 }
 
@@ -2800,7 +2800,7 @@ static bool lower_source_statement(MiniAs *as, char *text, size_t line) {
         const MiniAsSourceReplayReader replay=
             minias_common_source_replay_reader(as);
         if(!minias_source_graph_lookup_forced_branch(
-               as,&replay,statement_id,&forced_minimum_size)) {
+               as->source,&replay,statement_id,&forced_minimum_size)) {
             free(rewritten_args);
             return false;
         }
@@ -2836,7 +2836,7 @@ static bool consume_source_statement(void *user,
     MiniAs *as=(MiniAs *)user;
     if(as==NULL || event==NULL || event->text==NULL ||
        event->site==MINIAS_SITE_NONE ||
-       event->site!=minias_source_current_site(as)) {
+       event->site!=minias_source_current_site(as->source)) {
         if(as!=NULL)minias_set_error(as,"invalid-source-statement-site");
         return false;
     }
@@ -2857,7 +2857,7 @@ bool minias_common_parse_source_graph(MiniAs *as,
         .user=as,
         .consume=consume_source_statement
     };
-    if(!minias_source_context_process_graph(as,graph,&statements))
+    if(!minias_source_context_process_graph(as->source,graph,&statements))
         return false;
     if(minias_source_context_layout_sensitive(as->source))
         as->lowering->layout_sensitive=true;
@@ -2867,14 +2867,14 @@ bool minias_common_parse_source_graph(MiniAs *as,
     }
     /* SourceGraph owns the synthetic EOF source identity; Common retains
      * the actual literal-pool and local-COMMON fragment materialization. */
-    if(!minias_source_graph_begin_eof(as))return false;
+    if(!minias_source_graph_begin_eof(as->source))return false;
     if(as->target->supports_literal_pools &&
        !flush_literal_pools(as,minias_source_graph_physical_lines(graph),true))
         return false;
     if(!flush_pending_local_commons(as))return false;
     const MiniAsSourceReplayReader replay=
         minias_common_source_replay_reader(as);
-    if(!minias_source_graph_validate_fragment_sites(as,&replay))return false;
+    if(!minias_source_graph_validate_fragment_sites(as->source,&replay))return false;
     /* Finalization already refreshes the alias DAG after assigning final
      * subsection bases. Its subsequent .size end-anchor work changes no
      * alias source values, so a second whole-graph walk is redundant. */

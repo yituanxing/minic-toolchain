@@ -52,14 +52,14 @@ if 'case MINIAS_SOURCE_STATEMENT_LABEL:' not in lowering or \
    'return lower_source_statement(as,event->text,event->line);' not in lowering or \
    'invalid-source-statement-kind' not in lowering:
     raise SystemExit('Common sink must handle typed label/text events without a fallback')
-if 'dispatch_source_statement(as,cursor,line)' not in source or \
+if 'dispatch_source_statement(source,cursor,line)' not in source or \
    'MINIAS_SOURCE_STATEMENT_LABEL' not in source or \
    'MINIAS_SOURCE_STATEMENT_TEXT' not in source:
     raise SystemExit('Source did not take ownership of lexical statement dispatch')
 if '.consume=consume_source_statement' not in lowering or \
-   '.site=minias_source_session(as)->current_site' not in source:
+   '.site=source->current_site' not in source:
     raise SystemExit('Missing bound event sink or source identity')
-if 'minias_source_session(as)->statements=(MiniAsSourceStatementSink){0};' not in source:
+if 'source->statements=(MiniAsSourceStatementSink){0};' not in source:
     raise SystemExit('Source callback lifetime not cleared at parse exit')
 graph=(root/'source_graph.c').read_text()
 replay=(root/'minias_source_replay_contract.h').read_text()
@@ -92,7 +92,7 @@ if 'minias_common_source_replay_reader(' not in lowering or \
     raise SystemExit('Common did not bind its live Fragment reader for replay')
 if 'as->layout_sensitive' in source or 'minias_get_symbol(' in source:
     raise SystemExit('Source bypasses Common semantic ownership')
-if 'minias_common_source_symbol_defined(as,args)' not in source:
+if 'source->services.symbol_defined(source->services.owner,args)' not in source:
     raise SystemExit('Source conditional lacks Common definition predicate')
 if 'minias_source_context_layout_sensitive(as->source)' not in lowering:
     raise SystemExit('Common did not import Source conditional replay signal')
@@ -100,7 +100,7 @@ if re.search(r'\bas\s*->',source+graph):
     raise SystemExit('Source dereferences private Common session')
 if 'minias_source_context_create(' not in source:
     raise SystemExit('Source pass-state factory missing')
-if 'as->source=minias_source_context_create();' not in core:
+if 'as->source=minias_source_context_create(&source_services);' not in core:
     raise SystemExit('Common no longer owns Source session lifetime binding')
 if 'size_t site;' not in events or 'char *text;' not in events:
     raise SystemExit('Statement event loses writable text or stable identity')

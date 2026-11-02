@@ -121,7 +121,7 @@ if expr.count('minias_emission_mcdata_cursor(as,stmt,')!=2 or \
     raise SystemExit('MCData lost its per-field staged-byte cursor')
 if 'minias_common_emission_init(as)' not in driver or \
    driver.index('minias_common_emission_init(as)') > \
-   driver.index('minias_source_context_create()'):
+   driver.index('minias_source_context_create(&source_services)'):
     raise SystemExit('Emission initialized after source parsing')
 
 # Prove the public session header cannot be used to dereference the private
@@ -174,7 +174,7 @@ for old in ('section_slots','symbol_slots','symbol_name_slots',
 for method in ('minias_common_context_init(as)',
                'minias_common_lowering_init(as)',
                'minias_layout_init(as)'):
-    if method not in driver or driver.index(method)>driver.index('minias_source_context_create()'):
+    if method not in driver or driver.index(method)>driver.index('minias_source_context_create(&source_services)'):
         raise SystemExit('owner state not initialized before parsing: '+method)
 for method in ('minias_common_lowering_destroy(as)',
                'minias_layout_destroy(as)'):

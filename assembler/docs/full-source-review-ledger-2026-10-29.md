@@ -2409,3 +2409,49 @@ Production C/header delta: **8 files, +278/−204 lines (net +74)**;
 tests and these two documents are excluded. The intent is one ownership
 boundary and removal of unsafe capability borrows, not a source-line
 count reduction or new GNU dialect coverage.
+
+## 14. 2026-11-02 SourceGraph / SourceContext semantic capability closure
+
+Implementation baseline: `a8035f88f39e751f0cc59c83cb062ec9cdfaefdf`.
+All Source recursive functions were checked against the persistent graph
+and MCLayout replay path before this boundary was migrated:
+
+1. The entire Source expansion call graph and SourceGraph now accept
+   `MiniAsSourceContext *`, including file normalization, comment/quote
+   policy, conditionals, nested macro/REPT/IRP, statement sites, replay
+   shape checks, forced-branch growth and graph lifetime. No internal
+   Source translation unit accepts a Common `MiniAs *` or accesses its
+   fields, even indirectly through a broad `source_session` getter.
+2. Driver binds the SourceContext once per *fresh semantic pass* with
+   `MiniAsSourceSemanticServices`: absolute expression evaluation,
+   Target-specific conditional evaluation, defined-symbol check,
+   numeric-label rewriting and first-error `va_list` sink, plus immutable
+   target lexical policy. A `void *` callback owner is scoped to the pass,
+   never copied into the persistent SourceGraph or an expansion SiteID.
+3. Common Lowering/Driver invoke Source operations with their existing
+   SourceContext object, not the Common session. Deleted the public
+   `source_session`, `source_const_session`, target lexical getter and
+   defined-symbol bridges, moving the numeric-reference declaration to
+   the private Common Lowering header. Source still emits just one typed
+   LABEL/TEXT event to the existing Common lowerer; MCLayout still owns
+   one fixed point and one typed Target relaxation graph. No shadow parser
+   or conditional state machine was added.
+4. Converted the independent SourceGraph fake-reader fixture to a real
+   SourceContext/callback diagnostic; structural gates now reject both
+   full Common session parameters and dereferences of the callback owner,
+   including two negative and one positive compile capability probes.
+   The old wide getters are absent from production.
+
+Local verification: release `-Werror`; MiniAS A0 **30/30** with GNU RV
+cross toolchain; all **24** Target structural probes; four-architecture
+baseline **26** fixtures (**18 exact objects, 8 matching rejects**);
+SourceContext composite GNU, x86/RV64 SourceGraph physical cache,
+conditional/macro/rept/irp replay, changed topology and lost-branch
+rejection, numeric and macro-counter renumbering, RV64 tiered 2/4/8-byte
+branch growth, and unchanged 1-read physical source cache. The remote
+exact-head CI and complete original Linux/ld/QEMU run remain separate.
+
+Production delta: **8 C/header files, +447/−416 lines (net +31)**;
+test fixtures, boundary checks and documents excluded. Most changed lines
+are the one-time Source call-graph type/owner migration; the critical
+deletion is the previous broad Common session capability interface.

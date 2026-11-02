@@ -62,6 +62,7 @@ typedef struct MiniAsMacro {
 } MiniAsMacro;
 
 struct MiniAsSourceContext {
+    MiniAsSourceSemanticServices services;
     MiniAsConditional *conditionals;
     size_t conditional_count;
     size_t conditional_capacity;
@@ -173,15 +174,16 @@ struct MiniAsSourceGraph {
 
 
 /* Source-only SiteID interning and expansion/condition provenance. */
-bool minias_source_graph_intern(MiniAs *as, MiniAsSourceSiteKey key,
+bool minias_source_graph_intern(MiniAsSourceContext *source, MiniAsSourceSiteKey key,
                          MiniAsStableSiteId *site_id);
-bool minias_source_graph_line_site(MiniAs *as, const MiniAsSourceLine *line,
+bool minias_source_graph_line_site(MiniAsSourceContext *source, const MiniAsSourceLine *line,
                             MiniAsStableSiteId *site_id);
-void minias_source_graph_record_condition(MiniAs *as, MiniAsStableSiteId owner,
+void minias_source_graph_record_condition(MiniAsSourceContext *source, MiniAsStableSiteId owner,
                                    bool active);
+void minias_source_set_error(MiniAsSourceContext *source,const char *format,...);
 
 /* Source lexical/macro/repeat expansion (fresh inside each semantic pass). */
 void minias_source_lines_destroy(MiniAsSourceLine *lines, size_t count);
-bool minias_source_frame_process(MiniAs *as, const MiniAsSourceFrame *frame);
+bool minias_source_frame_process(MiniAsSourceContext *source, const MiniAsSourceFrame *frame);
 
 #endif

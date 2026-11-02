@@ -9,18 +9,16 @@
 #include <stdlib.h>
 #include <string.h>
 
-struct MiniAs {
-    MiniAsSourceContext *source;
+typedef struct ReplayDiagnostic {
     char error[256];
-};
+} ReplayDiagnostic;
 
-MiniAsSourceContext *minias_source_session(MiniAs *as) { return as->source; }
-
-void minias_set_error(MiniAs *as,const char *format,...) {
+void minias_source_set_error(MiniAsSourceContext *source,const char *format,...) {
+    ReplayDiagnostic *diagnostic=source->services.owner;
     va_list args;
-    if(as->error[0]!='\0')return;
+    if(diagnostic->error[0]!='\0')return;
     va_start(args,format);
-    (void)vsnprintf(as->error,sizeof(as->error),format,args);
+    (void)vsnprintf(diagnostic->error,sizeof(diagnostic->error),format,args);
     va_end(args);
 }
 
@@ -102,7 +100,7 @@ static void expect(bool condition,const char *detail) {
 
 int main(void) {
     MiniAsSourceContext context={0};
-    MiniAs as={.source=&context};
+    ReplayDiagnostic diagnostic={0};
     ReplayFixture fixture={0};
     MiniAsFragmentGrowthSet growth={0};
     MiniAsSourceReplayReader reader;
@@ -111,6 +109,7 @@ int main(void) {
     size_t minimum_size=0U;
     char op[8]="je";
 
+    context.services.owner=&diagnostic;
     context.graph=minias_source_graph_create();
     expect(context.graph!=NULL,"graph allocation");
     context.graph->sites=calloc(2U,sizeof(*context.graph->sites));
@@ -131,23 +130,23 @@ int main(void) {
     fixture.operands[0][0]=register_shape;
     fixture.count=1U;
     reader=reader_for(&fixture);
-    expect(minias_source_graph_validate_fragment_sites(&as,&reader),
+    expect(minias_source_graph_validate_fragment_sites(&context,&reader),
            "initial sites valid");
 
     growth.ids=malloc(sizeof(*growth.ids));
     expect(growth.ids!=NULL,"growth allocation");
     growth.ids[0]=0U;growth.count=1U;growth.capacity=1U;
     fixture.fail_growth_plan=true;
-    expect(!minias_source_graph_capture_forced_branches(&as,&reader,&growth),
+    expect(!minias_source_graph_capture_forced_branches(&context,&reader,&growth),
            "growth plan failure must reject capture");
-    expect(strstr(as.error,"invalid-forced-branch-growth-plan:line=17")!=NULL,
+    expect(strstr(diagnostic.error,"invalid-forced-branch-growth-plan:line=17")!=NULL,
            "silent growth callback must receive a diagnostic");
     expect(context.graph->forced_branch_count==0U &&
            context.graph->sites[0].forced_branch_index==0U,
            "failed growth plan must not retain a branch");
     fixture.fail_growth_plan=false;
-    as.error[0]='\0';
-    expect(minias_source_graph_capture_forced_branches(&as,&reader,&growth),
+    diagnostic.error[0]='\0';
+    expect(minias_source_graph_capture_forced_branches(&context,&reader,&growth),
            "capture typed branch shape");
     expect(context.graph->forced_branch_count==1U &&
            context.graph->forced_branches[0].minimum_size==6U &&
@@ -161,56 +160,56 @@ int main(void) {
     fixture.operands[1][0]=register_shape;
     fixture.count=2U;
     reader=reader_for(&fixture);
-    expect(minias_source_graph_validate_fragment_sites(&as,&reader),
+    expect(minias_source_graph_validate_fragment_sites(&context,&reader),
            "inserted fragment has stable site");
-    expect(minias_source_graph_rebind_forced_branches(&as,&reader,&growth) &&
+    expect(minias_source_graph_rebind_forced_branches(&context,&reader,&growth) &&
            growth.count==1U && growth.ids[0]==1U,
            "branch rebinds by SiteID after ordinal insertion");
-    expect(minias_source_graph_lookup_forced_branch(&as,&reader,1U,&minimum_size)
+    expect(minias_source_graph_lookup_forced_branch(&context,&reader,1U,&minimum_size)
            && minimum_size==6U,"forced terminal size survives rebind");
 
     fixture.fragments[1].opcode++;
-    expect(!minias_source_graph_lookup_forced_branch(&as,&reader,1U,&minimum_size)
-           && strstr(as.error,"changed-forced-branch-shape:")!=NULL,
+    expect(!minias_source_graph_lookup_forced_branch(&context,&reader,1U,&minimum_size)
+           && strstr(diagnostic.error,"changed-forced-branch-shape:")!=NULL,
            "changed opcode must fail closed");
     fixture.fragments[1].opcode--;
     fixture.fragments[1].provenance_bits++;
-    expect(!minias_source_graph_lookup_forced_branch(&as,&reader,1U,&minimum_size),
+    expect(!minias_source_graph_lookup_forced_branch(&context,&reader,1U,&minimum_size),
            "changed ISA/provenance site must fail closed");
     fixture.fragments[1].provenance_bits--;
     fixture.operands[1][0].reg++;
-    expect(!minias_source_graph_lookup_forced_branch(&as,&reader,1U,&minimum_size),
+    expect(!minias_source_graph_lookup_forced_branch(&context,&reader,1U,&minimum_size),
            "changed typed operand register must fail closed");
     fixture.operands[1][0].reg--;
     fixture.fail_operand=true;
-    expect(!minias_source_graph_lookup_forced_branch(&as,&reader,1U,&minimum_size),
+    expect(!minias_source_graph_lookup_forced_branch(&context,&reader,1U,&minimum_size),
            "failed operand projection must fail closed");
     fixture.fail_operand=false;
     (void)strcpy(op,"jne");
-    expect(!minias_source_graph_lookup_forced_branch(&as,&reader,1U,&minimum_size),
+    expect(!minias_source_graph_lookup_forced_branch(&context,&reader,1U,&minimum_size),
            "changed borrowed mnemonic must fail closed");
     (void)strcpy(op,"je");
 
     fixture.fail_growth_plan=true;
-    (void)strcpy(as.error,"target-owned-growth-error");
-    expect(!minias_source_graph_capture_forced_branches(&as,&reader,&growth) &&
+    (void)strcpy(diagnostic.error,"target-owned-growth-error");
+    expect(!minias_source_graph_capture_forced_branches(&context,&reader,&growth) &&
            context.graph->forced_branches[0].minimum_size==6U &&
-           strcmp(as.error,"target-owned-growth-error")==0,
+           strcmp(diagnostic.error,"target-owned-growth-error")==0,
            "failed growth plan preserves Target diagnostic and prior bound");
     fixture.fail_growth_plan=false;
-    as.error[0]='\0';
+    diagnostic.error[0]='\0';
 
     fixture.count=1U;
     reader=reader_for(&fixture);
-    expect(!minias_source_graph_rebind_forced_branches(&as,&reader,&growth) &&
-           strstr(as.error,"lost-or-ambiguous-forced-source-site:")!=NULL,
+    expect(!minias_source_graph_rebind_forced_branches(&context,&reader,&growth) &&
+           strstr(diagnostic.error,"lost-or-ambiguous-forced-source-site:")!=NULL,
            "vanished branch cannot rebind by stale ordinal");
 
     fixture.count=3U;
     fixture.fragments[2]=branch;
     fixture.operands[2][0]=register_shape;
     reader=reader_for(&fixture);
-    expect(!minias_source_graph_rebind_forced_branches(&as,&reader,&growth),
+    expect(!minias_source_graph_rebind_forced_branches(&context,&reader,&growth),
            "duplicate instructions with one SourceSite rejected");
 
     free(growth.ids);

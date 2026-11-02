@@ -26,9 +26,9 @@ for legacy in ('strcmp(stmt->op', 'strncmp(stmt->op'):
 if ('typedef struct MiniAsSourceFrame' not in source or
     'MiniAsSourceFrame physical;' not in source or
     expansion.count('bool minias_source_frame_process(') != 1 or
-    'minias_source_frame_process(as,&graph->physical)' not in expansion or
-    'minias_source_context_process_graph(as,graph,&statements)' not in lowering or
-    expansion.count('minias_source_frame_process(as,&frame)') < 3 or
+    'minias_source_frame_process(source,&graph->physical)' not in expansion or
+    'minias_source_context_process_graph(as->source,graph,&statements)' not in lowering or
+    expansion.count('minias_source_frame_process(source,&frame)') < 3 or
     'assembler/src/source_graph.c' not in mk or
     'assembler/src/source_expansion.c' not in mk):
     raise SystemExit('physical file and expansion inputs lack shared SourceFrame')
@@ -41,7 +41,7 @@ if ('MiniAsSourceContext *source;' not in internal or
     'minias_source_context_create(' not in expansion or
     'minias_source_context_destroy(' not in expansion or
     'minias_source_graph_load_physical(' not in source_api or
-    'minias_source_graph_load_physical(&as,input_path,graph)' not in driver):
+    'minias_source_graph_load_physical(as.source,input_path,graph)' not in driver):
     raise SystemExit('SourceContext must be private and physical input have one owner')
 if ('#include "source_graph_common.h"' not in driver or
     'source_graph_internal.h' in driver or
@@ -51,8 +51,8 @@ if ('#include "source_graph_common.h"' not in driver or
     'minias_source_graph_create()' not in driver or
     'minias_source_graph_destroy(graph)' not in driver or
     'minias_source_graph_trace(graph,' not in driver or
-    'minias_source_current_site(as)' not in lowering or
-    'minias_source_restore_site(as,' not in lowering):
+    'minias_source_current_site(as->source)' not in lowering or
+    'minias_source_restore_site(as->source,' not in lowering):
     raise SystemExit('Common bypasses opaque SourceGraph/SourceContext boundary')
 for old_stack in ('static bool push_conditional(',
                   'static bool elseif_conditional(',

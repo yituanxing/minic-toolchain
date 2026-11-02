@@ -1,5 +1,32 @@
 # MiniAS Source/Common ownership contract — 2026-11-02
 
+## 2026-11-02 Source semantic capability closure
+
+SourceGraph and SourceExpansion now use `MiniAsSourceContext *` throughout
+their complete recursive call graphs: physical file load, lexical conditions,
+macro/repeat/IRP expansion, stable SiteID interning, typed statement events,
+forced-branch rebind and layout-growth capture. Common constructs one
+`MiniAsSourceSemanticServices` value when it creates the SourceContext. It
+contains five narrow callbacks (absolute expression, Target conditional,
+defined-symbol predicate, numeric-reference rewrite, and first-error sink),
+an opaque callback owner and the immutable comment/macro lexical policy.
+Source may call these capabilities but cannot dereference the Common owner.
+
+The old `minias_source_session(MiniAs *)`, `source_const_session`,
+`source_target_*` helpers and exported defined-symbol predicate were deleted,
+not kept alongside the new services. Common callers now pass their
+SourceContext explicitly; neither Source implementation C file has a
+`MiniAs *` parameter. No extra Fragment, Symbol, SourceFrame or alias graph
+is retained. The original full SourceGraph replay on layout-sensitive
+conditionals and the target-owned typed relaxation policy are unchanged.
+The single SourceContext is recreated with each semantic pass and carries
+only its pass-local callback owner; the physical graph survives across passes.
+
+Release `-Werror`, A0 30/30, 26 four-target old/new cases, 24 standalone
+Target contract scripts, x86/RISC-V full-replay GNU oracles, changed-arm
+rebind, nested macro/rept/irp and RV 2→4→8 relaxation all pass locally.
+CI exact-head and full original Linux/QEMU remain separate confirmations.
+
 ## Design comparison
 LLVM separates SourceMgr/MCAsmParser, MCContext, MCStreamer,
 MCTargetAsmParser and MCObjectStreamer. GNU GAS separates input scrubbing,
@@ -21,8 +48,9 @@ without cloning LLVM's class hierarchy or GNU's parser.
    `lower_source_statement` for TEXT; neither consumer reenters Source's
    conditional/macro/control router or repeats the label lexer.
 4. Common exclusively creates Symbols, Sections, Fragments and MC expressions.
-   Source receives just its private context, target lexical config and
-   Common-owned expression/layout query services.
+   Source receives its private context with bound scalar/callback services
+   and immutable Target lexical policy; it does not carry `MiniAs *` into
+   SourceGraph or SourceExpansion.
 5. SourceGraph rebinds immutable Common Fragment spans into a shared
    pass-local growth-worklist. MCLayout owns growth decisions and cache.
 6. Common imports Source's conditional layout-sensitive signal at parse
@@ -44,6 +72,6 @@ oracles and exact-head four-target/strict runtime CI; Linux Image/QEMU P1
 is a separate milestone. P06 now splits Common by semantic ownership:
 Section/Symbol context, typed source lowering, Fragment emission and shared
 LEB serialization have distinct translation units (see
-common-owner-split-2026-11-02.md). Source services still receive an opaque
-Common session token for expression/layout queries; this is intentionally
-not claimed as a completely independent MCContext implementation.
+common-owner-split-2026-11-02.md). Source callbacks hold an opaque
+invocation owner so expressions and numeric labels can query the one live
+Common semantic state; this is not an independent MCContext or second parser.

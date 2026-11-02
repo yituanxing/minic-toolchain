@@ -313,9 +313,35 @@ bool minias_parse_queue_literal(MiniAsParseContext *ctx,
  * ignored section/subsection allocations, then invoked Target initialization
  * against a partial Common object. A failed init is destroyed by the caller
  * without parsing or emitting an output ELF. */
+static bool source_eval_absolute(void *owner,const char *text,int64_t *out) {
+    return minias_evaluate_absolute_expression(owner,text,out);
+}
+
+static bool source_eval_target_if(void *owner,const char *text,bool *out) {
+    const MiniAs *as=owner;
+    return as->target->evaluate_target_if!=NULL &&
+           as->target->evaluate_target_if(text,out);
+}
+
+static bool source_symbol_defined(void *owner,const char *name) {
+    MiniAsSymbolView symbol;
+    return minias_common_context_find_symbol_view(owner,name,&symbol) &&
+           (symbol.defined || symbol.alias_pending);
+}
+
+static bool source_rewrite_numeric(void *owner,const char *text,
+                                   char **out,size_t line) {
+    return minias_numeric_refs_rewrite(owner,text,out,line);
+}
+
+static void source_error_va(void *owner,const char *format,va_list args) {
+    minias_set_error_va(owner,format,args);
+}
+
 static bool minias_init_for_target(MiniAs *as,
                                    const MiniAsTargetSpec *spec) {
     const MiniAsTargetOps *target=spec->target;
+    MiniAsSourceSemanticServices source_services={0};
     int text;
     memset(as,0,sizeof(*as));
     as->target=target;
@@ -328,7 +354,17 @@ static bool minias_init_for_target(MiniAs *as,
     if(!minias_common_context_init(as) ||
        !minias_common_lowering_init(as) ||
        !minias_layout_init(as))return false;
-    as->source=minias_source_context_create();
+    source_services=(MiniAsSourceSemanticServices){
+        .owner=as,
+        .comment_prefix=target->comment_prefix,
+        .preserve_macro_parentheses=target->macro_preserve_parenthesized_operand,
+        .evaluate_absolute=source_eval_absolute,
+        .evaluate_target_if=source_eval_target_if,
+        .symbol_defined=source_symbol_defined,
+        .rewrite_numeric_refs=source_rewrite_numeric,
+        .error_va=source_error_va
+    };
+    as->source=minias_source_context_create(&source_services);
     if(as->source==NULL) {
         minias_set_error(as,"out-of-memory:source-context");
         return false;
@@ -380,34 +416,6 @@ static void minias_destroy(MiniAs *as) {
         free(as->cu_files[i]);
     free(as->cu_files);
     free(as->debug_locs);
-}
-
-/* Read-only .ifdef/.ifndef query: a declaration or relocation reference
- * alone cannot create a defined symbol in the Source conditional grammar. */
-/* Source sees only its own pass state and immutable lexical policy.
- * Common retains the sole mutable MiniAs session definition. */
-MiniAsSourceContext *minias_source_session(MiniAs *as) {
-    return as->source;
-}
-const MiniAsSourceContext *minias_source_const_session(const MiniAs *as) {
-    return as->source;
-}
-char minias_source_target_comment_prefix(const MiniAs *as) {
-    return as->target->comment_prefix;
-}
-bool minias_source_target_preserve_macro_parentheses(const MiniAs *as) {
-    return as->target->macro_preserve_parenthesized_operand;
-}
-bool minias_source_target_evaluate_if(const MiniAs *as,
-                                      const char *expression,bool *result) {
-    return as->target->evaluate_target_if!=NULL &&
-           as->target->evaluate_target_if(expression,result);
-}
-
-bool minias_common_source_symbol_defined(MiniAs *as,const char *name) {
-    MiniAsSymbolView symbol;
-    return minias_common_context_find_symbol_view(as,name,&symbol) &&
-           (symbol.defined || symbol.alias_pending);
 }
 
 /* Finalization is the only phase allowed to raise Target-driven ELF Section
@@ -578,7 +586,7 @@ int minias_assemble_config(const char *input_path,
             }
         }
         if(parsed && !minias_source_graph_is_loaded(graph)) {
-            parsed=minias_source_graph_load_physical(&as,input_path,graph);
+            parsed=minias_source_graph_load_physical(as.source,input_path,graph);
         }
         if(parsed)parsed=minias_common_parse_source_graph(&as,graph);
         if(parsed && as.target->prepare_layout!=NULL) {
@@ -592,7 +600,7 @@ int minias_assemble_config(const char *input_path,
         const MiniAsSourceReplayReader replay=
             minias_common_source_replay_reader(&as);
         if(parsed)parsed=minias_source_graph_rebind_forced_branches(
-                &as,&replay,&branch_growth);
+                as.source,&replay,&branch_growth);
         if(parsed && !minias_solve_fragment_layout(
               &as,&branch_growth,&added_long_branches,diagnostic))
             parsed=false;
@@ -603,7 +611,7 @@ int minias_assemble_config(const char *input_path,
             const MiniAsSourceReplayReader after_layout=
                 minias_common_source_replay_reader(&as);
             parsed=minias_source_graph_capture_forced_branches(
-                &as,&after_layout,&branch_growth);
+                as.source,&after_layout,&branch_growth);
         }
         if(parsed && added_long_branches) {
             ++source_reparse_pass;

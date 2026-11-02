@@ -1,5 +1,18 @@
 # MiniAS 当前清理与所有权总览（2026-11-01）
 
+> **2026-11-02 P06 SourceGraph/SourceContext 语义能力整链迁移
+> （基于 `a8035f88`，本批待发布）：** Source 物理行缓存、条件栈、
+> 宏/REPT/IRP、稳定 SiteID、强制分支重绑和跨布局重放，整个递归调用链
+> 已统一传递 Source 自己的 `MiniAsSourceContext`。Common 在每次
+> Session 构造时绑定五项窄语义回调（绝对表达式、Target 条件、定义
+> 查询、数字标签重写、诊断）以及不可变词法策略；Source 不再持有
+> `MiniAs *` 参数。删掉旧 `minias_source_session`、`source_target_*`
+> 和直接定义符号查询宽桥接，不造第二份 SourceGraph/Fragment 表，
+> 不改变 GNU 宏条件语义或 MCLayout 放松算法。`-Werror`、A0 30/30、
+> 24 道 Target 结构门禁、四目标 26 例差分、GNU x86/RISC-V
+> 条件换臂重放及 RV 压缩分支 2→4→8 成长均 PASS；新 SHA
+> 的远端 exact-head CI 和完整 Linux 原始源码/QEMU 另行验收。
+
 > **2026-11-02 ObjectModel 终结期引用/原子输出整批迁移（基于
 > `5d47f4f7`，新提交以发布 SHA 为准）：** 完整复核 Driver→
 > 终结期对象借用→ELF symbol/fixup planner→minielf 后，将最终

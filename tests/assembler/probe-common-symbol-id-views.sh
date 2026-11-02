@@ -67,8 +67,9 @@ if 'minias_common_context_intern_symbol_id(' not in emission or \
    re.search(r'\bsymbol\s*-\s*as\s*->\s*symbols',emission):
     raise SystemExit('Emission still retains a Symbol entity or derives ID')
 for name in ('minias_parse_symbol_pair_same_defined_section',
-             'minias_common_source_symbol_defined'):
-    body=driver.split('bool '+name+'(',1)[1].split('\n}',1)[0]
+             'source_symbol_defined'):
+    marker=('static bool ' if name=='source_symbol_defined' else 'bool ')+name+'('
+    body=driver.split(marker,1)[1].split('\n}',1)[0]
     if 'minias_common_context_' not in body or \
        re.search(r'\bMiniAsSymbol\s*\*',body):
         raise SystemExit('Driver source Symbol consumer bypassed Context: '+name)

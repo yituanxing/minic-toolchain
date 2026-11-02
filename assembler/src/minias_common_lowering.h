@@ -24,4 +24,5 @@ bool minias_queue_literal(MiniAs *,const MiniAsSymbolExpr *,unsigned,
  * or retained Target MCInst, and no shadow Fragment vector is allocated. */
 MiniAsSourceReplayReader minias_common_source_replay_reader(MiniAs *);
 bool minias_common_parse_source_graph(MiniAs *,MiniAsSourceGraph *);
+bool minias_numeric_refs_rewrite(MiniAs *,const char *,char **,size_t);
 #endif
