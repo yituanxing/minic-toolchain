@@ -389,7 +389,7 @@ la = Path('assembler/src/loongarch64_target.c').read_text()
 if 'typedef struct MiniAsPreLayoutView {' not in core or \
         not re.search(r'bool\s*\(\*prepare_layout\)\s*\(const MiniAsPreLayoutView\s*\*', core):
     raise SystemExit('Target layout policy lacks a read-only parsed-source view')
-steps = ('parse_loaded_source_graph(&as,graph)',
+steps = ('minias_common_parse_source_graph(&as,graph)',
          'as.target->prepare_layout(&parsed_fragments,',
          'minias_solve_fragment_layout(')
 positions = [driver.find(step) for step in steps]
