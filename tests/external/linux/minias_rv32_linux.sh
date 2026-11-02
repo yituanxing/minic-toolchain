@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Real Linux 6.6.143 / ELF32 MiniAS-only assembler P0.  GNU GCC owns every C
-# compilation, GNU binutils owns linking, and the unmodified Linux Image is
-# booted under qemu-system-riscv32.  This does NOT certify RV32 P1.
+# Real Linux 6.6.143 / ELF32 MiniAS-only assembler P0/P1. GNU GCC owns every
+# C compilation, GNU binutils owns linking, and both original GNU and MiniAS
+# Linux Images boot under qemu-system-riscv32. P1 is opt-in, with independent
+# original GNU kernel P1 control and the canonical 12-syscall guest oracle.
 set -Eeuo pipefail
 
 repo=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)
@@ -14,6 +15,8 @@ version=${LINUX_VERSION:-6.6.143}
 [[ "$version" == 6.6.143 ]] || { echo "MINIAS_RV32=FAIL unsupported_linux=$version" >&2; exit 2; }
 jobs=${MINIAS_LINUX_JOBS:-4}
 [[ "$jobs" =~ ^[1-9][0-9]*$ ]] || { echo 'MINIAS_RV32=FAIL invalid_jobs' >&2; exit 2; }
+p1=${MINIAS_RV32_P1:-0}
+[[ "$p1" == 0 || "$p1" == 1 ]] || { echo 'MINIAS_RV32=FAIL invalid_p1_mode' >&2; exit 2; }
 
 for cmd in make curl tar sha256sum cmp diff python3 gcc riscv64-linux-gnu-gcc \
            riscv64-linux-gnu-as riscv64-linux-gnu-ld riscv64-linux-gnu-readelf \
@@ -297,6 +300,7 @@ run_image() {
 run_image "$gnu_out" riscv64-linux-gnu-gcc riscv64-linux-gnu-as gnu
 RV32I_QEMU_IMAGE="$gnu_out/arch/riscv/boot/Image" \
 RV32I_QEMU_WORK="$work/qemu-gnu" \
+RV32I_QEMU_KERNEL_PROVENANCE=gnu-gcc-gnu-as \
   bash "$repo/tools/ci/linux-rv32i-qemu-p0-v1.sh" \
   >"$work/evidence/gnu-qemu-p0.log" 2>&1 || {
     echo 'MINIAS_RV32_GNU_P0=BLOCKED original_GNU_Image_did_not_boot' >&2
@@ -312,6 +316,7 @@ python3 "$repo/tests/external/linux/minias_as_provenance_check.py" \
   --min-objects 1200
 RV32I_QEMU_IMAGE="$mini_out/arch/riscv/boot/Image" \
 RV32I_QEMU_WORK="$work/qemu-minias" \
+RV32I_QEMU_KERNEL_PROVENANCE=gnu-gcc-minias \
   bash "$repo/tools/ci/linux-rv32i-qemu-p0-v1.sh" \
   >"$work/evidence/minias-qemu-p0.log" 2>&1 || {
     echo 'MINIAS_RV32_P0=FAIL kernel_or_guest' >&2
@@ -320,4 +325,36 @@ RV32I_QEMU_WORK="$work/qemu-minias" \
   }
 printf 'MINIAS_RV32_P0=PASS GNU_GCC=1 MiniAS_only=1 GNU_ld=1 ELF32=1 QEMU_system_rv32=1 GNU_control=PASS head=%s\n' \
   "$(git -C "$repo" rev-parse HEAD)"
-echo 'MINIAS_RV32_P1=NOT_TESTED separate_full_guest_contract_required'
+if [[ "$p1" == 0 ]]; then
+    echo 'MINIAS_RV32_P1=NOT_TESTED enable_with_MINIAS_RV32_P1=1'
+    exit 0
+fi
+
+# The GNU kernel and the MiniAS-only kernel each execute a new, freestanding
+# GNU-compiled ELF32/ILP32 guest. Both must pass the same exact P1 manifest,
+# 12/12 syscalls, execve and clean-powerdown checks; neither kernel's P0
+# result is sufficient for a P1 verdict.
+RV32I_QEMU_IMAGE="$gnu_out/arch/riscv/boot/Image" \
+RV32I_QEMU_WORK="$work/qemu-gnu-p1" \
+RV32I_QEMU_KERNEL_PROVENANCE=gnu-gcc-gnu-as \
+RV32I_QEMU_P1=1 \
+  bash "$repo/tools/ci/linux-rv32i-qemu-p0-v1.sh" \
+  >"$work/evidence/gnu-qemu-p1.log" 2>&1 || {
+    echo 'MINIAS_RV32_GNU_P1=BLOCKED original_GNU_Image_failed_canonical_P1' >&2
+    tail -n 120 "$work/evidence/gnu-qemu-p1.log" >&2
+    exit 7
+  }
+echo 'MINIAS_RV32_GNU_P1=PASS original_GNU_Image=1 syscalls=12/12 clean_powerdown=1'
+
+RV32I_QEMU_IMAGE="$mini_out/arch/riscv/boot/Image" \
+RV32I_QEMU_WORK="$work/qemu-minias-p1" \
+RV32I_QEMU_KERNEL_PROVENANCE=gnu-gcc-minias \
+RV32I_QEMU_P1=1 \
+  bash "$repo/tools/ci/linux-rv32i-qemu-p0-v1.sh" \
+  >"$work/evidence/minias-qemu-p1.log" 2>&1 || {
+    echo 'MINIAS_RV32_P1=FAIL kernel_or_guest_canonical_P1' >&2
+    tail -n 120 "$work/evidence/minias-qemu-p1.log" >&2
+    exit 8
+  }
+printf 'MINIAS_RV32_P1=PASS GNU_GCC=1 MiniAS_only=1 GNU_ld=1 ELF32=1 QEMU_system_rv32=1 GNU_control=PASS syscalls=12/12 clean_powerdown=1 head=%s\n' \
+  "$(git -C "$repo" rev-parse HEAD)"

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Boot the attested RV32 MiniC Linux Image in the real RV32 system emulator.
-# This is an early PID1/ELF32 syscall smoke, NOT the historical 12/12 P1 gate.
-# The kernel Image is read-only; this helper only builds a tiny external
-# initramfs from GNU assembler and standard GNU cpio tooling.
+# Boot an attested RV32 Linux Image in the real RV32 system emulator.
+# P0 is an early PID1/ELF32 smoke; opt-in P1 is the canonical 12/12 syscall
+# plus fork/exec/wait and clean-powerdown oracle. The kernel Image is read-only;
+# only the external freestanding GNU ELF32 initramfs is rebuilt.
 set -Eeuo pipefail
 
 : "${RV32I_QEMU_IMAGE:?set the exact seven-shard MiniC Linux Image}"
@@ -19,6 +19,13 @@ image=$(realpath "$RV32I_QEMU_IMAGE")
 work=$(realpath "$RV32I_QEMU_WORK")
 image_sha=$(sha256sum "$image" | cut -d' ' -f1)
 p1=${RV32I_QEMU_P1:-0}
+kernel_provenance=${RV32I_QEMU_KERNEL_PROVENANCE:-minic-c}
+case "$kernel_provenance" in
+  minic-c) kernel_provenance_marker='minic_C=1741/1741' ;;
+  gnu-gcc-gnu-as) kernel_provenance_marker='GNU_GCC=1 GNU_AS=1' ;;
+  gnu-gcc-minias) kernel_provenance_marker='GNU_GCC=1 MiniAS_only=1' ;;
+  *) echo "RV32I_QEMU=FAIL invalid_kernel_provenance=$kernel_provenance" >&2; exit 2 ;;
+esac
 p2=${RV32I_QEMU_P2:-0}
 shell=${RV32I_QEMU_SHELL:-0}
 [[ "$p2" == 0 || "$p2" == 1 ]] || {
@@ -58,8 +65,8 @@ fi
 # Check PID1 before issuing the sole success marker. No libc, host executables,
 # pseudo-root filesystem, or RV64 ELF is allowed in this initramfs.
 if [[ "$p1" == 1 ]]; then
-  # Only GNU-built freestanding userspace changes; the original, pinned
-  # 1741/1741 MiniC Linux C-object Image is never recompiled or relinked.
+  # Only GNU-built freestanding userspace changes; the already-linked kernel
+  # Image (historical MiniC or original GNU GCC/MiniAS) stays immutable.
   build_guest() {
     local source="$1" target="$2"
     riscv64-linux-gnu-gcc -S -O1 -march=rv32i -mabi=ilp32 \
@@ -261,7 +268,7 @@ else
   status=$?
 fi
 set -e
-printf 'qemu_status=%s\nimage_sha256=%s\n' "$status" "$image_sha" \
+printf 'qemu_status=%s\nimage_sha256=%s\nkernel_provenance=%s\n' "$status" "$image_sha" "$kernel_provenance" \
   >"$work/provenance.txt"
 if [[ "$p1" == 1 ]]; then
   # The historical P0/P1 contract requires CLEAN guest powerdown, not an
@@ -409,7 +416,7 @@ if [[ "$p1" == 1 ]]; then
   grep -Fq 'RUNTIME_V2_SYSCALL_END pass=12 fail=0' "$work/qemu-serial.log"
   grep -Fq 'RV32I_LINUX_P1=PASS syscalls=12 child=ELF32 ilp32=true execve=true' "$work/qemu-serial.log"
   grep -Fq 'INIT_RUNTIME_PROBE=PASS' "$work/qemu-serial.log"
-  echo "RV32I_QEMU_P1=PASS image_sha256=$image_sha real_QEMU=rv32i original_Kbuild=true minic_C=1741/1741 syscalls=12/12"
+  echo "RV32I_QEMU_P1=PASS image_sha256=$image_sha real_QEMU=rv32i original_Kbuild=true $kernel_provenance_marker syscalls=12/12"
 else
   echo "RV32I_QEMU_P0=PASS image_sha256=$image_sha guest=rv32i/ilp32 original_Kbuild=true PID1=1 syscalls=getpid,write QEMU_P1=NOT_RUN"
 fi
