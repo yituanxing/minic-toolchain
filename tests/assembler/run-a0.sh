@@ -1913,6 +1913,7 @@ riscv_mcinst:
     sltu a0, a1, a2
     mul a0, a1, a2
     mulh a0, a1, a2
+    mulhsu a0, a1, a2
     mulhu a0, a1, a2
     div a0, a1, a2
     remu a0, a1, a2
@@ -1996,6 +1997,53 @@ for rv_bad in 'add a0, a1' 'addi a0, a1' 'addi a0, a1, 4096' \
     fi
 done
 echo 'MINIAS_RV_MCINST_NEGATIVE=PASS bad_register_imm_branch_memory=7'
+
+# The original Linux 6.6.143 RV32 GNU Kbuild owners mm/page-writeback.o and
+# fs/ext4/resize.o both exercise MULHSU. Complete the RV32M eight-instruction
+# R-type family, including their original operand orders, under the same
+# GNU source->ELF .text oracle; reject the M instruction under base RV32I.
+cat >"$work/rv32m-linux-mulhsu.s" <<'EOF_RV32M_LINUX'
+.text
+.globl rv32m_linux
+rv32m_linux:
+    mul a0, a1, a2
+    mulh a0, a1, a2
+    mulhsu s2, a0, s2
+    mulhsu s8, a0, s8
+    mulhsu a5, a5, s1
+    mulhu a0, a1, a2
+    div a0, a1, a2
+    divu a0, a1, a2
+    rem a0, a1, a2
+    remu a0, a1, a2
+EOF_RV32M_LINUX
+"$MINIAS" -march=rv32im -mabi=ilp32 -mno-arch-attr \
+    -o "$work/rv32m-linux-mulhsu.o" "$work/rv32m-linux-mulhsu.s"
+if command -v riscv64-linux-gnu-as >/dev/null 2>&1 &&
+   command -v riscv64-linux-gnu-objcopy >/dev/null 2>&1; then
+    riscv64-linux-gnu-as -march=rv32im -mabi=ilp32 -mno-arch-attr \
+        -o "$work/rv32m-linux-mulhsu.gnu.o" "$work/rv32m-linux-mulhsu.s"
+    riscv64-linux-gnu-objcopy -j .text -O binary \
+        "$work/rv32m-linux-mulhsu.o" "$work/rv32m-linux-mulhsu.bin"
+    riscv64-linux-gnu-objcopy -j .text -O binary \
+        "$work/rv32m-linux-mulhsu.gnu.o" "$work/rv32m-linux-mulhsu.gnu.bin"
+    cmp "$work/rv32m-linux-mulhsu.bin" "$work/rv32m-linux-mulhsu.gnu.bin"
+    echo 'MINIAS_RV32M_LINUX_MULHSU=PASS GNU_AS_bytes_equal=1 M=8 original_GCC_operand_orders=3'
+else
+    echo 'MINIAS_RV32M_LINUX_MULHSU=PASS GNU_AS_bytes_equal=SKIP(toolchain-unavailable)'
+fi
+printf '.text\nmulhsu s2, a0, s2\n' >"$work/rv32m-linux-mulhsu-no-m.s"
+for missing_m in rv32i:ilp32 rv64i:lp64; do
+    rv_missing_profile=${missing_m%%:*}
+    rv_missing_abi=${missing_m#*:}
+    if "$MINIAS" -march="$rv_missing_profile" -mabi="$rv_missing_abi" \
+         -o "$work/rv32m-linux-mulhsu-bad.o" "$work/rv32m-linux-mulhsu-no-m.s" \
+         >"$work/rv32m-linux-mulhsu-bad.out" 2>"$work/rv32m-linux-mulhsu-bad.err"; then
+        echo "MINIAS_RV32M_LINUX_MULHSU=FAIL accepted_without_M=$rv_missing_profile" >&2
+        exit 1
+    fi
+    grep -Fq 'unsupported-isa-feature:mulhsu:' "$work/rv32m-linux-mulhsu-bad.err"
+done
 
 
 # One consolidated typed MCInst sweep over F/D, V, A and Zicsr. GNU AS
