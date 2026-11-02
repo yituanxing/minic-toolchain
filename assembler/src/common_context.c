@@ -138,7 +138,12 @@ static bool resolve_symbol_alias_edge(MiniAs *as, size_t alias_id) {
     alias->subsection = target->subsection;
     alias->value = value;
     alias->type = target->type;
-    if (alias->size == 0U) alias->size = target->size;
+    /* GNU snapshots an already-defined target's size at the lexical alias
+     * declaration. Only an initially undefined forward target follows its
+     * eventual size across relayout. Nonzero `.size alias,N` overrides both,
+     * while `.size alias,0` clears that explicit override. */
+    if(alias->alias_size_tracks_target && !alias->has_explicit_size)
+        alias->size=target->size;
     alias->alias_pending = false;
     return true;
 }
@@ -152,7 +157,7 @@ static bool resolve_symbol_alias_edge(MiniAs *as, size_t alias_id) {
  * relayout invalidates every dependent value and evaluates the same graph
  * against new symbol anchors. The explicit DFS path bounds stack usage and
  * rejects cycles/undefined targets without recursive C call depth. */
-bool minias_refresh_symbol_aliases(MiniAs *as) {
+static bool minias_refresh_symbol_aliases(MiniAs *as) {
     const size_t count = as->symbol_count;
     unsigned char *state;
     size_t *path;
@@ -217,6 +222,87 @@ done:
     free(path);
     free(state);
     return result;
+}
+
+bool minias_common_context_commit_local_symbol_anchors(
+            MiniAs *as,const MiniAsSymbolLocalAnchorPlan *plan) {
+    size_t i;
+    if(as==NULL || plan==NULL || plan->symbol_count!=as->symbol_count ||
+       (plan->symbol_count!=0U &&
+        (plan->start_local==NULL || plan->end_local==NULL ||
+         plan->size_candidate==NULL))) {
+        if(as!=NULL)minias_set_error(as,"invalid-symbol-local-anchor-plan");
+        return false;
+    }
+    /* The anchor graph has already validated every candidate address and
+     * size. Commit ONLY phase-local positions into the original SymbolIDs.
+     * The next Context finalizer adds current subsection bases once. */
+    for(i=0U;i<plan->symbol_count;++i) {
+        MiniAsSymbol *symbol=&as->symbols[i];
+        if(symbol->has_size_end_anchor)
+            symbol->size=plan->size_candidate[i];
+        if(!symbol->has_fragment_anchor || !symbol->defined ||
+           symbol->section<0)continue;
+        symbol->value=plan->start_local[i];
+        if(symbol->has_size_end_anchor)
+            symbol->size_end_value=plan->end_local[i];
+    }
+    return true;
+}
+
+bool minias_common_context_finalize_symbol_layout(
+            MiniAs *as,const MiniAsSubsectionBaseReader *reader,
+            const uint64_t *section_sizes,size_t section_count) {
+    size_t i;
+    if(as==NULL || reader==NULL || reader->owner==NULL ||
+       reader->base==NULL || section_count!=as->section_count ||
+       (section_count!=0U && section_sizes==NULL)) {
+        if(as!=NULL)minias_set_error(as,"invalid-symbol-layout-snapshot");
+        return false;
+    }
+    for(i=0U;i<as->symbol_count;++i) {
+        MiniAsSymbol *symbol=&as->symbols[i];
+        uint64_t base;
+        /* Alias values are owned by the dependency resolver below. Their
+         * previous Section-relative values must not get another base. */
+        if(!symbol->defined || symbol->section<0 ||
+           symbol->has_alias_dependency)continue;
+        if(!reader->base(reader->owner,symbol->section,
+                         symbol->subsection,&base) ||
+           symbol->value>UINT64_MAX-base) {
+            minias_set_error(as,"internal:symbol-subsection-layout:%s",
+                             symbol->name);
+            return false;
+        }
+        symbol->value+=base;
+        if(symbol->has_size_end_anchor && !symbol->has_size_start_symbol) {
+            if(symbol->size>UINT64_MAX-symbol->value) {
+                minias_set_error(as,"fragment-size-end-overflow:%s",
+                                 symbol->name);
+                return false;
+            }
+            symbol->size_end_value=symbol->value+symbol->size;
+        }
+    }
+    if(!minias_refresh_symbol_aliases(as))return false;
+    for(i=0U;i<as->symbol_count;++i) {
+        MiniAsSymbol *symbol=&as->symbols[i];
+        const MiniAsSymbol *start;
+        if(!symbol->has_size_end_anchor ||
+           !symbol->has_size_start_symbol)continue;
+        if(symbol->size_start_symbol_index>=as->symbol_count)return false;
+        start=&as->symbols[symbol->size_start_symbol_index];
+        if(!start->defined || start->section!=symbol->section ||
+           start->value>UINT64_MAX-symbol->size) {
+            minias_set_error(as,"fragment-size-start-mismatch:%s",
+                             symbol->name);
+            return false;
+        }
+        symbol->size_end_value=start->value+symbol->size;
+    }
+    for(i=0U;i<section_count;++i)
+        as->sections[i].layout_size=section_sizes[i];
+    return true;
 }
 
 
@@ -451,19 +537,6 @@ bool minias_common_context_apply_ident_comment(MiniAs *as,int section) {
     return true;
 }
 
-bool minias_common_context_publish_layout_sizes(MiniAs *as,
-                                                 const uint64_t *sizes,
-                                                 size_t count) {
-    size_t i;
-    if(as==NULL)return false;
-    if(count!=as->section_count || (count!=0U && sizes==NULL)) {
-        minias_set_error(as,"invalid-section-layout-snapshot");
-        return false;
-    }
-    for(i=0U;i<count;++i)as->sections[i].layout_size=sizes[i];
-    return true;
-}
-
 bool minias_common_context_set_section_alignment(MiniAs *as,int section,
                                                  uint64_t alignment) {
     MiniAsSection *sec;
@@ -602,6 +675,321 @@ MiniAsSymbol *minias_get_symbol(MiniAs *as, const char *name, bool create) {
     ++as->symbol_count;
     as->context_indexes->symbol_slots[slot] = as->symbol_count;
     return sym;
+}
+
+bool minias_common_context_declare_symbol_binding(MiniAs *as,const char *name,
+                                                  bool update_binding,uint8_t bind,
+                                                  bool update_visibility,
+                                                  uint8_t visibility) {
+    MiniAsSymbol *symbol=minias_get_symbol(as,name,true);
+    if(symbol==NULL)return false;
+    if(update_binding && !(bind==MINIAS_STB_LOCAL && symbol->defined &&
+                           symbol->section==MINIAS_SECTION_COMMON)) {
+        /* A late `.local` does not retag a GNU tentative SHN_COMMON. */
+        symbol->bind=bind;
+        symbol->explicit_local_binding=bind==MINIAS_STB_LOCAL;
+    }
+    if(update_visibility)symbol->visibility=visibility;
+    return true;
+}
+
+bool minias_common_context_declare_symbol_type(MiniAs *as,const char *name,
+                                               uint8_t type,bool force_binding,
+                                               uint8_t binding) {
+    MiniAsSymbol *symbol=minias_get_symbol(as,name,true);
+    if(symbol==NULL)return false;
+    symbol->type=type;
+    if(force_binding)symbol->bind=binding;
+    return true;
+}
+
+bool minias_common_context_declare_symbol_size(MiniAs *as,const char *name,
+                                               uint64_t size) {
+    MiniAsSymbol *symbol=minias_get_symbol(as,name,true);
+    if(symbol==NULL)return false;
+    symbol->size=size;
+    symbol->has_explicit_size=size!=0U;
+    return true;
+}
+
+bool minias_common_context_capture_symbol_size_end(MiniAs *as,
+                 size_t symbol_id,size_t start_id,uint32_t end_subsection,
+                 size_t end_ordinal,int64_t end_addend,uint64_t local_size,
+                 bool deferred) {
+    MiniAsSymbol *symbol;
+    if(as==NULL || symbol_id>=as->symbol_count ||
+       start_id>=as->symbol_count) {
+        if(as!=NULL)minias_set_error(as,"invalid-symbol-size-end-id");
+        return false;
+    }
+    symbol=&as->symbols[symbol_id];
+    if(!symbol->defined || !as->symbols[start_id].defined ||
+       symbol->section!=as->symbols[start_id].section) {
+        minias_set_error(as,"invalid-symbol-size-end-state");
+        return false;
+    }
+    symbol->has_size_start_symbol=start_id!=symbol_id;
+    symbol->size_start_symbol_index=start_id;
+    symbol->size=deferred?0U:local_size;
+    symbol->has_explicit_size=true;
+    symbol->has_size_end_anchor=true;
+    symbol->size_end_anchor=end_ordinal;
+    symbol->size_end_subsection=end_subsection;
+    symbol->size_end_addend=end_addend;
+    return true;
+}
+
+bool minias_common_context_define_source_fragment_anchor(MiniAs *as,
+             const char *name,MiniAsSourceAnchorKind kind,int section,
+             uint32_t subsection,uint64_t value,size_t fragment_ordinal,
+             int64_t addend,size_t line,bool hidden,size_t *id_out) {
+    MiniAsSymbol *symbol;
+    if(as==NULL || name==NULL || section<0 ||
+       (size_t)section>=as->section_count ||
+       (fragment_ordinal==SIZE_MAX && kind!=MINIAS_SOURCE_SET_DOT)) {
+        if(as!=NULL)minias_set_error(as,"invalid-source-symbol-anchor");
+        return false;
+    }
+    symbol=minias_get_symbol(as,name,true);
+    if(symbol==NULL)return false;
+    if(symbol->defined || symbol->alias_pending || symbol->named_dwarf_view) {
+        minias_set_error(as,"duplicate-symbol:%s:line=%zu",name,line);
+        return false;
+    }
+    symbol->defined=true;
+    symbol->section=section;
+    symbol->subsection=subsection;
+    symbol->value=value;
+    if(fragment_ordinal!=SIZE_MAX) {
+        symbol->has_fragment_anchor=true;
+        symbol->fragment_anchor=fragment_ordinal;
+        symbol->fragment_anchor_addend=addend;
+    }
+    if(hidden)symbol->visibility=MINIAS_STV_HIDDEN;
+    if(id_out!=NULL)*id_out=(size_t)(symbol-as->symbols);
+    return true;
+}
+
+bool minias_common_context_assign_symbol_absolute(MiniAs *as,const char *name,
+             uint64_t bits,MiniAsAbsoluteAssignKind kind,size_t line) {
+    MiniAsSymbol *symbol=minias_get_symbol(as,name,true);
+    if(symbol==NULL)return false;
+    if(symbol->named_dwarf_view)goto duplicate;
+    switch(kind) {
+    case MINIAS_ABSOLUTE_EQU_IDEMPOTENT:
+        if(symbol->defined || symbol->alias_pending) {
+            if(symbol->defined && symbol->section==MINIAS_SECTION_ABS &&
+               symbol->value==bits)return true;
+            goto duplicate;
+        }
+        break;
+    case MINIAS_ABSOLUTE_SET_MUTABLE:
+        if(symbol->alias_pending ||
+           (symbol->defined && (symbol->section!=MINIAS_SECTION_ABS ||
+                                !symbol->mutable_absolute_set)))goto duplicate;
+        break;
+    case MINIAS_ABSOLUTE_SET_ONCE:
+        if(symbol->defined || symbol->alias_pending)goto duplicate;
+        break;
+    default:
+        minias_set_error(as,"invalid-absolute-symbol-assignment");
+        return false;
+    }
+    symbol->defined=true;
+    symbol->section=MINIAS_SECTION_ABS;
+    symbol->subsection=0U;
+    symbol->value=bits;
+    if(kind==MINIAS_ABSOLUTE_SET_MUTABLE)symbol->mutable_absolute_set=true;
+    return true;
+duplicate:
+    minias_set_error(as,"duplicate-symbol:%s:line=%zu",name,line);
+    return false;
+}
+
+bool minias_common_context_bind_symbol_alias(MiniAs *as,const char *name,
+             size_t target_id,int64_t addend,const char *section_base,
+             size_t line) {
+    MiniAsSymbol *symbol;
+    char *base_copy=NULL;
+    bool target_size_frozen;
+    uint64_t target_size;
+    if(as==NULL || target_id>=as->symbol_count || name==NULL) {
+        if(as!=NULL)minias_set_error(as,"invalid-symbol-alias-target");
+        return false;
+    }
+    /* An anchor-derived target size is still moving even if its label and
+     * `.size` statement already exist. A defined label with no size plan
+     * instead provides a lexical zero snapshot (GNU GAS). Forward aliases
+     * and inherited alias chains track the current target generation. */
+    target_size_frozen=as->symbols[target_id].defined &&
+        !as->symbols[target_id].has_size_end_anchor &&
+        !(as->symbols[target_id].alias_size_tracks_target &&
+          !as->symbols[target_id].has_explicit_size);
+    target_size=as->symbols[target_id].size;
+    if(section_base!=NULL) {
+        base_copy=minias_strdup(section_base);
+        if(base_copy==NULL) {
+            minias_set_error(as,"out-of-memory:section-set");
+            return false;
+        }
+    }
+    symbol=minias_get_symbol(as,name,true);
+    if(symbol==NULL) {
+        free(base_copy);
+        return false;
+    }
+    if(symbol->defined || symbol->alias_pending ||
+       symbol->has_alias_dependency || symbol->named_dwarf_view) {
+        minias_set_error(as,"duplicate-symbol:%s:line=%zu",name,line);
+        free(base_copy);
+        return false;
+    }
+    symbol->has_alias_dependency=true;
+    symbol->alias_pending=true;
+    symbol->alias_target_index=target_id;
+    symbol->alias_addend=addend;
+    symbol->alias_line=line;
+    symbol->alias_section_base=base_copy;
+    symbol->alias_size_tracks_target=!target_size_frozen;
+    if(target_size_frozen && !symbol->has_explicit_size)symbol->size=target_size;
+    return true;
+}
+
+bool minias_common_context_declare_common(MiniAs *as,const char *name,
+               uint64_t size,uint64_t alignment,size_t line,
+               MiniAsCommonDeclaration *out) {
+    MiniAsSymbol *symbol;
+    int bss;
+    if(as==NULL || out==NULL || alignment==0U ||
+       (alignment&(alignment-1U))!=0U || name==NULL)return false;
+    *out=(MiniAsCommonDeclaration){0};
+    symbol=minias_get_symbol(as,name,true);
+    if(symbol==NULL)return false;
+    if(symbol->named_dwarf_view || symbol->alias_pending ||
+       symbol->type==MINIAS_STT_FUNC ||
+       symbol->bind==MINIAS_STB_WEAK)goto invalid;
+    out->symbol_id=(size_t)(symbol-as->symbols);
+    if(symbol->defined) {
+        if(symbol->section!=MINIAS_SECTION_COMMON)goto invalid;
+        if(alignment>symbol->value)symbol->value=alignment;
+        return true;
+    }
+    if(symbol->explicit_local_binding) {
+        if(size>UINT32_MAX || alignment>UINT32_MAX)goto invalid;
+        bss=minias_ensure_section(as,".bss",MINIAS_SHT_NOBITS,
+                                  MINIAS_SHF_ALLOC|MINIAS_SHF_WRITE,1U);
+        if(bss<0)return false;
+        symbol->defined=true;
+        symbol->section=bss;
+        symbol->subsection=0U;
+        symbol->value=0U;
+        symbol->type=MINIAS_STT_OBJECT;
+        symbol->size=size;
+        out->defer_local_bss=true;
+        out->bss_section=bss;
+        return true;
+    }
+    symbol->defined=true;
+    symbol->bind=MINIAS_STB_GLOBAL;
+    symbol->type=MINIAS_STT_OBJECT;
+    symbol->section=MINIAS_SECTION_COMMON;
+    symbol->subsection=0U;
+    symbol->size=size;
+    symbol->value=alignment;
+    return true;
+invalid:
+    minias_set_error(as,"unsupported-common-symbol:%s:line=%zu",name,line);
+    return false;
+}
+
+bool minias_common_context_finish_local_common(MiniAs *as,size_t symbol_id,
+                              int bss_section,uint64_t local_value,
+                              size_t fragment_ordinal) {
+    MiniAsSymbol *symbol;
+    if(as==NULL || symbol_id>=as->symbol_count || bss_section<0 ||
+       (size_t)bss_section>=as->section_count) {
+        if(as!=NULL)minias_set_error(as,"pending-local-common-invalid-symbol");
+        return false;
+    }
+    symbol=&as->symbols[symbol_id];
+    if(!symbol->defined || symbol->section!=bss_section ||
+       symbol->has_fragment_anchor) {
+        minias_set_error(as,"pending-local-common-mutated:%s",symbol->name);
+        return false;
+    }
+    symbol->value=local_value;
+    symbol->subsection=0U;
+    symbol->has_fragment_anchor=true;
+    symbol->fragment_anchor=fragment_ordinal;
+    symbol->fragment_anchor_addend=0;
+    return true;
+}
+
+bool minias_common_context_define_output_anchor(MiniAs *as,const char *name,
+                           int section,uint32_t subsection,uint64_t offset,
+                           bool hidden,size_t *id_out) {
+    MiniAsSymbol *symbol;
+    if(as==NULL || section<0 || (size_t)section>=as->section_count ||
+       name==NULL) {
+        if(as!=NULL)minias_set_error(as,"invalid-final-symbol-anchor");
+        return false;
+    }
+    symbol=minias_get_symbol(as,name,true);
+    if(symbol==NULL)return false;
+    if(symbol->defined || symbol->alias_pending || symbol->named_dwarf_view) {
+        minias_set_error(as,"duplicate-final-symbol-anchor:%s",name);
+        return false;
+    }
+    symbol->defined=true;
+    symbol->section=section;
+    symbol->subsection=subsection;
+    symbol->value=offset;
+    symbol->bind=MINIAS_STB_LOCAL;
+    if(hidden)symbol->visibility=MINIAS_STV_HIDDEN;
+    if(id_out!=NULL)*id_out=(size_t)(symbol-as->symbols);
+    return true;
+}
+
+bool minias_common_context_reserve_named_dwarf_view(MiniAs *as,
+                       const char *name,size_t *id_out) {
+    MiniAsSymbol *symbol;
+    if(as==NULL || name==NULL || id_out==NULL)return false;
+    symbol=minias_get_symbol(as,name,true);
+    if(symbol==NULL || symbol->defined || symbol->alias_pending ||
+       symbol->named_dwarf_view)return false;
+    symbol->named_dwarf_view=true;
+    *id_out=(size_t)(symbol-as->symbols);
+    return true;
+}
+
+bool minias_common_context_publish_dwarf_view(MiniAs *as,size_t id,
+                                               uint64_t ordinal) {
+    MiniAsSymbol *symbol;
+    if(as==NULL || id>=as->symbol_count ||
+       !as->symbols[id].named_dwarf_view) {
+        if(as!=NULL)minias_set_error(as,"dwarf-view-invalid-symbol");
+        return false;
+    }
+    symbol=&as->symbols[id];
+    symbol->defined=true;
+    symbol->section=MINIAS_SECTION_ABS;
+    symbol->subsection=0U;
+    symbol->value=ordinal;
+    return true;
+}
+
+bool minias_common_context_bind_fixup_reference(MiniAs *as,size_t id) {
+    MiniAsSymbol *symbol;
+    if(as==NULL || id>=as->symbol_count) {
+        if(as!=NULL)minias_set_error(as,"invalid-fixup-symbol-id:%zu",id);
+        return false;
+    }
+    symbol=&as->symbols[id];
+    if(!symbol->defined && symbol->bind==MINIAS_STB_LOCAL &&
+       !symbol->explicit_local_binding &&
+       strncmp(symbol->name,".L",2U)!=0)
+        symbol->bind=MINIAS_STB_GLOBAL;
+    return true;
 }
 
 bool minias_define_target_mapping_symbol(MiniAs *as, const char *stem,

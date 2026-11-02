@@ -13,6 +13,69 @@ typedef struct MiniAsSectionIdentity {
     uint32_t unique_id;
 } MiniAsSectionIdentity;
 
+/* Common Context alone commits Symbol declaration and definition transitions.
+ * Lowering owns GNU syntax, Layout owns Fragment placement and Source owns
+ * lexical sites; all consumers pass stable SymbolIDs or narrow value inputs. */
+typedef enum MiniAsAbsoluteAssignKind {
+    MINIAS_ABSOLUTE_EQU_IDEMPOTENT,
+    MINIAS_ABSOLUTE_SET_MUTABLE,
+    MINIAS_ABSOLUTE_SET_ONCE
+} MiniAsAbsoluteAssignKind;
+typedef enum MiniAsSourceAnchorKind {
+    MINIAS_SOURCE_LABEL,
+    MINIAS_SOURCE_EQU_DOT,
+    MINIAS_SOURCE_SET_DOT,
+    MINIAS_SOURCE_CFI
+} MiniAsSourceAnchorKind;
+typedef struct MiniAsCommonDeclaration {
+    size_t symbol_id;
+    bool defer_local_bss;
+    int bss_section;
+} MiniAsCommonDeclaration;
+bool minias_common_context_declare_symbol_binding(MiniAs *,const char *,
+                                                   bool,uint8_t,bool,uint8_t);
+bool minias_common_context_declare_symbol_type(MiniAs *,const char *,
+                                                uint8_t,bool,uint8_t);
+bool minias_common_context_declare_symbol_size(MiniAs *,const char *,uint64_t);
+bool minias_common_context_capture_symbol_size_end(MiniAs *,size_t,size_t,
+                                                    uint32_t,size_t,int64_t,
+                                                    uint64_t,bool);
+bool minias_common_context_define_source_fragment_anchor(MiniAs *,const char *,
+                                    MiniAsSourceAnchorKind,int,uint32_t,
+                                    uint64_t,size_t,int64_t,size_t,bool,size_t *);
+bool minias_common_context_assign_symbol_absolute(MiniAs *,const char *,
+                                    uint64_t,MiniAsAbsoluteAssignKind,size_t);
+bool minias_common_context_bind_symbol_alias(MiniAs *,const char *,size_t,
+                                             int64_t,const char *,size_t);
+bool minias_common_context_declare_common(MiniAs *,const char *,uint64_t,
+                                    uint64_t,size_t,MiniAsCommonDeclaration *);
+bool minias_common_context_finish_local_common(MiniAs *,size_t,int,uint64_t,size_t);
+
+/* Post-parse synthetic owners all use one Common SymbolID definition path. */
+bool minias_common_context_define_output_anchor(MiniAs *,const char *,int,
+                                                 uint32_t,uint64_t,bool,size_t *);
+bool minias_common_context_reserve_named_dwarf_view(MiniAs *,const char *,size_t *);
+bool minias_common_context_publish_dwarf_view(MiniAs *,size_t,uint64_t);
+bool minias_common_context_bind_fixup_reference(MiniAs *,size_t);
+
+/* Each MCLayout work pass stages Symbol values in scratch arrays. Context
+ * applies them to its one live Symbol table and refreshes its alias DAG. */
+typedef struct MiniAsSymbolLocalAnchorPlan {
+    size_t symbol_count;
+    const uint64_t *start_local;
+    const uint64_t *end_local;
+    const uint64_t *size_candidate;
+} MiniAsSymbolLocalAnchorPlan;
+typedef struct MiniAsSubsectionBaseReader {
+    void *owner;
+    bool (*base)(void *,int,uint32_t,uint64_t *);
+} MiniAsSubsectionBaseReader;
+bool minias_common_context_commit_local_symbol_anchors(MiniAs *,
+                                        const MiniAsSymbolLocalAnchorPlan *);
+bool minias_common_context_finalize_symbol_layout(MiniAs *,
+                                        const MiniAsSubsectionBaseReader *,
+                                        const uint64_t *,size_t);
+
 /* The Target only sees an opaque object-finalization capability. */
 struct MiniAsPostEmitObjectSink { MiniAs *as; };
 
@@ -27,9 +90,6 @@ bool minias_common_context_raise_section_alignment(MiniAs *,int,uint64_t);
 /* GNU .ident is the one source directive that upgrades an existing .comment
  * Section's mergeable-string attributes, without changing its SectionKey. */
 bool minias_common_context_apply_ident_comment(MiniAs *,int);
-/* MCLayout computes a complete transient measurement; Context publishes the
- * Section-visible layout sizes together, preserving one SectionID graph. */
-bool minias_common_context_publish_layout_sizes(MiniAs *,const uint64_t *,size_t);
 /* Only for bootstrap, before any source Fragment/output is present: the
  * target's configured default .text alignment may lower or raise the
  * pre-Target placeholder. This does not change Section identity. */

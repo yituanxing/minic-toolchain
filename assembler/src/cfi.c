@@ -1,4 +1,5 @@
 #include "minias_internal.h"
+#include "minias_common_context.h"
 #include "minias_common_layout.h"
 
 #include <inttypes.h>
@@ -97,28 +98,22 @@ done:
 /* Define a hidden source-location anchor at the current fragment boundary. */
 bool minias_anchor_here(MiniAs *as, size_t *index) {
     char name[72];
-    MiniAsSymbol *sym;
     const MiniAsSubsection *sub;
     if(!minias_make_private_symbol_name(name,sizeof(name),"cfi",
                                         as->cfi_anchor_counter++))return false;
-    sym = minias_get_symbol(as,name,true);
-    if (sym == NULL || sym->defined) return false;
-    *index = (size_t)(sym-as->symbols);
-    sym->defined = true;
-    if (as->target->cfi_anchors_hidden)
-        sym->visibility = MINIAS_STV_HIDDEN;
-    sym->section = as->current_section;
-    sym->subsection = as->current_subsection;
-    sym->has_fragment_anchor = true;
-    sym->fragment_anchor = as->stmt_count;
     sub=minias_layout_find_subsection(as,as->current_section,
                                       as->current_subsection);
-    if(sub!=NULL) {
-        sym->value=sub->size;
-        return true;
+    if(sub==NULL) {
+        minias_set_error(as,"cfi-no-active-subsection");
+        return false;
     }
-    minias_set_error(as,"cfi-no-active-subsection");
-    return false;
+    /* Both CFI and .loc use a source Fragment boundary, whose value is
+     * subsection-local until MCLayout normalizes it. Context alone creates
+     * the retained Symbol; the CFI producer owns only site provenance. */
+    return minias_common_context_define_source_fragment_anchor(
+        as,name,MINIAS_SOURCE_CFI,as->current_section,
+        as->current_subsection,sub->size,as->stmt_count,0,0U,
+        as->target->cfi_anchors_hidden,index);
 }
 
 static bool cfi_append(MiniAs *as,unsigned kind,unsigned reg,int64_t value) {

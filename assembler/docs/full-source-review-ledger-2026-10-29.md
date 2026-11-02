@@ -7,6 +7,60 @@
 > 和早期测试文件数量，均不能自动当作最新 HEAD 的事实。
 > “读过 / 修改过 / 完成清理”必须分别统计。
 
+### 2026-11-02 P06 entire Symbol lifecycle committed by Common Context
+
+**Exact previous published head:** `0ccb65f85f16487e94c981550902039dc6f66505`
+on Draft PR #667, with Target ISA ABI, x86/Loong GNU/Four-Target,
+MiniC Native Strict and MiniC Four-Architecture Runtime all SUCCESS.
+This batch changes one Common Symbol lifecycle for **all four targets**;
+it does not introduce a second table, a second alias graph, or an
+architecture-specific fallback.
+
+1. **Frontend semantic owner.** All nine source-level transitions
+   (binding/visibility, ELF type, fixed/anchored `.size`, `.equ`, `.set`,
+   labels, tentative COMMON, EOF local COMMON) now call typed Common
+   Context APIs. Lowering remains responsible for GNU tokenization,
+   source-site and expression interpretation, not persistent Symbol
+   mutation. Its previous standalone `bind_pending_alias` is deleted.
+2. **One layout publication.** MCLayout computes pass-local fragment
+   positions and `.size` candidates in its existing AnchorGraph. Context
+   commits these into the original SymbolIDs, normalizes by read-only
+   subsection-base callbacks, refreshes its existing alias DAG, resolves
+   cross-subsection end anchors and finally publishes all Section sizes.
+   The former external alias-refresh and Section-size-only publication
+   functions are deleted.
+3. **Synthetic symbols and bytes.** CFI source labels, post-emit CFI/
+   MCExpr/Emission anchors, DWARF named-view reservation and both
+   provisional/final view numbers, and implicit extern binding all
+   request Context transitions. Emission alone patches CFI byte ranges;
+   duplicate output anchors within an EncodeResult are rejected before
+   commit. Source event, Fixup, ELF and Target object paths remain one.
+4. **GNU alias-size correctness.** A previously reproduced bug left an
+   alias `st_size` stale after branch growth (old 259 versus GNU 262).
+   GNU tests now cover 2048 dependency edges, seven ordered forward/
+   backward aliases, fixed and anchored target sizes, explicit
+   `.size alias,11/0` before/after binding, and full ELF symbol values.
+   The Context records only lexical snapshot versus dynamic target
+   tracking; no second alias-sized map is retained.
+
+**Production source delta against `0ccb65f8`:** ten modified
+`assembler/src` files, **+642/-377**, net **+265** lines; much of the
+added Context code replaces deleted Lowering/Layout/synthetic scattered
+implementations. CI, tests and documentation are counted separately.
+
+**Independent local proof:** strict release `-Werror` MiniAS A0
+**30/30 PASS**; old assembler built from `37394c1d` versus this candidate
+**26 four-target fixtures: 18 byte-identical ELF and eight matched
+rejects**; full-production-TU Symbol ownership and synthetic ownership
+checks PASS (zero non-Context direct writes); GNU alias-size ordering,
+source rebind/composite, `.org`, subsection `.size`, DWARF views, CFI,
+ELF link and Fixup transaction probes PASS. A few local ELF parsing
+probes require absent `pyelftools`, so their later stages and the new
+**exact-head remote CI** are separate acceptance requirements. The
+remaining compile-time mutable Symbol getter isolation and full strict
+GNU/Linux runtime suite are still pending; this is not a P04/P06 total
+closure claim.
+
 ### 2026-11-02 P06 Context Section metadata + workflow ownership check
 
 **Immediate published base:** `356a9b2d590bec7d85170ec1720a3ed44a2d97b8`

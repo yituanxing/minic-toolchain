@@ -1,4 +1,5 @@
 #include "minias_common_emission_private.h"
+#include "minias_common_context.h"
 
 #include <limits.h>
 #include <stdarg.h>
@@ -147,10 +148,9 @@ static bool minias_record_fixup(MiniAs *as,
     }
     if (!absolute_zero_symbol && symbol == NULL) return false;
     if (!absolute_zero_symbol)symbol_index = (size_t)(symbol - as->symbols);
-    if (!absolute_zero_symbol && !symbol->defined && symbol->bind == MINIAS_STB_LOCAL &&
-        !symbol->explicit_local_binding &&
-        strncmp(symbol->name, ".L", 2U) != 0)
-        symbol->bind = MINIAS_STB_GLOBAL;
+    if (!absolute_zero_symbol &&
+        !minias_common_context_bind_fixup_reference(as,symbol_index))
+        return false;
 
     if (!minias_grow_array((void **)&as->emission->fixups,
                     &as->emission->fixup_capacity,
@@ -295,6 +295,16 @@ static bool minias_commit_encode_result(MiniAs *as, const MiniAsStmt *owner) {
                              owner->line);
             return false;
         }
+        /* One encoder result cannot define the same Symbol twice. Catch
+         * duplicates before ANY global Symbol or Fixup commit, not after
+         * the first name has already been published. */
+        for(size_t prior=0U;prior<i;++prior) {
+            if(result->anchors[prior].name_id==request->name_id) {
+                minias_set_error(as,"invalid-encoded-anchor:line=%zu",
+                                 owner->line);
+                return false;
+            }
+        }
     }
     for (i = 0U; i < result->fixup_count; ++i) {
         const MiniAsEncodeFixupRequest *request = &result->fixups[i];
@@ -320,13 +330,9 @@ static bool minias_commit_encode_result(MiniAs *as, const MiniAsStmt *owner) {
     for (i = 0U; i < result->anchor_count; ++i) {
         const MiniAsEncodeAnchorRequest *request = &result->anchors[i];
         const char *name=as->symbol_names[request->name_id].name;
-        MiniAsSymbol *anchor = minias_get_symbol(as, name, true);
-        if (anchor == NULL) return false;
-        anchor->defined = true;
-        anchor->section = owner->section;
-        anchor->subsection = owner->subsection;
-        anchor->value = owner->offset;
-        anchor->bind = MINIAS_STB_LOCAL;
+        if(!minias_common_context_define_output_anchor(
+              as,name,owner->section,owner->subsection,owner->offset,
+              false,NULL))return false;
     }
     for (i = 0U; i < result->fixup_count; ++i) {
         const MiniAsEncodeFixupRequest *request = &result->fixups[i];

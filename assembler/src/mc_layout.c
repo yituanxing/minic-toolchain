@@ -326,6 +326,20 @@ static MiniAsSubsection *find_canonical_subsection(const MiniAs *as,
     return NULL;
 }
 
+/* Context owns the persistent Symbol state; MCLayout lends it only the
+ * current canonical subsection base as a scalar.  No mutable subsection
+ * record or private AnchorGraph escapes the owning layout translation unit. */
+static bool layout_symbol_subsection_base(void *owner,int section,
+                                          uint32_t number,uint64_t *base) {
+    const MiniAs *as=(const MiniAs *)owner;
+    const MiniAsSubsection *sub;
+    if(as==NULL || base==NULL || as->layout==NULL)return false;
+    sub=find_canonical_subsection(as,section,number);
+    if(sub==NULL)return false;
+    *base=sub->base;
+    return true;
+}
+
 bool minias_finalize_subsection_layout(MiniAs *as) {
     size_t i;
     int active_section = -1;
@@ -392,57 +406,16 @@ bool minias_finalize_subsection_layout(MiniAs *as) {
         }
         stmt->offset += sub->base;
     }
-    for (i = 0U; i < as->symbol_count; ++i) {
-        MiniAsSymbol *symbol = &as->symbols[i];
-        MiniAsSubsection *sub;
-
-        /* Dependent aliases have no independent subsection offset.  They
-         * are refreshed from their final target after normalization, so
-         * adding a subsection base to their old value would double-count. */
-        if (!symbol->defined || symbol->section < 0 ||
-            symbol->has_alias_dependency) {
-            continue;
-        }
-        sub = find_canonical_subsection(as, symbol->section,
-                                        symbol->subsection);
-        if (sub == NULL || symbol->value > UINT64_MAX - sub->base) {
-            minias_set_error(as, "internal:symbol-subsection-layout:%s", symbol->name);
-            goto failed;
-        }
-        symbol->value += sub->base;
-        /* Parse-site .size records the span, not an already normalized
-         * absolute end offset. Reconstitute the exact end anchor after
-         * subsection concatenation, including sources that never needed a
-         * relaxation pass. A relayout iteration also reaches this path,
-         * so the end is normalized only once per layout application. */
-        if (symbol->has_size_end_anchor && !symbol->has_size_start_symbol) {
-            if (symbol->size > UINT64_MAX - symbol->value) {
-                minias_set_error(as, "fragment-size-end-overflow:%s",
-                                 symbol->name);
-                goto failed;
-            }
-            symbol->size_end_value = symbol->value + symbol->size;
-        }
-    }
-    if(!minias_refresh_symbol_aliases(as))goto failed;
-    /* The end anchor may be measured from a distinct same-section label,
-     * e.g. GNU .size public,.-.Lfunction_start.  Resolve that SymbolID
-     * only AFTER every subsection's symbols have their final bases. */
-    for(i=0U;i<as->symbol_count;++i) {
-        MiniAsSymbol *sym=&as->symbols[i];
-        const MiniAsSymbol *start;
-        if(!sym->has_size_end_anchor || !sym->has_size_start_symbol)continue;
-        if(sym->size_start_symbol_index>=as->symbol_count)goto failed;
-        start=&as->symbols[sym->size_start_symbol_index];
-        if(!start->defined || start->section!=sym->section ||
-           start->value>UINT64_MAX-sym->size) {
-            minias_set_error(as,"fragment-size-start-mismatch:%s",sym->name);
-            goto failed;
-        }
-        sym->size_end_value=start->value+sym->size;
-    }
-    if(!minias_common_context_publish_layout_sizes(
-            as,section_layout_sizes,as->section_count))goto failed;
+    /* One Context publication normalizes all source SymbolIDs, refreshes
+     * their alias DAG, resolves cross-subsection .size end anchors, and
+     * commits the complete Section sizes. Neither a partial Symbol update
+     * nor a Section size snapshot is observable on the succeeding pass. */
+    const MiniAsSubsectionBaseReader bases={
+        .owner=as,
+        .base=layout_symbol_subsection_base
+    };
+    if(!minias_common_context_finalize_symbol_layout(
+            as,&bases,section_layout_sizes,as->section_count))goto failed;
     free(section_layout_sizes);
     return true;
 failed:
@@ -463,7 +436,7 @@ typedef struct MiniAsAnchorGraph {
     /* Per-pass subsection-local candidate coordinates. Kept separate from
      * MiniAsSymbol until the entire Fragment pass commits atomically, so
      * `.org` sees one coherent previous Section-relative symbol snapshot. */
-    uint64_t *start_local, *end_local;
+    uint64_t *start_local, *end_local, *size_candidate;
     uint64_t *candidate_base;
     uint32_t *org_next_size;
     /* Derived from the pass-local growth worklist, never a session-wide
@@ -483,6 +456,7 @@ static void free_anchor_graph(MiniAsAnchorGraph *graph) {
     free(graph->end_subsection);
     free(graph->start_local);
     free(graph->end_local);
+    free(graph->size_candidate);
     free(graph->candidate_base);
     free(graph->org_next_size);
     free(graph->branch_membership);
@@ -541,6 +515,7 @@ static MiniAsAnchorGraph *build_anchor_graph(MiniAs *as) {
         malloc((symbols ? symbols : 1U) * sizeof(size_t));
     graph->start_local = malloc((symbols ? symbols : 1U) * sizeof(uint64_t));
     graph->end_local = malloc((symbols ? symbols : 1U) * sizeof(uint64_t));
+    graph->size_candidate = malloc((symbols ? symbols : 1U) * sizeof(uint64_t));
     graph->candidate_base = malloc((subsections ? subsections : 1U) *
                                    sizeof(uint64_t));
     graph->org_next_size = malloc((n ? n : 1U) * sizeof(uint32_t));
@@ -550,6 +525,7 @@ static MiniAsAnchorGraph *build_anchor_graph(MiniAs *as) {
         graph->symbol_subsection == NULL ||
         graph->end_subsection == NULL ||
         graph->start_local == NULL || graph->end_local == NULL ||
+        graph->size_candidate == NULL ||
         graph->candidate_base == NULL ||
         graph->org_next_size == NULL) {
         minias_set_error(as, "out-of-memory:fragment-index-storage");
@@ -829,7 +805,7 @@ static bool minias_scan_fragment_layout(MiniAs *as, bool *placement_changed) {
         }
     }
     for (i = 0U; i < graph->symbol_count; ++i) {
-        MiniAsSymbol *symbol = &as->symbols[i];
+        const MiniAsSymbol *symbol = &as->symbols[i];
         size_t start_idx,end_idx,source;
         uint64_t start,end;
         if (!symbol->has_size_end_anchor) continue;
@@ -859,7 +835,7 @@ static bool minias_scan_fragment_layout(MiniAs *as, bool *placement_changed) {
                              symbol->name);
             return false;
         }
-        symbol->size = end-start;
+        graph->size_candidate[i] = end-start;
     }
     /* Previous subsection bases may differ when an earlier DATA/branch
      * grew. The next fixed-point pass must reevaluate every retained `.org`
@@ -872,14 +848,14 @@ static bool minias_scan_fragment_layout(MiniAs *as, bool *placement_changed) {
     /* Commit all staged anchors together. The public finalizer also serves
      * the parser and expects subsection-local values; it adds the NEW base
      * once and refreshes every retained SymbolID alias dependency. */
-    for(i=0U;i<graph->symbol_count;++i) {
-        MiniAsSymbol *sym=&as->symbols[i];
-        if(!sym->has_fragment_anchor || !sym->defined ||
-           sym->section<0)continue;
-        sym->value=graph->start_local[i];
-        if(sym->has_size_end_anchor)
-            sym->size_end_value=graph->end_local[i];
-    }
+    const MiniAsSymbolLocalAnchorPlan anchors={
+        .symbol_count=graph->symbol_count,
+        .start_local=graph->start_local,
+        .end_local=graph->end_local,
+        .size_candidate=graph->size_candidate
+    };
+    if(!minias_common_context_commit_local_symbol_anchors(as,&anchors))
+        return false;
     return minias_finalize_subsection_layout(as);
 }
 

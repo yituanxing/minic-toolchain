@@ -1,4 +1,5 @@
 #include "minias_internal.h"
+#include "minias_common_context.h"
 
 #include <ctype.h>
 #include <errno.h>
@@ -175,14 +176,11 @@ static bool parse_loc(MiniAs *as,const char *args,size_t source_line) {
             else if(!strcmp(part,"-0"))loc.view_mode=2U;
             else {
                 size_t k;
-                MiniAsSymbol *view_symbol;
                 if(!minias_expr_symbol_start(part[0]))goto bad;
                 for(k=1U;part[k];++k)
                     if(!minias_expr_symbol_continue(part[k]))goto bad;
-                view_symbol=minias_get_symbol(as,part,true);
-                if(view_symbol==NULL || view_symbol->defined ||
-                   view_symbol->alias_pending)goto bad;
-                loc.view_symbol_index=(size_t)(view_symbol-as->symbols);
+                if(!minias_common_context_reserve_named_dwarf_view(
+                       as,part,&loc.view_symbol_index))goto bad;
                 loc.view_mode=3U;
             }
         }else goto bad;
@@ -212,13 +210,9 @@ static bool parse_loc(MiniAs *as,const char *args,size_t source_line) {
             }
         }
         if(loc.view_mode==2U)loc.view_number=0U;
-        if(loc.view_symbol_index!=SIZE_MAX) {
-            MiniAsSymbol *view=&as->symbols[loc.view_symbol_index];
-            view->section=MINIAS_SECTION_ABS;
-            view->subsection=0U;
-            view->value=loc.view_number;
-            view->defined=true;
-        }
+        if(loc.view_symbol_index!=SIZE_MAX &&
+           !minias_common_context_publish_dwarf_view(
+                 as,loc.view_symbol_index,loc.view_number))goto bad;
     }
     as->debug_locs[as->debug_loc_count++]=loc;
     as->debug_is_stmt=loc.is_stmt;
@@ -354,15 +348,14 @@ static bool resolve_views_sorted(MiniAs *as,bool strict,
         }
         loc->view_number=view;
         if(loc->view_symbol_index!=SIZE_MAX) {
-            MiniAsSymbol *sym;
             if(loc->view_symbol_index>=as->symbol_count) {
                 minias_set_error(as,"dwarf-view-invalid-symbol");
                 return false;
             }
-            sym=&as->symbols[loc->view_symbol_index];
-            sym->section=MINIAS_SECTION_ABS;
-            sym->value=view;
-            sym->defined=true;
+            /* Repeatable: provisional parse views are recomputed after
+             * each layout/relaxation pass, then once more for DWARF emit. */
+            if(!minias_common_context_publish_dwarf_view(
+                   as,loc->view_symbol_index,view))return false;
         }
         previous_view=view;
     }

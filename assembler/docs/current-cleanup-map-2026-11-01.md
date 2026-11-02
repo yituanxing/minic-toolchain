@@ -1,15 +1,32 @@
 # MiniAS 当前清理与所有权总览（2026-11-01）
 
+> **2026-11-02 P06 Symbol 语义所有权整批收口（基于已发布
+> `0ccb65f8`）：** Common Lowering 中的九类 Symbol 定义/声明操作、
+> MCLayout 的每轮 Fragment 锚点与最终大小提交，以及 CFI、DWARF、
+> MCExpr、Emission 的合成符号/隐式外部引用，全部走 Context 的
+> typed transition。Context 持有唯一 SymbolID 表和别名 DAG；
+> 不再保留 Lowering 的别名绑定写入、Layout 的直接 Symbol 更新、
+> 旧的跨模块别名刷新入口或独立 Section size 发布入口。
+> 新的全生产 TU 所有权门禁和合成符号门禁纳入 Target 工作流。
+> GNU 验证发现并覆盖分支松弛导致别名 `st_size` 过期的旧缺陷，
+> `.size alias,0/11`、别名前后定义顺序以及动态大小锚已按
+> GNU 精确对象对照。**当前仍保留 Common 内部可写
+> `MiniAsSymbol` 记录/`minias_get_symbol` 读借用，尚未完成
+> 编译期的 const/ID 查询硬隔离；也未宣称 P04/P06 全部结束。**
+> 本批 exact-head 远端结果应以新推送的 SHA 为准。
+
 > **2026-11-02 P06 Section 元数据归属后续：** 解析期
 > Section 对齐、首次 `.section` 的 `sh_entsize` 与 GNU `.ident`
 > 的 `.comment` 属性升级统一归 Common Context；MCLayout 计算
 > 一次性临时大小快照，在 Subsection/Symbol/别名/`.size` 归一化
 > 后向 Context 一次发布所有 Section 的 `layout_size`。Lowering
 > 和 Layout 不再直接改这些 Section 属性，未引入持久影子表。
-> 结构门禁已加入远端工作流。已发布的 `356a9b2d` 在 x86/GNU
-> 及 AArch64/QEMU 工作流成功，但 RV native 停在将 MCExpr 枚举
-> 错误地要求出现在 Target 公共头的旧源码检查；下一提交同步修正
-> 该检查以符合前一批 P04 私有类型边界，不能把旧 SHA 判为全绿。
+> 结构门禁已加入远端工作流。**最终发布提交 `0ccb65f8` 的
+> Target ISA ABI、x86/LoongArch GNU/Four-Target、MiniC Native
+> Strict 和 MiniC Four-Architecture Runtime 工作流均 SUCCESS。**
+> 前一 SHA `356a9b2d` 曾遇到 MCExpr 枚举旧头文件路径检查，
+> `0ccb65f8` 已将其更新为 Common 私有存在/Target 公共不存在的
+> 双向断言，并通过同一远端流水线。
 
 > **2026-11-02 P05 重放/Target 公共类型继续收口（基于已发布
 > `7d562531`）：** SourceGraph 的 Site 校验、强制分支查找、跨完整
@@ -130,8 +147,11 @@
   statement/directive、Section/Symbol、Fragment emit/commit、driver
   按消费者搬迁；Context/Lowering/Layout/Emission 已各有独立状态，
   本批进一步关闭可写 Subsection、raw Fixup/pattern 和 bootstrap
-  alignment 外泄。后续仍须逐消费者收口 Section/Symbol 的直接
-  可写记录；每批删除原实现而非留下桥接双路径。
+  alignment 外泄。**本轮已完成 Symbol 语义写入集中到 Context：**
+  前端、Layout、CFI/DWARF、MCExpr、Emission 不再直接修改 Symbol；
+  仍待把 Common 消费者的可写 `MiniAsSymbol *` 读借用收成 const/
+  SymbolID 查询接口，并清点余下 Section 宽借用。每批删除原实现
+  而非留下桥接双路径。
 - [x] **Fragment 负载类型化**：按 FragmentKind 收窄
   `MiniAsStmt` 的 DATA/ALIGN/ORG/INSTRUCTION 等专属 payload；
   Parser/Layout/Emitter/Target/SourceGraph 整批迁移，删除旧字段，

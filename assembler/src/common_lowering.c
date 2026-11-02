@@ -659,29 +659,14 @@ static bool handle_symbol_list(MiniAs *as,
 
     while (cursor != NULL) {
         char *comma = strchr(cursor, ',');
-        MiniAsSymbol *symbol;
 
         if (comma != NULL) {
             *comma = '\0';
         }
         cursor = minias_trim(cursor);
         if (*cursor != '\0') {
-            symbol = minias_get_symbol(as, cursor, true);
-            if (symbol == NULL) {
-                return false;
-            }
-            if (binding) {
-                /* GNU GAS: a late .local never turns an already-declared
-                 * SHN_COMMON global into a local COMMON ELF symbol. */
-                if (!(bind == MINIAS_STB_LOCAL && symbol->defined &&
-                      symbol->section == MINIAS_SECTION_COMMON)) {
-                    symbol->bind = bind;
-                    symbol->explicit_local_binding = bind == MINIAS_STB_LOCAL;
-                }
-            }
-            if (set_visibility) {
-                symbol->visibility = visibility;
-            }
+            if(!minias_common_context_declare_symbol_binding(
+                   as,cursor,binding,bind,set_visibility,visibility))return false;
         }
         cursor = comma == NULL ? NULL : comma + 1;
     }
@@ -690,8 +675,11 @@ static bool handle_symbol_list(MiniAs *as,
 
 static bool parse_type(MiniAs *as, char *args, size_t line) {
     char *separator = strchr(args, ',');
-    MiniAsSymbol *symbol;
+    const char *name;
     char *kind;
+    uint8_t type=MINIAS_STT_NOTYPE;
+    uint8_t binding=MINIAS_STB_LOCAL;
+    bool force_binding=false;
 
     if (separator == NULL) {
         separator = args;
@@ -705,43 +693,43 @@ static bool parse_type(MiniAs *as, char *args, size_t line) {
         }
     }
     *separator = '\0';
-    symbol = minias_get_symbol(as, minias_trim(args), true);
-    if (symbol == NULL) {
-        return false;
-    }
+    name=minias_trim(args);
     kind = minias_trim(separator + 1);
     if (strcmp(kind, "@function") == 0 || strcmp(kind, "%function") == 0 ||
         strcmp(kind, "STT_FUNC") == 0) {
-        symbol->type = MINIAS_STT_FUNC;
+        type=MINIAS_STT_FUNC;
     } else if (strcmp(kind, "@object") == 0 || strcmp(kind, "%object") == 0 ||
                strcmp(kind, "STT_OBJECT") == 0) {
-        symbol->type = MINIAS_STT_OBJECT;
+        type=MINIAS_STT_OBJECT;
     } else if(strcmp(kind,"@notype")==0 || strcmp(kind,"%notype")==0 ||
               strcmp(kind,"STT_NOTYPE")==0) {
-        symbol->type=MINIAS_STT_NOTYPE;
+        type=MINIAS_STT_NOTYPE;
     } else if(strcmp(kind,"@tls_object")==0 || strcmp(kind,"%tls_object")==0 ||
               strcmp(kind,"STT_TLS")==0) {
-        symbol->type=MINIAS_STT_TLS;
+        type=MINIAS_STT_TLS;
     } else if(strcmp(kind,"@common")==0 || strcmp(kind,"%common")==0 ||
               strcmp(kind,"STT_COMMON")==0) {
         /* GAS treats @common as STT_OBJECT + GLOBAL binding, not as
          * an ELF STT_COMMON (5) symbol. This is observable in symtab. */
-        symbol->type=MINIAS_STT_OBJECT;
-        symbol->bind=MINIAS_STB_GLOBAL;
+        type=MINIAS_STT_OBJECT;
+        binding=MINIAS_STB_GLOBAL;
+        force_binding=true;
     } else if(strcmp(kind,"@gnu_unique_object")==0 ||
               strcmp(kind,"%gnu_unique_object")==0) {
-        symbol->type=MINIAS_STT_OBJECT;
-        symbol->bind=MINIAS_STB_GNU_UNIQUE;
+        type=MINIAS_STT_OBJECT;
+        binding=MINIAS_STB_GNU_UNIQUE;
+        force_binding=true;
     } else if(strcmp(kind,"@gnu_indirect_function")==0 ||
               strcmp(kind,"%gnu_indirect_function")==0 ||
               strcmp(kind,"STT_GNU_IFUNC")==0) {
-        symbol->type=MINIAS_STT_GNU_IFUNC;
+        type=MINIAS_STT_GNU_IFUNC;
     } else {
         minias_set_error(as,"unsupported-elf-symbol-type:%s:line=%zu",
                          kind,line);
         return false;
     }
-    return true;
+    return minias_common_context_declare_symbol_type(
+        as,name,type,force_binding,binding);
 }
 
 static bool parse_size(MiniAs *as, char *args, size_t line) {
@@ -750,6 +738,7 @@ static bool parse_size(MiniAs *as, char *args, size_t line) {
     MiniAsSymbol *start_symbol;
     char *expr;
     int64_t size_addend;
+    size_t symbol_index;
     size_t start_symbol_index;
 
     if (comma == NULL) {
@@ -777,14 +766,14 @@ static bool parse_size(MiniAs *as, char *args, size_t line) {
              * retain it on the symbol and let the later label define value
              * and section ownership.
              */
-            symbol->size = explicit_size;
-            return true;
+            return minias_common_context_declare_symbol_size(
+                as,symbol->name,explicit_size);
         }
         size_symbol = minias_get_symbol(as, expr, false);
         if (size_symbol != NULL && size_symbol->defined &&
             size_symbol->section == MINIAS_SECTION_ABS) {
-            symbol->size = size_symbol->value;
-            return true;
+            return minias_common_context_declare_symbol_size(
+                as,symbol->name,size_symbol->value);
         }
     }
     if (!symbol->defined) {
@@ -792,7 +781,8 @@ static bool parse_size(MiniAs *as, char *args, size_t line) {
         return false;
     }
     start_symbol=symbol;
-    start_symbol_index=(size_t)(symbol-as->symbols);
+    symbol_index=(size_t)(symbol-as->symbols);
+    start_symbol_index=symbol_index;
     if (!minias_parse_size_end_addend(expr,symbol->name,&size_addend)) {
         MiniAsSymbolDifference difference;
         if(!minias_parse_symbol_difference_absolute_tail(as,expr,&difference) ||
@@ -810,19 +800,15 @@ static bool parse_size(MiniAs *as, char *args, size_t line) {
         minias_set_error(as, "size-section-mismatch:%s:line=%zu", symbol->name, line);
         return false;
     }
-    symbol->has_size_start_symbol=start_symbol!=symbol;
-    symbol->size_start_symbol_index=start_symbol_index;
     if(symbol->subsection!=as->current_subsection ||
        start_symbol->subsection!=as->current_subsection) {
         /* GAS joins numbered subsections before evaluating symbol sizes.
          * A span from subsection 0 to subsection 1 cannot be computed from
          * parse-site LOCAL offsets: capture its end owner and let MCLayout
          * subtract the two final Section-relative Fragment anchors. */
-        symbol->has_size_end_anchor=true;
-        symbol->size_end_anchor=as->stmt_count;
-        symbol->size_end_subsection=as->current_subsection;
-        symbol->size_end_addend=size_addend;
-        symbol->size=0U;
+        if(!minias_common_context_capture_symbol_size_end(
+                as,symbol_index,start_symbol_index,as->current_subsection,
+                as->stmt_count,size_addend,0U,true))return false;
         as->lowering->has_cross_subsection_size_end=true;
         return true;
     }
@@ -836,40 +822,20 @@ static bool parse_size(MiniAs *as, char *args, size_t line) {
             minias_set_error(as, "size-location-mismatch:%s:line=%zu", symbol->name, line);
             return false;
         }
-        symbol->size = (uint64_t)end - start_symbol->value;
-        symbol->has_size_end_anchor = true;
-        symbol->size_end_anchor = as->stmt_count;
-        symbol->size_end_subsection = as->current_subsection;
-        symbol->size_end_addend = size_addend;
+        return minias_common_context_capture_symbol_size_end(
+            as,symbol_index,start_symbol_index,as->current_subsection,
+            as->stmt_count,size_addend,(uint64_t)end-start_symbol->value,false);
     }
-    return true;
 }
 
 /* A symbol alias carries a stable SymbolID edge.  The first parse resolves
  * forward references, and subsequent MCLayout passes refresh values after
  * branch/data growth.  Do not intern a second symbol under the same name. */
-static bool bind_pending_alias(MiniAs *as,const char *name,size_t target_index,
-                               int64_t addend,size_t line) {
-    MiniAsSymbol *alias=minias_get_symbol(as,name,true);
-    if(alias==NULL)return false;
-    if(alias->defined || alias->alias_pending || alias->has_alias_dependency) {
-        minias_set_error(as,"duplicate-symbol:%s:line=%zu",name,line);
-        return false;
-    }
-    alias->has_alias_dependency=true;
-    alias->alias_pending=true;
-    alias->alias_target_index=target_index;
-    alias->alias_addend=addend;
-    alias->alias_line=line;
-    return true;
-}
-
 static bool parse_equ(MiniAs *as, char *args, size_t line) {
     char *comma = strchr(args, ',');
     char *name;
     char *expression;
     int64_t value;
-    MiniAsSymbol *symbol;
     MiniAsSymbolExpr expr={0};
 
     if (comma == NULL) {
@@ -902,20 +868,10 @@ static bool parse_equ(MiniAs *as, char *args, size_t line) {
             }
             position=expr.addend>=0 ? here+(uint64_t)expr.addend :
                 here-((uint64_t)(-(expr.addend+1))+1U);
-            symbol=minias_get_symbol(as,name,true);
-            if(!symbol)return false;
-            if(symbol->defined || symbol->alias_pending) {
-                minias_set_error(as,"duplicate-symbol:%s:line=%zu",name,line);
-                return false;
-            }
-            symbol->defined=true;
-            symbol->section=as->current_section;
-            symbol->subsection=as->current_subsection;
-            symbol->value=position;
-            symbol->has_fragment_anchor=true;
-            symbol->fragment_anchor=as->stmt_count;
-            symbol->fragment_anchor_addend=expr.addend;
-            return true;
+            return minias_common_context_define_source_fragment_anchor(
+                as,name,MINIAS_SOURCE_EQU_DOT,as->current_section,
+                as->current_subsection,position,as->stmt_count,expr.addend,
+                line,false,NULL);
         }
         {
             MiniAsSymbol *target=minias_get_symbol(as,expr.name,true);
@@ -923,7 +879,8 @@ static bool parse_equ(MiniAs *as, char *args, size_t line) {
             if(!target)return false;
             target_index=(size_t)(target-as->symbols);
             if(!target->defined || target->section!=MINIAS_SECTION_ABS)
-                return bind_pending_alias(as,name,target_index,expr.addend,line);
+                return minias_common_context_bind_symbol_alias(
+                    as,name,target_index,expr.addend,NULL,line);
         }
     }
     if(!minias_evaluate_absolute_expression(as, expression, &value)) {
@@ -931,23 +888,8 @@ static bool parse_equ(MiniAs *as, char *args, size_t line) {
                          expression,line);
         return false;
     }
-    symbol = minias_get_symbol(as, name, true);
-    if (symbol == NULL) {
-        return false;
-    }
-    if (symbol->defined || symbol->alias_pending) {
-        if (symbol->defined && symbol->section == MINIAS_SECTION_ABS &&
-            symbol->value == (uint64_t)value) {
-            return true;
-        }
-        minias_set_error(as, "duplicate-symbol:%s:line=%zu", name, line);
-        return false;
-    }
-    symbol->defined = true;
-    symbol->section = MINIAS_SECTION_ABS;
-    symbol->subsection = 0U;
-    symbol->value = (uint64_t)value;
-    return true;
+    return minias_common_context_assign_symbol_absolute(
+        as,name,(uint64_t)value,MINIAS_ABSOLUTE_EQU_IDEMPOTENT,line);
 }
 
 static bool parse_set(MiniAs *as, char *args, size_t line) {
@@ -956,7 +898,6 @@ static bool parse_set(MiniAs *as, char *args, size_t line) {
     char *expression;
     MiniAsSymbolExpr expr;
     MiniAsSymbol *target;
-    MiniAsSymbol *alias;
     size_t target_index;
 
     if (comma == NULL) {
@@ -1013,31 +954,23 @@ static bool parse_set(MiniAs *as, char *args, size_t line) {
                                  line);
                 return false;
             }
-            alias = minias_get_symbol(as, name, true);
-            if (alias == NULL) {
-                return false;
-            }
-            if (alias->defined || alias->alias_pending) {
-                minias_set_error(as, "duplicate-symbol:%s:line=%zu", name, line);
-                return false;
-            }
-            alias->defined = true;
-            alias->section = as->current_section;
-            alias->subsection = as->current_subsection;
-            alias->value = (uint64_t)value;
             {
                 MiniAsSymbolExpr location = {0};
+                size_t fragment_ordinal=SIZE_MAX;
+                int64_t addend=0;
                 if (minias_parse_symbol_addend(expression, &location) &&
                     strcmp(location.name, ".") == 0) {
                     /* Capture the source-site symbol as an immutable
                      * Fragment anchor. Relaxation moves the anchor, not
                      * the already-parsed GNU assignment statement. */
-                    alias->has_fragment_anchor = true;
-                    alias->fragment_anchor = as->stmt_count;
-                    alias->fragment_anchor_addend = location.addend;
+                    fragment_ordinal=as->stmt_count;
+                    addend=location.addend;
                 }
+                return minias_common_context_define_source_fragment_anchor(
+                    as,name,MINIAS_SOURCE_SET_DOT,as->current_section,
+                    as->current_subsection,(uint64_t)value,fragment_ordinal,
+                    addend,line,false,NULL);
             }
-            return true;
         }
     }
 
@@ -1050,7 +983,8 @@ static bool parse_set(MiniAs *as, char *args, size_t line) {
         if(!target)return false;
         target_index=(size_t)(target-as->symbols);
         if(!target->defined || target->section!=MINIAS_SECTION_ABS)
-            return bind_pending_alias(as,name,target_index,expr.addend,line);
+            return minias_common_context_bind_symbol_alias(
+                as,name,target_index,expr.addend,NULL,line);
     }
 
     /* GNU .set is mutable, unlike .equ. Evaluate an already-defined
@@ -1060,20 +994,9 @@ static bool parse_set(MiniAs *as, char *args, size_t line) {
     {
         int64_t value;
         if(minias_evaluate_absolute_expression(as,expression,&value)) {
-            alias=minias_get_symbol(as,name,true);
-            if(!alias)return false;
-            if(alias->alias_pending ||
-               (alias->defined &&
-                (alias->section!=MINIAS_SECTION_ABS ||
-                 !alias->mutable_absolute_set))) {
-                minias_set_error(as,"duplicate-symbol:%s:line=%zu",name,line);
+            if(!minias_common_context_assign_symbol_absolute(
+                    as,name,(uint64_t)value,MINIAS_ABSOLUTE_SET_MUTABLE,line))
                 return false;
-            }
-            alias->defined=true;
-            alias->section=MINIAS_SECTION_ABS;
-            alias->subsection=0U;
-            alias->value=(uint64_t)value;
-            alias->mutable_absolute_set=true;
             as->lowering->has_mutable_absolute_sets=true;
             return true;
         }
@@ -1085,15 +1008,8 @@ static bool parse_set(MiniAs *as, char *args, size_t line) {
         }
         target_index = (size_t)(target - as->symbols);
 
-        alias = minias_get_symbol(as, name, true);
-        if (alias == NULL) {
-            return false;
-        }
-        if (alias->defined || alias->alias_pending) {
-            minias_set_error(as, "duplicate-symbol:%s:line=%zu", name, line);
-            return false;
-        }
-        return bind_pending_alias(as,name,target_index,expr.addend,line);
+        return minias_common_context_bind_symbol_alias(
+            as,name,target_index,expr.addend,NULL,line);
     }
 
     /* GNU ARM64 tramp_alias:
@@ -1109,6 +1025,7 @@ static bool parse_set(MiniAs *as, char *args, size_t line) {
         char *minus=sum?strrchr(sum+1U,'-'):NULL;
         MiniAsSymbolExpr base;
         int64_t number;
+        bool matched=false;
         bool valid=false;
         if(sum && minus && minus>sum+1U) {
             *sum++='\0';*minus++='\0';
@@ -1121,22 +1038,14 @@ static bool parse_set(MiniAs *as, char *args, size_t line) {
                 MiniAsSymbol *ref=minias_get_symbol(as,base.name,true);
                 if(ref!=NULL) {
                     size_t ref_index=(size_t)(ref-as->symbols);
-                    MiniAsSymbol *result=minias_get_symbol(as,name,true);
-                    if(result && !result->defined && !result->alias_pending) {
-                        result->alias_section_base=minias_strdup(section_name);
-                        if(result->alias_section_base!=NULL) {
-                            result->alias_pending=true;
-                            result->has_alias_dependency=true;
-                            result->alias_target_index=ref_index;
-                            result->alias_addend=number;
-                            result->alias_line=line;
-                            valid=true;
-                        }
-                    }
+                    matched=true;
+                    valid=minias_common_context_bind_symbol_alias(
+                        as,name,ref_index,number,section_name,line);
                 }
             }
         }
         free(copy);
+        if(matched)return valid;
         if(valid)return true;
     }
 
@@ -1149,19 +1058,8 @@ static bool parse_set(MiniAs *as, char *args, size_t line) {
                              line);
             return false;
         }
-        alias = minias_get_symbol(as, name, true);
-        if (alias == NULL) {
-            return false;
-        }
-        if (alias->defined || alias->alias_pending) {
-            minias_set_error(as, "duplicate-symbol:%s:line=%zu", name, line);
-            return false;
-        }
-        alias->defined = true;
-        alias->section = MINIAS_SECTION_ABS;
-        alias->subsection = 0U;
-        alias->value = (uint64_t)value;
-        return true;
+        return minias_common_context_assign_symbol_absolute(
+            as,name,(uint64_t)value,MINIAS_ABSOLUTE_SET_ONCE,line);
     }
 }
 
@@ -2195,7 +2093,7 @@ static bool pop_section(MiniAs *as, size_t line) {
 static bool define_label(MiniAs *as, char *label, size_t line) {
     char canonical[96];
     size_t numeric_id;
-    MiniAsSymbol *symbol;
+    uint64_t position;
 
     label = minias_trim(label);
     if (*label == '\0') {
@@ -2222,24 +2120,10 @@ static bool define_label(MiniAs *as, char *label, size_t line) {
         }
         label = canonical;
     }
-    symbol = minias_get_symbol(as, label, true);
-    if (symbol == NULL) {
-        return false;
-    }
-    if (symbol->defined || symbol->alias_pending) {
-        minias_set_error(as, "duplicate-symbol:%s:line=%zu", symbol->name, line);
-        return false;
-    }
-    symbol->defined = true;
-    symbol->section = as->current_section;
-    symbol->subsection = as->current_subsection;
-    symbol->has_fragment_anchor = true;
-    symbol->fragment_anchor = as->stmt_count;
-    if (!minias_current_location(as, &symbol->value)) {
-        symbol->defined = false;
-        return false;
-    }
-    return true;
+    if(!minias_current_location(as,&position))return false;
+    return minias_common_context_define_source_fragment_anchor(
+        as,label,MINIAS_SOURCE_LABEL,as->current_section,
+        as->current_subsection,position,as->stmt_count,0,line,false,NULL);
 }
 
 /* Materialize real GNU literal pools at the requested location, NOT by
@@ -2339,7 +2223,7 @@ failure:
 static bool parse_comm(MiniAs *as, const char *args, size_t line) {
     char *copy=minias_strdup(args);
     char *name,*size_text,*align_text=NULL,*first,*second;
-    MiniAsSymbol *symbol;
+    MiniAsCommonDeclaration declaration;
     uint64_t alignment=1U;
     int64_t size,alignment_value;
     size_t k;
@@ -2373,23 +2257,13 @@ static bool parse_comm(MiniAs *as, const char *args, size_t line) {
             alignment*=2U;
     }
     if((alignment&(alignment-1U))!=0U)goto invalid;
-    symbol=minias_get_symbol(as,name,true);
-    if(!symbol){free(copy);return false;}
-    if(symbol->alias_pending || symbol->type==MINIAS_STT_FUNC ||
-       symbol->bind==MINIAS_STB_WEAK)goto invalid;
-    if(symbol->defined) {
-        /* GNU GAS retains first tentative size, maxes alignment. */
-        if(symbol->section!=MINIAS_SECTION_COMMON)goto invalid;
-        if(alignment>symbol->value)symbol->value=alignment;
-        free(copy);return true;
+    if(!minias_common_context_declare_common(
+            as,name,(uint64_t)size,alignment,line,&declaration)) {
+        free(copy);
+        return false;
     }
-    if(symbol->explicit_local_binding) {
+    if(declaration.defer_local_bss) {
         MiniAsPendingLocalCommon *pending;
-        int bss;
-        if((uint64_t)size>UINT32_MAX || alignment>UINT32_MAX)goto invalid;
-        bss=minias_ensure_section(as,".bss",MINIAS_SHT_NOBITS,
-                                  MINIAS_SHF_ALLOC|MINIAS_SHF_WRITE,1U);
-        if(bss<0){free(copy);return false;}
         if(!minias_grow_array((void **)&as->lowering->pending_local_commons,
                 &as->lowering->pending_local_common_capacity,
                 sizeof(*as->lowering->pending_local_commons),
@@ -2398,30 +2272,13 @@ static bool parse_comm(MiniAs *as, const char *args, size_t line) {
             free(copy);return false;
         }
         pending=&as->lowering->pending_local_commons[as->lowering->pending_local_common_count++];
-        pending->symbol_index=(size_t)(symbol-as->symbols);
+        pending->symbol_index=declaration.symbol_id;
         pending->size=(uint64_t)size;
         pending->alignment=alignment;
         pending->line=line;
         pending->source_site=minias_source_current_site(as);
-        /* Mark this SymbolID as defined immediately, preserving GNU's
-         * duplicate-symbol and late .globl/.hidden semantics, but do not
-         * anchor its BSS offset until the complete subsection-0 source
-         * stream exists. It will become a real Fragment anchor at EOF. */
-        symbol->defined=true;
-        symbol->section=bss;
-        symbol->subsection=0U;
-        symbol->value=0U;
-        symbol->type=MINIAS_STT_OBJECT;
-        symbol->size=(uint64_t)size;
         free(copy);return true;
     }
-    symbol->defined=true;
-    symbol->bind=MINIAS_STB_GLOBAL;
-    symbol->type=MINIAS_STT_OBJECT;
-    symbol->section=MINIAS_SECTION_COMMON;
-    symbol->subsection=0U;
-    symbol->size=(uint64_t)size;
-    symbol->value=alignment;
     free(copy);return true;
 invalid:
     minias_set_error(as,"unsupported-common:%s:line=%zu",args,line);
@@ -2474,11 +2331,10 @@ static bool flush_pending_local_commons(MiniAs *as) {
            !minias_current_location(as,&here)) {
             ok=false;break;
         }
-        symbol->value=here;
-        symbol->subsection=0U;
-        symbol->has_fragment_anchor=true;
-        symbol->fragment_anchor=as->stmt_count;
-        symbol->fragment_anchor_addend=0;
+        if(!minias_common_context_finish_local_common(
+                as,pending->symbol_index,bss,here,as->stmt_count)) {
+            ok=false;break;
+        }
         if(!add_data_stmt(as,".zero",size_buf,pending->line)) {
             ok=false;break;
         }

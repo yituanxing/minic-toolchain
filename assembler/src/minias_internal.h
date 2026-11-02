@@ -51,6 +51,16 @@ typedef struct MiniAsSymbol {
     int section;
     uint64_t value;
     uint64_t size;
+    /* GNU alias `.size NAME,0` still inherits its target's current size;
+     * a nonzero explicit size or anchored `.size` span remains independent
+     * of its target across repeated MCLayout generations. */
+    bool has_explicit_size;
+    /* An alias follows a forward target or a target with live `.size` span;
+     * a defined target without dynamic size gives a lexical size snapshot.
+     * Explicit nonzero alias sizes override the inherited result. */
+    bool alias_size_tracks_target;
+    /* `.loc view NAME` can be updated after relaxation, unlike `.equ`. */
+    bool named_dwarf_view;
     uint8_t bind;
     uint8_t type;
     uint8_t visibility;
@@ -266,7 +276,6 @@ const MiniAsSymbol *minias_symbol_ref_lookup(const MiniAs *as,
 /* Common persistent Fragment/Layout subsystem. */
 bool minias_grow_array(void **, size_t *, size_t, size_t);
 bool minias_finalize_subsection_layout(MiniAs *);
-bool minias_refresh_symbol_aliases(MiniAs *);
 bool minias_solve_fragment_layout(MiniAs *, MiniAsFragmentGrowthSet *,
                                   bool *, FILE *);
 bool minias_validate_fragment_semantics(MiniAs *);

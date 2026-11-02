@@ -1,4 +1,5 @@
 #include "minias_internal.h"
+#include "minias_common_context.h"
 #include "minias_common_emission.h"
 #include "expression_grammar.h"
 
@@ -1054,7 +1055,6 @@ static bool emit_symbol_minus_dot(MiniAs *as,
 
     {
         char anchor_name[96];
-        MiniAsSymbol *anchor;
 
         if (!minias_make_private_symbol_name(anchor_name,
                                               sizeof(anchor_name),
@@ -1062,19 +1062,12 @@ static bool emit_symbol_minus_dot(MiniAs *as,
             minias_set_error(as, "expr-anchor-too-long:line=%zu", stmt->line);
             return false;
         }
-        anchor = minias_get_symbol(as, anchor_name, true);
-        if (anchor == NULL) {
-            return false;
-        }
-        anchor->defined = true;
-        anchor->section = stmt->section;
-        anchor->value = relocation_offset;
-        anchor->bind = MINIAS_STB_LOCAL;
         /* Local binding and ELF visibility are independent. The Target ABI
          * owns the visibility of assembler-synthesized expression anchors;
          * the ELF writer must not infer it from their private spelling. */
-        anchor->visibility = as->target->synthetic_expr_anchors_hidden
-                                 ? MINIAS_STV_HIDDEN : MINIAS_STV_DEFAULT;
+        if(!minias_common_context_define_output_anchor(
+               as,anchor_name,stmt->section,0U,relocation_offset,
+               as->target->synthetic_expr_anchors_hidden,NULL))return false;
 
         return minias_section_append_zero(as, stmt->section, width) &&
                minias_add_fixup_symbol_id(as,

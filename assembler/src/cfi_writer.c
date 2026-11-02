@@ -1,4 +1,5 @@
 #include "minias_internal.h"
+#include "minias_common_context.h"
 
 #include <limits.h>
 #include <stdint.h>
@@ -71,17 +72,10 @@ static bool finish_length(MiniAs *as,int sec,size_t begin) {
  * Fragments or reparse a fabricated .reloc directive. */
 static bool cfi_length_anchor(MiniAs *as,int sec,size_t offset,
                               char *name,size_t name_capacity) {
-    MiniAsSymbol *symbol;
     if(!minias_make_private_symbol_name(name,name_capacity,"cfilen",
                                         as->cfi_anchor_counter++))return false;
-    symbol=minias_get_symbol(as,name,true);
-    if(symbol==NULL || symbol->defined)return false;
-    symbol->defined=true;
-    symbol->section=sec;
-    symbol->subsection=0U;
-    symbol->value=(uint64_t)offset;
-    symbol->visibility=MINIAS_STV_HIDDEN;
-    return true;
+    return minias_common_context_define_output_anchor(
+        as,name,sec,0U,(uint64_t)offset,true,NULL);
 }
 static bool cfi_finalize_debug_length(MiniAs *as,int sec,size_t begin) {
     char end_name[72],start_name[72];
@@ -94,9 +88,9 @@ static bool cfi_finalize_debug_length(MiniAs *as,int sec,size_t begin) {
     if(!cfi_length_anchor(as,sec,end,end_name,sizeof(end_name)) ||
        !cfi_length_anchor(as,sec,begin+4U,start_name,
                           sizeof(start_name)))return false;
-    data=&as->sections[(size_t)sec];
-    memset(data->data+begin,0,4U);
-    return minias_add_section_fixup(as,
+    /* Emission owns Section bytes and their range-checked patch operation. */
+    return minias_section_patch_le32(as,sec,begin,0U) &&
+           minias_add_section_fixup(as,
                MINIAS_FIXUP_ORIGIN_SYNTHETIC_SECTION,sec,begin,
                MINIAS_FIXUP_ADD,4U,end_name,0,false) &&
            minias_add_section_fixup(as,
@@ -427,19 +421,14 @@ static bool cfi_emit_section_core(MiniAs *as,bool eh,
         minias_cfi_abi(as).address_size);
     if(section<0)return false;
     if(!eh) {
-        MiniAsSymbol *debug_base;
         /* An FDE's .debug_frame CIE pointer must be relocated when the
          * linker concatenates input .debug_frame sections.  A source-local
          * numeric offset cannot encode that final output-section address. */
         if(!minias_make_private_symbol_name(debug_base_name,
                                            sizeof(debug_base_name),"cfisec",
                                            as->cfi_anchor_counter++))return false;
-        debug_base=minias_get_symbol(as,debug_base_name,true);
-        if(debug_base==NULL || debug_base->defined)return false;
-        debug_base->defined=true;
-        debug_base->section=section;
-        debug_base->value=0U;
-        debug_base->visibility=MINIAS_STV_HIDDEN;
+        if(!minias_common_context_define_output_anchor(
+                as,debug_base_name,section,0U,0U,true,NULL))return false;
     }
     for(i=0U;i<as->cfi_proc_count;++i) {
         const MiniAsCfiProc *proc=&as->cfi_procs[i];

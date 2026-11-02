@@ -15,7 +15,7 @@ api=(root/'minias_common_context.h').read_text()
 
 for name in ('minias_common_context_raise_section_alignment',
              'minias_common_context_apply_ident_comment',
-             'minias_common_context_publish_layout_sizes'):
+             'minias_common_context_finalize_symbol_layout'):
     if not re.search(r'\bbool\s+'+name+r'\s*\(',context) or name not in api:
         raise SystemExit('missing Context Section transition: '+name)
 
@@ -23,8 +23,11 @@ if lowering.count('minias_common_context_raise_section_alignment(')!=3:
     raise SystemExit('Lowering lost an implicit/explicit/literal alignment transition')
 if lowering.count('minias_common_context_apply_ident_comment(')!=1:
     raise SystemExit('GNU .ident no longer uses Context comment-upgrade semantics')
-if layout.count('minias_common_context_publish_layout_sizes(')!=1:
+if layout.count('minias_common_context_finalize_symbol_layout(')!=1 or \
+   'minias_common_context_publish_layout_sizes(' in layout:
     raise SystemExit('MCLayout bypasses the complete Section layout publication')
+if not re.search(r'as->sections\[i\]\.layout_size\s*=\s*section_sizes\[i\]',context):
+    raise SystemExit('Context must publish all Section sizes after Symbol normalization')
 if 'sec->entry_size=entry_size;' not in context:
     raise SystemExit('new SectionKey lacks first-declaration sh_entsize')
 if 'minias_ensure_section_key(as,&key,group_flags,' not in lowering or \

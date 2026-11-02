@@ -105,6 +105,10 @@ jobs:
         run: bash tests/assembler/probe-common-context-emission-boundary.sh
       - name: Context owns Section metadata and one post-layout size commit
         run: bash tests/assembler/probe-common-context-section-metadata-owner.sh
+      - name: Context owns all source, layout and synthetic Symbol state
+        run: bash tests/assembler/probe-common-context-symbol-owner.sh
+      - name: Synthetic CFI, DWARF, MCExpr and Emit symbols use Context capabilities
+        run: bash tests/assembler/probe-common-context-synthetic-symbol-owner.sh
       - name: SourceGraph opaque-session semantic service isolation
         run: bash tests/assembler/probe-source-session-isolation.sh
       - name: Source statement events enforce Source/Common parser ownership
