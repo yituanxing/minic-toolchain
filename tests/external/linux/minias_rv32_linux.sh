@@ -89,13 +89,16 @@ preserve_failure() {
     } >"$MINIAS_FAILURE_DIR/$id.replay.txt"
 }
 # Kconfig probes GCC/binutils capabilities by emitting generated /tmp/cc*.s
-# into an ephemeral .tmp_<pid>/tmp[.o].  Their result affects the original
-# kernel configuration, so GNU and MiniAS lanes must use the same GNU probe
-# oracle.  This exception is restricted to the Kbuild root and that exact
-# temporary file shape; no production .cmd object can take this path.
+# into ephemeral .tmp_<pid>/tmp[.o], /tmp/tmp.<random>.o or /dev/null.
+# These results affect the original kernel configuration, so GNU/MiniAS
+# lanes must use the same GNU oracle. This exception is restricted to the
+# Kbuild root and those exact scratch destinations: a genuine production
+# object is under the build tree and MUST take the MiniAS-only route.
 if [[ "$PWD" == "${MINIAS_KBUILD_OUT:?}" &&
       "$input" =~ ^/tmp/cc[[:alnum:]]+\.s$ &&
-      "$output" =~ ^\.tmp_[0-9]+/tmp(\.o)?$ ]]; then
+      ( "$output" =~ ^\.tmp_[0-9]+/tmp(\.o)?$ ||
+        "$output" =~ ^/tmp/tmp\.[[:alnum:]]+\.o$ ||
+        "$output" == /dev/null ) ]]; then
     printf 'delegate-kconfig-probe cwd=%q input=%q output=%q\n' \
       "$PWD" "$input" "$output" >>"$MINIAS_AS_TRACE"
     exec "${REAL_AS:-/usr/bin/riscv64-linux-gnu-as}" "$@"
