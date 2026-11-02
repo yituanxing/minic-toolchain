@@ -949,8 +949,19 @@ cc -std=c11 -Wall -Wextra -Wpedantic -Werror -ffunction-sections \
 cc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror \
   -Iinclude -Isrc tests/compiler/c0/probe-core-object-storage-ownership.c \
   src/target/common/core_object_storage.c \
+  src/core/core_type.c \
   -o "$work/core-object-storage-ownership-probe"
 "$work/core-object-storage-ownership-probe"
+
+# A Core-attached object must consume the sealed execution type's size and
+# alignment: no target may reconsult C DataLayout or silently fall back after
+# invalid type IDs, missing layout, overflow or invalid explicit alignment.
+cc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror \
+  -Iinclude -Isrc tests/compiler/c0/probe-core-object-storage-resolved.c \
+  src/target/common/core_object_storage.c \
+  src/core/core_type.c \
+  -o "$work/core-object-storage-resolved-probe"
+"$work/core-object-storage-resolved-probe"
 
 cc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror \
   -ffunction-sections -fdata-sections -Wl,--gc-sections \
@@ -1001,9 +1012,18 @@ cc -std=c11 -Wall -Wextra -Wpedantic -Werror -Iinclude -Isrc \
 cc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror \
   -Iinclude -Isrc tests/compiler/c0/probe-core-call-semantics.c \
   src/target/common/core_call_view.c \
-  src/target/common/core_call_index.c src/frontend/type.c \
+  src/target/common/core_call_index.c src/core/core_type.c src/frontend/type.c \
   -o "$work/core-call-probe"
 "$work/core-call-probe"
+
+# Bound Core call signatures are validated by Core-owned nominal type IDs.
+# Distinct but equally-shaped function/record declarations must not alias,
+# and malformed indirect pointers/results are rejected before any ABI plan.
+cc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror \
+  -Iinclude -Isrc tests/compiler/c0/probe-core-call-coretypes.c \
+  src/target/common/core_call_view.c src/core/core_type.c src/frontend/type.c \
+  -o "$work/core-call-coretypes-probe"
+"$work/core-call-coretypes-probe"
 
 # A calling-convention ID is part of both direct and indirect Core call
 # identity. The Common IR carries it without implementing a target ABI;

@@ -1,4 +1,5 @@
 #include "compiler/core_function_set.h"
+#include "core/core_type_import.h"
 #include "core/reentry_index.h"
 #include "frontend/function_body.h"
 #include <stdint.h>
@@ -13,6 +14,14 @@ static bool minic_core_set_bootstrap_trace_enabled(void) {
     return getenv("MINIC_BOOTSTRAP_TRACE") != NULL;
 }
 
+/* The only source-to-execution-type conversion in the compiler driver.
+ * Neither the Core verifier nor any Target query needs a C Program to
+ * interpret a Core type identity after this snapshot is attached. */
+static bool minic_core_set_import_type(void *data, MinicType source,
+                                      MinicCoreTypeId *result) {
+    return minic_core_type_import((MinicCoreTypeImporter *)data, source, result);
+}
+
 void minic_core_function_set_initialize(MinicCoreFunctionSet *set) {
     if (set == NULL) {
         return;
@@ -20,6 +29,7 @@ void minic_core_function_set_initialize(MinicCoreFunctionSet *set) {
     set->functions = NULL;
     set->statuses = NULL;
     set->function_count = 0U;
+    set->type_context = NULL;
 }
 
 void minic_core_function_set_destroy(MinicCoreFunctionSet *set) {
@@ -35,6 +45,10 @@ void minic_core_function_set_destroy(MinicCoreFunctionSet *set) {
     }
     free(set->functions);
     free(set->statuses);
+    if (set->type_context != NULL) {
+        minic_core_type_context_destroy(set->type_context);
+        free(set->type_context);
+    }
     minic_core_function_set_initialize(set);
 }
 
@@ -45,6 +59,7 @@ bool minic_prepare_core_function_set(const MinicC0Program *program,
                                             const MinicTargetInfo *target,
                                             MinicCoreFunctionSet *output) {
     MinicCoreFunctionSet set;
+    MinicCoreTypeImporter importer;
     MinicCoreReentryIndex *index;
     size_t function_index;
 
@@ -54,6 +69,15 @@ bool minic_prepare_core_function_set(const MinicC0Program *program,
         return false;
     }
     minic_core_function_set_initialize(&set);
+    set.type_context = (MinicCoreTypeContext *)malloc(sizeof(*set.type_context));
+    if (set.type_context == NULL) return false;
+    minic_core_type_context_initialize(set.type_context);
+    if (!minic_core_type_importer_initialize(&importer, program,
+                                            target->data_layout, set.type_context)) {
+        minic_core_type_importer_destroy(&importer);
+        minic_core_function_set_destroy(&set);
+        return false;
+    }
     set.function_count = program->function_count;
     if (set.function_count != 0U) {
         set.functions =
@@ -61,8 +85,8 @@ bool minic_prepare_core_function_set(const MinicC0Program *program,
         set.statuses = (MinicCoreLowerStatus *)malloc(set.function_count *
                                                        sizeof(*set.statuses));
         if (set.functions == NULL || set.statuses == NULL) {
-            free(set.functions);
-            free(set.statuses);
+            minic_core_type_importer_destroy(&importer);
+            minic_core_function_set_destroy(&set);
             return false;
         }
     }
@@ -103,6 +127,13 @@ bool minic_prepare_core_function_set(const MinicC0Program *program,
         set.statuses[function_index] =
             minic_core_lower_function_with_index(&body, target,
                                                 &set.functions[function_index], index);
+        if (set.statuses[function_index] == MINIC_CORE_LOWER_OK &&
+            (!minic_core_function_snapshot_types(
+                &set.functions[function_index], set.type_context,
+                minic_core_set_import_type, &importer) ||
+             !minic_core_function_verify(&set.functions[function_index]))) {
+            set.statuses[function_index] = MINIC_CORE_LOWER_ERROR;
+        }
         if (set.statuses[function_index] == MINIC_CORE_LOWER_OK)
             (void)minic_core_function_fold_literal_branches(
                 &set.functions[function_index]);
@@ -119,6 +150,7 @@ bool minic_prepare_core_function_set(const MinicC0Program *program,
         }
     }
     minic_core_reentry_index_destroy(index);
+    minic_core_type_importer_destroy(&importer);
     minic_core_function_set_destroy(output);
     *output = set;
     return true;

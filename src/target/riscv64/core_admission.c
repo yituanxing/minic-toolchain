@@ -192,6 +192,13 @@ static bool core_function_can_emit_with_index(
             return core_rv64_capability_reject(function, "object-type", index, -1);
         if (storage != NULL) {
             shape = &storage->objects[index];
+        } else if (function->type_context != NULL) {
+            /* Even standalone RV64 admission must not reopen C layout once
+             * the Core function has a resolved execution-type snapshot. */
+            if (!minic_core_object_storage_resolved(
+                    function->type_context, &function->objects[index], &calculated))
+                return core_rv64_capability_reject(function, "object-layout", index, -1);
+            shape = &calculated;
         } else if (program != NULL) {
             if (!minic_core_object_storage(
                     program, minic_default_data_layout(),

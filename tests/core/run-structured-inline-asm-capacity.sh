@@ -6,8 +6,9 @@ work=${BUILD_DIR:-"$root/build/debug"}/tests/core-structured-inline-asm-capacity
 mkdir -p "$work"
 "$host_cc" -std=c11 -O2 -Wall -Wextra -Werror \
     -ffunction-sections -fdata-sections -Wl,--gc-sections \
-    -I"$root/src" \
+    -I"$root/src" -I"$root/include" \
     "$root/src/core/core_ir.c" \
+    "$root/src/core/core_type.c" \
     "$root/src/core/core_ir_verify.c" \
     "$root/src/core/core_lower_asm_operands.c" \
     "$root/src/frontend/type.c" \

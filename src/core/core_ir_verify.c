@@ -11,6 +11,208 @@ static bool storage_shape_is_valid(const void *data, size_t count, size_t capaci
     return count <= capacity && (count == 0U || data != NULL);
 }
 
+/* Source descriptors coexist temporarily with the fully resolved Core
+ * snapshots. These checks are independent of C integer rank/enum tables and
+ * deliberately fail closed when a TypeId belongs to another (or no) arena. */
+static const MinicCoreType *core_snapshot_base_type(const MinicCoreFunction *function,
+                                                    MinicCoreTypeId type_id) {
+    MinicCoreTypeId base;
+    if (function == NULL || function->type_context == NULL) return NULL;
+    base = minic_core_type_unqualified(function->type_context, type_id);
+    return minic_core_type_get(function->type_context, base);
+}
+
+static bool core_snapshot_exists(const MinicCoreFunction *function,
+                                 MinicCoreTypeId type_id) {
+    return minic_core_function_type_get(function, type_id) != NULL;
+}
+
+static bool core_snapshot_parameter_list_valid(
+    const MinicCoreFunction *function, const MinicCoreTypeId *types,
+    size_t count) {
+    size_t i;
+    if (count != 0U && types == NULL) return false;
+    for (i = 0U; i < count; ++i)
+        if (!core_snapshot_exists(function, types[i])) return false;
+    return true;
+}
+
+/* The function-pointer's pointee and the indirect call's signature must be
+ * the SAME Core function identity. Merely comparing a return register class
+ * would silently widen the call ABI contract. */
+static bool core_snapshot_indirect_callee_valid(
+    const MinicCoreFunction *function, const MinicCoreInstruction *instruction) {
+    const MinicCoreCallSignature *signature;
+    const MinicCoreType *callee_pointer;
+    MinicCoreValueId callee_value;
+    callee_value = instruction->value.indirect_call.callee;
+    if (instruction->value.indirect_call.signature_id >= function->call_signature_count ||
+        callee_value >= function->value_count) return false;
+    signature = &function->call_signatures[instruction->value.indirect_call.signature_id];
+    callee_pointer = core_snapshot_base_type(
+        function, function->values[callee_value].core_type_id);
+    if (callee_pointer == NULL || callee_pointer->kind != MINIC_CORE_TYPE_POINTER)
+        return false;
+    return minic_core_type_unqualified(function->type_context,
+                                      callee_pointer->value.pointer.pointee) ==
+           minic_core_type_unqualified(function->type_context,
+                                       signature->core_function_type_id) &&
+           instruction->core_type_id == signature->core_return_type_id;
+}
+
+static bool core_snapshot_fixed_record_arguments_valid(
+    const MinicCoreFunction *function, size_t argument_begin,
+    size_t argument_count, const MinicCoreTypeId *parameters,
+    size_t parameter_count) {
+    size_t i;
+    if (parameter_count > argument_count ||
+        argument_begin > function->call_argument_count ||
+        argument_count > function->call_argument_count - argument_begin)
+        return false;
+    for (i = 0U; i < parameter_count; ++i) {
+        const MinicCoreType *param = core_snapshot_base_type(function, parameters[i]);
+        const MinicCoreCallArgument *argument =
+            &function->call_arguments[argument_begin + i];
+        if (param == NULL) return false;
+        if (param->kind == MINIC_CORE_TYPE_RECORD) {
+            if (argument->kind != MINIC_CORE_CALL_ARGUMENT_OBJECT ||
+                argument->value.object_id >= function->object_count ||
+                minic_core_type_unqualified(function->type_context, parameters[i]) !=
+                    minic_core_type_unqualified(
+                        function->type_context,
+                        function->objects[argument->value.object_id].core_type_id))
+                return false;
+        } else if (argument->kind != MINIC_CORE_CALL_ARGUMENT_VALUE ||
+                   argument->value.value_id >= function->value_count) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool minic_core_function_verify_core_type_snapshot(const MinicCoreFunction *function) {
+    const MinicCoreType *type;
+    size_t i, j;
+    if (function == NULL || function->type_context == NULL ||
+        !storage_shape_is_valid(function->fixed_register_bindings,
+                                function->fixed_register_binding_count,
+                                function->fixed_register_binding_capacity) ||
+        !storage_shape_is_valid(function->objects, function->object_count,
+                                function->object_capacity) ||
+        !storage_shape_is_valid(function->globals, function->global_count,
+                                function->global_capacity) ||
+        !storage_shape_is_valid(function->callees, function->callee_count,
+                                function->callee_capacity) ||
+        !storage_shape_is_valid(function->call_signatures,
+                                function->call_signature_count,
+                                function->call_signature_capacity) ||
+        !storage_shape_is_valid(function->values, function->value_count,
+                                function->value_capacity) ||
+        !storage_shape_is_valid(function->instructions, function->instruction_count,
+                                function->instruction_capacity) ||
+        !storage_shape_is_valid(function->call_arguments,
+                                function->call_argument_count,
+                                function->call_argument_capacity) ||
+        !core_snapshot_exists(function, function->core_return_type_id) ||
+        !core_snapshot_parameter_list_valid(function,
+                                            function->core_parameter_type_ids,
+                                            function->parameter_count)) return false;
+    for (i = 0U; i < function->fixed_register_binding_count; ++i)
+        if (!core_snapshot_exists(function,
+                                  function->fixed_register_bindings[i].core_type_id))
+            return false;
+    for (i = 0U; i < function->object_count; ++i) {
+        size_t size, alignment;
+        if (!minic_core_function_object_layout(function, (MinicCoreObjectId)i,
+                                               &size, &alignment) || alignment == 0U)
+            return false;
+        type = core_snapshot_base_type(function, function->objects[i].core_type_id);
+        if (type == NULL || type->kind == MINIC_CORE_TYPE_VOID ||
+            type->kind == MINIC_CORE_TYPE_FUNCTION ||
+            type->kind == MINIC_CORE_TYPE_OPAQUE) return false;
+        (void)size;
+    }
+    for (i = 0U; i < function->global_count; ++i)
+        if (!core_snapshot_exists(function, function->globals[i].core_type_id))
+            return false;
+    for (i = 0U; i < function->callee_count; ++i) {
+        const MinicCoreCallee *callee = &function->callees[i];
+        if (!core_snapshot_exists(function, callee->core_return_type_id) ||
+            !core_snapshot_parameter_list_valid(function,
+                                                callee->core_parameter_type_ids,
+                                                callee->parameter_count)) return false;
+    }
+    for (i = 0U; i < function->call_signature_count; ++i) {
+        const MinicCoreCallSignature *signature = &function->call_signatures[i];
+        const MinicCoreType *function_type =
+            core_snapshot_base_type(function, signature->core_function_type_id);
+        if (function_type == NULL || function_type->kind != MINIC_CORE_TYPE_FUNCTION ||
+            !core_snapshot_exists(function, signature->core_return_type_id) ||
+            !core_snapshot_parameter_list_valid(function,
+                                                signature->core_parameter_type_ids,
+                                                signature->parameter_count) ||
+            function_type->value.function.return_type != signature->core_return_type_id ||
+            function_type->value.function.parameter_count != signature->parameter_count ||
+            function_type->value.function.is_variadic != signature->is_variadic ||
+            function_type->value.function.calling_convention != signature->calling_convention ||
+            (signature->parameter_count != 0U &&
+             function_type->value.function.parameters == NULL)) return false;
+        for (j = 0U; j < signature->parameter_count; ++j)
+            if (function_type->value.function.parameters[j] !=
+                signature->core_parameter_type_ids[j]) return false;
+    }
+    for (i = 0U; i < function->value_count; ++i)
+        if (!core_snapshot_exists(function, function->values[i].core_type_id)) return false;
+    for (i = 0U; i < function->instruction_count; ++i) {
+        const MinicCoreInstruction *instruction = &function->instructions[i];
+        if (!core_snapshot_exists(function, instruction->core_type_id)) return false;
+        if (instruction->result != MINIC_CORE_VALUE_INVALID) {
+            if (instruction->result >= function->value_count ||
+                instruction->core_type_id !=
+                    function->values[instruction->result].core_type_id) return false;
+        }
+        if (instruction->kind == MINIC_CORE_INSTRUCTION_FIELD_ADDRESS) {
+            const MinicCoreType *record = core_snapshot_base_type(
+                function, instruction->value.field_address.core_record_type_id);
+            const MinicCoreType *pointer;
+            size_t base_id = instruction->value.field_address.base;
+            if (record == NULL || record->kind != MINIC_CORE_TYPE_RECORD ||
+                !record->value.record.is_complete ||
+                instruction->value.field_address.field_index >= record->value.record.field_count ||
+                record->value.record.fields == NULL ||
+                record->value.record.fields[instruction->value.field_address.field_index]
+                    .byte_offset != instruction->value.field_address.byte_offset ||
+                base_id >= function->value_count) return false;
+            pointer = core_snapshot_base_type(function,
+                                              function->values[base_id].core_type_id);
+            if (pointer == NULL || pointer->kind != MINIC_CORE_TYPE_POINTER ||
+                minic_core_type_unqualified(function->type_context,
+                                            pointer->value.pointer.pointee) !=
+                    minic_core_type_unqualified(function->type_context,
+                        instruction->value.field_address.core_record_type_id)) return false;
+        } else if (instruction->kind == MINIC_CORE_INSTRUCTION_CALL) {
+            const MinicCoreCallee *callee;
+            if (instruction->value.call.callee_id >= function->callee_count) return false;
+            callee = &function->callees[instruction->value.call.callee_id];
+            if (instruction->core_type_id != callee->core_return_type_id ||
+                !core_snapshot_fixed_record_arguments_valid(
+                    function, instruction->value.call.argument_begin,
+                    instruction->value.call.argument_count, callee->core_parameter_type_ids,
+                    callee->parameter_count)) return false;
+        } else if (instruction->kind == MINIC_CORE_INSTRUCTION_INDIRECT_CALL) {
+            const MinicCoreCallSignature *signature;
+            if (!core_snapshot_indirect_callee_valid(function, instruction)) return false;
+            signature = &function->call_signatures[
+                instruction->value.indirect_call.signature_id];
+            if (!core_snapshot_fixed_record_arguments_valid(
+                function, instruction->value.indirect_call.argument_begin,
+                instruction->value.indirect_call.argument_count,
+                signature->core_parameter_type_ids, signature->parameter_count)) return false;
+        }
+    }
+    return true;
+}
+
 /* A Core enum scalar needs its target integer representation snapshot.
  * Pointers to incomplete enums are permitted and do not need a snapshot. */
 static bool enum_scalar_is_registered(const MinicCoreFunction *function, MinicType type) {
@@ -1285,6 +1487,8 @@ bool minic_core_function_verify(const MinicCoreFunction *function) {
         function->value_count > function->instruction_count) {
         return false;
     }
+    if (function->type_context != NULL &&
+        !minic_core_function_verify_core_type_snapshot(function)) return false;
     if (!enum_scalar_is_registered(function, function->return_type)) return false;
     for (index = 0U; index < function->parameter_count; ++index) {
         if (!enum_scalar_is_registered(function, function->parameter_types[index])) return false;

@@ -206,6 +206,7 @@ void minic_core_function_initialize(MinicCoreFunction *function) {
     }
     (void)memset(function, 0, sizeof(*function));
     function->entry_block = MINIC_CORE_BLOCK_INVALID;
+    function->core_return_type_id = MINIC_CORE_TYPE_INVALID;
 }
 
 void minic_core_function_destroy(MinicCoreFunction *function) {
@@ -226,11 +227,13 @@ void minic_core_function_destroy(MinicCoreFunction *function) {
     for (callee_index = 0U; callee_index < function->callee_count; ++callee_index) {
         free(function->callees[callee_index].name);
         free(function->callees[callee_index].parameter_types);
+        free(function->callees[callee_index].core_parameter_type_ids);
     }
     for (call_signature_index = 0U;
          call_signature_index < function->call_signature_count;
          ++call_signature_index) {
         free(function->call_signatures[call_signature_index].parameter_types);
+        free(function->call_signatures[call_signature_index].core_parameter_type_ids);
     }
     for (global_index = 0U; global_index < function->global_count; ++global_index) {
         free(function->globals[global_index].name);
@@ -265,6 +268,7 @@ void minic_core_function_destroy(MinicCoreFunction *function) {
     }
     free(function->name);
     free(function->parameter_types);
+    free(function->core_parameter_type_ids);
     free(function->enum_types);
     free(function->fixed_register_bindings);
     free(function->globals);
@@ -428,6 +432,7 @@ bool minic_core_function_add_fixed_register_binding(MinicCoreFunction *function,
     function->fixed_register_bindings[index].register_name = name_copy;
     function->fixed_register_bindings[index].register_name_length = register_name_length;
     function->fixed_register_bindings[index].type = type;
+    function->fixed_register_bindings[index].core_type_id = MINIC_CORE_TYPE_INVALID;
     function->fixed_register_bindings[index].is_local = is_local;
     function->fixed_register_binding_count += 1U;
     *binding_id = index;
@@ -474,6 +479,7 @@ bool minic_core_function_add_repeated_object(MinicCoreFunction *function,
     new_id = (MinicCoreObjectId)function->object_count;
     function->objects[function->object_count].span = span;
     function->objects[function->object_count].type = element_type;
+    function->objects[function->object_count].core_type_id = MINIC_CORE_TYPE_INVALID;
     function->objects[function->object_count].element_count = element_count;
     function->objects[function->object_count].explicit_alignment = 0U;
     function->object_count += 1U;
@@ -544,6 +550,7 @@ bool minic_core_function_add_global(MinicCoreFunction *function,
     function->globals[function->global_count].name = name_copy;
     function->globals[function->global_count].name_length = name_length;
     function->globals[function->global_count].type = type;
+    function->globals[function->global_count].core_type_id = MINIC_CORE_TYPE_INVALID;
     *global_id = (MinicCoreGlobalId)function->global_count;
     function->global_count += 1U;
     return true;
@@ -695,6 +702,7 @@ bool minic_core_function_add_callee(MinicCoreFunction *function,
     }
     stored.name_length = name_length;
     stored.return_type = return_type;
+    stored.core_return_type_id = MINIC_CORE_TYPE_INVALID;
     stored.parameter_count = parameter_count;
     stored.is_variadic = is_variadic;
     stored.calling_convention = calling_convention;
@@ -779,6 +787,8 @@ bool minic_core_function_add_call_signature(MinicCoreFunction *function,
     }
     (void)memset(&stored, 0, sizeof(stored));
     stored.function_type_id = function_type_id;
+    stored.core_function_type_id = MINIC_CORE_TYPE_INVALID;
+    stored.core_return_type_id = MINIC_CORE_TYPE_INVALID;
     stored.return_type = return_type;
     stored.parameter_count = parameter_count;
     stored.is_variadic = is_variadic;
@@ -965,7 +975,13 @@ bool minic_core_function_append_value_instruction(MinicCoreFunction *function,
     result_id = (MinicCoreValueId)function->value_count;
     stored = *instruction;
     stored.result = result_id;
+    /* Source producers do not manufacture Core IDs. The whole-function
+     * ingress resolves these in one fail-closed snapshot transaction. */
+    stored.core_type_id = MINIC_CORE_TYPE_INVALID;
+    if (stored.kind == MINIC_CORE_INSTRUCTION_FIELD_ADDRESS)
+        stored.value.field_address.core_record_type_id = MINIC_CORE_TYPE_INVALID;
     function->values[function->value_count].type = stored.type;
+    function->values[function->value_count].core_type_id = MINIC_CORE_TYPE_INVALID;
     function->values[function->value_count].definition = instruction_id;
     function->value_count += 1U;
     append_reserved_instruction(function, block, &stored, instruction_id);
@@ -992,6 +1008,9 @@ bool minic_core_function_append_effect_instruction(MinicCoreFunction *function,
     instruction_id = (MinicCoreInstructionId)function->instruction_count;
     stored = *instruction;
     stored.result = MINIC_CORE_VALUE_INVALID;
+    stored.core_type_id = MINIC_CORE_TYPE_INVALID;
+    if (stored.kind == MINIC_CORE_INSTRUCTION_FIELD_ADDRESS)
+        stored.value.field_address.core_record_type_id = MINIC_CORE_TYPE_INVALID;
     append_reserved_instruction(function, block, &stored, instruction_id);
     return true;
 }
@@ -1010,6 +1029,190 @@ bool minic_core_function_set_terminator(MinicCoreFunction *function,
     }
     block->terminator = *terminator;
     block->has_terminator = true;
+    return true;
+}
+
+/* Once C lowering has finished, all execution types are translated at the
+ * ingress as a single snapshot. A failed import never attaches a half-typed
+ * function to Core; the C-only function remains independently destructible. */
+static void clear_core_type_snapshots(MinicCoreFunction *function) {
+    size_t index;
+
+    if (function == NULL) return;
+    function->type_context = NULL;
+    function->core_return_type_id = MINIC_CORE_TYPE_INVALID;
+    free(function->core_parameter_type_ids);
+    function->core_parameter_type_ids = NULL;
+    for (index = 0U; index < function->fixed_register_binding_count; ++index)
+        function->fixed_register_bindings[index].core_type_id = MINIC_CORE_TYPE_INVALID;
+    for (index = 0U; index < function->object_count; ++index)
+        function->objects[index].core_type_id = MINIC_CORE_TYPE_INVALID;
+    for (index = 0U; index < function->global_count; ++index)
+        function->globals[index].core_type_id = MINIC_CORE_TYPE_INVALID;
+    for (index = 0U; index < function->callee_count; ++index) {
+        MinicCoreCallee *callee = &function->callees[index];
+        callee->core_return_type_id = MINIC_CORE_TYPE_INVALID;
+        free(callee->core_parameter_type_ids);
+        callee->core_parameter_type_ids = NULL;
+    }
+    for (index = 0U; index < function->call_signature_count; ++index) {
+        MinicCoreCallSignature *signature = &function->call_signatures[index];
+        signature->core_function_type_id = MINIC_CORE_TYPE_INVALID;
+        signature->core_return_type_id = MINIC_CORE_TYPE_INVALID;
+        free(signature->core_parameter_type_ids);
+        signature->core_parameter_type_ids = NULL;
+    }
+    for (index = 0U; index < function->value_count; ++index)
+        function->values[index].core_type_id = MINIC_CORE_TYPE_INVALID;
+    for (index = 0U; index < function->instruction_count; ++index) {
+        MinicCoreInstruction *instruction = &function->instructions[index];
+        instruction->core_type_id = MINIC_CORE_TYPE_INVALID;
+        if (instruction->kind == MINIC_CORE_INSTRUCTION_FIELD_ADDRESS)
+            instruction->value.field_address.core_record_type_id = MINIC_CORE_TYPE_INVALID;
+    }
+}
+
+static bool snapshot_one_type(const MinicCoreTypeContext *context,
+                              MinicCoreTypeSnapshotResolver resolver,
+                              void *user_data, MinicType source,
+                              MinicCoreTypeId *result) {
+    return resolver(user_data, source, result) &&
+           minic_core_type_get(context, *result) != NULL;
+}
+
+static bool snapshot_type_array(const MinicCoreTypeContext *context,
+                                MinicCoreTypeSnapshotResolver resolver,
+                                void *user_data, const MinicType *source,
+                                size_t count, MinicCoreTypeId **result) {
+    size_t index;
+    MinicCoreTypeId *copy;
+
+    if (result == NULL || (count != 0U && source == NULL) ||
+        count > SIZE_MAX / sizeof(*copy)) return false;
+    *result = NULL;
+    if (count == 0U) return true;
+    copy = malloc(count * sizeof(*copy));
+    if (copy == NULL) return false;
+    *result = copy;
+    for (index = 0U; index < count; ++index)
+        if (!snapshot_one_type(context, resolver, user_data, source[index], &copy[index]))
+            return false;
+    return true;
+}
+
+bool minic_core_function_snapshot_types(MinicCoreFunction *function,
+                                        const MinicCoreTypeContext *context,
+                                        MinicCoreTypeSnapshotResolver resolver,
+                                        void *user_data) {
+    size_t index;
+
+    if (function == NULL || context == NULL || resolver == NULL ||
+        function->type_context != NULL || !minic_core_function_verify(function))
+        return false;
+    /* This cleanup is deliberately idempotent. It also permits a caller to
+     * retry with a fresh importer after an earlier failed translation. */
+    clear_core_type_snapshots(function);
+    if (!snapshot_one_type(context, resolver, user_data, function->return_type,
+                           &function->core_return_type_id) ||
+        !snapshot_type_array(context, resolver, user_data,
+                             function->parameter_types, function->parameter_count,
+                             &function->core_parameter_type_ids)) goto failed;
+    for (index = 0U; index < function->fixed_register_binding_count; ++index)
+        if (!snapshot_one_type(context, resolver, user_data,
+                               function->fixed_register_bindings[index].type,
+                               &function->fixed_register_bindings[index].core_type_id))
+            goto failed;
+    for (index = 0U; index < function->object_count; ++index)
+        if (!snapshot_one_type(context, resolver, user_data,
+                               function->objects[index].type,
+                               &function->objects[index].core_type_id))
+            goto failed;
+    for (index = 0U; index < function->global_count; ++index)
+        if (!snapshot_one_type(context, resolver, user_data,
+                               function->globals[index].type,
+                               &function->globals[index].core_type_id))
+            goto failed;
+    for (index = 0U; index < function->callee_count; ++index) {
+        MinicCoreCallee *callee = &function->callees[index];
+        if (!snapshot_one_type(context, resolver, user_data, callee->return_type,
+                               &callee->core_return_type_id) ||
+            !snapshot_type_array(context, resolver, user_data,
+                                 callee->parameter_types, callee->parameter_count,
+                                 &callee->core_parameter_type_ids)) goto failed;
+    }
+    for (index = 0U; index < function->call_signature_count; ++index) {
+        MinicCoreCallSignature *signature = &function->call_signatures[index];
+        /* C's declaration-table ID lives only in this migration adapter.
+         * The resulting Core FUNCTION ID is an executable call contract. */
+        MinicType source_function = {0};
+        source_function.base_kind = MINIC_TYPE_BASE_FUNCTION;
+        source_function.function_type_id = signature->function_type_id;
+        if (!snapshot_one_type(context, resolver, user_data, source_function,
+                               &signature->core_function_type_id) ||
+            !snapshot_one_type(context, resolver, user_data, signature->return_type,
+                               &signature->core_return_type_id) ||
+            !snapshot_type_array(context, resolver, user_data,
+                                 signature->parameter_types, signature->parameter_count,
+                                 &signature->core_parameter_type_ids)) goto failed;
+    }
+    for (index = 0U; index < function->value_count; ++index)
+        if (!snapshot_one_type(context, resolver, user_data, function->values[index].type,
+                               &function->values[index].core_type_id)) goto failed;
+    for (index = 0U; index < function->instruction_count; ++index) {
+        MinicCoreInstruction *instruction = &function->instructions[index];
+        if (!snapshot_one_type(context, resolver, user_data, instruction->type,
+                               &instruction->core_type_id)) goto failed;
+        if (instruction->kind == MINIC_CORE_INSTRUCTION_FIELD_ADDRESS) {
+            MinicType source_record = {0};
+            source_record.base_kind = MINIC_TYPE_BASE_RECORD;
+            source_record.record_id = instruction->value.field_address.record_id;
+            if (!snapshot_one_type(context, resolver, user_data, source_record,
+                                   &instruction->value.field_address.core_record_type_id))
+                goto failed;
+        }
+    }
+    if (minic_core_function_attach_type_context(function, context)) return true;
+failed:
+    clear_core_type_snapshots(function);
+    return false;
+}
+
+bool minic_core_function_attach_type_context(MinicCoreFunction *function,
+                                             const MinicCoreTypeContext *context) {
+    if (function == NULL || context == NULL || function->type_context != NULL)
+        return false;
+    function->type_context = context;
+    if (minic_core_function_verify_core_type_snapshot(function)) return true;
+    function->type_context = NULL;
+    return false;
+}
+
+const MinicCoreType *minic_core_function_type_get(const MinicCoreFunction *function,
+                                                  MinicCoreTypeId id) {
+    if (function == NULL) return NULL;
+    return minic_core_type_get(function->type_context, id);
+}
+
+bool minic_core_function_object_layout(const MinicCoreFunction *function,
+                                       MinicCoreObjectId object_id,
+                                       size_t *size, size_t *alignment) {
+    const MinicCoreObject *object;
+    const MinicCoreType *type;
+    size_t object_size;
+    size_t object_alignment;
+    if (function == NULL || size == NULL || alignment == NULL ||
+        object_id >= function->object_count || function->objects == NULL) return false;
+    object = &function->objects[object_id];
+    type = minic_core_function_type_get(function, object->core_type_id);
+    if (type == NULL || !type->has_layout || type->alignment == 0U ||
+        object->element_count == 0U ||
+        type->size > SIZE_MAX / object->element_count) return false;
+    object_size = type->size * object->element_count;
+    object_alignment = type->alignment > object->explicit_alignment
+                           ? type->alignment : object->explicit_alignment;
+    if ((object_alignment & (object_alignment - 1U)) != 0U) return false;
+    *size = object_size;
+    *alignment = object_alignment;
     return true;
 }
 

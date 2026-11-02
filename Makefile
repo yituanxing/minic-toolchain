@@ -74,6 +74,8 @@ MINIC_SOURCES := \
 	src/compiler/inline_reference.c \
 	src/compiler/core_reachability.c \
 	src/core/core_ir.c \
+	src/core/core_type.c \
+	src/core/core_type_import.c \
 	src/core/core_ir_verify.c \
 	src/core/core_ir_dump.c \
 	src/core/value_uses.c \
@@ -883,8 +885,12 @@ check-binary128-literal-oracle:
 		$(MINIC_LDFLAGS) -o "$(BUILD_DIR)/tests/frontend/binary128_literal_oracle_test"
 	"$(abspath $(BUILD_DIR))/tests/frontend/binary128_literal_oracle_test"
 
+.PHONY: check-core-types
+check-core-types:
+	bash tests/core/run-core-types.sh "$(CC)"
+
 .PHONY: check-core-ir-shapes
-check-core-ir-shapes:
+check-core-ir-shapes: check-core-types
 	bash tests/core/run-core-ir-shapes.sh "$(CC)"
 
 .PHONY: check-core-ir-shapes-source

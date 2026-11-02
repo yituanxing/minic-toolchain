@@ -10,6 +10,9 @@ typedef struct MinicCoreFunctionSet {
     MinicCoreFunction *functions;
     MinicCoreLowerStatus *statuses;
     size_t function_count;
+    /* One type arena per translation unit. Heap storage keeps the address
+     * stable while the function set is transactionally moved to its caller. */
+    MinicCoreTypeContext *type_context;
 } MinicCoreFunctionSet;
 /* Compiler-internal AST->Core per-TU function lifecycle. The outgoing
  * statuses/verified Core IR are consumed by independent backend targets. */

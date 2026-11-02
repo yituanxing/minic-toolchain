@@ -370,6 +370,7 @@ bool minic_core_object_interval(
     CoreScalarObjectInterval *interval) {
     size_t object_size;
     size_t object_alignment;
+    bool scalar_storage;
 
     if (program == NULL || function == NULL || layout == NULL ||
         (unit_bytes != 4U && unit_bytes != 8U) || interval == NULL ||
@@ -382,17 +383,36 @@ bool minic_core_object_interval(
     interval->first_position = SIZE_MAX;
     interval->last_position = 0U;
 
-    if (!(minic_type_is_integer(function->objects[object_id].type) ||
-           minic_type_is_pointer(function->objects[object_id].type) ||
-           minic_type_is_float(function->objects[object_id].type) ||
-           minic_type_is_double(function->objects[object_id].type) ||
-           minic_type_is_long_double(function->objects[object_id].type)) ||
-        function->objects[object_id].element_count != 1U ||
-        !minic_data_layout_type(layout,
-                                program,
-                                function->objects[object_id].type,
-                                &object_size,
-                                &object_alignment) ||
+    if (function->type_context != NULL) {
+        const MinicCoreTypeId id = minic_core_type_unqualified(
+            function->type_context, function->objects[object_id].core_type_id);
+        const MinicCoreType *type = minic_core_type_get(function->type_context,
+                                                        id);
+        const MinicCoreType *storage_type = minic_core_type_get(
+            function->type_context, function->objects[object_id].core_type_id);
+        /* Failed type/layout admission forfeits storage reuse. The shared
+         * CoreObjectStorage plan separately rejects invalid objects. */
+        if (type == NULL || storage_type == NULL || !storage_type->has_layout)
+            return true;
+        scalar_storage = type->kind == MINIC_CORE_TYPE_INTEGER ||
+                         type->kind == MINIC_CORE_TYPE_POINTER ||
+                         type->kind == MINIC_CORE_TYPE_FLOAT;
+        object_size = storage_type->size;
+        object_alignment = storage_type->alignment;
+    } else {
+        /* Standalone, context-free C fixtures retain the old query path;
+         * production function visitors require a resolved type context. */
+        const MinicType type = function->objects[object_id].type;
+        scalar_storage = minic_type_is_integer(type) ||
+                         minic_type_is_pointer(type) ||
+                         minic_type_is_float(type) ||
+                         minic_type_is_double(type) ||
+                         minic_type_is_long_double(type);
+        if (!minic_data_layout_type(layout, program, type,
+                                    &object_size, &object_alignment))
+            return true;
+    }
+    if (!scalar_storage || function->objects[object_id].element_count != 1U ||
         object_size == 0U || object_size > unit_bytes || object_alignment == 0U ||
         object_alignment > unit_bytes ||
         function->objects[object_id].explicit_alignment > unit_bytes) {

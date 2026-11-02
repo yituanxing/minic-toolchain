@@ -23,6 +23,7 @@ static bool core_value_spill_slot_size(const MinicC0Program *program,
                                        size_t *slot_size) {
     size_t value_size;
     size_t value_alignment;
+    const MinicCoreType *resolved;
 
     if (program == NULL || function == NULL || slot_size == NULL ||
         cached_slot_sizes == NULL || value_id >= function->value_count)
@@ -31,15 +32,26 @@ static bool core_value_spill_slot_size(const MinicC0Program *program,
         *slot_size = cached_slot_sizes[value_id];
         return true;
     }
-    if (!minic_data_layout_type(layout,
-                                program,
-                                function->values[value_id].type,
-                                &value_size,
-                                &value_alignment) ||
-        value_size == 0U || value_size > 2U * unit_bytes) {
+    if (function->type_context != NULL) {
+        /* SSA spill geometry is a Core execution property. A resolved type
+         * that lacks layout may not reconsult the source-language arena. */
+        resolved = minic_core_type_get(function->type_context,
+                         function->values[value_id].core_type_id);
+        if (resolved == NULL || !resolved->has_layout)
+            return false;
+        value_size = resolved->size;
+        value_alignment = resolved->alignment;
+    } else if (!minic_data_layout_type(layout, program,
+                                      function->values[value_id].type,
+                                      &value_size, &value_alignment)) {
+        /* Retained for standalone legacy CoreFunction fixtures only. The
+         * production function visitor requires an attached type context. */
         return false;
     }
-    (void)value_alignment;
+    if (value_alignment == 0U || value_size == 0U ||
+        value_size > 2U * unit_bytes) {
+        return false;
+    }
     *slot_size = value_size > unit_bytes ? 2U * unit_bytes : unit_bytes;
     cached_slot_sizes[value_id] = *slot_size;
     return true;

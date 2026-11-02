@@ -21,6 +21,12 @@ typedef struct MinicCoreCallView {
     const MinicCoreCallArgument *arguments;    /* NULL when count == 0 */
     const MinicType *parameter_types;
     MinicType return_type;
+    /* The type-checked Core signature, independent of a C frontend arena.
+     * The legacy types above are still read by unmigrated machine ABI plans;
+     * a bound type_context makes these IDs authoritative for Core validity. */
+    const MinicCoreTypeId *core_parameter_type_ids;
+    MinicCoreTypeId core_return_type_id;
+    MinicCoreTypeId core_function_type_id; /* indirect only */
     MinicCoreValueId function_pointer;         /* indirect only */
     size_t argument_begin;
     size_t argument_count;
@@ -42,10 +48,18 @@ bool minic_core_call_view_build(const MinicCoreFunction *,
 bool minic_core_call_argument_actual_type(const MinicCoreFunction *,
                                            const MinicCoreCallArgument *,
                                            MinicType *);
+/* Core-owned type counterpart, usable by all target ABI plans after their
+ * C-type shape readers have migrated. Requires a bound CoreTypeContext. */
+bool minic_core_call_argument_actual_core_type(const MinicCoreFunction *,
+                                               const MinicCoreCallArgument *,
+                                               MinicCoreTypeId *);
 /* Common checked argument/record identity, all five backend call planners. */
 bool minic_core_call_view_argument_type(const MinicCoreFunction *,
                                         const MinicCoreCallView *, size_t,
                                         MinicType *);
+bool minic_core_call_view_argument_core_type(const MinicCoreFunction *,
+                                             const MinicCoreCallView *, size_t,
+                                             MinicCoreTypeId *);
 
 /* Once-per-definition, machine-independent CALL semantic index. Only real
  * CALL IDs are stored, in ascending order; no per-instruction pointer table.

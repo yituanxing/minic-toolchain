@@ -1,7 +1,8 @@
 #ifndef MINIC_CORE_CORE_IR_H
 #define MINIC_CORE_CORE_IR_H
 
-#include "frontend/token.h"
+#include "common/source_location.h"
+#include "core/core_type.h"
 #include "frontend/type.h"
 
 #include <stdbool.h>
@@ -172,12 +173,15 @@ typedef enum MinicCoreTerminatorKind {
 } MinicCoreTerminatorKind;
 
 typedef struct MinicCoreValue {
+    /* Migration-only C descriptor; eventually removed at the Core boundary. */
     MinicType type;
+    MinicCoreTypeId core_type_id;
     MinicCoreInstructionId definition;
 } MinicCoreValue;
 
-/* Core owns the semantic integer representation of enums referenced by a
-   function. Backends must not recover enum compatibility from Semantic AST. */
+/* Migration-only enum-to-integer compatibility table for old C-based
+ * consumers. New CoreTypeId snapshots already resolve enum execution shape;
+ * no machine consumer should inspect this source-language table. */
 typedef struct MinicCoreEnumType {
     MinicEnumId enum_id;
     MinicType effective_integer_type;
@@ -189,13 +193,16 @@ typedef struct MinicCoreEnumType {
 typedef struct MinicCoreFixedRegisterBinding {
     char *register_name;
     size_t register_name_length;
-    MinicType type;
+    MinicType type; /* migration-only source descriptor */
+    MinicCoreTypeId core_type_id;
     bool is_local;
 } MinicCoreFixedRegisterBinding;
 
 typedef struct MinicCoreObject {
     MinicSourceSpan span;
+    /* Migration-only C descriptor; target storage consumes core_type_id. */
     MinicType type;
+    MinicCoreTypeId core_type_id;
     /* M95_REPEATED_LOCAL_OBJECT: legacy frontend arrays carry element type
        plus an explicit count. Keep Core object addressing element-typed while
        owning the complete repeated storage extent. Ordinary objects use 1. */
@@ -208,7 +215,8 @@ typedef struct MinicCoreObject {
 typedef struct MinicCoreGlobal {
     char *name;
     size_t name_length;
-    MinicType type;
+    MinicType type; /* migration-only source descriptor */
+    MinicCoreTypeId core_type_id;
 } MinicCoreGlobal;
 
 typedef struct MinicCoreFunctionSymbol {
@@ -219,8 +227,11 @@ typedef struct MinicCoreFunctionSymbol {
 typedef struct MinicCoreCallee {
     char *name;
     size_t name_length;
+    /* Migration-only C signature, retained for unswitched ABI consumers. */
     MinicType return_type;
     MinicType *parameter_types;
+    MinicCoreTypeId core_return_type_id;
+    MinicCoreTypeId *core_parameter_type_ids;
     size_t parameter_count;
     /* BATCH_D_VARIADIC_DIRECT_CALL: parameter_types is the fixed prefix;
        variadic tail types are the semantic types of VALUE arguments. */
@@ -232,9 +243,13 @@ typedef struct MinicCoreCallee {
 /* M83_FIRST_CLASS_INDIRECT_CALL: Core owns enough static signature data to
    verify an indirect call without consulting frontend Program state. */
 typedef struct MinicCoreCallSignature {
+    /* Migration-only C identity. Core uses core_function_type_id. */
     MinicFunctionTypeId function_type_id;
     MinicType return_type;
     MinicType *parameter_types;
+    MinicCoreTypeId core_function_type_id;
+    MinicCoreTypeId core_return_type_id;
+    MinicCoreTypeId *core_parameter_type_ids;
     size_t parameter_count;
     /* M150_INDIRECT_VARIADIC_CALL_SIGNATURE_OWNER: parameter_types is the
        fixed prefix; variadic tail VALUE arguments carry their own scalar type. */
@@ -369,7 +384,9 @@ typedef struct MinicCoreStructuredInlineAsmOperand {
 typedef struct MinicCoreInstruction {
     MinicCoreInstructionKind kind;
     MinicSourceSpan span;
+    /* Migration-only C result descriptor; may be void for effects. */
     MinicType type;
+    MinicCoreTypeId core_type_id;
     MinicCoreValueId result;
     union {
         int64_t integer_value;
@@ -416,7 +433,9 @@ typedef struct MinicCoreInstruction {
         MinicCoreBlockId block_id;
         struct {
             MinicCoreValueId base;
+            /* Migration-only source RecordId; Core owns the nominal type. */
             MinicRecordId record_id;
+            MinicCoreTypeId core_record_type_id;
             size_t field_index;
             /* Target-neutral DataLayout result captured at AST -> Core lowering.
                Backends consume the byte displacement without reopening record AST. */
@@ -547,8 +566,13 @@ typedef struct MinicCoreBlock {
 typedef struct MinicCoreFunction {
     char *name;
     size_t name_length;
+    /* Migration-only source signature. The attached type arena is borrowed
+     * and must outlive this function and all target consumers. */
     MinicType return_type;
     MinicType *parameter_types;
+    const MinicCoreTypeContext *type_context;
+    MinicCoreTypeId core_return_type_id;
+    MinicCoreTypeId *core_parameter_type_ids;
     size_t parameter_count;
     MinicFunctionCallingConvention calling_convention;
     /* Definition-side signature fact: ABI callee entry (notably RV32
@@ -596,6 +620,33 @@ typedef struct MinicCoreFunction {
     size_t block_capacity;
     MinicCoreBlockId entry_block;
 } MinicCoreFunction;
+
+/* Temporary, ingress-only adapter. The callback resolves each already
+ * semantically checked C descriptor into a Core TypeId in the supplied arena.
+ * No importer or C Program is retained by Core. */
+typedef bool (*MinicCoreTypeSnapshotResolver)(void *user_data,
+                                              MinicType source_type,
+                                              MinicCoreTypeId *core_type_id);
+
+/* Snapshots a complete lowered function, including its call signature IDs,
+ * in one operation. On failure all Core snapshots are discarded and the
+ * function remains unattached. Call only after Core lowering finishes. */
+bool minic_core_function_snapshot_types(MinicCoreFunction *function,
+                                        const MinicCoreTypeContext *context,
+                                        MinicCoreTypeSnapshotResolver resolver,
+                                        void *user_data);
+/* For independent Core producers that have already populated all snapshots.
+ * Both paths reject invalid/incomplete type identities and object layouts. */
+bool minic_core_function_attach_type_context(MinicCoreFunction *function,
+                                             const MinicCoreTypeContext *context);
+bool minic_core_function_verify_core_type_snapshot(const MinicCoreFunction *function);
+const MinicCoreType *minic_core_function_type_get(const MinicCoreFunction *function,
+                                                  MinicCoreTypeId id);
+/* Fully resolved element extent for private objects; explicit object alignment
+ * remains independent of the underlying element's natural ABI alignment. */
+bool minic_core_function_object_layout(const MinicCoreFunction *function,
+                                       MinicCoreObjectId object_id,
+                                       size_t *size, size_t *alignment);
 
 bool minic_core_scalar_bitcast_types_valid(MinicType target_type, MinicType source_type);
 void minic_core_function_initialize(MinicCoreFunction *function);
