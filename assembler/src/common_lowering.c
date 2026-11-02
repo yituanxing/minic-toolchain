@@ -1,6 +1,7 @@
 #include "minias_common_lowering.h"
 #include "minias_common_context.h"
 #include "minias_common_emission.h"
+#include "minias_common_layout.h"
 #include "source_graph_common.h"
 
 #include <ctype.h>
@@ -166,19 +167,8 @@ static bool add_stmt(MiniAs *as,
      * regions do not grow a redundant alignment Fragment per instruction.
      * The actual padding is deferred to MCLayout, where symbolic LEBs and
      * other variable-width preceding data have their final sizes. */
-    if(fragment_kind==MINIAS_FRAGMENT_INSTRUCTION ||
-       fragment_kind==MINIAS_FRAGMENT_FIXED_DATA ||
-       fragment_kind==MINIAS_FRAGMENT_BYTES ||
-       fragment_kind==MINIAS_FRAGMENT_FILL ||
-       fragment_kind==MINIAS_FRAGMENT_SPACE ||
-       fragment_kind==MINIAS_FRAGMENT_ORIGIN) {
-        MiniAsSubsection *sub=minias_ensure_subsection(
-            as,st->section,st->subsection);
-        if(sub==NULL)return false;
-        sub->pending_instruction_alignment=
-            fragment_kind!=MINIAS_FRAGMENT_INSTRUCTION;
-    }
-    return true;
+    return minias_layout_record_source_fragment(as,st->section,
+                                                st->subsection,fragment_kind);
 }
 
 /* GNU AArch64 emits zero data padding before an instruction after an odd-
@@ -189,7 +179,7 @@ static bool add_stmt(MiniAs *as,
  * MCLayout's one fixed point (including anchors before the next opcode). */
 static bool minias_maybe_align_instruction(MiniAs *as,size_t line) {
     const unsigned alignment=as->target->implicit_instruction_alignment;
-    MiniAsSubsection *sub;
+    MiniAsSubsectionParseState sub;
     MiniAsStmt *stmt;
     uint64_t pad;
     if(alignment==0U ||
@@ -199,10 +189,10 @@ static bool minias_maybe_align_instruction(MiniAs *as,size_t line) {
         minias_set_error(as,"invalid-target-implicit-code-alignment");
         return false;
     }
-    sub=minias_ensure_subsection(as,as->current_section,as->current_subsection);
-    if(sub==NULL)return false;
-    pad=(alignment-(sub->size&(alignment-1U)))&(alignment-1U);
-    if(!sub->pending_instruction_alignment && pad==0U)return true;
+    if(!minias_layout_subsection_parse_state(as,as->current_section,
+                                            as->current_subsection,&sub))return false;
+    pad=(alignment-(sub.cursor&(alignment-1U)))&(alignment-1U);
+    if(!sub.pending_instruction_alignment && pad==0U)return true;
     if(!add_stmt(as,MINIAS_FRAGMENT_ALIGNMENT,".implicit_code_align","",
                  line,(uint32_t)pad,alignment))return false;
     stmt=&as->stmts[as->stmt_count-1U];
@@ -211,7 +201,8 @@ static bool minias_maybe_align_instruction(MiniAs *as,size_t line) {
     stmt->payload.alignment.has_fill=true;
     stmt->payload.alignment.fill=0U;
     if(!advance_current_location(as,pad))return false;
-    sub->pending_instruction_alignment=false;
+    if(!minias_layout_clear_instruction_alignment(
+           as,as->current_section,as->current_subsection))return false;
     if(as->sections[(size_t)as->current_section].align<alignment)
         as->sections[(size_t)as->current_section].align=alignment;
     return true;
@@ -261,7 +252,8 @@ static bool switch_section(MiniAs *as,
         as->current_section = index;
         as->current_subsection = 0U;
     }
-    return minias_ensure_subsection(as, as->current_section, as->current_subsection) != NULL;
+    return minias_layout_touch_subsection(as,as->current_section,
+                                          as->current_subsection);
 }
 
 /* GAS's implicit section names are family members only at the exact
@@ -2105,7 +2097,8 @@ static bool pop_section(MiniAs *as, size_t line) {
         as->previous_section = old_current;
         as->previous_subsection = old_subsection;
     }
-    return minias_ensure_subsection(as, as->current_section, as->current_subsection) != NULL;
+    return minias_layout_touch_subsection(as,as->current_section,
+                                          as->current_subsection);
 }
 
 static bool define_label(MiniAs *as, char *label, size_t line) {
@@ -2188,7 +2181,8 @@ static bool flush_literal_pools(MiniAs *as,size_t line,bool all) {
         if(all) {
             as->current_section=entry->section;
             as->current_subsection=entry->subsection;
-            if(!minias_ensure_subsection(as,as->current_section,as->current_subsection))
+            if(!minias_layout_touch_subsection(as,as->current_section,
+                                               as->current_subsection))
                 goto failure;
         }
         if(!minias_current_location(as,&current))goto failure;
@@ -2364,7 +2358,7 @@ static bool flush_pending_local_commons(MiniAs *as) {
     }
     as->current_section=bss;
     as->current_subsection=0U;
-    if(minias_ensure_subsection(as,bss,0U)==NULL)ok=false;
+    if(!minias_layout_touch_subsection(as,bss,0U))ok=false;
     for(i=0U;ok && i<as->lowering->pending_local_common_count;++i) {
         const MiniAsPendingLocalCommon *pending=&as->lowering->pending_local_commons[i];
         MiniAsSymbol *symbol;
@@ -2434,9 +2428,8 @@ static bool handle_named_reloc(MiniAs *as,const char *args,size_t line) {
                  MINIAS_FIXUP_ORIGIN_EXPLICIT_SECTION,
                  as->current_section,(uint64_t)offset,
                  kind,width,expression.name,expression.addend,false);
-    else if(ok)ok=minias_record_fixup(as,as->current_section,
-                  (uint64_t)offset,kind,width,NULL,SIZE_MAX,0,
-                  MINIAS_FIXUP_ORIGIN_EXPLICIT_SECTION,true,false,SIZE_MAX);
+    else if(ok)ok=minias_add_explicit_section_abs0_fixup(
+                  as,as->current_section,(uint64_t)offset,kind,width);
     free(copy);
     if(ok)return true;
 invalid:
@@ -2469,7 +2462,7 @@ static bool handle_ident(MiniAs *as,char *args,size_t line) {
     as->sections[(size_t)section].entry_size=1U;
     as->current_section=section;
     as->current_subsection=0U;
-    ok=minias_ensure_subsection(as,section,0U)!=NULL &&
+    ok=minias_layout_touch_subsection(as,section,0U) &&
        (prior>=0 || add_data_stmt(as,".zero",seed,line)) &&
        add_data_stmt(as,".asciz",args,line);
     as->current_section=saved_section;
@@ -2485,8 +2478,6 @@ static bool lower_source_statement(MiniAs *as, char *text, size_t line) {
     char *op;
     char *args;
     uint32_t size;
-    bool had_leading_label=false;
-    bool source_handled=false;
     MiniAsCommonDirectiveKind directive_kind=MINIAS_COMMON_DIRECTIVE_OTHER;
 
     text = minias_trim(text);
@@ -2504,44 +2495,9 @@ static bool lower_source_statement(MiniAs *as, char *text, size_t line) {
     if(text[0]=='#' && (text[1]=='#' ||
                         isspace((unsigned char)text[1])))return true;
 
-    /* Conditional grammar and stack state belong to source expansion.
-     * Dispatch before labels so inactive arms cannot define symbols. */
-    if(!minias_source_try_conditional(as,text,line,&source_handled))return false;
-    if(source_handled)return true;
-    if (!minias_source_conditional_active(as)) {
-        return true;
-    }
-
-    for (;;) {
-        char *token_end = text;
-        char *colon;
-
-        while (*token_end != '\0' && *token_end != ':' &&
-               !isspace((unsigned char)*token_end)) {
-            ++token_end;
-        }
-        colon = token_end;
-        while (*colon == ' ' || *colon == '\t') {
-            ++colon;
-        }
-        if (*colon != ':') {
-            break;
-        }
-        *token_end = '\0';
-        had_leading_label=true;
-        if (!define_label(as, text, line)) {
-            return false;
-        }
-        text = minias_trim(colon + 1);
-        if (*text == '\0') {
-            return true;
-        }
-    }
-    /* A GNU statement after LABEL: still starts a fresh directive.
-     * Reenter the same shared conditional dispatcher instead of treating
-     * '0: .ifc \arg,x' as an unknown target instruction/directive. */
-    if(had_leading_label)return lower_source_statement(as,text,line);
-
+    /* Source alone tokenizes leading labels, conditionals and macro control.
+     * This function receives only an ordinary TEXT event; typed LABEL
+     * events enter the Symbol owner directly through the sink below. */
     {
         char *glued=NULL;
         /* GNU's .inst(EXPR) and .long(EXPR) syntax permits interior
@@ -2627,12 +2583,6 @@ static bool lower_source_statement(MiniAs *as, char *text, size_t line) {
         free(set_args);
         return ok;
     }
-
-    /* Macro lookup/expansion is a source-layer action, before Target
-     * directives so defined macro names keep their GNU precedence. */
-    if(!minias_source_try_macro_invocation(as,op,args,line,&source_handled))
-        return false;
-    if(source_handled)return true;
 
     if (strcmp(op, ".set") == 0 || strcmp(op, ".equ") == 0) {
         const char *comma = strchr(args, ',');
@@ -2787,9 +2737,9 @@ static bool lower_source_statement(MiniAs *as, char *text, size_t line) {
             as->current_subsection = as->previous_subsection;
             as->previous_section = swap_section;
             as->previous_subsection = swap_subsection;
-            return minias_ensure_subsection(as,
-                                     as->current_section,
-                                     as->current_subsection) != NULL;
+            return minias_layout_touch_subsection(as,
+                                                  as->current_section,
+                                                  as->current_subsection);
         }
         if (strcmp(op, ".subsection") == 0) {
             uint64_t number;
@@ -2802,9 +2752,9 @@ static bool lower_source_statement(MiniAs *as, char *text, size_t line) {
                 as->previous_subsection = as->current_subsection;
                 as->current_subsection = (uint32_t)number;
             }
-            return minias_ensure_subsection(as,
-                                     as->current_section,
-                                     as->current_subsection) != NULL;
+            return minias_layout_touch_subsection(as,
+                                                  as->current_section,
+                                                  as->current_subsection);
         }
         if (strcmp(op, ".pushsection") == 0) {
             return push_section(as, args, line);
@@ -2812,9 +2762,6 @@ static bool lower_source_statement(MiniAs *as, char *text, size_t line) {
         if (strcmp(op, ".popsection") == 0) {
             return pop_section(as, line);
         }
-        if(!minias_source_try_control_directive(as,op,args,line,
-                                                &source_handled))return false;
-        if(source_handled)return true;
         if (strcmp(op, ".ident") == 0) {
             return handle_ident(as,args,line);
         }
@@ -2854,10 +2801,8 @@ static bool lower_source_statement(MiniAs *as, char *text, size_t line) {
             ok = add_data_stmt(as, op, rewritten_args, line);
             if(ok && strcmp(op,".inst")==0 &&
                as->target->implicit_instruction_alignment!=0U) {
-                MiniAsSubsection *sub=minias_ensure_subsection(
+                ok=minias_layout_clear_instruction_alignment(
                     as,as->current_section,as->current_subsection);
-                if(sub==NULL)ok=false;
-                else sub->pending_instruction_alignment=false;
             }
             free(rewritten_args);
             return ok;
@@ -2932,9 +2877,9 @@ static bool lower_source_statement(MiniAs *as, char *text, size_t line) {
     return advance_current_location(as, size);
 }
 
-/* Common consumes one Source-owned, stable-site statement event. No private
- * session pointer or lowerer function is exported into the Source module.
- * Label recursion stays within the same single Common parser. */
+/* Common consumes one Source-owned, stable-site statement event. Source
+ * owns the only label lexer; Common owns the only Symbol definition path.
+ * Neither Source nor Target sees a Common parser/session pointer. */
 static bool consume_source_statement(void *user,
                                      const MiniAsSourceStatementEvent *event) {
     MiniAs *as=(MiniAs *)user;
@@ -2944,7 +2889,15 @@ static bool consume_source_statement(void *user,
         if(as!=NULL)minias_set_error(as,"invalid-source-statement-site");
         return false;
     }
-    return lower_source_statement(as,event->text,event->line);
+    switch(event->kind) {
+    case MINIAS_SOURCE_STATEMENT_LABEL:
+        return define_label(as,event->text,event->line);
+    case MINIAS_SOURCE_STATEMENT_TEXT:
+        return lower_source_statement(as,event->text,event->line);
+    default:
+        minias_set_error(as,"invalid-source-statement-kind");
+        return false;
+    }
 }
 
 bool minias_common_parse_source_graph(MiniAs *as,

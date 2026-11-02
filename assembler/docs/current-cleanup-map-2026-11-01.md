@@ -1,5 +1,20 @@
 # MiniAS 当前清理与所有权总览（2026-11-01）
 
+> **2026-11-02 P04/P05/P06 联合边界批次（基于 `37394c1d`）：**
+> 四目标在完成 parse 构造后统一通过 `InstructionView` 内
+> `MCInstView/OperandView` 的栈上值投影进行 Measure/Relax/Encode；
+> retained MCInst 仅在 parse/销毁阶段可写，后续能力不泄露裸指针；
+> Source 已把条件、宏、repeat、前缀标签、`.end` 的裁决集中到
+> 一个 typed `LABEL/TEXT` event sink 之前，Common 不再反调 Source
+> 或重复扫描标签；Subsection 的写游标和指令对齐过渡归 MCLayout，
+> Driver 初始节对齐经 Context setter，原始无符号 `.reloc` 经
+> Emission 专属 API；ELF 对 Fixup 折叠和 COMDAT 签名各规划一次。
+> 表达式符号加数已改消费唯一 syntax grammar，同时保留原 suffix
+> 结合规则而非贸然扩展 GNU 接受面。代码与本地回归属于这一
+> **新批次**；远端 exact-head、完整 GNU/Linux/QEMU 必须在最终
+> 推送 SHA 上另行核对。RISC-V 现场 ISA→mapping 的未闭环计划见
+> [下一批设计](riscv-site-isa-mapping-plan-2026-11-02.md)。
+
 > **2026-11-02 P04 Fragment/Target 权限再收口：** 四架构 Parse、
 > source-site capture 和 executable ALIGN 回调已一次性迁移到
 > 受限请求/值类型站点视图；`MiniAsStmt`、Fragment payload union
@@ -67,20 +82,27 @@
   directive、common validation、init/destroy 和 CFI mapping；删除
   旧入口，让四 Target 不能再包含完整 Common 内部会话头；
   结构测试 + A0 + 目标定向 GNU/链接/松弛/CFI + 旧新对象比较。
-  **已完成子项：** 宽回调与五个 ISA TU 头文件隔离、本地负向编译、
-  A0/22 组差分、PreLayout/PostEmit 只读投影、Relax/Encode 符号
-  值快照、Measure/Relax/Encode MCInst 深层 const 借用视图；
-  **本批新增完成：** Site capture、ALIGN 和 parse 的完整 Fragment
-  裸借用删除，私有 Fragment 唯一定义及 10+2 编译期边界门禁；
-  **待完成：** 最终 Target 生命周期/策略接口扫尾、P05 SourceGraph
-  原始 Fragment 重放借用剥离以及本批 exact-head CI 核对。
-- [ ] **P05 Source/Common 解耦**：从 Source 递归调用
-  `minias_statement_process(MiniAs *,...)` 迁移到带来源身份的
-  受限 statement sink；保留 SourceSite、EOF、条件拓扑、强制增长
-  和必要的完整 SourceGraph replay；做宏与 replay 同一批回归。
+  **已完成子项：** 宽回调与五个 ISA TU 头文件隔离、PreLayout/PostEmit
+  只读投影、Relax/Encode 符号值快照、四架构 Measure/Relax/Encode
+  `MCInstView/OperandView` 栈上深层 const 投影；Parse、Site capture、
+  ALIGN 的私有 Fragment 裸借用已由受限 Request/View 代替，Fragment
+  唯一定义收回 Common 私有头，增加编译期边界门禁。**待完成：**
+  最终 Target 生命周期/策略接口扫尾和 exact-head CI/跨架构 GNU/链接
+  验收；不把局部硬化冒充完整 P04 结束。
+- [x] **P05 Source/Common statement 边界**：旧
+  `minias_statement_process(MiniAs *,...)` 已在先前批次删除；本批
+  连同 Source→Common 的反向 conditional/macro/control 回调、
+  Common 重复标签 lexer 一起删除。唯一受限 `LABEL/TEXT` sink
+  保留 SourceSite、EOF、条件拓扑、强制增长和必要的完整
+  SourceGraph replay。**剩余独立工作：** 动态条件依赖读集/增量
+  SourceGraph（不能无证明删除正确性兜底）、SourceGraph 重放对原始
+  Common Fragment 的借用剥离，以及本批 exact-head CI。
 - [ ] **Common 职责拆分**：在 P04/P05 接口稳定后，把
   statement/directive、Section/Symbol、Fragment emit/commit、driver
-  按消费者搬迁；每批删除原实现而非留下桥接双路径。
+  按消费者搬迁；Context/Lowering/Layout/Emission 已各有独立状态，
+  本批进一步关闭可写 Subsection、raw Fixup/pattern 和 bootstrap
+  alignment 外泄。后续仍须逐消费者收口 Section/Symbol 的直接
+  可写记录；每批删除原实现而非留下桥接双路径。
 - [x] **Fragment 负载类型化**：按 FragmentKind 收窄
   `MiniAsStmt` 的 DATA/ALIGN/ORG/INSTRUCTION 等专属 payload；
   Parser/Layout/Emitter/Target/SourceGraph 整批迁移，删除旧字段，

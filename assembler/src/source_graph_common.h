@@ -52,14 +52,6 @@ bool minias_source_context_layout_sensitive(const MiniAsSourceContext *source);
  * Source never allocates Symbols or inspects Common Symbol internals. */
 bool minias_common_source_symbol_defined(MiniAs *as,const char *name);
 void minias_source_restore_site(MiniAs *as,MiniAsStableSiteId site);
-bool minias_source_try_conditional(MiniAs *as,char *text,size_t line,
-                                   bool *handled);
-bool minias_source_conditional_active(const MiniAs *as);
-bool minias_source_try_macro_invocation(MiniAs *as,char *op,char *args,
-                                        size_t line,bool *handled);
-bool minias_source_try_control_directive(MiniAs *as,const char *op,
-                                         const char *args,size_t line,
-                                         bool *handled);
 bool minias_numeric_refs_rewrite(MiniAs *as,const char *text,
                                 char **out,size_t line);
 /* The Source module emits statement events through the borrowed sink;

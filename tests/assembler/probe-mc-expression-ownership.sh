@@ -54,12 +54,16 @@ if 'expression_grammar.h' not in legacy or 'expression_grammar.h' not in m:
 for old in ('parse_addend_primary(', 'parse_addend_mul(',
             'parse_absolute_primary(', 'parse_absolute_mul(',
             'deferred_parse_prefix(', 'deferred_parse_binary(',
-            'minias_expr_take_binary('):
+            'minias_expr_take_binary(',
+            'parse_symbol_addend_inner('):
     if old in legacy or old in m or old in syntax:
         raise SystemExit('obsolete recursive expression grammar survived '+old)
 if m.count('minias_expr_parse_syntax(') < 3 or \
    'minias_expr_parse_syntax(' not in legacy:
     raise SystemExit('absolute and deferred consumers bypass shared AST')
+if 'minias_expr_copy_symbol_name(' not in legacy or \
+   m.count('minias_expr_copy_symbol_name(') < 3:
+    raise SystemExit('symbol source spans have multiple Common owners')
 if 'assembler/src/mc_expr.c' not in mk:
     raise SystemExit('MCExpr not in build')
 print('MINIAS_MCEXPR_MODULE=PASS shared_AST=1 evaluators=3 one_emitter=1 immutable_fields=1 stable_symbols=1 dead_apis=0')

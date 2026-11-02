@@ -61,7 +61,7 @@ if 'minias_pre_layout_fragment(view,i,&stmt)' not in \
 
 def must_reject(label,code,expected):
     cc=os.environ.get('CC','cc')
-    result=subprocess.run([cc,'-std=c11','-fsyntax-only','-x','c',
+    result=subprocess.run([cc,'-std=c11','-Werror','-fsyntax-only','-x','c',
                            '-Iassembler/src','-'],input=code,text=True,
                           capture_output=True,check=False)
     if result.returncode==0 or expected not in result.stderr:
@@ -90,7 +90,35 @@ for record,field in (('MiniAsFragmentView','op'),
         '#include "minias_target_api.h"\n'
         'void bad('+record+' *v) { v->'+field+'[0]=1; }\n',
         'read-only')
+
+# Post-parse Target stage APIs receive a by-value instruction and operand
+# projection. A `const MiniAsMCInst*` would still carry mutable nested
+# payloads and lifetime capabilities; the dedicated MCInstView has neither.
+if 'typedef struct MiniAsInstructionView {' not in public or \
+   not all(token in public for token in
+           ('const MiniAsMCInstView *inst;',
+            'const MiniAsMCOperandView *operands;',
+            'const MiniAsSymbolRef *bound_symbol;',
+            'const MiniAsSymbolDifferenceRef *bound_difference;',
+            'const void *memory;', 'const void *target_payload;')):
+    raise SystemExit('Instruction phase lacks deep read-only payload edges')
+for label,code in (
+    ('MCInst opcode', 'v->inst->opcode=1U;'),
+    ('MCInst operand kind', 'v->inst->operands[0].kind=MINIAS_MC_IMMEDIATE;'),
+    ('bound SymbolRef', 'v->inst->operands[0].bound_symbol->addend=1;'),
+    ('bound SymbolDifference',
+     'v->inst->operands[0].bound_difference->positive.addend=1;'),
+    ('memory target payload',
+     'unsigned char *p=v->inst->operands[0].memory; (void)p;'),
+    ('instruction target payload',
+     'unsigned char *p=v->inst->target_payload; (void)p;')):
+    must_reject(label+' deep const',
+                '#include "minias_target_api.h"\n'
+                'void bad(const MiniAsInstructionView *v) { '+code+' }\n',
+                'read-only' if label not in ('memory target payload',
+                                             'instruction target payload')
+                else 'discards')
 print('MINIAS_TARGET_READONLY_PROJECTIONS=PASS opaque_phases=2 '
       'hidden_records=2 const_nested_fields=4 target_units=5 '
-      'symbol_owner=single fragment_owner=live')
+      'symbol_owner=single fragment_owner=live instruction_deep_const=6')
 PY

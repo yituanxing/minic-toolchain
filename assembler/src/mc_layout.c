@@ -179,7 +179,8 @@ const MiniAsSubsection *minias_layout_find_subsection(const MiniAs *as,
     return index==SIZE_MAX ? NULL : &state->subsections[index];
 }
 
-MiniAsSubsection *minias_ensure_subsection(MiniAs *as,int section,uint32_t number) {
+static MiniAsSubsection *minias_ensure_subsection(MiniAs *as,int section,
+                                                  uint32_t number) {
     MiniAsSubsection *sub;
     size_t existing;
     size_t slot;
@@ -207,6 +208,87 @@ MiniAsSubsection *minias_ensure_subsection(MiniAs *as,int section,uint32_t numbe
     as->layout->subsection_slots[slot]=as->layout->subsection_count+1U;
     ++as->layout->subsection_count;
     return sub;
+}
+
+bool minias_layout_touch_subsection(MiniAs *as,int section,uint32_t number) {
+    return minias_ensure_subsection(as,section,number)!=NULL;
+}
+
+bool minias_layout_subsection_parse_state(MiniAs *as,int section,
+                                         uint32_t number,
+                                         MiniAsSubsectionParseState *out) {
+    MiniAsSubsection *sub;
+    if(out==NULL) {
+        if(as!=NULL)minias_set_error(as,"missing-subsection-parse-state");
+        return false;
+    }
+    sub=minias_ensure_subsection(as,section,number);
+    if(sub==NULL)return false;
+    *out=(MiniAsSubsectionParseState){
+        .cursor=sub->size,
+        .pending_instruction_alignment=sub->pending_instruction_alignment
+    };
+    return true;
+}
+
+bool minias_layout_record_source_fragment(MiniAs *as,int section,
+                                          uint32_t number,
+                                          MiniAsFragmentKind kind) {
+    MiniAsSubsection *sub;
+    switch(kind) {
+    case MINIAS_FRAGMENT_ALIGNMENT:
+        return true;
+    case MINIAS_FRAGMENT_INSTRUCTION:
+    case MINIAS_FRAGMENT_ORIGIN:
+    case MINIAS_FRAGMENT_FIXED_DATA:
+    case MINIAS_FRAGMENT_FILL:
+    case MINIAS_FRAGMENT_SPACE:
+    case MINIAS_FRAGMENT_BYTES:
+        break;
+    default:
+        if(as!=NULL)minias_set_error(as,"invalid-fragment-alignment-transition");
+        return false;
+    }
+    sub=minias_ensure_subsection(as,section,number);
+    if(sub==NULL)return false;
+    sub->pending_instruction_alignment=kind!=MINIAS_FRAGMENT_INSTRUCTION;
+    return true;
+}
+
+bool minias_layout_clear_instruction_alignment(MiniAs *as,int section,
+                                               uint32_t number) {
+    MiniAsSubsection *sub=minias_ensure_subsection(as,section,number);
+    if(sub==NULL)return false;
+    sub->pending_instruction_alignment=false;
+    return true;
+}
+
+/* The parse-time location counter is a subsection cursor, not a Context
+ * symbol/section-index property. MCLayout alone advances this live cursor. */
+bool minias_current_location(MiniAs *as,uint64_t *value) {
+    MiniAsSubsection *sub;
+    if(as==NULL || value==NULL)return false;
+    if(as->current_section<0 || (size_t)as->current_section>=as->section_count) {
+        minias_set_error(as,"internal:bad-current-section");
+        return false;
+    }
+    sub=minias_ensure_subsection(as,as->current_section,as->current_subsection);
+    if(sub==NULL)return false;
+    *value=sub->size;
+    return true;
+}
+
+bool advance_current_location(MiniAs *as,uint64_t amount) {
+    MiniAsSubsection *sub;
+    if(as==NULL)return false;
+    sub=minias_ensure_subsection(as,as->current_section,as->current_subsection);
+    if(sub==NULL)return false;
+    if(amount>UINT64_MAX-sub->size) {
+        minias_set_error(as,"subsection-size-overflow");
+        return false;
+    }
+    sub->size+=amount;
+    return true;
 }
 
 static int compare_subsections(const void *lhs_ptr, const void *rhs_ptr) {

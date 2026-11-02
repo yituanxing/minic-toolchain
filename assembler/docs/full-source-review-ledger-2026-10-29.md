@@ -7,6 +7,139 @@
 > 和早期测试文件数量，均不能自动当作最新 HEAD 的事实。
 > “读过 / 修改过 / 完成清理”必须分别统计。
 
+### 2026-11-02 P04/P05/P06 + expression/ELF integrated ownership batch
+
+**Exact pre-batch source:** `37394c1db82d8578bee3bad7aca07ac4475424c3`
+on Draft PR #667, branch `refactor/minias-target-isa-abi-core`.
+The independent previous-head assembler was rebuilt from a detached
+worktree with `MODE=release CFLAGS=-Werror`; the candidate used the same
+flags. This is a **post-parse ownership migration**, not a new ISA grammar
+or a claim of complete strict GNU/Linux runtime conformance.
+
+1. **Four-target P04 stage contract.** AArch64, LoongArch64, x86-64/i386
+   and RISC-V now take a stack-local `const MiniAsInstructionView *` for
+   Measure/Relax/Encode, projected from the current typed Fragment with
+   Section/Subsection, current offset/size, source spelling/site and an
+   immutable `MiniAsMCInstView` with copied scalar/const-borrowed active
+   `MiniAsMCOperandView` slots. The existing retained MCInst is editable
+   only during `parse_mcinst` construction; Measure/Relax/Encode cannot
+   see its mutable operands, capacity or destructor pointers. The sole
+   Common projector builds stack-local views; there is no second retained
+   instruction graph. The newer, concurrently integrated `510d7931`
+   projection supersedes the preliminary shallow `const MiniAsMCInst *`
+   representation in this batch. Compile-time negative checks and the
+   runtime view contract enforce the stage boundary.
+2. **P05 one-way Source dispatch.** Source owns conditional active/inactive
+   routing, macro/REPT/IRP/control invocation, and the sole leading-label
+   colon lexer. The existing source-site sink is now typed `LABEL|TEXT`;
+   Common exclusively defines a LABEL or lowers a TEXT, with the reverse
+   `source_try_*` callbacks, duplicated Common label lexer and recursive
+   label-tail call removed. The four old Source service declarations are
+   now TU-private, not a public Common call-back door. SourceGraph cached
+   physical reads, SiteID,
+   conditional/forced-branch full semantic replay, EOF and macro recursion
+   retain one original ownership and failure path.
+3. **P06 Subsection/Context/Emission permissions.** Writable subsection
+   creation, parse cursor, cursor advancement and post-DATA implicit code
+   alignment state live only in MCLayout. Lowering gets typed touch,
+   snapshot and state-transition services. Driver initializes a subsection
+   through Layout and sets preparse `.text` alignment through Context's
+   validated setter. Raw Fixup recorder and Section fill/pattern writers
+   become Emission-only static implementations; the Common `.reloc` symbol-0
+   case receives one explicit-section typed sink, preserving ELF
+   `STN_UNDEF=0` and Fragment/Section Fixup origins.
+4. **M1/M2 symbolic suffix de-duplication.** The old independent
+   `parse_symbol_addend_inner` symbol/parenthesis scanner is deleted;
+   symbol extraction consumes the shared syntax AST, with one wrapping
+   integer helper. The original GNU-facing suffix contract deliberately
+   remains `symbol + 4 << 2 == symbol + 16`, not a whole-symbol shift;
+   `7+symbol`, `(symbol)+1`, second symbols and invalid shifts remain
+   rejected. Checked absolute and deferred relocation policies remain
+   separate consumers, not merged evaluators.
+5. **ELF one-time object reference plan.** Each Fixup's Target
+   section-symbol folding decision and each COMDAT signature SymbolID are
+   resolved once for both symbol-liveness planning and final serialization.
+   Mixed 2048 folded/2048 external relocation cases, empty Fixup lists,
+   undefined local group signatures and AArch64 STT_FUNC folding veto have
+   focused oracles. CFI and debug_line own distinct DWARF states; no
+   COFF/Mach-O placeholder or parallel serializer was added.
+
+**Original local candidate diff versus that baseline (before integrating
+the concurrent remote commit):** **23 existing** `assembler/src`
+files, **+618/-392** production lines, net **+226**. This is an ownership
+and phase API change, so line growth is not described as a cleanup failure;
+there is one persistent Fragment/MCInst/SourceGraph path. Test and workflow
+changes are counted separately: nine previously tracked files
+**+326/-12**, plus three new GNU Source/symbol-suffix test/fixture files
+(65+116+39 lines). One focused RISC-V site ISA/mapping design document was
+added, and the Source/Common contract and current TODO were updated.
+
+**Independently re-run local verification after integrating all contributors:**
+
+- `make -s -j8 MODE=release CFLAGS=-Werror check-minias-a0`: **PASS,
+  30/30 objects**. Missing RISC-V GNU cross-as branches explicitly SKIP.
+- `compare-target-readonly-baseline.sh` against exact `37394c1d` binary:
+  **26 four-target fixtures, 18 byte-identical ELF objects, eight matched
+  fail-closed rejections, zero mismatches**.
+- Target readonly negative compilations and stack projection contract,
+  hard header boundary,
+  Common P06 ownership/transaction, typed Source sink negative boundary,
+  GNU Source LABEL/TEXT dispatch, SourceContext macro/REPT/replay,
+  four-target symbol suffix/GNU x86 bytes+three relocations, ELF reference
+  planning and four-target EncodeResult with GNU explicit ABS0:
+  **ten separate focused probes PASS** on the integrated tree.
+- Domain owners additionally ran the x86 GNU growth/stress, RISC-V 2/4/8
+  relaxation, SourceGraph full-replay/EOF/large collectors, GNU ELF
+  COMDAT/CFI/DWARF, affine/signed-overflow/deferred-expression probes;
+  those local results were **PASS**, not a replacement for strict full
+  runtime proof. `git diff --check`: **PASS**.
+
+**Not claimed:** remote CI for the **new** pushed SHA, missing local
+RISC-V/AArch64/LoongArch GNU cross-assembler oracles, all 3,536 strict
+GNU comparisons, original Linux full linked Image or QEMU P0/P1.
+P02/P07 still needs a GNU-grounded effective site ISA → `$x` mapping
+transition and SourceGraph replay identity; see
+`riscv-site-isa-mapping-plan-2026-11-02.md`. Full P04 lifetime/ISA and
+Common direct Section/Symbol mutator reduction remain open after this batch.
+**Merged integration against that same `37394c1d` source base:** the
+remote concurrent `510d7931` Target revision and local `433c6d75`
+batch were reconciled by retaining the stronger value-type instruction
+projection and the local P05/P06/Expression/ELF changes. Combined
+production diff: **24 existing files, +729/-420 lines, net +309**.
+The merged tree repeated Release `-Werror`, A0 **30/30**, four-target
+old/new 26-case parity (**18 identical ELF + eight mutual rejections**),
+both negative-compile Target view suites (**6 + 8**), runtime projection
+contract (including zero-count and capacity checks), Source LABEL/TEXT,
+Common fragment/Fixup, expression and ELF GNU oracles: **PASS locally**.
+Source's four now-internal lexical services were removed from the public
+Source/Common header in the same ownership family (production +4/-12).
+
+**P02/P07 oracle preparation only:** added an opt-in GNU RISC-V RV32/RV64
+lexical ISA mapping probe/fixture (nested `arch,+zbb/+v`, push/pop,
+subsection and code/data transitions). It reports mapping-symbol
+Section/offset/name/order differences as `EXPECTED_GAP`, not a pass,
+and was **SKIP locally** because `riscv64-linux-gnu-as` is absent; it
+is not a mandatory CI gate or an implementation of mapping transitions.
+The 3,536 strict GNU, complete cross-architecture Linux and QEMU runtime
+checks remain separate. Exact-head remote CI belongs to the final merged
+commit, not either independently tested parent.
+
+**Second concurrent Target boundary integrated:** remote `ef8ca2bc` builds
+on `510d7931` and removes full writable `MiniAsStmt`/Fragment borrowing
+from Parse, Site capture and executable ALIGN across the same four Targets.
+The sole Fragment definition now lives in private
+`minias_fragment_internal.h`; Target callbacks consume restricted request
+and immutable site/alignment value projections. The merged Common path
+preserves the local Source `LABEL/TEXT`, MCLayout/Emission owner changes.
+Combined production scope versus `37394c1d`: **25 files,
++927/-567 lines, net +360**. Following this second integration, the
+strict Release `-Werror` A0 **30/30**, 26-case byte/rejection parity
+(**18 exact / eight matched reject**), 10-negative/2-positive Fragment
+privacy gate, eight-negative operand-view gate, six-negative Target
+projection gate, four-Target parse failure unwind and Source/GNU dispatch
+probes all **PASS locally**. This proof is for the merged local tree;
+exact-head remote CI and complete GNU/Linux/QEMU remain outstanding.
+
 ### 2026-11-02 P04 parse/site/alignment Target/Fragment private boundary
 
 **Base:** Draft PR #667 remote head `510d7931292b361550d0c90de7d973d0aed23f7e`

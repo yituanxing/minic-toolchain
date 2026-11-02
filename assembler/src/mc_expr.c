@@ -144,10 +144,9 @@ static bool evaluate_absolute_syntax(MiniAs *as,
         case MINIAS_EXPR_SYMBOL: {
             char name[256];
             MiniAsSymbol *symbol;
-            if(!node->length || node->length>=sizeof(name))
+            if(!minias_expr_copy_symbol_name(syntax,node,name,
+                                             sizeof(name)))
                 goto invalid;
-            memcpy(name,syntax->text+node->start,node->length);
-            name[node->length]='\0';
             symbol=minias_get_symbol(as,name,false);
             if(!symbol || !symbol->defined ||
                symbol->section==MINIAS_SECTION_COMMON ||
@@ -246,12 +245,9 @@ static bool affine_combine(const MiniAsAffineValue *lhs,
 static bool affine_copy_symbol(const MiniAsExprSyntax *syntax,
                                 const MiniAsExprNode *node,
                                 MiniAsSymbolExpr *symbol) {
-    if(!node || node->kind!=MINIAS_EXPR_SYMBOL ||
-       node->length==0U || node->length>=sizeof(symbol->name))return false;
     memset(symbol,0,sizeof(*symbol));
-    memcpy(symbol->name,syntax->text+node->start,node->length);
-    symbol->name[node->length]='\0';
-    return true;
+    return minias_expr_copy_symbol_name(syntax,node,symbol->name,
+                                        sizeof(symbol->name));
 }
 
 static bool affine_lower_syntax(MiniAs *as,const MiniAsExprSyntax *syntax,
@@ -612,9 +608,8 @@ MiniAsDeferredExpr *minias_compile_deferred_expr(MiniAs *as,
         case MINIAS_EXPR_SYMBOL: {
             char name[256];
             MiniAsSymbol *symbol;
-            if(!node->length || node->length>=sizeof(name))goto invalid;
-            memcpy(name,text+node->start,node->length);
-            name[node->length]='\0';
+            if(!minias_expr_copy_symbol_name(&syntax,node,name,sizeof(name)))
+                goto invalid;
             symbol=minias_get_symbol(as,name,true);
             if(!symbol)goto invalid;
             out->op=DEF_SYMBOL;

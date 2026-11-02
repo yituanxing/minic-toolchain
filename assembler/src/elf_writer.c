@@ -158,6 +158,20 @@ typedef struct MiniAsELFSymbolState {
     bool emit;
 } MiniAsELFSymbolState;
 
+/* Resolve the two kinds of references once before assigning ELF symbol
+ * ordinals. A Target's STT_SECTION folding decision controls both whether
+ * the original local SymbolID survives in .symtab and how the relocation is
+ * serialized; recomputing it in those two passes risks divergent results.
+ * Likewise, the group signature selected for symbol liveness is the exact
+ * SymbolID later written into the SHT_GROUP reference. */
+typedef struct MiniAsELFFixupPlan {
+    bool use_section_symbol;
+} MiniAsELFFixupPlan;
+
+typedef struct MiniAsELFGroupPlan {
+    size_t signature_symbol_index;
+} MiniAsELFGroupPlan;
+
 /* A LINK_ORDER reference can name a section instead of an anchor symbol.
  * Linux objects may contain thousands of unique named sections. Resolving
  * every metadata section by scanning every input section becomes quadratic
@@ -190,6 +204,8 @@ static size_t first_named_elf_section(const MiniAsELFSectionName *index,
 }
 
 static bool plan_elf_symbols(MiniAs *as,MiniAsELFSymbolState *states,
+                             MiniAsELFFixupPlan *relocation_plan,
+                             MiniAsELFGroupPlan *group_plan,
                              size_t *emitted_count) {
     size_t i;
     size_t count=0U;
@@ -197,6 +213,7 @@ static bool plan_elf_symbols(MiniAs *as,MiniAsELFSymbolState *states,
     for(i=0U;i<as->section_count;++i) {
         const char *signature=as->sections[i].group_signature;
         const MiniAsSymbol *symbol;
+        group_plan[i].signature_symbol_index=SIZE_MAX;
         if(signature==NULL)continue;
         symbol=minias_get_symbol(as,signature,false);
         if(symbol==NULL) {
@@ -204,12 +221,14 @@ static bool plan_elf_symbols(MiniAs *as,MiniAsELFSymbolState *states,
                              as->sections[i].name);
             return false;
         }
-        states[(size_t)(symbol-as->symbols)].group_signature=true;
+        group_plan[i].signature_symbol_index=(size_t)(symbol-as->symbols);
+        states[group_plan[i].signature_symbol_index].group_signature=true;
     }
     for(i=0U;i<fixups.count;++i) {
         const MiniAsFixup *fixup=&fixups.data[i];
+        relocation_plan[i].use_section_symbol=section_symbol_fixup(as,fixup);
         if(fixup->symbol_index<as->symbol_count &&
-           !section_symbol_fixup(as,fixup))
+           !relocation_plan[i].use_section_symbol)
             states[fixup->symbol_index].referenced_by_relocation=true;
     }
     for(i=0U;i<as->symbol_count;++i) {
@@ -304,6 +323,8 @@ static bool minias_write_elf(MiniAs *as,
     size_t *symbol_map = NULL;
     MiniAsELFSectionName *name_index = NULL;
     MiniAsELFSymbolState *symbol_states = NULL;
+    MiniAsELFFixupPlan *relocation_plan = NULL;
+    MiniAsELFGroupPlan *group_plan = NULL;
     char **private_names = NULL;
     unsigned char *image = NULL;
     size_t image_size = 0U;
@@ -328,7 +349,21 @@ static bool minias_write_elf(MiniAs *as,
         minias_set_error(as,"out-of-memory:elf-symbol-plan");
         return false;
     }
-    if(!plan_elf_symbols(as,symbol_states,&expected_symbol_count))goto done;
+    if(fixups.count>SIZE_MAX/sizeof(*relocation_plan) ||
+       as->section_count>SIZE_MAX/sizeof(*group_plan)) {
+        minias_set_error(as,"elf-object-capacity-overflow");
+        goto done;
+    }
+    relocation_plan=calloc(fixups.count==0U?1U:fixups.count,
+                           sizeof(*relocation_plan));
+    group_plan=malloc((as->section_count==0U?1U:as->section_count)*
+                      sizeof(*group_plan));
+    if(relocation_plan==NULL || group_plan==NULL) {
+        minias_set_error(as,"out-of-memory:elf-reference-plan");
+        goto done;
+    }
+    if(!plan_elf_symbols(as,symbol_states,relocation_plan,group_plan,
+                         &expected_symbol_count))goto done;
     if(as->cu_file_count>SIZE_MAX-expected_symbol_count) {
         minias_set_error(as,"too-many-cu-file-symbols");
         goto done;
@@ -515,14 +550,8 @@ static bool minias_write_elf(MiniAs *as,
     }
     for(i=0U;i<as->section_count;++i) {
         const MiniAsSection *sec=&as->sections[i];
-        if(sec->group_signature!=NULL) {
-            const MiniAsSymbol *sig=minias_get_symbol(as,sec->group_signature,false);
-            size_t idx;
-            if(sig==NULL) {
-                minias_set_error(as,"missing-group-signature:%s",sec->name);
-                goto done;
-            }
-            idx=(size_t)(sig-as->symbols);
+        const size_t idx=group_plan[i].signature_symbol_index;
+        if(idx!=SIZE_MAX) {
             if(idx>=as->symbol_count || symbol_map[idx]==SIZE_MAX) {
                 minias_set_error(as,"invalid-group-signature:%s",sec->name);
                 goto done;
@@ -535,7 +564,7 @@ static bool minias_write_elf(MiniAs *as,
         const MiniAsFixup *input = &fixups.data[i];
         MiniElfWriteRela *output = &relocations[i];
         uint64_t final_offset;
-        bool section_reloc=section_symbol_fixup(as,input);
+        const bool section_reloc=relocation_plan[i].use_section_symbol;
         if (input->origin == MINIAS_FIXUP_ORIGIN_FRAGMENT) {
             const MiniAsStmt *owner;
             if (input->fragment_id >= as->stmt_count) {
@@ -663,6 +692,8 @@ done:
     free(symbol_map);
     free(name_index);
     free(symbol_states);
+    free(relocation_plan);
+    free(group_plan);
     free(relocations);
     free(symbols);
     free(sections);

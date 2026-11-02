@@ -73,6 +73,9 @@ typedef struct MiniAsExprSyntax {
 
 bool minias_expr_parse_syntax(const char *text,MiniAsExprSyntax *out);
 void minias_expr_syntax_destroy(MiniAsExprSyntax *syntax);
+bool minias_expr_copy_symbol_name(const MiniAsExprSyntax *syntax,
+                                  const MiniAsExprNode *node,
+                                  char *name,size_t capacity);
 bool minias_expr_eval_integer(const MiniAsExprSyntax *syntax,
                               bool signed_shift,uint64_t *result);
 

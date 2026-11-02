@@ -17,10 +17,13 @@ typedef struct MiniAsSectionIdentity {
 struct MiniAsPostEmitObjectSink { MiniAs *as; };
 
 bool minias_common_context_init(MiniAs *);
-bool advance_current_location(MiniAs *, uint64_t);
 int minias_find_section_key(const MiniAs *, const MiniAsSectionIdentity *);
 int minias_ensure_section_key(MiniAs *, const MiniAsSectionIdentity *,
                               uint32_t, uint32_t, uint64_t, uint64_t);
+/* Only for bootstrap, before any source Fragment/output is present: the
+ * target's configured default .text alignment may lower or raise the
+ * pre-Target placeholder. This does not change Section identity. */
+bool minias_common_context_set_section_alignment(MiniAs *,int,uint64_t);
 void minias_common_context_destroy_sections(MiniAs *);
 void minias_common_context_destroy_symbols(MiniAs *);
 

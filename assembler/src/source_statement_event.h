@@ -5,14 +5,21 @@
 #include <stddef.h>
 
 /* Source -> Common is an event boundary, not a shared parser API.
- * Source owns lexical splitting, expansion order and stable site identity;
- * Common owns the only statement parser and all Fragment/Symbol mutations.
- * The event's text is a writable, borrowed slice: the consumer may edit it
- * synchronously, but must not retain it after returning. */
+ * Source owns lexical splitting, label recognition, expansion order and
+ * stable site identity; Common exclusively defines the recognized label or
+ * parses the ordinary statement and mutates Symbols/Fragments. Both kinds
+ * carry writable, synchronously borrowed text: LABEL is a bare identifier
+ * without ':'; TEXT is a non-label statement. Neither may be retained. */
+typedef enum MiniAsSourceStatementKind {
+    MINIAS_SOURCE_STATEMENT_TEXT,
+    MINIAS_SOURCE_STATEMENT_LABEL
+} MiniAsSourceStatementKind;
+
 typedef struct MiniAsSourceStatementEvent {
     char *text;
     size_t line;
     size_t site;
+    MiniAsSourceStatementKind kind;
 } MiniAsSourceStatementEvent;
 
 /* This consumer is pass-local. Macro/REPT/IRP recursion must call the same

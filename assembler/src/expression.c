@@ -167,6 +167,8 @@ static bool syntax_parse_prefix(MiniAsSyntaxParser *parser,size_t *result) {
     }
     if(*parser->cursor=='.' &&
        !minias_expr_symbol_continue(parser->cursor[1])) {
+        node.start=(size_t)(parser->cursor-parser->syntax->text);
+        node.length=1U;
         ++parser->cursor;--parser->depth;
         node.kind=MINIAS_EXPR_DOT;
         return syntax_add(parser,node,result);
@@ -239,6 +241,66 @@ invalid:
     return false;
 }
 
+/* All syntax consumers copy a symbol's source span through this one owner.
+ * DOT is a location-counter node, never an interned symbol-name span. */
+bool minias_expr_copy_symbol_name(const MiniAsExprSyntax *syntax,
+                                  const MiniAsExprNode *node,
+                                  char *name,size_t capacity) {
+    if(!syntax || !syntax->text || !node || !name ||
+       node->kind!=MINIAS_EXPR_SYMBOL || node->length==0U ||
+       node->length>=capacity)return false;
+    memcpy(name,syntax->text+node->start,node->length);
+    name[node->length]='\0';
+    return true;
+}
+
+/* The wrapping Target-immediate algebra is intentionally distinct from
+ * Common's checked signed and relocation-aware policies. Both bare integer
+ * expressions and symbolic addends consume precisely this scalar policy. */
+static bool eval_integer_node(const MiniAsExprNode *node,uint64_t lhs,
+                              uint64_t rhs,bool signed_shift,
+                              uint64_t *result) {
+    if(node->kind==MINIAS_EXPR_LITERAL) {
+        *result=node->literal;
+        return true;
+    }
+    if(node->kind==MINIAS_EXPR_UNARY) {
+        switch(node->unary) {
+        case '-':*result=0U-lhs;return true;
+        case '~':*result=~lhs;return true;
+        case '!':*result=lhs==0U?1U:0U;return true;
+        default:return false;
+        }
+    }
+    if(node->kind!=MINIAS_EXPR_BINARY)return false;
+    switch(node->op) {
+    case MINIAS_EXPR_OP_MUL:*result=lhs*rhs;return true;
+    case MINIAS_EXPR_OP_DIV:
+        if(!rhs)return false;
+        *result=lhs/rhs;return true;
+    case MINIAS_EXPR_OP_MOD:
+        if(!rhs)return false;
+        *result=lhs%rhs;return true;
+    case MINIAS_EXPR_OP_ADD:*result=lhs+rhs;return true;
+    case MINIAS_EXPR_OP_SUB:*result=lhs-rhs;return true;
+    case MINIAS_EXPR_OP_SHL:
+        if(rhs>=64U)return false;
+        *result=lhs<<(unsigned)rhs;return true;
+    case MINIAS_EXPR_OP_SHR:
+        if(rhs>=64U)return false;
+        if(signed_shift && rhs!=0U &&
+           (lhs & (UINT64_C(1)<<63U)))
+            *result=(lhs>>(unsigned)rhs) |
+                    (~UINT64_C(0)<<(unsigned)(64U-rhs));
+        else *result=lhs>>(unsigned)rhs;
+        return true;
+    case MINIAS_EXPR_OP_AND:*result=lhs&rhs;return true;
+    case MINIAS_EXPR_OP_XOR:*result=lhs^rhs;return true;
+    case MINIAS_EXPR_OP_OR:*result=lhs|rhs;return true;
+    default:return false;
+    }
+}
+
 /* Target integer operands wrap to 64 bits. Their arithmetic is intentionally
  * distinct from checked Common absolute expressions and deferred relocation
  * algebra, but uses exactly the same syntax tree. */
@@ -258,48 +320,8 @@ bool minias_expr_eval_integer(const MiniAsExprSyntax *syntax,
         uint64_t lhs=0U,rhs=0U;
         if(node->left<i)lhs=values[node->left];
         if(node->right<i)rhs=values[node->right];
-        switch(node->kind) {
-        case MINIAS_EXPR_LITERAL:values[i]=node->literal;break;
-        case MINIAS_EXPR_SYMBOL:
-        case MINIAS_EXPR_DOT:goto invalid;
-        case MINIAS_EXPR_UNARY:
-            switch(node->unary) {
-            case '-':values[i]=0U-lhs;break;
-            case '~':values[i]=~lhs;break;
-            case '!':values[i]=lhs==0U?1U:0U;break;
-            default:goto invalid;
-            }
-            break;
-        case MINIAS_EXPR_BINARY:
-            switch(node->op) {
-            case MINIAS_EXPR_OP_MUL:values[i]=lhs*rhs;break;
-            case MINIAS_EXPR_OP_DIV:
-                if(!rhs)goto invalid;
-                values[i]=lhs/rhs;break;
-            case MINIAS_EXPR_OP_MOD:
-                if(!rhs)goto invalid;
-                values[i]=lhs%rhs;break;
-            case MINIAS_EXPR_OP_ADD:values[i]=lhs+rhs;break;
-            case MINIAS_EXPR_OP_SUB:values[i]=lhs-rhs;break;
-            case MINIAS_EXPR_OP_SHL:
-                if(rhs>=64U)goto invalid;
-                values[i]=lhs<<(unsigned)rhs;break;
-            case MINIAS_EXPR_OP_SHR:
-                if(rhs>=64U)goto invalid;
-                if(signed_shift && rhs!=0U &&
-                   (lhs & (UINT64_C(1)<<63U))) {
-                    values[i]=(lhs>>(unsigned)rhs) |
-                              (~UINT64_C(0)<<(unsigned)(64U-rhs));
-                }else values[i]=lhs>>(unsigned)rhs;
-                break;
-            case MINIAS_EXPR_OP_AND:values[i]=lhs&rhs;break;
-            case MINIAS_EXPR_OP_XOR:values[i]=lhs^rhs;break;
-            case MINIAS_EXPR_OP_OR:values[i]=lhs|rhs;break;
-            default:goto invalid;
-            }
-            break;
-        default:goto invalid;
-        }
+        if(!eval_integer_node(node,lhs,rhs,signed_shift,&values[i]))
+            goto invalid;
     }
     *result=values[syntax->root];
     if(values!=inline_values)free(values);
@@ -330,88 +352,71 @@ bool minias_eval_i64_expression(const char *text,int64_t *value) {
     return true;
 }
 
-static bool parse_symbol_addend_inner(const char *text,
-                                     MiniAsSymbolExpr *expr,
-                                     unsigned depth) {
-    const char *p;
-    const char *start;
-    size_t length;
-    uint64_t addend_bits = 0U;
-
-    if (text == NULL || expr == NULL) {
-        return false;
+/* This restricted Target-fixup DTO has a deliberately historical suffix
+ * contract: `symbol + 4 << 2` means `symbol + (4 << 2)`, even though a
+ * full affine MCExpr interprets the shift over the *whole* expression.
+ * Preserve that contract for every Target and Common's .set aliases.
+ *
+ * The only syntax parser recognizes the complete input first. Its source
+ * span identifies the first symbol; the sole integer evaluator consumes
+ * the exact old suffix, after removing only whole-expression parentheses.
+ * This retires the old private symbol/parenthesis grammar without widening
+ * acceptance to e.g. `7 + symbol` or `(symbol) + 1`. */
+bool minias_parse_symbol_addend(const char *text,MiniAsSymbolExpr *expr) {
+    MiniAsExprSyntax syntax;
+    MiniAsSymbolExpr parsed={0};
+    const MiniAsExprNode *first=NULL;
+    const char *begin,*end,*cursor,*suffix_start;
+    char *suffix=NULL;
+    unsigned wrappers=0U;
+    size_t i,length;
+    uint64_t addend_bits=0U;
+    bool valid=false;
+    if(!text || !expr || !minias_expr_parse_syntax(text,&syntax))return false;
+    cursor=text;
+    minias_expr_skip_space(&cursor);
+    while(*cursor=='(' && wrappers<32U) {
+        ++wrappers;
+        ++cursor;
+        minias_expr_skip_space(&cursor);
     }
-    p = text;
-    while (*p == ' ' || *p == '\t') {
-        ++p;
+    begin=cursor;
+    end=text+strlen(text);
+    while(end>begin && (end[-1]==' ' || end[-1]=='\t'))--end;
+    for(i=0U;i<wrappers;++i) {
+        if(end<=begin || end[-1]!=')')goto done;
+        --end;
+        while(end>begin && (end[-1]==' ' || end[-1]=='\t'))--end;
     }
-    /* GNU GAS permits an entire symbol+constant expression enclosed in
-     * grouping parentheses. The same semantic Fixup/Addend grammar is
-     * used by every target, notably x86_64 addq $(symbol - 0xff...).
-     * Require that the outside ')' really matches the first '('; do not
-     * strip a grouping used only around one subexpression. */
-    if (*p == '(' && depth < 32U) {
-        size_t n = strlen(p), i;
-        unsigned nested = 0U;
-        bool outer = false;
-        while(n && isspace((unsigned char)p[n-1U])) --n;
-        if(n>=3U && p[n-1U]==')') {
-            for(i=0U;i<n;++i) {
-                if(p[i]=='(')++nested;
-                else if(p[i]==')') {
-                    if(nested==0U)break;
-                    if(--nested==0U) {
-                        outer=i==n-1U;
-                        break;
-                    }
-                }
-            }
-            if(outer) {
-                char *inner=malloc(n-1U);
-                bool ok;
-                if(!inner)return false;
-                memcpy(inner,p+1U,n-2U);
-                inner[n-2U]='\0';
-                ok=parse_symbol_addend_inner(inner,expr,depth+1U);
-                free(inner);
-                return ok;
-            }
-        }
+    for(i=0U;i<syntax.count;++i) {
+        const MiniAsExprNode *node=&syntax.nodes[i];
+        if((node->kind==MINIAS_EXPR_SYMBOL ||
+            node->kind==MINIAS_EXPR_DOT) &&
+           node->start==(size_t)(begin-text)) {first=node;break;}
     }
-    if (!minias_expr_symbol_start(*p)) {
-        return false;
+    if(!first)goto done;
+    if(first->kind==MINIAS_EXPR_DOT)memcpy(parsed.name,".",2U);
+    else if(!minias_expr_copy_symbol_name(&syntax,first,
+                                          parsed.name,sizeof(parsed.name)))
+        goto done;
+    suffix_start=begin+first->length;
+    if(suffix_start>end)goto done;
+    while(suffix_start<end &&
+          (*suffix_start==' ' || *suffix_start=='\t'))++suffix_start;
+    if(suffix_start<end) {
+        if(*suffix_start!='+' && *suffix_start!='-')goto done;
+        length=(size_t)(end-suffix_start);
+        suffix=malloc(length+1U);
+        if(!suffix)goto done;
+        memcpy(suffix,suffix_start,length);
+        suffix[length]='\0';
+        if(!minias_eval_u64_expression(suffix,&addend_bits))goto done;
     }
-    start = p++;
-    while (minias_expr_symbol_continue(*p)) {
-        ++p;
-    }
-    length = (size_t)(p - start);
-    if (length == 0U || length >= sizeof(expr->name)) {
-        return false;
-    }
-    memcpy(expr->name, start, length);
-    expr->name[length] = '\0';
-
-    while (*p == ' ' || *p == '\t') {
-        ++p;
-    }
-    if (*p == '+' || *p == '-') {
-        /* Parse the sign as part of the entire arithmetic suffix.  In
-         * `symbol - BASE + FLAGS`, negating (BASE + FLAGS) instead would
-         * silently change +FLAGS into -FLAGS.  Linux x86's initial page
-         * tables use this exact GNU expression and need the Present bit. */
-        if (!minias_eval_u64_expression(p, &addend_bits)) {
-            return false;
-        }
-        p += strlen(p);
-    }
-    if (*p != '\0') {
-        return false;
-    }
-    expr->addend = (int64_t)addend_bits;
-    return true;
-}
-
-bool minias_parse_symbol_addend(const char *text, MiniAsSymbolExpr *expr) {
-    return parse_symbol_addend_inner(text,expr,0U);
+    parsed.addend=(int64_t)addend_bits;
+    *expr=parsed;
+    valid=true;
+done:
+    free(suffix);
+    minias_expr_syntax_destroy(&syntax);
+    return valid;
 }

@@ -350,7 +350,7 @@ static bool minias_source_pop_conditional(MiniAs *as, size_t line) {
 /* Conditional dispatch belongs to the same pass-local source owner as its
  * stack, including the lexical-vs-layout-sensitive replay decision.  The
  * ordinary statement lowerer calls this before parsing labels/opcodes. */
-bool minias_source_try_conditional(MiniAs *as,char *text,size_t line,
+static bool minias_source_try_conditional(MiniAs *as,char *text,size_t line,
                                    bool *handled) {
     *handled=true;
     if((strncmp(text,".ifb",4U)==0 ||
@@ -433,7 +433,7 @@ bool minias_source_try_conditional(MiniAs *as,char *text,size_t line,
     return true;
 }
 
-bool minias_source_conditional_active(const MiniAs *as) {
+static bool minias_source_conditional_active(const MiniAs *as) {
     return minias_source_const_session(as)->conditional_active;
 }
 
@@ -1214,7 +1214,7 @@ done:
 
 /* Macro registry mutation and invocation use one SourceContext owner.
  * The statement lowerer consumes only the decision and error result. */
-bool minias_source_try_macro_invocation(MiniAs *as,char *op,char *args,
+static bool minias_source_try_macro_invocation(MiniAs *as,char *op,char *args,
                                         size_t line,bool *handled) {
     MiniAsMacro *macro;
     *handled=true;
@@ -1247,7 +1247,7 @@ bool minias_source_try_macro_invocation(MiniAs *as,char *op,char *args,
     return true;
 }
 
-bool minias_source_try_control_directive(MiniAs *as,const char *op,
+static bool minias_source_try_control_directive(MiniAs *as,const char *op,
                                          const char *args,size_t line,
                                          bool *handled) {
     *handled=true;
@@ -1281,6 +1281,98 @@ static char *find_statement_separator(char *text) {
     return NULL;
 }
 
+/* Common is only a statement *consumer*. Source owns each lexical decision
+ * that can suppress, expand or terminate subsequent statements. Keep this
+ * one borrowed event path for ordinary statements and leading labels alike:
+ * neither nested expansion nor a label tail may call a Common parser back
+ * through Source's conditional/macro machinery. */
+static bool emit_common_statement(MiniAs *as,char *text,size_t line,
+                                  MiniAsSourceStatementKind kind) {
+    const MiniAsSourceStatementEvent event={
+        .text=text,
+        .line=line,
+        .site=minias_source_session(as)->current_site,
+        .kind=kind
+    };
+    const MiniAsSourceStatementSink *sink=&minias_source_session(as)->statements;
+    if(sink->consume==NULL) {
+        minias_set_error(as,"unbound-source-statement-sink");
+        return false;
+    }
+    return sink->consume(sink->user,&event);
+}
+
+/* A source conditional must run before any Common label definition; an
+ * inactive arm cannot emit even a leading label. Conversely, an active
+ * `first: second: MACRO ...` binds both labels at the invocation location
+ * before recursively expanding the macro body. Emit bare label-name events,
+ * then resume Source dispatch on the tail. The first whitespace-or-colon
+ * terminates the lexical label token; Common owns the sole Symbol mutation,
+ * and does not duplicate this colon scanner. */
+static bool dispatch_source_statement(MiniAs *as,char *text,size_t line) {
+    bool handled=false;
+    char *space,*op,*args;
+    char separator='\0';
+
+    text=minias_trim(text);
+    if(*text=='\0')return true;
+    if(!minias_source_try_conditional(as,text,line,&handled))return false;
+    if(handled)return true;
+    if(!minias_source_conditional_active(as))return true;
+
+    for(;;) {
+        char *token_end=text,*colon;
+        char following;
+        while(*token_end!='\0' && *token_end!=':' &&
+              !isspace((unsigned char)*token_end))++token_end;
+        colon=token_end;
+        while(*colon==' ' || *colon=='\t')++colon;
+        if(*colon!=':')break;
+
+        /* The colon remains in Source's buffer. Only the label identifier
+         * is borrowed by the sink, with a restored token terminator even
+         * when Common reports a duplicate/invalid label. */
+        following=*token_end;
+        *token_end='\0';
+        handled=emit_common_statement(as,text,line,
+                                      MINIAS_SOURCE_STATEMENT_LABEL);
+        *token_end=following;
+        if(!handled)return false;
+        text=minias_trim(colon+1U);
+        if(*text=='\0')return true;
+        handled=false;
+        if(!minias_source_try_conditional(as,text,line,&handled))return false;
+        if(handled)return true;
+        if(!minias_source_conditional_active(as))return true;
+    }
+
+    /* Temporarily split only the first mnemonic/argument boundary. The
+     * sink must see the original mutable text for Common expression and
+     * Target operand parsing; Source never retains this borrowed buffer. */
+    space=text;
+    while(*space!='\0' && !isspace((unsigned char)*space))++space;
+    op=text;
+    args=space;
+    if(*space!='\0') {
+        separator=*space;
+        *space='\0';
+        args=minias_trim(space+1U);
+    }
+    handled=false;
+    if(!minias_source_try_macro_invocation(as,op,args,line,&handled)) {
+        if(separator!='\0')*space=separator;
+        return false;
+    }
+    if(!handled && op[0]=='.' &&
+       !minias_source_try_control_directive(as,op,args,line,&handled)) {
+        if(separator!='\0')*space=separator;
+        return false;
+    }
+    if(separator!='\0')*space=separator;
+    return handled || emit_common_statement(as,text,line,
+                                            MINIAS_SOURCE_STATEMENT_TEXT);
+}
+
 static bool process_source_line(MiniAs *as, const char *source, size_t line) {
     char *copy = minias_strdup(source);
     char *cursor;
@@ -1312,20 +1404,9 @@ static bool process_source_line(MiniAs *as, const char *source, size_t line) {
         if (semicolon != NULL) {
             *semicolon = '\0';
         }
-        /* One stable source event for every logical segment, including
-         * recursive macro/repeat expansion. The mutable text is borrowed
-         * only for the duration of this synchronous callback. */
-        const MiniAsSourceStatementEvent event={
-            .text=cursor,
-            .line=line,
-            .site=minias_source_session(as)->current_site
-        };
-        if(minias_source_session(as)->statements.consume==NULL) {
-            minias_set_error(as,"unbound-source-statement-sink");
-            goto finished;
-        }
-        if(!minias_source_session(as)->statements.consume(
-               minias_source_session(as)->statements.user,&event))goto finished;
+        /* Every macro/repeat/inline segment follows the same Source-owned
+         * conditional/label/macro/EOF decision path before Common lowering. */
+        if(!dispatch_source_statement(as,cursor,line))goto finished;
         cursor = semicolon == NULL ? NULL : semicolon + 1;
         semicolon = cursor == NULL ? NULL : find_statement_separator(cursor);
         ++segment;

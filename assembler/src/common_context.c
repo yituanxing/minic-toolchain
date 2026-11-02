@@ -81,37 +81,6 @@ void minias_common_context_destroy_symbols(MiniAs *as) {
     }
 }
 
-bool minias_current_location(MiniAs *as, uint64_t *value) {
-    MiniAsSubsection *sub;
-
-    if (as->current_section < 0 ||
-        (size_t)as->current_section >= as->section_count) {
-        minias_set_error(as, "internal:bad-current-section");
-        return false;
-    }
-    sub = minias_ensure_subsection(as, as->current_section, as->current_subsection);
-    if (sub == NULL) {
-        return false;
-    }
-    *value = sub->size;
-    return true;
-}
-
-bool advance_current_location(MiniAs *as, uint64_t amount) {
-    MiniAsSubsection *sub =
-        minias_ensure_subsection(as, as->current_section, as->current_subsection);
-
-    if (sub == NULL) {
-        return false;
-    }
-    if (amount > UINT64_MAX - sub->size) {
-        minias_set_error(as, "subsection-size-overflow");
-        return false;
-    }
-    sub->size += amount;
-    return true;
-}
-
 /* SymbolID edges remain retained across every MCFragment relayout. Resolve
  * one edge only after its target has been normalized in the current pass.
  * This has no ISA knowledge: section-relative aliases and section-cancelled
@@ -448,6 +417,25 @@ int minias_ensure_section(MiniAs *as,
                           uint64_t align) {
     const MiniAsSectionIdentity key={name,NULL,NULL,false,0U};
     return minias_ensure_section_key(as,&key,0U,type,flags,align);
+}
+
+bool minias_common_context_set_section_alignment(MiniAs *as,int section,
+                                                 uint64_t alignment) {
+    MiniAsSection *sec;
+    if(as==NULL)return false;
+    if(section<0 || (size_t)section>=as->section_count ||
+       alignment==0U || (alignment&(alignment-1U))!=0U ||
+       as->stmt_count!=0U) {
+        minias_set_error(as,"invalid-initial-section-alignment");
+        return false;
+    }
+    sec=&as->sections[(size_t)section];
+    if(sec->size!=0U || sec->layout_size!=0U) {
+        minias_set_error(as,"section-already-materialized");
+        return false;
+    }
+    sec->align=alignment;
+    return true;
 }
 
 static size_t symbol_name_hash(const char *name) {

@@ -340,7 +340,7 @@ static bool minias_init_for_target(MiniAs *as,
     as->previous_section=text;
     as->previous_subsection=0U;
     as->debug_is_stmt=true;
-    return minias_ensure_subsection(as,text,0U)!=NULL;
+    return minias_layout_touch_subsection(as,text,0U);
 }
 
 uint64_t minias_target_exec_alignment(const MiniAs *as) {
@@ -466,7 +466,8 @@ int minias_assemble_config(const char *input_path,
                 minias_set_error(&as,"invalid-target-exec-alignment");
                 parsed=false;
             } else {
-                as.sections[(size_t)text_section].align=align;
+                parsed=minias_common_context_set_section_alignment(
+                    &as,text_section,align);
             }
         }
         if(parsed && !minias_source_graph_is_loaded(graph)) {

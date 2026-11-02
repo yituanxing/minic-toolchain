@@ -175,6 +175,31 @@ if ('minias_common_lowering_layout_plan(as,&plan)' not in layout or
     'minias_layout_find_subsection(as,' not in cfi or
     'const MiniAsSubsection *minias_layout_find_subsection(' not in layout_api):
     raise SystemExit('cross-domain read interface bypassed')
+
+# A parser-facing pointer to mutable MCLayout subsection storage would
+# silently split the cursor/alignment owner again. Only a short parse-time
+# value snapshot and typed transitions may cross this Common boundary.
+if 'MiniAsSubsection *minias_ensure_subsection(' in internal or \
+   not re.search(r'static\s+MiniAsSubsection\s*\*\s*minias_ensure_subsection\(',layout) or \
+   'minias_ensure_subsection(' in context+lowering+driver or \
+   'MiniAsSubsection *sub=' in lowering or \
+   'sub->pending_instruction_alignment' in lowering or \
+   'minias_layout_subsection_parse_state(' not in lowering or \
+   'minias_layout_record_source_fragment(' not in lowering:
+    raise SystemExit('MCLayout parse cursor or transition escaped as mutable pointer')
+if 'minias_common_context_set_section_alignment(' not in context or \
+   'minias_common_context_set_section_alignment(' not in driver or \
+   re.search(r'as\.sections\[\(size_t\)text_section\]\.align\s*=',driver):
+    raise SystemExit('Driver bypasses Context bootstrap alignment owner')
+
+# Only Emission's internal commit may see a full Fixup/Fragment owner tuple.
+# Lowering's GNU .reloc-without-symbol uses a narrow explicit Section API.
+if not re.search(r'(?m)^static bool minias_record_fixup\(',emission) or \
+   'minias_record_fixup(' in contract+lowering or \
+   'minias_add_explicit_section_abs0_fixup(' not in contract+lowering or \
+   'minias_section_append_pattern(' in contract or \
+   'minias_section_append_fill(' in contract:
+    raise SystemExit('Emission raw Fixup/byte writer escaped its transaction owner')
 for field,(kind,_,_) in states.items():
     bad=f'#include "minias_internal.h"\nint probe(MiniAs *as) {{ return (int)as->{field}->not_public; }}\n'
     rejected=subprocess.run([os.environ.get('CC','cc'),'-std=c11',

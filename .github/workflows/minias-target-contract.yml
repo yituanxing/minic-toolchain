@@ -111,6 +111,10 @@ jobs:
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
             bash tests/assembler/probe-source-if-common-gnu.sh
+      - name: GNU Source-owned statement dispatch and leading-label semantics
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-source-statement-dispatch-gnu.sh
       - name: GNU SourceContext replay, macro lifetime and source-site identity
         run: |
           command -v as

@@ -88,7 +88,8 @@ if 'bool (*encode)(MiniAsEncodeContext *, const MiniAsInstructionView *);' not i
     raise SystemExit('TargetOps still uses old mutable instruction callback')
 if 'struct MiniAsEncodeContext {' in header or \
    'struct MiniAsEncodeContext {' not in core or \
-   'as->target->encode(&(MiniAsEncodeContext){as},&snapshot)' not in core:
+   'as->target->encode(&(MiniAsEncodeContext){as},&snapshot)' not in core or \
+   'minias_project_instruction(stmt,&snapshot' not in core:
     raise SystemExit('EncodeContext is not constructed privately by Common')
 services=('emit','fixup_ref','fixup_abs0','anchor_ref','elf_flags',
           'error','symbol_lookup','resolve_difference',
@@ -365,7 +366,8 @@ if 'struct MiniAsRelaxContext {' in core or \
 for service in ('symbol_ref_lookup', 'resolve_symbol_difference_ref', 'error'):
     if not re.search(r'\bminias_relax_' + service + r'\s*\(', core):
         raise SystemExit('Missing Common relaxation service: ' + service)
-if 'plan_instruction_relaxation(&context,&snapshot,plan)' not in layout:
+if 'plan_instruction_relaxation(&context,&snapshot,plan)' not in layout or \
+        'minias_project_instruction(stmt,&snapshot' not in layout:
     raise SystemExit('Common MCLayout bypassed its phase-limited context')
 for source, name in ((rv, 'riscv_plan_instruction_relaxation'),
                      (x86, 'x64_plan_instruction_relaxation')):

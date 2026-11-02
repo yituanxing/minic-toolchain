@@ -92,4 +92,46 @@ for target in x86_64 riscv aarch64 loongarch64; do
     fi
 done
 
-echo 'MINIAS_MC_ENCODE_RESULT=PASS targets=4 instruction_fixups=4 explicit_section=1 cfi_synthetic=1 failed_outputs=0'
+# GNU `.reloc OFFSET,TYPE` with no third operand intentionally requests the
+# ELF STN_UNDEF=0 marker. It is a Section-owned relocation, not an encoded
+# instruction Fixup and not a newly interned synthetic Object Symbol. The
+# public Lowering interface exposes precisely that case after raw record
+# internals became private to Emission.
+abs0_oracle='SKIP(no-native-GNU-x86-as)'
+if command -v as >/dev/null && [[ $(uname -m) == x86_64 ]]; then
+    cat >"$work/explicit-abs0.s" <<'ASM'
+.data
+.long 0
+.reloc 0, R_X86_64_PC32
+ASM
+    as --64 -o "$work/explicit-abs0.gnu.o" "$work/explicit-abs0.s"
+    "$MINIAS" --target=x86_64 -o "$work/explicit-abs0.mini.o" \
+        "$work/explicit-abs0.s"
+    python3 - "$work/explicit-abs0.gnu.o" \
+        "$work/explicit-abs0.mini.o" <<'PY'
+import re
+import subprocess
+import sys
+
+def relocation(path):
+    text=subprocess.check_output(['readelf','-rW',path],text=True)
+    rows=[]
+    for line in text.splitlines():
+        if 'R_X86_64_' not in line:
+            continue
+        columns=line.split()
+        if len(columns)<4:
+            raise SystemExit('malformed explicit abs0 relocation: '+line)
+        symbol_index=int(columns[1],16)>>32
+        rows.append((int(columns[0],16),columns[2],symbol_index,
+                     tuple(columns[3:])))
+    return rows
+
+gnu,mini=map(relocation,sys.argv[1:])
+if len(gnu)!=1 or gnu!=mini or gnu[0][2]!=0:
+    raise SystemExit(f'explicit abs0 mismatch: GNU={gnu} MiniAS={mini}')
+PY
+    abs0_oracle='GNU_STN_UNDEF0_exact'
+fi
+
+echo "MINIAS_MC_ENCODE_RESULT=PASS targets=4 instruction_fixups=4 explicit_section=1 cfi_synthetic=1 explicit_abs0=$abs0_oracle failed_outputs=0"

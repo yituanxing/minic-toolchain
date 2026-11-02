@@ -58,7 +58,7 @@ bool minias_emission_mcdata_cursor(MiniAs *as,const MiniAsStmt *stmt,
 /* Keep staged MCData Fixup widths identical to the committed Section
  * contract. LoongArch uses 8-bit and 24-bit ADD/SUB pairs as well as
  * 16/32/64-bit relocations; staging must not reject a legal typed Fixup. */
-bool minias_record_fixup(MiniAs *as,
+static bool minias_record_fixup(MiniAs *as,
                       int section,
                       uint64_t offset,
                       MiniAsFixupKind kind,
@@ -184,6 +184,16 @@ bool minias_add_section_fixup(MiniAs *as, MiniAsFixupOrigin origin,
                                SIZE_MAX);
 }
 
+bool minias_add_explicit_section_abs0_fixup(MiniAs *as,int section,
+                                            uint64_t offset,
+                                            MiniAsFixupKind kind,
+                                            unsigned width) {
+    return minias_record_fixup(as,section,offset,kind,width,
+                               NULL,SIZE_MAX,0,
+                               MINIAS_FIXUP_ORIGIN_EXPLICIT_SECTION,
+                               true,false,SIZE_MAX);
+}
+
 /* The final linker-relaxation predicate needs all Target MCInst fixups,
  * including instructions parsed *after* the ULEB source line. A second
  * retained-fragment commit window allows its paired relocation records to
@@ -218,6 +228,9 @@ bool minias_add_late_fragment_fixup(MiniAs *as,size_t fragment_id,
 }
 
 static bool minias_stage_fragment_bytes(MiniAs *,int,const void *,size_t,bool);
+static bool minias_section_append_pattern(MiniAs *,int,const unsigned char *,
+                                          size_t,size_t,bool);
+static bool minias_section_append_fill(MiniAs *,int,size_t,uint8_t,bool);
 
 /* Commit a complete source Fragment's result after its measured length has
  * passed the common invariant. Both target code and typed common data/fills
@@ -721,7 +734,7 @@ bool minias_section_append(MiniAs *as, int section_index, const void *data, size
 /* All repeated fills have one materialization path, including fragment
  * transaction commits. GNU .space/.skip may ignore the fill in NOBITS;
  * literal DATA/.fill may not silently discard nonzero bytes. */
-bool minias_section_append_pattern(MiniAs *as,int section_index,
+static bool minias_section_append_pattern(MiniAs *as,int section_index,
                                            const unsigned char *pattern,
                                            size_t width,size_t repeat,
                                            bool ignore_nobits_fill) {
@@ -769,7 +782,7 @@ bool minias_section_append_pattern(MiniAs *as,int section_index,
     return true;
 }
 
-bool minias_section_append_fill(MiniAs *as,int section_index,
+static bool minias_section_append_fill(MiniAs *as,int section_index,
                                         size_t size,uint8_t fill,
                                         bool ignore_nobits_fill) {
     return minias_section_append_pattern(as,section_index,&fill,1U,size,

@@ -203,7 +203,6 @@ typedef struct MiniAs {
     char error[MINIAS_MAX_ERROR];
 } MiniAs;
 
-
 static inline MiniAsTargetABIView minias_target_abi_view(const MiniAs *as) {
     MiniAsTargetABIView view={as->target_state,as->output_elf32};
     return view;
@@ -262,7 +261,6 @@ const MiniAsSymbol *minias_symbol_ref_lookup(const MiniAs *as,
  * evaluation. CFI, directives, and all four Targets use these APIs. */
 /* Common persistent Fragment/Layout subsystem. */
 bool minias_grow_array(void **, size_t *, size_t, size_t);
-MiniAsSubsection *minias_ensure_subsection(MiniAs *, int, uint32_t);
 bool minias_finalize_subsection_layout(MiniAs *);
 bool minias_refresh_symbol_aliases(MiniAs *);
 bool minias_solve_fragment_layout(MiniAs *, MiniAsFragmentGrowthSet *,

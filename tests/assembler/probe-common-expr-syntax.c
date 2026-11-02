@@ -23,6 +23,26 @@ static int expect_i64(const char *text,int64_t expected) {
     return 0;
 }
 
+static int expect_addend(const char *text,const char *name,
+                         uint64_t bits) {
+    MiniAsSymbolExpr actual={0};
+    if(!minias_parse_symbol_addend(text,&actual) ||
+       strcmp(actual.name,name)!=0 || (uint64_t)actual.addend!=bits) {
+        fprintf(stderr,"symbol/suffix AST failure: %s\n",text);
+        return 1;
+    }
+    return 0;
+}
+
+static int reject_addend(const char *text) {
+    MiniAsSymbolExpr ignored={0};
+    if(minias_parse_symbol_addend(text,&ignored)) {
+        fprintf(stderr,"symbol/suffix unexpectedly accepted: %s\n",text);
+        return 1;
+    }
+    return 0;
+}
+
 int main(void) {
     MiniAsExprSyntax syntax;
     size_t i;
@@ -54,6 +74,25 @@ int main(void) {
     if(!symbol || !dot) {
         fprintf(stderr,"typed symbol/dot spans missing\n");return 1;
     }
+    /* Legacy fixup suffix binding deliberately differs from GNU MCData:
+     * `sym + 4 << 2` applies the shift to the suffix alone. Preserve both
+     * this acceptance and the old restricted leading-symbol syntax. */
+    if(expect_addend("sym + 4 << 2","sym",16U) ||
+       expect_addend("((sym + 4 << 2))","sym",16U) ||
+       expect_addend("sym - 4 + 2","sym",UINT64_MAX-1U) ||
+       expect_addend("sym - 0xffffffffffffffff","sym",1U) ||
+       expect_addend("sym + (1 << 63)","sym",UINT64_C(1)<<63U) ||
+       expect_addend("sym + ((-16 >> 2) & 255)","sym",252U) ||
+       expect_addend(". + 0x10 - 7",".",9U) ||
+       expect_addend(".Ltest + (3 * (4 + 2))",".Ltest",18U) ||
+       reject_addend("7 + sym") ||
+       reject_addend("(sym) + 1") ||
+       reject_addend("sym + other") ||
+       reject_addend("sym - other") ||
+       reject_addend("sym + 1 << 64") ||
+       reject_addend("sym + (3 / 0)") ||
+       reject_addend("sym@GOT") ||
+       reject_addend("sym + 1 == 1"))return 1;
     puts("MINIAS_EXPR_SYNTAX=PASS grammar=1 numeric_policy=2 symbol_dot=1");
     return 0;
 }
