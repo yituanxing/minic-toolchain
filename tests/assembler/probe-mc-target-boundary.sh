@@ -144,7 +144,7 @@ if not re.search(r'bool\s*\(\*finalize_output\)\s*\(const MiniAsPostEmitView\s*\
 steps = ('minias_emit_sections(&as)',
          'as.target->validate_output(&final_layout, &errors)',
          'minias_finalize_target_output(&as,&final_layout,&errors,&object)',
-         'minias_write_elf64(&as, output_path)')
+         'minias_write_final_object(&as,output_path,config->elf32)')
 offsets = [driver.find(step) for step in steps]
 if -1 in offsets or offsets != sorted(offsets):
     raise SystemExit('Target validation/finalization/ELF output order drifted')
