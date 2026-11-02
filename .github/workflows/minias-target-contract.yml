@@ -280,7 +280,7 @@ jobs:
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=riscv \
             bash tests/assembler/probe-mcexpr-size-end-anchor.sh
       - name: MCExpr data oracle in all A0 and ISA tests
-        run: grep -q "MINIAS_MC_EXPR_DIFFERENCE" assembler/src/minias_internal.h
+        run: grep -q "MINIAS_MC_EXPR_DIFFERENCE" assembler/src/minias_target_api.h
       - name: Verify atomic MCFragment transactions across four CodeEmitters
         run: bash tests/assembler/probe-mc-fragment-transaction.sh
       - name: Validate MCExpr stable interned Symbol IDs and 1024-relocation GNU oracle
