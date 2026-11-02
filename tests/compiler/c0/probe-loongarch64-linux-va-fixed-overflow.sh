@@ -25,6 +25,13 @@ check_cursor() {
         active && /^  li.d \$t3, [0-9]+$/ && frame == 0 {
             frame=$3+0
         }
+        # Both the expanded large-immediate sequence and a direct
+        # signed-12-bit SP adjustment are legitimate frame prologues. The
+        # latter is emitted when the frame fits in addi.d; either way the
+        # va cursor must still resolve to the same entry-SP-relative slot.
+        active && /^  addi.d \$sp, \$sp, -[0-9]+$/ && frame == 0 {
+            frame=-($4+0)
+        }
         active && /^  li.d \$t0, [0-9]+$/ && frame != 0 {
             offset=$3+0
             if (offset == frame-64+gp*8) count++

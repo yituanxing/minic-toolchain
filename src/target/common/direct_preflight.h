@@ -20,13 +20,15 @@ bool minic_multi_direct_lp64_function_preflight(
     const MinicFunction *decl, const MinicCoreFunction *fn,
     const MinicCoreFunctionFacts *facts, const char *arch, const char *name,
     MinicDirectLP64OpaqueAsmQualifier qualify_opaque_asm,
-    MinicDirectLP64IndirectRecord indirect_return);
+    MinicDirectLP64IndirectRecord indirect_return,
+    const MinicDirectLP64AbiPolicy *abi);
 
 /* Call only after function admission. On rejection, report the failing
  * Core block; all machine diagnostics stay with the caller's backend. */
 bool minic_multi_direct_lp64_cfg_preflight(
     const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, size_t *failed_block,
-    MinicDirectLP64IndirectRecord indirect_return);
+    MinicDirectLP64IndirectRecord indirect_return,
+    const MinicDirectLP64AbiPolicy *abi);
 
 #endif

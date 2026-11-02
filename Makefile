@@ -401,6 +401,7 @@ LAYOUT_TEST_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(LAYOUT_TEST_SOURCES
 LAYOUT_TEST_BINARY  := $(BUILD_DIR)/tests/target/riscv64/layout-test
 
 RV64_ABI_TEST_SOURCES := \
+	src/core/core_type.c \
 	src/frontend/ast.c \
 	src/frontend/ast_global.c \
 	src/frontend/type.c \
@@ -641,10 +642,12 @@ check-direct-lp64-asm-capacity: $(MINIC_CC_BINARY)
 check-fast: check-direct-lp64-asm-capacity
 
 $(DIRECT_LP64_ASM_UNIT_BINARY): tests/compiler/c0/direct_lp64_asm_preflight_unit.c \
+		src/core/core_type.c src/target/common/lp64_scalar.c \
 		$(BUILD_DIR)/obj/src/frontend/type.o
 	@mkdir -p "$(dir $@)"
 	$(CC) $(CPPFLAGS) $(MINIC_INCLUDES) $(MINIC_CFLAGS) \
 		-ffunction-sections -fdata-sections "$<" \
+		src/core/core_type.c src/target/common/lp64_scalar.c \
 		"$(BUILD_DIR)/obj/src/frontend/type.o" $(MINIC_LDFLAGS) \
 		-Wl,--gc-sections -o "$@"
 
@@ -1802,6 +1805,13 @@ check-aarch64-fp-pointer-record-abi: $(MINIC_CC_BINARY)
 	sh tests/compiler/c0/probe-aarch64-fp-pointer-record-abi.sh
 
 check-fast: check-aarch64-fp-pointer-record-abi
+
+.PHONY: check-loongarch64-linux-va-fixed-overflow
+check-loongarch64-linux-va-fixed-overflow: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" \
+	bash tests/compiler/c0/probe-loongarch64-linux-va-fixed-overflow.sh
+
+check-fast: check-loongarch64-linux-va-fixed-overflow
 
 .PHONY: check-static-const-source-boundaries
 check-static-const-source-boundaries: $(MINIC_CC_BINARY)

@@ -40,7 +40,7 @@ bool minic_multi_direct_lp64_function_plan_prepare(
     name = minic_c0_function_symbol_name(decl);
     if (!minic_multi_direct_lp64_function_preflight(
             program, target, decl, fn, facts, architecture_name, name,
-            qualify_opaque_asm, indirect_return))
+            qualify_opaque_asm, indirect_return, abi))
         return false;
     profile_result = minic_multi_direct_lp64_profile_function(
         program, target, decl, fn, facts, abi, indirect_record,
@@ -60,7 +60,7 @@ bool minic_multi_direct_lp64_function_plan_prepare(
 
     plan->failed_stage = "cfg_preflight";
     if (!minic_multi_direct_lp64_cfg_preflight(
-            program, target, fn, &plan->failed_block, indirect_return))
+            program, target, fn, &plan->failed_block, indirect_return, abi))
         return false;
 
     plan->failed_stage = "frame_layout";

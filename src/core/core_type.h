@@ -82,6 +82,11 @@ typedef struct MinicCoreType {
         struct {
             MinicCoreRecordField *fields;
             size_t field_count;
+            /* ABI-visible record layout policy. Distinct from the final
+             * size/alignment: classifiers must still reject packed or
+             * explicitly aligned shapes they cannot legally decompose. */
+            size_t pack_alignment;
+            size_t explicit_alignment;
             bool is_complete;
             bool is_union;
             bool is_packed;

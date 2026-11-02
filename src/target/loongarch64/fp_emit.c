@@ -7,6 +7,27 @@
 #include <inttypes.h>
 #include <stdio.h>
 
+static bool loong_fp_type(const MinicCoreFunction *fn,
+                           MinicType legacy, MinicCoreTypeId id,
+                           MinicCoreFloatFormat format) {
+    const MinicCoreType *type;
+    if (fn->type_context == NULL) {
+        switch (format) {
+        case MINIC_CORE_FLOAT_BINARY32: return minic_type_is_float(legacy);
+        case MINIC_CORE_FLOAT_BINARY64: return minic_type_is_double(legacy);
+        case MINIC_CORE_FLOAT_EXTENDED: return minic_type_is_long_double(legacy);
+        default: return false;
+        }
+    }
+    id = minic_core_type_unqualified(fn->type_context, id);
+    type = minic_core_type_get(fn->type_context, id);
+    return type != NULL && type->kind == MINIC_CORE_TYPE_FLOAT &&
+           type->has_layout &&
+           type->value.floating.format == format &&
+           type->size == (format == MINIC_CORE_FLOAT_BINARY32 ? 4U :
+                          format == MINIC_CORE_FLOAT_BINARY64 ? 8U : 16U);
+}
+
 #define emit_sp_mem(_out, _op, _reg, _offset) \
     minic_loongarch64_emit_frame_mem((_out), (_op), (_reg), (_offset), dynamic_frame)
 
@@ -26,7 +47,8 @@ bool minic_loongarch64_emit_fp_instruction(
     *needs_gp_store = false;
     switch (ins->kind) {
         case MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT:
-            if (minic_type_is_long_double(ins->type)) {
+            if (loong_fp_type(fn, ins->type, ins->core_type_id,
+                              MINIC_CORE_FLOAT_EXTENDED)) {
                 size_t dst;
                 if (!minic_lp64_frame_plan_wide_slot(frame_plan, ins->result, &dst) ||
                     fprintf(out, "  li.d $t0, 0x%016" PRIx64 "\n",
@@ -38,8 +60,10 @@ bool minic_loongarch64_emit_fp_instruction(
                     return false;
                 return true;
             }
-            if ((!minic_type_is_double(ins->type) &&
-                 !minic_type_is_float(ins->type)) ||
+            if ((!loong_fp_type(fn, ins->type, ins->core_type_id,
+                                MINIC_CORE_FLOAT_BINARY64) &&
+                 !loong_fp_type(fn, ins->type, ins->core_type_id,
+                                MINIC_CORE_FLOAT_BINARY32)) ||
                 fprintf(out, "  li.d $t0, 0x%016" PRIx64 "\n",
                         ins->value.floating_bits) < 0) return false;
             *needs_gp_store = true;

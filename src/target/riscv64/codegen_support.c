@@ -62,21 +62,16 @@ static bool minic_riscv64_integer_aggregate_abi(
     return true;
 }
 
-bool minic_riscv64_emit_integer_aggregate_load_chunk_profile(
-    FILE *file, const MinicC0Program *program, MinicType type,
+static bool rv64_emit_integer_aggregate_load_chunk_known_shape(
+    FILE *file, size_t storage_size, size_t chunk_count,
     size_t chunk_index, const char *destination_register,
-    const char *address_register, bool lp64_soft_float,
-    size_t known_frame_offset) {
-    size_t chunk_count;
+    const char *address_register, size_t known_frame_offset) {
     size_t chunk_offset;
     size_t chunk_size;
     size_t index;
-    size_t storage_size;
     bool aligned_for_native_load;
 
     if (file == NULL || destination_register == NULL || address_register == NULL ||
-        !minic_riscv64_integer_aggregate_abi(
-            program, type, &storage_size, &chunk_count, lp64_soft_float) ||
         chunk_index >= chunk_count || chunk_index > SIZE_MAX / 8U) {
         return false;
     }
@@ -133,6 +128,33 @@ bool minic_riscv64_emit_integer_aggregate_load_chunk_profile(
         }
     }
     return true;
+}
+
+bool minic_riscv64_emit_integer_aggregate_load_chunk_profile(
+    FILE *file, const MinicC0Program *program, MinicType type,
+    size_t chunk_index, const char *destination_register,
+    const char *address_register, bool lp64_soft_float,
+    size_t known_frame_offset) {
+    size_t size, chunks;
+    return minic_riscv64_integer_aggregate_abi(
+               program, type, &size, &chunks, lp64_soft_float) &&
+           rv64_emit_integer_aggregate_load_chunk_known_shape(
+               file, size, chunks, chunk_index, destination_register,
+               address_register, known_frame_offset);
+}
+
+bool minic_riscv64_emit_integer_aggregate_load_chunk_core_profile(
+    FILE *file, const MinicCoreTypeContext *types, MinicCoreTypeId type_id,
+    size_t chunk_index, const char *destination_register,
+    const char *address_register, bool lp64_soft_float,
+    size_t known_frame_offset) {
+    MinicRiscv64AbiValue value;
+    return minic_riscv64_abi_classify_core_value_profile(
+               types, type_id, lp64_soft_float, &value) &&
+           value.kind == MINIC_RISCV64_ABI_VALUE_AGGREGATE &&
+           rv64_emit_integer_aggregate_load_chunk_known_shape(
+               file, value.storage_size, value.slot_count, chunk_index,
+               destination_register, address_register, known_frame_offset);
 }
 
 void minic_riscv64_set_diagnostic(MinicDiagnostic *diagnostic,
@@ -228,6 +250,50 @@ static bool minic_riscv64_emit_integer_conversion(FILE *file, MinicType type, co
                        register_name) >= 0;
     }
     return fprintf(file, "  addiw %s, %s, 0\n", register_name, register_name) >= 0;
+}
+
+bool minic_riscv64_emit_core_integer_conversion(
+    FILE *file, const MinicCoreTypeContext *types, MinicCoreTypeId type_id,
+    const char *register_name) {
+    const MinicCoreType *type = minic_core_type_get(
+        types, minic_core_type_unqualified(types, type_id));
+    unsigned int bits;
+    bool sign;
+    if (file == NULL || register_name == NULL || type == NULL ||
+        type->kind != MINIC_CORE_TYPE_INTEGER || !type->has_layout)
+        return false;
+    bits = type->value.integer.bit_width;
+    sign = type->value.integer.is_signed;
+    if (type->value.integer.is_bool)
+        return bits == 8U && fprintf(file, "  snez %s, %s\n",
+                                     register_name, register_name) >= 0;
+    if (bits == 8U) {
+        if (!sign) return fprintf(file, "  andi %s, %s, 255\n",
+                                  register_name, register_name) >= 0;
+        return fprintf(file,
+                       "  slli %s, %s, 56\n"
+                       "  srai %s, %s, 56\n",
+                       register_name, register_name,
+                       register_name, register_name) >= 0;
+    }
+    if (bits == 16U)
+        return fprintf(file,
+                       "  slli %s, %s, 48\n"
+                       "  %s %s, %s, 48\n",
+                       register_name, register_name,
+                       sign ? "srai" : "srli",
+                       register_name, register_name) >= 0;
+    if (bits == 32U) {
+        if (!sign)
+            return fprintf(file,
+                           "  slli %s, %s, 32\n"
+                           "  srli %s, %s, 32\n",
+                           register_name, register_name,
+                           register_name, register_name) >= 0;
+        return fprintf(file, "  addiw %s, %s, 0\n",
+                       register_name, register_name) >= 0;
+    }
+    return bits == 64U;
 }
 
 bool minic_riscv64_emit_integer_conversion_for_program(FILE *file,

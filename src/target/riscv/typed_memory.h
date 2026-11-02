@@ -25,17 +25,28 @@ static inline size_t minic_riscv_address_root_alignment(
     const MinicRiscvAddressLayout *layout = opaque;
     const MinicCoreObject *object;
     size_t bytes, alignment;
-    if (function == NULL || root == NULL || layout == NULL ||
-        layout->program == NULL || layout->data_layout == NULL ||
+    if (function == NULL || root == NULL ||
         root->kind != MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS ||
         root->value.object_id >= function->object_count ||
         function->objects == NULL)
         return 1U;
     object = &function->objects[root->value.object_id];
-    if (!minic_data_layout_type(layout->data_layout, layout->program,
-                                object->type, &bytes, &alignment))
-        return 1U;
-    (void)bytes;
+    if (function->type_context != NULL) {
+        const MinicCoreType *type = minic_core_type_get(
+            function->type_context, object->core_type_id);
+        if (type == NULL || !type->has_layout || type->alignment == 0U)
+            return 1U;
+        alignment = type->alignment;
+    } else {
+        /* Only independent pre-snapshot fixtures use the C layout path.
+         * A resolved production function never reopens frontend metadata. */
+        if (layout == NULL || layout->program == NULL ||
+            layout->data_layout == NULL ||
+            !minic_data_layout_type(layout->data_layout, layout->program,
+                                    object->type, &bytes, &alignment))
+            return 1U;
+        (void)bytes;
+    }
     if (object->explicit_alignment > alignment)
         alignment = object->explicit_alignment;
     return alignment;

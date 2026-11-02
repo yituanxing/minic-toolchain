@@ -51,12 +51,9 @@ bool x86_one_gp_store(FILE *out, size_t bytes, size_t offset) {
     return true;
 }
 
-bool x86_normalize(FILE *out, const MinicC0Program *program,
-                          const MinicTargetInfo *target, MinicType type) {
-    size_t bytes;
-    bool sign;
-    if (!minic_x86_64_scalar_width(program, target, type, &bytes, &sign)) return false;
-    if (minic_type_is_bool_integer(type))
+static bool x86_normalize_shape(FILE *out, size_t bytes, bool sign,
+                                bool is_bool) {
+    if (is_bool)
         return fprintf(out, "  testq %%rax, %%rax\n  setne %%al\n  movzbq %%al, %%rax\n") >= 0;
     switch (bytes) {
     case 1U: return fprintf(out, sign ? "  movsbq %%al, %%rax\n" : "  movzbq %%al, %%rax\n") >= 0;
@@ -65,6 +62,27 @@ bool x86_normalize(FILE *out, const MinicC0Program *program,
     case 8U: return true;
     }
     return false;
+}
+
+bool x86_normalize(FILE *out, const MinicC0Program *program,
+                          const MinicTargetInfo *target, MinicType type) {
+    size_t bytes;
+    bool sign;
+    return minic_x86_64_scalar_width(program, target, type, &bytes, &sign) &&
+           x86_normalize_shape(out, bytes, sign, minic_type_is_bool_integer(type));
+}
+
+bool x86_core_normalize(FILE *out, const MinicCoreTypeContext *context,
+                        MinicCoreTypeId id) {
+    const MinicCoreType *type;
+    size_t bytes;
+    bool sign;
+    if (!minic_x86_64_core_scalar_width(context, id, &bytes, &sign)) return false;
+    type = minic_core_type_get(context,
+                               minic_core_type_unqualified(context, id));
+    return type != NULL && x86_normalize_shape(
+        out, bytes, sign,
+        type->kind == MINIC_CORE_TYPE_INTEGER && type->value.integer.is_bool);
 }
 
 bool x86_value_load(FILE *out, const MinicX86Frame *frame, MinicCoreValueId id,

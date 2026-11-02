@@ -1,6 +1,7 @@
 #ifndef MINIC_TARGET_COMMON_AGGREGATE_SHAPE_H
 #define MINIC_TARGET_COMMON_AGGREGATE_SHAPE_H
 
+#include "core/core_type.h"
 #include "frontend/ast.h"
 #include "target/data_layout.h"
 #include <stdbool.h>
@@ -17,6 +18,13 @@ typedef struct MinicAggregateStorageShape {
 
 bool minic_common_aggregate_storage_shape(
     const MinicC0Program *, const MinicDataLayout *, MinicType,
+    size_t word_bytes, MinicAggregateStorageShape *);
+
+/* Production CoreType ingress: a complete nominal RECORD carries the exact
+ * target-resolved byte extent and alignment. No Program or C DataLayout may
+ * be queried on this path. */
+bool minic_common_aggregate_storage_shape_core(
+    const MinicCoreTypeContext *, MinicCoreTypeId,
     size_t word_bytes, MinicAggregateStorageShape *);
 
 #endif

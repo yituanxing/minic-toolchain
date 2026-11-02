@@ -452,6 +452,8 @@ static const MinicDirectLP64AbiPolicy loongarch64_abi_policy = {
     .stack_slot_bytes = 8U,
     .stack_alignment = 16U,
     .indirect_result_argument_registers = 1U,
+    .core_indirect_record = minic_multi_indirect_record_core,
+    .core_indirect_return = minic_multi_indirect_record_core,
     .record_registers = MINIC_DIRECT_LP64_RECORD_SPLIT_WITH_STACK,
     .wide_registers = MINIC_DIRECT_LP64_WIDE_SPLIT_WITH_STACK,
     .long_double_in_fp_register = false,
@@ -470,6 +472,15 @@ static bool loongarch64_executed_fp_type(MinicType type) {
            minic_type_is_long_double(type) || minic_type_is_float128(type);
 }
 
+static bool loongarch64_core_executed_fp_type(
+    const MinicCoreTypeContext *types, MinicCoreTypeId id) {
+    const MinicCoreType *type = minic_core_type_get(
+        types, minic_core_type_unqualified(types, id));
+    /* Any floating scalar ABI in LP64S is unsupported, regardless of
+     * source spelling or integer rank. Invalid IDs fail the Core verifier. */
+    return type == NULL || type->kind == MINIC_CORE_TYPE_FLOAT;
+}
+
 /* LP64S passes floating arguments in GPRs and forbids compiler-generated FPU
  * instructions in the kernel. The integer ABI remains compatible with LP64D,
  * but we must not miscompile a future float operation or FP-valued call while
@@ -481,39 +492,68 @@ static bool loongarch64_lp64s_executable_supported(
     size_t i;
     size_t count, width, j;
     if (fn == NULL || program == NULL || target == NULL ||
-        loongarch64_executed_fp_type(fn->return_type)) return false;
-    if (minic_type_is_record(fn->return_type) &&
-        minic_multi_fp_return_record(program, target, fn->return_type,
-                                     &count, &width)) return false;
+        (fn->type_context != NULL
+            ? loongarch64_core_executed_fp_type(fn->type_context,
+                                                fn->core_return_type_id)
+            : loongarch64_executed_fp_type(fn->return_type))) return false;
+    if ((fn->type_context != NULL
+             ? minic_multi_fp_return_record_core(fn->type_context,
+                    fn->core_return_type_id, &count, &width)
+             : minic_type_is_record(fn->return_type) &&
+               minic_multi_fp_return_record(program, target, fn->return_type,
+                                            &count, &width))) return false;
     for (i = 0U; i < fn->parameter_count; ++i)
-        if (loongarch64_executed_fp_type(fn->parameter_types[i])) return false;
+        if (fn->type_context != NULL
+                ? loongarch64_core_executed_fp_type(fn->type_context,
+                      fn->core_parameter_type_ids[i])
+                : loongarch64_executed_fp_type(fn->parameter_types[i])) return false;
     /* Validate actual Core call signatures, not every source declaration.
      * An FP formal type can exist even when argument conversion was folded
      * or no FP-typed SSA operand survives in the call lowering. */
     for (i = 0U; i < fn->callee_count; ++i) {
         const MinicCoreCallee *call = &fn->callees[i];
-        if (loongarch64_executed_fp_type(call->return_type)) return false;
+        if (fn->type_context != NULL
+                ? loongarch64_core_executed_fp_type(fn->type_context,
+                      call->core_return_type_id)
+                : loongarch64_executed_fp_type(call->return_type)) return false;
         for (j = 0U; j < call->parameter_count; ++j)
-            if (loongarch64_executed_fp_type(call->parameter_types[j]))
+            if (fn->type_context != NULL
+                    ? loongarch64_core_executed_fp_type(fn->type_context,
+                          call->core_parameter_type_ids[j])
+                    : loongarch64_executed_fp_type(call->parameter_types[j]))
                 return false;
     }
     for (i = 0U; i < fn->call_signature_count; ++i) {
         const MinicCoreCallSignature *call = &fn->call_signatures[i];
-        if (loongarch64_executed_fp_type(call->return_type)) return false;
+        if (fn->type_context != NULL
+                ? loongarch64_core_executed_fp_type(fn->type_context,
+                      call->core_return_type_id)
+                : loongarch64_executed_fp_type(call->return_type)) return false;
         for (j = 0U; j < call->parameter_count; ++j)
-            if (loongarch64_executed_fp_type(call->parameter_types[j]))
+            if (fn->type_context != NULL
+                    ? loongarch64_core_executed_fp_type(fn->type_context,
+                          call->core_parameter_type_ids[j])
+                    : loongarch64_executed_fp_type(call->parameter_types[j]))
                 return false;
     }
     for (i = 0U; i < fn->value_count; ++i)
-        if (loongarch64_executed_fp_type(fn->values[i].type)) return false;
+        if (fn->type_context != NULL
+                ? loongarch64_core_executed_fp_type(fn->type_context,
+                      fn->values[i].core_type_id)
+                : loongarch64_executed_fp_type(fn->values[i].type)) return false;
     for (i = 0U; i < fn->instruction_count; ++i) {
         const MinicCoreInstruction *ins = &fn->instructions[i];
-        if (loongarch64_executed_fp_type(ins->type)) return false;
+        if (fn->type_context != NULL
+                ? loongarch64_core_executed_fp_type(fn->type_context, ins->core_type_id)
+                : loongarch64_executed_fp_type(ins->type)) return false;
         if ((ins->kind == MINIC_CORE_INSTRUCTION_CALL ||
              ins->kind == MINIC_CORE_INSTRUCTION_INDIRECT_CALL) &&
-            minic_type_is_record(ins->type) &&
-            minic_multi_fp_return_record(program, target, ins->type,
-                                         &count, &width)) return false;
+            (fn->type_context != NULL
+                ? minic_multi_fp_return_record_core(fn->type_context,
+                      ins->core_type_id, &count, &width)
+                : minic_type_is_record(ins->type) &&
+                  minic_multi_fp_return_record(program, target, ins->type,
+                                                &count, &width))) return false;
     }
     return true;
 }

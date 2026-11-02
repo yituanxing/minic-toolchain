@@ -43,4 +43,20 @@ bool minic_x86_64_record_abi_compatible(MinicType, MinicType);
 bool minic_x86_64_memory_result_record(const MinicC0Program *,
                                       const MinicTargetInfo *, MinicType, size_t *);
 
+/* Resolved execution-type ABI gates. These are the production entry points
+ * once Core has attached its per-TU type context; the C signatures above
+ * remain only for independent pre-migration native fixtures. */
+bool minic_x86_64_core_scalar_width(const MinicCoreTypeContext *,
+                                    MinicCoreTypeId, size_t *, bool *);
+bool minic_x86_64_core_storage_width(const MinicCoreTypeContext *,
+                                     MinicCoreTypeId, size_t *, bool *);
+bool minic_x86_64_core_one_gp_record(const MinicCoreTypeContext *,
+                                     MinicCoreTypeId, size_t *);
+bool minic_x86_64_core_two_gp_record(const MinicCoreTypeContext *,
+                                     MinicCoreTypeId);
+bool minic_x86_64_core_memory_result_record(const MinicCoreTypeContext *,
+                                             MinicCoreTypeId, size_t *);
+bool minic_x86_64_core_record_abi_compatible(const MinicCoreTypeContext *,
+                                             MinicCoreTypeId, MinicCoreTypeId);
+
 #endif

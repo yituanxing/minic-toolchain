@@ -94,7 +94,13 @@ static bool type_references_valid(const MinicCoreTypeContext *context,
     case MINIC_CORE_TYPE_ARRAY:
         return type->value.array.element < context->type_count;
     case MINIC_CORE_TYPE_RECORD:
-        if (type->value.record.field_count > SIZE_MAX / sizeof(*type->value.record.fields) ||
+        if ((type->value.record.pack_alignment != 0U &&
+             (type->value.record.pack_alignment &
+              (type->value.record.pack_alignment - 1U)) != 0U) ||
+            (type->value.record.explicit_alignment != 0U &&
+             (type->value.record.explicit_alignment &
+              (type->value.record.explicit_alignment - 1U)) != 0U) ||
+            type->value.record.field_count > SIZE_MAX / sizeof(*type->value.record.fields) ||
             (type->value.record.field_count != 0U && type->value.record.fields == NULL))
             return false;
         for (i = 0U; i < type->value.record.field_count; ++i)
@@ -212,6 +218,8 @@ bool minic_core_type_complete_record(MinicCoreTypeContext *context,
         return false;
     if (current->value.record.is_union != complete->value.record.is_union ||
         current->value.record.is_packed != complete->value.record.is_packed ||
+        current->value.record.pack_alignment != complete->value.record.pack_alignment ||
+        current->value.record.explicit_alignment != complete->value.record.explicit_alignment ||
         current->value.record.is_transparent_union !=
             complete->value.record.is_transparent_union ||
         (current->has_layout &&

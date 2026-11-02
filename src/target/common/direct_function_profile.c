@@ -21,13 +21,24 @@ MinicDirectLP64ProfileResult minic_multi_direct_lp64_profile_function(
         incoming == NULL || profile == NULL || indirect_record == NULL ||
         !minic_direct_lp64_abi_policy_valid(abi))
         return MINIC_DIRECT_LP64_PROFILE_PARAMETER_SHAPE;
+    if (fn->type_context != NULL &&
+        ((fn->parameter_count != 0U && fn->core_parameter_type_ids == NULL) ||
+         abi->core_indirect_record == NULL))
+        return MINIC_DIRECT_LP64_PROFILE_PARAMETER_SHAPE;
     (void)memset(profile, 0, sizeof(*profile));
     profile->variadic_address_count = facts->variadic_address_count;
     profile->has_dynamic_stack = facts->uses_dynamic_stack_alloc;
     if (decl->is_variadic) {
         for (i = 0U; i < fn->parameter_count; ++i)
             if (!abi->variadic_named_double_supported &&
-                minic_type_is_double(fn->parameter_types[i]))
+                (fn->type_context != NULL
+                    ? minic_lp64_core_kind(fn->type_context,
+                        fn->core_parameter_type_ids[i], MINIC_CORE_TYPE_FLOAT) &&
+                      minic_core_type_get(fn->type_context,
+                          minic_core_type_unqualified(fn->type_context,
+                              fn->core_parameter_type_ids[i]))->value.floating.format ==
+                          MINIC_CORE_FLOAT_BINARY64
+                    : minic_type_is_double(fn->parameter_types[i])))
                 return MINIC_DIRECT_LP64_PROFILE_VARIADIC_FIXED_FLOAT;
     }
     /* The incoming ABI classifier is the source of truth for consumed
@@ -37,11 +48,26 @@ MinicDirectLP64ProfileResult minic_multi_direct_lp64_profile_function(
      * would position va_start at the wrong byte address. */
     for (i = 0U; i < fn->parameter_count; ++i) {
         size_t record_size, record_slots;
-        if (!minic_lp64_valid_parameter_type(program, target, fn->parameter_types[i]) &&
-            !minic_multi_empty_record(program, target, fn->parameter_types[i]) &&
-            !minic_multi_gp_record(program, target, fn->parameter_types[i],
-                                   &record_size, &record_slots) &&
-            !indirect_record(program, target, fn->parameter_types[i], &record_size))
+        const MinicCoreTypeId id = fn->type_context != NULL
+            ? fn->core_parameter_type_ids[i] : MINIC_CORE_TYPE_INVALID;
+        if (!(fn->type_context != NULL
+                 ? minic_lp64_core_valid_parameter_type(fn->type_context, id)
+                 : minic_lp64_valid_parameter_type(program, target,
+                                                   fn->parameter_types[i])) &&
+            !(fn->type_context != NULL
+                 ? minic_multi_empty_record_core(fn->type_context, id)
+                 : minic_multi_empty_record(program, target,
+                                           fn->parameter_types[i])) &&
+            !(fn->type_context != NULL
+                 ? minic_multi_gp_record_core(fn->type_context, id,
+                                              &record_size, &record_slots)
+                 : minic_multi_gp_record(program, target,
+                         fn->parameter_types[i], &record_size, &record_slots)) &&
+            !(fn->type_context != NULL
+                 ? abi->core_indirect_record != NULL &&
+                   abi->core_indirect_record(fn->type_context, id, &record_size)
+                 : indirect_record(program, target,
+                         fn->parameter_types[i], &record_size)))
             return MINIC_DIRECT_LP64_PROFILE_PARAMETER_SHAPE;
     }
     if (!minic_lp64_plan_incoming_parameters(
@@ -72,7 +98,14 @@ MinicDirectLP64ProfileResult minic_multi_direct_lp64_profile_function(
                 if (loc->kind == MINIC_LP64_ARGUMENT_FP ||
                     (loc->kind == MINIC_LP64_ARGUMENT_WIDE &&
                      abi->long_double_in_fp_register &&
-                     minic_type_is_long_double(fn->parameter_types[i]))) {
+                     (fn->type_context != NULL
+                          ? minic_lp64_core_kind(fn->type_context,
+                              fn->core_parameter_type_ids[i], MINIC_CORE_TYPE_FLOAT) &&
+                            minic_core_type_get(fn->type_context,
+                              minic_core_type_unqualified(fn->type_context,
+                                fn->core_parameter_type_ids[i]))->value.floating.format ==
+                              MINIC_CORE_FLOAT_EXTENDED
+                          : minic_type_is_long_double(fn->parameter_types[i])))) {
                     profile->fixed_fp_count = abi->fp_argument_registers;
                 } else {
                     profile->fixed_gp_count = abi->gp_argument_registers;
@@ -105,9 +138,16 @@ MinicDirectLP64ProfileResult minic_multi_direct_lp64_profile_function(
         size_t starts = 0U, cursors = 0U, consumed_gp = 0U;
         size_t indirect_bytes = 0U;
         const bool hidden_indirect_result =
-            minic_type_is_record(fn->return_type) &&
-            indirect_record(program, target, fn->return_type,
-                            &indirect_bytes) && indirect_bytes > 16U;
+            (fn->type_context != NULL
+                 ? minic_lp64_core_kind(fn->type_context,
+                     fn->core_return_type_id, MINIC_CORE_TYPE_RECORD)
+                 : minic_type_is_record(fn->return_type)) &&
+            (fn->type_context != NULL
+                 ? abi->core_indirect_record != NULL &&
+                   abi->core_indirect_record(fn->type_context,
+                       fn->core_return_type_id, &indirect_bytes)
+                 : indirect_record(program, target, fn->return_type,
+                                    &indirect_bytes)) && indirect_bytes > 16U;
         consumed_gp = hidden_indirect_result ? 1U : 0U;
         for (i = 0U; i < incoming->argument_count; ++i) {
             const MinicLP64ArgumentLocation *loc = &incoming->arguments[i];

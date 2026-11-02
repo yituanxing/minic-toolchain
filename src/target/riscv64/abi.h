@@ -2,6 +2,7 @@
 #define MINIC_TARGET_RISCV64_ABI_H
 
 #include "frontend/ast.h"
+#include "core/core_type.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -70,5 +71,20 @@ bool minic_riscv64_abi_place_argument(const MinicC0Program *program,
                                       bool is_fixed_parameter,
                                       MinicRiscv64AbiCursor *cursor,
                                       MinicRiscv64AbiArgumentLocation *location);
+
+/* Canonical Core-owned execution types. These are the production interfaces
+ * for functions with an attached translation-unit CoreTypeContext; C-facing
+ * entry points above remain for standalone historical ABI tests only. */
+bool minic_riscv64_abi_classify_core_value_profile(
+    const MinicCoreTypeContext *types, MinicCoreTypeId type_id,
+    bool lp64_soft_float, MinicRiscv64AbiValue *value);
+bool minic_riscv64_abi_cursor_initialize_for_core_return_profile(
+    const MinicCoreTypeContext *types, MinicCoreTypeId return_type,
+    bool lp64_soft_float, MinicRiscv64AbiCursor *cursor,
+    MinicRiscv64AbiValue *return_value);
+bool minic_riscv64_abi_place_core_argument(
+    const MinicCoreTypeContext *types, MinicCoreTypeId type_id,
+    bool is_fixed_parameter, MinicRiscv64AbiCursor *cursor,
+    MinicRiscv64AbiArgumentLocation *location);
 
 #endif

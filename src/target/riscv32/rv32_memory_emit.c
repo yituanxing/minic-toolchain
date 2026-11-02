@@ -15,8 +15,62 @@ static bool rv32_wide_memory(FILE *out, bool store, size_t alignment) {
         "t1", "t2", "t0", "t3", alignment, "rv32_memory");
 }
 
-/* Addressing, ILP32 memory and aggregate transport. Core's record layout
- * is obtained through target DataLayout, never host sizeof or LP64 slots. */
+static bool rv32_memory_is_kind(const MinicCoreFunction *function,
+                                MinicCoreTypeId type_id, MinicType legacy,
+                                MinicCoreTypeKind kind) {
+    if (function->type_context != NULL) {
+        const MinicCoreType *type = minic_core_type_get(function->type_context,
+            minic_core_type_unqualified(function->type_context, type_id));
+        return type != NULL && type->kind == kind;
+    }
+    switch (kind) {
+    case MINIC_CORE_TYPE_POINTER: return minic_type_is_pointer(legacy);
+    case MINIC_CORE_TYPE_RECORD: return minic_type_is_record(legacy);
+    case MINIC_CORE_TYPE_VOID: return minic_type_is_void(legacy);
+    case MINIC_CORE_TYPE_INTEGER: return minic_type_is_integer(legacy);
+    default: return false;
+    }
+}
+
+static bool rv32_allocation_size_type(const MinicCoreFunction *function,
+                                      MinicCoreValueId count) {
+    if (count >= function->value_count) return false;
+    if (function->type_context == NULL)
+        return minic_type_equal(function->values[count].type,
+                                minic_type_unsigned_long());
+    const MinicCoreType *type = minic_core_type_get(function->type_context,
+        minic_core_type_unqualified(function->type_context,
+                                    function->values[count].core_type_id));
+    return type != NULL && type->kind == MINIC_CORE_TYPE_INTEGER &&
+           type->has_layout && type->size == 4U &&
+           type->value.integer.bit_width == 32U &&
+           !type->value.integer.is_signed && !type->value.integer.is_bool;
+}
+
+static bool rv32_record_layout(const MinicC0Program *program,
+                                const MinicTargetInfo *target,
+                                const MinicCoreFunction *function,
+                                MinicCoreTypeId type_id, MinicType legacy,
+                                size_t *size, size_t *alignment) {
+    if (function->type_context != NULL) {
+        const MinicCoreType *type =
+            minic_core_type_get(function->type_context, type_id);
+        if (type == NULL || !type->has_layout ||
+            !rv32_memory_is_kind(function, type_id, legacy,
+                                 MINIC_CORE_TYPE_RECORD) ||
+            type->alignment == 0U ||
+            (type->alignment & (type->alignment - 1U)) != 0U) return false;
+        *size = type->size;
+        *alignment = type->alignment;
+        return true;
+    }
+    return minic_type_is_record(legacy) &&
+           minic_data_layout_type(target->data_layout, program, legacy,
+                                  size, alignment);
+}
+
+/* Addressing, ILP32 memory and aggregate transport. Attached Core functions
+ * consume the resolved Core type layout; C DataLayout is legacy-only. */
 bool rv32_emit_memory_instruction(FILE *out, const MinicC0Program *program,
                                   const MinicTargetInfo *target,
                                   const MinicCoreFunction *f,
@@ -73,13 +127,15 @@ bool rv32_emit_memory_instruction(FILE *out, const MinicC0Program *program,
     case MINIC_CORE_INSTRUCTION_LOAD:
         access_alignment = minic_riscv_address_alignment(program, target->data_layout, f,
                                           ins->value.load.address);
-        if (rv32_scalar_storage_words(f, ins->type, &bits) && bits == 2U)
+        if (rv32_resolved_scalar_storage_words(
+                f, ins->type, ins->core_type_id, &bits) && bits == 2U)
             return rv32_slot(out, fr, ins->value.load.address, "t0", true) &&
                    rv32_wide_memory(out, false, access_alignment) &&
                    rv32_pair_slot(out, fr, ins->result,
                                   "t1", "t2", false);
         return rv32_slot(out, fr, ins->value.load.address, "t0", true) &&
-               rv32_load_mem(out, f, ins->type, "t1", access_alignment) &&
+               rv32_resolved_load_mem(out, f, ins->type,
+                                      ins->core_type_id, "t1", access_alignment) &&
                rv32_slot(out, fr, ins->result, "t1", false);
     case MINIC_CORE_INSTRUCTION_DYNAMIC_STACK_ALLOC: {
         /* Fixed SSA and locals use s0. Each dynamic allocation leaves a
@@ -87,9 +143,12 @@ bool rv32_emit_memory_instruction(FILE *out, const MinicC0Program *program,
         const MinicCoreValueId count = ins->value.operand;
         if (!fr->has_dynamic_stack || count >= f->value_count ||
             ins->result >= f->value_count ||
-            !minic_type_is_pointer(ins->type) ||
-            !minic_type_equal(f->values[ins->result].type, ins->type) ||
-            !minic_type_equal(f->values[count].type, minic_type_unsigned_long()) ||
+            !rv32_memory_is_kind(f, ins->core_type_id, ins->type,
+                                 MINIC_CORE_TYPE_POINTER) ||
+            (f->type_context != NULL
+                ? f->values[ins->result].core_type_id != ins->core_type_id
+                : !minic_type_equal(f->values[ins->result].type, ins->type)) ||
+            !rv32_allocation_size_type(f, count) ||
             !rv32_slot(out, fr, count, "t0", true))
             return false;
         /* Both 16-byte rounding and outgoing-area addition check XLEN overflow. */
@@ -116,8 +175,9 @@ bool rv32_emit_memory_instruction(FILE *out, const MinicC0Program *program,
         access_alignment = minic_riscv_address_alignment(program, target->data_layout, f,
                                           ins->value.store.address);
         if (ins->value.store.stored_value < f->value_count &&
-            rv32_scalar_storage_words(
-                f, f->values[ins->value.store.stored_value].type, &bits) &&
+            rv32_resolved_scalar_storage_words(
+                f, f->values[ins->value.store.stored_value].type,
+                f->values[ins->value.store.stored_value].core_type_id, &bits) &&
             bits == 2U)
             return rv32_slot(out, fr, ins->value.store.address, "t0", true) &&
                    rv32_pair_slot(out, fr, ins->value.store.stored_value,
@@ -126,13 +186,14 @@ bool rv32_emit_memory_instruction(FILE *out, const MinicC0Program *program,
         return ins->value.store.stored_value < f->value_count &&
                rv32_slot(out, fr, ins->value.store.address, "t0", true) &&
                rv32_slot(out, fr, ins->value.store.stored_value, "t1", true) &&
-               rv32_store_mem(out, f,
-                   f->values[ins->value.store.stored_value].type, access_alignment);
+               rv32_resolved_store_mem(out, f,
+                   f->values[ins->value.store.stored_value].type,
+                   f->values[ins->value.store.stored_value].core_type_id,
+                   access_alignment);
     case MINIC_CORE_INSTRUCTION_RECORD_COPY: {
         size_t copy_size, alignment;
-        if (!minic_type_is_record(ins->type) ||
-            !minic_data_layout_type(target->data_layout, program, ins->type,
-                                    &copy_size, &alignment) ||
+        if (!rv32_record_layout(program, target, f, ins->core_type_id,
+                                 ins->type, &copy_size, &alignment) ||
             copy_size > UINT32_MAX)
             return false;
         /* GNU C permits empty lockdep records. A zero-byte record copy is
@@ -152,10 +213,9 @@ bool rv32_emit_memory_instruction(FILE *out, const MinicC0Program *program,
             ins->value.record_load.destination_object;
         size_t copy_size, alignment;
         if (id >= f->object_count ||
-            !minic_type_is_record(f->objects[id].type) ||
-            !minic_data_layout_type(target->data_layout, program,
-                                    f->objects[id].type,
-                                    &copy_size, &alignment) ||
+            !rv32_record_layout(program, target, f,
+                                f->objects[id].core_type_id, f->objects[id].type,
+                                &copy_size, &alignment) ||
             copy_size > UINT32_MAX)
             return false;
         if (copy_size == 0U) return true;

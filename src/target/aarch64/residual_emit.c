@@ -18,6 +18,70 @@
  * target owned; planning and type checks are shared with the other LP64
  * backend, preserving AArch64 and LoongArch64 ABI/ISA divergence. */
 
+static const MinicCoreType *a64_residual_core_type(
+    const MinicCoreFunction *fn, MinicCoreTypeId id) {
+    if (fn == NULL || fn->type_context == NULL) return NULL;
+    id = minic_core_type_unqualified(fn->type_context, id);
+    return minic_core_type_get(fn->type_context, id);
+}
+
+static bool a64_residual_is_kind(const MinicCoreFunction *fn,
+                                 MinicType legacy, MinicCoreTypeId id,
+                                 MinicCoreTypeKind kind) {
+    const MinicCoreType *type;
+    if (fn->type_context != NULL) {
+        type = a64_residual_core_type(fn, id);
+        return type != NULL && type->kind == kind;
+    }
+    switch (kind) {
+    case MINIC_CORE_TYPE_VOID: return minic_type_is_void(legacy);
+    case MINIC_CORE_TYPE_INTEGER: return minic_type_is_integer(legacy);
+    case MINIC_CORE_TYPE_POINTER: return minic_type_is_pointer(legacy);
+    case MINIC_CORE_TYPE_FLOAT: return minic_type_is_double(legacy);
+    default: return false;
+    }
+}
+
+static bool a64_residual_is_double(const MinicCoreFunction *fn,
+                                   MinicType legacy, MinicCoreTypeId id) {
+    const MinicCoreType *type;
+    if (fn->type_context == NULL) return minic_type_is_double(legacy);
+    type = a64_residual_core_type(fn, id);
+    return type != NULL && type->kind == MINIC_CORE_TYPE_FLOAT &&
+           type->has_layout && type->size == 8U &&
+           type->value.floating.format == MINIC_CORE_FLOAT_BINARY64;
+}
+
+static bool a64_residual_same(const MinicCoreFunction *fn,
+                              MinicType left, MinicCoreTypeId left_id,
+                              MinicType right, MinicCoreTypeId right_id) {
+    return fn->type_context != NULL ? left_id == right_id
+                                     : minic_type_equal(left, right);
+}
+
+static bool a64_residual_pointee_void(const MinicCoreFunction *fn,
+                                      MinicType legacy, MinicCoreTypeId id) {
+    const MinicCoreType *type, *pointee;
+    MinicType old_pointee;
+    if (fn->type_context == NULL)
+        return minic_type_pointee(legacy, &old_pointee) &&
+               minic_type_is_void(old_pointee);
+    type = a64_residual_core_type(fn, id);
+    if (type == NULL || type->kind != MINIC_CORE_TYPE_POINTER) return false;
+    pointee = a64_residual_core_type(fn, type->value.pointer.pointee);
+    return pointee != NULL && pointee->kind == MINIC_CORE_TYPE_VOID;
+}
+
+static bool a64_residual_integer_width(const MinicC0Program *program,
+                                       const MinicTargetInfo *target,
+                                       const MinicCoreFunction *fn,
+                                       MinicType legacy, MinicCoreTypeId id,
+                                       size_t *width, bool *sign) {
+    return fn->type_context != NULL
+        ? minic_lp64_core_integer_width(fn->type_context, id, width, sign)
+        : minic_lp64_scalar_integer_width(program, target, legacy, width, sign);
+}
+
 /* An AArch64 MOVZ immediate carries just 16 bits. A pointer element stride
  * may be much larger (Linux has large ZSTD contexts and LZO thread records),
  * so materialize the complete target LP64 size without silently truncating
@@ -208,13 +272,11 @@ bool minic_aarch64_emit_residual_instruction(
                 break;
             }
             {
-                MinicType frame_pointee;
                 if (ins->value.call_frame_address.kind ==
                         MINIC_CORE_CALL_FRAME_ADDRESS_FRAME &&
                     ins->value.call_frame_address.level == 1U &&
                     ins->result < fn->value_count &&
-                    minic_type_pointee(ins->type, &frame_pointee) &&
-                    minic_type_is_void(frame_pointee) &&
+                    a64_residual_pointee_void(fn, ins->type, ins->core_type_id) &&
                     minic_target_info_call_frame_address_supported(
                         target, MINIC_CALL_FRAME_ADDRESS_FRAME, 1U)) {
                     if (fputs("  ldr x9, [x29]\n", out) == EOF)
@@ -435,9 +497,11 @@ bool minic_aarch64_emit_residual_instruction(
                     "MINIC_M11_POINTER_DIAG arch=aarch64 function=%s block=%zu ins=%u base=%u base_pointer=%d index=%u index_integer=%d width_known=%d index_bits=%u stride=%zu subtract=%d\n",
                     name, block_id, (unsigned int)ins_id,
                     (unsigned int)base,
-                    minic_type_is_pointer(fn->values[base].type) ? 1 : 0,
+                    a64_residual_is_kind(fn, fn->values[base].type,
+                        fn->values[base].core_type_id, MINIC_CORE_TYPE_POINTER) ? 1 : 0,
                     (unsigned int)index,
-                    minic_type_is_integer(fn->values[index].type) ? 1 : 0,
+                    a64_residual_is_kind(fn, fn->values[index].type,
+                        fn->values[index].core_type_id, MINIC_CORE_TYPE_INTEGER) ? 1 : 0,
                     have_bits ? 1 : 0, bits, stride,
                     ins->value.pointer_offset.subtract ? 1 : 0);
             }
@@ -516,16 +580,20 @@ bool minic_aarch64_emit_residual_instruction(
              * __gr_offs, __vr_offs}. Read from the correct register bank
              * (GP slots = 8 bytes, FP slots = 16 bytes) or from the
              * incoming overflow stack, then update the mutable cursor. */
-            const bool fp = minic_type_is_double(ins->type);
+            const bool fp = a64_residual_is_double(fn, ins->type,
+                                                     ins->core_type_id);
             size_t width = 8U;
             bool sign = false;
             if (ins->result >= fn->value_count ||
                 ins->value.operand >= fn->value_count ||
-                !minic_type_is_pointer(
-                    fn->values[ins->value.operand].type) ||
-                (!fp && !minic_type_is_pointer(ins->type) &&
-                 !minic_lp64_scalar_integer_width(program, target, ins->type,
-                                       &width, &sign)))
+                !a64_residual_is_kind(fn,
+                    fn->values[ins->value.operand].type,
+                    fn->values[ins->value.operand].core_type_id,
+                    MINIC_CORE_TYPE_POINTER) ||
+                (!fp && !a64_residual_is_kind(fn, ins->type,
+                    ins->core_type_id, MINIC_CORE_TYPE_POINTER) &&
+                 !a64_residual_integer_width(program, target, fn,
+                    ins->type, ins->core_type_id, &width, &sign)))
                 return minic_multi_direct_machine_reject(fn, "aarch64", name,
                     reject_stage, reject_block, reject_ins, __LINE__);
             if (!minic_a64_emit_owned_slot(out, &frame_view, false,
@@ -556,7 +624,8 @@ bool minic_aarch64_emit_residual_instruction(
                         id, (unsigned int)ins->result,
                         id, (unsigned int)ins->result,
                         id, (unsigned int)ins->result) < 0 ||
-                (!fp && !minic_type_is_pointer(ins->type) &&
+                (!fp && !a64_residual_is_kind(fn, ins->type,
+                    ins->core_type_id, MINIC_CORE_TYPE_POINTER) &&
                  width != 8U && !minic_aarch64_emit_integer_normalize(out, width, sign)))
                 return minic_multi_direct_machine_reject(fn, "aarch64", name,
                     reject_stage, reject_block, reject_ins, __LINE__);
@@ -569,10 +638,14 @@ bool minic_aarch64_emit_residual_instruction(
              * signed 32-bit register offsets. Copy the entire ABI state,
              * including both mutable offsets, into an independent tag. */
             if (ins->result != MINIC_CORE_VALUE_INVALID ||
-                !minic_type_is_void(ins->type) ||
+                !a64_residual_is_kind(fn, ins->type, ins->core_type_id,
+                                      MINIC_CORE_TYPE_VOID) ||
                 dest >= fn->value_count || src >= fn->value_count ||
-                !minic_type_is_pointer(fn->values[dest].type) ||
-                !minic_type_equal(fn->values[dest].type, fn->values[src].type) ||
+                !a64_residual_is_kind(fn, fn->values[dest].type,
+                    fn->values[dest].core_type_id, MINIC_CORE_TYPE_POINTER) ||
+                !a64_residual_same(fn,
+                    fn->values[dest].type, fn->values[dest].core_type_id,
+                    fn->values[src].type, fn->values[src].core_type_id) ||
                 !minic_a64_emit_owned_slot(out, &frame_view, false,
                     MINIC_A64_REG_X, 9U, minic_lp64_frame_value_offset(frame_plan, dest)) ||
                 !minic_a64_emit_owned_slot(out, &frame_view, false,
@@ -599,7 +672,8 @@ bool minic_aarch64_emit_residual_instruction(
             if (va_count == 0U || seen >= va_count ||
                 ctx->incoming_plan == NULL ||
                 ctx->incoming_plan->stack_slots > SIZE_MAX / 8U ||
-                !minic_type_is_pointer(ins->type) ||
+                !a64_residual_is_kind(fn, ins->type, ins->core_type_id,
+                                      MINIC_CORE_TYPE_POINTER) ||
                 ins->result >= fn->value_count ||
                 (seen != 0U && frame < (va_count - seen) * 32U))
                 return minic_multi_direct_machine_reject(fn, "aarch64", name,

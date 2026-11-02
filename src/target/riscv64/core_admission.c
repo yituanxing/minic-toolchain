@@ -15,6 +15,23 @@
 #include <stdlib.h>
 #include <string.h>
 
+static const MinicCoreType *rv64_admit_core_base(
+    const MinicCoreFunction *function, MinicCoreTypeId id) {
+    if (function == NULL || function->type_context == NULL) return NULL;
+    return minic_core_type_get(function->type_context,
+        minic_core_type_unqualified(function->type_context, id));
+}
+
+static bool rv64_admit_core_scalar(const MinicCoreType *type) {
+    return type != NULL &&
+        (type->kind == MINIC_CORE_TYPE_INTEGER ||
+         type->kind == MINIC_CORE_TYPE_POINTER ||
+         (type->kind == MINIC_CORE_TYPE_FLOAT &&
+          (type->value.floating.format == MINIC_CORE_FLOAT_BINARY32 ||
+           type->value.floating.format == MINIC_CORE_FLOAT_BINARY64 ||
+           type->value.floating.format == MINIC_CORE_FLOAT_EXTENDED)));
+}
+
 /* Canonical Core verification belongs to Common FunctionPlan. RV64 owns
  * target capability, psABI placements and strict machine ISA admission. */
 static bool core_instruction_supported(const MinicC0Program *program,
@@ -82,9 +99,14 @@ static bool core_instruction_supported(const MinicC0Program *program,
 
         binding = minic_riscv64_inline_asm_fixed_register_binding(
             function, instruction->value.fixed_register_binding_id);
-        return binding != NULL && binding->register_name != NULL &&
-               binding->register_name_length != 0U && minic_riscv64_scalar_type(binding->type) &&
-               minic_type_equal(binding->type, instruction->type);
+        if (binding == NULL || binding->register_name == NULL ||
+            binding->register_name_length == 0U) return false;
+        return function->type_context != NULL
+            ? rv64_admit_core_scalar(rv64_admit_core_base(
+                  function, binding->core_type_id)) &&
+              binding->core_type_id == instruction->core_type_id
+            : minic_riscv64_scalar_type(binding->type) &&
+              minic_type_equal(binding->type, instruction->type);
     }
     /* Core already proved block bounds, global/function symbol identity,
      * and exact pointer result types. No RV64 ISA feature is involved. */
@@ -185,10 +207,19 @@ static bool core_function_can_emit_with_index(
         return core_rv64_capability_reject(function, "object-plan", 0U, -1);
     for (index = 0U; index < function->object_count; ++index) {
         const MinicType type = function->objects[index].type;
+        const MinicCoreType *core_type = function->type_context != NULL
+            ? rv64_admit_core_base(function, function->objects[index].core_type_id)
+            : NULL;
+        const bool is_record = function->type_context != NULL
+            ? core_type != NULL && core_type->kind == MINIC_CORE_TYPE_RECORD
+            : minic_type_is_record(type);
         MinicCoreObjectStorage calculated = {0};
         const MinicCoreObjectStorage *shape = NULL;
-        if (!minic_riscv64_scalar_type(type) &&
-            !minic_type_is_record(type) && !minic_type_is_array(type))
+        if (function->type_context != NULL
+                ? !(rv64_admit_core_scalar(core_type) || is_record ||
+                    (core_type != NULL && core_type->kind == MINIC_CORE_TYPE_ARRAY))
+                : (!minic_riscv64_scalar_type(type) &&
+                   !minic_type_is_record(type) && !minic_type_is_array(type)))
             return core_rv64_capability_reject(function, "object-type", index, -1);
         if (storage != NULL) {
             shape = &storage->objects[index];
@@ -220,7 +251,7 @@ static bool core_function_can_emit_with_index(
             calculated.alignment = alignment;
             shape = &calculated;
         }
-        if ((shape->extent == 0U && !minic_type_is_record(type)) ||
+        if ((shape->extent == 0U && !is_record) ||
             shape->alignment == 0U ||
             (shape->alignment & (shape->alignment - 1U)) != 0U)
             return core_rv64_capability_reject(function, "object", index, -1);
@@ -228,7 +259,10 @@ static bool core_function_can_emit_with_index(
     /* Core verifier already checks global name, type and symbol shape.
      * Relocations and actual address emission remain machine-owned. */
     for (index = 0U; index < function->value_count; ++index) {
-        if (!minic_riscv64_scalar_type(function->values[index].type)) {
+        if (!(function->type_context != NULL
+                  ? rv64_admit_core_scalar(rv64_admit_core_base(
+                        function, function->values[index].core_type_id))
+                  : minic_riscv64_scalar_type(function->values[index].type))) {
             return core_rv64_capability_reject(function, "value", index, -1);
         }
     }

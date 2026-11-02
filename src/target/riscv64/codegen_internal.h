@@ -1,6 +1,7 @@
 #ifndef MINIC_TARGET_RISCV64_CODEGEN_INTERNAL_H
 #define MINIC_TARGET_RISCV64_CODEGEN_INTERNAL_H
 
+#include "core/core_type.h"
 #include "frontend/ast.h"
 #include "minic/compiler.h"
 #include "target/data_layout.h"
@@ -34,6 +35,9 @@ bool minic_riscv64_emit_integer_conversion_for_program(FILE *file,
                                                        const MinicC0Program *program,
                                                        MinicType type,
                                                        const char *register_name);
+bool minic_riscv64_emit_core_integer_conversion(FILE *file,
+    const MinicCoreTypeContext *types, MinicCoreTypeId type_id,
+    const char *register_name);
 /* Typed Core pointer memory, distinct from aligned machine-owned frame
  * slots. All source pointer effects must use this proven-or-guarded form. */
 bool minic_riscv64_emit_safe_scalar_load(FILE *, const MinicC0Program *,
@@ -42,6 +46,11 @@ bool minic_riscv64_emit_safe_scalar_store(FILE *, const MinicC0Program *,
     MinicType, const char *, const char *, const char *, size_t);
 bool minic_riscv64_emit_integer_aggregate_load_chunk_profile(
     FILE *file, const MinicC0Program *program, MinicType type,
+    size_t chunk_index, const char *destination_register,
+    const char *address_register, bool lp64_soft_float,
+    size_t known_frame_offset);
+bool minic_riscv64_emit_integer_aggregate_load_chunk_core_profile(
+    FILE *file, const MinicCoreTypeContext *types, MinicCoreTypeId type_id,
     size_t chunk_index, const char *destination_register,
     const char *address_register, bool lp64_soft_float,
     size_t known_frame_offset);

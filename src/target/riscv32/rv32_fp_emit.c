@@ -3,6 +3,19 @@
 #include <inttypes.h>
 #include <stdint.h>
 
+static bool rv32_fp_is(const MinicCoreFunction *function,
+                        MinicType legacy, MinicCoreTypeId id, bool binary64) {
+    const MinicCoreType *type;
+    if (function->type_context == NULL)
+        return binary64 ? minic_type_is_double(legacy) : minic_type_is_float(legacy);
+    type = minic_core_type_get(function->type_context,
+        minic_core_type_unqualified(function->type_context, id));
+    return type != NULL && type->kind == MINIC_CORE_TYPE_FLOAT &&
+        type->has_layout && type->size == (binary64 ? 8U : 4U) &&
+        type->value.floating.format == (binary64 ? MINIC_CORE_FLOAT_BINARY64
+                                                 : MINIC_CORE_FLOAT_BINARY32);
+}
+
 /* RV32 soft-float arithmetic uses upstream LLVM compiler-rt IEEE-754,
  * with two-XLEN ILP32 register transport. No duplicated FP algorithms. */
 bool rv32_emit_fp_instruction(FILE *out, const MinicCoreFunction *f,
@@ -14,12 +27,12 @@ bool rv32_emit_fp_instruction(FILE *out, const MinicCoreFunction *f,
     switch (ins->kind) {
     case MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT: {
         uint64_t raw = ins->value.floating_bits;
-        if (minic_type_is_double(ins->type)) {
+        if (rv32_fp_is(f, ins->type, ins->core_type_id, true)) {
             return fprintf(out, "  li t0, %" PRIu32 "\n  li t1, %" PRIu32 "\n",
                            (uint32_t)raw, (uint32_t)(raw >> 32U)) >= 0 &&
                    rv32_pair_slot(out, fr, ins->result, "t0", "t1", false);
         }
-        return minic_type_is_float(ins->type) &&
+        return rv32_fp_is(f, ins->type, ins->core_type_id, false) &&
                fprintf(out, "  li t0, %" PRIu32 "\n", (uint32_t)raw) >= 0 &&
                rv32_slot(out, fr, ins->result, "t0", false);
     }
@@ -33,10 +46,13 @@ bool rv32_emit_fp_instruction(FILE *out, const MinicCoreFunction *f,
         const char *helper = minic_riscv_softfloat_arithmetic_symbol(ins->kind);
         MinicCoreValueId left = ins->value.binary.left;
         MinicCoreValueId right = ins->value.binary.right;
-        if (helper == NULL || !minic_type_is_float(ins->type) ||
+        if (helper == NULL ||
+            !rv32_fp_is(f, ins->type, ins->core_type_id, false) ||
             left >= f->value_count || right >= f->value_count ||
-            !minic_type_is_float(f->values[left].type) ||
-            !minic_type_is_float(f->values[right].type) ||
+            !rv32_fp_is(f, f->values[left].type,
+                         f->values[left].core_type_id, false) ||
+            !rv32_fp_is(f, f->values[right].type,
+                         f->values[right].core_type_id, false) ||
             !rv32_slot(out, fr, left, "a0", true) ||
             !rv32_slot(out, fr, right, "a1", true) ||
             fprintf(out, "  call %s\n", helper) < 0)
@@ -92,20 +108,24 @@ bool rv32_emit_fp_instruction(FILE *out, const MinicCoreFunction *f,
         unsigned words;
         const char *helper;
         if (id >= f->value_count ||
-            !rv32_scalar_storage_words(f, f->values[id].type, &words))
+            !rv32_resolved_integer_type(f, f->values[id].type,
+                                         f->values[id].core_type_id) ||
+            !rv32_resolved_scalar_storage_words(f, f->values[id].type,
+                f->values[id].core_type_id, &words))
             return false;
         effective = f->values[id].type;
-        if (minic_type_is_enum(effective) &&
+        if (f->type_context == NULL && minic_type_is_enum(effective) &&
             !minic_core_function_effective_integer_type(f, effective, &effective))
             return false;
-        if (!minic_type_is_integer(effective)) return false;
         if (words == 2U) {
-            is_signed = effective.integer_sign == MINIC_INTEGER_SIGN_SIGNED;
+            is_signed = !rv32_resolved_unsigned_integer(f, effective,
+                f->values[id].core_type_id);
             helper = is_signed ? "__floatdidf" : "__floatundidf";
             if (!rv32_pair_slot(out, fr, id, "a0", "a1", true))
                 return false;
         } else {
-            if (!rv32_scalar(f, f->values[id].type, &bits, &is_signed) ||
+            if (!rv32_resolved_scalar(f, f->values[id].type,
+                    f->values[id].core_type_id, &bits, &is_signed) ||
                 !rv32_slot(out, fr, id, "a0", true))
                 return false;
             helper = is_signed ? "__floatsidf" : "__floatunsidf";
@@ -117,16 +137,20 @@ bool rv32_emit_fp_instruction(FILE *out, const MinicCoreFunction *f,
         MinicType effective = ins->type;
         unsigned words;
         const char *helper;
-        if (!rv32_scalar_storage_words(f, ins->type, &words) ||
-            (minic_type_is_enum(effective) &&
+        if (!rv32_resolved_integer_type(f, ins->type, ins->core_type_id) ||
+            !rv32_resolved_scalar_storage_words(f, ins->type,
+                                                 ins->core_type_id, &words) ||
+            (f->type_context == NULL && minic_type_is_enum(effective) &&
              !minic_core_function_effective_integer_type(f, effective, &effective)) ||
-            !minic_type_is_integer(effective))
+            (f->type_context == NULL && !minic_type_is_integer(effective)))
             return false;
         if (words == 2U) {
-            is_signed = effective.integer_sign == MINIC_INTEGER_SIGN_SIGNED;
+            is_signed = !rv32_resolved_unsigned_integer(f, effective,
+                                                        ins->core_type_id);
             helper = is_signed ? "__fixdfdi" : "__fixunsdfdi";
         } else {
-            if (!rv32_scalar(f, ins->type, &bits, &is_signed))
+            if (!rv32_resolved_scalar(f, ins->type, ins->core_type_id,
+                                      &bits, &is_signed))
                 return false;
             helper = is_signed ? "__fixdfsi" : "__fixunsdfsi";
         }
@@ -135,7 +159,8 @@ bool rv32_emit_fp_instruction(FILE *out, const MinicCoreFunction *f,
             return false;
         return words == 2U ?
             rv32_pair_slot(out, fr, ins->result, "a0", "a1", false) :
-            (rv32_canon(out, f, ins->type, "a0") &&
+            (rv32_resolved_canon(out, f, ins->type,
+                                 ins->core_type_id, "a0") &&
              rv32_slot(out, fr, ins->result, "a0", false));
     }
     case MINIC_CORE_INSTRUCTION_FLOAT_TO_DOUBLE:

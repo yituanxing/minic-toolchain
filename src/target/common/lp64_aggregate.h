@@ -1,6 +1,7 @@
 #ifndef MINIC_TARGET_COMMON_LP64_AGGREGATE_H
 #define MINIC_TARGET_COMMON_LP64_AGGREGATE_H
 
+#include "core/core_type.h"
 #include "frontend/ast.h"
 #include "target/target_info.h"
 
@@ -28,4 +29,15 @@ bool minic_multi_indirect_record(const MinicC0Program *program,
 bool minic_multi_fp_return_record(
     const MinicC0Program *, const MinicTargetInfo *, MinicType,
     size_t *element_count, size_t *element_width);
+
+/* Production equivalents: immutable, target-resolved CoreTypeContext only.
+ * The caller must not fall back to the C-facing predicates after an invalid
+ * Core type identity or an unsupported ABI shape. */
+bool minic_multi_gp_record_core(const MinicCoreTypeContext *, MinicCoreTypeId,
+                                size_t *bytes, size_t *eightbytes);
+bool minic_multi_empty_record_core(const MinicCoreTypeContext *, MinicCoreTypeId);
+bool minic_multi_indirect_record_core(const MinicCoreTypeContext *, MinicCoreTypeId,
+                                      size_t *bytes);
+bool minic_multi_fp_return_record_core(const MinicCoreTypeContext *, MinicCoreTypeId,
+                                       size_t *element_count, size_t *element_width);
 #endif

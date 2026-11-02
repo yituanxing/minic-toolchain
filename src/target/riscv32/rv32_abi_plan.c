@@ -20,6 +20,22 @@ static bool rv32_abi_reject(const char *stage, size_t index,
     return false;
 }
 
+/* Core TypeIds are the only executable type proof in an attached function.
+ * Source descriptors remain solely for older independently constructed ABI
+ * fixtures and diagnostic spelling. */
+static const MinicCoreType *rv32_abi_core_type(
+    const MinicCoreFunction *function, MinicCoreTypeId id) {
+    if (function == NULL || function->type_context == NULL) return NULL;
+    return minic_core_type_get(function->type_context,
+        minic_core_type_unqualified(function->type_context, id));
+}
+
+static bool rv32_abi_core_is(const MinicCoreFunction *function,
+                             MinicCoreTypeId id, MinicCoreTypeKind kind) {
+    const MinicCoreType *type = rv32_abi_core_type(function, id);
+    return type != NULL && type->kind == kind;
+}
+
 /* One psABI planner per Core function, used unchanged by physical frame
  * allocation, direct/indirect calls and callee parameter reception.
  * No target-unaware Core or frontend code knows about a0..a7 or ILP32. */
@@ -41,8 +57,35 @@ void rv32_function_abi_plan_destroy(Rv32FunctionAbiPlan *plan) {
 static bool rv32_plan_shape(const MinicC0Program *program,
                              const MinicTargetInfo *target,
                              const MinicCoreFunction *function,
-                             MinicType type, Rv32AbiWordLocation *entry) {
+                             MinicType type, MinicCoreTypeId core_id,
+                             Rv32AbiWordLocation *entry) {
     size_t size, align;
+    if (function->type_context != NULL) {
+        const MinicCoreType *core_type = rv32_abi_core_type(function, core_id);
+        const MinicCoreType *exact =
+            minic_core_type_get(function->type_context, core_id);
+        if (core_type == NULL || exact == NULL || !exact->has_layout)
+            return false;
+        if (core_type->kind == MINIC_CORE_TYPE_RECORD) {
+            MinicAggregateStorageShape shape;
+            if (!minic_common_aggregate_storage_shape_core(
+                    function->type_context, core_id, 4U, &shape) ||
+                shape.bytes > UINT32_MAX) return false;
+            entry->alignment = shape.alignment;
+            entry->record_size = shape.bytes;
+            entry->indirect_record = shape.bytes > 8U;
+            entry->words = shape.bytes > 8U ? 1U : (unsigned)shape.words;
+            return true;
+        }
+        if (!rv32_core_scalar_storage_words(function, core_id, &entry->words))
+            return false;
+        size = exact->size;
+        align = exact->alignment;
+        if (size == 0U || align == 0U ||
+            (align & (align - 1U)) != 0U) return false;
+        entry->alignment = align;
+        return true;
+    }
     if (minic_type_is_record(type)) {
         MinicAggregateStorageShape shape;
         bool layout_ok = minic_common_aggregate_storage_shape(
@@ -82,11 +125,18 @@ static bool rv32_plan_incoming(const MinicC0Program *program,
      * Scalar and record definitions share the same checked shape used
      * for incoming parameters and outgoing calls. Machine emission does
      * not walk the signature again. */
-    if (!minic_type_is_void(function->return_type)) {
+    if (!(function->type_context != NULL
+              ? rv32_abi_core_is(function, function->core_return_type_id,
+                                 MINIC_CORE_TYPE_VOID)
+              : minic_type_is_void(function->return_type))) {
         if (!rv32_plan_shape(program, target, function,
-                             function->return_type, &result_shape))
+                             function->return_type, function->core_return_type_id,
+                             &result_shape))
             return rv32_abi_reject("incoming_return", 0U, function->return_type);
-        if (minic_type_is_record(function->return_type)) {
+        if (function->type_context != NULL
+                ? rv32_abi_core_is(function, function->core_return_type_id,
+                                   MINIC_CORE_TYPE_RECORD)
+                : minic_type_is_record(function->return_type)) {
             plan->record_return_size = result_shape.record_size;
             plan->indirect_return = result_shape.indirect_record;
             /* Hidden sret pointer occupies a0 before all named parameters. */
@@ -95,7 +145,9 @@ static bool rv32_plan_incoming(const MinicC0Program *program,
         }
     }
     if (function->parameter_count != 0U &&
-        function->parameter_types == NULL) return false;
+        (function->type_context != NULL
+             ? function->core_parameter_type_ids == NULL
+             : function->parameter_types == NULL)) return false;
     if (function->parameter_count > SIZE_MAX / sizeof(*plan->parameters))
         return false;
     plan->parameter_count = function->parameter_count;
@@ -106,14 +158,19 @@ static bool rv32_plan_incoming(const MinicC0Program *program,
     }
     for (i = 0U; i < plan->parameter_count; ++i) {
         Rv32AbiWordLocation *entry = &plan->parameters[i];
+        const MinicType source_type = function->parameter_types != NULL
+            ? function->parameter_types[i] : minic_type_void();
+        const MinicCoreTypeId parameter_type = function->type_context != NULL &&
+            function->core_parameter_type_ids != NULL
+                ? function->core_parameter_type_ids[i] : MINIC_CORE_TYPE_INVALID;
         if (!rv32_plan_shape(program, target, function,
-                              function->parameter_types[i], entry))
-            return rv32_abi_reject("incoming_type", i, function->parameter_types[i]);
+                              source_type, parameter_type, entry))
+            return rv32_abi_reject("incoming_type", i, source_type);
         if (entry->words == 0U) continue;
         if (!minic_riscv32_abi_place(&cursor, entry->words, false,
                                       entry->alignment,
                                       &entry->location))
-            return rv32_abi_reject("incoming_place", i, function->parameter_types[i]);
+            return rv32_abi_reject("incoming_place", i, source_type);
     }
     plan->named_gpr_words = cursor.register_words;
     plan->named_stack_words = cursor.stack_words;
@@ -136,6 +193,7 @@ static bool rv32_plan_call(const MinicC0Program *program,
         return false;
     if (view.return_form == MINIC_CORE_CALL_RETURN_OBJECT) {
         if (!rv32_plan_shape(program, target, function, view.return_type,
+                             view.core_return_type_id,
                              &result_shape))
             return false;
         call->record_return_size = result_shape.record_size;
@@ -149,23 +207,37 @@ static bool rv32_plan_call(const MinicC0Program *program,
     }
     for (i = 0U; i < view.argument_count; ++i) {
         Rv32AbiWordLocation *entry = &call->arguments[i];
-        MinicType actual, type;
-        if (!minic_core_call_view_argument_type(
-                function, &view, i, &actual))
-            return rv32_abi_reject("call_actual_type", i, minic_type_void());
+        MinicType actual = minic_type_void(), type;
+        MinicCoreTypeId actual_core = MINIC_CORE_TYPE_INVALID;
+        MinicCoreTypeId declared_core = MINIC_CORE_TYPE_INVALID;
+        if (function->type_context != NULL) {
+            if (!minic_core_call_view_argument_core_type(
+                    function, &view, i, &actual_core))
+                return rv32_abi_reject("call_actual_core_type", i, actual);
+        } else if (!minic_core_call_view_argument_type(
+                        function, &view, i, &actual)) {
+            return rv32_abi_reject("call_actual_type", i, actual);
+        }
         /* psABI placement of fixed parameters belongs to the *declared*
          * prototype, not the C expression's pre-conversion type. RV64,
          * x86 SysV and Direct LP64 already use this distinction. If an
          * explicit Core conversion is absent, do not silently marshal a
          * 1-word value as a 2-word formal (or vice versa). */
         type = i < view.parameter_count ? view.parameter_types[i] : actual;
-        if (i < view.parameter_count && !minic_type_equal(type, actual))
+        if (function->type_context != NULL) {
+            declared_core = i < view.parameter_count
+                ? view.core_parameter_type_ids[i] : actual_core;
+            if (i < view.parameter_count && declared_core != actual_core)
+                return rv32_abi_reject("call_fixed_core_type", i, type);
+        } else if (i < view.parameter_count && !minic_type_equal(type, actual)) {
             return rv32_abi_reject("call_fixed_type", i, type);
+        }
         /* Record varargs obey the same ILP32 ABI shape and cursor as scalar
          * varargs: <=2 XLEN words by value, larger via a Core snapshot
          * pointer. Even-register pairing depends on the actual 8-byte ABI
          * alignment, not on an aggregate's 8-byte size alone. */
-        if (!rv32_plan_shape(program, target, function, type, entry))
+        if (!rv32_plan_shape(program, target, function, type,
+                             declared_core, entry))
             return rv32_abi_reject("call_arg_type", i, type);
         if (entry->words == 0U) continue;
         if (!minic_riscv32_abi_place(&cursor, entry->words,

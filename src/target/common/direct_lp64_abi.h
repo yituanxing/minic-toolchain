@@ -1,8 +1,12 @@
 #ifndef MINIC_TARGET_COMMON_DIRECT_LP64_ABI_H
 #define MINIC_TARGET_COMMON_DIRECT_LP64_ABI_H
 
+#include "core/core_type.h"
 #include <stdbool.h>
 #include <stddef.h>
+
+typedef bool (*MinicDirectLP64CoreIndirectRecord)(
+    const MinicCoreTypeContext *, MinicCoreTypeId, size_t *);
 
 /* These describe physical ABI behavior, not architecture identities. Two
  * targets with matching pointer widths need not use the same call ABI. */
@@ -29,6 +33,11 @@ typedef struct MinicDirectLP64AbiPolicy {
     size_t stack_alignment;
     /* Zero means a dedicated hidden-result register; one consumes a0. */
     size_t indirect_result_argument_registers;
+    /* The selected target owns indirect ABI legality. CoreType admission
+     * must preserve distinct argument and return restrictions; NULL is
+     * fail-closed once the Core function has an attached type context. */
+    MinicDirectLP64CoreIndirectRecord core_indirect_record;
+    MinicDirectLP64CoreIndirectRecord core_indirect_return;
     MinicDirectLP64RecordRegisters record_registers;
     MinicDirectLP64WideRegisters wide_registers;
     bool long_double_in_fp_register;

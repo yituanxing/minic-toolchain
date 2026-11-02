@@ -14,6 +14,55 @@
 #include <stdlib.h>
 #include <string.h>
 
+static const MinicCoreType *x86_emit_core_type(const MinicCoreFunction *fn,
+                                               MinicCoreTypeId id) {
+    return fn != NULL && fn->type_context != NULL
+        ? minic_core_type_get(fn->type_context,
+                              minic_core_type_unqualified(fn->type_context, id))
+        : NULL;
+}
+
+static bool x86_emit_core_kind(const MinicCoreFunction *fn,
+                               MinicCoreTypeId id, MinicType legacy,
+                               MinicCoreTypeKind kind) {
+    const MinicCoreType *type;
+    if (fn->type_context != NULL) {
+        type = x86_emit_core_type(fn, id);
+        return type != NULL && type->kind == kind;
+    }
+    switch (kind) {
+    case MINIC_CORE_TYPE_RECORD: return minic_type_is_record(legacy);
+    case MINIC_CORE_TYPE_INTEGER: return minic_type_is_integer(legacy);
+    default: return false;
+    }
+}
+
+static bool x86_emit_core_float(const MinicCoreFunction *fn,
+                                MinicCoreTypeId id, MinicType legacy,
+                                MinicCoreFloatFormat format) {
+    const MinicCoreType *type;
+    if (fn->type_context != NULL) {
+        type = x86_emit_core_type(fn, id);
+        return type != NULL && type->kind == MINIC_CORE_TYPE_FLOAT &&
+               type->value.floating.format == format;
+    }
+    return format == MINIC_CORE_FLOAT_BINARY32 ? minic_type_is_float(legacy)
+         : format == MINIC_CORE_FLOAT_BINARY64 ? minic_type_is_double(legacy)
+         : format == MINIC_CORE_FLOAT_EXTENDED ? minic_type_is_long_double(legacy)
+         : false;
+}
+
+static bool x86_emit_core_int128(const MinicCoreFunction *fn,
+                                 MinicCoreTypeId id, MinicType legacy) {
+    const MinicCoreType *type;
+    if (fn->type_context != NULL) {
+        type = x86_emit_core_type(fn, id);
+        return type != NULL && type->kind == MINIC_CORE_TYPE_INTEGER &&
+               type->value.integer.bit_width == 128U;
+    }
+    return minic_type_is_int128_integer(legacy);
+}
+
 /* In early head code a direct-global SSA pointer normally stays physical,
  * including when passed to an out-of-line data helper. If a pointer has
  * instead passed through a numeric link-VMA cast and is converted back to a
@@ -501,19 +550,30 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
         return x86_value_store(out, frame, ins->result);
     }
     case MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT:
-        if (minic_type_is_int128_integer(ins->type)) {
+        if (x86_emit_core_int128(fn, ins->core_type_id, ins->type)) {
+            const MinicCoreType *resolved = x86_emit_core_type(fn,
+                                                                 ins->core_type_id);
+            const bool signed_value = fn->type_context != NULL
+                ? (resolved != NULL && resolved->value.integer.is_signed)
+                : minic_type_is_signed_integer(ins->type);
             if (fprintf(out, "  movabsq $%" PRId64 ", %%rax\n",
                         ins->value.integer_value) < 0 ||
-                fprintf(out, minic_type_is_signed_integer(ins->type)
+                fprintf(out, signed_value
                                     ? "  movq %%rax, %%rdx\n  sarq $63, %%rdx\n"
                                     : "  xorq %%rdx, %%rdx\n") < 0)
                 return false;
             return x86_i128_store(out, frame, ins->result, "%rax", "%rdx");
         }
-        if (!minic_x86_64_scalar_width(program, target, ins->type, &bytes, &sign) ||
+        if (!(fn->type_context != NULL
+                  ? minic_x86_64_core_scalar_width(
+                      fn->type_context, ins->core_type_id, &bytes, &sign)
+                  : minic_x86_64_scalar_width(
+                      program, target, ins->type, &bytes, &sign)) ||
             fprintf(out, "  movabsq $%" PRId64 ", %%rax\n", ins->value.integer_value) < 0)
             return false;
-        return x86_normalize(out, program, target, ins->type) &&
+        return (fn->type_context != NULL
+                   ? x86_core_normalize(out, fn->type_context, ins->core_type_id)
+                   : x86_normalize(out, program, target, ins->type)) &&
                x86_value_store(out, frame, ins->result);
     case MINIC_CORE_INSTRUCTION_PARAMETER: {
         const MinicX86AbiRegisters *abi = minic_x86_64_abi_registers(
@@ -526,7 +586,7 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
             frame->incoming_arguments.locations == NULL)
             return false;
         location = &frame->incoming_arguments.locations[position];
-        if (minic_type_is_int128_integer(ins->type)) {
+        if (x86_emit_core_int128(fn, ins->core_type_id, ins->type)) {
             if (ms_x64 || location->kind != MINIC_X86_ARG_I128_TWO_GP)
                 return false;
             if (!location->on_stack) {
@@ -553,18 +613,24 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
                 return false;
             return x86_i128_store(out, frame, ins->result, "%r10", "%r11");
         }
-        if (minic_type_is_long_double(ins->type)) {
+        if (x86_emit_core_float(fn, ins->core_type_id, ins->type,
+                                MINIC_CORE_FLOAT_EXTENDED)) {
             if (ms_x64 || location->kind != MINIC_X86_ARG_X87_MEMORY ||
                 fprintf(out, "  fldt %zu(%%rbp)\n",
                         16U + location->stack_index * 8U) < 0)
                 return false;
             return x86_x87_store(out, frame, ins->result);
         }
-        if (minic_type_is_double(ins->type) || minic_type_is_float(ins->type)) {
+        if (x86_emit_core_float(fn, ins->core_type_id, ins->type,
+                                MINIC_CORE_FLOAT_BINARY64) ||
+            x86_emit_core_float(fn, ins->core_type_id, ins->type,
+                                MINIC_CORE_FLOAT_BINARY32)) {
             if (location->kind != MINIC_X86_ARG_SSE) return false;
             if (!location->on_stack) {
                 if (location->fp_index >= abi->fp_argument_count ||
-                    fprintf(out, minic_type_is_double(ins->type)
+                    fprintf(out, x86_emit_core_float(
+                                     fn, ins->core_type_id, ins->type,
+                                     MINIC_CORE_FLOAT_BINARY64)
                              ? "  movq %%xmm%zu, %%rax\n"
                              : "  movd %%xmm%zu, %%eax\n",
                             location->fp_index) < 0)
@@ -586,7 +652,10 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
             } else if (fprintf(out, "  movq %zu(%%rbp), %%rax\n",
                                16U + location->stack_index * 8U) < 0)
                 return false;
-            if (!x86_normalize(out, program, target, ins->type)) return false;
+            if (fn->type_context != NULL
+                    ? !x86_core_normalize(out, fn->type_context, ins->core_type_id)
+                    : !x86_normalize(out, program, target, ins->type))
+                return false;
         }
         return x86_value_store(out, frame, ins->result);
     }
@@ -611,8 +680,14 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
         const MinicX86ArgLocation *location;
         const bool type_compatible = position < fn->parameter_count &&
             object < fn->object_count &&
-            minic_x86_64_record_abi_compatible(
-                fn->objects[object].type, fn->parameter_types[position]);
+            (fn->type_context != NULL
+                ? (fn->core_parameter_type_ids != NULL &&
+                   minic_x86_64_core_record_abi_compatible(
+                       fn->type_context,
+                       fn->objects[object].core_type_id,
+                       fn->core_parameter_type_ids[position]))
+                : minic_x86_64_record_abi_compatible(
+                    fn->objects[object].type, fn->parameter_types[position]));
         if (abi == NULL || frame->incoming_arguments.calling_convention !=
                 MINIC_CALLING_CONVENTION_DEFAULT ||
             position >= frame->incoming_arguments.argument_count ||
@@ -1494,20 +1569,39 @@ bool minic_x86_64_emit_core_terminator(FILE *out,
             if (!program || !target || !frame || !fn ||
                 term->return_value != MINIC_CORE_VALUE_INVALID ||
                 term->return_object >= fn->object_count ||
-                !minic_type_is_record(fn->return_type) ||
-                !minic_x86_64_record_abi_compatible(
-                    fn->return_type, fn->objects[term->return_object].type) ||
+                !x86_emit_core_kind(fn, fn->core_return_type_id,
+                                    fn->return_type, MINIC_CORE_TYPE_RECORD) ||
+                !(fn->type_context != NULL
+                    ? minic_x86_64_core_record_abi_compatible(
+                        fn->type_context, fn->core_return_type_id,
+                        fn->objects[term->return_object].core_type_id)
+                    : minic_x86_64_record_abi_compatible(
+                        fn->return_type,
+                        fn->objects[term->return_object].type)) ||
                 !x86_object_address(out, frame, term->return_object, "%r11"))
                 return false;
-            if (minic_x86_64_one_gp_record(program, target, fn->return_type, &bytes)) {
+            if (fn->type_context != NULL
+                    ? minic_x86_64_core_one_gp_record(
+                        fn->type_context, fn->core_return_type_id, &bytes)
+                    : minic_x86_64_one_gp_record(
+                        program, target, fn->return_type, &bytes)) {
                 if (!x86_one_gp_load(out, bytes, 0U)) return false;
-            } else if (minic_x86_64_two_gp_record(program, target, fn->return_type)) {
+            } else if (fn->type_context != NULL
+                    ? minic_x86_64_core_two_gp_record(
+                        fn->type_context, fn->core_return_type_id)
+                    : minic_x86_64_two_gp_record(program, target, fn->return_type)) {
                 const MinicX86AbiRegisters *abi = minic_x86_64_abi_registers(
                     MINIC_CALLING_CONVENTION_DEFAULT);
                 size_t alignment;
+                if (fn->type_context != NULL) {
+                    const MinicCoreType *resolved = x86_emit_core_type(
+                        fn, fn->core_return_type_id);
+                    if (resolved == NULL || !resolved->has_layout) return false;
+                    bytes = resolved->size;
+                } else if (!minic_data_layout_type(
+                               target->data_layout, program, fn->return_type,
+                               &bytes, &alignment)) return false;
                 if (abi == NULL || abi->gp_result_count < 2U ||
-                    !minic_data_layout_type(target->data_layout, program,
-                                            fn->return_type, &bytes, &alignment) ||
                     (bytes < 9U || bytes > 16U) ||
                     !x86_one_gp_load(out, bytes - 8U, 8U) ||
                     fprintf(out, "  movq %%rax, %s\n"
@@ -1515,8 +1609,11 @@ bool minic_x86_64_emit_core_terminator(FILE *out,
                             abi->gp_results[1], abi->gp_results[0]) < 0)
                     return false;
             } else if (frame->has_sret && frame->sret_save_offset != 0U &&
-                       minic_x86_64_memory_result_record(
-                           program, target, fn->return_type, &bytes)) {
+                       (fn->type_context != NULL
+                          ? minic_x86_64_core_memory_result_record(
+                              fn->type_context, fn->core_return_type_id, &bytes)
+                          : minic_x86_64_memory_result_record(
+                              program, target, fn->return_type, &bytes))) {
                 /* Caller passes a private destination in RDI. Its saved
                  * value is stable across nested calls; a bounded byte copy
                  * preserves tail bytes and does not read past the record. */
@@ -1536,10 +1633,11 @@ bool minic_x86_64_emit_core_terminator(FILE *out,
             return fprintf(out,"  jmp .Lmini_x86_f%zu_ret\n",function_id)>=0;
         }
         if (term->return_value != MINIC_CORE_VALUE_INVALID) {
-            if (minic_type_is_long_double(fn->return_type))
+            if (x86_emit_core_float(fn, fn->core_return_type_id, fn->return_type,
+                                    MINIC_CORE_FLOAT_EXTENDED))
                 return x86_x87_load(out, frame, term->return_value) &&
                        fprintf(out, "  jmp .Lmini_x86_f%zu_ret\n", function_id) >= 0;
-            if (minic_type_is_int128_integer(fn->return_type)) {
+            if (x86_emit_core_int128(fn, fn->core_return_type_id, fn->return_type)) {
                 const MinicX86AbiRegisters *abi = minic_x86_64_abi_registers(
                     MINIC_CALLING_CONVENTION_DEFAULT);
                 return abi != NULL && abi->gp_result_count >= 2U &&
@@ -1549,9 +1647,11 @@ bool minic_x86_64_emit_core_terminator(FILE *out,
             }
             if (!x86_value_load(out, frame, term->return_value, "%rax"))
                 return false;
-            if (minic_type_is_double(fn->return_type)) {
+            if (x86_emit_core_float(fn, fn->core_return_type_id, fn->return_type,
+                                    MINIC_CORE_FLOAT_BINARY64)) {
                 if (fprintf(out, "  movq %%rax, %%xmm0\n") < 0) return false;
-            } else if (minic_type_is_float(fn->return_type)) {
+            } else if (x86_emit_core_float(fn, fn->core_return_type_id, fn->return_type,
+                                           MINIC_CORE_FLOAT_BINARY32)) {
                 if (fprintf(out, "  movd %%eax, %%xmm0\n") < 0) return false;
             }
         }

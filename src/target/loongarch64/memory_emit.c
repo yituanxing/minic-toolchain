@@ -5,6 +5,23 @@
 #include <stdio.h>
 #include <string.h>
 
+static bool loong_memory_wide_type(const MinicCoreFunction *fn,
+                                   MinicType legacy, MinicCoreTypeId id,
+                                   bool integer128) {
+    const MinicCoreType *type;
+    if (fn->type_context == NULL)
+        return integer128 ? minic_type_is_int128_integer(legacy)
+                          : minic_type_is_long_double(legacy);
+    id = minic_core_type_unqualified(fn->type_context, id);
+    type = minic_core_type_get(fn->type_context, id);
+    return type != NULL && type->has_layout && type->size == 16U &&
+           (integer128
+                ? (type->kind == MINIC_CORE_TYPE_INTEGER &&
+                   type->value.integer.bit_width == 128U)
+                : (type->kind == MINIC_CORE_TYPE_FLOAT &&
+                   type->value.floating.format == MINIC_CORE_FLOAT_EXTENDED));
+}
+
 /* Every ordinary Core access has a byte-exact fallback if its pointer is
  * not naturally aligned.  Keeping that full loop at every access site made
  * the Linux kernel's LoongArch .text needlessly enormous.  Share the slow
@@ -103,15 +120,28 @@ static size_t loong_address_root_alignment(
     switch (origin->kind) {
     case MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS: {
         const MinicCoreObjectId id = origin->value.object_id;
-        if (id >= fn->object_count || fn->objects == NULL ||
-            !minic_data_layout_type(ctx->target->data_layout, ctx->program,
-                fn->objects[id].type, &size, &alignment)) return 1U;
+        if (id >= fn->object_count || fn->objects == NULL) return 1U;
+        if (fn->type_context != NULL) {
+            const MinicCoreType *type = minic_core_type_get(
+                fn->type_context, fn->objects[id].core_type_id);
+            if (type == NULL || !type->has_layout || type->alignment == 0U)
+                return 1U;
+            alignment = type->alignment;
+        } else if (!minic_data_layout_type(ctx->target->data_layout,
+                                           ctx->program, fn->objects[id].type,
+                                           &size, &alignment)) return 1U;
         if (fn->objects[id].explicit_alignment > alignment)
             alignment = fn->objects[id].explicit_alignment;
         return alignment;
     }
     case MINIC_CORE_INSTRUCTION_GLOBAL_ADDRESS: {
         const MinicCoreGlobalId id = origin->value.global_id;
+        if (id >= fn->global_count || fn->globals == NULL) return 1U;
+        if (fn->type_context != NULL) {
+            const MinicCoreType *type = minic_core_type_get(
+                fn->type_context, fn->globals[id].core_type_id);
+            return type != NULL && type->has_layout ? type->alignment : 1U;
+        }
         return id < fn->global_count && fn->globals != NULL &&
                minic_data_layout_type(ctx->target->data_layout, ctx->program,
                    fn->globals[id].type, &size, &alignment)
@@ -201,10 +231,12 @@ bool minic_loongarch64_direct_frame_memory_use(
         if ((ins->kind == MINIC_CORE_INSTRUCTION_STORE &&
              ins->value.store.stored_value >= fn->value_count) ||
             (ins->kind == MINIC_CORE_INSTRUCTION_STORE &&
-             (minic_type_is_int128_integer(
-                 fn->values[ins->value.store.stored_value].type) ||
-              minic_type_is_long_double(
-                 fn->values[ins->value.store.stored_value].type))) ||
+             (loong_memory_wide_type(fn,
+                 fn->values[ins->value.store.stored_value].type,
+                 fn->values[ins->value.store.stored_value].core_type_id, true) ||
+              loong_memory_wide_type(fn,
+                 fn->values[ins->value.store.stored_value].type,
+                 fn->values[ins->value.store.stored_value].core_type_id, false))) ||
             !minic_multi_direct_scalar_store_shape(
                 program, target, fn, ins, &width, &sign, &pointer))
             return false;
@@ -214,8 +246,8 @@ bool minic_loongarch64_direct_frame_memory_use(
         address = ins->kind == MINIC_CORE_INSTRUCTION_LOAD
             ? ins->value.load.address : ins->value.atomic_load.address;
         if ((ins->kind == MINIC_CORE_INSTRUCTION_LOAD &&
-             (minic_type_is_int128_integer(ins->type) ||
-              minic_type_is_long_double(ins->type))) ||
+             (loong_memory_wide_type(fn, ins->type, ins->core_type_id, true) ||
+              loong_memory_wide_type(fn, ins->type, ins->core_type_id, false))) ||
             !minic_multi_direct_scalar_load_shape(
                 program, target, fn, ins, &width, &sign, &pointer))
             return false;
@@ -447,10 +479,12 @@ bool minic_loongarch64_emit_memory_instruction(
     if (function_id != loong_memory_function_id) return false;
         if (ins->kind == MINIC_CORE_INSTRUCTION_STORE &&
             ins->value.store.stored_value < fn->value_count &&
-            (minic_type_is_int128_integer(
-                fn->values[ins->value.store.stored_value].type) ||
-             minic_type_is_long_double(
-                 fn->values[ins->value.store.stored_value].type))) {
+            (loong_memory_wide_type(fn,
+                fn->values[ins->value.store.stored_value].type,
+                fn->values[ins->value.store.stored_value].core_type_id, true) ||
+             loong_memory_wide_type(fn,
+                fn->values[ins->value.store.stored_value].type,
+                fn->values[ins->value.store.stored_value].core_type_id, false))) {
             const MinicCoreValueId addr = ins->value.store.address;
             size_t src;
             const bool aligned = loong_known_address_alignment(
@@ -507,8 +541,8 @@ bool minic_loongarch64_emit_memory_instruction(
         case MINIC_CORE_INSTRUCTION_LOAD:
         case MINIC_CORE_INSTRUCTION_ATOMIC_LOAD: {
             if (ins->kind == MINIC_CORE_INSTRUCTION_LOAD &&
-                (minic_type_is_int128_integer(ins->type) ||
-                 minic_type_is_long_double(ins->type))) {
+                (loong_memory_wide_type(fn, ins->type, ins->core_type_id, true) ||
+                 loong_memory_wide_type(fn, ins->type, ins->core_type_id, false))) {
                 MinicCoreValueId addr;
                 size_t dst;
                 bool aligned;

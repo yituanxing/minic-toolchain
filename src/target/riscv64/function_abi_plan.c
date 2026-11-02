@@ -2,6 +2,46 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+
+static const MinicCoreType *rv64_core_base_type(
+    const MinicCoreFunction *fn, MinicCoreTypeId id) {
+    if (fn == NULL || fn->type_context == NULL) return NULL;
+    return minic_core_type_get(fn->type_context,
+                               minic_core_type_unqualified(fn->type_context, id));
+}
+
+static bool rv64_fn_is_record(const MinicCoreFunction *fn,
+                             MinicCoreTypeId id, MinicType source) {
+    const MinicCoreType *type;
+    if (fn->type_context == NULL) return minic_type_is_record(source);
+    type = rv64_core_base_type(fn, id);
+    return type != NULL && type->kind == MINIC_CORE_TYPE_RECORD;
+}
+
+static bool rv64_fn_is_fp_scalar(const MinicCoreFunction *fn,
+                                MinicCoreTypeId id, MinicType source) {
+    const MinicCoreType *type;
+    if (fn->type_context == NULL)
+        return minic_type_is_float(source) || minic_type_is_double(source);
+    type = rv64_core_base_type(fn, id);
+    return type != NULL && type->kind == MINIC_CORE_TYPE_FLOAT &&
+           (type->value.floating.format == MINIC_CORE_FLOAT_BINARY32 ||
+            type->value.floating.format == MINIC_CORE_FLOAT_BINARY64);
+}
+
+static bool rv64_fn_is_wide_scalar(const MinicCoreFunction *fn,
+                                  MinicCoreTypeId id, MinicType source) {
+    const MinicCoreType *type;
+    if (fn->type_context == NULL)
+        return minic_type_is_long_double(source) ||
+               minic_type_is_int128_integer(source);
+    type = rv64_core_base_type(fn, id);
+    return type != NULL &&
+           ((type->kind == MINIC_CORE_TYPE_FLOAT &&
+             type->value.floating.format == MINIC_CORE_FLOAT_EXTENDED) ||
+            (type->kind == MINIC_CORE_TYPE_INTEGER &&
+             type->value.integer.bit_width == 128U));
+}
 /* Return and named-argument legality have exactly one psABI owner.
  * The Core verifier proves types and identities; this checked placement
  * plan proves RV64 register/stack forms before admission or emission.
@@ -24,28 +64,33 @@ static bool minic_riscv64_function_abi_plan_qualified(
                 return false;
             }
         } else if (return_value.kind == MINIC_RISCV64_ABI_VALUE_INDIRECT) {
-            if (!minic_type_is_record(function->return_type) ||
+            if (!rv64_fn_is_record(function, function->core_return_type_id,
+                                   function->return_type) ||
                 return_value.storage_size <= 16U || return_value.slot_count != 1U) {
                 return false;
             }
         } else if (return_value.kind == MINIC_RISCV64_ABI_VALUE_WIDE_SCALAR) {
-            if ((!minic_type_is_long_double(function->return_type) &&
-                 !minic_type_is_int128_integer(function->return_type)) ||
+            if (!rv64_fn_is_wide_scalar(function, function->core_return_type_id,
+                                        function->return_type) ||
                 return_value.storage_size != 16U || return_value.slot_count != 2U) {
                 return false;
             }
         } else if (return_value.kind != MINIC_RISCV64_ABI_VALUE_VOID &&
                    return_value.kind != MINIC_RISCV64_ABI_VALUE_INTEGER &&
                    !(return_value.kind == MINIC_RISCV64_ABI_VALUE_FLOAT &&
-                     (minic_type_is_float(function->return_type) ||
-                      minic_type_is_double(function->return_type)))) {
+                     rv64_fn_is_fp_scalar(function, function->core_return_type_id,
+                                          function->return_type))) {
             return false;
         }
         for (index = 0U; index < function->parameter_count; ++index) {
             const MinicRiscv64AbiArgumentLocation location =
                 abi_plan->parameter_locations[index];
             if (location.value.kind == MINIC_RISCV64_ABI_VALUE_INDIRECT) {
-                if (!minic_type_is_record(function->parameter_types[index]) ||
+                if (!rv64_fn_is_record(function,
+                        function->type_context != NULL
+                            ? function->core_parameter_type_ids[index]
+                            : MINIC_CORE_TYPE_INVALID,
+                        function->parameter_types[index]) ||
                     location.value.storage_size == 0U || location.value.slot_count != 1U ||
                     location.floating_register_count != 0U ||
                     !((location.integer_register_count == 1U &&
@@ -70,14 +115,20 @@ static bool minic_riscv64_function_abi_plan_qualified(
                              location.stack_slot_count == 0U) ||
                             (location.integer_register_count == 0U &&
                              location.stack_slot_count == 1U)));
-                if ((!minic_type_is_float(function->parameter_types[index]) &&
-                     !minic_type_is_double(function->parameter_types[index])) ||
+                if (!rv64_fn_is_fp_scalar(function,
+                        function->type_context != NULL
+                            ? function->core_parameter_type_ids[index]
+                            : MINIC_CORE_TYPE_INVALID,
+                        function->parameter_types[index]) ||
                     !correct_location) {
                     return false;
                 }
             } else if (location.value.kind == MINIC_RISCV64_ABI_VALUE_WIDE_SCALAR) {
-                if ((!minic_type_is_long_double(function->parameter_types[index]) &&
-                     !minic_type_is_int128_integer(function->parameter_types[index])) ||
+                if (!rv64_fn_is_wide_scalar(function,
+                        function->type_context != NULL
+                            ? function->core_parameter_type_ids[index]
+                            : MINIC_CORE_TYPE_INVALID,
+                        function->parameter_types[index]) ||
                     location.value.storage_size != 16U || location.value.slot_count != 2U ||
                     location.floating_register_count != 0U ||
                     location.integer_register_count + location.stack_slot_count != 2U ||
@@ -104,10 +155,16 @@ bool minic_riscv64_function_abi_plan_build_profile(
     if (program == NULL || fn == NULL || plan == NULL ||
         plan->prepared || plan->parameter_locations != NULL ||
         (fn->parameter_count != 0U && fn->parameter_types == NULL) ||
+        (fn->type_context != NULL && fn->parameter_count != 0U &&
+         fn->core_parameter_type_ids == NULL) ||
         fn->parameter_count > SIZE_MAX / sizeof(*plan->parameter_locations) ||
-        !minic_riscv64_abi_cursor_initialize_for_return_profile(
-             program, fn->return_type, lp64_soft_float,
-             &cursor, &plan->return_value))
+        !(fn->type_context != NULL
+              ? minic_riscv64_abi_cursor_initialize_for_core_return_profile(
+                    fn->type_context, fn->core_return_type_id, lp64_soft_float,
+                    &cursor, &plan->return_value)
+              : minic_riscv64_abi_cursor_initialize_for_return_profile(
+                    program, fn->return_type, lp64_soft_float,
+                    &cursor, &plan->return_value)))
         return false;
     if (fn->parameter_count != 0U) {
         plan->parameter_locations = (MinicRiscv64AbiArgumentLocation *)calloc(
@@ -115,9 +172,13 @@ bool minic_riscv64_function_abi_plan_build_profile(
         if (plan->parameter_locations == NULL) return false;
     }
     for (i = 0U; i < fn->parameter_count; ++i) {
-        if (!minic_riscv64_abi_place_argument(
-                program, fn->parameter_types[i], true, &cursor,
-                &plan->parameter_locations[i])) {
+        if (!(fn->type_context != NULL
+                ? minic_riscv64_abi_place_core_argument(
+                      fn->type_context, fn->core_parameter_type_ids[i], true,
+                      &cursor, &plan->parameter_locations[i])
+                : minic_riscv64_abi_place_argument(
+                      program, fn->parameter_types[i], true, &cursor,
+                      &plan->parameter_locations[i]))) {
             minic_riscv64_function_abi_plan_destroy(plan);
             return false;
         }

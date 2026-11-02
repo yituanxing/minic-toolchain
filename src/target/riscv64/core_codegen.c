@@ -115,18 +115,35 @@ static bool emit_instruction(FILE *file,
     }
     case MINIC_CORE_INSTRUCTION_FIXED_REGISTER_READ: {
         const MinicCoreFixedRegisterBinding *binding;
+        const MinicCoreType *binding_core = NULL;
 
         binding = minic_riscv64_inline_asm_fixed_register_binding(
             function, instruction->value.fixed_register_binding_id);
-        if (binding == NULL || binding->register_name == NULL ||
-            binding->register_name_length == 0U || !minic_riscv64_scalar_type(binding->type) ||
-            !minic_type_equal(binding->type, instruction->type) ||
+        if (binding == NULL) return false;
+        if (function->type_context != NULL)
+            binding_core = minic_core_type_get(function->type_context,
+                minic_core_type_unqualified(function->type_context,
+                                           binding->core_type_id));
+        if (binding->register_name == NULL ||
+            binding->register_name_length == 0U ||
+            !(function->type_context != NULL
+                ? binding_core != NULL &&
+                  (binding_core->kind == MINIC_CORE_TYPE_INTEGER ||
+                   binding_core->kind == MINIC_CORE_TYPE_POINTER ||
+                   binding_core->kind == MINIC_CORE_TYPE_FLOAT) &&
+                  binding->core_type_id == instruction->core_type_id
+                : minic_riscv64_scalar_type(binding->type) &&
+                  minic_type_equal(binding->type, instruction->type)) ||
             fprintf(file, "  mv t0, %s\n", binding->register_name) < 0) {
             return false;
         }
-        if (minic_type_is_integer(instruction->type) &&
-            !minic_riscv64_emit_integer_conversion_for_program(
-                file, program, instruction->type, "t0")) {
+        if (function->type_context != NULL
+                ? binding_core->kind == MINIC_CORE_TYPE_INTEGER &&
+                  !minic_riscv64_emit_core_integer_conversion(
+                      file, function->type_context, instruction->core_type_id, "t0")
+                : minic_type_is_integer(instruction->type) &&
+                  !minic_riscv64_emit_integer_conversion_for_program(
+                      file, program, instruction->type, "t0")) {
             return false;
         }
         return minic_riscv64_frame_store_value(file, frame, instruction->result, "t0");
@@ -345,8 +362,36 @@ static bool emit_terminator(FILE *file,
         return false;
     }
     switch (terminator->kind) {
-    case MINIC_CORE_TERMINATOR_RETURN:
-        if (minic_type_is_record(function->return_type)) {
+    case MINIC_CORE_TERMINATOR_RETURN: {
+        const MinicCoreType *core_return = NULL;
+        bool record_return, wide_return, fp_return, double_return;
+        if (function->type_context != NULL) {
+            const MinicCoreTypeId base_id = minic_core_type_unqualified(
+                function->type_context, function->core_return_type_id);
+            core_return = minic_core_type_get(function->type_context, base_id);
+            if (core_return == NULL) return false;
+        }
+        record_return = core_return != NULL
+            ? core_return->kind == MINIC_CORE_TYPE_RECORD
+            : minic_type_is_record(function->return_type);
+        wide_return = core_return != NULL
+            ? (core_return->kind == MINIC_CORE_TYPE_INTEGER &&
+               core_return->value.integer.bit_width == 128U) ||
+              (core_return->kind == MINIC_CORE_TYPE_FLOAT &&
+               core_return->value.floating.format == MINIC_CORE_FLOAT_EXTENDED)
+            : minic_type_is_long_double(function->return_type) ||
+              minic_type_is_int128_integer(function->return_type);
+        fp_return = core_return != NULL
+            ? core_return->kind == MINIC_CORE_TYPE_FLOAT &&
+              (core_return->value.floating.format == MINIC_CORE_FLOAT_BINARY32 ||
+               core_return->value.floating.format == MINIC_CORE_FLOAT_BINARY64)
+            : minic_type_is_float(function->return_type) ||
+              minic_type_is_double(function->return_type);
+        double_return = core_return != NULL
+            ? core_return->kind == MINIC_CORE_TYPE_FLOAT &&
+              core_return->value.floating.format == MINIC_CORE_FLOAT_BINARY64
+            : minic_type_is_double(function->return_type);
+        if (record_return) {
             /* FIXME(MC-057): classify_value can return ABI_VALUE_IGNORE for
              * a GNU zero-byte Record; this return emitter handles only
              * AGGREGATE/INDIRECT and must model no physical return payload. */
@@ -354,25 +399,52 @@ static bool emit_terminator(FILE *file,
             size_t object_offset;
 
             if (program == NULL || terminator->return_object >= function->object_count ||
-                !minic_type_equal(function->objects[terminator->return_object].type,
-                                  function->return_type) ||
-                !minic_riscv64_abi_classify_value_profile(
-                    program, function->return_type,
-                    frame->named_parameter_cursor.lp64_soft_float,
-                    &return_value) ||
+                !(function->type_context != NULL
+                      ? minic_core_type_unqualified(function->type_context,
+                            function->objects[terminator->return_object].core_type_id) ==
+                        minic_core_type_unqualified(function->type_context,
+                            function->core_return_type_id)
+                      : minic_type_equal(
+                            function->objects[terminator->return_object].type,
+                            function->return_type)) ||
+                !(function->type_context != NULL
+                      ? minic_riscv64_abi_classify_core_value_profile(
+                            function->type_context, function->core_return_type_id,
+                            frame->named_parameter_cursor.lp64_soft_float,
+                            &return_value)
+                      : minic_riscv64_abi_classify_value_profile(
+                            program, function->return_type,
+                            frame->named_parameter_cursor.lp64_soft_float,
+                            &return_value)) ||
                 !minic_riscv64_core_frame_object_offset(program, function, frame, terminator->return_object, &object_offset) ||
                 !minic_riscv64_frame_emit_address(file, frame, "t0", object_offset)) {
                 return false;
             }
             if (return_value.kind == MINIC_RISCV64_ABI_VALUE_AGGREGATE) {
                 if (return_value.slot_count == 0U || return_value.slot_count > 2U ||
-                    !minic_riscv64_emit_integer_aggregate_load_chunk_profile(
-                        file, program, function->return_type, 0U, "a0", "t0",
-                        frame->named_parameter_cursor.lp64_soft_float, object_offset) ||
+                    !(function->type_context != NULL
+                          ? minic_riscv64_emit_integer_aggregate_load_chunk_core_profile(
+                                file, function->type_context,
+                                function->core_return_type_id, 0U, "a0", "t0",
+                                frame->named_parameter_cursor.lp64_soft_float,
+                                object_offset)
+                          : minic_riscv64_emit_integer_aggregate_load_chunk_profile(
+                                file, program, function->return_type, 0U,
+                                "a0", "t0",
+                                frame->named_parameter_cursor.lp64_soft_float,
+                                object_offset)) ||
                     (return_value.slot_count == 2U &&
-                     !minic_riscv64_emit_integer_aggregate_load_chunk_profile(
-                         file, program, function->return_type, 1U, "a1", "t0",
-                         frame->named_parameter_cursor.lp64_soft_float, object_offset))) {
+                     !(function->type_context != NULL
+                           ? minic_riscv64_emit_integer_aggregate_load_chunk_core_profile(
+                                 file, function->type_context,
+                                 function->core_return_type_id, 1U, "a1", "t0",
+                                 frame->named_parameter_cursor.lp64_soft_float,
+                                 object_offset)
+                           : minic_riscv64_emit_integer_aggregate_load_chunk_profile(
+                                 file, program, function->return_type, 1U,
+                                 "a1", "t0",
+                                 frame->named_parameter_cursor.lp64_soft_float,
+                                 object_offset)))) {
                     return false;
                 }
             } else if (return_value.kind == MINIC_RISCV64_ABI_VALUE_INDIRECT) {
@@ -414,18 +486,15 @@ static bool emit_terminator(FILE *file,
             } else {
                 return false;
             }
-        } else if (minic_type_is_long_double(function->return_type) ||
-                   minic_type_is_int128_integer(function->return_type)) {
+        } else if (wide_return) {
             if (terminator->return_value == MINIC_CORE_VALUE_INVALID ||
                 !minic_riscv64_frame_load_int128(
                     file, frame, terminator->return_value, "a0", "a1")) {
                 return false;
             }
-        } else if (!frame->named_parameter_cursor.lp64_soft_float &&
-                   (minic_type_is_float(function->return_type) ||
-                    minic_type_is_double(function->return_type))) {
+        } else if (!frame->named_parameter_cursor.lp64_soft_float && fp_return) {
             const char *move_opcode =
-                minic_type_is_double(function->return_type) ? "fmv.d.x" : "fmv.w.x";
+                double_return ? "fmv.d.x" : "fmv.w.x";
             if (terminator->return_value == MINIC_CORE_VALUE_INVALID ||
                 !minic_riscv64_frame_load_value(file, frame, terminator->return_value, "a0") ||
                 fprintf(file, "  %s fa0, a0\n", move_opcode) < 0) {
@@ -436,6 +505,7 @@ static bool emit_terminator(FILE *file,
             return false;
         }
         return emit_far_jump_to_return(file, symbol_name);
+    }
     /* M91_BUILTIN_UNREACHABLE_TERMINATOR: reaching this block is UB; no
        target instruction is required. The Core terminator still prevents
        normal CFG fallthrough from being modeled as a supported continuation. */

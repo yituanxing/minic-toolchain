@@ -143,6 +143,8 @@ static bool import_record(MinicCoreTypeImporter *importer, MinicType source,
     type.kind = MINIC_CORE_TYPE_RECORD;
     type.value.record.is_union = record->is_union;
     type.value.record.is_packed = record->is_packed;
+    type.value.record.pack_alignment = record->pack_alignment;
+    type.value.record.explicit_alignment = record->explicit_alignment;
     type.value.record.is_transparent_union = record->is_transparent_union;
     /* The C record already has a complete DataLayout even though Core's
      * recursive member graph must be populated in two phases. Seed that

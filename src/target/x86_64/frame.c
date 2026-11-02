@@ -26,6 +26,31 @@ static bool x86_frame_preflight_reject(
             fn->parameter_count, fn->value_count, fn->object_count);
     return false;
 }
+
+static bool x86_frame_wide_type(const MinicCoreFunction *fn,
+                                MinicCoreTypeId id, MinicType legacy) {
+    const MinicCoreType *type;
+    if (fn->type_context == NULL)
+        return minic_type_is_int128_integer(legacy) ||
+               minic_type_is_long_double(legacy);
+    id = minic_core_type_unqualified(fn->type_context, id);
+    type = minic_core_type_get(fn->type_context, id);
+    return type != NULL &&
+        ((type->kind == MINIC_CORE_TYPE_INTEGER &&
+          type->value.integer.bit_width == 128U) ||
+         (type->kind == MINIC_CORE_TYPE_FLOAT &&
+          type->value.floating.format == MINIC_CORE_FLOAT_EXTENDED));
+}
+
+static bool x86_frame_int128_type(const MinicCoreFunction *fn,
+                                  MinicCoreTypeId id, MinicType legacy) {
+    const MinicCoreType *type;
+    if (fn->type_context == NULL) return minic_type_is_int128_integer(legacy);
+    type = minic_core_type_get(fn->type_context,
+                               minic_core_type_unqualified(fn->type_context, id));
+    return type != NULL && type->kind == MINIC_CORE_TYPE_INTEGER &&
+           type->value.integer.bit_width == 128U;
+}
 /* Frame is caller-owned and must have no live resources on entry: init resets
  * it before creating plans/offsets. Failure may leave partial allocations;
  * the emitter destroys the frame on both successful and rejected paths. */
@@ -72,8 +97,8 @@ bool minic_x86_64_frame_init_with_storage(const MinicC0Program *program,
         return x86_frame_preflight_reject(fn, "value-slots-reuse");
     for (i = 0U; i < fn->value_count; ++i) {
         const MinicType type = fn->values[i].type;
-        const size_t width = minic_type_is_int128_integer(type) ||
-                             minic_type_is_long_double(type) ? 16U : 8U;
+        const size_t width = x86_frame_wide_type(fn,
+                                fn->values[i].core_type_id, type) ? 16U : 8U;
         if (frame->value_offsets[i] == SIZE_MAX ||
             frame->value_offsets[i] > (size_t)INT32_MAX - width)
             return x86_frame_preflight_reject(fn, "value-slots-reuse-offset");
@@ -81,8 +106,11 @@ bool minic_x86_64_frame_init_with_storage(const MinicC0Program *program,
     }
     {
         size_t result_bytes;
-        frame->has_sret = minic_x86_64_memory_result_record(
-            program, target, fn->return_type, &result_bytes);
+        frame->has_sret = fn->type_context != NULL
+            ? minic_x86_64_core_memory_result_record(
+                fn->type_context, fn->core_return_type_id, &result_bytes)
+            : minic_x86_64_memory_result_record(
+                program, target, fn->return_type, &result_bytes);
         if (frame->has_sret) {
             if (value_bytes > (size_t)INT32_MAX - 8U)
                 return x86_frame_preflight_reject(fn, "sret-slot");
@@ -96,7 +124,10 @@ bool minic_x86_64_frame_init_with_storage(const MinicC0Program *program,
      * its PARAMETER instruction executes. No overhead for functions without
      * TI parameters. 48 bytes also preserves 16-byte frame alignment. */
     for (i = 0U; i < fn->parameter_count; ++i)
-        if (minic_type_is_int128_integer(fn->parameter_types[i])) {
+        if (x86_frame_int128_type(fn,
+                fn->type_context != NULL ? fn->core_parameter_type_ids[i]
+                                         : MINIC_CORE_TYPE_INVALID,
+                fn->parameter_types[i])) {
             const MinicX86AbiRegisters *abi = minic_x86_64_abi_registers(
                 MINIC_CALLING_CONVENTION_DEFAULT);
             size_t bank_bytes;

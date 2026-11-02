@@ -963,6 +963,36 @@ cc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror \
   -o "$work/core-object-storage-resolved-probe"
 "$work/core-object-storage-resolved-probe"
 
+# A Record's Core layout is an ABI classification input, not a request for
+# Target to reconstruct C fields. Packed, HFA, bitfield and nominal shapes
+# must retain the existing conservative LP64 admission/rejection contract.
+cc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror \
+  -ffunction-sections -fdata-sections -Wl,--gc-sections \
+  -Iinclude -Isrc tests/compiler/c0/probe-core-lp64-aggregate.c \
+  src/core/core_type.c \
+  src/target/common/aggregate_shape.c src/target/common/lp64_aggregate.c \
+  -o "$work/core-lp64-aggregate-probe"
+"$work/core-lp64-aggregate-probe"
+
+# Attached integer/atomic/bitcast admission must derive widths, signedness
+# and pointee effects from CoreType; a fake C-width oracle intentionally
+# fails if any selected path consults the old frontend integer model.
+bash tests/compiler/c0/probe-core-numeric-coretypes.sh
+
+# x86 SysV/Win64 Core record and scalar classification must preserve the
+# original INTEGER eightbyte, unaligned MEMORY and indirect-return boundary.
+cc -std=c11 -O2 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror \
+  -ffunction-sections -fdata-sections -Wl,--gc-sections \
+  -Iinclude -Isrc tests/compiler/c0/probe-x86-core-abi-shape.c \
+  src/core/core_type.c src/target/common/aggregate_shape.c \
+  src/target/common/lp64_scalar.c src/target/x86_64/abi.c \
+  -o "$work/x86-core-abi-shape-probe"
+"$work/x86-core-abi-shape-probe"
+
+# RV64 LP64/LP64D call and return classification depends on the attached
+# neutral CoreType graph, including union and soft/hard-float exceptions.
+bash tests/compiler/c0/probe-rv64-coretype-abi.sh
+
 cc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror \
   -ffunction-sections -fdata-sections -Wl,--gc-sections \
   -Iinclude -Isrc tests/compiler/c0/probe-program-emit-transaction.c \

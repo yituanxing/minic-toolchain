@@ -26,7 +26,9 @@ static const MinicDirectLP64AbiPolicy aarch64_abi_policy = {
     .variadic_save_bytes = 224U, /* 32B tag + 64B GPR + 128B FPR */
     .variadic_save_alignment = 16U,
     .extra_variadic_cursor_bytes = 32U,
-    .variadic_requires_public_stack_alignment = false
+    .variadic_requires_public_stack_alignment = false,
+    .core_indirect_record = minic_aarch64_indirect_record_core,
+    .core_indirect_return = minic_aarch64_indirect_record_core
 };
 
 /* Only native AAPCS64 prologue policy lives here. Symbol metadata,

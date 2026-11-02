@@ -10,6 +10,7 @@ mkdir -p "$work"
     -I"$root/src" \
     "$root/tests/compiler/c0/aarch64_neon_machine_contract_test.c" \
     "$root/src/frontend/type.c" \
+    "$root/src/core/core_type.c" \
     "$root/src/target/aarch64/frame_emit.c" \
     "$root/src/target/aarch64/neon_emit.c" \
     -o "$work/contract"

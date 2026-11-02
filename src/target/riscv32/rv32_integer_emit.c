@@ -6,6 +6,44 @@
 #include <stdint.h>
 #include <stdlib.h>
 
+static bool rv32_integer_result_i32(const MinicCoreFunction *function,
+                                     const MinicCoreInstruction *instruction) {
+    const MinicCoreType *type;
+    if (function->type_context == NULL)
+        return minic_type_equal(instruction->type, minic_type_int());
+    type = minic_core_type_get(function->type_context,
+        minic_core_type_unqualified(function->type_context,
+                                    instruction->core_type_id));
+    return type != NULL && type->kind == MINIC_CORE_TYPE_INTEGER &&
+           type->has_layout && type->size == 4U &&
+           type->value.integer.bit_width == 32U &&
+           type->value.integer.is_signed && !type->value.integer.is_bool;
+}
+
+static MinicCoreTypeId rv32_integer_pointee_type_id(
+    const MinicCoreFunction *function, MinicCoreValueId address) {
+    const MinicCoreType *pointer;
+    if (function->type_context == NULL || address >= function->value_count)
+        return MINIC_CORE_TYPE_INVALID;
+    pointer = minic_core_type_get(function->type_context,
+        minic_core_type_unqualified(function->type_context,
+                                    function->values[address].core_type_id));
+    return pointer != NULL && pointer->kind == MINIC_CORE_TYPE_POINTER
+        ? pointer->value.pointer.pointee : MINIC_CORE_TYPE_INVALID;
+}
+
+static bool rv32_integer_result_bool(const MinicCoreFunction *function,
+                                      const MinicCoreInstruction *instruction) {
+    const MinicCoreType *type;
+    if (function->type_context == NULL)
+        return minic_type_equal(instruction->type, minic_type_bool());
+    type = minic_core_type_get(function->type_context,
+        minic_core_type_unqualified(function->type_context,
+                                    instruction->core_type_id));
+    return type != NULL && type->kind == MINIC_CORE_TYPE_INTEGER &&
+           type->value.integer.is_bool;
+}
+
 /* GCC __builtin_*_overflow computes in infinite signed precision and then
  * checks whether the value fits the destination type. In particular,
  * signed int + unsigned int -> signed int must not use ordinary C promotion.
@@ -16,6 +54,7 @@ static bool rv32_emit_mixed_checked_overflow(FILE *out,
                                              const Rv32Frame *fr,
                                              const MinicCoreInstruction *ins,
                                              MinicType result_type,
+                                             MinicCoreTypeId result_core_type,
                                              size_t address_alignment) {
     const MinicCoreValueId lhs = ins->value.integer_overflow.left;
     const MinicCoreValueId rhs = ins->value.integer_overflow.right;
@@ -30,18 +69,26 @@ static bool rv32_emit_mixed_checked_overflow(FILE *out,
      * two-word input. */
     if (ins->value.integer_overflow.operator_kind ==
             MINIC_CORE_INTEGER_OVERFLOW_ADD &&
-        ((rv32_is_wide_integer(f, f->values[lhs].type) &&
-          minic_type_is_unsigned_integer(f->values[lhs].type) &&
-          rv32_scalar(f, f->values[rhs].type, &right_bits, &right_signed) &&
+        ((rv32_resolved_is_wide_integer(f, f->values[lhs].type,
+                                      f->values[lhs].core_type_id) &&
+          rv32_resolved_unsigned_integer(f, f->values[lhs].type,
+                                         f->values[lhs].core_type_id) &&
+          rv32_resolved_scalar(f, f->values[rhs].type,
+                  f->values[rhs].core_type_id, &right_bits, &right_signed) &&
           !right_signed && right_bits == 32U) ||
-         (rv32_is_wide_integer(f, f->values[rhs].type) &&
-          minic_type_is_unsigned_integer(f->values[rhs].type) &&
-          rv32_scalar(f, f->values[lhs].type, &left_bits, &left_signed) &&
+         (rv32_resolved_is_wide_integer(f, f->values[rhs].type,
+                                      f->values[rhs].core_type_id) &&
+          rv32_resolved_unsigned_integer(f, f->values[rhs].type,
+                                         f->values[rhs].core_type_id) &&
+          rv32_resolved_scalar(f, f->values[lhs].type,
+                  f->values[lhs].core_type_id, &left_bits, &left_signed) &&
           !left_signed && left_bits == 32U)) &&
-        rv32_scalar(f, result_type, &result_bits, &result_signed) &&
+        rv32_resolved_scalar(f, result_type, result_core_type,
+                             &result_bits, &result_signed) &&
         !result_signed && result_bits == 32U) {
         const bool wide_left =
-            rv32_is_wide_integer(f, f->values[lhs].type);
+            rv32_resolved_is_wide_integer(f, f->values[lhs].type,
+                                          f->values[lhs].core_type_id);
         const MinicCoreValueId wide = wide_left ? lhs : rhs;
         const MinicCoreValueId narrow = wide_left ? rhs : lhs;
         return rv32_pair_slot(out, fr, wide, "t0", "t1", true) &&
@@ -59,9 +106,12 @@ static bool rv32_emit_mixed_checked_overflow(FILE *out,
                    "t3", "t0", "t5", address_alignment, "rv32_overflow") &&
                rv32_slot(out, fr, ins->result, "t4", false);
     }
-    if (!rv32_scalar(f, f->values[lhs].type, &left_bits, &left_signed) ||
-        !rv32_scalar(f, f->values[rhs].type, &right_bits, &right_signed) ||
-        !rv32_scalar(f, result_type, &result_bits, &result_signed) ||
+    if (!rv32_resolved_scalar(f, f->values[lhs].type,
+            f->values[lhs].core_type_id, &left_bits, &left_signed) ||
+        !rv32_resolved_scalar(f, f->values[rhs].type,
+            f->values[rhs].core_type_id, &right_bits, &right_signed) ||
+        !rv32_resolved_scalar(f, result_type, result_core_type,
+                               &result_bits, &result_signed) ||
         left_bits < 8U || right_bits < 8U || result_bits < 8U ||
         left_bits > 32U || right_bits > 32U || result_bits > 32U ||
         !rv32_slot(out, fr, lhs, "t0", true) ||
@@ -97,7 +147,7 @@ static bool rv32_emit_mixed_checked_overflow(FILE *out,
     /* Compare the full mathematical result to the two-word sign/zero
      * extension of the value actually written to the destination. */
     if (fprintf(out, "  mv t5, t2\n") < 0 ||
-        !rv32_canon(out, f, result_type, "t2") ||
+        !rv32_resolved_canon(out, f, result_type, result_core_type, "t2") ||
         fprintf(out,
             "  xor t5, t5, t2\n"
             "  %s\n"
@@ -215,7 +265,8 @@ static bool rv32_emit_checked_overflow(FILE *out,
     const MinicCoreValueId lhs = ins->value.integer_overflow.left;
     const MinicCoreValueId rhs = ins->value.integer_overflow.right;
     const MinicCoreValueId address = ins->value.integer_overflow.result_address;
-    MinicType result_type;
+    MinicType result_type = minic_type_void();
+    MinicCoreTypeId result_core_type = MINIC_CORE_TYPE_INVALID;
     unsigned bits;
     bool is_signed;
     const char *store;
@@ -223,16 +274,27 @@ static bool rv32_emit_checked_overflow(FILE *out,
     if (program == NULL || target == NULL || target->data_layout == NULL ||
         lhs >= f->value_count || rhs >= f->value_count ||
         address >= f->value_count || ins->result >= f->value_count ||
-        !minic_type_equal(ins->type, minic_type_bool()) ||
-        !minic_type_pointee(f->values[address].type, &result_type))
+        !rv32_integer_result_bool(f, ins) ||
+        (f->type_context == NULL &&
+         !minic_type_pointee(f->values[address].type, &result_type)))
         return false;
+    if (f->type_context != NULL) {
+        result_core_type = rv32_integer_pointee_type_id(f, address);
+        if (result_core_type == MINIC_CORE_TYPE_INVALID) return false;
+    }
     address_alignment = minic_riscv_address_alignment(
         program, target->data_layout, f, address);
-    if (!minic_type_equal(f->values[lhs].type, result_type) ||
-        !minic_type_equal(f->values[rhs].type, result_type)) {
-        if (rv32_scalar_storage_words(f, result_type, &bits) && bits == 1U &&
+    if (!(f->type_context != NULL
+            ? (f->values[lhs].core_type_id == result_core_type &&
+               f->values[rhs].core_type_id == result_core_type)
+            : (minic_type_equal(f->values[lhs].type, result_type) &&
+               minic_type_equal(f->values[rhs].type, result_type)))) {
+        if (rv32_resolved_scalar_storage_words(f, result_type,
+                                               result_core_type, &bits) &&
+            bits == 1U &&
             rv32_emit_mixed_checked_overflow(
-                out, f, fr, ins, result_type, address_alignment))
+                out, f, fr, ins, result_type, result_core_type,
+                address_alignment))
             return true;
         if (getenv("MINIC_RV32_OVERFLOW_TRACE") != NULL)
             (void)fprintf(stderr,
@@ -246,12 +308,14 @@ static bool rv32_emit_checked_overflow(FILE *out,
                 (int)ins->value.integer_overflow.operator_kind);
         return false;
     }
-    if (rv32_is_wide_integer(f, result_type))
+    if (rv32_resolved_is_wide_integer(f, result_type, result_core_type))
         return rv32_emit_wide_checked_overflow(
-            out, fr, ins, minic_type_is_unsigned_integer(result_type),
+            out, fr, ins, rv32_resolved_unsigned_integer(f, result_type,
+                                                         result_core_type),
             address_alignment);
     if (
-        !rv32_scalar(f, result_type, &bits, &is_signed) ||
+        !rv32_resolved_scalar(f, result_type, result_core_type,
+                              &bits, &is_signed) ||
         bits < 8U || bits > 32U ||
         !rv32_slot(out, fr, lhs, "t0", true) ||
         !rv32_slot(out, fr, rhs, "t1", true))
@@ -325,7 +389,8 @@ static bool rv32_emit_checked_overflow(FILE *out,
         /* Both narrow operands are canonicalized on load. Their sum,
          * difference and product fit an exact 32-bit scratch result. */
         if (fprintf(out, "  mv t3, t2\n") < 0 ||
-            !rv32_canon(out, f, result_type, "t3") ||
+            !rv32_resolved_canon(out, f, result_type,
+                                 result_core_type, "t3") ||
             fprintf(out,
                     "  xor t4, t2, t3\n  snez t4, t4\n"
                     "  mv t2, t3\n") < 0) return false;
@@ -366,18 +431,22 @@ bool rv32_emit_integer_instruction(FILE *out,
     case MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_RIGHT:
     case MINIC_CORE_INSTRUCTION_INTEGER_NEGATE:
     case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_NOT:
-        if (rv32_is_wide_integer(f, ins->type))
+        if (rv32_resolved_is_wide_integer(f, ins->type, ins->core_type_id))
             return rv32_emit_wide_integer(out, f, fr, ins, symbol);
         break;
     case MINIC_CORE_INSTRUCTION_INTEGER_LESS:
     case MINIC_CORE_INSTRUCTION_SCALAR_EQUAL:
         if (ins->value.binary.left < f->value_count &&
-            rv32_is_wide_integer(f, f->values[ins->value.binary.left].type))
+            rv32_resolved_is_wide_integer(f,
+                f->values[ins->value.binary.left].type,
+                f->values[ins->value.binary.left].core_type_id))
             return rv32_emit_wide_integer(out, f, fr, ins, symbol);
         break;
     case MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO:
         if (ins->value.operand < f->value_count &&
-            rv32_is_wide_integer(f, f->values[ins->value.operand].type))
+            rv32_resolved_is_wide_integer(f,
+                f->values[ins->value.operand].type,
+                f->values[ins->value.operand].core_type_id))
             return rv32_emit_wide_integer(out, f, fr, ins, symbol);
         break;
     default: break;
@@ -387,7 +456,8 @@ bool rv32_emit_integer_instruction(FILE *out,
         return rv32_emit_checked_overflow(out, program, target, f, fr, ins);
     case MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT: {
         unsigned words;
-        if (!rv32_scalar_storage_words(f, ins->type, &words))
+        if (!rv32_resolved_scalar_storage_words(f, ins->type,
+                                                ins->core_type_id, &words))
             return false;
         if (words == 2U) {
             uint64_t raw = (uint64_t)ins->value.integer_value;
@@ -395,10 +465,12 @@ bool rv32_emit_integer_instruction(FILE *out,
                            (uint32_t)raw, (uint32_t)(raw >> 32U)) >= 0 &&
                    rv32_pair_slot(out, fr, ins->result, "t0", "t1", false);
         }
-        return rv32_scalar(f, ins->type, &bits, &is_signed) &&
+        return rv32_resolved_scalar(f, ins->type,
+                                     ins->core_type_id, &bits, &is_signed) &&
                fprintf(out, "  li t0, %" PRId64 "\n",
                        ins->value.integer_value) >= 0 &&
-               rv32_canon(out, f, ins->type, "t0") &&
+               rv32_resolved_canon(out, f, ins->type,
+                                    ins->core_type_id, "t0") &&
                rv32_slot(out, fr, ins->result, "t0", false);
     }
     /* Core owns widths; both XLEN variants share base-I opcode names. */
@@ -415,7 +487,9 @@ bool rv32_emit_integer_instruction(FILE *out,
     case MINIC_CORE_INSTRUCTION_POINTER_LESS:
         if (ins->value.binary.left >= f->value_count) return false;
         lhs = f->values[ins->value.binary.left].type;
-        if (!rv32_scalar(f, lhs, &bits, &is_signed)) return false;
+        if (!rv32_resolved_scalar(f, lhs,
+                f->values[ins->value.binary.left].core_type_id,
+                &bits, &is_signed)) return false;
         op = minic_riscv_scalar_binary_opcode(
             ins->kind, ins->kind == MINIC_CORE_INSTRUCTION_POINTER_LESS ||
                            !is_signed);
@@ -430,7 +504,8 @@ bool rv32_emit_integer_instruction(FILE *out,
         /* Compiler target lowering only chooses an ABI-compatible libcall.
          * Actual arithmetic lives in the pinned GNU libgcc 14.2.0 sources,
          * not a second implementation in MiniC's instruction generator. */
-        if (!rv32_scalar(f, ins->type, &bits, &is_signed))
+        if (!rv32_resolved_scalar(f, ins->type,
+                                  ins->core_type_id, &bits, &is_signed))
             return false;
         MinicRiscvIntegerPlan plan;
         if (!minic_riscv_plan_integer_arithmetic(
@@ -439,14 +514,16 @@ bool rv32_emit_integer_instruction(FILE *out,
         if (plan.strategy == MINIC_RISCV_INTEGER_NATIVE_M)
             return rv32_load2(out, fr, ins) &&
                    fprintf(out, "  %s t0, t0, t1\n", plan.opcode) >= 0 &&
-                   rv32_canon(out, f, ins->type, "t0") &&
+                   rv32_resolved_canon(out, f, ins->type,
+                                        ins->core_type_id, "t0") &&
                    rv32_slot(out, fr, ins->result, "t0", false);
         if (plan.strategy != MINIC_RISCV_INTEGER_RUNTIME_LIBCALL)
             return false;
         return rv32_load2(out, fr, ins) &&
                fprintf(out, "  mv a0, t0\n  mv a1, t1\n  call %s\n",
                        plan.symbol) >= 0 &&
-               rv32_canon(out, f, ins->type, "a0") &&
+               rv32_resolved_canon(out, f, ins->type,
+                                    ins->core_type_id, "a0") &&
                rv32_slot(out, fr, ins->result, "a0", false);
     }
     case MINIC_CORE_INSTRUCTION_INTEGER_CONVERSION:
@@ -454,8 +531,10 @@ bool rv32_emit_integer_instruction(FILE *out,
         const MinicCoreValueId id = ins->value.operand;
         unsigned from_words, to_words;
         if (id >= f->value_count ||
-            !rv32_scalar_storage_words(f, f->values[id].type, &from_words) ||
-            !rv32_scalar_storage_words(f, ins->type, &to_words))
+            !rv32_resolved_scalar_storage_words(f, f->values[id].type,
+                f->values[id].core_type_id, &from_words) ||
+            !rv32_resolved_scalar_storage_words(f, ins->type,
+                ins->core_type_id, &to_words))
             return false;
         if (from_words == 2U) {
             if (!rv32_pair_slot(out, fr, id, "t0", "t1", true)) return false;
@@ -467,12 +546,15 @@ bool rv32_emit_integer_instruction(FILE *out,
                      * long long by sign-extending its 32-bit address. A
                      * separate cast via unsigned long zero-extends instead;
                      * preserve this implementation-defined distinction. */
-                    if (!minic_type_is_pointer(f->values[id].type) ||
-                        !minic_type_is_integer(ins->type) ||
+                    if (!rv32_resolved_pointer_type(f, f->values[id].type,
+                                                     f->values[id].core_type_id) ||
+                        !rv32_resolved_integer_type(f, ins->type,
+                                                     ins->core_type_id) ||
                         fprintf(out, "  srai t1, t0, 31\n") < 0)
                         return false;
-                } else if (!rv32_scalar(f, f->values[id].type,
-                                       &bits, &is_signed) ||
+                } else if (!rv32_resolved_scalar(f, f->values[id].type,
+                                f->values[id].core_type_id,
+                                &bits, &is_signed) ||
                            fprintf(out, is_signed ? "  srai t1, t0, 31\n" :
                                                  "  li t1, 0\n") < 0) {
                     return false;
@@ -481,7 +563,8 @@ bool rv32_emit_integer_instruction(FILE *out,
             return rv32_pair_slot(out, fr, ins->result,
                                   "t0", "t1", false);
         }
-        return rv32_canon(out, f, ins->type, "t0") &&
+        return rv32_resolved_canon(out, f, ins->type,
+                                   ins->core_type_id, "t0") &&
                rv32_slot(out, fr, ins->result, "t0", false);
     }
     /* RV32I provides no Zbb CLZ/CTZ. Preserve the target-neutral
@@ -495,10 +578,12 @@ bool rv32_emit_integer_instruction(FILE *out,
         bool signed_input;
         bool wide;
         if (input >= f->value_count ||
-            !minic_type_is_unsigned_integer(f->values[input].type) ||
-            !minic_type_equal(ins->type, minic_type_int()))
+            !rv32_resolved_unsigned_integer(f, f->values[input].type,
+                                             f->values[input].core_type_id) ||
+            !rv32_integer_result_i32(f, ins))
             return false;
-        wide = rv32_is_wide_integer(f, f->values[input].type);
+        wide = rv32_resolved_is_wide_integer(f, f->values[input].type,
+                                              f->values[input].core_type_id);
         if (wide) {
             /* Unsigned long long is two base-I XLEN words. Select the
              * nonzero half, then reuse the 32-bit count loop verbatim.
@@ -529,7 +614,9 @@ bool rv32_emit_integer_instruction(FILE *out,
                     symbol, ins->result, symbol, ins->result) < 0)
                     return false;
             }
-        } else if (!rv32_scalar(f, f->values[input].type, &width, &signed_input) ||
+        } else if (!rv32_resolved_scalar(f, f->values[input].type,
+                           f->values[input].core_type_id,
+                           &width, &signed_input) ||
                    signed_input || width < 8U || width > 32U ||
                    !rv32_slot(out, fr, input, "t0", true)) {
             return false;
@@ -550,13 +637,15 @@ bool rv32_emit_integer_instruction(FILE *out,
                        "  neg t0, t0\n" :
                        ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_NOT ?
                        "  not t0, t0\n" : "  seqz t0, t0\n") >= 0 &&
-               rv32_canon(out, f, ins->type, "t0") &&
+               rv32_resolved_canon(out, f, ins->type,
+                                    ins->core_type_id, "t0") &&
                rv32_slot(out, fr, ins->result, "t0", false);
     default:
         return false;
     }
     return op != NULL && rv32_load2(out, fr, ins) &&
            fprintf(out, "  %s t0, t0, t1\n", op) >= 0 &&
-           rv32_canon(out, f, ins->type, "t0") &&
+           rv32_resolved_canon(out, f, ins->type,
+                                ins->core_type_id, "t0") &&
            rv32_slot(out, fr, ins->result, "t0", false);
 }
