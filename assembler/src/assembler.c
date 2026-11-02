@@ -1,5 +1,6 @@
 #include "minias_internal.h"
 #include "source_graph_common.h"
+#include "minias_source_semantic_services.h"
 #include "minias.h"
 
 #include <ctype.h>
@@ -1643,7 +1644,11 @@ static bool minias_init_for_target(MiniAs *as,
         minias_set_error(as,"missing-assembler-target");
         return false;
     }
-    if(!minias_source_context_init(as))return false;
+    as->source=minias_source_context_create();
+    if(as->source==NULL) {
+        minias_set_error(as,"out-of-memory:source-context");
+        return false;
+    }
     text=minias_ensure_section(as,".text",MINIAS_SHT_PROGBITS,
             MINIAS_SHF_ALLOC|MINIAS_SHF_EXECINSTR,
             target->default_exec_alignment!=0U ?
@@ -4664,6 +4669,23 @@ static bool lower_source_statement(MiniAs *as, char *text, size_t line) {
 
 /* Read-only .ifdef/.ifndef query: a declaration or relocation reference
  * alone cannot create a defined symbol in the Source conditional grammar. */
+/* Source sees only its own pass state and immutable lexical policy.
+ * Common retains the sole mutable MiniAs session definition. */
+MiniAsSourceContext *minias_source_session(MiniAs *as) {
+    return as->source;
+}
+char minias_source_target_comment_prefix(const MiniAs *as) {
+    return as->target->comment_prefix;
+}
+bool minias_source_target_preserve_macro_parentheses(const MiniAs *as) {
+    return as->target->macro_preserve_parenthesized_operand;
+}
+bool minias_source_target_evaluate_if(const MiniAs *as,
+                                      const char *expression,bool *result) {
+    return as->target->evaluate_target_if!=NULL &&
+           as->target->evaluate_target_if(expression,result);
+}
+
 bool minias_common_source_symbol_defined(MiniAs *as,const char *name) {
     const MiniAsSymbol *symbol=minias_get_symbol(as,name,false);
     return symbol!=NULL && (symbol->defined || symbol->alias_pending);

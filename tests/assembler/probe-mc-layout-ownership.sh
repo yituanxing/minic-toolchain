@@ -36,7 +36,7 @@ for old_reader in ('read_macro_block(', 'read_repeat_block('):
 if ('MiniAsSourceContext *source;' not in internal or
     'struct MiniAsSourceContext {' in internal or
     'struct MiniAsSourceContext {' not in source or
-    'minias_source_context_init(' not in expansion or
+    'minias_source_context_create(' not in expansion or
     'minias_source_context_destroy(' not in expansion or
     'minias_source_graph_load_physical(' not in source_api or
     'minias_source_graph_load_physical(&as,input_path,graph)' not in driver):
@@ -111,7 +111,8 @@ if ('unsigned char *branch_membership;' not in layout or
     'forced_long_branch_bitmap' in internal or
     'forced_long_branch_bitmap' in layout):
     raise SystemExit('MCLayout branch membership escaped its private graph')
-if ('typedef struct MiniAsFragmentGrowthSet {' not in internal or
+if ('typedef struct MiniAsFragmentGrowthSet {' not in
+        Path('assembler/src/minias_source_replay_contract.h').read_text() or
     'MiniAsFragmentGrowthSet branch_growth={0};' not in driver or
     'minias_source_graph_rebind_forced_branches(' not in driver or
     'minias_source_graph_capture_forced_branches(' not in driver or

@@ -15,8 +15,10 @@ private=(root/'source_graph_internal.h').read_text()
 core=(root/'assembler.c').read_text()
 if '#include "minias_internal.h"' in common:
     raise SystemExit('Source/Common contract exposes private session layout')
-if '#include "minias_internal.h"' not in private:
-    raise SystemExit('Source private implementation lacks explicit ownership')
+if '#include "minias_internal.h"' in private:
+    raise SystemExit('Source private implementation imports Common session')
+if '#include "minias_source_semantic_services.h"' not in private:
+    raise SystemExit('Missing Source-only semantic service contract')
 if 'minias_statement_process' in (common+source+core):
     raise SystemExit('Legacy exported statement parser survives')
 if re.search(r'\b(?:lower_source_statement|consume_source_statement)\s*\(',source):
@@ -26,9 +28,9 @@ if len(re.findall(r'\bstatic bool lower_source_statement\s*\(',core))!=1:
 if 'return lower_source_statement(as,text,line);' not in core:
     raise SystemExit('Common local label recursion changed')
 if '.consume=consume_source_statement' not in core or \
-   '.site=as->source->current_site' not in source:
+   '.site=minias_source_session(as)->current_site' not in source:
     raise SystemExit('Missing bound event sink or source identity')
-if 'as->source->statements=(MiniAsSourceStatementSink){0};' not in source:
+if 'minias_source_session(as)->statements=(MiniAsSourceStatementSink){0};' not in source:
     raise SystemExit('Source callback lifetime not cleared at parse exit')
 graph=(root/'source_graph.c').read_text()
 if re.search(r'\bas->(?:stmts|stmt_count)\b',graph):
@@ -42,6 +44,12 @@ if 'minias_common_source_symbol_defined(as,args)' not in source:
     raise SystemExit('Source conditional lacks Common definition predicate')
 if 'minias_source_context_layout_sensitive(as->source)' not in core:
     raise SystemExit('Common did not import Source conditional replay signal')
+if re.search(r'\bas\s*->',source+graph):
+    raise SystemExit('Source dereferences private Common session')
+if 'minias_source_context_create(' not in source:
+    raise SystemExit('Source pass-state factory missing')
+if 'as->source=minias_source_context_create();' not in core:
+    raise SystemExit('Common no longer owns Source session lifetime binding')
 if 'size_t site;' not in events or 'char *text;' not in events:
     raise SystemExit('Statement event loses writable text or stable identity')
 print('MINIAS_SOURCE_EVENT_STRUCTURE=PASS one_lowerer=1 stable_site=1 no_legacy_parser=1 sink_unbound=1 fragments=borrowed semantic_state=owned')

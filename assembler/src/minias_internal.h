@@ -2,16 +2,10 @@
 #define MINIAS_INTERNAL_H
 
 #include "minias_target_api.h"
+#include "minias_source_replay_contract.h"
 
 /* Common-only mutable Section/Symbol/Fragment state and ownership APIs. */
-/* Pass-local Fragment ordinals selected for monotone branch growth.
- * SourceGraph rebinds stable lexical identities into this worklist after a
- * semantic replay; MCLayout owns its membership index and size decisions. */
-typedef struct MiniAsFragmentGrowthSet {
-    size_t *ids;
-    size_t count;
-    size_t capacity;
-} MiniAsFragmentGrowthSet;
+/* The SourceGraph/MCLayout replay worklist is declared in its own contract. */
 
 /* A Target proposes one whole encoded fragment.  Common alone assigns its
  * final SymbolIDs, relocation ownership and Section bytes after validation. */

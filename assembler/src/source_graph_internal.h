@@ -1,8 +1,8 @@
 #ifndef MINIAS_SOURCE_GRAPH_INTERNAL_H
 #define MINIAS_SOURCE_GRAPH_INTERNAL_H
 
-#include "minias_internal.h"
 #include "source_graph_common.h"
+#include "minias_source_semantic_services.h"
 
 typedef struct MiniAsSourceLine {
     char *text;

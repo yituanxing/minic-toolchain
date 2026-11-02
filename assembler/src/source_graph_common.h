@@ -3,12 +3,11 @@
 
 #include "minias_target_api.h"
 #include "source_statement_event.h"
+#include "minias_source_replay_contract.h"
 
-/* This interface deliberately does not expose the mutable Common session.
- * The Source implementation itself explicitly includes minias_internal.h
- * until MCExpr/Symbol query capabilities are factored out. */
+/* Source and Common exchange opaque sessions and typed events, never
+ * the Common private assembly-session layout. */
 typedef struct MiniAs MiniAs;
-typedef struct MiniAsFragmentGrowthSet MiniAsFragmentGrowthSet;
 
 /* Common may drive the source pass and retain a persistent graph, but does
  * not own or inspect SourceFrame, macro/conditional stacks or SiteID tables.
@@ -42,7 +41,7 @@ bool minias_source_graph_capture_forced_branches(
 /* SourceContext owns the pass-local lexical state and the current SiteID.
  * Common saves/restores that ID only when materializing deferred fragments
  * at EOF, so they retain the source identity of their original directive. */
-bool minias_source_context_init(MiniAs *as);
+MiniAsSourceContext *minias_source_context_create(void);
 void minias_source_context_destroy(MiniAsSourceContext *source);
 MiniAsStableSiteId minias_source_current_site(const MiniAs *as);
 /* Source records syntax whose condition may change after MCLayout; Common

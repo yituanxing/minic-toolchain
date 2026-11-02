@@ -59,7 +59,7 @@ static bool validate_user_source_private_marker(MiniAs *as,
 
 /* GAS block comments are a physical source lexical state, independent of
  * ISA operand parsing and stable across physical input lines. */
-static void strip_gnu_c_comments(const MiniAsTargetOps *target, char *line,
+static void strip_gnu_c_comments(char comment_prefix, char *line,
                                  bool *comment_active) {
     MiniAsSourceQuoteState quotes={0};
     size_t i;
@@ -72,10 +72,10 @@ static void strip_gnu_c_comments(const MiniAsTargetOps *target, char *line,
             continue;
         }
         if(minias_source_quote_consumes(&quotes,line[i]))continue;
-        if((target->comment_prefix=='/' &&
+        if((comment_prefix=='/' &&
             line[i]=='/' && line[i+1U]=='/') ||
-           (target->comment_prefix!='/' &&
-            line[i]==target->comment_prefix))
+           (comment_prefix!='/' &&
+            line[i]==comment_prefix))
             return;
         if(line[i]=='/' && line[i+1U]=='*') {
             *comment_active=true;
@@ -115,7 +115,8 @@ bool minias_source_graph_load_physical(MiniAs *as, const char *path,
         if(!validate_user_source_private_marker(as,linebuf,line_no)) {
             ok=false;break;
         }
-        strip_gnu_c_comments(as->target,linebuf,&comment_active);
+        strip_gnu_c_comments(minias_source_target_comment_prefix(as),
+                             linebuf,&comment_active);
         if(!minias_grow_array((void **)&frame->lines,
                               &frame->capacity,sizeof(*frame->lines),
                               frame->count+1U)) {
@@ -188,7 +189,7 @@ static bool source_graph_rehash(MiniAsSourceGraph *graph,size_t capacity) {
 
 bool minias_source_graph_intern(MiniAs *as,MiniAsSourceSiteKey key,
                                 MiniAsStableSiteId *site_id) {
-    MiniAsSourceGraph *graph=as->source->graph;
+    MiniAsSourceGraph *graph=minias_source_session(as)->graph;
     size_t slot,probes;
     size_t hashed=source_site_hash(key);
     if(graph==NULL || site_id==NULL ||
@@ -248,7 +249,7 @@ bool minias_source_graph_line_site(MiniAs *as,
                                    const MiniAsSourceLine *line,
                                    MiniAsStableSiteId *site_id) {
     const MiniAsSourceSiteKey key={
-        .parent=as->source->current_expansion_site,
+        .parent=minias_source_session(as)->current_expansion_site,
         .origin_line=line->line,
         .origin_segment=line->source_segment,
         .kind=MINIAS_SOURCE_SITE_LINE
@@ -260,14 +261,14 @@ bool minias_source_graph_line_site(MiniAs *as,
  * Keep that identity inside SourceGraph: it must match previous replays
  * exactly even though Common materializes pools and local .comm fragments. */
 bool minias_source_graph_begin_eof(MiniAs *as) {
-    MiniAsSourceGraph *graph=as->source->graph;
+    MiniAsSourceGraph *graph=minias_source_session(as)->graph;
     MiniAsSourceLine eof={0};
     if(graph==NULL || graph->physical.count==SIZE_MAX) {
         minias_set_error(as,"invalid-source-graph-eof");
         return false;
     }
     eof.line=graph->physical.count+1U;
-    return minias_source_graph_line_site(as,&eof,&as->source->current_site);
+    return minias_source_graph_line_site(as,&eof,&minias_source_session(as)->current_site);
 }
 
 /* A fragment without a stable source owner makes forced-branch rebinding
@@ -275,7 +276,7 @@ bool minias_source_graph_begin_eof(MiniAs *as) {
  * rather than inspecting its private site cardinality from the lowerer. */
 bool minias_source_graph_validate_fragment_sites(
     MiniAs *as,const MiniAsStmt *fragments,size_t fragment_count) {
-    const MiniAsSourceGraph *graph=as->source->graph;
+    const MiniAsSourceGraph *graph=minias_source_session(as)->graph;
     size_t i;
     if(graph==NULL) {
         minias_set_error(as,"invalid-source-graph-state");
@@ -294,11 +295,11 @@ bool minias_source_graph_validate_fragment_sites(
 void minias_source_graph_record_condition(MiniAs *as,
                                           MiniAsStableSiteId owner,
                                           bool active) {
-    MiniAsSourceGraph *graph=as->source->graph;
+    MiniAsSourceGraph *graph=minias_source_session(as)->graph;
     MiniAsSourceSiteEntry *entry;
-    if(graph==NULL || as->source->current_site==MINIAS_SITE_NONE ||
-       as->source->current_site>graph->site_count)return;
-    entry=&graph->sites[as->source->current_site-1U];
+    if(graph==NULL || minias_source_session(as)->current_site==MINIAS_SITE_NONE ||
+       minias_source_session(as)->current_site>graph->site_count)return;
+    entry=&graph->sites[minias_source_session(as)->current_site-1U];
     if(entry->last_condition_pass!=0U &&
        entry->last_condition_pass+1U==graph->parse_passes &&
        (entry->last_condition_active!=active ||
@@ -360,7 +361,7 @@ static bool source_graph_forced_shape_matches(
 bool minias_source_graph_lookup_forced_branch(MiniAs *as,
                                               const MiniAsStmt *stmt,
                                               size_t *minimum_size) {
-    MiniAsSourceGraph *graph=as->source->graph;
+    MiniAsSourceGraph *graph=minias_source_session(as)->graph;
     size_t encoded;
     *minimum_size=0U;
     if(graph==NULL)return true;
@@ -389,7 +390,7 @@ bool minias_source_graph_lookup_forced_branch(MiniAs *as,
 bool minias_source_graph_rebind_forced_branches(
     MiniAs *as,const MiniAsStmt *fragments,size_t fragment_count,
     MiniAsFragmentGrowthSet *growth) {
-    MiniAsSourceGraph *graph=as->source->graph;
+    MiniAsSourceGraph *graph=minias_source_session(as)->graph;
     size_t *site_to_stmt;
     size_t i;
     if(graph==NULL || graph->forced_branch_count==0U) {
@@ -448,7 +449,7 @@ bool minias_source_graph_rebind_forced_branches(
 bool minias_source_graph_capture_forced_branches(
     MiniAs *as,const MiniAsStmt *fragments,size_t fragment_count,
     const MiniAsFragmentGrowthSet *growth) {
-    MiniAsSourceGraph *graph=as->source->graph;
+    MiniAsSourceGraph *graph=minias_source_session(as)->graph;
     const size_t *ids=growth->ids;
     const size_t count=growth->count;
     size_t i;
