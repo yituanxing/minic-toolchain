@@ -63,6 +63,28 @@ static bool section_bytes(const void *reader,int section,
     return true;
 }
 
+static bool supports_fixture_fixup(MiniAsTargetABIView abi,
+                                   MiniAsFixupKind kind,unsigned width) {
+    (void)abi;
+    (void)kind;
+    (void)width;
+    return false; /* This projection fixture contains no Fixups. */
+}
+
+static uint32_t fixture_relocation_type(MiniAsTargetABIView abi,
+                                        MiniAsFixupKind kind,unsigned width) {
+    (void)abi;
+    (void)kind;
+    (void)width;
+    abort(); /* A missing relocation must never request an encoding. */
+}
+
+static const MiniAsElfTargetPolicy fixture_elf_policy={
+    .elf_machine=EM_X86_64,
+    .supports_fixup=supports_fixture_fixup,
+    .fixup_relocation_type=fixture_relocation_type
+};
+
 static bool write_section(MiniAsElfObjectView *view,const char *path) {
     view->error[0]='\0';
     return minias_write_elf64(view,path);
@@ -92,6 +114,12 @@ int main(int argc,char **argv) {
     view.model.fragment_location=fragment_location;
     view.model.section_bytes=section_bytes;
     view.object_machine=EM_X86_64;
+    if(write_section(&view,"/dev/null") ||
+       strcmp(view.error,"missing-elf-target-policy")!=0) {
+        fputs("missing ELF Target policy escaped terminal Writer\n",stderr);
+        return 1;
+    }
+    view.policy=&fixture_elf_policy;
 
     for(i=0U;i<sizeof(kinds)/sizeof(kinds[0]);++i) {
         int length=snprintf(filename,sizeof(filename),"%s-%zu.o",argv[1],i);

@@ -14,6 +14,20 @@
 > 完整 Linux/QEMU P1 仍未完成**。详见
 > [格式语义边界记录](object-format-semantic-boundary-2026-11-02.md)。
 
+> **2026-11-02 MC/Target→ELF ABI 策略整链收口（接
+> `dc7ec7fb`，本批发布 SHA 待定）：** 从四架构 TargetSpec/ISA
+> resolver 沿 MCExpr、MCLayout、`.reloc`、CFI 到 ObjectModel/ELF Writer
+> 复核后，删除通用 TargetOps 中全部散列 ELF 机器号、Fixup 编码、
+> 命名重定位、折叠及可见性字段；ELF 数字映射留在 Writer，
+> 唯一 `MiniAsElfTargetPolicy` 移至专用头，四目标各自静态只读持有。
+> Driver 在初始化时 fail-closed，并将同一指针直接借给 Writer，
+> 不再逐字段复制第二套策略。新增 14 个负向、2 个正向编译门禁。
+> 本地 `-Werror`、A0 30/30、Target 结构门禁以及四架构 26 例
+> 差分（18 对象 byte-exact、8 同拒绝）PASS；远端 exact-head
+> 需发布后核验。该批没有改变 GNU 编码，没有实现 COFF/Mach-O
+> 或 RISC-V 链接放松。详见
+> [ELF 策略边界记录](elf-target-policy-boundary-2026-11-02.md)。
+
 > **2026-11-02 P06 SourceGraph/SourceContext 语义能力整链迁移
 > （基于 `a8035f88`，本批待发布）：** Source 物理行缓存、条件栈、
 > 宏/REPT/IRP、稳定 SiteID、强制分支重绑和跨布局重放，整个递归调用链

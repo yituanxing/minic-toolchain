@@ -1,4 +1,5 @@
 #include "minias_target_api.h"
+#include "minias_elf_target_policy.h"
 #include "loongarch64_fixup_kinds.h"
 
 #include <ctype.h>
@@ -2385,8 +2386,18 @@ static bool la_allow_local_section_symbol_fixup(const MiniAsFixup *fixup,
     return fixup->kind!=MINIAS_FIXUP_LEB_ADD &&
            fixup->kind!=MINIAS_FIXUP_LEB_SUB;
 }
+static const MiniAsElfTargetPolicy la_elf_policy = {
+    .elf_machine = 258U, /* EM_LOONGARCH */
+    .supports_fixup = la_supports_fixup,
+    .fixup_relocation_type = la_reloc,
+    .allow_local_section_symbol_fixup = la_allow_local_section_symbol_fixup,
+    .emit_all_section_symbols = true,
+    .synthetic_expr_anchors_hidden = true,
+    .cfi_anchors_hidden = true
+};
+
 static const MiniAsTargetOps ops={
-    .name="loongarch64",.comment_prefix='#',.elf_machine=258U,
+    .name="loongarch64",.comment_prefix='#',.elf_policy=&la_elf_policy,
     /* GNU LoongArch GAS 2.42 (Linux cross toolchain) unconditionally keeps
      * symbolic ULEB differences as ADD/SUB pairs in relax mode.  The newer
      * interval-sensitive policy remains available in Common mode 1. */
@@ -2396,12 +2407,9 @@ static const MiniAsTargetOps ops={
     .destroy_target_state=la_destroy_target_state,
     .prepare_layout=la_prepare_layout,
     .measure_mcinst=la_measure,.encode=la_encode,
-    .append_code_alignment=la_align,.supports_fixup=la_supports_fixup,
-    .fixup_relocation_type=la_reloc,
+    .append_code_alignment=la_align,
     .validate_output=la_validate,
     .cfi_implicit_eh_frame=true,
-    .allow_local_section_symbol_fixup=la_allow_local_section_symbol_fixup,
-    .emit_all_section_symbols=true,
     .cfi_code_align=1U,
     .cfi_data_align=-4,
     .cfi_return_reg=1U,
@@ -2413,9 +2421,7 @@ static const MiniAsTargetOps ops={
     .cfi_fde_range_relocations=true,
     .cfi_debug_length_relocations=true,
     .cfi_advance_reloc_mode=1U,
-    .synthetic_expr_anchors_hidden=true,
     .cfi_linker_relaxation_marker=la_cfi_linker_relaxation_marker,
-    .default_exec_alignment=1U,
-    .cfi_anchors_hidden=true
+    .default_exec_alignment=1U
 };
 const MiniAsTargetOps *minias_target_loongarch64(void){return &ops;}

@@ -1,4 +1,5 @@
 #include "minias_target_api.h"
+#include "minias_elf_target_policy.h"
 #include "riscv_fixup_kinds.h"
 #include "riscv_profile.h"
 #include "riscv_target.h"

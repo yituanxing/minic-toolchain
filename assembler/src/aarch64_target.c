@@ -1,4 +1,5 @@
 #include "minias_target_api.h"
+#include "minias_elf_target_policy.h"
 #include "aarch64_fixup_kinds.h"
 
 #include <ctype.h>
@@ -5886,10 +5887,20 @@ static bool a64_named_relocation(MiniAsTargetABIView view,const char *name,
     return false;
 }
 
+static const MiniAsElfTargetPolicy a64_elf_policy = {
+    .elf_machine = 183U, /* EM_AARCH64 */
+    .supports_fixup = aarch64_supports_fixup,
+    .fixup_relocation_type = aarch64_fixup_relocation_type,
+    .parse_named_relocation = a64_named_relocation,
+    .fold_defined_local_relocation_to_section = true,
+    .allow_local_section_symbol_fixup = a64_allow_local_section_symbol_fixup,
+    .emit_all_section_symbols = true
+};
+
 static const MiniAsTargetOps ops = {
     .macro_preserve_parenthesized_operand=true,
     .comment_prefix = '/', /* //, not #; AArch64 #42 is an immediate. */
-    .elf_machine = 183U, /* EM_AARCH64 */
+    .elf_policy = &a64_elf_policy,
     .parse_target_directive = directive,
     .init_target_state = a64_init_target_state,
     .capture_site_state = a64_capture_site_state,
@@ -5900,9 +5911,6 @@ static const MiniAsTargetOps ops = {
     .measure_mcinst = aarch64_measure_mcinst,
     .encode = encode,
     .append_code_alignment = code_alignment,
-    .supports_fixup = aarch64_supports_fixup,
-    .fixup_relocation_type = aarch64_fixup_relocation_type,
-    .parse_named_relocation = a64_named_relocation,
     .validate_output = validate,
     .finalize_output = a64_record_source_mappings,
     .dot_relative_fixup = MINIAS_FIXUP_PREL32,
@@ -5912,9 +5920,6 @@ static const MiniAsTargetOps ops = {
     .supports_literal_pools = true,
     .literal_pool_order = MINIAS_LITERAL_POOL_WIDTH_ASC,
     .cfi_implicit_eh_frame = true,
-    .fold_defined_local_relocation_to_section = true,
-    .allow_local_section_symbol_fixup = a64_allow_local_section_symbol_fixup,
-    .emit_all_section_symbols = true,
     .record_cfi_data_mapping = a64_record_cfi_data_mapping,
     .cfi_code_align = 4U,
     .cfi_data_align = -8,

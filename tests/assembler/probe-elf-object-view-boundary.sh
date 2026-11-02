@@ -3,18 +3,30 @@ set -Eeuo pipefail
 
 repo=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
 source="$repo/tests/assembler/elf-object-view-compile.c"
+generic_source="$repo/tests/assembler/mc-elf-policy-compile.c"
 compiler=${CC:-cc}
 work=$(mktemp -d)
 trap 'rm -rf -- "$work"' EXIT
 
 "$compiler" -std=c11 -pedantic-errors -Wall -Wextra -Werror -fsyntax-only \
     -I"$repo/assembler/src" "$source"
-for case in SECTION_WRITE SYMBOL_WRITE FIXUP_WRITE FILENAME_WRITE \
-            TARGET_WRITE SESSION_LOOKUP EMISSION_ACCESS; do
+for case in SECTION_WRITE ELF_POLICY_WRITE SYMBOL_WRITE FIXUP_WRITE FILENAME_WRITE \
+            TARGET_WRITE SESSION_LOOKUP EMISSION_ACCESS LEGACY_TARGET_POLICY; do
     if "$compiler" -std=c11 -pedantic-errors -Wall -Wextra -Werror \
         -fsyntax-only -I"$repo/assembler/src" -D"TRY_$case" "$source" \
         >"$work/$case.log" 2>&1; then
         echo "MINIAS_ELF_OBJECT_VIEW=FAIL mutable_or_broad_case=$case" >&2
+        exit 1
+    fi
+done
+
+"$compiler" -std=c11 -pedantic-errors -Wall -Wextra -Werror -fsyntax-only \
+    -I"$repo/assembler/src" "$generic_source"
+for case in ELF_CONSTANT ELF_MACHINE ELF_FIXUP ELF_FOLDING ELF_POLICY_MUTATE; do
+    if "$compiler" -std=c11 -pedantic-errors -Wall -Wextra -Werror \
+        -fsyntax-only -I"$repo/assembler/src" -D"TRY_$case" \
+        "$generic_source" >"$work/$case.log" 2>&1; then
+        echo "MINIAS_ELF_POLICY=FAIL leaked_generic_api=$case" >&2
         exit 1
     fi
 done
@@ -56,4 +68,4 @@ print('MINIAS_ELF_OBJECT_VIEW=PASS serializer_session=opaque '
       'owner_mutations=forbidden')
 PY
 
-echo 'MINIAS_ELF_OBJECT_VIEW_COMPILE=PASS negative=7 positive=1'
+echo 'MINIAS_ELF_OBJECT_VIEW_COMPILE=PASS negative=14 positive=2'

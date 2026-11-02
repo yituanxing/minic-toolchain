@@ -1085,9 +1085,9 @@ bool minias_emit_deferred_leb_relocations(MiniAs *as) {
                 return false;
             if(!crosses)continue;
         }
-        if(as->target->supports_fixup==NULL ||
-           !as->target->supports_fixup(minias_target_abi_view(as),positive_fixup,0U) ||
-           !as->target->supports_fixup(minias_target_abi_view(as),MINIAS_FIXUP_LEB_SUB,0U) ||
+        if(as->target->elf_policy->supports_fixup==NULL ||
+           !as->target->elf_policy->supports_fixup(minias_target_abi_view(as),positive_fixup,0U) ||
+           !as->target->elf_policy->supports_fixup(minias_target_abi_view(as),MINIAS_FIXUP_LEB_SUB,0U) ||
            stmt->section<0 || (size_t)stmt->section>=as->section_count) {
             minias_set_error(as,"unsupported-uleb-relocation:line=%zu",
                              stmt->line);

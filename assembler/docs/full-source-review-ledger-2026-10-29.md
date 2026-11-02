@@ -7,6 +7,27 @@
 > 和早期测试文件数量，均不能自动当作最新 HEAD 的事实。
 > “读过 / 修改过 / 完成清理”必须分别统计。
 
+### 2026-11-02 MC/Target → ELF ABI policy closure
+
+Read the actual TargetSpec / MCExpr / MCLayout / named relocation / CFI /
+ObjectModel / ELF Writer consumers together. One static read-only
+`MiniAsElfTargetPolicy` now owns each Target's ELF machine, object-specific
+Fixup capability and mapping, named relocations, GNU folding and synthesized
+symbol visibility, section-symbol density and attributes. The generic
+`MiniAsTargetOps` exports only an opaque `const` pointer, with no old
+ELF fields; numeric ELF section/group/symbol conversions now live only
+in the terminal writer after the concurrently integrated semantic
+Section/Symbol enum migration. The terminal Driver borrows this policy and passes it to the
+Writer, rather than rebuilding a duplicate callback table. Both Driver
+initialization and Writer reject a missing required policy. Four Targets,
+all Common ELF Fixup consumers, regression scripts and owner contracts
+were migrated as a single incompatible batch. Local `-Werror`, A0 30/30,
+26-case four-Target byte/negative parity and the Target workflow probes
+passed. Exact-head remote CI and raw Linux/QEMU evidence must be recorded
+against the final published commit. This does **not** imply COFF/Mach-O
+support; the existing Section/Symbol grammar is still explicitly ELF.
+See [full boundary record](elf-target-policy-boundary-2026-11-02.md).
+
 ### 2026-11-02 P06 Section metadata and payload become distinct owners
 
 **Exact previous published head:** `ebe366e89aa2aca8e4e494cf0966b01c1ebb182e`

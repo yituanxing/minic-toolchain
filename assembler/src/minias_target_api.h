@@ -57,7 +57,7 @@ typedef enum MiniAsSymbolVisibility {
 
 #define MINIAS_SECTION_UNDEF (-1)
 #define MINIAS_SECTION_ABS (-2)
-#define MINIAS_SECTION_COMMON (-3) /* semantic ELF SHN_COMMON */
+#define MINIAS_SECTION_COMMON (-3) /* abstract common-block section identity */
 #define MINIAS_MAX_ERROR 256U
 
 /* Section and Symbol are Common-owned mutable records, defined only in
@@ -470,13 +470,6 @@ bool minias_split_mc_operands(const char *,char *const [],const size_t [],
 char *minias_strdup(const char *text);
 char *minias_trim(char *text);
 
-typedef struct MiniAsObjectAttribute {
-    const char *name;
-    uint32_t type;
-    const unsigned char *data;
-    size_t size;
-} MiniAsObjectAttribute;
-
 struct MiniAsTargetSpec;
 /* Effective CFI ABI of a TargetSpec. Target can override only the fields
  * affected by its ISA/ABI profile (e.g. RV32 vs RV64), while Common owns
@@ -553,9 +546,12 @@ typedef struct MiniAsCfiMappingSink MiniAsCfiMappingSink;
 bool minias_cfi_mapping_define(MiniAsCfiMappingSink *,const char *stem,
                                bool always_suffix,int section,uint64_t offset);
 
+/* Only the opaque, immutable ELF policy pointer crosses this general Target
+ * boundary. ELF field numbers and relocation folding live in the ELF header. */
+typedef struct MiniAsElfTargetPolicy MiniAsElfTargetPolicy;
 typedef struct MiniAsTargetOps {
     char comment_prefix;
-    uint16_t elf_machine;
+    const MiniAsElfTargetPolicy *elf_policy;
     /* Optional: NULL means all directives go to the common grammar. */
     bool (*parse_target_directive)(MiniAsDirectiveContext *,
                                    const char *, const char *, size_t, bool *);
@@ -579,9 +575,6 @@ typedef struct MiniAsTargetOps {
      * conditional stack and arithmetic, Target only interprets native
      * register-token comparisons that are not integer expressions. */
     bool (*evaluate_target_if)(const char *, bool *);
-    /* Optional: NULL emits no target-specific attributes section. */
-    void (*object_attributes)(MiniAsTargetABIView, unsigned char,
-                              MiniAsObjectAttribute *);
     const char *name;
     /* Each target owns ISA/ABI/ELF profile validation; the CLI is target-neutral. */
     bool (*resolve_profile)(const char *, const char *,
@@ -606,15 +599,6 @@ typedef struct MiniAsTargetOps {
      * executable NOP sequence (e.g. GNU x86 `balign 16,0x90`). Common
      * must not choose machine-code bytes or hardcode a target's fill value. */
     bool (*explicit_alignment_fill_is_code_nop)(uint8_t);
-    /* Single ABI-aware semantic capability and relocation mapping. ELF32
-     * i386 and ELF64 AMD64 are different object profiles despite sharing
-     * one target parser; no generic fallback may re-admit a rejected kind. */
-    bool (*supports_fixup)(MiniAsTargetABIView,MiniAsFixupKind,unsigned);
-    uint32_t (*fixup_relocation_type)(MiniAsTargetABIView,MiniAsFixupKind,unsigned);
-    /* GNU named relocation spelling is ISA-owned; Common only places the
-     * semantic fixup at the explicit section offset. */
-    bool (*parse_named_relocation)(MiniAsTargetABIView,const char *,
-                                   MiniAsFixupKind *,unsigned *);
     bool supports_literal_pools; /* .ltorg/.pool only for a checked target */
     MiniAsLiteralPoolOrder literal_pool_order;
     /* Post-emission validation checks finalized section bytes/placements.
@@ -632,30 +616,6 @@ typedef struct MiniAsTargetOps {
     /* Target-advertised GNU implicit .eh_frame: never infer ISA from
      * numeric ELF e_machine inside Common CFI/layout dispatch. */
     bool cfi_implicit_eh_frame;
-    /* GNU x86 ld canonicalizes defined local ABS data relocations, including
-     * same-section references, to STT_SECTION + addend. Target policy,
-     * Common ELF ownership. */
-    bool fold_local_abs_relocation_to_section;
-    /* Some targets (including GNU i386/AMD64) canonicalize an ordinary
-     * source Fragment's local S - P data relocation to STT_SECTION +
-     * section-relative symbol offset.  Explicit .reloc and synthesized
-     * DWARF fixups retain their own identity/ownership contract. */
-    bool fold_local_pcrel_relocation_to_section;
-    /* Some ABIs (AArch64 GAS) canonicalize eligible relocations to defined
-     * local labels as STT_SECTION + offset, including PC-relative fixups. */
-    bool fold_defined_local_relocation_to_section;
-    bool fold_synthetic_local_relocation_to_section;
-    /* Private expression-anchor visibility is an object ABI policy. The
-     * generic symbol owner must not infer ELF visibility from the generated
-     * spelling or assume all targets share GNU GAS's choice. */
-    bool synthetic_expr_anchors_hidden;
-    /* A target may veto otherwise-selected STT_SECTION folding for symbol-
-     * sensitive relocation semantics (e.g. AArch64 function veneers and GOT
-     * entry identity). A NULL callback imposes no additional restriction. */
-    bool (*allow_local_section_symbol_fixup)(const MiniAsFixup *,
-                                            const MiniAsSymbolView *);
-    /* Section-symbol density is ABI/assembler policy, not an ELF constant. */
-    bool emit_all_section_symbols;
     /* Target mapping symbols for data synthesized by the Common CFI writer.
      * Called once at the first FDE, after the CIE has been serialized. */
     bool (*record_cfi_data_mapping)(MiniAsCfiMappingSink *,int,uint64_t);
@@ -690,7 +650,6 @@ typedef struct MiniAsTargetOps {
      * change the encoded code span after assembly (e.g. LoongArch RELAX).
      * CFI events spanning such a fixup need linker-resolved code distances. */
     bool (*cfi_linker_relaxation_marker)(MiniAsFixupKind);
-    bool cfi_anchors_hidden; /* target marks private CFI anchors STV_HIDDEN */
     unsigned cfi_negate_ra_opcode;
     unsigned cfi_initial_cfa_offset;
     bool cfi_initial_ra_saved;

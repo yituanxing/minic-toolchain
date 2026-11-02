@@ -112,23 +112,23 @@ static bool section_symbol_fixup(const MiniAsElfObjectView *as,const MiniAsFixup
     const MiniAsSymbol *sym;
     MiniAsSymbolView target_symbol;
     bool requested=fixup->prefer_section_symbol ||
-        as->policy.fold_defined_local_relocation_to_section ||
-        (as->policy.fold_local_pcrel_relocation_to_section &&
+        as->policy->fold_defined_local_relocation_to_section ||
+        (as->policy->fold_local_pcrel_relocation_to_section &&
          fixup->origin==MINIAS_FIXUP_ORIGIN_FRAGMENT &&
          (fixup->kind==MINIAS_FIXUP_PREL32 ||
           fixup->kind==MINIAS_FIXUP_PREL64)) ||
-        (as->policy.fold_synthetic_local_relocation_to_section &&
+        (as->policy->fold_synthetic_local_relocation_to_section &&
          fixup->origin==MINIAS_FIXUP_ORIGIN_SYNTHETIC_SECTION) ||
-        (as->policy.fold_local_abs_relocation_to_section &&
+        (as->policy->fold_local_abs_relocation_to_section &&
          fixup->kind==MINIAS_FIXUP_ABS);
     if(!requested || fixup->symbol_index>=as->model.symbol_count)
         return false;
     sym=&as->model.symbols[fixup->symbol_index];
     return sym->defined && sym->bind==MINIAS_SYMBOL_BINDING_LOCAL &&
            sym->section>=0 && (size_t)sym->section<as->model.section_count &&
-           (as->policy.allow_local_section_symbol_fixup==NULL ||
+           (as->policy->allow_local_section_symbol_fixup==NULL ||
             (minias_project_symbol(sym,&target_symbol) &&
-             as->policy.allow_local_section_symbol_fixup(fixup,&target_symbol)));
+             as->policy->allow_local_section_symbol_fixup(fixup,&target_symbol)));
 }
 
 /* Symbol-table membership is an ELF ObjectModel decision, not a Target
@@ -222,6 +222,12 @@ static bool minias_write_elf(MiniAsElfObjectView *as,
     size_t private_suffix=0U;
     bool ok = false;
 
+    if(as==NULL)return false;
+    if(as->policy==NULL || as->policy->supports_fixup==NULL ||
+       as->policy->fixup_relocation_type==NULL) {
+        elf_object_error(as,"missing-elf-target-policy");
+        return false;
+    }
     if(!minias_object_plan(&as->model,&object_plan,
                            as->error,sizeof(as->error)))return false;
     if(as->model.symbol_count>SIZE_MAX/sizeof(*symbol_states)) {
@@ -252,8 +258,8 @@ static bool minias_write_elf(MiniAsElfObjectView *as,
     }
     expected_symbol_count+=as->model.cu_file_count;
     memset(&attribute, 0, sizeof(attribute));
-    if (as->policy.object_attributes != NULL) {
-        as->policy.object_attributes(as->target_abi, elf_class,
+    if (as->policy->object_attributes != NULL) {
+        as->policy->object_attributes(as->target_abi, elf_class,
                                       &attribute);
     }
     emit_attribute = attribute.name != NULL;
@@ -435,8 +441,8 @@ static bool minias_write_elf(MiniAsElfObjectView *as,
          * A raw NONE request is never allowed to masquerade as an actual
          * relocation, regardless of a future target's numeric mapping. */
         if (input->kind == MINIAS_FIXUP_NONE ||
-            as->policy.supports_fixup==NULL ||
-            !as->policy.supports_fixup(as->target_abi,input->kind,input->width)) {
+            as->policy->supports_fixup==NULL ||
+            !as->policy->supports_fixup(as->target_abi,input->kind,input->width)) {
             elf_object_error(as, "unsupported-elf-fixup:kind=%u",
                              (unsigned)input->kind);
             goto done;
@@ -445,7 +451,7 @@ static bool minias_write_elf(MiniAsElfObjectView *as,
         output->offset = final_offset;
         output->symbol_index = input->symbol_index == SIZE_MAX ? SIZE_MAX :
                                symbol_map[input->symbol_index];
-        output->type = as->policy.fixup_relocation_type(
+        output->type = as->policy->fixup_relocation_type(
             as->target_abi,input->kind,input->width);
         output->field_width = input->width;
         output->addend = input->addend;
@@ -480,7 +486,7 @@ static bool minias_write_elf(MiniAsElfObjectView *as,
         }
     }
     spec.machine = as->object_machine != 0U ?
-                   as->object_machine : as->policy.elf_machine;
+                   as->object_machine : as->policy->elf_machine;
     spec.relocation_format = as->output_rel_relocations ?
                              MINIELF_RELOC_FORMAT_REL :
                              MINIELF_RELOC_FORMAT_RELA;
@@ -492,7 +498,7 @@ static bool minias_write_elf(MiniAsElfObjectView *as,
     spec.relocations = relocations;
     spec.relocation_count = fixup_count;
     spec.emit_section_symbols = true;
-    spec.emit_all_section_symbols = as->policy.emit_all_section_symbols;
+    spec.emit_all_section_symbols = as->policy->emit_all_section_symbols;
 
     if (!minielf_build_relocatable(&spec,
                                    &image,

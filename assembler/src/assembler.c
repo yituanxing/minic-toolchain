@@ -350,6 +350,12 @@ static bool minias_init_for_target(MiniAs *as,
         minias_set_error(as,"missing-assembler-target");
         return false;
     }
+    if(target->elf_policy==NULL ||
+       target->elf_policy->supports_fixup==NULL ||
+       target->elf_policy->fixup_relocation_type==NULL) {
+        minias_set_error(as,"missing-elf-target-policy");
+        return false;
+    }
     if(!minias_common_emission_init(as))return false;
     if(!minias_common_context_init(as) ||
        !minias_common_lowering_init(as) ||
@@ -488,23 +494,7 @@ static bool minias_write_final_object(MiniAs *as,const char *path,bool elf32) {
     object.model.fixup_count=fixups.count;
     object.model.cu_file_count=as->cu_file_count;
     object.model.cu_file=minias_object_cu_file;
-    object.policy=(MiniAsElfTargetPolicy){
-        .elf_machine=as->target->elf_machine,
-        .emit_all_section_symbols=as->target->emit_all_section_symbols,
-        .fold_defined_local_relocation_to_section=
-            as->target->fold_defined_local_relocation_to_section,
-        .fold_local_pcrel_relocation_to_section=
-            as->target->fold_local_pcrel_relocation_to_section,
-        .fold_synthetic_local_relocation_to_section=
-            as->target->fold_synthetic_local_relocation_to_section,
-        .fold_local_abs_relocation_to_section=
-            as->target->fold_local_abs_relocation_to_section,
-        .allow_local_section_symbol_fixup=
-            as->target->allow_local_section_symbol_fixup,
-        .supports_fixup=as->target->supports_fixup,
-        .fixup_relocation_type=as->target->fixup_relocation_type,
-        .object_attributes=as->target->object_attributes
-    };
+    object.policy=as->target->elf_policy;
     object.target_abi=minias_target_abi_view(as);
     object.object_machine=as->target_spec->object.machine;
     object.output_rel_relocations=as->target_spec->object.rel_relocations;

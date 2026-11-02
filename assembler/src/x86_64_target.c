@@ -1,4 +1,5 @@
 #include "minias_target_api.h"
+#include "minias_elf_target_policy.h"
 #include "x86_64_fixup_kinds.h"
 
 #include <ctype.h>
@@ -5138,8 +5139,18 @@ static bool x64_named_relocation(MiniAsTargetABIView view,const char *name,
     }
     return false;
 }
+static const MiniAsElfTargetPolicy x64_elf_policy = {
+    .elf_machine = 62U, /* EM_X86_64; i386 overrides in TargetSpec */
+    .fixup_relocation_type = x64_reloc_for_object,
+    .supports_fixup = x64_supports_fixup,
+    .parse_named_relocation = x64_named_relocation,
+    .fold_local_abs_relocation_to_section = true,
+    .fold_local_pcrel_relocation_to_section = true,
+    .fold_synthetic_local_relocation_to_section = true
+};
+
 static const MiniAsTargetOps ops={
-    .name="x86_64",.comment_prefix='#',.elf_machine=62U,
+    .name="x86_64",.comment_prefix='#',.elf_policy=&x64_elf_policy,
     .resolve_profile=x64_profile,.parse_mcinst=x64_parse,
     .init_target_state=x64_init_target_state,
     .capture_site_state=x64_capture_site_state,
@@ -5150,11 +5161,8 @@ static const MiniAsTargetOps ops={
     .plan_instruction_relaxation=x64_plan_instruction_relaxation,
     .append_code_alignment=x64_code_align,
     .explicit_alignment_fill_is_code_nop=x64_explicit_alignment_fill_is_code_nop,
-    .fixup_relocation_type=x64_reloc_for_object,
     .resolve_cfi_register=x64_resolve_cfi_register,
     .resolve_cfi_abi=x64_resolve_cfi_abi,
-    .supports_fixup=x64_supports_fixup,
-    .parse_named_relocation=x64_named_relocation,
     .default_exec_alignment=1U,
     .word_directive_width=2U,.align_directive_bytes=true,
     .dot_relative_fixup=MINIAS_FIXUP_PREL32,
@@ -5163,9 +5171,6 @@ static const MiniAsTargetOps ops={
      * eight-byte stack slots, return address=RIP(16), CFA base=RSP(7).
      * The Common CFI encoder already owns the real .debug_frame FDE. */
     .cfi_implicit_eh_frame=true,
-    .fold_local_abs_relocation_to_section=true,
-    .fold_local_pcrel_relocation_to_section=true,
-    .fold_synthetic_local_relocation_to_section=true,
     /* Intermediate FDEs use 4B DWARF32 padding; only the final FDE
      * closes the ELF section at 8B, matching GNU GAS. */
     .cfi_eh_fde_alignment=4U,

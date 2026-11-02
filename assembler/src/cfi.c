@@ -113,7 +113,7 @@ bool minias_anchor_here(MiniAs *as, size_t *index) {
     return minias_common_context_define_source_fragment_anchor(
         as,name,MINIAS_SOURCE_CFI,as->current_section,
         as->current_subsection,sub->size,as->stmt_count,0,0U,
-        as->target->cfi_anchors_hidden,index);
+        as->target->elf_policy->cfi_anchors_hidden,index);
 }
 
 static bool cfi_append(MiniAs *as,unsigned kind,unsigned reg,int64_t value) {

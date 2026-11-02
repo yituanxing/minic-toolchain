@@ -424,14 +424,32 @@ import re
 
 root = Path('assembler/src')
 header = (root / 'minias_target_api.h').read_text()
+elf_header = (root / 'minias_elf_target_policy.h').read_text()
 for file in ('minias_internal.h', 'mc_expr.c', 'elf_writer.c', 'x86_64_target.c'):
     source = (root / file).read_text()
     if 'supports_fixup_for_object' in source or \
        'fixup_relocation_type_for_object' in source:
         raise SystemExit(f'{file}: duplicate generic/object Fixup policy remains')
 if not re.search(r'bool\s*\(\*supports_fixup\)\s*\('
-                 r'MiniAsTargetABIView', header):
+                 r'MiniAsTargetABIView', elf_header):
     raise SystemExit('Fixup capability lost Object ABI profile')
+if 'const MiniAsElfTargetPolicy *elf_policy;' not in header or \
+        re.search(r'\(\*supports_fixup\)|\belf_machine;', header):
+    raise SystemExit('ELF ABI policy leaked back into generic TargetOps')
+for macro in ('MINIAS_SHF_', 'MINIAS_SHT_', 'MINIAS_STB_', 'MINIAS_STT_',
+              'MINIAS_STV_', 'MINIAS_GRP_COMDAT'):
+    if '#define '+macro in header or '#define '+macro in elf_header:
+        raise SystemExit('obsolete ELF numeric encoding survived: '+macro)
+for target in ('aarch64_target.c', 'riscv_target.c',
+               'loongarch64_target.c', 'x86_64_target.c'):
+    source = (root / target).read_text()
+    if not re.search(r'static const MiniAsElfTargetPolicy\s+\w+\s*=',source) or \
+            not re.search(r'\.elf_policy\s*=\s*&\w+',source):
+        raise SystemExit('Target lacks one borrowed static ELF policy: '+target)
+driver = (root / 'assembler.c').read_text()
+if 'object.policy=as->target->elf_policy;' not in driver or \
+        'object.policy=(MiniAsElfTargetPolicy)' in driver:
+    raise SystemExit('Driver copied or reconstituted target ELF callback table')
 print('MINIAS_MC_FIXUP_ABI=PASS policy=single_object_aware_interface')
 PY
 # Target object/CFI/relocation policy sees only two read-only ABI facts.
@@ -442,6 +460,7 @@ import re
 
 root = Path('assembler/src')
 header = (root / 'minias_target_api.h').read_text()
+elf_header = (root / 'minias_elf_target_policy.h').read_text()
 definition = header.split('typedef struct MiniAsTargetABIView {',1)[1].split('}',1)[0]
 if re.sub(r'/\*.*?\*/', '', definition, flags=re.S).strip() != \
         'const void *target_state;\n    bool elf32;':
@@ -450,7 +469,8 @@ policies = ('object_attributes','supports_fixup','fixup_relocation_type',
             'parse_named_relocation','leb128_relocations_enabled',
             'resolve_cfi_abi','resolve_cfi_register')
 for policy in policies:
-    if not re.search(r'\(\*'+policy+r'\)\s*\(\s*MiniAsTargetABIView',header):
+    if not re.search(r'\(\*'+policy+r'\)\s*\(\s*MiniAsTargetABIView',
+                     header+'\n'+elf_header):
         raise SystemExit('Target policy still receives MiniAs: '+policy)
 targets = {
     'riscv_target.c': ('riscv_supports_fixup','riscv_fixup_relocation_type',

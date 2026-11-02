@@ -1,4 +1,5 @@
 #include "minias_target_api.h"
+#include "minias_elf_target_policy.h"
 #include "riscv_target.h"
 #include "riscv_profile.h"
 #include <stdio.h>
@@ -1135,6 +1136,16 @@ static void riscv_resolve_cfi_abi(MiniAsTargetABIView view, MiniAsCfiABI *abi) {
     }
 }
 
+static const MiniAsElfTargetPolicy riscv_elf_policy = {
+    .elf_machine = 243U, /* EM_RISCV */
+    .object_attributes = riscv_object_attributes,
+    .supports_fixup = riscv_supports_fixup,
+    .fixup_relocation_type = riscv_fixup_relocation_type,
+    .allow_local_section_symbol_fixup =
+        riscv_allow_local_section_symbol_fixup,
+    .emit_all_section_symbols = true
+};
+
 static const MiniAsTargetOps riscv_ops = {
     .comment_prefix = '#',
     .init_target_state = riscv_init_target_state,
@@ -1143,10 +1154,9 @@ static const MiniAsTargetOps riscv_ops = {
     .capture_site_state = riscv_capture_site_state,
     .prepare_layout = riscv_prepare_layout,
     .default_exec_alignment_for_site = riscv_default_exec_alignment_for_site,
-    .elf_machine = 243U, /* EM_RISCV */
+    .elf_policy = &riscv_elf_policy,
     .parse_target_directive = riscv_target_directive,
     .validate_common_directive = riscv_validate_common_directive,
-    .object_attributes = riscv_object_attributes,
     .name = "riscv",
     .resolve_profile = riscv_resolve_profile,
     .parse_mcinst = minias_riscv_parse_mcinst,
@@ -1154,12 +1164,8 @@ static const MiniAsTargetOps riscv_ops = {
     .encode = minias_riscv_encode,
     .plan_instruction_relaxation = riscv_plan_instruction_relaxation,
     .append_code_alignment = riscv_emit_code_alignment,
-    .supports_fixup = riscv_supports_fixup,
-    .fixup_relocation_type = riscv_fixup_relocation_type,
     .leb128_reloc_mode = 2U, /* psABI SET_ULEB128/SUB_ULEB128 */
     .leb128_relocations_enabled=riscv_leb128_relocations_enabled,
-    .allow_local_section_symbol_fixup=
-        riscv_allow_local_section_symbol_fixup,
     .validate_output = strict_base_i_check_sections,
     .finalize_output = riscv_record_object_mapping_symbols,
     /* RV64 DWARF register numbering: ra=x1, sp=x2; DW_CFA code unit
@@ -1176,7 +1182,6 @@ static const MiniAsTargetOps riscv_ops = {
     .cfi_initial_cfa_register_only = true,
     .cfi_fde_range_relocations = true,
     .cfi_advance_reloc_mode = 2U,
-    .emit_all_section_symbols = true,
     .resolve_cfi_abi = riscv_resolve_cfi_abi,
 };
 
