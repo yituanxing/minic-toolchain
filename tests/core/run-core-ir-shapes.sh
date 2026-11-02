@@ -16,6 +16,7 @@ cases=(
     fixed fixed-null fixed-overcapacity
     symbol symbol-null symbol-overcapacity
     enum enum-pointer enum-null enum-overcapacity enum-missing
+    variadic
 )
 
 for mode in native asan; do
@@ -36,4 +37,4 @@ for mode in native asan; do
     done
 done
 
-echo 'CORE_IR_SHAPES=PASS valid=4 malformed=7 native=11 ASAN_UBSAN=11 C_producer_claim=none'
+echo 'CORE_IR_SHAPES=PASS valid=5 malformed=7 native=12 ASAN_UBSAN=12 C_producer_claim=none'

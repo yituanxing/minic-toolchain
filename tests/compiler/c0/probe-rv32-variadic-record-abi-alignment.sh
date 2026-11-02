@@ -41,4 +41,41 @@ for item in natural:1 packed:1 aligned:2 wide_scalar:2; do
     ' "$work/abi.s"
 done
 
+# A definition's own variadic bit must reach Core and RV32 frame construction.
+# Inspect only the prologue before the first Core block: ordinary incoming
+# parameter stores inside take_fixed's block are not a varargs save area.
+awk '
+    $0 == "take_variadic:" { variadic = 1; saw_variadic = 1; next }
+    $0 == "take_fixed:" { fixed = 1; saw_fixed = 1; next }
+    variadic && /^\.Ltake_variadic_rv32_bb0:$/ {
+        variadic = 0; ended_variadic = 1; next
+    }
+    fixed && /^\.Ltake_fixed_rv32_bb0:$/ {
+        fixed = 0; ended_fixed = 1; next
+    }
+    variadic && /^  sw a[1-7], [0-9]+\(sp\)$/ {
+        reg = substr($2, 1, 2)
+        split($3, parts, "(")
+        saved[reg]++
+        offsets[reg] = parts[1] + 0
+    }
+    fixed && /^  sw a[1-7],/ { fixed_saves++ }
+    END {
+        if (!saw_variadic || !ended_variadic || !saw_fixed || !ended_fixed ||
+            fixed_saves != 0) {
+            print "RV32_VARIADIC_DEFINITION=FAIL missing prologue or fixed callee saved unnamed registers" > "/dev/stderr"
+            exit 1
+        }
+        for (i = 1; i <= 7; ++i) {
+            reg = "a" i
+            if (saved[reg] != 1 || (i > 1 && offsets[reg] != offsets["a" (i - 1)] + 4)) {
+                printf "RV32_VARIADIC_DEFINITION=FAIL %s saves=%d offset=%d\n", \
+                    reg, saved[reg], offsets[reg] > "/dev/stderr"
+                exit 1
+            }
+        }
+    }
+' "$work/abi.s"
+
 echo 'RV32_VARIADIC_PAIR=PASS natural_align4=a1/a2 packed_align1=a1/a2 align8=a2/a3 scalar8=a2/a3'
+echo 'RV32_VARIADIC_DEFINITION=PASS callee_saved=a1..a7 fixed_callee_saved=none'

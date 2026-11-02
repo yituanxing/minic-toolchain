@@ -327,6 +327,12 @@ bool minic_core_function_set_calling_convention(
     return true;
 }
 
+bool minic_core_function_set_variadic(MinicCoreFunction *function, bool is_variadic) {
+    if (function == NULL || function->name == NULL) return false;
+    function->is_variadic = is_variadic;
+    return true;
+}
+
 bool minic_core_function_add_enum_type(MinicCoreFunction *function,
                                        MinicEnumId enum_id,
                                        MinicType effective_integer_type) {

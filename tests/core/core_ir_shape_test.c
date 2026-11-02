@@ -49,6 +49,14 @@ static bool build_function(MinicCoreFunction *function, const char *mode) {
         instruction.kind = MINIC_CORE_INSTRUCTION_PARAMETER;
         instruction.type = result_type;
         instruction.value.parameter_index = 0U;
+    } else if (strcmp(mode, "variadic") == 0) {
+        result_type = minic_type_int();
+        parameter_type = result_type;
+        parameter_count = 1U;
+        (void)memset(&instruction, 0, sizeof(instruction));
+        instruction.kind = MINIC_CORE_INSTRUCTION_PARAMETER;
+        instruction.type = result_type;
+        instruction.value.parameter_index = 0U;
     } else {
         return false;
     }
@@ -56,6 +64,8 @@ static bool build_function(MinicCoreFunction *function, const char *mode) {
                                            result_type,
                                            parameter_count == 0U ? NULL : &parameter_type,
                                            parameter_count) ||
+        (strcmp(mode, "variadic") == 0 &&
+         !minic_core_function_set_variadic(function, true)) ||
         !minic_core_function_add_block(function, &block) ||
         !minic_core_function_append_value_instruction(
             function, block, &instruction, &value)) return false;
@@ -77,12 +87,22 @@ static int run_case(const char *case_name) {
     else if (strcmp(case_name, "enum-pointer") == 0) kind = "enum-pointer";
     else if (strncmp(case_name, "enum-missing", 12U) == 0) kind = "enum-missing";
     else if (strncmp(case_name, "enum", 4U) == 0) kind = "enum";
+    else if (strcmp(case_name, "variadic") == 0) kind = "variadic";
     if (kind == NULL) return 90;
 
     minic_core_function_initialize(&function);
     if (!build_function(&function, kind)) {
         minic_core_function_destroy(&function);
         return 91;
+    }
+    if (strcmp(case_name, "variadic") == 0 &&
+        (!function.is_variadic ||
+         !minic_core_function_set_variadic(&function, false) ||
+         function.is_variadic ||
+         !minic_core_function_set_variadic(&function, true) ||
+         !function.is_variadic)) {
+        minic_core_function_destroy(&function);
+        return 94;
     }
     if (strcmp(case_name, "fixed-null") == 0) {
         MinicCoreFixedRegisterBinding *saved = function.fixed_register_bindings;

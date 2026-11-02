@@ -551,6 +551,9 @@ typedef struct MinicCoreFunction {
     MinicType *parameter_types;
     size_t parameter_count;
     MinicFunctionCallingConvention calling_convention;
+    /* Definition-side signature fact: ABI callee entry (notably RV32
+       register-save areas) must not have to reopen the C function. */
+    bool is_variadic;
     /* Integer-specialization clones share Semantic statement ids with their
        source. Their executable Core block labels are already function-scoped,
        so do not also export the source-id .Luser_* compatibility aliases. */
@@ -605,6 +608,7 @@ bool minic_core_function_set_signature(MinicCoreFunction *function,
                                        size_t parameter_count);
 bool minic_core_function_set_calling_convention(
     MinicCoreFunction *function, MinicFunctionCallingConvention convention);
+bool minic_core_function_set_variadic(MinicCoreFunction *function, bool is_variadic);
 bool minic_core_function_add_enum_type(MinicCoreFunction *function,
                                        MinicEnumId enum_id,
                                        MinicType effective_integer_type);

@@ -377,3 +377,45 @@ R1–R5 累计生产源码净 −384 行，纳入 R6 后为**净 −303 行**；
 payload 家族需要新的 typed 结构；两者都须先证明 Source 准入域、
 Machine 防伪和原 ELF/物理效果，再退休对应旧分派。不要以不受
 本机工具支持的交叉运行测试冒充实测。
+
+## IR-P0：Core 类型迁移入口契约与定义侧 variadic 事实
+
+起点：`2f8b74f`（R6；同一 `refactor/minic-target-language-boundary`
+分支）。这是 Core-owned 类型迁移的**准备批**，并非宣称 CoreTypeId、
+CoreModule 或 Machine IR 已经实现。
+
+1. 新建 [Core 类型入口与 Module 边界契约](core-type-ingress-and-module-boundary-2026-11-02.md)：
+   选择 TU 共享且 Core-owned 的 TypeContext，明确递归 Record 的两阶段
+   登记、跨函数类型身份/生命周期、布局和 ABI shape、SourcePolicy 的
+   typed ASM 来源证明、转换失败事务和五目标按语义家族验收。
+   Module 只负责未来的编译单元函数、数据、符号和重定位，不另建
+   并行 Global initializer walker；Machine IR 继续后置。
+2. `MinicCoreFunction` 补齐 `is_variadic` 定义签名事实；C→Core lowering
+   在入口捕获它，RV32 callee frame 改从 Core 读取，而不再为该事实
+   回查 C `MinicFunction`。不改变现有 RV32 Frame、ABI 或寄存器布局算法。
+3. 扩展 Core schema 的 native/ASan 形状正例，RV32 变参/非变参
+   definition 对照以及 `a1..a7` 入口保存区验证；保留原 Record
+   对齐与传参布局负担，不将 `MC-014/015` 已知风险标为已修复。
+
+**本批统计（不含文档）：**生产 `+13/-1`、净 `+12` 行（4 文件）；
+测试 `+83/-1`、净 `+82` 行（4 文件）。新增 P0 契约文档
+142 行，架构索引新增 1 行；本节进度台账单独统计。
+当前 `src` 生产 C/H/def 文件 **343** 个；历史 C38 的 342
+为当时基线，不作为本批的当前分母。
+
+| 本批本地实测 | 结果与限制 |
+| --- | --- |
+| Debug `minic-cc` 全构建 | **PASS** |
+| `make check-core-ir-shapes` | **PASS**：12 native、12 ASan/UBSan |
+| RV32 变参 Record 对齐与 callee 保存区 | **PASS**：原四组入参位置、新 variadic/fixed 定义侧对照 |
+| `make check-core-ir-shapes-source` | **PASS**：五 ISA `-S`，x86 GNU/MiniC native exit 42 |
+| `make check-rv64-abi` | **PASS** |
+| `make check-x86_64-sysv-odd-record-abi` | **PASS**：GNU/MiniC caller/callee 四组合 |
+| `make check-aarch64-fp-pointer-record-abi` | **PASS**：五目标 134 项 `-S`，A64 negative 3 项；A64 ELF/QEMU **SKIP** |
+| `check-minic-target-boundaries.sh` | **PASS**；历史 fingerprint `drift=145` 另计 |
+| 完整五目标 GNU ELF/QEMU/Linux 运行 | **NOT_RUN**；当前环境缺部分交叉工具链，不得记成 PASS |
+
+仍 OPEN 的 `MC-014/015/076`、`MC-064/072/085` 等由原问题
+台账独立跟踪。下一批进入现有 Core IR 的类型身份/所有权迁移，
+按标量、聚合、函数签名及五目标消费者分批切换；每个切片同时
+删除已被替代的 C 查询路径，不保留永久平行 Core IR v2。

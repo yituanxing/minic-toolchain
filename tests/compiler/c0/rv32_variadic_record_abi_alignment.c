@@ -41,3 +41,27 @@ PackedPair32 return_after_byte(OneByte lead, PackedPair32 pair) {
 PackedPair32 call_after_byte(OneByte lead, PackedPair32 pair) {
     return return_after_byte(lead, pair);
 }
+
+/* The direct Core callee signature and the Core function definition must
+ * agree on variadicness. RV32 saves the unnamed a-registers in the callee's
+ * variadic register area, but must not do so for an ordinary definition. */
+unsigned int take_variadic(unsigned int named, ...) {
+    __builtin_va_list args;
+    unsigned int tail;
+    __builtin_va_start(args, named);
+    tail = __builtin_va_arg(args, unsigned int);
+    __builtin_va_end(args);
+    return named + tail;
+}
+
+unsigned int take_fixed(unsigned int named, unsigned int tail) {
+    return named + tail;
+}
+
+unsigned int call_take_variadic(void) {
+    return take_variadic(7U, 35U);
+}
+
+unsigned int call_take_fixed(void) {
+    return take_fixed(7U, 35U);
+}

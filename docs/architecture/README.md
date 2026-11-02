@@ -283,6 +283,7 @@ Frontend 多数 `probe=*parser` 只是词法前瞻、Core 不同强度的常量�
   [Record 布局查询](record-datalayout-query-v1.md)、
   [全局对象布局查询](global-object-datalayout-query-v1.md)。
 - Core：
+  [Core 类型入口与后续 Module 边界（P0，待实施）](core-type-ingress-and-module-boundary-2026-11-02.md)、
   [IR 表示边界](representation-seams-and-deferred-ir.md)、
   [Core IR module ownership](core-ir-module-ownership-2026-10-21.md)、
   [Core expression ownership](core-expression-module-ownership-2026-10-21.md)、
