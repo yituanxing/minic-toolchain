@@ -77,12 +77,13 @@ for token in ('minias_internal.h','MiniAs *','minias_assemble_file(',
         raise SystemExit('format dispatcher gained mutable or ELF-wire semantics: '+token)
 for path in ('assembler/src/object_model.c',
              'assembler/src/object_writer.c',
+             'assembler/src/coff_writer.c',
              'assembler/src/object_output.c'):
     if path not in make:
         raise SystemExit('new owner not built: '+path)
 print('MINIAS_OBJECT_MODEL_TRANSACTION=PASS sections=logical_reference '
       'fixups=final_offset_owned file_output=generic_atomic '
-      'ELF=only_format_projection persistent_copy=none')
+      'ELF_COFF=terminal_format_projection persistent_copy=none')
 PY
 work=$(mktemp -d)
 trap 'rm -rf -- "$work"' EXIT

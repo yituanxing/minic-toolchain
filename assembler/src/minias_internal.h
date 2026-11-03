@@ -273,8 +273,16 @@ bool minias_parse_size_end_addend(const char *,const char *,int64_t *);
 /* Target and generic data fixups require an active fragment. */
 /* Common-only checked Fixup field-width contract, no Target state. */
 bool minias_fixup_field_width(MiniAsFixupKind kind,unsigned width);
-/* Zero-sized machine markers are legal only if the active target ABI names
- * the exact (kind,width) pair; Common LEB rules stay format independent. */
+/* Ask the selected output format's immutable Target policy for an actual
+ * relocatable (kind,width) pair.  No Common producer may infer this from
+ * ELF relocation numbers or an ISA-specific fixup enum. */
+bool minias_target_output_supports_fixup(const MiniAs *,MiniAsFixupKind,unsigned);
+bool minias_target_output_parse_named_relocation(const MiniAs *,const char *,
+                                                MiniAsFixupKind *,unsigned *);
+bool minias_target_output_expr_anchors_hidden(const MiniAs *);
+bool minias_target_output_cfi_anchors_hidden(const MiniAs *);
+/* Zero-sized machine markers are legal only if the selected output format
+ * and target ABI support the pair; Common LEB rules stay format-neutral. */
 bool minias_fixup_field_width_for_target(const MiniAs *,MiniAsFixupKind,unsigned);
 bool minias_add_fixup(MiniAs *as,
                       uint64_t offset,

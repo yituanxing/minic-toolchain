@@ -497,6 +497,7 @@ static bool minias_write_final_object(MiniAs *as,const char *path) {
     object.model.cu_file_count=as->cu_file_count;
     object.model.cu_file=minias_object_cu_file;
     object.elf.policy=as->target->elf_policy;
+    object.coff.policy=as->target->coff_policy;
     object.target_abi=minias_target_abi_view(as);
     object.spec=&as->target_spec->object;
     object.target_output_features=as->target_output_features;
@@ -530,6 +531,13 @@ int minias_assemble_config(const char *input_path,
        config->layout.address_size!=8U) {
         if(diagnostic!=NULL)
             fprintf(diagnostic,"minic-as: unsupported-target-layout\n");
+        return 2;
+    }
+    if(config->object.format==MINIAS_OBJECT_FORMAT_COFF &&
+       (config->layout.address_size!=8U || config->target==NULL ||
+        config->target->coff_policy==NULL)) {
+        if(diagnostic!=NULL)
+            fprintf(diagnostic,"minic-as: unsupported-target-coff-profile\n");
         return 2;
     }
     graph=minias_source_graph_create();

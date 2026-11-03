@@ -3,6 +3,7 @@
 
 #include "minias_object_model.h"
 #include "minias_elf_target_policy.h"
+#include "minias_coff_target_policy.h"
 
 /* One terminal, stack-scoped request. Common owns the retained semantic
  * records and emitted bytes; this dispatcher borrows them and selects a
@@ -19,6 +20,9 @@ typedef struct MiniAsObjectWriterRequest {
     struct {
         const MiniAsElfTargetPolicy *policy;
     } elf;
+    struct {
+        const MiniAsCoffTargetPolicy *policy;
+    } coff;
 
     char error[MINIAS_MAX_ERROR];
 } MiniAsObjectWriterRequest;

@@ -575,12 +575,16 @@ typedef struct MiniAsCfiMappingSink MiniAsCfiMappingSink;
 bool minias_cfi_mapping_define(MiniAsCfiMappingSink *,const char *stem,
                                bool always_suffix,int section,uint64_t offset);
 
-/* Only the opaque, immutable ELF policy pointer crosses this general Target
- * boundary. ELF field numbers and relocation folding live in the ELF header. */
+/* Object-format-specific policies cross this general Target boundary only
+ * as opaque immutable capabilities; wire constants stay with the format
+ * writer, and machine relocation selection remains Target-owned. */
 typedef struct MiniAsElfTargetPolicy MiniAsElfTargetPolicy;
+typedef struct MiniAsCoffTargetPolicy MiniAsCoffTargetPolicy;
 typedef struct MiniAsTargetOps {
     char comment_prefix;
     const MiniAsElfTargetPolicy *elf_policy;
+    /* COFF relocations are Target-owned too; NULL means unsupported format. */
+    const MiniAsCoffTargetPolicy *coff_policy;
     /* Optional: NULL means all directives go to the common grammar. */
     bool (*parse_target_directive)(MiniAsDirectiveContext *,
                                    const char *, const char *, size_t, bool *);
@@ -743,9 +747,10 @@ typedef struct MiniAsTargetDataLayout {
 } MiniAsTargetDataLayout;
 
 /* Format policy stays separate from the common machine data layout.
- * Only ELF has a writer today; unknown format values fail closed. */
+ * Unsupported formats and Target/format combinations fail closed. */
 typedef enum MiniAsObjectFormat {
-    MINIAS_OBJECT_FORMAT_ELF = 0
+    MINIAS_OBJECT_FORMAT_ELF = 0,
+    MINIAS_OBJECT_FORMAT_COFF = 1
 } MiniAsObjectFormat;
 typedef struct MiniAsElfObjectSpec {
     /* Target encoders may OR output-only ELF flags during Emission. */

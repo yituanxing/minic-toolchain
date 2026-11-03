@@ -1223,8 +1223,7 @@ bool minias_compile_data_mc(MiniAs *as, MiniAsStmt *stmt,
  * Common must ask Target policy before choosing a fixup strategy. */
 static bool target_supports_fixup(const MiniAs *as,
                                   MiniAsFixupKind kind,unsigned width) {
-    return as->target->elf_policy->supports_fixup!=NULL &&
-           as->target->elf_policy->supports_fixup(minias_target_abi_view(as),kind,width);
+    return minias_target_output_supports_fixup(as,kind,width);
 }
 
 /* Every fixed DATA path writes the same low-order little-endian bits.
@@ -1304,7 +1303,7 @@ static bool emit_symbol_minus_dot(MiniAs *as,
          * the ELF writer must not infer it from their private spelling. */
         if(!minias_common_context_define_output_anchor(
                as,anchor_name,stmt->section,0U,relocation_offset,
-               as->target->elf_policy->synthetic_expr_anchors_hidden,NULL))return false;
+               minias_target_output_expr_anchors_hidden(as),NULL))return false;
 
         return minias_section_append_zero(as, stmt->section, width) &&
                minias_add_fixup_symbol_id(as,
@@ -1611,7 +1610,7 @@ bool minias_emit_mc_data(MiniAs *as,const MiniAsStmt *stmt) {
                          sizeof(anchor_name),"expr",++as->expr_anchor_counter) ||
                    !minias_common_context_define_output_anchor(
                          as,anchor_name,stmt->section,0U,at,
-                         as->target->elf_policy->synthetic_expr_anchors_hidden,
+                         minias_target_output_expr_anchors_hidden(as),
                          NULL) ||
                    !minias_section_append_zero(as,stmt->section,data->width) ||
                    !minias_add_fixup(as,at,MINIAS_FIXUP_ADD,data->width,

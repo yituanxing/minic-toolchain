@@ -2400,8 +2400,7 @@ static bool handle_named_reloc(MiniAs *as,const char *args,size_t line) {
     name=minias_trim(comma1);
     if(comma2)symbol=minias_trim(comma2);
     ok=as->current_section>=0 && as->current_subsection==0U &&
-       as->target->elf_policy->parse_named_relocation &&
-       as->target->elf_policy->parse_named_relocation(minias_target_abi_view(as),name,&kind,&width) &&
+       minias_target_output_parse_named_relocation(as,name,&kind,&width) &&
        minias_evaluate_absolute_expression(as,offset_text,&offset) && offset>=0 &&
        (symbol==NULL || (*symbol!='\0' && !strchr(symbol,',') &&
                          minias_parse_symbol_addend(symbol,&expression)));

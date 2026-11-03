@@ -1,5 +1,6 @@
 #include "minias_target_api.h"
 #include "minias_elf_target_policy.h"
+#include "minias_coff_target_policy.h"
 #include "x86_64_fixup_kinds.h"
 
 #include <ctype.h>
@@ -5190,8 +5191,35 @@ static const MiniAsElfTargetPolicy x64_elf_policy = {
     .fold_synthetic_local_relocation_to_section = true
 };
 
+/* PE/COFF has in-place REL addends, unlike ELF64 RELA.  This Target only
+ * declares relocation *identity*; the COFF writer owns section-byte
+ * adjustment and wire serialization. Windows x64 initially admits only
+ * the relocations necessary for true linked code and data. */
+static bool x64_coff_relocation(MiniAsTargetABIView view,
+                                MiniAsFixupKind kind,unsigned width,
+                                uint16_t *type) {
+    if(type==NULL || view.address_size!=8U)return false;
+    if((kind==MINIAS_FIXUP_ABS || kind==MINIAS_FIXUP_X64_ABS64) &&
+       width==8U) {*type=0x0001U;return true;} /* IMAGE_REL_AMD64_ADDR64 */
+    if(kind==MINIAS_FIXUP_ABS && width==4U) {
+        *type=0x0002U;return true; /* IMAGE_REL_AMD64_ADDR32 */
+    }
+    if((kind==MINIAS_FIXUP_PREL32 ||
+        kind==MINIAS_FIXUP_X64_PC32 || kind==MINIAS_FIXUP_X64_PLT32) &&
+       width==4U) {
+        *type=0x0004U;return true; /* IMAGE_REL_AMD64_REL32 */
+    }
+    return false;
+}
+
+static const MiniAsCoffTargetPolicy x64_coff_policy={
+    .machine=0x8664U,
+    .map_fixup=x64_coff_relocation
+};
+
 static const MiniAsTargetOps ops={
     .name="x86_64",.comment_prefix='#',.elf_policy=&x64_elf_policy,
+    .coff_policy=&x64_coff_policy,
     .resolve_profile=x64_profile,.parse_mcinst=x64_parse,
     .init_target_state=x64_init_target_state,
     .capture_site_state=x64_capture_site_state,

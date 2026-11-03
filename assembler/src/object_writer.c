@@ -1,5 +1,6 @@
 #include "minias_object_writer.h"
 #include "minias_elf_object_view.h"
+#include "minias_coff_object_view.h"
 
 #include <stdio.h>
 
@@ -8,6 +9,7 @@
  * any private Common/Target mutable record. */
 bool minias_write_object(MiniAsObjectWriterRequest *request,const char *path) {
     MiniAsElfObjectView elf={0};
+    MiniAsCoffObjectView coff={0};
     const MiniAsElfTargetPolicy *policy;
     if(request==NULL)return false;
     request->error[0]='\0';
@@ -15,6 +17,26 @@ bool minias_write_object(MiniAsObjectWriterRequest *request,const char *path) {
         (void)snprintf(request->error,sizeof(request->error),
                        "invalid-object-writer-request");
         return false;
+    }
+    if(request->spec->format==MINIAS_OBJECT_FORMAT_COFF) {
+        const MiniAsCoffTargetPolicy *coff_policy=request->coff.policy;
+        if(coff_policy==NULL || coff_policy->map_fixup==NULL ||
+           request->target_abi.address_size!=8U) {
+            (void)snprintf(request->error,sizeof(request->error),
+                           "unsupported-coff-target-policy");
+            return false;
+        }
+        coff.model=request->model;
+        coff.target_abi=request->target_abi;
+        coff.machine=coff_policy->machine;
+        coff.map_fixup=coff_policy->map_fixup;
+        if(!minias_write_coff_object(&coff,path)) {
+            (void)snprintf(request->error,sizeof(request->error),"%s",
+                           coff.error[0]!='\0'?coff.error:
+                           "coff-object-write-failed");
+            return false;
+        }
+        return true;
     }
     if(request->spec->format!=MINIAS_OBJECT_FORMAT_ELF) {
         (void)snprintf(request->error,sizeof(request->error),

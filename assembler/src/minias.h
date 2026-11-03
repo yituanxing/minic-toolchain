@@ -44,6 +44,15 @@ int minias_assemble_invocation_with_options(const char *input_path,
                                            MiniAsLinkRelaxMode link_relax,
                                            bool suppress_target_attributes,
                                            FILE *diagnostic);
+/* A real object-format selection without extending the public Invocation
+ * record. The only non-ELF format admitted today is Windows x86-64 COFF. */
+int minias_assemble_invocation_with_object_format(const char *input_path,
+                                                  const char *output_path,
+                                                  const MiniAsInvocation *invocation,
+                                                  MiniAsLinkRelaxMode link_relax,
+                                                  bool suppress_target_attributes,
+                                                  const char *format,
+                                                  FILE *diagnostic);
 
 int minias_assemble_file(const char *input_path, const char *output_path, FILE *diagnostic);
 int minias_assemble_file_class(const char *input_path,

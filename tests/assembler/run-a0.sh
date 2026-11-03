@@ -36,6 +36,7 @@ bash tests/assembler/probe-irp-reused-frame-gnu.sh
 bash tests/assembler/probe-common-numeric-literal-gnu.sh
 bash tests/assembler/probe-common-dwarf-view-size-gnu.sh
 bash tests/assembler/probe-minias-atomic-output.sh
+bash tests/assembler/probe-coff-object-structural.sh
 bash tests/assembler/probe-mc-deferred-shift-gnu.sh
 bash tests/assembler/probe-elf-sectionkey-unique-inherited-group-gnu.sh
 bash tests/assembler/probe-rv-i-audit-api.sh

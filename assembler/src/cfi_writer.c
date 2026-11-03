@@ -149,8 +149,8 @@ static bool advance_cfi(MiniAs *as,int sec,size_t from_symbol,
         {
             MiniAsFixupKind positive=as->target->cfi_advance_reloc_mode==2U ?
                 MINIAS_FIXUP_CFI_SET6 : MINIAS_FIXUP_CFI_ADD6;
-            if(!as->target->elf_policy->supports_fixup(minias_target_abi_view(as),positive,1U) ||
-               !as->target->elf_policy->supports_fixup(minias_target_abi_view(as),MINIAS_FIXUP_CFI_SUB6,1U)) {
+            if(!minias_target_output_supports_fixup(as,positive,1U) ||
+               !minias_target_output_supports_fixup(as,MINIAS_FIXUP_CFI_SUB6,1U)) {
                 minias_set_error(as,"unsupported-cfi-short-relocation");
                 return false;
             }
@@ -417,8 +417,7 @@ static bool cfi_emit_section_core(MiniAs *as,bool eh,
     int section;
     if(eh && (!as->target->cfi_implicit_eh_frame ||
               minias_cfi_abi(as).address_size!=as->target_spec->layout.address_size ||
-              as->target->elf_policy->supports_fixup==NULL ||
-              !as->target->elf_policy->supports_fixup(minias_target_abi_view(as),MINIAS_FIXUP_PREL32,4U))) {
+              !minias_target_output_supports_fixup(as,MINIAS_FIXUP_PREL32,4U))) {
         minias_set_error(as,"unsupported-target-eh-frame");
         return false;
     }
@@ -608,6 +607,14 @@ static bool cfi_emit_section(MiniAs *as,bool eh) {
 
 bool minias_cfi_emit(MiniAs *as) {
     if(as->cfi_proc_count==0U)return true;
+    /* x86-64 COFF unwind requires a Windows SEH contract (.pdata/.xdata).
+     * The existing DWARF CFI encoder is correct for ELF but cannot silently
+     * substitute an ELF-style .eh_frame for Windows unwind metadata. */
+    if(as->target_spec!=NULL &&
+       as->target_spec->object.format==MINIAS_OBJECT_FORMAT_COFF) {
+        minias_set_error(as,"unsupported-coff-cfi:windows-seh-not-implemented");
+        return false;
+    }
     if(as->cfi_eh_frame && !cfi_emit_section(as,true))return false;
     if(as->cfi_debug_frame && !cfi_emit_section(as,false))return false;
     return true;

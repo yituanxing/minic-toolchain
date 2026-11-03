@@ -1,5 +1,6 @@
 #include "minias_common_emission_private.h"
 #include "minias_common_context.h"
+#include "minias_coff_target_policy.h"
 
 #include <stdint.h>
 #include <stdlib.h>
@@ -51,14 +52,64 @@ bool minias_fixup_field_width(MiniAsFixupKind kind,unsigned width) {
            width==4U || width==8U;
 }
 
+/* Common's MC producers retain semantic FixupKind values, not on-disk
+ * relocation codes.  The immutable format/Target policy alone decides
+ * whether a pending fixup can be represented in the requested object. */
+bool minias_target_output_supports_fixup(const MiniAs *as,
+                                         MiniAsFixupKind kind,unsigned width) {
+    if(as==NULL || as->target==NULL || as->target_spec==NULL)return false;
+    switch(as->target_spec->object.format) {
+        case MINIAS_OBJECT_FORMAT_ELF:
+            return as->target->elf_policy!=NULL &&
+                   as->target->elf_policy->supports_fixup!=NULL &&
+                   as->target->elf_policy->supports_fixup(
+                       minias_target_abi_view(as),kind,width);
+        case MINIAS_OBJECT_FORMAT_COFF: {
+            uint16_t relocation_type=0U;
+            return as->target->coff_policy!=NULL &&
+                   as->target->coff_policy->map_fixup!=NULL &&
+                   as->target->coff_policy->map_fixup(
+                       minias_target_abi_view(as),kind,width,&relocation_type);
+        }
+        default:return false;
+    }
+}
+
+/* GNU `.reloc` names are part of the ELF assembler dialect.  A future
+ * COFF relocation spelling needs its own policy, not ELF R_* reuse. */
+bool minias_target_output_parse_named_relocation(const MiniAs *as,
+                                                 const char *name,
+                                                 MiniAsFixupKind *kind,
+                                                 unsigned *width) {
+    return as!=NULL && as->target!=NULL && as->target_spec!=NULL &&
+           as->target_spec->object.format==MINIAS_OBJECT_FORMAT_ELF &&
+           as->target->elf_policy!=NULL &&
+           as->target->elf_policy->parse_named_relocation!=NULL &&
+           as->target->elf_policy->parse_named_relocation(
+               minias_target_abi_view(as),name,kind,width);
+}
+
+/* Output-only visibility of synthetic anchors does not change their
+ * SymbolID, source provenance, or the unique Common Context owner. */
+bool minias_target_output_expr_anchors_hidden(const MiniAs *as) {
+    return as!=NULL && as->target!=NULL && as->target_spec!=NULL &&
+           as->target_spec->object.format==MINIAS_OBJECT_FORMAT_ELF &&
+           as->target->elf_policy!=NULL &&
+           as->target->elf_policy->synthetic_expr_anchors_hidden;
+}
+
+bool minias_target_output_cfi_anchors_hidden(const MiniAs *as) {
+    return as!=NULL && as->target!=NULL && as->target_spec!=NULL &&
+           as->target_spec->object.format==MINIAS_OBJECT_FORMAT_ELF &&
+           as->target->elf_policy!=NULL &&
+           as->target->elf_policy->cfi_anchors_hidden;
+}
+
 bool minias_fixup_field_width_for_target(const MiniAs *as,
                                          MiniAsFixupKind kind,unsigned width) {
-    if(minias_fixup_field_width(kind,width))return true;
-    return as!=NULL && kind>=0x1000U && width==0U &&
-           as->target!=NULL && as->target->elf_policy!=NULL &&
-           as->target->elf_policy->supports_fixup!=NULL &&
-           as->target->elf_policy->supports_fixup(minias_target_abi_view(as),
-                                                 kind,width);
+    return (minias_fixup_field_width(kind,width) ||
+            (kind>=0x1000U && width==0U)) &&
+           minias_target_output_supports_fixup(as,kind,width);
 }
 
 /* MCData fixups used to bypass the instruction transaction and publish
@@ -86,6 +137,7 @@ static bool minias_stage_common_fixup(MiniAs *as,uint64_t offset,
        (size_t)section>=as->section_count ||
        as->sections[(size_t)section].type==MINIAS_SECTION_KIND_NOBITS ||
        offset<owner->offset || !minias_fixup_field_width(kind,width) ||
+       !minias_target_output_supports_fixup(as,kind,width) ||
        (name==NULL && symbol_index>=minias_common_context_symbol_count(as))) {
         minias_set_error(as,"invalid-mcdata-fixup:line=%zu",owner->line);
         return false;
