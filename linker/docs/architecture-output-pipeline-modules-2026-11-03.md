@@ -4,7 +4,7 @@
 
 The output-side implementation formerly occupied most of
 `linker/src/linker_core.inc`.  Its original declaration and execution order
-has now been preserved across five included implementation files.  These
+has now been preserved across six included implementation files.  These
 are **physical phase boundaries**, not independently compiled objects: the
 linker still has one C translation unit, and the public linker API, ELF
 format decisions, and runtime behavior remain unchanged.
@@ -13,8 +13,9 @@ format decisions, and runtime behavior remain unchanged.
 | --- | --- | --- |
 | `linker_layout.inc` | RISC-V relocation encoding, static GOT and relaxation, static/shared address layout, linker-script expression and section placement | Computes and mutates working-section placement before ELF output is serialized. |
 | `linker_output_plan.inc` | `MiniLdOutputPlan`, surviving output-section identity, non-alloc placement, section headers and bytes | Projects the placed working sections into output sections; does not own original input identities. |
-| `linker_final_symbols.inc` | `MiniLdFinalSymbols`, final symbol-value and symbol-table projection | Reads the placed working sections and their canonical symbols for either final ELF kind. |
-| `linker_static_output.inc` | `MiniLdProgramPlan`, static PT_LOAD policy and ET_EXEC writer | Owns executable segment policy and final static emission, including scripted output. |
+| `linker_final_symbols.inc` | `MiniLdFinalSymbols` plus `MiniLdFinalSectionTables` projection | Reads canonical symbols and the OutputPlan; builds the shared final ELF symbol/name/section-header trailer. |
+| `linker_program_plan.inc` | Common `MiniLdProgramPlan` lifetime and final PHDR range validation | Both writers consume one output-neutral program-header contract, while each retains its own segment policy. |
+| `linker_static_output.inc` | Static PT_LOAD selection and ET_EXEC writer | Owns executable segment policy and final static emission, including scripted output. |
 | `linker_shared_output.inc` | `MiniLdSharedImage`, dynamic symbols/relocations, dynamic metadata, ET_DYN writer and shared-link entry point | Owns shared-object output state and its writer without mixing it into ET_EXEC policy. |
 
 `linker_core.inc` continues to own the earlier admission, input graph,
@@ -37,9 +38,37 @@ invert those intra-translation-unit dependencies.
 3. Static program segments and shared dynamic segments remain distinct
    policies.  The small scripted PT_LOAD comparator lives with the static
    segment owner, rather than general placement helpers.
-4. The existing static/ET_DYN ELF writers still decide final offsets,
-   relocations, and headers.  No new writer abstraction or intermediate
+4. The existing static/ET_DYN ELF writers still decide LOAD boundaries,
+   relocation handling and ELF kind. No generic image writer or intermediate
    representation is introduced in this pass.
+
+## Shared output contracts after consolidation
+
+The subsequent ownership pass makes these boundaries operational, rather
+than only moving implementation text:
+
+- Script placement now writes each `section_owner`, output VMA and final
+  output file base into the single layout-owned storage from the outset.
+  The duplicate temporary mirrors and success-only ownership transfer were
+  removed. The separate `output_defined` bit stays because VMA zero is valid;
+  synthetic section capacity and vDSO's file-offset rewrite remain intact.
+- `MiniLdOutputPlan.work_count` bounds its own work-section-to-ELF-index
+  projection. `MiniLdFinalSymbols.entry_count` owns the final symbol count;
+  writers do not infer these sizes from the mutable input resolver.
+- `MiniLdFinalSectionTables` owns the final `.symtab`, `.strtab`, `.shstrtab`
+  names, ELF section headers, byte offsets and trailer emission. Both writers
+  consume it and release it through one destructor. ET_EXEC retains physical
+  **symtab → strtab → shstrtab** order, while ET_DYN retains **strtab →
+  symtab → shstrtab**. Shared dynamic section `sh_link`/`sh_info` adjustment
+  remains in the ET_DYN writer after common header projection.
+- `MiniLdProgramPlan` and its range validator move out of the static writer
+  to `linker_program_plan.inc`. Static and shared segment builders continue to
+  use distinct policies; the shared writer no longer relies on the static
+  writer to declare its common program-header type.
+
+The layout object is consumed by both executable and shared-object output.
+Its name is `MiniLdLayout`, with direct consumers migrated rather than a
+compatibility alias.
 
 ## Validation and limits
 
@@ -48,3 +77,12 @@ including input/work-section ownership, COMDAT/archive admission, RISC-V
 relocation lifecycle, script/GC, output-section ownership, ET_EXEC and
 ET_DYN output.  Its outputs are host ELF fixture checks; Linux/QEMU runtime
 acceptance is separate and is not claimed here.
+
+Two regression extensions specifically guard the consolidated output
+contract: static profile phases must occur exactly once in their existing
+order, and the vDSO linker-script ET_DYN path must also preserve ELF section,
+symbol, version and relocation identity after an intermediate `-r` link.
+The expanded vDSO sanitizer coverage additionally exposed an empty
+`.rela.dyn` case: zero relocations legitimately leave its data pointer NULL.
+The dynamic relocation writer now avoids calling `memset` on that absent
+buffer, without changing any emitted bytes.

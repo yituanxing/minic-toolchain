@@ -20,45 +20,12 @@ static int static_load_segment_compare(const void *lhs, const void *rhs) {
     return 0;
 }
 
-typedef struct MiniLdProgramPlan {
-    Elf64_Phdr *entries;
-    size_t count;
-} MiniLdProgramPlan;
-
-static void minild_program_plan_destroy(MiniLdProgramPlan *plan) {
-    free(plan->entries);
-    memset(plan, 0, sizeof(*plan));
-}
-
-static bool minild_program_plan_validate(const MiniLdState *state,
-                                         const MiniLdProgramPlan *plan,
-                                         size_t image_size) {
-    size_t i;
-    for (i = 0U; i < plan->count; ++i) {
-        const Elf64_Phdr *ph = &plan->entries[i];
-        uint64_t align = ph->p_align;
-        if (ph->p_filesz > ph->p_memsz ||
-            ph->p_offset > image_size ||
-            ph->p_filesz > image_size - (size_t)ph->p_offset ||
-            ph->p_vaddr > UINT64_MAX - ph->p_memsz ||
-            (align > 1U &&
-             (((align & (align - 1U)) != 0U) ||
-              ph->p_offset % align != ph->p_vaddr % align))) {
-            fprintf(state->diagnostics,
-                    "minic-ld: invalid-final-program-range:%zu:type=%u\n",
-                    i, ph->p_type);
-            return false;
-        }
-    }
-    return true;
-}
-
 /* The static segment policy is deliberately distinct from ET_DYN: default
  * executables leave the ELF header outside PT_LOAD, while scripted images
  * preserve LMA and merge only three-way-contiguous sections. */
 static bool minild_static_program_plan_build(
     const MiniLdState *state,
-    const MiniLdStaticLayout *layout,
+    const MiniLdLayout *layout,
     const MiniLdOutputPlan *output_plan,
     MiniLdProgramPlan *plan) {
     MiniLdStaticLoadSegment *loads = NULL;
@@ -186,23 +153,16 @@ failed:
 }
 
 static bool static_write_executable(MiniLdState *state,
-                                    const MiniLdStaticLayout *layout,
+                                    const MiniLdLayout *layout,
                                     const char *path,
                                     uint64_t entry) {
     MiniLdOutputPlan output_plan = {0};
     MiniLdProgramPlan program_plan = {0};
+    MiniLdFinalSectionTables final_tables = {0};
     size_t load_image_size;
-    size_t output_section_count;
-    size_t symtab_index;
-    size_t strtab_index;
-    size_t shstrtab_index;
     size_t cursor;
-    size_t section_header_offset;
     size_t total_size;
-    uint32_t *section_name_offsets = NULL;
     MiniLdFinalSymbols final_symbols = {0};
-    MiniLdBuffer shstrtab = {NULL, 0U, 0U};
-    Elf64_Shdr *headers = NULL;
     unsigned char *image = NULL;
     Elf64_Ehdr header;
     size_t i;
@@ -265,17 +225,6 @@ static bool static_write_executable(MiniLdState *state,
                 "minic-ld: too-many-static-output-sections\n");
         goto done;
     }
-    output_section_count = output_plan.count + 3U;
-
-    section_name_offsets =
-        calloc(output_plan.count == 0U ? 1U : output_plan.count,
-               sizeof(*section_name_offsets));
-    headers = calloc(output_section_count + 1U, sizeof(*headers));
-    if (section_name_offsets == NULL ||
-        headers == NULL ||
-        !buffer_append_zero(&shstrtab, 1U)) {
-        goto oom;
-    }
 
     if (!minild_output_plan_place_nonalloc(state, layout, &output_plan,
                                            load_image_size, &cursor)) {
@@ -295,93 +244,21 @@ static bool static_write_executable(MiniLdState *state,
             goto done;
         }
     }
-    for (i = 0U; i < output_plan.count; ++i) {
-        if (!buffer_append_string(&shstrtab,
-                                  output_plan.sections[i].name,
-                                  &section_name_offsets[i])) {
-            goto oom;
-        }
-    }
-
     if (!minild_final_symbols_build(state, layout, &output_plan,
                                     &final_symbols)) {
         goto oom;
     }
-
-    symtab_index = 1U + output_plan.count;
-    strtab_index = symtab_index + 1U;
-    shstrtab_index = symtab_index + 2U;
-    {
-        uint32_t symtab_name;
-        uint32_t strtab_name;
-        uint32_t shstrtab_name;
-
-        if (!buffer_append_string(&shstrtab,
-                                  ".symtab",
-                                  &symtab_name) ||
-            !buffer_append_string(&shstrtab,
-                                  ".strtab",
-                                  &strtab_name) ||
-            !buffer_append_string(&shstrtab,
-                                  ".shstrtab",
-                                  &shstrtab_name)) {
-            goto oom;
-        }
-        headers[symtab_index].sh_name = symtab_name;
-        headers[strtab_index].sh_name = strtab_name;
-        headers[shstrtab_index].sh_name = shstrtab_name;
+    if (!minild_final_section_tables_build(&output_plan, &final_symbols,
+                                           cursor, MINILD_FINAL_SYMTAB_FIRST,
+                                           &final_tables)) {
+        goto oom;
     }
-
-    if (!minild_output_plan_section_headers(state, &output_plan,
-                                             section_name_offsets, headers)) {
+    if (!minild_output_plan_section_headers(
+            state, &output_plan, final_tables.output_name_offsets,
+            final_tables.headers)) {
         goto done;
     }
-
-    {
-        size_t aligned;
-        if (!align_up_size(cursor, 8U, &aligned)) {
-            goto oom;
-        }
-        cursor = aligned;
-    }
-    headers[symtab_index].sh_type = SHT_SYMTAB;
-    headers[symtab_index].sh_offset = cursor;
-    headers[symtab_index].sh_size =
-        (state->resolver.count + 1U) * sizeof(Elf64_Sym);
-    headers[symtab_index].sh_link = (Elf64_Word)strtab_index;
-    headers[symtab_index].sh_info =
-        (Elf64_Word)final_symbols.local_count;
-    headers[symtab_index].sh_addralign = 8U;
-    headers[symtab_index].sh_entsize = sizeof(Elf64_Sym);
-    if (!add_size(cursor,
-                  headers[symtab_index].sh_size,
-                  &cursor)) {
-        goto oom;
-    }
-
-    headers[strtab_index].sh_type = SHT_STRTAB;
-    headers[strtab_index].sh_offset = cursor;
-    headers[strtab_index].sh_size = final_symbols.names.size;
-    headers[strtab_index].sh_addralign = 1U;
-    if (!add_size(cursor, final_symbols.names.size, &cursor)) {
-        goto oom;
-    }
-
-    headers[shstrtab_index].sh_type = SHT_STRTAB;
-    headers[shstrtab_index].sh_offset = cursor;
-    headers[shstrtab_index].sh_size = shstrtab.size;
-    headers[shstrtab_index].sh_addralign = 1U;
-    if (!add_size(cursor, shstrtab.size, &cursor) ||
-        !align_up_size(cursor, 8U, &section_header_offset) ||
-        output_section_count + 1U >
-            (SIZE_MAX - section_header_offset) /
-                sizeof(Elf64_Shdr)) {
-        goto oom;
-    }
-
-    total_size =
-        section_header_offset +
-        (output_section_count + 1U) * sizeof(Elf64_Shdr);
+    total_size = final_tables.total_size;
     if (!minild_program_plan_validate(state, &program_plan, total_size)) {
         goto done;
     }
@@ -401,37 +278,27 @@ static bool static_write_executable(MiniLdState *state,
     header.e_version = EV_CURRENT;
     header.e_entry = entry;
     header.e_phoff = sizeof(Elf64_Ehdr);
-    header.e_shoff = section_header_offset;
+    header.e_shoff = final_tables.header_offset;
     header.e_flags = state->elf_flags;
     header.e_ehsize = sizeof(Elf64_Ehdr);
     header.e_phentsize = sizeof(Elf64_Phdr);
     header.e_phnum = (Elf64_Half)program_plan.count;
     header.e_shentsize = sizeof(Elf64_Shdr);
-    header.e_shnum =
-        (Elf64_Half)(output_section_count + 1U);
-    header.e_shstrndx = (Elf64_Half)shstrtab_index;
+    header.e_shnum = (Elf64_Half)final_tables.count;
+    header.e_shstrndx = (Elf64_Half)final_tables.shstrtab_index;
     memcpy(image, &header, sizeof(header));
 
-    memcpy(image + sizeof(Elf64_Ehdr), program_plan.entries,
-           program_plan.count * sizeof(Elf64_Phdr));
+    if (program_plan.count != 0U) {
+        memcpy(image + sizeof(Elf64_Ehdr), program_plan.entries,
+               program_plan.count * sizeof(Elf64_Phdr));
+    }
 
     if (!minild_output_plan_emit_sections(state, layout, &output_plan,
                                           image, total_size)) {
         goto done;
     }
 
-    memcpy(image + headers[symtab_index].sh_offset,
-           final_symbols.entries,
-           headers[symtab_index].sh_size);
-    memcpy(image + headers[strtab_index].sh_offset,
-           final_symbols.names.data,
-           final_symbols.names.size);
-    memcpy(image + headers[shstrtab_index].sh_offset,
-           shstrtab.data,
-           shstrtab.size);
-    memcpy(image + section_header_offset,
-           headers,
-           (output_section_count + 1U) * sizeof(*headers));
+    minild_final_section_tables_emit(&final_tables, &final_symbols, image);
 
     file = fopen(path, "wb");
     if (file == NULL) {
@@ -472,11 +339,9 @@ done:
         (void)remove(path);
     }
     free(image);
-    free(headers);
+    minild_final_section_tables_destroy(&final_tables);
     minild_program_plan_destroy(&program_plan);
     minild_output_plan_destroy(&output_plan);
-    free(section_name_offsets);
     minild_final_symbols_destroy(&final_symbols);
-    free(shstrtab.data);
     return ok;
 }

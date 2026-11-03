@@ -1145,7 +1145,7 @@ static int minild_link_static_pipeline(
     bool garbage_collect,
     FILE *diagnostics) {
     MiniLdState state;
-    MiniLdStaticLayout layout;
+    MiniLdLayout layout;
     MiniLdStaticGot got;
     MiniLdScript script;
     const char *entry_symbol;
@@ -1231,7 +1231,7 @@ static int minild_link_static_pipeline(
 
 done:
     if (layout_ready) {
-        static_layout_destroy(&layout);
+        minild_layout_destroy(&layout);
     }
     minild_script_destroy(&script);
     static_got_destroy(&got);

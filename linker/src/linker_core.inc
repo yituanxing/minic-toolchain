@@ -2429,14 +2429,17 @@ done:
 }
 
 /* Output-phase implementation order is intentional: layout/relocation
- * primitives, output-section projection, final symbol projection, then
- * distinct static and shared ELF writers.  These remain one C translation
+ * primitives, output-section projection, final symbols/section tables,
+ * common program-header contracts, then distinct static and shared ELF
+ * writers. These remain one C translation
  * unit; moving an owner here does not introduce an extra state copy. */
 #include "linker_layout.inc"
 
 #include "linker_output_plan.inc"
 
 #include "linker_final_symbols.inc"
+
+#include "linker_program_plan.inc"
 
 #include "linker_static_output.inc"
 

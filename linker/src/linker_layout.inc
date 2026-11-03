@@ -10,7 +10,7 @@ typedef struct MiniLdScriptBytePatch {
     unsigned char value;
 } MiniLdScriptBytePatch;
 
-typedef struct MiniLdStaticLayout {
+typedef struct MiniLdLayout {
     uint64_t *section_vaddr;
     uint64_t *section_laddr;
     size_t *section_file_offset;
@@ -37,7 +37,7 @@ typedef struct MiniLdStaticLayout {
     bool have_rx;
     bool have_rw;
     bool scripted;
-} MiniLdStaticLayout;
+} MiniLdLayout;
 
 typedef struct MiniLdAlignSite {
     size_t offset;
@@ -670,7 +670,7 @@ done:
 }
 
 static bool static_build_layout_at(MiniLdState *state,
-                                   MiniLdStaticLayout *layout,
+                                   MiniLdLayout *layout,
                                    uint64_t base_vaddr) {
     const size_t page = 4096U;
     const size_t header_page = 4096U;
@@ -818,12 +818,12 @@ static bool static_build_layout_at(MiniLdState *state,
 }
 
 static bool static_build_layout(MiniLdState *state,
-                                MiniLdStaticLayout *layout) {
+                                MiniLdLayout *layout) {
     return static_build_layout_at(state, layout, UINT64_C(0x10000));
 }
 
 static bool shared_build_layout(MiniLdState *state,
-                                MiniLdStaticLayout *layout) {
+                                MiniLdLayout *layout) {
     /*
      * ET_DYN load bias is defined relative to virtual address zero.
      * Keep the ELF/program headers at vaddr 0 and place the first
@@ -836,11 +836,9 @@ static bool shared_build_layout(MiniLdState *state,
 
 typedef struct MiniLdScriptLayoutState {
     MiniLdState *state;
-    MiniLdStaticLayout *layout;
+    MiniLdLayout *layout;
     const MiniLdScript *script;
     bool *section_placed;
-    size_t *section_owner;
-    uint64_t *output_vaddr;
     bool *output_defined;
     uint64_t dot;
     uint64_t load_bias;
@@ -907,7 +905,7 @@ static bool script_layout_section_value(void *context,
         if (command->kind == MINILD_SCRIPT_OUTPUT_SECTION &&
             script_state->output_defined[i] &&
             strcmp(command->value.section.name, name) == 0) {
-            *value_out = script_state->output_vaddr[i];
+            *value_out = script_state->layout->script_output_start[i];
             return true;
         }
     }
@@ -968,7 +966,7 @@ static bool script_layout_place_section(MiniLdScriptLayoutState *script_state,
     script_state->dot = aligned;
     script_state->layout->section_vaddr[section_index] = script_state->dot;
     script_state->section_placed[section_index] = true;
-    script_state->section_owner[section_index] = command_index;
+    script_state->layout->section_owner[section_index] = command_index;
     if (script_state->script->commands[command_index].kind ==
             MINILD_SCRIPT_OUTPUT_SECTION) {
         section->output_name =
@@ -1114,7 +1112,7 @@ static bool script_layout_bind_output_symbols(
     for (i = 0U; i < script_state->state->work.count; ++i) {
         MiniLdSection *section = &script_state->state->work.sections[i];
 
-        if (script_state->section_owner[i] == command_index &&
+        if (script_state->layout->section_owner[i] == command_index &&
             !script_state->layout->section_discarded[i] &&
             (section->flags & SHF_ALLOC) != 0U &&
             (anchor == SIZE_MAX ||
@@ -1280,7 +1278,6 @@ static bool script_layout_process_output(MiniLdScriptLayoutState *script_state,
     }
 
     output_start = script_state->dot;
-    script_state->output_vaddr[command_index] = output_start;
     script_state->output_defined[command_index] = true;
     script_state->layout->script_output_start[command_index] = output_start;
 
@@ -1334,7 +1331,7 @@ static bool script_layout_process_output(MiniLdScriptLayoutState *script_state,
                 return false;
             }
             {
-                MiniLdStaticLayout *layout = script_state->layout;
+                MiniLdLayout *layout = script_state->layout;
                 if (layout->script_byte_count == layout->script_byte_capacity) {
                     size_t capacity = layout->script_byte_capacity == 0U
                                           ? 16U : layout->script_byte_capacity * 2U;
@@ -1380,7 +1377,7 @@ static bool script_layout_process_output(MiniLdScriptLayoutState *script_state,
         bool has_input = false;
 
         for (i = 0U; i < script_state->state->work.count; ++i) {
-            if (script_state->section_owner[i] == command_index &&
+            if (script_state->layout->section_owner[i] == command_index &&
                 !script_state->layout->section_discarded[i]) {
                 has_input = true;
                 break;
@@ -1430,7 +1427,7 @@ static bool script_layout_process_output(MiniLdScriptLayoutState *script_state,
             }
             script_state->layout->section_vaddr[synthetic_index] =
                 output_start;
-            script_state->section_owner[synthetic_index] = command_index;
+            script_state->layout->section_owner[synthetic_index] = command_index;
             script_state->section_placed[synthetic_index] = true;
         }
     }
@@ -1450,7 +1447,7 @@ static bool script_layout_process_output(MiniLdScriptLayoutState *script_state,
     }
 
     for (i = 0U; i < script_state->state->work.count; ++i) {
-        if (script_state->section_owner[i] == command_index) {
+        if (script_state->layout->section_owner[i] == command_index) {
             script_state->layout->section_laddr[i] =
                 lma_start +
                 (script_state->layout->section_vaddr[i] - output_start);
@@ -1490,15 +1487,13 @@ static int minild_compare_file_order(const void *lhs, const void *rhs) {
 
 static bool static_build_script_layout(MiniLdState *state,
                                        const MiniLdScript *script,
-                                       MiniLdStaticLayout *layout,
+                                       MiniLdLayout *layout,
                                        size_t shared_headers_size) {
     MiniLdScriptLayoutState script_state;
     MiniLdFileOrder *file_order = NULL;
     bool *command_deferred = NULL;
     size_t i;
     size_t alloc_count = 0U;
-    size_t *owner_file_base = NULL;
-    uint64_t *owner_vaddr_base = NULL;
     uint64_t *owner_max_align = NULL;
     size_t *owner_remaining = NULL;
     size_t storage_count;
@@ -1534,9 +1529,9 @@ static bool static_build_script_layout(MiniLdState *state,
     script_state.section_placed =
         calloc(storage_count,
                sizeof(*script_state.section_placed));
-    script_state.section_owner =
+    layout->section_owner =
         malloc((storage_count) *
-               sizeof(*script_state.section_owner));
+               sizeof(*layout->section_owner));
     layout->script_fill = calloc(script->command_count == 0U ? 1U :
                                  script->command_count, sizeof(*layout->script_fill));
     layout->script_have_fill = calloc(script->command_count == 0U ? 1U :
@@ -1551,19 +1546,12 @@ static bool static_build_script_layout(MiniLdState *state,
     layout->script_output_file_base = malloc((script->command_count == 0U ? 1U :
                                                script->command_count) *
                                               sizeof(*layout->script_output_file_base));
-    script_state.output_vaddr =
-        calloc(script->command_count == 0U ? 1U : script->command_count,
-               sizeof(*script_state.output_vaddr));
     script_state.output_defined =
         calloc(script->command_count == 0U ? 1U : script->command_count,
                sizeof(*script_state.output_defined));
     command_deferred =
         calloc(script->command_count == 0U ? 1U : script->command_count,
                sizeof(*command_deferred));
-    owner_file_base = malloc((script->command_count == 0U ? 1U :
-                              script->command_count) * sizeof(*owner_file_base));
-    owner_vaddr_base = calloc(script->command_count == 0U ? 1U :
-                              script->command_count, sizeof(*owner_vaddr_base));
     owner_max_align = calloc(script->command_count == 0U ? 1U :
                               script->command_count, sizeof(*owner_max_align));
     owner_remaining = calloc(script->command_count == 0U ? 1U :
@@ -1573,15 +1561,13 @@ static bool static_build_script_layout(MiniLdState *state,
         layout->section_file_offset == NULL ||
         layout->section_discarded == NULL ||
         script_state.section_placed == NULL ||
-        script_state.section_owner == NULL ||
+        layout->section_owner == NULL ||
         layout->script_fill == NULL || layout->script_have_fill == NULL ||
         layout->script_output_start == NULL ||
         layout->script_output_end == NULL ||
         layout->script_output_file_base == NULL ||
-        script_state.output_vaddr == NULL ||
         script_state.output_defined == NULL ||
-        command_deferred == NULL || owner_file_base == NULL ||
-        owner_vaddr_base == NULL || owner_max_align == NULL ||
+        command_deferred == NULL || owner_max_align == NULL ||
         owner_remaining == NULL) {
         fprintf(state->diagnostics,
                 "minic-ld: out-of-memory:linker-script-layout\n");
@@ -1590,10 +1576,9 @@ static bool static_build_script_layout(MiniLdState *state,
 
     for (i = 0U; i < state->work.count; ++i) {
         layout->section_file_offset[i] = SIZE_MAX;
-        script_state.section_owner[i] = SIZE_MAX;
+        layout->section_owner[i] = SIZE_MAX;
     }
     for (i = 0U; i < script->command_count; ++i) {
-        owner_file_base[i] = SIZE_MAX;
         layout->script_output_file_base[i] = SIZE_MAX;
     }
     script_state.state = state;
@@ -1703,7 +1688,7 @@ static bool static_build_script_layout(MiniLdState *state,
 
     for (i = 0U; i < state->work.count; ++i) {
         MiniLdSection *section = &state->work.sections[i];
-        size_t owner = script_state.section_owner[i];
+        size_t owner = layout->section_owner[i];
 
         if (layout->section_discarded[i] ||
             (section->flags & SHF_ALLOC) == 0U ||
@@ -1771,7 +1756,7 @@ static bool static_build_script_layout(MiniLdState *state,
     for (i = 0U; i < alloc_count; ++i) {
         size_t best = file_order[i].index;
         const MiniLdSection *section = &state->work.sections[best];
-        size_t owner = script_state.section_owner[best];
+        size_t owner = layout->section_owner[best];
         size_t aligned;
 
         if (!align_up_size(file_cursor,
@@ -1783,20 +1768,23 @@ static bool static_build_script_layout(MiniLdState *state,
             goto done;
         }
         if (owner != SIZE_MAX && owner < script->command_count &&
-            owner_file_base[owner] != SIZE_MAX) {
+            layout->script_output_file_base[owner] != SIZE_MAX) {
             uint64_t delta;
             size_t expected;
 
-            if (layout->section_vaddr[best] < owner_vaddr_base[owner] ||
-                layout->section_vaddr[best] - owner_vaddr_base[owner] >
-                    SIZE_MAX - owner_file_base[owner]) {
+            if (layout->section_vaddr[best] <
+                    layout->script_output_start[owner] ||
+                layout->section_vaddr[best] -
+                    layout->script_output_start[owner] >
+                    SIZE_MAX - layout->script_output_file_base[owner]) {
                 fprintf(state->diagnostics,
                         "minic-ld: unsupported-script-output-order:%s\n",
                         section->name);
                 goto done;
             }
-            delta = layout->section_vaddr[best] - owner_vaddr_base[owner];
-            expected = owner_file_base[owner] + (size_t)delta;
+            delta = layout->section_vaddr[best] -
+                    layout->script_output_start[owner];
+            expected = layout->script_output_file_base[owner] + (size_t)delta;
             /* An ELF output section has one sh_offset and one sh_addr.
              * Every member therefore needs the SAME file/VMA displacement.
              * Preserve script dot holes as real zero-filled file gaps. */
@@ -1841,9 +1829,8 @@ static bool static_build_script_layout(MiniLdState *state,
                             section->name);
                     goto done;
                 }
-                owner_file_base[owner] = file_cursor - (size_t)leading;
-                owner_vaddr_base[owner] = layout->script_output_start[owner];
-                layout->script_output_file_base[owner] = owner_file_base[owner];
+                layout->script_output_file_base[owner] =
+                    file_cursor - (size_t)leading;
             }
         }
         layout->section_file_offset[best] = file_cursor;
@@ -1859,13 +1846,13 @@ static bool static_build_script_layout(MiniLdState *state,
             uint64_t span = layout->script_output_end[owner] -
                             layout->script_output_start[owner];
             size_t end;
-            if (span > SIZE_MAX - owner_file_base[owner]) {
+            if (span > SIZE_MAX - layout->script_output_file_base[owner]) {
                 fprintf(state->diagnostics,
                         "minic-ld: script-output-tail-overflow:%s\n",
                         section->name);
                 goto done;
             }
-            end = owner_file_base[owner] + (size_t)span;
+            end = layout->script_output_file_base[owner] + (size_t)span;
             if (end > file_cursor) {
                 file_cursor = end;
             }
@@ -1874,22 +1861,17 @@ static bool static_build_script_layout(MiniLdState *state,
 
     layout->scripted = true;
     layout->script_command_count = script->command_count;
-    layout->section_owner = script_state.section_owner;
-    script_state.section_owner = NULL;
     ok = true;
 
 done:
     free(file_order);
-    free(owner_file_base);
-    free(owner_vaddr_base);
     free(owner_max_align);
     free(owner_remaining);
     free(command_deferred);
     free(script_state.output_defined);
-    free(script_state.output_vaddr);
-    free(script_state.section_owner);
     free(script_state.section_placed);
     if (!ok) {
+        free(layout->section_owner);
         free(layout->script_bytes);
         free(layout->script_output_file_base);
         free(layout->script_output_end);
@@ -1912,7 +1894,7 @@ done:
  */
 static bool shared_build_vdso_script_layout(MiniLdState *state,
                                             const MiniLdScript *script,
-                                            MiniLdStaticLayout *layout) {
+                                            MiniLdLayout *layout) {
     size_t headers_size;
     size_t i;
     size_t end;
@@ -2004,7 +1986,7 @@ static bool static_define_absolute_if_undefined(MiniLdState *state,
 
 static bool static_synthesize_array_bound_pair(
     MiniLdState *state,
-    const MiniLdStaticLayout *layout,
+    const MiniLdLayout *layout,
     const char *section_prefix,
     const char *start_name,
     const char *end_name) {
@@ -2067,12 +2049,12 @@ static bool static_synthesize_array_bound_pair(
 
 
 static bool static_resolve_symbol(MiniLdState *state,
-                                  const MiniLdStaticLayout *layout,
+                                  const MiniLdLayout *layout,
                                   size_t symbol_index,
                                   uint64_t *value_out);
 
 static bool static_fill_got(MiniLdState *state,
-                            const MiniLdStaticLayout *layout,
+                            const MiniLdLayout *layout,
                             const MiniLdStaticGot *got) {
     MiniLdSection *section;
     size_t i;
@@ -2110,7 +2092,7 @@ static bool static_fill_got(MiniLdState *state,
  */
 static bool static_synthesize_gnu_default_boundaries(
     MiniLdState *state,
-    const MiniLdStaticLayout *layout) {
+    const MiniLdLayout *layout) {
     uint64_t end = layout->have_rw
                        ? layout->rw_vaddr + (uint64_t)layout->rw_mem_size
                        : layout->rx_vaddr + (uint64_t)layout->rx_file_size;
@@ -2209,7 +2191,7 @@ static bool static_synthesize_gnu_default_boundaries(
 
 static bool static_need_array_bound_pair(
     const MiniLdState *state,
-    const MiniLdStaticLayout *layout,
+    const MiniLdLayout *layout,
     const char *section_prefix,
     const char *start_name,
     const char *end_name) {
@@ -2236,7 +2218,7 @@ static bool static_need_array_bound_pair(
 
 static bool static_synthesize_runtime_boundaries(
     MiniLdState *state,
-    const MiniLdStaticLayout *layout) {
+    const MiniLdLayout *layout) {
     return static_synthesize_gnu_default_boundaries(state, layout) &&
            (!static_need_array_bound_pair(state, layout, ".preinit_array",
                                           "__preinit_array_start",
@@ -2261,7 +2243,7 @@ static bool static_synthesize_runtime_boundaries(
                                                 "__fini_array_end"));
 }
 
-static void static_layout_destroy(MiniLdStaticLayout *layout) {
+static void minild_layout_destroy(MiniLdLayout *layout) {
     free(layout->section_vaddr);
     free(layout->section_laddr);
     free(layout->section_file_offset);
@@ -2288,7 +2270,7 @@ static void static_layout_destroy(MiniLdStaticLayout *layout) {
 }
 
 static bool static_resolve_symbol(MiniLdState *state,
-                                  const MiniLdStaticLayout *layout,
+                                  const MiniLdLayout *layout,
                                   size_t symbol_index,
                                   uint64_t *value_out) {
     MiniLdResolvedSymbol *symbol;
@@ -2386,7 +2368,7 @@ static bool pcrel_find(const MiniLdPcrelSlot *slots,
 }
 
 static bool static_apply_relocations(MiniLdState *state,
-                                     const MiniLdStaticLayout *layout,
+                                     const MiniLdLayout *layout,
                                      const MiniLdStaticGot *got) {
     size_t capacity = pcrel_capacity_for(state->relocations.count);
     MiniLdPcrelSlot *pcrel;
@@ -2835,7 +2817,7 @@ static bool static_apply_relocations(MiniLdState *state,
 }
 
 static bool static_entry_address(MiniLdState *state,
-                                 const MiniLdStaticLayout *layout,
+                                 const MiniLdLayout *layout,
                                  const char *entry_symbol,
                                  uint64_t *entry_out) {
     size_t index = symbol_resolver_lookup(&state->resolver, entry_symbol);

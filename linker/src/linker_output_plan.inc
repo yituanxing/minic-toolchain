@@ -25,6 +25,8 @@ typedef struct MiniLdOutputSection {
 typedef struct MiniLdOutputPlan {
     MiniLdOutputSection *sections;
     size_t count;
+    /* Fixed at projection time: the plan, not MiniLdState, owns map bounds. */
+    size_t work_count;
     /* Zero means discarded, otherwise final ELF section header index. */
     size_t *work_shndx;
     /* Final physical offsets of surviving work fragments, including
@@ -47,9 +49,8 @@ static void minild_output_plan_destroy(MiniLdOutputPlan *plan) {
 }
 
 static size_t minild_output_shndx(const MiniLdOutputPlan *plan,
-                                  const MiniLdState *state,
                                   size_t work) {
-    return work < state->work.count ? plan->work_shndx[work] : 0U;
+    return work < plan->work_count ? plan->work_shndx[work] : 0U;
 }
 
 static int minild_output_section_compare(const void *left,
@@ -64,7 +65,7 @@ static int minild_output_section_compare(const void *left,
 }
 
 static bool minild_output_plan_build(const MiniLdState *state,
-                                     const MiniLdStaticLayout *layout,
+                                     const MiniLdLayout *layout,
                                      const size_t *file_offsets,
                                      MiniLdOutputPlan *plan) {
     size_t *owner_to_output = NULL;
@@ -72,6 +73,7 @@ static bool minild_output_plan_build(const MiniLdState *state,
     bool ok = false;
 
     memset(plan, 0, sizeof(*plan));
+    plan->work_count = state->work.count;
     plan->sections = calloc(state->work.count == 0U ? 1U :
                             state->work.count, sizeof(*plan->sections));
     plan->work_shndx = calloc(state->work.count == 0U ? 1U :
@@ -303,7 +305,7 @@ done:
  * and each final output section's file offset. */
 static bool minild_output_plan_place_nonalloc(
     const MiniLdState *state,
-    const MiniLdStaticLayout *layout,
+    const MiniLdLayout *layout,
     MiniLdOutputPlan *plan,
     size_t first_offset,
     size_t *end_offset) {
@@ -410,7 +412,7 @@ static bool minild_output_plan_section_headers(
 }
 
 static bool minild_output_write_script_bytes(const MiniLdState *state,
-                                              const MiniLdStaticLayout *layout,
+                                              const MiniLdLayout *layout,
                                               const MiniLdOutputPlan *plan,
                                               unsigned char *image,
                                               size_t image_size) {
@@ -452,7 +454,7 @@ static bool minild_output_write_script_bytes(const MiniLdState *state,
  * script gaps receive fill, or where final bytes belong. */
 static bool minild_output_plan_emit_sections(
     const MiniLdState *state,
-    const MiniLdStaticLayout *layout,
+    const MiniLdLayout *layout,
     const MiniLdOutputPlan *plan,
     unsigned char *image,
     size_t image_size) {

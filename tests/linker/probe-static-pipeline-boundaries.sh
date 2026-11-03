@@ -145,12 +145,21 @@ for case in plain script gc script_gc; do
         exit 1
     fi
     python3 "$work/check.py" "$case" "$work/$case.elf"
-    for phase in inputs layout relocations output cleanup; do
-        if ! grep -q "^MINILD_PHASE=$phase " "$work/$case.stderr"; then
-            echo "MINILD_STATIC_PIPELINE=FAIL case=$case missing_phase=$phase" >&2
-            exit 1
-        fi
-    done
+    # The phase profile is also an execution-order contract.  Merely finding
+    # each name somewhere would miss duplicate, skipped or reordered phases.
+    python3 - "$case" "$work/$case.stderr" <<'PY'
+from pathlib import Path
+import sys
+
+case, logfile = sys.argv[1:]
+expected = ('inputs', 'layout', 'relocations', 'output', 'cleanup')
+observed = tuple(line.split(' ', 1)[0].split('=', 1)[1]
+                 for line in Path(logfile).read_text().splitlines()
+                 if line.startswith('MINILD_PHASE='))
+if observed != expected:
+    raise SystemExit(f'MINILD_STATIC_PIPELINE=FAIL case={case} '
+                     f'phase_order={observed!r} expected={expected!r}')
+PY
     if [[ $case == plain ]]; then
         if grep -q 'materialized-input-sections:' "$work/$case.stderr"; then
             echo 'MINILD_STATIC_PIPELINE=FAIL case=plain unexpected_materialization' >&2

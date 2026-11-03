@@ -111,6 +111,7 @@ import sys
 from pathlib import Path
 
 mode, filename = sys.argv[1:]
+is_vdso = mode in ('vdso', 'vdso-after-r')
 data = Path(filename).read_bytes()
 if data[:6] != b"\x7fELF\x02\x01":
     raise SystemExit("not a little-endian ELF64 file")
@@ -158,11 +159,11 @@ _, dynamic = unique(".dynamic", 6)
 _, hash_section = unique(".hash", 5)
 _, gnu_hash = unique(".gnu.hash", 0x6ffffff6)
 _, rela = unique(".rela.dyn", 4)
-text_i, text = unique(".text" if mode == "vdso" else ".text.answer", 1)
-second_i, second = ((text_i, text) if mode == "vdso" else
+text_i, text = unique(".text" if is_vdso else ".text.answer", 1)
+second_i, second = ((text_i, text) if is_vdso else
                     unique(".text.second", 1))
-data_i, data_sec = unique(".data" if mode == "vdso" else ".data.value", 1)
-meta_i, meta = unique(".meta" if mode == "vdso" else ".meta.answer", 1)
+data_i, data_sec = unique(".data" if is_vdso else ".data.value", 1)
+meta_i, meta = unique(".meta" if is_vdso else ".meta.answer", 1)
 
 for name, section, target in ((".dynsym", dynsym, dynstr_i),
                                (".symtab", symtab, strtab_i),
@@ -203,7 +204,7 @@ for name, shndx, section in (("exported_answer", text_i, text),
     if actual != shndx or not section[3] <= value < section[3] + section[5]:
         raise SystemExit(f"{name}: wrong static section/value: {symbols[name]}")
 
-if mode not in ("versioned", "vdso"):
+if mode not in ("versioned", "vdso", "vdso-after-r"):
     for name, shndx in (("exported_answer", text_i),
                         ("exported_second", second_i),
                         ("exported_ptr", data_i)):
@@ -223,7 +224,7 @@ else:
 
 if "outside_symbol" not in dynsymbols or dynsymbols["outside_symbol"][0] != 0:
     raise SystemExit("unresolved dynamic symbol must remain SHN_UNDEF")
-if mode == "vdso":
+if is_vdso:
     if any(name in by_name for name in
            (".text.answer", ".text.second", ".data.value", ".meta.answer")):
         raise SystemExit("input sections leaked into scripted ELF section headers")
@@ -248,24 +249,27 @@ if mode == "vdso":
             phdrs[1][3] != dyn[3] or phdrs[1][2] != dyn[4] or
             phdrs[2][3] != note[3] or phdrs[2][2] != note[4]):
         raise SystemExit("vDSO PT_LOAD/PT_DYNAMIC/PT_NOTE contract broken")
-if ((mode != "vdso" and text_i == second_i) or dynsym_i >= count or
+if ((not is_vdso and text_i == second_i) or dynsym_i >= count or
         symtab_i >= count or meta_i >= count):
     raise SystemExit("ELF section indexes invalid")
 print(f"MINILD_SHARED_OUTPUT_CHECK=PASS mode={mode}"
       f" sections={count} dynsym={dynsym_i} symtab={symtab_i}"
-      f" link_order={text_i} versioned={mode in ('versioned', 'vdso')}")
+      f" link_order={text_i} versioned={mode in ('versioned', 'vdso', 'vdso-after-r')}")
 PY
 
 "$MINILD" -melf64lriscv -r -o "$work/after_r.o" "$work/input.o"
-for mode in normal versioned after_r vdso; do
+for mode in normal versioned after_r vdso vdso-after-r; do
     extra=()
     input="$work/input.o"
     if [[ $mode == versioned ]]; then
         extra=(--version-script "$work/exports.map")
     elif [[ $mode == after_r ]]; then
         input="$work/after_r.o"
-    elif [[ $mode == vdso ]]; then
+    elif [[ $mode == vdso || $mode == vdso-after-r ]]; then
         extra=(-T "$work/vdso.lds")
+        if [[ $mode == vdso-after-r ]]; then
+            input="$work/after_r.o"
+        fi
     fi
     if ! "$MINILD" -melf64lriscv -shared --hash-style=both \
         -soname libminild-shared.so "${extra[@]}" \
@@ -280,4 +284,4 @@ for mode in normal versioned after_r vdso; do
         exit 1
     }
 done
-echo "MINILD_SHARED_OUTPUT=PASS modes=4"
+echo "MINILD_SHARED_OUTPUT=PASS modes=5"

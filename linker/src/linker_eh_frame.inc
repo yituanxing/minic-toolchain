@@ -107,7 +107,7 @@ static bool minild_eh_encoding(const MiniLdSection *section,
 
 static bool minild_eh_scan(MiniLdState *state,
                             size_t section_index,
-                            const MiniLdStaticLayout *layout,
+                            const MiniLdLayout *layout,
                             MiniLdEhIndex *result, size_t capacity,
                             size_t *count_out) {
     const MiniLdSection *section = &state->work.sections[section_index];
@@ -241,7 +241,7 @@ static bool minild_eh_prepare(MiniLdState *state,
 }
 
 static bool minild_eh_fill(MiniLdState *state,
-                            const MiniLdStaticLayout *layout,
+                            const MiniLdLayout *layout,
                             const MiniLdSharedImage *shared) {
     MiniLdSection *header;
     MiniLdEhIndex *index;

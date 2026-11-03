@@ -325,7 +325,7 @@ static bool shared_define_linker_symbols_pre_layout(
 }
 
 static bool shared_finalize_ehdr_symbol(MiniLdState *state,
-                                        const MiniLdStaticLayout *layout) {
+                                        const MiniLdLayout *layout) {
     size_t index = symbol_resolver_lookup(&state->resolver, "__ehdr_start");
     uint64_t header_vaddr;
 
@@ -889,7 +889,7 @@ fail:
 }
 
 static bool shared_fill_dynsym(MiniLdState *state,
-                               const MiniLdStaticLayout *layout,
+                               const MiniLdLayout *layout,
                                const MiniLdOutputPlan *output_plan,
                                const MiniLdSharedImage *shared) {
     MiniLdSection *dynsym = &state->work.sections[shared->dynsym_section];
@@ -1056,7 +1056,7 @@ static bool shared_fill_gnu_hash(MiniLdState *state,
 
 static bool shared_patch_arithmetic_relocations(
     MiniLdState *state,
-    const MiniLdStaticLayout *layout) {
+    const MiniLdLayout *layout) {
     size_t i;
 
     for (i = 0U; i < state->relocations.count; ++i) {
@@ -1239,13 +1239,17 @@ static bool shared_patch_arithmetic_relocations(
 }
 
 static bool shared_fill_relocations(MiniLdState *state,
-                                    const MiniLdStaticLayout *layout,
+                                    const MiniLdLayout *layout,
                                     const MiniLdSharedImage *shared) {
     MiniLdSection *rela = &state->work.sections[shared->rela_section];
     size_t write_index = 0U;
     size_t i;
 
-    memset(rela->data, 0, rela->size);
+    /* A vDSO may have no dynamic relocations; that valid empty synthetic
+     * section has no byte allocation and cannot be passed to memset. */
+    if (rela->size != 0U) {
+        memset(rela->data, 0, rela->size);
+    }
 
     for (i = 0U; i < state->resolver.count; ++i) {
         size_t offset = shared->got_slot_offset[i];
@@ -1425,7 +1429,7 @@ static uint32_t shared_riscv_itype(unsigned opcode,
 
 static bool shared_patch_final_layout_relocations(
     MiniLdState *state,
-    const MiniLdStaticLayout *layout,
+    const MiniLdLayout *layout,
     const MiniLdSharedImage *shared) {
     size_t capacity = pcrel_capacity_for(state->relocations.count);
     MiniLdPcrelSlot *pcrel;
@@ -1712,7 +1716,7 @@ static bool shared_patch_final_layout_relocations(
 }
 
 static bool shared_fill_plt(MiniLdState *state,
-                            const MiniLdStaticLayout *layout,
+                            const MiniLdLayout *layout,
                             const MiniLdSharedImage *shared) {
     MiniLdSection *plt;
     MiniLdSection *gotplt;
@@ -1869,7 +1873,7 @@ static bool shared_fill_plt(MiniLdState *state,
 }
 
 static bool shared_fill_dynamic(MiniLdState *state,
-                                const MiniLdStaticLayout *layout,
+                                const MiniLdLayout *layout,
                                 const MiniLdSharedImage *shared) {
     MiniLdSection *dynamic = &state->work.sections[shared->dynamic_section];
     Elf64_Dyn *entries = (Elf64_Dyn *)(void *)dynamic->data;
@@ -1946,7 +1950,7 @@ typedef struct MiniLdSharedTlsSegment {
 } MiniLdSharedTlsSegment;
 
 static bool shared_tls_segment(const MiniLdState *state,
-                               const MiniLdStaticLayout *layout,
+                               const MiniLdLayout *layout,
                                MiniLdSharedTlsSegment *tls) {
     uint64_t base = UINT64_MAX;
     uint64_t memory_end = 0U;
@@ -2014,7 +2018,7 @@ static bool shared_tls_segment(const MiniLdState *state,
  * PT_LOAD includes ELF headers; PIE, TLS and vDSO introduce distinct PHDRs. */
 static bool minild_shared_program_plan_build(
     const MiniLdState *state,
-    const MiniLdStaticLayout *layout,
+    const MiniLdLayout *layout,
     const MiniLdSharedImage *shared,
     MiniLdProgramPlan *plan) {
     MiniLdSharedTlsSegment tls;
@@ -2247,7 +2251,6 @@ failed:
 /* Only ET_DYN synthetic sections add dynamic sh_link/sh_info policy.
  * All generic section identity and LINK_ORDER links are already finalized. */
 static void minild_shared_output_section_links(
-    const MiniLdState *state,
     const MiniLdOutputPlan *output_plan,
     const MiniLdSharedImage *shared,
     Elf64_Shdr *section_headers) {
@@ -2255,67 +2258,54 @@ static void minild_shared_output_section_links(
     for (i = 0U; i < output_plan->count; ++i) {
         Elf64_Shdr *sh = &section_headers[i + 1U];
 
-        if (i + 1U == minild_output_shndx(output_plan, state,
+        if (i + 1U == minild_output_shndx(output_plan,
                                            shared->dynsym_section)) {
             sh->sh_link = (Elf64_Word)
-                minild_output_shndx(output_plan, state, shared->dynstr_section);
+                minild_output_shndx(output_plan, shared->dynstr_section);
             sh->sh_info = 1U;
         } else if (shared->version_script != NULL &&
-                   i + 1U == minild_output_shndx(output_plan, state,
+                   i + 1U == minild_output_shndx(output_plan,
                                                   shared->versym_section)) {
             sh->sh_link = (Elf64_Word)
-                minild_output_shndx(output_plan, state, shared->dynsym_section);
+                minild_output_shndx(output_plan, shared->dynsym_section);
         } else if (shared->version_script != NULL &&
-                   i + 1U == minild_output_shndx(output_plan, state,
+                   i + 1U == minild_output_shndx(output_plan,
                                                   shared->verdef_section)) {
             sh->sh_link = (Elf64_Word)
-                minild_output_shndx(output_plan, state, shared->dynstr_section);
+                minild_output_shndx(output_plan, shared->dynstr_section);
             sh->sh_info = 2U;
-        } else if (i + 1U == minild_output_shndx(output_plan, state,
+        } else if (i + 1U == minild_output_shndx(output_plan,
                                                   shared->hash_section) ||
                    (shared->have_gnu_hash &&
-                    i + 1U == minild_output_shndx(output_plan, state,
+                    i + 1U == minild_output_shndx(output_plan,
                                                    shared->gnu_hash_section)) ||
-                   i + 1U == minild_output_shndx(output_plan, state,
+                   i + 1U == minild_output_shndx(output_plan,
                                                   shared->rela_section) ||
-                   i + 1U == minild_output_shndx(output_plan, state,
+                   i + 1U == minild_output_shndx(output_plan,
                                                   shared->rela_plt_section)) {
             sh->sh_link = (Elf64_Word)
-                minild_output_shndx(output_plan, state, shared->dynsym_section);
-        } else if (i + 1U == minild_output_shndx(output_plan, state,
+                minild_output_shndx(output_plan, shared->dynsym_section);
+        } else if (i + 1U == minild_output_shndx(output_plan,
                                                   shared->dynamic_section)) {
             sh->sh_link = (Elf64_Word)
-                minild_output_shndx(output_plan, state, shared->dynstr_section);
+                minild_output_shndx(output_plan, shared->dynstr_section);
         }
     }
 }
 
 static bool shared_write_object(MiniLdState *state,
-                                const MiniLdStaticLayout *layout,
+                                const MiniLdLayout *layout,
                                 MiniLdOutputPlan *output_plan,
                                 const MiniLdSharedImage *shared,
                                 const char *path,
                                 uint64_t entry) {
     MiniLdProgramPlan program_plan = {0};
     size_t image_size;
-    MiniLdBuffer shstrtab = {NULL, 0U, 0U};
     MiniLdFinalSymbols final_symbols = {0};
-    uint32_t symtab_name = 0U;
-    uint32_t strtab_name = 0U;
-    uint32_t shstrtab_name = 0U;
-    uint32_t *name_offsets = NULL;
-    Elf64_Shdr *section_headers = NULL;
+    MiniLdFinalSectionTables final_tables = {0};
     unsigned char *image = NULL;
-    size_t section_count = output_plan->count + 4U; /* null + symtab + strtab + shstrtab */
-    size_t symtab_index = output_plan->count + 1U;
-    size_t strtab_index = output_plan->count + 2U;
-    size_t shstrtab_index = output_plan->count + 3U;
-    size_t symtab_offset;
-    size_t strtab_offset;
-    size_t shstrtab_offset;
-    size_t section_header_offset;
+    size_t end_nonalloc;
     size_t total_size;
-    size_t i;
     Elf64_Ehdr header;
     FILE *file = NULL;
     bool ok = false;
@@ -2327,7 +2317,7 @@ static bool shared_write_object(MiniLdState *state,
     image_size = sizeof(Elf64_Ehdr) +
                  program_plan.count * sizeof(Elf64_Phdr);
 
-    if (section_count > UINT16_MAX) {
+    if (output_plan->count > UINT16_MAX - 4U) {
         fprintf(state->diagnostics,
                 "minic-ld: too-many-shared-sections\n");
         goto done;
@@ -2353,57 +2343,22 @@ static bool shared_write_object(MiniLdState *state,
      */
     if (!minild_output_plan_place_nonalloc(state, layout, output_plan,
                                            image_size,
-                                           &strtab_offset)) {
+                                           &end_nonalloc)) {
         goto done;
     }
-    if (!add_size(strtab_offset, final_symbols.names.size, &symtab_offset) ||
-        !align_up_size(symtab_offset, 8U, &symtab_offset) ||
-        state->resolver.count + 1U > SIZE_MAX / sizeof(Elf64_Sym) ||
-        !add_size(symtab_offset,
-                  (state->resolver.count + 1U) * sizeof(Elf64_Sym),
-                  &shstrtab_offset)) {
+    if (!minild_final_section_tables_build(output_plan, &final_symbols,
+                                           end_nonalloc,
+                                           MINILD_FINAL_STRTAB_FIRST,
+                                           &final_tables)) {
         goto oom;
     }
-
-    name_offsets =
-        calloc(output_plan->count == 0U ? 1U : output_plan->count,
-               sizeof(*name_offsets));
-    if (name_offsets == NULL ||
-        !buffer_append_zero(&shstrtab, 1U)) {
-        goto oom;
-    }
-    for (i = 0U; i < output_plan->count; ++i) {
-        if (!buffer_append_string(&shstrtab,
-                                  output_plan->sections[i].name,
-                                  &name_offsets[i])) {
-            goto oom;
-        }
-    }
-    {
-        if (!buffer_append_string(&shstrtab, ".symtab",
-                                  &symtab_name) ||
-            !buffer_append_string(&shstrtab, ".strtab",
-                                  &strtab_name) ||
-            !buffer_append_string(&shstrtab, ".shstrtab",
-                                  &shstrtab_name)) {
-            goto oom;
-        }
-    }
-    if (!add_size(shstrtab_offset, shstrtab.size, &section_header_offset) ||
-        !align_up_size(section_header_offset, 8U, &section_header_offset) ||
-        section_count > SIZE_MAX / sizeof(Elf64_Shdr) ||
-        !add_size(section_header_offset,
-                  section_count * sizeof(Elf64_Shdr),
-                  &total_size)) {
-        goto oom;
-    }
+    total_size = final_tables.total_size;
 
     if (!minild_program_plan_validate(state, &program_plan, total_size)) {
         goto done;
     }
     image = calloc(total_size == 0U ? 1U : total_size, 1U);
-    section_headers = calloc(section_count, sizeof(*section_headers));
-    if (image == NULL || section_headers == NULL) {
+    if (image == NULL) {
         goto oom;
     }
 
@@ -2417,64 +2372,33 @@ static bool shared_write_object(MiniLdState *state,
     header.e_version = EV_CURRENT;
     header.e_entry = entry;
     header.e_phoff = sizeof(Elf64_Ehdr);
-    header.e_shoff = section_header_offset;
+    header.e_shoff = final_tables.header_offset;
     header.e_flags = state->elf_flags;
     header.e_ehsize = sizeof(Elf64_Ehdr);
     header.e_phentsize = sizeof(Elf64_Phdr);
     header.e_phnum = (Elf64_Half)program_plan.count;
     header.e_shentsize = sizeof(Elf64_Shdr);
-    header.e_shnum = (Elf64_Half)section_count;
-    header.e_shstrndx = (Elf64_Half)shstrtab_index;
+    header.e_shnum = (Elf64_Half)final_tables.count;
+    header.e_shstrndx = (Elf64_Half)final_tables.shstrtab_index;
     memcpy(image, &header, sizeof(header));
 
-    memcpy(image + sizeof(Elf64_Ehdr), program_plan.entries,
-           program_plan.count * sizeof(Elf64_Phdr));
+    if (program_plan.count != 0U) {
+        memcpy(image + sizeof(Elf64_Ehdr), program_plan.entries,
+               program_plan.count * sizeof(Elf64_Phdr));
+    }
     if (!minild_output_plan_section_headers(state, output_plan,
-                                             name_offsets, section_headers)) {
+                                             final_tables.output_name_offsets,
+                                             final_tables.headers)) {
         goto done;
     }
-    minild_shared_output_section_links(state, output_plan, shared,
-                                        section_headers);
+    minild_shared_output_section_links(output_plan, shared,
+                                        final_tables.headers);
     if (!minild_output_plan_emit_sections(state, layout, output_plan,
                                           image, total_size)) {
         goto done;
     }
 
-    {
-        Elf64_Shdr *sh = &section_headers[symtab_index];
-        sh->sh_name = symtab_name;
-        sh->sh_type = SHT_SYMTAB;
-        sh->sh_offset = symtab_offset;
-        sh->sh_size = (state->resolver.count + 1U) * sizeof(Elf64_Sym);
-        sh->sh_link = (Elf64_Word)strtab_index;
-        sh->sh_info = (Elf64_Word)final_symbols.local_count;
-        sh->sh_addralign = 8U;
-        sh->sh_entsize = sizeof(Elf64_Sym);
-    }
-    {
-        Elf64_Shdr *sh = &section_headers[strtab_index];
-        sh->sh_name = strtab_name;
-        sh->sh_type = SHT_STRTAB;
-        sh->sh_offset = strtab_offset;
-        sh->sh_size = final_symbols.names.size;
-        sh->sh_addralign = 1U;
-    }
-    {
-        Elf64_Shdr *sh = &section_headers[shstrtab_index];
-        sh->sh_name = shstrtab_name;
-        sh->sh_type = SHT_STRTAB;
-        sh->sh_offset = shstrtab_offset;
-        sh->sh_size = shstrtab.size;
-        sh->sh_addralign = 1U;
-    }
-    memcpy(image + strtab_offset, final_symbols.names.data,
-           final_symbols.names.size);
-    memcpy(image + symtab_offset, final_symbols.entries,
-           (state->resolver.count + 1U) * sizeof(Elf64_Sym));
-    memcpy(image + shstrtab_offset, shstrtab.data, shstrtab.size);
-    memcpy(image + section_header_offset,
-           section_headers,
-           section_count * sizeof(*section_headers));
+    minild_final_section_tables_emit(&final_tables, &final_symbols, image);
 
     file = fopen(path, "wb");
     if (file == NULL) {
@@ -2507,12 +2431,10 @@ done:
     if (!ok) {
         (void)remove(path);
     }
-    free(name_offsets);
     minild_program_plan_destroy(&program_plan);
-    free(section_headers);
+    minild_final_section_tables_destroy(&final_tables);
     free(image);
     minild_final_symbols_destroy(&final_symbols);
-    free(shstrtab.data);
     return ok;
 
 oom:
@@ -2584,7 +2506,7 @@ static bool shared_strip_debug_preflight(const MiniLdState *state) {
  * leave a dynamic relocation or exported symbol pointing into dead bytes.
  * Reject that exact unsupported case instead of emitting an invalid DSO. */
 static bool shared_script_validate_discarded_alloc(
-    const MiniLdState *state, const MiniLdStaticLayout *layout) {
+    const MiniLdState *state, const MiniLdLayout *layout) {
     size_t i;
 
     for (i = 0U; i < state->work.count; ++i) {
@@ -2628,7 +2550,7 @@ int minild_link_shared_elf64_riscv_inputs_options(
             ? options->interpreter_path
             : pie ? "/lib/ld-musl-riscv64.so.1" : NULL;
     MiniLdState state;
-    MiniLdStaticLayout layout;
+    MiniLdLayout layout;
     MiniLdSharedImage shared;
     MiniLdOutputPlan output_plan = {0};
     MiniLdScript version_script;
@@ -2749,7 +2671,7 @@ int minild_link_shared_elf64_riscv_inputs_options(
 done:
     minild_output_plan_destroy(&output_plan);
     if (layout_ready || layout.section_vaddr != NULL) {
-        static_layout_destroy(&layout);
+        minild_layout_destroy(&layout);
     }
     shared_image_destroy(&shared);
     state_destroy(&state);
