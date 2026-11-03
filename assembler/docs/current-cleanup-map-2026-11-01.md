@@ -16,6 +16,10 @@
 > addend 被篡改的对象必须不等，未知型为 INCONCLUSIVE。
 > Target 专项门禁另外核验 x86 PC8/PC16/ABS8/ABS16 和溢出、
 > RV32/64 ADD8/SUB8 配对、AArch64 ABS16/PREL16 与 ABS8 拒绝；
+> AArch64 数据 mapping 另按 GNU `rs_fill` 的 Fragment 来源区分
+> 普通 `.word` 与 `.zero/.space/.skip/.fill`，为可装载数据节
+> 记录 `$d`，新增六组 GNU 严格用例；非 ALLOC 与 DWARF Section
+> 需要单独的 Debug 分类，不在本批按 Section 名硬猜。
 > LoongArch 复用原始 Linux `.alternative` ADD8/SUB8/ADD32/SUB32
 > 严格 GNU 证据。`probe-cfi-debug-frame-link-gnu.sh` 保留 x86
 > ELF32/64 真正 GNU `ld -r` 双对象 CIE/FDE 图对照，并增加

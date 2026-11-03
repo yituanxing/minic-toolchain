@@ -5651,6 +5651,7 @@ typedef struct A64MappingFragment {
     uint32_t size;
     bool executable;
     bool explicit_alignment;
+    bool fill_directive;
 } A64MappingFragment;
 
 static int a64_compare_mapping_fragments(const void *lhs,const void *rhs) {
@@ -5741,6 +5742,14 @@ static bool a64_record_source_mappings(const MiniAsPostEmitView *view,
         points[count].size=stmt->size;
         points[count].executable=executable;
         points[count].explicit_alignment=explicit_alignment;
+        /* GAS's aarch64_init_frag(rs_fill) enters MAP_DATA even in a
+         * non-executable section. Ordinary .word/.byte uses a different
+         * path: mapping_state(MAP_DATA) deliberately leaves the initial
+         * state undefined there. Preserve this semantic distinction from
+         * the already-parsed MC Fragment kind, not section-name guesses. */
+        points[count].fill_directive=
+            stmt->kind==MINIAS_FRAGMENT_FILL ||
+            stmt->kind==MINIAS_FRAGMENT_SPACE;
         ++count;
     }
     qsort(points,count,sizeof(*points),a64_compare_mapping_fragments);
@@ -5803,6 +5812,18 @@ static bool a64_record_source_mappings(const MiniAsPostEmitView *view,
                 has_mapping=true;
                 previous_executable=false;
             }
+        } else if(point->fill_directive) {
+            /* Unlike raw fixed-width data, .fill/.zero/.space/.skip form
+             * GAS rs_fill fragments and create an initial $d even in
+             * non-executable ALLOC sections. The transition is at the
+             * fill site, not at an earlier unmarked .word/.byte. */
+            if(!has_mapping || previous_executable) {
+                if(!a64_record_mapping(object,point->section,point->offset,false))
+                    goto mapping_failure;
+                has_mapping=true;
+                previous_executable=false;
+            }
+            pending_initial_data=false;
         } else if(point->size!=0U) {
             if(has_mapping && previous_executable) {
                 if(!a64_record_mapping(object,point->section,point->offset,false))

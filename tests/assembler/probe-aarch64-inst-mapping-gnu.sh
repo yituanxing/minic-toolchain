@@ -131,3 +131,59 @@ for case in raw-data aligned-data late-alignment retro-inst \
     }
 done
 echo 'MINIAS_AARCH64_MAPPING_STATE=PASS GNU_strict_raw_align_late_align_retro_inst_empty_text=6/6'
+
+# GAS tc-aarch64.c uses two distinct data-mapping paths: fixed-width .word
+# does not create an initial $d in a data section, whereas rs_fill fragments
+# (.zero/.space/.skip/.fill) enter MAP_DATA via aarch64_init_frag.  This
+# applies to arbitrary ALLOC PROGBITS sections, not just .data/.rodata or
+# sections with a specially recognized name.  The PC-relative width matrix
+# exercises the first case below, so also pin the adjacent semantic cases.
+cat >"$work/fill-custom-allocated.s" <<'ASM'
+.section .data.alpha,"aw",@progbits
+.zero 3
+a_owner:
+.byte 0x55
+.section .rodata.beta,"a",@progbits
+.zero 5
+b_owner:
+.byte 0x66
+ASM
+cat >"$work/fill-builtin-data.s" <<'ASM'
+.data
+.zero 3
+.byte 0x55
+ASM
+cat >"$work/space-custom-allocated.s" <<'ASM'
+.section .space.delta,"a",@progbits
+.space 3,0
+.byte 0x55
+ASM
+cat >"$work/skip-custom-allocated.s" <<'ASM'
+.section .skip.delta,"aw",@progbits
+.skip 3,0
+.byte 0x55
+ASM
+cat >"$work/fill-custom-allocated-expr.s" <<'ASM'
+.section .fill.delta,"a",@progbits
+.fill 3,1,0
+.byte 0x55
+ASM
+cat >"$work/fill-after-fixed-width.s" <<'ASM'
+.section .data.delta,"aw",@progbits
+.word 11
+.zero 3
+.byte 0x55
+ASM
+for case in fill-custom-allocated fill-builtin-data space-custom-allocated \
+            skip-custom-allocated fill-custom-allocated-expr \
+            fill-after-fixed-width; do
+    "$MINIAS" --target=aarch64 -o "$work/$case-mini.o" "$work/$case.s"
+    "$AARCH64_AS" -o "$work/$case-gnu.o" "$work/$case.s"
+    python3 "$(dirname "$0")/elf_semantic_compare.py" --strict \
+        "$work/$case-gnu.o" "$work/$case-mini.o" >"$work/$case-semantic.json" || {
+        echo "MINIAS_AARCH64_FILL_MAPPING=FAIL GNU_strict_case=$case" >&2
+        python3 -m json.tool "$work/$case-semantic.json" >&2
+        exit 1
+    }
+done
+echo 'MINIAS_AARCH64_FILL_MAPPING=PASS GNU_strict_fill_space_skip_allocated_builtin=6/6'

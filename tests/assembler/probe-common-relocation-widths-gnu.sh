@@ -54,7 +54,7 @@ test_profile() {
         echo "MINIAS_COMMON_RELOC_WIDTHS=SKIP profile=$profile GNU_cross_unavailable"
         return 0
     fi
-    "$gas" "${gnu_args[@]}" -o "$work/prefix.$profile.o" "$work/prefix.s"
+    "$gas" "${gnu_args[@]}" -o "$work/prefix.$profile.o" "$work/prefix.s" || return 1
     for width in 1 2 4 8; do
         local directive
         case "$width" in
@@ -99,7 +99,7 @@ ASM
                 >"$work/mini.log" 2>&1 || mini_status=$?
             ((observed+=1))
             if [[ $gnu_status -ne 0 && $mini_status -ne 0 ]]; then
-                test ! -e "$mini_object"
+                test ! -e "$mini_object" || return 1
                 ((rejected+=1))
                 continue
             fi
@@ -109,12 +109,12 @@ ASM
                 sed -n '1,15p' "$work/mini.log" >&2
                 return 1
             fi
-            test -s "$gnu_object" && test -s "$mini_object"
+            test -s "$gnu_object" && test -s "$mini_object" || return 1
             for object in "$gnu_object" "$mini_object"; do
-                readelf -h "$object" >"$work/header.txt"
-                grep -Eq "Class:[[:space:]]+ELF$klass" "$work/header.txt"
-                grep -Eq "Machine:.*$machine" "$work/header.txt"
-                readelf -SW "$object" | grep -q '\.minias_widths'
+                readelf -h "$object" >"$work/header.txt" || return 1
+                grep -Eq "Class:[[:space:]]+ELF$klass" "$work/header.txt" || return 1
+                grep -Eq "Machine:.*$machine" "$work/header.txt" || return 1
+                readelf -SW "$object" | grep -q '\.minias_widths' || return 1
             done
             ((accepted+=1))
             # This semantic comparator normalizes section identities,
@@ -138,9 +138,9 @@ ASM
             # GNU ld -r joins an independent preceding source object,
             # shifting section bases and exercising linker fixup semantics.
             "$linker" "${link_args[@]}" -r -o "$gnu_linked" \
-                "$work/prefix.$profile.o" "$gnu_object"
+                "$work/prefix.$profile.o" "$gnu_object" || return 1
             "$linker" "${link_args[@]}" -r -o "$mini_linked" \
-                "$work/prefix.$profile.o" "$mini_object"
+                "$work/prefix.$profile.o" "$mini_object" || return 1
             if [[ $has_semantics == 1 ]]; then
                 if ! python3 "$repo/tests/assembler/elf_semantic_compare.py" --strict \
                     "$gnu_linked" "$mini_linked" >"$work/linked-strict.json"; then
@@ -156,16 +156,29 @@ ASM
     echo "MINIAS_COMMON_RELOC_WIDTHS=PASS profile=$profile tested=12 GNU_accept_or_reject=matched ELF$klass=1 ld_r=matched"
 }
 
-test_profile x86_64 x86_64 64 'Advanced Micro Devices X86-64' \
+failed_profiles=0
+run_profile() {
+    # Report every architecture in a single CI pass, but fail the aggregate
+    # if any GNU acceptance, object or linked semantic check differs.
+    if ! test_profile "$@"; then
+        ((failed_profiles+=1))
+    fi
+}
+
+run_profile x86_64 x86_64 64 'Advanced Micro Devices X86-64' \
     as ld '--64' '-m elf_x86_64'
-test_profile i386 x86_64 32 'Intel 80386' \
+run_profile i386 x86_64 32 'Intel 80386' \
     as ld '--32' '-m elf_i386'
-test_profile rv32 riscv 32 'RISC-V' \
+run_profile rv32 riscv 32 'RISC-V' \
     riscv64-linux-gnu-as riscv64-linux-gnu-ld '-march=rv32i2p1 -mabi=ilp32' '-m elf32lriscv'
-test_profile rv64 riscv 64 'RISC-V' \
+run_profile rv64 riscv 64 'RISC-V' \
     riscv64-linux-gnu-as riscv64-linux-gnu-ld '-march=rv64i2p1 -mabi=lp64' '-m elf64lriscv'
-test_profile aarch64 aarch64 64 'AArch64' \
+run_profile aarch64 aarch64 64 'AArch64' \
     aarch64-linux-gnu-as aarch64-linux-gnu-ld '-march=armv8-a' ''
-test_profile loong loongarch64 64 'LoongArch' \
+run_profile loong loongarch64 64 'LoongArch' \
     loongarch64-linux-gnu-as loongarch64-linux-gnu-ld '-mabi=lp64d' ''
+if ((failed_profiles)); then
+    echo "MINIAS_COMMON_RELOC_WIDTHS=FAIL failed_profiles=$failed_profiles cases=$observed GNU_accept=$accepted GNU_reject=$rejected GNU_ld_r=$linked" >&2
+    exit 1
+fi
 echo "MINIAS_COMMON_RELOC_WIDTHS=PASS cases=$observed accepted=$accepted rejected=$rejected GNU_ld_r=$linked semantic_oracle=$has_semantics"
