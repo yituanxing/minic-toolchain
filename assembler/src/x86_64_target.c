@@ -651,7 +651,7 @@ static bool x64_parse_base_memory(MiniAsParseContext *ctx,const char *text, X64M
         if (p<close) ++p;
     }
     if(code16 && count<=2U && regs[0][0]!='\0') {
-        unsigned first,second=0U;
+        unsigned first=0U,second=0U;
         bool first16=x64_register16(regs[0],&first) && first<8U;
         bool second16=count==2U &&
             x64_register16(regs[1],&second) && second<8U;
