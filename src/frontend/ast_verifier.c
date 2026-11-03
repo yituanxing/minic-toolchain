@@ -1,6 +1,6 @@
 #include "frontend/ast_verifier.h"
 #include "frontend/expression_semantics.h"
-#include "target/data_layout.h"
+#include "target/source_policy/source_info.h"
 
 #include <limits.h>
 #include <stdio.h>
@@ -1111,6 +1111,7 @@ static bool verify_statement(const MinicC0Program *program,
             statement->target_expression != MINIC_EXPRESSION_INVALID ||
             statement->expression != MINIC_EXPRESSION_INVALID ||
             statement->target_statement != MINIC_STATEMENT_INVALID ||
+            statement->cleanup_context > program->cleanup_context_count ||
             statement->then_block != MINIC_BLOCK_INVALID ||
             statement->else_block != MINIC_BLOCK_INVALID) {
             return false;
@@ -1160,7 +1161,10 @@ static bool verify_statement(const MinicC0Program *program,
             label = &inline_asm->labels[operand_index];
             target_statement = minic_c0_program_statement(program, label->target_statement);
             if (label->name == NULL || label->name_length == 0U || target_statement == NULL ||
-                target_statement->kind != MINIC_STATEMENT_LABEL) {
+                target_statement->kind != MINIC_STATEMENT_LABEL ||
+                /* Core asm-goto taken edges cannot currently materialize
+                 * GNU cleanup callbacks; fail sealed ASTs closed as well. */
+                target_statement->cleanup_context != statement->cleanup_context) {
                 return false;
             }
         }

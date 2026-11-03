@@ -1,5 +1,6 @@
 #include "frontend/expression_semantics.h"
 #include "frontend/const_eval.h"
+#include "target/source_policy/source_info.h"
 
 bool minic_c0_inline_asm_input_value_supported(
     const MinicTargetInfo *target, const MinicExpression *expression,

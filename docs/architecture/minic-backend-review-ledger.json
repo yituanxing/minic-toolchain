@@ -39,6 +39,11 @@
       "review_depth": "targeted",
       "ci_touched_in": []
     },
+    "src/target/aarch64/asm_contract_source.h": {
+      "blob": "bcd900f8cee0c0f8d4167c6f5ad5a64d42545b3a",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
     "src/target/aarch64/block_emit.c": {
       "blob": "2463a165be14ea5b0699b83d2c6754bf39c8be47",
       "review_depth": "full",
@@ -582,6 +587,11 @@
         665
       ]
     },
+    "src/target/data_layout_source.h": {
+      "blob": "42d2d6410c9a48b17cb4f30f27515cee1f08ca95",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
     "src/target/loongarch64/asm_contract.c": {
       "blob": "0ce1755666ee9162659f869fb8c02b47af301d1c",
       "review_depth": "targeted",
@@ -590,6 +600,11 @@
     "src/target/loongarch64/asm_contract.h": {
       "blob": "7fb73c185c090dc691d0ee40530f3273e2beb699",
       "review_depth": "targeted",
+      "ci_touched_in": []
+    },
+    "src/target/loongarch64/asm_contract_source.h": {
+      "blob": "982c3f06e59834541821ac738cbf55b65eaa344e",
+      "review_depth": "inventory",
       "ci_touched_in": []
     },
     "src/target/loongarch64/block_emit.c": {
@@ -1202,6 +1217,11 @@
       "ci_touched_in": [],
       "note": "2026-10-29 batch19: typed source ASM policy and separate machine builtin contract."
     },
+    "src/target/source_policy/source_info.h": {
+      "blob": "4e83a5b6aec4a8bbfdd43572b397cbb05d941045",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
     "src/target/source_policy/x86_64.c": {
       "blob": "085f722881db9e1cc8342dffb4ff813bdebca22f",
       "review_depth": "full",
@@ -1258,6 +1278,11 @@
     },
     "src/target/x86_64/asm_contract.h": {
       "blob": "4415b188ef25e10d2ef04bf219d402bc57ab206d",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/x86_64/asm_contract_source.h": {
+      "blob": "229204f0a5b45a568ed5395922a246c442f6bda3",
       "review_depth": "inventory",
       "ci_touched_in": []
     },

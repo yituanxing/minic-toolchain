@@ -38,6 +38,21 @@ fi
 has src/core/core_ir_source.c 'minic_core_function_snapshot_types('
 has src/core/core_ir_source.c 'minic_source_placeholder('
 has src/core/core_ir.c 'minic_core_function_release_source_draft('
+has src/core/core_ir.h 'char *local_label_symbol;'
+has src/core/core_ir.h 'char *deferred_immediate_symbol;'
+has src/core/module_ir.h 'char *relocation_symbol;'
+exists src/core/symbol_identity.h
+has src/core/symbol_identity.h 'minic_core_label_symbol_valid('
+has src/core/symbol_identity.h 'minic_core_deferred_asm_symbol_valid('
+for source in src/core/core_ir.h src/core/module_ir.h \
+              src/target/common/direct_machine_dispatch.h \
+              src/target/riscv32/rv32_emit.c \
+              src/target/riscv64/core_codegen.c \
+              src/target/x86_64/codegen.c; do
+  lacks "$source" 'source_inline_asm_id'
+  lacks "$source" 'source_label_id'
+  lacks "$source" 'relocation_label_id'
+done
 for source in src/core/core_ir.c src/core/core_ir_verify.c; do
   lacks "$source" 'MinicType'
   lacks "$source" 'minic_type_'
@@ -47,6 +62,25 @@ done
 for symbol in 'MinicType' 'MinicEnumId' 'MinicFunctionTypeId' \
               'frontend/type.h'; do
   lacks src/core/core_ir.h "$symbol"
+done
+
+# Public machine-facing TargetInfo/DataLayout headers must have no source C
+# identity or Frontend type closure. Source policy is available explicitly to
+# Frontend and compiler ingress, never transitively through a target emitter.
+exists src/target/source_policy/source_info.h
+exists src/target/data_layout_source.h
+for arch in x86_64 aarch64 loongarch64; do
+  exists "src/target/$arch/asm_contract_source.h"
+  for symbol in 'MinicType' 'MinicC0Program' 'MinicInlineAsm' 'MinicExpression'; do
+    lacks "src/target/$arch/asm_contract.h" "$symbol"
+  done
+done
+has src/target/target_info.h 'const struct MinicTargetSourceInfo *source_info;'
+for source in src/target/target_info.h src/target/data_layout.h; do
+  lacks "$source" 'MinicType'
+  lacks "$source" 'MinicC0Program'
+  lacks "$source" 'frontend/type.h'
+  lacks "$source" 'frontend/ast.h'
 done
 
 has src/target/loongarch64/asm_contract.c 'loong_pte_form('

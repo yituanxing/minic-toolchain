@@ -179,40 +179,77 @@ bool minic_parser_identifier_starts_label(MinicParser *parser) {
     return minic_lexer_next(&lookahead, &token, &diagnostic) && token.kind == MINIC_TOKEN_COLON;
 }
 
-static void resolve_pending_inline_asm_labels(MinicParser *parser,
-                                              MinicSourceSpan name_span,
-                                              MinicStatementId label_statement_id) {
+/* Resolve C goto and GNU asm-goto targets together: both name the same
+ * source statement, but their cleanup effects differ. Ordinary goto may
+ * leave a cleanup scope (Core materializes it); asm goto cannot currently
+ * materialize cleanup on its taken edges and must stay within one context.
+ * Recheck already-bound GNU __label__ references at their final definition:
+ * the declaration's context need not equal the definition's context. */
+static bool resolve_label_control_edges(MinicParser *parser,
+                                        MinicSourceSpan name_span,
+                                        MinicStatementId label_statement_id,
+                                        bool is_local_label) {
     size_t statement_index;
     size_t name_length;
     const char *name;
+    const MinicStatement *target;
 
     if (parser == NULL || label_statement_id == MINIC_STATEMENT_INVALID) {
-        return;
+        return false;
     }
+    target = minic_c0_program_statement(parser->program, label_statement_id);
+    if (target == NULL || target->kind != MINIC_STATEMENT_LABEL)
+        return false;
     name = parser->source + name_span.begin.offset;
     name_length = minic_parser_span_length(name_span);
-    for (statement_index = parser->function_statement_begin; statement_index < label_statement_id;
+    /* GNU local labels and labels-as-values can allocate an anchor before
+     * their eventual definition. Scan every already-published function
+     * statement, not only those preceding the label's stable ID. */
+    for (statement_index = parser->function_statement_begin;
+         statement_index < parser->program->statement_count;
          ++statement_index) {
-        const MinicStatement *statement;
-        MinicInlineAsm *inline_asm;
+        MinicStatement *statement;
         size_t label_index;
 
-        statement = minic_c0_program_statement(parser->program, statement_index);
-        if (statement == NULL || statement->kind != MINIC_STATEMENT_INLINE_ASM ||
+        if (statement_index == label_statement_id)
+            continue;
+        statement = &parser->program->statements[statement_index];
+        if (statement->kind == MINIC_STATEMENT_GOTO &&
+            statement->expression == MINIC_EXPRESSION_INVALID &&
+            (statement->target_statement == label_statement_id ||
+             (!is_local_label && statement->target_statement == MINIC_STATEMENT_INVALID &&
+              minic_parser_span_equals(parser, statement->span, name_span)))) {
+            if (!minic_c0_cleanup_context_reaches(
+                    parser->program, statement->cleanup_context, target->cleanup_context)) {
+                minic_parser_error(parser,
+                                   "goto cannot enter a different GNU cleanup lifetime");
+                return false;
+            }
+            statement->target_statement = label_statement_id;
+            statement->cleanup_stop_context = target->cleanup_context;
+        }
+        if (statement->kind != MINIC_STATEMENT_INLINE_ASM ||
             statement->inline_asm_id >= parser->program->inline_asm_count) {
             continue;
         }
-        inline_asm = &parser->program->inline_asms[statement->inline_asm_id];
+        MinicInlineAsm *inline_asm = &parser->program->inline_asms[statement->inline_asm_id];
         for (label_index = 0U; label_index < inline_asm->label_count; ++label_index) {
             MinicInlineAsmLabel *label;
 
             label = &inline_asm->labels[label_index];
-            if (label->target_statement == MINIC_STATEMENT_INVALID &&
-                label->name_length == name_length && memcmp(label->name, name, name_length) == 0) {
+            if (label->target_statement == label_statement_id ||
+                (!is_local_label && label->target_statement == MINIC_STATEMENT_INVALID &&
+                 label->name_length == name_length && memcmp(label->name, name, name_length) == 0)) {
+                if (statement->cleanup_context != target->cleanup_context) {
+                    minic_parser_error(parser,
+                                       "GNU asm goto cannot cross a GNU cleanup lifetime");
+                    return false;
+                }
                 label->target_statement = label_statement_id;
             }
         }
     }
+    return true;
 }
 
 static bool consume_gnu_label_attribute(MinicParser *parser,
@@ -252,7 +289,6 @@ bool minic_parser_parse_label(MinicParser *parser, bool allow_declaration) {
     MinicStatementId label_statement_id;
     MinicStatementId local_label_id;
     MinicStatementId existing_function_label_id;
-    size_t statement_index;
     bool is_local_label;
     bool defines_pending_function_label;
 
@@ -315,28 +351,8 @@ bool minic_parser_parse_label(MinicParser *parser, bool allow_declaration) {
         return false;
     }
 
-    if (!is_local_label) {
-        for (statement_index = parser->function_statement_begin;
-             statement_index < label_statement_id;
-             ++statement_index) {
-            MinicStatement *pending;
-
-            pending = &parser->program->statements[statement_index];
-            if (pending->kind == MINIC_STATEMENT_GOTO &&
-                pending->target_statement == MINIC_STATEMENT_INVALID &&
-                minic_parser_span_equals(parser, pending->span, name_span)) {
-                if (!minic_c0_cleanup_context_reaches(
-                        parser->program, pending->cleanup_context, statement.cleanup_context)) {
-                    minic_parser_error(parser,
-                                       "goto cannot enter a different GNU cleanup lifetime");
-                    return false;
-                }
-                pending->target_statement = label_statement_id;
-                pending->cleanup_stop_context = statement.cleanup_context;
-            }
-        }
-        resolve_pending_inline_asm_labels(parser, name_span, label_statement_id);
-    }
+    if (!resolve_label_control_edges(parser, name_span, label_statement_id, is_local_label))
+        return false;
 
     if (parser->current.kind == MINIC_TOKEN_RBRACE || parser->current.kind == MINIC_TOKEN_EOF) {
         minic_parser_error(parser, "label must be followed by a statement");

@@ -2135,6 +2135,29 @@ check-common-linux-jump-label-contract:
 
 check-fast: check-common-linux-jump-label-contract
 
+# Source ASM and local labels are sealed to canonical owned symbol identities
+# before Core publication. All five machine consumers validate these names
+# without reopening frontend statement tables or interpolating untrusted text.
+.PHONY: check-target-sealed-symbol-contract
+check-target-sealed-symbol-contract:
+	mkdir -p "$(BUILD_DIR)/tests"
+	$(CC) -std=c11 -Wall -Wextra -Wpedantic -Werror $(MINIC_INCLUDES) \
+	  tests/target/target_sealed_symbol_contract.c \
+	  src/target/common/module_global_emit.c \
+	  -o "$(BUILD_DIR)/tests/target-sealed-symbol-contract"
+	"$(BUILD_DIR)/tests/target-sealed-symbol-contract"
+
+check-fast: check-target-sealed-symbol-contract
+
+# Core owns the local asm-goto symbol, and frontend cleanup lifetimes are
+# enforced at source resolution before these taken edges enter Core CFG.
+.PHONY: check-frontend-asm-goto-cleanup-lifetime
+check-frontend-asm-goto-cleanup-lifetime: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" \
+	  sh tests/frontend/p24_asm_goto_cleanup_regression.sh
+
+check-fast: check-frontend-asm-goto-cleanup-lifetime
+
 # The Core/machine header closure must never drag in the C AST. A standalone
 # translation unit catches accidental transitive dependencies before backend
 # implementation files can mask them with a frontend include of their own.
@@ -2142,7 +2165,7 @@ check-fast: check-common-linux-jump-label-contract
 check-target-machine-header-boundary:
 	$(CC) -std=c11 $(COMMON_WARNINGS) -Werror -Iinclude -Isrc \
 		-fsyntax-only tests/target/machine_header_ast_boundary.c
-	@echo "TARGET_MACHINE_HEADER_BOUNDARY=PASS c_ast=absent"
+	@echo "TARGET_MACHINE_HEADER_BOUNDARY=PASS c_ast=absent c_type=absent"
 
 check-fast: check-target-machine-header-boundary
 

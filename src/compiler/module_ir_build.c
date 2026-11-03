@@ -1,6 +1,8 @@
 #include "compiler/module_ir_build.h"
+#include "core/symbol_identity.h"
 
 #include "compiler/global_payload.h"
+#include "target/data_layout_source.h"
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -151,8 +153,8 @@ static bool module_sink_relocation(void *context,
             sink->program, source->target_id);
         if (label == NULL || label->kind != MINIC_STATEMENT_LABEL) return false;
         fragment->relocation_kind = MINIC_CORE_MODULE_RELOCATION_LABEL;
-        fragment->relocation_label_id = source->target_id;
-        return true;
+        return minic_core_format_label_symbol(source->target_id,
+                                              &fragment->relocation_symbol);
     }
     symbol = minic_multi_global_relocation_target_name(sink->program, source);
     if (symbol == NULL || symbol[0] == '\0' ||

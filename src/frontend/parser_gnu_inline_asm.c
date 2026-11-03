@@ -235,6 +235,19 @@ static bool parse_gnu_inline_asm_label(MinicParser *parser, MinicInlineAsmId inl
     name = parser->source + name_span.begin.offset;
     name_length = minic_parser_span_length(name_span);
     target_statement = minic_parser_find_label_statement(parser, name_span);
+    if (target_statement != MINIC_STATEMENT_INVALID) {
+        const MinicStatement *target =
+            minic_c0_program_statement(parser->program, target_statement);
+        /* A taken asm-goto edge cannot execute source cleanup callbacks.
+         * Preserve the source label, but fail closed across cleanup scopes
+         * until Core has explicit cleanup-on-branch-edge semantics. */
+        if (target == NULL || target->kind != MINIC_STATEMENT_LABEL ||
+            target->cleanup_context != parser->cleanup_context) {
+            minic_parser_error(parser,
+                               "GNU asm goto cannot cross a GNU cleanup lifetime");
+            return false;
+        }
+    }
     return minic_c0_program_add_inline_asm_label(
                parser->program, inline_asm_id, name, name_length, target_statement) &&
            minic_parser_advance(parser);
@@ -457,6 +470,8 @@ bool minic_parser_gnu_inline_asm_statement(MinicParser *parser) {
     statement.target_expression = MINIC_EXPRESSION_INVALID;
     statement.expression = MINIC_EXPRESSION_INVALID;
     statement.target_statement = MINIC_STATEMENT_INVALID;
+    statement.cleanup_context = parser->cleanup_context;
+    statement.cleanup_stop_context = MINIC_CLEANUP_CONTEXT_ROOT;
     statement.inline_asm_id = inline_asm_id;
     statement.then_block = MINIC_BLOCK_INVALID;
     statement.else_block = MINIC_BLOCK_INVALID;

@@ -12,7 +12,6 @@ int main(void) {
     MinicCoreType type = {0};
     MinicCoreTypeId int_id, double_id;
     bool reachable[3] = {false, false, false};
-    size_t i;
 
     minic_core_type_context_initialize(&types);
     type.kind = MINIC_CORE_TYPE_INTEGER;
@@ -49,18 +48,22 @@ int main(void) {
     blocks[0].terminator.conditional.condition = 0U;
     blocks[0].terminator.conditional.when_true = 1U;
     blocks[0].terminator.conditional.when_false = 2U;
-    for (i = 1U; i < 3U; ++i) {
+    for (size_t i = 1U; i < 3U; ++i) {
         blocks[i].has_terminator = true;
         blocks[i].terminator.kind = MINIC_CORE_TERMINATOR_RETURN;
         blocks[i].terminator.return_value = MINIC_CORE_VALUE_INVALID;
     }
-    for (i = 0U; i < 3U; ++i)
-        blocks[i].source_label_id = SIZE_MAX;
     if (minic_core_function_fold_literal_branches(&fn) != 1U ||
         blocks[0].terminator.kind != MINIC_CORE_TERMINATOR_BRANCH ||
         blocks[0].terminator.branch_target != 1U ||
         !minic_core_function_mark_reachable_blocks(&fn, reachable, 3U) ||
         !reachable[0] || !reachable[1] || reachable[2]) return 1;
+    /* A sealed local symbol remains a CFG root even when constant folding
+     * proves its ordinary lexical branch unreachable. */
+    blocks[2].local_label_symbol = ".Luser_2";
+    if (!minic_core_function_mark_reachable_blocks(&fn, reachable, 3U) ||
+        !reachable[2]) return 12;
+    blocks[2].local_label_symbol = NULL;
 
     /* False literal selects the other successor without changing effects. */
     blocks[0].terminator.kind = MINIC_CORE_TERMINATOR_CONDITIONAL_BRANCH;

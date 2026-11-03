@@ -6,11 +6,11 @@
 #include "target/riscv64/codegen.h"
 #include "target/riscv32/rv32_emit.h"
 #include "target/x86_64/codegen.h"
-#include "target/x86_64/asm_contract.h"
+#include "target/x86_64/asm_contract_source.h"
 #include "target/aarch64/codegen.h"
-#include "target/aarch64/asm_contract.h"
+#include "target/aarch64/asm_contract_source.h"
 #include "target/loongarch64/codegen.h"
-#include "target/loongarch64/asm_contract.h"
+#include "target/loongarch64/asm_contract_source.h"
 #include <string.h>
 
 static bool emit_riscv64_module(

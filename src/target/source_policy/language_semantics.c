@@ -127,13 +127,15 @@ integer_literal_fits(const MinicTargetIntegerModel *model, MinicType type, uint6
  * -fno-* spelling is explicitly present. */
 bool minic_target_invocation_begin(MinicTargetInvocation *invocation,
                                    const MinicTargetInfo *canonical) {
-    if (invocation == NULL || canonical == NULL ||
-        canonical->integer_model == NULL || canonical->data_layout == NULL)
+    if (invocation == NULL || canonical == NULL || canonical->source_info == NULL ||
+        canonical->source_info->integer_model == NULL || canonical->data_layout == NULL)
         return false;
     invocation->target = *canonical;
-    invocation->integer_model = *canonical->integer_model;
-    invocation->target.integer_model = &invocation->integer_model;
-    invocation->default_wide_character_type = canonical->wide_character_type;
+    invocation->source_info = *canonical->source_info;
+    invocation->target.source_info = &invocation->source_info;
+    invocation->integer_model = *canonical->source_info->integer_model;
+    invocation->source_info.integer_model = &invocation->integer_model;
+    invocation->default_wide_character_type = canonical->source_info->wide_character_type;
     return true;
 }
 
@@ -150,7 +152,7 @@ bool minic_target_invocation_plain_char(MinicTargetInvocation *invocation,
 bool minic_target_invocation_short_wchar(MinicTargetInvocation *invocation,
                                          bool enabled) {
     if (invocation == NULL) return false;
-    invocation->target.wide_character_type = enabled
+    invocation->source_info.wide_character_type = enabled
         ? minic_type_unsigned_short()
         : invocation->default_wide_character_type;
     /* -fno-short-wchar restores the canonical descriptor chosen by begin().
@@ -160,10 +162,15 @@ bool minic_target_invocation_short_wchar(MinicTargetInvocation *invocation,
 
 /* The language admission gate is intentionally independent of the emitter.
  * A declaration may be parsed while its arithmetic and ABI remain unsupported. */
+const MinicTargetIntegerModel *minic_target_info_integer_model(const MinicTargetInfo *target) {
+    return target == NULL || target->source_info == NULL
+        ? NULL : target->source_info->integer_model;
+}
+
 bool minic_target_info_language_type_supported(const MinicTargetInfo *target,
                                                MinicTypeBaseKind kind) {
     unsigned int required;
-    if (target == NULL) return false;
+    if (target == NULL || target->source_info == NULL) return false;
     switch (kind) {
     case MINIC_TYPE_BASE_FLOAT128:
     case MINIC_TYPE_BASE_FLOAT32:
@@ -191,7 +198,7 @@ bool minic_target_info_language_type_supported(const MinicTargetInfo *target,
     default:
         return false;
     }
-    return (target->language_type_capabilities & required) != 0U;
+    return (target->source_info->language_type_capabilities & required) != 0U;
 }
 
 /* Source-language vocabulary is owned by the selected target policy.
@@ -201,7 +208,7 @@ bool minic_target_info_named_builtin_type(const MinicTargetInfo *target,
                                           const char *spelling, size_t length,
                                           MinicType *type) {
     const MinicTargetSourceLanguagePolicy *policy =
-        target == NULL ? NULL : target->source_language_policy;
+        (target == NULL || target->source_info == NULL) ? NULL : target->source_info->source_language_policy;
     return policy != NULL && spelling != NULL &&
            policy->named_builtin_type != NULL &&
            policy->named_builtin_type(target, spelling, length, type);
@@ -210,7 +217,7 @@ bool minic_target_info_named_builtin_type(const MinicTargetInfo *target,
 bool minic_target_info_header_opaque_vector_return(const MinicTargetInfo *target,
                                                     MinicType return_type) {
     const MinicTargetSourceLanguagePolicy *policy =
-        target == NULL ? NULL : target->source_language_policy;
+        (target == NULL || target->source_info == NULL) ? NULL : target->source_info->source_language_policy;
     return policy != NULL && policy->header_opaque_return != NULL &&
            policy->header_opaque_return(target, return_type);
 }
@@ -219,7 +226,7 @@ bool minic_target_info_header_attribute_supported(const MinicTargetInfo *target,
                                                   const char *spelling,
                                                   size_t length) {
     const MinicTargetSourceLanguagePolicy *policy =
-        target == NULL ? NULL : target->source_language_policy;
+        (target == NULL || target->source_info == NULL) ? NULL : target->source_info->source_language_policy;
     return policy != NULL && spelling != NULL &&
            policy->header_attribute != NULL &&
            policy->header_attribute(target, spelling, length);
@@ -228,7 +235,7 @@ bool minic_target_info_header_attribute_supported(const MinicTargetInfo *target,
 bool minic_target_info_gnu_function_security_attribute_supported(
     const MinicTargetInfo *target, const char *attribute, size_t length) {
     const MinicTargetSourceLanguagePolicy *policy =
-        target == NULL ? NULL : target->source_language_policy;
+        (target == NULL || target->source_info == NULL) ? NULL : target->source_info->source_language_policy;
     return policy != NULL && attribute != NULL &&
            policy->gnu_function_attribute_name != NULL &&
            policy->gnu_function_attribute_name(attribute, length);
@@ -238,7 +245,7 @@ bool minic_target_info_gnu_function_security_attribute_value_supported(
     const MinicTargetInfo *target, MinicTargetGnuFunctionAttributeKind kind,
     const char *value, size_t value_length) {
     const MinicTargetSourceLanguagePolicy *policy =
-        target == NULL ? NULL : target->source_language_policy;
+        (target == NULL || target->source_info == NULL) ? NULL : target->source_info->source_language_policy;
     return policy != NULL && (value != NULL || value_length == 0U) &&
            policy->gnu_function_attribute_value != NULL &&
            policy->gnu_function_attribute_value(kind, value, value_length);
@@ -249,7 +256,7 @@ bool minic_target_info_gnu_pragma_target_options(
     const MinicTargetGnuPragmaOptionState *current,
     MinicTargetGnuPragmaOptionState *next) {
     const MinicTargetSourceLanguagePolicy *policy =
-        target == NULL ? NULL : target->source_language_policy;
+        (target == NULL || target->source_info == NULL) ? NULL : target->source_info->source_language_policy;
     MinicTargetGnuPragmaOptionState candidate;
 
     if (policy == NULL || value == NULL || current == NULL || next == NULL ||
@@ -266,10 +273,10 @@ bool minic_target_info_gnu_pragma_target_options(
  * decides separately which calling conventions it can actually emit. */
 bool minic_target_info_function_pointer_calling_convention_declaration_supported(
     const MinicTargetInfo *target, MinicFunctionCallingConvention convention) {
-    if (target == NULL) return false;
+    if (target == NULL || target->source_info == NULL) return false;
     if (convention == MINIC_CALLING_CONVENTION_DEFAULT) return true;
     return convention == MINIC_CALLING_CONVENTION_MS_X64 &&
-           (target->language_type_capabilities &
+           (target->source_info->language_type_capabilities &
             MINIC_TARGET_LANG_MS_X64_FUNCTION_POINTER_DECLARATIONS) != 0U;
 }
 
@@ -277,9 +284,10 @@ bool minic_target_info_function_pointer_calling_convention_declaration_supported
 bool minic_target_info_va_cursor_source_shape(
     const MinicTargetInfo *target, MinicVaCursorSourceShape *shape) {
     const MinicTargetVaCursorSourceAbiPolicy *policy;
-    if (target == NULL || target->data_layout == NULL || shape == NULL)
+    if (target == NULL || target->source_info == NULL ||
+        target->data_layout == NULL || shape == NULL)
         return false;
-    policy = target->va_cursor_source_abi_policy;
+    policy = target->source_info->va_cursor_source_abi_policy;
     if (policy == NULL) {
         if (target->variadic_copy_kind != MINIC_VARIADIC_COPY_SCALAR_ASSIGNMENT)
             return false;
@@ -343,12 +351,13 @@ bool minic_target_info_va_cursor_source_operand_supported(
 }
 
 bool minic_target_info_plain_char_sign(const MinicTargetInfo *target, MinicIntegerSign *sign) {
-    if (target == NULL || target->integer_model == NULL || sign == NULL ||
-        (target->integer_model->plain_char_sign != MINIC_INTEGER_SIGN_SIGNED &&
-         target->integer_model->plain_char_sign != MINIC_INTEGER_SIGN_UNSIGNED)) {
+    if (target == NULL || target->source_info == NULL ||
+        target->source_info->integer_model == NULL || sign == NULL ||
+        (target->source_info->integer_model->plain_char_sign != MINIC_INTEGER_SIGN_SIGNED &&
+         target->source_info->integer_model->plain_char_sign != MINIC_INTEGER_SIGN_UNSIGNED)) {
         return false;
     }
-    *sign = target->integer_model->plain_char_sign;
+    *sign = target->source_info->integer_model->plain_char_sign;
     return true;
 }
 
@@ -364,23 +373,25 @@ bool minic_target_info_plain_char_type(const MinicTargetInfo *target, MinicType 
 }
 
 bool minic_target_info_wide_character_type(const MinicTargetInfo *target, MinicType *type) {
-    if (target == NULL || type == NULL || !minic_type_is_integer(target->wide_character_type)) {
+    if (target == NULL || target->source_info == NULL || type == NULL ||
+        !minic_type_is_integer(target->source_info->wide_character_type)) {
         return false;
     }
-    *type = target->wide_character_type;
+    *type = target->source_info->wide_character_type;
     return true;
 }
 
 bool minic_target_info_word_integer_type(const MinicTargetInfo *target,
                                          MinicIntegerSign sign,
                                          MinicType *type) {
-    if (target == NULL || target->integer_model == NULL || type == NULL ||
-        target->word_integer_rank <= MINIC_INTEGER_RANK_NONE ||
-        target->word_integer_rank > MINIC_INTEGER_RANK_INT128 ||
+    if (target == NULL || target->source_info == NULL ||
+        target->source_info->integer_model == NULL || type == NULL ||
+        target->source_info->word_integer_rank <= MINIC_INTEGER_RANK_NONE ||
+        target->source_info->word_integer_rank > MINIC_INTEGER_RANK_INT128 ||
         (sign != MINIC_INTEGER_SIGN_SIGNED && sign != MINIC_INTEGER_SIGN_UNSIGNED)) {
         return false;
     }
-    return minic_target_source_integer_type_with_rank(sign, target->word_integer_rank, type);
+    return minic_target_source_integer_type_with_rank(sign, target->source_info->word_integer_rank, type);
 }
 
 bool minic_target_info_function_alias_abi_compatible(
@@ -388,7 +399,8 @@ bool minic_target_info_function_alias_abi_compatible(
     const MinicFunction *alias, const MinicFunction *owner) {
     size_t i;
     bool incompatible_parameters = false;
-    if (target == NULL || program == NULL || alias == NULL || owner == NULL ||
+    if (target == NULL || target->source_info == NULL ||
+        program == NULL || alias == NULL || owner == NULL ||
         alias->parameter_count != owner->parameter_count ||
         alias->is_variadic != owner->is_variadic ||
         !minic_c0_types_compatible(
@@ -405,9 +417,9 @@ bool minic_target_info_function_alias_abi_compatible(
      * a target owner must certify the WHOLE function and real symbol family. */
     if (!incompatible_parameters) return true;
     return !alias->is_variadic && !alias->is_internal && !owner->is_internal &&
-           target->alias_abi_policy != NULL &&
-           target->alias_abi_policy->allow_incompatible_prototypes != NULL &&
-           target->alias_abi_policy->allow_incompatible_prototypes(
+           target->source_info->alias_abi_policy != NULL &&
+           target->source_info->alias_abi_policy->allow_incompatible_prototypes != NULL &&
+           target->source_info->alias_abi_policy->allow_incompatible_prototypes(
                target, program, alias, owner);
 }
 
@@ -417,20 +429,21 @@ bool minic_target_info_sizeof_type(const MinicTargetInfo *target,
                                    size_t *size) {
     size_t alignment;
 
-    if (target == NULL || program == NULL || size == NULL) {
+    if (target == NULL || target->source_info == NULL ||
+        program == NULL || size == NULL) {
         return false;
     }
     /* Builtin va_list is already an ordinary canonical Program record/array
      * shape here; no pointer-width exception or target ISA switch is valid. */
     if (minic_type_is_void(type)) {
-        if (!target->gnu_sizeof_void_is_one) {
+        if (!target->source_info->gnu_sizeof_void_is_one) {
             return false;
         }
         *size = 1U;
         return true;
     }
     if (minic_type_is_function(type)) {
-        if (!target->gnu_sizeof_function_is_one) {
+        if (!target->source_info->gnu_sizeof_function_is_one) {
             return false;
         }
         *size = 1U;
@@ -445,11 +458,11 @@ bool minic_target_info_integer_width(const MinicTargetInfo *target,
                                      unsigned int *bits) {
     MinicType effective_type;
 
-    if (target == NULL || program == NULL ||
+    if (target == NULL || target->source_info == NULL || program == NULL ||
         !minic_c0_type_effective_integer_type(program, type, &effective_type)) {
         return false;
     }
-    return integer_model_semantic_width(target->integer_model, effective_type, bits);
+    return integer_model_semantic_width(target->source_info->integer_model, effective_type, bits);
 }
 
 bool minic_target_info_integer_promotion(const MinicTargetInfo *target,
@@ -460,10 +473,11 @@ bool minic_target_info_integer_promotion(const MinicTargetInfo *target,
     unsigned int int_bits;
     unsigned int source_bits;
 
-    if (target == NULL || result == NULL || !minic_type_is_integer(type)) {
+    if (target == NULL || target->source_info == NULL || result == NULL ||
+        !minic_type_is_integer(type)) {
         return false;
     }
-    model = target->integer_model;
+    model = target->source_info->integer_model;
     if (!integer_model_effective_sign(model, type, &sign) ||
         !integer_model_semantic_width(model, type, &source_bits) ||
         !integer_model_semantic_width(model, minic_type_int(), &int_bits)) {
@@ -493,11 +507,11 @@ bool minic_target_info_integer_common(const MinicTargetInfo *target,
     MinicIntegerSign left_sign;
     MinicIntegerSign right_sign;
 
-    if (target == NULL || result == NULL ||
+    if (target == NULL || target->source_info == NULL || result == NULL ||
         !minic_target_info_integer_promotion(target, left, &promoted_left) ||
         !minic_target_info_integer_promotion(target, right, &promoted_right) ||
-        !integer_model_effective_sign(target->integer_model, promoted_left, &left_sign) ||
-        !integer_model_effective_sign(target->integer_model, promoted_right, &right_sign)) {
+        !integer_model_effective_sign(target->source_info->integer_model, promoted_left, &left_sign) ||
+        !integer_model_effective_sign(target->source_info->integer_model, promoted_right, &right_sign)) {
         return false;
     }
     if (minic_type_equal(promoted_left, promoted_right)) {
@@ -518,7 +532,7 @@ bool minic_target_info_integer_common(const MinicTargetInfo *target,
         return minic_target_source_integer_type_with_rank(
             MINIC_INTEGER_SIGN_UNSIGNED, unsigned_type.integer_rank, result);
     }
-    if (signed_type_represents_unsigned(target->integer_model, signed_type, unsigned_type)) {
+    if (signed_type_represents_unsigned(target->source_info->integer_model, signed_type, unsigned_type)) {
         *result = signed_type;
         return true;
     }
@@ -561,7 +575,8 @@ bool minic_target_info_integer_literal_type(const MinicTargetInfo *target,
     size_t index;
     bool decimal;
 
-    if (target == NULL || target->integer_model == NULL || result == NULL || long_count > 2U ||
+    if (target == NULL || target->source_info == NULL ||
+        target->source_info->integer_model == NULL || result == NULL || long_count > 2U ||
         (base != MINIC_INTEGER_LITERAL_BASE_BINARY &&
          base != MINIC_INTEGER_LITERAL_BASE_DECIMAL &&
          base != MINIC_INTEGER_LITERAL_BASE_OCTAL &&
@@ -609,7 +624,7 @@ bool minic_target_info_integer_literal_type(const MinicTargetInfo *target,
     }
 
     for (index = 0U; index < candidate_count; ++index) {
-        if (integer_literal_fits(target->integer_model, candidates[index], value)) {
+        if (integer_literal_fits(target->source_info->integer_model, candidates[index], value)) {
             *result = candidates[index];
             return true;
         }
@@ -623,7 +638,7 @@ bool minic_target_info_integer_literal_type(const MinicTargetInfo *target,
  * operand allocation and final emitter qualification are separate contracts. */
 static const MinicTargetAsmSourcePolicy *minic_target_source_policy(
     const MinicTargetInfo *target) {
-    return target == NULL ? NULL : target->asm_source_policy;
+    return (target == NULL || target->source_info == NULL) ? NULL : target->source_info->asm_source_policy;
 }
 
 bool minic_target_info_fixed_register_supported(const MinicTargetInfo *target,
@@ -680,7 +695,7 @@ bool minic_target_info_machine_builtin_signature(
     MinicType arguments[3], size_t *argument_count,
     const char **mnemonic, size_t *immediate_index) {
     const MinicTargetMachineBuiltinPolicy *policy =
-        target == NULL ? NULL : target->machine_builtin_policy;
+        (target == NULL || target->source_info == NULL) ? NULL : target->source_info->machine_builtin_policy;
     return policy != NULL && policy->signature != NULL &&
            policy->signature(target, spelling, length, callee, callee_capacity,
                              result, arguments, argument_count, mnemonic,

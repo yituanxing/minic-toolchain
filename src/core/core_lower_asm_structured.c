@@ -1,4 +1,5 @@
 #include "core/core_lower_asm_internal.h"
+#include "core/symbol_identity.h"
 
 #include "frontend/const_eval.h"
 #include "frontend/expression_semantics.h"
@@ -515,7 +516,6 @@ MinicCoreLowerStatus core_asm_try_structured_roles_and_asm_goto(
             return MINIC_CORE_LOWER_ERROR;
         stored = &context->function->inline_asms[inline_asm_id];
         stored->is_goto = true;
-        stored->source_inline_asm_id = SIZE_MAX;
         stored->goto_target = targets[0];
         stored->goto_second_target = targets[1];
         for (i = 0U; i < source->input_count; ++i) {
@@ -830,9 +830,10 @@ MinicCoreLowerStatus core_asm_try_structured_roles_and_asm_goto(
         free(numeric_template);
         stored = &context->function->inline_asms[inline_asm_id];
         stored->is_goto = true;
-        stored->source_inline_asm_id = input_resolved
-                                           ? SIZE_MAX
-                                           : (size_t)statement->inline_asm_id;
+        if (!input_resolved && !minic_core_format_deferred_asm_symbol(
+                (size_t)statement->inline_asm_id,
+                &stored->deferred_immediate_symbol))
+            { *handled = true; return MINIC_CORE_LOWER_ERROR; }
         stored->goto_target = target_block;
 
         (void)memset(&instruction, 0, sizeof(instruction));

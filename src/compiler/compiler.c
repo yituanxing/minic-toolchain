@@ -13,6 +13,8 @@
 #include "frontend/parser.h"
 #include "target/backend.h"
 #include "target/data_layout.h"
+#include "target/data_layout_source.h"
+#include "target/source_policy/source_info.h"
 #include "target/target_info.h"
 
 #include <errno.h>
@@ -258,7 +260,8 @@ int minic_compile_preprocessed_file_for_target(const char *input_path,
     }
     backend = minic_backend_for_target(target_info);
     if (target_info == NULL || backend == NULL ||
-        target_info->data_layout == NULL || target_info->integer_model == NULL) {
+        target_info->data_layout == NULL || target_info->source_info == NULL ||
+        target_info->source_info->integer_model == NULL) {
         minic_set_diagnostic(diagnostic, input_path, 1U, 1U, "invalid target configuration");
         return 1;
     }

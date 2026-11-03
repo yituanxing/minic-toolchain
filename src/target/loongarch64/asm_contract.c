@@ -1,4 +1,4 @@
-#include "target/loongarch64/asm_contract.h"
+#include "target/loongarch64/asm_contract_source.h"
 #include "frontend/ast.h"
 #include "target/loongarch64/simd_asm.h"
 #include "target/loongarch64/simd_source_policy.h"

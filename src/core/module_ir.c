@@ -1,4 +1,5 @@
 #include "core/module_ir.h"
+#include "core/symbol_identity.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -63,7 +64,8 @@ static bool module_global_fragments_valid(const MinicCoreModuleGlobal *global) {
                 fragment->byte_count != 4U && fragment->byte_count != 8U)
                 return false;
             if (fragment->relocation_kind == MINIC_CORE_MODULE_RELOCATION_LABEL) {
-                if (fragment->relocation_symbol != NULL) return false;
+                if (!minic_core_label_symbol_valid(fragment->relocation_symbol) ||
+                    fragment->relocation_addend != 0) return false;
             } else if (fragment->relocation_kind == MINIC_CORE_MODULE_RELOCATION_OBJECT ||
                        fragment->relocation_kind == MINIC_CORE_MODULE_RELOCATION_FUNCTION) {
                 if (fragment->relocation_symbol == NULL ||

@@ -108,7 +108,8 @@ static bool aarch_header_opaque_return(const MinicTargetInfo *target,
 
 static bool aarch_header_attribute(const MinicTargetInfo *target,
                                    const char *name, size_t length) {
-    return (target->language_type_capabilities &
+    return target->source_info != NULL &&
+           (target->source_info->language_type_capabilities &
             MINIC_TARGET_LANG_OPAQUE_VECTOR_HEADER_DECLARATIONS) != 0U &&
            aarch_register_is(name, length, "__aarch64_vector_pcs__");
 }

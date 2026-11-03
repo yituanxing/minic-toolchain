@@ -1,19 +1,14 @@
 #ifndef MINIC_TARGET_DATA_LAYOUT_H
 #define MINIC_TARGET_DATA_LAYOUT_H
 
-#include "frontend/type.h"
-
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
-/* Source object traversal requires a complete C AST only in data_layout.c.
- * Machine users need the target's immutable byte/align descriptor, not the
- * parser's expression, statement, or translation-unit representation. */
-typedef struct MinicC0Program MinicC0Program;
-typedef struct MinicGlobalObject MinicGlobalObject;
-typedef struct MinicRecord MinicRecord;
-typedef struct MinicGlobalRelocation MinicGlobalRelocation;
+/* Machine/ABI byte-layout dimensions cannot depend on C nominal descriptors.
+ * Source rank IDs are checked against this storage table by the C-only
+ * DataLayout adapter. Keep this count stable for existing five ABIs. */
+enum { MINIC_DATA_LAYOUT_INTEGER_RANK_SLOTS = 8U };
 
 typedef enum MinicByteOrder {
     MINIC_BYTE_ORDER_UNKNOWN = 0,
@@ -27,8 +22,8 @@ typedef struct MinicDataLayout {
     MinicByteOrder byte_order;
     size_t pointer_size;
     size_t pointer_alignment;
-    size_t integer_size[MINIC_INTEGER_RANK_INT128 + 1U];
-    size_t integer_alignment[MINIC_INTEGER_RANK_INT128 + 1U];
+    size_t integer_size[MINIC_DATA_LAYOUT_INTEGER_RANK_SLOTS];
+    size_t integer_alignment[MINIC_DATA_LAYOUT_INTEGER_RANK_SLOTS];
     size_t float_size;
     size_t float_alignment;
     size_t double_size;
@@ -56,52 +51,5 @@ const MinicDataLayout *minic_x86_64_linux_data_layout(void);
 /* AAPCS64 LP64 and LoongArch ELF lp64d: separate target-owned layouts. */
 const MinicDataLayout *minic_aarch64_linux_data_layout(void);
 const MinicDataLayout *minic_loongarch64_linux_data_layout(void);
-bool minic_data_layout_type(const MinicDataLayout *layout,
-                            const MinicC0Program *program,
-                            MinicType type,
-                            size_t *size,
-                            size_t *alignment);
-/* Machine-neutral validation of the complete C0 object and record layout.
- * Physical frame allocation, value slots, and target ABI are NOT computed.
- * This is the unique translation-unit layout admission for all five targets. */
-typedef enum MinicDataLayoutProgramCheck {
-    MINIC_DATA_LAYOUT_PROGRAM_OK = 0,
-    MINIC_DATA_LAYOUT_PROGRAM_INVALID_INPUT,
-    MINIC_DATA_LAYOUT_PROGRAM_INVALID_RECORD,
-    MINIC_DATA_LAYOUT_PROGRAM_INVALID_GLOBAL
-} MinicDataLayoutProgramCheck;
-MinicDataLayoutProgramCheck minic_data_layout_validate_program(
-    const MinicDataLayout *, const MinicC0Program *);
-
-bool minic_data_layout_global_object(const MinicDataLayout *layout,
-                                     const MinicC0Program *program,
-                                     const MinicGlobalObject *object,
-                                     size_t *size,
-                                     size_t *alignment);
-bool minic_data_layout_record_field_alignment(const MinicDataLayout *layout,
-                                              const MinicC0Program *program,
-                                              const MinicRecord *record,
-                                              size_t field_index,
-                                              size_t *alignment);
-bool minic_data_layout_record_field_layout(const MinicDataLayout *layout,
-                                           const MinicC0Program *program,
-                                           const MinicRecord *record,
-                                           size_t field_index,
-                                           size_t *offset,
-                                           size_t *bit_offset);
-bool minic_data_layout_record_field_offset(const MinicDataLayout *layout,
-                                           const MinicC0Program *program,
-                                           const MinicRecord *record,
-                                           size_t field_index,
-                                           size_t *offset);
-bool minic_data_layout_global_relocation_offset(const MinicDataLayout *layout,
-                                                const MinicC0Program *program,
-                                                const MinicGlobalObject *object,
-                                                const MinicGlobalRelocation *relocation,
-                                                size_t *offset);
-bool minic_data_layout_global_relocation_target_addend(const MinicDataLayout *layout,
-                                                       const MinicC0Program *program,
-                                                       const MinicGlobalRelocation *relocation,
-                                                       int64_t *addend);
 
 #endif

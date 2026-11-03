@@ -17,6 +17,7 @@
 #include "target/riscv64/runtime_libcall.h"
 #include "target/riscv/instruction_select.h"
 #include "core/value_uses.h"
+#include "core/symbol_identity.h"
 #include "target/common/core_block_walk.h"
 #include "target/common/core_instruction_family.h"
 #include "target/target_info.h"
@@ -706,9 +707,10 @@ static bool emit_core_function_with_symbol(FILE *file,
         if (!emit_block_label(file, symbol_name, (MinicCoreBlockId)block_index)) {
             return core_frame_fail(&frame);
         }
-        if (!function->suppress_source_label_aliases &&
-            block->source_label_id != SIZE_MAX &&
-            fprintf(file, ".Luser_%zu:\n", block->source_label_id) < 0) {
+        if (!function->suppress_local_label_aliases &&
+            block->local_label_symbol != NULL &&
+            (!minic_core_label_symbol_valid(block->local_label_symbol) ||
+             fprintf(file, "%s:\n", block->local_label_symbol) < 0)) {
             return core_frame_fail(&frame);
         }
         for (instruction_index = 0U; instruction_index < block->instruction_count;

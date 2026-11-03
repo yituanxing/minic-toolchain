@@ -61,10 +61,10 @@ typedef struct MinicCoreModuleFragment {
      * layout remains bit-exact regardless of the assembler's formatting. */
     bool bits_signed_integer;
     MinicCoreModuleRelocationKind relocation_kind;
-    /* Owned symbolic identity for object/function targets; labels instead
-     * use the Core-owned source label ordinal. */
+    /* Owned symbolic identity for object/function and local-label targets.
+     * Label relocations reference the exact local symbol emitted by the
+     * corresponding published Core block; no source statement IDs escape. */
     char *relocation_symbol;
-    size_t relocation_label_id;
     int64_t relocation_addend;
 } MinicCoreModuleFragment;
 

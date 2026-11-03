@@ -2,6 +2,7 @@
 #include "target/common/core_numeric_shape.h"
 #include "target/common/direct_instruction_semantics.h"
 #include "target/common/lp64_scalar.h"
+#include "target/source_policy/source_info.h"
 
 #include <stdio.h>
 

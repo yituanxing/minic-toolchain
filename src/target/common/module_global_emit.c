@@ -1,5 +1,6 @@
 #include "target/common/module_global_emit.h"
 #include "target/common/elf_section_name.h"
+#include "core/symbol_identity.h"
 
 #include <inttypes.h>
 #include <stdint.h>
@@ -43,7 +44,8 @@ static bool minic_module_global_fragment_shape_valid(
                 (relocation_width != 0U && n != relocation_width) ||
                 (n != 4U && n != 8U)) return false;
             if (fragment->relocation_kind == MINIC_CORE_MODULE_RELOCATION_LABEL) {
-                if (fragment->relocation_symbol != NULL ||
+                if (!minic_core_label_symbol_valid(
+                        fragment->relocation_symbol) ||
                     fragment->relocation_addend != 0) return false;
             } else if ((fragment->relocation_kind != MINIC_CORE_MODULE_RELOCATION_OBJECT &&
                         fragment->relocation_kind != MINIC_CORE_MODULE_RELOCATION_FUNCTION) ||
@@ -89,10 +91,7 @@ bool minic_multi_module_emit_global_fragments(
             }
             break;
         case MINIC_CORE_MODULE_FRAGMENT_RELOCATION:
-            if (fragment->relocation_kind == MINIC_CORE_MODULE_RELOCATION_LABEL) {
-                if (fprintf(out, "  %s .Luser_%zu\n", data,
-                            fragment->relocation_label_id) < 0) return false;
-            } else if (fragment->relocation_addend == 0) {
+            if (fragment->relocation_addend == 0) {
                 if (fprintf(out, "  %s %s\n", data,
                             fragment->relocation_symbol) < 0) return false;
             } else if (fprintf(out, "  %s %s%+" PRId64 "\n", data,

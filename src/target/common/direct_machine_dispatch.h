@@ -6,6 +6,7 @@
 #include "target/common/direct_block_register.h"
 #include "target/common/direct_instruction_semantics.h"
 #include "target/common/direct_program_emit.h"
+#include "core/symbol_identity.h"
 #include "core/value_uses.h"
 #include <stdbool.h>
 #include <stddef.h>
@@ -179,9 +180,10 @@ static inline bool minic_multi_direct_machine_dispatch(
         }
         if (fprintf(out, ".L%s_f%zu_b%zu:\n", dispatch->label_prefix,
                     ctx->id, block_id) < 0 ||
-            (block->source_label_id != SIZE_MAX &&
-             !fn->suppress_source_label_aliases &&
-             fprintf(out, ".Luser_%zu:\n", block->source_label_id) < 0)) {
+            (block->local_label_symbol != NULL &&
+             !fn->suppress_local_label_aliases &&
+             (!minic_core_label_symbol_valid(block->local_label_symbol) ||
+              fprintf(out, "%s:\n", block->local_label_symbol) < 0))) {
             success = minic_multi_direct_machine_reject(
                 fn, dispatch->architecture, ctx->name,
                 "machine_emit", block_id, SIZE_MAX, __LINE__);

@@ -66,7 +66,7 @@ int main(void) {
     source.template_length = strlen(aarch64_template);
     source.is_goto = true;
     source.is_volatile = true;
-    source.source_inline_asm_id = SIZE_MAX;
+    source.deferred_immediate_symbol = NULL;
     source.goto_target = 0U;
     source.goto_second_target = MINIC_CORE_BLOCK_INVALID;
     source.resolved_immediates[0] = "key+4";
@@ -83,10 +83,10 @@ int main(void) {
     if (minic_multi_linux_jump_label_asm_goto_core(&source, loong_form))
         return 8;
     source.resolved_immediates[0] = "key+4";
-    source.source_inline_asm_id = 0U;
+    source.deferred_immediate_symbol = "__minic_deferred_asm_immediate_0_0";
     if (minic_multi_linux_jump_label_asm_goto_core(&source, loong_form))
         return 9;
-    source.source_inline_asm_id = SIZE_MAX;
+    source.deferred_immediate_symbol = NULL;
     source.goto_second_target = 1U;
     if (minic_multi_linux_jump_label_asm_goto_core(&source, loong_form))
         return 10;

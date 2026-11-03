@@ -1,5 +1,6 @@
 #include "target/common/core_object_storage.h"
 #include "target/data_layout.h"
+#include "target/data_layout_source.h"
 #include <stdint.h>
 #include <stdio.h>
 

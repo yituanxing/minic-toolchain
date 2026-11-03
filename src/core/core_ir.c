@@ -1,5 +1,6 @@
 #include "core/core_ir_storage.h"
 #include "core/address_alignment.h"
+#include "core/symbol_identity.h"
 
 #include <inttypes.h>
 #include <stdlib.h>
@@ -136,7 +137,7 @@ bool minic_core_function_mark_reachable_blocks(const MinicCoreFunction *function
 
     MINIC_CORE_REACH_ENQUEUE(function->entry_block);
     for (index = 0U; index < function->block_count; ++index)
-        if (function->blocks[index].source_label_id != SIZE_MAX)
+        if (function->blocks[index].local_label_symbol != NULL)
             MINIC_CORE_REACH_ENQUEUE((MinicCoreBlockId)index);
     while (begin < end) {
         const MinicCoreBlock *block = &function->blocks[queue[begin++]];
@@ -239,6 +240,7 @@ void minic_core_function_destroy(MinicCoreFunction *function) {
     minic_core_function_release_source_draft(function);
     for (block_index = 0U; block_index < function->block_count; ++block_index) {
         free(function->blocks[block_index].instructions);
+        free(function->blocks[block_index].local_label_symbol);
     }
     for (callee_index = 0U; callee_index < function->callee_count; ++callee_index) {
         free(function->callees[callee_index].name);
@@ -267,6 +269,7 @@ void minic_core_function_destroy(MinicCoreFunction *function) {
         size_t clobber_index;
 
         free(inline_asm->template_text);
+        free(inline_asm->deferred_immediate_symbol);
         {
             size_t resolved_index;
             for (resolved_index = 0U;
@@ -329,7 +332,6 @@ bool minic_core_function_add_block(MinicCoreFunction *function, MinicCoreBlockId
     }
     new_id = (MinicCoreBlockId)function->block_count;
     (void)memset(&function->blocks[function->block_count], 0, sizeof(*function->blocks));
-    function->blocks[function->block_count].source_label_id = SIZE_MAX;
     function->block_count += 1U;
     if (function->entry_block == MINIC_CORE_BLOCK_INVALID) {
         function->entry_block = new_id;
@@ -438,11 +440,8 @@ bool minic_core_function_add_opaque_inline_asm(MinicCoreFunction *function,
     stored.has_memory_clobber = has_memory_clobber;
     stored.goto_target = MINIC_CORE_BLOCK_INVALID;
     stored.goto_second_target = MINIC_CORE_BLOCK_INVALID;
-    /* Source provenance is opt-in.  In particular zero is a valid AST id,
-     * not proof that this Core effect came from source inline ASM #0.
-     * Opaque asm-goto uses this same field for a deferred-immediate owner;
-     * only an ingress with a verified source identity may populate it. */
-    stored.source_inline_asm_id = SIZE_MAX;
+    /* A fresh Core-only effect never borrows a source statement identity;
+     * optional deferred relocation symbols are attached by lowering. */
     function->inline_asms[function->inline_asm_count] = stored;
     *inline_asm_id = (MinicCoreInlineAsmId)function->inline_asm_count;
     function->inline_asm_count += 1U;

@@ -14,6 +14,7 @@
 #include "target/x86_64/frame.h"
 #include "target/x86_64/codegen_options.h"
 #include "core/value_uses.h"
+#include "core/symbol_identity.h"
 
 #include <inttypes.h>
 #include <stdint.h>
@@ -543,8 +544,9 @@ static bool x86_emit_function(FILE *out,
         MinicCoreValueId previous_direct_value = MINIC_CORE_VALUE_INVALID;
         MinicCoreObjectId previous_direct_object = MINIC_CORE_OBJECT_INVALID;
         if (fprintf(out, ".Lmini_x86_f%zu_b%zu:\n", function_id, block_index) < 0) goto done;
-        if (block->source_label_id != SIZE_MAX && !fn->suppress_source_label_aliases) {
-            if (fprintf(out, ".Luser_%zu:\n", block->source_label_id) < 0)
+        if (block->local_label_symbol != NULL && !fn->suppress_local_label_aliases) {
+            if (!minic_core_label_symbol_valid(block->local_label_symbol) ||
+                fprintf(out, "%s:\n", block->local_label_symbol) < 0)
                 goto done;
             /* GNU computed-goto entries are indirect branch destinations.
              * They need ENDBR independently of the function's own entry. */

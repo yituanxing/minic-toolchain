@@ -540,10 +540,8 @@ static bool dump_instruction(FILE *output,
                     inline_asm->is_volatile ? " volatile" : "",
                     inline_asm->has_memory_clobber ? " memory" : "") < 0)
             return false;
-        /* Distinguish verified source provenance from Core-only effects in
-         * diagnostics; SIZE_MAX is never a genuine source statement id. */
-        if (inline_asm->source_inline_asm_id != SIZE_MAX &&
-            fprintf(output, " source=%zu", inline_asm->source_inline_asm_id) < 0)
+        if (inline_asm->deferred_immediate_symbol != NULL &&
+            fprintf(output, " deferred=%s", inline_asm->deferred_immediate_symbol) < 0)
             return false;
         return fputc('\n', output) != EOF;
     }

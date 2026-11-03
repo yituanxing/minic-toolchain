@@ -1,6 +1,7 @@
 #include "frontend/ast.h"
 #include "frontend/type.h"
 #include "target/data_layout.h"
+#include "target/data_layout_source.h"
 
 #include <stdio.h>
 #include <string.h>

@@ -7,7 +7,7 @@
 #include "frontend/lexer.h"
 #include "frontend/token.h"
 #include "minic/compiler.h"
-#include "target/target_info.h"
+#include "target/source_policy/source_info.h"
 
 #include <stdbool.h>
 #include <stdint.h>

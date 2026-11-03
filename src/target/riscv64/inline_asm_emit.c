@@ -6,6 +6,7 @@
 #include "target/riscv64/legalize.h"
 #include "target/riscv64/isa.h"
 #include "target/common/lp64_scalar.h"
+#include "core/symbol_identity.h"
 #include <inttypes.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -437,18 +438,22 @@ static bool emit_opaque_inline_asm(FILE *file,
     }
     inline_asm = &function->inline_asms[instruction->value.inline_asm_id];
     if (inline_asm->is_goto) {
-        bool deferred_immediate = inline_asm->source_inline_asm_id != SIZE_MAX;
+        bool deferred_immediate =
+            inline_asm->deferred_immediate_symbol != NULL;
 
         if (symbol_name == NULL || symbol_name[0] == '\0' ||
             inline_asm->goto_target >= function->block_count) {
             return false;
         }
         if (deferred_immediate) {
+            if (!minic_core_deferred_asm_symbol_valid(
+                    inline_asm->deferred_immediate_symbol))
+                return false;
             if (fprintf(file,
                         "  # MINIC_DEFERRED_ASM_IMMEDIATE requires inline specialization\n"
-                        "  .extern __minic_deferred_asm_immediate_%zu_0\n"
+                        "  .extern %s\n"
                         "  ",
-                        inline_asm->source_inline_asm_id) < 0) {
+                        inline_asm->deferred_immediate_symbol) < 0) {
                 return false;
             }
         } else if (fprintf(file, "  ") < 0) {
@@ -474,9 +479,7 @@ static bool emit_opaque_inline_asm(FILE *file,
             }
             if (inline_asm->template_text[index + 1U] == '0') {
                 if (!deferred_immediate ||
-                    fprintf(file,
-                            "__minic_deferred_asm_immediate_%zu_0",
-                            inline_asm->source_inline_asm_id) < 0) {
+                    fputs(inline_asm->deferred_immediate_symbol, file) == EOF) {
                     return false;
                 }
                 index += 1U;

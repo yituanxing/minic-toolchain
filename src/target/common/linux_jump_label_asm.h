@@ -70,7 +70,7 @@ static inline bool minic_multi_linux_jump_label_asm_goto_core(
            source->goto_second_target == MINIC_CORE_BLOCK_INVALID &&
            !source->has_memory_clobber &&
            source->register_clobber_count == 0U &&
-           source->source_inline_asm_id == SIZE_MAX &&
+           source->deferred_immediate_symbol == NULL &&
            source->resolved_immediate_count == 1U &&
            minic_multi_linux_jump_key_relocation(
                source->resolved_immediates[0]) &&

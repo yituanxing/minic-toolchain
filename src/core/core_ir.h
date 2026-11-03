@@ -309,13 +309,11 @@ typedef struct MinicCoreInlineAsm {
        instead of hiding it inside target assembly text. The first supported
        seam is one label plus one deferred immediate input. */
     bool is_goto;
-    /* SIZE_MAX means no source identity was proven at Core ingress.
-     * Non-goto target-qualified structured ASM stores its exact frontend
-     * statement's inline_asm_id, allowing strict target-side revalidation.
-     * Legacy opaque asm-goto also uses a non-SIZE_MAX id to name the
-     * deferred-immediate relocation owner; do not reinterpret those forms
-     * as ordinary structured provenance without migrating that consumer. */
-    size_t source_inline_asm_id;
+    /* Immutable machine-local relocation symbol for an unresolved `asm goto`
+     * `%0` immediate. NULL if every immediate has already been resolved;
+     * non-goto structured ASM dispatch uses its sealed machine-form ID and
+     * must not retain a borrowed source Program statement identity. */
+    char *deferred_immediate_symbol;
     MinicCoreBlockId goto_target;
     /* Second CFG destination for a TARGET-qualified multi-label asm-goto.
      * Existing one-label forms leave this as INVALID. */
@@ -538,11 +536,9 @@ typedef struct MinicCoreBlock {
     size_t instruction_capacity;
     MinicCoreTerminator terminator;
     bool has_terminator;
-    /* RUNTIME_R1_LOCAL_LABEL_RELOCATION: stable source-label identity.
-       Static data relocations use the TU-local .Luser_<statement-id> symbol;
-       Core owns the CFG block and carries only the identity needed for the
-       backend to emit a colocated alias without reopening Semantic AST. */
-    size_t source_label_id;
+    /* Local symbol identity resolved once on source ingress; Module data
+     * relocations refer to this very same name. NULL means no local label. */
+    char *local_label_symbol;
 } MinicCoreBlock;
 
 /* The source-language lowering adapter is owned by Core only while a draft
@@ -571,7 +567,7 @@ typedef struct MinicCoreFunction {
     /* Integer-specialization clones share Semantic statement ids with their
        source. Their executable Core block labels are already function-scoped,
        so do not also export the source-id .Luser_* compatibility aliases. */
-    bool suppress_source_label_aliases;
+    bool suppress_local_label_aliases;
     MinicCoreFixedRegisterBinding *fixed_register_bindings;
     size_t fixed_register_binding_count;
     size_t fixed_register_binding_capacity;

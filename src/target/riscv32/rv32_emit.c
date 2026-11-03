@@ -20,6 +20,7 @@
 #include "target/common/program_visit.h"
 #include "target/common/program_emit.h"
 #include "target/common/elf_alias_emit.h"
+#include "core/symbol_identity.h"
 #include "target/data_layout.h"
 #include <inttypes.h>
 #include <limits.h>
@@ -107,10 +108,14 @@ static bool rv32_emit_source_opaque_asm(
          source->goto_target >= f->block_count))
         return false;
     deferred_immediate = source->is_goto &&
-                         source->source_inline_asm_id != SIZE_MAX;
+                         source->deferred_immediate_symbol != NULL;
     if (deferred_immediate &&
-        fprintf(out, "  .extern __minic_deferred_asm_immediate_%zu_0\n",
-                source->source_inline_asm_id) < 0)
+        !minic_core_deferred_asm_symbol_valid(
+            source->deferred_immediate_symbol))
+        return false;
+    if (deferred_immediate &&
+        fprintf(out, "  .extern %s\n",
+                source->deferred_immediate_symbol) < 0)
         return false;
     if (fprintf(out, "# MINIC_SOURCE_INLINE_ASM_BEGIN\n  ") < 0)
         return false;
@@ -125,8 +130,8 @@ static bool rv32_emit_source_opaque_asm(
         } else if (deferred_immediate &&
                    i + 1U < source->template_length &&
                    source->template_text[i + 1U] == '0') {
-            if (fprintf(out, "__minic_deferred_asm_immediate_%zu_0",
-                        source->source_inline_asm_id) < 0) return false;
+            if (fputs(source->deferred_immediate_symbol, out) == EOF)
+                return false;
             ++i;
         } else if (source->is_goto && i + 2U < source->template_length &&
                    source->template_text[i + 1U] == 'l' &&
@@ -865,9 +870,10 @@ static bool rv32_func(FILE *out, const MinicCoreModule *module,
         if (!block->has_terminator ||
             fprintf(out, ".L%s_rv32_bb%zu:\n", sym.symbol_name, i) < 0)
             goto done;
-        if (!f->suppress_source_label_aliases &&
-            block->source_label_id != SIZE_MAX &&
-            fprintf(out, ".Luser_%zu:\n", block->source_label_id) < 0)
+        if (!f->suppress_local_label_aliases &&
+            block->local_label_symbol != NULL &&
+            (!minic_core_label_symbol_valid(block->local_label_symbol) ||
+             fprintf(out, "%s:\n", block->local_label_symbol) < 0))
             goto done;
         for (j = 0U; j < block->instruction_count; ++j) {
             MinicCoreInstructionId id = 0U;

@@ -1291,3 +1291,59 @@ AArch64 vector contract and LoongArch64 14-case machine text optimizer;
 Release `make MODE=release CFLAGS=-Werror -j8 build/release/bin/minic-cc`
 PASS. Strict boundary and review-inventory checks run separately. GNU cross
 assembly/link, five-ISA Linux runtime and QEMU are **NOT RUN** for P23.
+
+## IR-P24 — Seal local-symbol identity and split machine/source target interfaces (2026-11-03)
+
+Remove the two remaining *published-interface* paths that could still borrow
+source-language identity. The prior P23 split changed implementation owners;
+P24 also changes the actual public headers and target registration layout.
+GCC's front-end trees versus machine RTL and Clang's source TargetInfo versus
+LLVM's TargetMachine informed the ownership boundary, without inventing MIR
+or changing the existing five-target ISA/ABI contract.
+
+- **Target ownership:** `target_info.h` becomes machine/ABI/ISA/ELF-only;
+  an opaque `source_info` refers to C language types, integer ranks,
+  builtins, GNU attributes, `va_list` and invocation-specific C options in
+  `source_policy/source_info.h`. Canonical target registration and a mutable
+  invocation copy both maintain separate source and machine descriptors.
+  `data_layout.h` now owns only the ABI byte/align table; the source adapter
+  `data_layout_source.h` owns C record/object/relocation layout queries and
+  statically checks the source-rank table width. Three register-name-only
+  admission queries remain visible to Core machine consumers because they
+  inspect *sealed register names*, not C nominal types.
+- **Three architecture-wide ASM headers:** x86-64, AArch64, LoongArch64
+  move the C/Program GNU ASM source qualifier declarations from
+  `asm_contract.h` to their explicit `asm_contract_source.h`. Common and
+  machine header translation units compile without transitive Frontend type
+  or AST headers. Source qualifier implementations remain target-owned;
+  the existing ISA form parsers and machine emitters are not duplicated.
+- **Core/Module publication:** replace block `source_label_id`, deferred
+  GNU asm `source_inline_asm_id`, and Module LABEL relocation IDs with
+  owned `local_label_symbol`, `deferred_immediate_symbol` and
+  `relocation_symbol`. Source ingress formats one canonical `.Luser_N` or
+  `__minic_deferred_asm_immediate_N_0` identity; the five machine emitters
+  only print it after strict format validation, with no source table lookup.
+  Core owns free/reachability roots/duplicate-label checks and rejects
+  forged assembler instructions, leading zeros and non-goto deferred forms.
+  Cloned specializations still suppress duplicate local alias definitions.
+- **Source label lifetime:** GNU `__label__` allocates an anchor *before*
+  its definition. Resolve ordinary goto and GNU asm-goto together at the
+  actual definition, so neither forward/backward nor local label references
+  bypass cleanup-context checks. Ordinary goto continues to materialize
+  source cleanup on permitted exits; asm-goto cross-cleanup taken edges are
+  rejected until Core represents cleanup-on-edge. The AST verifier independently
+  rechecks this invariant against forged/externally built source trees.
+- **Validation and review boundaries:** add Core symbol identity native and
+  ASAN/UBSan tests, machine symbol negative tests, GNU source CFG lifetime
+  positives/negatives and standalone no-C machine-header compilation.
+  New target source headers are recorded as `inventory`, not falsely
+  certified as fully reviewed or Linux/QEMU accepted.
+
+**Verification:** Debug `make MODE=debug -s -j8 check-fast` PASS; Release
+`make MODE=release CFLAGS=-Werror -s -j8 build/release/bin/minic-cc` PASS;
+`check-minic-target-boundaries.sh` PASS; machine-only headers PASS; Core
+types/symbol ownership native 4/4 and ASAN/UBSAN 4/4 PASS; `asm goto`
+source lifetime positive 3/3 and negative 5/5 PASS; same-scope and
+ordinary goto cleanup differential PASS; `check-four-target-model-m0`
+five-target SourceInfo/invocation/ABI tests PASS. Full GNU cross-assembler,
+linker and QEMU Linux runtime acceptance is **NOT RUN** for this refactor.

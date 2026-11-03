@@ -1,4 +1,5 @@
-#include "target/aarch64/asm_contract.h"
+#include "target/aarch64/asm_contract_source.h"
+#include "target/data_layout_source.h"
 #include "frontend/ast.h"
 #include "target/aarch64/frame_emit.h"
 #include "target/common/lp64_frame.h"
@@ -8,6 +9,7 @@
 #include "target/common/lp64_scalar.h"
 #include "target/data_layout.h"
 #include "frontend/const_eval.h"
+#include "core/symbol_identity.h"
 #include <string.h>
 
 /* GNU constraint syntax and C rank are admitted by *_source() below.
@@ -389,9 +391,12 @@ bool minic_aarch64_emit_linux_cap_asm_goto(
         ? sizeof(likely_goto_token) - 1U
         : sizeof(unlikely_goto_token) - 1U;
     static const char imm_token[] = "%0";
-    const bool deferred = a != NULL && a->source_inline_asm_id != SIZE_MAX;
+    const bool deferred =
+        a != NULL && a->deferred_immediate_symbol != NULL;
     size_t i;
     if (out == NULL || !minic_aarch64_linux_cap_asm_goto_core(a) ||
+        (deferred && !minic_core_deferred_asm_symbol_valid(
+            a->deferred_immediate_symbol)) ||
         (deferred ? strstr(a->template_text, imm_token) == NULL
                   : strstr(a->template_text, imm_token) != NULL))
         return false;
@@ -400,8 +405,8 @@ bool minic_aarch64_emit_linux_cap_asm_goto(
      * label, so Linux's patched branch lands on the correct C label. */
     if (deferred &&
         fprintf(out, "  // MINIC_DEFERRED_ASM_IMMEDIATE requires inline specialization\n"
-                     "  .extern __minic_deferred_asm_immediate_%zu_0\n",
-                a->source_inline_asm_id) < 0)
+                     "  .extern %s\n",
+                a->deferred_immediate_symbol) < 0)
         return false;
     for (i = 0U; i < a->template_length;) {
         if (i + goto_token_length <= a->template_length &&
@@ -415,8 +420,7 @@ bool minic_aarch64_emit_linux_cap_asm_goto(
                    i + sizeof(imm_token) - 1U <= a->template_length &&
                    memcmp(a->template_text + i, imm_token,
                           sizeof(imm_token) - 1U) == 0) {
-            if (fprintf(out, "__minic_deferred_asm_immediate_%zu_0",
-                        a->source_inline_asm_id) < 0)
+            if (fputs(a->deferred_immediate_symbol, out) == EOF)
                 return false;
             i += sizeof(imm_token) - 1U;
         } else if (fputc((unsigned char)a->template_text[i++], out) == EOF) {

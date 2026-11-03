@@ -327,6 +327,73 @@ static int test_verify_failure_provenance(void) {
     return 0;
 }
 
+/* Even a directly synthesized AST must not smuggle a GNU asm-goto edge
+ * across cleanup scopes: Core cannot run callbacks on the taken edge. */
+static int test_asm_goto_cleanup_edge_contract(void) {
+    MinicC0Program program;
+    MinicExpressionId cleanup_expression;
+    MinicCleanupContextId cleanup_context;
+    MinicInlineAsmId inline_asm_id;
+    MinicStatement label;
+    MinicStatement inline_asm_statement;
+    MinicStatementId label_id;
+    MinicStatementId inline_asm_statement_id;
+    int failure = 0;
+
+    minic_c0_program_initialize(&program);
+    (void)memset(&label, 0, sizeof(label));
+    (void)memset(&inline_asm_statement, 0, sizeof(inline_asm_statement));
+    label.kind = MINIC_STATEMENT_LABEL;
+    label.span = test_span(0U);
+    label.target_expression = MINIC_EXPRESSION_INVALID;
+    label.expression = MINIC_EXPRESSION_INVALID;
+    label.target_statement = MINIC_STATEMENT_INVALID;
+    label.then_block = MINIC_BLOCK_INVALID;
+    label.else_block = MINIC_BLOCK_INVALID;
+    inline_asm_statement.kind = MINIC_STATEMENT_INLINE_ASM;
+    inline_asm_statement.span = test_span(1U);
+    inline_asm_statement.target_expression = MINIC_EXPRESSION_INVALID;
+    inline_asm_statement.expression = MINIC_EXPRESSION_INVALID;
+    inline_asm_statement.target_statement = MINIC_STATEMENT_INVALID;
+    inline_asm_statement.then_block = MINIC_BLOCK_INVALID;
+    inline_asm_statement.else_block = MINIC_BLOCK_INVALID;
+
+    if (!add_integer(&program, 1, &cleanup_expression) ||
+        !minic_c0_program_add_cleanup_context(&program, MINIC_CLEANUP_CONTEXT_ROOT,
+                                              cleanup_expression, &cleanup_context) ||
+        !minic_c0_program_add_statement(&program, &label, &label_id) ||
+        !minic_c0_program_add_inline_asm(&program, "nop", 3U, true, false, &inline_asm_id) ||
+        !minic_c0_program_set_inline_asm_goto(&program, inline_asm_id, true) ||
+        !minic_c0_program_add_inline_asm_label(&program, inline_asm_id, "destination", 11U,
+                                                label_id)) {
+        failure = 91;
+        goto finish;
+    }
+    inline_asm_statement.inline_asm_id = inline_asm_id;
+    if (!minic_c0_program_add_statement(&program, &inline_asm_statement,
+                                         &inline_asm_statement_id) ||
+        !minic_c0_program_verify(&program, MINIC_C0_AST_PARSED)) {
+        failure = 92;
+        goto finish;
+    }
+    program.statements[label_id].cleanup_context = cleanup_context;
+    if (minic_c0_program_verify(&program, MINIC_C0_AST_PARSED)) {
+        failure = 93;
+        goto finish;
+    }
+    program.statements[inline_asm_statement_id].cleanup_context = cleanup_context;
+    if (!minic_c0_program_verify(&program, MINIC_C0_AST_PARSED)) {
+        failure = 94;
+        goto finish;
+    }
+    program.statements[inline_asm_statement_id].cleanup_context = cleanup_context + 1U;
+    if (minic_c0_program_verify(&program, MINIC_C0_AST_PARSED))
+        failure = 95;
+finish:
+    minic_c0_program_destroy(&program);
+    return failure;
+}
+
 /* New semantic fields must acquire safe defaults in the owning constructor, not parser call sites. */
 static int test_semantic_entity_defaults(void) {
     MinicC0Program program;
@@ -630,6 +697,10 @@ int main(void) {
         return status;
     }
     status = test_verify_failure_provenance();
+    if (status != 0) {
+        return status;
+    }
+    status = test_asm_goto_cleanup_edge_contract();
     if (status != 0) {
         return status;
     }

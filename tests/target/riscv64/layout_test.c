@@ -1,7 +1,9 @@
 #include "frontend/ast.h"
 #include "frontend/type.h"
 #include "target/data_layout.h"
+#include "target/data_layout_source.h"
 #include "target/target_info.h"
+#include "target/source_policy/source_info.h"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -141,6 +143,7 @@ int main(void) {
 
     {
         MinicTargetIntegerModel model;
+        MinicTargetSourceInfo source_info = {0};
         MinicTargetInfo target;
         MinicIntegerSign plain_char_sign;
         MinicType plain_char_type;
@@ -158,7 +161,8 @@ int main(void) {
         model.semantic_width_bits[MINIC_INTEGER_RANK_LONG] = 32U;
         model.semantic_width_bits[MINIC_INTEGER_RANK_LONG_LONG] = 64U;
         model.semantic_width_bits[MINIC_INTEGER_RANK_INT128] = 128U;
-        target.integer_model = &model;
+        source_info.integer_model = &model;
+        target.source_info = &source_info;
 
         if (!minic_target_info_plain_char_sign(&target, &plain_char_sign) ||
             plain_char_sign != MINIC_INTEGER_SIGN_SIGNED ||

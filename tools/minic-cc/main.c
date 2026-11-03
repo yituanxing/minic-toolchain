@@ -1,5 +1,5 @@
 #include "minic/compiler.h"
-#include "target/target_info.h"
+#include "target/source_policy/source_info.h"
 #include "target/target_catalog.h"
 #include "target/target_machine_options.h"
 

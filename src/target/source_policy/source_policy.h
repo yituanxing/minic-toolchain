@@ -1,7 +1,7 @@
 #ifndef MINIC_TARGET_ASM_SOURCE_POLICY_H
 #define MINIC_TARGET_ASM_SOURCE_POLICY_H
 
-#include "target/target_info.h"
+#include "target/source_policy/source_info.h"
 
 /* Shared C rank construction for canonical target registration and C source
  * integer promotion; machine emitters never synthesize C scalar types. */

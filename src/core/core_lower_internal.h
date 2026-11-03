@@ -4,6 +4,8 @@
 #include "core/core_lower.h"
 #include "core/core_ir_source_internal.h"
 #include "frontend/const_eval.h"
+#include "target/data_layout_source.h"
+#include "target/source_policy/source_info.h"
 
 typedef struct MinicCoreLocalIntegerConstant {
     MinicConstValue value;

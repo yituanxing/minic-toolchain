@@ -3,6 +3,7 @@
 
 #include "target/common/program_visit.h"
 #include "target/common/elf_alias_emit.h"
+#include "core/symbol_identity.h"
 #include <stdint.h>
 #include <stdbool.h>
 #include <stddef.h>
@@ -200,6 +201,11 @@ static inline bool minic_program_emit_collect_symbol_uses_module(
                 return false;
             for (ordinal = 0U; ordinal < object->fragment_count; ++ordinal) {
                 const MinicCoreModuleFragment *fragment = &object->fragments[ordinal];
+                if (fragment->kind == MINIC_CORE_MODULE_FRAGMENT_RELOCATION &&
+                    fragment->relocation_kind == MINIC_CORE_MODULE_RELOCATION_LABEL &&
+                    !minic_core_label_symbol_valid(
+                        fragment->relocation_symbol))
+                    return false;
                 if (fragment->kind == MINIC_CORE_MODULE_FRAGMENT_RELOCATION &&
                     fragment->relocation_kind != MINIC_CORE_MODULE_RELOCATION_LABEL &&
                     (fragment->relocation_symbol == NULL ||

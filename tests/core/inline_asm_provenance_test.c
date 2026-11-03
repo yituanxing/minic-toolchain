@@ -2,10 +2,11 @@
 
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
-/* A zero-initialized Core ASM record must never pretend it originated from
- * frontend asm statement zero.  A proven caller may install that actual id;
- * another Core record must retain the absent-provenance sentinel. */
+/* Core ASM owns its sealed machine relocation identity. An absent symbol is
+ * NULL, and a separate ASM record must never borrow the producer's C ID. */
 int main(void) {
     MinicCoreFunction function;
     MinicCoreInlineAsmId first, second;
@@ -18,21 +19,28 @@ int main(void) {
              &function, "vst $vr0, %0", 12U, true, true, &second);
     if (ok) {
         ok = first == 0U && second == 1U &&
-             function.inline_asms[first].source_inline_asm_id == SIZE_MAX &&
-             function.inline_asms[second].source_inline_asm_id == SIZE_MAX &&
+             function.inline_asms[first].deferred_immediate_symbol == NULL &&
+             function.inline_asms[second].deferred_immediate_symbol == NULL &&
              function.inline_asms[first].goto_target == MINIC_CORE_BLOCK_INVALID &&
              function.inline_asms[second].goto_second_target == MINIC_CORE_BLOCK_INVALID;
     }
     if (ok) {
-        function.inline_asms[second].source_inline_asm_id = 0U;
-        ok = function.inline_asms[second].source_inline_asm_id == 0U &&
-             function.inline_asms[first].source_inline_asm_id == SIZE_MAX;
+        const char symbol[] = "__minic_deferred_asm_immediate_0_0";
+        function.inline_asms[second].deferred_immediate_symbol = malloc(sizeof(symbol));
+        ok = function.inline_asms[second].deferred_immediate_symbol != NULL;
+        if (ok) {
+            (void)memcpy(function.inline_asms[second].deferred_immediate_symbol,
+                         symbol, sizeof(symbol));
+            ok = strcmp(function.inline_asms[second].deferred_immediate_symbol,
+                        symbol) == 0 &&
+                 function.inline_asms[first].deferred_immediate_symbol == NULL;
+        }
     }
     minic_core_function_destroy(&function);
     if (!ok) {
-        (void)fprintf(stderr, "FAIL Core inline ASM provenance sentinel\n");
+        (void)fprintf(stderr, "FAIL Core inline ASM sealed symbol ownership\n");
         return 1;
     }
-    (void)puts("MINIC_CORE_INLINE_ASM_PROVENANCE=PASS absent=SIZE_MAX real-source-zero=0");
+    (void)puts("MINIC_CORE_INLINE_ASM_PROVENANCE=PASS absent=NULL owned-symbol-zero=1");
     return 0;
 }

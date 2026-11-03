@@ -3,6 +3,7 @@
 #include "core/source_loop_shapes.h"
 #include "core/local_facts.h"
 #include "core/cfg_constant_calls.h"
+#include "core/symbol_identity.h"
 
 #include "frontend/const_eval.h"
 #include "frontend/expression_semantics.h"
@@ -85,11 +86,17 @@ MinicCoreLowerStatus ensure_statement_block(MinicCoreLowerContext *context, Mini
     if (source_statement->kind == MINIC_STATEMENT_LABEL) {
         MinicCoreBlock *block = &context->function->blocks[mapped];
 
-        if (block->source_label_id != SIZE_MAX &&
-            block->source_label_id != (size_t)statement_id) {
+        char *name;
+        if (!minic_core_format_label_symbol((size_t)statement_id, &name))
+            return MINIC_CORE_LOWER_ERROR;
+        if (block->local_label_symbol != NULL &&
+            strcmp(block->local_label_symbol, name) != 0) {
+            free(name);
             return MINIC_CORE_LOWER_ERROR;
         }
-        block->source_label_id = (size_t)statement_id;
+        if (block->local_label_symbol == NULL)
+            block->local_label_symbol = name;
+        else free(name);
     }
     *block_id = mapped;
     return MINIC_CORE_LOWER_OK;
@@ -1584,7 +1591,7 @@ MinicCoreLowerStatus minic_core_lower_function_with_index(const MinicFunctionBod
     context.target = target;
     context.reentry_index = reentry_index;
     context.function = &lowered;
-    lowered.suppress_source_label_aliases = source_function->is_integer_specialization;
+    lowered.suppress_local_label_aliases = source_function->is_integer_specialization;
     context.block_id = block_id;
     context.break_target = MINIC_CORE_BLOCK_INVALID;
     context.local_objects = local_objects;

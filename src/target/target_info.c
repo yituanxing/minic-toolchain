@@ -45,12 +45,11 @@ static const MinicTargetIntegerModel minic_lp64_signed_char_integer_model = {
                             [MINIC_INTEGER_RANK_INT128] = 128U},
 };
 
-
-/* This is the sole target-registration boundary for C language policy.
- * Backend ABI lowering is not inferred from shared integer widths or vararg
- * cursor representation: each target explicitly declares its own fields. */
+/* One catalog owns machine capability and a distinct immutable C source
+ * profile; the invocation constructs a writable copy of both. */
 typedef struct MinicTargetLanguageDescriptor {
     MinicTargetInfo target;
+    MinicTargetSourceInfo source;
     const MinicDataLayout *(*layout)(void);
     MinicIntegerSign wide_character_sign;
     MinicIntegerRank wide_character_rank;
@@ -58,132 +57,137 @@ typedef struct MinicTargetLanguageDescriptor {
 } MinicTargetLanguageDescriptor;
 
 static const MinicTargetLanguageDescriptor minic_language_riscv32 = {
-        .target = {
-            .asm_source_policy = &minic_riscv32_asm_source_policy,
-            .integer_model = &minic_ilp32_unsigned_char_integer_model,
-            .word_integer_rank = MINIC_INTEGER_RANK_INT,
-            .long_double_significand_bits = 113U,
-            .gnu_sizeof_void_is_one = true,
-            .gnu_sizeof_function_is_one = true,
-            /* No RV64 cursor reuse: RV32 uses its own ILP32 register pairs. */
-            .variadic_scalar_read_kind = MINIC_VARIADIC_SCALAR_READ_LINEAR_SLOT,
-            .variadic_linear_slot_bytes = 4U,
-            .variadic_copy_kind = MINIC_VARIADIC_COPY_SCALAR_ASSIGNMENT,
-            .pic_lowering_supported = true,
-            .call_frame_return_address_level0 = true,
-            .call_frame_frame_address_level0 = true,
-            .riscv_isa = {.xlen = 32U, .abi = MINIC_RISCV_ABI_ILP32,
-                          .strict_isa = true},
-        },
-        .layout = minic_riscv32_linux_data_layout,
-        .wide_character_sign = MINIC_INTEGER_SIGN_SIGNED,
-        .wide_character_rank = MINIC_INTEGER_RANK_INT,
-        .libc_size_rank = MINIC_INTEGER_RANK_INT,
+    .target = {
+        .variadic_scalar_read_kind = MINIC_VARIADIC_SCALAR_READ_LINEAR_SLOT,
+        .variadic_linear_slot_bytes = 4U,
+        .variadic_copy_kind = MINIC_VARIADIC_COPY_SCALAR_ASSIGNMENT,
+        .pic_lowering_supported = true,
+        .call_frame_return_address_level0 = true,
+        .call_frame_frame_address_level0 = true,
+        .riscv_isa = {.xlen = 32U, .abi = MINIC_RISCV_ABI_ILP32,
+                      .strict_isa = true},
+    },
+    .source = {
+        .asm_source_policy = &minic_riscv32_asm_source_policy,
+        .integer_model = &minic_ilp32_unsigned_char_integer_model,
+        .word_integer_rank = MINIC_INTEGER_RANK_INT,
+        .long_double_significand_bits = 113U,
+        .gnu_sizeof_void_is_one = true,
+        .gnu_sizeof_function_is_one = true,
+    },
+    .layout = minic_riscv32_linux_data_layout,
+    .wide_character_sign = MINIC_INTEGER_SIGN_SIGNED,
+    .wide_character_rank = MINIC_INTEGER_RANK_INT,
+    .libc_size_rank = MINIC_INTEGER_RANK_INT,
 };
 static const MinicTargetLanguageDescriptor minic_language_riscv64 = {
-        .target = {
-            .asm_source_policy = &minic_riscv64_asm_source_policy,
-            .integer_model = &minic_lp64_unsigned_char_integer_model,
-            .word_integer_rank = MINIC_INTEGER_RANK_LONG,
-            .long_double_significand_bits = 113U,
-            .language_type_capabilities = MINIC_TARGET_LANG_EXTENDED_FLOAT_DECLARATIONS,
-            .gnu_sizeof_void_is_one = true,
-            .gnu_sizeof_function_is_one = true,
-            .variadic_scalar_read_kind = MINIC_VARIADIC_SCALAR_READ_LINEAR_SLOT,
-            .variadic_linear_slot_bytes = 8U,
-            .variadic_copy_kind = MINIC_VARIADIC_COPY_SCALAR_ASSIGNMENT,
-            .pic_lowering_supported = true,
-            .call_frame_return_address_level0 = true,
-            .call_frame_frame_address_level0 = true,
-            .riscv_isa = {.xlen = 64U, .abi = MINIC_RISCV_ABI_LP64D,
-                          .strict_isa = false},
-        },
-        .layout = minic_default_data_layout,
-        .wide_character_sign = MINIC_INTEGER_SIGN_SIGNED,
-        .wide_character_rank = MINIC_INTEGER_RANK_INT,
-        .libc_size_rank = MINIC_INTEGER_RANK_LONG,
+    .target = {
+        .variadic_scalar_read_kind = MINIC_VARIADIC_SCALAR_READ_LINEAR_SLOT,
+        .variadic_linear_slot_bytes = 8U,
+        .variadic_copy_kind = MINIC_VARIADIC_COPY_SCALAR_ASSIGNMENT,
+        .pic_lowering_supported = true,
+        .call_frame_return_address_level0 = true,
+        .call_frame_frame_address_level0 = true,
+        .riscv_isa = {.xlen = 64U, .abi = MINIC_RISCV_ABI_LP64D,
+                      .strict_isa = false},
+    },
+    .source = {
+        .asm_source_policy = &minic_riscv64_asm_source_policy,
+        .integer_model = &minic_lp64_unsigned_char_integer_model,
+        .word_integer_rank = MINIC_INTEGER_RANK_LONG,
+        .long_double_significand_bits = 113U,
+        .language_type_capabilities = MINIC_TARGET_LANG_EXTENDED_FLOAT_DECLARATIONS,
+        .gnu_sizeof_void_is_one = true,
+        .gnu_sizeof_function_is_one = true,
+    },
+    .layout = minic_default_data_layout,
+    .wide_character_sign = MINIC_INTEGER_SIGN_SIGNED,
+    .wide_character_rank = MINIC_INTEGER_RANK_INT,
+    .libc_size_rank = MINIC_INTEGER_RANK_LONG,
 };
 static const MinicTargetLanguageDescriptor minic_language_x86_64 = {
-        .target = {
-            .asm_source_policy = &minic_x86_64_asm_source_policy,
-            .source_language_policy = &minic_x86_64_source_language_policy,
-            .va_cursor_source_abi_policy = &minic_x86_64_va_cursor_source_abi_policy,
-            .integer_model = &minic_lp64_signed_char_integer_model,
-            .word_integer_rank = MINIC_INTEGER_RANK_LONG,
-            .long_double_significand_bits = 64U,
-            .language_type_capabilities = MINIC_TARGET_LANG_EXTENDED_FLOAT_DECLARATIONS |
-                MINIC_TARGET_LANG_MS_X64_FUNCTION_POINTER_DECLARATIONS |
-                MINIC_TARGET_LANG_GNU_FIXED_VECTOR_STORAGE,
-            .call_lowering_capabilities = MINIC_TARGET_CALL_MS_X64_FIXED_SCALAR,
-            .gnu_sizeof_void_is_one = true,
-            .gnu_sizeof_function_is_one = true,
-            .variadic_scalar_read_kind = MINIC_VARIADIC_SCALAR_READ_ABI_CURSOR,
-            .variadic_copy_kind = MINIC_VARIADIC_COPY_ABI_STATE,
-            .pic_lowering_supported = true,
-            /* The SysV x86 rbp prologue supports only frame level zero. */
-            .call_frame_return_address_level0 = true,
-            .call_frame_frame_address_level0 = true,
-        },
-        .layout = minic_x86_64_linux_data_layout,
-        .wide_character_sign = MINIC_INTEGER_SIGN_SIGNED,
-        .wide_character_rank = MINIC_INTEGER_RANK_INT,
-        .libc_size_rank = MINIC_INTEGER_RANK_LONG,
+    .target = {
+        .call_lowering_capabilities = MINIC_TARGET_CALL_MS_X64_FIXED_SCALAR,
+        .variadic_scalar_read_kind = MINIC_VARIADIC_SCALAR_READ_ABI_CURSOR,
+        .variadic_copy_kind = MINIC_VARIADIC_COPY_ABI_STATE,
+        .pic_lowering_supported = true,
+        .call_frame_return_address_level0 = true,
+        .call_frame_frame_address_level0 = true,
+    },
+    .source = {
+        .asm_source_policy = &minic_x86_64_asm_source_policy,
+        .source_language_policy = &minic_x86_64_source_language_policy,
+        .va_cursor_source_abi_policy = &minic_x86_64_va_cursor_source_abi_policy,
+        .integer_model = &minic_lp64_signed_char_integer_model,
+        .word_integer_rank = MINIC_INTEGER_RANK_LONG,
+        .long_double_significand_bits = 64U,
+        .language_type_capabilities = MINIC_TARGET_LANG_EXTENDED_FLOAT_DECLARATIONS |
+            MINIC_TARGET_LANG_MS_X64_FUNCTION_POINTER_DECLARATIONS |
+            MINIC_TARGET_LANG_GNU_FIXED_VECTOR_STORAGE,
+        .gnu_sizeof_void_is_one = true,
+        .gnu_sizeof_function_is_one = true,
+    },
+    .layout = minic_x86_64_linux_data_layout,
+    .wide_character_sign = MINIC_INTEGER_SIGN_SIGNED,
+    .wide_character_rank = MINIC_INTEGER_RANK_INT,
+    .libc_size_rank = MINIC_INTEGER_RANK_LONG,
 };
 static const MinicTargetLanguageDescriptor minic_language_aarch64 = {
-        .target = {
-            .asm_source_policy = &minic_aarch64_asm_source_policy,
-            .source_language_policy = &minic_aarch64_source_language_policy,
-            .va_cursor_source_abi_policy = &minic_aarch64_va_cursor_source_abi_policy,
-            .integer_model = &minic_lp64_unsigned_char_integer_model,
-            .word_integer_rank = MINIC_INTEGER_RANK_LONG,
-            .long_double_significand_bits = 113U,
-            .language_type_capabilities = MINIC_TARGET_LANG_EXTENDED_FLOAT_DECLARATIONS |
-                MINIC_TARGET_LANG_OPAQUE_VECTOR_HEADER_DECLARATIONS |
-                MINIC_TARGET_LANG_FIXED_VECTOR128_STORAGE_DECLARATIONS,
-            .gnu_sizeof_void_is_one = true,
-            .gnu_sizeof_function_is_one = true,
-            .variadic_scalar_read_kind = MINIC_VARIADIC_SCALAR_READ_ABI_CURSOR,
-            /* AAPCS64 va_copy duplicates an owned 32-byte ABI-state cursor. */
-            .variadic_copy_kind = MINIC_VARIADIC_COPY_ABI_STATE,
-            .pic_lowering_supported = true,
-            .call_frame_return_address_level0 = true,
-            .call_frame_frame_address_level0 = true,
-            /* x29 can follow one AAPCS64 parent frame; other targets cannot. */
-            .call_frame_frame_address_level1 = true,
-        },
-        .layout = minic_aarch64_linux_data_layout,
-        .wide_character_sign = MINIC_INTEGER_SIGN_UNSIGNED,
-        .wide_character_rank = MINIC_INTEGER_RANK_INT,
-        .libc_size_rank = MINIC_INTEGER_RANK_LONG,
+    .target = {
+        .variadic_scalar_read_kind = MINIC_VARIADIC_SCALAR_READ_ABI_CURSOR,
+        .variadic_copy_kind = MINIC_VARIADIC_COPY_ABI_STATE,
+        .pic_lowering_supported = true,
+        .call_frame_return_address_level0 = true,
+        .call_frame_frame_address_level0 = true,
+        .call_frame_frame_address_level1 = true,
+    },
+    .source = {
+        .asm_source_policy = &minic_aarch64_asm_source_policy,
+        .source_language_policy = &minic_aarch64_source_language_policy,
+        .va_cursor_source_abi_policy = &minic_aarch64_va_cursor_source_abi_policy,
+        .integer_model = &minic_lp64_unsigned_char_integer_model,
+        .word_integer_rank = MINIC_INTEGER_RANK_LONG,
+        .long_double_significand_bits = 113U,
+        .language_type_capabilities = MINIC_TARGET_LANG_EXTENDED_FLOAT_DECLARATIONS |
+            MINIC_TARGET_LANG_OPAQUE_VECTOR_HEADER_DECLARATIONS |
+            MINIC_TARGET_LANG_FIXED_VECTOR128_STORAGE_DECLARATIONS,
+        .gnu_sizeof_void_is_one = true,
+        .gnu_sizeof_function_is_one = true,
+    },
+    .layout = minic_aarch64_linux_data_layout,
+    .wide_character_sign = MINIC_INTEGER_SIGN_UNSIGNED,
+    .wide_character_rank = MINIC_INTEGER_RANK_INT,
+    .libc_size_rank = MINIC_INTEGER_RANK_LONG,
 };
 static const MinicTargetLanguageDescriptor minic_language_loongarch64 = {
-        .target = {
-            .asm_source_policy = &minic_loongarch64_asm_source_policy,
-            .machine_builtin_policy = &minic_loongarch64_machine_builtin_policy,
-            .machine_builtin_form_lookup = minic_loongarch64_machine_builtin_form,
-            .alias_abi_policy = &minic_loongarch64_alias_abi_policy,
-            .integer_model = &minic_lp64_signed_char_integer_model,
-            .word_integer_rank = MINIC_INTEGER_RANK_LONG,
-            .long_double_significand_bits = 113U,
-            .language_type_capabilities = MINIC_TARGET_LANG_EXTENDED_FLOAT_DECLARATIONS,
-            .gnu_sizeof_void_is_one = true,
-            .gnu_sizeof_function_is_one = true,
-            .variadic_scalar_read_kind = MINIC_VARIADIC_SCALAR_READ_LINEAR_SLOT,
-            .variadic_linear_slot_bytes = 8U,
-            .variadic_copy_kind = MINIC_VARIADIC_COPY_SCALAR_ASSIGNMENT,
-            .pic_lowering_supported = true,
-            .call_frame_return_address_level0 = true,
-            .call_frame_frame_address_level0 = true,
-        },
-        .layout = minic_loongarch64_linux_data_layout,
-        .wide_character_sign = MINIC_INTEGER_SIGN_SIGNED,
-        .wide_character_rank = MINIC_INTEGER_RANK_INT,
-        .libc_size_rank = MINIC_INTEGER_RANK_LONG,
+    .target = {
+        .machine_builtin_form_lookup = minic_loongarch64_machine_builtin_form,
+        .variadic_scalar_read_kind = MINIC_VARIADIC_SCALAR_READ_LINEAR_SLOT,
+        .variadic_linear_slot_bytes = 8U,
+        .variadic_copy_kind = MINIC_VARIADIC_COPY_SCALAR_ASSIGNMENT,
+        .pic_lowering_supported = true,
+        .call_frame_return_address_level0 = true,
+        .call_frame_frame_address_level0 = true,
+    },
+    .source = {
+        .asm_source_policy = &minic_loongarch64_asm_source_policy,
+        .machine_builtin_policy = &minic_loongarch64_machine_builtin_policy,
+        .alias_abi_policy = &minic_loongarch64_alias_abi_policy,
+        .integer_model = &minic_lp64_signed_char_integer_model,
+        .word_integer_rank = MINIC_INTEGER_RANK_LONG,
+        .long_double_significand_bits = 113U,
+        .language_type_capabilities = MINIC_TARGET_LANG_EXTENDED_FLOAT_DECLARATIONS,
+        .gnu_sizeof_void_is_one = true,
+        .gnu_sizeof_function_is_one = true,
+    },
+    .layout = minic_loongarch64_linux_data_layout,
+    .wide_character_sign = MINIC_INTEGER_SIGN_SIGNED,
+    .wide_character_rank = MINIC_INTEGER_RANK_INT,
+    .libc_size_rank = MINIC_INTEGER_RANK_LONG,
 };
 
-/* The catalog, language descriptor, and backend indexes are generated from
- * one registration inventory. Architecture IDs are assigned by the catalog,
- * never independently copied into the C language/ABI facts above. */
+/* The catalog is the sole target registration order, shared by the driver,
+ * source ABI profiles and five machine backends. */
 static const MinicTargetLanguageDescriptor *const minic_target_language_descriptors[] = {
 #define MINIC_TARGET_REGISTRATION(arch, id, spelling, stages, isa) \
     &minic_language_##id,
@@ -194,6 +198,9 @@ static const MinicTargetLanguageDescriptor *const minic_target_language_descript
 const MinicTargetInfo *minic_target_info_for_architecture(
     MinicTargetArchitecture architecture) {
     static MinicTargetInfo canonical_targets[
+        sizeof(minic_target_language_descriptors) /
+        sizeof(minic_target_language_descriptors[0])];
+    static MinicTargetSourceInfo canonical_source_profiles[
         sizeof(minic_target_language_descriptors) /
         sizeof(minic_target_language_descriptors[0])];
     const MinicTargetCatalogEntry *catalog;
@@ -209,16 +216,19 @@ const MinicTargetInfo *minic_target_info_for_architecture(
         if (catalog[index].architecture != architecture) continue;
         if (target->data_layout == NULL) {
             MinicTargetInfo initialized = descriptor->target;
+            MinicTargetSourceInfo source = descriptor->source;
             initialized.architecture = catalog[index].architecture;
             initialized.data_layout = descriptor->layout();
             if (initialized.data_layout == NULL ||
                 !minic_target_source_integer_type_with_rank(descriptor->wide_character_sign,
                                         descriptor->wide_character_rank,
-                                        &initialized.wide_character_type) ||
+                                        &source.wide_character_type) ||
                 !minic_target_source_integer_type_with_rank(MINIC_INTEGER_SIGN_UNSIGNED,
                                         descriptor->libc_size_rank,
-                                        &initialized.libc_size_type))
+                                        &source.libc_size_type))
                 return NULL;
+            canonical_source_profiles[index] = source;
+            initialized.source_info = &canonical_source_profiles[index];
             *target = initialized;
         }
         return target;
@@ -241,11 +251,6 @@ const MinicTargetInfo *minic_target_info_from_name(const char *name) {
 const MinicDataLayout *minic_target_info_data_layout(const MinicTargetInfo *target) {
     return target == NULL ? NULL : target->data_layout;
 }
-
-const MinicTargetIntegerModel *minic_target_info_integer_model(const MinicTargetInfo *target) {
-    return target == NULL ? NULL : target->integer_model;
-}
-
 
 static bool minic_elf_module_visibility_is_nonpreemptible(
     MinicCoreModuleVisibility visibility) {

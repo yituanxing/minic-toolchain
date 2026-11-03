@@ -58,7 +58,6 @@ bool minic_x86_64_raid6_simd_template(const char *, size_t, size_t);
 /* Linux KVM's nonvolatile 16-byte vector_size memory operands, intentionally
  * disjoint from RAID6's byte-lvalue/volatile SIMD assembly contract. */
 unsigned int minic_x86_64_kvm_movdqa_form(const char *, size_t);
-bool minic_x86_64_kvm_movdqa_u32x4_type(MinicType);
 
 /* GNU atomic RMWcc accepts both LOCK/SMP-patch and bare variants with
  * identical opcodes; preserve the hardware/ELF side effect in FormId data. */
@@ -67,7 +66,6 @@ bool minic_x86_64_kvm_movdqa_u32x4_type(MinicType);
  * template. The x86 emitter must call this before using form/variant data. */
 bool minic_x86_64_typed_machine_form_matches_template(
     uint32_t, uint32_t, const char *, size_t);
-bool minic_x86_64_requires_qualified_input_asm(const MinicInlineAsm *);
 /* Linux constant bit-test with GNU flag output (@ccnz/@ccz). */
 unsigned int minic_x86_64_linux_testcc_form(const char *, size_t);
 unsigned int minic_x86_64_linux_gs_testcc_form(const char *, size_t);
@@ -91,7 +89,6 @@ bool minic_x86_64_linux_real_mode_far_jump_form(const char *, size_t);
 bool minic_x86_64_linux_unreachable_opaque(const char *, size_t);
 unsigned int minic_x86_64_linux_mmio_read_form(const char *, size_t);
 unsigned int minic_x86_64_linux_mmio_write_form(const char *, size_t);
-bool minic_x86_64_linux_mmio_type_matches(MinicType, unsigned int);
 /* Fixed-SI/DI, fixed-CX repeated string I/O with a DX port operand. */
 unsigned int minic_x86_64_linux_rep_string_io_form(const char *, size_t);
 /* Fixed RCX/RDI/RSI kernel iomem MOVSB/MOVSW/REP MOVSL with tied inputs. */
@@ -237,12 +234,8 @@ bool minic_x86_64_linux_prefetchw_alt_form(const char *,size_t);
 /* Post-Core immediate-specialized GNU Linux BUG/WARN metadata format.
  * Accept directive-only side-table source, never arbitrary opaque machine ASM. */
 bool minic_x86_64_linux_bug_table_opaque(const char *, size_t);
-/* Register allocation, GNU constraints and native instruction templates
- * belong to x86. The shared compiler sees only Core operand roles. */
-bool minic_x86_64_qualify_inline_asm(
-    const MinicC0Program *, const MinicInlineAsm *, MinicTargetInlineAsmContract *);
-bool minic_x86_64_qualify_inline_asm_goto(
-    const MinicC0Program *, const MinicInlineAsm *);
+/* Register allocation and native instruction templates are x86 machine
+ * contracts. C operand admission is declared in asm_contract_source.h. */
 bool minic_x86_64_linux_cpu_has_goto_form(const char *, size_t);
 /* Original Linux barrier.h CMP/SBB mask, strictly qualified. */
 bool minic_x86_64_asm_nospec_template(const char *, size_t);

@@ -1,4 +1,5 @@
 #include "core/core_type_import.h"
+#include "target/data_layout_source.h"
 
 #include <stdio.h>
 #include <string.h>

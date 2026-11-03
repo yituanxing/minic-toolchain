@@ -1,5 +1,7 @@
 /* M0 metadata-only ABI audit. No new target code is emitted here. */
 #include "target/target_info.h"
+#include "target/source_policy/source_info.h"
+#include "target/data_layout_source.h"
 #include "target/backend.h"
 #include "frontend/ast.h"
 #include "target/riscv/instruction_select.h"
@@ -18,21 +20,22 @@ static int verify_lp64(const char *name,
     const MinicDataLayout *layout;
     if (info == NULL || info->architecture != expected_arch ||
         info != minic_target_info_for_architecture(expected_arch) ||
-        info->integer_model == NULL || info->data_layout == NULL) {
+        info->source_info == NULL || info->source_info->integer_model == NULL ||
+        info->data_layout == NULL) {
         (void)fprintf(stderr, "FAIL target identity: %s\n", name);
         return 1;
     }
     layout = info->data_layout;
-    if (info->integer_model->plain_char_sign != expected_char_sign ||
-        info->integer_model->semantic_width_bits[MINIC_INTEGER_RANK_BOOL] != 1U ||
-        info->integer_model->semantic_width_bits[MINIC_INTEGER_RANK_CHAR] != 8U ||
-        info->integer_model->semantic_width_bits[MINIC_INTEGER_RANK_SHORT] != 16U ||
-        info->integer_model->semantic_width_bits[MINIC_INTEGER_RANK_INT] != 32U ||
-        info->integer_model->semantic_width_bits[MINIC_INTEGER_RANK_LONG] != 64U ||
-        info->integer_model->semantic_width_bits[MINIC_INTEGER_RANK_INT128] != 128U ||
-        info->wide_character_type.integer_rank != expected_wchar_rank ||
-        info->wide_character_type.integer_sign != expected_wchar_sign ||
-        info->word_integer_rank != MINIC_INTEGER_RANK_LONG) {
+    if (info->source_info->integer_model->plain_char_sign != expected_char_sign ||
+        info->source_info->integer_model->semantic_width_bits[MINIC_INTEGER_RANK_BOOL] != 1U ||
+        info->source_info->integer_model->semantic_width_bits[MINIC_INTEGER_RANK_CHAR] != 8U ||
+        info->source_info->integer_model->semantic_width_bits[MINIC_INTEGER_RANK_SHORT] != 16U ||
+        info->source_info->integer_model->semantic_width_bits[MINIC_INTEGER_RANK_INT] != 32U ||
+        info->source_info->integer_model->semantic_width_bits[MINIC_INTEGER_RANK_LONG] != 64U ||
+        info->source_info->integer_model->semantic_width_bits[MINIC_INTEGER_RANK_INT128] != 128U ||
+        info->source_info->wide_character_type.integer_rank != expected_wchar_rank ||
+        info->source_info->wide_character_type.integer_sign != expected_wchar_sign ||
+        info->source_info->word_integer_rank != MINIC_INTEGER_RANK_LONG) {
         (void)fprintf(stderr, "FAIL integer/char/wchar ABI: %s\n", name);
         return 1;
     }
@@ -64,10 +67,10 @@ static int verify_rv32(void) {
         t->data_layout->integer_size[MINIC_INTEGER_RANK_LONG] != 4U ||
         t->data_layout->integer_size[MINIC_INTEGER_RANK_LONG_LONG] != 8U ||
         t->data_layout->integer_alignment[MINIC_INTEGER_RANK_LONG_LONG] != 8U ||
-        t->integer_model->semantic_width_bits[MINIC_INTEGER_RANK_LONG] != 32U ||
-        t->integer_model->semantic_width_bits[MINIC_INTEGER_RANK_LONG_LONG] != 64U ||
-        t->integer_model->plain_char_sign != MINIC_INTEGER_SIGN_UNSIGNED ||
-        t->word_integer_rank != MINIC_INTEGER_RANK_INT ||
+        t->source_info->integer_model->semantic_width_bits[MINIC_INTEGER_RANK_LONG] != 32U ||
+        t->source_info->integer_model->semantic_width_bits[MINIC_INTEGER_RANK_LONG_LONG] != 64U ||
+        t->source_info->integer_model->plain_char_sign != MINIC_INTEGER_SIGN_UNSIGNED ||
+        t->source_info->word_integer_rank != MINIC_INTEGER_RANK_INT ||
         t->variadic_scalar_read_kind != MINIC_VARIADIC_SCALAR_READ_LINEAR_SLOT ||
         t->variadic_linear_slot_bytes != 4U ||
         t->variadic_copy_kind != MINIC_VARIADIC_COPY_SCALAR_ASSIGNMENT ||
@@ -192,6 +195,7 @@ static int verify_va_cursor_source_abi(void) {
         bool aarch = i == 3U;
         bool opaque = x86 || aarch;
         MinicTargetInfo missing_policy;
+        MinicTargetSourceInfo missing_source;
         minic_c0_program_initialize(&program);
         if (t == NULL ||
             !minic_target_info_va_cursor_source_shape(t, &shape) ||
@@ -233,7 +237,9 @@ static int verify_va_cursor_source_abi(void) {
             /* ABI-state targets must never silently revert to an ordinary
              * void* source cursor when their source policy is missing. */
             missing_policy = *t;
-            missing_policy.va_cursor_source_abi_policy = NULL;
+            missing_source = *t->source_info;
+            missing_source.va_cursor_source_abi_policy = NULL;
+            missing_policy.source_info = &missing_source;
             if (minic_target_info_va_cursor_source_shape(
                     &missing_policy, &shape)) {
                 minic_c0_program_destroy(&program);
@@ -349,13 +355,14 @@ static int verify_invocation_language_abi(void) {
                 &invocation, original == MINIC_INTEGER_SIGN_SIGNED
                     ? MINIC_INTEGER_SIGN_UNSIGNED : MINIC_INTEGER_SIGN_SIGNED) ||
             !minic_target_invocation_short_wchar(&invocation, true) ||
-            invocation.target.integer_model != &invocation.integer_model ||
+            invocation.target.source_info != &invocation.source_info ||
+            invocation.source_info.integer_model != &invocation.integer_model ||
             invocation.integer_model.plain_char_sign == original ||
             second.integer_model.plain_char_sign != original ||
-            canonical->integer_model->plain_char_sign != original ||
-            !minic_type_equal(second.target.wide_character_type, original_wchar) ||
+            canonical->source_info->integer_model->plain_char_sign != original ||
+            !minic_type_equal(second.source_info.wide_character_type, original_wchar) ||
             !minic_target_invocation_short_wchar(&invocation, false) ||
-            !minic_type_equal(invocation.target.wide_character_type, original_wchar))
+            !minic_type_equal(invocation.source_info.wide_character_type, original_wchar))
             return (void)fprintf(stderr,
                 "TARGET_INVOCATION_ABI=FAIL target:%s\n", entries[i].name), 1;
     }
@@ -572,6 +579,7 @@ static int verify_target_asm_source_policy(void) {
     const MinicTargetInfo *arm = minic_target_info_from_name(names[3]);
     const MinicTargetInfo *loong = minic_target_info_from_name(names[4]);
     MinicTargetInfo unsupported;
+    MinicTargetSourceInfo unsupported_source;
     MinicType result, arguments[3];
     size_t argument_count, immediate_index, i;
     const char *mnemonic;
@@ -581,15 +589,17 @@ static int verify_target_asm_source_policy(void) {
     for (i = 0U; i < sizeof(names) / sizeof(names[0]); ++i) {
         stage = 1U;
         const MinicTargetInfo *target = minic_target_info_from_name(names[i]);
-        if (!target->asm_source_policy ||
+        if (target->source_info == NULL || !target->source_info->asm_source_policy ||
             !minic_target_info_inline_asm_memory_input_constraint_supported(
                 target, "m", 1U) ||
             minic_target_info_inline_asm_memory_input_constraint_supported(
                 target, "Q", 1U) != (target == arm)) goto failure;
     }
     unsupported = *x86;
+    unsupported_source = *x86->source_info;
+    unsupported.source_info = &unsupported_source;
     stage = 2U;
-    unsupported.asm_source_policy = NULL;
+    unsupported_source.asm_source_policy = NULL;
     if (minic_target_info_fixed_register_supported(&unsupported, "rsp", 3U) ||
         minic_target_info_inline_asm_memory_input_constraint_supported(
             &unsupported, "m", 1U) ||

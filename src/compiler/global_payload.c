@@ -1,4 +1,5 @@
 #include "compiler/global_payload.h"
+#include "target/data_layout_source.h"
 
 #include <stdint.h>
 #include <stdlib.h>

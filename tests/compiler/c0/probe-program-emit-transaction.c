@@ -248,8 +248,7 @@ int main(int argc, char **argv) {
      * but executable Core must still have a valid, reachable entry block. */
     MinicCoreBlock entry_block = {
         .terminator = { .kind = MINIC_CORE_TERMINATOR_RETURN },
-        .has_terminator = true,
-        .source_label_id = SIZE_MAX
+        .has_terminator = true
     };
     MinicCoreInstruction instructions[6] = {
         { .kind = MINIC_CORE_INSTRUCTION_CALL, .value.call = { .argument_count = 7U } },

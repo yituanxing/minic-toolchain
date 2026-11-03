@@ -1,4 +1,5 @@
 #include "core/core_ir.h"
+#include "core/symbol_identity.h"
 
 #include <inttypes.h>
 #include <stdio.h>
@@ -1746,6 +1747,30 @@ bool minic_core_function_verify(const MinicCoreFunction *function) {
                 return false;
             }
         }
+    }
+    /* Machine-local labels belong to the published Core CFG. A forged label
+     * (or duplicate export within a function) must be rejected before any
+     * backend prints assembler syntax. They are no longer source ordinals. */
+    for (index = 0U; index < function->block_count; ++index) {
+        const char *name = function->blocks[index].local_label_symbol;
+        size_t earlier;
+        if (name == NULL) continue;
+        if (!minic_core_label_symbol_valid(name)) return false;
+        for (earlier = 0U; earlier < index; ++earlier)
+            if (function->blocks[earlier].local_label_symbol != NULL &&
+                strcmp(function->blocks[earlier].local_label_symbol, name) == 0)
+                return false;
+    }
+    for (index = 0U; index < function->inline_asm_count; ++index) {
+        const MinicCoreInlineAsm *assembly = &function->inline_asms[index];
+        if (assembly->deferred_immediate_symbol != NULL &&
+            (!minic_core_deferred_asm_symbol_valid(assembly->deferred_immediate_symbol) ||
+             !assembly->is_goto ||
+             assembly->goto_second_target != MINIC_CORE_BLOCK_INVALID ||
+             assembly->resolved_immediate_count != 0U ||
+             assembly->template_text == NULL ||
+             strstr(assembly->template_text, "%0") == NULL))
+            return false;
     }
     instruction_seen = function->instruction_count == 0U
                            ? NULL

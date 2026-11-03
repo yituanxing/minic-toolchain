@@ -26,6 +26,12 @@ snapshot_sources=(
     "$root/src/frontend/type.c"
     "$root/tests/core/core_type_snapshot_test.c"
 )
+symbol_sources=(
+    "$root/src/core/core_type.c"
+    "$root/src/core/core_ir.c"
+    "$root/src/core/core_ir_verify.c"
+    "$root/tests/core/core_symbol_identity_test.c"
+)
 
 for mode in native asan; do
     extra=()
@@ -46,11 +52,16 @@ for mode in native asan; do
         -Wstrict-prototypes -Wmissing-prototypes -Werror \
         -I"$root/src" -I"$root/include" "${extra[@]}" \
         "${snapshot_sources[@]}" -o "$work/core-types-snapshot-$mode"
+    "$host_cc" -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow \
+        -Wstrict-prototypes -Wmissing-prototypes -Werror \
+        -I"$root/src" -I"$root/include" "${extra[@]}" \
+        "${symbol_sources[@]}" -o "$work/core-symbol-identity-$mode"
     # Under ptrace LeakSanitizer crashes independently of program correctness.
     # AddressSanitizer and UndefinedBehaviorSanitizer remain active.
     ASAN_OPTIONS=detect_leaks=0 "$work/core-types-$mode"
     ASAN_OPTIONS=detect_leaks=0 "$work/core-types-import-$mode"
     ASAN_OPTIONS=detect_leaks=0 "$work/core-types-snapshot-$mode"
+    ASAN_OPTIONS=detect_leaks=0 "$work/core-symbol-identity-$mode"
 done
 
-echo 'CORE_TYPES=PASS tests=3 native=3 ASAN_UBSAN=3'
+echo 'CORE_TYPES=PASS tests=4 native=4 ASAN_UBSAN=4'

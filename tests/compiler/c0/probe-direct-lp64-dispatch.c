@@ -94,7 +94,6 @@ static int run(unsigned int failure) {
     if (out == NULL) return 1;
     blocks[0].instructions = first;
     blocks[0].instruction_count = 2U;
-    blocks[0].source_label_id = SIZE_MAX;
     blocks[0].has_terminator = true;
     /* Keep the first block's result live through a real same-block
      * terminator use; the dead-result probe covers elided writeback. */
@@ -104,7 +103,7 @@ static int run(unsigned int failure) {
     blocks[0].terminator.conditional.when_false = 1U;
     blocks[1].instructions = second;
     blocks[1].instruction_count = 1U;
-    blocks[1].source_label_id = 7U;
+    blocks[1].local_label_symbol = ".Luser_7";
     blocks[1].has_terminator = true;
     blocks[1].terminator.kind = MINIC_CORE_TERMINATOR_RETURN;
     fn.blocks = blocks;

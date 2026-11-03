@@ -1,5 +1,6 @@
 #include "frontend/const_eval.h"
 #include "frontend/expression_semantics.h"
+#include "target/source_policy/source_info.h"
 
 #include <limits.h>
 #include <string.h>

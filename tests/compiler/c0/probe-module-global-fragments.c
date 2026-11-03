@@ -89,7 +89,7 @@ int main(void) {
     fragments[0].kind = MINIC_CORE_MODULE_FRAGMENT_RELOCATION;
     fragments[0].byte_count = 4U;
     fragments[0].relocation_kind = MINIC_CORE_MODULE_RELOCATION_LABEL;
-    fragments[0].relocation_label_id = 23U;
+    fragments[0].relocation_symbol = ".Luser_23";
     global.storage_size = 4U;
     if (!emitted_matches(&global, 4U, "  .4byte .Luser_23\n", true, false))
         return 9;

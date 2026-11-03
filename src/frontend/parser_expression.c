@@ -197,7 +197,7 @@ static bool parse_floating(MinicParser *parser, MinicExpressionId *expression_id
          * the shared binary128 literal representation after one rounding. */
         if (!minic_binary128_parse_literal(
                 text, numeric_length,
-                parser->target_info->long_double_significand_bits,
+                parser->target_info->source_info->long_double_significand_bits,
                 &expression.value.floating128_bits.low,
                 &expression.value.floating128_bits.high)) {
             free(text);
