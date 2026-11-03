@@ -308,6 +308,7 @@ MINIAR_BINARY := $(BUILD_DIR)/bin/minic-ar
 
 MINILD_INCLUDES := -Ilinker/include -Ilinker/src $(MINIELF_INCLUDES)
 MINILD_SOURCES := \
+	linker/src/riscv_elf_abi.c \
 	linker/src/linker_script_lex.c \
 	linker/src/linker_script_expr.c \
 	linker/src/linker_script_parse.c \
@@ -443,6 +444,8 @@ help:
 		"  make check-minild-a6    Validate Global-Dynamic TLS shared runtime" \
 		"  make check-minild-script-a0 Parse the Linux linker-script subset" \
 		"  make check-minild-script-a1 Validate script-directed ET_EXEC symbol semantics" \
+		"  make check-minild-as-section-contract Exercise MiniAS/MiniLD COMDAT, LINK_ORDER and -r ownership" \
+		"  make check-minild-input-section-gc Verify source-section GC with no STT_SECTION or GNU tools" \
 		"  make check-fast         Run the fast frontend and C0 gates" \
 		"  make check-token-model  Run the token data-model unit gate" \
 		"  make check-lexer        Run the C0 lexer unit gate" \
@@ -711,6 +714,111 @@ check-minild-a6: $(MINILD_BINARY)
 	MINILD="$(abspath $(MINILD_BINARY))" \
 	BUILD_DIR="$(abspath $(BUILD_DIR))" \
 	sh tests/linker/run-a6.sh
+
+.PHONY: check-minild-riscv-abi
+$(BUILD_DIR)/tests/linker/riscv-elf-abi-test: linker/src/riscv_elf_abi.c linker/src/riscv_elf_abi.h tests/linker/riscv_elf_abi_test.c
+	@mkdir -p "$(dir $@)"
+	$(CC) $(CPPFLAGS) -std=c11 $(COMMON_WARNINGS) -Werror -Ilinker/src \
+		linker/src/riscv_elf_abi.c tests/linker/riscv_elf_abi_test.c -o "$@"
+
+check-minild-riscv-abi: $(BUILD_DIR)/tests/linker/riscv-elf-abi-test
+	"$(abspath $<)"
+
+.PHONY: check-minild-riscv-abi-integration
+check-minild-riscv-abi-integration: $(MINIAS_BINARY) $(MINILD_BINARY)
+	MINIAS="$(abspath $(MINIAS_BINARY))" \
+	MINILD="$(abspath $(MINILD_BINARY))" \
+	sh tests/linker/probe-riscv-abi-flags.sh
+
+.PHONY: check-minild-as-section-contract
+check-minild-as-section-contract: $(MINIAS_BINARY) $(MINILD_BINARY)
+	MINIAS="$(abspath $(MINIAS_BINARY))" \
+	MINILD="$(abspath $(MINILD_BINARY))" \
+	bash tests/linker/probe-as-ld-section-contract.sh
+
+.PHONY: check-minild-input-section-gc
+$(BUILD_DIR)/tests/linker/input-section-gc-fixture: tests/linker/input_section_gc_fixture.c elf/src/relocatable_writer.c elf/src/reader.c elf/include/minielf.h elf/include/minielf_elf_abi.h
+	@mkdir -p "$(dir $@)"
+	$(CC) $(CPPFLAGS) -std=c11 $(COMMON_WARNINGS) -Werror -Ielf/include \
+		tests/linker/input_section_gc_fixture.c elf/src/relocatable_writer.c \
+		elf/src/reader.c -o "$@"
+
+check-minild-input-section-gc: $(MINILD_BINARY) $(BUILD_DIR)/tests/linker/input-section-gc-fixture
+	MINILD="$(abspath $(MINILD_BINARY))" \
+	INPUT_SECTION_GC_FIXTURE="$(abspath $(BUILD_DIR))/tests/linker/input-section-gc-fixture" \
+	bash tests/linker/probe-input-section-gc.sh
+
+.PHONY: check-minild-script-gc-input
+check-minild-script-gc-input: $(MINIAS_BINARY) $(MINILD_BINARY)
+	MINIAS="$(abspath $(MINIAS_BINARY))" \
+	MINILD="$(abspath $(MINILD_BINARY))" \
+	bash tests/linker/probe-script-input-selection-gc.sh
+
+.PHONY: check-minild-script-nonalloc-offset
+check-minild-script-nonalloc-offset: $(MINIAS_BINARY) $(MINILD_BINARY)
+	MINIAS="$(abspath $(MINIAS_BINARY))" \
+	MINILD="$(abspath $(MINILD_BINARY))" \
+	bash tests/linker/probe-script-nonalloc-offset.sh
+
+.PHONY: check-minild-output-section-owner
+check-minild-output-section-owner: $(MINIAS_BINARY) $(MINILD_BINARY)
+	MINIAS="$(abspath $(MINIAS_BINARY))" \
+	MINILD="$(abspath $(MINILD_BINARY))" \
+	bash tests/linker/probe-output-section-owner.sh
+
+.PHONY: check-minild-output-script-edges
+check-minild-output-script-edges: $(MINIAS_BINARY) $(MINILD_BINARY)
+	MINIAS="$(abspath $(MINIAS_BINARY))" \
+	MINILD="$(abspath $(MINILD_BINARY))" \
+	bash tests/linker/probe-output-script-edges.sh
+
+.PHONY: check-minild-shared-output-section
+check-minild-shared-output-section: $(MINIAS_BINARY) $(MINILD_BINARY)
+	MINIAS="$(abspath $(MINIAS_BINARY))" \
+	MINILD="$(abspath $(MINILD_BINARY))" \
+	bash tests/linker/probe-shared-output-section.sh
+
+.PHONY: check-minild-segment-plan
+check-minild-segment-plan: $(MINIAS_BINARY) $(MINILD_BINARY)
+	MINIAS="$(abspath $(MINIAS_BINARY))" \
+	MINILD="$(abspath $(MINILD_BINARY))" \
+	bash tests/linker/probe-segment-plan.sh
+
+.PHONY: check-minild-input-identity-script-order
+check-minild-input-identity-script-order: $(MINIAS_BINARY) $(MINILD_BINARY)
+	MINIAS="$(abspath $(MINIAS_BINARY))" \
+	MINILD="$(abspath $(MINILD_BINARY))" \
+	bash tests/linker/probe-input-identity-script-order.sh
+
+.PHONY: check-minild-shared-input-identity
+check-minild-shared-input-identity: $(MINIAS_BINARY) $(MINILD_BINARY)
+	MINIAS="$(abspath $(MINIAS_BINARY))" \
+	MINILD="$(abspath $(MINILD_BINARY))" \
+	bash tests/linker/probe-shared-input-identity.sh
+
+.PHONY: check-minild-shared-discard-inputs
+check-minild-shared-discard-inputs: $(MINIAS_BINARY) $(MINILD_BINARY)
+	MINIAS="$(abspath $(MINIAS_BINARY))" \
+	MINILD="$(abspath $(MINILD_BINARY))" \
+	bash tests/linker/probe-shared-discard-inputs.sh
+
+.PHONY: check-minild-final-symbol-view
+check-minild-final-symbol-view: $(MINIAS_BINARY) $(MINILD_BINARY)
+	MINIAS="$(abspath $(MINIAS_BINARY))" \
+	MINILD="$(abspath $(MINILD_BINARY))" \
+	bash tests/linker/probe-final-symbol-view.sh
+
+.PHONY: check-minild-symbol-ownership
+check-minild-symbol-ownership: $(MINIAS_BINARY) $(MINILD_BINARY)
+	MINIAS="$(abspath $(MINIAS_BINARY))" \
+	MINILD="$(abspath $(MINILD_BINARY))" \
+	bash tests/linker/probe-symbol-ownership.sh
+
+.PHONY: check-minild-static-pipeline-boundaries
+check-minild-static-pipeline-boundaries: $(MINIAS_BINARY) $(MINILD_BINARY)
+	MINIAS="$(abspath $(MINIAS_BINARY))" \
+	MINILD="$(abspath $(MINILD_BINARY))" \
+	bash tests/linker/probe-static-pipeline-boundaries.sh
 
 check-minild-script-a0: $(MINILD_BINARY)
 	HOST_CC="$(CC)" \

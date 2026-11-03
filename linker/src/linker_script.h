@@ -35,6 +35,8 @@ typedef struct MiniLdScriptExpr {
 
 typedef struct MiniLdScriptPattern {
     char *text;
+    /* NULL matches any input file, otherwise a GNU file-name wildcard. */
+    char *file_pattern;
     bool keep;
     bool sort;
     bool common;
@@ -65,6 +67,7 @@ typedef struct MiniLdScriptOutputSection {
     MiniLdScriptExprId address;
     MiniLdScriptExprId at;
     MiniLdScriptExprId align;
+    MiniLdScriptExprId fill;
     MiniLdScriptSectionItem *items;
     size_t item_count;
     size_t item_capacity;
@@ -152,5 +155,8 @@ bool minild_script_evaluate(const MiniLdScript *script,
                             FILE *diagnostics);
 bool minild_script_pattern_matches(const MiniLdScriptPattern *pattern,
                                    const char *section_name);
+bool minild_script_pattern_matches_input(const MiniLdScriptPattern *pattern,
+                                         const char *section_name,
+                                         const char *input_file);
 
 #endif

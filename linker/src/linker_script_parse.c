@@ -52,6 +52,7 @@ static bool append_section_item(MiniLdScriptOutputSection *section,
 static bool append_pattern_text(ScriptParser *parser,
                                 bool keep,
                                 bool sort,
+                                const char *file_pattern,
                                 MiniLdScriptOutputSection *section) {
     char buffer[512];
     size_t size = 0U;
@@ -113,49 +114,106 @@ static bool append_pattern_text(ScriptParser *parser,
     memset(&item, 0, sizeof(item));
     item.kind = MINILD_SCRIPT_SECTION_PATTERN;
     item.value.pattern.text = minild_script_strdup_range(buffer, size);
+    if (file_pattern != NULL) {
+        item.value.pattern.file_pattern = minild_script_strdup_range(
+            file_pattern, strlen(file_pattern));
+    }
     item.value.pattern.keep = keep;
     item.value.pattern.sort = sort;
     item.value.pattern.common = strcmp(buffer, "COMMON") == 0;
     if (item.value.pattern.text == NULL ||
+        (file_pattern != NULL && item.value.pattern.file_pattern == NULL) ||
         !append_section_item(section, item)) {
         free(item.value.pattern.text);
+        free(item.value.pattern.file_pattern);
         return minild_script_parser_error(parser,
                                           "out-of-memory:pattern");
     }
     return true;
 }
 
+/* A GNU input description starts with a file selector, not necessarily '*'.
+ * Tokens are rejoined because the lexer separates '*', '/', '-' and ':' from
+ * identifiers (e.g. '*crtbegin.o', 'build/foo.o' or 'lib.a:member.o'). */
+static bool parse_input_file_selector(ScriptParser *parser,
+                                      char **file_pattern_out) {
+    char buffer[512];
+    size_t size = 0U;
+    *file_pattern_out = NULL;
+    while (parser->token.kind != TOKEN_LPAREN) {
+        switch (parser->token.kind) {
+        case TOKEN_IDENTIFIER:
+        case TOKEN_NUMBER:
+        case TOKEN_STAR:
+        case TOKEN_MINUS:
+        case TOKEN_PLUS:
+        case TOKEN_SLASH:
+        case TOKEN_COLON:
+            break;
+        default:
+            return minild_script_parser_error(parser,
+                                              "expected-input-file-selector");
+        }
+        if (parser->token.length == 0U ||
+            parser->token.length >= sizeof(buffer) - size) {
+            return minild_script_parser_error(parser,
+                                              "input-file-pattern-too-long");
+        }
+        memcpy(buffer + size, parser->token.begin, parser->token.length);
+        size += parser->token.length;
+        if (!minild_script_parser_next(parser)) {
+            return false;
+        }
+    }
+    if (size == 0U) {
+        return minild_script_parser_error(parser,
+                                          "expected-input-file-selector");
+    }
+    buffer[size] = '\0';
+    if (!(size == 1U && buffer[0] == '*')) {
+        *file_pattern_out = minild_script_strdup_range(buffer, size);
+        if (*file_pattern_out == NULL) {
+            return minild_script_parser_error(parser,
+                                              "out-of-memory:file-pattern");
+        }
+    }
+    return minild_script_parser_next(parser);
+}
+
 static bool parse_pattern_list(ScriptParser *parser,
                                bool keep,
                                MiniLdScriptOutputSection *section) {
-    if (!minild_script_expect(parser,
-                              TOKEN_STAR,
-                              "expected-'*'-before-section-patterns") ||
-        !minild_script_expect(parser,
-                              TOKEN_LPAREN,
-                              "expected-'('-before-section-patterns")) {
+    char *file_pattern = NULL;
+    bool ok = false;
+
+    if (!parse_input_file_selector(parser, &file_pattern)) {
+        free(file_pattern);
         return false;
     }
-
     while (parser->token.kind != TOKEN_RPAREN) {
-        bool sort = false;
-        if (minild_script_token_is(parser, "SORT")) {
-            sort = true;
+        bool sort = minild_script_token_is(parser, "SORT") ||
+                    minild_script_token_is(parser, "SORT_BY_NAME");
+        if (sort) {
             if (!minild_script_parser_next(parser) ||
                 !minild_script_expect(parser,
                                       TOKEN_LPAREN,
                                       "expected-'('-after-SORT") ||
-                !append_pattern_text(parser, keep, true, section) ||
+                !append_pattern_text(parser, keep, true, file_pattern,
+                                     section) ||
                 !minild_script_expect(parser,
                                       TOKEN_RPAREN,
                                       "expected-')'-after-SORT")) {
-                return false;
+                goto done;
             }
-        } else if (!append_pattern_text(parser, keep, sort, section)) {
-            return false;
+        } else if (!append_pattern_text(parser, keep, false, file_pattern,
+                                        section)) {
+            goto done;
         }
     }
-    return minild_script_parser_next(parser);
+    ok = minild_script_parser_next(parser);
+done:
+    free(file_pattern);
+    return ok;
 }
 
 static bool parse_section_body(ScriptParser *parser,
@@ -218,19 +276,32 @@ static bool parse_section_body(ScriptParser *parser,
             }
             continue;
         }
-        if (parser->token.kind == TOKEN_STAR) {
+        if (parser->token.kind == TOKEN_STAR ||
+            parser->token.kind == TOKEN_SLASH ||
+            parser->token.kind == TOKEN_NUMBER ||
+            parser->token.kind == TOKEN_COLON) {
             if (!parse_pattern_list(parser, false, section)) {
                 return false;
             }
             continue;
         }
         if (parser->token.kind == TOKEN_IDENTIFIER) {
+            ScriptParser lookahead = *parser;
             ScriptToken name = parser->token;
             char *symbol_name;
             MiniLdScriptExprId expression;
             MiniLdScriptSectionItem item;
             bool is_dot;
 
+            if (!minild_script_parser_next(&lookahead)) {
+                return false;
+            }
+            if (lookahead.token.kind != TOKEN_EQUAL) {
+                if (!parse_pattern_list(parser, false, section)) {
+                    return false;
+                }
+                continue;
+            }
             if (!minild_script_parser_next(parser)) {
                 return false;
             }
@@ -290,6 +361,7 @@ static bool parse_output_section(ScriptParser *parser,
     section.address = address;
     section.at = MINILD_SCRIPT_EXPR_NONE;
     section.align = MINILD_SCRIPT_EXPR_NONE;
+    section.fill = MINILD_SCRIPT_EXPR_NONE;
 
     if (!minild_script_expect(parser,
                               TOKEN_COLON,
@@ -356,6 +428,11 @@ static bool parse_output_section(ScriptParser *parser,
         if (!minild_script_parser_next(parser)) {
             return false;
         }
+    }
+    if (parser->token.kind == TOKEN_EQUAL &&
+        (!minild_script_parser_next(parser) ||
+         !minild_script_parse_expression(parser, &section.fill))) {
+        return false;
     }
     memset(&command, 0, sizeof(command));
     command.kind = MINILD_SCRIPT_OUTPUT_SECTION;
@@ -786,6 +863,7 @@ void minild_script_destroy(MiniLdScript *script) {
                 MiniLdScriptSectionItem *item = &section->items[j];
                 if (item->kind == MINILD_SCRIPT_SECTION_PATTERN) {
                     free(item->value.pattern.text);
+                    free(item->value.pattern.file_pattern);
                 } else if (item->kind ==
                            MINILD_SCRIPT_SECTION_DEFINE_SYMBOL) {
                     free(item->value.symbol.name);

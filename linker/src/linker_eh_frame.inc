@@ -191,17 +191,33 @@ static int minild_eh_order(const void *a, const void *b) {
     return left->fde < right->fde ? -1 : left->fde > right->fde ? 1 : 0;
 }
 
+static bool minild_eh_source_section(const MiniLdSection *section) {
+    return strcmp(section->input_name != NULL
+                      ? section->input_name : section->name,
+                  ".eh_frame") == 0 &&
+           (section->flags & SHF_ALLOC) != 0U &&
+           section->size != 0U &&
+           !section->gc_discarded &&
+           !section->script_discard;
+}
+
 static bool minild_eh_prepare(MiniLdState *state,
                                MiniLdSharedImage *shared) {
-    size_t i, count;
+    size_t i, count, total = 0U;
+    bool have_frame = false;
+
     for (i = 0U; i < state->section_count; ++i) {
-        if (strcmp(state->sections[i].name, ".eh_frame") == 0 &&
-            (state->sections[i].flags & SHF_ALLOC) != 0U &&
-            state->sections[i].size != 0U) {
-            break;
+        if (!minild_eh_source_section(&state->sections[i])) {
+            continue;
         }
+        have_frame = true;
+        if (!minild_eh_scan(state, i, NULL, NULL, 0U, &count) ||
+            count > SIZE_MAX - total) {
+            return false;
+        }
+        total += count;
     }
-    if (i == state->section_count) {
+    if (!have_frame) {
         /* GNU LD accepts --eh-frame-hdr when no input contributes CFI.
          * Without explicit PHDRS it emits no EH header/program header;
          * with Linux vDSO's explicit PT_GNU_EH_FRAME declaration the
@@ -211,17 +227,15 @@ static bool minild_eh_prepare(MiniLdState *state,
         shared->have_eh_frame_hdr = false;
         return true;
     }
-    shared->eh_frame_section = i;
-    if (!minild_eh_scan(state, i, NULL, NULL, 0U, &count) ||
-        count > (SIZE_MAX - 12U) / 8U ||
+    if (total > UINT32_MAX || total > (SIZE_MAX - 12U) / 8U ||
         !find_or_add_section(state, ".eh_frame_hdr", SHT_PROGBITS,
                              SHF_ALLOC, 4U, 0U,
                              &shared->eh_frame_hdr_section) ||
         !section_append_zero(&state->sections[shared->eh_frame_hdr_section],
-                             12U + count * 8U)) {
+                             12U + total * 8U)) {
         return false;
     }
-    shared->eh_frame_fde_count = count;
+    shared->eh_frame_fde_count = total;
     shared->have_eh_frame_hdr = true;
     return true;
 }
@@ -231,24 +245,39 @@ static bool minild_eh_fill(MiniLdState *state,
                             const MiniLdSharedImage *shared) {
     MiniLdSection *header;
     MiniLdEhIndex *index;
-    uint64_t base, frame;
+    uint64_t base, frame = UINT64_MAX;
     int64_t ptr;
-    size_t count, i;
+    size_t count = 0U, i;
     bool ok = false;
     if (!shared->have_eh_frame_hdr) {
         return true;
     }
     header = &state->sections[shared->eh_frame_hdr_section];
     base = layout->section_vaddr[shared->eh_frame_hdr_section];
-    frame = layout->section_vaddr[shared->eh_frame_section];
     index = calloc(shared->eh_frame_fde_count == 0U
                    ? 1U : shared->eh_frame_fde_count, sizeof(*index));
     if (index == NULL) {
         return false;
     }
-    if (!minild_eh_scan(state, shared->eh_frame_section, layout, index,
-                        shared->eh_frame_fde_count, &count) ||
-        count != shared->eh_frame_fde_count ||
+    for (i = 0U; i < state->section_count; ++i) {
+        size_t part_count;
+
+        if (!minild_eh_source_section(&state->sections[i]) ||
+            (layout->section_discarded != NULL &&
+             layout->section_discarded[i])) {
+            continue;
+        }
+        if (layout->section_vaddr[i] < frame) {
+            frame = layout->section_vaddr[i];
+        }
+        if (!minild_eh_scan(state, i, layout, index + count,
+                            shared->eh_frame_fde_count - count,
+                            &part_count)) {
+            goto out;
+        }
+        count += part_count;
+    }
+    if (count != shared->eh_frame_fde_count ||
         base > INT64_MAX - 4U || frame > INT64_MAX) {
         goto out;
     }
