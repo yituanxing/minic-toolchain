@@ -341,7 +341,7 @@ static bool x86_emit_function(FILE *out, const MinicC0Program *program,
              minic_core_function_verify(fn));
         const bool planned = verified &&
             minic_x86_64_frame_init_with_storage(
-                program, target, fn, facts, storage, &frame);
+                target, fn, facts, storage, &frame);
         if (!planned) {
             if (getenv("MINIC_M1_TRACE") != NULL) {
                 (void)fprintf(stderr,

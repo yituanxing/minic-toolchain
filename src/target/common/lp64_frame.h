@@ -35,7 +35,6 @@ typedef struct MinicLP64FramePlan {
 } MinicLP64FramePlan;
 
 bool minic_lp64_frame_plan_objects_with_storage(
-    const MinicC0Program *, const MinicTargetInfo *,
     const MinicCoreFunction *, const MinicCoreObjectStoragePlan *,
     MinicLP64FramePlan *);
 bool minic_lp64_frame_plan_wide(

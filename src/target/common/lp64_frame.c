@@ -13,12 +13,11 @@
  * once per function and O(1) on the emission hot path. */
 
 bool minic_lp64_frame_plan_objects_with_storage(
-    const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicCoreObjectStoragePlan *shared,
     MinicLP64FramePlan *plan) {
     size_t pos, i, scalar_bytes = 0U, pool_slots = 0U, pool_base = 0U;
     MinicCoreObjectReusePlan reuse = {0};
-    if (program == NULL || target == NULL || fn == NULL || plan == NULL ||
+    if (fn == NULL || plan == NULL ||
         !minic_lp64_baseline_values_fit_frame(fn->value_count) ||
         fn->object_count > 8192U ||
         (fn->object_count != 0U && fn->objects == NULL) ||

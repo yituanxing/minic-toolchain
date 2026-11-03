@@ -1064,6 +1064,12 @@ lacks src/target/common/direct_function_plan.c 'indirect_record'
 lacks src/target/common/direct_function_plan.c 'fn->return_type'
 has src/target/common/direct_function_emit.h 'minic_multi_direct_lp64_function_plan_prepare('
 lacks src/target/loongarch64/codegen.c 'minic_multi_direct_lp64_function_plan_prepare('
+# Core ABI/Frame owners cannot reopen C Program for geometry or call ABI.
+lacks src/target/common/lp64_frame.c 'const MinicC0Program *program'
+lacks src/target/common/direct_function_plan.c 'const MinicC0Program *program'
+lacks src/target/x86_64/call_plan.c 'const MinicC0Program *program'
+lacks src/target/x86_64/frame.c 'const MinicC0Program *program'
+lacks src/target/x86_64/machine_call.c 'const MinicC0Program *program'
 # All five targets must own only target callbacks. File lifetime,
 # global/Core visit order and partial-output removal are ONE common transaction.
 has src/target/backend.h 'MinicBackendEmitModule emit_module;'

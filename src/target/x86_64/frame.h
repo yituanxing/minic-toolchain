@@ -103,7 +103,7 @@ typedef struct MinicX86Frame {
 } MinicX86Frame;
 
 bool minic_x86_64_frame_init_with_storage(
-    const MinicC0Program *, const MinicTargetInfo *, const MinicCoreFunction *,
+    const MinicTargetInfo *, const MinicCoreFunction *,
     const MinicCoreFunctionFacts *, const MinicCoreObjectStoragePlan *,
     MinicX86Frame *);
 void minic_x86_64_frame_destroy(MinicX86Frame *frame);

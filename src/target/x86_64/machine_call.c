@@ -240,8 +240,7 @@ static bool x86_emit_call_arguments_planned(
 /* Machine CALL emission consumes the x86 ABI plan built for its
  * Common Core CALL identity; external standalone emission still works. */
 static bool x86_emit_call_arguments(
-    FILE *out, const MinicC0Program *program,
-    const MinicTargetInfo *target, const MinicCoreFunction *fn,
+    FILE *out, const MinicCoreFunction *fn,
     const MinicX86Frame *frame, const MinicCoreCallView *call,
     const MinicX86ArgumentPlan *cached_plan,
     size_t *allocated_stack_bytes) {
@@ -254,7 +253,7 @@ static bool x86_emit_call_arguments(
     if (frame->semantic_calls != NULL && plan == NULL) return false;
     if (plan == NULL) {
         if (!minic_x86_64_plan_outgoing_arguments(
-                program, target, fn, call, &fallback))
+                fn, call, &fallback))
             return false;
         plan = &fallback;
     }
@@ -588,11 +587,10 @@ static bool x86_resolve_call_view(
 }
 
 bool minic_x86_64_emit_call_instruction(
-    FILE *out, const MinicC0Program *program,
-    const MinicTargetInfo *target, const MinicCoreFunction *fn,
+    FILE *out, const MinicTargetInfo *target, const MinicCoreFunction *fn,
     const MinicX86Frame *frame, const MinicCoreInstruction *ins,
     size_t instruction_id) {
-    if (out == NULL || program == NULL || target == NULL ||
+    if (out == NULL || target == NULL ||
         fn == NULL || frame == NULL || ins == NULL) return false;
     switch (ins->kind) {
     case MINIC_CORE_INSTRUCTION_CALL: {
@@ -647,7 +645,7 @@ bool minic_x86_64_emit_call_instruction(
                 return handled;
             }
         }
-        if (!x86_emit_call_arguments(out, program, target, fn, frame,
+        if (!x86_emit_call_arguments(out, fn, frame,
                                      &call, cached_plan, &outgoing_bytes)) {
             if (getenv("MINIC_X86_CALL_TRACE") != NULL) {
                 size_t j;
@@ -713,7 +711,7 @@ bool minic_x86_64_emit_call_instruction(
         if (call.signature == NULL)
             return false;
         signature = call.signature;
-        if (!x86_emit_call_arguments(out, program, target, fn, frame,
+        if (!x86_emit_call_arguments(out, fn, frame,
                                      &call, cached_plan, &outgoing_bytes) ||
             !x86_prepare_call_sret(out, fn, frame,
                     &call, ins->value.indirect_call.result_object, outgoing_bytes) ||

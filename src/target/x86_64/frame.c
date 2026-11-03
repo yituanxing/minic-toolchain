@@ -52,12 +52,11 @@ static bool x86_frame_int128_type(const MinicCoreFunction *fn,
 /* Frame is caller-owned and must have no live resources on entry: init resets
  * it before creating plans/offsets. Failure may leave partial allocations;
  * the emitter destroys the frame on both successful and rejected paths. */
-bool minic_x86_64_frame_init_with_storage(const MinicC0Program *program,
-    const MinicTargetInfo *target, const MinicCoreFunction *fn,
+bool minic_x86_64_frame_init_with_storage(const MinicTargetInfo *target, const MinicCoreFunction *fn,
     const MinicCoreFunctionFacts *facts,
     const MinicCoreObjectStoragePlan *storage, MinicX86Frame *frame) {
     size_t pos, i, value_bytes, maximum_alignment = 16U;
-    if (program == NULL || target == NULL || fn == NULL ||
+    if (target == NULL || fn == NULL ||
         fn->type_context == NULL ||
         (fn->parameter_count != 0U && fn->core_parameter_type_ids == NULL) ||
         facts == NULL || frame == NULL ||
@@ -65,11 +64,11 @@ bool minic_x86_64_frame_init_with_storage(const MinicC0Program *program,
     (void)memset(frame, 0, sizeof(*frame));
     frame->semantic_calls = facts->call_index;
     if (!minic_x86_64_plan_incoming_arguments(
-            program, target, fn, &frame->incoming_arguments))
+            fn, &frame->incoming_arguments))
         return x86_frame_preflight_reject(fn, "incoming-abi");
     if (facts->call_index != NULL &&
         !minic_x86_64_outgoing_call_plans_prepare(
-            program, target, fn, facts->call_index,
+            fn, facts->call_index,
             &frame->outgoing_call_plans))
         return x86_frame_preflight_reject(fn, "outgoing-abi");
     if (!minic_core_object_storage_plan_acquire(

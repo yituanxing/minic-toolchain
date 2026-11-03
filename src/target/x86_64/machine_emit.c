@@ -551,7 +551,7 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
     }
     if (minic_core_instruction_semantic_family(ins->kind) ==
         MINIC_CORE_FAMILY_CALL)
-        return minic_x86_64_emit_call_instruction(out, program, target, fn,
+        return minic_x86_64_emit_call_instruction(out, target, fn,
                                                   frame, ins, instruction_id);
     switch (ins->kind) {
     case MINIC_CORE_INSTRUCTION_CALL_FRAME_ADDRESS: {

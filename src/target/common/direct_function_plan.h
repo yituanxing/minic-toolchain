@@ -34,7 +34,6 @@ typedef struct MinicDirectLP64FunctionPlan {
 } MinicDirectLP64FunctionPlan;
 
 bool minic_multi_direct_lp64_function_plan_prepare(
-    const MinicC0Program *, const MinicTargetInfo *,
     const MinicFunction *, const MinicCoreModuleFunctionSymbol *,
     const MinicCoreFunction *,
     const MinicCoreFunctionFacts *,

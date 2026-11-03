@@ -15,7 +15,6 @@
  * fresh/unowned plan: initialization clears it, and even a false result may
  * own partial allocations that the caller must destroy. */
 bool minic_multi_direct_lp64_function_plan_prepare(
-    const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicFunction *decl, const MinicCoreModuleFunctionSymbol *module_decl,
     const MinicCoreFunction *fn,
     const MinicCoreFunctionFacts *facts,
@@ -33,7 +32,7 @@ bool minic_multi_direct_lp64_function_plan_prepare(
     plan->failed_stage = "function_preflight";
     plan->failed_block = SIZE_MAX;
     plan->failed_instruction = SIZE_MAX;
-    if (program == NULL || target == NULL || decl == NULL || fn == NULL || facts == NULL ||
+    if (decl == NULL || fn == NULL || facts == NULL ||
         architecture_name == NULL || fn->type_context == NULL ||
         !minic_direct_lp64_abi_policy_valid(abi))
         return false;
@@ -66,7 +65,7 @@ bool minic_multi_direct_lp64_function_plan_prepare(
     plan->failed_stage = "frame_layout";
     plan->failed_block = SIZE_MAX;
     if (!minic_lp64_frame_plan_objects_with_storage(
-            program, target, fn, storage, &plan->frame_plan)) {
+            fn, storage, &plan->frame_plan)) {
         if (getenv("MINIC_M1_TRACE") != NULL)
             (void)fprintf(stderr,
                 "MINIC_M8_FRAME_REJECT arch=%s function=%s values=%zu objects=%zu\n",

@@ -67,7 +67,7 @@ static inline bool minic_multi_direct_lp64_emit_function(
                                       : decl->is_constructor;
     if (name == NULL || name[0] == '\0') return false;
     if (!minic_multi_direct_lp64_function_plan_prepare(
-            program, target, decl, module_decl, fn, facts, storage, config->architecture,
+            decl, module_decl, fn, facts, storage, config->architecture,
             config->abi, config->qualify_opaque_asm,
             &plan)) {
         (void)minic_multi_direct_machine_reject(fn, config->architecture,

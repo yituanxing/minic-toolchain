@@ -262,11 +262,10 @@ static bool x86_sysv_plan_alloc(size_t count, MinicX86ArgumentPlan *plan) {
 }
 
 bool minic_x86_64_plan_incoming_arguments(
-    const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, MinicX86ArgumentPlan *plan) {
     MinicX86ArgCursor cursor = {0};
     size_t i;
-    if (program == NULL || target == NULL || fn == NULL ||
+    if (fn == NULL ||
         fn->type_context == NULL || plan == NULL ||
         !minic_function_calling_convention_valid(fn->calling_convention) ||
         (fn->parameter_count != 0U &&
@@ -304,12 +303,11 @@ failed:
 }
 
 bool minic_x86_64_plan_outgoing_arguments(
-    const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicCoreCallView *view,
     MinicX86ArgumentPlan *plan) {
     MinicX86ArgCursor cursor = {0};
     size_t i, bytes;
-    if (program == NULL || target == NULL || fn == NULL ||
+    if (fn == NULL ||
         fn->type_context == NULL ||
         view == NULL || plan == NULL ||
         view->parameter_count > view->argument_count ||
@@ -391,11 +389,10 @@ void minic_x86_64_argument_plan_destroy(MinicX86ArgumentPlan *plan) {
  * SysV/Win64 register-and-stack ABI planning, performed once per call rather than in
  * the machine instruction emitter. Standalone emitters retain fallback. */
 bool minic_x86_64_outgoing_call_plans_prepare(
-    const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicCoreCallIndex *calls,
     MinicX86OutgoingCallPlans *result) {
     size_t i, previous = SIZE_MAX;
-    if (program == NULL || target == NULL || fn == NULL || calls == NULL ||
+    if (fn == NULL || calls == NULL ||
         result == NULL || result->sites != NULL || result->count != 0U ||
         calls->count > fn->instruction_count ||
         (calls->count != 0U && calls->sites == NULL) ||
@@ -418,7 +415,7 @@ bool minic_x86_64_outgoing_call_plans_prepare(
             goto fail;
         result->sites[i].instruction_id = id;
         if (!minic_x86_64_plan_outgoing_arguments(
-                program, target, fn, &calls->sites[i].view,
+                fn, &calls->sites[i].view,
                 &result->sites[i].plan))
             goto fail;
         previous = id;

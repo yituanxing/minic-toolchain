@@ -49,15 +49,12 @@ typedef struct MinicX86OutgoingCallPlans {
 } MinicX86OutgoingCallPlans;
 
 bool minic_x86_64_plan_incoming_arguments(
-    const MinicC0Program *, const MinicTargetInfo *,
     const MinicCoreFunction *, MinicX86ArgumentPlan *);
 bool minic_x86_64_plan_outgoing_arguments(
-    const MinicC0Program *, const MinicTargetInfo *,
     const MinicCoreFunction *, const MinicCoreCallView *,
     MinicX86ArgumentPlan *);
 void minic_x86_64_argument_plan_destroy(MinicX86ArgumentPlan *);
 bool minic_x86_64_outgoing_call_plans_prepare(
-    const MinicC0Program *, const MinicTargetInfo *,
     const MinicCoreFunction *, const MinicCoreCallIndex *,
     MinicX86OutgoingCallPlans *);
 void minic_x86_64_outgoing_call_plans_destroy(MinicX86OutgoingCallPlans *);

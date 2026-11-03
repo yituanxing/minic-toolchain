@@ -936,3 +936,7 @@ Common prepared-function callback 的 C decl 和 x86 `NONE`
 machine-form/operand/fixup 证明，再关闭五目标 function emitter
 及 Common visitor 的最后 C 参数。**不要在没有证明时直接
 把 `source_inline_asm_id` 当作机器准入。**
+
+## IR-P10 — Cross-target Core ABI and Frame owners (2026-11-03)
+
+Read as one chain: x86 SysV/Win64 incoming/outgoing Core CALL plans, Frame and standalone machine CALL fallback; AArch64/LoongArch shared Direct LP64 FunctionPlan and frame storage; RV32/RV64 frame and ABI owners (already Core-only). Remove C Program and unused TargetInfo from x86 ABI placement and the shared LP64 frame plan; propagate interfaces all the way to x86 machine CALL and Direct function emission, deleting null-only source dependencies instead of masking them. The Direct LP64 preflight still borrows C declarations for source-ASM checks. Final five-writer Module-only boundary is not yet claimed; GNU/QEMU runtime correctness remains separate from source/boundary checks.
