@@ -136,8 +136,11 @@ _start:
 .loc 1 1 0
     b target
     la.local $a0,target
-    .p2align 5
 .loc 1 2 0
+after_la:
+    nop
+    .p2align 5
+.loc 1 3 0
 target:
     nop
 ASM
@@ -152,14 +155,18 @@ for mode in relax no-relax; do
             "$work/$producer-$mode.text"
         readelf -Ws "$work/$producer-$mode.elf" |
             awk '$8=="target" {print $2}' >"$work/$producer-$mode.target"
+        readelf -Ws "$work/$producer-$mode.elf" |
+            awk '$8=="after_la" {print $2}' >"$work/$producer-$mode.after"
         test -s "$work/$producer-$mode.target"
+        test -s "$work/$producer-$mode.after"
         readelf --debug-dump=decodedline "$work/$producer-$mode.elf" \
             >"$work/$producer-$mode.lines"
     done
     cmp "$work/gnu-$mode.text" "$work/mini-$mode.text"
     cmp "$work/gnu-$mode.target" "$work/mini-$mode.target"
+    cmp "$work/gnu-$mode.after" "$work/mini-$mode.after"
     python3 - "$work/gnu-$mode.lines" "$work/mini-$mode.lines" \
-        "$work/gnu-$mode.target" <<'PY'
+        "$work/gnu-$mode.after" "$work/gnu-$mode.target" <<'PY'
 from pathlib import Path
 import re
 import sys
@@ -173,10 +180,17 @@ def rows(path):
     return result
 
 gnu, mini = rows(sys.argv[1]), rows(sys.argv[2])
-target = int(Path(sys.argv[3]).read_text().strip(), 16)
+after = int(Path(sys.argv[3]).read_text().strip(), 16)
+target = int(Path(sys.argv[4]).read_text().strip(), 16)
 assert gnu and mini and gnu == mini, ('final DWARF line PCs', gnu, mini)
-assert any(line == 2 and pc == target for line, pc in mini), \
-    ('line 2 did not follow relaxed target', mini, hex(target))
+assert any(line == 2 and pc == after for line, pc in mini), \
+    ('line 2 did not follow relocated instruction', mini, hex(after))
+assert any(line == 3 and pc == target for line, pc in mini), \
+    ('line 3 did not follow aligned target', mini, hex(target))
 PY
 done
+if cmp -s "$work/gnu-relax.after" "$work/gnu-no-relax.after"; then
+    echo 'MINIAS_LOONG_SCOPED_RELAX=FAIL GNU link did not shrink fixture' >&2
+    exit 1
+fi
 echo 'MINIAS_LOONG_SCOPED_RELAX=PASS GNU_final_text_target_and_DWARF=exact linker_modes=2'
