@@ -785,10 +785,15 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
          * an undefined weak must still use GOT (it may resolve to zero),
          * even when its visibility is hidden. */
         if (!target->position_independent ||
-            (minic_target_info_elf_object_is_nonpreemptible(
-                 program, fn->globals[ins->value.global_id].name) &&
-             !minic_target_info_elf_object_is_undefined_weak(
-                 program, fn->globals[ins->value.global_id].name)))
+            (frame->module != NULL
+                 ? (minic_target_info_elf_module_object_is_nonpreemptible(
+                        frame->module, fn->globals[ins->value.global_id].name) &&
+                    !minic_target_info_elf_module_object_is_undefined_weak(
+                        frame->module, fn->globals[ins->value.global_id].name))
+                 : (minic_target_info_elf_object_is_nonpreemptible(
+                        program, fn->globals[ins->value.global_id].name) &&
+                    !minic_target_info_elf_object_is_undefined_weak(
+                        program, fn->globals[ins->value.global_id].name))))
             return fprintf(out, "  leaq %s(%%rip), %%rax\n",
                            fn->globals[ins->value.global_id].name) >= 0 &&
                    x86_value_store(out, frame, ins->result);
@@ -802,10 +807,19 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
         if (ins->value.function_symbol_id >= fn->function_symbol_count ||
             fn->function_symbols[ins->value.function_symbol_id].name == NULL) return false;
         if (!target->position_independent ||
-            (minic_target_info_elf_function_is_nonpreemptible(
-                 program, fn->function_symbols[ins->value.function_symbol_id].name) &&
-             !minic_target_info_elf_function_is_undefined_weak(
-                 program, fn->function_symbols[ins->value.function_symbol_id].name)))
+            (frame->module != NULL
+                 ? (minic_target_info_elf_module_function_is_nonpreemptible(
+                        frame->module, fn->function_symbols[
+                            ins->value.function_symbol_id].name) &&
+                    !minic_target_info_elf_module_function_is_undefined_weak(
+                        frame->module, fn->function_symbols[
+                            ins->value.function_symbol_id].name))
+                 : (minic_target_info_elf_function_is_nonpreemptible(
+                        program, fn->function_symbols[
+                            ins->value.function_symbol_id].name) &&
+                    !minic_target_info_elf_function_is_undefined_weak(
+                        program, fn->function_symbols[
+                            ins->value.function_symbol_id].name))))
             return fprintf(out, "  leaq %s(%%rip), %%rax\n",
                            fn->function_symbols[ins->value.function_symbol_id].name) >= 0 &&
                    x86_value_store(out, frame, ins->result);

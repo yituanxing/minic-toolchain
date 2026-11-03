@@ -977,6 +977,56 @@ static bool aarch64_stlr_memory_carrier(
             size == width && alignment <= width);
 }
 
+/* A GNU Q address may denote a packed record, not a scalar. Source
+ * qualification has already proven the C layout. Revalidate its native
+ * access size from the independently imported Core type snapshot so the
+ * machine emission can never consult the C Program again. */
+static bool aarch64_stlr_memory_carrier_core(
+    const MinicCoreFunction *fn, MinicCoreValueId address,
+    MinicType pointee, size_t width) {
+    const MinicCoreType *pointer, *object;
+    MinicCoreTypeId id;
+    if (aarch64_stlr_memory_type(pointee, width) ||
+        aarch64_stlr_scalar_core(fn, pointee, width))
+        return true;
+    if (!fn || !fn->type_context || address >= fn->value_count)
+        return false;
+    id = minic_core_type_unqualified(fn->type_context,
+                                    fn->values[address].core_type_id);
+    pointer = minic_core_type_get(fn->type_context, id);
+    if (!pointer || pointer->kind != MINIC_CORE_TYPE_POINTER)
+        return false;
+    id = minic_core_type_unqualified(fn->type_context,
+                                    pointer->value.pointer.pointee);
+    object = minic_core_type_get(fn->type_context, id);
+    return object && object->kind == MINIC_CORE_TYPE_RECORD &&
+           object->has_layout && object->size == width &&
+           object->alignment <= width;
+}
+
+static bool aarch64_core_pointee_layout(
+    const MinicCoreFunction *fn, MinicCoreValueId address,
+    size_t *size, size_t *alignment) {
+    const MinicCoreType *pointer, *object;
+    MinicCoreTypeId id;
+    if (!fn || !fn->type_context || address >= fn->value_count ||
+        !size || !alignment)
+        return false;
+    id = minic_core_type_unqualified(fn->type_context,
+                                    fn->values[address].core_type_id);
+    pointer = minic_core_type_get(fn->type_context, id);
+    if (!pointer || pointer->kind != MINIC_CORE_TYPE_POINTER)
+        return false;
+    id = minic_core_type_unqualified(fn->type_context,
+                                    pointer->value.pointer.pointee);
+    object = minic_core_type_get(fn->type_context, id);
+    if (!object || !object->has_layout)
+        return false;
+    *size = object->size;
+    *alignment = object->alignment;
+    return true;
+}
+
 /* One typed AArch64 ISA descriptor for source qualification AND machine
  * emission. No ordinal op IDs, width thresholds or duplicated ALU tables:
  * new Linux atomics extend this target-owned operation/mode inventory only.
@@ -3101,9 +3151,8 @@ static bool aarch64_linux_hyp_spin_emit(
             !minic_type_pointee(fn->values[ops[i].value].type, &pointee) ||
             (record ? !minic_type_is_record(pointee) :
                       !minic_type_is_unsigned_integer(pointee)) ||
-            !ctx->target || !ctx->target->data_layout || !ctx->program ||
-            !minic_data_layout_type(ctx->target->data_layout, ctx->program,
-                                    pointee, &size, &alignment) ||
+            !aarch64_core_pointee_layout(fn, ops[i].value,
+                                         &size, &alignment) ||
             size != width) return false;
     }
     if (lock) {
@@ -3487,9 +3536,8 @@ static bool aarch64_linux_uaccess_emit(
          (!minic_type_pointee(fn->values[op[1].value].type, &data_type) ||
           (!minic_type_is_integer(data_type) &&
            !(form->width == 8U && minic_type_is_pointer(data_type))) ||
-          !ctx->target || !ctx->target->data_layout || !ctx->program ||
-          !minic_data_layout_type(ctx->target->data_layout, ctx->program,
-                                  data_type, &data_bytes, &data_alignment))) ||
+          !aarch64_core_pointee_layout(fn, op[1].value,
+                                       &data_bytes, &data_alignment))) ||
         !minic_type_is_pointer(fn->values[op[2].value].type)) return false;
     /* GNU =r output registers are widened to W/X, but the C destination
      * remains a 1/2/4/8-byte object. The old unconditional STR X10 silently
@@ -6105,6 +6153,89 @@ bool minic_aarch64_qualify_inline_asm(
     contract->kinds[2] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     return true;
 }
+
+/* The ID is a target-owned machine proof, not the C source hash or index.
+ * One descriptor family includes all four Linux byte/half/word/dword widths;
+ * source qualifier validates GNU roles and types, while this second gate
+ * proves that operand normalization preserved the exact machine template. */
+enum Aarch64MachineAsmForm {
+    AARCH64_MACHINE_ASM_LDAR = 1,
+    AARCH64_MACHINE_ASM_STLR,
+    AARCH64_MACHINE_ASM_RAW_IO_READ,
+    AARCH64_MACHINE_ASM_RAW_IO_STORE
+};
+
+bool minic_aarch64_seal_normalized_inline_asm(
+    const MinicC0Program *program, const MinicInlineAsm *source,
+    const char *normalized, size_t length,
+    MinicTargetInlineAsmContract *contract) {
+    const Aarch64RawIoRead *old_read, *new_read;
+    const Aarch64RawIoStore *old_store, *new_store;
+    size_t original_width, machine_width;
+    if (!program || !source || !source->template_text ||
+        !normalized || !length || !contract)
+        return false;
+
+    original_width = aarch64_load_acquire_width(
+        source->template_text, source->template_length);
+    if (original_width) {
+        machine_width = aarch64_load_acquire_width(normalized, length);
+        if (machine_width != original_width || contract->operand_count != 2U ||
+            contract->kinds[0] !=
+                MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT ||
+            contract->kinds[1] !=
+                MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT)
+            return false;
+        contract->target_machine_form_id = AARCH64_MACHINE_ASM_LDAR;
+        contract->target_machine_form_variant = (uint32_t)original_width;
+        return true;
+    }
+    original_width = aarch64_stlr_width(
+        source->template_text, source->template_length);
+    if (original_width) {
+        machine_width = aarch64_stlr_width(normalized, length);
+        if (machine_width != original_width || contract->operand_count != 2U ||
+            contract->kinds[0] !=
+                MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT ||
+            contract->kinds[1] !=
+                MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT)
+            return false;
+        contract->target_machine_form_id = AARCH64_MACHINE_ASM_STLR;
+        contract->target_machine_form_variant = (uint32_t)original_width;
+        return true;
+    }
+    old_read = aarch64_raw_io_read(
+        source->template_text, source->template_length);
+    if (old_read) {
+        new_read = aarch64_raw_io_read(normalized, length);
+        if (new_read != old_read || contract->operand_count != 2U ||
+            contract->kinds[0] !=
+                MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT ||
+            contract->kinds[1] !=
+                MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT)
+            return false;
+        contract->target_machine_form_id = AARCH64_MACHINE_ASM_RAW_IO_READ;
+        contract->target_machine_form_variant = (uint32_t)old_read->width;
+        return true;
+    }
+    old_store = aarch64_raw_io_store(
+        source->template_text, source->template_length);
+    if (old_store) {
+        new_store = aarch64_raw_io_store(normalized, length);
+        if (new_store != old_store || contract->operand_count != 2U ||
+            contract->kinds[0] !=
+                MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT ||
+            contract->kinds[1] !=
+                MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT ||
+            !contract->implicit_memory_effect)
+            return false;
+        contract->target_machine_form_id = AARCH64_MACHINE_ASM_RAW_IO_STORE;
+        contract->target_machine_form_variant = (uint32_t)old_store->width;
+        return true;
+    }
+    return true;
+}
+
 static bool aarch64_linux_percpu_write_alternative_emit(
     FILE *out, const MinicDirectLP64BlockContext *ctx,
     const MinicCoreInstruction *ins, const MinicCoreInlineAsm *info) {
@@ -6290,8 +6421,8 @@ static bool aarch64_linux_crash_regs_emit(
         !minic_type_pointee(fn->values[op[2].value].type, &record) ||
         !minic_type_unqualified(record, &plain_record) ||
         !minic_type_is_record(plain_record) ||
-        !minic_data_layout_type(minic_default_data_layout(), ctx->program,
-                                plain_record, &record_size, &record_alignment) ||
+        !aarch64_core_pointee_layout(fn, op[2].value,
+                                     &record_size, &record_alignment) ||
         record_size < 34U * 8U || record_alignment < 8U) return false;
     /* Materialize the original GNU %2 "r" input in x0. Under GCC's
      * early-clobber rules it cannot alias the two outputs, which are x9/x10.
@@ -6348,6 +6479,36 @@ bool minic_aarch64_emit_qualified_structured_asm(
     if (ins->value.structured_inline_asm.inline_asm_id >= fn->inline_asm_count)
         return false;
     info = &fn->inline_asms[ins->value.structured_inline_asm.inline_asm_id];
+    /* A sealed form must agree with its normalized machine syntax. No
+     * fallback to an unsealed template or source hash is permitted. */
+    switch (info->target_machine_form_id) {
+    case 0U: break;
+    case AARCH64_MACHINE_ASM_LDAR:
+        if (info->target_machine_form_variant !=
+            aarch64_load_acquire_width(info->template_text, info->template_length))
+            return false;
+        break;
+    case AARCH64_MACHINE_ASM_STLR:
+        if (info->target_machine_form_variant !=
+            aarch64_stlr_width(info->template_text, info->template_length))
+            return false;
+        break;
+    case AARCH64_MACHINE_ASM_RAW_IO_READ: {
+        const Aarch64RawIoRead *read = aarch64_raw_io_read(
+            info->template_text, info->template_length);
+        if (!read || info->target_machine_form_variant != read->width)
+            return false;
+        break;
+    }
+    case AARCH64_MACHINE_ASM_RAW_IO_STORE: {
+        const Aarch64RawIoStore *store = aarch64_raw_io_store(
+            info->template_text, info->template_length);
+        if (!store || info->target_machine_form_variant != store->width)
+            return false;
+        break;
+    }
+    default: return false;
+    }
     /* Linux arm-smmu-v3 uses dma_wmb() after a runtime-sized stack frame.
      * The zero-operand DMB touches no stack slots, so its architectural
      * memory-ordering effect remains valid even while SP is dynamic.
@@ -6680,7 +6841,7 @@ bool minic_aarch64_emit_qualified_structured_asm(
             info->template_text,info->template_length))
         return aarch64_linux_io_dependency_emit(out,ctx,ins,info);
     if (ins->value.structured_inline_asm.operand_count == 2U &&
-        aarch64_raw_io_read(info->template_text, info->template_length)) {
+        info->target_machine_form_id == AARCH64_MACHINE_ASM_RAW_IO_READ) {
         const Aarch64RawIoRead *d = aarch64_raw_io_read(
             info->template_text, info->template_length);
         const MinicCoreStructuredInlineAsmOperand *ops =
@@ -6791,7 +6952,7 @@ bool minic_aarch64_emit_qualified_structured_asm(
             fputs("  str x9, [x10]\n", out) != EOF;
     }
     if (ins->value.structured_inline_asm.operand_count == 2U &&
-        aarch64_raw_io_store(info->template_text, info->template_length)) {
+        info->target_machine_form_id == AARCH64_MACHINE_ASM_RAW_IO_STORE) {
         const Aarch64RawIoStore *store = aarch64_raw_io_store(
             info->template_text, info->template_length);
         const MinicCoreStructuredInlineAsmOperand *ops =
@@ -6823,9 +6984,8 @@ bool minic_aarch64_emit_qualified_structured_asm(
     /* Original GNU barrier.h acquire load: exact byte/half/word/64-bit
      * LDAR hardware and matching-width C output writes. */
     if(ins->value.structured_inline_asm.operand_count==2U &&
-       aarch64_load_acquire_width(info->template_text,info->template_length)){
-        const size_t w=aarch64_load_acquire_width(
-            info->template_text,info->template_length);
+       info->target_machine_form_id == AARCH64_MACHINE_ASM_LDAR){
+        const size_t w=info->target_machine_form_variant;
         static const char *const rd[]={
             "ldarb w9, [x10]","ldarh w9, [x10]",
             "ldar w9, [x10]","ldar x9, [x10]"};
@@ -6846,8 +7006,7 @@ bool minic_aarch64_emit_qualified_structured_asm(
            !minic_type_pointee(fn->values[ops[0].value].type,&dst_ty)||
            !minic_type_pointee(fn->values[ops[1].value].type,&mem_ty)||
            !aarch64_stlr_scalar_core(fn,dst_ty,w)||
-           !(aarch64_stlr_memory_carrier(ctx->program,mem_ty,w) ||
-             aarch64_stlr_scalar_core(fn,mem_ty,w)))
+           !aarch64_stlr_memory_carrier_core(fn,ops[1].value,mem_ty,w))
             return false;
         return aarch64_atomic_owned_x(out, ctx, 10U, ops[1].value) &&
                fprintf(out, "  %s\n", rd[n]) >= 0 &&
@@ -6861,8 +7020,9 @@ bool minic_aarch64_emit_qualified_structured_asm(
             NULL, "stlrb w9, [x10]", "stlrh w9, [x10]", NULL,
             "stlr w9, [x10]", NULL, NULL, NULL, "stlr x9, [x10]"
         };
-        const size_t width = aarch64_stlr_width(
-            info->template_text, info->template_length);
+        const size_t width = info->target_machine_form_id ==
+            AARCH64_MACHINE_ASM_STLR
+            ? (size_t)info->target_machine_form_variant : 0U;
         MinicType pointee;
         if (!width || !info->is_volatile || info->is_goto ||
             !info->has_memory_clobber || info->register_clobber_count ||
@@ -6875,8 +7035,7 @@ bool minic_aarch64_emit_qualified_structured_asm(
             b[0].value >= fn->value_count || b[1].value >= fn->value_count ||
             !aarch64_linux_structured_spill_slot_valid(b[0].value) || !aarch64_linux_structured_spill_slot_valid(b[1].value) ||
             !minic_type_pointee(fn->values[b[0].value].type, &pointee) ||
-            !(aarch64_stlr_memory_carrier(ctx->program,pointee,width) ||
-              aarch64_stlr_scalar_core(fn,pointee,width)) ||
+            !aarch64_stlr_memory_carrier_core(fn,b[0].value,pointee,width) ||
             !aarch64_stlr_scalar_core(fn,fn->values[b[1].value].type, width))
             return false;
         /* LP64 Core SSA slots SP-relative; x9/x10 are AAPCS64 caller-saved.

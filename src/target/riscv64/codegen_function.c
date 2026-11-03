@@ -117,11 +117,15 @@ static bool rv64_visit_function(
             ? minic_riscv_function_symbol_from_module(module_decl, &symbol)
             : minic_riscv_function_symbol_from_function(function, &symbol);
         symbol.function_sections = function_sections;
-        success = success && minic_riscv64_emit_core_function_for_program_with_symbol_with_storage(
-                      file, program, core_function, &symbol, facts, storage,
-                      target != NULL && target->position_independent,
-                      target != NULL ? &target->riscv_isa : NULL,
-                      ctx->diagnostic);
+        success = success && (ctx->module != NULL
+            ? minic_riscv64_emit_core_function_for_program_with_symbol_with_storage_module(
+                  file, program, ctx->module, core_function, &symbol, facts, storage,
+                  target != NULL && target->position_independent,
+                  target != NULL ? &target->riscv_isa : NULL, ctx->diagnostic)
+            : minic_riscv64_emit_core_function_for_program_with_symbol_with_storage(
+                  file, program, core_function, &symbol, facts, storage,
+                  target != NULL && target->position_independent,
+                  target != NULL ? &target->riscv_isa : NULL, ctx->diagnostic));
         if (success && is_constructor) {
             success = name != NULL && name[0] != '\0' &&
                       fprintf(file, ".section .init_array,\"aw\",@init_array\n"
@@ -172,7 +176,10 @@ static bool rv64_between(FILE *file, const MinicC0Program *program,
                 !minic_riscv64_asm_audit_marker(file, false))
                 return false;
         }
-        return true;
+        /* A source file asm may leave GAS in an arbitrary section. The
+         * sealed Module path must restore the same .text boundary as the
+         * legacy Program visitor before machine functions are emitted. */
+        return module->file_asm_count == 0U || fprintf(file, ".text\n") >= 0;
     }
     if (program->file_asm_count != 0U) {
         if (fprintf(file, ".text\n") < 0) return false;

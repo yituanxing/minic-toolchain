@@ -29,23 +29,4 @@ bool minic_aarch64_neon_emit_store_core(FILE *, const MinicA64FrameView *,
 bool minic_aarch64_neon_emit_xor_core(FILE *, const MinicA64FrameView *,
     const MinicCoreTypeContext *, MinicCoreTypeId, size_t, size_t, size_t);
 
-/* Validate the complete source operand signature of the SHA3 template.
- * Real Linux's ARM64_ASM_PREAMBLE-expanded prefix must be separately
- * admitted against its exact frozen .i; generic prefix text is rejected. */
-bool minic_aarch64_neon_sha3_eor3_source_form(
-    const MinicC0Program *program, const MinicInlineAsm *source);
-
-/* SHA3 is not part of the baseline +simd option. Only a caller that has
- * independently qualified GCC's exact four-V-register `eor3` inline ASM
- * may pass true. Runtime safety additionally requires the program's CPU
- * feature-guarded dispatch to remain intact; an assembler .arch_extension
- * is never evidence that a particular CPU supports SHA3. */
-bool minic_aarch64_neon_emit_eor3(FILE *out, const MinicA64FrameView *frame,
-    MinicType type, bool qualified_sha3_asm,
-    size_t first_slot, size_t second_slot, size_t third_slot,
-    size_t result_slot);
-bool minic_aarch64_neon_emit_eor3_core(FILE *, const MinicA64FrameView *,
-    const MinicCoreTypeContext *, MinicCoreTypeId, bool,
-    size_t, size_t, size_t, size_t);
-
 #endif

@@ -16,4 +16,4 @@ mkdir -p "$work"
     -o "$work/contract"
 "$work/contract"
 
-printf '%s\n' 'PASS AArch64 typed 128-bit Q-machine-contract load/store/xor; eor3 SHA3 strict gate; invalid types rejected; ARM runtime=NOT_TESTED'
+printf '%s\n' 'PASS AArch64 typed 128-bit Q-machine-contract load/store/xor; invalid types rejected; ARM runtime=NOT_TESTED'

@@ -861,3 +861,78 @@ Program 双轨虽已被生产 Module 路径取代，但若在这些证明尚未
 machine-form proof，再一次性删除五目标 writer、Common
 `program_emit`/`program_visit` 的旧 C 分支并把事务负例全部改为
 Module-only；不在每个架构各留一套半迁移的 writer。
+
+## IR-P9：五目标完整机器类型/ASM 资格闭包与生产 Module 单入口
+
+起点：`d2597b844`（IR-P8）；不按后端一个个发小修补。本轮先重读
+编译 Driver、Common TU 事务/Prepared Function visitor、五目标
+`Source→Core→ABI/Frame→Machine` 调用链，发现还混着三类不同事实：
+编译源类型与 GNU 约束、Core 可执行类型/对齐、ELF TU 符号联编。
+因此同时迁移五架构对应消费者，并对确实需要 Source 资格的
+ISA 家族建立规范化后机器证明，不能把 provenance ID 误作许可。
+
+1. **公共生产单入口及 ELF 六种证明。** `backend` 去掉无人调用的
+   `emit_program` 回调、旧 `minic_backend_emit_assembly` 入口；
+   五目标生产统一注册 `emit_module`，失败绝不回退 C globals。
+   `target_info` 以 `CoreModule` 的封存 linkage/visibility 实现
+   object/function 各自的 TU-local、nonpreemptible、undefined-weak
+   六种精确判定，空/未 finalized 的 Module fail closed。Direct LP64
+   公共 BlockContext 正式携带只读 Module；x86、RV32、RV64、
+   AArch64、LoongArch64 的 PIC/GOT/弱符号路径一并接入。
+   `program_emit` 的 Module symbol-use/weak-hidden 决定现可**完全
+   不提供 C Program**独立运作；已新增 20-case ELF、Poison C
+   与原有五失败边输出事务测试。原白盒 Program 兼容入口仅限
+   target 底层测试，不再可由 Backend Driver 选择。
+2. **x86-64 一次转换现有全部 40 组 typed ASM dispatcher 家族。**
+   原子 RMW/XCHG/CMPXCHG/TRY-CAS、bitops/PORT_IO、MMIO、
+   XSETBV/FXSAVE/MXCSR、segment/FSGSBASE、boot/低级控制、
+   delay、IPv6、Zstd CPUID 等在 Source 保留 exact GNU C rank
+   和约束审查，Machine 只验证 typed machine form/variant、Core
+   pointee/宽度/对齐、模板和物理操作数。`frame.module` 负责
+   PIC nonpreemptible/undefined-weak；保留尚未显式封存的
+   `target_machine_form_id=NONE` Linux exception/alt/percpu/nospec
+   族原有严格 Source 验证，不伪造安全性。
+3. **RV32/RV64 整条地址计算/ASM/ELF 链同时迁移。**
+   `memory→overflow→structured inline ASM` 的地址对齐只读
+   `CoreTypeContext` 与已封存对象 alignment；RV32 ILP32 及
+   RV64I ISA 检查保留。两架构 `GLOBAL_ADDRESS`/`FUNCTION_ADDRESS`
+   以 Module 确认 PIC GOT 与 lla/lla-local 的条件，RV64 ABI
+   frame/admission 摆脱借 Program 非空判定严格模式的历史哨兵。
+   修正 RV64 文件级 ASM 在实际切节后必须恢复 `.text`；仅
+   `file_asm_count > 0` 才输出恢复指令，防止污染所有 TU 的
+   汇编字节稳定性。
+4. **AArch64/LoongArch64 整族 ASM 资格封存。** AArch64
+   LDAR/STLR/raw MMIO read/write 各 1/2/4/8 字节共 16 个
+   来源→规范机器形式，hypspin/uaccess/crash/RCU 原 C Record
+   布局校验转 Core；没有 Core 生产者的 `VECTOR128_EOR3`
+   死 opcode/SSA operands/NEON machine shim 一次从 Core、Target、
+   分类器与测试清净，保留真实可执行 NEON Load/Store/XOR。
+   LoongArch64 进一步把 non-SIMD 标量 DBAR、LL/SC、uaccess、
+   percpu AMO、CSR、AMO store/fetch 统一封存 form 21–28；
+   normalized template 逐条证明 operand/异常 fixup 等效，
+   Machine 不再访问 `ctx->program`；800B 大 Record 的 C 名称
+   仍须 Source 准入验证，其物理布局由 Core 复核。
+
+**本批独立回归：** `make -s -j8 check-fast`、
+`check-minic-target-boundaries.sh`、新 AArch64 form 16 正例/28
+恶意反例、新 Loong 标量 8 族/源 C rank 反例、20-case Module
+ELF linker 证明、Poison C/事务回滚均 PASS。x86 GNU 原生
+RAW_CMPXCHG 36,000、RMW 6,656、TRYCAS 1,800 个差分等
+PASS。用同一份 GNU 预处理 `.i` 对照 P8 的原编译器：
+**执行/ASM 51×5=255（188 字节相同、67 同拒、0 差异），
+ABI/CALL 24×5=120（98 字节相同、22 同拒、0 差异）**。
+RV32/RV64、AArch64、LoongArch64 真实交叉 GNU AS/LD/QEMU
+本地缺相关交叉工具，**未宣称 Linux 运行时五架构通过**。
+本批一提交共 **59 文件、约 +1690/−807 行**；其中生产 `src/`
+**48 文件、+1111/−739 行（净 +372）**，新造的正反例和
+测试迁移约占另 9 文件，另有构建入口与本文档各一。
+
+**剩余入口与后继边界：** 完整 Module-only *机器代码生成函数*
+尚未完成：为单独白盒测试保留的目标 `Program` wrappers、
+Common prepared-function callback 的 C decl 和 x86 `NONE`
+型 Linux ASM 没有全部封存；Driver 虽已唯一选择 Module，
+仍暂借只读 Program 供未迁移的 SourcePolicy 前置资格。
+后续需整体为 x86 剩余 NONE 族补 Source→normalized 的
+machine-form/operand/fixup 证明，再关闭五目标 function emitter
+及 Common visitor 的最后 C 参数。**不要在没有证明时直接
+把 `source_inline_asm_id` 当作机器准入。**

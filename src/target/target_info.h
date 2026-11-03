@@ -97,6 +97,7 @@ struct MinicTargetMachineBuiltinPolicy;
 struct MinicTargetAliasAbiPolicy;
 struct MinicTargetSourceLanguagePolicy;
 struct MinicTargetVaCursorSourceAbiPolicy;
+struct MinicCoreModule;
 
 typedef struct MinicTargetInfo {
     MinicTargetArchitecture architecture;
@@ -228,6 +229,22 @@ bool minic_target_info_elf_object_is_undefined_weak(const MinicC0Program *progra
                                                     const char *symbol);
 bool minic_target_info_elf_function_is_undefined_weak(const MinicC0Program *program,
                                                       const char *symbol);
+/* Machine PIC/ELF classification consumes the sealed ModuleIR symbol table.
+ * These six decisions mirror the source-ingress queries above, but do not
+ * reopen a C declaration after CoreModule has been finalized. A missing
+ * symbol is never guessed local, nonpreemptible or undefined-weak. */
+bool minic_target_info_elf_module_object_is_tu_local(
+    const struct MinicCoreModule *module, const char *symbol);
+bool minic_target_info_elf_module_function_is_tu_local(
+    const struct MinicCoreModule *module, const char *symbol);
+bool minic_target_info_elf_module_object_is_nonpreemptible(
+    const struct MinicCoreModule *module, const char *symbol);
+bool minic_target_info_elf_module_function_is_nonpreemptible(
+    const struct MinicCoreModule *module, const char *symbol);
+bool minic_target_info_elf_module_object_is_undefined_weak(
+    const struct MinicCoreModule *module, const char *symbol);
+bool minic_target_info_elf_module_function_is_undefined_weak(
+    const struct MinicCoreModule *module, const char *symbol);
 bool minic_target_info_function_pointer_calling_convention_declaration_supported(
     const MinicTargetInfo *target, MinicFunctionCallingConvention convention);
 bool minic_target_info_function_calling_convention_scalar_call_supported(

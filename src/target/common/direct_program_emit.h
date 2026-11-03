@@ -20,6 +20,7 @@ typedef struct MinicCoreModuleFunctionSymbol MinicCoreModuleFunctionSymbol;
  * target-neutral object/function serialization loop. */
 typedef bool (*MinicMultiDirectEmitFunction)(
     FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicCoreModule *module,
     const MinicFunction *decl, const MinicCoreModuleFunctionSymbol *module_decl,
     const MinicCoreFunction *fn,
     const MinicCoreFunctionFacts *facts,

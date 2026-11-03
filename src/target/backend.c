@@ -11,17 +11,6 @@
 #include "target/loongarch64/asm_contract.h"
 #include <string.h>
 
-static bool emit_riscv64(const char *output_path, const MinicC0Program *program,
-                        const MinicTargetInfo *target,
-                        const MinicCoreFunction *functions,
-                        size_t function_count, bool function_sections,
-                        MinicDiagnostic *diagnostic) {
-    return minic_riscv64_write_c0_program_with_core_functions(
-        output_path, program, functions, function_count,
-        function_sections, target,
-        diagnostic);
-}
-
 static bool emit_riscv64_module(
     const char *output_path, const MinicC0Program *program,
     const MinicTargetInfo *target, const MinicCoreFunction *functions,
@@ -36,35 +25,31 @@ static bool emit_riscv64_module(
  * More targets can register here without modifying compiler.c or Core IR. */
 /* Reserved source ISA templates are declared in their native target. */
 static const MinicBackend riscv64_backend = {
-    .emit_program = emit_riscv64,
-    .emit_module_program = emit_riscv64_module,
+    .emit_module = emit_riscv64_module,
     .emit_reachable_core_blocks_only = true,
 };
 static const MinicBackend riscv32_backend = {
-    .emit_program = minic_riscv32_write_core_program,
-    .emit_module_program = minic_riscv32_write_core_module,
+    .emit_module = minic_riscv32_write_core_module,
     .emit_reachable_core_blocks_only = true,
 };
 static const MinicBackend x86_64_backend = {
-    .emit_program = minic_x86_64_write_c0_program_with_core_functions,
-    .emit_module_program = minic_x86_64_write_c0_program_with_core_module,
+    .emit_module = minic_x86_64_write_c0_program_with_core_module,
     .emit_reachable_core_blocks_only = true,
     .qualify_inline_asm = minic_x86_64_qualify_inline_asm,
     .requires_qualified_input_asm = minic_x86_64_requires_qualified_input_asm,
     .qualify_inline_asm_goto = minic_x86_64_qualify_inline_asm_goto,
 };
 static const MinicBackend aarch64_backend = {
-    .emit_program = minic_aarch64_write_c0_program_with_core_functions,
-    .emit_module_program = minic_aarch64_write_c0_program_with_core_module,
+    .emit_module = minic_aarch64_write_c0_program_with_core_module,
     .emit_reachable_core_blocks_only = true,
     .qualify_inline_asm = minic_aarch64_qualify_inline_asm,
+    .seal_normalized_inline_asm = minic_aarch64_seal_normalized_inline_asm,
     .requires_qualified_input_asm = minic_aarch64_requires_qualified_input_asm,
     .qualify_inline_asm_goto = minic_aarch64_qualify_inline_asm_goto,
     .clone_safe_opaque_asm = minic_aarch64_clone_safe_opaque_asm,
 };
 static const MinicBackend loongarch64_backend = {
-    .emit_program = minic_loongarch64_write_c0_program_with_core_functions,
-    .emit_module_program = minic_loongarch64_write_c0_program_with_core_module,
+    .emit_module = minic_loongarch64_write_c0_program_with_core_module,
     .emit_reachable_core_blocks_only = true,
     .qualify_inline_asm = minic_loongarch64_qualify_inline_asm,
     .seal_normalized_inline_asm = minic_loongarch64_seal_normalized_inline_asm,
@@ -315,19 +300,6 @@ bool minic_backend_clone_safe_opaque_asm(
            backend->clone_safe_opaque_asm(source);
 }
 
-bool minic_backend_emit_assembly(
-    const MinicBackend *backend, const char *output_path,
-    const MinicC0Program *program, const MinicTargetInfo *target,
-    const MinicCoreFunction *functions, size_t function_count,
-    bool function_sections, MinicDiagnostic *diagnostic) {
-    if (backend == NULL || target == NULL ||
-        backend != minic_backend_for_target(target) ||
-        backend->emit_program == NULL)
-        return false;
-    return backend->emit_program(output_path, program, target, functions,
-                                 function_count, function_sections, diagnostic);
-}
-
 bool minic_backend_emit_assembly_with_module(
     const MinicBackend *backend, const char *output_path,
     const MinicC0Program *program, const MinicTargetInfo *target,
@@ -336,12 +308,12 @@ bool minic_backend_emit_assembly_with_module(
     MinicDiagnostic *diagnostic) {
     if (backend == NULL || target == NULL || module == NULL ||
         backend != minic_backend_for_target(target) ||
-        backend->emit_module_program == NULL ||
+        backend->emit_module == NULL ||
         !minic_core_module_verify(module) ||
         module->function_count != function_count)
         return false;
     /* Once a module has been attached, failure remains a real failure:
      * emitting from the mutable source globals would violate ownership. */
-    return backend->emit_module_program(output_path, program, target,
+    return backend->emit_module(output_path, program, target,
         functions, function_count, function_sections, module, diagnostic);
 }

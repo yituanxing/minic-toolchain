@@ -332,12 +332,9 @@ static bool loong_emit_scalar_store(FILE *out, size_t width,
 }
 
 bool minic_loongarch64_emit_asm_output_store(
-    FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
-    const MinicCoreFunction *fn, MinicCoreValueId address,
+    FILE *out, const MinicCoreFunction *fn, MinicCoreValueId address,
     size_t width, const char *value_reg, const char *address_reg,
     const char *scratch_reg) {
-    (void)program;
-    (void)target;
     return loong_emit_scalar_store(out, width, value_reg, address_reg,
         scratch_reg, loong_known_address_alignment(fn, address) >= width,
         true, false);
@@ -428,9 +425,9 @@ static bool emit_integer_memory(FILE *out, bool store,
 }
 
 bool minic_loongarch64_emit_asm_input_scalar(
-    FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
-    const MinicCoreFunction *fn, MinicCoreValueId address, size_t width) {
-    if (!out || !program || !target || !fn || address >= fn->value_count ||
+    FILE *out, const MinicCoreFunction *fn,
+    MinicCoreValueId address, size_t width) {
+    if (!out || !fn || address >= fn->value_count ||
         (width != 4U && width != 8U))
         return false;
     /* Both native ld.w and byte-gather must extend the word to the same

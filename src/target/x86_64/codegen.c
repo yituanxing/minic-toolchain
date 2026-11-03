@@ -301,6 +301,7 @@ static bool x86_no_sse_function_safe(
 static bool x86_emit_function(FILE *out, const MinicC0Program *program,
                               const MinicTargetInfo *target, const MinicFunction *declaration,
                               const MinicCoreModuleFunctionSymbol *module_decl,
+                              const MinicCoreModule *module,
                               const MinicCoreFunction *fn, const MinicCoreFunctionFacts *facts,
                               const MinicCoreObjectStoragePlan *storage,
                               size_t function_id, bool function_sections,
@@ -359,6 +360,7 @@ static bool x86_emit_function(FILE *out, const MinicC0Program *program,
             return false;
         }
     }
+    frame.module = module;
     /* Match the shared Core CFG visibility contract: source labels remain
      * roots for computed goto and asm-goto, while dead lexical arms must not
      * contribute machine instructions or unresolved linker references. */
@@ -935,7 +937,7 @@ static bool x86_visit_function(
     bool function_sections, void *opaque) {
     const MinicX86VisitContext *ctx = opaque;
     return x86_emit_function(out, program, target, decl, module_decl,
-                             fn, facts, storage, index,
+                             ctx->module, fn, facts, storage, index,
                              function_sections,
                              ctx->head_address_context != NULL &&
                              ctx->head_address_context[index],

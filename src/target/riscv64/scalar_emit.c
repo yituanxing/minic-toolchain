@@ -141,8 +141,7 @@ static bool emit_int128_pair_shift_left(
 }
 
 bool minic_riscv64_emit_scalar_instruction(
-    FILE *file, const MinicC0Program *program,
-    const MinicCoreFunction *function, const MinicRiscv64CoreFrame *frame,
+    FILE *file, const MinicCoreFunction *function, const MinicRiscv64CoreFrame *frame,
     const char *symbol_name, const MinicCoreInstruction *instruction,
     const MinicRiscvIsa *isa) {
     if (file == NULL || function == NULL || function->type_context == NULL ||
@@ -155,7 +154,7 @@ bool minic_riscv64_emit_scalar_instruction(
             file, function, frame, instruction, isa);
     if (instruction->kind == MINIC_CORE_INSTRUCTION_INTEGER_OVERFLOW)
         return minic_riscv64_emit_overflow_instruction(
-            file, program, function, frame, instruction, isa);
+            file, function, frame, instruction, isa);
     /* The ordinary scalar emitters consume only one XLEN word.
      * The pair emitter is the unique selection seam for wide I operations. */
     if (minic_riscv64_core_is_i128(function, instruction->core_type_id)) {

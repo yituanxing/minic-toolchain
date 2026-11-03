@@ -352,8 +352,11 @@ bool minic_aarch64_emit_abi_instruction(
             } else {
                 const MinicCoreCallee *callee =
                     &fn->callees[ins->value.call.callee_id];
-                if (minic_target_info_elf_function_is_undefined_weak(
-                        program, callee->name)) {
+                if (ctx->module != NULL
+                        ? minic_target_info_elf_module_function_is_undefined_weak(
+                            ctx->module, callee->name)
+                        : minic_target_info_elf_function_is_undefined_weak(
+                            program, callee->name)) {
                     /* An undefined weak symbol may resolve to address zero.
                      * Direct CALL26 can force a PLT entry, forbidden by the
                      * Linux AArch64 linker script. Reuse the normal AAPCS64

@@ -237,8 +237,6 @@ static bool rv32_emit_wide_checked_overflow(FILE *out,
  * helpers already selected by ordinary RV32 scalar multiplication/division.
  * Keep operands in their owned Core frame slots across every libcall. */
 static bool rv32_emit_checked_overflow(FILE *out,
-                                       const MinicC0Program *program,
-                                       const MinicTargetInfo *target,
                                        const MinicCoreFunction *f,
                                        const Rv32Frame *fr,
                                        const MinicCoreInstruction *ins) {
@@ -250,7 +248,7 @@ static bool rv32_emit_checked_overflow(FILE *out,
     bool is_signed;
     const char *store;
     size_t address_alignment;
-    if (program == NULL || target == NULL || target->data_layout == NULL ||
+    if (f == NULL || f->type_context == NULL ||
         lhs >= f->value_count || rhs >= f->value_count ||
         address >= f->value_count || ins->result >= f->value_count ||
         !rv32_integer_result_bool(f, ins))
@@ -258,8 +256,9 @@ static bool rv32_emit_checked_overflow(FILE *out,
     result_core_type = rv32_core_pointee_type(
         f, f->values[address].core_type_id);
     if (result_core_type == MINIC_CORE_TYPE_INVALID) return false;
-    address_alignment = minic_riscv_address_alignment(
-        program, target->data_layout, f, address);
+    /* Frozen Core carries local-object type and explicit alignment.  A
+     * machine overflow store must never consult its C source Program. */
+    address_alignment = minic_riscv_address_alignment(NULL, NULL, f, address);
     if (f->values[lhs].core_type_id != result_core_type ||
         f->values[rhs].core_type_id != result_core_type) {
         if (rv32_core_scalar_storage_words(f, result_core_type, &bits) &&
@@ -370,8 +369,6 @@ static bool rv32_emit_checked_overflow(FILE *out,
 /* RV32 integer machine selection and ILP32 normalization. Common
  * RISC-V opcode and runtime symbol identities remain XLEN-parametric. */
 bool rv32_emit_integer_instruction(FILE *out,
-                                   const MinicC0Program *program,
-                                   const MinicTargetInfo *target,
                                    const MinicCoreFunction *f,
                                    const Rv32Frame *fr,
                                    const MinicCoreInstruction *ins,
@@ -415,7 +412,7 @@ bool rv32_emit_integer_instruction(FILE *out,
     }
     switch (ins->kind) {
     case MINIC_CORE_INSTRUCTION_INTEGER_OVERFLOW:
-        return rv32_emit_checked_overflow(out, program, target, f, fr, ins);
+        return rv32_emit_checked_overflow(out, f, fr, ins);
     case MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT: {
         unsigned words;
         if (!rv32_core_scalar_storage_words(f, ins->core_type_id, &words))

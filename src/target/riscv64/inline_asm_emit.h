@@ -1,6 +1,5 @@
 #ifndef MINIC_TARGET_RISCV64_INLINE_ASM_EMIT_H
 #define MINIC_TARGET_RISCV64_INLINE_ASM_EMIT_H
-#include "frontend/ast.h"
 #include "core/core_ir.h"
 #include "target/riscv64/frame_layout.h"
 #include <stdbool.h>
@@ -13,6 +12,6 @@ const MinicCoreFixedRegisterBinding *minic_riscv64_inline_asm_fixed_register_bin
 bool minic_riscv64_inline_asm_instruction_supported(
     const MinicCoreFunction *, const MinicCoreInstruction *);
 bool minic_riscv64_emit_inline_asm_instruction(
-    FILE *, const MinicC0Program *, const MinicCoreFunction *,
+    FILE *, const MinicCoreFunction *,
     const MinicRiscv64CoreFrame *, const char *, const MinicCoreInstruction *, size_t);
 #endif

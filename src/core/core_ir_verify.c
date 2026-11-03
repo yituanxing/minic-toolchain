@@ -375,17 +375,6 @@ static bool core_is_gnu_vector(const MinicCoreFunction *function, MinicCoreTypeI
     return core_is_vector(function, id) && !type->value.vector.is_builtin;
 }
 
-static bool core_is_builtin_u64x2(const MinicCoreFunction *function,
-                                  MinicCoreTypeId id) {
-    const MinicCoreType *type = core_type(function, id);
-    const MinicCoreType *element;
-    if (!core_is_builtin_vector(function, id) || type->value.vector.element_count != 2U)
-        return false;
-    element = core_type(function, type->value.vector.element);
-    return element != NULL && element->kind == MINIC_CORE_TYPE_INTEGER &&
-           element->value.integer.bit_width == 64U && !element->value.integer.is_signed;
-}
-
 static bool core_is_int(const MinicCoreFunction *function, MinicCoreTypeId id) {
     const MinicCoreType *type = core_type(function, id);
     return type != NULL && type->kind == MINIC_CORE_TYPE_INTEGER &&
@@ -1039,24 +1028,6 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
                ct_equal(
                    function->values[instruction->value.binary.right].core_type_id,
                    instruction->core_type_id);
-    case MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_EOR3: {
-        const MinicCoreValueId first = instruction->value.vector_ternary.first;
-        const MinicCoreValueId second = instruction->value.vector_ternary.second;
-        const MinicCoreValueId third = instruction->value.vector_ternary.third;
-        const MinicCoreInlineAsmId source =
-            instruction->value.vector_ternary.source_inline_asm;
-        return instruction_result_is_valid(function, instruction) &&
-               core_is_builtin_u64x2(function, instruction->core_type_id) &&
-               first < function->value_count && second < function->value_count &&
-               third < function->value_count &&
-               available_values[first] && available_values[second] &&
-               available_values[third] &&
-               ct_equal(function->values[first].core_type_id, instruction->core_type_id) &&
-               ct_equal(function->values[second].core_type_id, instruction->core_type_id) &&
-               ct_equal(function->values[third].core_type_id, instruction->core_type_id) &&
-               source < function->inline_asm_count &&
-               function->inline_asms[source].source_inline_asm_id != SIZE_MAX;
-    }
     case MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM: {
         const MinicCoreInlineAsm *inline_asm;
 

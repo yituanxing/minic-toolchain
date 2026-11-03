@@ -15,8 +15,7 @@
  * signed INT64_MIN * -1 check (RISC-V division overflow also returns MIN).
  * The native-M lowering below is intentionally unchanged. */
 static bool emit_strict_i_checked_multiply(
-    FILE *file, const MinicC0Program *program,
-    const MinicCoreFunction *function,
+    FILE *file, const MinicCoreFunction *function,
     const MinicRiscv64CoreFrame *frame,
     const MinicCoreInstruction *instruction, const MinicRiscvIsa *isa,
     MinicCoreTypeId result_type, size_t result_size, bool is_unsigned) {
@@ -24,7 +23,7 @@ static bool emit_strict_i_checked_multiply(
     MinicCoreValueId rhs = instruction->value.integer_overflow.right;
     MinicCoreValueId output = instruction->value.integer_overflow.result_address;
     const size_t proven_alignment = minic_riscv_address_alignment(
-        program, minic_default_data_layout(), function, output);
+        NULL, NULL, function, output);
 
     if (!minic_riscv64_frame_load_value(file, frame, lhs, "t0") ||
         !minic_riscv64_frame_load_value(file, frame, rhs, "t1") ||
@@ -91,8 +90,7 @@ static bool emit_strict_i_checked_multiply(
 /* Native RV64 overflow lowering is intentionally kept adjacent to its
  * mixed signedness/legalization rules rather than normal int ALU emission. */
 bool minic_riscv64_emit_overflow_instruction(
-    FILE *file, const MinicC0Program *program,
-    const MinicCoreFunction *function, const MinicRiscv64CoreFrame *frame,
+    FILE *file, const MinicCoreFunction *function, const MinicRiscv64CoreFrame *frame,
     const MinicCoreInstruction *instruction, const MinicRiscvIsa *isa) {
     if (file == NULL || function == NULL || frame == NULL ||
         instruction == NULL ||
@@ -111,13 +109,13 @@ bool minic_riscv64_emit_overflow_instruction(
                 function, instruction, &result_type, &result_size, &is_unsigned))
             return false;
         proven_alignment = minic_riscv_address_alignment(
-            program, minic_default_data_layout(), function,
+            NULL, NULL, function,
             instruction->value.integer_overflow.result_address);
         if (minic_riscv64_uses_arithmetic_libcall(isa) &&
             instruction->value.integer_overflow.operator_kind ==
                 MINIC_CORE_INTEGER_OVERFLOW_MULTIPLY)
             return emit_strict_i_checked_multiply(
-                file, program, function, frame, instruction, isa, result_type, result_size,
+                file, function, frame, instruction, isa, result_type, result_size,
                 is_unsigned);
         if (!minic_riscv64_frame_load_value(
                 file, frame, instruction->value.integer_overflow.left, "t0") ||

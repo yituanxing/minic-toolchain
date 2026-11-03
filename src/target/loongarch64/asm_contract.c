@@ -262,7 +262,7 @@ static bool loong_linux_clock_emit(
                 out, "ld.d", "$t2", minic_lp64_frame_value_offset(ctx->frame_plan, b[i].value),
                 ctx->dynamic_frame) ||
             !minic_loongarch64_emit_asm_output_store(
-                out, ctx->program, ctx->target, fn, b[i].value,
+                out, fn, b[i].value,
                 (form == LOONG_CLOCK_RDTIME_NUMERIC && i == 1U) ||
                 form == LOONG_CLOCK_CPU_ID ? 4U : 8U,
                 i == 0U ? "$t0" : "$t1", "$t2", "$t3"))
@@ -574,6 +574,9 @@ static bool loong_atomic_qualified_source(
     contract->operand_count = 2U;
     contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE;
     contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    contract->target_machine_form_id = MINIC_LOONG_MACHINE_ASM_AMO_STORE;
+    contract->target_machine_form_variant =
+        (uint32_t)(atom - loong_atomic) + 1U;
     return true;
 }
 
@@ -664,6 +667,8 @@ static bool loong_csr_qualified_source(
         contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     contract->kinds[contract->operand_count - 1U] =
         MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    contract->target_machine_form_id = MINIC_LOONG_MACHINE_ASM_CSR;
+    contract->target_machine_form_variant = form;
     return true;
 }
 
@@ -748,7 +753,7 @@ static bool loong_linux_cpucfg_emit(
                out, "ld.d", "$t2", minic_lp64_frame_value_offset(ctx->frame_plan, operands[0].value),
                ctx->dynamic_frame) &&
            minic_loongarch64_emit_asm_output_store(
-               out, ctx->program, ctx->target, fn, operands[0].value,
+               out, fn, operands[0].value,
                4U, "$t0", "$t2", "$t3");
 }
 
@@ -846,6 +851,9 @@ static bool loong_atomic_fetch_qualified_source(
     contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE;
     contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
     contract->kinds[2] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    contract->target_machine_form_id = MINIC_LOONG_MACHINE_ASM_AMO_FETCH;
+    contract->target_machine_form_variant =
+        (uint32_t)(atom - loong_atomic) + 1U;
     return true;
 }
 
@@ -1155,7 +1163,7 @@ static bool loong_mask_nospec_emit(
                out, "ld.d", "$t1", minic_lp64_frame_value_offset(ctx->frame_plan, b[0].value),
                ctx->dynamic_frame) &&
            minic_loongarch64_emit_asm_output_store(
-               out, ctx->program, ctx->target, fn, b[0].value,
+               out, fn, b[0].value,
                8U, "$t2", "$t1", "$t3");
 }
 
@@ -1287,7 +1295,7 @@ static bool loong_percpu_indexed_emit(
                    out, "ld.d", "$t1", minic_lp64_frame_value_offset(ctx->frame_plan, b[0].value),
                    ctx->dynamic_frame) &&
                minic_loongarch64_emit_asm_output_store(
-                   out, ctx->program, ctx->target, fn, b[0].value,
+                   out, fn, b[0].value,
                    8U, "$t0", "$t1", "$t3");
     return minic_loongarch64_emit_frame_mem(
                out, "ld.d", "$t0", minic_lp64_frame_value_offset(ctx->frame_plan, b[0].value),ctx->dynamic_frame) &&
@@ -1369,6 +1377,8 @@ static bool loong_percpu_amo_source(
     contract->kinds[0]=MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
     contract->kinds[1]=MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE;
     contract->kinds[2]=MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    contract->target_machine_form_id=MINIC_LOONG_MACHINE_ASM_PERCPU_AMO;
+    contract->target_machine_form_variant=(uint32_t)form+1U;
     return true;
 }
 static bool loong_percpu_amo_emit(
@@ -1416,7 +1426,7 @@ static bool loong_percpu_amo_emit(
            minic_loongarch64_emit_frame_mem(
              out,"ld.d","$t1",minic_lp64_frame_value_offset(ctx->frame_plan, b[0].value),ctx->dynamic_frame)&&
            minic_loongarch64_emit_asm_output_store(
-             out,ctx->program,ctx->target,fn,b[0].value,
+             out,fn,b[0].value,
              8U,"$t2","$t1","$t3");
 }
 static bool loong_fcsr0_write_form(const char *text,size_t len){
@@ -1576,7 +1586,7 @@ static bool loong_linux_fpr_transfer_emit(
             minic_loongarch64_emit_frame_mem(out, "ld.d", "$t1",
                 minic_lp64_frame_value_offset(ctx->frame_plan, b[0].value), ctx->dynamic_frame) &&
             minic_loongarch64_emit_asm_output_store(
-                out, ctx->program, ctx->target, fn, b[0].value,
+                out, fn, b[0].value,
                 8U, "$t0", "$t1", "$t3");
     }
     return minic_type_equal(fn->values[b[0].value].type,
@@ -1896,6 +1906,9 @@ static bool loong_linux_sub_positive_source(
     contract->operand_count = 4U;
     contract->kinds[3] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     contract->implicit_memory_effect = true;
+    contract->target_machine_form_id = MINIC_LOONG_MACHINE_ASM_SUB_POSITIVE;
+    contract->target_machine_form_variant =
+        (form.width == 8U ? 2U : 0U) + (form.add_negated ? 1U : 2U);
     return true;
 }
 
@@ -2291,6 +2304,50 @@ static bool loong_uaccess_memory_width_matches(
            strcmp(record->name, "__large_struct") == 0;
 }
 
+/* Core intentionally drops C record spellings. Source admission above is
+ * the only authority for the GNU __large_struct name. The machine must
+ * independently validate its ABI shape (one 100-element unsigned long
+ * array, 800 bytes) and transport the pointer to the memory operand from
+ * Core, not reopen the frontend Program's record-name table. */
+static bool loong_uaccess_core_memory_width_matches(
+    const MinicCoreFunction *fn, MinicCoreValueId address,
+    unsigned int width) {
+    const MinicCoreTypeContext *types;
+    const MinicCoreType *pointer, *memory, *array, *element;
+    MinicCoreTypeId id;
+    if (!fn || !fn->type_context || address >= fn->value_count)
+        return false;
+    types = fn->type_context;
+    id = minic_core_type_unqualified(types, fn->values[address].core_type_id);
+    pointer = minic_core_type_get(types, id);
+    if (!pointer || pointer->kind != MINIC_CORE_TYPE_POINTER) return false;
+    id = minic_core_type_unqualified(types, pointer->value.pointer.pointee);
+    memory = minic_core_type_get(types, id);
+    if (!memory) return false;
+    if (memory->kind == MINIC_CORE_TYPE_RECORD) {
+        if (!memory->has_layout || !memory->value.record.is_complete ||
+            memory->size != 800U || memory->value.record.field_count != 1U ||
+            memory->value.record.fields == NULL ||
+            memory->value.record.fields[0].byte_offset != 0U ||
+            memory->value.record.fields[0].is_bit_field) return false;
+        id = minic_core_type_unqualified(
+            types, memory->value.record.fields[0].type_id);
+        array = minic_core_type_get(types, id);
+        if (!array || array->kind != MINIC_CORE_TYPE_ARRAY ||
+            !array->value.array.is_complete ||
+            array->value.array.count != 100U) return false;
+        id = minic_core_type_unqualified(types, array->value.array.element);
+        element = minic_core_type_get(types, id);
+        return element && element->kind == MINIC_CORE_TYPE_INTEGER &&
+            element->value.integer.bit_width == 64U &&
+            !element->value.integer.is_signed && element->size == 8U;
+    }
+    if (memory->kind == MINIC_CORE_TYPE_POINTER) return width == 8U;
+    return memory->kind == MINIC_CORE_TYPE_INTEGER &&
+        memory->value.integer.bit_width == width * 8U &&
+        (width == 1U || width == 2U || width == 4U || width == 8U);
+}
+
 static bool loong_linux_uaccess_source(
     const MinicC0Program *program, const MinicInlineAsm *src,
     MinicTargetInlineAsmContract *contract) {
@@ -2337,6 +2394,10 @@ static bool loong_linux_uaccess_source(
         ? MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT
         : MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     contract->implicit_memory_effect = true;
+    contract->target_machine_form_id = MINIC_LOONG_MACHINE_ASM_UACCESS;
+    contract->target_machine_form_variant =
+        (form.load ? 0U : 4U) + (uint32_t)(form.width == 1U ? 1U :
+            form.width == 2U ? 2U : form.width == 4U ? 3U : 4U);
     return true;
 }
 
@@ -2347,7 +2408,7 @@ static bool loong_linux_uaccess_emit(
     const MinicCoreFunction *fn = ctx->fn;
     const MinicCoreStructuredInlineAsmOperand *b =
         ins->value.structured_inline_asm.operands;
-    MinicType err_type, data_type, memory_type;
+    MinicType err_type, data_type;
     size_t i, data_width;
 
     if (!out || !ctx || !fn || !info || !form || !info->is_volatile ||
@@ -2371,18 +2432,15 @@ static bool loong_linux_uaccess_emit(
     if (!minic_type_pointee(fn->values[b[0].value].type, &err_type) ||
         !minic_type_equal(err_type, minic_type_int())) return false;
     if (form->load) {
-        if (!minic_type_pointee(fn->values[b[1].value].type, &data_type) ||
-            !minic_type_pointee(fn->values[b[2].value].type, &memory_type))
+        if (!minic_type_pointee(fn->values[b[1].value].type, &data_type))
             return false;
     } else {
-        if (!minic_type_pointee(fn->values[b[1].value].type, &memory_type))
-            return false;
         data_type = fn->values[b[2].value].type;
     }
     if (
         !loong_uaccess_scalar_width(data_type, &data_width) ||
-        !loong_uaccess_memory_width_matches(
-            ctx->program, memory_type, form->width) ||
+        !loong_uaccess_core_memory_width_matches(
+            fn, b[form->load ? 2U : 1U].value, form->width) ||
         data_width < form->width ||
         (minic_type_is_pointer(data_type) && form->width != 8U))
         return false;
@@ -2396,7 +2454,7 @@ static bool loong_linux_uaccess_emit(
             out, "ld.d", "$t1", minic_lp64_frame_value_offset(ctx->frame_plan, b[0].value),
             ctx->dynamic_frame) ||
         !minic_loongarch64_emit_asm_input_scalar(
-            out, ctx->program, ctx->target, fn, b[0].value, 4U) ||
+            out, fn, b[0].value, 4U) ||
         !minic_loongarch64_emit_frame_mem(
             out, "ld.d", "$t4", minic_lp64_frame_value_offset(ctx->frame_plan, b[form->load ? 2U : 1U].value),
             ctx->dynamic_frame)) return false;
@@ -2420,14 +2478,14 @@ static bool loong_linux_uaccess_emit(
             out, "ld.d", "$t7", minic_lp64_frame_value_offset(ctx->frame_plan, b[0].value),
             ctx->dynamic_frame) ||
         !minic_loongarch64_emit_asm_output_store(
-            out, ctx->program, ctx->target, fn, b[0].value,
+            out, fn, b[0].value,
             4U, "$t0", "$t7", "$t3")) return false;
     if (form->load &&
         (!minic_loongarch64_emit_frame_mem(
              out, "ld.d", "$t7", minic_lp64_frame_value_offset(ctx->frame_plan, b[1].value),
              ctx->dynamic_frame) ||
          !minic_loongarch64_emit_asm_output_store(
-             out, ctx->program, ctx->target, fn, b[1].value,
+             out, fn, b[1].value,
              data_width, "$t1", "$t7", "$t3"))) return false;
     return true;
 }
@@ -2944,7 +3002,7 @@ static bool loong_linux_frametrace_csr_emit(
             out, "ld.d", "$t1", minic_lp64_frame_value_offset(ctx->frame_plan, b[0].value),
             ctx->dynamic_frame) &&
         minic_loongarch64_emit_asm_output_store(
-            out, ctx->program, ctx->target, fn, b[0].value,
+            out, fn, b[0].value,
             minic_type_equal(pointee, minic_type_unsigned_long()) ? 8U : 4U,
             "$t0", "$t1", "$t3");
 }
@@ -2961,8 +3019,37 @@ bool minic_loongarch64_seal_normalized_inline_asm(
     const MinicC0Program *program, const MinicInlineAsm *source,
     const char *normalized, size_t length,
     MinicTargetInlineAsmContract *contract) {
-    return minic_loongarch64_simd_seal_normalized(
-        program, source, normalized, length, contract);
+    MinicTargetInlineAsmContract admitted = {0};
+    uint32_t id, variant;
+    size_t i;
+    if (!minic_loongarch64_simd_seal_normalized(
+            program, source, normalized, length, contract)) return false;
+    if (contract == NULL) return false;
+    id = contract->target_machine_form_id;
+    variant = contract->target_machine_form_variant;
+    if (id < MINIC_LOONG_MACHINE_ASM_LITERAL_DBAR ||
+        id > MINIC_LOONG_MACHINE_ASM_AMO_FETCH)
+        return true;
+    /* Re-qualify original GNU operands and C rank before sealing the
+     * normalized machine template. A numeric rewrite may not change the
+     * hardware operation, operand order, width or memory effects. */
+    if (!program || !source || !normalized ||
+        !minic_loongarch64_qualify_inline_asm(program, source, &admitted) ||
+        !minic_backend_capture_asm_operand_source(
+            source, MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED, &admitted) ||
+        admitted.target_machine_form_id != id ||
+        admitted.target_machine_form_variant != variant ||
+        !minic_loongarch64_typed_scalar_form_matches_template(
+            id, variant, source->template_text, source->template_length) ||
+        !minic_loongarch64_typed_scalar_form_matches_template(
+            id, variant, normalized, length) ||
+        admitted.operand_count != contract->operand_count ||
+        admitted.implicit_memory_effect != contract->implicit_memory_effect ||
+        admitted.effective_memory_effect != contract->effective_memory_effect)
+        return false;
+    for (i = 0U; i < admitted.operand_count; ++i)
+        if (admitted.kinds[i] != contract->kinds[i]) return false;
+    return true;
 }
 
 bool minic_loongarch64_qualify_inline_asm(
@@ -2981,6 +3068,9 @@ bool minic_loongarch64_qualify_inline_asm(
        src->register_clobber_count==0U&&src->label_count==0U&&
        loongarch64_literal_dbar(src->template_text,src->template_length)){
         contract->operand_count=0U;
+        contract->target_machine_form_id = MINIC_LOONG_MACHINE_ASM_LITERAL_DBAR;
+        contract->target_machine_form_variant = strcmp(loongarch64_literal_dbar(
+            src->template_text, src->template_length), "dbar 0") == 0 ? 1U : 2U;
         return true;
     }
     if (loong_linux_invtlb_source(program, src, contract) ||
@@ -3010,6 +3100,8 @@ bool minic_loongarch64_qualify_inline_asm(
         return false;
     contract->operand_count = 1U;
     contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    contract->target_machine_form_id = MINIC_LOONG_MACHINE_ASM_HINT_DBAR;
+    contract->target_machine_form_variant = 1U;
     return true;
 }
 
@@ -3119,7 +3211,7 @@ static bool minic_loongarch64_emit_csr(
              out, "ld.d", "$t1", minic_lp64_frame_value_offset(ctx->frame_plan, b[0].value),
              ctx->dynamic_frame) ||
          !minic_loongarch64_emit_asm_input_scalar(
-             out, ctx->program, ctx->target, fn, b[0].value, width) ||
+             out, fn, b[0].value, width) ||
          fputs("  move $t1, $t0\n", out) == EOF ||
          !minic_loongarch64_emit_frame_mem(
              out, "ld.w", "$t0", minic_lp64_frame_value_offset(ctx->frame_plan, b[1].value),
@@ -3132,7 +3224,7 @@ static bool minic_loongarch64_emit_csr(
                out, "ld.d", "$t2", minic_lp64_frame_value_offset(ctx->frame_plan, b[0].value),
                ctx->dynamic_frame) &&
            minic_loongarch64_emit_asm_output_store(
-               out, ctx->program, ctx->target, fn, b[0].value,
+               out, fn, b[0].value,
                width, "$t1", "$t2", "$t3");
 }
 /* Result register of LoongArch AMO is the OLD pre-update memory value.
@@ -3179,7 +3271,7 @@ static bool minic_loongarch64_emit_amo_fetch(
                out, "ld.d", "$t1", minic_lp64_frame_value_offset(ctx->frame_plan, b[1].value),
                ctx->dynamic_frame) &&
            minic_loongarch64_emit_asm_output_store(
-               out, ctx->program, ctx->target, fn, b[1].value,
+               out, fn, b[1].value,
                atom->width, "$t2", "$t1", "$t3");
 }
 
@@ -3229,7 +3321,7 @@ static bool loong_pte_emit(
                  "2:\n"
                  "  dbar 0x700\n",out)!=EOF&&
            minic_loongarch64_emit_asm_output_store(
-             out,ctx->program,ctx->target,fn,b[1].value,
+             out,fn,b[1].value,
              8U,"$t4","$t2","$t3");
 }
 
@@ -3365,7 +3457,7 @@ static bool loong_linux_xchg_emit(FILE *out,
            minic_loongarch64_emit_frame_mem(
              out,"ld.d","$t1",minic_lp64_frame_value_offset(ctx->frame_plan, b[1].value),ctx->dynamic_frame)&&
            minic_loongarch64_emit_asm_output_store(
-             out,ctx->program,ctx->target,fn,b[1].value,
+             out,fn,b[1].value,
              width==8U||named?8U:4U,"$t2","$t1","$t3");
 }
 
@@ -3583,6 +3675,11 @@ bool minic_loongarch64_typed_descriptor_matches_template(
 
 bool minic_loongarch64_typed_scalar_form_matches_template(
     uint32_t id, uint32_t variant, const char *text, size_t length) {
+    LoongLinuxSubPositive sub;
+    LoongLinuxUaccess uaccess;
+    const struct MinicLoongAtomicTemplate *atom;
+    const char *literal;
+    size_t percpu;
     if (text == NULL || variant == 0U) return false;
     switch ((MinicLoongLinuxMachineAsmForm)id) {
     case MINIC_LOONG_MACHINE_ASM_CLOCK:
@@ -3596,6 +3693,32 @@ bool minic_loongarch64_typed_scalar_form_matches_template(
         return variant == loong_linux_add_unless_form(text, length);
     case MINIC_LOONG_MACHINE_ASM_FUTEX_RMW:
         return variant == (uint32_t)loong_linux_futex_rmw_form(text, length);
+    case MINIC_LOONG_MACHINE_ASM_LITERAL_DBAR:
+        literal = loongarch64_literal_dbar(text, length);
+        return literal != NULL && variant ==
+            (strcmp(literal, "dbar 0") == 0 ? 1U : 2U);
+    case MINIC_LOONG_MACHINE_ASM_HINT_DBAR:
+        return variant == 1U && loongarch64_dbar_template(text, length);
+    case MINIC_LOONG_MACHINE_ASM_SUB_POSITIVE:
+        return loong_linux_sub_positive_form(text, length, &sub) &&
+            variant == (sub.width == 8U ? 2U : 0U) +
+                       (sub.add_negated ? 1U : 2U);
+    case MINIC_LOONG_MACHINE_ASM_UACCESS:
+        return loong_linux_uaccess_form(text, length, &uaccess) &&
+            variant == (uaccess.load ? 0U : 4U) +
+                (uint32_t)(uaccess.width == 1U ? 1U :
+                    uaccess.width == 2U ? 2U : uaccess.width == 4U ? 3U : 4U);
+    case MINIC_LOONG_MACHINE_ASM_PERCPU_AMO:
+        percpu = loong_percpu_amo_form(text, length);
+        return percpu != SIZE_MAX && variant == (uint32_t)percpu + 1U;
+    case MINIC_LOONG_MACHINE_ASM_CSR:
+        return variant == loong_csr_template(text, length);
+    case MINIC_LOONG_MACHINE_ASM_AMO_STORE:
+    case MINIC_LOONG_MACHINE_ASM_AMO_FETCH:
+        atom = loong_atomic_template(text, length,
+                    id == MINIC_LOONG_MACHINE_ASM_AMO_FETCH);
+        return atom != NULL &&
+            variant == (uint32_t)(atom - loong_atomic) + 1U;
     default:
         return false;
     }
@@ -3607,7 +3730,16 @@ static bool loong_linux_scalar_template_requires_typed_id(
         loong_linux_irq_switch_template(text, length, true) ||
         loong_linux_invtlb_form(text, length) != 0U ||
         loong_linux_add_unless_form(text, length) != 0U ||
-        loong_linux_futex_rmw_form(text, length) != LOONG_FUTEX_NONE;
+        loong_linux_futex_rmw_form(text, length) != LOONG_FUTEX_NONE ||
+        loongarch64_literal_dbar(text, length) != NULL ||
+        loongarch64_dbar_template(text, length) ||
+        loong_linux_sub_positive_form(text, length,
+                                     &(LoongLinuxSubPositive){0}) ||
+        loong_linux_uaccess_form(text, length, &(LoongLinuxUaccess){0}) ||
+        loong_percpu_amo_form(text, length) != SIZE_MAX ||
+        loong_csr_template(text, length) != 0U ||
+        loong_atomic_template(text, length, false) != NULL ||
+        loong_atomic_template(text, length, true) != NULL;
 }
 
 static bool loong_linux_descriptor_emit(
@@ -3667,6 +3799,37 @@ bool minic_loongarch64_emit_qualified_structured_asm(
         case MINIC_LOONG_MACHINE_ASM_FUTEX_RMW:
             return loong_linux_futex_rmw_emit(out, ctx, ins, info,
                 (LoongLinuxFutexRmw)variant);
+        case MINIC_LOONG_MACHINE_ASM_LITERAL_DBAR: {
+            const char *literal = loongarch64_literal_dbar(
+                info->template_text, info->template_length);
+            if (literal == NULL || !info->is_volatile || info->is_goto ||
+                !info->has_memory_clobber || info->register_clobber_count ||
+                ins->value.structured_inline_asm.operand_count != 0U)
+                return false;
+            return fprintf(out, "  %s\n", literal) >= 0;
+        }
+        case MINIC_LOONG_MACHINE_ASM_HINT_DBAR:
+            return minic_loongarch64_emit_dbar(out, ctx, ins);
+        case MINIC_LOONG_MACHINE_ASM_SUB_POSITIVE: {
+            LoongLinuxSubPositive form;
+            return loong_linux_sub_positive_form(
+                info->template_text, info->template_length, &form) &&
+                loong_linux_sub_positive_emit(out, ctx, ins, info, &form);
+        }
+        case MINIC_LOONG_MACHINE_ASM_UACCESS: {
+            LoongLinuxUaccess form;
+            return loong_linux_uaccess_form(
+                info->template_text, info->template_length, &form) &&
+                loong_linux_uaccess_emit(out, ctx, ins, info, &form);
+        }
+        case MINIC_LOONG_MACHINE_ASM_PERCPU_AMO:
+            return loong_percpu_amo_emit(out, ctx, ins, info);
+        case MINIC_LOONG_MACHINE_ASM_CSR:
+            return minic_loongarch64_emit_csr(out, ctx, ins, info);
+        case MINIC_LOONG_MACHINE_ASM_AMO_STORE:
+            return minic_loongarch64_emit_amo(out, ctx, ins, info);
+        case MINIC_LOONG_MACHINE_ASM_AMO_FETCH:
+            return minic_loongarch64_emit_amo_fetch(out, ctx, ins, info);
         default:
             return false;
         }
@@ -3681,36 +3844,10 @@ bool minic_loongarch64_emit_qualified_structured_asm(
         minic_loongarch64_simd_structured_template_requires_typed_id(
             info->template_text, info->template_length))
         return false;
-    {
-        LoongLinuxSubPositive sub_positive;
-        if (loong_linux_sub_positive_form(
-                info->template_text, info->template_length, &sub_positive))
-            return loong_linux_sub_positive_emit(
-                out, ctx, ins, info, &sub_positive);
-    }
-    {
-        LoongLinuxUaccess uaccess;
-        if (loong_linux_uaccess_form(info->template_text,
-                                    info->template_length, &uaccess))
-            return loong_linux_uaccess_emit(out, ctx, ins, info, &uaccess);
-    }
-    if(ins->value.structured_inline_asm.operand_count==0U){
-        const char *barrier=loongarch64_literal_dbar(
-            info->template_text,info->template_length);
-        if(!barrier||!info->is_volatile||info->is_goto||
-           !info->has_memory_clobber||info->register_clobber_count)
-            return false;
-        return fprintf(out,"  %s\n",barrier)>=0;
-    }
-    if (loong_percpu_amo_form(info->template_text, info->template_length) != SIZE_MAX)
-        return loong_percpu_amo_emit(out, ctx, ins, info);
-    if (loong_csr_template(info->template_text, info->template_length))
-        return minic_loongarch64_emit_csr(out, ctx, ins, info);
-    if (ins->value.structured_inline_asm.operand_count == 3U)
-        return minic_loongarch64_emit_amo_fetch(out, ctx, ins, info);
-    if (ins->value.structured_inline_asm.operand_count == 2U)
-        return minic_loongarch64_emit_amo(out, ctx, ins, info);
-    return minic_loongarch64_emit_dbar(out, ctx, ins);
+    /* Every native GNU LoongArch scalar family is now source-qualified and
+     * post-normalization sealed. No operand-count/text-only fallback can
+     * authorize hardware instructions in a synthetic Core producer. */
+    return false;
 }
 bool minic_loongarch64_emit_dbar(
     FILE *out, const MinicDirectLP64BlockContext *ctx,

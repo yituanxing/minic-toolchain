@@ -38,15 +38,6 @@ static int run(void) {
     const MinicType polynomial = minic_type_aarch64_fixed_vector128(
         MINIC_TYPE_BASE_AARCH64_POLY8X16);
     MinicType invalid = words;
-    MinicExpression expressions[4] = {{0}};
-    MinicInlineAsmOperand outputs[1] = {{0}};
-    MinicInlineAsmOperand inputs[3] = {{0}};
-    MinicC0Program program = {0};
-    MinicInlineAsm source = {0};
-    static const char eor3_template[] =
-        ".arch_extension sha3\n"
-        "eor3 %0.16b, %1.16b, %2.16b, %3.16b";
-    size_t input_index;
     FILE *out;
     if (!minic_aarch64_neon_vector128_type(words) ||
         !minic_aarch64_neon_vector128_type(bytes) ||
@@ -88,21 +79,6 @@ static int run(void) {
         !expect_text(out, "  str q16, [x17]\n")) return 9;
     fclose(out);
 
-    out = tmpfile();
-    if (out == NULL) return 10;
-    if (minic_aarch64_neon_emit_eor3(out, &frame, words, false,
-                                      0U, 16U, 32U, 48U) ||
-        !empty_file(out)) return 11;
-    if (minic_aarch64_neon_emit_eor3(out, &frame, bytes, true,
-                                     0U, 16U, 32U, 48U) ||
-        !empty_file(out)) return 12;
-    if (!minic_aarch64_neon_emit_eor3(out, &frame, words, true,
-                                      0U, 16U, 32U, 48U) ||
-        !expect_text(out, "  .arch_extension sha3\n") ||
-        !expect_text(out, "  eor3 v16.16b, v16.16b, v17.16b, v18.16b\n"))
-        return 13;
-    fclose(out);
-
     invalid.pointer_depth = 1U;
     out = tmpfile();
     if (out == NULL) return 14;
@@ -114,46 +90,6 @@ static int run(void) {
         !empty_file(out)) return 16;
     fclose(out);
 
-    for (input_index = 0U; input_index < 4U; ++input_index) {
-        expressions[input_index].type = words;
-        expressions[input_index].value_category = input_index == 0U
-            ? MINIC_VALUE_LVALUE : MINIC_VALUE_RVALUE;
-    }
-    program.expressions = expressions;
-    program.expression_count = 4U;
-    outputs[0].constraint_text = "=w";
-    outputs[0].constraint_length = 2U;
-    outputs[0].access = MINIC_INLINE_ASM_OPERAND_WRITE_ONLY;
-    outputs[0].expression = 0U;
-    for (input_index = 0U; input_index < 3U; ++input_index) {
-        inputs[input_index].constraint_text = "w";
-        inputs[input_index].constraint_length = 1U;
-        inputs[input_index].access = MINIC_INLINE_ASM_OPERAND_READ_ONLY;
-        inputs[input_index].expression = input_index + 1U;
-    }
-    source.template_text = (char *)eor3_template;
-    source.template_length = sizeof(eor3_template) - 1U;
-    source.outputs = outputs;
-    source.output_count = 1U;
-    source.inputs = inputs;
-    source.input_count = 3U;
-    if (!minic_aarch64_neon_sha3_eor3_source_form(&program, &source))
-        return 17;
-    inputs[1].constraint_text = "r";
-    if (minic_aarch64_neon_sha3_eor3_source_form(&program, &source))
-        return 18;
-    inputs[1].constraint_text = "w";
-    expressions[2].type = bytes;
-    if (minic_aarch64_neon_sha3_eor3_source_form(&program, &source))
-        return 19;
-    expressions[2].type = words;
-    source.has_memory_clobber = true;
-    if (minic_aarch64_neon_sha3_eor3_source_form(&program, &source))
-        return 20;
-    source.has_memory_clobber = false;
-    source.template_text = "eor3 %0.16b, %1.16b, %2.16b, %3.16b";
-    if (minic_aarch64_neon_sha3_eor3_source_form(&program, &source))
-        return 21;
     return 0;
 }
 

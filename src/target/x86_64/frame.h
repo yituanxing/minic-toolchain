@@ -2,6 +2,7 @@
 #define MINIC_TARGET_X86_64_FRAME_H
 
 #include "core/core_ir.h"
+#include "core/module_ir.h"
 #include "frontend/ast.h"
 #include "target/target_info.h"
 #include "target/common/core_object_storage.h"
@@ -17,6 +18,10 @@
 /* Per-Core-value 8-byte frame slots, or 16 bytes for int128/x87 long double.
  * The extra limb is x86 backend-owned; Core IR identities are unchanged. */
 typedef struct MinicX86Frame {
+    /* Sealed module ownership for PIC/ELF symbol binding during machine
+     * execution. NULL is reserved for the legacy source-program test writer;
+     * the production Module writer must not reopen C declarations. */
+    const MinicCoreModule *module;
     size_t value_count;
     size_t *value_offsets;
     /* Borrowed from the function's canonical use census while emitting

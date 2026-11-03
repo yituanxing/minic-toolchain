@@ -23,12 +23,6 @@ typedef struct MinicCoreModule MinicCoreModule;
  * Backend callbacks currently emit directly to GNU assembly. Introducing
  * Machine IR must not require a new frontend target dispatch.
  */
-typedef bool (*MinicBackendEmitProgram)(
-    const char *output_path, const MinicC0Program *program,
-    const MinicTargetInfo *target, const MinicCoreFunction *functions,
-    size_t function_count, bool function_sections,
-    MinicDiagnostic *diagnostic);
-
 /* A fully sealed translation-unit module is the production data/symbol
  * boundary.  The C Program is temporarily borrowed by function/ISA source
  * policy while its remaining call sites are migrated; module globals and
@@ -117,8 +111,7 @@ typedef bool (*MinicBackendCloneSafeOpaqueAsm)(const MinicInlineAsm *);
 typedef struct MinicBackend {
     /* This is the only Core-to-machine handoff in the compile driver.
      * Today: direct GNU text. Future: lower, optimize and emit Machine IR. */
-    MinicBackendEmitProgram emit_program;
-    MinicBackendEmitModule emit_module_program;
+    MinicBackendEmitModule emit_module;
     /* Optional target contract for GNU multi-operand inline assembly. */
     MinicBackendQualifyInlineAsm qualify_inline_asm;
     MinicBackendSealNormalizedInlineAsm seal_normalized_inline_asm;
@@ -158,14 +151,7 @@ bool minic_backend_qualify_inline_asm_goto(
 bool minic_backend_clone_safe_opaque_asm(
     const MinicBackend *, const MinicInlineAsm *);
 
-/* Stable driver-facing emission seam. Machine IR can be inserted here. */
-bool minic_backend_emit_assembly(
-    const MinicBackend *backend, const char *output_path,
-    const MinicC0Program *program, const MinicTargetInfo *target,
-    const MinicCoreFunction *functions, size_t function_count,
-    bool function_sections, MinicDiagnostic *diagnostic);
-
-/* Production entry. There is deliberately no fallback to the C global
+/* Sole production handoff. There is deliberately no fallback to the C global
  * emitter when a non-NULL sealed module fails target admission. */
 bool minic_backend_emit_assembly_with_module(
     const MinicBackend *backend, const char *output_path,

@@ -2149,6 +2149,34 @@ check-loong-typed-descriptors: $(LOONG_TYPED_DESCRIPTOR_TEST_OBJECTS)
 
 check-fast: check-loong-typed-descriptors
 
+# Source -> Core -> normalized-machine ASM proof is a single admission
+# contract. Check whole instruction families, including hostile rewrites,
+# without requiring cross GNU/QEMU tools or granting opaque source IDs power.
+A64_NORMALIZED_SEAL_TEST_BINARY := $(BUILD_DIR)/tests/compiler/c0/a64-normalized-seal
+
+.PHONY: check-a64-normalized-seal
+check-a64-normalized-seal: $(LOONG_TYPED_DESCRIPTOR_TEST_OBJECTS)
+	@mkdir -p "$(BUILD_DIR)/tests/compiler/c0"
+	$(CC) $(CPPFLAGS) $(MINIC_INCLUDES) $(MINIC_CFLAGS) \
+	  tests/compiler/c0/probe-a64-normalized-seal.c \
+	  $(LOONG_TYPED_DESCRIPTOR_TEST_OBJECTS) $(MINIC_LDFLAGS) \
+	  -o "$(A64_NORMALIZED_SEAL_TEST_BINARY)"
+	"$(abspath $(A64_NORMALIZED_SEAL_TEST_BINARY))"
+
+.PHONY: check-loong-scalar-normalized-seal
+check-loong-scalar-normalized-seal: $(MINIC_CC_BINARY)
+	@mkdir -p "$(BUILD_DIR)/tests/compiler/c0"
+	$(CC) $(CPPFLAGS) $(MINIC_INCLUDES) $(MINIC_CFLAGS) \
+	  -ffunction-sections -fdata-sections -Wl,--gc-sections \
+	  tests/compiler/c0/probe-loong-scalar-normalized-seal.c \
+	  src/target/loongarch64/asm_contract.c $(MINIC_LDFLAGS) \
+	  -o "$(BUILD_DIR)/tests/compiler/c0/loong-scalar-normalized-seal"
+	"$(abspath $(BUILD_DIR))/tests/compiler/c0/loong-scalar-normalized-seal"
+	bash tests/compiler/c0/probe-loong-scalar-source-rank.sh \
+	  "$(abspath $(MINIC_CC_BINARY))"
+
+check-fast: check-a64-normalized-seal check-loong-scalar-normalized-seal
+
 # R6 x86: eight further legacy ASM families, including GNU-owned ELF
 # .tracedata/.altinstructions and original VDSO/syscall native contracts.
 .PHONY: check-x86-typed-eight-legacy

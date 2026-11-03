@@ -134,7 +134,8 @@ fail:
 
 static bool aarch64_emit_function(
     FILE *out, const MinicC0Program *program,
-    const MinicTargetInfo *target, const MinicFunction *decl,
+    const MinicTargetInfo *target, const MinicCoreModule *module,
+    const MinicFunction *decl,
     const MinicCoreModuleFunctionSymbol *module_decl,
     const MinicCoreFunction *fn, const MinicCoreFunctionFacts *facts,
     const MinicCoreObjectStoragePlan *storage, size_t id,
@@ -146,7 +147,7 @@ static bool aarch64_emit_function(
         minic_aarch64_qualified_opaque_asm
     };
     return minic_multi_direct_lp64_emit_function(
-        out, program, target, decl, module_decl, fn, facts, storage,
+        out, program, target, module, decl, module_decl, fn, facts, storage,
         id, function_sections, &emitter);
 }
 

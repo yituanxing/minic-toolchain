@@ -35,6 +35,7 @@ static bool core_frame_fail(MinicRiscv64CoreFrame *frame) {
 }
 static bool emit_instruction(FILE *file,
                              const MinicC0Program *program,
+                             const MinicCoreModule *module,
                              const MinicCoreFunction *function,
                              const MinicRiscv64CoreFrame *frame,
                              const char *symbol_name,
@@ -57,7 +58,7 @@ static bool emit_instruction(FILE *file,
         instruction->kind == MINIC_CORE_INSTRUCTION_INTEGER_OVERFLOW ||
         instruction->kind == MINIC_CORE_INSTRUCTION_SCALAR_BITCAST)
         return minic_riscv64_emit_scalar_instruction(
-            file, program, function, frame, symbol_name, instruction, isa);
+            file, function, frame, symbol_name, instruction, isa);
     switch (instruction->kind) {
     case MINIC_CORE_INSTRUCTION_VARIADIC_COPY:
         /* SysV 24-byte cursor copying is x86-only; RV64 keeps its linear
@@ -252,7 +253,7 @@ static bool emit_instruction(FILE *file,
         return minic_riscv64_frame_store_value(file, frame, instruction->result, "t0");
     /* Static Linux kernels need lla, not GOT, before the MMU is on.
      * GNU/glibc PIE must instead resolve preemptible objects/functions via
-     * the GOT. Keep the C ABI decision here in RV64 Target emission. Scope
+     * the GOT. CoreModule supplies the sealed symbol policy. Scope
      * .option pic with push/pop so user file/inline asm cannot leak modes. */
     case MINIC_CORE_INSTRUCTION_GLOBAL_ADDRESS:
         if (instruction->value.global_id >= function->global_count)
@@ -264,8 +265,11 @@ static bool emit_instruction(FILE *file,
          * linked high virtual address before enabling the MMU. */
         if (fprintf(file,
                     position_independent &&
-                            !minic_target_info_elf_object_is_nonpreemptible(
-                                program, function->globals[instruction->value.global_id].name)
+                            !(module != NULL
+                              ? minic_target_info_elf_module_object_is_nonpreemptible(
+                                    module, function->globals[instruction->value.global_id].name)
+                              : minic_target_info_elf_object_is_nonpreemptible(
+                                    program, function->globals[instruction->value.global_id].name))
                         ? "  .option push\n  .option pic\n  la t0, %s\n  .option pop\n"
                         : "  lla t0, %s\n",
                     function->globals[instruction->value.global_id].name) < 0) {
@@ -277,10 +281,13 @@ static bool emit_instruction(FILE *file,
             return false;
         if (fprintf(file,
                     position_independent &&
-                            !minic_target_info_elf_function_is_nonpreemptible(
-                                program,
-                                function->function_symbols[
-                                    instruction->value.function_symbol_id].name)
+                            !(module != NULL
+                              ? minic_target_info_elf_module_function_is_nonpreemptible(
+                                    module, function->function_symbols[
+                                        instruction->value.function_symbol_id].name)
+                              : minic_target_info_elf_function_is_nonpreemptible(
+                                    program, function->function_symbols[
+                                        instruction->value.function_symbol_id].name))
                         ? "  .option push\n  .option pic\n  la t0, %s\n  .option pop\n"
                         : "  lla t0, %s\n",
                     function->function_symbols[instruction->value.function_symbol_id].name) < 0) {
@@ -291,7 +298,7 @@ static bool emit_instruction(FILE *file,
     case MINIC_CORE_INSTRUCTION_STORE:
     case MINIC_CORE_INSTRUCTION_RECORD_LOAD:
     case MINIC_CORE_INSTRUCTION_RECORD_COPY:
-        return minic_riscv64_emit_memory_instruction(file, program, function, frame, instruction);
+        return minic_riscv64_emit_memory_instruction(file, function, frame, instruction);
     case MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM:
     case MINIC_CORE_INSTRUCTION_REGISTER_OUTPUT_INLINE_ASM:
     case MINIC_CORE_INSTRUCTION_REGISTER_OUTPUT_INPUT_INLINE_ASM:
@@ -299,7 +306,7 @@ static bool emit_instruction(FILE *file,
     case MINIC_CORE_INSTRUCTION_SCALAR_INPUT_INLINE_ASM:
     case MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM:
         return minic_riscv64_emit_inline_asm_instruction(
-            file, program, function, frame, symbol_name, instruction, instruction_id);
+            file, function, frame, symbol_name, instruction, instruction_id);
     case MINIC_CORE_INSTRUCTION_COMPILER_BARRIER:
         return true;
     case MINIC_CORE_INSTRUCTION_CALL:
@@ -307,7 +314,7 @@ static bool emit_instruction(FILE *file,
     case MINIC_CORE_INSTRUCTION_INDIRECT_CALL:
         return minic_riscv64_emit_indirect_call(file, function, frame, instruction, instruction_id);
     case MINIC_CORE_INSTRUCTION_FIELD_ADDRESS:
-        return minic_riscv64_emit_memory_instruction(file, program, function, frame, instruction);
+        return minic_riscv64_emit_memory_instruction(file, function, frame, instruction);
     default:
         return false;
     }
@@ -344,7 +351,7 @@ static bool emit_far_jump_to_return(FILE *file, const char *symbol_name) {
 }
 
 static bool emit_terminator(FILE *file,
-                            const MinicC0Program *program,
+                            bool require_prepared_abi,
                             const MinicCoreFunction *function,
                             const MinicRiscv64CoreFrame *frame,
                             const char *symbol_name,
@@ -377,7 +384,8 @@ static bool emit_terminator(FILE *file,
             MinicRiscv64AbiValue return_value;
             size_t object_offset;
 
-            if (program == NULL || terminator->return_object >= function->object_count ||
+            if (!require_prepared_abi ||
+                terminator->return_object >= function->object_count ||
                 minic_core_type_unqualified(function->type_context,
                     function->objects[terminator->return_object].core_type_id) !=
                 minic_core_type_unqualified(function->type_context,
@@ -502,6 +510,7 @@ static bool emit_terminator(FILE *file,
    switch blocks with no executable predecessor remain unmarked. */
 static bool emit_core_function_with_symbol(FILE *file,
                                                     const MinicC0Program *program,
+                                                    const MinicCoreModule *module,
                                                     const MinicCoreFunction *function,
                                                     const MinicRiscvFunctionSymbol *symbol,
                                                     bool position_independent,
@@ -516,6 +525,7 @@ static bool emit_core_function_with_symbol(FILE *file,
     size_t block_index;
     MinicCoreBlockWalk machine_blocks = {0};
     bool bootstrap_trace;
+    const bool require_prepared_abi = program != NULL || module != NULL;
 
     if (file == NULL || symbol == NULL || symbol->symbol_name == NULL ||
         symbol->symbol_name[0] == '\0') {
@@ -541,7 +551,7 @@ static bool emit_core_function_with_symbol(FILE *file,
         (void)fflush(stderr);
     }
     if (!minic_riscv64_core_function_admit_profile(
-            program != NULL, function, &abi_plan,
+            require_prepared_abi, function, &abi_plan,
             isa != NULL && isa->strict_isa &&
             isa->abi == MINIC_RISCV_ABI_LP64, facts, storage)) {
         minic_riscv64_function_abi_plan_destroy(&abi_plan);
@@ -569,7 +579,7 @@ static bool emit_core_function_with_symbol(FILE *file,
         if (!minic_riscv64_asm_function_plan_build(function, &frame.asm_plan) ||
             !minic_riscv64_core_frame_initialize_with_storage(
                 function, &frame,
-                program != NULL ? &abi_plan : NULL, crossblock_enabled,
+                require_prepared_abi ? &abi_plan : NULL, crossblock_enabled,
                 minic_riscv64_needs_arithmetic_libcall(isa, function), facts, storage)) {
             minic_riscv64_function_abi_plan_destroy(&abi_plan);
             return core_frame_fail(&frame);
@@ -716,13 +726,14 @@ static bool emit_core_function_with_symbol(FILE *file,
             const MinicCoreInstruction *ins = NULL;
             if (!minic_core_block_instruction_at(function, block, instruction_index,
                                                  &instruction_id, &ins) ||
-                !emit_instruction(file, program, function, &frame, symbol_name,
+                !emit_instruction(file, program, module, function, &frame, symbol_name,
                                   ins, (size_t)instruction_id, position_independent, isa)) {
                 return core_frame_fail(&frame);
             }
         }
         if (!block->has_terminator ||
-            !emit_terminator(file, program, function, &frame, symbol_name, &block->terminator)) {
+            !emit_terminator(file, require_prepared_abi, function, &frame,
+                             symbol_name, &block->terminator)) {
             return core_frame_fail(&frame);
         }
     }
@@ -792,7 +803,7 @@ static bool emit_core_function_with_symbol(FILE *file,
 
 bool minic_riscv64_emit_core_function_with_symbol(
     FILE *file, const MinicCoreFunction *function, const MinicRiscvFunctionSymbol *symbol) {
-    return emit_core_function_with_symbol(file, NULL, function, symbol, false,
+    return emit_core_function_with_symbol(file, NULL, NULL, function, symbol, false,
                                           NULL, NULL, NULL, NULL);
 }
 
@@ -802,7 +813,19 @@ bool minic_riscv64_emit_core_function_for_program_with_symbol_with_storage(
     const MinicCoreObjectStoragePlan *storage, bool position_independent,
     const MinicRiscvIsa *isa, MinicDiagnostic *diagnostic) {
     return program != NULL && facts != NULL &&
-           emit_core_function_with_symbol(file, program, function, symbol,
+           emit_core_function_with_symbol(file, program, NULL, function, symbol,
+                                          position_independent, isa, diagnostic,
+                                          facts, storage);
+}
+
+bool minic_riscv64_emit_core_function_for_program_with_symbol_with_storage_module(
+    FILE *file, const MinicC0Program *program, const MinicCoreModule *module,
+    const MinicCoreFunction *function, const MinicRiscvFunctionSymbol *symbol,
+    const MinicCoreFunctionFacts *facts, const MinicCoreObjectStoragePlan *storage,
+    bool position_independent, const MinicRiscvIsa *isa,
+    MinicDiagnostic *diagnostic) {
+    return module != NULL && module->finalized && facts != NULL &&
+           emit_core_function_with_symbol(file, program, module, function, symbol,
                                           position_independent, isa, diagnostic,
                                           facts, storage);
 }
@@ -818,7 +841,7 @@ bool minic_riscv64_emit_core_function_for_program_with_symbol(
     MinicCoreFunctionFacts facts;
     return program != NULL &&
            minic_core_function_facts_analyze(function, &facts) &&
-           emit_core_function_with_symbol(file, program, function, symbol,
+           emit_core_function_with_symbol(file, program, NULL, function, symbol,
                                           position_independent, isa, diagnostic,
                                           &facts, NULL);
 }

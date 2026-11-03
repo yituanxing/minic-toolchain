@@ -37,15 +37,14 @@ static bool emit_field_address(FILE *file,
 
 
 bool minic_riscv64_emit_memory_instruction(
-    FILE *file, const MinicC0Program *program,
-    const MinicCoreFunction *function, const MinicRiscv64CoreFrame *frame,
+    FILE *file, const MinicCoreFunction *function, const MinicRiscv64CoreFrame *frame,
     const MinicCoreInstruction *instruction) {
     if (file == NULL || function == NULL || frame == NULL || instruction == NULL)
         return false;
     switch (instruction->kind) {
     case MINIC_CORE_INSTRUCTION_LOAD: {
         const size_t guaranteed = minic_riscv_address_alignment(
-            program, minic_default_data_layout(), function,
+            NULL, NULL, function,
             instruction->value.load.address);
         if (minic_core_abi_wide_scalar(function, instruction->core_type_id)) {
             if (!minic_riscv64_frame_load_value(file, frame, instruction->value.load.address, "t0") ||
@@ -76,7 +75,7 @@ bool minic_riscv64_emit_memory_instruction(
         }
         stored_type = function->values[stored_value].core_type_id;
         guaranteed = minic_riscv_address_alignment(
-            program, minic_default_data_layout(), function,
+            NULL, NULL, function,
             instruction->value.store.address);
         if (minic_core_abi_wide_scalar(function, stored_type)) {
             return minic_riscv64_frame_load_value(file, frame, instruction->value.store.address, "t0") &&

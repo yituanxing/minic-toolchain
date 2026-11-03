@@ -156,7 +156,7 @@ static bool direct_visit_function(
     bool function_sections, void *opaque) {
     MinicDirectVisitContext *ctx = opaque;
     ++ctx->scanned_functions;
-    if (ctx->config->emit_function(out, program, target, decl, module_decl, fn,
+    if (ctx->config->emit_function(out, program, target, ctx->module, decl, module_decl, fn,
                                    facts, storage, index, function_sections))
         return true;
     ++ctx->rejected_functions;

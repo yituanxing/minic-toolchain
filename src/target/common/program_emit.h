@@ -191,6 +191,7 @@ static inline bool minic_program_symbol_used_in_source_asm_module(
     const MinicC0Program *program, const MinicProgramSymbolUses *uses,
     const char *name, const MinicCoreModule *module) {
     size_t index;
+    if (uses == NULL || (module == NULL && program == NULL)) return false;
     if (module != NULL) {
         for (index = 0U; index < module->file_asm_count; ++index)
             if (minic_program_asm_names_symbol(module->file_asms[index].text,
@@ -226,7 +227,9 @@ static inline bool minic_program_emit_collect_symbol_uses_module(
     const MinicCoreFunction *functions, size_t function_count,
     const MinicProgramEmitConfig *config, const MinicCoreModule *module) {
     size_t index, ordinal, block_id;
-    if (uses == NULL || program == NULL || config == NULL ||
+    if (uses == NULL || config == NULL ||
+        (module == NULL && program == NULL) ||
+        (function_count != 0U && functions == NULL) ||
         (module != NULL && (!module->finalized ||
             module->function_count != function_count ||
             (module->global_count != 0U && module->globals == NULL) ||
@@ -398,7 +401,7 @@ static inline bool minic_program_emit_undefined_symbol_visibility_module(
     size_t index;
     MinicProgramSymbolUses uses = {0};
     bool ok = true;
-    if (out == NULL || program == NULL) return false;
+    if (out == NULL || (module == NULL && program == NULL)) return false;
     if (!minic_program_emit_collect_symbol_uses_module(
             &uses, program, functions, function_count, config, module)) {
         free(uses.names);

@@ -630,7 +630,6 @@ static bool emit_register_output_input_inline_asm(
 
 static bool emit_memory_readwrite_scalar_input_inline_asm(
     FILE *file,
-    const MinicC0Program *program,
     const MinicCoreFunction *function,
     const MinicRiscv64CoreFrame *frame,
     const MinicCoreInstruction *instruction) {
@@ -641,7 +640,7 @@ static bool emit_memory_readwrite_scalar_input_inline_asm(
     size_t index;
     bool has_register_output;
 
-    if (file == NULL || program == NULL || frame == NULL ||
+    if (file == NULL || function == NULL || function->type_context == NULL || frame == NULL ||
         !core_memory_readwrite_scalar_input_inline_asm_supported(function, instruction) ||
         !minic_riscv64_frame_load_value(
             file,
@@ -760,7 +759,6 @@ static bool emit_scalar_input_inline_asm(
 }
 
 static bool emit_structured_inline_asm(FILE *file,
-                                       const MinicC0Program *program,
                                        const MinicCoreFunction *function,
                                        const MinicRiscv64CoreFrame *frame,
                                        const MinicCoreInstruction *instruction,
@@ -774,7 +772,8 @@ static bool emit_structured_inline_asm(FILE *file,
     size_t binding_index;
     size_t index;
 
-    if (file == NULL || program == NULL || frame == NULL || function == NULL ||
+    if (file == NULL || frame == NULL || function == NULL ||
+        function->type_context == NULL ||
         instruction == NULL ||
         (plan = minic_riscv64_asm_function_plan_get(&frame->asm_plan, instruction_id)) == NULL)
         return false;
@@ -808,7 +807,7 @@ static bool emit_structured_inline_asm(FILE *file,
                     register_name, scratch_register,
                     transfer_scratch_register,
                     minic_riscv_address_alignment(
-                        program, minic_default_data_layout(), function,
+                        NULL, NULL, function,
                         binding->value))) {
                 return false;
             }
@@ -899,7 +898,7 @@ static bool emit_structured_inline_asm(FILE *file,
                 register_name, scratch_register,
                 transfer_scratch_register,
                 minic_riscv_address_alignment(
-                    program, minic_default_data_layout(), function,
+                    NULL, NULL, function,
                     binding->value))) {
             return false;
         }
@@ -934,8 +933,7 @@ bool minic_riscv64_inline_asm_instruction_supported(
     }
 }
 bool minic_riscv64_emit_inline_asm_instruction(
-    FILE *file, const MinicC0Program *program,
-    const MinicCoreFunction *function, const MinicRiscv64CoreFrame *frame,
+    FILE *file, const MinicCoreFunction *function, const MinicRiscv64CoreFrame *frame,
     const char *symbol_name, const MinicCoreInstruction *instruction,
     size_t instruction_id) {
     if (file == NULL || function == NULL || frame == NULL || instruction == NULL ||
@@ -950,11 +948,11 @@ bool minic_riscv64_emit_inline_asm_instruction(
         return emit_register_output_input_inline_asm(file, function, frame, instruction);
     case MINIC_CORE_INSTRUCTION_MEMORY_READWRITE_SCALAR_INPUT_INLINE_ASM:
         return emit_memory_readwrite_scalar_input_inline_asm(
-            file, program, function, frame, instruction);
+            file, function, frame, instruction);
     case MINIC_CORE_INSTRUCTION_SCALAR_INPUT_INLINE_ASM:
         return emit_scalar_input_inline_asm(file, function, frame, instruction);
     case MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM:
-        return emit_structured_inline_asm(file, program, function, frame, instruction, instruction_id);
+        return emit_structured_inline_asm(file, function, frame, instruction, instruction_id);
     default: return false;
     }
 }

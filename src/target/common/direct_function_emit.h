@@ -29,6 +29,7 @@ typedef struct MinicDirectLP64FunctionEmitter {
 
 static inline bool minic_multi_direct_lp64_emit_function(
     FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicCoreModule *module,
     const MinicFunction *decl, const MinicCoreModuleFunctionSymbol *module_decl,
     const MinicCoreFunction *fn,
     const MinicCoreFunctionFacts *facts,
@@ -99,7 +100,7 @@ static inline bool minic_multi_direct_lp64_emit_function(
         goto output_failed;
 
     ctx = (MinicDirectLP64BlockContext){
-        .program = program, .target = target, .fn = fn,
+        .program = program, .module = module, .target = target, .fn = fn,
         .frame_plan = &plan.frame_plan,
         .incoming_plan = &plan.incoming_plan,
         .outgoing_calls = &plan.outgoing_calls,

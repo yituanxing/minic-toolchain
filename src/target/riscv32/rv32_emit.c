@@ -295,24 +295,21 @@ static bool rv32_emit_source_legacy_asm(
  * Fixed-register bindings and explicit register clobbers need a separate
  * target allocation plan, and remain rejected until one is available. */
 static bool rv32_emit_source_asm_scalar_transfer(
-    FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
-    const MinicCoreFunction *f, MinicCoreValueId address,
+    FILE *out, const MinicCoreFunction *f, MinicCoreValueId address,
     MinicCoreTypeId value_type, bool store, const char *value_register,
     const char *address_register, const char *scratch_register) {
     unsigned bits;
     bool is_signed;
     const char *opcode;
     size_t known_alignment;
-    if (out == NULL || program == NULL || target == NULL ||
-        target->data_layout == NULL || f == NULL ||
+    if (out == NULL || f == NULL || f->type_context == NULL ||
         !rv32_core_scalar(f, value_type, &bits, &is_signed))
         return false;
     opcode = store
         ? (bits <= 8U ? "sb" : bits <= 16U ? "sh" : "sw")
         : (bits <= 8U ? (is_signed ? "lb" : "lbu") :
            bits <= 16U ? (is_signed ? "lh" : "lhu") : "lw");
-    known_alignment = minic_riscv_address_alignment(
-        program, target->data_layout, f, address);
+    known_alignment = minic_riscv_address_alignment(NULL, NULL, f, address);
     return minic_riscv_emit_typed_memory(
         out, store, 32U, bits <= 8U ? 1U : bits / 8U,
         !store && is_signed, opcode, value_register, address_register,
@@ -320,8 +317,7 @@ static bool rv32_emit_source_asm_scalar_transfer(
 }
 
 static bool rv32_emit_source_structured_asm(
-    FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
-    const MinicCoreFunction *f, const Rv32Frame *fr,
+    FILE *out, const MinicCoreFunction *f, const Rv32Frame *fr,
     const MinicCoreInstruction *ins) {
     const MinicCoreInlineAsm *source;
     static const char *const regs[] = {
@@ -455,7 +451,7 @@ static bool rv32_emit_source_structured_asm(
                     if (b->kind == MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE &&
                         (!rv32_slot(out, fr, b->value, "t0", true) ||
                          !rv32_emit_source_asm_scalar_transfer(
-                             out, program, target, f, b->value, pointee,
+                             out, f, b->value, pointee,
                              false, abi_registers[reg_index], "t0", "t6")))
                         return false;
                 } else {
@@ -474,7 +470,7 @@ static bool rv32_emit_source_structured_asm(
                     if (pointee == MINIC_CORE_TYPE_INVALID ||
                         !rv32_slot(out, fr, b->value, "t0", true) ||
                         !rv32_emit_source_asm_scalar_transfer(
-                            out, program, target, f, b->value, pointee,
+                            out, f, b->value, pointee,
                             true, bindings[b->operand_index], "t0", "t6"))
                         return false;
                 }
@@ -565,7 +561,7 @@ static bool rv32_emit_source_structured_asm(
                 !rv32_core_scalar(f, pointee, &bits, &is_signed))
                 return false;
             if (!rv32_emit_source_asm_scalar_transfer(
-                    out, program, target, f, b->value, pointee,
+                    out, f, b->value, pointee,
                     false, reg, "a2", "t6"))
                 return false;
         }
@@ -595,13 +591,13 @@ static bool rv32_emit_source_structured_asm(
          * zero as a stable value for the otherwise uninitialized half. */
         if (rv32_core_is_wide_integer(f, pointee)) {
             size_t proven_alignment = minic_riscv_address_alignment(
-                program, target->data_layout, f, b->value);
+                NULL, NULL, f, b->value);
             if (!minic_riscv_emit_typed_word_pair(
                     out, true, 32U, regs[b->operand_index], "zero", "a2",
                     "t6", proven_alignment, "rv32_asm"))
                 return false;
         } else if (!rv32_emit_source_asm_scalar_transfer(
-                       out, program, target, f, b->value, pointee,
+                       out, f, b->value, pointee,
                        true, regs[b->operand_index], "a2", "t6"))
             return false;
     }
@@ -609,13 +605,14 @@ static bool rv32_emit_source_structured_asm(
 }
 
 static bool rv32_emit_ins(FILE *out, const MinicC0Program *program,
+                          const MinicCoreModule *module,
                           const MinicTargetInfo *target,
                           const MinicCoreFunction *f,
                           const Rv32Frame *fr,
                           const MinicCoreInstruction *ins,
                           MinicCoreInstructionId id,
                           const char *symbol) {
-    if (out == NULL || program == NULL || target == NULL ||
+    if (out == NULL || (module == NULL && program == NULL) || target == NULL ||
         f == NULL || fr == NULL || ins == NULL) return false;
     /* Shared semantic dispatch, but the 32-bit emitter still decides
      * helper calls, ABI limb splitting and legal Base-I instructions. */
@@ -624,7 +621,7 @@ static bool rv32_emit_ins(FILE *out, const MinicC0Program *program,
     if (family == MINIC_CORE_FAMILY_INTEGER_SCALAR ||
         family == MINIC_CORE_FAMILY_OVERFLOW ||
         family == MINIC_CORE_FAMILY_BITCAST)
-        return rv32_emit_integer_instruction(out, program, target, f, fr,
+        return rv32_emit_integer_instruction(out, f, fr,
                                              ins, symbol);
     if (family == MINIC_CORE_FAMILY_FLOATING_SCALAR)
         return rv32_emit_fp_instruction(out, f, fr, ins);
@@ -671,7 +668,7 @@ static bool rv32_emit_ins(FILE *out, const MinicC0Program *program,
     case MINIC_CORE_INSTRUCTION_RECORD_LOAD:
     case MINIC_CORE_INSTRUCTION_GLOBAL_ADDRESS:
     case MINIC_CORE_INSTRUCTION_FUNCTION_ADDRESS:
-        return rv32_emit_memory_instruction(out, program, target, f, fr, ins);
+        return rv32_emit_memory_instruction(out, program, module, target, f, fr, ins);
     case MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM:
         return rv32_emit_source_opaque_asm(out, f, symbol, ins);
     case MINIC_CORE_INSTRUCTION_REGISTER_OUTPUT_INLINE_ASM:
@@ -680,7 +677,7 @@ static bool rv32_emit_ins(FILE *out, const MinicC0Program *program,
     case MINIC_CORE_INSTRUCTION_SCALAR_INPUT_INLINE_ASM:
         return rv32_emit_source_legacy_asm(out, f, fr, ins);
     case MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM:
-        return rv32_emit_source_structured_asm(out, program, target, f, fr, ins);
+        return rv32_emit_source_structured_asm(out, f, fr, ins);
     case MINIC_CORE_INSTRUCTION_COMPILER_BARRIER:
         return true;
     case MINIC_CORE_INSTRUCTION_CALL_FRAME_ADDRESS: {
@@ -798,6 +795,7 @@ static bool rv32_term(FILE *out, const MinicCoreFunction *f,
     }
 }
 static bool rv32_func(FILE *out, const MinicC0Program *program,
+                       const MinicCoreModule *module,
                        const MinicCoreFunction *f, const MinicFunction *def,
                        const MinicCoreModuleFunctionSymbol *module_decl,
                        bool function_sections, const MinicTargetInfo *target,
@@ -880,7 +878,7 @@ static bool rv32_func(FILE *out, const MinicC0Program *program,
             MinicCoreInstructionId id = 0U;
             const MinicCoreInstruction *ins = NULL;
             if (!minic_core_block_instruction_at(f, block, j, &id, &ins) ||
-                !rv32_emit_ins(out, program, target, f, &fr,
+                !rv32_emit_ins(out, program, module, target, f, &fr,
                                ins, id, sym.symbol_name)) {
                 (void)snprintf(message, sizeof(message),
                                "rv32i: unqualified Core instruction function=%.75s block=%zu id=%u kind=%u",
@@ -998,7 +996,7 @@ static bool rv32_visit_function(
     Rv32ProgramContext *ctx = opaque;
     const char *name;
     (void)index;
-    if (!rv32_func(out, program, fn, decl, module_decl, function_sections,
+    if (!rv32_func(out, program, ctx->module, fn, decl, module_decl, function_sections,
                    target, facts, storage, ctx->diagnostic))
         return false;
     if (!(module_decl != NULL ? module_decl->is_constructor

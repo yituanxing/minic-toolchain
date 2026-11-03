@@ -348,9 +348,17 @@ bool minic_aarch64_emit_residual_instruction(
             if (!minic_multi_direct_global_address_symbol(fn, ins, &symbol))
                 return minic_multi_direct_machine_reject(
                     fn, "aarch64", name, reject_stage, reject_block, reject_ins, __LINE__);
-            if (!minic_target_info_elf_object_is_undefined_weak(program, symbol) &&
+            if (!(ctx->module != NULL
+                    ? minic_target_info_elf_module_object_is_undefined_weak(
+                        ctx->module, symbol)
+                    : minic_target_info_elf_object_is_undefined_weak(
+                        program, symbol)) &&
                 (!target->position_independent ||
-                 minic_target_info_elf_object_is_nonpreemptible(program, symbol))) {
+                 (ctx->module != NULL
+                    ? minic_target_info_elf_module_object_is_nonpreemptible(
+                        ctx->module, symbol)
+                    : minic_target_info_elf_object_is_nonpreemptible(
+                        program, symbol)))) {
                 /* Static definitions and ELF hidden/internal declarations
                  * bind locally, including undefined symbols resolved by the
                  * final shared link (Linux vDSO). Non-PIC code can also use
@@ -387,9 +395,17 @@ bool minic_aarch64_emit_residual_instruction(
             if (!minic_multi_direct_function_address_symbol(fn, ins, &symbol))
                 return minic_multi_direct_machine_reject(fn, "aarch64", name, reject_stage,
                                            reject_block, reject_ins, __LINE__);
-            if (!minic_target_info_elf_function_is_undefined_weak(program, symbol) &&
+            if (!(ctx->module != NULL
+                    ? minic_target_info_elf_module_function_is_undefined_weak(
+                        ctx->module, symbol)
+                    : minic_target_info_elf_function_is_undefined_weak(
+                        program, symbol)) &&
                 (!target->position_independent ||
-                 minic_target_info_elf_function_is_nonpreemptible(program, symbol))) {
+                 (ctx->module != NULL
+                    ? minic_target_info_elf_module_function_is_nonpreemptible(
+                        ctx->module, symbol)
+                    : minic_target_info_elf_function_is_nonpreemptible(
+                        program, symbol)))) {
                 if (fprintf(out, "  adrp x9, %s\n"
                                  "  add x9, x9, :lo12:%s\n",
                             symbol, symbol) < 0)

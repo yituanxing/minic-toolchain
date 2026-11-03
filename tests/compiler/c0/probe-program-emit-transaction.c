@@ -160,6 +160,36 @@ static int check_module_snapshot_output(const char *path) {
         strstr(data, ".text\n .quad asm_weak\n.text\n") == NULL ||
         strstr(data, "unused_hidden") != NULL ||
         strstr(data, "poison_source") != NULL) return 3;
+    /* Module symbol-use gathering and ELF binding must be independently
+     * runnable with NO source Program at all, not merely resistant to an
+     * altered Program's global list. This covers both relocation and text
+     * ASM references while never emitting unused hidden declarations. */
+    {
+        MinicProgramSymbolUses uses = {0};
+        FILE *bindings = tmpfile();
+        if (bindings == NULL) return 9;
+        if (!minic_program_emit_collect_symbol_uses_module(
+                &uses, NULL, NULL, 0U, &config, &module) ||
+            !minic_program_symbol_use_has(&uses, "weak_ext") ||
+            minic_program_symbol_use_has(&uses, "poison_source_global") ||
+            !minic_program_emit_undefined_symbol_visibility_module(
+                bindings, NULL, NULL, 0U, &config, &module) ||
+            fseek(bindings, 0L, SEEK_SET) != 0) {
+            free(uses.names);
+            free(uses.asm_uses);
+            (void)fclose(bindings);
+            return 10;
+        }
+        free(uses.names);
+        free(uses.asm_uses);
+        (void)memset(data, 0, sizeof(data));
+        count = fread(data, 1U, sizeof(data) - 1U, bindings);
+        if (fclose(bindings) != 0 || count == 0U ||
+            strstr(data, ".weak weak_ext\n.hidden weak_ext\n") == NULL ||
+            strstr(data, ".weak asm_weak\n.hidden asm_weak\n") == NULL ||
+            strstr(data, "unused_hidden") != NULL ||
+            strstr(data, "poison_source") != NULL) return 11;
+    }
     module.finalized = false;
     if (minic_program_emit_write_module(
             path, &program, &target, NULL, 0U, false,

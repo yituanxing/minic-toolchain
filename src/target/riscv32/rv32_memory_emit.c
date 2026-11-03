@@ -46,18 +46,21 @@ static bool rv32_record_layout(const MinicCoreFunction *function,
     return true;
 }
 
-/* Addressing, ILP32 memory and aggregate transport. All execution layouts
- * are sealed Core layouts; source policy still supplies symbol visibility
- * and proven pointer alignment. */
+/* Addressing, ILP32 memory and aggregate transport.  Frozen Core owns
+ * pointer-alignment proof; Module owns PIC symbol provenance.  Source-C
+ * visibility is retained solely for legacy pre-Module emit fixtures. */
 bool rv32_emit_memory_instruction(FILE *out, const MinicC0Program *program,
+                                  const MinicCoreModule *module,
                                   const MinicTargetInfo *target,
                                   const MinicCoreFunction *f,
                                   const Rv32Frame *fr,
                                   const MinicCoreInstruction *ins) {
     unsigned bits;
     size_t access_alignment;
-    if (out == NULL || program == NULL || target == NULL ||
-        f == NULL || fr == NULL || ins == NULL) return false;
+    if (out == NULL || target == NULL || f == NULL ||
+        fr == NULL || ins == NULL ||
+        (module == NULL && program == NULL) ||
+        (module != NULL && !module->finalized)) return false;
     switch (ins->kind) {
     case MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS:
         return (size_t)ins->value.object_id < fr->object_count &&
@@ -103,7 +106,7 @@ bool rv32_emit_memory_instruction(FILE *out, const MinicC0Program *program,
                rv32_slot(out, fr, ins->result, "t0", false);
     }
     case MINIC_CORE_INSTRUCTION_LOAD:
-        access_alignment = minic_riscv_address_alignment(program, target->data_layout, f,
+        access_alignment = minic_riscv_address_alignment(NULL, NULL, f,
                                           ins->value.load.address);
         if (rv32_core_scalar_storage_words(f, ins->core_type_id,
                                            &bits) && bits == 2U)
@@ -147,7 +150,7 @@ bool rv32_emit_memory_instruction(FILE *out, const MinicC0Program *program,
             rv32_slot(out, fr, ins->result, "t0", false);
     }
     case MINIC_CORE_INSTRUCTION_STORE:
-        access_alignment = minic_riscv_address_alignment(program, target->data_layout, f,
+        access_alignment = minic_riscv_address_alignment(NULL, NULL, f,
                                           ins->value.store.address);
         if (ins->value.store.stored_value < f->value_count &&
             rv32_core_scalar_storage_words(
@@ -206,7 +209,9 @@ bool rv32_emit_memory_instruction(FILE *out, const MinicC0Program *program,
         if (ins->value.global_id >= f->global_count) return false;
         symbol = f->globals[ins->value.global_id].name;
         preemptible = target->position_independent &&
-            !minic_target_info_elf_object_is_nonpreemptible(program, symbol);
+            !(module != NULL
+                ? minic_target_info_elf_module_object_is_nonpreemptible(module, symbol)
+                : minic_target_info_elf_object_is_nonpreemptible(program, symbol));
         return fprintf(out, preemptible
                        ? "  .option push\n  .option pic\n  la t0, %s\n  .option pop\n"
                        : "  lla t0, %s\n", symbol) >= 0 &&
@@ -219,7 +224,9 @@ bool rv32_emit_memory_instruction(FILE *out, const MinicC0Program *program,
             return false;
         symbol = f->function_symbols[ins->value.function_symbol_id].name;
         preemptible = target->position_independent &&
-            !minic_target_info_elf_function_is_nonpreemptible(program, symbol);
+            !(module != NULL
+                ? minic_target_info_elf_module_function_is_nonpreemptible(module, symbol)
+                : minic_target_info_elf_function_is_nonpreemptible(program, symbol));
         return fprintf(out, preemptible
                        ? "  .option push\n  .option pic\n  la t0, %s\n  .option pop\n"
                        : "  lla t0, %s\n", symbol) >= 0 &&

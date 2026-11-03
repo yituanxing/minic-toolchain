@@ -134,13 +134,6 @@ bool minic_core_visit_instruction_value_uses(const MinicCoreFunction *function,
                core_visit_value_use(
                    instruction->value.gnu_fixed_vector_storage_copy.source_address,
                    visitor, context);
-    case MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_EOR3:
-        return core_visit_value_use(instruction->value.vector_ternary.first,
-                   visitor, context) &&
-               core_visit_value_use(instruction->value.vector_ternary.second,
-                   visitor, context) &&
-               core_visit_value_use(instruction->value.vector_ternary.third,
-                   visitor, context);
     case MINIC_CORE_INSTRUCTION_REGISTER_OUTPUT_INPUT_INLINE_ASM:
         return core_visit_value_use(
             instruction->value.register_output_input_inline_asm.operand, visitor, context);

@@ -426,15 +426,6 @@ static bool dump_instruction(FILE *output,
         return fprintf(output, "  %%%" PRIu32 " = vector128.xor %%%" PRIu32 ", %%%" PRIu32 "\n",
                        instruction->result, instruction->value.binary.left,
                        instruction->value.binary.right) >= 0;
-    case MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_EOR3:
-        return fprintf(output,
-                       "  %%%" PRIu32 " = vector128.eor3 %%%" PRIu32 ", %%%" PRIu32
-                       ", %%%" PRIu32 " source_asm=%" PRIu32 "\n",
-                       instruction->result,
-                       instruction->value.vector_ternary.first,
-                       instruction->value.vector_ternary.second,
-                       instruction->value.vector_ternary.third,
-                       instruction->value.vector_ternary.source_inline_asm) >= 0;
     case MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM: {
         const MinicCoreInlineAsm *inline_asm;
 

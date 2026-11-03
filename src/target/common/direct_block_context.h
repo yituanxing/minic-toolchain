@@ -3,6 +3,7 @@
 #include "target/common/direct_call_plan.h"
 #include "target/common/lp64_frame.h"
 #include "core/core_ir.h"
+#include "core/module_ir.h"
 #include "frontend/ast.h"
 #include "target/target_info.h"
 #include <stdbool.h>
@@ -13,6 +14,7 @@
  * AAPCS64 and LoongArch LP64D keep independent instruction/ABI semantics. */
 typedef struct MinicDirectLP64BlockContext {
     const MinicC0Program *program;
+    const MinicCoreModule *module; /* sealed TU ELF linkage/provenance */
     const MinicTargetInfo *target;
     const MinicCoreFunction *fn;
     const MinicLP64FramePlan *frame_plan;

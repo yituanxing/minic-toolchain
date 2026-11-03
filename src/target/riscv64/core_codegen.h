@@ -2,6 +2,7 @@
 #define MINIC_TARGET_RISCV64_CORE_CODEGEN_H
 
 #include "core/core_ir.h"
+#include "core/module_ir.h"
 #include "target/common/core_function_facts.h"
 #include "target/common/core_object_storage.h"
 #include "target/riscv/function_symbol.h"
@@ -31,6 +32,13 @@ bool minic_riscv64_emit_core_function_for_program_with_symbol_with_storage(
     FILE *, const MinicC0Program *, const MinicCoreFunction *,
     const MinicRiscvFunctionSymbol *, const MinicCoreFunctionFacts *,
     const MinicCoreObjectStoragePlan *, bool, const MinicRiscvIsa *, MinicDiagnostic *);
+/* The Module form is the production PIC provenance authority.  Preserve
+ * the no-Module entry point for existing isolated machine/ABI fixtures. */
+bool minic_riscv64_emit_core_function_for_program_with_symbol_with_storage_module(
+    FILE *, const MinicC0Program *, const MinicCoreModule *,
+    const MinicCoreFunction *, const MinicRiscvFunctionSymbol *,
+    const MinicCoreFunctionFacts *, const MinicCoreObjectStoragePlan *,
+    bool, const MinicRiscvIsa *, MinicDiagnostic *);
 bool minic_riscv64_emit_core_function_for_program_with_symbol(
     FILE *file,
     const MinicC0Program *program,

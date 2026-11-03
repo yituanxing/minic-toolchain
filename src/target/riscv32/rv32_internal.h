@@ -1,6 +1,7 @@
 #ifndef MINIC_TARGET_RISCV32_INTERNAL_H
 #define MINIC_TARGET_RISCV32_INTERNAL_H
 #include "core/core_ir.h"
+#include "core/module_ir.h"
 #include "target/common/core_function_facts.h"
 #include "target/common/core_object_storage.h"
 #include "frontend/ast.h"
@@ -74,8 +75,7 @@ bool rv32_core_store_mem(FILE *, const MinicCoreFunction *, MinicCoreTypeId,
 bool rv32_load2(FILE *, const Rv32Frame *, const MinicCoreInstruction *);
 
 /* Typed machine family lowering; all transport stays behind Target. */
-bool rv32_emit_integer_instruction(FILE *, const MinicC0Program *,
-                                   const MinicTargetInfo *, const MinicCoreFunction *,
+bool rv32_emit_integer_instruction(FILE *, const MinicCoreFunction *,
                                    const Rv32Frame *, const MinicCoreInstruction *,
                                    const char *);
 bool rv32_core_is_wide_integer(const MinicCoreFunction *, MinicCoreTypeId);
@@ -90,7 +90,8 @@ bool rv32_emit_wide_integer(FILE *, const MinicCoreFunction *,
 bool rv32_emit_fp_instruction(FILE *, const MinicCoreFunction *,
                               const Rv32Frame *, const MinicCoreInstruction *);
 bool rv32_emit_memory_instruction(FILE *, const MinicC0Program *,
-                                  const MinicTargetInfo *, const MinicCoreFunction *,
+                                  const MinicCoreModule *, const MinicTargetInfo *,
+                                  const MinicCoreFunction *,
                                   const Rv32Frame *, const MinicCoreInstruction *);
 
 /* Parameters/direct/indirect ABI lowering: rv32_call.c */

@@ -22,6 +22,11 @@ bool minic_aarch64_emit_linux_jump_label_asm_goto(
 /* Machine-specific template qualification; Core carries operand roles only. */
 bool minic_aarch64_qualify_inline_asm(
     const MinicC0Program *, const MinicInlineAsm *, MinicTargetInlineAsmContract *);
+/* Source-qualified GNU forms sealed against the normalized machine template.
+ * Unrecognized families retain their existing fail-closed emitter contract. */
+bool minic_aarch64_seal_normalized_inline_asm(
+    const MinicC0Program *, const MinicInlineAsm *, const char *, size_t,
+    MinicTargetInlineAsmContract *);
 bool minic_aarch64_emit_qualified_structured_asm(
     FILE *, const MinicDirectLP64BlockContext *, const MinicCoreInstruction *);
 bool minic_aarch64_qualified_opaque_asm(const MinicCoreInlineAsm *);

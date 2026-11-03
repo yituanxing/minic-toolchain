@@ -1066,6 +1066,15 @@ has src/target/common/direct_function_emit.h 'minic_multi_direct_lp64_function_p
 lacks src/target/loongarch64/codegen.c 'minic_multi_direct_lp64_function_plan_prepare('
 # All five targets must own only target callbacks. File lifetime,
 # global/Core visit order and partial-output removal are ONE common transaction.
+has src/target/backend.h 'MinicBackendEmitModule emit_module;'
+lacks src/target/backend.h 'MinicBackendEmitProgram'
+lacks src/target/backend.c 'minic_backend_emit_assembly('
+lacks src/target/backend.c '.emit_program ='
+has src/target/backend.c '.emit_module = emit_riscv64_module,'
+has src/target/backend.c '.emit_module = minic_riscv32_write_core_module,'
+has src/target/backend.c '.emit_module = minic_x86_64_write_c0_program_with_core_module,'
+has src/target/backend.c '.emit_module = minic_aarch64_write_c0_program_with_core_module,'
+has src/target/backend.c '.emit_module = minic_loongarch64_write_c0_program_with_core_module,'
 exists src/target/common/program_emit.h
 has src/target/common/program_emit.h 'minic_program_visit_globals('
 has src/target/common/program_emit.h 'minic_program_visit_prepared_functions_module('
@@ -1196,6 +1205,16 @@ cc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror \
   -Iinclude -Isrc tests/compiler/c0/probe-module-function-visitor.c \
   -o "$work/module-function-owner-probe"
 "$work/module-function-owner-probe"
+
+# Machine PIC and ELF-address eligibility must come from the immutable
+# ModuleIR linkage snapshot, never from a late C Program lookup. The same
+# six proofs cover RV32/RV64, x86-64, AArch64, and LoongArch64 policies.
+cc -std=c11 -O2 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror \
+  -ffunction-sections -fdata-sections -Wl,--gc-sections \
+  -Iinclude -Isrc tests/compiler/c0/probe-core-module-elf-linkage.c \
+  src/target/target_info.c \
+  -o "$work/core-module-elf-linkage-probe"
+"$work/core-module-elf-linkage-probe"
 
 # Integer conversion and scalar pointer/int bitcast share the same CoreType
 # semantic boundary on all five targets. ISA-owned normalization stays local;

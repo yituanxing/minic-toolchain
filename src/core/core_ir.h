@@ -161,15 +161,13 @@ typedef enum MinicCoreInstructionKind {
      * ISA permission, V-register ABI and exact intrinsics remain target owned. */
     MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_LOAD,
     MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_STORE,
-    MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_XOR,
-    /* SHA3 extension, only after exact native ASM + runtime guard proof. */
-    MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_EOR3
+    MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_XOR
 } MinicCoreInstructionKind;
 
 /* One exclusive upper bound for opcode-indexed tables and diagnostics.
  * Keep this adjacent to the last real opcode as the IR vocabulary grows;
  * it is intentionally not an instruction-kind enum member. */
-enum { MINIC_CORE_INSTRUCTION_KIND_COUNT = MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_EOR3 + 1U };
+enum { MINIC_CORE_INSTRUCTION_KIND_COUNT = MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_XOR + 1U };
 
 /* M91_BUILTIN_UNREACHABLE_TERMINATOR: unreachable is a CFG fact, not a
    value-producing instruction and not an invented target trap. */
@@ -494,14 +492,6 @@ typedef struct MinicCoreInstruction {
             MinicCoreValueId destination_address;
             MinicCoreValueId source_address;
         } gnu_fixed_vector_storage_copy;
-        struct {
-            MinicCoreValueId first;
-            MinicCoreValueId second;
-            MinicCoreValueId third;
-            /* Proven source inline ASM identity, else INVALID. The target
-             * must requalify exact four `w` operands and SHA3 feature use. */
-            MinicCoreInlineAsmId source_inline_asm;
-        } vector_ternary;
         /* Target ABI state-copy: left=destination cursor pointer, right=source. */
         struct {
             MinicCoreValueId destination;
