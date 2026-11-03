@@ -40,8 +40,8 @@ test_profile() {
     case "$profile" in
       x86_64) mini_args=(--target=x86_64 -march=x86-64 -mabi=sysv) ;;
       i386) mini_args=(--target=x86_64 -march=i386 -mabi=i386) ;;
-      rv32) mini_args=(--target=riscv -march=rv32i -mabi=ilp32) ;;
-      rv64) mini_args=(--target=riscv -march=rv64i -mabi=lp64) ;;
+      rv32) mini_args=(--target=riscv -march=rv32i2p1 -mabi=ilp32) ;;
+      rv64) mini_args=(--target=riscv -march=rv64i2p1 -mabi=lp64) ;;
       aarch64) mini_args=(--target=aarch64 -march=armv8-a -mabi=lp64) ;;
       loong) mini_args=(--target=loongarch64 -march=loongarch64 -mabi=lp64d) ;;
     esac
@@ -124,6 +124,7 @@ ASM
                 if ! python3 "$repo/tests/assembler/elf_semantic_compare.py" --strict \
                      "$gnu_object" "$mini_object" >"$work/strict.json"; then
                     echo "MINIAS_COMMON_RELOC_WIDTHS=FAIL semantic profile=$profile width=$width expr=$expr" >&2
+                    python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print("failed_dimensions=", [k for k,v in d["dimensions"].items() if not v])' "$work/strict.json" >&2
                     sed -n '1,70p' "$work/strict.json" >&2
                     if [[ $profile == rv* ]]; then
                         echo 'GNU RISC-V attributes:' >&2
@@ -144,6 +145,7 @@ ASM
                 if ! python3 "$repo/tests/assembler/elf_semantic_compare.py" --strict \
                     "$gnu_linked" "$mini_linked" >"$work/linked-strict.json"; then
                     echo "MINIAS_COMMON_RELOC_WIDTHS=FAIL linked profile=$profile width=$width expr=$expr" >&2
+                    python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print("failed_dimensions=", [k for k,v in d["dimensions"].items() if not v])' "$work/linked-strict.json" >&2
                     sed -n '1,70p' "$work/linked-strict.json" >&2
                     return 1
                 fi
@@ -159,9 +161,9 @@ test_profile x86_64 x86_64 64 'Advanced Micro Devices X86-64' \
 test_profile i386 x86_64 32 'Intel 80386' \
     as ld '--32' '-m elf_i386'
 test_profile rv32 riscv 32 'RISC-V' \
-    riscv64-linux-gnu-as riscv64-linux-gnu-ld '-march=rv32i -mabi=ilp32' '-m elf32lriscv'
+    riscv64-linux-gnu-as riscv64-linux-gnu-ld '-march=rv32i2p1 -mabi=ilp32' '-m elf32lriscv'
 test_profile rv64 riscv 64 'RISC-V' \
-    riscv64-linux-gnu-as riscv64-linux-gnu-ld '-march=rv64i -mabi=lp64' '-m elf64lriscv'
+    riscv64-linux-gnu-as riscv64-linux-gnu-ld '-march=rv64i2p1 -mabi=lp64' '-m elf64lriscv'
 test_profile aarch64 aarch64 64 'AArch64' \
     aarch64-linux-gnu-as aarch64-linux-gnu-ld '-march=armv8-a' ''
 test_profile loong loongarch64 64 'LoongArch' \
