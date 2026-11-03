@@ -122,7 +122,7 @@ bool minic_multi_direct_call_frame_return_level0_shape(
 }
 
 bool minic_multi_direct_fixed_register_write_shape(
-    const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
     const MinicCoreFixedRegisterBinding **binding_out) {
     const MinicCoreFixedRegisterBinding *binding;
@@ -130,7 +130,7 @@ bool minic_multi_direct_fixed_register_write_shape(
         ? ins->value.fixed_register_write.binding_id : SIZE_MAX;
     const MinicCoreValueId source = ins != NULL
         ? ins->value.fixed_register_write.source : MINIC_CORE_VALUE_INVALID;
-    if (program == NULL || target == NULL || fn == NULL ||
+    if (target == NULL || fn == NULL ||
         fn->type_context == NULL || ins == NULL ||
         binding_out == NULL ||
         ins->kind != MINIC_CORE_INSTRUCTION_FIXED_REGISTER_WRITE ||
@@ -152,12 +152,12 @@ bool minic_multi_direct_fixed_register_write_shape(
 }
 
 bool minic_multi_direct_fixed_register_read_shape(
-    const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
     const MinicCoreFixedRegisterBinding **binding_out) {
     const MinicCoreFixedRegisterBinding *binding;
     const size_t index = ins != NULL ? ins->value.fixed_register_binding_id : 0U;
-    if (!program || !target || !fn || fn->type_context == NULL ||
+    if (!target || !fn || fn->type_context == NULL ||
         !ins || !binding_out ||
         ins->kind != MINIC_CORE_INSTRUCTION_FIXED_REGISTER_READ ||
         ins->result >= fn->value_count ||
@@ -178,13 +178,12 @@ bool minic_multi_direct_fixed_register_read_shape(
 }
 
 bool minic_multi_direct_record_copy_extent(
-    const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
     size_t *bytes) {
     MinicCoreValueId dst, src;
     MinicCoreTypeId dst_pointee, src_pointee;
     const MinicCoreType *record;
-    if (program == NULL || target == NULL || fn == NULL ||
+    if (fn == NULL ||
         fn->type_context == NULL || ins == NULL ||
         bytes == NULL)
         return false;
@@ -217,14 +216,13 @@ bool minic_multi_direct_record_copy_extent(
  * address-backed lvalue. Core owns type/volatility and DataLayout bounds;
  * native emitters alone own the actual ISA byte operations. */
 bool minic_multi_direct_record_load_extent(
-    const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
     const MinicLP64FramePlan *frame_plan,
     MinicCoreValueId *source, size_t *object_offset, size_t *bytes) {
     MinicCoreObjectId dst;
     MinicCoreTypeId pointee_id;
     const MinicCoreType *source_type, *record;
-    if (!program || !target || !fn || fn->type_context == NULL ||
+    if (!fn || fn->type_context == NULL ||
         !ins || !frame_plan ||
         !source || !object_offset || !bytes ||
         ins->kind != MINIC_CORE_INSTRUCTION_RECORD_LOAD ||

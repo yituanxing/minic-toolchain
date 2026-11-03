@@ -28,6 +28,31 @@ has src/target/loongarch64/asm_contract.c 'loong_pte_emit('
 lacks src/core/core_lower_asm_target.c 'll.d'
 has src/target/common/direct_instruction_semantics.c \
   'minic_multi_direct_machine_instruction_shape('
+# The sealed Core execution-type contract now spans x86, RV32/RV64 and
+# the Direct LP64 pair. None may resurrect a machine-side C width oracle.
+for source in \
+  src/target/x86_64/machine_emit.c \
+  src/target/x86_64/machine_support.c \
+  src/target/common/direct_instruction_semantics.c \
+  src/target/common/direct_instruction_semantics.h \
+  src/target/backend_core_usage.c \
+  src/target/backend_core_usage.h; do
+  lacks "$source" 'minic_type_'
+  lacks "$source" 'minic_data_layout_type('
+done
+lacks src/target/common/direct_instruction_semantics.c 'MinicC0Program'
+lacks src/target/backend_core_usage.c 'MinicC0Program'
+has src/target/riscv64/core_admission.c 'require_prepared_abi'
+has src/target/riscv64/frame_layout.c 'if (abi_plan != NULL)'
+lacks src/target/riscv64/frame_layout.c 'if (program != NULL)'
+# ISA proof is minted AFTER GNU named-operand normalization, never by
+# the source ID or hash alone. The machine emitter revalidates the sealed
+# form and typed operands without reopening the mutable source Program.
+has src/core/core_lower_asm_target.c 'minic_backend_seal_normalized_inline_asm('
+has src/target/backend.c 'minic_loongarch64_seal_normalized_inline_asm'
+has src/target/loongarch64/simd_asm.c 'loong_simd_same_machine_effects(&original, &machine)'
+has src/target/loongarch64/simd_asm.c 'MINIC_LOONG_MACHINE_ASM_SIMD'
+lacks src/target/loongarch64/simd_asm.c 'ctx->program'
 has src/target/common/direct_residual_plan.c \
   'minic_multi_direct_integer_cast_plan('
 # Once attached, Common/Direct admission and AArch64 integer lowering only
@@ -1077,6 +1102,17 @@ cc -std=c11 -Wall -Wextra -Wpedantic -Werror -ffunction-sections \
   src/target/x86_64/asm_contract.c \
   -o "$work/x86-matched-asm-template-probe"
 "$work/x86-matched-asm-template-probe"
+
+# Source-qualified Loong SIMD must prove normalized machine effects before
+# a typed Core form is published: named/numeric positive and malicious
+# register/instruction mutations must remain fail-closed.
+cc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow \
+  -Wstrict-prototypes -Wmissing-prototypes -Werror \
+  -ffunction-sections -fdata-sections -Wl,--gc-sections \
+  -Iinclude -Isrc tests/compiler/c0/probe-loong-simd-normalized-seal.c \
+  src/target/loongarch64/simd_asm.c src/target/backend.c src/frontend/type.c \
+  -o "$work/loong-simd-seal"
+"$work/loong-simd-seal"
 
 
 # Unit test the borrow-or-own policy on the real linked Common implementation,

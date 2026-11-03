@@ -64,14 +64,6 @@ static bool x86_normalize_shape(FILE *out, size_t bytes, bool sign,
     return false;
 }
 
-bool x86_normalize(FILE *out, const MinicC0Program *program,
-                          const MinicTargetInfo *target, MinicType type) {
-    size_t bytes;
-    bool sign;
-    return minic_x86_64_scalar_width(program, target, type, &bytes, &sign) &&
-           x86_normalize_shape(out, bytes, sign, minic_type_is_bool_integer(type));
-}
-
 bool x86_core_normalize(FILE *out, const MinicCoreTypeContext *context,
                         MinicCoreTypeId id) {
     const MinicCoreType *type;

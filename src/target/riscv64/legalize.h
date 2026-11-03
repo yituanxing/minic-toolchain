@@ -43,13 +43,13 @@ bool minic_riscv64_core_integer_overflow_supported(
     const MinicCoreFunction *function, const MinicCoreInstruction *instruction,
     MinicCoreTypeId *result_type, size_t *result_size, bool *is_unsigned);
 
-bool minic_riscv64_core_direct_call_supported(const MinicC0Program *program,
+bool minic_riscv64_core_direct_call_supported(bool require_prepared_abi,
                                        const MinicCoreFunction *function,
                                        const MinicCoreInstruction *instruction,
                                        const MinicCoreCallView *semantic_view,
                                        const MinicRiscv64PreparedCall *prepared);
 
-bool minic_riscv64_core_indirect_call_supported(const MinicC0Program *program,
+bool minic_riscv64_core_indirect_call_supported(bool require_prepared_abi,
                                          const MinicCoreFunction *function,
                                          const MinicCoreInstruction *instruction,
                                          const MinicCoreCallView *semantic_view,

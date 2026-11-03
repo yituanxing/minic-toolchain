@@ -816,7 +816,7 @@ static bool rv32_func(FILE *out, const MinicC0Program *program,
      * before constructing the frame. Its placements are the sole ILP32
      * authority for call, prologue and return emission. */
     if (!rv32_frame_init_with_storage(
-            &fr, program, f, target, f->is_variadic, facts, storage)) {
+            &fr, f, target, f->is_variadic, facts, storage)) {
         if (getenv("MINIC_RV32_FRAME_TRACE") != NULL)
             (void)fprintf(stderr,
                 "RV32_FRAME_OWNER function=%s parameters=%zu values=%zu objects=%zu instructions=%zu\n",

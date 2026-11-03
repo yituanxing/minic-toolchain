@@ -46,7 +46,7 @@ typedef struct Rv32Frame {
 } Rv32Frame;
 
 /* Frame ownership: rv32_frame.c */
-bool rv32_frame_init_with_storage(Rv32Frame *, const MinicC0Program *,
+bool rv32_frame_init_with_storage(Rv32Frame *,
     const MinicCoreFunction *, const MinicTargetInfo *, bool,
     const MinicCoreFunctionFacts *, const MinicCoreObjectStoragePlan *);
 void rv32_frame_destroy(Rv32Frame *);

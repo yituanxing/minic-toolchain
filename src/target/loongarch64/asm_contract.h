@@ -8,6 +8,11 @@ bool minic_loongarch64_requires_qualified_input_asm(const MinicInlineAsm *);
 bool minic_loongarch64_qualify_inline_asm(
     const MinicC0Program *program, const MinicInlineAsm *src,
     MinicTargetInlineAsmContract *contract);
+/* Post-normalization Source -> Core machine-effect proof. All other
+ * previously typed scalar contracts remain unchanged. */
+bool minic_loongarch64_seal_normalized_inline_asm(
+    const MinicC0Program *, const MinicInlineAsm *,
+    const char *, size_t, MinicTargetInlineAsmContract *);
 bool minic_loongarch64_emit_qualified_structured_asm(
     FILE *out, const MinicDirectLP64BlockContext *ctx,
     const MinicCoreInstruction *ins);

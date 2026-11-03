@@ -80,7 +80,6 @@ static bool emit_incoming_stack_load64(FILE *file,
 }
 
 bool minic_riscv64_emit_incoming_parameter(FILE *file,
-                           const MinicC0Program *program,
                            const MinicCoreFunction *function,
                            const MinicRiscv64CoreFrame *frame,
                            const MinicCoreInstruction *instruction) {
@@ -106,7 +105,7 @@ bool minic_riscv64_emit_incoming_parameter(FILE *file,
              core.float_format == MINIC_CORE_FLOAT_BINARY64);
     is_double = is_fp && core.float_format == MINIC_CORE_FLOAT_BINARY64;
     is_wide = rv64_call_core_wide_scalar(function, instruction->core_type_id);
-    if (program != NULL) {
+    if (frame->has_named_parameter_cursor) {
         MinicRiscv64AbiArgumentLocation location;
 
         if (!minic_riscv64_core_frame_parameter_location(frame, parameter_index, &location)) {
@@ -210,7 +209,6 @@ bool minic_riscv64_emit_incoming_parameter(FILE *file,
 }
 
 bool minic_riscv64_emit_incoming_parameter_object(FILE *file,
-                                  const MinicC0Program *program,
                                   const MinicCoreFunction *function,
                                   const MinicRiscv64CoreFrame *frame,
                                   const MinicCoreInstruction *instruction) {
@@ -219,7 +217,8 @@ bool minic_riscv64_emit_incoming_parameter_object(FILE *file,
     size_t object_offset;
     size_t chunk_index;
 
-    if (file == NULL || program == NULL || function == NULL || frame == NULL ||
+    if (file == NULL || function == NULL || frame == NULL ||
+        !frame->has_named_parameter_cursor ||
         instruction == NULL || instruction->kind != MINIC_CORE_INSTRUCTION_PARAMETER_OBJECT) {
         return false;
     }
@@ -228,7 +227,7 @@ bool minic_riscv64_emit_incoming_parameter_object(FILE *file,
             frame, instruction->value.parameter_object.parameter_index, &location) ||
         object_id >= function->object_count ||
         instruction->value.parameter_object.parameter_index >= function->parameter_count ||
-        !minic_riscv64_core_frame_object_offset(program, function, frame, object_id, &object_offset)) {
+        !minic_riscv64_core_frame_object_offset(function, frame, object_id, &object_offset)) {
         return false;
     }
     if (function->type_context == NULL ||
@@ -353,12 +352,12 @@ bool minic_riscv64_emit_incoming_parameter_object(FILE *file,
  * 16-byte long-double splits, stack spills and partial record bytes.
  * Indirect-call unsupported shapes must remain fail-closed. */
 static bool emit_core_call_argument(
-    FILE *file, const MinicC0Program *program,
+    FILE *file,
     const MinicCoreFunction *function, const MinicRiscv64CoreFrame *frame,
     const MinicCoreCallArgument *argument, MinicCoreTypeId core_argument_type_id,
     const MinicRiscv64AbiArgumentLocation *location,
     bool is_fixed_parameter, bool direct_call) {
-    if (file == NULL || program == NULL || function == NULL ||
+    if (file == NULL || function == NULL ||
         function->type_context == NULL || frame == NULL ||
         argument == NULL || location == NULL)
         return false;
@@ -455,7 +454,7 @@ static bool emit_core_call_argument(
 
         if ((!direct_call && !is_fixed_parameter) ||
             !minic_riscv64_core_frame_object_offset(
-                program, function, frame, argument->value.object_id, &object_offset)) {
+                function, frame, argument->value.object_id, &object_offset)) {
             return false;
         }
         if (location->value.kind == MINIC_RISCV64_ABI_VALUE_IGNORE) {
@@ -543,14 +542,14 @@ static bool emit_core_call_argument(
 /* The scalar return move is bit-for-bit identical for either callee
  * kind; record and binary128 returns keep their distinct ABI checks. */
 static bool emit_core_call_scalar_result(
-    FILE *file, const MinicC0Program *program,
+    FILE *file,
     const MinicCoreFunction *function,
     const MinicRiscv64CoreFrame *frame,
     const MinicCoreInstruction *instruction,
     const MinicRiscv64AbiValue *return_value) {
     bool is_double = false;
     bool is_fp;
-    if (file == NULL || program == NULL || function == NULL ||
+    if (file == NULL || function == NULL ||
         function->type_context == NULL || frame == NULL ||
         instruction == NULL || return_value == NULL)
         return false;
@@ -608,12 +607,12 @@ static bool emit_core_call_wide_result(
  * register/stack location. Machine emission does no second argument
  * classification, and both direct/indirect forms use the same transport. */
 static bool emit_core_call_arguments(
-    FILE *file, const MinicC0Program *program,
+    FILE *file,
     const MinicCoreFunction *function, const MinicRiscv64CoreFrame *frame,
     const MinicCoreCallView *call, const MinicRiscv64PreparedCall *planned,
     bool direct_call) {
     size_t argument_index;
-    if (file == NULL || program == NULL || function == NULL ||
+    if (file == NULL || function == NULL ||
         function->type_context == NULL || frame == NULL ||
         call == NULL || planned == NULL ||
         call->argument_begin > function->call_argument_count ||
@@ -634,7 +633,7 @@ static bool emit_core_call_arguments(
             ? call->core_parameter_type_ids[argument_index]
             : actual_core_type_id;
         if (!emit_core_call_argument(
-                file, program, function, frame, argument, core_argument_type_id,
+                file, function, frame, argument, core_argument_type_id,
                 &planned->arguments[argument_index], fixed, direct_call))
             return false;
     }
@@ -669,7 +668,7 @@ static bool rv64_resolve_prepared_call(
  * calls consume the same psABI return classification and materialize exactly
  * the same GP-register chunks (or use hidden a0 for large records). */
 static bool rv64_emit_call_record_result(
-    FILE *file, const MinicC0Program *program,
+    FILE *file,
     const MinicCoreFunction *function, const MinicRiscv64CoreFrame *frame,
     MinicCoreObjectId object_id, const MinicRiscv64AbiValue *return_value) {
     size_t chunk_index;
@@ -682,7 +681,7 @@ static bool rv64_emit_call_record_result(
         return_value->slot_count == 0U || return_value->slot_count > 2U ||
         object_id >= function->object_count ||
         !minic_riscv64_core_frame_object_offset(
-            program, function, frame, object_id, &object_offset))
+            function, frame, object_id, &object_offset))
         return false;
     for (chunk_index = 0U; chunk_index < return_value->slot_count; ++chunk_index) {
         size_t chunk_offset = chunk_index * 8U;
@@ -702,20 +701,20 @@ static bool rv64_emit_call_record_result(
 }
 
 static bool rv64_emit_call_hidden_return_pointer(
-    FILE *file, const MinicC0Program *program,
+    FILE *file,
     const MinicCoreFunction *function, const MinicRiscv64CoreFrame *frame,
     MinicCoreObjectId object_id) {
     size_t result_offset;
     return object_id < function->object_count &&
            minic_riscv64_core_frame_object_offset(
-               program, function, frame, object_id, &result_offset) &&
+               function, frame, object_id, &result_offset) &&
            minic_riscv64_frame_emit_address(file, frame, "a0", result_offset);
 }
 
 /* Direct and indirect CALLs consume exactly the same classified Core return
  * shape; machine emission may not reinterpret a bound return via C types. */
 static bool rv64_emit_call_return_result(
-    FILE *file, const MinicC0Program *program,
+    FILE *file,
     const MinicCoreFunction *function, const MinicRiscv64CoreFrame *frame,
     const MinicCoreInstruction *instruction, MinicCoreObjectId result_object,
     const MinicRiscv64AbiValue *return_value) {
@@ -725,17 +724,16 @@ static bool rv64_emit_call_return_result(
     if (base->kind == MINIC_CORE_TYPE_VOID)
         return return_value->kind == MINIC_RISCV64_ABI_VALUE_VOID;
     if (base->kind == MINIC_CORE_TYPE_RECORD)
-        return rv64_emit_call_record_result(file, program, function, frame,
+        return rv64_emit_call_record_result(file, function, frame,
                                             result_object, return_value);
     if (rv64_call_core_wide_scalar(function, instruction->core_type_id))
         return emit_core_call_wide_result(file, function, frame,
                                           instruction, return_value);
-    return emit_core_call_scalar_result(file, program, function, frame,
+    return emit_core_call_scalar_result(file, function, frame,
                                         instruction, return_value);
 }
 
 bool minic_riscv64_emit_direct_call(FILE *file,
-                      const MinicC0Program *program,
                       const MinicCoreFunction *function,
                       const MinicRiscv64CoreFrame *frame,
                       const MinicCoreInstruction *instruction,
@@ -744,7 +742,8 @@ bool minic_riscv64_emit_direct_call(FILE *file,
     const MinicCoreCallee *callee;
     MinicRiscv64AbiValue return_value;
     const MinicRiscv64PreparedCall *planned;
-    if (file == NULL || program == NULL || function == NULL || frame == NULL ||
+    if (file == NULL || function == NULL || frame == NULL ||
+        !frame->has_named_parameter_cursor ||
         instruction == NULL || instruction->kind != MINIC_CORE_INSTRUCTION_CALL)
         return false;
     if (!rv64_resolve_prepared_call(frame, instruction_id, &call, &planned))
@@ -756,24 +755,23 @@ bool minic_riscv64_emit_direct_call(FILE *file,
     return_value = planned->return_value;
     if (return_value.kind == MINIC_RISCV64_ABI_VALUE_INDIRECT) {
         if (call->return_form != MINIC_CORE_CALL_RETURN_OBJECT ||
-            !rv64_emit_call_hidden_return_pointer(file, program, function, frame,
+            !rv64_emit_call_hidden_return_pointer(file, function, frame,
                                                    instruction->value.call.result_object)) {
             return false;
         }
     }
     if (!emit_core_call_arguments(
-            file, program, function, frame,
+            file, function, frame,
             call, planned, true))
         return false;
     if (fprintf(file, "  call %s\n", callee->name) < 0) {
         return false;
     }
-    return rv64_emit_call_return_result(file, program, function, frame,
+    return rv64_emit_call_return_result(file, function, frame,
         instruction, instruction->value.call.result_object, &return_value);
 }
 
 bool minic_riscv64_emit_indirect_call(FILE *file,
-                               const MinicC0Program *program,
                                const MinicCoreFunction *function,
                                const MinicRiscv64CoreFrame *frame,
                                const MinicCoreInstruction *instruction,
@@ -781,7 +779,8 @@ bool minic_riscv64_emit_indirect_call(FILE *file,
     const MinicCoreCallView *call;
     MinicRiscv64AbiValue return_value;
     const MinicRiscv64PreparedCall *planned;
-    if (file == NULL || program == NULL || function == NULL || frame == NULL ||
+    if (file == NULL || function == NULL || frame == NULL ||
+        !frame->has_named_parameter_cursor ||
         instruction == NULL || instruction->kind != MINIC_CORE_INSTRUCTION_INDIRECT_CALL)
         return false;
     if (!rv64_resolve_prepared_call(frame, instruction_id, &call, &planned))
@@ -792,18 +791,18 @@ bool minic_riscv64_emit_indirect_call(FILE *file,
     return_value = planned->return_value;
     if (return_value.kind == MINIC_RISCV64_ABI_VALUE_INDIRECT &&
         (call->return_form != MINIC_CORE_CALL_RETURN_OBJECT ||
-         !rv64_emit_call_hidden_return_pointer(file, program, function, frame,
+         !rv64_emit_call_hidden_return_pointer(file, function, frame,
              instruction->value.indirect_call.result_object)))
         return false;
     if (!emit_core_call_arguments(
-            file, program, function, frame,
+            file, function, frame,
             call, planned, false))
         return false;
     if (!minic_riscv64_frame_load_value(file, frame, instruction->value.indirect_call.callee, "t0") ||
         fprintf(file, "  jalr ra, t0, 0\n") < 0) {
         return false;
     }
-    return rv64_emit_call_return_result(file, program, function, frame,
+    return rv64_emit_call_return_result(file, function, frame,
         instruction, instruction->value.indirect_call.result_object, &return_value);
 }
 

@@ -1,5 +1,6 @@
 #include "target/loongarch64/simd_asm.h"
 #include "target/loongarch64/frame_emit.h"
+#include "target/common/lp64_scalar.h"
 
 #include <ctype.h>
 #include <stdint.h>
@@ -384,6 +385,12 @@ bool minic_loongarch64_simd_qualify_opaque(const MinicCoreInlineAsm *source) {
     return true;
 }
 
+bool minic_loongarch64_simd_structured_template_requires_typed_id(
+    const char *text, size_t length) {
+    LoongSimdProgram parsed;
+    return loong_simd_parse(text, length, &parsed) && parsed.operand_count != 0U;
+}
+
 bool minic_loongarch64_simd_emit_opaque(
     FILE *out, const MinicCoreInlineAsm *source) {
     LoongSimdProgram parsed;
@@ -418,55 +425,101 @@ static bool loong_simd_same_machine_effects(
     return true;
 }
 
+/* The generic Core lowering pass owns GNU named -> numeric substitution.
+ * Only after that pass has built the actual machine template can Target
+ * prove it is instruction-for-instruction equivalent to the qualified
+ * original source. The typed form is never minted from a source ID/hash.
+ * Non-SIMD families retain their existing independent admission contract. */
+bool minic_loongarch64_simd_seal_normalized(
+    const MinicC0Program *program, const MinicInlineAsm *source,
+    const char *normalized, size_t length,
+    MinicTargetInlineAsmContract *contract) {
+    LoongSimdProgram original, machine;
+    MinicTargetInlineAsmContract admitted = {0};
+    size_t i;
+    if (program == NULL || source == NULL || normalized == NULL ||
+        contract == NULL) return false;
+    if (!loong_simd_parse(source->template_text, source->template_length,
+                          &original))
+        return true; /* Another target-owned family, not SIMD. */
+    if (contract->target_machine_form_id != 0U ||
+        contract->target_machine_form_variant != 0U ||
+        !minic_loongarch64_simd_qualify_source(program, source, &admitted) ||
+        !minic_backend_capture_asm_operand_source(
+            source, MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED, &admitted) ||
+        !loong_simd_parse(normalized, length, &machine) ||
+        !loong_simd_same_machine_effects(&original, &machine) ||
+        admitted.operand_count != contract->operand_count ||
+        admitted.implicit_memory_effect != contract->implicit_memory_effect ||
+        admitted.effective_memory_effect != contract->effective_memory_effect)
+        return false;
+    for (i = 0U; i < admitted.operand_count; ++i)
+        if (admitted.kinds[i] != contract->kinds[i]) return false;
+    contract->target_machine_form_id = MINIC_LOONG_MACHINE_ASM_SIMD;
+    contract->target_machine_form_variant = machine.uses_lasx
+        ? MINIC_LOONG_MACHINE_SIMD_LASX : MINIC_LOONG_MACHINE_SIMD_LSX;
+    return true;
+}
+
+static bool loong_simd_core_pointer(const MinicCoreFunction *fn,
+                                     MinicCoreValueId value) {
+    const MinicCoreType *type;
+    if (fn == NULL || fn->type_context == NULL || fn->values == NULL ||
+        value >= fn->value_count) return false;
+    type = minic_core_type_get(fn->type_context,
+        minic_core_type_unqualified(fn->type_context,
+            fn->values[value].core_type_id));
+    return type != NULL && type->kind == MINIC_CORE_TYPE_POINTER &&
+           type->has_layout && type->size == 8U && type->alignment == 8U;
+}
+
 bool minic_loongarch64_simd_emit_structured(
     FILE *out, const MinicDirectLP64BlockContext *ctx,
     const MinicCoreInstruction *ins, const MinicCoreInlineAsm *source) {
     const MinicCoreFunction *fn;
     const MinicCoreStructuredInlineAsmOperand *operands;
-    const MinicInlineAsm *original;
-    MinicTargetInlineAsmContract contract = {0};
-    LoongSimdProgram parsed, source_parsed;
+    LoongSimdProgram parsed;
     size_t i;
     bool named, expected_memory_effect;
     if (!out || !ctx || !(fn = ctx->fn) || !ins || !source ||
+        fn->type_context == NULL ||
         ins->kind != MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM ||
         ins->result != MINIC_CORE_VALUE_INVALID ||
-        !minic_type_is_void(ins->type) || !source->is_volatile ||
+        !minic_lp64_core_kind(fn->type_context, ins->core_type_id,
+                             MINIC_CORE_TYPE_VOID) || !source->is_volatile ||
         source->is_goto || source->register_clobber_count ||
-        !ctx->program ||
-        source->source_inline_asm_id == SIZE_MAX ||
-        source->source_inline_asm_id >= ctx->program->inline_asm_count ||
+        source->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
+        source->target_machine_form_id != MINIC_LOONG_MACHINE_ASM_SIMD ||
+        (source->target_machine_form_variant != MINIC_LOONG_MACHINE_SIMD_LSX &&
+         source->target_machine_form_variant != MINIC_LOONG_MACHINE_SIMD_LASX) ||
         !loong_simd_parse(source->template_text, source->template_length,
                           &parsed) || parsed.operand_count == 0U ||
+        parsed.uses_lasx !=
+            (source->target_machine_form_variant == MINIC_LOONG_MACHINE_SIMD_LASX) ||
         parsed.operand_count != ins->value.structured_inline_asm.operand_count ||
         !(operands = ins->value.structured_inline_asm.operands))
         return false;
-    original = minic_c0_program_inline_asm(
-        ctx->program, source->source_inline_asm_id);
-    if (!original ||
-        !minic_loongarch64_simd_qualify_source(
-            ctx->program, original, &contract) ||
-        !loong_simd_parse(original->template_text,
-                          original->template_length, &source_parsed) ||
-        contract.operand_count != parsed.operand_count ||
-        !loong_simd_same_machine_effects(&source_parsed, &parsed))
-        return false;
-    named = strstr(original->template_text, "%[") != NULL;
-    expected_memory_effect =
-        original->has_memory_clobber || contract.implicit_memory_effect;
+    /* The post-normalization ingress comparison sealed exact opcode,
+     * register, placeholder and offset effects. Machine emission validates
+     * the immutable typed form and Core operand/effect witness again. */
+    named = source->explicit_memory_clobber;
+    expected_memory_effect = named;
     for (i = 0U; i < parsed.operand_count; ++i) {
-        if (contract.kinds[i] != operands[i].kind) return false;
-        if (contract.kinds[i] ==
+        if (operands[i].kind ==
             MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE)
             expected_memory_effect = true;
     }
-    if (source->has_memory_clobber != expected_memory_effect)
+    if (source->implicit_memory_effect != expected_memory_effect ||
+        source->has_memory_clobber != expected_memory_effect)
         return false;
     /* Core marks read/write +m as an implicit memory effect, even though
      * the original GNU source had no literal "memory" clobber. Named r
      * pointer forms carry that explicit source clobber. */
     if (named && !source->has_memory_clobber) return false;
-    if (named && (parsed.operand_count < 2U || parsed.operand_count > 5U))
+    if (named && (source->source_output_count != 0U ||
+                  parsed.operand_count < 2U || parsed.operand_count > 5U))
+        return false;
+    if (!named && source->source_output_count > parsed.operand_count)
         return false;
     for (i = 0U; i < parsed.operand_count; ++i) {
         const MinicCoreStructuredInlineAsmOperand *operand = &operands[i];
@@ -475,18 +528,17 @@ bool minic_loongarch64_simd_emit_structured(
         const MinicCoreStructuredInlineAsmOperandKind kind = operand->kind;
         if (operand->operand_index != i || operand->early_clobber ||
             operand->has_fixed_register_binding ||
-            operand->value >= fn->value_count ||
-            !minic_type_is_pointer(fn->values[operand->value].type) ||
-            (!read && !written) || contract.kinds[i] != kind) return false;
+            !loong_simd_core_pointer(fn, operand->value) ||
+            (!read && !written)) return false;
         if (named) {
             if (kind != MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT)
                 return false;
         } else if (kind == MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT) {
-            if (!read || written) return false;
+            if (i < source->source_output_count || !read || written) return false;
         } else if (kind == MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT) {
-            if (read || !written) return false;
+            if (i >= source->source_output_count || read || !written) return false;
         } else if (kind == MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE) {
-            if (!read || !written) return false;
+            if (i >= source->source_output_count || !read || !written) return false;
         } else return false;
     }
     /* All instructions are validated first; a new opcode cannot leak into

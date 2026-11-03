@@ -8,12 +8,10 @@
  * Machine addressing, byte transfers, registers, and call/return ABI
  * stay independently owned by each target emitter. */
 bool minic_multi_direct_record_copy_extent(
-    const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
     size_t *bytes);
 
 bool minic_multi_direct_record_load_extent(
-    const MinicC0Program *, const MinicTargetInfo *,
     const MinicCoreFunction *, const MinicCoreInstruction *,
     const MinicLP64FramePlan *, MinicCoreValueId *source,
     size_t *destination_offset, size_t *bytes);
@@ -44,12 +42,12 @@ bool minic_multi_direct_call_frame_return_level0_shape(
  * machine is still responsible for choosing register bytes and forbidding
  * unsupported physical-register aliases. */
 bool minic_multi_direct_fixed_register_write_shape(
-    const MinicC0Program *, const MinicTargetInfo *,
+    const MinicTargetInfo *,
     const MinicCoreFunction *, const MinicCoreInstruction *,
     const MinicCoreFixedRegisterBinding **);
 
 bool minic_multi_direct_fixed_register_read_shape(
-    const MinicC0Program *, const MinicTargetInfo *,
+    const MinicTargetInfo *,
     const MinicCoreFunction *, const MinicCoreInstruction *,
     const MinicCoreFixedRegisterBinding **binding);
 

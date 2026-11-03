@@ -67,6 +67,7 @@ static const MinicBackend loongarch64_backend = {
     .emit_module_program = minic_loongarch64_write_c0_program_with_core_module,
     .emit_reachable_core_blocks_only = true,
     .qualify_inline_asm = minic_loongarch64_qualify_inline_asm,
+    .seal_normalized_inline_asm = minic_loongarch64_seal_normalized_inline_asm,
     .requires_qualified_input_asm = minic_loongarch64_requires_qualified_input_asm,
     .qualify_inline_asm_goto = minic_loongarch64_qualify_inline_asm_goto,
 };
@@ -239,6 +240,28 @@ bool minic_backend_qualify_inline_asm(
     return backend->qualify_inline_asm(program, source, contract) &&
            minic_backend_capture_asm_operand_source(
                source, MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED, contract);
+}
+
+bool minic_backend_seal_normalized_inline_asm(
+    const MinicBackend *backend, const MinicC0Program *program,
+    const MinicInlineAsm *source, const char *normalized, size_t length,
+    MinicTargetInlineAsmContract *contract) {
+    MinicTargetInlineAsmContract before, after;
+    if (!backend || !program || !source || !normalized || !contract ||
+        contract->owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED)
+        return false;
+    if (!backend->seal_normalized_inline_asm) return true;
+    before = *contract;
+    if (!backend->seal_normalized_inline_asm(
+            program, source, normalized, length, contract))
+        return false;
+    /* A machine seal is not a second GNU constraint qualifier. Replacing
+     * the already-approved operand/effect facts here would bypass the
+     * source-side restrictions or change observable memory semantics. */
+    after = *contract;
+    after.target_machine_form_id = before.target_machine_form_id;
+    after.target_machine_form_variant = before.target_machine_form_variant;
+    return memcmp(&before, &after, sizeof(before)) == 0;
 }
 
 /* Shared lexical guard; one ISA may reserve source prefix families without

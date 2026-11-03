@@ -131,14 +131,14 @@ bool minic_loongarch64_emit_lp64_record_chunk_parameter(FILE *out, size_t offset
     return true;
 }
 
-bool minic_loongarch64_emit_record_copy(FILE *out, const MinicC0Program *program,
-    const MinicTargetInfo *target, const MinicCoreFunction *fn,
+bool minic_loongarch64_emit_record_copy(FILE *out,
+    const MinicCoreFunction *fn,
     const MinicCoreInstruction *ins, const MinicLP64FramePlan *frame_plan,
     bool dynamic_frame) {
 const MinicCoreValueId dst = ins->value.record_copy.destination_address;
             const MinicCoreValueId src = ins->value.record_copy.source_address;
             size_t bytes;
-            if (!minic_multi_direct_record_copy_extent(program, target, fn, ins, &bytes))
+            if (!minic_multi_direct_record_copy_extent(fn, ins, &bytes))
                 return false;
             if (!emit_sp_mem(out, "ld.d", "$t1", minic_lp64_frame_value_offset(frame_plan, dst)) ||
                 !emit_sp_mem(out, "ld.d", "$t2", minic_lp64_frame_value_offset(frame_plan, src)))
@@ -156,7 +156,7 @@ static bool minic_loongarch64_emit_record_load(FILE *out,
     MinicCoreValueId source;
     size_t dest, bytes;
     if (!minic_multi_direct_record_load_extent(
-            ctx->program, ctx->target, ctx->fn, ins, ctx->frame_plan,
+            ctx->fn, ins, ctx->frame_plan,
             &source, &dest, &bytes) ||
         !minic_loongarch64_emit_frame_mem(out, "ld.d", "$t2",
             minic_lp64_frame_value_offset(frame_plan, source), ctx->dynamic_frame) ||
@@ -446,7 +446,7 @@ static bool loongarch64_machine_emit_family(
         return minic_loongarch64_emit_record_load(out, ctx, ins);
     case MINIC_DIRECT_MACHINE_RECORD_COPY:
         return minic_loongarch64_emit_record_copy(
-            out, program, target, fn, ins, ctx->frame_plan,
+            out, fn, ins, ctx->frame_plan,
             ctx->dynamic_frame);
     case MINIC_DIRECT_MACHINE_PARAMETER_OBJECT:
         return minic_loongarch64_emit_parameter_object(

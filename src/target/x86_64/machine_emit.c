@@ -6,9 +6,9 @@
 #include "target/common/core_scalar_conversion.h"
 #include "target/common/direct_residual_plan.h"
 #include "target/common/direct_instruction_semantics.h"
+#include "target/common/lp64_scalar.h"
 #include "target/x86_64/abi.h"
 #include "target/x86_64/asm_contract.h"
-#include "target/data_layout.h"
 #include <inttypes.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -23,45 +23,63 @@ static const MinicCoreType *x86_emit_core_type(const MinicCoreFunction *fn,
         : NULL;
 }
 
+/* Execution shape has one owner after Core ingress. The remaining Program
+ * argument to the outer emitter is solely for source-qualified Linux asm
+ * and ELF symbol preemption, never C value layout or signedness. */
 static bool x86_emit_core_kind(const MinicCoreFunction *fn,
-                               MinicCoreTypeId id, MinicType legacy,
-                               MinicCoreTypeKind kind) {
-    const MinicCoreType *type;
-    if (fn->type_context != NULL) {
-        type = x86_emit_core_type(fn, id);
-        return type != NULL && type->kind == kind;
-    }
-    switch (kind) {
-    case MINIC_CORE_TYPE_RECORD: return minic_type_is_record(legacy);
-    case MINIC_CORE_TYPE_INTEGER: return minic_type_is_integer(legacy);
-    default: return false;
-    }
+                               MinicCoreTypeId id, MinicCoreTypeKind kind) {
+    const MinicCoreType *type = x86_emit_core_type(fn, id);
+    return type != NULL && type->kind == kind;
 }
 
 static bool x86_emit_core_float(const MinicCoreFunction *fn,
-                                MinicCoreTypeId id, MinicType legacy,
+                                MinicCoreTypeId id,
                                 MinicCoreFloatFormat format) {
-    const MinicCoreType *type;
-    if (fn->type_context != NULL) {
-        type = x86_emit_core_type(fn, id);
-        return type != NULL && type->kind == MINIC_CORE_TYPE_FLOAT &&
-               type->value.floating.format == format;
-    }
-    return format == MINIC_CORE_FLOAT_BINARY32 ? minic_type_is_float(legacy)
-         : format == MINIC_CORE_FLOAT_BINARY64 ? minic_type_is_double(legacy)
-         : format == MINIC_CORE_FLOAT_EXTENDED ? minic_type_is_long_double(legacy)
-         : false;
+    const MinicCoreType *type = x86_emit_core_type(fn, id);
+    return type != NULL && type->kind == MINIC_CORE_TYPE_FLOAT &&
+           type->has_layout && type->value.floating.format == format;
 }
 
 static bool x86_emit_core_int128(const MinicCoreFunction *fn,
-                                 MinicCoreTypeId id, MinicType legacy) {
+                                 MinicCoreTypeId id) {
+    const MinicCoreType *type = x86_emit_core_type(fn, id);
+    return type != NULL && type->kind == MINIC_CORE_TYPE_INTEGER &&
+           type->has_layout && type->size == 16U &&
+           type->value.integer.bit_width == 128U;
+}
+
+static bool x86_emit_core_signed(const MinicCoreFunction *fn,
+                                 MinicCoreTypeId id, bool *is_signed) {
+    const MinicCoreType *type = x86_emit_core_type(fn, id);
+    if (type == NULL || type->kind != MINIC_CORE_TYPE_INTEGER ||
+        !type->has_layout || is_signed == NULL) return false;
+    *is_signed = type->value.integer.is_signed;
+    return true;
+}
+
+static bool x86_emit_core_pointee(const MinicCoreFunction *fn,
+                                  MinicCoreTypeId pointer,
+                                  MinicCoreTypeId *pointee) {
+    const MinicCoreType *type = x86_emit_core_type(fn, pointer);
+    return fn != NULL && fn->type_context != NULL &&
+           minic_lp64_core_pointer_pointee(fn->type_context, pointer, pointee) &&
+           type != NULL && type->has_layout && type->size == 8U;
+}
+
+static bool x86_emit_core_atomic_scalar(const MinicCoreFunction *fn,
+                                        MinicCoreValueId address,
+                                        size_t *width, bool *sign) {
+    MinicCoreTypeId pointee;
     const MinicCoreType *type;
-    if (fn->type_context != NULL) {
-        type = x86_emit_core_type(fn, id);
-        return type != NULL && type->kind == MINIC_CORE_TYPE_INTEGER &&
-               type->value.integer.bit_width == 128U;
-    }
-    return minic_type_is_int128_integer(legacy);
+    return fn != NULL && fn->values != NULL &&
+           address < fn->value_count &&
+           x86_emit_core_pointee(fn, fn->values[address].core_type_id,
+                                 &pointee) &&
+           (type = x86_emit_core_type(fn, pointee)) != NULL &&
+           (type->kind == MINIC_CORE_TYPE_INTEGER ||
+            type->kind == MINIC_CORE_TYPE_POINTER) &&
+           minic_x86_64_core_storage_width(fn->type_context, pointee,
+                                           width, sign);
 }
 
 /* In early head code a direct-global SSA pointer normally stays physical,
@@ -262,30 +280,33 @@ static bool emit_linux_cpu_has_asm_goto(
  * fast path cannot handle these; evaluate the complete 128-bit signed value
  * with real x86 GP arithmetic instead of narrowing inputs prematurely. */
 static bool x86_emit_mixed_integer_overflow(
-    FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
-    const MinicCoreFunction *fn, const MinicX86Frame *frame,
+    FILE *out, const MinicCoreFunction *fn, const MinicX86Frame *frame,
     const MinicCoreInstruction *ins) {
     const MinicCoreValueId lhs = ins->value.integer_overflow.left;
     const MinicCoreValueId rhs = ins->value.integer_overflow.right;
     const MinicCoreValueId address = ins->value.integer_overflow.result_address;
-    MinicType result_type;
+    MinicCoreTypeId result_type;
+    const MinicCoreType *result_qualified, *result;
     size_t lhs_width, rhs_width, result_width;
     bool lhs_signed, rhs_signed, result_signed;
     const char *lhs_extension, *rhs_extension, *result_extension, *store;
-    if (!out || !program || !target || !fn || !frame ||
+    if (!out || !fn || !fn->type_context || !frame || !fn->values ||
         ins->result >= fn->value_count || lhs >= fn->value_count ||
         rhs >= fn->value_count || address >= fn->value_count ||
-        !minic_type_pointee(fn->values[address].type, &result_type) ||
-        !minic_type_is_integer(result_type) ||
-        minic_type_is_bool_integer(result_type) ||
-        minic_type_is_const(result_type) ||
-        minic_type_is_volatile(result_type) ||
-        !minic_x86_64_scalar_width(program, target, fn->values[lhs].type,
-                                    &lhs_width, &lhs_signed) ||
-        !minic_x86_64_scalar_width(program, target, fn->values[rhs].type,
-                                    &rhs_width, &rhs_signed) ||
-        !minic_x86_64_scalar_width(program, target, result_type,
-                                    &result_width, &result_signed))
+        !x86_emit_core_pointee(fn, fn->values[address].core_type_id, &result_type) ||
+        (result_qualified = minic_core_type_get(fn->type_context, result_type)) == NULL ||
+        result_qualified->is_read_only || result_qualified->is_volatile ||
+        (result = x86_emit_core_type(fn, result_type)) == NULL ||
+        result->kind != MINIC_CORE_TYPE_INTEGER ||
+        result->value.integer.is_bool ||
+        !minic_x86_64_core_scalar_width(fn->type_context,
+                                        fn->values[lhs].core_type_id,
+                                        &lhs_width, &lhs_signed) ||
+        !minic_x86_64_core_scalar_width(fn->type_context,
+                                        fn->values[rhs].core_type_id,
+                                        &rhs_width, &rhs_signed) ||
+        !minic_x86_64_core_scalar_width(fn->type_context, result_type,
+                                        &result_width, &result_signed))
         return false;
     switch (ins->value.integer_overflow.operator_kind) {
     case MINIC_CORE_INTEGER_OVERFLOW_ADD:
@@ -363,7 +384,8 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
     MinicCoreValueId left, right;
     size_t bytes;
     bool sign;
-    if (ins == NULL) return false;
+    if (ins == NULL || fn == NULL || fn->type_context == NULL ||
+        frame == NULL || target == NULL) return false;
     /* Machine-independent family categorization, native emission per ISA. */
     if (minic_core_instruction_semantic_family(ins->kind) ==
         MINIC_CORE_FAMILY_FLOATING_SCALAR)
@@ -551,12 +573,10 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
         return x86_value_store(out, frame, ins->result);
     }
     case MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT:
-        if (x86_emit_core_int128(fn, ins->core_type_id, ins->type)) {
-            const MinicCoreType *resolved = x86_emit_core_type(fn,
-                                                                 ins->core_type_id);
-            const bool signed_value = fn->type_context != NULL
-                ? (resolved != NULL && resolved->value.integer.is_signed)
-                : minic_type_is_signed_integer(ins->type);
+        if (x86_emit_core_int128(fn, ins->core_type_id)) {
+            bool signed_value;
+            if (!x86_emit_core_signed(fn, ins->core_type_id, &signed_value))
+                return false;
             if (fprintf(out, "  movabsq $%" PRId64 ", %%rax\n",
                         ins->value.integer_value) < 0 ||
                 fprintf(out, signed_value
@@ -565,16 +585,11 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
                 return false;
             return x86_i128_store(out, frame, ins->result, "%rax", "%rdx");
         }
-        if (!(fn->type_context != NULL
-                  ? minic_x86_64_core_scalar_width(
-                      fn->type_context, ins->core_type_id, &bytes, &sign)
-                  : minic_x86_64_scalar_width(
-                      program, target, ins->type, &bytes, &sign)) ||
+        if (!minic_x86_64_core_scalar_width(
+                fn->type_context, ins->core_type_id, &bytes, &sign) ||
             fprintf(out, "  movabsq $%" PRId64 ", %%rax\n", ins->value.integer_value) < 0)
             return false;
-        return (fn->type_context != NULL
-                   ? x86_core_normalize(out, fn->type_context, ins->core_type_id)
-                   : x86_normalize(out, program, target, ins->type)) &&
+        return x86_core_normalize(out, fn->type_context, ins->core_type_id) &&
                x86_value_store(out, frame, ins->result);
     case MINIC_CORE_INSTRUCTION_PARAMETER: {
         const MinicX86AbiRegisters *abi = minic_x86_64_abi_registers(
@@ -587,7 +602,7 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
             frame->incoming_arguments.locations == NULL)
             return false;
         location = &frame->incoming_arguments.locations[position];
-        if (x86_emit_core_int128(fn, ins->core_type_id, ins->type)) {
+        if (x86_emit_core_int128(fn, ins->core_type_id)) {
             if (ms_x64 || location->kind != MINIC_X86_ARG_I128_TWO_GP)
                 return false;
             if (!location->on_stack) {
@@ -614,7 +629,7 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
                 return false;
             return x86_i128_store(out, frame, ins->result, "%r10", "%r11");
         }
-        if (x86_emit_core_float(fn, ins->core_type_id, ins->type,
+        if (x86_emit_core_float(fn, ins->core_type_id,
                                 MINIC_CORE_FLOAT_EXTENDED)) {
             if (ms_x64 || location->kind != MINIC_X86_ARG_X87_MEMORY ||
                 fprintf(out, "  fldt %zu(%%rbp)\n",
@@ -622,15 +637,15 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
                 return false;
             return x86_x87_store(out, frame, ins->result);
         }
-        if (x86_emit_core_float(fn, ins->core_type_id, ins->type,
+        if (x86_emit_core_float(fn, ins->core_type_id,
                                 MINIC_CORE_FLOAT_BINARY64) ||
-            x86_emit_core_float(fn, ins->core_type_id, ins->type,
+            x86_emit_core_float(fn, ins->core_type_id,
                                 MINIC_CORE_FLOAT_BINARY32)) {
             if (location->kind != MINIC_X86_ARG_SSE) return false;
             if (!location->on_stack) {
                 if (location->fp_index >= abi->fp_argument_count ||
                     fprintf(out, x86_emit_core_float(
-                                     fn, ins->core_type_id, ins->type,
+                                     fn, ins->core_type_id,
                                      MINIC_CORE_FLOAT_BINARY64)
                              ? "  movq %%xmm%zu, %%rax\n"
                              : "  movd %%xmm%zu, %%eax\n",
@@ -653,9 +668,7 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
             } else if (fprintf(out, "  movq %zu(%%rbp), %%rax\n",
                                16U + location->stack_index * 8U) < 0)
                 return false;
-            if (fn->type_context != NULL
-                    ? !x86_core_normalize(out, fn->type_context, ins->core_type_id)
-                    : !x86_normalize(out, program, target, ins->type))
+            if (!x86_core_normalize(out, fn->type_context, ins->core_type_id))
                 return false;
         }
         return x86_value_store(out, frame, ins->result);
@@ -666,7 +679,7 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
          * x86 owns only its ABI-specific live RSP move and frame store.
          * Unknown fixed registers remain rejected in TargetInfo. */
         if (!minic_multi_direct_fixed_register_read_shape(
-                program, target, fn, ins, &binding) ||
+                target, fn, ins, &binding) ||
             binding->register_name_length != 3U ||
             memcmp(binding->register_name, "rsp", 3U) != 0)
             return false;
@@ -679,16 +692,13 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
         const size_t position = ins->value.parameter_object.parameter_index;
         const MinicCoreObjectId object = ins->value.parameter_object.object_id;
         const MinicX86ArgLocation *location;
-        const bool type_compatible = position < fn->parameter_count &&
+        const bool type_compatible = fn->type_context != NULL &&
+            position < fn->parameter_count &&
             object < fn->object_count &&
-            (fn->type_context != NULL
-                ? (fn->core_parameter_type_ids != NULL &&
-                   minic_x86_64_core_record_abi_compatible(
-                       fn->type_context,
-                       fn->objects[object].core_type_id,
-                       fn->core_parameter_type_ids[position]))
-                : minic_x86_64_record_abi_compatible(
-                    fn->objects[object].type, fn->parameter_types[position]));
+            fn->core_parameter_type_ids != NULL &&
+            minic_x86_64_core_record_abi_compatible(
+                fn->type_context, fn->objects[object].core_type_id,
+                fn->core_parameter_type_ids[position]);
         if (abi == NULL || frame->incoming_arguments.calling_convention !=
                 MINIC_CALLING_CONVENTION_DEFAULT ||
             position >= frame->incoming_arguments.argument_count ||
@@ -820,14 +830,17 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
          * GP entries consume 8 bytes (0..48), SSE entries 16 bytes
          * (48..176), and overflow arguments consume eight stack bytes.
          * Only scalar integer, pointer and double are supported here. */
-        bool is_fp = minic_type_is_double(ins->type);
+        const bool is_fp = x86_emit_core_float(fn, ins->core_type_id,
+                                               MINIC_CORE_FLOAT_BINARY64);
         size_t ignored_width;
         bool ignored_signed;
+        MinicCoreTypeId cursor_pointee;
         if (ins->result >= fn->value_count ||
             ins->value.operand >= fn->value_count ||
-            !minic_type_is_pointer(fn->values[ins->value.operand].type) ||
-            (!is_fp && !minic_x86_64_scalar_width(program, target, ins->type,
-                                         &ignored_width, &ignored_signed)))
+            !x86_emit_core_pointee(fn,
+                fn->values[ins->value.operand].core_type_id, &cursor_pointee) ||
+            (!is_fp && !minic_x86_64_core_scalar_width(fn->type_context,
+                ins->core_type_id, &ignored_width, &ignored_signed)))
             return false;
         if (!x86_value_load(out, frame, ins->value.operand, "%r10"))
             return false;
@@ -851,7 +864,8 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
                     function_id, (unsigned)ins->result,
                     function_id, (unsigned)ins->result) < 0)
             return false;
-        if (!is_fp && !x86_normalize(out, program, target, ins->type))
+        if (!is_fp && !x86_core_normalize(out, fn->type_context,
+                                         ins->core_type_id))
             return false;
         return x86_value_store(out, frame, ins->result);
     }
@@ -876,7 +890,8 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
         size_t i;
         size_t tag_offset = 0U;
         if (frame->varargs_count == 0U || ins->result >= fn->value_count ||
-            !minic_type_is_pointer(ins->type)) return false;
+            !x86_emit_core_kind(fn, ins->core_type_id,
+                                MINIC_CORE_TYPE_POINTER)) return false;
         for (i = 0U; i < frame->varargs_count; ++i) {
             if (frame->varargs_results[i] == ins->result) {
                 tag_offset = frame->varargs_tag_base_offset + (i + 1U) * 24U;
@@ -919,26 +934,31 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
          * register result. Materialize an independent owned Core object
          * using exact byte-wise reads, including volatile source bytes.
          * This mirrors the common DirectLP64 record-load contract. */
-        MinicType source_pointee, source_plain, target_plain, object_plain;
-        size_t extent, alignment, offset;
+        MinicCoreTypeId source_pointee;
+        const MinicCoreType *record, *source_type;
+        size_t extent, offset;
         const MinicCoreObjectId dest =
             ins->value.record_load.destination_object;
         const MinicCoreValueId source =
             ins->value.record_load.source_address;
         if (ins->result != MINIC_CORE_VALUE_INVALID ||
-            !minic_type_is_record(ins->type) ||
+            !x86_emit_core_kind(fn, ins->core_type_id,
+                                MINIC_CORE_TYPE_RECORD) ||
             dest >= frame->object_count || dest >= fn->object_count ||
             source >= fn->value_count ||
-            !minic_type_pointee(fn->values[source].type, &source_pointee) ||
-            !minic_type_unqualified(source_pointee, &source_plain) ||
-            !minic_type_unqualified(ins->type, &target_plain) ||
-            !minic_type_unqualified(fn->objects[dest].type, &object_plain) ||
-            !minic_type_equal(source_plain, target_plain) ||
-            !minic_type_equal(object_plain, target_plain) ||
-            !minic_data_layout_type(target->data_layout, program,
-                                    target_plain, &extent, &alignment) ||
-            !alignment ||
-            extent > frame->object_storage.objects[dest].extent ||
+            !x86_emit_core_pointee(fn, fn->values[source].core_type_id,
+                                   &source_pointee) ||
+            !minic_lp64_core_equal_unqualified(fn->type_context,
+                 source_pointee, ins->core_type_id) ||
+            !minic_lp64_core_equal_unqualified(fn->type_context,
+                 fn->objects[dest].core_type_id, ins->core_type_id) ||
+            (record = x86_emit_core_type(fn, ins->core_type_id)) == NULL ||
+            !record->has_layout || record->alignment == 0U ||
+            (source_type = minic_core_type_get(fn->type_context,
+                                              source_pointee)) == NULL ||
+            ins->value.record_load.is_volatile != source_type->is_volatile ||
+            frame->object_storage.objects == NULL ||
+            (extent = record->size) > frame->object_storage.objects[dest].extent ||
             !x86_value_load(out, frame, source, "%r11"))
             return false;
         if (frame->objects_from_aligned_rsp) {
@@ -957,26 +977,30 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
     case MINIC_CORE_INSTRUCTION_RECORD_COPY: {
         /* Byte-preserving copy between already-evaluated addresses.
          * Do not assume field layout or alignment; match RV64 semantics. */
-        MinicType dst_pointee, src_pointee, dst_unqualified, src_unqualified;
-        size_t record_size, record_alignment, copied;
+        MinicCoreTypeId dst_pointee, src_pointee;
+        const MinicCoreType *record;
+        size_t record_size, copied;
         if (ins->result != MINIC_CORE_VALUE_INVALID ||
-            !minic_type_is_record(ins->type) ||
+            !x86_emit_core_kind(fn, ins->core_type_id,
+                                MINIC_CORE_TYPE_RECORD) ||
             ins->value.record_copy.destination_address >= fn->value_count ||
             ins->value.record_copy.source_address >= fn->value_count ||
-            !minic_type_pointee(fn->values[ins->value.record_copy.destination_address].type,
-                                &dst_pointee) ||
-            !minic_type_pointee(fn->values[ins->value.record_copy.source_address].type,
-                                &src_pointee) ||
-            !minic_type_unqualified(dst_pointee, &dst_unqualified) ||
-            !minic_type_unqualified(src_pointee, &src_unqualified) ||
-            !minic_type_equal(dst_unqualified, ins->type) ||
-            !minic_type_equal(src_unqualified, ins->type) ||
-            !minic_data_layout_type(target->data_layout, program, ins->type,
-                                    &record_size, &record_alignment) ||
-            record_alignment == 0U ||
+            !x86_emit_core_pointee(fn,
+                fn->values[ins->value.record_copy.destination_address].core_type_id,
+                &dst_pointee) ||
+            !x86_emit_core_pointee(fn,
+                fn->values[ins->value.record_copy.source_address].core_type_id,
+                &src_pointee) ||
+            !minic_lp64_core_equal_unqualified(fn->type_context,
+                dst_pointee, ins->core_type_id) ||
+            !minic_lp64_core_equal_unqualified(fn->type_context,
+                src_pointee, ins->core_type_id) ||
+            (record = x86_emit_core_type(fn, ins->core_type_id)) == NULL ||
+            !record->has_layout || record->alignment == 0U ||
             !x86_value_load(out, frame, ins->value.record_copy.destination_address, "%r10") ||
             !x86_value_load(out, frame, ins->value.record_copy.source_address, "%r11"))
             return false;
+        record_size = record->size;
         /* GNU zero-size records have no bytes to copy. */
         copied = 0U;
         while (copied < record_size) {
@@ -999,30 +1023,33 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
         return true;
     }
     case MINIC_CORE_INSTRUCTION_GNU_FIXED_VECTOR_STORAGE_COPY: {
-        MinicType dst_pointee, src_pointee, dst_type, src_type;
-        size_t vector_bytes, vector_alignment;
+        MinicCoreTypeId dst_pointee, src_pointee;
+        const MinicCoreType *vector, *dst_type, *src_type;
         const MinicCoreValueId dst =
             ins->value.gnu_fixed_vector_storage_copy.destination_address;
         const MinicCoreValueId src =
             ins->value.gnu_fixed_vector_storage_copy.source_address;
         if (ins->result != MINIC_CORE_VALUE_INVALID ||
-            !minic_type_is_gnu_fixed_vector(ins->type) ||
-            ins->type.gnu_vector_bytes != 16U ||
+            (vector = x86_emit_core_type(fn, ins->core_type_id)) == NULL ||
+            vector->kind != MINIC_CORE_TYPE_VECTOR ||
+            vector->value.vector.is_builtin ||
+            !vector->has_layout || vector->size != 16U ||
+            vector->alignment != 16U ||
             !minic_target_info_language_type_supported(
                 target, MINIC_TYPE_BASE_GNU_FIXED_VECTOR) ||
             dst >= fn->value_count || src >= fn->value_count ||
-            !minic_type_pointee(fn->values[dst].type, &dst_pointee) ||
-            !minic_type_pointee(fn->values[src].type, &src_pointee) ||
-            minic_type_is_const(dst_pointee) ||
-            minic_type_is_volatile(dst_pointee) ||
-            minic_type_is_volatile(src_pointee) ||
-            !minic_type_unqualified(dst_pointee, &dst_type) ||
-            !minic_type_unqualified(src_pointee, &src_type) ||
-            !minic_type_equal(dst_type, ins->type) ||
-            !minic_type_equal(src_type, ins->type) ||
-            !minic_data_layout_type(target->data_layout, program, ins->type,
-                                    &vector_bytes, &vector_alignment) ||
-            vector_bytes != 16U || vector_alignment != 16U ||
+            !x86_emit_core_pointee(fn, fn->values[dst].core_type_id,
+                                   &dst_pointee) ||
+            !x86_emit_core_pointee(fn, fn->values[src].core_type_id,
+                                   &src_pointee) ||
+            (dst_type = minic_core_type_get(fn->type_context, dst_pointee)) == NULL ||
+            (src_type = minic_core_type_get(fn->type_context, src_pointee)) == NULL ||
+            dst_type->is_read_only || dst_type->is_volatile ||
+            src_type->is_volatile ||
+            !minic_lp64_core_equal_unqualified(fn->type_context,
+                dst_pointee, ins->core_type_id) ||
+            !minic_lp64_core_equal_unqualified(fn->type_context,
+                src_pointee, ins->core_type_id) ||
             !x86_value_load(out, frame, dst, "%r10") ||
             !x86_value_load(out, frame, src, "%r11"))
             return false;
@@ -1096,16 +1123,18 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
                x86_value_store(out, frame, ins->result);
     }
     case MINIC_CORE_INSTRUCTION_LOAD:
-        if (minic_type_is_long_double(ins->type))
+        if (x86_emit_core_float(fn, ins->core_type_id,
+                                MINIC_CORE_FLOAT_EXTENDED))
             return x86_head_load_memory_address(out, fn, frame, ins->value.load.address) &&
                    fprintf(out, "  fldt (%%r10)\n") >= 0 &&
                    x86_x87_store(out, frame, ins->result);
-        if (minic_type_is_int128_integer(ins->type))
+        if (x86_emit_core_int128(fn, ins->core_type_id))
             return x86_head_load_memory_address(out, fn, frame, ins->value.load.address) &&
                    fprintf(out, "  movq (%%r10), %%rax\n"
                                 "  movq 8(%%r10), %%rdx\n") >= 0 &&
                    x86_i128_store(out, frame, ins->result, "%rax", "%rdx");
-        if (!minic_x86_64_storage_width(program, target, ins->type, &bytes, &sign)) return false;
+        if (!minic_x86_64_core_storage_width(
+                fn->type_context, ins->core_type_id, &bytes, &sign)) return false;
         if (frame->direct_object_address_consumer &&
             frame->direct_object_address_value_id == ins->value.load.address) {
             char memory[64];
@@ -1120,12 +1149,8 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
                x86_value_store(out, frame, ins->result);
     case MINIC_CORE_INSTRUCTION_ATOMIC_LOAD: {
         const MinicCoreValueId addr = ins->value.atomic_load.address;
-        MinicType pointee;
         if (ins->value.atomic_load.memory_order != 0U ||
-            addr >= fn->value_count ||
-            !minic_type_pointee(fn->values[addr].type, &pointee) ||
-            !(minic_type_is_integer(pointee) || minic_type_is_pointer(pointee)) ||
-            !minic_x86_64_storage_width(program, target, pointee, &bytes, &sign))
+            !x86_emit_core_atomic_scalar(fn, addr, &bytes, &sign))
             return false;
         /* Aligned scalar x86 MOV has atomicity at supported widths. */
         return x86_head_load_memory_address(out, fn, frame, addr) &&
@@ -1135,12 +1160,9 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
     case MINIC_CORE_INSTRUCTION_ATOMIC_STORE: {
         const MinicCoreValueId src = ins->value.atomic_store.stored_value;
         const MinicCoreValueId addr = ins->value.atomic_store.address;
-        MinicType pointee;
         if (ins->value.atomic_store.memory_order != 0U ||
-            src >= fn->value_count || addr >= fn->value_count ||
-            !minic_type_pointee(fn->values[addr].type, &pointee) ||
-            !(minic_type_is_integer(pointee) || minic_type_is_pointer(pointee)) ||
-            !minic_x86_64_storage_width(program, target, pointee, &bytes, &sign))
+            src >= fn->value_count ||
+            !x86_emit_core_atomic_scalar(fn, addr, &bytes, &sign))
             return false;
         /* Naturally aligned 1/2/4/8-byte scalar MOV writes are atomic on
          * x86-64. Only relaxed semantics are implemented: sequentially
@@ -1152,16 +1174,18 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
     case MINIC_CORE_INSTRUCTION_STORE: {
         MinicCoreValueId src = ins->value.store.stored_value;
         if (src >= fn->value_count) return false;
-        if (minic_type_is_long_double(fn->values[src].type))
+        if (x86_emit_core_float(fn, fn->values[src].core_type_id,
+                                MINIC_CORE_FLOAT_EXTENDED))
             return x86_head_load_memory_address(out, fn, frame, ins->value.store.address) &&
                    x86_x87_load(out, frame, src) &&
                    fprintf(out, "  fstpt (%%r10)\n") >= 0;
-        if (minic_type_is_int128_integer(fn->values[src].type))
+        if (x86_emit_core_int128(fn, fn->values[src].core_type_id))
             return x86_head_load_memory_address(out, fn, frame, ins->value.store.address) &&
                    x86_i128_load(out, frame, src, "%rax", "%rdx") &&
                    fprintf(out, "  movq %%rax, (%%r10)\n"
                                 "  movq %%rdx, 8(%%r10)\n") >= 0;
-        if (!minic_x86_64_storage_width(program, target, fn->values[src].type, &bytes, &sign))
+        if (!minic_x86_64_core_storage_width(
+                fn->type_context, fn->values[src].core_type_id, &bytes, &sign))
             return false;
         if (frame->direct_object_address_consumer &&
             frame->direct_object_address_value_id == ins->value.store.address) {
@@ -1188,8 +1212,7 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
             bool signed_left;
             if (!minic_core_integer_overflow_mixed_add_i32_shape(
                     fn, ins, &signed_left))
-                return x86_emit_mixed_integer_overflow(
-                    out, program, target, fn, frame, ins);
+                return x86_emit_mixed_integer_overflow(out, fn, frame, ins);
             if (!x86_value_load(out, frame, lhs, "%rax") ||
                 !x86_value_load(out, frame, rhs, "%r10"))
                 return false;
@@ -1288,7 +1311,8 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
     case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_NOT:
     case MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO:
         if (ins->value.operand >= fn->value_count) return false;
-        if (minic_type_is_int128_integer(fn->values[ins->value.operand].type)) {
+        if (x86_emit_core_int128(fn,
+                fn->values[ins->value.operand].core_type_id)) {
             if (ins->kind == MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO) return false;
             if (!x86_i128_load(out, frame, ins->value.operand, "%rax", "%rdx"))
                 return false;
@@ -1306,7 +1330,7 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
             if (fprintf(out, "  notq %%rax\n") < 0) return false;
         } else if (fprintf(out, "  testq %%rax, %%rax\n  sete %%al\n  movzbq %%al, %%rax\n") < 0)
             return false;
-        return x86_normalize(out, program, target, ins->type) &&
+        return x86_core_normalize(out, fn->type_context, ins->core_type_id) &&
                x86_value_store(out, frame, ins->result);
     case MINIC_CORE_INSTRUCTION_INTEGER_ADD:
     case MINIC_CORE_INSTRUCTION_INTEGER_SUBTRACT:
@@ -1325,7 +1349,7 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
         right = ins->value.binary.right;
         if (left >= fn->value_count || right >= fn->value_count)
             return false;
-        if (minic_type_is_int128_integer(fn->values[left].type)) {
+        if (x86_emit_core_int128(fn, fn->values[left].core_type_id)) {
             /* 128-bit x86 registers are pairs of 64-bit machine registers.
              * Only explicitly handled operations are admitted. */
             if (ins->kind != MINIC_CORE_INSTRUCTION_INTEGER_ADD &&
@@ -1343,13 +1367,15 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
                 return false;
             if (ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_LEFT ||
                 ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_RIGHT) {
-                if (minic_type_is_int128_integer(fn->values[right].type) ||
+                if (x86_emit_core_int128(fn, fn->values[right].core_type_id) ||
                     !x86_value_load(out, frame, right, "%rcx"))
                     return false;
                 /* Shift by >=128 is undefined C behavior. The >=64 limb case
                  * is needed by SQLite's high-64 and high-32 extraction. */
                 if (ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_RIGHT) {
-                    bool signed_value = minic_type_is_signed_integer(ins->type);
+                    bool signed_value;
+                    if (!x86_emit_core_signed(fn, ins->core_type_id,
+                                              &signed_value)) return false;
                     if (fprintf(out,
                         "  cmpq $64, %%rcx\n"
                         "  jae 1f\n"
@@ -1381,7 +1407,7 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
                     return false;
                 return x86_i128_store(out, frame, ins->result, "%rax", "%rdx");
             }
-            if (!minic_type_is_int128_integer(fn->values[right].type) ||
+            if (!x86_emit_core_int128(fn, fn->values[right].core_type_id) ||
                 !x86_i128_load(out, frame, right, "%r10", "%r11"))
                 return false;
             switch (ins->kind) {
@@ -1420,6 +1446,8 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
                 /* Compare high words with source signedness; when high
                  * words match, compare the low words unsigned. Do the low
                  * comparison first to avoid clobbering the input with setcc. */
+                if (!x86_emit_core_signed(fn,
+                      fn->values[left].core_type_id, &sign)) return false;
                 if (fprintf(out,
                     "  cmpq %%r10, %%rax\n"
                     "  setb %%cl\n"
@@ -1429,8 +1457,7 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
                     "  andb %%cl, %%dl\n"
                     "  orb %%dl, %%al\n"
                     "  movzbq %%al, %%rax\n",
-                    minic_type_is_signed_integer(fn->values[left].type)
-                      ? "  setl %al\n" : "  setb %al\n") < 0)
+                    sign ? "  setl %al\n" : "  setb %al\n") < 0)
                     return false;
                 return x86_value_store(out, frame, ins->result);
             case MINIC_CORE_INSTRUCTION_SCALAR_EQUAL:
@@ -1461,7 +1488,8 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
             break;
         case MINIC_CORE_INSTRUCTION_INTEGER_DIVIDE:
         case MINIC_CORE_INSTRUCTION_INTEGER_REMAINDER:
-            if (!minic_x86_64_scalar_width(program, target, fn->values[left].type, &bytes, &sign) ||
+            if (!minic_x86_64_core_scalar_width(fn->type_context,
+                    fn->values[left].core_type_id, &bytes, &sign) ||
                 fprintf(out, sign ? "  cqto\n  idivq %%r10\n" :
                                     "  xorq %%rdx, %%rdx\n  divq %%r10\n") < 0)
                 return false;
@@ -1481,7 +1509,8 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
             if (fprintf(out, "  movb %%r10b, %%cl\n  shlq %%cl, %%rax\n") < 0) return false;
             break;
         case MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_RIGHT:
-            if (!minic_x86_64_scalar_width(program, target, fn->values[left].type, &bytes, &sign) ||
+            if (!minic_x86_64_core_scalar_width(fn->type_context,
+                    fn->values[left].core_type_id, &bytes, &sign) ||
                 fprintf(out, sign ? "  movb %%r10b, %%cl\n  sarq %%cl, %%rax\n"
                                   : "  movb %%r10b, %%cl\n  shrq %%cl, %%rax\n") < 0)
                 return false;
@@ -1489,7 +1518,8 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
         case MINIC_CORE_INSTRUCTION_INTEGER_LESS:
         case MINIC_CORE_INSTRUCTION_POINTER_LESS:
         case MINIC_CORE_INSTRUCTION_SCALAR_EQUAL:
-            if (!minic_x86_64_scalar_width(program, target, fn->values[left].type, &bytes, &sign) ||
+            if (!minic_x86_64_core_scalar_width(fn->type_context,
+                    fn->values[left].core_type_id, &bytes, &sign) ||
                 fprintf(out, "  cmpq %%r10, %%rax\n") < 0) return false;
             if (ins->kind == MINIC_CORE_INSTRUCTION_SCALAR_EQUAL) {
                 if (fprintf(out, "  sete %%al\n") < 0) return false;
@@ -1500,7 +1530,7 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
             break;
         default: return false;
         }
-        return x86_normalize(out, program, target, ins->type) &&
+        return x86_core_normalize(out, fn->type_context, ins->core_type_id) &&
                x86_value_store(out, frame, ins->result);
     case MINIC_CORE_INSTRUCTION_FIELD_ADDRESS:
         return x86_value_load(out, frame, ins->value.field_address.base, "%rax") &&
@@ -1517,14 +1547,20 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
         return x86_value_store(out, frame, ins->result);
     case MINIC_CORE_INSTRUCTION_DYNAMIC_STACK_ALLOC: {
         MinicCoreValueId count = ins->value.operand;
+        size_t count_width;
+        bool count_signed;
         /* The current dynamically aligned object frame is rsp-relative.
          * Alloca changes rsp, so reject this unqualified combination
          * rather than silently addressing the wrong local object. */
         if (frame->objects_from_aligned_rsp ||
             ins->result >= fn->value_count || count >= fn->value_count ||
-            !minic_type_is_pointer(ins->type) ||
-            !minic_type_equal(fn->values[ins->result].type, ins->type) ||
-            !minic_type_equal(fn->values[count].type, minic_type_unsigned_long()) ||
+            !x86_emit_core_kind(fn, ins->core_type_id,
+                                MINIC_CORE_TYPE_POINTER) ||
+            fn->values[ins->result].core_type_id != ins->core_type_id ||
+            !minic_x86_64_core_scalar_width(fn->type_context,
+                fn->values[count].core_type_id,
+                &count_width, &count_signed) ||
+            count_width != 8U || count_signed ||
             !x86_value_load(out, frame, count, "%r10") ||
             fprintf(out,
                     "  addq $15, %%r10\n"
@@ -1548,7 +1584,6 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
 }
 
 bool minic_x86_64_emit_core_terminator(FILE *out,
-                                const MinicC0Program *program,
                                 const MinicTargetInfo *target,
                                 const MinicX86Frame *frame,
                                 const MinicCoreTerminator *term,
@@ -1558,41 +1593,27 @@ bool minic_x86_64_emit_core_terminator(FILE *out,
     case MINIC_CORE_TERMINATOR_RETURN:
         if (term->return_object != MINIC_CORE_OBJECT_INVALID) {
             size_t bytes;
-            if (!program || !target || !frame || !fn ||
+            if (!frame || !fn || !fn->type_context || !fn->objects ||
                 term->return_value != MINIC_CORE_VALUE_INVALID ||
                 term->return_object >= fn->object_count ||
                 !x86_emit_core_kind(fn, fn->core_return_type_id,
-                                    fn->return_type, MINIC_CORE_TYPE_RECORD) ||
-                !(fn->type_context != NULL
-                    ? minic_x86_64_core_record_abi_compatible(
-                        fn->type_context, fn->core_return_type_id,
-                        fn->objects[term->return_object].core_type_id)
-                    : minic_x86_64_record_abi_compatible(
-                        fn->return_type,
-                        fn->objects[term->return_object].type)) ||
+                                    MINIC_CORE_TYPE_RECORD) ||
+                !minic_x86_64_core_record_abi_compatible(
+                    fn->type_context, fn->core_return_type_id,
+                    fn->objects[term->return_object].core_type_id) ||
                 !x86_object_address(out, frame, term->return_object, "%r11"))
                 return false;
-            if (fn->type_context != NULL
-                    ? minic_x86_64_core_one_gp_record(
-                        fn->type_context, fn->core_return_type_id, &bytes)
-                    : minic_x86_64_one_gp_record(
-                        program, target, fn->return_type, &bytes)) {
+            if (minic_x86_64_core_one_gp_record(
+                    fn->type_context, fn->core_return_type_id, &bytes)) {
                 if (!x86_one_gp_load(out, bytes, 0U)) return false;
-            } else if (fn->type_context != NULL
-                    ? minic_x86_64_core_two_gp_record(
-                        fn->type_context, fn->core_return_type_id)
-                    : minic_x86_64_two_gp_record(program, target, fn->return_type)) {
+            } else if (minic_x86_64_core_two_gp_record(
+                    fn->type_context, fn->core_return_type_id)) {
                 const MinicX86AbiRegisters *abi = minic_x86_64_abi_registers(
                     MINIC_CALLING_CONVENTION_DEFAULT);
-                size_t alignment;
-                if (fn->type_context != NULL) {
-                    const MinicCoreType *resolved = x86_emit_core_type(
-                        fn, fn->core_return_type_id);
-                    if (resolved == NULL || !resolved->has_layout) return false;
-                    bytes = resolved->size;
-                } else if (!minic_data_layout_type(
-                               target->data_layout, program, fn->return_type,
-                               &bytes, &alignment)) return false;
+                const MinicCoreType *resolved = x86_emit_core_type(
+                    fn, fn->core_return_type_id);
+                if (resolved == NULL || !resolved->has_layout) return false;
+                bytes = resolved->size;
                 if (abi == NULL || abi->gp_result_count < 2U ||
                     (bytes < 9U || bytes > 16U) ||
                     !x86_one_gp_load(out, bytes - 8U, 8U) ||
@@ -1601,11 +1622,8 @@ bool minic_x86_64_emit_core_terminator(FILE *out,
                             abi->gp_results[1], abi->gp_results[0]) < 0)
                     return false;
             } else if (frame->has_sret && frame->sret_save_offset != 0U &&
-                       (fn->type_context != NULL
-                          ? minic_x86_64_core_memory_result_record(
-                              fn->type_context, fn->core_return_type_id, &bytes)
-                          : minic_x86_64_memory_result_record(
-                              program, target, fn->return_type, &bytes))) {
+                       minic_x86_64_core_memory_result_record(
+                           fn->type_context, fn->core_return_type_id, &bytes)) {
                 /* Caller passes a private destination in RDI. Its saved
                  * value is stable across nested calls; a bounded byte copy
                  * preserves tail bytes and does not read past the record. */
@@ -1625,11 +1643,11 @@ bool minic_x86_64_emit_core_terminator(FILE *out,
             return fprintf(out,"  jmp .Lmini_x86_f%zu_ret\n",function_id)>=0;
         }
         if (term->return_value != MINIC_CORE_VALUE_INVALID) {
-            if (x86_emit_core_float(fn, fn->core_return_type_id, fn->return_type,
+            if (x86_emit_core_float(fn, fn->core_return_type_id,
                                     MINIC_CORE_FLOAT_EXTENDED))
                 return x86_x87_load(out, frame, term->return_value) &&
                        fprintf(out, "  jmp .Lmini_x86_f%zu_ret\n", function_id) >= 0;
-            if (x86_emit_core_int128(fn, fn->core_return_type_id, fn->return_type)) {
+            if (x86_emit_core_int128(fn, fn->core_return_type_id)) {
                 const MinicX86AbiRegisters *abi = minic_x86_64_abi_registers(
                     MINIC_CALLING_CONVENTION_DEFAULT);
                 return abi != NULL && abi->gp_result_count >= 2U &&
@@ -1639,10 +1657,10 @@ bool minic_x86_64_emit_core_terminator(FILE *out,
             }
             if (!x86_value_load(out, frame, term->return_value, "%rax"))
                 return false;
-            if (x86_emit_core_float(fn, fn->core_return_type_id, fn->return_type,
+            if (x86_emit_core_float(fn, fn->core_return_type_id,
                                     MINIC_CORE_FLOAT_BINARY64)) {
                 if (fprintf(out, "  movq %%rax, %%xmm0\n") < 0) return false;
-            } else if (x86_emit_core_float(fn, fn->core_return_type_id, fn->return_type,
+            } else if (x86_emit_core_float(fn, fn->core_return_type_id,
                                            MINIC_CORE_FLOAT_BINARY32)) {
                 if (fprintf(out, "  movd %%eax, %%xmm0\n") < 0) return false;
             }

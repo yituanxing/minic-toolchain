@@ -96,8 +96,7 @@ bool minic_riscv64_emit_memory_instruction(
         size_t record_size;
 
         if (!minic_riscv64_core_record_load_supported(function, instruction, &record_size) ||
-            !minic_riscv64_core_frame_object_offset(program,
-                                function,
+            !minic_riscv64_core_frame_object_offset(function,
                                 frame,
                                 instruction->value.record_load.destination_object,
                                 &destination_offset) ||

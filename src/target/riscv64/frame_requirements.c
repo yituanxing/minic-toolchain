@@ -10,11 +10,11 @@
  * precisely one native psABI plan for each direct/indirect CALL. Caller,
  * frame outgoing size and emission all consume that same placement. */
 bool minic_riscv64_call_plan_cache_build(
-    const MinicC0Program *program, const MinicCoreFunction *function,
+    const MinicCoreFunction *function,
     bool lp64_soft_float, const MinicCoreCallIndex *calls,
     MinicRiscv64CallPlanCache *cache) {
     size_t ordinal, previous = SIZE_MAX, maximum_stack_slots = 0U;
-    if (program == NULL || function == NULL || function->type_context == NULL ||
+    if (function == NULL || function->type_context == NULL ||
         calls == NULL || cache == NULL ||
         cache->sites != NULL || cache->count != 0U ||
         calls->count > function->instruction_count ||

@@ -42,20 +42,20 @@ static bool rv32_align(size_t value, size_t by, size_t *out) {
 }
 
 /* A wide ILP32 operand remains ONE semantic Core SSA value. */
-bool rv32_frame_init_with_storage(Rv32Frame *frame, const MinicC0Program *program,
+bool rv32_frame_init_with_storage(Rv32Frame *frame,
     const MinicCoreFunction *f, const MinicTargetInfo *t,
     bool is_variadic, const MinicCoreFunctionFacts *facts,
     const MinicCoreObjectStoragePlan *storage) {
     size_t next, i, max_stack_args, value_base, peak_bytes = 0U;
     size_t maximum_object_alignment = 16U;
-    if (frame == NULL || program == NULL || f == NULL || t == NULL || facts == NULL ||
+    if (frame == NULL || f == NULL || t == NULL || facts == NULL ||
         f->value_count > 100000U || f->object_count > 100000U)
         return false;
     frame->isa = &t->riscv_isa;
     /* The ABI plan is built once; frame and call emission consume exactly
      * its precomputed stack bound and individual argument placements. */
     frame->has_dynamic_stack = facts->uses_dynamic_stack_alloc;
-    if (!rv32_function_abi_plan_build(program, t, f, facts->call_index, &frame->abi))
+    if (!rv32_function_abi_plan_build(f, facts->call_index, &frame->abi))
         return rv32_frame_reject("abi_plan", 0U, f,
                                  MINIC_CORE_TYPE_INVALID);
     max_stack_args = frame->abi.max_outgoing_stack_words;

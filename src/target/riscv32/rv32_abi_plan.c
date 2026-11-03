@@ -205,15 +205,12 @@ static bool rv32_plan_call(const MinicCoreFunction *function,
 
 /* Sparse CALL ownership: Common owns the validated Core call index.
  * ILP32 keeps one target ABI plan per CALL, not per Core instruction. */
-bool rv32_function_abi_plan_build(const MinicC0Program *program,
-                                  const MinicTargetInfo *target,
-                                  const MinicCoreFunction *function,
+bool rv32_function_abi_plan_build(const MinicCoreFunction *function,
                                   const MinicCoreCallIndex *semantic_calls,
                                   Rv32FunctionAbiPlan *plan) {
     const MinicCoreCallIndex *calls;
     size_t ordinal, previous_id = SIZE_MAX;
-    if (program == NULL || target == NULL ||
-        target->data_layout == NULL || function == NULL || plan == NULL ||
+    if (function == NULL || function->type_context == NULL || plan == NULL ||
         plan->calls != NULL || plan->parameters != NULL ||
         plan->call_count != 0U || plan->parameter_count != 0U ||
         plan->max_outgoing_stack_words != 0U ||

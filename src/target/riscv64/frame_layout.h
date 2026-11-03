@@ -64,14 +64,14 @@ typedef struct MinicRiscv64CoreFrame {
 /* Consume a prevalidated ABI plan. This transfers ownership of parameter
  * locations to the frame; the input plan becomes empty on success. */
 bool minic_riscv64_core_frame_initialize_with_storage(
-    const MinicC0Program *, const MinicCoreFunction *,
+    const MinicCoreFunction *,
     MinicRiscv64CoreFrame *, MinicRiscv64FunctionAbiPlan *, bool, bool,
     const MinicCoreFunctionFacts *, const MinicCoreObjectStoragePlan *);
 void minic_riscv64_core_frame_destroy(MinicRiscv64CoreFrame *);
 bool minic_riscv64_core_frame_parameter_location(
     const MinicRiscv64CoreFrame *, size_t, MinicRiscv64AbiArgumentLocation *);
 bool minic_riscv64_core_frame_object_offset(
-    const MinicC0Program *, const MinicCoreFunction *,
+    const MinicCoreFunction *,
     const MinicRiscv64CoreFrame *, MinicCoreObjectId, size_t *);
 bool minic_riscv64_core_frame_value_offset(
     const MinicRiscv64CoreFrame *, MinicCoreValueId, size_t *);

@@ -123,11 +123,10 @@ static bool minic_riscv64_function_abi_plan_qualified(
 /* Return-pointer reservation, float/int register cursors and split stack
  * locations are classified once and subsequently passed into the frame. */
 bool minic_riscv64_function_abi_plan_build_profile(
-    const MinicC0Program *program, const MinicCoreFunction *fn,
+    const MinicCoreFunction *fn,
     MinicRiscv64FunctionAbiPlan *plan, bool lp64_soft_float) {
     MinicRiscv64AbiCursor cursor;
     size_t i;
-    (void)program; /* C ingress does not participate in sealed psABI classification. */
     if (fn == NULL || fn->type_context == NULL || plan == NULL ||
         plan->prepared || plan->parameter_locations != NULL ||
         (fn->parameter_count != 0U && fn->core_parameter_type_ids == NULL) ||
@@ -159,9 +158,9 @@ bool minic_riscv64_function_abi_plan_build_profile(
     return true;
 }
 bool minic_riscv64_function_abi_plan_build(
-    const MinicC0Program *program, const MinicCoreFunction *fn,
+    const MinicCoreFunction *fn,
     MinicRiscv64FunctionAbiPlan *plan) {
-    return minic_riscv64_function_abi_plan_build_profile(program, fn, plan, false);
+    return minic_riscv64_function_abi_plan_build_profile(fn, plan, false);
 }
 void minic_riscv64_function_abi_plan_destroy(
     MinicRiscv64FunctionAbiPlan *plan) {

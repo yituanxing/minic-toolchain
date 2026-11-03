@@ -459,7 +459,7 @@ static bool rv64_core_preparedless_call_supported(
     return true;
 }
 
-bool minic_riscv64_core_direct_call_supported(const MinicC0Program *program,
+bool minic_riscv64_core_direct_call_supported(bool require_prepared_abi,
                                        const MinicCoreFunction *function,
                                        const MinicCoreInstruction *instruction,
                                        const MinicCoreCallView *semantic_view,
@@ -476,7 +476,7 @@ bool minic_riscv64_core_direct_call_supported(const MinicC0Program *program,
     callee = call.callee;
     if (callee->name == NULL || callee->name_length == 0U)
         return false;
-    if (program == NULL)
+    if (!require_prepared_abi)
         return function != NULL && function->type_context != NULL &&
                rv64_core_preparedless_call_supported(function, &call);
     if (prepared == NULL ||
@@ -488,7 +488,7 @@ bool minic_riscv64_core_direct_call_supported(const MinicC0Program *program,
 
 /* M151_INDIRECT_CALL_BATCH_OWNER: validate indirect arguments through the
    same register-only RV64 ABI classifier used by direct calls. */
-bool minic_riscv64_core_indirect_call_supported(const MinicC0Program *program,
+bool minic_riscv64_core_indirect_call_supported(bool require_prepared_abi,
                                          const MinicCoreFunction *function,
                                          const MinicCoreInstruction *instruction,
                                          const MinicCoreCallView *semantic_view,
@@ -499,7 +499,7 @@ bool minic_riscv64_core_indirect_call_supported(const MinicC0Program *program,
           minic_core_call_view_build(function, instruction, &call)) ||
         call.signature == NULL)
         return false;
-    if (program == NULL)
+    if (!require_prepared_abi)
         return function != NULL && function->type_context != NULL &&
                rv64_core_preparedless_call_supported(function, &call);
     if (prepared == NULL ||

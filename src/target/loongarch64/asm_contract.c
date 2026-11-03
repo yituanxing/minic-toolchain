@@ -2957,6 +2957,14 @@ static bool loong_linux_descriptor_qualify(
     const MinicC0Program *program, const MinicInlineAsm *source,
     MinicTargetInlineAsmContract *contract);
 
+bool minic_loongarch64_seal_normalized_inline_asm(
+    const MinicC0Program *program, const MinicInlineAsm *source,
+    const char *normalized, size_t length,
+    MinicTargetInlineAsmContract *contract) {
+    return minic_loongarch64_simd_seal_normalized(
+        program, source, normalized, length, contract);
+}
+
 bool minic_loongarch64_qualify_inline_asm(
     const MinicC0Program *program, const MinicInlineAsm *src,
     MinicTargetInlineAsmContract *contract) {
@@ -3641,6 +3649,8 @@ bool minic_loongarch64_emit_qualified_structured_asm(
         if (id <= sizeof(loong_linux_structured_forms) /
                   sizeof(loong_linux_structured_forms[0]))
             return loong_linux_descriptor_emit(out, ctx, ins, info);
+        if (id == MINIC_LOONG_MACHINE_ASM_SIMD)
+            return minic_loongarch64_simd_emit_structured(out, ctx, ins, info);
         if (!minic_loongarch64_typed_scalar_form_matches_template(
                 id, variant, info->template_text, info->template_length))
             return false;
@@ -3667,10 +3677,10 @@ bool minic_loongarch64_emit_qualified_structured_asm(
     if (minic_loongarch64_descriptor_template_requires_typed_id(
             info->template_text, info->template_length) ||
         loong_linux_scalar_template_requires_typed_id(
+            info->template_text, info->template_length) ||
+        minic_loongarch64_simd_structured_template_requires_typed_id(
             info->template_text, info->template_length))
         return false;
-    if (minic_loongarch64_simd_emit_structured(out, ctx, ins, info))
-        return true;
     {
         LoongLinuxSubPositive sub_positive;
         if (loong_linux_sub_positive_form(

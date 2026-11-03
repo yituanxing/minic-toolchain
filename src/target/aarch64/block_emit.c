@@ -112,7 +112,7 @@ bool minic_aarch64_emit_record_copy(FILE *out,
             };
             size_t bytes;
             if (!minic_multi_direct_record_copy_extent(
-                    ctx->program, ctx->target, ctx->fn, ins, &bytes))
+                    ctx->fn, ins, &bytes))
                 return false;
             if (!minic_a64_emit_owned_slot(out, &view, false,
                     MINIC_A64_REG_X, 10U, minic_lp64_frame_value_offset(frame_plan, dst)) ||
@@ -154,7 +154,7 @@ static bool minic_aarch64_emit_record_load(FILE *out,
         ctx->dynamic_frame, ctx->frame, 0U, ctx->saved_entry_sp_offset
     };
     if (!minic_multi_direct_record_load_extent(
-            ctx->program, ctx->target, ctx->fn, ins, ctx->frame_plan,
+            ctx->fn, ins, ctx->frame_plan,
             &source, &dest, &bytes) ||
         !minic_a64_emit_owned_slot(out, &view, false,
             MINIC_A64_REG_X, 10U, minic_lp64_frame_value_offset(frame_plan, source)) ||

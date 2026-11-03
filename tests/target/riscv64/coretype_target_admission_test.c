@@ -65,7 +65,6 @@ static int run(void) {
     MinicCoreInstruction ins = {0};
     MinicCoreInlineAsm asm_binding = {0};
     MinicCoreFixedRegisterBinding fixed_binding = {0};
-    MinicC0Program source_program = {0};
     MinicCoreCallee callee = {0};
     MinicCoreCallArgument call_argument = {0};
     MinicCoreCallSite call_site = {0};
@@ -339,15 +338,15 @@ static int run(void) {
     call_index.sites = &call_site;
     call_index.count = 1U;
     REQUIRE(minic_riscv64_call_plan_cache_build(
-        &source_program, &function, false, &call_index, &call_cache));
+        &function, false, &call_index, &call_cache));
     REQUIRE(call_cache.count == 1U && call_cache.sites != NULL &&
             call_cache.sites[0] != NULL);
     REQUIRE(minic_riscv64_core_direct_call_supported(
-        &source_program, &function, &ins, &call_site.view, call_cache.sites[0]));
+        true, &function, &ins, &call_site.view, call_cache.sites[0]));
     /* A wrong machine location must still fail, even with valid Core types. */
     call_cache.sites[0]->arguments[0].integer_register_count = 2U;
     REQUIRE(!minic_riscv64_core_direct_call_supported(
-        &source_program, &function, &ins, &call_site.view, call_cache.sites[0]));
+        true, &function, &ins, &call_site.view, call_cache.sites[0]));
     minic_riscv64_call_plan_cache_destroy(&call_cache);
 
     /* Native instruction and bytewise fallback both derive from Core layout.

@@ -347,10 +347,10 @@ static bool test_function_abi_plan_qualification(void) {
     for (i = 0U; i < 9U; ++i) params[i] = double_id;
     /* Standalone plans must also be sealed: legacy function types do not
      * authorize an untyped ABI decision. */
-    CHECK(!minic_riscv64_function_abi_plan_build_profile(NULL, &fn, &plan, false));
+    CHECK(!minic_riscv64_function_abi_plan_build_profile(&fn, &plan, false));
     CHECK(!plan.prepared && plan.parameter_locations == NULL);
     fn.type_context = &types;
-    CHECK(minic_riscv64_function_abi_plan_build_profile(NULL, &fn, &plan, false));
+    CHECK(minic_riscv64_function_abi_plan_build_profile(&fn, &plan, false));
     CHECK(plan.prepared && plan.parameter_location_count == 8U);
     CHECK(plan.parameter_locations[7].floating_register_begin == 7U);
     CHECK(plan.parameter_locations[7].floating_register_count == 1U);
@@ -358,7 +358,7 @@ static bool test_function_abi_plan_qualification(void) {
 
     /* RV64 LP64D named FP9 is legal: fa0..fa7, then a0. */
     fn.parameter_count = 9U;
-    CHECK(minic_riscv64_function_abi_plan_build_profile(NULL, &fn, &plan, false));
+    CHECK(minic_riscv64_function_abi_plan_build_profile(&fn, &plan, false));
     CHECK(plan.prepared && plan.parameter_location_count == 9U);
     CHECK(plan.parameter_locations[8].floating_register_count == 0U &&
           plan.parameter_locations[8].integer_register_begin == 0U &&
@@ -367,7 +367,7 @@ static bool test_function_abi_plan_qualification(void) {
 
     /* The same value is legal under soft-float LP64 as a GPR argument. */
     fn.parameter_count = 1U;
-    CHECK(minic_riscv64_function_abi_plan_build_profile(NULL, &fn, &plan, true));
+    CHECK(minic_riscv64_function_abi_plan_build_profile(&fn, &plan, true));
     CHECK(plan.named_parameter_cursor.lp64_soft_float);
     CHECK(plan.parameter_locations[0].floating_register_count == 0U);
     CHECK(plan.parameter_locations[0].integer_register_count == 1U);
@@ -389,17 +389,17 @@ static bool test_function_abi_plan_qualification(void) {
     fn.core_return_type_id = record24_id;
     fn.parameter_count = 1U;
     params[0] = long_id;
-    CHECK(minic_riscv64_function_abi_plan_build_profile(NULL, &fn, &plan, false));
+    CHECK(minic_riscv64_function_abi_plan_build_profile(&fn, &plan, false));
     CHECK(plan.return_value.kind == MINIC_RISCV64_ABI_VALUE_INDIRECT);
     CHECK(plan.parameter_locations[0].integer_register_begin == 1U);
     minic_riscv64_function_abi_plan_destroy(&plan);
 
     /* Rejected Core argument placement rolls back the plan allocation. */
     params[0] = void_id;
-    CHECK(!minic_riscv64_function_abi_plan_build_profile(NULL, &fn, &plan, false));
+    CHECK(!minic_riscv64_function_abi_plan_build_profile(&fn, &plan, false));
     CHECK(!plan.prepared && plan.parameter_locations == NULL);
     params[0] = long_id;
-    CHECK(minic_riscv64_function_abi_plan_build_profile(NULL, &fn, &plan, false));
+    CHECK(minic_riscv64_function_abi_plan_build_profile(&fn, &plan, false));
     minic_riscv64_function_abi_plan_destroy(&plan);
     minic_core_type_context_destroy(&types);
     return true;

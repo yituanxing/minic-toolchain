@@ -800,3 +800,64 @@ LoongArch64 SIMD 原始模板与 Core 规范模板效果等价的二次验证。
 证明封存进 Core，再一次性迁移 `backend`、`program_emit`、
 五目标 writer 与事务测试；**不能只凭 `source_inline_asm_id`
 绕过 fail-closed 检查**，也不应复制另一套 ModuleIR。
+
+## IR-P8：五目标机器消费横向闭包与规范化 ASM 机器资格封存
+
+起点：`8fd6353`（IR-P7）。P7 虽然关闭 Common 栈槽、Direct LP64
+和 RV64 各自的 C 类型回退，却没有按同一执行类型所有权把 x86、
+RV32、RV64、AArch64、LoongArch64 **一起**收干净。本批重读五目标
+`Source→Core→ABI/Frame→Machine` 生产者、调用点和失败条件后，
+以贯穿五目标的 Core 执行事实为同一个提交边界，而不是逐目标
+发五个小提交。
+
+1. x86-64 `machine_emit` 一整个执行族转为 Core-only：mixed
+   signed/unsigned overflow、i128/FP/参数/返回值、普通/原子内存、
+   Record/向量复制、动态栈以及 machine terminator。删除
+   `machine_support` 内无用的 C normalization 和终结符旧 Program
+   参数，机器 opcode、SysV ABI、`long double`、GNU Linux
+   `.head.text` 与 ELF 符号抢占策略保持目标私有。
+2. RV32/RV64 沿 FunctionABI→Frame→CallPlan→CALL emitter→Target
+   admission 迁移整个消费者链。RV32 的 incoming ABI/frame 不再
+   假借 C Program；RV64 的 sret、参数 cursor、frame offset
+   和 CALL/RETURN 接受已准备的 Core ABI plan。历史上通过
+   `program != NULL` 判定生产严格模式的 sentinel 改为显式
+   `require_prepared_abi`，standalone 与 production 的原有
+   fail-closed 差异保留，不擅自改变 LP64/LP64D 分配。
+3. AArch64/LoongArch64 与 x86 共用的 Direct Core 形状 API
+   删除四处仅检查非空的 C Program 参数；两个 Direct 目标的
+   RecordCopy/RecordLoad/固定寄存器调用点及 x86 读取同步改签。
+   可选 `backend_core_usage` 诊断也从旧 C width/函数声明改为
+   Module symbol 与 CoreType，避免生产之外的诊断成为反向 C 依赖。
+4. 为 **Target→Core 的 ASM 后置证明**加唯一公共入口：目标在
+   原始 GNU 来源完成资格检查后，看到 Core 规范化的数字模板，
+   才可标记 `target_machine_form_id/variant`；公共 wrapper 禁止
+   回调篡改原先已鉴定的 operands/ties/memory effects。
+   LoongArch64 LSX/LASX SIMD 整族在封存前逐指令核对两个版本的
+   opcode、寄存器、偏移与占位符映射；机器端只消费 form=20、
+   Core 8B pointer、operand roles/内存效果并严格解析规范模板，
+   不再拿 `source_inline_asm_id` 回读 C Program 做第二次鉴定。
+
+**验证：** 原有 LSX/LASX Linux 正例、四种 opcode/register/
+immediate 负例、128 个重复来源干扰样本通过；新增独立
+`probe-loong-simd-normalized-seal.c` 覆盖 named/numeric +m、
+伪造寄存器、追加指令、篡改 operand_count 的恶意目标回调。
+边界检查增加 x86、Common Direct、诊断 Core-only 与 Loong
+post-normalization proof 防回退门槛。严格 Release `-Werror`、
+Debug、`make check-fast`、RV64 ABI/Core admission、Loong SIMD
+及 boundary 均 PASS。用 P7 基线与当前构建消费完全相同的
+GNU 预处理输入：**51 份执行/Frame/ASM fixture × 五目标
+255 组，188 `.s` 字节相同、67 双方一致拒绝、0 差异**；
+调用 ABI 24×5 **98 相同、22 双方拒绝、0 差异**。
+`src/` 生产修改 **41 文件 +531/−418，净 +113 行**。
+新增验证逻辑不代表已经完成五 ISA GNU AS/LD 或 QEMU。
+
+**尚不能强行删除的接口：** x86 `machine_asm.c` 的 Linux GNU
+约束/C rank、AArch64 多个未封存 form 的 ASM/EOR3、Loong
+非 SIMD 标量 ASM、RV 的源地址对齐/structured ASM 仍依赖
+源资格事实。`backend.emit_program` 和五目标 Module writer 的
+Program 双轨虽已被生产 Module 路径取代，但若在这些证明尚未
+封存前直接去掉 Program，会把来源 ID/哈希误当 ISA 放行证据。
+下一完整批次应先对这些剩余 ASM 族一并形成 Target-owned
+machine-form proof，再一次性删除五目标 writer、Common
+`program_emit`/`program_visit` 的旧 C 分支并把事务负例全部改为
+Module-only；不在每个架构各留一套半迁移的 writer。

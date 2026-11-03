@@ -43,6 +43,16 @@ MinicCoreLowerStatus core_asm_try_target_register_contract(
                 ctx->source_function ? ctx->source_function->name : "?");
         return MINIC_CORE_LOWER_ERROR;
     }
+    /* The source qualifier has admitted GNU constraints, but named-operand
+     * normalization can still alter a target instruction's machine effects.
+     * Seal a target-owned proof only after seeing BOTH spellings; a source
+     * fingerprint alone is not authority to emit a machine instruction. */
+    if (!minic_backend_seal_normalized_inline_asm(
+            backend, ctx->body->program, source, normalized, length,
+            &contract)) {
+        free(normalized);
+        return MINIC_CORE_LOWER_ERROR;
+    }
     memset(&ins, 0, sizeof(ins));
     ins.kind = MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM;
     ins.span = statement->span;

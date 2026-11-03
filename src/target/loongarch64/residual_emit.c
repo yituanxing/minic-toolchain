@@ -277,7 +277,7 @@ bool minic_loongarch64_emit_residual_instruction(
              * relocation updates the live $tp thread_info pointer; ordinary
              * per-CPU assignment updates $r21. Neither is a C memory store. */
             if (!minic_multi_direct_fixed_register_write_shape(
-                    program, target, fn, ins, &binding) ||
+                    target, fn, ins, &binding) ||
                 !((binding->register_name_length == 4U &&
                    memcmp(binding->register_name, "$r21", 4U) == 0 &&
                    loong_residual_unsigned_long_register(fn, binding)) ||
@@ -304,7 +304,7 @@ bool minic_loongarch64_emit_residual_instruction(
              * local frame. A live SP read in a dynamic/realigned frame must
              * remain explicitly rejected: its value differs across allocas. */
             if (!minic_multi_direct_fixed_register_read_shape(
-                    program, target, fn, ins, &binding) ||
+                    target, fn, ins, &binding) ||
                 (binding->register_name_length != 3U &&
                  binding->register_name_length != 4U))
                 return minic_multi_direct_machine_reject(

@@ -18,10 +18,10 @@ typedef struct MinicRiscv64FunctionAbiPlan {
     bool prepared;
 } MinicRiscv64FunctionAbiPlan;
 bool minic_riscv64_function_abi_plan_build_profile(
-    const MinicC0Program *, const MinicCoreFunction *,
+    const MinicCoreFunction *,
     MinicRiscv64FunctionAbiPlan *, bool lp64_soft_float);
 bool minic_riscv64_function_abi_plan_build(
-    const MinicC0Program *, const MinicCoreFunction *,
+    const MinicCoreFunction *,
     MinicRiscv64FunctionAbiPlan *);
 void minic_riscv64_function_abi_plan_destroy(MinicRiscv64FunctionAbiPlan *);
 #endif

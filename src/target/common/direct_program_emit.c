@@ -231,7 +231,7 @@ bool minic_multi_direct_write_program_with_module(
     }
     if (census) {
         minic_backend_core_usage_dump(config->architecture_name,
-                                      program, target, core_functions,
+                                      module, core_functions,
                                       core_function_count);
         (void)fprintf(stderr,
             "MINIC_BACKEND_CENSUS arch=%s scanned=%zu rejected=%zu\\n",

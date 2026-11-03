@@ -91,6 +91,16 @@ uint64_t minic_backend_asm_source_form_id(const MinicInlineAsm *);
 typedef bool (*MinicBackendQualifyInlineAsm)(
     const MinicC0Program *, const MinicInlineAsm *, MinicTargetInlineAsmContract *);
 
+/* Source qualification runs before Core normalizes GNU named operands.
+ * Targets whose machine spelling carries additional semantic effects must
+ * prove the exact original -> normalized equivalence before Core publishes
+ * the operand plan. This callback may ONLY seal opaque machine-form IDs;
+ * it must not change already-qualified operand roles, ties or memory effects.
+ * A zero form ID means the native emitter must retain strict source checks. */
+typedef bool (*MinicBackendSealNormalizedInlineAsm)(
+    const MinicC0Program *, const MinicInlineAsm *, const char *, size_t,
+    MinicTargetInlineAsmContract *);
+
 /* A target reserves its own input-bearing GNU machine template families.
  * Generic Core knows neither machine opcodes nor physical constraints. */
 typedef bool (*MinicBackendRequiresQualifiedInputAsm)(const MinicInlineAsm *);
@@ -111,6 +121,7 @@ typedef struct MinicBackend {
     MinicBackendEmitModule emit_module_program;
     /* Optional target contract for GNU multi-operand inline assembly. */
     MinicBackendQualifyInlineAsm qualify_inline_asm;
+    MinicBackendSealNormalizedInlineAsm seal_normalized_inline_asm;
     /* True only when the machine emitter omits unreachable Core blocks.
      * Core call-graph pruning must use exactly the same emitted CFG roots. */
     bool emit_reachable_core_blocks_only;
@@ -129,6 +140,9 @@ const MinicBackend *minic_backend_for_target(const MinicTargetInfo *target);
 bool minic_backend_qualify_inline_asm(
     const MinicBackend *, const MinicC0Program *, const MinicInlineAsm *,
     MinicTargetInlineAsmContract *);
+bool minic_backend_seal_normalized_inline_asm(
+    const MinicBackend *, const MinicC0Program *, const MinicInlineAsm *,
+    const char *, size_t, MinicTargetInlineAsmContract *);
 
 /* Common lexical prefix test only; the target owns the ISA inventory. */
 bool minic_backend_inline_asm_prefix_matches(

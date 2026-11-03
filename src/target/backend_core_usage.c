@@ -1,5 +1,6 @@
 #include "target/backend_core_usage.h"
 
+#include <limits.h>
 #include <stdio.h>
 
 /* Exact original opt-in census semantics and stable machine-readable output.
@@ -80,13 +81,11 @@ static const char *minic_backend_usage_group(MinicCoreInstructionKind kind) {
     }
 }
 
-static unsigned int minic_backend_usage_bits(const MinicC0Program *program,
-                                             const MinicTargetInfo *target,
-                                             const MinicCoreFunction *fn,
+static unsigned int minic_backend_usage_bits(const MinicCoreFunction *fn,
                                              const MinicCoreInstruction *ins) {
-    MinicType type = ins->type;
-    unsigned int bits = 0U;
-    size_t size = 0U;
+    MinicCoreTypeId type_id = ins->core_type_id;
+    const MinicCoreType *type;
+    if (fn == NULL || fn->type_context == NULL || ins == NULL) return 0U;
     switch (ins->kind) {
     case MINIC_CORE_INSTRUCTION_INTEGER_LESS:
     case MINIC_CORE_INSTRUCTION_SCALAR_EQUAL:
@@ -95,7 +94,7 @@ static unsigned int minic_backend_usage_bits(const MinicC0Program *program,
     case MINIC_CORE_INSTRUCTION_DOUBLE_LESS:
     case MINIC_CORE_INSTRUCTION_DOUBLE_LESS_EQUAL:
         if (ins->value.binary.left < fn->value_count)
-            type = fn->values[ins->value.binary.left].type;
+            type_id = fn->values[ins->value.binary.left].core_type_id;
         break;
     case MINIC_CORE_INSTRUCTION_INTEGER_CONVERSION:
     case MINIC_CORE_INSTRUCTION_INTEGER_TO_DOUBLE:
@@ -109,40 +108,46 @@ static unsigned int minic_backend_usage_bits(const MinicC0Program *program,
     case MINIC_CORE_INSTRUCTION_FLOAT_TO_DOUBLE:
     case MINIC_CORE_INSTRUCTION_DOUBLE_TO_FLOAT:
         if (ins->value.operand < fn->value_count)
-            type = fn->values[ins->value.operand].type;
+            type_id = fn->values[ins->value.operand].core_type_id;
         break;
     default: break;
     }
-    if (minic_type_is_integer(type))
-        (void)minic_target_info_integer_width(target, program, type, &bits);
-    else if (minic_type_is_pointer(type) &&
-             minic_target_info_sizeof_type(target, program, type, &size))
-        bits = (unsigned int)(size * 8U);
-    else if (minic_type_is_float(type)) bits = 32U;
-    else if (minic_type_is_double(type)) bits = 64U;
-    else if (minic_type_is_float128(type)) bits = 128U;
-    return bits;
+    type = minic_core_type_get(fn->type_context, type_id);
+    if (type == NULL || !type->has_layout) return 0U;
+    if (type->kind == MINIC_CORE_TYPE_INTEGER)
+        return type->value.integer.bit_width;
+    if (type->kind == MINIC_CORE_TYPE_POINTER)
+        return type->size > UINT_MAX / 8U ? UINT_MAX
+            : (unsigned int)(type->size * 8U);
+    if (type->kind == MINIC_CORE_TYPE_FLOAT) {
+        if (type->value.floating.format == MINIC_CORE_FLOAT_BINARY32) return 32U;
+        if (type->value.floating.format == MINIC_CORE_FLOAT_BINARY64) return 64U;
+        if (type->value.floating.format == MINIC_CORE_FLOAT_EXTENDED) return 128U;
+    }
+    return 0U;
 }
 
 void minic_backend_core_usage_dump(const char *arch,
-                                          const MinicC0Program *program,
-                                          const MinicTargetInfo *target,
+                                          const MinicCoreModule *module,
                                           const MinicCoreFunction *functions,
                                           size_t function_count) {
     size_t counts[MINIC_CORE_INSTRUCTION_KIND_COUNT][4] = {{0U}};
     size_t totals[MINIC_CORE_TERMINATOR_UNREACHABLE + 1U] = {0U};
     size_t i, j, kind, bucket, n_functions = 0U, n_instructions = 0U;
     const char *const widths[4] = {"unknown", "upto32", "64", "over64"};
+    if (!arch || !module || !module->finalized ||
+        module->function_count != function_count ||
+        (function_count != 0U && (!functions || !module->function_symbols)))
+        return;
     for (i = 0U; i < function_count; ++i) {
-        const MinicFunction *decl = &program->functions[i];
+        const MinicCoreModuleFunctionSymbol *decl = &module->function_symbols[i];
         const MinicCoreFunction *fn = &functions[i];
         if (!decl->is_defined || (decl->is_internal && !decl->is_referenced))
             continue;
         ++n_functions;
         for (j = 0U; j < fn->instruction_count; ++j) {
             const MinicCoreInstruction *ins = &fn->instructions[j];
-            const unsigned int bits = minic_backend_usage_bits(
-                program, target, fn, ins);
+            const unsigned int bits = minic_backend_usage_bits(fn, ins);
             kind = (size_t)ins->kind;
             if (kind >= (size_t)MINIC_CORE_INSTRUCTION_KIND_COUNT)
                 continue;

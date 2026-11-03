@@ -291,7 +291,7 @@ bool minic_aarch64_emit_residual_instruction(
              * not qualified by this first machine owner. */
             if (dynamic_frame ||
                 !minic_multi_direct_fixed_register_read_shape(
-                    program, target, fn, ins, &binding) ||
+                    target, fn, ins, &binding) ||
                 binding->register_name_length != 2U ||
                 memcmp(binding->register_name, "sp", 2U) != 0 ||
                 fputs("  mov x9, sp\n", out) == EOF)

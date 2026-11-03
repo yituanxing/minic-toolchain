@@ -237,11 +237,11 @@ static bool emit_instruction(FILE *file,
         }
         return minic_riscv64_frame_store_value(file, frame, instruction->result, "t0");
     case MINIC_CORE_INSTRUCTION_PARAMETER:
-        return minic_riscv64_emit_incoming_parameter(file, program, function, frame, instruction);
+        return minic_riscv64_emit_incoming_parameter(file, function, frame, instruction);
     case MINIC_CORE_INSTRUCTION_PARAMETER_OBJECT:
-        return minic_riscv64_emit_incoming_parameter_object(file, program, function, frame, instruction);
+        return minic_riscv64_emit_incoming_parameter_object(file, function, frame, instruction);
     case MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS:
-        if (!minic_riscv64_core_frame_object_offset(program, function, frame, instruction->value.object_id, &object_offset) ||
+        if (!minic_riscv64_core_frame_object_offset(function, frame, instruction->value.object_id, &object_offset) ||
             !minic_riscv64_frame_emit_address(file, frame, "t0", object_offset)) {
             return false;
         }
@@ -303,9 +303,9 @@ static bool emit_instruction(FILE *file,
     case MINIC_CORE_INSTRUCTION_COMPILER_BARRIER:
         return true;
     case MINIC_CORE_INSTRUCTION_CALL:
-        return minic_riscv64_emit_direct_call(file, program, function, frame, instruction, instruction_id);
+        return minic_riscv64_emit_direct_call(file, function, frame, instruction, instruction_id);
     case MINIC_CORE_INSTRUCTION_INDIRECT_CALL:
-        return minic_riscv64_emit_indirect_call(file, program, function, frame, instruction, instruction_id);
+        return minic_riscv64_emit_indirect_call(file, function, frame, instruction, instruction_id);
     case MINIC_CORE_INSTRUCTION_FIELD_ADDRESS:
         return minic_riscv64_emit_memory_instruction(file, program, function, frame, instruction);
     default:
@@ -386,7 +386,7 @@ static bool emit_terminator(FILE *file,
                     function->type_context, function->core_return_type_id,
                     frame->named_parameter_cursor.lp64_soft_float,
                     &return_value) ||
-                !minic_riscv64_core_frame_object_offset(program, function, frame, terminator->return_object, &object_offset) ||
+                !minic_riscv64_core_frame_object_offset(function, frame, terminator->return_object, &object_offset) ||
                 !minic_riscv64_frame_emit_address(file, frame, "t0", object_offset)) {
                 return false;
             }
@@ -541,7 +541,7 @@ static bool emit_core_function_with_symbol(FILE *file,
         (void)fflush(stderr);
     }
     if (!minic_riscv64_core_function_admit_profile(
-            program, function, &abi_plan,
+            program != NULL, function, &abi_plan,
             isa != NULL && isa->strict_isa &&
             isa->abi == MINIC_RISCV_ABI_LP64, facts, storage)) {
         minic_riscv64_function_abi_plan_destroy(&abi_plan);
@@ -568,7 +568,7 @@ static bool emit_core_function_with_symbol(FILE *file,
             strcmp(focus, symbol_name) == 0;
         if (!minic_riscv64_asm_function_plan_build(function, &frame.asm_plan) ||
             !minic_riscv64_core_frame_initialize_with_storage(
-                program, function, &frame,
+                function, &frame,
                 program != NULL ? &abi_plan : NULL, crossblock_enabled,
                 minic_riscv64_needs_arithmetic_libcall(isa, function), facts, storage)) {
             minic_riscv64_function_abi_plan_destroy(&abi_plan);

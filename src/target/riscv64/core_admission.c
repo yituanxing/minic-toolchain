@@ -35,7 +35,7 @@ static bool rv64_admit_core_scalar(const MinicCoreType *type) {
 
 /* Canonical Core verification belongs to Common FunctionPlan. RV64 owns
  * target capability, psABI placements and strict machine ISA admission. */
-static bool core_instruction_supported(const MinicC0Program *program,
+static bool core_instruction_supported(bool require_prepared_abi,
                                        const MinicCoreFunction *function,
                                        const MinicCoreInstruction *instruction,
                                        const MinicCoreCallView *semantic_view,
@@ -79,7 +79,7 @@ static bool core_instruction_supported(const MinicC0Program *program,
         /* Parameter locations have already been classified by the same
          * qualified psABI plan used by incoming machine emission. Do not
          * re-run the named prefix cursor for every va_start instruction. */
-        return program != NULL && abi_plan != NULL && abi_plan->prepared &&
+        return require_prepared_abi && abi_plan != NULL && abi_plan->prepared &&
                minic_riscv64_abi_variadic_prefix_from_cursor(
                    &abi_plan->named_parameter_cursor,
                    &integer_parameter_count, &fixed_stack_slots);
@@ -131,10 +131,10 @@ static bool core_instruction_supported(const MinicC0Program *program,
         return true;
     case MINIC_CORE_INSTRUCTION_CALL:
         return minic_riscv64_core_direct_call_supported(
-            program, function, instruction, semantic_view, prepared_call);
+            require_prepared_abi, function, instruction, semantic_view, prepared_call);
     case MINIC_CORE_INSTRUCTION_INDIRECT_CALL:
         return minic_riscv64_core_indirect_call_supported(
-            program, function, instruction, semantic_view, prepared_call);
+            require_prepared_abi, function, instruction, semantic_view, prepared_call);
     case MINIC_CORE_INSTRUCTION_FIELD_ADDRESS:
         return minic_riscv64_core_field_address_supported(instruction, NULL);
     case MINIC_CORE_INSTRUCTION_SCALAR_BITCAST:
@@ -165,7 +165,7 @@ static bool core_rv64_capability_reject(const MinicCoreFunction *function,
 }
 
 static bool core_function_can_emit_with_index(
-                                   const MinicC0Program *program,
+                                   bool require_prepared_abi,
                                    const MinicCoreFunction *function,
                                    const MinicRiscv64FunctionAbiPlan *abi_plan,
                                    const MinicCoreCallIndex *semantic_calls,
@@ -175,7 +175,7 @@ static bool core_function_can_emit_with_index(
      * reach this routine. ABI and ISA capability remain RV64-owned. */
     if (function == NULL || function->type_context == NULL)
         return core_rv64_capability_reject(function, "sealed-types", 0U, -1);
-    if (program == NULL) {
+    if (!require_prepared_abi) {
         const MinicCoreType *ret = rv64_admit_core_base(
             function, function->core_return_type_id);
         if (ret == NULL ||
@@ -252,7 +252,7 @@ static bool core_function_can_emit_with_index(
                 return core_rv64_capability_reject(
                     function, "call-index", index, (int)ins->kind);
             view = &semantic_calls->sites[call_site].view;
-            if (program != NULL) {
+            if (require_prepared_abi) {
                 prepared = abi_plan->outgoing_calls.sites[call_site];
                 if (prepared == NULL || prepared->instruction_id != index ||
                     prepared->argument_count != view->argument_count)
@@ -262,7 +262,7 @@ static bool core_function_can_emit_with_index(
             ++call_site;
         }
         if (!core_instruction_supported(
-                program, function, ins, view, prepared, abi_plan)) {
+                require_prepared_abi, function, ins, view, prepared, abi_plan)) {
             return core_rv64_capability_reject(
                 function, "instruction", index, (int)ins->kind);
         }
@@ -277,7 +277,7 @@ static bool core_function_can_emit_with_index(
  * admission builds the identical Common semantic index, not a second
  * RV64-only CALL scan/shape resolver. */
 static bool core_function_can_emit(
-    const MinicC0Program *program, const MinicCoreFunction *function,
+    bool require_prepared_abi, const MinicCoreFunction *function,
     MinicRiscv64FunctionAbiPlan *abi_plan, bool core_verified,
     const MinicCoreCallIndex *semantic_calls,
     const MinicCoreObjectStoragePlan *storage) {
@@ -291,23 +291,23 @@ static bool core_function_can_emit(
     /* Build the outgoing psABI exactly once with the incoming ABI profile.
      * Admission, frame stack sizing and machine emission then share these
      * same immutable locations, including LP64 versus LP64D FP records. */
-    if (program != NULL &&
+    if (require_prepared_abi &&
         (abi_plan == NULL || !abi_plan->prepared ||
          !minic_riscv64_call_plan_cache_build(
-             program, function,
+             function,
              abi_plan->named_parameter_cursor.lp64_soft_float,
              calls.index, &abi_plan->outgoing_calls))) {
         minic_core_call_index_handle_destroy(&calls);
         return core_rv64_capability_reject(function, "call-abi", 0U, -1);
     }
     ok = core_function_can_emit_with_index(
-        program, function, abi_plan, calls.index, storage);
+        require_prepared_abi, function, abi_plan, calls.index, storage);
     minic_core_call_index_handle_destroy(&calls);
     return ok;
 }
 
 bool minic_riscv64_core_function_admit_profile(
-    const MinicC0Program *program, const MinicCoreFunction *function,
+    bool require_prepared_abi, const MinicCoreFunction *function,
     MinicRiscv64FunctionAbiPlan *abi_plan, bool lp64_soft_float,
     const MinicCoreFunctionFacts *facts,
     const MinicCoreObjectStoragePlan *storage) {
@@ -316,31 +316,31 @@ bool minic_riscv64_core_function_admit_profile(
         minic_core_function_verify(function);
     if (!core_verified)
         return core_rv64_capability_reject(function, "verify", 0U, -1);
-    if (program != NULL &&
+    if (require_prepared_abi &&
         (abi_plan == NULL ||
          !minic_riscv64_function_abi_plan_build_profile(
-             program, function, abi_plan, lp64_soft_float)))
+             function, abi_plan, lp64_soft_float)))
         return core_rv64_capability_reject(function, "function-abi", 0U, -1);
     return core_function_can_emit(
-        program, function, abi_plan, core_verified,
+        require_prepared_abi, function, abi_plan, core_verified,
         minic_core_function_facts_verified(facts, function) ? facts->call_index : NULL,
         storage);
 }
 bool minic_riscv64_core_function_admit(
-    const MinicC0Program *program, const MinicCoreFunction *function,
+    bool require_prepared_abi, const MinicCoreFunction *function,
     MinicRiscv64FunctionAbiPlan *abi_plan) {
     return minic_riscv64_core_function_admit_profile(
-        program, function, abi_plan, false, NULL, NULL);
+        require_prepared_abi, function, abi_plan, false, NULL, NULL);
 }
 bool minic_riscv64_core_function_can_emit(const MinicCoreFunction *function) {
-    return core_function_can_emit(NULL, function, NULL, false, NULL, NULL);
+    return core_function_can_emit(false, function, NULL, false, NULL, NULL);
 }
 bool minic_riscv64_core_function_can_emit_for_program(
     const MinicC0Program *program, const MinicCoreFunction *function) {
     MinicRiscv64FunctionAbiPlan plan = {0};
     bool ok;
     if (program == NULL) return false;
-    ok = minic_riscv64_core_function_admit(program, function, &plan);
+    ok = minic_riscv64_core_function_admit(true, function, &plan);
     minic_riscv64_function_abi_plan_destroy(&plan);
     return ok;
 }

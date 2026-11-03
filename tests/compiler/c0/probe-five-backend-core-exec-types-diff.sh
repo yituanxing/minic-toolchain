@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Optional same-preprocessed-source differential gate for the P6/P7 Core
-# execution-type and frame/ASM ownership closures. Emitters must retain
-# machine bytes and rejection behavior while C fallbacks are retired.
+# Optional same-preprocessed-source differential gate for the P6-P8 Core
+# execution-type, frame and machine-ASM ownership closures. All five target
+# emitters must retain machine bytes and rejection behavior as C fallbacks
+# and obsolete source->machine type queries are retired together.
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "$0")/../../.." && pwd)
@@ -45,6 +46,26 @@ fixtures=(
   anonymous_record_members_runtime
   loongarch64_linux_va_fixed_overflow
   loongarch64_core_integer_emit
+  mixed-overflow-u64-i32
+  dynamic_stack_wide_spill
+  x86_sysv_12byte_record
+  x86_typed_six_legacy_abi
+  x86_gnu_vector_size_storage_driver
+  x86_gnu_vector_size_copy
+  x86_va_cursor_source_object_runtime
+  x86_linux_cmpxchg16b_alt
+  core_gp_forward
+  gnu_inline_asm_named_operands
+  gnu_inline_asm_readwrite_output
+  gnu_inline_asm_eight_operands
+  core_opaque_inline_asm
+  loongarch64_packed_hardware_asm_results
+  loongarch64_packed_asm_output
+  loongarch64_packed_uaccess_output
+  rv64_integer_aggregate_return
+  rv32_constructor_init_array
+  aarch64_linux_kvm_tlbi
+  gnu_inline_asm_satp_direct
 )
 targets=(riscv32-linux riscv64-linux x86_64-linux aarch64-linux loongarch64-linux)
 

@@ -14,7 +14,7 @@
 typedef struct Rv32AbiWordLocation {
     MinicRiscv32AbiPlacement location;
     unsigned words;
-    /* Source C ABI alignment, not width; 8-byte records may align to 1/4/8.
+    /* Sealed Core ABI alignment, not width; 8-byte records may align to 1/4/8.
      * In unnamed RV32 variadics only a two-word, 8-aligned value gets an
      * even-numbered argument register pair. */
     size_t alignment;
@@ -50,9 +50,7 @@ typedef struct Rv32FunctionAbiPlan {
     MinicCoreCallIndexHandle semantic_calls;
 } Rv32FunctionAbiPlan;
 
-bool rv32_function_abi_plan_build(const MinicC0Program *,
-                                  const MinicTargetInfo *,
-                                  const MinicCoreFunction *,
+bool rv32_function_abi_plan_build(const MinicCoreFunction *,
                                   const MinicCoreCallIndex *, Rv32FunctionAbiPlan *);
 void rv32_function_abi_plan_destroy(Rv32FunctionAbiPlan *);
 
