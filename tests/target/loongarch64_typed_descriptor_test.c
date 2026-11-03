@@ -141,8 +141,7 @@ static void descriptor_core_type_machine_positive(void) {
     assert(minic_core_type_register(&types, &type, &ptr_u64_id));
     values[0].core_type_id = ptr_u32_id;
     values[1].core_type_id = s32_id;
-    values[0].type = minic_type_double(); /* poison nominal C metadata */
-    values[1].type = minic_type_void();
+    /* Machine operands have CoreType identities, not source C descriptors. */
     descriptor.template_text = "cpucfg %0, %1";
     descriptor.template_length = strlen(descriptor.template_text);
     descriptor.is_volatile = true;

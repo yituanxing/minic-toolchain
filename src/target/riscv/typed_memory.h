@@ -2,18 +2,12 @@
 #define MINIC_TARGET_RISCV_TYPED_MEMORY_H
 
 #include "core/address_alignment.h"
-#include "target/data_layout.h"
 #include "target/riscv/register_identity.h"
 
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
-
-typedef struct MinicRiscvAddressLayout {
-    const MinicC0Program *program;
-    const MinicDataLayout *data_layout;
-} MinicRiscvAddressLayout;
 
 /* Root resolution never assumes a pointer's nominal pointee alignment.
  * Local CoreObjects have target DataLayout and explicit frame alignment;
@@ -22,42 +16,29 @@ typedef struct MinicRiscvAddressLayout {
 static inline size_t minic_riscv_address_root_alignment(
     const MinicCoreFunction *function,
     const MinicCoreInstruction *root, void *opaque) {
-    const MinicRiscvAddressLayout *layout = opaque;
     const MinicCoreObject *object;
-    size_t bytes, alignment;
+    const MinicCoreType *type;
+    size_t alignment;
+    (void)opaque;
     if (function == NULL || root == NULL ||
         root->kind != MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS ||
         root->value.object_id >= function->object_count ||
-        function->objects == NULL)
+        function->objects == NULL || function->type_context == NULL)
         return 1U;
     object = &function->objects[root->value.object_id];
-    if (function->type_context != NULL) {
-        const MinicCoreType *type = minic_core_type_get(
-            function->type_context, object->core_type_id);
-        if (type == NULL || !type->has_layout || type->alignment == 0U)
-            return 1U;
-        alignment = type->alignment;
-    } else {
-        /* Only independent pre-snapshot fixtures use the C layout path.
-         * A resolved production function never reopens frontend metadata. */
-        if (layout == NULL || layout->program == NULL ||
-            layout->data_layout == NULL ||
-            !minic_data_layout_type(layout->data_layout, layout->program,
-                                    object->type, &bytes, &alignment))
-            return 1U;
-        (void)bytes;
-    }
+    type = minic_core_type_get(function->type_context, object->core_type_id);
+    if (type == NULL || !type->has_layout || type->alignment == 0U)
+        return 1U;
+    alignment = type->alignment;
     if (object->explicit_alignment > alignment)
         alignment = object->explicit_alignment;
     return alignment;
 }
 
 static inline size_t minic_riscv_address_alignment(
-    const MinicC0Program *program, const MinicDataLayout *data_layout,
     const MinicCoreFunction *function, MinicCoreValueId address) {
-    MinicRiscvAddressLayout context = {program, data_layout};
     return minic_core_address_known_alignment(
-        function, address, minic_riscv_address_root_alignment, &context);
+        function, address, minic_riscv_address_root_alignment, NULL);
 }
 
 /* One target-local RISC-V Base-I scalar memory transport for both XLENs.

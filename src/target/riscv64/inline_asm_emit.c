@@ -807,8 +807,7 @@ static bool emit_structured_inline_asm(FILE *file,
                     register_name, scratch_register,
                     transfer_scratch_register,
                     minic_riscv_address_alignment(
-                        NULL, NULL, function,
-                        binding->value))) {
+                        function, binding->value))) {
                 return false;
             }
             break;
@@ -898,8 +897,7 @@ static bool emit_structured_inline_asm(FILE *file,
                 register_name, scratch_register,
                 transfer_scratch_register,
                 minic_riscv_address_alignment(
-                    NULL, NULL, function,
-                    binding->value))) {
+                    function, binding->value))) {
             return false;
         }
     }

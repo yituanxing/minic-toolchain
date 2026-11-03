@@ -430,7 +430,7 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
         if (*value_id >= context->function->value_count) {
             return MINIC_CORE_LOWER_ERROR;
         }
-        if (minic_type_equal(context->function->values[*value_id].type, expression->type)) {
+        if (minic_type_equal(minic_core_function_source_value_type(context->function, *value_id), expression->type)) {
             return MINIC_CORE_LOWER_OK;
         }
         /* M90_LEGACY_ARRAY_ADDRESS_OF: legacy local/member arrays keep their
@@ -447,7 +447,7 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
             if (addressed != NULL &&
                 minic_c0_expression_array_object_info(
                     context->body->program, addressed, &array_info) &&
-                minic_type_is_pointer(context->function->values[*value_id].type) &&
+                minic_type_is_pointer(minic_core_function_source_value_type(context->function, *value_id)) &&
                 minic_type_is_pointer(expression->type)) {
                 return append_scalar_bitcast(
                     context, expression->span, expression->type, *value_id, value_id);
@@ -542,7 +542,7 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
             return status;
         }
         if (operand_value >= context->function->value_count ||
-            !minic_type_equal(context->function->values[operand_value].type, source_type)) {
+            !minic_type_equal(minic_core_function_source_value_type(context->function, operand_value), source_type)) {
             return MINIC_CORE_LOWER_ERROR;
         }
         if (minic_type_is_integer(target_type) && minic_type_is_integer(source_type)) {
@@ -669,7 +669,7 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
             return status;
         }
         if (operand_value >= context->function->value_count ||
-            !minic_type_equal(context->function->values[operand_value].type, operand_value_type)) {
+            !minic_type_equal(minic_core_function_source_value_type(context->function, operand_value), operand_value_type)) {
             return MINIC_CORE_LOWER_ERROR;
         }
         return append_scalar_bitcast(
@@ -737,7 +737,7 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
             return status;
         }
         if (left_source >= context->function->value_count ||
-            !minic_type_equal(context->function->values[left_source].type, left_type)) {
+            !minic_type_equal(minic_core_function_source_value_type(context->function, left_source), left_type)) {
             return MINIC_CORE_LOWER_ERROR;
         }
         if (minic_type_equal(left_value_type, left_type)) {
@@ -760,7 +760,7 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
             return status;
         }
         if (right_source >= context->function->value_count ||
-            !minic_type_equal(context->function->values[right_source].type, right_type)) {
+            !minic_type_equal(minic_core_function_source_value_type(context->function, right_source), right_type)) {
             return MINIC_CORE_LOWER_ERROR;
         }
         if (minic_type_equal(right_value_type, right_type)) {
@@ -813,9 +813,9 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
         }
         if (left >= context->function->value_count || right >= context->function->value_count ||
             result_address >= context->function->value_count ||
-            !minic_type_equal(context->function->values[left].type, left_value_type) ||
-            !minic_type_equal(context->function->values[right].type, right_value_type) ||
-            !minic_type_equal(context->function->values[result_address].type,
+            !minic_type_equal(minic_core_function_source_value_type(context->function, left), left_value_type) ||
+            !minic_type_equal(minic_core_function_source_value_type(context->function, right), right_value_type) ||
+            !minic_type_equal(minic_core_function_source_value_type(context->function, result_address),
                               result_pointer_type)) {
             return MINIC_CORE_LOWER_ERROR;
         }

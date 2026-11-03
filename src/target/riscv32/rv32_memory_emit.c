@@ -106,7 +106,7 @@ bool rv32_emit_memory_instruction(FILE *out, const MinicC0Program *program,
                rv32_slot(out, fr, ins->result, "t0", false);
     }
     case MINIC_CORE_INSTRUCTION_LOAD:
-        access_alignment = minic_riscv_address_alignment(NULL, NULL, f,
+        access_alignment = minic_riscv_address_alignment(f,
                                           ins->value.load.address);
         if (rv32_core_scalar_storage_words(f, ins->core_type_id,
                                            &bits) && bits == 2U)
@@ -150,7 +150,7 @@ bool rv32_emit_memory_instruction(FILE *out, const MinicC0Program *program,
             rv32_slot(out, fr, ins->result, "t0", false);
     }
     case MINIC_CORE_INSTRUCTION_STORE:
-        access_alignment = minic_riscv_address_alignment(NULL, NULL, f,
+        access_alignment = minic_riscv_address_alignment(f,
                                           ins->value.store.address);
         if (ins->value.store.stored_value < f->value_count &&
             rv32_core_scalar_storage_words(

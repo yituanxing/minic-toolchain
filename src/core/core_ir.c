@@ -992,7 +992,6 @@ bool minic_core_function_append_value_instruction(MinicCoreFunction *function,
     stored.core_type_id = MINIC_CORE_TYPE_INVALID;
     if (stored.kind == MINIC_CORE_INSTRUCTION_FIELD_ADDRESS)
         stored.value.field_address.core_record_type_id = MINIC_CORE_TYPE_INVALID;
-    function->values[function->value_count].type = stored.type;
     function->values[function->value_count].core_type_id = MINIC_CORE_TYPE_INVALID;
     function->values[function->value_count].definition = instruction_id;
     function->value_count += 1U;
@@ -1114,6 +1113,26 @@ static bool snapshot_type_array(const MinicCoreTypeContext *context,
 
 static bool ingress_storage_valid(const void *items, size_t count, size_t capacity) {
     return count <= capacity && (capacity == 0U || items != NULL);
+}
+
+/* An SSA value has exactly one defining instruction. During C lowering that
+ * definition is the single owner of its exact source type (including C rank,
+ * enum identity and qualifiers). Do not copy the descriptor into every Value:
+ * the frozen Value schema contains only the imported CoreTypeId.  This adapter
+ * is intentionally unusable after Core publication. */
+MinicType minic_core_function_source_value_type(const MinicCoreFunction *function,
+                                                 MinicCoreValueId value_id) {
+    const MinicType invalid = {.base_kind = (MinicTypeBaseKind)0x7fffffff};
+    MinicCoreInstructionId definition;
+    if (function == NULL || function->type_context != NULL ||
+        function->values == NULL || function->instructions == NULL ||
+        value_id >= function->value_count)
+        return invalid;
+    definition = function->values[value_id].definition;
+    if (definition >= function->instruction_count ||
+        function->instructions[definition].result != value_id)
+        return invalid;
+    return function->instructions[definition].type;
 }
 
 static bool ingress_enum_scalar_registered(const MinicCoreFunction *function,
@@ -1241,7 +1260,8 @@ bool minic_core_function_verify_source_ingress(const MinicCoreFunction *function
                 return false;
     for (i = 0U; i < function->value_count; ++i)
         if (function->values[i].definition >= function->instruction_count ||
-            !ingress_enum_scalar_registered(function, function->values[i].type))
+            !ingress_enum_scalar_registered(
+                function, minic_core_function_source_value_type(function, (MinicCoreValueId)i)))
             return false;
     for (i = 0U; i < function->instruction_count; ++i)
         if ((unsigned int)function->instructions[i].kind >=
@@ -1259,6 +1279,50 @@ bool minic_core_function_verify_source_ingress(const MinicCoreFunction *function
             if (block->instructions[j] >= function->instruction_count) return false;
     }
     return true;
+}
+
+/* The C descriptors below are a temporary lowering/import transaction, not
+ * part of an executable Core function.  Once the complete CoreType graph has
+ * been sealed AND both verifiers accepted it, release the source-owned arrays
+ * and poison every borrowed C descriptor.  Keep the source draft intact on
+ * any snapshot failure so the caller may retry or destroy it normally.
+ *
+ * Source/target GNU-ASM qualification must use the original source Program;
+ * machine emission may use only the sealed Core type identities.  Poisoning
+ * here makes an accidental post-publication C-type read fail visibly rather
+ * than silently produce target-dependent machine code. */
+static void discard_published_source_types(MinicCoreFunction *function) {
+    const MinicType poisoned = {.base_kind = (MinicTypeBaseKind)0x7fffffff};
+    size_t index;
+
+    function->return_type = poisoned;
+    free(function->parameter_types);
+    function->parameter_types = NULL;
+    free(function->enum_types);
+    function->enum_types = NULL;
+    function->enum_type_count = 0U;
+    function->enum_type_capacity = 0U;
+    for (index = 0U; index < function->fixed_register_binding_count; ++index)
+        function->fixed_register_bindings[index].type = poisoned;
+    for (index = 0U; index < function->object_count; ++index)
+        function->objects[index].type = poisoned;
+    for (index = 0U; index < function->global_count; ++index)
+        function->globals[index].type = poisoned;
+    for (index = 0U; index < function->callee_count; ++index) {
+        MinicCoreCallee *callee = &function->callees[index];
+        callee->return_type = poisoned;
+        free(callee->parameter_types);
+        callee->parameter_types = NULL;
+    }
+    for (index = 0U; index < function->call_signature_count; ++index) {
+        MinicCoreCallSignature *signature = &function->call_signatures[index];
+        signature->function_type_id = MINIC_FUNCTION_TYPE_INVALID;
+        signature->return_type = poisoned;
+        free(signature->parameter_types);
+        signature->parameter_types = NULL;
+    }
+    for (index = 0U; index < function->instruction_count; ++index)
+        function->instructions[index].type = poisoned;
 }
 
 bool minic_core_function_snapshot_types(MinicCoreFunction *function,
@@ -1316,7 +1380,8 @@ bool minic_core_function_snapshot_types(MinicCoreFunction *function,
                                  &signature->core_parameter_type_ids)) goto failed;
     }
     for (index = 0U; index < function->value_count; ++index)
-        if (!snapshot_one_type(context, resolver, user_data, function->values[index].type,
+        if (!snapshot_one_type(context, resolver, user_data,
+                               minic_core_function_source_value_type(function, (MinicCoreValueId)index),
                                &function->values[index].core_type_id)) goto failed;
     for (index = 0U; index < function->instruction_count; ++index) {
         MinicCoreInstruction *instruction = &function->instructions[index];
@@ -1329,7 +1394,7 @@ bool minic_core_function_snapshot_types(MinicCoreFunction *function,
              * C or treats an enum's underlying integer as an ordinary
              * narrow-result ABI permission. */
             if (address >= function->value_count ||
-                !minic_type_pointee(function->values[address].type,
+                !minic_type_pointee(minic_core_function_source_value_type(function, address),
                                     &source_pointee) ||
                 instruction->value.integer_overflow.source_overflow_destination_ineligible !=
                     minic_type_is_enum(source_pointee)) goto failed;
@@ -1356,7 +1421,10 @@ bool minic_core_function_snapshot_types(MinicCoreFunction *function,
             instruction->value.field_address.core_record_type_id = record_id;
         }
     }
-    if (minic_core_function_attach_type_context(function, context)) return true;
+    if (minic_core_function_attach_type_context(function, context)) {
+        discard_published_source_types(function);
+        return true;
+    }
 failed:
     clear_core_type_snapshots(function);
     return false;

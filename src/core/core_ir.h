@@ -181,8 +181,8 @@ typedef enum MinicCoreTerminatorKind {
 } MinicCoreTerminatorKind;
 
 typedef struct MinicCoreValue {
-    /* Migration-only C descriptor; eventually removed at the Core boundary. */
-    MinicType type;
+    /* One definition owns the source draft type during C lowering. A sealed
+     * Core SSA value carries no duplicate C descriptor. */
     MinicCoreTypeId core_type_id;
     MinicCoreInstructionId definition;
 } MinicCoreValue;

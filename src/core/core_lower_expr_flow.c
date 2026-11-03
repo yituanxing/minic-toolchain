@@ -337,7 +337,7 @@ void_conditional_done:
         if (minic_type_is_pointer(condition_expression->type)) {
             MinicCoreBlockId original_true;
 
-            if (!minic_type_is_pointer(context->function->values[branch_value].type)) {
+            if (!minic_type_is_pointer(minic_core_function_source_value_type(context->function, branch_value))) {
                 { *handled = true; return MINIC_CORE_LOWER_ERROR; }
             }
             (void)memset(&zero_test, 0, sizeof(zero_test));
@@ -353,7 +353,7 @@ void_conditional_done:
             original_true = branch_true;
             branch_true = branch_false;
             branch_false = original_true;
-        } else if (!minic_type_is_integer(context->function->values[branch_value].type)) {
+        } else if (!minic_type_is_integer(minic_core_function_source_value_type(context->function, branch_value))) {
             { *handled = true; return MINIC_CORE_LOWER_ERROR; }
         }
         (void)memset(&terminator, 0, sizeof(terminator));
@@ -728,7 +728,7 @@ MinicCoreLowerStatus minic_core_lower_try_statement_expression(
         return MINIC_CORE_LOWER_OK;
     }
     if (result_value >= context->function->value_count ||
-        !minic_type_equal(context->function->values[result_value].type, result_type))
+        !minic_type_equal(minic_core_function_source_value_type(context->function, result_value), result_type))
         return MINIC_CORE_LOWER_ERROR;
     *value_id = result_value;
     return MINIC_CORE_LOWER_OK;

@@ -23,7 +23,7 @@ static bool emit_strict_i_checked_multiply(
     MinicCoreValueId rhs = instruction->value.integer_overflow.right;
     MinicCoreValueId output = instruction->value.integer_overflow.result_address;
     const size_t proven_alignment = minic_riscv_address_alignment(
-        NULL, NULL, function, output);
+        function, output);
 
     if (!minic_riscv64_frame_load_value(file, frame, lhs, "t0") ||
         !minic_riscv64_frame_load_value(file, frame, rhs, "t1") ||
@@ -109,8 +109,7 @@ bool minic_riscv64_emit_overflow_instruction(
                 function, instruction, &result_type, &result_size, &is_unsigned))
             return false;
         proven_alignment = minic_riscv_address_alignment(
-            NULL, NULL, function,
-            instruction->value.integer_overflow.result_address);
+            function, instruction->value.integer_overflow.result_address);
         if (minic_riscv64_uses_arithmetic_libcall(isa) &&
             instruction->value.integer_overflow.operator_kind ==
                 MINIC_CORE_INTEGER_OVERFLOW_MULTIPLY)

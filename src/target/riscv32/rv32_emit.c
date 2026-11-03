@@ -309,7 +309,7 @@ static bool rv32_emit_source_asm_scalar_transfer(
         ? (bits <= 8U ? "sb" : bits <= 16U ? "sh" : "sw")
         : (bits <= 8U ? (is_signed ? "lb" : "lbu") :
            bits <= 16U ? (is_signed ? "lh" : "lhu") : "lw");
-    known_alignment = minic_riscv_address_alignment(NULL, NULL, f, address);
+    known_alignment = minic_riscv_address_alignment(f, address);
     return minic_riscv_emit_typed_memory(
         out, store, 32U, bits <= 8U ? 1U : bits / 8U,
         !store && is_signed, opcode, value_register, address_register,
@@ -590,8 +590,7 @@ static bool rv32_emit_source_structured_asm(
          * writes that low word leaves the upper register unspecified; choose
          * zero as a stable value for the otherwise uninitialized half. */
         if (rv32_core_is_wide_integer(f, pointee)) {
-            size_t proven_alignment = minic_riscv_address_alignment(
-                NULL, NULL, f, b->value);
+            size_t proven_alignment = minic_riscv_address_alignment(f, b->value);
             if (!minic_riscv_emit_typed_word_pair(
                     out, true, 32U, regs[b->operand_index], "zero", "a2",
                     "t6", proven_alignment, "rv32_asm"))

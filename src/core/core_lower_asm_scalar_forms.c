@@ -185,7 +185,7 @@ MinicCoreLowerStatus core_asm_try_mixed_memory_forms(
                 }
                 if (input_value >= context->function->value_count ||
                     memory_address >= context->function->value_count ||
-                    !minic_type_equal(context->function->values[input_value].type, input_type)) {
+                    !minic_type_equal(minic_core_function_source_value_type(context->function, input_value), input_type)) {
                     { *handled = true; return MINIC_CORE_LOWER_ERROR; }
                 }
                 if (!minic_core_function_add_opaque_inline_asm(context->function,
@@ -291,7 +291,7 @@ MinicCoreLowerStatus core_asm_try_mixed_memory_forms(
             }
             if (input_value >= context->function->value_count ||
                 memory_address >= context->function->value_count ||
-                !minic_type_equal(context->function->values[input_value].type, input_type)) {
+                !minic_type_equal(minic_core_function_source_value_type(context->function, input_value), input_type)) {
                 { *handled = true; return MINIC_CORE_LOWER_ERROR; }
             }
             if (!minic_core_function_add_opaque_inline_asm(context->function,
@@ -422,7 +422,7 @@ MinicCoreLowerStatus core_asm_try_mixed_memory_forms(
                     { *handled = true; return status; }
                 }
                 if (input_value >= context->function->value_count ||
-                    !minic_type_equal(context->function->values[input_value].type, input_type)) {
+                    !minic_type_equal(minic_core_function_source_value_type(context->function, input_value), input_type)) {
                     { *handled = true; return MINIC_CORE_LOWER_ERROR; }
                 }
                 if (!minic_core_function_add_opaque_inline_asm(context->function,
@@ -1029,7 +1029,7 @@ MinicCoreLowerStatus core_asm_try_empty_barrier_scalar_forms(
                 }
                 if (input_value >= context->function->value_count ||
                     !minic_type_equal(
-                        context->function->values[input_value].type, input_type)) {
+                        minic_core_function_source_value_type(context->function, input_value), input_type)) {
                     *handled = true;
                     return MINIC_CORE_LOWER_ERROR;
                 }
@@ -1146,7 +1146,7 @@ MinicCoreLowerStatus core_asm_try_empty_barrier_scalar_forms(
                 { *handled = true; return input_status; }
             }
             if (input_value >= context->function->value_count ||
-                !minic_type_equal(context->function->values[input_value].type, input_type)) {
+                !minic_type_equal(minic_core_function_source_value_type(context->function, input_value), input_type)) {
                 { *handled = true; return MINIC_CORE_LOWER_ERROR; }
             }
             if (!minic_core_function_add_opaque_inline_asm(context->function,

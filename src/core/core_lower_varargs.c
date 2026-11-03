@@ -47,9 +47,9 @@ MinicCoreLowerStatus minic_core_lower_abi_va_state_pointer(
     status = lower_address(context, operand, state_pointer);
     if (status != MINIC_CORE_LOWER_OK) return status;
     if (*state_pointer >= context->function->value_count ||
-        !minic_type_is_pointer(context->function->values[*state_pointer].type))
+        !minic_type_is_pointer(minic_core_function_source_value_type(context->function, *state_pointer)))
         return MINIC_CORE_LOWER_ERROR;
-    if (minic_type_equal(context->function->values[*state_pointer].type,
+    if (minic_type_equal(minic_core_function_source_value_type(context->function, *state_pointer),
                          state_pointer_type))
         return MINIC_CORE_LOWER_OK;
     /* Legacy array-object addressing may carry a pointer-to-array type;

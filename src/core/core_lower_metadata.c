@@ -81,7 +81,7 @@ bool core_capture_enum_metadata(MinicCoreLowerContext *context) {
         }
     }
     for (index = 0U; index < function->value_count; ++index) {
-        if (!core_capture_enum_type_metadata(context, function->values[index].type)) {
+        if (!core_capture_enum_type_metadata(context, minic_core_function_source_value_type(function, index))) {
             return false;
         }
     }

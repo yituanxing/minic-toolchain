@@ -169,7 +169,7 @@ static MinicCoreLowerStatus minic_core_lower_assignment_pair_impl(MinicCoreLower
         status = lower_expression(context, source_id, &vector_value);
         if (status != MINIC_CORE_LOWER_OK) return status;
         if (vector_value >= context->function->value_count ||
-            !minic_type_equal(context->function->values[vector_value].type,
+            !minic_type_equal(minic_core_function_source_value_type(context->function, vector_value),
                               stored_type))
             return MINIC_CORE_LOWER_UNSUPPORTED;
         status = lower_address(context, target_id, &target_address);
@@ -623,7 +623,7 @@ MinicCoreLowerStatus minic_core_lower_try_pointer_compound_assignment(
             if (address >= context->function->value_count) {
                 return MINIC_CORE_LOWER_ERROR;
             }
-            address_type = context->function->values[address].type;
+            address_type = minic_core_function_source_value_type(context->function, address);
             status = minic_core_lower_internal_spill_scalar_value(
                 context, target->span, address_type, address, &address_object);
             if (status != MINIC_CORE_LOWER_OK) {
@@ -639,7 +639,7 @@ MinicCoreLowerStatus minic_core_lower_try_pointer_compound_assignment(
                 return status;
             }
             if (index >= context->function->value_count ||
-                !minic_type_equal(context->function->values[index].type, index_type)) {
+                !minic_type_equal(minic_core_function_source_value_type(context->function, index), index_type)) {
                 return MINIC_CORE_LOWER_ERROR;
             }
             status = minic_core_lower_internal_reload_scalar_value(

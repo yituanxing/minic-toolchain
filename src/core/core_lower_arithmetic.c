@@ -34,7 +34,7 @@ MinicCoreLowerStatus minic_core_lower_try_arithmetic_unary(
             return status;
         }
         if (operand_value >= context->function->value_count ||
-            !minic_type_equal(context->function->values[operand_value].type, expression->type)) {
+            !minic_type_equal(minic_core_function_source_value_type(context->function, operand_value), expression->type)) {
             return MINIC_CORE_LOWER_UNSUPPORTED;
         }
         *value_id = operand_value;
@@ -76,7 +76,7 @@ MinicCoreLowerStatus minic_core_lower_try_arithmetic_unary(
             return status;
         }
         if (operand_value >= context->function->value_count ||
-            !minic_type_is_float(context->function->values[operand_value].type)) {
+            !minic_type_is_float(minic_core_function_source_value_type(context->function, operand_value))) {
             return MINIC_CORE_LOWER_ERROR;
         }
 
@@ -228,7 +228,7 @@ MinicCoreLowerStatus minic_core_lower_try_arithmetic_unary(
             return status;
         }
         if (operand_value >= context->function->value_count ||
-            !core_memory_scalar_type(context->function->values[operand_value].type)) {
+            !core_memory_scalar_type(minic_core_function_source_value_type(context->function, operand_value))) {
             return MINIC_CORE_LOWER_UNSUPPORTED;
         }
         (void)memset(&instruction, 0, sizeof(instruction));
@@ -272,9 +272,9 @@ MinicCoreLowerStatus minic_core_lower_try_arithmetic_binary(
         if (status != MINIC_CORE_LOWER_OK) return status;
         if (left >= context->function->value_count ||
             right >= context->function->value_count ||
-            !minic_type_equal(context->function->values[left].type,
+            !minic_type_equal(minic_core_function_source_value_type(context->function, left),
                               expression->type) ||
-            !minic_type_equal(context->function->values[right].type,
+            !minic_type_equal(minic_core_function_source_value_type(context->function, right),
                               expression->type))
             return MINIC_CORE_LOWER_UNSUPPORTED;
         instruction.kind = MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_XOR;
@@ -540,8 +540,8 @@ MinicCoreLowerStatus minic_core_lower_try_arithmetic_binary(
             return status;
         }
         if (left >= context->function->value_count || right >= context->function->value_count ||
-            !minic_type_equal(context->function->values[left].type, expression->type) ||
-            !minic_type_is_integer(context->function->values[right].type)) {
+            !minic_type_equal(minic_core_function_source_value_type(context->function, left), expression->type) ||
+            !minic_type_is_integer(minic_core_function_source_value_type(context->function, right))) {
             return MINIC_CORE_LOWER_ERROR;
         }
         instruction.kind = expression->value.binary.operator_kind == MINIC_BINARY_SHIFT_LEFT
@@ -622,7 +622,7 @@ MinicCoreLowerStatus minic_core_lower_try_arithmetic_compound(
                 address >= context->function->value_count) {
                 return MINIC_CORE_LOWER_ERROR;
             }
-            address_type = context->function->values[address].type;
+            address_type = minic_core_function_source_value_type(context->function, address);
             status = minic_core_lower_internal_spill_scalar_value(
                 context, target->span, address_type, address, &address_object);
             if (status != MINIC_CORE_LOWER_OK) {
@@ -802,7 +802,7 @@ MinicCoreLowerStatus minic_core_lower_try_arithmetic_compound(
         if (address >= context->function->value_count) {
             return MINIC_CORE_LOWER_ERROR;
         }
-        address_type = context->function->values[address].type;
+        address_type = minic_core_function_source_value_type(context->function, address);
         status = minic_core_lower_internal_spill_scalar_value(context, target->span, address_type, address, &address_object);
         if (status != MINIC_CORE_LOWER_OK) {
             return status;

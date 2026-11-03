@@ -967,3 +967,45 @@ The attempted release/poison of source C descriptors at `snapshot_types` reveale
 ## IR-P15 — Three-ISA machine ASM Core kind closure (2026-11-03)
 
 Read x86-64, AArch64 and LoongArch64 ASM machine contracts as one semantic family. A pointer/integer/void *execution-kind* query on a sealed Core SSA operand is now owned by Core and type-checked by the CoreType context, never the copied C type. Preserve distinct source-qualified GNU operand restrictions, exact C integer rank, and target physical register forms until those source checks are sealed: Core kind is not a C compatibility predicate or psABI classifier. The remaining strict C checks are a pending deliberate conversion, not permission to discard the entire source draft prematurely.
+
+## IR-P16 — Core Value single-owner source descriptor and five-target publication lifetime (2026-11-03)
+
+Follow the source producer through source-ingress validation, TypeId import,
+CoreType verification, and the machine consumers before retiring C state.
+`CoreValue.type` duplicated the defining `CoreInstruction.type` for every SSA
+value; all C lowering families now read the *single* defining instruction via
+the private, bounds-checked source-only query. Remove the duplicate field from
+the published Core Value schema, including its append, enum-capture and
+snapshot paths. This preserves C `long` vs `long long`, enum and qualifier
+identity before snapshot instead of collapsing C semantic checks into equal
+Core machine widths. A sealed Core function cannot use the source query.
+
+The previous IR-P14 post-snapshot C-type disposal was reverted because ASM
+machine consumers still used those descriptors. After IR-P15's three-ISA
+machine migration, reinstate disposal **only after both Core verifiers pass**:
+free source-owned signature/enum arrays and poison remaining C descriptors;
+snapshot failure preserves the entire draft for retry. RV32/RV64 also delete
+their last unsealed C `Program`/`DataLayout` root-alignment fallback from the
+shared typed-memory adapter; eleven callers now use only sealed Core type
+layout and return a conservative alignment of one without a valid Core proof.
+Positive root-alignment and poisoned-C regression tests cover alignment,
+offset GCD, unknown globals, malformed type and absent context.
+
+This is **not** yet the complete structural removal of C from Core IR:
+`CoreInstruction`, objects, globals, function/call signatures and fixed-register
+source ingress still retain C descriptors until their source-only temporary
+staging owners and APIs are migrated together. Source ASM C rank/qualifier
+admission remains with C SourcePolicy; it must not be replaced by a machine
+CoreType equality check. Linux runtime and cross-GNU/QEMU acceptance are
+separate gates, not implied by source-level Core/ASM tests.
+
+**Evidence/size:** 42 changed files in one coherent batch; production
+26 files +183/−133, tests 13 files +168/−35, Makefile +10/−2, plus two
+documentation files. All 73 direct and four alias CoreValue C-type lowering reads were
+retired; `CoreValue.type` removed entirely, and the RISC-V alignment adapter's
+C fallback and all eleven callers converted. `make -s MODE=debug check-fast`
+exited **0**, including Core source/strict verifier, ASan/UBSan, RV32 scalar,
+RV32/RV64 root alignment, AArch64/x86 machine poisoned-C and Loong descriptor
+tests. `make -j8 build/debug/bin/minic-cc` and Core enum-origin tests also
+passed. Cross-architecture GNU/QEMU absences remain `SKIP`/`NOT_RUN`; this is
+not five-architecture Linux boot/runtime certification.

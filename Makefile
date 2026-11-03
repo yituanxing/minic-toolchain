@@ -624,13 +624,21 @@ check-rv32-wide-branch-condition: $(MINIC_CC_BINARY)
 
 check-fast: check-rv32-wide-branch-condition
 
-# The RV32 integer/memory emitter accepts only sealed ILP32 CoreType, even
-# when a deliberately contradictory source-C descriptor is present.
+# RV32 integer/memory emits only sealed ILP32 CoreType; SSA values no longer
+# carry a redundant source-C descriptor.
 .PHONY: check-rv32-coretype-scalar
 check-rv32-coretype-scalar:
 	HOST_CC="$(CC)" bash tests/target/riscv32/run-coretype-scalar.sh
 
 check-fast: check-rv32-coretype-scalar
+
+# Both RISC-V XLENs share the same Core-only object alignment proof; the
+# source-C DataLayout fallback must remain retired.
+.PHONY: check-riscv-coretype-root-alignment
+check-riscv-coretype-root-alignment:
+	HOST_CC="$(CC)" bash tests/target/riscv/run-coretype-root-alignment.sh
+
+check-fast: check-riscv-coretype-root-alignment
 
 .PHONY: check-rv32-empty-record-return
 check-rv32-empty-record-return: $(MINIC_CC_BINARY)

@@ -92,7 +92,7 @@ static MinicCoreLowerStatus core_bit_field_byte_address(
     (void)memset(&op, 0, sizeof(op));
     op.kind = MINIC_CORE_INSTRUCTION_POINTER_OFFSET;
     op.span = span;
-    op.type = context->function->values[base].type;
+    op.type = minic_core_function_source_value_type(context->function, base);
     op.result = MINIC_CORE_VALUE_INVALID;
     op.value.pointer_offset.base = base;
     op.value.pointer_offset.index = index;
@@ -224,7 +224,7 @@ static MinicCoreLowerStatus core_bit_field_store_storage(
             (void)memset(&op, 0, sizeof(op));
             op.kind = MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_RIGHT;
             op.span = span;
-            op.type = context->function->values[value].type;
+            op.type = minic_core_function_source_value_type(context->function, value);
             op.result = MINIC_CORE_VALUE_INVALID;
             op.value.binary.left = value;
             op.value.binary.right = shift;
@@ -352,7 +352,7 @@ MinicCoreLowerStatus minic_core_lower_try_bit_field_assignment(
                 return bit_status;
             }
             if (base_value >= context->function->value_count ||
-                !minic_type_equal(context->function->values[base_value].type, base_value_type)) {
+                !minic_type_equal(minic_core_function_source_value_type(context->function, base_value), base_value_type)) {
                 return MINIC_CORE_LOWER_ERROR;
             }
             bit_status = minic_core_lower_internal_append_field_address(context,
@@ -614,7 +614,7 @@ MinicCoreLowerStatus minic_core_lower_try_bit_field_read(
                 return status;
             }
             if (base_id >= context->function->value_count ||
-                !minic_type_equal(context->function->values[base_id].type, base_value_type)) {
+                !minic_type_equal(minic_core_function_source_value_type(context->function, base_id), base_value_type)) {
                 return MINIC_CORE_LOWER_ERROR;
             }
             status = minic_core_lower_internal_append_field_address(context,
@@ -888,7 +888,7 @@ MinicCoreLowerStatus minic_core_lower_try_bit_field_compound(
                 return bit_status;
             }
             if (bit_base_value >= context->function->value_count ||
-                !minic_type_equal(context->function->values[bit_base_value].type,
+                !minic_type_equal(minic_core_function_source_value_type(context->function, bit_base_value),
                                   bit_base_value_type)) {
                 return MINIC_CORE_LOWER_ERROR;
             }
@@ -1026,7 +1026,7 @@ MinicCoreLowerStatus minic_core_lower_try_bit_field_compound(
             if (bit_status != MINIC_CORE_LOWER_OK) {
                 return bit_status;
             }
-            bit_address_type = context->function->values[bit_address].type;
+            bit_address_type = minic_core_function_source_value_type(context->function, bit_address);
             bit_status = minic_core_lower_internal_spill_scalar_value(
                 context, bit_target->span, bit_address_type, bit_address, &bit_address_object);
             if (bit_status != MINIC_CORE_LOWER_OK) {
@@ -1404,7 +1404,7 @@ MinicCoreLowerStatus minic_core_lower_bit_field_update(
         return status;
     }
     if (base_value >= context->function->value_count ||
-        !minic_type_equal(context->function->values[base_value].type, base_value_type)) {
+        !minic_type_equal(minic_core_function_source_value_type(context->function, base_value), base_value_type)) {
         return MINIC_CORE_LOWER_ERROR;
     }
     status = minic_core_lower_internal_append_field_address(context,

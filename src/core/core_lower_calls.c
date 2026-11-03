@@ -691,7 +691,7 @@ static MinicCoreLowerStatus core_prepare_call_argument(
     }
     if (argument->value.value_id >= context->function->value_count ||
         !minic_type_equal(
-            context->function->values[argument->value.value_id].type, type))
+            minic_core_function_source_value_type(context->function, argument->value.value_id), type))
         return MINIC_CORE_LOWER_ERROR;
     /* Preserve one immutable language fact before the ordinary Core
      * evaluation-order snapshot. Do not let backends infer immediates from
@@ -1134,7 +1134,7 @@ static MinicCoreLowerStatus core_lower_indirect_call_impl(MinicCoreLowerContext 
         return status;
     }
     if (callee_value >= context->function->value_count ||
-        !minic_type_equal(context->function->values[callee_value].type, callee_value_type)) {
+        !minic_type_equal(minic_core_function_source_value_type(context->function, callee_value), callee_value_type)) {
         free(arguments);
         return MINIC_CORE_LOWER_ERROR;
     }

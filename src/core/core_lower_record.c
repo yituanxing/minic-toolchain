@@ -762,7 +762,7 @@ MinicCoreLowerStatus minic_core_lower_record_load_object(MinicCoreLowerContext *
         return status;
     }
     if (source_address >= context->function->value_count ||
-        !minic_type_pointee(context->function->values[source_address].type, &source_pointee) ||
+        !minic_type_pointee(minic_core_function_source_value_type(context->function, source_address), &source_pointee) ||
         !minic_type_unqualified(source_pointee, &source_type) ||
         !minic_type_equal(source_type, expression_type)) {
         return MINIC_CORE_LOWER_UNSUPPORTED;
@@ -952,7 +952,7 @@ MinicCoreLowerStatus minic_core_lower_try_direct_record_member(
                 return MINIC_CORE_LOWER_ERROR;
             }
             if (base_address >= context->function->value_count ||
-                !minic_type_equal(context->function->values[base_address].type,
+                !minic_type_equal(minic_core_function_source_value_type(context->function, base_address),
                                   pointer_type))
                 return MINIC_CORE_LOWER_ERROR;
             status = minic_core_lower_internal_append_field_address(context,

@@ -79,7 +79,7 @@ static int run(void) {
     MinicCoreType qualifier = {0};
     MinicCoreType record = {0};
     MinicCoreType wrong_layout = {0};
-    MinicCoreValue poisoned_value = {0};
+    MinicCoreValue scalar_value = {0};
     MinicCoreFunction function = {0};
     unsigned bits, words;
     bool sign;
@@ -115,12 +115,11 @@ static int run(void) {
     wrong_layout.value.pointer.pointee = s32;
     REQUIRE(minic_core_type_register(&types, &wrong_layout, &invalid_pointer));
 
-    /* The C descriptor intentionally contradicts the Core integer ID.
-     * Classifiers and machine-load policy must never consult it. */
-    poisoned_value.type.base_kind = MINIC_TYPE_BASE_DOUBLE;
-    poisoned_value.core_type_id = s8;
+    /* Values no longer carry a C descriptor. All scalar classifiers use
+     * the sealed Core integer ID and layout. */
+    scalar_value.core_type_id = s8;
     function.type_context = &types;
-    function.values = &poisoned_value;
+    function.values = &scalar_value;
     function.value_count = 1U;
     REQUIRE(rv32_core_scalar(&function,
                              function.values[0].core_type_id, &bits, &sign));
@@ -161,10 +160,8 @@ static int run(void) {
     REQUIRE(check_canon_opcode(&function, boolean, "snez"));
     REQUIRE(check_canon_opcode(&function, s16, "srai"));
 
-    /* Detached Core is rejected even with a plausible legacy C descriptor. */
+    /* Detached Core is rejected even with a plausible Core integer ID. */
     function.type_context = NULL;
-    poisoned_value.type.base_kind = MINIC_TYPE_BASE_INT;
-    poisoned_value.type.integer_rank = MINIC_INTEGER_RANK_LONG_LONG;
     REQUIRE(!rv32_core_scalar(&function, s8, &bits, &sign));
     REQUIRE(!rv32_core_scalar_storage_words(&function, u64, &words));
     REQUIRE(!rv32_core_is_wide_integer(&function, u64));

@@ -102,7 +102,6 @@ static void machine_core_poison(PoisonMachine machine) {
     function.inline_asms = &inline_asm;
     function.inline_asm_count = 1U;
     value[0].core_type_id = pointer_u64;
-    assert(minic_type_pointer_to(minic_type_unsigned_long(), &value[0].type));
     function.return_type = minic_type_void();
 
     inline_asm.template_text = (char *)template_text;
@@ -126,9 +125,8 @@ static void machine_core_poison(PoisonMachine machine) {
     assert(strstr(normal, machine == POISON_AARCH64
         ? "  mrs x9, cntpct_el0\n" : "  movq %rbx, (%r11)\n") != NULL);
 
-    /* Mutate every old C descriptor on this independent Core-only fixture.
-     * The same SSA CoreType must produce byte-identical hardware assembly. */
-    value[0].type = minic_type_double();
+    /* CoreValue has no C descriptor; corrupt the remaining source-only
+     * instruction and function descriptors without changing the CoreType. */
     instruction.type = minic_type_int();
     function.return_type = minic_type_double();
     if (!emit_one(machine, &function, &instruction, poisoned,

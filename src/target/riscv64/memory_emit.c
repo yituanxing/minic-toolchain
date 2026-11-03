@@ -44,8 +44,7 @@ bool minic_riscv64_emit_memory_instruction(
     switch (instruction->kind) {
     case MINIC_CORE_INSTRUCTION_LOAD: {
         const size_t guaranteed = minic_riscv_address_alignment(
-            NULL, NULL, function,
-            instruction->value.load.address);
+            function, instruction->value.load.address);
         if (minic_core_abi_wide_scalar(function, instruction->core_type_id)) {
             if (!minic_riscv64_frame_load_value(file, frame, instruction->value.load.address, "t0") ||
                 !minic_riscv_emit_typed_word_pair(
@@ -75,8 +74,7 @@ bool minic_riscv64_emit_memory_instruction(
         }
         stored_type = function->values[stored_value].core_type_id;
         guaranteed = minic_riscv_address_alignment(
-            NULL, NULL, function,
-            instruction->value.store.address);
+            function, instruction->value.store.address);
         if (minic_core_abi_wide_scalar(function, stored_type)) {
             return minic_riscv64_frame_load_value(file, frame, instruction->value.store.address, "t0") &&
                    minic_riscv64_frame_load_int128(file, frame, stored_value, "t1", "t2") &&

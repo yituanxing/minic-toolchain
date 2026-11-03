@@ -1,9 +1,10 @@
 # Core 类型入口与后续 Module 边界：P0 实施契约
 
-状态：**P0 设计决定，待实现和逐批验收**。源码核对基线：
+状态：**历史 P0 设计契约；CoreType 与 ModuleIR 已进入实施阶段**。源码核对基线：
 `refactor/minic-target-language-boundary` / `2f8b74f`（2026-11-02）。
 本文只定义 Core-owned 类型所需的最低语义、所有权和验证条件；
-**不声称当前代码已经实现 CoreType，也不是让 Machine IR 提前开工的 RFC**。
+下文“现状”均指 `2f8b74f` 的历史基线，不代表最新实现状态；
+**不以本契约代替已经完成的实现及验收凭证，也不是让 Machine IR 提前开工的 RFC**。
 具体批次及实际删改、`+/-` 行数、验证凭证记入
 [现行架构收敛账本](minic-refactor-ledger.md)，Bug 状态仍以
 [MC 问题台账](minic-issue-register.md)为准。

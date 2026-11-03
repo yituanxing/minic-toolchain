@@ -70,7 +70,7 @@ static MinicCoreLowerStatus set_switch_conditional_branch(MinicCoreLowerContext 
 
     if (context == NULL || context->function == NULL ||
         condition >= context->function->value_count ||
-        !minic_type_is_integer(context->function->values[condition].type) ||
+        !minic_type_is_integer(minic_core_function_source_value_type(context->function, condition)) ||
         when_true == MINIC_CORE_BLOCK_INVALID || when_false == MINIC_CORE_BLOCK_INVALID) {
         return MINIC_CORE_LOWER_ERROR;
     }

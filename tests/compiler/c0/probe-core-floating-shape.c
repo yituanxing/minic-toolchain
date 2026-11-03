@@ -73,7 +73,6 @@ static int run(void) {
     function.type_context = &ctx;
     function.values = values;
     function.value_count = 4U;
-    for (i = 0U; i < 4U; ++i) values[i].type = minic_type_int128();
     ins.type = minic_type_void();
     ins.result = 3U;
     ins.value.binary.left = 0U;

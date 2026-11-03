@@ -76,8 +76,6 @@ int main(void) {
     fn.call_arguments = &argument; fn.call_argument_count = 1U;
     values[0].core_type_id = types.integer;
     values[1].core_type_id = types.function_pointer;
-    values[0].type = poison;
-    values[1].type = poison;
     object.core_type_id = types.record;
     object.element_count = 1U;
     object.type = poison;

@@ -59,8 +59,6 @@ static int run(void) {
     instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONVERSION;
     instruction.value.operand = 0U;
     instruction.result = 1U;
-    values[0].type = minic_type_int128();
-    values[1].type = minic_type_bool();
     instruction.type = minic_type_void();
     values[0].core_type_id = signed_byte;
     values[1].core_type_id = unsigned_long;

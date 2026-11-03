@@ -258,7 +258,7 @@ static bool rv32_emit_checked_overflow(FILE *out,
     if (result_core_type == MINIC_CORE_TYPE_INVALID) return false;
     /* Frozen Core carries local-object type and explicit alignment.  A
      * machine overflow store must never consult its C source Program. */
-    address_alignment = minic_riscv_address_alignment(NULL, NULL, f, address);
+    address_alignment = minic_riscv_address_alignment(f, address);
     if (f->values[lhs].core_type_id != result_core_type ||
         f->values[rhs].core_type_id != result_core_type) {
         if (rv32_core_scalar_storage_words(f, result_core_type, &bits) &&

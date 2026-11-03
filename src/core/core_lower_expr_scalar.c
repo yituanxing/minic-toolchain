@@ -238,7 +238,7 @@ MinicCoreLowerStatus minic_core_lower_try_builtin_unary(
             { *handled = true; return status; }
         }
         if (operand_value >= context->function->value_count ||
-            !minic_type_equal(context->function->values[operand_value].type,
+            !minic_type_equal(minic_core_function_source_value_type(context->function, operand_value),
                               minic_type_long_long())) {
             { *handled = true; return MINIC_CORE_LOWER_ERROR; }
         }
@@ -444,7 +444,7 @@ MinicCoreLowerStatus minic_core_lower_try_builtin_unary(
             { *handled = true; return status; }
         }
         if (operand_value >= context->function->value_count ||
-            !minic_type_equal(context->function->values[operand_value].type, operand->type)) {
+            !minic_type_equal(minic_core_function_source_value_type(context->function, operand_value), operand->type)) {
             { *handled = true; return MINIC_CORE_LOWER_ERROR; }
         }
         is_clz = expression->value.builtin_unary.operator_kind == MINIC_BUILTIN_UNARY_CLZ ||
@@ -912,7 +912,7 @@ MinicCoreLowerStatus minic_core_lower_try_comparisons(
             if (left >= context->function->value_count) {
                 { *handled = true; return MINIC_CORE_LOWER_ERROR; }
             }
-            if (!minic_type_equal(context->function->values[left].type, common_type)) {
+            if (!minic_type_equal(minic_core_function_source_value_type(context->function, left), common_type)) {
                 status = append_scalar_bitcast(
                     context, left_expression->span, common_type, left, &left);
                 if (status != MINIC_CORE_LOWER_OK) {
@@ -936,7 +936,7 @@ MinicCoreLowerStatus minic_core_lower_try_comparisons(
             if (right >= context->function->value_count) {
                 { *handled = true; return MINIC_CORE_LOWER_ERROR; }
             }
-            if (!minic_type_equal(context->function->values[right].type, common_type)) {
+            if (!minic_type_equal(minic_core_function_source_value_type(context->function, right), common_type)) {
                 status = append_scalar_bitcast(
                     context, right_expression->span, common_type, right, &right);
                 if (status != MINIC_CORE_LOWER_OK) {
@@ -1324,9 +1324,9 @@ MinicCoreLowerStatus minic_core_lower_try_pointer_arithmetic(
         }
         if (pointer_value >= context->function->value_count ||
             index_value >= context->function->value_count ||
-            !minic_type_equal(context->function->values[pointer_value].type,
+            !minic_type_equal(minic_core_function_source_value_type(context->function, pointer_value),
                               pointer_value_type) ||
-            !minic_type_equal(context->function->values[index_value].type,
+            !minic_type_equal(minic_core_function_source_value_type(context->function, index_value),
                               index_value_type)) {
             { *handled = true; return MINIC_CORE_LOWER_ERROR; }
         }

@@ -38,9 +38,7 @@ static int run(void) {
     REQUIRE(integer_type(&types, 32U, &i32));
     REQUIRE(integer_type(&types, 64U, &i64));
 
-    /* Deliberately contradictory C descriptors: both SSA and object
-     * storage must use only sealed CoreTypeId and never source rank. */
-    values[0].type.base_kind = MINIC_TYPE_BASE_DOUBLE;
+    /* SSA has no source C descriptor; frame storage is CoreType-only. */
     values[0].core_type_id = i64;
     instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
     instruction.core_type_id = i64;

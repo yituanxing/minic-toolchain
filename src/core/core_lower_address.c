@@ -34,7 +34,7 @@ MinicCoreLowerStatus lower_address(MinicCoreLowerContext *context,
             return status;
         }
         if (size_value >= context->function->value_count ||
-            !minic_type_equal(context->function->values[size_value].type,
+            !minic_type_equal(minic_core_function_source_value_type(context->function, size_value),
                               minic_type_unsigned_long()) ||
             !minic_type_pointer_to(minic_type_void(), &void_pointer) ||
             !minic_type_equal(expression->type, void_pointer)) {
@@ -374,7 +374,7 @@ MinicCoreLowerStatus lower_address(MinicCoreLowerContext *context,
          * pointer value. Preserve exact pointee qualifiers and shape; strip
          * only the top-level pointer value cv-qualification here. */
         if (pointer_id >= context->function->value_count ||
-            !minic_type_unqualified(context->function->values[pointer_id].type,
+            !minic_type_unqualified(minic_core_function_source_value_type(context->function, pointer_id),
                                     &pointer_value_type) ||
             !minic_type_equal(pointer_value_type, expected_pointer)) {
             return MINIC_CORE_LOWER_UNSUPPORTED;
@@ -442,7 +442,7 @@ MinicCoreLowerStatus lower_address(MinicCoreLowerContext *context,
             if (array_info.has_materialized_type) {
                 if (!minic_type_is_array(base->type) ||
                     !minic_type_pointer_to(base->type, &array_pointer_type) ||
-                    !minic_type_equal(context->function->values[base_value].type,
+                    !minic_type_equal(minic_core_function_source_value_type(context->function, base_value),
                                       array_pointer_type)) {
                     return MINIC_CORE_LOWER_ERROR;
                 }
@@ -452,7 +452,7 @@ MinicCoreLowerStatus lower_address(MinicCoreLowerContext *context,
                     return subscript_status;
                 }
             } else if (!minic_type_equal(base->type, array_info.element_type) ||
-                       !minic_type_equal(context->function->values[base_value].type,
+                       !minic_type_equal(minic_core_function_source_value_type(context->function, base_value),
                                          pointer_type)) {
                 return MINIC_CORE_LOWER_ERROR;
             }
@@ -483,7 +483,7 @@ MinicCoreLowerStatus lower_address(MinicCoreLowerContext *context,
                 return subscript_status;
             }
             if (base_value >= context->function->value_count ||
-                !minic_type_equal(context->function->values[base_value].type, base_value_type)) {
+                !minic_type_equal(minic_core_function_source_value_type(context->function, base_value), base_value_type)) {
                 return MINIC_CORE_LOWER_ERROR;
             }
         }
@@ -519,10 +519,10 @@ MinicCoreLowerStatus lower_address(MinicCoreLowerContext *context,
             return subscript_status;
         }
         if (index_value >= context->function->value_count ||
-            !minic_type_is_integer(context->function->values[index_value].type)) {
+            !minic_type_is_integer(minic_core_function_source_value_type(context->function, index_value))) {
             return MINIC_CORE_LOWER_ERROR;
         }
-        if (!minic_type_equal(context->function->values[index_value].type, index_value_type)) {
+        if (!minic_type_equal(minic_core_function_source_value_type(context->function, index_value), index_value_type)) {
             subscript_status = minic_core_lower_internal_append_integer_conversion(
                 context, index->span, index_value_type, index_value, &index_value);
             if (subscript_status != MINIC_CORE_LOWER_OK) {
@@ -591,7 +591,7 @@ MinicCoreLowerStatus lower_address(MinicCoreLowerContext *context,
             return status;
         }
         if (base_id >= context->function->value_count ||
-            !minic_type_equal(context->function->values[base_id].type, base_value_type)) {
+            !minic_type_equal(minic_core_function_source_value_type(context->function, base_id), base_value_type)) {
             return MINIC_CORE_LOWER_ERROR;
         }
         return minic_core_lower_internal_append_field_address(context,

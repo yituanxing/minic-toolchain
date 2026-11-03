@@ -37,12 +37,7 @@ int main(void) {
     fn.values = values;
     fn.value_count = 4U;
     fn.type_context = &types;
-    /* Legacy source descriptors are intentionally contradictory: slot policy
-     * must use only the resolved Core execution shapes. */
-    values[0].type = minic_type_long_double();
-    values[1].type = minic_type_int128();
-    values[2].type = minic_type_int128();
-    values[3].type = minic_type_int();
+    /* SSA has no C descriptor; slot policy uses only Core execution shape. */
 
     if (!minic_core_wide_value_slots_build(
             &fn, 64U, 128U,

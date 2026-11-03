@@ -167,8 +167,6 @@ int main(void) {
     function.call_argument_count = 1U;
     values[0].core_type_id = integer;
     values[1].core_type_id = pointer_type;
-    values[0].type = legacy_scalar;
-    values[1].type = legacy_scalar;
     objects[0].core_type_id = record;
     objects[1].core_type_id = other_record;
     objects[0].type = legacy_scalar;

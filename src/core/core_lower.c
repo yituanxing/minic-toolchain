@@ -369,7 +369,7 @@ MinicCoreLowerStatus minic_core_lower_internal_append_field_address(MinicCoreLow
     if (context == NULL || context->body == NULL || context->body->program == NULL ||
         context->function == NULL || address_id == NULL ||
         base_id >= context->function->value_count ||
-        !minic_type_pointee(context->function->values[base_id].type, &base_pointee) ||
+        !minic_type_pointee(minic_core_function_source_value_type(context->function, base_id), &base_pointee) ||
         !minic_type_is_record(base_pointee) || base_pointee.record_id != record_id ||
         record_id == MINIC_RECORD_INVALID) {
         return MINIC_CORE_LOWER_ERROR;
@@ -851,7 +851,7 @@ MinicCoreLowerStatus minic_core_lower_internal_lower_condition_branch(MinicCoreL
         MinicCoreInstruction zero_test;
         MinicCoreBlockId original_true;
 
-        if (!minic_type_is_pointer(context->function->values[condition].type)) {
+        if (!minic_type_is_pointer(minic_core_function_source_value_type(context->function, condition))) {
             return MINIC_CORE_LOWER_ERROR;
         }
         (void)memset(&zero_test, 0, sizeof(zero_test));
@@ -867,7 +867,7 @@ MinicCoreLowerStatus minic_core_lower_internal_lower_condition_branch(MinicCoreL
         original_true = when_true;
         when_true = when_false;
         when_false = original_true;
-    } else if (!minic_type_is_integer(context->function->values[condition].type)) {
+    } else if (!minic_type_is_integer(minic_core_function_source_value_type(context->function, condition))) {
         return MINIC_CORE_LOWER_ERROR;
     }
     condition_block = context->block_id;
@@ -1409,7 +1409,7 @@ minic_core_lower_internal_lower_block(MinicCoreLowerContext *context, const Mini
                         break;
                     }
                     if (target_value >= context->function->value_count ||
-                        !minic_type_is_pointer(context->function->values[target_value].type)) {
+                        !minic_type_is_pointer(minic_core_function_source_value_type(context->function, target_value))) {
                         status = MINIC_CORE_LOWER_UNSUPPORTED;
                         break;
                     }

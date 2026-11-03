@@ -76,17 +76,17 @@ MinicCoreLowerStatus minic_core_lower_internal_append_integer_conversion(MinicCo
                                                       MinicCoreValueId source_value,
                                                       MinicCoreValueId *value_id) {
     MinicCoreInstruction instruction;
-    const MinicCoreValue *source;
+    MinicType source_type;
 
     if (context == NULL || context->function == NULL || value_id == NULL ||
         source_value >= context->function->value_count || !minic_type_is_integer(target_type)) {
         return MINIC_CORE_LOWER_ERROR;
     }
-    source = &context->function->values[source_value];
-    if (!minic_type_is_integer(source->type)) {
+    source_type = minic_core_function_source_value_type(context->function, source_value);
+    if (!minic_type_is_integer(source_type)) {
         return MINIC_CORE_LOWER_UNSUPPORTED;
     }
-    if (minic_type_equal(source->type, target_type)) {
+    if (minic_type_equal(source_type, target_type)) {
         *value_id = source_value;
         return MINIC_CORE_LOWER_OK;
     }
@@ -108,18 +108,18 @@ MinicCoreLowerStatus append_scalar_bitcast(MinicCoreLowerContext *context,
                                                   MinicCoreValueId source_value,
                                                   MinicCoreValueId *value_id) {
     MinicCoreInstruction instruction;
-    const MinicCoreValue *source;
+    MinicType source_type;
 
     if (context == NULL || context->function == NULL || value_id == NULL ||
         source_value >= context->function->value_count) {
         return MINIC_CORE_LOWER_ERROR;
     }
-    source = &context->function->values[source_value];
-    if (minic_type_equal(source->type, target_type)) {
+    source_type = minic_core_function_source_value_type(context->function, source_value);
+    if (minic_type_equal(source_type, target_type)) {
         *value_id = source_value;
         return MINIC_CORE_LOWER_OK;
     }
-    if (!minic_core_scalar_bitcast_types_valid(target_type, source->type)) {
+    if (!minic_core_scalar_bitcast_types_valid(target_type, source_type)) {
         return MINIC_CORE_LOWER_UNSUPPORTED;
     }
     (void)memset(&instruction, 0, sizeof(instruction));
@@ -199,7 +199,7 @@ MinicCoreLowerStatus minic_core_lower_internal_spill_scalar_value(MinicCoreLower
     if (context == NULL || context->function == NULL || object_id == NULL ||
         !core_memory_scalar_type(type) || minic_type_is_const(type) ||
         minic_type_is_volatile(type) || value_id >= context->function->value_count ||
-        !minic_type_equal(context->function->values[value_id].type, type)) {
+        !minic_type_equal(minic_core_function_source_value_type(context->function, value_id), type)) {
         return MINIC_CORE_LOWER_ERROR;
     }
     if (!minic_core_function_add_object(context->function, span, type, object_id) ||
@@ -228,7 +228,7 @@ MinicCoreLowerStatus minic_core_lower_internal_store_scalar_value(MinicCoreLower
         object_id >= context->function->object_count ||
         value_id >= context->function->value_count ||
         !minic_type_equal(context->function->objects[object_id].type, type) ||
-        !minic_type_equal(context->function->values[value_id].type, type) ||
+        !minic_type_equal(minic_core_function_source_value_type(context->function, value_id), type) ||
         !minic_type_pointer_to(type, &pointer_type)) {
         return MINIC_CORE_LOWER_ERROR;
     }
@@ -352,7 +352,7 @@ MinicCoreLowerStatus minic_core_lower_internal_lower_scalar_equality_operands(Mi
         return status;
     }
     if (left_source >= context->function->value_count ||
-        !minic_type_equal(context->function->values[left_source].type, left_type)) {
+        !minic_type_equal(minic_core_function_source_value_type(context->function, left_source), left_type)) {
         if (getenv("MINIC_CORE_EXPR_FAILURE_TRACE") != NULL)
             (void)fprintf(stderr,
                 "CORE_EXPR_FAIL owner=equality-left-type function=%s id=%zu "
@@ -361,7 +361,7 @@ MinicCoreLowerStatus minic_core_lower_internal_lower_scalar_equality_operands(Mi
                 (size_t)left_id, (unsigned)left_source,
                 (int)left_type.base_kind,
                 left_source < context->function->value_count
-                    ? (int)context->function->values[left_source].type.base_kind : -1);
+                    ? (int)minic_core_function_source_value_type(context->function, left_source).base_kind : -1);
         return MINIC_CORE_LOWER_ERROR;
     }
     if (integer_comparison) {
@@ -396,7 +396,7 @@ MinicCoreLowerStatus minic_core_lower_internal_lower_scalar_equality_operands(Mi
     if (right_stays_in_block && context->block_id != rhs_entry_block)
         return MINIC_CORE_LOWER_UNSUPPORTED;
     if (right_source >= context->function->value_count ||
-        !minic_type_equal(context->function->values[right_source].type, right_type)) {
+        !minic_type_equal(minic_core_function_source_value_type(context->function, right_source), right_type)) {
         return MINIC_CORE_LOWER_ERROR;
     }
     if (integer_comparison) {
@@ -556,7 +556,7 @@ MinicCoreLowerStatus minic_core_lower_internal_lower_floating_binary_operands(Mi
         return status;
     }
     if (right_source >= context->function->value_count ||
-        !minic_type_equal(context->function->values[right_source].type, result_type)) {
+        !minic_type_equal(minic_core_function_source_value_type(context->function, right_source), result_type)) {
         return MINIC_CORE_LOWER_ERROR;
     }
     *right_value = right_source;
@@ -615,7 +615,7 @@ static MinicCoreLowerStatus append_runtime_scalar_call(
     (void)memset(arguments, 0, sizeof(arguments));
     for (index = 0U; index < argument_count; ++index) {
         if (argument_values[index] >= context->function->value_count ||
-            !minic_type_equal(context->function->values[argument_values[index]].type,
+            !minic_type_equal(minic_core_function_source_value_type(context->function, argument_values[index]),
                               parameter_types[index])) {
             return MINIC_CORE_LOWER_ERROR;
         }
@@ -857,7 +857,7 @@ MinicCoreLowerStatus minic_core_lower_internal_lower_scalar_assignment_value(Min
         MinicType source_type;
 
         if (!core_scalar_expression_value_type(context->body, expression, &source_type) ||
-            !minic_type_equal(context->function->values[source_value].type, source_type)) {
+            !minic_type_equal(minic_core_function_source_value_type(context->function, source_value), source_type)) {
             return MINIC_CORE_LOWER_UNSUPPORTED;
         }
         return minic_core_lower_internal_append_long_double_conversion(
@@ -869,9 +869,9 @@ MinicCoreLowerStatus minic_core_lower_internal_lower_scalar_assignment_value(Min
         if (!core_scalar_expression_value_type(context->body, expression, &source_type)) {
             return MINIC_CORE_LOWER_UNSUPPORTED;
         }
-        if (!minic_type_equal(context->function->values[source_value].type, source_type)) {
+        if (!minic_type_equal(minic_core_function_source_value_type(context->function, source_value), source_type)) {
             if (getenv("CORE_FAST_TRACE") != NULL) {
-                const MinicType actual_type = context->function->values[source_value].type;
+                const MinicType actual_type = minic_core_function_source_value_type(context->function, source_value);
                 (void)fprintf(stderr,
                               "CORE_SCALAR_ASSIGN_TRACE function=%s stage=double-source-type "
                               "expr_kind=%d value=%u expected_base=%d expected_ptr=%u "
@@ -917,7 +917,7 @@ MinicCoreLowerStatus minic_core_lower_internal_lower_scalar_assignment_value(Min
         MinicType source_type;
 
         if (!core_scalar_expression_value_type(context->body, expression, &source_type) ||
-            !minic_type_equal(context->function->values[source_value].type, source_type)) {
+            !minic_type_equal(minic_core_function_source_value_type(context->function, source_value), source_type)) {
             return MINIC_CORE_LOWER_UNSUPPORTED;
         }
         if (minic_type_is_long_double(source_type)) {

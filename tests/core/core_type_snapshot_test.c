@@ -249,6 +249,7 @@ static bool build_object_fixture(MinicCoreFunction *function, const TypeIds *ids
 
 typedef struct ResolverState {
     MinicCoreTypeId i32;
+    MinicCoreTypeId function_i32_i32;
     size_t call_count;
     size_t fail_on_call;
 } ResolverState;
@@ -256,13 +257,23 @@ typedef struct ResolverState {
 static bool resolve_source_type(void *data, MinicType source, MinicCoreTypeId *id) {
     ResolverState *state = data;
     ++state->call_count;
-    if (!minic_type_equal(source, minic_type_int()) ||
-        state->call_count == state->fail_on_call) return false;
-    *id = state->i32;
+    if (state->call_count == state->fail_on_call) return false;
+    if (minic_type_equal(source, minic_type_int()))
+        *id = state->i32;
+    else if (minic_type_equal(source, minic_type_function(29U)))
+        *id = state->function_i32_i32;
+    else return false;
     return true;
 }
 
 static bool build_simple_function(MinicCoreFunction *function) {
+    MinicCoreObjectId object_id;
+    MinicCoreGlobalId global_id;
+    MinicCoreCalleeId callee_id;
+    MinicCoreCallSignatureId signature_id;
+    MinicType parameter = minic_type_int();
+    MinicSourceSpan span = {0};
+    size_t fixed_register_id;
     MinicCoreBlockId block;
     MinicCoreValueId value;
     MinicCoreInstruction instruction = {0};
@@ -270,6 +281,20 @@ static bool build_simple_function(MinicCoreFunction *function) {
     minic_core_function_initialize(function);
     if (!minic_core_function_set_signature(function, "answer", 6U,
                                            minic_type_int(), NULL, 0U) ||
+        !minic_core_function_add_object(function, span, minic_type_int(),
+                                        &object_id) ||
+        !minic_core_function_add_global(function, "scratch", 7U,
+                                        minic_type_int(), &global_id) ||
+        !minic_core_function_add_fixed_register_binding(function, "r12", 3U,
+                                                         minic_type_int(), true,
+                                                         &fixed_register_id) ||
+        !minic_core_function_add_callee(function, "other", 5U, minic_type_int(),
+                                        &parameter, 1U, false,
+                                        MINIC_CALLING_CONVENTION_DEFAULT, &callee_id) ||
+        !minic_core_function_add_call_signature(function, 29U, minic_type_int(),
+                                                &parameter, 1U, false,
+                                                MINIC_CALLING_CONVENTION_DEFAULT,
+                                                &signature_id) ||
         !minic_core_function_add_block(function, &block)) return false;
     instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
     instruction.type = minic_type_int();
@@ -437,8 +462,12 @@ int main(void) {
     /* The bulk-ingress callback must roll back ALL snapshots on failure. */
     CHECK(build_simple_function(&function));
     CHECK(minic_core_function_verify_source_ingress(&function));
+    CHECK(function.object_count == 1U && function.global_count == 1U &&
+          function.fixed_register_binding_count == 1U &&
+          function.callee_count == 1U && function.call_signature_count == 1U);
     CHECK(!minic_core_function_verify(&function)); /* unattached source is not Core */
     resolver.i32 = ids.i32;
+    resolver.function_i32_i32 = ids.function_a;
     resolver.call_count = 0U;
     resolver.fail_on_call = 2U;
     CHECK(!minic_core_function_snapshot_types(&function, &context,
@@ -446,11 +475,42 @@ int main(void) {
     CHECK(function.type_context == NULL &&
           function.core_return_type_id == MINIC_CORE_TYPE_INVALID);
     CHECK(function.values[0].core_type_id == MINIC_CORE_TYPE_INVALID);
+    /* A rejected import must leave every C draft available for a retry. */
+    CHECK(minic_type_equal(function.return_type, minic_type_int()) &&
+          minic_type_equal(function.callees[0].return_type, minic_type_int()) &&
+          minic_type_equal(minic_core_function_source_value_type(&function, 0U),
+                           minic_type_int()) &&
+          function.callees[0].parameter_types != NULL &&
+          function.call_signatures[0].parameter_types != NULL);
+    /* Source reads resolve the defining instruction, not a separately copied
+     * Value descriptor. Exact C rank must survive this ingress adapter. */
+    function.instructions[0].type = minic_type_long_long();
+    CHECK(minic_type_equal(minic_core_function_source_value_type(&function, 0U),
+                           minic_type_long_long()) &&
+          !minic_type_equal(minic_core_function_source_value_type(&function, 0U),
+                            minic_type_long()));
+    function.instructions[0].type = minic_type_int();
     resolver.call_count = 0U;
     resolver.fail_on_call = 0U;
     CHECK(minic_core_function_snapshot_types(&function, &context,
                                               resolve_source_type, &resolver));
     CHECK(minic_core_function_verify_core_type_snapshot(&function));
+    /* No published type consumer may depend on the C ingress side tables. */
+    CHECK(function.type_context == &context &&
+          function.parameter_types == NULL && function.enum_types == NULL &&
+          function.callees[0].parameter_types == NULL &&
+          function.call_signatures[0].parameter_types == NULL &&
+          function.call_signatures[0].function_type_id == MINIC_FUNCTION_TYPE_INVALID);
+    CHECK(function.return_type.base_kind == (MinicTypeBaseKind)0x7fffffff &&
+          function.fixed_register_bindings[0].type.base_kind == (MinicTypeBaseKind)0x7fffffff &&
+          function.objects[0].type.base_kind == (MinicTypeBaseKind)0x7fffffff &&
+          function.globals[0].type.base_kind == (MinicTypeBaseKind)0x7fffffff &&
+          function.callees[0].return_type.base_kind == (MinicTypeBaseKind)0x7fffffff &&
+          function.call_signatures[0].return_type.base_kind == (MinicTypeBaseKind)0x7fffffff &&
+          function.instructions[0].type.base_kind == (MinicTypeBaseKind)0x7fffffff);
+    CHECK(minic_core_function_source_value_type(&function, 0U).base_kind ==
+          (MinicTypeBaseKind)0x7fffffff);
+    CHECK(minic_core_function_verify(&function));
     value = function.instructions[0].result;
     CHECK(function.values[value].core_type_id == ids.i32);
     CHECK(function.instructions[0].core_type_id == ids.i32);
@@ -466,6 +526,9 @@ int main(void) {
     CHECK(minic_core_function_snapshot_types(&function, &context,
                                              resolve_enum_overflow_type, &ids));
     CHECK(minic_core_function_verify_core_type_snapshot(&function));
+    CHECK(function.parameter_types == NULL && function.enum_types == NULL &&
+          minic_core_function_source_value_type(&function, 2U).base_kind ==
+              (MinicTypeBaseKind)0x7fffffff);
     minic_core_function_destroy(&function);
     minic_core_type_context_destroy(&context);
     (void)puts("CORE_TYPE_SNAPSHOT=PASS valid malformed indirect_nominal field_nominal overflow enum_source_proof rollback");

@@ -104,7 +104,8 @@ int main(void) {
     REQUIRE(minic_core_integer_overflow_narrow_result_shape(
         &fn, &ins, &narrow));
     REQUIRE(narrow.result_width == 1U && narrow.result_signed);
-    REQUIRE(minic_type_pointer_to(minic_type_enum(7U), &values[2].type));
+    /* Enum-origin eligibility is sealed as a separate source proof. Values
+     * intentionally have no C descriptor after the Core boundary. */
     ins.value.integer_overflow.source_overflow_destination_ineligible = true;
     REQUIRE(!minic_core_integer_overflow_narrow_result_shape(
         &fn, &ins, &narrow));

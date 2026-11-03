@@ -16,4 +16,10 @@ bool minic_core_ir_direct_call_return_type(MinicType type);
  * verification runs on the sealed, CoreType-backed function after import. */
 bool minic_core_function_verify_source_ingress(const MinicCoreFunction *function);
 
+/* Source-ingress-only C descriptor for a lowered SSA value. The single
+ * canonical source type lives on its defining instruction; sealed Core
+ * consumers must use the CoreType snapshot instead. Invalid IDs fail closed. */
+MinicType minic_core_function_source_value_type(const MinicCoreFunction *function,
+                                                MinicCoreValueId value_id);
+
 #endif
