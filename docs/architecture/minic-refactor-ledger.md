@@ -1813,7 +1813,7 @@ callbacks and declared entry points. There is no copied compatibility body.
 | Release MiniC compiler `-Werror` | **PASS**, exit 0 |
 | Full Debug `check-fast` | **PASS**, exit 0; GNU/QEMU-dependent SKIPs remain SKIPs |
 | Whole target boundary (including five-target output transaction and Module visitor) | **PASS**, output failure rollback=5, prior output preserved=5, census=1 |
-| Review ledger `--check` | **PASS**, inventory=249, new/removed/invalid=0, stale=204 (not recertified) |
+| Review ledger `--check` (including both newly compiled Common units) | **PASS**, inventory=251, new/removed/invalid=0, stale=202 (not recertified) |
 | Two GNU-preprocessed fixtures × five ISA, P32 vs P33 assembly byte equality | **10/10 identical** |
 | Five ISA Linux original GNU ELF/QEMU complete runtime | **NOT RUN**; no new Image/P1 or software correctness claim |
 

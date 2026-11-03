@@ -585,16 +585,28 @@
       "review_depth": "inventory",
       "ci_touched_in": []
     },
+    "src/target/common/program_emit.c": {
+      "blob": "7a41121b66b86f4e02d7b97b889bbd2b6e714a21",
+      "review_depth": "targeted",
+      "ci_touched_in": [],
+      "note": "P33: reviewed one compiled Core/Module symbol collection, ELF bindings and atomic output; native rollback and five-target parity tested."
+    },
     "src/target/common/program_emit.h": {
-      "blob": "492717f6c9d0f4c8cd0fa9cf1d8bfa8415429ad1",
-      "review_depth": "inventory",
+      "blob": "5c2a4d3679fd19af67b18646fcca812997aa12a7",
+      "review_depth": "targeted",
       "ci_touched_in": [
         666
       ]
     },
+    "src/target/common/program_visit.c": {
+      "blob": "854e923a4a09a88263fa577d23d5635d2d2da2de",
+      "review_depth": "targeted",
+      "ci_touched_in": [],
+      "note": "P33: reviewed one sealed ModuleIR visit and FunctionPlan construction/destruction owner."
+    },
     "src/target/common/program_visit.h": {
-      "blob": "2ce7150b5c30e0ed7b556bd319e886238cb78f9b",
-      "review_depth": "inventory",
+      "blob": "d9bc1c281063507df19957ffbf4b7bc4ea8534c4",
+      "review_depth": "targeted",
       "ci_touched_in": [
         665
       ]
