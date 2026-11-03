@@ -279,6 +279,7 @@ MINIAS_SOURCES := \
 	assembler/src/riscv_encode.c \
 	assembler/src/string_literal.c \
 	assembler/src/elf_writer.c \
+	assembler/src/object_writer.c \
 	assembler/src/object_model.c \
 	assembler/src/object_output.c \
 	tools/minic-as/main.c

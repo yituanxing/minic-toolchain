@@ -450,7 +450,7 @@ static bool minias_commit_encode_result(MiniAs *as, const MiniAsStmt *owner) {
     }
     as->emission->committing_fragment=false;
     as->emission->synthetic_anchor_counter += result->anchor_count;
-    as->elf_flags |= result->elf_flags_or;
+    as->target_output_features |= result->target_output_features_or;
     minias_encode_result_destroy(result);
     return true;
 }
@@ -534,8 +534,8 @@ bool minias_encode_ctx_anchor_ref(MiniAsEncodeContext *ctx,const char *prefix,
     return minias_encode_request_anchor_ref(ctx->as,prefix,ref);
 }
 
-bool minias_encode_ctx_elf_flags(MiniAsEncodeContext *ctx,uint32_t flags) {
-    return minias_encode_add_elf_flags(ctx->as,flags);
+bool minias_encode_ctx_record_target_feature(MiniAsEncodeContext *ctx,uint32_t features) {
+    return minias_encode_record_target_feature(ctx->as,features);
 }
 
 void minias_encode_ctx_error(MiniAsEncodeContext *ctx,const char *format,...) {
@@ -589,8 +589,8 @@ bool minias_code_align_emit(MiniAsCodeAlignSink *sink,
     return sink!=NULL && minias_stage_instruction_bytes(sink->as,bytes,size);
 }
 
-bool minias_code_align_add_elf_flags(MiniAsCodeAlignSink *sink,uint32_t flags) {
-    return sink!=NULL && minias_encode_add_elf_flags(sink->as,flags);
+bool minias_code_align_record_target_feature(MiniAsCodeAlignSink *sink,uint32_t features) {
+    return sink!=NULL && minias_encode_record_target_feature(sink->as,features);
 }
 
 void minias_code_align_error(MiniAsCodeAlignSink *sink,const char *format,...) {

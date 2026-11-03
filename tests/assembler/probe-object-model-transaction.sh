@@ -16,6 +16,8 @@ model_c = (root/'assembler/src/object_model.c').read_text()
 output_c = (root/'assembler/src/object_output.c').read_text()
 elf_h = (root/'assembler/src/minias_elf_object_view.h').read_text()
 elf_c = (root/'assembler/src/elf_writer.c').read_text()
+writer_h = (root/'assembler/src/minias_object_writer.h').read_text()
+writer_c = (root/'assembler/src/object_writer.c').read_text()
 driver = (root/'assembler/src/assembler.c').read_text()
 make = (root/'Makefile').read_text()
 
@@ -59,7 +61,22 @@ for token in ('O_EXCL','rename(', 'fchmod(', 'lstat(',
               'S_ISREG','fwrite(', 'write_stream('):
     if token not in output_c:
         raise SystemExit('atomic output policy lost: '+token)
+if 'MiniAsObjectModelView model;' not in writer_h or \
+   'const MiniAsObjectSpec *spec;' not in writer_h or \
+   'minias_write_object(&object,path)' not in driver or \
+   'minias_write_elf_object(' in driver:
+    raise SystemExit('Driver bypassed format-neutral object writer dispatch')
+if 'MINIAS_OBJECT_FORMAT_ELF' not in writer_c or \
+   'unsupported-object-format' not in writer_c or \
+   'minias_write_elf_object(&elf,path)' not in writer_c or \
+   'project_output_features(' not in writer_c:
+    raise SystemExit('format dispatch bypassed ELF policy/feature projection')
+for token in ('minias_internal.h','MiniAs *','minias_assemble_file(',
+              'SourceGraph','MCLayout','SHT_','SHN_','STB_'):
+    if token in writer_h+writer_c:
+        raise SystemExit('format dispatcher gained mutable or ELF-wire semantics: '+token)
 for path in ('assembler/src/object_model.c',
+             'assembler/src/object_writer.c',
              'assembler/src/object_output.c'):
     if path not in make:
         raise SystemExit('new owner not built: '+path)
@@ -75,5 +92,11 @@ trap 'rm -rf -- "$work"' EXIT
     "$repo/tests/assembler/object-model-transaction-probe.c" \
     -o "$work/object-model-plan"
 "$work/object-model-plan"
+"${CC:-cc}" -std=c11 -Wall -Wextra -Wconversion -Wshadow -Werror \
+    -I"$repo/assembler/src" \
+    "$repo/assembler/src/object_writer.c" \
+    "$repo/tests/assembler/object-writer-router-probe.c" \
+    -o "$work/object-writer-router"
+"$work/object-writer-router"
 PYTHONPATH=${PYTHONPATH:-/usr/lib/python3/dist-packages} \
   bash "$repo/tests/assembler/probe-elf-object-view-boundary.sh"

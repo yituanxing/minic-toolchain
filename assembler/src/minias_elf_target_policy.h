@@ -24,6 +24,10 @@ typedef struct MiniAsObjectAttribute {
  * an ISA parser yet have different supported relocation profiles. */
 typedef struct MiniAsElfTargetPolicy {
     uint16_t elf_machine;
+    /* Format projection only: Common Emission retains opaque Target bits;
+     * Targets may supply their mapping to ELF e_flags without exposing ISA
+     * names or ELF wire values to the Common Fragment/Encode path. */
+    uint32_t (*project_output_features)(MiniAsTargetABIView,uint32_t);
     bool emit_all_section_symbols;
     bool fold_defined_local_relocation_to_section;
     bool fold_local_pcrel_relocation_to_section;

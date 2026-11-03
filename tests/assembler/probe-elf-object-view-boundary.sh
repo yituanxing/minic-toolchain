@@ -53,9 +53,9 @@ for name in ('sections', 'symbols', 'fixups', 'cu_file',
              'fragment_location', 'section_bytes'):
     if not re.search(r'object\.model\.' + name + r'\s*=', driver):
         raise SystemExit('MINIAS_ELF_OBJECT_VIEW=FAIL missing_projection:' + name)
-for name in ('policy', 'target_abi'):
-    if not re.search(r'object\.' + name + r'\s*=', driver):
-        raise SystemExit('MINIAS_ELF_OBJECT_VIEW=FAIL missing_policy:' + name)
+for name in ('elf.policy', 'target_abi', 'spec', 'target_output_features'):
+    if not re.search(r'object\.' + re.escape(name) + r'\s*=', driver):
+        raise SystemExit('MINIAS_ELF_OBJECT_VIEW=FAIL missing_writer_request:' + name)
 if not (driver.index('minias_finalize_target_output(&as,') <
         driver.index('minias_write_final_object(&as,')):
     raise SystemExit('MINIAS_ELF_OBJECT_VIEW=FAIL wrong_finalization_order')

@@ -2497,7 +2497,8 @@ static bool rv_encode_mcinst(MiniAsEncodeContext *ctx, const MiniAsInstructionVi
         return append_u32(ctx, m->encoding);
     if (rv_rvc_encode_plain(state,stmt,&compressed))
         return append_u16(ctx,compressed) &&
-               minias_encode_ctx_elf_flags(ctx,1U);
+               minias_encode_ctx_record_target_feature(
+                   ctx,RV_OUTPUT_USED_COMPRESSED);
     if (m->opcode == RV_MC_LI || m->opcode == RV_MC_CALL ||
         m->opcode == RV_MC_TAIL || m->opcode == RV_MC_LA)
         return rv_encode_multi_mc(ctx, stmt);
@@ -2505,7 +2506,8 @@ static bool rv_encode_mcinst(MiniAsEncodeContext *ctx, const MiniAsInstructionVi
         /* The selected 16-bit instruction may have no register operands
          * (c.nop/c.jr), so dispatch before reading operand[0]. */
         if(!append_u16(ctx,(uint16_t)m->encoding))return false;
-        return minias_encode_ctx_elf_flags(ctx,1U); /* EF_RISCV_RVC */
+        return minias_encode_ctx_record_target_feature(
+            ctx,RV_OUTPUT_USED_COMPRESSED);
     }
     if (stmt->size==2U &&
         (m->opcode==RV_MC_BRANCH || m->opcode==RV_MC_JAL)) {
@@ -2535,7 +2537,8 @@ static bool rv_encode_mcinst(MiniAsEncodeContext *ctx, const MiniAsInstructionVi
             fixup=MINIAS_FIXUP_RV_RVC_JUMP;
         }
         return append_u16(ctx,bits) &&
-               minias_encode_ctx_elf_flags(ctx,1U) &&
+               minias_encode_ctx_record_target_feature(
+                   ctx,RV_OUTPUT_USED_COMPRESSED) &&
                minias_encode_ctx_fixup_ref(ctx,stmt->offset,
                                             fixup,2U,*symbol,false);
     }

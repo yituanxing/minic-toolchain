@@ -235,10 +235,10 @@ bool minias_encode_request_anchor_ref(MiniAs *as,const char *prefix,
     return true;
 }
 
-bool minias_encode_add_elf_flags(MiniAs *as, uint32_t flags) {
-    MiniAsEncodeResult *result = active_result(as, "elf-flags");
+bool minias_encode_record_target_feature(MiniAs *as, uint32_t features) {
+    MiniAsEncodeResult *result = active_result(as, "target-feature");
     if (result == NULL) return false;
-    result->elf_flags_or |= flags;
+    result->target_output_features_or |= features;
     return true;
 }
 

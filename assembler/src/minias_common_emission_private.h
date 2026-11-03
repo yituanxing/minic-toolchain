@@ -54,7 +54,7 @@ typedef struct MiniAsEncodeResult {
     MiniAsEncodeAnchorRequest *anchors;
     size_t anchor_count;
     size_t anchor_capacity;
-    uint32_t elf_flags_or;
+    uint32_t target_output_features_or;
 } MiniAsEncodeResult;
 
 /* Bytes are not Section metadata. The Emission owner retains the sole

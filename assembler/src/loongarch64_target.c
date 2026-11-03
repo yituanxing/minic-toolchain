@@ -81,6 +81,7 @@ typedef struct {
 } LaMnemonicEntry;
 typedef struct {
     uint32_t features;
+    uint32_t abi;
     LaMnemonicEntry *mnemonics;
     size_t mnemonic_count;
     bool *relaxable_sections;
@@ -2253,6 +2254,7 @@ static bool la_init_target_state(const MiniAsTargetSpec *cfg,
         return false;
     }
     state->features=LA_FEATURE_LSX|LA_FEATURE_LASX;
+    state->abi=3U; /* Default LP64D ABI, independent of object output policy. */
     if(cfg->profile_size!=0U) {
         if(cfg->profile_size!=sizeof(profile)) {
             free(state);
@@ -2263,14 +2265,14 @@ static bool la_init_target_state(const MiniAsTargetSpec *cfg,
         memcpy(&profile,cfg->profile,sizeof(profile));
         if((profile.features &
             ~(uint32_t)(LA_FEATURE_LSX|LA_FEATURE_LASX))!=0U ||
-           profile.abi<1U || profile.abi>3U ||
-           cfg->object.elf.initial_flags!=(UINT32_C(0x40)|profile.abi)) {
+           profile.abi<1U || profile.abi>3U) {
             free(state);
             if(error_capacity!=0U)
                 snprintf(error,error_capacity,"loongarch-target-profile-abi-features");
             return false;
         }
         state->features=profile.features;
+        state->abi=profile.abi;
     }
     if(!la_build_mnemonic_index(state,error,error_capacity)) {
         free(state);

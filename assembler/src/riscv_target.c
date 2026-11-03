@@ -57,7 +57,8 @@ static bool riscv_emit_code_alignment(MiniAsCodeAlignSink *sink,
         }
         if (!minias_code_align_emit(sink,
                                            nop16, sizeof(nop16)) ||
-            !minias_code_align_add_elf_flags(sink, 1U)) /* EF_RISCV_RVC */
+            !minias_code_align_record_target_feature(
+                sink, RV_OUTPUT_USED_COMPRESSED))
             return false;
         size -= sizeof(nop16);
     }
@@ -1062,7 +1063,6 @@ static bool riscv_init_target_state(const MiniAsTargetSpec *config,
         return false;
     }
     state->target_xlen = config->layout.address_size == 4U ? 32U : 64U;
-    state->rv32e_abi = (config->object.elf.initial_flags & 8U) != 0U; /* EF_RISCV_RVE */
     if (config->profile_size != 0U) {
         memcpy(&profile, config->profile, sizeof(profile));
         if (profile.elf32 != (config->layout.address_size == 4U) ||
@@ -1073,6 +1073,7 @@ static bool riscv_init_target_state(const MiniAsTargetSpec *config,
             return false;
         }
         state->strict_i_xlen = profile.strict_i_xlen;
+        state->rv32e_abi = profile.rv32e_abi;
         state->isa_explicit = profile.explicit_isa;
         state->file_isa = profile.isa;
         /* Profile resolution passes semantic ISA spelling. Only the Target
@@ -1087,6 +1088,10 @@ static bool riscv_init_target_state(const MiniAsTargetSpec *config,
                 return false;
             }
         }
+    } else {
+        /* Historical callers can still supply only object ELF flags.
+         * Keep this compatibility fallback out of resolved Target profiles. */
+        state->rv32e_abi = (config->object.elf.initial_flags & 8U) != 0U;
     }
     /* The explicit legacy Base-I audit is independent of -march. A raw-byte
      * ban must never be activated by ISA selection alone: GCC Linux input
@@ -1108,6 +1113,9 @@ static bool riscv_configure_legacy(MiniAsTargetSpec *config,
     memset(&profile, 0, sizeof(profile));
     profile.elf32 = config->layout.address_size == 4U;
     profile.strict_i_xlen = strict_i_xlen;
+    /* Legacy strict-I entry points produce a profile from an ELF-only
+     * configuration; translate that old representation exactly once here. */
+    profile.rv32e_abi = (config->object.elf.initial_flags & 8U) != 0U;
     if (sizeof(profile) > sizeof(config->profile)) return false;
     memcpy(config->profile, &profile, sizeof(profile));
     config->profile_size = sizeof(profile);
@@ -1141,8 +1149,17 @@ static void riscv_resolve_cfi_abi(MiniAsTargetABIView view, MiniAsCfiABI *abi) {
     }
 }
 
+static uint32_t riscv_project_output_features(MiniAsTargetABIView view,
+                                               uint32_t features) {
+    (void)view;
+    /* Object-format policy alone knows EF_RISCV_RVC. Neither MC emission
+     * nor code alignment encodes or mutates ELF header bits directly. */
+    return (features & RV_OUTPUT_USED_COMPRESSED) != 0U ? 1U : 0U;
+}
+
 static const MiniAsElfTargetPolicy riscv_elf_policy = {
     .elf_machine = 243U, /* EM_RISCV */
+    .project_output_features = riscv_project_output_features,
     .object_attributes = riscv_object_attributes,
     .supports_fixup = riscv_supports_fixup,
     .fixup_relocation_type = riscv_fixup_relocation_type,

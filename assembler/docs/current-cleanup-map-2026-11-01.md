@@ -1,5 +1,30 @@
 # MiniAS 当前清理与所有权总览（2026-11-01）
 
+> **2026-11-03 Target ISA/ABI→Emission→ObjectWriter 整链收口（本轮
+> 工作树，最终提交 SHA/远端 exact-head 仍待确认）：** `TargetOps.resolve_profile`
+> 将四架构的 `-march/-mabi` 解析成不可变 `MiniAsTargetSpec`；Target
+> 私有 `profile` 是 ISA/psABI 语义来源，`layout.address_size` 是目标
+> 地址宽度来源，`object.elf.initial_flags` 只是单向输出投影。
+> `init_target_state` 从私有 profile 建立运行时 ISA/ABI；源内
+> `.option arch`/模式切换保存在 TargetContext，并在 SourceSite/Fragment
+> 留下现场快照。MC Encode 和代码对齐只通过窄 Sink 记录 Target 自有
+> `target_output_features`（例如用过压缩 RISC-V 指令），Emission
+> 统一汇总这些事实，不准直接改 ELF `e_flags`。终结的
+> `MiniAsObjectWriterRequest` 借用一个只读 ObjectModel、不可变
+> TargetABI 视图、输出特征和独立格式策略；唯一格式路由
+> `minias_write_object` 将输出特征经目标 ELF policy 映射成 ELF flags，
+> 再调用 `minias_write_elf_object` 做磁盘投影/原子提交。
+> **新增两项实际链接运行的回归：** 四个历史 C `assemble_file*`
+> ABI 符号及两个 Invocation 入口、属性开关不改变 RV32 ELF/编码；
+> 三组 Loong lp64s/f/d 与三组 RV profile 的 `initial_flags` 故意
+> 篡改测试。旧 `riscv_init_target_state` 的 RV32E 状态确被该测试
+> 检出从 1 误变 0；本轮修复版实际重编后两项均 PASS。
+> 目前 **ObjectFormat 只有 ELF 一个枚举值和实现**；格式分派是
+> 后续 COFF/Mach-O Writer 的接入点，不表示两种格式已经支持，
+> 实施前还需定义各自 relocation/symbol/section 投影与验收集。
+> 旧 GNU 严格矩阵和原始 Linux/QEMU 不能跨 SHA 继承，最终需
+> 以同一发布 SHA 的 exact-head 运行记录封口。
+
 > **2026-11-02 Target DataLayout × ObjectFormat 终结边界合批
 > （`352537a1` ELF policy 批次之后；新 SHA 的远端结果另核）：**
 > 已将 `TargetSpec.layout.address_size` 设为四目标六配置唯一的机器
@@ -319,7 +344,10 @@
   高置信 dead static 函数；根状态/索引容量/CFI/DWARF/重放均有
   真实读写者。四个公开 `minias_assemble_file*` 在仓库中仅有
   一条测试消费者，但外部 ABI 消费者未知，保留到兼容迁移契约
-  明确后再删；不为净删数字强行改写不同语义。
+  明确后再删；不为净删数字强行改写不同语义。另新增
+  `probe-minias-public-api-compat.sh` 真正 C 链接/调用回归并纳入
+  Target CI，防止历史公开入口被“无仓内调用”误判删除；这是
+  **保留兼容接口的门禁**，并非确认外部用户已迁移。
 - [x] **P04 Target 权限硬隔离（源码接口/本地结构门禁）**：清点所有宽 `MiniAs *` 回调；
   建立 Target 可见头文件与窄阶段 Context；四架构同批迁移
   directive、common validation、init/destroy 和 CFI mapping；删除

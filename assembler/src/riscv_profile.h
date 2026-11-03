@@ -42,11 +42,20 @@ typedef struct MiniAsRiscvProfile {
     uint32_t elf_flags;
     unsigned strict_i_xlen;
     bool explicit_isa;
+    /* Source-level psABI constraint, independent of ELF e_flags encoding.
+     * The object writer receives a separate one-way flags projection. */
+    bool rv32e_abi;
     MiniAsRiscvISA isa;
     /* Canonical target ISA spelling, not a serialized ELF vendor section.
      * Object output owns the one and only attribute serializer. */
     char arch_attribute_isa[512];
 } MiniAsRiscvProfile;
+
+/* Facts produced by the RISC-V encoder and code-align emitter. They are
+ * Target-owned semantic bits, not ELF e_flags or ISA extension masks. */
+enum {
+    RV_OUTPUT_USED_COMPRESSED = 1U << 8
+};
 
 bool minias_riscv_resolve_profile(const char *march, const char *mabi,
                                   MiniAsRiscvProfile *out,

@@ -3,7 +3,7 @@
 #include "minias_common_context.h"
 #include "minias_common_emission.h"
 #include "minias_common_layout.h"
-#include "minias_elf_object_view.h"
+#include "minias_object_writer.h"
 #include "source_graph_common.h"
 #include "minias_source_semantic_services.h"
 #include "minias.h"
@@ -484,12 +484,8 @@ static bool minias_object_section_bytes(const void *reader,int section,
 
 static bool minias_write_final_object(MiniAs *as,const char *path) {
     const MiniAsFixupSpan fixups=minias_emission_fixups(as);
-    MiniAsElfObjectView object={0};
+    MiniAsObjectWriterRequest object={0};
     bool ok;
-    if(as->target_spec->object.format!=MINIAS_OBJECT_FORMAT_ELF) {
-        minias_set_error(as,"unsupported-object-format");
-        return false;
-    }
     object.model.sections=as->sections;
     object.model.section_count=as->section_count;
     object.model.symbols=as->symbols;
@@ -498,22 +494,19 @@ static bool minias_write_final_object(MiniAs *as,const char *path) {
     object.model.fixup_count=fixups.count;
     object.model.cu_file_count=as->cu_file_count;
     object.model.cu_file=minias_object_cu_file;
-    object.policy=as->target->elf_policy;
+    object.elf.policy=as->target->elf_policy;
     object.target_abi=minias_target_abi_view(as);
-    object.object_machine=as->target_spec->object.elf.machine;
-    object.output_rel_relocations=as->target_spec->object.elf.rel_relocations;
-    object.suppress_target_attributes=
-        as->target_spec->object.elf.suppress_target_attributes;
-    object.elf_flags=as->elf_flags;
+    object.spec=&as->target_spec->object;
+    object.target_output_features=as->target_output_features;
     object.model.reader=as;
     object.model.find_symbol_id=minias_object_find_symbol_id;
     object.model.find_section=minias_object_find_section;
     object.model.numeric_reference=minias_object_numeric_reference;
     object.model.fragment_location=minias_object_fragment_location;
     object.model.section_bytes=minias_object_section_bytes;
-    ok=minias_write_elf_object(&object,path);
+    ok=minias_write_object(&object,path);
     if(!ok)minias_set_error(as,"%s",object.error[0]!='\0'?
-                            object.error:"elf-object-write-failed");
+                            object.error:"object-write-failed");
     return ok;
 }
 
@@ -531,11 +524,10 @@ int minias_assemble_config(const char *input_path,
             fprintf(diagnostic,"minic-as: missing-target-spec\n");
         return 2;
     }
-    if((config->layout.address_size!=4U &&
-        config->layout.address_size!=8U) ||
-       config->object.format!=MINIAS_OBJECT_FORMAT_ELF) {
+    if(config->layout.address_size!=4U &&
+       config->layout.address_size!=8U) {
         if(diagnostic!=NULL)
-            fprintf(diagnostic,"minic-as: unsupported-target-layout-or-object-format\n");
+            fprintf(diagnostic,"minic-as: unsupported-target-layout\n");
         return 2;
     }
     graph=minias_source_graph_create();
@@ -551,7 +543,7 @@ int minias_assemble_config(const char *input_path,
         bool added_long_branches = false;
 
         const bool initialized=minias_init_for_target(&as,config);
-        as.elf_flags = config->object.elf.initial_flags;
+        as.target_output_features = 0U;
         if (config->profile_size > sizeof(config->profile)) {
             minias_set_error(&as, "invalid-target-profile-size");
         } else if (initialized && as.target->init_target_state != NULL) {

@@ -120,6 +120,14 @@ jobs:
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
             bash tests/assembler/probe-target-spec-const-abi.sh
+      - name: Public C ABI compatibility and ELF attribute policy do not alter ISA
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-minias-public-api-compat.sh
+      - name: Target-private ISA and ABI stay independent of poisoned ELF flags
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-target-profile-elf-isolation.sh
       - name: Six-profile data layout and object format boundary against GNU
         run: |
           MINIAS_REQUIRE_SIX_GNU=1 MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \

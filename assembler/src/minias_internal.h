@@ -144,9 +144,9 @@ typedef struct MiniAs {
     size_t debug_loc_count;
     size_t debug_loc_capacity;
     bool debug_is_stmt;
-    /* Emission's additive ELF flags are runtime output, not a mutable
-     * TargetSpec or a second copy of its immutable object configuration. */
-    uint32_t elf_flags;
+    /* Emission records Target-private semantic facts without knowing any
+     * output format's ELF e_flags or other serialized header layout. */
+    uint32_t target_output_features;
     /* Only the Target object-finalization callback may request late
      * section alignment changes. Common retains the actual Section owner. */
     bool finalizing_target_output;
@@ -285,7 +285,7 @@ bool minias_encode_add_fixup_abs0(MiniAs *as, uint64_t offset,
                                   MiniAsFixupKind kind, unsigned width);
 bool minias_encode_request_anchor_ref(MiniAs *as, const char *prefix,
                                       MiniAsSymbolRef *ref);
-bool minias_encode_add_elf_flags(MiniAs *as, uint32_t flags);
+bool minias_encode_record_target_feature(MiniAs *as, uint32_t features);
 /* Section-owned relocations are explicit .reloc directives or generated
  * DWARF records. Never silently fall back here from a Target encoder. */
 bool minias_add_section_fixup(MiniAs *as, MiniAsFixupOrigin origin,

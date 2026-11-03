@@ -341,5 +341,9 @@ bool minias_riscv_resolve_profile(const char *march, const char *mabi,
     } else if (march != NULL && (out->isa.features & RISCV_ISA_E)) {
         out->elf_flags |= EF_RVE;
     }
+    /* Keep target legality tied to the resolved ISA/psABI rather than
+     * reinterpreting the object format's EF_RISCV_RVE serialization bit. */
+    out->rv32e_abi = eabi ||
+                    (march != NULL && (out->isa.features & RISCV_ISA_E) != 0U);
     return true;
 }

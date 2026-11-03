@@ -31,8 +31,8 @@ bad = []
 patterns = {
     'direct Fixup insertion': r'\bminias_add_fixup\s*\(',
     'global Fixup array access': r'\bas\s*->\s*fixups\s*\[',
-    'global ELF flag mutation':
-        r'\bas\s*->\s*elf_flags\s*(?:\|=|&=|\^=|\+=|-=|=(?!=)|\+\+|--)',
+    'global target output feature mutation':
+        r'\bas\s*->\s*target_output_features\s*(?:\|=|&=|\^=|\+=|-=|=(?!=)|\+\+|--)',
     'global synthetic-anchor counter mutation':
         r'\bas\s*->\s*pcrel_anchor_counter\s*(?:\+\+|--|\+=|-=|=(?!=))',
     'direct synthetic Symbol insertion':
@@ -63,7 +63,7 @@ if bad:
                      '\n'.join(bad))
 
 core = Path('assembler/src/minias_internal.h').read_text(encoding='utf-8')
-for api in ('minias_encode_add_elf_flags', 'minias_encode_add_fixup_ref',
+for api in ('minias_encode_record_target_feature', 'minias_encode_add_fixup_ref',
             'minias_encode_request_anchor_ref', 'minias_bind_symbol_ref'):
     if not re.search(r'\b' + api + r'\s*\(', core):
         raise SystemExit('Missing Common transaction API: ' + api)
@@ -94,7 +94,7 @@ if 'struct MiniAsEncodeContext {' in header or \
    'as->target->encode(&(MiniAsEncodeContext){as},&snapshot)' not in core or \
    'minias_project_instruction(stmt,&snapshot' not in core:
     raise SystemExit('EncodeContext is not constructed privately by Common')
-services=('emit','fixup_ref','fixup_abs0','anchor_ref','elf_flags',
+services=('emit','fixup_ref','fixup_abs0','anchor_ref','record_target_feature',
           'error','symbol_lookup','resolve_difference',
           'resolve_difference_field','symbol_is_dot','target_state','address_size')
 for service in services:
@@ -122,7 +122,7 @@ for filename, functions in targets.items():
         if re.search(r'\bMiniAs\s*\*|\bas\s*->|\bctx\s*->\s*as\b|'
                      r'\bminias_(?:emit_instruction_bytes|encode_add_fixup_ref|'
                      r'encode_add_fixup_abs0|encode_request_anchor_ref|'
-                     r'encode_add_elf_flags|set_error)\s*\(',body):
+                     r'encode_record_target_feature|set_error)\s*\(',body):
             raise SystemExit('Target encoder bypasses capability: '+filename+':'+name)
 print('MINIAS_OPAQUE_ENCODE_CONTEXT=PASS targets=4 helpers=18 services=12 old_callback=removed')
 PY
@@ -447,8 +447,8 @@ for target in ('aarch64_target.c', 'riscv_target.c',
             not re.search(r'\.elf_policy\s*=\s*&\w+',source):
         raise SystemExit('Target lacks one borrowed static ELF policy: '+target)
 driver = (root / 'assembler.c').read_text()
-if 'object.policy=as->target->elf_policy;' not in driver or \
-        'object.policy=(MiniAsElfTargetPolicy)' in driver:
+if 'object.elf.policy=as->target->elf_policy;' not in driver or \
+        'object.elf.policy=(MiniAsElfTargetPolicy)' in driver:
     raise SystemExit('Driver copied or reconstituted target ELF callback table')
 print('MINIAS_MC_FIXUP_ABI=PASS policy=single_object_aware_interface')
 PY

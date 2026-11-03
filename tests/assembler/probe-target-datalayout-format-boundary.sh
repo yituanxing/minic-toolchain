@@ -28,6 +28,7 @@ driver=(src/'assembler.c').read_text()
 core='\n'.join((src/name).read_text() for name in (
     'common_lowering.c','cfi.c','cfi_writer.c','debug_line.c'))
 writer=(src/'elf_writer.c').read_text()
+router=(src/'object_writer.c').read_text()
 object_h=(src/'minias_object_model.h').read_text()
 for token in ('typedef struct MiniAsTargetDataLayout',
               'uint8_t address_size;', 'MiniAsTargetDataLayout layout;',
@@ -43,9 +44,11 @@ for filename in ('common_lowering.c','cfi.c','cfi_writer.c','debug_line.c'):
         raise SystemExit('Common layout consumes ELF wire policy: '+filename)
 if re.search(r'object\.elf32|abi\.elf32|initial_elf_flags',api+driver+core+writer):
     raise SystemExit('obsolete ELF class/flag field survived')
-if 'unsupported-object-format' not in driver or \
-   'MINIAS_OBJECT_FORMAT_ELF' not in driver:
-    raise SystemExit('Driver lacks fail-closed object format dispatch')
+if 'unsupported-object-format' not in router or \
+   'MINIAS_OBJECT_FORMAT_ELF' not in router or \
+   'minias_write_object(&object,path)' not in driver or \
+   'minias_write_elf_object(' in driver:
+    raise SystemExit('Object writer router lacks fail-closed format dispatch')
 if 'minias_write_elf_object(' not in writer or \
    'target_abi.address_size' not in writer or \
    'ELFCLASS32' not in writer or 'ELFCLASS64' not in writer:

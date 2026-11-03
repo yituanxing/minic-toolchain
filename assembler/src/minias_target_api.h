@@ -436,7 +436,9 @@ bool minias_encode_ctx_fixup_abs0(MiniAsEncodeContext *, uint64_t,
                                  MiniAsFixupKind, unsigned);
 bool minias_encode_ctx_anchor_ref(MiniAsEncodeContext *, const char *,
                                  MiniAsSymbolRef *);
-bool minias_encode_ctx_elf_flags(MiniAsEncodeContext *, uint32_t);
+/* Target-private, opaque output facts. An ObjectWriter's format policy
+ * projects these bits to format-specific header fields after emission. */
+bool minias_encode_ctx_record_target_feature(MiniAsEncodeContext *, uint32_t);
 void minias_encode_ctx_error(MiniAsEncodeContext *, const char *, ...);
 bool minias_encode_ctx_symbol_lookup(MiniAsEncodeContext *,MiniAsSymbolRef,
                                     MiniAsSymbolView *);
@@ -452,7 +454,7 @@ unsigned minias_encode_ctx_address_size(const MiniAsEncodeContext *);
  * capability. The Target sees no MiniAs or mutable Fragment/Section array. */
 typedef struct MiniAsCodeAlignSink MiniAsCodeAlignSink;
 bool minias_code_align_emit(MiniAsCodeAlignSink *, const void *, size_t);
-bool minias_code_align_add_elf_flags(MiniAsCodeAlignSink *, uint32_t);
+bool minias_code_align_record_target_feature(MiniAsCodeAlignSink *, uint32_t);
 void minias_code_align_error(MiniAsCodeAlignSink *, const char *, ...);
 const void *minias_code_align_target_state(const MiniAsCodeAlignSink *);
 unsigned minias_code_align_address_size(const MiniAsCodeAlignSink *);
