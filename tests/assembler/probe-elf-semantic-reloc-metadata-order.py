@@ -294,7 +294,7 @@ def main():
     reject("et-exec-with-unchecked-load-segments",
            mutate(x86, 16, struct.pack("<H", 2)), "requires ET_REL")
     reject("unsupported-machine-without-relocations",
-           mutate(x86, 18, struct.pack("<H", 3)), "no target model")
+           mutate(x86, 18, struct.pack("<H", 8)), "no target model")
     reject("et-rel-with-program-headers",
            mutate(x86, 56, struct.pack("<H", 1)), "program headers")
 
