@@ -21,10 +21,82 @@ static void input_graph_destroy(MiniLdInputGraph *graph) {
     for (i = 0U; i < graph->symbol_count; ++i) {
         free(graph->symbols[i].name);
     }
+    for (i = 0U; i < graph->comdat_signature_count; ++i) {
+        free(graph->comdat_signatures[i]);
+    }
+    for (i = 0U; i < graph->dso.needed_count; ++i) {
+        free(graph->dso.needed_names[i]);
+    }
+    for (i = 0U; i < graph->dso.symbol_count; ++i) {
+        free(graph->dso.symbol_names[i]);
+    }
     free(graph->files);
     free(graph->sections);
     free(graph->symbols);
+    free(graph->comdat_signatures);
+    free(graph->dso.needed_names);
+    free(graph->dso.symbol_names);
     memset(graph, 0, sizeof(*graph));
+}
+
+static bool input_graph_add_dso_needed(MiniLdInputGraph *graph,
+                                       const char *name) {
+    return string_set_append(&graph->dso.needed_names,
+                             &graph->dso.needed_count,
+                             &graph->dso.needed_capacity, name);
+}
+
+static bool input_graph_add_dso_symbol(MiniLdInputGraph *graph,
+                                       const char *name) {
+    return string_set_append(&graph->dso.symbol_names,
+                             &graph->dso.symbol_count,
+                             &graph->dso.symbol_capacity, name);
+}
+
+static bool input_graph_dso_defines(const MiniLdInputGraph *graph,
+                                    const char *name) {
+    size_t i;
+
+    for (i = 0U; i < graph->dso.symbol_count; ++i) {
+        if (strcmp(graph->dso.symbol_names[i], name) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static size_t input_graph_dso_needed_count(const MiniLdInputGraph *graph) {
+    return graph->dso.needed_count;
+}
+
+static const char *input_graph_dso_needed_name(const MiniLdInputGraph *graph,
+                                                size_t index) {
+    return index < graph->dso.needed_count ?
+           graph->dso.needed_names[index] : NULL;
+}
+
+/* Object admission owns the first-wins COMDAT decision across both ordinary
+ * inputs and selected archive members. A losing group never reaches the
+ * working sections or symbol resolver as a second strong definition. */
+static bool input_graph_select_comdat(MiniLdInputGraph *graph,
+                                      const char *signature,
+                                      bool *selected_out) {
+    size_t i;
+
+    for (i = 0U; i < graph->comdat_signature_count; ++i) {
+        if (strcmp(graph->comdat_signatures[i], signature) == 0) {
+            *selected_out = false;
+            return true;
+        }
+    }
+    if (!string_set_append(&graph->comdat_signatures,
+                           &graph->comdat_signature_count,
+                           &graph->comdat_signature_capacity,
+                           signature)) {
+        return false;
+    }
+    *selected_out = true;
+    return true;
 }
 
 static bool input_graph_record_file(MiniLdInputGraph *graph,
@@ -135,7 +207,6 @@ static bool input_graph_record_section(MiniLdInputGraph *graph,
     entry->link = header->link;
     entry->info = header->info;
     entry->size = (size_t)header->size;
-    entry->group_signature_symbol = SIZE_MAX;
     entry->link_order_input = SIZE_MAX;
     entry->group_input = SIZE_MAX;
     *input_id_out = graph->section_count++;

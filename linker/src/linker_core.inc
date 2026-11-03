@@ -39,7 +39,6 @@ typedef struct MiniLdSection {
     unsigned char *data;
     size_t size;
     size_t capacity;
-    size_t relocation_count;
     bool has_group;
     uint32_t group_flags;
     size_t group_signature_symbol;
@@ -97,6 +96,19 @@ typedef struct MiniLdReloc {
     uint64_t input_offset;
 } MiniLdReloc;
 
+/* Current relocation targets and offsets are mutable working state. The
+ * original input-section ID and original offset remain stable in each entry.
+ * CSR section lookup is created only after all work-section permutations and
+ * relocation filtering have completed. */
+typedef struct MiniLdRelocationWorkspace {
+    MiniLdReloc *entries;
+    size_t count;
+    size_t capacity;
+    size_t *section_starts;
+    size_t *section_refs;
+    size_t index_sections;
+} MiniLdRelocationWorkspace;
+
 /* Input identity survives name-based output concatenation.  The input owner
  * retains its exact bytes and section-header metadata so GC and future
  * COMDAT/link-order selection never have to infer object boundaries from
@@ -127,12 +139,20 @@ typedef struct MiniLdInputSection {
     uint32_t info;
     unsigned char *data;
     size_t size;
-    size_t group_signature_symbol;
-    uint32_t group_flags;
-    bool has_group;
     size_t link_order_input;
     size_t group_input;
 } MiniLdInputSection;
+
+/* References provided by ET_DYN inputs are source facts, not synthesized
+ * dynamic output sections. Their order is the original admission order. */
+typedef struct MiniLdDsoCatalog {
+    char **needed_names;
+    size_t needed_count;
+    size_t needed_capacity;
+    char **symbol_names;
+    size_t symbol_count;
+    size_t symbol_capacity;
+} MiniLdDsoCatalog;
 
 /* Stable input identities and their lifetime belong to one graph.  A file's
  * section/symbol ranges are append-only, and ELF shndx maps to a stable input
@@ -147,6 +167,12 @@ typedef struct MiniLdInputGraph {
     MiniLdInputSymbol *symbols;
     size_t symbol_count;
     size_t symbol_capacity;
+    /* One first-wins COMDAT signature registry across every admitted object,
+     * including lazily extracted archive members. */
+    char **comdat_signatures;
+    size_t comdat_signature_count;
+    size_t comdat_signature_capacity;
+    MiniLdDsoCatalog dso;
 } MiniLdInputGraph;
 
 typedef struct MiniLdIndexSlot {
@@ -192,26 +218,7 @@ typedef struct MiniLdState {
     MiniLdInputGraph inputs;
     MiniLdSectionWorkspace work;
     MiniLdSymbolResolver resolver;
-    MiniLdReloc *relocs;
-    size_t reloc_count;
-    size_t reloc_capacity;
-    /*
-     * Lazy CSR-style relocation index, keyed by input section number.
-     * Built once when R_RISCV_ALIGN relaxation starts, then immutable:
-     * relaxation alters relocation offsets but never section owners.
-     */
-    size_t *reloc_section_starts;
-    size_t *reloc_section_refs;
-    size_t reloc_index_sections;
-    char **comdat_signatures;
-    size_t comdat_signature_count;
-    size_t comdat_signature_capacity;
-    char **dso_needed_names;
-    size_t dso_needed_count;
-    size_t dso_needed_capacity;
-    char **dso_symbol_names;
-    size_t dso_symbol_count;
-    size_t dso_symbol_capacity;
+    MiniLdRelocationWorkspace relocations;
     uint32_t elf_flags;
     size_t processed_object_count;
     bool have_input;
@@ -415,29 +422,20 @@ static bool read_file(const char *path,
     return true;
 }
 
+static bool string_set_append(char ***items,
+                              size_t *count,
+                              size_t *capacity,
+                              const char *name);
+
 #include "linker_input.inc"
 
-static void state_destroy(MiniLdState *state) {
-    size_t i;
+#include "linker_relocations.inc"
 
+static void state_destroy(MiniLdState *state) {
     work_sections_destroy(&state->work);
     symbol_resolver_destroy(&state->resolver);
     input_graph_destroy(&state->inputs);
-    for (i = 0U; i < state->dso_needed_count; ++i) {
-        free(state->dso_needed_names[i]);
-    }
-    for (i = 0U; i < state->dso_symbol_count; ++i) {
-        free(state->dso_symbol_names[i]);
-    }
-    free(state->dso_needed_names);
-    free(state->dso_symbol_names);
-    free(state->relocs);
-    free(state->reloc_section_starts);
-    free(state->reloc_section_refs);
-    for (i = 0U; i < state->comdat_signature_count; ++i) {
-        free(state->comdat_signatures[i]);
-    }
-    free(state->comdat_signatures);
+    relocations_destroy(&state->relocations);
 }
 
 static bool string_set_append(char ***items,
@@ -476,10 +474,7 @@ static bool string_set_append(char ***items,
 }
 
 static bool state_add_dso_needed(MiniLdState *state, const char *name) {
-    if (!string_set_append(&state->dso_needed_names,
-                           &state->dso_needed_count,
-                           &state->dso_needed_capacity,
-                           name)) {
+    if (!input_graph_add_dso_needed(&state->inputs, name)) {
         fprintf(state->diagnostics,
                 "minic-ld: out-of-memory:dso-needed\n");
         return false;
@@ -488,10 +483,7 @@ static bool state_add_dso_needed(MiniLdState *state, const char *name) {
 }
 
 static bool state_add_dso_symbol(MiniLdState *state, const char *name) {
-    if (!string_set_append(&state->dso_symbol_names,
-                           &state->dso_symbol_count,
-                           &state->dso_symbol_capacity,
-                           name)) {
+    if (!input_graph_add_dso_symbol(&state->inputs, name)) {
         fprintf(state->diagnostics,
                 "minic-ld: out-of-memory:dso-symbol\n");
         return false;
@@ -500,35 +492,7 @@ static bool state_add_dso_symbol(MiniLdState *state, const char *name) {
 }
 
 static bool state_dso_defines(const MiniLdState *state, const char *name) {
-    size_t i;
-
-    for (i = 0U; i < state->dso_symbol_count; ++i) {
-        if (strcmp(state->dso_symbol_names[i], name) == 0) {
-            return true;
-        }
-    }
-    return false;
-}
-
-static bool ensure_reloc_capacity(MiniLdState *state) {
-    MiniLdReloc *next;
-    size_t capacity;
-
-    if (state->reloc_count < state->reloc_capacity) {
-        return true;
-    }
-    capacity = state->reloc_capacity == 0U ? 64U : state->reloc_capacity * 2U;
-    if (capacity < state->reloc_capacity ||
-        capacity > SIZE_MAX / sizeof(*state->relocs)) {
-        return false;
-    }
-    next = realloc(state->relocs, capacity * sizeof(*state->relocs));
-    if (next == NULL) {
-        return false;
-    }
-    state->relocs = next;
-    state->reloc_capacity = capacity;
-    return true;
+    return input_graph_dso_defines(&state->inputs, name);
 }
 
 static uint64_t hash_text(const char *text) {
@@ -599,32 +563,6 @@ static bool find_or_add_section(MiniLdState *state,
     return find_or_add_section_with_identity(state, name, type, flags,
                                              align, entsize, false,
                                              section_out);
-}
-
-static bool add_relocation(MiniLdState *state,
-                           size_t section,
-                           uint64_t offset,
-                           uint32_t type,
-                           size_t symbol,
-                           int64_t addend,
-                           size_t input_section,
-                           uint64_t input_offset) {
-    MiniLdReloc *reloc;
-
-    if (!ensure_reloc_capacity(state)) {
-        fprintf(state->diagnostics, "minic-ld: out-of-memory:relocations\n");
-        return false;
-    }
-    reloc = &state->relocs[state->reloc_count++];
-    reloc->section = section;
-    reloc->offset = offset;
-    reloc->type = type;
-    reloc->symbol = symbol;
-    reloc->addend = addend;
-    reloc->input_section = input_section;
-    reloc->input_offset = input_offset;
-    ++state->work.sections[section].relocation_count;
-    return true;
 }
 
 static bool section_supported_for_merge(const MiniElfSection *section) {
@@ -702,17 +640,9 @@ static bool select_input_groups(MiniLdState *state,
         groups[i].flags = flags;
         groups[i].selected = true;
         if ((flags & GRP_COMDAT) != 0U) {
-            for (j = 0U; j < state->comdat_signature_count; ++j) {
-                if (strcmp(state->comdat_signatures[j], signature_name) == 0) {
-                    groups[i].selected = false;
-                    break;
-                }
-            }
-            if (groups[i].selected &&
-                !string_set_append(&state->comdat_signatures,
-                                   &state->comdat_signature_count,
-                                   &state->comdat_signature_capacity,
-                                   signature_name)) {
+            if (!input_graph_select_comdat(&state->inputs,
+                                           signature_name,
+                                           &groups[i].selected)) {
                 fprintf(state->diagnostics,
                         "minic-ld: out-of-memory:comdat-signature\n");
                 return false;
@@ -1087,8 +1017,6 @@ static bool process_input_data(MiniLdState *state,
         if (group_index != SIZE_MAX) {
             MiniLdInputSection *source =
                 &state->inputs.sections[section_map[i].input_section];
-            source->has_group = true;
-            source->group_flags = groups[group_index].flags;
             source->group_input = section_map[group_index].input_section;
             if (state->relocatable_output) {
                 output->has_group = true;
@@ -1253,8 +1181,6 @@ static bool process_input_data(MiniLdState *state,
         }
         state->work.sections[section_map[i].output_section].group_signature_symbol =
             signature_id;
-        state->inputs.sections[section_map[i].input_section].group_signature_symbol =
-            signature_id;
     }
 
     for (i = 1U; i < elf.section_count; ++i) {
@@ -1310,7 +1236,7 @@ static bool process_input_data(MiniLdState *state,
                     goto done;
                 }
             }
-            if (!add_relocation(state,
+            if (!relocations_append(&state->relocations, state->diagnostics,
                                 target_map.output_section,
                                 rela.offset + target_map.base,
                                 minielf_rela_type(&elf, rela.info),
@@ -2378,7 +2304,7 @@ static bool write_output(MiniLdState *state, const char *path) {
                       sizeof(*sections));
     symbols = calloc(state->resolver.count == 0U ? 1U : state->resolver.count,
                      sizeof(*symbols));
-    relocations = calloc(state->reloc_count == 0U ? 1U : state->reloc_count,
+    relocations = calloc(state->relocations.count == 0U ? 1U : state->relocations.count,
                          sizeof(*relocations));
     if (sections == NULL || symbols == NULL || relocations == NULL) {
         fprintf(state->diagnostics, "minic-ld: out-of-memory:output\n");
@@ -2432,8 +2358,8 @@ static bool write_output(MiniLdState *state, const char *path) {
         }
     }
 
-    for (i = 0U; i < state->reloc_count; ++i) {
-        const MiniLdReloc *input = &state->relocs[i];
+    for (i = 0U; i < state->relocations.count; ++i) {
+        const MiniLdReloc *input = &state->relocations.entries[i];
         MiniElfWriteRela *output = &relocations[i];
 
         if (input->section >= state->work.count ||
@@ -2460,7 +2386,7 @@ static bool write_output(MiniLdState *state, const char *path) {
     spec.symbols = symbols;
     spec.symbol_count = state->resolver.count;
     spec.relocations = relocations;
-    spec.relocation_count = state->reloc_count;
+    spec.relocation_count = state->relocations.count;
     spec.emit_section_symbols = false;
 
     if (!minielf_build_relocatable(&spec,
@@ -2866,8 +2792,8 @@ static bool static_build_got(MiniLdState *state, MiniLdStaticGot *got) {
         got->slot_offsets[i] = SIZE_MAX;
     }
 
-    for (i = 0U; i < state->reloc_count; ++i) {
-        MiniLdReloc *reloc = &state->relocs[i];
+    for (i = 0U; i < state->relocations.count; ++i) {
+        MiniLdReloc *reloc = &state->relocations.entries[i];
         MiniLdSection *section;
         size_t aligned;
 
@@ -2973,71 +2899,6 @@ static size_t static_map_relaxed_offset(
     return raw_offset - deleted;
 }
 
-/*
- * RISC-V ALIGN relaxation is invoked for thousands of input sections.
- * Scanning all 1.28 million Linux relocations for each section was O(S*R).
- * Build a compact, stable, prefix-sum index ONCE; order within a section
- * remains the original order, and relocation offsets may still be changed.
- */
-static bool minild_index_relocations_by_section(MiniLdState *state) {
-    size_t *starts = NULL;
-    size_t *refs = NULL;
-    size_t *positions = NULL;
-    size_t count = state->work.count;
-    size_t i;
-
-    if (state->reloc_section_starts != NULL) {
-        return true;
-    }
-    if (count == SIZE_MAX ||
-        count + 1U > SIZE_MAX / sizeof(*starts) ||
-        state->reloc_count > SIZE_MAX / sizeof(*refs)) {
-        fprintf(state->diagnostics, "minic-ld: relocation-index-overflow\n");
-        return false;
-    }
-    starts = calloc(count + 1U, sizeof(*starts));
-    refs = malloc((state->reloc_count == 0U ? 1U : state->reloc_count) *
-                  sizeof(*refs));
-    positions = malloc((count == 0U ? 1U : count) * sizeof(*positions));
-    if (starts == NULL || refs == NULL || positions == NULL) {
-        fprintf(state->diagnostics, "minic-ld: out-of-memory:relocation-index\n");
-        goto fail;
-    }
-    for (i = 0U; i < state->reloc_count; ++i) {
-        const size_t section = state->relocs[i].section;
-        if (section >= count || starts[section + 1U] == SIZE_MAX) {
-            fprintf(state->diagnostics,
-                    "minic-ld: invalid-relocation-section-index\n");
-            goto fail;
-        }
-        ++starts[section + 1U];
-    }
-    for (i = 1U; i <= count; ++i) {
-        if (starts[i] > SIZE_MAX - starts[i - 1U]) {
-            fprintf(state->diagnostics, "minic-ld: relocation-prefix-overflow\n");
-            goto fail;
-        }
-        starts[i] += starts[i - 1U];
-    }
-    for (i = 0U; i < count; ++i) {
-        positions[i] = starts[i];
-    }
-    for (i = 0U; i < state->reloc_count; ++i) {
-        size_t section = state->relocs[i].section;
-        refs[positions[section]++] = i;
-    }
-    free(positions);
-    state->reloc_section_starts = starts;
-    state->reloc_section_refs = refs;
-    state->reloc_index_sections = count;
-    return true;
-fail:
-    free(positions);
-    free(refs);
-    free(starts);
-    return false;
-}
-
 static bool static_relax_align_section(MiniLdState *state,
                                        size_t section_index,
                                        uint64_t base_addr) {
@@ -3058,17 +2919,19 @@ static bool static_relax_align_section(MiniLdState *state,
     if (section->type == SHT_NOBITS || section->size == 0U) {
         return true;
     }
-    if (!minild_index_relocations_by_section(state)) {
+    if (!relocations_build_section_index(&state->relocations,
+                                         state->work.count,
+                                         state->diagnostics)) {
         return false;
     }
     /* Synthetic script-only sections appended later have no relocations. */
-    if (section_index >= state->reloc_index_sections) {
+    if (section_index >= state->relocations.index_sections) {
         return true;
     }
-    relocation_begin = state->reloc_section_starts[section_index];
-    relocation_end = state->reloc_section_starts[section_index + 1U];
+    relocation_begin = state->relocations.section_starts[section_index];
+    relocation_end = state->relocations.section_starts[section_index + 1U];
     for (i = relocation_begin; i < relocation_end; ++i) {
-        if (state->relocs[state->reloc_section_refs[i]].type == R_RISCV_ALIGN) {
+        if (state->relocations.entries[state->relocations.section_refs[i]].type == R_RISCV_ALIGN) {
             ++site_count;
         }
     }
@@ -3088,7 +2951,7 @@ static bool static_relax_align_section(MiniLdState *state,
 
     site_count = 0U;
     for (i = relocation_begin; i < relocation_end; ++i) {
-        MiniLdReloc *reloc = &state->relocs[state->reloc_section_refs[i]];
+        MiniLdReloc *reloc = &state->relocations.entries[state->relocations.section_refs[i]];
         if (reloc->type != R_RISCV_ALIGN) {
             continue;
         }
@@ -3215,7 +3078,7 @@ static bool static_relax_align_section(MiniLdState *state,
     }
 
     for (i = relocation_begin; i < relocation_end; ++i) {
-        MiniLdReloc *reloc = &state->relocs[state->reloc_section_refs[i]];
+        MiniLdReloc *reloc = &state->relocations.entries[state->relocations.section_refs[i]];
 
         if (reloc->offset <= SIZE_MAX) {
             reloc->offset = (uint64_t)static_map_relaxed_offset(
@@ -4955,7 +4818,7 @@ static bool pcrel_find(const MiniLdPcrelSlot *slots,
 static bool static_apply_relocations(MiniLdState *state,
                                      const MiniLdStaticLayout *layout,
                                      const MiniLdStaticGot *got) {
-    size_t capacity = pcrel_capacity_for(state->reloc_count);
+    size_t capacity = pcrel_capacity_for(state->relocations.count);
     MiniLdPcrelSlot *pcrel;
     size_t i;
 
@@ -4969,8 +4832,8 @@ static bool static_apply_relocations(MiniLdState *state,
         return false;
     }
 
-    for (i = 0U; i < state->reloc_count; ++i) {
-        MiniLdReloc *reloc = &state->relocs[i];
+    for (i = 0U; i < state->relocations.count; ++i) {
+        MiniLdReloc *reloc = &state->relocations.entries[i];
         MiniLdSection *section = &state->work.sections[reloc->section];
         uint64_t symbol_value = 0U;
 
@@ -5349,8 +5212,8 @@ static bool static_apply_relocations(MiniLdState *state,
         }
     }
 
-    for (i = 0U; i < state->reloc_count; ++i) {
-        MiniLdReloc *reloc = &state->relocs[i];
+    for (i = 0U; i < state->relocations.count; ++i) {
+        MiniLdReloc *reloc = &state->relocations.entries[i];
         MiniLdSection *section;
         MiniLdResolvedSymbol *label;
         int64_t delta;
@@ -6991,7 +6854,7 @@ static bool shared_prepare_metadata(MiniLdState *state,
         calloc(shared->symbol_map_capacity,
                sizeof(*shared->preemptible));
     {
-        size_t maximum_needed = state->dso_needed_count +
+        size_t maximum_needed = input_graph_dso_needed_count(&state->inputs) +
             (needed_name != NULL && needed_name[0] != '\0' ? 1U : 0U);
 
         shared->needed_offsets =
@@ -7166,8 +7029,8 @@ static bool shared_prepare_metadata(MiniLdState *state,
             goto oom;
         }
     }
-    for (i = 0U; i < state->dso_needed_count; ++i) {
-        const char *name = state->dso_needed_names[i];
+    for (i = 0U; i < input_graph_dso_needed_count(&state->inputs); ++i) {
+        const char *name = input_graph_dso_needed_name(&state->inputs, i);
 
         if (needed_name != NULL && strcmp(needed_name, name) == 0) {
             continue;
@@ -7256,8 +7119,8 @@ static bool shared_prepare_metadata(MiniLdState *state,
             goto oom;
         }
     }
-    for (i = 0U; i < state->reloc_count; ++i) {
-        MiniLdReloc *reloc = &state->relocs[i];
+    for (i = 0U; i < state->relocations.count; ++i) {
+        MiniLdReloc *reloc = &state->relocations.entries[i];
         MiniLdResolvedSymbol *target;
 
         if (reloc->section >= state->work.count ||
@@ -7604,8 +7467,8 @@ static bool shared_patch_arithmetic_relocations(
     const MiniLdStaticLayout *layout) {
     size_t i;
 
-    for (i = 0U; i < state->reloc_count; ++i) {
-        MiniLdReloc *reloc = &state->relocs[i];
+    for (i = 0U; i < state->relocations.count; ++i) {
+        MiniLdReloc *reloc = &state->relocations.entries[i];
         MiniLdSection *section;
         uint64_t symbol_value = 0U;
         int64_t target;
@@ -7831,8 +7694,8 @@ static bool shared_fill_relocations(MiniLdState *state,
         ++write_index;
     }
 
-    for (i = 0U; i < state->reloc_count; ++i) {
-        MiniLdReloc *input = &state->relocs[i];
+    for (i = 0U; i < state->relocations.count; ++i) {
+        MiniLdReloc *input = &state->relocations.entries[i];
         MiniLdSection *source;
         MiniLdResolvedSymbol *target;
         Elf64_Rela output;
@@ -7972,7 +7835,7 @@ static bool shared_patch_final_layout_relocations(
     MiniLdState *state,
     const MiniLdStaticLayout *layout,
     const MiniLdSharedImage *shared) {
-    size_t capacity = pcrel_capacity_for(state->reloc_count);
+    size_t capacity = pcrel_capacity_for(state->relocations.count);
     MiniLdPcrelSlot *pcrel;
     size_t i;
 
@@ -7991,8 +7854,8 @@ static bool shared_patch_final_layout_relocations(
         return false;
     }
 
-    for (i = 0U; i < state->reloc_count; ++i) {
-        MiniLdReloc *reloc = &state->relocs[i];
+    for (i = 0U; i < state->relocations.count; ++i) {
+        MiniLdReloc *reloc = &state->relocations.entries[i];
         MiniLdSection *source;
         uint64_t symbol_value = 0U;
         uint64_t place;
@@ -8196,8 +8059,8 @@ static bool shared_patch_final_layout_relocations(
         }
     }
 
-    for (i = 0U; i < state->reloc_count; ++i) {
-        MiniLdReloc *reloc = &state->relocs[i];
+    for (i = 0U; i < state->relocations.count; ++i) {
+        MiniLdReloc *reloc = &state->relocations.entries[i];
         MiniLdResolvedSymbol *anchor;
         MiniLdSection *source;
         int64_t anchor_offset;
@@ -8352,8 +8215,8 @@ static bool shared_fill_plt(MiniLdState *state,
                sizeof(relocation));
     }
 
-    for (i = 0U; i < state->reloc_count; ++i) {
-        MiniLdReloc *reloc = &state->relocs[i];
+    for (i = 0U; i < state->relocations.count; ++i) {
+        MiniLdReloc *reloc = &state->relocations.entries[i];
         MiniLdSection *source;
         MiniLdResolvedSymbol *target;
         uint64_t destination;
@@ -9070,7 +8933,7 @@ static bool shared_validate_pie_dso_symbols(
     const MiniLdState *state) {
     size_t i;
 
-    if (state->dso_needed_count == 0U) {
+    if (input_graph_dso_needed_count(&state->inputs) == 0U) {
         return true;
     }
     for (i = 0U; i < state->resolver.count; ++i) {
@@ -9347,7 +9210,7 @@ static void minild_perf_phase(const char *phase,
         fprintf(diagnostics,
                 "MINILD_PHASE=%s cpu_ms=%.3f objects=%zu sections=%zu symbols=%zu relocs=%zu\n",
                 phase, milliseconds, state->processed_object_count,
-                state->work.count, state->resolver.count, state->reloc_count);
+                state->work.count, state->resolver.count, state->relocations.count);
     }
     *last = now;
 }
