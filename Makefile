@@ -2316,8 +2316,8 @@ check-array-shape-convergence: $(MINIC_CC_BINARY)
 
 check-fast: check-array-shape-convergence
 
-# Materialized typedef outer dimensions and legacy fixed local declarators
-# must keep the same C semantics across all five emitters.  Host GNU provides
+# Materialized typedef and fixed local arrays must retain the same C semantics
+# across all five emitters. Host GNU provides
 # native runtime and 16 independent invalid-input oracles (80 target rejects).
 .PHONY: check-array-local-materialization
 check-array-local-materialization: $(MINIC_CC_BINARY)
@@ -2326,8 +2326,8 @@ check-array-local-materialization: $(MINIC_CC_BINARY)
 
 check-fast: check-array-local-materialization
 
-# Record-field typedef arrays must share static initializer slot ownership
-# with legacy declarator arrays, including designated rewrites and relocations.
+# Record-field typedef and declarator arrays share one complete ArrayType;
+# verify static initializer slots, designated rewrites and relocations.
 .PHONY: check-static-field-typedef-array
 check-static-field-typedef-array: $(MINIC_CC_BINARY)
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \

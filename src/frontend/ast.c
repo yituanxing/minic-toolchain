@@ -472,28 +472,21 @@ static bool minic_c0_type_initializer_slot_count_impl(const MinicC0Program *prog
             const MinicRecordField *field;
             MinicArrayObjectInfo array_info;
             bool is_array;
-            size_t field_count;
             size_t element_slots;
-            size_t field_slots;
 
             field = &record->fields[field_index];
             is_array = minic_c0_record_field_array_info(program, field, &array_info);
             if (is_array && (array_info.is_incomplete || array_info.is_zero_length)) {
                 continue;
             }
-            field_count = is_array && !array_info.has_materialized_type
-                              ? array_info.element_count : 1U;
-            if ((is_array && array_info.has_materialized_type && field->element_count != 1U) ||
-                (!is_array && field->element_count != 1U) || field_count == 0U ||
-                !minic_c0_type_initializer_slot_count_impl(program, field->type, &element_slots) ||
-                (element_slots != 0U && field_count > SIZE_MAX / element_slots)) {
+            if (!minic_c0_type_initializer_slot_count_impl(program, field->type,
+                                                           &element_slots)) {
                 return false;
             }
-            field_slots = field_count * element_slots;
-            if (total > SIZE_MAX - field_slots) {
+            if (total > SIZE_MAX - element_slots) {
                 return false;
             }
-            total += field_slots;
+            total += element_slots;
         }
         *slot_count = total;
         return true;
@@ -1245,8 +1238,15 @@ bool minic_c0_record_add_field(MinicC0Program *program,
         return false;
     }
     field.name_length = name_length;
+    /* The legacy count parameter is only a construction convenience: record
+     * fields themselves always store their complete type, never a parallel
+     * outer array dimension. */
+    if (element_count != 1U &&
+        !minic_c0_program_add_array_type(program, type, element_count, &type)) {
+        free(field.name);
+        return false;
+    }
     field.type = type;
-    field.element_count = element_count;
     record->fields[record->field_count] = field;
     record->field_count += 1U;
     return true;
@@ -1657,20 +1657,17 @@ bool minic_c0_local_array_object_info(const MinicC0Program *program,
 
     if (local == NULL) return false;
     (void)memset(&resolved, 0, sizeof(resolved));
-    if (local->is_array) {
-        /* The outer dimension of a local T name[N] is still owned by its
-         * declarator; T itself may be a materialized inner array type. */
+    if (local->dynamic_count_local_id != MINIC_LOCAL_INVALID ||
+        local->dynamic_address_local_id != MINIC_LOCAL_INVALID) {
+        /* Only VLAs own runtime bound/address locals. Reject a half-published
+         * pair rather than interpreting it as an ordinary object type. */
+        if (local->dynamic_count_local_id == MINIC_LOCAL_INVALID ||
+            local->dynamic_address_local_id == MINIC_LOCAL_INVALID ||
+            minic_type_is_array(local->type)) return false;
         resolved.element_type = local->type;
-        resolved.element_count = local->element_count;
-        resolved.is_zero_length = local->is_zero_length_array;
-        resolved.is_incomplete = local->element_count == 0U &&
-                                 !local->is_zero_length_array;
-        resolved.is_runtime_sized = resolved.is_incomplete &&
-            local->dynamic_count_local_id != MINIC_LOCAL_INVALID &&
-            local->dynamic_address_local_id != MINIC_LOCAL_INVALID;
+        resolved.is_incomplete = true;
+        resolved.is_runtime_sized = true;
     } else if (minic_type_is_array(local->type)) {
-        /* `typedef T Row[3]; Row row;` already has a materialized type.
-         * It must not be confused with an outer legacy local dimension. */
         if (!minic_c0_materialized_array_object_info(
                 program, local->type, &resolved)) return false;
     } else return false;
@@ -1686,15 +1683,9 @@ bool minic_c0_record_field_array_info(const MinicC0Program *program,
 
     if (field == NULL) return false;
     (void)memset(&resolved, 0, sizeof(resolved));
-    if (field->is_array) {
-        resolved.element_type = field->type;
-        resolved.element_count = field->element_count;
-        resolved.is_incomplete = field->is_flexible_array;
-        resolved.is_zero_length = field->is_zero_length_array;
-    } else if (minic_type_is_array(field->type)) {
-        if (!minic_c0_materialized_array_object_info(
-                program, field->type, &resolved)) return false;
-    } else return false;
+    if (!minic_type_is_array(field->type) ||
+        !minic_c0_materialized_array_object_info(
+            program, field->type, &resolved)) return false;
 
     if (info != NULL) *info = resolved;
     return true;

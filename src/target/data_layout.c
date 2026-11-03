@@ -198,14 +198,11 @@ static bool minic_data_layout_effective_field_alignment(
     return true;
 }
 
-/* A record member can still be written as a legacy repeated element or as
- * one materialized ArrayType (notably through a typedef).  Normalize that
- * distinction at the source-layout boundary; do not multiply the dimensions
- * of an already-materialized array a second time.  Flexible members need
- * their element type because an incomplete ArrayType has no static extent. */
+/* Record array dimensions are owned by MinicArrayType.  The layout walker
+ * stores one source type per field; a flexible tail alone substitutes its
+ * element type because the outer incomplete array has no static extent. */
 typedef struct MinicLayoutFieldStorage {
     MinicType storage_type;
-    size_t storage_count;
     bool is_array;
     bool is_flexible;
     bool is_zero_length;
@@ -219,27 +216,20 @@ static bool minic_data_layout_field_storage(const MinicC0Program *program,
     (void)memset(result, 0, sizeof(*result));
     (void)memset(&info, 0, sizeof(info));
     if (minic_c0_record_field_array_info(program, field, &info)) {
-        if ((info.element_count == 0U && !info.is_zero_length &&
-             !field->is_flexible_array) || info.is_runtime_sized)
+        if (!info.has_materialized_type || info.is_runtime_sized ||
+            (info.is_incomplete && !field->is_flexible_array) ||
+            (field->is_flexible_array && !info.is_incomplete))
             return false;
         result->is_array = true;
         result->is_flexible = field->is_flexible_array;
         result->is_zero_length = info.is_zero_length;
-        result->storage_type = info.has_materialized_type && !result->is_flexible
-            ? field->type : info.element_type;
-        result->storage_count = info.has_materialized_type && !result->is_flexible
-            ? 1U : info.element_count;
-        if (result->storage_count == 0U &&
-            (result->is_flexible || result->is_zero_length))
-            result->storage_count = 1U;
+        result->storage_type = result->is_flexible ? info.element_type : field->type;
     } else {
-        if (minic_type_is_array(field->type) || field->element_count == 0U ||
-            field->is_flexible_array || field->is_zero_length_array)
+        if (minic_type_is_array(field->type) || field->is_flexible_array)
             return false;
         result->storage_type = field->type;
-        result->storage_count = field->element_count;
     }
-    return result->storage_count != 0U;
+    return true;
 }
 
 static bool minic_data_layout_record_depth(const MinicDataLayout *layout,
@@ -279,8 +269,7 @@ static bool minic_data_layout_record_depth(const MinicDataLayout *layout,
         if (!minic_data_layout_field_storage(program, field, &storage) ||
             !minic_data_layout_type_depth(
                 layout, program, storage.storage_type, depth + 1U,
-                &element_size, &field_alignment) ||
-            element_size > SIZE_MAX / storage.storage_count) {
+                &element_size, &field_alignment)) {
             return false;
         }
         type_alignment = field_alignment;
@@ -302,8 +291,7 @@ static bool minic_data_layout_record_depth(const MinicDataLayout *layout,
             /* Nonzero bit-fields share the member alignment cap with
              * ordinary fields. Unnamed zero-width fields keep the natural
              * boundary established above even under packing. */
-            if (!minic_type_is_integer(storage.storage_type) ||
-                storage.storage_count != 1U || storage.is_array ||
+            if (!minic_type_is_integer(storage.storage_type) || storage.is_array ||
                 storage.is_flexible || storage.is_zero_length ||
                 element_size == 0U || element_size > SIZE_MAX / 8U || field_alignment == 0U ||
                 field_alignment > SIZE_MAX / 8U) {
@@ -360,7 +348,7 @@ static bool minic_data_layout_record_depth(const MinicDataLayout *layout,
             storage_size = (storage_bits + 7U) / 8U;
             field_size = (storage.is_flexible || storage.is_zero_length)
                              ? 0U
-                             : element_size * storage.storage_count;
+                             : element_size;
             if (record->is_union) {
                 field_offset = 0U;
                 if (field_size > storage_size) {
@@ -932,7 +920,7 @@ static bool aggregate_scalar_slot_layout_for_object(const MinicDataLayout *layou
             if (storage.is_zero_length) {
                 continue;
             }
-            element_count = storage.storage_count;
+            element_count = 1U;
             if (storage.is_flexible) {
                 element_count = base_offset == 0U && record_base_slot == 0U &&
                                         minic_type_equal(type, object->type)
@@ -1041,7 +1029,7 @@ bool minic_data_layout_global_relocation_offset(const MinicDataLayout *layout,
         record = minic_c0_program_record(program, object->type.record_id);
         field = record == NULL ? NULL : minic_c0_record_field(record, relocation->location_index);
         if (!minic_data_layout_field_storage(program, field, &storage) ||
-            storage.storage_count != 1U || field->is_bit_field ||
+            field->is_bit_field ||
             storage.is_flexible || !minic_type_is_pointer(storage.storage_type) ||
             !minic_data_layout_record_field_offset(
                 layout, program, record, relocation->location_index, &resolved_offset)) {
@@ -1136,7 +1124,6 @@ bool minic_data_layout_global_relocation_target_addend(const MinicDataLayout *la
                     : minic_c0_record_field(record, relocation->target_member_indices[depth]);
         if (!minic_data_layout_field_storage(program, field, &storage) ||
             field->is_bit_field ||
-            (!storage.is_array && !storage.is_flexible && storage.storage_count != 1U) ||
             !minic_data_layout_record_field_offset(
                 layout, program, record, relocation->target_member_indices[depth], &field_offset) ||
             result > SIZE_MAX - field_offset) {

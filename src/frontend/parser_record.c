@@ -636,13 +636,9 @@ static bool parse_record_field_declarator(MinicParser *parser,
     mutable_record->fields[mutable_record->field_count - 1U].explicit_alignment =
         explicit_alignment;
     mutable_record->fields[mutable_record->field_count - 1U].is_packed = is_packed;
-    /* All parser-produced arrays now carry their complete type. Keep the
-     * old metadata only on hand-authored source AST fixtures until they have
-     * an explicit compatibility migration; it is no longer a parser owner. */
-    mutable_record->fields[mutable_record->field_count - 1U].is_array = false;
+    /* The field's ArrayType owns its element and extent; only the explicit
+     * flexible-member declaration marker remains semantic source metadata. */
     mutable_record->fields[mutable_record->field_count - 1U].is_flexible_array = is_flexible_array;
-    mutable_record->fields[mutable_record->field_count - 1U].is_zero_length_array =
-        is_zero_length_array;
     return true;
 }
 

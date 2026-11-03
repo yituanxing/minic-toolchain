@@ -119,7 +119,6 @@ static int test_pointer_bitcast_identity(void) {
     minic_c0_local_initialize(&local);
     local.name_span = test_span(0U);
     local.type = int_pointer;
-    local.element_count = 1U;
     if (!minic_c0_program_add_local(&program, &local, &local_id)) {
         minic_c0_program_destroy(&program);
         return 4;
@@ -214,7 +213,6 @@ static int test_malformed_contracts(void) {
     local.name_span = test_span(0U);
     local.type = minic_type_int();
     local.type.is_plain_char = true;
-    local.element_count = 1U;
     if (!minic_c0_program_add_local(&program, &local, &local_id) ||
         minic_c0_program_verify(&program, MINIC_C0_AST_PARSED)) {
         minic_c0_program_destroy(&program);
@@ -227,7 +225,6 @@ static int test_malformed_contracts(void) {
     local.name_span = test_span(0U);
     local.type = minic_type_int();
     local.type.function_type_id = 0U;
-    local.element_count = 1U;
     if (!minic_c0_program_add_local(&program, &local, &local_id) ||
         minic_c0_program_verify(&program, MINIC_C0_AST_PARSED)) {
         minic_c0_program_destroy(&program);
@@ -240,7 +237,6 @@ static int test_malformed_contracts(void) {
     local.name_span = test_span(0U);
     local.type = minic_type_int();
     local.type.pointer_qualifiers = 1U;
-    local.element_count = 1U;
     if (!minic_c0_program_add_local(&program, &local, &local_id) ||
         minic_c0_program_verify(&program, MINIC_C0_AST_PARSED)) {
         minic_c0_program_destroy(&program);
@@ -260,7 +256,6 @@ static bool verify_builtin_local(const MinicTargetInfo *target, MinicType type) 
     minic_c0_local_initialize(&local);
     local.name_span = test_span(0U);
     local.type = type;
-    local.element_count = 1U;
     if (!minic_c0_program_add_local(&program, &local, &local_id)) {
         minic_c0_program_destroy(&program);
         return false;
@@ -314,7 +309,6 @@ static int test_verify_failure_provenance(void) {
     minic_c0_local_initialize(&local);
     local.name_span = test_span(0U);
     local.type = minic_type_int();
-    local.element_count = 1U;
     local.explicit_alignment = 3U;
     if (!minic_c0_program_add_local(&program, &local, &local_id) ||
         minic_c0_program_verify_detailed(&program, MINIC_C0_AST_PARSED, &failure) ||
@@ -325,6 +319,108 @@ static int test_verify_failure_provenance(void) {
     }
     minic_c0_program_destroy(&program);
     return 0;
+}
+
+/* A VLA is identified by its complete runtime count/address pair, not by a
+ * second C-array extent stored alongside the element type. The verifier must
+ * reject a half-published pair and a forged pair of hidden locals. */
+static int test_runtime_array_pair_contract(void) {
+    MinicC0Program program;
+    MinicLocal local;
+    MinicLocalId array_id, count_id, address_id;
+    MinicType pointer_type;
+    MinicC0AstVerifyFailure failure;
+    int result = 0;
+
+    minic_c0_program_initialize(&program);
+    if (!minic_type_pointer_to(minic_type_int(), &pointer_type)) {
+        result = 100;
+        goto finish;
+    }
+    minic_c0_local_initialize(&local);
+    local.name_span = test_span(0U);
+    local.type = minic_type_int();
+    if (!minic_c0_program_add_local(&program, &local, &array_id)) {
+        result = 101;
+        goto finish;
+    }
+    local.name_span = test_span(1U);
+    local.type = minic_type_unsigned_long();
+    if (!minic_c0_program_add_local(&program, &local, &count_id)) {
+        result = 102;
+        goto finish;
+    }
+    local.name_span = test_span(2U);
+    local.type = pointer_type;
+    if (!minic_c0_program_add_local(&program, &local, &address_id)) {
+        result = 103;
+        goto finish;
+    }
+    if (!minic_c0_program_verify(&program, MINIC_C0_AST_PARSED)) {
+        result = 104;
+        goto finish;
+    }
+    program.locals[array_id].dynamic_count_local_id = count_id;
+    if (minic_c0_program_verify_detailed(&program, MINIC_C0_AST_PARSED, &failure) ||
+        failure.stage != MINIC_C0_AST_VERIFY_LOCAL || failure.index != array_id) {
+        result = 105;
+        goto finish;
+    }
+    program.locals[array_id].dynamic_address_local_id = address_id;
+    if (!minic_c0_program_verify(&program, MINIC_C0_AST_PARSED)) {
+        result = 106;
+        goto finish;
+    }
+    /* A bound local is an integer, never an allocation-address local. */
+    program.locals[array_id].dynamic_count_local_id = address_id;
+    if (minic_c0_program_verify_detailed(&program, MINIC_C0_AST_PARSED, &failure) ||
+        failure.stage != MINIC_C0_AST_VERIFY_LOCAL || failure.index != array_id) {
+        result = 107;
+        goto finish;
+    }
+    program.locals[array_id].dynamic_count_local_id = count_id;
+    program.locals[count_id].type = minic_type_int();
+    if (minic_c0_program_verify_detailed(&program, MINIC_C0_AST_PARSED, &failure) ||
+        failure.stage != MINIC_C0_AST_VERIFY_LOCAL || failure.index != array_id) {
+        result = 108;
+        goto finish;
+    }
+finish:
+    minic_c0_program_destroy(&program);
+    return result;
+}
+
+static int test_flexible_record_tail_contract(void) {
+    MinicC0Program program;
+    MinicRecordId record_id;
+    MinicType incomplete_type;
+    int result = 0;
+
+    minic_c0_program_initialize(&program);
+    if (!minic_c0_program_add_record(&program, "Tail", 4U, &record_id) ||
+        !minic_c0_record_add_field(&program, record_id, "length", 6U,
+                                    minic_type_unsigned_int(), 1U) ||
+        !minic_c0_program_add_incomplete_array_type(
+            &program, minic_type_unsigned_char(), &incomplete_type) ||
+        !minic_c0_record_add_field(&program, record_id, "bytes", 5U,
+                                    incomplete_type, 1U) ||
+        !minic_c0_program_finish_record(&program, record_id)) {
+        result = 109;
+        goto finish;
+    }
+    program.records[record_id].fields[1].is_flexible_array = true;
+    if (!minic_c0_program_verify(&program, MINIC_C0_AST_PARSED)) {
+        result = 110;
+        goto finish;
+    }
+    program.records[record_id].is_union = true;
+    if (minic_c0_program_verify(&program, MINIC_C0_AST_PARSED)) {
+        result = 111;
+        goto finish;
+    }
+finish:
+    minic_c0_program_destroy(&program);
+    return result;
 }
 
 /* Even a directly synthesized AST must not smuggle a GNU asm-goto edge
@@ -433,8 +529,8 @@ static int test_semantic_entity_defaults(void) {
         function->visibility != MINIC_SYMBOL_VISIBILITY_DEFAULT ||
         !minic_type_equal(function->return_type, minic_type_int()) ||
         function->parameter_count != 0U || function->is_defined ||
-        field->explicit_alignment != 0U || field->is_array || field->is_packed ||
-        field->is_bit_field || field->is_flexible_array || field->is_zero_length_array ||
+        field->explicit_alignment != 0U || field->is_packed ||
+        field->is_bit_field || field->is_flexible_array ||
         field->is_anonymous_member ||
         object->alias_target != MINIC_GLOBAL_OBJECT_INVALID ||
         object->section_name != NULL || object->section_name_length != 0U ||
@@ -697,6 +793,14 @@ int main(void) {
         return status;
     }
     status = test_verify_failure_provenance();
+    if (status != 0) {
+        return status;
+    }
+    status = test_runtime_array_pair_contract();
+    if (status != 0) {
+        return status;
+    }
+    status = test_flexible_record_tail_contract();
     if (status != 0) {
         return status;
     }

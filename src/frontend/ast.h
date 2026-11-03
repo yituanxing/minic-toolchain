@@ -265,8 +265,9 @@ static inline bool minic_c0_call_set_argument(MinicExpression *expression,
     return true;
 }
 
-/* Transitional read model: callers must preserve legacy object semantics until
- * producers are migrated to one materialized ArrayType representation. */
+/* Object-shape query shared by language parsing, Core lowering and layout.
+ * Static array extents belong to ArrayType; local VLAs instead own a runtime
+ * bound and allocation-address pair. */
 typedef struct MinicArrayObjectInfo {
     MinicType element_type;
     size_t element_count;
@@ -289,15 +290,11 @@ typedef struct MinicLocal {
      * proven owner keep has_declaration_block=false. */
     MinicBlockId declaration_block;
     bool has_declaration_block;
-    size_t element_count;
     size_t explicit_alignment;
     /* Runtime-sized local arrays preserve one evaluated bound and one allocated
        address in ordinary hidden locals. Static arrays leave both invalid. */
     MinicLocalId dynamic_count_local_id;
     MinicLocalId dynamic_address_local_id;
-    bool is_array;
-    /* Explicit GNU `T name[0]`, never an inferred `T name[]` or runtime VLA. */
-    bool is_zero_length_array;
     bool is_register_storage;
 } MinicLocal;
 
@@ -464,14 +461,13 @@ typedef struct MinicRecordField {
     char *name;
     size_t name_length;
     MinicType type;
-    size_t element_count;
     size_t bit_width;
     size_t explicit_alignment;
-    bool is_array;
     bool is_packed;
     bool is_bit_field;
+    /* The parser marks the legal flexible tail, which is not interchangeable
+     * with an arbitrary incomplete ArrayType in a hand-built source AST. */
     bool is_flexible_array;
-    bool is_zero_length_array;
     bool is_anonymous_member;
 } MinicRecordField;
 

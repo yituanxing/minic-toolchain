@@ -985,19 +985,20 @@ static bool verify_expression(const MinicC0Program *program,
                 return false;
             }
             if (array_info.has_materialized_type) {
-                return !local->is_array && local->element_count == 1U &&
-                       minic_type_is_array(local->type) &&
+                return minic_type_is_array(local->type) &&
+                       local->dynamic_count_local_id == MINIC_LOCAL_INVALID &&
+                       local->dynamic_address_local_id == MINIC_LOCAL_INVALID &&
                        minic_c0_type_is_complete_object(program, local->type);
             }
-            return local->is_array && local->element_count != 0U &&
-                   array_info.element_count == local->element_count &&
-                   minic_type_equal(expression_array_info.element_type, local->type) &&
-                   minic_c0_type_is_complete_object(program, local->type);
+            /* Runtime-sized locals are not valid compound-literal storage.
+             * A compound literal must have an actual, complete ArrayType. */
+            return false;
         }
         complete_object = minic_c0_type_is_complete_object(program, expression->type);
         return complete_object && !minic_type_is_array(expression->type) &&
                !minic_type_is_function(expression->type) && !minic_type_is_void(expression->type) &&
-               local->element_count == 1U;
+               local->dynamic_count_local_id == MINIC_LOCAL_INVALID &&
+               local->dynamic_address_local_id == MINIC_LOCAL_INVALID;
     }
     case MINIC_EXPRESSION_STATEMENT: {
         const MinicBlock *block;
@@ -1288,8 +1289,7 @@ static bool record_field_owns_flexible_array_type(const MinicC0Program *program,
                                                   MinicArrayTypeId array_type_id) {
     const MinicArrayType *array;
 
-    if (program == NULL || field == NULL || !field->is_flexible_array || field->is_array ||
-        field->element_count != 1U ||
+    if (program == NULL || field == NULL || !field->is_flexible_array ||
         !type_owns_array_descriptor(field->type, array_type_id, false) ||
         field->type.pointer_depth != 0U) {
         return false;
@@ -1756,9 +1756,15 @@ bool minic_c0_program_verify_target_detailed(const MinicC0Program *program,
             subindex = field_index;
 
             field = &record->fields[field_index];
-            if (field->name == NULL || field->element_count == 0U ||
+            if (field->name == NULL ||
                 !type_is_valid(program, target, field->type) ||
-                minic_type_is_function(field->type)) {
+                minic_type_is_function(field->type) ||
+                (field->is_flexible_array &&
+                 (!record->is_complete || record->is_union || field_index == 0U ||
+                  field_index + 1U != record->field_count ||
+                  !minic_type_is_array(field->type) ||
+                  !record_field_owns_flexible_array_type(
+                      program, field, field->type.array_type_id)))) {
                 MINIC_AST_VERIFY_FAIL(minic_c0_ast_verify_stage_default_reason(stage));
             }
         }
@@ -1770,11 +1776,17 @@ bool minic_c0_program_verify_target_detailed(const MinicC0Program *program,
         const MinicLocal *local;
         size_t explicit_alignment;
         bool dynamic_vla;
+        bool has_dynamic_count;
+        bool has_dynamic_address;
+        MinicArrayObjectInfo array_info;
 
         local = &program->locals[index];
         explicit_alignment = local->explicit_alignment;
         dynamic_vla = false;
-        if (local->is_array && local->element_count == 0U &&
+        has_dynamic_count = local->dynamic_count_local_id != MINIC_LOCAL_INVALID;
+        has_dynamic_address = local->dynamic_address_local_id != MINIC_LOCAL_INVALID;
+        if (has_dynamic_count && has_dynamic_address &&
+            !minic_type_is_array(local->type) &&
             local->dynamic_count_local_id < program->local_count &&
             local->dynamic_address_local_id < program->local_count &&
             local->dynamic_count_local_id != index &&
@@ -1787,17 +1799,22 @@ bool minic_c0_program_verify_target_detailed(const MinicC0Program *program,
             MinicType pointee;
 
             dynamic_vla =
-                !count_local->is_array && count_local->element_count == 1U &&
+                count_local->dynamic_count_local_id == MINIC_LOCAL_INVALID &&
+                count_local->dynamic_address_local_id == MINIC_LOCAL_INVALID &&
                 minic_type_equal(count_local->type, minic_type_unsigned_long()) &&
-                !address_local->is_array && address_local->element_count == 1U &&
+                address_local->dynamic_count_local_id == MINIC_LOCAL_INVALID &&
+                address_local->dynamic_address_local_id == MINIC_LOCAL_INVALID &&
                 minic_type_pointee(address_local->type, &pointee) &&
                 minic_type_equal(pointee, local->type);
         }
-        /* GNU local `T name[0]` is a complete zero-extent object, distinct
-           from a VLA whose runtime bound has not been materialized. */
-        if ((local->element_count == 0U && !dynamic_vla && !local->is_zero_length_array) ||
-            (local->is_zero_length_array &&
-             (!local->is_array || local->element_count != 0U || dynamic_vla)) ||
+        (void)memset(&array_info, 0, sizeof(array_info));
+        /* Fixed and GNU zero-sized arrays are complete ArrayTypes. VLAs
+         * alone have the paired runtime bound/address locals and an element
+         * type; reject any partial or forged runtime pair. */
+        if ((has_dynamic_count != has_dynamic_address) ||
+            (has_dynamic_count && !dynamic_vla) ||
+            (minic_c0_local_array_object_info(program, index, &array_info) &&
+             array_info.is_incomplete && !array_info.is_runtime_sized) ||
             (local->has_declaration_block &&
              local->declaration_block >= program->block_count) ||
             !type_is_valid(program, target, local->type) ||
@@ -1997,13 +2014,12 @@ bool minic_c0_program_verify_target_detailed(const MinicC0Program *program,
                     size_t selected_slots;
 
                     field = minic_c0_record_field(record, selection->field_index);
-                    if (field == NULL || field->element_count == 0U ||
+                    if (field == NULL ||
                         !minic_c0_global_initializer_slot_count(
-                            program, field->type, &element_slots) ||
-                        (element_slots != 0U && field->element_count > SIZE_MAX / element_slots)) {
+                            program, field->type, &element_slots)) {
                         MINIC_AST_VERIFY_FAIL(minic_c0_ast_verify_stage_default_reason(stage));
                     }
-                    selected_slots = field->element_count * element_slots;
+                    selected_slots = element_slots;
                     if (selected_slots > selection->initializer_span ||
                         selection->initializer_span >
                             object->initializer_count - selection->initializer_slot) {

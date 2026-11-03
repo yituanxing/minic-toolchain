@@ -141,8 +141,7 @@ MinicCoreLowerStatus lower_address(MinicCoreLowerContext *context,
             expression->value.member.record_id,
             expression->value.member.field_index, expression->type, address_id);
     }
-    /* The hidden local owns compound-literal array storage in either the
-     * legacy repeated-element or materialized ArrayType representation.
+    /* The hidden local owns a complete ArrayType compound literal.
      * Execute its initializer exactly once at this expression point, then
      * expose the full array object's address. Subscript lowering owns the
      * eventual pointer-to-array -> pointer-to-element bitcast. */
@@ -165,14 +164,13 @@ MinicCoreLowerStatus lower_address(MinicCoreLowerContext *context,
                 !minic_c0_local_array_object_info(
                     context->body->program,
                     expression->value.compound_literal.local_id, &local_array_info) ||
-                local_array_info.has_materialized_type != array_info.has_materialized_type ||
+                !local_array_info.has_materialized_type ||
+                !array_info.has_materialized_type ||
                 local->is_register_storage ||
                 (local_array_info.element_count == 0U && !local_array_info.is_zero_length) ||
                 !minic_type_equal(local->type, expression->type) ||
                 !minic_type_equal(array_info.element_type, local_array_info.element_type) ||
-                (array_info.has_materialized_type
-                    ? !minic_type_is_array(expression->type)
-                    : !minic_type_equal(array_info.element_type, expression->type)) ||
+                !minic_type_is_array(expression->type) ||
                 array_info.element_count != local_array_info.element_count) {
                 return MINIC_CORE_LOWER_UNSUPPORTED;
             }
@@ -190,8 +188,7 @@ MinicCoreLowerStatus lower_address(MinicCoreLowerContext *context,
                 return status;
             }
             if (object_id >= context->function->object_count ||
-                context->function->objects[object_id].element_count !=
-                    (array_info.has_materialized_type ? 1U : local_array_info.element_count)) {
+                context->function->objects[object_id].element_count != 1U) {
                 return MINIC_CORE_LOWER_ERROR;
             }
             return lower_source_local_object_address(
@@ -303,7 +300,6 @@ MinicCoreLowerStatus lower_address(MinicCoreLowerContext *context,
             if (address_local == NULL ||
                 minic_c0_local_array_object_info(context->body->program,
                     local->dynamic_address_local_id, NULL) ||
-                address_local->element_count != 1U ||
                 !minic_type_equal(address_local->type, expected_pointer)) {
                 return MINIC_CORE_LOWER_UNSUPPORTED;
             }

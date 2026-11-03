@@ -2137,12 +2137,10 @@ static bool parse_function_inner(MinicParser *parser, bool is_internal) {
         size_t parameter_index;
 
         for (parameter_index = 0U; parameter_index < parameter_count; ++parameter_index) {
-            (void)memset(&parameter_local, 0, sizeof(parameter_local));
+            minic_c0_local_initialize(&parameter_local);
             parameter_local.name_span = parameter_name_spans[parameter_index];
             parameter_local.type = parameter_types[parameter_index];
-            parameter_local.element_count = 1U;
             parameter_local.explicit_alignment = 0U;
-            parameter_local.is_array = false;
             parameter_local.is_register_storage = false;
             if (minic_parser_find_local_in_current_scope(parser, parameter_local.name_span) !=
                 MINIC_LOCAL_INVALID) {

@@ -133,16 +133,16 @@ MinicCoreLowerStatus minic_core_lower_internal_local_object(MinicCoreLowerContex
        not change the C object's scalar value semantics. Keep ordinary Core
        storage for reads/writes; only inline-asm operand materialization consumes
        the target register binding. */
-    /* The Frontend array-object query owns the old/materialized distinction.
-       In `typedef int Row[3]; Row rows[2]`, the outer repetition is separate
-       from the complete inner element type.  Preserve both dimensions without
-       reinterpreting C declarator flags in Core lowering. */
+    /* All statically sized local arrays have first-class ArrayType storage.
+       A typedef-bearing inner dimension is part of that type, not an extra
+       repetition imposed on the Core object. */
     if (minic_type_is_array(local->type)) {
         const MinicArrayType *array_type;
 
         array_type = minic_c0_program_array_type(
             context->body->program, local->type.array_type_id);
-        if (array_type == NULL ||
+        if (array_type == NULL || !has_array_object ||
+            !array_info.has_materialized_type ||
             (array_type->element_count == 0U && !array_type->is_zero_length)) {
             return MINIC_CORE_LOWER_UNSUPPORTED;
         }
@@ -152,18 +152,8 @@ MinicCoreLowerStatus minic_core_lower_internal_local_object(MinicCoreLowerContex
              * sentinel after the declarator becomes a real ArrayType.  The
              * address owner bitcasts element* to array[0]*, so the published
              * Core object and its OBJECT_ADDRESS remain type-consistent. */
-            if (!has_array_object || !array_info.has_materialized_type ||
-                !minic_core_function_add_object(context->function, local->name_span,
+            if (!minic_core_function_add_object(context->function, local->name_span,
                                                 array_type->element_type, object_id)) {
-                return MINIC_CORE_LOWER_ERROR;
-            }
-        } else if (has_array_object && !array_info.has_materialized_type) {
-            if (array_info.element_count == 0U ||
-                !minic_core_function_add_repeated_object(context->function,
-                                                         local->name_span,
-                                                         local->type,
-                                                         array_info.element_count,
-                                                         object_id)) {
                 return MINIC_CORE_LOWER_ERROR;
             }
         } else if (!minic_core_function_add_object(
@@ -179,20 +169,11 @@ MinicCoreLowerStatus minic_core_lower_internal_local_object(MinicCoreLowerContex
         !minic_type_is_fixed_vector128_storage(local->type)) {
         return MINIC_CORE_LOWER_UNSUPPORTED;
     }
-    if (has_array_object) {
-        /* A zero-length GNU local still has an address.  Allocate one
-           addressable backing element as a sentinel; its source-language
-           extent and sizeof remain zero, and no element access is valid. */
-        if ((array_info.element_count == 0U && !array_info.is_zero_length) ||
-            !minic_core_function_add_repeated_object(context->function,
-                                                    local->name_span,
-                                                    local->type,
-                                                    array_info.element_count == 0U ? 1U
-                                                                                  : array_info.element_count,
-                                                    object_id)) {
-            return MINIC_CORE_LOWER_ERROR;
-        }
-    } else if (!minic_core_function_add_object(
+    /* A runtime VLA has no static object extent. Its single-evaluated bound
+       and allocated address are separate hidden locals, and local-address
+       lowering must select that address rather than materialize this owner. */
+    if (has_array_object) return MINIC_CORE_LOWER_UNSUPPORTED;
+    if (!minic_core_function_add_object(
                    context->function, local->name_span, local->type, object_id)) {
         return MINIC_CORE_LOWER_ERROR;
     }

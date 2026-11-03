@@ -254,7 +254,7 @@ bool minic_core_const_global_record_scalar(
         minic_c0_record_field_array_object_info(
             program, element_type.record_id,
             member->value.member.field_index, NULL) ||
-        field->element_count != 1U || !minic_type_is_integer(field->type) ||
+        !minic_type_is_integer(field->type) ||
         minic_type_is_volatile(field->type) ||
         !minic_type_unqualified(field->type, &member_type) ||
         !minic_c0_type_initializer_slot_count(program, element_type, &record_slots) ||

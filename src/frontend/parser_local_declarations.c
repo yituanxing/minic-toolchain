@@ -377,7 +377,7 @@ static bool materialize_dynamic_local_array(MinicParser *parser,
     }
     local_snapshot = *local;
     bound_snapshot = *bound;
-    if (!local_snapshot.is_array || local_snapshot.element_count != 0U ||
+    if (minic_type_is_array(local_snapshot.type) ||
         local_snapshot.dynamic_count_local_id != MINIC_LOCAL_INVALID ||
         local_snapshot.dynamic_address_local_id != MINIC_LOCAL_INVALID ||
         local_snapshot.is_register_storage || local_snapshot.explicit_alignment != 0U ||
@@ -394,8 +394,6 @@ static bool materialize_dynamic_local_array(MinicParser *parser,
     minic_c0_local_initialize(&count_local);
     count_local.name_span = local_snapshot.name_span;
     count_local.type = minic_type_unsigned_long();
-    count_local.element_count = 1U;
-    count_local.is_array = false;
     count_local.is_register_storage = false;
     count_local.declaration_block = parser->current_block;
     count_local.has_declaration_block =
@@ -408,8 +406,6 @@ static bool materialize_dynamic_local_array(MinicParser *parser,
     minic_c0_local_initialize(&address_local);
     address_local.name_span = local_snapshot.name_span;
     address_local.type = pointer_type;
-    address_local.element_count = 1U;
-    address_local.is_array = false;
     address_local.is_register_storage = false;
     address_local.declaration_block = parser->current_block;
     address_local.has_declaration_block =
@@ -538,6 +534,9 @@ parse_local_declarator(MinicParser *parser,
     bool parenthesized_name_is_array;
     bool parenthesized_name_array_inferred;
     size_t parenthesized_name_array_count;
+    size_t array_element_count;
+    bool declares_array;
+    bool zero_length_array;
     MinicExpressionId runtime_array_bound;
 
     if (declaration_attributes != NULL) {
@@ -552,6 +551,9 @@ parse_local_declarator(MinicParser *parser,
     parenthesized_name_is_array = false;
     parenthesized_name_array_inferred = false;
     parenthesized_name_array_count = 0U;
+    array_element_count = 1U;
+    declares_array = false;
+    zero_length_array = false;
     runtime_array_bound = MINIC_EXPRESSION_INVALID;
     if (!minic_parser_parse_pointer_declarator(parser, base_type, &declared_type) ||
         !parse_local_object_attributes(parser, &attributes)) {
@@ -639,10 +641,10 @@ parse_local_declarator(MinicParser *parser,
     }
 
     local.type = declared_type;
-    local.element_count =
+    array_element_count =
         parenthesized_name_is_array ? parenthesized_name_array_count : 1U;
     local.explicit_alignment = attributes.explicit_alignment;
-    local.is_array = parenthesized_name_is_array;
+    declares_array = parenthesized_name_is_array;
     local.is_register_storage = is_register_storage;
     if (minic_parser_name_bound_in_current_scope(parser, local.name_span)) {
         minic_parser_error(parser, "duplicate local declaration");
@@ -659,12 +661,12 @@ parse_local_declarator(MinicParser *parser,
             }
             if (parser->current.kind == MINIC_TOKEN_RBRACKET) {
                 inferred_array = true;
-                local.element_count = 0U;
+                array_element_count = 0U;
                 if (!minic_parser_advance(parser)) {
                     return false;
                 }
             } else if (!parse_local_array_bound_or_vla(
-                           parser, &local.element_count, &runtime_array_bound)) {
+                           parser, &array_element_count, &runtime_array_bound)) {
                 return false;
             }
         }
@@ -680,10 +682,10 @@ parse_local_declarator(MinicParser *parser,
             declared_type = nested_element_type;
             local.type = declared_type;
         }
-        local.is_array = true;
-        local.is_zero_length_array = !inferred_array &&
-                                     local.element_count == 0U &&
-                                     runtime_array_bound == MINIC_EXPRESSION_INVALID;
+        declares_array = true;
+        zero_length_array = !inferred_array &&
+                            array_element_count == 0U &&
+                            runtime_array_bound == MINIC_EXPRESSION_INVALID;
         if (!parse_local_object_attributes(parser, &attributes)) {
             return false;
         }
@@ -701,7 +703,7 @@ parse_local_declarator(MinicParser *parser,
              * representation, because their extent is not a static type
              * property. Inferred arrays complete this exact descriptor once
              * the initializer has established its bound. */
-            if (local.is_zero_length_array) {
+            if (zero_length_array) {
                 type_created = minic_c0_program_add_zero_length_array_type(
                     parser->program, local.type, &array_type);
             } else if (inferred_array) {
@@ -709,16 +711,13 @@ parse_local_declarator(MinicParser *parser,
                     parser->program, local.type, &array_type);
             } else {
                 type_created = minic_c0_program_add_array_type(
-                    parser->program, local.type, local.element_count, &array_type);
+                    parser->program, local.type, array_element_count, &array_type);
             }
             if (!type_created) {
                 minic_parser_error(parser, "cannot materialize local array type");
                 return false;
             }
             published_local.type = array_type;
-            published_local.element_count = 1U;
-            published_local.is_array = false;
-            published_local.is_zero_length_array = false;
         }
         if (!minic_c0_program_add_local(parser->program, &published_local, &local_id)) {
             minic_parser_error(parser, "out of memory while adding local");
@@ -773,12 +772,11 @@ parse_local_declarator(MinicParser *parser,
                     minic_parser_error(parser, "cannot complete inferred local array type");
                     return false;
                 }
-                local.element_count = completed->element_count;
             }
             return finalize_local_cleanup(parser, &attributes, &local, local_id);
         }
     }
-    if (!local.is_array) {
+    if (!declares_array) {
         if (!parse_local_object_attributes(parser, &attributes)) {
             return false;
         }
@@ -815,7 +813,7 @@ parse_local_declarator(MinicParser *parser,
         MinicStatement statement;
         const MinicExpression *initializer;
 
-        if (local.is_array) {
+        if (declares_array) {
             minic_parser_error(parser,
                                "internal error: local array initializer escaped array path");
             return false;
@@ -907,8 +905,6 @@ bool minic_parser_local_decl_auto_type(MinicParser *parser) {
 
     minic_c0_local_initialize(&local);
     local.name_span = parser->current.span;
-    local.element_count = 1U;
-    local.is_array = false;
     local.is_register_storage = false;
     if (minic_parser_name_bound_in_current_scope(parser, local.name_span)) {
         minic_parser_error(parser, "duplicate local declaration");

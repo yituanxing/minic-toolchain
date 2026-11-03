@@ -4,9 +4,9 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* An older declarator owns the outer repetition separately from field->type;
- * typedef arrays can instead be materialized inside that type.  Keep slot
- * walkers independent of which representation the producer selected. */
+/* A record member's ArrayType owns the entire fixed shape. Flexible members
+ * are the only incomplete by-value record field and use the element type
+ * when traversing their GNU trailing initializer extension. */
 static bool global_record_field_shape(const MinicC0Program *program,
                                       const MinicRecordField *field,
                                       MinicType *element_type,
@@ -21,17 +21,14 @@ static bool global_record_field_shape(const MinicC0Program *program,
         return false;
     }
     is_array = minic_c0_record_field_array_info(program, field, &info);
-    if (!is_array && field->element_count != 1U) return false;
-    if (is_array && info.has_materialized_type &&
-        (field->element_count != 1U ||
-         (field->is_flexible_array && !info.is_incomplete) ||
-         (field->is_zero_length_array && !info.is_zero_length))) {
+    if (is_array && (!info.has_materialized_type || info.is_runtime_sized ||
+                     (info.is_incomplete != field->is_flexible_array))) {
         return false;
     }
-    *element_type = is_array && (!info.has_materialized_type || field->is_flexible_array)
+    if (!is_array && field->is_flexible_array) return false;
+    *element_type = is_array && field->is_flexible_array
                         ? info.element_type : field->type;
-    *element_count = is_array && !info.has_materialized_type
-                         ? info.element_count : 1U;
+    *element_count = 1U;
     *is_zero_length = is_array && info.is_zero_length;
     *is_flexible = is_array && info.is_incomplete && field->is_flexible_array;
     return true;
@@ -1246,7 +1243,7 @@ bool minic_c0_global_relocation_slot_type(const MinicC0Program *program,
         record = minic_c0_program_record(program, object->type.record_id);
         field = record == NULL ? NULL : minic_c0_record_field(record, location_index);
         array_field = minic_c0_record_field_array_info(program, field, &array_info);
-        if (field == NULL || field->element_count != 1U || field->is_bit_field ||
+        if (field == NULL || field->is_bit_field ||
             (array_field && array_info.is_incomplete) ||
             !minic_type_is_pointer(field->type)) {
             return false;
@@ -1492,7 +1489,7 @@ bool minic_c0_global_object_set_flexible_array_initializer_count(
         MinicArrayObjectInfo array_info;
 
         if (!minic_c0_record_field_array_info(program, field, &array_info) ||
-            !array_info.is_incomplete || field->is_bit_field) {
+            !array_info.is_incomplete || !field->is_flexible_array || field->is_bit_field) {
             return false;
         }
     }

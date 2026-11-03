@@ -18,11 +18,9 @@ static bool minic_payload_visibility_valid(MinicSymbolVisibility visibility) {
            visibility == MINIC_SYMBOL_VISIBILITY_PROTECTED;
 }
 
-/* Record fields have one source-level array shape, even while some parser
- * producers publish the outer dimension separately from a materialized
- * typedef array.  Preserve the historical recursive traversal depth for
- * already-materialized fields; only legacy outer dimensions repeat their
- * element type here. */
+/* Every record array is a source ArrayType.  Payload traversal keeps its
+ * outer dimension within that type; only the flexible tail is visited via
+ * its element type, with zero static initializer slots. */
 typedef struct MinicPayloadRecordFieldShape {
     MinicType traversal_type;
     size_t traversal_count;
@@ -40,26 +38,20 @@ static bool minic_payload_record_field_shape(
     (void)memset(shape, 0, sizeof(*shape));
     has_array = minic_c0_record_field_array_info(program, field, &array);
     if (!has_array) {
-        if (field->is_array || minic_type_is_array(field->type) ||
-            field->is_flexible_array || field->is_zero_length_array ||
-            field->element_count != 1U) return false;
+        if (minic_type_is_array(field->type) || field->is_flexible_array)
+            return false;
         shape->traversal_type = field->type;
         shape->traversal_count = 1U;
         return true;
     }
-    if (array.is_runtime_sized ||
+    if (!array.has_materialized_type || array.is_runtime_sized ||
         (array.is_incomplete && !field->is_flexible_array) ||
-        (field->is_flexible_array && !array.is_incomplete) ||
-        (field->is_zero_length_array && !array.is_zero_length)) return false;
+        (field->is_flexible_array && !array.is_incomplete)) return false;
     shape->is_array = true;
     shape->is_zero_length = array.is_zero_length;
     shape->is_flexible = field->is_flexible_array;
-    shape->traversal_type = shape->is_flexible ? array.element_type
-        : array.has_materialized_type
-        ? field->type : array.element_type;
-    shape->traversal_count = shape->is_flexible ? 0U
-        : array.has_materialized_type
-        ? 1U : array.element_count;
+    shape->traversal_type = shape->is_flexible ? array.element_type : field->type;
+    shape->traversal_count = shape->is_flexible ? 0U : 1U;
     return true;
 }
 

@@ -494,8 +494,6 @@ static bool add_runtime_initializer_once_read(MinicParser *parser,
     minic_c0_local_initialize(&local);
     local.name_span = value_span;
     local.type = temporary_type;
-    local.element_count = 1U;
-    local.is_array = false;
     local.is_register_storage = false;
     local.declaration_block = parser->current_block;
     local.has_declaration_block =
@@ -839,14 +837,11 @@ static bool parse_local_character_array_string_initializer(MinicParser *parser,
             return false;
         }
         element_count = (size_t)(string_size / (uint64_t)element_size);
-        if (array_info.has_materialized_type) {
-            if (!minic_c0_program_complete_array_type(
-                    parser->program, local->type, element_count)) {
-                minic_parser_error(parser, "cannot complete inferred string array type");
-                return false;
-            }
-        } else {
-            parser->program->locals[local_id].element_count = element_count;
+        if (!array_info.has_materialized_type ||
+            !minic_c0_program_complete_array_type(
+                parser->program, local->type, element_count)) {
+            minic_parser_error(parser, "cannot complete inferred string array type");
+            return false;
         }
     }
     if (element_count == 0U) {
@@ -1004,13 +999,10 @@ static bool parse_inferred_runtime_array_initializer(MinicParser *parser,
             minic_parser_error(parser, "invalid inferred local array object");
             goto done;
         }
-        if (array_info.has_materialized_type) {
-            if (!minic_c0_program_complete_array_type(parser->program, local->type, extent)) {
-                minic_parser_error(parser, "cannot complete inferred local array type");
-                goto done;
-            }
-        } else {
-            parser->program->locals[local_id].element_count = extent;
+        if (!array_info.has_materialized_type ||
+            !minic_c0_program_complete_array_type(parser->program, local->type, extent)) {
+            minic_parser_error(parser, "cannot complete inferred local array type");
+            goto done;
         }
     }
     initializer_span.end = parser->current.span.end;

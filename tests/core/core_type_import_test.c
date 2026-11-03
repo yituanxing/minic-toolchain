@@ -47,10 +47,9 @@ int main(void) {
     CHECK(minic_type_pointer_to(node_source, &pointer_source));
     CHECK(minic_c0_record_add_field(&program, node_record, "next", 4U,
                                     pointer_source, 1U));
-    /* The old C Program stores array members as element type + count. */
+    /* The record builder now materializes an ArrayType for fixed extents. */
     CHECK(minic_c0_record_add_field(&program, node_record, "data", 4U,
                                     minic_type_int(), 3U));
-    program.records[node_record].fields[1].is_array = true;
     CHECK(minic_c0_record_add_bit_field(&program, node_record, "flags", 5U,
                                         minic_type_unsigned_int(), 5U));
     CHECK(minic_c0_program_finish_record(&program, node_record));
@@ -62,7 +61,6 @@ int main(void) {
                                     pointer_source, 1U));
     CHECK(minic_c0_record_add_field(&program, twin_record, "data", 4U,
                                     minic_type_int(), 3U));
-    program.records[twin_record].fields[1].is_array = true;
     CHECK(minic_c0_record_add_bit_field(&program, twin_record, "flags", 5U,
                                         minic_type_unsigned_int(), 5U));
     CHECK(minic_c0_program_finish_record(&program, twin_record));

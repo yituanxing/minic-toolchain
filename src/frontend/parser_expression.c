@@ -483,8 +483,6 @@ static bool parse_record_compound_literal(MinicParser *parser,
     local.name_span.begin = begin;
     local.name_span.end = begin;
     local.type = type;
-    local.element_count = 1U;
-    local.is_array = false;
     local.is_register_storage = false;
     local.declaration_block = parser->current_block;
     local.has_declaration_block =
@@ -577,8 +575,6 @@ static bool parse_array_compound_literal(MinicParser *parser,
      * array object. Keep the actual ArrayType in both AST nodes rather than
      * re-encoding its outer bound in MinicLocal. */
     local.type = type;
-    local.element_count = 1U;
-    local.is_array = false;
     local.is_register_storage = false;
     local.declaration_block = parser->current_block;
     local.has_declaration_block =
@@ -657,8 +653,6 @@ static bool parse_scalar_compound_literal(MinicParser *parser,
     local.name_span.begin = begin;
     local.name_span.end = begin;
     local.type = type;
-    local.element_count = 1U;
-    local.is_array = false;
     local.is_register_storage = false;
     local.declaration_block = parser->current_block;
     local.has_declaration_block =
@@ -802,7 +796,7 @@ static bool parse_gnu_scalar_to_union_cast(MinicParser *parser,
         MinicType unqualified_member;
         MinicType unqualified_operand;
 
-        if (!candidate->is_array && !candidate->is_bit_field &&
+        if (!minic_type_is_array(candidate->type) && !candidate->is_bit_field &&
             minic_type_unqualified(candidate->type, &unqualified_member) &&
             minic_type_unqualified(operand_type, &unqualified_operand) &&
             minic_c0_types_compatible(parser->program, unqualified_member, unqualified_operand)) {
@@ -817,7 +811,6 @@ static bool parse_gnu_scalar_to_union_cast(MinicParser *parser,
     local.name_span.begin = begin;
     local.name_span.end = begin;
     local.type = union_type;
-    local.element_count = 1U;
     local.declaration_block = parser->current_block;
     local.has_declaration_block =
         parser->current_block != MINIC_BLOCK_INVALID;

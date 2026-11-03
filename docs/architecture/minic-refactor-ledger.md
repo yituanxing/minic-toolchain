@@ -1483,3 +1483,52 @@ special cases.
 | Prior machine `.s` A/B | Local-only phase byte-identical on five targets; **full RecordField phase differs** in temporary spill/order. Native semantic results pass, byte equality is **not** claimed. |
 | Strict backend review manifest | Previous IR-P25 historical stale-inventory failure persists; this batch does not rewrite unrelated fingerprints. |
 | GNU cross ELF/QEMU and five-ISA Linux runtime | **NOT RUN**, cross GNU/QEMU unavailable here |
+
+## IR-P27 — Retire duplicate source array metadata across Frontend/Core/Layout (2026-11-03)
+
+**Baseline:** PR #674 remote `5fba0cc` (IR-P26). P26 materialized parser-produced
+arrays but still had a second, legacy field/count representation available to
+hand-constructed C Program objects. This batch removes that split end-to-end.
+
+### One source-object representation, with an explicit VLA exception
+
+- `MinicLocal` no longer stores `is_array`, `element_count` or
+  `is_zero_length_array`. Fixed, inferred, typedef and GNU zero local extents
+  live exclusively in `MinicArrayType`. Declaration-time bounds/flags remain
+  temporary parser state and never enter the persisted AST. An automatic VLA
+  keeps its **single-evaluated** runtime-bound and allocated-address hidden
+  local IDs; the paired IDs, not a forged static array length, identify the
+  runtime-sized object. The verifier rejects partial/invalid hidden-ID pairs.
+- `MinicRecordField` no longer stores `is_array`, `element_count` or
+  `is_zero_length_array`. The low-level `minic_c0_record_add_field` builder now
+  materializes its count>1 input as a full `ArrayType`, like parser-produced
+  members. Static/runtime initialization, global payloads, source DataLayout,
+  Core record import and AST verification read the same typed shape. Tests
+  which explicitly built the old representation now construct typed fields.
+- The sole retained C record-array marker is `is_flexible_array`: declaration
+  legality and the semantic ownership of an incomplete *tail* array cannot
+  be inferred from zero extent alone. Core's own imported flexible/zero-size
+  metadata remains independent of this source-frontend representation.
+- Core local object lowering and compound-literal addresses no longer have
+  dead branches to manufacture a second repetition dimension from C metadata.
+  Fixed-array Core storage owns one complete typed object; GNU `[0]` retains
+  a one-element addressable backing sentinel while its source `sizeof` is 0.
+  VLA addresses still come from runtime allocation, not static Core objects.
+
+### Verification boundary
+
+The source cleanup is not a five-target Linux runtime completion claim.
+Machine code and linker behavior were not rewritten in this batch. The
+existing tool environment does not provide the full cross-GNU/QEMU matrix.
+
+| Gate | Result |
+| --- | --- |
+| Debug `minic-cc` and Release `-Werror` builds | **PASS** |
+| Array-shape convergence: five targets, GNU/MiniC x86 native, bound-once, 25 negative programs | **PASS** |
+| Materialized locals: five targets, native 42/42, invalid/rollback | **PASS, 80/80** |
+| Static record typedef arrays: five targets, native 42/42, invalid/rollback | **PASS, 40/40** |
+| Record, RV64 layout, AST contract, Core type import + sanitizers, DataLayout zero/relocation | **PASS** |
+| Full Debug `check-fast` | **PASS**, exit 0; 367 PASS lines, 3 environment SKIPs |
+| Synthetic AST negative contracts: partial/forged VLA pair, illegal union FAM | **PASS**, reject at AST verification |
+| Strict backend manifest | **Pre-existing stale inventory**; not updated in this source-model batch |
+| Five-target Linux QEMU runtime | **NOT RUN**; no cross-GNU/QEMU toolchain in this environment |

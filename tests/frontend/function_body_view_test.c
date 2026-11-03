@@ -33,10 +33,9 @@ static void initialize_statement(MinicStatement *statement, MinicStatementKind k
 static bool add_local(MinicC0Program *program, MinicLocalId *local_id) {
     MinicLocal local;
 
-    (void)memset(&local, 0, sizeof(local));
+    minic_c0_local_initialize(&local);
     local.name_span = test_span(program->local_count);
     local.type = minic_type_int();
-    local.element_count = 1U;
     return minic_c0_program_add_local(program, &local, local_id);
 }
 

@@ -116,10 +116,9 @@ static bool build_parameter_function(MinicC0Program *program, MinicFunctionBodyV
     if (!minic_c0_program_add_block(program, &body_block)) {
         return false;
     }
-    (void)memset(&local, 0, sizeof(local));
+    minic_c0_local_initialize(&local);
     local.name_span = test_span(0U);
     local.type = minic_type_signed_char();
-    local.element_count = 1U;
     if (!minic_c0_program_add_local(program, &local, &local_id) ||
         !add_local_reference(program, local_id, &local_expression)) {
         return false;

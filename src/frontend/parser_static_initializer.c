@@ -12,12 +12,9 @@
 
 /* Own static constants, aggregate slots, record and array initialization. */
 
-/* Record declaration producers still have two representations: a legacy
- * outer repetition attached to the field, or an ArrayType already owning
- * its complete extent (notably typedef arrays).  Static initialization
- * performs both forward append and backward scalar-slot rewrites; keep their
- * common element shape in one place, rather than assuming field->type is
- * always the repeated element type. */
+/* Record ArrayType owns the full extent, including a typedef or a nested
+ * dimension. Static initialization needs its element shape for both forward
+ * appends and backward scalar-slot rewrites. */
 typedef struct MinicStaticFieldShape {
     MinicType element_type;
     size_t element_count;
@@ -36,13 +33,12 @@ static bool static_field_shape(const MinicC0Program *program,
     (void)memset(shape, 0, sizeof(*shape));
     is_array = minic_c0_record_field_array_info(program, field, &array);
     if (!is_array) {
-        if (field->is_array || field->is_flexible_array || field->is_zero_length_array ||
-            field->element_count != 1U || minic_type_is_array(field->type)) return false;
+        if (field->is_flexible_array || minic_type_is_array(field->type)) return false;
         shape->element_type = field->type;
         shape->element_count = 1U;
         return true;
     }
-    if (array.is_runtime_sized ||
+    if (!array.has_materialized_type || array.is_runtime_sized ||
         (array.is_incomplete && !field->is_flexible_array) ||
         (array.is_zero_length && field->is_flexible_array)) return false;
     shape->element_type = array.element_type;

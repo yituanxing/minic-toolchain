@@ -6,9 +6,8 @@
 #include <stdio.h>
 #include <string.h>
 
-/* A declaration can still spell the outer dimension in the legacy field
- * count or hold a fully materialized ArrayType. Source DataLayout must give
- * both the same bytes, alignment and aggregate relocation slots. */
+/* An explicit field extent and an existing nested ArrayType must converge to
+ * the same materialized field shape, including aggregate relocation slots. */
 static bool check_record_array_shape_equivalence(MinicC0Program *program,
                                                  const MinicDataLayout *layout) {
     MinicRecordId legacy_id, materialized_id, zero_id;
@@ -46,10 +45,6 @@ static bool check_record_array_shape_equivalence(MinicC0Program *program,
                                    pointer_type, 1U) ||
         !minic_c0_program_finish_record(program, zero_id))
         return false;
-    /* The low-level record field builder leaves declarator flags to the
-     * parser. Set them here exactly as a parsed legacy T field[N] does. */
-    program->records[legacy_id].fields[0].is_array = true;
-    program->records[legacy_id].fields[1].is_array = true;
     legacy = minic_c0_program_record(program, legacy_id);
     materialized = minic_c0_program_record(program, materialized_id);
     if (legacy == NULL || materialized == NULL ||

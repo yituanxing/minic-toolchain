@@ -182,8 +182,8 @@ static bool import_record(MinicCoreTypeImporter *importer, MinicType source,
          * ArrayType.  Preserve that ArrayType in sealed Core record metadata,
          * but ask DataLayout for its complete element's storage alignment.
          * A flexible tail contributes zero size to the enclosing record. */
-        field_layout_type = field_array && array_info.has_materialized_type &&
-                            array_info.is_incomplete && field->is_flexible_array
+        field_layout_type = field_array && array_info.is_incomplete &&
+                            field->is_flexible_array
                                 ? array_info.element_type : field->type;
         if (!import_type(importer, field->type, &field_type, depth + 1U) ||
             !minic_data_layout_type(importer->layout, importer->program,
@@ -192,21 +192,10 @@ static bool import_record(MinicCoreTypeImporter *importer, MinicType source,
                                                    record, i, &fields[i].byte_offset,
                                                    &fields[i].bit_offset))
             goto failed;
-        if (field_array && !array_info.has_materialized_type) {
-            size_t array_size = 0U;
-            size_t count = array_info.element_count;
-            bool layout_known = !array_info.is_incomplete;
-            if (count == 0U) goto failed;
-            if (layout_known) {
-                if (array_info.is_zero_length) array_size = 0U;
-                else if (field_size > SIZE_MAX / count) goto failed;
-                else array_size = field_size * count;
-            }
-            if (!import_array(importer, field->type, count, array_info.is_zero_length,
-                              !array_info.is_incomplete, array_size, field_alignment,
-                              layout_known, &field_type, depth + 1U))
-                goto failed;
-        }
+        /* Record field types are already complete source ArrayTypes (or a
+         * legal incomplete flexible tail).  Type import must not synthesize
+         * a second array dimension from declarator metadata. */
+        if (field_array && !array_info.has_materialized_type) goto failed;
         fields[i].type_id = field_type;
         fields[i].is_bit_field = field->is_bit_field;
         fields[i].bit_width = field->is_bit_field ? field->bit_width : 0U;
