@@ -1955,42 +1955,40 @@ done:
 typedef struct {
     bool local;
     bool short_legal;
+    bool long_legal;
     int64_t displacement;
 } LaBranchPlan;
 
-static bool la_resolve_branch_plan(MiniAsEncodeContext *ctx,const MiniAsInstructionView *s,
-                                   LaBranchPlan *plan) {
+static bool la_compute_branch_plan(const MiniAsInstructionView *s,
+                                   const MiniAsSymbolView *target,
+                                   LaBranchPlan *plan,const char **diagnostic) {
     const MiniAsMCInstView *m=s->inst;
     const MiniAsSymbolRef *ref;
-    const MiniAsSymbolView *target;
-    MiniAsSymbolView symbol_snapshot;
     int64_t diff,limit;
     unsigned slot;
     memset(plan,0,sizeof(*plan));
     if(m==NULL || (m->opcode!=LA_MC_BRANCH16 &&
                    m->opcode!=LA_MC_BRANCH21 &&
                    m->opcode!=LA_MC_BRANCH26) || m->count==0U) {
-        minias_encode_ctx_error(ctx,"invalid-loongarch-branch-plan");
+        *diagnostic="invalid-loongarch-branch-plan";
         return false;
     }
     slot=m->count-1U;
     if(m->operands[slot].kind!=MINIAS_MC_BOUND_SYMBOL ||
        (ref=m->operands[slot].bound_symbol)==NULL) {
-        minias_encode_ctx_error(ctx,"invalid-loongarch-bound-branch");
+        *diagnostic="invalid-loongarch-bound-branch";
         return false;
     }
-    target=minias_encode_ctx_symbol_lookup(ctx,*ref,&symbol_snapshot)?
-        &symbol_snapshot:NULL;
     if(target==NULL || !target->defined || target->section!=s->section ||
        target->bind==MINIAS_SYMBOL_BINDING_WEAK)return true;
     if(target->value>INT64_MAX || s->offset>INT64_MAX) {
-        minias_encode_ctx_error(ctx,"loong-branch-offset-overflow");
+        *diagnostic="loong-branch-offset-overflow";
         return false;
     }
     diff=(int64_t)target->value-(int64_t)s->offset;
     if((ref->addend>0 && diff>INT64_MAX-ref->addend) ||
        (ref->addend<0 && diff<INT64_MIN-ref->addend)) {
-        minias_encode_ctx_error(ctx,"loong-branch-addend-overflow");
+        *diagnostic="loong-branch-addend-overflow";
         return false;
     }
     diff+=ref->addend;
@@ -2000,6 +1998,76 @@ static bool la_resolve_branch_plan(MiniAsEncodeContext *ctx,const MiniAsInstruct
           m->opcode==LA_MC_BRANCH21 ? (INT64_C(1)<<22) :
                                         (INT64_C(1)<<27);
     plan->short_legal=(diff&3)==0 && diff>=-limit && diff<limit;
+    /* The long conditional form is an inverted branch over a B26 at +4.
+     * Its B26 displacement is therefore the original displacement - 4. */
+    limit=INT64_C(1)<<27;
+    plan->long_legal=(diff&3)==0 && diff>=-limit+4 && diff<limit+4;
+    return true;
+}
+
+static bool la_resolve_branch_plan(MiniAsEncodeContext *ctx,
+                                   const MiniAsInstructionView *s,
+                                   LaBranchPlan *plan) {
+    const MiniAsMCInstView *m=s->inst;
+    const MiniAsSymbolRef *ref;
+    MiniAsSymbolView target;
+    const MiniAsSymbolView *resolved;
+    const char *diagnostic=NULL;
+    if(m==NULL || m->count==0U || m->operands==NULL ||
+       m->operands[m->count-1U].kind!=MINIAS_MC_BOUND_SYMBOL ||
+       m->operands[m->count-1U].bound_symbol==NULL) {
+        minias_encode_ctx_error(ctx,"invalid-loongarch-bound-branch");
+        return false;
+    }
+    ref=m->operands[m->count-1U].bound_symbol;
+    resolved=minias_encode_ctx_symbol_lookup(ctx,*ref,&target)?&target:NULL;
+    if(la_compute_branch_plan(s,resolved,plan,&diagnostic))return true;
+    minias_encode_ctx_error(ctx,"%s",diagnostic);
+    return false;
+}
+
+/* GAS emits 4-byte B16/B21 for reachable targets, otherwise a conditional
+ * inversion over a 4-byte B26. Common's existing grow-only fixed point can
+ * own that transition for *all* LoongArch branch aliases and FCC branches. */
+static bool la_plan_instruction_relaxation(MiniAsRelaxContext *ctx,
+                                           const MiniAsInstructionView *s,
+                                           MiniAsTargetRelaxPlan *plan) {
+    const MiniAsMCInstView *m=s->inst;
+    const MiniAsSymbolRef *ref;
+    MiniAsSymbolView target;
+    const MiniAsSymbolView *resolved;
+    LaBranchPlan branch;
+    const char *diagnostic=NULL;
+    plan->current_size=s->size;
+    plan->required_size=s->size;
+    plan->terminal_size=s->size;
+    if(m==NULL || (m->opcode!=LA_MC_BRANCH16 &&
+                   m->opcode!=LA_MC_BRANCH21))return true;
+    if(m->count==0U || m->operands==NULL ||
+       m->operands[m->count-1U].kind!=MINIAS_MC_BOUND_SYMBOL ||
+       m->operands[m->count-1U].bound_symbol==NULL) {
+        minias_relax_error(ctx,"invalid-loongarch-bound-branch");
+        return false;
+    }
+    ref=m->operands[m->count-1U].bound_symbol;
+    resolved=minias_relax_symbol_ref_lookup(ctx,*ref,&target)?&target:NULL;
+    if(!la_compute_branch_plan(s,resolved,&branch,&diagnostic)) {
+        minias_relax_error(ctx,"%s",diagnostic);
+        return false;
+    }
+    /* GNU cannot range-relax an unresolved/weak/cross-section branch at
+     * assembly time. Keep its original B16/B21 relocation and 4-byte size;
+     * only a fixed local target admits the two-word alternative. */
+    if(!branch.local)return true;
+    plan->terminal_size=8U;
+    if(branch.local && !branch.short_legal) {
+        if(!branch.long_legal) {
+            minias_relax_error(ctx,"loong-long-branch-out-of-range:line=%zu",
+                               s->line);
+            return false;
+        }
+        plan->required_size=8U;
+    }
     return true;
 }
 
@@ -2172,6 +2240,39 @@ static bool la_encode(MiniAsEncodeContext *ctx,const MiniAsInstructionView *s) {
             if(!la_resolve_branch_plan(ctx,s,&branch))return false;
             if(!la_section_is_linker_relaxable(ctx,s->section,
                                                &linker_relaxable))return false;
+            if(s->size==8U && m->opcode!=LA_MC_BRANCH26) {
+                unsigned char body[8];
+                uint32_t inverted,unconditional=UINT32_C(0x50000000);
+                const bool fcc_branch=(m->target_form==LA_FORM_BRANCH+10U ||
+                                       m->target_form==LA_FORM_BRANCH+11U);
+                unsigned j;
+                if(branch.local && !branch.long_legal) {
+                    minias_encode_ctx_error(ctx,
+                        "loong-long-branch-out-of-range:%s:line=%zu",
+                        s->args,s->line);
+                    return false;
+                }
+                /* Both inverted encodings skip exactly the next B26. The
+                 * FCC branch differs: its condition bit is bit 8, while
+                 * integer B16/B21 invert through bit 26. */
+                inverted=(code^(fcc_branch ? UINT32_C(0x100) :
+                                        UINT32_C(0x04000000)))|
+                         UINT32_C(2)<<10U;
+                if(branch.local) {
+                    uint32_t displacement=(uint32_t)((branch.displacement-4)/4);
+                    unconditional|=((displacement&UINT32_C(0xffff))<<10U)|
+                                    ((displacement>>16U)&UINT32_C(0x3ff));
+                }
+                for(j=0U;j<4U;++j) {
+                    body[j]=(unsigned char)(inverted>>(8U*j));
+                    body[j+4U]=(unsigned char)(unconditional>>(8U*j));
+                }
+                if(!minias_encode_ctx_emit(ctx,body,sizeof(body)))return false;
+                if(branch.local && !linker_relaxable)return true;
+                return minias_encode_ctx_fixup_ref(ctx,s->offset+4U,
+                              MINIAS_FIXUP_LARCH_B26,4U,
+                              *m->operands[slot].bound_symbol,false);
+            }
             if(s->size!=4U || (branch.local && !branch.short_legal)) {
                 minias_encode_ctx_error(ctx,"loong-branch-out-of-range:%s:line=%zu",
                                  s->args,s->line);
@@ -2418,6 +2519,7 @@ static const MiniAsTargetOps ops={
     .destroy_target_state=la_destroy_target_state,
     .prepare_layout=la_prepare_layout,
     .measure_mcinst=la_measure,.encode=la_encode,
+    .plan_instruction_relaxation=la_plan_instruction_relaxation,
     .append_code_alignment=la_align,
     .validate_output=la_validate,
     .cfi_implicit_eh_frame=true,

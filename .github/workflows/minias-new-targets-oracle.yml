@@ -31,6 +31,7 @@ on:
       - 'tests/assembler/probe-loong-vector-typed-patterns.sh'
       - 'tests/assembler/probe-loong-scalar-opcode-shapes.sh'
       - 'tests/assembler/probe-loong-register-bank-patterns.sh'
+      - 'tests/assembler/probe-loong-long-branches-gnu.sh'
       - 'tests/assembler/probe-link-order-gcc-patchable.sh'
       - 'tests/assembler/probe-miniobjcopy-comdat-rewrite.sh'
       - 'tests/assembler/probe-minias-ci-routing.py'
@@ -41,6 +42,7 @@ on:
       - 'tests/assembler/probe-x86-memory-encoding-layout.sh'
       - 'tests/assembler/probe-x86-register-width-and-high-byte-gnu.sh'
       - 'tests/assembler/probe-x86-symbol-binding-fixups-gnu.sh'
+      - 'tests/assembler/probe-x86-gotpcrelx-opcode-gnu.sh'
       - 'tests/assembler/probe-mcexpr-signed-overflow.sh'
       - 'tests/assembler/probe-mc-fragment-single-commit-gnu.sh'
       - 'tests/assembler/probe-mcinst-lifetime-ownership.sh'
@@ -162,6 +164,10 @@ jobs:
           command -v as
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
             bash tests/assembler/probe-x86-symbol-binding-fixups-gnu.sh
+      - name: GNU x86 GOTPCRELX opcode eligibility, REX, width and real link
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-x86-gotpcrelx-opcode-gnu.sh
       - name: MCInst capacity and Target destructor ownership (all backend constructors)
         run: bash tests/assembler/probe-mcinst-lifetime-ownership.sh
       - name: GNU x86 single Fragment emission transaction (DATA, ALIGN, FILL, SPACE, ORG, NOBITS)
@@ -366,6 +372,10 @@ jobs:
           command -v loongarch64-linux-gnu-as
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
             bash tests/assembler/probe-loong-alias-privilege-gnu.sh
+      - name: GNU LoongArch64 B16/B21 long-branch growth and real link
+        run: |
+          REQUIRE_ALL_GNU=1 MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-loong-long-branches-gnu.sh
       - name: LoongArch64 FCSR FCC GPR FPR LSX LASX register-bank identity versus GNU
         run: |
           command -v loongarch64-linux-gnu-as

@@ -918,9 +918,7 @@ static bool rv_rvc_encode_plain(const MiniAsRiscvState *state,
     uint32_t w,op,rd,rs1,rs2,f3,imm12;
     int32_t imm;
     uint16_t out;
-    if(state==NULL || !state->isa_explicit ||
-       (state->file_isa.features&RISCV_ISA_C)==0U ||
-       (stmt->site.mode_bits&MINIAS_RISCV_OPTION_NO_RVC)!=0U ||
+    if(!minias_riscv_site_compression_enabled(state,stmt->site.mode_bits) ||
        m==NULL || !rv_scalar_machine_word(m,false,&w))return false;
     op=w&127U;
     rd=(w>>7U)&31U;
@@ -1006,9 +1004,7 @@ static bool rv_rvc_branch_form(const MiniAsRiscvState *state,
                                 const MiniAsInstructionView *stmt,
                                 bool *jump) {
     const MiniAsMCInstView *m=stmt->inst;
-    if(state==NULL || !state->isa_explicit ||
-       (state->file_isa.features&RISCV_ISA_C)==0U ||
-       (stmt->site.mode_bits&MINIAS_RISCV_OPTION_NO_RVC)!=0U ||
+    if(!minias_riscv_site_compression_enabled(state,stmt->site.mode_bits) ||
        m==NULL)return false;
     if(m->opcode==RV_MC_JAL && m->operands[0].reg==0U) {
         *jump=true;
@@ -1334,9 +1330,8 @@ static bool rv_parse_simple_mc(MiniAsParseContext *ctx, MiniAsParseInstruction *
         if (selected->simple_kind == RV_SIMPLE_ZERO) {
             if (n != 0U) goto invalid;
             if (selected->compressed_encoding != 0U &&
-                rv_parse_state(ctx)->isa_explicit &&
-                (rv_parse_state(ctx)->file_isa.features & RISCV_ISA_C) != 0U &&
-                (rv_parse_state(ctx)->options & MINIAS_RISCV_OPTION_NO_RVC) == 0U) {
+                minias_riscv_site_compression_enabled(rv_parse_state(ctx),
+                                                      stmt->site.mode_bits)) {
                 MiniAsMCInst *m = minias_mcinst_alloc(0U);
                 if (m == NULL) goto oom;
                 m->opcode = RV_MC_C16;

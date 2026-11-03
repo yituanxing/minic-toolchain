@@ -348,7 +348,8 @@ if x86.count('x64_legacy_mode_prefixes(') != 4 or \
     raise SystemExit('x86 prefix size and emission diverged')
 print('MINIAS_MC_MEASURE_VIEW=PASS targets=4 common_writable_state=none')
 PY
-# Only RV/x86 need ISA branch/operand relaxation. They receive an opaque
+# RV/x86/LoongArch now share the same opaque branch-relaxation capability.
+# They receive an opaque
 # Common query/diagnostic capability; encoding reuses the same target-private
 # distance algorithm with its current-layout symbol, not a second planner.
 python3 - <<'PY'
@@ -361,6 +362,7 @@ layout = (root / 'mc_layout.c').read_text()
 rv = (root / 'riscv_target.c').read_text()
 rv_encoder = (root / 'riscv_encode.c').read_text()
 x86 = (root / 'x86_64_target.c').read_text()
+loong = (root / 'loongarch64_target.c').read_text()
 if not re.search(r'bool\s*\(\*plan_instruction_relaxation\)\s*\('
                  r'MiniAsRelaxContext\s*\*,', core):
     raise SystemExit('Target relaxation callback still accepts writable Common')
@@ -374,7 +376,8 @@ if 'plan_instruction_relaxation(&context,&snapshot,plan)' not in layout or \
         'minias_project_instruction(stmt,&snapshot' not in layout:
     raise SystemExit('Common MCLayout bypassed its phase-limited context')
 for source, name in ((rv, 'riscv_plan_instruction_relaxation'),
-                     (x86, 'x64_plan_instruction_relaxation')):
+                     (x86, 'x64_plan_instruction_relaxation'),
+                     (loong, 'la_plan_instruction_relaxation')):
     if not re.search(r'static bool\s+' + name +
                      r'\s*\(MiniAsRelaxContext\s*\*', source):
         raise SystemExit(name + ' still borrows mutable Common')
@@ -385,7 +388,11 @@ if 'minias_riscv_compute_branch_plan(' not in rv_encoder or \
     raise SystemExit('RV relaxation and encoding no longer share one branch policy')
 if re.search(r'\bminias_riscv_resolve_branch_plan\s*\(', rv + rv_encoder):
     raise SystemExit('Legacy broad RV branch resolver remains')
-print('MINIAS_MC_RELAX_SERVICES=PASS targets=2 common_root=opaque shared_branch_policy=1')
+if 'la_compute_branch_plan(' not in loong or \
+        'la_plan_instruction_relaxation' not in loong or \
+        '.plan_instruction_relaxation=la_plan_instruction_relaxation' not in loong:
+    raise SystemExit('Loong long branch planner bypassed the shared target policy')
+print('MINIAS_MC_RELAX_SERVICES=PASS targets=3 common_root=opaque shared_branch_policy=1')
 PY
 # Full-source LoongArch relaxability is a necessary forward-looking policy.
 # It must be precomputed once from a read-only completed SourceGraph, not

@@ -129,8 +129,7 @@ for bad in mul div fadd.s fadd.d amoadd.w c.li csrrw fence.i pause; do
         exit 1
     }
 done
-for escape in '.option arch,+m' \
-              '.option rvc'; do
+for escape in '.option arch,+m'; do
     printf '.text\n.globl test_i\ntest_i:\n    %s\n' "$escape" >"$work/strict-i-escape.s"
     rm -f "$work/strict-i-escape.o"
     if "$MINIAS" -march=rv64i -mabi=lp64 -o "$work/strict-i-escape.o" \
@@ -146,6 +145,17 @@ for escape in '.option arch,+m' \
         exit 1
     }
 done
+
+# GNU's .option rvc is a valid lexical C permission even over a Base-I file
+# ISA. The file Tag_RISCV_arch stays immutable while EF_RISCV_RVC becomes
+# sticky; a later pop must not make C instructions outside the site legal.
+printf '.text\n.option push\n.option rvc\nc.li a0,1\n.option pop\naddi a1,a1,1\n' \
+    >"$work/strict-i-local-c.s"
+"$MINIAS" -march=rv64i -mabi=lp64 -o "$work/strict-i-local-c.o" \
+    "$work/strict-i-local-c.s"
+readelf -A "$work/strict-i-local-c.o" |
+    grep -q 'Tag_RISCV_arch: "rv64i2p1"'
+readelf -h "$work/strict-i-local-c.o" | grep -Eq 'Flags:.*RVC'
 
 # GNU-compatible source-directed instruction encodings and .org do not
 # silently expand the typed instruction set selected by -march=rv64i.

@@ -35,7 +35,9 @@ static bool riscv_emit_code_alignment(MiniAsCodeAlignSink *sink,
      * alignment must fill with C.NOP after switching to norvc.  The ISA
      * capability and ELF RVC flag are separate from that lexical mode. */
     allow_c = (!state->isa_explicit ||
-               (state->file_isa.features & RISCV_ISA_C) != 0U);
+               (state->file_isa.features & RISCV_ISA_C) != 0U ||
+               (owner->site.mode_bits & (MINIAS_RISCV_OPTION_FORCE_RVC |
+                                         MINIAS_RISCV_SITE_EVER_RVC)) != 0U);
 
     /* GNU GAS riscv_make_nops emits one non-instruction zero byte for odd
      * alignment, then (if needed) the single C.NOP BEFORE its 32-bit NOPs.
@@ -257,7 +259,9 @@ bool minias_riscv_validate_parsed_isa(MiniAsParseContext *ctx, const MiniAsParse
         ((stmt->site.mode_bits & MINIAS_RISCV_OPTION_SITE_ZBB)!=0U?
          RISCV_ISA_ZBB:0U) |
         ((stmt->site.mode_bits & MINIAS_RISCV_OPTION_SITE_V)!=0U?
-         RISCV_ISA_V:0U);
+         RISCV_ISA_V:0U) |
+        ((stmt->site.mode_bits & MINIAS_RISCV_OPTION_FORCE_RVC)!=0U?
+         RISCV_ISA_C:0U);
     uint64_t effective_features=minias_riscv_site_features(
         state->file_isa.features,additions,
         (stmt->site.mode_bits&MINIAS_RISCV_OPTION_NO_RVC)!=0U);
@@ -676,13 +680,14 @@ static bool riscv_target_directive(MiniAsDirectiveContext *ctx, const char *op,
         state->options|=MINIAS_RISCV_OPTION_PIC;
     else if(strcmp(args,"nopic")==0)
         state->options&=~(uint32_t)MINIAS_RISCV_OPTION_PIC;
-    else if(strcmp(args,"norvc")==0)
+    else if(strcmp(args,"norvc")==0) {
         state->options|=MINIAS_RISCV_OPTION_NO_RVC;
+        state->options&=~(uint32_t)MINIAS_RISCV_OPTION_FORCE_RVC;
+    }
     else if(strcmp(args,"rvc")==0) {
-        /* Restoring C cannot add an extension absent from the ISA. */
-        if(state->isa_explicit && !(state->file_isa.features&RISCV_ISA_C))
-            goto unsupported;
         state->options&=~(uint32_t)MINIAS_RISCV_OPTION_NO_RVC;
+        state->options|=MINIAS_RISCV_OPTION_FORCE_RVC;
+        state->rvc_option_seen=true;
     } else if(strcmp(args,"push")==0) {
         if(state->option_depth>=sizeof(state->option_stack)/
                                 sizeof(state->option_stack[0])) {
@@ -911,7 +916,8 @@ typedef struct RiscvMappingSectionState {
 static unsigned riscv_mapping_site_key(MiniAsTargetSiteState site) {
     return ((site.mode_bits&MINIAS_RISCV_OPTION_NO_RVC)!=0U?1U:0U) |
            ((site.mode_bits&MINIAS_RISCV_OPTION_SITE_ZBB)!=0U?2U:0U) |
-           ((site.mode_bits&MINIAS_RISCV_OPTION_SITE_V)!=0U?4U:0U);
+           ((site.mode_bits&MINIAS_RISCV_OPTION_SITE_V)!=0U?4U:0U) |
+           ((site.mode_bits&MINIAS_RISCV_OPTION_FORCE_RVC)!=0U?8U:0U);
 }
 
 static bool riscv_mapping_is_code(const MiniAsFragmentView *fragment) {
@@ -929,8 +935,8 @@ static bool riscv_record_object_mapping_symbols(
     const size_t section_count=minias_post_emit_section_count(view);
     const size_t fragment_count=minias_post_emit_fragment_count(view);
     RiscvMappingSectionState *sections;
-    char site_names[8][512]={{0}};
-    bool cached[8]={false};
+    char site_names[16][512]={{0}};
+    bool cached[16]={false};
     size_t i;
     bool ok=false;
     if (state == NULL || state->arch_attribute_isa[0] == '\0') return true;
@@ -988,7 +994,9 @@ static bool riscv_record_object_mapping_symbols(
                 ((fragment.site.mode_bits&MINIAS_RISCV_OPTION_SITE_ZBB)!=0U?
                  RISCV_ISA_ZBB:0U) |
                 ((fragment.site.mode_bits&MINIAS_RISCV_OPTION_SITE_V)!=0U?
-                 RISCV_ISA_V:0U);
+                 RISCV_ISA_V:0U) |
+                ((fragment.site.mode_bits&MINIAS_RISCV_OPTION_FORCE_RVC)!=0U?
+                 RISCV_ISA_C:0U);
             key=riscv_mapping_site_key(fragment.site);
             if(!cached[key]) {
                 if(!minias_riscv_mapping_isa(&state->file_isa,
@@ -1127,7 +1135,8 @@ static void riscv_capture_site_state(const void *target_state,
                                       const MiniAsSourceSiteView *stmt,
                                       MiniAsTargetSiteState *site) {
     const MiniAsRiscvState *state=target_state;
-    site->mode_bits = state->options;
+    site->mode_bits = state->options |
+        (state->rvc_option_seen ? MINIAS_RISCV_SITE_EVER_RVC : 0U);
     if(strcmp(stmt->op,".insn")==0)
         site->provenance_bits|=MINIAS_RISCV_SITE_INSN_DATA;
 }
@@ -1135,9 +1144,8 @@ static void riscv_capture_site_state(const void *target_state,
 static unsigned riscv_default_exec_alignment_for_site(
     const void *target_state) {
     const MiniAsRiscvState *state = target_state;
-    if (state != NULL && state->isa_explicit &&
-        (state->file_isa.features & RISCV_ISA_C) != 0U &&
-        (state->options & MINIAS_RISCV_OPTION_NO_RVC) == 0U)
+    if (minias_riscv_site_compression_enabled(state,
+                                              state != NULL ? state->options : 0U))
         return 2U;
     return 4U;
 }
@@ -1152,10 +1160,11 @@ static void riscv_resolve_cfi_abi(MiniAsTargetABIView view, MiniAsCfiABI *abi) {
 
 static uint32_t riscv_project_output_features(MiniAsTargetABIView view,
                                                uint32_t features) {
-    (void)view;
+    const MiniAsRiscvState *state=view.target_state;
     /* Object-format policy alone knows EF_RISCV_RVC. Neither MC emission
      * nor code alignment encodes or mutates ELF header bits directly. */
-    return (features & RV_OUTPUT_USED_COMPRESSED) != 0U ? 1U : 0U;
+    return ((features & RV_OUTPUT_USED_COMPRESSED) != 0U ||
+            (state != NULL && state->rvc_option_seen)) ? 1U : 0U;
 }
 
 static const MiniAsElfTargetPolicy riscv_elf_policy = {

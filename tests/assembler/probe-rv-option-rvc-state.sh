@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # RISC-V .option rvc/norvc belongs to target-site state, not to Common.
-# Under an explicit ISA it may restore C only when C was already selected;
+# An explicit .option rvc may also grant C lexically over a Base-I file
+# profile, without promoting the immutable Tag_RISCV_arch file attribute.
 # norelax is always safe because MiniAS does not emit linker RELAX markers.
 set -Eeuo pipefail
 : "${MINIAS:?exact-head MiniAS binary required}"
@@ -29,7 +30,7 @@ EOF_RV
 "$MINIAS" -mabi=lp64 -o "$work/legacy.o" "$work/restored.s"
 
 # Verify the compressed instructions were actually emitted after restoring
-# the mode, without asking -march=rv64i to accept a C-ISA escape.
+# the mode; file-level Base-I lexical C enablement is checked below.
 for abi in rv64gc rv32ec legacy; do
     text_hex=$(readelf -x .text "$work/$abi.o")
     if ! grep -qE '0305|1305|1346' <<<"$text_hex"; then
@@ -76,13 +77,13 @@ cat >"$work/no-c.s" <<'EOF_RV'
 c.li a0, 1
 EOF_RV
 for arch in rv64i rv32i; do
-    if "$MINIAS" "-march=$arch" \
-            -o "$work/invalid.o" "$work/no-c.s" \
-            >"$work/invalid.stdout" 2>"$work/invalid.stderr"; then
-        echo ".option rvc escaped $arch strict ISA" >&2
+    "$MINIAS" "-march=$arch" \
+        -o "$work/$arch-local-c.o" "$work/no-c.s"
+    readelf -h "$work/$arch-local-c.o" | grep -Eq 'Flags:.*RVC'
+    if ! readelf -A "$work/$arch-local-c.o" | grep -q "Tag_RISCV_arch: \"${arch}2p1\""; then
+        echo "Local .option rvc changed $arch file ISA attribute" >&2
         exit 1
     fi
-    grep -q 'unsupported-isa-option:rvc' "$work/invalid.stderr"
 done
 
 cat >"$work/popped.s" <<'EOF_RV'

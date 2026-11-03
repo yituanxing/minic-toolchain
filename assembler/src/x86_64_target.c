@@ -4259,6 +4259,34 @@ static bool x64_resolve_memory_displacement(MiniAsEncodeContext *ctx,const MiniA
     return true;
 }
 
+/* GNU GAS marks selected non-byte/word register-destination integer
+ * reads and TEST as GOTPCRELX candidates. The linker may replace the
+ * GOT load with an immediate address; writes and LEA retain GOTPCREL.
+ * Use only the already-decoded MC opcode and operand width, never the
+ * original source mnemonic or ELF writer relocation codes. */
+static bool x64_memory_gotpcrelx_eligible(const MiniAsMCInstView *inst,
+                                          const X64MemoryLayout *layout) {
+    if(inst->opcode!=X64_REG_MEMORY ||
+       (inst->encoding&UINT32_C(0x600))!=0U ||
+       (inst->encoding&UINT32_C(0x100))!=0U)
+        return false;
+    switch(layout->opcode) {
+        case 0x03U: /* ADD r/m -> reg */
+        case 0x0bU: /* OR */
+        case 0x13U: /* ADC */
+        case 0x1bU: /* SBB */
+        case 0x23U: /* AND */
+        case 0x2bU: /* SUB */
+        case 0x33U: /* XOR */
+        case 0x3bU: /* CMP */
+        case 0x85U: /* TEST reads both operands */
+        case 0x8bU: /* MOV r/m -> reg */
+            return true;
+        default:
+            return false;
+    }
+}
+
 /* A single relocation owner for the three old memory-emission branches:
  * absolute symbolic displacement, RIP-relative PC32, and symbolic immediate.
  * The immediate field's ELF signedness is determined solely by its ISA
@@ -4279,10 +4307,9 @@ static bool x64_emit_memory_fixups(MiniAsEncodeContext *ctx,const MiniAsInstruct
             MiniAsSymbolRef relative;
             MiniAsFixupKind kind=MINIAS_FIXUP_X64_PC32;
             if(mem->reloc_flavor==X64_DISP_GOTPCREL) {
-                /* GNU GAS allows link-time MOV->LEA relaxation for GOTPCREL
-                 * loads. The REX variant records the present REX prefix;
-                 * non-MOV consumers retain non-relaxable GOTPCREL. */
-                if((inst->encoding&UINT32_C(0xff))==UINT32_C(0x8b))
+                /* GNU linker relaxability belongs to the decoded operand
+                 * form; REX and non-REX use different ELF relocation codes. */
+                if(x64_memory_gotpcrelx_eligible(inst,layout))
                     kind=layout->has_rex?
                         MINIAS_FIXUP_X64_REX_GOTPCRELX:
                         MINIAS_FIXUP_X64_GOTPCRELX;

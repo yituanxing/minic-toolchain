@@ -221,6 +221,12 @@ jobs:
           command -v riscv64-linux-gnu-as
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
             bash tests/assembler/probe-rv-option-rvc-state.sh
+      - name: GNU RV32I/RV64I lexical RVC over file Base-I and sticky ELF flags
+        run: |
+          command -v riscv64-linux-gnu-as
+          command -v riscv64-linux-gnu-objcopy
+          REQUIRE_ALL_GNU=1 MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-rv-rvc-site-gnu.sh
       - name: GNU RV32/RV64 lexical ISA and exact mapping-symbol order
         run: |
           command -v riscv64-linux-gnu-as

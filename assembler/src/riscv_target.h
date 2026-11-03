@@ -15,6 +15,12 @@
 #define MINIAS_RISCV_OPTION_SITE_ZBB 8U
 /* .option arch,+v likewise grants V at instruction sites only. */
 #define MINIAS_RISCV_OPTION_SITE_V 16U
+/* GNU .option rvc can enable C lexically even when the immutable file ISA
+ * omits C; push/pop restores this site permission, not ELF e_flags. */
+#define MINIAS_RISCV_OPTION_FORCE_RVC 32U
+/* This is a captured provenance bit, not an option-stack entry: GNU's
+ * permanently advertised C capability can also license later C.NOP fill. */
+#define MINIAS_RISCV_SITE_EVER_RVC 64U
 /* GAS treats .insn as code for $x/$d mapping regardless of which retained
  * Fragment representation supplies its machine bytes. No alternate graph. */
 #define MINIAS_RISCV_SITE_INSN_DATA 1U
@@ -45,6 +51,9 @@ typedef struct MiniAsRiscvState {
     /* Mutable .option mode belongs to this TargetContext, not MiniAs.
      * The matching immutable parse-site view lives in stmt->site. */
     uint32_t options;
+    /* GNU immediately sets EF_RISCV_RVC for a positive .option rvc, even
+     * if no compressed machine word follows or a later pop disables C. */
+    bool rvc_option_seen;
     /* Semantic source of ELF Tag_File attributes. Serialization is a single
      * target-owned step, independent of source .attribute directive order. */
     char arch_attribute_isa[512];
@@ -67,6 +76,17 @@ typedef struct MiniAsRiscvState {
     uint32_t option_stack[64];
     size_t option_depth;
 } MiniAsRiscvState;
+
+/* A single instruction-site C decision for parser and encoder.  The
+ * implicit/legacy profile keeps its historical uncompressed default. */
+static inline bool minias_riscv_site_compression_enabled(
+    const MiniAsRiscvState *state, uint32_t site_options) {
+    return state != NULL &&
+           (site_options & MINIAS_RISCV_OPTION_NO_RVC) == 0U &&
+           (((state->file_isa.features & RISCV_ISA_C) != 0U &&
+             state->isa_explicit) ||
+            (site_options & MINIAS_RISCV_OPTION_FORCE_RVC) != 0U);
+}
 
 /* Shared target-owned MC opcode families: used by parser, encoder and
  * relaxation without any mnemonic parsing in the common assembler. */
