@@ -1079,3 +1079,34 @@ assertion that no strong `prefix_extern_inline_identity` symbol appears and the
 unrelated invalid `no_sanitize` source must be rejected. The complete native
 step's function-metadata, fixed-register, five-target inline ASM, empty ASM
 and constant-switch regressions pass after the test-only correction.
+
+## IR-P18 — Separate pure Core construction from C source ingress (2026-11-03)
+
+The published Core schema was made C-type-free in P17, but its implementation
+still mixed source-only `MinicType` admission, enum identity, source signatures,
+SourceDraft disposal and one-shot import with pure SSA/CFG construction. Read
+the complete ingress, append, snapshot, failure-retry and destruction chains
+before moving them together into `core_ir_source.c`. Keep `core_ir.c` and its
+verifier independently buildable without the frontend type implementation.
+The C adapter registers a temporary draft cleanup callback; successful type
+publication and ordinary destruction both release it exactly once. The pure
+instruction append APIs no longer alter a caller's pretyped Core IDs based on
+the presence of a source draft: only explicit source append wrappers create
+invalid pre-snapshot type placeholders. Shared array growth and string copying
+retain a single C-free implementation.
+The C-only private header is now `core_ir_source_internal.h`; the old mixed
+`core_ir_internal.h` is removed and the independent Core verifier imports
+only the public C-free Core schema. Existing source-ingress consumers are
+migrated together, including standalone test and bootstrap compile lists.
+
+**Verification:** Debug `make -s MODE=debug -j8 check-fast`, Release
+`minic-cc` build, strict target-boundary script and `git diff --check` all
+PASS. Core type snapshot/import and Core shape native plus ASan/UBSan tests
+PASS; standalone Core literal-branch folding and RV root-alignment binaries
+compile and run without linking any frontend type implementation.
+
+This is a source-ownership boundary, not a new IR layer or runtime/ISA feature.
+GNU operand source qualification remains before publication. The five machine
+writers' remaining borrowed `MinicC0Program` is a **separate**, later
+five-architecture migration, and neither this split nor a green native gate
+implies five-architecture Linux boot certification.

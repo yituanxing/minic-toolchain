@@ -8,6 +8,7 @@ mkdir -p "$work"
     -ffunction-sections -fdata-sections -Wl,--gc-sections \
     -I"$root/src" -I"$root/include" \
     "$root/src/core/core_ir.c" \
+    "$root/src/core/core_ir_source.c" \
     "$root/src/core/core_type.c" \
     "$root/src/core/core_ir_verify.c" \
     "$root/src/core/core_lower_asm_operands.c" \

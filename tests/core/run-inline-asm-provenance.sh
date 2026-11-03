@@ -10,7 +10,6 @@ mkdir -p "$work"
     -I"$root/src" \
     "$root/src/core/core_ir.c" \
     "$root/src/core/core_type.c" \
-    "$root/src/frontend/type.c" \
     "$root/tests/core/inline_asm_provenance_test.c" \
     -o "$work/core-inline-asm-provenance"
 "$work/core-inline-asm-provenance"

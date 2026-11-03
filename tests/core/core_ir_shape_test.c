@@ -1,6 +1,6 @@
 /* MC-055: these are deliberately malformed public Core API objects, NOT
  * cases claimed to be emitted by a valid C frontend producer. */
-#include "core/core_ir_internal.h"
+#include "core/core_ir_source_internal.h"
 
 #include <stdio.h>
 #include <string.h>

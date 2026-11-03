@@ -7,6 +7,5 @@ trap 'rm -rf -- "$work"' EXIT
     -ffunction-sections -fdata-sections -Wl,--gc-sections -I"$root/src" \
     "$root/tests/compiler/c0/probe-core-literal-branch-fold.c" \
     "$root/src/core/core_ir.c" "$root/src/core/core_type.c" \
-    "$root/src/frontend/type.c" \
     -o "$work/core-literal-branch-fold"
 "$work/core-literal-branch-fold"

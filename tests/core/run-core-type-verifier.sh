@@ -9,6 +9,7 @@ trap 'rm -rf "$work"' EXIT
 sources=(
     "$root/tests/core/core_type_verifier_test.c"
     "$root/src/core/core_ir.c"
+    "$root/src/core/core_ir_source.c"
     "$root/src/core/core_type.c"
     "$root/src/core/core_ir_verify.c"
     "$root/src/frontend/type.c"

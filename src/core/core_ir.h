@@ -549,11 +549,15 @@ typedef struct MinicCoreBlock {
  * function is being constructed. A published Core function has no source
  * draft: target consumers see only the CoreTypeId snapshots below. */
 typedef struct MinicCoreSourceDraft MinicCoreSourceDraft;
+typedef void (*MinicCoreSourceDraftRelease)(MinicCoreSourceDraft *draft);
 
 typedef struct MinicCoreFunction {
     char *name;
     size_t name_length;
     MinicCoreSourceDraft *source_draft;
+    /* A transient C adapter owns this cleanup callback. Pure Core functions
+     * need no frontend implementation to destroy or verify themselves. */
+    MinicCoreSourceDraftRelease source_draft_release;
     /* The attached type arena is borrowed and must outlive this function and
      * all target consumers. */
     const MinicCoreTypeContext *type_context;

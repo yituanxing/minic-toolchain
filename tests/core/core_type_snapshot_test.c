@@ -1,4 +1,4 @@
-#include "core/core_ir_internal.h"
+#include "core/core_ir_source_internal.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -393,9 +393,10 @@ int main(void) {
 
     CHECK(make_type_context(&context, &ids));
     CHECK(build_core_only_function(&function, &ids));
-    CHECK(function.source_draft == NULL);
+    CHECK(function.source_draft == NULL && function.source_draft_release == NULL);
     CHECK(minic_core_function_attach_type_context(&function, &context));
-    CHECK(function.source_draft == NULL && minic_core_function_verify(&function));
+    CHECK(function.source_draft == NULL && function.source_draft_release == NULL &&
+          minic_core_function_verify(&function));
     minic_core_function_destroy(&function);
 
     CHECK(build_indirect_fixture(&function, &ids));
@@ -490,6 +491,13 @@ int main(void) {
     /* The bulk-ingress callback must roll back ALL snapshots on failure. */
     CHECK(build_simple_function(&function));
     CHECK(minic_core_function_verify_source_ingress(&function));
+    {
+        const MinicCoreSourceDraftRelease release = function.source_draft_release;
+        function.source_draft_release = NULL;
+        CHECK(!minic_core_function_verify_source_ingress(&function));
+        function.source_draft_release = release;
+        CHECK(minic_core_function_verify_source_ingress(&function));
+    }
     CHECK(function.object_count == 1U && function.global_count == 1U &&
           function.fixed_register_binding_count == 1U &&
           function.callee_count == 1U && function.call_signature_count == 1U);
@@ -504,7 +512,7 @@ int main(void) {
           function.core_return_type_id == MINIC_CORE_TYPE_INVALID);
     CHECK(function.values[0].core_type_id == MINIC_CORE_TYPE_INVALID);
     /* A rejected import must leave every C draft available for a retry. */
-    CHECK(function.source_draft != NULL &&
+    CHECK(function.source_draft != NULL && function.source_draft_release != NULL &&
           minic_type_equal(function.source_draft->return_type, minic_type_int()) &&
           minic_type_equal(function.source_draft->callees[0].return_type,
                            minic_type_int()) &&
@@ -533,7 +541,7 @@ int main(void) {
     /* Publication physically releases the C ingress sidecar; Core has no
      * residual C descriptors to poison or accidentally inspect. */
     CHECK(function.type_context == &context &&
-          function.source_draft == NULL);
+          function.source_draft == NULL && function.source_draft_release == NULL);
     CHECK(minic_core_function_source_value_type(&function, 0U).base_kind ==
           (MinicTypeBaseKind)0x7fffffff);
     CHECK(minic_core_function_verify(&function));
@@ -552,9 +560,14 @@ int main(void) {
     CHECK(minic_core_function_snapshot_types(&function, &context,
                                              resolve_enum_overflow_type, &ids));
     CHECK(minic_core_function_verify_core_type_snapshot(&function));
-    CHECK(function.source_draft == NULL &&
+    CHECK(function.source_draft == NULL && function.source_draft_release == NULL &&
           minic_core_function_source_value_type(&function, 2U).base_kind ==
               (MinicTypeBaseKind)0x7fffffff);
+    minic_core_function_destroy(&function);
+    CHECK(build_simple_function(&function));
+    CHECK(function.source_draft != NULL && function.source_draft_release != NULL);
+    /* A canceled, unsealed C draft and repeated destructor must be safe. */
+    minic_core_function_destroy(&function);
     minic_core_function_destroy(&function);
     minic_core_type_context_destroy(&context);
     (void)puts("CORE_TYPE_SNAPSHOT=PASS valid malformed direct_core_producer indirect_nominal field_nominal overflow enum_source_proof rollback");

@@ -1,4 +1,4 @@
-#include "core/core_ir_internal.h"
+#include "core/core_ir.h"
 
 #include <inttypes.h>
 #include <stdio.h>
@@ -94,6 +94,8 @@ bool minic_core_function_verify_core_type_snapshot(const MinicCoreFunction *func
     const MinicCoreType *type;
     size_t i, j;
     if (function == NULL || function->type_context == NULL ||
+        (function->source_draft == NULL) !=
+            (function->source_draft_release == NULL) ||
         !storage_shape_is_valid(function->fixed_register_bindings,
                                 function->fixed_register_binding_count,
                                 function->fixed_register_binding_capacity) ||
@@ -213,8 +215,8 @@ bool minic_core_function_verify_core_type_snapshot(const MinicCoreFunction *func
     return true;
 }
 
-/* The verifier consumes frozen, context-local CoreType identities. Source
- * enum ranks, C tags, and MinicType descriptors are not verifier inputs. */
+/* The verifier consumes frozen, context-local CoreType identities. No
+ * source-language rank, nominal-tag or descriptor is a verifier input. */
 static MinicCoreTypeId core_unqualified(const MinicCoreFunction *function,
                                        MinicCoreTypeId id) {
     return minic_core_type_unqualified(function->type_context, id);

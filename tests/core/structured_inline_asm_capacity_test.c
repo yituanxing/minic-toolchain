@@ -1,5 +1,5 @@
 #include "core/core_lower_asm_internal.h"
-#include "core/core_ir_internal.h"
+#include "core/core_ir_source_internal.h"
 
 #include <stdio.h>
 #include <stdlib.h>

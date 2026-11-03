@@ -27,6 +27,23 @@ done
 # exist only in the source-only draft and must disappear after publication.
 has src/core/core_ir.h 'MinicCoreSourceDraft *source_draft;'
 has src/core/core_ir_source.h 'struct MinicCoreSourceDraft {'
+exists src/core/core_ir_source.c
+exists src/core/core_ir_source_internal.h
+exists src/core/core_ir_storage.h
+has src/core/core_ir_source_internal.h '#include "core/core_ir_source.h"'
+has src/core/core_lower_internal.h '#include "core/core_ir_source_internal.h"'
+if [[ -e src/core/core_ir_internal.h ]]; then
+  fail 'legacy Core internal header still owns C source ingress'
+fi
+has src/core/core_ir_source.c 'minic_core_function_snapshot_types('
+has src/core/core_ir_source.c 'minic_source_placeholder('
+has src/core/core_ir.c 'minic_core_function_release_source_draft('
+for source in src/core/core_ir.c src/core/core_ir_verify.c; do
+  lacks "$source" 'MinicType'
+  lacks "$source" 'minic_type_'
+  lacks "$source" 'frontend/type.h'
+  lacks "$source" 'core_ir_source.h'
+done
 for symbol in 'MinicType' 'MinicEnumId' 'MinicFunctionTypeId' \
               'frontend/type.h'; do
   lacks src/core/core_ir.h "$symbol"
@@ -1399,7 +1416,7 @@ cc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror \
 cc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror \
   -ffunction-sections -fdata-sections -Wl,--gc-sections \
   -Iinclude -Isrc tests/compiler/c0/probe-core-call-convention-intern.c \
-  src/core/core_ir.c src/frontend/type.c \
+  src/core/core_ir.c src/core/core_ir_source.c src/frontend/type.c \
   -o "$work/core-call-convention-intern-probe"
 "$work/core-call-convention-intern-probe"
 

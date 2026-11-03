@@ -1,5 +1,5 @@
 #include "core/core_lower_internal.h"
-#include "core/core_ir_internal.h"
+#include "core/core_ir_source_internal.h"
 #include "core/source_loop_shapes.h"
 #include "core/local_facts.h"
 #include "core/cfg_constant_calls.h"

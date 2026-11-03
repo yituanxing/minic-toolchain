@@ -21,6 +21,7 @@ import_sources=(
 snapshot_sources=(
     "$root/src/core/core_type.c"
     "$root/src/core/core_ir.c"
+    "$root/src/core/core_ir_source.c"
     "$root/src/core/core_ir_verify.c"
     "$root/src/frontend/type.c"
     "$root/tests/core/core_type_snapshot_test.c"

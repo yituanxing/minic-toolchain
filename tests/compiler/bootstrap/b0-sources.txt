@@ -7,6 +7,7 @@ src/compiler/inline_boolean.c
 src/compiler/inline_reference.c
 src/compiler/core_reachability.c
 src/core/core_ir.c
+src/core/core_ir_source.c
 src/core/core_ir_verify.c
 src/core/core_ir_dump.c
 src/core/value_uses.c

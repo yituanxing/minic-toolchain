@@ -76,6 +76,7 @@ MINIC_SOURCES := \
 	src/compiler/inline_reference.c \
 	src/compiler/core_reachability.c \
 	src/core/core_ir.c \
+	src/core/core_ir_source.c \
 	src/core/core_type.c \
 	src/core/module_ir.c \
 	src/core/core_type_import.c \
