@@ -10,20 +10,33 @@ typedef struct MiniLdScriptBytePatch {
     unsigned char value;
 } MiniLdScriptBytePatch;
 
+/* One mutable physical placement for each working section.  Input-section
+ * identity lives in InputGraph/WorkingSections; layout owns only addresses,
+ * file placement, script command membership and discard decisions. */
+typedef struct MiniLdLayoutWorkPlacement {
+    uint64_t vaddr;
+    uint64_t laddr;
+    size_t file_offset;
+    size_t owner_command;
+    bool discarded;
+} MiniLdLayoutWorkPlacement;
+
+/* One linker-script output-command placement, regardless of how many input
+ * fragments it selects.  The OutputPlan later projects these into final ELF
+ * OutputSections, without retaining redundant per-field owner arrays. */
+typedef struct MiniLdLayoutScriptOutput {
+    uint64_t start;
+    uint64_t end;
+    size_t file_base;
+    unsigned char fill;
+    bool have_fill;
+    bool defined;
+} MiniLdLayoutScriptOutput;
+
 typedef struct MiniLdLayout {
-    uint64_t *section_vaddr;
-    uint64_t *section_laddr;
-    size_t *section_file_offset;
-    bool *section_discarded;
-    /* Script-command identity survives layout: final ELF output sections
-     * own working fragments, not the other way around. SIZE_MAX = none. */
-    size_t *section_owner;
-    unsigned char *script_fill;
-    bool *script_have_fill;
+    MiniLdLayoutWorkPlacement *work;
+    MiniLdLayoutScriptOutput *script_outputs;
     size_t script_command_count;
-    uint64_t *script_output_start;
-    uint64_t *script_output_end;
-    size_t *script_output_file_base;
     MiniLdScriptBytePatch *script_bytes;
     size_t script_byte_count;
     size_t script_byte_capacity;
@@ -430,26 +443,16 @@ static bool static_build_layout_at(MiniLdState *state,
     size_t i;
 
     memset(layout, 0, sizeof(*layout));
-    layout->section_vaddr =
+    layout->work =
         calloc(state->work.count == 0U ? 1U : state->work.count,
-               sizeof(*layout->section_vaddr));
-    layout->section_laddr =
-        calloc(state->work.count == 0U ? 1U : state->work.count,
-               sizeof(*layout->section_laddr));
-    layout->section_file_offset =
-        malloc((state->work.count == 0U ? 1U : state->work.count) *
-               sizeof(*layout->section_file_offset));
-    layout->section_discarded =
-        calloc(state->work.count == 0U ? 1U : state->work.count,
-               sizeof(*layout->section_discarded));
-    if (layout->section_vaddr == NULL || layout->section_laddr == NULL ||
-        layout->section_file_offset == NULL ||
-        layout->section_discarded == NULL) {
+               sizeof(*layout->work));
+    if (layout->work == NULL) {
         fprintf(state->diagnostics, "minic-ld: out-of-memory:static-layout\n");
         return false;
     }
     for (i = 0U; i < state->work.count; ++i) {
-        layout->section_file_offset[i] = SIZE_MAX;
+        layout->work[i].file_offset = SIZE_MAX;
+        layout->work[i].owner_command = SIZE_MAX;
     }
 
     layout->rx_file_offset = header_page;
@@ -474,12 +477,12 @@ static bool static_build_layout_at(MiniLdState *state,
             return false;
         }
         rx_cursor = aligned;
-        layout->section_vaddr[i] = layout->rx_vaddr + rx_cursor;
-        layout->section_laddr[i] = layout->section_vaddr[i];
-        layout->section_file_offset[i] = layout->rx_file_offset + rx_cursor;
+        layout->work[i].vaddr = layout->rx_vaddr + rx_cursor;
+        layout->work[i].laddr = layout->work[i].vaddr;
+        layout->work[i].file_offset = layout->rx_file_offset + rx_cursor;
         if (!static_relax_align_section(state,
                                         i,
-                                        layout->section_vaddr[i])) {
+                                        layout->work[i].vaddr)) {
             return false;
         }
         if (!add_size(rx_cursor, section->size, &rx_cursor)) {
@@ -522,13 +525,13 @@ static bool static_build_layout_at(MiniLdState *state,
         }
         rw_file_cursor = aligned;
         rw_mem_cursor = aligned;
-        layout->section_vaddr[i] = layout->rw_vaddr + rw_mem_cursor;
-        layout->section_laddr[i] = layout->section_vaddr[i];
-        layout->section_file_offset[i] =
+        layout->work[i].vaddr = layout->rw_vaddr + rw_mem_cursor;
+        layout->work[i].laddr = layout->work[i].vaddr;
+        layout->work[i].file_offset =
             layout->rw_file_offset + rw_file_cursor;
         if (!static_relax_align_section(state,
                                         i,
-                                        layout->section_vaddr[i])) {
+                                        layout->work[i].vaddr)) {
             return false;
         }
         if (!add_size(rw_file_cursor, section->size, &rw_file_cursor) ||
@@ -553,8 +556,8 @@ static bool static_build_layout_at(MiniLdState *state,
             return false;
         }
         rw_mem_cursor = aligned;
-        layout->section_vaddr[i] = layout->rw_vaddr + rw_mem_cursor;
-        layout->section_laddr[i] = layout->section_vaddr[i];
+        layout->work[i].vaddr = layout->rw_vaddr + rw_mem_cursor;
+        layout->work[i].laddr = layout->work[i].vaddr;
         if (!add_size(rw_mem_cursor, section->size, &rw_mem_cursor)) {
             fprintf(state->diagnostics, "minic-ld: static-layout-overflow\n");
             return false;
@@ -601,7 +604,6 @@ typedef struct MiniLdScriptLayoutState {
     MiniLdLayout *layout;
     const MiniLdScript *script;
     bool *section_placed;
-    bool *output_defined;
     uint64_t dot;
     uint64_t load_bias;
     bool have_load_bias;
@@ -651,10 +653,10 @@ static bool script_layout_symbol_value(void *context,
     if (symbol->section < 0 ||
         (size_t)symbol->section >= script_state->state->work.count ||
         !script_state->section_placed[symbol->section] ||
-        script_state->layout->section_discarded[symbol->section]) {
+        script_state->layout->work[symbol->section].discarded) {
         return false;
     }
-    *value_out = script_state->layout->section_vaddr[symbol->section] +
+    *value_out = script_state->layout->work[symbol->section].vaddr +
                  symbol->value;
     return true;
 }
@@ -669,9 +671,9 @@ static bool script_layout_section_value(void *context,
         const MiniLdScriptCommand *command = &script_state->script->commands[i];
 
         if (command->kind == MINILD_SCRIPT_OUTPUT_SECTION &&
-            script_state->output_defined[i] &&
+            script_state->layout->script_outputs[i].defined &&
             strcmp(command->value.section.name, name) == 0) {
-            *value_out = script_state->layout->script_output_start[i];
+            *value_out = script_state->layout->script_outputs[i].start;
             return true;
         }
     }
@@ -990,9 +992,9 @@ static bool script_layout_place_section(MiniLdScriptLayoutState *script_state,
         return false;
     }
     script_state->dot = aligned;
-    script_state->layout->section_vaddr[section_index] = script_state->dot;
+    script_state->layout->work[section_index].vaddr = script_state->dot;
     script_state->section_placed[section_index] = true;
-    script_state->layout->section_owner[section_index] = command_index;
+    script_state->layout->work[section_index].owner_command = command_index;
     if (script_state->script->commands[command_index].kind ==
             MINILD_SCRIPT_OUTPUT_SECTION) {
         section->output_name =
@@ -1068,7 +1070,7 @@ static bool script_layout_place_pattern(MiniLdScriptLayoutState *script_state,
     for (i = 0U; i < script_state->state->work.count; ++i) {
         if (script_state->section_placed[i] ||
             script_state->state->work.sections[i].gc_discarded ||
-            script_state->layout->section_discarded[i]) {
+            script_state->layout->work[i].discarded) {
             continue;
         }
         if (minild_script_pattern_matches_input(
@@ -1111,7 +1113,7 @@ static bool script_layout_place_pattern(MiniLdScriptLayoutState *script_state,
         size_t section_index = matches[i];
 
         if (discard) {
-            script_state->layout->section_discarded[section_index] = true;
+            script_state->layout->work[section_index].discarded = true;
             script_state->section_placed[section_index] = true;
             continue;
         }
@@ -1135,12 +1137,12 @@ static size_t script_layout_output_anchor(
     for (i = 0U; i < script_state->state->work.count; ++i) {
         MiniLdSection *section = &script_state->state->work.sections[i];
 
-        if (script_state->layout->section_owner[i] == command_index &&
-            !script_state->layout->section_discarded[i] &&
+        if (script_state->layout->work[i].owner_command == command_index &&
+            !script_state->layout->work[i].discarded &&
             (section->flags & SHF_ALLOC) != 0U &&
             (anchor == SIZE_MAX ||
-             script_state->layout->section_vaddr[i] <
-                 script_state->layout->section_vaddr[anchor])) {
+             script_state->layout->work[i].vaddr <
+                 script_state->layout->work[anchor].vaddr)) {
             anchor = i;
         }
     }
@@ -1158,7 +1160,7 @@ static bool script_layout_bind_output_symbols(
     if (anchor == SIZE_MAX) {
         return true;
     }
-    anchor_vaddr = script_state->layout->section_vaddr[anchor];
+    anchor_vaddr = script_state->layout->work[anchor].vaddr;
 
     for (i = 0U; i < output->item_count; ++i) {
         const MiniLdScriptSectionItem *item = &output->items[i];
@@ -1214,9 +1216,9 @@ static bool script_layout_process_output(MiniLdScriptLayoutState *script_state,
                     output->name);
             return false;
         }
-        script_state->layout->script_fill[command_index] =
+        script_state->layout->script_outputs[command_index].fill =
             (unsigned char)fill;
-        script_state->layout->script_have_fill[command_index] = true;
+        script_state->layout->script_outputs[command_index].have_fill = true;
     }
 
     if (output->discard) {
@@ -1289,7 +1291,7 @@ static bool script_layout_process_output(MiniLdScriptLayoutState *script_state,
 
                 if (script_state->section_placed[section_index] ||
                     section->gc_discarded ||
-                    script_state->layout->section_discarded[section_index] ||
+                    script_state->layout->work[section_index].discarded ||
                     (section->flags & SHF_ALLOC) == 0U ||
                     !minild_script_pattern_matches_input(
                         &item->value.pattern,
@@ -1312,8 +1314,8 @@ static bool script_layout_process_output(MiniLdScriptLayoutState *script_state,
     }
 
     output_start = script_state->dot;
-    script_state->output_defined[command_index] = true;
-    script_state->layout->script_output_start[command_index] = output_start;
+    script_state->layout->script_outputs[command_index].defined = true;
+    script_state->layout->script_outputs[command_index].start = output_start;
 
     for (i = 0U; i < output->item_count; ++i) {
         const MiniLdScriptSectionItem *item = &output->items[i];
@@ -1401,7 +1403,7 @@ static bool script_layout_process_output(MiniLdScriptLayoutState *script_state,
         }
     }
 
-    script_state->layout->script_output_end[command_index] =
+    script_state->layout->script_outputs[command_index].end =
         script_state->dot;
 
     /* A pure BYTE output needs a working section to anchor its layout.
@@ -1411,8 +1413,8 @@ static bool script_layout_process_output(MiniLdScriptLayoutState *script_state,
         bool has_input = false;
 
         for (i = 0U; i < script_state->state->work.count; ++i) {
-            if (script_state->layout->section_owner[i] == command_index &&
-                !script_state->layout->section_discarded[i]) {
+            if (script_state->layout->work[i].owner_command == command_index &&
+                !script_state->layout->work[i].discarded) {
                 has_input = true;
                 break;
             }
@@ -1450,9 +1452,9 @@ static bool script_layout_process_output(MiniLdScriptLayoutState *script_state,
              * must carry that same pattern or the copy would overwrite
              * the script's requested fill with zero bytes. */
             if (length != 0U &&
-                script_state->layout->script_have_fill[command_index]) {
+                script_state->layout->script_outputs[command_index].have_fill) {
                 memset(section->data,
-                       script_state->layout->script_fill[command_index],
+                       script_state->layout->script_outputs[command_index].fill,
                        length);
             }
             for (i = byte_start;
@@ -1469,9 +1471,9 @@ static bool script_layout_process_output(MiniLdScriptLayoutState *script_state,
                 }
                 section->data[(size_t)off] = patch->value;
             }
-            script_state->layout->section_vaddr[synthetic_index] =
+            script_state->layout->work[synthetic_index].vaddr =
                 output_start;
-            script_state->layout->section_owner[synthetic_index] = command_index;
+            script_state->layout->work[synthetic_index].owner_command = command_index;
             script_state->section_placed[synthetic_index] = true;
         }
     }
@@ -1491,10 +1493,10 @@ static bool script_layout_process_output(MiniLdScriptLayoutState *script_state,
     }
 
     for (i = 0U; i < script_state->state->work.count; ++i) {
-        if (script_state->layout->section_owner[i] == command_index) {
-            script_state->layout->section_laddr[i] =
+        if (script_state->layout->work[i].owner_command == command_index) {
+            script_state->layout->work[i].laddr =
                 lma_start +
-                (script_state->layout->section_vaddr[i] - output_start);
+                (script_state->layout->work[i].vaddr - output_start);
         }
     }
     if (!script_layout_bind_output_symbols(script_state,
@@ -1533,8 +1535,8 @@ static bool script_layout_finalize_top_symbol_provenance(
                     &script_state->script->commands[j];
 
                 if (cmd->kind == MINILD_SCRIPT_OUTPUT_SECTION &&
-                    script_state->output_defined[j] &&
-                    script_state->layout->script_output_start[j] ==
+                    script_state->layout->script_outputs[j].defined &&
+                    script_state->layout->script_outputs[j].start ==
                         binding->value &&
                     script_layout_output_anchor(script_state, j) != SIZE_MAX) {
                     owner = j;
@@ -1556,7 +1558,7 @@ static bool script_layout_finalize_top_symbol_provenance(
         }
         symbol->section = (int)anchor;
         symbol->value = binding->value -
-                        script_state->layout->section_vaddr[anchor];
+                        script_state->layout->work[anchor].vaddr;
     }
     return true;
 }
@@ -1617,41 +1619,13 @@ static bool static_build_script_layout(MiniLdState *state,
         storage_count = 1U;
     }
 
-    layout->section_vaddr =
-        calloc(storage_count,
-               sizeof(*layout->section_vaddr));
-    layout->section_laddr =
-        calloc(storage_count,
-               sizeof(*layout->section_laddr));
-    layout->section_file_offset =
-        malloc((storage_count) *
-               sizeof(*layout->section_file_offset));
-    layout->section_discarded =
-        calloc(storage_count,
-               sizeof(*layout->section_discarded));
+    layout->work = calloc(storage_count, sizeof(*layout->work));
+    layout->script_outputs =
+        calloc(script->command_count == 0U ? 1U : script->command_count,
+               sizeof(*layout->script_outputs));
     script_state.section_placed =
         calloc(storage_count,
                sizeof(*script_state.section_placed));
-    layout->section_owner =
-        malloc((storage_count) *
-               sizeof(*layout->section_owner));
-    layout->script_fill = calloc(script->command_count == 0U ? 1U :
-                                 script->command_count, sizeof(*layout->script_fill));
-    layout->script_have_fill = calloc(script->command_count == 0U ? 1U :
-                                      script->command_count,
-                                      sizeof(*layout->script_have_fill));
-    layout->script_output_start = calloc(script->command_count == 0U ? 1U :
-                                         script->command_count,
-                                         sizeof(*layout->script_output_start));
-    layout->script_output_end = calloc(script->command_count == 0U ? 1U :
-                                       script->command_count,
-                                       sizeof(*layout->script_output_end));
-    layout->script_output_file_base = malloc((script->command_count == 0U ? 1U :
-                                               script->command_count) *
-                                              sizeof(*layout->script_output_file_base));
-    script_state.output_defined =
-        calloc(script->command_count == 0U ? 1U : script->command_count,
-               sizeof(*script_state.output_defined));
     command_deferred =
         calloc(script->command_count == 0U ? 1U : script->command_count,
                sizeof(*command_deferred));
@@ -1660,16 +1634,8 @@ static bool static_build_script_layout(MiniLdState *state,
     owner_remaining = calloc(script->command_count == 0U ? 1U :
                               script->command_count, sizeof(*owner_remaining));
 
-    if (layout->section_vaddr == NULL || layout->section_laddr == NULL ||
-        layout->section_file_offset == NULL ||
-        layout->section_discarded == NULL ||
+    if (layout->work == NULL || layout->script_outputs == NULL ||
         script_state.section_placed == NULL ||
-        layout->section_owner == NULL ||
-        layout->script_fill == NULL || layout->script_have_fill == NULL ||
-        layout->script_output_start == NULL ||
-        layout->script_output_end == NULL ||
-        layout->script_output_file_base == NULL ||
-        script_state.output_defined == NULL ||
         command_deferred == NULL || owner_max_align == NULL ||
         owner_remaining == NULL) {
         fprintf(state->diagnostics,
@@ -1677,12 +1643,12 @@ static bool static_build_script_layout(MiniLdState *state,
         goto done;
     }
 
-    for (i = 0U; i < state->work.count; ++i) {
-        layout->section_file_offset[i] = SIZE_MAX;
-        layout->section_owner[i] = SIZE_MAX;
+    for (i = 0U; i < storage_count; ++i) {
+        layout->work[i].file_offset = SIZE_MAX;
+        layout->work[i].owner_command = SIZE_MAX;
     }
     for (i = 0U; i < script->command_count; ++i) {
-        layout->script_output_file_base[i] = SIZE_MAX;
+        layout->script_outputs[i].file_base = SIZE_MAX;
     }
     script_state.state = state;
     script_state.layout = layout;
@@ -1787,7 +1753,7 @@ static bool static_build_script_layout(MiniLdState *state,
         MiniLdSection *section = &state->work.sections[i];
 
         if (script_state.section_placed[i] ||
-            layout->section_discarded[i]) {
+            layout->work[i].discarded) {
             continue;
         }
         if ((section->flags & SHF_ALLOC) != 0U && section->size != 0U) {
@@ -1797,15 +1763,15 @@ static bool static_build_script_layout(MiniLdState *state,
                     section->size);
             goto done;
         }
-        layout->section_discarded[i] = true;
+        layout->work[i].discarded = true;
         script_state.section_placed[i] = true;
     }
 
     for (i = 0U; i < state->work.count; ++i) {
         MiniLdSection *section = &state->work.sections[i];
-        size_t owner = layout->section_owner[i];
+        size_t owner = layout->work[i].owner_command;
 
-        if (layout->section_discarded[i] ||
+        if (layout->work[i].discarded ||
             (section->flags & SHF_ALLOC) == 0U ||
             section->size == 0U) {
             continue;
@@ -1851,12 +1817,12 @@ static bool static_build_script_layout(MiniLdState *state,
         size_t count = 0U;
         for (i = 0U; i < state->work.count; ++i) {
             const MiniLdSection *section = &state->work.sections[i];
-            if (layout->section_discarded[i] ||
+            if (layout->work[i].discarded ||
                 (section->flags & SHF_ALLOC) == 0U || section->size == 0U) {
                 continue;
             }
-            file_order[count].laddr = layout->section_laddr[i];
-            file_order[count].vaddr = layout->section_vaddr[i];
+            file_order[count].laddr = layout->work[i].laddr;
+            file_order[count].vaddr = layout->work[i].vaddr;
             file_order[count].index = i;
             ++count;
         }
@@ -1871,7 +1837,7 @@ static bool static_build_script_layout(MiniLdState *state,
     for (i = 0U; i < alloc_count; ++i) {
         size_t best = file_order[i].index;
         const MiniLdSection *section = &state->work.sections[best];
-        size_t owner = layout->section_owner[best];
+        size_t owner = layout->work[best].owner_command;
         size_t aligned;
 
         if (!align_up_size(file_cursor,
@@ -1883,23 +1849,23 @@ static bool static_build_script_layout(MiniLdState *state,
             goto done;
         }
         if (owner != SIZE_MAX && owner < script->command_count &&
-            layout->script_output_file_base[owner] != SIZE_MAX) {
+            layout->script_outputs[owner].file_base != SIZE_MAX) {
             uint64_t delta;
             size_t expected;
 
-            if (layout->section_vaddr[best] <
-                    layout->script_output_start[owner] ||
-                layout->section_vaddr[best] -
-                    layout->script_output_start[owner] >
-                    SIZE_MAX - layout->script_output_file_base[owner]) {
+            if (layout->work[best].vaddr <
+                    layout->script_outputs[owner].start ||
+                layout->work[best].vaddr -
+                    layout->script_outputs[owner].start >
+                    SIZE_MAX - layout->script_outputs[owner].file_base) {
                 fprintf(state->diagnostics,
                         "minic-ld: unsupported-script-output-order:%s\n",
                         section->name);
                 goto done;
             }
-            delta = layout->section_vaddr[best] -
-                    layout->script_output_start[owner];
-            expected = layout->script_output_file_base[owner] + (size_t)delta;
+            delta = layout->work[best].vaddr -
+                    layout->script_outputs[owner].start;
+            expected = layout->script_outputs[owner].file_base + (size_t)delta;
             /* An ELF output section has one sh_offset and one sh_addr.
              * Every member therefore needs the SAME file/VMA displacement.
              * Preserve script dot holes as real zero-filled file gaps. */
@@ -1919,9 +1885,9 @@ static bool static_build_script_layout(MiniLdState *state,
                  * VMA now, so later VMA gaps also have correct file gaps. */
                 size_t alignment = (size_t)(owner_max_align[owner] == 0U
                                                ? 1U : owner_max_align[owner]);
-                uint64_t leading = layout->section_vaddr[best] -
-                                   layout->script_output_start[owner];
-                size_t wanted = (size_t)(layout->section_vaddr[best] % alignment);
+                uint64_t leading = layout->work[best].vaddr -
+                                   layout->script_outputs[owner].start;
+                size_t wanted = (size_t)(layout->work[best].vaddr % alignment);
                 size_t have;
                 size_t minimum;
                 if (leading > SIZE_MAX - file_cursor) {
@@ -1944,11 +1910,11 @@ static bool static_build_script_layout(MiniLdState *state,
                             section->name);
                     goto done;
                 }
-                layout->script_output_file_base[owner] =
+                layout->script_outputs[owner].file_base =
                     file_cursor - (size_t)leading;
             }
         }
-        layout->section_file_offset[best] = file_cursor;
+        layout->work[best].file_offset = file_cursor;
         if (section->type != SHT_NOBITS &&
             !add_size(file_cursor, section->size, &file_cursor)) {
             fprintf(state->diagnostics,
@@ -1958,16 +1924,16 @@ static bool static_build_script_layout(MiniLdState *state,
         }
         if (owner != SIZE_MAX && owner < script->command_count &&
             --owner_remaining[owner] == 0U && section->type != SHT_NOBITS) {
-            uint64_t span = layout->script_output_end[owner] -
-                            layout->script_output_start[owner];
+            uint64_t span = layout->script_outputs[owner].end -
+                            layout->script_outputs[owner].start;
             size_t end;
-            if (span > SIZE_MAX - layout->script_output_file_base[owner]) {
+            if (span > SIZE_MAX - layout->script_outputs[owner].file_base) {
                 fprintf(state->diagnostics,
                         "minic-ld: script-output-tail-overflow:%s\n",
                         section->name);
                 goto done;
             }
-            end = layout->script_output_file_base[owner] + (size_t)span;
+            end = layout->script_outputs[owner].file_base + (size_t)span;
             if (end > file_cursor) {
                 file_cursor = end;
             }
@@ -1984,20 +1950,11 @@ done:
     free(owner_remaining);
     free(command_deferred);
     free(script_state.symbol_provenance);
-    free(script_state.output_defined);
     free(script_state.section_placed);
     if (!ok) {
-        free(layout->section_owner);
+        free(layout->work);
+        free(layout->script_outputs);
         free(layout->script_bytes);
-        free(layout->script_output_file_base);
-        free(layout->script_output_end);
-        free(layout->script_output_start);
-        free(layout->script_have_fill);
-        free(layout->script_fill);
-        free(layout->section_discarded);
-        free(layout->section_file_offset);
-        free(layout->section_laddr);
-        free(layout->section_vaddr);
         memset(layout, 0, sizeof(*layout));
     }
     return ok;
@@ -2042,11 +1999,11 @@ static bool shared_validate_vdso_script_phdr_membership(
         const MiniLdSection *section = &state->work.sections[i];
         size_t owner;
 
-        if (section->gc_discarded || layout->section_discarded[i] ||
+        if (section->gc_discarded || layout->work[i].discarded ||
             (section->flags & SHF_ALLOC) == 0U || section->size == 0U) {
             continue;
         }
-        owner = layout->section_owner[i];
+        owner = layout->work[i].owner_command;
         if (owner >= command_count ||
             script->commands[owner].kind != MINILD_SCRIPT_OUTPUT_SECTION ||
             script->commands[owner].value.section.discard) {
@@ -2098,11 +2055,11 @@ static bool shared_validate_vdso_script_phdr_membership(
         unsigned char required_mask = PHDR_TEXT;
         size_t owner;
 
-        if (section->gc_discarded || layout->section_discarded[i] ||
+        if (section->gc_discarded || layout->work[i].discarded ||
             (section->flags & SHF_ALLOC) == 0U || section->size == 0U) {
             continue;
         }
-        owner = layout->section_owner[i];
+        owner = layout->work[i].owner_command;
         if (section->type == SHT_NOTE) {
             required_mask |= PHDR_NOTE;
         }
@@ -2187,12 +2144,12 @@ static bool shared_build_vdso_script_layout(MiniLdState *state,
     for (i = 0U; i < state->work.count; ++i) {
         MiniLdSection *section = &state->work.sections[i];
         uint64_t address;
-        if (layout->section_discarded[i] ||
+        if (layout->work[i].discarded ||
             (section->flags & SHF_ALLOC) == 0U ||
             section->size == 0U) {
             continue;
         }
-        address = layout->section_vaddr[i];
+        address = layout->work[i].vaddr;
         if (address < headers_size ||
             address > SIZE_MAX ||
             section->size > SIZE_MAX - (size_t)address) {
@@ -2201,7 +2158,7 @@ static bool shared_build_vdso_script_layout(MiniLdState *state,
                     section->name);
             return false;
         }
-        layout->section_file_offset[i] = (size_t)address;
+        layout->work[i].file_offset = (size_t)address;
         if (section->type != SHT_NOBITS &&
             end < (size_t)address + section->size) {
             end = (size_t)address + section->size;
@@ -2211,14 +2168,14 @@ static bool shared_build_vdso_script_layout(MiniLdState *state,
      * both zero. The script allocator's temporary packed file bases are
      * replaced above, so the output owner bases must follow suit. */
     for (i = 0U; i < layout->script_command_count; ++i) {
-        if (layout->script_output_file_base[i] != SIZE_MAX) {
-            if (layout->script_output_start[i] > SIZE_MAX) {
+        if (layout->script_outputs[i].file_base != SIZE_MAX) {
+            if (layout->script_outputs[i].start > SIZE_MAX) {
                 fprintf(state->diagnostics,
                         "minic-ld: vdso-output-base-overflow\n");
                 return false;
             }
-            layout->script_output_file_base[i] =
-                (size_t)layout->script_output_start[i];
+            layout->script_outputs[i].file_base =
+                (size_t)layout->script_outputs[i].start;
         }
     }
     layout->have_rx = true;
@@ -2261,12 +2218,12 @@ static bool static_synthesize_array_bound_pair(
         uint64_t section_end;
 
         if ((section->flags & SHF_ALLOC) == 0U ||
-            (layout->section_discarded != NULL &&
-             layout->section_discarded[i]) ||
+            (layout->work != NULL &&
+             layout->work[i].discarded) ||
             !static_section_has_prefix(section->name, section_prefix)) {
             continue;
         }
-        section_start = layout->section_vaddr[i];
+        section_start = layout->work[i].vaddr;
         section_end = section_start + (uint64_t)section->size;
         if (!found || section_start < start) {
             start = section_start;
@@ -2289,10 +2246,10 @@ static bool static_synthesize_array_bound_pair(
                 uint64_t candidate;
 
                 if ((section->flags & SHF_ALLOC) == 0U ||
-                    layout->section_discarded[i]) {
+                    layout->work[i].discarded) {
                     continue;
                 }
-                candidate = layout->section_vaddr[i] +
+                candidate = layout->work[i].vaddr +
                             (uint64_t)section->size;
                 if (candidate > start) {
                     start = candidate;
@@ -2372,11 +2329,11 @@ static bool static_synthesize_gnu_default_boundaries(
         uint64_t section_end;
 
         if ((section->flags & SHF_ALLOC) == 0U ||
-            (layout->section_discarded != NULL &&
-             layout->section_discarded[i])) {
+            (layout->work != NULL &&
+             layout->work[i].discarded)) {
             continue;
         }
-        address = layout->section_vaddr[i];
+        address = layout->work[i].vaddr;
         if ((uint64_t)section->size > UINT64_MAX - address) {
             fprintf(state->diagnostics,
                     "minic-ld: default-symbol-address-overflow\n");
@@ -2466,8 +2423,8 @@ static bool static_need_array_bound_pair(
     for (i = 0U; i < state->work.count; ++i) {
         const MiniLdSection *section = &state->work.sections[i];
         if ((section->flags & SHF_ALLOC) != 0U &&
-            (layout->section_discarded == NULL ||
-             !layout->section_discarded[i]) &&
+            (layout->work == NULL ||
+             !layout->work[i].discarded) &&
             static_section_has_prefix(section->name, section_prefix)) {
             return true;
         }
@@ -2504,29 +2461,10 @@ static bool static_synthesize_runtime_boundaries(
 }
 
 static void minild_layout_destroy(MiniLdLayout *layout) {
-    free(layout->section_vaddr);
-    free(layout->section_laddr);
-    free(layout->section_file_offset);
-    free(layout->section_discarded);
-    free(layout->section_owner);
-    free(layout->script_fill);
-    free(layout->script_have_fill);
+    free(layout->work);
+    free(layout->script_outputs);
     free(layout->script_bytes);
-    free(layout->script_output_file_base);
-    free(layout->script_output_end);
-    free(layout->script_output_start);
-    layout->section_vaddr = NULL;
-    layout->section_laddr = NULL;
-    layout->section_file_offset = NULL;
-    layout->section_discarded = NULL;
-    layout->section_owner = NULL;
-    layout->script_fill = NULL;
-    layout->script_have_fill = NULL;
-    layout->script_bytes = NULL;
-    layout->script_output_file_base = NULL;
-    layout->script_output_end = NULL;
-    layout->script_output_start = NULL;
-    layout->script_command_count = 0U;
+    memset(layout, 0, sizeof(*layout));
 }
 
 static bool static_resolve_symbol(MiniLdState *state,
@@ -2557,14 +2495,14 @@ static bool static_resolve_symbol(MiniLdState *state,
     if (symbol->section < 0 ||
         (size_t)symbol->section >= state->work.count ||
         (state->work.sections[symbol->section].flags & SHF_ALLOC) == 0U ||
-        (layout->section_discarded != NULL &&
-         layout->section_discarded[symbol->section])) {
+        (layout->work != NULL &&
+         layout->work[symbol->section].discarded)) {
         fprintf(state->diagnostics,
                 "minic-ld: unsupported-static-symbol:%s\n",
                 symbol->name);
         return false;
     }
-    *value_out = layout->section_vaddr[symbol->section] + symbol->value;
+    *value_out = layout->work[symbol->section].vaddr + symbol->value;
     return true;
 }
 

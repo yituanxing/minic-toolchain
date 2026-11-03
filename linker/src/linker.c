@@ -1380,7 +1380,6 @@ static int minild_link_static_pipeline(
     const char *entry_symbol;
     uint64_t entry = 0U;
     bool have_script = false;
-    bool layout_ready = false;
     bool ok = false;
     clock_t phase_start = clock();
 
@@ -1442,7 +1441,6 @@ static int minild_link_static_pipeline(
               : static_build_layout(&state, &layout))) {
         goto done;
     }
-    layout_ready = true;
     minild_perf_phase("layout", &phase_start, &state, diagnostics);
 
     if (!static_synthesize_runtime_boundaries(&state, &layout) ||
@@ -1453,9 +1451,7 @@ static int minild_link_static_pipeline(
     minild_perf_phase("relocations", &phase_start, &state, diagnostics);
 
     if (!static_entry_address(&state, &layout, entry_symbol, &entry) ||
-        !minild_output_plan_build(&state, &layout,
-                                  layout.section_file_offset,
-                                  &output_plan) ||
+        !minild_output_plan_build(&state, &layout, &output_plan) ||
         !static_write_executable(&state, &layout, &output_plan,
                                  output_path, entry)) {
         goto done;
@@ -1465,9 +1461,7 @@ static int minild_link_static_pipeline(
 
 done:
     minild_output_plan_destroy(&output_plan);
-    if (layout_ready) {
-        minild_layout_destroy(&layout);
-    }
+    minild_layout_destroy(&layout);
     minild_script_destroy(&script);
     static_got_destroy(&got);
     state_destroy(&state);

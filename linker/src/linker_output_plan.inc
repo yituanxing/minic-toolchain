@@ -66,7 +66,6 @@ static int minild_output_section_compare(const void *left,
 
 static bool minild_output_plan_build(const MiniLdState *state,
                                      const MiniLdLayout *layout,
-                                     const size_t *file_offsets,
                                      MiniLdOutputPlan *plan) {
     size_t *owner_to_output = NULL;
     size_t i;
@@ -86,7 +85,7 @@ static bool minild_output_plan_build(const MiniLdState *state,
         goto done;
     }
     for (i = 0U; i < state->work.count; ++i) {
-        plan->work_file_offsets[i] = file_offsets[i];
+        plan->work_file_offsets[i] = layout->work[i].file_offset;
     }
     if (layout->scripted) {
         size_t count = layout->script_command_count;
@@ -106,12 +105,12 @@ static bool minild_output_plan_build(const MiniLdState *state,
     }
     for (i = 0U; i < state->work.count; ++i) {
         const MiniLdSection *part = &state->work.sections[i];
-        size_t command = layout->scripted && layout->section_owner != NULL
-                             ? layout->section_owner[i] : SIZE_MAX;
+        size_t command = layout->scripted && layout->work != NULL
+                             ? layout->work[i].owner_command : SIZE_MAX;
         MiniLdOutputSection *output = NULL;
 
         if (part->gc_discarded ||
-            (layout->scripted && layout->section_discarded[i])) {
+            (layout->scripted && layout->work[i].discarded)) {
             continue;
         }
         if (command != SIZE_MAX && command < layout->script_command_count &&
@@ -127,10 +126,10 @@ static bool minild_output_plan_build(const MiniLdState *state,
             if (command != SIZE_MAX && command < layout->script_command_count) {
                 owner_to_output[command] = plan->count - 1U;
             }
-            if (command != SIZE_MAX && layout->script_have_fill != NULL &&
-                layout->script_have_fill[command]) {
+            if (command != SIZE_MAX && layout->script_outputs != NULL &&
+                layout->script_outputs[command].have_fill) {
                 output->have_fill = true;
-                output->fill = layout->script_fill[command];
+                output->fill = layout->script_outputs[command].fill;
             }
         }
         if (output->member_count == output->member_capacity) {
@@ -159,10 +158,10 @@ static bool minild_output_plan_build(const MiniLdState *state,
             output->type = part->type;
             output->flags = part->flags;
             output->entsize = part->entsize;
-            output->vaddr = layout->section_vaddr[i];
-            output->laddr = layout->section_laddr[i];
+            output->vaddr = layout->work[i].vaddr;
+            output->laddr = layout->work[i].laddr;
             output->size = part->size;
-            output->file_offset = file_offsets[i];
+            output->file_offset = layout->work[i].file_offset;
             output->have_content = true;
         } else if (part->size != 0U) {
             uint64_t low = output->vaddr;
@@ -170,7 +169,7 @@ static bool minild_output_plan_build(const MiniLdState *state,
             uint64_t end;
             if (part->type != output->type || part->flags != output->flags ||
                 part->entsize != output->entsize ||
-                part->size > UINT64_MAX - layout->section_vaddr[i] ||
+                part->size > UINT64_MAX - layout->work[i].vaddr ||
                 output->size > UINT64_MAX - output->vaddr) {
                 fprintf(state->diagnostics,
                         "minic-ld: unsupported-script-output-type:%s\n",
@@ -178,10 +177,10 @@ static bool minild_output_plan_build(const MiniLdState *state,
                 goto done;
             }
             high = output->vaddr + output->size;
-            end = layout->section_vaddr[i] + part->size;
-            if (layout->section_vaddr[i] < low) {
-                low = layout->section_vaddr[i];
-                output->laddr = layout->section_laddr[i];
+            end = layout->work[i].vaddr + part->size;
+            if (layout->work[i].vaddr < low) {
+                low = layout->work[i].vaddr;
+                output->laddr = layout->work[i].laddr;
             }
             if (end > high) {
                 high = end;
@@ -189,8 +188,8 @@ static bool minild_output_plan_build(const MiniLdState *state,
             output->vaddr = low;
             output->size = high - low;
             if (part->type != SHT_NOBITS &&
-                file_offsets[i] < output->file_offset) {
-                output->file_offset = file_offsets[i];
+                layout->work[i].file_offset < output->file_offset) {
+                output->file_offset = layout->work[i].file_offset;
             }
         }
     }
@@ -204,9 +203,9 @@ static bool minild_output_plan_build(const MiniLdState *state,
         if (layout->scripted && output->command != SIZE_MAX &&
             output->command < layout->script_command_count) {
             size_t command = output->command;
-            uint64_t start = layout->script_output_start[command];
-            uint64_t end = layout->script_output_end[command];
-            size_t file_base = layout->script_output_file_base[command];
+            uint64_t start = layout->script_outputs[command].start;
+            uint64_t end = layout->script_outputs[command].end;
+            size_t file_base = layout->script_outputs[command].file_base;
 
             plan->command_shndx[command] = i + 1U;
             if (end < start || (file_base == SIZE_MAX &&
@@ -268,13 +267,13 @@ static bool minild_output_plan_build(const MiniLdState *state,
             /* A single shdr cannot describe several independent file/VMA
              * displacements; reject any inconsistent span rather than
              * producing an apparently valid but wrong section table. */
-            if (layout->section_vaddr[work] < output->vaddr ||
-                layout->section_laddr[work] < output->laddr ||
-                file_offsets[work] < output->file_offset ||
-                layout->section_vaddr[work] - output->vaddr !=
-                    file_offsets[work] - output->file_offset ||
-                layout->section_laddr[work] - output->laddr !=
-                    layout->section_vaddr[work] - output->vaddr) {
+            if (layout->work[work].vaddr < output->vaddr ||
+                layout->work[work].laddr < output->laddr ||
+                layout->work[work].file_offset < output->file_offset ||
+                layout->work[work].vaddr - output->vaddr !=
+                    layout->work[work].file_offset - output->file_offset ||
+                layout->work[work].laddr - output->laddr !=
+                    layout->work[work].vaddr - output->vaddr) {
                 fprintf(state->diagnostics,
                         "minic-ld: incompatible-script-output-offset:%s\n",
                         output->name);
@@ -348,8 +347,8 @@ static bool minild_output_plan_place_nonalloc(
                 file_offsets[work] = 0U;
                 continue;
             }
-            if (layout->section_vaddr[work] < output->vaddr ||
-                (delta = layout->section_vaddr[work] - output->vaddr) >
+            if (layout->work[work].vaddr < output->vaddr ||
+                (delta = layout->work[work].vaddr - output->vaddr) >
                     SIZE_MAX - base ||
                 !add_size(base + (size_t)delta, part->size, &offset) ||
                 offset > end) {

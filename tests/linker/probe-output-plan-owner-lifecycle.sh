@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# An output-script command can own its own ELF output section even when it
-# selects no input fragment.  Do not make its section identity depend on a
-# synthetic input identity; check bytes, fill, symbols and PT_LOAD mapping.
+# Two consecutive output-script commands can each own an ELF output section
+# even when neither selects an input fragment. Check their bytes, fill,
+# script symbols, inherited LMA and PT_LOAD mapping independently of the
+# implementation's temporary work-section representation.
 # Host-only: MiniAS/MiniLD/Python, with GNU as/ld as an independent x86 oracle.
 set -Eeuo pipefail
 
@@ -38,11 +39,20 @@ OUTPUT_ARCH(riscv)
 ENTRY(_start)
 SECTIONS {
   . = 0x10000;
-  .header : {
+  .header : AT(0x12000) {
+    __hdr_begin = .;
     BYTE(0x11);
     . = . + 0x10;
     BYTE(0x22);
+    __hdr_end = .;
   } = 0x5a
+  .pad : {
+    __pad_begin = .;
+    BYTE(0x33);
+    . = . + 0x04;
+    BYTE(0x44);
+    __pad_end = .;
+  } = 0xa6
   .text : { *(.text.entry) } = 0
 }
 LDS
@@ -92,31 +102,56 @@ def unique(name, kind):
     return matches[0]
 
 header_i, header = unique('.header', 1)
+pad_i, pad = unique('.pad', 1)
 text_i, text = unique('.text', 1)
 if '.text.entry' in by_name:
     raise SystemExit(f'{label}: original input section leaked into ELF output')
-if not (header[2] & 2 and text[2] & 6 == 6 and
-        header[5] == 0x12 and header[3] + header[5] <= text[3]):
-    raise SystemExit(f'{label}: wrong section flags, VMA or header span')
-expected = b'\x11' + b'\x5a' * 0x10 + b'\x22'
-if section_bytes(header) != expected:
-    raise SystemExit(f'{label}: pure-script section fill/bytes mismatch '
-                     f'got={section_bytes(header).hex()} expected={expected.hex()}')
+expected_header = b'\x11' + b'\x5a' * 0x10 + b'\x22'
+expected_pad = b'\x33' + b'\xa6' * 4 + b'\x44'
+if not (header_i < pad_i < text_i and
+        header[2] & 2 and pad[2] & 2 and text[2] & 6 == 6 and
+        header[3] == 0x10000 and header[5] == len(expected_header) and
+        pad[3] == header[3] + header[5] and pad[5] == len(expected_pad) and
+        text[3] == pad[3] + pad[5]):
+    raise SystemExit(f'{label}: wrong output section identities/VMA/size')
+for name, section, expected in (('.header', header, expected_header),
+                                ('.pad', pad, expected_pad)):
+    actual = section_bytes(section)
+    if actual != expected:
+        raise SystemExit(f'{label}: {name} script fill/bytes mismatch '
+                         f'got={actual.hex()} expected={expected.hex()}')
+for section in (pad, text):
+    if section[3] - header[3] != section[4] - header[4]:
+        raise SystemExit(f'{label}: output section file offset/VMA drift')
 
 symtab_i, symtab = unique('.symtab', 2)
 strtab_i, strtab = unique('.strtab', 3)
 if symtab[6] != strtab_i or symtab[9] != 24 or symtab[5] % 24:
     raise SystemExit(f'{label}: invalid symtab ownership')
 strings = section_bytes(strtab)
-found = None
+symbols = {}
 for pos in range(symtab[4], symtab[4] + symtab[5], 24):
     name, info, other, shndx, value, size = struct.unpack_from('<IBBHQQ', data, pos)
-    if name and string(strings, name) == '_start':
-        if found is not None:
-            raise SystemExit(f'{label}: duplicate _start')
-        found = (shndx, value, size)
-if found is None or found[0] != text_i or not text[3] <= found[1] < text[3] + text[5]:
-    raise SystemExit(f'{label}: _start points at wrong output section: {found}')
+    if name:
+        key = string(strings, name)
+        if key in symbols:
+            raise SystemExit(f'{label}: duplicate {key}')
+        symbols[key] = (shndx, value, size)
+for name, index, address in (
+    ('__hdr_begin', header_i, header[3]),
+    ('__hdr_end', header_i, header[3] + header[5]),
+    ('__pad_begin', pad_i, pad[3]),
+    ('__pad_end', pad_i, pad[3] + pad[5]),
+    ('_start', text_i, text[3]),
+):
+    found = symbols.get(name)
+    if found is None or found[:2] != (index, address):
+        raise SystemExit(f'{label}: {name} expected section={index} '
+                         f'address=0x{address:x}, got {found}')
+# __pad_end is exactly the start of the following .text, but retains its
+# original command's output-section identity instead of moving to .text.
+if symbols['__pad_end'][1] != symbols['_start'][1] or pad_i == text_i:
+    raise SystemExit(f'{label}: boundary script symbol identity lost')
 
 phoff = struct.unpack_from('<Q', data, 32)[0]
 phentsize, phnum = struct.unpack_from('<HH', data, 54)
@@ -133,18 +168,21 @@ def require_load(sh):
         ptype, flags, fileoff, vaddr, paddr, filesz, memsz, align = p
         if (vaddr <= sh[3] and sh[3] + sh[5] <= vaddr + memsz and
                 fileoff <= sh[4] and sh[4] + sh[5] <= fileoff + filesz and
-                sh[3] - vaddr == sh[4] - fileoff):
+                sh[3] - vaddr == sh[4] - fileoff and
+                paddr - vaddr == 0x2000):
             return
-    raise SystemExit(f'{label}: output section not file/VMA mapped by PT_LOAD: {sh}')
+    raise SystemExit(f'{label}: section not file/VMA/LMA mapped by PT_LOAD: {sh}')
 
 require_load(header)
+require_load(pad)
 require_load(text)
-if not text[4] > header[4] or found[1] != text[3]:
-    raise SystemExit(f'{label}: output order or _start address changed')
+if not header[4] < pad[4] < text[4]:
+    raise SystemExit(f'{label}: physical file output order changed')
 
 print(f'MINILD_OUTPUT_PLAN_OWNER_CHECK=PASS case={label} machine={machine}'
-      f' header_shndx={header_i} text_shndx={text_i}'
-      f' pure_bytes={len(expected)} loads={len(loads)}')
+      f' pure_shndx={header_i},{pad_i} text_shndx={text_i}'
+      f' pure_bytes={len(expected_header)},{len(expected_pad)}'
+      f' script_symbols=4 lma_delta=0x2000 loads={len(loads)}')
 PY
 
 gnu_oracle=INCONCLUSIVE

@@ -26,10 +26,10 @@ static bool static_apply_relocations(MiniLdState *state,
 
         if (layout->scripted &&
             ((section->flags & SHF_ALLOC) == 0U ||
-             layout->section_discarded[reloc->section])) {
+             layout->work[reloc->section].discarded)) {
             continue;
         }
-        uint64_t place = layout->section_vaddr[reloc->section] + reloc->offset;
+        uint64_t place = layout->work[reloc->section].vaddr + reloc->offset;
         int64_t target;
         int64_t delta;
 
@@ -107,7 +107,7 @@ static bool static_apply_relocations(MiniLdState *state,
                 free(pcrel);
                 return false;
             }
-            got_address = layout->section_vaddr[got->section] +
+            got_address = layout->work[got->section].vaddr +
                           (uint64_t)got->slot_offsets[reloc->symbol];
             delta = (int64_t)got_address - (int64_t)place;
             if (!static_patch_utype(section,

@@ -30,8 +30,8 @@ static bool minild_final_tls_base_address(const MiniLdState *state,
             plan->work_shndx[i] == 0U) {
             continue;
         }
-        if (layout->section_vaddr[i] < base) {
-            base = layout->section_vaddr[i];
+        if (layout->work[i].vaddr < base) {
+            base = layout->work[i].vaddr;
         }
     }
     *present_out = base != UINT64_MAX;
@@ -155,28 +155,28 @@ static bool minild_final_symbols_build_with_version(
                          * not the section VMA (ET_EXEC and ET_DYN alike). */
                         if (!have_tls ||
                             (state->work.sections[section].flags & SHF_TLS) == 0U ||
-                            layout->section_vaddr[section] < tls_base ||
+                            layout->work[section].vaddr < tls_base ||
                             source->value > UINT64_MAX -
-                                (layout->section_vaddr[section] - tls_base)) {
+                                (layout->work[section].vaddr - tls_base)) {
                             fprintf(state->diagnostics,
                                     "minic-ld: invalid-final-tls-symbol:%s\n",
                                     source->name);
                             return false;
                         }
                         output->st_value =
-                            layout->section_vaddr[section] - tls_base +
+                            layout->work[section].vaddr - tls_base +
                             source->value;
                     } else if ((state->work.sections[section].flags &
                                 SHF_ALLOC) != 0U) {
                         output->st_value =
-                            layout->section_vaddr[section] + source->value;
+                            layout->work[section].vaddr + source->value;
                     } else {
                         /* sh_addr is zero for non-ALLOC output sections.
                          * An input symbol must still include the fragment's
                          * displacement in its merged output section. */
                         const MiniLdOutputSection *owner =
                             &plan->sections[plan->work_shndx[section] - 1U];
-                        uint64_t start = layout->section_vaddr[section];
+                        uint64_t start = layout->work[section].vaddr;
                         if (start < owner->vaddr ||
                             source->value > UINT64_MAX -
                                 (start - owner->vaddr)) {

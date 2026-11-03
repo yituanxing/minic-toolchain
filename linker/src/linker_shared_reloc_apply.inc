@@ -35,7 +35,7 @@ static bool shared_nonalloc_output_offset(const MiniLdState *state,
                 "minic-ld: invalid-shared-nonalloc-section\n");
         return false;
     }
-    start = layout->section_vaddr[section];
+    start = layout->work[section].vaddr;
     base = output_plan->sections[shndx - 1U].vaddr;
     if (start < base || offset > UINT64_MAX - (start - base)) {
         fprintf(state->diagnostics,
@@ -168,7 +168,7 @@ static bool shared_fill_relocations(MiniLdState *state,
         }
         memset(&output, 0, sizeof(output));
         output.r_offset =
-            layout->section_vaddr[shared->got_section] + (uint64_t)offset;
+            layout->work[shared->got_section].vaddr + (uint64_t)offset;
         if (target->section != MINILD_SECTION_UNDEF &&
             !shared->preemptible[i]) {
             uint64_t target_value;
@@ -307,7 +307,7 @@ static bool shared_fill_relocations(MiniLdState *state,
 
         memset(&output, 0, sizeof(output));
         output.r_offset =
-            layout->section_vaddr[input->section] + input->offset;
+            layout->work[input->section].vaddr + input->offset;
         if (target->section != MINILD_SECTION_UNDEF &&
             !shared->preemptible[input->symbol]) {
             uint64_t target_value;
@@ -356,7 +356,7 @@ static bool shared_fill_relocations(MiniLdState *state,
             return false;
         }
         slot_address =
-            layout->section_vaddr[shared->got_section] + (uint64_t)offset;
+            layout->work[shared->got_section].vaddr + (uint64_t)offset;
 
         memset(&output, 0, sizeof(output));
         output.r_offset = slot_address;
@@ -488,7 +488,7 @@ static bool shared_patch_final_layout_relocations(
                 return false;
             }
         } else {
-            place = layout->section_vaddr[reloc->section] + reloc->offset;
+            place = layout->work[reloc->section].vaddr + reloc->offset;
         }
         target = (int64_t)symbol_value + reloc->addend;
 
@@ -507,7 +507,7 @@ static bool shared_patch_final_layout_relocations(
             }
             offset = shared->got_slot_offset[reloc->symbol];
             got_address =
-                layout->section_vaddr[shared->got_section] + (uint64_t)offset;
+                layout->work[shared->got_section].vaddr + (uint64_t)offset;
             delta = (int64_t)got_address - (int64_t)place;
             if (!static_patch_utype(source,
                                     reloc->offset,
@@ -535,7 +535,7 @@ static bool shared_patch_final_layout_relocations(
                 return false;
             }
             descriptor =
-                layout->section_vaddr[shared->got_section] +
+                layout->work[shared->got_section].vaddr +
                 (uint64_t)shared->tls_gd_offset[reloc->symbol];
             delta = (int64_t)descriptor + reloc->addend - (int64_t)place;
             if (!static_patch_utype(source,
@@ -744,8 +744,8 @@ static bool shared_finalize_plt_and_calls(MiniLdState *state,
     plt = &state->work.sections[shared->plt_section];
     gotplt = &state->work.sections[shared->gotplt_section];
     rela_plt = &state->work.sections[shared->rela_plt_section];
-    plt_address = layout->section_vaddr[shared->plt_section];
-    gotplt_address = layout->section_vaddr[shared->gotplt_section];
+    plt_address = layout->work[shared->plt_section].vaddr;
+    gotplt_address = layout->work[shared->gotplt_section].vaddr;
 
     if (shared->plt_count != 0U &&
         (plt->size != shared->plt_count * 16U ||
@@ -880,7 +880,7 @@ static bool shared_finalize_plt_and_calls(MiniLdState *state,
         destination = (uint64_t)((int64_t)destination + reloc->addend);
 
         delta = (int64_t)destination -
-                (int64_t)(layout->section_vaddr[reloc->section] +
+                (int64_t)(layout->work[reloc->section].vaddr +
                           reloc->offset);
         if (!static_patch_utype(source,
                                 reloc->offset,

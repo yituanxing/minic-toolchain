@@ -848,7 +848,7 @@ static bool shared_fill_dynsym(MiniLdState *state,
                                                     &tls_base,
                                                     &tls_present) ||
                     !tls_present ||
-                    layout->section_vaddr[input->section] + input->value <
+                    layout->work[input->section].vaddr + input->value <
                         tls_base) {
                     fprintf(state->diagnostics,
                             "minic-ld: invalid-shared-tls-symbol:%s\n",
@@ -856,11 +856,11 @@ static bool shared_fill_dynsym(MiniLdState *state,
                     return false;
                 }
                 output.st_value =
-                    layout->section_vaddr[input->section] +
+                    layout->work[input->section].vaddr +
                     input->value - tls_base;
             } else {
                 output.st_value =
-                    layout->section_vaddr[input->section] + input->value;
+                    layout->work[input->section].vaddr + input->value;
             }
         } else {
             fprintf(state->diagnostics,
@@ -987,21 +987,21 @@ static bool shared_fill_dynamic(MiniLdState *state,
     } while (0)
 
     memset(dynamic->data, 0, dynamic->size);
-    MINILD_DYN(DT_HASH, layout->section_vaddr[shared->hash_section]);
+    MINILD_DYN(DT_HASH, layout->work[shared->hash_section].vaddr);
     if (shared->have_gnu_hash) {
-        MINILD_DYN(DT_GNU_HASH, layout->section_vaddr[shared->gnu_hash_section]);
+        MINILD_DYN(DT_GNU_HASH, layout->work[shared->gnu_hash_section].vaddr);
     }
     if (shared->version_script != NULL) {
-        MINILD_DYN(DT_VERSYM, layout->section_vaddr[shared->versym_section]);
-        MINILD_DYN(DT_VERDEF, layout->section_vaddr[shared->verdef_section]);
+        MINILD_DYN(DT_VERSYM, layout->work[shared->versym_section].vaddr);
+        MINILD_DYN(DT_VERDEF, layout->work[shared->verdef_section].vaddr);
         MINILD_DYN(DT_VERDEFNUM, 2U);
     }
-    MINILD_DYN(DT_STRTAB, layout->section_vaddr[shared->dynstr_section]);
-    MINILD_DYN(DT_SYMTAB, layout->section_vaddr[shared->dynsym_section]);
+    MINILD_DYN(DT_STRTAB, layout->work[shared->dynstr_section].vaddr);
+    MINILD_DYN(DT_SYMTAB, layout->work[shared->dynsym_section].vaddr);
     MINILD_DYN(DT_STRSZ, state->work.sections[shared->dynstr_section].size);
     MINILD_DYN(DT_SYMENT, sizeof(Elf64_Sym));
     if (shared->rela_count != 0U) {
-        MINILD_DYN(DT_RELA, layout->section_vaddr[shared->rela_section]);
+        MINILD_DYN(DT_RELA, layout->work[shared->rela_section].vaddr);
         MINILD_DYN(DT_RELASZ, state->work.sections[shared->rela_section].size);
         MINILD_DYN(DT_RELAENT, sizeof(Elf64_Rela));
     }
@@ -1014,10 +1014,10 @@ static bool shared_fill_dynamic(MiniLdState *state,
 #endif
     }
     if (shared->plt_count != 0U) {
-        MINILD_DYN(DT_PLTGOT, layout->section_vaddr[shared->gotplt_section]);
+        MINILD_DYN(DT_PLTGOT, layout->work[shared->gotplt_section].vaddr);
         MINILD_DYN(DT_PLTRELSZ, state->work.sections[shared->rela_plt_section].size);
         MINILD_DYN(DT_PLTREL, DT_RELA);
-        MINILD_DYN(DT_JMPREL, layout->section_vaddr[shared->rela_plt_section]);
+        MINILD_DYN(DT_JMPREL, layout->work[shared->rela_plt_section].vaddr);
         MINILD_DYN(DT_BIND_NOW, 0U);
     }
     {
@@ -1088,7 +1088,7 @@ static bool shared_tls_segment(const MiniLdState *state,
          * agree with the final TLS-symbol view, but do not emit PT_TLS
          * when every surviving TLS fragment is empty. */
         have_nonempty |= section->size != 0U;
-        start = layout->section_vaddr[i];
+        start = layout->work[i].vaddr;
         if (section->size > UINT64_MAX - start) {
             return false;
         }
@@ -1103,7 +1103,7 @@ static bool shared_tls_segment(const MiniLdState *state,
             alignment = section->align;
         }
         if (section->type != SHT_NOBITS && section->size != 0U) {
-            if (layout->section_file_offset[i] == SIZE_MAX) {
+            if (layout->work[i].file_offset == SIZE_MAX) {
                 return false;
             }
             if (!have_file || end > file_end) {
@@ -1201,7 +1201,7 @@ static bool minild_shared_program_plan_build(
         const MiniLdSection *interp;
 
         if (shared->interp_section >= state->work.count ||
-            layout->section_file_offset[shared->interp_section] == SIZE_MAX) {
+            layout->work[shared->interp_section].file_offset == SIZE_MAX) {
             fprintf(state->diagnostics,
                     "minic-ld: invalid-pie-interpreter-layout\n");
             goto failed;
@@ -1209,8 +1209,8 @@ static bool minild_shared_program_plan_build(
         interp = &state->work.sections[shared->interp_section];
         ph->p_type = PT_INTERP;
         ph->p_flags = PF_R;
-        ph->p_offset = layout->section_file_offset[shared->interp_section];
-        ph->p_vaddr = layout->section_vaddr[shared->interp_section];
+        ph->p_offset = layout->work[shared->interp_section].file_offset;
+        ph->p_vaddr = layout->work[shared->interp_section].vaddr;
         ph->p_paddr = ph->p_vaddr;
         ph->p_filesz = interp->size;
         ph->p_memsz = interp->size;
@@ -1264,7 +1264,7 @@ static bool minild_shared_program_plan_build(
     {
         Elf64_Phdr *ph = &programs[program_index++];
         MiniLdSection *dynamic = &state->work.sections[shared->dynamic_section];
-        size_t offset = layout->section_file_offset[shared->dynamic_section];
+        size_t offset = layout->work[shared->dynamic_section].file_offset;
 
         if (offset == SIZE_MAX) {
             fprintf(state->diagnostics,
@@ -1274,7 +1274,7 @@ static bool minild_shared_program_plan_build(
         ph->p_type = PT_DYNAMIC;
         ph->p_flags = shared->layout_script != NULL ? PF_R : PF_R | PF_W;
         ph->p_offset = offset;
-        ph->p_vaddr = layout->section_vaddr[shared->dynamic_section];
+        ph->p_vaddr = layout->work[shared->dynamic_section].vaddr;
         ph->p_paddr = ph->p_vaddr;
         ph->p_filesz = dynamic->size;
         ph->p_memsz = dynamic->size;
@@ -1289,11 +1289,11 @@ static bool minild_shared_program_plan_build(
         uint64_t note_end = 0U;
         for (i = 0U; i < state->work.count; ++i) {
             const MiniLdSection *section = &state->work.sections[i];
-            size_t offset = layout->section_file_offset[i];
-            uint64_t address = layout->section_vaddr[i];
+            size_t offset = layout->work[i].file_offset;
+            uint64_t address = layout->work[i].vaddr;
             if (section->type != SHT_NOTE ||
                 (section->flags & SHF_ALLOC) == 0U ||
-                layout->section_discarded[i] || section->size == 0U) {
+                layout->work[i].discarded || section->size == 0U) {
                 continue;
             }
             if (offset == SIZE_MAX ||
@@ -1340,14 +1340,14 @@ static bool minild_shared_program_plan_build(
         if (shared->have_eh_frame_hdr) {
             size_t h = shared->eh_frame_hdr_section;
             if (h >= state->work.count ||
-                layout->section_file_offset[h] == SIZE_MAX) {
+                layout->work[h].file_offset == SIZE_MAX) {
                 fprintf(state->diagnostics,
                         "minic-ld: missing-eh-frame-hdr-file-offset\n");
                 goto failed;
             }
             ph->p_flags = PF_R;
-            ph->p_offset = layout->section_file_offset[h];
-            ph->p_vaddr = layout->section_vaddr[h];
+            ph->p_offset = layout->work[h].file_offset;
+            ph->p_vaddr = layout->work[h].vaddr;
             ph->p_paddr = ph->p_vaddr;
             ph->p_filesz = state->work.sections[h].size;
             ph->p_memsz = ph->p_filesz;
@@ -1572,7 +1572,7 @@ static bool shared_script_validate_discarded_alloc(
     for (i = 0U; i < state->work.count; ++i) {
         const MiniLdSection *section = &state->work.sections[i];
 
-        if (layout->section_discarded[i] &&
+        if (layout->work[i].discarded &&
             (section->flags & SHF_ALLOC) != 0U &&
             section->size != 0U) {
             fprintf(state->diagnostics,
@@ -1617,7 +1617,6 @@ int minild_link_shared_elf64_riscv_inputs_options(
     MiniLdScript layout_script;
     const MiniLdScript *version = NULL;
     uint64_t entry = 0U;
-    bool layout_ready = false;
     bool ok = false;
 
     if (output_path == NULL || inputs == NULL || input_count == 0U ||
@@ -1693,7 +1692,6 @@ int minild_link_shared_elf64_riscv_inputs_options(
               : shared_build_layout(&state, &layout))) {
         goto done;
     }
-    layout_ready = true;
     if (script_path != NULL &&
         !shared_script_validate_discarded_alloc(&state, &layout)) {
         goto done;
@@ -1706,8 +1704,7 @@ int minild_link_shared_elf64_riscv_inputs_options(
         goto done;
     }
 
-    if (!minild_output_plan_build(&state, &layout,
-                                  layout.section_file_offset, &output_plan) ||
+    if (!minild_output_plan_build(&state, &layout, &output_plan) ||
         !shared_finalize_ehdr_symbol(&state, &layout) ||
         (entry_symbol != NULL &&
          !static_entry_address(&state, &layout, entry_symbol, &entry)) ||
@@ -1733,9 +1730,7 @@ int minild_link_shared_elf64_riscv_inputs_options(
 
 done:
     minild_output_plan_destroy(&output_plan);
-    if (layout_ready || layout.section_vaddr != NULL) {
-        minild_layout_destroy(&layout);
-    }
+    minild_layout_destroy(&layout);
     shared_image_destroy(&shared);
     state_destroy(&state);
     minild_script_destroy(&version_script);

@@ -153,7 +153,7 @@ static bool minild_eh_scan(MiniLdState *state,
             if (layout != NULL) {
                 /* The existing final-layout R_RISCV_32_PCREL pass has
                  * already resolved the signed PC-relative FDE address. */
-                uint64_t location = layout->section_vaddr[section_index] +
+                uint64_t location = layout->work[section_index].vaddr +
                                     (uint64_t)(off + 8U);
                 disp = (int32_t)load_u32le(bytes + off + 8U);
                 if (location > (uint64_t)INT64_MAX ||
@@ -161,7 +161,7 @@ static bool minild_eh_scan(MiniLdState *state,
                     goto invalid;
                 }
                 pc = (uint64_t)((int64_t)location + disp);
-                fde = layout->section_vaddr[section_index] + (uint64_t)off;
+                fde = layout->work[section_index].vaddr + (uint64_t)off;
                 if (count >= capacity || result == NULL) {
                     goto invalid;
                 }
@@ -253,7 +253,7 @@ static bool minild_eh_fill(MiniLdState *state,
         return true;
     }
     header = &state->work.sections[shared->eh_frame_hdr_section];
-    base = layout->section_vaddr[shared->eh_frame_hdr_section];
+    base = layout->work[shared->eh_frame_hdr_section].vaddr;
     index = calloc(shared->eh_frame_fde_count == 0U
                    ? 1U : shared->eh_frame_fde_count, sizeof(*index));
     if (index == NULL) {
@@ -263,12 +263,12 @@ static bool minild_eh_fill(MiniLdState *state,
         size_t part_count;
 
         if (!minild_eh_source_section(&state->work.sections[i]) ||
-            (layout->section_discarded != NULL &&
-             layout->section_discarded[i])) {
+            (layout->work != NULL &&
+             layout->work[i].discarded)) {
             continue;
         }
-        if (layout->section_vaddr[i] < frame) {
-            frame = layout->section_vaddr[i];
+        if (layout->work[i].vaddr < frame) {
+            frame = layout->work[i].vaddr;
         }
         if (!minild_eh_scan(state, i, layout, index + count,
                             shared->eh_frame_fde_count - count,
