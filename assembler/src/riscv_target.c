@@ -1275,6 +1275,7 @@ static const MiniAsTargetOps riscv_ops = {
     .parse_mcinst = minias_riscv_parse_mcinst,
     .measure_mcinst = minias_riscv_measure_mcinst,
     .encode = minias_riscv_encode,
+    .instruction_may_link_relax=minias_riscv_instruction_may_link_relax,
     .plan_instruction_relaxation = riscv_plan_instruction_relaxation,
     .plan_code_alignment=riscv_plan_code_alignment,
     .supports_link_relax_cli=true,

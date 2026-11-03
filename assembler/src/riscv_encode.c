@@ -2349,6 +2349,32 @@ static bool rv_fixup_allows_link_relaxation(MiniAsFixupKind kind) {
     }
 }
 
+/* Pre-emission counterpart to the exact fixup marker list. Only the Target
+ * can interpret retained MC opcodes and its lexical .option snapshot;
+ * Common needs merely a conservative yes/no to protect local DATA/LLA
+ * constants from later linker byte deletion. */
+bool minias_riscv_instruction_may_link_relax(
+    const MiniAsInstructionView *stmt) {
+    const MiniAsMCInstView *m=stmt!=NULL?stmt->inst:NULL;
+    if(m==NULL || (stmt->site.mode_bits & MINIAS_RISCV_OPTION_MARK_RELAX)==0U)
+        return false;
+    switch(m->opcode) {
+    case RV_MC_CALL:
+    case RV_MC_TAIL:
+    case RV_MC_LA:
+    case RV_MC_SYMBOL_LOAD:
+    case RV_MC_SYMBOL_STORE:
+        return true;
+    case RV_MC_U:
+    case RV_MC_I:
+    case RV_MC_LOAD:
+    case RV_MC_STORE:
+        return m->target_form!=RV_ABS_RELOC_NONE;
+    default:
+        return false;
+    }
+}
+
 /* A primary relocation and its zero-width STN_UNDEF=0 RELAX companion are
  * one MCInst transaction. The immutable site state, not the final mutable
  * TargetContext, determines which source instructions opted into GNU linker
@@ -2421,6 +2447,7 @@ static bool rv_encode_multi_mc(MiniAsEncodeContext *ctx, const MiniAsInstruction
         bool use_got;
         bool pic_la;
         bool local_delta_known = false;
+        bool intervening_link_relaxation = false;
         int64_t local_hi = 0, local_lo = 0;
         if (expr == NULL) {
             minias_encode_ctx_error(ctx, "internal:riscv-la-symbol-missing");
@@ -2473,7 +2500,24 @@ static bool rv_encode_multi_mc(MiniAsEncodeContext *ctx, const MiniAsInstruction
                 local_delta_known = true;
                 local_hi = hi;
                 local_lo = lo;
-                if ((state->options & MINIAS_RISCV_OPTION_MARK_RELAX)==0U)
+                /* The terminal .option norelax cannot undo a previous
+                 * source site's R_RISCV_RELAX or R_RISCV_ALIGN.  A CALL
+                 * between this AUIPC and the local target may shrink at
+                 * final link and invalidate an assembler-folded delta.
+                 * Common scans immutable sites in *final Section order*,
+                 * including subsection-reordered fragments. */
+                if (!minias_encode_ctx_span_may_link_relax(ctx,
+                        stmt->section,
+                        target->value>stmt->offset?
+                            (stmt->offset<=UINT64_MAX-stmt->size?
+                             stmt->offset+stmt->size:UINT64_MAX):stmt->offset,
+                        target->value,
+                        &intervening_link_relaxation)) {
+                    minias_encode_ctx_error(ctx,"riscv-local-la-span-invalid");
+                    return false;
+                }
+                if ((state->options & MINIAS_RISCV_OPTION_MARK_RELAX)==0U &&
+                    !intervening_link_relaxation)
                     return append_u32(ctx,
                                       0x17U | ((uint32_t)rd << 7U) |
                                       (((uint32_t)hi & 0xfffffU) << 12U)) &&

@@ -43,12 +43,22 @@ static bool fragment_has_deferred_data(const MiniAsStmt *stmt) {
 /* Common MCLayout subsystem. Fragment identities are immutable; Target
  * hooks give ISA instruction widths and relaxation ranges. */
 
+typedef struct MiniAsLinkRelaxSite {
+    int section;
+    uint64_t offset;
+} MiniAsLinkRelaxSite;
+
 struct MiniAsLayoutState {
     MiniAsSubsection *subsections;
     size_t subsection_count, subsection_capacity;
     size_t *subsection_slots;
     size_t subsection_slot_capacity;
     struct MiniAsAnchorGraph *anchor_graph;
+    /* Derived, read-only emission-time index. A fold queries it O(log N),
+     * avoiding an O(N^2) scan on large kernel MCExpr source files. */
+    MiniAsLinkRelaxSite *link_relax_sites;
+    size_t link_relax_site_count;
+    bool link_relax_sites_ready;
 };
 
 bool minias_layout_init(MiniAs *as) {
@@ -475,6 +485,7 @@ void minias_layout_destroy(MiniAs *as) {
     free_anchor_graph(as->layout->anchor_graph);
     free(as->layout->subsections);
     free(as->layout->subsection_slots);
+    free(as->layout->link_relax_sites);
     free(as->layout);
     as->layout=NULL;
 }
@@ -899,6 +910,13 @@ static bool minias_relayout_fragments(MiniAs *as, bool *org_changed) {
     size_t i;
     bool changed=false, placement_changed=false;
 
+    /* Invalidate only derived positions; the semantic Fragment graph stays
+     * owned by MCLayout and is not copied into the linker-motion cache. */
+    free(as->layout->link_relax_sites);
+    as->layout->link_relax_sites=NULL;
+    as->layout->link_relax_site_count=0U;
+    as->layout->link_relax_sites_ready=false;
+
     if(!minias_scan_fragment_layout(as,&placement_changed))return false;
     graph=(MiniAsAnchorGraph *)as->layout->anchor_graph;
     if(graph==NULL) {
@@ -1035,6 +1053,89 @@ static bool minias_resolve_deferred_data(MiniAs *as) {
     return false;
 }
 
+/* Before any instruction has been emitted, a local PC-relative fold still
+ * needs to know whether an *intervening* source site may later shrink at
+ * link. Inspect final Section offsets rather than lexical source order:
+ * numbered subsections can reorder a CALL and its target label. TargetInfo
+ * recognizes its own typed candidate instructions; Common recognizes the
+ * one generic linker-relaxable ALIGN Fragment and owns the Section scan. */
+static int compare_link_relax_sites(const void *left,const void *right) {
+    const MiniAsLinkRelaxSite *a=left,*b=right;
+    if(a->section!=b->section)return a->section<b->section?-1:1;
+    if(a->offset!=b->offset)return a->offset<b->offset?-1:1;
+    return 0;
+}
+
+static bool index_possible_link_relax_sites(MiniAs *as) {
+    MiniAsLayoutState *layout=as->layout;
+    size_t count=0U,i;
+    MiniAsLinkRelaxSite *sites;
+    if(layout->link_relax_sites_ready)return true;
+    if(as->stmt_count>SIZE_MAX/sizeof(*sites)) {
+        minias_set_error(as,"link-relax-site-index-overflow");
+        return false;
+    }
+    sites=as->stmt_count!=0U?
+        malloc(as->stmt_count*sizeof(*sites)):NULL;
+    if(as->stmt_count!=0U && sites==NULL) {
+        minias_set_error(as,"out-of-memory:link-relax-site-index");
+        return false;
+    }
+    for(i=0U;i<as->stmt_count;++i) {
+        const MiniAsStmt *stmt=&as->stmts[i];
+        if(stmt->size==0U)continue;
+        if(stmt->fragment_kind==MINIAS_FRAGMENT_ALIGNMENT) {
+            if(!stmt->payload.alignment.linker_relaxable)continue;
+        }else if(stmt->fragment_kind==MINIAS_FRAGMENT_INSTRUCTION) {
+            const MiniAsMCInst *mc=stmt->payload.instruction.inst;
+            const size_t n=mc!=NULL && mc->count<=mc->capacity?
+                           mc->count:0U;
+            MiniAsMCOperandView operands[n?n:1U];
+            MiniAsMCInstView instruction;
+            MiniAsInstructionView snapshot;
+            if(as->target->instruction_may_link_relax==NULL)continue;
+            if(!minias_project_instruction(stmt,&snapshot,&instruction,
+                                           operands,n)) {
+                free(sites);
+                minias_set_error(as,"invalid-link-relax-instruction-view");
+                return false;
+            }
+            if(!as->target->instruction_may_link_relax(&snapshot))continue;
+        }else continue;
+        sites[count++]=(MiniAsLinkRelaxSite){stmt->section,stmt->offset};
+    }
+    if(count>1U)qsort(sites,count,sizeof(*sites),compare_link_relax_sites);
+    layout->link_relax_sites=sites;
+    layout->link_relax_site_count=count;
+    layout->link_relax_sites_ready=true;
+    return true;
+}
+
+bool minias_span_may_link_relax(MiniAs *as,int section,
+                               uint64_t first,uint64_t last,bool *crosses) {
+    uint64_t begin=first<last?first:last;
+    uint64_t end=first>last?first:last;
+    size_t lo=0U,hi;
+    if(as==NULL || crosses==NULL || section<0 ||
+       (size_t)section>=as->section_count)return false;
+    *crosses=false;
+    if(begin==end)return true;
+    if(!index_possible_link_relax_sites(as))return false;
+    hi=as->layout->link_relax_site_count;
+    while(lo<hi) {
+        size_t mid=lo+(hi-lo)/2U;
+        const MiniAsLinkRelaxSite *site=&as->layout->link_relax_sites[mid];
+        if(site->section<section ||
+           (site->section==section && site->offset<begin))lo=mid+1U;
+        else hi=mid;
+    }
+    if(lo<as->layout->link_relax_site_count) {
+        const MiniAsLinkRelaxSite *site=&as->layout->link_relax_sites[lo];
+        *crosses=site->section==section && site->offset<end;
+    }
+    return true;
+}
+
 /* GNU link relaxation can change the distance between two already-defined
  * anchors. TargetInfo identifies which emitted relocation *permits* code
  * shrinking; Common checks the final fragment-owned fixup graph and stable
@@ -1083,10 +1184,18 @@ bool minias_span_has_linker_relaxation(MiniAs *as,size_t from_symbol,
  * stable AST SymbolIDs, not a replay of the GNU source spelling. */
 bool minias_emit_deferred_leb_relocations(MiniAs *as) {
     const unsigned mode=as->target->leb128_reloc_mode;
+    bool final_mode_allows_relocations=true;
     size_t i;
     if(mode==0U)return true;
     if(as->target->leb128_relocations_enabled!=NULL &&
-       !as->target->leb128_relocations_enabled(minias_target_abi_view(as)))return true;
+       !as->target->leb128_relocations_enabled(minias_target_abi_view(as)))
+        final_mode_allows_relocations=false;
+    /* The RISC-V terminal .option norelax state is not sufficient to
+     * suppress a deferred ULEB pair: an earlier .option relax may already
+     * have produced R_RISCV_RELAX/ALIGN sites between the two anchors.
+     * GNU ld can shorten that span regardless of the final parser option.
+     * Preserve normal target policy for LoongArch and for unaffected spans. */
+    if(!final_mode_allows_relocations && mode!=2U)return true;
     if(mode>3U) {
         minias_set_error(as,"invalid-target-uleb-relocation-policy");
         return false;
@@ -1120,7 +1229,7 @@ bool minias_emit_deferred_leb_relocations(MiniAs *as) {
                              stmt->line);
             return false;
         }
-        if(mode==1U) {
+        if(mode==1U || (mode==2U && !final_mode_allows_relocations)) {
             if(!minias_span_has_linker_relaxation(as,neg_id,pos_id,&crosses))
                 return false;
             if(!crosses)continue;

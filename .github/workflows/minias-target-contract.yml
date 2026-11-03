@@ -247,6 +247,14 @@ jobs:
         run: |
           REQUIRE_ALL_GNU=1 MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
             bash tests/assembler/probe-rv-dwarf-final-link-relax-gnu.sh
+      - name: GNU RV32/RV64 cross-site LLA and ULEB final-link semantics
+        run: |
+          REQUIRE_ALL_GNU=1 MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-rv-cross-site-relax-semantics-gnu.sh
+      - name: GNU RV32/RV64 PC-relative DATA differences after CALL relaxation
+        run: |
+          REQUIRE_ALL_GNU=1 MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-rv-data-difference-final-link-gnu.sh
       - name: TargetSpec to lexical relaxation mode across all four backends
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \

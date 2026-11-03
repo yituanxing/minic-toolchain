@@ -463,6 +463,11 @@ bool minias_encode_ctx_resolve_difference_field(MiniAsEncodeContext *,
     const MiniAsSymbolDifferenceRef *, int, uint64_t, int64_t *, bool *,
     MiniAsSymbolRef *);
 bool minias_encode_ctx_symbol_is_dot(MiniAsEncodeContext *, MiniAsSymbolRef);
+/* A read-only final-layout safety query for local PC-relative folding.
+ * Common knows Fragment boundaries; only the Target identifies which typed
+ * instruction sites may carry a link-time byte-removal marker. */
+bool minias_encode_ctx_span_may_link_relax(MiniAsEncodeContext *, int,
+    uint64_t, uint64_t, bool *);
 const void *minias_encode_ctx_target_state(const MiniAsEncodeContext *);
 unsigned minias_encode_ctx_address_size(const MiniAsEncodeContext *);
 /* Executable ALIGN is a Target byte policy, not a general-purpose session
@@ -610,6 +615,11 @@ typedef struct MiniAsTargetOps {
                            MiniAsMeasureErrorSink *,
                            const MiniAsInstructionView *, uint32_t *);
     bool (*encode)(MiniAsEncodeContext *, const MiniAsInstructionView *);
+    /* Before emission, a Target predicts whether a retained instruction
+     * *may* publish a linker-shrinking fixup.  Common performs the final
+     * Section-position scan for PC-relative folded fields, including
+     * forward sites and reordered subsections. NULL means never. */
+    bool (*instruction_may_link_relax)(const MiniAsInstructionView *);
     /* One typed TargetRelaxPlan supplies both the range requirement and
      * the longest legal encoding. No Common mnemonic/argument reparse. */
     bool (*plan_instruction_relaxation)(MiniAsRelaxContext *,

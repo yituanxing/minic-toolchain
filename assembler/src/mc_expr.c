@@ -1010,14 +1010,21 @@ static bool emit_symbol_minus_dot(MiniAs *as,
     const MiniAsSymbolView *target=&target_value;
     bool can_add=target_supports_fixup(as,MINIAS_FIXUP_ADD,width);
     bool can_sub=target_supports_fixup(as,MINIAS_FIXUP_SUB,width);
+    bool may_link_relax=false;
     if(!minias_common_context_symbol_view(as,symbol_index,&target_value))
         return false;
 
     if (target->defined && target->section == stmt->section) {
-        /* Fixed-width DATA is bit-modular, unlike a signed relocation
-         * addend.  This is S+A-P modulo 2^64, with no signed overflow. */
-        uint64_t value = target->value + (uint64_t)addend - relocation_offset;
-        return append_mc_bits(as,stmt->section,width,value);
+        if(!minias_span_may_link_relax(as,stmt->section,relocation_offset,
+                                      target->value,&may_link_relax))return false;
+        if(!may_link_relax) {
+            /* Stable same-section DATA is bit-modular, unlike a signed
+             * relocation addend. This is S+A-P modulo 2^64. */
+            uint64_t value=target->value+(uint64_t)addend-relocation_offset;
+            return append_mc_bits(as,stmt->section,width,value);
+        }
+        /* The linker's R_RISCV_RELAX/ALIGN may change S-P after emission.
+         * Reuse the already-supported ADD(S)+SUB(synthetic-dot) path below. */
     }
 
     /* ELF64 x86 has a direct signed PC32 relocation for S + A - P.
@@ -1089,6 +1096,7 @@ static bool emit_symbol_minus_dot_divided(
     const MiniAsSymbolView *target=&target_value;
     int64_t difference;
     int64_t quotient;
+    bool may_link_relax=false;
 
     if(!minias_common_context_symbol_view(as,symbol_index,&target_value))
         return false;
@@ -1101,6 +1109,13 @@ static bool emit_symbol_minus_dot_divided(
                          "unsupported-divided-symbol-difference:%s/%llu:line=%zu",
                          target->name,
                          (unsigned long long)divisor,
+                         stmt->line);
+        return false;
+    }
+    if(!minias_span_may_link_relax(as,stmt->section,relocation_offset,
+                                  target->value,&may_link_relax))return false;
+    if(may_link_relax) {
+        minias_set_error(as,"unrepresentable-link-relax-divided-difference:line=%zu",
                          stmt->line);
         return false;
     }
@@ -1207,6 +1222,7 @@ static bool emit_symbol_difference_divided(MiniAs *as,
     const MiniAsSymbolView *lhs=&lhs_value,*rhs=&rhs_value;
     int64_t diff;
     uint64_t result_bits;
+    bool may_link_relax=false;
     if(!minias_common_context_symbol_view(as,lhs_index,&lhs_value) ||
        !minias_common_context_symbol_view(as,rhs_index,&rhs_value))return false;
     /* A cross-section difference cannot be divided using an ELF fixup.
@@ -1216,6 +1232,14 @@ static bool emit_symbol_difference_divided(MiniAs *as,
        (lhs->section<0 && lhs->section!=MINIAS_SECTION_ABS) ||
        divisor==0U || divisor>(uint64_t)INT64_MAX) {
         minias_set_error(as,"unsupported-divided-symbol-pair:line=%zu",
+                         stmt->line);
+        return false;
+    }
+    if(lhs->section>=0 &&
+       (!minias_span_may_link_relax(as,lhs->section,lhs->value,
+                                   rhs->value,&may_link_relax)))return false;
+    if(may_link_relax) {
+        minias_set_error(as,"unrepresentable-link-relax-divided-pair:line=%zu",
                          stmt->line);
         return false;
     }
@@ -1328,10 +1352,36 @@ bool minias_emit_mc_data(MiniAs *as,const MiniAsStmt *stmt) {
                                               x->lhs_addend,x->divisor))return false;
             continue;
         } else if(x->kind==MINIAS_MC_EXPR_DOT_MINUS_SYMBOL) {
+            bool may_link_relax=false;
             if(rhs==NULL || !rhs->defined || rhs->section!=stmt->section) {
                 minias_set_error(as,"unresolved-mc-dot-difference:line=%zu",
                                  stmt->line);
                 return false;
+            }
+            if(!minias_span_may_link_relax(as,stmt->section,at,rhs->value,
+                                          &may_link_relax))return false;
+            if(may_link_relax) {
+                char anchor_name[96];
+                if(!target_supports_fixup(as,MINIAS_FIXUP_ADD,data->width) ||
+                   !target_supports_fixup(as,MINIAS_FIXUP_SUB,data->width)) {
+                    minias_set_error(as,
+                        "unsupported-link-relax-dot-difference:line=%zu",
+                        stmt->line);
+                    return false;
+                }
+                if(!minias_make_private_symbol_name(anchor_name,
+                         sizeof(anchor_name),"expr",++as->expr_anchor_counter) ||
+                   !minias_common_context_define_output_anchor(
+                         as,anchor_name,stmt->section,0U,at,
+                         as->target->elf_policy->synthetic_expr_anchors_hidden,
+                         NULL) ||
+                   !minias_section_append_zero(as,stmt->section,data->width) ||
+                   !minias_add_fixup(as,at,MINIAS_FIXUP_ADD,data->width,
+                                     anchor_name,x->lhs_addend) ||
+                   !minias_add_fixup_symbol_id(as,at,MINIAS_FIXUP_SUB,
+                                     data->width,x->rhs_symbol_index,
+                                     x->rhs_addend))return false;
+                continue;
             }
             literal=true;
             /* '.' has no SymbolID: its lexical addend stays in MCExpr,

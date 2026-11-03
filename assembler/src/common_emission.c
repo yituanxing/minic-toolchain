@@ -576,6 +576,14 @@ bool minias_encode_ctx_symbol_is_dot(MiniAsEncodeContext *ctx,
            strcmp(as->symbol_names[ref.name_id].name,".")==0;
 }
 
+bool minias_encode_ctx_span_may_link_relax(MiniAsEncodeContext *ctx,
+                                          int section,uint64_t first,
+                                          uint64_t last,
+                                          bool *result) {
+    return minias_span_may_link_relax(ctx!=NULL?ctx->as:NULL,section,
+                                     first,last,result);
+}
+
 const void *minias_encode_ctx_target_state(const MiniAsEncodeContext *ctx) {
     return ctx->as->target_state;
 }

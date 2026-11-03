@@ -128,6 +128,7 @@ bool minias_riscv_measure_mcinst(const struct MiniAsMeasureView *,
                                 const struct MiniAsInstructionView *, uint32_t *);
 bool minias_riscv_parse_mcinst(struct MiniAsParseContext *, struct MiniAsParseInstruction *);
 bool minias_riscv_encode(struct MiniAsEncodeContext *, const struct MiniAsInstructionView *);
+bool minias_riscv_instruction_may_link_relax(const struct MiniAsInstructionView *);
 
 /* Parser already chose a fixed descriptor or dynamic Target form; validate
  * its typed feature/XLEN policy once, after MCInst construction. An explicitly

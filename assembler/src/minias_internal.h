@@ -252,6 +252,9 @@ bool minias_add_late_fragment_fixup(MiniAs *,size_t,MiniAsFixupKind,
 bool minias_emit_deferred_leb_relocations(MiniAs *);
 /* Shared post-encoding predicate for CFI and ULEB code-distance fields. */
 bool minias_span_has_linker_relaxation(MiniAs *,size_t,size_t,bool *);
+/* Pre-emission counterpart: conservative final-Section scan over immutable
+ * typed instruction sites and linker-relaxable ALIGN Fragments. */
+bool minias_span_may_link_relax(MiniAs *,int,uint64_t,uint64_t,bool *);
 bool minias_emit_mc_data(MiniAs *, const MiniAsStmt *);
 void minias_mcdata_destroy(MiniAsMCData *);
 /* Parsed syntax may name forward symbols; resolve only after final
