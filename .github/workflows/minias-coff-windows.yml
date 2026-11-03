@@ -5,16 +5,6 @@ name: MiniAS x86-64 COFF Real Windows Link and Run
 # on Windows. Linux Wine/QEMU or a successful object dump alone is not PASS.
 on:
   workflow_dispatch:
-  push:
-    branches: [refactor/minias-target-isa-abi-core]
-    paths:
-      - '.github/workflows/minias-coff-windows.yml'
-      - 'assembler/**'
-      - 'elf/**'
-      - 'tools/minic-as/**'
-      - 'Makefile'
-      - 'tests/assembler/probe-coff-windows-link-run.ps1'
-      - 'tests/assembler/probe-minias-windows-atomic-output.ps1'
   pull_request:
     paths:
       - '.github/workflows/minias-coff-windows.yml'
@@ -47,6 +37,7 @@ jobs:
           update: true
           install: >-
             mingw-w64-x86_64-gcc
+            git
             make
             python
 
