@@ -1411,3 +1411,14 @@ cc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror \
 "$work/frame-layout-probe"
 
 printf 'MINIC_BACKEND_BOUNDARY_CHECK=PASS\n'
+
+# Machine ASM's pointer/integer/void kind queries are Core-owned.
+for source in src/target/aarch64/asm_contract.c \
+              src/target/loongarch64/asm_contract.c \
+              src/target/x86_64/machine_asm.c; do
+  has "$source" 'minic_core_function_value_is_kind('
+  lacks "$source" 'minic_type_is_pointer(fn->values['
+  lacks "$source" 'minic_type_is_integer(fn->values['
+done
+lacks src/target/aarch64/asm_contract.c 'minic_type_is_void(ins->type)'
+lacks src/target/loongarch64/asm_contract.c 'minic_type_is_void(ins->type)'

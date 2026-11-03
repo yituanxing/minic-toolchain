@@ -383,7 +383,7 @@ static bool loong_linux_vdso_emit(
     if (!minic_loongarch64_emit_frame_mem(out, "ld.d", "$a7",
             minic_lp64_frame_value_offset(ctx->frame_plan, b[1].value), ctx->dynamic_frame) ||
         !minic_loongarch64_emit_frame_mem(out,
-            minic_type_is_pointer(fn->values[b[2].value].type)
+            minic_core_function_value_is_kind(fn, b[2].value, MINIC_CORE_TYPE_POINTER)
                 ? "ld.d" : "ld.w", "$a0",
             minic_lp64_frame_value_offset(ctx->frame_plan, b[2].value), ctx->dynamic_frame) ||
         !minic_loongarch64_emit_frame_mem(out, "ld.d", "$a1",
@@ -743,7 +743,7 @@ static bool loong_linux_cpucfg_emit(
         operands[1].value >= fn->value_count ||
         !minic_type_pointee(fn->values[operands[0].value].type, &output_type) ||
         !minic_type_equal(output_type, minic_type_unsigned_int()) ||
-        !minic_type_is_integer(fn->values[operands[1].value].type))
+        !minic_core_function_value_is_kind(fn, operands[1].value, MINIC_CORE_TYPE_INTEGER))
         return false;
     return minic_loongarch64_emit_frame_mem(
                out, "ld.d", "$t1", minic_lp64_frame_value_offset(ctx->frame_plan, operands[1].value),
@@ -1283,7 +1283,7 @@ static bool loong_percpu_indexed_emit(
         return false;
     if (!minic_type_equal(value_type, minic_type_unsigned_long()))
         return false;
-    if (!minic_type_is_pointer(fn->values[b[1].value].type))
+    if (!minic_core_function_value_is_kind(fn, b[1].value, MINIC_CORE_TYPE_POINTER))
         return false;
     if (!minic_loongarch64_emit_frame_mem(
             out, "ld.d", "$t1", minic_lp64_frame_value_offset(ctx->frame_plan, b[1].value), ctx->dynamic_frame))
@@ -2530,7 +2530,7 @@ static bool loong_linux_futex_rmw_emit(
     if (!minic_type_pointee(fn->values[b[4].value].type, &pointee) ||
         !minic_type_equal(pointee, minic_type_unsigned_int()) ||
         !minic_type_equal(fn->values[b[3].value].type, minic_type_int()) ||
-        !minic_type_is_integer(fn->values[b[5].value].type) ||
+        !minic_core_function_value_is_kind(fn, b[5].value, MINIC_CORE_TYPE_INTEGER) ||
         fn->values[b[3].value].definition >= fn->instruction_count)
         return false;
     initial = &fn->instructions[fn->values[b[3].value].definition];
@@ -2782,7 +2782,7 @@ static bool loong_linux_irq_switch_emit(
             ((i == 0U && !minic_type_equal(
                 fn->values[op->value].type, minic_type_unsigned_long())) ||
              (i == 1U &&
-              !minic_type_is_pointer(fn->values[op->value].type))))
+              !minic_core_function_value_is_kind(fn, op->value, MINIC_CORE_TYPE_POINTER))))
             return false;
         if (!minic_loongarch64_emit_frame_mem(
                 out, "ld.d", i == 0U ? "$t0" : "$t1",
@@ -2900,7 +2900,7 @@ static bool loong_linux_frametrace_emit(
             return false;
     if (!minic_type_pointee(fn->values[b[0].value].type, &pointee) ||
         !minic_type_equal(pointee, minic_type_unsigned_long()) ||
-        !minic_type_is_pointer(fn->values[b[1].value].type) ||
+        !minic_core_function_value_is_kind(fn, b[1].value, MINIC_CORE_TYPE_POINTER) ||
         !minic_loongarch64_emit_frame_mem(
             out, "ld.d", "$t0", minic_lp64_frame_value_offset(ctx->frame_plan, b[1].value),
             ctx->dynamic_frame) ||
@@ -3536,7 +3536,7 @@ static bool loong_linux_cacop_emit(
         b[0].early_clobber || b[1].early_clobber ||
         b[0].has_fixed_register_binding || b[1].has_fixed_register_binding ||
         b[0].value >= fn->value_count || b[1].value >= fn->value_count ||
-        !minic_type_is_integer(fn->values[b[0].value].type) ||
+        !minic_core_function_value_is_kind(fn, b[0].value, MINIC_CORE_TYPE_INTEGER) ||
         !minic_type_pointee(fn->values[b[1].value].type, &pointee) ||
         !minic_type_equal(pointee, minic_type_unsigned_char()))
         return false;
@@ -3769,7 +3769,7 @@ bool minic_loongarch64_emit_qualified_structured_asm(
     if (out == NULL || ctx == NULL || ctx->fn == NULL || ins == NULL ||
         ins->kind != MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM ||
         ins->result != MINIC_CORE_VALUE_INVALID ||
-        !minic_type_is_void(ins->type) ||
+        !minic_core_function_type_is_kind(ctx->fn, ins->core_type_id, MINIC_CORE_TYPE_VOID) ||
         ins->value.structured_inline_asm.inline_asm_id >= ctx->fn->inline_asm_count)
         return false;
     info = &ctx->fn->inline_asms[ins->value.structured_inline_asm.inline_asm_id];
@@ -3861,7 +3861,7 @@ bool minic_loongarch64_emit_dbar(
     if (out == NULL || ctx == NULL || ctx->fn == NULL || ins == NULL ||
         ins->kind != MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM ||
         ins->result != MINIC_CORE_VALUE_INVALID ||
-        !minic_type_is_void(ins->type) ||
+        !minic_core_function_type_is_kind(ctx->fn, ins->core_type_id, MINIC_CORE_TYPE_VOID) ||
         ins->value.structured_inline_asm.operand_count != 1U ||
         ins->value.structured_inline_asm.inline_asm_id >= ctx->fn->inline_asm_count)
         return false;

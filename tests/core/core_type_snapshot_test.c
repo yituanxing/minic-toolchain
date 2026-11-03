@@ -350,6 +350,15 @@ int main(void) {
     CHECK(minic_core_function_verify_core_type_snapshot(&function));
     CHECK(!minic_core_function_attach_type_context(&function, &context));
     CHECK(minic_core_function_type_get(&function, ids.function_a) != NULL);
+    CHECK(minic_core_function_type_is_kind(&function, ids.i32,
+                                           MINIC_CORE_TYPE_INTEGER));
+    CHECK(minic_core_function_value_is_kind(&function, 0U,
+                                            MINIC_CORE_TYPE_POINTER));
+    CHECK(!minic_core_function_value_is_kind(&function, 0U,
+                                             MINIC_CORE_TYPE_INTEGER));
+    CHECK(!minic_core_function_value_is_kind(&function,
+                                             MINIC_CORE_VALUE_INVALID,
+                                             MINIC_CORE_TYPE_POINTER));
     saved = function.core_return_type_id;
     function.core_return_type_id = MINIC_CORE_TYPE_INVALID;
     CHECK(!minic_core_function_verify_core_type_snapshot(&function));

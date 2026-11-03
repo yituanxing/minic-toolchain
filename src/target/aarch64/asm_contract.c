@@ -2991,7 +2991,7 @@ static bool aarch64_linux_tlbi_emit(
        !aarch64_linux_structured_spill_slot_valid(b[0].value)||b[0].early_clobber||
        b[0].has_fixed_register_binding||
        b[0].kind!=MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT||
-       !minic_type_is_integer(fn->values[b[0].value].type))return false;
+       !minic_core_function_value_is_kind(fn, b[0].value, MINIC_CORE_TYPE_INTEGER))return false;
     return aarch64_privileged_owned_x(out, ctx, 9U, b[0].value) &&
            fprintf(out, "  .arch armv8.5-a\n  tlbi %s, x9\n",
                    mnemonic) >= 0;
@@ -3328,7 +3328,7 @@ static bool aarch64_linux_zeropad_emit(
         !minic_type_pointee(fn->values[ops[2].value].type, &memory) ||
         !minic_type_equal(result, minic_type_unsigned_long()) ||
         !minic_type_equal(memory, minic_type_unsigned_long()) ||
-        !minic_type_is_pointer(fn->values[ops[1].value].type)) return false;
+        !minic_core_function_value_is_kind(fn, ops[1].value, MINIC_CORE_TYPE_POINTER)) return false;
     /* Operand %0 -> x9, %1 -> x10, %2 -> [x11]. The kernel exception
      * fixup's .short indexes remain EXACTLY (9,10); they are not a guessed
      * GNU allocator binding. Section-relative .long offsets are evaluated
@@ -3538,7 +3538,7 @@ static bool aarch64_linux_uaccess_emit(
            !(form->width == 8U && minic_type_is_pointer(data_type))) ||
           !aarch64_core_pointee_layout(fn, op[1].value,
                                        &data_bytes, &data_alignment))) ||
-        !minic_type_is_pointer(fn->values[op[2].value].type)) return false;
+        !minic_core_function_value_is_kind(fn, op[2].value, MINIC_CORE_TYPE_POINTER)) return false;
     /* GNU =r output registers are widened to W/X, but the C destination
      * remains a 1/2/4/8-byte object. The old unconditional STR X10 silently
      * overwrote adjacent fields of packed u8/u16 output objects. Preserve
@@ -6473,7 +6473,7 @@ bool minic_aarch64_emit_qualified_structured_asm(
     if (!out || !ctx || !ctx->fn || !ins ||
         ins->kind != MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM ||
         ins->result != MINIC_CORE_VALUE_INVALID ||
-        !minic_type_is_void(ins->type))
+        !minic_core_function_type_is_kind(ctx->fn, ins->core_type_id, MINIC_CORE_TYPE_VOID))
         return false;
     fn = ctx->fn;
     if (ins->value.structured_inline_asm.inline_asm_id >= fn->inline_asm_count)
@@ -6763,7 +6763,7 @@ bool minic_aarch64_emit_qualified_structured_asm(
                 operand[0].has_fixed_register_binding || operand[0].early_clobber ||
                 operand[0].value >= fn->value_count ||
                 !aarch64_linux_structured_spill_slot_valid(operand[0].value) ||
-                !minic_type_is_pointer(fn->values[operand[0].value].type))
+                !minic_core_function_value_is_kind(fn, operand[0].value, MINIC_CORE_TYPE_POINTER))
                 return false;
             return aarch64_privileged_owned_x(out, ctx, 9U,
                        operand[0].value) &&
@@ -6859,7 +6859,7 @@ bool minic_aarch64_emit_qualified_structured_asm(
             !aarch64_linux_structured_spill_slot_valid(ops[0].value) || !aarch64_linux_structured_spill_slot_valid(ops[1].value) ||
             !minic_type_pointee(fn->values[ops[0].value].type, &output_type) ||
             !aarch64_stlr_type(output_type, d->width) ||
-            !minic_type_is_pointer(fn->values[ops[1].value].type))
+            !minic_core_function_value_is_kind(fn, ops[1].value, MINIC_CORE_TYPE_POINTER))
             return false;
         /* x9/x10/x11 are AAPCS64 caller-scratch. GNU linker consumes the
          * preserved 2×PREL32, 12-byte .altinstructions feature-91 record.
@@ -6971,7 +6971,7 @@ bool minic_aarch64_emit_qualified_structured_asm(
             ops[0].value >= fn->value_count ||
             ops[1].value >= fn->value_count ||
             !aarch64_linux_structured_spill_slot_valid(ops[0].value) || !aarch64_linux_structured_spill_slot_valid(ops[1].value) ||
-            !minic_type_is_pointer(fn->values[ops[1].value].type) ||
+            !minic_core_function_value_is_kind(fn, ops[1].value, MINIC_CORE_TYPE_POINTER) ||
             !aarch64_stlr_type(fn->values[ops[0].value].type, store->width))
             return false;
         /* x9/x10 are AAPCS64 caller-saved. Preserve the actual
@@ -7492,7 +7492,7 @@ bool minic_aarch64_emit_qualified_structured_asm(
         }
         if (!minic_type_pointee(fn->values[ops[0].value].type, &pointee) ||
             !minic_type_is_pointer(pointee) ||
-            !minic_type_is_pointer(fn->values[ops[1].value].type))
+            !minic_core_function_value_is_kind(fn, ops[1].value, MINIC_CORE_TYPE_POINTER))
             return false;
         def = fn->values[ops[2].value].definition;
         if (def >= fn->instruction_count) return false;

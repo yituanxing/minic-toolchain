@@ -646,6 +646,11 @@ bool minic_core_function_attach_type_context(MinicCoreFunction *function,
 bool minic_core_function_verify_core_type_snapshot(const MinicCoreFunction *function);
 const MinicCoreType *minic_core_function_type_get(const MinicCoreFunction *function,
                                                   MinicCoreTypeId id);
+/* Execution-kind queries for sealed Core types; never infer C rank or ABI. */
+bool minic_core_function_type_is_kind(const MinicCoreFunction *function,
+                                     MinicCoreTypeId id, MinicCoreTypeKind kind);
+bool minic_core_function_value_is_kind(const MinicCoreFunction *function,
+                                      MinicCoreValueId id, MinicCoreTypeKind kind);
 /* Fully resolved element extent for private objects; explicit object alignment
  * remains independent of the underlying element's natural ABI alignment. */
 bool minic_core_function_object_layout(const MinicCoreFunction *function,

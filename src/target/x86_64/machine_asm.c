@@ -144,8 +144,8 @@ static const char *x86_asm_zero_offset_global_symbol(
         if (definition->kind == MINIC_CORE_INSTRUCTION_SCALAR_BITCAST) {
             const MinicCoreValueId operand = definition->value.operand;
             if (operand >= fn->value_count ||
-                !minic_type_is_pointer(fn->values[value].type) ||
-                !minic_type_is_pointer(fn->values[operand].type))
+                !minic_core_function_value_is_kind(fn, value, MINIC_CORE_TYPE_POINTER) ||
+                !minic_core_function_value_is_kind(fn, operand, MINIC_CORE_TYPE_POINTER))
                 return NULL;
             value = operand;
             continue;
@@ -286,8 +286,8 @@ static bool emit_linux_task_control(
             ? MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT
             : MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT) ||
         b[0].early_clobber || b[0].has_fixed_register_binding ||
-        (form == 1U ? !minic_type_is_integer(fn->values[b[0].value].type)
-                    : !minic_type_is_pointer(fn->values[b[0].value].type)))
+        (form == 1U ? !minic_core_function_value_is_kind(fn, b[0].value, MINIC_CORE_TYPE_INTEGER)
+                    : !minic_core_function_value_is_kind(fn, b[0].value, MINIC_CORE_TYPE_POINTER)))
         return false;
     if (form == 1U)
         return x86_value_load(out, frame, b[0].value, "%rax") &&
@@ -320,7 +320,7 @@ static bool emit_linux_iret_to_self(
         b[0].has_fixed_register_binding ||
         !b[1].has_fixed_register_binding ||
         b[1].fixed_register_binding_id >= fn->fixed_register_binding_count ||
-        !minic_type_is_pointer(fn->values[b[0].value].type) ||
+        !minic_core_function_value_is_kind(fn, b[0].value, MINIC_CORE_TYPE_POINTER) ||
         !minic_type_equal(fn->values[b[1].value].type, minic_type_unsigned_long()))
         return false;
     fixed = &fn->fixed_register_bindings[b[1].fixed_register_binding_id];
@@ -363,7 +363,7 @@ static bool emit_linux_int3_selftest(
         !b[0].has_fixed_register_binding ||
         b[0].fixed_register_binding_id >= fn->fixed_register_binding_count ||
         b[1].has_fixed_register_binding || b[0].early_clobber || b[1].early_clobber ||
-        !minic_type_is_pointer(fn->values[b[1].value].type)) return false;
+        !minic_core_function_value_is_kind(fn, b[1].value, MINIC_CORE_TYPE_POINTER)) return false;
     fixed = &fn->fixed_register_bindings[b[0].fixed_register_binding_id];
     if (!fixed->register_name || strcmp(fixed->register_name, "rsp")) return false;
     return x86_value_load(out, frame, b[1].value, "%rdi") &&
@@ -391,8 +391,8 @@ static bool emit_linux_real_mode_far_jump(
         b[1].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT ||
         b[0].has_fixed_register_binding || b[1].has_fixed_register_binding ||
         b[0].early_clobber || b[1].early_clobber ||
-        !minic_type_is_pointer(fn->values[b[0].value].type) ||
-        !minic_type_is_integer(fn->values[b[1].value].type)) return false;
+        !minic_core_function_value_is_kind(fn, b[0].value, MINIC_CORE_TYPE_POINTER) ||
+        !minic_core_function_value_is_kind(fn, b[1].value, MINIC_CORE_TYPE_INTEGER)) return false;
     /* The operand is the address of the 6-byte m16:32 memory far pointer;
      * loading *that address* is required, loading its 32-bit first word or
      * issuing an ordinary near JMP would corrupt the restart transition. */
@@ -443,8 +443,8 @@ static bool emit_linux_pv_indirect_call(
     fixed = &fn->fixed_register_bindings[b[4].fixed_register_binding_id];
     if (!fixed->register_name || strcmp(fixed->register_name, "rsp") ||
         !minic_type_equal(fn->values[b[4].value].type, minic_type_unsigned_long()) ||
-        !minic_type_is_integer(fn->values[b[5].value].type) ||
-        !minic_type_is_pointer(fn->values[b[6].value].type) ||
+        !minic_core_function_value_is_kind(fn, b[5].value, MINIC_CORE_TYPE_INTEGER) ||
+        !minic_core_function_value_is_kind(fn, b[6].value, MINIC_CORE_TYPE_POINTER) ||
         fn->values[b[5].value].definition >= fn->instruction_count) return false;
     constant = &fn->instructions[fn->values[b[5].value].definition];
     if (constant->kind != MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT ||
@@ -511,7 +511,7 @@ static bool emit_linux_kvm_hypercall(
         info->register_clobber_count ||
         count < 2U || count > 6U || (!alt && count > 5U) ||
         b[0].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT ||
-        !minic_type_is_pointer(fn->values[b[0].value].type)) return false;
+        !minic_core_function_value_is_kind(fn, b[0].value, MINIC_CORE_TYPE_POINTER)) return false;
     for (i = 0U; i < count; ++i) {
         if (b[i].operand_index != i || b[i].value >= fn->value_count ||
             b[i].early_clobber || b[i].has_fixed_register_binding ||
@@ -593,12 +593,12 @@ static bool emit_linux_exception_stack_call(
         return false;
     fixed = &fn->fixed_register_bindings[b[3].fixed_register_binding_id];
     if (!fixed->register_name || strcmp(fixed->register_name, "r11") ||
-        !minic_type_is_pointer(fn->values[b[3].value].type)) return false;
+        !minic_core_function_value_is_kind(fn, b[3].value, MINIC_CORE_TYPE_POINTER)) return false;
     name = x86_asm_direct_function_symbol(fn, b[2].value);
-    if (!name || !minic_type_is_pointer(fn->values[b[2].value].type) ||
-        !minic_type_is_pointer(fn->values[b[4].value].type) ||
+    if (!name || !minic_core_function_value_is_kind(fn, b[2].value, MINIC_CORE_TYPE_POINTER) ||
+        !minic_core_function_value_is_kind(fn, b[4].value, MINIC_CORE_TYPE_POINTER) ||
         !x86_asm_u64_type(fn->values[b[5].value].type) ||
-        !minic_type_is_pointer(fn->values[b[6].value].type)) return false;
+        !minic_core_function_value_is_kind(fn, b[6].value, MINIC_CORE_TYPE_POINTER)) return false;
     return x86_value_load(out, frame, b[6].value, "%rdx") &&
            x86_value_load(out, frame, b[5].value, "%rsi") &&
            x86_value_load(out, frame, b[4].value, "%rdi") &&
@@ -754,7 +754,7 @@ static bool emit_linux_pci_mmconfig(
         ops[1].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT ||
         ops[0].has_fixed_register_binding || ops[1].has_fixed_register_binding ||
         ops[0].early_clobber || ops[1].early_clobber ||
-        !minic_type_is_pointer(fn->values[ops[1].value].type)) return false;
+        !minic_core_function_value_is_kind(fn, ops[1].value, MINIC_CORE_TYPE_POINTER)) return false;
     value_type = fn->values[ops[0].value].type;
     if (read && !minic_type_pointee(value_type, &value_type)) return false;
     if (!minic_x86_64_scalar_width(program, target,
@@ -858,8 +858,8 @@ static bool emit_linux_iomem_copy(
             (form == 3U ? !minic_type_is_integer(pointee) :
                           !minic_type_is_pointer(pointee)))) return false;
         if (i >= outputs &&
-            !minic_type_is_integer(fn->values[b[i].value].type) &&
-            !minic_type_is_pointer(fn->values[b[i].value].type)) return false;
+            !minic_core_function_value_is_kind(fn, b[i].value, MINIC_CORE_TYPE_INTEGER) &&
+            !minic_core_function_value_is_kind(fn, b[i].value, MINIC_CORE_TYPE_POINTER)) return false;
     }
     if (form == 3U) {
         if (!x86_value_load(out, frame, b[3].value, "%rcx") ||
@@ -956,7 +956,7 @@ static bool emit_linux_flushcache_copy(
     if (form == 4U) {
         size_t index;
 
-        if (!minic_type_is_pointer(fn->values[b[1].value].type) ||
+        if (!minic_core_function_value_is_kind(fn, b[1].value, MINIC_CORE_TYPE_POINTER) ||
             !x86_value_load(out, frame, b[1].value, "%rax")) return false;
         /* The compiler-normalized original `clwb` ALTERNATIVE owns both
            .altinstructions entries and the replacement section. Replace
@@ -974,8 +974,8 @@ static bool emit_linux_flushcache_copy(
         }
         return fputc('\n', out) != EOF;
     }
-    if (!minic_type_is_integer(fn->values[b[0].value].type) ||
-        !minic_type_is_integer(fn->values[b[1].value].type) ||
+    if (!minic_core_function_value_is_kind(fn, b[0].value, MINIC_CORE_TYPE_INTEGER) ||
+        !minic_core_function_value_is_kind(fn, b[1].value, MINIC_CORE_TYPE_INTEGER) ||
         !x86_value_load(out, frame, b[0].value, "%rax") ||
         !x86_value_load(out, frame, b[1].value, "%rcx")) return false;
     if (form == 1U)
@@ -1157,11 +1157,11 @@ static bool emit_linux_irq_stack_call(
             return false;
         }
     }
-    if (!minic_type_is_pointer(fn->values[b[0].value].type) ||
+    if (!minic_core_function_value_is_kind(fn, b[0].value, MINIC_CORE_TYPE_POINTER) ||
         !minic_type_equal(fn->values[b[1].value].type, minic_type_unsigned_long()) ||
-        !minic_type_is_pointer(fn->values[b[3].value].type) ||
-        (form != 3U && !minic_type_is_pointer(fn->values[b[4].value].type)) ||
-        (form == 2U && !minic_type_is_integer(fn->values[b[5].value].type)) ||
+        !minic_core_function_value_is_kind(fn, b[3].value, MINIC_CORE_TYPE_POINTER) ||
+        (form != 3U && !minic_core_function_value_is_kind(fn, b[4].value, MINIC_CORE_TYPE_POINTER)) ||
+        (form == 2U && !minic_core_function_value_is_kind(fn, b[5].value, MINIC_CORE_TYPE_INTEGER)) ||
         !(callee = x86_asm_direct_function_symbol(fn, b[2].value))) return false;
     if (form == 3U) {
         /* softirq uses the same two fixed live RSP/R11 GNU bindings but
@@ -1876,7 +1876,7 @@ static bool emit_linux_prefetchw_alt(
        b[1].kind!=MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT||
        b[1].value>=fn->value_count||
        fn->values[b[0].value].definition>=fn->instruction_count||
-       !minic_type_is_pointer(fn->values[b[1].value].type))
+       !minic_core_function_value_is_kind(fn, b[1].value, MINIC_CORE_TYPE_POINTER))
         return false;
     constant=&fn->instructions[fn->values[b[0].value].definition];
     if(constant->kind!=MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT||
@@ -1934,9 +1934,9 @@ static bool emit_linux_apic_amd_alt(
            b[i].value>=fn->value_count||
            b[i].has_fixed_register_binding)return false;
         if((form==1U&&(i==0U||i==1U||i==4U))&&
-           !minic_type_is_pointer(fn->values[b[i].value].type))return false;
+           !minic_core_function_value_is_kind(fn, b[i].value, MINIC_CORE_TYPE_POINTER))return false;
         if((form==2U||i==2U||i==3U)&&
-           !minic_type_is_integer(fn->values[b[i].value].type))return false;
+           !minic_core_function_value_is_kind(fn, b[i].value, MINIC_CORE_TYPE_INTEGER))return false;
     }
     if(form==1U){
         if(!x86_value_load(out,frame,b[1].value,"%r10")||
@@ -2298,7 +2298,7 @@ static bool emit_linux_kexec_load_segments(
         ops[0].operand_index || ops[0].value >= fn->value_count ||
         ops[0].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT ||
         ops[0].has_fixed_register_binding || ops[0].early_clobber ||
-        !minic_type_is_integer(fn->values[ops[0].value].type)) return false;
+        !minic_core_function_value_is_kind(fn, ops[0].value, MINIC_CORE_TYPE_INTEGER)) return false;
     return x86_value_load(out, frame, ops[0].value, "%rax") &&
         fputs("  movl %eax, %ds\n  movl %eax, %es\n"
               "  movl %eax, %ss\n  movl %eax, %fs\n"
@@ -2324,7 +2324,7 @@ static bool emit_linux_efi_kernel_transfer(
         ops[1].has_fixed_register_binding ||
         ops[0].early_clobber || ops[1].early_clobber ||
         !x86_asm_u64_type(fn->values[ops[0].value].type) ||
-        !minic_type_is_pointer(fn->values[ops[1].value].type)) return false;
+        !minic_core_function_value_is_kind(fn, ops[1].value, MINIC_CORE_TYPE_POINTER)) return false;
     /* Incoming RSI is independent of the branch destination and must be
      * materialized before we load R11 with the kernel's entry address. */
     return x86_value_load(out, frame, ops[1].value, "%rsi") &&
@@ -3837,7 +3837,7 @@ static bool emit_percpu_stable_u64(
             program, target, type, &width, &sign) ||
         width != minic_x86_64_asm_percpu_stable_width(
             info->template_text, info->template_length) ||
-        !minic_type_is_pointer(fn->values[b[1].value].type))
+        !minic_core_function_value_is_kind(fn, b[1].value, MINIC_CORE_TYPE_POINTER))
         return false;
     /* x86-64 SysV RAX/R10/R11 are caller-saved and Core SSA is spilled.
      * The original GNU %P operand can be materialized as an address in R10;
@@ -4455,7 +4455,7 @@ static bool emit_linux_rep_stosb_alternative(
             if (!minic_type_equal(fn->values[b[i].value].type,
                                   minic_type_unsigned_long()))
                 return false;
-        } else if (!minic_type_is_integer(fn->values[b[i].value].type)) {
+        } else if (!minic_core_function_value_is_kind(fn, b[i].value, MINIC_CORE_TYPE_INTEGER)) {
             return false;
         }
     }
@@ -4555,7 +4555,7 @@ static bool emit_linux_fpu_user_frame(
         !minic_type_is_record(memory_type) ||
         !minic_type_pointee(fn->values[b[3].value].type, &type) ||
         !minic_type_equal(type, memory_type) ||
-        !minic_type_is_integer(fn->values[b[2].value].type))
+        !minic_core_function_value_is_kind(fn, b[2].value, MINIC_CORE_TYPE_INTEGER))
         return false;
     if (!x86_value_load(out, frame, b[2].value, "%rax") ||
         !x86_value_load(out, frame, b[1].value, "%r10") ||
@@ -4771,7 +4771,7 @@ static bool emit_linux_fxrstor_safe(
         !minic_type_is_record(mem) ||
         !minic_type_pointee(fn->values[b[3].value].type, &type) ||
         !minic_type_equal(type, mem) ||
-        !minic_type_is_integer(fn->values[b[2].value].type))
+        !minic_core_function_value_is_kind(fn, b[2].value, MINIC_CORE_TYPE_INTEGER))
         return false;
     return x86_value_load(out, frame, b[2].value, "%rax") &&
            x86_value_load(out, frame, b[1].value, "%r10") &&
@@ -4825,11 +4825,11 @@ static bool emit_linux_xstate_fault(
             return false;
     if (!minic_type_pointee(fn->values[b[0].value].type, &type) ||
         !minic_type_equal(type, minic_type_int()) ||
-        !minic_type_is_pointer(fn->values[b[1].value].type) ||
+        !minic_core_function_value_is_kind(fn, b[1].value, MINIC_CORE_TYPE_POINTER) ||
         !minic_type_pointee(fn->values[b[2].value].type, &memory_type) ||
         !minic_type_is_record(memory_type) ||
-        !minic_type_is_integer(fn->values[b[3].value].type) ||
-        !minic_type_is_integer(fn->values[b[4].value].type))
+        !minic_core_function_value_is_kind(fn, b[3].value, MINIC_CORE_TYPE_INTEGER) ||
+        !minic_core_function_value_is_kind(fn, b[4].value, MINIC_CORE_TYPE_INTEGER))
         return false;
     return x86_value_load(out, frame, b[1].value, "%rdi") &&
            x86_value_load(out, frame, b[3].value, "%rax") &&
@@ -4872,11 +4872,11 @@ static bool emit_linux_xrstor_alternative(
             b[i].early_clobber || b[i].has_fixed_register_binding ||
             b[i].kind != kinds[i])
             return false;
-    if (!minic_type_is_pointer(fn->values[b[0].value].type) ||
+    if (!minic_core_function_value_is_kind(fn, b[0].value, MINIC_CORE_TYPE_POINTER) ||
         !minic_type_pointee(fn->values[b[1].value].type, &type) ||
         !minic_type_is_record(type) ||
-        !minic_type_is_integer(fn->values[b[2].value].type) ||
-        !minic_type_is_integer(fn->values[b[3].value].type))
+        !minic_core_function_value_is_kind(fn, b[2].value, MINIC_CORE_TYPE_INTEGER) ||
+        !minic_core_function_value_is_kind(fn, b[3].value, MINIC_CORE_TYPE_INTEGER))
         return false;
     return x86_value_load(out, frame, b[0].value, "%rdi") &&
            x86_value_load(out, frame, b[2].value, "%rax") &&
@@ -4939,11 +4939,11 @@ static bool emit_linux_xsave_triple_alternative(
             return false;
     if (!minic_type_pointee(fn->values[b[0].value].type, &type) ||
         !minic_type_equal(type, minic_type_int()) ||
-        !minic_type_is_pointer(fn->values[b[1].value].type) ||
+        !minic_core_function_value_is_kind(fn, b[1].value, MINIC_CORE_TYPE_POINTER) ||
         !minic_type_pointee(fn->values[b[2].value].type, &memory_type) ||
         !minic_type_is_record(memory_type) ||
-        !minic_type_is_integer(fn->values[b[3].value].type) ||
-        !minic_type_is_integer(fn->values[b[4].value].type))
+        !minic_core_function_value_is_kind(fn, b[3].value, MINIC_CORE_TYPE_INTEGER) ||
+        !minic_core_function_value_is_kind(fn, b[4].value, MINIC_CORE_TYPE_INTEGER))
         return false;
     return x86_value_load(out, frame, b[1].value, "%rdi") &&
            x86_value_load(out, frame, b[3].value, "%rax") &&
@@ -5092,11 +5092,10 @@ static bool emit_linux_put_user_call(
             return false;
     if (!minic_type_pointee(fn->values[b[0].value].type, &result_type) ||
         !minic_type_equal(result_type, minic_type_int()) ||
-        !minic_type_is_pointer(fn->values[b[2].value].type) ||
+        !minic_core_function_value_is_kind(fn, b[2].value, MINIC_CORE_TYPE_POINTER) ||
         !minic_x86_64_scalar_width(program, target,
             fn->values[b[3].value].type, &value_width, &signed_type) ||
-        !minic_type_is_integer(
-            fn->values[b[4].value].type) ||
+        !minic_core_function_value_is_kind(fn, b[4].value, MINIC_CORE_TYPE_INTEGER) ||
         b[1].fixed_register_binding_id >= fn->fixed_register_binding_count ||
         b[3].fixed_register_binding_id >= fn->fixed_register_binding_count)
         return false;
@@ -5178,8 +5177,8 @@ static bool emit_linux_get_user_call(
         !minic_x86_64_scalar_width(program, target,
             value_type, &width, &signed_type) ||
         !minic_type_is_integer(value_type) ||
-        !minic_type_is_pointer(fn->values[b[3].value].type) ||
-        !minic_type_is_integer(fn->values[b[4].value].type) ||
+        !minic_core_function_value_is_kind(fn, b[3].value, MINIC_CORE_TYPE_POINTER) ||
+        !minic_core_function_value_is_kind(fn, b[4].value, MINIC_CORE_TYPE_INTEGER) ||
         b[1].fixed_register_binding_id >= fn->fixed_register_binding_count ||
         b[2].fixed_register_binding_id >= fn->fixed_register_binding_count)
         return false;
@@ -5234,8 +5233,8 @@ static bool emit_linux_idle_clflush_alt(
             b[i].early_clobber || b[i].has_fixed_register_binding ||
             b[i].value >= fn->value_count)
             return false;
-    if (!minic_type_is_integer(fn->values[b[0].value].type) ||
-        !minic_type_is_pointer(fn->values[b[1].value].type) ||
+    if (!minic_core_function_value_is_kind(fn, b[0].value, MINIC_CORE_TYPE_INTEGER) ||
+        !minic_core_function_value_is_kind(fn, b[1].value, MINIC_CORE_TYPE_POINTER) ||
         fn->values[b[0].value].definition >= fn->instruction_count)
         return false;
     zero = &fn->instructions[fn->values[b[0].value].definition];
@@ -5290,7 +5289,7 @@ static bool emit_linux_pat_clflushopt(
         pointee.base_kind != MINIC_TYPE_BASE_INT ||
         pointee.integer_rank != MINIC_INTEGER_RANK_CHAR ||
         pointee.pointer_depth != 0U ||
-        !minic_type_is_integer(fn->values[b[1].value].type) ||
+        !minic_core_function_value_is_kind(fn, b[1].value, MINIC_CORE_TYPE_INTEGER) ||
         fn->values[b[1].value].definition >= fn->instruction_count)
         return false;
     unused_immediate = &fn->instructions[fn->values[b[1].value].definition];
