@@ -38,7 +38,7 @@ cat >"$work/mini.s" <<'ASM'
 .globl motion_start
 motion_start:
 .cfi_startproc
-.cfi_def_cfa $sp,0
+.cfi_def_cfa 3,0
 .loc 1 1 0
     la.local $a2,motion_target
 .globl motion_before_relax
@@ -75,7 +75,7 @@ cat >"$work/gnu.s" <<'ASM'
 .globl motion_start
 motion_start:
 .cfi_startproc
-.cfi_def_cfa $sp,0
+.cfi_def_cfa 3,0
 .loc 1 1 0
     la.local $a2,motion_target
 .globl motion_before_relax
