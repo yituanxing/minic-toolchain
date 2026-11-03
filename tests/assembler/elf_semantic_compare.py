@@ -117,6 +117,15 @@ X86_RELOC_FIELDS = {
     35: (),  # R_X86_64_TLSDESC_CALL marker; preserve the complete CALL.
 }
 
+# ELF32 i386 uses SHT_REL, so r_addend is implicit in the destination bytes.
+# The replacement spans below are the exact six psABI fixed-width types for
+# which this comparator can decode *all* original addend bits. In particular,
+# do not interpret i386 GOT/PLT fields using a guessed generic width: those
+# carry different linker semantics and remain inconclusive until modeled.
+I386_REL_WIDTHS = {1: 4, 2: 4, 20: 2, 21: 2, 22: 1, 23: 1}
+I386_RELOC_FIELDS = {0: (), **{t: data_field(n)
+                                  for t, n in I386_REL_WIDTHS.items()}}
+
 A64_MOVW = instruction_field(0x001fffe0)  # 16-bit immediate at [20:5].
 A64_SIGNED_MOVW = instruction_field(0x401fffe0)  # MOVN/MOVZ selection too.
 A64_ADR = instruction_field(0x60ffffe0)  # immlo [30:29], immhi [23:5].
@@ -168,6 +177,7 @@ LOONGARCH_RELOC_FIELDS = {
 RELOC_FIELDS_BY_MACHINE = {
     "EM_RISCV": RISC_V_RELOC_FIELDS,
     "EM_X86_64": X86_RELOC_FIELDS,
+    "EM_386": I386_RELOC_FIELDS,
     "EM_AARCH64": AARCH64_RELOC_FIELDS,
     "EM_LOONGARCH": LOONGARCH_RELOC_FIELDS,
 }
@@ -374,9 +384,35 @@ def relocation_counter(elf, section_keys):
             if offset < 0 or offset > target_size:
                 raise ValueError("relocation offset outside target section")
             addend = int(rel["r_addend"]) if is_rela else 0
+            decoded_i386_rel = False
             if not is_rela:
+                if machine == "EM_386" and typ == 0:
+                    # R_386_NONE has no field or implicit addend to decode.
+                    decoded_i386_rel = True
+                elif machine == "EM_386" and typ in I386_REL_WIDTHS:
+                    width = I386_REL_WIDTHS[typ]
+                    if offset + width > target_size:
+                        raise ValueError("i386 REL relocation field outside target section")
+                    # SHT_NOBITS cannot supply an in-place addend. Do not
+                    # manufacture zero for a non-file-backed field.
+                    source = target_section.data()
+                    if len(source) < offset + width:
+                        unknown_width[target_name].append(
+                            (offset, typ, "i386-REL-implicit-addend-unavailable"))
+                    else:
+                        byteorder = "little" if elf.little_endian else "big"
+                        addend = int.from_bytes(source[offset:offset + width],
+                                                byteorder, signed=True)
+                        decoded_i386_rel = True
+                else:
+                    unknown_width[target_name].append(
+                        (offset, typ, "REL-implicit-addend-not-decoded"))
+            elif machine == "EM_386":
+                # The i386 psABI defines REL implicit addends, not the
+                # ELF64-style RELA contract. Retain its record for debugging
+                # but refuse to claim a complete semantic comparison.
                 unknown_width[target_name].append(
-                    (offset, typ, "REL-implicit-addend-not-decoded"))
+                    (offset, typ, "unsupported-i386-RELA"))
             sym = symtab.get_symbol(int(rel["r_info_sym"]))
             sym_key = symbol_semantic_key(elf, sym, section_keys)
             if sym_key is None:
@@ -409,6 +445,14 @@ def relocation_counter(elf, section_keys):
             # Without decoding its target-specific field, treating REL as a
             # zero-addend RELA could call two different relocations equal.
             if not is_rela:
+                if decoded_i386_rel and typ in I386_RELOC_FIELDS:
+                    masks[target_name].extend(
+                        (offset + displacement, width, bitmask)
+                        for displacement, width, bitmask in I386_RELOC_FIELDS[typ])
+                continue
+            if machine == "EM_386":
+                # Already recorded as unsupported-i386-RELA above. Never
+                # infer a replaceable span from that unsupported format.
                 continue
             if typ in fields:
                 if any(offset + displacement < 0 or

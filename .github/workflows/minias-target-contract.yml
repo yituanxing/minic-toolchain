@@ -132,6 +132,10 @@ jobs:
         run: |
           MINIAS_REQUIRE_SIX_GNU=1 MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
             bash tests/assembler/probe-target-datalayout-format-boundary.sh
+      - name: ELF32 i386 REL implicit addends are strict and fail-closed
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            python3 tests/assembler/probe-elf-semantic-i386-rel-addends.py
       - name: Common symbol differences and PC-relative widths across all six GNU ELF profiles
         run: |
           REQUIRE_ALL_GNU=1 MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \

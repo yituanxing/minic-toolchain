@@ -7,7 +7,12 @@ set -Eeuo pipefail
 : "${MINIAS:?Set MINIAS to the exact-head MiniAS executable}"
 repo=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
 work=$(mktemp -d)
-trap 'rm -rf -- "$work"' EXIT
+mkdir -p "$work/gnu" "$work/mini"
+if [[ ${MINIAS_DEBUG_WORK:-0} == 1 ]]; then
+    echo "MINIAS_COMMON_RELOC_WORK=$work"
+else
+    trap 'rm -rf -- "$work"' EXIT
+fi
 for tool in as ld readelf python3; do command -v "$tool" >/dev/null; done
 
 has_semantics=0
@@ -19,7 +24,7 @@ elif [[ ${REQUIRE_ALL_GNU:-0} == 1 ]]; then
 fi
 
 cat >"$work/prefix.s" <<'ASM'
-.section .debug_info,"",@progbits
+.section .minias_widths,"",@progbits
 .zero 7
 .section .data.alpha,"aw",@progbits
 .zero 3
@@ -60,8 +65,11 @@ test_profile() {
         esac
         for expr in difference pc_relative absolute; do
             local source="$work/$profile-$width-$expr.s"
-            local gnu_object="$work/$profile-$width-$expr.gnu.o"
-            local mini_object="$work/$profile-$width-$expr.mini.o"
+            # GNU ld -r synthesizes STT_FILE entries from input object
+            # basenames. Equal basenames keep the strict symbol oracle about
+            # assembly semantics, not the producer's temporary filename.
+            local gnu_object="$work/gnu/$profile-$width-$expr.o"
+            local mini_object="$work/mini/$profile-$width-$expr.o"
             local gnu_linked="$work/$profile-$width-$expr.gnu.linked.o"
             local mini_linked="$work/$profile-$width-$expr.mini.linked.o"
             local operand
@@ -79,7 +87,7 @@ a_owner:
 .zero 5
 b_owner:
 .byte 0x66
-.section .debug_info,"",@progbits
+.section .minias_widths,"",@progbits
 .globl fixed_width_$expr
 fixed_width_$expr:
 $directive $operand
@@ -106,7 +114,7 @@ ASM
                 readelf -h "$object" >"$work/header.txt"
                 grep -Eq "Class:[[:space:]]+ELF$klass" "$work/header.txt"
                 grep -Eq "Machine:.*$machine" "$work/header.txt"
-                readelf -SW "$object" | grep -q '\.debug_info'
+                readelf -SW "$object" | grep -q '\.minias_widths'
             done
             ((accepted+=1))
             # This semantic comparator normalizes section identities,

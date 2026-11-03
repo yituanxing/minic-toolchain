@@ -10,7 +10,10 @@
 > class/machine、归一化语义而非对象文件逐字节相同，并用独立前置
 > GNU 对象通过 `ld -r` 重定位后再次检查。x86 本地两模式
 > **24/24** 场景（14 接受/10 同拒绝）、14 组 `ld -r` PASS，
-> 跨 GNU 工具及 pyelftools 缺失的部分不冒充本地 PASS。
+> 本地安装 `pyelftools` 后 24/24 严格语义也已 PASS，
+> 四个交叉 GNU 工具缺失的部分不冒充本地 PASS。比较器现支持
+> i386 六种常用 `SHT_REL` 宽度的隐式 addend 解码；同类型同符号但
+> addend 被篡改的对象必须不等，未知型为 INCONCLUSIVE。
 > Target 专项门禁另外核验 x86 PC8/PC16/ABS8/ABS16 和溢出、
 > RV32/64 ADD8/SUB8 配对、AArch64 ABS16/PREL16 与 ABS8 拒绝；
 > LoongArch 复用原始 Linux `.alternative` ADD8/SUB8/ADD32/SUB32
