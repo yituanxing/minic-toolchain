@@ -236,12 +236,25 @@ static bool symbol_resolver_assign_absolute(MiniLdSymbolResolver *resolver,
 
     if (index != SIZE_MAX) {
         MiniLdResolvedSymbol *symbol = &resolver->entries[index];
+        /* Shared-script canonical declarations may refer to a genuinely
+         * hidden/protected input undefined symbol.  Defining it via a
+         * script must not turn that input's visibility into DEFAULT and
+         * accidentally export it or require an unwanted DT_RELA.  Static
+         * links do not predeclare scripts and retain their old behavior. */
+        bool preserve_input = symbol->script_planned_defined &&
+                              !symbol->script_placeholder;
+        unsigned char info = preserve_input
+                                 ? symbol->info
+                                 : ELF64_ST_INFO(STB_GLOBAL, STT_NOTYPE);
+        unsigned char other = preserve_input
+                                  ? symbol->other : STV_DEFAULT;
         symbol->section = MINILD_SECTION_ABS;
         symbol->value = value;
         symbol->size = 0U;
-        symbol->info = ELF64_ST_INFO(STB_GLOBAL, STT_NOTYPE);
-        symbol->other = STV_DEFAULT;
+        symbol->info = info;
+        symbol->other = other;
         symbol->source_symbol = SIZE_MAX;
+        symbol->script_placeholder = false;
         return true;
     }
     return symbol_resolver_merge_global(resolver, diagnostics, name,

@@ -30,6 +30,7 @@ typedef struct MiniLdSharedImage {
     size_t dynamic_list_size;
     size_t dynsym_count;
     size_t symbol_map_capacity;
+    size_t prepared_symbol_count;
     size_t rela_count;
     size_t plt_count;
     size_t got_count;
@@ -119,6 +120,17 @@ static bool shared_symbol_eligible(const MiniLdState *state, size_t index,
     unsigned bind = ELF64_ST_BIND(symbol->info);
     unsigned visibility = ELF64_ST_VISIBILITY(symbol->other);
 
+    /* Script assignments give their canonical UND slots a final definition.
+     * An existing hidden/protected reference still owns its visibility:
+     * a hidden scripted symbol must never become a dynamic export. */
+    if (symbol->script_planned_defined) {
+        return (bind == STB_GLOBAL || bind == STB_WEAK) &&
+               symbol->name[0] != '\0' &&
+               (visibility == STV_DEFAULT ||
+                visibility == STV_PROTECTED) &&
+               (version == NULL ||
+                shared_version_exports(version, symbol->name));
+    }
     if ((bind != STB_GLOBAL && bind != STB_WEAK) ||
         symbol->name[0] == '\0' ||
         (visibility != STV_DEFAULT && visibility != STV_PROTECTED)) {
@@ -211,6 +223,13 @@ static bool shared_symbol_preemptible(const MiniLdState *state,
         return false;
     }
     symbol = &state->resolver.entries[index];
+    if (symbol->script_planned_defined) {
+        bind = ELF64_ST_BIND(symbol->info);
+        return (bind == STB_GLOBAL || bind == STB_WEAK) &&
+               !shared->pie &&
+               ELF64_ST_VISIBILITY(symbol->other) == STV_DEFAULT &&
+               shared_dynamic_list_contains(shared, symbol->name);
+    }
     if (symbol->section == MINILD_SECTION_UNDEF) {
         return true;
     }
@@ -234,10 +253,32 @@ static bool shared_symbol_needs_plt(const MiniLdState *state,
     if (index >= state->resolver.count) {
         return false;
     }
-    if (state->resolver.entries[index].section == MINILD_SECTION_UNDEF) {
+    if (state->resolver.entries[index].section == MINILD_SECTION_UNDEF &&
+        !state->resolver.entries[index].script_planned_defined) {
         return true;
     }
     return shared->preemptible[index];
+}
+
+/* A nonpreemptible SHN_ABS address is a load-independent constant.  Script
+ * declarations can establish this fact before their values are evaluated,
+ * so neither a dynamic RELATIVE relocation nor a loader textrel is needed. */
+static bool shared_symbol_is_static_absolute(const MiniLdState *state,
+                                             const MiniLdSharedImage *shared,
+                                             size_t index) {
+    const MiniLdResolvedSymbol *symbol;
+
+    if (index >= state->resolver.count || shared->preemptible[index]) {
+        return false;
+    }
+    symbol = &state->resolver.entries[index];
+    /* Layout may later turn a section-relative script assignment into ABS.
+     * Such a change cannot retroactively shrink .rela.dyn: only guaranteed
+     * pre-layout ABS definitions qualify for the static-relocation budget. */
+    if (symbol->script_planned_defined) {
+        return symbol->script_planned_absolute;
+    }
+    return symbol->section == MINILD_SECTION_ABS;
 }
 
 
@@ -363,7 +404,6 @@ static bool shared_prepare_metadata(MiniLdState *state,
                                     bool hash_style_both,
                                     bool eh_frame_hdr,
                                     const MiniLdScript *version_script,
-                                    const MiniLdScript *layout_script,
                                     MiniLdSharedImage *shared) {
     MiniLdSection *dynstr;
     MiniLdSection *dynsym;
@@ -397,33 +437,11 @@ static bool shared_prepare_metadata(MiniLdState *state,
     shared->dynamic_section = SIZE_MAX;
     shared->interp_section = SIZE_MAX;
     shared->pie = pie;
-    /* Script output-section definitions can append globals after dynsym
-     * sizing, so reserve their entire upper bound before allocating
-     * per-symbol maps. Later local: * script symbols remain nonexports. */
-    shared->symbol_map_capacity = state->resolver.count;
-    if (layout_script != NULL) {
-        for (i = 0U; i < layout_script->command_count; ++i) {
-            const MiniLdScriptCommand *command = &layout_script->commands[i];
-            size_t extra = 0U;
-            size_t j;
-            if (command->kind == MINILD_SCRIPT_DEFINE_SYMBOL) {
-                extra = 1U;
-            } else if (command->kind == MINILD_SCRIPT_OUTPUT_SECTION) {
-                for (j = 0U; j < command->value.section.item_count; ++j) {
-                    if (command->value.section.items[j].kind ==
-                        MINILD_SCRIPT_SECTION_DEFINE_SYMBOL) {
-                        ++extra;
-                    }
-                }
-            }
-            if (extra > SIZE_MAX - shared->symbol_map_capacity) {
-                fprintf(state->diagnostics,
-                        "minic-ld: script-symbol-map-overflow\n");
-                goto fail;
-            }
-            shared->symbol_map_capacity += extra;
-        }
-    }
+    /* Script-defined names are registered as canonical unresolved slots
+     * before this phase.  No resolver index may be appended during layout:
+     * dynamic table size and hash indices are fixed here, not afterward. */
+    shared->prepared_symbol_count = state->resolver.count;
+    shared->symbol_map_capacity = shared->prepared_symbol_count;
     if (shared->symbol_map_capacity >
         SIZE_MAX / sizeof(*shared->dynsym_index)) {
         fprintf(state->diagnostics,
@@ -596,7 +614,8 @@ static bool shared_prepare_metadata(MiniLdState *state,
         shared->preemptible[i] =
             shared_symbol_preemptible(state, shared, i) &&
             (version_script == NULL ||
-             state->resolver.entries[i].section == MINILD_SECTION_UNDEF ||
+             (state->resolver.entries[i].section == MINILD_SECTION_UNDEF &&
+              !state->resolver.entries[i].script_planned_defined) ||
              shared_version_exports(version_script,
                                     state->resolver.entries[i].name));
     }
@@ -740,14 +759,19 @@ static bool shared_prepare_metadata(MiniLdState *state,
                 goto fail;
             }
             if (shared->got_slot_offset[reloc->symbol] == SIZE_MAX) {
+                bool static_abs = shared_symbol_is_static_absolute(
+                    state, shared, reloc->symbol);
+
                 if (shared->got_count > (SIZE_MAX / 8U) - 1U ||
-                    shared->rela_count == SIZE_MAX) {
+                    (!static_abs && shared->rela_count == SIZE_MAX)) {
                     goto oom;
                 }
                 shared->got_slot_offset[reloc->symbol] =
                     shared->got_count * 8U;
                 ++shared->got_count;
-                ++shared->rela_count;
+                if (!static_abs) {
+                    ++shared->rela_count;
+                }
             }
             continue;
         }
@@ -804,6 +828,10 @@ static bool shared_prepare_metadata(MiniLdState *state,
                     "minic-ld: unsupported-shared-relocation:%u\n",
                     reloc->type);
             goto fail;
+        }
+        if (reloc->symbol != SIZE_MAX &&
+            shared_symbol_is_static_absolute(state, shared, reloc->symbol)) {
+            continue;
         }
         /* A dynamic absolute relocation written into an RX/RO input needs
          * loader textrel permission. GOT/TLS/PLT slots themselves are RW,
@@ -1363,6 +1391,27 @@ static bool shared_fill_relocations(MiniLdState *state,
             continue;
         }
         target = &state->resolver.entries[i];
+        if (shared_symbol_is_static_absolute(state, shared, i)) {
+            uint64_t target_value;
+
+            if (target->section != MINILD_SECTION_ABS ||
+                !static_resolve_symbol(state, layout, i, &target_value)) {
+                fprintf(state->diagnostics,
+                        "minic-ld: unresolved-planned-static-absolute:%s\n",
+                        target->name);
+                return false;
+            }
+            store_u64le(state->work.sections[shared->got_section].data + offset,
+                        target_value);
+            continue;
+        }
+        if (target->section == MINILD_SECTION_ABS &&
+            !shared->preemptible[i]) {
+            fprintf(state->diagnostics,
+                    "minic-ld: unplanned-shared-absolute-got:%s\n",
+                    target->name);
+            return false;
+        }
         memset(&output, 0, sizeof(output));
         output.r_offset =
             layout->section_vaddr[shared->got_section] + (uint64_t)offset;
@@ -1478,6 +1527,29 @@ static bool shared_fill_relocations(MiniLdState *state,
             return false;
         }
         target = &state->resolver.entries[input->symbol];
+
+        if (shared_symbol_is_static_absolute(state, shared, input->symbol)) {
+            uint64_t target_value;
+
+            if (target->section != MINILD_SECTION_ABS ||
+                !static_resolve_symbol(state, layout, input->symbol,
+                                       &target_value)) {
+                fprintf(state->diagnostics,
+                        "minic-ld: unresolved-planned-static-absolute:%s\n",
+                        target->name);
+                return false;
+            }
+            store_u64le(source->data + (size_t)input->offset,
+                        target_value + (uint64_t)input->addend);
+            continue;
+        }
+        if (target->section == MINILD_SECTION_ABS &&
+            !shared->preemptible[input->symbol]) {
+            fprintf(state->diagnostics,
+                    "minic-ld: unplanned-shared-absolute-relocation:%s\n",
+                    target->name);
+            return false;
+        }
 
         memset(&output, 0, sizeof(output));
         output.r_offset =
@@ -2544,8 +2616,9 @@ static bool shared_write_object(MiniLdState *state,
     }
     /* GNU nm uses the non-ALLOC .symtab in Linux's vDSO build, not only
      * .dynsym.  Both executable kinds consume the same final symbol view. */
-    if (!minild_final_symbols_build(state, layout, output_plan,
-                                    &final_symbols)) {
+    if (!minild_final_symbols_build_with_version(state, layout, output_plan,
+                                                shared->version_script,
+                                                &final_symbols)) {
         fprintf(state->diagnostics,
                 "minic-ld: cannot-build-shared-static-symbols\n");
         goto oom;
@@ -2672,6 +2745,7 @@ static bool shared_validate_pie_dso_symbols(
         unsigned bind = ELF64_ST_BIND(symbol->info);
 
         if (symbol->section != MINILD_SECTION_UNDEF ||
+            symbol->script_planned_defined ||
             bind == STB_WEAK ||
             bind == STB_LOCAL ||
             symbol->name[0] == '\0') {
@@ -2830,6 +2904,8 @@ int minild_link_shared_elf64_riscv_inputs_options(
         !static_allocate_common(&state) ||
         (script_path != NULL &&
          !minild_shared_prune_script_inputs(&state, &layout_script)) ||
+        (script_path != NULL &&
+         !minild_script_declare_shared_symbols(&state, &layout_script)) ||
         !shared_prepare_metadata(&state,
                                  soname,
                                  dynamic_list_path,
@@ -2839,7 +2915,6 @@ int minild_link_shared_elf64_riscv_inputs_options(
                                  hash_style_both,
                                  eh_frame_hdr,
                                  version,
-                                 script_path != NULL ? &layout_script : NULL,
                                  &shared) ||
         (pie && !shared_validate_pie_dso_symbols(&state)) ||
         !(script_path != NULL
@@ -2854,10 +2929,10 @@ int minild_link_shared_elf64_riscv_inputs_options(
         goto done;
     }
     shared.layout_script = script_path != NULL ? &layout_script : NULL;
-    if (state.resolver.count > shared.symbol_map_capacity) {
+    if (state.resolver.count != shared.prepared_symbol_count) {
         fprintf(diagnostics,
-                "minic-ld: script-symbol-map-exceeded:%zu:%zu\n",
-                state.resolver.count, shared.symbol_map_capacity);
+                "minic-ld: script-symbol-count-changed:%zu:%zu\n",
+                state.resolver.count, shared.prepared_symbol_count);
         goto done;
     }
 

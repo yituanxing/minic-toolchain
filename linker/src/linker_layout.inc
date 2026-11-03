@@ -834,6 +834,18 @@ static bool shared_build_layout(MiniLdState *state,
 }
 
 
+/* A top-level location-counter definition carries both its evaluated VMA
+ * and its output-section provenance.  Defer the section-index binding until
+ * all output fragments exist; forward `foo = .` before the first output is
+ * then resolved against that output's real work-section anchor. */
+typedef struct MiniLdScriptSymbolProvenance {
+    size_t resolver_index;
+    size_t command_index;
+    size_t output_command;
+    uint64_t value;
+    bool active;
+} MiniLdScriptSymbolProvenance;
+
 typedef struct MiniLdScriptLayoutState {
     MiniLdState *state;
     MiniLdLayout *layout;
@@ -845,6 +857,10 @@ typedef struct MiniLdScriptLayoutState {
     bool have_load_bias;
     uint64_t headers_size;
     bool have_headers_size;
+    size_t dot_output_command;
+    MiniLdScriptSymbolProvenance *symbol_provenance;
+    size_t symbol_provenance_count;
+    size_t symbol_provenance_capacity;
 } MiniLdScriptLayoutState;
 
 static bool static_align_up_u64(uint64_t value,
@@ -935,8 +951,18 @@ static bool script_layout_define_symbol(MiniLdScriptLayoutState *script_state,
                                         const char *name,
                                         uint64_t value) {
     size_t index = symbol_resolver_lookup(&script_state->state->resolver, name);
+    size_t i;
 
-    if (index != SIZE_MAX) {
+    for (i = 0U; i < script_state->symbol_provenance_count; ++i) {
+        MiniLdScriptSymbolProvenance *binding =
+            &script_state->symbol_provenance[i];
+
+        if (index != SIZE_MAX && binding->resolver_index == index) {
+            binding->active = false;
+        }
+    }
+
+    if (!script_state->have_headers_size && index != SIZE_MAX) {
         uint64_t current;
 
         if (script_layout_symbol_value(script_state, name, &current) &&
@@ -947,6 +973,256 @@ static bool script_layout_define_symbol(MiniLdScriptLayoutState *script_state,
     return symbol_resolver_assign_absolute(&script_state->state->resolver,
                                             script_state->state->diagnostics,
                                             name, value);
+}
+
+static bool script_layout_is_literal_expr(const MiniLdScript *script,
+                                          MiniLdScriptExprId id,
+                                          unsigned depth) {
+    const MiniLdScriptExpr *expr;
+
+    if (id == MINILD_SCRIPT_EXPR_NONE || id >= script->expression_count ||
+        depth > 128U) {
+        return false;
+    }
+    expr = &script->expressions[id];
+    switch (expr->kind) {
+    case MINILD_SCRIPT_EXPR_INTEGER:
+        return true;
+    case MINILD_SCRIPT_EXPR_NEGATE:
+        return script_layout_is_literal_expr(script, expr->left, depth + 1U);
+    case MINILD_SCRIPT_EXPR_ADD:
+    case MINILD_SCRIPT_EXPR_SUBTRACT:
+    case MINILD_SCRIPT_EXPR_MULTIPLY:
+    case MINILD_SCRIPT_EXPR_DIVIDE:
+    case MINILD_SCRIPT_EXPR_SHIFT_LEFT:
+        return script_layout_is_literal_expr(script, expr->left, depth + 1U) &&
+               script_layout_is_literal_expr(script, expr->right, depth + 1U);
+    default:
+        return false;
+    }
+}
+
+/* GNU top-level `foo = .` and `foo = . +/- constant` inherit the location
+ * counter's section, whereas `foo = ABSOLUTE(.)` is an absolute definition.
+ * Do not infer provenance from a previous symbol's ELF st_shndx: GNU treats
+ * e.g. `alias = top_after_data` differently from `alias = .`. */
+static bool script_layout_is_dot_relative_expr(const MiniLdScript *script,
+                                                MiniLdScriptExprId id,
+                                                unsigned depth) {
+    const MiniLdScriptExpr *expr;
+
+    if (id == MINILD_SCRIPT_EXPR_NONE || id >= script->expression_count ||
+        depth > 128U) {
+        return false;
+    }
+    expr = &script->expressions[id];
+    if (expr->kind == MINILD_SCRIPT_EXPR_DOT) {
+        return true;
+    }
+    if (expr->kind == MINILD_SCRIPT_EXPR_ADD) {
+        return (script_layout_is_dot_relative_expr(script, expr->left,
+                                                    depth + 1U) &&
+                script_layout_is_literal_expr(script, expr->right,
+                                               depth + 1U)) ||
+               (script_layout_is_literal_expr(script, expr->left,
+                                               depth + 1U) &&
+                script_layout_is_dot_relative_expr(script, expr->right,
+                                                    depth + 1U));
+    }
+    return expr->kind == MINILD_SCRIPT_EXPR_SUBTRACT &&
+           script_layout_is_dot_relative_expr(script, expr->left,
+                                              depth + 1U) &&
+           script_layout_is_literal_expr(script, expr->right, depth + 1U);
+}
+
+static bool script_layout_define_top_symbol(
+    MiniLdScriptLayoutState *script_state, size_t command_index,
+    const char *name, MiniLdScriptExprId expr_id, uint64_t value) {
+    MiniLdScriptSymbolProvenance *entry;
+    size_t index;
+
+    if (!script_layout_define_symbol(script_state, name, value)) {
+        return false;
+    }
+    if (!script_state->have_headers_size ||
+        !script_layout_is_dot_relative_expr(script_state->script, expr_id,
+                                            0U)) {
+        return true;
+    }
+    index = symbol_resolver_lookup(&script_state->state->resolver, name);
+    if (index == SIZE_MAX) {
+        fprintf(script_state->state->diagnostics,
+                "minic-ld: linker-script-missing-defined-symbol:%s\n", name);
+        return false;
+    }
+    if (script_state->symbol_provenance_count ==
+            script_state->symbol_provenance_capacity) {
+        size_t capacity = script_state->symbol_provenance_capacity == 0U
+                              ? 16U
+                              : script_state->symbol_provenance_capacity * 2U;
+        MiniLdScriptSymbolProvenance *items;
+
+        if (capacity < script_state->symbol_provenance_capacity ||
+            capacity > SIZE_MAX / sizeof(*items)) {
+            fprintf(script_state->state->diagnostics,
+                    "minic-ld: linker-script-symbol-provenance-overflow\n");
+            return false;
+        }
+        items = realloc(script_state->symbol_provenance,
+                        capacity * sizeof(*items));
+        if (items == NULL) {
+            fprintf(script_state->state->diagnostics,
+                    "minic-ld: out-of-memory:linker-script-symbol-provenance\n");
+            return false;
+        }
+        script_state->symbol_provenance = items;
+        script_state->symbol_provenance_capacity = capacity;
+    }
+    entry = &script_state->symbol_provenance[
+        script_state->symbol_provenance_count++];
+    entry->resolver_index = index;
+    entry->command_index = command_index;
+    entry->output_command = script_state->dot_output_command;
+    entry->value = value;
+    entry->active = true;
+    return true;
+}
+
+/* Register future shared-script definitions in the ONE canonical resolver
+ * before dynsym/PLT/GOT sizing.  This pass deliberately does not evaluate
+ * expressions: the value of `.` and section membership belong to layout.
+ * The synthetic slot is a real UND placeholder, not an invented ABS zero.
+ * PROVIDE is active only for an original, unresolved input reference;
+ * artificially reserved forced names must not trigger it. */
+static bool minild_script_declare_shared_name(MiniLdState *state,
+                                               const char *name,
+                                               bool provide,
+                                               bool provably_absolute) {
+    size_t index = symbol_resolver_lookup(&state->resolver, name);
+
+    if (provide) {
+        if (index != SIZE_MAX &&
+            state->resolver.entries[index].section == MINILD_SECTION_UNDEF &&
+            !state->resolver.entries[index].script_placeholder) {
+            if (!state->resolver.entries[index].script_planned_defined) {
+                state->resolver.entries[index].script_planned_absolute =
+                    provably_absolute;
+            } else {
+                state->resolver.entries[index].script_planned_absolute &=
+                    provably_absolute;
+            }
+            state->resolver.entries[index].script_planned_defined = true;
+        }
+        return true;
+    }
+
+    if (index == SIZE_MAX) {
+        if (!symbol_resolver_merge_global(&state->resolver,
+                                          state->diagnostics,
+                                          name,
+                                          MINILD_SECTION_UNDEF,
+                                          0U,
+                                          0U,
+                                          ELF64_ST_INFO(STB_GLOBAL, STT_NOTYPE),
+                                          STV_DEFAULT,
+                                          SIZE_MAX,
+                                          &index)) {
+            return false;
+        }
+        state->resolver.entries[index].script_placeholder = true;
+    }
+    if (!state->resolver.entries[index].script_planned_defined) {
+        state->resolver.entries[index].script_planned_absolute =
+            provably_absolute;
+    } else {
+        state->resolver.entries[index].script_planned_absolute &=
+            provably_absolute;
+    }
+    state->resolver.entries[index].script_planned_defined = true;
+    return true;
+}
+
+/* Prove only pure literal arithmetic or an explicit ABSOLUTE(...).
+ * Section/dot/symbol provenance is resolved during layout, and an output
+ * section's ordinary assignment may be rebound to the section even when
+ * its expression is a literal.  Unknown expressions stay conservative. */
+static bool minild_script_expr_guaranteed_absolute(
+    const MiniLdScript *script, MiniLdScriptExprId id, bool in_section,
+    unsigned depth) {
+    const MiniLdScriptExpr *expr;
+
+    if (id == MINILD_SCRIPT_EXPR_NONE || id >= script->expression_count ||
+        depth >= 128U) {
+        return false;
+    }
+    expr = &script->expressions[id];
+    if (expr->kind == MINILD_SCRIPT_EXPR_ABSOLUTE) {
+        return true;
+    }
+    if (in_section) {
+        return false;
+    }
+    switch (expr->kind) {
+    case MINILD_SCRIPT_EXPR_INTEGER:
+        return true;
+    case MINILD_SCRIPT_EXPR_NEGATE:
+        return minild_script_expr_guaranteed_absolute(
+            script, expr->left, false, depth + 1U);
+    case MINILD_SCRIPT_EXPR_ADD:
+    case MINILD_SCRIPT_EXPR_SUBTRACT:
+    case MINILD_SCRIPT_EXPR_MULTIPLY:
+    case MINILD_SCRIPT_EXPR_DIVIDE:
+    case MINILD_SCRIPT_EXPR_SHIFT_LEFT:
+        return minild_script_expr_guaranteed_absolute(
+                   script, expr->left, false, depth + 1U) &&
+               minild_script_expr_guaranteed_absolute(
+                   script, expr->right, false, depth + 1U);
+    default:
+        return false;
+    }
+}
+
+/* Only the shared -T driver invokes this directly after input admission,
+ * COMMON allocation and source /DISCARD/.  Static links preserve their
+ * existing script declaration and PROVIDE behavior unchanged. */
+static bool minild_script_declare_shared_symbols(MiniLdState *state,
+                                                  const MiniLdScript *script) {
+    size_t i;
+
+    for (i = 0U; i < script->command_count; ++i) {
+        const MiniLdScriptCommand *command = &script->commands[i];
+        size_t j;
+
+        if (command->kind == MINILD_SCRIPT_DEFINE_SYMBOL) {
+            if (!minild_script_declare_shared_name(
+                    state,
+                    command->value.symbol.name,
+                    command->value.symbol.provide,
+                    minild_script_expr_guaranteed_absolute(
+                        script, command->value.symbol.expression, false,
+                        0U))) {
+                return false;
+            }
+            continue;
+        }
+        if (command->kind != MINILD_SCRIPT_OUTPUT_SECTION ||
+            command->value.section.discard) {
+            continue;
+        }
+        for (j = 0U; j < command->value.section.item_count; ++j) {
+            const MiniLdScriptSectionItem *item =
+                &command->value.section.items[j];
+
+            if (item->kind == MINILD_SCRIPT_SECTION_DEFINE_SYMBOL &&
+                !minild_script_declare_shared_name(
+                    state, item->value.symbol.name, false,
+                    minild_script_expr_guaranteed_absolute(
+                        script, item->value.symbol.expression, true, 0U))) {
+                return false;
+            }
+        }
+    }
+    return true;
 }
 
 static bool script_layout_place_section(MiniLdScriptLayoutState *script_state,
@@ -1101,12 +1377,9 @@ static bool script_layout_place_pattern(MiniLdScriptLayoutState *script_state,
     return true;
 }
 
-static bool script_layout_bind_output_symbols(
-    MiniLdScriptLayoutState *script_state,
-    const MiniLdScriptOutputSection *output,
-    size_t command_index) {
+static size_t script_layout_output_anchor(
+    const MiniLdScriptLayoutState *script_state, size_t command_index) {
     size_t anchor = SIZE_MAX;
-    uint64_t anchor_vaddr;
     size_t i;
 
     for (i = 0U; i < script_state->state->work.count; ++i) {
@@ -1121,6 +1394,17 @@ static bool script_layout_bind_output_symbols(
             anchor = i;
         }
     }
+    return anchor;
+}
+
+static bool script_layout_bind_output_symbols(
+    MiniLdScriptLayoutState *script_state,
+    const MiniLdScriptOutputSection *output,
+    size_t command_index) {
+    size_t anchor = script_layout_output_anchor(script_state, command_index);
+    uint64_t anchor_vaddr;
+    size_t i;
+
     if (anchor == SIZE_MAX) {
         return true;
     }
@@ -1453,9 +1737,68 @@ static bool script_layout_process_output(MiniLdScriptLayoutState *script_state,
                 (script_state->layout->section_vaddr[i] - output_start);
         }
     }
-    return script_layout_bind_output_symbols(script_state,
-                                             output,
-                                             command_index);
+    if (!script_layout_bind_output_symbols(script_state,
+                                           output,
+                                           command_index)) {
+        return false;
+    }
+    if (script_layout_output_anchor(script_state, command_index) != SIZE_MAX) {
+        script_state->dot_output_command = command_index;
+    }
+    return true;
+}
+
+static bool script_layout_finalize_top_symbol_provenance(
+    MiniLdScriptLayoutState *script_state) {
+    size_t i;
+
+    for (i = 0U; i < script_state->symbol_provenance_count; ++i) {
+        const MiniLdScriptSymbolProvenance *binding =
+            &script_state->symbol_provenance[i];
+        MiniLdResolvedSymbol *symbol;
+        size_t owner = binding->output_command;
+        size_t anchor;
+        size_t j;
+
+        if (!binding->active) {
+            continue;
+        }
+        if (owner == SIZE_MAX) {
+            /* Before the first section, or after an explicit dot jump,
+             * GNU associates a matching output-section start with `.`.
+             * A different placement cannot be inferred safely. */
+            for (j = binding->command_index + 1U;
+                 j < script_state->script->command_count; ++j) {
+                const MiniLdScriptCommand *cmd =
+                    &script_state->script->commands[j];
+
+                if (cmd->kind == MINILD_SCRIPT_OUTPUT_SECTION &&
+                    script_state->output_defined[j] &&
+                    script_state->layout->script_output_start[j] ==
+                        binding->value &&
+                    script_layout_output_anchor(script_state, j) != SIZE_MAX) {
+                    owner = j;
+                    break;
+                }
+            }
+        }
+        anchor = owner == SIZE_MAX ? SIZE_MAX :
+                     script_layout_output_anchor(script_state, owner);
+        symbol = &script_state->state->resolver.entries[
+            binding->resolver_index];
+        if (anchor == SIZE_MAX ||
+            symbol->section != MINILD_SECTION_ABS ||
+            symbol->value != binding->value) {
+            fprintf(script_state->state->diagnostics,
+                    "minic-ld: unsupported-script-symbol-provenance:%s\n",
+                    symbol->name);
+            return false;
+        }
+        symbol->section = (int)anchor;
+        symbol->value = binding->value -
+                        script_state->layout->section_vaddr[anchor];
+    }
+    return true;
 }
 
 /*
@@ -1584,6 +1927,7 @@ static bool static_build_script_layout(MiniLdState *state,
     script_state.state = state;
     script_state.layout = layout;
     script_state.script = script;
+    script_state.dot_output_command = SIZE_MAX;
     script_state.have_headers_size = shared_headers_size != 0U;
     script_state.headers_size = shared_headers_size;
 
@@ -1603,6 +1947,11 @@ static bool static_build_script_layout(MiniLdState *state,
                         "minic-ld: linker-script-top-level-dot-moved-backward\n");
                 goto done;
             }
+            if (script_state.dot != value) {
+                /* Moving top-level dot may enter the following output
+                 * section, which is not constructed until later. */
+                script_state.dot_output_command = SIZE_MAX;
+            }
             script_state.dot = value;
             break;
         case MINILD_SCRIPT_DEFINE_SYMBOL:
@@ -1610,7 +1959,8 @@ static bool static_build_script_layout(MiniLdState *state,
                 size_t sym = symbol_resolver_lookup(&state->resolver,
                                                 command->value.symbol.name);
                 if (sym == SIZE_MAX ||
-                    state->resolver.entries[sym].section != MINILD_SECTION_UNDEF) {
+                    state->resolver.entries[sym].section != MINILD_SECTION_UNDEF ||
+                    state->resolver.entries[sym].script_placeholder) {
                     break;
                 }
             }
@@ -1626,9 +1976,9 @@ static bool static_build_script_layout(MiniLdState *state,
             if (!script_layout_evaluate(&script_state,
                                         command->value.symbol.expression,
                                         &value) ||
-                !script_layout_define_symbol(&script_state,
-                                             command->value.symbol.name,
-                                             value)) {
+                !script_layout_define_top_symbol(
+                    &script_state, i, command->value.symbol.name,
+                    command->value.symbol.expression, value)) {
                 goto done;
             }
             break;
@@ -1654,18 +2004,23 @@ static bool static_build_script_layout(MiniLdState *state,
             size_t sym = symbol_resolver_lookup(&state->resolver,
                                             command->value.symbol.name);
             if (sym == SIZE_MAX ||
-                state->resolver.entries[sym].section != MINILD_SECTION_UNDEF) {
+                state->resolver.entries[sym].section != MINILD_SECTION_UNDEF ||
+                state->resolver.entries[sym].script_placeholder) {
                 continue;
             }
         }
         if (!script_layout_evaluate(&script_state,
                                     command->value.symbol.expression,
                                     &value) ||
-            !script_layout_define_symbol(&script_state,
-                                         command->value.symbol.name,
-                                         value)) {
+            !script_layout_define_top_symbol(
+                &script_state, i, command->value.symbol.name,
+                command->value.symbol.expression, value)) {
             goto done;
         }
+    }
+
+    if (!script_layout_finalize_top_symbol_provenance(&script_state)) {
+        goto done;
     }
 
     for (i = 0U; i < state->work.count; ++i) {
@@ -1868,6 +2223,7 @@ done:
     free(owner_max_align);
     free(owner_remaining);
     free(command_deferred);
+    free(script_state.symbol_provenance);
     free(script_state.output_defined);
     free(script_state.section_placed);
     if (!ok) {
@@ -2047,6 +2403,22 @@ static bool shared_build_vdso_script_layout(MiniLdState *state,
                    script->phdr_count * sizeof(Elf64_Phdr);
     if (!static_build_script_layout(state, script, layout, headers_size)) {
         return false;
+    }
+    /* Every shared-script declaration was registered before metadata
+     * sizing.  A remaining planned UND is never a valid runtime import:
+     * its final definition was promised by the script and any dynamic
+     * symbol/relocation reservation depended on that promise. */
+    for (i = 0U; i < state->resolver.count; ++i) {
+        const MiniLdResolvedSymbol *symbol = &state->resolver.entries[i];
+
+        if (symbol->script_planned_defined &&
+            (symbol->script_placeholder ||
+             symbol->section == MINILD_SECTION_UNDEF)) {
+            fprintf(state->diagnostics,
+                    "minic-ld: unresolved-shared-script-definition:%s\n",
+                    symbol->name);
+            return false;
+        }
     }
     if (!shared_validate_vdso_script_phdr_membership(state, script, layout)) {
         return false;

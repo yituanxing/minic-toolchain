@@ -39,10 +39,57 @@ static bool minild_final_tls_base_address(const MiniLdState *state,
     return true;
 }
 
-static bool minild_final_symbols_build(const MiniLdState *state,
-                                       const MiniLdLayout *layout,
-                                       const MiniLdOutputPlan *plan,
-                                       MiniLdFinalSymbols *final) {
+/* A VERSION { global: ...; local: *; } script hides final definitions
+ * from the dynamic interface by making them local in the ordinary symbol
+ * table too.  Compute that final ELF binding without changing canonical
+ * resolver entries (whose indices are used by relocation and dynsym maps).
+ * Undefined imports remain undefined globals: local: * only controls
+ * definitions owned by the output. */
+static bool minild_final_version_exports(const MiniLdScript *version,
+                                         const char *name) {
+    size_t i;
+
+    for (i = 0U; i < version->version_global_count; ++i) {
+        if (strcmp(version->version_globals[i], name) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool minild_final_symbol_local(const MiniLdResolvedSymbol *source,
+                                      const MiniLdState *state,
+                                      const MiniLdOutputPlan *plan,
+                                      const MiniLdScript *version) {
+    unsigned visibility;
+
+    if (ELF64_ST_BIND(source->info) == STB_LOCAL) {
+        return true;
+    }
+    if (version == NULL || !version->version_local_all ||
+        source->section == MINILD_SECTION_UNDEF ||
+        source->name[0] == '\0') {
+        return false;
+    }
+    if (source->section >= 0 &&
+        ((size_t)source->section >= state->work.count ||
+         plan->work_shndx[source->section] == 0U)) {
+        return false;
+    }
+    visibility = ELF64_ST_VISIBILITY(source->other);
+    /* GNU ld localizes HIDDEN/INTERNAL definitions even if their names are
+     * listed under global:.  PROTECTED definitions may be exported and
+     * retain that visibility when explicitly whitelisted. */
+    return (visibility != STV_DEFAULT && visibility != STV_PROTECTED) ||
+           !minild_final_version_exports(version, source->name);
+}
+
+static bool minild_final_symbols_build_with_version(
+    const MiniLdState *state,
+    const MiniLdLayout *layout,
+    const MiniLdOutputPlan *plan,
+    const MiniLdScript *version_script,
+    MiniLdFinalSymbols *final) {
     uint64_t tls_base = 0U;
     bool have_tls = false;
     size_t next = 1U;
@@ -62,7 +109,10 @@ static bool minild_final_symbols_build(const MiniLdState *state,
     for (pass = 0U; pass < 2U; ++pass) {
         for (i = 0U; i < state->resolver.count; ++i) {
             const MiniLdResolvedSymbol *source = &state->resolver.entries[i];
-            bool local = ELF64_ST_BIND(source->info) == STB_LOCAL;
+            bool local = minild_final_symbol_local(source, state, plan,
+                                                   version_script);
+            bool localized = local &&
+                             ELF64_ST_BIND(source->info) != STB_LOCAL;
             Elf64_Sym *output;
 
             if (local != (pass == 0U)) {
@@ -74,8 +124,15 @@ static bool minild_final_symbols_build(const MiniLdState *state,
                                       &output->st_name)) {
                 return false;
             }
-            output->st_info = source->info;
-            output->st_other = source->other;
+            output->st_info = localized
+                                  ? ELF64_ST_INFO(STB_LOCAL,
+                                                  ELF64_ST_TYPE(source->info))
+                                  : source->info;
+            /* GNU's localized .symtab entries use DEFAULT visibility;
+             * preserve input locals and target-specific high st_other bits. */
+            output->st_other = localized
+                                   ? (unsigned char)(source->other & ~3U)
+                                   : source->other;
             output->st_size = source->size;
             if (source->section == MINILD_SECTION_UNDEF) {
                 output->st_shndx = SHN_UNDEF;
@@ -144,6 +201,15 @@ static bool minild_final_symbols_build(const MiniLdState *state,
         }
     }
     return next == final->entry_count;
+}
+
+/* ET_EXEC and unversioned ET_DYN retain their existing symbol behavior. */
+static bool minild_final_symbols_build(const MiniLdState *state,
+                                       const MiniLdLayout *layout,
+                                       const MiniLdOutputPlan *plan,
+                                       MiniLdFinalSymbols *final) {
+    return minild_final_symbols_build_with_version(state, layout, plan,
+                                                   NULL, final);
 }
 
 /* The final ELF section table and its synthetic symbol/name trailer have

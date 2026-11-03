@@ -820,6 +820,12 @@ check-minild-shared-nonalloc-relocations: $(MINIAS_BINARY) $(MINILD_BINARY)
 	MINILD="$(abspath $(MINILD_BINARY))" \
 	bash tests/linker/probe-shared-nonalloc-relocations.sh
 
+.PHONY: check-minild-shared-script-dynsym
+check-minild-shared-script-dynsym: $(MINIAS_BINARY) $(MINILD_BINARY)
+	MINIAS="$(abspath $(MINIAS_BINARY))" \
+	MINILD="$(abspath $(MINILD_BINARY))" \
+	bash tests/linker/probe-shared-script-dynsym.sh
+
 .PHONY: check-minild-final-symbol-view
 check-minild-final-symbol-view: $(MINIAS_BINARY) $(MINILD_BINARY)
 	MINIAS="$(abspath $(MINIAS_BINARY))" \

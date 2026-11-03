@@ -65,6 +65,15 @@ typedef struct MiniLdResolvedSymbol {
      * definition. The current section/value above remain mutable. */
     size_t source_symbol;
     bool group_signature_section;
+    /* Shared -T records a future script definition in this canonical slot
+     * before dynamic-symbol and relocation sizing.  A newly reserved name
+     * stays truly undefined until the script evaluator assigns its value;
+     * it must not count as an original undefined reference for PROVIDE. */
+    bool script_planned_defined;
+    /* Known SHN_ABS before shared dynamic relocation reservation; false
+     * is conservative for dot/section-relative script expressions. */
+    bool script_planned_absolute;
+    bool script_placeholder;
 } MiniLdResolvedSymbol;
 
 /* An original ET_REL symbol has its own identity even when it loses a
