@@ -2268,7 +2268,10 @@ static bool la_encode(MiniAsEncodeContext *ctx,const MiniAsInstructionView *s) {
                     body[j+4U]=(unsigned char)(unconditional>>(8U*j));
                 }
                 if(!minias_encode_ctx_emit(ctx,body,sizeof(body)))return false;
-                if(branch.local && !linker_relaxable)return true;
+                /* GNU always leaves a B26 relocation on the second word of
+                 * a grown conditional branch, including same-section local
+                 * targets in otherwise non-relaxable sections. The linker
+                 * must retain that branch identity across object layout. */
                 return minias_encode_ctx_fixup_ref(ctx,s->offset+4U,
                               MINIAS_FIXUP_LARCH_B26,4U,
                               *m->operands[slot].bound_symbol,false);

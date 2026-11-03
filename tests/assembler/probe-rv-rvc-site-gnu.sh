@@ -66,6 +66,39 @@ c.li a0,1
 addi a1,a1,1
 ASM
             ;;
+        align-rvc)
+            cat <<'ASM'
+.text
+.option push
+.option rvc
+c.li a0,1
+.p2align 2
+.option pop
+addi a1,a1,1
+ASM
+            ;;
+        align-large)
+            cat <<'ASM'
+.text
+.option push
+.option rvc
+c.li a0,1
+.option pop
+.p2align 3
+addi a1,a1,1
+ASM
+            ;;
+        align-explicit)
+            cat <<'ASM'
+.text
+.option push
+.option rvc
+c.li a0,1
+.option pop
+.p2align 2,0
+addi a1,a1,1
+ASM
+            ;;
     esac
 }
 
@@ -73,7 +106,7 @@ cases=0
 for bits in 32 64; do
     if [[ $bits == 32 ]]; then mabi=ilp32; else mabi=lp64; fi
     march="rv${bits}i2p1"
-    for scenario in empty emitted toggle align; do
+    for scenario in empty emitted toggle align align-rvc align-large align-explicit; do
         stem="$work/$bits-$scenario"
         write_scenario "$scenario" >"$stem.s"
         riscv64-linux-gnu-as --no-pad-sections "-march=$march" "-mabi=$mabi" \
@@ -87,6 +120,11 @@ for bits in 32 64; do
             done
             if ! cmp -s "$stem.gnu.${section#.}" "$stem.mini.${section#.}"; then
                 echo "MINIAS_RV_RVC_SITE=FAIL xlen=$bits scenario=$scenario section=$section" >&2
+                for producer in gnu mini; do
+                    echo "MINIAS_RV_RVC_SITE=DIAG producer=$producer section=$section" >&2
+                    readelf -x "$section" "$stem.$producer.o" >&2
+                    readelf -SW "$stem.$producer.o" >&2
+                done
                 exit 1
             fi
         done
@@ -102,6 +140,9 @@ def flag_rvc(path):
     return 'RVC' in next(s for s in output(path, '-h').splitlines() if 'Flags:' in s)
 def attribute(path):
     return next(s.strip() for s in output(path, '-A').splitlines() if 'Tag_RISCV_arch:' in s)
+def section_align(path, name):
+    return int(next(s.split()[-1] for s in output(path, '-SW').splitlines()
+                    if re.match(r'^\s*\[\s*\d+\]\s+' + re.escape(name) + r'\s', s)))
 def mapping(path):
     sections = {}
     for line in output(path, '-SW').splitlines():
@@ -122,6 +163,10 @@ assert flag_rvc(gnu) and flag_rvc(mini), (bits, scenario, 'RVC not sticky')
 expected_arch = f'Tag_RISCV_arch: "rv{bits}i2p1"'
 assert attribute(gnu) == attribute(mini) == expected_arch, (
     bits, scenario, attribute(gnu), attribute(mini))
+for name in ('.text', '.riscv.attributes'):
+    assert section_align(gnu, name) == section_align(mini, name), (
+        bits, scenario, name, 'sh_addralign',
+        section_align(gnu, name), section_align(mini, name))
 gnu_mapping, mini_mapping = mapping(gnu), mapping(mini)
 assert gnu_mapping and gnu_mapping == mini_mapping, (
     bits, scenario, 'mapping mismatch', gnu_mapping, mini_mapping)

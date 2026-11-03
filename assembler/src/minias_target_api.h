@@ -598,6 +598,12 @@ typedef struct MiniAsTargetOps {
      * need different NOP encodings for different source-selected CPU modes. */
     bool (*append_code_alignment)(MiniAsCodeAlignSink *,
                                   const MiniAsCodeAlignmentView *,size_t);
+    /* Some GAS targets discard an executable no-fill alignment directive
+     * when its requested granularity does not exceed the *current lexical*
+     * instruction alignment (RISC-V .option norvc is one example).  Decide
+     * this before Common reserves Fragment bytes, not during NOP emission. */
+    bool (*skip_small_code_alignment)(const void *target_state,
+                                      uint64_t requested_alignment);
     /* Some targets interpret an explicit alignment fill as the canonical
      * executable NOP sequence (e.g. GNU x86 `balign 16,0x90`). Common
      * must not choose machine-code bytes or hardcode a target's fill value. */

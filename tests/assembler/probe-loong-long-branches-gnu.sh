@@ -110,14 +110,21 @@ with open(sys.argv[1], 'rb') as source:
         section = elf.get_section_by_name(f'.text.case{i}')
         assert section is not None, (i, 'missing section')
         body = section.data()
+        relocation_section = elf.get_section_by_name(f'.rela.text.case{i}')
+        b26_offsets = ([] if relocation_section is None else
+                       [entry['r_offset'] for entry in relocation_section.iter_relocations()
+                        if entry['r_info_type'] == 66])
         gap = 0 if direction == 'near' else 131072 if width == 16 else 4194304
         branch_width = 4 if direction == 'near' else 8
         extra = 8 if i == 0 else 0
         assert len(body) == gap + branch_width + 4 + extra, (
             i, name, direction, 'wrong growth', len(body))
         if direction == 'near':
+            assert not b26_offsets, (i, name, 'spurious long B26', b26_offsets)
             continue
         pos = gap + 4 if direction == 'backward' else 0
+        assert pos + 4 in b26_offsets, (
+            i, name, 'missing long B26 relocation', pos + 4, b26_offsets)
         first, second = struct.unpack_from('<II', body, pos)
         high_mask = 0xfc000100 if name.startswith('bc') else 0xfc000000
         assert (first & high_mask) == inversion[name], (i, name, hex(first))
@@ -131,7 +138,7 @@ with open(sys.argv[1], 'rb') as source:
     assert any(e['r_offset'] == 4 and e['r_info_type'] == 66
                for e in rela.iter_relocations()), 'missing retained R_LARCH_B26 at +4'
 print('MINIAS_LOONG_LONG_BRANCH=PASS local_structural=22 width=4_or_8 '
-      'integer_and_FCC_inversion=exact retained_B26=1')
+      'integer_and_FCC_inversion=exact retained_B26=20')
 PY
 
 if ! command -v "$loong_as" >/dev/null ||
@@ -181,14 +188,22 @@ mini_sections, mini_relocs = read(second)
 expected = 1 if stage == 'final-link' else 22
 assert len(gnu_sections) == expected, (stage, 'GNU section coverage', len(gnu_sections))
 assert gnu_sections.keys() == mini_sections.keys(), (stage, 'section set mismatch')
+differences = []
 for name, reference in gnu_sections.items():
     actual = mini_sections[name]
-    assert reference == actual, (
-        stage, name, 'bytes', len(reference), len(actual),
-        reference[:16].hex(), actual[:16].hex(),
-        reference[-16:].hex(), actual[-16:].hex())
-    assert gnu_relocs.get(name, []) == mini_relocs.get(name, []), (
-        stage, name, 'relocations', gnu_relocs.get(name), mini_relocs.get(name))
+    if reference != actual:
+        first_diff = next((idx for idx, (g, m) in enumerate(zip(reference, actual))
+                           if g != m), min(len(reference), len(actual)))
+        differences.append((name, 'bytes', len(reference), len(actual), first_diff,
+                            reference[max(0, first_diff - 4):first_diff + 12].hex(),
+                            actual[max(0, first_diff - 4):first_diff + 12].hex()))
+    if gnu_relocs.get(name, []) != mini_relocs.get(name, []):
+        differences.append((name, 'relocations', gnu_relocs.get(name, []),
+                            mini_relocs.get(name, [])))
+if differences:
+    raise SystemExit(f'MINIAS_LOONG_LONG_BRANCH=FAIL stage={stage} '
+                     f'differences={len(differences)}\n' +
+                     '\n'.join(map(str, differences)))
 print(f'MINIAS_LOONG_LONG_BRANCH=PASS stage={stage} '
       f'cases={len(gnu_sections)} bytes=exact relocations=exact')
 PY

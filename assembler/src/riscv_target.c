@@ -1150,6 +1150,23 @@ static unsigned riscv_default_exec_alignment_for_site(
     return 4U;
 }
 
+/* GNU GAS riscv_frag_align_code() short-circuits md_do_align when the
+ * requested alignment is <= the lexical instruction width.  A C16 emitted
+ * under .option rvc followed by .option pop to RV{32,64}I makes this
+ * observable: .p2align 2 after the pop does NOT insert a C.NOP even when
+ * the current offset is 2 modulo 4 and EF_RISCV_RVC remains sticky. */
+static bool riscv_skip_small_code_alignment(const void *target_state,
+                                            uint64_t alignment) {
+    const MiniAsRiscvState *state=target_state;
+    /* The legacy implicit profile intentionally accepts compressed NOP
+     * padding even though its instruction parser defaults to RV64I forms.
+     * Keep that established GNU-compatible padding policy; explicit -march
+     * profiles use the actual lexical C enablement instead. */
+    if(state!=NULL && !state->isa_explicit)
+        return alignment<=2U;
+    return alignment <= riscv_default_exec_alignment_for_site(target_state);
+}
+
 static void riscv_resolve_cfi_abi(MiniAsTargetABIView view, MiniAsCfiABI *abi) {
     const MiniAsRiscvState *state=view.target_state;
     if(state!=NULL && state->target_xlen==32U) {
@@ -1186,6 +1203,7 @@ static const MiniAsTargetOps riscv_ops = {
     .capture_site_state = riscv_capture_site_state,
     .prepare_layout = riscv_prepare_layout,
     .default_exec_alignment_for_site = riscv_default_exec_alignment_for_site,
+    .skip_small_code_alignment = riscv_skip_small_code_alignment,
     .elf_policy = &riscv_elf_policy,
     .parse_target_directive = riscv_target_directive,
     .validate_common_directive = riscv_validate_common_directive,

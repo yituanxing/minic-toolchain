@@ -1334,6 +1334,17 @@ static bool handle_align(MiniAs *as,const char *op,char *args,size_t line){
         minias_set_error(as,"unsupported-alignment:%s:line=%zu",op,line);
         return false;
     }
+    /* GAS may entirely consume a no-fill executable alignment when its
+     * requested width is at/below the Target's current instruction unit.
+     * The Target makes that decision from lexical state; Common still owns
+     * the reservation, ELF section metadata and all other fill semantics. */
+    if(!has_fill &&
+       (as->sections[(size_t)as->current_section].flags &
+        MINIAS_SECTION_FLAG_EXECINSTR)!=0U &&
+       as->target->skip_small_code_alignment!=NULL &&
+       as->target->skip_small_code_alignment(as->target_state,alignment))
+        return minias_common_context_raise_section_alignment(
+            as,as->current_section,alignment);
     if(!minias_current_location(as,&current))return false;
     pad=(alignment-(current&(alignment-1U)))&(alignment-1U);
     if(has_max && pad>max_skip)pad=0U;
