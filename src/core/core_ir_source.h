@@ -96,11 +96,6 @@ bool minic_core_function_add_object(MinicCoreFunction *function,
                                     MinicSourceSpan span,
                                     MinicType type,
                                     MinicCoreObjectId *object_id);
-bool minic_core_function_add_repeated_object(MinicCoreFunction *function,
-                                             MinicSourceSpan span,
-                                             MinicType element_type,
-                                             size_t element_count,
-                                             MinicCoreObjectId *object_id);
 bool minic_core_function_add_global(MinicCoreFunction *function,
                                     const char *name,
                                     size_t name_length,

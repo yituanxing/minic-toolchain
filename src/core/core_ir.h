@@ -43,14 +43,14 @@ typedef enum MinicCoreCallFrameAddressKind {
     MINIC_CORE_CALL_FRAME_ADDRESS_FRAME
 } MinicCoreCallFrameAddressKind;
 
-/* A FIELD_ADDRESS names one nominal Core record field, but the typed
- * address may represent either the member itself, its first array element,
- * or a scalar storage carrier for packed bit-field extraction. These are
- * source-proven, target-independent memory-access forms, not C RecordIds. */
+/* A FIELD_ADDRESS names one nominal Core record field. The resulting address
+ * denotes the complete field type, except for a packed bit-field's scalar
+ * storage carrier. Array elements require explicit typed address lowering. */
 typedef enum MinicCoreFieldAccessForm {
     MINIC_CORE_FIELD_ACCESS_EXACT = 0,
-    MINIC_CORE_FIELD_ACCESS_ARRAY_ELEMENT,
-    MINIC_CORE_FIELD_ACCESS_BITFIELD_STORAGE
+    /* Numeric form 1 belonged to the retired legacy array-element shortcut.
+     * Keep the remaining encoding stable and reject form 1 at verification. */
+    MINIC_CORE_FIELD_ACCESS_BITFIELD_STORAGE = 2
 } MinicCoreFieldAccessForm;
 
 /* M158_FINAL_STRICT_TAIL */
@@ -198,11 +198,9 @@ typedef struct MinicCoreFixedRegisterBinding {
 
 typedef struct MinicCoreObject {
     MinicSourceSpan span;
+    /* The entire storage extent is owned by CoreType. A repeated object is
+     * represented by a first-class Core array, not an extra object count. */
     MinicCoreTypeId core_type_id;
-    /* M95_REPEATED_LOCAL_OBJECT: object addresses retain their element type;
-       element_count independently owns the complete repeated storage extent.
-       Ordinary objects use 1. */
-    size_t element_count;
     /* Zero means natural DataLayout alignment. Nonzero alignment is captured
        from source object semantics during AST -> Core lowering. */
     size_t explicit_alignment;

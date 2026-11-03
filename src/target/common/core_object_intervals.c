@@ -398,7 +398,7 @@ bool minic_core_object_interval(
         object_size = storage_type->size;
         object_alignment = storage_type->alignment;
     }
-    if (!scalar_storage || function->objects[object_id].element_count != 1U ||
+    if (!scalar_storage ||
         object_size == 0U || object_size > unit_bytes || object_alignment == 0U ||
         object_alignment > unit_bytes ||
         function->objects[object_id].explicit_alignment > unit_bytes) {

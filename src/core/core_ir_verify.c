@@ -804,7 +804,6 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
         MinicCoreTypeId field_type;
         const MinicCoreType *record;
         const MinicCoreRecordField *field;
-        const MinicCoreType *field_record_type;
         const MinicCoreType *storage_type;
 
         base = instruction->value.field_address.base;
@@ -828,13 +827,6 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
         case MINIC_CORE_FIELD_ACCESS_EXACT:
             return !field->is_bit_field &&
                    core_equal_unqualified(function, field_type, field->type_id);
-        case MINIC_CORE_FIELD_ACCESS_ARRAY_ELEMENT:
-            if (field->is_bit_field) return false;
-            field_record_type = core_type(function, field->type_id);
-            return field_record_type != NULL &&
-                   field_record_type->kind == MINIC_CORE_TYPE_ARRAY &&
-                   core_equal_unqualified(function, field_type,
-                                          field_record_type->value.array.element);
         case MINIC_CORE_FIELD_ACCESS_BITFIELD_STORAGE:
             storage_type = core_type(function, field_type);
             return field->is_bit_field && field->bit_width > 0U &&
@@ -1695,7 +1687,7 @@ bool minic_core_function_verify(const MinicCoreFunction *function) {
     }
     for (index = 0U; index < function->object_count; ++index) {
         const MinicCoreObject *object = &function->objects[index];
-        if (object->element_count == 0U || ct_is_void(object->core_type_id) ||
+        if (ct_is_void(object->core_type_id) ||
             ct_is_function(object->core_type_id) ||
             core_is(function, object->core_type_id, MINIC_CORE_TYPE_OPAQUE)) {
             return false;

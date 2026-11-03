@@ -233,7 +233,6 @@ bool minic_multi_direct_lp64_cfg_preflight(
                     term->return_value != MINIC_CORE_VALUE_INVALID ||
                     term->return_object >= fn->object_count ||
                     fn->objects == NULL ||
-                    fn->objects[term->return_object].element_count != 1U ||
                     minic_core_type_unqualified(types,
                             fn->objects[term->return_object].core_type_id) !=
                         minic_core_type_unqualified(types, fn->core_return_type_id))

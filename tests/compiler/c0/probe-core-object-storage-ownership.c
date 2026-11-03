@@ -23,7 +23,7 @@ static int check(bool ok, int code) { return ok ? 0 : code; }
 int main(void) {
     MinicCoreTypeContext types;
     MinicCoreType storage_type = {0};
-    MinicCoreTypeId storage_id;
+    MinicCoreTypeId storage_id, array_id;
     MinicCoreObject object = {0};
     MinicCoreFunction function = {0};
     MinicCoreObjectStoragePlan owned = {0};
@@ -39,8 +39,16 @@ int main(void) {
     storage_type.alignment = 4U;
     storage_type.value.integer.bit_width = 32U;
     if (!minic_core_type_register(&types, &storage_type, &storage_id)) return 11;
-    object.core_type_id = storage_id;
-    object.element_count = 2U;
+    storage_type = (MinicCoreType){0};
+    storage_type.kind = MINIC_CORE_TYPE_ARRAY;
+    storage_type.has_layout = true;
+    storage_type.size = 8U;
+    storage_type.alignment = 4U;
+    storage_type.value.array.element = storage_id;
+    storage_type.value.array.count = 2U;
+    storage_type.value.array.is_complete = true;
+    if (!minic_core_type_register(&types, &storage_type, &array_id)) return 13;
+    object.core_type_id = array_id;
     object.explicit_alignment = 16U;
     function.type_context = &types;
     function.objects = &object;

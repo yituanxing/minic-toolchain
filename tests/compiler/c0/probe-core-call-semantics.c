@@ -76,7 +76,6 @@ int main(void) {
     values[0].core_type_id = types.integer;
     values[1].core_type_id = types.function_pointer;
     object.core_type_id = types.record;
-    object.element_count = 1U;
     callee.name = "probe";
     callee.name_length = 5U;
     callee.core_return_type_id = types.integer;

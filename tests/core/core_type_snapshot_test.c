@@ -13,7 +13,8 @@
 } while (0)
 
 typedef struct TypeIds {
-    MinicCoreTypeId boolean, i8, i32, u32, record_a, record_b, incomplete_record;
+    MinicCoreTypeId boolean, i8, i32, u32, array_i32_2;
+    MinicCoreTypeId record_a, record_b, incomplete_record;
     MinicCoreTypeId ptr_record_a, ptr_record_b, ptr_i8, ptr_i32;
     MinicCoreTypeId function_a, function_b, ptr_function_a;
 } TypeIds;
@@ -41,6 +42,18 @@ static bool make_type_context(MinicCoreTypeContext *context, TypeIds *ids) {
     if (!minic_core_type_register(context, &type, &ids->i32)) return false;
     type.value.integer.is_signed = false;
     if (!minic_core_type_register(context, &type, &ids->u32)) return false;
+
+    /* Fixed object repetition lives in one Core ARRAY type; CoreObject itself
+     * has no second independent extent. */
+    (void)memset(&type, 0, sizeof(type));
+    type.kind = MINIC_CORE_TYPE_ARRAY;
+    type.has_layout = true;
+    type.size = 8U;
+    type.alignment = 4U;
+    type.value.array.element = ids->i32;
+    type.value.array.count = 2U;
+    type.value.array.is_complete = true;
+    if (!minic_core_type_register(context, &type, &ids->array_i32_2)) return false;
 
     (void)memset(&type, 0, sizeof(type));
     type.kind = MINIC_CORE_TYPE_RECORD;
@@ -225,10 +238,9 @@ static bool build_object_fixture(MinicCoreFunction *function, const TypeIds *ids
     if (!minic_core_function_set_signature(function, "storage", 7U,
                                            minic_type_int(), NULL, 0U) ||
         !set_snapshot_signature(function, ids->i32, NULL) ||
-        !minic_core_function_add_repeated_object(function, span, minic_type_int(),
-                                                 2U, &object_id) ||
+        !minic_core_function_add_object(function, span, minic_type_int(), &object_id) ||
         !minic_core_function_add_block(function, &block)) return false;
-    function->objects[object_id].core_type_id = ids->i32;
+    function->objects[object_id].core_type_id = ids->array_i32_2;
     instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
     instruction.value.integer_value = 0;
     if (!minic_core_function_append_source_value_instruction(
@@ -440,11 +452,11 @@ int main(void) {
     CHECK(minic_core_function_attach_type_context(&function, &context));
     CHECK(minic_core_function_verify_core_type_snapshot(&function));
     CHECK(minic_core_function_verify(&function));
-    /* A record member's pointer type is a sealed Core constraint, not an
-     * arbitrary carrier of the same byte displacement. The frontend may
-     * choose array-element or bit-field storage only for matching members. */
+    /* A record member's pointer type is a sealed Core constraint. The
+     * retired array-element shortcut (numeric form 1) cannot be re-admitted;
+     * a bit-field storage carrier also requires an actual bit-field. */
     function.instructions[1].value.field_address.access_form =
-        MINIC_CORE_FIELD_ACCESS_ARRAY_ELEMENT;
+        (MinicCoreFieldAccessForm)1;
     CHECK(!minic_core_function_verify(&function));
     function.instructions[1].value.field_address.access_form =
         MINIC_CORE_FIELD_ACCESS_BITFIELD_STORAGE;
@@ -479,12 +491,23 @@ int main(void) {
     CHECK(minic_core_function_attach_type_context(&function, &context));
     CHECK(minic_core_function_object_layout(&function, 0U, &extent, &alignment));
     CHECK(extent == 8U && alignment == 4U);
-    function.objects[0].element_count = SIZE_MAX;
-    CHECK(!minic_core_function_verify_core_type_snapshot(&function));
-    function.objects[0].element_count = 2U;
+    /* A mismatched/overflowing array layout must be rejected by CoreType
+     * registration, not by a second object-level count multiplier. */
+    {
+        MinicCoreType overflow_array = {0};
+        MinicCoreTypeId ignored_id = MINIC_CORE_TYPE_INVALID;
+        overflow_array.kind = MINIC_CORE_TYPE_ARRAY;
+        overflow_array.has_layout = true;
+        overflow_array.size = SIZE_MAX;
+        overflow_array.alignment = 4U;
+        overflow_array.value.array.element = ids.i32;
+        overflow_array.value.array.count = SIZE_MAX;
+        overflow_array.value.array.is_complete = true;
+        CHECK(!minic_core_type_register(&context, &overflow_array, &ignored_id));
+    }
     function.objects[0].core_type_id = ids.incomplete_record;
     CHECK(!minic_core_function_verify_core_type_snapshot(&function));
-    function.objects[0].core_type_id = ids.i32;
+    function.objects[0].core_type_id = ids.array_i32_2;
     CHECK(minic_core_function_verify_core_type_snapshot(&function));
     minic_core_function_destroy(&function);
 

@@ -23,7 +23,6 @@ int main(void) {
     types.type_count = 1U;
     types.type_capacity = 1U;
     object.core_type_id = 0U;
-    object.element_count = 1U;
     object.explicit_alignment = 16U;
     instructions[0].kind = MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS;
     instructions[0].result = 0U;

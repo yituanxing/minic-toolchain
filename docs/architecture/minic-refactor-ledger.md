@@ -1532,3 +1532,50 @@ existing tool environment does not provide the full cross-GNU/QEMU matrix.
 | Synthetic AST negative contracts: partial/forged VLA pair, illegal union FAM | **PASS**, reject at AST verification |
 | Strict backend manifest | **Pre-existing stale inventory**; not updated in this source-model batch |
 | Five-target Linux QEMU runtime | **NOT RUN**; no cross-GNU/QEMU toolchain in this environment |
+
+## IR-P28 — Retire duplicate Core object extent and field-element access (2026-11-03)
+
+**Baseline:** PR #674 remote `864c18f` (IR-P27). P27 removed the source AST's
+extra declarator array extent; this batch follows the same logical ownership
+through pure Core storage and the five-machine shared ABI/layout path.
+
+### One typed Core object, one layout owner
+
+- A published `MinicCoreObject` owns exactly one `MinicCoreTypeId` and an
+  optional explicit object alignment. Its `element_count` repetition scalar
+  and `minic_core_function_add_repeated_object` adapter have been retired.
+  Production lowering already emitted only complete typed objects after P27;
+  legacy Core-only tests now construct real `MINIC_CORE_TYPE_ARRAY` values to
+  exercise two-/three-element arrays and their layout boundaries.
+- Core object layout and Common Target storage planning use `CoreType.size`
+  directly, without multiplying by a second count or permitting an extra
+  shape to disagree with CoreType. ABI call/result admission, frame intervals,
+  RV64 record snapshots and pointer/storage preflight remove dead `count==1`
+  special cases while retaining actual type and alignment checks.
+- The obsolete `MINIC_CORE_FIELD_ACCESS_ARRAY_ELEMENT` compatibility form
+  had no possible source producer once RecordFields gained full ArrayType.
+  Core FIELD_ADDRESS now names the exact field type or a bit-field storage
+  carrier; the former numeric form remains invalid under Core verification.
+- Core array type registration checks complete/zero/incomplete state and
+  checked element-size multiplication, catching malformed standalone Core
+  producers without consulting source C DataLayout. Existing VLA runtime
+  allocation and GNU zero-length backing semantics remain unchanged.
+
+### Architectural ownership result and certification limit
+
+Read-through confirms the **sealed Core Function/Module already has no
+`MinicType` or AST identity**: Frontend's `MinicCoreSourceDraft` exists during
+lowering, then `snapshot_types()` imports typed IDs and destroys the draft.
+Backends fail closed if the draft is still live. Moving source lowering files
+between directories is a later physical-ownership change, not grounds to
+rebuild the Core IR model. Core ABI facts (calling convention, memory access,
+transparent union and field layout) are intentionally retained.
+
+| Gate | Result |
+| --- | --- |
+| Core types, verifier, shape tests, native/ASan/UBSan | **PASS**, 4 native + 4 sanitizer and malformed CoreArray contracts |
+| Core object storage ownership/resolved, frame/call, RISC-V alignment/RV64 admission | **PASS**, scoped native checks |
+| Array/source record gates: five targets, GNU/MiniC x86 native, negative+rollback | **PASS**, 25 + 80 + 40 cases |
+| Full Debug `check-fast` | **PASS**, exit 0; 367 PASS lines, 3 environment SKIPs |
+| Release `-Werror` compiler | **PASS**, `MODE=release BUILD_DIR=build/p28-final CFLAGS=-Werror` |
+| Five-target GNU ELF/QEMU Linux runtime | **NOT RUN**; cross runtime tools unavailable in this environment |

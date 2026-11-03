@@ -281,7 +281,6 @@ static bool minic_lp64_admit_call(
                                  MINIC_CORE_TYPE_RECORD) &&
             result_object < fn->object_count &&
             ins->result == MINIC_CORE_VALUE_INVALID &&
-            fn->objects[result_object].element_count == 1U &&
             fn->objects[result_object].core_type_id == ins->core_type_id &&
             ((minic_multi_gp_record_core(core_types, ins->core_type_id,
                                           &return_record_bytes, &return_record_slots) &&
@@ -379,7 +378,6 @@ static bool minic_lp64_admit_call(
                 const MinicCoreObjectId object_id = arg->value.object_id;
                 size_t record_size, record_slots;
                 if (object_id >= fn->object_count ||
-                    fn->objects[object_id].element_count != 1U ||
                     (j < parameter_count &&
                      fn->objects[object_id].core_type_id !=
                          call.core_parameter_type_ids[j]) ||

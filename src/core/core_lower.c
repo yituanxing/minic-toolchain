@@ -369,8 +369,6 @@ MinicCoreLowerStatus minic_core_lower_internal_append_field_address(MinicCoreLow
     MinicType actual_field_type, declared_field_type;
     const MinicRecord *record;
     const MinicRecordField *field;
-    MinicArrayObjectInfo field_array_info;
-    bool has_field_array;
     size_t byte_offset;
 
     if (context == NULL || context->body == NULL || context->body->program == NULL ||
@@ -383,8 +381,6 @@ MinicCoreLowerStatus minic_core_lower_internal_append_field_address(MinicCoreLow
     }
     record = minic_c0_program_record(context->body->program, record_id);
     field = minic_c0_record_field(record, field_index);
-    has_field_array = minic_c0_record_field_array_object_info(
-        context->body->program, record_id, field_index, &field_array_info);
     if (record == NULL || field == NULL ||
         !minic_type_unqualified(field_type, &actual_field_type) ||
         !minic_type_unqualified(field->type, &declared_field_type) ||
@@ -406,9 +402,7 @@ MinicCoreLowerStatus minic_core_lower_internal_append_field_address(MinicCoreLow
     instruction.value.field_address.field_index = field_index;
     instruction.value.field_address.access_form = field->is_bit_field
         ? MINIC_CORE_FIELD_ACCESS_BITFIELD_STORAGE
-        : (has_field_array && !field_array_info.has_materialized_type
-               ? MINIC_CORE_FIELD_ACCESS_ARRAY_ELEMENT
-                           : MINIC_CORE_FIELD_ACCESS_EXACT);
+        : MINIC_CORE_FIELD_ACCESS_EXACT;
     instruction.value.field_address.byte_offset = byte_offset;
     if (!minic_type_pointer_to(field_type, &instruction_source_type)) {
         return MINIC_CORE_LOWER_ERROR;

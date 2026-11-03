@@ -91,8 +91,37 @@ static bool type_references_valid(const MinicCoreTypeContext *context,
         return true;
     case MINIC_CORE_TYPE_POINTER:
         return type->value.pointer.pointee < context->type_count;
-    case MINIC_CORE_TYPE_ARRAY:
-        return type->value.array.element < context->type_count;
+    case MINIC_CORE_TYPE_ARRAY: {
+        const MinicCoreType *element = minic_core_type_get(
+            context, type->value.array.element);
+        size_t count = type->value.array.count;
+
+        if (element == NULL) return false;
+        /* Incomplete arrays are legitimate type identities (for example a
+         * pointer to an unknown-bound array), but cannot describe storage.
+         * Neither an invented static count nor a GNU zero extent may be
+         * attached to an incomplete ArrayType. */
+        if (!type->value.array.is_complete)
+            return count == 0U && !type->value.array.is_zero_length &&
+                   !type->has_layout && type->size == 0U &&
+                   type->alignment == 0U;
+
+        /* A complete array owns its entire object extent. Core objects must
+         * not repeat the source declarator dimension separately. Its natural
+         * alignment comes from the element, while an explicitly overridden
+         * execution view may strengthen that alignment. */
+        if (!type->has_layout || !element->has_layout ||
+            element->alignment == 0U || type->alignment < element->alignment ||
+            (type->alignment != element->alignment &&
+             (!type->is_layout_override ||
+              (type->alignment & (type->alignment - 1U)) != 0U)))
+            return false;
+        if (type->value.array.is_zero_length)
+            return count == 0U && type->size == 0U;
+        if (count == 0U || element->size > SIZE_MAX / count)
+            return false;
+        return type->size == element->size * count;
+    }
     case MINIC_CORE_TYPE_RECORD:
         if ((type->value.record.pack_alignment != 0U &&
              (type->value.record.pack_alignment &

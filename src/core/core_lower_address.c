@@ -187,8 +187,7 @@ MinicCoreLowerStatus lower_address(MinicCoreLowerContext *context,
             if (status != MINIC_CORE_LOWER_OK) {
                 return status;
             }
-            if (object_id >= context->function->object_count ||
-                context->function->objects[object_id].element_count != 1U) {
+            if (object_id >= context->function->object_count) {
                 return MINIC_CORE_LOWER_ERROR;
             }
             return lower_source_local_object_address(

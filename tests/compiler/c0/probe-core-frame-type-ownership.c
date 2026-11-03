@@ -50,7 +50,6 @@ static int run(void) {
     block.terminator.return_value = MINIC_CORE_VALUE_INVALID;
     block.terminator.return_object = MINIC_CORE_OBJECT_INVALID;
     object.core_type_id = i32;
-    object.element_count = 1U;
     function.type_context = &types;
     function.values = values;
     function.value_count = 1U;

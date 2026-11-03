@@ -6,9 +6,8 @@
 static bool core_object_storage_checked_shape(
     const MinicCoreObject *object, size_t size, size_t alignment,
     MinicCoreObjectStorage *result) {
-    if (object == NULL || result == NULL || object->element_count == 0U ||
-        alignment == 0U || (alignment & (alignment - 1U)) != 0U ||
-        size > SIZE_MAX / object->element_count)
+    if (object == NULL || result == NULL ||
+        alignment == 0U || (alignment & (alignment - 1U)) != 0U)
         return false;
     if (object->explicit_alignment != 0U) {
         if ((object->explicit_alignment & (object->explicit_alignment - 1U)) != 0U)
@@ -16,7 +15,9 @@ static bool core_object_storage_checked_shape(
         if (object->explicit_alignment > alignment)
             alignment = object->explicit_alignment;
     }
-    result->extent = size * object->element_count;
+    /* The complete CoreType owns the entire object extent, including arrays.
+     * CoreObject must not re-apply a second declarator repetition factor. */
+    result->extent = size;
     result->alignment = alignment;
     return true;
 }

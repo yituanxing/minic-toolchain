@@ -232,7 +232,6 @@ bool minic_multi_direct_record_load_extent(
     *source = ins->value.record_load.source_address;
     if (dst >= fn->object_count || *source >= fn->value_count ||
         fn->objects == NULL || fn->values == NULL ||
-        fn->objects[dst].element_count != 1U ||
         !direct_core_equal_unqualified(fn, fn->objects[dst].core_type_id,
                                        ins->core_type_id) ||
         !direct_core_pointer_pointee(fn, fn->values[*source].core_type_id,
@@ -278,7 +277,6 @@ bool minic_multi_direct_parameter_object_location(
          * and member qualifiers and the exact record identity. */
         !direct_core_equal_unqualified(fn, fn->objects[obj_id].core_type_id,
                                        fn->core_parameter_type_ids[position]) ||
-        fn->objects[obj_id].element_count != 1U ||
         (loc->kind != MINIC_LP64_ARGUMENT_RECORD &&
          loc->kind != MINIC_LP64_ARGUMENT_INDIRECT_RECORD &&
          loc->kind != MINIC_LP64_ARGUMENT_EMPTY_RECORD) ||

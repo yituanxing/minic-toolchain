@@ -275,9 +275,7 @@ static int run(void) {
         REQUIRE(minic_core_type_register(&types, &other_record, &other_record_id));
         REQUIRE(other_record_id != record_id);
         snapshot_objects[0].core_type_id = record_id;
-        snapshot_objects[0].element_count = 1U;
         snapshot_objects[1].core_type_id = record_id;
-        snapshot_objects[1].element_count = 1U;
         snapshot_instructions[0].kind = MINIC_CORE_INSTRUCTION_RECORD_LOAD;
         snapshot_instructions[0].value.record_load.destination_object = 0U;
         snapshot_instructions[1].kind = MINIC_CORE_INSTRUCTION_CALL;

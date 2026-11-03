@@ -16,6 +16,7 @@ int main(void) {
     MinicCoreType type;
     MinicCoreTypeId void_id, integer_id, duplicate_id;
     MinicCoreTypeId record_id, pointer_id, array_id, incomplete_array_id;
+    MinicCoreTypeId fixed_array_id, aligned_array_id;
     MinicCoreTypeId function_id, another_function_id, alternate_function_id, opaque_id;
     MinicCoreTypeId float_id, vector_id;
     MinicCoreRecordField field;
@@ -136,6 +137,62 @@ int main(void) {
     CHECK(minic_core_type_register(&context, &type, &incomplete_array_id));
     CHECK(incomplete_array_id != array_id);
 
+    /* Array storage is one canonical CoreType: no second object-level count.
+     * Registration must reject mismatched/overflowing extents atomically. */
+    (void)memset(&type, 0, sizeof(type));
+    type.kind = MINIC_CORE_TYPE_ARRAY;
+    type.has_layout = true;
+    type.size = 8U;
+    type.alignment = 4U;
+    type.value.array.element = integer_id;
+    type.value.array.count = 2U;
+    type.value.array.is_complete = true;
+    CHECK(minic_core_type_register(&context, &type, &fixed_array_id));
+    CHECK(minic_core_type_register(&context, &type, &duplicate_id));
+    CHECK(duplicate_id == fixed_array_id);
+    before = context.type_count;
+    type.size = 4U;
+    CHECK(!minic_core_type_register(&context, &type, &duplicate_id));
+    CHECK(context.type_count == before);
+    type.size = 8U;
+    type.alignment = 8U;
+    CHECK(!minic_core_type_register(&context, &type, &duplicate_id));
+    CHECK(context.type_count == before);
+    type.is_layout_override = true;
+    CHECK(minic_core_type_register(&context, &type, &aligned_array_id));
+    CHECK(aligned_array_id != fixed_array_id);
+    before = context.type_count;
+    type.is_layout_override = false;
+    type.alignment = 4U;
+    type.value.array.count = SIZE_MAX;
+    type.size = SIZE_MAX;
+    CHECK(!minic_core_type_register(&context, &type, &duplicate_id));
+    CHECK(context.type_count == before);
+    type.value.array.count = 0U;
+    type.size = 0U;
+    CHECK(!minic_core_type_register(&context, &type, &duplicate_id));
+    CHECK(context.type_count == before);
+    type.value.array.is_zero_length = true;
+    CHECK(minic_core_type_register(&context, &type, &duplicate_id));
+    CHECK(duplicate_id == array_id);
+    type.has_layout = false;
+    CHECK(!minic_core_type_register(&context, &type, &duplicate_id));
+    CHECK(context.type_count == before);
+    type.value.array.is_zero_length = false;
+    type.value.array.is_complete = false;
+    type.alignment = 0U;
+    CHECK(minic_core_type_register(&context, &type, &duplicate_id));
+    CHECK(duplicate_id == incomplete_array_id);
+    type.has_layout = true;
+    type.alignment = 4U;
+    CHECK(!minic_core_type_register(&context, &type, &duplicate_id));
+    CHECK(context.type_count == before);
+    type.has_layout = false;
+    type.alignment = 0U;
+    type.value.array.count = 1U;
+    CHECK(!minic_core_type_register(&context, &type, &duplicate_id));
+    CHECK(context.type_count == before);
+
     params[0] = integer_id;
     params[1] = pointer_id;
     (void)memset(&type, 0, sizeof(type));
@@ -202,6 +259,6 @@ int main(void) {
 
     minic_core_type_context_destroy(&context);
     CHECK(context.types == NULL && context.type_count == 0U);
-    (void)puts("CORE_TYPE_CONTEXT=PASS scalar pointer recursive_record zero_array function_abi ownership rollback");
+    (void)puts("CORE_TYPE_CONTEXT=PASS scalar pointer recursive_record fixed_zero_incomplete_array function_abi ownership rollback");
     return 0;
 }

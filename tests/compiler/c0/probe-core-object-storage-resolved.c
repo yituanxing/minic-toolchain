@@ -22,7 +22,7 @@ bool minic_data_layout_type(const MinicDataLayout *layout,
 int main(void) {
     MinicCoreTypeContext types;
     MinicCoreType type = {0};
-    MinicCoreTypeId integer_id, incomplete_id;
+    MinicCoreTypeId integer_id, array_id, incomplete_id;
     MinicCoreObject object = {0};
     MinicCoreFunction fn = {0};
     MinicCoreObjectStoragePlan plan = {0};
@@ -35,11 +35,19 @@ int main(void) {
     type.value.integer.bit_width = 64U;
     if (!minic_core_type_register(&types, &type, &integer_id)) return 1;
     type = (MinicCoreType){0};
+    type.kind = MINIC_CORE_TYPE_ARRAY;
+    type.has_layout = true;
+    type.size = 24U;
+    type.alignment = 8U;
+    type.value.array.element = integer_id;
+    type.value.array.count = 3U;
+    type.value.array.is_complete = true;
+    if (!minic_core_type_register(&types, &type, &array_id)) return 10;
+    type = (MinicCoreType){0};
     type.kind = MINIC_CORE_TYPE_OPAQUE;
     if (!minic_core_type_register(&types, &type, &incomplete_id)) return 2;
 
-    object.core_type_id = integer_id;
-    object.element_count = 3U;
+    object.core_type_id = array_id;
     object.explicit_alignment = 16U;
     fn.type_context = &types;
     fn.objects = &object;
@@ -56,11 +64,19 @@ int main(void) {
     object.core_type_id = incomplete_id;
     if (minic_core_object_storage_plan_build(&fn, &plan) ||
         legacy_layout_queries != 0U || plan.objects != NULL) return 6;
-    object.core_type_id = integer_id;
-    object.element_count = SIZE_MAX;
-    if (minic_core_object_storage_plan_build(&fn, &plan) ||
+    /* The array's extent is validated by its CoreType declaration; there
+     * is no independent object count that could silently overflow. */
+    type = (MinicCoreType){0};
+    type.kind = MINIC_CORE_TYPE_ARRAY;
+    type.has_layout = true;
+    type.size = SIZE_MAX;
+    type.alignment = 8U;
+    type.value.array.element = integer_id;
+    type.value.array.count = SIZE_MAX;
+    type.value.array.is_complete = true;
+    if (minic_core_type_register(&types, &type, &array_id) ||
         legacy_layout_queries != 0U || plan.objects != NULL) return 7;
-    object.element_count = 1U;
+    object.core_type_id = integer_id;
     object.explicit_alignment = 3U;
     if (minic_core_object_storage_plan_build(&fn, &plan) ||
         legacy_layout_queries != 0U || plan.objects != NULL) return 8;

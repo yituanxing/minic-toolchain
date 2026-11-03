@@ -163,8 +163,7 @@ bool minic_riscv64_record_call_result_snapshot_reuse_candidate(
         candidate_out == NULL ||
         result_object >= function->object_count ||
         !minic_riscv64_core_is_record(
-            function, function->objects[result_object].core_type_id) ||
-        function->objects[result_object].element_count != 1U) {
+            function, function->objects[result_object].core_type_id)) {
         return false;
     }
     for (instruction_index = 0U; instruction_index < function->instruction_count;
@@ -202,8 +201,7 @@ bool minic_riscv64_record_call_result_snapshot_reuse_candidate(
         }
         candidate_object = &function->objects[candidate];
         result = &function->objects[result_object];
-        if (candidate_object->element_count != result->element_count ||
-            candidate_object->explicit_alignment != result->explicit_alignment ||
+        if (candidate_object->explicit_alignment != result->explicit_alignment ||
             /* Preserve the source-C qualified nominal identity check:
              * Core importer interns one ID per fully qualified Record.
              * A distinct but layout-identical record cannot borrow storage. */
