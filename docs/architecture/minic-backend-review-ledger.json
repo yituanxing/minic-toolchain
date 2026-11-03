@@ -123,6 +123,12 @@
       "review_depth": "inventory",
       "ci_touched_in": []
     },
+    "src/target/aarch64/machine_register.c": {
+      "blob": "13eed3fb1e196061cbc098525b0deee267d31583",
+      "review_depth": "targeted",
+      "ci_touched_in": [],
+      "note": "P33: reviewed machine-only fixed/local register grammar and source-policy reuse; no runtime recertification implied."
+    },
     "src/target/aarch64/memory_emit.c": {
       "blob": "e1f1f15f3c5f85b9fdd9868c214ac2bbf51ea5dc",
       "review_depth": "inventory",
@@ -705,6 +711,12 @@
       "review_depth": "inventory",
       "ci_touched_in": []
     },
+    "src/target/loongarch64/machine_register.c": {
+      "blob": "9e83f3d797cc2d7a79d8b6710ac5e6ec5113b298",
+      "review_depth": "targeted",
+      "ci_touched_in": [],
+      "note": "P33: reviewed TP/SP/r21 write exclusion and local register admission; no runtime recertification implied."
+    },
     "src/target/loongarch64/memory_emit.c": {
       "blob": "a1e62dd4cedfeb66da78815016c1097c9da2f8e7",
       "review_depth": "inventory",
@@ -851,6 +863,12 @@
       "review_depth": "inventory",
       "ci_touched_in": []
     },
+    "src/target/riscv32/machine_register.c": {
+      "blob": "2c28b312a3fb9f8d268db29409d367df31d782c5",
+      "review_depth": "targeted",
+      "ci_touched_in": [],
+      "note": "P33: reviewed ILP32 a0-a7 and sp/tp grammar, separate from RV64 aliases."
+    },
     "src/target/riscv32/rv32_abi_cursor.c": {
       "blob": "755c7a2aad645c5e1b6abe614f1d0991ea910a81",
       "review_depth": "inventory",
@@ -944,6 +962,12 @@
       "blob": "d3b0b502b00c5dea2e97303f31744d064e2f2d40",
       "review_depth": "inventory",
       "ci_touched_in": []
+    },
+    "src/target/riscv64/machine_register.c": {
+      "blob": "b9e3355b2eab35be4b6e2974b51957aa716bc6a5",
+      "review_depth": "targeted",
+      "ci_touched_in": [],
+      "note": "P33: reviewed shared GPR identity and ABI a0-a7 range; no runtime recertification implied."
     },
     "src/target/riscv64/abi.c": {
       "blob": "3b35b7161cf4d6433c3a3bcde0a532c811094764",
@@ -1273,6 +1297,12 @@
       "ci_touched_in": [],
       "note": "2026-10-29 batch19: x86 GNU fixed register, clobber and immediate qualifiers reviewed."
     },
+    "src/target/machine_register.h": {
+      "blob": "5fec40c61410e39aee9c4ea001e5d1d0617a8c90",
+      "review_depth": "targeted",
+      "ci_touched_in": [],
+      "note": "P33: reviewed common recognizer declarations and shared source/machine registration."
+    },
     "src/target/target_catalog.c": {
       "blob": "d888db09bf59f4e3b5509d28d4decd9dad78827d",
       "review_depth": "inventory",
@@ -1437,6 +1467,12 @@
       "ci_touched_in": [
         665
       ]
+    },
+    "src/target/x86_64/machine_register.c": {
+      "blob": "1041454499c3433e257cf0529beb2324fba6bc9e",
+      "review_depth": "targeted",
+      "ci_touched_in": [],
+      "note": "P33: reviewed rsp read, SysV scratch-clobber and optional percent locals; no runtime recertification implied."
     },
     "src/target/x86_64/machine_support.c": {
       "blob": "eac267258cbce8bb3e8fbc44e6fe8fe141f1c98d",

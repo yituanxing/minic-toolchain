@@ -395,7 +395,7 @@ for consumer in src/target/x86_64/machine_emit.c \
   has "$consumer" 'minic_core_instruction_semantic_family('
 done
 lacks src/target/common/direct_instruction_semantics.c 'minic_multi_direct_memory_machine_kind('
-has src/target/common/program_visit.h 'minic_program_module_function_selected('
+has src/target/common/program_visit.c 'minic_program_module_function_selected('
 has src/target/common/core_function_plan.c 'minic_core_function_verify(function)'
 has src/target/riscv64/core_admission.c 'RV64 atomic ISA/memory-order lowering is not qualified yet.'
 
@@ -526,8 +526,8 @@ has src/target/common/core_function_facts.c 'facts->variadic_address_results = *
 has src/target/common/core_function_plan.c 'minic_core_function_facts_analyze_collect('
 lacks src/target/common/core_function_plan.c 'for (i = 0U; i < function->instruction_count;'
 has src/target/x86_64/frame.c 'facts->variadic_address_results[i]'
-has src/target/common/program_emit.h 'descriptor = mkstemp(temporary);'
-has src/target/common/program_emit.h 'rename(temporary, path)'
+has src/target/common/program_emit.c 'descriptor = mkstemp(temporary);'
+has src/target/common/program_emit.c 'rename(temporary, path)'
 lacks src/target/riscv/function_symbol.h 'MinicRiscv64FunctionSymbol'
 has src/target/riscv/function_symbol.h 'MinicRiscvFunctionSymbol'
 
@@ -934,8 +934,8 @@ has src/target/riscv32/rv32_emit.c 'MINIC_CORE_FAMILY_INTEGER_SCALAR'
 has src/target/riscv64/core_admission.c 'MINIC_CORE_FAMILY_INTEGER_SCALAR'
 has src/target/riscv64/core_codegen.c 'minic_core_instruction_is_floating_scalar(instruction->kind)'
 has src/target/common/direct_instruction_semantics.c 'MINIC_CORE_FAMILY_FLOATING_SCALAR'
-has src/target/common/program_visit.h 'minic_program_visit_module_globals('
-has src/target/common/program_visit.h 'minic_program_visit_prepared_functions_module('
+has src/target/common/program_visit.c 'minic_program_visit_module_globals('
+has src/target/common/program_visit.c 'minic_program_visit_prepared_functions_module('
 # Machine callbacks cannot reopen C declarations, even in fallback paths.
 lacks src/target/common/program_visit.h 'MinicC0Program'
 lacks src/target/common/program_emit.h 'MinicC0Program'
@@ -1053,8 +1053,8 @@ lacks src/target/common/lp64_frame.c 'minic_core_object_storage(program,'
 exists src/target/common/core_call_index.c
 has src/target/common/core_function_plan.c 'minic_core_call_index_build('
 has src/target/common/core_function_plan.c 'minic_core_call_index_destroy(&plan->calls)'
-has src/target/common/program_visit.h 'minic_core_function_plan_build('
-has src/target/common/program_visit.h 'minic_core_function_plan_destroy(&plan)'
+has src/target/common/program_visit.c 'minic_core_function_plan_build('
+has src/target/common/program_visit.c 'minic_core_function_plan_destroy(&plan)'
 has src/target/riscv32/rv32_frame.c 'facts->call_index'
 has src/target/riscv64/frame_layout.c 'facts->call_index'
 has src/target/common/direct_function_plan.c 'facts->call_index'
@@ -1239,11 +1239,11 @@ has tests/compiler/c0/check-four-target-model-m0.c 'backend->emit_module'
 has src/target/backend.c '.emit_module = minic_aarch64_write_core_module,'
 has src/target/backend.c '.emit_module = minic_loongarch64_write_core_module,'
 exists src/target/common/program_emit.h
-has src/target/common/program_emit.h 'minic_program_visit_module_globals('
-has src/target/common/program_emit.h 'minic_program_visit_prepared_functions_module('
-has src/target/common/program_emit.h 'minic_program_emit_write_module('
-has src/target/common/program_emit.h 'if (!ok) (void)remove(temporary);'
-lacks src/target/common/program_emit.h 'out = fopen(path, "wb");'
+has src/target/common/program_emit.c 'minic_program_visit_module_globals('
+has src/target/common/program_emit.c 'minic_program_visit_prepared_functions_module('
+has src/target/common/program_emit.c 'minic_program_emit_write_module('
+has src/target/common/program_emit.c 'if (!ok) (void)remove(temporary);'
+lacks src/target/common/program_emit.c 'out = fopen(path, "wb");'
 has src/target/common/direct_program_emit.c 'minic_program_emit_write_module('
 # Historical standalone C ABI/global/NEON machine adapters are deleted,
 # not retained as a silent second implementation beside the Module owner.
@@ -1283,8 +1283,8 @@ for owner in \
   lacks "$owner" 'MinicC0Program'
   lacks "$owner" 'minic_c0_program_'
 done
-has src/target/common/program_emit.h 'module->function_count != function_count'
-has src/target/common/program_visit.h '!module->finalized'
+has src/target/common/program_emit.c 'module->function_count != function_count'
+has src/target/common/program_visit.c '!module->finalized'
 has src/target/common/direct_program_emit.c '!minic_core_module_verify(module)'
 has src/target/x86_64/codegen.c 'minic_program_emit_write_module('
 has src/target/riscv32/rv32_emit.c 'minic_program_emit_write_module('
@@ -1300,7 +1300,13 @@ for backend in x86_64 riscv32 riscv64; do
   lacks "$owner" '(void)remove(path)'
 done
 # The only live definition filter is the common Core semantic predicate.
-has src/target/common/program_visit.h 'decl->is_internal && !decl->is_referenced'
+has src/target/common/program_visit.c 'decl->is_internal && !decl->is_referenced'
+# Common algorithms have exactly one compiled owner. The API headers expose
+# types and declarations only; no per-target copy or legacy forwarding body.
+lacks src/target/common/program_emit.h 'static inline'
+lacks src/target/common/program_visit.h 'static inline'
+has src/target/common/program_emit.c 'static bool minic_program_emit_collect_symbol_uses_module('
+has src/target/common/program_emit.c 'static bool minic_program_emit_undefined_symbol_visibility_module('
 lacks src/target/x86_64/codegen.c 'for (i = 0U; i < program->function_count && success; ++i)'
 lacks src/target/riscv64/codegen_function.c 'for (function_index = 0U;'
 lacks src/target/riscv32/rv32_emit.c 'for (i = 0U; ok && i < function_count; ++i)'
@@ -1425,6 +1431,7 @@ cc -std=c11 -O2 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror \
 # Both definitions and declarations must follow the sealed module decision.
 cc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror \
   -Iinclude -Isrc tests/compiler/c0/probe-module-function-visitor.c \
+  src/target/common/program_visit.c \
   -o "$work/module-function-owner-probe"
 "$work/module-function-owner-probe"
 
@@ -1525,6 +1532,8 @@ cc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror \
   src/frontend/ast_global.c \
   src/target/common/core_function_facts.c \
   src/target/common/core_function_plan.c \
+  src/target/common/program_visit.c \
+  src/target/common/program_emit.c \
   src/compiler/global_payload.c \
   src/target/common/global_emit.c \
   -o "$work/program-emit-probe"

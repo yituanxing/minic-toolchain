@@ -179,6 +179,8 @@ MINIC_SOURCES := \
 	src/target/backend_core_usage.c \
 	src/target/common/global_emit.c \
 	src/target/common/module_global_emit.c \
+	src/target/common/program_visit.c \
+	src/target/common/program_emit.c \
 	src/target/common/direct_program_emit.c \
 	src/target/common/direct_preflight.c \
 	src/target/common/direct_function_profile.c \

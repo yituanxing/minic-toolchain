@@ -1778,3 +1778,49 @@ bridge to resolve Core function/object liveness.
 This seals the *post-Core C ownership* boundary, not the separate work on
 generic backend algorithm convergence, Machine IR and full cross-runtime
 correctness.
+
+## IR-P33 — One compiled Common Program Visitor and emission transaction (2026-11-03)
+
+**Baseline:** PR #674 `820d9b9` (P32). The five backends already shared one
+semantic FunctionPlan and ProgramEmit/ProgramVisit algorithm, but the latter
+two lived as ~500 lines of `static inline` production logic in public headers.
+This batch moves the complete implementations to independently built Common
+`program_visit.c` and `program_emit.c`, with headers now exposing only types,
+callbacks and declared entry points. There is no copied compatibility body.
+
+- `program_visit.c` is the single owner of sealed ModuleIR global/function
+  selection and each selected function's one prepared CoreFunctionPlan
+  acquire/visit/destroy lifecycle. All five targets retain their actual
+  ISA-specific function and global callbacks.
+- `program_emit.c` is the single owner of reachable Core/Module symbol-use
+  collection, inline/file ASM token checks, undefined ELF weak/visibility
+  binding, and adjacent-file `mkstemp`/close/finalize/atomic-rename rollback.
+  The internal symbol-set data structures and scanners are no longer
+  published to every machine backend. No ISA/GNU syntax or output ordering
+  was changed.
+- The standalone output probe now checks weak/hidden/unused names through
+  actual emitted assembly rather than reaching into private symbol scans.
+  The visitor probe still uses test-owned fake FunctionPlan callbacks, linked
+  against the real compiled visitor. The Makefile, B0 source inventory and
+  structural/negative boundary gates changed in the same owner batch.
+- Separately registered the six P31 machine register source/header files in
+  the existing blob review manifest after targeted source inspection. The
+  manifest's older stale hashes remain intentionally stale: updating them
+  would falsely imply a new full source review.
+
+| Gate | P33 result |
+| --- | --- |
+| Release MiniC compiler `-Werror` | **PASS**, exit 0 |
+| Full Debug `check-fast` | **PASS**, exit 0; GNU/QEMU-dependent SKIPs remain SKIPs |
+| Whole target boundary (including five-target output transaction and Module visitor) | **PASS**, output failure rollback=5, prior output preserved=5, census=1 |
+| Review ledger `--check` | **PASS**, inventory=249, new/removed/invalid=0, stale=204 (not recertified) |
+| Two GNU-preprocessed fixtures × five ISA, P32 vs P33 assembly byte equality | **10/10 identical** |
+| Five ISA Linux original GNU ELF/QEMU complete runtime | **NOT RUN**; no new Image/P1 or software correctness claim |
+
+The latest P30/P31/P32 remote CI failures were independently compared and
+remain non-green: x86-64 cmpxchg128, RV32 Zstd Core lowering, AArch64 GNU
+pragma/NEON, RV32 P2 virtio-gpu, and environment-blocked x86 KVM. P33 does
+not relabel these as architectural regressions or success. The next stage
+must judge remaining target Common versus ISA-specific machine responsibilities
+from complete producers/consumers, not introduce a second MachineIR model
+before the actual machine-pass requirements are clear.

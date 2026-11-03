@@ -1,4 +1,5 @@
 #include "target/common/program_emit.h"
+#include "target/common/elf_alias_emit.h"
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -168,33 +169,8 @@ static int check_module_snapshot_output(const char *path) {
         strstr(data, "G:owned\n") == NULL ||
         strstr(data, ".text\n .quad asm_weak\n.text\n") == NULL ||
         strstr(data, "poison_source") != NULL) return 14;
-    /* Symbol-use gathering and ELF binding work independently of Program. */
-    {
-        MinicProgramSymbolUses uses = {0};
-        FILE *bindings = tmpfile();
-        if (bindings == NULL) return 9;
-        if (!minic_program_emit_collect_symbol_uses_module(
-                &uses, NULL, 0U, &config, &module) ||
-            !minic_program_symbol_use_has(&uses, "weak_ext") ||
-            minic_program_symbol_use_has(&uses, "poison_source_global") ||
-            !minic_program_emit_undefined_symbol_visibility_module(
-                bindings, NULL, 0U, &config, &module) ||
-            fseek(bindings, 0L, SEEK_SET) != 0) {
-            free(uses.names);
-            free(uses.asm_uses);
-            (void)fclose(bindings);
-            return 10;
-        }
-        free(uses.names);
-        free(uses.asm_uses);
-        (void)memset(data, 0, sizeof(data));
-        count = fread(data, 1U, sizeof(data) - 1U, bindings);
-        if (fclose(bindings) != 0 || count == 0U ||
-            strstr(data, ".weak weak_ext\n.hidden weak_ext\n") == NULL ||
-            strstr(data, ".weak asm_weak\n.hidden asm_weak\n") == NULL ||
-            strstr(data, "unused_hidden") != NULL ||
-            strstr(data, "poison_source") != NULL) return 11;
-    }
+    /* The emitted .weak/.hidden directives and unused-symbol exclusion above
+     * exercise the real private symbol-use collector through its output. */
     module.finalized = false;
     if (minic_program_emit_write_module(
             path, &module, &target, NULL, 0U, false,
