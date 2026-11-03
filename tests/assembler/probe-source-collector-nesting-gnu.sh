@@ -12,8 +12,9 @@ if (s.count('minias_source_quote_consumes(')!=3 or
     graph.count('minias_source_quote_consumes(')!=2 or
     owner.count('static inline bool minias_source_quote_consumes(')!=1):
     raise SystemExit('Source lexers reintroduced a duplicate quote/escape grammar')
-if (s.count('find_macro_top_level_separator(')!=5 or
-    'MINIAS_MACRO_SEPARATOR_COMMA|MINIAS_MACRO_SEPARATOR_SPACE' not in s):
+if (s.count('static const char *find_macro_top_level_separator(')!=1 or
+    'MINIAS_MACRO_SEPARATOR_COMMA|MINIAS_MACRO_SEPARATOR_SPACE' not in s or
+    'next_comma=(char *)find_macro_top_level_separator(' not in s):
     raise SystemExit('macro declaration/invocation delimiter scanner duplicated')
 tokens=s[s.index('static size_t split_macro_tokens('):
          s.index('static bool macro_has_top_level_comma(')]
@@ -21,7 +22,7 @@ arguments=s[s.index('static size_t split_macro_arguments('):
             s.index('static MiniAsMacro *minias_macro_find(')]
 if "char quote = '\\0'" in tokens or "char quote = '\\0'" in arguments:
     raise SystemExit('macro tokenization reintroduced a private quote parser')
-print('MINIAS_MACRO_SEPARATOR_OWNER=PASS declaration=1 invocation=1 grammar=shared')
+print('MINIAS_MACRO_SEPARATOR_OWNER=PASS declaration=1 invocation=1 irp=1 grammar=shared')
 print('MINIAS_SOURCE_QUOTE_OWNER=PASS consumers=5 state=source_private')
 PY
 work=$(mktemp -d)
