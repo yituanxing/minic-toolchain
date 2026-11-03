@@ -55,6 +55,19 @@ ret
 .option pop
 ASM
             ;;
+        la_local_final_relax)
+            cat <<'ASM'
+.text
+.globl relax_probe
+relax_probe:
+.option relax
+lla a0,.Ltarget
+.Ltarget:
+.globl after_local_lla
+after_local_lla:
+ret
+ASM
+            ;;
         pic_got)
             cat <<'ASM'
 .text
@@ -150,7 +163,7 @@ external_data:
 ASM
     riscv64-linux-gnu-as --no-pad-sections "-march=$march" "-mabi=$mabi" \
         -mno-relax -o "$work/$bits-definitions.o" "$work/$bits-definitions.s"
-    for scenario in call_align_pop la_local pic_got absolute nested_toggle align_rvc; do
+    for scenario in call_align_pop la_local la_local_final_relax pic_got absolute nested_toggle align_rvc; do
         stem="$work/$bits-$scenario"
         write_case "$scenario" >"$stem.s"
         riscv64-linux-gnu-as --no-pad-sections "-march=$march" "-mabi=$mabi" \
@@ -173,7 +186,10 @@ ASM
             done
             exit 1
         fi
-        if [[ $scenario != align_rvc ]] &&
+        # GNU resolves disposable same-section .L PCREL pairs after source
+        # .option pop restores final -mno-relax. Unlike external addresses,
+        # the local pair therefore has no surviving RELAX markers.
+        if [[ $scenario != align_rvc && $scenario != la_local ]] &&
            ! grep -q 'R_RISCV_RELAX' "$stem.gnu.relocs"; then
             echo "MINIAS_RV_LINK_RELAX=FAIL no-positive-gnu-marker scenario=$scenario" >&2
             exit 1
@@ -228,7 +244,7 @@ ASM
                         exit 1
                     fi
                 done
-            elif [[ $scenario == la_local ]]; then
+            elif [[ $scenario == la_local || $scenario == la_local_final_relax ]]; then
                 if [[ $(linked_symbol_value "$stem.gnu.$link_mode.elf" after_local_lla) != \
                       $(linked_symbol_value "$stem.mini.$link_mode.elf" after_local_lla) ]]; then
                     echo "MINIAS_RV_LINK_RELAX=FAIL local-symbol-after-lla xlen=$bits mode=$link_mode" >&2
@@ -239,4 +255,4 @@ ASM
         ((cases+=1))
     done
 done
-echo "MINIAS_RV_LINK_RELAX=PASS RV32_RV64=2 scenarios=6 exact_object_and_linked_text=$cases link_modes=relax,no-relax symbol_alignment=8"
+echo "MINIAS_RV_LINK_RELAX=PASS RV32_RV64=2 scenarios=7 exact_object_and_linked_text=$cases link_modes=relax,no-relax symbol_alignment=8"

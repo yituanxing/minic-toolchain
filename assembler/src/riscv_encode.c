@@ -2420,6 +2420,8 @@ static bool rv_encode_multi_mc(MiniAsEncodeContext *ctx, const MiniAsInstruction
         int rd = (int)m->operands[0].reg;
         bool use_got;
         bool pic_la;
+        bool local_delta_known = false;
+        int64_t local_hi = 0, local_lo = 0;
         if (expr == NULL) {
             minias_encode_ctx_error(ctx, "internal:riscv-la-symbol-missing");
             return false;
@@ -2437,17 +2439,19 @@ static bool rv_encode_multi_mc(MiniAsEncodeContext *ctx, const MiniAsInstruction
         pic_la = (stmt->site.mode_bits & MINIAS_RISCV_OPTION_PIC) != 0U &&
                  m->target_form == RV_PSEUDO_LA;
         use_got = pic_la;
-        /* GNU resolves same-section strong local LA/LLA pairs without RELA
-         * when linker relaxation is disabled. MiniAS cannot advertise the
-         * R_RISCV_RELAX contract, so its supported encoding is nonrelaxable.
+        /* GNU GAS resolves same-section disposable .L LA/LLA pairs without
+         * RELA when its final relaxation mode is disabled. That resolution
+         * happens in md_apply_fix after .option push/pop has unwound, while
+         * each fixup's R_RISCV_RELAX eligibility was already captured at its
+         * source site. Keep these two time domains distinct: a source-local
+         * .option relax cannot force an unneeded relocation if the file ends
+         * with relaxation disabled.
          * PIC `la` always follows the GOT relocation path, including for
          * defined locals; only `lla` may take this fixed PCREL encoding.
          * GNU retains relocations even for an ELF STB_LOCAL named source
          * symbol: only its disposable .L temporary labels are folded.
          * Do not fold weak, named, mutable, aliased or cross-section refs. */
-        if (!pic_la &&
-            (stmt->site.mode_bits & MINIAS_RISCV_OPTION_MARK_RELAX)==0U &&
-            target != NULL && target->defined &&
+        if (!pic_la && target != NULL && target->defined &&
             target->section == stmt->section &&
             target->bind == MINIAS_SYMBOL_BINDING_LOCAL && !target->alias_pending &&
             target->name != NULL && target->name[0] == '.' &&
@@ -2466,11 +2470,15 @@ static bool rv_encode_multi_mc(MiniAsEncodeContext *ctx, const MiniAsInstruction
                 if (rounded < 0 && rounded % INT64_C(4096) != 0)
                     --hi; /* C division truncates toward zero, not floor. */
                 int64_t lo = delta - hi * INT64_C(4096);
-                return append_u32(ctx,
-                                  0x17U | ((uint32_t)rd << 7U) |
-                                  (((uint32_t)hi & 0xfffffU) << 12U)) &&
-                       append_u32(ctx,
-                                  enc_i(0x13U, rd, 0U, rd, lo));
+                local_delta_known = true;
+                local_hi = hi;
+                local_lo = lo;
+                if ((state->options & MINIAS_RISCV_OPTION_MARK_RELAX)==0U)
+                    return append_u32(ctx,
+                                      0x17U | ((uint32_t)rd << 7U) |
+                                      (((uint32_t)hi & 0xfffffU) << 12U)) &&
+                           append_u32(ctx,
+                                      enc_i(0x13U, rd, 0U, rd, lo));
             }
         }
         if(!minias_encode_ctx_anchor_ref(ctx,"pcrel",
@@ -2479,15 +2487,21 @@ static bool rv_encode_multi_mc(MiniAsEncodeContext *ctx, const MiniAsInstruction
             return false;
         }
 
+        /* GAS retains the source symbol's tentative immediate in .text for
+         * local relaxable PCREL pairs; the linker may later replace it. */
         if (!append_u32(ctx,
-                        0x17U | ((uint32_t)rd << 7U))) return false;
+                        0x17U | ((uint32_t)rd << 7U) |
+                        (local_delta_known ?
+                            (((uint32_t)local_hi & 0xfffffU) << 12U) : 0U)))
+            return false;
         if (use_got) {
             if (!append_u32(ctx,
                             enc_i(0x03U, rd,
                                   state->target_xlen == 32U ?
                                       2U : 3U, rd, 0))) return false;
         } else if (!append_u32(ctx,
-                               enc_i(0x13U, rd, 0U, rd, 0))) return false;
+                               enc_i(0x13U, rd, 0U, rd,
+                                     local_delta_known ? local_lo : 0))) return false;
         return rv_encode_symbol_fixup(ctx,stmt,stmt->offset,
                                 use_got ? MINIAS_FIXUP_RV_GOT_HI20 :
                                           MINIAS_FIXUP_RV_PCREL_HI20,
