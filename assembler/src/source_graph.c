@@ -1,11 +1,40 @@
+#ifndef _WIN32
 #define _POSIX_C_SOURCE 200809L
+#endif
 #include "source_graph_internal.h"
 
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifndef _WIN32
 #include <sys/types.h>
+#endif
+
+#ifdef _WIN32
+/* MinGW-w64's native CRT need not provide POSIX getline. Retain its important
+ * contract here: consume one entire physical line (including an available
+ * newline), accept a final unterminated line, reuse the buffer, and never
+ * truncate at an arbitrary fgets chunk boundary. The shared checked array
+ * grower handles capacity and multiplication overflow. The caller's EOF /
+ * ferror check distinguishes a normal end from an incomplete read. */
+static bool minias_windows_read_physical_line(FILE *file,char **buffer,
+                                             size_t *capacity) {
+    size_t used=0U;
+    int ch;
+    while((ch=fgetc(file))!=EOF) {
+        if(used>SIZE_MAX-2U ||
+           (used+2U>*capacity &&
+            !minias_grow_array((void **)buffer,capacity,sizeof(char),used+2U)))
+            return false;
+        (*buffer)[used++]=(char)ch;
+        if(ch=='\n')break;
+    }
+    if(ferror(file) || (ch==EOF && used==0U))return false;
+    (*buffer)[used]='\0';
+    return true;
+}
+#endif
 
 MiniAsSourceGraph *minias_source_graph_create(void) {
     return calloc(1U,sizeof(MiniAsSourceGraph));
@@ -109,7 +138,11 @@ bool minias_source_graph_load_physical(MiniAsSourceContext *source, const char *
     frame->kind=MINIAS_SOURCE_FRAME_FILE;
     /* Reuse one dynamically sized physical-line buffer for the whole file.
      * Fixed 64 KiB fgets chunks rejected otherwise valid GNU source lines. */
+#ifdef _WIN32
+    while(minias_windows_read_physical_line(file,&linebuf,&line_capacity)) {
+#else
     while(getline(&linebuf,&line_capacity,file)>=0) {
+#endif
         MiniAsSourceLine *line;
         ++line_no;
         if(!validate_user_source_private_marker(source,linebuf,line_no)) {

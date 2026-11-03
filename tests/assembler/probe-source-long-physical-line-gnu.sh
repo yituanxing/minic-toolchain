@@ -27,4 +27,14 @@ cmp "$work/gnu.bin" "$work/mini.bin"
 test "$(wc -c <"$work/mini.bin")" -eq 207
 grep -Eq '^minias-source-graph:file-reads=1 .*replay-passes=[0-9]+' \
     "$work/mini.trace"
-echo 'MINIAS_LONG_PHYSICAL_SOURCE=PASS long_comment=70004 GNU_text=exact branch_growth=1 reads=1'
+
+# A final physical line without a newline must be emitted exactly once.
+# The same invariant matters to the Windows native dynamic-line fallback.
+printf '.text\n.globl final_no_newline\nfinal_no_newline:\n.byte 0x7f' > "$work/final.s"
+as --64 -o "$work/final-gnu.o" "$work/final.s"
+"$MINIAS" --target=x86_64 -o "$work/final-mini.o" "$work/final.s"
+objcopy -j .text -O binary "$work/final-gnu.o" "$work/final-gnu.bin"
+objcopy -j .text -O binary "$work/final-mini.o" "$work/final-mini.bin"
+cmp "$work/final-gnu.bin" "$work/final-mini.bin"
+test "$(wc -c <"$work/final-mini.bin")" -eq 1
+echo 'MINIAS_LONG_PHYSICAL_SOURCE=PASS long_comment=70004 GNU_text=exact branch_growth=1 reads=1 final_no_newline=exact'

@@ -1,7 +1,7 @@
 #include "minias_elf_object_view.h"
 #include "minielf.h"
+#include "minielf_elf_abi.h"
 
-#include <elf.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>

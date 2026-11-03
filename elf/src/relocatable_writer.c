@@ -1,6 +1,6 @@
 #include "minielf.h"
+#include "minielf_elf_abi.h"
 
-#include <elf.h>
 #include <limits.h>
 #include <stdlib.h>
 #include <string.h>
