@@ -34,7 +34,10 @@ static bool core_inline_asm_rewind_dead_local_assignment(
 
     if (context == NULL || context->function == NULL || context->source_function == NULL ||
         context->local_objects == NULL || context->block_id >= context->function->block_count ||
-        local_id < context->source_function->local_begin) {
+        local_id < context->source_function->local_begin ||
+        context->function->source_draft == NULL ||
+        context->function->source_draft->instruction_type_count !=
+            context->function->instruction_count) {
         return false;
     }
     local_index = local_id - context->source_function->local_begin;
@@ -181,6 +184,10 @@ static bool core_inline_asm_rewind_dead_local_assignment(
         block->instruction_count -= remove_count;
         context->function->instruction_count -= remove_count;
         context->function->value_count -= produced_values;
+        /* The discarded instruction IDs are immediately reusable. Its exact
+         * C types must rewind as the same transaction, or the next source
+         * append would observe an old draft count and reject the function. */
+        context->function->source_draft->instruction_type_count -= remove_count;
         if (getenv("MINIC_LOCAL_FACT_TRACE") != NULL) {
             (void)fprintf(stderr,
                           "RK_EARLY_GLOBAL_ROLLBACK function=%s removed_insts=%zu removed_values=%zu converted=%d\n",

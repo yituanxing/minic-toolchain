@@ -1051,3 +1051,19 @@ source/ABI/ASM boundary tests, RISC-V layout and native GNU-linked checks
 ran within `check-fast`; unavailable cross-GNU/QEMU runs remain explicit SKIP.
 **Scope:** 43 files including 23 production `src/` files, 18 test files,
 the Makefile and this ledger; approximately +1,600/−1,260 lines.
+
+### IR-P17 exact-head CI correction — source instruction tail rewind
+
+The strict native gate exposed one C-free source-ingress regression that the
+ordinary check-fast suite did not exercise. GNU rK register-output ASM may
+remove an exact dead assignment tail, decrementing Core instruction, block and
+value counts and immediately reusing the freed IDs. The first SourceDraft
+version omitted the matching instruction-type count rewind, so the next
+source append rejected `source_count=8/core_count=0`. Restore the same
+transaction boundary: require aligned counts before an eligible rewind and
+decrement SourceDraft's instruction-type count with the Core counts. Preserve
+the original exact suffix/SSA and same-local proof; do not relax ASM admission.
+Release `minic-cc`, the RV32 target gate (including `rv32_irq_save_legacy`)
+and the 2026-10-29 five-ISA review batch all pass after the correction. The
+workflow's unrelated AArch64 ACLE Stage3 unsupported GCC pragma and hosted
+KVM CPUID VMX blocker remain separate from this fix.
