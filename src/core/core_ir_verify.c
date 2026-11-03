@@ -367,14 +367,18 @@ static bool core_is_bool(const MinicCoreFunction *function, MinicCoreTypeId id) 
            type->value.integer.is_bool;
 }
 
-static bool core_is_builtin_vector(const MinicCoreFunction *function, MinicCoreTypeId id) {
+static bool core_is_register_value_vector(const MinicCoreFunction *function,
+                                          MinicCoreTypeId id) {
     const MinicCoreType *type = core_type(function, id);
-    return core_is_vector(function, id) && type->value.vector.is_builtin;
+    return core_is_vector(function, id) &&
+           type->value.vector.representation == MINIC_CORE_VECTOR_REGISTER_VALUE;
 }
 
-static bool core_is_gnu_vector(const MinicCoreFunction *function, MinicCoreTypeId id) {
+static bool core_is_storage_only_vector(const MinicCoreFunction *function,
+                                        MinicCoreTypeId id) {
     const MinicCoreType *type = core_type(function, id);
-    return core_is_vector(function, id) && !type->value.vector.is_builtin;
+    return core_is_vector(function, id) &&
+           type->value.vector.representation == MINIC_CORE_VECTOR_STORAGE_ONLY;
 }
 
 static bool core_is_int(const MinicCoreFunction *function, MinicCoreTypeId id) {
@@ -416,8 +420,8 @@ static bool core_bitcast_types_valid(const MinicCoreFunction *function,
 #define ct_is_float(id) core_is_float_format(function, (id), MINIC_CORE_FLOAT_BINARY32)
 #define ct_is_double(id) core_is_float_format(function, (id), MINIC_CORE_FLOAT_BINARY64)
 #define ct_is_long_double(id) core_is_float_format(function, (id), MINIC_CORE_FLOAT_EXTENDED)
-#define ct_is_aarch64_fixed_vector128(id) core_is_builtin_vector(function, (id))
-#define ct_is_gnu_fixed_vector(id) core_is_gnu_vector(function, (id))
+#define ct_is_vector_register_value(id) core_is_register_value_vector(function, (id))
+#define ct_is_vector_storage_only(id) core_is_storage_only_vector(function, (id))
 #define ct_is_const(id) (!core_is_writable(function, (id)))
 #define ct_is_volatile(id) core_is_volatile(function, (id))
 #define ct_equal(a, b) core_equal((a), (b))
@@ -968,21 +972,21 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
                ct_equal(destination_type, instruction->core_type_id) &&
                ct_equal(source_type, instruction->core_type_id);
     }
-    case MINIC_CORE_INSTRUCTION_GNU_FIXED_VECTOR_STORAGE_COPY: {
+    case MINIC_CORE_INSTRUCTION_VECTOR_STORAGE_COPY: {
         MinicCoreTypeId destination_pointee, source_pointee;
         MinicCoreTypeId destination_type, source_type, unqualified_type;
 
         return instruction->result == MINIC_CORE_VALUE_INVALID &&
-               ct_is_gnu_fixed_vector(instruction->core_type_id) &&
+               ct_is_vector_storage_only(instruction->core_type_id) &&
                ct_unqualified(instruction->core_type_id, &unqualified_type) &&
                ct_equal(unqualified_type, instruction->core_type_id) &&
                available_pointer_pointee(
                    function, available_values,
-                   instruction->value.gnu_fixed_vector_storage_copy.destination_address,
+                   instruction->value.vector_storage_copy.destination_address,
                    &destination_pointee) &&
                available_pointer_pointee(
                    function, available_values,
-                   instruction->value.gnu_fixed_vector_storage_copy.source_address,
+                   instruction->value.vector_storage_copy.source_address,
                    &source_pointee) &&
                !ct_is_const(destination_pointee) &&
                !ct_is_volatile(destination_pointee) &&
@@ -995,7 +999,7 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
     case MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_LOAD: {
         MinicCoreTypeId pointee, unqualified;
         return instruction_result_is_valid(function, instruction) &&
-               ct_is_aarch64_fixed_vector128(instruction->core_type_id) &&
+               ct_is_vector_register_value(instruction->core_type_id) &&
                ct_unqualified(instruction->core_type_id, &unqualified) &&
                ct_equal(instruction->core_type_id, unqualified) &&
                available_pointer_pointee(function, available_values,
@@ -1009,7 +1013,7 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
         return instruction->result == MINIC_CORE_VALUE_INVALID &&
                ct_is_void(instruction->core_type_id) &&
                value < function->value_count && available_values[value] &&
-               ct_is_aarch64_fixed_vector128(function->values[value].core_type_id) &&
+               ct_is_vector_register_value(function->values[value].core_type_id) &&
                available_pointer_pointee(function, available_values,
                    instruction->value.store.address, &pointee) &&
                !ct_is_const(pointee) &&
@@ -1019,7 +1023,7 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
     }
     case MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_XOR:
         if (!instruction_result_is_valid(function, instruction) ||
-            !ct_is_aarch64_fixed_vector128(instruction->core_type_id) ||
+            !ct_is_vector_register_value(instruction->core_type_id) ||
             instruction->value.binary.left >= function->value_count ||
             instruction->value.binary.right >= function->value_count ||
             !available_values[instruction->value.binary.left] ||

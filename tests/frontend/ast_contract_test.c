@@ -296,7 +296,7 @@ static int test_builtin_type_target_admission(void) {
         if (target == NULL || !verify_builtin_local(target, minic_type_float()) ||
             verify_builtin_local(target, minic_type_float128()) != has_extended_float ||
             verify_builtin_local(target, malformed) ||
-            verify_builtin_local(target, minic_type_aarch64_header_builtin(
+            verify_builtin_local(target, minic_type_header_builtin(
                                              MINIC_TYPE_BASE_AARCH64_SVE_BOOL)) != is_aarch64) {
             return 90;
         }

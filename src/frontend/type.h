@@ -146,11 +146,16 @@ MinicType minic_type_float32(void);
 MinicType minic_type_float64(void);
 MinicType minic_type_float32x(void);
 MinicType minic_type_float64x(void);
-/* Header-only opaque AArch64 builtin SIMD identities, not scalar aliases. */
-MinicType minic_type_aarch64_header_builtin(MinicTypeBaseKind base_kind);
-MinicType minic_type_aarch64_fixed_vector128(MinicTypeBaseKind base_kind);
-/* Typed source identity, not a generic scalar or an ISA codegen permit. */
-bool minic_type_is_aarch64_fixed_vector128(MinicType type);
+/* Construct only registered header builtin declaration identities (opaque or
+ * fixed-width storage). The selected target still admits the actual spelling
+ * and type separately; this never grants machine SIMD or a vector call ABI. */
+MinicType minic_type_header_builtin(MinicTypeBaseKind base_kind);
+/* Source C object identity, not a machine SIMD operation or ISA permit. */
+bool minic_type_is_fixed_vector128_storage(MinicType type);
+/* Source C identity and CV-qualification check shared by parser and verifier.
+ * Target admission of each builtin kind is deliberately the caller's duty. */
+bool minic_type_fixed_vector128_xor_result(MinicType left, MinicType right,
+                                            MinicType *result);
 MinicType minic_type_function(MinicFunctionTypeId function_type_id);
 MinicType minic_type_record(MinicRecordId record_id);
 MinicType minic_type_array(MinicArrayTypeId array_type_id);

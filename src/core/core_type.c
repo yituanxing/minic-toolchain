@@ -70,7 +70,7 @@ static bool type_equal(const MinicCoreType *left, const MinicCoreType *right) {
     case MINIC_CORE_TYPE_VECTOR:
         return left->value.vector.element == right->value.vector.element &&
                left->value.vector.element_count == right->value.vector.element_count &&
-               left->value.vector.is_builtin == right->value.vector.is_builtin;
+               left->value.vector.representation == right->value.vector.representation;
     case MINIC_CORE_TYPE_QUALIFIED:
         return left->value.qualified.base == right->value.qualified.base;
     /* Record and opaque identities are nominal, not shape-interned. */
@@ -121,7 +121,9 @@ static bool type_references_valid(const MinicCoreTypeContext *context,
         return true;
     case MINIC_CORE_TYPE_VECTOR:
         return type->value.vector.element < context->type_count &&
-               type->value.vector.element_count != 0U;
+               type->value.vector.element_count != 0U &&
+               (type->value.vector.representation == MINIC_CORE_VECTOR_STORAGE_ONLY ||
+                type->value.vector.representation == MINIC_CORE_VECTOR_REGISTER_VALUE);
     case MINIC_CORE_TYPE_OPAQUE:
         return !type->has_layout;
     case MINIC_CORE_TYPE_QUALIFIED: {

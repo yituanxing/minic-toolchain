@@ -8,7 +8,8 @@ bool minic_aarch64_neon_vector128_core_type(
         types, minic_core_type_unqualified(types, id));
     const MinicCoreType *element;
     if (vector == NULL || vector->kind != MINIC_CORE_TYPE_VECTOR ||
-        !vector->value.vector.is_builtin || !vector->has_layout ||
+        vector->value.vector.representation !=
+            MINIC_CORE_VECTOR_REGISTER_VALUE || !vector->has_layout ||
         vector->size != 16U || vector->alignment != 16U)
         return false;
     element = minic_core_type_get(types,

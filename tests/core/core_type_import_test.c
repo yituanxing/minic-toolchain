@@ -30,6 +30,8 @@ int main(void) {
     MinicCoreTypeId int_id, const_int_id, volatile_int_id, const_volatile_int_id;
     MinicCoreTypeId integer_pointer_id;
     MinicCoreTypeId array_id, function_id, repeated_function_id, vector_id, bad_id;
+    MinicCoreTypeId register_vector_id;
+    MinicCoreType register_vector;
     const MinicCoreType *node, *pointer, *array, *function, *vector, *int_type;
     size_t node_size, node_alignment, field_offset, bit_offset;
     size_t previous_count;
@@ -197,7 +199,21 @@ int main(void) {
     vector = minic_core_type_get(&context, vector_id);
     CHECK(vector != NULL && vector->kind == MINIC_CORE_TYPE_VECTOR);
     CHECK(vector->value.vector.element_count == 16U && vector->size == 16U);
-    CHECK(!vector->value.vector.is_builtin);
+    CHECK(vector->value.vector.representation == MINIC_CORE_VECTOR_STORAGE_ONLY);
+    /* The same element count and byte layout do not imply the same Core
+     * value representation. Neither representation depends on a C type name. */
+    register_vector = *vector;
+    register_vector.value.vector.representation = MINIC_CORE_VECTOR_REGISTER_VALUE;
+    CHECK(minic_core_type_register(&context, &register_vector, &register_vector_id));
+    CHECK(register_vector_id != vector_id);
+    CHECK(minic_core_type_get(&context, register_vector_id)->value.vector.representation ==
+          MINIC_CORE_VECTOR_REGISTER_VALUE);
+    CHECK(minic_core_type_register(&context, &register_vector, &bad_id));
+    CHECK(bad_id == register_vector_id);
+    register_vector.value.vector.representation = (MinicCoreVectorRepresentation)5;
+    bad_id = MINIC_CORE_TYPE_INVALID;
+    CHECK(!minic_core_type_register(&context, &register_vector, &bad_id));
+    CHECK(bad_id == MINIC_CORE_TYPE_INVALID);
 
     /* One failed conversion poisons the transaction, never returns a valid ID. */
     previous_count = context.type_count;

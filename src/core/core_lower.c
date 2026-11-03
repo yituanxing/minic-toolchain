@@ -161,7 +161,7 @@ MinicCoreLowerStatus minic_core_lower_internal_local_object(MinicCoreLowerContex
     }
     if (!core_memory_scalar_type(local->type) &&
         !minic_type_is_record(local->type) &&
-        !minic_type_is_aarch64_fixed_vector128(local->type)) {
+        !minic_type_is_fixed_vector128_storage(local->type)) {
         return MINIC_CORE_LOWER_UNSUPPORTED;
     }
     if (local->is_array) {

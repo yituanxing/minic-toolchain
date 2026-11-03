@@ -3,6 +3,12 @@
 
 #include "target/target_info.h"
 
+/* Shared C rank construction for canonical target registration and C source
+ * integer promotion; machine emitters never synthesize C scalar types. */
+bool minic_target_source_integer_type_with_rank(MinicIntegerSign sign,
+                                                MinicIntegerRank rank,
+                                                MinicType *result);
+
 /* These callbacks answer C/GNU source grammar questions only. An accepted
  * spelling never reserves a register or authorizes a physical ASM template.
  * Each target owns its own policy object; missing callbacks fail closed. */

@@ -36,7 +36,8 @@ bool minic_core_wide_value_slots_build(
                (type->kind == MINIC_CORE_TYPE_FLOAT &&
                 type->value.floating.format == MINIC_CORE_FLOAT_EXTENDED) ||
                (type->kind == MINIC_CORE_TYPE_VECTOR &&
-                type->value.vector.is_builtin && type->has_layout &&
+                type->value.vector.representation ==
+                    MINIC_CORE_VECTOR_REGISTER_VALUE && type->has_layout &&
                 type->size == 16U);
         const size_t bytes = wide ? 16U : 0U;
         if (bytes > maximum_bytes || cursor > maximum_bytes - bytes) {

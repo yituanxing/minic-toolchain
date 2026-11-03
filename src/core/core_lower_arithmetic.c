@@ -262,7 +262,7 @@ MinicCoreLowerStatus minic_core_lower_try_arithmetic_binary(
 
     if (expression->kind == MINIC_EXPRESSION_BINARY &&
         expression->value.binary.operator_kind == MINIC_BINARY_BITWISE_XOR &&
-        minic_type_is_aarch64_fixed_vector128(expression->type)) {
+        minic_type_is_fixed_vector128_storage(expression->type)) {
         MinicCoreValueId left, right;
         MinicCoreLowerStatus status;
         *handled = true;

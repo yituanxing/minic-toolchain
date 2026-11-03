@@ -410,11 +410,11 @@ static bool dump_instruction(FILE *output,
                        "  record.copy %%%" PRIu32 ", %%%" PRIu32 "\n",
                        instruction->value.record_copy.source_address,
                        instruction->value.record_copy.destination_address) >= 0;
-    case MINIC_CORE_INSTRUCTION_GNU_FIXED_VECTOR_STORAGE_COPY:
+    case MINIC_CORE_INSTRUCTION_VECTOR_STORAGE_COPY:
         return fprintf(output,
-                       "  gnu.vector16.copy %%%" PRIu32 ", %%%" PRIu32 "\n",
-                       instruction->value.gnu_fixed_vector_storage_copy.source_address,
-                       instruction->value.gnu_fixed_vector_storage_copy.destination_address) >= 0;
+                       "  vector.storage.copy %%%" PRIu32 ", %%%" PRIu32 "\n",
+                       instruction->value.vector_storage_copy.source_address,
+                       instruction->value.vector_storage_copy.destination_address) >= 0;
     case MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_LOAD:
         return fprintf(output, "  %%%" PRIu32 " = vector128.load %%%" PRIu32 "\n",
                        instruction->result, instruction->value.load.address) >= 0;

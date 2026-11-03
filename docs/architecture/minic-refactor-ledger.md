@@ -1242,3 +1242,52 @@ PASS; standalone machine-header AST isolation PASS. Target-specific host/native
 SIMD and GNU source tests exercised the unchanged acceptance/rejection
 contracts. Cross-GNU/QEMU full Linux five-architecture runtime qualification
 was **not** performed; these native gates do not prove Linux boot.
+
+## IR-P23 — Separate C target semantics, seal vector representation, isolate machine text passes (2026-11-03)
+
+Read the whole source/target admission → CoreType import and vector lowering →
+five-target machine emission → LoongArch64 native text postprocessing path.
+GCC's GENERIC/GIMPLE versus RTL and LLVM's IR versus TargetLowering provide
+the reference for *ownership*, not a demand to clone either compiler's full
+intermediate representations. This batch keeps the existing Core/Module IR,
+the same target registries, and unchanged supported ISA/ABI contracts.
+
+- **Target C semantics:** move integer rank, promotion, literal typing,
+  `sizeof`, `char`/`wchar_t`, `va_list` source identities, invocation-local
+  C options, GNU attributes/pragma/inline-ASM source constraints and builtin
+  source signatures together from `target_info.c` to
+  `source_policy/language_semantics.c`. The original public API remains
+  stable. `TargetInfo` owns the five target descriptors, DataLayout pointers,
+  machine capability/ABI facts and finalized Module ELF symbol queries;
+  it no longer includes or dereferences the C AST.
+- **Frontend declaration roles:** replace arch-named vector type helpers
+  with generic source builtin declaration-role and fixed-vector storage
+  queries. Parser and AST verifier share one exact unqualified-operand
+  identity check for the admitted typed vector XOR. The target SourcePolicy
+  still admits the known AArch64 spellings; this does not authorize GNU
+  vector ALU, other targets' NEON, or a vector argument/return ABI.
+- **Core vector representation:** replace the source-language-derived
+  `vector.is_builtin` flag with explicit `STORAGE_ONLY` or `REGISTER_VALUE`
+  Core representation, and generalize the storage-copy opcode to
+  `VECTOR_STORAGE_COPY`. Import, intern, lower, verify, value census, dump,
+  x86 storage copy, AArch64 NEON and shared value slot consumers use the
+  same sealed Core property. Machine code rejects unsupported Core shape
+  instead of re-querying C type declaration permission.
+- **Loong machine text ownership:** extract both existing postprocessing
+  passes out of `loongarch64/codegen.c` into `machine_text_opt.c`: one-use
+  spill forwarding followed by native frame/branch compaction. Preserve
+  the exact order, sign extension, address/alias barriers, source inline-ASM
+  opaque regions and shared Core-use census. Standalone native test covers
+  14 positive/negative scenarios; no optimization algorithm redesign.
+- **Build and review inventory:** update the compiler build, standalone
+  SourcePolicy tests, bootstrap file inventory and strict source boundaries.
+  Index previously newly introduced P22 owners alongside the P23 source
+  units as `inventory`, without falsely transferring old blob reviews or
+  declaring GNU/QEMU Linux acceptance from a host-native check.
+
+**Verification:** Debug `make MODE=debug -j8 check-fast` PASS, including
+CoreType native/ASAN-UBSAN, source parser/verifier, x86 typed GNU ASM,
+AArch64 vector contract and LoongArch64 14-case machine text optimizer;
+Release `make MODE=release CFLAGS=-Werror -j8 build/release/bin/minic-cc`
+PASS. Strict boundary and review-inventory checks run separately. GNU cross
+assembly/link, five-ISA Linux runtime and QEMU are **NOT RUN** for P23.

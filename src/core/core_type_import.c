@@ -265,12 +265,13 @@ static bool import_vector(MinicCoreTypeImporter *importer, MinicType source,
     type.kind = MINIC_CORE_TYPE_VECTOR;
     role = minic_type_builtin_declaration_role(source.base_kind);
     if (source.base_kind == MINIC_TYPE_BASE_GNU_FIXED_VECTOR) {
+        type.value.vector.representation = MINIC_CORE_VECTOR_STORAGE_ONLY;
         element.base_kind = source.gnu_vector_element_kind;
         element.integer_sign = source.integer_sign;
         element.integer_rank = source.integer_rank;
         element.is_plain_char = source.is_plain_char;
     } else if (role == MINIC_BUILTIN_DECLARATION_FIXED_VECTOR128_STORAGE) {
-        type.value.vector.is_builtin = true;
+        type.value.vector.representation = MINIC_CORE_VECTOR_REGISTER_VALUE;
         switch (source.base_kind) {
         case MINIC_TYPE_BASE_AARCH64_FLOAT32X4: element = minic_type_float(); break;
         case MINIC_TYPE_BASE_AARCH64_FLOAT64X2: element = minic_type_double(); break;

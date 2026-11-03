@@ -61,20 +61,20 @@ static MinicCoreLowerStatus core_lower_gnu_vector16_storage_copy(
         return MINIC_CORE_LOWER_ERROR;
 
     (void)memset(&instruction, 0, sizeof(instruction));
-    instruction.kind = MINIC_CORE_INSTRUCTION_GNU_FIXED_VECTOR_STORAGE_COPY;
+    instruction.kind = MINIC_CORE_INSTRUCTION_VECTOR_STORAGE_COPY;
     instruction.span = span;
     instruction_source_type = type;
     instruction.result = MINIC_CORE_VALUE_INVALID;
-    instruction.value.gnu_fixed_vector_storage_copy.destination_address = snapshot_address;
-    instruction.value.gnu_fixed_vector_storage_copy.source_address = source_address;
+    instruction.value.vector_storage_copy.destination_address = snapshot_address;
+    instruction.value.vector_storage_copy.source_address = source_address;
     if (!minic_core_function_append_source_effect_instruction(
             context->function, context->block_id, &instruction, instruction_source_type))
         return MINIC_CORE_LOWER_ERROR;
 
     status = lower_address(context, target_id, &destination_address);
     if (status != MINIC_CORE_LOWER_OK) return status;
-    instruction.value.gnu_fixed_vector_storage_copy.destination_address = destination_address;
-    instruction.value.gnu_fixed_vector_storage_copy.source_address = snapshot_address;
+    instruction.value.vector_storage_copy.destination_address = destination_address;
+    instruction.value.vector_storage_copy.source_address = snapshot_address;
     return minic_core_function_append_source_effect_instruction(
                context->function, context->block_id, &instruction, instruction_source_type)
                ? MINIC_CORE_LOWER_OK : MINIC_CORE_LOWER_ERROR;
@@ -158,7 +158,7 @@ static MinicCoreLowerStatus minic_core_lower_assignment_pair_impl(MinicCoreLower
     if (minic_type_is_gnu_fixed_vector(target->type))
         return core_lower_gnu_vector16_storage_copy(
             context, target, source, target_id, source_id, span, result_value);
-    if (minic_type_is_aarch64_fixed_vector128(target->type)) {
+    if (minic_type_is_fixed_vector128_storage(target->type)) {
         MinicCoreInstruction store;
         MinicType store_source_type = minic_type_void();
         MinicCoreValueId vector_value, target_address;

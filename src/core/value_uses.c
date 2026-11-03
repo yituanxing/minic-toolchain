@@ -127,12 +127,12 @@ bool minic_core_visit_instruction_value_uses(const MinicCoreFunction *function,
                    instruction->value.record_copy.destination_address, visitor, context) &&
                core_visit_value_use(
                    instruction->value.record_copy.source_address, visitor, context);
-    case MINIC_CORE_INSTRUCTION_GNU_FIXED_VECTOR_STORAGE_COPY:
+    case MINIC_CORE_INSTRUCTION_VECTOR_STORAGE_COPY:
         return core_visit_value_use(
-                   instruction->value.gnu_fixed_vector_storage_copy.destination_address,
+                   instruction->value.vector_storage_copy.destination_address,
                    visitor, context) &&
                core_visit_value_use(
-                   instruction->value.gnu_fixed_vector_storage_copy.source_address,
+                   instruction->value.vector_storage_copy.source_address,
                    visitor, context);
     case MINIC_CORE_INSTRUCTION_REGISTER_OUTPUT_INPUT_INLINE_ASM:
         return core_visit_value_use(

@@ -59,6 +59,7 @@ MINIC_LDFLAGS := $(MODE_LDFLAGS) $(LDFLAGS)
 MINIC_INCLUDES := -Iinclude -Isrc
 
 TARGET_SOURCE_POLICY_SOURCES := \
+	src/target/source_policy/language_semantics.c \
 	src/target/source_policy/riscv32.c \
 	src/target/source_policy/riscv64.c \
 	src/target/source_policy/x86_64.c \
@@ -248,6 +249,7 @@ MINIC_SOURCES := \
 	src/target/aarch64/integer_emit.c \
 	src/target/aarch64/fp_emit.c \
 	src/target/loongarch64/codegen.c \
+	src/target/loongarch64/machine_text_opt.c \
 	src/target/loongarch64/asm_contract.c \
 	src/target/loongarch64/simd_asm.c \
 	src/target/loongarch64/simd_source_policy.c \
@@ -2143,6 +2145,20 @@ check-target-machine-header-boundary:
 	@echo "TARGET_MACHINE_HEADER_BOUNDARY=PASS c_ast=absent"
 
 check-fast: check-target-machine-header-boundary
+
+# LoongArch machine-text optimization is a native codegen stage, independent
+# of Source C policy and structured GNU inline-ASM admission. Keep its exact
+# barriers and sign-extension/SSA-use rules under a standalone host gate.
+.PHONY: check-loongarch64-machine-text-opt
+check-loongarch64-machine-text-opt:
+	mkdir -p "$(BUILD_DIR)/tests"
+	$(CC) $(MINIC_CFLAGS) $(MINIC_INCLUDES) \
+	  tests/target/loongarch64_machine_text_opt_test.c \
+	  src/target/loongarch64/machine_text_opt.c \
+	  -o "$(BUILD_DIR)/tests/loongarch64-machine-text-opt-test"
+	"$(BUILD_DIR)/tests/loongarch64-machine-text-opt-test"
+
+check-fast: check-loongarch64-machine-text-opt
 
 # x86 Linux structured ASM families retire legacy machine-side template
 # dispatch; GNU ELF/native is available on the host, no cross toolchain.

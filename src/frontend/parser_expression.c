@@ -2411,19 +2411,13 @@ static bool binary_result_type(const MinicTargetInfo *target,
     if (result == NULL) {
         return false;
     }
-    /* Real AArch64 typed vector ALU: one lane-preserving XOR, never scalar
-     * promotion or an arbitrary GNU vector_size value. Target-owned source
-     * registration controls whether these builtin identities exist. */
+    /* Typed fixed-vector storage permits precisely the source-qualified XOR
+     * identity; this does not admit general GNU vectors or machine SIMD. */
     if (kind == MINIC_TOKEN_CARET &&
-        minic_type_is_aarch64_fixed_vector128(left) &&
+        minic_type_is_fixed_vector128_storage(left) &&
         minic_target_info_language_type_supported(target, left.base_kind)) {
-        MinicType left_value, right_value;
-        if (minic_type_unqualified(left, &left_value) &&
-            minic_type_unqualified(right, &right_value) &&
-            minic_type_equal(left_value, right_value)) {
-            *result = left_value;
+        if (minic_type_fixed_vector128_xor_result(left, right, result))
             return true;
-        }
     }
     if (binary_is_logical(kind)) {
         if (!type_is_condition_scalar(left) || !type_is_condition_scalar(right)) {

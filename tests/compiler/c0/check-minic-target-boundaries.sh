@@ -494,9 +494,10 @@ for arch in aarch64 loongarch64; do
 done
 
 # Invocation-specific language ABI flags must not mutate canonical models.
-has src/target/target_info.c 'minic_target_invocation_begin('
-has src/target/target_info.c 'minic_target_invocation_plain_char('
-has src/target/target_info.c 'minic_target_invocation_short_wchar('
+has src/target/source_policy/language_semantics.c 'minic_target_invocation_begin('
+has src/target/source_policy/language_semantics.c 'minic_target_invocation_plain_char('
+has src/target/source_policy/language_semantics.c 'minic_target_invocation_short_wchar('
+lacks src/target/target_info.c '#include "frontend/ast.h"'
 has tools/minic-cc/main.c 'minic_target_invocation_begin('
 has tools/minic/main.c 'minic_driver_plain_char_unsigned('
 has tools/minic/main.c 'language.relocation != NULL'
@@ -582,7 +583,14 @@ lacks src/target/target_info.c 'strcmp(name, "riscv64-linux")'
 if grep -REq 'MINIC_TARGET_ARCH_' src/frontend; then
   fail 'frontend must query TargetInfo language features, not CPU names'
 fi
-has src/target/target_info.c 'minic_target_info_language_type_supported('
+has src/target/source_policy/language_semantics.c 'minic_target_info_language_type_supported('
+lacks src/target/target_info.c 'minic_target_info_language_type_supported('
+has src/target/source_policy/language_semantics.c 'minic_target_info_integer_promotion('
+lacks src/target/target_info.c 'minic_target_info_integer_promotion('
+has src/target/loongarch64/codegen.c 'minic_loongarch64_forward_single_use_spills('
+has src/target/loongarch64/codegen.c 'minic_loongarch64_emit_compact_assembly('
+has src/target/loongarch64/machine_text_opt.c '# MINI_LOONG_INLINE_ASM_BEGIN'
+lacks src/target/loongarch64/machine_text_opt.c '#include "frontend/ast.h"'
 has src/frontend/parser_type.c 'minic_target_info_named_builtin_type('
 has src/frontend/ast_verifier.c 'minic_target_info_language_type_supported('
 
@@ -1337,6 +1345,7 @@ cc -std=c11 -O2 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror \
   -ffunction-sections -fdata-sections -Wl,--gc-sections \
   -Iinclude -Isrc tests/compiler/c0/probe-core-module-elf-linkage.c \
   src/target/target_info.c \
+  src/target/source_policy/language_semantics.c \
   -o "$work/core-module-elf-linkage-probe"
 "$work/core-module-elf-linkage-probe"
 

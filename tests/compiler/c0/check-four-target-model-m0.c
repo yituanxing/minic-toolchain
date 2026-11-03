@@ -140,7 +140,7 @@ static int verify_language_admission(void) {
             return 1;
         }
         if (!minic_type_pointer_to(
-                minic_type_aarch64_header_builtin(
+                minic_type_header_builtin(
                     MINIC_TYPE_BASE_AARCH64_FLOAT32X4), &vector_pointer)) {
             (void)fprintf(stderr, "FAIL target vector pointer construction: %s\n", names[i]);
             return 1;
@@ -148,7 +148,7 @@ static int verify_language_admission(void) {
         if (has_vector != is_arm ||
             (is_arm && vector_type.base_kind != MINIC_TYPE_BASE_AARCH64_SVE_BOOL) ||
             minic_target_info_header_opaque_vector_return(
-                t, minic_type_aarch64_header_builtin(
+                t, minic_type_header_builtin(
                        MINIC_TYPE_BASE_AARCH64_FLOAT32X4)) != is_arm ||
             minic_target_info_header_opaque_vector_return(
                 t, minic_type_float128()) ||

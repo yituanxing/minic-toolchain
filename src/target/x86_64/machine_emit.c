@@ -1024,21 +1024,20 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicCoreModule *module
         }
         return true;
     }
-    case MINIC_CORE_INSTRUCTION_GNU_FIXED_VECTOR_STORAGE_COPY: {
+    case MINIC_CORE_INSTRUCTION_VECTOR_STORAGE_COPY: {
         MinicCoreTypeId dst_pointee, src_pointee;
         const MinicCoreType *vector, *dst_type, *src_type;
         const MinicCoreValueId dst =
-            ins->value.gnu_fixed_vector_storage_copy.destination_address;
+            ins->value.vector_storage_copy.destination_address;
         const MinicCoreValueId src =
-            ins->value.gnu_fixed_vector_storage_copy.source_address;
+            ins->value.vector_storage_copy.source_address;
         if (ins->result != MINIC_CORE_VALUE_INVALID ||
             (vector = x86_emit_core_type(fn, ins->core_type_id)) == NULL ||
             vector->kind != MINIC_CORE_TYPE_VECTOR ||
-            vector->value.vector.is_builtin ||
+            vector->value.vector.representation !=
+                MINIC_CORE_VECTOR_STORAGE_ONLY ||
             !vector->has_layout || vector->size != 16U ||
             vector->alignment != 16U ||
-            !minic_target_info_language_type_supported(
-                target, MINIC_TYPE_BASE_GNU_FIXED_VECTOR) ||
             dst >= fn->value_count || src >= fn->value_count ||
             !x86_emit_core_pointee(fn, fn->values[dst].core_type_id,
                                    &dst_pointee) ||

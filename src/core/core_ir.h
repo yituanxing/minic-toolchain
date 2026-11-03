@@ -154,8 +154,8 @@ typedef enum MinicCoreInstructionKind {
     /* Target-neutral effect, register destination identity plus SSA source.
      * Append after frozen enum values to preserve established IR numbering. */
     MINIC_CORE_INSTRUCTION_FIXED_REGISTER_WRITE,
-    /* GNU vector_size(16) lvalue storage copy: no SIMD value or call ABI. */
-    MINIC_CORE_INSTRUCTION_GNU_FIXED_VECTOR_STORAGE_COPY,
+    /* Address-backed vector lvalue storage copy: no register value or call ABI. */
+    MINIC_CORE_INSTRUCTION_VECTOR_STORAGE_COPY,
     /* True 128-bit typed vector value operations; never scalar/record copy.
      * ISA permission, V-register ABI and exact intrinsics remain target owned. */
     MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_LOAD,
@@ -469,7 +469,7 @@ typedef struct MinicCoreInstruction {
         struct {
             MinicCoreValueId destination_address;
             MinicCoreValueId source_address;
-        } gnu_fixed_vector_storage_copy;
+        } vector_storage_copy;
         /* Target ABI state-copy: left=destination cursor pointer, right=source. */
         struct {
             MinicCoreValueId destination;

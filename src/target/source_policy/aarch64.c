@@ -82,10 +82,7 @@ static bool aarch_named_header_builtin(const MinicTargetInfo *target,
         if (aarch_register_is(name, length, names[i].name) &&
             minic_target_info_language_type_supported(target, names[i].kind)) {
             if (type != NULL)
-                *type = minic_type_builtin_declaration_role(names[i].kind) ==
-                                MINIC_BUILTIN_DECLARATION_FIXED_VECTOR128_STORAGE
-                            ? minic_type_aarch64_fixed_vector128(names[i].kind)
-                            : minic_type_aarch64_header_builtin(names[i].kind);
+                *type = minic_type_header_builtin(names[i].kind);
             return true;
         }
     }

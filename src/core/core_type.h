@@ -37,6 +37,16 @@ typedef enum MinicCoreFloatFormat {
     MINIC_CORE_FLOAT_EXTENDED64X
 } MinicCoreFloatFormat;
 
+/* Core vectors are classified by the value representation that lowering
+ * actually admitted, independently of the source extension naming them.
+ * Storage-only vectors are address-backed aggregates. Register-value vectors
+ * may participate in typed vector SSA operations and target vector registers.
+ * The selected target still owns ABI register assignment and instruction ISA. */
+typedef enum MinicCoreVectorRepresentation {
+    MINIC_CORE_VECTOR_STORAGE_ONLY = 0,
+    MINIC_CORE_VECTOR_REGISTER_VALUE
+} MinicCoreVectorRepresentation;
+
 typedef struct MinicCoreRecordField {
     MinicCoreTypeId type_id;
     size_t byte_offset;
@@ -101,7 +111,7 @@ typedef struct MinicCoreType {
         struct {
             MinicCoreTypeId element;
             size_t element_count;
-            bool is_builtin;
+            MinicCoreVectorRepresentation representation;
         } vector;
         struct {
             MinicCoreTypeId base;

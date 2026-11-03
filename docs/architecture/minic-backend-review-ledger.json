@@ -501,6 +501,11 @@
       "ci_touched_in": [],
       "audit_note": "R3 A64/Loong Linux static-key source/Core grammar dedup. Both ISA exact .s baseline diffs and negative modifier tests passed; GNU cross ELF/QEMU not run."
     },
+    "src/target/common/linux_jump_label_source.h": {
+      "blob": "36f481bf4cdaa0bc7ee31f3f25e80d7bd2651d93",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
     "src/target/common/lp64_aggregate.c": {
       "blob": "60e369f815ee81ef41a7f1ba16a7a7d873b4723a",
       "review_depth": "inventory",
@@ -665,6 +670,21 @@
       "review_depth": "inventory",
       "ci_touched_in": []
     },
+    "src/target/loongarch64/machine_builtin_form.h": {
+      "blob": "45b6e389ba784596ba2153ecb6a98d45b0200bb9",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/loongarch64/machine_text_opt.c": {
+      "blob": "acc05a787366c570da37bdce62b00deffe9b8e6b",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/loongarch64/machine_text_opt.h": {
+      "blob": "097ca6532263665a4d04ae59603066522db4891c",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
     "src/target/loongarch64/residual_emit.c": {
       "blob": "8e97841497c85dc611c309f4022ce9865c92147c",
       "review_depth": "targeted",
@@ -692,6 +712,21 @@
     },
     "src/target/loongarch64/simd_asm.h": {
       "blob": "04942ab687e9dfd7b8af95e9aaa00c63a0ae74e8",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/loongarch64/simd_asm_syntax.h": {
+      "blob": "112e90cbdd3caed17748e0cc9e087ddc7c8b8b98",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/loongarch64/simd_source_policy.c": {
+      "blob": "294846fefbc77796357f1705ad4bfbc323a61f8a",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/loongarch64/simd_source_policy.h": {
+      "blob": "3e881675bb6399284f49aa846e75e6cf38675c4c",
       "review_depth": "inventory",
       "ci_touched_in": []
     },
@@ -1137,6 +1172,11 @@
       "review_depth": "full",
       "ci_touched_in": [],
       "note": "2026-10-29 batch19: AArch64 GNU ASM source admission extracted from TargetInfo; paired source and machine ownership reviewed."
+    },
+    "src/target/source_policy/language_semantics.c": {
+      "blob": "a3716b2cc9f3887fea6a74ee01fcfad05e91bf02",
+      "review_depth": "inventory",
+      "ci_touched_in": []
     },
     "src/target/source_policy/loongarch64.c": {
       "blob": "5a3c0de51f74769de2af4976c4d8f1cda165af66",

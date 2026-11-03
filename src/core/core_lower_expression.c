@@ -185,7 +185,7 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
                    : MINIC_CORE_LOWER_ERROR;
     }
     if (expression->value_category == MINIC_VALUE_LVALUE &&
-        minic_type_is_aarch64_fixed_vector128(expression->type)) {
+        minic_type_is_fixed_vector128_storage(expression->type)) {
         MinicCoreValueId address_id;
         MinicType unqualified_type;
         MinicCoreLowerStatus status;
@@ -226,12 +226,12 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
         return MINIC_CORE_LOWER_UNSUPPORTED;
     }
     if (expression->kind == MINIC_EXPRESSION_LVALUE_READ &&
-        minic_type_is_aarch64_fixed_vector128(expression->type)) {
+        minic_type_is_fixed_vector128_storage(expression->type)) {
         const MinicExpression *operand = minic_c0_program_expression(
             context->body->program, expression->value.unary.operand);
         MinicType operand_value_type;
         if (operand == NULL || operand->value_category != MINIC_VALUE_LVALUE ||
-            !minic_type_is_aarch64_fixed_vector128(operand->type) ||
+            !minic_type_is_fixed_vector128_storage(operand->type) ||
             !minic_type_unqualified(operand->type, &operand_value_type) ||
             !minic_type_equal(operand_value_type, expression->type))
             return MINIC_CORE_LOWER_UNSUPPORTED;

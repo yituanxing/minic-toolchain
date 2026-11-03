@@ -47,17 +47,43 @@ static int test_builtin_declaration_roles(void) {
             MINIC_BUILTIN_DECLARATION_INVALID ||
         minic_type_builtin_declaration_role(MINIC_TYPE_BASE_INT) !=
             MINIC_BUILTIN_DECLARATION_INVALID ||
-        !minic_type_is_void(minic_type_aarch64_header_builtin(MINIC_TYPE_BASE_FLOAT128)) ||
-        minic_type_aarch64_header_builtin(MINIC_TYPE_BASE_AARCH64_SVE_BOOL).base_kind !=
+        !minic_type_is_void(minic_type_header_builtin(MINIC_TYPE_BASE_FLOAT128)) ||
+        !minic_type_is_void(minic_type_header_builtin(MINIC_TYPE_BASE_INT)) ||
+        minic_type_header_builtin(MINIC_TYPE_BASE_AARCH64_SVE_BOOL).base_kind !=
             MINIC_TYPE_BASE_AARCH64_SVE_BOOL ||
-        !minic_type_is_void(minic_type_aarch64_fixed_vector128(MINIC_TYPE_BASE_FLOAT128)) ||
-        minic_type_aarch64_fixed_vector128(MINIC_TYPE_BASE_AARCH64_UINT64X2).base_kind !=
-            MINIC_TYPE_BASE_AARCH64_UINT64X2) {
+        minic_type_header_builtin(MINIC_TYPE_BASE_AARCH64_UINT64X2).base_kind !=
+            MINIC_TYPE_BASE_AARCH64_UINT64X2 ||
+        !minic_type_is_fixed_vector128_storage(
+            minic_type_header_builtin(MINIC_TYPE_BASE_AARCH64_UINT64X2)) ||
+        minic_type_is_fixed_vector128_storage(
+            minic_type_header_builtin(MINIC_TYPE_BASE_AARCH64_SVE_BOOL))) {
         /* __builtin_va_list now materializes a canonical record/array C
          * type per translation unit, not a special frontend scalar kind.
          * Its shape and identity are tested by four-target-model-m0. */
         return fail("builtin declaration trait rejects non-vector ISA identity");
     }
+    return 0;
+}
+
+static int test_header_fixed_vector_xor_type(void) {
+    MinicType vector_u8 = minic_type_header_builtin(MINIC_TYPE_BASE_AARCH64_UINT8X16);
+    MinicType vector_u64 = minic_type_header_builtin(MINIC_TYPE_BASE_AARCH64_UINT64X2);
+    MinicType opaque = minic_type_header_builtin(MINIC_TYPE_BASE_AARCH64_SVE_BOOL);
+    MinicType qualified, pointer, result;
+
+    if (!minic_type_add_const(vector_u8, &qualified) ||
+        !minic_type_pointer_to(vector_u8, &pointer) ||
+        minic_type_is_fixed_vector128_storage(pointer) ||
+        !minic_type_fixed_vector128_xor_result(vector_u8, qualified, &result) ||
+        !minic_type_equal(result, vector_u8) ||
+        !minic_type_fixed_vector128_xor_result(qualified, vector_u8, &result) ||
+        !minic_type_equal(result, vector_u8) ||
+        minic_type_fixed_vector128_xor_result(vector_u8, vector_u64, &result) ||
+        minic_type_fixed_vector128_xor_result(vector_u8, opaque, &result) ||
+        minic_type_fixed_vector128_xor_result(opaque, opaque, &result) ||
+        minic_type_fixed_vector128_xor_result(pointer, pointer, &result) ||
+        minic_type_fixed_vector128_xor_result(vector_u8, vector_u8, NULL))
+        return fail("fixed-vector source identity and XOR result admission");
     return 0;
 }
 
@@ -97,7 +123,8 @@ int main(void)
     MinicType malformed_type;
     MinicType overflow_type;
 
-    if (test_builtin_declaration_roles() != 0) {
+    if (test_builtin_declaration_roles() != 0 ||
+        test_header_fixed_vector_xor_type() != 0) {
         return 1;
     }
 

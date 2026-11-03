@@ -18,7 +18,7 @@ int main(void) {
         minic_core_instruction_semantic_family(MINIC_CORE_INSTRUCTION_FIXED_REGISTER_WRITE) !=
             MINIC_CORE_FAMILY_ABI ||
         minic_core_instruction_semantic_family(
-            MINIC_CORE_INSTRUCTION_GNU_FIXED_VECTOR_STORAGE_COPY) !=
+            MINIC_CORE_INSTRUCTION_VECTOR_STORAGE_COPY) !=
             MINIC_CORE_FAMILY_MEMORY ||
         minic_core_instruction_semantic_family(
             MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_LOAD) !=

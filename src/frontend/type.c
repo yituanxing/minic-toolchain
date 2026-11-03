@@ -269,29 +269,34 @@ MinicBuiltinDeclarationRole minic_type_builtin_declaration_role(MinicTypeBaseKin
     }
 }
 
-/* This function recognizes declared ABI builtin identities, but does not
- * assign invented sizes or scalar machine operations to NEON/SVE vectors. */
-MinicType minic_type_aarch64_header_builtin(MinicTypeBaseKind base_kind) {
-    if (minic_type_builtin_declaration_role(base_kind) !=
-        MINIC_BUILTIN_DECLARATION_HEADER_ONLY_OPAQUE)
+/* Source-level declaration identity; target source policy controls admission.
+ * Both opaque-only and storage-capable kinds remain distinct from machine
+ * support and must never be inferred to imply a register calling convention. */
+MinicType minic_type_header_builtin(MinicTypeBaseKind base_kind) {
+    MinicBuiltinDeclarationRole role = minic_type_builtin_declaration_role(base_kind);
+    if (role != MINIC_BUILTIN_DECLARATION_HEADER_ONLY_OPAQUE &&
+        role != MINIC_BUILTIN_DECLARATION_FIXED_VECTOR128_STORAGE)
         return minic_type_void();
     return minic_type_scalar(base_kind);
 }
 
-/* Real fixed-width vector storage identity, without inventing scalar machine
- * operations. The target's DataLayout and vector ABI gate remain separate. */
-MinicType minic_type_aarch64_fixed_vector128(MinicTypeBaseKind base_kind) {
-    if (minic_type_builtin_declaration_role(base_kind) !=
-        MINIC_BUILTIN_DECLARATION_FIXED_VECTOR128_STORAGE)
-        return minic_type_void();
-    return minic_type_scalar(base_kind);
-}
-
-bool minic_type_is_aarch64_fixed_vector128(MinicType type) {
+bool minic_type_is_fixed_vector128_storage(MinicType type) {
     if (type.pointer_depth != 0U ||
         minic_type_builtin_declaration_role(type.base_kind) !=
             MINIC_BUILTIN_DECLARATION_FIXED_VECTOR128_STORAGE)
         return false;
+    return true;
+}
+
+bool minic_type_fixed_vector128_xor_result(MinicType left, MinicType right,
+                                            MinicType *result) {
+    MinicType left_value, right_value;
+    if (result == NULL || !minic_type_is_fixed_vector128_storage(left) ||
+        !minic_type_unqualified(left, &left_value) ||
+        !minic_type_unqualified(right, &right_value) ||
+        !minic_type_equal(left_value, right_value))
+        return false;
+    *result = left_value;
     return true;
 }
 

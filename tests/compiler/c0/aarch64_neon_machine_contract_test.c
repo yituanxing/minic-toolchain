@@ -28,7 +28,9 @@ static bool add_vector(MinicCoreTypeContext *types, MinicCoreTypeId element,
     type.alignment = alignment;
     type.value.vector.element = element;
     type.value.vector.element_count = count;
-    type.value.vector.is_builtin = builtin;
+    type.value.vector.representation = builtin
+        ? MINIC_CORE_VECTOR_REGISTER_VALUE
+        : MINIC_CORE_VECTOR_STORAGE_ONLY;
     return minic_core_type_register(types, &type, result);
 }
 

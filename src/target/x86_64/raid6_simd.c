@@ -284,7 +284,8 @@ bool minic_x86_64_emit_kvm_movdqa(
         return false;
     vector_type = raid6_core_type(fn, pointer_type->value.pointer.pointee);
     if (vector_type == NULL || vector_type->kind != MINIC_CORE_TYPE_VECTOR ||
-        vector_type->value.vector.is_builtin || !vector_type->has_layout ||
+        vector_type->value.vector.representation !=
+            MINIC_CORE_VECTOR_STORAGE_ONLY || !vector_type->has_layout ||
         vector_type->size != 16U || vector_type->value.vector.element_count != 4U)
         return false;
     element_type = raid6_core_type(fn, vector_type->value.vector.element);
