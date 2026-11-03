@@ -340,6 +340,7 @@ typedef struct MiniAsFragmentView {
     bool has_instruction;
     unsigned instruction_opcode;
     bool alignment_has_fill;
+    bool alignment_linker_relaxable;
 } MiniAsFragmentView;
 
 typedef struct MiniAsSectionView {

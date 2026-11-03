@@ -249,6 +249,10 @@ jobs:
           command -v loongarch64-linux-gnu-ld
           REQUIRE_ALL_GNU=1 MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
             bash tests/assembler/probe-loong-align-relax-gnu.sh
+      - name: LoongArch branch and DWARF correctness across lexical relaxation scopes
+        run: |
+          REQUIRE_ALL_GNU=1 MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-loong-scoped-relax-correctness.sh
       - name: GNU RISC-V and LoongArch DWARF line programs survive linker relaxation
         run: |
           REQUIRE_ALL_GNU=1 MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \

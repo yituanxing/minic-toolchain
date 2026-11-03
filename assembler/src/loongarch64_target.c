@@ -2120,12 +2120,14 @@ static bool la_prepare_layout(const MiniAsPreLayoutView *view,
             (void)snprintf(error,error_capacity,"invalid-loongarch-fragment-view");
             return false;
         }
-        if(stmt.kind==MINIAS_FRAGMENT_INSTRUCTION &&
-           stmt.section>=0 && (size_t)stmt.section<section_count &&
-           stmt.has_instruction &&
-           (stmt.site.mode_bits&LA_SITE_RELAX)!=0U &&
-           (stmt.instruction_opcode==LA_MC_PCREL_PSEUDO ||
-            stmt.instruction_opcode==LA_MC_GOT_PSEUDO))
+        if(stmt.section>=0 && (size_t)stmt.section<section_count &&
+           ((stmt.kind==MINIAS_FRAGMENT_ALIGNMENT &&
+             stmt.alignment_linker_relaxable) ||
+            (stmt.kind==MINIAS_FRAGMENT_INSTRUCTION &&
+             stmt.has_instruction &&
+             (stmt.site.mode_bits&LA_SITE_RELAX)!=0U &&
+             (stmt.instruction_opcode==LA_MC_PCREL_PSEUDO ||
+              stmt.instruction_opcode==LA_MC_GOT_PSEUDO))))
             sections[(size_t)stmt.section]=true;
     }
     free(state->relaxable_sections);
@@ -2252,8 +2254,7 @@ static bool la_encode(MiniAsEncodeContext *ctx,const MiniAsInstructionView *s) {
         case LA_MC_BRANCH21:
         case LA_MC_BRANCH26: {
             LaBranchPlan branch;
-            const LaTargetState *state=minias_encode_ctx_target_state(ctx);
-            const bool emit_local_relocation=state==NULL || state->relax;
+            bool emit_local_relocation;
             bool linker_relaxable;
             kind=m->opcode==LA_MC_BRANCH16 ?
                  MINIAS_FIXUP_LARCH_B16 :
@@ -2263,6 +2264,12 @@ static bool la_encode(MiniAsEncodeContext *ctx,const MiniAsInstructionView *s) {
             if(!la_resolve_branch_plan(ctx,s,&branch))return false;
             if(!la_section_is_linker_relaxable(ctx,s->section,
                                                &linker_relaxable))return false;
+            /* A later .option cannot retroactively disable this branch's
+             * relocation. Nor may a norelax branch retain a fixed local
+             * displacement when another fragment in its Section can shrink
+             * (including an R_LARCH_ALIGN NOP reservation). */
+            emit_local_relocation=
+                (s->site.mode_bits&LA_SITE_RELAX)!=0U || linker_relaxable;
             if(s->size==8U && m->opcode!=LA_MC_BRANCH26) {
                 unsigned char body[8];
                 uint32_t inverted,unconditional=UINT32_C(0x50000000);
@@ -2635,12 +2642,16 @@ static bool la_cfi_linker_relaxation_marker(MiniAsFixupKind kind) {
            kind==MINIAS_FIXUP_LARCH_ALIGN;
 }
 
-/* GNU's deferred ULEB and DWARF line-range relocation sweeps observe the
- * final -mrelax/.option relax state. They are not determined by an earlier
- * instruction's lexical snapshot (unlike R_LARCH_RELAX on its PCALA pair). */
+/* Deferred ULEB and DWARF line-range differences must survive every
+ * shrinkable source site, even if .option norelax ends the file. The final
+ * option still controls the no-shrink case for GNU-compatible output. */
 static bool la_final_linker_relaxation_enabled(MiniAsTargetABIView view) {
     const LaTargetState *state=view.target_state;
-    return state==NULL || state->relax;
+    size_t i;
+    if(state==NULL || state->relax)return true;
+    for(i=0U;i<state->relaxable_section_count;++i)
+        if(state->relaxable_sections[i])return true;
+    return false;
 }
 /* GNU LoongArch retains the original local label in linker-relaxable ULEB
  * ADD/SUB pairs.  Folding `.Lend` to STT_SECTION + offset loses the symbol

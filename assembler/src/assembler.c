@@ -41,6 +41,8 @@ static bool minias_project_fragment(const MiniAs *as,size_t index,
         out->instruction_opcode=stmt->payload.instruction.inst->opcode;
     }else if(stmt->fragment_kind==MINIAS_FRAGMENT_ALIGNMENT) {
         out->alignment_has_fill=stmt->payload.alignment.has_fill;
+        out->alignment_linker_relaxable=
+            stmt->payload.alignment.linker_relaxable;
     }
     return true;
 }
