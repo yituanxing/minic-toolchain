@@ -295,6 +295,8 @@ bool minias_write_coff_object(MiniAsCoffObjectView *object,const char *path) {
     CoffSectionPlan *sections=NULL;
     CoffFixupField *fixup_fields=NULL;
     uint32_t *long_symbol_names=NULL;
+    uint32_t *symbol_ordinals=NULL;
+    unsigned char *function_aux=NULL;
     char **private_names=NULL;
     CoffStringTable strings={0};
     unsigned char *image=NULL;
@@ -316,6 +318,7 @@ bool minias_write_coff_object(MiniAsCoffObjectView *object,const char *path) {
        fixup_count>SIZE_MAX/sizeof(*fixup_fields) ||
        symbol_count>SIZE_MAX/sizeof(*long_symbol_names) ||
        symbol_count>SIZE_MAX/sizeof(*private_names) ||
+       symbol_count>SIZE_MAX/sizeof(*symbol_ordinals) ||
        section_count>(UINT32_MAX/2U) ||
        symbol_count>UINT32_MAX-2U*section_count) {
         coff_error(object,"coff-object-capacity-overflow");
@@ -328,9 +331,14 @@ bool minias_write_coff_object(MiniAsCoffObjectView *object,const char *path) {
                         sizeof(*fixup_fields));
     long_symbol_names=calloc(symbol_count?symbol_count:1U,
                              sizeof(*long_symbol_names));
+    symbol_ordinals=calloc(symbol_count?symbol_count:1U,
+                           sizeof(*symbol_ordinals));
+    function_aux=calloc(symbol_count?symbol_count:1U,
+                         sizeof(*function_aux));
     private_names=calloc(symbol_count?symbol_count:1U,sizeof(*private_names));
     if(sections==NULL || fixup_fields==NULL ||
-       long_symbol_names==NULL || private_names==NULL) {
+       long_symbol_names==NULL || symbol_ordinals==NULL ||
+       function_aux==NULL || private_names==NULL) {
         coff_error(object,"out-of-memory:coff-object-plan");
         goto done;
     }
@@ -379,6 +387,16 @@ bool minias_write_coff_object(MiniAsCoffObjectView *object,const char *path) {
         uint8_t storage;
         if(!coff_symbol_semantics(object,symbol,&section_number,&value,&type,&storage))
             goto done;
+        /* Microsoft COFF defines an auxiliary function-definition record
+         * after each defined external symbol whose Type is 0x20.  Ordinals
+         * must account for these records before relocations are serialized. */
+        if(section_number>0 && type==0x20U && storage==COFF_CLASS_EXTERNAL) {
+            if(symbol->size>UINT32_MAX) {
+                coff_error(object,"coff-function-size-overflow:%s",name);
+                goto done;
+            }
+            function_aux[i]=1U;
+        }
         if(minias_is_private_symbol_name(name)) {
             char candidate[96];
             size_t collision;
@@ -444,7 +462,15 @@ bool minias_write_coff_object(MiniAsCoffObjectView *object,const char *path) {
             goto done;
         }
 
-    symbol_records=2U*section_count+symbol_count;
+    symbol_records=2U*section_count;
+    for(i=0U;i<symbol_count;++i) {
+        if(symbol_records>UINT32_MAX-1U-function_aux[i]) {
+            coff_error(object,"coff-symbol-table-overflow");
+            goto done;
+        }
+        symbol_ordinals[i]=(uint32_t)symbol_records;
+        symbol_records+=1U+function_aux[i];
+    }
     if(section_count>(UINT32_MAX-COFF_FILE_HEADER_SIZE)/COFF_SECTION_HEADER_SIZE) {
         coff_error(object,"coff-header-size-overflow");
         goto done;
@@ -519,7 +545,7 @@ bool minias_write_coff_object(MiniAsCoffObjectView *object,const char *path) {
                               fixup->width,&type) ||
            !coff_embed_addend(object,field,type,fixup->addend))goto done;
         coff_u32(rel,offset);
-        coff_u32(rel+4U,(uint32_t)(2U*section_count+fixup->symbol_index));
+        coff_u32(rel+4U,symbol_ordinals[fixup->symbol_index]);
         coff_u16(rel+8U,type);
     }
 
@@ -545,7 +571,7 @@ bool minias_write_coff_object(MiniAsCoffObjectView *object,const char *path) {
         const MiniAsSymbol *source=&object->model.symbols[i];
         const char *name=private_names[i]?private_names[i]:source->name;
         unsigned char *symbol=image+symbol_table_offset+
-                              (2U*section_count+i)*COFF_SYMBOL_SIZE;
+                              symbol_ordinals[i]*COFF_SYMBOL_SIZE;
         int16_t section_number=0;
         uint32_t value=0;
         uint16_t type=0;
@@ -557,6 +583,25 @@ bool minias_write_coff_object(MiniAsCoffObjectView *object,const char *path) {
         coff_u16(symbol+12U,(uint16_t)section_number);
         coff_u16(symbol+14U,type);
         symbol[16U]=storage_class;
+        if(function_aux[i]) {
+            /* No .bf or COFF line-number records: TagIndex and line pointer
+             * stay zero.  Preserve the known .size, where supplied. */
+            unsigned char *aux=symbol+COFF_SYMBOL_SIZE;
+            symbol[17U]=1U;
+            coff_u32(aux+4U,(uint32_t)source->size);
+        }
+    }
+    {
+        uint32_t next_function=0U;
+        for(i=symbol_count;i>0U;--i) {
+            const size_t symbol_index=i-1U;
+            if(function_aux[symbol_index]) {
+                unsigned char *aux=image+symbol_table_offset+
+                    (symbol_ordinals[symbol_index]+1U)*COFF_SYMBOL_SIZE;
+                coff_u32(aux+12U,next_function);
+                next_function=symbol_ordinals[symbol_index];
+            }
+        }
     }
     memcpy(image+symbol_table_offset+symbol_records*COFF_SYMBOL_SIZE,
            strings.data,strings.size);
@@ -571,6 +616,8 @@ done:
         for(i=0U;i<symbol_count;++i)free(private_names[i]);
     free(private_names);
     free(long_symbol_names);
+    free(symbol_ordinals);
+    free(function_aux);
     free(fixup_fields);
     free(sections);
     free(strings.data);

@@ -10,11 +10,19 @@ trap 'rm -rf -- "$work"' EXIT
 cat >"$work/entry.s" <<'SRC'
 .text
 .globl start
+.type start,@function
 start:
     subq $40, %rsp
     call external_helper
     movl %eax, %ecx
     call ExitProcess
+.size start,.-start
+.globl second_function
+.type second_function,@function
+second_function:
+    ret
+.size second_function,.-second_function
+.type external_helper,@function
 .data
 .globl helper_address
 helper_address:
@@ -69,18 +77,31 @@ def name(record):
     return short.split(b'\0', 1)[0].decode('ascii')
 
 symbols = {}
+aux_records = {}
 ordinal = 0
 while ordinal < symbol_count:
     record = image[symbol_at+ordinal*18:symbol_at+(ordinal+1)*18]
     sym = name(record)
     value, section, typ, storage, aux = struct.unpack_from('<IhHBB', record, 8)
     symbols[sym] = (ordinal, value, section, typ, storage)
+    aux_records[sym] = (aux, image[symbol_at+(ordinal+1)*18:
+                                    symbol_at+(ordinal+1+aux)*18])
     ordinal += 1 + aux
 assert ordinal == symbol_count, 'invalid COFF aux-symbol count'
-for sym in ('start', 'helper_address', 'uninitialized_buffer'):
+for sym in ('start', 'second_function', 'helper_address', 'uninitialized_buffer'):
     assert symbols[sym][2] > 0 and symbols[sym][4] == 2, (sym, symbols[sym])
 for sym in ('external_helper', 'ExitProcess'):
     assert symbols[sym][2] == 0 and symbols[sym][4] == 2, (sym, symbols[sym])
+assert symbols['start'][3] == symbols['second_function'][3] == 0x20
+assert symbols['external_helper'][3] == 0x20
+assert aux_records['external_helper'][0] == 0, 'undefined function acquired aux'
+for function, expected_size, expected_next in (
+        ('start', 16, symbols['second_function'][0]),
+        ('second_function', 1, 0)):
+    count, aux = aux_records[function]
+    assert count == 1 and len(aux) == 18, (function, count)
+    assert struct.unpack_from('<I', aux, 4)[0] == expected_size, function
+    assert struct.unpack_from('<I', aux, 12)[0] == expected_next, function
 
 sections = {}
 relocations = []

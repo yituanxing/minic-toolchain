@@ -88,6 +88,9 @@ bool minias_object_publish_image(const char *path,const unsigned char *image,
     bool preserve_mode=false;
     size_t path_length,buffer_capacity;
     char *temporary;
+#ifdef _WIN32
+    char *backup=NULL;
+#endif
     FILE *file=NULL;
     int fd=-1;
     unsigned attempt;
@@ -136,6 +139,13 @@ bool minias_object_publish_image(const char *path,const unsigned char *image,
             }
         }
     }
+    if(preserve_mode) {
+        backup=malloc(buffer_capacity);
+        if(backup==NULL) {
+            output_error(error,capacity,"output-backup-allocation");
+            goto done;
+        }
+    }
 #else
     if(lstat(path,&old_stat)==0) {
         if(!S_ISREG(old_stat.st_mode)) {
@@ -155,6 +165,16 @@ bool minias_object_publish_image(const char *path,const unsigned char *image,
 #endif
         if(length<0 || (size_t)length>=buffer_capacity)break;
 #ifdef _WIN32
+        if(backup!=NULL) {
+            DWORD existing;
+            DWORD status;
+            int backup_length=snprintf(backup,buffer_capacity,"%s.backup",temporary);
+            if(backup_length<0 || (size_t)backup_length>=buffer_capacity)break;
+            existing=GetFileAttributesA(backup);
+            if(existing!=INVALID_FILE_ATTRIBUTES)continue;
+            status=GetLastError();
+            if(status!=ERROR_FILE_NOT_FOUND && status!=ERROR_PATH_NOT_FOUND)break;
+        }
         fd=_open(temporary,_O_WRONLY|_O_BINARY|_O_CREAT|_O_EXCL,
                  _S_IREAD|_S_IWRITE);
 #else
@@ -196,14 +216,31 @@ bool minias_object_publish_image(const char *path,const unsigned char *image,
         }
     }
 #ifdef _WIN32
-    /* ReplaceFile preserves the previous regular file's security descriptor
-     * and attributes, rather than silently dropping its ACL on replacement.
-     * Never fall back to a truncate/write or remove-then-rename sequence.
-     * For new files MoveFileEx does not set REPLACE_EXISTING: if another
-     * creator wins the race, their output is left intact. */
-    if(!(preserve_mode
-          ? ReplaceFileA(path,temporary,NULL,0U,NULL,NULL)
-          : MoveFileExA(temporary,path,MOVEFILE_WRITE_THROUGH))) {
+    /* ReplaceFile's default flags require ACL/attribute merging: unlike
+     * MOVEFILE_REPLACE_EXISTING it retains the existing file's DACL and
+     * named streams. A same-directory backup is essential. Microsoft
+     * documents that without one, some failure codes can move or remove
+     * the old path before reporting failure. On code 1177, the old file
+     * is under the backup name; restore it without overwriting any new
+     * concurrent path. Never fall back to truncate/write. */
+    if(preserve_mode) {
+        if(!ReplaceFileA(path,temporary,backup,0U,NULL,NULL)) {
+            DWORD code=GetLastError();
+            if(code==ERROR_UNABLE_TO_MOVE_REPLACEMENT_2 &&
+               !MoveFileExA(backup,path,MOVEFILE_WRITE_THROUGH)) {
+                output_error(error,capacity,"output-recovery-needed:%s",backup);
+                goto done;
+            }
+            output_error(error,capacity,"output-rename:%s",path);
+            goto done;
+        }
+        if(!DeleteFileA(backup)) {
+            /* The new file has already replaced the old one. Preserve the
+             * old contents under the reported backup path for recovery. */
+            output_error(error,capacity,"output-backup-cleanup:%s",backup);
+            goto done;
+        }
+    } else if(!MoveFileExA(temporary,path,MOVEFILE_WRITE_THROUGH)) {
 #else
     if(rename(temporary,path)!=0) {
 #endif
@@ -216,6 +253,7 @@ done:
 #ifdef _WIN32
     if(fd>=0)(void)_close(fd);
     if(!ok && temporary_created)(void)DeleteFileA(temporary);
+    free(backup);
 #else
     if(fd>=0)(void)close(fd);
     if(!ok && temporary_created)(void)unlink(temporary);

@@ -127,3 +127,7 @@ Write-Host (("MINIAS_COFF_WINDOWS=PASS machine=AMD64 sections={0} " +
              "unresolved_REL32={1} data_ADDR64={2} " +
              "linker=MSVC-link.exe native_exit=42") -f
             $Sections, $Rel32, $Addr64)
+# GitHub's pwsh shell epilogue propagates LASTEXITCODE from the final native
+# command. Its deliberate exit=42 has already been asserted above, and must
+# not turn this successful test script into a failed workflow step.
+$global:LASTEXITCODE = 0
