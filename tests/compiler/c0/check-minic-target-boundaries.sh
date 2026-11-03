@@ -1297,7 +1297,6 @@ has src/target/loongarch64/call_emit.c 'minic_target_info_machine_builtin_form('
 has src/target/loongarch64/call_emit.c 'ins->core_type_id != callee->core_return_type_id'
 lacks src/target/loongarch64/call_emit.c 'minic_type_equal('
 lacks src/target/loongarch64/call_emit.c 'ins->type'
-has src/core/core_ir.c 'discard_published_source_descriptors(function);'
 lacks src/target/riscv32/rv32_call.c 'rv32_resolved_'
 lacks src/target/riscv64/call_emit.c 'minic_riscv64_emit_integer_conversion_for_program('
 
