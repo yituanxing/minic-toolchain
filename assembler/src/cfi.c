@@ -298,9 +298,12 @@ bool minias_cfi_directive(MiniAs *as,const char *op,
     }
     if (!strcmp(op,".cfi_return_column")) {
         /* GNU emits this in the CIE, even if the directive appears after
-         * the first instruction.  DWARF CIE v1 stores an 8-bit column;
-         * reject overflow here instead of silently truncating it later. */
-        if (!cfi_register(as,args,&reg) || reg>UINT8_MAX)goto bad;
+         * the first instruction. CIE v1 stores an 8-bit column, while v3
+         * uses ULEB128. Do not apply v1's byte limit to RISC-V v3. */
+        unsigned version=as->target->cfi_cie_version!=0U ?
+                         as->target->cfi_cie_version:1U;
+        if (!cfi_register(as,args,&reg) ||
+            (version<3U && reg>UINT8_MAX))goto bad;
         proc->return_column=reg;
         return true;
     }

@@ -19,6 +19,8 @@ on:
       - 'tests/assembler/probe-cfi-initial-state-gnu.sh'
       - 'tests/assembler/probe-cfi-signed-save-offsets-gnu.sh'
       - 'tests/assembler/probe-debug-line-directory-gnu.sh'
+      - 'tests/assembler/probe-debug-line-quoted-gnu.sh'
+      - 'tests/assembler/probe-gcc-dwarf-debug-e2e.sh'
       - 'tests/assembler/probe-minias-acceptance-gates.sh'
       - 'tests/assembler/probe-elf-semantic-comdat-strict.sh'
       - 'tests/assembler/probe-elf-semantic-payload-bitfields.py'
@@ -217,10 +219,12 @@ jobs:
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
             bash tests/assembler/probe-x86-debug-line-mixed-section-gnu.sh
-      - name: GNU x86 DWARF directory and file table references
+      - name: GNU x86 DWARF directory, quoted filename and file table references
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
             bash tests/assembler/probe-debug-line-directory-gnu.sh
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-debug-line-quoted-gnu.sh
       - name: GNU x86-64 grouped MC operand tokenizer and negative grammar
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=x86_64 \
@@ -331,7 +335,7 @@ jobs:
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
             bash tests/assembler/probe-mcexpr-absolute-prefix-gnu.sh
-      - name: GNU deferred LEB and DWARF view-symbol layout semantics
+      - name: GNU deferred LEB, DWARF views and real GCC linked source-level debugging
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=x86_64 \
             bash tests/assembler/probe-mc-deferred-leb-gnu.sh
@@ -339,6 +343,8 @@ jobs:
             bash tests/assembler/probe-mc-deferred-leb-gnu.sh
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
             bash tests/assembler/probe-common-dwarf-named-views-gnu.sh
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-gcc-dwarf-debug-e2e.sh
       - name: GNU x86 and LoongArch64 .size signed end anchors
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=x86_64 \

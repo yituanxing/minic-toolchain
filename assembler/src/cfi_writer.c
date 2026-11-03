@@ -43,6 +43,16 @@ static bool uleb(MiniAs *as,int sec,uint64_t value) {
 static bool sleb(MiniAs *as,int sec,int64_t value) {
     return minias_section_append_sleb(as,sec,value);
 }
+/* A DWARF v1 CIE's return-address column is a byte. Since v3 it is
+ * ULEB128, in BOTH .eh_frame and .debug_frame. Keep the encoding in one
+ * place: otherwise columns 128..255 silently corrupt an EH CIE. */
+static bool put_cie_return_column(MiniAs *as,int sec,unsigned version,
+                                  unsigned column) {
+    if(version==1U)
+        return column<=UINT8_MAX && put8(as,sec,(uint8_t)column);
+    if(version==3U)return uleb(as,sec,column);
+    return false;
+}
 /* A CIE ends at a section-relative alignment boundary: four for
  * .eh_frame, address size for .debug_frame. Source-authored bytes before
  * it can make the DWARF32 record length itself non-multiple-of-four.
@@ -286,18 +296,21 @@ static bool emit_eh_cie(MiniAs *as,int sec,bool simple,bool signal,
                         unsigned return_column,
                         size_t first,size_t count,size_t *cie_begin) {
     MiniAsCfiABI abi=minias_cfi_abi(as);
+    unsigned version=as->target->cfi_cie_version!=0U ?
+                     as->target->cfi_cie_version:1U;
     size_t begin=minias_emission_section_size(as,sec);
     *cie_begin=begin;
     if(abi.code_align==0U || abi.data_align>=0 ||
-       abi.return_reg>255U || return_column>255U ||
-       abi.address_size==0U)return false;
+       abi.address_size==0U ||
+       (version!=1U && version!=3U) ||
+       (version==1U && (abi.return_reg>UINT8_MAX ||
+                        return_column>UINT8_MAX)))return false;
     if(!put32(as,sec,0U) || !put32(as,sec,0U) ||
-       !put8(as,sec,(uint8_t)(as->target->cfi_cie_version!=0U ?
-                             as->target->cfi_cie_version : 1U)) ||
+       !put8(as,sec,(uint8_t)version) ||
        !put8(as,sec,'z') || !put8(as,sec,'R') ||
        (signal && !put8(as,sec,'S')) || !put8(as,sec,0U) ||
        !uleb(as,sec,abi.code_align) || !sleb(as,sec,abi.data_align) ||
-       !put8(as,sec,(uint8_t)return_column) ||
+       !put_cie_return_column(as,sec,version,return_column) ||
        !uleb(as,sec,1U) || !put8(as,sec,0x1bU))return false;
     if(!simple && !emit_target_initial_cfi(as,sec,&abi))return false;
     return emit_initial_cfi(as,sec,first,count) &&
@@ -320,13 +333,12 @@ static bool emit_debug_cie(MiniAs *as,int sec,bool simple,
     size_t begin=minias_emission_section_size(as,sec);
     *cie_begin=begin;
     if(abi.code_align==0U || abi.data_align>=0 ||
-       abi.address_size==0U || version>UINT8_MAX ||
-       (version<3U && return_column>UINT8_MAX))return false;
+       abi.address_size==0U || (version!=1U && version!=3U) ||
+       (version==1U && return_column>UINT8_MAX))return false;
     if(!put32(as,sec,0U) || !put32(as,sec,UINT32_MAX) ||
        !put8(as,sec,(uint8_t)version) || !put8(as,sec,0U) ||
        !uleb(as,sec,abi.code_align) || !sleb(as,sec,abi.data_align) ||
-       !(version>=3U ? uleb(as,sec,return_column) :
-                        put8(as,sec,(uint8_t)return_column)))return false;
+       !put_cie_return_column(as,sec,version,return_column))return false;
     if(!simple && !emit_target_initial_cfi(as,sec,&abi))return false;
     return emit_initial_cfi(as,sec,first,count) &&
            finish_length_aligned(as,sec,begin,abi.address_size,true) &&

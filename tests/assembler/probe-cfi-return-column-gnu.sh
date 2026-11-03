@@ -155,6 +155,114 @@ print(f'MINIAS_CFI_RETURN_COLUMN_LOONG=PASS section={mode} columns=1,0 FDE=3')
 PY
 done
 
+# CIE v1 stores the return-address column as exactly one byte. GNU GAS
+# rejects 256, but its 128..255 encodings must also remain byte-exact.
+for column in 127 128 200 255; do
+  cat >"$work/v1.s" <<ASM
+.cfi_sections .debug_frame
+.text
+v1_column:
+.cfi_startproc
+.cfi_return_column $column
+nop
+.cfi_endproc
+ASM
+  as --64 -o "$work/v1.gnu.o" "$work/v1.s"
+  "$MINIAS" --target=x86_64 -o "$work/v1.mini.o" "$work/v1.s"
+  objcopy --dump-section ".debug_frame=$work/v1.gnu.bytes" "$work/v1.gnu.o"
+  objcopy --dump-section ".debug_frame=$work/v1.mini.bytes" "$work/v1.mini.o"
+  cmp "$work/v1.gnu.bytes" "$work/v1.mini.bytes"
+done
+echo 'MINIAS_CFI_CIE_V1_WIDTH=PASS x86_columns=127,128,200,255 GNU_debug_frame_bytes=exact'
+
+# RISC-V uses DWARF CIE version 3 in BOTH frame sections. For v3 the column
+# is a ULEB128 (not a v1 byte); a byte-sized 200 previously made readelf
+# misparse the EH augmentation and silently lose the CIE/FDE. Test both
+# serializers together, including the ULEB transition and values >255.
+for column in 127 128 200 255 256 300; do
+  cat >"$work/v3.s" <<ASM
+.cfi_sections .eh_frame,.debug_frame
+.text
+v3_column:
+.cfi_startproc
+.cfi_return_column $column
+addi x0,x0,0
+.cfi_endproc
+ASM
+  "$MINIAS" --target=riscv -march=rv64i -mabi=lp64 \
+    -o "$work/v3.mini.o" "$work/v3.s"
+  readelf --debug-dump=frames "$work/v3.mini.o" \
+    >"$work/v3.mini.frames" 2>"$work/v3.mini.errors"
+  test ! -s "$work/v3.mini.errors"
+  if command -v riscv64-linux-gnu-as >/dev/null 2>&1; then
+    riscv64-linux-gnu-as -march=rv64i -mabi=lp64 \
+      -o "$work/v3.gnu.o" "$work/v3.s"
+    readelf --debug-dump=frames "$work/v3.gnu.o" \
+      >"$work/v3.gnu.frames" 2>"$work/v3.gnu.errors"
+    test ! -s "$work/v3.gnu.errors"
+    gnu_frames="$work/v3.gnu.frames"
+  else
+    gnu_frames=''
+  fi
+  python3 - "$column" "$work/v3.mini.frames" "$gnu_frames" <<'PY'
+import pathlib
+import re
+import sys
+
+column = int(sys.argv[1])
+
+def read_frames(path):
+    if not path:
+        return None
+    result = {}
+    current = None
+    for line in pathlib.Path(path).read_text().splitlines():
+        section = re.match(r'Contents of the (\.\w+) section:', line)
+        if section:
+            current = section.group(1)
+            result[current] = {'cie': 0, 'fde': 0, 'version': [], 'column': []}
+            continue
+        if current is None:
+            continue
+        if re.search(r'\bCIE\b', line):
+            result[current]['cie'] += 1
+        if re.search(r'\bFDE\b', line):
+            result[current]['fde'] += 1
+        match = re.search(r'Version:\s*(\d+)', line)
+        if match:
+            result[current]['version'].append(int(match.group(1)))
+        match = re.search(r'Return address column:\s*(\d+)', line)
+        if match:
+            result[current]['column'].append(int(match.group(1)))
+    return result
+
+mini = read_frames(sys.argv[2])
+for section in ('.eh_frame', '.debug_frame'):
+    expected = {'cie': 1, 'fde': 1, 'version': [3], 'column': [column]}
+    assert mini.get(section) == expected, (section, column, mini)
+gnu = read_frames(sys.argv[3])
+if gnu is not None:
+    assert gnu == mini, (column, gnu, mini)
+PY
+done
+
+# A v3 column can exceed 255 but still must fit our unsigned register ID.
+cat >"$work/v3-overflow.s" <<'ASM'
+.text
+bad:
+.cfi_startproc
+.cfi_return_column 4294967296
+addi x0,x0,0
+.cfi_endproc
+ASM
+if "$MINIAS" --target=riscv -march=rv64i -mabi=lp64 \
+  -o "$work/v3-overflow.o" "$work/v3-overflow.s" >/dev/null 2>&1; then
+  echo 'MiniAS accepted overflowing DWARF v3 return column' >&2
+  exit 1
+fi
+test ! -e "$work/v3-overflow.o"
+echo 'MINIAS_CFI_CIE_V3_WIDTH=PASS rv64_columns=127,128,200,255,256,300 eh_and_debug_FDE=decoded'
+
 # Reject malformed / non-v1-representable columns rather than wrapping or
 # accidentally emitting an invalid CIE.  GAS rejects each of these too.
 for operand in '' -1 foo 256 300 '1,2'; do

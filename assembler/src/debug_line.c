@@ -47,63 +47,90 @@ static char *debug_next_token(char **cursor) {
     }else *cursor=NULL;
     return start;
 }
-static bool debug_quoted(const char **current,char *out,size_t cap) {
-    const char *p=*current;
-    size_t n=0U;
-    while(isspace((unsigned char)*p))++p;
-    if(*p!='"')return false;
-    ++p;
-    while(*p && *p!='"') {
-        char ch=*p++;
-        if(ch=='\\' && *p)ch=*p++;
-        if(n+1U>=cap)return false;
-        out[n++]=ch;
+/* .file path spelling uses the same GNU quoted-string escapes as Common
+ * data directives. In particular, \\040 is a space, not literal "040".
+ * Consume precisely one lexical string, then delegate byte decoding to the
+ * one shared decoder; a NUL byte is invalid in a file-system path. */
+static bool debug_quoted(const char **current,char **out) {
+    const char *begin=*current,*p;
+    char *literal=NULL,*name=NULL;
+    unsigned char *decoded=NULL;
+    size_t literal_size,decoded_size=0U;
+    *out=NULL;
+    while(isspace((unsigned char)*begin))++begin;
+    if(*begin!='"')return false;
+    p=begin+1U;
+    while(*p!='\0') {
+        if(*p=='\\') {
+            if(p[1U]=='\0')return false;
+            p+=2U;
+            continue;
+        }
+        if(*p=='"')break;
+        ++p;
     }
     if(*p!='"')return false;
-    out[n]='\0';*current=p+1U;return true;
+    literal_size=(size_t)(p-begin)+1U;
+    if(literal_size==SIZE_MAX)return false;
+    literal=malloc(literal_size+1U);
+    if(literal==NULL)return false;
+    memcpy(literal,begin,literal_size);
+    literal[literal_size]='\0';
+    if(!minias_decode_string_literals(literal,false,&decoded,&decoded_size) ||
+       decoded_size==SIZE_MAX ||
+       (decoded_size!=0U && memchr(decoded,'\0',decoded_size)!=NULL))goto failed;
+    name=malloc(decoded_size+1U);
+    if(name==NULL)goto failed;
+    if(decoded_size!=0U)memcpy(name,decoded,decoded_size);
+    name[decoded_size]='\0';
+    *current=p+1U;
+    *out=name;
+    free(decoded);
+    free(literal);
+    return true;
+failed:
+    free(name);
+    free(decoded);
+    free(literal);
+    return false;
 }
 static bool parse_file(MiniAs *as,const char *args,size_t line) {
     const char *p=args;
     char *end;
     unsigned long index;
-    char first[1024],second[1024];
-    char *name;
+    char *first=NULL,*second=NULL,*name=NULL;
     size_t len1,len2;
     if(*p=='"') {
         /* GNU .file "name.c" contributes an independent LOCAL ABS STT_FILE
          * entry in .symtab.  It is not a numbered .loc file, and may have
          * the same spelling as a user-defined symbol or another CU. */
-        if(!debug_quoted(&p,first,sizeof(first)))goto invalid;
+        if(!debug_quoted(&p,&first))goto invalid;
         while(isspace((unsigned char)*p))++p;
         if(*p!='\0')goto invalid;
         if(!minias_grow_array((void **)&as->cu_files,&as->cu_file_capacity,
                               sizeof(*as->cu_files),as->cu_file_count+1U)) {
             minias_set_error(as,"out-of-memory:cu-file-symbol");
-            return false;
+            goto failed;
         }
-        name=minias_strdup(first);
-        if(!name) {
-            minias_set_error(as,"out-of-memory:cu-file-name");
-            return false;
-        }
-        as->cu_files[as->cu_file_count++]=name;
+        as->cu_files[as->cu_file_count++]=first;
         return true;
     }
     errno=0;index=strtoul(p,&end,10);
     if(errno || end==p || index>8192UL || !isspace((unsigned char)*end))
         goto invalid;
     p=end;
-    if(!debug_quoted(&p,first,sizeof(first)))goto invalid;
+    if(!debug_quoted(&p,&first))goto invalid;
     while(isspace((unsigned char)*p))++p;
     if(*p) {
-        if(!debug_quoted(&p,second,sizeof(second)))goto invalid;
+        if(!debug_quoted(&p,&second))goto invalid;
         while(isspace((unsigned char)*p))++p;
         if(*p)goto invalid;
-    } else second[0]='\0';
-    if(index==0UL)return true; /* DWARF4's CU name is not file index 0. */
-    len1=strlen(first);len2=strlen(second);
+    }
+    if(index==0UL)goto success; /* DWARF4's CU name is not file index 0. */
+    len1=strlen(first);len2=second?strlen(second):0U;
+    if(len1>SIZE_MAX-len2-2U)goto oom;
     name=malloc(len1+len2+2U);
-    if(!name)return false;
+    if(!name)goto oom;
     memcpy(name,first,len1);
     if(len2){
         name[len1]='/';memcpy(name+len1+1U,second,len2);
@@ -113,7 +140,7 @@ static bool parse_file(MiniAs *as,const char *args,size_t line) {
         size_t old_capacity=as->debug_file_capacity;
         if(!minias_grow_array((void **)&as->debug_files,&as->debug_file_capacity,
                               sizeof(*as->debug_files),(size_t)index+1U)) {
-            free(name);return false;
+            goto oom;
         }
         if(as->debug_file_capacity>old_capacity)
             memset(as->debug_files+old_capacity,0,
@@ -127,13 +154,26 @@ static bool parse_file(MiniAs *as,const char *args,size_t line) {
         as->debug_file_max=(size_t)index;
     }
     if(as->debug_files[index]!=NULL && strcmp(as->debug_files[index],name)) {
-        free(name);goto invalid;
+        goto invalid;
     }
     free(as->debug_files[index]);
-    as->debug_files[index]=name;return true;
+    as->debug_files[index]=name;
+    name=NULL;
+success:
+    free(first);
+    free(second);
+    free(name);
+    return true;
 invalid:
     minias_set_error(as,"invalid-dwarf-file:%s:line=%zu",args,line);
+failed:
+    free(first);
+    free(second);
+    free(name);
     return false;
+oom:
+    minias_set_error(as,"out-of-memory:dwarf-file-name");
+    goto failed;
 }
 static bool parse_loc(MiniAs *as,const char *args,size_t source_line) {
     char *copy=minias_strdup(args);
