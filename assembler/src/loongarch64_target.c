@@ -2324,6 +2324,14 @@ static const struct {
     unsigned width;
     uint32_t relocation;
 } la_fixup_forms[] = {
+    /* GNU LoongArch GAS lowers unresolved BFD_RELOC_8/16 to a single
+     * R_LARCH_ADD8/ADD16, even without a subtracting symbol. Both
+     * relocations add S+A to the zero-initialized data field, which is
+     * precisely the semantics of an absolute 8/16-bit symbol reference.
+     * They are not generic ELF ABS8/16 relocations and must stay private
+     * to this Target's output policy. */
+    {MINIAS_FIXUP_ABS,1U,47U}, /* R_LARCH_ADD8 */
+    {MINIAS_FIXUP_ABS,2U,48U}, /* R_LARCH_ADD16 */
     {MINIAS_FIXUP_ABS,4U,1U}, /* R_LARCH_32 */
     {MINIAS_FIXUP_ABS,8U,2U}, /* R_LARCH_64 */
     {MINIAS_FIXUP_PREL32,4U,99U}, /* R_LARCH_32_PCREL */

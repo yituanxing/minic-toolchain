@@ -20,6 +20,9 @@
 > 普通 `.word` 与 `.zero/.space/.skip/.fill`，为可装载数据节
 > 记录 `$d`，新增六组 GNU 严格用例；非 ALLOC 与 DWARF Section
 > 需要单独的 Debug 分类，不在本批按 Section 名硬猜。
+> LoongArch 的单符号 1/2 字节绝对数据引用按 GNU GAS 的
+> `R_LARCH_ADD8/ADD16`（初始字段为零）处理，保留 4/8 字节原始
+> `R_LARCH_32/64`，不把此 Target 专有规则扩散到 RISC-V。
 > LoongArch 复用原始 Linux `.alternative` ADD8/SUB8/ADD32/SUB32
 > 严格 GNU 证据。`probe-cfi-debug-frame-link-gnu.sh` 保留 x86
 > ELF32/64 真正 GNU `ld -r` 双对象 CIE/FDE 图对照，并增加
