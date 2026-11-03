@@ -84,7 +84,7 @@ static bool rv64_module_zero_extent_legal(const MinicCoreType *type) {
         ((type->kind == MINIC_CORE_TYPE_RECORD &&
           type->value.record.is_complete && type->value.record.field_count == 0U) ||
          (type->kind == MINIC_CORE_TYPE_ARRAY &&
-          (type->value.array.is_zero_length || type->value.array.count != 0U)));
+          type->value.array.is_complete));
 }
 
 static bool rv64_module_admit_global(const MinicCoreModule *module,

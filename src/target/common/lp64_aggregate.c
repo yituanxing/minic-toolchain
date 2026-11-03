@@ -42,13 +42,11 @@ static bool core_integer_record_members(const MinicCoreTypeContext *types,
         const MinicCoreType *element;
         bool is_array;
         size_t field_size, field_align, count = 1U;
-        if (field_storage == NULL || field_type == NULL ||
-            field->is_flexible_array || field->is_zero_length_array)
+        if (field_storage == NULL || field_type == NULL)
             return false;
         is_array = field_type->kind == MINIC_CORE_TYPE_ARRAY;
         if (is_array) {
             if (!field_type->value.array.is_complete ||
-                field_type->value.array.is_zero_length ||
                 field_type->value.array.count == 0U)
                 return false;
             element_id = field_type->value.array.element;
@@ -123,9 +121,7 @@ bool minic_multi_fp_return_record_core(
     if (types == NULL || element_count == NULL || element_width == NULL ||
         record == NULL || record->kind != MINIC_CORE_TYPE_RECORD ||
         !record->value.record.is_complete || record->value.record.is_union ||
-        record->value.record.is_packed ||
-        record->value.record.pack_alignment != 0U ||
-        record->value.record.explicit_alignment != 0U ||
+        record->value.record.has_nondefault_layout_policy ||
         record->value.record.field_count == 0U ||
         record->value.record.field_count > 2U ||
         record->value.record.fields == NULL)
@@ -133,8 +129,7 @@ bool minic_multi_fp_return_record_core(
     first = &record->value.record.fields[0];
     first_type = core_aggregate_base(types, first->type_id);
     if (first_type == NULL || first_type->kind != MINIC_CORE_TYPE_FLOAT ||
-        first->is_bit_field || first->is_packed || first->is_flexible_array ||
-        first->is_zero_length_array ||
+        first->is_bit_field || first->has_nondefault_layout_policy ||
         (first_type->value.floating.format != MINIC_CORE_FLOAT_BINARY32 &&
          first_type->value.floating.format != MINIC_CORE_FLOAT_BINARY64))
         return false;
@@ -147,8 +142,7 @@ bool minic_multi_fp_return_record_core(
         const MinicCoreRecordField *field = &record->value.record.fields[i];
         const MinicCoreType *field_type = core_aggregate_base(types, field->type_id);
         if (field_type == NULL || field_type->kind != MINIC_CORE_TYPE_FLOAT ||
-            field->is_bit_field || field->is_packed || field->is_flexible_array ||
-            field->is_zero_length_array ||
+            field->is_bit_field || field->has_nondefault_layout_policy ||
             field->type_id != first->type_id ||
             field->byte_offset != i * width)
             return false;

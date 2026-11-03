@@ -98,7 +98,7 @@ static bool x86_core_integer_record_tree(const MinicCoreTypeContext *context,
              absolute % type->alignment == 0U);
     if (type->kind == MINIC_CORE_TYPE_ARRAY) {
         const MinicCoreType *element = x86_core_type(context, type->value.array.element);
-        if (!type->value.array.is_complete || type->value.array.is_zero_length ||
+        if (!type->value.array.is_complete ||
             type->value.array.count == 0U || element == NULL ||
             !element->has_layout || element->size == 0U ||
             type->value.array.count > SIZE_MAX / element->size ||
@@ -119,8 +119,7 @@ static bool x86_core_integer_record_tree(const MinicCoreTypeContext *context,
         const MinicCoreRecordField *field = &type->value.record.fields[index];
         const MinicCoreType *member = x86_core_type(context, field->type_id);
         const size_t offset = field->byte_offset;
-        if (field->is_flexible_array || field->is_zero_length_array ||
-            member == NULL || !member->has_layout ||
+        if (member == NULL || !member->has_layout ||
             member->alignment == 0U || offset > type->size ||
             offset > max_bytes - absolute) return false;
         if (field->is_bit_field) {
@@ -200,7 +199,7 @@ bool minic_x86_64_core_record_abi_compatible(const MinicCoreTypeContext *context
         record->value.record.is_complete && a->has_layout && b->has_layout &&
         minic_core_type_unqualified(context, actual) ==
             minic_core_type_unqualified(context, declared) &&
-        a->is_layout_override == b->is_layout_override &&
+        a->has_abi_alignment_override == b->has_abi_alignment_override &&
         a->size == b->size && a->alignment == b->alignment;
 }
 

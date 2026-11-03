@@ -123,7 +123,6 @@ int main(void) {
     type.alignment = 4U;
     type.value.array.element = integer_id;
     type.value.array.is_complete = true;
-    type.value.array.is_zero_length = true;
     before = context.type_count;
     type.value.array.element = MINIC_CORE_TYPE_INVALID;
     CHECK(!minic_core_type_register(&context, &type, &duplicate_id));
@@ -133,7 +132,6 @@ int main(void) {
     type.has_layout = false;
     type.alignment = 0U;
     type.value.array.is_complete = false;
-    type.value.array.is_zero_length = false;
     CHECK(minic_core_type_register(&context, &type, &incomplete_array_id));
     CHECK(incomplete_array_id != array_id);
 
@@ -158,11 +156,11 @@ int main(void) {
     type.alignment = 8U;
     CHECK(!minic_core_type_register(&context, &type, &duplicate_id));
     CHECK(context.type_count == before);
-    type.is_layout_override = true;
+    type.has_abi_alignment_override = true;
     CHECK(minic_core_type_register(&context, &type, &aligned_array_id));
     CHECK(aligned_array_id != fixed_array_id);
     before = context.type_count;
-    type.is_layout_override = false;
+    type.has_abi_alignment_override = false;
     type.alignment = 4U;
     type.value.array.count = SIZE_MAX;
     type.size = SIZE_MAX;
@@ -170,15 +168,12 @@ int main(void) {
     CHECK(context.type_count == before);
     type.value.array.count = 0U;
     type.size = 0U;
-    CHECK(!minic_core_type_register(&context, &type, &duplicate_id));
-    CHECK(context.type_count == before);
-    type.value.array.is_zero_length = true;
     CHECK(minic_core_type_register(&context, &type, &duplicate_id));
     CHECK(duplicate_id == array_id);
+    CHECK(context.type_count == before);
     type.has_layout = false;
     CHECK(!minic_core_type_register(&context, &type, &duplicate_id));
     CHECK(context.type_count == before);
-    type.value.array.is_zero_length = false;
     type.value.array.is_complete = false;
     type.alignment = 0U;
     CHECK(minic_core_type_register(&context, &type, &duplicate_id));

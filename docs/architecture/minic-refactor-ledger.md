@@ -1868,3 +1868,44 @@ but repeatedly allocate and recompute two *identical* Core-only analyses.
 | Prepared plan / output transaction host ASan+UBSan | **PASS**, LeakSanitizer unavailable under host ptrace; run with `detect_leaks=0` |
 | Review ledger inventory | **PASS**, 251 entries, no new/removed/invalid; existing stale entries not recertified |
 | Five-ISA original Linux GNU ELF/QEMU runtime | **NOT RUN** in this architectural owner batch |
+
+## IR-P35 — Seal the C-to-Core type ABI facts in one batch (2026-11-04)
+
+**Baseline:** P34 PR #674 `e4eb19b`. Read the C Type/record importer, Core
+TypeContext registration/completion/verifier, x86 SysV integer aggregate
+classifier, Common LP64 GP/HFA classifiers and RV64 zero-sized global gate as
+one owner chain, together with their source-layout and Core probe consumers.
+
+- Core no longer carries source-only `is_transparent_union`: GNU transparent
+  union admission and argument conversion remain in the C frontend/lowering.
+- Record fields no longer duplicate flexible-array or GNU zero-length-array
+  declaration flags. Their referenced sealed Core ARRAY shape (complete vs
+  incomplete, count, extent and layout) now owns the distinction. The C ingress
+  checks that the materialized source field array matches the imported Core
+  array before publishing a completed record; x86 SysV and Common LP64 keep
+  rejecting unsized/zero tails for register classification.
+- Core ARRAY no longer duplicates the zero-length flag: `is_complete` with
+  `count == 0` is a valid, zero-sized GNU array; `!is_complete` with `count == 0`
+  is an incomplete array with no storage. Registration and RV64 global gates
+  now consume that normalized representation.
+- Packed record, pack alignment and explicit record alignment policies now
+  enter Core as one **target-neutral nondefault-layout fact**; packed fields
+  carry the same independent field-local fact. Common LP64 interprets these
+  facts conservatively in its homogeneous-FP classifier; Core does not encode
+  that ABI decision. Exact physical size/alignment, member offsets, bitfields
+  and qualifiers remain intact. Source DataLayout still validates the policy
+  and owns its numerical values. The Core alignment override is named for its
+  effective ABI property, and x86 by-value ABI equality still checks it. No
+  transitional old fields or machine-to-C metadata fallback were retained.
+- Negative Core ABI probes now explicitly synthesize complete zero extent,
+  incomplete extent and field-local homogeneous-FP restrictions. Architecture
+  boundary gates forbid a regression to the removed Core/source shadow flags.
+
+| Gate | P35 result |
+| --- | --- |
+| Strict Release MiniC `-Werror` | **PASS**, exit 0 |
+| Full Debug `check-fast` (CoreType, C transparent union, zero array, target ABI) | **PASS**, exit 0 |
+| GNU preprocessed six fixtures × five ISAs: exact P34 vs P35 `.s` | **30/30 byte-identical** |
+| GNU C-origin probes (transparent union, array identity/local, packed record) × five ISAs | **20/20 byte-identical** |
+| Core architecture boundary/native probes (incl. newly forged ABI tails) | **PASS** |
+| Five-ISA original Linux GNU ELF/QEMU runtime | **NOT RUN** in this type-owner batch |

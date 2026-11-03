@@ -19,6 +19,7 @@ int main(void) {
     MinicCoreType type = {0};
     MinicCoreTypeId integer, pointer, array, one, two, unaligned, large, small;
     MinicCoreTypeId aligned_alias, oversized_alias, incomplete;
+    MinicCoreTypeId zero_array, unsized_array, zero_tail, unsized_tail;
     MinicCoreRecordField fields[2] = {{0}};
     size_t bytes = 0U;
     bool sign = false;
@@ -67,6 +68,31 @@ int main(void) {
     type.value.array.count = 3U;
     type.value.array.is_complete = true;
     REQUIRE(put(&context, type, &array));
+    /* Sealed zero and incomplete extents alone must exclude these record
+     * tails from SysV registers, without redundant source-field flags. */
+    type.value.array.count = 0U;
+    type.size = 0U;
+    REQUIRE(put(&context, type, &zero_array));
+    type.value.array.is_complete = false;
+    type.has_layout = false;
+    type.alignment = 0U;
+    REQUIRE(put(&context, type, &unsized_array));
+    fields[0].type_id = zero_array;
+    (void)memset(&type, 0, sizeof(type));
+    type.kind = MINIC_CORE_TYPE_RECORD;
+    type.has_layout = true;
+    type.size = 8U;
+    type.alignment = 4U;
+    type.value.record.is_complete = true;
+    type.value.record.fields = fields;
+    type.value.record.field_count = 1U;
+    REQUIRE(put(&context, type, &zero_tail));
+    REQUIRE(!minic_x86_64_core_one_gp_record(&context, zero_tail, &bytes));
+    REQUIRE(!minic_x86_64_core_two_gp_record(&context, zero_tail));
+    fields[0].type_id = unsized_array;
+    REQUIRE(put(&context, type, &unsized_tail));
+    REQUIRE(!minic_x86_64_core_one_gp_record(&context, unsized_tail, &bytes));
+    REQUIRE(!minic_x86_64_core_two_gp_record(&context, unsized_tail));
     fields[0].type_id = array;
     (void)memset(&type, 0, sizeof(type));
     type.kind = MINIC_CORE_TYPE_RECORD;
@@ -87,7 +113,7 @@ int main(void) {
     type.size = 8U;
     type.alignment = 1U;
     type.value.record.is_complete = true;
-    type.value.record.is_packed = true;
+    type.value.record.has_nondefault_layout_policy = true;
     type.value.record.fields = fields;
     type.value.record.field_count = 1U;
     REQUIRE(put(&context, type, &unaligned));
@@ -120,7 +146,7 @@ int main(void) {
     (void)memset(&type, 0, sizeof(type));
     type.kind = MINIC_CORE_TYPE_QUALIFIED;
     type.has_layout = true;
-    type.is_layout_override = true;
+    type.has_abi_alignment_override = true;
     type.size = 4U;
     type.alignment = 16U;
     type.value.qualified.base = one;

@@ -54,9 +54,8 @@ typedef struct MinicCoreRecordField {
     size_t bit_width;
     size_t alignment;
     bool is_bit_field;
-    bool is_packed;
-    bool is_flexible_array;
-    bool is_zero_length_array;
+    /* Non-default layout policy; each target ABI decides its implications. */
+    bool has_nondefault_layout_policy;
 } MinicCoreRecordField;
 
 typedef struct MinicCoreType {
@@ -69,7 +68,7 @@ typedef struct MinicCoreType {
     bool is_volatile;
     bool is_read_only;
     /* ABI-effective alignment was explicitly overridden on this view. */
-    bool is_layout_override;
+    bool has_abi_alignment_override;
     union {
         struct {
             unsigned int bit_width;
@@ -86,20 +85,17 @@ typedef struct MinicCoreType {
             MinicCoreTypeId element;
             size_t count;
             bool is_complete;
-            bool is_zero_length;
         } array;
         struct {
             MinicCoreRecordField *fields;
             size_t field_count;
-            /* ABI-visible record layout policy. Distinct from the final
-             * size/alignment: classifiers must still reject packed or
-             * explicitly aligned shapes they cannot legally decompose. */
-            size_t pack_alignment;
-            size_t explicit_alignment;
+            /* Source record layout policy is resolved on C ingress. Retain
+             * a target-independent nondefault-layout fact alongside the
+             * effective size, alignment and member offsets; individual ABIs
+             * decide whether or how this constrains register classification. */
+            bool has_nondefault_layout_policy;
             bool is_complete;
             bool is_union;
-            bool is_packed;
-            bool is_transparent_union;
         } record;
         struct {
             MinicCoreTypeId return_type;

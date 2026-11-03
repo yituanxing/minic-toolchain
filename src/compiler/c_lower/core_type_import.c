@@ -111,7 +111,7 @@ static bool bit_field_storage_alignment(const MinicRecord *record,
 }
 
 static bool import_array(MinicCoreTypeImporter *importer, MinicType element,
-                         size_t count, bool zero_length, bool complete,
+                         size_t count, bool complete,
                          size_t size, size_t alignment, bool has_layout,
                          MinicCoreTypeId *result, unsigned depth) {
     MinicCoreType type = {0};
@@ -119,7 +119,6 @@ static bool import_array(MinicCoreTypeImporter *importer, MinicType element,
         return false;
     type.kind = MINIC_CORE_TYPE_ARRAY;
     type.value.array.count = count;
-    type.value.array.is_zero_length = zero_length;
     type.value.array.is_complete = complete;
     type.has_layout = has_layout;
     type.size = size;
@@ -144,10 +143,9 @@ static bool import_record(MinicCoreTypeImporter *importer, MinicType source,
     if (record == NULL) return false;
     type.kind = MINIC_CORE_TYPE_RECORD;
     type.value.record.is_union = record->is_union;
-    type.value.record.is_packed = record->is_packed;
-    type.value.record.pack_alignment = record->pack_alignment;
-    type.value.record.explicit_alignment = record->explicit_alignment;
-    type.value.record.is_transparent_union = record->is_transparent_union;
+    type.value.record.has_nondefault_layout_policy =
+        record->is_packed || record->pack_alignment != 0U ||
+        record->explicit_alignment != 0U;
     /* The C record already has a complete DataLayout even though Core's
      * recursive member graph must be populated in two phases. Seed that
      * layout before publishing provisional identity so pointer-to-const
@@ -173,6 +171,7 @@ static bool import_record(MinicCoreTypeImporter *importer, MinicType source,
     for (i = 0U; i < record->field_count; ++i) {
         const MinicRecordField *field = &record->fields[i];
         MinicCoreTypeId field_type;
+        const MinicCoreType *array_storage;
         MinicArrayObjectInfo array_info;
         bool field_array;
         MinicType field_layout_type;
@@ -196,13 +195,21 @@ static bool import_record(MinicCoreTypeImporter *importer, MinicType source,
         /* Record field types are already complete source ArrayTypes (or a
          * legal incomplete flexible tail).  Type import must not synthesize
          * a second array dimension from declarator metadata. */
-        if (field_array && !array_info.has_materialized_type) goto failed;
+        if (field_array) {
+            array_storage = minic_core_type_get(
+                importer->context,
+                minic_core_type_unqualified(importer->context, field_type));
+            if (!array_info.has_materialized_type || array_storage == NULL ||
+                array_storage->kind != MINIC_CORE_TYPE_ARRAY ||
+                array_storage->value.array.is_complete == array_info.is_incomplete ||
+                (array_storage->value.array.is_complete &&
+                 array_storage->value.array.count == 0U) != array_info.is_zero_length)
+                goto failed;
+        }
         fields[i].type_id = field_type;
         fields[i].is_bit_field = field->is_bit_field;
         fields[i].bit_width = field->is_bit_field ? field->bit_width : 0U;
-        fields[i].is_packed = field->is_packed;
-        fields[i].is_flexible_array = field_array && array_info.is_incomplete;
-        fields[i].is_zero_length_array = field_array && array_info.is_zero_length;
+        fields[i].has_nondefault_layout_policy = field->is_packed;
         if (field->is_bit_field) {
             if (!bit_field_storage_alignment(record, field, field_alignment,
                                              &fields[i].alignment)) goto failed;
@@ -319,9 +326,9 @@ static bool import_type(MinicCoreTypeImporter *importer, MinicType source,
         type.alignment = base->alignment;
         type.is_volatile = minic_type_is_volatile(source);
         type.is_read_only = minic_type_is_const(source);
-        type.is_layout_override = source.explicit_alignment != 0U &&
-                                  source.pointer_depth == 0U;
-        if (type.is_layout_override && type.has_layout) {
+        type.has_abi_alignment_override = source.explicit_alignment != 0U &&
+                                          source.pointer_depth == 0U;
+        if (type.has_abi_alignment_override && type.has_layout) {
             if (!minic_data_layout_type(importer->invocation, importer->program,
                                         source, &size, &alignment) || size != type.size)
                 return false;
@@ -367,13 +374,12 @@ static bool import_type(MinicCoreTypeImporter *importer, MinicType source,
         array = minic_c0_program_array_type(importer->program, source.array_type_id);
         if (array == NULL) return false;
         type.kind = MINIC_CORE_TYPE_ARRAY;
-        type.value.array.is_zero_length = array->is_zero_length;
         type.value.array.is_complete = array->element_count != 0U || array->is_zero_length;
         type.value.array.count = array->element_count;
         if (type.value.array.is_complete && !source_layout(importer, source, &type))
             return false;
         return import_array(importer, array->element_type, array->element_count,
-                            array->is_zero_length, type.value.array.is_complete,
+                            type.value.array.is_complete,
                             type.size, type.alignment, type.has_layout, result, depth + 1U);
     case MINIC_TYPE_BASE_RECORD:
         return import_record(importer, source, result, depth + 1U);

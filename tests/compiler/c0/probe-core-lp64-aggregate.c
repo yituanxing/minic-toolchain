@@ -45,9 +45,8 @@ static bool record(MinicCoreTypeContext *ctx, size_t bytes, size_t align,
     type.alignment = align;
     type.value.record.is_complete = true;
     type.value.record.is_union = is_union;
-    type.value.record.is_packed = pack_align != 0U;
-    type.value.record.pack_alignment = pack_align;
-    type.value.record.explicit_alignment = explicit_align;
+    type.value.record.has_nondefault_layout_policy =
+        pack_align != 0U || explicit_align != 0U;
     type.value.record.fields = (MinicCoreRecordField *)fields;
     type.value.record.field_count = count;
     return minic_core_type_register(ctx, &type, out);
@@ -56,9 +55,10 @@ static bool record(MinicCoreTypeContext *ctx, size_t bytes, size_t align,
 int main(void) {
     MinicCoreTypeContext ctx;
     MinicCoreType type = {0};
-    MinicCoreTypeId i8, i32, i64, f32, f64, arr12;
+    MinicCoreTypeId i8, i32, i64, f32, f64, arr12, zero_arr, unsized_arr;
     MinicCoreTypeId int_record, packed, misaligned, empty, nested;
-    MinicCoreTypeId array_record, fp_record, packed_fp, extended_fp, union_fp;
+    MinicCoreTypeId array_record, fp_record, packed_fp, field_restricted_fp;
+    MinicCoreTypeId extended_fp, union_fp;
     MinicCoreTypeId big_record, huge_record, qual_record, vector_id, vector_record;
     MinicCoreRecordField fields[2] = {{0}};
     MinicAggregateStorageShape shape;
@@ -115,6 +115,19 @@ int main(void) {
     type.value.array.count = 3U;
     type.value.array.is_complete = true;
     CHECK(minic_core_type_register(&ctx, &type, &arr12));
+    type.value.array.count = 0U;
+    type.size = 0U;
+    CHECK(minic_core_type_register(&ctx, &type, &zero_arr));
+    type.value.array.is_complete = false;
+    type.has_layout = false;
+    type.alignment = 0U;
+    CHECK(minic_core_type_register(&ctx, &type, &unsized_arr));
+    fields[0] = (MinicCoreRecordField){.type_id = zero_arr, .alignment = 4U};
+    CHECK(record(&ctx, 8U, 4U, fields, 1U, false, 0U, 0U, &array_record));
+    CHECK(!minic_multi_gp_record_core(&ctx, array_record, &bytes, &chunks));
+    fields[0].type_id = unsized_arr;
+    CHECK(record(&ctx, 8U, 4U, fields, 1U, false, 0U, 0U, &array_record));
+    CHECK(!minic_multi_gp_record_core(&ctx, array_record, &bytes, &chunks));
     fields[0] = (MinicCoreRecordField){.type_id = arr12, .alignment = 4U};
     CHECK(record(&ctx, 12U, 4U, fields, 1U, false, 0U, 0U, &array_record));
     CHECK(minic_multi_gp_record_core(&ctx, array_record, &bytes, &chunks));
@@ -127,6 +140,10 @@ int main(void) {
     CHECK(minic_multi_fp_return_record_core(&ctx, fp_record, &lanes, &width));
     CHECK(lanes == 2U && width == 4U);
     CHECK(!minic_multi_gp_record_core(&ctx, fp_record, &bytes, &chunks));
+    fields[0].has_nondefault_layout_policy = true;
+    CHECK(record(&ctx, 8U, 4U, fields, 2U, false, 0U, 0U, &field_restricted_fp));
+    CHECK(!minic_multi_fp_return_record_core(&ctx, field_restricted_fp, &lanes, &width));
+    fields[0].has_nondefault_layout_policy = false;
     CHECK(record(&ctx, 8U, 4U, fields, 2U, false, 1U, 0U, &packed_fp));
     CHECK(!minic_multi_fp_return_record_core(&ctx, packed_fp, &lanes, &width));
     CHECK(record(&ctx, 8U, 4U, fields, 2U, false, 0U, 8U, &extended_fp));
@@ -146,7 +163,7 @@ int main(void) {
     type.has_layout = true;
     type.size = 24U;
     type.alignment = 16U;
-    type.is_layout_override = true;
+    type.has_abi_alignment_override = true;
     CHECK(minic_core_type_register(&ctx, &type, &qual_record));
     CHECK(minic_common_aggregate_storage_shape_core(&ctx, qual_record, 8U, &shape));
     CHECK(shape.alignment == 16U && shape.words == 3U);

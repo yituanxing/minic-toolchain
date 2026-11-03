@@ -19,12 +19,15 @@ int main(void) {
     MinicTargetInvocation invocation;
     const MinicTargetInvocation *source = &invocation;
     MinicRecordId node_record, twin_record, qualified_record;
+    MinicRecordId packed_record, flexible_record, zero_record;
     MinicType node_source, twin_source, aligned_node_source;
     MinicType pointer_source, pointer_const_source;
     MinicType qualified_record_source, qualified_record_cv, qualified_record_pointer;
     MinicType integer_pointer_source;
     MinicType array_source, function_source, vector_source, const_integer;
     MinicType volatile_integer, const_volatile_integer;
+    MinicType packed_source, flexible_source, zero_source;
+    MinicType flexible_array_source, zero_array_source;
     MinicType parameters[2];
     MinicCoreTypeId node_id, twin_id, aligned_node_id;
     MinicCoreTypeId qualified_record_id, qualified_record_pointer_id;
@@ -33,6 +36,7 @@ int main(void) {
     MinicCoreTypeId integer_pointer_id;
     MinicCoreTypeId array_id, function_id, repeated_function_id, vector_id, bad_id;
     MinicCoreTypeId register_vector_id;
+    MinicCoreTypeId packed_id, flexible_id, zero_id;
     MinicCoreType register_vector;
     const MinicCoreType *node, *pointer, *array, *function, *vector, *int_type;
     size_t node_size, node_alignment, field_offset, bit_offset;
@@ -74,6 +78,36 @@ int main(void) {
     CHECK(minic_c0_record_add_field(&program, qualified_record, "next", 4U,
                                     qualified_record_pointer, 1U));
     CHECK(minic_c0_program_finish_record(&program, qualified_record));
+    /* C policy stops at ingress: Core captures only neutral layout facts
+     * and canonical materialized array extents, not declarator spellings. */
+    CHECK(minic_c0_program_add_record(&program, "Packed", 6U, &packed_record));
+    packed_source = minic_type_record(packed_record);
+    CHECK(minic_c0_record_add_field(&program, packed_record, "value", 5U,
+                                    minic_type_int(), 1U));
+    program.records[packed_record].is_packed = true;
+    program.records[packed_record].fields[0].is_packed = true;
+    CHECK(minic_c0_program_finish_record(&program, packed_record));
+
+    CHECK(minic_c0_program_add_incomplete_array_type(
+        &program, minic_type_int(), &flexible_array_source));
+    CHECK(minic_c0_program_add_record(&program, "Flexible", 8U, &flexible_record));
+    flexible_source = minic_type_record(flexible_record);
+    CHECK(minic_c0_record_add_field(&program, flexible_record, "head", 4U,
+                                    minic_type_int(), 1U));
+    CHECK(minic_c0_record_add_field(&program, flexible_record, "tail", 4U,
+                                    flexible_array_source, 1U));
+    program.records[flexible_record].fields[1].is_flexible_array = true;
+    CHECK(minic_c0_program_finish_record(&program, flexible_record));
+
+    CHECK(minic_c0_program_add_zero_length_array_type(
+        &program, minic_type_int(), &zero_array_source));
+    CHECK(minic_c0_program_add_record(&program, "ZeroTail", 8U, &zero_record));
+    zero_source = minic_type_record(zero_record);
+    CHECK(minic_c0_record_add_field(&program, zero_record, "head", 4U,
+                                    minic_type_int(), 1U));
+    CHECK(minic_c0_record_add_field(&program, zero_record, "tail", 4U,
+                                    zero_array_source, 1U));
+    CHECK(minic_c0_program_finish_record(&program, zero_record));
     CHECK(minic_c0_program_add_array_type(&program, minic_type_int(), 5U,
                                           &array_source));
 
@@ -95,9 +129,31 @@ int main(void) {
     CHECK(aligned_node_id != node_id);
     CHECK(minic_core_type_unqualified(&context, aligned_node_id) == node_id);
     CHECK(minic_core_type_get(&context, aligned_node_id)->kind == MINIC_CORE_TYPE_QUALIFIED);
-    CHECK(minic_core_type_get(&context, aligned_node_id)->is_layout_override);
+    CHECK(minic_core_type_get(&context, aligned_node_id)->has_abi_alignment_override);
     CHECK(minic_core_type_get(&context, aligned_node_id)->alignment == 32U);
     CHECK(minic_core_type_import(&importer, pointer_source, &pointer_id));
+    CHECK(minic_core_type_import(&importer, packed_source, &packed_id));
+    CHECK(minic_core_type_get(&context, packed_id)->value.record.has_nondefault_layout_policy);
+    CHECK(minic_core_type_get(&context, packed_id)->value.record.fields[0]
+              .has_nondefault_layout_policy);
+    CHECK(minic_core_type_import(&importer, flexible_source, &flexible_id));
+    CHECK(minic_core_type_import(&importer, zero_source, &zero_id));
+    {
+        const MinicCoreType *flexible = minic_core_type_get(&context, flexible_id);
+        const MinicCoreType *zero = minic_core_type_get(&context, zero_id);
+        const MinicCoreType *tail;
+        CHECK(flexible != NULL && zero != NULL &&
+              flexible->value.record.field_count == 2U &&
+              zero->value.record.field_count == 2U);
+        tail = minic_core_type_get(&context, flexible->value.record.fields[1].type_id);
+        CHECK(tail != NULL && tail->kind == MINIC_CORE_TYPE_ARRAY &&
+              !tail->value.array.is_complete && tail->value.array.count == 0U &&
+              !tail->has_layout);
+        tail = minic_core_type_get(&context, zero->value.record.fields[1].type_id);
+        CHECK(tail != NULL && tail->kind == MINIC_CORE_TYPE_ARRAY &&
+              tail->value.array.is_complete && tail->value.array.count == 0U &&
+              tail->has_layout && tail->size == 0U);
+    }
     CHECK(minic_core_type_import(&importer, twin_source, &twin_id));
     CHECK(node_id != twin_id);
     CHECK(minic_core_type_import(&importer, qualified_record_source,
@@ -229,6 +285,6 @@ int main(void) {
     minic_core_type_importer_destroy(&importer);
     minic_core_type_context_destroy(&context);
     minic_c0_program_destroy(&program);
-    (void)puts("CORE_TYPE_IMPORT=PASS recursion nominal layout array_field bitfield function vector poison");
+    (void)puts("CORE_TYPE_IMPORT=PASS recursion nominal layout packed flexible zero_array array_field bitfield function vector poison");
     return 0;
 }

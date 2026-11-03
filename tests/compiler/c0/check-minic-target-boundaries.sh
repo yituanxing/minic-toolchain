@@ -190,6 +190,20 @@ has src/target/common/direct_residual_plan.c \
   'minic_multi_direct_integer_cast_plan('
 # Once attached, Common/Direct admission and AArch64 integer lowering only
 # inspect sealed CoreTypeId. C type operations belong to the source ingress.
+for source in src/core/core_type.h src/core/core_type.c \
+              src/target/common/lp64_aggregate.c \
+              src/target/x86_64/abi.c \
+              src/target/riscv64/global_emit.c; do
+  lacks "$source" 'is_transparent_union'
+  lacks "$source" 'is_flexible_array'
+  lacks "$source" 'is_zero_length_array'
+  lacks "$source" 'is_zero_length'
+  lacks "$source" 'is_layout_override'
+  lacks "$source" 'pack_alignment'
+done
+has src/core/core_type.h 'has_nondefault_layout_policy'
+has src/core/core_type.h 'has_abi_alignment_override'
+has src/compiler/c_lower/core_type_import.c 'array_storage->value.array.is_complete'
 for source in \
   src/target/common/direct_residual_plan.c \
   src/target/common/direct_preflight.c \
