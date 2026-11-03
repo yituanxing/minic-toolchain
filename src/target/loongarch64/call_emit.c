@@ -319,7 +319,6 @@ bool minic_loongarch64_emit_abi_instruction(
                             sizeof(internal_prefix) - 1U) == 0) {
                     char builtin_name[128], validated_name[128];
                     const char *mnemonic = NULL;
-                    MinicType result_type, argument_types[3];
                     size_t argc = 0U, immediate_index = SIZE_MAX;
                     size_t k;
                     uint64_t imm = 0U;
@@ -333,13 +332,14 @@ bool minic_loongarch64_emit_abi_instruction(
                     (void)memcpy(builtin_name + sizeof(gnu_prefix) - 1U,
                                  callee->name + sizeof(internal_prefix) - 1U,
                                  suffix_length + 1U);
-                    if (!minic_target_info_machine_builtin_signature(
+                    if (!minic_target_info_machine_builtin_form(
                             target, builtin_name, strlen(builtin_name),
                             validated_name, sizeof(validated_name),
-                            &result_type, argument_types, &argc,
-                            &mnemonic, &immediate_index) ||
+                            &argc, &mnemonic, &immediate_index) ||
                         strcmp(validated_name, callee->name) != 0 ||
-                        !minic_type_equal(ins->type, result_type) ||
+                        ins->core_type_id != callee->core_return_type_id ||
+                        callee->parameter_count != argc || callee->is_variadic ||
+                        (argc != 0U && callee->core_parameter_type_ids == NULL) ||
                         count != argc || count > 3U ||
                         stack_bytes != 0U || mnemonic == NULL)
                         return false;
@@ -348,9 +348,8 @@ bool minic_loongarch64_emit_abi_instruction(
                             &fn->call_arguments[begin + k];
                         if (arg->kind != MINIC_CORE_CALL_ARGUMENT_VALUE ||
                             arg->value.value_id >= fn->value_count ||
-                            !minic_type_equal(
-                                fn->values[arg->value.value_id].type,
-                                argument_types[k]) ||
+                            fn->values[arg->value.value_id].core_type_id !=
+                                callee->core_parameter_type_ids[k] ||
                             call_plan->arguments[k].gp_first != k ||
                             call_plan->arguments[k].gp_registers != 1U ||
                             call_plan->arguments[k].fp_registers != 0U ||

@@ -1261,6 +1261,42 @@ bool minic_core_function_verify_source_ingress(const MinicCoreFunction *function
     return true;
 }
 
+/* C descriptors are a source-lowering draft, not published execution facts.
+ * Once an entire CoreType graph passes verification, discard every owned
+ * source-only parameter/enum table and poison inline C descriptors. */
+static void discard_published_source_descriptors(MinicCoreFunction *function) {
+    const MinicType poisoned = {.base_kind = (MinicTypeBaseKind)0x7fffffff};
+    size_t i;
+    function->return_type = poisoned;
+    free(function->parameter_types);
+    function->parameter_types = NULL;
+    free(function->enum_types);
+    function->enum_types = NULL;
+    function->enum_type_count = 0U;
+    function->enum_type_capacity = 0U;
+    for (i = 0U; i < function->fixed_register_binding_count; ++i)
+        function->fixed_register_bindings[i].type = poisoned;
+    for (i = 0U; i < function->object_count; ++i)
+        function->objects[i].type = poisoned;
+    for (i = 0U; i < function->global_count; ++i)
+        function->globals[i].type = poisoned;
+    for (i = 0U; i < function->callee_count; ++i) {
+        function->callees[i].return_type = poisoned;
+        free(function->callees[i].parameter_types);
+        function->callees[i].parameter_types = NULL;
+    }
+    for (i = 0U; i < function->call_signature_count; ++i) {
+        function->call_signatures[i].return_type = poisoned;
+        free(function->call_signatures[i].parameter_types);
+        function->call_signatures[i].parameter_types = NULL;
+        function->call_signatures[i].function_type_id = MINIC_FUNCTION_TYPE_INVALID;
+    }
+    for (i = 0U; i < function->value_count; ++i)
+        function->values[i].type = poisoned;
+    for (i = 0U; i < function->instruction_count; ++i)
+        function->instructions[i].type = poisoned;
+}
+
 bool minic_core_function_snapshot_types(MinicCoreFunction *function,
                                         const MinicCoreTypeContext *context,
                                         MinicCoreTypeSnapshotResolver resolver,
@@ -1356,7 +1392,10 @@ bool minic_core_function_snapshot_types(MinicCoreFunction *function,
             instruction->value.field_address.core_record_type_id = record_id;
         }
     }
-    if (minic_core_function_attach_type_context(function, context)) return true;
+    if (minic_core_function_attach_type_context(function, context)) {
+        discard_published_source_descriptors(function);
+        return true;
+    }
 failed:
     clear_core_type_snapshots(function);
     return false;

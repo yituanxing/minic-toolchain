@@ -190,6 +190,12 @@ bool minic_target_info_machine_builtin_signature(
     char *callee, size_t callee_capacity, MinicType *result,
     MinicType arguments[3], size_t *argument_count,
     const char **mnemonic, size_t *immediate_index);
+/* Machine-only view of the same target builtin descriptor. C parameter
+ * checking belongs to Source and CoreType call identities to the verifier. */
+bool minic_target_info_machine_builtin_form(
+    const MinicTargetInfo *target, const char *spelling, size_t length,
+    char *callee, size_t callee_capacity, size_t *argument_count,
+    const char **mnemonic, size_t *immediate_index);
 bool minic_target_info_header_attribute_supported(const MinicTargetInfo *target,
                                                   const char *spelling,
                                                   size_t length);

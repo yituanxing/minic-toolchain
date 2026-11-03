@@ -442,6 +442,10 @@ int main(void) {
     CHECK(minic_core_function_snapshot_types(&function, &context,
                                               resolve_source_type, &resolver));
     CHECK(minic_core_function_verify_core_type_snapshot(&function));
+    CHECK(function.parameter_types == NULL && function.enum_types == NULL);
+    CHECK(function.return_type.base_kind == (MinicTypeBaseKind)0x7fffffff);
+    CHECK(function.values[0].type.base_kind == (MinicTypeBaseKind)0x7fffffff);
+    CHECK(function.instructions[0].type.base_kind == (MinicTypeBaseKind)0x7fffffff);
     value = function.instructions[0].result;
     CHECK(function.values[value].core_type_id == ids.i32);
     CHECK(function.instructions[0].core_type_id == ids.i32);
@@ -457,6 +461,7 @@ int main(void) {
     CHECK(minic_core_function_snapshot_types(&function, &context,
                                              resolve_enum_overflow_type, &ids));
     CHECK(minic_core_function_verify_core_type_snapshot(&function));
+    CHECK(function.parameter_types == NULL && function.enum_types == NULL);
     minic_core_function_destroy(&function);
     minic_core_type_context_destroy(&context);
     (void)puts("CORE_TYPE_SNAPSHOT=PASS valid malformed indirect_nominal field_nominal overflow enum_source_proof rollback");

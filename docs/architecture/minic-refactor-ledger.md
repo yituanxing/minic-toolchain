@@ -952,3 +952,10 @@ The runtime four-architecture target-catalog probe still attempted to compile ag
 ## IR-P13 — Standalone sealed Module output transaction and Core visitor (2026-11-03)
 
 The shared prepared-function visitor no longer dereferences C declarations or C function count when a finalized CoreModule is present, and the shared staged output transaction no longer requires a C Program to serialize sealed globals, weak/hidden binding, relocation uses, file ASM, and Core definition visits. Product target writers may still borrow C Program for outstanding GNU/source policy; this milestone is intentionally the common transport/transaction seam only. Whitebox probes run with both poisoned source Program and NULL source Program, including mismatched declaration definedness and rollback. Output is not considered accepted without actual CI.
+
+## IR-P14 — Published Core source-type disposal and native builtin Core-call contract (2026-11-03)
+
+- Traced the parser's exact LoongArch builtin C signature, Core callee construction, type snapshot, call verifier and native machine emitter as one producer→consumer chain. The source policy still controls target builtin signatures and the machine still checks mnemonic/immediate/register constraints.
+- Successful source-to-Core publication now frees owned source-only parameter arrays and enum compatibility tables, poisoning inline C descriptors. Import failures keep their source draft intact for rollback/retry. The physical fields and builder API remain a pending structural migration; this does NOT claim C has been removed from `core_ir.h`.
+- The LoongArch machine CALL path now requests only machine-form facts and checks sealed Core return/argument type IDs against the callee's checked Core call signature. The source-only `MinicType` signature is not read by the emitter.
+- Strict Core type snapshot tests and machine boundary gates verify the publication contract. GNU/QEMU/runtime remain independent acceptance gates.

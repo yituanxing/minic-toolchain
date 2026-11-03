@@ -1148,6 +1148,18 @@ bool minic_target_info_machine_builtin_signature(
                              immediate_index);
 }
 
+bool minic_target_info_machine_builtin_form(
+    const MinicTargetInfo *target, const char *spelling, size_t length,
+    char *callee, size_t callee_capacity, size_t *argument_count,
+    const char **mnemonic, size_t *immediate_index) {
+    MinicType source_return;
+    MinicType source_arguments[3];
+    return minic_target_info_machine_builtin_signature(
+        target, spelling, length, callee, callee_capacity,
+        &source_return, source_arguments, argument_count,
+        mnemonic, immediate_index);
+}
+
 bool minic_target_info_inline_asm_memory_input_constraint_supported(
     const MinicTargetInfo *target, const char *constraint,
     size_t constraint_length) {
