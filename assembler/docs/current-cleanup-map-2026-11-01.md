@@ -1,5 +1,11 @@
 # MiniAS 当前清理与所有权总览（2026-11-01）
 
+> **历史追加台账：** 本文保留当时各批次的“待发布”“COFF 未实现”和
+> “下一批”原始记录，不表示这些仍是当前状态。2026-11-03 起请以
+> [MiniAS 架构收口记录](minias-architecture-closeout-2026-11-03.md)
+> 为当前已完成/暂缓范围及各 SHA 验收状态的唯一入口。旧证据仍按
+> 各自提交解释，不自动迁移到新 HEAD。
+
 > **2026-11-03 COMMON 固定宽度重定位及跨对象 CFI 正确性矩阵
 > （本轮工作树，远端 exact-head 尚待确认）：** 单一
 > `probe-common-relocation-widths-gnu.sh` 在六种实际 ELF profile
