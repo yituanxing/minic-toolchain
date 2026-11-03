@@ -113,10 +113,10 @@ lacks src/target/common/core_object_intervals.c 'Allocation or malformed-index f
 has src/target/common/core_spill_layout.c \
   'cached_slot_sizes[value_id] = *slot_size;'
 
-# Real GNU ARM64 sysreg output is u64 (unsigned long long); both source
-# admission and actual machine writeback must share ONE target-owned type gate.
+# Real GNU ARM64 sysreg output is u64 (unsigned long long); Source proves
+# the exact C spelling, while machine writeback checks sealed Core u64.
 has src/target/aarch64/asm_contract.c 'aarch64_linux_sysreg_u64_type('
-has src/target/aarch64/asm_contract.c '!aarch64_linux_sysreg_u64_type(pointee)'
+has src/target/aarch64/asm_contract.c '!aarch64_asm_core_integer(fn,op[0].value,true,8U,0)'
 lacks src/core/core_lower_asm_target.c 'mrs x9, daif'
 
 # Original LoongArch64 Linux array_index_mask_nospec is exact target-owned
@@ -1112,6 +1112,18 @@ lacks src/target/x86_64/codegen.c 'for (i = 0U; i < program->function_count && s
 lacks src/target/riscv64/codegen_function.c 'for (function_index = 0U;'
 lacks src/target/riscv32/rv32_emit.c 'for (i = 0U; ok && i < function_count; ++i)'
 
+# The GNU/C qualifier owns nominal source ranks; all three physical ASM
+# emitters consume only sealed CoreType IDs. Match nested b[i].value indexes
+# too: an older single-bracket search silently missed most C-type readers.
+if grep -En -- 'fn->values\[.*\]\.type' \
+    src/target/aarch64/asm_contract.c \
+    src/target/aarch64/residual_emit.c \
+    src/target/loongarch64/asm_contract.c \
+    src/target/x86_64/machine_asm.c; then
+  echo 'MINIC_ASM_MACHINE_C_TYPE_BOUNDARY=FAIL' >&2
+  exit 1
+fi
+
 # A native executable verifies success, five failure edges, cleanup and
 # census continuation. Keep target GNU/QEMU checks in their own CI stages.
 work=$(mktemp -d)
@@ -1276,6 +1288,11 @@ lacks src/target/riscv64/fp_emit.c 'minic_riscv64_emit_integer_conversion_for_pr
 # Every machine CALL/INDIRECT_CALL/PARAMETER/return consumer reads the
 # sealed ABI value shape. Old C descriptors may remain in the Core IR for
 # source-level LoongArch builtin signature validation, never ABI selection.
+has src/target/common/core_call_view.h 'core_parameter_type_ids;'
+lacks src/target/common/core_call_view.h 'const MinicType *parameter_types;'
+lacks src/target/common/core_call_view.h 'MinicType return_type;'
+lacks src/target/common/core_call_view.c 'view.return_type ='
+lacks src/target/common/core_call_view.c 'view.parameter_types ='
 has src/target/common/core_abi_value_shape.h 'minic_core_abi_value_shape('
 for source in src/target/aarch64/call_emit.c \
               src/target/loongarch64/call_emit.c \

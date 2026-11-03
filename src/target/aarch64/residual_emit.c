@@ -487,8 +487,13 @@ bool minic_aarch64_emit_residual_instruction(
             if (getenv("MINIC_M1_TRACE") != NULL && base < fn->value_count &&
                 index < fn->value_count) {
                 unsigned int bits = 0U;
-                bool have_bits = minic_target_info_integer_width(
-                    target, program, fn->values[index].type, &bits);
+                const MinicCoreType *index_type = a64_residual_core_type(
+                    fn, fn->values[index].core_type_id);
+                const bool have_bits = index_type != NULL &&
+                    index_type->kind == MINIC_CORE_TYPE_INTEGER &&
+                    index_type->has_layout &&
+                    index_type->value.integer.bit_width != 0U;
+                if (have_bits) bits = index_type->value.integer.bit_width;
                 (void)fprintf(stderr,
                     "MINIC_M11_POINTER_DIAG arch=aarch64 function=%s block=%zu ins=%u base=%u base_pointer=%d index=%u index_integer=%d width_known=%d index_bits=%u stride=%zu subtract=%d\n",
                     name, block_id, (unsigned int)ins_id,

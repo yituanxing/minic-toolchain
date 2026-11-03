@@ -2149,6 +2149,22 @@ check-loong-typed-descriptors: $(LOONG_TYPED_DESCRIPTOR_TEST_OBJECTS)
 
 check-fast: check-loong-typed-descriptors
 
+# Real AArch64/x86-64 physical ASM emission must depend on sealed CoreType
+# alone. Poison the preserved migration-only C descriptors and require
+# byte-identical output; malformed Core types must fail with zero bytes.
+TYPED_ASM_CORE_POISON_TEST_BINARY := $(BUILD_DIR)/tests/target/typed-asm-core-poison
+
+.PHONY: check-typed-asm-core-poison
+check-typed-asm-core-poison: $(LOONG_TYPED_DESCRIPTOR_TEST_OBJECTS)
+	mkdir -p "$(BUILD_DIR)/tests/target"
+	$(CC) $(CPPFLAGS) $(MINIC_INCLUDES) $(MINIC_CFLAGS) \
+	  tests/target/typed_asm_core_poison_test.c \
+	  $(LOONG_TYPED_DESCRIPTOR_TEST_OBJECTS) $(MINIC_LDFLAGS) \
+	  -o "$(TYPED_ASM_CORE_POISON_TEST_BINARY)"
+	"$(abspath $(TYPED_ASM_CORE_POISON_TEST_BINARY))"
+
+check-fast: check-typed-asm-core-poison
+
 # Source -> Core -> normalized-machine ASM proof is a single admission
 # contract. Check whole instruction families, including hostile rewrites,
 # without requiring cross GNU/QEMU tools or granting opaque source IDs power.

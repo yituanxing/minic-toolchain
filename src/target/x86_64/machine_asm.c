@@ -18,13 +18,6 @@ static bool clobber_is(const MinicCoreInlineAsmRegisterClobber *c,
            memcmp(c->name, name, len) == 0;
 }
 
-static bool x86_asm_u64_type(MinicType type) {
-    MinicType plain;
-    return minic_type_unqualified(type, &plain) &&
-           (minic_type_equal(plain, minic_type_unsigned_long()) ||
-            minic_type_equal(plain, minic_type_unsigned_long_long()));
-}
-
 /* GNU constraint ranks and lvalue legality are checked exactly once by the
  * source qualifier. On the machine side the independently verified contract
  * is the normalized template, physical operand kind, and Core storage shape.
@@ -100,6 +93,63 @@ static bool x86_asm_core_f64(const MinicCoreFunction *fn,
     return type && type->kind == MINIC_CORE_TYPE_FLOAT &&
            type->has_layout && type->size == 8U &&
            type->value.floating.format == MINIC_CORE_FLOAT_BINARY64;
+}
+
+/* Every Core structured ASM operand has either scalar SSA storage or an
+ * address-backed GNU output/memory operand. Once Source seals the exact C
+ * rank and constraint, Machine may only recheck Core execution shape. */
+static bool x86_asm_operand_type(
+    const MinicCoreFunction *fn, MinicCoreValueId value,
+    bool address, MinicCoreTypeId *type_id) {
+    if (!fn || !fn->values || !type_id || value >= fn->value_count)
+        return false;
+    *type_id = fn->values[value].core_type_id;
+    if (address && !x86_asm_core_pointee(fn, *type_id, type_id))
+        return false;
+    return x86_asm_core_type(fn, *type_id) != NULL;
+}
+
+static bool x86_asm_operand_width(
+    const MinicCoreFunction *fn, MinicCoreValueId value,
+    bool address, size_t *bytes) {
+    MinicCoreTypeId type_id;
+    return x86_asm_operand_type(fn, value, address, &type_id) &&
+           x86_asm_core_width(fn, type_id, bytes);
+}
+
+/* signed_mode: -1 accepts both, 0 unsigned, 1 signed. */
+static bool x86_asm_operand_integer(
+    const MinicCoreFunction *fn, MinicCoreValueId value,
+    bool address, size_t bytes, int signed_mode) {
+    MinicCoreTypeId type_id;
+    const MinicCoreType *type;
+    size_t actual;
+    if (!x86_asm_operand_type(fn, value, address, &type_id) ||
+        !(type = x86_asm_core_type(fn, type_id)) ||
+        type->kind != MINIC_CORE_TYPE_INTEGER ||
+        type->value.integer.is_bool ||
+        (signed_mode >= 0 &&
+         type->value.integer.is_signed != (signed_mode != 0)) ||
+        !x86_asm_core_width(fn, type_id, &actual)) return false;
+    return bytes == 0U || bytes == actual;
+}
+
+static bool x86_asm_operand_kind(
+    const MinicCoreFunction *fn, MinicCoreValueId value,
+    bool address, MinicCoreTypeKind kind) {
+    MinicCoreTypeId type_id;
+    return x86_asm_operand_type(fn, value, address, &type_id) &&
+           x86_asm_core_is_kind(fn, type_id, kind);
+}
+
+static bool x86_asm_operand_same_type(
+    const MinicCoreFunction *fn, MinicCoreValueId left, bool left_address,
+    MinicCoreValueId right, bool right_address) {
+    MinicCoreTypeId first, second;
+    return x86_asm_operand_type(fn, left, left_address, &first) &&
+           x86_asm_operand_type(fn, right, right_address, &second) &&
+           minic_core_type_unqualified(fn->type_context, first) ==
+           minic_core_type_unqualified(fn->type_context, second);
 }
 
 /* Resolve a GNU `i` function-symbol operand exclusively from its Core SSA
@@ -244,7 +294,6 @@ static bool emit_linux_crash_register_snapshot(
         info->template_text, info->template_length);
     const bool memory_output = gpr != 0U || misc == 1U;
     const char *scratch = gpr == 12U ? "%r10" : "%r11";
-    MinicType pointee, plain;
     if (!out || !fn || !frame || !ins || !info || !b ||
         (!gpr && !misc) || info->is_goto ||
         (memory_output && !info->is_volatile) ||
@@ -255,9 +304,7 @@ static bool emit_linux_crash_register_snapshot(
         b[0].kind != (memory_output ?
             MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT :
             MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT) ||
-        !minic_type_pointee(fn->values[b[0].value].type, &pointee) ||
-        !minic_type_unqualified(pointee, &plain) ||
-        !minic_type_equal(plain, minic_type_unsigned_long()) ||
+        !x86_asm_operand_integer(fn, b[0].value, true, 8U, 0) ||
         !x86_value_load(out, frame, b[0].value, scratch)) return false;
     if (gpr)
         return fprintf(out, "  movq %s, (%s)\n", gprs[gpr - 1U], scratch) >= 0;
@@ -321,7 +368,7 @@ static bool emit_linux_iret_to_self(
         !b[1].has_fixed_register_binding ||
         b[1].fixed_register_binding_id >= fn->fixed_register_binding_count ||
         !minic_core_function_value_is_kind(fn, b[0].value, MINIC_CORE_TYPE_POINTER) ||
-        !minic_type_equal(fn->values[b[1].value].type, minic_type_unsigned_long()))
+        !x86_asm_operand_integer(fn, b[1].value, false, 8U, 0))
         return false;
     fixed = &fn->fixed_register_bindings[b[1].fixed_register_binding_id];
     if (!fixed->register_name || strcmp(fixed->register_name, "rsp")) return false;
@@ -435,14 +482,13 @@ static bool emit_linux_pv_indirect_call(
                                    : MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT) ||
             b[i].has_fixed_register_binding != (i == 4U) ||
             (i >= 7U &&
-             !minic_type_equal(fn->values[b[i].value].type,
-                               minic_type_unsigned_long()))) return false;
+             !x86_asm_operand_integer(fn, b[i].value, false, 8U, 0))) return false;
     }
     if (b[4].fixed_register_binding_id >= fn->fixed_register_binding_count)
         return false;
     fixed = &fn->fixed_register_bindings[b[4].fixed_register_binding_id];
     if (!fixed->register_name || strcmp(fixed->register_name, "rsp") ||
-        !minic_type_equal(fn->values[b[4].value].type, minic_type_unsigned_long()) ||
+        !x86_asm_operand_integer(fn, b[4].value, false, 8U, 0) ||
         !minic_core_function_value_is_kind(fn, b[5].value, MINIC_CORE_TYPE_INTEGER) ||
         !minic_core_function_value_is_kind(fn, b[6].value, MINIC_CORE_TYPE_POINTER) ||
         fn->values[b[5].value].definition >= fn->instruction_count) return false;
@@ -517,8 +563,8 @@ static bool emit_linux_kvm_hypercall(
             b[i].early_clobber || b[i].has_fixed_register_binding ||
             (i != 0U && (b[i].kind !=
                 MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT ||
-                !minic_type_equal(fn->values[b[i].value].type, i == 1U
-                    ? minic_type_unsigned_int() : minic_type_unsigned_long()))))
+                !x86_asm_operand_integer(fn, b[i].value, false,
+                                         i == 1U ? 4U : 8U, 0))))
             return false;
     }
     if (fputs("  pushq %rbx\n", out) == EOF) return false;
@@ -597,7 +643,7 @@ static bool emit_linux_exception_stack_call(
     name = x86_asm_direct_function_symbol(fn, b[2].value);
     if (!name || !minic_core_function_value_is_kind(fn, b[2].value, MINIC_CORE_TYPE_POINTER) ||
         !minic_core_function_value_is_kind(fn, b[4].value, MINIC_CORE_TYPE_POINTER) ||
-        !x86_asm_u64_type(fn->values[b[5].value].type) ||
+        !x86_asm_operand_integer(fn, b[5].value, false, 8U, 0) ||
         !minic_core_function_value_is_kind(fn, b[6].value, MINIC_CORE_TYPE_POINTER)) return false;
     return x86_value_load(out, frame, b[6].value, "%rdx") &&
            x86_value_load(out, frame, b[5].value, "%rsi") &&
@@ -740,7 +786,7 @@ static bool emit_linux_pci_mmconfig(
         info->template_text, info->template_length, true) : 0U;
     const bool read = r != 0U;
     const unsigned int width = read ? r : w;
-    MinicType value_type; size_t value_width; bool sign;
+    size_t value_width;
     const char *opcode;
     if (!out || !program || !target || !fn || !frame || !ins || !info ||
         !ops || !width || !info->is_volatile || info->is_goto ||
@@ -755,11 +801,9 @@ static bool emit_linux_pci_mmconfig(
         ops[0].has_fixed_register_binding || ops[1].has_fixed_register_binding ||
         ops[0].early_clobber || ops[1].early_clobber ||
         !minic_core_function_value_is_kind(fn, ops[1].value, MINIC_CORE_TYPE_POINTER)) return false;
-    value_type = fn->values[ops[0].value].type;
-    if (read && !minic_type_pointee(value_type, &value_type)) return false;
-    if (!minic_x86_64_scalar_width(program, target,
-            value_type, &value_width, &sign) || value_width != width ||
-        !minic_x86_64_linux_mmio_type_matches(value_type, width)) return false;
+    if (!x86_asm_operand_integer(fn, ops[0].value, read, width, -1) ||
+        !x86_asm_operand_width(fn, ops[0].value, read, &value_width) ||
+        value_width != width) return false;
     opcode = width == 1U ? "b" : width == 2U ? "w" : "l";
     if (!read && !x86_value_load(out, frame, ops[0].value, "%rax"))
         return false;
@@ -786,7 +830,6 @@ static bool emit_linux_rep_string_io(
     };
     const MinicCoreStructuredInlineAsmOperand *b =
         ins->value.structured_inline_asm.operands;
-    MinicType pointee;
     const unsigned int form = info ? minic_x86_64_linux_rep_string_io_form(
         info->template_text, info->template_length) : 0U;
     if (!out || !fn || !frame || !ins || !info || !b || !form ||
@@ -803,12 +846,9 @@ static bool emit_linux_rep_string_io(
         b[2].has_fixed_register_binding ||
         b[0].value >= fn->value_count || b[1].value >= fn->value_count ||
         b[2].value >= fn->value_count ||
-        !minic_type_pointee(fn->values[b[0].value].type, &pointee) ||
-        !minic_type_is_pointer(pointee) ||
-        !minic_type_pointee(fn->values[b[1].value].type, &pointee) ||
-        !minic_type_equal(pointee, minic_type_unsigned_long()) ||
-        !minic_type_equal(fn->values[b[2].value].type,
-                          minic_type_unsigned_short())) return false;
+        !x86_asm_operand_kind(fn, b[0].value, true, MINIC_CORE_TYPE_POINTER) ||
+        !x86_asm_operand_integer(fn, b[1].value, true, 8U, 0) ||
+        !x86_asm_operand_integer(fn, b[2].value, false, 2U, 0)) return false;
     /* The fixed-register C operand is a pointer to the source C lvalue,
      * not the value of that lvalue. Load SI/DI/CX before the instruction and
      * write back both architecturally updated registers afterward. */
@@ -847,16 +887,15 @@ static bool emit_linux_iomem_copy(
         ins->value.structured_inline_asm.operand_count != outputs + inputs)
         return false;
     for (i = 0U; i < outputs + inputs; ++i) {
-        MinicType pointee;
         if (b[i].operand_index != i || b[i].value >= fn->value_count ||
             b[i].has_fixed_register_binding || b[i].early_clobber ||
             b[i].kind != (i < outputs
                  ? MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT
                  : MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT)) return false;
         if (i < outputs &&
-            (!minic_type_pointee(fn->values[b[i].value].type, &pointee) ||
-            (form == 3U ? !minic_type_is_integer(pointee) :
-                          !minic_type_is_pointer(pointee)))) return false;
+            !x86_asm_operand_kind(fn, b[i].value, true,
+                form == 3U ? MINIC_CORE_TYPE_INTEGER :
+                             MINIC_CORE_TYPE_POINTER)) return false;
         if (i >= outputs &&
             !minic_core_function_value_is_kind(fn, b[i].value, MINIC_CORE_TYPE_INTEGER) &&
             !minic_core_function_value_is_kind(fn, b[i].value, MINIC_CORE_TYPE_POINTER)) return false;
@@ -1158,7 +1197,7 @@ static bool emit_linux_irq_stack_call(
         }
     }
     if (!minic_core_function_value_is_kind(fn, b[0].value, MINIC_CORE_TYPE_POINTER) ||
-        !minic_type_equal(fn->values[b[1].value].type, minic_type_unsigned_long()) ||
+        !x86_asm_operand_integer(fn, b[1].value, false, 8U, 0) ||
         !minic_core_function_value_is_kind(fn, b[3].value, MINIC_CORE_TYPE_POINTER) ||
         (form != 3U && !minic_core_function_value_is_kind(fn, b[4].value, MINIC_CORE_TYPE_POINTER)) ||
         (form == 2U && !minic_core_function_value_is_kind(fn, b[5].value, MINIC_CORE_TYPE_INTEGER)) ||
@@ -1209,9 +1248,7 @@ static bool emit_linux_three_call_alternative(
     const MinicCoreFixedRegisterBinding *fixed;
     const char *skip, *skip_end;
     const char *names[3];
-    MinicType output_type;
-    size_t i, width;
-    bool signed_type;
+    size_t i;
     if (!out || !program || !target || !fn || !frame || !ins || !info ||
         !b || !info->is_volatile || info->is_goto ||
         !info->has_memory_clobber || info->register_clobber_count != 3U ||
@@ -1229,16 +1266,15 @@ static bool emit_linux_three_call_alternative(
         b[5].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT ||
         b[0].value >= fn->value_count || b[5].value >= fn->value_count ||
         b[0].has_fixed_register_binding || b[5].has_fixed_register_binding ||
-        !minic_type_pointee(fn->values[b[0].value].type, &output_type) ||
-        !minic_type_is_pointer(output_type) ||
-        !minic_x86_64_scalar_width(
-            program, target, output_type, &width, &signed_type) || width != 8U ||
-        !minic_type_equal(fn->values[b[5].value].type, output_type))
+        !x86_asm_operand_kind(fn, b[0].value, true, MINIC_CORE_TYPE_POINTER) ||
+        !x86_asm_operand_same_type(fn, b[0].value, true,
+                                   b[5].value, false))
         return false;
     fixed = &fn->fixed_register_bindings[b[1].fixed_register_binding_id];
     if (!fixed->register_name || fixed->register_name_length != 3U ||
         memcmp(fixed->register_name, "rsp", 3U) != 0 ||
-        !minic_type_is_integer(fixed->type)) return false;
+        !x86_asm_operand_kind(fn, b[1].value, false,
+                              MINIC_CORE_TYPE_INTEGER)) return false;
     for (i = 0U; i < 6U; ++i) {
         if (b[i].operand_index != i || b[i].value >= fn->value_count ||
             b[i].early_clobber || (i != 1U && b[i].has_fixed_register_binding))
@@ -1294,7 +1330,7 @@ static bool emit_linux_three_call_alternative(
  * direction. The read's GNU dummy memory operand is an ordering dependency;
  * emitting a load from its synthetic address (often 0x1000) would fault. */
 static bool emit_linux_control_register(
-    FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
+    FILE *out,
     const MinicCoreFunction *fn, const MinicX86Frame *frame,
     const MinicCoreInstruction *ins, const MinicCoreInlineAsm *info) {
     static const char *const machine_registers[] = {
@@ -1310,9 +1346,7 @@ static bool emit_linux_control_register(
     const bool plain_write = (form == 7U || form == 8U) &&
         ins->value.structured_inline_asm.operand_count == 1U &&
         b[0].kind == MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
-    MinicType output_type, input_type;
-    size_t width, i;
-    bool sign;
+    size_t i;
     if (!form || !info->is_volatile || info->is_goto ||
         info->register_clobber_count != 0U ||
         (!info->has_memory_clobber && !plain_read && !plain_write) ||
@@ -1326,14 +1360,9 @@ static bool emit_linux_control_register(
         if (b[0].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT ||
             (!plain_read &&
              b[1].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT) ||
-            !minic_type_pointee(fn->values[b[0].value].type, &output_type) ||
+            !x86_asm_operand_integer(fn, b[0].value, true, 8U, 0) ||
             (!plain_read &&
-             !minic_type_pointee(fn->values[b[1].value].type, &input_type)) ||
-            !minic_type_equal(output_type, minic_type_unsigned_long()) ||
-            (!plain_read &&
-             !minic_type_equal(input_type, minic_type_unsigned_int())) ||
-            !minic_x86_64_scalar_width(
-                program, target, output_type, &width, &sign) || width != 8U)
+             !x86_asm_operand_integer(fn, b[1].value, true, 4U, 0)))
             return false;
         return fprintf(out, "  movq %s, %%rax\n",
                        machine_registers[form - 1U]) >= 0 &&
@@ -1342,8 +1371,7 @@ static bool emit_linux_control_register(
     }
     if ((form == 7U || form == 8U) && !plain_write) {
         if (b[0].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE ||
-            !minic_type_pointee(fn->values[b[0].value].type, &input_type) ||
-            !minic_type_equal(input_type, minic_type_unsigned_long()) ||
+            !x86_asm_operand_integer(fn, b[0].value, true, 8U, 0) ||
             !x86_value_load(out, frame, b[0].value, "%r11")) return false;
         /* GNU +r input/output: source is live and remains unchanged after
          * moving its bits to the privileged control register. */
@@ -1351,7 +1379,7 @@ static bool emit_linux_control_register(
                        machine_registers[form - 1U]) >= 0;
     }
     if (b[0].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT ||
-        !minic_type_equal(fn->values[b[0].value].type, minic_type_unsigned_long()))
+        !x86_asm_operand_integer(fn, b[0].value, false, 8U, 0))
         return false;
     return x86_value_load(out, frame, b[0].value, "%rax") &&
            fprintf(out, "  movq %%rax, %s\n",
@@ -1400,7 +1428,6 @@ static bool emit_linux_alternative_wrmsr(
     const MinicCoreInstruction *feature;
     static const char *const physical[] = {"%rcx", "%rax", "%rdx"};
     size_t i, width;
-    bool sign;
     if (!out || !program || !target || !fn || !frame || !ins || !info ||
         !b || !info->is_volatile || info->is_goto ||
         !info->has_memory_clobber || info->register_clobber_count != 0U ||
@@ -1412,9 +1439,8 @@ static bool emit_linux_alternative_wrmsr(
             b[i].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT ||
             b[i].value >= fn->value_count || b[i].early_clobber ||
             b[i].has_fixed_register_binding ||
-            !minic_x86_64_scalar_width(
-                program, target, fn->values[b[i].value].type,
-                &width, &sign) || (i < 3U && width != 4U) ||
+            !x86_asm_operand_width(fn, b[i].value, false, &width) ||
+            (i < 3U && width != 4U) ||
             (i == 3U && (width != 4U && width != 8U))) return false;
     }
     if (fn->values[b[3].value].definition >= fn->instruction_count)
@@ -1501,9 +1527,7 @@ static bool emit_bit_scan_u64(
     const MinicCoreInstruction *ins, const MinicCoreInlineAsm *info) {
     const MinicCoreStructuredInlineAsmOperand *b =
         ins->value.structured_inline_asm.operands;
-    bool reverse = false, signed_result;
-    MinicType output_type;
-    size_t width;
+    bool reverse = false;
     if (!out || !program || !target || !fn || !frame || !ins || !info ||
         info->register_clobber_count != 0U ||
         info->has_memory_clobber || info->is_goto ||
@@ -1517,12 +1541,8 @@ static bool emit_bit_scan_u64(
         b[0].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT ||
         b[1].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT ||
         b[0].value >= fn->value_count || b[1].value >= fn->value_count ||
-        !minic_type_pointee(fn->values[b[0].value].type, &output_type) ||
-        !minic_type_equal(output_type, minic_type_unsigned_long()) ||
-        !minic_type_equal(fn->values[b[1].value].type, minic_type_unsigned_long()) ||
-        !minic_x86_64_scalar_width(
-            program, target, output_type, &width, &signed_result) ||
-        width != 8U)
+        !x86_asm_operand_integer(fn, b[0].value, true, 8U, 0) ||
+        !x86_asm_operand_integer(fn, b[1].value, false, 8U, 0))
         return false;
     return x86_value_load(out, frame, b[1].value, "%r10") &&
            fputs(reverse ? "  bsrq %r10, %rax\n" :
@@ -1549,9 +1569,7 @@ static bool emit_linux_tied_bit_scan(
         "  bsfl %r10d, %eax\n" :
         form == MINIC_X86_BIT_SCAN_BSR32_TIED ?
         "  bsrl %r10d, %eax\n" : "  bsrq %r10, %rax\n";
-    MinicType output_type;
     size_t width, i;
-    bool sign;
     if (!out || !program || !target || !fn || !frame || !info || !b ||
         (count != 3U && count != 2U) ||
         (is64 && count != 2U) || (!is64 && count != 3U) ||
@@ -1569,16 +1587,12 @@ static bool emit_linux_tied_bit_scan(
                         MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT) :
                 MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT))
             return false;
-    if (!minic_type_pointee(fn->values[b[0].value].type, &output_type) ||
-        !minic_type_equal(output_type, minic_type_int()) ||
-        !minic_x86_64_scalar_width(program, target, output_type, &width, &sign) ||
-        width != 4U ||
-        !minic_x86_64_scalar_width(
-            program, target, fn->values[b[1].value].type, &width, &sign) ||
+    if (!x86_asm_operand_integer(fn, b[0].value, true, 4U, 1) ||
+        !x86_asm_operand_width(fn, b[1].value, false, &width) ||
         width != (is64 ? 8U : 4U))
         return false;
     if (count == 3U &&
-        (!minic_type_equal(fn->values[b[2].value].type, minic_type_int()) ||
+        (!x86_asm_operand_integer(fn, b[2].value, false, 4U, 1) ||
          !x86_value_load(out, frame, b[2].value, "%rax")))
         return false;
     if (is64) {
@@ -1672,7 +1686,7 @@ static bool emit_add32_carry(FILE *out,const MinicC0Program *p,
     const MinicCoreInlineAsm *info){
     const MinicCoreStructuredInlineAsmOperand *b=
         ins->value.structured_inline_asm.operands;
-    MinicType ty;size_t bytes,i;bool sign;
+    size_t bytes,i;
     if(!out||!p||!t||!fn||!frame||!info||!ins||!b||
        !minic_x86_64_add32_carry_template(
            info->template_text,info->template_length)||
@@ -1686,9 +1700,7 @@ static bool emit_add32_carry(FILE *out,const MinicC0Program *p,
              MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT:
              MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT))
             return false;
-        ty=fn->values[b[i].value].type;
-        if(i==0U&&!minic_type_pointee(ty,&ty))return false;
-        if(!minic_x86_64_scalar_width(p,t,ty,&bytes,&sign)||
+        if(!x86_asm_operand_width(fn,b[i].value,i==0U,&bytes)||
            bytes!=4U)return false;
     }
     return x86_value_load(out,frame,b[1].value,"%rax")&&
@@ -1709,9 +1721,7 @@ static bool emit_linux_tcpudp_nofold(
     const MinicCoreInstruction *ins, const MinicCoreInlineAsm *info) {
     const MinicCoreStructuredInlineAsmOperand *b =
         ins->value.structured_inline_asm.operands;
-    MinicType type;
     size_t bytes, i;
-    bool sign;
     if (!out || !p || !t || !fn || !frame || !ins || !info || !b ||
         !minic_x86_64_linux_tcpudp_nofold_template(
             info->template_text, info->template_length) ||
@@ -1724,9 +1734,7 @@ static bool emit_linux_tcpudp_nofold(
             b[i].kind != (i == 0U ?
                 MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
                 MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT)) return false;
-        type = fn->values[b[i].value].type;
-        if (i == 0U && !minic_type_pointee(type, &type)) return false;
-        if (!minic_x86_64_scalar_width(p, t, type, &bytes, &sign) ||
+        if (!x86_asm_operand_width(fn, b[i].value, i==0U, &bytes) ||
             bytes != 4U) return false;
     }
     return x86_value_load(out, frame, b[4].value, "%rax") &&
@@ -1748,10 +1756,9 @@ static bool emit_linux_percpu_gs(FILE *out,const MinicC0Program *p,
     const MinicTargetInfo *t,const MinicCoreFunction *fn,
     const MinicX86Frame *frame,const MinicCoreInstruction *ins,
     const MinicCoreInlineAsm *info){
-    unsigned int op;size_t bytes,i;bool sign;
+    unsigned int op;size_t bytes,i;
     const MinicCoreStructuredInlineAsmOperand *b=
         ins->value.structured_inline_asm.operands;
-    MinicType type;
     static const char *const mnemonics[]={
        "mov","mov","inc","dec","add","sub","and","or","xor"};
     char suffix;
@@ -1774,14 +1781,8 @@ static bool emit_linux_percpu_gs(FILE *out,const MinicC0Program *p,
               (op==0U?MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT:
                        MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT)))
             return false;
-        type=fn->values[b[i].value].type;
-        if(memory||(i==0U&&op==0U)){
-            if(!minic_type_pointee(type,&type))return false;
-        }
-        if (bytes == 8U && minic_type_is_pointer(type) &&
-            ((op == 0U && i == 1U) || (op == 1U && i == 0U)))
-            checked = 8U;
-        else if(!minic_x86_64_scalar_width(p,t,type,&checked,&sign))
+        if(!x86_asm_operand_width(fn,b[i].value,
+            memory||(i==0U&&op==0U),&checked))
             return false;
         if (checked != bytes)
             return false;
@@ -1814,10 +1815,8 @@ static bool emit_linux_gs_tied_alu(
     static const char *const mnemonics[]={"add","sub","and","or","xor"};
     const MinicCoreStructuredInlineAsmOperand *b=
         ins->value.structured_inline_asm.operands;
-    MinicType v;
     size_t form_width, width = 0U, checked;
     unsigned int form;
-    bool sign;
     if(!out||!p||!t||!fn||!frame||!ins||!info||!b||
        info->has_memory_clobber||info->register_clobber_count||
        ins->value.structured_inline_asm.operand_count != 3U)
@@ -1834,10 +1833,7 @@ static bool emit_linux_gs_tied_alu(
                i==1U?MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT:
                      MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT))
             return false;
-        v=fn->values[vref->value].type;
-        if(i!=2U && !minic_type_pointee(v,&v)) return false;
-        if(i==2U && minic_type_is_pointer(v)) checked=8U;
-        else if(!minic_x86_64_scalar_width(p,t,v,&checked,&sign))
+        if(!x86_asm_operand_width(fn,vref->value,i!=2U,&checked))
             return false;
         if(i==0U)width=checked;
         if(checked!=width|| (checked!=4U&&checked!=8U))
@@ -1983,7 +1979,7 @@ static bool emit_ip_fast_csum(FILE *out, const MinicC0Program *p,
     const MinicCoreInlineAsm *info) {
     const MinicCoreStructuredInlineAsmOperand *b =
         ins->value.structured_inline_asm.operands;
-    MinicType ty; size_t i,width; bool sign;
+    size_t i,width;
     if (!out || !p || !t || !fn || !frame || !ins || !info || !b ||
         info->is_goto || !info->has_memory_clobber ||
         info->register_clobber_count ||
@@ -1996,9 +1992,7 @@ static bool emit_ip_fast_csum(FILE *out, const MinicC0Program *p,
             b[i].kind!=(i<3U ?
                 MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT:
                 MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT))return false;
-        ty=fn->values[b[i].value].type;
-        if (i<3U && !minic_type_pointee(ty,&ty))return false;
-        if(!minic_x86_64_scalar_width(p,t,ty,&width,&sign) ||
+        if(!x86_asm_operand_width(fn,b[i].value,i<3U,&width) ||
            width!=(i==1U || i==3U ? 8U : 4U))return false;
     }
     if(!x86_value_load(out,frame,b[3].value,"%r10") ||
@@ -2037,7 +2031,7 @@ static bool emit_checksum_fold(FILE *out,const MinicC0Program *p,
     const MinicCoreInlineAsm *info){
     const MinicCoreStructuredInlineAsmOperand *b=
         ins->value.structured_inline_asm.operands;
-    MinicType ty;size_t width,i;bool sign;
+    size_t width,i;
     if(!out||!p||!t||!fn||!frame||!ins||!info||!b||
        !minic_x86_64_checksum_fold_template(
             info->template_text,info->template_length)||
@@ -2053,9 +2047,7 @@ static bool emit_checksum_fold(FILE *out,const MinicC0Program *p,
            b[i].kind!=(i==0U?
              MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT:
              MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT))return false;
-        ty=fn->values[b[i].value].type;
-        if(i==0U&&!minic_type_pointee(ty,&ty))return false;
-        if(!minic_x86_64_scalar_width(p,t,ty,&width,&sign)||
+        if(!x86_asm_operand_width(fn,b[i].value,i==0U,&width)||
            width!=4U)return false;
     }
     return x86_value_load(out,frame,b[2].value,"%rax")&&
@@ -2080,9 +2072,8 @@ static bool emit_linux_csum_partial(
         ins->value.structured_inline_asm.operands;
     const size_t count = form == 1U || form == 6U ? 2U : form == 2U ? 6U : 3U;
     size_t i;
-    MinicType type;
+    MinicCoreTypeId core_id;
     size_t width;
-    bool sign;
     if (out == NULL || program == NULL || target == NULL || fn == NULL ||
         frame == NULL || ins == NULL || info == NULL || operand == NULL ||
         form == 0U || info->is_goto || info->register_clobber_count ||
@@ -2098,26 +2089,27 @@ static bool emit_linux_csum_partial(
         if (op->operand_index != i || op->kind != kind ||
             op->value >= fn->value_count || op->early_clobber ||
             op->has_fixed_register_binding) return false;
-        type = fn->values[op->value].type;
-        if (i == 0U || kind == MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT) {
-            if (!minic_type_pointee(type, &type)) return false;
-        }
+        if (!x86_asm_operand_type(fn, op->value,
+            i == 0U || kind == MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT,
+            &core_id)) return false;
         if (form >= 3U && i == 2U) {
-            size_t alignment;
-            if (!minic_type_is_pointer(type) ||
-                !minic_type_pointee(type, &type)) return false;
-            if (minic_type_is_array(type)) {
-                if (!minic_data_layout_type(target->data_layout, program, type,
-                                            &width, &alignment) ||
-                    width != (form == 3U ? 32U : form == 4U ? 16U : 8U))
-                    return false;
-            } else if (!minic_type_unqualified(type, &type) ||
-                       !minic_type_is_char_integer(type)) return false;
+            MinicCoreTypeId nested;
+            const MinicCoreType *leaf;
+            if (!x86_asm_core_pointee(fn, core_id, &nested) ||
+                !(leaf = x86_asm_core_type(fn, nested))) return false;
+            if (leaf->kind == MINIC_CORE_TYPE_ARRAY) {
+                if (!leaf->has_layout ||
+                    leaf->size != (form == 3U ? 32U :
+                                   form == 4U ? 16U : 8U)) return false;
+            } else if (!x86_asm_core_unsigned_integer_width(
+                            fn, nested, 1U) &&
+                       !x86_asm_core_signed_integer_width(fn, nested, 1U))
+                return false;
         } else if (kind == MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT &&
                    form >= 3U && form != 6U) {
-            if (!minic_type_is_pointer(type)) return false;
-        } else if (!minic_x86_64_scalar_width(
-                       program, target, type, &width, &sign) || width != 8U)
+            if (!x86_asm_core_is_kind(fn, core_id, MINIC_CORE_TYPE_POINTER))
+                return false;
+        } else if (!x86_asm_core_width(fn, core_id, &width) || width != 8U)
             return false;
     }
     if (!x86_value_load(out, frame, operand[0].value, "%r11") ||
@@ -2160,7 +2152,7 @@ static bool emit_linux_vmware_hypercall(
         info->template_text, info->template_length) : 0U;
     const MinicCoreStructuredInlineAsmOperand *ops =
         ins->value.structured_inline_asm.operands;
-    size_t i, width; bool sign; MinicType type;
+    size_t i, width;
     if (!form || !out || !program || !target || !fn || !frame || !ins ||
         !info || !ops || info->is_goto ||
         !info->has_memory_clobber || info->register_clobber_count ||
@@ -2172,9 +2164,7 @@ static bool emit_linux_vmware_hypercall(
             ops[i].kind != (output ?
                 MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
                 MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT)) return false;
-        type = fn->values[ops[i].value].type;
-        if (output && !minic_type_pointee(type, &type)) return false;
-        if (!minic_x86_64_scalar_width(program, target, type, &width, &sign) ||
+        if (!x86_asm_operand_width(fn, ops[i].value, output, &width) ||
             width != 4U) return false;
     }
     if (fputs("  pushq %rbx\n", out) == EOF) return false;
@@ -2209,7 +2199,7 @@ static bool emit_linux_vmware_stealclock_alt(
         "-(-((6651f-6641f) < (6652f-6642f)))))";
     const MinicCoreStructuredInlineAsmOperand *b =
         ins->value.structured_inline_asm.operands;
-    size_t i, width; bool sign; MinicType ty;
+    size_t i, width;
     if (!out || !program || !target || !fn || !frame || !ins || !info || !b ||
         !minic_x86_64_linux_vmware_stealclock_alt_form(
             info->template_text, info->template_length) ||
@@ -2222,9 +2212,7 @@ static bool emit_linux_vmware_stealclock_alt(
             b[i].kind != (i < 2U ?
                 MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
                 MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT)) return false;
-        ty = fn->values[b[i].value].type;
-        if (i < 2U && !minic_type_pointee(ty, &ty)) return false;
-        if (!minic_x86_64_scalar_width(program, target, ty, &width, &sign) ||
+        if (!x86_asm_operand_width(fn, b[i].value, i<2U, &width) ||
             width != 4U) return false;
     }
     if (fputs("  pushq %rbx\n", out) == EOF) return false;
@@ -2267,7 +2255,8 @@ static bool emit_linux_legacy_fnsave(
     const MinicCoreInlineAsm *info) {
     const MinicCoreStructuredInlineAsmOperand *ops =
         ins->value.structured_inline_asm.operands;
-    MinicType image; size_t size, alignment;
+    MinicCoreTypeId image_id;
+    const MinicCoreType *image;
     if (!out || !program || !target || !fn || !frame || !ins || !info ||
         !ops || !minic_x86_64_linux_legacy_fnsave_form(
             info->template_text, info->template_length) ||
@@ -2277,9 +2266,9 @@ static bool emit_linux_legacy_fnsave(
         ops[0].operand_index || ops[0].value >= fn->value_count ||
         ops[0].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT ||
         ops[0].has_fixed_register_binding || ops[0].early_clobber ||
-        !minic_type_pointee(fn->values[ops[0].value].type, &image) ||
-        !minic_data_layout_type(minic_target_info_data_layout(target),
-            program, image, &size, &alignment) || size < 108U) return false;
+        !x86_asm_operand_type(fn, ops[0].value, true, &image_id) ||
+        !(image = x86_asm_core_type(fn, image_id)) ||
+        !image->has_layout || image->size < 108U) return false;
     return x86_value_load(out, frame, ops[0].value, "%r11") &&
         fputs("  fnsave (%r11)\n  fwait\n", out) != EOF;
 }
@@ -2323,7 +2312,7 @@ static bool emit_linux_efi_kernel_transfer(
         ops[0].has_fixed_register_binding ||
         ops[1].has_fixed_register_binding ||
         ops[0].early_clobber || ops[1].early_clobber ||
-        !x86_asm_u64_type(fn->values[ops[0].value].type) ||
+        !x86_asm_operand_integer(fn, ops[0].value, false, 8U, 0) ||
         !minic_core_function_value_is_kind(fn, ops[1].value, MINIC_CORE_TYPE_POINTER)) return false;
     /* Incoming RSI is independent of the branch destination and must be
      * materialized before we load R11 with the kernel's entry address. */
@@ -2348,7 +2337,7 @@ static bool emit_linux_msr(FILE *out,const MinicC0Program *program,
     static const char *const input_registers[]={"%rcx","%rax","%rdx"};
     static const char *const output_registers32[]={"%eax","%edx"};
     static const char *const output_registers64[]={"%rax","%rdx"};
-    MinicType ty;size_t width,i;bool sign;
+    size_t width,i;
     if(!out||!program||!target||!fn||!frame||!ins||!info||!ops||
        !form||!info->is_volatile||info->is_goto||
        info->register_clobber_count||
@@ -2364,9 +2353,7 @@ static bool emit_linux_msr(FILE *out,const MinicC0Program *program,
                ops[i].kind!=(output?
                  MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT:
                  MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT))return false;
-            ty=fn->values[ops[i].value].type;
-            if(output && !minic_type_pointee(ty,&ty))return false;
-            if(!minic_x86_64_scalar_width(program,target,ty,&width,&sign) ||
+            if(!x86_asm_operand_width(fn,ops[i].value,output,&width) ||
                width!=(form==3U && output && i!=0U?8U:4U))return false;
         }
         for(i=0U;i<4U-outputs;++i)
@@ -2402,12 +2389,10 @@ static bool emit_linux_msr(FILE *out,const MinicC0Program *program,
                MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT:
                MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT))return false;
         if(output){
-            if(!minic_type_pointee(fn->values[ops[i].value].type,&ty)||
-               !minic_x86_64_scalar_width(program,target,ty,&width,&sign)||
+            if(!x86_asm_operand_width(fn,ops[i].value,true,&width)||
                (width!=4U&&width!=8U))return false;
-        }else if(!minic_x86_64_scalar_width(
-                 program,target,fn->values[ops[i].value].type,
-                 &width,&sign)||width!=4U)return false;
+        }else if(!x86_asm_operand_width(fn,ops[i].value,false,&width)||
+                  width!=4U)return false;
     }
     for(i=0U;i<count-outputs;++i)
         if(!x86_value_load(out,frame,ops[outputs+i].value,
@@ -2424,8 +2409,7 @@ static bool emit_linux_msr(FILE *out,const MinicC0Program *program,
        (form==1U||form==5U)?"rdmsr":"wrmsr",
        form==5U?13U:form==6U?12U:form==1U?9U:8U)<0)return false;
     for(i=0U;i<outputs;++i){
-        if(!minic_type_pointee(fn->values[ops[i].value].type,&ty)||
-           !minic_x86_64_scalar_width(program,target,ty,&width,&sign)||
+        if(!x86_asm_operand_width(fn,ops[i].value,true,&width)||
            !x86_value_load(out,frame,ops[i].value,"%r11")||
            fprintf(out,"  %s %s, (%%r11)\n",
             width==4U?"movl":"movq",
@@ -2446,7 +2430,7 @@ static bool emit_hweight_alternative(FILE *out,const MinicC0Program *p,
         info->template_text,info->template_length);
     const MinicCoreStructuredInlineAsmOperand *b=
         ins->value.structured_inline_asm.operands;
-    MinicType ty;size_t bytes;bool sign;
+    size_t bytes;
     if(!out||!p||!t||!fn||!frame||!ins||!info||!b||
        (w!=4U&&w!=8U)||info->is_goto||
        info->register_clobber_count||info->has_memory_clobber||
@@ -2457,10 +2441,8 @@ static bool emit_hweight_alternative(FILE *out,const MinicC0Program *p,
        b[0].early_clobber||b[1].early_clobber||
        b[0].kind!=MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT||
        b[1].kind!=MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT||
-       !minic_type_pointee(fn->values[b[0].value].type,&ty)||
-       !minic_x86_64_scalar_width(p,t,ty,&bytes,&sign)||bytes!=w||
-       !minic_x86_64_scalar_width(p,t,fn->values[b[1].value].type,
-          &bytes,&sign)||bytes!=w)return false;
+       !x86_asm_operand_width(fn,b[0].value,true,&bytes)||bytes!=w||
+       !x86_asm_operand_width(fn,b[1].value,false,&bytes)||bytes!=w)return false;
     if(!x86_value_load(out,frame,b[1].value,"%rdi"))return false;
     if(fprintf(out,
         "661:\n"
@@ -2498,7 +2480,7 @@ static bool emit_x86_counter(FILE *out,const MinicC0Program *p,
     const size_t count=ins->value.structured_inline_asm.operand_count;
     static const char *const r32[]={"%eax","%edx"};
     static const char *const r64[]={"%rax","%rdx"};
-    MinicType ty;size_t w,i;bool sign;
+    size_t w,i;
     if(!out||!p||!t||!fn||!frame||!info||!ins||!b||!f||
        !info->is_volatile||info->is_goto||
        info->has_memory_clobber||
@@ -2513,11 +2495,10 @@ static bool emit_x86_counter(FILE *out,const MinicC0Program *p,
              MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT:
              MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT))return false;
         if(i<2U){
-            if(!minic_type_pointee(fn->values[b[i].value].type,&ty)||
-               !minic_x86_64_scalar_width(p,t,ty,&w,&sign)||
+            if(!x86_asm_operand_width(fn,b[i].value,true,&w)||
                (w!=4U&&w!=8U))return false;
-        }else if(!minic_x86_64_scalar_width(
-                 p,t,fn->values[b[i].value].type,&w,&sign)||w!=4U)return false;
+        }else if(!x86_asm_operand_width(fn,b[i].value,false,&w)||
+                  w!=4U)return false;
     }
     if((f==2U||f==5U)&&
        !x86_value_load(out,frame,b[2].value,"%rcx"))return false;
@@ -2530,8 +2511,7 @@ static bool emit_x86_counter(FILE *out,const MinicC0Program *p,
     } else if (fputs(f==1U?"  rdtsc\n":f==2U?"  rdpmc\n":
                    f==5U?"  xgetbv\n":"  rdtscp\n",out)==EOF) return false;
     for(i=0U;i<2U;++i){
-        if(!minic_type_pointee(fn->values[b[i].value].type,&ty)||
-           !minic_x86_64_scalar_width(p,t,ty,&w,&sign)||
+        if(!x86_asm_operand_width(fn,b[i].value,true,&w)||
            !x86_value_load(out,frame,b[i].value,"%r11")||
            fprintf(out,"  %s %s, (%%r11)\n",
               w==4U?"movl":"movq",w==4U?r32[i]:r64[i])<0)return false;
@@ -2701,9 +2681,7 @@ static bool emit_linux_local_xadd(
     const char *suffix, *source_reg;
     const MinicCoreStructuredInlineAsmOperand *b =
         ins->value.structured_inline_asm.operands;
-    MinicType type;
     size_t size, i;
-    bool sign;
     if (!out || !program || !target || !fn || !frame || !b || !width ||
         (plan.kind != MINIC_X86_GS_ATOMIC_XADD_SMP &&
          plan.kind != MINIC_X86_GS_ATOMIC_XADD_LOCAL &&
@@ -2721,9 +2699,9 @@ static bool emit_linux_local_xadd(
             b[i].kind != (i == 0U
                 ? MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE
                 : MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE) ||
-            !minic_type_pointee(fn->values[b[i].value].type, &type) ||
-            !minic_x86_64_scalar_width(program, target, type, &size, &sign) ||
-            size != width || !minic_type_is_integer(type))
+            !x86_asm_operand_width(fn, b[i].value, true, &size) ||
+            size != width ||
+            !x86_asm_operand_integer(fn, b[i].value, true, width, -1))
             return false;
     }
     /* r8 keeps the register C-lvalue address and r11 the memory address.
@@ -2760,8 +2738,6 @@ static bool emit_linux_gs_cmpxchg(
     const bool loop = plan.kind == MINIC_X86_GS_ATOMIC_CMPXCHG_RETRY;
     const char *suffix, *new_register, *old_register;
     size_t i, actual;
-    bool sign;
-    MinicType type;
     if (!out || !program || !target || !fn || !frame || !bind ||
         !width || (plan.kind != MINIC_X86_GS_ATOMIC_CMPXCHG &&
                    plan.kind != MINIC_X86_GS_ATOMIC_CMPXCHG_RETRY) ||
@@ -2779,12 +2755,12 @@ static bool emit_linux_gs_cmpxchg(
                     ? MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE
                     : MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT))
             return false;
-        type = fn->values[bind[i].value].type;
-        if (i != 2U && !minic_type_pointee(type, &type)) return false;
-        if (width == 8U && i == 1U && minic_type_is_pointer(type))
-            actual = 8U;
-        else if (!minic_type_is_integer(type) ||
-                 !minic_x86_64_scalar_width(program, target, type, &actual, &sign))
+        if (!x86_asm_operand_width(fn, bind[i].value, i!=2U, &actual) ||
+            !(x86_asm_operand_kind(fn, bind[i].value, i!=2U,
+                                   MINIC_CORE_TYPE_INTEGER) ||
+              (width==8U && i==1U &&
+               x86_asm_operand_kind(fn, bind[i].value, true,
+                                    MINIC_CORE_TYPE_POINTER))))
             return false;
         if (actual != width)
             return false;
@@ -2819,9 +2795,7 @@ static bool emit_linux_rep_stos(
         info->template_text, info->template_length);
     const char *opcode = width == 2U ? "rep stosw" :
                          width == 4U ? "rep stosl" : "rep stosq";
-    MinicType type;
     size_t checked, i;
-    bool sign;
     if (!out || !program || !target || !fn || !frame || !bind || !width ||
         !info->is_volatile || info->is_goto || !info->has_memory_clobber ||
         info->register_clobber_count ||
@@ -2834,13 +2808,12 @@ static bool emit_linux_rep_stos(
                 ? MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT
                 : MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT))
             return false;
-        type = fn->values[bind[i].value].type;
-        if (i < 2U && !minic_type_pointee(type, &type)) return false;
-        if (i == 3U) {
-            if (!minic_type_is_pointer(type)) return false;
-            checked = 8U;
-        } else if (!minic_type_is_integer(type) ||
-                   !minic_x86_64_scalar_width(program, target, type, &checked, &sign))
+        if (!x86_asm_operand_width(fn, bind[i].value, i<2U, &checked) ||
+            (i == 3U ?
+                !x86_asm_operand_kind(fn, bind[i].value, false,
+                                      MINIC_CORE_TYPE_POINTER) :
+                !x86_asm_operand_kind(fn, bind[i].value, i<2U,
+                                      MINIC_CORE_TYPE_INTEGER)))
             return false;
         if (checked != (i == 2U ? width : 8U)) return false;
     }
@@ -3190,9 +3163,8 @@ static bool emit_linux_lock_bitcc(
         info->template_text, info->template_length);
     const size_t mi = form == 1U ? 0U : 1U;
     const size_t fi = 1U-mi;
-    MinicType mem, flag;
+    MinicCoreTypeId flag_id;
     size_t width, input_width, i;
-    bool sign;
     if (!out || !program || !target || !fn || !frame || !ins || !info || !b ||
         !form || !info->is_volatile || info->is_goto ||
         !info->has_memory_clobber || info->register_clobber_count ||
@@ -3206,13 +3178,11 @@ static bool emit_linux_lock_bitcc(
                 : i == fi ? MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT
                           : MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT))
             return false;
-    if (!minic_type_pointee(fn->values[b[mi].value].type, &mem) ||
-        !minic_type_pointee(fn->values[b[fi].value].type, &flag) ||
-        !minic_type_equal(flag, minic_type_bool()) ||
-        !minic_x86_64_scalar_width(program,target,mem,&width,&sign) ||
+    if (!x86_asm_operand_width(fn,b[mi].value,true,&width) ||
+        !x86_asm_operand_type(fn,b[fi].value,true,&flag_id) ||
+        !x86_asm_core_bool(fn,flag_id) ||
         width != (form == 1U ? 4U : 1U) ||
-        !minic_x86_64_scalar_width(program,target,
-            fn->values[b[2].value].type,&input_width,&sign) ||
+        !x86_asm_operand_width(fn,b[2].value,false,&input_width) ||
         (form == 1U ? input_width != 4U : input_width != 1U))
         return false;
     if (!x86_value_load(out,frame,b[2].value,"%r10") ||
@@ -3502,8 +3472,6 @@ static bool emit_linux_cmpxchg128(
     const size_t at = alt ? 0U : 1U;
     const size_t count = alt ? 5U : 6U;
     size_t i, width;
-    bool sign;
-    MinicType pointee;
     if (!out || !program || !target || !fn || !frame || !info || !b || !form ||
         !info->is_volatile || info->is_goto || !info->has_memory_clobber ||
         info->register_clobber_count != (alt ? 1U : 0U) ||
@@ -3519,16 +3487,10 @@ static bool emit_linux_cmpxchg128(
             b[i].kind != kind || b[i].early_clobber ||
             b[i].has_fixed_register_binding)
             return false;
-        pointee = fn->values[b[i].value].type;
-        if (i<at+3U && !minic_type_pointee(pointee, &pointee))
-            return false;
         if (i==at) {
-            if (!minic_type_is_integer(pointee) ||
-                !minic_target_info_sizeof_type(target, program, pointee, &width) ||
-                width!=16U)
+            if (!x86_asm_operand_integer(fn,b[i].value,true,16U,-1))
                 return false;
-        } else if (!minic_x86_64_scalar_width(
-                       program, target, pointee, &width, &sign) ||
+        } else if (!x86_asm_operand_width(fn,b[i].value,i<at+3U,&width) ||
                    width != (!alt && i==0U ? 1U : 8U))
             return false;
     }
@@ -3767,9 +3729,7 @@ static bool emit_nospec_mask(
     const MinicCoreInstruction *ins, const MinicCoreInlineAsm *info) {
     const MinicCoreStructuredInlineAsmOperand *b =
         ins->value.structured_inline_asm.operands;
-    MinicType output_type;
-    size_t width, index_width, output_width, i;
-    bool sign, index_signed;
+    size_t width, index_width, i;
     if (!out || !program || !target || !fn || !frame || !ins || !info ||
         ins->value.structured_inline_asm.operand_count != 3U ||
         !b || !info->is_volatile || info->is_goto || info->has_memory_clobber ||
@@ -3784,16 +3744,9 @@ static bool emit_nospec_mask(
                 MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
                 MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT))
             return false;
-    if (!minic_type_pointee(fn->values[b[0].value].type, &output_type) ||
-        !minic_type_equal(output_type, minic_type_unsigned_long()) ||
-        !minic_x86_64_scalar_width(
-            program, target, output_type, &output_width, &sign) ||
-        output_width != 8U ||
-        !minic_x86_64_scalar_width(
-            program, target, fn->values[b[1].value].type, &width, &sign) ||
-        !minic_x86_64_scalar_width(
-            program, target, fn->values[b[2].value].type,
-            &index_width, &index_signed) ||
+    if (!x86_asm_operand_integer(fn,b[0].value,true,8U,0) ||
+        !x86_asm_operand_width(fn,b[1].value,false,&width) ||
+        !x86_asm_operand_width(fn,b[2].value,false,&index_width) ||
         width != index_width || (width != 4U && width != 8U))
         return false;
     if (!x86_value_load(out, frame, b[1].value, "%r10") ||
@@ -3817,9 +3770,7 @@ static bool emit_percpu_stable_u64(
     const MinicCoreInstruction *ins, const MinicCoreInlineAsm *info) {
     const MinicCoreStructuredInlineAsmOperand *b =
         ins->value.structured_inline_asm.operands;
-    MinicType type;
     size_t width;
-    bool sign;
     if (!out || !program || !target || !fn || !frame || !ins || !info ||
         info->is_goto || info->has_memory_clobber ||
         info->register_clobber_count != 0U ||
@@ -3832,9 +3783,7 @@ static bool emit_percpu_stable_u64(
         b[0].has_fixed_register_binding || b[1].has_fixed_register_binding ||
         b[0].early_clobber || b[1].early_clobber ||
         b[0].value >= fn->value_count || b[1].value >= fn->value_count ||
-        !minic_type_pointee(fn->values[b[0].value].type, &type) ||
-        !minic_x86_64_scalar_width(
-            program, target, type, &width, &sign) ||
+        !x86_asm_operand_width(fn,b[0].value,true,&width) ||
         width != minic_x86_64_asm_percpu_stable_width(
             info->template_text, info->template_length) ||
         !minic_core_function_value_is_kind(fn, b[1].value, MINIC_CORE_TYPE_POINTER))
@@ -3856,13 +3805,12 @@ static bool emit_percpu_stable_u64(
     }
 }
 static bool emit_muldiv_u64(
-    FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
+    FILE *out,
     const MinicCoreFunction *fn, const MinicX86Frame *frame,
     const MinicCoreInstruction *ins, const MinicCoreInlineAsm *info) {
     const MinicCoreStructuredInlineAsmOperand *b =
         ins->value.structured_inline_asm.operands;
-    size_t i, bytes;
-    bool sign;
+    size_t i;
     if (ins->value.structured_inline_asm.operand_count != 4U ||
         info->register_clobber_count != 1U || !info->register_clobbers ||
         !clobber_is(&info->register_clobbers[0], "rdx") ||
@@ -3870,16 +3818,13 @@ static bool emit_muldiv_u64(
         !minic_x86_64_asm_muldiv_template(info->template_text, info->template_length))
         return false;
     for (i = 0U; i < 4U; ++i) {
-        MinicType type;
         if (b[i].operand_index != i || b[i].value >= fn->value_count ||
             b[i].has_fixed_register_binding || b[i].early_clobber ||
             b[i].kind != (i == 0U ? MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT
                                    : MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT))
             return false;
-        type = fn->values[b[i].value].type;
-        if (i == 0U && !minic_type_pointee(type, &type)) return false;
-        if (!minic_x86_64_scalar_width(program, target, type, &bytes, &sign) ||
-            bytes != 8U || !minic_type_is_integer(type)) return false;
+        if (!x86_asm_operand_integer(fn,b[i].value,i==0U,8U,-1))
+            return false;
     }
     /* Select register alternatives for GNU rm, never RDX. */
     if (!x86_value_load(out, frame, b[2].value, "%r10") ||
@@ -3893,7 +3838,7 @@ static bool emit_muldiv_u64(
 }
 
 static bool emit_memory_clobber_matched(
-    FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
+    FILE *out,
     const MinicCoreFunction *fn, const MinicX86Frame *frame,
     const MinicCoreInstruction *ins, const MinicCoreInlineAsm *info) {
     static const char *const regs[] = {"%r8", "%r9", "%r10", "%rcx"};
@@ -3903,26 +3848,27 @@ static bool emit_memory_clobber_matched(
     const MinicCoreStructuredInlineAsmOperand *b =
         ins->value.structured_inline_asm.operands;
     size_t i, bytes;
-    bool sign;
+    MinicCoreTypeId core_id;
     if (outputs == 0U || !info->has_memory_clobber ||
         info->register_clobber_count != 0U ||
         !minic_x86_64_asm_matched_template(info->template_text,
                                           info->template_length, outputs))
         return false;
     for (i = 0U; i < count; ++i) {
-        MinicType type;
         if (b[i].value >= fn->value_count || b[i].operand_index != i ||
             b[i].has_fixed_register_binding || b[i].early_clobber)
             return false;
-        type = fn->values[b[i].value].type;
         if (i < outputs) {
             if (b[i].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT ||
-                !minic_type_pointee(type, &type)) return false;
+                !x86_asm_operand_type(fn,b[i].value,true,&core_id))
+                return false;
         } else if (b[i].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT)
             return false;
-        if (!minic_x86_64_scalar_width(program, target, type, &bytes, &sign) ||
+        if (!x86_asm_operand_width(fn,b[i].value,i<outputs,&bytes) ||
             (bytes != 8U &&
-             !(i >= outputs && bytes == 4U && minic_type_is_integer(type))))
+             !(i >= outputs && bytes == 4U &&
+               x86_asm_operand_kind(fn,b[i].value,false,
+                                    MINIC_CORE_TYPE_INTEGER))))
             return false;
     }
     for (i = 0U; i < count-outputs; ++i)
@@ -4042,8 +3988,7 @@ static bool emit_linux_segment_load_extable(
         op[0].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT ||
         op[0].value >= fn->value_count ||
         op[0].early_clobber || op[0].has_fixed_register_binding ||
-        !minic_type_equal(fn->values[op[0].value].type,
-            minic_type_unsigned_short()))
+        !x86_asm_operand_integer(fn, op[0].value, false, 2U, 0))
         return false;
     if (!x86_value_load(out, frame, op[0].value, "%rax")) return false;
     /* Numeric local labels are re-entrant across inlined callers; each
@@ -4067,7 +4012,6 @@ static bool emit_linux_lkgs_extable(
     const MinicCoreInstruction *ins, const MinicCoreInlineAsm *info) {
     const MinicCoreStructuredInlineAsmOperand *b =
         ins->value.structured_inline_asm.operands;
-    MinicType pointee;
     if (!out || !fn || !frame || !info ||
         !minic_x86_64_linux_lkgs_extable_form(
             info->template_text, info->template_length) ||
@@ -4078,8 +4022,7 @@ static bool emit_linux_lkgs_extable(
         b[0].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE ||
         b[0].early_clobber || b[0].has_fixed_register_binding ||
         b[0].value >= fn->value_count ||
-        !minic_type_pointee(fn->values[b[0].value].type, &pointee) ||
-        !minic_type_equal(pointee, minic_type_unsigned_short()))
+        !x86_asm_operand_integer(fn, b[0].value, true, 2U, 0))
         return false;
     if (!x86_value_load(out, frame, b[0].value, "%r11") ||
         fputs("  movzwl (%r11), %edi\n"
@@ -4141,7 +4084,6 @@ static bool emit_linux_segment_register_extable(
             info->template_text, info->template_length);
     const MinicCoreStructuredInlineAsmOperand *b =
         ins->value.structured_inline_asm.operands;
-    MinicType pointee;
     if (!out || !fn || !frame || !form || !info->is_volatile ||
         info->is_goto || !info->has_memory_clobber ||
         info->register_clobber_count ||
@@ -4150,8 +4092,7 @@ static bool emit_linux_segment_register_extable(
         b[0].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE ||
         b[0].value >= fn->value_count || b[0].early_clobber ||
         b[0].has_fixed_register_binding ||
-        !minic_type_pointee(fn->values[b[0].value].type, &pointee) ||
-        !minic_type_equal(pointee, minic_type_unsigned_short()))
+        !x86_asm_operand_integer(fn, b[0].value, true, 2U, 0))
         return false;
     /* GNU %k0 names the 32-bit view of the selected GPR. Choose EAX and
      * encode RAX=0 in type-17 extable metadata; never mark a different
@@ -4191,9 +4132,7 @@ static bool emit_linux_kernel_nofault_goto(
                       width == 4U ? "%eax" : "%rax";
     const MinicCoreStructuredInlineAsmOperand *b =
         ins->value.structured_inline_asm.operands;
-    MinicType type, carrier;
     size_t bytes;
-    bool sign;
     if (!out || !program || !target || !fn || !frame || !form ||
         !info->is_goto || !info->is_volatile || !info->has_memory_clobber ||
         info->register_clobber_count ||
@@ -4208,12 +4147,10 @@ static bool emit_linux_kernel_nofault_goto(
             MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
             MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT) ||
         b[1].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT ||
-        !minic_type_pointee(fn->values[b[1].value].type, &carrier) ||
-        !minic_type_is_record(carrier))
+        !x86_asm_operand_kind(fn, b[1].value, true,
+            MINIC_CORE_TYPE_RECORD))
         return false;
-    type = fn->values[b[0].value].type;
-    if (load && !minic_type_pointee(type, &type)) return false;
-    if (!minic_x86_64_scalar_width(program, target, type, &bytes, &sign) ||
+    if (!x86_asm_operand_width(fn, b[0].value, load, &bytes) ||
         bytes != width)
         return false;
     if (!x86_value_load(out, frame, b[1].value, "%r10")) return false;
@@ -4242,7 +4179,6 @@ static bool emit_linux_rep_movsb_alternative(
     const MinicCoreStructuredInlineAsmOperand *b =
         ins->value.structured_inline_asm.operands;
     const MinicCoreFixedRegisterBinding *stack;
-    MinicType value;
     size_t i;
     if (!out || !fn || !frame || !info ||
         !minic_x86_64_linux_rep_movsb_alternative_form(
@@ -4258,12 +4194,13 @@ static bool emit_linux_rep_movsb_alternative(
                 MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT :
                 MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE) ||
             b[i].early_clobber || b[i].value >= fn->value_count ||
-            (i != 3U && !minic_type_pointee(
-                fn->values[b[i].value].type, &value)) ||
-            (i == 0U || i == 3U ?
-                !minic_type_equal(i == 3U ? fn->values[b[i].value].type : value,
-                                  minic_type_unsigned_long()) :
-                !minic_type_is_pointer(value)) ||
+            (i == 0U && !x86_asm_operand_integer(fn, b[i].value,
+                                                 true, 8U, 0)) ||
+            (i == 3U && !x86_asm_operand_integer(fn, b[i].value,
+                                                 false, 8U, 0)) ||
+            ((i == 1U || i == 2U) &&
+                !x86_asm_operand_kind(fn, b[i].value,
+                    true, MINIC_CORE_TYPE_POINTER)) ||
             b[i].has_fixed_register_binding != (i == 3U))
             return false;
     }
@@ -4325,7 +4262,6 @@ static bool emit_linux_load_unaligned_zeropad(
     const MinicCoreInstruction *ins, const MinicCoreInlineAsm *info) {
     const MinicCoreStructuredInlineAsmOperand *b =
         ins->value.structured_inline_asm.operands;
-    MinicType type;
     if (!out || !fn || !frame || !info ||
         !minic_x86_64_linux_load_unaligned_zeropad_form(
             info->template_text, info->template_length) ||
@@ -4338,10 +4274,8 @@ static bool emit_linux_load_unaligned_zeropad(
         b[0].value >= fn->value_count || b[1].value >= fn->value_count ||
         b[0].early_clobber || b[1].early_clobber ||
         b[0].has_fixed_register_binding || b[1].has_fixed_register_binding ||
-        !minic_type_pointee(fn->values[b[0].value].type, &type) ||
-        !minic_type_equal(type, minic_type_unsigned_long()) ||
-        !minic_type_pointee(fn->values[b[1].value].type, &type) ||
-        !minic_type_equal(type, minic_type_unsigned_long()))
+        !x86_asm_operand_integer(fn, b[0].value, true, 8U, 0) ||
+        !x86_asm_operand_integer(fn, b[1].value, true, 8U, 0))
         return false;
     return x86_value_load(out, frame, b[1].value, "%r10") &&
            fputs(
@@ -4428,7 +4362,6 @@ static bool emit_linux_rep_stosb_alternative(
     const MinicCoreStructuredInlineAsmOperand *b =
         ins->value.structured_inline_asm.operands;
     const MinicCoreFixedRegisterBinding *stack;
-    MinicType type;
     size_t i;
     if (!out || !fn || !frame || !info ||
         !minic_x86_64_linux_rep_stosb_alternative_form(
@@ -4446,14 +4379,13 @@ static bool emit_linux_rep_stosb_alternative(
             b[i].has_fixed_register_binding != (i == 2U))
             return false;
         if (i < 2U) {
-            if (!minic_type_pointee(fn->values[b[i].value].type, &type) ||
-                (i == 0U ?
-                    !minic_type_equal(type, minic_type_unsigned_long()) :
-                    !minic_type_is_pointer(type)))
+            if (i == 0U ?
+                    !x86_asm_operand_integer(fn,b[i].value,true,8U,0) :
+                    !x86_asm_operand_kind(fn,b[i].value,true,
+                        MINIC_CORE_TYPE_POINTER))
                 return false;
         } else if (i == 2U) {
-            if (!minic_type_equal(fn->values[b[i].value].type,
-                                  minic_type_unsigned_long()))
+            if (!x86_asm_operand_integer(fn,b[i].value,false,8U,0))
                 return false;
         } else if (!minic_core_function_value_is_kind(fn, b[i].value, MINIC_CORE_TYPE_INTEGER)) {
             return false;
@@ -4533,7 +4465,6 @@ static bool emit_linux_fpu_user_frame(
     };
     const MinicCoreStructuredInlineAsmOperand *b =
         ins->value.structured_inline_asm.operands;
-    MinicType type, memory_type;
     size_t i;
     if (!out || !fn || !frame || !info || !form ||
         !info->is_volatile || info->is_goto || !info->has_memory_clobber ||
@@ -4549,12 +4480,9 @@ static bool emit_linux_fpu_user_frame(
                 i == 2U ? MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT :
                           MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT))
             return false;
-    if (!minic_type_pointee(fn->values[b[0].value].type, &type) ||
-        !minic_type_equal(type, minic_type_int()) ||
-        !minic_type_pointee(fn->values[b[1].value].type, &memory_type) ||
-        !minic_type_is_record(memory_type) ||
-        !minic_type_pointee(fn->values[b[3].value].type, &type) ||
-        !minic_type_equal(type, memory_type) ||
+    if (!x86_asm_operand_integer(fn, b[0].value, true, 4U, 1) ||
+        !x86_asm_operand_kind(fn, b[1].value, true, MINIC_CORE_TYPE_RECORD) ||
+        !x86_asm_operand_same_type(fn,b[1].value,true,b[3].value,true) ||
         !minic_core_function_value_is_kind(fn, b[2].value, MINIC_CORE_TYPE_INTEGER))
         return false;
     if (!x86_value_load(out, frame, b[2].value, "%rax") ||
@@ -4587,7 +4515,6 @@ static bool emit_linux_task_size_alt(
     static const uint64_t expected[] = {
         UINT64_C(0), UINT64_C(0x7ffffffff000), UINT64_C(0xfffffffffff000)
     };
-    MinicType output_type;
     size_t i;
     if (!out || !fn || !frame || !info ||
         !minic_x86_64_linux_task_size_alt_form(
@@ -4599,8 +4526,7 @@ static bool emit_linux_task_size_alt(
         b[0].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT ||
         b[0].value >= fn->value_count || b[0].early_clobber ||
         b[0].has_fixed_register_binding ||
-        !minic_type_pointee(fn->values[b[0].value].type, &output_type) ||
-        !minic_type_equal(output_type, minic_type_unsigned_long())) return false;
+        !x86_asm_operand_integer(fn, b[0].value, true, 8U, 0)) return false;
     for (i = 0U; i < 3U; ++i) {
         const MinicCoreInstruction *constant;
         const MinicCoreValueId id = b[i + 1U].value;
@@ -4717,7 +4643,6 @@ static bool emit_linux_fpu_kernel_restore(
         info->template_text, info->template_length);
     const MinicCoreStructuredInlineAsmOperand *b =
         ins->value.structured_inline_asm.operands;
-    MinicType output_type, input_type;
     if (!out || !fn || !frame || !info || form == 0U ||
         form > sizeof(opcodes)/sizeof(opcodes[0]) ||
         !info->is_volatile || info->is_goto || !info->has_memory_clobber ||
@@ -4728,10 +4653,9 @@ static bool emit_linux_fpu_kernel_restore(
         b[0].value >= fn->value_count || b[1].value >= fn->value_count ||
         b[0].has_fixed_register_binding || b[1].has_fixed_register_binding ||
         b[0].early_clobber || b[1].early_clobber ||
-        !minic_type_pointee(fn->values[b[0].value].type, &output_type) ||
-        !minic_type_pointee(fn->values[b[1].value].type, &input_type) ||
-        !minic_type_is_record(input_type) ||
-        !minic_type_equal(output_type, input_type)) return false;
+        !x86_asm_operand_kind(fn,b[1].value,true,MINIC_CORE_TYPE_RECORD) ||
+        !x86_asm_operand_same_type(fn,b[0].value,true,b[1].value,true))
+        return false;
     return x86_value_load(out, frame, b[1].value, "%r10") &&
         fprintf(out, "1: %s (%%r10)\n2:\n", opcodes[form - 1U]) >= 0 &&
         fputs("  .pushsection \"__ex_table\",\"a\"\n"
@@ -4749,7 +4673,6 @@ static bool emit_linux_fxrstor_safe(
         info->template_text, info->template_length);
     const MinicCoreStructuredInlineAsmOperand *b =
         ins->value.structured_inline_asm.operands;
-    MinicType type, mem;
     size_t i;
     if (!out || !fn || !frame || !info || !form ||
         !info->is_volatile || info->is_goto || !info->has_memory_clobber ||
@@ -4765,12 +4688,9 @@ static bool emit_linux_fxrstor_safe(
                 i == 2U ? MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT :
                           MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT))
             return false;
-    if (!minic_type_pointee(fn->values[b[0].value].type, &type) ||
-        !minic_type_equal(type, minic_type_int()) ||
-        !minic_type_pointee(fn->values[b[1].value].type, &mem) ||
-        !minic_type_is_record(mem) ||
-        !minic_type_pointee(fn->values[b[3].value].type, &type) ||
-        !minic_type_equal(type, mem) ||
+    if (!x86_asm_operand_integer(fn, b[0].value, true, 4U, 1) ||
+        !x86_asm_operand_kind(fn,b[1].value,true,MINIC_CORE_TYPE_RECORD) ||
+        !x86_asm_operand_same_type(fn,b[1].value,true,b[3].value,true) ||
         !minic_core_function_value_is_kind(fn, b[2].value, MINIC_CORE_TYPE_INTEGER))
         return false;
     return x86_value_load(out, frame, b[2].value, "%rax") &&
@@ -4811,7 +4731,6 @@ static bool emit_linux_xstate_fault(
         MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT,
         MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT
     };
-    MinicType type, memory_type;
     size_t i;
     if (!out || !fn || !frame || !info || !form ||
         !info->is_volatile || info->is_goto || !info->has_memory_clobber ||
@@ -4823,11 +4742,9 @@ static bool emit_linux_xstate_fault(
             b[i].early_clobber || b[i].has_fixed_register_binding ||
             b[i].kind != kinds[i])
             return false;
-    if (!minic_type_pointee(fn->values[b[0].value].type, &type) ||
-        !minic_type_equal(type, minic_type_int()) ||
+    if (!x86_asm_operand_integer(fn,b[0].value,true,4U,1) ||
         !minic_core_function_value_is_kind(fn, b[1].value, MINIC_CORE_TYPE_POINTER) ||
-        !minic_type_pointee(fn->values[b[2].value].type, &memory_type) ||
-        !minic_type_is_record(memory_type) ||
+        !x86_asm_operand_kind(fn,b[2].value,true,MINIC_CORE_TYPE_RECORD) ||
         !minic_core_function_value_is_kind(fn, b[3].value, MINIC_CORE_TYPE_INTEGER) ||
         !minic_core_function_value_is_kind(fn, b[4].value, MINIC_CORE_TYPE_INTEGER))
         return false;
@@ -4858,7 +4775,6 @@ static bool emit_linux_xrstor_alternative(
         MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT,
         MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT
     };
-    MinicType type;
     size_t i;
     if (!out || !fn || !frame || !info ||
         !minic_x86_64_linux_xrstor_alternative_form(
@@ -4873,8 +4789,7 @@ static bool emit_linux_xrstor_alternative(
             b[i].kind != kinds[i])
             return false;
     if (!minic_core_function_value_is_kind(fn, b[0].value, MINIC_CORE_TYPE_POINTER) ||
-        !minic_type_pointee(fn->values[b[1].value].type, &type) ||
-        !minic_type_is_record(type) ||
+        !x86_asm_operand_kind(fn,b[1].value,true,MINIC_CORE_TYPE_RECORD) ||
         !minic_core_function_value_is_kind(fn, b[2].value, MINIC_CORE_TYPE_INTEGER) ||
         !minic_core_function_value_is_kind(fn, b[3].value, MINIC_CORE_TYPE_INTEGER))
         return false;
@@ -4923,7 +4838,6 @@ static bool emit_linux_xsave_triple_alternative(
         MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT,
         MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT
     };
-    MinicType type, memory_type;
     size_t i;
     if (!out || !fn || !frame || !info ||
         !minic_x86_64_linux_xsave_triple_alternative_form(
@@ -4937,11 +4851,9 @@ static bool emit_linux_xsave_triple_alternative(
             b[i].early_clobber || b[i].has_fixed_register_binding ||
             b[i].kind != kinds[i])
             return false;
-    if (!minic_type_pointee(fn->values[b[0].value].type, &type) ||
-        !minic_type_equal(type, minic_type_int()) ||
+    if (!x86_asm_operand_integer(fn,b[0].value,true,4U,1) ||
         !minic_core_function_value_is_kind(fn, b[1].value, MINIC_CORE_TYPE_POINTER) ||
-        !minic_type_pointee(fn->values[b[2].value].type, &memory_type) ||
-        !minic_type_is_record(memory_type) ||
+        !x86_asm_operand_kind(fn,b[2].value,true,MINIC_CORE_TYPE_RECORD) ||
         !minic_core_function_value_is_kind(fn, b[3].value, MINIC_CORE_TYPE_INTEGER) ||
         !minic_core_function_value_is_kind(fn, b[4].value, MINIC_CORE_TYPE_INTEGER))
         return false;
@@ -5001,7 +4913,6 @@ bool minic_x86_64_emit_linux_smap_alternative(
     const MinicCoreStructuredInlineAsmOperand *b = ins &&
         ins->kind == MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM ?
         ins->value.structured_inline_asm.operands : NULL;
-    MinicType pointee;
     if (!out || !info || !form) return false;
     if (form < 3U) {
         if (!info->is_volatile || info->is_goto ||
@@ -5019,11 +4930,9 @@ bool minic_x86_64_emit_linux_smap_alternative(
         b[0].early_clobber || b[0].has_fixed_register_binding)
         return false;
     if (form == 3U) {
-        if (!minic_type_pointee(fn->values[b[0].value].type, &pointee) ||
-            !minic_type_equal(pointee, minic_type_unsigned_long()))
+        if (!x86_asm_operand_integer(fn,b[0].value,true,8U,0))
             return false;
-    } else if (!minic_type_equal(fn->values[b[0].value].type,
-                                 minic_type_unsigned_long())) {
+    } else if (!x86_asm_operand_integer(fn,b[0].value,false,8U,0)) {
         return false;
     }
     }
@@ -5062,7 +4971,7 @@ bool minic_x86_64_emit_linux_smap_alternative(
  * The helper itself owns exception-table recovery; a plain MOV to user
  * memory would bypass the fault fixup and return the wrong error code. */
 static bool emit_linux_put_user_call(
-    FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
+    FILE *out,
     const MinicCoreFunction *fn, const MinicX86Frame *frame,
     const MinicCoreInstruction *ins, const MinicCoreInlineAsm *info) {
     const unsigned int form = minic_x86_64_linux_put_user_call_form(
@@ -5072,10 +4981,8 @@ static bool emit_linux_put_user_call(
         ins->value.structured_inline_asm.operands;
     const MinicCoreFixedRegisterBinding *stack_binding, *value_binding;
     const MinicCoreInstruction *size_constant;
-    MinicType result_type;
     size_t i, value_width;
-    bool signed_type;
-    if (!out || !program || !target || !fn || !frame || !info ||
+    if (!out || !fn || !frame || !info ||
         (form != 0x200U && form != 0x800U) ||
         !info->is_volatile || info->is_goto || !info->has_memory_clobber ||
         info->register_clobber_count != 1U || !info->register_clobbers ||
@@ -5090,11 +4997,9 @@ static bool emit_linux_put_user_call(
                 MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT) ||
             b[i].has_fixed_register_binding != (i == 1U || i == 3U))
             return false;
-    if (!minic_type_pointee(fn->values[b[0].value].type, &result_type) ||
-        !minic_type_equal(result_type, minic_type_int()) ||
+    if (!x86_asm_operand_integer(fn,b[0].value,true,4U,1) ||
         !minic_core_function_value_is_kind(fn, b[2].value, MINIC_CORE_TYPE_POINTER) ||
-        !minic_x86_64_scalar_width(program, target,
-            fn->values[b[3].value].type, &value_width, &signed_type) ||
+        !x86_asm_operand_width(fn,b[3].value,false,&value_width) ||
         !minic_core_function_value_is_kind(fn, b[4].value, MINIC_CORE_TYPE_INTEGER) ||
         b[1].fixed_register_binding_id >= fn->fixed_register_binding_count ||
         b[3].fixed_register_binding_id >= fn->fixed_register_binding_count)
@@ -5140,7 +5045,7 @@ static bool emit_linux_put_user_call(
  * lvalues and are written back at their true widths. The original +r RSP
  * binding is physical and must never be loaded from a synthetic SSA slot. */
 static bool emit_linux_get_user_call(
-    FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
+    FILE *out,
     const MinicCoreFunction *fn, const MinicX86Frame *frame,
     const MinicCoreInstruction *ins, const MinicCoreInlineAsm *info) {
     static const char *const value_registers[] = {
@@ -5154,10 +5059,8 @@ static bool emit_linux_get_user_call(
         ins->value.structured_inline_asm.operands;
     const MinicCoreFixedRegisterBinding *stack_binding, *result_binding;
     const MinicCoreInstruction *size_constant;
-    MinicType error_type, value_type;
     size_t i, width, suffix_index;
-    bool signed_type;
-    if (!out || !program || !target || !fn || !frame || !info ||
+    if (!out || !fn || !frame || !info ||
         (form != 3U && form != 4U) ||
         !info->is_volatile || info->is_goto || !info->has_memory_clobber ||
         info->register_clobber_count ||
@@ -5171,12 +5074,9 @@ static bool emit_linux_get_user_call(
                 MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT) ||
             b[i].has_fixed_register_binding != (i == 1U || i == 2U))
             return false;
-    if (!minic_type_pointee(fn->values[b[0].value].type, &error_type) ||
-        !minic_type_equal(error_type, minic_type_int()) ||
-        !minic_type_pointee(fn->values[b[1].value].type, &value_type) ||
-        !minic_x86_64_scalar_width(program, target,
-            value_type, &width, &signed_type) ||
-        !minic_type_is_integer(value_type) ||
+    if (!x86_asm_operand_integer(fn,b[0].value,true,4U,1) ||
+        !x86_asm_operand_width(fn,b[1].value,true,&width) ||
+        !x86_asm_operand_integer(fn,b[1].value,true,0U,-1) ||
         !minic_core_function_value_is_kind(fn, b[3].value, MINIC_CORE_TYPE_POINTER) ||
         !minic_core_function_value_is_kind(fn, b[4].value, MINIC_CORE_TYPE_INTEGER) ||
         b[1].fixed_register_binding_id >= fn->fixed_register_binding_count ||
@@ -5271,7 +5171,6 @@ static bool emit_linux_pat_clflushopt(
     const MinicCoreStructuredInlineAsmOperand *b =
         ins->value.structured_inline_asm.operands;
     const MinicCoreInstruction *unused_immediate;
-    MinicType pointee;
     if (!out || !fn || !frame || !info || !info->is_volatile ||
         info->is_goto || !info->has_memory_clobber ||
         info->register_clobber_count ||
@@ -5284,11 +5183,7 @@ static bool emit_linux_pat_clflushopt(
         b[0].early_clobber || b[1].early_clobber ||
         b[0].has_fixed_register_binding || b[1].has_fixed_register_binding ||
         b[0].value >= fn->value_count || b[1].value >= fn->value_count ||
-        !minic_type_pointee(fn->values[b[0].value].type, &pointee) ||
-        !minic_type_unqualified(pointee, &pointee) ||
-        pointee.base_kind != MINIC_TYPE_BASE_INT ||
-        pointee.integer_rank != MINIC_INTEGER_RANK_CHAR ||
-        pointee.pointer_depth != 0U ||
+        !x86_asm_operand_integer(fn,b[0].value,true,1U,-1) ||
         !minic_core_function_value_is_kind(fn, b[1].value, MINIC_CORE_TYPE_INTEGER) ||
         fn->values[b[1].value].definition >= fn->instruction_count)
         return false;
@@ -5349,7 +5244,6 @@ static bool emit_linux_futex_extable(
     const size_t outputs = loop ? 4U : 3U;
     const MinicCoreStructuredInlineAsmOperand *b =
         ins->value.structured_inline_asm.operands;
-    MinicType pointee;
     size_t i;
     if (!out || !fn || !frame || !ins || !info || form == 0U ||
         !info->is_volatile || info->is_goto || !info->has_memory_clobber ||
@@ -5369,14 +5263,9 @@ static bool emit_linux_futex_extable(
             b[i].has_fixed_register_binding || b[i].value >= fn->value_count)
             return false;
         if (i < outputs) {
-            if (!minic_type_pointee(fn->values[b[i].value].type, &pointee) ||
-                !minic_type_unqualified(pointee, &pointee) ||
-                pointee.base_kind != MINIC_TYPE_BASE_INT ||
-                pointee.integer_rank != MINIC_INTEGER_RANK_INT ||
-                pointee.pointer_depth != 0U) return false;
-        } else if (fn->values[b[i].value].type.base_kind != MINIC_TYPE_BASE_INT ||
-                   fn->values[b[i].value].type.integer_rank != MINIC_INTEGER_RANK_INT ||
-                   fn->values[b[i].value].type.pointer_depth != 0U)
+            if (!x86_asm_operand_integer(fn,b[i].value,true,4U,-1))
+                return false;
+        } else if (!x86_asm_operand_integer(fn,b[i].value,false,4U,-1))
             return false;
     }
     /* Every operand is evaluated into Core values before we enter the ISA
@@ -5490,7 +5379,6 @@ static bool emit_linux_debug_register(
     const unsigned int index = form ? (form - 1U) % 6U : 0U;
     const MinicCoreStructuredInlineAsmOperand *b =
         ins->value.structured_inline_asm.operands;
-    MinicType type;
     size_t i;
     if (!out || !fn || !frame || !info || !form ||
         !info->is_volatile || info->is_goto || !info->has_memory_clobber ||
@@ -5507,15 +5395,12 @@ static bool emit_linux_debug_register(
                           MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT))
             return false;
     if (reading) {
-        if (!minic_type_pointee(fn->values[b[0].value].type, &type) ||
-            !minic_type_equal(type, minic_type_unsigned_long()))
+        if (!x86_asm_operand_integer(fn,b[0].value,true,8U,0))
             return false;
-    } else if (!minic_type_equal(
-            fn->values[b[0].value].type, minic_type_unsigned_long()))
+    } else if (!x86_asm_operand_integer(fn,b[0].value,false,8U,0))
         return false;
     if (dr7 &&
-        (!minic_type_pointee(fn->values[b[1].value].type, &type) ||
-         !minic_type_equal(type, minic_type_unsigned_int())))
+        !x86_asm_operand_integer(fn,b[1].value,true,4U,0))
         return false;
     /* DR7's synthetic m input is never dereferenced. This helper emits
      * only the actual MOV to/from a debug register and the true scalar
@@ -5770,7 +5655,7 @@ bool minic_x86_64_emit_structured_asm(
     const MinicCoreInlineAsm *info;
     const MinicCoreStructuredInlineAsmOperand *bindings;
     size_t i, bytes;
-    bool sign, cpuid, mulacc;
+    bool cpuid, mulacc;
     static const char *const cpuid_input_regs[4] = {
         "%rax", "%rbx", "%rcx", "%rdx"
     };
@@ -5987,11 +5872,11 @@ bool minic_x86_64_emit_structured_asm(
     if (minic_x86_64_linux_put_user_call_form(
             info->template_text, info->template_length))
         return emit_linux_put_user_call(
-            out, program, target, fn, frame, ins, info);
+            out, fn, frame, ins, info);
     if (minic_x86_64_linux_get_user_call_form(
             info->template_text, info->template_length))
         return emit_linux_get_user_call(
-            out, program, target, fn, frame, ins, info);
+            out, fn, frame, ins, info);
     if (minic_x86_64_linux_idle_clflush_alt_form(
             info->template_text, info->template_length, true))
         return emit_linux_idle_clflush_alt(out, fn, frame, ins, info);
@@ -6011,7 +5896,7 @@ bool minic_x86_64_emit_structured_asm(
     if (minic_x86_64_linux_control_register_form(
             info->template_text, info->template_length))
         return emit_linux_control_register(
-            out, program, target, fn, frame, ins, info);
+            out, fn, frame, ins, info);
     if (minic_x86_64_linux_three_call_alternative_form(
             info->template_text, info->template_length))
         return emit_linux_three_call_alternative(
@@ -6027,8 +5912,7 @@ bool minic_x86_64_emit_structured_asm(
             operand[0].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT ||
             operand[0].has_fixed_register_binding || operand[0].early_clobber ||
             operand[0].value >= fn->value_count ||
-            !minic_x86_64_scalar_width(program, target,
-                fn->values[operand[0].value].type, &width, &sign) ||
+            !x86_asm_operand_width(fn,operand[0].value,false,&width) ||
             (width != 2U && width != 4U && width != 8U)) return false;
         /* GNU's movl %%eax,%%ds/ss/es is an architectural selector load.
          * Only the 16-bit selector participates; unlike a C assignment to
@@ -6044,7 +5928,7 @@ bool minic_x86_64_emit_structured_asm(
             info->template_text, info->template_length);
         if (table != 0U) {
         const MinicCoreStructuredInlineAsmOperand *operand = bindings;
-        MinicType desc_type;
+        MinicCoreTypeId desc_type;
         size_t size;
         if (!operand || !info->is_volatile || info->is_goto ||
             !info->has_memory_clobber || info->register_clobber_count != 0U ||
@@ -6055,9 +5939,9 @@ bool minic_x86_64_emit_structured_asm(
                                    : MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT) ||
             operand[0].early_clobber || operand[0].has_fixed_register_binding ||
             operand[0].value >= fn->value_count ||
-            !minic_type_pointee(fn->values[operand[0].value].type, &desc_type) ||
-            !minic_type_is_record(desc_type) ||
-            !minic_target_info_sizeof_type(target, program, desc_type, &size) ||
+            !x86_asm_operand_type(fn,operand[0].value,true,&desc_type) ||
+            !x86_asm_core_is_kind(fn,desc_type,MINIC_CORE_TYPE_RECORD) ||
+            !x86_asm_core_width(fn,desc_type,&size) ||
             size != 10U)
             return false;
         /* Memory input is the Core lvalue address. LIDT atomically consumes
@@ -6085,18 +5969,18 @@ bool minic_x86_64_emit_structured_asm(
                 ins->value.structured_inline_asm.operand_count != 4U)
                 return false;
             for (i = 0U; i < 4U; ++i) {
-                MinicType output_type, pointee;
+                MinicCoreTypeId output_type, pointee;
                 if (b[i].operand_index != i || b[i].kind != expected[i] ||
                     b[i].early_clobber || b[i].has_fixed_register_binding ||
                     b[i].value >= fn->value_count ||
-                    !minic_type_pointee(fn->values[b[i].value].type,
-                                        &output_type)) return false;
+                    !x86_asm_operand_type(fn,b[i].value,true,&output_type))
+                    return false;
                 if (i == 3U) {
-                    if (!minic_type_pointee(output_type, &pointee) ||
-                        !minic_type_equal(pointee, minic_type_unsigned_int()))
+                    if (!x86_asm_core_pointee(fn,output_type,&pointee) ||
+                        !x86_asm_core_unsigned_integer_width(fn,pointee,4U))
                         return false;
-                } else if (!minic_type_equal(
-                               output_type, minic_type_unsigned_int()))
+                } else if (!x86_asm_core_unsigned_integer_width(
+                               fn,output_type,4U))
                     return false;
             }
             /* =m(*addr) is the XSTORE hardware write through the RDI
@@ -6121,7 +6005,7 @@ bool minic_x86_64_emit_structured_asm(
                 info->template_text, info->template_length);
         if (segment) {
             const MinicCoreStructuredInlineAsmOperand *b = bindings;
-            MinicType type;
+            size_t width;
             static const char *const names[] = {
                 "%ss", "%cs", "%ds", "%es", "%fs", "%gs"
             };
@@ -6132,13 +6016,13 @@ bool minic_x86_64_emit_structured_asm(
                 b[0].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT ||
                 b[0].early_clobber || b[0].has_fixed_register_binding ||
                 b[0].value >= fn->value_count ||
-                !minic_type_pointee(fn->values[b[0].value].type, &type) ||
-                !(minic_type_equal(type, minic_type_unsigned_short()) ||
-                  minic_type_equal(type, minic_type_unsigned_long())))
+                !x86_asm_operand_width(fn,b[0].value,true,&width) ||
+                !(x86_asm_operand_integer(fn,b[0].value,true,2U,0) ||
+                  x86_asm_operand_integer(fn,b[0].value,true,8U,0)))
                 return false;
             return fprintf(out, "  movl %s, %%eax\n", names[segment - 1U]) >= 0 &&
                    x86_value_load(out, frame, b[0].value, "%r11") &&
-                   fputs(minic_type_equal(type, minic_type_unsigned_short())
+                   fputs(width == 2U
                              ? "  movw %ax, (%r11)\n"
                              : "  movq %rax, (%r11)\n", out) != EOF;
         }
@@ -6153,17 +6037,13 @@ bool minic_x86_64_emit_structured_asm(
                 ins->value.structured_inline_asm.operand_count != 4U)
                 return false;
             for (i = 0U; i < 4U; ++i) {
-                MinicType type;
                 if (b[i].operand_index != i || b[i].early_clobber ||
                     b[i].has_fixed_register_binding ||
                     b[i].kind != (i == 0U ?
                         MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
                         MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT) ||
                     b[i].value >= fn->value_count ||
-                    (i == 0U ?
-                        (!minic_type_pointee(fn->values[b[i].value].type,
-                                            &type) || !x86_asm_u64_type(type)) :
-                        !x86_asm_u64_type(fn->values[b[i].value].type)))
+                    !x86_asm_operand_integer(fn,b[i].value,i==0U,8U,0))
                     return false;
             }
             /* Preserve the complete unsigned 128-bit RDX:RAX dividend.
@@ -6187,17 +6067,13 @@ bool minic_x86_64_emit_structured_asm(
                 ins->value.structured_inline_asm.operand_count != 4U)
                 return false;
             for (i = 0U; i < 4U; ++i) {
-                MinicType type;
                 if (b[i].operand_index != i || b[i].early_clobber ||
                     b[i].has_fixed_register_binding ||
                     b[i].kind != (i < 2U ?
                         MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
                         MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT) ||
                     b[i].value >= fn->value_count ||
-                    (i < 2U ?
-                        (!minic_type_pointee(fn->values[b[i].value].type, &type) ||
-                         !x86_asm_u64_type(type)) :
-                        !x86_asm_u64_type(fn->values[b[i].value].type)))
+                    !x86_asm_operand_integer(fn,b[i].value,i<2U,8U,0))
                     return false;
             }
             /* RAX*operand yields the 128-bit product in RDX:RAX. Store
@@ -6216,7 +6092,6 @@ bool minic_x86_64_emit_structured_asm(
         if (minic_x86_64_linux_gen_endbr_form(
                 info->template_text, info->template_length)) {
             const MinicCoreStructuredInlineAsmOperand *output = bindings;
-            MinicType type;
             if (!info->is_volatile || info->is_goto ||
                 info->has_memory_clobber || info->register_clobber_count ||
                 ins->value.structured_inline_asm.operand_count != 1U ||
@@ -6224,8 +6099,7 @@ bool minic_x86_64_emit_structured_asm(
                 output[0].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT ||
                 output[0].has_fixed_register_binding ||
                 output[0].value >= fn->value_count ||
-                !minic_type_pointee(fn->values[output[0].value].type, &type) ||
-                !minic_type_equal(type, minic_type_unsigned_int()))
+                !x86_asm_operand_integer(fn,output[0].value,true,4U,0))
                 return false;
             /* Mirror GNU's two 32-bit operations, preserving the exact
              * architectural IBT opcode value as an unsigned C result. */
@@ -6238,7 +6112,7 @@ bool minic_x86_64_emit_structured_asm(
         if (minic_x86_64_linux_preempt_gs_dec_form(
                 info->template_text, info->template_length)) {
             const MinicCoreStructuredInlineAsmOperand *b = bindings;
-            MinicType memory_type, flag_type;
+            MinicCoreTypeId type_id;
             if (!info->is_volatile || info->is_goto ||
                 !info->has_memory_clobber || info->register_clobber_count ||
                 ins->value.structured_inline_asm.operand_count != 2U ||
@@ -6248,10 +6122,9 @@ bool minic_x86_64_emit_structured_asm(
                 b[0].early_clobber || b[1].early_clobber ||
                 b[0].has_fixed_register_binding || b[1].has_fixed_register_binding ||
                 b[0].value >= fn->value_count || b[1].value >= fn->value_count ||
-                !minic_type_pointee(fn->values[b[0].value].type, &memory_type) ||
-                !minic_type_pointee(fn->values[b[1].value].type, &flag_type) ||
-                !minic_type_equal(memory_type, minic_type_int()) ||
-                !minic_type_equal(flag_type, minic_type_bool())) return false;
+                !x86_asm_operand_integer(fn,b[0].value,true,4U,1) ||
+                !x86_asm_operand_type(fn,b[1].value,true,&type_id) ||
+                !x86_asm_core_bool(fn,type_id)) return false;
             /* The per-CPU member's symbolic address is an offset from GS,
              * not an ordinary C object read. Hardware DECL sets ZF for the
              * second GNU output, which is materialized as one C _Bool byte. */
@@ -6266,7 +6139,7 @@ bool minic_x86_64_emit_structured_asm(
             info->template_text, info->template_length);
         if (gs_bit != 0U) {
             const MinicCoreStructuredInlineAsmOperand *b = bindings;
-            MinicType flag_type, mem_type;
+            MinicCoreTypeId flag_type;
             size_t width;
             if (!info->is_volatile || info->is_goto ||
                 !info->has_memory_clobber || info->register_clobber_count ||
@@ -6279,11 +6152,9 @@ bool minic_x86_64_emit_structured_asm(
                 b[0].value >= fn->value_count ||
                 b[1].value >= fn->value_count ||
                 b[2].value >= fn->value_count ||
-                !minic_type_pointee(fn->values[b[0].value].type, &flag_type) ||
-                !minic_type_equal(flag_type, minic_type_bool()) ||
-                !minic_type_pointee(fn->values[b[1].value].type, &mem_type) ||
-                !minic_x86_64_scalar_width(
-                    program, target, mem_type, &width, &sign) ||
+                !x86_asm_operand_type(fn,b[0].value,true,&flag_type) ||
+                !x86_asm_core_bool(fn,flag_type) ||
+                !x86_asm_operand_width(fn,b[1].value,true,&width) ||
                 (gs_bit == 1U ? (width != 4U && width != 8U)
                               : width != 8U)) return false;
             return x86_value_load(out, frame, b[1].value, "%r11") &&
@@ -6301,7 +6172,7 @@ bool minic_x86_64_emit_structured_asm(
             info->template_text, info->template_length);
         if (testcc != 0U) {
             const MinicCoreStructuredInlineAsmOperand *b = bindings;
-            MinicType result_type, memory_type;
+            MinicCoreTypeId result_type;
             if (!info->is_volatile || info->is_goto ||
                 !info->has_memory_clobber || info->register_clobber_count ||
                 ins->value.structured_inline_asm.operand_count != 3U ||
@@ -6313,10 +6184,10 @@ bool minic_x86_64_emit_structured_asm(
                 b[0].value >= fn->value_count ||
                 b[1].value >= fn->value_count ||
                 b[2].value >= fn->value_count ||
-                !minic_type_pointee(fn->values[b[0].value].type, &result_type) ||
-                !minic_type_equal(result_type, minic_type_bool()) ||
-                !minic_type_pointee(fn->values[b[1].value].type, &memory_type) ||
-                !minic_type_is_integer(memory_type)) return false;
+                !x86_asm_operand_type(fn,b[0].value,true,&result_type) ||
+                !x86_asm_core_bool(fn,result_type) ||
+                !x86_asm_operand_integer(fn,b[1].value,true,0U,-1))
+                return false;
             return x86_value_load(out, frame, b[1].value, "%r11") &&
                    x86_value_load(out, frame, b[2].value, "%r10") &&
                    fputs("  testb %r10b, (%r11)\n", out) != EOF &&
@@ -6426,7 +6297,7 @@ bool minic_x86_64_emit_structured_asm(
           memcmp(info->template_text, "cpuid", 5U) == 0))
         return info->is_volatile &&
                emit_memory_clobber_matched(
-                   out, program, target, fn, frame, ins, info);
+                   out, fn, frame, ins, info);
     if (ins->value.structured_inline_asm.operand_count == 2U ||
         ins->value.structured_inline_asm.operand_count == 3U) {
         const MinicX86BitScanForm bit_scan_form = minic_x86_64_asm_bit_scan_form(
@@ -6450,7 +6321,7 @@ bool minic_x86_64_emit_structured_asm(
     if (!info->is_volatile)
         return false;
     if (ins->value.structured_inline_asm.operand_count == 4U)
-        return emit_muldiv_u64(out, program, target, fn, frame, ins, info);
+        return emit_muldiv_u64(out, fn, frame, ins, info);
     if (ins->value.structured_inline_asm.operand_count != 8U &&
         ins->value.structured_inline_asm.operand_count != 6U)
         return false;
@@ -6474,27 +6345,21 @@ bool minic_x86_64_emit_structured_asm(
      * generic structured Core producer cannot bypass this machine contract. */
     for (i = 0U;
          i < ins->value.structured_inline_asm.operand_count; ++i) {
-        MinicType pointee;
         const MinicCoreValueId id = bindings[i].value;
         if (id >= fn->value_count || bindings[i].operand_index != i ||
             bindings[i].has_fixed_register_binding || bindings[i].early_clobber)
             return false;
         if (i < (cpuid ? 4U : 3U)) {
             if (bindings[i].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT ||
-                !minic_type_pointee(fn->values[id].type, &pointee) ||
-                !minic_x86_64_scalar_width(program, target, pointee,
-                                            &bytes, &sign) ||
+                !x86_asm_operand_width(fn,id,true,&bytes) ||
                 bytes != (cpuid ? 4U : 8U)) return false;
         } else if (mulacc && i == 7U) {
             if (bindings[i].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT ||
-                !minic_type_pointee(fn->values[id].type, &pointee) ||
-                !minic_x86_64_scalar_width(program, target, pointee,
-                                            &bytes, &sign) || bytes != 8U)
+                !x86_asm_operand_width(fn,id,true,&bytes) || bytes != 8U)
                 return false;
         } else {
             if (bindings[i].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT ||
-                !minic_x86_64_scalar_width(program, target, fn->values[id].type,
-                                            &bytes, &sign) ||
+                !x86_asm_operand_width(fn,id,false,&bytes) ||
                 bytes != (cpuid ? 4U : 8U)) return false;
         }
     }

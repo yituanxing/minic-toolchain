@@ -19,11 +19,9 @@ typedef struct MinicCoreCallView {
     const MinicCoreCallee *callee;             /* direct, otherwise NULL */
     const MinicCoreCallSignature *signature;   /* indirect, otherwise NULL */
     const MinicCoreCallArgument *arguments;    /* NULL when count == 0 */
-    const MinicType *parameter_types;
-    MinicType return_type;
     /* The type-checked Core signature, independent of a C frontend arena.
-     * The legacy types above are still read by unmigrated machine ABI plans;
-     * a bound type_context makes these IDs authoritative for Core validity. */
+     * CoreType IDs are the sole type view handed to machine ABI planners;
+     * nominal source descriptors remain owned by Core's legacy ingress. */
     const MinicCoreTypeId *core_parameter_type_ids;
     MinicCoreTypeId core_return_type_id;
     MinicCoreTypeId core_function_type_id; /* indirect only */

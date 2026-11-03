@@ -82,8 +82,6 @@ bool minic_core_call_view_build(const MinicCoreFunction *function,
         if (id >= function->callee_count || function->callees == NULL)
             return false;
         view.callee = &function->callees[id];
-        view.return_type = view.callee->return_type;
-        view.parameter_types = view.callee->parameter_types;
         view.core_return_type_id = view.callee->core_return_type_id;
         view.core_parameter_type_ids = view.callee->core_parameter_type_ids;
         view.parameter_count = view.callee->parameter_count;
@@ -112,8 +110,6 @@ bool minic_core_call_view_build(const MinicCoreFunction *function,
                                      MINIC_CORE_TYPE_FUNCTION))
             return false;
         view.function_pointer = pointer;
-        view.return_type = view.signature->return_type;
-        view.parameter_types = view.signature->parameter_types;
         view.core_function_type_id = view.signature->core_function_type_id;
         view.core_return_type_id = view.signature->core_return_type_id;
         view.core_parameter_type_ids = view.signature->core_parameter_type_ids;
