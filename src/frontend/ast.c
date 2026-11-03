@@ -1714,10 +1714,26 @@ static bool expression_array_qualified_shape(const MinicC0Program *program,
                                               MinicArrayObjectInfo *info) {
     if (program == NULL || expression == NULL || info == NULL) return false;
     if (info->has_materialized_type) {
+        MinicType element_type;
+
         /* A qualified record lvalue can carry a distinct qualified ArrayType
-         * from its unqualified field declaration.  The expression view wins. */
-        return minic_type_is_array(expression->type) &&
-               minic_c0_materialized_array_object_info(program, expression->type, info);
+         * from its unqualified field declaration.  Qualifiers on an array
+         * lvalue apply to its elements too, including recursively nested
+         * array dimensions; the declaration's unqualified descriptor is not
+         * a suitable source for the subscript's modifiable-lvalue rules. */
+        if (!minic_type_is_array(expression->type) ||
+            !minic_c0_materialized_array_object_info(program, expression->type, info)) {
+            return false;
+        }
+        element_type = info->element_type;
+        if ((minic_type_is_const(expression->type) &&
+             !minic_type_add_const(element_type, &element_type)) ||
+            (minic_type_is_volatile(expression->type) &&
+             !minic_type_add_volatile(element_type, &element_type))) {
+            return false;
+        }
+        info->element_type = element_type;
+        return true;
     }
     info->element_type = expression->type;
     return true;

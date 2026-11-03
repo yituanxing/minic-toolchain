@@ -12,24 +12,86 @@
 
 /* Own static constants, aggregate slots, record and array initialization. */
 
+/* Record declaration producers still have two representations: a legacy
+ * outer repetition attached to the field, or an ArrayType already owning
+ * its complete extent (notably typedef arrays).  Static initialization
+ * performs both forward append and backward scalar-slot rewrites; keep their
+ * common element shape in one place, rather than assuming field->type is
+ * always the repeated element type. */
+typedef struct MinicStaticFieldShape {
+    MinicType element_type;
+    size_t element_count;
+    bool is_array;
+    bool is_zero_length;
+    bool is_flexible;
+} MinicStaticFieldShape;
+
+static bool static_field_shape(const MinicC0Program *program,
+                               const MinicRecordField *field,
+                               MinicStaticFieldShape *shape) {
+    MinicArrayObjectInfo array;
+    bool is_array;
+
+    if (program == NULL || field == NULL || shape == NULL) return false;
+    (void)memset(shape, 0, sizeof(*shape));
+    is_array = minic_c0_record_field_array_info(program, field, &array);
+    if (!is_array) {
+        if (field->is_array || field->is_flexible_array || field->is_zero_length_array ||
+            field->element_count != 1U || minic_type_is_array(field->type)) return false;
+        shape->element_type = field->type;
+        shape->element_count = 1U;
+        return true;
+    }
+    if (array.is_runtime_sized ||
+        (array.is_incomplete && !field->is_flexible_array) ||
+        (array.is_zero_length && field->is_flexible_array)) return false;
+    shape->element_type = array.element_type;
+    shape->element_count = array.element_count;
+    shape->is_array = true;
+    shape->is_zero_length = array.is_zero_length;
+    shape->is_flexible = array.is_incomplete;
+    return true;
+}
+
+static bool static_field_fixed_slot_span(const MinicC0Program *program,
+                                         const MinicRecordField *field,
+                                         size_t *slot_count) {
+    MinicStaticFieldShape shape;
+    size_t element_slots;
+
+    if (slot_count == NULL || !static_field_shape(program, field, &shape) ||
+        shape.is_flexible) return false;
+    if (shape.is_zero_length) {
+        *slot_count = 0U;
+        return true;
+    }
+    if (shape.element_count == 0U ||
+        !minic_c0_global_initializer_slot_count(program, shape.element_type, &element_slots) ||
+        (element_slots != 0U && shape.element_count > SIZE_MAX / element_slots)) return false;
+    *slot_count = shape.element_count * element_slots;
+    return true;
+}
+
 static bool
 append_static_constant_zero(MinicParser *parser, MinicGlobalObjectId object_id, MinicType type);
 
 static bool append_static_field_zeros(MinicParser *parser,
                                       MinicGlobalObjectId object_id,
                                       const MinicRecordField *field) {
+    MinicStaticFieldShape shape;
     size_t element_index;
 
-    if (field == NULL || field->element_count == 0U) {
+    if (parser == NULL || !static_field_shape(parser->program, field, &shape)) {
         return false;
     }
     /* Flexible and GNU zero-length array members participate in record layout,
      * but contribute no scalar initializer slot to the fixed object extent. */
-    if (field->is_flexible_array || field->is_zero_length_array) {
+    if (shape.is_flexible || shape.is_zero_length) {
         return true;
     }
-    for (element_index = 0U; element_index < field->element_count; ++element_index) {
-        if (!append_static_constant_zero(parser, object_id, field->type)) {
+    if (shape.element_count == 0U) return false;
+    for (element_index = 0U; element_index < shape.element_count; ++element_index) {
+        if (!append_static_constant_zero(parser, object_id, shape.element_type)) {
             return false;
         }
     }
@@ -1460,6 +1522,7 @@ static bool parse_static_record_designator_path(MinicParser *parser,
         MinicRecordFieldPath field_path;
         MinicSourceSpan field_span;
         const MinicRecordField *field;
+        MinicStaticFieldShape field_shape;
         const MinicRecord *owned_record;
         size_t path_index;
 
@@ -1491,12 +1554,13 @@ static bool parse_static_record_designator_path(MinicParser *parser,
             field_index = field_path.field_indices[path_index];
             designator->field_indices[designator->depth++] = field_index;
             field = minic_c0_record_field(current_record, field_index);
-            if (field == NULL) {
+            if (!static_field_shape(parser->program, field, &field_shape)) {
                 return false;
             }
             if (path_index + 1U < field_path.depth) {
-                if (field->element_count != 1U || field->is_array || field->is_bit_field ||
-                    field->is_flexible_array || !minic_type_is_record(field->type)) {
+                if (field_shape.element_count != 1U || field_shape.is_array ||
+                    field->is_bit_field || field_shape.is_flexible ||
+                    !minic_type_is_record(field->type)) {
                     minic_parser_error(
                         parser,
                         "promoted static record designator path requires scalar record members");
@@ -1518,14 +1582,14 @@ static bool parse_static_record_designator_path(MinicParser *parser,
             size_t first;
             size_t last;
 
-            if (field == NULL || !field->is_array || field->element_count == 0U ||
-                field->is_bit_field || field->is_flexible_array) {
+            if (field == NULL || !field_shape.is_array || field_shape.element_count == 0U ||
+                field->is_bit_field || field_shape.is_flexible || field_shape.is_zero_length) {
                 minic_parser_error(
                     parser, "array designator after record member requires a fixed array field");
                 return false;
             }
             if (!minic_parser_parse_array_designator(
-                    parser, field->element_count, false, &first, &last)) {
+                    parser, field_shape.element_count, false, &first, &last)) {
                 return false;
             }
             if (first != last) {
@@ -1540,8 +1604,9 @@ static bool parse_static_record_designator_path(MinicParser *parser,
         if (parser->current.kind != MINIC_TOKEN_DOT) {
             break;
         }
-        if (field == NULL || field->element_count != 1U || field->is_array || field->is_bit_field ||
-            field->is_flexible_array || !minic_type_is_record(field->type)) {
+        if (field == NULL || field_shape.element_count != 1U || field_shape.is_array ||
+            field->is_bit_field || field_shape.is_flexible ||
+            !minic_type_is_record(field->type)) {
             minic_parser_error(
                 parser, "intermediate static record designator member must be a scalar record");
             return false;
@@ -1576,12 +1641,14 @@ static bool static_record_designator_leaf_slot(const MinicC0Program *program,
     total = 0U;
     for (depth = 0U; depth < designator->depth; ++depth) {
         const MinicRecordField *field;
+        MinicStaticFieldShape shape;
         size_t relative;
         size_t field_index;
 
         field_index = designator->field_indices[depth];
         field = minic_c0_record_field(current_record, field_index);
-        if (field == NULL || field->element_count == 0U || field->is_flexible_array ||
+        if (!static_field_shape(program, field, &shape) ||
+            shape.element_count == 0U || shape.is_flexible ||
             (!current_record->is_union &&
              !minic_c0_global_record_field_initializer_slot(
                  program, current_record, field_index, &relative))) {
@@ -1595,7 +1662,7 @@ static bool static_record_designator_leaf_slot(const MinicC0Program *program,
             *leaf_field = field;
             return true;
         }
-        if (field->element_count != 1U || field->is_array || field->is_bit_field ||
+        if (shape.element_count != 1U || shape.is_array || field->is_bit_field ||
             !minic_type_is_record(field->type)) {
             return false;
         }
@@ -1629,12 +1696,14 @@ static bool static_record_designator_next_positional_leaf(
     }
     nested = record;
     for (depth = 0U; depth + 1U < current->depth; ++depth) {
+        MinicStaticFieldShape shape;
         if (nested->is_union && current->field_indices[depth] != 0U) {
             return false;
         }
         field = minic_c0_record_field(nested, current->field_indices[depth]);
-        if (field == NULL || !minic_type_is_record(field->type) || field->element_count != 1U ||
-            field->is_array || field->is_bit_field || field->is_flexible_array) {
+        if (!static_field_shape(program, field, &shape) ||
+            !minic_type_is_record(field->type) || shape.element_count != 1U ||
+            shape.is_array || field->is_bit_field || shape.is_flexible) {
             return false;
         }
         nested = minic_c0_program_record(program, field->type.record_id);
@@ -1686,20 +1755,20 @@ static bool try_overwrite_static_zero_noncanonical_union_designator(
     total = 0U;
     for (depth = 0U; depth < designator->depth; ++depth) {
         const MinicRecordField *field;
+        MinicStaticFieldShape shape;
         size_t field_index;
 
         field_index = designator->field_indices[depth];
         field = minic_c0_record_field(current_record, field_index);
-        if (field == NULL || field->element_count != 1U || field->is_array || field->is_bit_field ||
-            field->is_flexible_array) {
+        if (!static_field_shape(parser->program, field, &shape) ||
+            shape.element_count != 1U || shape.is_array || field->is_bit_field ||
+            shape.is_flexible) {
             return true;
         }
         if (current_record->is_union && field_index != 0U) {
             const MinicRecordField *canonical_field;
             MinicRecordId union_record_id;
-            size_t canonical_element_slots;
             size_t canonical_slots;
-            size_t selected_element_slots;
             size_t selected_slots;
             size_t slot_begin;
             size_t slot_end;
@@ -1716,20 +1785,13 @@ static bool try_overwrite_static_zero_noncanonical_union_designator(
                 return false;
             }
             canonical_field = &current_record->fields[0];
-            if (canonical_field->element_count == 0U || canonical_field->is_flexible_array ||
-                !minic_c0_global_initializer_slot_count(
-                    parser->program, canonical_field->type, &canonical_element_slots) ||
-                (canonical_element_slots != 0U &&
-                 canonical_field->element_count > SIZE_MAX / canonical_element_slots) ||
-                !minic_c0_global_initializer_slot_count(
-                    parser->program, field->type, &selected_element_slots) ||
-                (selected_element_slots != 0U &&
-                 field->element_count > SIZE_MAX / selected_element_slots)) {
+            if (!static_field_fixed_slot_span(
+                    parser->program, canonical_field, &canonical_slots) ||
+                !static_field_fixed_slot_span(
+                    parser->program, field, &selected_slots)) {
                 minic_parser_error(parser, "cannot resolve static union storage shape");
                 return false;
             }
-            canonical_slots = canonical_field->element_count * canonical_element_slots;
-            selected_slots = field->element_count * selected_element_slots;
             if (record_base_slot > SIZE_MAX - total) {
                 return false;
             }
@@ -2029,6 +2091,7 @@ static bool append_static_record_designator_value(MinicParser *parser,
     MinicRecord record_snapshot;
     MinicRecordId record_id;
     const MinicRecordField *field;
+    MinicStaticFieldShape shape;
     size_t field_index;
     size_t field_limit;
     size_t selected_index;
@@ -2066,30 +2129,31 @@ static bool append_static_record_designator_value(MinicParser *parser,
         }
     }
     field = &record->fields[selected_index];
-    if (field->element_count == 0U || field->is_flexible_array) {
+    if (!static_field_shape(parser->program, field, &shape) ||
+        shape.element_count == 0U || shape.is_flexible) {
         minic_parser_error(parser, "unsupported static record designator field");
         return false;
     }
     if (depth == 1U) {
-        if (field->element_count == 1U && !field->is_array) {
+        if (!shape.is_array) {
             if (!minic_parser_parse_static_storage_initializer_value(
                     parser, object_id, field->type)) {
                 return false;
             }
-        } else if (field->is_array && minic_type_is_char_integer(field->type) &&
+        } else if (minic_type_is_char_integer(shape.element_type) &&
                    parser->current.kind == MINIC_TOKEN_STRING_LITERAL) {
             if (!minic_parser_add_bounded_string_literal_initializer(
-                    parser, object_id, field->element_count)) {
+                    parser, object_id, shape.element_count)) {
                 return false;
             }
         } else if (!parse_static_forward_array_initializer(
-                       parser, object_id, field->type, field->element_count, false, NULL)) {
+                       parser, object_id, shape.element_type, shape.element_count, false, NULL)) {
             return false;
         }
     } else {
         const MinicRecord *nested_record;
 
-        if (field->element_count != 1U || field->is_array || field->is_bit_field ||
+        if (shape.element_count != 1U || shape.is_array || field->is_bit_field ||
             !minic_type_is_record(field->type)) {
             minic_parser_error(
                 parser, "nested static record designator path requires scalar record members");
@@ -2137,14 +2201,12 @@ static bool append_static_chained_record_designator_value(
     }
     if (!static_record_designator_leaf_slot(parser->program, record, &designator,
                                             selected_slot, &leaf) ||
-        !minic_c0_global_initializer_slot_count(parser->program, leaf->type,
-                                                &leaf_slots) ||
-        (leaf_slots != 0U && leaf->element_count > SIZE_MAX / leaf_slots)) {
+        !static_field_fixed_slot_span(parser->program, leaf, &leaf_slots)) {
         minic_parser_error(parser,
                            "record-array chained member initializer span overflows");
         return false;
     }
-    *selected_slot_count = leaf_slots * leaf->element_count;
+    *selected_slot_count = leaf_slots;
     return append_static_record_designator_value(parser, object_id, record,
                                                  designator.field_indices,
                                                  designator.depth);
@@ -2154,24 +2216,27 @@ static bool append_static_record_array_element_designator_value(MinicParser *par
                                                                 MinicGlobalObjectId object_id,
                                                                 const MinicRecordField *field,
                                                                 size_t element_index) {
+    MinicStaticFieldShape shape;
     size_t index;
 
-    if (parser == NULL || field == NULL || !field->is_array || field->is_bit_field ||
-        field->is_flexible_array || field->element_count == 0U ||
-        element_index >= field->element_count) {
+    if (parser == NULL || !static_field_shape(parser->program, field, &shape) ||
+        !shape.is_array || field->is_bit_field || shape.is_flexible ||
+        shape.is_zero_length || shape.element_count == 0U ||
+        element_index >= shape.element_count) {
         return false;
     }
     for (index = 0U; index < element_index; ++index) {
-        if (!append_static_constant_zero(parser, object_id, field->type)) {
+        if (!append_static_constant_zero(parser, object_id, shape.element_type)) {
             minic_parser_error(parser, "cannot zero-fill static record array designator prefix");
             return false;
         }
     }
-    if (!minic_parser_parse_static_storage_initializer_value(parser, object_id, field->type)) {
+    if (!minic_parser_parse_static_storage_initializer_value(
+            parser, object_id, shape.element_type)) {
         return false;
     }
-    for (index = element_index + 1U; index < field->element_count; ++index) {
-        if (!append_static_constant_zero(parser, object_id, field->type)) {
+    for (index = element_index + 1U; index < shape.element_count; ++index) {
+        if (!append_static_constant_zero(parser, object_id, shape.element_type)) {
             minic_parser_error(parser, "cannot zero-fill static record array designator suffix");
             return false;
         }
@@ -2200,10 +2265,13 @@ static bool overwrite_static_zero_field_value(MinicParser *parser,
                                               MinicGlobalObjectId object_id,
                                               const MinicRecordField *field,
                                               size_t field_base_slot) {
-    if (parser == NULL || field == NULL || field->element_count == 0U || field->is_flexible_array) {
+    MinicStaticFieldShape shape;
+
+    if (parser == NULL || !static_field_shape(parser->program, field, &shape) ||
+        shape.element_count == 0U || shape.is_flexible) {
         return false;
     }
-    if (field->element_count == 1U && !field->is_array) {
+    if (!shape.is_array) {
         if (minic_type_is_integer(field->type) || minic_type_is_pointer(field->type)) {
             return parse_static_scalar_constant_at(
                 parser, object_id, field->type, true, field_base_slot);
@@ -2217,14 +2285,14 @@ static bool overwrite_static_zero_field_value(MinicParser *parser,
                        parser, object_id, field->type, nested_record, field_base_slot);
         }
     }
-    if (field->is_array && minic_type_is_char_integer(field->type) &&
+    if (shape.is_array && minic_type_is_char_integer(shape.element_type) &&
         parser->current.kind == MINIC_TOKEN_STRING_LITERAL) {
         return minic_parser_replace_zero_bounded_string_literal_initializer(
-            parser, object_id, field_base_slot, field->element_count);
+            parser, object_id, field_base_slot, shape.element_count);
     }
-    if (field->is_array) {
+    if (shape.is_array) {
         return overwrite_static_zero_array_constant(
-            parser, object_id, field->type, field->element_count, field_base_slot);
+            parser, object_id, shape.element_type, shape.element_count, field_base_slot);
     }
     minic_parser_error(parser, "backward aggregate designator requires a supported zero subobject");
     return false;
@@ -2572,6 +2640,7 @@ static bool parse_static_union_constant(MinicParser *parser,
     MinicStaticRecordDesignator designator;
     MinicRecord record_snapshot;
     const MinicRecordField *field;
+    MinicStaticFieldShape shape;
     MinicRecordId record_id;
     size_t selected_index;
     size_t union_base_slot;
@@ -2620,14 +2689,15 @@ static bool parse_static_union_constant(MinicParser *parser,
         return false;
     }
     field = &record->fields[selected_index];
-    if (field->element_count == 0U || field->is_flexible_array) {
+    if (!static_field_shape(parser->program, field, &shape) ||
+        shape.element_count == 0U || shape.is_flexible) {
         minic_parser_error(parser, "unsupported static union initializer member");
         return false;
     }
 
     if (has_designator && designator.has_array_index) {
-        if (designator.depth != 1U || !field->is_array || field->is_bit_field ||
-            designator.array_index >= field->element_count ||
+        if (designator.depth != 1U || !shape.is_array || field->is_bit_field ||
+            designator.array_index >= shape.element_count ||
             !append_static_record_array_element_designator_value(
                 parser, object_id, field, designator.array_index)) {
             if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
@@ -2639,7 +2709,7 @@ static bool parse_static_union_constant(MinicParser *parser,
     } else if (has_designator && designator.depth > 1U) {
         const MinicRecord *nested_record;
 
-        if (field->element_count != 1U || field->is_array || field->is_bit_field ||
+        if (shape.element_count != 1U || shape.is_array || field->is_bit_field ||
             !minic_type_is_record(field->type)) {
             minic_parser_error(parser, "nested static union designator requires a record member");
             return false;
@@ -2653,18 +2723,18 @@ static bool parse_static_union_constant(MinicParser *parser,
                                                    designator.depth - 1U)) {
             return false;
         }
-    } else if (field->element_count == 1U && !field->is_array) {
+    } else if (!shape.is_array) {
         if (!minic_parser_parse_static_storage_initializer_value(parser, object_id, field->type)) {
             return false;
         }
-    } else if (field->is_array && minic_type_is_char_integer(field->type) &&
+    } else if (shape.is_array && minic_type_is_char_integer(shape.element_type) &&
                parser->current.kind == MINIC_TOKEN_STRING_LITERAL) {
         if (!minic_parser_add_bounded_string_literal_initializer(
-                parser, object_id, field->element_count)) {
+                parser, object_id, shape.element_count)) {
             return false;
         }
     } else if (!parse_static_forward_array_initializer(
-                   parser, object_id, field->type, field->element_count, false, NULL)) {
+                   parser, object_id, shape.element_type, shape.element_count, false, NULL)) {
         return false;
     }
 
@@ -2752,6 +2822,7 @@ static bool parse_static_record_constant(MinicParser *parser,
     while (parser->current.kind != MINIC_TOKEN_RBRACE) {
         MinicStaticRecordDesignator designator;
         const MinicRecordField *field;
+        MinicStaticFieldShape shape;
         bool has_designator;
         bool overwrite_materialized_field;
 
@@ -2822,9 +2893,13 @@ static bool parse_static_record_constant(MinicParser *parser,
             return false;
         }
         field = &record->fields[field_index];
+        if (!static_field_shape(parser->program, field, &shape)) {
+            minic_parser_error(parser, "invalid static record field array shape");
+            return false;
+        }
         /* An explicitly empty GNU zero-length-array member consumes braces,
          * not a phantom element or flattened initializer slots. */
-        if (field->is_zero_length_array) {
+        if (shape.is_zero_length) {
             if (field_index != materialized_field_limit ||
                 (has_designator &&
                  (designator.depth != 1U || designator.has_array_index)) ||
@@ -2851,7 +2926,7 @@ static bool parse_static_record_constant(MinicParser *parser,
             }
             continue;
         }
-        if (field->is_flexible_array) {
+        if (shape.is_flexible) {
             const MinicGlobalObject *object;
             size_t flexible_element_count;
             bool parsed_flexible_tail;
@@ -2878,12 +2953,13 @@ static bool parse_static_record_constant(MinicParser *parser,
             /* Publish the inspected FAM extent before parsing its elements. Aggregate relocation
              * validation resolves a scalar slot through the complete top-level object shape; the
              * flexible tail therefore has to be visible while its transaction is in progress. */
-            if (minic_type_is_integer(field->type) || minic_type_is_pointer(field->type)) {
+            if (minic_type_is_integer(shape.element_type) ||
+                minic_type_is_pointer(shape.element_type)) {
                 parsed_flexible_tail = minic_parser_static_scalar_array_transaction(
-                    parser, object_id, field->type, flexible_element_count, false);
+                    parser, object_id, shape.element_type, flexible_element_count, false);
             } else {
                 parsed_flexible_tail = parse_static_forward_array_initializer(
-                    parser, object_id, field->type, flexible_element_count, false, NULL);
+                    parser, object_id, shape.element_type, flexible_element_count, false, NULL);
             }
             if (!parsed_flexible_tail) {
                 /* Parsing the translation unit will fail, but restore the object invariant so
@@ -2912,7 +2988,7 @@ static bool parse_static_record_constant(MinicParser *parser,
             }
             continue;
         }
-        if (field->element_count == 0U) {
+        if (shape.element_count == 0U) {
             minic_parser_error(parser, "unsupported nested static record field");
             return false;
         }
@@ -2923,8 +2999,8 @@ static bool parse_static_record_constant(MinicParser *parser,
             size_t element_base_slot;
             size_t element_slots;
 
-            if (designator.depth != 1U || !field->is_array || field->is_bit_field ||
-                field->is_flexible_array || designator.array_index >= field->element_count) {
+            if (designator.depth != 1U || !shape.is_array || field->is_bit_field ||
+                shape.is_flexible || designator.array_index >= shape.element_count) {
                 minic_parser_error(parser,
                                    "static record array member designator currently requires a "
                                    "direct fixed array field");
@@ -2934,7 +3010,7 @@ static bool parse_static_record_constant(MinicParser *parser,
                 if (!minic_c0_global_record_field_initializer_slot(
                         parser->program, record, field_index, &relative_slot) ||
                     !minic_c0_global_initializer_slot_count(
-                        parser->program, field->type, &element_slots) ||
+                        parser->program, shape.element_type, &element_slots) ||
                     record_base_slot > SIZE_MAX - relative_slot) {
                     minic_parser_error(parser,
                                        "cannot locate static record array member designator field");
@@ -2949,7 +3025,7 @@ static bool parse_static_record_constant(MinicParser *parser,
                 }
                 element_base_slot = field_base_slot + designator.array_index * element_slots;
                 if (!overwrite_static_zero_array_element(
-                        parser, object_id, field->type, element_base_slot)) {
+                        parser, object_id, shape.element_type, element_base_slot)) {
                     return false;
                 }
             } else {
@@ -3008,8 +3084,8 @@ static bool parse_static_record_constant(MinicParser *parser,
             } else {
                 const MinicRecord *nested_record;
 
-                if (field_index != materialized_field_limit || field->element_count != 1U ||
-                    field->is_array || field->is_bit_field || !minic_type_is_record(field->type)) {
+                if (field_index != materialized_field_limit || shape.element_count != 1U ||
+                    shape.is_array || field->is_bit_field || !minic_type_is_record(field->type)) {
                     minic_parser_error(
                         parser,
                         "forward nested static record designator requires a scalar record field");
@@ -3045,19 +3121,20 @@ static bool parse_static_record_constant(MinicParser *parser,
                 minic_parser_error(parser, "internal error: invalid static record materialization");
                 return false;
             }
-            if (field->element_count == 1U && !field->is_array) {
+            if (!shape.is_array) {
                 if (!minic_parser_parse_static_storage_initializer_value(
                         parser, object_id, field->type)) {
                     return false;
                 }
-            } else if (field->is_array && minic_type_is_char_integer(field->type) &&
+            } else if (shape.is_array && minic_type_is_char_integer(shape.element_type) &&
                        parser->current.kind == MINIC_TOKEN_STRING_LITERAL) {
                 if (!minic_parser_add_bounded_string_literal_initializer(
-                        parser, object_id, field->element_count)) {
+                        parser, object_id, shape.element_count)) {
                     return false;
                 }
             } else if (!parse_static_forward_array_initializer(
-                           parser, object_id, field->type, field->element_count, false, NULL)) {
+                           parser, object_id, shape.element_type, shape.element_count,
+                           false, NULL)) {
                 return false;
             }
             materialized_field_limit += 1U;

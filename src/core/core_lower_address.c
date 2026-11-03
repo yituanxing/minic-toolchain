@@ -9,6 +9,61 @@
 
 /* Core lvalue/address lowering owns source address effects, not machine ABI. */
 
+static MinicCoreLowerStatus lower_source_local_object_address(
+    MinicCoreLowerContext *context, MinicSourceSpan span,
+    MinicLocalId local_id, MinicCoreObjectId object_id,
+    MinicType expression_type, MinicCoreValueId *address_id) {
+    MinicCoreInstruction instruction;
+    MinicCoreValueId storage_address;
+    MinicType storage_type;
+    MinicType storage_pointer;
+    MinicType expression_pointer;
+    MinicArrayObjectInfo array_info;
+
+    if (context == NULL || context->function == NULL ||
+        context->function->source_draft == NULL || address_id == NULL ||
+        object_id >= context->function->object_count ||
+        object_id >= context->function->source_draft->object_type_count) {
+        return MINIC_CORE_LOWER_ERROR;
+    }
+    storage_type = context->function->source_draft->object_types[object_id];
+    if (!minic_type_equal(storage_type, expression_type)) {
+        const MinicArrayType *array;
+
+        /* A GNU zero-sized array is published as a complete ArrayType but
+         * occupies a one-element backing sentinel.  This is the only local
+         * type mismatch permitted between the C view and the Core object. */
+        if (!minic_c0_local_array_object_info(
+                context->body->program, local_id, &array_info) ||
+            !array_info.has_materialized_type || !array_info.is_zero_length ||
+            !minic_type_is_array(expression_type)) {
+            return MINIC_CORE_LOWER_UNSUPPORTED;
+        }
+        array = minic_c0_program_array_type(
+            context->body->program, expression_type.array_type_id);
+        if (array == NULL || !array->is_zero_length ||
+            !minic_type_equal(storage_type, array->element_type)) {
+            return MINIC_CORE_LOWER_UNSUPPORTED;
+        }
+    }
+    if (!minic_type_pointer_to(storage_type, &storage_pointer) ||
+        !minic_type_pointer_to(expression_type, &expression_pointer)) {
+        return MINIC_CORE_LOWER_ERROR;
+    }
+    (void)memset(&instruction, 0, sizeof(instruction));
+    instruction.kind = MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS;
+    instruction.span = span;
+    instruction.result = MINIC_CORE_VALUE_INVALID;
+    instruction.value.object_id = object_id;
+    if (!minic_core_function_append_source_value_instruction(
+            context->function, context->block_id, &instruction,
+            storage_pointer, &storage_address)) {
+        return MINIC_CORE_LOWER_ERROR;
+    }
+    return append_scalar_bitcast(context, span, expression_pointer,
+                                 storage_address, address_id);
+}
+
 MinicCoreLowerStatus lower_address(MinicCoreLowerContext *context,
                                           MinicExpressionId expression_id,
                                           MinicCoreValueId *address_id) {
@@ -86,17 +141,17 @@ MinicCoreLowerStatus lower_address(MinicCoreLowerContext *context,
             expression->value.member.record_id,
             expression->value.member.field_index, expression->type, address_id);
     }
-    /* Array compound literals reuse the legacy repeated-local storage model
-       until frontend array representation convergence. Execute their hidden
-       initializer block at the expression point, then expose element-zero
-       storage exactly like an ordinary local array object. */
+    /* The hidden local owns compound-literal array storage in either the
+     * legacy repeated-element or materialized ArrayType representation.
+     * Execute its initializer exactly once at this expression point, then
+     * expose the full array object's address. Subscript lowering owns the
+     * eventual pointer-to-array -> pointer-to-element bitcast. */
     if (expression->kind == MINIC_EXPRESSION_COMPOUND_LITERAL) {
         MinicArrayObjectInfo array_info;
 
         (void)memset(&array_info, 0, sizeof(array_info));
         if (minic_c0_expression_array_object_info(
-                context->body->program, expression, &array_info) &&
-            !array_info.has_materialized_type) {
+                context->body->program, expression, &array_info)) {
             const MinicBlock *initializer_block;
             const MinicLocal *local;
             MinicArrayObjectInfo local_array_info;
@@ -110,10 +165,14 @@ MinicCoreLowerStatus lower_address(MinicCoreLowerContext *context,
                 !minic_c0_local_array_object_info(
                     context->body->program,
                     expression->value.compound_literal.local_id, &local_array_info) ||
-                local_array_info.has_materialized_type ||
-                local->is_register_storage || local_array_info.element_count == 0U ||
+                local_array_info.has_materialized_type != array_info.has_materialized_type ||
+                local->is_register_storage ||
+                (local_array_info.element_count == 0U && !local_array_info.is_zero_length) ||
                 !minic_type_equal(local->type, expression->type) ||
-                !minic_type_equal(array_info.element_type, expression->type) ||
+                !minic_type_equal(array_info.element_type, local_array_info.element_type) ||
+                (array_info.has_materialized_type
+                    ? !minic_type_is_array(expression->type)
+                    : !minic_type_equal(array_info.element_type, expression->type)) ||
                 array_info.element_count != local_array_info.element_count) {
                 return MINIC_CORE_LOWER_UNSUPPORTED;
             }
@@ -131,23 +190,13 @@ MinicCoreLowerStatus lower_address(MinicCoreLowerContext *context,
                 return status;
             }
             if (object_id >= context->function->object_count ||
-                !minic_type_equal(context->function->source_draft->object_types[object_id], local->type) ||
                 context->function->objects[object_id].element_count !=
-                    local_array_info.element_count) {
+                    (array_info.has_materialized_type ? 1U : local_array_info.element_count)) {
                 return MINIC_CORE_LOWER_ERROR;
             }
-            (void)memset(&instruction, 0, sizeof(instruction));
-            instruction.kind = MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS;
-            instruction.span = expression->span;
-            instruction.result = MINIC_CORE_VALUE_INVALID;
-            instruction.value.object_id = object_id;
-            if (!minic_type_pointer_to(expression->type, &instruction_source_type)) {
-                return MINIC_CORE_LOWER_ERROR;
-            }
-            return minic_core_function_append_source_value_instruction(
-                       context->function, context->block_id, &instruction, instruction_source_type, address_id)
-                       ? MINIC_CORE_LOWER_OK
-                       : MINIC_CORE_LOWER_ERROR;
+            return lower_source_local_object_address(
+                context, expression->span, expression->value.compound_literal.local_id,
+                object_id, expression->type, address_id);
         }
     }
 
@@ -290,18 +339,9 @@ MinicCoreLowerStatus lower_address(MinicCoreLowerContext *context,
         if (status != MINIC_CORE_LOWER_OK) {
             return status;
         }
-        (void)memset(&instruction, 0, sizeof(instruction));
-        instruction.kind = MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS;
-        instruction.span = expression->span;
-        instruction.result = MINIC_CORE_VALUE_INVALID;
-        instruction.value.object_id = object_id;
-        if (!minic_type_pointer_to(expression->type, &instruction_source_type)) {
-            return MINIC_CORE_LOWER_ERROR;
-        }
-        return minic_core_function_append_source_value_instruction(
-                   context->function, context->block_id, &instruction, instruction_source_type, address_id)
-                   ? MINIC_CORE_LOWER_OK
-                   : MINIC_CORE_LOWER_ERROR;
+        return lower_source_local_object_address(
+            context, expression->span, expression->value.local_id,
+            object_id, expression->type, address_id);
     }
     if (expression->kind == MINIC_EXPRESSION_GLOBAL_OBJECT) {
         const MinicGlobalObject *global;

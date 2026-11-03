@@ -650,6 +650,7 @@ parse_local_declarator(MinicParser *parser,
     }
     if (parenthesized_name_is_array || parser->current.kind == MINIC_TOKEN_LBRACKET) {
         bool inferred_array;
+        MinicLocal published_local;
 
         inferred_array = parenthesized_name_is_array && parenthesized_name_array_inferred;
         if (!parenthesized_name_is_array) {
@@ -690,7 +691,36 @@ parse_local_declarator(MinicParser *parser,
         local.declaration_block = parser->current_block;
         local.has_declaration_block =
             parser->current_block != MINIC_BLOCK_INVALID;
-        if (!minic_c0_program_add_local(parser->program, &local, &local_id)) {
+        published_local = local;
+        if (runtime_array_bound == MINIC_EXPRESSION_INVALID) {
+            MinicType array_type;
+            bool type_created;
+
+            /* An automatic fixed array owns one complete C array type.
+             * Only VLA locals retain the separate runtime bound/address
+             * representation, because their extent is not a static type
+             * property. Inferred arrays complete this exact descriptor once
+             * the initializer has established its bound. */
+            if (local.is_zero_length_array) {
+                type_created = minic_c0_program_add_zero_length_array_type(
+                    parser->program, local.type, &array_type);
+            } else if (inferred_array) {
+                type_created = minic_c0_program_add_incomplete_array_type(
+                    parser->program, local.type, &array_type);
+            } else {
+                type_created = minic_c0_program_add_array_type(
+                    parser->program, local.type, local.element_count, &array_type);
+            }
+            if (!type_created) {
+                minic_parser_error(parser, "cannot materialize local array type");
+                return false;
+            }
+            published_local.type = array_type;
+            published_local.element_count = 1U;
+            published_local.is_array = false;
+            published_local.is_zero_length_array = false;
+        }
+        if (!minic_c0_program_add_local(parser->program, &published_local, &local_id)) {
             minic_parser_error(parser, "out of memory while adding local");
             return false;
         }
@@ -736,7 +766,15 @@ parse_local_declarator(MinicParser *parser,
             if (!minic_parser_runtime_local_array(parser, local_id, inferred_array)) {
                 return false;
             }
-            local.element_count = parser->program->locals[local_id].element_count;
+            if (inferred_array) {
+                const MinicArrayType *completed = minic_c0_program_array_type(
+                    parser->program, published_local.type.array_type_id);
+                if (completed == NULL || completed->element_count == 0U) {
+                    minic_parser_error(parser, "cannot complete inferred local array type");
+                    return false;
+                }
+                local.element_count = completed->element_count;
+            }
             return finalize_local_cleanup(parser, &attributes, &local, local_id);
         }
     }

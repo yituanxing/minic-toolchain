@@ -383,10 +383,10 @@ static bool parse_record_field_declarator(MinicParser *parser,
     size_t explicit_alignment;
     MinicRecord *mutable_record;
     const MinicRecord *record;
-    bool is_array;
     bool is_packed;
     bool is_flexible_array;
     bool is_zero_length_array;
+    bool materialize_outer_array;
 
     record = minic_c0_program_record(parser->program, record_id);
     if (record == NULL) {
@@ -489,9 +489,9 @@ static bool parse_record_field_declarator(MinicParser *parser,
     element_count = 1U;
     explicit_alignment = declaration_alignment;
     is_packed = declaration_packed;
-    is_array = false;
     is_flexible_array = false;
     is_zero_length_array = false;
+    materialize_outer_array = false;
     if (parser->current.kind != MINIC_TOKEN_LBRACKET && minic_type_is_array(field_type)) {
         const MinicArrayType *typedef_array;
 
@@ -501,20 +501,13 @@ static bool parse_record_field_declarator(MinicParser *parser,
             minic_parser_error(parser, "record field requires a complete typedef array type");
             return false;
         }
-        field_type = typedef_array->element_type;
-        if (typedef_array->is_zero_length) {
-            /* Direct GNU T field[0] uses one semantic element plus an explicit
-               zero-length layout bit. Preserve the same representation when
-               the zero-length array arrives through a typedef. */
-            element_count = 1U;
-            is_zero_length_array = true;
-        } else {
-            element_count = typedef_array->element_count;
-        }
-        is_array = true;
+        /* Keep typedef arrays as complete object types. The old parser
+         * flattened their outer dimension into field.element_count, so
+         * record fields had two incompatible array representations. */
+        is_zero_length_array = typedef_array->is_zero_length;
     }
     if (parser->current.kind == MINIC_TOKEN_LBRACKET) {
-        is_array = true;
+        materialize_outer_array = true;
         size_t bounds[8];
         size_t bound_count;
 
@@ -603,12 +596,39 @@ static bool parse_record_field_declarator(MinicParser *parser,
         return false;
     }
 
+    if (materialize_outer_array) {
+        MinicType materialized_type;
+
+        /* Preserve the historical attribute attachment point: attributes
+         * on a function-pointer field can update its element type before
+         * the outer array dimension is committed. The fixed inner dimensions
+         * were already constructed by the declarator parser above. */
+        if (is_flexible_array) {
+            if (!minic_c0_program_add_incomplete_array_type(
+                    parser->program, field_type, &materialized_type)) {
+                minic_parser_error(parser, "cannot materialize flexible record array type");
+                return false;
+            }
+        } else if (is_zero_length_array) {
+            if (!minic_c0_program_add_zero_length_array_type(
+                    parser->program, field_type, &materialized_type)) {
+                minic_parser_error(parser, "cannot materialize GNU zero-length record array type");
+                return false;
+            }
+        } else if (!minic_c0_program_add_array_type(
+                       parser->program, field_type, element_count, &materialized_type)) {
+            minic_parser_error(parser, "cannot materialize record array type");
+            return false;
+        }
+        field_type = materialized_type;
+    }
+
     if (!minic_c0_record_add_field(parser->program,
                                    record_id,
                                    parser->source + name_span.begin.offset,
                                    minic_parser_span_length(name_span),
                                    field_type,
-                                   element_count)) {
+                                   1U)) {
         minic_parser_error(parser, "out of memory while adding record field");
         return false;
     }
@@ -616,7 +636,10 @@ static bool parse_record_field_declarator(MinicParser *parser,
     mutable_record->fields[mutable_record->field_count - 1U].explicit_alignment =
         explicit_alignment;
     mutable_record->fields[mutable_record->field_count - 1U].is_packed = is_packed;
-    mutable_record->fields[mutable_record->field_count - 1U].is_array = is_array;
+    /* All parser-produced arrays now carry their complete type. Keep the
+     * old metadata only on hand-authored source AST fixtures until they have
+     * an explicit compatibility migration; it is no longer a parser owner. */
+    mutable_record->fields[mutable_record->field_count - 1U].is_array = false;
     mutable_record->fields[mutable_record->field_count - 1U].is_flexible_array = is_flexible_array;
     mutable_record->fields[mutable_record->field_count - 1U].is_zero_length_array =
         is_zero_length_array;

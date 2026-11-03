@@ -971,12 +971,27 @@ static bool verify_expression(const MinicC0Program *program,
             return false;
         }
         (void)memset(&array_info, 0, sizeof(array_info));
-        if (local->is_array) {
-            return local->element_count != 0U &&
-                   minic_c0_expression_array_object_info(program, expression, &array_info) &&
-                   !array_info.has_materialized_type &&
+        if (minic_c0_local_array_object_info(
+                program, expression->value.compound_literal.local_id, &array_info)) {
+            MinicArrayObjectInfo expression_array_info;
+
+            if (!minic_c0_expression_array_object_info(
+                    program, expression, &expression_array_info) ||
+                expression_array_info.is_incomplete ||
+                expression_array_info.is_zero_length ||
+                expression_array_info.element_count == 0U ||
+                expression_array_info.has_materialized_type !=
+                    array_info.has_materialized_type) {
+                return false;
+            }
+            if (array_info.has_materialized_type) {
+                return !local->is_array && local->element_count == 1U &&
+                       minic_type_is_array(local->type) &&
+                       minic_c0_type_is_complete_object(program, local->type);
+            }
+            return local->is_array && local->element_count != 0U &&
                    array_info.element_count == local->element_count &&
-                   minic_type_equal(array_info.element_type, local->type) &&
+                   minic_type_equal(expression_array_info.element_type, local->type) &&
                    minic_c0_type_is_complete_object(program, local->type);
         }
         complete_object = minic_c0_type_is_complete_object(program, expression->type);
@@ -1264,6 +1279,26 @@ type_owns_array_descriptor(MinicType type, MinicArrayTypeId array_type_id, bool 
            (!require_pointer || type.pointer_depth != 0U);
 }
 
+/* A flexible record tail is the one legal by-value owner of an incomplete
+ * ArrayType. Ordinary incomplete arrays still require an expression, typedef,
+ * extern object or pointer owner; an arbitrary incomplete record member must
+ * not become valid just because the parser materializes flexible tails. */
+static bool record_field_owns_flexible_array_type(const MinicC0Program *program,
+                                                  const MinicRecordField *field,
+                                                  MinicArrayTypeId array_type_id) {
+    const MinicArrayType *array;
+
+    if (program == NULL || field == NULL || !field->is_flexible_array || field->is_array ||
+        field->element_count != 1U ||
+        !type_owns_array_descriptor(field->type, array_type_id, false) ||
+        field->type.pointer_depth != 0U) {
+        return false;
+    }
+    array = minic_c0_program_array_type(program, array_type_id);
+    return array != NULL && array->element_count == 0U && !array->is_zero_length &&
+           !array->is_query_materialized;
+}
+
 static bool incomplete_array_has_semantic_owner(const MinicC0Program *program,
                                                 MinicArrayTypeId array_type_id) {
     size_t index;
@@ -1302,7 +1337,10 @@ static bool incomplete_array_has_semantic_owner(const MinicC0Program *program,
 
         record = &program->records[index];
         for (field_index = 0U; field_index < record->field_count; ++field_index) {
-            if (type_owns_array_descriptor(record->fields[field_index].type, array_type_id, true)) {
+            const MinicRecordField *field = &record->fields[field_index];
+
+            if (type_owns_array_descriptor(field->type, array_type_id, true) ||
+                record_field_owns_flexible_array_type(program, field, array_type_id)) {
                 return true;
             }
         }
@@ -1408,8 +1446,16 @@ static unsigned char *minic_verify_build_array_owners(const MinicC0Program *prog
             continue;
         }
         for (j = 0U; j < record->field_count; ++j) {
+            const MinicRecordField *field = &record->fields[j];
+
             minic_verify_mark_array_owner(
-                owned, program->array_type_count, record->fields[j].type, true);
+                owned, program->array_type_count, field->type, true);
+            if (field->type.base_kind == MINIC_TYPE_BASE_ARRAY &&
+                field->type.array_type_id < program->array_type_count &&
+                record_field_owns_flexible_array_type(
+                    program, field, field->type.array_type_id)) {
+                owned[field->type.array_type_id] = 1U;
+            }
         }
     }
     for (i = 0U; i < program->function_count; ++i) {
@@ -1517,6 +1563,7 @@ static bool verify_builtin_va_list_source_type(
     MinicVaCursorSourceShape shape;
     MinicType source, state;
     const MinicRecord *record;
+    MinicArrayObjectInfo field_array;
     size_t size, alignment;
     if (program == NULL || target == NULL ||
         !minic_target_info_va_cursor_source_shape(target, &shape))
@@ -1541,9 +1588,10 @@ static bool verify_builtin_va_list_source_type(
         !record->is_complete || record->field_count != 1U ||
         record->fields == NULL || record->fields[0].name == NULL ||
         record->fields[0].name_length != 0U ||
-        !minic_type_equal(record->fields[0].type, minic_type_unsigned_char()) ||
-        !record->fields[0].is_array ||
-        record->fields[0].element_count != shape.object_size ||
+        !minic_c0_record_field_array_info(program, &record->fields[0], &field_array) ||
+        field_array.is_incomplete || field_array.is_zero_length ||
+        !minic_type_equal(field_array.element_type, minic_type_unsigned_char()) ||
+        field_array.element_count != shape.object_size ||
         record->explicit_alignment != shape.object_alignment ||
         !minic_data_layout_type(minic_target_info_data_layout(target), program,
                                 state, &size, &alignment) ||

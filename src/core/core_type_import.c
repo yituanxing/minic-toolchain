@@ -174,12 +174,20 @@ static bool import_record(MinicCoreTypeImporter *importer, MinicType source,
         MinicCoreTypeId field_type;
         MinicArrayObjectInfo array_info;
         bool field_array;
+        MinicType field_layout_type;
         size_t field_size, field_alignment;
         field_array = minic_c0_record_field_array_object_info(
             importer->program, source.record_id, i, &array_info);
+        /* A fully materialized flexible member has an incomplete outer
+         * ArrayType.  Preserve that ArrayType in sealed Core record metadata,
+         * but ask DataLayout for its complete element's storage alignment.
+         * A flexible tail contributes zero size to the enclosing record. */
+        field_layout_type = field_array && array_info.has_materialized_type &&
+                            array_info.is_incomplete && field->is_flexible_array
+                                ? array_info.element_type : field->type;
         if (!import_type(importer, field->type, &field_type, depth + 1U) ||
             !minic_data_layout_type(importer->layout, importer->program,
-                                    field->type, &field_size, &field_alignment) ||
+                                    field_layout_type, &field_size, &field_alignment) ||
             !minic_data_layout_record_field_layout(importer->layout, importer->program,
                                                    record, i, &fields[i].byte_offset,
                                                    &fields[i].bit_offset))

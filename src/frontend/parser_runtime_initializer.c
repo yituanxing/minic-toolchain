@@ -152,8 +152,7 @@ static bool add_local_array_element_assignment(MinicParser *parser,
     local = minic_c0_program_local(parser->program, local_id);
     value = minic_c0_program_expression(parser->program, value_id);
     if (local == NULL || value == NULL ||
-        !minic_c0_local_array_object_info(parser->program, local_id, &array_info) ||
-        array_info.has_materialized_type) {
+        !minic_c0_local_array_object_info(parser->program, local_id, &array_info)) {
         minic_parser_error(parser, "invalid local array initializer element");
         return false;
     }
@@ -772,6 +771,22 @@ static bool parse_fixed_runtime_array_initializer(MinicParser *parser,
         !minic_c0_expression_array_object_info(parser->program, base, &array_info)) {
         return false;
     }
+    if (array_info.is_zero_length) {
+        /* GNU complete zero-length fields used to publish a one-element
+         * sentinel in MinicRecordField. A materialized ArrayType correctly
+         * reports zero elements instead. Both spell the same C object: only
+         * an empty brace initializer is valid and it emits no assignments. */
+        if (parser->current.kind != MINIC_TOKEN_LBRACE ||
+            !minic_parser_advance(parser)) {
+            minic_parser_error(parser, "zero-length array initializer requires empty braces");
+            return false;
+        }
+        if (parser->current.kind != MINIC_TOKEN_RBRACE) {
+            minic_parser_error(parser, "excess initializer for zero-length array");
+            return false;
+        }
+        return minic_parser_advance(parser);
+    }
     if (minic_type_is_record(array_info.element_type)) {
         return parse_fixed_runtime_record_array_initializer(parser, base_id, element_count);
     }
@@ -806,7 +821,6 @@ static bool parse_local_character_array_string_initializer(MinicParser *parser,
     local = minic_c0_program_local(parser->program, local_id);
     if (local == NULL ||
         !minic_c0_local_array_object_info(parser->program, local_id, &array_info) ||
-        array_info.has_materialized_type ||
         !minic_parser_static_string_element_compatible(parser, array_info.element_type,
                                                        parser->current.kind)) {
         return false;
@@ -825,7 +839,15 @@ static bool parse_local_character_array_string_initializer(MinicParser *parser,
             return false;
         }
         element_count = (size_t)(string_size / (uint64_t)element_size);
-        parser->program->locals[local_id].element_count = element_count;
+        if (array_info.has_materialized_type) {
+            if (!minic_c0_program_complete_array_type(
+                    parser->program, local->type, element_count)) {
+                minic_parser_error(parser, "cannot complete inferred string array type");
+                return false;
+            }
+        } else {
+            parser->program->locals[local_id].element_count = element_count;
+        }
     }
     if (element_count == 0U) {
         minic_parser_error(parser, "character array string initializer requires nonzero extent");
@@ -973,7 +995,24 @@ static bool parse_inferred_runtime_array_initializer(MinicParser *parser,
         minic_parser_error(parser, "inferred local array initializer must not be empty");
         goto done;
     }
-    parser->program->locals[local_id].element_count = extent;
+    {
+        const MinicLocal *local = minic_c0_program_local(parser->program, local_id);
+        MinicArrayObjectInfo array_info;
+
+        if (local == NULL || !minic_c0_local_array_object_info(
+                parser->program, local_id, &array_info)) {
+            minic_parser_error(parser, "invalid inferred local array object");
+            goto done;
+        }
+        if (array_info.has_materialized_type) {
+            if (!minic_c0_program_complete_array_type(parser->program, local->type, extent)) {
+                minic_parser_error(parser, "cannot complete inferred local array type");
+                goto done;
+            }
+        } else {
+            parser->program->locals[local_id].element_count = extent;
+        }
+    }
     initializer_span.end = parser->current.span.end;
     if (!minic_parser_advance(parser)) {
         goto done;
@@ -1012,8 +1051,7 @@ minic_parser_runtime_local_array(MinicParser *parser, MinicLocalId local_id, boo
 
     local = minic_c0_program_local(parser->program, local_id);
     if (local == NULL ||
-        !minic_c0_local_array_object_info(parser->program, local_id, &array_info) ||
-        array_info.has_materialized_type) {
+        !minic_c0_local_array_object_info(parser->program, local_id, &array_info)) {
         minic_parser_error(parser, "invalid local array initializer target");
         return false;
     }

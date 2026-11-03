@@ -142,11 +142,22 @@ MinicCoreLowerStatus minic_core_lower_internal_local_object(MinicCoreLowerContex
 
         array_type = minic_c0_program_array_type(
             context->body->program, local->type.array_type_id);
-        if (array_type == NULL || array_type->element_count == 0U ||
-            array_type->is_zero_length) {
+        if (array_type == NULL ||
+            (array_type->element_count == 0U && !array_type->is_zero_length)) {
             return MINIC_CORE_LOWER_UNSUPPORTED;
         }
-        if (has_array_object && !array_info.has_materialized_type) {
+        if (array_type->is_zero_length) {
+            /* A complete GNU T local[0] has sizeof == 0, but its address
+             * remains materializable.  Keep the former one-element backing
+             * sentinel after the declarator becomes a real ArrayType.  The
+             * address owner bitcasts element* to array[0]*, so the published
+             * Core object and its OBJECT_ADDRESS remain type-consistent. */
+            if (!has_array_object || !array_info.has_materialized_type ||
+                !minic_core_function_add_object(context->function, local->name_span,
+                                                array_type->element_type, object_id)) {
+                return MINIC_CORE_LOWER_ERROR;
+            }
+        } else if (has_array_object && !array_info.has_materialized_type) {
             if (array_info.element_count == 0U ||
                 !minic_core_function_add_repeated_object(context->function,
                                                          local->name_span,
@@ -377,6 +388,8 @@ MinicCoreLowerStatus minic_core_lower_internal_append_field_address(MinicCoreLow
     MinicType actual_field_type, declared_field_type;
     const MinicRecord *record;
     const MinicRecordField *field;
+    MinicArrayObjectInfo field_array_info;
+    bool has_field_array;
     size_t byte_offset;
 
     if (context == NULL || context->body == NULL || context->body->program == NULL ||
@@ -389,6 +402,8 @@ MinicCoreLowerStatus minic_core_lower_internal_append_field_address(MinicCoreLow
     }
     record = minic_c0_program_record(context->body->program, record_id);
     field = minic_c0_record_field(record, field_index);
+    has_field_array = minic_c0_record_field_array_object_info(
+        context->body->program, record_id, field_index, &field_array_info);
     if (record == NULL || field == NULL ||
         !minic_type_unqualified(field_type, &actual_field_type) ||
         !minic_type_unqualified(field->type, &declared_field_type) ||
@@ -410,8 +425,7 @@ MinicCoreLowerStatus minic_core_lower_internal_append_field_address(MinicCoreLow
     instruction.value.field_address.field_index = field_index;
     instruction.value.field_address.access_form = field->is_bit_field
         ? MINIC_CORE_FIELD_ACCESS_BITFIELD_STORAGE
-        : (minic_c0_record_field_array_object_info(
-               context->body->program, record_id, field_index, NULL)
+        : (has_field_array && !field_array_info.has_materialized_type
                ? MINIC_CORE_FIELD_ACCESS_ARRAY_ELEMENT
                            : MINIC_CORE_FIELD_ACCESS_EXACT);
     instruction.value.field_address.byte_offset = byte_offset;

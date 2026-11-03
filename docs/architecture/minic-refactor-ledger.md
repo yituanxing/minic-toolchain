@@ -1413,3 +1413,73 @@ This batch is **read-side convergence**, not complete C type elimination.
 | Backend review manifest strict check | **FAIL, preexisting inventory drift**: `backend_source.c/.h` missing from manifest and many older fingerprints stale. This batch did not update that unrelated review inventory. |
 | Backend structural boundary checks (same script, omitting only the stale-manifest invocation) | **PASS**, including native and sanitizer Core/Module and five-target ownership probes |
 | Four-target GNU cross ABI / five-target Linux QEMU | **NOT RUN / missing cross GCC and QEMU tools** |
+
+## IR-P26 — Materialize parser-produced array objects and RecordFields (2026-11-03)
+
+**Baseline:** PR #674 remote `64e127f` (IR-P25). IR-P25 made the two
+declaration representations readable through one interface. This batch moves
+the main **producers** to real `MinicArrayType` rather than leaving every
+consumer to reconstruct a legacy declarator dimension.
+
+### One producer/type/initializer/Core transaction
+
+- Fixed, inferred and GNU zero-length *automatic locals* now publish
+  `local.type=ArrayType`, `element_count=1`, `is_array=false`. Inferred string
+  and brace initialization completes the **same** incomplete array descriptor
+  after determining its extent. Array compound literals and their backing
+  locals use the same full type, while the Core initializer block runs once.
+  The GNU complete zero array has `sizeof==0`, yet Core retains the old
+  one-element **storage sentinel** to preserve address materialization;
+  OBJECT_ADDRESS uses the backing type and a validated pointer bitcast.
+- Record declarations now publish full arrays for fixed, multidimensional,
+  typedef, GNU `[0]` and flexible `[]` members. The parser preserves the
+  established field-attribute attachment order before wrapping the outer
+  dimension. Parsed fields have `element_count=1`, `is_array=false`, while
+  GNU zero/flexible semantic flags remain explicit. The built-in `va_list`
+  state record's byte array likewise uses a complete ArrayType.
+- Static initialization's five linked algorithms—zero expansion, nested
+  designators, union overlays, backward slot rewrites and record/union
+  positional walking—now share one field-shape and fixed-slot policy.
+  This removes roughly 56 spread-out legacy shape reads. Runtime record
+  initialization accepts GNU zero-array empty `{}` without fabricating an
+  element write; excess elements are rejected.
+- Core FIELD_ADDRESS uses `EXACT` for a materialized array **field type**,
+  reserving `ARRAY_ELEMENT` for hand-authored legacy repeated fields. Core
+  record import obtains a flexible incomplete array's alignment through its
+  complete element type without losing the sealed incomplete CoreType.
+  The unchanged Core verifier enforces the resulting typed pointer contract.
+- AST verification recognizes an incomplete by-value ArrayType **only** as a
+  properly flagged flexible member, accepts full-array compound literals,
+  and validates the canonical `va_list` field through its array query.
+  Expression array queries propagate `const`/`volatile` recursively to
+  materialized array elements, so a `const struct` member cannot be written
+  through a subscript.
+
+### Deliberate remaining exceptions and evidence
+
+VLA locals still own a single-evaluated runtime bound and address pair: they
+are **not** incorrectly transformed into a compile-time fixed ArrayType.
+Manually built AST/white-box fixtures may still publish the old repeated
+field shape through `minic_c0_record_add_field`; the shared query continues
+to accept it until those public callers migrate. Parser-produced fixed array
+locals and record fields no longer need that fallback. Some GNU typedef-array
+initializer forms outside this batch's accepted domain remain separate
+feature gaps, not newly claimed behavior.
+
+The first integration exposed two real regressions, both fixed before the
+final gate: materialized flexible arrays initially lacked an incomplete-type
+semantic owner in the AST verifier; and materialized GNU zero record members
+initially had bound 0 where the runtime initializer expected the legacy
+sentinel 1. The fixes restore precise array source semantics, not machine
+special cases.
+
+| Gate | Result |
+| --- | --- |
+| Complete Debug `check-fast` | **PASS**, exit 0 |
+| Release full compiler `-Werror` | **PASS** |
+| New local array gate: five targets, GNU/MiniC x86 native 42, negative/rollback | **5/5, native 42/42, 80/80** |
+| New static typedef-field gate: five targets, GNU/MiniC native 42, negative/rollback | **5/5, native 42/42, 40/40** |
+| FAM / zero nested / Record ABI / AArch64 va_list source contracts | **PASS** at focused local gates |
+| Prior machine `.s` A/B | Local-only phase byte-identical on five targets; **full RecordField phase differs** in temporary spill/order. Native semantic results pass, byte equality is **not** claimed. |
+| Strict backend review manifest | Previous IR-P25 historical stale-inventory failure persists; this batch does not rewrite unrelated fingerprints. |
+| GNU cross ELF/QEMU and five-ISA Linux runtime | **NOT RUN**, cross GNU/QEMU unavailable here |

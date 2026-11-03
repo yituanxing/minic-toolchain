@@ -73,7 +73,7 @@ bool minic_parser_materialize_builtin_va_list_source_type(
     MinicVaCursorSourceShape shape;
     MinicRecordId tag_id;
     MinicRecord *tag;
-    MinicType record_type, result;
+    MinicType record_type, result, cursor_storage_type;
     size_t actual_size, actual_alignment;
     if (parser == NULL || parser->program == NULL || parser->target_info == NULL ||
         type == NULL ||
@@ -96,11 +96,13 @@ bool minic_parser_materialize_builtin_va_list_source_type(
          * explicit alignment supplies the target's layout independently of
          * how its real ABI state is accessed by the machine emitter. */
         if (!minic_c0_program_add_anonymous_record(parser->program, &tag_id) ||
+            !minic_c0_program_add_array_type(
+                parser->program, minic_type_unsigned_char(),
+                shape.object_size, &cursor_storage_type) ||
             !minic_c0_record_add_field(parser->program, tag_id, "", 0U,
-                                       minic_type_unsigned_char(), shape.object_size))
+                                       cursor_storage_type, 1U))
             return false;
         tag = &parser->program->records[tag_id];
-        tag->fields[0].is_array = true;
         tag->explicit_alignment = shape.object_alignment;
         if (!minic_c0_program_finish_record(parser->program, tag_id))
             return false;

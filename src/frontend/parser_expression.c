@@ -573,9 +573,12 @@ static bool parse_array_compound_literal(MinicParser *parser,
     minic_c0_local_initialize(&local);
     local.name_span.begin = begin;
     local.name_span.end = begin;
-    local.type = array_type->element_type;
-    local.element_count = element_count;
-    local.is_array = true;
+    /* The compound literal and its backing local denote the same complete
+     * array object. Keep the actual ArrayType in both AST nodes rather than
+     * re-encoding its outer bound in MinicLocal. */
+    local.type = type;
+    local.element_count = 1U;
+    local.is_array = false;
     local.is_register_storage = false;
     local.declaration_block = parser->current_block;
     local.has_declaration_block =
@@ -589,7 +592,7 @@ static bool parse_array_compound_literal(MinicParser *parser,
     hidden_lvalue.kind = MINIC_EXPRESSION_LOCAL;
     hidden_lvalue.span.begin = begin;
     hidden_lvalue.span.end = parser->current.span.begin;
-    hidden_lvalue.type = local.type;
+    hidden_lvalue.type = type;
     hidden_lvalue.value_category = MINIC_VALUE_LVALUE;
     hidden_lvalue.value.local_id = local_id;
     if (!minic_parser_add_expression(parser, &hidden_lvalue, &hidden_lvalue_id) ||
@@ -609,10 +612,7 @@ static bool parse_array_compound_literal(MinicParser *parser,
     compound_literal.kind = MINIC_EXPRESSION_COMPOUND_LITERAL;
     compound_literal.span.begin = begin;
     compound_literal.span.end = parser->current.span.begin;
-    /* Array convergence is still transitional: local arrays expose their
-       element type plus array-object metadata. Keep the same representation
-       here so Core can reuse the existing repeated-local object owner. */
-    compound_literal.type = local.type;
+    compound_literal.type = type;
     compound_literal.value_category = MINIC_VALUE_LVALUE;
     compound_literal.value.compound_literal.local_id = local_id;
     compound_literal.value.compound_literal.initializer_block = initializer_block;

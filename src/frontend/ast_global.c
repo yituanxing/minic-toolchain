@@ -23,15 +23,17 @@ static bool global_record_field_shape(const MinicC0Program *program,
     is_array = minic_c0_record_field_array_info(program, field, &info);
     if (!is_array && field->element_count != 1U) return false;
     if (is_array && info.has_materialized_type &&
-        (field->element_count != 1U || field->is_flexible_array || field->is_zero_length_array)) {
+        (field->element_count != 1U ||
+         (field->is_flexible_array && !info.is_incomplete) ||
+         (field->is_zero_length_array && !info.is_zero_length))) {
         return false;
     }
-    *element_type = is_array && !info.has_materialized_type
+    *element_type = is_array && (!info.has_materialized_type || field->is_flexible_array)
                         ? info.element_type : field->type;
     *element_count = is_array && !info.has_materialized_type
                          ? info.element_count : 1U;
     *is_zero_length = is_array && info.is_zero_length;
-    *is_flexible = is_array && !info.has_materialized_type && field->is_flexible_array;
+    *is_flexible = is_array && info.is_incomplete && field->is_flexible_array;
     return true;
 }
 
