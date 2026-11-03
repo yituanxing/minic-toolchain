@@ -1082,6 +1082,9 @@ lacks src/target/backend.c '.emit_program ='
 has src/target/backend.c '.emit_module = emit_riscv64_module,'
 has src/target/backend.c '.emit_module = minic_riscv32_write_core_module,'
 has src/target/backend.c '.emit_module = minic_x86_64_write_c0_program_with_core_module,'
+# All target-catalog tests consume the sealed Module backend registration.
+lacks tests/compiler/c0/check-four-target-model-m0.c 'backend->emit_program'
+has tests/compiler/c0/check-four-target-model-m0.c 'backend->emit_module'
 has src/target/backend.c '.emit_module = minic_aarch64_write_c0_program_with_core_module,'
 has src/target/backend.c '.emit_module = minic_loongarch64_write_c0_program_with_core_module,'
 exists src/target/common/program_emit.h

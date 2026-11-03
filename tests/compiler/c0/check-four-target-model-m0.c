@@ -271,7 +271,7 @@ static int verify_registered_target_catalog(void) {
         if (entry != &targets[i] || info == NULL ||
             entry != minic_target_catalog_for_architecture(entry->architecture) ||
             info->architecture != entry->architecture ||
-            backend == NULL || backend->emit_program == NULL ||
+            backend == NULL || backend->emit_module == NULL ||
             info->data_layout == NULL ||
             (entry->isa_family == MINIC_TARGET_ISA_FAMILY_RISCV) !=
                 (info->riscv_isa.xlen != 0U) ||

@@ -944,3 +944,7 @@ Read as one chain: x86 SysV/Win64 incoming/outgoing Core CALL plans, Frame and s
 ## IR-P11 — Five-target sealed Module function declaration boundary (2026-11-03)
 
 The common prepared visitor now withholds `MinicFunction*` from machine callbacks whenever the final ModuleIR owns the function symbol. AArch64 and LoongArch's shared Direct LP64 preflight accepts a sealed Module function even with no source declaration; RV32/RV64/x86 machine callback paths select the Module symbol without fallback. Four writer entrypoints no longer demand that sealed Module global count equal the mutable source Program global count (the fifth target shares the Direct writer). Output transaction tests deliberately contradict the source declaration while keeping the sealed Module definition, and verify the function is emitted using Module facts. Standalone source-only callers retain their original behavior. The remaining source `Program` for unsealed GNU ASM and target-specific legacy machine consumers is not declared removed.
+
+## IR-P12 — Cross-suite stale backend consumer closed (2026-11-03)
+
+The runtime four-architecture target-catalog probe still attempted to compile against the removed `MinicBackend.emit_program` field and failed before reaching any runtime validation. Update the only stale catalog consumer to `emit_module` and harden the cross-target boundary test to reject reintroduction of the old registration. This is source-level closure, not a GNU/QEMU runtime pass; verify in GitHub's actual four-architecture CI gate.
