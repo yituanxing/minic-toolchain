@@ -67,6 +67,7 @@ static MinicCoreLowerStatus linear_vararg_align8(
     MinicCoreValueId cursor, MinicType cursor_type,
     MinicCoreValueId *result) {
     MinicCoreInstruction ins;
+    MinicType ins_source_type = minic_type_void();
     MinicCoreValueId bits, seven, rounded, mask, masked;
     const MinicType word = minic_type_unsigned_int();
     MinicCoreLowerStatus status;
@@ -78,40 +79,40 @@ static MinicCoreLowerStatus linear_vararg_align8(
     (void)memset(&ins, 0, sizeof(ins));
     ins.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
     ins.span = span;
-    ins.type = word;
+    ins_source_type = word;
     ins.result = MINIC_CORE_VALUE_INVALID;
     ins.value.integer_value = 7;
-    if (!minic_core_function_append_value_instruction(
-            context->function, context->block_id, &ins, &seven))
+    if (!minic_core_function_append_source_value_instruction(
+            context->function, context->block_id, &ins, ins_source_type, &seven))
         return MINIC_CORE_LOWER_ERROR;
     (void)memset(&ins, 0, sizeof(ins));
     ins.kind = MINIC_CORE_INSTRUCTION_INTEGER_ADD;
     ins.span = span;
-    ins.type = word;
+    ins_source_type = word;
     ins.result = MINIC_CORE_VALUE_INVALID;
     ins.value.binary.left = bits;
     ins.value.binary.right = seven;
-    if (!minic_core_function_append_value_instruction(
-            context->function, context->block_id, &ins, &rounded))
+    if (!minic_core_function_append_source_value_instruction(
+            context->function, context->block_id, &ins, ins_source_type, &rounded))
         return MINIC_CORE_LOWER_ERROR;
     (void)memset(&ins, 0, sizeof(ins));
     ins.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
     ins.span = span;
-    ins.type = word;
+    ins_source_type = word;
     ins.result = MINIC_CORE_VALUE_INVALID;
     ins.value.integer_value = -8;
-    if (!minic_core_function_append_value_instruction(
-            context->function, context->block_id, &ins, &mask))
+    if (!minic_core_function_append_source_value_instruction(
+            context->function, context->block_id, &ins, ins_source_type, &mask))
         return MINIC_CORE_LOWER_ERROR;
     (void)memset(&ins, 0, sizeof(ins));
     ins.kind = MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND;
     ins.span = span;
-    ins.type = word;
+    ins_source_type = word;
     ins.result = MINIC_CORE_VALUE_INVALID;
     ins.value.binary.left = rounded;
     ins.value.binary.right = mask;
-    if (!minic_core_function_append_value_instruction(
-            context->function, context->block_id, &ins, &masked))
+    if (!minic_core_function_append_source_value_instruction(
+            context->function, context->block_id, &ins, ins_source_type, &masked))
         return MINIC_CORE_LOWER_ERROR;
     return append_scalar_bitcast(
         context, span, cursor_type, masked, result);
@@ -142,6 +143,7 @@ MinicCoreLowerStatus minic_core_linear_vararg_advance(
     MinicCoreValueId cursor, MinicCoreValueId list_address,
     MinicType cursor_type, size_t value_size, bool is_volatile) {
     MinicCoreInstruction operation;
+    MinicType operation_source_type = minic_type_void();
     MinicCoreValueId slots, next_cursor;
     size_t slot_bytes;
     size_t slot_count;
@@ -161,36 +163,36 @@ MinicCoreLowerStatus minic_core_linear_vararg_advance(
     (void)memset(&operation, 0, sizeof(operation));
     operation.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
     operation.span = span;
-    operation.type = minic_type_int();
+    operation_source_type = minic_type_int();
     operation.result = MINIC_CORE_VALUE_INVALID;
     operation.value.integer_value = (int64_t)slot_count;
-    if (!minic_core_function_append_value_instruction(
-            context->function, context->block_id, &operation, &slots)) {
+    if (!minic_core_function_append_source_value_instruction(
+            context->function, context->block_id, &operation, operation_source_type, &slots)) {
         return MINIC_CORE_LOWER_ERROR;
     }
     (void)memset(&operation, 0, sizeof(operation));
     operation.kind = MINIC_CORE_INSTRUCTION_POINTER_OFFSET;
     operation.span = span;
-    operation.type = cursor_type;
+    operation_source_type = cursor_type;
     operation.result = MINIC_CORE_VALUE_INVALID;
     operation.value.pointer_offset.base = cursor;
     operation.value.pointer_offset.index = slots;
     operation.value.pointer_offset.element_size = slot_bytes;
     operation.value.pointer_offset.subtract = false;
-    if (!minic_core_function_append_value_instruction(
-            context->function, context->block_id, &operation, &next_cursor)) {
+    if (!minic_core_function_append_source_value_instruction(
+            context->function, context->block_id, &operation, operation_source_type, &next_cursor)) {
         return MINIC_CORE_LOWER_ERROR;
     }
     (void)memset(&operation, 0, sizeof(operation));
     operation.kind = MINIC_CORE_INSTRUCTION_STORE;
     operation.span = span;
-    operation.type = minic_type_void();
+    operation_source_type = minic_type_void();
     operation.result = MINIC_CORE_VALUE_INVALID;
     operation.value.store.address = list_address;
     operation.value.store.stored_value = next_cursor;
     operation.value.store.is_volatile = is_volatile;
-    return minic_core_function_append_effect_instruction(
-               context->function, context->block_id, &operation)
+    return minic_core_function_append_source_effect_instruction(
+               context->function, context->block_id, &operation, operation_source_type)
                ? MINIC_CORE_LOWER_OK : MINIC_CORE_LOWER_ERROR;
 }
 
@@ -199,6 +201,7 @@ MinicCoreLowerStatus minic_core_lower_vararg_scalar(
     MinicCoreValueId *value_id) {
     const MinicExpression *target;
     MinicCoreInstruction operation;
+    MinicType operation_source_type = minic_type_void();
     MinicCoreLowerStatus status;
     MinicCoreValueId list_address;
     MinicCoreValueId cursor_value;
@@ -242,11 +245,11 @@ MinicCoreLowerStatus minic_core_lower_vararg_scalar(
         (void)memset(&operation, 0, sizeof(operation));
         operation.kind = MINIC_CORE_INSTRUCTION_VARIADIC_NEXT_SCALAR;
         operation.span = expression->span;
-        operation.type = expression->type;
+        operation_source_type = expression->type;
         operation.result = MINIC_CORE_VALUE_INVALID;
         operation.value.operand = cursor_value;
-        return minic_core_function_append_value_instruction(
-                   context->function, context->block_id, &operation,
+        return minic_core_function_append_source_value_instruction(
+                   context->function, context->block_id, &operation, operation_source_type,
                    value_id)
                    ? MINIC_CORE_LOWER_OK : MINIC_CORE_LOWER_ERROR;
     }
@@ -260,12 +263,12 @@ MinicCoreLowerStatus minic_core_lower_vararg_scalar(
     (void)memset(&operation, 0, sizeof(operation));
     operation.kind = MINIC_CORE_INSTRUCTION_LOAD;
     operation.span = expression->span;
-    operation.type = cursor_type;
+    operation_source_type = cursor_type;
     operation.result = MINIC_CORE_VALUE_INVALID;
     operation.value.load.address = list_address;
     operation.value.load.is_volatile = minic_type_is_volatile(target->type);
-    if (!minic_core_function_append_value_instruction(
-            context->function, context->block_id, &operation, &cursor_value)) {
+    if (!minic_core_function_append_source_value_instruction(
+            context->function, context->block_id, &operation, operation_source_type, &cursor_value)) {
         return MINIC_CORE_LOWER_ERROR;
     }
     status = minic_core_linear_vararg_prepare_cursor(
@@ -284,12 +287,12 @@ MinicCoreLowerStatus minic_core_lower_vararg_scalar(
     (void)memset(&operation, 0, sizeof(operation));
     operation.kind = MINIC_CORE_INSTRUCTION_LOAD;
     operation.span = expression->span;
-    operation.type = expression->type;
+    operation_source_type = expression->type;
     operation.result = MINIC_CORE_VALUE_INVALID;
     operation.value.load.address = value_address;
     operation.value.load.is_volatile = false;
-    if (!minic_core_function_append_value_instruction(
-            context->function, context->block_id, &operation, &argument_value)) {
+    if (!minic_core_function_append_source_value_instruction(
+            context->function, context->block_id, &operation, operation_source_type, &argument_value)) {
         return MINIC_CORE_LOWER_ERROR;
     }
     status = minic_core_linear_vararg_advance(
@@ -313,6 +316,7 @@ MinicCoreLowerStatus minic_core_lower_vararg_statement(
     if (expression->kind == MINIC_EXPRESSION_BUILTIN_VA_START) {
         const MinicExpression *target;
         MinicCoreInstruction instruction;
+        MinicType instruction_source_type = minic_type_void();
         MinicCoreLowerStatus status;
         MinicCoreValueId cursor_value;
         MinicCoreValueId target_address;
@@ -337,23 +341,23 @@ MinicCoreLowerStatus minic_core_lower_vararg_statement(
             (void)memset(&instruction, 0, sizeof(instruction));
             instruction.kind = MINIC_CORE_INSTRUCTION_VARIADIC_ARGUMENT_ADDRESS;
             instruction.span = expression->span;
-            instruction.type = value_type;
+            instruction_source_type = value_type;
             instruction.result = MINIC_CORE_VALUE_INVALID;
             instruction.value.variadic_address.copy_destination = false;
-            if (!minic_core_function_append_value_instruction(
-                    context->function, context->block_id, &instruction,
+            if (!minic_core_function_append_source_value_instruction(
+                    context->function, context->block_id, &instruction, instruction_source_type,
                     &cursor_value)) return MINIC_CORE_LOWER_ERROR;
             /* ORIGIN remains backend-private initialization. Copy its exact
              * state into the real C object, not into a pointer-valued proxy. */
             (void)memset(&instruction, 0, sizeof(instruction));
             instruction.kind = MINIC_CORE_INSTRUCTION_VARIADIC_COPY;
             instruction.span = expression->span;
-            instruction.type = minic_type_void();
+            instruction_source_type = minic_type_void();
             instruction.result = MINIC_CORE_VALUE_INVALID;
             instruction.value.variadic_copy.destination = target_address;
             instruction.value.variadic_copy.source = cursor_value;
-            return minic_core_function_append_effect_instruction(
-                       context->function, context->block_id, &instruction)
+            return minic_core_function_append_source_effect_instruction(
+                       context->function, context->block_id, &instruction, instruction_source_type)
                        ? MINIC_CORE_LOWER_OK : MINIC_CORE_LOWER_ERROR;
         }
         /* A linear cursor's C source representation is itself a pointer.
@@ -373,23 +377,23 @@ MinicCoreLowerStatus minic_core_lower_vararg_statement(
         (void)memset(&instruction, 0, sizeof(instruction));
         instruction.kind = MINIC_CORE_INSTRUCTION_VARIADIC_ARGUMENT_ADDRESS;
         instruction.span = expression->span;
-        instruction.type = value_type;
+        instruction_source_type = value_type;
         instruction.result = MINIC_CORE_VALUE_INVALID;
         instruction.value.variadic_address.copy_destination = false;
-        if (!minic_core_function_append_value_instruction(
-                context->function, context->block_id, &instruction, &cursor_value)) {
+        if (!minic_core_function_append_source_value_instruction(
+                context->function, context->block_id, &instruction, instruction_source_type, &cursor_value)) {
             return MINIC_CORE_LOWER_ERROR;
         }
         (void)memset(&instruction, 0, sizeof(instruction));
         instruction.kind = MINIC_CORE_INSTRUCTION_STORE;
         instruction.span = expression->span;
-        instruction.type = minic_type_void();
+        instruction_source_type = minic_type_void();
         instruction.result = MINIC_CORE_VALUE_INVALID;
         instruction.value.store.address = target_address;
         instruction.value.store.stored_value = cursor_value;
         instruction.value.store.is_volatile = minic_type_is_volatile(target->type);
-        return minic_core_function_append_effect_instruction(
-                   context->function, context->block_id, &instruction)
+        return minic_core_function_append_source_effect_instruction(
+                   context->function, context->block_id, &instruction, instruction_source_type)
                    ? MINIC_CORE_LOWER_OK
                    : MINIC_CORE_LOWER_ERROR;
     }
@@ -401,6 +405,7 @@ MinicCoreLowerStatus minic_core_lower_vararg_statement(
             const MinicExpression *source;
             MinicCoreValueId dest_address, source_cursor;
             MinicCoreInstruction instruction;
+            MinicType instruction_source_type = minic_type_void();
             MinicCoreLowerStatus status;
             target = minic_c0_program_expression(
                 context->body->program, expression->value.binary.left);
@@ -417,12 +422,12 @@ MinicCoreLowerStatus minic_core_lower_vararg_statement(
             (void)memset(&instruction, 0, sizeof(instruction));
             instruction.kind = MINIC_CORE_INSTRUCTION_VARIADIC_COPY;
             instruction.span = expression->span;
-            instruction.type = minic_type_void();
+            instruction_source_type = minic_type_void();
             instruction.result = MINIC_CORE_VALUE_INVALID;
             instruction.value.variadic_copy.destination = dest_address;
             instruction.value.variadic_copy.source = source_cursor;
-            return minic_core_function_append_effect_instruction(
-                       context->function, context->block_id, &instruction)
+            return minic_core_function_append_source_effect_instruction(
+                       context->function, context->block_id, &instruction, instruction_source_type)
                        ? MINIC_CORE_LOWER_OK : MINIC_CORE_LOWER_ERROR;
         }
         /* Preserve existing scalar-cursor policy. Unknown ABI policies

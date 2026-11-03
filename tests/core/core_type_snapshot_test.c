@@ -135,28 +135,25 @@ static bool build_indirect_fixture(MinicCoreFunction *function, const TypeIds *i
         !minic_core_function_add_block(function, &block)) return false;
 
     instruction.kind = MINIC_CORE_INSTRUCTION_PARAMETER;
-    instruction.type = source_function_pointer;
     instruction.value.parameter_index = 0U;
-    if (!minic_core_function_append_value_instruction(function, block, &instruction,
-                                                       &callee)) return false;
-    instruction.type = minic_type_int();
+    if (!minic_core_function_append_source_value_instruction(
+            function, block, &instruction, source_function_pointer, &callee)) return false;
     instruction.value.parameter_index = 1U;
-    if (!minic_core_function_append_value_instruction(function, block, &instruction,
-                                                       &argument)) return false;
+    if (!minic_core_function_append_source_value_instruction(
+            function, block, &instruction, minic_type_int(), &argument)) return false;
     call_argument.kind = MINIC_CORE_CALL_ARGUMENT_VALUE;
     call_argument.value.value_id = argument;
     if (!minic_core_function_append_call_arguments(function, &call_argument, 1U,
                                                    &begin)) return false;
     (void)memset(&instruction, 0, sizeof(instruction));
     instruction.kind = MINIC_CORE_INSTRUCTION_INDIRECT_CALL;
-    instruction.type = minic_type_int();
     instruction.value.indirect_call.callee = callee;
     instruction.value.indirect_call.signature_id = signature;
     instruction.value.indirect_call.argument_begin = begin;
     instruction.value.indirect_call.argument_count = 1U;
     instruction.value.indirect_call.result_object = MINIC_CORE_OBJECT_INVALID;
-    if (!minic_core_function_append_value_instruction(function, block, &instruction,
-                                                       &result)) return false;
+    if (!minic_core_function_append_source_value_instruction(
+            function, block, &instruction, minic_type_int(), &result)) return false;
     terminator.kind = MINIC_CORE_TERMINATOR_RETURN;
     terminator.return_value = result;
     terminator.return_object = MINIC_CORE_OBJECT_INVALID;
@@ -195,18 +192,16 @@ static bool build_field_fixture(MinicCoreFunction *function, const TypeIds *ids)
         !set_snapshot_signature(function, ids->ptr_i32, &core_parameter) ||
         !minic_core_function_add_block(function, &block)) return false;
     instruction.kind = MINIC_CORE_INSTRUCTION_PARAMETER;
-    instruction.type = source_pointer_record;
     instruction.value.parameter_index = 0U;
-    if (!minic_core_function_append_value_instruction(function, block, &instruction,
-                                                       &base)) return false;
+    if (!minic_core_function_append_source_value_instruction(
+            function, block, &instruction, source_pointer_record, &base)) return false;
     (void)memset(&instruction, 0, sizeof(instruction));
     instruction.kind = MINIC_CORE_INSTRUCTION_FIELD_ADDRESS;
-    instruction.type = source_pointer_int;
     instruction.value.field_address.base = base;
     instruction.value.field_address.field_index = 0U;
     instruction.value.field_address.byte_offset = 8U;
-    if (!minic_core_function_append_value_instruction(function, block, &instruction,
-                                                       &result)) return false;
+    if (!minic_core_function_append_source_value_instruction(
+            function, block, &instruction, source_pointer_int, &result)) return false;
     terminator.kind = MINIC_CORE_TERMINATOR_RETURN;
     terminator.return_value = result;
     terminator.return_object = MINIC_CORE_OBJECT_INVALID;
@@ -235,14 +230,44 @@ static bool build_object_fixture(MinicCoreFunction *function, const TypeIds *ids
         !minic_core_function_add_block(function, &block)) return false;
     function->objects[object_id].core_type_id = ids->i32;
     instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
-    instruction.type = minic_type_int();
     instruction.value.integer_value = 0;
-    if (!minic_core_function_append_value_instruction(function, block, &instruction,
-                                                       &result)) return false;
+    if (!minic_core_function_append_source_value_instruction(
+            function, block, &instruction, minic_type_int(), &result)) return false;
     function->values[result].core_type_id = ids->i32;
     function->instructions[0].core_type_id = ids->i32;
     terminator.kind = MINIC_CORE_TERMINATOR_RETURN;
     terminator.return_value = result;
+    terminator.return_object = MINIC_CORE_OBJECT_INVALID;
+    return minic_core_function_set_terminator(function, block, &terminator);
+}
+
+/* An independent Core producer does not import C declarations, allocate a
+ * SourceDraft, or call the C-facing builder. Publication is CoreType-only. */
+static bool build_core_only_function(MinicCoreFunction *function,
+                                     const TypeIds *ids) {
+    MinicCoreInstruction instruction = {0};
+    MinicCoreTerminator terminator = {0};
+    MinicCoreBlockId block;
+    MinicCoreValueId value;
+    const char name[] = "core_only";
+
+    minic_core_function_initialize(function);
+    function->name = malloc(sizeof(name));
+    if (function->name == NULL) return false;
+    (void)memcpy(function->name, name, sizeof(name));
+    function->name_length = sizeof(name) - 1U;
+    function->core_return_type_id = ids->i32;
+    if (!minic_core_function_add_block(function, &block)) return false;
+    instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
+    instruction.core_type_id = ids->i32;
+    instruction.value.integer_value = 42;
+    if (!minic_core_function_append_value_instruction(
+            function, block, &instruction, &value)) return false;
+    if (function->values[value].core_type_id != ids->i32 ||
+        function->instructions[0].core_type_id != ids->i32)
+        return false;
+    terminator.kind = MINIC_CORE_TERMINATOR_RETURN;
+    terminator.return_value = value;
     terminator.return_object = MINIC_CORE_OBJECT_INVALID;
     return minic_core_function_set_terminator(function, block, &terminator);
 }
@@ -297,10 +322,9 @@ static bool build_simple_function(MinicCoreFunction *function) {
                                                 &signature_id) ||
         !minic_core_function_add_block(function, &block)) return false;
     instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
-    instruction.type = minic_type_int();
     instruction.value.integer_value = 7;
-    if (!minic_core_function_append_value_instruction(function, block, &instruction,
-                                                       &value)) return false;
+    if (!minic_core_function_append_source_value_instruction(
+            function, block, &instruction, minic_type_int(), &value)) return false;
     terminator.kind = MINIC_CORE_TERMINATOR_RETURN;
     terminator.return_value = value;
     terminator.return_object = MINIC_CORE_OBJECT_INVALID;
@@ -327,21 +351,19 @@ static bool build_enum_overflow_function(MinicCoreFunction *function) {
         !minic_core_function_add_block(function, &block)) return false;
     for (i = 0U; i < 3U; ++i) {
         instruction.kind = MINIC_CORE_INSTRUCTION_PARAMETER;
-        instruction.type = parameter_types[i];
         instruction.value.parameter_index = i;
-        if (!minic_core_function_append_value_instruction(
-                function, block, &instruction, &values[i])) return false;
+        if (!minic_core_function_append_source_value_instruction(
+                function, block, &instruction, parameter_types[i], &values[i])) return false;
     }
     (void)memset(&instruction, 0, sizeof(instruction));
     instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_OVERFLOW;
-    instruction.type = minic_type_bool();
     instruction.value.integer_overflow.operator_kind = MINIC_CORE_INTEGER_OVERFLOW_ADD;
     instruction.value.integer_overflow.left = values[0];
     instruction.value.integer_overflow.right = values[1];
     instruction.value.integer_overflow.result_address = values[2];
     instruction.value.integer_overflow.source_overflow_destination_ineligible = true;
-    if (!minic_core_function_append_value_instruction(
-            function, block, &instruction, &result)) return false;
+    if (!minic_core_function_append_source_value_instruction(
+            function, block, &instruction, minic_type_bool(), &result)) return false;
     terminator.kind = MINIC_CORE_TERMINATOR_RETURN;
     terminator.return_value = result;
     terminator.return_object = MINIC_CORE_OBJECT_INVALID;
@@ -370,6 +392,12 @@ int main(void) {
     ResolverState resolver;
 
     CHECK(make_type_context(&context, &ids));
+    CHECK(build_core_only_function(&function, &ids));
+    CHECK(function.source_draft == NULL);
+    CHECK(minic_core_function_attach_type_context(&function, &context));
+    CHECK(function.source_draft == NULL && minic_core_function_verify(&function));
+    minic_core_function_destroy(&function);
+
     CHECK(build_indirect_fixture(&function, &ids));
     CHECK(minic_core_function_attach_type_context(&function, &context));
     CHECK(minic_core_function_verify_core_type_snapshot(&function));
@@ -476,38 +504,36 @@ int main(void) {
           function.core_return_type_id == MINIC_CORE_TYPE_INVALID);
     CHECK(function.values[0].core_type_id == MINIC_CORE_TYPE_INVALID);
     /* A rejected import must leave every C draft available for a retry. */
-    CHECK(minic_type_equal(function.return_type, minic_type_int()) &&
-          minic_type_equal(function.callees[0].return_type, minic_type_int()) &&
+    CHECK(function.source_draft != NULL &&
+          minic_type_equal(function.source_draft->return_type, minic_type_int()) &&
+          minic_type_equal(function.source_draft->callees[0].return_type,
+                           minic_type_int()) &&
+          minic_type_equal(function.source_draft->object_types[0], minic_type_int()) &&
+          minic_type_equal(function.source_draft->global_types[0], minic_type_int()) &&
+          minic_type_equal(function.source_draft->fixed_register_binding_types[0],
+                           minic_type_int()) &&
+          function.source_draft->call_signatures[0].function_type_id == 29U &&
           minic_type_equal(minic_core_function_source_value_type(&function, 0U),
                            minic_type_int()) &&
-          function.callees[0].parameter_types != NULL &&
-          function.call_signatures[0].parameter_types != NULL);
+          function.source_draft->callees[0].parameter_types != NULL &&
+          function.source_draft->call_signatures[0].parameter_types != NULL);
     /* Source reads resolve the defining instruction, not a separately copied
      * Value descriptor. Exact C rank must survive this ingress adapter. */
-    function.instructions[0].type = minic_type_long_long();
+    function.source_draft->instruction_types[0] = minic_type_long_long();
     CHECK(minic_type_equal(minic_core_function_source_value_type(&function, 0U),
                            minic_type_long_long()) &&
           !minic_type_equal(minic_core_function_source_value_type(&function, 0U),
                             minic_type_long()));
-    function.instructions[0].type = minic_type_int();
+    function.source_draft->instruction_types[0] = minic_type_int();
     resolver.call_count = 0U;
     resolver.fail_on_call = 0U;
     CHECK(minic_core_function_snapshot_types(&function, &context,
                                               resolve_source_type, &resolver));
     CHECK(minic_core_function_verify_core_type_snapshot(&function));
-    /* No published type consumer may depend on the C ingress side tables. */
+    /* Publication physically releases the C ingress sidecar; Core has no
+     * residual C descriptors to poison or accidentally inspect. */
     CHECK(function.type_context == &context &&
-          function.parameter_types == NULL && function.enum_types == NULL &&
-          function.callees[0].parameter_types == NULL &&
-          function.call_signatures[0].parameter_types == NULL &&
-          function.call_signatures[0].function_type_id == MINIC_FUNCTION_TYPE_INVALID);
-    CHECK(function.return_type.base_kind == (MinicTypeBaseKind)0x7fffffff &&
-          function.fixed_register_bindings[0].type.base_kind == (MinicTypeBaseKind)0x7fffffff &&
-          function.objects[0].type.base_kind == (MinicTypeBaseKind)0x7fffffff &&
-          function.globals[0].type.base_kind == (MinicTypeBaseKind)0x7fffffff &&
-          function.callees[0].return_type.base_kind == (MinicTypeBaseKind)0x7fffffff &&
-          function.call_signatures[0].return_type.base_kind == (MinicTypeBaseKind)0x7fffffff &&
-          function.instructions[0].type.base_kind == (MinicTypeBaseKind)0x7fffffff);
+          function.source_draft == NULL);
     CHECK(minic_core_function_source_value_type(&function, 0U).base_kind ==
           (MinicTypeBaseKind)0x7fffffff);
     CHECK(minic_core_function_verify(&function));
@@ -526,11 +552,11 @@ int main(void) {
     CHECK(minic_core_function_snapshot_types(&function, &context,
                                              resolve_enum_overflow_type, &ids));
     CHECK(minic_core_function_verify_core_type_snapshot(&function));
-    CHECK(function.parameter_types == NULL && function.enum_types == NULL &&
+    CHECK(function.source_draft == NULL &&
           minic_core_function_source_value_type(&function, 2U).base_kind ==
               (MinicTypeBaseKind)0x7fffffff);
     minic_core_function_destroy(&function);
     minic_core_type_context_destroy(&context);
-    (void)puts("CORE_TYPE_SNAPSHOT=PASS valid malformed indirect_nominal field_nominal overflow enum_source_proof rollback");
+    (void)puts("CORE_TYPE_SNAPSHOT=PASS valid malformed direct_core_producer indirect_nominal field_nominal overflow enum_source_proof rollback");
     return 0;
 }

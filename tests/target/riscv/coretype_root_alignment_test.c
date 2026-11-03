@@ -49,8 +49,7 @@ int main(void) {
     assert(minic_riscv_address_alignment(&function, 1U) == 4U);
     assert(minic_riscv_address_alignment(&function, 2U) == 1U);
 
-    /* A C descriptor must not change the committed Core alignment. */
-    object.type.base_kind = MINIC_TYPE_BASE_DOUBLE;
+    /* The published object has no C descriptor to override Core alignment. */
     assert(minic_riscv_address_alignment(&function, 0U) == 16U);
 
     /* Absent/invalid Core evidence cannot authorize an aligned fast path. */
@@ -67,6 +66,6 @@ int main(void) {
     integer.alignment = 3U;
     assert(minic_riscv_address_alignment(&function, 0U) == 1U);
 
-    puts("RISCV_CORETYPE_ROOT_ALIGNMENT=PASS root=16 offset=4 global=1 C_poison=1 missing_core=4");
+    puts("RISCV_CORETYPE_ROOT_ALIGNMENT=PASS root=16 offset=4 global=1 C_free=1 missing_core=4");
     return 0;
 }

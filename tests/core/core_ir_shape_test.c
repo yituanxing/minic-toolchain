@@ -14,61 +14,65 @@ static bool build_function(MinicCoreFunction *function, const char *mode) {
     MinicType parameter_type;
     size_t parameter_count = 0U;
 
+    /* Source builders publish a draft signature first. They may add source
+     * fixed bindings and enum identities only while that draft is alive. */
+    if (strcmp(mode, "fixed") == 0 || strcmp(mode, "variadic") == 0)
+        result_type = minic_type_int();
+    else if (strcmp(mode, "symbol") == 0) {
+        if (!minic_type_pointer_to(minic_type_function(0U), &result_type))
+            return false;
+    } else if (strcmp(mode, "enum") == 0 ||
+               strcmp(mode, "enum-missing") == 0)
+        result_type = minic_type_enum(123U);
+    else if (strcmp(mode, "enum-pointer") == 0) {
+        if (!minic_type_pointer_to(minic_type_enum(123U), &result_type))
+            return false;
+    } else return false;
+    if (strcmp(mode, "enum-pointer") == 0 || strcmp(mode, "variadic") == 0) {
+        parameter_type = result_type;
+        parameter_count = 1U;
+    }
+    if (!minic_core_function_set_signature(function, "probe", 5U,
+                                           result_type,
+                                           parameter_count == 0U ? NULL : &parameter_type,
+                                           parameter_count)) return false;
     if (strcmp(mode, "fixed") == 0) {
         size_t binding;
-        result_type = minic_type_int();
         if (!minic_core_function_add_fixed_register_binding(
                 function, "rax", 3U, result_type, false, &binding)) return false;
         (void)memset(&instruction, 0, sizeof(instruction));
         instruction.kind = MINIC_CORE_INSTRUCTION_FIXED_REGISTER_READ;
-        instruction.type = result_type;
         instruction.value.fixed_register_binding_id = binding;
     } else if (strcmp(mode, "symbol") == 0) {
         MinicCoreFunctionSymbolId symbol;
-        if (!minic_type_pointer_to(minic_type_function(0U), &result_type) ||
-            !minic_core_function_add_function_symbol(
+        if (!minic_core_function_add_function_symbol(
                 function, "callee", 6U, &symbol)) return false;
         (void)memset(&instruction, 0, sizeof(instruction));
         instruction.kind = MINIC_CORE_INSTRUCTION_FUNCTION_ADDRESS;
-        instruction.type = result_type;
         instruction.value.function_symbol_id = symbol;
     } else if (strcmp(mode, "enum") == 0 || strcmp(mode, "enum-missing") == 0) {
-        result_type = minic_type_enum(123U);
         if (strcmp(mode, "enum") == 0 &&
             !minic_core_function_add_enum_type(function, 123U, minic_type_int()))
             return false;
         (void)memset(&instruction, 0, sizeof(instruction));
         instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
-        instruction.type = result_type;
         instruction.value.integer_value = 7;
     } else if (strcmp(mode, "enum-pointer") == 0) {
-        if (!minic_type_pointer_to(minic_type_enum(123U), &result_type)) return false;
-        parameter_type = result_type;
-        parameter_count = 1U;
         (void)memset(&instruction, 0, sizeof(instruction));
         instruction.kind = MINIC_CORE_INSTRUCTION_PARAMETER;
-        instruction.type = result_type;
         instruction.value.parameter_index = 0U;
     } else if (strcmp(mode, "variadic") == 0) {
-        result_type = minic_type_int();
-        parameter_type = result_type;
-        parameter_count = 1U;
         (void)memset(&instruction, 0, sizeof(instruction));
         instruction.kind = MINIC_CORE_INSTRUCTION_PARAMETER;
-        instruction.type = result_type;
         instruction.value.parameter_index = 0U;
     } else {
         return false;
     }
-    if (!minic_core_function_set_signature(function, "probe", 5U,
-                                           result_type,
-                                           parameter_count == 0U ? NULL : &parameter_type,
-                                           parameter_count) ||
-        (strcmp(mode, "variadic") == 0 &&
+    if ((strcmp(mode, "variadic") == 0 &&
          !minic_core_function_set_variadic(function, true)) ||
         !minic_core_function_add_block(function, &block) ||
-        !minic_core_function_append_value_instruction(
-            function, block, &instruction, &value)) return false;
+        !minic_core_function_append_source_value_instruction(
+            function, block, &instruction, result_type, &value)) return false;
     (void)memset(&terminator, 0, sizeof(terminator));
     terminator.kind = MINIC_CORE_TERMINATOR_RETURN;
     terminator.return_value = value;
@@ -129,16 +133,17 @@ static int run_case(const char *case_name) {
         function.function_symbol_count = saved;
         expected = false;
     } else if (strcmp(case_name, "enum-null") == 0) {
-        MinicCoreEnumType *saved = function.enum_types;
-        function.enum_types = NULL;
+        MinicCoreEnumType *saved = function.source_draft->enum_types;
+        function.source_draft->enum_types = NULL;
         verified = minic_core_function_verify_source_ingress(&function);
-        function.enum_types = saved;
+        function.source_draft->enum_types = saved;
         expected = false;
     } else if (strcmp(case_name, "enum-overcapacity") == 0) {
-        size_t saved = function.enum_type_count;
-        function.enum_type_count = function.enum_type_capacity + 1U;
+        size_t saved = function.source_draft->enum_type_count;
+        function.source_draft->enum_type_count =
+            function.source_draft->enum_type_capacity + 1U;
         verified = minic_core_function_verify_source_ingress(&function);
-        function.enum_type_count = saved;
+        function.source_draft->enum_type_count = saved;
         expected = false;
     } else {
         verified = minic_core_function_verify_source_ingress(&function);

@@ -3,9 +3,9 @@
 #include <stdio.h>
 #include <string.h>
 
-/* Common CALL identity is entirely Core-owned. Legacy source descriptors
- * below are deliberately poisoned: they remain an ABI bridge for unmigrated
- * backends but must never decide Core CALL admission or call-index ownership. */
+/* Common CALL identity is entirely Core-owned, with no C source descriptors
+ * in the public schema. Core CALL admission and call-index ownership can
+ * therefore never depend on nominal C rank or frontend metadata. */
 typedef struct TypeIds {
     MinicCoreTypeId integer, record, other_record;
     MinicCoreTypeId function, other_function, function_pointer;
@@ -66,7 +66,6 @@ int main(void) {
     MinicCoreObject object = {0};
     MinicCoreCallView view;
     MinicCoreTypeId actual;
-    MinicType poison = minic_type_double();
 
     CHECK(register_types(&context, &types), 2);
     fn.type_context = &context;
@@ -78,19 +77,15 @@ int main(void) {
     values[1].core_type_id = types.function_pointer;
     object.core_type_id = types.record;
     object.element_count = 1U;
-    object.type = poison;
     callee.name = "probe";
     callee.name_length = 5U;
     callee.core_return_type_id = types.integer;
     callee.core_parameter_type_ids = &types.integer;
     callee.parameter_count = 1U;
-    callee.return_type = poison;
-    callee.parameter_types = &poison;
     argument.kind = MINIC_CORE_CALL_ARGUMENT_VALUE;
     argument.value.value_id = 0U;
     call.kind = MINIC_CORE_INSTRUCTION_CALL;
     call.core_type_id = types.integer;
-    call.type = poison;
     call.result = 0U;
     call.value.call.callee_id = 0U;
     call.value.call.argument_count = 1U;
@@ -143,7 +138,7 @@ int main(void) {
     object.core_type_id = types.record;
 
     /* Empty or invalid Core type denotes neither scalar nor record return.
-     * Use a real void type rather than source's deliberately false metadata. */
+     * Use a real Core void type instead. */
     {
         MinicCoreType type = {0};
         MinicCoreTypeId void_id;
@@ -164,8 +159,6 @@ int main(void) {
     signature.core_parameter_type_ids = &types.integer;
     signature.parameter_count = 1U;
     signature.calling_convention = MINIC_CALLING_CONVENTION_MS_X64;
-    signature.return_type = poison;
-    signature.parameter_types = &poison;
     fn.call_signatures = &signature;
     fn.call_signature_count = 1U;
     argument.kind = MINIC_CORE_CALL_ARGUMENT_VALUE;
@@ -258,6 +251,6 @@ int main(void) {
     }
 
     minic_core_type_context_destroy(&context);
-    (void)puts("MINIC_FIVE_TARGET_CALL_SEMANTICS=PASS CoreType_source_poison scalar_record_void_indirect malformed_reject index");
+    (void)puts("MINIC_FIVE_TARGET_CALL_SEMANTICS=PASS CoreType_C_free scalar_record_void_indirect malformed_reject index");
     return 0;
 }

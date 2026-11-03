@@ -208,6 +208,7 @@ MinicCoreLowerStatus core_asm_try_immediate_output_csr(
     *handled = false;
     MinicCoreInlineAsmId inline_asm_id;
     MinicCoreInstruction instruction;
+    MinicType instruction_source_type = minic_type_void();
     /* Linux RISC-V CSR helpers use one write-only register output plus an rK
        input and a memory clobber.  M126A below intentionally accepts rK as a
        scalar-register alternative, but doing so first materializes a constant
@@ -356,11 +357,11 @@ MinicCoreLowerStatus core_asm_try_immediate_output_csr(
                 (void)memset(&instruction, 0, sizeof(instruction));
                 instruction.kind = MINIC_CORE_INSTRUCTION_REGISTER_OUTPUT_INLINE_ASM;
                 instruction.span = statement->span;
-                instruction.type = output_type;
+                instruction_source_type = output_type;
                 instruction.result = MINIC_CORE_VALUE_INVALID;
                 instruction.value.inline_asm_id = inline_asm_id;
-                if (!minic_core_function_append_value_instruction(
-                        context->function, context->block_id, &instruction, &output_value)) {
+                if (!minic_core_function_append_source_value_instruction(
+                        context->function, context->block_id, &instruction, instruction_source_type, &output_value)) {
                     if (getenv("MINIC_ASM_BATCH_TRACE") != NULL) {
                         (void)fprintf(stderr,
                                       "ASM_OUTPUT_STAGE function=%s stage=append-output-value status=ERROR "
@@ -401,14 +402,14 @@ MinicCoreLowerStatus core_asm_try_immediate_output_csr(
                 (void)memset(&instruction, 0, sizeof(instruction));
                 instruction.kind = MINIC_CORE_INSTRUCTION_STORE;
                 instruction.span = statement->span;
-                instruction.type = minic_type_void();
+                instruction_source_type = minic_type_void();
                 instruction.result = MINIC_CORE_VALUE_INVALID;
                 instruction.value.store.address = address_id;
                 instruction.value.store.stored_value = output_value;
                 instruction.value.store.is_volatile = false;
                 {
-                    bool stored = minic_core_function_append_effect_instruction(
-                        context->function, context->block_id, &instruction);
+                    bool stored = minic_core_function_append_source_effect_instruction(
+                        context->function, context->block_id, &instruction, instruction_source_type);
                     if (getenv("MINIC_ASM_BATCH_TRACE") != NULL) {
                         (void)fprintf(stderr,
                                       "ASM_OUTPUT_STAGE function=%s stage=store-output status=%s "
@@ -441,6 +442,7 @@ MinicCoreLowerStatus core_asm_try_structured_roles_and_asm_goto(
     *handled = false;
     MinicCoreInlineAsmId inline_asm_id;
     MinicCoreInstruction instruction;
+    MinicType instruction_source_type = minic_type_void();
     /* Target-qualified asm-goto is a genuine CFG effect. The same path owns
      * the one-label Linux static-key table and the two-label CPU-feature
      * alternative. Preserve the complete source template, resolve all `i`
@@ -458,6 +460,7 @@ MinicCoreLowerStatus core_asm_try_structured_roles_and_asm_goto(
         };
         MinicCoreInlineAsm *stored;
         MinicCoreInstruction effect;
+        MinicType effect_source_type = minic_type_void();
         MinicCoreLowerStatus status;
         size_t i;
         *handled = true;
@@ -519,11 +522,11 @@ MinicCoreLowerStatus core_asm_try_structured_roles_and_asm_goto(
         (void)memset(&effect, 0, sizeof(effect));
         effect.kind = MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM;
         effect.span = statement->span;
-        effect.type = minic_type_void();
+        effect_source_type = minic_type_void();
         effect.result = MINIC_CORE_VALUE_INVALID;
         effect.value.inline_asm_id = inline_asm_id;
-        return minic_core_function_append_effect_instruction(
-            context->function, context->block_id, &effect)
+        return minic_core_function_append_source_effect_instruction(
+            context->function, context->block_id, &effect, effect_source_type)
             ? MINIC_CORE_LOWER_OK : MINIC_CORE_LOWER_ERROR;
     }
     /* M126A_GENERIC_STRUCTURED_ASM: canonical role lowering for register/memory
@@ -546,6 +549,7 @@ MinicCoreLowerStatus core_asm_try_structured_roles_and_asm_goto(
         source->clobber_count == source->register_clobber_count +
                                      (source->has_memory_clobber ? 1U : 0U)) {
         MinicCoreInstruction structured;
+        MinicType structured_source_type = minic_type_void();
         char *numeric_template = NULL;
         size_t numeric_template_length = 0U;
         size_t output_index;
@@ -558,7 +562,7 @@ MinicCoreLowerStatus core_asm_try_structured_roles_and_asm_goto(
         (void)memset(&plan, 0, sizeof(plan));
         structured.kind = MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM;
         structured.span = statement->span;
-        structured.type = minic_type_void();
+        structured_source_type = minic_type_void();
         structured.result = MINIC_CORE_VALUE_INVALID;
         structured.value.structured_inline_asm.operand_count =
             source->output_count + source->input_count;
@@ -755,8 +759,8 @@ MinicCoreLowerStatus core_asm_try_structured_roles_and_asm_goto(
             if (!core_asm_publish_operand_plan(
                     &structured, &context->function->inline_asms[inline_asm_id], &plan))
                 { *handled = true; return MINIC_CORE_LOWER_ERROR; }
-            { *handled = true; return minic_core_function_append_effect_instruction(
-                       context->function, context->block_id, &structured)
+            { *handled = true; return minic_core_function_append_source_effect_instruction(
+                       context->function, context->block_id, &structured, structured_source_type)
                        ? MINIC_CORE_LOWER_OK
                        : MINIC_CORE_LOWER_ERROR; }
         }
@@ -827,11 +831,11 @@ MinicCoreLowerStatus core_asm_try_structured_roles_and_asm_goto(
         (void)memset(&instruction, 0, sizeof(instruction));
         instruction.kind = MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM;
         instruction.span = statement->span;
-        instruction.type = minic_type_void();
+        instruction_source_type = minic_type_void();
         instruction.result = MINIC_CORE_VALUE_INVALID;
         instruction.value.inline_asm_id = inline_asm_id;
-        { *handled = true; return minic_core_function_append_effect_instruction(
-                   context->function, context->block_id, &instruction)
+        { *handled = true; return minic_core_function_append_source_effect_instruction(
+                   context->function, context->block_id, &instruction, instruction_source_type)
                    ? MINIC_CORE_LOWER_OK
                    : MINIC_CORE_LOWER_ERROR; }
     }

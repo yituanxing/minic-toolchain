@@ -38,7 +38,7 @@ static int run(void) {
     REQUIRE(integer_type(&types, 32U, &i32));
     REQUIRE(integer_type(&types, 64U, &i64));
 
-    /* SSA has no source C descriptor; frame storage is CoreType-only. */
+    /* SSA and frame-object storage have no source C descriptors. */
     values[0].core_type_id = i64;
     instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
     instruction.core_type_id = i64;
@@ -49,7 +49,6 @@ static int run(void) {
     block.terminator.kind = MINIC_CORE_TERMINATOR_RETURN;
     block.terminator.return_value = MINIC_CORE_VALUE_INVALID;
     block.terminator.return_object = MINIC_CORE_OBJECT_INVALID;
-    object.type.base_kind = MINIC_TYPE_BASE_DOUBLE;
     object.core_type_id = i32;
     object.element_count = 1U;
     function.type_context = &types;
@@ -123,6 +122,6 @@ int main(void) {
         (void)fprintf(stderr, "core_frame_type_ownership failed at %d\n", failed);
         return 1;
     }
-    (void)puts("CORE_FRAME_TYPE_OWNERSHIP=PASS Core-only object+interval+spill ILP32_LP64 C-poison malformed missing-context");
+    (void)puts("CORE_FRAME_TYPE_OWNERSHIP=PASS Core-only object+interval+spill ILP32_LP64 C-free malformed missing-context");
     return 0;
 }

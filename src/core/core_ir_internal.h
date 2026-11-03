@@ -1,7 +1,7 @@
 #ifndef MINIC_CORE_IR_INTERNAL_H
 #define MINIC_CORE_IR_INTERNAL_H
 
-#include "core/core_ir.h"
+#include "core/core_ir_source.h"
 
 /* Shared Core IR type-admission rules: construction and verification must
  * accept exactly the same signatures and global-symbol shapes. These are
@@ -21,5 +21,9 @@ bool minic_core_function_verify_source_ingress(const MinicCoreFunction *function
  * consumers must use the CoreType snapshot instead. Invalid IDs fail closed. */
 MinicType minic_core_function_source_value_type(const MinicCoreFunction *function,
                                                 MinicCoreValueId value_id);
+
+/* Complete, successful source publication discards C descriptors as a unit;
+ * partial/failed imports retain the draft for a retry or normal destruction. */
+void minic_core_function_discard_source_draft(MinicCoreFunction *function);
 
 #endif

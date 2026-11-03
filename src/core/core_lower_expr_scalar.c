@@ -15,14 +15,15 @@ static bool popcount_append_constant(MinicCoreLowerContext *context,
                                      uint64_t bits,
                                      MinicCoreValueId *value_id) {
     MinicCoreInstruction instruction;
+    MinicType instruction_source_type = minic_type_void();
     (void)memset(&instruction, 0, sizeof(instruction));
     instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
     instruction.span = span;
-    instruction.type = type;
+    instruction_source_type = type;
     instruction.result = MINIC_CORE_VALUE_INVALID;
     instruction.value.integer_value = (int64_t)bits;
-    return minic_core_function_append_value_instruction(
-        context->function, context->block_id, &instruction, value_id);
+    return minic_core_function_append_source_value_instruction(
+        context->function, context->block_id, &instruction, instruction_source_type, value_id);
 }
 
 static bool popcount_append_binary(MinicCoreLowerContext *context,
@@ -33,15 +34,16 @@ static bool popcount_append_binary(MinicCoreLowerContext *context,
                                    MinicCoreValueId right,
                                    MinicCoreValueId *value_id) {
     MinicCoreInstruction instruction;
+    MinicType instruction_source_type = minic_type_void();
     (void)memset(&instruction, 0, sizeof(instruction));
     instruction.kind = kind;
     instruction.span = span;
-    instruction.type = type;
+    instruction_source_type = type;
     instruction.result = MINIC_CORE_VALUE_INVALID;
     instruction.value.binary.left = left;
     instruction.value.binary.right = right;
-    return minic_core_function_append_value_instruction(
-        context->function, context->block_id, &instruction, value_id);
+    return minic_core_function_append_source_value_instruction(
+        context->function, context->block_id, &instruction, instruction_source_type, value_id);
 }
 
 /* Target-parametrized C scalar operations, not target-machine lowering.
@@ -50,6 +52,7 @@ MinicCoreLowerStatus minic_core_lower_try_builtin_unary(
     MinicCoreLowerContext *context, const MinicExpression *expression,
     MinicCoreValueId *value_id, bool *handled) {
     MinicCoreInstruction instruction;
+    MinicType instruction_source_type = minic_type_void();
     *handled = false;
     /* Integer population count is target-neutral SWAR.  Unlike clz/ctz,
      * zero is defined (popcount(0)==0).  Keep it in generic Core arithmetic
@@ -127,11 +130,11 @@ MinicCoreLowerStatus minic_core_lower_try_builtin_unary(
         (void)memset(&instruction, 0, sizeof(instruction));
         instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
         instruction.span = expression->span;
-        instruction.type = minic_type_int();
+        instruction_source_type = minic_type_int();
         instruction.result = MINIC_CORE_VALUE_INVALID;
         instruction.value.integer_value = is_constant ? 1 : 0;
-        { *handled = true; return minic_core_function_append_value_instruction(
-                   context->function, context->block_id, &instruction, value_id)
+        { *handled = true; return minic_core_function_append_source_value_instruction(
+                   context->function, context->block_id, &instruction, instruction_source_type, value_id)
                    ? MINIC_CORE_LOWER_OK
                    : MINIC_CORE_LOWER_ERROR; }
     }
@@ -140,6 +143,7 @@ MinicCoreLowerStatus minic_core_lower_try_builtin_unary(
         expression->value.builtin_unary.operator_kind == MINIC_BUILTIN_UNARY_ISDIGIT) {
         const MinicExpression *operand;
         MinicCoreInstruction builtin_instruction;
+        MinicType builtin_instruction_source_type = minic_type_void();
         MinicCoreLowerStatus status;
         MinicCoreValueId operand_value;
         MinicCoreValueId normalized_value;
@@ -169,43 +173,43 @@ MinicCoreLowerStatus minic_core_lower_try_builtin_unary(
         (void)memset(&builtin_instruction, 0, sizeof(builtin_instruction));
         builtin_instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
         builtin_instruction.span = expression->span;
-        builtin_instruction.type = minic_type_unsigned_int();
+        builtin_instruction_source_type = minic_type_unsigned_int();
         builtin_instruction.result = MINIC_CORE_VALUE_INVALID;
         builtin_instruction.value.integer_value = 48;
-        if (!minic_core_function_append_value_instruction(
-                context->function, context->block_id, &builtin_instruction, &zero_code)) {
+        if (!minic_core_function_append_source_value_instruction(
+                context->function, context->block_id, &builtin_instruction, builtin_instruction_source_type, &zero_code)) {
             { *handled = true; return MINIC_CORE_LOWER_ERROR; }
         }
         (void)memset(&builtin_instruction, 0, sizeof(builtin_instruction));
         builtin_instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_SUBTRACT;
         builtin_instruction.span = expression->span;
-        builtin_instruction.type = minic_type_unsigned_int();
+        builtin_instruction_source_type = minic_type_unsigned_int();
         builtin_instruction.result = MINIC_CORE_VALUE_INVALID;
         builtin_instruction.value.binary.left = normalized_value;
         builtin_instruction.value.binary.right = zero_code;
-        if (!minic_core_function_append_value_instruction(
-                context->function, context->block_id, &builtin_instruction, &offset_value)) {
+        if (!minic_core_function_append_source_value_instruction(
+                context->function, context->block_id, &builtin_instruction, builtin_instruction_source_type, &offset_value)) {
             { *handled = true; return MINIC_CORE_LOWER_ERROR; }
         }
         (void)memset(&builtin_instruction, 0, sizeof(builtin_instruction));
         builtin_instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
         builtin_instruction.span = expression->span;
-        builtin_instruction.type = minic_type_unsigned_int();
+        builtin_instruction_source_type = minic_type_unsigned_int();
         builtin_instruction.result = MINIC_CORE_VALUE_INVALID;
         builtin_instruction.value.integer_value = 10;
-        if (!minic_core_function_append_value_instruction(
-                context->function, context->block_id, &builtin_instruction, &digit_count)) {
+        if (!minic_core_function_append_source_value_instruction(
+                context->function, context->block_id, &builtin_instruction, builtin_instruction_source_type, &digit_count)) {
             { *handled = true; return MINIC_CORE_LOWER_ERROR; }
         }
         (void)memset(&builtin_instruction, 0, sizeof(builtin_instruction));
         builtin_instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_LESS;
         builtin_instruction.span = expression->span;
-        builtin_instruction.type = minic_type_int();
+        builtin_instruction_source_type = minic_type_int();
         builtin_instruction.result = MINIC_CORE_VALUE_INVALID;
         builtin_instruction.value.binary.left = offset_value;
         builtin_instruction.value.binary.right = digit_count;
-        { *handled = true; return minic_core_function_append_value_instruction(
-                   context->function, context->block_id, &builtin_instruction, value_id)
+        { *handled = true; return minic_core_function_append_source_value_instruction(
+                   context->function, context->block_id, &builtin_instruction, builtin_instruction_source_type, value_id)
                    ? MINIC_CORE_LOWER_OK
                    : MINIC_CORE_LOWER_ERROR; }
     }
@@ -217,6 +221,7 @@ MinicCoreLowerStatus minic_core_lower_try_builtin_unary(
         expression->value.builtin_unary.operator_kind == MINIC_BUILTIN_UNARY_FFSLL) {
         const MinicExpression *operand;
         MinicCoreInstruction builtin_instruction;
+        MinicType builtin_instruction_source_type = minic_type_void();
         MinicCoreLowerStatus status;
         MinicCoreValueId operand_value;
         MinicCoreValueId unsigned_value;
@@ -251,13 +256,13 @@ MinicCoreLowerStatus minic_core_lower_try_builtin_unary(
         (void)memset(&builtin_instruction, 0, sizeof(builtin_instruction));
         builtin_instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_CTZ;
         builtin_instruction.span = expression->span;
-        builtin_instruction.type = minic_type_int();
+        builtin_instruction_source_type = minic_type_int();
         builtin_instruction.result = MINIC_CORE_VALUE_INVALID;
         builtin_instruction.value.operand = unsigned_value;
-        if (!minic_core_function_append_value_instruction(
+        if (!minic_core_function_append_source_value_instruction(
                 context->function,
                 context->block_id,
-                &builtin_instruction,
+                &builtin_instruction, builtin_instruction_source_type,
                 &trailing_zero_count)) {
             { *handled = true; return MINIC_CORE_LOWER_ERROR; }
         }
@@ -265,57 +270,57 @@ MinicCoreLowerStatus minic_core_lower_try_builtin_unary(
         (void)memset(&builtin_instruction, 0, sizeof(builtin_instruction));
         builtin_instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
         builtin_instruction.span = expression->span;
-        builtin_instruction.type = minic_type_int();
+        builtin_instruction_source_type = minic_type_int();
         builtin_instruction.result = MINIC_CORE_VALUE_INVALID;
         builtin_instruction.value.integer_value = 1;
-        if (!minic_core_function_append_value_instruction(
-                context->function, context->block_id, &builtin_instruction, &one)) {
+        if (!minic_core_function_append_source_value_instruction(
+                context->function, context->block_id, &builtin_instruction, builtin_instruction_source_type, &one)) {
             { *handled = true; return MINIC_CORE_LOWER_ERROR; }
         }
 
         (void)memset(&builtin_instruction, 0, sizeof(builtin_instruction));
         builtin_instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_ADD;
         builtin_instruction.span = expression->span;
-        builtin_instruction.type = minic_type_int();
+        builtin_instruction_source_type = minic_type_int();
         builtin_instruction.result = MINIC_CORE_VALUE_INVALID;
         builtin_instruction.value.binary.left = trailing_zero_count;
         builtin_instruction.value.binary.right = one;
-        if (!minic_core_function_append_value_instruction(
-                context->function, context->block_id, &builtin_instruction, &one_based_index)) {
+        if (!minic_core_function_append_source_value_instruction(
+                context->function, context->block_id, &builtin_instruction, builtin_instruction_source_type, &one_based_index)) {
             { *handled = true; return MINIC_CORE_LOWER_ERROR; }
         }
 
         (void)memset(&builtin_instruction, 0, sizeof(builtin_instruction));
         builtin_instruction.kind = MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO;
         builtin_instruction.span = expression->span;
-        builtin_instruction.type = minic_type_int();
+        builtin_instruction_source_type = minic_type_int();
         builtin_instruction.result = MINIC_CORE_VALUE_INVALID;
         builtin_instruction.value.operand = unsigned_value;
-        if (!minic_core_function_append_value_instruction(
-                context->function, context->block_id, &builtin_instruction, &is_zero)) {
+        if (!minic_core_function_append_source_value_instruction(
+                context->function, context->block_id, &builtin_instruction, builtin_instruction_source_type, &is_zero)) {
             { *handled = true; return MINIC_CORE_LOWER_ERROR; }
         }
 
         (void)memset(&builtin_instruction, 0, sizeof(builtin_instruction));
         builtin_instruction.kind = MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO;
         builtin_instruction.span = expression->span;
-        builtin_instruction.type = minic_type_int();
+        builtin_instruction_source_type = minic_type_int();
         builtin_instruction.result = MINIC_CORE_VALUE_INVALID;
         builtin_instruction.value.operand = is_zero;
-        if (!minic_core_function_append_value_instruction(
-                context->function, context->block_id, &builtin_instruction, &is_nonzero)) {
+        if (!minic_core_function_append_source_value_instruction(
+                context->function, context->block_id, &builtin_instruction, builtin_instruction_source_type, &is_nonzero)) {
             { *handled = true; return MINIC_CORE_LOWER_ERROR; }
         }
 
         (void)memset(&builtin_instruction, 0, sizeof(builtin_instruction));
         builtin_instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_MULTIPLY;
         builtin_instruction.span = expression->span;
-        builtin_instruction.type = minic_type_int();
+        builtin_instruction_source_type = minic_type_int();
         builtin_instruction.result = MINIC_CORE_VALUE_INVALID;
         builtin_instruction.value.binary.left = one_based_index;
         builtin_instruction.value.binary.right = is_nonzero;
-        { *handled = true; return minic_core_function_append_value_instruction(
-                   context->function, context->block_id, &builtin_instruction, value_id)
+        { *handled = true; return minic_core_function_append_source_value_instruction(
+                   context->function, context->block_id, &builtin_instruction, builtin_instruction_source_type, value_id)
                    ? MINIC_CORE_LOWER_OK
                    : MINIC_CORE_LOWER_ERROR; }
     }
@@ -335,6 +340,7 @@ MinicCoreLowerStatus minic_core_lower_try_builtin_unary(
         MinicType work_type, result_type;
         MinicCoreValueId input, accumulator, term, mask, shift, next_value;
         MinicCoreInstruction bit;
+        MinicType bit_source_type = minic_type_void();
         MinicCoreLowerStatus status;
         size_t byte_count, i;
 
@@ -363,51 +369,51 @@ MinicCoreLowerStatus minic_core_lower_try_builtin_unary(
         (void)memset(&bit, 0, sizeof(bit));
         bit.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
         bit.span = expression->span;
-        bit.type = work_type;
+        bit_source_type = work_type;
         bit.result = MINIC_CORE_VALUE_INVALID;
         bit.value.integer_value = 0;
-        if (!minic_core_function_append_value_instruction(
-                context->function, context->block_id, &bit, &accumulator))
+        if (!minic_core_function_append_source_value_instruction(
+                context->function, context->block_id, &bit, bit_source_type, &accumulator))
             { *handled = true; return MINIC_CORE_LOWER_ERROR; }
         bit.value.integer_value = 255;
-        if (!minic_core_function_append_value_instruction(
-                context->function, context->block_id, &bit, &mask))
+        if (!minic_core_function_append_source_value_instruction(
+                context->function, context->block_id, &bit, bit_source_type, &mask))
             { *handled = true; return MINIC_CORE_LOWER_ERROR; }
         for (i = 0U; i < byte_count; ++i) {
             bit.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
-            bit.type = work_type;
+            bit_source_type = work_type;
             bit.value.integer_value = (int64_t)(i * 8U);
-            if (!minic_core_function_append_value_instruction(
-                    context->function, context->block_id, &bit, &shift))
+            if (!minic_core_function_append_source_value_instruction(
+                    context->function, context->block_id, &bit, bit_source_type, &shift))
                 { *handled = true; return MINIC_CORE_LOWER_ERROR; }
             bit.kind = MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_RIGHT;
             bit.value.binary.left = input;
             bit.value.binary.right = shift;
-            if (!minic_core_function_append_value_instruction(
-                    context->function, context->block_id, &bit, &term))
+            if (!minic_core_function_append_source_value_instruction(
+                    context->function, context->block_id, &bit, bit_source_type, &term))
                 { *handled = true; return MINIC_CORE_LOWER_ERROR; }
             bit.kind = MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND;
             bit.value.binary.left = term;
             bit.value.binary.right = mask;
-            if (!minic_core_function_append_value_instruction(
-                    context->function, context->block_id, &bit, &term))
+            if (!minic_core_function_append_source_value_instruction(
+                    context->function, context->block_id, &bit, bit_source_type, &term))
                 { *handled = true; return MINIC_CORE_LOWER_ERROR; }
             bit.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
             bit.value.integer_value = (int64_t)((byte_count - 1U - i) * 8U);
-            if (!minic_core_function_append_value_instruction(
-                    context->function, context->block_id, &bit, &shift))
+            if (!minic_core_function_append_source_value_instruction(
+                    context->function, context->block_id, &bit, bit_source_type, &shift))
                 { *handled = true; return MINIC_CORE_LOWER_ERROR; }
             bit.kind = MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_LEFT;
             bit.value.binary.left = term;
             bit.value.binary.right = shift;
-            if (!minic_core_function_append_value_instruction(
-                    context->function, context->block_id, &bit, &term))
+            if (!minic_core_function_append_source_value_instruction(
+                    context->function, context->block_id, &bit, bit_source_type, &term))
                 { *handled = true; return MINIC_CORE_LOWER_ERROR; }
             bit.kind = MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_OR;
             bit.value.binary.left = accumulator;
             bit.value.binary.right = term;
-            if (!minic_core_function_append_value_instruction(
-                    context->function, context->block_id, &bit, &next_value))
+            if (!minic_core_function_append_source_value_instruction(
+                    context->function, context->block_id, &bit, bit_source_type, &next_value))
                 { *handled = true; return MINIC_CORE_LOWER_ERROR; }
             accumulator = next_value;
         }
@@ -454,11 +460,11 @@ MinicCoreLowerStatus minic_core_lower_try_builtin_unary(
         instruction.kind = is_clz ? MINIC_CORE_INSTRUCTION_INTEGER_CLZ
                                   : MINIC_CORE_INSTRUCTION_INTEGER_CTZ;
         instruction.span = expression->span;
-        instruction.type = minic_type_int();
+        instruction_source_type = minic_type_int();
         instruction.result = MINIC_CORE_VALUE_INVALID;
         instruction.value.operand = operand_value;
-        { *handled = true; return minic_core_function_append_value_instruction(
-                   context->function, context->block_id, &instruction, value_id)
+        { *handled = true; return minic_core_function_append_source_value_instruction(
+                   context->function, context->block_id, &instruction, instruction_source_type, value_id)
                    ? MINIC_CORE_LOWER_OK
                    : MINIC_CORE_LOWER_ERROR; }
     }
@@ -469,6 +475,7 @@ MinicCoreLowerStatus minic_core_lower_try_comparisons(
     MinicCoreLowerContext *context, const MinicExpression *expression,
     MinicCoreValueId *value_id, bool *handled) {
     MinicCoreInstruction instruction;
+    MinicType instruction_source_type = minic_type_void();
     *handled = false;
     /* __builtin_isnan(v) = !(v == v), but the operand is evaluated exactly
      * once, not twice as it would be if we duplicated the AST. Both float
@@ -481,6 +488,8 @@ MinicCoreLowerStatus minic_core_lower_try_comparisons(
         MinicCoreValueId source, widened, equal;
         MinicCoreLowerStatus status;
         MinicCoreInstruction compare, test;
+        MinicType compare_source_type = minic_type_void();
+        MinicType test_source_type = minic_type_void();
         *handled = true;
         if (operand == NULL ||
             (!minic_type_is_float(operand->type) &&
@@ -495,31 +504,31 @@ MinicCoreLowerStatus minic_core_lower_try_comparisons(
             (void)memset(&compare, 0, sizeof(compare));
             compare.kind = MINIC_CORE_INSTRUCTION_FLOAT_TO_DOUBLE;
             compare.span = expression->span;
-            compare.type = minic_type_double();
+            compare_source_type = minic_type_double();
             compare.result = MINIC_CORE_VALUE_INVALID;
             compare.value.operand = source;
-            if (!minic_core_function_append_value_instruction(
-                    context->function, context->block_id, &compare, &widened))
+            if (!minic_core_function_append_source_value_instruction(
+                    context->function, context->block_id, &compare, compare_source_type, &widened))
                 return MINIC_CORE_LOWER_ERROR;
         }
         (void)memset(&compare, 0, sizeof(compare));
         compare.kind = MINIC_CORE_INSTRUCTION_DOUBLE_EQUAL;
         compare.span = expression->span;
-        compare.type = minic_type_int();
+        compare_source_type = minic_type_int();
         compare.result = MINIC_CORE_VALUE_INVALID;
         compare.value.binary.left = widened;
         compare.value.binary.right = widened;
-        if (!minic_core_function_append_value_instruction(
-                context->function, context->block_id, &compare, &equal))
+        if (!minic_core_function_append_source_value_instruction(
+                context->function, context->block_id, &compare, compare_source_type, &equal))
             return MINIC_CORE_LOWER_ERROR;
         (void)memset(&test, 0, sizeof(test));
         test.kind = MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO;
         test.span = expression->span;
-        test.type = minic_type_int();
+        test_source_type = minic_type_int();
         test.result = MINIC_CORE_VALUE_INVALID;
         test.value.operand = equal;
-        return minic_core_function_append_value_instruction(
-                   context->function, context->block_id, &test, value_id)
+        return minic_core_function_append_source_value_instruction(
+                   context->function, context->block_id, &test, test_source_type, value_id)
                    ? MINIC_CORE_LOWER_OK : MINIC_CORE_LOWER_ERROR;
     }
     /* RUNTIME_R0_DOUBLE_COMPARE: equality uses the same binary64
@@ -544,6 +553,7 @@ MinicCoreLowerStatus minic_core_lower_try_comparisons(
         }
         if (minic_type_is_long_double(left_type) || minic_type_is_long_double(right_type)) {
             MinicCoreInstruction zero_test_instruction;
+            MinicType zero_test_instruction_source_type = minic_type_void();
             MinicCoreValueId compare_value;
             MinicCoreValueId equal_value;
             MinicCoreValueId left;
@@ -564,11 +574,11 @@ MinicCoreLowerStatus minic_core_lower_try_comparisons(
             (void)memset(&zero_test_instruction, 0, sizeof(zero_test_instruction));
             zero_test_instruction.kind = MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO;
             zero_test_instruction.span = expression->span;
-            zero_test_instruction.type = minic_type_int();
+            zero_test_instruction_source_type = minic_type_int();
             zero_test_instruction.result = MINIC_CORE_VALUE_INVALID;
             zero_test_instruction.value.operand = compare_value;
-            if (!minic_core_function_append_value_instruction(
-                    context->function, context->block_id, &zero_test_instruction, &equal_value)) {
+            if (!minic_core_function_append_source_value_instruction(
+                    context->function, context->block_id, &zero_test_instruction, zero_test_instruction_source_type, &equal_value)) {
                 { *handled = true; return MINIC_CORE_LOWER_ERROR; }
             }
             if (expression->value.binary.operator_kind == MINIC_BINARY_EQUAL) {
@@ -576,12 +586,13 @@ MinicCoreLowerStatus minic_core_lower_try_comparisons(
                 { *handled = true; return MINIC_CORE_LOWER_OK; }
             }
             zero_test_instruction.value.operand = equal_value;
-            { *handled = true; return minic_core_function_append_value_instruction(
-                       context->function, context->block_id, &zero_test_instruction, value_id)
+            { *handled = true; return minic_core_function_append_source_value_instruction(
+                       context->function, context->block_id, &zero_test_instruction, zero_test_instruction_source_type, value_id)
                        ? MINIC_CORE_LOWER_OK : MINIC_CORE_LOWER_ERROR; }
         }
         if (minic_type_is_double(left_type) || minic_type_is_double(right_type)) {
             MinicCoreInstruction zero_test_instruction;
+            MinicType zero_test_instruction_source_type = minic_type_void();
             MinicCoreValueId equal_value;
             MinicCoreValueId left;
             MinicCoreValueId right;
@@ -602,30 +613,30 @@ MinicCoreLowerStatus minic_core_lower_try_comparisons(
             (void)memset(&instruction, 0, sizeof(instruction));
             instruction.kind = MINIC_CORE_INSTRUCTION_DOUBLE_EQUAL;
             instruction.span = expression->span;
-            instruction.type = minic_type_int();
+            instruction_source_type = minic_type_int();
             instruction.result = MINIC_CORE_VALUE_INVALID;
             instruction.value.binary.left = left;
             instruction.value.binary.right = right;
             if (expression->value.binary.operator_kind == MINIC_BINARY_EQUAL) {
-                { *handled = true; return minic_core_function_append_value_instruction(
-                           context->function, context->block_id, &instruction, value_id)
+                { *handled = true; return minic_core_function_append_source_value_instruction(
+                           context->function, context->block_id, &instruction, instruction_source_type, value_id)
                            ? MINIC_CORE_LOWER_OK
                            : MINIC_CORE_LOWER_ERROR; }
             }
-            if (!minic_core_function_append_value_instruction(
-                    context->function, context->block_id, &instruction, &equal_value)) {
+            if (!minic_core_function_append_source_value_instruction(
+                    context->function, context->block_id, &instruction, instruction_source_type, &equal_value)) {
                 { *handled = true; return MINIC_CORE_LOWER_ERROR; }
             }
             (void)memset(&zero_test_instruction, 0, sizeof(zero_test_instruction));
             zero_test_instruction.kind = MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO;
             zero_test_instruction.span = expression->span;
-            zero_test_instruction.type = minic_type_int();
+            zero_test_instruction_source_type = minic_type_int();
             zero_test_instruction.result = MINIC_CORE_VALUE_INVALID;
             zero_test_instruction.value.operand = equal_value;
-            { *handled = true; return minic_core_function_append_value_instruction(
+            { *handled = true; return minic_core_function_append_source_value_instruction(
                        context->function,
                        context->block_id,
-                       &zero_test_instruction,
+                       &zero_test_instruction, zero_test_instruction_source_type,
                        value_id)
                        ? MINIC_CORE_LOWER_OK
                        : MINIC_CORE_LOWER_ERROR; }
@@ -649,18 +660,19 @@ MinicCoreLowerStatus minic_core_lower_try_comparisons(
         (void)memset(&instruction, 0, sizeof(instruction));
         instruction.kind = MINIC_CORE_INSTRUCTION_SCALAR_EQUAL;
         instruction.span = expression->span;
-        instruction.type = minic_type_int();
+        instruction_source_type = minic_type_int();
         instruction.result = MINIC_CORE_VALUE_INVALID;
         instruction.value.binary.left = left;
         instruction.value.binary.right = right;
-        { *handled = true; return minic_core_function_append_value_instruction(
-                   context->function, context->block_id, &instruction, value_id)
+        { *handled = true; return minic_core_function_append_source_value_instruction(
+                   context->function, context->block_id, &instruction, instruction_source_type, value_id)
                    ? MINIC_CORE_LOWER_OK
                    : MINIC_CORE_LOWER_ERROR; }
     }
     if (expression->kind == MINIC_EXPRESSION_BINARY &&
         expression->value.binary.operator_kind == MINIC_BINARY_NOT_EQUAL) {
         MinicCoreInstruction zero_test_instruction;
+        MinicType zero_test_instruction_source_type = minic_type_void();
         MinicCoreValueId equal_value;
         MinicCoreValueId left;
         MinicCoreValueId right;
@@ -677,22 +689,22 @@ MinicCoreLowerStatus minic_core_lower_try_comparisons(
         (void)memset(&instruction, 0, sizeof(instruction));
         instruction.kind = MINIC_CORE_INSTRUCTION_SCALAR_EQUAL;
         instruction.span = expression->span;
-        instruction.type = minic_type_int();
+        instruction_source_type = minic_type_int();
         instruction.result = MINIC_CORE_VALUE_INVALID;
         instruction.value.binary.left = left;
         instruction.value.binary.right = right;
-        if (!minic_core_function_append_value_instruction(
-                context->function, context->block_id, &instruction, &equal_value)) {
+        if (!minic_core_function_append_source_value_instruction(
+                context->function, context->block_id, &instruction, instruction_source_type, &equal_value)) {
             { *handled = true; return MINIC_CORE_LOWER_ERROR; }
         }
         (void)memset(&zero_test_instruction, 0, sizeof(zero_test_instruction));
         zero_test_instruction.kind = MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO;
         zero_test_instruction.span = expression->span;
-        zero_test_instruction.type = minic_type_int();
+        zero_test_instruction_source_type = minic_type_int();
         zero_test_instruction.result = MINIC_CORE_VALUE_INVALID;
         zero_test_instruction.value.operand = equal_value;
-        { *handled = true; return minic_core_function_append_value_instruction(
-                   context->function, context->block_id, &zero_test_instruction, value_id)
+        { *handled = true; return minic_core_function_append_source_value_instruction(
+                   context->function, context->block_id, &zero_test_instruction, zero_test_instruction_source_type, value_id)
                    ? MINIC_CORE_LOWER_OK
                    : MINIC_CORE_LOWER_ERROR; }
     }
@@ -723,8 +735,11 @@ MinicCoreLowerStatus minic_core_lower_try_comparisons(
         if (minic_type_is_long_double(left_type) ||
             minic_type_is_long_double(right_type)) {
             MinicCoreInstruction compare_instruction;
+            MinicType compare_instruction_source_type = minic_type_void();
             MinicCoreInstruction zero_instruction;
+            MinicType zero_instruction_source_type = minic_type_void();
             MinicCoreInstruction invert_instruction;
+            MinicType invert_instruction_source_type = minic_type_void();
             MinicCoreValueId compare_value;
             MinicCoreValueId left;
             MinicCoreValueId right;
@@ -765,22 +780,22 @@ MinicCoreLowerStatus minic_core_lower_try_comparisons(
             (void)memset(&zero_instruction, 0, sizeof(zero_instruction));
             zero_instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
             zero_instruction.span = expression->span;
-            zero_instruction.type = minic_type_int();
+            zero_instruction_source_type = minic_type_int();
             zero_instruction.result = MINIC_CORE_VALUE_INVALID;
             zero_instruction.value.integer_value = 0;
-            if (!minic_core_function_append_value_instruction(
-                    context->function, context->block_id, &zero_instruction, &zero_value)) {
+            if (!minic_core_function_append_source_value_instruction(
+                    context->function, context->block_id, &zero_instruction, zero_instruction_source_type, &zero_value)) {
                 { *handled = true; return MINIC_CORE_LOWER_ERROR; }
             }
             (void)memset(&compare_instruction, 0, sizeof(compare_instruction));
             compare_instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_LESS;
             compare_instruction.span = expression->span;
-            compare_instruction.type = minic_type_int();
+            compare_instruction_source_type = minic_type_int();
             compare_instruction.result = MINIC_CORE_VALUE_INVALID;
             compare_instruction.value.binary.left = inclusive ? zero_value : compare_value;
             compare_instruction.value.binary.right = inclusive ? compare_value : zero_value;
-            if (!minic_core_function_append_value_instruction(
-                    context->function, context->block_id, &compare_instruction, &predicate_value)) {
+            if (!minic_core_function_append_source_value_instruction(
+                    context->function, context->block_id, &compare_instruction, compare_instruction_source_type, &predicate_value)) {
                 { *handled = true; return MINIC_CORE_LOWER_ERROR; }
             }
             if (!inclusive) {
@@ -790,11 +805,11 @@ MinicCoreLowerStatus minic_core_lower_try_comparisons(
             (void)memset(&invert_instruction, 0, sizeof(invert_instruction));
             invert_instruction.kind = MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO;
             invert_instruction.span = expression->span;
-            invert_instruction.type = minic_type_int();
+            invert_instruction_source_type = minic_type_int();
             invert_instruction.result = MINIC_CORE_VALUE_INVALID;
             invert_instruction.value.operand = predicate_value;
-            { *handled = true; return minic_core_function_append_value_instruction(
-                       context->function, context->block_id, &invert_instruction, value_id)
+            { *handled = true; return minic_core_function_append_source_value_instruction(
+                       context->function, context->block_id, &invert_instruction, invert_instruction_source_type, value_id)
                        ? MINIC_CORE_LOWER_OK
                        : MINIC_CORE_LOWER_ERROR; }
         }
@@ -849,12 +864,12 @@ MinicCoreLowerStatus minic_core_lower_try_comparisons(
                     ? MINIC_CORE_INSTRUCTION_DOUBLE_LESS
                     : MINIC_CORE_INSTRUCTION_DOUBLE_LESS_EQUAL;
             instruction.span = expression->span;
-            instruction.type = minic_type_int();
+            instruction_source_type = minic_type_int();
             instruction.result = MINIC_CORE_VALUE_INVALID;
             instruction.value.binary.left = swap ? right : left;
             instruction.value.binary.right = swap ? left : right;
-            { *handled = true; return minic_core_function_append_value_instruction(
-                       context->function, context->block_id, &instruction, value_id)
+            { *handled = true; return minic_core_function_append_source_value_instruction(
+                       context->function, context->block_id, &instruction, instruction_source_type, value_id)
                        ? MINIC_CORE_LOWER_OK
                        : MINIC_CORE_LOWER_ERROR; }
         }
@@ -868,6 +883,7 @@ MinicCoreLowerStatus minic_core_lower_try_comparisons(
         const MinicExpression *left_expression;
         const MinicExpression *right_expression;
         MinicCoreInstruction invert_instruction;
+        MinicType invert_instruction_source_type = minic_type_void();
         MinicCoreValueId left;
         MinicCoreValueId less_value;
         MinicCoreValueId right;
@@ -958,12 +974,12 @@ MinicCoreLowerStatus minic_core_lower_try_comparisons(
             (void)memset(&instruction, 0, sizeof(instruction));
             instruction.kind = MINIC_CORE_INSTRUCTION_POINTER_LESS;
             instruction.span = expression->span;
-            instruction.type = minic_type_int();
+            instruction_source_type = minic_type_int();
             instruction.result = MINIC_CORE_VALUE_INVALID;
             instruction.value.binary.left = swap ? right : left;
             instruction.value.binary.right = swap ? left : right;
-            if (!minic_core_function_append_value_instruction(
-                    context->function, context->block_id, &instruction, &less_value)) {
+            if (!minic_core_function_append_source_value_instruction(
+                    context->function, context->block_id, &instruction, instruction_source_type, &less_value)) {
                 { *handled = true; return MINIC_CORE_LOWER_ERROR; }
             }
             if (!invert) {
@@ -973,11 +989,11 @@ MinicCoreLowerStatus minic_core_lower_try_comparisons(
             (void)memset(&invert_instruction, 0, sizeof(invert_instruction));
             invert_instruction.kind = MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO;
             invert_instruction.span = expression->span;
-            invert_instruction.type = minic_type_int();
+            invert_instruction_source_type = minic_type_int();
             invert_instruction.result = MINIC_CORE_VALUE_INVALID;
             invert_instruction.value.operand = less_value;
-            { *handled = true; return minic_core_function_append_value_instruction(
-                       context->function, context->block_id, &invert_instruction, value_id)
+            { *handled = true; return minic_core_function_append_source_value_instruction(
+                       context->function, context->block_id, &invert_instruction, invert_instruction_source_type, value_id)
                        ? MINIC_CORE_LOWER_OK
                        : MINIC_CORE_LOWER_ERROR; }
         }
@@ -1021,12 +1037,12 @@ MinicCoreLowerStatus minic_core_lower_try_comparisons(
         (void)memset(&instruction, 0, sizeof(instruction));
         instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_LESS;
         instruction.span = expression->span;
-        instruction.type = minic_type_int();
+        instruction_source_type = minic_type_int();
         instruction.result = MINIC_CORE_VALUE_INVALID;
         instruction.value.binary.left = left;
         instruction.value.binary.right = right;
-        { *handled = true; return minic_core_function_append_value_instruction(
-                   context->function, context->block_id, &instruction, value_id)
+        { *handled = true; return minic_core_function_append_source_value_instruction(
+                   context->function, context->block_id, &instruction, instruction_source_type, value_id)
                    ? MINIC_CORE_LOWER_OK
                    : MINIC_CORE_LOWER_ERROR; }
     }
@@ -1037,6 +1053,7 @@ MinicCoreLowerStatus minic_core_lower_try_comparisons(
         const MinicExpression *left_expression;
         const MinicExpression *right_expression;
         MinicCoreInstruction invert_instruction;
+        MinicType invert_instruction_source_type = minic_type_void();
         MinicCoreValueId left;
         MinicCoreValueId less_value;
         MinicCoreValueId right;
@@ -1078,12 +1095,12 @@ MinicCoreLowerStatus minic_core_lower_try_comparisons(
         (void)memset(&instruction, 0, sizeof(instruction));
         instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_LESS;
         instruction.span = expression->span;
-        instruction.type = minic_type_int();
+        instruction_source_type = minic_type_int();
         instruction.result = MINIC_CORE_VALUE_INVALID;
         instruction.value.binary.left = swap ? right : left;
         instruction.value.binary.right = swap ? left : right;
-        if (!minic_core_function_append_value_instruction(
-                context->function, context->block_id, &instruction, &less_value)) {
+        if (!minic_core_function_append_source_value_instruction(
+                context->function, context->block_id, &instruction, instruction_source_type, &less_value)) {
             { *handled = true; return MINIC_CORE_LOWER_ERROR; }
         }
         if (!invert) {
@@ -1093,11 +1110,11 @@ MinicCoreLowerStatus minic_core_lower_try_comparisons(
         (void)memset(&invert_instruction, 0, sizeof(invert_instruction));
         invert_instruction.kind = MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO;
         invert_instruction.span = expression->span;
-        invert_instruction.type = minic_type_int();
+        invert_instruction_source_type = minic_type_int();
         invert_instruction.result = MINIC_CORE_VALUE_INVALID;
         invert_instruction.value.operand = less_value;
-        { *handled = true; return minic_core_function_append_value_instruction(
-                   context->function, context->block_id, &invert_instruction, value_id)
+        { *handled = true; return minic_core_function_append_source_value_instruction(
+                   context->function, context->block_id, &invert_instruction, invert_instruction_source_type, value_id)
                    ? MINIC_CORE_LOWER_OK
                    : MINIC_CORE_LOWER_ERROR; }
     }
@@ -1108,6 +1125,7 @@ MinicCoreLowerStatus minic_core_lower_try_pointer_arithmetic(
     MinicCoreLowerContext *context, const MinicExpression *expression,
     MinicCoreValueId *value_id, bool *handled) {
     MinicCoreInstruction instruction;
+    MinicType instruction_source_type = minic_type_void();
     *handled = false;
     /* M93_POINTER_DIFFERENCE: pointer - pointer produces an integer
        element distance. Compose existing target-neutral Core scalar primitives:
@@ -1187,12 +1205,12 @@ MinicCoreLowerStatus minic_core_lower_try_pointer_arithmetic(
             (void)memset(&instruction, 0, sizeof(instruction));
             instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_SUBTRACT;
             instruction.span = expression->span;
-            instruction.type = expression->type;
+            instruction_source_type = expression->type;
             instruction.result = MINIC_CORE_VALUE_INVALID;
             instruction.value.binary.left = left_integer;
             instruction.value.binary.right = right_integer;
-            if (!minic_core_function_append_value_instruction(
-                    context->function, context->block_id, &instruction, &byte_difference)) {
+            if (!minic_core_function_append_source_value_instruction(
+                    context->function, context->block_id, &instruction, instruction_source_type, &byte_difference)) {
                 { *handled = true; return MINIC_CORE_LOWER_ERROR; }
             }
             if (element_size == 1U) {
@@ -1203,22 +1221,22 @@ MinicCoreLowerStatus minic_core_lower_try_pointer_arithmetic(
             (void)memset(&instruction, 0, sizeof(instruction));
             instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
             instruction.span = expression->span;
-            instruction.type = expression->type;
+            instruction_source_type = expression->type;
             instruction.result = MINIC_CORE_VALUE_INVALID;
             instruction.value.integer_value = (int64_t)element_size;
-            if (!minic_core_function_append_value_instruction(
-                    context->function, context->block_id, &instruction, &divisor)) {
+            if (!minic_core_function_append_source_value_instruction(
+                    context->function, context->block_id, &instruction, instruction_source_type, &divisor)) {
                 { *handled = true; return MINIC_CORE_LOWER_ERROR; }
             }
             (void)memset(&instruction, 0, sizeof(instruction));
             instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_DIVIDE;
             instruction.span = expression->span;
-            instruction.type = expression->type;
+            instruction_source_type = expression->type;
             instruction.result = MINIC_CORE_VALUE_INVALID;
             instruction.value.binary.left = byte_difference;
             instruction.value.binary.right = divisor;
-            { *handled = true; return minic_core_function_append_value_instruction(
-                       context->function, context->block_id, &instruction, value_id)
+            { *handled = true; return minic_core_function_append_source_value_instruction(
+                       context->function, context->block_id, &instruction, instruction_source_type, value_id)
                        ? MINIC_CORE_LOWER_OK
                        : MINIC_CORE_LOWER_ERROR; }
         }
@@ -1336,7 +1354,7 @@ MinicCoreLowerStatus minic_core_lower_try_pointer_arithmetic(
         (void)memset(&instruction, 0, sizeof(instruction));
         instruction.kind = MINIC_CORE_INSTRUCTION_POINTER_OFFSET;
         instruction.span = expression->span;
-        instruction.type = pointer_value_type;
+        instruction_source_type = pointer_value_type;
         instruction.result = MINIC_CORE_VALUE_INVALID;
         instruction.value.pointer_offset.base = pointer_value;
         instruction.value.pointer_offset.index = index_value;
@@ -1348,8 +1366,8 @@ MinicCoreLowerStatus minic_core_lower_try_pointer_arithmetic(
            type, not the storage-qualified spelling. */
         instruction.value.pointer_offset.subtract =
             expression->value.binary.operator_kind == MINIC_BINARY_SUBTRACT;
-        if (!minic_core_function_append_value_instruction(
-                context->function, context->block_id, &instruction, &offset_value)) {
+        if (!minic_core_function_append_source_value_instruction(
+                context->function, context->block_id, &instruction, instruction_source_type, &offset_value)) {
             { *handled = true; return MINIC_CORE_LOWER_ERROR; }
         }
         *value_id = offset_value;

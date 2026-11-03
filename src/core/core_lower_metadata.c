@@ -29,6 +29,7 @@ static bool core_capture_enum_type_metadata(MinicCoreLowerContext *context, Mini
 
 bool core_capture_enum_metadata(MinicCoreLowerContext *context) {
     MinicCoreFunction *function;
+    const MinicCoreSourceDraft *source;
     size_t index;
     size_t parameter_index;
 
@@ -36,57 +37,71 @@ bool core_capture_enum_metadata(MinicCoreLowerContext *context) {
         return false;
     }
     function = context->function;
-    if (!core_capture_enum_type_metadata(context, function->return_type)) {
+    source = function->source_draft;
+    if (source == NULL ||
+        source->global_type_count != function->global_count ||
+        source->callee_count != function->callee_count ||
+        source->call_signature_count != function->call_signature_count ||
+        source->object_type_count != function->object_count ||
+        source->instruction_type_count != function->instruction_count ||
+        (function->parameter_count != 0U && source->parameter_types == NULL)) {
+        return false;
+    }
+    if (!core_capture_enum_type_metadata(context, source->return_type)) {
         return false;
     }
     for (index = 0U; index < function->parameter_count; ++index) {
-        if (!core_capture_enum_type_metadata(context, function->parameter_types[index])) {
+        if (!core_capture_enum_type_metadata(context, source->parameter_types[index])) {
             return false;
         }
     }
     for (index = 0U; index < function->global_count; ++index) {
-        if (!core_capture_enum_type_metadata(context, function->globals[index].type)) {
+        if (!core_capture_enum_type_metadata(context, source->global_types[index])) {
             return false;
         }
     }
     for (index = 0U; index < function->callee_count; ++index) {
         const MinicCoreCallee *callee = &function->callees[index];
+        const MinicCoreSourceCallType *source_callee = &source->callees[index];
 
-        if (!core_capture_enum_type_metadata(context, callee->return_type)) {
+        if (!core_capture_enum_type_metadata(context, source_callee->return_type)) {
             return false;
         }
         for (parameter_index = 0U; parameter_index < callee->parameter_count; ++parameter_index) {
-            if (!core_capture_enum_type_metadata(context, callee->parameter_types[parameter_index])) {
+            if (!core_capture_enum_type_metadata(context, source_callee->parameter_types[parameter_index])) {
                 return false;
             }
         }
     }
     for (index = 0U; index < function->call_signature_count; ++index) {
         const MinicCoreCallSignature *signature = &function->call_signatures[index];
+        const MinicCoreSourceCallType *source_signature = &source->call_signatures[index];
 
-        if (!core_capture_enum_type_metadata(context, signature->return_type)) {
+        if (!core_capture_enum_type_metadata(context, source_signature->return_type)) {
             return false;
         }
         for (parameter_index = 0U; parameter_index < signature->parameter_count;
              ++parameter_index) {
             if (!core_capture_enum_type_metadata(
-                    context, signature->parameter_types[parameter_index])) {
+                    context, source_signature->parameter_types[parameter_index])) {
                 return false;
             }
         }
     }
     for (index = 0U; index < function->object_count; ++index) {
-        if (!core_capture_enum_type_metadata(context, function->objects[index].type)) {
+        if (!core_capture_enum_type_metadata(context, source->object_types[index])) {
             return false;
         }
     }
     for (index = 0U; index < function->value_count; ++index) {
-        if (!core_capture_enum_type_metadata(context, minic_core_function_source_value_type(function, index))) {
+        if (!core_capture_enum_type_metadata(
+                context,
+                minic_core_function_source_value_type(function, (MinicCoreValueId)index))) {
             return false;
         }
     }
     for (index = 0U; index < function->instruction_count; ++index) {
-        if (!core_capture_enum_type_metadata(context, function->instructions[index].type)) {
+        if (!core_capture_enum_type_metadata(context, source->instruction_types[index])) {
             return false;
         }
     }

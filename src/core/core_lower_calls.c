@@ -97,6 +97,7 @@ static MinicCoreLowerStatus lower_record_call_argument_object(
        consumed by the existing Core/ABI OBJECT call-argument path. */
     const MinicExpression *expression;
     MinicCoreInstruction instruction;
+    MinicType instruction_source_type = minic_type_void();
     MinicCoreValueId destination_address;
     MinicCoreValueId source_address;
     MinicCoreLowerStatus status;
@@ -169,11 +170,11 @@ static MinicCoreLowerStatus lower_record_call_argument_object(
         (void)memset(&instruction, 0, sizeof(instruction));
         instruction.kind = MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS;
         instruction.span = expression->span;
-        instruction.type = pointer_type;
+        instruction_source_type = pointer_type;
         instruction.result = MINIC_CORE_VALUE_INVALID;
         instruction.value.object_id = *object_id;
-        if (!minic_core_function_append_value_instruction(
-                context->function, context->block_id, &instruction, &object_address)) {
+        if (!minic_core_function_append_source_value_instruction(
+                context->function, context->block_id, &instruction, instruction_source_type, &object_address)) {
             return MINIC_CORE_LOWER_ERROR;
         }
         status = minic_core_lower_internal_append_field_address(context,
@@ -189,13 +190,13 @@ static MinicCoreLowerStatus lower_record_call_argument_object(
         (void)memset(&instruction, 0, sizeof(instruction));
         instruction.kind = MINIC_CORE_INSTRUCTION_STORE;
         instruction.span = expression->span;
-        instruction.type = minic_type_void();
+        instruction_source_type = minic_type_void();
         instruction.result = MINIC_CORE_VALUE_INVALID;
         instruction.value.store.address = field_address;
         instruction.value.store.stored_value = field_value;
         instruction.value.store.is_volatile = false;
-        return minic_core_function_append_effect_instruction(
-                   context->function, context->block_id, &instruction)
+        return minic_core_function_append_source_effect_instruction(
+                   context->function, context->block_id, &instruction, instruction_source_type)
                    ? MINIC_CORE_LOWER_OK
                    : MINIC_CORE_LOWER_ERROR;
     }
@@ -225,22 +226,22 @@ static MinicCoreLowerStatus lower_record_call_argument_object(
     (void)memset(&instruction, 0, sizeof(instruction));
     instruction.kind = MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS;
     instruction.span = expression->span;
-    instruction.type = pointer_type;
+    instruction_source_type = pointer_type;
     instruction.result = MINIC_CORE_VALUE_INVALID;
     instruction.value.object_id = *object_id;
-    if (!minic_core_function_append_value_instruction(
-            context->function, context->block_id, &instruction, &destination_address)) {
+    if (!minic_core_function_append_source_value_instruction(
+            context->function, context->block_id, &instruction, instruction_source_type, &destination_address)) {
         return MINIC_CORE_LOWER_ERROR;
     }
     (void)memset(&instruction, 0, sizeof(instruction));
     instruction.kind = MINIC_CORE_INSTRUCTION_RECORD_COPY;
     instruction.span = expression->span;
-    instruction.type = parameter_type;
+    instruction_source_type = parameter_type;
     instruction.result = MINIC_CORE_VALUE_INVALID;
     instruction.value.record_copy.destination_address = destination_address;
     instruction.value.record_copy.source_address = source_address;
-    return minic_core_function_append_effect_instruction(
-               context->function, context->block_id, &instruction)
+    return minic_core_function_append_source_effect_instruction(
+               context->function, context->block_id, &instruction, instruction_source_type)
                ? MINIC_CORE_LOWER_OK
                : MINIC_CORE_LOWER_ERROR;
 }
@@ -741,6 +742,7 @@ MinicCoreLowerStatus minic_core_lower_direct_call(MinicCoreLowerContext *context
     size_t callee_name_length;
     MinicCoreCalleeId callee_id;
     MinicCoreInstruction instruction;
+    MinicType instruction_source_type = minic_type_void();
     MinicCoreCallArgument *arguments;
     MinicCoreObjectId argument_objects[MINIC_MAX_FUNCTION_PARAMETERS];
     MinicType argument_types[MINIC_MAX_FUNCTION_PARAMETERS];
@@ -880,7 +882,7 @@ MinicCoreLowerStatus minic_core_lower_direct_call(MinicCoreLowerContext *context
     (void)memset(&instruction, 0, sizeof(instruction));
     instruction.kind = MINIC_CORE_INSTRUCTION_CALL;
     instruction.span = expression->span;
-    instruction.type = callee->return_type;
+    instruction_source_type = callee->return_type;
     instruction.result = MINIC_CORE_VALUE_INVALID;
     instruction.value.call.callee_id = callee_id;
     instruction.value.call.argument_begin = argument_begin;
@@ -888,13 +890,13 @@ MinicCoreLowerStatus minic_core_lower_direct_call(MinicCoreLowerContext *context
     instruction.value.call.result_object = MINIC_CORE_OBJECT_INVALID;
     if (returns_void) {
         *value_id = MINIC_CORE_VALUE_INVALID;
-        return minic_core_function_append_effect_instruction(
-                   context->function, context->block_id, &instruction)
+        return minic_core_function_append_source_effect_instruction(
+                   context->function, context->block_id, &instruction, instruction_source_type)
                    ? MINIC_CORE_LOWER_OK
                    : MINIC_CORE_LOWER_ERROR;
     }
-    return minic_core_function_append_value_instruction(
-               context->function, context->block_id, &instruction, value_id)
+    return minic_core_function_append_source_value_instruction(
+               context->function, context->block_id, &instruction, instruction_source_type, value_id)
                ? MINIC_CORE_LOWER_OK
                : MINIC_CORE_LOWER_ERROR;
 }
@@ -911,6 +913,7 @@ MinicCoreLowerStatus minic_core_lower_direct_record_call_object(
     size_t callee_name_length;
     MinicCoreCalleeId callee_id;
     MinicCoreInstruction instruction;
+    MinicType instruction_source_type = minic_type_void();
     MinicCoreCallArgument *arguments;
     MinicCoreObjectId argument_objects[MINIC_MAX_FUNCTION_PARAMETERS];
     MinicCoreLowerStatus status;
@@ -990,14 +993,14 @@ MinicCoreLowerStatus minic_core_lower_direct_record_call_object(
     (void)memset(&instruction, 0, sizeof(instruction));
     instruction.kind = MINIC_CORE_INSTRUCTION_CALL;
     instruction.span = expression->span;
-    instruction.type = callee->return_type;
+    instruction_source_type = callee->return_type;
     instruction.result = MINIC_CORE_VALUE_INVALID;
     instruction.value.call.callee_id = callee_id;
     instruction.value.call.argument_begin = argument_begin;
     instruction.value.call.argument_count = callee->parameter_count;
     instruction.value.call.result_object = *result_object;
-    return minic_core_function_append_effect_instruction(
-               context->function, context->block_id, &instruction)
+    return minic_core_function_append_source_effect_instruction(
+               context->function, context->block_id, &instruction, instruction_source_type)
                ? MINIC_CORE_LOWER_OK
                : MINIC_CORE_LOWER_ERROR;
 }
@@ -1015,6 +1018,7 @@ static MinicCoreLowerStatus core_lower_indirect_call_impl(MinicCoreLowerContext 
     const MinicFunctionType *signature;
     MinicCoreCallSignatureId signature_id;
     MinicCoreInstruction instruction;
+    MinicType instruction_source_type = minic_type_void();
     MinicCoreValueId callee_value;
     MinicCoreCallArgument *arguments;
     MinicCoreObjectId argument_objects[MINIC_MAX_FUNCTION_PARAMETERS];
@@ -1156,7 +1160,7 @@ static MinicCoreLowerStatus core_lower_indirect_call_impl(MinicCoreLowerContext 
     (void)memset(&instruction, 0, sizeof(instruction));
     instruction.kind = MINIC_CORE_INSTRUCTION_INDIRECT_CALL;
     instruction.span = expression->span;
-    instruction.type = signature->return_type;
+    instruction_source_type = signature->return_type;
     instruction.result = MINIC_CORE_VALUE_INVALID;
     instruction.value.indirect_call.callee = callee_value;
     instruction.value.indirect_call.signature_id = signature_id;
@@ -1170,19 +1174,19 @@ static MinicCoreLowerStatus core_lower_indirect_call_impl(MinicCoreLowerContext 
             return MINIC_CORE_LOWER_ERROR;
         }
         instruction.value.indirect_call.result_object = *result_object;
-        return minic_core_function_append_effect_instruction(
-                   context->function, context->block_id, &instruction)
+        return minic_core_function_append_source_effect_instruction(
+                   context->function, context->block_id, &instruction, instruction_source_type)
                    ? MINIC_CORE_LOWER_OK : MINIC_CORE_LOWER_ERROR;
     }
     if (returns_void) {
         *value_id = MINIC_CORE_VALUE_INVALID;
-        return minic_core_function_append_effect_instruction(
-                   context->function, context->block_id, &instruction)
+        return minic_core_function_append_source_effect_instruction(
+                   context->function, context->block_id, &instruction, instruction_source_type)
                    ? MINIC_CORE_LOWER_OK
                    : MINIC_CORE_LOWER_ERROR;
     }
-    return minic_core_function_append_value_instruction(
-               context->function, context->block_id, &instruction, value_id)
+    return minic_core_function_append_source_value_instruction(
+               context->function, context->block_id, &instruction, instruction_source_type, value_id)
                ? MINIC_CORE_LOWER_OK
                : MINIC_CORE_LOWER_ERROR;
 }

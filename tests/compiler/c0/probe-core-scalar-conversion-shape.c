@@ -1,5 +1,5 @@
-/* Both Core conversions and Core scalar bitcasts must ignore C descriptors.
- * Deliberately poison C operands while preserving sealed CoreType IDs. */
+/* Core conversions and scalar bitcasts use sealed CoreType IDs, without a
+ * source-language descriptor in the public instruction/value schema. */
 #include "target/common/core_scalar_conversion.h"
 #include <stdio.h>
 
@@ -59,7 +59,6 @@ static int run(void) {
     instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONVERSION;
     instruction.value.operand = 0U;
     instruction.result = 1U;
-    instruction.type = minic_type_void();
     values[0].core_type_id = signed_byte;
     values[1].core_type_id = unsigned_long;
     instruction.core_type_id = unsigned_long;
@@ -130,6 +129,6 @@ int main(void) {
         fprintf(stderr, "CORE_SCALAR_CONVERSION_SHAPE=FAIL line=%d\n", line);
         return 1;
     }
-    puts("CORE_SCALAR_CONVERSION_SHAPE=PASS C_poison integer bitcast LP64_ILP32 bool rollback=6");
+    puts("CORE_SCALAR_CONVERSION_SHAPE=PASS C_free integer bitcast LP64_ILP32 bool rollback=6");
     return 0;
 }

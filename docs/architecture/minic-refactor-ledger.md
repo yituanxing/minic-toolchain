@@ -1009,3 +1009,45 @@ RV32/RV64 root alignment, AArch64/x86 machine poisoned-C and Loong descriptor
 tests. `make -j8 build/debug/bin/minic-cc` and Core enum-origin tests also
 passed. Cross-architecture GNU/QEMU absences remain `SKIP`/`NOT_RUN`; this is
 not five-architecture Linux boot/runtime certification.
+
+## IR-P17 — C-free published Core schema and transient SourceDraft owner (2026-11-03)
+
+Read this migration across the complete producer-to-consumer lifecycle:
+C semantic lowering → type-preserving source construction → one-shot CoreType
+import → Core verification → machine consumers → destroy. The public
+`core/core_ir.h` no longer imports `frontend/type.h` and contains no
+`MinicType`, `MinicEnumId` or `MinicFunctionTypeId` fields or source-only
+entrypoint signatures. The explicit `core/core_ir_source.h` houses the temporary
+C admission API and one per-function `MinicCoreSourceDraft`, indexed alongside
+Core's stable object, global, fixed-register, callee, call-signature and
+instruction IDs. Core values still derive their original source type from
+their one defining instruction; they do not copy a second C descriptor.
+
+All existing `core_lower*` producers, including GNU ASM operand clones,
+pass exact C source types separately into source-only append APIs. The
+published instruction/object/signature/function structures carry only
+sealed Core type identities and execution metadata. Preserve C's exact
+integer rank, enum/record identity, direct symbol signature consistency,
+indirect `FunctionTypeId`, and definition-local parameter normalization
+**before** import; Core representation equality is not C type compatibility.
+Both Core and SourceDraft arrays reserve storage before publishing a shared
+index. A failed import clears partial Core type IDs and leaves the draft
+available for retry; only success through both Core verifiers frees the entire
+draft. Independent Core producers can provide typed instructions without
+constructing a source draft.
+
+This closes the **published function C-type schema boundary**, not the
+remaining GNU SourcePolicy qualification or the broader source-Program
+dependency in some Target machine admission paths. It introduces neither
+Machine IR nor a replacement Core IR. Cross-GNU QEMU and five-ISA Linux
+boots remain independent acceptance gates and are not inferred here.
+
+**Verification:** `make -s MODE=debug -j8 check-fast` exited zero;
+`make -s MODE=release -j8 build/release/bin/minic-cc` also passed.
+Core Type/Import/Snapshot passed native and ASan/UBSan; Core IR ingress
+shapes passed 12/12 valid/negative cases in both modes. A clean Core-only
+instruction construction test preserves pre-typed Core IDs. Five-target
+source/ABI/ASM boundary tests, RISC-V layout and native GNU-linked checks
+ran within `check-fast`; unavailable cross-GNU/QEMU runs remain explicit SKIP.
+**Scope:** 43 files including 23 production `src/` files, 18 test files,
+the Makefile and this ledger; approximately +1,600/−1,260 lines.

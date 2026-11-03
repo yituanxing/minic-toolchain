@@ -1,6 +1,6 @@
 /* Deliberately corrupted, otherwise well-formed Core function fixtures.
  * The type verifier must inspect semantic Core types, not C descriptors. */
-#include "core/core_ir.h"
+#include "core/core_ir_source.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -70,36 +70,36 @@ static bool build_function(MinicCoreFunction *fn, MinicCoreTypeContext *context,
     for (index = 0U; index < 3U; ++index) {
         (void)memset(&op, 0, sizeof(op));
         op.kind = MINIC_CORE_INSTRUCTION_PARAMETER;
-        op.type = params[index];
         op.value.parameter_index = index;
-        if (!minic_core_function_append_value_instruction(fn, block, &op, &id) ||
+        if (!minic_core_function_append_source_value_instruction(
+                fn, block, &op, params[index], &id) ||
             id != index) return false;
     }
     (void)memset(&op, 0, sizeof(op));
     op.kind = MINIC_CORE_INSTRUCTION_INTEGER_ADD;
-    op.type = minic_type_int();
     op.value.binary.left = 0U;
     op.value.binary.right = 1U;
-    if (!minic_core_function_append_value_instruction(fn, block, &op, &id) ||
+    if (!minic_core_function_append_source_value_instruction(
+            fn, block, &op, minic_type_int(), &id) ||
         id != 3U) return false;
     (void)memset(&op, 0, sizeof(op));
     op.kind = MINIC_CORE_INSTRUCTION_LOAD;
-    op.type = minic_type_int();
     op.value.load.address = 2U;
-    if (!minic_core_function_append_value_instruction(fn, block, &op, &id) ||
+    if (!minic_core_function_append_source_value_instruction(
+            fn, block, &op, minic_type_int(), &id) ||
         id != 4U) return false;
     (void)memset(&op, 0, sizeof(op));
     op.kind = MINIC_CORE_INSTRUCTION_SCALAR_BITCAST;
-    op.type = minic_type_int();
     op.value.operand = 2U;
-    if (!minic_core_function_append_value_instruction(fn, block, &op, &id) ||
+    if (!minic_core_function_append_source_value_instruction(
+            fn, block, &op, minic_type_int(), &id) ||
         id != 5U) return false;
     (void)memset(&op, 0, sizeof(op));
     op.kind = MINIC_CORE_INSTRUCTION_INTEGER_ADD;
-    op.type = minic_type_int();
     op.value.binary.left = 3U;
     op.value.binary.right = 4U;
-    if (!minic_core_function_append_value_instruction(fn, block, &op, &id) ||
+    if (!minic_core_function_append_source_value_instruction(
+            fn, block, &op, minic_type_int(), &id) ||
         id != 6U) return false;
     term.kind = MINIC_CORE_TERMINATOR_RETURN;
     term.return_value = 6U;

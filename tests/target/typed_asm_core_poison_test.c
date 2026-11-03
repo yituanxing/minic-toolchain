@@ -1,6 +1,6 @@
 /* AArch64/x86-64 GNU ASM source qualification may depend on exact C ranks,
- * but the final machine emitter must consume only the sealed Core ABI shape.
- * Use actual positive emitted ISA, not just rejected malformed test stubs. */
+ * but Core machine emission has no C descriptor to reopen. Check stable
+ * positive emissions and reject malformed sealed Core identities. */
 #include "core/core_ir.h"
 #include "target/aarch64/asm_contract.h"
 #include "target/x86_64/machine_internal.h"
@@ -37,8 +37,8 @@ static bool register_pointer(MinicCoreTypeContext *types,
     return minic_core_type_register(types, &type, id);
 }
 
-/* The output buffers remain untouched for false admissions. Callers compare
- * complete emitted text before and after poisoning legacy C descriptors. */
+/* The output buffers remain untouched for false admissions. A repeated
+ * invocation with the same sealed Core IDs must emit exactly the same ISA. */
 static bool emit_one(PoisonMachine machine, const MinicCoreFunction *function,
                      const MinicCoreInstruction *instruction,
                      char *output, size_t capacity) {
@@ -102,14 +102,12 @@ static void machine_core_poison(PoisonMachine machine) {
     function.inline_asms = &inline_asm;
     function.inline_asm_count = 1U;
     value[0].core_type_id = pointer_u64;
-    function.return_type = minic_type_void();
 
     inline_asm.template_text = (char *)template_text;
     inline_asm.template_length = strlen(template_text);
     inline_asm.is_volatile = true;
     inline_asm.target_machine_form_id = 0U;
     instruction.kind = MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM;
-    instruction.type = minic_type_void();
     instruction.core_type_id = void_id;
     instruction.result = MINIC_CORE_VALUE_INVALID;
     instruction.value.structured_inline_asm.inline_asm_id = 0U;
@@ -125,15 +123,13 @@ static void machine_core_poison(PoisonMachine machine) {
     assert(strstr(normal, machine == POISON_AARCH64
         ? "  mrs x9, cntpct_el0\n" : "  movq %rbx, (%r11)\n") != NULL);
 
-    /* CoreValue has no C descriptor; corrupt the remaining source-only
-     * instruction and function descriptors without changing the CoreType. */
-    instruction.type = minic_type_int();
-    function.return_type = minic_type_double();
+    /* The public instruction/function schemas contain no C descriptor at all;
+     * repeat with unchanged sealed Core identities and compare the output. */
     if (!emit_one(machine, &function, &instruction, poisoned,
                   sizeof(poisoned))) {
-        fprintf(stderr, "Core/C poison rejected by %s machine emitter\n",
+        fprintf(stderr, "Sealed Core re-emission rejected by %s machine emitter\n",
                 machine == POISON_AARCH64 ? "AArch64" : "x86-64");
-        assert(0 && "legacy C descriptors must not govern machine emission");
+        assert(0 && "sealed Core identities must govern machine emission");
     }
     assert(strcmp(normal, poisoned) == 0);
 
@@ -163,6 +159,6 @@ static void machine_core_poison(PoisonMachine machine) {
 int main(void) {
     machine_core_poison(POISON_AARCH64);
     machine_core_poison(POISON_X86_64);
-    puts("TYPED_ASM_CORE_POISON=PASS targets=2 positive=2 C_poison_identical=2 wrong_core=4 null_context=2 invalid_ssa=2 partial_asm=0");
+    puts("TYPED_ASM_CORE_POISON=PASS targets=2 positive=2 sealed_core_stable=2 wrong_core=4 null_context=2 invalid_ssa=2 partial_asm=0");
     return 0;
 }

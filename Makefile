@@ -2158,8 +2158,8 @@ check-loong-typed-descriptors: $(LOONG_TYPED_DESCRIPTOR_TEST_OBJECTS)
 check-fast: check-loong-typed-descriptors
 
 # Real AArch64/x86-64 physical ASM emission must depend on sealed CoreType
-# alone. Poison the preserved migration-only C descriptors and require
-# byte-identical output; malformed Core types must fail with zero bytes.
+# alone. The public Core schema no longer retains C descriptors: require
+# byte-identical repeated output and reject malformed Core types with zero bytes.
 TYPED_ASM_CORE_POISON_TEST_BINARY := $(BUILD_DIR)/tests/target/typed-asm-core-poison
 
 .PHONY: check-typed-asm-core-poison

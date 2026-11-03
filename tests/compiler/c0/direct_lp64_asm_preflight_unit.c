@@ -20,9 +20,8 @@ static int check_asm_ids(size_t count) {
     if (instructions == NULL || asms == NULL) goto done;
     for (i = 0U; i < count; ++i) {
         instructions[i].kind = MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM;
-        /* The obsolete C descriptor is poisoned; only the sealed Core void
-         * identity may authorize a machine-neutral ASM effect. */
-        instructions[i].type = minic_type_int();
+        /* Only the sealed Core void identity authorizes an ASM effect.
+         * C descriptors do not exist in the executable Core instruction. */
         instructions[i].core_type_id = 0U;
         instructions[i].result = MINIC_CORE_VALUE_INVALID;
         instructions[i].value.structured_inline_asm.inline_asm_id = (MinicCoreInlineAsmId)i;

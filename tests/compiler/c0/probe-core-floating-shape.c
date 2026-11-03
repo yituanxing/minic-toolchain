@@ -1,5 +1,5 @@
-/* All 17 floating-scalar Core operations ignore deliberately poisoned
- * frontend C descriptors, including enum rank, integer signs and widths. */
+/* All 17 floating-scalar Core operations use only sealed Core identities;
+ * nominal C ranks and frontend descriptors are absent from Core IR. */
 #include "target/common/core_floating_shape.h"
 #include <stdio.h>
 
@@ -73,7 +73,6 @@ static int run(void) {
     function.type_context = &ctx;
     function.values = values;
     function.value_count = 4U;
-    ins.type = minic_type_void();
     ins.result = 3U;
     ins.value.binary.left = 0U;
     ins.value.binary.right = 1U;
@@ -166,6 +165,6 @@ int main(void) {
         fprintf(stderr, "CORE_FLOATING_SHAPE=FAIL line=%d\n", line);
         return 1;
     }
-    puts("CORE_FLOATING_SHAPE=PASS family=17 C_poison binary32 binary64 extended signed8 unsigned64 invalid=5");
+    puts("CORE_FLOATING_SHAPE=PASS family=17 C_free binary32 binary64 extended signed8 unsigned64 invalid=5");
     return 0;
 }

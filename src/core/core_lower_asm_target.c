@@ -11,6 +11,7 @@ MinicCoreLowerStatus core_asm_try_target_register_contract(
     MinicCoreLowerContext *ctx, const MinicStatement *statement,
     const MinicInlineAsm *source, bool *handled) {
     MinicCoreInstruction ins;
+    MinicType ins_source_type = minic_type_void();
     MinicCoreInlineAsmId id;
     char *normalized = NULL;
     size_t length, i;
@@ -56,7 +57,7 @@ MinicCoreLowerStatus core_asm_try_target_register_contract(
     memset(&ins, 0, sizeof(ins));
     ins.kind = MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM;
     ins.span = statement->span;
-    ins.type = minic_type_void();
+    ins_source_type = minic_type_void();
     ins.result = MINIC_CORE_VALUE_INVALID;
     ins.value.structured_inline_asm.operand_count = contract.operand_count;
     for (i = 0U; i < ins.value.structured_inline_asm.operand_count; ++i) {
@@ -120,14 +121,15 @@ MinicCoreLowerStatus core_asm_try_target_register_contract(
                 core_const_eval_integer_with_locals(
                     ctx, op->expression, &folded)) {
                 MinicCoreInstruction constant_ins;
+                MinicType constant_ins_source_type = minic_type_void();
                 (void)memset(&constant_ins, 0, sizeof(constant_ins));
                 constant_ins.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
                 constant_ins.span = expr->span;
-                constant_ins.type = expr->type;
+                constant_ins_source_type = expr->type;
                 constant_ins.result = MINIC_CORE_VALUE_INVALID;
                 constant_ins.value.integer_value = (int64_t)folded.bits;
-                status = minic_core_function_append_value_instruction(
-                    ctx->function, ctx->block_id, &constant_ins, &bind->value)
+                status = minic_core_function_append_source_value_instruction(
+                    ctx->function, ctx->block_id, &constant_ins, constant_ins_source_type, &bind->value)
                     ? MINIC_CORE_LOWER_OK : MINIC_CORE_LOWER_ERROR;
             } else {
                 status = lower_expression(ctx, op->expression, &bind->value);
@@ -186,9 +188,10 @@ MinicCoreLowerStatus core_asm_try_target_register_contract(
         }
         if (!already_in_effect_block) {
             MinicCoreInstruction local_address = *producer;
+            MinicType local_address_source_type = ctx->function->source_draft->instruction_types[definition];
             local_address.result = MINIC_CORE_VALUE_INVALID;
-            if (!minic_core_function_append_value_instruction(
-                    ctx->function, ctx->block_id, &local_address, &bind->value)) {
+            if (!minic_core_function_append_source_value_instruction(
+                    ctx->function, ctx->block_id, &local_address, local_address_source_type, &bind->value)) {
                 free(normalized);
                 return MINIC_CORE_LOWER_ERROR;
             }
@@ -241,7 +244,7 @@ MinicCoreLowerStatus core_asm_try_target_register_contract(
     if (!core_asm_publish_operand_plan(
             &ins, &ctx->function->inline_asms[id], &contract))
         return MINIC_CORE_LOWER_ERROR;
-    return minic_core_function_append_effect_instruction(
-        ctx->function, ctx->block_id, &ins)
+    return minic_core_function_append_source_effect_instruction(
+        ctx->function, ctx->block_id, &ins, ins_source_type)
         ? MINIC_CORE_LOWER_OK : MINIC_CORE_LOWER_ERROR;
 }

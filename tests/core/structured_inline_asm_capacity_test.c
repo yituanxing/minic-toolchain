@@ -79,14 +79,12 @@ static bool verify_core_roles(size_t count, bool corrupt_index, bool expected) {
                       &function, "# sixteen slots", 15U, true, false, &asm_id);
     if (initialized) {
         integer.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
-        integer.type = minic_type_int();
         integer.value.integer_value = 1;
         initialized = minic_core_function_append_value_instruction(
             &function, block, &integer, &scalar);
     }
     if (initialized) {
         asm_effect.kind = MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM;
-        asm_effect.type = minic_type_void();
         asm_effect.value.structured_inline_asm.inline_asm_id = asm_id;
         asm_effect.value.structured_inline_asm.operand_count = count;
         for (index = 0U;

@@ -1,5 +1,4 @@
-#include "core/core_ir.h"
-#include "frontend/type.h"
+#include "core/core_ir_source.h"
 
 #include <stdio.h>
 

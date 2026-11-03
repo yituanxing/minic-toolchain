@@ -105,17 +105,15 @@ static bool build_call_dump_function(MinicCoreFunction *function) {
 
     (void)memset(&instruction, 0, sizeof(instruction));
     instruction.kind = MINIC_CORE_INSTRUCTION_FUNCTION_ADDRESS;
-    instruction.type = function_pointer;
     instruction.value.function_symbol_id = symbol;
-    if (!minic_core_function_append_value_instruction(
-            function, block, &instruction, &function_address)) return false;
+    if (!minic_core_function_append_source_value_instruction(
+            function, block, &instruction, function_pointer, &function_address)) return false;
 
     (void)memset(&instruction, 0, sizeof(instruction));
     instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
-    instruction.type = minic_type_int();
     instruction.value.integer_value = 7;
-    if (!minic_core_function_append_value_instruction(
-            function, block, &instruction, &integer)) return false;
+    if (!minic_core_function_append_source_value_instruction(
+            function, block, &instruction, minic_type_int(), &integer)) return false;
 
     (void)memset(arguments, 0, sizeof(arguments));
     arguments[0].kind = MINIC_CORE_CALL_ARGUMENT_VALUE;
@@ -127,24 +125,22 @@ static bool build_call_dump_function(MinicCoreFunction *function) {
 
     (void)memset(&instruction, 0, sizeof(instruction));
     instruction.kind = MINIC_CORE_INSTRUCTION_CALL;
-    instruction.type = minic_type_int();
     instruction.value.call.callee_id = callee;
     instruction.value.call.argument_begin = argument_begin;
     instruction.value.call.argument_count = 2U;
     instruction.value.call.result_object = MINIC_CORE_OBJECT_INVALID;
-    if (!minic_core_function_append_value_instruction(
-            function, block, &instruction, &result)) return false;
+    if (!minic_core_function_append_source_value_instruction(
+            function, block, &instruction, minic_type_int(), &result)) return false;
 
     (void)memset(&instruction, 0, sizeof(instruction));
     instruction.kind = MINIC_CORE_INSTRUCTION_INDIRECT_CALL;
-    instruction.type = minic_type_int();
     instruction.value.indirect_call.callee = function_address;
     instruction.value.indirect_call.signature_id = signature;
     instruction.value.indirect_call.argument_begin = argument_begin;
     instruction.value.indirect_call.argument_count = 2U;
     instruction.value.indirect_call.result_object = MINIC_CORE_OBJECT_INVALID;
-    if (!minic_core_function_append_value_instruction(
-            function, block, &instruction, &result)) return false;
+    if (!minic_core_function_append_source_value_instruction(
+            function, block, &instruction, minic_type_int(), &result)) return false;
 
     (void)memset(&terminator, 0, sizeof(terminator));
     terminator.kind = MINIC_CORE_TERMINATOR_RETURN;

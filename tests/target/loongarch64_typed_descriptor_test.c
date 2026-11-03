@@ -79,10 +79,9 @@ static void descriptor_source_normalized_seal(void) {
     assert(!minic_loongarch64_qualify_inline_asm(&program, &source, &forged));
 }
 
-/* The physical emitter must consume the sealed Core execution type, not
- * independently rediscover C's nominal rank from CoreValue.type. This is
- * deliberately a positive machine emission test with poisoned C descriptors.
- * Rejection-only fixtures cannot detect that ownership regression. */
+/* The physical emitter consumes sealed Core execution types; no C nominal
+ * rank can be recovered from the C-free CoreValue schema. Positive emission
+ * fixtures catch an ownership regression that rejection tests alone miss. */
 static bool cpucfg_emit_matches(const MinicDirectLP64BlockContext *ctx,
                                 const MinicCoreInstruction *ins,
                                 bool accepted) {
@@ -205,7 +204,6 @@ static void machine_reject(uint32_t id, uint32_t variant, const char *literal) {
     ctx.fn = &function;
     ins.kind = MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM;
     ins.result = MINIC_CORE_VALUE_INVALID;
-    ins.type = minic_type_void();
     ins.value.structured_inline_asm.inline_asm_id = 0U;
     assert(!minic_loongarch64_emit_qualified_structured_asm(out, &ctx, &ins));
     assert(ftell(out) == 0L);

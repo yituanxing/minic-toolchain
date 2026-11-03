@@ -368,19 +368,16 @@ static int run(void) {
     REQUIRE(strstr(output, "sw t0, 0(t1)") != NULL);
     REQUIRE(fclose(stream) == 0);
 
-    /* Strict ISA admission and frame predicates must not read the C type
-     * once a complete CoreType arena has been attached. Deliberately make
-     * the legacy descriptor disagree in both directions. */
+    /* Strict ISA admission and frame predicates depend exclusively on sealed
+     * CoreType identities. No source-language type field exists on Core IR. */
     REQUIRE(minic_riscv64_core_is_record(&function, record_id));
     REQUIRE(!minic_riscv64_core_is_record(&function, int_id));
     REQUIRE(minic_riscv64_core_is_i128(&function, wide_id));
     REQUIRE(!minic_riscv64_core_is_i128(&function, int_id));
     isa_ins.kind = MINIC_CORE_INSTRUCTION_INTEGER_CLZ;
-    isa_ins.type = minic_type_int128();
     isa_ins.core_type_id = int_id;
     REQUIRE(minic_riscv_isa_admit_core_instruction(
         &strict_isa, &function, &isa_ins, reason, sizeof(reason)));
-    isa_ins.type = minic_type_int();
     isa_ins.core_type_id = wide_id;
     REQUIRE(!minic_riscv_isa_admit_core_instruction(
         &strict_isa, &function, &isa_ins, reason, sizeof(reason)));

@@ -44,6 +44,7 @@ static MinicCoreLowerStatus append_switch_integer_constant(MinicCoreLowerContext
                                                            int64_t value,
                                                            MinicCoreValueId *value_id) {
     MinicCoreInstruction instruction;
+    MinicType instruction_source_type = minic_type_void();
 
     if (context == NULL || context->function == NULL || value_id == NULL ||
         !minic_type_is_integer(type)) {
@@ -52,11 +53,11 @@ static MinicCoreLowerStatus append_switch_integer_constant(MinicCoreLowerContext
     (void)memset(&instruction, 0, sizeof(instruction));
     instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
     instruction.span = span;
-    instruction.type = type;
+    instruction_source_type = type;
     instruction.result = MINIC_CORE_VALUE_INVALID;
     instruction.value.integer_value = value;
-    return minic_core_function_append_value_instruction(
-               context->function, context->block_id, &instruction, value_id)
+    return minic_core_function_append_source_value_instruction(
+               context->function, context->block_id, &instruction, instruction_source_type, value_id)
                ? MINIC_CORE_LOWER_OK
                : MINIC_CORE_LOWER_ERROR;
 }
@@ -99,6 +100,7 @@ static MinicCoreLowerStatus lower_switch_case_dispatch(MinicCoreLowerContext *co
     MinicConstValue upper_constant;
     MinicConstValue upper_converted;
     MinicCoreInstruction instruction;
+    MinicType instruction_source_type = minic_type_void();
     MinicCoreValueId bound;
     MinicCoreValueId comparison;
     MinicCoreValueId selector;
@@ -151,12 +153,12 @@ static MinicCoreLowerStatus lower_switch_case_dispatch(MinicCoreLowerContext *co
         (void)memset(&instruction, 0, sizeof(instruction));
         instruction.kind = MINIC_CORE_INSTRUCTION_SCALAR_EQUAL;
         instruction.span = case_statement->span;
-        instruction.type = minic_type_int();
+        instruction_source_type = minic_type_int();
         instruction.result = MINIC_CORE_VALUE_INVALID;
         instruction.value.binary.left = selector;
         instruction.value.binary.right = bound;
-        if (!minic_core_function_append_value_instruction(
-                context->function, context->block_id, &instruction, &comparison)) {
+        if (!minic_core_function_append_source_value_instruction(
+                context->function, context->block_id, &instruction, instruction_source_type, &comparison)) {
             return MINIC_CORE_LOWER_ERROR;
         }
         return set_switch_conditional_branch(
@@ -186,12 +188,12 @@ static MinicCoreLowerStatus lower_switch_case_dispatch(MinicCoreLowerContext *co
         (void)memset(&instruction, 0, sizeof(instruction));
         instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_LESS;
         instruction.span = case_statement->span;
-        instruction.type = minic_type_int();
+        instruction_source_type = minic_type_int();
         instruction.result = MINIC_CORE_VALUE_INVALID;
         instruction.value.binary.left = selector;
         instruction.value.binary.right = bound;
-        if (!minic_core_function_append_value_instruction(
-                context->function, context->block_id, &instruction, &comparison)) {
+        if (!minic_core_function_append_source_value_instruction(
+                context->function, context->block_id, &instruction, instruction_source_type, &comparison)) {
             return MINIC_CORE_LOWER_ERROR;
         }
         status = set_switch_conditional_branch(
@@ -223,12 +225,12 @@ static MinicCoreLowerStatus lower_switch_case_dispatch(MinicCoreLowerContext *co
         (void)memset(&instruction, 0, sizeof(instruction));
         instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_LESS;
         instruction.span = case_statement->span;
-        instruction.type = minic_type_int();
+        instruction_source_type = minic_type_int();
         instruction.result = MINIC_CORE_VALUE_INVALID;
         instruction.value.binary.left = bound;
         instruction.value.binary.right = selector;
-        if (!minic_core_function_append_value_instruction(
-                context->function, context->block_id, &instruction, &comparison)) {
+        if (!minic_core_function_append_source_value_instruction(
+                context->function, context->block_id, &instruction, instruction_source_type, &comparison)) {
             return MINIC_CORE_LOWER_ERROR;
         }
         return set_switch_conditional_branch(

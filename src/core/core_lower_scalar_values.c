@@ -76,6 +76,7 @@ MinicCoreLowerStatus minic_core_lower_internal_append_integer_conversion(MinicCo
                                                       MinicCoreValueId source_value,
                                                       MinicCoreValueId *value_id) {
     MinicCoreInstruction instruction;
+    MinicType instruction_source_type = minic_type_void();
     MinicType source_type;
 
     if (context == NULL || context->function == NULL || value_id == NULL ||
@@ -93,11 +94,11 @@ MinicCoreLowerStatus minic_core_lower_internal_append_integer_conversion(MinicCo
     (void)memset(&instruction, 0, sizeof(instruction));
     instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONVERSION;
     instruction.span = span;
-    instruction.type = target_type;
+    instruction_source_type = target_type;
     instruction.result = MINIC_CORE_VALUE_INVALID;
     instruction.value.operand = source_value;
-    return minic_core_function_append_value_instruction(
-               context->function, context->block_id, &instruction, value_id)
+    return minic_core_function_append_source_value_instruction(
+               context->function, context->block_id, &instruction, instruction_source_type, value_id)
                ? MINIC_CORE_LOWER_OK
                : MINIC_CORE_LOWER_ERROR;
 }
@@ -108,6 +109,7 @@ MinicCoreLowerStatus append_scalar_bitcast(MinicCoreLowerContext *context,
                                                   MinicCoreValueId source_value,
                                                   MinicCoreValueId *value_id) {
     MinicCoreInstruction instruction;
+    MinicType instruction_source_type = minic_type_void();
     MinicType source_type;
 
     if (context == NULL || context->function == NULL || value_id == NULL ||
@@ -125,11 +127,11 @@ MinicCoreLowerStatus append_scalar_bitcast(MinicCoreLowerContext *context,
     (void)memset(&instruction, 0, sizeof(instruction));
     instruction.kind = MINIC_CORE_INSTRUCTION_SCALAR_BITCAST;
     instruction.span = span;
-    instruction.type = target_type;
+    instruction_source_type = target_type;
     instruction.result = MINIC_CORE_VALUE_INVALID;
     instruction.value.operand = source_value;
-    return minic_core_function_append_value_instruction(
-               context->function, context->block_id, &instruction, value_id)
+    return minic_core_function_append_source_value_instruction(
+               context->function, context->block_id, &instruction, instruction_source_type, value_id)
                ? MINIC_CORE_LOWER_OK
                : MINIC_CORE_LOWER_ERROR;
 }
@@ -140,17 +142,18 @@ MinicCoreLowerStatus minic_core_lower_internal_emit_scalar_load(
     MinicCoreLowerContext *context, MinicSourceSpan span, MinicType type,
     MinicCoreValueId address_id, bool is_volatile, MinicCoreValueId *value_id) {
     MinicCoreInstruction instruction;
+    MinicType instruction_source_type = minic_type_void();
     if (context == NULL || context->function == NULL || value_id == NULL)
         return MINIC_CORE_LOWER_ERROR;
     (void)memset(&instruction, 0, sizeof(instruction));
     instruction.kind = MINIC_CORE_INSTRUCTION_LOAD;
     instruction.span = span;
-    instruction.type = type;
+    instruction_source_type = type;
     instruction.result = MINIC_CORE_VALUE_INVALID;
     instruction.value.load.address = address_id;
     instruction.value.load.is_volatile = is_volatile;
-    return minic_core_function_append_value_instruction(
-               context->function, context->block_id, &instruction, value_id)
+    return minic_core_function_append_source_value_instruction(
+               context->function, context->block_id, &instruction, instruction_source_type, value_id)
                ? MINIC_CORE_LOWER_OK : MINIC_CORE_LOWER_ERROR;
 }
 
@@ -158,18 +161,19 @@ MinicCoreLowerStatus minic_core_lower_internal_emit_scalar_store(
     MinicCoreLowerContext *context, MinicSourceSpan span,
     MinicCoreValueId address_id, MinicCoreValueId stored_value, bool is_volatile) {
     MinicCoreInstruction instruction;
+    MinicType instruction_source_type = minic_type_void();
     if (context == NULL || context->function == NULL)
         return MINIC_CORE_LOWER_ERROR;
     (void)memset(&instruction, 0, sizeof(instruction));
     instruction.kind = MINIC_CORE_INSTRUCTION_STORE;
     instruction.span = span;
-    instruction.type = minic_type_void();
+    instruction_source_type = minic_type_void();
     instruction.result = MINIC_CORE_VALUE_INVALID;
     instruction.value.store.address = address_id;
     instruction.value.store.stored_value = stored_value;
     instruction.value.store.is_volatile = is_volatile;
-    return minic_core_function_append_effect_instruction(
-               context->function, context->block_id, &instruction)
+    return minic_core_function_append_source_effect_instruction(
+               context->function, context->block_id, &instruction, instruction_source_type)
                ? MINIC_CORE_LOWER_OK : MINIC_CORE_LOWER_ERROR;
 }
 
@@ -177,14 +181,15 @@ static MinicCoreLowerStatus core_scalar_object_address(
     MinicCoreLowerContext *context, MinicSourceSpan span, MinicType pointer_type,
     MinicCoreObjectId object_id, MinicCoreValueId *address_id) {
     MinicCoreInstruction instruction;
+    MinicType instruction_source_type = minic_type_void();
     (void)memset(&instruction, 0, sizeof(instruction));
     instruction.kind = MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS;
     instruction.span = span;
-    instruction.type = pointer_type;
+    instruction_source_type = pointer_type;
     instruction.result = MINIC_CORE_VALUE_INVALID;
     instruction.value.object_id = object_id;
-    return minic_core_function_append_value_instruction(
-               context->function, context->block_id, &instruction, address_id)
+    return minic_core_function_append_source_value_instruction(
+               context->function, context->block_id, &instruction, instruction_source_type, address_id)
                ? MINIC_CORE_LOWER_OK : MINIC_CORE_LOWER_ERROR;
 }
 
@@ -227,7 +232,7 @@ MinicCoreLowerStatus minic_core_lower_internal_store_scalar_value(MinicCoreLower
         minic_type_is_const(type) || minic_type_is_volatile(type) ||
         object_id >= context->function->object_count ||
         value_id >= context->function->value_count ||
-        !minic_type_equal(context->function->objects[object_id].type, type) ||
+        !minic_type_equal(context->function->source_draft->object_types[object_id], type) ||
         !minic_type_equal(minic_core_function_source_value_type(context->function, value_id), type) ||
         !minic_type_pointer_to(type, &pointer_type)) {
         return MINIC_CORE_LOWER_ERROR;
@@ -252,7 +257,7 @@ MinicCoreLowerStatus minic_core_lower_internal_reload_scalar_value(MinicCoreLowe
     if (context == NULL || context->function == NULL || value_id == NULL ||
         !core_memory_scalar_type(type) || minic_type_is_const(type) ||
         minic_type_is_volatile(type) || object_id >= context->function->object_count ||
-        !minic_type_equal(context->function->objects[object_id].type, type) ||
+        !minic_type_equal(context->function->source_draft->object_types[object_id], type) ||
         !minic_type_pointer_to(type, &pointer_type)) {
         return MINIC_CORE_LOWER_ERROR;
     }
@@ -604,6 +609,7 @@ static MinicCoreLowerStatus append_runtime_scalar_call(
     MinicCoreCallArgument arguments[2];
     MinicCoreCalleeId callee_id;
     MinicCoreInstruction instruction;
+    MinicType instruction_source_type = minic_type_void();
     size_t argument_begin;
     size_t index;
 
@@ -638,14 +644,14 @@ static MinicCoreLowerStatus append_runtime_scalar_call(
     (void)memset(&instruction, 0, sizeof(instruction));
     instruction.kind = MINIC_CORE_INSTRUCTION_CALL;
     instruction.span = span;
-    instruction.type = return_type;
+    instruction_source_type = return_type;
     instruction.result = MINIC_CORE_VALUE_INVALID;
     instruction.value.call.callee_id = callee_id;
     instruction.value.call.argument_begin = argument_begin;
     instruction.value.call.argument_count = argument_count;
     instruction.value.call.result_object = MINIC_CORE_OBJECT_INVALID;
-    return minic_core_function_append_value_instruction(
-               context->function, context->block_id, &instruction, value_id)
+    return minic_core_function_append_source_value_instruction(
+               context->function, context->block_id, &instruction, instruction_source_type, value_id)
                ? MINIC_CORE_LOWER_OK
                : MINIC_CORE_LOWER_ERROR;
 }
@@ -795,6 +801,7 @@ MinicCoreLowerStatus minic_core_lower_internal_lower_scalar_assignment_value(Min
                                                           MinicCoreValueId *value_id) {
     const MinicExpression *expression;
     MinicCoreInstruction instruction;
+    MinicType instruction_source_type = minic_type_void();
     MinicCoreLowerStatus status;
     MinicCoreValueId source_value;
     MinicCoreValueId zero_test;
@@ -838,11 +845,11 @@ MinicCoreLowerStatus minic_core_lower_internal_lower_scalar_assignment_value(Min
         (void)memset(&instruction, 0, sizeof(instruction));
         instruction.kind = MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT;
         instruction.span = expression->span;
-        instruction.type = target_type;
+        instruction_source_type = target_type;
         instruction.result = MINIC_CORE_VALUE_INVALID;
         instruction.value.floating_bits = 0U;
-        return minic_core_function_append_value_instruction(
-                   context->function, context->block_id, &instruction, value_id)
+        return minic_core_function_append_source_value_instruction(
+                   context->function, context->block_id, &instruction, instruction_source_type, value_id)
                ? MINIC_CORE_LOWER_OK : MINIC_CORE_LOWER_ERROR;
     }
 
@@ -903,11 +910,11 @@ MinicCoreLowerStatus minic_core_lower_internal_lower_scalar_assignment_value(Min
             (void)memset(&instruction, 0, sizeof(instruction));
             instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_TO_DOUBLE;
             instruction.span = expression->span;
-            instruction.type = target_type;
+            instruction_source_type = target_type;
             instruction.result = MINIC_CORE_VALUE_INVALID;
             instruction.value.operand = source_value;
-            return minic_core_function_append_value_instruction(
-                       context->function, context->block_id, &instruction, value_id)
+            return minic_core_function_append_source_value_instruction(
+                       context->function, context->block_id, &instruction, instruction_source_type, value_id)
                        ? MINIC_CORE_LOWER_OK
                        : MINIC_CORE_LOWER_ERROR;
         }
@@ -947,16 +954,16 @@ MinicCoreLowerStatus minic_core_lower_internal_lower_scalar_assignment_value(Min
     (void)memset(&instruction, 0, sizeof(instruction));
     instruction.kind = MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO;
     instruction.span = expression->span;
-    instruction.type = minic_type_int();
+    instruction_source_type = minic_type_int();
     instruction.result = MINIC_CORE_VALUE_INVALID;
     instruction.value.operand = source_value;
-    if (!minic_core_function_append_value_instruction(
-            context->function, context->block_id, &instruction, &zero_test)) {
+    if (!minic_core_function_append_source_value_instruction(
+            context->function, context->block_id, &instruction, instruction_source_type, &zero_test)) {
         return MINIC_CORE_LOWER_ERROR;
     }
     instruction.value.operand = zero_test;
-    if (!minic_core_function_append_value_instruction(
-            context->function, context->block_id, &instruction, &truth_value)) {
+    if (!minic_core_function_append_source_value_instruction(
+            context->function, context->block_id, &instruction, instruction_source_type, &truth_value)) {
         return MINIC_CORE_LOWER_ERROR;
     }
     return minic_core_lower_internal_append_integer_conversion(context, expression->span, target_type, truth_value, value_id);

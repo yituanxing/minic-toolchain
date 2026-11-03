@@ -1,4 +1,4 @@
-#include "core/core_ir.h"
+#include "core/core_ir_source.h"
 #include "target/riscv64/core_codegen.h"
 
 #include <stdbool.h>
@@ -30,34 +30,32 @@ static bool append_parameter_ingress(MinicCoreFunction *function,
     (void)memset(&instruction, 0, sizeof(instruction));
     instruction.kind = MINIC_CORE_INSTRUCTION_PARAMETER;
     instruction.span = empty_span();
-    instruction.type = type;
     instruction.result = MINIC_CORE_VALUE_INVALID;
     instruction.value.parameter_index = parameter_index;
-    if (!minic_core_function_append_value_instruction(
-            function, block_id, &instruction, &parameter_value)) {
+    if (!minic_core_function_append_source_value_instruction(
+            function, block_id, &instruction, type, &parameter_value)) {
         return false;
     }
 
     (void)memset(&instruction, 0, sizeof(instruction));
     instruction.kind = MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS;
     instruction.span = empty_span();
-    instruction.type = pointer_type;
     instruction.result = MINIC_CORE_VALUE_INVALID;
     instruction.value.object_id = object_id;
-    if (!minic_core_function_append_value_instruction(
-            function, block_id, &instruction, address_id)) {
+    if (!minic_core_function_append_source_value_instruction(
+            function, block_id, &instruction, pointer_type, address_id)) {
         return false;
     }
 
     (void)memset(&instruction, 0, sizeof(instruction));
     instruction.kind = MINIC_CORE_INSTRUCTION_STORE;
     instruction.span = empty_span();
-    instruction.type = minic_type_void();
     instruction.result = MINIC_CORE_VALUE_INVALID;
     instruction.value.store.address = *address_id;
     instruction.value.store.stored_value = parameter_value;
     instruction.value.store.is_volatile = false;
-    return minic_core_function_append_effect_instruction(function, block_id, &instruction);
+    return minic_core_function_append_source_effect_instruction(
+        function, block_id, &instruction, minic_type_void());
 }
 
 static bool append_load(MinicCoreFunction *function,
@@ -70,11 +68,11 @@ static bool append_load(MinicCoreFunction *function,
     (void)memset(&instruction, 0, sizeof(instruction));
     instruction.kind = MINIC_CORE_INSTRUCTION_LOAD;
     instruction.span = empty_span();
-    instruction.type = type;
     instruction.result = MINIC_CORE_VALUE_INVALID;
     instruction.value.load.address = address_id;
     instruction.value.load.is_volatile = false;
-    return minic_core_function_append_value_instruction(function, block_id, &instruction, value_id);
+    return minic_core_function_append_source_value_instruction(
+        function, block_id, &instruction, type, value_id);
 }
 
 static bool append_constant(MinicCoreFunction *function,
@@ -86,10 +84,10 @@ static bool append_constant(MinicCoreFunction *function,
     (void)memset(&instruction, 0, sizeof(instruction));
     instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
     instruction.span = empty_span();
-    instruction.type = minic_type_int();
     instruction.result = MINIC_CORE_VALUE_INVALID;
     instruction.value.integer_value = value;
-    return minic_core_function_append_value_instruction(function, block_id, &instruction, value_id);
+    return minic_core_function_append_source_value_instruction(
+        function, block_id, &instruction, minic_type_int(), value_id);
 }
 
 static bool append_unary(MinicCoreFunction *function,
@@ -103,10 +101,10 @@ static bool append_unary(MinicCoreFunction *function,
     (void)memset(&instruction, 0, sizeof(instruction));
     instruction.kind = kind;
     instruction.span = empty_span();
-    instruction.type = type;
     instruction.result = MINIC_CORE_VALUE_INVALID;
     instruction.value.operand = operand;
-    return minic_core_function_append_value_instruction(function, block_id, &instruction, value_id);
+    return minic_core_function_append_source_value_instruction(
+        function, block_id, &instruction, type, value_id);
 }
 
 static bool
@@ -148,11 +146,11 @@ static bool build_math(MinicCoreFunction *function) {
     (void)memset(&instruction, 0, sizeof(instruction));
     instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_ADD;
     instruction.span = empty_span();
-    instruction.type = minic_type_int();
     instruction.result = MINIC_CORE_VALUE_INVALID;
     instruction.value.binary.left = x_value;
     instruction.value.binary.right = y_value;
-    if (!minic_core_function_append_value_instruction(function, block_id, &instruction, &sum) ||
+    if (!minic_core_function_append_source_value_instruction(
+            function, block_id, &instruction, minic_type_int(), &sum) ||
         !append_unary(function,
                       block_id,
                       MINIC_CORE_INSTRUCTION_INTEGER_NEGATE,

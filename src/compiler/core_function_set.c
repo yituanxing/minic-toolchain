@@ -1,5 +1,6 @@
 #include "compiler/core_function_set.h"
 #include "core/core_type_import.h"
+#include "core/core_ir_source.h"
 #include "compiler/module_ir_build.h"
 #include "core/reentry_index.h"
 #include "frontend/function_body.h"

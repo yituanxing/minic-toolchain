@@ -227,6 +227,7 @@ MinicCoreLowerStatus minic_core_lower_inline_asm(MinicCoreLowerContext *context,
     const MinicInlineAsm *source;
     MinicCoreInlineAsmId inline_asm_id;
     MinicCoreInstruction instruction;
+    MinicType instruction_source_type = minic_type_void();
     MinicCoreLowerStatus status;
     bool handled;
 
@@ -312,11 +313,11 @@ MinicCoreLowerStatus minic_core_lower_inline_asm(MinicCoreLowerContext *context,
     (void)memset(&instruction, 0, sizeof(instruction));
     instruction.kind = MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM;
     instruction.span = statement->span;
-    instruction.type = minic_type_void();
+    instruction_source_type = minic_type_void();
     instruction.result = MINIC_CORE_VALUE_INVALID;
     instruction.value.inline_asm_id = inline_asm_id;
-    return minic_core_function_append_effect_instruction(
-               context->function, context->block_id, &instruction)
+    return minic_core_function_append_source_effect_instruction(
+               context->function, context->block_id, &instruction, instruction_source_type)
                ? MINIC_CORE_LOWER_OK
                : MINIC_CORE_LOWER_ERROR;
 }

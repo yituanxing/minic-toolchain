@@ -23,6 +23,15 @@ for file in \
   exists "$file"
 done
 
+# The published Core IR schema cannot expose C nominal descriptors. They
+# exist only in the source-only draft and must disappear after publication.
+has src/core/core_ir.h 'MinicCoreSourceDraft *source_draft;'
+has src/core/core_ir_source.h 'struct MinicCoreSourceDraft {'
+for symbol in 'MinicType' 'MinicEnumId' 'MinicFunctionTypeId' \
+              'frontend/type.h'; do
+  lacks src/core/core_ir.h "$symbol"
+done
+
 has src/target/loongarch64/asm_contract.c 'loong_pte_form('
 has src/target/loongarch64/asm_contract.c 'loong_pte_emit('
 lacks src/core/core_lower_asm_target.c 'll.d'
@@ -1170,8 +1179,8 @@ cc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror \
   -o "$work/core-object-storage-resolved-probe"
 "$work/core-object-storage-resolved-probe"
 
-# Deliberately poison source C descriptors across the entire five-backend
-# shared object/SSA frame chain; ILP32/LP64 and missing Core facts fail closed.
+# Exercise the C-free object/SSA frame chain shared by five backends;
+# ILP32/LP64 and missing Core evidence still fail closed.
 cc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror \
   -ffunction-sections -fdata-sections -Wl,--gc-sections \
   -Iinclude -Isrc tests/compiler/c0/probe-core-frame-type-ownership.c \
@@ -1286,8 +1295,8 @@ lacks src/target/riscv32/rv32_fp_emit.c 'rv32_resolved_'
 lacks src/target/riscv64/fp_emit.c 'minic_riscv64_emit_integer_conversion_for_program('
 
 # Every machine CALL/INDIRECT_CALL/PARAMETER/return consumer reads the
-# sealed ABI value shape. Old C descriptors may remain in the Core IR for
-# source-level LoongArch builtin signature validation, never ABI selection.
+# sealed ABI value shape. C descriptors now live exclusively in a temporary
+# source lowering draft, never the published Core IR or target call ABI.
 has src/target/common/core_call_view.h 'core_parameter_type_ids;'
 lacks src/target/common/core_call_view.h 'const MinicType *parameter_types;'
 lacks src/target/common/core_call_view.h 'MinicType return_type;'

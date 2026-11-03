@@ -10,8 +10,8 @@ static bool register_type(MinicCoreTypeContext *context, MinicCoreType type,
     return minic_core_type_register(context, &type, result);
 }
 
-/* Call marshaling must follow the same already-sealed Core scalar layout on
- * every ISA, even when Source MinicType still contains contradictory data. */
+/* Call marshaling follows sealed Core scalar layout on every ISA. No C
+ * descriptor can be reached through these public Core ABI records. */
 static bool probe_abi_value_shapes(void) {
     MinicCoreTypeContext context;
     MinicCoreFunction function = {0};
@@ -94,13 +94,9 @@ int main(void) {
     MinicCoreCallView view;
     MinicCoreTypeId actual;
     MinicCoreFunction function = {0};
-    /* Deliberately contradictory C descriptors. Only Core IDs may govern
-     * target-neutral CALL identity and argument admission. */
-    MinicType legacy_scalar = {0};
 
     if (!probe_abi_value_shapes()) return 23;
     minic_core_type_context_initialize(&context);
-    legacy_scalar.base_kind = MINIC_TYPE_BASE_DOUBLE;
     (void)memset(values, 0, sizeof(values));
     (void)memset(objects, 0, sizeof(objects));
     type.kind = MINIC_CORE_TYPE_INTEGER;
@@ -169,19 +165,14 @@ int main(void) {
     values[1].core_type_id = pointer_type;
     objects[0].core_type_id = record;
     objects[1].core_type_id = other_record;
-    objects[0].type = legacy_scalar;
-    objects[1].type = legacy_scalar;
 
     callee.core_return_type_id = integer;
     callee.core_parameter_type_ids = &integer;
-    callee.return_type = legacy_scalar;
-    callee.parameter_types = &legacy_scalar;
     callee.parameter_count = 1U;
     argument.kind = MINIC_CORE_CALL_ARGUMENT_VALUE;
     argument.value.value_id = 0U;
     call.kind = MINIC_CORE_INSTRUCTION_CALL;
     call.core_type_id = integer;
-    call.type = legacy_scalar;
     call.result = 0U;
     call.value.call.callee_id = 0U;
     call.value.call.argument_count = 1U;
@@ -232,8 +223,6 @@ int main(void) {
     signature.core_function_type_id = signature_type;
     signature.core_return_type_id = integer;
     signature.core_parameter_type_ids = &integer;
-    signature.return_type = legacy_scalar;
-    signature.parameter_types = &legacy_scalar;
     signature.parameter_count = 1U;
     argument.kind = MINIC_CORE_CALL_ARGUMENT_VALUE;
     argument.value.value_id = 0U;
