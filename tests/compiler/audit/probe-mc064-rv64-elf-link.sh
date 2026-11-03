@@ -1,7 +1,7 @@
 #!/bin/sh
-# Known-negative MC-064 ELF/link audit, not a check-fast green regression.
-# Requires RV64 GNU binutils/GCC and qemu-riscv64; stdout is a factual result.
-# Once the bug is fixed, flip the expected negative and promote the probe.
+# MC-064 positive ELF/link/runtime proof, using a single GNU-preprocessed TU.
+# The ASM-only function is a real Core reachability root. GNU AS accepting an
+# unresolved relocation is not sufficient: GNU LD and QEMU must both pass.
 set -eu
 : "${MINIC_CC:?set MINIC_CC to the compiler under test}"
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
@@ -61,39 +61,26 @@ for variant in asm_only direct_call static_object; do
         exit 1
     fi
 
-    if [ "$variant" = asm_only ]; then
-        if ! grep -Eq "U $symbol\$" "$work/$variant.undefined"; then
-            echo "MC064_AUDIT=FAIL expected MiniC undefined $symbol" >&2
-            exit 1
-        fi
-        if riscv64-linux-gnu-ld -m elf64lriscv -static -e _start \
-            "$work/start.o" "$work/$variant.minic.o" \
-            -o "$work/$variant.minic.elf" 2> "$work/$variant.ld.err"; then
-            echo 'MC064_AUDIT=CHANGED MiniC asm_only now links; promote to positive regression' >&2
-            exit 1
-        fi
-        if ! grep -Fq "undefined reference to \`$symbol'" "$work/$variant.ld.err"; then
-            echo 'MC064_AUDIT=FAIL unexpected MiniC negative link diagnostic' >&2
-            sed -n '1,10p' "$work/$variant.ld.err" >&2
-            exit 1
-        fi
-    else
-        if grep -Eq "U $symbol\$" "$work/$variant.undefined"; then
-            echo "MC064_AUDIT=FAIL positive control undefined symbol=$symbol" >&2
-            exit 1
-        fi
-        riscv64-linux-gnu-ld -m elf64lriscv -static -e _start \
-            "$work/start.o" "$work/$variant.minic.o" \
-            -o "$work/$variant.minic.elf"
-        set +e
-        qemu-riscv64 "$work/$variant.minic.elf"
-        minic_exit=$?
-        set -e
-        if [ "$minic_exit" -ne "$expected" ]; then
-            echo "MC064_AUDIT=FAIL $variant MiniC native exit=$minic_exit expected=$expected" >&2
-            exit 1
-        fi
+    if grep -Eq "U $symbol\$" "$work/$variant.undefined"; then
+        echo "MC064_AUDIT=FAIL $variant MiniC missing reachable definition=$symbol" >&2
+        exit 1
+    fi
+    if ! riscv64-linux-gnu-nm --defined-only "$work/$variant.minic.o" |
+        grep -Eq " [a-zA-Z] $symbol\$"; then
+        echo "MC064_AUDIT=FAIL $variant MiniC missing local ELF symbol=$symbol" >&2
+        exit 1
+    fi
+    riscv64-linux-gnu-ld -m elf64lriscv -static -e _start \
+        "$work/start.o" "$work/$variant.minic.o" \
+        -o "$work/$variant.minic.elf"
+    set +e
+    qemu-riscv64 "$work/$variant.minic.elf"
+    minic_exit=$?
+    set -e
+    if [ "$minic_exit" -ne "$expected" ]; then
+        echo "MC064_AUDIT=FAIL $variant MiniC native exit=$minic_exit expected=$expected" >&2
+        exit 1
     fi
 done
 
-echo 'MC064_PREEXISTING_NEGATIVE=CONFIRMED same_preprocessed_input=YES GNU_AS=PASS GNU_ELF_AND_QEMU=PASS MiniC_AS=PASS MiniC_ASM_ONLY_LD=UNDEFINED_STATIC_FUNCTION direct_call_and_object_native=PASS'
+echo 'MC064_ELF_REACHABILITY=PASS same_preprocessed_input=YES GNU_AS_LD_QEMU=PASS MiniC_AS_LD_QEMU=PASS asm_only_function=retained direct_call=retained static_object=retained'

@@ -141,6 +141,30 @@ bool minic_core_function_mark_reachable_blocks(const MinicCoreFunction *function
             MINIC_CORE_REACH_ENQUEUE((MinicCoreBlockId)index);
     while (begin < end) {
         const MinicCoreBlock *block = &function->blocks[queue[begin++]];
+        size_t instruction_index;
+        /* A BLOCK_ADDRESS produced in an executable block is a first-class
+         * escape edge to its target block, even if that target has no source
+         * local_label_symbol. This is Core CFG ownership, not C label syntax;
+         * the same canonical marking is used by the backend emitter and the
+         * whole-module symbol closure. Unreachable address producers do not
+         * introduce spurious roots. */
+        if ((block->instruction_count != 0U && block->instructions == NULL) ||
+            (function->instruction_count != 0U && function->instructions == NULL)) {
+            free(queue);
+            return false;
+        }
+        for (instruction_index = 0U;
+             instruction_index < block->instruction_count; ++instruction_index) {
+            MinicCoreInstructionId id = block->instructions[instruction_index];
+            const MinicCoreInstruction *instruction;
+            if (id >= function->instruction_count) {
+                free(queue);
+                return false;
+            }
+            instruction = &function->instructions[id];
+            if (instruction->kind == MINIC_CORE_INSTRUCTION_BLOCK_ADDRESS)
+                MINIC_CORE_REACH_ENQUEUE(instruction->value.block_id);
+        }
         if (!block->has_terminator) { free(queue); return false; }
         switch (block->terminator.kind) {
         case MINIC_CORE_TERMINATOR_RETURN:

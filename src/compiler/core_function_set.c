@@ -107,6 +107,14 @@ bool minic_prepare_core_function_set(const MinicC0Program *program,
         minic_core_function_initialize(&set.functions[function_index]);
         set.statuses[function_index] = MINIC_CORE_LOWER_UNSUPPORTED;
     }
+    /* Ingress owns all source-only non-Core roots before selecting which
+     * canonical FunctionBodies to lower.  A typed ASM immediate or an
+     * initializer &&label can require a static body even after ordinary C
+     * lexical references were rewritten to specialized clones. */
+    if (!minic_core_module_prepare_from_program(&set.module, program, importer)) {
+        minic_core_function_set_destroy(&set);
+        return false;
+    }
     /* The AST statement/expression graph is immutable during Core Lowering.
      * Reuse one validated incoming-edge map for all ordinary and clone bodies. */
     index = minic_core_reentry_index_create(program);
@@ -123,7 +131,10 @@ bool minic_prepare_core_function_set(const MinicC0Program *program,
         if (!function->is_defined) {
             continue;
         }
-        if (function->is_internal && !function->is_referenced) {
+        if (function->is_internal && !function->is_referenced &&
+            !set.module.function_symbols[function_index].is_reachability_root &&
+            !set.module.function_symbols[function_index].is_source_asm_operand_root &&
+            !set.module.function_symbols[function_index].is_source_label_relocation_owner) {
             continue;
         }
         if (!minic_c0_function_body_view(program, function_index, &body)) {
@@ -185,7 +196,7 @@ bool minic_finalize_core_function_set_module(const MinicC0Program *program,
         set->type_importer == NULL || set->type_context == NULL ||
         set->module.finalized || set->function_count != program->function_count)
         return false;
-    ok = minic_core_module_build_from_program(
+    ok = minic_core_module_materialize_live_payloads(
         &set->module, program, target, set->type_importer);
     /* The Core module is immutable after construction. Release the last
      * compiler-only AST importer before entering target emission. */

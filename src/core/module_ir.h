@@ -68,6 +68,20 @@ typedef struct MinicCoreModuleFragment {
     int64_t relocation_addend;
 } MinicCoreModuleFragment;
 
+/* Symbol-identity edges captured at C ingress, independent of initializer
+ * byte serialization.  These are Core/Module reachability facts, never C
+ * expression IDs or target relocation encodings. */
+typedef enum MinicCoreModuleReferenceKind {
+    MINIC_CORE_MODULE_REFERENCE_OBJECT = 0,
+    MINIC_CORE_MODULE_REFERENCE_FUNCTION,
+    MINIC_CORE_MODULE_REFERENCE_OWNER_LABEL
+} MinicCoreModuleReferenceKind;
+
+typedef struct MinicCoreModuleReference {
+    MinicCoreModuleReferenceKind kind;
+    size_t target_index;
+} MinicCoreModuleReference;
+
 /* Original source ordinal is the array index, including entries that a
  * reachability pass later marks non-emittable. All strings/fragments owned. */
 typedef struct MinicCoreModuleGlobal {
@@ -100,6 +114,13 @@ typedef struct MinicCoreModuleGlobal {
     /* Sealed target-neutral proof for Common ELF NOBITS .bss policy.
      * RV64's independent explicit-section @progbits policy need not use it. */
     bool common_elf_bss_admitted;
+    /* The complete static-symbol closure runs on these source-independent
+     * facts before any live object's byte payload is materialized. */
+    bool is_file_scope_reachability_root;
+    bool is_source_asm_operand_root;
+    bool was_source_emission_pruned;
+    MinicCoreModuleReference *references;
+    size_t reference_count;
     MinicCoreModuleFragment *fragments;
     size_t fragment_count;
     size_t fragment_capacity;
@@ -107,6 +128,7 @@ typedef struct MinicCoreModuleGlobal {
 
 typedef struct MinicCoreModuleFunctionSymbol {
     char *name; /* canonical assembler-facing symbol, not a C declarator */
+    char *source_name; /* diagnostic/opaque-ASM source spelling, owned */
     char *section_name;
     size_t explicit_alignment;
     size_t alias_target_index; /* SIZE_MAX when not an alias. */
@@ -118,6 +140,11 @@ typedef struct MinicCoreModuleFunctionSymbol {
     bool is_weak;
     bool is_constructor;
     bool is_variadic;
+    bool is_reachability_root;
+    bool is_source_asm_operand_root;
+    bool is_source_label_relocation_owner;
+    bool is_specialization;
+    size_t specialization_source_index; /* SIZE_MAX unless a source clone. */
 } MinicCoreModuleFunctionSymbol;
 
 typedef struct MinicCoreModuleFileAsm {
@@ -134,6 +161,9 @@ typedef struct MinicCoreModule {
     size_t function_count;
     MinicCoreModuleFileAsm *file_asms;
     size_t file_asm_count;
+    /* Source ASM operand shapes that cannot be proven statically suppress
+     * object pruning conservatively, without retaining the source AST. */
+    bool preserve_all_static_objects;
     bool finalized;
 } MinicCoreModule;
 

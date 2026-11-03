@@ -1,7 +1,9 @@
 #include "compiler/module_ir_build.h"
+#include "compiler/inline_specialize_internal.h"
 #include "core/symbol_identity.h"
 
 #include "compiler/global_payload.h"
+#include "frontend/ast_traversal.h"
 #include "target/data_layout_source.h"
 #include <stdint.h>
 #include <stdlib.h>
@@ -13,6 +15,79 @@ typedef struct MinicModuleFragmentSinkContext {
     const MinicTargetInvocation *target;
     size_t cursor;
 } MinicModuleFragmentSinkContext;
+
+typedef struct MinicModuleAsmRootWalk {
+    const MinicC0Program *program;
+    MinicCoreModule *module;
+    unsigned int depth;
+} MinicModuleAsmRootWalk;
+
+/* All source GNU asm operand expressions, including an unreachable asm,
+ * may become symbolic immediates without a Core address instruction.  Capture
+ * typed function/object roots once; never ask Core closure to parse C syntax
+ * or architecture-dependent template text. An opaque nested expression
+ * conservatively disables object pruning, matching the historical contract. */
+static bool module_asm_operand_root_visit(MinicExpressionId *id_opaque,
+                                          void *context_opaque) {
+    MinicModuleAsmRootWalk *walk = context_opaque;
+    const MinicExpression *expression;
+    MinicExpression expression_view;
+    bool ok;
+    if (walk == NULL || id_opaque == NULL || walk->program == NULL ||
+        walk->module == NULL || walk->depth >= 64U ||
+        *id_opaque >= walk->program->expression_count) return false;
+    expression = minic_c0_program_expression(walk->program, *id_opaque);
+    if (expression == NULL) return false;
+    if (expression->kind == MINIC_EXPRESSION_GLOBAL_OBJECT) {
+        size_t id = expression->value.global_object_id;
+        if (id >= walk->module->global_count) return false;
+        walk->module->globals[id].is_source_asm_operand_root = true;
+        return true;
+    }
+    if (expression->kind == MINIC_EXPRESSION_FUNCTION) {
+        size_t id = expression->value.function_id;
+        if (id >= walk->module->function_count) return false;
+        walk->module->function_symbols[id].is_source_asm_operand_root = true;
+        return true;
+    }
+    if (expression->kind == MINIC_EXPRESSION_COMPOUND_LITERAL ||
+        expression->kind == MINIC_EXPRESSION_STATEMENT) return false;
+    expression_view = *expression;
+    ++walk->depth;
+    ok = minic_c0_expression_visit_child_id_refs(
+        &expression_view, module_asm_operand_root_visit, walk);
+    --walk->depth;
+    return ok;
+}
+
+static void module_capture_asm_operand_roots(MinicCoreModule *module,
+                                             const MinicC0Program *program) {
+    size_t i;
+    for (i = 0U; i < program->inline_asm_count; ++i) {
+        const MinicInlineAsm *source = &program->inline_asms[i];
+        MinicModuleAsmRootWalk walk = {program, module, 0U};
+        size_t j;
+        if ((source->input_count != 0U && source->inputs == NULL) ||
+            (source->output_count != 0U && source->outputs == NULL)) {
+            module->preserve_all_static_objects = true;
+            return;
+        }
+        for (j = 0U; j < source->input_count; ++j) {
+            MinicExpressionId id = source->inputs[j].expression;
+            if (!module_asm_operand_root_visit(&id, &walk)) {
+                module->preserve_all_static_objects = true;
+                return;
+            }
+        }
+        for (j = 0U; j < source->output_count; ++j) {
+            MinicExpressionId id = source->outputs[j].expression;
+            if (!module_asm_operand_root_visit(&id, &walk)) {
+                module->preserve_all_static_objects = true;
+                return;
+            }
+        }
+    }
+}
 
 static char *module_owned_string(const char *text, size_t length) {
     char *copy;
@@ -149,17 +224,12 @@ static bool module_sink_relocation(void *context,
     return true;
 }
 
-static bool module_capture_global(MinicCoreModuleGlobal *destination,
-                                  const MinicC0Program *program,
-                                  const MinicTargetInvocation *target,
-                                  MinicCoreTypeImporter *importer,
-                                  const MinicGlobalObject *source, size_t index) {
-    MinicMultiGlobalEmissionPlan plan;
-    MinicModuleFragmentSinkContext sink;
-    const MinicMultiGlobalPayloadSink callbacks = {
-        &sink, module_sink_zero, module_sink_bits, module_sink_relocation
-    };
+static bool module_capture_global_identity(MinicCoreModuleGlobal *destination,
+                                           const MinicC0Program *program,
+                                           const MinicGlobalObject *source,
+                                           size_t index) {
     const MinicGlobalObject *alias_target;
+    size_t reference_index;
     if (source->name == NULL ||
         (destination->name = module_c_string(source->name)) == NULL ||
         !module_visibility(source->visibility, &destination->visibility))
@@ -181,7 +251,17 @@ static bool module_capture_global(MinicCoreModuleGlobal *destination,
     destination->explicit_alignment = source->explicit_alignment;
     destination->initializer_slot_count = source->initializer_count;
     destination->relocation_slot_count = source->relocation_count;
-    destination->emittable = minic_c0_program_global_object_emittable(program, source);
+    destination->was_source_emission_pruned = source->is_emission_pruned;
+    destination->is_file_scope_reachability_root =
+        source->owner_function == MINIC_FUNCTION_INVALID &&
+        (!source->is_internal || source->force_emit ||
+         source->section_name != NULL ||
+         source->alias_target < program->global_object_count ||
+         source->is_weak || source->is_thread_local ||
+         source->visibility != MINIC_SYMBOL_VISIBILITY_DEFAULT ||
+         minic_program_has_opaque_asm_symbol(
+             program, source->name, source->name_length));
+    destination->emittable = false;
     destination->is_alias = source->alias_target != MINIC_GLOBAL_OBJECT_INVALID;
     destination->core_type_id = MINIC_CORE_TYPE_INVALID;
     if (destination->is_alias) {
@@ -196,6 +276,49 @@ static bool module_capture_global(MinicCoreModuleGlobal *destination,
         destination->alias_target_name = module_c_string(alias_target->name);
         if (destination->alias_target_name == NULL) return false;
     }
+    if (source->relocation_count != 0U && source->relocations == NULL)
+        return false;
+    destination->reference_count = source->relocation_count;
+    if (destination->reference_count != 0U) {
+        if (destination->reference_count > SIZE_MAX / sizeof(*destination->references))
+            return false;
+        destination->references = calloc(destination->reference_count,
+                                         sizeof(*destination->references));
+        if (destination->references == NULL) return false;
+    }
+    for (reference_index = 0U; reference_index < destination->reference_count;
+         ++reference_index) {
+        const MinicGlobalRelocation *relocation = &source->relocations[reference_index];
+        MinicCoreModuleReference *reference = &destination->references[reference_index];
+        if (relocation->target_kind == MINIC_GLOBAL_RELOCATION_OBJECT) {
+            reference->kind = MINIC_CORE_MODULE_REFERENCE_OBJECT;
+            reference->target_index = relocation->target_id;
+            if (reference->target_index >= program->global_object_count) return false;
+        } else if (relocation->target_kind == MINIC_GLOBAL_RELOCATION_FUNCTION) {
+            reference->kind = MINIC_CORE_MODULE_REFERENCE_FUNCTION;
+            reference->target_index = relocation->target_id;
+            if (reference->target_index >= program->function_count) return false;
+        } else if (relocation->target_kind == MINIC_GLOBAL_RELOCATION_LABEL) {
+            /* A local-label relocation names the original FunctionBody's
+             * label, never the body of an integer-specialization clone. */
+            reference->kind = MINIC_CORE_MODULE_REFERENCE_OWNER_LABEL;
+            reference->target_index = destination->owner_function_index;
+            if (reference->target_index >= program->function_count) return false;
+        } else return false;
+    }
+    return true;
+}
+
+static bool module_capture_global_payload(MinicCoreModuleGlobal *destination,
+                                          const MinicC0Program *program,
+                                          const MinicTargetInvocation *target,
+                                          MinicCoreTypeImporter *importer,
+                                          const MinicGlobalObject *source) {
+    MinicMultiGlobalEmissionPlan plan;
+    MinicModuleFragmentSinkContext sink;
+    const MinicMultiGlobalPayloadSink callbacks = {
+        &sink, module_sink_zero, module_sink_bits, module_sink_relocation
+    };
     if (!destination->emittable) return true;
     if (!minic_core_type_import(importer, source->type,
                                 &destination->core_type_id)) return false;
@@ -224,6 +347,8 @@ static bool module_capture_function(MinicCoreModuleFunctionSymbol *destination,
                                     const MinicFunction *source, size_t index) {
     const char *symbol = minic_c0_function_symbol_name(source);
     if (symbol == NULL || (destination->name = module_c_string(symbol)) == NULL ||
+        (destination->source_name = module_owned_string(
+            source->name, source->name_length)) == NULL ||
         !module_visibility(source->visibility, &destination->visibility))
         return false;
     destination->section_name = module_c_string(source->section_name);
@@ -236,6 +361,23 @@ static bool module_capture_function(MinicCoreModuleFunctionSymbol *destination,
     destination->is_weak = source->is_weak;
     destination->is_constructor = source->is_constructor;
     destination->is_variadic = source->is_variadic;
+    destination->is_specialization = source->is_integer_specialization;
+    destination->specialization_source_index = source->is_integer_specialization
+        ? (size_t)source->specialization_source : SIZE_MAX;
+    if (destination->is_specialization &&
+        destination->specialization_source_index >= program->function_count)
+        return false;
+    destination->is_reachability_root =
+        !source->is_integer_specialization && source->is_defined &&
+        (!source->is_internal || source->force_emit ||
+         source->is_constructor || index == program->entry_function);
+    /* A C parser reference is not an executable Core root. Historically the
+     * first Core pruning pass removed dead internal bodies BEFORE section,
+     * assembler-name, visibility and opaque template hints were considered.
+     * Let Core edges, alias targets and typed source-ASM operands retain them;
+     * otherwise dead if(0) metadata would resurrect unresolved callbacks.
+     * In particular a plain inline `cpuid` mnemonic is not a reference to a
+     * static function named cpuid. */
     destination->alias_target_index = SIZE_MAX;
     if (source->alias_target != MINIC_FUNCTION_INVALID) {
         const MinicFunction *target;
@@ -252,14 +394,12 @@ static bool module_capture_function(MinicCoreModuleFunctionSymbol *destination,
     return true;
 }
 
-bool minic_core_module_build_from_program(MinicCoreModule *output,
-                                          const MinicC0Program *program,
-                                          const MinicTargetInvocation *target,
-                                          MinicCoreTypeImporter *importer) {
+bool minic_core_module_prepare_from_program(MinicCoreModule *output,
+                                            const MinicC0Program *program,
+                                            MinicCoreTypeImporter *importer) {
     MinicCoreModule staged;
     size_t index;
-    if (output == NULL || program == NULL || target == NULL ||
-        target->machine.data_layout == NULL || importer == NULL || importer->failed ||
+    if (output == NULL || program == NULL || importer == NULL || importer->failed ||
         importer->program != program || importer->context == NULL ||
         program->global_object_count > SIZE_MAX / sizeof(*staged.globals) ||
         program->function_count > SIZE_MAX / sizeof(*staged.function_symbols) ||
@@ -284,13 +424,25 @@ bool minic_core_module_build_from_program(MinicCoreModule *output,
         if (staged.file_asms == NULL) goto failed;
     }
     for (index = 0U; index < staged.global_count; ++index)
-        if (!module_capture_global(&staged.globals[index], program, target,
-                                   importer, &program->global_objects[index], index))
+        if (!module_capture_global_identity(&staged.globals[index], program,
+                                            &program->global_objects[index], index))
             goto failed;
     for (index = 0U; index < staged.function_count; ++index)
         if (!module_capture_function(&staged.function_symbols[index], program,
                                      &program->functions[index], index))
             goto failed;
+    for (index = 0U; index < staged.global_count; ++index) {
+        const MinicCoreModuleGlobal *global = &staged.globals[index];
+        size_t reference_index;
+        for (reference_index = 0U; reference_index < global->reference_count;
+             ++reference_index) {
+            const MinicCoreModuleReference *reference =
+                &global->references[reference_index];
+            if (reference->kind == MINIC_CORE_MODULE_REFERENCE_OWNER_LABEL)
+                staged.function_symbols[reference->target_index].
+                    is_source_label_relocation_owner = true;
+        }
+    }
     for (index = 0U; index < staged.file_asm_count; ++index) {
         const MinicFileAsm *source = &program->file_asms[index];
         if (source->text == NULL || source->length == SIZE_MAX) goto failed;
@@ -299,12 +451,33 @@ bool minic_core_module_build_from_program(MinicCoreModule *output,
         staged.file_asms[index].length = source->length;
         if (staged.file_asms[index].text == NULL) goto failed;
     }
-    staged.finalized = true;
-    if (!minic_core_module_verify(&staged)) goto failed;
+    module_capture_asm_operand_roots(&staged, program);
     minic_core_module_destroy(output);
     *output = staged;
     return true;
 failed:
     minic_core_module_destroy(&staged);
     return false;
+}
+
+bool minic_core_module_materialize_live_payloads(MinicCoreModule *module,
+                                                  const MinicC0Program *program,
+                                                  const MinicTargetInvocation *target,
+                                                  MinicCoreTypeImporter *importer) {
+    size_t index;
+    if (module == NULL || program == NULL || target == NULL ||
+        target->machine.data_layout == NULL || importer == NULL || importer->failed ||
+        importer->program != program || importer->context != module->type_context ||
+        module->finalized || module->global_count != program->global_object_count ||
+        module->function_count != program->function_count)
+        return false;
+    /* A dead file-static payload must never be imported. Its C type may be
+     * target-unsupported and its initializer is deliberately irrelevant to
+     * the emitted object graph. The symbol graph was already closed in Core. */
+    for (index = 0U; index < module->global_count; ++index)
+        if (!module_capture_global_payload(
+                &module->globals[index], program, target,
+                importer, &program->global_objects[index])) return false;
+    module->finalized = true;
+    return minic_core_module_verify(module);
 }

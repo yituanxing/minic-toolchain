@@ -73,28 +73,28 @@ static void minic_set_diagnostic(MinicDiagnostic *diagnostic,
 }
 
 static bool minic_validate_core_functions(const char *input_path,
-                                          const MinicC0Program *program,
                                           const MinicCoreFunctionSet *set,
                                           MinicDiagnostic *diagnostic) {
     size_t function_index;
     const bool report_all = getenv("MINIC_CORE_FAILURE_CENSUS") != NULL;
     bool found_failure = false;
 
-    if (program == NULL || set == NULL) {
+    if (set == NULL) {
         return false;
     }
-    if (set->function_count != program->function_count ||
+    if (set->function_count != set->module.function_count ||
         (set->function_count != 0U &&
-         (set->functions == NULL || set->statuses == NULL))) {
+         (set->functions == NULL || set->statuses == NULL ||
+          set->module.function_symbols == NULL))) {
         minic_set_diagnostic(
             diagnostic, input_path, 1U, 1U, "Core IR functions do not match source program");
         return false;
     }
-    for (function_index = 0U; function_index < program->function_count; ++function_index) {
-        const MinicFunction *function;
+    for (function_index = 0U; function_index < set->function_count; ++function_index) {
+        const MinicCoreModuleFunctionSymbol *function;
         MinicCoreLowerStatus status;
 
-        function = minic_c0_program_function(program, function_index);
+        function = &set->module.function_symbols[function_index];
         if (function == NULL) {
             minic_set_diagnostic(
                 diagnostic, input_path, 1U, 1U, "Core lowering cannot access function");
@@ -122,17 +122,17 @@ static bool minic_validate_core_functions(const char *input_path,
             (void)fprintf(stderr,
                 "MINIC_CORE_FUNCTION_FAILURE kind=%s index=%zu function=%s\n",
                 status == MINIC_CORE_LOWER_UNSUPPORTED ? "UNSUPPORTED" : "ERROR",
-                function_index, function->name != NULL ? function->name : "?");
+                function_index, function->source_name != NULL ? function->source_name : "?");
         }
         if (!found_failure) {
             if (status == MINIC_CORE_LOWER_UNSUPPORTED) {
                 minic_set_diagnostic(diagnostic, input_path, 1U, 1U,
                     "Core IR does not yet support function '%s'",
-                    function->name);
+                    function->source_name);
             } else {
                 minic_set_diagnostic(diagnostic, input_path, 1U, 1U,
                     "Core IR lowering failed for function '%s'",
-                    function->name);
+                    function->source_name);
             }
             found_failure = true;
         }
@@ -355,34 +355,19 @@ int minic_compile_preprocessed_file_for_target(const char *input_path,
                                     success ? "end-ok" : "end-fail",
                                     program.function_count);
     }
-    if (success && !minic_prune_inline_specializations_from_core(
-                       &program, &core_set, backend->emit_reachable_core_blocks_only)) {
-        minic_set_diagnostic(diagnostic,
-                             input_path,
-                             1U,
-                             1U,
-                             "cannot prune inline specialization Core reachability");
-        success = false;
-    }
-    if (success && !minic_prune_dead_file_scope_static_objects_from_core(
-                       &program, &core_set, backend->emit_reachable_core_blocks_only)) {
+    /* One joint function/object fixed-point closure consumes only Core IR and
+     * ModuleIR symbol facts. It never asks the mutable source AST to decide
+     * an already-lowered function or object's emission. */
+    if (success && !minic_core_function_set_close_reachability(
+                       &core_set, backend->emit_reachable_core_blocks_only)) {
         minic_set_diagnostic(diagnostic, input_path, 1U, 1U,
-                             "cannot compute static object/function Core reachability");
-        success = false;
-    }
-    /* Unused file-static callback tables no longer seed their otherwise dead
-     * static functions through initializer relocations. Reuse the existing
-     * function reachability pass with the finalized object-emission policy. */
-    if (success && !minic_prune_inline_specializations_from_core(
-                       &program, &core_set, backend->emit_reachable_core_blocks_only)) {
-        minic_set_diagnostic(diagnostic, input_path, 1U, 1U,
-                             "cannot prune dead callback functions from Core");
+                             "cannot compute Core/Module symbol reachability");
         success = false;
     }
     if (success) {
         minic_bootstrap_trace_stage(input_path, "core-validate", "begin", program.function_count);
         success =
-            minic_validate_core_functions(input_path, &program, &core_set, diagnostic);
+            minic_validate_core_functions(input_path, &core_set, diagnostic);
         minic_bootstrap_trace_stage(input_path,
                                     "core-validate",
                                     success ? "end-ok" : "end-fail",
@@ -406,9 +391,8 @@ int minic_compile_preprocessed_file_for_target(const char *input_path,
                                     program.function_count);
     }
     if (success) {
-        /* Finalize TU globals only after both Core reachability pruning
-         * and C DataLayout validation. All target consumers then see a
-         * sealed, source-independent global/relocation fragment stream. */
+        /* C ingress materializes only closure-live payloads. Core/Module
+         * reachability has already published its source-independent verdict. */
         if (!minic_finalize_core_function_set_module(
                 &program, invocation, &core_set)) {
             minic_set_diagnostic(diagnostic, input_path, 1U, 1U,

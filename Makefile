@@ -1969,6 +1969,15 @@ check-gnu-dead-file-static-object-graph: $(MINIC_CC_BINARY)
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
 	sh tests/compiler/c0/probe-gnu-dead-file-static-object-graph.sh
 
+.PHONY: check-core-module-reachability-closure
+check-core-module-reachability-closure: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" CC="$(CC)" \
+	sh tests/compiler/c0/probe-core-module-reachability-closure.sh
+
+# One acceptance surface covers the complete Core+Module reachability owner,
+# including the historical GNU ASM/static-label errors and pure Core CFG.
+check-fast: check-core-module-reachability-closure
+
 .PHONY: check-core-inline-statement-constant-guard
 check-core-inline-statement-constant-guard: $(MINIC_CC_BINARY)
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" BUILD_DIR="$(abspath $(BUILD_DIR))" \

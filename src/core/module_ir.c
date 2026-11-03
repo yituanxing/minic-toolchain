@@ -16,6 +16,7 @@ void minic_core_module_destroy(MinicCoreModule *module) {
         free(global->name);
         free(global->section_name);
         free(global->alias_target_name);
+        free(global->references);
         for (part = 0U; global->fragments != NULL &&
                          part < global->fragment_count; ++part)
             free(global->fragments[part].relocation_symbol);
@@ -24,6 +25,7 @@ void minic_core_module_destroy(MinicCoreModule *module) {
     for (index = 0U; module->function_symbols != NULL &&
                      index < module->function_count; ++index) {
         free(module->function_symbols[index].name);
+        free(module->function_symbols[index].source_name);
         free(module->function_symbols[index].section_name);
         free(module->function_symbols[index].alias_target_name);
     }
@@ -96,9 +98,33 @@ bool minic_core_module_verify(const MinicCoreModule *module) {
             module->type_context, global->core_type_id);
         if (global->name == NULL || global->name[0] == '\0' ||
             !valid_visibility(global->visibility) ||
+            (global->reference_count != 0U && global->references == NULL) ||
             (global->owner_function_index != SIZE_MAX &&
              global->owner_function_index >= module->function_count))
             return false;
+        {
+            size_t reference_index;
+            for (reference_index = 0U; reference_index < global->reference_count;
+                 ++reference_index) {
+                const MinicCoreModuleReference *reference =
+                    &global->references[reference_index];
+                if ((reference->kind == MINIC_CORE_MODULE_REFERENCE_OBJECT &&
+                     reference->target_index >= module->global_count) ||
+                    (reference->kind == MINIC_CORE_MODULE_REFERENCE_FUNCTION &&
+                     reference->target_index >= module->function_count) ||
+                    (reference->kind == MINIC_CORE_MODULE_REFERENCE_OWNER_LABEL &&
+                     reference->target_index >= module->function_count) ||
+                    reference->kind > MINIC_CORE_MODULE_REFERENCE_OWNER_LABEL)
+                    return false;
+                if (reference->kind == MINIC_CORE_MODULE_REFERENCE_OWNER_LABEL) {
+                    const MinicCoreModuleFunctionSymbol *owner =
+                        &module->function_symbols[reference->target_index];
+                    if (global->owner_function_index != reference->target_index ||
+                        !owner->is_defined || owner->is_specialization)
+                        return false;
+                }
+            }
+        }
         if (global->is_alias) {
             const MinicCoreModuleGlobal *target;
             if (!global->is_extern || global->alias_target_index >= module->global_count ||
@@ -130,7 +156,15 @@ bool minic_core_module_verify(const MinicCoreModule *module) {
     for (index = 0U; index < module->function_count; ++index) {
         const MinicCoreModuleFunctionSymbol *symbol = &module->function_symbols[index];
         if (symbol->name == NULL || symbol->name[0] == '\0' ||
-            !valid_visibility(symbol->visibility)) return false;
+            !valid_visibility(symbol->visibility) ||
+            (symbol->is_specialization &&
+             (symbol->specialization_source_index >= module->function_count ||
+              symbol->specialization_source_index == index))) return false;
+        if (symbol->is_specialization) {
+            const MinicCoreModuleFunctionSymbol *source =
+                &module->function_symbols[symbol->specialization_source_index];
+            if (!source->is_defined || source->is_specialization) return false;
+        }
         if (symbol->alias_target_index != SIZE_MAX) {
             const MinicCoreModuleFunctionSymbol *target;
             if (symbol->is_defined || symbol->alias_target_index >= module->function_count ||

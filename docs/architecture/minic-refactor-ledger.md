@@ -1719,3 +1719,62 @@ problem.
 **Next whole-owner class:** seal post-lowering C root facts into Core
 FunctionSet/ModuleIR and perform one function/global reachability closure;
 no Core-stage writeback to C AST or compatibility path is permitted.
+
+## IR-P32 — Core/ModuleIR joint reachability with no post-Core C writeback (2026-11-03)
+
+**Baseline:** P31 remote `b86bbc8`. This batch retires all three separate
+post-lowering Core reachability/pruning passes, rather than keeping a C AST
+bridge to resolve Core function/object liveness.
+
+- The **single** Core `MinicCoreModule` is prepared before function lowering:
+  owned linker-visible function/global identities, source root evidence,
+  alias edges, initializer relocation targets, source-local-static ownership,
+  specialization clone ancestry, and typed GNU ASM operand roots. No global
+  initializer bytes are materialized during this identity stage.
+- Core FunctionSet lowering uses the source ingress root facts to retain
+  canonical static FunctionBodies needed by an ASM symbolic immediate or
+  local-label relocation even when ordinary C reference specialization removed
+  their lexical reference. After lowering, one joint Core+Module function-
+  object fixed-point closure follows CALL, FUNCTION_ADDRESS, GLOBAL_ADDRESS,
+  aliases, global relocs, clone-owner storage and source-label ownership.
+  Every liveness decision is published **atomically in ModuleIR**, never
+  written back into `MinicFunction` or `MinicGlobalObject`.
+- Only after the closure is complete does Compiler materialize initializer
+  byte/relocation fragments for ModuleIR globals marked emittable; Core and
+  machine backends never reconsult the C AST. The one ModuleIR is sealed and
+  verified before the C Program is destroyed, and only sealed ModuleIR is
+  available to machine emission. No replacement sidecar or old prune-call
+  compatibility path remains.
+- The same change fixes two recorded correctness cases: MC-064 GNU ASM
+  symbolic immediate retaining a static function body (formerly RV64 symbol
+  relocation without a definition) and MC-072 `static inline` specialization
+  with function-local `&&label` initializer relocations (formerly four ISA
+  `.Luser_*` references without corresponding definitions).
+- MC-073 canonical Core CFG now treats `BLOCK_ADDRESS` produced in a reachable
+  block as an address-escape edge, even without source `local_label_symbol`.
+  Dead address producers stay dead; malformed indices are rejected. All
+  machine CFG emission and Module closure share the same Core block marker.
+- The first joint-closure implementation incorrectly treated a parser-only
+  `is_referenced` flag combined with section/asm-name/visibility as a stable
+  function root. An independent P32 review and a five-ISA dead-helper/GNU
+  native-link negative reproduced the resulting dead-function leak. Stable
+  roots now exclude these parser-only hints; real Core/alias/ASM roots remain.
+  ModuleIR verifier also rejects malformed specialization ancestry and
+  local-label relocations to noncanonical or mismatched owner functions.
+
+| Gate | P32 result |
+| --- | --- |
+| Strict Release full compiler/toolchain | **PASS** |
+| Final full Debug `check-fast` (including new joint closure gate) | **PASS**, exit 0; 617 matching PASS lines, 3 environment SKIPs |
+| Joint static global graph/owner, aliases, Core conditional reachability, CFG source labels, x86 GNU/native | **PASS** |
+| MC-064 RV64 static function ASM immediate | **PASS**: static function definition now exists in `.s` |
+| MC-072 RV32/RV64/AArch64/LoongArch64 label relocations | **PASS**: 2 references / 2 definitions on each ISA (previously 2 / 0) |
+| Two GNU-preprocessed fixtures × five ISAs, P31 vs P32 `.s` byte equality | **10/10 identical** |
+| One `check-core-module-reachability-closure` acceptance (static globals, aliases, MC-064/072/073, dead-source-metadata regression) | **PASS**, exit 0; P31 baseline fails as expected on MC-064 |
+| ModuleIR clone provenance + owner-label forged inputs | **PASS**, 9 malformed cases rejected, native and ASan/UBSan |
+| Independent architecture/root/transaction/finalization diff review | **CLEAR**, no outstanding P32 correctness blocker |
+| Five ISA GNU ELF/QEMU Linux runtime recertification | **NOT RUN**: cross GNU and QEMU executables unavailable here |
+
+This seals the *post-Core C ownership* boundary, not the separate work on
+generic backend algorithm convergence, Machine IR and full cross-runtime
+correctness.
