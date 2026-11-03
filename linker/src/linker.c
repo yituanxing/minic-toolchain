@@ -38,7 +38,7 @@ void minild_cli_enable_gc_sections_v0(void) {
  */
 static bool minild_materialize_input_sections(MiniLdState *state,
                                                bool include_nonalloc) {
-    const size_t merged_count = state->section_count;
+    const size_t merged_count = state->work.count;
     bool *had_source = NULL;
     size_t restored = 0U;
     size_t i;
@@ -46,6 +46,10 @@ static bool minild_materialize_input_sections(MiniLdState *state,
     size_t target;
     bool ok = false;
 
+    if (state->work.placement_count != state->inputs.section_count) {
+        fprintf(state->diagnostics, "minic-ld: invalid-input-work-ownership\n");
+        return false;
+    }
     had_source = calloc(merged_count == 0U ? 1U : merged_count,
                         sizeof(*had_source));
     if (had_source == NULL) {
@@ -53,8 +57,9 @@ static bool minild_materialize_input_sections(MiniLdState *state,
         return false;
     }
 
-    for (i = 0U; i < state->input_section_count; ++i) {
-        MiniLdInputSection *input = &state->input_sections[i];
+    for (i = 0U; i < state->inputs.section_count; ++i) {
+        MiniLdInputSection *input = &state->inputs.sections[i];
+        MiniLdInputPlacement *placement = &state->work.placements[i];
         MiniLdSection *output;
         size_t next_section;
         size_t name_len;
@@ -65,17 +70,17 @@ static bool minild_materialize_input_sections(MiniLdState *state,
          * cannot be copied as independent output fragments. All other
          * admitted inputs, including non-ALLOC debug/comment metadata, must
          * retain file selection and stable order under linker scripts. */
-        if (input->output_section == SIZE_MAX ||
+        if (placement->merged_section == SIZE_MAX ||
             input->type == MINILD_SHT_RISCV_ATTRIBUTES ||
             (!include_nonalloc &&
              (input->flags & (SHF_ALLOC | SHF_LINK_ORDER)) == 0U)) {
             continue;
         }
-        if (input->output_section >= merged_count) {
+        if (placement->merged_section >= merged_count) {
             fprintf(state->diagnostics, "minic-ld: gc-invalid-input-map\n");
             goto done;
         }
-        if (input->file >= state->input_file_count) {
+        if (input->file >= state->inputs.file_count) {
             fprintf(state->diagnostics, "minic-ld: invalid-input-file-owner\n");
             goto done;
         }
@@ -90,7 +95,7 @@ static bool minild_materialize_input_sections(MiniLdState *state,
             goto done;
         }
         name_len = (size_t)len;
-        output = &state->sections[state->section_count];
+        output = &state->work.sections[state->work.count];
         memset(output, 0, sizeof(*output));
         output->name = malloc(name_len + 1U);
         if (output->name == NULL) {
@@ -105,9 +110,9 @@ static bool minild_materialize_input_sections(MiniLdState *state,
         output->align = input->align;
         output->entsize = input->entsize;
         output->input_name = input->name;
-        output->input_path = state->input_files[input->file].path;
+        output->input_path = state->inputs.files[input->file].path;
         output->output_name = input->name;
-        next_section = state->section_count++;
+        next_section = state->work.count++;
         if ((input->type == SHT_NOBITS &&
              !section_append_zero(output, input->size)) ||
             (input->type != SHT_NOBITS &&
@@ -117,78 +122,79 @@ static bool minild_materialize_input_sections(MiniLdState *state,
                     input->name);
             goto done;
         }
-        had_source[input->output_section] = true;
-        input->gc_section = next_section;
+        had_source[placement->merged_section] = true;
+        placement->current_section = next_section;
         ++restored;
     }
 
-    for (i = 0U; i < state->input_section_count; ++i) {
-        const MiniLdInputSection *input = &state->input_sections[i];
-        const MiniLdInputSection *link_target;
+    for (i = 0U; i < state->inputs.section_count; ++i) {
+        const MiniLdInputSection *input = &state->inputs.sections[i];
+        const MiniLdInputPlacement *placement = &state->work.placements[i];
         MiniLdSection *output;
 
-        if (input->gc_section == SIZE_MAX ||
+        if (placement->current_section == SIZE_MAX ||
             input->link_order_input == SIZE_MAX) {
             continue;
         }
-        if (input->link_order_input >= state->input_section_count) {
+        if (input->link_order_input >= state->inputs.section_count) {
             fprintf(state->diagnostics, "minic-ld: gc-invalid-link-order\n");
             goto done;
         }
-        link_target = &state->input_sections[input->link_order_input];
-        if (link_target->gc_section == SIZE_MAX) {
+        if (state->work.placements[input->link_order_input].current_section ==
+            SIZE_MAX) {
             fprintf(state->diagnostics,
                     "minic-ld: gc-link-order-target-not-alloc\n");
             goto done;
         }
-        output = &state->sections[input->gc_section];
+        output = &state->work.sections[placement->current_section];
         output->has_link_order_target = true;
-        output->link_order_target = link_target->gc_section;
+        output->link_order_target =
+            state->work.placements[input->link_order_input].current_section;
     }
 
     for (i = 0U; i < state->resolver.count; ++i) {
         MiniLdResolvedSymbol *symbol = &state->resolver.entries[i];
         const MiniLdInputSymbol *source;
-        const MiniLdInputSection *input;
 
         if (symbol->source_symbol == SIZE_MAX) {
             continue;
         }
-        if (symbol->source_symbol >= state->input_symbol_count) {
+        if (symbol->source_symbol >= state->inputs.symbol_count) {
             fprintf(state->diagnostics, "minic-ld: gc-invalid-symbol-source\n");
             goto done;
         }
-        source = &state->input_symbols[symbol->source_symbol];
+        source = &state->inputs.symbols[symbol->source_symbol];
         if (source->canonical_symbol != i ||
-            source->file >= state->input_file_count) {
+            source->file >= state->inputs.file_count) {
             fprintf(state->diagnostics, "minic-ld: gc-invalid-symbol-owner\n");
             goto done;
         }
         if (source->input_section == SIZE_MAX) {
             continue;
         }
-        if (source->input_section >= state->input_section_count) {
+        if (source->input_section >= state->inputs.section_count) {
             fprintf(state->diagnostics, "minic-ld: gc-invalid-symbol-source\n");
             goto done;
         }
-        input = &state->input_sections[source->input_section];
-        if (input->gc_section != SIZE_MAX) {
-            symbol->section = (int)input->gc_section;
+        if (state->work.placements[source->input_section].current_section !=
+            SIZE_MAX) {
+            symbol->section = (int)state->work.placements[
+                source->input_section].current_section;
             symbol->value = source->value;
         }
     }
     for (i = 0U; i < state->reloc_count; ++i) {
         MiniLdReloc *reloc = &state->relocs[i];
-        const MiniLdInputSection *input;
 
         if (reloc->input_section == SIZE_MAX ||
-            reloc->input_section >= state->input_section_count) {
+            reloc->input_section >= state->inputs.section_count) {
             fprintf(state->diagnostics, "minic-ld: gc-invalid-reloc-source\n");
             goto done;
         }
-        input = &state->input_sections[reloc->input_section];
-        if (input->gc_section != SIZE_MAX) {
-            reloc->section = input->gc_section;
+        if (state->work.placements[reloc->input_section].current_section !=
+            SIZE_MAX) {
+            reloc->section = state->work.placements[
+                reloc->input_section].current_section;
             reloc->offset = reloc->input_offset;
         }
     }
@@ -198,30 +204,30 @@ static bool minild_materialize_input_sections(MiniLdState *state,
             /* The original merged buffer and its maximum alignment are no
              * longer layout inputs.  Leaving either in the state introduces
              * padding from an empty holder before the real input pieces. */
-            free(state->sections[i].data);
-            state->sections[i].data = NULL;
-            state->sections[i].size = 0U;
-            state->sections[i].capacity = 0U;
-            state->sections[i].align = 1U;
-            state->sections[i].gc_discarded = true;
+            free(state->work.sections[i].data);
+            state->work.sections[i].data = NULL;
+            state->work.sections[i].size = 0U;
+            state->work.sections[i].capacity = 0U;
+            state->work.sections[i].align = 1U;
+            state->work.sections[i].gc_discarded = true;
         }
     }
-    for (i = 0U; i < state->section_count; ++i) {
-        state->sections[i].relocation_count = 0U;
+    for (i = 0U; i < state->work.count; ++i) {
+        state->work.sections[i].relocation_count = 0U;
     }
     for (i = 0U; i < state->reloc_count; ++i) {
-        if (state->relocs[i].section >= state->section_count) {
+        if (state->relocs[i].section >= state->work.count) {
             fprintf(state->diagnostics, "minic-ld: gc-reloc-section-range\n");
             goto done;
         }
-        ++state->sections[state->relocs[i].section].relocation_count;
+        ++state->work.sections[state->relocs[i].section].relocation_count;
     }
 
-    if (state->section_count > (SIZE_MAX - 1U) / 2U) {
+    if (state->work.count > (SIZE_MAX - 1U) / 2U) {
         fprintf(state->diagnostics, "minic-ld: gc-index-overflow\n");
         goto done;
     }
-    target = state->section_count * 2U + 1U;
+    target = state->work.count * 2U + 1U;
     while (index_capacity < target) {
         if (index_capacity > SIZE_MAX / 2U) {
             fprintf(state->diagnostics, "minic-ld: gc-index-overflow\n");
@@ -236,7 +242,7 @@ static bool minild_materialize_input_sections(MiniLdState *state,
 
     fprintf(state->diagnostics,
             "minic-ld: materialized-input-sections:source=%zu:restored=%zu\n",
-            state->input_section_count, restored);
+            state->inputs.section_count, restored);
     ok = true;
 done:
     free(had_source);
@@ -267,22 +273,129 @@ static int minild_compare_input_section_order(const void *lhs,
     return 0;
 }
 
+/* Working-section indices are deliberately transient: once a permutation is
+ * chosen, every consumer must move together.  Build the new name index before
+ * touching any live references so allocation failure leaves the old workspace
+ * intact. Input-file, input-section and canonical-symbol IDs never move. */
+static bool minild_install_work_section_order(MiniLdState *state,
+                                               MiniLdSection *ordered,
+                                               const size_t *remap,
+                                               const char *phase) {
+    const size_t count = state->work.count;
+    MiniLdSectionWorkspace next = {0};
+    bool *seen = NULL;
+    size_t index_capacity = 64U;
+    size_t index_target;
+    size_t i;
+
+    if (state->work.placement_count != state->inputs.section_count ||
+        count > (SIZE_MAX - 1U) / 2U) {
+        goto invalid;
+    }
+    seen = calloc(count == 0U ? 1U : count, sizeof(*seen));
+    if (seen == NULL) {
+        fprintf(state->diagnostics,
+                "minic-ld: out-of-memory:work-reorder-map:%s\n", phase);
+        return false;
+    }
+    index_target = count * 2U + 1U;
+    while (index_capacity < index_target) {
+        if (index_capacity > SIZE_MAX / 2U) {
+            goto invalid;
+        }
+        index_capacity *= 2U;
+    }
+    for (i = 0U; i < count; ++i) {
+        if (remap[i] >= count || seen[remap[i]] ||
+            (ordered[i].has_link_order_target &&
+             ordered[i].link_order_target >= count)) {
+            goto invalid;
+        }
+        seen[remap[i]] = true;
+    }
+    for (i = 0U; i < state->resolver.count; ++i) {
+        int section = state->resolver.entries[i].section;
+
+        if (section >= 0 && (size_t)section >= count) {
+            goto invalid;
+        }
+    }
+    for (i = 0U; i < state->reloc_count; ++i) {
+        if (state->relocs[i].section >= count) {
+            goto invalid;
+        }
+    }
+    for (i = 0U; i < state->work.placement_count; ++i) {
+        size_t section = state->work.placements[i].current_section;
+
+        if (section != SIZE_MAX && section >= count) {
+            goto invalid;
+        }
+    }
+
+    next.sections = ordered;
+    next.count = count;
+    next.capacity = count;
+    if (!work_sections_rebuild_index(&next, index_capacity)) {
+        free(seen);
+        fprintf(state->diagnostics,
+                "minic-ld: out-of-memory:work-reorder-index:%s\n", phase);
+        return false;
+    }
+
+    for (i = 0U; i < state->resolver.count; ++i) {
+        MiniLdResolvedSymbol *symbol = &state->resolver.entries[i];
+
+        if (symbol->section >= 0) {
+            symbol->section = (int)remap[symbol->section];
+        }
+    }
+    for (i = 0U; i < state->reloc_count; ++i) {
+        state->relocs[i].section = remap[state->relocs[i].section];
+    }
+    for (i = 0U; i < count; ++i) {
+        if (ordered[i].has_link_order_target) {
+            ordered[i].link_order_target = remap[ordered[i].link_order_target];
+        }
+    }
+    for (i = 0U; i < state->work.placement_count; ++i) {
+        MiniLdInputPlacement *place = &state->work.placements[i];
+
+        if (place->current_section != SIZE_MAX) {
+            place->current_section = remap[place->current_section];
+        }
+    }
+
+    free(state->work.sections);
+    free(state->work.index);
+    state->work.sections = next.sections;
+    state->work.count = next.count;
+    state->work.capacity = next.capacity;
+    state->work.index = next.index;
+    state->work.index_capacity = next.index_capacity;
+    free(seen);
+    return true;
+
+invalid:
+    free(seen);
+    fprintf(state->diagnostics,
+            "minic-ld: invalid-work-reorder:%s\n", phase);
+    return false;
+}
+
 /*
  * Restore the exact admission order of input sections, not an order inferred
  * from the optional STT_SECTION symbol table entries.  This avoids placing
  * large read-only fragments between two direct R_RISCV_JAL sites.
  */
 static bool minild_restore_input_order(MiniLdState *state) {
-    const size_t count = state->section_count;
+    const size_t count = state->work.count;
     MiniLdInputSectionOrder *entries = NULL;
     MiniLdSection *ordered_sections = NULL;
     size_t *orders = NULL;
     size_t *remap = NULL;
-    size_t index_capacity = 64U;
-    size_t target;
     size_t ordered_count = 0U;
     size_t i;
-    bool installed = false;
     bool ok = false;
 
     entries = malloc((count == 0U ? 1U : count) * sizeof(*entries));
@@ -300,9 +413,8 @@ static bool minild_restore_input_order(MiniLdState *state) {
         orders[i] = SIZE_MAX;
     }
 
-    for (i = 0U; i < state->input_section_count; ++i) {
-        const MiniLdInputSection *input = &state->input_sections[i];
-        size_t section_index = input->gc_section;
+    for (i = 0U; i < state->inputs.section_count; ++i) {
+        size_t section_index = state->work.placements[i].current_section;
 
         if (section_index == SIZE_MAX) {
             continue;
@@ -318,25 +430,10 @@ static bool minild_restore_input_order(MiniLdState *state) {
         }
     }
 
-    if (count > (SIZE_MAX - 1U) / 2U) {
-        fprintf(state->diagnostics,
-                "minic-ld: gc-input-order-index-overflow\n");
-        goto done;
-    }
-    target = count * 2U + 1U;
-    while (index_capacity < target) {
-        if (index_capacity > SIZE_MAX / 2U) {
-            fprintf(state->diagnostics,
-                    "minic-ld: gc-input-order-index-overflow\n");
-            goto done;
-        }
-        index_capacity *= 2U;
-    }
-
     for (i = 0U; i < count; ++i) {
         entries[i].old_index = i;
         entries[i].order =
-            orders[i] == SIZE_MAX ? state->input_section_count + i : orders[i];
+            orders[i] == SIZE_MAX ? state->inputs.section_count + i : orders[i];
     }
     qsort(entries,
           count,
@@ -345,56 +442,14 @@ static bool minild_restore_input_order(MiniLdState *state) {
 
     for (i = 0U; i < count; ++i) {
         const size_t old_index = entries[i].old_index;
-        ordered_sections[i] = state->sections[old_index];
+        ordered_sections[i] = state->work.sections[old_index];
         remap[old_index] = i;
     }
-    for (i = 0U; i < state->resolver.count; ++i) {
-        MiniLdResolvedSymbol *symbol = &state->resolver.entries[i];
-
-        if (symbol->section < 0) {
-            continue;
-        }
-        if ((size_t)symbol->section >= count) {
-            fprintf(state->diagnostics,
-                    "minic-ld: gc-input-order-symbol-remap\n");
-            goto done;
-        }
-        symbol->section = (int)remap[symbol->section];
-    }
-    for (i = 0U; i < state->reloc_count; ++i) {
-        if (state->relocs[i].section >= count) {
-            fprintf(state->diagnostics,
-                    "minic-ld: gc-input-order-reloc-remap\n");
-            goto done;
-        }
-        state->relocs[i].section = remap[state->relocs[i].section];
-    }
-    for (i = 0U; i < count; ++i) {
-        MiniLdSection *section = &ordered_sections[i];
-
-        if (section->has_link_order_target) {
-            section->link_order_target = remap[section->link_order_target];
-        }
-    }
-    for (i = 0U; i < state->input_section_count; ++i) {
-        MiniLdInputSection *input = &state->input_sections[i];
-
-        if (input->gc_section != SIZE_MAX) {
-            input->gc_section = remap[input->gc_section];
-        }
-    }
-
-    free(state->sections);
-    state->sections = ordered_sections;
-    state->section_capacity = count;
-    ordered_sections = NULL;
-    installed = true;
-
-    if (!rebuild_section_index(state, index_capacity)) {
-        fprintf(state->diagnostics,
-                "minic-ld: out-of-memory:gc-input-order-index\n");
+    if (!minild_install_work_section_order(
+            state, ordered_sections, remap, "input-order")) {
         goto done;
     }
+    ordered_sections = NULL;
     fprintf(state->diagnostics,
             "minic-ld: materialized-input-order:sections=%zu:ordered=%zu\n",
             count,
@@ -402,9 +457,7 @@ static bool minild_restore_input_order(MiniLdState *state) {
     ok = true;
 
 done:
-    if (!installed) {
-        free(ordered_sections);
-    }
+    free(ordered_sections);
     free(remap);
     free(orders);
     free(entries);
@@ -432,17 +485,14 @@ static int minild_gc_default_output_class(const MiniLdSection *section) {
 }
 
 static bool minild_gc_group_default_output_classes(MiniLdState *state) {
-    const size_t count = state->section_count;
+    const size_t count = state->work.count;
     MiniLdSection *ordered_sections = NULL;
     size_t *remap = NULL;
-    size_t index_capacity = 64U;
-    size_t target;
     size_t next = 0U;
     size_t executable_rx = 0U;
     size_t readonly_rx = 0U;
     size_t i;
     int output_class;
-    bool installed = false;
     bool ok = false;
 
     ordered_sections =
@@ -456,11 +506,11 @@ static bool minild_gc_group_default_output_classes(MiniLdState *state) {
 
     for (output_class = 0; output_class < 3; ++output_class) {
         for (i = 0U; i < count; ++i) {
-            if (minild_gc_default_output_class(&state->sections[i]) !=
+            if (minild_gc_default_output_class(&state->work.sections[i]) !=
                 output_class) {
                 continue;
             }
-            ordered_sections[next] = state->sections[i];
+            ordered_sections[next] = state->work.sections[i];
             remap[i] = next;
             if (output_class == 0) {
                 ++executable_rx;
@@ -476,67 +526,11 @@ static bool minild_gc_group_default_output_classes(MiniLdState *state) {
         goto done;
     }
 
-    for (i = 0U; i < state->resolver.count; ++i) {
-        MiniLdResolvedSymbol *symbol = &state->resolver.entries[i];
-
-        if (symbol->section < 0) {
-            continue;
-        }
-        if ((size_t)symbol->section >= count) {
-            fprintf(state->diagnostics,
-                    "minic-ld: gc-output-class-symbol-remap\n");
-            goto done;
-        }
-        symbol->section = (int)remap[symbol->section];
+    if (!minild_install_work_section_order(
+            state, ordered_sections, remap, "output-classes")) {
+        goto done;
     }
-    for (i = 0U; i < state->reloc_count; ++i) {
-        if (state->relocs[i].section >= count) {
-            fprintf(state->diagnostics,
-                    "minic-ld: gc-output-class-reloc-remap\n");
-            goto done;
-        }
-        state->relocs[i].section = remap[state->relocs[i].section];
-    }
-    for (i = 0U; i < count; ++i) {
-        MiniLdSection *section = &ordered_sections[i];
-
-        if (section->has_link_order_target) {
-            section->link_order_target = remap[section->link_order_target];
-        }
-    }
-    for (i = 0U; i < state->input_section_count; ++i) {
-        MiniLdInputSection *input = &state->input_sections[i];
-
-        if (input->gc_section != SIZE_MAX) {
-            input->gc_section = remap[input->gc_section];
-        }
-    }
-
-    free(state->sections);
-    state->sections = ordered_sections;
-    state->section_capacity = count;
     ordered_sections = NULL;
-    installed = true;
-
-    if (count > (SIZE_MAX - 1U) / 2U) {
-        fprintf(state->diagnostics,
-                "minic-ld: gc-output-class-index-overflow\n");
-        goto done;
-    }
-    target = count * 2U + 1U;
-    while (index_capacity < target) {
-        if (index_capacity > SIZE_MAX / 2U) {
-            fprintf(state->diagnostics,
-                    "minic-ld: gc-output-class-index-overflow\n");
-            goto done;
-        }
-        index_capacity *= 2U;
-    }
-    if (!rebuild_section_index(state, index_capacity)) {
-        fprintf(state->diagnostics,
-                "minic-ld: out-of-memory:gc-output-class-index\n");
-        goto done;
-    }
     fprintf(state->diagnostics,
             "minic-ld: gc-output-classes:exec-rx=%zu:ro-rx=%zu\n",
             executable_rx,
@@ -544,9 +538,7 @@ static bool minild_gc_group_default_output_classes(MiniLdState *state) {
     ok = true;
 
 done:
-    if (!installed) {
-        free(ordered_sections);
-    }
+    free(ordered_sections);
     free(remap);
     return ok;
 }
@@ -584,14 +576,11 @@ static int minild_gc_compare_output_alignment(const void *lhs_ptr,
  * or metadata section order.
  */
 static bool minild_gc_sort_default_output_alignment(MiniLdState *state) {
-    const size_t count = state->section_count;
+    const size_t count = state->work.count;
     MiniLdGcOutputAlignmentOrder *entries = NULL;
     MiniLdSection *ordered_sections = NULL;
     size_t *remap = NULL;
-    size_t index_capacity = 64U;
-    size_t target;
     size_t i;
-    bool installed = false;
     bool ok = false;
 
     entries = malloc((count == 0U ? 1U : count) * sizeof(*entries));
@@ -607,8 +596,8 @@ static bool minild_gc_sort_default_output_alignment(MiniLdState *state) {
     for (i = 0U; i < count; ++i) {
         entries[i].old_index = i;
         entries[i].output_class =
-            minild_gc_default_output_class(&state->sections[i]);
-        entries[i].align = state->sections[i].align;
+            minild_gc_default_output_class(&state->work.sections[i]);
+        entries[i].align = state->work.sections[i].align;
     }
     qsort(entries,
           count,
@@ -617,80 +606,21 @@ static bool minild_gc_sort_default_output_alignment(MiniLdState *state) {
 
     for (i = 0U; i < count; ++i) {
         size_t old_index = entries[i].old_index;
-        ordered_sections[i] = state->sections[old_index];
+        ordered_sections[i] = state->work.sections[old_index];
         remap[old_index] = i;
     }
-    for (i = 0U; i < state->resolver.count; ++i) {
-        MiniLdResolvedSymbol *symbol = &state->resolver.entries[i];
-
-        if (symbol->section < 0) {
-            continue;
-        }
-        if ((size_t)symbol->section >= count) {
-            fprintf(state->diagnostics,
-                    "minic-ld: gc-output-alignment-symbol-remap\n");
-            goto done;
-        }
-        symbol->section = (int)remap[symbol->section];
+    if (!minild_install_work_section_order(
+            state, ordered_sections, remap, "output-alignment")) {
+        goto done;
     }
-    for (i = 0U; i < state->reloc_count; ++i) {
-        if (state->relocs[i].section >= count) {
-            fprintf(state->diagnostics,
-                    "minic-ld: gc-output-alignment-reloc-remap\n");
-            goto done;
-        }
-        state->relocs[i].section = remap[state->relocs[i].section];
-    }
-    for (i = 0U; i < count; ++i) {
-        MiniLdSection *section = &ordered_sections[i];
-
-        if (section->has_link_order_target) {
-            section->link_order_target = remap[section->link_order_target];
-        }
-    }
-
-    for (i = 0U; i < state->input_section_count; ++i) {
-        MiniLdInputSection *input = &state->input_sections[i];
-
-        if (input->gc_section != SIZE_MAX) {
-            input->gc_section = remap[input->gc_section];
-        }
-    }
-
-    free(state->sections);
-    state->sections = ordered_sections;
-    state->section_capacity = count;
     ordered_sections = NULL;
-    installed = true;
-
-    if (count > (SIZE_MAX - 1U) / 2U) {
-        fprintf(state->diagnostics,
-                "minic-ld: gc-output-alignment-index-overflow\n");
-        goto done;
-    }
-    target = count * 2U + 1U;
-    while (index_capacity < target) {
-        if (index_capacity > SIZE_MAX / 2U) {
-            fprintf(state->diagnostics,
-                    "minic-ld: gc-output-alignment-index-overflow\n");
-            goto done;
-        }
-        index_capacity *= 2U;
-    }
-    if (!rebuild_section_index(state, index_capacity)) {
-        fprintf(state->diagnostics,
-                "minic-ld: out-of-memory:gc-output-alignment-index\n");
-        goto done;
-    }
     fprintf(state->diagnostics,
             "minic-ld: gc-output-alignment:sections=%zu\n",
             count);
     ok = true;
 
 done:
-    if (!installed) {
-        free(ordered_sections);
-    }
+    free(ordered_sections);
     free(remap);
     free(entries);
     return ok;
@@ -731,32 +661,32 @@ static bool minild_select_script_inputs(MiniLdState *state,
                 item->value.pattern.common) {
                 continue;
             }
-            for (i = 0U; i < state->input_section_count; ++i) {
-                MiniLdInputSection *source = &state->input_sections[i];
+            for (i = 0U; i < state->inputs.section_count; ++i) {
+                const MiniLdInputSection *source = &state->inputs.sections[i];
+                size_t current_section = state->work.placements[i].current_section;
                 MiniLdSection *section;
 
-                if (source->gc_section == SIZE_MAX ||
-                    source->script_selected ||
-                    source->file >= state->input_file_count ||
+                if (current_section == SIZE_MAX ||
+                    source->file >= state->inputs.file_count ||
                     !minild_script_pattern_matches_input(
                         &item->value.pattern, source->name,
-                        state->input_files[source->file].path)) {
+                        state->inputs.files[source->file].path)) {
                     continue;
                 }
-                if (source->gc_section >= state->section_count) {
+                if (current_section >= state->work.count) {
                     fprintf(state->diagnostics,
                             "minic-ld: invalid-script-source-section\n");
                     return false;
                 }
-                section = &state->sections[source->gc_section];
-                source->script_selected = true;
+                section = &state->work.sections[current_section];
+                if (section->script_selected) {
+                    continue;
+                }
                 section->script_selected = true;
                 if (output->discard) {
-                    source->script_discard = true;
                     section->script_discard = true;
                     ++discarded;
                 } else if (item->value.pattern.keep) {
-                    source->script_keep = true;
                     section->script_keep = true;
                     ++kept;
                 }
@@ -764,8 +694,8 @@ static bool minild_select_script_inputs(MiniLdState *state,
             /* COMMON and legacy non-allocating metadata have no restored
              * source fragment. Give those sections the same first-match
              * policy while keeping InputSection selection authoritative. */
-            for (i = 0U; i < state->section_count; ++i) {
-                MiniLdSection *section = &state->sections[i];
+            for (i = 0U; i < state->work.count; ++i) {
+                MiniLdSection *section = &state->work.sections[i];
 
                 if (section->gc_discarded || section->script_selected ||
                     section->input_name != NULL ||
@@ -809,16 +739,16 @@ static bool minild_shared_prune_script_inputs(MiniLdState *state,
     if (!minild_select_script_inputs(state, script)) {
         return false;
     }
-    discarded = calloc(state->section_count == 0U
-                           ? 1U : state->section_count,
+    discarded = calloc(state->work.count == 0U
+                           ? 1U : state->work.count,
                        sizeof(*discarded));
     if (discarded == NULL) {
         fprintf(state->diagnostics,
                 "minic-ld: out-of-memory:shared-script-discard\n");
         return false;
     }
-    for (i = 0U; i < state->section_count; ++i) {
-        discarded[i] = state->sections[i].script_discard;
+    for (i = 0U; i < state->work.count; ++i) {
+        discarded[i] = state->work.sections[i].script_discard;
     }
 
     /* SHF_LINK_ORDER associates metadata with a target input section.
@@ -826,12 +756,12 @@ static bool minild_shared_prune_script_inputs(MiniLdState *state,
      * no final sh_link points into an absent output section. */
     do {
         changed = false;
-        for (i = 0U; i < state->section_count; ++i) {
-            const MiniLdSection *section = &state->sections[i];
+        for (i = 0U; i < state->work.count; ++i) {
+            const MiniLdSection *section = &state->work.sections[i];
             if (discarded[i] || !section->has_link_order_target) {
                 continue;
             }
-            if (section->link_order_target >= state->section_count) {
+            if (section->link_order_target >= state->work.count) {
                 fprintf(state->diagnostics,
                         "minic-ld: invalid-shared-link-order-target\n");
                 goto done;
@@ -846,7 +776,7 @@ static bool minild_shared_prune_script_inputs(MiniLdState *state,
     for (i = 0U; i < state->reloc_count; ++i) {
         const MiniLdReloc *reloc = &state->relocs[i];
         const MiniLdResolvedSymbol *symbol;
-        if (reloc->section >= state->section_count) {
+        if (reloc->section >= state->work.count) {
             fprintf(state->diagnostics,
                     "minic-ld: invalid-shared-script-reloc-source\n");
             goto done;
@@ -865,7 +795,7 @@ static bool minild_shared_prune_script_inputs(MiniLdState *state,
         }
         symbol = &state->resolver.entries[reloc->symbol];
         if (symbol->section >= 0 &&
-            (size_t)symbol->section < state->section_count &&
+            (size_t)symbol->section < state->work.count &&
             discarded[symbol->section]) {
             fprintf(state->diagnostics,
                     "minic-ld: shared-relocation-to-discarded-symbol:%s\n",
@@ -877,15 +807,15 @@ static bool minild_shared_prune_script_inputs(MiniLdState *state,
     for (i = 0U; i < state->resolver.count; ++i) {
         MiniLdResolvedSymbol *symbol = &state->resolver.entries[i];
         if (symbol->section >= 0 &&
-            (size_t)symbol->section < state->section_count &&
+            (size_t)symbol->section < state->work.count &&
             discarded[symbol->section]) {
             symbol->section = MINILD_SECTION_ABS;
             symbol->value = 0U;
             symbol->size = 0U;
         }
     }
-    for (i = 0U; i < state->section_count; ++i) {
-        MiniLdSection *section = &state->sections[i];
+    for (i = 0U; i < state->work.count; ++i) {
+        MiniLdSection *section = &state->work.sections[i];
         section->relocation_count = 0U;
         if (discarded[i]) {
             section->gc_discarded = true;
@@ -898,7 +828,7 @@ static bool minild_shared_prune_script_inputs(MiniLdState *state,
         MiniLdReloc reloc = state->relocs[i];
         if (!discarded[reloc.section]) {
             state->relocs[remaining_relocs++] = reloc;
-            ++state->sections[reloc.section].relocation_count;
+            ++state->work.sections[reloc.section].relocation_count;
         }
     }
     state->reloc_count = remaining_relocs;
@@ -937,14 +867,14 @@ static bool minild_gc_mark_section(const MiniLdState *state,
                                    bool *live,
                                    size_t *queue,
                                    size_t *queue_size) {
-    if (section_index >= state->section_count || live[section_index] ||
-        state->sections[section_index].script_discard ||
-        state->sections[section_index].gc_discarded ||
-        (state->sections[section_index].flags &
+    if (section_index >= state->work.count || live[section_index] ||
+        state->work.sections[section_index].script_discard ||
+        state->work.sections[section_index].gc_discarded ||
+        (state->work.sections[section_index].flags &
          (SHF_ALLOC | SHF_LINK_ORDER)) == 0U) {
         return true;
     }
-    if (*queue_size >= state->section_count) {
+    if (*queue_size >= state->work.count) {
         return false;
     }
     live[section_index] = true;
@@ -972,23 +902,23 @@ static bool minild_gc_prune_static(MiniLdState *state,
     size_t entry_index;
     bool ok = false;
 
-    live = calloc(state->section_count == 0U ? 1U : state->section_count,
+    live = calloc(state->work.count == 0U ? 1U : state->work.count,
                   sizeof(*live));
-    heads = malloc((state->section_count == 0U ? 1U : state->section_count) *
+    heads = malloc((state->work.count == 0U ? 1U : state->work.count) *
                    sizeof(*heads));
     next = malloc((state->reloc_count == 0U ? 1U : state->reloc_count) *
                   sizeof(*next));
-    queue = malloc((state->section_count == 0U ? 1U : state->section_count) *
+    queue = malloc((state->work.count == 0U ? 1U : state->work.count) *
                    sizeof(*queue));
-    section_input = malloc((state->section_count == 0U ? 1U : state->section_count) *
+    section_input = malloc((state->work.count == 0U ? 1U : state->work.count) *
                            sizeof(*section_input));
-    dependent_heads = malloc((state->section_count == 0U ? 1U : state->section_count) *
+    dependent_heads = malloc((state->work.count == 0U ? 1U : state->work.count) *
                              sizeof(*dependent_heads));
-    group_heads = malloc((state->input_section_count == 0U ? 1U : state->input_section_count) *
+    group_heads = malloc((state->inputs.section_count == 0U ? 1U : state->inputs.section_count) *
                          sizeof(*group_heads));
-    group_next = malloc((state->input_section_count == 0U ? 1U : state->input_section_count) *
+    group_next = malloc((state->inputs.section_count == 0U ? 1U : state->inputs.section_count) *
                         sizeof(*group_next));
-    dependent_next = malloc((state->input_section_count == 0U ? 1U : state->input_section_count) *
+    dependent_next = malloc((state->inputs.section_count == 0U ? 1U : state->inputs.section_count) *
                             sizeof(*dependent_next));
     if (live == NULL || heads == NULL || next == NULL || queue == NULL) {
         fprintf(state->diagnostics, "minic-ld: out-of-memory:gc-sections\n");
@@ -999,25 +929,26 @@ static bool minild_gc_prune_static(MiniLdState *state,
         fprintf(state->diagnostics, "minic-ld: out-of-memory:gc-dependencies\n");
         goto done;
     }
-    for (i = 0U; i < state->section_count; ++i) {
+    for (i = 0U; i < state->work.count; ++i) {
         heads[i] = SIZE_MAX;
         section_input[i] = SIZE_MAX;
         dependent_heads[i] = SIZE_MAX;
     }
-    for (i = 0U; i < state->input_section_count; ++i) {
+    for (i = 0U; i < state->inputs.section_count; ++i) {
         group_heads[i] = SIZE_MAX;
     }
-    for (i = 0U; i < state->input_section_count; ++i) {
-        const MiniLdInputSection *input = &state->input_sections[i];
+    for (i = 0U; i < state->inputs.section_count; ++i) {
+        const MiniLdInputSection *input = &state->inputs.sections[i];
+        size_t current_section = state->work.placements[i].current_section;
 
         group_next[i] = SIZE_MAX;
         dependent_next[i] = SIZE_MAX;
-        if (input->gc_section == SIZE_MAX) {
+        if (current_section == SIZE_MAX) {
             continue;
         }
-        section_input[input->gc_section] = i;
+        section_input[current_section] = i;
         if (input->group_input != SIZE_MAX) {
-            if (input->group_input >= state->input_section_count) {
+            if (input->group_input >= state->inputs.section_count) {
                 fprintf(state->diagnostics, "minic-ld: gc-invalid-group\n");
                 goto done;
             }
@@ -1027,11 +958,11 @@ static bool minild_gc_prune_static(MiniLdState *state,
         if (input->link_order_input != SIZE_MAX) {
             size_t target;
 
-            if (input->link_order_input >= state->input_section_count) {
+            if (input->link_order_input >= state->inputs.section_count) {
                 fprintf(state->diagnostics, "minic-ld: gc-invalid-order\n");
                 goto done;
             }
-            target = state->input_sections[input->link_order_input].gc_section;
+            target = state->work.placements[input->link_order_input].current_section;
             if (target == SIZE_MAX) {
                 fprintf(state->diagnostics, "minic-ld: gc-unmapped-order-target\n");
                 goto done;
@@ -1044,7 +975,7 @@ static bool minild_gc_prune_static(MiniLdState *state,
         size_t source = state->relocs[i].section;
 
         next[i] = SIZE_MAX;
-        if (source >= state->section_count) {
+        if (source >= state->work.count) {
             fprintf(state->diagnostics,
                     "minic-ld: gc-invalid-relocation-section\n");
             goto done;
@@ -1056,7 +987,7 @@ static bool minild_gc_prune_static(MiniLdState *state,
     entry_index = symbol_resolver_lookup(&state->resolver, entry_symbol);
     if (entry_index == SIZE_MAX ||
         state->resolver.entries[entry_index].section < 0 ||
-        (size_t)state->resolver.entries[entry_index].section >= state->section_count) {
+        (size_t)state->resolver.entries[entry_index].section >= state->work.count) {
         fprintf(state->diagnostics,
                 "minic-ld: undefined-entry:%s\n",
                 entry_symbol);
@@ -1071,9 +1002,9 @@ static bool minild_gc_prune_static(MiniLdState *state,
         goto done;
     }
 
-    for (i = 0U; i < state->section_count; ++i) {
-        if ((minild_gc_root_section(&state->sections[i]) ||
-             state->sections[i].script_keep) &&
+    for (i = 0U; i < state->work.count; ++i) {
+        if ((minild_gc_root_section(&state->work.sections[i]) ||
+             state->work.sections[i].script_keep) &&
             !minild_gc_mark_section(state, i, live, queue, &queue_size)) {
             fprintf(state->diagnostics, "minic-ld: gc-root-overflow\n");
             goto done;
@@ -1086,14 +1017,14 @@ static bool minild_gc_prune_static(MiniLdState *state,
         size_t owner = section_input[source];
 
         if (owner != SIZE_MAX) {
-            const MiniLdInputSection *input = &state->input_sections[owner];
+            const MiniLdInputSection *input = &state->inputs.sections[owner];
             size_t member;
 
             if (input->group_input != SIZE_MAX) {
                 for (member = group_heads[input->group_input];
                      member != SIZE_MAX; member = group_next[member]) {
                     if (!minild_gc_mark_section(
-                            state, state->input_sections[member].gc_section,
+                            state, state->work.placements[member].current_section,
                             live, queue, &queue_size)) {
                         fprintf(state->diagnostics,
                                 "minic-ld: gc-group-overflow\n");
@@ -1105,7 +1036,7 @@ static bool minild_gc_prune_static(MiniLdState *state,
         for (size_t dependent = dependent_heads[source];
              dependent != SIZE_MAX; dependent = dependent_next[dependent]) {
             if (!minild_gc_mark_section(
-                    state, state->input_sections[dependent].gc_section,
+                    state, state->work.placements[dependent].current_section,
                     live, queue, &queue_size)) {
                 fprintf(state->diagnostics,
                         "minic-ld: gc-link-order-overflow\n");
@@ -1125,7 +1056,7 @@ static bool minild_gc_prune_static(MiniLdState *state,
             }
             target = &state->resolver.entries[reloc->symbol];
             if (target->section < 0 ||
-                (size_t)target->section >= state->section_count) {
+                (size_t)target->section >= state->work.count) {
                 continue;
             }
             if (!minild_gc_mark_section(state,
@@ -1139,14 +1070,14 @@ static bool minild_gc_prune_static(MiniLdState *state,
         }
     }
 
-    for (i = 0U; i < state->section_count; ++i) {
-        state->sections[i].relocation_count = 0U;
-        if (((state->sections[i].flags & (SHF_ALLOC | SHF_LINK_ORDER)) != 0U ||
-             state->sections[i].script_discard) &&
+    for (i = 0U; i < state->work.count; ++i) {
+        state->work.sections[i].relocation_count = 0U;
+        if (((state->work.sections[i].flags & (SHF_ALLOC | SHF_LINK_ORDER)) != 0U ||
+             state->work.sections[i].script_discard) &&
             !live[i]) {
-            state->sections[i].size = 0U;
-            state->sections[i].gc_discarded = true;
-            state->sections[i].align = 1U;
+            state->work.sections[i].size = 0U;
+            state->work.sections[i].gc_discarded = true;
+            state->work.sections[i].align = 1U;
             ++discarded;
         }
     }
@@ -1155,7 +1086,7 @@ static bool minild_gc_prune_static(MiniLdState *state,
         MiniLdResolvedSymbol *symbol = &state->resolver.entries[i];
 
         if (symbol->section >= 0 &&
-            (size_t)symbol->section < state->section_count &&
+            (size_t)symbol->section < state->work.count &&
             !live[symbol->section]) {
             symbol->section = MINILD_SECTION_UNDEF;
             symbol->value = 0U;
@@ -1166,12 +1097,12 @@ static bool minild_gc_prune_static(MiniLdState *state,
     for (i = 0U; i < old_reloc_count; ++i) {
         MiniLdReloc reloc = state->relocs[i];
 
-        if (reloc.section >= state->section_count ||
+        if (reloc.section >= state->work.count ||
             !live[reloc.section]) {
             continue;
         }
         state->relocs[write_reloc++] = reloc;
-        ++state->sections[reloc.section].relocation_count;
+        ++state->work.sections[reloc.section].relocation_count;
     }
     state->reloc_count = write_reloc;
 

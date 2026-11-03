@@ -110,7 +110,7 @@ static bool minild_eh_scan(MiniLdState *state,
                             const MiniLdStaticLayout *layout,
                             MiniLdEhIndex *result, size_t capacity,
                             size_t *count_out) {
-    const MiniLdSection *section = &state->sections[section_index];
+    const MiniLdSection *section = &state->work.sections[section_index];
     const unsigned char *bytes = section->data;
     size_t off = 0U, count = 0U;
 
@@ -206,8 +206,8 @@ static bool minild_eh_prepare(MiniLdState *state,
     size_t i, count, total = 0U;
     bool have_frame = false;
 
-    for (i = 0U; i < state->section_count; ++i) {
-        if (!minild_eh_source_section(&state->sections[i])) {
+    for (i = 0U; i < state->work.count; ++i) {
+        if (!minild_eh_source_section(&state->work.sections[i])) {
             continue;
         }
         have_frame = true;
@@ -231,7 +231,7 @@ static bool minild_eh_prepare(MiniLdState *state,
         !find_or_add_section(state, ".eh_frame_hdr", SHT_PROGBITS,
                              SHF_ALLOC, 4U, 0U,
                              &shared->eh_frame_hdr_section) ||
-        !section_append_zero(&state->sections[shared->eh_frame_hdr_section],
+        !section_append_zero(&state->work.sections[shared->eh_frame_hdr_section],
                              12U + total * 8U)) {
         return false;
     }
@@ -252,17 +252,17 @@ static bool minild_eh_fill(MiniLdState *state,
     if (!shared->have_eh_frame_hdr) {
         return true;
     }
-    header = &state->sections[shared->eh_frame_hdr_section];
+    header = &state->work.sections[shared->eh_frame_hdr_section];
     base = layout->section_vaddr[shared->eh_frame_hdr_section];
     index = calloc(shared->eh_frame_fde_count == 0U
                    ? 1U : shared->eh_frame_fde_count, sizeof(*index));
     if (index == NULL) {
         return false;
     }
-    for (i = 0U; i < state->section_count; ++i) {
+    for (i = 0U; i < state->work.count; ++i) {
         size_t part_count;
 
-        if (!minild_eh_source_section(&state->sections[i]) ||
+        if (!minild_eh_source_section(&state->work.sections[i]) ||
             (layout->section_discarded != NULL &&
              layout->section_discarded[i])) {
             continue;

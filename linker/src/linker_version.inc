@@ -13,9 +13,9 @@ static bool shared_fill_versions(MiniLdState *state,
     if (shared->version_script == NULL) {
         return true;
     }
-    versym = &state->sections[shared->versym_section];
-    verdef = &state->sections[shared->verdef_section];
-    dynstr = &state->sections[shared->dynstr_section];
+    versym = &state->work.sections[shared->versym_section];
+    verdef = &state->work.sections[shared->verdef_section];
+    dynstr = &state->work.sections[shared->dynstr_section];
     if (versym->size != shared->dynsym_count * sizeof(Elf64_Half) ||
         verdef->size != 2U * (sizeof(Elf64_Verdef) + sizeof(Elf64_Verdaux)) ||
         shared->version_name_offset >= dynstr->size ||
