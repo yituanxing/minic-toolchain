@@ -114,6 +114,10 @@ with open(sys.argv[1], 'rb') as source:
         b26_offsets = ([] if relocation_section is None else
                        [entry['r_offset'] for entry in relocation_section.iter_relocations()
                         if entry['r_info_type'] == 66])
+        short_relocations = ([] if relocation_section is None else
+                             [(entry['r_offset'], entry['r_info_type'])
+                              for entry in relocation_section.iter_relocations()
+                              if entry['r_info_type'] in (64, 65)])
         gap = 0 if direction == 'near' else 131072 if width == 16 else 4194304
         branch_width = 4 if direction == 'near' else 8
         extra = 8 if i == 0 else 0
@@ -121,6 +125,8 @@ with open(sys.argv[1], 'rb') as source:
             i, name, direction, 'wrong growth', len(body))
         if direction == 'near':
             assert not b26_offsets, (i, name, 'spurious long B26', b26_offsets)
+            assert (0, 64 if width == 16 else 65) in short_relocations, (
+                i, name, 'missing retained short relocation', short_relocations)
             continue
         pos = gap + 4 if direction == 'backward' else 0
         assert pos + 4 in b26_offsets, (
@@ -138,7 +144,7 @@ with open(sys.argv[1], 'rb') as source:
     assert any(e['r_offset'] == 4 and e['r_info_type'] == 66
                for e in rela.iter_relocations()), 'missing retained R_LARCH_B26 at +4'
 print('MINIAS_LOONG_LONG_BRANCH=PASS local_structural=22 width=4_or_8 '
-      'integer_and_FCC_inversion=exact retained_B26=20')
+      'integer_and_FCC_inversion=exact retained_B26=20 retained_short=2')
 PY
 
 if ! command -v "$loong_as" >/dev/null ||

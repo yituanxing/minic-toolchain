@@ -19,7 +19,8 @@ for name in ('minias_common_context_raise_section_alignment',
     if not re.search(r'\bbool\s+'+name+r'\s*\(',context) or name not in api:
         raise SystemExit('missing Context Section transition: '+name)
 
-if lowering.count('minias_common_context_raise_section_alignment(')!=3:
+if lowering.count('minias_common_context_raise_section_alignment(')!=4 or \
+   'skip_small_code_alignment(as->target_state,alignment)' not in lowering:
     raise SystemExit('Lowering lost an implicit/explicit/literal alignment transition')
 if lowering.count('minias_common_context_apply_ident_comment(')!=1:
     raise SystemExit('GNU .ident no longer uses Context comment-upgrade semantics')

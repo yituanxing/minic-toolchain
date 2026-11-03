@@ -2295,7 +2295,13 @@ static bool la_encode(MiniAsEncodeContext *ctx,const MiniAsInstructionView *s) {
                         ((off>>16U)&UINT32_C(0x1f)) :
                     ((off&UINT32_C(0xffff))<<10U)|
                         ((off>>16U)&UINT32_C(0x3ff));
-                if(!linker_relaxable)kind=MINIAS_FIXUP_NONE;
+                /* GAS retains B16/B21 relocations even for a resolved
+                 * same-section near conditional branch.  The target
+                 * label may move at link time irrespective of whether this
+                 * section itself has a shrinkable PCALA sequence.  The
+                 * existing B26 exemption remains a separate GNU policy. */
+                if(!linker_relaxable && kind==MINIAS_FIXUP_LARCH_B26)
+                    kind=MINIAS_FIXUP_NONE;
             }
             break;
         }
