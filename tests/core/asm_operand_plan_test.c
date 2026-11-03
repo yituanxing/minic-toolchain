@@ -48,7 +48,7 @@ static void check_source_plan(MinicAsmOperandPlanOwner owner) {
     plan.kinds[2] = MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE;
     for (i = 3U; i < 6U; ++i)
         plan.kinds[i] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
-    assert(minic_backend_capture_asm_operand_source(&source, owner, &plan));
+    assert(minic_source_backend_capture_asm_operand_source(&source, owner, &plan));
     assert(plan.owner == owner && plan.output_count == 3U);
     assert(plan.gnu_early_clobber[0] && !plan.gnu_early_clobber[1] &&
            !plan.gnu_early_clobber[2] && !plan.gnu_early_clobber[3]);
@@ -60,7 +60,7 @@ static void check_source_plan(MinicAsmOperandPlanOwner owner) {
     assert(!plan.explicit_memory_clobber && plan.implicit_memory_effect &&
            plan.effective_memory_effect);
     initial_id = plan.source_form_id;
-    assert(initial_id == minic_backend_asm_source_form_id(&source));
+    assert(initial_id == minic_source_backend_asm_source_form_id(&source));
 
     /* Core carries a target-owned ID/payload without treating the source
      * fingerprint as a machine opcode. This synthetic value tests transport,
@@ -91,17 +91,17 @@ static void check_source_plan(MinicAsmOperandPlanOwner owner) {
 
     outputs[0].constraint_text = "=r";
     outputs[0].constraint_length = 2U;
-    assert(minic_backend_asm_source_form_id(&source) != initial_id);
+    assert(minic_source_backend_asm_source_form_id(&source) != initial_id);
     outputs[0].constraint_text = "+&r";
     outputs[0].constraint_length = 3U;
     source.has_memory_clobber = true;
     source.clobber_count = 1U;
-    assert(minic_backend_capture_asm_operand_source(&source, owner, &plan));
+    assert(minic_source_backend_capture_asm_operand_source(&source, owner, &plan));
     assert(plan.explicit_memory_clobber && plan.implicit_memory_effect &&
            plan.effective_memory_effect);
 
     inputs[0].constraint_text = NULL;
-    assert(!minic_backend_capture_asm_operand_source(&source, owner, &plan));
+    assert(!minic_source_backend_capture_asm_operand_source(&source, owner, &plan));
 }
 
 int main(void) {

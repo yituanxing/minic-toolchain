@@ -1,7 +1,7 @@
 #ifndef MINIC_TARGET_LOONGARCH64_SIMD_SOURCE_POLICY_H
 #define MINIC_TARGET_LOONGARCH64_SIMD_SOURCE_POLICY_H
 
-#include "target/backend.h"
+#include "target/backend_source.h"
 #include "frontend/ast.h"
 
 /* GNU C source acceptance ends at Core ingress.  Machine SIMD emission must

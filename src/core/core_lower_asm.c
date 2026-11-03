@@ -3,7 +3,7 @@
 #include "frontend/const_eval.h"
 #include "frontend/expression_semantics.h"
 #include "target/data_layout.h"
-#include "target/backend.h"
+#include "target/backend_source.h"
 
 #include <inttypes.h>
 #include <stdio.h>
@@ -192,7 +192,7 @@ static void core_asm_trace_frontier(
     /* The same source-form fingerprint is attached to admitted structured
      * Core instructions. Failed forms use that identical identity here;
      * distinct diagnostic paths must not carry a second hash algorithm. */
-    signature_hash = minic_backend_asm_source_form_id(source);
+    signature_hash = minic_source_backend_asm_source_form_id(source);
     for (i = 0U; i < source->template_length && n < sizeof(preview) - 1U; ++i) {
         const unsigned char c = (unsigned char)source->template_text[i];
         if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
@@ -264,8 +264,8 @@ MinicCoreLowerStatus minic_core_lower_inline_asm(MinicCoreLowerContext *context,
      * its target rejects the specific constraints or instruction suffix.
      * This is one shared ownership gate, with ISA mnemonics supplied solely
      * by each backend descriptor (not Frontend/Core arch conditionals). */
-    if (minic_backend_requires_qualified_input_asm(
-            minic_backend_for_target(context->target), source)) {
+    if (minic_source_backend_requires_qualified_input_asm(
+            minic_source_backend_for_target(context->target), source)) {
         core_asm_trace_frontier(context, source, "target_required");
         return MINIC_CORE_LOWER_UNSUPPORTED;
     }

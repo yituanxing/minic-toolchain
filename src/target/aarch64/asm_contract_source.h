@@ -2,6 +2,7 @@
 #define MINIC_TARGET_AARCH64_ASM_CONTRACT_SOURCE_H
 
 #include "target/aarch64/asm_contract.h"
+#include "target/backend_source.h"
 
 /* Only frontend qualification and clone-source safety consult C operands.
  * Native Core form parsing and hardware instruction emission remain in

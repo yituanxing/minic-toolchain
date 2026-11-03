@@ -45,13 +45,17 @@ static bool valid_power_two(size_t value) {
     return value != 0U && (value & (value - 1U)) == 0U;
 }
 
-static bool module_global_fragments_valid(const MinicCoreModuleGlobal *global) {
+bool minic_core_module_global_fragments_valid(const MinicCoreModuleGlobal *global) {
     size_t index, offset = 0U;
-    if (global->fragment_count != 0U && global->fragments == NULL)
+    if (global == NULL ||
+        (global->fragment_count != 0U && global->fragments == NULL))
         return false;
     for (index = 0U; index < global->fragment_count; ++index) {
         const MinicCoreModuleFragment *fragment = &global->fragments[index];
-        if (fragment->byte_offset != offset || fragment->byte_count == 0U ||
+        /* Check the cursor first: subtraction must never wrap on malformed
+         * external Module IR, even if an offset happens to be forged. */
+        if (offset > global->storage_size ||
+            fragment->byte_offset != offset || fragment->byte_count == 0U ||
             fragment->byte_count > global->storage_size - offset)
             return false;
         if (fragment->kind == MINIC_CORE_MODULE_FRAGMENT_BITS) {
@@ -68,8 +72,8 @@ static bool module_global_fragments_valid(const MinicCoreModuleGlobal *global) {
                     fragment->relocation_addend != 0) return false;
             } else if (fragment->relocation_kind == MINIC_CORE_MODULE_RELOCATION_OBJECT ||
                        fragment->relocation_kind == MINIC_CORE_MODULE_RELOCATION_FUNCTION) {
-                if (fragment->relocation_symbol == NULL ||
-                    fragment->relocation_symbol[0] == '\0') return false;
+                if (!minic_core_assembler_symbol_lexically_safe(
+                        fragment->relocation_symbol)) return false;
             } else return false;
         } else if (fragment->kind != MINIC_CORE_MODULE_FRAGMENT_ZERO)
             return false;
@@ -121,7 +125,7 @@ bool minic_core_module_verify(const MinicCoreModule *module) {
             global->payload_kind > MINIC_CORE_MODULE_PAYLOAD_SCALAR_BITS)
             return false;
         if (!type->has_layout || !valid_power_two(global->storage_alignment) ||
-            !module_global_fragments_valid(global)) return false;
+            !minic_core_module_global_fragments_valid(global)) return false;
     }
     for (index = 0U; index < module->function_count; ++index) {
         const MinicCoreModuleFunctionSymbol *symbol = &module->function_symbols[index];
@@ -134,6 +138,7 @@ bool minic_core_module_verify(const MinicCoreModule *module) {
                 return false;
             target = &module->function_symbols[symbol->alias_target_index];
             if (!target->is_defined || target->alias_target_index != SIZE_MAX ||
+                target->name == NULL ||
                 strcmp(target->name, symbol->alias_target_name) != 0)
                 return false;
         } else if (symbol->alias_target_name != NULL) return false;

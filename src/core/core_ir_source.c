@@ -24,10 +24,11 @@ static void minic_core_source_draft_release(MinicCoreSourceDraft *draft) {
     free(draft->fixed_register_binding_types);
     free(draft->object_types);
     free(draft->global_types);
-    for (index = 0U; index < draft->callee_count; ++index)
+    for (index = 0U; draft->callees != NULL && index < draft->callee_count; ++index)
         free(draft->callees[index].parameter_types);
     free(draft->callees);
-    for (index = 0U; index < draft->call_signature_count; ++index)
+    for (index = 0U; draft->call_signatures != NULL &&
+                     index < draft->call_signature_count; ++index)
         free(draft->call_signatures[index].parameter_types);
     free(draft->call_signatures);
     free(draft->instruction_types);

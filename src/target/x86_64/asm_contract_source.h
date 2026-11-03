@@ -2,6 +2,7 @@
 #define MINIC_TARGET_X86_64_ASM_CONTRACT_SOURCE_H
 
 #include "target/x86_64/asm_contract.h"
+#include "target/backend_source.h"
 #include "frontend/type.h"
 
 /* C-language GNU ASM admission. Machine emitters include asm_contract.h

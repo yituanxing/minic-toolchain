@@ -36,7 +36,7 @@ static void descriptor_source_normalized_seal(void) {
     MinicInlineAsmOperand output = {0}, input = {0};
     MinicInlineAsm source = {0};
     MinicTargetInlineAsmContract admitted = {0}, forged;
-    MinicBackend backend = {0};
+    MinicSourceBackend backend = {0};
     expressions[0].type = minic_type_unsigned_int();
     expressions[0].value_category = MINIC_VALUE_LVALUE;
     expressions[1].type = minic_type_int();
@@ -58,24 +58,24 @@ static void descriptor_source_normalized_seal(void) {
     source.input_count = 1U;
     backend.seal_normalized_inline_asm = minic_loongarch64_seal_normalized_inline_asm;
     assert(minic_loongarch64_qualify_inline_asm(&program, &source, &admitted));
-    assert(minic_backend_capture_asm_operand_source(
+    assert(minic_source_backend_capture_asm_operand_source(
         &source, MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED, &admitted));
     assert(admitted.target_machine_form_id == 5U);
-    assert(minic_backend_seal_normalized_inline_asm(
+    assert(minic_source_backend_seal_normalized_inline_asm(
         &backend, &program, &source, machine, sizeof(machine) - 1U, &admitted));
-    assert(!minic_backend_seal_normalized_inline_asm(
+    assert(!minic_source_backend_seal_normalized_inline_asm(
         &backend, &program, &source, altered, sizeof(altered) - 1U, &admitted));
     forged = admitted;
     forged.target_machine_form_id = 1U;
-    assert(!minic_backend_seal_normalized_inline_asm(
+    assert(!minic_source_backend_seal_normalized_inline_asm(
         &backend, &program, &source, machine, sizeof(machine) - 1U, &forged));
     forged = admitted;
     forged.kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT;
-    assert(!minic_backend_seal_normalized_inline_asm(
+    assert(!minic_source_backend_seal_normalized_inline_asm(
         &backend, &program, &source, machine, sizeof(machine) - 1U, &forged));
     forged = admitted;
     forged.output_count = 0U;
-    assert(!minic_backend_seal_normalized_inline_asm(
+    assert(!minic_source_backend_seal_normalized_inline_asm(
         &backend, &program, &source, machine, sizeof(machine) - 1U, &forged));
     expressions[0].type = minic_type_unsigned_long_long();
     assert(!minic_loongarch64_qualify_inline_asm(&program, &source, &forged));

@@ -141,7 +141,7 @@ bool minic_loongarch64_simd_seal_normalized(
     if (contract->target_machine_form_id != 0U ||
         contract->target_machine_form_variant != 0U ||
         !minic_loongarch64_simd_qualify_source(program, source, &admitted) ||
-        !minic_backend_capture_asm_operand_source(
+        !minic_source_backend_capture_asm_operand_source(
             source, MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED, &admitted) ||
         !minic_loongarch64_simd_parse(normalized, length, &machine) ||
         !loong_simd_same_machine_effects(&original, &machine) ||

@@ -3,7 +3,7 @@
 #include "core/opt_pure_statement.h"
 #include "frontend/const_eval.h"
 #include "frontend/function_body.h"
-#include "target/backend.h"
+#include "target/backend_source.h"
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -94,7 +94,7 @@ static bool minic_static_integer_claim_block(
 static unsigned char *minic_static_integer_blocked_sources(
     const MinicC0Program *program, const MinicTargetInfo *target) {
     unsigned char *blocked;
-    const MinicBackend *backend;
+    const MinicSourceBackend *backend;
     unsigned char *inline_has_external_guard = NULL;
     unsigned char *static_calls_guarded_inline = NULL;
     MinicFunctionId *owners = NULL;
@@ -107,7 +107,7 @@ static unsigned char *minic_static_integer_blocked_sources(
     if (program == NULL || target == NULL) {
         return NULL;
     }
-    backend = minic_backend_for_target(target);
+    backend = minic_source_backend_for_target(target);
     if (backend == NULL) {
         return NULL;
     }
@@ -280,7 +280,7 @@ static unsigned char *minic_static_integer_blocked_sources(
                 if (statement->kind == MINIC_STATEMENT_INLINE_ASM) {
                     const MinicInlineAsm *asm_source =
                         minic_c0_program_inline_asm(program, statement->inline_asm_id);
-                    if (!minic_backend_clone_safe_opaque_asm(backend, asm_source)) {
+                    if (!minic_source_backend_clone_safe_opaque_asm(backend, asm_source)) {
                         blocked[owner] = 1U;
                     }
                 }

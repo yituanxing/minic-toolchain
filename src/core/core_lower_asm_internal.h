@@ -2,7 +2,7 @@
 #define MINIC_CORE_CORE_LOWER_ASM_INTERNAL_H
 
 #include "core/core_lower_internal.h"
-#include "target/backend.h"
+#include "target/backend_source.h"
 
 /* Shared GNU asm input-normalization bounds: consumed by operand decoding,
  * tracing and CSR structured-effect lowering across separate C files. */

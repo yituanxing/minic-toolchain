@@ -1229,7 +1229,7 @@ bool minic_aarch64_requires_qualified_input_asm(const MinicInlineAsm *src) {
     if (src != NULL && src->is_goto &&
         aarch64_linux_jump_label_form(src->template_text,
                                       src->template_length) != 0U) return false;
-    if (minic_backend_inline_asm_prefix_matches(
+    if (minic_source_backend_inline_asm_prefix_matches(
             src, fixed, sizeof(fixed) / sizeof(fixed[0])))
         return true;
     for (width = 0U; width < 2U; ++width)
@@ -1241,7 +1241,7 @@ bool minic_aarch64_requires_qualified_input_asm(const MinicInlineAsm *src) {
                     fetch ? "_fetch" : "", aarch64_atomic_operations[op].name);
                 if (n <= 0 || (size_t)n >= sizeof(prefix))
                     return false;
-                if (minic_backend_inline_asm_prefix_matches(src, single, 1U))
+                if (minic_source_backend_inline_asm_prefix_matches(src, single, 1U))
                     return true;
             }
     return false;

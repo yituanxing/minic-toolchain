@@ -1,6 +1,6 @@
 #include "core/core_lower_asm_internal.h"
 #include "frontend/const_eval.h"
-#include "target/backend.h"
+#include "target/backend_source.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -15,13 +15,13 @@ MinicCoreLowerStatus core_asm_try_target_register_contract(
     MinicCoreInlineAsmId id;
     char *normalized = NULL;
     size_t length, i;
-    const MinicBackend *backend;
+    const MinicSourceBackend *backend;
     MinicTargetInlineAsmContract contract;
     if (!handled) return MINIC_CORE_LOWER_ERROR;
     *handled = false;
     if (!ctx || !ctx->target || !ctx->body || !ctx->body->program ||
         !ctx->function || !statement) return MINIC_CORE_LOWER_OK;
-    backend = minic_backend_for_target(ctx->target);
+    backend = minic_source_backend_for_target(ctx->target);
     /* A fully target-qualified asm goto with GNU `i` inputs must take the
      * Core source-constant path below, not the earlier scalar-register
      * contract path. The latter would silently turn a symbolic relocation
@@ -30,10 +30,10 @@ MinicCoreLowerStatus core_asm_try_target_register_contract(
      * existing exact-template qualifier, and the goto lowering checks every
      * immediate before committing any Core effects. */
     if (source && source->is_goto &&
-        minic_backend_qualify_inline_asm_goto(
+        minic_source_backend_qualify_inline_asm_goto(
             backend, ctx->body->program, source))
         return MINIC_CORE_LOWER_OK;
-    if (!minic_backend_qualify_inline_asm(
+    if (!minic_source_backend_qualify_inline_asm(
             backend, ctx->body->program, source, &contract))
         return MINIC_CORE_LOWER_OK;
     *handled = true;
@@ -48,7 +48,7 @@ MinicCoreLowerStatus core_asm_try_target_register_contract(
      * normalization can still alter a target instruction's machine effects.
      * Seal a target-owned proof only after seeing BOTH spellings; a source
      * fingerprint alone is not authority to emit a machine instruction. */
-    if (!minic_backend_seal_normalized_inline_asm(
+    if (!minic_source_backend_seal_normalized_inline_asm(
             backend, ctx->body->program, source, normalized, length,
             &contract)) {
         free(normalized);

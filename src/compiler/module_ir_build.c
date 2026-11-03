@@ -44,47 +44,6 @@ static bool module_visibility(MinicSymbolVisibility source,
     return false;
 }
 
-static bool module_default_section(const char *text,
-                                   MinicCoreModuleDefaultSection *output) {
-    if (text == NULL || output == NULL) return false;
-    if (strcmp(text, ".bss") == 0) *output = MINIC_CORE_MODULE_SECTION_BSS;
-    else if (strcmp(text, ".data") == 0) *output = MINIC_CORE_MODULE_SECTION_DATA;
-    else if (strcmp(text, ".section .rodata") == 0)
-        *output = MINIC_CORE_MODULE_SECTION_RODATA;
-    else if (strcmp(text, ".section .data.rel.ro") == 0)
-        *output = MINIC_CORE_MODULE_SECTION_RELRO;
-    else return false;
-    return true;
-}
-
-static bool module_payload_kind(MinicMultiGlobalPayloadKind source,
-                                MinicCoreModulePayloadKind *output) {
-    if (output == NULL) return false;
-    switch (source) {
-    case MINIC_MULTI_GLOBAL_PAYLOAD_ZERO:
-        *output = MINIC_CORE_MODULE_PAYLOAD_ZERO; return true;
-    case MINIC_MULTI_GLOBAL_PAYLOAD_ZERO_RELOCATIONS:
-        *output = MINIC_CORE_MODULE_PAYLOAD_ZERO_RELOCATIONS; return true;
-    case MINIC_MULTI_GLOBAL_PAYLOAD_RECORD_FLAT:
-        *output = MINIC_CORE_MODULE_PAYLOAD_RECORD_FLAT; return true;
-    case MINIC_MULTI_GLOBAL_PAYLOAD_RECORD_RECURSIVE:
-        *output = MINIC_CORE_MODULE_PAYLOAD_RECORD_RECURSIVE; return true;
-    case MINIC_MULTI_GLOBAL_PAYLOAD_RECORD_FLEXIBLE:
-        *output = MINIC_CORE_MODULE_PAYLOAD_RECORD_FLEXIBLE; return true;
-    case MINIC_MULTI_GLOBAL_PAYLOAD_ARRAY_RECORD:
-        *output = MINIC_CORE_MODULE_PAYLOAD_ARRAY_RECORD; return true;
-    case MINIC_MULTI_GLOBAL_PAYLOAD_ARRAY_RECURSIVE:
-        *output = MINIC_CORE_MODULE_PAYLOAD_ARRAY_RECURSIVE; return true;
-    case MINIC_MULTI_GLOBAL_PAYLOAD_ARRAY_SCALAR_RELOCATIONS:
-        *output = MINIC_CORE_MODULE_PAYLOAD_ARRAY_SCALAR_RELOCATIONS; return true;
-    case MINIC_MULTI_GLOBAL_PAYLOAD_SCALAR_RELOCATION:
-        *output = MINIC_CORE_MODULE_PAYLOAD_SCALAR_RELOCATION; return true;
-    case MINIC_MULTI_GLOBAL_PAYLOAD_SCALAR_BITS:
-        *output = MINIC_CORE_MODULE_PAYLOAD_SCALAR_BITS; return true;
-    }
-    return false;
-}
-
 static MinicCoreModuleFragment *module_push_fragment(
     MinicModuleFragmentSinkContext *sink, size_t bytes,
     MinicCoreModuleFragmentKind kind) {
@@ -123,10 +82,15 @@ static bool module_sink_zero(void *context, size_t bytes) {
                  MINIC_CORE_MODULE_FRAGMENT_ZERO) != NULL;
 }
 
+static bool module_scalar_width_valid(size_t width) {
+    return width == 1U || width == 2U || width == 4U || width == 8U;
+}
+
 static bool module_sink_bits(void *context, MinicType source_type,
                              size_t width, uint64_t bits) {
-    MinicCoreModuleFragment *fragment = module_push_fragment(
-        context, width, MINIC_CORE_MODULE_FRAGMENT_BITS);
+    MinicCoreModuleFragment *fragment;
+    if (!module_scalar_width_valid(width)) return false;
+    fragment = module_push_fragment(context, width, MINIC_CORE_MODULE_FRAGMENT_BITS);
     if (fragment == NULL) return false;
     fragment->bits = bits;
     fragment->bits_signed_integer = width > 1U &&
@@ -142,33 +106,47 @@ static bool module_sink_relocation(void *context,
                                   size_t width) {
     MinicModuleFragmentSinkContext *sink = context;
     MinicCoreModuleFragment *fragment;
-    const char *symbol;
-    int64_t addend;
-    if (sink == NULL || source == NULL) return false;
-    fragment = module_push_fragment(sink, width,
-                                    MINIC_CORE_MODULE_FRAGMENT_RELOCATION);
-    if (fragment == NULL) return false;
+    MinicCoreModuleRelocationKind relocation_kind;
+    char *owned_symbol = NULL;
+    const char *source_symbol;
+    int64_t addend = 0;
+    if (sink == NULL || source == NULL || !module_scalar_width_valid(width))
+        return false;
+    /* Resolve and own the entire symbol/relocation proof before committing
+     * a fragment. A rejected source relocation must never advance the byte
+     * cursor or leave a partially initialized Core slot in the sink. */
     if (source->target_kind == MINIC_GLOBAL_RELOCATION_LABEL) {
         const MinicStatement *label = minic_c0_program_statement(
             sink->program, source->target_id);
         if (label == NULL || label->kind != MINIC_STATEMENT_LABEL) return false;
-        fragment->relocation_kind = MINIC_CORE_MODULE_RELOCATION_LABEL;
-        return minic_core_format_label_symbol(source->target_id,
-                                              &fragment->relocation_symbol);
-    }
-    symbol = minic_multi_global_relocation_target_name(sink->program, source);
-    if (symbol == NULL || symbol[0] == '\0' ||
-        !minic_data_layout_global_relocation_target_addend(
-            sink->target->data_layout, sink->program, source, &addend))
+        relocation_kind = MINIC_CORE_MODULE_RELOCATION_LABEL;
+        if (!minic_core_format_label_symbol(source->target_id, &owned_symbol))
+            return false;
+    } else if (source->target_kind == MINIC_GLOBAL_RELOCATION_OBJECT ||
+               source->target_kind == MINIC_GLOBAL_RELOCATION_FUNCTION) {
+        source_symbol = minic_multi_global_relocation_target_name(sink->program, source);
+        if (source_symbol == NULL || source_symbol[0] == '\0' ||
+            !minic_data_layout_global_relocation_target_addend(
+                sink->target->data_layout, sink->program, source, &addend))
+            return false;
+        owned_symbol = module_c_string(source_symbol);
+        if (owned_symbol == NULL) return false;
+        relocation_kind = source->target_kind == MINIC_GLOBAL_RELOCATION_OBJECT
+            ? MINIC_CORE_MODULE_RELOCATION_OBJECT
+            : MINIC_CORE_MODULE_RELOCATION_FUNCTION;
+    } else {
         return false;
-    fragment->relocation_symbol = module_c_string(symbol);
-    if (fragment->relocation_symbol == NULL) return false;
+    }
+    fragment = module_push_fragment(sink, width,
+                                    MINIC_CORE_MODULE_FRAGMENT_RELOCATION);
+    if (fragment == NULL) {
+        free(owned_symbol);
+        return false;
+    }
+    fragment->relocation_symbol = owned_symbol;
     fragment->relocation_addend = addend;
-    fragment->relocation_kind = source->target_kind == MINIC_GLOBAL_RELOCATION_OBJECT
-        ? MINIC_CORE_MODULE_RELOCATION_OBJECT
-        : MINIC_CORE_MODULE_RELOCATION_FUNCTION;
-    return source->target_kind == MINIC_GLOBAL_RELOCATION_OBJECT ||
-           source->target_kind == MINIC_GLOBAL_RELOCATION_FUNCTION;
+    fragment->relocation_kind = relocation_kind;
+    return true;
 }
 
 static bool module_capture_global(MinicCoreModuleGlobal *destination,
@@ -222,11 +200,10 @@ static bool module_capture_global(MinicCoreModuleGlobal *destination,
     if (!minic_core_type_import(importer, source->type,
                                 &destination->core_type_id)) return false;
     if (destination->is_extern) return true;
-    if (!minic_multi_global_payload_plan_build(program, target, source, &plan) ||
-        !module_payload_kind(plan.payload_kind, &destination->payload_kind) ||
-        !module_default_section(plan.default_elf_section,
-                                &destination->default_section))
+    if (!minic_multi_global_payload_plan_build(program, target, source, &plan))
         return false;
+    destination->payload_kind = plan.payload_kind;
+    destination->default_section = plan.default_section;
     destination->common_elf_bss_admitted =
         minic_multi_global_explicit_bss_admitted(source);
     destination->storage_size = plan.storage_size;

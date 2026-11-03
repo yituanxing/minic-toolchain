@@ -175,7 +175,7 @@ bool minic_loongarch64_requires_qualified_input_asm(const MinicInlineAsm *src) {
      * escape into generic raw inline assembly if this older prefix list
      * overlooked its mnemonic. The prefix list still rejects *mutated*
      * source templates that intentionally do not match an exact form. */
-    return minic_backend_inline_asm_prefix_matches(
+    return minic_source_backend_inline_asm_prefix_matches(
                src, reserved, sizeof(reserved) / sizeof(reserved[0])) ||
            loong_linux_descriptor_template_matches(src);
 }
@@ -3035,7 +3035,7 @@ bool minic_loongarch64_seal_normalized_inline_asm(
      * ordinal, hardware effects, and physical operand ordering. */
     if (!program || !source || !normalized ||
         !minic_loongarch64_qualify_inline_asm(program, source, &admitted) ||
-        !minic_backend_capture_asm_operand_source(
+        !minic_source_backend_capture_asm_operand_source(
             source, MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED, &admitted) ||
         admitted.target_machine_form_id != id ||
         admitted.target_machine_form_variant != variant ||

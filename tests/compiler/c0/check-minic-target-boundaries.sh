@@ -108,8 +108,8 @@ lacks src/target/riscv64/frame_layout.c 'if (program != NULL)'
 # ISA proof is minted AFTER GNU named-operand normalization, never by
 # the source ID or hash alone. The machine emitter revalidates the sealed
 # form and typed operands without reopening the mutable source Program.
-has src/core/core_lower_asm_target.c 'minic_backend_seal_normalized_inline_asm('
-has src/target/backend.c 'minic_loongarch64_seal_normalized_inline_asm'
+has src/core/core_lower_asm_target.c 'minic_source_backend_seal_normalized_inline_asm('
+has src/target/backend_source.c 'minic_loongarch64_seal_normalized_inline_asm'
 has src/target/loongarch64/simd_source_policy.c 'loong_simd_same_machine_effects(&original, &machine)'
 has src/target/loongarch64/simd_asm.c 'MINIC_LOONG_MACHINE_ASM_SIMD'
 lacks src/target/loongarch64/simd_asm.c 'ctx->program'
@@ -135,6 +135,16 @@ for header in \
 done
 has src/target/common/linux_jump_label_source.h 'minic_multi_qualify_linux_jump_label_asm_goto('
 has src/target/backend.c 'functions[index].type_context != module->type_context'
+# GNU/C source admission has its own target descriptor. No C AST handles or
+# assembler template qualification are permitted in the machine contract.
+has src/target/backend_source.h 'typedef struct MinicSourceBackend {'
+has src/target/backend_source.c 'minic_source_backend_for_target('
+has src/target/backend_source.c '#include "target/target_registration.def"'
+lacks src/target/backend.h 'MinicInlineAsm'
+lacks src/target/backend.h 'MinicC0Program'
+lacks src/target/backend.h 'qualify_inline_asm'
+lacks src/target/backend.c 'frontend/ast.h'
+lacks src/target/backend.c 'minic_source_backend_'
 has src/target/target_info.c 'target->machine_builtin_form_lookup('
 lacks src/target/loongarch64/call_emit.c '"__builtin_loongarch_"'
 has src/target/common/direct_residual_plan.c \
@@ -296,6 +306,7 @@ for arch in RISCV32 RISCV64 X86_64 AARCH64 LOONGARCH64; do
 done
 has src/target/target_info.c '#include "target/target_registration.def"'
 has src/target/backend.c '#include "target/target_registration.def"'
+has src/target/backend_source.c '#include "target/target_registration.def"'
 has src/target/target_catalog.c '#include "target/target_registration.def"'
 has src/target/backend.c 'backend != minic_backend_for_target(target)'
 lacks src/target/backend.c 'case MINIC_TARGET_ARCH_'
@@ -378,7 +389,7 @@ has src/target/aarch64/asm_contract.c 'aarch64_linux_xchg_form('
 has src/target/aarch64/asm_contract.c 'aarch64_xchg_ld[xchg.mode]'
 lacks src/core/core_lower_asm_target.c 'ldaxrb'
 has src/target/aarch64/asm_contract.c 'aarch64_atomic_form('
-has src/target/backend.c 'minic_backend_inline_asm_prefix_matches('
+has src/target/backend_source.c 'minic_source_backend_inline_asm_prefix_matches('
 has src/frontend/parser_local_declarations.c 'consume_static_local_interleaved_attribute, attributes'
 has src/frontend/parser_function.c 'has_const_qualifier'
 has src/frontend/parser_function.c '!minic_type_add_const(base_type, &base_type)'
@@ -413,7 +424,7 @@ lacks src/target/backend.c 'x86_64_qualified_inputs'
 lacks src/target/backend.h 'qualified_input_mnemonic_count'
 lacks src/core/core_lower_asm_target.c 'tpidr_el1'
 lacks src/core/core_lower_asm_target.c '.altinstructions'
-has src/target/backend.c 'minic_loongarch64_qualify_inline_asm'
+has src/target/backend_source.c 'minic_loongarch64_qualify_inline_asm'
 has src/target/loongarch64/residual_emit.c 'minic_loongarch64_emit_qualified_structured_asm'
 has src/core/core_lower_asm_scalar_forms.c 'e->kind == MINIC_EXPRESSION_FIXED_REGISTER'
 has src/core/core_lower_asm_scalar_forms.c 'minic_target_info_fixed_register_write_supported('
@@ -632,8 +643,8 @@ has src/frontend/ast_verifier.c 'minic_target_info_language_type_supported('
 # introduce ISA switches into Core or duplicate GNU template qualification.
 for file in src/target/x86_64/asm_contract.c src/target/x86_64/asm_contract.h \
             src/core/core_lower_asm_target.c; do exists "$file"; done
-has src/target/backend.c 'minic_x86_64_qualify_inline_asm'
-has src/core/core_lower_asm_target.c 'minic_backend_qualify_inline_asm('
+has src/target/backend_source.c 'minic_x86_64_qualify_inline_asm'
+has src/core/core_lower_asm_target.c 'minic_source_backend_qualify_inline_asm('
 has src/target/x86_64/machine_asm.c 'minic_x86_64_asm_mulacc_template('
 has src/target/x86_64/machine_asm.c 'minic_x86_64_asm_matched_template('
 lacks src/core/core_lower_asm.c 'core_asm_try_x86_register_contract('
@@ -1285,7 +1296,7 @@ cc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow \
   -Iinclude -Isrc tests/compiler/c0/probe-loong-simd-normalized-seal.c \
   src/target/loongarch64/simd_asm.c \
   src/target/loongarch64/simd_source_policy.c \
-  src/target/backend.c src/frontend/type.c \
+  src/target/backend_source.c src/frontend/type.c \
   -o "$work/loong-simd-seal"
 "$work/loong-simd-seal"
 
@@ -1359,6 +1370,7 @@ cc -std=c11 -O2 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror \
   -ffunction-sections -fdata-sections -Wl,--gc-sections \
   -Iinclude -Isrc tests/compiler/c0/probe-module-global-fragments.c \
   src/target/common/module_global_emit.c \
+  src/core/module_ir.c \
   src/compiler/global_payload.c \
   src/target/common/global_emit.c \
   -o "$work/module-global-fragments-probe"

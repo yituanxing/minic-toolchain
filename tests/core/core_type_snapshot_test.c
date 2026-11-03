@@ -569,7 +569,29 @@ int main(void) {
     /* A canceled, unsealed C draft and repeated destructor must be safe. */
     minic_core_function_destroy(&function);
     minic_core_function_destroy(&function);
+
+    /* A partially published allocation count is not proof that its array
+     * exists: an OOM/cancelled Core builder must be destructible even when
+     * several independent allocations did not complete. The C ingress
+     * sidecar follows the same rollback contract as the pure Core arrays. */
+    minic_core_function_initialize(&function);
+    CHECK(minic_core_function_set_signature(
+        &function, "partial", 7U, minic_type_int(), NULL, 0U));
+    function.block_count = 2U;
+    function.callee_count = 2U;
+    function.call_signature_count = 2U;
+    function.global_count = 2U;
+    function.function_symbol_count = 2U;
+    function.fixed_register_binding_count = 2U;
+    function.inline_asm_count = 2U;
+    function.source_draft->callee_count = 2U;
+    function.source_draft->call_signature_count = 2U;
+    minic_core_function_destroy(&function);
+    CHECK(function.source_draft == NULL && function.blocks == NULL &&
+          function.callees == NULL && function.inline_asms == NULL &&
+          function.block_count == 0U);
+    minic_core_function_destroy(&function);
     minic_core_type_context_destroy(&context);
-    (void)puts("CORE_TYPE_SNAPSHOT=PASS valid malformed direct_core_producer indirect_nominal field_nominal overflow enum_source_proof rollback");
+    (void)puts("CORE_TYPE_SNAPSHOT=PASS valid malformed direct_core_producer indirect_nominal field_nominal overflow enum_source_proof rollback partial_oom");
     return 0;
 }

@@ -139,6 +139,9 @@ typedef struct MinicCoreModule {
 
 void minic_core_module_initialize(MinicCoreModule *module);
 void minic_core_module_destroy(MinicCoreModule *module);
+/* Pure, target-neutral initializer layout contract, reusable by each object
+ * format writer. ISA-specific relocation widths/directives remain Target-owned. */
+bool minic_core_module_global_fragments_valid(const MinicCoreModuleGlobal *global);
 bool minic_core_module_verify(const MinicCoreModule *module);
 
 #endif

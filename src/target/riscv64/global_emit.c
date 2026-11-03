@@ -2,6 +2,7 @@
 #include "target/riscv64/isa.h"
 #include "target/common/global_emit.h"
 #include "target/common/module_global_emit.h"
+#include "core/symbol_identity.h"
 
 #include <stdio.h>
 
@@ -52,16 +53,6 @@ static const MinicCoreType *rv64_module_core_base(
     return minic_core_type_get(types, minic_core_type_unqualified(types, id));
 }
 
-static bool rv64_module_symbol_safe(const char *name) {
-    const unsigned char *p = (const unsigned char *)name;
-    if (p == NULL || *p == '\0') return false;
-    for (; *p != '\0'; ++p)
-        if (!((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') ||
-              (*p >= '0' && *p <= '9') || *p == '_' || *p == '.' || *p == '$'))
-            return false;
-    return true;
-}
-
 static bool rv64_module_array_recursive(
     const MinicCoreTypeContext *types, const MinicCoreType *type) {
     const MinicCoreType *element;
@@ -102,7 +93,7 @@ static bool rv64_module_admit_global(const MinicCoreModule *module,
     size_t scalar_width;
     bool zero_extent;
     if (module == NULL || module->type_context == NULL || global == NULL ||
-        !rv64_module_symbol_safe(global->name) || global->is_extern ||
+        !minic_core_assembler_symbol_lexically_safe(global->name) || global->is_extern ||
         global->is_alias || global->is_thread_local ||
         (global->is_internal && global->is_weak) ||
         global->storage_alignment == 0U ||

@@ -165,6 +165,7 @@ MINIC_SOURCES := \
 	src/target/target_machine_options.c \
 	$(TARGET_SOURCE_POLICY_SOURCES) \
 	src/target/backend.c \
+	src/target/backend_source.c \
 	src/target/backend_core_usage.c \
 	src/target/common/global_emit.c \
 	src/target/common/module_global_emit.c \
@@ -1880,6 +1881,17 @@ check-core-module-rollback:
 
 check-fast: check-core-module-rollback
 
+.PHONY: check-core-module-fragment-contract
+check-core-module-fragment-contract:
+	@mkdir -p "$(BUILD_DIR)/tests/core"
+	$(CC) $(CPPFLAGS) $(MINIC_INCLUDES) $(MINIC_CFLAGS) \
+		tests/core/module_ir_fragment_contract_test.c \
+		src/core/module_ir.c src/core/core_type.c $(MINIC_LDFLAGS) \
+		-o "$(BUILD_DIR)/tests/core/module-ir-fragment-contract"
+	"$(abspath $(BUILD_DIR))/tests/core/module-ir-fragment-contract"
+
+check-fast: check-core-module-fragment-contract
+
 .PHONY: check-loongarch64-linux-va-fixed-overflow
 check-loongarch64-linux-va-fixed-overflow: $(MINIC_CC_BINARY)
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" \
@@ -2142,8 +2154,10 @@ check-fast: check-common-linux-jump-label-contract
 check-target-sealed-symbol-contract:
 	mkdir -p "$(BUILD_DIR)/tests"
 	$(CC) -std=c11 -Wall -Wextra -Wpedantic -Werror $(MINIC_INCLUDES) \
+	  -ffunction-sections -fdata-sections -Wl,--gc-sections \
 	  tests/target/target_sealed_symbol_contract.c \
 	  src/target/common/module_global_emit.c \
+	  src/core/module_ir.c \
 	  -o "$(BUILD_DIR)/tests/target-sealed-symbol-contract"
 	"$(BUILD_DIR)/tests/target-sealed-symbol-contract"
 
@@ -2216,6 +2230,19 @@ check-loong-typed-descriptors: $(LOONG_TYPED_DESCRIPTOR_TEST_OBJECTS)
 	"$(abspath $(LOONG_TYPED_DESCRIPTOR_TEST_BINARY))"
 
 check-fast: check-loong-typed-descriptors
+
+# The C/GNU ASM admission descriptor must never be part of MinicBackend.
+# Both source and machine dispatch use the same target registration inventory.
+.PHONY: check-backend-source-registration
+check-backend-source-registration: $(LOONG_TYPED_DESCRIPTOR_TEST_OBJECTS)
+	mkdir -p "$(BUILD_DIR)/tests/target"
+	$(CC) $(CPPFLAGS) $(MINIC_INCLUDES) $(MINIC_CFLAGS) \
+	  tests/target/backend_source_registration_test.c \
+	  $(LOONG_TYPED_DESCRIPTOR_TEST_OBJECTS) $(MINIC_LDFLAGS) \
+	  -o "$(BUILD_DIR)/tests/target/backend-source-registration"
+	"$(abspath $(BUILD_DIR)/tests/target/backend-source-registration)"
+
+check-fast: check-backend-source-registration
 
 # Real AArch64/x86-64 physical ASM emission must depend on sealed CoreType
 # alone. The public Core schema no longer retains C descriptors: require

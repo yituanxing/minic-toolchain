@@ -2,6 +2,7 @@
 #define MINIC_TARGET_LOONGARCH64_ASM_CONTRACT_SOURCE_H
 
 #include "target/loongarch64/asm_contract.h"
+#include "target/backend_source.h"
 
 /* C/GNU inline ASM source policy only. The machine-facing contract retains
  * typed descriptor IDs, exact ISA templates, and Core effect validators. */

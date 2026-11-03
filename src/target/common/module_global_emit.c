@@ -6,59 +6,36 @@
 #include <stdint.h>
 #include <string.h>
 
-static bool minic_module_global_symbol_safe(const char *symbol) {
-    const unsigned char *cursor = (const unsigned char *)symbol;
-    if (cursor == NULL || *cursor == '\0') return false;
-    for (; *cursor != '\0'; ++cursor) {
-        const unsigned char c = *cursor;
-        if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
-              (c >= '0' && c <= '9') || c == '_' || c == '.' || c == '$'))
-            return false;
-    }
-    return true;
-}
-
-static bool minic_module_global_fragment_shape_valid(
+/* Core owns the target-neutral initializer layout and symbol proof. The
+ * object writer only checks what this GNU data-directive dialect can express:
+ * scalar directive spelling and this target's relocation field width. */
+static bool minic_module_global_fragment_directives_supported(
     const MinicCoreModuleGlobal *global,
     MinicModuleDataDirectiveFn directive, size_t relocation_width) {
-    size_t index, cursor = 0U;
-    if (global == NULL || directive == NULL ||
-        (global->fragment_count != 0U && global->fragments == NULL) ||
-        (global->fragment_count == 0U && global->storage_size != 0U))
+    size_t index;
+    if (directive == NULL ||
+        !minic_core_module_global_fragments_valid(global))
         return false;
     for (index = 0U; index < global->fragment_count; ++index) {
         const MinicCoreModuleFragment *fragment = &global->fragments[index];
         const size_t n = fragment->byte_count;
-        if (fragment->byte_offset != cursor || n > global->storage_size - cursor)
-            return false;
         switch (fragment->kind) {
         case MINIC_CORE_MODULE_FRAGMENT_ZERO:
-            if (n == 0U) return false;
             break;
         case MINIC_CORE_MODULE_FRAGMENT_BITS:
-            if (n == 0U || directive(n) == NULL ||
-                (n != 1U && n != 2U && n != 4U && n != 8U)) return false;
+            if (directive(n) == NULL) return false;
             break;
         case MINIC_CORE_MODULE_FRAGMENT_RELOCATION:
-            if (n == 0U || directive(n) == NULL ||
+            if (directive(n) == NULL ||
                 (relocation_width != 0U && n != relocation_width) ||
                 (n != 4U && n != 8U)) return false;
-            if (fragment->relocation_kind == MINIC_CORE_MODULE_RELOCATION_LABEL) {
-                if (!minic_core_label_symbol_valid(
-                        fragment->relocation_symbol) ||
-                    fragment->relocation_addend != 0) return false;
-            } else if ((fragment->relocation_kind != MINIC_CORE_MODULE_RELOCATION_OBJECT &&
-                        fragment->relocation_kind != MINIC_CORE_MODULE_RELOCATION_FUNCTION) ||
-                       !minic_module_global_symbol_safe(fragment->relocation_symbol)) {
-                return false;
-            }
             break;
         default:
+            /* Core fragment verification already rejects unknown kinds. */
             return false;
         }
-        cursor += n;
     }
-    return cursor == global->storage_size;
+    return true;
 }
 
 bool minic_multi_module_emit_global_fragments(
@@ -66,7 +43,7 @@ bool minic_multi_module_emit_global_fragments(
     MinicModuleDataDirectiveFn directive, bool signed_integer_bits,
     size_t required_relocation_width) {
     size_t index;
-    if (out == NULL || !minic_module_global_fragment_shape_valid(
+    if (out == NULL || !minic_module_global_fragment_directives_supported(
             global, directive, required_relocation_width)) return false;
     for (index = 0U; index < global->fragment_count; ++index) {
         const MinicCoreModuleFragment *fragment = &global->fragments[index];
@@ -127,7 +104,7 @@ bool minic_multi_module_emit_elf_section(
 bool minic_multi_module_emit_elf_binding(
     FILE *out, const MinicCoreModuleGlobal *global) {
     if (out == NULL || global == NULL ||
-        !minic_module_global_symbol_safe(global->name)) return false;
+        !minic_core_assembler_symbol_lexically_safe(global->name)) return false;
     if (global->is_internal) return !global->is_weak;
     return fprintf(out, "%s %s\n", global->is_weak ? ".weak" : ".globl",
                    global->name) >= 0;
@@ -136,7 +113,7 @@ bool minic_multi_module_emit_elf_binding(
 bool minic_multi_module_emit_elf_symbol_visibility(
     FILE *out, MinicCoreModuleVisibility visibility, const char *symbol) {
     const char *directive;
-    if (out == NULL || !minic_module_global_symbol_safe(symbol)) return false;
+    if (out == NULL || !minic_core_assembler_symbol_lexically_safe(symbol)) return false;
     switch (visibility) {
     case MINIC_CORE_MODULE_VISIBILITY_DEFAULT: return true;
     case MINIC_CORE_MODULE_VISIBILITY_HIDDEN: directive = ".hidden"; break;

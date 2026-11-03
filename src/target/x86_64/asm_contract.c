@@ -403,7 +403,7 @@ bool minic_x86_64_requires_qualified_input_asm(const MinicInlineAsm *src) {
          x86_linux_compact_asm_equals(
              src->template_text, src->template_length, "movb%1,%%al")))
         return true;
-    return minic_backend_inline_asm_prefix_matches(
+    return minic_source_backend_inline_asm_prefix_matches(
         src, reserved, sizeof(reserved) / sizeof(reserved[0]));
 }
 

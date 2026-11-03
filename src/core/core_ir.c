@@ -238,33 +238,41 @@ void minic_core_function_destroy(MinicCoreFunction *function) {
         return;
     }
     minic_core_function_release_source_draft(function);
-    for (block_index = 0U; block_index < function->block_count; ++block_index) {
+    for (block_index = 0U; function->blocks != NULL &&
+                             block_index < function->block_count; ++block_index) {
         free(function->blocks[block_index].instructions);
         free(function->blocks[block_index].local_label_symbol);
     }
-    for (callee_index = 0U; callee_index < function->callee_count; ++callee_index) {
+    for (callee_index = 0U; function->callees != NULL &&
+                              callee_index < function->callee_count; ++callee_index) {
         free(function->callees[callee_index].name);
         free(function->callees[callee_index].core_parameter_type_ids);
     }
     for (call_signature_index = 0U;
+         function->call_signatures != NULL &&
          call_signature_index < function->call_signature_count;
          ++call_signature_index) {
         free(function->call_signatures[call_signature_index].core_parameter_type_ids);
     }
-    for (global_index = 0U; global_index < function->global_count; ++global_index) {
+    for (global_index = 0U; function->globals != NULL &&
+                             global_index < function->global_count; ++global_index) {
         free(function->globals[global_index].name);
     }
     for (function_symbol_index = 0U;
+         function->function_symbols != NULL &&
          function_symbol_index < function->function_symbol_count;
          ++function_symbol_index) {
         free(function->function_symbols[function_symbol_index].name);
     }
     for (fixed_register_index = 0U;
+         function->fixed_register_bindings != NULL &&
          fixed_register_index < function->fixed_register_binding_count;
          ++fixed_register_index) {
         free(function->fixed_register_bindings[fixed_register_index].register_name);
     }
-    for (inline_asm_index = 0U; inline_asm_index < function->inline_asm_count; ++inline_asm_index) {
+    for (inline_asm_index = 0U; function->inline_asms != NULL &&
+                                 inline_asm_index < function->inline_asm_count;
+         ++inline_asm_index) {
         MinicCoreInlineAsm *inline_asm = &function->inline_asms[inline_asm_index];
         size_t clobber_index;
 
@@ -277,7 +285,8 @@ void minic_core_function_destroy(MinicCoreFunction *function) {
                      resolved_index < 3U; ++resolved_index)
                 free(inline_asm->resolved_immediates[resolved_index]);
         }
-        for (clobber_index = 0U; clobber_index < inline_asm->register_clobber_count;
+        for (clobber_index = 0U; inline_asm->register_clobbers != NULL &&
+                                  clobber_index < inline_asm->register_clobber_count;
              ++clobber_index) {
             free(inline_asm->register_clobbers[clobber_index].name);
         }
