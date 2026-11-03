@@ -6,7 +6,6 @@
 #include "target/aarch64/frame_emit.h"
 #include "target/common/lp64_frame.h"
 #include "core/core_ir.h"
-#include "frontend/ast.h"
 #include "target/target_info.h"
 #include <stdbool.h>
 #include <stddef.h>

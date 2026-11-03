@@ -96,7 +96,6 @@ typedef struct MinicCoreModuleGlobal {
     bool is_zero_initialized;
     bool is_tentative;
     bool is_block_scope_extern_only;
-    bool force_emit;
     bool is_thread_local;
     /* Sealed target-neutral proof for Common ELF NOBITS .bss policy.
      * RV64's independent explicit-section @progbits policy need not use it. */
@@ -119,7 +118,6 @@ typedef struct MinicCoreModuleFunctionSymbol {
     bool is_weak;
     bool is_constructor;
     bool is_variadic;
-    bool is_noreturn;
 } MinicCoreModuleFunctionSymbol;
 
 typedef struct MinicCoreModuleFileAsm {

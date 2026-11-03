@@ -1,10 +1,19 @@
 #ifndef MINIC_TARGET_DATA_LAYOUT_H
 #define MINIC_TARGET_DATA_LAYOUT_H
 
-#include "frontend/ast.h"
+#include "frontend/type.h"
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
+
+/* Source object traversal requires a complete C AST only in data_layout.c.
+ * Machine users need the target's immutable byte/align descriptor, not the
+ * parser's expression, statement, or translation-unit representation. */
+typedef struct MinicC0Program MinicC0Program;
+typedef struct MinicGlobalObject MinicGlobalObject;
+typedef struct MinicRecord MinicRecord;
+typedef struct MinicGlobalRelocation MinicGlobalRelocation;
 
 typedef enum MinicByteOrder {
     MINIC_BYTE_ORDER_UNKNOWN = 0,

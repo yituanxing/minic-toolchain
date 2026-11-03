@@ -250,6 +250,7 @@ MINIC_SOURCES := \
 	src/target/loongarch64/codegen.c \
 	src/target/loongarch64/asm_contract.c \
 	src/target/loongarch64/simd_asm.c \
+	src/target/loongarch64/simd_source_policy.c \
 	src/target/loongarch64/block_emit.c \
 	src/target/loongarch64/residual_emit.c \
 	src/target/loongarch64/scalar_normalize.c \
@@ -263,6 +264,8 @@ MINIC_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(MINIC_SOURCES))
 MINIC_CC_BINARY := $(BUILD_DIR)/bin/minic-cc
 FUNCTION_DIAGNOSTIC_TEST_OBJECT := $(BUILD_DIR)/obj/tests/frontend/function_diagnostic_attribute_test.o
 FUNCTION_DIAGNOSTIC_TEST_BINARY := $(BUILD_DIR)/tests/frontend/function-diagnostic-attribute-test
+BACKEND_MODULE_ARENA_TEST_OBJECT := $(BUILD_DIR)/obj/tests/target/backend_module_arena_test.o
+BACKEND_MODULE_ARENA_TEST_BINARY := $(BUILD_DIR)/tests/target/backend-module-arena-test
 DIRECT_LP64_ASM_UNIT_BINARY := $(BUILD_DIR)/tests/compiler/c0/direct-lp64-asm-preflight-unit
 MINIC_DRIVER_OBJECTS := $(BUILD_DIR)/obj/tools/minic/main.o \
 	$(BUILD_DIR)/obj/src/target/target_catalog.o
@@ -552,6 +555,16 @@ $(MINIC_CC_BINARY): $(MINIC_OBJECTS)
 $(FUNCTION_DIAGNOSTIC_TEST_BINARY): $(filter-out $(BUILD_DIR)/obj/tools/minic-cc/main.o,$(MINIC_OBJECTS)) $(FUNCTION_DIAGNOSTIC_TEST_OBJECT)
 	@mkdir -p "$(dir $@)"
 	$(CC) $^ $(MINIC_LDFLAGS) -o "$@"
+
+$(BACKEND_MODULE_ARENA_TEST_BINARY): $(filter-out $(BUILD_DIR)/obj/tools/minic-cc/main.o,$(MINIC_OBJECTS)) $(BACKEND_MODULE_ARENA_TEST_OBJECT)
+	@mkdir -p "$(dir $@)"
+	$(CC) $^ $(MINIC_LDFLAGS) -o "$@"
+
+.PHONY: check-backend-module-arena
+check-backend-module-arena: $(BACKEND_MODULE_ARENA_TEST_BINARY)
+	"$(BACKEND_MODULE_ARENA_TEST_BINARY)"
+
+check-fast: check-backend-module-arena
 
 .PHONY: check-function-diagnostic-attribute
 check-function-diagnostic-attribute: $(FUNCTION_DIAGNOSTIC_TEST_BINARY)
@@ -2119,6 +2132,17 @@ check-common-linux-jump-label-contract:
 	"$(BUILD_DIR)/tests/common-linux-jump-label-contract"
 
 check-fast: check-common-linux-jump-label-contract
+
+# The Core/machine header closure must never drag in the C AST. A standalone
+# translation unit catches accidental transitive dependencies before backend
+# implementation files can mask them with a frontend include of their own.
+.PHONY: check-target-machine-header-boundary
+check-target-machine-header-boundary:
+	$(CC) -std=c11 $(COMMON_WARNINGS) -Werror -Iinclude -Isrc \
+		-fsyntax-only tests/target/machine_header_ast_boundary.c
+	@echo "TARGET_MACHINE_HEADER_BOUNDARY=PASS c_ast=absent"
+
+check-fast: check-target-machine-header-boundary
 
 # x86 Linux structured ASM families retire legacy machine-side template
 # dispatch; GNU ELF/native is available on the host, no cross toolchain.

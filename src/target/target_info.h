@@ -1,6 +1,7 @@
 #ifndef MINIC_TARGET_TARGET_INFO_H
 #define MINIC_TARGET_TARGET_INFO_H
 
+#include "common/call_frame_address.h"
 #include "target/data_layout.h"
 #include "target/riscv/isa_features.h"
 #include "target/target_catalog.h"
@@ -98,11 +99,21 @@ struct MinicTargetAliasAbiPolicy;
 struct MinicTargetSourceLanguagePolicy;
 struct MinicTargetVaCursorSourceAbiPolicy;
 struct MinicCoreModule;
+struct MinicTargetInfo;
+typedef struct MinicFunction MinicFunction;
+
+/* A machine form is looked up independently of C source-signature types.
+ * Both qualifications read one target-owned instruction descriptor table;
+ * native CALL emission must never ask Source to reconstruct a MinicType. */
+typedef bool (*MinicTargetMachineBuiltinFormLookup)(
+    const struct MinicTargetInfo *, const char *, size_t,
+    size_t *, const char **, size_t *);
 
 typedef struct MinicTargetInfo {
     MinicTargetArchitecture architecture;
     const struct MinicTargetAsmSourcePolicy *asm_source_policy;
     const struct MinicTargetMachineBuiltinPolicy *machine_builtin_policy;
+    MinicTargetMachineBuiltinFormLookup machine_builtin_form_lookup;
     const struct MinicTargetAliasAbiPolicy *alias_abi_policy;
     const struct MinicTargetSourceLanguagePolicy *source_language_policy;
     /* C source identity and Core's ABI state-copy opcode are independently
@@ -190,11 +201,13 @@ bool minic_target_info_machine_builtin_signature(
     char *callee, size_t callee_capacity, MinicType *result,
     MinicType arguments[3], size_t *argument_count,
     const char **mnemonic, size_t *immediate_index);
-/* Machine-only view of the same target builtin descriptor. C parameter
- * checking belongs to Source and CoreType call identities to the verifier. */
+/* Machine-only view of the same descriptor. The lookup key is the sealed
+ * internal Core callee name, NOT a GNU source builtin spelling or C alias.
+ * No source signature or MinicType is reconstructed. CoreType call identities
+ * remain checked by the machine CALL emitter. */
 bool minic_target_info_machine_builtin_form(
-    const MinicTargetInfo *target, const char *spelling, size_t length,
-    char *callee, size_t callee_capacity, size_t *argument_count,
+    const MinicTargetInfo *target, const char *internal_callee, size_t length,
+    size_t *argument_count,
     const char **mnemonic, size_t *immediate_index);
 bool minic_target_info_header_attribute_supported(const MinicTargetInfo *target,
                                                   const char *spelling,

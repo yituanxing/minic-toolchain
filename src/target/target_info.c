@@ -1,5 +1,7 @@
 #include "target/target_info.h"
 #include "core/module_ir.h"
+#include "frontend/ast.h"
+#include "target/loongarch64/machine_builtin_form.h"
 #include "target/source_policy/source_policy.h"
 
 #include <stdint.h>
@@ -275,6 +277,7 @@ static const MinicTargetLanguageDescriptor minic_language_loongarch64 = {
         .target = {
             .asm_source_policy = &minic_loongarch64_asm_source_policy,
             .machine_builtin_policy = &minic_loongarch64_machine_builtin_policy,
+            .machine_builtin_form_lookup = minic_loongarch64_machine_builtin_form,
             .alias_abi_policy = &minic_loongarch64_alias_abi_policy,
             .integer_model = &minic_lp64_signed_char_integer_model,
             .word_integer_rank = MINIC_INTEGER_RANK_LONG,
@@ -1047,15 +1050,13 @@ bool minic_target_info_machine_builtin_signature(
 }
 
 bool minic_target_info_machine_builtin_form(
-    const MinicTargetInfo *target, const char *spelling, size_t length,
-    char *callee, size_t callee_capacity, size_t *argument_count,
+    const MinicTargetInfo *target, const char *internal_callee, size_t length,
+    size_t *argument_count,
     const char **mnemonic, size_t *immediate_index) {
-    MinicType source_return;
-    MinicType source_arguments[3];
-    return minic_target_info_machine_builtin_signature(
-        target, spelling, length, callee, callee_capacity,
-        &source_return, source_arguments, argument_count,
-        mnemonic, immediate_index);
+    return target != NULL && target->machine_builtin_form_lookup != NULL &&
+           target->machine_builtin_form_lookup(
+               target, internal_callee, length, argument_count,
+               mnemonic, immediate_index);
 }
 
 bool minic_target_info_inline_asm_memory_input_constraint_supported(

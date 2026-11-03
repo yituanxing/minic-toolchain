@@ -3,6 +3,7 @@
 
 #include "frontend/token.h"
 #include "frontend/type.h"
+#include "common/call_frame_address.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -131,11 +132,6 @@ typedef enum MinicBuiltinUnaryOperator {
     /* IEEE-754 unordered self-comparison; operand must be evaluated once. */
     MINIC_BUILTIN_UNARY_ISNAN
 } MinicBuiltinUnaryOperator;
-
-typedef enum MinicCallFrameAddressKind {
-    MINIC_CALL_FRAME_ADDRESS_RETURN = 0,
-    MINIC_CALL_FRAME_ADDRESS_FRAME
-} MinicCallFrameAddressKind;
 
 typedef enum MinicOverflowOperator {
     MINIC_OVERFLOW_ADD = 0,

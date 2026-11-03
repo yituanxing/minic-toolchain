@@ -76,9 +76,33 @@ lacks src/target/riscv64/frame_layout.c 'if (program != NULL)'
 # form and typed operands without reopening the mutable source Program.
 has src/core/core_lower_asm_target.c 'minic_backend_seal_normalized_inline_asm('
 has src/target/backend.c 'minic_loongarch64_seal_normalized_inline_asm'
-has src/target/loongarch64/simd_asm.c 'loong_simd_same_machine_effects(&original, &machine)'
+has src/target/loongarch64/simd_source_policy.c 'loong_simd_same_machine_effects(&original, &machine)'
 has src/target/loongarch64/simd_asm.c 'MINIC_LOONG_MACHINE_ASM_SIMD'
 lacks src/target/loongarch64/simd_asm.c 'ctx->program'
+lacks src/target/loongarch64/simd_asm.c 'MinicC0Program'
+lacks src/target/loongarch64/simd_asm.c 'MinicType'
+has src/target/loongarch64/simd_source_policy.c 'minic_loongarch64_simd_qualify_source('
+# A C AST may be used to qualify GNU source ASM, not smuggled through the
+# headers consumed by five Core-only machine emitters.
+for header in \
+  src/target/data_layout.h src/target/backend.h \
+  src/target/common/linux_jump_label_asm.h \
+  src/target/common/lp64_frame.h \
+  src/target/riscv32/rv32_emit.h \
+  src/target/riscv32/rv32_internal.h \
+  src/target/x86_64/codegen.h \
+  src/target/x86_64/call_plan.h \
+  src/target/x86_64/frame.h \
+  src/target/aarch64/codegen.h \
+  src/target/aarch64/block_emit.h \
+  src/target/loongarch64/codegen.h \
+  src/target/loongarch64/block_emit.h; do
+  lacks "$header" 'frontend/ast.h'
+done
+has src/target/common/linux_jump_label_source.h 'minic_multi_qualify_linux_jump_label_asm_goto('
+has src/target/backend.c 'functions[index].type_context != module->type_context'
+has src/target/target_info.c 'target->machine_builtin_form_lookup('
+lacks src/target/loongarch64/call_emit.c '"__builtin_loongarch_"'
 has src/target/common/direct_residual_plan.c \
   'minic_multi_direct_integer_cast_plan('
 # Once attached, Common/Direct admission and AArch64 integer lowering only
@@ -1217,7 +1241,9 @@ cc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow \
   -Wstrict-prototypes -Wmissing-prototypes -Werror \
   -ffunction-sections -fdata-sections -Wl,--gc-sections \
   -Iinclude -Isrc tests/compiler/c0/probe-loong-simd-normalized-seal.c \
-  src/target/loongarch64/simd_asm.c src/target/backend.c src/frontend/type.c \
+  src/target/loongarch64/simd_asm.c \
+  src/target/loongarch64/simd_source_policy.c \
+  src/target/backend.c src/frontend/type.c \
   -o "$work/loong-simd-seal"
 "$work/loong-simd-seal"
 

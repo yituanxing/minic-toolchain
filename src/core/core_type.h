@@ -47,7 +47,6 @@ typedef struct MinicCoreRecordField {
     bool is_packed;
     bool is_flexible_array;
     bool is_zero_length_array;
-    bool is_anonymous_member;
 } MinicCoreRecordField;
 
 typedef struct MinicCoreType {

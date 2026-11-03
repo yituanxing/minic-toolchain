@@ -1,4 +1,5 @@
 #include "target/x86_64/asm_contract.h"
+#include "frontend/ast.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -1209,6 +1210,17 @@ unsigned int minic_x86_64_kvm_movdqa_form(const char *text, size_t length) {
         if (x86_linux_compact_asm_equals(text, length, store)) return reg + 17U;
     }
     return 0U;
+}
+
+/* GNU C vector-size/rank/sign qualification belongs to source ingress.
+ * The machine emitter independently verifies the sealed Core vector shape
+ * and never receives a source MinicType. */
+bool minic_x86_64_kvm_movdqa_u32x4_type(MinicType type) {
+    return minic_type_is_gnu_fixed_vector(type) &&
+        type.gnu_vector_bytes == 16U &&
+        type.gnu_vector_element_kind == MINIC_TYPE_BASE_INT &&
+        type.integer_rank == MINIC_INTEGER_RANK_INT &&
+        type.integer_sign == MINIC_INTEGER_SIGN_UNSIGNED;
 }
 
 /* KVM's `sse128_t` is a genuine GNU `u32 vector_size(16)` object: x86's

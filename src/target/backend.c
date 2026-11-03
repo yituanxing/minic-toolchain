@@ -1,5 +1,7 @@
 #include "target/backend.h"
+#include "frontend/ast.h"
 #include "core/module_ir.h"
+#include "target/common/program_visit.h"
 
 #include "target/riscv64/codegen.h"
 #include "target/riscv32/rv32_emit.h"
@@ -306,12 +308,29 @@ bool minic_backend_emit_assembly_with_module(
     const MinicCoreFunction *functions, size_t function_count,
     bool function_sections, const MinicCoreModule *module,
     MinicDiagnostic *diagnostic) {
+    size_t index;
     if (backend == NULL || target == NULL || module == NULL ||
         backend != minic_backend_for_target(target) ||
         backend->emit_module == NULL ||
         !minic_core_module_verify(module) ||
-        module->function_count != function_count)
+        module->function_count != function_count ||
+        (function_count != 0U && functions == NULL))
         return false;
+    /* Core type IDs have arena-local meaning. Never pass a valid Module
+     * paired with a definition lowered under a different type arena. Source
+     * draft adapters may exist during lowering but cannot be published to a
+     * machine writer. Skipped internal definitions and mere declarations do
+     * not own a lowered Core function and are intentionally exempt. */
+    for (index = 0U; index < function_count; ++index) {
+        if (!minic_program_module_function_selected(
+                &module->function_symbols[index],
+                MINIC_PROGRAM_FUNCTION_LIVE_DEFINITIONS))
+            continue;
+        if (functions[index].type_context != module->type_context ||
+            functions[index].source_draft != NULL ||
+            functions[index].source_draft_release != NULL)
+            return false;
+    }
     /* Once a module has been attached, failure remains a real failure:
      * emitting from the mutable source globals would violate ownership. */
     return backend->emit_module(output_path, target,

@@ -2,7 +2,6 @@
 #define MINIC_TARGET_LOONGARCH64_CODEGEN_H
 
 #include "core/core_ir.h"
-#include "frontend/ast.h"
 #include "minic/compiler.h"
 #include "target/target_info.h"
 

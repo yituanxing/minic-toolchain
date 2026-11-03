@@ -254,14 +254,6 @@ bool minic_x86_64_emit_raid6_simd(
     return fputc('\n', out) != EOF;
 }
 
-bool minic_x86_64_kvm_movdqa_u32x4_type(MinicType type) {
-    return minic_type_is_gnu_fixed_vector(type) &&
-        type.gnu_vector_bytes == 16U &&
-        type.gnu_vector_element_kind == MINIC_TYPE_BASE_INT &&
-        type.integer_rank == MINIC_INTEGER_RANK_INT &&
-        type.integer_sign == MINIC_INTEGER_SIGN_UNSIGNED;
-}
-
 bool minic_x86_64_emit_kvm_movdqa(
     FILE *out, const MinicCoreFunction *fn, const MinicX86Frame *frame,
     const MinicCoreInstruction *ins, const MinicCoreInlineAsm *info) {

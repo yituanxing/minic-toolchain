@@ -1,4 +1,6 @@
 #include "target/source_policy/source_policy.h"
+#include "frontend/ast.h"
+#include "target/loongarch64/machine_builtin_form.h"
 
 #include <string.h>
 
@@ -129,11 +131,26 @@ static const LoongBuiltinDesc loong_builtins[] = {
 #undef UI
 #undef UL
 
-static bool loong_machine_builtin_signature(
+/* Machine and Source lookup share only this immutable ISA descriptor index.
+ * In particular, the native path never reconstructs a GNU C identifier. */
+static const LoongBuiltinDesc *loong_builtin_descriptor_suffix(
+    const char *suffix, size_t suffix_length) {
+    size_t i;
+    if (suffix == NULL || suffix_length == 0U) return NULL;
+    for (i = 0U; i < sizeof(loong_builtins) / sizeof(loong_builtins[0]); ++i) {
+        const LoongBuiltinDesc *descriptor = &loong_builtins[i];
+        if (strlen(descriptor->suffix) == suffix_length &&
+            memcmp(suffix, descriptor->suffix, suffix_length) == 0)
+            return descriptor;
+    }
+    return NULL;
+}
+
+/* Original GNU source spelling and a few admitted header wrappers map to
+ * one unspellable internal Core callee. Source alone performs this mapping. */
+static const LoongBuiltinDesc *loong_source_builtin_descriptor(
     const MinicTargetInfo *target, const char *spelling, size_t length,
-    char *callee, size_t callee_capacity, MinicType *result,
-    MinicType arguments[3], size_t *argument_count,
-    const char **mnemonic, size_t *immediate_index) {
+    char *callee, size_t callee_capacity) {
     static const char gnu_prefix[] = "__builtin_loongarch_";
     static const char internal_prefix[] = "__minic_target_builtin_loongarch_";
     static const char cpucfg_intrinsic[] = "__cpucfg";
@@ -151,6 +168,7 @@ static bool loong_machine_builtin_signature(
                sizeof(cpucfg_intrinsic) - 1U) == 0;
     bool iocsr_alias = false;
     const char *suffix;
+    const LoongBuiltinDesc *descriptor;
     size_t i, suffix_length, prefix_length;
     if (spelling != NULL) {
         for (i = 0U; i < sizeof(iocsr_wrappers) / sizeof(iocsr_wrappers[0]); ++i)
@@ -160,37 +178,71 @@ static bool loong_machine_builtin_signature(
                 break;
             }
     }
-    if (target == NULL || spelling == NULL || result == NULL ||
-        arguments == NULL || argument_count == NULL || mnemonic == NULL ||
-        immediate_index == NULL || callee == NULL || callee_capacity == 0U ||
+    if (target == NULL || spelling == NULL ||
+        callee == NULL || callee_capacity == 0U ||
         (!cpucfg_alias && !iocsr_alias &&
          (length <= sizeof(gnu_prefix) - 1U ||
           memcmp(spelling, gnu_prefix, sizeof(gnu_prefix) - 1U) != 0)))
-        return false;
+        return NULL;
     suffix = cpucfg_alias || iocsr_alias
         ? spelling + 2U : spelling + sizeof(gnu_prefix) - 1U;
     suffix_length = cpucfg_alias || iocsr_alias
         ? length - 2U : length - (sizeof(gnu_prefix) - 1U);
     prefix_length = sizeof(internal_prefix) - 1U;
     if (suffix_length > SIZE_MAX - prefix_length ||
-        prefix_length + suffix_length >= callee_capacity) return false;
-    for (i = 0U; i < sizeof(loong_builtins) / sizeof(loong_builtins[0]); ++i) {
-        const LoongBuiltinDesc *descriptor = &loong_builtins[i];
-        size_t j;
-        if (strlen(descriptor->suffix) != suffix_length ||
-            memcmp(suffix, descriptor->suffix, suffix_length) != 0) continue;
-        (void)memcpy(callee, internal_prefix, prefix_length);
-        (void)memcpy(callee + prefix_length, descriptor->suffix, suffix_length);
-        callee[prefix_length + suffix_length] = '\0';
-        *result = loong_builtin_type(target, descriptor->result);
-        for (j = 0U; j < descriptor->argc; ++j)
-            arguments[j] = loong_builtin_type(target, descriptor->arg[j]);
-        *argument_count = descriptor->argc;
-        *mnemonic = descriptor->mnemonic;
-        *immediate_index = descriptor->immediate_index;
-        return true;
-    }
-    return false;
+        prefix_length + suffix_length >= callee_capacity) return NULL;
+    descriptor = loong_builtin_descriptor_suffix(suffix, suffix_length);
+    if (descriptor == NULL) return NULL;
+    (void)memcpy(callee, internal_prefix, prefix_length);
+    (void)memcpy(callee + prefix_length, descriptor->suffix, suffix_length);
+    callee[prefix_length + suffix_length] = '\0';
+    return descriptor;
+}
+
+/* Core machine identity is the qualified internal name, not the original
+ * GNU source spelling. It admits no source aliases or arbitrary CALL names. */
+bool minic_loongarch64_machine_builtin_form(
+    const MinicTargetInfo *target, const char *internal_callee, size_t length,
+    size_t *argument_count,
+    const char **mnemonic, size_t *immediate_index) {
+    static const char internal_prefix[] =
+        "__minic_target_builtin_loongarch_";
+    const size_t prefix_length = sizeof(internal_prefix) - 1U;
+    const LoongBuiltinDesc *descriptor;
+    if (target == NULL || internal_callee == NULL ||
+        argument_count == NULL || mnemonic == NULL || immediate_index == NULL ||
+        length <= prefix_length ||
+        memcmp(internal_callee, internal_prefix, prefix_length) != 0)
+        return false;
+    descriptor = loong_builtin_descriptor_suffix(
+        internal_callee + prefix_length, length - prefix_length);
+    if (descriptor == NULL) return false;
+    *argument_count = descriptor->argc;
+    *mnemonic = descriptor->mnemonic;
+    *immediate_index = descriptor->immediate_index;
+    return true;
+}
+
+static bool loong_machine_builtin_signature(
+    const MinicTargetInfo *target, const char *spelling, size_t length,
+    char *callee, size_t callee_capacity, MinicType *result,
+    MinicType arguments[3], size_t *argument_count,
+    const char **mnemonic, size_t *immediate_index) {
+    const LoongBuiltinDesc *descriptor;
+    size_t j;
+    if (result == NULL || arguments == NULL || argument_count == NULL ||
+        mnemonic == NULL || immediate_index == NULL)
+        return false;
+    descriptor = loong_source_builtin_descriptor(
+        target, spelling, length, callee, callee_capacity);
+    if (descriptor == NULL) return false;
+    *result = loong_builtin_type(target, descriptor->result);
+    for (j = 0U; j < descriptor->argc; ++j)
+        arguments[j] = loong_builtin_type(target, descriptor->arg[j]);
+    *argument_count = descriptor->argc;
+    *mnemonic = descriptor->mnemonic;
+    *immediate_index = descriptor->immediate_index;
+    return true;
 }
 
 const MinicTargetAsmSourcePolicy minic_loongarch64_asm_source_policy = {

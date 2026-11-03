@@ -706,21 +706,6 @@ MinicCoreLowerStatus minic_core_lower_internal_lower_condition_branch(MinicCoreL
                               condition_is_zero ? when_false : when_true);
         }
     }
-    if (context->source_function != NULL &&
-        context->source_function->name != NULL &&
-        strcmp(context->source_function->name, "genl_op_from_split") == 0) {
-        (void)fprintf(stderr,
-                      "GENL_COND_ENTER expression=%zu kind=%d block=%u true=%u false=%u op=%d\\n",
-                      (size_t)expression_id,
-                      (int)expression->kind,
-                      (unsigned int)context->block_id,
-                      (unsigned int)when_true,
-                      (unsigned int)when_false,
-                      expression->kind == MINIC_EXPRESSION_BINARY
-                          ? (int)expression->value.binary.operator_kind
-                          : expression->kind == MINIC_EXPRESSION_UNARY
-                          ? (int)expression->value.unary.operator_kind : -1);
-    }
     if (expression->kind == MINIC_EXPRESSION_UNARY &&
         expression->value.unary.operator_kind == MINIC_UNARY_LOGICAL_NOT) {
         const MinicExpression *operand;
@@ -826,17 +811,6 @@ MinicCoreLowerStatus minic_core_lower_internal_lower_condition_branch(MinicCoreL
         return MINIC_CORE_LOWER_OK;
     }
 
-    if (context->source_function != NULL &&
-        context->source_function->name != NULL &&
-        strcmp(context->source_function->name, "genl_op_from_split") == 0) {
-        (void)fprintf(stderr,
-                      "GENL_COND_EMIT expression=%zu kind=%d block=%u true=%u false=%u\n",
-                      (size_t)expression_id,
-                      (int)expression->kind,
-                      (unsigned int)context->block_id,
-                      (unsigned int)when_true,
-                      (unsigned int)when_false);
-    }
     status = lower_expression(context, expression_id, &condition);
     if (status != MINIC_CORE_LOWER_OK) {
         if (getenv("MINIC_CORE_EXPR_FAILURE_TRACE") != NULL)

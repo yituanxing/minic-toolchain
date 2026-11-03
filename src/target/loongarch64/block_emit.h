@@ -5,7 +5,6 @@
 #include "target/common/direct_block_context.h"
 #include "target/common/lp64_frame.h"
 #include "core/core_ir.h"
-#include "frontend/ast.h"
 #include "target/target_info.h"
 #include <stdbool.h>
 #include <stddef.h>

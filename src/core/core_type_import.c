@@ -200,7 +200,6 @@ static bool import_record(MinicCoreTypeImporter *importer, MinicType source,
         fields[i].is_packed = field->is_packed;
         fields[i].is_flexible_array = field->is_flexible_array;
         fields[i].is_zero_length_array = field->is_zero_length_array;
-        fields[i].is_anonymous_member = field->is_anonymous_member;
         if (field->is_bit_field) {
             if (!bit_field_storage_alignment(record, field, field_alignment,
                                              &fields[i].alignment)) goto failed;

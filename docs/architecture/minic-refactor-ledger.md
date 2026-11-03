@@ -1184,3 +1184,61 @@ debug `make check-fast` PASS. This is compiler cleanup and native/source-
 level regression evidence, **not** a claim that five Linux images boot under
 QEMU. Cross-toolchain GNU assembly/link and five-architecture runtime
 certification remain outside this refactor's execution evidence.
+
+## IR-P21 — Read-only five-target ownership audit (2026-11-03)
+
+Re-read the entire parse/inline specialization/Core lowering/reachability/
+Module sealing/machine emit chain alongside each ISA writer. The remaining
+machine paths are all Core + finalized Module; the two function-pruning passes
+are distinct stages in a function/static-global/relocation-root fixed point,
+not duplicate emitters. Identify three unconsumed Core/Module C metadata
+copies, a missing CoreFunction/Module type-arena identity check, and target
+GNU ASM source qualifiers interleaved with physical emitters. Also identify
+the LoongArch64 builtin machine-form query that reconstructs C types merely
+to learn a machine mnemonic. This phase was strictly read-only.
+
+## IR-P22 — Seal type-arena ownership and separate Source ASM from machine ISA (2026-11-03)
+
+Address the coupled classes from the P21 inventory across the actual owning
+layers, without adding a new IR, cloning opcode lists or altering ABI policy:
+
+- **Core/Module publication:** remove the unused Core record anonymous-member
+  marker, Module global `force_emit` copy and Module function `is_noreturn`
+  copy. Keep the actively consumed C source fields. All five machine writers
+  now share a fail-closed Backend admission check: a live Core definition's
+  type arena must be *identical* to the sealed Module's arena, and it must not
+  retain an unpublished SourceDraft. Declarations and pruned internal slots
+  remain legal without a lowered CoreFunction. The new real-writer unit gate
+  verifies both admitted output and mismatched-arena/no-partial-output rejects.
+- **Source/Target GNU ASM ownership:** x86 KVM MOVDQA C vector-type
+  qualification moves out of `raid6_simd.c` into x86 Source ASM admission;
+  the shared machine file stays Core/ISA-only. LoongArch64 LSX/LASX likewise
+  separates C operand admission and post-normalization seal into
+  `simd_source_policy.c`, retaining the one exact machine-template parser and
+  Core machine emitter in `simd_asm.c`. Source and machine share the parsed
+  instruction effects, not duplicated recognizers. The LP64 Linux static-key
+  source qualifier moves to `linux_jump_label_source.h`, while the Core side
+  retains a C-free template/relocation contract.
+- **Loong machine builtins:** source GNU aliases/signatures and native CALL
+  form lookup project from the same 24-entry target descriptor. The native
+  emitter queries the sealed unspellable Core callee directly, never rebuilds
+  the source GNU builtin name or constructs and discards a `MinicType`. Keep
+  Core call signature, GPR ABI and immediate validation. Add alias, invalid
+  internal identity and cross-target negative checks.
+- **Header boundaries:** `DataLayout` and `Backend` machine headers expose
+  only C AST *opaque* declaration handles when necessary; target Core emit
+  headers across RV32, RV64, x86-64, AArch64, LoongArch64 and Common stop
+  importing the full C AST transitively. Move the shared call-frame-address
+  semantic enum into `common` and give source `.c` files explicit AST imports.
+  A standalone include-only machine-header gate ensures this separation
+  cannot regress. Remove six function-name-specific `GENL_*` diagnostic
+  prints; preserve CFG/constant-fact behavior and supported error tracing.
+
+**Verification:** `make MODE=debug -j8 check-fast` PASS (including CoreType
+snapshot, Module emission, x86 typed ASM, AArch64 and LoongArch64 normalized
+seal, Source/Target descriptor tests); `make MODE=release CFLAGS=-Werror -j8
+build/release/bin/minic-cc` PASS; dedicated Backend type-arena negative test
+PASS; standalone machine-header AST isolation PASS. Target-specific host/native
+SIMD and GNU source tests exercised the unchanged acceptance/rejection
+contracts. Cross-GNU/QEMU full Linux five-architecture runtime qualification
+was **not** performed; these native gates do not prove Linux boot.

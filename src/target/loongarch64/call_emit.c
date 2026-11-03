@@ -308,35 +308,22 @@ bool minic_loongarch64_emit_abi_instruction(
             } else {
                 const MinicCoreCallee *callee =
                     &fn->callees[ins->value.call.callee_id];
-                /* Revalidate the complete semantic ABI and exact ISA
-                 * mnemonic against the SAME TargetInfo table as Frontend.
-                 * No arbitrary GNU asm is forwarded through a raw template. */
+                /* Revalidate the sealed internal Core callee against the
+                 * target's machine-form descriptor, independently of the
+                 * original GNU source spelling/C parameter type identities.
+                 * The ISA descriptor is shared with the Source projection. */
                 static const char internal_prefix[] =
                     "__minic_target_builtin_loongarch_";
-                static const char gnu_prefix[] = "__builtin_loongarch_";
                 if (callee->name != NULL &&
                     strncmp(callee->name, internal_prefix,
                             sizeof(internal_prefix) - 1U) == 0) {
-                    char builtin_name[128], validated_name[128];
                     const char *mnemonic = NULL;
                     size_t argc = 0U, immediate_index = SIZE_MAX;
                     size_t k;
                     uint64_t imm = 0U;
-                    size_t suffix_length =
-                        strlen(callee->name + sizeof(internal_prefix) - 1U);
-                    if (sizeof(gnu_prefix) - 1U + suffix_length >=
-                        sizeof(builtin_name))
-                        return false;
-                    (void)memcpy(builtin_name, gnu_prefix,
-                                 sizeof(gnu_prefix) - 1U);
-                    (void)memcpy(builtin_name + sizeof(gnu_prefix) - 1U,
-                                 callee->name + sizeof(internal_prefix) - 1U,
-                                 suffix_length + 1U);
                     if (!minic_target_info_machine_builtin_form(
-                            target, builtin_name, strlen(builtin_name),
-                            validated_name, sizeof(validated_name),
+                            target, callee->name, strlen(callee->name),
                             &argc, &mnemonic, &immediate_index) ||
-                        strcmp(validated_name, callee->name) != 0 ||
                         ins->core_type_id != callee->core_return_type_id ||
                         callee->parameter_count != argc || callee->is_variadic ||
                         (argc != 0U && callee->core_parameter_type_ids == NULL) ||

@@ -1,6 +1,7 @@
 /* M0 metadata-only ABI audit. No new target code is emitted here. */
 #include "target/target_info.h"
 #include "target/backend.h"
+#include "frontend/ast.h"
 #include "target/riscv/instruction_select.h"
 #include "frontend/parser.h"
 #include "frontend/ast_verifier.h"
@@ -640,6 +641,74 @@ static int verify_target_asm_source_policy(void) {
             "__builtin_loongarch_crc_w_b_w", sizeof("__builtin_loongarch_crc_w_b_w") - 1U,
             callee, sizeof(callee), &result, arguments, &argument_count,
             &mnemonic, &immediate_index)) goto failure;
+    /* Machine admission starts from the sealed internal Core callee, never
+     * re-enters GNU source aliases or constructs C argument types. */
+    stage = 8U;
+    if (!minic_target_info_machine_builtin_form(
+            loong, "__minic_target_builtin_loongarch_crc_w_b_w",
+            sizeof("__minic_target_builtin_loongarch_crc_w_b_w") - 1U,
+            &argument_count, &mnemonic, &immediate_index) ||
+        argument_count != 2U || immediate_index != SIZE_MAX ||
+        strcmp(mnemonic, "crc.w.b.w") != 0 ||
+        !minic_target_info_machine_builtin_form(
+            loong, "__minic_target_builtin_loongarch_csrwr_d",
+            sizeof("__minic_target_builtin_loongarch_csrwr_d") - 1U,
+            &argument_count, &mnemonic, &immediate_index) ||
+        argument_count != 2U || immediate_index != 1U ||
+        strcmp(mnemonic, "csrwr") != 0 ||
+        !minic_target_info_machine_builtin_form(
+            loong, "__minic_target_builtin_loongarch_cpucfg",
+            sizeof("__minic_target_builtin_loongarch_cpucfg") - 1U,
+            &argument_count, &mnemonic, &immediate_index) ||
+        argument_count != 1U || immediate_index != SIZE_MAX ||
+        strcmp(mnemonic, "cpucfg") != 0)
+        goto failure;
+    stage = 9U;
+    if (!minic_target_info_machine_builtin_signature(
+            loong, "__cpucfg", sizeof("__cpucfg") - 1U,
+            callee, sizeof(callee), &result, arguments, &argument_count,
+            &mnemonic, &immediate_index) ||
+        strcmp(callee, "__minic_target_builtin_loongarch_cpucfg") != 0 ||
+        !minic_type_equal(result, minic_type_unsigned_int()) ||
+        !minic_type_equal(arguments[0], minic_type_unsigned_int()) ||
+        !minic_target_info_machine_builtin_signature(
+            loong, "__iocsrrd_w", sizeof("__iocsrrd_w") - 1U,
+            callee, sizeof(callee), &result, arguments, &argument_count,
+            &mnemonic, &immediate_index) ||
+        strcmp(callee, "__minic_target_builtin_loongarch_iocsrrd_w") != 0 ||
+        argument_count != 1U || strcmp(mnemonic, "iocsrrd.w") != 0)
+        goto failure;
+    stage = 10U;
+    unsupported = *loong;
+    unsupported.machine_builtin_form_lookup = NULL;
+    if (minic_target_info_machine_builtin_form(
+            &unsupported, "__minic_target_builtin_loongarch_cpucfg",
+            sizeof("__minic_target_builtin_loongarch_cpucfg") - 1U,
+            &argument_count, &mnemonic, &immediate_index) ||
+        minic_target_info_machine_builtin_form(
+            x86, "__minic_target_builtin_loongarch_cpucfg",
+            sizeof("__minic_target_builtin_loongarch_cpucfg") - 1U,
+            &argument_count, &mnemonic, &immediate_index) ||
+        minic_target_info_machine_builtin_form(
+            loong, "__builtin_loongarch_cpucfg",
+            sizeof("__builtin_loongarch_cpucfg") - 1U,
+            &argument_count, &mnemonic, &immediate_index) ||
+        minic_target_info_machine_builtin_form(
+            loong, "__cpucfg", sizeof("__cpucfg") - 1U,
+            &argument_count, &mnemonic, &immediate_index) ||
+        minic_target_info_machine_builtin_form(
+            loong, "__minic_target_builtin_loongarch_unknown",
+            sizeof("__minic_target_builtin_loongarch_unknown") - 1U,
+            &argument_count, &mnemonic, &immediate_index) ||
+        minic_target_info_machine_builtin_form(
+            loong, "__minic_target_builtin_loongarch_cpucfg_suffix",
+            sizeof("__minic_target_builtin_loongarch_cpucfg_suffix") - 1U,
+            &argument_count, &mnemonic, &immediate_index) ||
+        minic_target_info_machine_builtin_form(
+            loong, "__minic_target_builtin_loongarch_cpucfg",
+            sizeof("__minic_target_builtin_loongarch_cpucfg") - 1U,
+            NULL, &mnemonic, &immediate_index))
+        goto failure;
     (void)puts("TARGET_ASM_SOURCE_POLICY=PASS five_independent_targets grammar_vs_machine_fail_closed loong_builtin_owned");
     return 0;
 failure:

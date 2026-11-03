@@ -1,7 +1,7 @@
 #ifndef MINIC_TARGET_LOONGARCH64_SIMD_ASM_H
 #define MINIC_TARGET_LOONGARCH64_SIMD_ASM_H
 
-#include "target/backend.h"
+#include "core/core_ir.h"
 #include "target/common/direct_function_emit.h"
 #include <stdio.h>
 
@@ -14,15 +14,9 @@ enum {
     MINIC_LOONG_MACHINE_SIMD_LASX = 2U
 };
 
-/* Exact GNU LSX/LASX ISA contracts for the Linux RAID6 and XOR vector paths.
- * No generic assembler-text passthrough: source constraints and independent
- * machine-side register/memory forms must both prove the complete template. */
-bool minic_loongarch64_simd_qualify_source(
-    const MinicC0Program *, const MinicInlineAsm *,
-    MinicTargetInlineAsmContract *);
-bool minic_loongarch64_simd_seal_normalized(
-    const MinicC0Program *, const MinicInlineAsm *,
-    const char *, size_t, MinicTargetInlineAsmContract *);
+/* Exact Core-only LSX/LASX machine contracts. The original GNU C operand
+ * qualification and normalized seal live in simd_source_policy.h. Neither
+ * machine API accepts a mutable frontend Program or C type descriptor. */
 bool minic_loongarch64_simd_qualify_opaque(const MinicCoreInlineAsm *);
 bool minic_loongarch64_simd_structured_template_requires_typed_id(
     const char *, size_t);

@@ -2,6 +2,7 @@
  * Link with the ordinary MiniC object set (without tools/minic-cc/main.o).
  * This test does not need an A64 cross-assembler or QEMU. */
 #include "target/aarch64/asm_contract.h"
+#include "frontend/ast.h"
 #include "frontend/type.h"
 
 #include <stdio.h>

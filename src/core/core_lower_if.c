@@ -624,11 +624,6 @@ minic_core_lower_if(MinicCoreLowerContext *context, const MinicStatement *statem
     }
 
     context->block_id = then_block;
-    if (context->source_function && context->source_function->name &&
-        strcmp(context->source_function->name, "genl_op_from_split") == 0)
-        (void)fprintf(stderr, "GENL_IF_PATH stage=pre_then expr=%zu current=%u then=%u condition=%u\n",
-            (size_t)statement->expression, (unsigned int)context->block_id,
-            (unsigned int)then_block, (unsigned int)condition_block);
     status = minic_core_lower_internal_lower_block(context, then_source, &then_terminated);
     if (status != MINIC_CORE_LOWER_OK) {
         (void)fprintf(stderr,
@@ -641,11 +636,6 @@ minic_core_lower_if(MinicCoreLowerContext *context, const MinicStatement *statem
                       statement->span.begin.column);
         goto if_facts_cleanup;
     }
-    if (context->source_function && context->source_function->name &&
-        strcmp(context->source_function->name, "genl_op_from_split") == 0)
-        (void)fprintf(stderr, "GENL_IF_PATH stage=post_then expr=%zu status=%d terminated=%d continuation=%u\n",
-            (size_t)statement->expression, (int)status,
-            then_terminated ? 1 : 0, (unsigned int)context->block_id);
     then_continuation_block = context->block_id;
     if (fallthrough_facts != NULL) {
         then_exit_facts = core_runtime_if_copy_facts(context);
@@ -721,12 +711,6 @@ minic_core_lower_if(MinicCoreLowerContext *context, const MinicStatement *statem
      * restore either branch-exit facts or an unfiltered impure snapshot. */
     minic_core_local_facts_restore(
         context, condition_is_pure ? incoming_facts : branch_entry_facts);
-    if (context->source_function && context->source_function->name &&
-        strcmp(context->source_function->name, "genl_op_from_split") == 0)
-        (void)fprintf(stderr, "GENL_IF_PATH stage=pre_guard expr=%zu condition=%u then=%u else=%u need_merge=%d\n",
-            (size_t)statement->expression, (unsigned int)condition_block,
-            (unsigned int)then_block, (unsigned int)false_target,
-            needs_merge ? 1 : 0);
     status = minic_core_lower_internal_lower_condition_branch(
         context, statement->expression, statement->span, then_block, false_target);
     if (status != MINIC_CORE_LOWER_OK) {
@@ -765,11 +749,6 @@ minic_core_lower_if(MinicCoreLowerContext *context, const MinicStatement *statem
                 then_terminated ? 1 : 0);
         }
     }
-    if (context->source_function && context->source_function->name &&
-        strcmp(context->source_function->name, "genl_op_from_split") == 0)
-        (void)fprintf(stderr, "GENL_IF_PATH stage=post_guard expr=%zu status=%d block=%u\n",
-            (size_t)statement->expression, (int)status,
-            (unsigned int)context->block_id);
     *terminated = !needs_merge;
     status = MINIC_CORE_LOWER_OK;
 if_facts_cleanup:

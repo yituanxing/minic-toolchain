@@ -4,7 +4,6 @@
 #include "core/module_ir.h"
 #include "target/common/core_function_facts.h"
 #include "target/common/core_object_storage.h"
-#include "frontend/ast.h"
 #include "minic/compiler.h"
 #include "target/target_info.h"
 #include "target/riscv32/rv32_abi_plan.h"

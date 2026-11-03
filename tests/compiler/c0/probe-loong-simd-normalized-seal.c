@@ -1,4 +1,5 @@
 #include "target/loongarch64/simd_asm.h"
+#include "target/loongarch64/simd_source_policy.h"
 #include "frontend/type.h"
 
 #include <stdio.h>

@@ -197,7 +197,6 @@ static bool module_capture_global(MinicCoreModuleGlobal *destination,
     destination->is_zero_initialized = source->is_zero_initialized;
     destination->is_tentative = source->is_tentative;
     destination->is_block_scope_extern_only = source->is_block_scope_extern_only;
-    destination->force_emit = source->force_emit;
     destination->is_thread_local = source->is_thread_local;
     destination->explicit_alignment = source->explicit_alignment;
     destination->initializer_slot_count = source->initializer_count;
@@ -258,7 +257,6 @@ static bool module_capture_function(MinicCoreModuleFunctionSymbol *destination,
     destination->is_weak = source->is_weak;
     destination->is_constructor = source->is_constructor;
     destination->is_variadic = source->is_variadic;
-    destination->is_noreturn = source->is_noreturn;
     destination->alias_target_index = SIZE_MAX;
     if (source->alias_target != MINIC_FUNCTION_INVALID) {
         const MinicFunction *target;

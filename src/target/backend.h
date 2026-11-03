@@ -2,7 +2,6 @@
 #define MINIC_TARGET_BACKEND_H
 
 #include "core/core_ir.h"
-#include "frontend/ast.h"
 #include "minic/compiler.h"
 #include "target/target_info.h"
 
@@ -11,6 +10,10 @@
 #include <stdint.h>
 
 typedef struct MinicCoreModule MinicCoreModule;
+/* Source admission callbacks traffic in opaque C AST handles. The machine
+ * backend contract must not transitively expose the whole frontend AST. */
+typedef struct MinicC0Program MinicC0Program;
+typedef struct MinicInlineAsm MinicInlineAsm;
 
 /*
  * Core/Target seam: compiler.c owns C semantics and Core IR; the selected

@@ -3,7 +3,6 @@
 
 #include "core/core_ir.h"
 #include "core/module_ir.h"
-#include "frontend/ast.h"
 #include "target/target_info.h"
 #include "target/common/core_object_storage.h"
 #include "target/common/core_function_facts.h"

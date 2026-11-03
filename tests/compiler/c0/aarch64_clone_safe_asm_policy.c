@@ -1,6 +1,7 @@
 /* Direct negative and positive checks for AArch64 static clone ASM policy.
  * Build with src/target/aarch64/asm_contract.c under -ffunction-sections. */
 #include "target/aarch64/asm_contract.h"
+#include "frontend/ast.h"
 #include <stdio.h>
 #include <string.h>
 

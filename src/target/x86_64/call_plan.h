@@ -2,7 +2,6 @@
 #define MINIC_TARGET_X86_64_CALL_PLAN_H
 #include "target/common/core_call_view.h"
 #include "target/target_info.h"
-#include "frontend/ast.h"
 #include <stdbool.h>
 #include <stddef.h>
 

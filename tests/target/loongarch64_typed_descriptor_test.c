@@ -2,6 +2,7 @@
  * checked GNU template, zero-only variant, and fail-closed forged metadata.
  * These IDs deliberately follow the single source/machine descriptor table. */
 #include "target/loongarch64/asm_contract.h"
+#include "frontend/ast.h"
 
 /* This is an assertion-based machine-contract test: release -DNDEBUG must
  * not silently disable its forged-Core and no-partial-output checks. */

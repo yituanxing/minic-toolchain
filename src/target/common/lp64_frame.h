@@ -7,7 +7,6 @@
 #include "core/core_ir.h"
 #include "target/common/direct_lp64_abi.h"
 #include "target/common/core_object_storage.h"
-#include "frontend/ast.h"
 #include "target/target_info.h"
 #include <stdbool.h>
 #include <stddef.h>
