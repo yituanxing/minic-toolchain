@@ -3,17 +3,12 @@
 
 #include "target/common/core_call_view.h"
 #include "target/common/direct_lp64_abi.h"
-#include "frontend/ast.h"
-#include "target/target_info.h"
 #include <stdbool.h>
 #include <stddef.h>
 
 /* AAPCS64 and LoongArch64 share a checked CALL bound; the indirect
  * aggregate ABI classifier remains an independent target callback. */
 #define MINIC_DIRECT_LP64_MAX_CALL_ARGUMENTS 64U
-typedef bool (*MinicDirectLP64IndirectRecord)(
-    const MinicC0Program *, const MinicTargetInfo *, MinicType, size_t *);
-
 /* ABI locations are resolved before emission; the target emitter only
  * transfers values to the selected machine locations. */
 typedef enum MinicLP64ArgumentKind {
@@ -50,10 +45,8 @@ typedef struct MinicLP64CallPlanCache {
     MinicCoreCallIndexHandle semantic_calls; /* borrowed or Common-owned */
 } MinicLP64CallPlanCache;
 bool minic_lp64_plan_function_calls(
-    const MinicC0Program *, const MinicTargetInfo *,
     const MinicCoreFunction *, const MinicCoreCallIndex *,
     const MinicDirectLP64AbiPolicy *,
-    MinicDirectLP64IndirectRecord, MinicDirectLP64IndirectRecord,
     const char *architecture_name, const char *function_name,
     size_t *failed_instruction, bool *failed_preflight, bool *has_calls,
     MinicLP64CallPlanCache *);
@@ -63,9 +56,7 @@ void minic_lp64_call_plan_cache_destroy(MinicLP64CallPlanCache *);
 
 /* Identical argument-location representation for callee ingress. */
 bool minic_lp64_plan_incoming_parameters(
-    const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicDirectLP64AbiPolicy *abi,
-    MinicDirectLP64IndirectRecord indirect_record,
     MinicLP64ArgumentPlan *plan);
 
 #endif

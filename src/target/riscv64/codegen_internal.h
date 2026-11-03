@@ -31,32 +31,18 @@ bool minic_riscv64_emit_stack_allocate(FILE *file, size_t size);
 bool minic_riscv64_emit_stack_release(FILE *file, size_t size);
 bool minic_riscv64_emit_sp_store64(FILE *file, const char *register_name, size_t offset);
 bool minic_riscv64_emit_sp_load64(FILE *file, const char *register_name, size_t offset);
-bool minic_riscv64_emit_integer_conversion_for_program(FILE *file,
-                                                       const MinicC0Program *program,
-                                                       MinicType type,
-                                                       const char *register_name);
 bool minic_riscv64_emit_core_integer_conversion(FILE *file,
     const MinicCoreTypeContext *types, MinicCoreTypeId type_id,
     const char *register_name);
-/* Typed Core pointer memory, distinct from aligned machine-owned frame
- * slots. All source pointer effects must use this proven-or-guarded form. */
-bool minic_riscv64_emit_safe_scalar_load(FILE *, const MinicC0Program *,
-    MinicType, const char *, const char *, const char *, size_t);
-bool minic_riscv64_emit_safe_scalar_store(FILE *, const MinicC0Program *,
-    MinicType, const char *, const char *, const char *, size_t);
-/* Core-only machine scalar transport for attached functions. The target
- * chooses RV64I opcodes from frozen execution type width/signedness. */
+/* Core-only machine scalar transport, distinct from machine-owned frame
+ * slots. Source pointer effects use proven-or-bytewise RV64I load/store
+ * opcodes selected exclusively from frozen execution type width/signedness. */
 bool minic_riscv64_emit_safe_core_scalar_load(FILE *,
     const MinicCoreTypeContext *, MinicCoreTypeId,
     const char *, const char *, const char *, size_t);
 bool minic_riscv64_emit_safe_core_scalar_store(FILE *,
     const MinicCoreTypeContext *, MinicCoreTypeId,
     const char *, const char *, const char *, size_t);
-bool minic_riscv64_emit_integer_aggregate_load_chunk_profile(
-    FILE *file, const MinicC0Program *program, MinicType type,
-    size_t chunk_index, const char *destination_register,
-    const char *address_register, bool lp64_soft_float,
-    size_t known_frame_offset);
 bool minic_riscv64_emit_integer_aggregate_load_chunk_core_profile(
     FILE *file, const MinicCoreTypeContext *types, MinicCoreTypeId type_id,
     size_t chunk_index, const char *destination_register,

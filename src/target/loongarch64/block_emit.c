@@ -25,16 +25,14 @@
 
 static const MinicCoreType *loongarch64_block_core_type(
     const MinicCoreFunction *fn, MinicCoreTypeId id) {
+    if (fn == NULL || fn->type_context == NULL) return NULL;
     return minic_core_type_get(fn->type_context,
                                minic_core_type_unqualified(fn->type_context, id));
 }
 
 static bool loongarch64_block_wide(
-    const MinicCoreFunction *fn, MinicType source, MinicCoreTypeId id) {
-    const MinicCoreType *type;
-    if (fn->type_context == NULL)
-        return minic_type_is_long_double(source) || minic_type_is_int128_integer(source);
-    type = loongarch64_block_core_type(fn, id);
+    const MinicCoreFunction *fn, MinicCoreTypeId id) {
+    const MinicCoreType *type = loongarch64_block_core_type(fn, id);
     return type != NULL &&
            ((type->kind == MINIC_CORE_TYPE_INTEGER && type->size == 16U) ||
             (type->kind == MINIC_CORE_TYPE_FLOAT &&
@@ -42,25 +40,16 @@ static bool loongarch64_block_wide(
 }
 
 static bool loongarch64_block_fp_format(
-    const MinicCoreFunction *fn, MinicType source, MinicCoreTypeId id,
+    const MinicCoreFunction *fn, MinicCoreTypeId id,
     MinicCoreFloatFormat format) {
-    const MinicCoreType *type;
-    if (fn->type_context == NULL)
-        return format == MINIC_CORE_FLOAT_BINARY32 ? minic_type_is_float(source)
-             : format == MINIC_CORE_FLOAT_BINARY64 ? minic_type_is_double(source)
-             : false;
-    type = loongarch64_block_core_type(fn, id);
+    const MinicCoreType *type = loongarch64_block_core_type(fn, id);
     return type != NULL && type->kind == MINIC_CORE_TYPE_FLOAT &&
            type->value.floating.format == format;
 }
 
 static bool loongarch64_block_register64(
-    const MinicCoreFunction *fn, const MinicC0Program *program,
-    const MinicTargetInfo *target, MinicType source, MinicCoreTypeId id) {
-    const MinicCoreType *type;
-    if (fn->type_context == NULL)
-        return minic_lp64_register64_type(program, target, source);
-    type = loongarch64_block_core_type(fn, id);
+    const MinicCoreFunction *fn, MinicCoreTypeId id) {
+    const MinicCoreType *type = loongarch64_block_core_type(fn, id);
     return type != NULL &&
            (type->kind == MINIC_CORE_TYPE_POINTER ||
             (type->kind == MINIC_CORE_TYPE_INTEGER && type->size == 8U));
@@ -271,16 +260,14 @@ static bool loongarch64_return_gp_record(
  * The saved incoming pointer survives nested calls and dynamic alloca.
  * Emit a counted, exact-byte copy instead of O(size) textual instructions. */
 static bool loongarch64_return_indirect_record(
-    FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
-    const MinicCoreFunction *fn, const MinicLP64FramePlan *frame_plan,
+    FILE *out, const MinicCoreFunction *fn,
+    const MinicLP64FramePlan *frame_plan,
     MinicCoreObjectId object_id, size_t return_slot, bool dynamic_frame) {
     size_t src, bytes;
     if (out == NULL ||
-        !(fn->type_context != NULL
-            ? minic_multi_indirect_record_core(fn->type_context,
-                  fn->core_return_type_id, &bytes)
-            : minic_multi_indirect_record(program, target, fn->return_type,
-                                           &bytes)) ||
+        fn == NULL || fn->type_context == NULL ||
+        !minic_multi_indirect_record_core(fn->type_context,
+            fn->core_return_type_id, &bytes) ||
         bytes <= 16U || bytes > 2048U ||
         !minic_lp64_frame_plan_object(frame_plan, object_id, &src) ||
         !minic_loongarch64_emit_frame_address(
@@ -295,35 +282,28 @@ static bool loongarch64_return_indirect_record(
 }
 
 bool minic_loongarch64_emit_terminator(FILE *out,
-    const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicCoreBlock *block,
     size_t id, size_t block_id, const MinicLP64FramePlan *frame_plan,
     size_t frame, size_t save_offset, bool has_direct_calls,
     bool dynamic_frame, bool has_indirect_return,
     size_t indirect_return_offset, size_t frame_alignment,
     size_t saved_entry_sp_offset) {
+        if (out == NULL || fn == NULL || fn->type_context == NULL ||
+            block == NULL) return false;
         switch (block->terminator.kind) {
         case MINIC_CORE_TERMINATOR_RETURN:
-            if (fn->type_context != NULL
-                    ? minic_lp64_core_kind(fn->type_context,
-                          fn->core_return_type_id, MINIC_CORE_TYPE_RECORD)
-                    : minic_type_is_record(fn->return_type)) {
+            if (minic_lp64_core_kind(fn->type_context,
+                    fn->core_return_type_id, MINIC_CORE_TYPE_RECORD)) {
                 size_t src, bytes, slots, fp_elements, fp_width, fp;
                 const MinicCoreObjectId object_id = block->terminator.return_object;
                 if (object_id >= fn->object_count ||
                     !minic_lp64_frame_plan_object(frame_plan, object_id, &src))
                     return false;
-                if (fn->type_context != NULL
-                        ? minic_multi_empty_record_core(fn->type_context,
-                            fn->core_return_type_id)
-                        : minic_multi_empty_record(program, target,
-                                                   fn->return_type)) {
+                if (minic_multi_empty_record_core(fn->type_context,
+                        fn->core_return_type_id)) {
                     /* Complete zero-byte record returns have no payload. */
-                } else if (fn->type_context != NULL
-                               ? minic_multi_fp_return_record_core(fn->type_context,
-                                   fn->core_return_type_id, &fp_elements, &fp_width)
-                               : minic_multi_fp_return_record(program, target,
-                                   fn->return_type, &fp_elements, &fp_width)) {
+                } else if (minic_multi_fp_return_record_core(fn->type_context,
+                               fn->core_return_type_id, &fp_elements, &fp_width)) {
                     for (fp = 0U; fp < fp_elements; ++fp)
                         if (!minic_loongarch64_emit_frame_mem(
                                 out, fp_width == 4U ? "fld.s" : "fld.d",
@@ -332,47 +312,37 @@ bool minic_loongarch64_emit_terminator(FILE *out,
                             return false;
                 } else if (has_indirect_return) {
                     if (!loongarch64_return_indirect_record(
-                            out, program, target, fn, frame_plan, object_id,
+                            out, fn, frame_plan, object_id,
                             indirect_return_offset, dynamic_frame))
                         return false;
-                } else if (!(fn->type_context != NULL
-                               ? minic_multi_gp_record_core(fn->type_context,
-                                   fn->core_return_type_id, &bytes, &slots)
-                               : minic_multi_gp_record(program, target,
-                                   fn->return_type, &bytes, &slots)) ||
+                } else if (!minic_multi_gp_record_core(fn->type_context,
+                               fn->core_return_type_id, &bytes, &slots) ||
                            !loongarch64_return_gp_record(out, src, bytes,
                                                          dynamic_frame))
                     return false;
             }
-            if (loongarch64_block_wide(fn, fn->return_type,
-                                       fn->core_return_type_id)) {
+            if (loongarch64_block_wide(fn, fn->core_return_type_id)) {
                 size_t src;
                 if (!minic_lp64_frame_plan_wide_slot(frame_plan, block->terminator.return_value, &src) ||
                     !emit_sp_mem(out, "ld.d", "$a0", src) ||
                     !emit_sp_mem(out, "ld.d", "$a1", src + 8U))
                     return false;
             }
-            if ((!(fn->type_context != NULL
-                      ? minic_lp64_core_kind(fn->type_context,
-                          fn->core_return_type_id, MINIC_CORE_TYPE_VOID)
-                      : minic_type_is_void(fn->return_type)) &&
-                 !(fn->type_context != NULL
-                      ? minic_lp64_core_kind(fn->type_context,
-                          fn->core_return_type_id, MINIC_CORE_TYPE_RECORD)
-                      : minic_type_is_record(fn->return_type)) &&
-                 !loongarch64_block_wide(fn, fn->return_type,
-                                         fn->core_return_type_id) &&
-                 !((loongarch64_block_fp_format(fn, fn->return_type,
+            if ((!minic_lp64_core_kind(fn->type_context,
+                       fn->core_return_type_id, MINIC_CORE_TYPE_VOID) &&
+                 !minic_lp64_core_kind(fn->type_context,
+                       fn->core_return_type_id, MINIC_CORE_TYPE_RECORD) &&
+                 !loongarch64_block_wide(fn, fn->core_return_type_id) &&
+                 !((loongarch64_block_fp_format(fn,
                            fn->core_return_type_id, MINIC_CORE_FLOAT_BINARY64) ||
-                    loongarch64_block_fp_format(fn, fn->return_type,
+                    loongarch64_block_fp_format(fn,
                            fn->core_return_type_id, MINIC_CORE_FLOAT_BINARY32))
                        ? emit_sp_mem(out,
-                                     loongarch64_block_fp_format(fn, fn->return_type,
+                                     loongarch64_block_fp_format(fn,
                                            fn->core_return_type_id, MINIC_CORE_FLOAT_BINARY32)
                                          ? "fld.s" : "fld.d", "$fa0",
                                      minic_lp64_frame_value_offset(frame_plan, block->terminator.return_value))
-                       : emit_sp_mem(out, loongarch64_block_register64(fn, program,
-                                             target, fn->return_type,
+                       : emit_sp_mem(out, loongarch64_block_register64(fn,
                                              fn->core_return_type_id)
                                           ? "ld.d" : "ld.w", "$a0",
                                      minic_lp64_frame_value_offset(frame_plan, block->terminator.return_value)))) ||
@@ -409,8 +379,9 @@ bool minic_loongarch64_emit_terminator(FILE *out,
             break;
         case MINIC_CORE_TERMINATOR_CONDITIONAL_BRANCH: {
             const MinicCoreValueId cond = block->terminator.conditional.condition;
-            const bool wide = loongarch64_block_register64(fn, program, target,
-                fn->values[cond].type, fn->values[cond].core_type_id);
+            const bool wide = cond < fn->value_count &&
+                loongarch64_block_register64(fn, fn->values[cond].core_type_id);
+            if (cond >= fn->value_count) return false;
             /* The short LoongArch conditional jump must remain nearby. */
             if (fn->block_count > 256U) {
                 if (!emit_sp_mem(out, wide ? "ld.d" : "ld.w", "$t0",
@@ -448,14 +419,12 @@ bool minic_loongarch64_emit_terminator(FILE *out,
 /* The fixed-frame register is target-specific; one machine writeback
  * owner prevents memory/FP/ALU/ABI lowering from diverging on slot widths. */
 static bool loongarch64_emit_gp_result(
-    FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
-    const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
+    FILE *out, const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
     size_t offset, bool include_double,
     bool dynamic_frame) {
-    const bool wide = loongarch64_block_register64(fn, program, target,
-                          ins->type, ins->core_type_id) ||
+    const bool wide = loongarch64_block_register64(fn, ins->core_type_id) ||
                       (include_double && loongarch64_block_fp_format(fn,
-                           ins->type, ins->core_type_id, MINIC_CORE_FLOAT_BINARY64));
+                           ins->core_type_id, MINIC_CORE_FLOAT_BINARY64));
     return minic_loongarch64_emit_frame_mem(
         out, wide ? "st.d" : "st.w", "$t0", offset, dynamic_frame);
 }
@@ -517,7 +486,7 @@ static bool loongarch64_machine_store_gp(
     FILE *out, const MinicDirectLP64BlockContext *ctx,
     const MinicCoreInstruction *ins, size_t offset, bool include_double) {
     return loongarch64_emit_gp_result(
-               out, ctx->program, ctx->target, ctx->fn,
+               out, ctx->fn,
                ins, offset, include_double,
                ctx->dynamic_frame) &&
            /* The native compactor may cache only certified SSA spill slots,
@@ -530,7 +499,7 @@ static bool loongarch64_machine_emit_terminator(
     FILE *out, const MinicDirectLP64BlockContext *ctx,
     const MinicCoreBlock *block, size_t block_id) {
     return minic_loongarch64_emit_terminator(
-        out, ctx->program, ctx->target, ctx->fn,
+        out, ctx->fn,
         block, ctx->id, block_id, ctx->frame_plan, ctx->frame,
         ctx->save_offset, ctx->has_direct_calls, ctx->dynamic_frame,
         ctx->has_indirect_return, ctx->indirect_return_offset,

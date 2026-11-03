@@ -4,12 +4,10 @@
 #include "target/common/core_scalar_conversion.h"
 #include "target/common/core_floating_shape.h"
 #include "target/common/lp64_scalar.h"
-#include "target/data_layout.h"
-
 #include <stdint.h>
 
-/* Source-free Core queries for the live Compiler -> Target path. C descriptor
- * branches below are reserved for standalone pre-snapshot fixture callers. */
+/* Every Direct LP64 machine consumer sees sealed Core execution types.
+ * Missing Core provenance is a rejection, not permission to reopen C types. */
 static const MinicCoreType *direct_core_type(const MinicCoreFunction *fn,
                                              MinicCoreTypeId id) {
     if (fn == NULL || fn->type_context == NULL) return NULL;
@@ -83,116 +81,38 @@ static bool direct_core_i32(const MinicCoreFunction *fn,
            type->value.integer.is_signed && !type->value.integer.is_bool;
 }
 
-static bool direct_type_void(const MinicCoreFunction *fn, MinicCoreTypeId id,
-                             MinicType legacy) {
-    return fn->type_context != NULL
-        ? direct_core_kind(fn, id, MINIC_CORE_TYPE_VOID)
-        : minic_type_is_void(legacy);
-}
-
-static bool direct_type_pointer(const MinicCoreFunction *fn, MinicCoreTypeId id,
-                                MinicType legacy) {
-    return fn->type_context != NULL
-        ? direct_core_kind(fn, id, MINIC_CORE_TYPE_POINTER)
-        : minic_type_is_pointer(legacy);
-}
-
-static bool direct_type_integer(const MinicCoreFunction *fn, MinicCoreTypeId id,
-                                MinicType legacy) {
-    return fn->type_context != NULL
-        ? direct_core_kind(fn, id, MINIC_CORE_TYPE_INTEGER)
-        : minic_type_is_integer(legacy);
-}
-
-static bool direct_type_record(const MinicCoreFunction *fn, MinicCoreTypeId id,
-                               MinicType legacy) {
-    return fn->type_context != NULL
-        ? direct_core_kind(fn, id, MINIC_CORE_TYPE_RECORD)
-        : minic_type_is_record(legacy);
-}
-
-static bool direct_type_bool(const MinicCoreFunction *fn, MinicCoreTypeId id,
-                             MinicType legacy) {
-    return fn->type_context != NULL
-        ? direct_core_bool(fn, id)
-        : minic_type_is_bool_integer(legacy);
-}
-
-static bool direct_type_float(const MinicCoreFunction *fn, MinicCoreTypeId id,
-                              MinicType legacy) {
-    return fn->type_context != NULL
-        ? direct_core_float(fn, id, MINIC_CORE_FLOAT_BINARY32)
-        : minic_type_is_float(legacy);
-}
-
-static bool direct_type_double(const MinicCoreFunction *fn, MinicCoreTypeId id,
-                               MinicType legacy) {
-    return fn->type_context != NULL
-        ? direct_core_float(fn, id, MINIC_CORE_FLOAT_BINARY64)
-        : minic_type_is_double(legacy);
-}
-
-static bool direct_type_long_double(const MinicCoreFunction *fn,
-                                    MinicCoreTypeId id, MinicType legacy) {
-    return fn->type_context != NULL
-        ? direct_core_float(fn, id, MINIC_CORE_FLOAT_EXTENDED)
-        : minic_type_is_long_double(legacy);
-}
-
-static bool direct_type_int128(const MinicCoreFunction *fn,
-                               MinicCoreTypeId id, MinicType legacy) {
-    const MinicCoreType *type;
-    if (fn->type_context == NULL) return minic_type_is_int128_integer(legacy);
-    type = direct_core_type(fn, id);
+static bool direct_core_int128(const MinicCoreFunction *fn,
+                               MinicCoreTypeId id) {
+    const MinicCoreType *type = direct_core_type(fn, id);
     return type != NULL && type->kind == MINIC_CORE_TYPE_INTEGER &&
            type->value.integer.bit_width == 128U && type->has_layout;
 }
 
-static bool direct_type_equal(const MinicCoreFunction *fn,
-                              MinicCoreTypeId lhs_id, MinicCoreTypeId rhs_id,
-                              MinicType lhs, MinicType rhs) {
-    if (fn->type_context == NULL) return minic_type_equal(lhs, rhs);
-    return lhs_id != MINIC_CORE_TYPE_INVALID &&
+/* Equal exact execution IDs, intentionally distinct from unqualified
+ * pointee/record equivalence used by aggregate transport. */
+static bool direct_core_equal_exact(const MinicCoreFunction *fn,
+                                    MinicCoreTypeId lhs_id,
+                                    MinicCoreTypeId rhs_id) {
+    return fn != NULL && fn->type_context != NULL &&
+           lhs_id != MINIC_CORE_TYPE_INVALID &&
            minic_core_type_get(fn->type_context, lhs_id) != NULL &&
            lhs_id == rhs_id;
-}
-
-static bool direct_type_integer_width(const MinicC0Program *program,
-                                      const MinicTargetInfo *target,
-                                      const MinicCoreFunction *fn,
-                                      MinicCoreTypeId id, MinicType legacy,
-                                      size_t *width, bool *sign) {
-    return fn->type_context != NULL
-        ? direct_core_int_width(fn, id, width, sign)
-        : minic_lp64_scalar_integer_width(program, target, legacy, width, sign);
 }
 
 bool minic_multi_direct_call_frame_level0_shape(
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
     MinicCoreCallFrameAddressKind kind) {
-    MinicType pointee;
-    if (fn != NULL && ins != NULL && fn->type_context != NULL) {
-        MinicCoreTypeId core_pointee;
-        return (kind == MINIC_CORE_CALL_FRAME_ADDRESS_RETURN ||
-                kind == MINIC_CORE_CALL_FRAME_ADDRESS_FRAME) &&
-               ins->kind == MINIC_CORE_INSTRUCTION_CALL_FRAME_ADDRESS &&
-               ins->result < fn->value_count &&
-               ins->value.call_frame_address.level == 0U &&
-               ins->value.call_frame_address.kind == kind &&
-               direct_core_pointer_pointee(fn, ins->core_type_id, &core_pointee) &&
-               direct_core_kind(fn, core_pointee, MINIC_CORE_TYPE_VOID) &&
-               fn->values[ins->result].core_type_id == ins->core_type_id;
-    }
-    return fn != NULL && ins != NULL &&
+    MinicCoreTypeId pointee;
+    return fn != NULL && ins != NULL && fn->type_context != NULL &&
            (kind == MINIC_CORE_CALL_FRAME_ADDRESS_RETURN ||
             kind == MINIC_CORE_CALL_FRAME_ADDRESS_FRAME) &&
            ins->kind == MINIC_CORE_INSTRUCTION_CALL_FRAME_ADDRESS &&
-           ins->result < fn->value_count &&
+           ins->result < fn->value_count && fn->values != NULL &&
            ins->value.call_frame_address.level == 0U &&
            ins->value.call_frame_address.kind == kind &&
-           minic_type_pointee(ins->type, &pointee) &&
-           minic_type_is_void(pointee) &&
-           minic_type_equal(fn->values[ins->result].type, ins->type);
+           direct_core_pointer_pointee(fn, ins->core_type_id, &pointee) &&
+           direct_core_kind(fn, pointee, MINIC_CORE_TYPE_VOID) &&
+           fn->values[ins->result].core_type_id == ins->core_type_id;
 }
 
 bool minic_multi_direct_call_frame_return_level0_shape(
@@ -378,7 +298,7 @@ static bool minic_multi_direct_compiler_barrier_shape(
     return ins != NULL &&
            ins->kind == MINIC_CORE_INSTRUCTION_COMPILER_BARRIER &&
            ins->result == MINIC_CORE_VALUE_INVALID &&
-           direct_type_void(fn, ins->core_type_id, ins->type);
+           direct_core_kind(fn, ins->core_type_id, MINIC_CORE_TYPE_VOID);
 }
 
 /* Both direct LP64 emitters materialize int128 and long double in a 16-byte
@@ -394,12 +314,11 @@ bool minic_multi_direct_wide_store_shape(
     address = ins->value.store.address;
     value = ins->value.store.stored_value;
     return address < fn->value_count && value < fn->value_count &&
-           direct_type_pointer(fn, fn->values[address].core_type_id,
-                               fn->values[address].type) &&
-           (direct_type_int128(fn, fn->values[value].core_type_id,
-                               fn->values[value].type) ||
-            direct_type_long_double(fn, fn->values[value].core_type_id,
-                                    fn->values[value].type)) &&
+           direct_core_kind(fn, fn->values[address].core_type_id,
+                            MINIC_CORE_TYPE_POINTER) &&
+           (direct_core_int128(fn, fn->values[value].core_type_id) ||
+            direct_core_float(fn, fn->values[value].core_type_id,
+                              MINIC_CORE_FLOAT_EXTENDED)) &&
            minic_lp64_frame_plan_wide_slot(frame_plan, value, value_offset);
 }
 
@@ -413,8 +332,8 @@ static bool minic_multi_direct_result_slot_offset(
         return false;
     if ((ins->kind == MINIC_CORE_INSTRUCTION_CALL ||
          ins->kind == MINIC_CORE_INSTRUCTION_INDIRECT_CALL) &&
-        (direct_type_void(fn, ins->core_type_id, ins->type) ||
-         (direct_type_record(fn, ins->core_type_id, ins->type) &&
+        (direct_core_kind(fn, ins->core_type_id, MINIC_CORE_TYPE_VOID) ||
+         (direct_core_kind(fn, ins->core_type_id, MINIC_CORE_TYPE_RECORD) &&
           (ins->kind == MINIC_CORE_INSTRUCTION_CALL
               ? ins->value.call.result_object
               : ins->value.indirect_call.result_object) != MINIC_CORE_OBJECT_INVALID))) {
@@ -426,10 +345,10 @@ static bool minic_multi_direct_result_slot_offset(
         ins->result >= fn->value_count ||
         ((ins->kind == MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS ||
           ins->kind == MINIC_CORE_INSTRUCTION_GLOBAL_ADDRESS)
-            ? !direct_type_pointer(fn, ins->core_type_id, ins->type)
-            : !direct_type_integer(fn, ins->core_type_id, ins->type) &&
-              !direct_type_pointer(fn, ins->core_type_id, ins->type) &&
-              !(direct_type_float(fn, ins->core_type_id, ins->type) &&
+            ? !direct_core_kind(fn, ins->core_type_id, MINIC_CORE_TYPE_POINTER)
+            : !direct_core_kind(fn, ins->core_type_id, MINIC_CORE_TYPE_INTEGER) &&
+              !direct_core_kind(fn, ins->core_type_id, MINIC_CORE_TYPE_POINTER) &&
+              !(direct_core_float(fn, ins->core_type_id, MINIC_CORE_FLOAT_BINARY32) &&
                 (ins->kind == MINIC_CORE_INSTRUCTION_LOAD ||
                  ins->kind == MINIC_CORE_INSTRUCTION_PARAMETER ||
                  ins->kind == MINIC_CORE_INSTRUCTION_CALL ||
@@ -440,13 +359,13 @@ static bool minic_multi_direct_result_slot_offset(
                  ins->kind == MINIC_CORE_INSTRUCTION_FLOAT_SUBTRACT ||
                  ins->kind == MINIC_CORE_INSTRUCTION_FLOAT_MULTIPLY ||
                  ins->kind == MINIC_CORE_INSTRUCTION_FLOAT_DIVIDE)) &&
-              !(direct_type_long_double(fn, ins->core_type_id, ins->type) &&
+              !(direct_core_float(fn, ins->core_type_id, MINIC_CORE_FLOAT_EXTENDED) &&
                 (ins->kind == MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT ||
                  ins->kind == MINIC_CORE_INSTRUCTION_LOAD ||
                  ins->kind == MINIC_CORE_INSTRUCTION_PARAMETER ||
                  ins->kind == MINIC_CORE_INSTRUCTION_CALL ||
                  ins->kind == MINIC_CORE_INSTRUCTION_INDIRECT_CALL)) &&
-              !(direct_type_double(fn, ins->core_type_id, ins->type) &&
+              !(direct_core_float(fn, ins->core_type_id, MINIC_CORE_FLOAT_BINARY64) &&
                 (ins->kind == MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT ||
                  ins->kind == MINIC_CORE_INSTRUCTION_LOAD ||
                  ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_ADD ||
@@ -496,18 +415,15 @@ bool minic_multi_direct_scalar_parameter_location(
     const MinicLP64ArgumentPlan *incoming,
     const MinicLP64ArgumentLocation **location) {
     size_t ordinal;
-    if (fn == NULL || ins == NULL || incoming == NULL ||
-        location == NULL ||
+    if (fn == NULL || fn->type_context == NULL || ins == NULL ||
+        incoming == NULL || location == NULL ||
         ins->kind != MINIC_CORE_INSTRUCTION_PARAMETER ||
-        fn->parameter_types == NULL)
+        fn->core_parameter_type_ids == NULL)
         return false;
     ordinal = (size_t)ins->value.parameter_index;
     if (ordinal >= fn->parameter_count ||
         ordinal >= incoming->argument_count ||
-        !(fn->type_context != NULL
-            ? fn->core_parameter_type_ids != NULL &&
-              ins->core_type_id == fn->core_parameter_type_ids[ordinal]
-            : minic_type_equal(ins->type, fn->parameter_types[ordinal])) ||
+        ins->core_type_id != fn->core_parameter_type_ids[ordinal] ||
         incoming->arguments[ordinal].kind == MINIC_LP64_ARGUMENT_RECORD ||
         incoming->arguments[ordinal].kind == MINIC_LP64_ARGUMENT_INDIRECT_RECORD)
         return false;
@@ -525,7 +441,6 @@ static bool minic_multi_direct_integer_machine_kind(MinicCoreInstructionKind kin
 }
 
 bool minic_multi_direct_floating_shape(
-    const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
     size_t *integer_width, bool *integer_signed) {
     MinicCoreFloatingShape shape;
@@ -533,8 +448,7 @@ bool minic_multi_direct_floating_shape(
         return false;
     if (ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_TO_DOUBLE ||
         ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_TO_INTEGER) {
-        if (program == NULL || target == NULL ||
-            integer_width == NULL || integer_signed == NULL)
+        if (integer_width == NULL || integer_signed == NULL)
             return false;
         *integer_width = shape.integer_bytes;
         *integer_signed = shape.integer_signed;
@@ -551,12 +465,11 @@ bool minic_multi_direct_floating_shape(
  * the integer input width for integer->pointer; source_signed describes the
  * integer result on pointer->integer and the input otherwise. */
 bool minic_multi_direct_scalar_bitcast_shape(
-    const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
     bool *pointer_to_integer, size_t *source_width,
     bool *source_signed, bool *source_pointer) {
     MinicCoreScalarBitcastShape cast;
-    if (program == NULL || target == NULL || fn == NULL ||
+    if (fn == NULL ||
         pointer_to_integer == NULL || source_width == NULL ||
         source_signed == NULL || source_pointer == NULL ||
         !minic_core_scalar_bitcast_shape(fn, ins, &cast))
@@ -581,102 +494,83 @@ bool minic_multi_direct_scalar_bitcast_shape(
 bool minic_multi_direct_pointer_less_shape(
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins) {
     MinicCoreValueId lhs, rhs;
-    if (fn == NULL || ins == NULL ||
+    if (fn == NULL || fn->type_context == NULL || ins == NULL ||
         ins->kind != MINIC_CORE_INSTRUCTION_POINTER_LESS ||
-        !(fn->type_context != NULL
-            ? direct_core_i32(fn, ins->core_type_id)
-            : minic_type_equal(ins->type, minic_type_int())))
+        !direct_core_i32(fn, ins->core_type_id))
         return false;
     lhs = ins->value.binary.left;
     rhs = ins->value.binary.right;
     return lhs < fn->value_count && rhs < fn->value_count &&
-           direct_type_pointer(fn, fn->values[lhs].core_type_id,
-                               fn->values[lhs].type) &&
-           direct_type_equal(fn, fn->values[lhs].core_type_id,
-                             fn->values[rhs].core_type_id,
-                             fn->values[lhs].type, fn->values[rhs].type);
+           direct_core_kind(fn, fn->values[lhs].core_type_id,
+                            MINIC_CORE_TYPE_POINTER) &&
+           direct_core_equal_exact(fn, fn->values[lhs].core_type_id,
+                                   fn->values[rhs].core_type_id);
 }
 
 /* Core unary/shift/compare type admission is shared across direct LP64
  * targets. Native extensions and opcode selection remain ISA-owned. */
 bool minic_multi_direct_integer_unary_shape(
-    const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
     size_t *width, bool *is_signed) {
     MinicCoreValueId operand;
-    if (program == NULL || target == NULL || fn == NULL || ins == NULL ||
+    if (fn == NULL || fn->type_context == NULL || fn->values == NULL ||
+        ins == NULL ||
         width == NULL || is_signed == NULL ||
         (ins->kind != MINIC_CORE_INSTRUCTION_INTEGER_NEGATE &&
          ins->kind != MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_NOT))
         return false;
     operand = ins->value.operand;
     return operand < fn->value_count &&
-           direct_type_equal(fn, fn->values[operand].core_type_id,
-                             ins->core_type_id,
-                             fn->values[operand].type, ins->type) &&
-           direct_type_integer_width(program, target, fn, ins->core_type_id,
-                                     ins->type, width, is_signed) &&
-           !direct_type_bool(fn, ins->core_type_id, ins->type);
+           direct_core_equal_exact(fn, fn->values[operand].core_type_id,
+                                   ins->core_type_id) &&
+           direct_core_int_width(fn, ins->core_type_id, width, is_signed) &&
+           !direct_core_bool(fn, ins->core_type_id);
 }
 
 /* File-private Core operand decoders. The public family probes below
  * retain their independent type, boolean, width and ABI admission rules. */
 static bool core_direct_integer_pair(
-    const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
     size_t *lw, size_t *rw, bool *ls, bool *rs) {
     MinicCoreValueId lhs, rhs;
-    if (program == NULL || target == NULL || fn == NULL || ins == NULL ||
+    if (fn == NULL || fn->type_context == NULL || fn->values == NULL ||
+        ins == NULL ||
         lw == NULL || rw == NULL || ls == NULL || rs == NULL)
         return false;
     lhs = ins->value.binary.left;
     rhs = ins->value.binary.right;
     return lhs < fn->value_count && rhs < fn->value_count &&
-           direct_type_integer_width(program, target, fn,
-                 fn->values[lhs].core_type_id, fn->values[lhs].type, lw, ls) &&
-           direct_type_integer_width(program, target, fn,
-                 fn->values[rhs].core_type_id, fn->values[rhs].type, rw, rs);
+           direct_core_int_width(fn, fn->values[lhs].core_type_id, lw, ls) &&
+           direct_core_int_width(fn, fn->values[rhs].core_type_id, rw, rs);
 }
 
 /* This remains a relaxed-only atomic preflight, not a C11 memory model.
  * LOAD and STORE apply separate payload/bit-width tests afterward. */
 static bool core_direct_relaxed_atomic_pointee_width(
-    const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, MinicCoreValueId address,
     unsigned int order, size_t *width) {
-    MinicType pointee;
-    size_t align;
-    if (program == NULL || target == NULL || fn == NULL || width == NULL ||
+    MinicCoreTypeId pointee_id;
+    const MinicCoreType *type;
+    if (fn == NULL || fn->type_context == NULL || fn->values == NULL ||
+        width == NULL ||
         order != 0U || address >= fn->value_count) return false;
-    if (fn->type_context != NULL) {
-        MinicCoreTypeId pointee_id;
-        const MinicCoreType *type;
-        if (!direct_core_pointer_pointee(fn, fn->values[address].core_type_id,
-                                         &pointee_id)) return false;
-        type = direct_core_type(fn, pointee_id);
-        if (type == NULL || !type->has_layout || type->alignment == 0U ||
-            (type->kind != MINIC_CORE_TYPE_INTEGER &&
-             type->kind != MINIC_CORE_TYPE_POINTER)) return false;
-        *width = type->size;
-        return true;
-    }
-    if (
-        !minic_type_pointee(fn->values[address].type, &pointee) ||
-        !(minic_type_is_integer(pointee) || minic_type_is_pointer(pointee)) ||
-        !minic_data_layout_type(target->data_layout, program, pointee,
-                                width, &align))
-        return false;
-    (void)align;
+    if (!direct_core_pointer_pointee(fn, fn->values[address].core_type_id,
+                                     &pointee_id)) return false;
+    type = direct_core_type(fn, pointee_id);
+    if (type == NULL || !type->has_layout || type->alignment == 0U ||
+        (type->kind != MINIC_CORE_TYPE_INTEGER &&
+         type->kind != MINIC_CORE_TYPE_POINTER)) return false;
+    *width = type->size;
     return true;
 }
 
 bool minic_multi_direct_integer_shift_shape(
-    const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
     size_t *left_width, size_t *right_width,
     bool *left_signed, bool *right_signed) {
     MinicCoreValueId lhs;
-    if (program == NULL || target == NULL || fn == NULL || ins == NULL ||
+    if (fn == NULL || fn->type_context == NULL || fn->values == NULL ||
+        ins == NULL ||
         left_width == NULL || right_width == NULL ||
         left_signed == NULL || right_signed == NULL ||
         (ins->kind != MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_LEFT &&
@@ -684,29 +578,27 @@ bool minic_multi_direct_integer_shift_shape(
         return false;
     lhs = ins->value.binary.left;
     return lhs < fn->value_count &&
-           direct_type_equal(fn, fn->values[lhs].core_type_id,
-                             ins->core_type_id,
-                             fn->values[lhs].type, ins->type) &&
-           core_direct_integer_pair(program, target, fn, ins,
+           direct_core_equal_exact(fn, fn->values[lhs].core_type_id,
+                                   ins->core_type_id) &&
+           core_direct_integer_pair(fn, ins,
                                     left_width, right_width,
                                     left_signed, right_signed) &&
            (*left_width == 1U || *left_width == 2U ||
             *left_width == 4U || *left_width == 8U) &&
-           !direct_type_bool(fn, ins->core_type_id, ins->type);
+           !direct_core_bool(fn, ins->core_type_id);
 }
 
 bool minic_multi_direct_integer_compare_shape(
-    const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
     size_t *left_width, size_t *right_width,
     bool *left_signed, bool *right_signed) {
-    if (program == NULL || target == NULL || fn == NULL || ins == NULL ||
+    if (fn == NULL || fn->type_context == NULL || ins == NULL ||
         left_width == NULL || right_width == NULL ||
         left_signed == NULL || right_signed == NULL ||
         (ins->kind != MINIC_CORE_INSTRUCTION_INTEGER_LESS &&
          ins->kind != MINIC_CORE_INSTRUCTION_SCALAR_EQUAL))
         return false;
-    return core_direct_integer_pair(program, target, fn, ins,
+    return core_direct_integer_pair(fn, ins,
                                     left_width, right_width,
                                     left_signed, right_signed) &&
            *left_width == *right_width && *left_signed == *right_signed &&
@@ -714,59 +606,55 @@ bool minic_multi_direct_integer_compare_shape(
 }
 
 bool minic_multi_direct_scalar_zero_shape(
-    const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
     size_t *width, bool *is_signed, bool *is_pointer) {
     MinicCoreValueId operand;
-    MinicType type;
-    if (program == NULL || target == NULL || fn == NULL || ins == NULL ||
+    MinicCoreTypeId type_id;
+    if (fn == NULL || fn->type_context == NULL || fn->values == NULL ||
+        ins == NULL ||
         width == NULL || is_signed == NULL || is_pointer == NULL ||
         ins->kind != MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO)
         return false;
     operand = ins->value.operand;
     if (operand >= fn->value_count) return false;
-    type = fn->values[operand].type;
-    *is_pointer = direct_type_pointer(fn, fn->values[operand].core_type_id, type);
+    type_id = fn->values[operand].core_type_id;
+    *is_pointer = direct_core_kind(fn, type_id, MINIC_CORE_TYPE_POINTER);
     *width = 0U;
     *is_signed = false;
-    return *is_pointer || direct_type_bool(fn, fn->values[operand].core_type_id, type) ||
-           direct_type_integer_width(program, target, fn,
-                                     fn->values[operand].core_type_id, type,
-                                     width, is_signed);
+    return *is_pointer || direct_core_bool(fn, type_id) ||
+           direct_core_int_width(fn, type_id, width, is_signed);
 }
 
 /* AArch64's current direct emitter admits a 16-bit element-stride literal;
  * LoongArch64 materializes full-width strides. Keep the different limits. */
 bool minic_multi_direct_pointer_offset_shape(
-    const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
     size_t maximum_stride, size_t *index_width, bool *index_signed) {
     MinicCoreValueId base, index;
-    if (program == NULL || target == NULL || fn == NULL || ins == NULL ||
+    if (fn == NULL || fn->type_context == NULL || fn->values == NULL ||
+        ins == NULL ||
         index_width == NULL || index_signed == NULL ||
         ins->kind != MINIC_CORE_INSTRUCTION_POINTER_OFFSET)
         return false;
     base = ins->value.pointer_offset.base;
     index = ins->value.pointer_offset.index;
     return base < fn->value_count && index < fn->value_count &&
-           direct_type_pointer(fn, fn->values[base].core_type_id,
-                               fn->values[base].type) &&
-           direct_type_integer_width(program, target, fn,
-                  fn->values[index].core_type_id, fn->values[index].type,
-                  index_width, index_signed) &&
+           direct_core_kind(fn, fn->values[base].core_type_id,
+                            MINIC_CORE_TYPE_POINTER) &&
+           direct_core_int_width(fn, fn->values[index].core_type_id,
+                                 index_width, index_signed) &&
            ins->value.pointer_offset.element_size <= maximum_stride;
 }
 
 /* Arithmetic, bitwise and division/remainder retain distinct result-type
  * and 8/16/32/64-bit restrictions above the common pair decoder. */
 bool minic_multi_direct_integer_binary_shape(
-    const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
     size_t *left_width, size_t *right_width,
     bool *left_signed, bool *right_signed) {
     MinicCoreValueId lhs;
     bool arithmetic, bitwise, division;
-    if (program == NULL || target == NULL || fn == NULL || ins == NULL ||
+    if (fn == NULL || fn->type_context == NULL || ins == NULL ||
         left_width == NULL || right_width == NULL ||
         left_signed == NULL || right_signed == NULL)
         return false;
@@ -781,66 +669,60 @@ bool minic_multi_direct_integer_binary_shape(
     if (!arithmetic && !bitwise && !division)
         return false;
     lhs = ins->value.binary.left;
-    if (!core_direct_integer_pair(program, target, fn, ins,
+    if (!core_direct_integer_pair(fn, ins,
                                   left_width, right_width,
                                   left_signed, right_signed) ||
         *left_width != *right_width || *left_signed != *right_signed)
         return false;
     if (arithmetic)
-        return direct_type_equal(fn, fn->values[lhs].core_type_id,
-                                 ins->core_type_id, fn->values[lhs].type,
-                                 ins->type) &&
-               !direct_type_bool(fn, ins->core_type_id, ins->type);
+        return direct_core_equal_exact(fn, fn->values[lhs].core_type_id,
+                                       ins->core_type_id) &&
+               !direct_core_bool(fn, ins->core_type_id);
     if (bitwise)
         return (*left_width == 1U || *left_width == 2U ||
                 *left_width == 4U || *left_width == 8U) &&
-               !direct_type_bool(fn, ins->core_type_id, ins->type);
+               !direct_core_bool(fn, ins->core_type_id);
     return (*left_width == 4U || *left_width == 8U) &&
-           direct_type_equal(fn, fn->values[lhs].core_type_id,
-                             ins->core_type_id, fn->values[lhs].type,
-                             ins->type);
+           direct_core_equal_exact(fn, fn->values[lhs].core_type_id,
+                                   ins->core_type_id);
 }
 
 /* The direct LP64 backends admit relaxed-only atomic scalar loads.
  * This remains strictly a source/Core value-shape gate. */
 bool minic_multi_direct_scalar_load_shape(
-    const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
     size_t *width, bool *is_signed, bool *is_pointer) {
     bool atomic;
     MinicCoreValueId address;
     size_t pointee_width = 0U;
-    if (program == NULL || target == NULL || fn == NULL || ins == NULL ||
+    if (fn == NULL || fn->type_context == NULL || fn->values == NULL ||
+        ins == NULL ||
         width == NULL || is_signed == NULL || is_pointer == NULL)
         return false;
     atomic = ins->kind == MINIC_CORE_INSTRUCTION_ATOMIC_LOAD;
     if (ins->kind != MINIC_CORE_INSTRUCTION_LOAD && !atomic)
         return false;
     address = atomic ? ins->value.atomic_load.address : ins->value.load.address;
-    *width = direct_type_double(fn, ins->core_type_id, ins->type) ? 8U :
-             direct_type_float(fn, ins->core_type_id, ins->type) ? 4U : 0U;
+    *width = direct_core_float(fn, ins->core_type_id, MINIC_CORE_FLOAT_BINARY64) ? 8U :
+             direct_core_float(fn, ins->core_type_id, MINIC_CORE_FLOAT_BINARY32) ? 4U : 0U;
     *is_signed = false;
-    *is_pointer = direct_type_pointer(fn, ins->core_type_id, ins->type);
+    *is_pointer = direct_core_kind(fn, ins->core_type_id, MINIC_CORE_TYPE_POINTER);
     if (atomic &&
         (!core_direct_relaxed_atomic_pointee_width(
-             program, target, fn, address,
-             ins->value.atomic_load.memory_order, &pointee_width) ||
+             fn, address, ins->value.atomic_load.memory_order, &pointee_width) ||
          (*is_pointer ? pointee_width != 8U :
-            !direct_type_integer_width(program, target, fn,
-                                       ins->core_type_id, ins->type,
-                                       width, is_signed) ||
+            !direct_core_int_width(fn, ins->core_type_id, width, is_signed) ||
             (*width != 1U && *width != 2U && *width != 4U &&
              *width != 8U) ||
             pointee_width != *width)))
         return false;
     if (address >= fn->value_count ||
-        !direct_type_pointer(fn, fn->values[address].core_type_id,
-                             fn->values[address].type) ||
-        (!*is_pointer && !direct_type_double(fn, ins->core_type_id, ins->type) &&
-         !direct_type_float(fn, ins->core_type_id, ins->type) &&
-         !direct_type_integer_width(program, target, fn,
-                                    ins->core_type_id, ins->type,
-                                    width, is_signed)))
+        !direct_core_kind(fn, fn->values[address].core_type_id,
+                          MINIC_CORE_TYPE_POINTER) ||
+        (!*is_pointer &&
+         !direct_core_float(fn, ins->core_type_id, MINIC_CORE_FLOAT_BINARY64) &&
+         !direct_core_float(fn, ins->core_type_id, MINIC_CORE_FLOAT_BINARY32) &&
+         !direct_core_int_width(fn, ins->core_type_id, width, is_signed)))
         return false;
     return true;
 }
@@ -851,30 +733,27 @@ bool minic_multi_direct_wide_scalar_load_location(
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
     const MinicLP64FramePlan *frame_plan, MinicCoreValueId *address,
     size_t *destination_offset) {
-    if (fn == NULL || ins == NULL || frame_plan == NULL ||
+    if (fn == NULL || fn->type_context == NULL || ins == NULL || frame_plan == NULL ||
         address == NULL || destination_offset == NULL ||
         ins->kind != MINIC_CORE_INSTRUCTION_LOAD ||
-        !(fn->type_context != NULL
-            ? direct_core_wide(fn, ins->core_type_id)
-            : (minic_type_is_int128_integer(ins->type) ||
-               minic_type_is_long_double(ins->type))))
+        !direct_core_wide(fn, ins->core_type_id))
         return false;
     *address = ins->value.load.address;
     return *address < fn->value_count &&
-           direct_type_pointer(fn, fn->values[*address].core_type_id,
-                               fn->values[*address].type) &&
+           direct_core_kind(fn, fn->values[*address].core_type_id,
+                            MINIC_CORE_TYPE_POINTER) &&
            minic_lp64_frame_plan_wide_slot(frame_plan, ins->result,
                                             destination_offset);
 }
 
 bool minic_multi_direct_scalar_store_shape(
-    const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
     size_t *width, bool *is_signed, bool *is_pointer) {
     bool atomic;
     MinicCoreValueId addr, value;
     size_t pointee_width = 0U;
-    if (program == NULL || target == NULL || fn == NULL || ins == NULL ||
+    if (fn == NULL || fn->type_context == NULL || fn->values == NULL ||
+        ins == NULL ||
         width == NULL || is_signed == NULL || is_pointer == NULL)
         return false;
     atomic = ins->kind == MINIC_CORE_INSTRUCTION_ATOMIC_STORE;
@@ -885,39 +764,39 @@ bool minic_multi_direct_scalar_store_shape(
     if ((ins->kind != MINIC_CORE_INSTRUCTION_STORE && !atomic) ||
         ins->result != MINIC_CORE_VALUE_INVALID ||
         addr >= fn->value_count || value >= fn->value_count ||
-        !direct_type_pointer(fn, fn->values[addr].core_type_id,
-                             fn->values[addr].type))
+        !direct_core_kind(fn, fn->values[addr].core_type_id,
+                          MINIC_CORE_TYPE_POINTER))
         return false;
     *width = 0U;
     *is_signed = false;
-    *is_pointer = direct_type_pointer(fn, fn->values[value].core_type_id,
-                                      fn->values[value].type);
+    *is_pointer = direct_core_kind(fn, fn->values[value].core_type_id,
+                                   MINIC_CORE_TYPE_POINTER);
     /* These are the existing *relaxed-only*, scalar, naturally-aligned
      * admission rules. This is not a general atomic memory model. */
     if (atomic &&
         !core_direct_relaxed_atomic_pointee_width(
-             program, target, fn, addr,
+             fn, addr,
              ins->value.atomic_store.memory_order, &pointee_width))
         return false;
-    if (!*is_pointer && !direct_type_double(fn, fn->values[value].core_type_id,
-                                             fn->values[value].type) &&
-        !direct_type_float(fn, fn->values[value].core_type_id,
-                           fn->values[value].type) &&
-        !direct_type_integer_width(program, target, fn,
-                                   fn->values[value].core_type_id,
-                                   fn->values[value].type, width, is_signed))
+    if (!*is_pointer &&
+        !direct_core_float(fn, fn->values[value].core_type_id,
+                           MINIC_CORE_FLOAT_BINARY64) &&
+        !direct_core_float(fn, fn->values[value].core_type_id,
+                           MINIC_CORE_FLOAT_BINARY32) &&
+        !direct_core_int_width(fn, fn->values[value].core_type_id,
+                               width, is_signed))
         return false;
-    if (direct_type_double(fn, fn->values[value].core_type_id,
-                           fn->values[value].type))
+    if (direct_core_float(fn, fn->values[value].core_type_id,
+                          MINIC_CORE_FLOAT_BINARY64))
         *width = 8U;
-    if (direct_type_float(fn, fn->values[value].core_type_id,
-                          fn->values[value].type))
+    if (direct_core_float(fn, fn->values[value].core_type_id,
+                          MINIC_CORE_FLOAT_BINARY32))
         *width = 4U;
     if (atomic &&
-        (direct_type_double(fn, fn->values[value].core_type_id,
-                            fn->values[value].type) ||
-         direct_type_float(fn, fn->values[value].core_type_id,
-                           fn->values[value].type) ||
+        (direct_core_float(fn, fn->values[value].core_type_id,
+                           MINIC_CORE_FLOAT_BINARY64) ||
+         direct_core_float(fn, fn->values[value].core_type_id,
+                           MINIC_CORE_FLOAT_BINARY32) ||
          (*is_pointer ? pointee_width != 8U :
           (*width != 1U && *width != 2U &&
            *width != 4U && *width != 8U) ||
@@ -932,7 +811,7 @@ bool minic_multi_direct_machine_instruction_shape(
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
     bool allow_variadic_double_result,
     MinicDirectMachineInstructionShape *shape) {
-    if (fn == NULL || ins == NULL || shape == NULL)
+    if (fn == NULL || fn->type_context == NULL || ins == NULL || shape == NULL)
         return false;
     shape->result_offset = 0U;
     if (ins->kind == MINIC_CORE_INSTRUCTION_COMPILER_BARRIER) {
@@ -945,7 +824,7 @@ bool minic_multi_direct_machine_instruction_shape(
      * Native target emission remains independently qualified and fail-closed. */
     if (ins->kind == MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM) {
         if (ins->result != MINIC_CORE_VALUE_INVALID ||
-            !direct_type_void(fn, ins->core_type_id, ins->type) ||
+            !direct_core_kind(fn, ins->core_type_id, MINIC_CORE_TYPE_VOID) ||
             ins->value.structured_inline_asm.inline_asm_id >= fn->inline_asm_count)
             return false;
         shape->family = MINIC_DIRECT_MACHINE_RESIDUAL;
@@ -955,7 +834,7 @@ bool minic_multi_direct_machine_instruction_shape(
      * must independently requalify the full exact template at emission. */
     if (ins->kind == MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM) {
         if (ins->result != MINIC_CORE_VALUE_INVALID ||
-            !direct_type_void(fn, ins->core_type_id, ins->type) ||
+            !direct_core_kind(fn, ins->core_type_id, MINIC_CORE_TYPE_VOID) ||
             ins->value.inline_asm_id >= fn->inline_asm_count)
             return false;
         shape->family = MINIC_DIRECT_MACHINE_RESIDUAL;
@@ -963,7 +842,7 @@ bool minic_multi_direct_machine_instruction_shape(
     }
     if (ins->kind == MINIC_CORE_INSTRUCTION_FIXED_REGISTER_WRITE) {
         if (ins->result != MINIC_CORE_VALUE_INVALID ||
-            !direct_type_void(fn, ins->core_type_id, ins->type) ||
+            !direct_core_kind(fn, ins->core_type_id, MINIC_CORE_TYPE_VOID) ||
             ins->value.fixed_register_write.binding_id >=
                 fn->fixed_register_binding_count ||
             ins->value.fixed_register_write.source >= fn->value_count)
@@ -975,14 +854,13 @@ bool minic_multi_direct_machine_instruction_shape(
         const MinicCoreValueId dst = ins->value.variadic_copy.destination;
         const MinicCoreValueId src = ins->value.variadic_copy.source;
         if (ins->result != MINIC_CORE_VALUE_INVALID ||
-            !direct_type_void(fn, ins->core_type_id, ins->type) ||
+            !direct_core_kind(fn, ins->core_type_id, MINIC_CORE_TYPE_VOID) ||
             dst >= fn->value_count ||
             src >= fn->value_count ||
-            !direct_type_pointer(fn, fn->values[dst].core_type_id,
-                                 fn->values[dst].type) ||
-            !direct_type_equal(fn, fn->values[dst].core_type_id,
-                               fn->values[src].core_type_id,
-                               fn->values[dst].type, fn->values[src].type))
+            !direct_core_kind(fn, fn->values[dst].core_type_id,
+                              MINIC_CORE_TYPE_POINTER) ||
+            !direct_core_equal_exact(fn, fn->values[dst].core_type_id,
+                                     fn->values[src].core_type_id))
             return false;
         shape->family = MINIC_DIRECT_MACHINE_RESIDUAL;
         return true;

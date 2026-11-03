@@ -52,8 +52,7 @@ int main(void) {
     MinicCoreFunction fn = {0};
     MinicCoreInstruction ins = {0};
     MinicCoreIntegerOverflowNarrowShape narrow;
-    MinicC0Program program = {0};
-    MinicTargetInfo target = {0};
+    MinicDirectMachineInstructionShape machine_shape;
     size_t width, lw, rw;
     bool sign, ls, rs, pointer, ptr_to_int, source_pointer, left_signed;
     bool wide_left, right_signed, result_signed;
@@ -178,7 +177,7 @@ int main(void) {
     ins.core_type_id = i32;
     ins.value.operand = 0U;
     REQUIRE(minic_multi_direct_integer_unary_shape(
-        &program, &target, &fn, &ins, &width, &sign));
+        &fn, &ins, &width, &sign));
     REQUIRE(width == 4U && sign);
 
     ins.kind = MINIC_CORE_INSTRUCTION_POINTER_LESS;
@@ -190,7 +189,7 @@ int main(void) {
     ins.core_type_id = i32;
     ins.value.operand = 2U;
     REQUIRE(minic_multi_direct_scalar_bitcast_shape(
-        &program, &target, &fn, &ins, &ptr_to_int, &width,
+        &fn, &ins, &ptr_to_int, &width,
         &sign, &source_pointer));
     REQUIRE(ptr_to_int && source_pointer && width == 4U && sign);
 
@@ -198,23 +197,23 @@ int main(void) {
     ins.value.binary.left = 0U;
     ins.value.binary.right = 1U;
     REQUIRE(minic_multi_direct_integer_shift_shape(
-        &program, &target, &fn, &ins, &lw, &rw, &ls, &rs));
+        &fn, &ins, &lw, &rw, &ls, &rs));
     REQUIRE(lw == 4U && rw == 4U && ls && rs);
 
     ins.kind = MINIC_CORE_INSTRUCTION_LOAD;
     ins.value.load.address = 2U;
     REQUIRE(minic_multi_direct_scalar_load_shape(
-        &program, &target, &fn, &ins, &width, &sign, &pointer));
+        &fn, &ins, &width, &sign, &pointer));
     REQUIRE(width == 4U && sign && !pointer);
     ins.kind = MINIC_CORE_INSTRUCTION_ATOMIC_LOAD;
     ins.value.atomic_load.address = 2U;
     ins.value.atomic_load.memory_order = 0U;
     REQUIRE(minic_multi_direct_scalar_load_shape(
-        &program, &target, &fn, &ins, &width, &sign, &pointer));
+        &fn, &ins, &width, &sign, &pointer));
     REQUIRE(width == 4U && sign && !pointer);
     ins.value.atomic_load.memory_order = 4U;
     REQUIRE(!minic_multi_direct_scalar_load_shape(
-        &program, &target, &fn, &ins, &width, &sign, &pointer));
+        &fn, &ins, &width, &sign, &pointer));
     REQUIRE(legacy_integer_queries == 0U);
 
     ins.kind = MINIC_CORE_INSTRUCTION_STORE;
@@ -222,27 +221,75 @@ int main(void) {
     ins.value.store.address = 2U;
     ins.value.store.stored_value = 0U;
     REQUIRE(minic_multi_direct_scalar_store_shape(
-        &program, &target, &fn, &ins, &width, &sign, &pointer));
+        &fn, &ins, &width, &sign, &pointer));
     REQUIRE(width == 4U && sign && !pointer);
     ins.kind = MINIC_CORE_INSTRUCTION_ATOMIC_STORE;
     ins.value.atomic_store.address = 2U;
     ins.value.atomic_store.stored_value = 0U;
     ins.value.atomic_store.memory_order = 0U;
     REQUIRE(minic_multi_direct_scalar_store_shape(
-        &program, &target, &fn, &ins, &width, &sign, &pointer));
+        &fn, &ins, &width, &sign, &pointer));
     ins.value.atomic_store.memory_order = 3U;
     REQUIRE(!minic_multi_direct_scalar_store_shape(
-        &program, &target, &fn, &ins, &width, &sign, &pointer));
+        &fn, &ins, &width, &sign, &pointer));
 
     values[2].core_type_id = MINIC_CORE_TYPE_INVALID;
     ins.kind = MINIC_CORE_INSTRUCTION_LOAD;
     ins.value.load.address = 2U;
     REQUIRE(!minic_multi_direct_scalar_load_shape(
-        &program, &target, &fn, &ins, &width, &sign, &pointer));
+        &fn, &ins, &width, &sign, &pointer));
     values[2].core_type_id = p_i32;
+
+    /* The Direct LP64 machine family uses the same exclusive Core execution
+     * view across scalar ALU, compare, pointer offsets and dispatch. */
+    ins.kind = MINIC_CORE_INSTRUCTION_INTEGER_ADD;
+    ins.core_type_id = i32;
+    ins.result = 0U;
+    ins.value.binary.left = 0U;
+    ins.value.binary.right = 1U;
+    REQUIRE(minic_multi_direct_integer_binary_shape(
+        &fn, &ins, &lw, &rw, &ls, &rs));
+    REQUIRE(lw == 4U && rw == 4U && ls && rs);
+    REQUIRE(minic_multi_direct_machine_instruction_shape(
+        &fn, &ins, false, &machine_shape));
+    REQUIRE(machine_shape.family == MINIC_DIRECT_MACHINE_INTEGER);
+    ins.kind = MINIC_CORE_INSTRUCTION_INTEGER_LESS;
+    REQUIRE(minic_multi_direct_integer_compare_shape(
+        &fn, &ins, &lw, &rw, &ls, &rs));
+    ins.kind = MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO;
+    ins.value.operand = 2U;
+    REQUIRE(minic_multi_direct_scalar_zero_shape(
+        &fn, &ins, &width, &sign, &pointer) && pointer);
+    ins.kind = MINIC_CORE_INSTRUCTION_POINTER_OFFSET;
+    ins.value.pointer_offset.base = 2U;
+    ins.value.pointer_offset.index = 0U;
+    ins.value.pointer_offset.element_size = 4U;
+    REQUIRE(minic_multi_direct_pointer_offset_shape(
+        &fn, &ins, 16U, &width, &sign) && width == 4U && sign);
+    REQUIRE(!minic_multi_direct_pointer_offset_shape(
+        &fn, &ins, 2U, &width, &sign));
+
     fn.type_context = NULL;
+    REQUIRE(!minic_multi_direct_pointer_offset_shape(
+        &fn, &ins, 16U, &width, &sign));
+    ins.kind = MINIC_CORE_INSTRUCTION_LOAD;
+    ins.value.load.address = 2U;
     REQUIRE(!minic_multi_direct_scalar_load_shape(
-        &program, &target, &fn, &ins, &width, &sign, &pointer));
+        &fn, &ins, &width, &sign, &pointer));
+    ins.kind = MINIC_CORE_INSTRUCTION_INTEGER_ADD;
+    REQUIRE(!minic_multi_direct_integer_binary_shape(
+        &fn, &ins, &lw, &rw, &ls, &rs));
+    REQUIRE(!minic_multi_direct_machine_instruction_shape(
+        &fn, &ins, false, &machine_shape));
+    ins.kind = MINIC_CORE_INSTRUCTION_RECORD_LOAD;
+    REQUIRE(!minic_multi_direct_machine_instruction_shape(
+        &fn, &ins, false, &machine_shape));
+    ins.kind = MINIC_CORE_INSTRUCTION_INTEGER_LESS;
+    REQUIRE(!minic_multi_direct_integer_compare_shape(
+        &fn, &ins, &lw, &rw, &ls, &rs));
+    ins.kind = MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO;
+    REQUIRE(!minic_multi_direct_scalar_zero_shape(
+        &fn, &ins, &width, &sign, &pointer));
     minic_core_type_context_destroy(&types);
     (void)puts("CORE_NUMERIC_CORETYPE=PASS overflow enum_source_proof bitscan LP64_scalar bitcast atomic_no_C_query");
     return 0;

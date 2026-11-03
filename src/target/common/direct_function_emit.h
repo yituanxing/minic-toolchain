@@ -16,9 +16,6 @@
 typedef struct MinicDirectLP64FunctionEmitter {
     const char *architecture;
     const MinicDirectLP64AbiPolicy *abi;
-    MinicDirectLP64IndirectRecord indirect_record;
-    /* ABI-owned return classifier. NULL preserves the old fail-closed path. */
-    MinicDirectLP64IndirectRecord indirect_return;
     const char *text_section_type;  /* @progbits or %progbits */
     const char *elf_function_type;  /* @function or %function */
     const char *init_array_type;    /* @init_array or %init_array */
@@ -48,7 +45,9 @@ static inline bool minic_multi_direct_lp64_emit_function(
 
     if (config == NULL || config->architecture == NULL ||
         !minic_direct_lp64_abi_policy_valid(config->abi) ||
-        config->indirect_record == NULL || config->text_section_type == NULL ||
+        config->abi->core_indirect_record == NULL ||
+        config->abi->core_indirect_return == NULL ||
+        config->text_section_type == NULL ||
         config->elf_function_type == NULL || config->init_array_type == NULL ||
         config->init_word_directive == NULL || config->emit_prologue == NULL ||
         config->emit_core_blocks == NULL || out == NULL || decl == NULL)
@@ -68,8 +67,7 @@ static inline bool minic_multi_direct_lp64_emit_function(
     if (name == NULL || name[0] == '\0') return false;
     if (!minic_multi_direct_lp64_function_plan_prepare(
             program, target, decl, module_decl, fn, facts, storage, config->architecture,
-            config->abi, config->indirect_record, config->indirect_return,
-            config->qualify_opaque_asm,
+            config->abi, config->qualify_opaque_asm,
             &plan)) {
         (void)minic_multi_direct_machine_reject(fn, config->architecture,
             name, plan.failed_stage, plan.failed_block,

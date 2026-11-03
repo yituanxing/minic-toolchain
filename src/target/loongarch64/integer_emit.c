@@ -15,9 +15,8 @@ static const MinicCoreType *loong_integer_core_type(
 }
 
 static bool loong_integer_i128(const MinicCoreFunction *fn,
-                               MinicType legacy, MinicCoreTypeId id) {
+                               MinicCoreTypeId id) {
     const MinicCoreType *type;
-    if (fn->type_context == NULL) return minic_type_is_int128_integer(legacy);
     type = loong_integer_core_type(fn, id);
     return type != NULL && type->kind == MINIC_CORE_TYPE_INTEGER &&
            type->has_layout && type->size == 16U &&
@@ -25,36 +24,29 @@ static bool loong_integer_i128(const MinicCoreFunction *fn,
 }
 
 static bool loong_integer_signed(const MinicCoreFunction *fn,
-                                 MinicType legacy, MinicCoreTypeId id) {
+                                 MinicCoreTypeId id) {
     const MinicCoreType *type;
-    if (fn->type_context == NULL) return minic_type_is_signed_integer(legacy);
     type = loong_integer_core_type(fn, id);
     return type != NULL && type->kind == MINIC_CORE_TYPE_INTEGER &&
            type->value.integer.is_signed;
 }
 
 static bool loong_integer_same(const MinicCoreFunction *fn,
-                               MinicType a, MinicCoreTypeId a_id,
-                               MinicType b, MinicCoreTypeId b_id) {
-    return fn->type_context != NULL
-        ? minic_lp64_core_equal_unqualified(fn->type_context, a_id, b_id)
-        : minic_type_equal(a, b);
+                               MinicCoreTypeId a_id, MinicCoreTypeId b_id) {
+    return fn != NULL && fn->type_context != NULL &&
+           minic_lp64_core_equal_unqualified(fn->type_context, a_id, b_id);
 }
 
-static bool loong_integer_width(const MinicC0Program *program,
-                                const MinicTargetInfo *target,
-                                const MinicCoreFunction *fn,
-                                MinicType old_type, MinicCoreTypeId id,
+static bool loong_integer_width(const MinicCoreFunction *fn,
+                                MinicCoreTypeId id,
                                 size_t *width, bool *sign) {
-    return fn->type_context != NULL
-        ? minic_lp64_core_integer_width(fn->type_context, id, width, sign)
-        : minic_lp64_scalar_integer_width(program, target, old_type, width, sign);
+    return fn != NULL && fn->type_context != NULL &&
+           minic_lp64_core_integer_width(fn->type_context, id, width, sign);
 }
 
 static bool loong_integer_pointer(const MinicCoreFunction *fn,
-                                  MinicType old_type, MinicCoreTypeId id) {
+                                  MinicCoreTypeId id) {
     const MinicCoreType *type;
-    if (fn->type_context == NULL) return minic_type_is_pointer(old_type);
     type = loong_integer_core_type(fn, id);
     return type != NULL && type->kind == MINIC_CORE_TYPE_POINTER;
 }
@@ -102,7 +94,7 @@ bool minic_loongarch64_integer_rhs_immediate(
         return false;
     }
     if (!minic_multi_direct_integer_binary_shape(
-            program, target, fn, ins, &lw, &rw, &ls, &rs))
+            fn, ins, &lw, &rw, &ls, &rs))
         return false;
     rhs = ins->value.binary.right;
     if (!loong_integer_constant_rhs(fn, rhs, &constant))
@@ -130,8 +122,8 @@ static bool loong_checked_add_i32_u32_shape(
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
     bool *signed_left) {
     MinicCoreValueId left, right, address;
-    MinicType result;
     if (fn == NULL || ins == NULL || signed_left == NULL ||
+        fn->type_context == NULL || fn->values == NULL ||
         ins->kind != MINIC_CORE_INSTRUCTION_INTEGER_OVERFLOW ||
         ins->value.integer_overflow.operator_kind !=
             MINIC_CORE_INTEGER_OVERFLOW_ADD)
@@ -142,47 +134,30 @@ static bool loong_checked_add_i32_u32_shape(
     if (left >= fn->value_count || right >= fn->value_count ||
         address >= fn->value_count)
         return false;
-    if (fn->type_context != NULL) {
-        MinicCoreTypeId pointee;
-        const MinicCoreType *result_type, *lhs_type, *rhs_type;
-        if (!minic_lp64_core_pointer_pointee(fn->type_context,
-                fn->values[address].core_type_id, &pointee)) return false;
-        result_type = loong_integer_core_type(fn, pointee);
-        lhs_type = loong_integer_core_type(fn, fn->values[left].core_type_id);
-        rhs_type = loong_integer_core_type(fn, fn->values[right].core_type_id);
-        if (result_type == NULL || lhs_type == NULL || rhs_type == NULL ||
-            result_type->kind != MINIC_CORE_TYPE_INTEGER ||
-            !result_type->has_layout || result_type->size != 4U ||
-            result_type->value.integer.bit_width != 32U ||
-            !result_type->value.integer.is_signed ||
-            result_type->value.integer.is_bool ||
-            lhs_type->kind != MINIC_CORE_TYPE_INTEGER ||
-            !lhs_type->has_layout || lhs_type->size != 4U ||
-            lhs_type->value.integer.bit_width != 32U ||
-            rhs_type->kind != MINIC_CORE_TYPE_INTEGER ||
-            !rhs_type->has_layout || rhs_type->size != 4U ||
-            rhs_type->value.integer.bit_width != 32U ||
-            lhs_type->value.integer.is_bool || rhs_type->value.integer.is_bool ||
-            lhs_type->value.integer.is_signed == rhs_type->value.integer.is_signed)
-            return false;
-        *signed_left = lhs_type->value.integer.is_signed;
-        return true;
-    }
-    if (!minic_type_pointee(fn->values[address].type, &result) ||
-        !minic_type_equal(result, minic_type_int())) return false;
-    if (minic_type_equal(fn->values[left].type, minic_type_int()) &&
-        minic_type_equal(fn->values[right].type,
-                         minic_type_unsigned_int())) {
-        *signed_left = true;
-        return true;
-    }
-    if (minic_type_equal(fn->values[left].type,
-                         minic_type_unsigned_int()) &&
-        minic_type_equal(fn->values[right].type, minic_type_int())) {
-        *signed_left = false;
-        return true;
-    }
-    return false;
+    MinicCoreTypeId pointee;
+    const MinicCoreType *result_type, *lhs_type, *rhs_type;
+    if (!minic_lp64_core_pointer_pointee(fn->type_context,
+            fn->values[address].core_type_id, &pointee)) return false;
+    result_type = loong_integer_core_type(fn, pointee);
+    lhs_type = loong_integer_core_type(fn, fn->values[left].core_type_id);
+    rhs_type = loong_integer_core_type(fn, fn->values[right].core_type_id);
+    if (result_type == NULL || lhs_type == NULL || rhs_type == NULL ||
+        result_type->kind != MINIC_CORE_TYPE_INTEGER ||
+        !result_type->has_layout || result_type->size != 4U ||
+        result_type->value.integer.bit_width != 32U ||
+        !result_type->value.integer.is_signed ||
+        result_type->value.integer.is_bool ||
+        lhs_type->kind != MINIC_CORE_TYPE_INTEGER ||
+        !lhs_type->has_layout || lhs_type->size != 4U ||
+        lhs_type->value.integer.bit_width != 32U ||
+        rhs_type->kind != MINIC_CORE_TYPE_INTEGER ||
+        !rhs_type->has_layout || rhs_type->size != 4U ||
+        rhs_type->value.integer.bit_width != 32U ||
+        lhs_type->value.integer.is_bool || rhs_type->value.integer.is_bool ||
+        lhs_type->value.integer.is_signed == rhs_type->value.integer.is_signed)
+        return false;
+    *signed_left = lhs_type->value.integer.is_signed;
+    return true;
 }
 
 /* Keep dynamic-stack addressing behind the target frame helper. */
@@ -208,12 +183,12 @@ bool minic_loongarch64_emit_integer_instruction(
      * The LP64D ABI transfer remains owned by call_emit.c. */
     if ((ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_NEGATE ||
          ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_NOT) &&
-        loong_integer_i128(fn, ins->type, ins->core_type_id)) {
+        loong_integer_i128(fn, ins->core_type_id)) {
         const MinicCoreValueId src = ins->value.operand;
         size_t from, to;
         if (src >= fn->value_count ||
-            !loong_integer_same(fn, fn->values[src].type,
-                fn->values[src].core_type_id, ins->type, ins->core_type_id) ||
+            !loong_integer_same(fn, fn->values[src].core_type_id,
+                ins->core_type_id) ||
             !minic_lp64_frame_plan_wide_slot(frame_plan, src, &from) ||
             !minic_lp64_frame_plan_wide_slot(frame_plan, ins->result, &to) ||
             !emit_sp_mem(out, "ld.d", "$t0", from) ||
@@ -244,18 +219,17 @@ bool minic_loongarch64_emit_integer_instruction(
             ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_LESS ||
             ins->kind == MINIC_CORE_INSTRUCTION_SCALAR_EQUAL;
         if (lhs < fn->value_count && rhs < fn->value_count &&
-            loong_integer_i128(fn, fn->values[lhs].type,
-                                fn->values[lhs].core_type_id)) {
+            loong_integer_i128(fn, fn->values[lhs].core_type_id)) {
             size_t left, right, dst = 0U;
-            const bool sign = loong_integer_signed(fn, fn->values[lhs].type,
+            const bool sign = loong_integer_signed(fn,
                                                     fn->values[lhs].core_type_id);
             const char *op = NULL;
             if (!loong_integer_same(fn,
-                    fn->values[lhs].type, fn->values[lhs].core_type_id,
-                    fn->values[rhs].type, fn->values[rhs].core_type_id) ||
+                    fn->values[lhs].core_type_id,
+                    fn->values[rhs].core_type_id) ||
                 (!comparison &&
-                 !loong_integer_same(fn, ins->type, ins->core_type_id,
-                    fn->values[lhs].type, fn->values[lhs].core_type_id)) ||
+                 !loong_integer_same(fn, ins->core_type_id,
+                    fn->values[lhs].core_type_id)) ||
                 !minic_lp64_frame_plan_wide_slot(frame_plan, lhs, &left) ||
                 !minic_lp64_frame_plan_wide_slot(frame_plan, rhs, &right) ||
                 (!comparison &&
@@ -323,8 +297,7 @@ bool minic_loongarch64_emit_integer_instruction(
         const MinicCoreValueId src = ins->value.operand;
         size_t from;
         if (src < fn->value_count &&
-            loong_integer_i128(fn, fn->values[src].type,
-                                fn->values[src].core_type_id)) {
+            loong_integer_i128(fn, fn->values[src].core_type_id)) {
             if (!minic_lp64_frame_plan_wide_slot(frame_plan, src, &from) ||
                 !emit_sp_mem(out, "ld.d", "$t0", from) ||
                 !emit_sp_mem(out, "ld.d", "$t1", from + 8U) ||
@@ -336,17 +309,16 @@ bool minic_loongarch64_emit_integer_instruction(
         }
     }
     if (ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_LEFT &&
-        loong_integer_i128(fn, ins->type, ins->core_type_id)) {
+        loong_integer_i128(fn, ins->core_type_id)) {
         const MinicCoreValueId lhs = ins->value.binary.left;
         const MinicCoreValueId rhs = ins->value.binary.right;
         size_t src, dst, rw;
         bool sign;
         if (lhs >= fn->value_count || rhs >= fn->value_count ||
-            !loong_integer_same(fn, fn->values[lhs].type,
-                fn->values[lhs].core_type_id, ins->type, ins->core_type_id) ||
-            !loong_integer_width(program, target, fn,
-                fn->values[rhs].type, fn->values[rhs].core_type_id,
-                &rw, &sign) ||
+            !loong_integer_same(fn, fn->values[lhs].core_type_id,
+                ins->core_type_id) ||
+            !loong_integer_width(fn, fn->values[rhs].core_type_id,
+                                 &rw, &sign) ||
             !minic_lp64_frame_plan_wide_slot(frame_plan, lhs, &src) ||
             !minic_lp64_frame_plan_wide_slot(frame_plan, ins->result, &dst) ||
             !emit_sp_mem(out, "ld.d", "$t0", src) ||
@@ -591,18 +563,15 @@ bool minic_loongarch64_emit_integer_instruction(
         case MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_RIGHT: {
             const MinicCoreValueId lhs = ins->value.binary.left;
             if (ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_RIGHT &&
-                loong_integer_i128(fn, ins->type, ins->core_type_id)) {
+                loong_integer_i128(fn, ins->core_type_id)) {
                 const MinicCoreValueId rhs = ins->value.binary.right;
                 size_t src_offset, dst_offset, rw;
                 bool rs;
-                const bool sign = loong_integer_signed(fn, ins->type,
-                                                       ins->core_type_id);
+                const bool sign = loong_integer_signed(fn, ins->core_type_id);
                 if (lhs >= fn->value_count || rhs >= fn->value_count ||
-                    !loong_integer_i128(fn, fn->values[lhs].type,
-                                        fn->values[lhs].core_type_id) ||
-                    !loong_integer_width(program, target, fn,
-                        fn->values[rhs].type, fn->values[rhs].core_type_id,
-                        &rw, &rs) ||
+                    !loong_integer_i128(fn, fn->values[lhs].core_type_id) ||
+                    !loong_integer_width(fn, fn->values[rhs].core_type_id,
+                                         &rw, &rs) ||
                     !minic_lp64_frame_plan_wide_slot(frame_plan, lhs, &src_offset) ||
                     !minic_lp64_frame_plan_wide_slot(frame_plan, ins->result, &dst_offset) ||
                     !emit_sp_mem(out, "ld.d", "$t0", src_offset) ||
@@ -640,7 +609,7 @@ bool minic_loongarch64_emit_integer_instruction(
             const char *immediate_op = NULL;
             int64_t shift_count = 0;
             if (!minic_multi_direct_integer_shift_shape(
-                    program, target, fn, ins, &lw, &rw, &ls, &rs))
+                    fn, ins, &lw, &rw, &ls, &rs))
                 return false;
             wide = lw == 8U;
             op = ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_LEFT
@@ -682,7 +651,7 @@ bool minic_loongarch64_emit_integer_instruction(
             size_t width;
             bool sign;
             if (!minic_multi_direct_integer_unary_shape(
-                    program, target, fn, ins, &width, &sign) ||
+                    fn, ins, &width, &sign) ||
                 (!lhs_in_previous_gp &&
                  !emit_sp_mem(out, width == 8U ? "ld.d" : "ld.w",
                               "$t0", minic_lp64_frame_value_offset(frame_plan, operand))) ||
@@ -709,7 +678,7 @@ bool minic_loongarch64_emit_integer_instruction(
             int64_t constant = 0;
             bool immediate = false;
             if (!minic_multi_direct_integer_binary_shape(
-                    program, target, fn, ins, &lw, &rw, &ls, &rs))
+                    fn, ins, &lw, &rw, &ls, &rs))
                 return false;
             wide = lw == 8U;
             /* M36: real LP64 multiplication uses the full 64-bit operands. */
@@ -748,7 +717,7 @@ bool minic_loongarch64_emit_integer_instruction(
             const char *immediate_opcode = NULL;
             int64_t constant = 0;
             if (!minic_multi_direct_integer_binary_shape(
-                    program, target, fn, ins, &lw, &rw, &ls, &rs))
+                    fn, ins, &lw, &rw, &ls, &rs))
                 return false;
             opcode = ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND
                 ? "  and $t0, $t0, $t1\n"
@@ -786,7 +755,7 @@ bool minic_loongarch64_emit_integer_instruction(
             bool ls, rs, wide;
             const char *op;
             if (!minic_multi_direct_integer_binary_shape(
-                    program, target, fn, ins, &lw, &rw, &ls, &rs))
+                    fn, ins, &lw, &rw, &ls, &rs))
                 return false;
             wide = lw == 8U;
             op = ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_DIVIDE
@@ -832,10 +801,8 @@ bool minic_loongarch64_emit_integer_instruction(
             bool ls, rs, wide;
             if (ins->kind == MINIC_CORE_INSTRUCTION_SCALAR_EQUAL &&
                 lhs < fn->value_count && rhs < fn->value_count &&
-                loong_integer_pointer(fn, fn->values[lhs].type,
-                                      fn->values[lhs].core_type_id) &&
-                loong_integer_pointer(fn, fn->values[rhs].type,
-                                      fn->values[rhs].core_type_id)) {
+                loong_integer_pointer(fn, fn->values[lhs].core_type_id) &&
+                loong_integer_pointer(fn, fn->values[rhs].core_type_id)) {
                 if ((!lhs_in_previous_gp &&
                      !emit_sp_mem(out, "ld.d", "$t0", minic_lp64_frame_value_offset(frame_plan, lhs))) ||
                     !emit_sp_mem(out, "ld.d", "$t1", minic_lp64_frame_value_offset(frame_plan, rhs)) ||
@@ -846,7 +813,7 @@ bool minic_loongarch64_emit_integer_instruction(
             return true;
             }
             if (!minic_multi_direct_integer_compare_shape(
-                    program, target, fn, ins, &lw, &rw, &ls, &rs))
+                    fn, ins, &lw, &rw, &ls, &rs))
                 return false;
             wide = lw == 8U;
             if ((!lhs_in_previous_gp &&
@@ -870,7 +837,7 @@ bool minic_loongarch64_emit_integer_instruction(
             bool sign = false;
             bool pointer, wide;
             if (!minic_multi_direct_scalar_zero_shape(
-                    program, target, fn, ins, &width, &sign, &pointer))
+                    fn, ins, &width, &sign, &pointer))
                 return false;
             wide = pointer || width == 8U;
             if ((!lhs_in_previous_gp &&

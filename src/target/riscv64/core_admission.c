@@ -92,9 +92,9 @@ static bool core_instruction_supported(const MinicC0Program *program,
     case MINIC_CORE_INSTRUCTION_STORE:
         return true;
     case MINIC_CORE_INSTRUCTION_RECORD_LOAD:
-        return minic_riscv64_core_record_load_supported(program, function, instruction, NULL);
+        return minic_riscv64_core_record_load_supported(function, instruction, NULL);
     case MINIC_CORE_INSTRUCTION_RECORD_COPY:
-        return minic_riscv64_core_record_copy_supported(program, function, instruction);
+        return minic_riscv64_core_record_copy_supported(function, instruction);
     case MINIC_CORE_INSTRUCTION_FIXED_REGISTER_READ: {
         const MinicCoreFixedRegisterBinding *binding;
 
@@ -138,7 +138,7 @@ static bool core_instruction_supported(const MinicC0Program *program,
     case MINIC_CORE_INSTRUCTION_FIELD_ADDRESS:
         return minic_riscv64_core_field_address_supported(instruction, NULL);
     case MINIC_CORE_INSTRUCTION_SCALAR_BITCAST:
-        return minic_riscv64_core_scalar_bitcast_supported(program, function, instruction);
+        return minic_riscv64_core_scalar_bitcast_supported(function, instruction);
     default:
         return false;
     }

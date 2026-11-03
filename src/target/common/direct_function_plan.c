@@ -1,6 +1,7 @@
 #include "target/common/direct_function_plan.h"
 #include "target/common/direct_preflight.h"
 #include "target/common/core_frame_layout.h"
+#include "target/common/lp64_scalar.h"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -20,8 +21,6 @@ bool minic_multi_direct_lp64_function_plan_prepare(
     const MinicCoreFunctionFacts *facts,
     const MinicCoreObjectStoragePlan *storage,
     const char *architecture_name, const MinicDirectLP64AbiPolicy *abi,
-    MinicDirectLP64IndirectRecord indirect_record,
-    MinicDirectLP64IndirectRecord indirect_return,
     MinicDirectLP64OpaqueAsmQualifier qualify_opaque_asm,
     MinicDirectLP64FunctionPlan *plan) {
     MinicDirectLP64FunctionProfile profile;
@@ -35,18 +34,17 @@ bool minic_multi_direct_lp64_function_plan_prepare(
     plan->failed_block = SIZE_MAX;
     plan->failed_instruction = SIZE_MAX;
     if (program == NULL || target == NULL || decl == NULL || fn == NULL || facts == NULL ||
-        architecture_name == NULL || indirect_record == NULL ||
+        architecture_name == NULL || fn->type_context == NULL ||
         !minic_direct_lp64_abi_policy_valid(abi))
         return false;
     name = module_decl != NULL ? module_decl->name
         : minic_c0_function_symbol_name(decl);
     if (!minic_multi_direct_lp64_function_preflight(
-            program, target, decl, module_decl, fn, facts, architecture_name, name,
-            qualify_opaque_asm, indirect_return, abi))
+            decl, module_decl, fn, facts, architecture_name, name,
+            qualify_opaque_asm, abi))
         return false;
     profile_result = minic_multi_direct_lp64_profile_function(
-        program, target, fn, facts, abi, indirect_record,
-        &plan->incoming_plan, &profile);
+        fn, facts, abi, &plan->incoming_plan, &profile);
     if (profile_result != MINIC_DIRECT_LP64_PROFILE_OK) {
         plan->failed_stage =
             profile_result == MINIC_DIRECT_LP64_PROFILE_VARIADIC_FIXED_FLOAT
@@ -62,7 +60,7 @@ bool minic_multi_direct_lp64_function_plan_prepare(
 
     plan->failed_stage = "cfg_preflight";
     if (!minic_multi_direct_lp64_cfg_preflight(
-            program, target, fn, &plan->failed_block, indirect_return, abi))
+            fn, &plan->failed_block, abi))
         return false;
 
     plan->failed_stage = "frame_layout";
@@ -102,11 +100,12 @@ bool minic_multi_direct_lp64_function_plan_prepare(
 
     /* Preserve the target's hidden result pointer across nested calls.
      * The target supplies the ABI return classifier, not Core or Common. */
-    if (indirect_return != NULL &&
-        minic_type_is_record(fn->return_type)) {
+    if (minic_lp64_core_kind(fn->type_context,
+            fn->core_return_type_id, MINIC_CORE_TYPE_RECORD) &&
+        abi->core_indirect_return != NULL) {
         size_t result_bytes = 0U;
-        if (indirect_return(program, target, fn->return_type,
-                            &result_bytes) && result_bytes > 16U) {
+        if (abi->core_indirect_return(fn->type_context,
+                fn->core_return_type_id, &result_bytes) && result_bytes > 16U) {
             if (!minic_core_frame_reserve(&object_end, 8U, 8U,
                                           MINIC_LARGE_FRAME_MAX,
                                           &plan->indirect_return_offset))
@@ -121,8 +120,7 @@ bool minic_multi_direct_lp64_function_plan_prepare(
         bool failed_preflight = true;
         plan->failed_stage = "call_preflight";
         if (!minic_lp64_plan_function_calls(
-                program, target, fn, facts->call_index, abi,
-                indirect_record, indirect_return, architecture_name, name,
+                fn, facts->call_index, abi, architecture_name, name,
                 &plan->failed_instruction, &failed_preflight,
                 &plan->has_calls, &plan->outgoing_calls)) {
             plan->failed_stage =

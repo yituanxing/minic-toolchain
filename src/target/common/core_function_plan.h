@@ -3,7 +3,6 @@
 
 #include "target/common/core_function_facts.h"
 #include "target/common/core_object_storage.h"
-#include "target/target_info.h"
 #include <stdbool.h>
 #include <stddef.h>
 #include <string.h>
@@ -25,7 +24,6 @@ typedef struct MinicCoreFunctionPlan {
 
 void minic_core_function_plan_destroy(MinicCoreFunctionPlan *);
 bool minic_core_function_plan_build(
-    const MinicC0Program *, const MinicTargetInfo *,
     const MinicCoreFunction *, MinicCoreFunctionPlan *);
 
 #endif

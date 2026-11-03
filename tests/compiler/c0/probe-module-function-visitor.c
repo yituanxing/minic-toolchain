@@ -17,9 +17,8 @@ static size_t plan_builds;
  * FunctionPlan/verifier are independently tested; this probe owns only the
  * visitor's choice of producer and the borrowed callback contract. */
 bool minic_core_function_plan_build(
-    const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *function, MinicCoreFunctionPlan *plan) {
-    if (program == NULL || target == NULL || function == NULL || plan == NULL ||
+    if (function == NULL || plan == NULL ||
         plan->prepared) return false;
     ++plan_builds;
     plan->prepared = true;

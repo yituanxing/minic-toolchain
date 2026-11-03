@@ -467,7 +467,7 @@ bool minic_loongarch64_emit_residual_instruction(
                     ins->value.pointer_offset.subtract ? 1 : 0);
             }
             if (!minic_multi_direct_pointer_offset_shape(
-                    program, target, fn, ins, (size_t)-1, &iw, &signed_index) ||
+                    fn, ins, (size_t)-1, &iw, &signed_index) ||
                 /* Full-width stride literal; keep LoongArch64-only assembly. */
                 !emit_sp_mem(out, "ld.d", "$t0", minic_lp64_frame_value_offset(frame_plan, base)) ||
                 !emit_sp_mem(out, iw == 1U
@@ -514,7 +514,7 @@ bool minic_loongarch64_emit_residual_instruction(
             bool src_pointer = false;
             bool pointer_to_integer = false;
             if (!minic_multi_direct_scalar_bitcast_shape(
-                    program, target, fn, ins, &pointer_to_integer,
+                    fn, ins, &pointer_to_integer,
                     &src_width, &src_signed, &src_pointer))
                 return minic_multi_direct_machine_reject(
                     fn, "loongarch64", name, reject_stage, reject_block,

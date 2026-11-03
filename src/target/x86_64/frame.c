@@ -73,7 +73,7 @@ bool minic_x86_64_frame_init_with_storage(const MinicC0Program *program,
             &frame->outgoing_call_plans))
         return x86_frame_preflight_reject(fn, "outgoing-abi");
     if (!minic_core_object_storage_plan_acquire(
-            program, target->data_layout, fn, storage,
+            fn, storage,
             &frame->object_storage, &frame->borrows_object_storage))
         return x86_frame_preflight_reject(fn, "object-storage");
     frame->varargs_count = facts->variadic_address_count;
@@ -93,7 +93,7 @@ bool minic_x86_64_frame_init_with_storage(const MinicC0Program *program,
             frame->value_offsets[i] = SIZE_MAX;
     }
     if (!minic_core_function_reused_spill_layout(
-            program, fn, target->data_layout, 8U, 0U,
+            fn, 8U, 0U,
             frame->value_offsets, &value_bytes, NULL))
         return x86_frame_preflight_reject(fn, "value-slots-reuse");
     for (i = 0U; i < fn->value_count; ++i) {
@@ -244,7 +244,7 @@ bool minic_x86_64_frame_init_with_storage(const MinicC0Program *program,
         MinicCoreObjectReusePlan reuse = {0};
         size_t pool_slots, pool_first_end = 0U;
         bool valid = minic_core_object_reuse_plan_build(
-            program, fn, target->data_layout, 8U, true, &reuse) &&
+            fn, 8U, true, &reuse) &&
             minic_core_object_reuse_plan_get(
                 &reuse, MINIC_CORE_OBJECT_INVALID, NULL, NULL, &pool_slots);
         /* Core proves first-write, last-use and non-escape of every eligible

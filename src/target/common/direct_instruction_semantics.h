@@ -70,7 +70,6 @@ bool minic_multi_direct_scalar_parameter_location(
     const MinicLP64ArgumentPlan *incoming,
     const MinicLP64ArgumentLocation **location);
 bool minic_multi_direct_floating_shape(
-    const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
     size_t *integer_width, bool *integer_signed);
 
@@ -78,7 +77,6 @@ bool minic_multi_direct_floating_shape(
  * selection and all native emission stay in the target backends. */
 /* Exact direct-LP64 Core pointer/int cast and pointer-order admission. */
 bool minic_multi_direct_scalar_bitcast_shape(
-    const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
     bool *pointer_to_integer, size_t *source_width,
     bool *source_signed, bool *source_pointer);
@@ -86,38 +84,31 @@ bool minic_multi_direct_pointer_less_shape(
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins);
 
 bool minic_multi_direct_integer_unary_shape(
-    const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
     size_t *width, bool *is_signed);
 bool minic_multi_direct_integer_shift_shape(
-    const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
     size_t *left_width, size_t *right_width,
     bool *left_signed, bool *right_signed);
 bool minic_multi_direct_integer_compare_shape(
-    const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
     size_t *left_width, size_t *right_width,
     bool *left_signed, bool *right_signed);
 bool minic_multi_direct_scalar_zero_shape(
-    const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
     size_t *width, bool *is_signed, bool *is_pointer);
 bool minic_multi_direct_pointer_offset_shape(
-    const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
     size_t maximum_stride, size_t *index_width, bool *index_signed);
 
 /* Scalar integer binary families keep their existing ABI width rules. */
 bool minic_multi_direct_integer_binary_shape(
-    const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
     size_t *left_width, size_t *right_width,
     bool *left_signed, bool *right_signed);
 
 /* Relaxed-only scalar LOAD/ATOMIC_LOAD shape validation. */
 bool minic_multi_direct_scalar_load_shape(
-    const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
     size_t *width, bool *is_signed, bool *is_pointer);
 
@@ -128,7 +119,6 @@ bool minic_multi_direct_wide_scalar_load_location(
     size_t *destination_offset);
 
 bool minic_multi_direct_scalar_store_shape(
-    const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
     size_t *width, bool *is_signed, bool *is_pointer);
 

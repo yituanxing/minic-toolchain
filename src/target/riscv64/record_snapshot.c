@@ -1,4 +1,5 @@
 #include "target/riscv64/record_snapshot.h"
+#include "target/riscv64/core_type_query.h"
 
 /* Reuse the original optional cache and same per-function liveness
  * heuristics; no new machine representation or changed ABI constraints. */
@@ -158,9 +159,11 @@ bool minic_riscv64_record_call_result_snapshot_reuse_candidate(
     const MinicCoreInstruction *call;
     size_t i;
 
-    if (function == NULL || candidate_out == NULL ||
+    if (function == NULL || function->type_context == NULL ||
+        candidate_out == NULL ||
         result_object >= function->object_count ||
-        !minic_type_is_record(function->objects[result_object].type) ||
+        !minic_riscv64_core_is_record(
+            function, function->objects[result_object].core_type_id) ||
         function->objects[result_object].element_count != 1U) {
         return false;
     }
@@ -201,7 +204,10 @@ bool minic_riscv64_record_call_result_snapshot_reuse_candidate(
         result = &function->objects[result_object];
         if (candidate_object->element_count != result->element_count ||
             candidate_object->explicit_alignment != result->explicit_alignment ||
-            !minic_type_equal(candidate_object->type, result->type)) {
+            /* Preserve the source-C qualified nominal identity check:
+             * Core importer interns one ID per fully qualified Record.
+             * A distinct but layout-identical record cannot borrow storage. */
+            candidate_object->core_type_id != result->core_type_id) {
             continue;
         }
         *candidate_out = candidate;

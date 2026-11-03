@@ -5,63 +5,6 @@
 #include <stdint.h>
 #include <stdio.h>
 
-static const char *minic_riscv64_load_instruction(MinicType type) {
-    if (minic_type_is_pointer(type) || minic_type_is_double(type)) {
-        return "ld";
-    }
-    if (minic_type_is_float(type)) {
-        return "lwu";
-    }
-    if (!minic_type_is_integer(type) || minic_type_is_int128_integer(type)) {
-        return NULL;
-    }
-    if (minic_type_is_bool_integer(type)) {
-        return "lbu";
-    }
-    if (minic_type_is_char_integer(type)) {
-        return minic_type_is_unsigned_integer(type) ? "lbu" : "lb";
-    }
-    if (minic_type_is_short_integer(type)) {
-        return minic_type_is_unsigned_integer(type) ? "lhu" : "lh";
-    }
-    if (minic_type_is_long_integer(type)) {
-        return "ld";
-    }
-    return minic_type_is_unsigned_integer(type) ? "lwu" : "lw";
-}
-
-static const char *minic_riscv64_store_instruction(MinicType type) {
-    if (minic_type_is_pointer(type) || minic_type_is_double(type)) {
-        return "sd";
-    }
-    if (minic_type_is_float(type)) {
-        return "sw";
-    }
-    if (!minic_type_is_integer(type) || minic_type_is_int128_integer(type)) {
-        return NULL;
-    }
-    return (minic_type_is_bool_integer(type) || minic_type_is_char_integer(type)) ? "sb"
-           : minic_type_is_short_integer(type)                                    ? "sh"
-           : minic_type_is_long_integer(type)                                     ? "sd"
-                                                                                  : "sw";
-}
-
-static bool minic_riscv64_integer_aggregate_abi(
-    const MinicC0Program *program, MinicType type,
-    size_t *storage_size, size_t *register_chunks, bool lp64_soft_float) {
-    MinicRiscv64AbiValue value;
-
-    if (storage_size == NULL || register_chunks == NULL ||
-        !minic_riscv64_abi_classify_value_profile(
-            program, type, lp64_soft_float, &value) ||
-        value.kind != MINIC_RISCV64_ABI_VALUE_AGGREGATE) {
-        return false;
-    }
-    *storage_size = value.storage_size;
-    *register_chunks = value.slot_count;
-    return true;
-}
-
 static bool rv64_emit_integer_aggregate_load_chunk_known_shape(
     FILE *file, size_t storage_size, size_t chunk_count,
     size_t chunk_index, const char *destination_register,
@@ -85,7 +28,7 @@ static bool rv64_emit_integer_aggregate_load_chunk_known_shape(
     /* Only a proven RV64 frame address can use a native multi-byte load.
      * A record member inside an enclosing packed struct may be unaligned
      * even when the member's own record type has natural alignment. The
-     * legacy helper passes SIZE_MAX and takes the byte-gather path. */
+     * An unknown address offset passes SIZE_MAX for the byte-gather path. */
     aligned_for_native_load = known_frame_offset != SIZE_MAX &&
         known_frame_offset <= SIZE_MAX - chunk_offset &&
         (known_frame_offset + chunk_offset) % chunk_size == 0U;
@@ -128,19 +71,6 @@ static bool rv64_emit_integer_aggregate_load_chunk_known_shape(
         }
     }
     return true;
-}
-
-bool minic_riscv64_emit_integer_aggregate_load_chunk_profile(
-    FILE *file, const MinicC0Program *program, MinicType type,
-    size_t chunk_index, const char *destination_register,
-    const char *address_register, bool lp64_soft_float,
-    size_t known_frame_offset) {
-    size_t size, chunks;
-    return minic_riscv64_integer_aggregate_abi(
-               program, type, &size, &chunks, lp64_soft_float) &&
-           rv64_emit_integer_aggregate_load_chunk_known_shape(
-               file, size, chunks, chunk_index, destination_register,
-               address_register, known_frame_offset);
 }
 
 bool minic_riscv64_emit_integer_aggregate_load_chunk_core_profile(
@@ -207,51 +137,6 @@ bool minic_riscv64_emit_sp_load64(FILE *file, const char *register_name, size_t 
     return minic_riscv_frame_emit_word(file, &policy, false, register_name, offset);
 }
 
-static bool minic_riscv64_emit_integer_conversion(FILE *file, MinicType type, const char *register_name) {
-    if (register_name == NULL || !minic_type_is_integer(type) ||
-        minic_type_is_int128_integer(type)) {
-        return false;
-    }
-    if (minic_type_is_bool_integer(type)) {
-        return fprintf(file, "  snez %s, %s\n", register_name, register_name) >= 0;
-    }
-    if (minic_type_is_char_integer(type)) {
-        if (minic_type_is_unsigned_integer(type)) {
-            return fprintf(file, "  andi %s, %s, 255\n", register_name, register_name) >= 0;
-        }
-        return fprintf(file,
-                       "  slli %s, %s, 56\n"
-                       "  srai %s, %s, 56\n",
-                       register_name,
-                       register_name,
-                       register_name,
-                       register_name) >= 0;
-    }
-    if (minic_type_is_short_integer(type)) {
-        return fprintf(file,
-                       "  slli %s, %s, 48\n"
-                       "  %s %s, %s, 48\n",
-                       register_name,
-                       register_name,
-                       minic_type_is_unsigned_integer(type) ? "srli" : "srai",
-                       register_name,
-                       register_name) >= 0;
-    }
-    if (minic_type_is_long_integer(type)) {
-        return true;
-    }
-    if (minic_type_is_unsigned_integer(type)) {
-        return fprintf(file,
-                       "  slli %s, %s, 32\n"
-                       "  srli %s, %s, 32\n",
-                       register_name,
-                       register_name,
-                       register_name,
-                       register_name) >= 0;
-    }
-    return fprintf(file, "  addiw %s, %s, 0\n", register_name, register_name) >= 0;
-}
-
 bool minic_riscv64_emit_core_integer_conversion(
     FILE *file, const MinicCoreTypeContext *types, MinicCoreTypeId type_id,
     const char *register_name) {
@@ -294,63 +179,6 @@ bool minic_riscv64_emit_core_integer_conversion(
                        register_name, register_name) >= 0;
     }
     return bits == 64U;
-}
-
-bool minic_riscv64_emit_integer_conversion_for_program(FILE *file,
-                                                       const MinicC0Program *program,
-                                                       MinicType type,
-                                                       const char *register_name) {
-    MinicType effective_type;
-
-    if (minic_type_is_enum(type)) {
-        if (!minic_c0_type_effective_integer_type(program, type, &effective_type)) {
-            return false;
-        }
-        type = effective_type;
-    }
-    return minic_riscv64_emit_integer_conversion(file, type, register_name);
-}
-
-static bool minic_riscv64_emit_safe_scalar(
-    FILE *file, const MinicC0Program *program, MinicType type,
-    bool store, const char *value_register, const char *address_register,
-    const char *scratch_register, size_t proven_alignment) {
-    MinicType effective = type;
-    size_t width, type_alignment;
-    const char *op;
-    if (minic_type_is_enum(type) &&
-        !minic_c0_type_effective_integer_type(program, type, &effective))
-        return false;
-    op = store ? minic_riscv64_store_instruction(effective) :
-                 minic_riscv64_load_instruction(effective);
-    if (op == NULL ||
-        !minic_data_layout_type(minic_default_data_layout(), program,
-                                effective, &width, &type_alignment))
-        return false;
-    (void)type_alignment;
-    return minic_riscv_emit_typed_memory(
-        file, store, 64U, width,
-        !store && minic_type_is_signed_integer(effective),
-        op, value_register, address_register, scratch_register,
-        proven_alignment, "rv64_scalar");
-}
-
-bool minic_riscv64_emit_safe_scalar_load(
-    FILE *file, const MinicC0Program *program, MinicType type,
-    const char *destination_register, const char *address_register,
-    const char *scratch_register, size_t proven_alignment) {
-    return minic_riscv64_emit_safe_scalar(
-        file, program, type, false, destination_register,
-        address_register, scratch_register, proven_alignment);
-}
-
-bool minic_riscv64_emit_safe_scalar_store(
-    FILE *file, const MinicC0Program *program, MinicType type,
-    const char *source_register, const char *address_register,
-    const char *scratch_register, size_t proven_alignment) {
-    return minic_riscv64_emit_safe_scalar(
-        file, program, type, true, source_register,
-        address_register, scratch_register, proven_alignment);
 }
 
 static bool rv64_emit_safe_core_scalar(

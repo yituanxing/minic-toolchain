@@ -40,8 +40,6 @@ bool minic_multi_direct_lp64_function_plan_prepare(
     const MinicCoreFunctionFacts *,
     const MinicCoreObjectStoragePlan *, const char *architecture_name,
     const MinicDirectLP64AbiPolicy *,
-    MinicDirectLP64IndirectRecord,
-    MinicDirectLP64IndirectRecord,
     MinicDirectLP64OpaqueAsmQualifier,
     MinicDirectLP64FunctionPlan *);
 void minic_multi_direct_lp64_function_plan_destroy(

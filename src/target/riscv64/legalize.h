@@ -11,9 +11,6 @@
  * widths, aggregate operations, overflow arithmetic and call psABI.
  * A shared frontend/Core semantic invariant is NOT an ISA capability.
  * Never rewrite an unsupported operation as successful lowering. */
-/* Shared RV64 admissibility of machine-representable scalars; no liveness dependency. */
-bool minic_riscv64_scalar_type(MinicType);
-
 bool minic_riscv64_core_integer_type_is_signed(const MinicCoreFunction *function,
                                         MinicCoreTypeId type_id,
                                         bool *is_signed);
@@ -21,20 +18,17 @@ bool minic_riscv64_core_integer_type_is_signed(const MinicCoreFunction *function
 bool minic_riscv64_core_field_address_supported(const MinicCoreInstruction *instruction,
                                          size_t *field_offset);
 
-bool minic_riscv64_core_record_load_supported(const MinicC0Program *program,
-                                       const MinicCoreFunction *function,
+bool minic_riscv64_core_record_load_supported(const MinicCoreFunction *function,
                                        const MinicCoreInstruction *instruction,
                                        size_t *record_size);
 
-bool minic_riscv64_core_record_copy_supported(const MinicC0Program *program,
-                                       const MinicCoreFunction *function,
+bool minic_riscv64_core_record_copy_supported(const MinicCoreFunction *function,
                                        const MinicCoreInstruction *instruction);
 
 bool minic_riscv64_core_call_frame_address_supported(
     const MinicCoreFunction *function, const MinicCoreInstruction *instruction);
 
-bool minic_riscv64_core_scalar_bitcast_supported(const MinicC0Program *program,
-                                          const MinicCoreFunction *function,
+bool minic_riscv64_core_scalar_bitcast_supported(const MinicCoreFunction *function,
                                           const MinicCoreInstruction *instruction);
 
 bool minic_riscv64_core_integer_type_range_fits(

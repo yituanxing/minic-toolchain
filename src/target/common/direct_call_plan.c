@@ -227,9 +227,7 @@ static bool minic_lp64_plan_types(
  * and therefore fixed even when the function declares an ellipsis.
  * Reuses exactly the same register/stack classifier as outgoing calls. */
 bool minic_lp64_plan_incoming_parameters(
-    const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicDirectLP64AbiPolicy *abi,
-    MinicDirectLP64IndirectRecord indirect_record,
     MinicLP64ArgumentPlan *plan) {
     size_t return_bytes = 0U;
     bool hidden_indirect_result;
@@ -245,9 +243,6 @@ bool minic_lp64_plan_incoming_parameters(
         abi->core_indirect_record(types, fn->core_return_type_id,
                                   &return_bytes) &&
         return_bytes > 16U;
-    (void)program;
-    (void)target;
-    (void)indirect_record;
     return minic_lp64_plan_types(types, fn->core_parameter_type_ids,
         fn->parameter_count, fn->parameter_count, false, abi,
         hidden_indirect_result, plan);
@@ -449,11 +444,8 @@ static bool minic_lp64_admit_call(
  * Standalone callers without a Common index still use a checked linear
  * fallback, but production work is O(CALL sites), not O(all instructions). */
 bool minic_lp64_plan_function_calls(
-    const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicCoreCallIndex *semantic_calls,
     const MinicDirectLP64AbiPolicy *abi,
-    MinicDirectLP64IndirectRecord indirect_record,
-    MinicDirectLP64IndirectRecord indirect_return,
     const char *arch, const char *name, size_t *failed_instruction,
     bool *failed_preflight, bool *has_calls, MinicLP64CallPlanCache *cache) {
     const MinicCoreCallIndex *calls;
@@ -461,7 +453,7 @@ bool minic_lp64_plan_function_calls(
     if (failed_instruction != NULL) *failed_instruction = SIZE_MAX;
     if (failed_preflight != NULL) *failed_preflight = true;
     if (has_calls != NULL) *has_calls = false;
-    if (program == NULL || target == NULL || fn == NULL ||
+    if (fn == NULL ||
         fn->type_context == NULL || cache == NULL ||
         arch == NULL || name == NULL ||
         !minic_direct_lp64_abi_policy_valid(abi) ||
@@ -469,7 +461,6 @@ bool minic_lp64_plan_function_calls(
         failed_preflight == NULL || has_calls == NULL ||
         cache->sites != NULL || cache->call_count != 0U ||
         cache->semantic_calls.index != NULL ||
-        indirect_record == NULL ||
         abi->core_indirect_record == NULL || abi->core_indirect_return == NULL ||
         !minic_core_call_index_handle_prepare(
             fn, semantic_calls, &cache->semantic_calls))
@@ -507,7 +498,6 @@ bool minic_lp64_plan_function_calls(
         *failed_preflight = false;
         hidden_indirect_result =
             abi->indirect_result_argument_registers != 0U &&
-            indirect_return != NULL &&
             minic_lp64_core_kind(fn->type_context,
                 calls->sites[ordinal].view.core_return_type_id,
                 MINIC_CORE_TYPE_RECORD) &&

@@ -183,7 +183,7 @@ static inline bool minic_program_visit_prepared_functions_module(
          * No physical ABI state escapes into the Core definition. */
         if (is_defined)
             ready = minic_core_function_plan_build(
-                program, target, &functions[i], &plan);
+                &functions[i], &plan);
         if (ready)
             ready = visit(out, program, target, decl, module_decl, &functions[i],
                           is_defined ? &plan.facts : NULL,

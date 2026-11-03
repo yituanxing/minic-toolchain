@@ -33,33 +33,13 @@ bool minic_core_object_storage_resolved(const MinicCoreTypeContext *types,
         object, type->size, type->alignment, result);
 }
 
-/* This function is kept only for existing C-facing standalone callers.
- * Prepared CoreFunction machine plans take the resolved branch below. */
-bool minic_core_object_storage(const MinicC0Program *program,
-                               const MinicDataLayout *layout,
-                               const MinicCoreObject *object,
-                               MinicCoreObjectStorage *result) {
-    size_t size, alignment;
-    if (program == NULL || layout == NULL || object == NULL || result == NULL ||
-        !minic_data_layout_type(layout, program, object->type, &size, &alignment))
-        return false;
-    return core_object_storage_checked_shape(object, size, alignment, result);
-}
-
 bool minic_core_object_storage_plan_build(
-    const MinicC0Program *program, const MinicDataLayout *layout,
     const MinicCoreFunction *function, MinicCoreObjectStoragePlan *plan) {
     size_t i;
-    if (function == NULL || plan == NULL ||
-        plan->objects != NULL ||
+    if (function == NULL || function->type_context == NULL || plan == NULL ||
+        plan->objects != NULL || plan->count != 0U ||
         (function->object_count != 0U && function->objects == NULL) ||
         function->object_count > SIZE_MAX / sizeof(*plan->objects))
-        return false;
-    /* Missing context is an explicit compatibility allowance for old native
-     * standalone C fixture callers. Production Core ingress must attach a
-     * context before requesting its prepared function plan; once attached,
-     * an unresolved CoreType NEVER falls back to C layout. */
-    if (function->type_context == NULL && (program == NULL || layout == NULL))
         return false;
     plan->count = 0U;
     if (function->object_count == 0U) return true;
@@ -67,11 +47,8 @@ bool minic_core_object_storage_plan_build(
         function->object_count, sizeof(*plan->objects));
     if (plan->objects == NULL) return false;
     for (i = 0U; i < function->object_count; ++i)
-        if (!(function->type_context != NULL
-                ? minic_core_object_storage_resolved(
-                    function->type_context, &function->objects[i], &plan->objects[i])
-                : minic_core_object_storage(
-                    program, layout, &function->objects[i], &plan->objects[i]))) {
+        if (!minic_core_object_storage_resolved(
+                function->type_context, &function->objects[i], &plan->objects[i])) {
             minic_core_object_storage_plan_destroy(plan);
             return false;
         }
@@ -88,10 +65,9 @@ void minic_core_object_storage_plan_destroy(MinicCoreObjectStoragePlan *plan) {
 /* Shared resource ownership for five machine backends. No target-specific
  * memory addresses, register assignment, spill policy or stack direction. */
 bool minic_core_object_storage_plan_acquire(
-    const MinicC0Program *program, const MinicDataLayout *layout,
     const MinicCoreFunction *fn, const MinicCoreObjectStoragePlan *shared,
     MinicCoreObjectStoragePlan *result, bool *borrowed) {
-    if (fn == NULL || result == NULL || borrowed == NULL ||
+    if (fn == NULL || fn->type_context == NULL || result == NULL || borrowed == NULL ||
         result->objects != NULL || result->count != 0U) return false;
     *borrowed = false;
     if (shared != NULL) {
@@ -101,7 +77,7 @@ bool minic_core_object_storage_plan_acquire(
         *borrowed = true;
         return true;
     }
-    return minic_core_object_storage_plan_build(program, layout, fn, result);
+    return minic_core_object_storage_plan_build(fn, result);
 }
 
 void minic_core_object_storage_plan_release(

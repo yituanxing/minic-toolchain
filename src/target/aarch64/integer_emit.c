@@ -489,7 +489,7 @@ bool minic_aarch64_emit_integer_instruction(
             bool wide;
             const char *op;
             if (!minic_multi_direct_integer_shift_shape(
-                    program, target, fn, ins, &lw, &rw, &ls, &rs))
+                    fn, ins, &lw, &rw, &ls, &rs))
                 return false;
             wide = lw == 8U;
             op = ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_LEFT
@@ -523,7 +523,7 @@ bool minic_aarch64_emit_integer_instruction(
             size_t width;
             bool sign;
             if (!minic_multi_direct_integer_unary_shape(
-                    program, target, fn, ins, &width, &sign) ||
+                    fn, ins, &width, &sign) ||
                 !minic_a64_emit_owned_slot(out, view, false,
                     width == 8U ? MINIC_A64_REG_X : MINIC_A64_REG_W,
                     9U, minic_lp64_frame_value_offset(frame_plan, operand)) ||
@@ -539,7 +539,7 @@ bool minic_aarch64_emit_integer_instruction(
             size_t width;
             bool sign;
             if (!minic_multi_direct_integer_unary_shape(
-                    program, target, fn, ins, &width, &sign) ||
+                    fn, ins, &width, &sign) ||
                 !minic_a64_emit_owned_slot(out, view, false,
                     width == 8U ? MINIC_A64_REG_X : MINIC_A64_REG_W,
                     9U, minic_lp64_frame_value_offset(frame_plan, operand)) ||
@@ -560,7 +560,7 @@ bool minic_aarch64_emit_integer_instruction(
             bool wide;
             const char *opcode;
             if (!minic_multi_direct_integer_binary_shape(
-                    program, target, fn, ins, &lw, &rw, &ls, &rs))
+                    fn, ins, &lw, &rw, &ls, &rs))
                 return false;
             wide = lw == 8U;
             /* M36: target-native LP64 multiplication, including cJSON's
@@ -593,7 +593,7 @@ bool minic_aarch64_emit_integer_instruction(
             bool wide;
             const char *opcode;
             if (!minic_multi_direct_integer_binary_shape(
-                    program, target, fn, ins, &lw, &rw, &ls, &rs))
+                    fn, ins, &lw, &rw, &ls, &rs))
                 return false;
             wide = lw == 8U;
             opcode = ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND
@@ -621,7 +621,7 @@ bool minic_aarch64_emit_integer_instruction(
             bool ls, rs, wide;
             const char *op;
             if (!minic_multi_direct_integer_binary_shape(
-                    program, target, fn, ins, &lw, &rw, &ls, &rs))
+                    fn, ins, &lw, &rw, &ls, &rs))
                 return false;
             wide = lw == 8U;
             if (!minic_a64_emit_owned_slot(out, view, false,
@@ -685,7 +685,7 @@ bool minic_aarch64_emit_integer_instruction(
             return true;
             }
             if (!minic_multi_direct_integer_compare_shape(
-                    program, target, fn, ins, &lw, &rw, &ls, &rs))
+                    fn, ins, &lw, &rw, &ls, &rs))
                 return false;
             wide = lw == 8U;
             if (!minic_a64_emit_owned_slot(out, view, false,
@@ -712,7 +712,7 @@ bool minic_aarch64_emit_integer_instruction(
             bool sign = false;
             bool pointer, wide;
             if (!minic_multi_direct_scalar_zero_shape(
-                    program, target, fn, ins, &width, &sign, &pointer))
+                    fn, ins, &width, &sign, &pointer))
                 return false;
             wide = pointer || width == 8U;
             if (!minic_a64_emit_owned_slot(out, view, false,

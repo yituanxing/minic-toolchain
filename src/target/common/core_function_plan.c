@@ -16,10 +16,9 @@ void minic_core_function_plan_destroy(
 }
 
 bool minic_core_function_plan_build(
-    const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *function, MinicCoreFunctionPlan *plan) {
-    if (plan == NULL || program == NULL || target == NULL ||
-        target->data_layout == NULL || function == NULL || plan->prepared ||
+    if (plan == NULL || function == NULL || function->type_context == NULL ||
+        plan->prepared ||
         plan->calls.sites != NULL || plan->objects.objects != NULL ||
         plan->variadic_results != NULL)
         return false;
@@ -33,8 +32,7 @@ bool minic_core_function_plan_build(
         !minic_core_call_index_build(
             function, plan->facts.direct_call_count +
                       plan->facts.indirect_call_count, &plan->calls) ||
-        !minic_core_object_storage_plan_build(
-            program, target->data_layout, function, &plan->objects)) {
+        !minic_core_object_storage_plan_build(function, &plan->objects)) {
         minic_core_function_plan_destroy(plan);
         return false;
     }

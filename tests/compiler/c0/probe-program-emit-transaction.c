@@ -203,6 +203,7 @@ int main(int argc, char **argv) {
     MinicGlobalObject object = {0};
     MinicFunction declaration = {0};
     MinicCoreFunction ir = {0};
+    MinicCoreTypeContext synthetic_types = {0};
     /* Transaction callbacks use six global instructions for fact coverage,
      * but executable Core must still have a valid, reachable entry block. */
     MinicCoreBlock entry_block = {
@@ -241,6 +242,7 @@ int main(int argc, char **argv) {
     declaration.is_defined = true;
     instructions[5].value.call_frame_address.kind = MINIC_CORE_CALL_FRAME_ADDRESS_RETURN;
     ir.instructions = instructions;
+    ir.type_context = &synthetic_types;
     ir.instruction_count = sizeof(instructions) / sizeof(instructions[0]);
     ir.blocks = &entry_block;
     ir.block_count = 1U;
@@ -328,9 +330,8 @@ int main(int argc, char **argv) {
  * have identical success/cleanup semantics. Architecture runtime gates
  * always link the production Core storage implementation. */
 bool minic_core_object_storage_plan_build(
-    const MinicC0Program *program, const MinicDataLayout *layout,
     const MinicCoreFunction *fn, MinicCoreObjectStoragePlan *plan) {
-    return program != NULL && layout != NULL && fn != NULL && plan != NULL &&
+    return fn != NULL && plan != NULL &&
            fn->object_count == 0U && plan->objects == NULL;
 }
 void minic_core_object_storage_plan_destroy(MinicCoreObjectStoragePlan *plan) {

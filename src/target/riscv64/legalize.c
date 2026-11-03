@@ -5,16 +5,8 @@
 #include "target/common/lp64_scalar.h"
 #include "target/common/core_scalar_conversion.h"
 
-/* Original target scalar gate remains shared by RV64 object analysis
- * and instruction-admission queries. */
-bool minic_riscv64_scalar_type(MinicType type) {
-    return minic_type_is_integer(type) || minic_type_is_pointer(type) ||
-           minic_type_is_float(type) || minic_type_is_double(type) ||
-           minic_type_is_long_double(type);
-}
-
 /* Existing production RV64 instruction and calling-convention legal gates.
- * Moved from core_codegen.c without changing any comparisons or fallbacks.
+ * Moved from core_codegen.c. Executable type admission is Core-only.
  * ISA emission and actual register/stack placement remain target-owned. */
 bool minic_riscv64_core_integer_type_is_signed(const MinicCoreFunction *function,
                                         MinicCoreTypeId type_id,
@@ -37,14 +29,12 @@ bool minic_riscv64_core_field_address_supported(const MinicCoreInstruction *inst
     return true;
 }
 
-bool minic_riscv64_core_record_load_supported(const MinicC0Program *program,
-                                       const MinicCoreFunction *function,
+bool minic_riscv64_core_record_load_supported(const MinicCoreFunction *function,
                                        const MinicCoreInstruction *instruction,
                                        size_t *record_size) {
     const MinicCoreTypeContext *types;
     const MinicCoreType *record, *pointee;
     MinicCoreTypeId source_pointee_id;
-    (void)program;
     if (function == NULL || function->type_context == NULL || instruction == NULL ||
         instruction->kind != MINIC_CORE_INSTRUCTION_RECORD_LOAD ||
         instruction->result != MINIC_CORE_VALUE_INVALID ||
@@ -74,13 +64,11 @@ bool minic_riscv64_core_record_load_supported(const MinicC0Program *program,
     return true;
 }
 
-bool minic_riscv64_core_record_copy_supported(const MinicC0Program *program,
-                                       const MinicCoreFunction *function,
+bool minic_riscv64_core_record_copy_supported(const MinicCoreFunction *function,
                                        const MinicCoreInstruction *instruction) {
     const MinicCoreTypeContext *types;
     const MinicCoreType *record;
     MinicCoreTypeId destination_pointee_id, source_pointee_id;
-    (void)program;
     if (function == NULL || function->type_context == NULL || instruction == NULL ||
         instruction->kind != MINIC_CORE_INSTRUCTION_RECORD_COPY ||
         instruction->result != MINIC_CORE_VALUE_INVALID ||
@@ -126,11 +114,9 @@ bool minic_riscv64_core_call_frame_address_supported(
     }
 }
 
-bool minic_riscv64_core_scalar_bitcast_supported(const MinicC0Program *program,
-                                          const MinicCoreFunction *function,
+bool minic_riscv64_core_scalar_bitcast_supported(const MinicCoreFunction *function,
                                           const MinicCoreInstruction *instruction) {
     MinicCoreScalarBitcastShape cast;
-    (void)program;
     return minic_core_scalar_bitcast_shape(function, instruction, &cast) &&
            cast.source_bytes <= 8U && cast.target_bytes <= 8U;
 }

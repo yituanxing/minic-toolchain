@@ -216,7 +216,7 @@ bool minic_loongarch64_direct_frame_memory_use(
               loong_memory_wide_type(fn,
                  fn->values[ins->value.store.stored_value].core_type_id, false))) ||
             !minic_multi_direct_scalar_store_shape(
-                program, target, fn, ins, &width, &sign, &pointer))
+                fn, ins, &width, &sign, &pointer))
             return false;
         break;
     case MINIC_CORE_INSTRUCTION_LOAD:
@@ -227,7 +227,7 @@ bool minic_loongarch64_direct_frame_memory_use(
              (loong_memory_wide_type(fn, ins->core_type_id, true) ||
               loong_memory_wide_type(fn, ins->core_type_id, false))) ||
             !minic_multi_direct_scalar_load_shape(
-                program, target, fn, ins, &width, &sign, &pointer))
+                fn, ins, &width, &sign, &pointer))
             return false;
         break;
     default: return false;
@@ -488,7 +488,7 @@ bool minic_loongarch64_emit_memory_instruction(
             size_t direct_offset = 0U;
             bool sign = false, pointer = false;
             if (!minic_multi_direct_scalar_store_shape(
-                    program, target, fn, ins, &width, &sign, &pointer))
+                    fn, ins, &width, &sign, &pointer))
                 return false;
             if (minic_loongarch64_direct_frame_memory_use(
                     program, target, fn, frame_plan, ins)) {
@@ -544,7 +544,7 @@ bool minic_loongarch64_emit_memory_instruction(
             size_t direct_offset = 0U;
             bool sign = false, pointer = false;
             if (!minic_multi_direct_scalar_load_shape(
-                    program, target, fn, ins, &width, &sign, &pointer))
+                    fn, ins, &width, &sign, &pointer))
                 return false;
             if (minic_loongarch64_direct_frame_memory_use(
                     program, target, fn, frame_plan, ins)) {

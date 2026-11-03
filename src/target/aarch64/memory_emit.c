@@ -206,7 +206,7 @@ bool minic_aarch64_emit_memory_instruction(
             size_t width = 0U;
             bool sign = false, pointer = false;
             if (!minic_multi_direct_scalar_store_shape(
-                    program, target, fn, ins, &width, &sign, &pointer))
+                    fn, ins, &width, &sign, &pointer))
                 return false;
             if (!memory_slot(out, frame_view, false, MINIC_A64_REG_X, 10U,
                     minic_lp64_frame_value_offset(frame_plan, addr)) ||
@@ -263,7 +263,7 @@ bool minic_aarch64_emit_memory_instruction(
             size_t width = 0U;
             bool sign = false, pointer = false;
             if (!minic_multi_direct_scalar_load_shape(
-                    program, target, fn, ins, &width, &sign, &pointer)) {
+                    fn, ins, &width, &sign, &pointer)) {
                 report_load_shape_reject(fn, ins, addr);
                 return false;
             }

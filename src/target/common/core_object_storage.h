@@ -2,8 +2,6 @@
 #define MINIC_TARGET_COMMON_CORE_OBJECT_STORAGE_H
 
 #include "core/core_ir.h"
-#include "frontend/ast.h"
-#include "target/data_layout.h"
 #include <stdbool.h>
 #include <stddef.h>
 
@@ -26,14 +24,7 @@ bool minic_core_object_storage_resolved(const MinicCoreTypeContext *,
                                         const MinicCoreObject *,
                                         MinicCoreObjectStorage *);
 
-/* Legacy standalone layout helper retained for C-facing harnesses.  The
- * five-target CoreFunction plan uses resolved Core types when attached. */
-bool minic_core_object_storage(const MinicC0Program *,
-                               const MinicDataLayout *,
-                               const MinicCoreObject *,
-                               MinicCoreObjectStorage *);
 bool minic_core_object_storage_plan_build(
-    const MinicC0Program *, const MinicDataLayout *,
     const MinicCoreFunction *, MinicCoreObjectStoragePlan *);
 void minic_core_object_storage_plan_destroy(
     MinicCoreObjectStoragePlan *);
@@ -43,7 +34,6 @@ void minic_core_object_storage_plan_destroy(
  * offsets, ABI alignment and spill lifetimes remain target-owned.
  * Acquire only into a zero-initialized (unowned) plan; always release. */
 bool minic_core_object_storage_plan_acquire(
-    const MinicC0Program *, const MinicDataLayout *,
     const MinicCoreFunction *, const MinicCoreObjectStoragePlan *shared,
     MinicCoreObjectStoragePlan *result, bool *borrowed);
 void minic_core_object_storage_plan_release(

@@ -74,7 +74,7 @@ bool rv32_frame_init_with_storage(Rv32Frame *frame, const MinicC0Program *progra
     frame->object_storage = (MinicCoreObjectStoragePlan){0};
     frame->borrows_object_storage = false;
     if (!minic_core_object_storage_plan_acquire(
-            program, t->data_layout, f, storage,
+            f, storage,
             &frame->object_storage, &frame->borrows_object_storage))
         return rv32_frame_reject("core_object_storage", 0U, f,
                                  MINIC_CORE_TYPE_INVALID);
@@ -111,7 +111,7 @@ bool rv32_frame_init_with_storage(Rv32Frame *frame, const MinicC0Program *progra
         MinicCoreObjectReusePlan reuse = {0};
         size_t pool_slots = 0U, pool_base;
         if (!minic_core_object_reuse_plan_build(
-                program, f, t->data_layout, 8U, true, &reuse) ||
+                f, 8U, true, &reuse) ||
             !minic_core_object_reuse_plan_get(
                 &reuse, MINIC_CORE_OBJECT_INVALID, NULL, NULL, &pool_slots)) {
             minic_core_object_reuse_plan_destroy(&reuse);
@@ -175,7 +175,7 @@ bool rv32_frame_init_with_storage(Rv32Frame *frame, const MinicC0Program *progra
     {
         size_t failed_block = SIZE_MAX;
         if (!minic_core_function_reused_spill_layout(
-                program, f, t->data_layout, 4U, value_base,
+                f, 4U, value_base,
                 frame->value_offsets, &peak_bytes, &failed_block))
             return rv32_frame_reject("spill_layout", failed_block, f,
                                      MINIC_CORE_TYPE_INVALID);

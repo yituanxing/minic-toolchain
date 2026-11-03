@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Optional same-preprocessed-source differential gate for the P6 Core
-# execution-type closure. Emitters must retain machine bytes and rejection
-# behavior while their C descriptor fallbacks are retired together.
+# Optional same-preprocessed-source differential gate for the P6/P7 Core
+# execution-type and frame/ASM ownership closures. Emitters must retain
+# machine bytes and rejection behavior while C fallbacks are retired.
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "$0")/../../.." && pwd)
@@ -34,6 +34,17 @@ fixtures=(
   gnu_typeof_array_bound_cast
   core_integer_or_shifts_m22
   gnu_choose_dynamic_condition_reject
+  gnu_fixed_register_bindings
+  gnu_extended_nonvolatile_asm
+  gnu_asm_qualifier_metadata
+  riscv_packed_structured_asm_alignment
+  direct_lp64_source_object_slot_reuse
+  direct_lp64_spill_reuse_pressure
+  lp64_overaligned_stack_frame
+  record_rvalue_nested_member
+  anonymous_record_members_runtime
+  loongarch64_linux_va_fixed_overflow
+  loongarch64_core_integer_emit
 )
 targets=(riscv32-linux riscv64-linux x86_64-linux aarch64-linux loongarch64-linux)
 

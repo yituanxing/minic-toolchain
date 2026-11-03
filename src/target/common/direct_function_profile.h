@@ -23,11 +23,9 @@ typedef enum MinicDirectLP64ProfileResult {
 /* Preserve the existing per-ABI variadic admissions, parameter type gates,
  * and incoming register/stack locations. No machine instructions are emitted. */
 MinicDirectLP64ProfileResult minic_multi_direct_lp64_profile_function(
-    const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn,
     const MinicCoreFunctionFacts *facts,
     const MinicDirectLP64AbiPolicy *abi,
-    MinicDirectLP64IndirectRecord indirect_record,
     MinicLP64ArgumentPlan *incoming, MinicDirectLP64FunctionProfile *profile);
 
 #endif

@@ -141,7 +141,6 @@ static bool aarch64_emit_function(
     bool function_sections) {
     static const MinicDirectLP64FunctionEmitter emitter = {
         "aarch64", &aarch64_abi_policy,
-        minic_aarch64_indirect_record, minic_aarch64_indirect_record,
         "%progbits", "%function", "%init_array", "xword",
         aarch64_emit_prologue, minic_aarch64_emit_core_blocks,
         minic_aarch64_qualified_opaque_asm

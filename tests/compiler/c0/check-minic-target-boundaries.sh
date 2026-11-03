@@ -211,10 +211,11 @@ has src/target/common/aggregate_shape.c 'bool minic_common_aggregate_storage_sha
 lacks src/target/common/aggregate_shape.c 'minic_common_aggregate_integral_tree('
 lacks src/target/common/aggregate_shape.h 'minic_common_aggregate_integral_tree('
 for consumer in src/target/x86_64/abi.c \
-                src/target/riscv64/abi.c \
-                src/target/common/lp64_aggregate.c; do
+                src/target/riscv64/abi.c; do
   has "$consumer" 'minic_common_aggregate_storage_shape('
 done
+has src/target/common/lp64_aggregate.c 'minic_common_aggregate_storage_shape_core('
+lacks src/target/common/lp64_aggregate.c 'minic_common_aggregate_storage_shape('
 has src/target/riscv32/rv32_abi_plan.c 'minic_common_aggregate_storage_shape_core('
 lacks src/target/riscv32/rv32_abi_plan.c 'minic_common_aggregate_storage_shape('
 has src/target/riscv64/abi.c 'static bool rv64_integer_convention_record_tree('
@@ -791,7 +792,59 @@ done
 # Actual five-target frame ownership, not another architecture-specific
 # Core storage calculator. The target still chooses ABI stack geometry.
 exists src/target/common/core_frame_layout.h
-has src/target/common/core_object_storage.c 'return minic_core_object_storage_plan_build(program, layout, fn, result);'
+has src/target/common/core_object_storage.c 'return minic_core_object_storage_plan_build(fn, result);'
+# The complete Core object → interval → reuse → spill → function-plan
+# ownership chain must be independent of source C type and DataLayout.
+for source in \
+  src/target/common/core_object_storage.c \
+  src/target/common/core_object_storage.h \
+  src/target/common/core_object_intervals.c \
+  src/target/common/core_object_intervals.h \
+  src/target/common/core_object_reuse.c \
+  src/target/common/core_object_reuse.h \
+  src/target/common/core_spill_layout.c \
+  src/target/common/core_spill_layout.h \
+  src/target/common/core_function_plan.c \
+  src/target/common/core_function_plan.h; do
+  lacks "$source" 'MinicC0Program'
+  lacks "$source" 'MinicDataLayout'
+  lacks "$source" 'minic_type_'
+done
+# Direct LP64 psABI Core classifiers are never allowed to re-introduce
+# a C record walker or a second frontend integer-width interpretation.
+for source in \
+  src/target/common/lp64_scalar.c \
+  src/target/common/lp64_scalar.h \
+  src/target/common/lp64_aggregate.c \
+  src/target/common/lp64_aggregate.h \
+  src/target/common/direct_call_plan.c \
+  src/target/common/direct_call_plan.h \
+  src/target/common/direct_function_profile.c \
+  src/target/common/direct_function_profile.h; do
+  lacks "$source" 'MinicC0Program'
+  lacks "$source" 'MinicTargetInfo'
+  lacks "$source" 'minic_type_'
+done
+has src/target/common/direct_call_plan.c 'abi->core_indirect_return'
+has src/target/common/direct_function_profile.c 'fn->core_return_type_id'
+# RV64 machine execution and the LoongArch64 integer pipeline no longer
+# have source C type fallbacks; retain source-ASM qualification separately.
+for source in \
+  src/target/riscv64/memory_emit.c \
+  src/target/riscv64/codegen_support.c \
+  src/target/riscv64/core_codegen.c \
+  src/target/riscv64/core_admission.c \
+  src/target/riscv64/inline_asm_emit.c \
+  src/target/riscv64/legalize.c \
+  src/target/riscv64/legalize.h \
+  src/target/riscv64/record_snapshot.c \
+  src/target/riscv64/codegen_internal.h \
+  src/target/loongarch64/integer_emit.c \
+  src/target/common/direct_instruction_semantics.c \
+  src/target/common/direct_instruction_semantics.h; do
+  lacks "$source" 'minic_type_'
+done
+lacks src/target/loongarch64/integer_emit.c 'minic_lp64_scalar_integer_width'
 has src/target/riscv32/rv32_frame.c 'minic_core_frame_reserve('
 # Entire RISC-V Core SSA frame planning now uses one pass across blocks,
 # not a peak pass followed by an identical assignment re-traversal.
@@ -980,8 +1033,10 @@ lacks src/target/riscv32/rv32_abi_plan.c 'while (i < function->instruction_count
 lacks src/target/common/direct_call_plan.c 'while (id < fn->instruction_count'
 # SysV VA cursors must match the prepared Common fact count exactly.
 has src/target/x86_64/frame.c 'if (count != frame->varargs_count) return false;'
-has src/target/common/direct_function_plan.c 'program, target, fn, facts, abi, indirect_record,'
-has src/target/common/direct_function_plan.c 'program, target, decl, module_decl, fn, facts, architecture_name, name,'
+has src/target/common/direct_function_plan.c 'fn, facts->call_index, abi, architecture_name, name,'
+has src/target/common/direct_function_plan.c 'decl, module_decl, fn, facts, architecture_name, name,'
+lacks src/target/common/direct_function_plan.c 'indirect_record'
+lacks src/target/common/direct_function_plan.c 'fn->return_type'
 has src/target/common/direct_function_emit.h 'minic_multi_direct_lp64_function_plan_prepare('
 lacks src/target/loongarch64/codegen.c 'minic_multi_direct_lp64_function_plan_prepare('
 # All five targets must own only target callbacks. File lifetime,
@@ -1043,6 +1098,19 @@ cc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror \
   src/core/core_type.c \
   -o "$work/core-object-storage-resolved-probe"
 "$work/core-object-storage-resolved-probe"
+
+# Deliberately poison source C descriptors across the entire five-backend
+# shared object/SSA frame chain; ILP32/LP64 and missing Core facts fail closed.
+cc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror \
+  -ffunction-sections -fdata-sections -Wl,--gc-sections \
+  -Iinclude -Isrc tests/compiler/c0/probe-core-frame-type-ownership.c \
+  src/core/core_type.c src/core/core_ir.c src/core/value_uses.c \
+  src/target/common/core_object_storage.c \
+  src/target/common/core_object_intervals.c \
+  src/target/common/core_object_reuse.c \
+  src/target/common/core_spill_layout.c \
+  -o "$work/core-frame-type-ownership-probe"
+"$work/core-frame-type-ownership-probe"
 
 # A Record's Core layout is an ABI classification input, not a request for
 # Target to reconstruct C fields. Packed, HFA, bitfield and nominal shapes

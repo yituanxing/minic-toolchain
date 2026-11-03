@@ -48,6 +48,25 @@ const MinicX86AbiRegisters *minic_x86_64_abi_registers(
  * and register-bank/stack ingress. The existing rules stay byte-for-byte;
  * target-specific machine emission remains in machine_emit.c and machine_call.c. */
 
+/* Source-facing GNU inline-ASM width qualification remains here until its
+ * source facts are sealed at ingress. The LP64 Common machine ABI no longer
+ * depends on this C descriptor query. */
+static bool x86_source_integer_width(const MinicC0Program *program,
+                                     const MinicTargetInfo *target,
+                                     MinicType type, size_t *bytes,
+                                     bool *is_signed) {
+    unsigned int bits;
+    MinicType effective;
+    if (bytes == NULL || is_signed == NULL || !minic_type_is_integer(type) ||
+        !minic_c0_type_effective_integer_type(program, type, &effective) ||
+        !minic_target_info_integer_width(target, program, type, &bits) ||
+        bits == 0U || (bits > 32U && bits != 64U))
+        return false;
+    *bytes = bits == 64U ? 8U : ((size_t)bits + 7U) / 8U;
+    *is_signed = minic_type_is_signed_integer(effective);
+    return *bytes == 1U || *bytes == 2U || *bytes == 4U || *bytes == 8U;
+}
+
 bool minic_x86_64_scalar_width(const MinicC0Program *program,
                              const MinicTargetInfo *target,
                              MinicType type, size_t *bytes, bool *is_signed) {
@@ -58,8 +77,8 @@ bool minic_x86_64_scalar_width(const MinicC0Program *program,
         *is_signed = false;
         return *bytes == 8U;
     }
-    return minic_lp64_scalar_integer_width(program, target, type,
-                                            bytes, is_signed);
+    return x86_source_integer_width(program, target, type,
+                                   bytes, is_signed);
 }
 
 /* Values are stored as raw machine bits in eight-byte Core slots.  Floating

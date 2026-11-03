@@ -43,7 +43,7 @@ bool minic_riscv64_core_frame_initialize_with_storage(
     frame->call_index = (MinicCoreCallIndexHandle){0};
     frame->outgoing_calls = (MinicRiscv64CallPlanCache){0};
     if (!minic_core_object_storage_plan_acquire(
-            program, minic_default_data_layout(), function, storage,
+            function, storage,
             &frame->object_storage, &frame->borrows_object_storage))
         return false;
     frame->has_dynamic_stack_alloc = facts->uses_dynamic_stack_alloc;
@@ -88,7 +88,7 @@ bool minic_riscv64_core_frame_initialize_with_storage(
     storage_size = outgoing_argument_size;
     maximum_object_alignment = 16U;
     if (!minic_core_object_reuse_plan_build(
-            program, function, minic_default_data_layout(), 8U,
+            function, 8U,
             crossblock_enabled, &frame->object_reuse) ||
         !minic_core_object_reuse_plan_get(
             &frame->object_reuse, MINIC_CORE_OBJECT_INVALID,
@@ -167,7 +167,7 @@ bool minic_riscv64_core_frame_initialize_with_storage(
                 frame->value_offsets[i] = SIZE_MAX;
         }
         if (!minic_core_function_reused_spill_layout(
-                program, function, minic_default_data_layout(), 8U,
+                function, 8U,
                 frame->value_base_offset, frame->value_offsets,
                 &maximum_block_bytes, NULL))
             return false;

@@ -486,7 +486,7 @@ bool minic_aarch64_emit_residual_instruction(
                     ins->value.pointer_offset.subtract ? 1 : 0);
             }
             if (!minic_multi_direct_pointer_offset_shape(
-                    program, target, fn, ins, SIZE_MAX, &iw, &signed_index) ||
+                    fn, ins, SIZE_MAX, &iw, &signed_index) ||
                 !minic_a64_emit_owned_slot(out, &frame_view, false,
                     MINIC_A64_REG_X, 9U, minic_lp64_frame_value_offset(frame_plan, base)) ||
                 !minic_a64_emit_owned_address(out, &frame_view,
@@ -521,7 +521,7 @@ bool minic_aarch64_emit_residual_instruction(
             bool src_pointer = false;
             bool pointer_to_integer = false;
             if (!minic_multi_direct_scalar_bitcast_shape(
-                    program, target, fn, ins, &pointer_to_integer,
+                    fn, ins, &pointer_to_integer,
                     &src_width, &src_signed, &src_pointer))
                 return minic_multi_direct_machine_reject(
                     fn, "aarch64", name, reject_stage, reject_block,

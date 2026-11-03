@@ -109,19 +109,17 @@ static void direct_lp64_trace_asm_owners(
  * Reject unsupported Core shapes before generating partial GNU assembly.
  * Caller owns target ABI, registers, frame and any failure diagnostics. */
 bool minic_multi_direct_lp64_function_preflight(
-    const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicFunction *decl, const MinicCoreModuleFunctionSymbol *module_decl,
     const MinicCoreFunction *fn,
     const MinicCoreFunctionFacts *facts, const char *arch, const char *name,
     MinicDirectLP64OpaqueAsmQualifier qualify_opaque_asm,
-    MinicDirectLP64IndirectRecord indirect_return,
     const MinicDirectLP64AbiPolicy *abi) {
     bool verified;
     bool return_valid;
     bool visibility_valid, alias_present, constructor, weak;
     bool has_section;
     unsigned int visibility;
-    if (program == NULL || target == NULL || decl == NULL || fn == NULL ||
+    if (decl == NULL || fn == NULL ||
         fn->type_context == NULL ||
         arch == NULL || !minic_direct_lp64_abi_policy_valid(abi)) return false;
     verified = minic_core_function_facts_verified(facts, fn) ||
@@ -142,7 +140,6 @@ bool minic_multi_direct_lp64_function_preflight(
         : decl->section_name != NULL;
     visibility = module_decl != NULL ? (unsigned int)module_decl->visibility
         : (unsigned int)decl->visibility;
-    (void)indirect_return;
     /* Collect the ENTIRE admission error class for each failed function.
      * This is not a feature gate or permissive fallback: all original
      * policy checks below stay intact. The 3x7 GNU corpus aggregates
@@ -206,15 +203,12 @@ bool minic_multi_direct_lp64_function_preflight(
 }
 
 bool minic_multi_direct_lp64_cfg_preflight(
-    const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, size_t *failed_block,
-    MinicDirectLP64IndirectRecord indirect_return,
     const MinicDirectLP64AbiPolicy *abi) {
     size_t i;
-    if (program == NULL || target == NULL || fn == NULL ||
+    if (fn == NULL ||
         fn->type_context == NULL ||
         failed_block == NULL || !minic_direct_lp64_abi_policy_valid(abi)) return false;
-    (void)indirect_return;
     *failed_block = SIZE_MAX;
     /* M2: verify every CFG successor and return before emitting anything.
      * A function's SSA values and local objects retain unique stack slots

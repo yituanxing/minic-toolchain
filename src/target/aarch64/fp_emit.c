@@ -93,7 +93,7 @@ bool minic_aarch64_emit_fp_instruction(
             const char *condition = ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_EQUAL
                 ? "eq" : ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_LESS ? "lo" : "ls";
             if (!minic_multi_direct_floating_shape(
-                    program, target, fn, ins, NULL, NULL) ||
+                    fn, ins, NULL, NULL) ||
                 !fp_slot(out, frame_view, false, MINIC_A64_REG_D, 9U,
                     minic_lp64_frame_value_offset(frame_plan, lhs)) ||
                 !fp_slot(out, frame_view, false, MINIC_A64_REG_D, 10U,
@@ -116,7 +116,7 @@ bool minic_aarch64_emit_fp_instruction(
                     ? "  fsub d9, d9, d10\n"
                     : "  fmul d9, d9, d10\n";
             if (!minic_multi_direct_floating_shape(
-                    program, target, fn, ins, NULL, NULL) ||
+                    fn, ins, NULL, NULL) ||
                 !fp_slot(out, frame_view, false, MINIC_A64_REG_D, 9U,
                     minic_lp64_frame_value_offset(frame_plan, lhs)) ||
                 !fp_slot(out, frame_view, false, MINIC_A64_REG_D, 10U,
@@ -130,7 +130,7 @@ bool minic_aarch64_emit_fp_instruction(
             const MinicCoreValueId lhs = ins->value.binary.left;
             const MinicCoreValueId rhs = ins->value.binary.right;
             if (!minic_multi_direct_floating_shape(
-                    program, target, fn, ins, NULL, NULL) ||
+                    fn, ins, NULL, NULL) ||
                 !fp_slot(out, frame_view, false, MINIC_A64_REG_D, 9U,
                     minic_lp64_frame_value_offset(frame_plan, lhs)) ||
                 !fp_slot(out, frame_view, false, MINIC_A64_REG_D, 10U,
@@ -144,7 +144,7 @@ bool minic_aarch64_emit_fp_instruction(
         case MINIC_CORE_INSTRUCTION_DOUBLE_NEGATE: {
             const MinicCoreValueId operand = ins->value.operand;
             if (!minic_multi_direct_floating_shape(
-                    program, target, fn, ins, NULL, NULL) ||
+                    fn, ins, NULL, NULL) ||
                 !fp_slot(out, frame_view, false, MINIC_A64_REG_D, 9U,
                     minic_lp64_frame_value_offset(frame_plan, operand)) ||
                 fputs("  fneg d9, d9\n", out) == EOF ||
@@ -161,7 +161,7 @@ bool minic_aarch64_emit_fp_instruction(
         case MINIC_CORE_INSTRUCTION_DOUBLE_TO_FLOAT: {
             const MinicCoreValueId source = ins->value.operand;
             if (!minic_multi_direct_floating_shape(
-                    program, target, fn, ins, NULL, NULL) ||
+                    fn, ins, NULL, NULL) ||
                 !fp_slot(out, frame_view, false, MINIC_A64_REG_D, 9U,
                     minic_lp64_frame_value_offset(frame_plan, source)) ||
                 fputs("  fcvt s9, d9\n", out) == EOF ||
@@ -183,7 +183,7 @@ bool minic_aarch64_emit_fp_instruction(
                         ? "  fmul s9, s9, s10\n"
                         : "  fdiv s9, s9, s10\n";
             if (!minic_multi_direct_floating_shape(
-                    program, target, fn, ins, NULL, NULL) ||
+                    fn, ins, NULL, NULL) ||
                 !fp_slot(out, frame_view, false, MINIC_A64_REG_S, 9U,
                     minic_lp64_frame_value_offset(frame_plan, lhs)) ||
                 !fp_slot(out, frame_view, false, MINIC_A64_REG_S, 10U,
@@ -196,7 +196,7 @@ bool minic_aarch64_emit_fp_instruction(
         case MINIC_CORE_INSTRUCTION_FLOAT_TO_DOUBLE: {
             const MinicCoreValueId src = ins->value.operand;
             if (!minic_multi_direct_floating_shape(
-                    program, target, fn, ins, NULL, NULL) ||
+                    fn, ins, NULL, NULL) ||
                 !fp_slot(out, frame_view, false, MINIC_A64_REG_S, 9U,
                     minic_lp64_frame_value_offset(frame_plan, src)) ||
                 fputs("  fcvt d9, s9\n", out) == EOF ||
@@ -212,7 +212,7 @@ bool minic_aarch64_emit_fp_instruction(
              * integer-to-double instructions. Narrow source values retain
              * their Core signedness through explicit normalization. */
             if (!minic_multi_direct_floating_shape(
-                    program, target, fn, ins, &width, &sign) ||
+                    fn, ins, &width, &sign) ||
                 !fp_slot(out, frame_view, false,
                     width == 8U ? MINIC_A64_REG_X : MINIC_A64_REG_W,
                     9U, minic_lp64_frame_value_offset(frame_plan, src)) ||
@@ -235,7 +235,7 @@ bool minic_aarch64_emit_fp_instruction(
              * Both signed and unsigned native widths are explicit below;
              * NaN and out-of-range inputs remain undefined at C level. */
             if (!minic_multi_direct_floating_shape(
-                    program, target, fn, ins, &width, &sign))
+                    fn, ins, &width, &sign))
                 return false;
             /* A64 natively supports unsigned 64-bit binary64 conversion.
              * C-defined finite inputs truncate toward zero; NaN/overflow

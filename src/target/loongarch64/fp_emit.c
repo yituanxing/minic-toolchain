@@ -73,7 +73,7 @@ bool minic_loongarch64_emit_fp_instruction(
                 ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_LESS
                     ? "fcmp.clt.d" : "fcmp.cle.d";
             if (!minic_multi_direct_floating_shape(
-                    program, target, fn, ins, NULL, NULL) ||
+                    fn, ins, NULL, NULL) ||
                 !emit_sp_mem(out, "fld.d", "$ft0", minic_lp64_frame_value_offset(frame_plan, lhs)) ||
                 !emit_sp_mem(out, "fld.d", "$ft1", minic_lp64_frame_value_offset(frame_plan, rhs)) ||
                 fprintf(out, "  %s $fcc0, $ft0, $ft1\n"
@@ -97,7 +97,7 @@ bool minic_loongarch64_emit_fp_instruction(
                         ? "  fmul.d $ft0, $ft0, $ft1\n"
                         : "  fdiv.d $ft0, $ft0, $ft1\n";
             if (!minic_multi_direct_floating_shape(
-                    program, target, fn, ins, NULL, NULL) ||
+                    fn, ins, NULL, NULL) ||
                 !emit_sp_mem(out, "fld.d", "$ft0", minic_lp64_frame_value_offset(frame_plan, lhs)) ||
                 !emit_sp_mem(out, "fld.d", "$ft1", minic_lp64_frame_value_offset(frame_plan, rhs)) ||
                 fputs(op, out) == EOF ||
@@ -108,7 +108,7 @@ bool minic_loongarch64_emit_fp_instruction(
         case MINIC_CORE_INSTRUCTION_DOUBLE_NEGATE: {
             const MinicCoreValueId operand = ins->value.operand;
             if (!minic_multi_direct_floating_shape(
-                    program, target, fn, ins, NULL, NULL) ||
+                    fn, ins, NULL, NULL) ||
                 !emit_sp_mem(out, "fld.d", "$ft0", minic_lp64_frame_value_offset(frame_plan, operand)) ||
                 fputs("  fneg.d $ft0, $ft0\n", out) == EOF ||
                 !emit_sp_mem(out, "fst.d", "$ft0", offset))
@@ -123,7 +123,7 @@ bool minic_loongarch64_emit_fp_instruction(
         case MINIC_CORE_INSTRUCTION_DOUBLE_TO_FLOAT: {
             const MinicCoreValueId source = ins->value.operand;
             if (!minic_multi_direct_floating_shape(
-                    program, target, fn, ins, NULL, NULL) ||
+                    fn, ins, NULL, NULL) ||
                 !emit_sp_mem(out, "fld.d", "$ft0", minic_lp64_frame_value_offset(frame_plan, source)) ||
                 fputs("  fcvt.s.d $ft0, $ft0\n", out) == EOF ||
                 !emit_sp_mem(out, "fst.s", "$ft0", offset))
@@ -144,7 +144,7 @@ bool minic_loongarch64_emit_fp_instruction(
                         ? "  fmul.s $ft0, $ft0, $ft1\n"
                         : "  fdiv.s $ft0, $ft0, $ft1\n";
             if (!minic_multi_direct_floating_shape(
-                    program, target, fn, ins, NULL, NULL) ||
+                    fn, ins, NULL, NULL) ||
                 !emit_sp_mem(out, "fld.s", "$ft0", minic_lp64_frame_value_offset(frame_plan, lhs)) ||
                 !emit_sp_mem(out, "fld.s", "$ft1", minic_lp64_frame_value_offset(frame_plan, rhs)) ||
                 fputs(op, out) == EOF ||
@@ -155,7 +155,7 @@ bool minic_loongarch64_emit_fp_instruction(
         case MINIC_CORE_INSTRUCTION_FLOAT_TO_DOUBLE: {
             const MinicCoreValueId src = ins->value.operand;
             if (!minic_multi_direct_floating_shape(
-                    program, target, fn, ins, NULL, NULL) ||
+                    fn, ins, NULL, NULL) ||
                 !emit_sp_mem(out, "fld.s", "$ft0", minic_lp64_frame_value_offset(frame_plan, src)) ||
                 fputs("  fcvt.d.s $ft0, $ft0\n", out) == EOF ||
                 !emit_sp_mem(out, "fst.d", "$ft0", offset))
@@ -167,7 +167,7 @@ bool minic_loongarch64_emit_fp_instruction(
             size_t width;
             bool sign;
             if (!minic_multi_direct_floating_shape(
-                    program, target, fn, ins, &width, &sign) ||
+                    fn, ins, &width, &sign) ||
                 !emit_sp_mem(out, width == 8U ? "ld.d" : "ld.w",
                              "$t0", minic_lp64_frame_value_offset(frame_plan, src)) ||
                 (width < 4U && !minic_loongarch64_emit_integer_normalize(out, width, sign)))
@@ -216,7 +216,7 @@ bool minic_loongarch64_emit_fp_instruction(
              * That also covers the entire unsigned32 range: retain its
              * low 32 bits for the Core result. Unsigned64 remains gated. */
             if (!minic_multi_direct_floating_shape(
-                    program, target, fn, ins, &width, &sign))
+                    fn, ins, &width, &sign))
                 return false;
             if (width == 8U && !sign) {
                 /* LP64D supplies signed ftintrz.l.d only. For C-defined

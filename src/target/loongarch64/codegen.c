@@ -611,7 +611,6 @@ static bool loongarch64_emit_function(
     MinicDirectLP64AbiPolicy abi = loongarch64_abi_policy;
     const MinicDirectLP64FunctionEmitter emitter = {
         "loongarch64", &abi,
-        minic_multi_indirect_record, minic_multi_indirect_record,
         "@progbits", "@function", "@init_array", "quad",
         loongarch64_emit_prologue, minic_loongarch64_emit_core_blocks,
         minic_loongarch64_qualified_opaque_asm

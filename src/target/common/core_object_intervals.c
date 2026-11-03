@@ -1,6 +1,5 @@
 #include "target/common/core_object_intervals.h"
 #include "core/value_uses.h"
-#include "target/data_layout.h"
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -364,15 +363,15 @@ unavailable:
 }
 
 bool minic_core_object_interval(
-    const MinicC0Program *program, const MinicCoreFunction *function,
-    MinicCoreObjectId object_id, const MinicDataLayout *layout,
+    const MinicCoreFunction *function, MinicCoreObjectId object_id,
     size_t unit_bytes, const MinicCoreObjectIntervalAnalysis *analysis,
     CoreScalarObjectInterval *interval) {
     size_t object_size;
     size_t object_alignment;
     bool scalar_storage;
 
-    if (program == NULL || function == NULL || layout == NULL ||
+    if (function == NULL || function->type_context == NULL ||
+        function->objects == NULL ||
         (unit_bytes != 4U && unit_bytes != 8U) || interval == NULL ||
         object_id >= function->object_count) {
         return false;
@@ -383,11 +382,10 @@ bool minic_core_object_interval(
     interval->first_position = SIZE_MAX;
     interval->last_position = 0U;
 
-    if (function->type_context != NULL) {
+    {
         const MinicCoreTypeId id = minic_core_type_unqualified(
             function->type_context, function->objects[object_id].core_type_id);
-        const MinicCoreType *type = minic_core_type_get(function->type_context,
-                                                        id);
+        const MinicCoreType *type = minic_core_type_get(function->type_context, id);
         const MinicCoreType *storage_type = minic_core_type_get(
             function->type_context, function->objects[object_id].core_type_id);
         /* Failed type/layout admission forfeits storage reuse. The shared
@@ -399,18 +397,6 @@ bool minic_core_object_interval(
                          type->kind == MINIC_CORE_TYPE_FLOAT;
         object_size = storage_type->size;
         object_alignment = storage_type->alignment;
-    } else {
-        /* Standalone, context-free C fixtures retain the old query path;
-         * production function visitors require a resolved type context. */
-        const MinicType type = function->objects[object_id].type;
-        scalar_storage = minic_type_is_integer(type) ||
-                         minic_type_is_pointer(type) ||
-                         minic_type_is_float(type) ||
-                         minic_type_is_double(type) ||
-                         minic_type_is_long_double(type);
-        if (!minic_data_layout_type(layout, program, type,
-                                    &object_size, &object_alignment))
-            return true;
     }
     if (!scalar_storage || function->objects[object_id].element_count != 1U ||
         object_size == 0U || object_size > unit_bytes || object_alignment == 0U ||

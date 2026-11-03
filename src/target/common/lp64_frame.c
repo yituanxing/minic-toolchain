@@ -28,7 +28,7 @@ bool minic_lp64_frame_plan_objects_with_storage(
     /* Shared one-time Core storage plan also serves x86 and RV64.
      * The LP64 emitters keep their exact 8-byte slots and 1 MiB frame cap. */
     if (!minic_core_object_storage_plan_acquire(
-            program, target->data_layout, fn, shared,
+            fn, shared,
             &plan->object_storage, &plan->borrows_object_storage))
         return false;
     if (fn->object_count != 0U) {
@@ -46,7 +46,7 @@ bool minic_lp64_frame_plan_objects_with_storage(
             plan->value_offsets[i] = SIZE_MAX;
     }
     if (!minic_core_function_reused_spill_layout(
-            program, fn, target->data_layout, 8U, 0U,
+            fn, 8U, 0U,
             plan->value_offsets, &scalar_bytes, NULL))
         return false;
     /* The source Core contract defines a result for each value ID; no
@@ -60,7 +60,7 @@ bool minic_lp64_frame_plan_objects_with_storage(
      * by RV32/RV64. The LP64 frame owns only the resulting byte offsets;
      * the short-lived analysis cannot escape the planner. */
     if (!minic_core_object_reuse_plan_build(
-            program, fn, target->data_layout, 8U, true, &reuse) ||
+            fn, 8U, true, &reuse) ||
         !minic_core_object_reuse_plan_get(
             &reuse, MINIC_CORE_OBJECT_INVALID, NULL, NULL, &pool_slots)) {
         minic_core_object_reuse_plan_destroy(&reuse);

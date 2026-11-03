@@ -1,6 +1,7 @@
 #include "core/core_ir.h"
 #include "target/riscv64/legalize.h"
 #include "target/riscv64/inline_asm_emit.h"
+#include "target/riscv64/record_snapshot.h"
 #include "target/riscv64/codegen_internal.h"
 #include "target/riscv64/core_type_query.h"
 #include "target/riscv64/isa.h"
@@ -56,12 +57,14 @@ static int run(void) {
     MinicCoreTypeId void_id, int_id, wide_id, record_id, pointer_id, record_pointer_id;
     MinicCoreTypeId volatile_record_id, volatile_record_pointer_id;
     MinicCoreTypeId bool_id, unsigned_id;
+    MinicCoreTypeId malformed_pointer_id, other_record_id;
     MinicCoreType qualifier = {0};
     MinicCoreValue values[4];
     MinicCoreObject objects[1];
     MinicCoreFunction function = {0};
     MinicCoreInstruction ins = {0};
     MinicCoreInlineAsm asm_binding = {0};
+    MinicCoreFixedRegisterBinding fixed_binding = {0};
     MinicC0Program source_program = {0};
     MinicCoreCallee callee = {0};
     MinicCoreCallArgument call_argument = {0};
@@ -93,6 +96,15 @@ static int run(void) {
     qualifier.value.qualified.base = record_id;
     REQUIRE(minic_core_type_register(&types, &qualifier, &volatile_record_id));
     REQUIRE(register_pointer(&types, volatile_record_id, &volatile_record_pointer_id));
+    {
+        MinicCoreType malformed = {0};
+        malformed.kind = MINIC_CORE_TYPE_POINTER;
+        malformed.has_layout = true;
+        malformed.size = 4U; /* valid Core entry but not an RV64 pointer */
+        malformed.alignment = 4U;
+        malformed.value.pointer.pointee = int_id;
+        REQUIRE(minic_core_type_register(&types, &malformed, &malformed_pointer_id));
+    }
 
     memset(values, 0, sizeof(values));
     memset(objects, 0, sizeof(objects));
@@ -154,14 +166,14 @@ static int run(void) {
     ins.result = MINIC_CORE_VALUE_INVALID;
     ins.value.record_load.source_address = 0U;
     ins.value.record_load.destination_object = 0U;
-    REQUIRE(minic_riscv64_core_record_load_supported(NULL, &function, &ins, &record_size));
+    REQUIRE(minic_riscv64_core_record_load_supported(&function, &ins, &record_size));
     REQUIRE(record_size == 4U);
     ins.value.record_load.source_address = 1U;
-    REQUIRE(!minic_riscv64_core_record_load_supported(NULL, &function, &ins, NULL));
+    REQUIRE(!minic_riscv64_core_record_load_supported(&function, &ins, NULL));
     ins.value.record_load.is_volatile = true;
-    REQUIRE(minic_riscv64_core_record_load_supported(NULL, &function, &ins, NULL));
+    REQUIRE(minic_riscv64_core_record_load_supported(&function, &ins, NULL));
     ins.value.record_load.destination_object = 1U;
-    REQUIRE(!minic_riscv64_core_record_load_supported(NULL, &function, &ins, NULL));
+    REQUIRE(!minic_riscv64_core_record_load_supported(&function, &ins, NULL));
 
     ins = (MinicCoreInstruction){0};
     ins.kind = MINIC_CORE_INSTRUCTION_RECORD_COPY;
@@ -169,9 +181,9 @@ static int run(void) {
     ins.result = MINIC_CORE_VALUE_INVALID;
     ins.value.record_copy.destination_address = 0U;
     ins.value.record_copy.source_address = 1U;
-    REQUIRE(minic_riscv64_core_record_copy_supported(NULL, &function, &ins));
+    REQUIRE(minic_riscv64_core_record_copy_supported(&function, &ins));
     ins.value.record_copy.source_address = 2U;
-    REQUIRE(!minic_riscv64_core_record_copy_supported(NULL, &function, &ins));
+    REQUIRE(!minic_riscv64_core_record_copy_supported(&function, &ins));
 
     ins = (MinicCoreInstruction){0};
     ins.kind = MINIC_CORE_INSTRUCTION_SCALAR_BITCAST;
@@ -179,9 +191,9 @@ static int run(void) {
     /* Shared Core shape now checks the result SSA ID as well as operands. */
     ins.result = 3U;
     ins.value.operand = 2U;
-    REQUIRE(minic_riscv64_core_scalar_bitcast_supported(NULL, &function, &ins));
+    REQUIRE(minic_riscv64_core_scalar_bitcast_supported(&function, &ins));
     ins.value.operand = 3U;
-    REQUIRE(!minic_riscv64_core_scalar_bitcast_supported(NULL, &function, &ins));
+    REQUIRE(!minic_riscv64_core_scalar_bitcast_supported(&function, &ins));
 
     ins = (MinicCoreInstruction){0};
     ins.kind = MINIC_CORE_INSTRUCTION_CALL_FRAME_ADDRESS;
@@ -206,6 +218,97 @@ static int run(void) {
     REQUIRE(minic_riscv64_inline_asm_instruction_supported(&function, &ins));
     ins.core_type_id = record_id;
     REQUIRE(!minic_riscv64_inline_asm_instruction_supported(&function, &ins));
+
+    /* Fixed-register register-output asm must follow the Core pointee and
+     * Core binding identity even when both source descriptors are void.
+     * A malformed pointer layout must fail closed before address transport. */
+    fixed_binding.register_name = "a2";
+    fixed_binding.register_name_length = 2U;
+    fixed_binding.core_type_id = int_id;
+    fixed_binding.is_local = true;
+    function.fixed_register_bindings = &fixed_binding;
+    function.fixed_register_binding_count = 1U;
+    ins = (MinicCoreInstruction){0};
+    ins.kind = MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM;
+    ins.core_type_id = void_id;
+    ins.result = MINIC_CORE_VALUE_INVALID;
+    ins.value.structured_inline_asm.inline_asm_id = 0U;
+    ins.value.structured_inline_asm.operand_count = 1U;
+    ins.value.structured_inline_asm.operands[0].kind =
+        MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
+    ins.value.structured_inline_asm.operands[0].operand_index = 0U;
+    ins.value.structured_inline_asm.operands[0].value = 2U;
+    ins.value.structured_inline_asm.operands[0].has_fixed_register_binding = true;
+    values[2].core_type_id = malformed_pointer_id;
+    REQUIRE(!minic_riscv64_inline_asm_instruction_supported(&function, &ins));
+    REQUIRE(register_pointer(&types, wide_id, &values[2].core_type_id));
+    REQUIRE(!minic_riscv64_inline_asm_instruction_supported(&function, &ins));
+    values[2].core_type_id = pointer_id;
+    /* pointer_id now points to void after the CALL_FRAME_ADDRESS test;
+     * restore the original int-pointer identity for structured asm. */
+    REQUIRE(register_pointer(&types, int_id, &values[2].core_type_id));
+    REQUIRE(minic_riscv64_inline_asm_instruction_supported(&function, &ins));
+    fixed_binding.core_type_id = record_id;
+    REQUIRE(!minic_riscv64_inline_asm_instruction_supported(&function, &ins));
+    fixed_binding.core_type_id = int_id;
+    function.type_context = NULL;
+    REQUIRE(!minic_riscv64_inline_asm_instruction_supported(&function, &ins));
+    function.type_context = &types;
+
+    /* A source-C descriptor cannot license snapshot stack reuse. Different
+     * Core Record IDs (even with identical layouts) must remain distinct. */
+    {
+        MinicCoreType other_record = {0};
+        MinicCoreObject snapshot_objects[2];
+        MinicCoreInstruction snapshot_instructions[2] = {{0}, {0}};
+        MinicCoreInstructionId snapshot_order[] = {0U, 1U};
+        MinicCoreCallArgument snapshot_argument = {0};
+        MinicCoreBlock snapshot_block = {0};
+        MinicCoreFunction snapshot_function = {0};
+        MinicCoreObjectId candidate = MINIC_CORE_OBJECT_INVALID;
+        memset(snapshot_objects, 0, sizeof(snapshot_objects));
+        other_record.kind = MINIC_CORE_TYPE_RECORD;
+        other_record.has_layout = true;
+        other_record.size = 4U;
+        other_record.alignment = 4U;
+        other_record.value.record.is_complete = true;
+        other_record.value.record.is_union = true;
+        REQUIRE(minic_core_type_register(&types, &other_record, &other_record_id));
+        REQUIRE(other_record_id != record_id);
+        snapshot_objects[0].core_type_id = record_id;
+        snapshot_objects[0].element_count = 1U;
+        snapshot_objects[1].core_type_id = record_id;
+        snapshot_objects[1].element_count = 1U;
+        snapshot_instructions[0].kind = MINIC_CORE_INSTRUCTION_RECORD_LOAD;
+        snapshot_instructions[0].value.record_load.destination_object = 0U;
+        snapshot_instructions[1].kind = MINIC_CORE_INSTRUCTION_CALL;
+        snapshot_instructions[1].value.call.argument_count = 1U;
+        snapshot_instructions[1].value.call.result_object = 1U;
+        snapshot_argument.kind = MINIC_CORE_CALL_ARGUMENT_OBJECT;
+        snapshot_argument.value.object_id = 0U;
+        snapshot_block.instructions = snapshot_order;
+        snapshot_block.instruction_count = 2U;
+        snapshot_function.type_context = &types;
+        snapshot_function.objects = snapshot_objects;
+        snapshot_function.object_count = 2U;
+        snapshot_function.instructions = snapshot_instructions;
+        snapshot_function.instruction_count = 2U;
+        snapshot_function.blocks = &snapshot_block;
+        snapshot_function.block_count = 1U;
+        snapshot_function.call_arguments = &snapshot_argument;
+        snapshot_function.call_argument_count = 1U;
+        REQUIRE(minic_riscv64_record_call_result_snapshot_reuse_candidate(
+            &snapshot_function, 1U, &candidate) && candidate == 0U);
+        snapshot_objects[1].core_type_id = other_record_id;
+        REQUIRE(!minic_riscv64_record_call_result_snapshot_reuse_candidate(
+            &snapshot_function, 1U, &candidate));
+        snapshot_objects[1].core_type_id = volatile_record_id;
+        REQUIRE(!minic_riscv64_record_call_result_snapshot_reuse_candidate(
+            &snapshot_function, 1U, &candidate));
+        snapshot_function.type_context = NULL;
+        REQUIRE(!minic_riscv64_record_call_result_snapshot_reuse_candidate(
+            &snapshot_function, 1U, &candidate));
+    }
 
     /* The prepared CALL ABI must not consult the C signature or the C
      * argument type. Its authoritative fixed prefix is the CoreTypeId. */
@@ -308,6 +411,6 @@ int main(void) {
         fprintf(stderr, "RV64_CORETYPE_TARGET_ADMISSION=FAIL line=%d\n", line);
         return 1;
     }
-    puts("RV64_CORETYPE_TARGET_ADMISSION=PASS record_load_copy volatile bitcast asm call_abi core_only_scalar_transport overflow_poison_C strict_isa_frame_type");
+    puts("RV64_CORETYPE_TARGET_ADMISSION=PASS record_load_copy volatile bitcast asm fixed_register_pointer_layout snapshot_nominal call_abi core_only_scalar_transport overflow_poison_C strict_isa_frame_type");
     return 0;
 }

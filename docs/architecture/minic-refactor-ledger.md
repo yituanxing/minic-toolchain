@@ -738,3 +738,65 @@ AArch64/LoongArch64 Linux inline ASM 的源资格证明和 typed operand
 拥有全局片段、symbol/section/alias/file ASM，不另造第二套 IR。
 Linux NEON、RV32 Zstd 与 KVM 等机器/runtime 失败仍分开跟踪，
 不能用边界检查通过冒充五 ISA runtime 全绿。
+
+## IR-P7：Core 对象/栈槽全链所有权与 Direct LP64/RV64 机器回退清除
+
+起点：`d835281`（IR-P6）。沿五目标机器消费、Common frame
+所有权、LP64 aggregate/return ABI、RV64 Core admission/inline ASM
+及 LoongArch64 整数发射调用链一起读完，再删除旧入口并迁移全部
+生产消费者。这批不是单独换接口签名：**对象布局、interval、复用、
+SSA spill、FunctionPlan** 的同一条链、**Direct LP64 调用/返回**
+及 **RV64 执行类型** 各自完成 producer→consumer 闭包。
+
+1. Common `core_object_storage`、`core_object_intervals`、
+   `core_object_reuse`、`core_spill_layout`、`core_function_plan` 一律
+   从 `MinicCoreFunction.type_context` 和 CoreTypeId 读取物理尺寸、
+   对齐、元素数与 SSA 寿命；删除 `MinicC0Program`、C DataLayout
+   和 `minic_type_*` 备用分支。五目标各自的 frame 调用点、
+   shared borrow/own visitor 和已有 standalone 测试同时改签。
+   ILP32 4 字节、LP64 8 字节公共布局不混淆；ABI 的栈增长方向、
+   保存寄存器和宽数值 sidecar 仍留在目标。
+2. Direct LP64 的 `direct_call_plan`、`direct_function_profile`、
+   `direct_function_plan`、`direct_preflight`、`direct_function_emit`
+   去掉已死的 C ABI Record 回调和调用/返回类型 fallback，
+   保留 AArch64 AAPCS64 与 LoongArch64 LP64D 自己的 Core ABI
+   分类器及实际寄存器分配。删除 Common `lp64_scalar` 与
+   `lp64_aggregate` 整组旧 C record/整数查询，AArch64 旧 C
+   indirect-record walker 同时删除。x86 的 Source ASM ABI 查询
+   留在本机 `abi.c`，不再反向污染 Common Core 分类接口。
+3. `direct_instruction_semantics` 的执行类型、指针 pointee、
+   signedness、i128、浮点和结果形状只读 Core；AArch64/LoongArch64
+   两个发射端整族迁签。尤其 LoongArch64 `integer_emit` 删除
+   i128、width、pointer、类型相等及 i32/u32 混合溢出操作的
+   C 回退，原 signed/unsigned 比较、128 位右移及宽加 carry
+   的目标指令策略保持不变。
+4. RV64 `memory_emit`、`core_codegen`、`codegen_support`、
+   `core_admission`、`inline_asm_emit`、`record_snapshot`、
+   `legalize` 同批退休旧 C 执行类型推断：标量访存与返回、
+   固定寄存器、Record 类型身份、结构化 ASM 操作数宽度以及
+   LP64 单寄存器约束都必须由 Core 证明；畸形 4B 指针、
+   16B 单寄存器值和缺失 type context 均拒绝。独立 C Source
+   ABI 分类器仍有公共测试依赖，继续保留，不误删源语义入口。
+
+**验证：** 新 `probe-core-frame-type-ownership.c` 和
+`loongarch64_core_integer_emit.c`，补充 RV64 Core admission 的
+malformed 负例；Common 对象/ABI/数值原生与 ASan/UBSan 单测、
+`make check-fast`、目标边界脚本、Debug 与 Release 构建、
+RV64 LP64D union ABI 专项均 PASS。边界脚本新增 Common 对象
+整族、Direct LP64 Core 分类及 RV64/Loong 整族禁 C 回退断言。
+以 P6 编译器与本批编译器消费相同的 GNU `-E -P` 文件：
+31 个执行、对象、ASM fixture × 五目标共 **155 组**，其中
+**129 字节相同、26 双方拒绝、0 差异**；既有 24 个调用 ABI
+fixture × 五目标 **98 相同、22 双方拒绝、0 差异**。双方拒绝
+不等于正确执行；当前没有完成五 ISA GNU 交叉 ELF/QEMU 回归。
+`src/` 生产代码 **+602/−1577，净 −975 行（54 文件）**。
+
+**下一所有权边界：** `MinicCoreModule` 已封存全球数据、符号、
+section/alias/file ASM，真正阻止旧五目标 Module writer ABI
+退出 `MinicC0Program` 的，是 AArch64 大量 Linux GNU ASM
+Source qualifier 在机器端重新鉴定源类型、EOR3 原始模板，以及
+LoongArch64 SIMD 原始模板与 Core 规范模板效果等价的二次验证。
+应先由 Target SourcePolicy 将明确的 machine form/variant/效果
+证明封存进 Core，再一次性迁移 `backend`、`program_emit`、
+五目标 writer 与事务测试；**不能只凭 `source_inline_asm_id`
+绕过 fail-closed 检查**，也不应复制另一套 ModuleIR。
