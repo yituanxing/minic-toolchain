@@ -948,3 +948,7 @@ The common prepared visitor now withholds `MinicFunction*` from machine callback
 ## IR-P12 — Cross-suite stale backend consumer closed (2026-11-03)
 
 The runtime four-architecture target-catalog probe still attempted to compile against the removed `MinicBackend.emit_program` field and failed before reaching any runtime validation. Update the only stale catalog consumer to `emit_module` and harden the cross-target boundary test to reject reintroduction of the old registration. This is source-level closure, not a GNU/QEMU runtime pass; verify in GitHub's actual four-architecture CI gate.
+
+## IR-P13 — Standalone sealed Module output transaction and Core visitor (2026-11-03)
+
+The shared prepared-function visitor no longer dereferences C declarations or C function count when a finalized CoreModule is present, and the shared staged output transaction no longer requires a C Program to serialize sealed globals, weak/hidden binding, relocation uses, file ASM, and Core definition visits. Product target writers may still borrow C Program for outstanding GNU/source policy; this milestone is intentionally the common transport/transaction seam only. Whitebox probes run with both poisoned source Program and NULL source Program, including mismatched declaration definedness and rollback. Output is not considered accepted without actual CI.

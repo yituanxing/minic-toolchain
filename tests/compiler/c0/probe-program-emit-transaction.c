@@ -163,6 +163,23 @@ static int check_module_snapshot_output(const char *path) {
         strstr(data, ".text\n .quad asm_weak\n.text\n") == NULL ||
         strstr(data, "unused_hidden") != NULL ||
         strstr(data, "poison_source") != NULL) return 3;
+    /* The whole output transaction must also run with no C Program at all.
+     * Both runs serialize the exact same frozen globals, weak bindings,
+     * relocation references, and file ASM; the former source is poisoned. */
+    context.globals = 0U;
+    if (!minic_program_emit_write_module(
+            path, NULL, &target, NULL, 0U, false,
+            &config, &context, &module, module_global)) return 12;
+    in = fopen(path, "rb");
+    if (in == NULL) return 13;
+    (void)memset(data, 0, sizeof(data));
+    count = fread(data, 1U, sizeof(data) - 1U, in);
+    if (fclose(in) != 0 || count == 0U || context.globals != 1U ||
+        strstr(data, ".weak weak_ext\\n.hidden weak_ext\\n") == NULL ||
+        strstr(data, ".weak asm_weak\\n.hidden asm_weak\\n") == NULL ||
+        strstr(data, "G:owned\\n") == NULL ||
+        strstr(data, ".text\\n .quad asm_weak\\n.text\\n") == NULL ||
+        strstr(data, "poison_source") != NULL) return 14;
     /* Module symbol-use gathering and ELF binding must be independently
      * runnable with NO source Program at all, not merely resistant to an
      * altered Program's global list. This covers both relocation and text
@@ -343,6 +360,19 @@ int main(int argc, char **argv) {
             return 42;
         }
         if (fclose(probe) != 0) return 43;
+        /* The source declaration is not merely hidden from callbacks:
+         * zero source Program is a supported sealed Module visitor input. */
+        probe = tmpfile();
+        if (probe == NULL) return 44;
+        (void)memset(&ctx, 0, sizeof(ctx));
+        if (!minic_program_visit_prepared_functions_module(
+                probe, NULL, &target, &ir, 1U, false,
+                MINIC_PROGRAM_FUNCTION_LIVE_DEFINITIONS, false,
+                function, &ctx, &module) || ctx.functions != 1U) {
+            (void)fclose(probe);
+            return 45;
+        }
+        if (fclose(probe) != 0) return 46;
         declaration.is_defined = true;
     }
     if (check_module_snapshot_output(path) != 0) return 50;

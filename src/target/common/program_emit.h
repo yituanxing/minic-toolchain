@@ -522,13 +522,13 @@ static inline bool minic_program_emit_write_module(
     int descriptor;
     bool ok;
     bool functions_ok;
-    if (path == NULL || program == NULL || target == NULL ||
-        config == NULL ||
-        (module == NULL && config->emit_global == NULL) ||
+    if (path == NULL || target == NULL || config == NULL ||
+        (module == NULL &&
+         (program == NULL || config->emit_global == NULL ||
+          function_count != program->function_count)) ||
         (module != NULL && (!module->finalized || visit_module_global == NULL ||
                             module->function_count != function_count)) ||
         config->emit_function == NULL ||
-        function_count != program->function_count ||
         (function_count != 0U && functions == NULL))
         return false;
     /* Stage next to the destination, without touching the last good .s.

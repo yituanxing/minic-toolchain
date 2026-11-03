@@ -789,8 +789,10 @@ has src/target/common/program_visit.h 'minic_program_visit_functions('
 has src/target/common/program_visit.h 'minic_program_visit_prepared_functions('
 has src/target/common/program_visit.h 'minic_program_visit_prepared_functions_module('
 # Published Module definitions are visited without source C declarations.
-has src/target/common/program_visit.h 'module_decl != NULL ? NULL : decl'
+has src/target/common/program_visit.h 'module == NULL ? &program->functions[i] : NULL'
 has tests/compiler/c0/probe-program-emit-transaction.c 'module_decl != NULL && decl != NULL'
+has tests/compiler/c0/probe-program-emit-transaction.c 'probe, NULL, &target, &ir, 1U, false,'
+has tests/compiler/c0/probe-program-emit-transaction.c 'path, NULL, &target, NULL, 0U, false,'
 has src/target/common/program_visit.h 'minic_program_visit_module_globals('
 # All five machine backends must borrow one visitor-owned per-function Core
 # object plan, not repeat layout scans. Each target keeps its own psABI frame.
