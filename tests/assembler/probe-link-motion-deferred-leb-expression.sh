@@ -67,7 +67,7 @@ for arch in rv32 rv64 loongarch64; do
                 fi
                 # This is a deliberate semantic rejection, not an unrelated
                 # unrecognized-source or unsupported-ISA parser failure.
-                if ! rg -qi 'link.relax|linker.motion|link.motion|unrepresentable' \
+                if ! grep -Eiq 'link.relax|linker.motion|link.motion|unrepresentable' \
                     "$work/stderr"; then
                     echo "MINIAS_LINK_MOTION_LEB_EXPR=FAIL wrong_diagnostic arch=$arch expr=$expression" >&2
                     sed -n '1,12p' "$work/stderr" >&2
@@ -129,16 +129,16 @@ for arch in rv32 rv64 loongarch64; do
             exit 1
         fi
         readelf -rW "$object" >"$work/$arch-$expression.reloc"
-        if ! rg -q "$marker_pattern" "$work/$arch-$expression.reloc"; then
+        if ! grep -Eq "$marker_pattern" "$work/$arch-$expression.reloc"; then
             echo "MINIAS_LINK_MOTION_LEB_EXPR=FAIL missing_relax_marker arch=$arch expr=$expression" >&2
             exit 1
         fi
         if [[ $expected_pair == true ]]; then
-            if [[ $(rg -c "$reloc_pattern" "$work/$arch-$expression.reloc") != 2 ]]; then
+            if [[ $(grep -Ec "$reloc_pattern" "$work/$arch-$expression.reloc" || true) != 2 ]]; then
                 echo "MINIAS_LINK_MOTION_LEB_EXPR=FAIL missing_uleb_pair arch=$arch" >&2
                 exit 1
             fi
-        elif rg -q "$reloc_pattern" "$work/$arch-$expression.reloc"; then
+        elif grep -Eq "$reloc_pattern" "$work/$arch-$expression.reloc"; then
             echo "MINIAS_LINK_MOTION_LEB_EXPR=FAIL unneeded_uleb_pair arch=$arch" >&2
             exit 1
         fi
