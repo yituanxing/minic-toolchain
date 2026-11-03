@@ -119,7 +119,7 @@ bool minic_multi_direct_lp64_function_preflight(
     bool visibility_valid, alias_present, constructor, weak;
     bool has_section;
     unsigned int visibility;
-    if (decl == NULL || fn == NULL ||
+    if ((decl == NULL && module_decl == NULL) || fn == NULL ||
         fn->type_context == NULL ||
         arch == NULL || !minic_direct_lp64_abi_policy_valid(abi)) return false;
     verified = minic_core_function_facts_verified(facts, fn) ||

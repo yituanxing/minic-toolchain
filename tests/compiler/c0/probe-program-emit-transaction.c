@@ -40,7 +40,10 @@ static bool function(FILE *out, const MinicC0Program *p,
                      const MinicCoreObjectStoragePlan *storage, size_t index,
                      bool sections, void *opaque) {
     TestContext *ctx = opaque;
-    (void)p; (void)t; (void)decl; (void)module_decl; (void)f; (void)sections;
+    (void)p; (void)t; (void)f; (void)sections;
+    /* A sealed Module must never hand its machine visitor a C declaration. */
+    if ((module_decl != NULL && decl != NULL) ||
+        (module_decl == NULL && decl == NULL)) return false;
     if (index != 0U || facts == NULL || storage == NULL ||
         storage->count != 0U ||
         facts->direct_call_count != 1U ||
@@ -315,6 +318,32 @@ int main(int argc, char **argv) {
             (void)fclose(leaked);
             return 21;
         }
+    }
+    /* A deliberately conflicting C declaration cannot suppress a sealed
+     * Module definition, and the machine callback must receive NULL C decl.
+     * This exercises the real shared Core function-plan builder. */
+    {
+        MinicCoreModuleFunctionSymbol module_decl = {
+            .name = "sealed_function", .is_defined = true, .is_referenced = true,
+            .alias_target_index = SIZE_MAX
+        };
+        MinicCoreModule module = {
+            .function_symbols = &module_decl, .function_count = 1U,
+            .finalized = true
+        };
+        FILE *probe = tmpfile();
+        if (probe == NULL) return 41;
+        declaration.is_defined = false;
+        (void)memset(&ctx, 0, sizeof(ctx));
+        if (!minic_program_visit_prepared_functions_module(
+                probe, &program, &target, &ir, 1U, false,
+                MINIC_PROGRAM_FUNCTION_LIVE_DEFINITIONS, false,
+                function, &ctx, &module) || ctx.functions != 1U) {
+            (void)fclose(probe);
+            return 42;
+        }
+        if (fclose(probe) != 0) return 43;
+        declaration.is_defined = true;
     }
     if (check_module_snapshot_output(path) != 0) return 50;
     puts("MINIC_CORE_MODULE_SYMBOL_TRANSACTION=PASS no_C_program_global=file_asm=1 weak_hidden=2 alias=2 invalid_reject=2");

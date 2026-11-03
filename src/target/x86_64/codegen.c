@@ -994,8 +994,7 @@ static bool x86_write_core_program_impl(
         target->architecture != MINIC_TARGET_ARCH_X86_64 ||
         (core_function_count != 0U && core_functions == NULL) ||
         (module != NULL &&
-         (module->global_count != program->global_object_count ||
-          module->function_count != core_function_count)) ||
+         module->function_count != core_function_count) ||
         core_function_count != program->function_count) {
         x86_error(diagnostic, path, "x86-64 invalid program or target");
         return false;

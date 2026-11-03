@@ -1083,8 +1083,7 @@ static bool rv32_write_core_program_impl(const char *path,
         target->riscv_isa.abi != MINIC_RISCV_ABI_ILP32 ||
         function_count != program->function_count ||
         (module != NULL &&
-         (module->global_count != program->global_object_count ||
-          module->function_count != function_count)) ||
+         module->function_count != function_count) ||
         (function_count != 0U && functions == NULL)) {
         rv32_diag(diagnostic, "<rv32-abi>",
                   "rv32i: unsupported file-scope inline ASM or invalid Core function map");

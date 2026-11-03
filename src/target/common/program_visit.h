@@ -185,7 +185,8 @@ static inline bool minic_program_visit_prepared_functions_module(
             ready = minic_core_function_plan_build(
                 &functions[i], &plan);
         if (ready)
-            ready = visit(out, program, target, decl, module_decl, &functions[i],
+            ready = visit(out, program, target,
+                          module_decl != NULL ? NULL : decl, module_decl, &functions[i],
                           is_defined ? &plan.facts : NULL,
                           is_defined ? &plan.objects : NULL, i,
                           function_sections, context);

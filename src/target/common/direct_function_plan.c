@@ -32,7 +32,7 @@ bool minic_multi_direct_lp64_function_plan_prepare(
     plan->failed_stage = "function_preflight";
     plan->failed_block = SIZE_MAX;
     plan->failed_instruction = SIZE_MAX;
-    if (decl == NULL || fn == NULL || facts == NULL ||
+    if ((decl == NULL && module_decl == NULL) || fn == NULL || facts == NULL ||
         architecture_name == NULL || fn->type_context == NULL ||
         !minic_direct_lp64_abi_policy_valid(abi))
         return false;

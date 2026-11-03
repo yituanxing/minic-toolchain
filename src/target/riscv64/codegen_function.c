@@ -228,8 +228,7 @@ static bool rv64_write_core_program_impl(const char *path,
     }
     if (core_function_count != program->function_count ||
         (module != NULL &&
-         (module->global_count != program->global_object_count ||
-          module->function_count != core_function_count)) ||
+         module->function_count != core_function_count) ||
         (core_function_count != 0U && core_functions == NULL)) {
         minic_riscv64_set_diagnostic(diagnostic, path,
             "Core function map does not match program functions");

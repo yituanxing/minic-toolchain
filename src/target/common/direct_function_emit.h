@@ -51,7 +51,7 @@ static inline bool minic_multi_direct_lp64_emit_function(
         config->text_section_type == NULL ||
         config->elf_function_type == NULL || config->init_array_type == NULL ||
         config->init_word_directive == NULL || config->emit_prologue == NULL ||
-        config->emit_core_blocks == NULL || out == NULL || decl == NULL)
+        config->emit_core_blocks == NULL || out == NULL || (decl == NULL && module_decl == NULL))
         return false;
     /* Once ModuleIR is attached, function identity and ELF declarations
      * have a single sealed owner. The source declaration survives only for

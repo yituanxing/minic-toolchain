@@ -213,7 +213,6 @@ bool minic_multi_direct_write_program_with_module(
         core_function_count != program->function_count ||
         (module != NULL &&
          (!minic_core_module_verify(module) || !module->finalized ||
-          module->global_count != program->global_object_count ||
           module->function_count != core_function_count)))
         return minic_multi_direct_fail(diagnostic, path, config->display_name,
                                        "invalid Core or target configuration");
