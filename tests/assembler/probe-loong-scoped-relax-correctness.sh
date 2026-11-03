@@ -157,40 +157,59 @@ for mode in relax no-relax; do
             awk '$8=="target" {print $2}' >"$work/$producer-$mode.target"
         readelf -Ws "$work/$producer-$mode.elf" |
             awk '$8=="after_la" {print $2}' >"$work/$producer-$mode.after"
+        readelf -Ws "$work/$producer-$mode.elf" |
+            awk '$8=="_start" {print $2}' >"$work/$producer-$mode.entry"
         test -s "$work/$producer-$mode.target"
         test -s "$work/$producer-$mode.after"
+        test -s "$work/$producer-$mode.entry"
         readelf --debug-dump=decodedline "$work/$producer-$mode.elf" \
             >"$work/$producer-$mode.lines"
-    done
-    cmp "$work/gnu-$mode.text" "$work/mini-$mode.text"
-    cmp "$work/gnu-$mode.target" "$work/mini-$mode.target"
-    cmp "$work/gnu-$mode.after" "$work/mini-$mode.after"
-    python3 - "$work/gnu-$mode.lines" "$work/mini-$mode.lines" \
-        "$work/gnu-$mode.after" "$work/gnu-$mode.target" <<'PY'
+        python3 - "$work/$producer-$mode.lines" "$work/$producer-$mode.entry" \
+            "$work/$producer-$mode.after" "$work/$producer-$mode.target" \
+            "$work/$producer-$mode.text" "$producer" "$mode" <<'PY'
 from pathlib import Path
 import re
+import struct
 import sys
 
-def rows(path):
-    result=[]
-    for line in Path(path).read_text().splitlines():
-        match=re.match(r'^\s*\S*scoped-branch\.c\s+(\d+)\s+(0x[0-9a-fA-F]+)\b', line)
-        if match:
-            result.append((int(match.group(1)),int(match.group(2),16)))
-    return result
+def value(path):
+    return int(Path(path).read_text().strip(),16)
 
-gnu, mini = rows(sys.argv[1]), rows(sys.argv[2])
-after = int(Path(sys.argv[3]).read_text().strip(), 16)
-target = int(Path(sys.argv[4]).read_text().strip(), 16)
-assert gnu and mini and gnu == mini, ('final DWARF line PCs', gnu, mini)
-assert any(line == 2 and pc == after for line, pc in mini), \
-    ('line 2 did not follow relocated instruction', mini, hex(after))
-assert any(line == 3 and pc == target for line, pc in mini), \
-    ('line 3 did not follow aligned target', mini, hex(target))
+rows=[]
+for text in Path(sys.argv[1]).read_text().splitlines():
+    match=re.match(r'^\s*\S*scoped-branch\.c\s+(\d+)\s+(0x[0-9a-fA-F]+)\b',text)
+    if match:
+        rows.append((int(match.group(1)),int(match.group(2),16)))
+entry,after,target=map(value,sys.argv[2:5])
+producer,mode=sys.argv[6:8]
+assert target%32==0, (producer,mode,'target not 32-byte aligned',hex(target))
+for line,pc in ((1,entry),(2,after),(3,target)):
+    assert (line,pc) in rows, (producer,mode,'misplaced linked DWARF row',line,hex(pc),rows)
+
+# B26 immediate encoding is a signed 26-bit word displacement relative to
+# the branch PC. Verify the *executed* target, not the exact GNU NOP layout.
+body=Path(sys.argv[5]).read_bytes()
+assert len(body)>=4, (producer,mode,'empty linked text')
+word=struct.unpack_from('<I',body)[0]
+assert word&0xfc000000==0x50000000, (producer,mode,'not a B26',hex(word))
+units=((word>>10)&0xffff)|((word&0x3ff)<<16)
+if units&(1<<25): units-=1<<26
+assert entry+units*4==target, \
+    (producer,mode,'linked B26 jumped to wrong address',hex(entry+units*4),hex(target))
 PY
+    done
+    if ! cmp -s "$work/gnu-$mode.text" "$work/mini-$mode.text"; then
+        echo "MINIAS_LOONG_SCOPED_RELAX=INFO mode=$mode final_text_bytes_differ "\
+             "GNU=$(wc -c <"$work/gnu-$mode.text") "\
+             "MiniAS=$(wc -c <"$work/mini-$mode.text")" >&2
+    fi
 done
 if cmp -s "$work/gnu-relax.after" "$work/gnu-no-relax.after"; then
     echo 'MINIAS_LOONG_SCOPED_RELAX=FAIL GNU link did not shrink fixture' >&2
     exit 1
 fi
-echo 'MINIAS_LOONG_SCOPED_RELAX=PASS GNU_final_text_target_and_DWARF=exact linker_modes=2'
+if cmp -s "$work/mini-relax.after" "$work/mini-no-relax.after"; then
+    echo 'MINIAS_LOONG_SCOPED_RELAX=FAIL MiniAS link did not shrink fixture' >&2
+    exit 1
+fi
+echo 'MINIAS_LOONG_SCOPED_RELAX=PASS linked_B26_targets_and_DWARF_PCs=self_consistent linker_modes=2 actual_shrink=both'
