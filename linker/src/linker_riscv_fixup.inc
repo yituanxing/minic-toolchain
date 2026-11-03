@@ -274,6 +274,73 @@ static bool minild_riscv_is_arithmetic_relocation(uint32_t type) {
     }
 }
 
+/* Only the RISC-V psABI type is classified here.  Whether a relocation
+ * reserves a dynamic record, needs a PLT, or can be resolved without a
+ * loader is an output-mode decision (especially under PIE/preemption).
+ * The same shape classification feeds static and shared pre-layout scans. */
+typedef enum MiniLdRiscvRelocKind {
+    MINILD_RV_RELOC_NOOP,
+    MINILD_RV_RELOC_ALIGN,
+    MINILD_RV_RELOC_ABS32,
+    MINILD_RV_RELOC_ABS64,
+    MINILD_RV_RELOC_ARITHMETIC,
+    MINILD_RV_RELOC_FINAL,
+    MINILD_RV_RELOC_CALL,
+    MINILD_RV_RELOC_GOT,
+    MINILD_RV_RELOC_TLS_GD,
+    MINILD_RV_RELOC_UNSUPPORTED
+} MiniLdRiscvRelocKind;
+
+static MiniLdRiscvRelocKind minild_riscv_reloc_kind(uint32_t type) {
+    if (minild_riscv_is_arithmetic_relocation(type)) {
+        return MINILD_RV_RELOC_ARITHMETIC;
+    }
+    switch (type) {
+    case R_RISCV_NONE:
+    case R_RISCV_RELAX:
+        return MINILD_RV_RELOC_NOOP;
+    case R_RISCV_ALIGN:
+        return MINILD_RV_RELOC_ALIGN;
+    case R_RISCV_32:
+        return MINILD_RV_RELOC_ABS32;
+    case R_RISCV_64:
+        return MINILD_RV_RELOC_ABS64;
+    case R_RISCV_PCREL_HI20:
+    case R_RISCV_PCREL_LO12_I:
+    case R_RISCV_PCREL_LO12_S:
+    case R_RISCV_HI20:
+    case R_RISCV_LO12_I:
+    case R_RISCV_LO12_S:
+    case R_RISCV_BRANCH:
+    case R_RISCV_JAL:
+    case R_RISCV_RVC_BRANCH:
+    case R_RISCV_RVC_JUMP:
+    case R_RISCV_32_PCREL:
+        return MINILD_RV_RELOC_FINAL;
+    case R_RISCV_CALL:
+    case R_RISCV_CALL_PLT:
+        return MINILD_RV_RELOC_CALL;
+    case R_RISCV_GOT_HI20:
+        return MINILD_RV_RELOC_GOT;
+    case R_RISCV_TLS_GD_HI20:
+        return MINILD_RV_RELOC_TLS_GD;
+    default:
+        return MINILD_RV_RELOC_UNSUPPORTED;
+    }
+}
+
+static bool minild_riscv_reloc_final_layout(uint32_t type) {
+    switch (minild_riscv_reloc_kind(type)) {
+    case MINILD_RV_RELOC_ARITHMETIC:
+    case MINILD_RV_RELOC_FINAL:
+    case MINILD_RV_RELOC_GOT:
+    case MINILD_RV_RELOC_TLS_GD:
+        return true;
+    default:
+        return false;
+    }
+}
+
 static bool minild_riscv_apply_arithmetic(MiniLdSection *section,
                                            const MiniLdReloc *reloc,
                                            int64_t target,

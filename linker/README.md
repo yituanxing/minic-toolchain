@@ -7,13 +7,16 @@ script subsets and section GC. There is also a separately scoped RV32 vDSO
 compatibility implementation. These capabilities have different acceptance
 levels; this README does not claim general GNU `ld` compatibility.
 
-Ordinary no-script final links now preserve separate input-section identities
-through object/archive admission and perform name-based coalescing only once
-before layout. The relocatable (`-r`) and script/GC admission paths retain
-their earlier merge/materialization rules; they are not yet one universal
-InputSection-to-OutputSection selection pipeline. COMDAT and link-order are
-covered by focused integration tests, while full instruction relaxation and
-some GNU RISC-V relocation semantics remain outside this implementation.
+Every ELF link mode (`-r`, static, shared/PIE, script and GC) now records
+independent input-section identities throughout object/archive admission.
+After input selection, one mode-aware work-section projection applies the
+historical coalescing and alignment rules; script/GC links subsequently
+materialize source sections for their own selection/layout. COMDAT,
+link-order and repeated `-r` are covered by focused integration tests.
+This does not imply a complete target-neutral InputSection-to-OutputSection
+pipeline: output policies and ELF writers remain separate, and full
+instruction relaxation and some GNU RISC-V relocation semantics are outside
+the implementation.
 The source-based architecture review, GNU Binutils/LLVM comparison,
 ownership migrations and exact test boundaries are recorded in:
 

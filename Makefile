@@ -857,6 +857,12 @@ check-minild-default-input-late-coalesce: $(MINIAS_BINARY) $(MINILD_BINARY)
 	MINILD="$(abspath $(MINILD_BINARY))" \
 	bash tests/linker/probe-default-input-late-coalesce.sh
 
+.PHONY: check-minild-relocatable-input-projection
+check-minild-relocatable-input-projection: $(MINIAS_BINARY) $(MINILD_BINARY)
+	MINIAS="$(abspath $(MINIAS_BINARY))" \
+	MINILD="$(abspath $(MINILD_BINARY))" \
+	bash tests/linker/probe-relocatable-input-projection.sh
+
 .PHONY: check-minild-reloc-owner-lifecycle
 check-minild-reloc-owner-lifecycle: $(MINIAS_BINARY) $(MINILD_BINARY)
 	MINIAS="$(abspath $(MINIAS_BINARY))" \

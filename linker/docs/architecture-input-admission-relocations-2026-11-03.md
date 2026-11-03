@@ -27,8 +27,9 @@ relations remain available to GC.
 ## Relocation phase contract
 
 1. ET_REL admission appends one relocation with a stable origin ID/offset and
-   its initial merged work-section ID/offset. `-r` writes a temporary ELF
-   projection of that worklist; repeated `-r` is handled by re-admission.
+   a distinct, empty source-section work placeholder. A single post-admission
+   projection chooses the `-r` or final-link work section and its mutable
+   offset; repeated `-r` is handled by re-admission.
 2. Final-link materialization restores each surviving relocation's original
    offset from the input section. Section permutations remap relocation
    current-section IDs simultaneously with resolved symbols, LINK_ORDER
@@ -46,6 +47,11 @@ relations remain available to GC.
    consume the same canonical worklist. `MiniLdFinalSymbols`,
    `MiniLdOutputPlan`, `MiniLdProgramPlan` and `MiniLdSharedImage` retain their
    existing separate output lifetimes.
+
+7. RISC-V relocation *type* classification is shared by the static and shared
+   pre-layout scanners. The static GOT reservation and shared GOT/PLT/TLS,
+   dynamic RELA and TEXTREL reservation are separate included phase owners;
+   output-mode symbol preemption and all final application remain separate.
 
 No extra parallel relocation counter is stored in work sections: its old
 `relocation_count` value was incremented or reset but never read.

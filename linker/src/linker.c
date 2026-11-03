@@ -1,11 +1,10 @@
 /*
  * Final-link input-section ownership and one static ET_EXEC pipeline.
  *
- * Link scripts and GC must see individual ELF input sections before layout,
- * even though the legacy reader initially concatenates same-named sections.
- * Static and shared script links reuse this owner.  The static pipeline
- * materializes only when a script or GC needs source identity, preserving
- * the ordinary no-script fast path.  ET_REL stays independent.
+ * Every link mode retains individual ELF input sections through complete
+ * archive/COMDAT admission.  The later work-section projection chooses the
+ * exact -r or final-link coalescing policy, and script/GC final links then
+ * materialize the input identities they actually need for selection.
  */
 #include "linker_core.inc"
 
@@ -28,13 +27,12 @@ void minild_cli_enable_gc_sections_v0(void) {
     minild_gc_sections_enabled = true;
 }
 
-/* The ordinary ET_EXEC/ET_DYN path admits independent source sections first.
- * Archives and COMDAT may change the chosen input set while that graph is
- * growing, so name coalescing belongs AFTER admission, before symbol layout
- * or synthetic GOT/PLT/TLS sections are built.  This projection reproduces
- * the old default-link order, padding and RISC-V attribute aggregation, but
- * it never changes immutable InputSection/source-symbol coordinates. */
-static bool minild_finish_default_input_merge(MiniLdState *state) {
+/* Archives and COMDAT may change the selected input set while that graph is
+ * growing.  Name coalescing belongs AFTER admission for all link modes, with
+ * -r preserving group and linked-target section identity.  This projection
+ * reproduces existing output order/alignment without mutating immutable
+ * InputSection or source-symbol coordinates. */
+static bool minild_finish_input_merge(MiniLdState *state) {
     MiniLdSectionWorkspace work = {0};
     size_t *old_to_new = NULL;
     size_t *old_base = NULL;
@@ -42,11 +40,10 @@ static bool minild_finish_default_input_merge(MiniLdState *state) {
     size_t i;
     bool ok = false;
 
-    if (!state->defer_default_input_merge || state->relocatable_output ||
-        state->work.placement_count != state->inputs.section_count ||
+    if (state->work.placement_count != state->inputs.section_count ||
         !relocations_require_editable(&state->relocations,
-                                       state->diagnostics, "default-coalesce")) {
-        fprintf(state->diagnostics, "minic-ld: invalid-default-input-phase\n");
+                                       state->diagnostics, "input-coalesce")) {
+        fprintf(state->diagnostics, "minic-ld: invalid-input-coalesce-phase\n");
         return false;
     }
     old_to_new = malloc((old_count == 0U ? 1U : old_count) *
@@ -68,8 +65,13 @@ static bool minild_finish_default_input_merge(MiniLdState *state) {
         MiniLdSection *output;
         size_t index;
         size_t base;
-        const uint64_t flags = input->flags & ~(uint64_t)SHF_GROUP;
-        const bool distinct = (input->flags & SHF_LINK_ORDER) != 0U;
+        const uint64_t flags = state->relocatable_output
+                                   ? input->flags
+                                   : input->flags & ~(uint64_t)SHF_GROUP;
+        const bool distinct = (input->flags & SHF_LINK_ORDER) != 0U ||
+                              (state->relocatable_output &&
+                               (input->group_input != SIZE_MAX ||
+                                input->link_order_target));
 
         /* SHT_GROUP is source-only; its selected members have independent
          * InputSection IDs, but it has no work bytes or output section. */
@@ -93,6 +95,17 @@ static bool minild_finish_default_input_merge(MiniLdState *state) {
             goto done;
         }
         output = &work.sections[index];
+        if (state->relocatable_output) {
+            /* All grouped sections are distinct in -r; the original
+             * placeholder already carries the canonical group signature
+             * and group flag values assigned after source-symbol mapping. */
+            const MiniLdSection *original =
+                &state->work.sections[placement->merged_section];
+
+            output->has_group = original->has_group;
+            output->group_flags = original->group_flags;
+            output->group_signature_symbol = original->group_signature_symbol;
+        }
         if (input->type == MINILD_SHT_RISCV_ATTRIBUTES) {
             base = 0U;
             if (input->size == 0U || input->data == NULL ||
@@ -231,7 +244,6 @@ static bool minild_finish_default_input_merge(MiniLdState *state) {
     work_sections_destroy(&state->work);
     state->work = work;
     memset(&work, 0, sizeof(work));
-    state->defer_default_input_merge = false;
     ok = true;
     goto done;
 
@@ -1400,7 +1412,6 @@ static int minild_link_static_pipeline(
         }
         have_script = true;
     }
-    state.defer_default_input_merge = !garbage_collect && !have_script;
     entry_symbol = options != NULL && options->entry_symbol != NULL
                        ? options->entry_symbol
                        : have_script && script.entry_symbol != NULL
@@ -1413,8 +1424,7 @@ static int minild_link_static_pipeline(
     minild_perf_phase("inputs", &phase_start, &state, diagnostics);
 
     if (!state.have_input ||
-        (state.defer_default_input_merge &&
-         !minild_finish_default_input_merge(&state)) ||
+        !minild_finish_input_merge(&state) ||
         ((garbage_collect || have_script) &&
          (!minild_materialize_input_sections(&state, have_script) ||
           !minild_restore_input_order(&state))) ||

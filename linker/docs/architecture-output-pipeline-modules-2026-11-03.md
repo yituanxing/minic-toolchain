@@ -83,6 +83,14 @@ implementation boundaries without changing phase order or output formats:
 - `linker_shared_reloc_apply.inc`: ET_DYN dynamic relocation construction,
   link-time arithmetic/final fixups and PLT/CALL finalization, still after
   shared metadata reservation and layout.
+- `linker_static_reloc_scan.inc`: ET_EXEC pre-layout static GOT site scan and
+  slot reservation, called from the layout stage.
+- `linker_shared_reloc_scan.inc`: ET_DYN pre-layout dynamic RELA, GOT, PLT,
+  TLS GD and TEXTREL reservation, called from shared metadata preparation.
+
+The two pre-layout scanners use the same psABI relocation **type** classifier
+in `linker_riscv_fixup.inc`; each output mode keeps its own symbol-resolution,
+preemption, diagnostics and reservation policy.
 
 These modules are included by the same C translation unit and deliberately
 retain distinct static and shared relocation policies: preemption, TLS,
@@ -92,7 +100,7 @@ relocations are not added by this ownership change.
 
 ## Validation and limits
 
-The strict `MODE=release CFLAGS=-Werror` host gate now covers 25 MiniLD targets,
+The strict `MODE=release CFLAGS=-Werror` host gate now covers 26 MiniLD targets,
 including input/work-section ownership, COMDAT/archive admission, RISC-V
 relocation lifecycle, script/GC, output-section ownership, ET_EXEC and
 ET_DYN output.  Its outputs are host ELF fixture checks; Linux/QEMU runtime

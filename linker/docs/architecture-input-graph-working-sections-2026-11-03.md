@@ -14,9 +14,10 @@ the existing RISC-V ELF linker, not a new target or linker algorithm.
 | Final-symbol / output-section projections | Serialized symbol/section order after planning | Disposable output ELF indexes |
 
 `MiniLdInputPlacement[i]` corresponds to `MiniLdInputGraph.sections[i]`.
-`merged_section` records the original working merge slot used **before**
-materialization; `current_section` records the live materialized fragment
-after sorting. The original `MiniLdInputSection` no longer stores placement,
+`merged_section` records the work slot assigned **after** post-admission
+projection; `current_section` records the live materialized fragment after
+sorting. During admission there is exactly one initially empty work placeholder
+per input section. The original `MiniLdInputSection` no longer stores placement,
 GC section indexes or linker-script KEEP/DISCARD/selection flags. Those flags
 belong to the work section.
 
@@ -26,10 +27,12 @@ belong to the work section.
    the coordination helper checks equal counts and rolls back the placement
    count on a failed source-record operation. Lazy archive extraction uses the
    same path as ordinary ET_REL inputs.
-2. Work-section name merging excludes `distinct` COMDAT and LINK_ORDER
-   fragments. `indexable` records this property explicitly, including after
-   rebuilding the name index.
-3. Script/GC materialization copies only selected original section data into
+2. Once the complete object/archive/COMDAT selection is known,
+   `minild_finish_input_merge` projects those distinct source placeholders
+   into work sections. Name merging respects `-r` COMDAT group members,
+   LINK_ORDER sources and targets, alignment and RISC-V attributes; `indexable`
+   records distinct identities explicitly, including after name-index rebuilds.
+3. Script/GC materialization then copies only selected original section data into
    new work fragments, preserving source IDs and original symbol offsets.
    Work placement then points to each new fragment.
 4. Input-order, output-class and output-alignment sorts use one permutation
@@ -64,17 +67,19 @@ reside directly in `MiniLdState`. Their next ownership boundaries should be
 decided from the full admission and output dataflows rather than adding
 parallel caches or a transitional copy of the input graph.
 
-## Ordinary final-link deferred coalescing checkpoint
+## Uniform post-admission projection checkpoint
 
-For no-script/no-GC ET_EXEC and no-script ET_DYN, the reader now admits each
+For `-r`, ET_EXEC and ET_DYN (including script/GC), the reader admits each
 source section as its own initially empty working-section identity. It
 records original input bytes, symbols and relocation offsets without rebasing
 them into a same-named aggregate during archive/COMDAT selection. Once the
-complete input sequence is known, `minild_finish_default_input_merge` builds
-the historical name-coalesced work projection in one pass, preserving input
-order, alignment gaps, RISC-V attribute vendor-record concatenation and
-exact `SHF_LINK_ORDER` targets. It then remaps the *mutable* canonical winner
-symbols and relocation coordinates from their immutable source records.
+complete input sequence is known, `minild_finish_input_merge` builds
+a mode-aware work projection in one pass. Final links retain name coalescing,
+input order, alignment gaps, RISC-V attribute vendor-record concatenation and
+exact `SHF_LINK_ORDER` targets. `-r` additionally preserves independent COMDAT
+group members/signatures and LINK_ORDER target identities. Only the *mutable*
+canonical winner symbols and relocation coordinates are rebased from their
+immutable source records.
 
 The late projection replaces its former temporary working-section owner
 atomically after validating every symbol and relocation reference. Original
@@ -82,12 +87,16 @@ InputGraph IDs never change. Shared GOT/PLT/TLS/dynamic metadata preparation
 and static layout occur only after that projection is complete.
 
 `check-minild-default-input-late-coalesce` verifies direct and `-r`-then-final
-ET_EXEC links with repeated `.text.same`/`.data.refs` from separate objects,
-different alignments, one final section per name, and eight checked final
-pointer relocations. Existing native shared/PIE and archive/COMDAT tests also
-exercise the delayed no-script path.
+ET_EXEC name merging and pointer relocations. The new
+`check-minild-relocatable-input-projection` verifies two successive `-r`
+rounds and final ET_EXEC: repeated relocations/addends, section alignment,
+two COMDAT groups, LINK_ORDER metadata, merged `SHT_NOBITS` and RISC-V
+attributes. Existing native
+shared/PIE and archive/COMDAT tests exercise the same admission boundary.
 
-**Boundary:** `-r`, scripted/GC static links and scripted shared links still
-use their earlier eager-merge or materialize-before-select paths. This is a
-real default-link migration, not a claim that all input admission is now
-uniform or that GNU RISC-V/QEMU Linux compatibility has been requalified.
+**Boundary:** script/GC still materialize source identities **after** the
+shared projection, which may copy bytes twice; preserving non-ALLOC and
+attribute behavior takes priority over bypassing that step. The admission
+path is uniform, but output planning and script-specific selection are not
+unified into a universal linker engine. GNU RISC-V/QEMU Linux compatibility
+has not been requalified.

@@ -284,28 +284,10 @@ static bool shared_symbol_is_static_absolute(const MiniLdState *state,
 
 
 static bool shared_relocation_is_final_layout(uint32_t type) {
-    if (minild_riscv_is_arithmetic_relocation(type)) {
-        return true;
-    }
-    switch (type) {
-    case R_RISCV_GOT_HI20:
-    case R_RISCV_PCREL_HI20:
-    case R_RISCV_PCREL_LO12_I:
-    case R_RISCV_PCREL_LO12_S:
-    case R_RISCV_HI20:
-    case R_RISCV_LO12_I:
-    case R_RISCV_LO12_S:
-    case R_RISCV_BRANCH:
-    case R_RISCV_JAL:
-    case R_RISCV_RVC_BRANCH:
-    case R_RISCV_RVC_JUMP:
-    case R_RISCV_32_PCREL:
-    case R_RISCV_TLS_GD_HI20:
-        return true;
-    default:
-        return false;
-    }
+    return minild_riscv_reloc_final_layout(type);
 }
+
+#include "linker_shared_reloc_scan.inc"
 
 static bool shared_define_linker_symbols_pre_layout(
     MiniLdState *state,
@@ -717,109 +699,16 @@ static bool shared_prepare_metadata(MiniLdState *state,
             goto oom;
         }
     }
-    for (i = 0U; i < state->relocations.count; ++i) {
-        MiniLdReloc *reloc = &state->relocations.entries[i];
-        MiniLdResolvedSymbol *target;
+    {
+        MiniLdSharedRelocScanResult scan =
+            shared_scan_relocation_requirements(state, shared);
 
-        if (reloc->section >= state->work.count ||
-            (state->work.sections[reloc->section].flags & SHF_ALLOC) == 0U) {
-            continue;
+        if (scan == MINILD_SHARED_RELOC_SCAN_OOM) {
+            goto oom;
         }
-        if (reloc->type == R_RISCV_NONE ||
-            reloc->type == R_RISCV_RELAX ||
-            reloc->type == R_RISCV_ALIGN) {
-            continue;
-        }
-        if (reloc->type == R_RISCV_GOT_HI20) {
-            if (reloc->symbol == SIZE_MAX ||
-                reloc->symbol >= state->resolver.count ||
-                reloc->addend != 0) {
-                fprintf(state->diagnostics,
-                        "minic-ld: invalid-shared-got-hi20-relocation\n");
-                goto fail;
-            }
-            if (shared->got_slot_offset[reloc->symbol] == SIZE_MAX) {
-                bool static_abs = shared_symbol_is_static_absolute(
-                    state, shared, reloc->symbol);
-
-                if (shared->got_count > (SIZE_MAX / 8U) - 1U ||
-                    (!static_abs && shared->rela_count == SIZE_MAX)) {
-                    goto oom;
-                }
-                shared->got_slot_offset[reloc->symbol] =
-                    shared->got_count * 8U;
-                ++shared->got_count;
-                if (!static_abs) {
-                    ++shared->rela_count;
-                }
-            }
-            continue;
-        }
-        if (reloc->type == R_RISCV_TLS_GD_HI20) {
-            if (reloc->symbol == SIZE_MAX ||
-                reloc->symbol >= state->resolver.count ||
-                shared->dynsym_index[reloc->symbol] == SIZE_MAX) {
-                fprintf(state->diagnostics,
-                        "minic-ld: invalid-shared-tls-gd-relocation\n");
-                goto fail;
-            }
-            if (shared->tls_gd_offset[reloc->symbol] == SIZE_MAX) {
-                if (shared->tls_gd_count > (SIZE_MAX / 16U) - 1U) {
-                    goto oom;
-                }
-                shared->tls_gd_offset[reloc->symbol] =
-                    shared->tls_gd_count * 16U;
-                ++shared->tls_gd_count;
-                if (shared->rela_count > SIZE_MAX - 2U) {
-                    goto oom;
-                }
-                shared->rela_count += 2U;
-            }
-            continue;
-        }
-        if (shared_relocation_is_final_layout(reloc->type)) {
-            continue;
-        }
-        if (reloc->type == R_RISCV_CALL ||
-            reloc->type == R_RISCV_CALL_PLT) {
-            if (reloc->symbol == SIZE_MAX ||
-                reloc->symbol >= state->resolver.count) {
-                fprintf(state->diagnostics,
-                        "minic-ld: invalid-shared-call-relocation\n");
-                goto fail;
-            }
-            target = &state->resolver.entries[reloc->symbol];
-            if (shared_symbol_needs_plt(state,
-                                        shared,
-                                        reloc->symbol) &&
-                shared->plt_index[reloc->symbol] == SIZE_MAX) {
-                if (shared->dynsym_index[reloc->symbol] == SIZE_MAX) {
-                    fprintf(state->diagnostics,
-                            "minic-ld: missing-dynsym-for-plt:%s\n",
-                            target->name);
-                    goto fail;
-                }
-                shared->plt_index[reloc->symbol] = shared->plt_count++;
-            }
-            continue;
-        }
-        if (reloc->type != R_RISCV_64) {
-            fprintf(state->diagnostics,
-                    "minic-ld: unsupported-shared-relocation:%u\n",
-                    reloc->type);
+        if (scan != MINILD_SHARED_RELOC_SCAN_OK) {
             goto fail;
         }
-        if (reloc->symbol != SIZE_MAX &&
-            shared_symbol_is_static_absolute(state, shared, reloc->symbol)) {
-            continue;
-        }
-        /* A dynamic absolute relocation written into an RX/RO input needs
-         * loader textrel permission. GOT/TLS/PLT slots themselves are RW,
-         * and source-discarded relocations are pruned before this scan. */
-        if ((state->work.sections[reloc->section].flags & SHF_WRITE) == 0U) {
-            shared->have_textrel = true;
-        }
-        ++shared->rela_count;
     }
     if (shared->got_count > SIZE_MAX / 8U ||
         shared->tls_gd_count > SIZE_MAX / 16U ||
@@ -1802,9 +1691,6 @@ int minild_link_shared_elf64_riscv_inputs_options(
     minild_script_initialize(&layout_script);
     state.diagnostics = diagnostics;
     state.allow_dso_inputs = true;
-    /* Keep input-section provenance independent through archive selection;
-     * default name coalescing is a post-admission projection. */
-    state.defer_default_input_merge = script_path == NULL;
     if (version_script_path != NULL) {
         if (!minild_script_parse_file(version_script_path,
                                       &version_script, diagnostics) ||
@@ -1840,8 +1726,7 @@ int minild_link_shared_elf64_riscv_inputs_options(
 
     if (!process_input_sequence(&state, inputs, input_count) ||
         !state.have_input ||
-        (state.defer_default_input_merge &&
-         !minild_finish_default_input_merge(&state)) ||
+        !minild_finish_input_merge(&state) ||
         (script_path != NULL &&
          (!minild_materialize_input_sections(&state, true) ||
           !minild_restore_input_order(&state))) ||
