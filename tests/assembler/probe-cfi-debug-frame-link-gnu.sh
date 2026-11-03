@@ -33,17 +33,33 @@ def parse(path):
             if rule != 'nop' and not rule.startswith('advance_loc'):
                 current['rules'].append(rule)
     addresses = {cie['addr']: i for i, cie in enumerate(cies)}
-    assert len(cies) == 2 and len(fdes) == 4, (label, path, cies, fdes)
+    # CIE deduplication is linker/target-dependent: some GNU linkers keep
+    # one CIE per input FDE.  The CIE a given FDE *resolves to* determines
+    # unwind semantics, not the number of physically duplicated CIE records.
+    assert cies and len(fdes) == 4, (label, path, cies, fdes)
     assert all(fde['cie'] in addresses for fde in fdes), (label, path, fdes)
     return {'cie_rules': [cie['rules'] for cie in cies],
             'fde_cies': [addresses[fde['cie']] for fde in fdes],
-            'fde_rules': [fde['rules'] for fde in fdes]}
+            'fde_rules': [fde['rules'] for fde in fdes],
+            'resolved_fdes': [
+                (cies[addresses[fde['cie']]]['rules'], fde['rules'])
+                for fde in fdes]}
 
 gnu, mini = parse(reference), parse(actual)
-assert gnu['fde_cies'] == [0, 0, 1, 1], (label, gnu)
-if mini != gnu:
+if label.startswith('ELF'):
+    # Preserve the historically strict x86 ELF32/64 CIE graph contract.
+    assert len(gnu['cie_rules']) == 2 and gnu['fde_cies'] == [0, 0, 1, 1], (label, gnu)
+    equivalent = mini == gnu
+else:
+    # Cross targets may legitimately retain four CIE records where x86
+    # coalesces two.  Check each FDE's resolved rules, including its CIE's
+    # CFA rule, so a wrongly linked CIE still fails even after GNU ld -r.
+    equivalent = mini['resolved_fdes'] == gnu['resolved_fdes']
+if not equivalent:
     raise SystemExit(f'{label} ld -r CIE-link mismatch:\nGNU={gnu}\nMini={mini}')
-print(f'MINIAS_CFI_LINK=PASS {label} GNU_ld_r CIE=2 FDE=4 linked_CIE_refs=exact')
+print(f'MINIAS_CFI_LINK=PASS {label} GNU_ld_r '
+      f'GNU_CIE={len(gnu["cie_rules"])} Mini_CIE={len(mini["cie_rules"])} '
+      'FDE=4 resolved_CIE_rules=exact')
 PY
 }
 
@@ -138,25 +154,38 @@ two:
 $instruction
 .cfi_endproc
 ASM
-  "$gas" "${gas_args[@]}" -o "$work/$profile.gnu.o" "$work/$profile.s"
-  "$MINIAS" "${mini_args[@]}" -o "$work/$profile.mini.o" "$work/$profile.s"
+  "$gas" "${gas_args[@]}" -o "$work/$profile.gnu.o" "$work/$profile.s" || return 1
+  "$MINIAS" "${mini_args[@]}" -o "$work/$profile.mini.o" "$work/$profile.s" || return 1
   "$linker" "${ld_args[@]}" -r -o "$work/$profile.gg.o" \
-    "$work/$profile.gnu.o" "$work/$profile.gnu.o"
+    "$work/$profile.gnu.o" "$work/$profile.gnu.o" || return 1
   "$linker" "${ld_args[@]}" -r -o "$work/$profile.gm.o" \
-    "$work/$profile.gnu.o" "$work/$profile.mini.o"
-  readelf --debug-dump=frames "$work/$profile.gg.o" >"$work/$profile.gg.frames"
-  readelf --debug-dump=frames "$work/$profile.gm.o" >"$work/$profile.gm.frames"
-  compare_frames "$profile" "$work/$profile.gg.frames" "$work/$profile.gm.frames"
+    "$work/$profile.gnu.o" "$work/$profile.mini.o" || return 1
+  readelf --debug-dump=frames "$work/$profile.gg.o" >"$work/$profile.gg.frames" || return 1
+  readelf --debug-dump=frames "$work/$profile.gm.o" >"$work/$profile.gm.frames" || return 1
+  compare_frames "$profile" "$work/$profile.gg.frames" "$work/$profile.gm.frames" || return 1
 }
 
-check_cross_frames rv32 riscv64-linux-gnu-as riscv64-linux-gnu-ld \
+cross_failures=0
+run_cross_frames() {
+  # Collect every target's result in one CI attempt, without silently
+  # accepting a failed assembler/linker as an absent optional probe.
+  if ! check_cross_frames "$@"; then
+    ((cross_failures+=1))
+  fi
+}
+
+run_cross_frames rv32 riscv64-linux-gnu-as riscv64-linux-gnu-ld \
   '-march=rv32i -mabi=ilp32' '-m elf32lriscv' \
   '--target=riscv -march=rv32i -mabi=ilp32' 'addi x0,x0,0' 2
-check_cross_frames rv64 riscv64-linux-gnu-as riscv64-linux-gnu-ld \
+run_cross_frames rv64 riscv64-linux-gnu-as riscv64-linux-gnu-ld \
   '-march=rv64i -mabi=lp64' '-m elf64lriscv' \
   '--target=riscv -march=rv64i -mabi=lp64' 'addi x0,x0,0' 2
-check_cross_frames aarch64 aarch64-linux-gnu-as aarch64-linux-gnu-ld \
+run_cross_frames aarch64 aarch64-linux-gnu-as aarch64-linux-gnu-ld \
   '-march=armv8-a' '' '--target=aarch64 -march=armv8-a -mabi=lp64' 'nop' 31
-check_cross_frames loong loongarch64-linux-gnu-as loongarch64-linux-gnu-ld \
+run_cross_frames loong loongarch64-linux-gnu-as loongarch64-linux-gnu-ld \
   '-mabi=lp64d' '' '--target=loongarch64 -march=loongarch64 -mabi=lp64d' \
   'addi.d $r0,$r0,0' 3
+if ((cross_failures)); then
+  echo "MINIAS_CFI_LINK=FAIL cross_profiles=$cross_failures" >&2
+  exit 1
+fi
