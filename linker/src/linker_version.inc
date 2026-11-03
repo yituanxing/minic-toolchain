@@ -25,7 +25,7 @@ static bool shared_fill_versions(MiniLdState *state,
     }
     memset(versym->data, 0, versym->size);
     memset(verdef->data, 0, verdef->size);
-    for (i = 0U; i < state->symbol_count; ++i) {
+    for (i = 0U; i < state->resolver.count; ++i) {
         size_t dynindex = shared->dynsym_index[i];
         uint16_t version;
         if (dynindex == SIZE_MAX) {
@@ -34,7 +34,7 @@ static bool shared_fill_versions(MiniLdState *state,
         if (dynindex >= shared->dynsym_count) {
             return false;
         }
-        version = state->symbols[i].section == MINILD_SECTION_UNDEF
+        version = state->resolver.entries[i].section == MINILD_SECTION_UNDEF
                   ? UINT16_C(1) : UINT16_C(2);
         versym->data[dynindex * 2U] = (unsigned char)(version & 0xffU);
         versym->data[dynindex * 2U + 1U] = (unsigned char)(version >> 8U);

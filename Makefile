@@ -814,6 +814,12 @@ check-minild-symbol-ownership: $(MINIAS_BINARY) $(MINILD_BINARY)
 	MINILD="$(abspath $(MINILD_BINARY))" \
 	bash tests/linker/probe-symbol-ownership.sh
 
+.PHONY: check-minild-archive-resolution-boundary
+check-minild-archive-resolution-boundary: $(MINIAS_BINARY) $(MINILD_BINARY)
+	MINIAS="$(abspath $(MINIAS_BINARY))" \
+	MINILD="$(abspath $(MINILD_BINARY))" \
+	bash tests/linker/probe-archive-resolution-boundary.sh
+
 .PHONY: check-minild-static-pipeline-boundaries
 check-minild-static-pipeline-boundaries: $(MINIAS_BINARY) $(MINILD_BINARY)
 	MINIAS="$(abspath $(MINIAS_BINARY))" \

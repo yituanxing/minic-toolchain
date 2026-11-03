@@ -146,8 +146,8 @@ static bool minild_materialize_input_sections(MiniLdState *state,
         output->link_order_target = link_target->gc_section;
     }
 
-    for (i = 0U; i < state->symbol_count; ++i) {
-        MiniLdResolvedSymbol *symbol = &state->symbols[i];
+    for (i = 0U; i < state->resolver.count; ++i) {
+        MiniLdResolvedSymbol *symbol = &state->resolver.entries[i];
         const MiniLdInputSymbol *source;
         const MiniLdInputSection *input;
 
@@ -348,8 +348,8 @@ static bool minild_restore_input_order(MiniLdState *state) {
         ordered_sections[i] = state->sections[old_index];
         remap[old_index] = i;
     }
-    for (i = 0U; i < state->symbol_count; ++i) {
-        MiniLdResolvedSymbol *symbol = &state->symbols[i];
+    for (i = 0U; i < state->resolver.count; ++i) {
+        MiniLdResolvedSymbol *symbol = &state->resolver.entries[i];
 
         if (symbol->section < 0) {
             continue;
@@ -476,8 +476,8 @@ static bool minild_gc_group_default_output_classes(MiniLdState *state) {
         goto done;
     }
 
-    for (i = 0U; i < state->symbol_count; ++i) {
-        MiniLdResolvedSymbol *symbol = &state->symbols[i];
+    for (i = 0U; i < state->resolver.count; ++i) {
+        MiniLdResolvedSymbol *symbol = &state->resolver.entries[i];
 
         if (symbol->section < 0) {
             continue;
@@ -620,8 +620,8 @@ static bool minild_gc_sort_default_output_alignment(MiniLdState *state) {
         ordered_sections[i] = state->sections[old_index];
         remap[old_index] = i;
     }
-    for (i = 0U; i < state->symbol_count; ++i) {
-        MiniLdResolvedSymbol *symbol = &state->symbols[i];
+    for (i = 0U; i < state->resolver.count; ++i) {
+        MiniLdResolvedSymbol *symbol = &state->resolver.entries[i];
 
         if (symbol->section < 0) {
             continue;
@@ -858,12 +858,12 @@ static bool minild_shared_prune_script_inputs(MiniLdState *state,
             reloc->symbol == SIZE_MAX) {
             continue;
         }
-        if (reloc->symbol >= state->symbol_count) {
+        if (reloc->symbol >= state->resolver.count) {
             fprintf(state->diagnostics,
                     "minic-ld: invalid-shared-script-reloc-symbol\n");
             goto done;
         }
-        symbol = &state->symbols[reloc->symbol];
+        symbol = &state->resolver.entries[reloc->symbol];
         if (symbol->section >= 0 &&
             (size_t)symbol->section < state->section_count &&
             discarded[symbol->section]) {
@@ -874,8 +874,8 @@ static bool minild_shared_prune_script_inputs(MiniLdState *state,
         }
     }
 
-    for (i = 0U; i < state->symbol_count; ++i) {
-        MiniLdResolvedSymbol *symbol = &state->symbols[i];
+    for (i = 0U; i < state->resolver.count; ++i) {
+        MiniLdResolvedSymbol *symbol = &state->resolver.entries[i];
         if (symbol->section >= 0 &&
             (size_t)symbol->section < state->section_count &&
             discarded[symbol->section]) {
@@ -1053,17 +1053,17 @@ static bool minild_gc_prune_static(MiniLdState *state,
         heads[source] = i;
     }
 
-    entry_index = find_global_symbol(state, entry_symbol);
+    entry_index = symbol_resolver_lookup(&state->resolver, entry_symbol);
     if (entry_index == SIZE_MAX ||
-        state->symbols[entry_index].section < 0 ||
-        (size_t)state->symbols[entry_index].section >= state->section_count) {
+        state->resolver.entries[entry_index].section < 0 ||
+        (size_t)state->resolver.entries[entry_index].section >= state->section_count) {
         fprintf(state->diagnostics,
                 "minic-ld: undefined-entry:%s\n",
                 entry_symbol);
         goto done;
     }
     if (!minild_gc_mark_section(state,
-                                (size_t)state->symbols[entry_index].section,
+                                (size_t)state->resolver.entries[entry_index].section,
                                 live,
                                 queue,
                                 &queue_size)) {
@@ -1120,10 +1120,10 @@ static bool minild_gc_prune_static(MiniLdState *state,
             MiniLdResolvedSymbol *target;
 
             if (reloc->symbol == SIZE_MAX ||
-                reloc->symbol >= state->symbol_count) {
+                reloc->symbol >= state->resolver.count) {
                 continue;
             }
-            target = &state->symbols[reloc->symbol];
+            target = &state->resolver.entries[reloc->symbol];
             if (target->section < 0 ||
                 (size_t)target->section >= state->section_count) {
                 continue;
@@ -1151,8 +1151,8 @@ static bool minild_gc_prune_static(MiniLdState *state,
         }
     }
 
-    for (i = 0U; i < state->symbol_count; ++i) {
-        MiniLdResolvedSymbol *symbol = &state->symbols[i];
+    for (i = 0U; i < state->resolver.count; ++i) {
+        MiniLdResolvedSymbol *symbol = &state->resolver.entries[i];
 
         if (symbol->section >= 0 &&
             (size_t)symbol->section < state->section_count &&

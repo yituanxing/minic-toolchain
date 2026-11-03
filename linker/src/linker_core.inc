@@ -144,6 +144,20 @@ typedef struct MiniLdIndexSlot {
     size_t index_plus_one;
 } MiniLdIndexSlot;
 
+/* Owns the stable canonical symbol IDs and their global-name index.  Input
+ * symbols remain immutable in the input owner; layout, GC and scripts may
+ * transform canonical entries without changing their IDs. */
+typedef struct MiniLdSymbolResolver {
+    MiniLdResolvedSymbol *entries;
+    size_t count;
+    size_t capacity;
+    MiniLdIndexSlot *global_slots;
+    size_t global_capacity;
+    size_t global_count;
+} MiniLdSymbolResolver;
+
+static void symbol_resolver_destroy(MiniLdSymbolResolver *resolver);
+
 typedef struct MiniLdState {
     MiniLdInputFile *input_files;
     size_t input_file_count;
@@ -154,9 +168,7 @@ typedef struct MiniLdState {
     MiniLdSection *sections;
     size_t section_count;
     size_t section_capacity;
-    MiniLdResolvedSymbol *symbols;
-    size_t symbol_count;
-    size_t symbol_capacity;
+    MiniLdSymbolResolver resolver;
     MiniLdInputSymbol *input_symbols;
     size_t input_symbol_count;
     size_t input_symbol_capacity;
@@ -173,9 +185,6 @@ typedef struct MiniLdState {
     size_t reloc_index_sections;
     MiniLdIndexSlot *section_index;
     size_t section_index_capacity;
-    MiniLdIndexSlot *global_index;
-    size_t global_index_capacity;
-    size_t global_index_count;
     char **comdat_signatures;
     size_t comdat_signature_count;
     size_t comdat_signature_capacity;
@@ -216,25 +225,28 @@ typedef struct MiniLdParsedGroup {
     bool selected;
 } MiniLdParsedGroup;
 
-typedef struct MiniLdArchiveMembers {
-    char **paths;
-    size_t count;
-    size_t capacity;
-} MiniLdArchiveMembers;
+typedef enum MiniLdArchiveKind {
+    MINILD_ARCHIVE_THIN = 1,
+    MINILD_ARCHIVE_REGULAR = 2
+} MiniLdArchiveKind;
 
-typedef struct MiniLdEmbeddedMember {
+typedef struct MiniLdArchiveMember {
     char *name;
+    /* Thin members own an external path; regular members borrow archive data. */
+    char *path;
     size_t data_offset;
     size_t data_size;
-} MiniLdEmbeddedMember;
+    bool selected;
+} MiniLdArchiveMember;
 
-typedef struct MiniLdEmbeddedArchive {
+typedef struct MiniLdArchive {
+    MiniLdArchiveKind kind;
     unsigned char *data;
     size_t size;
-    MiniLdEmbeddedMember *members;
+    MiniLdArchiveMember *members;
     size_t count;
     size_t capacity;
-} MiniLdEmbeddedArchive;
+} MiniLdArchive;
 
 static char *minild_strdup(const char *text) {
     size_t size = strlen(text) + 1U;
@@ -324,7 +336,9 @@ static bool buffer_append_zero(MiniLdBuffer *buffer, size_t size) {
     if (!buffer_reserve(buffer, size)) {
         return false;
     }
-    memset(buffer->data + buffer->size, 0, size);
+    if (size != 0U) {
+        memset(buffer->data + buffer->size, 0, size);
+    }
     buffer->size += size;
     return true;
 }
@@ -400,9 +414,7 @@ static void state_destroy(MiniLdState *state) {
         free(state->sections[i].name);
         free(state->sections[i].data);
     }
-    for (i = 0U; i < state->symbol_count; ++i) {
-        free(state->symbols[i].name);
-    }
+    symbol_resolver_destroy(&state->resolver);
     for (i = 0U; i < state->input_symbol_count; ++i) {
         free(state->input_symbols[i].name);
     }
@@ -415,13 +427,11 @@ static void state_destroy(MiniLdState *state) {
     free(state->dso_needed_names);
     free(state->dso_symbol_names);
     free(state->sections);
-    free(state->symbols);
     free(state->input_symbols);
     free(state->relocs);
     free(state->reloc_section_starts);
     free(state->reloc_section_refs);
     free(state->section_index);
-    free(state->global_index);
     for (i = 0U; i < state->comdat_signature_count; ++i) {
         free(state->comdat_signatures[i]);
     }
@@ -642,27 +652,6 @@ static bool ensure_section_capacity(MiniLdState *state) {
     return true;
 }
 
-static bool ensure_symbol_capacity(MiniLdState *state) {
-    MiniLdResolvedSymbol *next;
-    size_t capacity;
-
-    if (state->symbol_count < state->symbol_capacity) {
-        return true;
-    }
-    capacity = state->symbol_capacity == 0U ? 64U : state->symbol_capacity * 2U;
-    if (capacity < state->symbol_capacity ||
-        capacity > SIZE_MAX / sizeof(*state->symbols)) {
-        return false;
-    }
-    next = realloc(state->symbols, capacity * sizeof(*state->symbols));
-    if (next == NULL) {
-        return false;
-    }
-    state->symbols = next;
-    state->symbol_capacity = capacity;
-    return true;
-}
-
 static bool record_input_symbol(MiniLdState *state,
                                 size_t file,
                                 size_t elf_index,
@@ -759,7 +748,9 @@ static bool section_append_zero(MiniLdSection *section, size_t size) {
         section->data = next;
         section->capacity = capacity;
     }
-    memset(section->data + section->size, 0, size);
+    if (size != 0U) {
+        memset(section->data + section->size, 0, size);
+    }
     section->size = required;
     return true;
 }
@@ -863,43 +854,9 @@ static size_t find_section_index(const MiniLdState *state,
     return SIZE_MAX;
 }
 
-static bool rebuild_global_index(MiniLdState *state, size_t capacity) {
-    MiniLdIndexSlot *slots;
-    size_t i;
-
-    slots = calloc(capacity, sizeof(*slots));
-    if (slots == NULL) {
-        return false;
-    }
-    for (i = 0U; i < state->symbol_count; ++i) {
-        if (ELF64_ST_BIND(state->symbols[i].info) != STB_LOCAL) {
-            uint64_t hash = hash_text(state->symbols[i].name);
-            insert_index_slot(slots, capacity, hash, i);
-        }
-    }
-    free(state->global_index);
-    state->global_index = slots;
-    state->global_index_capacity = capacity;
-    return true;
-}
-
-static bool ensure_global_index_insert(MiniLdState *state) {
-    size_t capacity = state->global_index_capacity;
-
-    if (capacity != 0U &&
-        (state->global_index_count + 1U) * 10U < capacity * 7U) {
-        return true;
-    }
-    if (capacity == 0U) {
-        capacity = 256U;
-    } else {
-        if (capacity > SIZE_MAX / 2U) {
-            return false;
-        }
-        capacity *= 2U;
-    }
-    return rebuild_global_index(state, capacity);
-}
+/* Symbol resolution has its own owner; input, archive, script and output
+ * stages consume its narrow API without managing its name index. */
+#include "linker_symbol.inc"
 
 static bool find_or_add_section_with_identity(MiniLdState *state,
                                 const char *name,
@@ -968,138 +925,6 @@ static bool find_or_add_section(MiniLdState *state,
     return find_or_add_section_with_identity(state, name, type, flags,
                                              align, entsize, false,
                                              section_out);
-}
-
-static bool add_local_symbol(MiniLdState *state,
-                             const char *name,
-                             int section,
-                             uint64_t value,
-                             uint64_t size,
-                             unsigned char info,
-                             unsigned char other,
-                             size_t source_symbol,
-                             size_t *symbol_out) {
-    MiniLdResolvedSymbol *symbol;
-
-    if (!ensure_symbol_capacity(state)) {
-        fprintf(state->diagnostics, "minic-ld: out-of-memory:symbols\n");
-        return false;
-    }
-    symbol = &state->symbols[state->symbol_count];
-    memset(symbol, 0, sizeof(*symbol));
-    symbol->name = minild_strdup(name);
-    if (symbol->name == NULL) {
-        fprintf(state->diagnostics, "minic-ld: out-of-memory:symbol-name\n");
-        return false;
-    }
-    symbol->section = section;
-    symbol->value = value;
-    symbol->size = size;
-    symbol->info = info;
-    symbol->other = other;
-    symbol->source_symbol = source_symbol;
-    *symbol_out = state->symbol_count++;
-    return true;
-}
-
-static bool symbol_is_defined(const MiniLdResolvedSymbol *symbol) {
-    return symbol->section != MINILD_SECTION_UNDEF;
-}
-
-static size_t find_global_symbol(const MiniLdState *state, const char *name) {
-    uint64_t hash = hash_text(name);
-    size_t position;
-
-    if (state->global_index_capacity == 0U) {
-        return SIZE_MAX;
-    }
-    position = (size_t)hash & (state->global_index_capacity - 1U);
-    while (state->global_index[position].index_plus_one != 0U) {
-        const MiniLdIndexSlot *slot = &state->global_index[position];
-        size_t index = slot->index_plus_one - 1U;
-
-        if (slot->hash == hash &&
-            strcmp(state->symbols[index].name, name) == 0) {
-            return index;
-        }
-        position = (position + 1U) & (state->global_index_capacity - 1U);
-    }
-    return SIZE_MAX;
-}
-
-static bool add_or_merge_global_symbol(MiniLdState *state,
-                                       const char *name,
-                                       int section,
-                                       uint64_t value,
-                                       uint64_t size,
-                                       unsigned char info,
-                                       unsigned char other,
-                                       size_t source_symbol,
-                                       size_t *symbol_out) {
-    size_t existing_index = find_global_symbol(state, name);
-    unsigned new_bind = ELF64_ST_BIND(info);
-
-    if (existing_index == SIZE_MAX) {
-        size_t index;
-        uint64_t hash = hash_text(name);
-
-        if (!ensure_global_index_insert(state) ||
-            !add_local_symbol(state,
-                              name,
-                              section,
-                              value,
-                              size,
-                              info,
-                              other,
-                              source_symbol,
-                              &index)) {
-            return false;
-        }
-        insert_index_slot(state->global_index,
-                          state->global_index_capacity,
-                          hash,
-                          index);
-        ++state->global_index_count;
-        *symbol_out = index;
-        return true;
-    }
-
-    {
-        MiniLdResolvedSymbol *existing = &state->symbols[existing_index];
-        unsigned old_bind = ELF64_ST_BIND(existing->info);
-        bool old_defined = symbol_is_defined(existing);
-        bool new_defined = section != MINILD_SECTION_UNDEF;
-
-        if (!old_defined && new_defined) {
-            existing->section = section;
-            existing->value = value;
-            existing->size = size;
-            existing->info = info;
-            existing->other = other;
-            existing->source_symbol = source_symbol;
-        } else if (old_defined && new_defined) {
-            if (old_bind == STB_WEAK && new_bind != STB_WEAK) {
-                existing->section = section;
-                existing->value = value;
-                existing->size = size;
-                existing->info = info;
-                existing->other = other;
-                existing->source_symbol = source_symbol;
-            } else if (old_bind != STB_WEAK && new_bind != STB_WEAK) {
-                fprintf(state->diagnostics,
-                        "minic-ld: multiple-definition:%s\n",
-                        name);
-                return false;
-            }
-        } else if (!old_defined && !new_defined &&
-                   old_bind == STB_WEAK && new_bind != STB_WEAK) {
-            existing->info = info;
-            existing->other = other;
-            existing->source_symbol = source_symbol;
-        }
-    }
-    *symbol_out = existing_index;
-    return true;
 }
 
 static bool add_relocation(MiniLdState *state,
@@ -1666,7 +1491,8 @@ static bool process_input_data(MiniLdState *state,
 
         bind = minielf_symbol_bind(input_symbol.info);
         if (bind == STB_LOCAL) {
-            if (!add_local_symbol(state,
+            if (!symbol_resolver_add_local(&state->resolver,
+                                  state->diagnostics,
                                   name,
                                   output_section,
                                   value,
@@ -1678,7 +1504,8 @@ static bool process_input_data(MiniLdState *state,
                 goto done;
             }
         } else if (bind == STB_GLOBAL || bind == STB_WEAK) {
-            if (!add_or_merge_global_symbol(state,
+            if (!symbol_resolver_merge_global(&state->resolver,
+                                            state->diagnostics,
                                             name,
                                             output_section,
                                             value,
@@ -1700,7 +1527,7 @@ static bool process_input_data(MiniLdState *state,
         symbol_map[i] = output_symbol;
         state->input_symbols[source_symbol].canonical_symbol = output_symbol;
         if (group_signature_section) {
-            state->symbols[output_symbol].group_signature_section = true;
+            state->resolver.entries[output_symbol].group_signature_section = true;
         }
     }
 
@@ -2052,36 +1879,46 @@ static char *join_path(const char *directory, const char *name) {
     return result;
 }
 
-static void archive_members_destroy(MiniLdArchiveMembers *members) {
+static void archive_destroy(MiniLdArchive *archive) {
     size_t i;
 
-    for (i = 0U; i < members->count; ++i) {
-        free(members->paths[i]);
+    for (i = 0U; i < archive->count; ++i) {
+        free(archive->members[i].name);
+        free(archive->members[i].path);
     }
-    free(members->paths);
-    members->paths = NULL;
-    members->count = 0U;
-    members->capacity = 0U;
+    free(archive->members);
+    free(archive->data);
+    memset(archive, 0, sizeof(*archive));
 }
 
-static bool archive_members_append(MiniLdArchiveMembers *members, char *path) {
-    char **next;
+static bool archive_member_append(MiniLdArchive *archive,
+                                  char *name,
+                                  char *path,
+                                  size_t offset,
+                                  size_t size) {
+    MiniLdArchiveMember *next;
     size_t capacity;
 
-    if (members->count == members->capacity) {
-        capacity = members->capacity == 0U ? 64U : members->capacity * 2U;
-        if (capacity < members->capacity ||
-            capacity > SIZE_MAX / sizeof(*members->paths)) {
+    if (archive->count == archive->capacity) {
+        capacity = archive->capacity == 0U ? 64U : archive->capacity * 2U;
+        if (capacity < archive->capacity ||
+            capacity > SIZE_MAX / sizeof(*archive->members)) {
             return false;
         }
-        next = realloc(members->paths, capacity * sizeof(*members->paths));
+        next = realloc(archive->members, capacity * sizeof(*archive->members));
         if (next == NULL) {
             return false;
         }
-        members->paths = next;
-        members->capacity = capacity;
+        archive->members = next;
+        archive->capacity = capacity;
     }
-    members->paths[members->count++] = path;
+    archive->members[archive->count++] = (MiniLdArchiveMember){
+        .name = name,
+        .path = path,
+        .data_offset = offset,
+        .data_size = size,
+        .selected = false
+    };
     return true;
 }
 
@@ -2204,7 +2041,7 @@ static bool decode_archive_member_name(const unsigned char *long_names,
 }
 
 static bool read_thin_archive_members(const char *archive_path,
-                                      MiniLdArchiveMembers *members,
+                                      MiniLdArchive *archive,
                                       FILE *diagnostics) {
     unsigned char *data = NULL;
     size_t size = 0U;
@@ -2274,8 +2111,9 @@ static bool read_thin_archive_members(const char *archive_path,
                 goto done;
             }
             path = join_path(directory, name);
-            free(name);
-            if (path == NULL || !archive_members_append(members, path)) {
+            if (path == NULL ||
+                !archive_member_append(archive, name, path, 0U, 0U)) {
+                free(name);
                 free(path);
                 fprintf(diagnostics, "minic-ld: out-of-memory:archive-members\n");
                 goto done;
@@ -2306,13 +2144,7 @@ done:
 
 static bool state_has_unresolved_nonweak(const MiniLdState *state,
                                          const char *name) {
-    size_t index = find_global_symbol(state, name);
-
-    if (index == SIZE_MAX) {
-        return false;
-    }
-    return !symbol_is_defined(&state->symbols[index]) &&
-           ELF64_ST_BIND(state->symbols[index].info) != STB_WEAK;
+    return symbol_resolver_needs_archive(&state->resolver, name);
 }
 
 static bool object_data_defines_needed_symbol(MiniLdState *state,
@@ -2416,70 +2248,8 @@ done:
     return ok;
 }
 
-static bool object_defines_needed_symbol(MiniLdState *state,
-                                         const char *path,
-                                         bool *needed_out) {
-    unsigned char *data = NULL;
-    size_t size = 0U;
-    bool ok;
-
-    if (!read_file(path, &data, &size, state->diagnostics)) {
-        return false;
-    }
-    ok = object_data_defines_needed_symbol(state,
-                                           data,
-                                           size,
-                                           path,
-                                           needed_out);
-    free(data);
-    return ok;
-}
-
-
-static void embedded_archive_destroy(MiniLdEmbeddedArchive *archive) {
-    size_t i;
-
-    for (i = 0U; i < archive->count; ++i) {
-        free(archive->members[i].name);
-    }
-    free(archive->members);
-    free(archive->data);
-    archive->members = NULL;
-    archive->data = NULL;
-    archive->count = 0U;
-    archive->capacity = 0U;
-    archive->size = 0U;
-}
-
-static bool embedded_archive_append(MiniLdEmbeddedArchive *archive,
-                                    char *name,
-                                    size_t data_offset,
-                                    size_t data_size) {
-    MiniLdEmbeddedMember *next;
-    size_t capacity;
-
-    if (archive->count == archive->capacity) {
-        capacity = archive->capacity == 0U ? 64U : archive->capacity * 2U;
-        if (capacity < archive->capacity ||
-            capacity > SIZE_MAX / sizeof(*archive->members)) {
-            return false;
-        }
-        next = realloc(archive->members, capacity * sizeof(*archive->members));
-        if (next == NULL) {
-            return false;
-        }
-        archive->members = next;
-        archive->capacity = capacity;
-    }
-    archive->members[archive->count].name = name;
-    archive->members[archive->count].data_offset = data_offset;
-    archive->members[archive->count].data_size = data_size;
-    ++archive->count;
-    return true;
-}
-
 static bool read_regular_archive(const char *archive_path,
-                                 MiniLdEmbeddedArchive *archive,
+                                 MiniLdArchive *archive,
                                  FILE *diagnostics) {
     size_t cursor = 8U;
     const unsigned char *long_names = NULL;
@@ -2546,10 +2316,11 @@ static bool read_regular_archive(const char *archive_path,
                         field);
                 goto done;
             }
-            if (!embedded_archive_append(archive,
-                                         name,
-                                         payload_offset,
-                                         (size_t)member_size)) {
+            if (!archive_member_append(archive,
+                                       name,
+                                       NULL,
+                                       payload_offset,
+                                       (size_t)member_size)) {
                 free(name);
                 fprintf(diagnostics,
                         "minic-ld: out-of-memory:regular-archive-members\n");
@@ -2572,9 +2343,6 @@ static bool read_regular_archive(const char *archive_path,
     ok = true;
 
 done:
-    if (!ok) {
-        embedded_archive_destroy(archive);
-    }
     return ok;
 }
 
@@ -2608,175 +2376,156 @@ static int archive_file_kind(const char *path, FILE *diagnostics) {
     return 0;
 }
 
-static bool process_regular_whole_archive(MiniLdState *state,
-                                          const char *path) {
-    MiniLdEmbeddedArchive archive = {NULL, 0U, NULL, 0U, 0U};
-    size_t i;
-    bool ok = false;
+/* Archive owns regular-member bytes and thin-member paths.  The extraction
+ * policy never needs to know how a member's bytes were obtained. */
+typedef struct MiniLdArchiveMemberView {
+    const unsigned char *bytes;
+    size_t size;
+    unsigned char *owned_bytes;
+} MiniLdArchiveMemberView;
 
-    if (!read_regular_archive(path, &archive, state->diagnostics)) {
-        goto done;
+static bool archive_open_kind(MiniLdArchive *archive,
+                              const char *path,
+                              int kind,
+                              FILE *diagnostics) {
+    bool ok;
+
+    if (kind != MINILD_ARCHIVE_THIN && kind != MINILD_ARCHIVE_REGULAR) {
+        fprintf(diagnostics, "minic-ld: expected-archive:%s\n", path);
+        return false;
     }
-    for (i = 0U; i < archive.count; ++i) {
-        MiniLdEmbeddedMember *member = &archive.members[i];
-
-        if (!process_input_data(state,
-                                archive.data + member->data_offset,
-                                member->data_size,
-                                member->name)) {
-            goto done;
-        }
+    archive->kind = (MiniLdArchiveKind)kind;
+    if (archive->kind == MINILD_ARCHIVE_THIN) {
+        ok = read_thin_archive_members(path, archive, diagnostics);
+    } else {
+        ok = read_regular_archive(path, archive, diagnostics);
     }
-    ok = true;
-
-done:
-    embedded_archive_destroy(&archive);
+    if (!ok) {
+        archive_destroy(archive);
+    }
     return ok;
 }
 
-static bool process_regular_group_archive(MiniLdState *state,
-                                          const char *path) {
-    MiniLdEmbeddedArchive archive = {NULL, 0U, NULL, 0U, 0U};
-    bool *selected = NULL;
-    bool changed;
-    size_t i;
-    bool ok = false;
+static bool archive_open(MiniLdArchive *archive,
+                         const char *path,
+                         FILE *diagnostics) {
+    int kind = archive_file_kind(path, diagnostics);
 
-    if (!read_regular_archive(path, &archive, state->diagnostics)) {
-        goto done;
+    return kind >= 0 && archive_open_kind(archive, path, kind, diagnostics);
+}
+
+static const char *archive_member_path(const MiniLdArchiveMember *member) {
+    return member->path == NULL ? member->name : member->path;
+}
+
+static bool archive_member_view(MiniLdState *state,
+                                const MiniLdArchive *archive,
+                                const MiniLdArchiveMember *member,
+                                MiniLdArchiveMemberView *view) {
+    memset(view, 0, sizeof(*view));
+    if (archive->kind == MINILD_ARCHIVE_REGULAR) {
+        view->bytes = archive->data + member->data_offset;
+        view->size = member->data_size;
+        return true;
     }
-    selected = calloc(archive.count == 0U ? 1U : archive.count,
-                      sizeof(*selected));
-    if (selected == NULL) {
-        fprintf(state->diagnostics,
-                "minic-ld: out-of-memory:regular-archive-selection\n");
-        goto done;
+    if (!read_file(member->path, &view->owned_bytes, &view->size,
+                   state->diagnostics)) {
+        return false;
     }
+    view->bytes = view->owned_bytes;
+    return true;
+}
+
+static bool archive_member_process(MiniLdState *state,
+                                   const MiniLdArchive *archive,
+                                   const MiniLdArchiveMember *member,
+                                   const MiniLdArchiveMemberView *view) {
+    const char *path = archive_member_path(member);
+    MiniElfView elf;
+
+    /* Preserve the existing distinction: only thin whole-archive members
+     * were allowed to dispatch ET_DYN through process_input(). */
+    if (archive->kind == MINILD_ARCHIVE_THIN &&
+        minielf_open(&elf, view->bytes, view->size) && elf.type == ET_DYN) {
+        if (!state->allow_dso_inputs) {
+            fprintf(state->diagnostics,
+                    "minic-ld: shared-input-requires-dynamic-link:%s\n",
+                    path);
+            return false;
+        }
+        return process_dso_input_data(state, view->bytes, view->size, path);
+    }
+    return process_input_data(state, view->bytes, view->size, path);
+}
+
+/* One fixed-point member selector for both archive encodings.  An extracted
+ * member may introduce a new undefined symbol satisfied by an earlier member.
+ * selected persists across outer --start-group passes to avoid reingestion. */
+static bool archive_extract(MiniLdState *state,
+                            MiniLdArchive *archive,
+                            bool whole,
+                            size_t *extracted_out) {
+    bool changed;
+    size_t extracted = 0U;
+    size_t i;
 
     do {
         changed = false;
-        for (i = 0U; i < archive.count; ++i) {
-            MiniLdEmbeddedMember *member = &archive.members[i];
-            bool needed = false;
+        for (i = 0U; i < archive->count; ++i) {
+            MiniLdArchiveMember *member = &archive->members[i];
+            MiniLdArchiveMemberView view;
+            bool needed = whole;
+            bool ok;
 
-            if (selected[i]) {
+            if (member->selected) {
                 continue;
             }
-            if (!object_data_defines_needed_symbol(
-                    state,
-                    archive.data + member->data_offset,
-                    member->data_size,
-                    member->name,
-                    &needed)) {
-                goto done;
+            if (!archive_member_view(state, archive, member, &view)) {
+                return false;
+            }
+            if (!whole) {
+                ok = object_data_defines_needed_symbol(
+                    state, view.bytes, view.size,
+                    archive_member_path(member), &needed);
+                if (!ok) {
+                    free(view.owned_bytes);
+                    return false;
+                }
+            }
+            ok = !needed || archive_member_process(state, archive, member, &view);
+            free(view.owned_bytes);
+            if (!ok) {
+                return false;
             }
             if (!needed) {
                 continue;
             }
-            if (!process_input_data(state,
-                                    archive.data + member->data_offset,
-                                    member->data_size,
-                                    member->name)) {
-                goto done;
-            }
-            selected[i] = true;
+            member->selected = true;
+            ++extracted;
             changed = true;
         }
-    } while (changed);
-
-    ok = true;
-
-done:
-    free(selected);
-    embedded_archive_destroy(&archive);
-    return ok;
+    } while (!whole && changed);
+    *extracted_out = extracted;
+    return true;
 }
 
 static bool process_whole_archive(MiniLdState *state, const char *path) {
-    MiniLdArchiveMembers members = {NULL, 0U, 0U};
-    int kind = archive_file_kind(path, state->diagnostics);
-    size_t i;
-    bool ok = false;
+    MiniLdArchive archive = {0};
+    size_t extracted;
+    bool ok = archive_open(&archive, path, state->diagnostics) &&
+              archive_extract(state, &archive, true, &extracted);
 
-    if (kind < 0) {
-        return false;
-    }
-    if (kind == 2) {
-        return process_regular_whole_archive(state, path);
-    }
-    if (kind != 1) {
-        fprintf(state->diagnostics, "minic-ld: expected-archive:%s\n", path);
-        return false;
-    }
-    if (!read_thin_archive_members(path, &members, state->diagnostics)) {
-        goto done;
-    }
-    for (i = 0U; i < members.count; ++i) {
-        if (!process_input(state, members.paths[i])) {
-            goto done;
-        }
-    }
-    ok = true;
-
-done:
-    archive_members_destroy(&members);
+    archive_destroy(&archive);
     return ok;
 }
 
 static bool process_group_archive(MiniLdState *state, const char *path) {
-    MiniLdArchiveMembers members = {NULL, 0U, 0U};
-    int kind = archive_file_kind(path, state->diagnostics);
-    bool *selected = NULL;
-    bool changed;
-    size_t i;
-    bool ok = false;
+    MiniLdArchive archive = {0};
+    size_t extracted;
+    bool ok = archive_open(&archive, path, state->diagnostics) &&
+              archive_extract(state, &archive, false, &extracted);
 
-    if (kind < 0) {
-        return false;
-    }
-    if (kind == 2) {
-        return process_regular_group_archive(state, path);
-    }
-    if (kind != 1) {
-        fprintf(state->diagnostics, "minic-ld: expected-archive:%s\n", path);
-        return false;
-    }
-    if (!read_thin_archive_members(path, &members, state->diagnostics)) {
-        goto done;
-    }
-    selected = calloc(members.count == 0U ? 1U : members.count, sizeof(*selected));
-    if (selected == NULL) {
-        fprintf(state->diagnostics, "minic-ld: out-of-memory:archive-selection\n");
-        goto done;
-    }
-
-    do {
-        changed = false;
-        for (i = 0U; i < members.count; ++i) {
-            bool needed = false;
-
-            if (selected[i]) {
-                continue;
-            }
-            if (!object_defines_needed_symbol(state, members.paths[i], &needed)) {
-                goto done;
-            }
-            if (!needed) {
-                continue;
-            }
-            if (!process_input(state, members.paths[i])) {
-                goto done;
-            }
-            selected[i] = true;
-            changed = true;
-        }
-    } while (changed);
-
-    ok = true;
-
-done:
-    free(selected);
-    archive_members_destroy(&members);
+    archive_destroy(&archive);
     return ok;
 }
 
@@ -2797,34 +2546,68 @@ static bool process_object_or_archive(MiniLdState *state,
 static bool process_group_sequence(MiniLdState *state,
                                    const MiniLdInput *inputs,
                                    size_t input_count) {
+    typedef struct MiniLdGroupInput {
+        MiniLdArchive archive;
+        bool is_archive;
+    } MiniLdGroupInput;
+    MiniLdGroupInput *entries;
     bool first_pass = true;
     bool changed;
     size_t i;
+    bool ok = false;
+
+    entries = calloc(input_count == 0U ? 1U : input_count, sizeof(*entries));
+    if (entries == NULL) {
+        fprintf(state->diagnostics, "minic-ld: out-of-memory:group-inputs\n");
+        return false;
+    }
+    for (i = 0U; i < input_count; ++i) {
+        int kind = archive_file_kind(inputs[i].path, state->diagnostics);
+
+        if (kind < 0) {
+            goto done;
+        }
+        entries[i].is_archive = kind == MINILD_ARCHIVE_THIN ||
+                                kind == MINILD_ARCHIVE_REGULAR;
+        if (entries[i].is_archive &&
+            !archive_open_kind(&entries[i].archive, inputs[i].path, kind,
+                               state->diagnostics)) {
+            goto done;
+        }
+    }
 
     do {
-        size_t before = state->processed_object_count;
+        changed = false;
 
         for (i = 0U; i < input_count; ++i) {
-            int kind = archive_file_kind(inputs[i].path, state->diagnostics);
+            if (entries[i].is_archive) {
+                size_t extracted = 0U;
 
-            if (kind < 0) {
-                return false;
-            }
-            if (kind == 1 || kind == 2) {
-                if (!process_group_archive(state, inputs[i].path)) {
-                    return false;
+                if (!archive_extract(state, &entries[i].archive,
+                                     false, &extracted)) {
+                    goto done;
                 }
+                changed = changed || extracted != 0U;
             } else if (first_pass) {
                 if (!process_input(state, inputs[i].path)) {
-                    return false;
+                    goto done;
                 }
+                /* A later plain object can create a need for an earlier
+                 * archive even if no archive member was selected this pass. */
+                changed = true;
             }
         }
-        changed = state->processed_object_count != before;
         first_pass = false;
     } while (changed);
 
-    return true;
+    ok = true;
+
+done:
+    for (i = 0U; i < input_count; ++i) {
+        archive_destroy(&entries[i].archive);
+    }
+    free(entries);
+    return ok;
 }
 
 static bool process_input_sequence(MiniLdState *state,
@@ -2888,7 +2671,7 @@ static bool write_output(MiniLdState *state, const char *path) {
 
     sections = calloc(state->section_count == 0U ? 1U : state->section_count,
                       sizeof(*sections));
-    symbols = calloc(state->symbol_count == 0U ? 1U : state->symbol_count,
+    symbols = calloc(state->resolver.count == 0U ? 1U : state->resolver.count,
                      sizeof(*symbols));
     relocations = calloc(state->reloc_count == 0U ? 1U : state->reloc_count,
                          sizeof(*relocations));
@@ -2915,8 +2698,8 @@ static bool write_output(MiniLdState *state, const char *path) {
         output->linked_target_section = input->link_order_target;
     }
 
-    for (i = 0U; i < state->symbol_count; ++i) {
-        const MiniLdResolvedSymbol *input = &state->symbols[i];
+    for (i = 0U; i < state->resolver.count; ++i) {
+        const MiniLdResolvedSymbol *input = &state->resolver.entries[i];
         MiniElfWriteSymbol *output = &symbols[i];
 
         output->name = input->name;
@@ -2950,7 +2733,7 @@ static bool write_output(MiniLdState *state, const char *path) {
 
         if (input->section >= state->section_count ||
             (input->symbol != SIZE_MAX &&
-             input->symbol >= state->symbol_count)) {
+             input->symbol >= state->resolver.count)) {
             fprintf(state->diagnostics,
                     "minic-ld: invalid-output-relocation\n");
             goto done;
@@ -2970,7 +2753,7 @@ static bool write_output(MiniLdState *state, const char *path) {
     spec.sections = sections;
     spec.section_count = state->section_count;
     spec.symbols = symbols;
-    spec.symbol_count = state->symbol_count;
+    spec.symbol_count = state->resolver.count;
     spec.relocations = relocations;
     spec.relocation_count = state->reloc_count;
     spec.emit_section_symbols = false;
@@ -3313,8 +3096,8 @@ static bool static_allocate_common(MiniLdState *state) {
     size_t bss_index = SIZE_MAX;
     size_t i;
 
-    for (i = 0U; i < state->symbol_count; ++i) {
-        MiniLdResolvedSymbol *symbol = &state->symbols[i];
+    for (i = 0U; i < state->resolver.count; ++i) {
+        MiniLdResolvedSymbol *symbol = &state->resolver.entries[i];
         size_t aligned;
         uint64_t alignment;
 
@@ -3366,7 +3149,7 @@ static bool static_build_got(MiniLdState *state, MiniLdStaticGot *got) {
 
     memset(got, 0, sizeof(*got));
     got->section = SIZE_MAX;
-    got->symbol_count = state->symbol_count;
+    got->symbol_count = state->resolver.count;
     got->slot_offsets =
         malloc((got->symbol_count == 0U ? 1U : got->symbol_count) *
                sizeof(*got->slot_offsets));
@@ -3714,8 +3497,8 @@ static bool static_relax_align_section(MiniLdState *state,
            section->size - cursor);
     output_size += section->size - cursor;
 
-    for (i = 0U; i < state->symbol_count; ++i) {
-        MiniLdResolvedSymbol *symbol = &state->symbols[i];
+    for (i = 0U; i < state->resolver.count; ++i) {
+        MiniLdResolvedSymbol *symbol = &state->resolver.entries[i];
 
         if (symbol->section == (int)section_index &&
             symbol->value <= SIZE_MAX) {
@@ -3952,13 +3735,13 @@ static bool script_layout_symbol_value(void *context,
                                        const char *name,
                                        uint64_t *value_out) {
     MiniLdScriptLayoutState *script_state = context;
-    size_t index = find_global_symbol(script_state->state, name);
+    size_t index = symbol_resolver_lookup(&script_state->state->resolver, name);
     MiniLdResolvedSymbol *symbol;
 
     if (index == SIZE_MAX) {
         return false;
     }
-    symbol = &script_state->state->symbols[index];
+    symbol = &script_state->state->resolver.entries[index];
     if (symbol->section == MINILD_SECTION_ABS) {
         *value_out = symbol->value;
         return true;
@@ -4015,35 +3798,19 @@ static bool script_layout_evaluate(MiniLdScriptLayoutState *script_state,
 static bool script_layout_define_symbol(MiniLdScriptLayoutState *script_state,
                                         const char *name,
                                         uint64_t value) {
-    size_t index = find_global_symbol(script_state->state, name);
-    size_t added;
+    size_t index = symbol_resolver_lookup(&script_state->state->resolver, name);
 
     if (index != SIZE_MAX) {
-        MiniLdResolvedSymbol *symbol = &script_state->state->symbols[index];
         uint64_t current;
 
         if (script_layout_symbol_value(script_state, name, &current) &&
             current == value) {
             return true;
         }
-        symbol->section = MINILD_SECTION_ABS;
-        symbol->value = value;
-        symbol->size = 0U;
-        symbol->info = ELF64_ST_INFO(STB_GLOBAL, STT_NOTYPE);
-        symbol->other = STV_DEFAULT;
-        symbol->source_symbol = SIZE_MAX;
-        return true;
     }
-
-    return add_or_merge_global_symbol(script_state->state,
-                                      name,
-                                      MINILD_SECTION_ABS,
-                                      value,
-                                      0U,
-                                      ELF64_ST_INFO(STB_GLOBAL, STT_NOTYPE),
-                                      STV_DEFAULT,
-                                      SIZE_MAX,
-                                      &added);
+    return symbol_resolver_assign_absolute(&script_state->state->resolver,
+                                            script_state->state->diagnostics,
+                                            name, value);
 }
 
 static bool script_layout_place_section(MiniLdScriptLayoutState *script_state,
@@ -4238,7 +4005,7 @@ static bool script_layout_bind_output_symbols(
                 MINILD_SCRIPT_EXPR_ABSOLUTE) {
             continue;
         }
-        symbol_index = find_global_symbol(script_state->state,
+        symbol_index = symbol_resolver_lookup(&script_state->state->resolver,
                                           item->value.symbol.name);
         if (symbol_index == SIZE_MAX) {
             fprintf(script_state->state->diagnostics,
@@ -4246,7 +4013,7 @@ static bool script_layout_bind_output_symbols(
                     item->value.symbol.name);
             return false;
         }
-        symbol = &script_state->state->symbols[symbol_index];
+        symbol = &script_state->state->resolver.entries[symbol_index];
         if (symbol->section != MINILD_SECTION_ABS ||
             symbol->value < anchor_vaddr) {
             continue;
@@ -4717,10 +4484,10 @@ static bool static_build_script_layout(MiniLdState *state,
             break;
         case MINILD_SCRIPT_DEFINE_SYMBOL:
             if (command->value.symbol.provide) {
-                size_t sym = find_global_symbol(state,
+                size_t sym = symbol_resolver_lookup(&state->resolver,
                                                 command->value.symbol.name);
                 if (sym == SIZE_MAX ||
-                    state->symbols[sym].section != MINILD_SECTION_UNDEF) {
+                    state->resolver.entries[sym].section != MINILD_SECTION_UNDEF) {
                     break;
                 }
             }
@@ -4761,10 +4528,10 @@ static bool static_build_script_layout(MiniLdState *state,
             continue;
         }
         if (command->value.symbol.provide) {
-            size_t sym = find_global_symbol(state,
+            size_t sym = symbol_resolver_lookup(&state->resolver,
                                             command->value.symbol.name);
             if (sym == SIZE_MAX ||
-                state->symbols[sym].section != MINILD_SECTION_UNDEF) {
+                state->resolver.entries[sym].section != MINILD_SECTION_UNDEF) {
                 continue;
             }
         }
@@ -5092,22 +4859,9 @@ static bool static_section_has_prefix(const char *name, const char *prefix) {
 static bool static_define_absolute_if_undefined(MiniLdState *state,
                                                 const char *name,
                                                 uint64_t value) {
-    size_t existing = find_global_symbol(state, name);
-    size_t symbol_index;
-
-    if (existing != SIZE_MAX &&
-        symbol_is_defined(&state->symbols[existing])) {
-        return true;
-    }
-    return add_or_merge_global_symbol(state,
-                                      name,
-                                      MINILD_SECTION_ABS,
-                                      value,
-                                      0U,
-                                      ELF64_ST_INFO(STB_GLOBAL, STT_NOTYPE),
-                                      STV_DEFAULT,
-                                      SIZE_MAX,
-                                      &symbol_index);
+    return symbol_resolver_provide_absolute(&state->resolver,
+                                             state->diagnostics,
+                                             name, value);
 }
 
 static bool static_synthesize_array_bound_pair(
@@ -5325,8 +5079,8 @@ static bool static_need_array_bound_pair(
 
     /* Preserve the already certified scripted Linux path exactly. */
     if (layout->scripted ||
-        find_global_symbol(state, start_name) != SIZE_MAX ||
-        find_global_symbol(state, end_name) != SIZE_MAX) {
+        symbol_resolver_lookup(&state->resolver, start_name) != SIZE_MAX ||
+        symbol_resolver_lookup(&state->resolver, end_name) != SIZE_MAX) {
         return true;
     }
     for (i = 0U; i < state->section_count; ++i) {
@@ -5401,11 +5155,11 @@ static bool static_resolve_symbol(MiniLdState *state,
                                   uint64_t *value_out) {
     MiniLdResolvedSymbol *symbol;
 
-    if (symbol_index >= state->symbol_count) {
+    if (symbol_index >= state->resolver.count) {
         fprintf(state->diagnostics, "minic-ld: relocation-symbol-out-of-range\n");
         return false;
     }
-    symbol = &state->symbols[symbol_index];
+    symbol = &state->resolver.entries[symbol_index];
     if (symbol->section == MINILD_SECTION_UNDEF) {
         if (ELF64_ST_BIND(symbol->info) == STB_WEAK) {
             *value_out = 0U;
@@ -5665,8 +5419,8 @@ static bool static_apply_relocations(MiniLdState *state,
                 delta > 1048574) {
                 const char *symbol_name =
                     (reloc->symbol != SIZE_MAX &&
-                     reloc->symbol < state->symbol_count)
-                        ? state->symbols[reloc->symbol].name
+                     reloc->symbol < state->resolver.count)
+                        ? state->resolver.entries[reloc->symbol].name
                         : "<none>";
                 fprintf(state->diagnostics,
                         "minic-ld: R_RISCV_JAL-overflow:"
@@ -5901,13 +5655,13 @@ static bool static_apply_relocations(MiniLdState *state,
             continue;
         }
         if (reloc->symbol == SIZE_MAX ||
-            reloc->symbol >= state->symbol_count) {
+            reloc->symbol >= state->resolver.count) {
             fprintf(state->diagnostics,
                     "minic-ld: invalid-pcrel-lo-symbol\n");
             free(pcrel);
             return false;
         }
-        label = &state->symbols[reloc->symbol];
+        label = &state->resolver.entries[reloc->symbol];
         if (label->section < 0 ||
             (size_t)label->section >= state->section_count ||
             !pcrel_find(pcrel,
@@ -5946,7 +5700,7 @@ static bool static_entry_address(MiniLdState *state,
                                  const MiniLdStaticLayout *layout,
                                  const char *entry_symbol,
                                  uint64_t *entry_out) {
-    size_t index = find_global_symbol(state, entry_symbol);
+    size_t index = symbol_resolver_lookup(&state->resolver, entry_symbol);
 
     if (index == SIZE_MAX) {
         fprintf(state->diagnostics,
@@ -6526,19 +6280,19 @@ static bool minild_final_symbols_build(const MiniLdState *state,
     size_t next = 1U;
     size_t pass, i;
 
-    if (state->symbol_count >= SIZE_MAX / sizeof(Elf64_Sym) - 1U ||
+    if (state->resolver.count >= SIZE_MAX / sizeof(Elf64_Sym) - 1U ||
         !minild_final_tls_base_address(state, layout, plan,
                                        &tls_base, &have_tls)) {
         return false;
     }
-    final->entries = calloc(state->symbol_count + 1U,
+    final->entries = calloc(state->resolver.count + 1U,
                             sizeof(*final->entries));
     if (final->entries == NULL || !buffer_append_zero(&final->names, 1U)) {
         return false;
     }
     for (pass = 0U; pass < 2U; ++pass) {
-        for (i = 0U; i < state->symbol_count; ++i) {
-            const MiniLdResolvedSymbol *source = &state->symbols[i];
+        for (i = 0U; i < state->resolver.count; ++i) {
+            const MiniLdResolvedSymbol *source = &state->resolver.entries[i];
             bool local = ELF64_ST_BIND(source->info) == STB_LOCAL;
             Elf64_Sym *output;
 
@@ -6620,7 +6374,7 @@ static bool minild_final_symbols_build(const MiniLdState *state,
             final->local_count = next;
         }
     }
-    return next == state->symbol_count + 1U;
+    return next == state->resolver.count + 1U;
 }
 
 typedef struct MiniLdProgramPlan {
@@ -6950,7 +6704,7 @@ static bool static_write_executable(MiniLdState *state,
     headers[symtab_index].sh_type = SHT_SYMTAB;
     headers[symtab_index].sh_offset = cursor;
     headers[symtab_index].sh_size =
-        (state->symbol_count + 1U) * sizeof(Elf64_Sym);
+        (state->resolver.count + 1U) * sizeof(Elf64_Sym);
     headers[symtab_index].sh_link = (Elf64_Word)strtab_index;
     headers[symtab_index].sh_info =
         (Elf64_Word)final_symbols.local_count;
@@ -7199,7 +6953,7 @@ static bool shared_version_exports(const MiniLdScript *script,
 
 static bool shared_symbol_eligible(const MiniLdState *state, size_t index,
                                    const MiniLdScript *version) {
-    const MiniLdResolvedSymbol *symbol = &state->symbols[index];
+    const MiniLdResolvedSymbol *symbol = &state->resolver.entries[index];
     unsigned bind = ELF64_ST_BIND(symbol->info);
     unsigned visibility = ELF64_ST_VISIBILITY(symbol->other);
 
@@ -7291,10 +7045,10 @@ static bool shared_symbol_preemptible(const MiniLdState *state,
     unsigned bind;
     unsigned visibility;
 
-    if (index >= state->symbol_count) {
+    if (index >= state->resolver.count) {
         return false;
     }
-    symbol = &state->symbols[index];
+    symbol = &state->resolver.entries[index];
     if (symbol->section == MINILD_SECTION_UNDEF) {
         return true;
     }
@@ -7310,10 +7064,10 @@ static bool shared_symbol_preemptible(const MiniLdState *state,
 static bool shared_symbol_needs_plt(const MiniLdState *state,
                                     const MiniLdSharedImage *shared,
                                     size_t index) {
-    if (index >= state->symbol_count) {
+    if (index >= state->resolver.count) {
         return false;
     }
-    if (state->symbols[index].section == MINILD_SECTION_UNDEF) {
+    if (state->resolver.entries[index].section == MINILD_SECTION_UNDEF) {
         return true;
     }
     return shared->preemptible[index];
@@ -7371,14 +7125,14 @@ static bool shared_define_linker_symbols_pre_layout(
     size_t index;
     MiniLdResolvedSymbol *symbol;
 
-    index = find_global_symbol(state, "_DYNAMIC");
+    index = symbol_resolver_lookup(&state->resolver, "_DYNAMIC");
     if (index != SIZE_MAX) {
         if (dynamic_section >= state->section_count) {
             fprintf(state->diagnostics,
                     "minic-ld: invalid-shared-dynamic-section\n");
             return false;
         }
-        symbol = &state->symbols[index];
+        symbol = &state->resolver.entries[index];
         if (symbol->section != MINILD_SECTION_UNDEF &&
             symbol->section != (int)dynamic_section) {
             fprintf(state->diagnostics,
@@ -7392,9 +7146,9 @@ static bool shared_define_linker_symbols_pre_layout(
         symbol->other = STV_HIDDEN;
     }
 
-    index = find_global_symbol(state, "__ehdr_start");
+    index = symbol_resolver_lookup(&state->resolver, "__ehdr_start");
     if (index != SIZE_MAX) {
-        symbol = &state->symbols[index];
+        symbol = &state->resolver.entries[index];
         if (symbol->section != MINILD_SECTION_UNDEF &&
             symbol->section != MINILD_SECTION_ABS) {
             fprintf(state->diagnostics,
@@ -7412,7 +7166,7 @@ static bool shared_define_linker_symbols_pre_layout(
 
 static bool shared_finalize_ehdr_symbol(MiniLdState *state,
                                         const MiniLdStaticLayout *layout) {
-    size_t index = find_global_symbol(state, "__ehdr_start");
+    size_t index = symbol_resolver_lookup(&state->resolver, "__ehdr_start");
     uint64_t header_vaddr;
 
     if (index == SIZE_MAX) {
@@ -7426,8 +7180,8 @@ static bool shared_finalize_ehdr_symbol(MiniLdState *state,
     }
     header_vaddr =
         layout->rx_vaddr - (uint64_t)layout->rx_file_offset;
-    state->symbols[index].section = MINILD_SECTION_ABS;
-    state->symbols[index].value = header_vaddr;
+    state->resolver.entries[index].section = MINILD_SECTION_ABS;
+    state->resolver.entries[index].value = header_vaddr;
     return true;
 }
 
@@ -7479,7 +7233,7 @@ static bool shared_prepare_metadata(MiniLdState *state,
     /* Script output-section definitions can append globals after dynsym
      * sizing, so reserve their entire upper bound before allocating
      * per-symbol maps. Later local: * script symbols remain nonexports. */
-    shared->symbol_map_capacity = state->symbol_count;
+    shared->symbol_map_capacity = state->resolver.count;
     if (layout_script != NULL) {
         for (i = 0U; i < layout_script->command_count; ++i) {
             const MiniLdScriptCommand *command = &layout_script->commands[i];
@@ -7671,13 +7425,13 @@ static bool shared_prepare_metadata(MiniLdState *state,
             shared->dynamic_section)) {
         goto fail;
     }
-    for (i = 0U; i < state->symbol_count; ++i) {
+    for (i = 0U; i < state->resolver.count; ++i) {
         shared->preemptible[i] =
             shared_symbol_preemptible(state, shared, i) &&
             (version_script == NULL ||
-             state->symbols[i].section == MINILD_SECTION_UNDEF ||
+             state->resolver.entries[i].section == MINILD_SECTION_UNDEF ||
              shared_version_exports(version_script,
-                                    state->symbols[i].name));
+                                    state->resolver.entries[i].name));
     }
 
     if (!section_append_zero(dynstr, 1U)) {
@@ -7737,7 +7491,7 @@ static bool shared_prepare_metadata(MiniLdState *state,
                        strlen(version_script->version_name) - 1U);
     }
     shared->dynsym_count = 1U;
-    for (i = 0U; i < state->symbol_count; ++i) {
+    for (i = 0U; i < state->resolver.count; ++i) {
         if (!shared_symbol_eligible(state, i, version_script)) {
             continue;
         }
@@ -7746,8 +7500,8 @@ static bool shared_prepare_metadata(MiniLdState *state,
         }
         shared->dynstr_name_offset[i] = (uint32_t)dynstr->size;
         if (!section_append_data(dynstr,
-                                 (const unsigned char *)state->symbols[i].name,
-                                 strlen(state->symbols[i].name) + 1U)) {
+                                 (const unsigned char *)state->resolver.entries[i].name,
+                                 strlen(state->resolver.entries[i].name) + 1U)) {
             goto oom;
         }
         shared->dynsym_index[i] = shared->dynsym_count++;
@@ -7812,7 +7566,7 @@ static bool shared_prepare_metadata(MiniLdState *state,
         }
         if (reloc->type == R_RISCV_GOT_HI20) {
             if (reloc->symbol == SIZE_MAX ||
-                reloc->symbol >= state->symbol_count ||
+                reloc->symbol >= state->resolver.count ||
                 reloc->addend != 0) {
                 fprintf(state->diagnostics,
                         "minic-ld: invalid-shared-got-hi20-relocation\n");
@@ -7832,7 +7586,7 @@ static bool shared_prepare_metadata(MiniLdState *state,
         }
         if (reloc->type == R_RISCV_TLS_GD_HI20) {
             if (reloc->symbol == SIZE_MAX ||
-                reloc->symbol >= state->symbol_count ||
+                reloc->symbol >= state->resolver.count ||
                 shared->dynsym_index[reloc->symbol] == SIZE_MAX) {
                 fprintf(state->diagnostics,
                         "minic-ld: invalid-shared-tls-gd-relocation\n");
@@ -7858,12 +7612,12 @@ static bool shared_prepare_metadata(MiniLdState *state,
         if (reloc->type == R_RISCV_CALL ||
             reloc->type == R_RISCV_CALL_PLT) {
             if (reloc->symbol == SIZE_MAX ||
-                reloc->symbol >= state->symbol_count) {
+                reloc->symbol >= state->resolver.count) {
                 fprintf(state->diagnostics,
                         "minic-ld: invalid-shared-call-relocation\n");
                 goto fail;
             }
-            target = &state->symbols[reloc->symbol];
+            target = &state->resolver.entries[reloc->symbol];
             if (shared_symbol_needs_plt(state,
                                         shared,
                                         reloc->symbol) &&
@@ -7895,7 +7649,7 @@ static bool shared_prepare_metadata(MiniLdState *state,
     if (shared->tls_gd_count != 0U) {
         size_t got_prefix = shared->got_count * 8U;
 
-        for (i = 0U; i < state->symbol_count; ++i) {
+        for (i = 0U; i < state->resolver.count; ++i) {
             if (shared->tls_gd_offset[i] != SIZE_MAX) {
                 shared->tls_gd_offset[i] += got_prefix;
             }
@@ -7982,8 +7736,8 @@ static bool shared_fill_dynsym(MiniLdState *state,
     size_t i;
 
     memset(dynsym->data, 0, dynsym->size);
-    for (i = 0U; i < state->symbol_count; ++i) {
-        MiniLdResolvedSymbol *input = &state->symbols[i];
+    for (i = 0U; i < state->resolver.count; ++i) {
+        MiniLdResolvedSymbol *input = &state->resolver.entries[i];
         size_t dynamic_index = shared->dynsym_index[i];
         Elf64_Sym output;
 
@@ -8068,7 +7822,7 @@ static bool shared_fill_hash(MiniLdState *state,
     buckets = words + 2U;
     chains = buckets + nbucket;
 
-    for (i = 0U; i < state->symbol_count; ++i) {
+    for (i = 0U; i < state->resolver.count; ++i) {
         size_t dynamic_index = shared->dynsym_index[i];
         uint32_t bucket;
         uint32_t *slot;
@@ -8076,7 +7830,7 @@ static bool shared_fill_hash(MiniLdState *state,
         if (dynamic_index == SIZE_MAX) {
             continue;
         }
-        bucket = shared_elf_hash(state->symbols[i].name) % (uint32_t)nbucket;
+        bucket = shared_elf_hash(state->resolver.entries[i].name) % (uint32_t)nbucket;
         slot = &buckets[bucket];
         if (*slot == 0U) {
             *slot = (uint32_t)dynamic_index;
@@ -8117,7 +7871,7 @@ static bool shared_fill_gnu_hash(MiniLdState *state,
     store_u32le(section->data + 12U, 5U);
     store_u32le(section->data + 24U,
                 shared->dynsym_count == 1U ? 0U : 1U);
-    for (i = 0U; i < state->symbol_count; ++i) {
+    for (i = 0U; i < state->resolver.count; ++i) {
         size_t index = shared->dynsym_index[i];
         uint32_t hash;
         if (index == SIZE_MAX) {
@@ -8127,7 +7881,7 @@ static bool shared_fill_gnu_hash(MiniLdState *state,
             fprintf(state->diagnostics, "minic-ld: invalid-gnu-hash-symbol\n");
             return false;
         }
-        hash = shared_gnu_symbol_hash(state->symbols[i].name);
+        hash = shared_gnu_symbol_hash(state->resolver.entries[i].name);
         bloom |= UINT64_C(1) << (hash % 64U);
         bloom |= UINT64_C(1) << ((hash >> 5U) % 64U);
         store_u32le(section->data + 28U + (index - 1U) * 4U,
@@ -8160,7 +7914,7 @@ static bool shared_patch_arithmetic_relocations(
         }
         section = &state->sections[reloc->section];
         if (reloc->symbol != SIZE_MAX &&
-            (reloc->symbol >= state->symbol_count ||
+            (reloc->symbol >= state->resolver.count ||
              !static_resolve_symbol(state,
                                     layout,
                                     reloc->symbol,
@@ -8333,7 +8087,7 @@ static bool shared_fill_relocations(MiniLdState *state,
 
     memset(rela->data, 0, rela->size);
 
-    for (i = 0U; i < state->symbol_count; ++i) {
+    for (i = 0U; i < state->resolver.count; ++i) {
         size_t offset = shared->got_slot_offset[i];
         MiniLdResolvedSymbol *target;
         Elf64_Rela output;
@@ -8341,7 +8095,7 @@ static bool shared_fill_relocations(MiniLdState *state,
         if (offset == SIZE_MAX) {
             continue;
         }
-        target = &state->symbols[i];
+        target = &state->resolver.entries[i];
         memset(&output, 0, sizeof(output));
         output.r_offset =
             layout->section_vaddr[shared->got_section] + (uint64_t)offset;
@@ -8391,7 +8145,7 @@ static bool shared_fill_relocations(MiniLdState *state,
         }
         if (input->type != R_RISCV_64 ||
             input->symbol == SIZE_MAX ||
-            input->symbol >= state->symbol_count) {
+            input->symbol >= state->resolver.count) {
             fprintf(state->diagnostics,
                     "minic-ld: invalid-shared-relocation:%u\n",
                     input->type);
@@ -8405,7 +8159,7 @@ static bool shared_fill_relocations(MiniLdState *state,
                     "minic-ld: shared-relocation-offset-out-of-range\n");
             return false;
         }
-        target = &state->symbols[input->symbol];
+        target = &state->resolver.entries[input->symbol];
 
         memset(&output, 0, sizeof(output));
         output.r_offset =
@@ -8441,7 +8195,7 @@ static bool shared_fill_relocations(MiniLdState *state,
         ++write_index;
     }
 
-    for (i = 0U; i < state->symbol_count; ++i) {
+    for (i = 0U; i < state->resolver.count; ++i) {
         size_t offset = shared->tls_gd_offset[i];
         size_t dynamic_index;
         uint64_t slot_address;
@@ -8559,7 +8313,7 @@ static bool shared_patch_final_layout_relocations(
         if (reloc->symbol != SIZE_MAX &&
             reloc->type != R_RISCV_GOT_HI20 &&
             reloc->type != R_RISCV_TLS_GD_HI20 &&
-            (reloc->symbol >= state->symbol_count ||
+            (reloc->symbol >= state->resolver.count ||
              !static_resolve_symbol(state,
                                     layout,
                                     reloc->symbol,
@@ -8578,7 +8332,7 @@ static bool shared_patch_final_layout_relocations(
             uint64_t got_address;
 
             if (reloc->symbol == SIZE_MAX ||
-                reloc->symbol >= state->symbol_count ||
+                reloc->symbol >= state->resolver.count ||
                 shared->got_slot_offset[reloc->symbol] == SIZE_MAX) {
                 fprintf(state->diagnostics,
                         "minic-ld: missing-shared-got-slot\n");
@@ -8607,7 +8361,7 @@ static bool shared_patch_final_layout_relocations(
             uint64_t descriptor;
 
             if (reloc->symbol == SIZE_MAX ||
-                reloc->symbol >= state->symbol_count ||
+                reloc->symbol >= state->resolver.count ||
                 shared->tls_gd_offset[reloc->symbol] == SIZE_MAX) {
                 fprintf(state->diagnostics,
                         "minic-ld: missing-shared-tls-gd-slot\n");
@@ -8749,13 +8503,13 @@ static bool shared_patch_final_layout_relocations(
             continue;
         }
         if (reloc->symbol == SIZE_MAX ||
-            reloc->symbol >= state->symbol_count) {
+            reloc->symbol >= state->resolver.count) {
             fprintf(state->diagnostics,
                     "minic-ld: invalid-shared-pcrel-lo-symbol\n");
             free(pcrel);
             return false;
         }
-        anchor = &state->symbols[reloc->symbol];
+        anchor = &state->resolver.entries[reloc->symbol];
         if (anchor->section < 0 ||
             (size_t)anchor->section >= state->section_count) {
             fprintf(state->diagnostics,
@@ -8842,7 +8596,7 @@ static bool shared_fill_plt(MiniLdState *state,
     memset(gotplt->data, 0, gotplt->size);
     memset(rela_plt->data, 0, rela_plt->size);
 
-    for (i = 0U; i < state->symbol_count; ++i) {
+    for (i = 0U; i < state->resolver.count; ++i) {
         size_t plt_index = shared->plt_index[i];
         size_t plt_offset;
         size_t got_offset;
@@ -8863,7 +8617,7 @@ static bool shared_fill_plt(MiniLdState *state,
         if (dynamic_index == SIZE_MAX) {
             fprintf(state->diagnostics,
                     "minic-ld: missing-dynsym-for-jump-slot:%s\n",
-                    state->symbols[i].name);
+                    state->resolver.entries[i].name);
             return false;
         }
 
@@ -8908,14 +8662,14 @@ static bool shared_fill_plt(MiniLdState *state,
             continue;
         }
         if (reloc->symbol == SIZE_MAX ||
-            reloc->symbol >= state->symbol_count) {
+            reloc->symbol >= state->resolver.count) {
             fprintf(state->diagnostics,
                     "minic-ld: invalid-shared-call-symbol\n");
             return false;
         }
 
         source = &state->sections[reloc->section];
-        target = &state->symbols[reloc->symbol];
+        target = &state->resolver.entries[reloc->symbol];
         if (shared_symbol_needs_plt(state, shared, reloc->symbol)) {
             size_t plt_index = shared->plt_index[reloc->symbol];
 
@@ -9444,9 +9198,9 @@ static bool shared_write_object(MiniLdState *state,
     }
     if (!add_size(strtab_offset, final_symbols.names.size, &symtab_offset) ||
         !align_up_size(symtab_offset, 8U, &symtab_offset) ||
-        state->symbol_count + 1U > SIZE_MAX / sizeof(Elf64_Sym) ||
+        state->resolver.count + 1U > SIZE_MAX / sizeof(Elf64_Sym) ||
         !add_size(symtab_offset,
-                  (state->symbol_count + 1U) * sizeof(Elf64_Sym),
+                  (state->resolver.count + 1U) * sizeof(Elf64_Sym),
                   &shstrtab_offset)) {
         goto oom;
     }
@@ -9531,7 +9285,7 @@ static bool shared_write_object(MiniLdState *state,
         sh->sh_name = symtab_name;
         sh->sh_type = SHT_SYMTAB;
         sh->sh_offset = symtab_offset;
-        sh->sh_size = (state->symbol_count + 1U) * sizeof(Elf64_Sym);
+        sh->sh_size = (state->resolver.count + 1U) * sizeof(Elf64_Sym);
         sh->sh_link = (Elf64_Word)strtab_index;
         sh->sh_info = (Elf64_Word)final_symbols.local_count;
         sh->sh_addralign = 8U;
@@ -9556,7 +9310,7 @@ static bool shared_write_object(MiniLdState *state,
     memcpy(image + strtab_offset, final_symbols.names.data,
            final_symbols.names.size);
     memcpy(image + symtab_offset, final_symbols.entries,
-           (state->symbol_count + 1U) * sizeof(Elf64_Sym));
+           (state->resolver.count + 1U) * sizeof(Elf64_Sym));
     memcpy(image + shstrtab_offset, shstrtab.data, shstrtab.size);
     memcpy(image + section_header_offset,
            section_headers,
@@ -9614,8 +9368,8 @@ static bool shared_validate_pie_dso_symbols(
     if (state->dso_needed_count == 0U) {
         return true;
     }
-    for (i = 0U; i < state->symbol_count; ++i) {
-        const MiniLdResolvedSymbol *symbol = &state->symbols[i];
+    for (i = 0U; i < state->resolver.count; ++i) {
+        const MiniLdResolvedSymbol *symbol = &state->resolver.entries[i];
         unsigned bind = ELF64_ST_BIND(symbol->info);
 
         if (symbol->section != MINILD_SECTION_UNDEF ||
@@ -9801,10 +9555,10 @@ int minild_link_shared_elf64_riscv_inputs_options(
         goto done;
     }
     shared.layout_script = script_path != NULL ? &layout_script : NULL;
-    if (state.symbol_count > shared.symbol_map_capacity) {
+    if (state.resolver.count > shared.symbol_map_capacity) {
         fprintf(diagnostics,
                 "minic-ld: script-symbol-map-exceeded:%zu:%zu\n",
-                state.symbol_count, shared.symbol_map_capacity);
+                state.resolver.count, shared.symbol_map_capacity);
         goto done;
     }
 
@@ -9888,7 +9642,7 @@ static void minild_perf_phase(const char *phase,
         fprintf(diagnostics,
                 "MINILD_PHASE=%s cpu_ms=%.3f objects=%zu sections=%zu symbols=%zu relocs=%zu\n",
                 phase, milliseconds, state->processed_object_count,
-                state->section_count, state->symbol_count, state->reloc_count);
+                state->section_count, state->resolver.count, state->reloc_count);
     }
     *last = now;
 }
