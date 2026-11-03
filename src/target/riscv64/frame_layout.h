@@ -35,7 +35,8 @@ typedef struct MinicRiscv64CoreFrame {
     bool has_named_parameter_cursor;
     /* M177_CONSTANT_SWITCH_CFG_OWNER: suppress target emission of Core blocks
        that have no executable predecessor after semantic CFG pruning. */
-    bool *reachable_blocks;
+    const bool *reachable_blocks;
+    bool *owned_reachable_blocks;
     size_t value_base_offset;
     size_t outgoing_argument_size;
     size_t dynamic_call_area_size;
@@ -75,5 +76,6 @@ bool minic_riscv64_core_frame_object_offset(
 bool minic_riscv64_core_frame_value_offset(
     const MinicRiscv64CoreFrame *, MinicCoreValueId, size_t *);
 bool minic_riscv64_core_frame_mark_reachable_blocks(
-    const MinicCoreFunction *, MinicRiscv64CoreFrame *);
+    const MinicCoreFunction *, const MinicCoreFunctionFacts *,
+    MinicRiscv64CoreFrame *);
 #endif

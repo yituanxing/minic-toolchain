@@ -1098,6 +1098,22 @@ has src/target/common/core_function_facts.c 'facts->max_call_arity = arity'
 has src/target/common/core_function_plan.c 'minic_core_function_verify(function)'
 lacks src/compiler/compiler.c '!minic_core_function_verify(&set->functions[function_index])'
 has src/target/common/core_function_plan.c 'plan->facts.verified_function = function'
+# One immutable Core function analysis owner: all five machine emitters borrow
+# the exact CFG visibility/use census built by their prepared ProgramVisitor.
+# Standalone RV64 keeps a distinct owned fallback and must never free a loan.
+has src/target/common/core_function_plan.c 'plan->facts.reachable_blocks = plan->reachable_blocks'
+has src/target/common/core_function_plan.c 'plan->facts.value_use_counts = plan->value_use_counts'
+has src/target/common/core_function_plan.c 'minic_core_function_value_use_counts('
+has src/target/x86_64/codegen.c 'reachable = facts->reachable_blocks'
+has src/target/x86_64/codegen.c 'function_value_use_counts = facts->value_use_counts'
+has src/target/riscv32/rv32_emit.c 'reachable = facts->reachable_blocks'
+has src/target/riscv64/frame_layout.c 'frame->reachable_blocks = facts->reachable_blocks'
+has src/target/riscv64/frame_layout.c 'free(frame->owned_reachable_blocks)'
+lacks src/target/riscv64/frame_layout.c 'free(frame->reachable_blocks)'
+has src/target/common/direct_function_emit.h '.core_facts = facts'
+has src/target/common/direct_machine_dispatch.h 'value_use_counts = ctx->core_facts->value_use_counts'
+has src/target/common/direct_machine_dispatch.h 'reachable = ctx->core_facts->reachable_blocks'
+has src/target/loongarch64/codegen.c 'uses = facts->value_use_counts'
 has src/target/x86_64/codegen.c 'minic_core_function_facts_verified(facts, fn)'
 has src/target/common/direct_preflight.c 'minic_core_function_facts_verified(facts, fn)'
 has src/target/riscv64/core_admission.c 'minic_core_function_facts_verified(facts, function)'
@@ -1528,7 +1544,7 @@ fi
 cc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror \
   -ffunction-sections -fdata-sections -Wl,--gc-sections \
   -Iinclude -Isrc tests/compiler/c0/probe-program-emit-transaction.c \
-  src/core/core_ir.c \
+  src/core/core_ir.c src/core/value_uses.c \
   src/frontend/ast_global.c \
   src/target/common/core_function_facts.c \
   src/target/common/core_function_plan.c \

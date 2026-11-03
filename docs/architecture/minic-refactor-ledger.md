@@ -1824,3 +1824,47 @@ not relabel these as architectural regressions or success. The next stage
 must judge remaining target Common versus ISA-specific machine responsibilities
 from complete producers/consumers, not introduce a second MachineIR model
 before the actual machine-pass requirements are clear.
+
+## IR-P34 — One prepared Core CFG/use-view owner across five machines (2026-11-03)
+
+**Baseline:** P33 PR #674 `cf0c271`. Following the entire production
+ProgramVisitor → CoreFunctionPlan → physical function plan → block emission
+chain confirmed that the five backends already share semantic CFG walking,
+but repeatedly allocate and recompute two *identical* Core-only analyses.
+
+- `CoreFunctionPlan` now owns one source-label-aware reachable-block bitmap
+  and one semantic SSA value-use census for each admitted, verified function.
+  Both are immutable, function-identity-checked borrowed views in
+  `MinicCoreFunctionFacts`. The plan destroys each allocation *after* its
+  machine callback returns; targets never free visitor-owned memory.
+- x86-64 uses both views for machine block selection, early kernel head
+  address analysis and GP dead-writeback; RV32 uses the same reachability
+  roots; RV64's strict ISA preflight and block walker share the visitor's
+  bitmap rather than letting the physical frame allocate it a second time.
+  RV64's public standalone emitters still acquire and own their fallback
+  bitmap. The frame has distinct `owned_reachable_blocks` and borrowed
+  read-only `reachable_blocks` fields to prevent double-free.
+- The direct AArch64/LoongArch64 emitter receives the same borrowed views
+  through its existing BlockContext; its SSA GP forwarding and target-
+  certified immediate folding retain the *original* all-lexical-block
+  value-use census. LoongArch64's subsequent single-use machine text pass
+  also borrows that census rather than recomputing it. Actual physical
+  ISA/ABI register, stack, call and terminator implementations are unchanged.
+- The ProgramEmit ELF symbol scanner must still find live assembly symbol
+  uses *before* invoking any function visitors, so it intentionally keeps
+  its own earlier reachability allocation. Merging these two lifetimes
+  would change module emission ordering/transaction semantics. A standalone
+  transaction probe now explicitly links the Common census implementation.
+- No new Machine IR, parallel machine callback dispatcher, transitional C
+  metadata fallback, or generic five-ISA physical instruction abstraction
+  was introduced.
+
+| Gate | P34 result |
+| --- | --- |
+| Strict Release MiniC `-Werror` | **PASS**, exit 0 |
+| Full Debug `check-fast` | **PASS**, exit 0 |
+| GNU preprocessed six fixtures × five ISAs: exact P33 vs P34 `.s` | **30/30 byte-identical** |
+| Core architecture boundary and host-native probes | **PASS**, including prepared function-view lifecycle, CFG traversal, Direct LP64 dispatch, atomic output rollback |
+| Prepared plan / output transaction host ASan+UBSan | **PASS**, LeakSanitizer unavailable under host ptrace; run with `detect_leaks=0` |
+| Review ledger inventory | **PASS**, 251 entries, no new/removed/invalid; existing stale entries not recertified |
+| Five-ISA original Linux GNU ELF/QEMU runtime | **NOT RUN** in this architectural owner batch |

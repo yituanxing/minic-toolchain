@@ -317,11 +317,13 @@ static bool x86_emit_function(FILE *out,
     const bool is_constructor = module_decl->is_constructor;
     size_t block_index;
     MinicCoreBlockWalk walk = {0};
-    bool *reachable = NULL;
+    const bool *reachable = NULL;
+    bool *owned_reachable = NULL;
     bool *head_direct_data_globals = NULL;
     MinicCoreGlobalId *head_vma_cast_globals = NULL;
     MinicCoreGlobalId *head_memory_rebase_globals = NULL;
-    size_t *function_value_use_counts = NULL;
+    const size_t *function_value_use_counts = NULL;
+    size_t *owned_value_use_counts = NULL;
     /* A diagnostic-only escape hatch enables a same-compiler A/B against the
      * former all-stack scalar path without changing any Linux Kbuild flags. */
     const bool adjacent_gp_forward_enabled =
@@ -359,10 +361,18 @@ static bool x86_emit_function(FILE *out,
     /* Match the shared Core CFG visibility contract: source labels remain
      * roots for computed goto and asm-goto, while dead lexical arms must not
      * contribute machine instructions or unresolved linker references. */
-    reachable = (bool *)calloc(fn->block_count == 0U ? 1U : fn->block_count,
-                               sizeof(*reachable));
-    if (reachable == NULL || !minic_core_function_mark_reachable_blocks(
-            fn, reachable, fn->block_count)) {
+    if (minic_core_function_facts_verified(facts, fn)) {
+        reachable = facts->reachable_blocks;
+        function_value_use_counts = facts->value_use_counts;
+    } else {
+        owned_reachable = calloc(fn->block_count == 0U ? 1U : fn->block_count,
+                                 sizeof(*owned_reachable));
+        if (owned_reachable != NULL &&
+            minic_core_function_mark_reachable_blocks(
+                fn, owned_reachable, fn->block_count))
+            reachable = owned_reachable;
+    }
+    if (reachable == NULL) {
         x86_error(diag, path, "x86-64 cannot discover reachable Core blocks");
         goto done;
     }
@@ -372,19 +382,21 @@ static bool x86_emit_function(FILE *out,
                   "x86-64 -mno-sse rejects reachable floating ABI or operation");
         goto done;
     }
-    if (fn->value_count > SIZE_MAX / sizeof(*function_value_use_counts) ||
-        (function_value_use_counts = (size_t *)calloc(
-            fn->value_count == 0U ? 1U : fn->value_count,
-            sizeof(*function_value_use_counts))) == NULL) {
-        x86_error(diag, path, "x86-64 cannot allocate Core value-use census");
-        goto done;
-    }
-    /* One canonical pass for all blocks; a Core value that has no consumers
-     * anywhere in the function does not need a spill writeback. */
-    if (!minic_core_function_value_use_counts(
-            fn, function_value_use_counts, fn->value_count)) {
-        x86_error(diag, path, "x86-64 cannot count Core function SSA uses");
-        goto done;
+    if (function_value_use_counts == NULL) {
+        if (fn->value_count > SIZE_MAX / sizeof(*owned_value_use_counts) ||
+            (owned_value_use_counts = calloc(
+                fn->value_count == 0U ? 1U : fn->value_count,
+                sizeof(*owned_value_use_counts))) == NULL) {
+            x86_error(diag, path, "x86-64 cannot allocate Core value-use census");
+            goto done;
+        }
+        /* Standalone function entry is not owned by ProgramVisitor. */
+        if (!minic_core_function_value_use_counts(
+                fn, owned_value_use_counts, fn->value_count)) {
+            x86_error(diag, path, "x86-64 cannot count Core function SSA uses");
+            goto done;
+        }
+        function_value_use_counts = owned_value_use_counts;
     }
     frame.function_value_use_counts = function_value_use_counts;
     frame.kernel_head_link_addresses = !target->position_independent &&
@@ -684,8 +696,8 @@ done:
     free(head_direct_data_globals);
     free(head_vma_cast_globals);
     free(head_memory_rebase_globals);
-    free(function_value_use_counts);
-    free(reachable);
+    free(owned_value_use_counts);
+    free(owned_reachable);
     minic_x86_64_frame_destroy(&frame);
     return success;
 }

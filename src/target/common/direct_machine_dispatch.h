@@ -55,9 +55,11 @@ static inline bool minic_multi_direct_machine_dispatch(
     MinicCoreBlockWalk walk = {0};
     const MinicCoreFunction *fn;
     const MinicCoreBlock *block;
-    bool *reachable;
+    const bool *reachable = NULL;
+    bool *owned_reachable = NULL;
     bool *folded_constants = NULL;
-    size_t *value_use_counts = NULL;
+    const size_t *value_use_counts = NULL;
+    size_t *owned_value_use_counts = NULL;
     bool *transparent = NULL;
     size_t transparent_capacity = 0U;
     bool have_value_use_counts = false;
@@ -71,31 +73,44 @@ static inline bool minic_multi_direct_machine_dispatch(
         dispatch->store_gp == NULL || dispatch->emit_terminator == NULL)
         return false;
     fn = ctx->fn;
+    if (minic_core_function_facts_verified(ctx->core_facts, fn)) {
+        reachable = ctx->core_facts->reachable_blocks;
+        value_use_counts = ctx->core_facts->value_use_counts;
+        have_value_use_counts = value_use_counts != NULL;
+    }
     /* A Core result without any semantic use needs no machine frame
      * writeback. Preserve the actual instruction and all memory/volatile/
      * atomic effects; this only discards an unused SSA copy. The same Core
      * use visitor already owns duplicate operands and terminator uses for
      * the stack-slot reuse planner, so targets must not guess liveness.
      * If the optional census cannot be allocated, retain legacy writebacks. */
-    if (fn->value_count != 0U &&
-        fn->value_count <= SIZE_MAX / sizeof(*value_use_counts)) {
-        value_use_counts = (size_t *)malloc(
-            fn->value_count * sizeof(*value_use_counts));
-        if (value_use_counts != NULL)
+    if (!have_value_use_counts && fn->value_count != 0U &&
+        fn->value_count <= SIZE_MAX / sizeof(*owned_value_use_counts)) {
+        owned_value_use_counts = malloc(
+            fn->value_count * sizeof(*owned_value_use_counts));
+        if (owned_value_use_counts != NULL) {
             have_value_use_counts = minic_core_function_value_use_counts(
-                fn, value_use_counts, fn->value_count);
+                fn, owned_value_use_counts, fn->value_count);
+            if (have_value_use_counts)
+                value_use_counts = owned_value_use_counts;
+        }
     }
     /* The same source-label-aware CFG roots as RV32/RV64: ordinary entry,
      * externally entered labels, asm-goto and computed-goto destinations.
      * A GNU jump-table relocation can name a source label even when no
      * ordinary branch reaches it, so never use entry-only traversal here.
      * Keep machine branch lowering/ABI ownership entirely in the target. */
-    reachable = (bool *)calloc(fn->block_count == 0U ? 1U : fn->block_count,
-                                sizeof(*reachable));
-    if (reachable == NULL || !minic_core_function_mark_reachable_blocks(
-            fn, reachable, fn->block_count)) {
-        free(reachable);
-        free(value_use_counts);
+    if (reachable == NULL) {
+        owned_reachable = calloc(fn->block_count == 0U ? 1U : fn->block_count,
+                                 sizeof(*owned_reachable));
+        if (owned_reachable != NULL &&
+            minic_core_function_mark_reachable_blocks(
+                fn, owned_reachable, fn->block_count))
+            reachable = owned_reachable;
+    }
+    if (reachable == NULL) {
+        free(owned_reachable);
+        free(owned_value_use_counts);
         return minic_multi_direct_machine_reject(
             fn, dispatch->architecture, ctx->name,
             "cfg_reachability", SIZE_MAX, SIZE_MAX, __LINE__);
@@ -303,10 +318,10 @@ static inline bool minic_multi_direct_machine_dispatch(
     }
     success = true;
 done:
-    free(reachable);
+    free(owned_reachable);
     free(folded_constants);
     free(transparent);
-    free(value_use_counts);
+    free(owned_value_use_counts);
     return success;
 }
 #endif

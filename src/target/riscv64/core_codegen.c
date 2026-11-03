@@ -578,7 +578,8 @@ static bool emit_core_function_with_symbol(FILE *file,
         }
     }
     minic_riscv64_function_abi_plan_destroy(&abi_plan);
-    if (!minic_riscv64_core_frame_mark_reachable_blocks(function, &frame)) {
+    if (!minic_riscv64_core_frame_mark_reachable_blocks(
+            function, facts, &frame)) {
         return core_frame_fail(&frame);
     }
     /* ISA-specific instruction selection occurs AFTER actual CFG reachability

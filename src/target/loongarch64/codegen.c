@@ -190,7 +190,8 @@ static bool loongarch64_emit_function(
     size_t generated_length = 0U;
     char *single_use_generated = NULL;
     size_t single_use_generated_length = 0U;
-    size_t *uses = NULL;
+    const size_t *uses = NULL;
+    size_t *owned_uses = NULL;
     FILE *temporary;
     FILE *single_use_output;
     bool success;
@@ -211,13 +212,14 @@ static bool loongarch64_emit_function(
         temporary, target, module, module_decl, fn, facts, storage,
         id, function_sections, &emitter);
     if (fclose(temporary) != 0) success = false;
-    if (success && fn->value_count != 0U &&
-        fn->value_count <= SIZE_MAX / sizeof(*uses)) {
-        uses = malloc(fn->value_count * sizeof(*uses));
-        if (uses != NULL && !minic_core_function_value_use_counts(
-                fn, uses, fn->value_count)) {
-            free(uses);
-            uses = NULL;
+    if (success && minic_core_function_facts_verified(facts, fn))
+        uses = facts->value_use_counts;
+    if (success && uses == NULL && fn->value_count != 0U &&
+        fn->value_count <= SIZE_MAX / sizeof(*owned_uses)) {
+        owned_uses = malloc(fn->value_count * sizeof(*owned_uses));
+        if (owned_uses != NULL && minic_core_function_value_use_counts(
+                fn, owned_uses, fn->value_count)) {
+            uses = owned_uses;
         }
     }
     single_use_output = success
@@ -237,7 +239,7 @@ static bool loongarch64_emit_function(
                   minic_loongarch64_memory_helpers_end(out);
     free(generated);
     free(single_use_generated);
-    free(uses);
+    free(owned_uses);
     return success;
 }
 

@@ -806,7 +806,8 @@ static bool rv32_func(FILE *out, const MinicCoreModule *module,
                        const MinicCoreObjectStoragePlan *storage,
                        MinicDiagnostic *diag) {
     Rv32Frame fr = {0};
-    bool *reachable = NULL;
+    const bool *reachable = NULL;
+    bool *owned_reachable = NULL;
     MinicCoreBlockWalk walk = {0};
     const MinicCoreBlock *block = NULL;
     MinicRiscvFunctionSymbol sym;
@@ -828,9 +829,17 @@ static bool rv32_func(FILE *out, const MinicCoreModule *module,
         rv32_frame_destroy(&fr);
         return false;
     }
-    reachable = (bool *)calloc(f->block_count, sizeof(*reachable));
-    if (reachable == NULL ||
-        !minic_core_function_mark_reachable_blocks(f, reachable, f->block_count)) {
+    if (minic_core_function_facts_verified(facts, f)) {
+        reachable = facts->reachable_blocks;
+    } else {
+        owned_reachable = calloc(f->block_count == 0U ? 1U : f->block_count,
+                                 sizeof(*owned_reachable));
+        if (owned_reachable != NULL &&
+            minic_core_function_mark_reachable_blocks(
+                f, owned_reachable, f->block_count))
+            reachable = owned_reachable;
+    }
+    if (reachable == NULL) {
         rv32_diag(diag, "<rv32-core>", "rv32i: cannot classify Core CFG reachability");
         goto done;
     }
@@ -916,7 +925,7 @@ static bool rv32_func(FILE *out, const MinicCoreModule *module,
     }
     ok = ok && minic_riscv_emit_function_symbol_end(out, &sym);
 done:
-    free(reachable);
+    free(owned_reachable);
     rv32_frame_destroy(&fr);
     return ok;
 }

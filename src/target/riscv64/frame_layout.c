@@ -31,6 +31,7 @@ bool minic_riscv64_core_frame_initialize_with_storage(
     frame->object_offsets = NULL;
     frame->value_offsets = NULL;
     frame->reachable_blocks = NULL;
+    frame->owned_reachable_blocks = NULL;
     frame->parameter_locations = NULL;
     frame->parameter_location_count = 0U;
     frame->has_named_parameter_cursor = false;
@@ -405,7 +406,8 @@ void minic_riscv64_core_frame_destroy(MinicRiscv64CoreFrame *frame) {
     frame->object_offsets = NULL;
     minic_core_object_storage_plan_release(
         &frame->object_storage, frame->borrows_object_storage);
-    free(frame->reachable_blocks);
+    free(frame->owned_reachable_blocks);
+    frame->owned_reachable_blocks = NULL;
     frame->reachable_blocks = NULL;
 }
 
@@ -444,14 +446,20 @@ minic_riscv64_core_frame_value_offset(const MinicRiscv64CoreFrame *frame, MinicC
     return true;
 }
 
-bool minic_riscv64_core_frame_mark_reachable_blocks(const MinicCoreFunction *function,
-                                             MinicRiscv64CoreFrame *frame) {
+bool minic_riscv64_core_frame_mark_reachable_blocks(
+    const MinicCoreFunction *function, const MinicCoreFunctionFacts *facts,
+    MinicRiscv64CoreFrame *frame) {
     if (function == NULL || frame == NULL || function->block_count == 0U)
         return false;
-    frame->reachable_blocks =
-        (bool *)calloc(function->block_count, sizeof(*frame->reachable_blocks));
-    return frame->reachable_blocks != NULL &&
+    if (minic_core_function_facts_verified(facts, function)) {
+        frame->reachable_blocks = facts->reachable_blocks;
+        return frame->reachable_blocks != NULL;
+    }
+    frame->owned_reachable_blocks =
+        calloc(function->block_count, sizeof(*frame->owned_reachable_blocks));
+    frame->reachable_blocks = frame->owned_reachable_blocks;
+    return frame->owned_reachable_blocks != NULL &&
            minic_core_function_mark_reachable_blocks(
-               function, frame->reachable_blocks, function->block_count);
+               function, frame->owned_reachable_blocks, function->block_count);
 }
 

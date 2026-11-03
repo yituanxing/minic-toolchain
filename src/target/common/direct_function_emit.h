@@ -91,7 +91,7 @@ static inline bool minic_multi_direct_lp64_emit_function(
         goto output_failed;
 
     ctx = (MinicDirectLP64BlockContext){
-        .module = module, .target = target, .fn = fn,
+        .module = module, .target = target, .fn = fn, .core_facts = facts,
         .frame_plan = &plan.frame_plan,
         .incoming_plan = &plan.incoming_plan,
         .outgoing_calls = &plan.outgoing_calls,

@@ -1,6 +1,7 @@
 #ifndef MINIC_TARGET_COMMON_DIRECT_BLOCK_CONTEXT_H
 #define MINIC_TARGET_COMMON_DIRECT_BLOCK_CONTEXT_H
 #include "target/common/direct_call_plan.h"
+#include "target/common/core_function_facts.h"
 #include "target/common/lp64_frame.h"
 #include "core/core_ir.h"
 #include "core/module_ir.h"
@@ -15,6 +16,7 @@ typedef struct MinicDirectLP64BlockContext {
     const MinicCoreModule *module; /* sealed TU ELF linkage/provenance */
     const MinicTargetInfo *target;
     const MinicCoreFunction *fn;
+    const MinicCoreFunctionFacts *core_facts; /* visitor-owned immutable view */
     const MinicLP64FramePlan *frame_plan;
     const MinicLP64ArgumentPlan *incoming_plan;
     const MinicLP64CallPlanCache *outgoing_calls;

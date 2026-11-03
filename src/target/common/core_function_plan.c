@@ -1,4 +1,5 @@
 #include "target/common/core_function_plan.h"
+#include "core/value_uses.h"
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -10,6 +11,8 @@ void minic_core_function_plan_destroy(
     MinicCoreFunctionPlan *plan) {
     if (plan == NULL) return;
     free(plan->variadic_results);
+    free(plan->reachable_blocks);
+    free(plan->value_use_counts);
     minic_core_object_storage_plan_destroy(&plan->objects);
     minic_core_call_index_destroy(&plan->calls);
     (void)memset(plan, 0, sizeof(*plan));
@@ -20,7 +23,8 @@ bool minic_core_function_plan_build(
     if (plan == NULL || function == NULL || function->type_context == NULL ||
         plan->prepared ||
         plan->calls.sites != NULL || plan->objects.objects != NULL ||
-        plan->variadic_results != NULL)
+        plan->variadic_results != NULL || plan->reachable_blocks != NULL ||
+        plan->value_use_counts != NULL)
         return false;
     /* The sole backend-boundary canonical Core verification; every physical
      * target then performs only its own capability and ABI checks. */
@@ -32,12 +36,26 @@ bool minic_core_function_plan_build(
         !minic_core_call_index_build(
             function, plan->facts.direct_call_count +
                       plan->facts.indirect_call_count, &plan->calls) ||
-        !minic_core_object_storage_plan_build(function, &plan->objects)) {
+        !minic_core_object_storage_plan_build(function, &plan->objects) ||
+        function->block_count > SIZE_MAX / sizeof(*plan->reachable_blocks) ||
+        function->value_count > SIZE_MAX / sizeof(*plan->value_use_counts) ||
+        (plan->reachable_blocks = calloc(
+             function->block_count == 0U ? 1U : function->block_count,
+             sizeof(*plan->reachable_blocks))) == NULL ||
+        (plan->value_use_counts = calloc(
+             function->value_count == 0U ? 1U : function->value_count,
+             sizeof(*plan->value_use_counts))) == NULL ||
+        !minic_core_function_mark_reachable_blocks(
+            function, plan->reachable_blocks, function->block_count) ||
+        !minic_core_function_value_use_counts(
+            function, plan->value_use_counts, function->value_count)) {
         minic_core_function_plan_destroy(plan);
         return false;
     }
     plan->facts.call_index = &plan->calls;
     plan->facts.verified_function = function;
+    plan->facts.reachable_blocks = plan->reachable_blocks;
+    plan->facts.value_use_counts = plan->value_use_counts;
     plan->prepared = true;
     return true;
 }

@@ -54,7 +54,9 @@ static bool function(FILE *out, const MinicCoreModule *p,
         !facts->uses_structured_inline_asm ||
         !facts->uses_dynamic_stack_alloc ||
         facts->max_call_arity != 7U || facts->call_index == NULL ||
-        facts->verified_function != f)
+        facts->verified_function != f ||
+        facts->reachable_blocks == NULL || !facts->reachable_blocks[0] ||
+        facts->value_use_counts == NULL)
         return false;
     ++ctx->functions;
     return fputs("F\n", out) != EOF && ctx->fail_stage != 4U;
@@ -223,7 +225,8 @@ int main(int argc, char **argv) {
     /* Transaction callbacks use six global instructions for fact coverage,
      * but executable Core must still have a valid, reachable entry block. */
     MinicCoreBlock entry_block = {
-        .terminator = { .kind = MINIC_CORE_TERMINATOR_RETURN },
+        .terminator = { .kind = MINIC_CORE_TERMINATOR_RETURN,
+                        .return_value = MINIC_CORE_VALUE_INVALID },
         .has_terminator = true
     };
     MinicCoreInstruction instructions[6] = {
