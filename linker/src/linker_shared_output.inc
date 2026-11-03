@@ -1424,11 +1424,8 @@ static bool shared_write_object(MiniLdState *state,
     size_t image_size;
     MiniLdFinalSymbols final_symbols = {0};
     MiniLdFinalSectionTables final_tables = {0};
-    unsigned char *image = NULL;
     size_t end_nonalloc;
     size_t total_size;
-    Elf64_Ehdr header;
-    FILE *file = NULL;
     bool ok = false;
 
     if (!minild_shared_program_plan_build(state, layout, output_plan, shared,
@@ -1479,35 +1476,6 @@ static bool shared_write_object(MiniLdState *state,
     if (!minild_program_plan_validate(state, &program_plan, total_size)) {
         goto done;
     }
-    image = calloc(total_size == 0U ? 1U : total_size, 1U);
-    if (image == NULL) {
-        goto oom;
-    }
-
-    memset(&header, 0, sizeof(header));
-    memcpy(header.e_ident, ELFMAG, SELFMAG);
-    header.e_ident[EI_CLASS] = ELFCLASS64;
-    header.e_ident[EI_DATA] = ELFDATA2LSB;
-    header.e_ident[EI_VERSION] = EV_CURRENT;
-    header.e_type = ET_DYN;
-    header.e_machine = EM_RISCV;
-    header.e_version = EV_CURRENT;
-    header.e_entry = entry;
-    header.e_phoff = sizeof(Elf64_Ehdr);
-    header.e_shoff = final_tables.header_offset;
-    header.e_flags = state->elf_flags;
-    header.e_ehsize = sizeof(Elf64_Ehdr);
-    header.e_phentsize = sizeof(Elf64_Phdr);
-    header.e_phnum = (Elf64_Half)program_plan.count;
-    header.e_shentsize = sizeof(Elf64_Shdr);
-    header.e_shnum = (Elf64_Half)final_tables.count;
-    header.e_shstrndx = (Elf64_Half)final_tables.shstrtab_index;
-    memcpy(image, &header, sizeof(header));
-
-    if (program_plan.count != 0U) {
-        memcpy(image + sizeof(Elf64_Ehdr), program_plan.entries,
-               program_plan.count * sizeof(Elf64_Phdr));
-    }
     if (!minild_output_plan_section_headers(state, output_plan,
                                              final_tables.output_name_offsets,
                                              final_tables.headers)) {
@@ -1515,47 +1483,19 @@ static bool shared_write_object(MiniLdState *state,
     }
     minild_shared_output_section_links(output_plan, shared,
                                         final_tables.headers);
-    if (!minild_output_plan_emit_sections(state, layout, output_plan,
-                                          image, total_size)) {
-        goto done;
-    }
-
-    minild_final_section_tables_emit(&final_tables, &final_symbols, image);
-
-    file = fopen(path, "wb");
-    if (file == NULL) {
-        fprintf(state->diagnostics,
-                "minic-ld: cannot-create:%s:%s\n",
-                path,
-                strerror(errno));
-        goto done;
-    }
-    if (fwrite(image, 1U, total_size, file) != total_size ||
-        fflush(file) != 0) {
-        fprintf(state->diagnostics,
-                "minic-ld: write-error:%s\n",
-                path);
-        goto done;
-    }
-    ok = true;
+    ok = minild_elf64_write_image(state, layout, output_plan, &program_plan,
+                                  &final_tables, &final_symbols,
+                                  ET_DYN, entry, path);
 
 done:
-    if (file != NULL && fclose(file) != 0) {
-        ok = false;
-    }
-    if (ok && chmod(path, 0755) != 0) {
-        fprintf(state->diagnostics,
-                "minic-ld: chmod-error:%s:%s\n",
-                path,
-                strerror(errno));
-        ok = false;
-    }
+    /* The old writer removed partial output even when planning failed before
+     * image allocation.  Preserve that fail-closed contract; the common ELF
+     * serializer also removes any file it may have opened. */
     if (!ok) {
         (void)remove(path);
     }
     minild_program_plan_destroy(&program_plan);
     minild_final_section_tables_destroy(&final_tables);
-    free(image);
     minild_final_symbols_destroy(&final_symbols);
     return ok;
 

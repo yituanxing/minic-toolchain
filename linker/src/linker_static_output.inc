@@ -154,28 +154,19 @@ failed:
 
 static bool static_write_executable(MiniLdState *state,
                                     const MiniLdLayout *layout,
+                                    MiniLdOutputPlan *output_plan,
                                     const char *path,
                                     uint64_t entry) {
-    MiniLdOutputPlan output_plan = {0};
     MiniLdProgramPlan program_plan = {0};
     MiniLdFinalSectionTables final_tables = {0};
     size_t load_image_size;
     size_t cursor;
     size_t total_size;
     MiniLdFinalSymbols final_symbols = {0};
-    unsigned char *image = NULL;
-    Elf64_Ehdr header;
     size_t i;
-    FILE *file = NULL;
     bool ok = false;
 
-    if (layout->scripted &&
-        !minild_output_plan_build(state, layout,
-                                  layout->section_file_offset,
-                                  &output_plan)) {
-        goto done;
-    }
-    if (!minild_static_program_plan_build(state, layout, &output_plan,
+    if (!minild_static_program_plan_build(state, layout, output_plan,
                                           &program_plan)) {
         goto done;
     }
@@ -183,8 +174,8 @@ static bool static_write_executable(MiniLdState *state,
                       program_plan.count * sizeof(Elf64_Phdr);
 
     if (layout->scripted) {
-        for (i = 0U; i < output_plan.count; ++i) {
-            const MiniLdOutputSection *section = &output_plan.sections[i];
+        for (i = 0U; i < output_plan->count; ++i) {
+            const MiniLdOutputSection *section = &output_plan->sections[i];
             size_t end;
 
             if ((section->flags & SHF_ALLOC) == 0U ||
@@ -214,29 +205,23 @@ static bool static_write_executable(MiniLdState *state,
         }
     }
 
-    if (!layout->scripted &&
-        !minild_output_plan_build(state, layout,
-                                  layout->section_file_offset,
-                                  &output_plan)) {
-        goto done;
-    }
-    if (output_plan.count > UINT16_MAX - 4U) {
+    if (output_plan->count > UINT16_MAX - 4U) {
         fprintf(state->diagnostics,
                 "minic-ld: too-many-static-output-sections\n");
         goto done;
     }
 
-    if (!minild_output_plan_place_nonalloc(state, layout, &output_plan,
+    if (!minild_output_plan_place_nonalloc(state, layout, output_plan,
                                            load_image_size, &cursor)) {
         goto done;
     }
     for (i = 0U; i < state->work.count; ++i) {
         const MiniLdSection *section = &state->work.sections[i];
-        if (output_plan.work_shndx[i] != 0U &&
+        if (output_plan->work_shndx[i] != 0U &&
             (section->flags & SHF_ALLOC) != 0U &&
             section->type != SHT_NOBITS && section->size != 0U &&
-            (output_plan.work_file_offsets[i] == SIZE_MAX ||
-             !range_ok(output_plan.work_file_offsets[i], section->size,
+            (output_plan->work_file_offsets[i] == SIZE_MAX ||
+             !range_ok(output_plan->work_file_offsets[i], section->size,
                        load_image_size))) {
             fprintf(state->diagnostics,
                     "minic-ld: invalid-static-section-layout:%s\n",
@@ -244,17 +229,17 @@ static bool static_write_executable(MiniLdState *state,
             goto done;
         }
     }
-    if (!minild_final_symbols_build(state, layout, &output_plan,
+    if (!minild_final_symbols_build(state, layout, output_plan,
                                     &final_symbols)) {
         goto oom;
     }
-    if (!minild_final_section_tables_build(&output_plan, &final_symbols,
+    if (!minild_final_section_tables_build(output_plan, &final_symbols,
                                            cursor, MINILD_FINAL_SYMTAB_FIRST,
                                            &final_tables)) {
         goto oom;
     }
     if (!minild_output_plan_section_headers(
-            state, &output_plan, final_tables.output_name_offsets,
+            state, output_plan, final_tables.output_name_offsets,
             final_tables.headers)) {
         goto done;
     }
@@ -262,60 +247,9 @@ static bool static_write_executable(MiniLdState *state,
     if (!minild_program_plan_validate(state, &program_plan, total_size)) {
         goto done;
     }
-    image = calloc(total_size == 0U ? 1U : total_size, 1U);
-    if (image == NULL) {
-        goto oom;
-    }
-
-    memset(&header, 0, sizeof(header));
-    memcpy(header.e_ident, ELFMAG, SELFMAG);
-    header.e_ident[EI_CLASS] = ELFCLASS64;
-    header.e_ident[EI_DATA] = ELFDATA2LSB;
-    header.e_ident[EI_VERSION] = EV_CURRENT;
-    header.e_ident[EI_OSABI] = ELFOSABI_NONE;
-    header.e_type = ET_EXEC;
-    header.e_machine = EM_RISCV;
-    header.e_version = EV_CURRENT;
-    header.e_entry = entry;
-    header.e_phoff = sizeof(Elf64_Ehdr);
-    header.e_shoff = final_tables.header_offset;
-    header.e_flags = state->elf_flags;
-    header.e_ehsize = sizeof(Elf64_Ehdr);
-    header.e_phentsize = sizeof(Elf64_Phdr);
-    header.e_phnum = (Elf64_Half)program_plan.count;
-    header.e_shentsize = sizeof(Elf64_Shdr);
-    header.e_shnum = (Elf64_Half)final_tables.count;
-    header.e_shstrndx = (Elf64_Half)final_tables.shstrtab_index;
-    memcpy(image, &header, sizeof(header));
-
-    if (program_plan.count != 0U) {
-        memcpy(image + sizeof(Elf64_Ehdr), program_plan.entries,
-               program_plan.count * sizeof(Elf64_Phdr));
-    }
-
-    if (!minild_output_plan_emit_sections(state, layout, &output_plan,
-                                          image, total_size)) {
-        goto done;
-    }
-
-    minild_final_section_tables_emit(&final_tables, &final_symbols, image);
-
-    file = fopen(path, "wb");
-    if (file == NULL) {
-        fprintf(state->diagnostics,
-                "minic-ld: cannot-create:%s:%s\n",
-                path,
-                strerror(errno));
-        goto done;
-    }
-    if (fwrite(image, 1U, total_size, file) != total_size ||
-        fflush(file) != 0) {
-        fprintf(state->diagnostics,
-                "minic-ld: write-error:%s\n",
-                path);
-        goto done;
-    }
-    ok = true;
+    ok = minild_elf64_write_image(state, layout, output_plan,
+                                  &program_plan, &final_tables,
+                                  &final_symbols, ET_EXEC, entry, path);
     goto done;
 
 oom:
@@ -323,25 +257,13 @@ oom:
             "minic-ld: out-of-memory:static-output\n");
 
 done:
-    if (file != NULL && fclose(file) != 0) {
-        ok = false;
-    }
-    if (ok) {
-        if (chmod(path, 0755) != 0) {
-            fprintf(state->diagnostics,
-                    "minic-ld: chmod-error:%s:%s\n",
-                    path,
-                    strerror(errno));
-            ok = false;
-        }
-    }
+    /* Retain the prior fail-closed contract even if preparation failed
+     * before the common ELF serializer was entered. */
     if (!ok) {
         (void)remove(path);
     }
-    free(image);
     minild_final_section_tables_destroy(&final_tables);
     minild_program_plan_destroy(&program_plan);
-    minild_output_plan_destroy(&output_plan);
     minild_final_symbols_destroy(&final_symbols);
     return ok;
 }

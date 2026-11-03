@@ -1374,6 +1374,7 @@ static int minild_link_static_pipeline(
     FILE *diagnostics) {
     MiniLdState state;
     MiniLdLayout layout;
+    MiniLdOutputPlan output_plan = {0};
     MiniLdStaticGot got;
     MiniLdScript script;
     const char *entry_symbol;
@@ -1452,13 +1453,18 @@ static int minild_link_static_pipeline(
     minild_perf_phase("relocations", &phase_start, &state, diagnostics);
 
     if (!static_entry_address(&state, &layout, entry_symbol, &entry) ||
-        !static_write_executable(&state, &layout, output_path, entry)) {
+        !minild_output_plan_build(&state, &layout,
+                                  layout.section_file_offset,
+                                  &output_plan) ||
+        !static_write_executable(&state, &layout, &output_plan,
+                                 output_path, entry)) {
         goto done;
     }
     minild_perf_phase("output", &phase_start, &state, diagnostics);
     ok = true;
 
 done:
+    minild_output_plan_destroy(&output_plan);
     if (layout_ready) {
         minild_layout_destroy(&layout);
     }

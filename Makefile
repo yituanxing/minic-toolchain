@@ -773,6 +773,12 @@ check-minild-output-script-edges: $(MINIAS_BINARY) $(MINILD_BINARY)
 	MINILD="$(abspath $(MINILD_BINARY))" \
 	bash tests/linker/probe-output-script-edges.sh
 
+.PHONY: check-minild-output-plan-owner-lifecycle
+check-minild-output-plan-owner-lifecycle: $(MINIAS_BINARY) $(MINILD_BINARY)
+	MINIAS="$(abspath $(MINIAS_BINARY))" \
+	MINILD="$(abspath $(MINILD_BINARY))" \
+	bash tests/linker/probe-output-plan-owner-lifecycle.sh
+
 .PHONY: check-minild-shared-output-section
 check-minild-shared-output-section: $(MINIAS_BINARY) $(MINILD_BINARY)
 	MINIAS="$(abspath $(MINIAS_BINARY))" \

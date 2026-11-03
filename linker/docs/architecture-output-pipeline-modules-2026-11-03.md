@@ -3,8 +3,8 @@
 ## Scope
 
 The output-side implementation formerly occupied most of
-`linker/src/linker_core.inc`.  Its original declaration and execution order
-has now been preserved across six included implementation files.  These
+`linker/src/linker_core.inc`. Its phase dependencies are now expressed by
+separate included implementation files. These
 are **physical phase boundaries**, not independently compiled objects: the
 linker still has one C translation unit, and the public linker API, ELF
 format decisions, and runtime behavior remain unchanged.
@@ -15,6 +15,7 @@ format decisions, and runtime behavior remain unchanged.
 | `linker_output_plan.inc` | `MiniLdOutputPlan`, surviving output-section identity, non-alloc placement, section headers and bytes | Projects the placed working sections into output sections; does not own original input identities. |
 | `linker_final_symbols.inc` | `MiniLdFinalSymbols` plus `MiniLdFinalSectionTables` projection | Reads canonical symbols and the OutputPlan; builds the shared final ELF symbol/name/section-header trailer. |
 | `linker_program_plan.inc` | Common `MiniLdProgramPlan` lifetime and final PHDR range validation | Both writers consume one output-neutral program-header contract, while each retains its own segment policy. |
+| `linker_elf64_image.inc` | Final ELF64 Ehdr/PHDR/section-byte/table serialization and file sink | Consumes already-finalized plans; does not decide section selection, relocation or layout. |
 | `linker_static_output.inc` | Static PT_LOAD selection and ET_EXEC writer | Owns executable segment policy and final static emission, including scripted output. |
 | `linker_shared_output.inc` | `MiniLdSharedImage`, dynamic symbols/relocations, dynamic metadata, ET_DYN writer and shared-link entry point | Owns shared-object output state and its writer without mixing it into ET_EXEC policy. |
 
@@ -38,9 +39,10 @@ invert those intra-translation-unit dependencies.
 3. Static program segments and shared dynamic segments remain distinct
    policies.  The small scripted PT_LOAD comparator lives with the static
    segment owner, rather than general placement helpers.
-4. The existing static/ET_DYN ELF writers still decide LOAD boundaries,
-   relocation handling and ELF kind. No generic image writer or intermediate
-   representation is introduced in this pass.
+4. ET_EXEC and ET_DYN still decide LOAD boundaries, relocation handling,
+   synthetic section links, ELF kind and symbol-table ordering. They share
+   one **ELF64-only** final image serializer, not a new target-neutral image
+   IR or prematurely generalized COFF/Mach-O writer.
 
 ## Shared output contracts after consolidation
 
@@ -69,6 +71,38 @@ than only moving implementation text:
 The layout object is consumed by both executable and shared-object output.
 Its name is `MiniLdLayout`, with direct consumers migrated rather than a
 compatibility alias.
+
+## OutputPlan lifecycle and final ELF64 boundary
+
+`MiniLdOutputPlan` already owns the actual ordered `OutputSection` objects,
+their work members, script command ownership, `work_shndx`, physical offsets
+and final section-header projection. Creating a second generic OutputSection
+tree would duplicate canonical state.
+
+Both public link drivers now build and destroy the OutputPlan after layout:
+the ET_EXEC driver creates it once after final static fixups, whether scripted
+or not; the ET_DYN driver creates it before dynamic symbols and relocations,
+which require final output-section indexes. Both final writers borrow their
+plan. Static and shared ProgramPlan builders retain their own PT_LOAD/PHDR
+policies, while final symbols, section-table ownership and emission are common.
+
+`minild_elf64_write_image` receives finalized output/program/symbol/section
+plans, ELF kind and entry address. It owns the temporary image bytes and final
+file sink; output-mode writers supply section-header links before invoking it.
+The script-layout producer still owns temporary `section_owner`, VMA/LMA,
+script BYTE and fill decisions until OutputPlan projects them, rather than
+maintaining a second output owner while the linker-script dot is evaluated.
+
+The newly added pure-BYTE regression exposed one related correctness error:
+a generated work anchor for an output command with no input fragments
+overwrote the script's nonzero fill hole with zeros during final copying.
+That anchor is now initialized with the already-evaluated script fill before
+explicit BYTE patches. The regression checks direct, `-r`-then-final and GC
+links against the GNU host linker for section identity, exact gap bytes and
+PT_LOAD mapping. The generated anchor remains an existing script-layout
+implementation detail; removing it requires an explicit output-command owner
+for symbols and segment membership and is not smuggled into this serializer
+migration.
 
 ## RISC-V final relocation owner checkpoint
 
@@ -100,7 +134,7 @@ relocations are not added by this ownership change.
 
 ## Validation and limits
 
-The strict `MODE=release CFLAGS=-Werror` host gate now covers 26 MiniLD targets,
+The strict `MODE=release CFLAGS=-Werror` host gate now covers 27 MiniLD targets,
 including input/work-section ownership, COMDAT/archive admission, RISC-V
 relocation lifecycle, script/GC, output-section ownership, ET_EXEC and
 ET_DYN output.  Its outputs are host ELF fixture checks; Linux/QEMU runtime

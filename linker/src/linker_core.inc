@@ -2436,6 +2436,8 @@ done:
 
 #include "linker_program_plan.inc"
 
+#include "linker_elf64_image.inc"
+
 #include "linker_static_output.inc"
 
 #include "linker_shared_output.inc"

@@ -1445,6 +1445,16 @@ static bool script_layout_process_output(MiniLdScriptLayoutState *script_state,
                         output->name);
                 return false;
             }
+            /* The generated work fragment is copied into the finalized
+             * OutputSection after its fill pattern is applied.  Its holes
+             * must carry that same pattern or the copy would overwrite
+             * the script's requested fill with zero bytes. */
+            if (length != 0U &&
+                script_state->layout->script_have_fill[command_index]) {
+                memset(section->data,
+                       script_state->layout->script_fill[command_index],
+                       length);
+            }
             for (i = byte_start;
                  i < script_state->layout->script_byte_count; ++i) {
                 const MiniLdScriptBytePatch *patch =
