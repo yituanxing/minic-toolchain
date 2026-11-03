@@ -6,7 +6,45 @@ Linux target C translation units**; the original GNU preprocessor, AS,
 Kbuild/LD, initramfs, and QEMU remain unchanged. A GNU-compiled C fallback
 invalidates full-MiniC certification even when the mixed kernel boots.
 
-## Last actual exact-head full campaign
+## Later real QEMU result — supersedes the link failures below
+
+On 2026-10-31, [three-ISA run #41181106144](https://github.com/yituanxing/minic-toolchain/actions/runs/41181106144)
+ran **all 21 fresh MiniC/GNU-AS producer shards** and all three real GNU
+relink/QEMU receivers. The receiver artifacts and job logs record:
+
+| Target | Authenticated MiniC C owners | GNU LD + MiniC Image QEMU P0/P1 | Full GCC option parity |
+| --- | ---: | --- | --- |
+| x86-64 | 2758/2758 | **PASS**, GNU/MiniC runtime differential PASS | **INCONCLUSIVE**, 46 unqualified distinct options |
+| AArch64 | 4108/4108 | **PASS**, GNU/MiniC runtime differential PASS | **INCONCLUSIVE**, 40 unqualified distinct options |
+| LoongArch64 | 2723/2723 | **PASS**, GNU/MiniC runtime differential PASS | **INCONCLUSIVE**, 34 unqualified distinct options |
+
+The authenticated `candidate/boot/minic-qemu-receipt.json` for all three
+targets reports `MINIC_QEMU_P0_P1_PASS_NO_GCC_C_FALLBACK`, and the independent
+P0/P1 differential reports `MINIC_LINUX_RUNTIME_DIFF=PASS`. The strict
+receivers intentionally return failure because `-O*`, stack protector,
+automatic variable initialization, architecture security/ABI flags and debug
+options have **not** all been shown equivalent to GNU. Do not erase that
+distinction or waive the gate merely because the kernel boots.
+
+Earlier `#41090926953` undefined assertions and LoongArch B26 branch-range
+failures below are **historical** blockers resolved sufficiently for this
+newer real run; they are not the last observed Linux boot result.
+
+RV32's independent [run #40268099875](https://github.com/yituanxing/minic-toolchain/actions/runs/40268099875)
+already demonstrated **1741/1741**, genuine ELF32 GNU Image and 12/12
+independent P1 boots on the same SHA. RV64's historical
+[run #39063287653](https://github.com/yituanxing/minic-toolchain/actions/runs/39063287653)
+demonstrated **2064/2064** Stage4 GNU-linked Linux and P1 12/12. All five
+receipts are **historical exact-commit proofs**, not a certification of the
+2026-11-03 IR-P28 refactor head `90fe3b8`.
+
+At that refactor head, [three-ISA run #41640145554](https://github.com/yituanxing/minic-toolchain/actions/runs/41640145554)
+reported green overall but executed **only the trigger gate**; all 21 shards,
+GNU LD and QEMU receiver jobs were skipped. Native strict workflow
+`#41640145565` failed at the **pre-existing** backend-review manifest drift,
+before executing its runtime stages. These are not new compiler Linux faults.
+
+## Earlier full campaign — linker blockers before #41181106144
 
 [`#41090926953`](https://github.com/yituanxing/minic-toolchain/actions/runs/41090926953),
 commit `83d6a53ad1b1e3e4ab52bc87e0ab714ada276a96`: three `gnu-boot` jobs
