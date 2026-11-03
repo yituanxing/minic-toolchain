@@ -649,11 +649,15 @@ bool minias_code_align_preceded_by_adjacent_data(const MiniAsCodeAlignSink *sink
     const MiniAs *as=sink!=NULL?sink->as:NULL;
     const MiniAsStmt *owner, *previous;
     if(as==NULL || as->emission==NULL || !as->emission->emitting_fragment ||
-       as->emission->emitting_fragment_id==0U ||
+       as->emission->last_emitted_fragment_id==SIZE_MAX ||
        as->emission->emitting_fragment_id>=as->stmt_count)return false;
     owner=&as->stmts[as->emission->emitting_fragment_id];
-    previous=&as->stmts[as->emission->emitting_fragment_id-1U];
-    /* Active Fragment owns Section; only predecessor needs comparison. */
+    if(as->emission->last_emitted_fragment_id>=as->stmt_count)return false;
+    previous=&as->stmts[as->emission->last_emitted_fragment_id];
+    /* Source order may interleave other Sections/subsections. The emission
+     * loop sorts by final Section offsets; the last committed Fragment is
+     * the actual output predecessor, with zero-sized fragments still
+     * preserving their own GNU Fragment boundary. */
     return owner->fragment_kind==MINIAS_FRAGMENT_ALIGNMENT &&
            (previous->fragment_kind==MINIAS_FRAGMENT_FIXED_DATA ||
             previous->fragment_kind==MINIAS_FRAGMENT_FILL ||
@@ -1060,6 +1064,7 @@ bool minias_emit_sections(MiniAs *as) {
         minias_set_error(as, "out-of-memory:encode-result");
         return false;
     }
+    as->emission->last_emitted_fragment_id=SIZE_MAX;
 
     for (i = 0U; i < as->section_count; ++i) {
         MiniAsEmittedSection *bytes=emission_mutable_section(as,(int)i);
@@ -1205,6 +1210,7 @@ bool minias_emit_sections(MiniAs *as) {
             free(refs);
             return false;
         }
+        as->emission->last_emitted_fragment_id=refs[i].order;
         as->emission->emitting_fragment = false;
     }
     free(refs);

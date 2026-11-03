@@ -4814,8 +4814,10 @@ static bool x64_code_align(MiniAsCodeAlignSink *sink,const MiniAsCodeAlignmentVi
         {0xeb,0x0d,0x2e,0x8d,0xb4,0x00,0x00,0x2e,0x8d,0xb4,0x00,0x00,0x8d,0x74,0x00}
     };
     const bool legacy32=(minias_code_align_address_size(sink)==4U) && stmt->site.mode_bits==X64_CODE32;
-    const bool legacy16=(minias_code_align_address_size(sink)==4U) &&
-        x64_mode16(stmt->site.mode_bits);
+    /* Unlike .code32, real-mode NOP forms depend only on the lexical
+     * instruction mode. GNU GAS uses the 16-bit table even in ELF64 when
+     * a local .code16/.code16gcc directive selects 16-bit execution. */
+    const bool legacy16=x64_mode16(stmt->site.mode_bits);
     /* GNU GAS leaves a single 0x90 at the beginning of a code-alignment
      * fragment immediately following a raw DATA fragment, then fills the
      * remainder with its canonical multi-byte table. This differs from

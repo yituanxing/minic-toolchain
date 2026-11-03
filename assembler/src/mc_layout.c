@@ -9,17 +9,20 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* Scan and final verification use one subsection-local alignment and
- * GNU max-skip calculation, with stage-specific diagnostics at each call. */
+/* Scan and final verification use the final Section-relative location for
+ * GNU alignment and max-skip.  Numbered subsections are emitted in numeric
+ * order, not source encounter order: alignment in subsection N must account
+ * for the complete lengths of all preceding numbered subsections. */
 static bool fragment_alignment_padding(const MiniAsStmt *stmt,
-                                       uint64_t cursor,uint64_t *padding) {
+                                       uint64_t section_location,
+                                       uint64_t *padding) {
     const uint64_t alignment=stmt->payload.alignment.alignment;
     if(alignment==0U || (alignment&(alignment-1U))!=0U)return false;
     if(stmt->payload.alignment.linker_relaxable) {
         *padding=stmt->size;
         return true;
     }
-    *padding=(alignment-(cursor&(alignment-1U)))&(alignment-1U);
+    *padding=(alignment-(section_location&(alignment-1U)))&(alignment-1U);
     if(stmt->payload.alignment.has_max_skip && *padding>stmt->payload.alignment.max_skip)
         *padding=0U;
     return true;
@@ -777,8 +780,13 @@ static bool minias_scan_fragment_layout(MiniAs *as, bool *placement_changed) {
             stmt->offset = sub->size;
             if (stmt->fragment_kind == MINIAS_FRAGMENT_ALIGNMENT) {
                 uint64_t pad;
-                if(!fragment_alignment_padding(stmt,sub->size,&pad)) {
-                    minias_set_error(as, "bad-fragment-alignment");
+                /* The previous fixed-point pass supplies each subsection's
+                 * Section-relative base.  Later passes propagate any size
+                 * change through the numerically ordered subsection bases. */
+                if(sub->size>UINT64_MAX-sub->base ||
+                   !fragment_alignment_padding(stmt,sub->base+sub->size,&pad)) {
+                    minias_set_error(as, "bad-fragment-alignment:line=%zu",
+                                     stmt->line);
                     return false;
                 }
                 if (pad > UINT32_MAX) {
@@ -932,17 +940,45 @@ static bool minias_relayout_fragments(MiniAs *as, bool *org_changed) {
 static bool minias_resolve_deferred_data(MiniAs *as) {
     MiniAsLoweringLayoutPlan plan;
     size_t pass;
+    bool cross_subsection_alignment=false;
+    size_t i;
     if(!minias_common_lowering_layout_plan(as,&plan)) {
         minias_set_error(as,"layout-without-lowering-plan");
         return false;
     }
+    /* Even without a symbolic .org/LEB/SPACE expression, a numbered
+     * subsection's ALIGN can depend on a preceding subsection's size.
+     * Parsing only knows its local cursor; perform the same final fixed
+     * point used for deferred fragments, rather than publishing that
+     * provisional padding as the final machine-code location. */
     if(!plan.has_deferred_data && !plan.has_org_constraints &&
-       !plan.has_cross_subsection_size_end)return true;
-    /* .org, .fill, .space and symbolic LEB share a single fixed point.
-     * A subsection base may change as another numbered subsection grows, so resolving
-     * .org only once would produce wrong final section-relative offsets. */
+       !plan.has_cross_subsection_size_end) {
+        bool has_numbered_subsection=false;
+        for(i=0U;i<as->layout->subsection_count;++i)
+            if(as->layout->subsections[i].number!=0U) {
+                has_numbered_subsection=true;
+                break;
+            }
+        if(has_numbered_subsection) {
+            for(i=0U;i<as->stmt_count;++i) {
+                const MiniAsStmt *stmt=&as->stmts[i];
+                if(stmt->fragment_kind==MINIAS_FRAGMENT_ALIGNMENT &&
+                   stmt->subsection!=0U &&
+                   !stmt->payload.alignment.linker_relaxable) {
+                    cross_subsection_alignment=true;
+                    break;
+                }
+            }
+        }
+    }
+    if(!plan.has_deferred_data && !plan.has_org_constraints &&
+       !plan.has_cross_subsection_size_end &&
+       !cross_subsection_alignment)return true;
+    /* .org, .fill, .space, symbolic LEB and cross-subsection ALIGN share a
+     * single fixed point. Subsection base changes propagate strictly from
+     * lower-numbered to higher-numbered subsections, so max-skip decisions
+     * stabilize without introducing a cycle into the Fragment graph. */
     for(pass=0U;pass<=as->stmt_count;++pass) {
-        size_t i;
         bool changed=false;
         bool org_changed=false;
         if(!minias_relayout_fragments(as,&org_changed) ||
@@ -1384,7 +1420,7 @@ static bool minias_validate_fragment_layout(MiniAs *as) {
                 }
             } else if(stmt->fragment_kind==MINIAS_FRAGMENT_ALIGNMENT) {
                 uint64_t padding;
-                if(!fragment_alignment_padding(stmt,cursor[sub_index],&padding)) {
+                if(!fragment_alignment_padding(stmt,expected,&padding)) {
                     minias_set_error(as,"invalid-layout-alignment:line=%zu",
                                      stmt->line);
                     goto done;

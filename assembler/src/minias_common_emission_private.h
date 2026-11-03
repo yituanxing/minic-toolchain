@@ -78,6 +78,9 @@ struct MiniAsEmissionState {
     bool emitting_fragment;
     bool committing_fragment;
     size_t emitting_fragment_id;
+    /* Final emission-order predecessor, not the previous source ordinal.
+     * SIZE_MAX before the first successfully committed Fragment. */
+    size_t last_emitted_fragment_id;
     MiniAsEncodeResult *active_encode_result;
     size_t synthetic_anchor_counter;
 };

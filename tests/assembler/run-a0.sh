@@ -27,11 +27,13 @@ bash tests/assembler/probe-source-collector-nesting-gnu.sh
 bash tests/assembler/probe-source-if-common-gnu.sh
 bash tests/assembler/probe-x86-pair-alignment-gnu.sh
 bash tests/assembler/probe-x86-adjacent-data-alignment-gnu.sh
+bash tests/assembler/probe-mc-cross-subsection-alignment-gnu.sh
 bash tests/assembler/probe-x86-unary-register-gnu.sh
 bash tests/assembler/probe-source-long-physical-line-gnu.sh
 bash tests/assembler/probe-source-eof-owner-gnu.sh
 bash tests/assembler/probe-source-large-collector-gnu.sh
 bash tests/assembler/probe-irp-reused-frame-gnu.sh
+bash tests/assembler/probe-common-numeric-literal-gnu.sh
 bash tests/assembler/probe-common-dwarf-view-size-gnu.sh
 bash tests/assembler/probe-minias-atomic-output.sh
 bash tests/assembler/probe-mc-deferred-shift-gnu.sh

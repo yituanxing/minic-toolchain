@@ -5,7 +5,6 @@
 #include "source_graph_common.h"
 
 #include <ctype.h>
-#include <errno.h>
 #include <limits.h>
 #include <stdarg.h>
 #include <stdlib.h>
@@ -306,20 +305,19 @@ static bool minias_maybe_align_instruction(MiniAs *as,size_t line) {
 
 bool minias_parse_u64(const char *text, uint64_t *out) {
     char *end = NULL;
-    unsigned long long value;
+    uint64_t value;
 
-    errno = 0;
-    value = strtoull(text, &end, 0);
-    if (errno != 0 || end == text) {
-        return false;
-    }
+    /* Section metadata, .size and .subsection need one integer literal,
+     * not an arbitrary expression. Share the GNU 0b / C-suffix scanner
+     * with MCExpr and Target operands while retaining full consumption. */
+    if (!minias_parse_number_literal(text, &end, &value)) return false;
     while (*end == ' ' || *end == '\t') {
         ++end;
     }
     if (*end != '\0') {
         return false;
     }
-    *out = (uint64_t)value;
+    *out = value;
     return true;
 }
 

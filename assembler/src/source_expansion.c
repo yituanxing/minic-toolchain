@@ -1625,13 +1625,18 @@ static bool process_irp_block(MiniAsSourceContext *source,
         size_t i;
         /* Keep the existing GNU comma/whitespace delimiter policy. */
         while(*cursor==' ' || *cursor=='\t')++cursor;
-        next_comma=strchr(cursor,',');
+        /* Like .macro arguments, .irp items may contain quoted or grouped
+         * commas.  A raw strchr would split `"A,B"` into two iterations. */
+        next_comma=(char *)find_macro_top_level_separator(
+            cursor,MINIAS_MACRO_SEPARATOR_COMMA);
         next_space=find_macro_argument_space(cursor);
         comma_delimited=next_comma!=NULL &&
                        (next_space==NULL || next_comma<next_space);
         next=comma_delimited?next_comma:next_space;
         if(next!=NULL)*next='\0';
-        value=minias_trim(cursor);
+        /* GAS removes one paired quote layer before substitution.  Keep
+         * this rule identical to ordinary macro argument expansion. */
+        value=strip_macro_argument_quotes(minias_trim(cursor));
 
         if(count!=0U && expanded==NULL) {
             expanded=calloc(count,sizeof(*expanded));
@@ -1666,12 +1671,11 @@ static bool process_irp_block(MiniAsSourceContext *source,
         ++iteration;
         if(next==NULL)break;
         cursor=next+1U;
-        /* Real trailing commas produce empty arguments; trailing whitespace
-         * without a comma does not invent a new positional argument. */
-        if(!comma_delimited) {
-            while(*cursor==' ' || *cursor=='\t')++cursor;
-            if(*cursor=='\0')break;
-        }
+        /* GAS ignores a final delimiter; consecutive delimiters still
+         * contain an empty middle item.  An initially empty .irp list above
+         * deliberately runs exactly one iteration. */
+        while(*cursor==' ' || *cursor=='\t')++cursor;
+        if(*cursor=='\0')break;
     }
     ok=true;
 done:

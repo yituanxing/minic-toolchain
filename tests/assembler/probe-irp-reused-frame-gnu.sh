@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Exact GNU byte parity for 512 IRP values with nested REPT expansion frames.
+# Exact GNU byte parity for reused IRP frames, quoted separators and empty values.
 set -Eeuo pipefail
 : "$MINIAS"
 for cmd in python3 as objcopy cmp; do command -v "$cmd" >/dev/null; done
@@ -18,6 +18,12 @@ src=(
     '  .byte 0xa5\n'
     ' .endr\n'
     '.endr\n'
+    '.irp item, "A,B", "C D",,\n'
+    ' .ascii "<\\item>"\n'
+    '.endr\n'
+    '.irp item,\n'
+    ' .ascii "<\\item>"\n'
+    '.endr\n'
     '.byte 0x67,0x68\n'
 )
 Path(sys.argv[1]).write_text(src,encoding='ascii')
@@ -32,7 +38,8 @@ python3 - "$work/mini.bin" <<'PY'
 from pathlib import Path
 import sys
 content=Path(sys.argv[1]).read_bytes()
-expected=b'\x65\x66'+b''.join(bytes((i%256,0xa5)) for i in range(512))+b'\x67\x68'
+expected=(b'\x65\x66'+b''.join(bytes((i%256,0xa5)) for i in range(512))+
+          b'<A,B><C D><><>'+b'\x67\x68')
 assert content==expected, (len(content),len(expected))
 PY
-echo 'MINIAS_IRP_REUSED_FRAME=PASS GNU_text=exact values=512 nested_frames=512'
+echo 'MINIAS_IRP_REUSED_FRAME=PASS GNU_text=exact values=512 nested_frames=512 quoted_comma=1 empty_cases=2'
