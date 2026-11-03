@@ -175,10 +175,10 @@ static int check_module_snapshot_output(const char *path) {
     (void)memset(data, 0, sizeof(data));
     count = fread(data, 1U, sizeof(data) - 1U, in);
     if (fclose(in) != 0 || count == 0U || context.globals != 1U ||
-        strstr(data, ".weak weak_ext\\n.hidden weak_ext\\n") == NULL ||
-        strstr(data, ".weak asm_weak\\n.hidden asm_weak\\n") == NULL ||
-        strstr(data, "G:owned\\n") == NULL ||
-        strstr(data, ".text\\n .quad asm_weak\\n.text\\n") == NULL ||
+        strstr(data, ".weak weak_ext\n.hidden weak_ext\n") == NULL ||
+        strstr(data, ".weak asm_weak\n.hidden asm_weak\n") == NULL ||
+        strstr(data, "G:owned\n") == NULL ||
+        strstr(data, ".text\n .quad asm_weak\n.text\n") == NULL ||
         strstr(data, "poison_source") != NULL) return 14;
     /* Module symbol-use gathering and ELF binding must be independently
      * runnable with NO source Program at all, not merely resistant to an

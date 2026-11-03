@@ -113,15 +113,16 @@ static inline bool minic_program_visit_functions_module(
     void *context, const MinicCoreModule *module) {
     size_t i;
     bool success = true;
-    if (out == NULL || program == NULL || visit == NULL ||
-        function_count != program->function_count ||
+    if (out == NULL || target == NULL || visit == NULL ||
+        (module == NULL && (program == NULL ||
+                            function_count != program->function_count)) ||
         (module != NULL && (!module->finalized ||
             module->function_count != function_count ||
             (function_count != 0U && module->function_symbols == NULL))) ||
         (function_count != 0U && functions == NULL))
         return false;
     for (i = 0U; i < function_count; ++i) {
-        const MinicFunction *decl = &program->functions[i];
+        const MinicFunction *decl = module == NULL ? &program->functions[i] : NULL;
         if (!(module != NULL
                   ? minic_program_module_function_selected(
                         &module->function_symbols[i], selection)
