@@ -38,6 +38,7 @@ typedef struct MiniLdSharedImage {
     bool have_gnu_hash;
     bool have_eh_frame_hdr;
     bool have_interp;
+    bool have_textrel;
     bool pie;
     bool have_dynamic_list;
 } MiniLdSharedImage;
@@ -69,6 +70,7 @@ static void shared_image_destroy(MiniLdSharedImage *shared) {
     shared->have_soname = false;
     shared->have_gnu_hash = false;
     shared->have_interp = false;
+    shared->have_textrel = false;
     shared->pie = false;
     shared->have_dynamic_list = false;
 }
@@ -211,6 +213,11 @@ static bool shared_symbol_preemptible(const MiniLdState *state,
     symbol = &state->resolver.entries[index];
     if (symbol->section == MINILD_SECTION_UNDEF) {
         return true;
+    }
+    /* An ET_DYN executable's own definitions bind locally.  Unlike a DSO,
+     * a PIE must not route calls to its defined globals through JUMP_SLOT. */
+    if (shared->pie) {
+        return false;
     }
     bind = ELF64_ST_BIND(symbol->info);
     visibility = ELF64_ST_VISIBILITY(symbol->other);
@@ -798,6 +805,12 @@ static bool shared_prepare_metadata(MiniLdState *state,
                     reloc->type);
             goto fail;
         }
+        /* A dynamic absolute relocation written into an RX/RO input needs
+         * loader textrel permission. GOT/TLS/PLT slots themselves are RW,
+         * and source-discarded relocations are pruned before this scan. */
+        if ((state->work.sections[reloc->section].flags & SHF_WRITE) == 0U) {
+            shared->have_textrel = true;
+        }
         ++shared->rela_count;
     }
     if (shared->got_count > SIZE_MAX / 8U ||
@@ -856,6 +869,9 @@ static bool shared_prepare_metadata(MiniLdState *state,
     }
     if (shared->rela_count != 0U) {
         dynamic_entries += 3U; /* RELA/RELASZ/RELAENT */
+    }
+    if (shared->have_textrel) {
+        dynamic_entries += 2U; /* TEXTREL/FLAGS(DF_TEXTREL) */
     }
     if (shared->plt_count != 0U) {
         dynamic_entries += 5U; /* PLTGOT/PLTRELSZ/PLTREL/JMPREL/BIND_NOW */
@@ -1054,9 +1070,94 @@ static bool shared_fill_gnu_hash(MiniLdState *state,
 
 #include "linker_version.inc"
 
+/* Both relocation passes must use the same final membership decision as
+ * symbol and section-table emission.  In particular, a surviving non-ALLOC
+ * input still needs link-time fixups, but must never acquire a DT_RELA. */
+static bool shared_relocation_live_source(const MiniLdState *state,
+                                           const MiniLdOutputPlan *output_plan,
+                                           size_t section,
+                                           bool *live_out) {
+    if (section >= state->work.count) {
+        fprintf(state->diagnostics,
+                "minic-ld: invalid-shared-relocation-section\n");
+        return false;
+    }
+    *live_out = minild_output_shndx(output_plan, section) != 0U;
+    return true;
+}
+
+/* Non-ALLOC sections have sh_addr=0, even when a linker script uses a
+ * temporary nonzero dot while arranging their input fragments.  Translate
+ * work-section offsets through the final output-section owner, exactly as
+ * the final symbol view does. */
+static bool shared_nonalloc_output_offset(const MiniLdState *state,
+                                           const MiniLdLayout *layout,
+                                           const MiniLdOutputPlan *output_plan,
+                                           size_t section,
+                                           uint64_t offset,
+                                           uint64_t *value_out) {
+    size_t shndx = minild_output_shndx(output_plan, section);
+    uint64_t start;
+    uint64_t base;
+
+    if (section >= state->work.count || shndx == 0U ||
+        shndx > output_plan->count) {
+        fprintf(state->diagnostics,
+                "minic-ld: invalid-shared-nonalloc-section\n");
+        return false;
+    }
+    start = layout->section_vaddr[section];
+    base = output_plan->sections[shndx - 1U].vaddr;
+    if (start < base || offset > UINT64_MAX - (start - base)) {
+        fprintf(state->diagnostics,
+                "minic-ld: invalid-shared-nonalloc-offset\n");
+        return false;
+    }
+    *value_out = start - base + offset;
+    return true;
+}
+
+static bool shared_resolve_static_relocation_target(
+    MiniLdState *state,
+    const MiniLdLayout *layout,
+    const MiniLdOutputPlan *output_plan,
+    const MiniLdReloc *reloc,
+    bool nonalloc,
+    uint64_t *value_out) {
+    if (reloc->symbol == SIZE_MAX) {
+        *value_out = 0U;
+        return true;
+    }
+    if (reloc->symbol >= state->resolver.count) {
+        fprintf(state->diagnostics,
+                "minic-ld: invalid-shared-relocation-symbol\n");
+        return false;
+    }
+    if (nonalloc && state->resolver.entries[reloc->symbol].section ==
+                        MINILD_SECTION_UNDEF &&
+        ELF64_ST_BIND(state->resolver.entries[reloc->symbol].info) != STB_WEAK) {
+        fprintf(state->diagnostics,
+                "minic-ld: unresolved-shared-nonalloc-reference:%s\n",
+                state->resolver.entries[reloc->symbol].name);
+        return false;
+    }
+    if (nonalloc && state->resolver.entries[reloc->symbol].section >= 0) {
+        size_t section =
+            (size_t)state->resolver.entries[reloc->symbol].section;
+        if (section < state->work.count &&
+            (state->work.sections[section].flags & SHF_ALLOC) == 0U) {
+            return shared_nonalloc_output_offset(
+                state, layout, output_plan, section,
+                state->resolver.entries[reloc->symbol].value, value_out);
+        }
+    }
+    return static_resolve_symbol(state, layout, reloc->symbol, value_out);
+}
+
 static bool shared_patch_arithmetic_relocations(
     MiniLdState *state,
-    const MiniLdLayout *layout) {
+    const MiniLdLayout *layout,
+    const MiniLdOutputPlan *output_plan) {
     size_t i;
 
     for (i = 0U; i < state->relocations.count; ++i) {
@@ -1064,21 +1165,22 @@ static bool shared_patch_arithmetic_relocations(
         MiniLdSection *section;
         uint64_t symbol_value = 0U;
         int64_t target;
+        bool live;
 
         if (!shared_relocation_is_arithmetic(reloc->type)) {
             continue;
         }
-        if (reloc->section >= state->work.count ||
-            (state->work.sections[reloc->section].flags & SHF_ALLOC) == 0U) {
+        if (!shared_relocation_live_source(state, output_plan,
+                                            reloc->section, &live)) {
+            return false;
+        }
+        if (!live) {
             continue;
         }
         section = &state->work.sections[reloc->section];
-        if (reloc->symbol != SIZE_MAX &&
-            (reloc->symbol >= state->resolver.count ||
-             !static_resolve_symbol(state,
-                                    layout,
-                                    reloc->symbol,
-                                    &symbol_value))) {
+        if (!shared_resolve_static_relocation_target(
+                state, layout, output_plan, reloc,
+                (section->flags & SHF_ALLOC) == 0U, &symbol_value)) {
             return false;
         }
         target = (int64_t)symbol_value + reloc->addend;
@@ -1240,6 +1342,7 @@ static bool shared_patch_arithmetic_relocations(
 
 static bool shared_fill_relocations(MiniLdState *state,
                                     const MiniLdLayout *layout,
+                                    const MiniLdOutputPlan *output_plan,
                                     const MiniLdSharedImage *shared) {
     MiniLdSection *rela = &state->work.sections[shared->rela_section];
     size_t write_index = 0U;
@@ -1296,13 +1399,65 @@ static bool shared_fill_relocations(MiniLdState *state,
         MiniLdResolvedSymbol *target;
         Elf64_Rela output;
         size_t dynamic_index = 0U;
+        bool live;
 
-        if (input->section >= state->work.count ||
-            (state->work.sections[input->section].flags & SHF_ALLOC) == 0U ||
-            input->type == R_RISCV_NONE ||
+        if (!shared_relocation_live_source(state, output_plan,
+                                           input->section, &live)) {
+            return false;
+        }
+        if (!live || input->type == R_RISCV_NONE ||
             input->type == R_RISCV_RELAX ||
-            input->type == R_RISCV_ALIGN ||
-            input->type == R_RISCV_CALL ||
+            input->type == R_RISCV_ALIGN) {
+            continue;
+        }
+        source = &state->work.sections[input->section];
+        if ((source->flags & SHF_ALLOC) == 0U) {
+            uint64_t resolved = 0U;
+            uint64_t value;
+            size_t width;
+
+            if (input->type == R_RISCV_CALL ||
+                input->type == R_RISCV_CALL_PLT ||
+                input->type == R_RISCV_GOT_HI20 ||
+                input->type == R_RISCV_TLS_GD_HI20) {
+                fprintf(state->diagnostics,
+                        "minic-ld: unsupported-shared-nonalloc-relocation:%u\n",
+                        input->type);
+                return false;
+            }
+            if (shared_relocation_is_final_layout(input->type)) {
+                continue;
+            }
+            if (input->type != R_RISCV_64 &&
+                input->type != R_RISCV_32) {
+                fprintf(state->diagnostics,
+                        "minic-ld: unsupported-shared-nonalloc-relocation:%u\n",
+                        input->type);
+                return false;
+            }
+            width = input->type == R_RISCV_64 ? 8U : 4U;
+            if (source->type == SHT_NOBITS || input->offset > SIZE_MAX ||
+                !range_ok((size_t)input->offset, width, source->size)) {
+                fprintf(state->diagnostics,
+                        "minic-ld: shared-nonalloc-relocation-offset-out-of-range\n");
+                return false;
+            }
+            if (!shared_resolve_static_relocation_target(
+                    state, layout, output_plan, input, true, &resolved)) {
+                return false;
+            }
+            value = resolved + (uint64_t)input->addend;
+            if (input->type == R_RISCV_32) {
+                /* R_RISCV_32 writes the low word of S+A, matching the
+                 * psABI and the existing static-link relocation path. */
+                store_u32le(source->data + (size_t)input->offset,
+                            (uint32_t)value);
+            } else {
+                store_u64le(source->data + (size_t)input->offset, value);
+            }
+            continue;
+        }
+        if (input->type == R_RISCV_CALL ||
             input->type == R_RISCV_CALL_PLT ||
             shared_relocation_is_final_layout(input->type)) {
             continue;
@@ -1315,7 +1470,6 @@ static bool shared_fill_relocations(MiniLdState *state,
                     input->type);
             return false;
         }
-        source = &state->work.sections[input->section];
         if (source->type == SHT_NOBITS ||
             input->offset > SIZE_MAX ||
             !range_ok((size_t)input->offset, 8U, source->size)) {
@@ -1430,12 +1584,13 @@ static uint32_t shared_riscv_itype(unsigned opcode,
 static bool shared_patch_final_layout_relocations(
     MiniLdState *state,
     const MiniLdLayout *layout,
+    const MiniLdOutputPlan *output_plan,
     const MiniLdSharedImage *shared) {
     size_t capacity = pcrel_capacity_for(state->relocations.count);
     MiniLdPcrelSlot *pcrel;
     size_t i;
 
-    if (!shared_patch_arithmetic_relocations(state, layout)) {
+    if (!shared_patch_arithmetic_relocations(state, layout, output_plan)) {
         return false;
     }
     if (capacity == 0U) {
@@ -1457,10 +1612,15 @@ static bool shared_patch_final_layout_relocations(
         uint64_t place;
         int64_t target;
         int64_t delta;
+        bool live;
+        bool nonalloc;
 
-        if (reloc->section >= state->work.count ||
-            (state->work.sections[reloc->section].flags & SHF_ALLOC) == 0U ||
-            reloc->type == R_RISCV_NONE ||
+        if (!shared_relocation_live_source(state, output_plan,
+                                           reloc->section, &live)) {
+            free(pcrel);
+            return false;
+        }
+        if (!live || reloc->type == R_RISCV_NONE ||
             reloc->type == R_RISCV_RELAX ||
             reloc->type == R_RISCV_ALIGN ||
             reloc->type == R_RISCV_64 ||
@@ -1474,20 +1634,36 @@ static bool shared_patch_final_layout_relocations(
         if (!shared_relocation_is_final_layout(reloc->type)) {
             continue;
         }
+        source = &state->work.sections[reloc->section];
+        nonalloc = (source->flags & SHF_ALLOC) == 0U;
+        if (nonalloc && (reloc->type == R_RISCV_GOT_HI20 ||
+                         reloc->type == R_RISCV_TLS_GD_HI20)) {
+            fprintf(state->diagnostics,
+                    "minic-ld: unsupported-shared-nonalloc-relocation:%u\n",
+                    reloc->type);
+            free(pcrel);
+            return false;
+        }
         if (reloc->symbol != SIZE_MAX &&
             reloc->type != R_RISCV_GOT_HI20 &&
             reloc->type != R_RISCV_TLS_GD_HI20 &&
-            (reloc->symbol >= state->resolver.count ||
-             !static_resolve_symbol(state,
-                                    layout,
-                                    reloc->symbol,
-                                    &symbol_value))) {
+            !shared_resolve_static_relocation_target(
+                state, layout, output_plan, reloc, nonalloc,
+                &symbol_value)) {
             free(pcrel);
             return false;
         }
 
-        source = &state->work.sections[reloc->section];
-        place = layout->section_vaddr[reloc->section] + reloc->offset;
+        if (nonalloc) {
+            if (!shared_nonalloc_output_offset(state, layout, output_plan,
+                                                reloc->section, reloc->offset,
+                                                &place)) {
+                free(pcrel);
+                return false;
+            }
+        } else {
+            place = layout->section_vaddr[reloc->section] + reloc->offset;
+        }
         target = (int64_t)symbol_value + reloc->addend;
 
         switch (reloc->type) {
@@ -1661,9 +1837,18 @@ static bool shared_patch_final_layout_relocations(
         MiniLdSection *source;
         int64_t anchor_offset;
         int64_t delta;
+        bool live;
 
         if (reloc->type != R_RISCV_PCREL_LO12_I &&
             reloc->type != R_RISCV_PCREL_LO12_S) {
+            continue;
+        }
+        if (!shared_relocation_live_source(state, output_plan,
+                                           reloc->section, &live)) {
+            free(pcrel);
+            return false;
+        }
+        if (!live) {
             continue;
         }
         if (reloc->symbol == SIZE_MAX ||
@@ -1718,6 +1903,7 @@ static bool shared_patch_final_layout_relocations(
 /* Emit optional dynamic PLT entries and always resolve local CALL pairs. */
 static bool shared_finalize_plt_and_calls(MiniLdState *state,
                                           const MiniLdLayout *layout,
+                                          const MiniLdOutputPlan *output_plan,
                                           const MiniLdSharedImage *shared) {
     MiniLdSection *plt;
     MiniLdSection *gotplt;
@@ -1816,14 +2002,24 @@ static bool shared_finalize_plt_and_calls(MiniLdState *state,
         MiniLdSection *source;
         MiniLdResolvedSymbol *target;
         uint64_t destination;
+        bool live;
 
         if (reloc->type != R_RISCV_CALL &&
             reloc->type != R_RISCV_CALL_PLT) {
             continue;
         }
-        if (reloc->section >= state->work.count ||
-            (state->work.sections[reloc->section].flags & SHF_ALLOC) == 0U) {
+        if (!shared_relocation_live_source(state, output_plan,
+                                           reloc->section, &live)) {
+            return false;
+        }
+        if (!live) {
             continue;
+        }
+        if ((state->work.sections[reloc->section].flags & SHF_ALLOC) == 0U) {
+            fprintf(state->diagnostics,
+                    "minic-ld: unsupported-shared-nonalloc-relocation:%u\n",
+                    reloc->type);
+            return false;
         }
         if (reloc->symbol == SIZE_MAX ||
             reloc->symbol >= state->resolver.count) {
@@ -1851,8 +2047,11 @@ static bool shared_finalize_plt_and_calls(MiniLdState *state,
                                        &destination)) {
                 return false;
             }
-            destination = (uint64_t)((int64_t)destination + reloc->addend);
         }
+        /* R_RISCV_CALL(_PLT) is S + A - P in both cases: S names either the
+         * local definition or the selected PLT entry.  The JUMP_SLOT's own
+         * addend remains zero; this addend belongs to the caller's pair. */
+        destination = (uint64_t)((int64_t)destination + reloc->addend);
 
         delta = (int64_t)destination -
                 (int64_t)(layout->section_vaddr[reloc->section] +
@@ -1904,6 +2103,14 @@ static bool shared_fill_dynamic(MiniLdState *state,
         MINILD_DYN(DT_RELA, layout->section_vaddr[shared->rela_section]);
         MINILD_DYN(DT_RELASZ, state->work.sections[shared->rela_section].size);
         MINILD_DYN(DT_RELAENT, sizeof(Elf64_Rela));
+    }
+    if (shared->have_textrel) {
+        MINILD_DYN(DT_TEXTREL, 0U);
+#ifdef DF_TEXTREL
+        MINILD_DYN(DT_FLAGS, DF_TEXTREL);
+#else
+        MINILD_DYN(DT_FLAGS, UINT64_C(0x00000004)); /* ELF DF_TEXTREL */
+#endif
     }
     if (shared->plt_count != 0U) {
         MINILD_DYN(DT_PLTGOT, layout->section_vaddr[shared->gotplt_section]);
@@ -2460,9 +2667,6 @@ static bool shared_validate_pie_dso_symbols(
     const MiniLdState *state) {
     size_t i;
 
-    if (input_graph_dso_needed_count(&state->inputs) == 0U) {
-        return true;
-    }
     for (i = 0U; i < state->resolver.count; ++i) {
         const MiniLdResolvedSymbol *symbol = &state->resolver.entries[i];
         unsigned bind = ELF64_ST_BIND(symbol->info);
@@ -2666,10 +2870,11 @@ int minild_link_shared_elf64_riscv_inputs_options(
         !shared_fill_hash(&state, &shared) ||
         !shared_fill_gnu_hash(&state, &shared) ||
         !shared_fill_versions(&state, &shared) ||
-        !shared_fill_relocations(&state, &layout, &shared) ||
-        !shared_patch_final_layout_relocations(&state, &layout, &shared) ||
+        !shared_fill_relocations(&state, &layout, &output_plan, &shared) ||
+        !shared_patch_final_layout_relocations(&state, &layout,
+                                               &output_plan, &shared) ||
         !minild_eh_fill(&state, &layout, &shared) ||
-        !shared_finalize_plt_and_calls(&state, &layout, &shared) ||
+        !shared_finalize_plt_and_calls(&state, &layout, &output_plan, &shared) ||
         !shared_fill_dynamic(&state, &layout, &shared) ||
         !shared_write_object(&state,
                              &layout,

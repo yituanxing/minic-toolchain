@@ -284,4 +284,52 @@ for mode in normal versioned after_r vdso vdso-after-r; do
         exit 1
     }
 done
-echo "MINILD_SHARED_OUTPUT=PASS modes=5"
+
+# A PHDRS clause is a segment-ownership contract, not merely a description
+# used by the final ELF writer.  Explicitly selected NOTE and DYNAMIC input
+# sections must belong to their corresponding PT_NOTE/PT_DYNAMIC segment;
+# non-NOTE sections must not accidentally join PT_NOTE.  The linker used to
+# accept all of these scripts silently while manufacturing PHDRs from types.
+sed 's/} :text :note/} :text/' \
+    "$work/vdso.lds" >"$work/phdr-note-missing.lds"
+sed 's/} :text :note/} :text :dynamic/' \
+    "$work/vdso.lds" >"$work/phdr-note-wrong.lds"
+sed '/^  .text :/s/} :text$/} :text :note/' \
+    "$work/vdso.lds" >"$work/phdr-text-to-note.lds"
+sed '/^  .dynamic :/s/} :text :dynamic$/} :text/' \
+    "$work/vdso.lds" >"$work/phdr-dynamic-missing.lds"
+
+for name in note-missing note-wrong text-to-note dynamic-missing; do
+    if "$MINILD" -melf64lriscv -shared --hash-style=both \
+        -soname libminild-shared.so -T "$work/phdr-$name.lds" \
+        -o "$work/phdr-$name.so" "$work/input.o" \
+        >"$work/phdr-$name.stdout" 2>"$work/phdr-$name.stderr"; then
+        echo "MINILD_SHARED_OUTPUT=FAIL phdr-$name unexpectedly-linked" >&2
+        exit 1
+    fi
+    if ! grep -Fq 'unsupported-shared-script-PHDR-membership:' \
+        "$work/phdr-$name.stderr"; then
+        echo "MINILD_SHARED_OUTPUT=FAIL phdr-$name missing-membership-diagnostic" >&2
+        sed -n '1,12p' "$work/phdr-$name.stderr" >&2
+        exit 1
+    fi
+    echo "MINILD_SHARED_OUTPUT_CHECK=PASS mode=phdr-$name rejected=membership"
+done
+
+# GNU linker-script semantics inherit the preceding output section's PHDR
+# membership when a following section has no explicit :phdr suffix.  Here
+# .rela.dyn belongs only to :text, so .text may inherit that membership.
+sed '/^  .text :/s/} :text$/}/' \
+    "$work/vdso.lds" >"$work/phdr-inherit-text.lds"
+if ! "$MINILD" -melf64lriscv -shared --hash-style=both \
+    -soname libminild-shared.so -T "$work/phdr-inherit-text.lds" \
+    -o "$work/phdr-inherit-text.so" "$work/input.o" \
+    >"$work/phdr-inherit-text.stdout" \
+    2>"$work/phdr-inherit-text.stderr"; then
+    echo 'MINILD_SHARED_OUTPUT=FAIL phdr-inherit-text unexpected-rejection' >&2
+    sed -n '1,12p' "$work/phdr-inherit-text.stderr" >&2
+    exit 1
+fi
+python3 "$work/check.py" vdso "$work/phdr-inherit-text.so"
+echo 'MINILD_SHARED_OUTPUT_CHECK=PASS mode=phdr-inherit-text inherited=text'
+echo "MINILD_SHARED_OUTPUT=PASS modes=10"

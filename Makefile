@@ -808,6 +808,18 @@ check-minild-shared-synthetic-discard: $(MINIAS_BINARY) $(MINILD_BINARY)
 	MINILD="$(abspath $(MINILD_BINARY))" \
 	bash tests/linker/probe-shared-synthetic-discard.sh
 
+.PHONY: check-minild-shared-textrel-pie
+check-minild-shared-textrel-pie: $(MINIAS_BINARY) $(MINILD_BINARY)
+	MINIAS="$(abspath $(MINIAS_BINARY))" \
+	MINILD="$(abspath $(MINILD_BINARY))" \
+	bash tests/linker/probe-shared-textrel-pie.sh
+
+.PHONY: check-minild-shared-nonalloc-relocations
+check-minild-shared-nonalloc-relocations: $(MINIAS_BINARY) $(MINILD_BINARY)
+	MINIAS="$(abspath $(MINIAS_BINARY))" \
+	MINILD="$(abspath $(MINILD_BINARY))" \
+	bash tests/linker/probe-shared-nonalloc-relocations.sh
+
 .PHONY: check-minild-final-symbol-view
 check-minild-final-symbol-view: $(MINIAS_BINARY) $(MINILD_BINARY)
 	MINIAS="$(abspath $(MINIAS_BINARY))" \
