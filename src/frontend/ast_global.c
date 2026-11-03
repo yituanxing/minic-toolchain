@@ -4,6 +4,37 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* An older declarator owns the outer repetition separately from field->type;
+ * typedef arrays can instead be materialized inside that type.  Keep slot
+ * walkers independent of which representation the producer selected. */
+static bool global_record_field_shape(const MinicC0Program *program,
+                                      const MinicRecordField *field,
+                                      MinicType *element_type,
+                                      size_t *element_count,
+                                      bool *is_zero_length,
+                                      bool *is_flexible) {
+    MinicArrayObjectInfo info;
+    bool is_array;
+
+    if (program == NULL || field == NULL || element_type == NULL ||
+        element_count == NULL || is_zero_length == NULL || is_flexible == NULL) {
+        return false;
+    }
+    is_array = minic_c0_record_field_array_info(program, field, &info);
+    if (!is_array && field->element_count != 1U) return false;
+    if (is_array && info.has_materialized_type &&
+        (field->element_count != 1U || field->is_flexible_array || field->is_zero_length_array)) {
+        return false;
+    }
+    *element_type = is_array && !info.has_materialized_type
+                        ? info.element_type : field->type;
+    *element_count = is_array && !info.has_materialized_type
+                         ? info.element_count : 1U;
+    *is_zero_length = is_array && info.is_zero_length;
+    *is_flexible = is_array && !info.has_materialized_type && field->is_flexible_array;
+    return true;
+}
+
 static bool grow_array(void **data, size_t *capacity, size_t count, size_t element_size) {
     void *resized;
     size_t new_capacity;
@@ -158,7 +189,7 @@ bool minic_c0_program_add_local_fixed_register_binding(MinicC0Program *program,
     const MinicLocal *local;
 
     local = minic_c0_program_local(program, local_id);
-    if (local == NULL || local->is_array ||
+    if (local == NULL || minic_c0_local_array_object_info(program, local_id, NULL) ||
         minic_c0_program_local_fixed_register_binding(program, local_id) != NULL) {
         return false;
     }
@@ -654,6 +685,10 @@ bool minic_c0_global_object_select_union_member_with_span(MinicC0Program *progra
     MinicGlobalObject *object;
     const MinicRecord *record;
     const MinicRecordField *field;
+    MinicType field_element_type;
+    size_t field_count;
+    bool zero_length;
+    bool flexible;
     size_t element_slots;
     size_t selected_slots;
     size_t index;
@@ -664,13 +699,15 @@ bool minic_c0_global_object_select_union_member_with_span(MinicC0Program *progra
     }
     record = minic_c0_program_record(program, record_id);
     field = record != NULL ? minic_c0_record_field(record, field_index) : NULL;
-    if (record == NULL || !record->is_complete || !record->is_union || field == NULL ||
-        field->element_count == 0U ||
-        !minic_c0_global_initializer_slot_count(program, field->type, &element_slots) ||
-        (element_slots != 0U && field->element_count > SIZE_MAX / element_slots)) {
+    if (record == NULL || !record->is_complete || !record->is_union ||
+        !global_record_field_shape(program, field, &field_element_type, &field_count,
+                                   &zero_length, &flexible) ||
+        field_count == 0U || zero_length || flexible ||
+        !minic_c0_global_initializer_slot_count(program, field_element_type, &element_slots) ||
+        (element_slots != 0U && field_count > SIZE_MAX / element_slots)) {
         return false;
     }
-    selected_slots = field->element_count * element_slots;
+    selected_slots = field_count * element_slots;
     object = &program->global_objects[global_object_id];
     if (initializer_span != 0U &&
         (selected_slots > initializer_span || initializer_slot > object->initializer_count ||
@@ -724,19 +761,27 @@ bool minic_c0_global_record_field_initializer_slot(const MinicC0Program *program
     total = 0U;
     for (index = 0U; index < field_index; ++index) {
         const MinicRecordField *field;
+        MinicType field_element_type;
+        size_t field_count;
+        bool zero_length;
+        bool flexible;
         size_t element_slots;
         size_t field_slots;
 
         field = &record->fields[index];
-        if (field->is_flexible_array || field->is_zero_length_array) {
-            continue;
-        }
-        if (field->element_count == 0U ||
-            !minic_c0_type_initializer_slot_count(program, field->type, &element_slots) ||
-            (element_slots != 0U && field->element_count > SIZE_MAX / element_slots)) {
+        if (!global_record_field_shape(program, field, &field_element_type, &field_count,
+                                       &zero_length, &flexible)) {
             return false;
         }
-        field_slots = field->element_count * element_slots;
+        if (flexible || zero_length) {
+            continue;
+        }
+        if (field_count == 0U ||
+            !minic_c0_type_initializer_slot_count(program, field_element_type, &element_slots) ||
+            (element_slots != 0U && field_count > SIZE_MAX / element_slots)) {
+            return false;
+        }
+        field_slots = field_count * element_slots;
         if (total > SIZE_MAX - field_slots) {
             return false;
         }
@@ -813,18 +858,22 @@ static bool global_object_type_initializer_slot_count_at(const MinicC0Program *p
         total = 0U;
         for (field_index = field_begin; field_index < field_end; ++field_index) {
             const MinicRecordField *field;
+            MinicType field_element_type;
+            bool zero_length;
+            bool flexible;
             size_t element_index;
             size_t element_count;
 
             field = minic_c0_record_field(record, field_index);
-            if (field == NULL || field->element_count == 0U) {
+            if (!global_record_field_shape(program, field, &field_element_type,
+                                           &element_count, &zero_length, &flexible) ||
+                element_count == 0U) {
                 return false;
             }
-            if (field->is_zero_length_array) {
+            if (zero_length) {
                 continue;
             }
-            element_count = field->element_count;
-            if (field->is_flexible_array) {
+            if (flexible) {
                 if (base_slot != 0U || !minic_type_equal(type, object->type)) {
                     continue;
                 }
@@ -834,7 +883,7 @@ static bool global_object_type_initializer_slot_count_at(const MinicC0Program *p
                 size_t child_count;
 
                 if (!global_object_type_initializer_slot_count_at(
-                        program, object, field->type, base_slot + total, &child_count) ||
+                        program, object, field_element_type, base_slot + total, &child_count) ||
                     total > SIZE_MAX - child_count) {
                     return false;
                 }
@@ -956,18 +1005,22 @@ static bool aggregate_scalar_slot_type_for_object(const MinicC0Program *program,
         cursor = base_slot;
         for (field_index = field_begin; field_index < field_end; ++field_index) {
             const MinicRecordField *field;
+            MinicType field_element_type;
+            bool zero_length;
+            bool flexible;
             size_t element_count;
             size_t element_index;
 
             field = minic_c0_record_field(record, field_index);
-            if (field == NULL || field->element_count == 0U) {
+            if (!global_record_field_shape(program, field, &field_element_type,
+                                           &element_count, &zero_length, &flexible) ||
+                element_count == 0U) {
                 return false;
             }
-            if (field->is_zero_length_array) {
+            if (zero_length) {
                 continue;
             }
-            element_count = field->element_count;
-            if (field->is_flexible_array) {
+            if (flexible) {
                 if (base_slot != 0U || !minic_type_equal(type, object->type)) {
                     continue;
                 }
@@ -977,12 +1030,12 @@ static bool aggregate_scalar_slot_type_for_object(const MinicC0Program *program,
                 size_t child_count;
 
                 if (!global_object_type_initializer_slot_count_at(
-                        program, object, field->type, cursor, &child_count)) {
+                        program, object, field_element_type, cursor, &child_count)) {
                     return false;
                 }
                 if (target_slot >= cursor && target_slot - cursor < child_count) {
                     return aggregate_scalar_slot_type_for_object(
-                        program, object, field->type, cursor, target_slot, slot_type);
+                        program, object, field_element_type, cursor, target_slot, slot_type);
                 }
                 if (cursor > SIZE_MAX - child_count) {
                     return false;
@@ -1011,6 +1064,10 @@ static bool global_object_member_path_type(const MinicC0Program *program,
     for (depth = 0U; depth < member_depth; ++depth) {
         const MinicRecord *record;
         const MinicRecordField *field;
+        MinicType field_element_type;
+        size_t field_count;
+        bool zero_length;
+        bool flexible;
 
         /* Static subobject addresses persist array subscripts as byte addends.
          * When a later member access follows such a subscript, recover the
@@ -1029,8 +1086,9 @@ static bool global_object_member_path_type(const MinicC0Program *program,
         }
         record = minic_c0_program_record(program, type.record_id);
         field = record == NULL ? NULL : minic_c0_record_field(record, member_indices[depth]);
-        if (field == NULL || field->element_count == 0U || field->is_bit_field ||
-            (!field->is_array && !field->is_flexible_array && field->element_count != 1U)) {
+        if (!global_record_field_shape(program, field, &field_element_type, &field_count,
+                                       &zero_length, &flexible) ||
+            field_count == 0U || field->is_bit_field) {
             return false;
         }
         type = field->type;
@@ -1177,14 +1235,18 @@ bool minic_c0_global_relocation_slot_type(const MinicC0Program *program,
     if (location_kind == MINIC_GLOBAL_RELOCATION_LOCATION_RECORD_FIELD) {
         const MinicRecord *record;
         const MinicRecordField *field;
+        MinicArrayObjectInfo array_info;
+        bool array_field;
 
         if (!minic_type_is_record(object->type)) {
             return false;
         }
         record = minic_c0_program_record(program, object->type.record_id);
         field = record == NULL ? NULL : minic_c0_record_field(record, location_index);
+        array_field = minic_c0_record_field_array_info(program, field, &array_info);
         if (field == NULL || field->element_count != 1U || field->is_bit_field ||
-            field->is_flexible_array || !minic_type_is_pointer(field->type)) {
+            (array_field && array_info.is_incomplete) ||
+            !minic_type_is_pointer(field->type)) {
             return false;
         }
         *slot_type = field->type;
@@ -1424,8 +1486,13 @@ bool minic_c0_global_object_set_flexible_array_initializer_count(
         return false;
     }
     field = &record->fields[record->field_count - 1U];
-    if (!field->is_flexible_array || field->is_bit_field) {
-        return false;
+    {
+        MinicArrayObjectInfo array_info;
+
+        if (!minic_c0_record_field_array_info(program, field, &array_info) ||
+            !array_info.is_incomplete || field->is_bit_field) {
+            return false;
+        }
     }
     object->flexible_array_initializer_count = element_count;
     return true;

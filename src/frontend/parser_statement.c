@@ -166,7 +166,8 @@ static bool assignment_chain_expression_is_stable(const MinicParser *parser,
         const MinicLocal *local;
 
         local = minic_c0_program_local(parser->program, expression->value.local_id);
-        return local != NULL && !local->is_array;
+        return local != NULL && !minic_c0_local_array_object_info(
+            parser->program, expression->value.local_id, NULL);
     }
     if (expression->kind == MINIC_EXPRESSION_GLOBAL_OBJECT) {
         return true;
@@ -190,7 +191,8 @@ static bool assignment_chain_target_is_stable(const MinicParser *parser,
         const MinicLocal *local;
 
         local = minic_c0_program_local(parser->program, target->value.local_id);
-        return local != NULL && !local->is_array;
+        return local != NULL && !minic_c0_local_array_object_info(
+            parser->program, target->value.local_id, NULL);
     }
     if (target->kind == MINIC_EXPRESSION_GLOBAL_OBJECT) {
         return true;

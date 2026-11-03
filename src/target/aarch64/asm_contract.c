@@ -3659,7 +3659,8 @@ static bool aarch64_linux_fixed_gpr_local_binding(
     local = minic_c0_program_local(program, e->value.local_id);
     binding = minic_c0_program_local_fixed_register_binding(
         program, e->value.local_id);
-    if (!local || !binding || local->is_array ||
+    if (!local || !binding ||
+        minic_c0_local_array_object_info(program, e->value.local_id, NULL) ||
         !minic_type_equal(local->type, e->type) ||
         !minic_type_equal(binding->type, e->type) ||
         !minic_type_unqualified(e->type, &plain) ||
@@ -3745,7 +3746,8 @@ static bool aarch64_linux_xpaclri_source(
     local = minic_c0_program_local(program, expr->value.local_id);
     fixed = minic_c0_program_local_fixed_register_binding(
         program, expr->value.local_id);
-    if (!local || !fixed || local->is_array ||
+    if (!local || !fixed ||
+        minic_c0_local_array_object_info(program, expr->value.local_id, NULL) ||
         !minic_type_equal(local->type, expr->type) ||
         !minic_type_equal(fixed->type, expr->type) ||
         fixed->register_name_length != 3U ||

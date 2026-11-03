@@ -18,6 +18,51 @@ static bool minic_payload_visibility_valid(MinicSymbolVisibility visibility) {
            visibility == MINIC_SYMBOL_VISIBILITY_PROTECTED;
 }
 
+/* Record fields have one source-level array shape, even while some parser
+ * producers publish the outer dimension separately from a materialized
+ * typedef array.  Preserve the historical recursive traversal depth for
+ * already-materialized fields; only legacy outer dimensions repeat their
+ * element type here. */
+typedef struct MinicPayloadRecordFieldShape {
+    MinicType traversal_type;
+    size_t traversal_count;
+    bool is_array;
+    bool is_zero_length;
+    bool is_flexible;
+} MinicPayloadRecordFieldShape;
+
+static bool minic_payload_record_field_shape(
+    const MinicC0Program *program, const MinicRecordField *field,
+    MinicPayloadRecordFieldShape *shape) {
+    MinicArrayObjectInfo array;
+    bool has_array;
+    if (program == NULL || field == NULL || shape == NULL) return false;
+    (void)memset(shape, 0, sizeof(*shape));
+    has_array = minic_c0_record_field_array_info(program, field, &array);
+    if (!has_array) {
+        if (field->is_array || minic_type_is_array(field->type) ||
+            field->is_flexible_array || field->is_zero_length_array ||
+            field->element_count != 1U) return false;
+        shape->traversal_type = field->type;
+        shape->traversal_count = 1U;
+        return true;
+    }
+    if (array.is_runtime_sized ||
+        (array.is_incomplete && !field->is_flexible_array) ||
+        (field->is_flexible_array && !array.is_incomplete) ||
+        (field->is_zero_length_array && !array.is_zero_length)) return false;
+    shape->is_array = true;
+    shape->is_zero_length = array.is_zero_length;
+    shape->is_flexible = field->is_flexible_array;
+    shape->traversal_type = shape->is_flexible ? array.element_type
+        : array.has_materialized_type
+        ? field->type : array.element_type;
+    shape->traversal_count = shape->is_flexible ? 0U
+        : array.has_materialized_type
+        ? 1U : array.element_count;
+    return true;
+}
+
 bool minic_multi_global_explicit_bss_admitted(const MinicGlobalObject *object) {
     size_t index;
     const char *name;
@@ -163,6 +208,7 @@ static bool minic_multi_visit_flat_record_array(
         }
         for (field_index = 0U; field_index < record->field_count; ++field_index) {
             const MinicRecordField *field = minic_c0_record_field(record, field_index);
+            MinicPayloadRecordFieldShape field_shape;
             const MinicGlobalRelocation *reloc =
                 relocation_index < object->relocation_count
                     ? &object->relocations[relocation_index] : NULL;
@@ -180,8 +226,11 @@ static bool minic_multi_visit_flat_record_array(
                     return false;
                 continue;
             }
-            if (field == NULL || field->is_bit_field || field->is_flexible_array ||
-                field->element_count != 1U ||
+            if (field == NULL || field->is_bit_field ||
+                !minic_payload_record_field_shape(program, field, &field_shape) ||
+                field_shape.is_flexible || field_shape.is_zero_length ||
+                field_shape.traversal_count != 1U ||
+                minic_type_is_array(field->type) ||
                 !minic_data_layout_type(target->data_layout, program, field->type,
                                         &field_bytes, &field_align) ||
                 !minic_data_layout_record_field_offset(target->data_layout, program,
@@ -196,6 +245,7 @@ static bool minic_multi_visit_flat_record_array(
                 const MinicRecord *nested = minic_c0_program_record(
                     program, field->type.record_id);
                 const MinicRecordField *member;
+                MinicPayloadRecordFieldShape member_shape;
                 size_t selected = 0U, selection_span = 0U;
                 if (nested == NULL || !nested->is_complete || !nested->is_union ||
                     nested->field_count == 0U) return false;
@@ -210,8 +260,11 @@ static bool minic_multi_visit_flat_record_array(
                 }
                 if (selected >= nested->field_count) return false;
                 member = minic_c0_record_field(nested, selected);
-                if (member == NULL || member->element_count != 1U ||
-                    member->is_bit_field || member->is_flexible_array ||
+                if (member == NULL || member->is_bit_field ||
+                    !minic_payload_record_field_shape(program, member, &member_shape) ||
+                    member_shape.is_flexible || member_shape.is_zero_length ||
+                    member_shape.traversal_count != 1U ||
+                    minic_type_is_array(member->type) ||
                     !minic_data_layout_record_field_offset(
                         target->data_layout, program, nested, selected, &emitted_offset) ||
                     emitted_offset != 0U) return false;
@@ -581,11 +634,13 @@ static bool minic_multi_visit_recursive_global_value(
         }
         for (i = begin; i < end; ++i) {
             const MinicRecordField *field = minic_c0_record_field(record, i);
+            MinicPayloadRecordFieldShape field_shape;
             size_t field_offset, element;
-            if (field == NULL)
+            if (field == NULL ||
+                !minic_payload_record_field_shape(program, field, &field_shape))
                 return false;
-            if (field->is_zero_length_array) continue;
-            if (field->is_flexible_array) {
+            if (field_shape.is_zero_length) continue;
+            if (field_shape.is_flexible) {
                 size_t flexible_count;
                 if (record->is_union || i + 1U != end ||
                     !minic_data_layout_record_field_offset(
@@ -602,7 +657,7 @@ static bool minic_multi_visit_recursive_global_value(
                 for (element = 0U; element < flexible_count; ++element) {
                     size_t emitted;
                     if (!minic_multi_visit_recursive_global_value(
-                            sink, program, target, object, field->type,
+                            sink, program, target, object, field_shape.traversal_type,
                             initializer_index, relocation_index,
                             matched_union_selections, &emitted, depth + 1U) ||
                         cursor > record_storage_size ||
@@ -613,6 +668,7 @@ static bool minic_multi_visit_recursive_global_value(
                 continue;
             }
             if (field->is_bit_field) {
+                if (field_shape.is_array) return false;
                 if (!minic_multi_visit_record_bit_field_run(
                         sink, program, target, object, record, end, type_size,
                         &i, initializer_index, relocation_index, &cursor))
@@ -620,7 +676,7 @@ static bool minic_multi_visit_recursive_global_value(
                 if (record->is_union) break;
                 continue;
             }
-            if (field->element_count == 0U) return false;
+            if (field_shape.traversal_count == 0U) return false;
             if (record->is_union) {
                 field_offset = 0U;
             } else if (!minic_data_layout_record_field_offset(
@@ -632,10 +688,10 @@ static bool minic_multi_visit_recursive_global_value(
                 !minic_payload_zero(sink, field_offset - cursor))
                 return false;
             cursor = field_offset;
-            for (element = 0U; element < field->element_count; ++element) {
+            for (element = 0U; element < field_shape.traversal_count; ++element) {
                 size_t emitted;
                 if (!minic_multi_visit_recursive_global_value(
-                        sink, program, target, object, field->type,
+                        sink, program, target, object, field_shape.traversal_type,
                         initializer_index, relocation_index, matched_union_selections,
                         &emitted, depth + 1U) ||
                     (cursor > type_size || emitted > type_size - cursor))
@@ -700,26 +756,28 @@ static bool minic_multi_recursive_shape_supported_at(
             return false;
         for (index = 0U; index < record->field_count; ++index) {
             const MinicRecordField *field = minic_c0_record_field(record, index);
-            if (field == NULL)
+            MinicPayloadRecordFieldShape field_shape;
+            if (field == NULL ||
+                !minic_payload_record_field_shape(program, field, &field_shape))
                 return false;
-            if (field->is_zero_length_array)
+            if (field_shape.is_zero_length)
                 continue;
-            if (field->is_flexible_array) {
+            if (field_shape.is_flexible) {
                 if (record->is_union || index + 1U != record->field_count ||
                     !minic_multi_recursive_shape_supported_at(
-                        program, field->type, depth + 1U))
+                        program, field_shape.traversal_type, depth + 1U))
                     return false;
                 continue;
             }
             if (field->is_bit_field) {
-                if (!minic_type_is_integer(field->type) ||
-                    field->bit_width > 64U || field->element_count != 1U)
+                if (field_shape.is_array || !minic_type_is_integer(field->type) ||
+                    field->bit_width > 64U || field_shape.traversal_count != 1U)
                     return false;
                 continue;
             }
-            if (field->element_count == 0U ||
+            if (field_shape.traversal_count == 0U ||
                 !minic_multi_recursive_shape_supported_at(
-                    program, field->type, depth + 1U))
+                    program, field_shape.traversal_type, depth + 1U))
                 return false;
         }
         return true;
@@ -783,7 +841,11 @@ static bool minic_multi_visit_record_array_global(
            object->initializer_count % record->field_count == 0U;
     for (i = 0U; i < record->field_count && flat; ++i) {
         const MinicRecordField *field = minic_c0_record_field(record, i);
-        if (field == NULL || field->element_count != 1U ||
+        MinicPayloadRecordFieldShape field_shape;
+        if (field == NULL ||
+            !minic_payload_record_field_shape(program, field, &field_shape) ||
+            field_shape.traversal_count != 1U ||
+            field_shape.is_flexible || field_shape.is_zero_length ||
             minic_type_is_array(field->type) ||
             minic_type_is_record(field->type))
             flat = false;
@@ -831,17 +893,20 @@ const char *minic_multi_global_relocation_target_name(
 
 
 bool minic_multi_record_initializer_needs_recursive(
-    const MinicRecord *record, const MinicGlobalObject *object) {
+    const MinicC0Program *program, const MinicRecord *record,
+    const MinicGlobalObject *object) {
     size_t index;
-    if (record == NULL || object == NULL || record->is_union ||
+    if (program == NULL || record == NULL || object == NULL || record->is_union ||
         record->field_count != object->initializer_count ||
         object->union_selection_count != 0U ||
         object->flexible_array_initializer_count != 0U)
         return true;
     for (index = 0U; index < record->field_count; ++index) {
         const MinicRecordField *field = &record->fields[index];
-        if (field->is_bit_field || field->is_flexible_array ||
-            field->is_zero_length_array || field->element_count != 1U ||
+        MinicPayloadRecordFieldShape field_shape;
+        if (!minic_payload_record_field_shape(program, field, &field_shape) ||
+            field->is_bit_field || field_shape.is_flexible ||
+            field_shape.is_zero_length || field_shape.traversal_count != 1U ||
             minic_type_is_array(field->type) || minic_type_is_record(field->type))
             return true;
     }
@@ -863,12 +928,15 @@ static bool minic_multi_visit_flat_record_global(
         obj->initializer_values == NULL) return false;
     for (i = 0U; i < record->field_count; ++i) {
         const MinicRecordField *field = minic_c0_record_field(record, i);
+        MinicPayloadRecordFieldShape field_shape;
         const MinicGlobalRelocation *reloc =
             reloc_index < obj->relocation_count
                 ? &obj->relocations[reloc_index] : NULL;
         size_t offset, width, alignment;
         if (field == NULL || field->is_bit_field ||
-            field->is_flexible_array || field->element_count != 1U ||
+            !minic_payload_record_field_shape(program, field, &field_shape) ||
+            field_shape.is_flexible || field_shape.is_zero_length ||
+            field_shape.traversal_count != 1U ||
             (!minic_type_is_integer(field->type) &&
              !minic_type_is_pointer(field->type) &&
              !minic_type_is_float(field->type) &&
@@ -967,7 +1035,7 @@ bool minic_multi_global_payload_plan_build(
         if (record == NULL) return false;
         plan->payload_kind = obj->flexible_array_initializer_count != 0U
             ? MINIC_CORE_MODULE_PAYLOAD_RECORD_FLEXIBLE
-            : minic_multi_record_initializer_needs_recursive(record, obj)
+            : minic_multi_record_initializer_needs_recursive(program, record, obj)
             ? MINIC_CORE_MODULE_PAYLOAD_RECORD_RECURSIVE
             : MINIC_CORE_MODULE_PAYLOAD_RECORD_FLAT;
         plan->default_section = obj->is_read_only

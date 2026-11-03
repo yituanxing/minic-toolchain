@@ -73,7 +73,9 @@ MinicCoreLowerStatus lower_address(MinicCoreLowerContext *context,
             context->body->program, expression->value.member.record_id);
         field = minic_c0_record_field(record, expression->value.member.field_index);
         if (base == NULL || field == NULL ||
-            (!field->is_array && !minic_type_is_array(field->type)))
+            !minic_c0_record_field_array_object_info(
+                context->body->program, expression->value.member.record_id,
+                expression->value.member.field_index, NULL))
             return MINIC_CORE_LOWER_UNSUPPORTED;
         status = minic_core_lower_internal_record_materialized_address(
             context, expression->value.member.base, &base_address);
@@ -97,17 +99,22 @@ MinicCoreLowerStatus lower_address(MinicCoreLowerContext *context,
             !array_info.has_materialized_type) {
             const MinicBlock *initializer_block;
             const MinicLocal *local;
+            MinicArrayObjectInfo local_array_info;
             bool terminated;
 
             local = minic_c0_program_local(
                 context->body->program, expression->value.compound_literal.local_id);
             initializer_block = minic_c0_program_block(
                 context->body->program, expression->value.compound_literal.initializer_block);
-            if (local == NULL || initializer_block == NULL || !local->is_array ||
-                local->is_register_storage || local->element_count == 0U ||
+            if (local == NULL || initializer_block == NULL ||
+                !minic_c0_local_array_object_info(
+                    context->body->program,
+                    expression->value.compound_literal.local_id, &local_array_info) ||
+                local_array_info.has_materialized_type ||
+                local->is_register_storage || local_array_info.element_count == 0U ||
                 !minic_type_equal(local->type, expression->type) ||
                 !minic_type_equal(array_info.element_type, expression->type) ||
-                array_info.element_count != local->element_count) {
+                array_info.element_count != local_array_info.element_count) {
                 return MINIC_CORE_LOWER_UNSUPPORTED;
             }
             terminated = false;
@@ -125,7 +132,8 @@ MinicCoreLowerStatus lower_address(MinicCoreLowerContext *context,
             }
             if (object_id >= context->function->object_count ||
                 !minic_type_equal(context->function->source_draft->object_types[object_id], local->type) ||
-                context->function->objects[object_id].element_count != local->element_count) {
+                context->function->objects[object_id].element_count !=
+                    local_array_info.element_count) {
                 return MINIC_CORE_LOWER_ERROR;
             }
             (void)memset(&instruction, 0, sizeof(instruction));
@@ -159,7 +167,9 @@ MinicCoreLowerStatus lower_address(MinicCoreLowerContext *context,
             context->body->program, expression->value.compound_literal.local_id);
         initializer_block = minic_c0_program_block(
             context->body->program, expression->value.compound_literal.initializer_block);
-        if (local == NULL || initializer_block == NULL || local->is_array ||
+        if (local == NULL || initializer_block == NULL ||
+            minic_c0_local_array_object_info(context->body->program,
+                expression->value.compound_literal.local_id, NULL) ||
             local->is_register_storage || !minic_type_equal(local->type, expression->type)) {
             return MINIC_CORE_LOWER_UNSUPPORTED;
         }
@@ -219,24 +229,31 @@ MinicCoreLowerStatus lower_address(MinicCoreLowerContext *context,
     if (expression->kind == MINIC_EXPRESSION_LOCAL) {
         const MinicLocal *local =
             minic_c0_program_local(context->body->program, expression->value.local_id);
+        MinicArrayObjectInfo local_array_info;
 
         if (local == NULL) {
             return MINIC_CORE_LOWER_ERROR;
         }
-        if (local->is_array && local->element_count == 0U &&
-            !local->is_zero_length_array) {
+        if (minic_c0_local_array_object_info(context->body->program,
+                expression->value.local_id, &local_array_info) &&
+            local_array_info.is_incomplete &&
+            local_array_info.element_count == 0U &&
+            !local_array_info.is_zero_length) {
             const MinicLocal *address_local;
             MinicCoreValueId slot_address;
             MinicType expected_pointer;
 
-            if (local->dynamic_address_local_id == MINIC_LOCAL_INVALID ||
+            if (!local_array_info.is_runtime_sized ||
+                local->dynamic_address_local_id == MINIC_LOCAL_INVALID ||
                 local->dynamic_address_local_id >= context->body->program->local_count ||
                 !minic_type_pointer_to(expression->type, &expected_pointer)) {
                 return MINIC_CORE_LOWER_UNSUPPORTED;
             }
             address_local = minic_c0_program_local(
                 context->body->program, local->dynamic_address_local_id);
-            if (address_local == NULL || address_local->is_array ||
+            if (address_local == NULL ||
+                minic_c0_local_array_object_info(context->body->program,
+                    local->dynamic_address_local_id, NULL) ||
                 address_local->element_count != 1U ||
                 !minic_type_equal(address_local->type, expected_pointer)) {
                 return MINIC_CORE_LOWER_UNSUPPORTED;

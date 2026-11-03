@@ -46,7 +46,8 @@ bool minic_multi_global_payload_visit(
  * This decision is sealed by the ModuleIR ingress for every backend. */
 bool minic_multi_global_explicit_bss_admitted(const MinicGlobalObject *object);
 bool minic_multi_record_initializer_needs_recursive(
-    const MinicRecord *record, const MinicGlobalObject *object);
+    const MinicC0Program *program, const MinicRecord *record,
+    const MinicGlobalObject *object);
 const char *minic_multi_global_relocation_target_name(
     const MinicC0Program *program, const MinicGlobalRelocation *relocation);
 

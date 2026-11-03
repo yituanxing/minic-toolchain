@@ -273,6 +273,10 @@ typedef struct MinicArrayObjectInfo {
     bool is_incomplete;
     bool is_zero_length;
     bool has_materialized_type;
+    /* Only local VLAs have a single-evaluated runtime bound/address pair.
+     * Their static extent remains unknown (is_incomplete), but they are not
+     * the same C object category as an unresolved extern/flexible array. */
+    bool is_runtime_sized;
 } MinicArrayObjectInfo;
 
 typedef struct MinicLocal {
@@ -1086,6 +1090,26 @@ bool minic_c0_global_object_set_explicit_alignment(MinicC0Program *program,
  * Keep an ID or copy required value fields across any operation that may grow that pool. */
 const MinicExpression *minic_c0_program_expression(const MinicC0Program *program,
                                                    MinicExpressionId expression_id);
+/* One read-only query for local array-object shape. During the staged
+ * producer migration, a declarator may own a legacy outer array dimension
+ * or a fully materialized ArrayType (including typedef arrays). This is the
+ * only place consumers should need to distinguish those representations.
+ * A NULL info output is a supported presence-only query. */
+bool minic_c0_local_array_object_info(const MinicC0Program *program,
+                                      MinicLocalId local_id,
+                                      MinicArrayObjectInfo *info);
+/* Same array-object shape as locals, for a record-field declaration. A
+ * legacy field outer dimension wins over any materialized inner type;
+ * flexible and GNU zero-length fields remain distinct from normal arrays. */
+bool minic_c0_record_field_array_object_info(const MinicC0Program *program,
+                                               MinicRecordId record_id,
+                                               size_t field_index,
+                                               MinicArrayObjectInfo *info);
+/* Layout walkers already own a borrowed field pointer and do not have a
+ * record ID. Both entry points deliberately share the same shape policy. */
+bool minic_c0_record_field_array_info(const MinicC0Program *program,
+                                       const MinicRecordField *field,
+                                       MinicArrayObjectInfo *info);
 bool minic_c0_expression_array_object_info(const MinicC0Program *program,
                                            const MinicExpression *expression,
                                            MinicArrayObjectInfo *info);

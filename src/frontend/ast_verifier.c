@@ -1780,7 +1780,9 @@ bool minic_c0_program_verify_target_detailed(const MinicC0Program *program,
             const MinicLocal *local;
 
             local = minic_c0_program_local(program, binding->local_id);
-            if (local == NULL || local->is_array || !local->is_register_storage ||
+            if (local == NULL ||
+                minic_c0_local_array_object_info(program, binding->local_id, NULL) ||
+                !local->is_register_storage ||
                 !minic_type_equal(local->type, binding->type) ||
                 !minic_target_info_local_fixed_register_supported(
                     target, binding->register_name, binding->register_name_length)) {

@@ -173,7 +173,8 @@ MinicCoreLowerStatus core_asm_try_mixed_memory_forms(
             if (register_local == NULL) {
                 { *handled = true; return MINIC_CORE_LOWER_ERROR; }
             }
-            if (!register_local->is_array &&
+            if (!minic_c0_local_array_object_info(context->body->program,
+                    register_expression->value.local_id, NULL) &&
                 minic_c0_program_local_fixed_register_binding(
                     context->body->program, register_expression->value.local_id) == NULL &&
                 minic_type_equal(register_local->type, register_expression->type)) {
@@ -367,7 +368,8 @@ MinicCoreLowerStatus core_asm_try_mixed_memory_forms(
             if (local == NULL) {
                 { *handled = true; return MINIC_CORE_LOWER_ERROR; }
             }
-            if (!local->is_array &&
+            if (!minic_c0_local_array_object_info(context->body->program,
+                    output_expression->value.local_id, NULL) &&
                 minic_c0_program_local_fixed_register_binding(
                     context->body->program, output_expression->value.local_id) == NULL &&
                 minic_type_equal(local->type, output_expression->type)) {
@@ -612,7 +614,8 @@ MinicCoreLowerStatus core_asm_try_readwrite_and_output_specialization(
                 free(specialized_template);
                 { *handled = true; return MINIC_CORE_LOWER_ERROR; }
             }
-            if (!local->is_array &&
+            if (!minic_c0_local_array_object_info(context->body->program,
+                    output_expression->value.local_id, NULL) &&
                 minic_c0_program_local_fixed_register_binding(
                     context->body->program, output_expression->value.local_id) == NULL &&
                 minic_type_equal(local->type, output_expression->type)) {
@@ -702,7 +705,8 @@ MinicCoreLowerStatus core_asm_try_readwrite_and_output_specialization(
             if (local == NULL) {
                 { *handled = true; return MINIC_CORE_LOWER_ERROR; }
             }
-            if (!local->is_array &&
+            if (!minic_c0_local_array_object_info(context->body->program,
+                    output_expression->value.local_id, NULL) &&
                 minic_c0_program_local_fixed_register_binding(
                     context->body->program, output_expression->value.local_id) == NULL &&
                 minic_type_equal(local->type, output_expression->type)) {
@@ -950,7 +954,8 @@ MinicCoreLowerStatus core_asm_try_empty_barrier_scalar_forms(
             if (local == NULL) {
                 { *handled = true; return MINIC_CORE_LOWER_ERROR; }
             }
-            if (!local->is_array &&
+            if (!minic_c0_local_array_object_info(context->body->program,
+                    output_expression->value.local_id, NULL) &&
                 /* GNU local register storage is valid for empty +r. The
                  * compiler must reject only explicit physical hard-register
                  * bindings here; no instruction can alter an ordinary C

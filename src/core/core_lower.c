@@ -106,6 +106,8 @@ MinicCoreLowerStatus minic_core_lower_internal_local_object(MinicCoreLowerContex
                                                MinicLocalId local_id,
                                                MinicCoreObjectId *object_id) {
     const MinicLocal *local;
+    MinicArrayObjectInfo array_info;
+    bool has_array_object;
     size_t local_index;
 
     if (context == NULL || context->body == NULL || context->body->program == NULL ||
@@ -125,21 +127,16 @@ MinicCoreLowerStatus minic_core_lower_internal_local_object(MinicCoreLowerContex
     if (local == NULL) {
         return MINIC_CORE_LOWER_ERROR;
     }
+    has_array_object = minic_c0_local_array_object_info(
+        context->body->program, local_id, &array_info);
     /* M105_FIXED_REGISTER_STRUCTURED_ASM: a GNU local register binding does
        not change the C object's scalar value semantics. Keep ordinary Core
        storage for reads/writes; only inline-asm operand materialization consumes
        the target register binding. */
-    /* M106_MATERIALIZED_LOCAL_ARRAY_OBJECT: frontend array convergence has
-       two local-object forms. Legacy locals keep element type + is_array/count;
-       typedef/materialized locals carry one complete array MinicType directly.
-       A materialized array is one Core object whose DataLayout already owns the
-       full extent, so its address is naturally pointer-to-array. */
-    /* M175A_REPEATED_ARRAY_OBJECT: an outer legacy array may itself have a
-       materialized array element type (for example `typedef int Row[3];
-       Row rows[2];`).  In that mixed representation local->type describes one
-       complete element object and local->element_count describes the outer
-       repetition.  Preserve both dimensions by using Core's repeated-object
-       form instead of rejecting local->is_array. */
+    /* The Frontend array-object query owns the old/materialized distinction.
+       In `typedef int Row[3]; Row rows[2]`, the outer repetition is separate
+       from the complete inner element type.  Preserve both dimensions without
+       reinterpreting C declarator flags in Core lowering. */
     if (minic_type_is_array(local->type)) {
         const MinicArrayType *array_type;
 
@@ -149,12 +146,12 @@ MinicCoreLowerStatus minic_core_lower_internal_local_object(MinicCoreLowerContex
             array_type->is_zero_length) {
             return MINIC_CORE_LOWER_UNSUPPORTED;
         }
-        if (local->is_array) {
-            if (local->element_count == 0U ||
+        if (has_array_object && !array_info.has_materialized_type) {
+            if (array_info.element_count == 0U ||
                 !minic_core_function_add_repeated_object(context->function,
                                                          local->name_span,
                                                          local->type,
-                                                         local->element_count,
+                                                         array_info.element_count,
                                                          object_id)) {
                 return MINIC_CORE_LOWER_ERROR;
             }
@@ -171,16 +168,16 @@ MinicCoreLowerStatus minic_core_lower_internal_local_object(MinicCoreLowerContex
         !minic_type_is_fixed_vector128_storage(local->type)) {
         return MINIC_CORE_LOWER_UNSUPPORTED;
     }
-    if (local->is_array) {
+    if (has_array_object) {
         /* A zero-length GNU local still has an address.  Allocate one
            addressable backing element as a sentinel; its source-language
            extent and sizeof remain zero, and no element access is valid. */
-        if ((local->element_count == 0U && !local->is_zero_length_array) ||
+        if ((array_info.element_count == 0U && !array_info.is_zero_length) ||
             !minic_core_function_add_repeated_object(context->function,
                                                     local->name_span,
                                                     local->type,
-                                                    local->element_count == 0U ? 1U
-                                                                               : local->element_count,
+                                                    array_info.element_count == 0U ? 1U
+                                                                                  : array_info.element_count,
                                                     object_id)) {
             return MINIC_CORE_LOWER_ERROR;
         }
@@ -216,7 +213,9 @@ static MinicCoreLowerStatus lower_parameter_ingress(MinicCoreLowerContext *conte
         if (parameter == NULL) {
             return MINIC_CORE_LOWER_ERROR;
         }
-        if (parameter->is_array || parameter->is_register_storage ||
+        if (minic_c0_local_array_object_info(
+                context->body->program, local_id, NULL) ||
+            parameter->is_register_storage ||
             !minic_type_unqualified(parameter->type, &parameter_value_type) ||
             !minic_c0_types_compatible(
                 context->body->program, parameter_value_type,
@@ -227,7 +226,8 @@ static MinicCoreLowerStatus lower_parameter_ingress(MinicCoreLowerContext *conte
                           context->source_function->name,
                           parameter_index,
                           minic_type_is_volatile(parameter->type) ? 1 : 0,
-                          parameter->is_array ? 1 : 0,
+                          minic_c0_local_array_object_info(
+                              context->body->program, local_id, NULL) ? 1 : 0,
                           parameter->is_register_storage ? 1 : 0);
             return MINIC_CORE_LOWER_UNSUPPORTED;
         }
@@ -410,7 +410,9 @@ MinicCoreLowerStatus minic_core_lower_internal_append_field_address(MinicCoreLow
     instruction.value.field_address.field_index = field_index;
     instruction.value.field_address.access_form = field->is_bit_field
         ? MINIC_CORE_FIELD_ACCESS_BITFIELD_STORAGE
-        : (field->is_array ? MINIC_CORE_FIELD_ACCESS_ARRAY_ELEMENT
+        : (minic_c0_record_field_array_object_info(
+               context->body->program, record_id, field_index, NULL)
+               ? MINIC_CORE_FIELD_ACCESS_ARRAY_ELEMENT
                            : MINIC_CORE_FIELD_ACCESS_EXACT);
     instruction.value.field_address.byte_offset = byte_offset;
     if (!minic_type_pointer_to(field_type, &instruction_source_type)) {

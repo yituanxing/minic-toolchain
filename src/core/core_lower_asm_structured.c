@@ -261,7 +261,8 @@ MinicCoreLowerStatus core_asm_try_immediate_output_csr(
                 free(specialized_template);
                 { *handled = true; return MINIC_CORE_LOWER_ERROR; }
             }
-            if (!local->is_array &&
+            if (!minic_c0_local_array_object_info(context->body->program,
+                    output_expression->value.local_id, NULL) &&
                 minic_c0_program_local_fixed_register_binding(
                     context->body->program, output_expression->value.local_id) == NULL &&
                 minic_type_equal(local->type, output_expression->type)) {

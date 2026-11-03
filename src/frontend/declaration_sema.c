@@ -276,7 +276,8 @@ minic_declaration_apply_transparent_union(MinicC0Program *program, MinicType typ
         const MinicRecordField *field;
 
         field = minic_c0_record_field(record, field_index);
-        if (field == NULL || field->is_array || field->is_bit_field ||
+        if (field == NULL || minic_c0_record_field_array_info(program, field, NULL) ||
+            field->is_bit_field ||
             !minic_type_is_pointer(field->type)) {
             return MINIC_DECLARATION_TRANSPARENT_UNION_UNSUPPORTED_MEMBER;
         }

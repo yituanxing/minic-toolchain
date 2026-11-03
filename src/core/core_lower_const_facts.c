@@ -260,7 +260,8 @@ static bool core_program_bool_is_provably_zero(
             context->source_function->name != NULL &&
             strcmp(context->source_function->name, "dma_direct_alloc") == 0;
     local = minic_c0_program_local(program, local_id);
-    if (local == NULL || local->is_array || local->is_register_storage ||
+    if (local == NULL || minic_c0_local_array_object_info(
+            program, local_id, NULL) || local->is_register_storage ||
         !minic_type_is_bool_integer(local->type) ||
         minic_type_is_volatile(local->type) ||
         !core_program_bool_has_entry_zero_initializer(context, local_id)) {
@@ -356,7 +357,9 @@ void core_local_constant_set(MinicCoreLowerContext *context,
         return;
     }
     local = minic_c0_program_local(context->body->program, local_id);
-    if (local == NULL || local->is_array || minic_type_is_volatile(local->type) ||
+    if (local == NULL || minic_c0_local_array_object_info(
+            context->body->program, local_id, NULL) ||
+        minic_type_is_volatile(local->type) ||
         !minic_type_unqualified(local->type, &local_type) ||
         !minic_type_is_integer(local_type) ||
         !minic_const_value_convert_integer(context->body->program,
@@ -1202,7 +1205,7 @@ static bool core_cfg_zero_union_scalar_read(
                  ? minic_c0_program_record(p, local->type.record_id) : NULL;
     layout = minic_target_info_data_layout(c->target);
     if (local == NULL || record == NULL || !record->is_union ||
-        !record->is_complete || local->is_array ||
+        !record->is_complete || minic_c0_local_array_object_info(p, root, NULL) ||
         minic_type_is_volatile(local->type) ||
         !local->has_declaration_block ||
         local->declaration_block != c->source_function->body_block ||

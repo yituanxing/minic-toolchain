@@ -2305,3 +2305,13 @@ check-loong-typed-scalar: $(MINIC_CC_BINARY)
 	  sh tests/compiler/c0/run-loongarch64-typed-invtlb-add-unless.sh
 
 check-fast: check-loong-typed-scalar
+
+# Array source identity is shared by Frontend, Core ingress and five machine
+# emitters. Compile all five targets, compare GNU/MiniC x86 native behavior,
+# and require fail-closed rejection for invalid C array types.
+.PHONY: check-array-shape-convergence
+check-array-shape-convergence: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	  sh tests/compiler/c0/run-array-shape-convergence.sh
+
+check-fast: check-array-shape-convergence

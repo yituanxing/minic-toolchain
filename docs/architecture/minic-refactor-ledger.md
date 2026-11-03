@@ -1347,3 +1347,69 @@ source lifetime positive 3/3 and negative 5/5 PASS; same-scope and
 ordinary goto cleanup differential PASS; `check-four-target-model-m0`
 five-target SourceInfo/invocation/ABI tests PASS. Full GNU cross-assembler,
 linker and QEMU Linux runtime acceptance is **NOT RUN** for this refactor.
+
+## IR-P25 — Source array-object read convergence across Frontend/Core/DataLayout (2026-11-03)
+
+**Baseline:** IR-P24 remote `6f387248` on PR #674. This is a single batch
+across all five source-to-machine paths, not a declaration that the old C
+array representation has been deleted or that a new MIR exists. There are two
+active producer shapes today: an outer declarator dimension carried by
+`MinicLocal` / `MinicRecordField`, and a fully materialized `MinicArrayType`
+often introduced by a typedef. Both must yield the same C object semantics.
+
+### Completed read-side ownership
+
+- Frontend provides `minic_c0_local_array_object_info`,
+  `minic_c0_record_field_array_info` and the ID-based field variant. They
+  distinguish legacy outer repetitions, materialized array type, GNU complete
+  zero arrays, incomplete flexible members, and runtime-sized VLAs. The
+  expression-level query additionally uses the **qualified expression view**:
+  `const struct` member arrays must not lose propagated `const` by reading an
+  unqualified field declaration.
+- Frontend expression, local initializer, builtin `sizeof` / `offsetof`,
+  record/global initializer slot walkers, Core lowering/type import/ASM and
+  local facts, common Global Payload planning, AArch64 fixed-register source
+  checks, and DataLayout record/relocation paths now use these queries.
+  Legacy arrays repeat the element type once per outer declarator bound;
+  materialized arrays traverse their full type **once**, without multiplying
+  an already materialized dimension twice. Bitfield and relocation guards
+  continue to reject malformed representations.
+- New executable test covers nested typedef arrays, record-member indexing,
+  GNU zero/flexible members, VLA bound evaluation once, compound literals,
+  inferred arrays, 25 negative target cases and absence of partial `.s` files.
+  DataLayout's standalone probe compares legacy and materialized nested-array
+  layout, offsets and global-relocation addends, with undefined-behavior
+  sanitizer enabled. The test is wired into `check-fast`.
+
+### Regression fixed during batch integration
+
+The first `check-fast` found a **real** x86 M1 regression: compiling a
+`static const struct` containing a nested `int items[3]` failed in Core
+subscript lowering. A separate five-target GNU zero/nested record probe failed
+at the same point. The new expression query had initially substituted the
+field's unqualified declared element type for the qualified expression type.
+After restoring the expression-qualified view, x86 M1 (including
+`zero_record_bitfields` exit 42), the GNU zero/nested five-target probe and a
+materialized typedef array under `const struct` all pass. No Core-specific
+workaround was added.
+
+### Explicitly retained producer seam and verification limit
+
+**The producer representation is still dual:** 29 direct array-metadata
+assignment sites remain in parser declaration/expression/initializer paths,
+with the static-initializer expansion protocol still owning legacy repetition.
+Do not delete `is_array` / `element_count` until those producers, expression
+type/decay, initializer slots, Core storage and ABI import can move together.
+This batch is **read-side convergence**, not complete C type elimination.
+
+| Gate | Result |
+| --- | --- |
+| Debug `make ... check-fast` | **PASS**, exit 0 (254 PASS/SKIP lines; individual skips are not runtime certification) |
+| Release `-Werror` compiler build; `git diff --check` | **PASS** |
+| Five-target `.i → .s`; 25 negative programs, no partial `.s` | **PASS** |
+| x86 GNU and MiniC→GNU AS/LD native semantics | **PASS** |
+| x86 M1, GNU zero/nested 5 ISA, const-typedef record | **PASS** |
+| DataLayout UBSan, x86 four record ABI differentials, flexible members | **PASS** |
+| Backend review manifest strict check | **FAIL, preexisting inventory drift**: `backend_source.c/.h` missing from manifest and many older fingerprints stale. This batch did not update that unrelated review inventory. |
+| Backend structural boundary checks (same script, omitting only the stale-manifest invocation) | **PASS**, including native and sanitizer Core/Module and five-target ownership probes |
+| Four-target GNU cross ABI / five-target Linux QEMU | **NOT RUN / missing cross GCC and QEMU tools** |

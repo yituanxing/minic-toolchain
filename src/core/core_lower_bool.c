@@ -86,7 +86,8 @@ static bool core_zero_bool_is_immutable(
     }
     program = context->body->program;
     local = minic_c0_program_local(program, local_id);
-    if (local == NULL || local->is_array || local->is_register_storage ||
+    if (local == NULL || minic_c0_local_array_object_info(
+            program, local_id, NULL) || local->is_register_storage ||
         !minic_type_is_bool_integer(local->type) ||
         minic_type_is_volatile(local->type) ||
         !core_zero_bool_has_entry_initializer(context, local_id)) {

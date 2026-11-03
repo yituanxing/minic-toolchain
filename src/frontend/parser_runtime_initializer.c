@@ -145,21 +145,28 @@ static bool add_local_array_element_assignment(MinicParser *parser,
                                                MinicExpressionId value_id) {
     const MinicLocal *local;
     const MinicExpression *value;
+    MinicArrayObjectInfo array_info;
+    MinicSourceSpan name_span;
     MinicExpressionId base_id;
 
     local = minic_c0_program_local(parser->program, local_id);
     value = minic_c0_program_expression(parser->program, value_id);
-    if (local == NULL || value == NULL || !local->is_array) {
+    if (local == NULL || value == NULL ||
+        !minic_c0_local_array_object_info(parser->program, local_id, &array_info) ||
+        array_info.has_materialized_type) {
         minic_parser_error(parser, "invalid local array initializer element");
         return false;
     }
-    if (!minic_parser_statement_assignment_conversion(parser, local->type, &value_id) ||
-        !minic_c0_assignment_compatible(parser->program, local->type, value_id)) {
+    name_span = local->name_span;
+    if (!minic_parser_statement_assignment_conversion(
+            parser, array_info.element_type, &value_id) ||
+        !minic_c0_assignment_compatible(
+            parser->program, array_info.element_type, value_id)) {
         minic_parser_error(parser,
                            "local array initializer element type does not match element type");
         return false;
     }
-    if (!minic_parser_statement_local_lvalue(parser, local_id, local->name_span, &base_id)) {
+    if (!minic_parser_statement_local_lvalue(parser, local_id, name_span, &base_id)) {
         return false;
     }
     return add_array_object_element_assignment(parser, base_id, index, value_id);
@@ -786,6 +793,7 @@ static bool parse_local_character_array_string_initializer(MinicParser *parser,
                                                            bool infer_count,
                                                            size_t declared_count) {
     const MinicLocal *local;
+    MinicArrayObjectInfo array_info;
     MinicParser probe;
     MinicSourceSpan initializer_span;
     uint64_t string_size;
@@ -796,8 +804,10 @@ static bool parse_local_character_array_string_initializer(MinicParser *parser,
     bool success;
 
     local = minic_c0_program_local(parser->program, local_id);
-    if (local == NULL || !local->is_array ||
-        !minic_parser_static_string_element_compatible(parser, local->type,
+    if (local == NULL ||
+        !minic_c0_local_array_object_info(parser->program, local_id, &array_info) ||
+        array_info.has_materialized_type ||
+        !minic_parser_static_string_element_compatible(parser, array_info.element_type,
                                                        parser->current.kind)) {
         return false;
     }
@@ -807,7 +817,8 @@ static bool parse_local_character_array_string_initializer(MinicParser *parser,
         probe = *parser;
         if (!minic_parser_parse_string_literal_size(&probe, &string_size) ||
             !minic_target_info_sizeof_type(
-                parser->target_info, parser->program, local->type, &element_size) ||
+                parser->target_info, parser->program,
+                array_info.element_type, &element_size) ||
             element_size == 0U || string_size == 0U || string_size % (uint64_t)element_size != 0U ||
             string_size / (uint64_t)element_size > SIZE_MAX) {
             minic_parser_error(parser, "cannot infer local character array extent from string");
@@ -994,17 +1005,20 @@ done:
 bool
 minic_parser_runtime_local_array(MinicParser *parser, MinicLocalId local_id, bool infer_count) {
     const MinicLocal *local;
+    MinicArrayObjectInfo array_info;
     MinicSourceSpan name_span;
     MinicType element_type;
     size_t declared_count;
 
     local = minic_c0_program_local(parser->program, local_id);
-    if (local == NULL || !local->is_array) {
+    if (local == NULL ||
+        !minic_c0_local_array_object_info(parser->program, local_id, &array_info) ||
+        array_info.has_materialized_type) {
         minic_parser_error(parser, "invalid local array initializer target");
         return false;
     }
-    declared_count = local->element_count;
-    element_type = local->type;
+    declared_count = array_info.element_count;
+    element_type = array_info.element_type;
     name_span = local->name_span;
     if (!minic_parser_advance(parser)) {
         return false;
@@ -1115,6 +1129,7 @@ static bool add_zero_initialized_record_lvalue(MinicParser *parser,
 
     for (field_index = 0U; field_index < field_limit; ++field_index) {
         const MinicRecordField *field;
+        MinicArrayObjectInfo field_array;
         MinicExpression member;
         MinicExpressionId member_id;
 
@@ -1145,9 +1160,9 @@ static bool add_zero_initialized_record_lvalue(MinicParser *parser,
         if (!minic_parser_add_expression(parser, &member, &member_id)) {
             return false;
         }
-        if (field->is_array) {
+        if (minic_c0_record_field_array_info(parser->program, field, &field_array)) {
             if (!add_array_object_zero_elements(
-                    parser, member_id, field->element_count, initializer_span)) {
+                    parser, member_id, field_array.element_count, initializer_span)) {
                 return false;
             }
         } else if (minic_type_is_record(field->type)) {
@@ -1323,6 +1338,7 @@ static bool zero_runtime_record_fields_from(MinicParser *parser,
         return false;
     }
     while (*field_index < field_limit) {
+        MinicArrayObjectInfo field_array;
         MinicExpressionId member_id;
 
         if (record->fields[*field_index].is_flexible_array) {
@@ -1333,10 +1349,11 @@ static bool zero_runtime_record_fields_from(MinicParser *parser,
                 parser, target_id, record_id, *field_index, initializer_span, &member_id)) {
             return false;
         }
-        if (record->fields[*field_index].is_array) {
+        if (minic_c0_record_field_array_info(
+                parser->program, &record->fields[*field_index], &field_array)) {
             if (!add_array_object_zero_elements(parser,
                                                 member_id,
-                                                record->fields[*field_index].element_count,
+                                                field_array.element_count,
                                                 initializer_span)) {
                 return false;
             }
@@ -1392,6 +1409,8 @@ static bool parse_positional_runtime_record_initializer_from(MinicParser *parser
     while (parser->current.kind != MINIC_TOKEN_RBRACE) {
         const MinicRecordField *field;
         MinicRecordField field_snapshot;
+        MinicArrayObjectInfo field_array;
+        bool field_is_array;
         MinicExpressionId member_id;
         MinicSourceSpan member_span;
 
@@ -1416,20 +1435,24 @@ static bool parse_positional_runtime_record_initializer_from(MinicParser *parser
         }
         field_snapshot = *field;
         field = &field_snapshot;
+        field_is_array = minic_c0_record_field_array_info(
+            parser->program, field, &field_array);
         member_span.begin = parser->current.span.begin;
         member_span.end = parser->current.span.end;
         if (!add_record_field_lvalue(
                 parser, target_id, record_id, field_index, member_span, &member_id)) {
             return false;
         }
-        if (parser->current.kind == MINIC_TOKEN_LBRACE && field->is_array) {
-            if (!parse_fixed_runtime_array_initializer(parser, member_id, field->element_count)) {
+        if (parser->current.kind == MINIC_TOKEN_LBRACE && field_is_array) {
+            if (!parse_fixed_runtime_array_initializer(
+                    parser, member_id, field_array.element_count)) {
                 return false;
             }
-        } else if (field->is_array && parser->current.kind == MINIC_TOKEN_STRING_LITERAL &&
-                   minic_type_is_char_integer(field->type)) {
+        } else if (field_is_array && parser->current.kind == MINIC_TOKEN_STRING_LITERAL &&
+                   minic_type_is_char_integer(field_array.element_type)) {
             if (!parse_runtime_character_array_string_initializer(
-                    parser, member_id, field->type, field->element_count)) {
+                    parser, member_id, field_array.element_type,
+                    field_array.element_count)) {
                 return false;
             }
         } else if (parser->current.kind == MINIC_TOKEN_LBRACE &&
@@ -1440,7 +1463,7 @@ static bool parse_positional_runtime_record_initializer_from(MinicParser *parser
         } else {
             MinicExpressionId value_id;
 
-            if (field->is_array) {
+            if (field_is_array) {
                 minic_parser_error(parser,
                                    "runtime record array field initializer requires braces");
                 return false;

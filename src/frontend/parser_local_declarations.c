@@ -167,7 +167,7 @@ static bool finalize_local_cleanup(MinicParser *parser,
         minic_parser_error(parser, "GNU cleanup cannot be applied to a register local");
         return false;
     }
-    if (local->is_array) {
+    if (minic_c0_local_array_object_info(parser->program, local_id, NULL)) {
         minic_parser_error(parser, "GNU cleanup on local arrays is not supported yet");
         return false;
     }

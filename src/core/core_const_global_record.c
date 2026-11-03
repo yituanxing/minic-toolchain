@@ -250,7 +250,10 @@ bool minic_core_const_global_record_scalar(
     record = minic_c0_program_record(program, element_type.record_id);
     field = minic_c0_record_field(record, member->value.member.field_index);
     if (record == NULL || !record->is_complete || record->is_union || field == NULL ||
-        field->is_bit_field || field->is_flexible_array || field->is_zero_length_array ||
+        field->is_bit_field ||
+        minic_c0_record_field_array_object_info(
+            program, element_type.record_id,
+            member->value.member.field_index, NULL) ||
         field->element_count != 1U || !minic_type_is_integer(field->type) ||
         minic_type_is_volatile(field->type) ||
         !minic_type_unqualified(field->type, &member_type) ||

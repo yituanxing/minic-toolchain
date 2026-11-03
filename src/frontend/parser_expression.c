@@ -1738,9 +1738,13 @@ static bool parse_sizeof(MinicParser *parser, MinicExpressionId *expression_id) 
         measured_type = operand->type;
         if (operand->kind == MINIC_EXPRESSION_LOCAL) {
             const MinicLocal *local;
+            MinicArrayObjectInfo array_info;
 
             local = minic_c0_program_local(parser->program, operand->value.local_id);
-            if (local != NULL && local->is_array &&
+            if (local != NULL &&
+                minic_c0_local_array_object_info(
+                    parser->program, operand->value.local_id, &array_info) &&
+                array_info.is_runtime_sized &&
                 local->dynamic_count_local_id != MINIC_LOCAL_INVALID) {
                 MinicExpression count_lvalue;
                 MinicExpression count_read;

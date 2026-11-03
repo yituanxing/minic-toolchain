@@ -470,19 +470,26 @@ static bool minic_c0_type_initializer_slot_count_impl(const MinicC0Program *prog
         total = 0U;
         for (field_index = 0U; field_index < field_limit; ++field_index) {
             const MinicRecordField *field;
+            MinicArrayObjectInfo array_info;
+            bool is_array;
+            size_t field_count;
             size_t element_slots;
             size_t field_slots;
 
             field = &record->fields[field_index];
-            if (field->is_flexible_array || field->is_zero_length_array) {
+            is_array = minic_c0_record_field_array_info(program, field, &array_info);
+            if (is_array && (array_info.is_incomplete || array_info.is_zero_length)) {
                 continue;
             }
-            if (field->element_count == 0U ||
+            field_count = is_array && !array_info.has_materialized_type
+                              ? array_info.element_count : 1U;
+            if ((is_array && array_info.has_materialized_type && field->element_count != 1U) ||
+                (!is_array && field->element_count != 1U) || field_count == 0U ||
                 !minic_c0_type_initializer_slot_count_impl(program, field->type, &element_slots) ||
-                (element_slots != 0U && field->element_count > SIZE_MAX / element_slots)) {
+                (element_slots != 0U && field_count > SIZE_MAX / element_slots)) {
                 return false;
             }
-            field_slots = field->element_count * element_slots;
+            field_slots = field_count * element_slots;
             if (total > SIZE_MAX - field_slots) {
                 return false;
             }
@@ -1642,6 +1649,80 @@ static bool minic_c0_materialized_array_object_info(const MinicC0Program *progra
     return true;
 }
 
+bool minic_c0_local_array_object_info(const MinicC0Program *program,
+                                      MinicLocalId local_id,
+                                      MinicArrayObjectInfo *info) {
+    const MinicLocal *local = minic_c0_program_local(program, local_id);
+    MinicArrayObjectInfo resolved;
+
+    if (local == NULL) return false;
+    (void)memset(&resolved, 0, sizeof(resolved));
+    if (local->is_array) {
+        /* The outer dimension of a local T name[N] is still owned by its
+         * declarator; T itself may be a materialized inner array type. */
+        resolved.element_type = local->type;
+        resolved.element_count = local->element_count;
+        resolved.is_zero_length = local->is_zero_length_array;
+        resolved.is_incomplete = local->element_count == 0U &&
+                                 !local->is_zero_length_array;
+        resolved.is_runtime_sized = resolved.is_incomplete &&
+            local->dynamic_count_local_id != MINIC_LOCAL_INVALID &&
+            local->dynamic_address_local_id != MINIC_LOCAL_INVALID;
+    } else if (minic_type_is_array(local->type)) {
+        /* `typedef T Row[3]; Row row;` already has a materialized type.
+         * It must not be confused with an outer legacy local dimension. */
+        if (!minic_c0_materialized_array_object_info(
+                program, local->type, &resolved)) return false;
+    } else return false;
+
+    if (info != NULL) *info = resolved;
+    return true;
+}
+
+bool minic_c0_record_field_array_info(const MinicC0Program *program,
+                                      const MinicRecordField *field,
+                                      MinicArrayObjectInfo *info) {
+    MinicArrayObjectInfo resolved;
+
+    if (field == NULL) return false;
+    (void)memset(&resolved, 0, sizeof(resolved));
+    if (field->is_array) {
+        resolved.element_type = field->type;
+        resolved.element_count = field->element_count;
+        resolved.is_incomplete = field->is_flexible_array;
+        resolved.is_zero_length = field->is_zero_length_array;
+    } else if (minic_type_is_array(field->type)) {
+        if (!minic_c0_materialized_array_object_info(
+                program, field->type, &resolved)) return false;
+    } else return false;
+
+    if (info != NULL) *info = resolved;
+    return true;
+}
+
+bool minic_c0_record_field_array_object_info(const MinicC0Program *program,
+                                               MinicRecordId record_id,
+                                               size_t field_index,
+                                               MinicArrayObjectInfo *info) {
+    const MinicRecord *record = minic_c0_program_record(program, record_id);
+    return minic_c0_record_field_array_info(
+        program, minic_c0_record_field(record, field_index), info);
+}
+
+static bool expression_array_qualified_shape(const MinicC0Program *program,
+                                              const MinicExpression *expression,
+                                              MinicArrayObjectInfo *info) {
+    if (program == NULL || expression == NULL || info == NULL) return false;
+    if (info->has_materialized_type) {
+        /* A qualified record lvalue can carry a distinct qualified ArrayType
+         * from its unqualified field declaration.  The expression view wins. */
+        return minic_type_is_array(expression->type) &&
+               minic_c0_materialized_array_object_info(program, expression->type, info);
+    }
+    info->element_type = expression->type;
+    return true;
+}
+
 bool minic_c0_expression_array_object_info(const MinicC0Program *program,
                                            const MinicExpression *expression,
                                            MinicArrayObjectInfo *info) {
@@ -1669,19 +1750,16 @@ bool minic_c0_expression_array_object_info(const MinicC0Program *program,
             !minic_type_is_record(base->type) ||
             base->type.record_id != expression->value.member.record_id ||
             !minic_c0_record_value_is_copy_source(program, expression->value.member.base) ||
-            field == NULL || (!field->is_array && !minic_type_is_array(field->type)))
+            field == NULL || !minic_c0_record_field_array_object_info(
+                program, expression->value.member.record_id,
+                expression->value.member.field_index, NULL))
             return false;
     }
     (void)memset(&resolved, 0, sizeof(resolved));
     if (expression->kind == MINIC_EXPRESSION_COMPOUND_LITERAL) {
-        const MinicLocal *local;
-
-        local = minic_c0_program_local(program, expression->value.compound_literal.local_id);
-        if (local != NULL && local->is_array) {
-            resolved.element_type = expression->type;
-            resolved.element_count = local->element_count;
-            resolved.is_zero_length = local->is_zero_length_array;
-            resolved.is_incomplete = local->element_count == 0U && !resolved.is_zero_length;
+        if (minic_c0_local_array_object_info(
+                program, expression->value.compound_literal.local_id, &resolved)) {
+            if (!expression_array_qualified_shape(program, expression, &resolved)) return false;
             if (info != NULL) {
                 *info = resolved;
             }
@@ -1689,19 +1767,8 @@ bool minic_c0_expression_array_object_info(const MinicC0Program *program,
         }
     }
     if (expression->kind == MINIC_EXPRESSION_LOCAL) {
-        const MinicLocal *local;
-
-        local = minic_c0_program_local(program, expression->value.local_id);
-        if (local != NULL && local->is_array) {
-            resolved.element_type = expression->type;
-            resolved.element_count = local->element_count;
-            /* A parsed `T local[0]` owns a complete GNU zero-sized array.
-               Keep only a not-yet-materialized VLA incomplete here. */
-            resolved.is_zero_length = local->is_zero_length_array;
-            resolved.is_incomplete = local->element_count == 0U && !resolved.is_zero_length;
-        } else if (!minic_type_is_array(expression->type)) {
-            return false;
-        } else if (!minic_c0_materialized_array_object_info(program, expression->type, &resolved)) {
+        if (!minic_c0_local_array_object_info(
+                program, expression->value.local_id, &resolved)) {
             return false;
         }
     } else if (expression->kind == MINIC_EXPRESSION_MEMBER) {
@@ -1710,14 +1777,9 @@ bool minic_c0_expression_array_object_info(const MinicC0Program *program,
 
         record = minic_c0_program_record(program, expression->value.member.record_id);
         field = minic_c0_record_field(record, expression->value.member.field_index);
-        if (field != NULL && field->is_array) {
-            resolved.element_type = expression->type;
-            resolved.element_count = field->element_count;
-            resolved.is_incomplete = field->is_flexible_array;
-            resolved.is_zero_length = field->is_zero_length_array;
-        } else if (!minic_type_is_array(expression->type)) {
-            return false;
-        } else if (!minic_c0_materialized_array_object_info(program, expression->type, &resolved)) {
+        if (field == NULL || !minic_c0_record_field_array_object_info(
+                program, expression->value.member.record_id,
+                expression->value.member.field_index, &resolved)) {
             return false;
         }
     } else if (minic_type_is_array(expression->type)) {
@@ -1729,6 +1791,7 @@ bool minic_c0_expression_array_object_info(const MinicC0Program *program,
     } else {
         return false;
     }
+    if (!expression_array_qualified_shape(program, expression, &resolved)) return false;
     if (info != NULL) {
         *info = resolved;
     }
@@ -1831,7 +1894,8 @@ static bool minic_c0_record_value_is_copy_source_bounded(const MinicC0Program *p
                base->value_category == MINIC_VALUE_RVALUE &&
                minic_type_is_record(base->type) &&
                base->type.record_id == expression->value.member.record_id &&
-               field != NULL && !field->is_array && !field->is_bit_field &&
+               field != NULL && !minic_c0_record_field_array_info(program, field, NULL) &&
+               !field->is_bit_field &&
                minic_type_is_record(field->type) &&
                field->type.record_id == expression->type.record_id &&
                minic_c0_record_value_is_copy_source_bounded(
@@ -2255,7 +2319,8 @@ bool minic_c0_fixed_parameter_abi_type(const MinicC0Program *program,
         return false;
     }
     first_field = minic_c0_record_field(record, 0U);
-    if (first_field == NULL || first_field->is_array || first_field->is_bit_field ||
+    if (first_field == NULL || minic_c0_record_field_array_info(program, first_field, NULL) ||
+        first_field->is_bit_field ||
         !minic_type_is_pointer(first_field->type)) {
         return false;
     }
@@ -2287,7 +2352,8 @@ bool minic_c0_fixed_call_argument_compatible(const MinicC0Program *program,
         const MinicRecordField *field;
 
         field = minic_c0_record_field(record, field_index);
-        if (field == NULL || field->is_array || field->is_bit_field ||
+        if (field == NULL || minic_c0_record_field_array_info(program, field, NULL) ||
+            field->is_bit_field ||
             !minic_type_is_pointer(field->type)) {
             return false;
         }

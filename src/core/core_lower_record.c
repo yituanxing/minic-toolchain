@@ -289,8 +289,9 @@ static MinicCoreLowerStatus lower_abi_cursor_scalar_record_va_arg(
         expression->value.unary.operand == MINIC_EXPRESSION_INVALID)
         return MINIC_CORE_LOWER_UNSUPPORTED;
     field = &record->fields[0];
-    if (field->is_array || field->is_bit_field || field->is_flexible_array ||
-        field->is_zero_length_array || field->is_anonymous_member ||
+    if (minic_c0_record_field_array_object_info(
+            context->body->program, record_type.record_id, 0U, NULL) ||
+        field->is_bit_field || field->is_anonymous_member ||
         (!minic_type_is_integer(field->type) &&
          !minic_type_is_pointer(field->type) &&
          !minic_type_is_double(field->type)) ||
@@ -501,7 +502,10 @@ MinicCoreLowerStatus minic_core_lower_internal_record_materialized_address(
             base->value_category != MINIC_VALUE_RVALUE ||
             !minic_type_is_record(base->type) ||
             base->type.record_id != expression->value.member.record_id ||
-            !minic_type_is_record(field->type) || field->is_array ||
+            !minic_type_is_record(field->type) ||
+            minic_c0_record_field_array_object_info(
+                context->body->program, expression->value.member.record_id,
+                expression->value.member.field_index, NULL) ||
             field->type.record_id != expression->type.record_id)
             return MINIC_CORE_LOWER_UNSUPPORTED;
         status = minic_core_lower_internal_record_materialized_address(

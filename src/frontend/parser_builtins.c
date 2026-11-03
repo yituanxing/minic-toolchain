@@ -408,8 +408,13 @@ static bool parse_offsetof_member_segment(MinicParser *parser,
     if (final_field == NULL || !minic_parser_advance(parser)) {
         return false;
     }
-    state->type = final_field->type;
-    state->is_array = final_field->is_array;
+    {
+        MinicArrayObjectInfo array_info;
+
+        state->is_array = minic_c0_record_field_array_info(
+            parser->program, final_field, &array_info);
+        state->type = state->is_array ? array_info.element_type : final_field->type;
+    }
     return true;
 }
 
@@ -753,23 +758,30 @@ static bool object_extent_direct_object(const MinicParser *parser,
     }
     if (expression->kind == MINIC_EXPRESSION_LOCAL) {
         const MinicLocal *local;
+        MinicArrayObjectInfo array_info;
         size_t element_size;
 
         local = minic_c0_program_local(parser->program, expression->value.local_id);
         if (local == NULL) {
             return false;
         }
-        if (!local->is_array) {
+        if (!minic_c0_local_array_object_info(
+                parser->program, expression->value.local_id, &array_info)) {
             return minic_target_info_sizeof_type(
                 parser->target_info, parser->program, local->type, extent);
         }
-        if (local->element_count == 0U ||
+        if (array_info.has_materialized_type) {
+            return minic_target_info_sizeof_type(
+                parser->target_info, parser->program, local->type, extent);
+        }
+        if (array_info.element_count == 0U ||
             !minic_target_info_sizeof_type(
-                parser->target_info, parser->program, local->type, &element_size) ||
-            element_size > SIZE_MAX / local->element_count) {
+                parser->target_info, parser->program,
+                array_info.element_type, &element_size) ||
+            element_size > SIZE_MAX / array_info.element_count) {
             return false;
         }
-        *extent = element_size * local->element_count;
+        *extent = element_size * array_info.element_count;
         return true;
     }
     if (expression->kind == MINIC_EXPRESSION_GLOBAL_OBJECT) {

@@ -172,7 +172,11 @@ static bool import_record(MinicCoreTypeImporter *importer, MinicType source,
     for (i = 0U; i < record->field_count; ++i) {
         const MinicRecordField *field = &record->fields[i];
         MinicCoreTypeId field_type;
+        MinicArrayObjectInfo array_info;
+        bool field_array;
         size_t field_size, field_alignment;
+        field_array = minic_c0_record_field_array_object_info(
+            importer->program, source.record_id, i, &array_info);
         if (!import_type(importer, field->type, &field_type, depth + 1U) ||
             !minic_data_layout_type(importer->layout, importer->program,
                                     field->type, &field_size, &field_alignment) ||
@@ -180,18 +184,18 @@ static bool import_record(MinicCoreTypeImporter *importer, MinicType source,
                                                    record, i, &fields[i].byte_offset,
                                                    &fields[i].bit_offset))
             goto failed;
-        if (field->is_array) {
+        if (field_array && !array_info.has_materialized_type) {
             size_t array_size = 0U;
-            size_t count = field->element_count;
-            bool layout_known = !field->is_flexible_array;
+            size_t count = array_info.element_count;
+            bool layout_known = !array_info.is_incomplete;
             if (count == 0U) goto failed;
             if (layout_known) {
-                if (field->is_zero_length_array) array_size = 0U;
+                if (array_info.is_zero_length) array_size = 0U;
                 else if (field_size > SIZE_MAX / count) goto failed;
                 else array_size = field_size * count;
             }
-            if (!import_array(importer, field->type, count, field->is_zero_length_array,
-                              !field->is_flexible_array, array_size, field_alignment,
+            if (!import_array(importer, field->type, count, array_info.is_zero_length,
+                              !array_info.is_incomplete, array_size, field_alignment,
                               layout_known, &field_type, depth + 1U))
                 goto failed;
         }
@@ -199,8 +203,8 @@ static bool import_record(MinicCoreTypeImporter *importer, MinicType source,
         fields[i].is_bit_field = field->is_bit_field;
         fields[i].bit_width = field->is_bit_field ? field->bit_width : 0U;
         fields[i].is_packed = field->is_packed;
-        fields[i].is_flexible_array = field->is_flexible_array;
-        fields[i].is_zero_length_array = field->is_zero_length_array;
+        fields[i].is_flexible_array = field_array && array_info.is_incomplete;
+        fields[i].is_zero_length_array = field_array && array_info.is_zero_length;
         if (field->is_bit_field) {
             if (!bit_field_storage_alignment(record, field, field_alignment,
                                              &fields[i].alignment)) goto failed;

@@ -303,7 +303,8 @@ bool minic_core_local_fact_possible_one_bits(
     }
     local = minic_c0_program_local(context->body->program, local_id);
     fact = &context->local_integer_constants[index];
-    if (local == NULL || local->is_array ||
+    if (local == NULL || minic_c0_local_array_object_info(
+            context->body->program, local_id, NULL) ||
         !minic_type_is_integer(local->type) ||
         minic_type_is_bool_integer(local->type) ||
         minic_type_is_volatile(local->type) || fact->escaped ||
@@ -331,7 +332,8 @@ bool minic_core_local_fact_or_constant(
     }
     local = minic_c0_program_local(context->body->program, local_id);
     fact = &context->local_integer_constants[index];
-    if (local == NULL || local->is_array ||
+    if (local == NULL || minic_c0_local_array_object_info(
+            context->body->program, local_id, NULL) ||
         !minic_type_is_integer(local->type) ||
         minic_type_is_bool_integer(local->type) ||
         minic_type_is_volatile(local->type) || fact->escaped ||
@@ -367,7 +369,9 @@ bool minic_core_local_fact_nonnegative_range_get(
         !minic_core_local_fact_index(context, local_id, &index)) return false;
     local = minic_c0_program_local(context->body->program, local_id);
     fact = &context->local_integer_constants[index];
-    if (local == NULL || local->is_array || !minic_type_is_integer(local->type) ||
+    if (local == NULL || minic_c0_local_array_object_info(
+            context->body->program, local_id, NULL) ||
+        !minic_type_is_integer(local->type) ||
         minic_type_is_bool_integer(local->type) ||
         minic_type_is_volatile(local->type) || fact->escaped ||
         !minic_target_info_integer_width(context->target,
@@ -403,7 +407,9 @@ bool minic_core_local_fact_nonnegative_range_set(
         !minic_core_local_fact_index(context, local_id, &index)) return false;
     local = minic_c0_program_local(context->body->program, local_id);
     fact = &context->local_integer_constants[index];
-    if (local == NULL || local->is_array || !minic_type_is_integer(local->type) ||
+    if (local == NULL || minic_c0_local_array_object_info(
+            context->body->program, local_id, NULL) ||
+        !minic_type_is_integer(local->type) ||
         minic_type_is_bool_integer(local->type) ||
         minic_type_is_volatile(local->type) || fact->escaped ||
         !minic_target_info_integer_width(context->target,
@@ -433,7 +439,9 @@ void minic_core_local_null_pointer_set(MinicCoreLowerContext *context,
         return;
     }
     local = minic_c0_program_local(context->body->program, local_id);
-    if (local == NULL || local->is_array || minic_type_is_volatile(local->type) ||
+    if (local == NULL || minic_c0_local_array_object_info(
+            context->body->program, local_id, NULL) ||
+        minic_type_is_volatile(local->type) ||
         !minic_type_is_pointer(local->type)) {
         context->local_integer_constants[index].known = false;
         return;
@@ -455,7 +463,9 @@ bool minic_core_local_null_pointer_get(const MinicCoreLowerContext *context,
         return false;
     }
     local = minic_c0_program_local(context->body->program, local_id);
-    return local != NULL && !local->is_array && !minic_type_is_volatile(local->type) &&
+    return local != NULL && !minic_c0_local_array_object_info(
+               context->body->program, local_id, NULL) &&
+           !minic_type_is_volatile(local->type) &&
            minic_type_is_pointer(local->type) &&
            minic_type_is_integer(context->local_integer_constants[index].value.type) &&
            context->local_integer_constants[index].value.bits == 0U;

@@ -144,7 +144,10 @@ static MinicCoreLowerStatus lower_record_call_argument_object(
             const MinicRecordField *candidate;
 
             candidate = minic_c0_record_field(record, field_index);
-            if (candidate == NULL || candidate->is_array || candidate->is_bit_field ||
+            if (candidate == NULL ||
+                minic_c0_record_field_array_object_info(
+                    context->body->program, parameter_type.record_id,
+                    field_index, NULL) || candidate->is_bit_field ||
                 !minic_type_is_pointer(candidate->type)) {
                 return MINIC_CORE_LOWER_UNSUPPORTED;
             }
