@@ -63,6 +63,7 @@ typedef struct MiniAsInstructionFragment {
 
 typedef struct MiniAsAlignmentFragment {
     uint64_t alignment;
+    bool linker_relaxable; /* fixed worst-case reservation for the linker */
     bool has_fill;
     unsigned char fill;
     bool has_max_skip;

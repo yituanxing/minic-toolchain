@@ -233,6 +233,26 @@ jobs:
           command -v riscv64-linux-gnu-objcopy
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
             bash tests/assembler/probe-rv-site-mapping-gnu.sh
+      - name: GNU RV32/RV64 explicit Link Relaxation and final ld alignment
+        run: |
+          command -v riscv64-linux-gnu-as
+          command -v riscv64-linux-gnu-ld
+          REQUIRE_ALL_GNU=1 MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-rv-link-relax-gnu.sh
+      - name: TargetSpec to lexical relaxation mode across all four backends
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-link-relax-targetspec-cli.sh
+      - name: GNU LoongArch link-relaxable ALIGN and lexical option-site ownership
+        run: |
+          command -v loongarch64-linux-gnu-as
+          command -v loongarch64-linux-gnu-ld
+          REQUIRE_ALL_GNU=1 MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-loong-align-relax-gnu.sh
+      - name: GNU RISC-V and LoongArch DWARF line programs survive linker relaxation
+        run: |
+          REQUIRE_ALL_GNU=1 MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-dwarf-line-linker-relax-gnu.sh
       - name: GNU RVC compressed nop and ret are frozen at each lexical option site
         run: |
           command -v riscv64-linux-gnu-as

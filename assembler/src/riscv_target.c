@@ -30,6 +30,13 @@ static bool riscv_emit_code_alignment(MiniAsCodeAlignSink *sink,
         minias_code_align_error(sink, "internal:riscv-alignment-site-missing");
         return false;
     }
+    /* GNU's relaxable code alignment is a fixed worst-case NOP reservation
+     * whose entire extent may be deleted by ld. Its RELA addend is exactly
+     * that span, not the ordinary current-offset padding requirement. The
+     * marker and NOP bytes commit atomically through one ALIGN Fragment. */
+    if (owner->linker_relaxable &&
+        !minias_code_align_fixup_abs0(sink,MINIAS_FIXUP_RV_ALIGN,(int64_t)size))
+        return false;
     /* GNU GAS treats .option norvc as a source-instruction compression mode.
      * A prior C16 instruction can still leave a 2-byte gap which code
      * alignment must fill with C.NOP after switching to norvc.  The ISA
@@ -115,7 +122,9 @@ static const struct {
     {MINIAS_FIXUP_RV_LO12_S, 4U, MINIAS_R_RISCV_LO12_S},
     {MINIAS_FIXUP_RV_BRANCH, 4U, MINIAS_R_RISCV_BRANCH},
     {MINIAS_FIXUP_RV_RVC_BRANCH, 2U, MINIAS_R_RISCV_RVC_BRANCH},
-    {MINIAS_FIXUP_RV_RVC_JUMP, 2U, MINIAS_R_RISCV_RVC_JUMP}
+    {MINIAS_FIXUP_RV_RVC_JUMP, 2U, MINIAS_R_RISCV_RVC_JUMP},
+    {MINIAS_FIXUP_RV_RELAX, 0U, MINIAS_R_RISCV_RELAX},
+    {MINIAS_FIXUP_RV_ALIGN, 0U, MINIAS_R_RISCV_ALIGN}
 };
 
 static bool riscv_lookup_fixup_form(MiniAsFixupKind kind, unsigned width,
@@ -658,9 +667,8 @@ static uint64_t riscv_arch_add_feature_option(const char *args) {
 }
 
 /* One option-state transition function for both legacy and explicit ISA
- * modes. Unsupported modifiers are errors, not ignored compatibility input:
- * in particular GNU .option relax needs R_RISCV_RELAX / R_RISCV_ALIGN
- * relocation contracts that this Target has not implemented. */
+ * modes. Positive linker relaxation is a lexical permission captured in the
+ * same site snapshot as RVC, and push/pop restores both simultaneously. */
 static bool riscv_target_directive(MiniAsDirectiveContext *ctx, const char *op,
                                    const char *args, size_t line, bool *handled) {
     MiniAsRiscvState *state=minias_directive_target_state(ctx);
@@ -716,9 +724,15 @@ static bool riscv_target_directive(MiniAsDirectiveContext *ctx, const char *op,
          * Keep the target-owned bit even though this assembler does not
          * yet publish general R_RISCV_RELAX instruction markers. */
         state->options|=MINIAS_RISCV_OPTION_NO_RELAX;
+        state->options&=~(uint32_t)MINIAS_RISCV_OPTION_MARK_RELAX;
+    } else if(strcmp(args,"relax")==0) {
+        /* The immutable instruction site selects the GNU R_RISCV_RELAX
+         * contract.  The state bit also determines the relaxable alignment
+         * planning path and is restored through ordinary .option pop. */
+        state->options&=~(uint32_t)MINIAS_RISCV_OPTION_NO_RELAX;
+        state->options|=MINIAS_RISCV_OPTION_MARK_RELAX;
     } else {
-        /* A positive relax request cannot silently produce nonrelaxable
-         * CALL/HI20/ALIGN relocations. */
+        /* Unknown ISA/mode modifiers still fail closed. */
         goto unsupported;
     }
     return true;
@@ -1050,6 +1064,22 @@ static bool riscv_leb128_relocations_enabled(MiniAsTargetABIView view) {
            (state->options & MINIAS_RISCV_OPTION_NO_RELAX)==0U;
 }
 
+/* GNU RISC-V GAS preserves relocation-backed DW_LNS_fixed_advance_pc
+ * differences even under -mno-relax.  The two address anchors must reach
+ * the ELF writer as R_RISCV_ADD16 / R_RISCV_SUB16 rather than folding to a
+ * prematurely fixed assembler-time number. */
+static bool riscv_dwarf_line_difference_relocations(MiniAsTargetABIView view) {
+    (void)view;
+    return true;
+}
+
+/* GNU ld may remove instruction spans marked RELAX or NOP runs marked
+ * ALIGN. Every CFI advance crossing either kind needs a link-resolved
+ * address delta, even when the assembler has already found both symbols. */
+static bool riscv_cfi_linker_relaxation_marker(MiniAsFixupKind kind) {
+    return kind==MINIAS_FIXUP_RV_RELAX || kind==MINIAS_FIXUP_RV_ALIGN;
+}
+
 /* GNU RISC-V GAS retains the two source-label identities in the deferred
  * R_RISCV_SET_ULEB128/SUB_ULEB128 pair.  The linker may relax instructions
  * between those anchors; turning either operand into STT_SECTION + addend
@@ -1081,6 +1111,10 @@ static bool riscv_init_target_state(const MiniAsTargetSpec *config,
         return false;
     }
     state->target_xlen = config->layout.address_size == 4U ? 32U : 64U;
+    if(config->link_relax_mode==1U)
+        state->options|=MINIAS_RISCV_OPTION_MARK_RELAX;
+    else if(config->link_relax_mode==2U)
+        state->options|=MINIAS_RISCV_OPTION_NO_RELAX;
     if (config->profile_size != 0U) {
         memcpy(&profile, config->profile, sizeof(profile));
         if (profile.elf32 != (config->layout.address_size == 4U) ||
@@ -1146,6 +1180,8 @@ static void riscv_capture_site_state(const void *target_state,
     const MiniAsRiscvState *state=target_state;
     site->mode_bits = state->options |
         (state->rvc_option_seen ? MINIAS_RISCV_SITE_EVER_RVC : 0U);
+    if(minias_riscv_site_compression_enabled(state,site->mode_bits))
+        site->provenance_bits|=MINIAS_RISCV_SITE_EFFECTIVE_RVC;
     if(strcmp(stmt->op,".insn")==0)
         site->provenance_bits|=MINIAS_RISCV_SITE_INSN_DATA;
 }
@@ -1157,6 +1193,24 @@ static unsigned riscv_default_exec_alignment_for_site(
                                               state != NULL ? state->options : 0U))
         return 2U;
     return 4U;
+}
+
+/* GNU GAS riscv_frag_align_code(): with .option relax, a no-fill code
+ * alignment larger than the lexical IALIGN always reserves N-IALIGN bytes,
+ * independent of the current offset. The linker can remove excess NOPs.
+ * The caller already classifies executable/no-fill source alignments;
+ * max_skip is deliberately not applied to this GNU relax path. */
+static bool riscv_plan_code_alignment(const MiniAsCodeAlignmentView *view,
+                                      MiniAsCodeAlignmentPlan *plan) {
+    uint64_t instruction_alignment;
+    if(view==NULL || plan==NULL || !view->code_nops || view->has_fill ||
+       (view->site.mode_bits & MINIAS_RISCV_OPTION_MARK_RELAX)==0U)
+        return false;
+    instruction_alignment=(view->site.provenance_bits &
+                           MINIAS_RISCV_SITE_EFFECTIVE_RVC)!=0U?2U:4U;
+    if(view->alignment<=instruction_alignment)return false;
+    plan->reserved_size=view->alignment-instruction_alignment;
+    return true;
 }
 
 /* GNU GAS riscv_frag_align_code() short-circuits md_do_align when the
@@ -1222,9 +1276,14 @@ static const MiniAsTargetOps riscv_ops = {
     .measure_mcinst = minias_riscv_measure_mcinst,
     .encode = minias_riscv_encode,
     .plan_instruction_relaxation = riscv_plan_instruction_relaxation,
+    .plan_code_alignment=riscv_plan_code_alignment,
+    .supports_link_relax_cli=true,
     .append_code_alignment = riscv_emit_code_alignment,
     .leb128_reloc_mode = 2U, /* psABI SET_ULEB128/SUB_ULEB128 */
     .leb128_relocations_enabled=riscv_leb128_relocations_enabled,
+    .cfi_linker_relaxation_marker=riscv_cfi_linker_relaxation_marker,
+    .dwarf_line_fixed_advance=true,
+    .dwarf_line_difference_relocations=riscv_dwarf_line_difference_relocations,
     .validate_output = strict_base_i_check_sections,
     .finalize_output = riscv_record_object_mapping_symbols,
     /* RV64 DWARF register numbering: ra=x1, sp=x2; DW_CFA code unit

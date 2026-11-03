@@ -2330,6 +2330,41 @@ bool minias_riscv_parse_mcinst(MiniAsParseContext *ctx, MiniAsParseInstruction *
 /* Typed variable-size RISC-V fragments: source operands were parsed once.
  * Layout owns size; this Target writes instructions and stages relocations
  * from MCInst, without reopening source or mutating final symbols/fixups. */
+static bool rv_fixup_allows_link_relaxation(MiniAsFixupKind kind) {
+    /* Match GNU GAS md_apply_fix: not every symbol-bearing instruction is a
+     * linker optimization site. A raw GOT_HI20 is not relaxable, whereas
+     * GOT_HI20 produced by the la/lga pseudoinstruction is (handled below).
+     * JAL and branch fixups retain their primary relocation without RELAX. */
+    switch (kind) {
+    case MINIAS_FIXUP_RV_CALL_PLT:
+    case MINIAS_FIXUP_RV_HI20:
+    case MINIAS_FIXUP_RV_LO12_I:
+    case MINIAS_FIXUP_RV_LO12_S:
+    case MINIAS_FIXUP_RV_PCREL_HI20:
+    case MINIAS_FIXUP_RV_PCREL_LO12_I:
+    case MINIAS_FIXUP_RV_PCREL_LO12_S:
+        return true;
+    default:
+        return false;
+    }
+}
+
+/* A primary relocation and its zero-width STN_UNDEF=0 RELAX companion are
+ * one MCInst transaction. The immutable site state, not the final mutable
+ * TargetContext, determines which source instructions opted into GNU linker
+ * shortening. CFI and DWARF can then query the resulting fixup spans. */
+static bool rv_encode_symbol_fixup(MiniAsEncodeContext *ctx,
+                                   const MiniAsInstructionView *stmt,
+                                   uint64_t offset, MiniAsFixupKind kind,
+                                   unsigned width, MiniAsSymbolRef ref,
+                                   bool section_symbol) {
+    if (!minias_encode_ctx_fixup_ref(ctx,offset,kind,width,ref,
+                                    section_symbol)) return false;
+    return (stmt->site.mode_bits & MINIAS_RISCV_OPTION_MARK_RELAX)==0U ||
+           !rv_fixup_allows_link_relaxation(kind) ||
+           minias_encode_ctx_fixup_abs0(ctx,offset,MINIAS_FIXUP_RV_RELAX,0U);
+}
+
 static bool rv_encode_multi_mc(MiniAsEncodeContext *ctx, const MiniAsInstructionView *stmt) {
     const MiniAsMCInstView *m = stmt->inst;
     const MiniAsRiscvState *state=minias_encode_ctx_target_state(ctx);
@@ -2373,7 +2408,7 @@ static bool rv_encode_multi_mc(MiniAsEncodeContext *ctx, const MiniAsInstruction
             minias_encode_ctx_error(ctx, "internal:riscv-call-modifier");
             return false;
         }
-        return minias_encode_ctx_fixup_ref(ctx, stmt->offset,
+        return rv_encode_symbol_fixup(ctx,stmt,stmt->offset,
                                 MINIAS_FIXUP_RV_CALL_PLT, 4U, *expr, false);
     }
 
@@ -2410,7 +2445,9 @@ static bool rv_encode_multi_mc(MiniAsEncodeContext *ctx, const MiniAsInstruction
          * GNU retains relocations even for an ELF STB_LOCAL named source
          * symbol: only its disposable .L temporary labels are folded.
          * Do not fold weak, named, mutable, aliased or cross-section refs. */
-        if (!pic_la && target != NULL && target->defined &&
+        if (!pic_la &&
+            (stmt->site.mode_bits & MINIAS_RISCV_OPTION_MARK_RELAX)==0U &&
+            target != NULL && target->defined &&
             target->section == stmt->section &&
             target->bind == MINIAS_SYMBOL_BINDING_LOCAL && !target->alias_pending &&
             target->name != NULL && target->name[0] == '.' &&
@@ -2451,11 +2488,18 @@ static bool rv_encode_multi_mc(MiniAsEncodeContext *ctx, const MiniAsInstruction
                                       2U : 3U, rd, 0))) return false;
         } else if (!append_u32(ctx,
                                enc_i(0x13U, rd, 0U, rd, 0))) return false;
-        return minias_encode_ctx_fixup_ref(ctx, stmt->offset,
+        return rv_encode_symbol_fixup(ctx,stmt,stmt->offset,
                                 use_got ? MINIAS_FIXUP_RV_GOT_HI20 :
                                           MINIAS_FIXUP_RV_PCREL_HI20,
                                 4U, *expr, false) &&
-               minias_encode_ctx_fixup_ref(ctx,
+               /* GNU GAS marks only la/lga-generated GOT_HI20 with RELAX,
+                * not hand-written auipc %got_pcrel_hi(...).  This bit is
+                * carried by the pseudo opcode rather than relocation kind. */
+               (!use_got ||
+                (stmt->site.mode_bits & MINIAS_RISCV_OPTION_MARK_RELAX)==0U ||
+                minias_encode_ctx_fixup_abs0(ctx,stmt->offset,
+                                             MINIAS_FIXUP_RV_RELAX,0U)) &&
+               rv_encode_symbol_fixup(ctx,stmt,
                                 stmt->offset + 4U,
                                 MINIAS_FIXUP_RV_PCREL_LO12_I, 4U, anchor,
                                 false);
@@ -2534,7 +2578,7 @@ static bool rv_encode_mcinst(MiniAsEncodeContext *ctx, const MiniAsInstructionVi
         return append_u16(ctx,bits) &&
                minias_encode_ctx_record_target_feature(
                    ctx,RV_OUTPUT_USED_COMPRESSED) &&
-               minias_encode_ctx_fixup_ref(ctx,stmt->offset,
+               rv_encode_symbol_fixup(ctx,stmt,stmt->offset,
                                             fixup,2U,*symbol,false);
     }
     int rd=(int)m->operands[0].reg,rs1=0;
@@ -2564,10 +2608,10 @@ static bool rv_encode_mcinst(MiniAsEncodeContext *ctx, const MiniAsInstructionVi
                         0x17U | ((uint32_t)rs1 << 7U)) ||
             !append_u32(ctx, second))
             return false;
-        return minias_encode_ctx_fixup_ref(ctx, stmt->offset,
+        return rv_encode_symbol_fixup(ctx,stmt,stmt->offset,
                                 MINIAS_FIXUP_RV_PCREL_HI20, 4U, *ref,
                                 false) &&
-               minias_encode_ctx_fixup_ref(ctx,
+               rv_encode_symbol_fixup(ctx,stmt,
                                 stmt->offset + 4U,
                                 load ? MINIAS_FIXUP_RV_PCREL_LO12_I :
                                        MINIAS_FIXUP_RV_PCREL_LO12_S,
@@ -2584,7 +2628,7 @@ static bool rv_encode_mcinst(MiniAsEncodeContext *ctx, const MiniAsInstructionVi
             }
             return append_u32(ctx,
                               enc_j(rd,branch.displacement)) &&
-                   minias_encode_ctx_fixup_ref(ctx,stmt->offset,
+                   rv_encode_symbol_fixup(ctx,stmt,stmt->offset,
                               MINIAS_FIXUP_RV_JAL,4U,*expr,false);
         }
         if(stmt->size==8U){
@@ -2602,7 +2646,7 @@ static bool rv_encode_mcinst(MiniAsEncodeContext *ctx, const MiniAsInstructionVi
             return append_u32(ctx,
                        enc_b((base>>12U &7U)^1U,rd,rs1,8)) &&
                    append_u32(ctx,enc_j(0,jal_displacement)) &&
-                   minias_encode_ctx_fixup_ref(ctx,
+                   rv_encode_symbol_fixup(ctx,stmt,
                        stmt->offset+4U,MINIAS_FIXUP_RV_JAL,4U,*expr,false);
         }
         if(!branch.local || !branch.short_legal){
@@ -2613,7 +2657,7 @@ static bool rv_encode_mcinst(MiniAsEncodeContext *ctx, const MiniAsInstructionVi
         return append_u32(ctx,
                           enc_b((base>>12U)&7U,rd,rs1,
                                 branch.displacement)) &&
-               minias_encode_ctx_fixup_ref(ctx,stmt->offset,
+               rv_encode_symbol_fixup(ctx,stmt,stmt->offset,
                            MINIAS_FIXUP_RV_BRANCH,4U,*expr,false);
     } else if(!rv_scalar_machine_word(m,true,&code)) {
         minias_encode_ctx_error(ctx,"unknown-riscv-mcinst");
@@ -2664,7 +2708,7 @@ static bool rv_encode_mcinst(MiniAsEncodeContext *ctx, const MiniAsInstructionVi
                    ((addend_low >> 5U) << 25U);
         }
         if (!append_u32(ctx, code)) return false;
-        return minias_encode_ctx_fixup_ref(ctx,stmt->offset,
+        return rv_encode_symbol_fixup(ctx,stmt,stmt->offset,
                                             kind,4U,*symbol,false);
     }
     return append_u32(ctx,code);

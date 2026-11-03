@@ -84,9 +84,19 @@ typedef struct {
     uint32_t abi;
     LaMnemonicEntry *mnemonics;
     size_t mnemonic_count;
+    /* GNU GAS defaults to -mrelax; .option stores a lexical, not file-wide,
+     * change. Common captures this bit on every retained MCFragment. */
+    bool relax;
+    bool *option_stack;
+    size_t option_depth;
+    size_t option_capacity;
     bool *relaxable_sections;
     size_t relaxable_section_count;
 } LaTargetState;
+
+enum {
+    LA_SITE_RELAX = 1U << 0
+};
 
 #define LA_COUNT(a) (sizeof(a)/sizeof((a)[0]))
 
@@ -512,9 +522,11 @@ static bool la_valid_lowering_plan(const MiniAsMCInstView *inst) {
          (inst->opcode==LA_MC_LI64_SEQUENCE &&
           inst->target_form==LA_FORM_LI_D && plan->fixup_count==0U) ||
          (inst->opcode==LA_MC_PCREL_PSEUDO &&
-          inst->target_form==LA_FORM_PCREL && plan->fixup_count==4U) ||
+          inst->target_form==LA_FORM_PCREL &&
+          (plan->fixup_count==2U || plan->fixup_count==4U)) ||
          (inst->opcode==LA_MC_GOT_PSEUDO &&
-          inst->target_form==LA_FORM_GOT && plan->fixup_count==4U));
+          inst->target_form==LA_FORM_GOT &&
+          (plan->fixup_count==2U || plan->fixup_count==4U)));
 }
 
 static bool la_attach_lowering_plan(MiniAsParseContext *ctx,MiniAsMCInst *inst,
@@ -569,33 +581,40 @@ static bool la_plan_li_w(MiniAsParseContext *ctx,MiniAsMCInst *inst,
 static bool la_plan_address(MiniAsParseContext *ctx,MiniAsMCInst *inst,
                             unsigned destination,uint32_t second_opcode,
                             MiniAsFixupKind high_kind,
-                            MiniAsFixupKind low_kind,uint32_t form) {
+                            MiniAsFixupKind low_kind,uint32_t form,bool relax) {
     LaLoweringPlan plan={0};
     plan.count=2U;
     plan.words[0]=UINT32_C(0x1a000000)|destination;
     plan.words[1]=second_opcode|(destination<<5U)|destination;
-    plan.fixup_count=4U;
     plan.fixups[0].kind=high_kind;
     plan.fixups[0].symbol_operand=1U;
-    plan.fixups[1].kind=MINIAS_FIXUP_LARCH_RELAX;
-    plan.fixups[1].absolute_zero=true;
-    plan.fixups[2].word=1U;
-    plan.fixups[2].kind=low_kind;
-    plan.fixups[2].symbol_operand=1U;
-    plan.fixups[3].word=1U;
-    plan.fixups[3].kind=MINIAS_FIXUP_LARCH_RELAX;
-    plan.fixups[3].absolute_zero=true;
+    if(relax) {
+        plan.fixup_count=4U;
+        plan.fixups[1].kind=MINIAS_FIXUP_LARCH_RELAX;
+        plan.fixups[1].absolute_zero=true;
+        plan.fixups[2].word=1U;
+        plan.fixups[2].kind=low_kind;
+        plan.fixups[2].symbol_operand=1U;
+        plan.fixups[3].word=1U;
+        plan.fixups[3].kind=MINIAS_FIXUP_LARCH_RELAX;
+        plan.fixups[3].absolute_zero=true;
+    }else {
+        plan.fixup_count=2U;
+        plan.fixups[1].word=1U;
+        plan.fixups[1].kind=low_kind;
+        plan.fixups[1].symbol_operand=1U;
+    }
     inst->target_form=form;
     return la_attach_lowering_plan(ctx,inst,&plan);
 }
 
 static bool la_plan_pcrel(MiniAsParseContext *ctx,MiniAsMCInst *inst,
-                           unsigned destination) {
+                           unsigned destination,bool relax) {
     /* GNU GAS defaults to linker relaxation for la.local/la.pcrel.
      * Each PCALA relocation carries a matching R_LARCH_RELAX marker. */
     return la_plan_address(ctx,inst,destination,UINT32_C(0x02c00000),
                            MINIAS_FIXUP_LARCH_PCALA_HI20,
-                           MINIAS_FIXUP_LARCH_PCALA_LO12,LA_FORM_PCREL);
+                           MINIAS_FIXUP_LARCH_PCALA_LO12,LA_FORM_PCREL,relax);
 }
 
 /* Under GNU's ordinary LP64D code model, la.global is a GOT-address
@@ -604,10 +623,10 @@ static bool la_plan_pcrel(MiniAsParseContext *ctx,MiniAsMCInst *inst,
  * the instruction and relocation types differ despite sharing the same
  * two-word fragment and optional-linker-relaxation policy. */
 static bool la_plan_global_got(MiniAsParseContext *ctx,MiniAsMCInst *inst,
-                               unsigned destination) {
+                               unsigned destination,bool relax) {
     return la_plan_address(ctx,inst,destination,UINT32_C(0x28c00000),
                            MINIAS_FIXUP_LARCH_GOT_PC_HI20,
-                           MINIAS_FIXUP_LARCH_GOT_PC_LO12,LA_FORM_GOT);
+                           MINIAS_FIXUP_LARCH_GOT_PC_LO12,LA_FORM_GOT,relax);
 }
 
 /* One LoongArch-owned operand grammar for LSX and LASX.  The two vector
@@ -1774,7 +1793,8 @@ static bool la_parse(MiniAsParseContext *ctx,MiniAsParseInstruction *s) {
         m->count=2U;
         la_capture_gpr_operand(m,0U,rd);
         if(!(mnemonic->family==LA_MN_GOT ?
-             la_plan_global_got(ctx,m,rd) : la_plan_pcrel(ctx,m,rd)))goto fail;
+             la_plan_global_got(ctx,m,rd,(s->site.mode_bits&LA_SITE_RELAX)!=0U) :
+             la_plan_pcrel(ctx,m,rd,(s->site.mode_bits&LA_SITE_RELAX)!=0U)))goto fail;
         goto done;
     }
     if(mnemonic->family==LA_MN_PCREL ||
@@ -2103,6 +2123,7 @@ static bool la_prepare_layout(const MiniAsPreLayoutView *view,
         if(stmt.kind==MINIAS_FRAGMENT_INSTRUCTION &&
            stmt.section>=0 && (size_t)stmt.section<section_count &&
            stmt.has_instruction &&
+           (stmt.site.mode_bits&LA_SITE_RELAX)!=0U &&
            (stmt.instruction_opcode==LA_MC_PCREL_PSEUDO ||
             stmt.instruction_opcode==LA_MC_GOT_PSEUDO))
             sections[(size_t)stmt.section]=true;
@@ -2231,6 +2252,8 @@ static bool la_encode(MiniAsEncodeContext *ctx,const MiniAsInstructionView *s) {
         case LA_MC_BRANCH21:
         case LA_MC_BRANCH26: {
             LaBranchPlan branch;
+            const LaTargetState *state=minias_encode_ctx_target_state(ctx);
+            const bool emit_local_relocation=state==NULL || state->relax;
             bool linker_relaxable;
             kind=m->opcode==LA_MC_BRANCH16 ?
                  MINIAS_FIXUP_LARCH_B16 :
@@ -2272,7 +2295,8 @@ static bool la_encode(MiniAsEncodeContext *ctx,const MiniAsInstructionView *s) {
                  * a grown conditional branch, including same-section local
                  * targets in otherwise non-relaxable sections. The linker
                  * must retain that branch identity across object layout. */
-                return minias_encode_ctx_fixup_ref(ctx,s->offset+4U,
+                return !emit_local_relocation ||
+                       minias_encode_ctx_fixup_ref(ctx,s->offset+4U,
                               MINIAS_FIXUP_LARCH_B26,4U,
                               *m->operands[slot].bound_symbol,false);
             }
@@ -2300,7 +2324,8 @@ static bool la_encode(MiniAsEncodeContext *ctx,const MiniAsInstructionView *s) {
                  * label may move at link time irrespective of whether this
                  * section itself has a shrinkable PCALA sequence.  The
                  * existing B26 exemption remains a separate GNU policy. */
-                if(!linker_relaxable && kind==MINIAS_FIXUP_LARCH_B26)
+                if(!emit_local_relocation ||
+                   (!linker_relaxable && kind==MINIAS_FIXUP_LARCH_B26))
                     kind=MINIAS_FIXUP_NONE;
             }
             break;
@@ -2320,9 +2345,59 @@ static bool la_encode(MiniAsEncodeContext *ctx,const MiniAsInstructionView *s) {
     return minias_encode_ctx_fixup_ref(ctx,s->offset,kind,4U,
                                        *expr,false);
 }
+/* GNU 2.42 creates R_LARCH_ALIGN on executable no-fill directives in
+ * -mrelax mode and reserves the maximal possible run of removable NOPs.
+ * The linker then reduces it to the correct final padding after shrinking
+ * earlier instructions. The length must stay fixed across MCLayout passes. */
+static bool la_plan_code_alignment(const MiniAsCodeAlignmentView *site,
+                                   MiniAsCodeAlignmentPlan *plan) {
+    if(site==NULL || plan==NULL || !site->code_nops || site->has_fill ||
+       (site->site.mode_bits&LA_SITE_RELAX)==0U || site->alignment<=4U)
+        return false;
+    if((site->alignment&(site->alignment-1U))!=0U)return false;
+    plan->reserved_size=site->alignment-4U;
+    return true;
+}
+
+static bool la_skip_small_code_alignment(const void *target_state,
+                                          uint64_t alignment) {
+    const LaTargetState *state=target_state;
+    return state!=NULL && state->relax && alignment<=4U;
+}
+
 static bool la_align(MiniAsCodeAlignSink *sink,const MiniAsCodeAlignmentView *stmt,size_t size) {
     static const unsigned char nop[4]={0x00,0x00,0x40,0x03};
-    (void)stmt;
+    if(stmt->linker_relaxable) {
+        MiniAsSymbolRef anchor;
+        uint64_t addend;
+        unsigned exponent=0U;
+        uint64_t width=stmt->alignment;
+        if((stmt->site.mode_bits&LA_SITE_RELAX)==0U ||
+           !stmt->code_nops || stmt->has_fill || width<=4U ||
+           (width&(width-1U))!=0U || size!=width-4U) {
+            minias_code_align_error(sink,"invalid-loongarch-linker-align-site");
+            return false;
+        }
+        while(width>1U) {++exponent;width>>=1U;}
+        /* Original GNU GAS 2.42 uses a nonzero relocation symbol for both
+         * the plain and max-skip forms.  Its addend records align exponent
+         * in the low byte and max-skip count in the remaining bits.  Use a
+         * same-section synthetic anchor; GNU fixed cross-section reuse in
+         * 2024 but its older ld already accepts this correct local form. */
+        if(stmt->has_max_skip && stmt->max_skip>UINT64_C(0x7fffffffffffff)) {
+            minias_code_align_error(sink,"loongarch-align-maxskip-overflow");
+            return false;
+        }
+        addend=(stmt->has_max_skip ? stmt->max_skip<<8U : 0U)|exponent;
+        if(addend>INT64_MAX ||
+           !minias_code_align_anchor_ref(sink,"loong_relax_align",&anchor)) {
+            minias_code_align_error(sink,"invalid-loongarch-align-marker");
+            return false;
+        }
+        anchor.addend=(int64_t)addend;
+        if(!minias_code_align_fixup_ref(sink,MINIAS_FIXUP_LARCH_ALIGN,0U,anchor))
+            return false;
+    }
     if(size%4U){minias_code_align_error(sink,"unalignable-loongarch-code-gap");return false;}
     while(size){if(!minias_code_align_emit(sink,nop,4U))return false;size-=4U;}
     return true;
@@ -2353,6 +2428,60 @@ bad:
     if(cap)snprintf(err,cap,"unsupported-loongarch64-isa-abi");
     return false;
 }
+
+/* LoongArch gained scoped .option relax/norelax after GNU GAS 2.42.  Each
+ * option transition changes only private Target state, while Common keeps
+ * a source-site snapshot for later layout, fixups and alignment decisions. */
+static bool la_target_directive(MiniAsDirectiveContext *ctx,const char *op,
+                                const char *args,size_t line,bool *handled) {
+    LaTargetState *state=minias_directive_target_state(ctx);
+    bool *stack;
+    size_t capacity;
+    *handled=false;
+    if(strcmp(op,".option")!=0)return true;
+    *handled=true;
+    if(state==NULL) {
+        minias_directive_set_error(ctx,"missing-loongarch-option-state:line=%zu",line);
+        return false;
+    }
+    if(strcmp(args,"relax")==0)state->relax=true;
+    else if(strcmp(args,"norelax")==0)state->relax=false;
+    else if(strcmp(args,"push")==0) {
+        if(state->option_depth==state->option_capacity) {
+            capacity=state->option_capacity ? state->option_capacity*2U : 8U;
+            if(capacity<state->option_capacity ||
+               capacity>SIZE_MAX/sizeof(*stack))goto oom;
+            stack=realloc(state->option_stack,capacity*sizeof(*stack));
+            if(stack==NULL)goto oom;
+            state->option_stack=stack;
+            state->option_capacity=capacity;
+        }
+        state->option_stack[state->option_depth++]=state->relax;
+    }else if(strcmp(args,"pop")==0) {
+        if(state->option_depth==0U) {
+            minias_directive_set_error(ctx,"loongarch-option-stack-underflow:line=%zu",line);
+            return false;
+        }
+        state->relax=state->option_stack[--state->option_depth];
+    }else {
+        minias_directive_set_error(ctx,"unsupported-loongarch-option:%s:line=%zu",
+                                   args,line);
+        return false;
+    }
+    return true;
+oom:
+    minias_directive_set_error(ctx,"out-of-memory:loongarch-option-stack");
+    return false;
+}
+
+static void la_capture_site_state(const void *target_state,
+                                  const MiniAsSourceSiteView *source,
+                                  MiniAsTargetSiteState *site) {
+    const LaTargetState *state=target_state;
+    (void)source;
+    if(state!=NULL && state->relax)site->mode_bits|=LA_SITE_RELAX;
+}
+
 static bool la_init_target_state(const MiniAsTargetSpec *cfg,
                                  void **out_state,char *error,size_t error_capacity) {
     LaTargetState *state=calloc(1U,sizeof(*state));
@@ -2365,6 +2494,8 @@ static bool la_init_target_state(const MiniAsTargetSpec *cfg,
     }
     state->features=LA_FEATURE_LSX|LA_FEATURE_LASX;
     state->abi=3U; /* Default LP64D ABI, independent of object output policy. */
+    state->relax=true; /* GNU GAS defaults to -mrelax. */
+    if(cfg->link_relax_mode==2U)state->relax=false;
     if(cfg->profile_size!=0U) {
         if(cfg->profile_size!=sizeof(profile)) {
             free(state);
@@ -2395,6 +2526,7 @@ static void la_destroy_target_state(void *target_state) {
     LaTargetState *state=(LaTargetState *)target_state;
     if(state!=NULL) {
         free(state->mnemonics);
+        free(state->option_stack);
         free(state->relaxable_sections);
         free(state);
     }
@@ -2469,7 +2601,8 @@ static const struct {
     {MINIAS_FIXUP_LARCH_B16,4U,64U},
     {MINIAS_FIXUP_LARCH_B21,4U,65U},
     {MINIAS_FIXUP_LARCH_B26,4U,66U},
-    {MINIAS_FIXUP_LARCH_RELAX,4U,100U}
+    {MINIAS_FIXUP_LARCH_RELAX,4U,100U},
+    {MINIAS_FIXUP_LARCH_ALIGN,0U,102U}
 };
 
 static bool la_lookup_fixup_form(MiniAsFixupKind kind,unsigned width,
@@ -2495,7 +2628,19 @@ static uint32_t la_reloc(MiniAsTargetABIView view,MiniAsFixupKind kind,unsigned 
     return relocation;
 }
 static bool la_cfi_linker_relaxation_marker(MiniAsFixupKind kind) {
-    return kind==MINIAS_FIXUP_LARCH_RELAX;
+    /* GNU linker may delete part of a code ALIGN reservation just as it may
+     * shrink a PCALA pair. CFI span differences across either marker cannot
+     * be treated as assembly-time constants. */
+    return kind==MINIAS_FIXUP_LARCH_RELAX ||
+           kind==MINIAS_FIXUP_LARCH_ALIGN;
+}
+
+/* GNU's deferred ULEB and DWARF line-range relocation sweeps observe the
+ * final -mrelax/.option relax state. They are not determined by an earlier
+ * instruction's lexical snapshot (unlike R_LARCH_RELAX on its PCALA pair). */
+static bool la_final_linker_relaxation_enabled(MiniAsTargetABIView view) {
+    const LaTargetState *state=view.target_state;
+    return state==NULL || state->relax;
 }
 /* GNU LoongArch retains the original local label in linker-relaxable ULEB
  * ADD/SUB pairs.  Folding `.Lend` to STT_SECTION + offset loses the symbol
@@ -2523,13 +2668,20 @@ static const MiniAsTargetOps ops={
      * symbolic ULEB differences as ADD/SUB pairs in relax mode.  The newer
      * interval-sensitive policy remains available in Common mode 1. */
     .leb128_reloc_mode=3U,
+    .leb128_relocations_enabled=la_final_linker_relaxation_enabled,
+    .dwarf_line_difference_relocations=la_final_linker_relaxation_enabled,
     .resolve_profile=la_profile,.parse_mcinst=la_parse,
+    .parse_target_directive=la_target_directive,
     .init_target_state=la_init_target_state,
+    .capture_site_state=la_capture_site_state,
     .destroy_target_state=la_destroy_target_state,
     .prepare_layout=la_prepare_layout,
     .measure_mcinst=la_measure,.encode=la_encode,
     .plan_instruction_relaxation=la_plan_instruction_relaxation,
+    .plan_code_alignment=la_plan_code_alignment,
+    .supports_link_relax_cli=true,
     .append_code_alignment=la_align,
+    .skip_small_code_alignment=la_skip_small_code_alignment,
     .validate_output=la_validate,
     .cfi_implicit_eh_frame=true,
     .cfi_code_align=1U,
@@ -2544,6 +2696,7 @@ static const MiniAsTargetOps ops={
     .cfi_debug_length_relocations=true,
     .cfi_advance_reloc_mode=1U,
     .cfi_linker_relaxation_marker=la_cfi_linker_relaxation_marker,
+    .dwarf_line_fixed_advance=true,
     .default_exec_alignment=1U
 };
 const MiniAsTargetOps *minias_target_loongarch64(void){return &ops;}

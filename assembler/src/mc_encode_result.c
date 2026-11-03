@@ -51,6 +51,16 @@ bool minias_fixup_field_width(MiniAsFixupKind kind,unsigned width) {
            width==4U || width==8U;
 }
 
+bool minias_fixup_field_width_for_target(const MiniAs *as,
+                                         MiniAsFixupKind kind,unsigned width) {
+    if(minias_fixup_field_width(kind,width))return true;
+    return as!=NULL && kind>=0x1000U && width==0U &&
+           as->target!=NULL && as->target->elf_policy!=NULL &&
+           as->target->elf_policy->supports_fixup!=NULL &&
+           as->target->elf_policy->supports_fixup(minias_target_abi_view(as),
+                                                 kind,width);
+}
+
 /* MCData fixups used to bypass the instruction transaction and publish
  * Section-owned symbol references as the DATA loop ran. Stage them under the
  * same persistent source Fragment, keeping the original SymbolID or a
@@ -133,7 +143,14 @@ static bool stage_instruction_fixup(MiniAs *as,uint64_t offset,
     if(result==NULL)return false;
     owner=&as->stmts[as->emission->emitting_fragment_id];
     section=owner->section; /* Target cannot select another Section. */
-    if(owner->fragment_kind!=MINIAS_FRAGMENT_INSTRUCTION ||
+    if(owner->fragment_kind!=MINIAS_FRAGMENT_INSTRUCTION &&
+       !(owner->fragment_kind==MINIAS_FRAGMENT_ALIGNMENT &&
+         owner->payload.alignment.linker_relaxable)) {
+        minias_set_error(as,"encoded-fixup-non-machine-fragment:line=%zu",owner->line);
+        return false;
+    }
+    if((owner->fragment_kind==MINIAS_FRAGMENT_ALIGNMENT &&
+        (width!=0U || offset!=owner->offset)) ||
        (!absolute_zero_symbol &&
         (ref.name_id>=as->symbol_name_count ||
          as->symbol_names[ref.name_id].name==NULL)) ||
@@ -141,8 +158,10 @@ static bool stage_instruction_fixup(MiniAs *as,uint64_t offset,
        (size_t)section>=as->section_count ||
        as->sections[(size_t)section].type==MINIAS_SECTION_KIND_NOBITS ||
        offset<owner->offset ||
-       (absolute_zero_symbol ? width!=4U :
-        (width!=2U && width!=4U && width!=8U))) {
+       !minias_fixup_field_width_for_target(as,kind,width) ||
+       (owner->fragment_kind==MINIAS_FRAGMENT_INSTRUCTION &&
+        (absolute_zero_symbol ? (width!=4U && width!=0U) :
+         (width!=2U && width!=4U && width!=8U)))) {
         minias_set_error(as,absolute_zero_symbol?
                          "invalid-encoded-abs0-fixup:line=%zu":
                          "invalid-encoded-fixup-ref:line=%zu",owner->line);
@@ -187,6 +206,24 @@ bool minias_encode_add_fixup_abs0(MiniAs *as,uint64_t offset,
                                    false,true);
 }
 
+/* Code ALIGN linker-padding relocations carry a non-zero GNU addend, while
+ * ordinary instruction STN_UNDEF markers continue to carry zero. */
+bool minias_encode_add_alignment_fixup_abs0(MiniAs *as,
+                                           MiniAsFixupKind kind,int64_t addend) {
+    MiniAsEncodeResult *result=active_result(as,"align-fixup-abs0");
+    MiniAsSymbolRef absent={0};
+    const MiniAsStmt *owner;
+    if(result==NULL)return false;
+    owner=&as->stmts[as->emission->emitting_fragment_id];
+    if(owner->fragment_kind!=MINIAS_FRAGMENT_ALIGNMENT ||
+       !owner->payload.alignment.linker_relaxable ||
+       !minias_fixup_field_width_for_target(as,kind,0U) ||
+       !stage_instruction_fixup(as,owner->offset,kind,0U,absent,false,true))
+        return false;
+    result->fixups[result->fixup_count-1U].symbol_ref.addend=addend;
+    return true;
+}
+
 /* A pending anchor exists only as a pure NameId and an EncodeResult-local
  * definition request.  Common creates its Object Symbol only at commit,
  * before any associated fixup is recorded.  This preserves old GNU/ELF
@@ -202,7 +239,9 @@ bool minias_encode_request_anchor_ref(MiniAs *as,const char *prefix,
     if(result==NULL)return false;
     stmt=&as->stmts[as->emission->emitting_fragment_id];
     if(ref==NULL ||
-       stmt->fragment_kind!=MINIAS_FRAGMENT_INSTRUCTION ||
+       (stmt->fragment_kind!=MINIAS_FRAGMENT_INSTRUCTION &&
+        !(stmt->fragment_kind==MINIAS_FRAGMENT_ALIGNMENT &&
+          stmt->payload.alignment.linker_relaxable)) ||
        stmt->section<0 || (size_t)stmt->section>=as->section_count ||
        prefix==NULL || *prefix=='\0' ||
        result->anchor_count>=SIZE_MAX-as->emission->synthetic_anchor_counter) {

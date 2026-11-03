@@ -270,6 +270,50 @@ static bool set_address(MiniAs *as,int sec,size_t symbol_index,
                MINIAS_FIXUP_ORIGIN_SYNTHETIC_SECTION,sec,at,MINIAS_FIXUP_ABS,address_width,
                             symbol.name,0,false);
 }
+
+/* A variable-length DW_LNS_advance_pc cannot be patched after GNU ld removes
+ * a relaxable instruction or NOP reservation. GNU's link-relaxable targets
+ * instead use DW_LNS_fixed_advance_pc plus a pair of 16-bit symbol-difference
+ * fixups. A large delta uses an absolute DW_LNE_set_address to avoid a
+ * linker-side 16-bit overflow. The machine's same-section subtraction
+ * policy stays in TargetOps, rather than assuming every code-span marker
+ * implies the same rule on RISC-V and LoongArch. */
+static bool advance_pc_between_symbols(MiniAs *as,int sec,
+                                      size_t from_symbol,size_t to_symbol,
+                                      uint64_t delta,unsigned address_width) {
+    MiniAsSymbolView from,to;
+    const MiniAsTargetOps *target=as->target;
+    const bool relocate=target->dwarf_line_difference_relocations!=NULL &&
+        target->dwarf_line_difference_relocations(minias_target_abi_view(as));
+    size_t field;
+    if(!target->dwarf_line_fixed_advance)return advance_pc(as,sec,delta);
+    if(delta>50000U)return set_address(as,sec,to_symbol,address_width);
+    if(delta>UINT16_MAX ||
+       !minias_common_context_symbol_view(as,from_symbol,&from) ||
+       !minias_common_context_symbol_view(as,to_symbol,&to) ||
+       from.section<0 || from.section!=to.section)return false;
+    if(!append_byte(as,sec,9U))return false; /* DW_LNS_fixed_advance_pc */
+    field=minias_emission_section_size(as,sec);
+    if(!append_byte(as,sec,relocate?0U:(uint8_t)delta) ||
+       !append_byte(as,sec,relocate?0U:(uint8_t)(delta>>8U)))return false;
+    return !relocate ||
+           (minias_add_section_fixup(as,MINIAS_FIXUP_ORIGIN_SYNTHETIC_SECTION,
+               sec,field,MINIAS_FIXUP_ADD,2U,to.name,0,false) &&
+            minias_add_section_fixup(as,MINIAS_FIXUP_ORIGIN_SYNTHETIC_SECTION,
+               sec,field,MINIAS_FIXUP_SUB,2U,from.name,0,false));
+}
+
+/* The end_sequence PC must move with the final code bytes too. Its symbol
+ * is a synthetic *Section-relative* anchor, created only during final DWARF
+ * emission after MCLayout has committed the one Section size. */
+static bool debug_section_end_anchor(MiniAs *as,int section,size_t *anchor_id) {
+    char name[96];
+    if(section<0 || (size_t)section>=as->section_count || anchor_id==NULL ||
+       !minias_make_private_symbol_name(name,sizeof(name),"debug_line_end",
+                                        (size_t)section+1U))return false;
+    return minias_common_context_define_output_anchor(as,name,section,0U,
+        as->sections[(size_t)section].layout_size,true,anchor_id);
+}
 /* No file-scope pointer to the assembly being serialized. qsort callbacks
  * that consult a mutable global would race when two independent MiniAs
  * contexts emit DWARF concurrently. Snapshot final section coordinates in
@@ -504,6 +548,7 @@ bool minias_debug_emit(MiniAs *as) {
         bool seen_row=false;
         uint64_t position;
         int source_section;
+        size_t previous_symbol=first->symbol_index;
         if(!minias_common_context_symbol_view(as,first->symbol_index,
                                               &first_sym))goto failed;
         position=first_sym.value;
@@ -527,10 +572,7 @@ bool minias_debug_emit(MiniAs *as) {
             }
             if(seen_row && sym.value==position && loc->view_mode==2U &&
                !set_address(as,sec,loc->symbol_index,address_width))goto failed;
-            if(sym.value<position ||
-               !advance_pc(as,sec,sym.value-position))goto failed;
-            position=sym.value;
-            seen_row=true;
+            if(sym.value<position)goto failed;
             if(loc->file!=cur_file &&
                (!append_byte(as,sec,4U) ||
                 !append_leb(as,sec,loc->file)))goto failed;
@@ -563,12 +605,24 @@ bool minias_debug_emit(MiniAs *as) {
                    !append_byte(as,sec,4U) ||
                    !append_leb(as,sec,loc->discriminator))goto failed;
             }
+            if(seen_row &&
+               !advance_pc_between_symbols(as,sec,previous_symbol,
+                   loc->symbol_index,sym.value-position,address_width))goto failed;
+            position=sym.value;
+            previous_symbol=loc->symbol_index;
+            seen_row=true;
             if(!append_byte(as,sec,1U))goto failed;
         }
-        if(position>as->sections[(size_t)source_section].layout_size ||
-           !advance_pc(as,sec,
-              as->sections[(size_t)source_section].layout_size-position) ||
-           !end_sequence(as,sec))goto failed;
+        if(position>as->sections[(size_t)source_section].layout_size)goto failed;
+        if(as->target->dwarf_line_fixed_advance) {
+            size_t end_symbol;
+            if(!debug_section_end_anchor(as,source_section,&end_symbol) ||
+               !advance_pc_between_symbols(as,sec,previous_symbol,end_symbol,
+                   as->sections[(size_t)source_section].layout_size-position,
+                   address_width))goto failed;
+        } else if(!advance_pc(as,sec,
+              as->sections[(size_t)source_section].layout_size-position))goto failed;
+        if(!end_sequence(as,sec))goto failed;
         begin=j;
     }
     if(!minias_section_patch_le32(as,sec,0U,

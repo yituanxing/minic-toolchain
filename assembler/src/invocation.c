@@ -19,6 +19,17 @@ int minias_assemble_invocation_with_policy(const char *input_path,
                                           const MiniAsInvocation *invocation,
                                           bool suppress_target_attributes,
                                           FILE *diagnostic) {
+    return minias_assemble_invocation_with_options(input_path,output_path,
+        invocation,MINIAS_LINK_RELAX_TARGET_DEFAULT,
+        suppress_target_attributes,diagnostic);
+}
+
+int minias_assemble_invocation_with_options(const char *input_path,
+                                          const char *output_path,
+                                          const MiniAsInvocation *invocation,
+                                          MiniAsLinkRelaxMode link_relax,
+                                          bool suppress_target_attributes,
+                                          FILE *diagnostic) {
     const char *target_name = "riscv";
     const char *march = NULL;
     const char *mabi = NULL;
@@ -42,6 +53,14 @@ int minias_assemble_invocation_with_policy(const char *input_path,
             fprintf(diagnostic, "minic-as: unsupported-target:%s\n", target_name);
         return 2;
     }
+    if(link_relax>MINIAS_LINK_RELAX_DISABLE ||
+       (link_relax!=MINIAS_LINK_RELAX_TARGET_DEFAULT &&
+        !target->supports_link_relax_cli)) {
+        if(diagnostic!=NULL)
+            fprintf(diagnostic,"minic-as: unsupported-target-link-relax-option:%s\n",
+                    target->name);
+        return 2;
+    }
     memset(&config, 0, sizeof(config));
     if (target->resolve_profile == NULL ||
         !target->resolve_profile(march, mabi, &config,
@@ -56,6 +75,7 @@ int minias_assemble_invocation_with_policy(const char *input_path,
             fprintf(diagnostic, "minic-as: internal:profile-target-mismatch\n");
         return 2;
     }
+    config.link_relax_mode=(uint8_t)link_relax;
     /* Output-attribute suppression is an ELF format policy; Common does not
      * decide which ISA's attributes exist or own their serialization. */
     config.object.elf.suppress_target_attributes = suppress_target_attributes;

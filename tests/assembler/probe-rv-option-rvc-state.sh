@@ -2,7 +2,8 @@
 # RISC-V .option rvc/norvc belongs to target-site state, not to Common.
 # An explicit .option rvc may also grant C lexically over a Base-I file
 # profile, without promoting the immutable Tag_RISCV_arch file attribute.
-# norelax is always safe because MiniAS does not emit linker RELAX markers.
+# norelax explicitly suppresses GNU linker markers, while a lexical
+# .option relax emits them for the eligible source instruction sites.
 set -Eeuo pipefail
 : "${MINIAS:?exact-head MiniAS binary required}"
 work=$(mktemp -d)
@@ -103,10 +104,8 @@ if "$MINIAS" -march=rv64gc -mabi=lp64d \
 fi
 grep -q 'disabled-riscv-compressed' "$work/invalid.stderr"
 
-# The legacy -march-omitted input must NOT silently accept GNU linker
-# relaxation requests, which require R_RISCV_RELAX/ALIGN marker relocations.
-# Unknown .option dialects must also fail rather than becoming no-ops.
-for option in relax unknown_option 'arch, +zmadeup'; do
+# Unknown .option dialects must fail rather than becoming no-ops.
+for option in unknown_option 'arch, +zmadeup'; do
     printf '.text\n.option %s\ncall external_symbol\n' "$option" >"$work/unsupported-option.s"
     for args in "legacy" "rv64gc"; do
         options=()
@@ -121,6 +120,41 @@ for option in relax unknown_option 'arch, +zmadeup'; do
         grep -q "unsupported-isa-option:$option" "$work/invalid.stderr"
     done
 done
+
+# Positive .option relax is now a real object-relocation mode, including
+# when no immutable -march was supplied. The default (not explicitly
+# requested) instruction contract intentionally remains nonrelaxable.
+for args in legacy rv64gc; do
+    options=()
+    if [[ "$args" = rv64gc ]]; then options=(-march=rv64gc -mabi=lp64d); fi
+    printf '.text\n.option relax\ncall external_symbol\n' >"$work/relax-option.s"
+    "$MINIAS" "${options[@]}" -o "$work/relax-option.o" \
+        "$work/relax-option.s"
+    relocations=$(readelf -Wr "$work/relax-option.o")
+    if ! grep -q 'R_RISCV_CALL_PLT' <<<"$relocations" ||
+       ! grep -q 'R_RISCV_RELAX' <<<"$relocations"; then
+        echo "positive .option relax missing GNU marker ($args)" >&2
+        exit 1
+    fi
+done
+
+cat >"$work/relax-align.s" <<'EOF_RV'
+.text
+.option push
+.option relax
+call external_symbol
+.p2align 3
+.option pop
+ret
+EOF_RV
+"$MINIAS" -march=rv64i -mabi=lp64 \
+    -o "$work/relax-align.o" "$work/relax-align.s"
+if ! readelf -Wr "$work/relax-align.o" |
+        grep -Eq 'R_RISCV_ALIGN[[:space:]]+4[[:space:]]*$'; then
+    echo 'positive .option relax missing fixed 4-byte ALIGN reservation' >&2
+    readelf -Wr "$work/relax-align.o" >&2
+    exit 1
+fi
 
 # Executable alignment is also a Target-site instruction decision.  A
 # two-byte gap can be filled with C.NOP whenever the ISA supports C, even

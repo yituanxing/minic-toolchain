@@ -15,6 +15,10 @@ static bool fragment_alignment_padding(const MiniAsStmt *stmt,
                                        uint64_t cursor,uint64_t *padding) {
     const uint64_t alignment=stmt->payload.alignment.alignment;
     if(alignment==0U || (alignment&(alignment-1U))!=0U)return false;
+    if(stmt->payload.alignment.linker_relaxable) {
+        *padding=stmt->size;
+        return true;
+    }
     *padding=(alignment-(cursor&(alignment-1U)))&(alignment-1U);
     if(stmt->payload.alignment.has_max_skip && *padding>stmt->payload.alignment.max_skip)
         *padding=0U;

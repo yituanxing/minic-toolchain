@@ -263,6 +263,9 @@ bool minias_parse_size_end_addend(const char *,const char *,int64_t *);
 /* Target and generic data fixups require an active fragment. */
 /* Common-only checked Fixup field-width contract, no Target state. */
 bool minias_fixup_field_width(MiniAsFixupKind kind,unsigned width);
+/* Zero-sized machine markers are legal only if the active target ABI names
+ * the exact (kind,width) pair; Common LEB rules stay format independent. */
+bool minias_fixup_field_width_for_target(const MiniAs *,MiniAsFixupKind,unsigned);
 bool minias_add_fixup(MiniAs *as,
                       uint64_t offset,
                       MiniAsFixupKind kind,
@@ -283,6 +286,7 @@ bool minias_encode_add_fixup_ref(MiniAs *as, uint64_t offset,
                                  bool prefer_section_symbol);
 bool minias_encode_add_fixup_abs0(MiniAs *as, uint64_t offset,
                                   MiniAsFixupKind kind, unsigned width);
+bool minias_encode_add_alignment_fixup_abs0(MiniAs *,MiniAsFixupKind,int64_t);
 bool minias_encode_request_anchor_ref(MiniAs *as, const char *prefix,
                                       MiniAsSymbolRef *ref);
 bool minias_encode_record_target_feature(MiniAs *as, uint32_t features);

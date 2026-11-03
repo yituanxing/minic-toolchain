@@ -97,6 +97,16 @@ jobs:
         env:
           MINIAS: ${{ github.workspace }}/build/release/bin/minic-as
         run: bash tests/assembler/probe-rv-uleb-final-relax-state-gnu.sh
+      - name: GNU RISC-V relaxable MC fixups and final linker alignment
+        if: matrix.arch == 'riscv64'
+        env:
+          MINIAS: ${{ github.workspace }}/build/release/bin/minic-as
+        run: REQUIRE_ALL_GNU=1 bash tests/assembler/probe-rv-link-relax-gnu.sh
+      - name: GNU LoongArch ALIGN/linker relaxation across ELF and final link
+        if: matrix.arch == 'loongarch64'
+        env:
+          MINIAS: ${{ github.workspace }}/build/release/bin/minic-as
+        run: REQUIRE_ALL_GNU=1 bash tests/assembler/probe-loong-align-relax-gnu.sh
       - name: Preserve both sides and exact failure evidence
         if: always()
         uses: actions/upload-artifact@v4

@@ -309,7 +309,21 @@ typedef struct MiniAsSourceSiteView {
 typedef struct MiniAsCodeAlignmentView {
     size_t line;
     MiniAsTargetSiteState site;
+    uint64_t alignment;
+    uint64_t offset;
+    bool has_fill;
+    bool has_max_skip;
+    uint64_t max_skip;
+    bool code_nops;
+    bool linker_relaxable;
 } MiniAsCodeAlignmentView;
+
+/* A linker may remove NOPs from an executable alignment reservation. A
+ * Target that opts in reserves a worst-case fixed span before MCLayout, so
+ * layout and emission cannot recompute different lengths from the cursor. */
+typedef struct MiniAsCodeAlignmentPlan {
+    uint64_t reserved_size;
+} MiniAsCodeAlignmentPlan;
 
 /* Ephemeral value projections. No pointer to writable Common Fragments,
  * Sections or Symbol records crosses a Target stage boundary. A borrowed
@@ -454,6 +468,12 @@ unsigned minias_encode_ctx_address_size(const MiniAsEncodeContext *);
  * capability. The Target sees no MiniAs or mutable Fragment/Section array. */
 typedef struct MiniAsCodeAlignSink MiniAsCodeAlignSink;
 bool minias_code_align_emit(MiniAsCodeAlignSink *, const void *, size_t);
+/* Marker fixups remain owned by the active ALIGN Fragment and staged inside
+ * its atomic EncodeResult, not inserted directly into the ELF writer. */
+bool minias_code_align_fixup_abs0(MiniAsCodeAlignSink *, MiniAsFixupKind, int64_t);
+bool minias_code_align_anchor_ref(MiniAsCodeAlignSink *, const char *, MiniAsSymbolRef *);
+bool minias_code_align_fixup_ref(MiniAsCodeAlignSink *, MiniAsFixupKind,
+                                 unsigned, MiniAsSymbolRef);
 bool minias_code_align_record_target_feature(MiniAsCodeAlignSink *, uint32_t);
 void minias_code_align_error(MiniAsCodeAlignSink *, const char *, ...);
 const void *minias_code_align_target_state(const MiniAsCodeAlignSink *);
@@ -598,6 +618,11 @@ typedef struct MiniAsTargetOps {
      * need different NOP encodings for different source-selected CPU modes. */
     bool (*append_code_alignment)(MiniAsCodeAlignSink *,
                                   const MiniAsCodeAlignmentView *,size_t);
+    bool (*plan_code_alignment)(const MiniAsCodeAlignmentView *,
+                                MiniAsCodeAlignmentPlan *);
+    /* The driver only forwards a target-neutral request. Unsupported
+     * architectures reject -mrelax/-mno-relax before SourceGraph begins. */
+    bool supports_link_relax_cli;
     /* Some GAS targets discard an executable no-fill alignment directive
      * when its requested granularity does not exceed the *current lexical*
      * instruction alignment (RISC-V .option norvc is one example).  Decide
@@ -659,6 +684,12 @@ typedef struct MiniAsTargetOps {
      * change the encoded code span after assembly (e.g. LoongArch RELAX).
      * CFI events spanning such a fixup need linker-resolved code distances. */
     bool (*cfi_linker_relaxation_marker)(MiniAsFixupKind);
+    /* GNU line tables for link-relaxable ISAs use a fixed 16-bit PC advance
+     * so a linker can recompute code distances. The Target, not the DWARF
+     * encoder, decides whether defined code-label differences stay as
+     * paired relocations (RISC-V always, LoongArch in relax mode). */
+    bool dwarf_line_fixed_advance;
+    bool (*dwarf_line_difference_relocations)(MiniAsTargetABIView);
     unsigned cfi_negate_ra_opcode;
     unsigned cfi_initial_cfa_offset;
     bool cfi_initial_ra_saved;
@@ -722,6 +753,9 @@ typedef struct MiniAsTargetSpec {
     const MiniAsTargetOps *target;
     MiniAsTargetDataLayout layout;
     MiniAsObjectSpec object;
+    /* 0 target default, 1 enable linker relaxation, 2 disable it.
+     * Not a machine's ISA feature or ELF e_flags. */
+    uint8_t link_relax_mode;
     /* Serialized Target-private ISA/ABI profile, read only by that Target.
      * A fixed inline buffer avoids caller-owned borrowed pointers. */
     unsigned char profile[1024];

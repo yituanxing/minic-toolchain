@@ -16,7 +16,12 @@ enum {
     MINIAS_FIXUP_RV_LO12_S,
     MINIAS_FIXUP_RV_BRANCH,
     MINIAS_FIXUP_RV_RVC_BRANCH,
-    MINIAS_FIXUP_RV_RVC_JUMP
+    MINIAS_FIXUP_RV_RVC_JUMP,
+    /* Zero-width metadata relocations. They alter no instruction field:
+     * RELAX tags one existing primary fixup, ALIGN owns a removable NOP
+     * span whose length is carried by the RELA addend. */
+    MINIAS_FIXUP_RV_RELAX,
+    MINIAS_FIXUP_RV_ALIGN
 };
 
 #endif

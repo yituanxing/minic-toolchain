@@ -11,13 +11,14 @@ static void usage(FILE *out, const char *name) {
         if (i != 0U) fputc('|', out);
         fputs(target, out);
     }
-    fputs("] [-march=ISA] [-mabi=ABI] [-mno-arch-attr] -o OUTPUT INPUT.s\n", out);
+    fputs("] [-march=ISA] [-mabi=ABI] [-mrelax|-mno-relax] [-mno-arch-attr] -o OUTPUT INPUT.s\n", out);
 }
 
 int main(int argc, char **argv) {
     const char *input = NULL, *output = NULL;
     const char *march = NULL, *mabi = NULL, *target_name = "riscv";
     bool suppress_target_attributes = false;
+    MiniAsLinkRelaxMode link_relax=MINIAS_LINK_RELAX_TARGET_DEFAULT;
     MiniAsInvocation invocation;
     int i;
 
@@ -31,6 +32,10 @@ int main(int argc, char **argv) {
             mabi = argv[i] + 6U;
         } else if (strcmp(argv[i], "-mno-arch-attr") == 0) {
             suppress_target_attributes = true;
+        } else if (strcmp(argv[i], "-mrelax") == 0) {
+            link_relax=MINIAS_LINK_RELAX_ENABLE;
+        } else if (strcmp(argv[i], "-mno-relax") == 0) {
+            link_relax=MINIAS_LINK_RELAX_DISABLE;
         } else if (strncmp(argv[i], "--target=", 9U) == 0) {
             target_name = argv[i] + 9U;
         } else if (strcmp(argv[i], "-h") == 0 ||
@@ -55,6 +60,7 @@ int main(int argc, char **argv) {
     invocation.target = target_name;
     invocation.march = march;
     invocation.mabi = mabi;
-    return minias_assemble_invocation_with_policy(
-        input, output, &invocation, suppress_target_attributes, stderr);
+    return minias_assemble_invocation_with_options(
+        input, output, &invocation, link_relax,
+        suppress_target_attributes, stderr);
 }

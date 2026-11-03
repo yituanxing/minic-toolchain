@@ -1355,6 +1355,26 @@ static bool handle_align(MiniAs *as,const char *op,char *args,size_t line){
     stmt->payload.alignment.has_fill=has_fill;
     stmt->payload.alignment.fill=fill;
     stmt->payload.alignment.has_max_skip=has_max;stmt->payload.alignment.max_skip=max_skip;
+    if(!has_fill &&
+       (as->sections[(size_t)as->current_section].flags &
+        MINIAS_SECTION_FLAG_EXECINSTR)!=0U &&
+       as->target->plan_code_alignment!=NULL) {
+        const MiniAsCodeAlignmentView site={
+            .line=stmt->line,.site=stmt->site,.alignment=alignment,
+            .offset=stmt->offset,.has_fill=has_fill,.has_max_skip=has_max,
+            .max_skip=max_skip,.code_nops=true
+        };
+        MiniAsCodeAlignmentPlan plan={0};
+        if(as->target->plan_code_alignment(&site,&plan)) {
+            if(plan.reserved_size>UINT32_MAX) {
+                minias_set_error(as,"linker-relax-alignment-overflow:line=%zu",line);
+                return false;
+            }
+            pad=plan.reserved_size;
+            stmt->size=(uint32_t)pad;
+            stmt->payload.alignment.linker_relaxable=true;
+        }
+    }
     if(!advance_current_location(as,pad))return false;
     return minias_common_context_raise_section_alignment(
         as,as->current_section,alignment);

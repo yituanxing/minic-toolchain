@@ -21,9 +21,17 @@
 /* This is a captured provenance bit, not an option-stack entry: GNU's
  * permanently advertised C capability can also license later C.NOP fill. */
 #define MINIAS_RISCV_SITE_EVER_RVC 64U
+/* Linker relaxability is a *source-site* permission. Keep an explicit
+ * positive marker apart from NO_RELAX: existing MiniAS invocations retain
+ * their nonrelaxable instruction/layout contract unless source opts in,
+ * while the historical final-option ULEB relocation policy remains intact. */
+#define MINIAS_RISCV_OPTION_MARK_RELAX 128U
 /* GAS treats .insn as code for $x/$d mapping regardless of which retained
  * Fragment representation supplies its machine bytes. No alternate graph. */
 #define MINIAS_RISCV_SITE_INSN_DATA 1U
+/* Immutable source-site decision, including the file ISA's C capability.
+ * The alignment planner sees only MiniAsCodeAlignmentView, not TargetState. */
+#define MINIAS_RISCV_SITE_EFFECTIVE_RVC 2U
 
 /* LI is a parsed, immutable target instruction plan. The MCInst pointer is
  * stable across stmt-vector relocation and layout retries. MCInst owns the
@@ -175,6 +183,8 @@ const struct MiniAsSymbolRef *minias_riscv_branch_bound_symbol(
 #define MINIAS_R_RISCV_SUB16 38U
 #define MINIAS_R_RISCV_SUB32 39U
 #define MINIAS_R_RISCV_SUB64 40U
+#define MINIAS_R_RISCV_ALIGN 43U
+#define MINIAS_R_RISCV_RELAX 51U
 #define MINIAS_R_RISCV_SET8 54U
 #define MINIAS_R_RISCV_SET16 55U
 #define MINIAS_R_RISCV_SET32 56U

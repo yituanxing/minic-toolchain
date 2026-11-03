@@ -187,7 +187,7 @@ static bool minias_record_fixup(MiniAs *as,
      * must decide whether this field needs an ELF relocation at all. */
     if (section < 0 || (size_t)section >= as->section_count ||
         as->sections[(size_t)section].type==MINIAS_SECTION_KIND_NOBITS ||
-        !minias_fixup_field_width(kind,width) ||
+        !minias_fixup_field_width_for_target(as,kind,width) ||
         offset > UINT64_MAX - width) {
         minias_set_error(as, "invalid-fixup-range:%s",
                          symbol_name != NULL ? symbol_name : "<symbol-id>");
@@ -197,7 +197,11 @@ static bool minias_record_fixup(MiniAs *as,
         if((origin!=MINIAS_FIXUP_ORIGIN_FRAGMENT &&
             origin!=MINIAS_FIXUP_ORIGIN_EXPLICIT_SECTION) ||
            symbol_name!=NULL ||
-           existing_symbol_index!=SIZE_MAX || addend!=0) {
+           existing_symbol_index!=SIZE_MAX ||
+           (addend!=0 && !(origin==MINIAS_FIXUP_ORIGIN_FRAGMENT &&
+             width==0U && fragment_id<as->stmt_count &&
+             as->stmts[fragment_id].fragment_kind==MINIAS_FRAGMENT_ALIGNMENT &&
+             as->stmts[fragment_id].payload.alignment.linker_relaxable))) {
             minias_set_error(as,"invalid-abs0-fixup-owner");
             return false;
         }
@@ -420,7 +424,7 @@ static bool minias_commit_encode_result(MiniAs *as, const MiniAsStmt *owner) {
                                  name,
                                  request->has_symbol_index ?
                                      request->symbol_index : SIZE_MAX,
-                                 request->absolute_zero_symbol ? 0 : request->symbol_ref.addend,
+                                 request->symbol_ref.addend,
                                  MINIAS_FIXUP_ORIGIN_FRAGMENT,
                                  request->absolute_zero_symbol,
                                  request->prefer_section_symbol,SIZE_MAX))
@@ -587,6 +591,29 @@ struct MiniAsCodeAlignSink {
 bool minias_code_align_emit(MiniAsCodeAlignSink *sink,
                             const void *bytes,size_t size) {
     return sink!=NULL && minias_stage_instruction_bytes(sink->as,bytes,size);
+}
+
+bool minias_code_align_fixup_abs0(MiniAsCodeAlignSink *sink,
+                                   MiniAsFixupKind kind,int64_t addend) {
+    return sink!=NULL && minias_encode_add_alignment_fixup_abs0(sink->as,kind,addend);
+}
+
+bool minias_code_align_anchor_ref(MiniAsCodeAlignSink *sink,const char *prefix,
+                                   MiniAsSymbolRef *ref) {
+    return sink!=NULL && minias_encode_request_anchor_ref(sink->as,prefix,ref);
+}
+
+bool minias_code_align_fixup_ref(MiniAsCodeAlignSink *sink,
+                                  MiniAsFixupKind kind,unsigned width,
+                                  MiniAsSymbolRef ref) {
+    const MiniAs *as=sink!=NULL?sink->as:NULL;
+    const MiniAsStmt *owner;
+    if(as==NULL || as->emission==NULL || !as->emission->emitting_fragment ||
+       as->emission->emitting_fragment_id>=as->stmt_count)return false;
+    owner=&as->stmts[as->emission->emitting_fragment_id];
+    return owner->fragment_kind==MINIAS_FRAGMENT_ALIGNMENT &&
+           owner->payload.alignment.linker_relaxable && width==0U &&
+           minias_encode_add_fixup_ref(sink->as,owner->offset,kind,width,ref,false);
 }
 
 bool minias_code_align_record_target_feature(MiniAsCodeAlignSink *sink,uint32_t features) {
@@ -1101,7 +1128,18 @@ bool minias_emit_sections(MiniAs *as) {
             MiniAsCodeAlignSink alignment_sink={as};
             const MiniAsCodeAlignmentView site={
                 .line=stmt->line,
-                .site=stmt->site
+                .site=stmt->site,
+                .alignment=stmt->fragment_kind==MINIAS_FRAGMENT_ALIGNMENT ?
+                    stmt->payload.alignment.alignment:0U,
+                .offset=stmt->offset,
+                .has_fill=has_fill,
+                .has_max_skip=stmt->fragment_kind==MINIAS_FRAGMENT_ALIGNMENT &&
+                              stmt->payload.alignment.has_max_skip,
+                .max_skip=stmt->fragment_kind==MINIAS_FRAGMENT_ALIGNMENT ?
+                    stmt->payload.alignment.max_skip:0U,
+                .code_nops=code_nop_align,
+                .linker_relaxable=stmt->fragment_kind==MINIAS_FRAGMENT_ALIGNMENT &&
+                                  stmt->payload.alignment.linker_relaxable
             };
             if (!(code_nop_align
                       ? as->target->append_code_alignment(&alignment_sink,&site,stmt->size)

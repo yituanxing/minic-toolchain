@@ -15,6 +15,12 @@ typedef struct MiniAsInvocation {
     const char *mabi;
 } MiniAsInvocation;
 
+typedef enum MiniAsLinkRelaxMode {
+    MINIAS_LINK_RELAX_TARGET_DEFAULT = 0,
+    MINIAS_LINK_RELAX_ENABLE = 1,
+    MINIAS_LINK_RELAX_DISABLE = 2
+} MiniAsLinkRelaxMode;
+
 /* The target list is obtained from the one internal Target registry.
  * Adding a backend never requires a matching CLI switch/help edit. */
 size_t minias_supported_target_count(void);
@@ -30,6 +36,14 @@ int minias_assemble_invocation_with_policy(const char *input_path,
                                           const MiniAsInvocation *invocation,
                                           bool suppress_target_attributes,
                                           FILE *diagnostic);
+/* The stable three-field Invocation remains source/ABI compatible. New
+ * TargetSpec transport options use an independent extended invocation API. */
+int minias_assemble_invocation_with_options(const char *input_path,
+                                           const char *output_path,
+                                           const MiniAsInvocation *invocation,
+                                           MiniAsLinkRelaxMode link_relax,
+                                           bool suppress_target_attributes,
+                                           FILE *diagnostic);
 
 int minias_assemble_file(const char *input_path, const char *output_path, FILE *diagnostic);
 int minias_assemble_file_class(const char *input_path,
