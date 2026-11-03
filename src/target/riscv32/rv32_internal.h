@@ -89,8 +89,8 @@ bool rv32_emit_wide_integer(FILE *, const MinicCoreFunction *,
                             const char *);
 bool rv32_emit_fp_instruction(FILE *, const MinicCoreFunction *,
                               const Rv32Frame *, const MinicCoreInstruction *);
-bool rv32_emit_memory_instruction(FILE *, const MinicC0Program *,
-                                  const MinicCoreModule *, const MinicTargetInfo *,
+bool rv32_emit_memory_instruction(FILE *, const MinicCoreModule *,
+                                  const MinicTargetInfo *,
                                   const MinicCoreFunction *,
                                   const Rv32Frame *, const MinicCoreInstruction *);
 

@@ -603,7 +603,7 @@ static bool rv32_emit_source_structured_asm(
     return true;
 }
 
-static bool rv32_emit_ins(FILE *out, const MinicC0Program *program,
+static bool rv32_emit_ins(FILE *out,
                           const MinicCoreModule *module,
                           const MinicTargetInfo *target,
                           const MinicCoreFunction *f,
@@ -611,7 +611,7 @@ static bool rv32_emit_ins(FILE *out, const MinicC0Program *program,
                           const MinicCoreInstruction *ins,
                           MinicCoreInstructionId id,
                           const char *symbol) {
-    if (out == NULL || (module == NULL && program == NULL) || target == NULL ||
+    if (out == NULL || module == NULL || target == NULL ||
         f == NULL || fr == NULL || ins == NULL) return false;
     /* Shared semantic dispatch, but the 32-bit emitter still decides
      * helper calls, ABI limb splitting and legal Base-I instructions. */
@@ -667,7 +667,7 @@ static bool rv32_emit_ins(FILE *out, const MinicC0Program *program,
     case MINIC_CORE_INSTRUCTION_RECORD_LOAD:
     case MINIC_CORE_INSTRUCTION_GLOBAL_ADDRESS:
     case MINIC_CORE_INSTRUCTION_FUNCTION_ADDRESS:
-        return rv32_emit_memory_instruction(out, program, module, target, f, fr, ins);
+        return rv32_emit_memory_instruction(out, module, target, f, fr, ins);
     case MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM:
         return rv32_emit_source_opaque_asm(out, f, symbol, ins);
     case MINIC_CORE_INSTRUCTION_REGISTER_OUTPUT_INLINE_ASM:
@@ -793,9 +793,8 @@ static bool rv32_term(FILE *out, const MinicCoreFunction *f,
         return false;
     }
 }
-static bool rv32_func(FILE *out, const MinicC0Program *program,
-                       const MinicCoreModule *module,
-                       const MinicCoreFunction *f, const MinicFunction *def,
+static bool rv32_func(FILE *out, const MinicCoreModule *module,
+                       const MinicCoreFunction *f,
                        const MinicCoreModuleFunctionSymbol *module_decl,
                        bool function_sections, const MinicTargetInfo *target,
                        const MinicCoreFunctionFacts *facts,
@@ -817,8 +816,7 @@ static bool rv32_func(FILE *out, const MinicC0Program *program,
         if (getenv("MINIC_RV32_FRAME_TRACE") != NULL)
             (void)fprintf(stderr,
                 "RV32_FRAME_OWNER function=%s parameters=%zu values=%zu objects=%zu instructions=%zu\n",
-                module_decl != NULL ? module_decl->name :
-                    (def->name != NULL ? def->name : "<unnamed>"),
+                module_decl->name != NULL ? module_decl->name : "<unnamed>",
                 f->parameter_count, f->value_count, f->object_count,
                 f->instruction_count);
         rv32_diag(diag, "<rv32-frame>", "rv32i: cannot allocate an ILP32 Core frame");
@@ -831,9 +829,7 @@ static bool rv32_func(FILE *out, const MinicC0Program *program,
         rv32_diag(diag, "<rv32-core>", "rv32i: cannot classify Core CFG reachability");
         goto done;
     }
-    if (!(module_decl != NULL
-              ? minic_riscv_function_symbol_from_module(module_decl, &sym)
-              : minic_riscv_function_symbol_from_function(def, &sym))) goto done;
+    if (!minic_riscv_function_symbol_from_module(module_decl, &sym)) goto done;
     sym.function_sections = function_sections;
     if (!minic_riscv_emit_function_symbol_begin(out, &sym)) goto done;
     if (fr.has_dynamic_stack_alignment) {
@@ -877,7 +873,7 @@ static bool rv32_func(FILE *out, const MinicC0Program *program,
             MinicCoreInstructionId id = 0U;
             const MinicCoreInstruction *ins = NULL;
             if (!minic_core_block_instruction_at(f, block, j, &id, &ins) ||
-                !rv32_emit_ins(out, program, module, target, f, &fr,
+                !rv32_emit_ins(out, module, target, f, &fr,
                                ins, id, sym.symbol_name)) {
                 (void)snprintf(message, sizeof(message),
                                "rv32i: unqualified Core instruction function=%.75s block=%zu id=%u kind=%u",
@@ -925,27 +921,6 @@ typedef struct Rv32ProgramContext {
     const MinicCoreModule *module;
 } Rv32ProgramContext;
 
-static bool rv32_visit_global(
-    FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
-    const MinicGlobalObject *obj, size_t index, void *opaque) {
-    Rv32ProgramContext *ctx = opaque;
-    (void)index;
-    if (obj->is_extern && obj->alias_target != MINIC_GLOBAL_OBJECT_INVALID)
-        return minic_multi_elf_emit_object_alias(
-            out, program, obj, "@object");
-    if (minic_riscv32_emit_flat_global(out, program, target, obj)) return true;
-    {
-        char message[256];
-        (void)snprintf(message, sizeof(message),
-            "rv32i: unsupported global initializer or relocation"
-            " object=%s values=%zu relocs=%zu zero=%u",
-            obj->name == NULL ? "<unnamed>" : obj->name,
-            obj->initializer_count, obj->relocation_count,
-            obj->is_zero_initialized ? 1U : 0U);
-        rv32_diag(ctx->diagnostic, "<rv32-global>", message);
-    }
-    return false;
-}
 
 static bool rv32_visit_module_global(
     FILE *out, const MinicCoreModule *module, const MinicTargetInfo *target,
@@ -970,24 +945,10 @@ static bool rv32_visit_module_global(
     return false;
 }
 
-static bool rv32_visit_declaration(
-    FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
-    const MinicFunction *decl, const MinicCoreFunction *fn,
-    size_t index, bool function_sections, void *opaque) {
-    (void)target;
-    (void)fn;
-    (void)index;
-    (void)function_sections;
-    (void)opaque;
-    if (decl->alias_target != MINIC_FUNCTION_INVALID)
-        return minic_riscv_emit_function_alias(out, program, decl);
-    /* Referenced undefined weak bindings are emitted once by Common. */
-    return true;
-}
 
 static bool rv32_visit_function(
-    FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
-    const MinicFunction *decl, const MinicCoreModuleFunctionSymbol *module_decl,
+    FILE *out, const MinicCoreModule *module, const MinicTargetInfo *target,
+    const MinicCoreModuleFunctionSymbol *module_decl,
     const MinicCoreFunction *fn,
     const MinicCoreFunctionFacts *facts,
     const MinicCoreObjectStoragePlan *storage, size_t index,
@@ -995,26 +956,24 @@ static bool rv32_visit_function(
     Rv32ProgramContext *ctx = opaque;
     const char *name;
     (void)index;
-    if (!rv32_func(out, program, ctx->module, fn, decl, module_decl, function_sections,
+    if (!rv32_func(out, module, fn, module_decl, function_sections,
                    target, facts, storage, ctx->diagnostic))
         return false;
-    if (!(module_decl != NULL ? module_decl->is_constructor
-                              : decl->is_constructor)) return true;
+    if (!module_decl->is_constructor) return true;
     /* GNU ELF32 startup traverses four-byte .init_array function pointers.
      * The function body is already emitted; registration is a separate
      * target-owned ELF record, including for static constructors. */
-    name = module_decl != NULL ? module_decl->name
-                               : minic_c0_function_symbol_name(decl);
+    name = module_decl->name;
     return name != NULL && name[0] != '\0' &&
            fprintf(out, ".section .init_array,\"aw\",@init_array\n"
                         ".p2align 2\n  .4byte %s\n.text\n", name) >= 0;
 }
 
-static bool rv32_prefix(FILE *out, const MinicC0Program *program,
+static bool rv32_prefix(FILE *out, const MinicCoreModule *module,
                         const MinicTargetInfo *target,
                         const MinicCoreFunction *functions, size_t count,
                         bool function_sections, void *opaque) {
-    (void)program;
+    (void)module;
     (void)target;
     (void)functions;
     (void)count;
@@ -1023,14 +982,17 @@ static bool rv32_prefix(FILE *out, const MinicC0Program *program,
     return fprintf(out, ".option norvc\n") >= 0;
 }
 
-static bool rv32_between(FILE *out, const MinicC0Program *program,
+static bool rv32_between(FILE *out, const MinicCoreModule *module,
                          const MinicTargetInfo *target,
                          const MinicCoreFunction *functions, size_t count,
                          bool function_sections, void *opaque) {
     size_t i;
-    const Rv32ProgramContext *ctx = opaque;
-    if (ctx != NULL && ctx->module != NULL) {
-        const MinicCoreModule *module = ctx->module;
+    (void)target;
+    (void)functions;
+    (void)count;
+    (void)function_sections;
+    (void)opaque;
+    if (module != NULL) {
         if (module->file_asm_count != 0U && fprintf(out, ".text\n") < 0)
             return false;
         for (i = 0U; i < module->file_asm_count; ++i) {
@@ -1044,27 +1006,10 @@ static bool rv32_between(FILE *out, const MinicC0Program *program,
         return minic_multi_elf_emit_module_function_aliases(
                    out, module, "@function") && fprintf(out, ".text\n") >= 0;
     }
-    if (program->file_asm_count != 0U && fprintf(out, ".text\n") < 0)
-        return false;
-    for (i = 0U; i < program->file_asm_count; ++i) {
-        const MinicFileAsm *source_asm = &program->file_asms[i];
-        if (source_asm->text == NULL ||
-            fprintf(out, "# MINIC_SOURCE_FILE_ASM_BEGIN\n") < 0 ||
-            fwrite(source_asm->text, 1U, source_asm->length, out) !=
-                source_asm->length ||
-            fprintf(out, "\n# MINIC_SOURCE_FILE_ASM_END\n") < 0)
-            return false;
-    }
-    /* ELF32 alias/undefined-weak definitions precede live functions. */
-    return minic_program_visit_functions(
-               out, program, target, functions, count, function_sections,
-               MINIC_PROGRAM_FUNCTION_DECLARATIONS, false,
-               rv32_visit_declaration, opaque) &&
-           fprintf(out, ".text\n") >= 0;
+    return false;
 }
 
 static bool rv32_write_core_program_impl(const char *path,
-                                      const MinicC0Program *program,
                                       const MinicTargetInfo *target,
                                       const MinicCoreFunction *functions,
                                       size_t function_count,
@@ -1072,48 +1017,30 @@ static bool rv32_write_core_program_impl(const char *path,
                                       const MinicCoreModule *module,
                                       MinicDiagnostic *diagnostic) {
     static const MinicProgramEmitConfig config = {
-        rv32_visit_global, rv32_visit_function, rv32_prefix, rv32_between,
+        rv32_visit_function, rv32_prefix, rv32_between,
         NULL, NULL, MINIC_PROGRAM_FUNCTION_LIVE_DEFINITIONS, false
     };
     bool ok;
     Rv32ProgramContext context = { diagnostic, module };
-    if (path == NULL || program == NULL || target == NULL ||
+    if (path == NULL || module == NULL || target == NULL ||
         target->riscv_isa.xlen != 32U ||
         target->riscv_isa.abi != MINIC_RISCV_ABI_ILP32 ||
-        function_count != program->function_count ||
-        (module != NULL &&
-         module->function_count != function_count) ||
+        module->function_count != function_count ||
         (function_count != 0U && functions == NULL)) {
         rv32_diag(diagnostic, "<rv32-abi>",
                   "rv32i: unsupported file-scope inline ASM or invalid Core function map");
         return false;
     }
-    ok = module != NULL
-        ? minic_program_emit_write_module(
-            path, program, target, functions, function_count,
-            function_sections, &config, &context,
-            module, rv32_visit_module_global)
-        : minic_program_emit_write(
-            path, program, target, functions, function_count,
-            function_sections, &config, &context);
+    ok = minic_program_emit_write_module(
+        path, module, target, functions, function_count,
+        function_sections, &config, &context,
+        rv32_visit_module_global);
     if (!ok && diagnostic != NULL && diagnostic->message[0] == '\0')
         rv32_diag(diagnostic, path, "rv32i: emission failed");
     return ok;
 }
 
-bool minic_riscv32_write_core_program(const char *path,
-                                      const MinicC0Program *program,
-                                      const MinicTargetInfo *target,
-                                      const MinicCoreFunction *functions,
-                                      size_t function_count,
-                                      bool function_sections,
-                                      MinicDiagnostic *diagnostic) {
-    return rv32_write_core_program_impl(path, program, target, functions,
-        function_count, function_sections, NULL, diagnostic);
-}
-
 bool minic_riscv32_write_core_module(const char *path,
-                                      const MinicC0Program *program,
                                       const MinicTargetInfo *target,
                                       const MinicCoreFunction *functions,
                                       size_t function_count,
@@ -1121,6 +1048,6 @@ bool minic_riscv32_write_core_module(const char *path,
                                       const MinicCoreModule *module,
                                       MinicDiagnostic *diagnostic) {
     return module != NULL && rv32_write_core_program_impl(
-        path, program, target, functions, function_count,
+        path, target, functions, function_count,
         function_sections, module, diagnostic);
 }

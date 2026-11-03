@@ -88,7 +88,7 @@ bool minic_aarch64_emit_residual_instruction(
     FILE *out, const MinicDirectLP64BlockContext *ctx,
     MinicCoreInstructionId ins_id, size_t block_id,
     size_t offset, bool *needs_writeback) {
-    const MinicC0Program *program;
+    const MinicCoreModule *module;
     const MinicTargetInfo *target;
     const MinicCoreFunction *fn;
     const MinicLP64FramePlan *frame_plan;
@@ -100,11 +100,11 @@ bool minic_aarch64_emit_residual_instruction(
     bool dynamic_frame;
     MinicA64FrameView frame_view;
     if (out == NULL || ctx == NULL || needs_writeback == NULL || ctx->fn == NULL ||
-        ctx->program == NULL || ctx->target == NULL ||
+        ctx->module == NULL || ctx->target == NULL ||
         ctx->frame_plan == NULL || ctx->name == NULL ||
         ins_id >= ctx->fn->instruction_count)
         return false;
-    program = ctx->program;
+    module = ctx->module;
     target = ctx->target;
     fn = ctx->fn;
     frame_plan = ctx->frame_plan;
@@ -307,7 +307,7 @@ bool minic_aarch64_emit_residual_instruction(
              * type determines narrowing, not the original int64 payload.
              * Lua exercises out-of-range literals in cast/enum contexts. */
             if (!minic_multi_direct_constant_integer_shape(
-                    program, target, fn, ins, &width, &sign))
+                    module, target, fn, ins, &width, &sign))
                 return minic_multi_direct_machine_reject(
                     fn, "aarch64", name, reject_stage, reject_block, reject_ins, __LINE__);
             if (width == 8U) {
@@ -348,17 +348,11 @@ bool minic_aarch64_emit_residual_instruction(
             if (!minic_multi_direct_global_address_symbol(fn, ins, &symbol))
                 return minic_multi_direct_machine_reject(
                     fn, "aarch64", name, reject_stage, reject_block, reject_ins, __LINE__);
-            if (!(ctx->module != NULL
-                    ? minic_target_info_elf_module_object_is_undefined_weak(
-                        ctx->module, symbol)
-                    : minic_target_info_elf_object_is_undefined_weak(
-                        program, symbol)) &&
+            if (!minic_target_info_elf_module_object_is_undefined_weak(
+                    module, symbol) &&
                 (!target->position_independent ||
-                 (ctx->module != NULL
-                    ? minic_target_info_elf_module_object_is_nonpreemptible(
-                        ctx->module, symbol)
-                    : minic_target_info_elf_object_is_nonpreemptible(
-                        program, symbol)))) {
+                 minic_target_info_elf_module_object_is_nonpreemptible(
+                     module, symbol))) {
                 /* Static definitions and ELF hidden/internal declarations
                  * bind locally, including undefined symbols resolved by the
                  * final shared link (Linux vDSO). Non-PIC code can also use
@@ -395,17 +389,11 @@ bool minic_aarch64_emit_residual_instruction(
             if (!minic_multi_direct_function_address_symbol(fn, ins, &symbol))
                 return minic_multi_direct_machine_reject(fn, "aarch64", name, reject_stage,
                                            reject_block, reject_ins, __LINE__);
-            if (!(ctx->module != NULL
-                    ? minic_target_info_elf_module_function_is_undefined_weak(
-                        ctx->module, symbol)
-                    : minic_target_info_elf_function_is_undefined_weak(
-                        program, symbol)) &&
+            if (!minic_target_info_elf_module_function_is_undefined_weak(
+                    module, symbol) &&
                 (!target->position_independent ||
-                 (ctx->module != NULL
-                    ? minic_target_info_elf_module_function_is_nonpreemptible(
-                        ctx->module, symbol)
-                    : minic_target_info_elf_function_is_nonpreemptible(
-                        program, symbol)))) {
+                 minic_target_info_elf_module_function_is_nonpreemptible(
+                     module, symbol))) {
                 if (fprintf(out, "  adrp x9, %s\n"
                                  "  add x9, x9, :lo12:%s\n",
                             symbol, symbol) < 0)
@@ -770,7 +758,7 @@ bool minic_aarch64_emit_residual_instruction(
             const MinicCoreValueId src = ins->value.operand;
             MinicDirectIntegerCastPlan cast;
             if (!minic_multi_direct_integer_cast_plan(
-                    program, target, fn, ins, frame_plan, &cast))
+                    module, target, fn, ins, frame_plan, &cast))
                 return minic_multi_direct_machine_reject(
                     fn, "aarch64", name, reject_stage,
                     reject_block, reject_ins, __LINE__);

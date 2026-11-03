@@ -774,7 +774,7 @@ static bool emit_linux_mmio_write(
 }
 
 static bool emit_linux_pci_mmconfig(
-    FILE *out, const MinicC0Program *program,
+    FILE *out, const MinicCoreModule *module,
     const MinicTargetInfo *target, const MinicCoreFunction *fn,
     const MinicX86Frame *frame, const MinicCoreInstruction *ins,
     const MinicCoreInlineAsm *info) {
@@ -788,7 +788,7 @@ static bool emit_linux_pci_mmconfig(
     const unsigned int width = read ? r : w;
     size_t value_width;
     const char *opcode;
-    if (!out || !program || !target || !fn || !frame || !ins || !info ||
+    if (!out || !module || !target || !fn || !frame || !ins || !info ||
         !ops || !width || !info->is_volatile || info->is_goto ||
         !info->has_memory_clobber || info->register_clobber_count ||
         ins->value.structured_inline_asm.operand_count != 2U ||
@@ -1240,7 +1240,7 @@ static bool emit_linux_irq_stack_call(
 }
 
 static bool emit_linux_three_call_alternative(
-    FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
+    FILE *out, const MinicCoreModule *module, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicX86Frame *frame,
     const MinicCoreInstruction *ins, const MinicCoreInlineAsm *info) {
     const MinicCoreStructuredInlineAsmOperand *b =
@@ -1249,7 +1249,7 @@ static bool emit_linux_three_call_alternative(
     const char *skip, *skip_end;
     const char *names[3];
     size_t i;
-    if (!out || !program || !target || !fn || !frame || !ins || !info ||
+    if (!out || !module || !target || !fn || !frame || !ins || !info ||
         !b || !info->is_volatile || info->is_goto ||
         !info->has_memory_clobber || info->register_clobber_count != 3U ||
         !info->register_clobbers ||
@@ -1420,7 +1420,7 @@ static bool emit_linux_tlb_cache(
  * ECX:EAX:EDX inputs. The feature number is an INTEGER_CONSTANT in Core,
  * never a runtime value smuggled into an ELF .4byte directive. */
 static bool emit_linux_alternative_wrmsr(
-    FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
+    FILE *out, const MinicCoreModule *module, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicX86Frame *frame,
     const MinicCoreInstruction *ins, const MinicCoreInlineAsm *info) {
     const MinicCoreStructuredInlineAsmOperand *b =
@@ -1428,7 +1428,7 @@ static bool emit_linux_alternative_wrmsr(
     const MinicCoreInstruction *feature;
     static const char *const physical[] = {"%rcx", "%rax", "%rdx"};
     size_t i, width;
-    if (!out || !program || !target || !fn || !frame || !ins || !info ||
+    if (!out || !module || !target || !fn || !frame || !ins || !info ||
         !b || !info->is_volatile || info->is_goto ||
         !info->has_memory_clobber || info->register_clobber_count != 0U ||
         ins->value.structured_inline_asm.operand_count != 4U ||
@@ -1522,13 +1522,13 @@ static bool emit_matched_register_template(
  * x86 64-bit shape, chooses physical caller-scratch R10/R11/RAX, and emits
  * only verified nonzero-word BSF/BSR semantics. */
 static bool emit_bit_scan_u64(
-    FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
+    FILE *out, const MinicCoreModule *module, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicX86Frame *frame,
     const MinicCoreInstruction *ins, const MinicCoreInlineAsm *info) {
     const MinicCoreStructuredInlineAsmOperand *b =
         ins->value.structured_inline_asm.operands;
     bool reverse = false;
-    if (!out || !program || !target || !fn || !frame || !ins || !info ||
+    if (!out || !module || !target || !fn || !frame || !ins || !info ||
         info->register_clobber_count != 0U ||
         info->has_memory_clobber || info->is_goto ||
         ins->value.structured_inline_asm.operand_count != 2U ||
@@ -1556,7 +1556,7 @@ static bool emit_bit_scan_u64(
  * with a 64-bit BSRQ. Respect input zero fallback and REAL flags, never
  * replace the hardware bit scan with a host C builtin. */
 static bool emit_linux_tied_bit_scan(
-    FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
+    FILE *out, const MinicCoreModule *module, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicX86Frame *frame,
     const MinicCoreInstruction *ins, const MinicCoreInlineAsm *info) {
     const MinicCoreStructuredInlineAsmOperand *b =
@@ -1570,7 +1570,7 @@ static bool emit_linux_tied_bit_scan(
         form == MINIC_X86_BIT_SCAN_BSR32_TIED ?
         "  bsrl %r10d, %eax\n" : "  bsrq %r10, %rax\n";
     size_t width, i;
-    if (!out || !program || !target || !fn || !frame || !info || !b ||
+    if (!out || !module || !target || !fn || !frame || !info || !b ||
         (count != 3U && count != 2U) ||
         (is64 && count != 2U) || (!is64 && count != 3U) ||
         info->is_goto || info->has_memory_clobber ||
@@ -1680,7 +1680,7 @@ static bool emit_linux_bitops(
 /* True CF carry-out propagation on 32-bit original Linux csum_add:
  * select GNU rm's register alternative. ALL inputs are materialized
  * before ADD, so ADC executes immediately with unmodified EFLAGS. */
-static bool emit_add32_carry(FILE *out,const MinicC0Program *p,
+static bool emit_add32_carry(FILE *out,const MinicCoreModule *p,
     const MinicTargetInfo *t,const MinicCoreFunction *fn,
     const MinicX86Frame *frame,const MinicCoreInstruction *ins,
     const MinicCoreInlineAsm *info){
@@ -1716,7 +1716,7 @@ static bool emit_add32_carry(FILE *out,const MinicC0Program *p,
  * and may each require arbitrary frame loads. Materialize every operand
  * before ADD: no flag-mutating calculation can intervene between ADCs. */
 static bool emit_linux_tcpudp_nofold(
-    FILE *out, const MinicC0Program *p, const MinicTargetInfo *t,
+    FILE *out, const MinicCoreModule *p, const MinicTargetInfo *t,
     const MinicCoreFunction *fn, const MinicX86Frame *frame,
     const MinicCoreInstruction *ins, const MinicCoreInlineAsm *info) {
     const MinicCoreStructuredInlineAsmOperand *b =
@@ -1752,7 +1752,7 @@ static bool emit_linux_tcpudp_nofold(
 /* The GS segment base is a real x86 hardware register. Address-backed
  * Core lvalues carry the per-CPU symbol/field displacement, not ordinary
  * C values. Use caller-saved RAX/R10/R11, preserve x86 width and flags. */
-static bool emit_linux_percpu_gs(FILE *out,const MinicC0Program *p,
+static bool emit_linux_percpu_gs(FILE *out,const MinicCoreModule *p,
     const MinicTargetInfo *t,const MinicCoreFunction *fn,
     const MinicX86Frame *frame,const MinicCoreInstruction *ins,
     const MinicCoreInlineAsm *info){
@@ -1809,7 +1809,7 @@ static bool emit_linux_percpu_gs(FILE *out,const MinicC0Program *p,
  * emission. Read the per-CPU GS displacement, combine it with live tied
  * input, and write the result into the canonical Core output lvalue. */
 static bool emit_linux_gs_tied_alu(
-    FILE *out, const MinicC0Program *p, const MinicTargetInfo *t,
+    FILE *out, const MinicCoreModule *p, const MinicTargetInfo *t,
     const MinicCoreFunction *fn, const MinicX86Frame *frame,
     const MinicCoreInstruction *ins, const MinicCoreInlineAsm *info) {
     static const char *const mnemonics[]={"add","sub","and","or","xor"};
@@ -1973,7 +1973,7 @@ static bool emit_linux_apic_amd_alt(
 /* Original Linux ip_fast_csum: preserve carry propagation and early
  * short-header branch; tied input operands are real Core scalar values.
  * No arbitrary assembly substitution or source-function special case. */
-static bool emit_ip_fast_csum(FILE *out, const MinicC0Program *p,
+static bool emit_ip_fast_csum(FILE *out, const MinicCoreModule *p,
     const MinicTargetInfo *t, const MinicCoreFunction *fn,
     const MinicX86Frame *frame, const MinicCoreInstruction *ins,
     const MinicCoreInlineAsm *info) {
@@ -2025,7 +2025,7 @@ static bool emit_ip_fast_csum(FILE *out, const MinicC0Program *p,
 
 /* The third GNU input "0" initializes %eax, while ADD and ADC must be
  * adjacent because CF is live. Both operands are real Core scalars. */
-static bool emit_checksum_fold(FILE *out,const MinicC0Program *p,
+static bool emit_checksum_fold(FILE *out,const MinicCoreModule *p,
     const MinicTargetInfo *t,const MinicCoreFunction *fn,
     const MinicX86Frame *frame,const MinicCoreInstruction *ins,
     const MinicCoreInlineAsm *info){
@@ -2063,7 +2063,7 @@ static bool emit_checksum_fold(FILE *out,const MinicC0Program *p,
  * with MOV, which does not change CF, before each dependent ADCQ; no C-level
  * arithmetic can replace the hardware carry propagation. */
 static bool emit_linux_csum_partial(
-    FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
+    FILE *out, const MinicCoreModule *module, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicX86Frame *frame,
     const MinicCoreInstruction *ins, const MinicCoreInlineAsm *info) {
     const unsigned int form = minic_x86_64_linux_csum_partial_form(
@@ -2074,7 +2074,7 @@ static bool emit_linux_csum_partial(
     size_t i;
     MinicCoreTypeId core_id;
     size_t width;
-    if (out == NULL || program == NULL || target == NULL || fn == NULL ||
+    if (out == NULL || module == NULL || target == NULL || fn == NULL ||
         frame == NULL || ins == NULL || info == NULL || operand == NULL ||
         form == 0U || info->is_goto || info->register_clobber_count ||
         info->has_memory_clobber != (form != 1U && form != 6U) ||
@@ -2142,7 +2142,7 @@ static bool emit_linux_csum_partial(
  * modify EBX, a SysV nonvolatile register. Save/restore RBX around the
  * complete four-register exchange; store EBX's returned value first. */
 static bool emit_linux_vmware_hypercall(
-    FILE *out, const MinicC0Program *program,
+    FILE *out, const MinicCoreModule *module,
     const MinicTargetInfo *target, const MinicCoreFunction *fn,
     const MinicX86Frame *frame, const MinicCoreInstruction *ins,
     const MinicCoreInlineAsm *info) {
@@ -2153,7 +2153,7 @@ static bool emit_linux_vmware_hypercall(
     const MinicCoreStructuredInlineAsmOperand *ops =
         ins->value.structured_inline_asm.operands;
     size_t i, width;
-    if (!form || !out || !program || !target || !fn || !frame || !ins ||
+    if (!form || !out || !module || !target || !fn || !frame || !ins ||
         !info || !ops || info->is_goto ||
         !info->has_memory_clobber || info->register_clobber_count ||
         ins->value.structured_inline_asm.operand_count != 8U) return false;
@@ -2184,7 +2184,7 @@ static bool emit_linux_vmware_hypercall(
 }
 
 static bool emit_linux_vmware_stealclock_alt(
-    FILE *out, const MinicC0Program *program,
+    FILE *out, const MinicCoreModule *module,
     const MinicTargetInfo *target, const MinicCoreFunction *fn,
     const MinicX86Frame *frame, const MinicCoreInstruction *ins,
     const MinicCoreInlineAsm *info) {
@@ -2200,7 +2200,7 @@ static bool emit_linux_vmware_stealclock_alt(
     const MinicCoreStructuredInlineAsmOperand *b =
         ins->value.structured_inline_asm.operands;
     size_t i, width;
-    if (!out || !program || !target || !fn || !frame || !ins || !info || !b ||
+    if (!out || !module || !target || !fn || !frame || !ins || !info || !b ||
         !minic_x86_64_linux_vmware_stealclock_alt_form(
             info->template_text, info->template_length) ||
         !info->is_volatile || info->is_goto || !info->has_memory_clobber ||
@@ -2249,7 +2249,7 @@ static bool emit_linux_vmware_stealclock_alt(
 }
 
 static bool emit_linux_legacy_fnsave(
-    FILE *out, const MinicC0Program *program,
+    FILE *out, const MinicCoreModule *module,
     const MinicTargetInfo *target, const MinicCoreFunction *fn,
     const MinicX86Frame *frame, const MinicCoreInstruction *ins,
     const MinicCoreInlineAsm *info) {
@@ -2257,7 +2257,7 @@ static bool emit_linux_legacy_fnsave(
         ins->value.structured_inline_asm.operands;
     MinicCoreTypeId image_id;
     const MinicCoreType *image;
-    if (!out || !program || !target || !fn || !frame || !ins || !info ||
+    if (!out || !module || !target || !fn || !frame || !ins || !info ||
         !ops || !minic_x86_64_linux_legacy_fnsave_form(
             info->template_text, info->template_length) ||
         !info->is_volatile || info->is_goto || info->has_memory_clobber ||
@@ -2324,7 +2324,7 @@ static bool emit_linux_efi_kernel_transfer(
 /* Privileged Linux rdmsr/wrmsr with 1:/2: exception fixups. Both GNU
  * relocation entries are real, with architecture-defined type 9 or 8.
  * No executing these privileged opcodes in unprivileged regression tests. */
-static bool emit_linux_msr(FILE *out,const MinicC0Program *program,
+static bool emit_linux_msr(FILE *out,const MinicCoreModule *module,
     const MinicTargetInfo *target,const MinicCoreFunction *fn,
     const MinicX86Frame *frame,const MinicCoreInstruction *ins,
     const MinicCoreInlineAsm *info){
@@ -2338,7 +2338,7 @@ static bool emit_linux_msr(FILE *out,const MinicC0Program *program,
     static const char *const output_registers32[]={"%eax","%edx"};
     static const char *const output_registers64[]={"%rax","%rdx"};
     size_t width,i;
-    if(!out||!program||!target||!fn||!frame||!ins||!info||!ops||
+    if(!out||!module||!target||!fn||!frame||!ins||!info||!ops||
        !form||!info->is_volatile||info->is_goto||
        info->register_clobber_count||
        info->has_memory_clobber!=(form==2U||form==4U||form==6U)||
@@ -2422,7 +2422,7 @@ static bool emit_linux_msr(FILE *out,const MinicC0Program *program,
 /* Linux's software fallback is executable before kernel runtime patches the
  * original CALL with the POPCNT replacement. ELF ALT section stores the
  * correct feature 151 and the two relative relocation expressions. */
-static bool emit_hweight_alternative(FILE *out,const MinicC0Program *p,
+static bool emit_hweight_alternative(FILE *out,const MinicCoreModule *p,
     const MinicTargetInfo *t,const MinicCoreFunction *fn,
     const MinicX86Frame *frame,const MinicCoreInstruction *ins,
     const MinicCoreInlineAsm *info){
@@ -2469,7 +2469,7 @@ static bool emit_hweight_alternative(FILE *out,const MinicC0Program *p,
 
 /* One target-owned EDX:EAX clock/PMC emitter. Read hardware first,
  * then store exact GNU typed output widths to address-backed Core slots. */
-static bool emit_x86_counter(FILE *out,const MinicC0Program *p,
+static bool emit_x86_counter(FILE *out,const MinicCoreModule *p,
     const MinicTargetInfo *t,const MinicCoreFunction *fn,
     const MinicX86Frame *frame,const MinicCoreInstruction *ins,
     const MinicCoreInlineAsm *info) {
@@ -2670,7 +2670,7 @@ static bool emit_linux_port_io(FILE *out,const MinicCoreFunction *fn,
  * register is initialized from the C lvalue and written back with the old
  * memory value. The memory gets the sum: neither operand may be dropped. */
 static bool emit_linux_local_xadd(
-    FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
+    FILE *out, const MinicCoreModule *module, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicX86Frame *frame,
     const MinicCoreInstruction *ins, const MinicCoreInlineAsm *info,
     MinicX86GsAtomicPlan plan) {
@@ -2682,7 +2682,7 @@ static bool emit_linux_local_xadd(
     const MinicCoreStructuredInlineAsmOperand *b =
         ins->value.structured_inline_asm.operands;
     size_t size, i;
-    if (!out || !program || !target || !fn || !frame || !b || !width ||
+    if (!out || !module || !target || !fn || !frame || !b || !width ||
         (plan.kind != MINIC_X86_GS_ATOMIC_XADD_SMP &&
          plan.kind != MINIC_X86_GS_ATOMIC_XADD_LOCAL &&
          plan.kind != MINIC_X86_GS_ATOMIC_XADD_PERCPU) ||
@@ -2728,7 +2728,7 @@ static bool emit_linux_local_xadd(
  * starts with the expected value and must receive the old memory value;
  * the +m operand names GS-relative per-CPU memory, not ordinary memory. */
 static bool emit_linux_gs_cmpxchg(
-    FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
+    FILE *out, const MinicCoreModule *module, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicX86Frame *frame,
     const MinicCoreInstruction *ins, const MinicCoreInlineAsm *info,
     MinicX86GsAtomicPlan plan) {
@@ -2738,7 +2738,7 @@ static bool emit_linux_gs_cmpxchg(
     const bool loop = plan.kind == MINIC_X86_GS_ATOMIC_CMPXCHG_RETRY;
     const char *suffix, *new_register, *old_register;
     size_t i, actual;
-    if (!out || !program || !target || !fn || !frame || !bind ||
+    if (!out || !module || !target || !fn || !frame || !bind ||
         !width || (plan.kind != MINIC_X86_GS_ATOMIC_CMPXCHG &&
                    plan.kind != MINIC_X86_GS_ATOMIC_CMPXCHG_RETRY) ||
         !info->is_volatile || info->is_goto ||
@@ -2786,7 +2786,7 @@ static bool emit_linux_gs_cmpxchg(
 }
 
 static bool emit_linux_rep_stos(
-    FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
+    FILE *out, const MinicCoreModule *module, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicX86Frame *frame,
     const MinicCoreInstruction *ins, const MinicCoreInlineAsm *info) {
     const MinicCoreStructuredInlineAsmOperand *bind =
@@ -2796,7 +2796,7 @@ static bool emit_linux_rep_stos(
     const char *opcode = width == 2U ? "rep stosw" :
                          width == 4U ? "rep stosl" : "rep stosq";
     size_t checked, i;
-    if (!out || !program || !target || !fn || !frame || !bind || !width ||
+    if (!out || !module || !target || !fn || !frame || !bind || !width ||
         !info->is_volatile || info->is_goto || !info->has_memory_clobber ||
         info->register_clobber_count ||
         ins->value.structured_inline_asm.operand_count != 5U)
@@ -3154,7 +3154,7 @@ static bool emit_linux_ipv6_checksum(
 }
 
 static bool emit_linux_lock_bitcc(
-    FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
+    FILE *out, const MinicCoreModule *module, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicX86Frame *frame,
     const MinicCoreInstruction *ins, const MinicCoreInlineAsm *info) {
     const MinicCoreStructuredInlineAsmOperand *b =
@@ -3165,7 +3165,7 @@ static bool emit_linux_lock_bitcc(
     const size_t fi = 1U-mi;
     MinicCoreTypeId flag_id;
     size_t width, input_width, i;
-    if (!out || !program || !target || !fn || !frame || !ins || !info || !b ||
+    if (!out || !module || !target || !fn || !frame || !ins || !info || !b ||
         !form || !info->is_volatile || info->is_goto ||
         !info->has_memory_clobber || info->register_clobber_count ||
         ins->value.structured_inline_asm.operand_count != 3U)
@@ -3461,7 +3461,7 @@ static bool emit_linux_atomic_rmw(
  * patch relocation and preserve ABI callee-saved RBX across the special
  * GNU operand contract, including when the C object itself is 16 bytes. */
 static bool emit_linux_cmpxchg128(
-    FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
+    FILE *out, const MinicCoreModule *module, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicX86Frame *frame,
     const MinicCoreInstruction *ins, const MinicCoreInlineAsm *info) {
     const MinicCoreStructuredInlineAsmOperand *b =
@@ -3472,7 +3472,7 @@ static bool emit_linux_cmpxchg128(
     const size_t at = alt ? 0U : 1U;
     const size_t count = alt ? 5U : 6U;
     size_t i, width;
-    if (!out || !program || !target || !fn || !frame || !info || !b || !form ||
+    if (!out || !module || !target || !fn || !frame || !info || !b || !form ||
         !info->is_volatile || info->is_goto || !info->has_memory_clobber ||
         info->register_clobber_count != (alt ? 1U : 0U) ||
         ins->value.structured_inline_asm.operand_count != count)
@@ -3724,13 +3724,13 @@ static bool emit_linux_atomic_cc(
  * consumes it immediately to create the branchless speculative mask.
  * Core transports typed SSA values, never a pretend boolean mask. */
 static bool emit_nospec_mask(
-    FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
+    FILE *out, const MinicCoreModule *module, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicX86Frame *frame,
     const MinicCoreInstruction *ins, const MinicCoreInlineAsm *info) {
     const MinicCoreStructuredInlineAsmOperand *b =
         ins->value.structured_inline_asm.operands;
     size_t width, index_width, i;
-    if (!out || !program || !target || !fn || !frame || !ins || !info ||
+    if (!out || !module || !target || !fn || !frame || !ins || !info ||
         ins->value.structured_inline_asm.operand_count != 3U ||
         !b || !info->is_volatile || info->is_goto || info->has_memory_clobber ||
         info->register_clobber_count != 1U || !info->register_clobbers ||
@@ -3765,13 +3765,13 @@ static bool emit_nospec_mask(
  * The caller's normal C result lvalue is written only after the GS read;
  * neither a plain Core LOAD nor generic textual inline asm is equivalent. */
 static bool emit_percpu_stable_u64(
-    FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
+    FILE *out, const MinicCoreModule *module, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicX86Frame *frame,
     const MinicCoreInstruction *ins, const MinicCoreInlineAsm *info) {
     const MinicCoreStructuredInlineAsmOperand *b =
         ins->value.structured_inline_asm.operands;
     size_t width;
-    if (!out || !program || !target || !fn || !frame || !ins || !info ||
+    if (!out || !module || !target || !fn || !frame || !ins || !info ||
         info->is_goto || info->has_memory_clobber ||
         info->register_clobber_count != 0U ||
         ins->value.structured_inline_asm.operand_count != 2U ||
@@ -4118,7 +4118,7 @@ static bool emit_linux_segment_register_extable(
  * only. The opaque __large_struct input is the address, never a C record
  * value to copy. Preserve 1/2/4/8-byte transfer width exactly. */
 static bool emit_linux_kernel_nofault_goto(
-    FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
+    FILE *out, const MinicCoreModule *module, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicX86Frame *frame,
     const MinicCoreInstruction *ins, const MinicCoreInlineAsm *info,
     size_t function_id) {
@@ -4133,7 +4133,7 @@ static bool emit_linux_kernel_nofault_goto(
     const MinicCoreStructuredInlineAsmOperand *b =
         ins->value.structured_inline_asm.operands;
     size_t bytes;
-    if (!out || !program || !target || !fn || !frame || !form ||
+    if (!out || !module || !target || !fn || !frame || !form ||
         !info->is_goto || !info->is_volatile || !info->has_memory_clobber ||
         info->register_clobber_count ||
         info->goto_target >= fn->block_count ||
@@ -5649,7 +5649,7 @@ static bool emit_linux_ip_here(
 }
 
 bool minic_x86_64_emit_structured_asm(
-    FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
+    FILE *out, const MinicCoreModule *module, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicX86Frame *frame,
     const MinicCoreInstruction *ins, size_t function_id) {
     const MinicCoreInlineAsm *info;
@@ -5664,7 +5664,7 @@ bool minic_x86_64_emit_structured_asm(
     };
     static const char *const mulacc_regs[3] = {"%r8", "%r9", "%rcx"};
 
-    if (!out || !program || !target || !fn || !frame || !ins ||
+    if (!out || !module || !target || !fn || !frame || !ins ||
         ins->kind != MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM ||
         ins->value.structured_inline_asm.inline_asm_id >= fn->inline_asm_count)
         return false;
@@ -5811,7 +5811,7 @@ bool minic_x86_64_emit_structured_asm(
             info->template_text, info->template_length, false) ||
         minic_x86_64_linux_pci_mmconfig_form(
             info->template_text, info->template_length, true))
-        return emit_linux_pci_mmconfig(out, program, target,
+        return emit_linux_pci_mmconfig(out, module, target,
                                       fn, frame, ins, info);
     if (minic_x86_64_linux_rep_string_io_form(
             info->template_text, info->template_length))
@@ -5834,7 +5834,7 @@ bool minic_x86_64_emit_structured_asm(
     if (minic_x86_64_linux_kernel_nofault_goto_form(
             info->template_text, info->template_length))
         return emit_linux_kernel_nofault_goto(
-            out, program, target, fn, frame, ins, info, function_id);
+            out, module, target, fn, frame, ins, info, function_id);
     if (minic_x86_64_linux_rep_movsb_alternative_form(
             info->template_text, info->template_length))
         return emit_linux_rep_movsb_alternative(out, fn, frame, ins, info);
@@ -5892,7 +5892,7 @@ bool minic_x86_64_emit_structured_asm(
     if (minic_x86_64_linux_alternative_wrmsr_form(
             info->template_text, info->template_length))
         return emit_linux_alternative_wrmsr(
-            out, program, target, fn, frame, ins, info);
+            out, module, target, fn, frame, ins, info);
     if (minic_x86_64_linux_control_register_form(
             info->template_text, info->template_length))
         return emit_linux_control_register(
@@ -5900,7 +5900,7 @@ bool minic_x86_64_emit_structured_asm(
     if (minic_x86_64_linux_three_call_alternative_form(
             info->template_text, info->template_length))
         return emit_linux_three_call_alternative(
-            out, program, target, fn, frame, ins, info);
+            out, module, target, fn, frame, ins, info);
     if (minic_x86_64_linux_boot_segments_template(
             info->template_text, info->template_length)) {
         const MinicCoreStructuredInlineAsmOperand *operand = bindings;
@@ -6200,7 +6200,7 @@ bool minic_x86_64_emit_structured_asm(
         unsigned int percpu_op=0U;size_t percpu_width=0U;
         if (minic_x86_64_linux_percpu_form(info->template_text,
               info->template_length,&percpu_op,&percpu_width))
-            return emit_linux_percpu_gs(out,program,target,fn,frame,ins,info);
+            return emit_linux_percpu_gs(out,module,target,fn,frame,ins,info);
     }
     if(minic_x86_64_linux_prefetchw_alt_form(
           info->template_text,info->template_length))
@@ -6211,31 +6211,31 @@ bool minic_x86_64_emit_structured_asm(
     { size_t gs_tied_width=0U;
       if(minic_x86_64_gs_tied_alu_form(
              info->template_text,info->template_length,&gs_tied_width))
-          return emit_linux_gs_tied_alu(out,program,target,fn,frame,ins,info);
+          return emit_linux_gs_tied_alu(out,module,target,fn,frame,ins,info);
     }
     if (minic_x86_64_add32_carry_template(
             info->template_text,info->template_length))
-        return emit_add32_carry(out,program,target,fn,frame,ins,info);
+        return emit_add32_carry(out,module,target,fn,frame,ins,info);
     if (minic_x86_64_linux_tcpudp_nofold_template(
             info->template_text,info->template_length))
-        return emit_linux_tcpudp_nofold(out,program,target,fn,frame,ins,info);
+        return emit_linux_tcpudp_nofold(out,module,target,fn,frame,ins,info);
     if (minic_x86_64_ip_fast_csum_template(
             info->template_text,info->template_length))
-        return emit_ip_fast_csum(out,program,target,fn,frame,ins,info);
+        return emit_ip_fast_csum(out,module,target,fn,frame,ins,info);
     if (minic_x86_64_checksum_fold_template(
             info->template_text,info->template_length))
-        return emit_checksum_fold(out,program,target,fn,frame,ins,info);
+        return emit_checksum_fold(out,module,target,fn,frame,ins,info);
     if (minic_x86_64_linux_vmware_hypercall_form(
             info->template_text, info->template_length))
-        return emit_linux_vmware_hypercall(out, program, target,
+        return emit_linux_vmware_hypercall(out, module, target,
                                           fn, frame, ins, info);
     if (minic_x86_64_linux_vmware_stealclock_alt_form(
             info->template_text, info->template_length))
-        return emit_linux_vmware_stealclock_alt(out, program, target,
+        return emit_linux_vmware_stealclock_alt(out, module, target,
                                                fn, frame, ins, info);
     if (minic_x86_64_linux_legacy_fnsave_form(
             info->template_text, info->template_length))
-        return emit_linux_legacy_fnsave(out, program, target,
+        return emit_linux_legacy_fnsave(out, module, target,
                                        fn, frame, ins, info);
     if (minic_x86_64_linux_kexec_load_segments_form(
             info->template_text, info->template_length))
@@ -6245,13 +6245,13 @@ bool minic_x86_64_emit_structured_asm(
         return emit_linux_efi_kernel_transfer(out, fn, frame, ins, info);
     if (minic_x86_64_linux_msr_form(
             info->template_text,info->template_length))
-        return emit_linux_msr(out,program,target,fn,frame,ins,info);
+        return emit_linux_msr(out,module,target,fn,frame,ins,info);
     if (minic_x86_64_hweight_alternative_form(
             info->template_text,info->template_length))
-        return emit_hweight_alternative(out,program,target,fn,frame,ins,info);
+        return emit_hweight_alternative(out,module,target,fn,frame,ins,info);
     if (minic_x86_64_linux_counter_form(
             info->template_text,info->template_length))
-        return emit_x86_counter(out,program,target,fn,frame,ins,info);
+        return emit_x86_counter(out,module,target,fn,frame,ins,info);
     {
         const MinicX86GsAtomicPlan atomic = minic_x86_64_gs_atomic_plan(
             info->template_text, info->template_length);
@@ -6259,11 +6259,11 @@ bool minic_x86_64_emit_structured_asm(
         case MINIC_X86_GS_ATOMIC_XADD_SMP:
         case MINIC_X86_GS_ATOMIC_XADD_LOCAL:
         case MINIC_X86_GS_ATOMIC_XADD_PERCPU:
-            return emit_linux_local_xadd(out, program, target, fn, frame,
+            return emit_linux_local_xadd(out, module, target, fn, frame,
                                          ins, info, atomic);
         case MINIC_X86_GS_ATOMIC_CMPXCHG:
         case MINIC_X86_GS_ATOMIC_CMPXCHG_RETRY:
-            return emit_linux_gs_cmpxchg(out, program, target, fn, frame,
+            return emit_linux_gs_cmpxchg(out, module, target, fn, frame,
                                          ins, info, atomic);
         case MINIC_X86_GS_ATOMIC_NONE:
             break;
@@ -6271,17 +6271,17 @@ bool minic_x86_64_emit_structured_asm(
     }
     if (minic_x86_64_linux_rep_stos_width(
             info->template_text, info->template_length))
-        return emit_linux_rep_stos(out, program, target, fn, frame, ins, info);
+        return emit_linux_rep_stos(out, module, target, fn, frame, ins, info);
     if (minic_x86_64_linux_lock_bitcc_form(
             info->template_text, info->template_length))
         return emit_linux_lock_bitcc(
-            out, program, target, fn, frame, ins, info);
+            out, module, target, fn, frame, ins, info);
     if (minic_x86_64_linux_csum_partial_form(
             info->template_text, info->template_length))
-        return emit_linux_csum_partial(out, program, target, fn, frame, ins, info);
+        return emit_linux_csum_partial(out, module, target, fn, frame, ins, info);
     if (minic_x86_64_linux_cmpxchg128_form(
             info->template_text, info->template_length))
-        return emit_linux_cmpxchg128(out,program,target,fn,frame,ins,info);
+        return emit_linux_cmpxchg128(out,module,target,fn,frame,ins,info);
     /* Preserve the pre-existing memory-clobber family (including its
      * valid two-operand dec_mod shape). Only DISJOINT no-clobber,
      * register-output two-operand templates enter the BSF/BSR selector.
@@ -6306,18 +6306,18 @@ bool minic_x86_64_emit_structured_asm(
             bit_scan_form == MINIC_X86_BIT_SCAN_BSR32_TIED ||
             bit_scan_form == MINIC_X86_BIT_SCAN_BSR64_READWRITE)
             return emit_linux_tied_bit_scan(
-                out, program, target, fn, frame, ins, info);
+                out, module, target, fn, frame, ins, info);
     }
     if (ins->value.structured_inline_asm.operand_count == 2U &&
         info->register_clobber_count == 0U) {
         if (minic_x86_64_asm_percpu_stable_template(
                 info->template_text, info->template_length))
             return emit_percpu_stable_u64(
-                out, program, target, fn, frame, ins, info);
-        return emit_bit_scan_u64(out, program, target, fn, frame, ins, info);
+                out, module, target, fn, frame, ins, info);
+        return emit_bit_scan_u64(out, module, target, fn, frame, ins, info);
     }
     if (ins->value.structured_inline_asm.operand_count == 3U)
-        return emit_nospec_mask(out, program, target, fn, frame, ins, info);
+        return emit_nospec_mask(out, module, target, fn, frame, ins, info);
     if (!info->is_volatile)
         return false;
     if (ins->value.structured_inline_asm.operand_count == 4U)

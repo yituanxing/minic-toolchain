@@ -194,13 +194,13 @@ static size_t loong_known_address_alignment(
 }
 
 bool minic_loongarch64_direct_frame_memory_use(
-    const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicCoreModule *module, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicLP64FramePlan *plan,
     const MinicCoreInstruction *ins) {
     MinicCoreValueId address;
     size_t width = 0U, direct_offset = 0U;
     bool sign = false, pointer = false;
-    if (program == NULL || target == NULL || fn == NULL ||
+    if (module == NULL || target == NULL || fn == NULL ||
         plan == NULL || ins == NULL)
         return false;
     switch (ins->kind) {
@@ -441,12 +441,12 @@ bool minic_loongarch64_emit_asm_input_scalar(
  * proven scalar and relaxed atomic shapes and complete 16-byte payloads.
  * Scalar reads leave a GP result; wide reads write two SSA words directly. */
 bool minic_loongarch64_emit_memory_instruction(
-    FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
+    FILE *out, const MinicCoreModule *module, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
     const MinicLP64FramePlan *frame_plan,
     size_t function_id, bool dynamic_frame, bool value_in_previous_gp,
     bool *needs_gp_store) {
-    if (out == NULL || program == NULL || target == NULL ||
+    if (out == NULL || module == NULL || target == NULL ||
         fn == NULL || ins == NULL || frame_plan == NULL ||
         needs_gp_store == NULL)
         return false;
@@ -488,7 +488,7 @@ bool minic_loongarch64_emit_memory_instruction(
                     fn, ins, &width, &sign, &pointer))
                 return false;
             if (minic_loongarch64_direct_frame_memory_use(
-                    program, target, fn, frame_plan, ins)) {
+                    module, target, fn, frame_plan, ins)) {
                 const char *op = loong_frame_store_op(pointer ? 8U : width);
                 if (op == NULL ||
                     !loong_static_frame_address(
@@ -544,7 +544,7 @@ bool minic_loongarch64_emit_memory_instruction(
                     fn, ins, &width, &sign, &pointer))
                 return false;
             if (minic_loongarch64_direct_frame_memory_use(
-                    program, target, fn, frame_plan, ins)) {
+                    module, target, fn, frame_plan, ins)) {
                 const char *op = loong_frame_load_op(pointer ? 8U : width, sign);
                 if (op == NULL ||
                     !loong_static_frame_address(

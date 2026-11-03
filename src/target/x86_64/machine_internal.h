@@ -35,7 +35,7 @@ bool minic_x86_64_emit_fp_instruction(
     FILE *, const MinicCoreFunction *, const MinicX86Frame *,
     const MinicCoreInstruction *);
 bool minic_x86_64_emit_structured_asm(
-    FILE *, const MinicC0Program *, const MinicTargetInfo *,
+    FILE *, const MinicCoreModule *, const MinicTargetInfo *,
     const MinicCoreFunction *, const MinicX86Frame *,
     const MinicCoreInstruction *, size_t);
 bool minic_x86_64_emit_linux_smap_alternative(

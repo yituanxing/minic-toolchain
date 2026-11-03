@@ -298,8 +298,8 @@ static bool x86_no_sse_function_safe(
     return true;
 }
 
-static bool x86_emit_function(FILE *out, const MinicC0Program *program,
-                              const MinicTargetInfo *target, const MinicFunction *declaration,
+static bool x86_emit_function(FILE *out,
+                              const MinicTargetInfo *target,
                               const MinicCoreModuleFunctionSymbol *module_decl,
                               const MinicCoreModule *module,
                               const MinicCoreFunction *fn, const MinicCoreFunctionFacts *facts,
@@ -308,18 +308,12 @@ static bool x86_emit_function(FILE *out, const MinicC0Program *program,
                               bool inherited_head_address_context,
                               MinicDiagnostic *diag, const char *path) {
     MinicX86Frame frame = {0};
-    const char *name = module_decl != NULL ? module_decl->name
-                                            : minic_c0_function_symbol_name(declaration);
-    const char *section_name = module_decl != NULL ? module_decl->section_name
-        : declaration->section_name;
-    const size_t explicit_alignment = module_decl != NULL
-        ? module_decl->explicit_alignment : declaration->explicit_alignment;
-    const bool is_internal = module_decl != NULL ? module_decl->is_internal
-        : declaration->is_internal;
-    const bool is_weak = module_decl != NULL ? module_decl->is_weak
-        : declaration->is_weak;
-    const bool is_constructor = module_decl != NULL ? module_decl->is_constructor
-        : declaration->is_constructor;
+    const char *name = module_decl->name;
+    const char *section_name = module_decl->section_name;
+    const size_t explicit_alignment = module_decl->explicit_alignment;
+    const bool is_internal = module_decl->is_internal;
+    const bool is_weak = module_decl->is_weak;
+    const bool is_constructor = module_decl->is_constructor;
     size_t block_index;
     MinicCoreBlockWalk walk = {0};
     bool *reachable = NULL;
@@ -440,11 +434,8 @@ static bool x86_emit_function(FILE *out, const MinicC0Program *program,
     if (!is_internal) {
         if (fprintf(out, is_weak ? ".weak %s\n" : ".globl %s\n", name) < 0)
             goto done;
-        if (!(module_decl != NULL
-              ? minic_multi_module_emit_elf_symbol_visibility(
-                    out, module_decl->visibility, name)
-              : minic_multi_emit_elf_symbol_visibility(
-                    out, declaration->visibility, name))) goto done;
+        if (!minic_multi_module_emit_elf_symbol_visibility(
+                out, module_decl->visibility, name)) goto done;
     }
     if (explicit_alignment != 0U &&
         fprintf(out, ".balign %zu\n", explicit_alignment) < 0)
@@ -593,7 +584,7 @@ static bool x86_emit_function(FILE *out, const MinicC0Program *program,
             frame.direct_object_address_consumer = previous_direct_address;
             frame.direct_object_address_value_id = previous_direct_value;
             frame.direct_object_address_object_id = previous_direct_object;
-            if (!minic_x86_64_emit_core_instruction(out, program, target, fn, &frame,
+            if (!minic_x86_64_emit_core_instruction(out, module, target, fn, &frame,
                                                     ins, function_id, id)) {
                 char message[256];
                 if (getenv("MINIC_ASM_FRONTIER_TRACE") && ins &&
@@ -731,8 +722,8 @@ static size_t x86_find_function_name(
  * already-relocated pointer. Do not extend this to a helper shared by normal
  * code or whose address escapes through a function pointer. */
 static bool *x86_head_address_call_closure(
-    const MinicC0Program *program, const MinicCoreFunction *functions,
-    size_t function_count, const MinicCoreModule *module) {
+    const MinicCoreFunction *functions, size_t function_count,
+    const MinicCoreModule *module) {
     MinicX86FunctionNameIndex *names = NULL;
     bool *head = NULL, *head_call = NULL, *normal_call = NULL, *address_taken = NULL;
     bool changed;
@@ -748,13 +739,10 @@ static bool *x86_head_address_call_closure(
     if (!names || !head || !head_call || !normal_call || !address_taken)
         goto fail;
     for (i = 0U; i < function_count; ++i) {
-        const MinicFunction *decl = module == NULL ? &program->functions[i] : NULL;
-        const MinicCoreModuleFunctionSymbol *module_decl = module != NULL
-            ? &module->function_symbols[i] : NULL;
-        const char *section = module_decl != NULL
-            ? module_decl->section_name : decl->section_name;
-        names[i].name = module_decl != NULL ? module_decl->name
-            : minic_c0_function_symbol_name(decl);
+        const MinicCoreModuleFunctionSymbol *module_decl =
+            &module->function_symbols[i];
+        const char *section = module_decl->section_name;
+        names[i].name = module_decl->name;
         names[i].index = i;
         if (names[i].name == NULL) goto fail;
         head[i] = section != NULL && strcmp(section, ".head.text") == 0;
@@ -800,13 +788,10 @@ static bool *x86_head_address_call_closure(
             }
         }
         for (i = 0U; i < function_count; ++i) {
-            const MinicFunction *decl = module == NULL ? &program->functions[i] : NULL;
-            const MinicCoreModuleFunctionSymbol *module_decl = module != NULL
-                ? &module->function_symbols[i] : NULL;
-            const bool internal = module_decl != NULL
-                ? module_decl->is_internal : decl->is_internal;
-            const char *section = module_decl != NULL
-                ? module_decl->section_name : decl->section_name;
+            const MinicCoreModuleFunctionSymbol *module_decl =
+                &module->function_symbols[i];
+            const bool internal = module_decl->is_internal;
+            const char *section = module_decl->section_name;
             if (!head[i] && head_call[i] && !normal_call[i] &&
                 !address_taken[i] && internal && section == NULL) {
                 head[i] = true;
@@ -828,81 +813,6 @@ fail:
     return NULL;
 }
 
-static bool x86_visit_global(
-    FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
-    const MinicGlobalObject *obj, size_t index, void *opaque) {
-    const MinicX86VisitContext *ctx = opaque;
-    (void)index;
-    if (obj->is_extern) {
-        if (obj->alias_target != MINIC_GLOBAL_OBJECT_INVALID)
-            return minic_multi_elf_emit_object_alias(
-                out, program, obj, "@object");
-        return true;
-    }
-    if (minic_x86_64_emit_global(out, program, target, obj)) return true;
-    {
-        char message[256];
-        if (getenv("MINIC_X86_GLOBAL_TRACE") != NULL) {
-            const MinicArrayType *outer = minic_type_is_array(obj->type)
-                ? minic_c0_program_array_type(program, obj->type.array_type_id) : NULL;
-            size_t r;
-            (void)fprintf(stderr,
-                          "MINIC_X86_GLOBAL_FRONTIER object=%s base=%u depth=%u "
-                          "array_count=%zu array_zero=%d element_base=%u "
-                          "element_record=%zu init=%zu reloc=%zu\n",
-                          obj->name != NULL ? obj->name : "<unnamed>",
-                          (unsigned int)obj->type.base_kind,
-                          obj->type.pointer_depth,
-                          outer != NULL ? outer->element_count : 0U,
-                          outer != NULL && outer->is_zero_length ? 1 : 0,
-                          outer != NULL ? (unsigned int)outer->element_type.base_kind : 0U,
-                          outer != NULL ? outer->element_type.record_id : 0U,
-                          obj->initializer_count, obj->relocation_count);
-            if (outer != NULL && minic_type_is_record(outer->element_type)) {
-                const MinicRecord *record = minic_c0_program_record(
-                    program, outer->element_type.record_id);
-                size_t f;
-                (void)fprintf(stderr,
-                              "MINIC_X86_GLOBAL_RECORD_FRONTIER record=%zu "
-                              "count=%zu union=%d complete=%d\n",
-                              outer->element_type.record_id,
-                              record != NULL ? record->field_count : 0U,
-                              record != NULL && record->is_union ? 1 : 0,
-                              record != NULL && record->is_complete ? 1 : 0);
-                if (record != NULL) for (f = 0U; f < record->field_count; ++f) {
-                    const MinicRecordField *field = &record->fields[f];
-                    (void)fprintf(stderr,
-                                  "MINIC_X86_GLOBAL_FIELD_FRONTIER index=%zu "
-                                  "base=%u count=%zu bitfield=%d union=%d\n",
-                                  f, (unsigned int)field->type.base_kind,
-                                  field->element_count, field->is_bit_field ? 1 : 0,
-                                  minic_type_is_record(field->type) ? 1 : 0);
-                }
-            }
-            for (r = 0U; r < obj->relocation_count; ++r) {
-                const MinicGlobalRelocation *reloc = &obj->relocations[r];
-                (void)fprintf(stderr,
-                              "MINIC_X86_GLOBAL_RELOCATION_FRONTIER object=%s "
-                              "index=%zu kind=%u slot=%zu target_kind=%u "
-                              "target_id=%zu addend=%" PRId64 "\n",
-                              obj->name != NULL ? obj->name : "<unnamed>",
-                              r, (unsigned int)reloc->location_kind,
-                              reloc->location_index, (unsigned int)reloc->target_kind,
-                              reloc->target_id, reloc->target_byte_addend);
-            }
-        }
-        (void)snprintf(message, sizeof(message),
-                       "x86-64 global initializer/relocation unsupported: %s "
-                       "(record=%d init=%zu reloc=%zu union=%zu zero=%d tentative=%d)",
-                       obj->name != NULL ? obj->name : "<unnamed>",
-                       (int)minic_type_is_record(obj->type),
-                       obj->initializer_count, obj->relocation_count,
-                       obj->union_selection_count,
-                       (int)obj->is_zero_initialized, (int)obj->is_tentative);
-        x86_error(ctx->diagnostic, ctx->path, message);
-    }
-    return false;
-}
 
 /* Production ModuleIR path: global payload and source symbol facts were
  * already sealed before target emission.  No C AST/global descriptor reads. */
@@ -929,15 +839,15 @@ static bool x86_visit_module_global(
 }
 
 static bool x86_visit_function(
-    FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
-    const MinicFunction *decl, const MinicCoreModuleFunctionSymbol *module_decl,
+    FILE *out, const MinicCoreModule *module, const MinicTargetInfo *target,
+    const MinicCoreModuleFunctionSymbol *module_decl,
     const MinicCoreFunction *fn,
     const MinicCoreFunctionFacts *facts,
     const MinicCoreObjectStoragePlan *storage, size_t index,
     bool function_sections, void *opaque) {
     const MinicX86VisitContext *ctx = opaque;
-    return x86_emit_function(out, program, target, decl, module_decl,
-                             ctx->module, fn, facts, storage, index,
+    return x86_emit_function(out, target, module_decl,
+                             module, fn, facts, storage, index,
                              function_sections,
                              ctx->head_address_context != NULL &&
                              ctx->head_address_context[index],
@@ -945,20 +855,16 @@ static bool x86_visit_function(
 }
 
 static bool x86_between(
-    FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
+    FILE *out, const MinicCoreModule *module, const MinicTargetInfo *target,
     const MinicCoreFunction *functions, size_t function_count,
     bool function_sections, void *context) {
-    const MinicX86VisitContext *ctx = context;
-    const bool module_bound = ctx != NULL && ctx->module != NULL;
-    if (!(module_bound
-            ? minic_program_emit_source_file_asm_module(out, ctx->module) &&
-              minic_multi_elf_emit_module_function_aliases(
-                  out, ctx->module, "@function")
-            : minic_program_emit_source_file_asm_stage(
-                  out, program, target, functions, function_count,
-                  function_sections, context) &&
-              minic_multi_elf_emit_function_aliases(
-                  out, program, "@function")))
+    (void)functions;
+    (void)function_count;
+    (void)function_sections;
+    (void)context;
+    if (!minic_program_emit_source_file_asm_module(out, module) ||
+        !minic_multi_elf_emit_module_function_aliases(
+            out, module, "@function"))
         return false;
     if ((target->x86_codegen_options & MINIC_X86_CODEGEN_IBT_ENDBR) != 0U &&
         fputs(".section .note.gnu.property,\"a\"\n"
@@ -978,65 +884,50 @@ static bool x86_between(
 }
 
 static bool x86_write_core_program_impl(
-    const char *path, const MinicC0Program *program, const MinicTargetInfo *target,
+    const char *path, const MinicTargetInfo *target,
     const MinicCoreFunction *core_functions, size_t core_function_count,
     bool function_sections, const MinicCoreModule *module,
     MinicDiagnostic *diagnostic) {
     static const MinicProgramEmitConfig config = {
-        x86_visit_global, x86_visit_function, NULL,
+        x86_visit_function, NULL,
         x86_between,
         ".section .note.GNU-stack,\"\",@progbits\n", NULL,
         MINIC_PROGRAM_FUNCTION_LIVE_DEFINITIONS, false
     };
     bool success;
     MinicX86VisitContext visits = { diagnostic, path, NULL, module };
-    if (path == NULL || program == NULL || target == NULL ||
+    if (path == NULL || module == NULL || target == NULL ||
         target->architecture != MINIC_TARGET_ARCH_X86_64 ||
         (core_function_count != 0U && core_functions == NULL) ||
-        (module != NULL &&
-         module->function_count != core_function_count) ||
-        core_function_count != program->function_count) {
-        x86_error(diagnostic, path, "x86-64 invalid program or target");
+        module->function_count != core_function_count) {
+        x86_error(diagnostic, path, "x86-64 invalid module or target");
         return false;
     }
     if (!target->position_independent) {
         visits.head_address_context = x86_head_address_call_closure(
-            program, core_functions, core_function_count, module);
+            core_functions, core_function_count, module);
         if (visits.head_address_context == NULL) {
             x86_error(diagnostic, path, "x86-64 cannot plan early head call roles");
             return false;
         }
     }
-    success = module != NULL
-        ? minic_program_emit_write_module(
-            path, program, target, core_functions, core_function_count,
-            function_sections, &config, (void *)&visits,
-            module, x86_visit_module_global)
-        : minic_program_emit_write(
-            path, program, target, core_functions, core_function_count,
-            function_sections, &config, (void *)&visits);
+    success = minic_program_emit_write_module(
+        path, module, target, core_functions, core_function_count,
+        function_sections, &config, (void *)&visits,
+        x86_visit_module_global);
     free((void *)visits.head_address_context);
     if (!success && diagnostic != NULL && diagnostic->message[0] == '\0')
         x86_error(diagnostic, path, "x86-64 cannot emit assembly");
     return success;
 }
 
-bool minic_x86_64_write_c0_program_with_core_functions(
-    const char *path, const MinicC0Program *program, const MinicTargetInfo *target,
-    const MinicCoreFunction *core_functions, size_t core_function_count,
-    bool function_sections, MinicDiagnostic *diagnostic) {
-    return x86_write_core_program_impl(path, program, target, core_functions,
-                                       core_function_count, function_sections,
-                                       NULL, diagnostic);
-}
-
 bool minic_x86_64_write_c0_program_with_core_module(
-    const char *path, const MinicC0Program *program, const MinicTargetInfo *target,
+    const char *path, const MinicTargetInfo *target,
     const MinicCoreFunction *core_functions, size_t core_function_count,
     bool function_sections, const MinicCoreModule *module,
     MinicDiagnostic *diagnostic) {
     return module != NULL &&
-           x86_write_core_program_impl(path, program, target, core_functions,
+           x86_write_core_program_impl(path, target, core_functions,
                                        core_function_count, function_sections,
                                        module, diagnostic);
 }

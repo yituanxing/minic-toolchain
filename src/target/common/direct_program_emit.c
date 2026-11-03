@@ -1,7 +1,6 @@
 #include "target/common/direct_program_emit.h"
 
 #include "target/backend_core_usage.h"
-#include "target/common/global_emit.h"
 #include "target/common/module_global_emit.h"
 #include "target/common/elf_alias_emit.h"
 #include "target/common/program_visit.h"
@@ -90,38 +89,6 @@ static bool direct_emit_module_global(FILE *out,
                    obj->storage_size) >= 0;
 }
 
-static bool direct_visit_global(
-    FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
-    const MinicGlobalObject *obj, size_t index, void *opaque) {
-    const MinicDirectVisitContext *ctx = opaque;
-    bool success = true;
-    (void)index;
-    if (!obj->is_extern) {
-        success = minic_multi_emit_simple_global(
-            out, program, target, obj, minic_multi_emit_elf_relocation);
-    } else if (obj->alias_target != MINIC_GLOBAL_OBJECT_INVALID) {
-        success = minic_multi_elf_emit_object_alias(
-            out, program, obj, ctx->config->elf_object_type);
-    }
-    if (!success && getenv("MINIC_M1_TRACE") != NULL) {
-        const MinicArrayType *array = minic_type_is_array(obj->type)
-            ? minic_c0_program_array_type(program, obj->type.array_type_id) : NULL;
-        const MinicRecord *record = array != NULL &&
-            minic_type_is_record(array->element_type)
-            ? minic_c0_program_record(program, array->element_type.record_id) : NULL;
-        (void)fprintf(stderr,
-            "MINIC_M4_GLOBAL_FRONTIER arch=%s name=%s init=%zu reloc=%zu type_kind=%d element_kind=%d element_count=%zu fields=%zu\n",
-            ctx->config->architecture_name,
-            obj->name != NULL ? obj->name : "<unnamed>",
-            obj->initializer_count, obj->relocation_count,
-            (int)obj->type.base_kind,
-            array != NULL ? (int)array->element_type.base_kind : -1,
-            array != NULL ? array->element_count : 0U,
-            record != NULL ? record->field_count : 0U);
-    }
-    return success;
-}
-
 static bool direct_visit_module_global(
     FILE *out, const MinicCoreModule *module, const MinicTargetInfo *target,
     const MinicCoreModuleGlobal *obj, size_t index, void *opaque) {
@@ -148,15 +115,15 @@ static bool direct_visit_module_global(
 }
 
 static bool direct_visit_function(
-    FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
-    const MinicFunction *decl, const MinicCoreModuleFunctionSymbol *module_decl,
+    FILE *out, const MinicCoreModule *module, const MinicTargetInfo *target,
+    const MinicCoreModuleFunctionSymbol *module_decl,
     const MinicCoreFunction *fn,
     const MinicCoreFunctionFacts *facts,
     const MinicCoreObjectStoragePlan *storage, size_t index,
     bool function_sections, void *opaque) {
     MinicDirectVisitContext *ctx = opaque;
     ++ctx->scanned_functions;
-    if (ctx->config->emit_function(out, program, target, ctx->module, decl, module_decl, fn,
+    if (ctx->config->emit_function(out, target, module, module_decl, fn,
                                    facts, storage, index, function_sections))
         return true;
     ++ctx->rejected_functions;
@@ -175,25 +142,23 @@ static bool direct_visit_function(
 }
 
 static bool direct_between(
-    FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
+    FILE *out, const MinicCoreModule *module, const MinicTargetInfo *target,
     const MinicCoreFunction *functions, size_t function_count,
     bool function_sections, void *opaque) {
     const MinicDirectVisitContext *ctx = opaque;
     if (ctx == NULL || ctx->config == NULL)
         return false;
-    if (ctx->module != NULL)
-        return minic_program_emit_source_file_asm_module(out, ctx->module) &&
-               minic_multi_elf_emit_module_function_aliases(
-                   out, ctx->module, ctx->config->elf_function_type);
-    return minic_program_emit_source_file_asm_stage(
-               out, program, target, functions, function_count,
-               function_sections, opaque) &&
-           minic_multi_elf_emit_function_aliases(
-               out, program, ctx->config->elf_function_type);
+    (void)target;
+    (void)functions;
+    (void)function_count;
+    (void)function_sections;
+    return minic_program_emit_source_file_asm_module(out, module) &&
+           minic_multi_elf_emit_module_function_aliases(
+               out, module, ctx->config->elf_function_type);
 }
 
 bool minic_multi_direct_write_program_with_module(
-    const char *path, const MinicC0Program *program,
+    const char *path,
     const MinicTargetInfo *target, const MinicCoreFunction *core_functions,
     size_t core_function_count, bool function_sections,
     const MinicCoreModule *module, const MinicMultiDirectProgramConfig *config,
@@ -207,25 +172,23 @@ bool minic_multi_direct_write_program_with_module(
         config->elf_function_type == NULL || config->elf_object_type == NULL ||
         config->emit_function == NULL)
         return false;
-    if (path == NULL || program == NULL || target == NULL ||
+    if (path == NULL || module == NULL || target == NULL ||
         target->architecture != config->architecture ||
         (core_function_count > 0U && core_functions == NULL) ||
-        core_function_count != program->function_count ||
-        (module != NULL &&
-         (!minic_core_module_verify(module) || !module->finalized ||
-          module->function_count != core_function_count)))
+        !minic_core_module_verify(module) || !module->finalized ||
+        module->function_count != core_function_count)
         return minic_multi_direct_fail(diagnostic, path, config->display_name,
                                        "invalid Core or target configuration");
     {
         const MinicProgramEmitConfig emit = {
-            direct_visit_global, direct_visit_function,
+            direct_visit_function,
             NULL, direct_between,
             config->gnu_stack_note, NULL,
             MINIC_PROGRAM_FUNCTION_LIVE_DEFINITIONS, census
         };
         success = minic_program_emit_write_module(
-            path, program, target, core_functions, core_function_count,
-            function_sections, &emit, &visits, module,
+            path, module, target, core_functions, core_function_count,
+            function_sections, &emit, &visits,
             direct_visit_module_global);
     }
     if (census) {
@@ -241,15 +204,4 @@ bool minic_multi_direct_write_program_with_module(
         return minic_multi_direct_fail(diagnostic, path, config->display_name,
                                        "Core instruction/ABI not yet supported by M1 emitter");
     return true;
-}
-
-bool minic_multi_direct_write_program(
-    const char *path, const MinicC0Program *program,
-    const MinicTargetInfo *target, const MinicCoreFunction *core_functions,
-    size_t core_function_count, bool function_sections,
-    const MinicMultiDirectProgramConfig *config,
-    MinicDiagnostic *diagnostic) {
-    return minic_multi_direct_write_program_with_module(
-        path, program, target, core_functions, core_function_count,
-        function_sections, NULL, config, diagnostic);
 }

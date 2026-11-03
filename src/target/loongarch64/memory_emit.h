@@ -1,7 +1,7 @@
 #ifndef MINIC_TARGET_LOONGARCH64_MEMORY_EMIT_H
 #define MINIC_TARGET_LOONGARCH64_MEMORY_EMIT_H
 #include "core/core_ir.h"
-#include "frontend/ast.h"
+#include "core/module_ir.h"
 #include "target/common/lp64_frame.h"
 #include "target/target_info.h"
 #include <stdbool.h>
@@ -10,7 +10,7 @@
 
 /* Native Core memory loads/stores and relaxed atomic byte transfers. */
 bool minic_loongarch64_emit_memory_instruction(
-    FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
+    FILE *out, const MinicCoreModule *module, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
     const MinicLP64FramePlan *frame_plan,
     size_t function_id, bool dynamic_frame, bool value_in_previous_gp,
@@ -25,7 +25,7 @@ bool minic_loongarch64_memory_helpers_end(FILE *out);
  * emitter and address-materialization elision. Never elide a producer
  * unless every consumer is certified to take the direct native path. */
 bool minic_loongarch64_direct_frame_memory_use(
-    const MinicC0Program *, const MinicTargetInfo *,
+    const MinicCoreModule *, const MinicTargetInfo *,
     const MinicCoreFunction *, const MinicLP64FramePlan *,
     const MinicCoreInstruction *);
 

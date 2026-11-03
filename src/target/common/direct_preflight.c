@@ -109,7 +109,7 @@ static void direct_lp64_trace_asm_owners(
  * Reject unsupported Core shapes before generating partial GNU assembly.
  * Caller owns target ABI, registers, frame and any failure diagnostics. */
 bool minic_multi_direct_lp64_function_preflight(
-    const MinicFunction *decl, const MinicCoreModuleFunctionSymbol *module_decl,
+    const MinicCoreModuleFunctionSymbol *module_decl,
     const MinicCoreFunction *fn,
     const MinicCoreFunctionFacts *facts, const char *arch, const char *name,
     MinicDirectLP64OpaqueAsmQualifier qualify_opaque_asm,
@@ -119,27 +119,21 @@ bool minic_multi_direct_lp64_function_preflight(
     bool visibility_valid, alias_present, constructor, weak;
     bool has_section;
     unsigned int visibility;
-    if ((decl == NULL && module_decl == NULL) || fn == NULL ||
+    if (module_decl == NULL || fn == NULL ||
         fn->type_context == NULL ||
         arch == NULL || !minic_direct_lp64_abi_policy_valid(abi)) return false;
     verified = minic_core_function_facts_verified(facts, fn) ||
                minic_core_function_verify(fn);
     return_valid = minic_lp64_core_valid_return_with_indirect(
         fn->type_context, fn->core_return_type_id, abi->core_indirect_return);
-    visibility_valid = module_decl != NULL
-        ? (module_decl->visibility == MINIC_CORE_MODULE_VISIBILITY_DEFAULT ||
-           minic_multi_elf_module_visibility_directive(module_decl->visibility) != NULL)
-        : (decl->visibility == MINIC_SYMBOL_VISIBILITY_DEFAULT ||
-           minic_multi_elf_visibility_directive(decl->visibility) != NULL);
-    alias_present = module_decl != NULL
-        ? module_decl->alias_target_index != SIZE_MAX
-        : decl->alias_target != MINIC_FUNCTION_INVALID;
-    constructor = module_decl != NULL ? module_decl->is_constructor : decl->is_constructor;
-    weak = module_decl != NULL ? module_decl->is_weak : decl->is_weak;
-    has_section = module_decl != NULL ? module_decl->section_name != NULL
-        : decl->section_name != NULL;
-    visibility = module_decl != NULL ? (unsigned int)module_decl->visibility
-        : (unsigned int)decl->visibility;
+    visibility_valid =
+        module_decl->visibility == MINIC_CORE_MODULE_VISIBILITY_DEFAULT ||
+        minic_multi_elf_module_visibility_directive(module_decl->visibility) != NULL;
+    alias_present = module_decl->alias_target_index != SIZE_MAX;
+    constructor = module_decl->is_constructor;
+    weak = module_decl->is_weak;
+    has_section = module_decl->section_name != NULL;
+    visibility = (unsigned int)module_decl->visibility;
     /* Collect the ENTIRE admission error class for each failed function.
      * This is not a feature gate or permissive fallback: all original
      * policy checks below stay intact. The 3x7 GNU corpus aggregates

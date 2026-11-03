@@ -4,7 +4,6 @@
 #include "core/core_ir.h"
 #include "target/common/core_function_facts.h"
 #include "target/common/core_object_storage.h"
-#include "frontend/ast.h"
 #include "minic/compiler.h"
 #include "target/target_info.h"
 #include <stdbool.h>
@@ -19,9 +18,9 @@ typedef struct MinicCoreModuleFunctionSymbol MinicCoreModuleFunctionSymbol;
  * Machine IR would replace the individual function callbacks, not this
  * target-neutral object/function serialization loop. */
 typedef bool (*MinicMultiDirectEmitFunction)(
-    FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
+    FILE *out, const MinicTargetInfo *target,
     const MinicCoreModule *module,
-    const MinicFunction *decl, const MinicCoreModuleFunctionSymbol *module_decl,
+    const MinicCoreModuleFunctionSymbol *module_decl,
     const MinicCoreFunction *fn,
     const MinicCoreFunctionFacts *facts,
     const MinicCoreObjectStoragePlan *storage, size_t function_id,
@@ -37,18 +36,9 @@ typedef struct MinicMultiDirectProgramConfig {
     MinicMultiDirectEmitFunction emit_function;
 } MinicMultiDirectProgramConfig;
 
-bool minic_multi_direct_write_program(
-    const char *path, const MinicC0Program *program,
-    const MinicTargetInfo *target, const MinicCoreFunction *core_functions,
-    size_t core_function_count, bool function_sections,
-    const MinicMultiDirectProgramConfig *config,
-    MinicDiagnostic *diagnostic);
-
-/* A fully snapshotted ModuleIR takes ownership of translation-unit global
- * data and symbols. The source Program is still borrowed for function-side
- * source policy during migration, not for global payload classification. */
+/* Sealed ModuleIR is the sole ELF and function symbol authority. */
 bool minic_multi_direct_write_program_with_module(
-    const char *path, const MinicC0Program *program,
+    const char *path,
     const MinicTargetInfo *target, const MinicCoreFunction *core_functions,
     size_t core_function_count, bool function_sections,
     const MinicCoreModule *module, const MinicMultiDirectProgramConfig *config,

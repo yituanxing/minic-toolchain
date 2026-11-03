@@ -23,13 +23,11 @@ typedef struct MinicCoreModule MinicCoreModule;
  * Backend callbacks currently emit directly to GNU assembly. Introducing
  * Machine IR must not require a new frontend target dispatch.
  */
-/* A fully sealed translation-unit module is the production data/symbol
- * boundary.  The C Program is temporarily borrowed by function/ISA source
- * policy while its remaining call sites are migrated; module globals and
- * relocations must not reopen it once this callback is selected. */
+/* A fully sealed translation-unit module is the only machine-side
+ * data/symbol boundary. Source-C admission precedes this callback. */
 typedef bool (*MinicBackendEmitModule)(
-    const char *output_path, const MinicC0Program *program,
-    const MinicTargetInfo *target, const MinicCoreFunction *functions,
+    const char *output_path, const MinicTargetInfo *target,
+    const MinicCoreFunction *functions,
     size_t function_count, bool function_sections,
     const MinicCoreModule *module, MinicDiagnostic *diagnostic);
 
@@ -155,7 +153,7 @@ bool minic_backend_clone_safe_opaque_asm(
  * emitter when a non-NULL sealed module fails target admission. */
 bool minic_backend_emit_assembly_with_module(
     const MinicBackend *backend, const char *output_path,
-    const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicTargetInfo *target,
     const MinicCoreFunction *functions, size_t function_count,
     bool function_sections, const MinicCoreModule *module,
     MinicDiagnostic *diagnostic);

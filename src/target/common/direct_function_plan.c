@@ -15,7 +15,7 @@
  * fresh/unowned plan: initialization clears it, and even a false result may
  * own partial allocations that the caller must destroy. */
 bool minic_multi_direct_lp64_function_plan_prepare(
-    const MinicFunction *decl, const MinicCoreModuleFunctionSymbol *module_decl,
+    const MinicCoreModuleFunctionSymbol *module_decl,
     const MinicCoreFunction *fn,
     const MinicCoreFunctionFacts *facts,
     const MinicCoreObjectStoragePlan *storage,
@@ -32,14 +32,13 @@ bool minic_multi_direct_lp64_function_plan_prepare(
     plan->failed_stage = "function_preflight";
     plan->failed_block = SIZE_MAX;
     plan->failed_instruction = SIZE_MAX;
-    if ((decl == NULL && module_decl == NULL) || fn == NULL || facts == NULL ||
+    if (module_decl == NULL || fn == NULL || facts == NULL ||
         architecture_name == NULL || fn->type_context == NULL ||
         !minic_direct_lp64_abi_policy_valid(abi))
         return false;
-    name = module_decl != NULL ? module_decl->name
-        : minic_c0_function_symbol_name(decl);
+    name = module_decl->name;
     if (!minic_multi_direct_lp64_function_preflight(
-            decl, module_decl, fn, facts, architecture_name, name,
+            module_decl, fn, facts, architecture_name, name,
             qualify_opaque_asm, abi))
         return false;
     profile_result = minic_multi_direct_lp64_profile_function(

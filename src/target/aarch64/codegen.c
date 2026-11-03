@@ -133,9 +133,7 @@ fail:
 }
 
 static bool aarch64_emit_function(
-    FILE *out, const MinicC0Program *program,
-    const MinicTargetInfo *target, const MinicCoreModule *module,
-    const MinicFunction *decl,
+    FILE *out, const MinicTargetInfo *target, const MinicCoreModule *module,
     const MinicCoreModuleFunctionSymbol *module_decl,
     const MinicCoreFunction *fn, const MinicCoreFunctionFacts *facts,
     const MinicCoreObjectStoragePlan *storage, size_t id,
@@ -147,12 +145,12 @@ static bool aarch64_emit_function(
         minic_aarch64_qualified_opaque_asm
     };
     return minic_multi_direct_lp64_emit_function(
-        out, program, target, module, decl, module_decl, fn, facts, storage,
+        out, target, module, module_decl, fn, facts, storage,
         id, function_sections, &emitter);
 }
 
 bool minic_aarch64_write_c0_program_with_core_module(
-    const char *path, const MinicC0Program *program,
+    const char *path,
     const MinicTargetInfo *target, const MinicCoreFunction *core_functions,
     size_t core_function_count, bool function_sections,
     const MinicCoreModule *module, MinicDiagnostic *diagnostic) {
@@ -163,16 +161,6 @@ bool minic_aarch64_write_c0_program_with_core_module(
         aarch64_emit_function
     };
     return minic_multi_direct_write_program_with_module(
-        path, program, target, core_functions, core_function_count,
+        path, target, core_functions, core_function_count,
         function_sections, module, &config, diagnostic);
-}
-
-bool minic_aarch64_write_c0_program_with_core_functions(
-    const char *path, const MinicC0Program *program,
-    const MinicTargetInfo *target, const MinicCoreFunction *core_functions,
-    size_t core_function_count, bool function_sections,
-    MinicDiagnostic *diagnostic) {
-    return minic_aarch64_write_c0_program_with_core_module(
-        path, program, target, core_functions, core_function_count,
-        function_sections, NULL, diagnostic);
 }

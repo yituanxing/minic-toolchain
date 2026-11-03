@@ -4,7 +4,7 @@
 #include "target/x86_64/frame.h"
 #include "target/target_info.h"
 #include "core/core_ir.h"
-#include "frontend/ast.h"
+#include "core/module_ir.h"
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdio.h>
@@ -13,7 +13,7 @@
  * policy. The calling ABI, register moves and opcode selection stay native.
  * This explicit boundary may later take a Machine IR rather than Core. */
 bool minic_x86_64_emit_core_instruction(
-    FILE *, const MinicC0Program *, const MinicTargetInfo *,
+    FILE *, const MinicCoreModule *, const MinicTargetInfo *,
     const MinicCoreFunction *, const MinicX86Frame *,
     const MinicCoreInstruction *, size_t function_id, size_t instruction_id);
 bool minic_x86_64_emit_core_terminator(

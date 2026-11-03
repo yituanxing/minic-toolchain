@@ -3,6 +3,7 @@
 #include "target/common/lp64_frame.h"
 #include "target/common/lp64_scalar.h"
 #include "core/core_ir.h"
+#include "core/module_ir.h"
 #include <stdbool.h>
 #include <stddef.h>
 
@@ -18,11 +19,11 @@ typedef struct MinicDirectIntegerCastPlan {
     size_t source_wide_offset, target_wide_offset;
 } MinicDirectIntegerCastPlan;
 bool minic_multi_direct_integer_cast_plan(
-    const MinicC0Program *, const MinicTargetInfo *,
+    const MinicCoreModule *, const MinicTargetInfo *,
     const MinicCoreFunction *, const MinicCoreInstruction *,
     const MinicLP64FramePlan *, MinicDirectIntegerCastPlan *);
 bool minic_multi_direct_constant_integer_shape(
-    const MinicC0Program *, const MinicTargetInfo *,
+    const MinicCoreModule *, const MinicTargetInfo *,
     const MinicCoreFunction *, const MinicCoreInstruction *, size_t *, bool *);
 bool minic_multi_direct_global_address_symbol(
     const MinicCoreFunction *, const MinicCoreInstruction *, const char **);

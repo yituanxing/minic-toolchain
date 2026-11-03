@@ -47,9 +47,8 @@ static bool rv32_record_layout(const MinicCoreFunction *function,
 }
 
 /* Addressing, ILP32 memory and aggregate transport.  Frozen Core owns
- * pointer-alignment proof; Module owns PIC symbol provenance.  Source-C
- * visibility is retained solely for legacy pre-Module emit fixtures. */
-bool rv32_emit_memory_instruction(FILE *out, const MinicC0Program *program,
+ * pointer-alignment proof; sealed Module owns PIC symbol provenance. */
+bool rv32_emit_memory_instruction(FILE *out,
                                   const MinicCoreModule *module,
                                   const MinicTargetInfo *target,
                                   const MinicCoreFunction *f,
@@ -59,8 +58,7 @@ bool rv32_emit_memory_instruction(FILE *out, const MinicC0Program *program,
     size_t access_alignment;
     if (out == NULL || target == NULL || f == NULL ||
         fr == NULL || ins == NULL ||
-        (module == NULL && program == NULL) ||
-        (module != NULL && !module->finalized)) return false;
+        module == NULL || !module->finalized) return false;
     switch (ins->kind) {
     case MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS:
         return (size_t)ins->value.object_id < fr->object_count &&
@@ -209,9 +207,7 @@ bool rv32_emit_memory_instruction(FILE *out, const MinicC0Program *program,
         if (ins->value.global_id >= f->global_count) return false;
         symbol = f->globals[ins->value.global_id].name;
         preemptible = target->position_independent &&
-            !(module != NULL
-                ? minic_target_info_elf_module_object_is_nonpreemptible(module, symbol)
-                : minic_target_info_elf_object_is_nonpreemptible(program, symbol));
+            !minic_target_info_elf_module_object_is_nonpreemptible(module, symbol);
         return fprintf(out, preemptible
                        ? "  .option push\n  .option pic\n  la t0, %s\n  .option pop\n"
                        : "  lla t0, %s\n", symbol) >= 0 &&
@@ -224,9 +220,7 @@ bool rv32_emit_memory_instruction(FILE *out, const MinicC0Program *program,
             return false;
         symbol = f->function_symbols[ins->value.function_symbol_id].name;
         preemptible = target->position_independent &&
-            !(module != NULL
-                ? minic_target_info_elf_module_function_is_nonpreemptible(module, symbol)
-                : minic_target_info_elf_function_is_nonpreemptible(program, symbol));
+            !minic_target_info_elf_module_function_is_nonpreemptible(module, symbol);
         return fprintf(out, preemptible
                        ? "  .option push\n  .option pic\n  la t0, %s\n  .option pop\n"
                        : "  lla t0, %s\n", symbol) >= 0 &&

@@ -283,7 +283,7 @@ for consumer in src/target/x86_64/machine_emit.c \
   has "$consumer" 'minic_core_instruction_semantic_family('
 done
 lacks src/target/common/direct_instruction_semantics.c 'minic_multi_direct_memory_machine_kind('
-has src/target/common/program_visit.h 'minic_program_function_selected('
+has src/target/common/program_visit.h 'minic_program_module_function_selected('
 has src/target/common/core_function_plan.c 'minic_core_function_verify(function)'
 has src/target/riscv64/core_admission.c 'RV64 atomic ISA/memory-order lowering is not qualified yet.'
 
@@ -294,8 +294,8 @@ exists src/target/common/elf_alias_emit.h
 has src/target/common/elf_alias_emit.h 'minic_multi_elf_emit_alias('
 has src/target/common/elf_alias_emit.h 'minic_multi_elf_emit_object_alias('
 has src/target/riscv/function_symbol.h 'minic_multi_elf_emit_alias('
-has src/target/riscv64/codegen_function.c 'minic_multi_elf_emit_object_alias('
-has src/target/x86_64/codegen.c 'minic_multi_elf_emit_object_alias('
+has src/target/riscv64/codegen_function.c 'minic_multi_elf_emit_module_object_alias('
+has src/target/x86_64/codegen.c 'minic_multi_elf_emit_module_object_alias('
 has src/target/common/direct_program_emit.c 'ctx->config->elf_function_type'
 has src/target/common/direct_program_emit.c 'ctx->config->elf_object_type'
 lacks src/target/common/direct_program_emit.c 'MINIC_TARGET_ARCH_AARCH64'
@@ -386,7 +386,7 @@ has src/target/common/direct_machine_dispatch.h 'shape.family != MINIC_DIRECT_MA
 # AArch64 and LoongArch64 supply only target-specific prologue/ISA hooks.
 exists src/target/common/direct_function_emit.h
 has src/target/common/direct_function_emit.h 'minic_multi_direct_lp64_function_plan_prepare('
-has src/target/common/direct_function_emit.h 'minic_multi_emit_elf_symbol_visibility('
+has src/target/common/direct_function_emit.h 'minic_multi_module_emit_elf_symbol_visibility('
 has src/target/common/direct_function_emit.h 'config->emit_prologue(out, &ctx)'
 has src/target/common/direct_function_emit.h 'config->emit_core_blocks(out, &ctx)'
 lacks src/target/common/direct_function_emit.h 'rewrite_dynamic_asm'
@@ -579,7 +579,7 @@ fi
 # GNU source asm that the original Linux Kbuild assembler is responsible for.
 has src/target/riscv64/isa.c 'if (in_user_asm) continue;'
 has src/target/riscv64/isa.c 'minic_riscv64_asm_audit_marker('
-has src/target/riscv64/codegen_function.c 'minic_riscv64_emit_file_asm('
+has src/target/riscv64/codegen_function.c 'minic_riscv64_emit_file_asm_bytes('
 lacks src/target/riscv64/codegen_function.c 'inline assembly is not yet ISA-qualified'
 lacks src/target/riscv64/codegen_function.c 'file-scope inline assembly is not qualified'
 exists tests/compiler/c0/probe-rv64i-asm-origin.sh
@@ -810,23 +810,22 @@ has src/target/riscv32/rv32_emit.c 'MINIC_CORE_FAMILY_INTEGER_SCALAR'
 has src/target/riscv64/core_admission.c 'MINIC_CORE_FAMILY_INTEGER_SCALAR'
 has src/target/riscv64/core_codegen.c 'minic_core_instruction_is_floating_scalar(instruction->kind)'
 has src/target/common/direct_instruction_semantics.c 'MINIC_CORE_FAMILY_FLOATING_SCALAR'
-has src/target/common/program_visit.h 'minic_program_visit_globals('
-has src/target/common/program_visit.h 'minic_program_visit_functions('
-has src/target/common/program_visit.h 'minic_program_visit_prepared_functions('
-has src/target/common/program_visit.h 'minic_program_visit_prepared_functions_module('
-# Published Module definitions are visited without source C declarations.
-has src/target/common/program_visit.h 'module == NULL ? &program->functions[i] : NULL'
-has tests/compiler/c0/probe-program-emit-transaction.c 'module_decl != NULL && decl != NULL'
-has tests/compiler/c0/probe-program-emit-transaction.c 'probe, NULL, &target, &ir, 1U, false,'
-has tests/compiler/c0/probe-program-emit-transaction.c 'path, NULL, &target, NULL, 0U, false,'
 has src/target/common/program_visit.h 'minic_program_visit_module_globals('
+has src/target/common/program_visit.h 'minic_program_visit_prepared_functions_module('
+# Machine callbacks cannot reopen C declarations, even in fallback paths.
+lacks src/target/common/program_visit.h 'MinicC0Program'
+lacks src/target/common/program_emit.h 'MinicC0Program'
+lacks src/target/common/program_emit.h 'minic_program_emit_write('
+has tests/compiler/c0/probe-program-emit-transaction.c 'module_decl == NULL'
+has tests/compiler/c0/probe-program-emit-transaction.c 'probe, NULL, &target, &ir, 1U, false,'
+has tests/compiler/c0/probe-program-emit-transaction.c 'path, &module, &target, NULL, 0U, false,'
 # All five machine backends must borrow one visitor-owned per-function Core
 # object plan, not repeat layout scans. Each target keeps its own psABI frame.
 has src/target/common/core_function_plan.c 'minic_core_object_storage_plan_build('
 has src/target/common/core_function_plan.c 'minic_core_object_storage_plan_destroy(&plan->objects)'
 has src/target/x86_64/codegen.c 'minic_x86_64_frame_init_with_storage('
 has src/target/riscv32/rv32_emit.c 'rv32_frame_init_with_storage('
-has src/target/riscv64/codegen_function.c 'minic_riscv64_emit_core_function_for_program_with_symbol_with_storage('
+has src/target/riscv64/codegen_function.c 'minic_riscv64_emit_core_function_for_program_with_symbol_with_storage_module('
 has src/target/aarch64/codegen.c 'minic_multi_direct_lp64_emit_function('
 has src/target/loongarch64/codegen.c 'minic_multi_direct_lp64_emit_function('
 # All four physical frame owners use the single Common borrowing contract.
@@ -1090,7 +1089,7 @@ lacks src/target/common/direct_call_plan.c 'while (id < fn->instruction_count'
 # SysV VA cursors must match the prepared Common fact count exactly.
 has src/target/x86_64/frame.c 'if (count != frame->varargs_count) return false;'
 has src/target/common/direct_function_plan.c 'fn, facts->call_index, abi, architecture_name, name,'
-has src/target/common/direct_function_plan.c 'decl, module_decl, fn, facts, architecture_name, name,'
+has src/target/common/direct_function_plan.c 'module_decl, fn, facts, architecture_name, name,'
 lacks src/target/common/direct_function_plan.c 'indirect_record'
 lacks src/target/common/direct_function_plan.c 'fn->return_type'
 has src/target/common/direct_function_emit.h 'minic_multi_direct_lp64_function_plan_prepare('
@@ -1116,12 +1115,35 @@ has tests/compiler/c0/check-four-target-model-m0.c 'backend->emit_module'
 has src/target/backend.c '.emit_module = minic_aarch64_write_c0_program_with_core_module,'
 has src/target/backend.c '.emit_module = minic_loongarch64_write_c0_program_with_core_module,'
 exists src/target/common/program_emit.h
-has src/target/common/program_emit.h 'minic_program_visit_globals('
+has src/target/common/program_emit.h 'minic_program_visit_module_globals('
 has src/target/common/program_emit.h 'minic_program_visit_prepared_functions_module('
 has src/target/common/program_emit.h 'minic_program_emit_write_module('
 has src/target/common/program_emit.h 'if (!ok) (void)remove(temporary);'
 lacks src/target/common/program_emit.h 'out = fopen(path, "wb");'
 has src/target/common/direct_program_emit.c 'minic_program_emit_write_module('
+# The executable translation-unit writers and their Core-facing dispatch
+# cannot regain a C Program argument or re-enter C global/function tables.
+for owner in \
+  src/target/common/program_visit.h \
+  src/target/common/program_emit.h \
+  src/target/common/direct_program_emit.c \
+  src/target/x86_64/codegen.c \
+  src/target/x86_64/machine_emit.c \
+  src/target/x86_64/machine_asm.c \
+  src/target/riscv32/rv32_emit.c \
+  src/target/riscv32/rv32_memory_emit.c \
+  src/target/riscv64/codegen_function.c \
+  src/target/aarch64/codegen.c \
+  src/target/loongarch64/codegen.c; do
+  lacks "$owner" 'MinicC0Program'
+  lacks "$owner" 'minic_c0_program_'
+done
+has src/target/common/program_emit.h 'module->function_count != function_count'
+has src/target/common/program_visit.h '!module->finalized'
+has src/target/common/direct_program_emit.c '!minic_core_module_verify(module)'
+has src/target/x86_64/codegen.c 'minic_program_emit_write_module('
+has src/target/riscv32/rv32_emit.c 'minic_program_emit_write_module('
+has src/target/riscv64/codegen_function.c 'minic_program_emit_write_module('
 for backend in x86_64 riscv32 riscv64; do
   case "$backend" in
     x86_64) owner=src/target/x86_64/codegen.c ;;

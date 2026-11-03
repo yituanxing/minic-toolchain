@@ -134,7 +134,7 @@ bool minic_aarch64_emit_abi_instruction(
     FILE *out, const MinicDirectLP64BlockContext *ctx,
     const MinicCoreInstruction *ins, size_t offset,
     bool *needs_gp_store) {
-    const MinicC0Program *program;
+    const MinicCoreModule *module;
     const MinicCoreFunction *fn;
     const MinicLP64FramePlan *frame_plan;
     const MinicLP64ArgumentPlan *incoming_plan;
@@ -142,13 +142,13 @@ bool minic_aarch64_emit_abi_instruction(
         ctx ? ctx->dynamic_frame : false, ctx ? ctx->frame : 0U,
         0U, ctx ? ctx->saved_entry_sp_offset : SIZE_MAX
     };
-    if (out == NULL || ctx == NULL || ctx->program == NULL ||
+    if (out == NULL || ctx == NULL || ctx->module == NULL ||
         ctx->target == NULL || ctx->fn == NULL || ctx->frame_plan == NULL ||
         ctx->incoming_plan == NULL || ctx->outgoing_calls == NULL ||
         ins == NULL ||
         needs_gp_store == NULL)
         return false;
-    program = ctx->program;
+    module = ctx->module;
     fn = ctx->fn;
     frame_plan = ctx->frame_plan;
     incoming_plan = ctx->incoming_plan;
@@ -352,11 +352,8 @@ bool minic_aarch64_emit_abi_instruction(
             } else {
                 const MinicCoreCallee *callee =
                     &fn->callees[ins->value.call.callee_id];
-                if (ctx->module != NULL
-                        ? minic_target_info_elf_module_function_is_undefined_weak(
-                            ctx->module, callee->name)
-                        : minic_target_info_elf_function_is_undefined_weak(
-                            program, callee->name)) {
+                if (minic_target_info_elf_module_function_is_undefined_weak(
+                        module, callee->name)) {
                     /* An undefined weak symbol may resolve to address zero.
                      * Direct CALL26 can force a PLT entry, forbidden by the
                      * Linux AArch64 linker script. Reuse the normal AAPCS64

@@ -62,7 +62,7 @@ static inline bool minic_multi_direct_machine_dispatch(
     bool have_value_use_counts = false;
     bool success = false;
     size_t block_id;
-    if (out == NULL || ctx == NULL || ctx->program == NULL ||
+    if (out == NULL || ctx == NULL || ctx->module == NULL ||
         ctx->target == NULL || ctx->fn == NULL || ctx->frame_plan == NULL ||
         ctx->incoming_plan == NULL || ctx->name == NULL ||
         dispatch == NULL || dispatch->architecture == NULL ||

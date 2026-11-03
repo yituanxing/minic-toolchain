@@ -52,11 +52,11 @@ static bool a64_integer_pointer(const MinicCoreFunction *fn,
  * are target-owned. Scalar results use the caller's GP SSA writeback,
  * while 128-bit shifts directly write their two frame-slot halves. */
 bool minic_aarch64_emit_integer_instruction(
-    FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
+    FILE *out, const MinicCoreModule *module, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
     const MinicLP64FramePlan *frame_plan, const MinicA64FrameView *view,
     bool *needs_gp_store) {
-    if (out == NULL || program == NULL || target == NULL ||
+    if (out == NULL || module == NULL || target == NULL ||
         fn == NULL || ins == NULL || frame_plan == NULL || view == NULL ||
          needs_gp_store == NULL)
         return false;

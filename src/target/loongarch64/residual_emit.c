@@ -90,7 +90,7 @@ static bool loong_address_fold_mark_use(MinicCoreValueId value_id, void *opaque)
  * that proven object offset. Inspect all instructions and terminators,
  * including cold/externally reachable blocks; no pointer escape is allowed. */
 static bool loong_address_only_folded_uses(
-    const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicCoreModule *module, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicLP64FramePlan *frame_plan,
     MinicCoreValueId value_id, unsigned depth) {
     size_t i;
@@ -113,7 +113,7 @@ static bool loong_address_only_folded_uses(
              ins->value.atomic_store.address == value_id &&
              ins->value.atomic_store.stored_value != value_id)) {
             if (!minic_loongarch64_direct_frame_memory_use(
-                    program, target, fn, frame_plan, ins))
+                    module, target, fn, frame_plan, ins))
                 return false;
             continue;
         }
@@ -121,7 +121,7 @@ static bool loong_address_only_folded_uses(
             ins->value.field_address.base == value_id &&
             ins->result != MINIC_CORE_VALUE_INVALID &&
             loong_address_only_folded_uses(
-                program, target, fn, frame_plan,
+                module, target, fn, frame_plan,
                 ins->result, depth + 1U))
             continue;
         return false;
@@ -141,17 +141,17 @@ bool minic_loongarch64_elided_frame_address_instruction(
     const MinicDirectLP64BlockContext *ctx,
     const MinicCoreInstruction *ins) {
     if (ctx == NULL || ctx->fn == NULL || ctx->frame_plan == NULL ||
-        ctx->target == NULL || ctx->program == NULL || ins == NULL ||
+        ctx->target == NULL || ctx->module == NULL || ins == NULL ||
         ins->result == MINIC_CORE_VALUE_INVALID)
         return false;
     if (ins->kind == MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS)
         return loong_address_only_folded_uses(
-            ctx->program, ctx->target, ctx->fn, ctx->frame_plan,
+            ctx->module, ctx->target, ctx->fn, ctx->frame_plan,
             ins->result, 0U);
     if (ins->kind == MINIC_CORE_INSTRUCTION_FIELD_ADDRESS)
         return loong_proven_frame_address(ctx->fn, ins->result, 0U) &&
                loong_address_only_folded_uses(
-                   ctx->program, ctx->target, ctx->fn, ctx->frame_plan,
+                   ctx->module, ctx->target, ctx->fn, ctx->frame_plan,
                    ins->result, 0U);
     return false;
 }
@@ -168,7 +168,7 @@ bool minic_loongarch64_emit_residual_instruction(
     size_t offset, bool native_opcode_presence_checked,
     bool emits_no_native_opcode, bool operand_in_previous_gp,
     bool *needs_writeback) {
-    const MinicC0Program *program;
+    const MinicCoreModule *module;
     const MinicTargetInfo *target;
     const MinicCoreFunction *fn;
     const MinicLP64FramePlan *frame_plan;
@@ -179,11 +179,11 @@ bool minic_loongarch64_emit_residual_instruction(
     size_t reject_ins;
     bool dynamic_frame;
     if (out == NULL || ctx == NULL || needs_writeback == NULL || ctx->fn == NULL ||
-        ctx->program == NULL || ctx->target == NULL ||
+        ctx->module == NULL || ctx->target == NULL ||
         ctx->frame_plan == NULL || ctx->name == NULL ||
         ins_id >= ctx->fn->instruction_count)
         return false;
-    program = ctx->program;
+    module = ctx->module;
     target = ctx->target;
     fn = ctx->fn;
     frame_plan = ctx->frame_plan;
@@ -338,7 +338,7 @@ bool minic_loongarch64_emit_residual_instruction(
              * type determines narrowing, not the original int64 payload.
              * Lua exercises out-of-range literals in cast/enum contexts. */
             if (!minic_multi_direct_constant_integer_shape(
-                    program, target, fn, ins, &width, &sign))
+                    module, target, fn, ins, &width, &sign))
                 return minic_multi_direct_machine_reject(
                     fn, "loongarch64", name, reject_stage, reject_block, reject_ins, __LINE__);
             if (width == 8U) {
@@ -362,11 +362,8 @@ bool minic_loongarch64_emit_residual_instruction(
              * references use LoongArch's GOT-based la.global sequence. */
             if (!minic_multi_direct_global_address_symbol(fn, ins, &symbol) ||
                 fprintf(out, "  %s $t0, %s\n",
-                        (ctx->module != NULL
-                            ? minic_target_info_elf_module_object_is_tu_local(
-                                  ctx->module, symbol)
-                            : minic_target_info_elf_object_is_tu_local(
-                                  program, symbol))
+                        minic_target_info_elf_module_object_is_tu_local(
+                            module, symbol)
                             ? "la.local" : "la.global", symbol) < 0 ||
                 !emit_sp_mem(out, "st.d", "$t0", offset))
                 return minic_multi_direct_machine_reject(fn, "loongarch64", name, reject_stage,
@@ -377,11 +374,8 @@ bool minic_loongarch64_emit_residual_instruction(
             const char *symbol;
             if (!minic_multi_direct_function_address_symbol(fn, ins, &symbol) ||
                 fprintf(out, "  %s $t0, %s\n",
-                        (ctx->module != NULL
-                            ? minic_target_info_elf_module_function_is_tu_local(
-                                  ctx->module, symbol)
-                            : minic_target_info_elf_function_is_tu_local(
-                                  program, symbol))
+                        minic_target_info_elf_module_function_is_tu_local(
+                            module, symbol)
                             ? "la.local" : "la.global", symbol) < 0 ||
                 !emit_sp_mem(out, "st.d", "$t0", offset)) return minic_multi_direct_machine_reject(fn, "loongarch64", name, reject_stage,
                                     reject_block, reject_ins, __LINE__);
@@ -406,7 +400,7 @@ bool minic_loongarch64_emit_residual_instruction(
             if ((native_opcode_presence_checked && emits_no_native_opcode) ||
                 (!native_opcode_presence_checked &&
                  loong_address_only_folded_uses(
-                     program, target, fn, frame_plan, ins->result, 0U))) {
+                     module, target, fn, frame_plan, ins->result, 0U))) {
                 *needs_writeback = false;
                 return true;
             }
@@ -424,7 +418,7 @@ bool minic_loongarch64_emit_residual_instruction(
                 (!native_opcode_presence_checked &&
                  loong_proven_frame_address(fn, ins->result, 0U) &&
                  loong_address_only_folded_uses(
-                     program, target, fn, frame_plan, ins->result, 0U))) {
+                     module, target, fn, frame_plan, ins->result, 0U))) {
                 *needs_writeback = false;
                 return true;
             }
@@ -597,7 +591,7 @@ bool minic_loongarch64_emit_residual_instruction(
             const MinicCoreValueId src = ins->value.operand;
             MinicDirectIntegerCastPlan cast;
             if (!minic_multi_direct_integer_cast_plan(
-                    program, target, fn, ins, frame_plan, &cast))
+                    module, target, fn, ins, frame_plan, &cast))
                 return minic_multi_direct_machine_reject(
                     fn, "loongarch64", name, reject_stage,
                     reject_block, reject_ins, __LINE__);

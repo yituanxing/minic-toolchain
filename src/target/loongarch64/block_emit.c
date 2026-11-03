@@ -436,7 +436,7 @@ static bool loongarch64_machine_emit_family(
     const MinicCoreInstruction *ins, MinicCoreInstructionId ins_id,
     size_t block_id, const MinicDirectMachineInstructionShape *shape,
     bool *needs_gp_store) {
-    const MinicC0Program *program = ctx->program;
+    const MinicCoreModule *module = ctx->module;
     const MinicTargetInfo *target = ctx->target;
     const MinicCoreFunction *fn = ctx->fn;
     if (shape == NULL || needs_gp_store == NULL) return false;
@@ -455,16 +455,16 @@ static bool loongarch64_machine_emit_family(
             ctx->saved_entry_sp_offset);
     case MINIC_DIRECT_MACHINE_MEMORY:
         return minic_loongarch64_emit_memory_instruction(
-            out, program, target, fn, ins, ctx->frame_plan,
+            out, module, target, fn, ins, ctx->frame_plan,
             ctx->id, ctx->dynamic_frame, shape->lhs_in_previous_gp,
             needs_gp_store);
     case MINIC_DIRECT_MACHINE_FP:
         return minic_loongarch64_emit_fp_instruction(
-            out, program, target, fn, ins, shape->result_offset,
+            out, module, target, fn, ins, shape->result_offset,
             ctx->id, ctx->dynamic_frame, ctx->frame_plan, needs_gp_store);
     case MINIC_DIRECT_MACHINE_INTEGER:
         return minic_loongarch64_emit_integer_instruction(
-            out, program, target, fn, ins, ctx->frame_plan,
+            out, module, target, fn, ins, ctx->frame_plan,
             ctx->dynamic_frame, shape->lhs_in_previous_gp,
             needs_gp_store);
     case MINIC_DIRECT_MACHINE_ABI:
@@ -518,7 +518,7 @@ static bool loongarch64_machine_immediate_rhs(
     MinicCoreValueId *rhs) {
     if (ctx == NULL) return false;
     return minic_loongarch64_integer_rhs_immediate(
-        ctx->program, ctx->target, ctx->fn, consumer, rhs, NULL);
+        ctx->module, ctx->target, ctx->fn, consumer, rhs, NULL);
 }
 
 bool minic_loongarch64_emit_core_blocks(

@@ -74,14 +74,14 @@ static bool loong_integer_constant_rhs(const MinicCoreFunction *fn,
  * its immutable Core definition directly; the emitter uses the identical
  * encoding range rather than independently guessing at valid immediates. */
 bool minic_loongarch64_integer_rhs_immediate(
-    const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicCoreModule *module, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
     MinicCoreValueId *rhs_id, int64_t *encoded_immediate) {
     MinicCoreValueId rhs;
     size_t lw, rw;
     bool ls, rs;
     int64_t constant;
-    if (program == NULL || target == NULL || fn == NULL || ins == NULL)
+    if (module == NULL || target == NULL || fn == NULL || ins == NULL)
         return false;
     switch (ins->kind) {
     case MINIC_CORE_INSTRUCTION_INTEGER_ADD:
@@ -169,12 +169,12 @@ static bool loong_checked_add_i32_u32_shape(
  * are target-owned. Scalar results use the caller's GP SSA writeback,
  * while 128-bit shifts directly write their two frame-slot halves. */
 bool minic_loongarch64_emit_integer_instruction(
-    FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
+    FILE *out, const MinicCoreModule *module, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
     const MinicLP64FramePlan *frame_plan,
     bool dynamic_frame, bool lhs_in_previous_gp,
     bool *needs_gp_store) {
-    if (out == NULL || program == NULL || target == NULL ||
+    if (out == NULL || module == NULL || target == NULL ||
         fn == NULL || ins == NULL || frame_plan == NULL ||
          needs_gp_store == NULL)
         return false;
@@ -689,7 +689,7 @@ bool minic_loongarch64_emit_integer_instruction(
                     : (wide ? "  mul.d $t0, $t0, $t1\n" : "  mul.w $t0, $t0, $t1\n");
             if (ins->kind != MINIC_CORE_INSTRUCTION_INTEGER_MULTIPLY)
                 immediate = minic_loongarch64_integer_rhs_immediate(
-                    program, target, fn, ins, NULL, &constant);
+                    module, target, fn, ins, NULL, &constant);
             if ((!lhs_in_previous_gp &&
                  !emit_sp_mem(out, wide ? "ld.d" : "ld.w", "$t0",
                              minic_lp64_frame_value_offset(frame_plan, lhs))) ||
@@ -725,7 +725,7 @@ bool minic_loongarch64_emit_integer_instruction(
                     ? "  xor $t0, $t0, $t1\n"
                     : "  or $t0, $t0, $t1\n";
             if (minic_loongarch64_integer_rhs_immediate(
-                    program, target, fn, ins, NULL, &constant))
+                    module, target, fn, ins, NULL, &constant))
                 immediate_opcode =
                     ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND
                         ? "andi"

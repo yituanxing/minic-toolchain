@@ -22,13 +22,12 @@ extern FILE *fdopen(int, const char *);
  * In particular, no LP64-only calling convention or frame offsets enter
  * this interface. Every callback sees the original target and Core mapping. */
 typedef bool (*MinicProgramEmitStage)(
-    FILE *, const MinicC0Program *, const MinicTargetInfo *,
+    FILE *, const MinicCoreModule *, const MinicTargetInfo *,
     const MinicCoreFunction *, size_t, bool, void *);
 typedef bool (*MinicProgramEmitFinalize)(
     const char *, const MinicTargetInfo *, void *);
 
 typedef struct MinicProgramEmitConfig {
-    MinicProgramVisitGlobal emit_global;
     MinicProgramVisitPreparedFunction emit_function;
     MinicProgramEmitStage prefix; /* before globals: e.g. RV32 .option norvc */
     MinicProgramEmitStage between; /* file-scope asm / declaration bindings */
@@ -38,30 +37,8 @@ typedef struct MinicProgramEmitConfig {
     bool continue_after_failure; /* opt-in census; never retain partial .s */
 } MinicProgramEmitConfig;
 
-/* GNU basic file-scope asm is source-owned text, not generated machine
- * instruction selection. Emit the original bytes once between globals and
- * functions for targets with a GNU assembler. Never treat embedded NUL as
- * a truncation boundary, and restore .text after arbitrary source sections. */
-static inline bool minic_program_emit_source_file_asm(
-    FILE *out, const MinicC0Program *program) {
-    size_t i;
-    if (out == NULL || program == NULL) return false;
-    if (program->file_asm_count == 0U) return true;
-    if (fputs(".text\n", out) == EOF) return false;
-    for (i = 0U; i < program->file_asm_count; ++i) {
-        const MinicFileAsm *source = &program->file_asms[i];
-        if (source->text == NULL ||
-            memchr(source->text, '\0', source->length) != NULL ||
-            (source->length != 0U &&
-             fwrite(source->text, 1U, source->length, out) != source->length) ||
-            fputc('\n', out) == EOF)
-            return false;
-    }
-    return fputs(".text\n", out) != EOF;
-}
-
-/* The same source-owned bytes are sealed into ModuleIR at ingress. The
- * machine writer must not reopen Program or reinterpret the assembly. */
+/* File-scope GNU ASM is sealed into ModuleIR at source ingress; the
+ * machine writer emits the original bytes without reopening C Program. */
 static inline bool minic_program_emit_source_file_asm_module(
     FILE *out, const MinicCoreModule *module) {
     size_t index;
@@ -80,18 +57,6 @@ static inline bool minic_program_emit_source_file_asm_module(
             return false;
     }
     return fputs(".text\n", out) != EOF;
-}
-
-static inline bool minic_program_emit_source_file_asm_stage(
-    FILE *out, const MinicC0Program *program,
-    const MinicTargetInfo *target, const MinicCoreFunction *functions,
-    size_t function_count, bool function_sections, void *context) {
-    (void)target;
-    (void)functions;
-    (void)function_count;
-    (void)function_sections;
-    (void)context;
-    return minic_program_emit_source_file_asm(out, program);
 }
 
 typedef struct MinicProgramAsmUse {
@@ -188,21 +153,14 @@ static inline bool minic_program_asm_names_symbol(const char *source,
 }
 
 static inline bool minic_program_symbol_used_in_source_asm_module(
-    const MinicC0Program *program, const MinicProgramSymbolUses *uses,
-    const char *name, const MinicCoreModule *module) {
+    const MinicProgramSymbolUses *uses, const char *name,
+    const MinicCoreModule *module) {
     size_t index;
-    if (uses == NULL || (module == NULL && program == NULL)) return false;
-    if (module != NULL) {
-        for (index = 0U; index < module->file_asm_count; ++index)
-            if (minic_program_asm_names_symbol(module->file_asms[index].text,
-                                               module->file_asms[index].length, name))
-                return true;
-    } else {
-        for (index = 0U; index < program->file_asm_count; ++index)
-            if (minic_program_asm_names_symbol(
-                    program->file_asms[index].text, program->file_asms[index].length, name))
-                return true;
-    }
+    if (uses == NULL || module == NULL) return false;
+    for (index = 0U; index < module->file_asm_count; ++index)
+        if (minic_program_asm_names_symbol(module->file_asms[index].text,
+                                           module->file_asms[index].length, name))
+            return true;
     /* Only Core ASM instructions in blocks the target actually emits count.
      * A dead static inline body with a hidden declaration is not a use. */
     for (index = 0U; index < uses->asm_count; ++index)
@@ -212,31 +170,24 @@ static inline bool minic_program_symbol_used_in_source_asm_module(
     return false;
 }
 
-static inline bool minic_program_symbol_used_in_source_asm(
-    const MinicC0Program *program, const MinicProgramSymbolUses *uses,
-    const char *name) {
-    return minic_program_symbol_used_in_source_asm_module(program, uses, name, NULL);
-}
-
 /* Collect symbol use from *emitted* Core, plus live global initializers.
  * Declaration-only visibility is not an ELF reference: GNU AS creates an
  * undefined hidden symbol for a bare `.hidden foo` even with no relocation,
  * making an otherwise linkable Linux vDSO/EFI object fail GNU ld. */
 static inline bool minic_program_emit_collect_symbol_uses_module(
-    MinicProgramSymbolUses *uses, const MinicC0Program *program,
+    MinicProgramSymbolUses *uses,
     const MinicCoreFunction *functions, size_t function_count,
     const MinicProgramEmitConfig *config, const MinicCoreModule *module) {
     size_t index, ordinal, block_id;
     if (uses == NULL || config == NULL ||
-        (module == NULL && program == NULL) ||
+        module == NULL ||
         (function_count != 0U && functions == NULL) ||
-        (module != NULL && (!module->finalized ||
-            module->function_count != function_count ||
-            (module->global_count != 0U && module->globals == NULL) ||
-            (function_count != 0U && module->function_symbols == NULL) ||
-            (module->file_asm_count != 0U && module->file_asms == NULL))))
+        !module->finalized || module->function_count != function_count ||
+        (module->global_count != 0U && module->globals == NULL) ||
+        (function_count != 0U && module->function_symbols == NULL) ||
+        (module->file_asm_count != 0U && module->file_asms == NULL))
         return false;
-    if (module != NULL) {
+    {
         for (index = 0U; index < module->global_count; ++index) {
             const MinicCoreModuleGlobal *object = &module->globals[index];
             if (!object->emittable) continue;
@@ -267,53 +218,13 @@ static inline bool minic_program_emit_collect_symbol_uses_module(
                  !minic_program_symbol_use_add(uses, function->alias_target_name)))
                 return false;
         }
-    } else {
-    for (index = 0U; index < program->global_object_count; ++index) {
-        const MinicGlobalObject *object = &program->global_objects[index];
-        if (!minic_c0_program_global_object_emittable(program, object))
-            continue;
-        if (object->alias_target < program->global_object_count &&
-            !minic_program_symbol_use_add(
-                uses, program->global_objects[object->alias_target].name))
-            return false;
-        for (ordinal = 0U; ordinal < object->relocation_count; ++ordinal) {
-            const MinicGlobalRelocation *reloc = &object->relocations[ordinal];
-            if (reloc->target_kind == MINIC_GLOBAL_RELOCATION_OBJECT &&
-                reloc->target_id < program->global_object_count &&
-                !minic_program_symbol_use_add(
-                    uses, program->global_objects[reloc->target_id].name))
-                return false;
-            if (reloc->target_kind == MINIC_GLOBAL_RELOCATION_FUNCTION &&
-                reloc->target_id < program->function_count) {
-                const MinicFunction *function = &program->functions[reloc->target_id];
-                if (!minic_program_symbol_use_add(
-                        uses, function->assembler_name != NULL ?
-                        function->assembler_name : function->name))
-                    return false;
-            }
-        }
-    }
-    for (index = 0U; index < program->function_count; ++index) {
-        const MinicFunction *function = &program->functions[index];
-        if (function->alias_target < program->function_count) {
-            const MinicFunction *target = &program->functions[function->alias_target];
-            if (!minic_program_symbol_use_add(
-                    uses, target->assembler_name != NULL ?
-                    target->assembler_name : target->name))
-                return false;
-        }
-    }
     }
     for (index = 0U; index < function_count; ++index) {
         const MinicCoreFunction *function = &functions[index];
         bool *reachable = NULL;
-        if (!(module != NULL
-                  ? minic_program_module_function_selected(
-                        &module->function_symbols[index], config->selection) &&
-                    module->function_symbols[index].is_defined
-                  : minic_program_function_selected(
-                        &program->functions[index], config->selection) &&
-                    program->functions[index].is_defined))
+        if (!(minic_program_module_function_selected(
+                &module->function_symbols[index], config->selection) &&
+              module->function_symbols[index].is_defined))
             continue;
         reachable = calloc(function->block_count == 0U ? 1U : function->block_count,
                            sizeof(*reachable));
@@ -381,34 +292,25 @@ static inline bool minic_program_emit_collect_symbol_uses_module(
     return true;
 }
 
-static inline bool minic_program_emit_collect_symbol_uses(
-    MinicProgramSymbolUses *uses, const MinicC0Program *program,
-    const MinicCoreFunction *functions, size_t function_count,
-    const MinicProgramEmitConfig *config) {
-    return minic_program_emit_collect_symbol_uses_module(
-        uses, program, functions, function_count, config, NULL);
-}
-
 /* Undefined ELF bindings belong to real references, not mere C declarations.
  * In particular, a referenced GNU extern weak symbol must retain `.weak`:
  * the ELF linker may legally resolve it to zero without a definition.  A
  * default-strong undefined reference silently changes that source contract.
  * Definitions and aliases already emit their own binding directives. */
 static inline bool minic_program_emit_undefined_symbol_visibility_module(
-    FILE *out, const MinicC0Program *program,
-    const MinicCoreFunction *functions, size_t function_count,
+    FILE *out, const MinicCoreFunction *functions, size_t function_count,
     const MinicProgramEmitConfig *config, const MinicCoreModule *module) {
     size_t index;
     MinicProgramSymbolUses uses = {0};
     bool ok = true;
-    if (out == NULL || (module == NULL && program == NULL)) return false;
+    if (out == NULL || module == NULL) return false;
     if (!minic_program_emit_collect_symbol_uses_module(
-            &uses, program, functions, function_count, config, module)) {
+            &uses, functions, function_count, config, module)) {
         free(uses.names);
         free(uses.asm_uses);
         return false;
     }
-    if (module != NULL) {
+    {
         for (index = 0U; index < module->global_count; ++index) {
             const MinicCoreModuleGlobal *object = &module->globals[index];
             if (object->is_extern && !object->is_internal && !object->is_alias) {
@@ -417,7 +319,7 @@ static inline bool minic_program_emit_undefined_symbol_visibility_module(
                 const bool used =
                     minic_program_symbol_use_has(&uses, object->name) ||
                     minic_program_symbol_used_in_source_asm_module(
-                        program, &uses, object->name, module);
+                        &uses, object->name, module);
                 if (used && (object->name == NULL ||
                     (object->is_weak &&
                      fprintf(out, ".weak %s\n", object->name) < 0) ||
@@ -439,7 +341,7 @@ static inline bool minic_program_emit_undefined_symbol_visibility_module(
                 const bool used =
                     minic_program_symbol_use_has(&uses, function->name) ||
                     minic_program_symbol_used_in_source_asm_module(
-                        program, &uses, function->name, module);
+                        &uses, function->name, module);
                 if (used && (function->name == NULL ||
                     (function->is_weak &&
                      fprintf(out, ".weak %s\n", function->name) < 0) ||
@@ -451,71 +353,18 @@ static inline bool minic_program_emit_undefined_symbol_visibility_module(
                 }
             }
         }
-    } else {
-    for (index = 0U; index < program->global_object_count; ++index) {
-        const MinicGlobalObject *object = &program->global_objects[index];
-        if (object->is_extern && !object->is_internal &&
-            object->alias_target == MINIC_GLOBAL_OBJECT_INVALID) {
-            const char *directive = minic_multi_elf_visibility_directive(object->visibility);
-            const bool used =
-                minic_program_symbol_use_has(&uses, object->name) ||
-                minic_program_symbol_used_in_source_asm(program, &uses, object->name);
-            if (used) {
-                if (object->name == NULL ||
-                    (object->is_weak &&
-                     fprintf(out, ".weak %s\n", object->name) < 0) ||
-                    (object->visibility != MINIC_SYMBOL_VISIBILITY_DEFAULT &&
-                     (directive == NULL ||
-                      fprintf(out, "%s %s\n", directive, object->name) < 0))) {
-                    ok = false;
-                    break;
-                }
-            }
-        }
-    }
-    for (index = 0U; ok && index < program->function_count; ++index) {
-        const MinicFunction *function = &program->functions[index];
-        if (!function->is_defined && !function->is_internal &&
-            function->alias_target == MINIC_FUNCTION_INVALID) {
-            const char *directive = minic_multi_elf_visibility_directive(function->visibility);
-            const char *name = function->assembler_name != NULL
-                ? function->assembler_name : function->name;
-            const bool used =
-                minic_program_symbol_use_has(&uses, name) ||
-                minic_program_symbol_used_in_source_asm(program, &uses, name);
-            if (used) {
-                if (name == NULL ||
-                    (function->is_weak &&
-                     fprintf(out, ".weak %s\n", name) < 0) ||
-                    (function->visibility != MINIC_SYMBOL_VISIBILITY_DEFAULT &&
-                     (directive == NULL ||
-                      fprintf(out, "%s %s\n", directive, name) < 0))) {
-                    ok = false;
-                    break;
-                }
-            }
-        }
-    }
     }
     free(uses.names);
     free(uses.asm_uses);
     return ok;
 }
 
-static inline bool minic_program_emit_undefined_symbol_visibility(
-    FILE *out, const MinicC0Program *program,
-    const MinicCoreFunction *functions, size_t function_count,
-    const MinicProgramEmitConfig *config) {
-    return minic_program_emit_undefined_symbol_visibility_module(
-        out, program, functions, function_count, config, NULL);
-}
-
 static inline bool minic_program_emit_write_module(
-    const char *path, const MinicC0Program *program,
+    const char *path, const MinicCoreModule *module,
     const MinicTargetInfo *target, const MinicCoreFunction *functions,
     size_t function_count, bool function_sections,
     const MinicProgramEmitConfig *config, void *context,
-    const MinicCoreModule *module, MinicProgramVisitModuleGlobal visit_module_global) {
+    MinicProgramVisitModuleGlobal visit_module_global) {
     FILE *out;
     char *temporary;
     size_t path_length;
@@ -523,11 +372,8 @@ static inline bool minic_program_emit_write_module(
     bool ok;
     bool functions_ok;
     if (path == NULL || target == NULL || config == NULL ||
-        (module == NULL &&
-         (program == NULL || config->emit_global == NULL ||
-          function_count != program->function_count)) ||
-        (module != NULL && (!module->finalized || visit_module_global == NULL ||
-                            module->function_count != function_count)) ||
+        module == NULL || !module->finalized || visit_module_global == NULL ||
+        module->function_count != function_count ||
         config->emit_function == NULL ||
         (function_count != 0U && functions == NULL))
         return false;
@@ -551,24 +397,21 @@ static inline bool minic_program_emit_write_module(
         return false;
     }
     ok = config->prefix == NULL ||
-         config->prefix(out, program, target, functions, function_count,
+         config->prefix(out, module, target, functions, function_count,
                         function_sections, context);
     if (ok) ok = minic_program_emit_undefined_symbol_visibility_module(
-        out, program, functions, function_count, config, module);
+        out, functions, function_count, config, module);
     if (ok)
-        ok = module != NULL
-            ? minic_program_visit_module_globals(
-                  out, module, target, visit_module_global, context)
-            : minic_program_visit_globals(
-                  out, program, target, config->emit_global, context);
+        ok = minic_program_visit_module_globals(
+            out, module, target, visit_module_global, context);
     if (ok && config->between != NULL)
-        ok = config->between(out, program, target, functions, function_count,
+        ok = config->between(out, module, target, functions, function_count,
                              function_sections, context);
     if (ok || config->continue_after_failure) {
         functions_ok = minic_program_visit_prepared_functions_module(
-            out, program, target, functions, function_count,
+            out, module, target, functions, function_count,
             function_sections, config->selection, config->continue_after_failure,
-            config->emit_function, context, module);
+            config->emit_function, context);
         ok = ok && functions_ok;
     }
     if (ok && config->trailer != NULL && fputs(config->trailer, out) == EOF)
@@ -583,18 +426,6 @@ static inline bool minic_program_emit_write_module(
     if (!ok) (void)remove(temporary);
     free(temporary);
     return ok;
-}
-
-/* Historical non-attached producer/whitebox tests keep their original
- * entrypoint, while the production driver supplies a sealed ModuleIR. */
-static inline bool minic_program_emit_write(
-    const char *path, const MinicC0Program *program,
-    const MinicTargetInfo *target, const MinicCoreFunction *functions,
-    size_t function_count, bool function_sections,
-    const MinicProgramEmitConfig *config, void *context) {
-    return minic_program_emit_write_module(
-        path, program, target, functions, function_count,
-        function_sections, config, context, NULL, NULL);
 }
 
 #endif

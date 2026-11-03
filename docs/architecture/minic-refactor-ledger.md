@@ -1110,3 +1110,33 @@ GNU operand source qualification remains before publication. The five machine
 writers' remaining borrowed `MinicC0Program` is a **separate**, later
 five-architecture migration, and neither this split nor a green native gate
 implies five-architecture Linux boot certification.
+
+## IR-P19 — One sealed Module-only machine output boundary across five ISAs (2026-11-03)
+
+Read the full C source-to-machine chain before changing the target handoff:
+driver/TargetInfo → final ModuleIR linkage and file-ASM snapshot → shared
+function/global visitor and Core facts/storage plan → target admission and
+machine instructions → staged assembly transaction. Remove the old Program
+parameter and source fallback **together** from the production backend API,
+the five writer entrypoints, common global/function visitation, PIC and ELF
+undefined-symbol analysis, and x86-64/AArch64/LoongArch64 physical emitters.
+There is no Core/Target writer path that can reinterpret a C declaration when
+the sealed Module disagrees; a missing or nonfinalized Module rejects output.
+The common transaction still preserves the last successful output on failure,
+including a target finalizer or census scan failure.
+
+The machine side now receives only ModuleIR, Core functions, prepared facts,
+target feature/ABI policy and explicit callbacks. RISC-V file-ASM strict-I
+markers and native ISA admission remain target-owned. This phase changes no
+Core instruction representation and adds no Machine IR. The separate GNU ASM
+*source qualification* stage still correctly handles exact C type ranks and
+operands before publication. Historical standalone legacy source-C ABI/NEON
+fixtures remain separate cleanup work; their presence must not be mistaken
+for an active production C Program machine-output fallback.
+
+**Verification:** Debug compiler and assembler build succeeded, strict
+`check-minic-target-boundaries.sh` passed, and `make -s MODE=debug -j8
+check-fast` exited zero (including staged writer rollback and five-target
+linkage/ABI/ASM probes). Check-fast is native/source-level evidence only;
+five-architecture Linux GNU-link and QEMU runtime acceptance remain NOT RUN
+for this refactor. Record independent acceptance before declaring a Linux pass.

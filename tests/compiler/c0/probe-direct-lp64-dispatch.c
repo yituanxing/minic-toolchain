@@ -72,7 +72,7 @@ static int run(unsigned int failure) {
     MinicCoreInstructionId first[] = {0U, 1U}, second[] = {2U};
     MinicCoreBlock blocks[2] = {{0}, {0}};
     MinicCoreFunction fn = {0};
-    MinicC0Program program = {0};
+    MinicCoreModule module = { .finalized = true };
     MinicTargetInfo target = {0};
     MinicLP64FramePlan frame = {0};
     size_t value_offsets[] = {0U, 24U, 8U};
@@ -116,7 +116,7 @@ static int run(unsigned int failure) {
     frame.value_count = 3U;
     if (failure == 5U)
         value_offsets[1] = SIZE_MAX;
-    ctx.program = &program;
+    ctx.module = &module;
     ctx.target = &target;
     ctx.fn = &fn;
     ctx.frame_plan = &frame;

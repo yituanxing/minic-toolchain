@@ -9,15 +9,15 @@ typedef struct TestContext {
     unsigned int fail_stage, globals, functions, finalizations;
 } TestContext;
 
-static bool prefix(FILE *out, const MinicC0Program *p,
+static bool prefix(FILE *out, const MinicCoreModule *p,
                    const MinicTargetInfo *t, const MinicCoreFunction *f,
                    size_t n, bool sections, void *opaque) {
     TestContext *ctx = opaque;
     (void)p; (void)t; (void)f; (void)n; (void)sections;
     return fputs("P\n", out) != EOF && ctx->fail_stage != 1U;
 }
-static bool global(FILE *out, const MinicC0Program *p,
-                   const MinicTargetInfo *t, const MinicGlobalObject *obj,
+static bool fixture_global(FILE *out, const MinicCoreModule *p,
+                   const MinicTargetInfo *t, const MinicCoreModuleGlobal *obj,
                    size_t index, void *opaque) {
     TestContext *ctx = opaque;
     (void)p; (void)t; (void)obj;
@@ -25,15 +25,15 @@ static bool global(FILE *out, const MinicC0Program *p,
     ++ctx->globals;
     return fputs("G\n", out) != EOF && ctx->fail_stage != 2U;
 }
-static bool between(FILE *out, const MinicC0Program *p,
+static bool between(FILE *out, const MinicCoreModule *p,
                     const MinicTargetInfo *t, const MinicCoreFunction *f,
                     size_t n, bool sections, void *opaque) {
     TestContext *ctx = opaque;
     (void)p; (void)t; (void)f; (void)n; (void)sections;
     return fputs("B\n", out) != EOF && ctx->fail_stage != 3U;
 }
-static bool function(FILE *out, const MinicC0Program *p,
-                     const MinicTargetInfo *t, const MinicFunction *decl,
+static bool function(FILE *out, const MinicCoreModule *p,
+                     const MinicTargetInfo *t,
                      const MinicCoreModuleFunctionSymbol *module_decl,
                      const MinicCoreFunction *f,
                      const MinicCoreFunctionFacts *facts,
@@ -41,9 +41,7 @@ static bool function(FILE *out, const MinicC0Program *p,
                      bool sections, void *opaque) {
     TestContext *ctx = opaque;
     (void)p; (void)t; (void)f; (void)sections;
-    /* A sealed Module must never hand its machine visitor a C declaration. */
-    if ((module_decl != NULL && decl != NULL) ||
-        (module_decl == NULL && decl == NULL)) return false;
+    if (p == NULL || module_decl == NULL) return false;
     if (index != 0U || facts == NULL || storage == NULL ||
         storage->count != 0U ||
         facts->direct_call_count != 1U ||
@@ -96,19 +94,18 @@ static bool module_global(FILE *out, const MinicCoreModule *module,
     return fprintf(out, "G:%s\n", object->name) >= 0;
 }
 
-static bool module_between(FILE *out, const MinicC0Program *program,
+static bool module_between(FILE *out, const MinicCoreModule *module,
                            const MinicTargetInfo *target,
                            const MinicCoreFunction *functions,
                            size_t function_count, bool sections, void *opaque) {
     const ModuleTestContext *context = opaque;
-    (void)program; (void)target; (void)functions; (void)function_count;
+    (void)target; (void)functions; (void)function_count;
     (void)sections;
-    return minic_program_emit_source_file_asm_module(out, context->module);
+    return module == context->module &&
+           minic_program_emit_source_file_asm_module(out, module);
 }
 
-/* An attached program transaction must be immune to C Program global,
- * relocation, function declaration and file-ASM mutation after ModuleIR
- * publication. The Core module alone owns its symbol-use evidence. */
+/* Module-only output owns immutable global/ASM and symbol-use evidence. */
 static int check_module_snapshot_output(const char *path) {
     MinicCoreModuleFragment fragment = {
         .kind = MINIC_CORE_MODULE_FRAGMENT_RELOCATION,
@@ -132,15 +129,8 @@ static int check_module_snapshot_output(const char *path) {
         .file_asms = &file_asm, .file_asm_count = 1U,
         .finalized = true
     };
-    MinicGlobalObject poison = { .name = "poison_source_global" };
-    MinicFileAsm poison_asm = { .text = ".quad poison_source_asm", .length = 23U };
-    MinicC0Program program = {
-        .global_objects = &poison, .global_object_count = 1U,
-        .file_asms = &poison_asm, .file_asm_count = 1U
-    };
     MinicTargetInfo target = {0};
     MinicProgramEmitConfig config = {
-        .emit_global = global,
         .emit_function = function,
         .between = module_between,
         .trailer = "T\n",
@@ -151,8 +141,8 @@ static int check_module_snapshot_output(const char *path) {
     char data[4096] = {0};
     size_t count;
     if (!minic_program_emit_write_module(
-            path, &program, &target, NULL, 0U, false,
-            &config, &context, &module, module_global)) return 1;
+            path, &module, &target, NULL, 0U, false,
+            &config, &context, module_global)) return 1;
     in = fopen(path, "rb");
     if (in == NULL) return 2;
     count = fread(data, 1U, sizeof(data) - 1U, in);
@@ -163,13 +153,11 @@ static int check_module_snapshot_output(const char *path) {
         strstr(data, ".text\n .quad asm_weak\n.text\n") == NULL ||
         strstr(data, "unused_hidden") != NULL ||
         strstr(data, "poison_source") != NULL) return 3;
-    /* The whole output transaction must also run with no C Program at all.
-     * Both runs serialize the exact same frozen globals, weak bindings,
-     * relocation references, and file ASM; the former source is poisoned. */
+    /* Repeated output is deterministic from the same sealed module. */
     context.globals = 0U;
     if (!minic_program_emit_write_module(
-            path, NULL, &target, NULL, 0U, false,
-            &config, &context, &module, module_global)) return 12;
+            path, &module, &target, NULL, 0U, false,
+            &config, &context, module_global)) return 12;
     in = fopen(path, "rb");
     if (in == NULL) return 13;
     (void)memset(data, 0, sizeof(data));
@@ -180,20 +168,17 @@ static int check_module_snapshot_output(const char *path) {
         strstr(data, "G:owned\n") == NULL ||
         strstr(data, ".text\n .quad asm_weak\n.text\n") == NULL ||
         strstr(data, "poison_source") != NULL) return 14;
-    /* Module symbol-use gathering and ELF binding must be independently
-     * runnable with NO source Program at all, not merely resistant to an
-     * altered Program's global list. This covers both relocation and text
-     * ASM references while never emitting unused hidden declarations. */
+    /* Symbol-use gathering and ELF binding work independently of Program. */
     {
         MinicProgramSymbolUses uses = {0};
         FILE *bindings = tmpfile();
         if (bindings == NULL) return 9;
         if (!minic_program_emit_collect_symbol_uses_module(
-                &uses, NULL, NULL, 0U, &config, &module) ||
+                &uses, NULL, 0U, &config, &module) ||
             !minic_program_symbol_use_has(&uses, "weak_ext") ||
             minic_program_symbol_use_has(&uses, "poison_source_global") ||
             !minic_program_emit_undefined_symbol_visibility_module(
-                bindings, NULL, NULL, 0U, &config, &module) ||
+                bindings, NULL, 0U, &config, &module) ||
             fseek(bindings, 0L, SEEK_SET) != 0) {
             free(uses.names);
             free(uses.asm_uses);
@@ -212,13 +197,13 @@ static int check_module_snapshot_output(const char *path) {
     }
     module.finalized = false;
     if (minic_program_emit_write_module(
-            path, &program, &target, NULL, 0U, false,
-            &config, &context, &module, module_global)) return 4;
+            path, &module, &target, NULL, 0U, false,
+            &config, &context, module_global)) return 4;
     module.finalized = true;
     fragment.relocation_symbol = NULL;
     if (minic_program_emit_write_module(
-            path, &program, &target, NULL, 0U, false,
-            &config, &context, &module, module_global)) return 8;
+            path, &module, &target, NULL, 0U, false,
+            &config, &context, module_global)) return 8;
     fragment.relocation_symbol = "weak_ext";
     {
         MinicCoreModuleFunctionSymbol symbols[2] = {
@@ -250,8 +235,13 @@ static int check_module_snapshot_output(const char *path) {
 }
 
 int main(int argc, char **argv) {
-    MinicGlobalObject object = {0};
-    MinicFunction declaration = {0};
+    MinicCoreModuleGlobal object = {
+        .name = "fixture_global", .emittable = true
+    };
+    MinicCoreModuleFunctionSymbol declaration = {
+        .name = "fixture_function", .is_defined = true,
+        .is_referenced = true, .alias_target_index = SIZE_MAX
+    };
     MinicCoreFunction ir = {0};
     MinicCoreTypeContext synthetic_types = {0};
     /* Transaction callbacks use six global instructions for fact coverage,
@@ -269,10 +259,13 @@ int main(int argc, char **argv) {
         { .kind = MINIC_CORE_INSTRUCTION_VARIADIC_ARGUMENT_ADDRESS },
         { .kind = MINIC_CORE_INSTRUCTION_CALL_FRAME_ADDRESS }
     };
-    MinicC0Program program = {0};
+    MinicCoreModule module = {
+        .globals = &object, .global_count = 1U,
+        .function_symbols = &declaration, .function_count = 1U,
+        .finalized = true
+    };
     MinicTargetInfo target = {0};
     MinicProgramEmitConfig config = {
-        .emit_global = global,
         .emit_function = function,
         .prefix = prefix,
         .between = between,
@@ -286,10 +279,6 @@ int main(int argc, char **argv) {
     const char *path;
     if (argc != 2) return 2;
     path = argv[1];
-    /* Real AST constructors initialize an unowned file-scope object with
-     * INVALID. Do not rely on a zero-initialized synthetic test shortcut. */
-    object.owner_function = MINIC_FUNCTION_INVALID;
-    declaration.is_defined = true;
     instructions[5].value.call_frame_address.kind = MINIC_CORE_CALL_FRAME_ADDRESS_RETURN;
     ir.instructions = instructions;
     ir.type_context = &synthetic_types;
@@ -297,19 +286,16 @@ int main(int argc, char **argv) {
     ir.blocks = &entry_block;
     ir.block_count = 1U;
     ir.entry_block = 0U;
-    program.global_objects = &object;
-    program.global_object_count = 1U;
     target.data_layout = &(MinicDataLayout){0};
-    program.functions = &declaration;
-    program.function_count = 1U;
     for (stage = 0U; stage <= 5U; ++stage) {
         FILE *existing;
         bool result;
         (void)remove(path);
         (void)memset(&ctx, 0, sizeof(ctx));
         ctx.fail_stage = stage;
-        result = minic_program_emit_write(
-            path, &program, &target, &ir, 1U, false, &config, &ctx);
+        result = minic_program_emit_write_module(
+            path, &module, &target, &ir, 1U, false, &config, &ctx,
+            fixture_global);
         existing = fopen(path, "rb");
         if (result != (stage == 0U) ||
             (existing != NULL) != (stage == 0U) ||
@@ -325,9 +311,10 @@ int main(int argc, char **argv) {
     (void)memset(&ctx, 0, sizeof(ctx));
     ctx.fail_stage = 2U;
     (void)remove(path);
-    if (minic_program_emit_write(
-            path, &program, &target, &ir, 1U, false,
-            &config, &ctx) || ctx.globals != 1U || ctx.functions != 1U)
+    if (minic_program_emit_write_module(
+            path, &module, &target, &ir, 1U, false,
+            &config, &ctx, fixture_global) ||
+        ctx.globals != 1U || ctx.functions != 1U)
         return 20;
     {
         FILE *leaked = fopen(path, "rb");
@@ -336,44 +323,39 @@ int main(int argc, char **argv) {
             return 21;
         }
     }
-    /* A deliberately conflicting C declaration cannot suppress a sealed
-     * Module definition, and the machine callback must receive NULL C decl.
-     * This exercises the real shared Core function-plan builder. */
+    /* Module definitions select the shared Core function-plan builder. */
     {
         MinicCoreModuleFunctionSymbol module_decl = {
             .name = "sealed_function", .is_defined = true, .is_referenced = true,
             .alias_target_index = SIZE_MAX
         };
-        MinicCoreModule module = {
+        MinicCoreModule owned_module = {
             .function_symbols = &module_decl, .function_count = 1U,
             .finalized = true
         };
         FILE *probe = tmpfile();
         if (probe == NULL) return 41;
-        declaration.is_defined = false;
         (void)memset(&ctx, 0, sizeof(ctx));
         if (!minic_program_visit_prepared_functions_module(
-                probe, &program, &target, &ir, 1U, false,
+                probe, &owned_module, &target, &ir, 1U, false,
                 MINIC_PROGRAM_FUNCTION_LIVE_DEFINITIONS, false,
-                function, &ctx, &module) || ctx.functions != 1U) {
+                function, &ctx) || ctx.functions != 1U) {
             (void)fclose(probe);
             return 42;
         }
         if (fclose(probe) != 0) return 43;
-        /* The source declaration is not merely hidden from callbacks:
-         * zero source Program is a supported sealed Module visitor input. */
+        /* A missing sealed Module cannot sneak through the machine visitor. */
         probe = tmpfile();
         if (probe == NULL) return 44;
         (void)memset(&ctx, 0, sizeof(ctx));
-        if (!minic_program_visit_prepared_functions_module(
+        if (minic_program_visit_prepared_functions_module(
                 probe, NULL, &target, &ir, 1U, false,
                 MINIC_PROGRAM_FUNCTION_LIVE_DEFINITIONS, false,
-                function, &ctx, &module) || ctx.functions != 1U) {
+                function, &ctx) || ctx.functions != 0U) {
             (void)fclose(probe);
             return 45;
         }
         if (fclose(probe) != 0) return 46;
-        declaration.is_defined = true;
     }
     if (check_module_snapshot_output(path) != 0) return 50;
     puts("MINIC_CORE_MODULE_SYMBOL_TRANSACTION=PASS no_C_program_global=file_asm=1 weak_hidden=2 alias=2 invalid_reject=2");
@@ -390,8 +372,9 @@ int main(int argc, char **argv) {
             fclose(original) != 0) return 30;
         (void)memset(&ctx, 0, sizeof(ctx));
         ctx.fail_stage = stage;
-        if (minic_program_emit_write(path, &program, &target, &ir, 1U,
-                                      false, &config, &ctx)) return 31;
+        if (minic_program_emit_write_module(path, &module, &target, &ir, 1U,
+                                      false, &config, &ctx,
+                                      fixture_global)) return 31;
         existing = fopen(path, "rb");
         if (existing == NULL) return 32;
         n = fread(data, 1U, sizeof(data) - 1U, existing);
@@ -399,8 +382,8 @@ int main(int argc, char **argv) {
             strcmp(data, "ORIGINAL\n") != 0) return 33;
     }
     (void)memset(&ctx, 0, sizeof(ctx));
-    if (!minic_program_emit_write(path, &program, &target, &ir, 1U,
-                                  false, &config, &ctx)) return 34;
+    if (!minic_program_emit_write_module(path, &module, &target, &ir, 1U,
+                                  false, &config, &ctx, fixture_global)) return 34;
     {
         FILE *in = fopen(path, "rb");
         char data[64] = {0};

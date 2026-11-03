@@ -4,7 +4,6 @@
 #include "target/common/direct_function_plan.h"
 #include "target/common/direct_block_context.h"
 #include "target/common/direct_program_emit.h"
-#include "target/common/global_emit.h"
 #include "target/common/module_global_emit.h"
 #include <stdint.h>
 #include <stdio.h>
@@ -28,9 +27,9 @@ typedef struct MinicDirectLP64FunctionEmitter {
 } MinicDirectLP64FunctionEmitter;
 
 static inline bool minic_multi_direct_lp64_emit_function(
-    FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
+    FILE *out, const MinicTargetInfo *target,
     const MinicCoreModule *module,
-    const MinicFunction *decl, const MinicCoreModuleFunctionSymbol *module_decl,
+    const MinicCoreModuleFunctionSymbol *module_decl,
     const MinicCoreFunction *fn,
     const MinicCoreFunctionFacts *facts,
     const MinicCoreObjectStoragePlan *storage,
@@ -51,23 +50,18 @@ static inline bool minic_multi_direct_lp64_emit_function(
         config->text_section_type == NULL ||
         config->elf_function_type == NULL || config->init_array_type == NULL ||
         config->init_word_directive == NULL || config->emit_prologue == NULL ||
-        config->emit_core_blocks == NULL || out == NULL || (decl == NULL && module_decl == NULL))
+        config->emit_core_blocks == NULL || out == NULL || module == NULL ||
+        module_decl == NULL)
         return false;
-    /* Once ModuleIR is attached, function identity and ELF declarations
-     * have a single sealed owner. The source declaration survives only for
-     * the not-yet-migrated, function-local ABI/source-ASM preflight. */
-    name = module_decl != NULL ? module_decl->name
-                               : minic_c0_function_symbol_name(decl);
-    section = module_decl != NULL ? module_decl->section_name : decl->section_name;
-    alignment = module_decl != NULL ? module_decl->explicit_alignment
-                                    : decl->explicit_alignment;
-    internal = module_decl != NULL ? module_decl->is_internal : decl->is_internal;
-    weak = module_decl != NULL ? module_decl->is_weak : decl->is_weak;
-    constructor = module_decl != NULL ? module_decl->is_constructor
-                                      : decl->is_constructor;
+    name = module_decl->name;
+    section = module_decl->section_name;
+    alignment = module_decl->explicit_alignment;
+    internal = module_decl->is_internal;
+    weak = module_decl->is_weak;
+    constructor = module_decl->is_constructor;
     if (name == NULL || name[0] == '\0') return false;
     if (!minic_multi_direct_lp64_function_plan_prepare(
-            decl, module_decl, fn, facts, storage, config->architecture,
+            module_decl, fn, facts, storage, config->architecture,
             config->abi, config->qualify_opaque_asm,
             &plan)) {
         (void)minic_multi_direct_machine_reject(fn, config->architecture,
@@ -89,18 +83,15 @@ static inline bool minic_multi_direct_lp64_emit_function(
     if ((!internal &&
          fprintf(out, weak ? ".weak %s\n" : ".globl %s\n", name) < 0) ||
         (!internal &&
-         !(module_decl != NULL
-             ? minic_multi_module_emit_elf_symbol_visibility(
-                   out, module_decl->visibility, name)
-             : minic_multi_emit_elf_symbol_visibility(
-                   out, decl->visibility, name))) ||
+         !minic_multi_module_emit_elf_symbol_visibility(
+             out, module_decl->visibility, name)) ||
         fprintf(out, ".balign %zu\n.type %s,%s\n%s:\n",
                 alignment > 4U ? alignment : 4U,
                 name, config->elf_function_type, name) < 0)
         goto output_failed;
 
     ctx = (MinicDirectLP64BlockContext){
-        .program = program, .module = module, .target = target, .fn = fn,
+        .module = module, .target = target, .fn = fn,
         .frame_plan = &plan.frame_plan,
         .incoming_plan = &plan.incoming_plan,
         .outgoing_calls = &plan.outgoing_calls,

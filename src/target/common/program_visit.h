@@ -4,38 +4,20 @@
 #include "core/core_ir.h"
 #include "core/module_ir.h"
 #include "target/common/core_function_plan.h"
-#include "frontend/ast.h"
 #include "target/target_info.h"
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdio.h>
-#include <stdlib.h>
 
-/* A single ISA/ABI-independent translation-unit traversal for all five MiniC
- * targets. Only declaration filtering and visitation order live here.
- * No frame offsets, registers, calling convention or assembler syntax.
- * The visitor controls source-asm provenance, global symbols and diagnostics.
- * Different targets may retain distinct ordering of external declarations. */
-typedef bool (*MinicProgramVisitGlobal)(
-    FILE *, const MinicC0Program *, const MinicTargetInfo *,
-    const MinicGlobalObject *, size_t, void *);
-/* A sealed ModuleIR global is already laid out and source-independent.
- * Physical ELF directives and relocation width policy remain target-owned. */
+/* A sealed translation unit is the only machine-side declaration owner.
+ * The visitor chooses which definitions to emit and constructs one shared,
+ * ABI-neutral Core plan. Targets alone own ABI and instructions. */
 typedef bool (*MinicProgramVisitModuleGlobal)(
     FILE *, const MinicCoreModule *, const MinicTargetInfo *,
     const MinicCoreModuleGlobal *, size_t, void *);
-typedef bool (*MinicProgramVisitFunction)(
-    FILE *, const MinicC0Program *, const MinicTargetInfo *,
-    const MinicFunction *, const MinicCoreFunction *, size_t,
-    bool function_sections, void *);
-
-/* Every emitted Core definition has one ABI-neutral semantic-facts plan.
- * Targets consume its call/variadic/dynamic stack facts without rescanning.
- * Physical locations and ISA admission remain target responsibilities. */
 typedef bool (*MinicProgramVisitPreparedFunction)(
-    FILE *, const MinicC0Program *, const MinicTargetInfo *,
-    const MinicFunction *, const MinicCoreModuleFunctionSymbol *,
-    const MinicCoreFunction *,
+    FILE *, const MinicCoreModule *, const MinicTargetInfo *,
+    const MinicCoreModuleFunctionSymbol *, const MinicCoreFunction *,
     const MinicCoreFunctionFacts *, const MinicCoreObjectStoragePlan *,
     size_t, bool function_sections, void *);
 
@@ -44,16 +26,6 @@ typedef enum MinicProgramFunctionSelection {
     MINIC_PROGRAM_FUNCTION_DECLARATIONS,
     MINIC_PROGRAM_FUNCTION_LIVE_DEFINITIONS
 } MinicProgramFunctionSelection;
-
-/* The declaration-only and prepared-definition passes must share the same
- * selection semantics, including unreachable static definitions. */
-static inline bool minic_program_function_selected(
-    const MinicFunction *decl, MinicProgramFunctionSelection selection) {
-    return decl != NULL &&
-        !(selection == MINIC_PROGRAM_FUNCTION_DECLARATIONS && decl->is_defined) &&
-        !(selection == MINIC_PROGRAM_FUNCTION_LIVE_DEFINITIONS && !decl->is_defined) &&
-        !(decl->is_defined && decl->is_internal && !decl->is_referenced);
-}
 
 static inline bool minic_program_module_function_selected(
     const MinicCoreModuleFunctionSymbol *decl,
@@ -80,117 +52,31 @@ static inline bool minic_program_visit_module_globals(
     return true;
 }
 
-static inline bool minic_program_visit_globals(
-    FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
-    MinicProgramVisitGlobal visit, void *context) {
-    size_t i;
-    bool *live_owners;
-    bool success = true;
-    if (out == NULL || program == NULL || visit == NULL) return false;
-    /* Snapshot emitted owners once: GNU Linux TUs may contain thousands of
-     * static-local objects and inline clones. The hot visitor is O(F + G),
-     * not O(F * G); allocation failure uses the exact uncached predicate. */
-    live_owners = minic_c0_program_build_global_owner_live_map(program);
-    for (i = 0U; i < program->global_object_count; ++i) {
-        const MinicGlobalObject *object = &program->global_objects[i];
-        if (!minic_c0_program_global_object_emittable_with_map(
-                program, object, live_owners))
-            continue;
-        if (!visit(out, program, target, object, i, context)) {
-            success = false;
-            break;
-        }
-    }
-    free(live_owners);
-    return success;
-}
-
-static inline bool minic_program_visit_functions_module(
-    FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
-    const MinicCoreFunction *functions, size_t function_count,
-    bool function_sections, MinicProgramFunctionSelection selection,
-    bool continue_after_failure, MinicProgramVisitFunction visit,
-    void *context, const MinicCoreModule *module) {
-    size_t i;
-    bool success = true;
-    if (out == NULL || target == NULL || visit == NULL ||
-        (module == NULL && (program == NULL ||
-                            function_count != program->function_count)) ||
-        (module != NULL && (!module->finalized ||
-            module->function_count != function_count ||
-            (function_count != 0U && module->function_symbols == NULL))) ||
-        (function_count != 0U && functions == NULL))
-        return false;
-    for (i = 0U; i < function_count; ++i) {
-        const MinicFunction *decl = module == NULL ? &program->functions[i] : NULL;
-        if (!(module != NULL
-                  ? minic_program_module_function_selected(
-                        &module->function_symbols[i], selection)
-                  : minic_program_function_selected(decl, selection)))
-            continue;
-        if (!visit(out, program, target, decl, &functions[i], i,
-                   function_sections, context)) {
-            success = false;
-            if (!continue_after_failure) break;
-        }
-    }
-    return success;
-}
-
-static inline bool minic_program_visit_functions(
-    FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
-    const MinicCoreFunction *functions, size_t function_count,
-    bool function_sections, MinicProgramFunctionSelection selection,
-    bool continue_after_failure, MinicProgramVisitFunction visit,
-    void *context) {
-    return minic_program_visit_functions_module(
-        out, program, target, functions, function_count,
-        function_sections, selection, continue_after_failure,
-        visit, context, NULL);
-}
-
-/* The single production per-function preparation stage. No ABI assumptions,
- * no target-specific opcode mapping, and no writable Core state. A NULL
- * facts pointer denotes a non-definition (RV64 declaration pass). */
 static inline bool minic_program_visit_prepared_functions_module(
-    FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
+    FILE *out, const MinicCoreModule *module, const MinicTargetInfo *target,
     const MinicCoreFunction *functions, size_t function_count,
     bool function_sections, MinicProgramFunctionSelection selection,
     bool continue_after_failure, MinicProgramVisitPreparedFunction visit,
-    void *context, const MinicCoreModule *module) {
+    void *context) {
     size_t i;
     bool success = true;
-    if (out == NULL || visit == NULL || target == NULL ||
-        (module == NULL && (program == NULL ||
-                            function_count != program->function_count)) ||
-        (module != NULL && (!module->finalized ||
-                            module->function_count != function_count ||
-                            (function_count != 0U && module->function_symbols == NULL))) ||
-        (function_count != 0U && functions == NULL))
+    if (out == NULL || visit == NULL || target == NULL || module == NULL ||
+        !module->finalized || module->function_count != function_count ||
+        (function_count != 0U &&
+         (module->function_symbols == NULL || functions == NULL)))
         return false;
     for (i = 0U; i < function_count; ++i) {
-        const MinicFunction *decl = module == NULL ? &program->functions[i] : NULL;
-        const MinicCoreModuleFunctionSymbol *module_decl = module != NULL
-            ? &module->function_symbols[i] : NULL;
-        const bool is_defined = module_decl != NULL
-            ? module_decl->is_defined : decl->is_defined;
+        const MinicCoreModuleFunctionSymbol *decl = &module->function_symbols[i];
         MinicCoreFunctionPlan plan = {0};
         bool ready = true;
-        if (!(module_decl != NULL
-                  ? minic_program_module_function_selected(module_decl, selection)
-                  : minic_program_function_selected(decl, selection)))
+        if (!minic_program_module_function_selected(decl, selection))
             continue;
-        /* One common, ABI-neutral function-plan owner. Target frames borrow
-         * the immutable layout/semantic snapshot for this visitor call only.
-         * No physical ABI state escapes into the Core definition. */
-        if (is_defined)
-            ready = minic_core_function_plan_build(
-                &functions[i], &plan);
+        if (decl->is_defined)
+            ready = minic_core_function_plan_build(&functions[i], &plan);
         if (ready)
-            ready = visit(out, program, target,
-                          decl, module_decl, &functions[i],
-                          is_defined ? &plan.facts : NULL,
-                          is_defined ? &plan.objects : NULL, i,
+            ready = visit(out, module, target, decl, &functions[i],
+                          decl->is_defined ? &plan.facts : NULL,
+                          decl->is_defined ? &plan.objects : NULL, i,
                           function_sections, context);
         minic_core_function_plan_destroy(&plan);
         if (!ready) {
@@ -199,17 +85,6 @@ static inline bool minic_program_visit_prepared_functions_module(
         }
     }
     return success;
-}
-
-static inline bool minic_program_visit_prepared_functions(
-    FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
-    const MinicCoreFunction *functions, size_t function_count,
-    bool function_sections, MinicProgramFunctionSelection selection,
-    bool continue_after_failure, MinicProgramVisitPreparedFunction visit,
-    void *context) {
-    return minic_program_visit_prepared_functions_module(
-        out, program, target, functions, function_count, function_sections,
-        selection, continue_after_failure, visit, context, NULL);
 }
 
 #endif

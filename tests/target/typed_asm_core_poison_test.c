@@ -45,7 +45,7 @@ static bool emit_one(PoisonMachine machine, const MinicCoreFunction *function,
     MinicDirectLP64BlockContext a64 = {0};
     MinicLP64FramePlan a64_frame = {0};
     MinicX86Frame x86_frame = {0};
-    MinicC0Program program = {0};
+    MinicCoreModule module = { .finalized = true };
     MinicTargetInfo target = {0};
     size_t offsets[1] = {16U};
     FILE *stream;
@@ -64,7 +64,7 @@ static bool emit_one(PoisonMachine machine, const MinicCoreFunction *function,
     x86_frame.value_offsets = offsets;
     result = machine == POISON_AARCH64
         ? minic_aarch64_emit_qualified_structured_asm(stream, &a64, instruction)
-        : minic_x86_64_emit_structured_asm(stream, &program, &target,
+        : minic_x86_64_emit_structured_asm(stream, &module, &target,
               function, &x86_frame, instruction, 0U);
     assert(fflush(stream) == 0);
     assert(fseek(stream, 0L, SEEK_SET) == 0);

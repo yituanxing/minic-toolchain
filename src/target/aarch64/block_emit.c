@@ -493,7 +493,7 @@ static bool aarch64_machine_emit_family(
     const MinicCoreInstruction *ins, MinicCoreInstructionId ins_id,
     size_t block_id, const MinicDirectMachineInstructionShape *shape,
     bool *needs_gp_store) {
-    const MinicC0Program *program = ctx->program;
+    const MinicCoreModule *module = ctx->module;
     const MinicTargetInfo *target = ctx->target;
     const MinicCoreFunction *fn = ctx->fn;
     const MinicA64FrameView frame_view = {
@@ -510,15 +510,15 @@ static bool aarch64_machine_emit_family(
         return minic_aarch64_emit_parameter_object(out, ctx, ins);
     case MINIC_DIRECT_MACHINE_MEMORY:
         return minic_aarch64_emit_memory_instruction(
-            out, program, target, fn, ins, ctx->frame_plan,
+            out, module, target, fn, ins, ctx->frame_plan,
             &frame_view, needs_gp_store);
     case MINIC_DIRECT_MACHINE_FP:
         return minic_aarch64_emit_fp_instruction(
-            out, program, target, fn, ins, shape->result_offset,
+            out, module, target, fn, ins, shape->result_offset,
             ctx->frame_plan, &frame_view, needs_gp_store);
     case MINIC_DIRECT_MACHINE_INTEGER:
         return minic_aarch64_emit_integer_instruction(
-            out, program, target, fn, ins, ctx->frame_plan,
+            out, module, target, fn, ins, ctx->frame_plan,
             &frame_view, needs_gp_store);
     case MINIC_DIRECT_MACHINE_ABI:
         return minic_aarch64_emit_abi_instruction(

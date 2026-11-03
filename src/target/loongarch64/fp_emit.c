@@ -29,11 +29,11 @@ static bool loong_fp_type(const MinicCoreFunction *fn,
  * Comparison and FP->integer leave their result in the ISA's integer
  * scratch register; other cases write their SSA slot directly. */
 bool minic_loongarch64_emit_fp_instruction(
-    FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
+    FILE *out, const MinicCoreModule *module, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
     size_t offset, size_t id, bool dynamic_frame, const MinicLP64FramePlan *frame_plan,
     bool *needs_gp_store) {
-    if (out == NULL || program == NULL || target == NULL ||
+    if (out == NULL || module == NULL || target == NULL ||
         fn == NULL || ins == NULL || frame_plan == NULL ||
         needs_gp_store == NULL)
         return false;

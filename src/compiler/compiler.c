@@ -415,7 +415,7 @@ int minic_compile_preprocessed_file_for_target(const char *input_path,
     if (success) {
         minic_bootstrap_trace_stage(input_path, "codegen", "begin", program.function_count);
         success = minic_backend_emit_assembly_with_module(
-            backend, output_path, &program, target_info, core_set.functions,
+            backend, output_path, target_info, core_set.functions,
             core_set.function_count, function_sections, &core_set.module,
             diagnostic);
         minic_bootstrap_trace_stage(input_path,

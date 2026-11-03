@@ -46,12 +46,12 @@ static bool fp_bits_constant(FILE *out, uint64_t bits) {
  * Comparison and FP->integer leave their result in the ISA's integer
  * scratch register; other cases write their SSA slot directly. */
 bool minic_aarch64_emit_fp_instruction(
-    FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
+    FILE *out, const MinicCoreModule *module, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
     size_t offset, const MinicLP64FramePlan *frame_plan,
     const MinicA64FrameView *frame_view,
     bool *needs_gp_store) {
-    if (out == NULL || program == NULL || target == NULL ||
+    if (out == NULL || module == NULL || target == NULL ||
         fn == NULL || ins == NULL || frame_plan == NULL || frame_view == NULL ||
         needs_gp_store == NULL)
         return false;

@@ -21,11 +21,11 @@ static bool residual_kind(const MinicCoreFunction *fn, MinicCoreTypeId id,
  * The former block emitters each classified scalar widths/sign, detected
  * binary128 and independently looked up both wide frame slots. */
 bool minic_multi_direct_integer_cast_plan(
-    const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicCoreModule *module, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
     const MinicLP64FramePlan *frame, MinicDirectIntegerCastPlan *plan) {
     MinicCoreIntegerConversionShape shape;
-    if (program == NULL || target == NULL ||
+    if (module == NULL || target == NULL ||
         frame == NULL || plan == NULL ||
         !minic_core_integer_conversion_shape(fn, ins, &shape))
         return false;
@@ -57,10 +57,10 @@ bool minic_multi_direct_integer_cast_plan(
  * payload. Unsupported pseudo-bool types preserve the original signed
  * int32 range gate used by both native direct backends. */
 bool minic_multi_direct_constant_integer_shape(
-    const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicCoreModule *module, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
     size_t *width, bool *is_signed) {
-    if (program == NULL || target == NULL || fn == NULL ||
+    if (module == NULL || target == NULL || fn == NULL ||
         fn->type_context == NULL || ins == NULL ||
         width == NULL || is_signed == NULL ||
         ins->kind != MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT)

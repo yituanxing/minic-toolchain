@@ -12,12 +12,12 @@
 #include <string.h>
 
 static bool emit_riscv64_module(
-    const char *output_path, const MinicC0Program *program,
-    const MinicTargetInfo *target, const MinicCoreFunction *functions,
+    const char *output_path, const MinicTargetInfo *target,
+    const MinicCoreFunction *functions,
     size_t function_count, bool function_sections,
     const MinicCoreModule *module, MinicDiagnostic *diagnostic) {
     return minic_riscv64_write_c0_program_with_core_module(
-        output_path, program, functions, function_count,
+        output_path, functions, function_count,
         function_sections, target, module, diagnostic);
 }
 
@@ -302,7 +302,7 @@ bool minic_backend_clone_safe_opaque_asm(
 
 bool minic_backend_emit_assembly_with_module(
     const MinicBackend *backend, const char *output_path,
-    const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicTargetInfo *target,
     const MinicCoreFunction *functions, size_t function_count,
     bool function_sections, const MinicCoreModule *module,
     MinicDiagnostic *diagnostic) {
@@ -314,6 +314,6 @@ bool minic_backend_emit_assembly_with_module(
         return false;
     /* Once a module has been attached, failure remains a real failure:
      * emitting from the mutable source globals would violate ownership. */
-    return backend->emit_module(output_path, program, target,
+    return backend->emit_module(output_path, target,
         functions, function_count, function_sections, module, diagnostic);
 }

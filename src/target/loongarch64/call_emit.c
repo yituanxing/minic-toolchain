@@ -132,7 +132,7 @@ bool minic_loongarch64_emit_abi_instruction(
     const MinicLP64ArgumentPlan *incoming_plan;
     size_t frame;
     bool dynamic_frame;
-    if (out == NULL || ctx == NULL || ctx->program == NULL ||
+    if (out == NULL || ctx == NULL || ctx->module == NULL ||
         ctx->target == NULL || ctx->fn == NULL || ctx->frame_plan == NULL ||
         ctx->incoming_plan == NULL || ctx->outgoing_calls == NULL ||
         ins == NULL ||
