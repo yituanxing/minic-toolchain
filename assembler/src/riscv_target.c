@@ -990,6 +990,15 @@ static bool riscv_record_object_mapping_symbols(
                !previous->pending_zero_data)continue;
             name="$d";
         }else {
+            /* GAS does not relabel an uninterrupted executable stream at
+             * the start of a padding fragment merely because .option pop
+             * changed the ISA spelling.  The NOP fill can itself contain
+             * C.NOP left by an earlier RVC site; the new `$xrv...` applies
+             * to the *next instruction* after the alignment.  Padding
+             * following DATA still needs the usual MAP_CODE transition. */
+            if(fragment.kind==MINIAS_FRAGMENT_ALIGNMENT &&
+               previous->kind==RISCV_MAP_CODE)
+                continue;
             const uint64_t additions=
                 ((fragment.site.mode_bits&MINIAS_RISCV_OPTION_SITE_ZBB)!=0U?
                  RISCV_ISA_ZBB:0U) |

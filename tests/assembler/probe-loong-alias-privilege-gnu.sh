@@ -50,8 +50,9 @@ printf '%s\n' '.text' '.globl gcc_pseudos' 'gcc_pseudos:' \
   '.data' '.LANCHOR0:' '.dword 7' >"$work/gcc-pseudos.s"
 
 # A branch must see a later relaxation-capable macro in the SAME section.
-# The independent .text.clean branch must not inherit that policy. This is
-# a complete-source lookahead query, not a parser-prefix or global flag.
+# Independently, GNU retains a local B16 relocation even when a separate
+# .text.clean section has no shrinkable macro.  The presence of a branch
+# relocation and whether a section can relax are different questions.
 printf '%s\n' \
   '.section .text.relax,"ax",@progbits' \
   'beq $a0,$a1,.Lrelax_target' \
@@ -184,11 +185,8 @@ if ((gnu_available)); then
     >"$work/gcc-pseudos-semantic.txt"
   loongarch64-linux-gnu-as -mabi=lp64d \
     -o "$work/gnu-section-lookahead.o" "$work/section-lookahead.s"
-  # GNU also keeps an optional local B16 relocation in .text.clean, even
-  # though that section contains no relaxable macro. MiniAS fixes that
-  # displacement directly: the distinction does not affect its link result.
-  # Compare the mandatory forward-looking .text.relax case exactly; do not
-  # equate optional clean-section metadata with incorrect machine code.
+  # Both branch relocations are observable in the input ELF and must match
+  # GNU.  The shrinkable-address-macro policy remains local to .text.relax.
   python3 - "$work/gnu-section-lookahead.o" \
             "$work/mini-section-lookahead.o" <<'PY_LOOKAHEAD'
 import re
@@ -207,8 +205,7 @@ def branch_sections(path):
     return result
 
 gnu, mini = (branch_sections(path) for path in sys.argv[1:])
-if '.text.relax' not in gnu or '.text.relax' not in mini or \
-        '.text.clean' in mini:
+if gnu != mini or gnu != ['.text.relax', '.text.clean']:
     raise SystemExit(f'Loong section lookahead wrong: GNU={gnu} MiniAS={mini}')
 PY_LOOKAHEAD
   loongarch64-linux-gnu-objcopy -j .text.relax -O binary \
