@@ -158,23 +158,55 @@ with open(path, 'rb') as source:
     data = line.data()
     assert len(data) >= 16 and struct.unpack_from('<H', data, 4)[0] == 4, \
         (path, 'expected DWARF v4', data[:16].hex())
-    unit_len = struct.unpack_from('<I', data, 0)[0]
-    assert unit_len + 4 == len(data), (path, 'line unit length')
-    header_len = struct.unpack_from('<I', data, 6)[0]
-    start = 10 + header_len
-    assert 16 < start < len(data), (path, 'DWARF header length')
-    opcode_base = data[15]
-    standard_arity = data[16:16 + opcode_base - 1]
-    assert opcode_base == 13 and len(standard_arity) == 12, \
-        (path, 'GNU v4 line opcode contract', opcode_base)
-    address_size = elf.elfclass // 8
-
     rela = elf.get_section_by_name('.rela.debug_line')
     assert rela is not None, (path, 'missing line relocation section')
     symtab = elf.get_section(rela['sh_link'])
     by_offset = defaultdict(list)
     for r in rela.iter_relocations():
         by_offset[r['r_offset']].append(r)
+
+    # GNU LoongArch can retain even *header length* symbol differences as
+    # in-place ADD32/SUB32 relocations when link relaxation is enabled.
+    # Unlike ABS relocations these apply to the existing u32 field.  Checking
+    # only the raw header then falsely reports an incomplete line unit.
+    # Validate and resolve the two same-.debug_line symbols, consuming the
+    # pair so the final relocation audit still rejects unknown leftovers.
+    def header_u32(field):
+        initial = struct.unpack_from('<I', data, field)[0]
+        relocations = by_offset.pop(field, [])
+        if not relocations:
+            return initial
+        assert kind == 'loong' and [r['r_info_type'] for r in relocations] == [50, 55], \
+            (path, 'unexpected DWARF header relocation', field, relocations)
+        values = []
+        for reloc in relocations:
+            idx = reloc['r_info_sym']
+            assert idx != 0, (path, 'null DWARF header symbol', field)
+            symbol = symtab.get_symbol(idx)
+            assert symbol['st_shndx'] == elf.get_section_index('.debug_line'), \
+                (path, 'DWARF header symbol outside line section', field, symbol.name)
+            values.append(symbol['st_value'] + reloc['r_addend'])
+        return (initial + values[0] - values[1]) & 0xffffffff
+
+    unit_len = header_u32(0)
+    unit_end = unit_len + 4
+    # GNU may pad the last unit to the output section alignment.  Do not
+    # accept a second unparsed unit or silently drop meaningful payload.
+    trailing = data[unit_end:] if unit_end <= len(data) else b''
+    assert 16 < unit_end <= len(data) and len(trailing) <= 7 and \
+           not any(trailing), \
+        (path, 'line unit length', unit_len, len(data), trailing.hex(),
+         [(at, [r['r_info_type'] for r in rs])
+          for at, rs in by_offset.items() if at < 10])
+    header_len = header_u32(6)
+    start = 10 + header_len
+    assert 16 < start < unit_end, (path, 'DWARF header length', header_len, unit_end)
+    opcode_base = data[15]
+    standard_arity = data[16:16 + opcode_base - 1]
+    assert opcode_base == 13 and len(standard_arity) == 12, \
+        (path, 'GNU v4 line opcode contract', opcode_base)
+    address_size = elf.elfclass // 8
+
     text_rela = elf.get_section_by_name('.rela.text')
     marks = [] if text_rela is None else [r for r in text_rela.iter_relocations()
                                          if r['r_info_type'] == relax_kind]
@@ -191,12 +223,12 @@ with open(path, 'rb') as source:
 
     fixed, addresses, other_address_ops, end_sequences = [], [], 0, 0
     at = start
-    while at < len(data):
+    while at < unit_end:
         op = data[at]
         at += 1
         if op == 0:
             length, at = uleb(data, at)
-            assert length > 0 and at + length <= len(data), (path, 'extended opcode length')
+            assert length > 0 and at + length <= unit_end, (path, 'extended opcode length')
             extension = data[at]
             if extension == 2:
                 assert length == address_size + 1, (path, 'set_address width', length)
