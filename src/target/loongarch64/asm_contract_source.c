@@ -15,7 +15,9 @@ static bool loong_linux_descriptor_qualify(const MinicC0Program *,
     const MinicInlineAsm *, MinicTargetInlineAsmContract *);
 
 bool minic_loongarch64_qualify_inline_asm_goto(
+    const MinicTargetInvocation *invocation,
     const MinicC0Program *program, const MinicInlineAsm *source) {
+    if (invocation == NULL) return false;
     return minic_multi_qualify_linux_jump_label_asm_goto(
         program, source, loong_linux_jump_label_form);
 }
@@ -1074,6 +1076,7 @@ static bool loong_linux_frametrace_csr_source(
 }
 
 bool minic_loongarch64_seal_normalized_inline_asm(
+    const MinicTargetInvocation *invocation,
     const MinicC0Program *program, const MinicInlineAsm *source,
     const char *normalized, size_t length,
     MinicTargetInlineAsmContract *contract) {
@@ -1082,7 +1085,7 @@ bool minic_loongarch64_seal_normalized_inline_asm(
     bool descriptor;
     size_t i;
     if (!minic_loongarch64_simd_seal_normalized(
-            program, source, normalized, length, contract)) return false;
+            invocation, program, source, normalized, length, contract)) return false;
     if (contract == NULL) return false;
     id = contract->target_machine_form_id;
     variant = contract->target_machine_form_variant;
@@ -1094,8 +1097,8 @@ bool minic_loongarch64_seal_normalized_inline_asm(
      * Source rank/constraints are rechecked before the Core witness is
      * published; a named-to-numeric operand rewrite must retain the same
      * ordinal, hardware effects, and physical operand ordering. */
-    if (!program || !source || !normalized ||
-        !minic_loongarch64_qualify_inline_asm(program, source, &admitted) ||
+    if (!invocation || !program || !source || !normalized ||
+        !minic_loongarch64_qualify_inline_asm(invocation, program, source, &admitted) ||
         !minic_source_backend_capture_asm_operand_source(
             source, MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED, &admitted) ||
         admitted.target_machine_form_id != id ||
@@ -1126,10 +1129,12 @@ bool minic_loongarch64_seal_normalized_inline_asm(
 }
 
 bool minic_loongarch64_qualify_inline_asm(
+    const MinicTargetInvocation *invocation,
     const MinicC0Program *program, const MinicInlineAsm *src,
     MinicTargetInlineAsmContract *contract) {
     const MinicInlineAsmOperand *op;
     const MinicExpression *expr;
+    if (invocation == NULL) return false;
     if (minic_loongarch64_simd_qualify_source(program, src, contract)) return true;
     if (loong_linux_descriptor_qualify(program, src, contract)) return true;
     if (loong_linux_clock_source(program, src, contract)) return true;

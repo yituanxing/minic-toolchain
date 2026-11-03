@@ -3,7 +3,7 @@
 #include "target/source_policy/source_info.h"
 
 bool minic_c0_inline_asm_input_value_supported(
-    const MinicTargetInfo *target, const MinicExpression *expression,
+    const MinicTargetInvocation *target, const MinicExpression *expression,
     const char *constraint, size_t length) {
     if (target == NULL || expression == NULL || constraint == NULL || length == 0U)
         return false;
@@ -32,7 +32,7 @@ bool minic_c0_inline_asm_input_value_supported(
 }
 
 bool minic_c0_inline_asm_output_value_supported(
-    const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicC0Program *program, const MinicTargetInvocation *target,
     const MinicExpression *expression, const char *constraint, size_t length) {
     const MinicFixedRegisterBinding *binding;
     if (expression == NULL || constraint == NULL || length == 0U)
@@ -52,13 +52,13 @@ bool minic_c0_inline_asm_output_value_supported(
 }
 
 bool minic_c0_pointer_arithmetic_element_size(const MinicC0Program *program,
-                                              const MinicDataLayout *layout,
+                                              const MinicTargetInvocation *invocation,
                                               MinicType pointer_type,
                                               size_t *element_size) {
     MinicType pointee;
     size_t alignment;
 
-    if (program == NULL || layout == NULL || element_size == NULL ||
+    if (program == NULL || invocation == NULL || element_size == NULL ||
         !minic_type_pointee(pointer_type, &pointee)) {
         return false;
     }
@@ -73,7 +73,7 @@ bool minic_c0_pointer_arithmetic_element_size(const MinicC0Program *program,
        is owned by the caller/frontend; DataLayout returning a valid size of zero
        must not be reinterpreted here as an unsupported type. Incomplete types
        still fail because DataLayout cannot size them. */
-    return minic_data_layout_type(layout, program, pointee, element_size, &alignment);
+    return minic_data_layout_type(invocation, program, pointee, element_size, &alignment);
 }
 
 static bool integer_type_is_signed(const MinicC0Program *program, MinicType type) {
@@ -102,7 +102,7 @@ bool minic_c0_integer_assignment_value_type(const MinicC0Program *program,
 }
 
 static bool conditional_type_only(const MinicC0Program *program,
-                                  const MinicTargetInfo *target,
+                                  const MinicTargetInvocation *target,
                                   MinicType when_true,
                                   MinicType when_false,
                                   MinicType *result) {
@@ -143,7 +143,7 @@ static bool conditional_type_only(const MinicC0Program *program,
 }
 
 bool minic_c0_expression_is_null_pointer_constant(
-    const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicC0Program *program, const MinicTargetInvocation *target,
     MinicExpressionId expression_id) {
     const MinicExpression *expression;
     MinicType pointee;
@@ -180,7 +180,7 @@ bool minic_c0_expression_is_null_pointer_constant(
 }
 
 bool minic_c0_integer_range_representable_in_type(const MinicC0Program *program,
-                                                  const MinicTargetInfo *target,
+                                                  const MinicTargetInvocation *target,
                                                   MinicType source_type,
                                                   MinicType destination_type) {
     unsigned int source_bits;
@@ -210,7 +210,7 @@ bool minic_c0_integer_range_representable_in_type(const MinicC0Program *program,
 }
 
 bool minic_c0_conditional_result_type(const MinicC0Program *program,
-                                      const MinicTargetInfo *target,
+                                      const MinicTargetInvocation *target,
                                       MinicExpressionId when_true_expression_id,
                                       MinicExpressionId when_false_expression_id,
                                       MinicType *result) {

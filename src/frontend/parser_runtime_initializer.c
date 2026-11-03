@@ -829,7 +829,7 @@ static bool parse_local_character_array_string_initializer(MinicParser *parser,
         probe = *parser;
         if (!minic_parser_parse_string_literal_size(&probe, &string_size) ||
             !minic_target_info_sizeof_type(
-                parser->target_info, parser->program,
+                parser->invocation, parser->program,
                 array_info.element_type, &element_size) ||
             element_size == 0U || string_size == 0U || string_size % (uint64_t)element_size != 0U ||
             string_size / (uint64_t)element_size > SIZE_MAX) {
@@ -1526,9 +1526,9 @@ static bool parse_positional_runtime_record_initializer_from(MinicParser *parser
                 } else {
                     if (value == NULL ||
                         !minic_const_eval_integer(
-                            parser->program, parser->target_info, value_id, &constant) ||
+                            parser->program, parser->invocation, value_id, &constant) ||
                         !minic_const_value_is_zero(
-                            parser->program, parser->target_info, &constant, &is_zero) ||
+                            parser->program, parser->invocation, &constant, &is_zero) ||
                         !is_zero) {
                         minic_parser_error(
                             parser,

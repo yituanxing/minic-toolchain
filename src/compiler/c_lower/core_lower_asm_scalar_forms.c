@@ -903,10 +903,10 @@ MinicCoreLowerStatus core_asm_try_empty_barrier_scalar_forms(
                     e->value.fixed_register_binding_id);
             if (binding && minic_type_equal(binding->type, e->type) &&
                 minic_target_info_fixed_register_supported(
-                    context->target, binding->register_name,
+                    &context->target->machine, binding->register_name,
                     binding->register_name_length) &&
                 minic_target_info_fixed_register_write_supported(
-                    context->target, binding->register_name,
+                    &context->target->machine, binding->register_name,
                     binding->register_name_length)) {
                 *handled = true;
                 if (!source->is_volatile)

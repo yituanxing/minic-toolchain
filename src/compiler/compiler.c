@@ -237,7 +237,7 @@ static void minic_set_ast_verify_diagnostic(const char *input_path,
 
 int minic_compile_preprocessed_file_for_target(const char *input_path,
                                                const char *output_path,
-                                               const MinicTargetInfo *target_info,
+                                               const MinicTargetInvocation *invocation,
                                                bool function_sections,
                                                MinicDiagnostic *diagnostic) {
     MinicSourceBuffer buffer;
@@ -258,10 +258,11 @@ int minic_compile_preprocessed_file_for_target(const char *input_path,
         diagnostic->column = 1U;
         diagnostic->message[0] = '\0';
     }
-    backend = minic_backend_for_target(target_info);
-    if (target_info == NULL || backend == NULL ||
-        target_info->data_layout == NULL || target_info->source_info == NULL ||
-        target_info->source_info->integer_model == NULL) {
+    backend = invocation == NULL ? NULL :
+        minic_backend_for_target(&invocation->machine);
+    if (invocation == NULL || backend == NULL ||
+        invocation->machine.data_layout == NULL ||
+        invocation->source_info.integer_model == NULL) {
         minic_set_diagnostic(diagnostic, input_path, 1U, 1U, "invalid target configuration");
         return 1;
     }
@@ -276,11 +277,11 @@ int minic_compile_preprocessed_file_for_target(const char *input_path,
     minic_core_function_set_initialize(&core_set);
     minic_bootstrap_trace_stage(input_path, "parse", "begin", 0U);
     success = minic_parse_c0_program_for_target(
-        input_path, buffer.data, buffer.size, target_info, &program, diagnostic);
+        input_path, buffer.data, buffer.size, invocation, &program, diagnostic);
     minic_bootstrap_trace_stage(input_path, "parse", success ? "end-ok" : "end-fail",
                                 program.function_count);
     if (success && !minic_c0_program_verify_target_detailed(
-                       &program, MINIC_C0_AST_PARSED, target_info, &verify_failure)) {
+                       &program, MINIC_C0_AST_PARSED, invocation, &verify_failure)) {
         minic_set_ast_verify_diagnostic(input_path, "parsed", &verify_failure, diagnostic);
         success = false;
     }
@@ -303,7 +304,7 @@ int minic_compile_preprocessed_file_for_target(const char *input_path,
                                     program.function_count);
     }
     if (success && !minic_c0_program_verify_target_detailed(
-                       &program, MINIC_C0_AST_NORMALIZED, target_info, &verify_failure)) {
+                       &program, MINIC_C0_AST_NORMALIZED, invocation, &verify_failure)) {
         minic_set_ast_verify_diagnostic(input_path, "normalized", &verify_failure, diagnostic);
         success = false;
     }
@@ -320,17 +321,17 @@ int minic_compile_preprocessed_file_for_target(const char *input_path,
                              "cannot compute inline emission reachability");
         success = false;
     }
-    if (success && !minic_specialize_inline_integer_calls(&program, target_info)) {
+    if (success && !minic_specialize_inline_integer_calls(&program, invocation)) {
         minic_set_diagnostic(diagnostic, input_path, 1U, 1U,
                              "cannot specialize inline integer call sites");
         success = false;
     }
-    if (success && !minic_specialize_inline_symbolic_calls(&program, target_info)) {
+    if (success && !minic_specialize_inline_symbolic_calls(&program, invocation)) {
         minic_set_diagnostic(diagnostic, input_path, 1U, 1U,
                              "cannot specialize inline symbolic address call sites");
         success = false;
     }
-    if (success && !minic_specialize_inline_boolean_range_calls(&program, target_info, &boolean_stats)) {
+    if (success && !minic_specialize_inline_boolean_range_calls(&program, invocation, &boolean_stats)) {
         minic_set_diagnostic(diagnostic, input_path, 1U, 1U,
                              "cannot specialize inline boolean range call sites");
         success = false;
@@ -343,7 +344,7 @@ int minic_compile_preprocessed_file_for_target(const char *input_path,
     if (success) {
         minic_bootstrap_trace_stage(input_path, "core-set", "begin", program.function_count);
     }
-    if (success && !minic_prepare_core_function_set(&program, target_info, &core_set)) {
+    if (success && !minic_prepare_core_function_set(&program, invocation, &core_set)) {
         minic_set_diagnostic(
             diagnostic, input_path, 1U, 1U, "cannot retain Core IR lowering results");
         success = false;
@@ -390,7 +391,7 @@ int minic_compile_preprocessed_file_for_target(const char *input_path,
     if (success) {
         MinicDataLayoutProgramCheck layout_status;
         minic_bootstrap_trace_stage(input_path, "layout", "begin", program.function_count);
-        layout_status = minic_data_layout_validate_program(target_info->data_layout, &program);
+        layout_status = minic_data_layout_validate_program(invocation, &program);
         if (layout_status != MINIC_DATA_LAYOUT_PROGRAM_OK) {
             const char *reason = layout_status == MINIC_DATA_LAYOUT_PROGRAM_INVALID_RECORD
                 ? "record size is invalid for the selected target"
@@ -409,7 +410,7 @@ int minic_compile_preprocessed_file_for_target(const char *input_path,
          * and C DataLayout validation. All target consumers then see a
          * sealed, source-independent global/relocation fragment stream. */
         if (!minic_finalize_core_function_set_module(
-                &program, target_info, &core_set)) {
+                &program, invocation, &core_set)) {
             minic_set_diagnostic(diagnostic, input_path, 1U, 1U,
                                  "cannot snapshot Core module globals");
             success = false;
@@ -424,7 +425,7 @@ int minic_compile_preprocessed_file_for_target(const char *input_path,
     if (success) {
         minic_bootstrap_trace_stage(input_path, "codegen", "begin", core_set.function_count);
         success = minic_backend_emit_assembly_with_module(
-            backend, output_path, target_info, core_set.functions,
+            backend, output_path, &invocation->machine, core_set.functions,
             core_set.function_count, function_sections, &core_set.module,
             diagnostic);
         minic_bootstrap_trace_stage(input_path,
@@ -445,8 +446,14 @@ int minic_compile_preprocessed_file_with_options(const char *input_path,
                                                  const char *output_path,
                                                  bool function_sections,
                                                  MinicDiagnostic *diagnostic) {
+    MinicTargetInvocation invocation;
+    if (!minic_target_invocation_begin(&invocation, minic_default_target_info())) {
+        minic_set_diagnostic(diagnostic, input_path, 1U, 1U,
+                             "cannot initialize default target configuration");
+        return 1;
+    }
     return minic_compile_preprocessed_file_for_target(
-        input_path, output_path, minic_default_target_info(), function_sections, diagnostic);
+        input_path, output_path, &invocation, function_sections, diagnostic);
 }
 
 int minic_compile_preprocessed_file(const char *input_path,

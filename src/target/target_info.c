@@ -1,7 +1,6 @@
 #include "target/target_info.h"
 #include "core/module_ir.h"
 #include "target/loongarch64/machine_builtin_form.h"
-#include "target/source_policy/target_source_info.h"
 
 #include <stdint.h>
 #include <string.h>
@@ -15,6 +14,8 @@ typedef struct MinicTargetMachineDescriptor {
 
 static const MinicTargetMachineDescriptor minic_machine_riscv32 = {
     .target = {
+        .fixed_register_read = minic_riscv32_machine_fixed_register_read,
+        .local_fixed_register = minic_riscv32_machine_local_fixed_register,
         .variadic_scalar_read_kind = MINIC_VARIADIC_SCALAR_READ_LINEAR_SLOT,
         .variadic_linear_slot_bytes = 4U,
         .variadic_copy_kind = MINIC_VARIADIC_COPY_SCALAR_ASSIGNMENT,
@@ -28,6 +29,8 @@ static const MinicTargetMachineDescriptor minic_machine_riscv32 = {
 };
 static const MinicTargetMachineDescriptor minic_machine_riscv64 = {
     .target = {
+        .fixed_register_read = minic_riscv64_machine_fixed_register_read,
+        .local_fixed_register = minic_riscv64_machine_local_fixed_register,
         .variadic_scalar_read_kind = MINIC_VARIADIC_SCALAR_READ_LINEAR_SLOT,
         .variadic_linear_slot_bytes = 8U,
         .variadic_copy_kind = MINIC_VARIADIC_COPY_SCALAR_ASSIGNMENT,
@@ -41,6 +44,8 @@ static const MinicTargetMachineDescriptor minic_machine_riscv64 = {
 };
 static const MinicTargetMachineDescriptor minic_machine_x86_64 = {
     .target = {
+        .fixed_register_read = minic_x86_64_machine_fixed_register_read,
+        .local_fixed_register = minic_x86_64_machine_local_fixed_register,
         .call_lowering_capabilities = MINIC_TARGET_CALL_MS_X64_FIXED_SCALAR,
         .variadic_scalar_read_kind = MINIC_VARIADIC_SCALAR_READ_ABI_CURSOR,
         .variadic_copy_kind = MINIC_VARIADIC_COPY_ABI_STATE,
@@ -52,6 +57,8 @@ static const MinicTargetMachineDescriptor minic_machine_x86_64 = {
 };
 static const MinicTargetMachineDescriptor minic_machine_aarch64 = {
     .target = {
+        .fixed_register_read = minic_aarch64_machine_fixed_register_read,
+        .local_fixed_register = minic_aarch64_machine_local_fixed_register,
         .variadic_scalar_read_kind = MINIC_VARIADIC_SCALAR_READ_ABI_CURSOR,
         .variadic_copy_kind = MINIC_VARIADIC_COPY_ABI_STATE,
         .pic_lowering_supported = true,
@@ -63,6 +70,9 @@ static const MinicTargetMachineDescriptor minic_machine_aarch64 = {
 };
 static const MinicTargetMachineDescriptor minic_machine_loongarch64 = {
     .target = {
+        .fixed_register_read = minic_loongarch64_machine_fixed_register_read,
+        .fixed_register_write = minic_loongarch64_machine_fixed_register_write,
+        .local_fixed_register = minic_loongarch64_machine_local_fixed_register,
         .machine_builtin_form_lookup = minic_loongarch64_machine_builtin_form,
         .variadic_scalar_read_kind = MINIC_VARIADIC_SCALAR_READ_LINEAR_SLOT,
         .variadic_linear_slot_bytes = 8U,
@@ -104,11 +114,7 @@ const MinicTargetInfo *minic_target_info_for_architecture(
             MinicTargetInfo initialized = descriptor->target;
             initialized.architecture = catalog[index].architecture;
             initialized.data_layout = descriptor->layout();
-            initialized.source_info = minic_target_source_info_for_architecture(
-                catalog[index].architecture);
-            if (initialized.data_layout == NULL ||
-                initialized.source_info == NULL)
-                return NULL;
+            if (initialized.data_layout == NULL) return NULL;
             *target = initialized;
         }
         return target;
@@ -121,7 +127,7 @@ const MinicTargetInfo *minic_default_target_info(void) {
 }
 
 /* Target spellings are owned by one catalog shared with the staged driver.
- * TargetInfo remains the authority for C widths, language facts and ABI. */
+ * Machine TargetInfo never stores a source-language descriptor. */
 const MinicTargetInfo *minic_target_info_from_name(const char *name) {
     const MinicTargetCatalogEntry *entry = minic_target_catalog_find(name);
     return entry == NULL ? NULL :
@@ -250,6 +256,27 @@ bool minic_target_info_call_frame_address_supported(const MinicTargetInfo *targe
                              target->call_frame_frame_address_level1;
     }
     return false;
+}
+
+bool minic_target_info_fixed_register_supported(
+    const MinicTargetInfo *target, const char *name, size_t name_length) {
+    return target != NULL && name != NULL &&
+           target->fixed_register_read != NULL &&
+           target->fixed_register_read(name, name_length);
+}
+
+bool minic_target_info_fixed_register_write_supported(
+    const MinicTargetInfo *target, const char *name, size_t name_length) {
+    return target != NULL && name != NULL &&
+           target->fixed_register_write != NULL &&
+           target->fixed_register_write(name, name_length);
+}
+
+bool minic_target_info_local_fixed_register_supported(
+    const MinicTargetInfo *target, const char *name, size_t name_length) {
+    return target != NULL && name != NULL &&
+           target->local_fixed_register != NULL &&
+           target->local_fixed_register(name, name_length);
 }
 
 bool minic_target_info_machine_builtin_form(

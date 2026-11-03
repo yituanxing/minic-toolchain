@@ -1,7 +1,7 @@
 #include "compiler/c_lower/core_lower_internal.h"
 
 const MinicDataLayout *core_data_layout(const MinicCoreLowerContext *context) {
-    return context == NULL ? NULL : minic_target_info_data_layout(context->target);
+    return context == NULL ? NULL : context->target->machine.data_layout;
 }
 
 bool core_memory_scalar_type(MinicType type) {
@@ -61,7 +61,7 @@ bool core_bit_field_storage_type(
     if (context == NULL || context->body == NULL || context->body->program == NULL ||
         context->target == NULL || storage_type == NULL || storage_width == NULL ||
         !minic_type_is_integer(value_type) ||
-        !minic_data_layout_type(core_data_layout(context),
+        !minic_data_layout_type(context->target,
                                 context->body->program,
                                 value_type,
                                 &storage_size,
@@ -86,7 +86,7 @@ bool core_bit_field_storage_type(
     candidates[3] = minic_type_unsigned_long();
     candidates[4] = minic_type_unsigned_long_long();
     for (candidate_index = 0U; candidate_index < 5U; ++candidate_index) {
-        if (minic_data_layout_type(core_data_layout(context),
+        if (minic_data_layout_type(context->target,
                                    context->body->program,
                                    candidates[candidate_index],
                                    &candidate_size,

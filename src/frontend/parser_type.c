@@ -55,10 +55,10 @@ static bool minic_parser_gnu_int128_name(const MinicParser *parser,
 static bool minic_parser_target_header_builtin(const MinicParser *parser,
                                                MinicToken token,
                                                MinicType *out_type) {
-    if (parser == NULL || parser->target_info == NULL ||
+    if (parser == NULL || parser->invocation == NULL ||
         token.kind != MINIC_TOKEN_IDENTIFIER) return false;
     return minic_target_info_named_builtin_type(
-        parser->target_info,
+        parser->invocation,
         parser->source + token.span.begin.offset,
         token.span.end.offset - token.span.begin.offset,
         out_type);
@@ -75,9 +75,9 @@ bool minic_parser_materialize_builtin_va_list_source_type(
     MinicRecord *tag;
     MinicType record_type, result, cursor_storage_type;
     size_t actual_size, actual_alignment;
-    if (parser == NULL || parser->program == NULL || parser->target_info == NULL ||
+    if (parser == NULL || parser->program == NULL || parser->invocation == NULL ||
         type == NULL ||
-        !minic_target_info_va_cursor_source_shape(parser->target_info, &shape))
+        !minic_target_info_va_cursor_source_shape(parser->invocation, &shape))
         return false;
     if (parser->program->has_builtin_va_list_source_type) {
         *type = parser->program->builtin_va_list_source_type;
@@ -114,7 +114,7 @@ bool minic_parser_materialize_builtin_va_list_source_type(
         } else {
             result = record_type;
         }
-        if (!minic_data_layout_type(minic_target_info_data_layout(parser->target_info),
+        if (!minic_data_layout_type(parser->invocation,
                                     parser->program, result,
                                     &actual_size, &actual_alignment) ||
             actual_size != shape.object_size ||
@@ -159,7 +159,7 @@ bool minic_parser_token_starts_type_name(const MinicParser *parser, MinicToken t
             return true;
         }
         if (minic_target_info_language_type_supported(
-                parser->target_info, MINIC_TYPE_BASE_FLOAT128) &&
+                parser->invocation, MINIC_TYPE_BASE_FLOAT128) &&
             (minic_parser_token_text_equals(parser, token, "_Float128") ||
              minic_parser_token_text_equals(parser, token, "_Float32") ||
              minic_parser_token_text_equals(parser, token, "_Float64") ||
@@ -517,7 +517,7 @@ bool minic_parser_parse_type_specifiers(MinicParser *parser, MinicType *type) {
                     parsed_type = minic_type_signed_char();
                 } else if (saw_unsigned) {
                     parsed_type = minic_type_unsigned_char();
-                } else if (!minic_target_info_plain_char_type(parser->target_info, &parsed_type)) {
+                } else if (!minic_target_info_plain_char_type(parser->invocation, &parsed_type)) {
                     minic_parser_error(parser, "cannot resolve target plain char type");
                     return false;
                 }
@@ -642,7 +642,7 @@ bool minic_parser_parse_type_specifiers(MinicParser *parser, MinicType *type) {
          * and sizeof does NOT enable FP operations or calling conventions.
          * Those must remain subject to target-specific legalization. */
         if (!minic_target_info_language_type_supported(
-                parser->target_info, MINIC_TYPE_BASE_FLOAT128)) {
+                parser->invocation, MINIC_TYPE_BASE_FLOAT128)) {
             minic_parser_error(parser, "extended float type is unsupported on this target");
             return false;
         }

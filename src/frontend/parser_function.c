@@ -47,7 +47,7 @@ static bool glibc_header_vector_pcs_attribute(const MinicParser *parser,
                                                const MinicParsedAttribute *attr) {
     return parser != NULL && attr != NULL && !attr->has_arguments &&
            minic_target_info_header_attribute_supported(
-               parser->target_info,
+               parser->invocation,
                parser->source + attr->name_span.begin.offset,
                minic_parser_span_length(attr->name_span));
 }
@@ -255,7 +255,7 @@ static bool parser_append_pending_function_alias(
 
 static bool parser_resolve_pending_function_aliases(MinicParser *parser) {
     size_t i;
-    if (parser == NULL || parser->target_info == NULL || parser->program == NULL)
+    if (parser == NULL || parser->invocation == NULL || parser->program == NULL)
         return false;
     for (i = 0U; i < parser->pending_function_alias_count; ++i) {
         const MinicParserPendingFunctionAlias *pending =
@@ -292,7 +292,7 @@ static bool parser_resolve_pending_function_aliases(MinicParser *parser) {
         target = minic_c0_program_function(parser->program, target_id);
         if (alias == NULL || target == NULL ||
             !minic_target_info_function_alias_abi_compatible(
-                parser->target_info, parser->program, alias, target) ||
+                parser->invocation, parser->program, alias, target) ||
             !minic_c0_program_set_function_alias(
                 parser->program, pending->alias_id, target_id)) {
             minic_parser_error(parser,
@@ -329,7 +329,7 @@ static bool consume_function_attribute(MinicParser *parser,
     if (descriptor->kind == MINIC_ATTRIBUTE_MS_ABI) {
         if (context->calling_convention == NULL || attribute->has_arguments ||
             !minic_target_info_function_calling_convention_scalar_call_supported(
-                parser->target_info, MINIC_CALLING_CONVENTION_MS_X64)) {
+                &parser->invocation->machine, MINIC_CALLING_CONVENTION_MS_X64)) {
             minic_parser_error(parser,
                 "GNU ms_abi function attribute requires x86-64 scalar ABI support");
             return false;
@@ -352,7 +352,7 @@ static bool consume_function_attribute(MinicParser *parser,
                     : MINIC_TARGET_GNU_FUNCTION_TARGET_CPU;
 
         if (!minic_target_info_gnu_function_security_attribute_supported(
-                parser->target_info,
+                parser->invocation,
                 parser->source + attribute->name_span.begin.offset,
                 minic_parser_span_length(attribute->name_span))) {
             minic_parser_error(parser,
@@ -368,7 +368,7 @@ static bool consume_function_attribute(MinicParser *parser,
                 return false;
             }
             return minic_target_info_gnu_function_security_attribute_value_supported(
-                parser->target_info, target_kind, NULL, 0U);
+                parser->invocation, target_kind, NULL, 0U);
         }
         if (!function_attribute_argument_token(
                 parser, attribute, MINIC_TOKEN_STRING_LITERAL, &literal) ||
@@ -384,7 +384,7 @@ static bool consume_function_attribute(MinicParser *parser,
              * functions. MiniC presently emits those ordinary branches and
              * has no thunk/retpoline generator to select per declaration. */
             if (minic_target_info_gnu_function_security_attribute_value_supported(
-                    parser->target_info, target_kind, value, length))
+                    parser->invocation, target_kind, value, length))
                 return true;
             minic_parser_error(parser,
                 "GNU indirect_branch policy requires supported value 'keep'");
@@ -393,7 +393,7 @@ static bool consume_function_attribute(MinicParser *parser,
         /* ISA/feature vocabulary is target owned. Frontend only confirms
          * one string-literal attribute argument and diagnoses rejection. */
         if (minic_target_info_gnu_function_security_attribute_value_supported(
-                parser->target_info, target_kind, value, length))
+                parser->invocation, target_kind, value, length))
             return true;
         minic_parser_error(parser,
             "GNU x86 target attribute requests an unsupported machine policy");
@@ -1537,7 +1537,7 @@ static bool parse_function_inner(MinicParser *parser, bool is_internal) {
             return false;
         }
         if (!minic_target_info_fixed_register_supported(
-                parser->target_info, assembler_name, assembler_name_length)) {
+                &parser->invocation->machine, assembler_name, assembler_name_length)) {
             minic_parser_error(parser, "fixed register binding is not supported by this target");
             return false;
         }
@@ -1595,7 +1595,7 @@ static bool parse_function_inner(MinicParser *parser, bool is_internal) {
                 is_inline,
                 is_extern_declaration,
                 !is_internal && minic_target_info_header_opaque_vector_return(
-                                    parser->target_info, typed_return_type),
+                                    parser->invocation, typed_return_type),
                 &typed_calling_convention,
                 section_name,
                 sizeof(section_name),
@@ -1923,7 +1923,7 @@ static bool parse_function_inner(MinicParser *parser, bool is_internal) {
             is_inline,
             is_extern_declaration,
             !is_internal && minic_target_info_header_opaque_vector_return(
-                                parser->target_info, return_type),
+                                parser->invocation, return_type),
             &calling_convention,
             section_name,
             sizeof(section_name),
@@ -2525,7 +2525,7 @@ static bool finalize_tentative_incomplete_arrays(MinicC0Program *program) {
 bool minic_parse_c0_program_for_target(const char *path,
                                        const char *source,
                                        size_t length,
-                                       const MinicTargetInfo *target_info,
+                                       const MinicTargetInvocation *invocation,
                                        MinicC0Program *program,
                                        MinicDiagnostic *diagnostic) {
     MinicParser parser;
@@ -2537,8 +2537,8 @@ bool minic_parse_c0_program_for_target(const char *path,
     parser.source = source;
     parser.diagnostic = diagnostic;
     parser.program = program;
-    parser.target_info = target_info;
-    if (target_info == NULL) {
+    parser.invocation = invocation;
+    if (invocation == NULL) {
         return false;
     }
     parser.default_visibility = MINIC_SYMBOL_VISIBILITY_DEFAULT;
@@ -2654,13 +2654,17 @@ bool minic_parse_c0_program_for_target(const char *path,
     return success;
 }
 
-/* Retain the historical parser API for RV64-focused tests and tools. */
+/* Retain the historical parser API for RV64-focused tests and tools.
+ * Standalone C parsing still starts with an invocation-owned source policy. */
 bool minic_parse_c0_program(const char *path,
                             const char *source,
                             size_t length,
                             MinicC0Program *program,
                             MinicDiagnostic *diagnostic) {
+    MinicTargetInvocation invocation;
+
+    if (!minic_target_invocation_begin(&invocation, minic_default_target_info()))
+        return false;
     return minic_parse_c0_program_for_target(path, source, length,
-                                              minic_default_target_info(),
-                                              program, diagnostic);
+                                             &invocation, program, diagnostic);
 }

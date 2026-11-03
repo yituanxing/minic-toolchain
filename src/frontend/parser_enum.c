@@ -337,7 +337,7 @@ signed_type_fits(MinicParser *parser, MinicType type, int64_t minimum, uint64_t 
     int64_t type_minimum;
     uint64_t type_maximum;
 
-    if (!minic_target_info_integer_width(parser->target_info, parser->program, type, &bits) ||
+    if (!minic_target_info_integer_width(parser->invocation, parser->program, type, &bits) ||
         bits == 0U || bits > 64U || minic_type_is_unsigned_integer(type)) {
         return false;
     }
@@ -355,7 +355,7 @@ static bool unsigned_type_fits(MinicParser *parser, MinicType type, uint64_t max
     unsigned int bits;
     uint64_t type_maximum;
 
-    if (!minic_target_info_integer_width(parser->target_info, parser->program, type, &bits) ||
+    if (!minic_target_info_integer_width(parser->invocation, parser->program, type, &bits) ||
         bits == 0U || bits > 64U || !minic_type_is_unsigned_integer(type)) {
         return false;
     }
@@ -403,7 +403,7 @@ static bool normalize_value_bits(MinicParser *parser,
     unsigned int width;
     uint64_t raw;
 
-    if (!minic_target_info_integer_width(parser->target_info, parser->program, type, &width) ||
+    if (!minic_target_info_integer_width(parser->invocation, parser->program, type, &width) ||
         width == 0U || width > 64U) {
         return false;
     }
@@ -423,7 +423,7 @@ static bool const_value_to_numeric(MinicParser *parser,
 
     if (constant == NULL || value == NULL || !minic_type_is_integer(constant->type) ||
         !minic_target_info_integer_width(
-            parser->target_info, parser->program, constant->type, &width) ||
+            parser->invocation, parser->program, constant->type, &width) ||
         width == 0U || width > 64U) {
         return false;
     }
@@ -460,7 +460,7 @@ static bool parse_enum_integer_value(MinicParser *parser,
     expression = minic_c0_program_expression(parser->program, expression_id);
     if (expression == NULL || !minic_type_is_integer(expression->type) ||
         !minic_const_eval_integer(
-            parser->program, parser->target_info, expression_id, &constant_value)) {
+            parser->program, parser->invocation, expression_id, &constant_value)) {
         minic_parser_error(parser, "enum initializer must be an integer constant expression");
         return false;
     }

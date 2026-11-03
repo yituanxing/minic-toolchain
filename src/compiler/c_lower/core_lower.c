@@ -387,7 +387,7 @@ MinicCoreLowerStatus minic_core_lower_internal_append_field_address(MinicCoreLow
         (field->is_bit_field
             ? !minic_type_is_integer(actual_field_type)
             : !minic_type_equal(actual_field_type, declared_field_type)) ||
-        !minic_data_layout_record_field_offset(core_data_layout(context),
+        !minic_data_layout_record_field_offset(context->target,
                                                context->body->program,
                                                record,
                                                field_index,
@@ -1476,7 +1476,7 @@ minic_core_lower_internal_lower_block(MinicCoreLowerContext *context, const Mini
 }
 
 MinicCoreLowerStatus minic_core_lower_function_with_index(const MinicFunctionBodyView *body,
-                                               const MinicTargetInfo *target,
+                                               const MinicTargetInvocation *target,
                                                MinicCoreSourceBuilder *output,
                                                MinicCoreReentryIndex *reentry_index) {
     const MinicFunction *source_function;
@@ -1627,7 +1627,7 @@ MinicCoreLowerStatus minic_core_lower_function_with_index(const MinicFunctionBod
 
 /* Standalone Core IR clients retain conservative no-index lowering. */
 MinicCoreLowerStatus minic_core_lower_function(const MinicFunctionBodyView *body,
-                                               const MinicTargetInfo *target,
+                                               const MinicTargetInvocation *target,
                                                MinicCoreSourceBuilder *output) {
     return minic_core_lower_function_with_index(body, target, output, NULL);
 }

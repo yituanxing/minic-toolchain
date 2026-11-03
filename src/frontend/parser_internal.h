@@ -115,7 +115,9 @@ typedef struct MinicParser {
     MinicToken current;
     MinicDiagnostic *diagnostic;
     MinicC0Program *program;
-    const MinicTargetInfo *target_info;
+    /* Invocation carries C source policy separately from machine ABI/layout.
+     * Frontend must never consume MinicTargetInfo as a C policy object. */
+    const MinicTargetInvocation *invocation;
     MinicBlockId current_block;
     MinicFunctionId current_function;
     MinicGlobalObjectId current_function_name_object;

@@ -480,7 +480,7 @@ MinicCoreLowerStatus lower_address(MinicCoreLowerContext *context,
             if (!minic_type_equal(array_info.element_type, expression->type) ||
                 !minic_type_pointer_to(array_info.element_type, &pointer_type) ||
                 !minic_c0_pointer_arithmetic_element_size(context->body->program,
-                                                          core_data_layout(context),
+                                                          context->target,
                                                           pointer_type,
                                                           &element_size)) {
                 return MINIC_CORE_LOWER_UNSUPPORTED;
@@ -521,7 +521,7 @@ MinicCoreLowerStatus lower_address(MinicCoreLowerContext *context,
                 !minic_type_pointee(base_value_type, &element_type) ||
                 !minic_type_equal(element_type, expression->type) ||
                 !minic_c0_pointer_arithmetic_element_size(context->body->program,
-                                                          core_data_layout(context),
+                                                          context->target,
                                                           base_value_type,
                                                           &element_size)) {
                 return MINIC_CORE_LOWER_UNSUPPORTED;

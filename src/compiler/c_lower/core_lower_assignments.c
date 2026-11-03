@@ -40,7 +40,7 @@ static MinicCoreLowerStatus core_lower_gnu_vector16_storage_copy(
         !minic_type_is_gnu_fixed_vector(type) || type.gnu_vector_bytes != 16U ||
         !minic_target_info_language_type_supported(
             context->target, MINIC_TYPE_BASE_GNU_FIXED_VECTOR) ||
-        !minic_data_layout_type(context->target->data_layout,
+        !minic_data_layout_type(context->target,
                                 context->body->program, type, &bytes, &alignment) ||
         bytes != 16U || alignment != 16U ||
         !minic_type_pointer_to(type, &pointer_type))
@@ -124,7 +124,8 @@ static MinicCoreLowerStatus minic_core_lower_assignment_pair_impl(MinicCoreLower
             context->body->program, target->value.fixed_register_binding_id);
         if (binding == NULL || binding->is_local ||
             !minic_target_info_fixed_register_write_supported(
-                context->target, binding->register_name, binding->register_name_length) ||
+                &context->target->machine, binding->register_name,
+                binding->register_name_length) ||
             !minic_type_unqualified(target->type, &stored_type) ||
             !core_memory_scalar_type(stored_type) ||
             !minic_type_equal(binding->type, stored_type))
@@ -512,7 +513,7 @@ MinicCoreLowerStatus minic_core_lower_scalar_update(MinicCoreLowerContext *conte
         size_t element_size;
 
         if (!minic_c0_pointer_arithmetic_element_size(
-                context->body->program, core_data_layout(context), stored_type, &element_size)) {
+                context->body->program, context->target, stored_type, &element_size)) {
             return MINIC_CORE_LOWER_UNSUPPORTED;
         }
         (void)memset(&instruction, 0, sizeof(instruction));
@@ -607,7 +608,7 @@ MinicCoreLowerStatus minic_core_lower_try_pointer_compound_assignment(
                 !core_scalar_expression_value_type(context->body, source, &index_type) ||
                 !minic_type_is_integer(index_type) ||
                 !minic_c0_pointer_arithmetic_element_size(context->body->program,
-                                                          core_data_layout(context),
+                                                          context->target,
                                                           stored_type,
                                                           &element_size)) {
                 return MINIC_CORE_LOWER_UNSUPPORTED;

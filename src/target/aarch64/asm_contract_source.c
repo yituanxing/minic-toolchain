@@ -61,7 +61,8 @@ bool minic_aarch64_clone_safe_opaque_asm(const MinicInlineAsm *source) {
 }
 
 bool minic_aarch64_qualify_inline_asm_goto(
-    const MinicC0Program *program, const MinicInlineAsm *source) {
+    const MinicTargetInvocation *invocation, const MinicC0Program *program, const MinicInlineAsm *source) {
+    if (invocation == NULL) return false;
     return minic_multi_qualify_linux_jump_label_asm_goto(
         program, source, aarch64_linux_jump_label_form);
 }
@@ -126,13 +127,13 @@ static bool aarch64_stlr_memory_type(MinicType type,size_t width){
 }
 
 static bool aarch64_stlr_memory_carrier(
-    const MinicC0Program *program, MinicType type, size_t width) {
+    const MinicTargetInvocation *invocation, const MinicC0Program *program, MinicType type, size_t width) {
     MinicType plain;
     size_t size, alignment;
     return aarch64_stlr_memory_type(type, width) ||
            (program && minic_type_unqualified(type, &plain) &&
             minic_type_is_record(plain) &&
-            minic_data_layout_type(minic_default_data_layout(), program,
+            minic_data_layout_type(invocation, program,
                                    plain, &size, &alignment) &&
             size == width && alignment <= width);
 }
@@ -200,12 +201,10 @@ static bool aarch64_linux_kvm_va_mask_source(
 }
 
 static bool aarch64_linux_kvm_at_fixup_source(
-    const MinicC0Program *program, const MinicInlineAsm *src,
+    const MinicTargetInvocation *invocation, const MinicC0Program *program, const MinicInlineAsm *src,
     MinicTargetInlineAsmContract *contract) {
     static const char *const output_constraint[] = {"+r", "=&r", "=&r"};
     static const char *const input_constraint[] = {"r", "i"};
-    const MinicTargetInfo *target = minic_target_info_for_architecture(
-        MINIC_TARGET_ARCH_AARCH64);
     MinicConstValue immediate;
     size_t i;
     if (!program || !src || !contract || !src->is_volatile || src->is_goto ||
@@ -236,8 +235,8 @@ static bool aarch64_linux_kvm_at_fixup_source(
     }
     /* The `i` operand in Linux's hyp exception fixup is -EFAULT (-14).
      * Do not turn any run-time scalar into a GNU compile-time immediate. */
-    if (!target || !minic_const_eval_integer(
-            program, target, src->inputs[1].expression, &immediate) ||
+    if (!invocation || !minic_const_eval_integer(
+            program, invocation, src->inputs[1].expression, &immediate) ||
         (uint32_t)immediate.bits != UINT32_C(0xfffffff2)) return false;
     contract->operand_count = 5U;
     contract->implicit_memory_effect = true;
@@ -403,19 +402,19 @@ static bool aarch64_linux_tlbi_source(
 }
 
 static bool aarch64_linux_hyp_spin_type(
-    const MinicC0Program *program, MinicType type,
+    const MinicTargetInvocation *invocation, const MinicC0Program *program, MinicType type,
     size_t width, bool record) {
     size_t size, alignment;
     MinicType plain;
     return program && minic_type_unqualified(type, &plain) &&
            (record ? minic_type_is_record(plain) :
                      minic_type_is_unsigned_integer(plain)) &&
-           minic_data_layout_type(minic_default_data_layout(), program,
+           minic_data_layout_type(invocation, program,
                                   plain, &size, &alignment) && size == width;
 }
 
 static bool aarch64_linux_hyp_spin_source(
-    const MinicC0Program *program, const MinicInlineAsm *src,
+    const MinicTargetInvocation *invocation, const MinicC0Program *program, const MinicInlineAsm *src,
     MinicTargetInlineAsmContract *contract) {
     const Aarch64LinuxHypSpinForm form = src ? aarch64_linux_hyp_spin_form(
         src->template_text, src->template_length) : AARCH64_LINUX_HYP_SPIN_NONE;
@@ -444,7 +443,7 @@ static bool aarch64_linux_hyp_spin_source(
         if (!constraint(operand, expected) || !expr ||
             expr->value_category != MINIC_VALUE_LVALUE ||
             (output && minic_type_is_const(expr->type)) ||
-            !aarch64_linux_hyp_spin_type(program, expr->type,
+            !aarch64_linux_hyp_spin_type(invocation, program, expr->type,
                                          width, record)) return false;
         /* GNU can return a 32-bit union through one GPR; Core's ordinary
          * register-output kind assumes scalar pointees.  Transport this
@@ -504,7 +503,7 @@ static bool aarch64_linux_zeropad_source(
 }
 
 static bool aarch64_linux_uaccess_source(
-    const MinicC0Program *program, const MinicInlineAsm *src,
+    const MinicTargetInvocation *invocation, const MinicC0Program *program, const MinicInlineAsm *src,
     MinicTargetInlineAsmContract *contract) {
     Aarch64UaccessForm form;
     const MinicExpression *err, *data, *pointer;
@@ -541,7 +540,7 @@ static bool aarch64_linux_uaccess_source(
         !minic_type_equal(err_type, minic_type_int()) ||
         (!minic_type_is_integer(data_type) &&
          !(form.width == 8U && minic_type_is_pointer(data_type))) ||
-        !minic_data_layout_type(minic_aarch64_linux_data_layout(), program,
+        !minic_data_layout_type(invocation, program,
                                 data_type, &data_bytes, &data_alignment) ||
         (data_bytes != 1U && data_bytes != 2U &&
          data_bytes != 4U && data_bytes != 8U) ||
@@ -1156,11 +1155,12 @@ static bool aarch64_linux_lse_source(
 }
 
 bool minic_aarch64_qualify_inline_asm(
-    const MinicC0Program *program, const MinicInlineAsm *src,
+    const MinicTargetInvocation *invocation, const MinicC0Program *program, const MinicInlineAsm *src,
     MinicTargetInlineAsmContract *contract) {
     const MinicExpression *expr;
     MinicType plain;
     size_t i;
+    if (invocation == NULL) return false;
     /* AArch64 admits the GNU source roles only with exact types and
      * the original exclusive-load control-flow template. */
     if (program && src && contract && src->is_volatile && !src->is_goto &&
@@ -1197,7 +1197,7 @@ bool minic_aarch64_qualify_inline_asm(
     }
     if(aarch64_linux_bitrev_source(program,src,contract))return true;
     if(aarch64_linux_kvm_va_mask_source(program,src,contract))return true;
-    if(aarch64_linux_hyp_spin_source(program,src,contract))return true;
+    if(aarch64_linux_hyp_spin_source(invocation, program,src,contract))return true;
     if(aarch64_linux_lse_source(program,src,contract))return true;
     if(aarch64_linux_lse_casp128_source(program,src,contract))return true;
     if(aarch64_linux_lse_dec_positive_source(program,src,contract))return true;
@@ -1213,7 +1213,7 @@ bool minic_aarch64_qualify_inline_asm(
     if(aarch64_linux_counter_ordering_source(program,src,contract))return true;
     if(aarch64_linux_rng_sysreg_source(program,src,contract))return true;
     if(aarch64_linux_qcom_return_stack_source(program,src,contract))return true;
-    if(aarch64_linux_uaccess_source(program,src,contract))return true;
+    if(aarch64_linux_uaccess_source(invocation, program,src,contract))return true;
     if(aarch64_linux_zeropad_source(program,src,contract))return true;
     if(aarch64_linux_user_cache_fault_source(program,src,contract))return true;
     if(aarch64_linux_cache_op_source(program,src,contract))return true;
@@ -1239,7 +1239,7 @@ bool minic_aarch64_qualify_inline_asm(
         contract->implicit_memory_effect = true;
         return true;
     }
-    if(aarch64_linux_kvm_at_fixup_source(program,src,contract))return true;
+    if(aarch64_linux_kvm_at_fixup_source(invocation, program,src,contract))return true;
     if(aarch64_linux_at_s1e1r_source(program,src,contract))return true;
     if (src && contract && !src->is_goto &&
         !src->output_count && !src->input_count && !src->label_count &&
@@ -1380,7 +1380,7 @@ bool minic_aarch64_qualify_inline_asm(
            mem->value_category==MINIC_VALUE_LVALUE&&
            !minic_type_is_const(dst->type)&&
            aarch64_stlr_scalar_source(program,dst->type,width)&&
-           (aarch64_stlr_memory_carrier(program,mem->type,width) ||
+           (aarch64_stlr_memory_carrier(invocation, program,mem->type,width) ||
             aarch64_stlr_scalar_source(program,mem->type,width))) {
             contract->operand_count=2U;
             contract->kinds[0]=MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
@@ -1452,7 +1452,7 @@ bool minic_aarch64_qualify_inline_asm(
         if (width && dst && value &&
             dst->value_category == MINIC_VALUE_LVALUE &&
             !minic_type_is_const(dst->type) &&
-            (aarch64_stlr_memory_carrier(program,dst->type,width) ||
+            (aarch64_stlr_memory_carrier(invocation, program,dst->type,width) ||
              aarch64_stlr_scalar_source(program,dst->type,width)) &&
             aarch64_stlr_scalar_source(program,value->type, width)) {
             contract->operand_count = 2U;
@@ -1769,15 +1769,13 @@ bool minic_aarch64_qualify_inline_asm(
         const MinicExpression *mask = minic_c0_program_expression(
             program, src->inputs[1].expression);
         MinicConstValue constant;
-        const MinicTargetInfo *target = minic_target_info_for_architecture(
-            MINIC_TARGET_ARCH_AARCH64);
-        if (out && arg && mask &&
+            if (out && arg && mask &&
             out->value_category == MINIC_VALUE_LVALUE &&
             !minic_type_is_const(out->type) &&
             minic_type_is_pointer(out->type) &&
             minic_type_is_pointer(arg->type) &&
             minic_type_is_integer(mask->type) &&
-            minic_const_eval_integer(program, target,
+            minic_const_eval_integer(program, invocation,
                                     src->inputs[1].expression, &constant) &&
             constant.bits == (UINT64_C(1) << 55)) {
             contract->operand_count = 3U;
@@ -1818,13 +1816,13 @@ bool minic_aarch64_qualify_inline_asm(
 }
 
 bool minic_aarch64_seal_normalized_inline_asm(
-    const MinicC0Program *program, const MinicInlineAsm *source,
+    const MinicTargetInvocation *invocation, const MinicC0Program *program, const MinicInlineAsm *source,
     const char *normalized, size_t length,
     MinicTargetInlineAsmContract *contract) {
     const Aarch64RawIoRead *old_read, *new_read;
     const Aarch64RawIoStore *old_store, *new_store;
     size_t original_width, machine_width;
-    if (!program || !source || !source->template_text ||
+    if (!invocation || !program || !source || !source->template_text ||
         !normalized || !length || !contract)
         return false;
 

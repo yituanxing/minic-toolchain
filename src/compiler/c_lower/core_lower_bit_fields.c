@@ -37,7 +37,7 @@ static bool core_bit_field_access_window(
         *storage_width > 64U || (*storage_width % 8U) != 0U ||
         bit_offset >= 8U || field_width > 64U - bit_offset ||
         !minic_data_layout_is_little_endian(core_data_layout(context)) ||
-        !minic_data_layout_type(core_data_layout(context),
+        !minic_data_layout_type(context->target,
                                 context->body->program,
                                 minic_type_record(record_id),
                                 &record_size, &record_alignment)) {
@@ -316,7 +316,7 @@ MinicCoreLowerStatus minic_core_lower_try_bit_field_assignment(
                     context, value_type, &storage_type, &storage_width) ||
                 storage_width == 0U || storage_width > 64U ||
                 field->bit_width > storage_width ||
-                !minic_data_layout_record_field_layout(core_data_layout(context),
+                !minic_data_layout_record_field_layout(context->target,
                                                        context->body->program,
                                                        record,
                                                        target->value.member.field_index,
@@ -588,7 +588,7 @@ MinicCoreLowerStatus minic_core_lower_try_bit_field_read(
                     context, value_type, &storage_type, &storage_width) ||
                 storage_width == 0U || storage_width > 64U ||
                 field->bit_width > storage_width ||
-                !minic_data_layout_record_field_layout(core_data_layout(context),
+                !minic_data_layout_record_field_layout(context->target,
                                                        context->body->program,
                                                        record,
                                                        expression->value.member.field_index,
@@ -837,7 +837,7 @@ MinicCoreLowerStatus minic_core_lower_try_bit_field_compound(
                     context, bit_value_type, &bit_storage_type, &bit_storage_width) ||
                 bit_storage_width == 0U || bit_storage_width > 64U ||
                 bit_field->bit_width > bit_storage_width ||
-                !minic_data_layout_record_field_layout(core_data_layout(context),
+                !minic_data_layout_record_field_layout(context->target,
                                                        context->body->program,
                                                        bit_record,
                                                        bit_target->value.member.field_index,
@@ -1383,7 +1383,7 @@ MinicCoreLowerStatus minic_core_lower_bit_field_update(
         !core_bit_field_storage_type(
             context, value_type, &storage_type, &storage_width) ||
         storage_width == 0U || storage_width > 64U || field->bit_width > storage_width ||
-        !minic_data_layout_record_field_layout(core_data_layout(context),
+        !minic_data_layout_record_field_layout(context->target,
                                                context->body->program,
                                                record,
                                                operand->value.member.field_index,

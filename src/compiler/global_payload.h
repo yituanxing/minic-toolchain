@@ -7,7 +7,7 @@
  * choose physical serialization and relocation spelling. */
 #include "frontend/ast.h"
 #include "core/module_ir.h"
-#include "target/target_info.h"
+#include "target/source_policy/source_info.h"
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -35,10 +35,10 @@ typedef struct MinicMultiGlobalPayloadSink {
 } MinicMultiGlobalPayloadSink;
 
 bool minic_multi_global_payload_plan_build(
-    const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicC0Program *program, const MinicTargetInvocation *target,
     const MinicGlobalObject *object, MinicMultiGlobalEmissionPlan *plan);
 bool minic_multi_global_payload_visit(
-    const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicC0Program *program, const MinicTargetInvocation *target,
     const MinicGlobalObject *object, const MinicMultiGlobalEmissionPlan *plan,
     const MinicMultiGlobalPayloadSink *sink);
 /* Source initializer admission for explicitly named ELF .bss/.bss.*:

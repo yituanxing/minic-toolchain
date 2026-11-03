@@ -5,11 +5,6 @@
 #include <stddef.h>
 #include <stdint.h>
 
-/* Machine/ABI byte-layout dimensions cannot depend on C nominal descriptors.
- * Source rank IDs are checked against this storage table by the C-only
- * DataLayout adapter. Keep this count stable for existing five ABIs. */
-enum { MINIC_DATA_LAYOUT_INTEGER_RANK_SLOTS = 8U };
-
 typedef enum MinicByteOrder {
     MINIC_BYTE_ORDER_UNKNOWN = 0,
     MINIC_BYTE_ORDER_LITTLE,
@@ -22,8 +17,6 @@ typedef struct MinicDataLayout {
     MinicByteOrder byte_order;
     size_t pointer_size;
     size_t pointer_alignment;
-    size_t integer_size[MINIC_DATA_LAYOUT_INTEGER_RANK_SLOTS];
-    size_t integer_alignment[MINIC_DATA_LAYOUT_INTEGER_RANK_SLOTS];
     size_t float_size;
     size_t float_alignment;
     size_t double_size;

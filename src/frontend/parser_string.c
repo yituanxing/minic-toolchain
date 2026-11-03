@@ -107,10 +107,10 @@ static bool string_literal_element_type(MinicParser *parser, MinicTokenKind kind
         return false;
     }
     if (kind == MINIC_TOKEN_STRING_LITERAL) {
-        return minic_target_info_plain_char_type(parser->target_info, type);
+        return minic_target_info_plain_char_type(parser->invocation, type);
     }
     return kind == MINIC_TOKEN_WIDE_STRING_LITERAL &&
-           minic_target_info_wide_character_type(parser->target_info, type);
+           minic_target_info_wide_character_type(parser->invocation, type);
 }
 
 static bool decode_string_escape(const char *source, size_t *cursor, size_t end, int *value) {
@@ -231,7 +231,7 @@ bool minic_parser_parse_string_literal_size(MinicParser *parser, uint64_t *size)
     }
     if (total_length == SIZE_MAX ||
         !minic_target_info_sizeof_type(
-            parser->target_info, parser->program, element_type, &element_size) ||
+            parser->invocation, parser->program, element_type, &element_size) ||
         element_size == 0U || (uint64_t)(total_length + 1U) > UINT64_MAX / element_size) {
         minic_parser_error(parser, "string literal sizeof result is too large");
         return false;
@@ -544,7 +544,7 @@ bool minic_parser_get_predefined_function_name_object(MinicParser *parser,
         minic_parser_error(parser, "cannot determine predefined function name");
         return false;
     }
-    if (!minic_target_info_plain_char_type(parser->target_info, &char_type) ||
+    if (!minic_target_info_plain_char_type(parser->invocation, &char_type) ||
         !minic_type_add_const(char_type, &const_char_type) ||
         !minic_c0_program_add_array_type(
             parser->program, const_char_type, function->name_length + 1U, &array_type)) {

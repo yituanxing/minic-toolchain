@@ -16,7 +16,8 @@ int main(void) {
     MinicC0Program program;
     MinicCoreTypeContext context;
     MinicCoreTypeImporter importer;
-    const MinicDataLayout *layout = minic_x86_64_linux_data_layout();
+    MinicTargetInvocation invocation;
+    const MinicTargetInvocation *source = &invocation;
     MinicRecordId node_record, twin_record, qualified_record;
     MinicType node_source, twin_source, aligned_node_source;
     MinicType pointer_source, pointer_const_source;
@@ -37,7 +38,8 @@ int main(void) {
     size_t node_size, node_alignment, field_offset, bit_offset;
     size_t previous_count;
 
-    CHECK(layout != NULL);
+    CHECK(minic_target_invocation_begin(
+        &invocation, minic_target_info_for_architecture(MINIC_TARGET_ARCH_X86_64)));
     minic_c0_program_initialize(&program);
     minic_core_type_context_initialize(&context);
     CHECK(minic_c0_program_add_record(&program, "Node", 4U, &node_record));
@@ -87,7 +89,7 @@ int main(void) {
     CHECK(minic_type_pointer_to(const_integer, &pointer_const_source));
     CHECK(minic_type_pointer_to(minic_type_int(), &integer_pointer_source));
 
-    CHECK(minic_core_type_importer_initialize(&importer, &program, layout, &context));
+    CHECK(minic_core_type_importer_initialize(&importer, &program, source, &context));
     CHECK(minic_core_type_import(&importer, node_source, &node_id));
     CHECK(minic_core_type_import(&importer, aligned_node_source, &aligned_node_id));
     CHECK(aligned_node_id != node_id);
@@ -148,7 +150,7 @@ int main(void) {
     CHECK(pointer_const_id != integer_pointer_id);
     CHECK(minic_core_type_get(&context, pointer_const_id)->value.pointer.pointee == const_int_id);
 
-    CHECK(minic_data_layout_type(layout, &program, node_source,
+    CHECK(minic_data_layout_type(source, &program, node_source,
                                   &node_size, &node_alignment));
     node = minic_core_type_get(&context, node_id);
     pointer = minic_core_type_get(&context, pointer_id);
@@ -160,7 +162,7 @@ int main(void) {
     CHECK(pointer->kind == MINIC_CORE_TYPE_POINTER &&
           pointer->value.pointer.pointee == node_id && pointer->size == 8U);
     CHECK(node->value.record.fields[0].type_id == pointer_id);
-    CHECK(minic_data_layout_record_field_layout(layout, &program,
+    CHECK(minic_data_layout_record_field_layout(source, &program,
                 minic_c0_program_record(&program, node_record), 1U,
                 &field_offset, &bit_offset));
     CHECK(node->value.record.fields[1].byte_offset == field_offset);
@@ -171,7 +173,7 @@ int main(void) {
     CHECK(array->value.array.element == int_id && array->size == 12U);
     CHECK(node->value.record.fields[2].is_bit_field &&
           node->value.record.fields[2].bit_width == 5U);
-    CHECK(minic_data_layout_record_field_layout(layout, &program,
+    CHECK(minic_data_layout_record_field_layout(source, &program,
                 minic_c0_program_record(&program, node_record), 2U,
                 &field_offset, &bit_offset));
     CHECK(node->value.record.fields[2].byte_offset == field_offset &&

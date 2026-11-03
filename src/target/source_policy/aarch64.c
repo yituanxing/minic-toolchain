@@ -1,31 +1,10 @@
 #include "target/source_policy/source_policy.h"
+#include "target/machine_register.h"
 
 #include <string.h>
 
 static bool aarch_register_is(const char *name, size_t length, const char *expected) {
     return strlen(expected) == length && memcmp(name, expected, length) == 0;
-}
-
-static bool aarch_fixed_register_read(const char *name, size_t length) {
-    return aarch_register_is(name, length, "sp");
-}
-
-static bool aarch_local_fixed_register(const char *name, size_t length) {
-    unsigned int number;
-    /* Linux current_stack_pointer and PAC XPACLRI's tied x30 link-register
-     * operand have separately qualified native machine paths. */
-    if (aarch_register_is(name, length, "sp") ||
-        aarch_register_is(name, length, "x30")) return true;
-    /* Source-only AAPCS64 argument and scratch bindings x/r0..17. x18 and
-     * all callee-saved registers remain fail-closed. */
-    if (length < 2U || length > 3U || (name[0] != 'x' && name[0] != 'r') ||
-        name[1] < '0' || name[1] > '9') return false;
-    number = (unsigned int)(name[1] - '0');
-    if (length == 3U) {
-        if (name[2] < '0' || name[2] > '9') return false;
-        number = number * 10U + (unsigned int)(name[2] - '0');
-    }
-    return number <= 17U;
 }
 
 static bool aarch_register_clobber(const char *name, size_t length) {
@@ -46,8 +25,8 @@ static bool aarch_immediate(const char *constraint, size_t length, int64_t value
 }
 
 const MinicTargetAsmSourcePolicy minic_aarch64_asm_source_policy = {
-    .fixed_register_read = aarch_fixed_register_read,
-    .local_fixed_register = aarch_local_fixed_register,
+    .fixed_register_read = minic_aarch64_machine_fixed_register_read,
+    .local_fixed_register = minic_aarch64_machine_local_fixed_register,
     .register_clobber = aarch_register_clobber,
     .memory_input_constraint = aarch_memory_input,
     .immediate_constraint = aarch_immediate,
@@ -60,7 +39,7 @@ const MinicTargetAsmSourcePolicy minic_aarch64_asm_source_policy = {
  * explicitly registered NEON byte/word spellings additionally have real
  * target-owned 16-byte object layout, but still have NO vector arithmetic,
  * V-register transport or function-call PCS implementation. */
-static bool aarch_named_header_builtin(const MinicTargetInfo *target,
+static bool aarch_named_header_builtin(const MinicTargetInvocation *target,
                                        const char *name, size_t length,
                                        MinicType *type) {
     static const struct {
@@ -89,7 +68,7 @@ static bool aarch_named_header_builtin(const MinicTargetInfo *target,
     return false;
 }
 
-static bool aarch_header_opaque_return(const MinicTargetInfo *target,
+static bool aarch_header_opaque_return(const MinicTargetInvocation *target,
                                        MinicType type) {
     if (type.pointer_depth != 0U ||
         !minic_target_info_language_type_supported(target, type.base_kind))
@@ -106,10 +85,10 @@ static bool aarch_header_opaque_return(const MinicTargetInfo *target,
     }
 }
 
-static bool aarch_header_attribute(const MinicTargetInfo *target,
+static bool aarch_header_attribute(const MinicTargetInvocation *target,
                                    const char *name, size_t length) {
-    return target->source_info != NULL &&
-           (target->source_info->language_type_capabilities &
+    return target != NULL &&
+           (target->source_info.language_type_capabilities &
             MINIC_TARGET_LANG_OPAQUE_VECTOR_HEADER_DECLARATIONS) != 0U &&
            aarch_register_is(name, length, "__aarch64_vector_pcs__");
 }
@@ -120,7 +99,7 @@ static bool aarch_header_attribute(const MinicTargetInfo *target,
  * it grants no NEON vector type, intrinsic, V-register ASM or ABI lowering.
  * In particular, all other GCC target extension strings remain rejected. */
 static bool aarch_pragma_target_options(
-    const MinicTargetInfo *target, const char *value, size_t value_length,
+    const MinicTargetInvocation *target, const char *value, size_t value_length,
     const MinicTargetGnuPragmaOptionState *current,
     MinicTargetGnuPragmaOptionState *next) {
     static const char simd_baseline[] = "+nothing+simd";

@@ -20,7 +20,7 @@
 
 typedef struct MinicInlinePureTruth {
     const MinicC0Program *program;
-    const MinicTargetInfo *target;
+    const MinicTargetInvocation *target;
 } MinicInlinePureTruth;
 
 static bool minic_inline_pure_constant_truth(void *opaque,
@@ -39,7 +39,7 @@ static bool minic_inline_pure_constant_truth(void *opaque,
 }
 
 static bool minic_inline_pure_statement_constant(const MinicC0Program *program,
-                                                 const MinicTargetInfo *target,
+                                                 const MinicTargetInvocation *target,
                                                  MinicCoreReentryIndex *reentry_index,
                                                  MinicExpressionId expression_id,
                                                  MinicConstValue *value) {
@@ -92,7 +92,7 @@ static bool minic_static_integer_claim_block(
  * retain its original source-label aliases. A clone deliberately suppresses
  * those aliases, so do not specialize such a source in the first place. */
 static unsigned char *minic_static_integer_blocked_sources(
-    const MinicC0Program *program, const MinicTargetInfo *target) {
+    const MinicC0Program *program, const MinicTargetInvocation *target) {
     unsigned char *blocked;
     const MinicSourceBackend *backend;
     unsigned char *inline_has_external_guard = NULL;
@@ -107,7 +107,7 @@ static unsigned char *minic_static_integer_blocked_sources(
     if (program == NULL || target == NULL) {
         return NULL;
     }
-    backend = minic_source_backend_for_target(target);
+    backend = minic_source_backend_for_target(&target->machine);
     if (backend == NULL) {
         return NULL;
     }
@@ -473,7 +473,7 @@ bool minic_add_inline_integer_specialization(
 
 static bool minic_inline_specialization_argument_value(
     const MinicC0Program *program,
-    const MinicTargetInfo *target,
+    const MinicTargetInvocation *target,
     const MinicFunction *caller,
     MinicExpressionId expression_id,
     MinicType target_type,
@@ -548,7 +548,7 @@ static bool minic_inline_specialization_argument_value(
 }
 
 bool minic_specialize_inline_integer_calls(MinicC0Program *program,
-                                                  const MinicTargetInfo *target) {
+                                                  const MinicTargetInvocation *target) {
     size_t expression_index;
     size_t original_function_count;
     size_t specialization_count = 0U;

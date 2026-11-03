@@ -1,6 +1,7 @@
 #include "compiler/c_lower/core_ir_source_internal.h"
 #include "compiler/c_lower/core_type_import.h"
 #include "target/riscv64/core_codegen.h"
+#include "target/source_policy/source_info.h"
 #include "target/target_info.h"
 
 #include <stdbool.h>
@@ -261,6 +262,7 @@ static bool emit_one(FILE *file,
     const MinicTargetInfo *target =
         minic_target_info_for_architecture(MINIC_TARGET_ARCH_RISCV64);
     MinicC0Program empty_program = {0};
+    MinicTargetInvocation invocation;
     MinicCoreTypeContext type_context;
     MinicCoreTypeImporter importer;
     MinicCoreFunction sealed;
@@ -268,9 +270,9 @@ static bool emit_one(FILE *file,
 
     minic_core_type_context_initialize(&type_context);
     minic_core_function_initialize(&sealed);
-    if (target == NULL || target->data_layout == NULL ||
+    if (!minic_target_invocation_begin(&invocation, target) ||
         !minic_core_type_importer_initialize(&importer, &empty_program,
-                                             target->data_layout, &type_context)) {
+                                             &invocation, &type_context)) {
         minic_core_type_context_destroy(&type_context);
         minic_core_function_destroy(&sealed);
         return false;

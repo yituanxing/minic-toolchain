@@ -5,11 +5,11 @@
  * from a Core verifier or target emitter. */
 #include "core/module_ir.h"
 #include "compiler/c_lower/core_type_import.h"
-#include "target/target_info.h"
+#include "target/source_policy/source_info.h"
 
 bool minic_core_module_build_from_program(MinicCoreModule *output,
                                           const MinicC0Program *program,
-                                          const MinicTargetInfo *target,
+                                          const MinicTargetInvocation *target,
                                           MinicCoreTypeImporter *importer);
 
 #endif

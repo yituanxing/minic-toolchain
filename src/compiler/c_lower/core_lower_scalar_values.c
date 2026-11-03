@@ -684,7 +684,7 @@ MinicCoreLowerStatus minic_core_lower_internal_append_long_double_conversion(
         } else if (minic_type_is_float(source_type)) {
             helper = "__extendsftf2";
         } else if (minic_type_is_integer(source_type) &&
-                   minic_data_layout_type(core_data_layout(context),
+                   minic_data_layout_type(context->target,
                                           context->body->program,
                                           source_type,
                                           &source_size,
@@ -713,7 +713,7 @@ MinicCoreLowerStatus minic_core_lower_internal_append_long_double_conversion(
             size_t target_alignment;
             size_t target_size;
 
-            if (!minic_data_layout_type(core_data_layout(context),
+            if (!minic_data_layout_type(context->target,
                                         context->body->program,
                                         target_type,
                                         &target_size,

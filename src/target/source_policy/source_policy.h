@@ -31,7 +31,7 @@ typedef struct MinicTargetAsmSourcePolicy {
  * native emitter qualification. */
 typedef struct MinicTargetMachineBuiltinPolicy {
     bool (*signature)(
-        const MinicTargetInfo *, const char *, size_t,
+        const MinicTargetInvocation *, const char *, size_t,
         char *, size_t, MinicType *, MinicType[3], size_t *,
         const char **, size_t *);
 } MinicTargetMachineBuiltinPolicy;
@@ -42,7 +42,7 @@ typedef struct MinicTargetMachineBuiltinPolicy {
  * family and all argument shapes, not a generic pointer/int width shortcut. */
 typedef struct MinicTargetAliasAbiPolicy {
     bool (*allow_incompatible_prototypes)(
-        const MinicTargetInfo *, const MinicC0Program *,
+        const MinicTargetInvocation *, const MinicC0Program *,
         const MinicFunction *, const MinicFunction *);
 } MinicTargetAliasAbiPolicy;
 
@@ -51,17 +51,17 @@ typedef struct MinicTargetAliasAbiPolicy {
  * linker/ELF contract. A caller checks C syntax/arity; the registered target
  * decides which source spellings and qualified values it may admit. */
 typedef struct MinicTargetSourceLanguagePolicy {
-    bool (*named_builtin_type)(const MinicTargetInfo *,
+    bool (*named_builtin_type)(const MinicTargetInvocation *,
                                const char *, size_t, MinicType *);
-    bool (*header_opaque_return)(const MinicTargetInfo *, MinicType);
-    bool (*header_attribute)(const MinicTargetInfo *, const char *, size_t);
+    bool (*header_opaque_return)(const MinicTargetInvocation *, MinicType);
+    bool (*header_attribute)(const MinicTargetInvocation *, const char *, size_t);
     bool (*gnu_function_attribute_name)(const char *, size_t);
     bool (*gnu_function_attribute_value)(
         MinicTargetGnuFunctionAttributeKind, const char *, size_t);
     /* Target-specific GCC #pragma target option policy. No frontend ISA
      * spellings; unknown strings fail closed, without mutating *next. */
     bool (*gnu_pragma_target_options)(
-        const MinicTargetInfo *, const char *, size_t,
+        const MinicTargetInvocation *, const char *, size_t,
         const MinicTargetGnuPragmaOptionState *,
         MinicTargetGnuPragmaOptionState *);
 } MinicTargetSourceLanguagePolicy;

@@ -8,7 +8,7 @@
 #define MINIC_CONST_EVAL_MAX_DEPTH 256U
 
 static bool integer_width(const MinicC0Program *program,
-                          const MinicTargetInfo *target,
+                          const MinicTargetInvocation *target,
                           MinicType type,
                           unsigned int *width) {
     return minic_target_info_integer_width(target, program, type, width) && *width <= 64U;
@@ -26,7 +26,7 @@ static uint64_t width_mask(unsigned int width) {
 }
 
 static bool normalize_bits(const MinicC0Program *program,
-                           const MinicTargetInfo *target,
+                           const MinicTargetInvocation *target,
                            MinicType type,
                            uint64_t bits,
                            uint64_t *normalized) {
@@ -44,7 +44,7 @@ static bool normalize_bits(const MinicC0Program *program,
 }
 
 static bool value_signed(const MinicC0Program *program,
-                         const MinicTargetInfo *target,
+                         const MinicTargetInvocation *target,
                          const MinicConstValue *value,
                          int64_t *result) {
     unsigned int width;
@@ -63,13 +63,13 @@ static bool value_signed(const MinicC0Program *program,
 }
 
 static bool signed_range(const MinicC0Program *program,
-                         const MinicTargetInfo *target,
+                         const MinicTargetInvocation *target,
                          MinicType type,
                          int64_t *minimum,
                          int64_t *maximum);
 
 static bool convert_value(const MinicC0Program *program,
-                          const MinicTargetInfo *target,
+                          const MinicTargetInvocation *target,
                           const MinicConstValue *source,
                           MinicType type,
                           MinicConstValue *result) {
@@ -99,7 +99,7 @@ static bool convert_value(const MinicC0Program *program,
 }
 
 bool minic_const_value_convert_integer(const MinicC0Program *program,
-                                       const MinicTargetInfo *target,
+                                       const MinicTargetInvocation *target,
                                        const MinicConstValue *source,
                                        MinicType type,
                                        MinicConstValue *result) {
@@ -107,7 +107,7 @@ bool minic_const_value_convert_integer(const MinicC0Program *program,
 }
 
 bool minic_const_value_integer_representable_in_type(const MinicC0Program *program,
-                                                     const MinicTargetInfo *target,
+                                                     const MinicTargetInvocation *target,
                                                      const MinicConstValue *value,
                                                      MinicType destination_type) {
     unsigned int destination_width;
@@ -160,7 +160,7 @@ bool minic_const_value_integer_representable_in_type(const MinicC0Program *progr
 }
 
 static bool value_truthy(const MinicC0Program *program,
-                         const MinicTargetInfo *target,
+                         const MinicTargetInvocation *target,
                          const MinicConstValue *value,
                          bool *truthy) {
     uint64_t bits;
@@ -174,7 +174,7 @@ static bool value_truthy(const MinicC0Program *program,
 }
 
 static bool signed_range(const MinicC0Program *program,
-                         const MinicTargetInfo *target,
+                         const MinicTargetInvocation *target,
                          MinicType type,
                          int64_t *minimum,
                          int64_t *maximum) {
@@ -235,13 +235,13 @@ signed_mul(int64_t left, int64_t right, int64_t minimum, int64_t maximum, int64_
 }
 
 static bool eval_expression(const MinicC0Program *program,
-                            const MinicTargetInfo *target,
+                            const MinicTargetInvocation *target,
                             MinicExpressionId expression_id,
                             unsigned int depth,
                             MinicConstValue *value);
 
 static bool eval_null_based_pointer_constant(const MinicC0Program *program,
-                                             const MinicTargetInfo *target,
+                                             const MinicTargetInvocation *target,
                                              MinicExpressionId expression_id,
                                              unsigned int depth,
                                              uint64_t *byte_offset) {
@@ -314,7 +314,7 @@ static bool eval_null_based_pointer_constant(const MinicC0Program *program,
             record = minic_c0_program_record(program, addressed->value.member.record_id);
             if (record == NULL ||
                 !minic_data_layout_record_field_offset(
-                    minic_target_info_data_layout(target),
+                    target,
                     program,
                     record,
                     addressed->value.member.field_index,
@@ -330,7 +330,7 @@ static bool eval_null_based_pointer_constant(const MinicC0Program *program,
 }
 
 static bool eval_null_based_pointer_difference(const MinicC0Program *program,
-                                               const MinicTargetInfo *target,
+                                               const MinicTargetInvocation *target,
                                                const MinicExpression *expression,
                                                unsigned int depth,
                                                MinicConstValue *value) {
@@ -360,7 +360,7 @@ static bool eval_null_based_pointer_difference(const MinicC0Program *program,
             program, target, expression->value.binary.right, depth + 1U, &right_offset) ||
         !minic_type_pointee(left->type, &pointee) ||
         !minic_c0_pointer_arithmetic_element_size(
-            program, minic_target_info_data_layout(target), left->type, &element_size) ||
+            program, target, left->type, &element_size) ||
         element_size == 0U) {
         return false;
     }
@@ -387,7 +387,7 @@ static bool eval_null_based_pointer_difference(const MinicC0Program *program,
 }
 
 static bool integer_cast_operand_is_pointer_roundtrip_constant(const MinicC0Program *program,
-                                                               const MinicTargetInfo *target,
+                                                               const MinicTargetInvocation *target,
                                                                const MinicExpression *expression,
                                                                unsigned int depth,
                                                                uint64_t *bits) {
@@ -451,7 +451,7 @@ static bool integer_cast_operand_is_pointer_roundtrip_constant(const MinicC0Prog
 }
 
 static bool eval_builtin_unary(const MinicC0Program *program,
-                               const MinicTargetInfo *target,
+                               const MinicTargetInvocation *target,
                                const MinicExpression *expression,
                                unsigned int depth,
                                MinicConstValue *value) {
@@ -551,7 +551,7 @@ typedef struct MinicConstWideInteger {
 } MinicConstWideInteger;
 
 static bool const_wide_from_integer(const MinicC0Program *program,
-                                    const MinicTargetInfo *target,
+                                    const MinicTargetInvocation *target,
                                     MinicConstValue source,
                                     MinicConstWideInteger *wide) {
     if (wide == NULL) return false;
@@ -598,7 +598,7 @@ static MinicConstWideInteger const_wide_multiply(MinicConstWideInteger left,
 }
 
 static bool eval_builtin_overflow_predicate(const MinicC0Program *program,
-                                            const MinicTargetInfo *target,
+                                            const MinicTargetInvocation *target,
                                             const MinicExpression *expression,
                                             unsigned int depth,
                                             MinicConstValue *value) {
@@ -657,7 +657,7 @@ static bool eval_builtin_overflow_predicate(const MinicC0Program *program,
  * their comparison is unsigned at the target pointer width. Do not admit
  * addresses of objects or other pointer expressions into integer consteval. */
 static bool eval_integer_address_pointer_bits(const MinicC0Program *program,
-                                              const MinicTargetInfo *target,
+                                              const MinicTargetInvocation *target,
                                               MinicExpressionId expression_id,
                                               unsigned int depth,
                                               uint64_t *bits) {
@@ -760,7 +760,7 @@ static bool eval_known_global_array_pointer_truth(
 }
 
 static bool eval_integer_address_pointer_compare(const MinicC0Program *program,
-                                                 const MinicTargetInfo *target,
+                                                 const MinicTargetInvocation *target,
                                                  const MinicExpression *expression,
                                                  unsigned int depth,
                                                  MinicConstValue *value) {
@@ -811,7 +811,7 @@ static bool eval_integer_address_pointer_compare(const MinicC0Program *program,
 }
 
 static bool eval_binary(const MinicC0Program *program,
-                        const MinicTargetInfo *target,
+                        const MinicTargetInvocation *target,
                         const MinicExpression *expression,
                         unsigned int depth,
                         MinicConstValue *value) {
@@ -1095,7 +1095,7 @@ static bool eval_binary(const MinicC0Program *program,
 }
 
 static bool eval_expression(const MinicC0Program *program,
-                            const MinicTargetInfo *target,
+                            const MinicTargetInvocation *target,
                             MinicExpressionId expression_id,
                             unsigned int depth,
                             MinicConstValue *value) {
@@ -1179,7 +1179,7 @@ static bool eval_expression(const MinicC0Program *program,
 
         record = minic_c0_program_record(program, expression->value.offsetof_value.record_id);
         if (record == NULL ||
-            !minic_data_layout_record_field_offset(minic_target_info_data_layout(target),
+            !minic_data_layout_record_field_offset(target,
                                                    program,
                                                    record,
                                                    expression->value.offsetof_value.field_index,
@@ -1318,7 +1318,7 @@ typedef struct MinicArithmeticConstValue {
 } MinicArithmeticConstValue;
 
 static bool arithmetic_integer_to_double(const MinicC0Program *program,
-                                         const MinicTargetInfo *target,
+                                         const MinicTargetInvocation *target,
                                          const MinicConstValue *value,
                                          double *result) {
     uint64_t bits;
@@ -1344,7 +1344,7 @@ static bool arithmetic_integer_to_double(const MinicC0Program *program,
 }
 
 static bool arithmetic_value_as_double(const MinicC0Program *program,
-                                       const MinicTargetInfo *target,
+                                       const MinicTargetInvocation *target,
                                        const MinicArithmeticConstValue *value,
                                        double *result) {
     if (value == NULL || result == NULL) {
@@ -1358,7 +1358,7 @@ static bool arithmetic_value_as_double(const MinicC0Program *program,
 }
 
 static bool arithmetic_double_to_integer(const MinicC0Program *program,
-                                         const MinicTargetInfo *target,
+                                         const MinicTargetInvocation *target,
                                          double input,
                                          MinicType type,
                                          MinicConstValue *result) {
@@ -1412,7 +1412,7 @@ static bool arithmetic_double_to_integer(const MinicC0Program *program,
 }
 
 static bool eval_arithmetic_expression(const MinicC0Program *program,
-                                       const MinicTargetInfo *target,
+                                       const MinicTargetInvocation *target,
                                        MinicExpressionId expression_id,
                                        unsigned int depth,
                                        MinicArithmeticConstValue *value) {
@@ -1603,7 +1603,7 @@ static bool eval_arithmetic_expression(const MinicC0Program *program,
 }
 
 bool minic_const_eval_arithmetic_to_integer(const MinicC0Program *program,
-                                            const MinicTargetInfo *target,
+                                            const MinicTargetInvocation *target,
                                             MinicExpressionId expression_id,
                                             MinicType destination_type,
                                             MinicConstValue *value) {
@@ -1622,14 +1622,14 @@ bool minic_const_eval_arithmetic_to_integer(const MinicC0Program *program,
 }
 
 bool minic_const_eval_integer(const MinicC0Program *program,
-                              const MinicTargetInfo *target,
+                              const MinicTargetInvocation *target,
                               MinicExpressionId expression_id,
                               MinicConstValue *value) {
     return eval_expression(program, target, expression_id, 0U, value);
 }
 
 bool minic_const_value_is_zero(const MinicC0Program *program,
-                               const MinicTargetInfo *target,
+                               const MinicTargetInvocation *target,
                                const MinicConstValue *value,
                                bool *is_zero) {
     bool truthy;
@@ -1642,7 +1642,7 @@ bool minic_const_value_is_zero(const MinicC0Program *program,
 }
 
 bool minic_const_value_as_int64(const MinicC0Program *program,
-                                const MinicTargetInfo *target,
+                                const MinicTargetInvocation *target,
                                 const MinicConstValue *value,
                                 int64_t *result) {
     uint64_t bits;

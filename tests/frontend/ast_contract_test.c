@@ -1,6 +1,7 @@
 #include "frontend/ast.h"
 #include "frontend/ast_verifier.h"
 #include "frontend/cast_normalization.h"
+#include "target/source_policy/source_info.h"
 
 #include <stdbool.h>
 #include <string.h>
@@ -246,7 +247,7 @@ static int test_malformed_contracts(void) {
     return 0;
 }
 
-static bool verify_builtin_local(const MinicTargetInfo *target, MinicType type) {
+static bool verify_builtin_local(const MinicTargetInvocation *target, MinicType type) {
     MinicC0Program program;
     MinicLocal local;
     MinicLocalId local_id;
@@ -279,16 +280,18 @@ static int test_builtin_type_target_admission(void) {
     size_t index;
 
     for (index = 0U; index < sizeof(architectures) / sizeof(architectures[0]); ++index) {
-        const MinicTargetInfo *target;
+        MinicTargetInvocation invocation;
+        const MinicTargetInvocation *target = &invocation;
         MinicType malformed;
         bool is_aarch64, has_extended_float;
 
-        target = minic_target_info_for_architecture(architectures[index]);
         is_aarch64 = architectures[index] == MINIC_TARGET_ARCH_AARCH64;
         has_extended_float = architectures[index] != MINIC_TARGET_ARCH_RISCV32;
         malformed = minic_type_float128();
         malformed.integer_rank = MINIC_INTEGER_RANK_INT;
-        if (target == NULL || !verify_builtin_local(target, minic_type_float()) ||
+        if (!minic_target_invocation_begin(
+                &invocation, minic_target_info_for_architecture(architectures[index])) ||
+            !verify_builtin_local(target, minic_type_float()) ||
             verify_builtin_local(target, minic_type_float128()) != has_extended_float ||
             verify_builtin_local(target, malformed) ||
             verify_builtin_local(target, minic_type_header_builtin(

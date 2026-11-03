@@ -85,7 +85,7 @@ static inline bool minic_opt_pure_guard_loop(
  * pure statement expressions. Dynamic calls, writes, volatile accesses, ASM,
  * GOTOs, and unrecognized loops all fail closed. */
 static inline bool minic_opt_pure_statement_block(
-    const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicC0Program *program, const MinicTargetInvocation *target,
     MinicCoreReentryIndex *reentry_index, MinicBlockId block_id,
     void *context, MinicOptPureGuardTruth truth, unsigned int depth) {
     const MinicBlock *block;

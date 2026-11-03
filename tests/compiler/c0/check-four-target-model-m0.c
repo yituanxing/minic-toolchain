@@ -17,34 +17,36 @@ static int verify_lp64(const char *name,
                        MinicIntegerRank expected_wchar_rank,
                        MinicIntegerSign expected_wchar_sign) {
     const MinicTargetInfo *info = minic_target_info_from_name(name);
+    MinicTargetInvocation invocation;
     const MinicDataLayout *layout;
     if (info == NULL || info->architecture != expected_arch ||
         info != minic_target_info_for_architecture(expected_arch) ||
-        info->source_info == NULL || info->source_info->integer_model == NULL ||
+        !minic_target_invocation_begin(&invocation, info) ||
+        invocation.source_info.integer_model == NULL ||
         info->data_layout == NULL) {
         (void)fprintf(stderr, "FAIL target identity: %s\n", name);
         return 1;
     }
     layout = info->data_layout;
-    if (info->source_info->integer_model->plain_char_sign != expected_char_sign ||
-        info->source_info->integer_model->semantic_width_bits[MINIC_INTEGER_RANK_BOOL] != 1U ||
-        info->source_info->integer_model->semantic_width_bits[MINIC_INTEGER_RANK_CHAR] != 8U ||
-        info->source_info->integer_model->semantic_width_bits[MINIC_INTEGER_RANK_SHORT] != 16U ||
-        info->source_info->integer_model->semantic_width_bits[MINIC_INTEGER_RANK_INT] != 32U ||
-        info->source_info->integer_model->semantic_width_bits[MINIC_INTEGER_RANK_LONG] != 64U ||
-        info->source_info->integer_model->semantic_width_bits[MINIC_INTEGER_RANK_INT128] != 128U ||
-        info->source_info->wide_character_type.integer_rank != expected_wchar_rank ||
-        info->source_info->wide_character_type.integer_sign != expected_wchar_sign ||
-        info->source_info->word_integer_rank != MINIC_INTEGER_RANK_LONG) {
+    if (invocation.source_info.integer_model->plain_char_sign != expected_char_sign ||
+        invocation.source_info.integer_model->semantic_width_bits[MINIC_INTEGER_RANK_BOOL] != 1U ||
+        invocation.source_info.integer_model->semantic_width_bits[MINIC_INTEGER_RANK_CHAR] != 8U ||
+        invocation.source_info.integer_model->semantic_width_bits[MINIC_INTEGER_RANK_SHORT] != 16U ||
+        invocation.source_info.integer_model->semantic_width_bits[MINIC_INTEGER_RANK_INT] != 32U ||
+        invocation.source_info.integer_model->semantic_width_bits[MINIC_INTEGER_RANK_LONG] != 64U ||
+        invocation.source_info.integer_model->semantic_width_bits[MINIC_INTEGER_RANK_INT128] != 128U ||
+        invocation.source_info.wide_character_type.integer_rank != expected_wchar_rank ||
+        invocation.source_info.wide_character_type.integer_sign != expected_wchar_sign ||
+        invocation.source_info.word_integer_rank != MINIC_INTEGER_RANK_LONG) {
         (void)fprintf(stderr, "FAIL integer/char/wchar ABI: %s\n", name);
         return 1;
     }
     if (!minic_data_layout_is_little_endian(layout) ||
         layout->pointer_size != 8U || layout->pointer_alignment != 8U ||
-        layout->integer_size[MINIC_INTEGER_RANK_INT] != 4U ||
-        layout->integer_size[MINIC_INTEGER_RANK_LONG] != 8U ||
-        layout->integer_size[MINIC_INTEGER_RANK_INT128] != 16U ||
-        layout->integer_alignment[MINIC_INTEGER_RANK_INT128] != 16U ||
+        invocation.source_info.integer_size[MINIC_INTEGER_RANK_INT] != 4U ||
+        invocation.source_info.integer_size[MINIC_INTEGER_RANK_LONG] != 8U ||
+        invocation.source_info.integer_size[MINIC_INTEGER_RANK_INT128] != 16U ||
+        invocation.source_info.integer_alignment[MINIC_INTEGER_RANK_INT128] != 16U ||
         layout->float_size != 4U || layout->float_alignment != 4U ||
         layout->double_size != 8U || layout->double_alignment != 8U ||
         layout->long_double_size != 16U || layout->long_double_alignment != 16U) {
@@ -58,26 +60,28 @@ static int verify_lp64(const char *name,
  * model. Test GNU C language promotions, not only raw pointer bytes. */
 static int verify_rv32(void) {
     const MinicTargetInfo *t = minic_target_info_from_name("riscv32-linux");
+    MinicTargetInvocation invocation;
     MinicType v;
     if (t == NULL || t->architecture != MINIC_TARGET_ARCH_RISCV32 ||
+        !minic_target_invocation_begin(&invocation, t) ||
         t->riscv_isa.xlen != 32U || t->riscv_isa.abi != MINIC_RISCV_ABI_ILP32 ||
         !minic_data_layout_is_little_endian(t->data_layout) ||
         t->data_layout->pointer_size != 4U ||
         t->data_layout->pointer_alignment != 4U ||
-        t->data_layout->integer_size[MINIC_INTEGER_RANK_LONG] != 4U ||
-        t->data_layout->integer_size[MINIC_INTEGER_RANK_LONG_LONG] != 8U ||
-        t->data_layout->integer_alignment[MINIC_INTEGER_RANK_LONG_LONG] != 8U ||
-        t->source_info->integer_model->semantic_width_bits[MINIC_INTEGER_RANK_LONG] != 32U ||
-        t->source_info->integer_model->semantic_width_bits[MINIC_INTEGER_RANK_LONG_LONG] != 64U ||
-        t->source_info->integer_model->plain_char_sign != MINIC_INTEGER_SIGN_UNSIGNED ||
-        t->source_info->word_integer_rank != MINIC_INTEGER_RANK_INT ||
+        invocation.source_info.integer_size[MINIC_INTEGER_RANK_LONG] != 4U ||
+        invocation.source_info.integer_size[MINIC_INTEGER_RANK_LONG_LONG] != 8U ||
+        invocation.source_info.integer_alignment[MINIC_INTEGER_RANK_LONG_LONG] != 8U ||
+        invocation.source_info.integer_model->semantic_width_bits[MINIC_INTEGER_RANK_LONG] != 32U ||
+        invocation.source_info.integer_model->semantic_width_bits[MINIC_INTEGER_RANK_LONG_LONG] != 64U ||
+        invocation.source_info.integer_model->plain_char_sign != MINIC_INTEGER_SIGN_UNSIGNED ||
+        invocation.source_info.word_integer_rank != MINIC_INTEGER_RANK_INT ||
         t->variadic_scalar_read_kind != MINIC_VARIADIC_SCALAR_READ_LINEAR_SLOT ||
         t->variadic_linear_slot_bytes != 4U ||
         t->variadic_copy_kind != MINIC_VARIADIC_COPY_SCALAR_ASSIGNMENT ||
-        !minic_target_info_integer_common(t, minic_type_unsigned_int(),
+        !minic_target_info_integer_common(&invocation, minic_type_unsigned_int(),
                                           minic_type_long(), &v) ||
         !minic_type_equal(v, minic_type_unsigned_long()) ||
-        !minic_target_info_integer_common(t, minic_type_unsigned_long(),
+        !minic_target_info_integer_common(&invocation, minic_type_unsigned_long(),
                                           minic_type_long_long(), &v) ||
         !minic_type_equal(v, minic_type_long_long()))
         return (void)fprintf(stderr, "RV32_ILP32_MODEL=FAIL\n"), 1;
@@ -93,13 +97,15 @@ static int verify_language_admission(void) {
     };
     size_t i;
     for (i = 0U; i < sizeof(names) / sizeof(names[0]); ++i) {
-        const MinicTargetInfo *t = minic_target_info_from_name(names[i]);
+        MinicTargetInvocation invocation;
+        const MinicTargetInvocation *t = &invocation;
         MinicType vector_type;
         MinicType vector_pointer;
         bool is_arm = i == 3U;
         bool has_extended_float = i != 0U;
         bool has_vector;
-        if (t == NULL ||
+        if (!minic_target_invocation_begin(&invocation,
+                                           minic_target_info_from_name(names[i])) ||
             minic_target_info_language_type_supported(
                 t, MINIC_TYPE_BASE_FLOAT128) != has_extended_float ||
             minic_target_info_language_type_supported(
@@ -184,7 +190,9 @@ static int verify_va_cursor_source_abi(void) {
         "struct VaBox { int key; First member; };\n";
     size_t i;
     for (i = 0U; i < sizeof(names) / sizeof(names[0]); ++i) {
-        const MinicTargetInfo *t = minic_target_info_from_name(names[i]);
+        const MinicTargetInfo *machine = minic_target_info_from_name(names[i]);
+        MinicTargetInvocation invocation;
+        const MinicTargetInvocation *t = &invocation;
         MinicC0Program program;
         MinicVaCursorSourceShape shape;
         MinicC0AstVerifyFailure failure;
@@ -194,16 +202,15 @@ static int verify_va_cursor_source_abi(void) {
         bool x86 = i == 2U;
         bool aarch = i == 3U;
         bool opaque = x86 || aarch;
-        MinicTargetInfo missing_policy;
-        MinicTargetSourceInfo missing_source;
+        MinicTargetInvocation missing_policy;
         minic_c0_program_initialize(&program);
-        if (t == NULL ||
+        if (!minic_target_invocation_begin(&invocation, machine) ||
             !minic_target_info_va_cursor_source_shape(t, &shape) ||
             shape.kind != (x86 ? MINIC_VA_CURSOR_SOURCE_OPAQUE_RECORD_ARRAY_ONE :
                           aarch ? MINIC_VA_CURSOR_SOURCE_OPAQUE_RECORD :
                                   MINIC_VA_CURSOR_SOURCE_LINEAR_POINTER) ||
-            shape.object_size != (x86 ? 24U : aarch ? 32U : t->data_layout->pointer_size) ||
-            shape.object_alignment != t->data_layout->pointer_alignment ||
+            shape.object_size != (x86 ? 24U : aarch ? 32U : machine->data_layout->pointer_size) ||
+            shape.object_alignment != machine->data_layout->pointer_alignment ||
             !minic_parse_c0_program_for_target(names[i], source,
                                                sizeof(source) - 1U, t,
                                                &program, &diagnostic) ||
@@ -211,11 +218,13 @@ static int verify_va_cursor_source_abi(void) {
                 &program, &source_type, &state_type) ||
             !minic_type_pointer_to(minic_type_void(), &void_pointer) ||
             !minic_type_pointer_to(state_type, &pointer_state) ||
-            !minic_data_layout_type(t->data_layout, &program, source_type,
+            !minic_data_layout_type(t, &program, source_type,
                                     &bytes, &alignment) ||
             bytes != shape.object_size || alignment != shape.object_alignment ||
             program.record_count != (opaque ? 2U : 1U) ||
-            program.array_type_count != (x86 ? 1U : 0U) ||
+            /* Opaque cursor storage materializes a char[N] array; SysV x86
+             * additionally owns its canonical one-element va_list array. */
+            program.array_type_count != (x86 ? 2U : aarch ? 1U : 0U) ||
             program.type_alias_count != 2U ||
             !minic_type_equal(program.type_aliases[0].type, source_type) ||
             !minic_type_equal(program.type_aliases[1].type, source_type) ||
@@ -236,10 +245,11 @@ static int verify_va_cursor_source_abi(void) {
         if (opaque) {
             /* ABI-state targets must never silently revert to an ordinary
              * void* source cursor when their source policy is missing. */
-            missing_policy = *t;
-            missing_source = *t->source_info;
-            missing_source.va_cursor_source_abi_policy = NULL;
-            missing_policy.source_info = &missing_source;
+            if (!minic_target_invocation_begin(&missing_policy, machine)) {
+                minic_c0_program_destroy(&program);
+                return 1;
+            }
+            missing_policy.source_info.va_cursor_source_abi_policy = NULL;
             if (minic_target_info_va_cursor_source_shape(
                     &missing_policy, &shape)) {
                 minic_c0_program_destroy(&program);
@@ -347,19 +357,19 @@ static int verify_invocation_language_abi(void) {
         MinicIntegerSign original;
         MinicType original_wchar;
         if (canonical == NULL ||
-            !minic_target_info_plain_char_sign(canonical, &original) ||
-            !minic_target_info_wide_character_type(canonical, &original_wchar) ||
             !minic_target_invocation_begin(&invocation, canonical) ||
             !minic_target_invocation_begin(&second, canonical) ||
+            !minic_target_info_plain_char_sign(&second, &original) ||
+            !minic_target_info_wide_character_type(&second, &original_wchar) ||
             !minic_target_invocation_plain_char(
                 &invocation, original == MINIC_INTEGER_SIGN_SIGNED
                     ? MINIC_INTEGER_SIGN_UNSIGNED : MINIC_INTEGER_SIGN_SIGNED) ||
             !minic_target_invocation_short_wchar(&invocation, true) ||
-            invocation.target.source_info != &invocation.source_info ||
+            invocation.machine.architecture != canonical->architecture ||
             invocation.source_info.integer_model != &invocation.integer_model ||
+            second.source_info.integer_model != &second.integer_model ||
             invocation.integer_model.plain_char_sign == original ||
             second.integer_model.plain_char_sign != original ||
-            canonical->source_info->integer_model->plain_char_sign != original ||
             !minic_type_equal(second.source_info.wide_character_type, original_wchar) ||
             !minic_target_invocation_short_wchar(&invocation, false) ||
             !minic_type_equal(invocation.source_info.wide_character_type, original_wchar))
@@ -503,17 +513,20 @@ static int verify_fixed_register_target_contract(void) {
     {
         const MinicTargetInfo *rv64 = minic_target_info_from_name("riscv64-linux");
         const MinicTargetInfo *rv32 = minic_target_info_from_name("riscv32-linux");
+        MinicTargetInvocation source_rv64, source_rv32;
         if (rv64 == NULL || rv32 == NULL ||
+            !minic_target_invocation_begin(&source_rv64, rv64) ||
+            !minic_target_invocation_begin(&source_rv32, rv32) ||
             !minic_target_info_local_fixed_register_supported(rv64, "a7", 2U) ||
             !minic_target_info_local_fixed_register_supported(rv64, "x17", 3U) ||
             minic_target_info_local_fixed_register_supported(rv64, "x7", 2U) ||
-            !minic_target_info_inline_asm_register_clobber_supported(rv64, "t2", 2U) ||
-            !minic_target_info_inline_asm_register_clobber_supported(rv64, "x7", 2U) ||
-            !minic_target_info_inline_asm_register_clobber_supported(rv64, "x31", 3U) ||
-            minic_target_info_inline_asm_register_clobber_supported(rv64, "x8", 2U) ||
-            minic_target_info_inline_asm_register_clobber_supported(rv64, "sp", 2U) ||
+            !minic_target_info_inline_asm_register_clobber_supported(&source_rv64, "t2", 2U) ||
+            !minic_target_info_inline_asm_register_clobber_supported(&source_rv64, "x7", 2U) ||
+            !minic_target_info_inline_asm_register_clobber_supported(&source_rv64, "x31", 3U) ||
+            minic_target_info_inline_asm_register_clobber_supported(&source_rv64, "x8", 2U) ||
+            minic_target_info_inline_asm_register_clobber_supported(&source_rv64, "sp", 2U) ||
             minic_target_info_local_fixed_register_supported(rv32, "x17", 3U) ||
-            minic_target_info_inline_asm_register_clobber_supported(rv32, "x7", 2U)) {
+            minic_target_info_inline_asm_register_clobber_supported(&source_rv32, "x7", 2U)) {
             (void)fprintf(stderr, "RISCV_PHYSICAL_REGISTER_ADMISSION=FAIL\n");
             return 1;
         }
@@ -533,11 +546,13 @@ static int verify_gnu_asm_immediate_target_contract(void) {
     };
     size_t i;
     for (i = 0U; i < sizeof(names) / sizeof(names[0]); ++i) {
-        const MinicTargetInfo *target = minic_target_info_from_name(names[i]);
+        MinicTargetInvocation invocation;
+        const MinicTargetInvocation *target = &invocation;
         const bool signed12 = (i == 0U || i == 1U || i == 4U);
         const bool arm = i == 3U;
         const bool x86 = i == 2U;
-        if (target == NULL ||
+        if (!minic_target_invocation_begin(
+                &invocation, minic_target_info_from_name(names[i])) ||
             minic_target_info_inline_asm_immediate_may_defer(target) != (arm || x86 || i == 4U) ||
             minic_target_info_inline_asm_immediate_constraint_supported(target, "I", 1U, -2048) != signed12 ||
             minic_target_info_inline_asm_immediate_constraint_supported(target, "I", 1U, 0) != (signed12 || arm || x86) ||
@@ -579,47 +594,54 @@ static int verify_target_asm_source_policy(void) {
     const MinicTargetInfo *arm = minic_target_info_from_name(names[3]);
     const MinicTargetInfo *loong = minic_target_info_from_name(names[4]);
     MinicTargetInfo unsupported;
-    MinicTargetSourceInfo unsupported_source;
+    MinicTargetInvocation source_rv32, source_rv64, source_x86, source_arm, source_loong;
+    MinicTargetInvocation unsupported_source;
     MinicType result, arguments[3];
     size_t argument_count, immediate_index, i;
     const char *mnemonic;
     char callee[128];
     unsigned int stage = 0U;
-    if (!rv32 || !rv64 || !x86 || !arm || !loong) return 1;
+    if (!rv32 || !rv64 || !x86 || !arm || !loong ||
+        !minic_target_invocation_begin(&source_rv32, rv32) ||
+        !minic_target_invocation_begin(&source_rv64, rv64) ||
+        !minic_target_invocation_begin(&source_x86, x86) ||
+        !minic_target_invocation_begin(&source_arm, arm) ||
+        !minic_target_invocation_begin(&source_loong, loong)) return 1;
     for (i = 0U; i < sizeof(names) / sizeof(names[0]); ++i) {
         stage = 1U;
         const MinicTargetInfo *target = minic_target_info_from_name(names[i]);
-        if (target->source_info == NULL || !target->source_info->asm_source_policy ||
+        MinicTargetInvocation source_target;
+        if (!minic_target_invocation_begin(&source_target, target) ||
+            source_target.source_info.asm_source_policy == NULL ||
             !minic_target_info_inline_asm_memory_input_constraint_supported(
-                target, "m", 1U) ||
+                &source_target, "m", 1U) ||
             minic_target_info_inline_asm_memory_input_constraint_supported(
-                target, "Q", 1U) != (target == arm)) goto failure;
+                &source_target, "Q", 1U) != (target == arm)) goto failure;
     }
     unsupported = *x86;
-    unsupported_source = *x86->source_info;
-    unsupported.source_info = &unsupported_source;
+    if (!minic_target_invocation_begin(&unsupported_source, x86)) goto failure;
     stage = 2U;
-    unsupported_source.asm_source_policy = NULL;
-    if (minic_target_info_fixed_register_supported(&unsupported, "rsp", 3U) ||
+    unsupported_source.source_info.asm_source_policy = NULL;
+    if (!minic_target_info_fixed_register_supported(&unsupported, "rsp", 3U) ||
         minic_target_info_inline_asm_memory_input_constraint_supported(
-            &unsupported, "m", 1U) ||
+            &unsupported_source, "m", 1U) ||
         minic_target_info_inline_asm_source_clobber_supported(
-            &unsupported, "cc", 2U)) goto failure;
+            &unsupported_source, "cc", 2U)) goto failure;
     stage = 3U;
     if (!minic_target_info_local_fixed_register_supported(x86, "%rax", 4U) ||
         minic_target_info_local_fixed_register_supported(x86, "%r15", 4U) ||
-        minic_target_info_inline_asm_register_clobber_supported(x86, "rbx", 3U) ||
-        !minic_target_info_inline_asm_source_clobber_supported(x86, "ebx", 3U) ||
-        !minic_target_info_inline_asm_source_clobber_supported(x86, "flags", 5U) ||
+        minic_target_info_inline_asm_register_clobber_supported(&source_x86, "rbx", 3U) ||
+        !minic_target_info_inline_asm_source_clobber_supported(&source_x86, "ebx", 3U) ||
+        !minic_target_info_inline_asm_source_clobber_supported(&source_x86, "flags", 5U) ||
         !minic_target_info_inline_asm_readwrite_hardreg_supported(
-            x86, "rsp", 3U, "+r", 2U, minic_type_unsigned_long()) ||
+            &source_x86, "rsp", 3U, "+r", 2U, minic_type_unsigned_long()) ||
         minic_target_info_inline_asm_readwrite_hardreg_supported(
-            x86, "rsp", 3U, "+r", 2U, minic_type_int())) goto failure;
+            &source_x86, "rsp", 3U, "+r", 2U, minic_type_int())) goto failure;
     stage = 4U;
     if (!minic_target_info_local_fixed_register_supported(arm, "x30", 3U) ||
         !minic_target_info_local_fixed_register_supported(arm, "r17", 3U) ||
         minic_target_info_local_fixed_register_supported(arm, "x18", 3U) ||
-        !minic_target_info_inline_asm_register_clobber_supported(arm, "cc", 2U) ||
+        !minic_target_info_inline_asm_register_clobber_supported(&source_arm, "cc", 2U) ||
         minic_target_info_fixed_register_write_supported(arm, "sp", 2U))
         goto failure;
     stage = 5U;
@@ -628,17 +650,17 @@ static int verify_target_asm_source_policy(void) {
         minic_target_info_fixed_register_write_supported(loong, "$sp", 3U) ||
         !minic_target_info_local_fixed_register_supported(loong, "a7", 2U) ||
         minic_target_info_local_fixed_register_supported(loong, "t1", 2U) ||
-        !minic_target_info_inline_asm_source_clobber_supported(loong, "$s0", 3U))
+        !minic_target_info_inline_asm_source_clobber_supported(&source_loong, "$s0", 3U))
         goto failure;
     stage = 6U;
     if (!minic_target_info_local_fixed_register_supported(rv32, "a7", 2U) ||
         minic_target_info_local_fixed_register_supported(rv32, "x17", 3U) ||
-        !minic_target_info_inline_asm_register_clobber_supported(rv32, "t6", 2U) ||
+        !minic_target_info_inline_asm_register_clobber_supported(&source_rv32, "t6", 2U) ||
         !minic_target_info_local_fixed_register_supported(rv64, "x17", 3U) ||
         minic_target_info_local_fixed_register_supported(rv64, "x7", 2U))
         goto failure;
     stage = 7U;
-    if (!minic_target_info_machine_builtin_signature(loong,
+    if (!minic_target_info_machine_builtin_signature(&source_loong,
             "__builtin_loongarch_crc_w_b_w", sizeof("__builtin_loongarch_crc_w_b_w") - 1U,
             callee, sizeof(callee), &result, arguments, &argument_count,
             &mnemonic, &immediate_index) ||
@@ -647,7 +669,7 @@ static int verify_target_asm_source_policy(void) {
         !minic_type_is_signed_integer(arguments[0]) ||
         argument_count != 2U || immediate_index != SIZE_MAX ||
         strcmp(mnemonic, "crc.w.b.w") != 0 ||
-        minic_target_info_machine_builtin_signature(x86,
+        minic_target_info_machine_builtin_signature(&source_x86,
             "__builtin_loongarch_crc_w_b_w", sizeof("__builtin_loongarch_crc_w_b_w") - 1U,
             callee, sizeof(callee), &result, arguments, &argument_count,
             &mnemonic, &immediate_index)) goto failure;
@@ -675,14 +697,14 @@ static int verify_target_asm_source_policy(void) {
         goto failure;
     stage = 9U;
     if (!minic_target_info_machine_builtin_signature(
-            loong, "__cpucfg", sizeof("__cpucfg") - 1U,
+            &source_loong, "__cpucfg", sizeof("__cpucfg") - 1U,
             callee, sizeof(callee), &result, arguments, &argument_count,
             &mnemonic, &immediate_index) ||
         strcmp(callee, "__minic_target_builtin_loongarch_cpucfg") != 0 ||
         !minic_type_equal(result, minic_type_unsigned_int()) ||
         !minic_type_equal(arguments[0], minic_type_unsigned_int()) ||
         !minic_target_info_machine_builtin_signature(
-            loong, "__iocsrrd_w", sizeof("__iocsrrd_w") - 1U,
+            &source_loong, "__iocsrrd_w", sizeof("__iocsrrd_w") - 1U,
             callee, sizeof(callee), &result, arguments, &argument_count,
             &mnemonic, &immediate_index) ||
         strcmp(callee, "__minic_target_builtin_loongarch_iocsrrd_w") != 0 ||

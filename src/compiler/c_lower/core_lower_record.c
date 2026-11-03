@@ -295,10 +295,10 @@ static MinicCoreLowerStatus lower_abi_cursor_scalar_record_va_arg(
         (!minic_type_is_integer(field->type) &&
          !minic_type_is_pointer(field->type) &&
          !minic_type_is_double(field->type)) ||
-        !minic_data_layout_type(core_data_layout(context),
+        !minic_data_layout_type(context->target,
                                 context->body->program, record_type,
                                 &record_size, &record_alignment) ||
-        !minic_data_layout_type(core_data_layout(context),
+        !minic_data_layout_type(context->target,
                                 context->body->program, field->type,
                                 &field_size, &field_alignment) ||
         record_size != field_size || record_alignment != field_alignment ||
@@ -375,13 +375,13 @@ static MinicCoreLowerStatus lower_record_va_arg_object(
         !minic_type_is_record(record_type)) {
         return MINIC_CORE_LOWER_UNSUPPORTED;
     }
-    if (context->target->variadic_scalar_read_kind ==
+    if (context->target->machine.variadic_scalar_read_kind ==
             MINIC_VARIADIC_SCALAR_READ_ABI_CURSOR)
         return lower_abi_cursor_scalar_record_va_arg(
             context, expression, record_type, object_id);
-    if (context->target->variadic_scalar_read_kind !=
+    if (context->target->machine.variadic_scalar_read_kind !=
             MINIC_VARIADIC_SCALAR_READ_LINEAR_SLOT ||
-        context->target->variadic_linear_slot_bytes == 0U)
+        context->target->machine.variadic_linear_slot_bytes == 0U)
         return MINIC_CORE_LOWER_UNSUPPORTED;
     /* A structured GP/FP cursor needs a target-specific aggregate ABI
      * classifier; reinterpreting its tag pointer as a linear record slot
@@ -392,7 +392,7 @@ static MinicCoreLowerStatus lower_record_va_arg_object(
         !minic_type_is_pointer(target->type) || minic_type_is_const(target->type) ||
         !minic_type_unqualified(target->type, &cursor_type) ||
         !minic_type_is_pointer(cursor_type) ||
-        !minic_data_layout_type(core_data_layout(context),
+        !minic_data_layout_type(context->target,
                                 context->body->program,
                                 record_type,
                                 &value_size,

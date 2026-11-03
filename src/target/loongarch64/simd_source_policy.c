@@ -127,13 +127,14 @@ static bool loong_simd_same_machine_effects(
 }
 
 bool minic_loongarch64_simd_seal_normalized(
+    const MinicTargetInvocation *invocation,
     const MinicC0Program *program, const MinicInlineAsm *source,
     const char *normalized, size_t length,
     MinicTargetInlineAsmContract *contract) {
     LoongSimdProgram original, machine;
     MinicTargetInlineAsmContract admitted = {0};
     size_t i;
-    if (program == NULL || source == NULL || normalized == NULL ||
+    if (invocation == NULL || program == NULL || source == NULL || normalized == NULL ||
         contract == NULL) return false;
     if (!minic_loongarch64_simd_parse(source->template_text, source->template_length,
                                       &original))

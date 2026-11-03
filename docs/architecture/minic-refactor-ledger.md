@@ -1666,3 +1666,56 @@ mutate C Program function/global emission flags; their complete root set
 (alias, initializer relocation, file/inline ASM, owner, clone and entry)
 must be sealed into ModuleIR and closed in one Core+Module reachability pass.
 Neither deserves a transitional C fallback in pure Core or machine Target.
+
+## IR-P31 — Invocation-owned C semantics and machine-only TargetInfo (2026-11-03)
+
+**Baseline:** P30 remote commit `3226fb0`. This batch closes the entire
+SourcePolicy/MachineTarget identity seam. It is not a five-ISA Linux runtime
+recertification and does not close the separate Core reachability ownership
+problem.
+
+- `MinicTargetInfo` now carries **only** machine ISA, ABI, codegen, byte-order
+  and register facts; delete its last `source_info` backlink. A fresh
+  `MinicTargetInvocation` owns the selected machine descriptor, immutable
+  source-language profile copy and per-compilation C integer/wchar overrides.
+  It is explicitly non-copyable after initialization because its source model
+  borrows the integer model embedded in that same invocation.
+- Frontend's complete Parser/AST/constant-evaluation family (30 files),
+  Compiler and C lowering/type-import/global payload family (32 files),
+  driver and C-specific test callers now pass one Invocation through their
+  C semantic queries. Every Core/ISA/ABI machine consumer explicitly takes
+  `&invocation.machine`; there is no old overloaded TargetInfo C interface.
+- Remove C integer-size/alignment rank arrays from machine DataLayout and
+  place them in the source-language profile. All eight C record/array/object
+  layout interfaces now take Invocation. Pure machine layouts retain only
+  ABI storage, endian, pointer, scalar, vector physical properties.
+- Five ISA-specific machine register recognition modules own the actual
+  fixed-register grammar. C SourcePolicy and machine TargetInfo register the
+  **same functions**, without a duplicate parser, canonical target roundtrip
+  or C-oriented fallback in machine code.
+- Complete the SourceBackend callbacks as a whole: x86-64/AArch64/LoongArch64
+  source ASM qualify/seal/asm-goto and LoongArch64 SIMD sealing receive the
+  active Invocation. In particular, architecture-specific ASM qualifiers no
+  longer assume default machine layouts or independently look up canonical
+  architecture descriptors when performing C type/layout checks. RISC-V
+  sources follow the same explicit SourcePolicy boundary.
+- The build/bootstrap inventories include all five machine-register units;
+  the runtime workflow path trigger covers the new x86/AArch64/Loong owners.
+
+| Gate | P31 result |
+| --- | --- |
+| Full Release `MODE=release BUILD_DIR=build/p31-strict CFLAGS=-Werror all` | **PASS**, exit 0 |
+| Frontend (30 files), Compiler/C Lower (32 files), Target (19 files), affected tests strict C11 `-Werror -fsyntax-only` | **PASS** |
+| Five-ISA target selection, C language ABI options and machine ISA/ABI options | **3/3 PASS**, 0 failures |
+| Whole Target boundary contract (`check-minic-target-boundaries.sh`) with source/machine ownership and native probes | **PASS**, exit 0 |
+| Four-target model M0 (including Invocation ABI, C va cursor and RV32 ILP32) | **PASS**, 14 subresults |
+| Source DataLayout/AST contract, pure Core types and verifier (including sanitizers) | **PASS**, CoreTypes native 4/4 + ASAN/UBSAN 4/4 |
+| Two historical RV64 Core emitters with sealed SourceBuilder | **PASS**, 187 and 287 assembly lines |
+| C DataLayout zero-size relocations/aggregates, UBSan + native + five-ISA ASM | **PASS**, both dedicated gates |
+| Loong typed descriptor, A64 source-normalized ASM seal, five-target SourceBackend registration | **PASS**, direct fixture linking against P31 strict objects |
+| GNU-preprocessed `.i` fixtures × five targets, P30 vs P31 `.s` byte equality | **10/10 identical** |
+| Five-ISA Linux Kbuild/GNU ELF/QEMU, full Debug regression | **NOT RUN** for this architecture batch |
+
+**Next whole-owner class:** seal post-lowering C root facts into Core
+FunctionSet/ModuleIR and perform one function/global reachability closure;
+no Core-stage writeback to C AST or compatibility path is permitted.

@@ -68,6 +68,13 @@ TARGET_SOURCE_POLICY_SOURCES := \
 	src/target/source_policy/aarch64.c \
 	src/target/source_policy/loongarch64.c
 
+TARGET_MACHINE_REGISTER_SOURCES := \
+	src/target/riscv32/machine_register.c \
+	src/target/riscv64/machine_register.c \
+	src/target/x86_64/machine_register.c \
+	src/target/aarch64/machine_register.c \
+	src/target/loongarch64/machine_register.c
+
 MINIC_SOURCES := \
 	src/compiler/compiler.c \
 	src/compiler/core_function_set.c \
@@ -166,6 +173,7 @@ MINIC_SOURCES := \
 	src/target/target_catalog.c \
 	src/target/target_machine_options.c \
 	$(TARGET_SOURCE_POLICY_SOURCES) \
+	$(TARGET_MACHINE_REGISTER_SOURCES) \
 	src/target/backend.c \
 	src/target/backend_source.c \
 	src/target/backend_core_usage.c \
@@ -401,6 +409,7 @@ AST_CONTRACT_TEST_SOURCES := \
 	src/target/target_info.c \
 	src/target/target_catalog.c \
 	$(TARGET_SOURCE_POLICY_SOURCES) \
+	$(TARGET_MACHINE_REGISTER_SOURCES) \
 	tests/frontend/ast_contract_test.c
 AST_CONTRACT_TEST_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(AST_CONTRACT_TEST_SOURCES))
 AST_CONTRACT_TEST_BINARY  := $(BUILD_DIR)/tests/frontend/ast-contract-test
@@ -412,6 +421,7 @@ LAYOUT_TEST_SOURCES := \
 	src/target/target_info.c \
 	src/target/target_catalog.c \
 	$(TARGET_SOURCE_POLICY_SOURCES) \
+	$(TARGET_MACHINE_REGISTER_SOURCES) \
 	tests/target/riscv64/layout_test.c
 LAYOUT_TEST_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(LAYOUT_TEST_SOURCES))
 LAYOUT_TEST_BINARY  := $(BUILD_DIR)/tests/target/riscv64/layout-test

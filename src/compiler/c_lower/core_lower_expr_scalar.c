@@ -1165,7 +1165,7 @@ MinicCoreLowerStatus minic_core_lower_try_pointer_arithmetic(
             minic_c0_pointer_difference_compatible(
                 context->body->program, left_type, right_type) &&
             minic_c0_pointer_arithmetic_element_size(context->body->program,
-                                                      core_data_layout(context),
+                                                      context->target,
                                                       left_type,
                                                       &element_size) &&
             /* M131_ZERO_STRIDE_POINTER_DIFFERENCE_FAIL_CLOSED: unlike pointer
@@ -1311,7 +1311,7 @@ MinicCoreLowerStatus minic_core_lower_try_pointer_arithmetic(
             !minic_type_unqualified(expression->type, &expression_value_type) ||
             !minic_type_equal(pointer_value_type, expression_value_type) ||
             !minic_c0_pointer_arithmetic_element_size(context->body->program,
-                                                      core_data_layout(context),
+                                                      context->target,
                                                       pointer_value_type,
                                                       &element_size)) {
             { *handled = true; return MINIC_CORE_LOWER_UNSUPPORTED; }

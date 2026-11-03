@@ -9,6 +9,7 @@
 #include "target/riscv64/core_admission.h"
 #include "target/riscv64/function_abi_plan.h"
 #include "target/target_info.h"
+#include "target/source_policy/source_info.h"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -67,14 +68,16 @@ static bool prepare_program(const char *path,
                             const TestSourceBuffer *buffer,
                             MinicC0Program *program,
                             MinicDiagnostic *diagnostic) {
-    const MinicTargetInfo *target_info;
+    MinicTargetInvocation invocation;
 
-    target_info = minic_target_info_for_architecture(MINIC_TARGET_ARCH_RISCV64);
+    if (!minic_target_invocation_begin(
+            &invocation, minic_target_info_for_architecture(MINIC_TARGET_ARCH_RISCV64)))
+        return false;
     if (!minic_parse_c0_program(path, buffer->data, buffer->size, program, diagnostic) ||
-        !minic_c0_program_verify_target(program, MINIC_C0_AST_PARSED, target_info) ||
+        !minic_c0_program_verify_target(program, MINIC_C0_AST_PARSED, &invocation) ||
         !minic_c0_program_validate_function_body_ownership(program) ||
         !minic_c0_program_normalize_casts(program) ||
-        !minic_c0_program_verify_target(program, MINIC_C0_AST_NORMALIZED, target_info) ||
+        !minic_c0_program_verify_target(program, MINIC_C0_AST_NORMALIZED, &invocation) ||
         !minic_c0_program_validate_function_body_ownership(program)) {
         return false;
     }
@@ -83,15 +86,15 @@ static bool prepare_program(const char *path,
 
 static bool emit_frontend_functions(FILE *file, const MinicC0Program *program) {
     MinicCoreFunctionSet core_set;
+    MinicTargetInvocation invocation;
     size_t function_index;
     size_t emitted_count;
     bool all_ok;
 
     minic_core_function_set_initialize(&core_set);
-    if (!minic_prepare_core_function_set(program,
-                                         minic_target_info_for_architecture(
-                                             MINIC_TARGET_ARCH_RISCV64),
-                                         &core_set)) {
+    if (!minic_target_invocation_begin(
+            &invocation, minic_target_info_for_architecture(MINIC_TARGET_ARCH_RISCV64)) ||
+        !minic_prepare_core_function_set(program, &invocation, &core_set)) {
         return false;
     }
     emitted_count = 0U;

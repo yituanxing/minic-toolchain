@@ -80,13 +80,47 @@ for arch in x86_64 aarch64 loongarch64; do
     lacks "src/target/$arch/asm_contract.h" "$symbol"
   done
 done
-has src/target/target_info.h 'const struct MinicTargetSourceInfo *source_info;'
+# P31: canonical TargetInfo is strictly machine-owned. All mutable C/GNU
+# source semantics are copied into each invocation, not stored on the machine
+# descriptor, nor inferred by a machine DataLayout integer-rank table.
+lacks src/target/target_info.h 'MinicTargetSourceInfo'
+lacks src/target/target_info.h 'source_info;'
+lacks src/target/target_info.h 'MinicTargetInvocation'
+lacks src/target/data_layout.h 'integer_size['
+lacks src/target/data_layout.h 'integer_alignment['
+has src/target/source_policy/source_info.h 'typedef struct MinicTargetInvocation {'
+has src/target/source_policy/source_info.h 'MinicTargetInfo machine;'
+has src/target/source_policy/source_info.h 'MinicTargetSourceInfo source_info;'
+has src/target/source_policy/source_info.h 'MinicTargetIntegerModel integer_model;'
+has src/target/source_policy/source_info.h 'size_t integer_size[MINIC_INTEGER_RANK_INT128 + 1U];'
+has src/target/source_policy/source_info.h 'size_t integer_alignment[MINIC_INTEGER_RANK_INT128 + 1U];'
+has src/target/source_policy/source_info.h 'minic_target_invocation_begin('
+has src/target/source_policy/target_source_info.c 'minic_source_ilp32_integer_storage'
+has src/target/source_policy/target_source_info.c 'minic_source_lp64_integer_storage'
+has src/target/source_policy/data_layout_source.c 'const MinicTargetInvocation *'
 for source in src/target/target_info.h src/target/data_layout.h; do
   lacks "$source" 'MinicType'
   lacks "$source" 'MinicC0Program'
   lacks "$source" 'frontend/type.h'
   lacks "$source" 'frontend/ast.h'
 done
+# Every ISA supplies its fixed machine register recognizers independently
+# of C declaration/lvalue admission and the SourceBackend callbacks.
+for arch in riscv32 riscv64 x86_64 aarch64 loongarch64; do
+  has src/target/target_info.c "minic_${arch}_machine_fixed_register_read"
+  has src/target/target_info.c "minic_${arch}_machine_local_fixed_register"
+done
+has src/target/target_info.c 'minic_target_machine_descriptors[]'
+has src/target/source_policy/target_source_info.c 'minic_target_source_descriptors[]'
+lacks src/target/target_info.c '#include "target/source_policy/source_info.h"'
+lacks src/target/target_info.c 'source_info'
+has src/target/backend_source.h 'const MinicTargetInvocation *, const MinicC0Program *'
+has src/target/backend_source.h 'const MinicSourceBackend *, const MinicTargetInvocation *'
+has src/target/backend_source.h 'const MinicTargetInfo *target);'
+lacks src/target/backend.h 'MinicTargetInvocation'
+has tools/minic-cc/main.c 'invocation.machine.position_independent = position_independent;'
+has tools/minic-cc/main.c 'result = minic_compile_preprocessed_file_for_target('
+lacks tools/minic-cc/main.c 'MinicTargetInfo selected_target'
 
 has src/target/loongarch64/asm_contract.c 'loong_pte_form('
 has src/target/loongarch64/asm_contract.c 'loong_pte_emit('
@@ -401,7 +435,10 @@ has src/frontend/parser_local_declarations.c 'consume_static_local_interleaved_a
 has src/frontend/parser_function.c 'has_const_qualifier'
 has src/frontend/parser_function.c '!minic_type_add_const(base_type, &base_type)'
 has src/frontend/parser_function.c '!minic_type_add_volatile(base_type, &base_type)'
-has src/target/source_policy/x86_64.c "name[0] == '%'"
+# Percent-prefixed x86 register spelling belongs to the ISA-owned machine
+# recognizer; GNU SourcePolicy reuses that recognizer without a second parser.
+has src/target/x86_64/machine_register.c "name[0] == '%'"
+has src/target/source_policy/x86_64.c 'minic_x86_64_machine_register_clobber(name, length)'
 lacks src/compiler/c_lower/core_lower_asm_target.c 'discard.addressable'
 has src/target/x86_64/asm_contract.c '"cmp%1,%2;sbb%0,%0;"'
 has src/target/x86_64/asm_contract.c 'MINIC_X86_BIT_SCAN_BSR32_TIED'
@@ -923,7 +960,7 @@ has src/target/common/core_object_storage.c '*borrowed = true;'
 # Unique program-wide DataLayout validation supersedes the obsolete
 # AST/RV64-only layout pass and requires no backend prepare callback.
 exists src/target/data_layout.c
-has src/compiler/compiler.c 'minic_data_layout_validate_program(target_info->data_layout, &program)'
+has src/compiler/compiler.c 'minic_data_layout_validate_program(invocation, &program)'
 lacks src/compiler/compiler.c 'backend->prepare_program'
 lacks src/target/backend.h 'MinicBackendPrepareProgram'
 lacks src/target/riscv64/codegen_internal.h 'target/riscv64/layout.h'

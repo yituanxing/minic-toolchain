@@ -351,7 +351,7 @@ static bool apply_integer_typedef_mode(MinicParser *parser,
         mapped = is_unsigned ? minic_type_unsigned_int128() : minic_type_int128();
     } else if (typedef_mode_name_is(mode_name, mode_name_length, "word")) {
         if (!minic_target_info_word_integer_type(
-                parser->target_info,
+                parser->invocation,
                 is_unsigned ? MINIC_INTEGER_SIGN_UNSIGNED : MINIC_INTEGER_SIGN_SIGNED,
                 &mapped)) {
             minic_parser_error(parser, "cannot resolve target GNU word integer mode");
@@ -403,7 +403,7 @@ static bool consume_typedef_attribute(MinicParser *parser,
         size_t bytes = 0U;
 
         if (!minic_target_info_language_type_supported(
-                parser->target_info, MINIC_TYPE_BASE_GNU_FIXED_VECTOR)) {
+                parser->invocation, MINIC_TYPE_BASE_GNU_FIXED_VECTOR)) {
             minic_parser_error(parser,
                                "GNU vector_size storage is unsupported on this target");
             return false;
@@ -412,9 +412,9 @@ static bool consume_typedef_attribute(MinicParser *parser,
                 parser, attribute, "vector size", &bytes)) {
             return false;
         }
-        layout = minic_target_info_data_layout(parser->target_info);
+        layout = minic_target_info_data_layout(&parser->invocation->machine);
         if (layout == NULL ||
-            !minic_data_layout_type(layout, parser->program, *context->aliased_type,
+            !minic_data_layout_type(parser->invocation, parser->program, *context->aliased_type,
                                     &element_size, &element_alignment) ||
             element_size == 0U || bytes % element_size != 0U ||
             !minic_type_gnu_fixed_vector(*context->aliased_type, bytes, &vector)) {
@@ -424,7 +424,7 @@ static bool consume_typedef_attribute(MinicParser *parser,
             return false;
         }
         (void)element_alignment;
-        if (!minic_data_layout_type(layout, parser->program, vector,
+        if (!minic_data_layout_type(parser->invocation, parser->program, vector,
                                     &element_size, &element_alignment)) {
             minic_parser_error(parser,
                                "GNU vector_size width is unsupported by target storage layout");

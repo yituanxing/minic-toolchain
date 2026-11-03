@@ -17,6 +17,20 @@ cc -I"$root/include" -I"$root/src" -std=c11 -O0 -g \
     "$root/src/frontend/type.c" \
     "$root/src/target/data_layout.c" \
     "$root/src/target/source_policy/data_layout_source.c" \
+    "$root/src/target/target_info.c" \
+    "$root/src/target/target_catalog.c" \
+    "$root/src/target/source_policy/target_source_info.c" \
+    "$root/src/target/source_policy/language_semantics.c" \
+    "$root/src/target/source_policy/riscv32.c" \
+    "$root/src/target/source_policy/riscv64.c" \
+    "$root/src/target/source_policy/x86_64.c" \
+    "$root/src/target/source_policy/aarch64.c" \
+    "$root/src/target/source_policy/loongarch64.c" \
+    "$root/src/target/riscv32/machine_register.c" \
+    "$root/src/target/riscv64/machine_register.c" \
+    "$root/src/target/x86_64/machine_register.c" \
+    "$root/src/target/aarch64/machine_register.c" \
+    "$root/src/target/loongarch64/machine_register.c" \
     "$root/tests/target/data_layout_zero_size_reloc_test.c" \
     -o "$work/layout-ubsan"
 "$work/layout-ubsan"

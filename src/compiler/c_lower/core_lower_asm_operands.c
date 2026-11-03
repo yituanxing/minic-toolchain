@@ -141,7 +141,7 @@ static const MinicExpression *core_inline_asm_strip_immediate_wrappers(
 
 static const char *core_inline_asm_symbolic_immediate_name(
     const MinicC0Program *program,
-    const MinicTargetInfo *target,
+    const MinicTargetInvocation *target,
     MinicExpressionId expression_id) {
     const MinicExpression *expression;
 
@@ -392,7 +392,7 @@ static bool core_inline_asm_symbolic_lvalue_address(
 
         if (record == NULL || base == NULL ||
             !minic_data_layout_record_field_offset(
-                minic_target_info_data_layout(context->target),
+                context->target,
                 program,
                 record,
                 expression->value.member.field_index,
@@ -474,7 +474,7 @@ static bool core_inline_asm_symbolic_lvalue_address(
         }
         if (!base_ok ||
             !minic_data_layout_type(
-                minic_target_info_data_layout(context->target),
+                context->target,
                 program,
                 element_type,
                 &element_size,

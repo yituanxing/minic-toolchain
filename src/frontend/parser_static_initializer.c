@@ -145,8 +145,8 @@ static bool static_integer_address_constant_delta(const MinicParser *parser,
     MinicConstValue value;
 
     return parser != NULL && delta != NULL &&
-           minic_const_eval_integer(parser->program, parser->target_info, expression_id, &value) &&
-           minic_const_value_as_int64(parser->program, parser->target_info, &value, delta);
+           minic_const_eval_integer(parser->program, parser->invocation, expression_id, &value) &&
+           minic_const_value_as_int64(parser->program, parser->invocation, &value, delta);
 }
 
 static bool static_integer_address_relocation_target(const MinicParser *parser,
@@ -179,11 +179,11 @@ static bool static_integer_address_relocation_target(const MinicParser *parser,
         MinicExpressionId selected_id;
 
         if (!minic_const_eval_integer(parser->program,
-                                      parser->target_info,
+                                      parser->invocation,
                                       expression->value.conditional.condition,
                                       &condition) ||
             !minic_const_value_is_zero(
-                parser->program, parser->target_info, &condition, &is_zero)) {
+                parser->program, parser->invocation, &condition, &is_zero)) {
             return false;
         }
         selected_id = !is_zero && expression->value.conditional.uses_condition_value
@@ -230,9 +230,9 @@ static bool static_integer_address_slot_supported(const MinicParser *parser, Min
     size_t alignment;
     size_t size;
 
-    layout = parser == NULL ? NULL : minic_target_info_data_layout(parser->target_info);
+    layout = parser == NULL ? NULL : minic_target_info_data_layout(&parser->invocation->machine);
     return layout != NULL && minic_type_is_integer(type) &&
-           minic_data_layout_type(layout, parser->program, type, &size, &alignment) &&
+           minic_data_layout_type(parser->invocation, parser->program, type, &size, &alignment) &&
            size == layout->pointer_size;
 }
 
@@ -269,14 +269,14 @@ static bool parse_static_integer_address_value(MinicParser *parser,
     }
     (void)memset(value, 0, sizeof(*value));
     value->function_id = MINIC_FUNCTION_INVALID;
-    if (minic_const_eval_integer(parser->program, parser->target_info,
+    if (minic_const_eval_integer(parser->program, parser->invocation,
                                  expression_id, &constant) &&
-        minic_const_value_convert_integer(parser->program, parser->target_info,
+        minic_const_value_convert_integer(parser->program, parser->invocation,
                                           &constant, type, &converted)) {
         value->bits = converted.bits;
         return true;
     }
-    if (minic_const_eval_arithmetic_to_integer(parser->program, parser->target_info,
+    if (minic_const_eval_arithmetic_to_integer(parser->program, parser->invocation,
                                                 expression_id, type, &converted)) {
         value->bits = converted.bits;
         return true;
@@ -709,7 +709,7 @@ bool minic_parser_static_string_element_compatible(MinicParser *parser,
         return minic_type_is_char_integer(unqualified_type);
     }
     return literal_kind == MINIC_TOKEN_WIDE_STRING_LITERAL &&
-           minic_target_info_wide_character_type(parser->target_info, &expected_type) &&
+           minic_target_info_wide_character_type(parser->invocation, &expected_type) &&
            minic_type_equal(unqualified_type, expected_type);
 }
 

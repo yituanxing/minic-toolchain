@@ -60,7 +60,7 @@ bool minic_parser_parse_typed_integer_constant_expression(MinicParser *parser, i
         !minic_parser_parse_expression(parser, &expression_id, 0U)) {
         return false;
     }
-    if (!minic_const_eval_integer(parser->program, parser->target_info, expression_id, &constant)) {
+    if (!minic_const_eval_integer(parser->program, parser->invocation, expression_id, &constant)) {
         const char *trace = getenv("CORE_FAST_TRACE");
 
         if (trace != NULL && trace[0] != '\0' && strcmp(trace, "0") != 0) {
@@ -87,7 +87,7 @@ bool minic_parser_parse_typed_integer_constant_expression(MinicParser *parser, i
         minic_parser_error(parser, "expected integer constant expression");
         return false;
     }
-    if (!minic_const_value_as_int64(parser->program, parser->target_info, &constant, value)) {
+    if (!minic_const_value_as_int64(parser->program, parser->invocation, &constant, value)) {
         minic_parser_error(parser, "integer constant expression exceeds supported 64-bit range");
         return false;
     }
@@ -119,15 +119,15 @@ bool minic_parser_parse_integer_initializer_bits(MinicParser *parser,
         return false;
     }
     if (minic_const_eval_integer(
-            parser->program, parser->target_info, expression_id, &constant)) {
+            parser->program, parser->invocation, expression_id, &constant)) {
         if (!minic_const_value_convert_integer(
-                parser->program, parser->target_info, &constant, target_type, &converted)) {
+                parser->program, parser->invocation, &constant, target_type, &converted)) {
             minic_parser_error(parser,
                                "integer initializer constant cannot be converted to target type");
             return false;
         }
     } else if (!minic_const_eval_arithmetic_to_integer(parser->program,
-                                                       parser->target_info,
+                                                       parser->invocation,
                                                        expression_id,
                                                        target_type,
                                                        &converted)) {

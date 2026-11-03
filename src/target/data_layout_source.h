@@ -5,17 +5,14 @@
 #include "frontend/type.h"
 
 /* Source object traversal and C nominal-record semantics are never part of
- * a machine TargetInfo include. Their sole implementation is data_layout.c. */
+ * machine TargetInfo. Their implementation is source_policy/data_layout_source.c. */
 typedef struct MinicC0Program MinicC0Program;
 typedef struct MinicGlobalObject MinicGlobalObject;
 typedef struct MinicRecord MinicRecord;
 typedef struct MinicGlobalRelocation MinicGlobalRelocation;
+struct MinicTargetInvocation;
 
-_Static_assert(MINIC_DATA_LAYOUT_INTEGER_RANK_SLOTS ==
-                   (unsigned int)MINIC_INTEGER_RANK_INT128 + 1U,
-               "machine DataLayout rank slots must match source C rank IDs");
-
-bool minic_data_layout_type(const MinicDataLayout *layout,
+bool minic_data_layout_type(const struct MinicTargetInvocation *invocation,
                             const MinicC0Program *program,
                             MinicType type,
                             size_t *size,
@@ -30,35 +27,35 @@ typedef enum MinicDataLayoutProgramCheck {
     MINIC_DATA_LAYOUT_PROGRAM_INVALID_GLOBAL
 } MinicDataLayoutProgramCheck;
 MinicDataLayoutProgramCheck minic_data_layout_validate_program(
-    const MinicDataLayout *, const MinicC0Program *);
+    const struct MinicTargetInvocation *, const MinicC0Program *);
 
-bool minic_data_layout_global_object(const MinicDataLayout *layout,
+bool minic_data_layout_global_object(const struct MinicTargetInvocation *invocation,
                                      const MinicC0Program *program,
                                      const MinicGlobalObject *object,
                                      size_t *size,
                                      size_t *alignment);
-bool minic_data_layout_record_field_alignment(const MinicDataLayout *layout,
+bool minic_data_layout_record_field_alignment(const struct MinicTargetInvocation *invocation,
                                               const MinicC0Program *program,
                                               const MinicRecord *record,
                                               size_t field_index,
                                               size_t *alignment);
-bool minic_data_layout_record_field_layout(const MinicDataLayout *layout,
+bool minic_data_layout_record_field_layout(const struct MinicTargetInvocation *invocation,
                                            const MinicC0Program *program,
                                            const MinicRecord *record,
                                            size_t field_index,
                                            size_t *offset,
                                            size_t *bit_offset);
-bool minic_data_layout_record_field_offset(const MinicDataLayout *layout,
+bool minic_data_layout_record_field_offset(const struct MinicTargetInvocation *invocation,
                                            const MinicC0Program *program,
                                            const MinicRecord *record,
                                            size_t field_index,
                                            size_t *offset);
-bool minic_data_layout_global_relocation_offset(const MinicDataLayout *layout,
+bool minic_data_layout_global_relocation_offset(const struct MinicTargetInvocation *invocation,
                                                 const MinicC0Program *program,
                                                 const MinicGlobalObject *object,
                                                 const MinicGlobalRelocation *relocation,
                                                 size_t *offset);
-bool minic_data_layout_global_relocation_target_addend(const MinicDataLayout *layout,
+bool minic_data_layout_global_relocation_target_addend(const struct MinicTargetInvocation *invocation,
                                                        const MinicC0Program *program,
                                                        const MinicGlobalRelocation *relocation,
                                                        int64_t *addend);

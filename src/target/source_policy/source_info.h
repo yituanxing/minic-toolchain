@@ -64,6 +64,9 @@ typedef struct MinicTargetSourceInfo {
     const struct MinicTargetSourceLanguagePolicy *source_language_policy;
     const struct MinicTargetVaCursorSourceAbiPolicy *va_cursor_source_abi_policy;
     const MinicTargetIntegerModel *integer_model;
+    /* C scalar storage ranks belong to source semantics, not machine layout. */
+    size_t integer_size[MINIC_INTEGER_RANK_INT128 + 1U];
+    size_t integer_alignment[MINIC_INTEGER_RANK_INT128 + 1U];
     MinicType wide_character_type;
     MinicType libc_size_type;
     MinicIntegerRank word_integer_rank;
@@ -74,9 +77,10 @@ typedef struct MinicTargetSourceInfo {
 } MinicTargetSourceInfo;
 
 /* Per-invocation source overrides copy the immutable source registration.
- * Canonical targets and previous invocation targets are never mutated. */
+ * Canonical targets and previous invocation targets are never mutated.
+ * Non-copyable after begin(): source_info.integer_model points into this object. */
 typedef struct MinicTargetInvocation {
-    MinicTargetInfo target;
+    MinicTargetInfo machine;
     MinicTargetSourceInfo source_info;
     MinicTargetIntegerModel integer_model;
     MinicType default_wide_character_type;
@@ -90,85 +94,85 @@ bool minic_target_invocation_short_wchar(MinicTargetInvocation *invocation,
                                          bool enabled);
 
 const MinicTargetIntegerModel *minic_target_info_integer_model(
-    const MinicTargetInfo *target);
+    const MinicTargetInvocation *target);
 bool minic_target_info_language_type_supported(
-    const MinicTargetInfo *target, MinicTypeBaseKind kind);
+    const MinicTargetInvocation *target, MinicTypeBaseKind kind);
 bool minic_target_info_named_builtin_type(
-    const MinicTargetInfo *target,
+    const MinicTargetInvocation *target,
     const char *spelling, size_t length, MinicType *type);
 bool minic_target_info_header_opaque_vector_return(
-    const MinicTargetInfo *target, MinicType return_type);
+    const MinicTargetInvocation *target, MinicType return_type);
 bool minic_target_info_machine_builtin_signature(
-    const MinicTargetInfo *target, const char *spelling, size_t length,
+    const MinicTargetInvocation *target, const char *spelling, size_t length,
     char *callee, size_t callee_capacity, MinicType *result,
     MinicType arguments[3], size_t *argument_count,
     const char **mnemonic, size_t *immediate_index);
 bool minic_target_info_header_attribute_supported(
-    const MinicTargetInfo *target, const char *spelling, size_t length);
+    const MinicTargetInvocation *target, const char *spelling, size_t length);
 bool minic_target_info_gnu_function_security_attribute_supported(
-    const MinicTargetInfo *target, const char *attribute, size_t length);
+    const MinicTargetInvocation *target, const char *attribute, size_t length);
 bool minic_target_info_gnu_function_security_attribute_value_supported(
-    const MinicTargetInfo *target, MinicTargetGnuFunctionAttributeKind kind,
+    const MinicTargetInvocation *target, MinicTargetGnuFunctionAttributeKind kind,
     const char *value, size_t value_length);
 bool minic_target_info_gnu_pragma_target_options(
-    const MinicTargetInfo *target, const char *value, size_t value_length,
+    const MinicTargetInvocation *target, const char *value, size_t value_length,
     const MinicTargetGnuPragmaOptionState *current,
     MinicTargetGnuPragmaOptionState *next);
 bool minic_target_info_function_pointer_calling_convention_declaration_supported(
-    const MinicTargetInfo *target, MinicFunctionCallingConvention convention);
+    const MinicTargetInvocation *target, MinicFunctionCallingConvention convention);
 bool minic_target_info_va_cursor_source_shape(
-    const MinicTargetInfo *target, MinicVaCursorSourceShape *shape);
+    const MinicTargetInvocation *target, MinicVaCursorSourceShape *shape);
 bool minic_target_info_va_cursor_source_type_supported(
-    const MinicTargetInfo *target, const MinicC0Program *program, MinicType type);
+    const MinicTargetInvocation *target, const MinicC0Program *program, MinicType type);
 bool minic_target_info_va_cursor_source_operand_supported(
-    const MinicTargetInfo *target, const MinicC0Program *program,
+    const MinicTargetInvocation *target, const MinicC0Program *program,
     MinicType type, bool is_lvalue);
 bool minic_target_info_plain_char_sign(
-    const MinicTargetInfo *target, MinicIntegerSign *sign);
-bool minic_target_info_plain_char_type(const MinicTargetInfo *target, MinicType *type);
+    const MinicTargetInvocation *target, MinicIntegerSign *sign);
+bool minic_target_info_plain_char_type(const MinicTargetInvocation *target, MinicType *type);
 bool minic_target_info_wide_character_type(
-    const MinicTargetInfo *target, MinicType *type);
+    const MinicTargetInvocation *target, MinicType *type);
 bool minic_target_info_word_integer_type(
-    const MinicTargetInfo *target, MinicIntegerSign sign, MinicType *type);
+    const MinicTargetInvocation *target, MinicIntegerSign sign, MinicType *type);
 bool minic_target_info_function_alias_abi_compatible(
-    const MinicTargetInfo *target, const MinicC0Program *program,
+    const MinicTargetInvocation *target, const MinicC0Program *program,
     const MinicFunction *alias, const MinicFunction *owner);
 bool minic_target_info_sizeof_type(
-    const MinicTargetInfo *target, const MinicC0Program *program,
+    const MinicTargetInvocation *target, const MinicC0Program *program,
     MinicType type, size_t *size);
 bool minic_target_info_integer_width(
-    const MinicTargetInfo *target, const MinicC0Program *program,
+    const MinicTargetInvocation *target, const MinicC0Program *program,
     MinicType type, unsigned int *bits);
 bool minic_target_info_integer_promotion(
-    const MinicTargetInfo *target, MinicType type, MinicType *result);
+    const MinicTargetInvocation *target, MinicType type, MinicType *result);
 bool minic_target_info_integer_promotion_for_program(
-    const MinicTargetInfo *target, const MinicC0Program *program,
+    const MinicTargetInvocation *target, const MinicC0Program *program,
     MinicType type, MinicType *result);
 bool minic_target_info_integer_common(
-    const MinicTargetInfo *target,
+    const MinicTargetInvocation *target,
     MinicType left, MinicType right, MinicType *result);
 bool minic_target_info_integer_common_for_program(
-    const MinicTargetInfo *target, const MinicC0Program *program,
+    const MinicTargetInvocation *target, const MinicC0Program *program,
     MinicType left, MinicType right, MinicType *result);
 bool minic_target_info_integer_literal_type(
-    const MinicTargetInfo *target, MinicIntegerLiteralBase base,
+    const MinicTargetInvocation *target, MinicIntegerLiteralBase base,
     bool has_unsigned_suffix, unsigned int long_count,
     uint64_t value, MinicType *result);
 bool minic_target_info_inline_asm_readwrite_hardreg_supported(
-    const MinicTargetInfo *, const char *, size_t,
+    const MinicTargetInvocation *, const char *, size_t,
     const char *, size_t, MinicType);
 bool minic_target_info_inline_asm_source_clobber_supported(
-    const MinicTargetInfo *target, const char *name, size_t name_length);
+    const MinicTargetInvocation *target, const char *name, size_t name_length);
 bool minic_target_info_inline_asm_register_clobber_supported(
-    const MinicTargetInfo *target, const char *name, size_t name_length);
+    const MinicTargetInvocation *target, const char *name, size_t name_length);
 bool minic_target_info_inline_asm_memory_input_constraint_supported(
-    const MinicTargetInfo *target, const char *constraint, size_t constraint_length);
+    const MinicTargetInvocation *target, const char *constraint, size_t constraint_length);
 bool minic_target_info_inline_asm_immediate_may_defer(
-    const MinicTargetInfo *target);
+    const MinicTargetInvocation *target);
 const char *minic_target_info_inline_asm_immediate_constraint_diagnostic(
-    const MinicTargetInfo *target);
+    const MinicTargetInvocation *target);
 bool minic_target_info_inline_asm_immediate_constraint_supported(
-    const MinicTargetInfo *target, const char *constraint,
+    const MinicTargetInvocation *target, const char *constraint,
     size_t constraint_length, int64_t value);
 
 #endif

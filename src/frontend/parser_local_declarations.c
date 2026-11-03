@@ -317,9 +317,9 @@ static bool parse_local_array_bound_or_vla(MinicParser *parser,
         return false;
     }
 
-    if (minic_const_eval_integer(parser->program, parser->target_info, bound_id, &constant)) {
+    if (minic_const_eval_integer(parser->program, parser->invocation, bound_id, &constant)) {
         if (!minic_const_value_as_int64(
-                parser->program, parser->target_info, &constant, &value)) {
+                parser->program, parser->invocation, &constant, &value)) {
             minic_parser_error(parser, "array bound exceeds target object range");
             return false;
         }
@@ -383,7 +383,7 @@ static bool materialize_dynamic_local_array(MinicParser *parser,
         local_snapshot.is_register_storage || local_snapshot.explicit_alignment != 0U ||
         !minic_type_is_integer(bound_snapshot.type) ||
         !minic_target_info_sizeof_type(
-            parser->target_info, parser->program, local_snapshot.type, &element_size) ||
+            parser->invocation, parser->program, local_snapshot.type, &element_size) ||
         element_size == 0U ||
         !minic_type_pointer_to(local_snapshot.type, &pointer_type) ||
         !minic_type_pointer_to(minic_type_void(), &void_pointer_type)) {
@@ -630,7 +630,7 @@ parse_local_declarator(MinicParser *parser,
     }
     if (has_fixed_register_binding &&
         !minic_target_info_local_fixed_register_supported(
-            parser->target_info, fixed_register_name, fixed_register_name_length)) {
+            &parser->invocation->machine, fixed_register_name, fixed_register_name_length)) {
         minic_parser_error(parser, "local fixed register binding is not supported by this target");
         return false;
     }

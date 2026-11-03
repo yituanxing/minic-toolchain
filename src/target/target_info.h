@@ -4,6 +4,7 @@
 #include "common/call_frame_address.h"
 #include "common/calling_convention.h"
 #include "target/data_layout.h"
+#include "target/machine_register.h"
 #include "target/riscv/isa_features.h"
 #include "target/target_catalog.h"
 
@@ -31,7 +32,6 @@ typedef enum MinicTargetCallCapability {
 } MinicTargetCallCapability;
 
 struct MinicCoreModule;
-struct MinicTargetSourceInfo;
 struct MinicTargetInfo;
 
 /* Query a sealed machine-internal builtin name, never a C signature. */
@@ -41,9 +41,11 @@ typedef bool (*MinicTargetMachineBuiltinFormLookup)(
 
 typedef struct MinicTargetInfo {
     MinicTargetArchitecture architecture;
-    /* Opaque to the machine side. Source-only C types, spelling policy and
-     * per-invocation C language state live in source_policy/source_info.h. */
-    const struct MinicTargetSourceInfo *source_info;
+    /* Exact machine-recognized fixed-register forms, shared with SourcePolicy
+     * through the ISA-owned recognizer, never a pointer to C source state. */
+    MinicMachineRegisterRecognizer fixed_register_read;
+    MinicMachineRegisterRecognizer fixed_register_write;
+    MinicMachineRegisterRecognizer local_fixed_register;
     MinicTargetMachineBuiltinFormLookup machine_builtin_form_lookup;
     const MinicDataLayout *data_layout;
     unsigned int call_lowering_capabilities;

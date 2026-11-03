@@ -352,7 +352,7 @@ bool minic_parser_control_parse_switch(MinicParser *parser) {
     selector_expression = minic_c0_program_expression(parser->program, statement.expression);
     if (selector_expression == NULL ||
         !minic_target_info_integer_promotion_for_program(
-            parser->target_info, parser->program, selector_expression->type, &selector_type)) {
+            parser->invocation, parser->program, selector_expression->type, &selector_type)) {
         minic_parser_error(parser, "cannot determine promoted switch selector type");
         return false;
     }
@@ -372,10 +372,10 @@ static bool case_integer_constant_value(const MinicParser *parser,
     MinicConstValue converted;
 
     if (parser == NULL || context == NULL || parser->program == NULL ||
-        parser->target_info == NULL || value == NULL ||
-        !minic_const_eval_integer(parser->program, parser->target_info, expression_id, &constant) ||
+        parser->invocation == NULL || value == NULL ||
+        !minic_const_eval_integer(parser->program, parser->invocation, expression_id, &constant) ||
         !minic_const_value_convert_integer(parser->program,
-                                           parser->target_info,
+                                           parser->invocation,
                                            &constant,
                                            context->selector_type,
                                            &converted)) {
@@ -385,7 +385,7 @@ static bool case_integer_constant_value(const MinicParser *parser,
         int64_t signed_value;
 
         if (!minic_const_value_as_int64(
-                parser->program, parser->target_info, &converted, &signed_value)) {
+                parser->program, parser->invocation, &converted, &signed_value)) {
             return false;
         }
         (void)memcpy(value, &signed_value, sizeof(*value));

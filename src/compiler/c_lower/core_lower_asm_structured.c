@@ -459,7 +459,8 @@ MinicCoreLowerStatus core_asm_try_structured_roles_and_asm_goto(
      * label destinations as Core blocks. Neither form may silently lower
      * a GNU immediate into a runtime SSA register. */
     if (minic_source_backend_qualify_inline_asm_goto(
-            minic_source_backend_for_target(context->target),
+            minic_source_backend_for_target(&context->target->machine),
+            context->target,
             context->body->program, source)) {
         char immediate_buffers[3][MINIC_CORE_IMMEDIATE_TEXT_LIMIT];
         const char *resolved[3] = {NULL, NULL, NULL};

@@ -185,28 +185,30 @@ bool minic_source_backend_capture_asm_operand_source(
 }
 
 bool minic_source_backend_qualify_inline_asm(
-    const MinicSourceBackend *backend, const MinicC0Program *program,
+    const MinicSourceBackend *backend, const MinicTargetInvocation *invocation,
+    const MinicC0Program *program,
     const MinicInlineAsm *source, MinicTargetInlineAsmContract *contract) {
-    if (!backend || !program || !source || !contract ||
+    if (!backend || !invocation || !program || !source || !contract ||
         !backend->qualify_inline_asm) return false;
     memset(contract, 0, sizeof(*contract));
-    return backend->qualify_inline_asm(program, source, contract) &&
+    return backend->qualify_inline_asm(invocation, program, source, contract) &&
            minic_source_backend_capture_asm_operand_source(
                source, MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED, contract);
 }
 
 bool minic_source_backend_seal_normalized_inline_asm(
-    const MinicSourceBackend *backend, const MinicC0Program *program,
+    const MinicSourceBackend *backend, const MinicTargetInvocation *invocation,
+    const MinicC0Program *program,
     const MinicInlineAsm *source, const char *normalized, size_t length,
     MinicTargetInlineAsmContract *contract) {
     MinicTargetInlineAsmContract before, after;
-    if (!backend || !program || !source || !normalized || !contract ||
+    if (!backend || !invocation || !program || !source || !normalized || !contract ||
         contract->owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED)
         return false;
     if (!backend->seal_normalized_inline_asm) return true;
     before = *contract;
     if (!backend->seal_normalized_inline_asm(
-            program, source, normalized, length, contract))
+            invocation, program, source, normalized, length, contract))
         return false;
     /* A machine seal cannot change already-qualified operand/effect facts. */
     after = *contract;
@@ -251,10 +253,11 @@ bool minic_source_backend_requires_qualified_input_asm(
 }
 
 bool minic_source_backend_qualify_inline_asm_goto(
-    const MinicSourceBackend *backend, const MinicC0Program *program,
+    const MinicSourceBackend *backend, const MinicTargetInvocation *invocation,
+    const MinicC0Program *program,
     const MinicInlineAsm *source) {
-    return backend && backend->qualify_inline_asm_goto &&
-           backend->qualify_inline_asm_goto(program, source);
+    return backend && invocation && backend->qualify_inline_asm_goto &&
+           backend->qualify_inline_asm_goto(invocation, program, source);
 }
 
 bool minic_source_backend_clone_safe_opaque_asm(

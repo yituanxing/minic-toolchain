@@ -332,8 +332,8 @@ static bool parse_array_designator_bound(MinicParser *parser,
 
     if (parser == NULL || bound == NULL ||
         !minic_parser_parse_expression(parser, &expression_id, 0U) ||
-        !minic_const_eval_integer(parser->program, parser->target_info, expression_id, &constant) ||
-        !minic_const_value_as_int64(parser->program, parser->target_info, &constant, &value)) {
+        !minic_const_eval_integer(parser->program, parser->invocation, expression_id, &constant) ||
+        !minic_const_value_as_int64(parser->program, parser->invocation, &constant, &value)) {
         if (parser != NULL && parser->diagnostic != NULL &&
             parser->diagnostic->message[0] == '\0') {
             minic_parser_error(parser, "array designator requires an integer constant expression");

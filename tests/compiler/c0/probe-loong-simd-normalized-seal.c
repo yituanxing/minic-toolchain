@@ -17,9 +17,11 @@ const MinicExpression *minic_c0_program_expression(
 }
 
 static bool forged_effect_seal(
+    const MinicTargetInvocation *invocation,
     const MinicC0Program *program, const MinicInlineAsm *source,
     const char *normalized, size_t length,
     MinicTargetInlineAsmContract *contract) {
+    (void)invocation;
     (void)program;
     (void)source;
     (void)normalized;
@@ -57,6 +59,11 @@ static int run(void) {
     MinicInlineAsm source = {0};
     MinicTargetInlineAsmContract contract = {0};
     MinicSourceBackend backend = {0};
+    /* This isolated SIMD machine-effects proof does not consult source ABI
+     * policy. Its source qualifier requires a present invocation, while the
+     * canonical target registrations are checked by the M0 ABI suite. */
+    MinicTargetInvocation invocation = {0};
+    invocation.machine.architecture = MINIC_TARGET_ARCH_LOONGARCH64;
     backend.seal_normalized_inline_asm = minic_loongarch64_simd_seal_normalized;
     REQUIRE(minic_type_pointer_to(minic_type_unsigned_char(), &pointer));
     expressions[0].type = pointer;
@@ -84,7 +91,7 @@ static int run(void) {
     REQUIRE(minic_source_backend_capture_asm_operand_source(
         &source, MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED, &contract));
     REQUIRE(minic_source_backend_seal_normalized_inline_asm(
-        &backend, &program, &source, named_numeric,
+        &backend, &invocation, &program, &source, named_numeric,
         sizeof(named_numeric)-1U, &contract));
     REQUIRE(contract.target_machine_form_id == MINIC_LOONG_MACHINE_ASM_SIMD);
     REQUIRE(contract.target_machine_form_variant == MINIC_LOONG_MACHINE_SIMD_LSX);
@@ -92,16 +99,16 @@ static int run(void) {
     contract.target_machine_form_id = 0U;
     contract.target_machine_form_variant = 0U;
     REQUIRE(!minic_source_backend_seal_normalized_inline_asm(
-        &backend, &program, &source, forged_register,
+        &backend, &invocation, &program, &source, forged_register,
         sizeof(forged_register)-1U, &contract));
     REQUIRE(contract.target_machine_form_id == 0U);
     REQUIRE(!minic_source_backend_seal_normalized_inline_asm(
-        &backend, &program, &source, forged_instruction,
+        &backend, &invocation, &program, &source, forged_instruction,
         sizeof(forged_instruction)-1U, &contract));
     REQUIRE(contract.target_machine_form_id == 0U);
     backend.seal_normalized_inline_asm = forged_effect_seal;
     REQUIRE(!minic_source_backend_seal_normalized_inline_asm(
-        &backend, &program, &source, named_numeric,
+        &backend, &invocation, &program, &source, named_numeric,
         sizeof(named_numeric)-1U, &contract));
     backend.seal_normalized_inline_asm = minic_loongarch64_simd_seal_normalized;
 
@@ -126,7 +133,7 @@ static int run(void) {
         &source, MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED, &contract));
     REQUIRE(contract.effective_memory_effect);
     REQUIRE(minic_source_backend_seal_normalized_inline_asm(
-        &backend, &program, &source, numeric_rw,
+        &backend, &invocation, &program, &source, numeric_rw,
         sizeof(numeric_rw)-1U, &contract));
     REQUIRE(contract.target_machine_form_id == MINIC_LOONG_MACHINE_ASM_SIMD);
     return 0;

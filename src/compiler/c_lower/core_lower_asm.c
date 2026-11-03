@@ -265,7 +265,7 @@ MinicCoreLowerStatus minic_core_lower_inline_asm(MinicCoreLowerContext *context,
      * This is one shared ownership gate, with ISA mnemonics supplied solely
      * by each backend descriptor (not Frontend/Core arch conditionals). */
     if (minic_source_backend_requires_qualified_input_asm(
-            minic_source_backend_for_target(context->target), source)) {
+            minic_source_backend_for_target(&context->target->machine), source)) {
         core_asm_trace_frontier(context, source, "target_required");
         return MINIC_CORE_LOWER_UNSUPPORTED;
     }

@@ -30,7 +30,7 @@ typedef struct MinicCoreLocalIntegerConstant {
 typedef struct MinicCoreLowerContext {
     const MinicFunctionBodyView *body;
     const MinicFunction *source_function;
-    const MinicTargetInfo *target;
+    const MinicTargetInvocation *target;
     MinicCoreReentryIndex *reentry_index; /* Borrowed from Core Function Set. */
     /* Only the source-to-Core lowering adapter owns C type ingress.  Generic
      * Core construction uses the separately named source-neutral function. */

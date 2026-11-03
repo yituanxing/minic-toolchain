@@ -94,7 +94,7 @@ static bool parse_gnu_inline_asm_output(MinicParser *parser, MinicInlineAsmId in
     }
     operand_expression = minic_c0_program_expression(parser->program, operand_id);
     if (!minic_c0_inline_asm_output_value_supported(
-            parser->program, parser->target_info, operand_expression,
+            parser->program, parser->invocation, operand_expression,
             constraint, constraint_length)) {
         free(constraint);
         minic_parser_error(parser, "GNU asm output operand requires an lvalue");
@@ -150,7 +150,7 @@ static bool parse_gnu_inline_asm_input(MinicParser *parser, MinicInlineAsmId inl
     }
     operand_expression = minic_c0_program_expression(parser->program, operand_id);
     if (!minic_c0_inline_asm_input_value_supported(
-            parser->target_info, operand_expression, constraint, constraint_length)) {
+            parser->invocation, operand_expression, constraint, constraint_length)) {
         free(constraint);
         minic_parser_error(parser,
                            "GNU asm input operand currently requires an integer or pointer");
@@ -165,19 +165,19 @@ static bool parse_gnu_inline_asm_input(MinicParser *parser, MinicInlineAsmId inl
 
         operand_span = operand_expression->span;
         is_constant = minic_const_eval_integer(
-            parser->program, parser->target_info, operand_id, &constant) &&
+            parser->program, parser->invocation, operand_id, &constant) &&
             minic_const_value_as_int64(
-                parser->program, parser->target_info, &constant, &immediate_value);
+                parser->program, parser->invocation, &constant, &immediate_value);
         if (is_constant) {
             /* Even in an inline helper, a known but illegal immediate must
              * not be accepted as deferred target assembly. */
             if (!minic_target_info_inline_asm_immediate_constraint_supported(
-                    parser->target_info, constraint, constraint_length, immediate_value)) {
+                    parser->invocation, constraint, constraint_length, immediate_value)) {
                 free(constraint);
                 minic_parser_error(
                     parser, "%s",
                     minic_target_info_inline_asm_immediate_constraint_diagnostic(
-                        parser->target_info));
+                        parser->invocation));
                 return false;
             }
             (void)memset(&folded, 0, sizeof(folded));
@@ -191,12 +191,12 @@ static bool parse_gnu_inline_asm_input(MinicParser *parser, MinicInlineAsmId inl
                 minic_parser_error(parser, "cannot store GNU asm immediate operand");
                 return false;
             }
-        } else if (!minic_target_info_inline_asm_immediate_may_defer(parser->target_info)) {
+        } else if (!minic_target_info_inline_asm_immediate_may_defer(parser->invocation)) {
             free(constraint);
             minic_parser_error(
                 parser, "%s",
                 minic_target_info_inline_asm_immediate_constraint_diagnostic(
-                    parser->target_info));
+                    parser->invocation));
             return false;
         }
         /* For a GNU always-inline function, a target I-constraint may become
@@ -396,7 +396,7 @@ bool minic_parser_gnu_inline_asm_statement(MinicParser *parser) {
             if (clobber_length == 6U && memcmp(clobber, "memory", 6U) == 0) {
                 has_memory_clobber = true;
             } else if (!minic_target_info_inline_asm_source_clobber_supported(
-                           parser->target_info, clobber, clobber_length)) {
+                           parser->invocation, clobber, clobber_length)) {
                 /* Fail closed, but identify the actual physical register or
                  * special token. Previously 771 three-ISA Linux failures all
                  * collapsed to one un-actionable identical diagnostic. No

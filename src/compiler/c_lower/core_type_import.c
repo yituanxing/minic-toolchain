@@ -12,17 +12,18 @@ static bool import_type(MinicCoreTypeImporter *importer, MinicType source,
 
 bool minic_core_type_importer_initialize(MinicCoreTypeImporter *importer,
                                         const MinicC0Program *program,
-                                        const MinicDataLayout *layout,
+                                        const MinicTargetInvocation *invocation,
                                         MinicCoreTypeContext *context) {
     size_t i;
     if (importer == NULL) return false;
     (void)memset(importer, 0, sizeof(*importer));
-    if (program == NULL || layout == NULL || context == NULL) {
+    if (program == NULL || invocation == NULL ||
+        invocation->machine.data_layout == NULL || context == NULL) {
         importer->failed = true;
         return false;
     }
     importer->program = program;
-    importer->layout = layout;
+    importer->invocation = invocation;
     importer->context = context;
     importer->record_count = program->record_count;
     importer->function_count = program->function_type_count;
@@ -74,7 +75,7 @@ void minic_core_type_importer_destroy(MinicCoreTypeImporter *importer) {
 
 static bool source_layout(MinicCoreTypeImporter *importer, MinicType source,
                           MinicCoreType *type) {
-    if (!minic_data_layout_type(importer->layout, importer->program,
+    if (!minic_data_layout_type(importer->invocation, importer->program,
                                 source, &type->size, &type->alignment))
         return false;
     type->has_layout = true;
@@ -186,9 +187,9 @@ static bool import_record(MinicCoreTypeImporter *importer, MinicType source,
                             field->is_flexible_array
                                 ? array_info.element_type : field->type;
         if (!import_type(importer, field->type, &field_type, depth + 1U) ||
-            !minic_data_layout_type(importer->layout, importer->program,
+            !minic_data_layout_type(importer->invocation, importer->program,
                                     field_layout_type, &field_size, &field_alignment) ||
-            !minic_data_layout_record_field_layout(importer->layout, importer->program,
+            !minic_data_layout_record_field_layout(importer->invocation, importer->program,
                                                    record, i, &fields[i].byte_offset,
                                                    &fields[i].bit_offset))
             goto failed;
@@ -206,7 +207,7 @@ static bool import_record(MinicCoreTypeImporter *importer, MinicType source,
             if (!bit_field_storage_alignment(record, field, field_alignment,
                                              &fields[i].alignment)) goto failed;
         } else if (!minic_data_layout_record_field_alignment(
-                       importer->layout, importer->program, record, i,
+                       importer->invocation, importer->program, record, i,
                        &fields[i].alignment)) {
             goto failed;
         }
@@ -284,7 +285,7 @@ static bool import_vector(MinicCoreTypeImporter *importer, MinicType source,
         default: return false;
         }
     } else return false;
-    if (!minic_data_layout_type(importer->layout, importer->program,
+    if (!minic_data_layout_type(importer->invocation, importer->program,
                                 element, &element_size, &element_alignment) ||
         !source_layout(importer, source, &type) || element_size == 0U ||
         type.size % element_size != 0U ||
@@ -321,7 +322,7 @@ static bool import_type(MinicCoreTypeImporter *importer, MinicType source,
         type.is_layout_override = source.explicit_alignment != 0U &&
                                   source.pointer_depth == 0U;
         if (type.is_layout_override && type.has_layout) {
-            if (!minic_data_layout_type(importer->layout, importer->program,
+            if (!minic_data_layout_type(importer->invocation, importer->program,
                                         source, &size, &alignment) || size != type.size)
                 return false;
             type.alignment = alignment;
@@ -415,7 +416,7 @@ bool minic_core_type_import(MinicCoreTypeImporter *importer,
     MinicCoreTypeId imported = MINIC_CORE_TYPE_INVALID;
     if (result != NULL) *result = MINIC_CORE_TYPE_INVALID;
     if (importer == NULL || importer->failed || importer->context == NULL ||
-        importer->layout == NULL || importer->program == NULL || result == NULL)
+        importer->invocation == NULL || importer->program == NULL || result == NULL)
         return false;
     if (!import_type(importer, source, &imported, 0U)) {
         importer->failed = true;

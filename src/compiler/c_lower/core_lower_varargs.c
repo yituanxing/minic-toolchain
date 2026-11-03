@@ -123,13 +123,13 @@ MinicCoreLowerStatus minic_core_linear_vararg_prepare_cursor(
     MinicCoreValueId cursor, MinicType cursor_type,
     size_t value_alignment, MinicCoreValueId *aligned_cursor) {
     if (context == NULL || context->target == NULL || aligned_cursor == NULL ||
-        context->target->variadic_scalar_read_kind !=
+        context->target->machine.variadic_scalar_read_kind !=
             MINIC_VARIADIC_SCALAR_READ_LINEAR_SLOT ||
-        context->target->variadic_linear_slot_bytes == 0U ||
+        context->target->machine.variadic_linear_slot_bytes == 0U ||
         value_alignment == 0U || value_alignment > 8U) {
         return MINIC_CORE_LOWER_UNSUPPORTED;
     }
-    if (context->target->variadic_linear_slot_bytes == 4U &&
+    if (context->target->machine.variadic_linear_slot_bytes == 4U &&
         value_alignment == 8U) {
         return linear_vararg_align8(
             context, span, cursor, cursor_type, aligned_cursor);
@@ -149,9 +149,9 @@ MinicCoreLowerStatus minic_core_linear_vararg_advance(
     size_t slot_count;
 
     if (context == NULL || context->target == NULL || context->function == NULL ||
-        context->target->variadic_scalar_read_kind !=
+        context->target->machine.variadic_scalar_read_kind !=
             MINIC_VARIADIC_SCALAR_READ_LINEAR_SLOT ||
-        (slot_bytes = context->target->variadic_linear_slot_bytes) == 0U ||
+        (slot_bytes = context->target->machine.variadic_linear_slot_bytes) == 0U ||
         value_size == 0U) {
         return MINIC_CORE_LOWER_UNSUPPORTED;
     }
@@ -216,7 +216,7 @@ MinicCoreLowerStatus minic_core_lower_vararg_scalar(
         context->target == NULL ||
         expression->kind != MINIC_EXPRESSION_BUILTIN_VA_ARG)
         return MINIC_CORE_LOWER_ERROR;
-    if (context->target->variadic_scalar_read_kind ==
+    if (context->target->machine.variadic_scalar_read_kind ==
         MINIC_VARIADIC_SCALAR_READ_UNSUPPORTED)
         return MINIC_CORE_LOWER_UNSUPPORTED;
 
@@ -226,7 +226,7 @@ MinicCoreLowerStatus minic_core_lower_vararg_scalar(
         (!minic_type_is_integer(expression->type) &&
          !minic_type_is_pointer(expression->type) &&
          !minic_type_is_double(expression->type)) ||
-        !minic_data_layout_type(core_data_layout(context),
+        !minic_data_layout_type(context->target,
                                 context->body->program,
                                 expression->type,
                                 &value_size,
@@ -235,7 +235,7 @@ MinicCoreLowerStatus minic_core_lower_vararg_scalar(
         !minic_type_pointer_to(expression->type, &value_pointer_type)) {
         return MINIC_CORE_LOWER_UNSUPPORTED;
     }
-    if (context->target->variadic_scalar_read_kind ==
+    if (context->target->machine.variadic_scalar_read_kind ==
         MINIC_VARIADIC_SCALAR_READ_ABI_CURSOR) {
         /* The source C object contains the state itself; ABI machinery
          * operates on its exact address without a pointer-proxy LOAD. */
@@ -280,9 +280,9 @@ MinicCoreLowerStatus minic_core_lower_vararg_scalar(
     if (status != MINIC_CORE_LOWER_OK) {
         return status;
     }
-    if (context->target->variadic_scalar_read_kind !=
+    if (context->target->machine.variadic_scalar_read_kind !=
             MINIC_VARIADIC_SCALAR_READ_LINEAR_SLOT ||
-        context->target->variadic_linear_slot_bytes == 0U)
+        context->target->machine.variadic_linear_slot_bytes == 0U)
         return MINIC_CORE_LOWER_UNSUPPORTED;
     (void)memset(&operation, 0, sizeof(operation));
     operation.kind = MINIC_CORE_INSTRUCTION_LOAD;
@@ -328,7 +328,7 @@ MinicCoreLowerStatus minic_core_lower_vararg_statement(
             target == NULL)
             return MINIC_CORE_LOWER_UNSUPPORTED;
 
-        if (context->target->variadic_scalar_read_kind ==
+        if (context->target->machine.variadic_scalar_read_kind ==
                 MINIC_VARIADIC_SCALAR_READ_ABI_CURSOR) {
             MinicType source_type, state_type;
             status = minic_core_lower_abi_va_state_pointer(
@@ -362,7 +362,7 @@ MinicCoreLowerStatus minic_core_lower_vararg_statement(
         }
         /* A linear cursor's C source representation is itself a pointer.
          * Preserve its scalar lvalue writeback on RV/Loong. */
-        if (context->target->variadic_scalar_read_kind !=
+        if (context->target->machine.variadic_scalar_read_kind !=
                 MINIC_VARIADIC_SCALAR_READ_LINEAR_SLOT ||
             target->value_category != MINIC_VALUE_LVALUE ||
             !minic_type_is_pointer(target->type) || minic_type_is_const(target->type) ||
@@ -400,7 +400,7 @@ MinicCoreLowerStatus minic_core_lower_vararg_statement(
     if (expression->kind == MINIC_EXPRESSION_BUILTIN_VA_COPY) {
         /* ABI-state copy takes addresses of two distinct source C objects.
          * No surrogate allocation and pointer-proxy writeback is legal. */
-        if (context->target->variadic_copy_kind == MINIC_VARIADIC_COPY_ABI_STATE) {
+        if (context->target->machine.variadic_copy_kind == MINIC_VARIADIC_COPY_ABI_STATE) {
             const MinicExpression *target;
             const MinicExpression *source;
             MinicCoreValueId dest_address, source_cursor;
@@ -432,7 +432,7 @@ MinicCoreLowerStatus minic_core_lower_vararg_statement(
         }
         /* Preserve existing scalar-cursor policy. Unknown ABI policies
          * fail closed rather than treating a structured cursor as pointer. */
-        if (context->target->variadic_copy_kind !=
+        if (context->target->machine.variadic_copy_kind !=
                 MINIC_VARIADIC_COPY_SCALAR_ASSIGNMENT)
             return MINIC_CORE_LOWER_UNSUPPORTED;
         return minic_core_lower_assignment_pair(context,
@@ -443,7 +443,7 @@ MinicCoreLowerStatus minic_core_lower_vararg_statement(
     }
     if (expression->kind == MINIC_EXPRESSION_BUILTIN_VA_END) {
         MinicCoreValueId discarded_address;
-        if (context->target->variadic_scalar_read_kind ==
+        if (context->target->machine.variadic_scalar_read_kind ==
                 MINIC_VARIADIC_SCALAR_READ_ABI_CURSOR)
             return minic_core_lower_abi_va_state_pointer(
                 context, expression->value.unary.operand,

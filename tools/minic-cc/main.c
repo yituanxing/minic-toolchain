@@ -42,7 +42,6 @@ int main(int argc, char **argv) {
     bool plain_char_override = false;
     MinicIntegerSign plain_char_sign = MINIC_INTEGER_SIGN_NONE;
     MinicTargetInvocation invocation;
-    MinicTargetInfo selected_target;
     const MinicTargetCatalogEntry *target_entry;
     const char *target_name;
     const MinicTargetInfo *target_info;
@@ -171,12 +170,11 @@ int main(int argc, char **argv) {
         (void)fprintf(stderr, "%s: invalid language ABI options\n", argv[0]);
         return 2;
     }
-    selected_target = invocation.target;
-    selected_target.position_independent = position_independent;
+    invocation.machine.position_independent = position_independent;
     if (march != NULL || mabi != NULL) {
         char reason[240];
         if (!minic_target_machine_options_resolve(
-                &selected_target, march, mabi, reason, sizeof(reason))) {
+                &invocation.machine, march, mabi, reason, sizeof(reason))) {
             (void)fprintf(stderr, "%s: %s\n", argv[0], reason);
             return 2;
         }
@@ -186,7 +184,7 @@ int main(int argc, char **argv) {
          ++machine_codegen_option_index) {
         char reason[240];
         if (!minic_target_codegen_option_apply(
-                &selected_target,
+                &invocation.machine,
                 machine_codegen_options[machine_codegen_option_index],
                 reason, sizeof(reason))) {
             (void)fprintf(stderr, "%s: %s\n", argv[0], reason);
@@ -194,7 +192,7 @@ int main(int argc, char **argv) {
         }
     }
     result = minic_compile_preprocessed_file_for_target(
-        input_path, output_path, &selected_target, function_sections, &diagnostic);
+        input_path, output_path, &invocation, function_sections, &diagnostic);
     if (result != 0) {
         (void)fprintf(stderr,
                       "%s:%zu:%zu: error: %s\n",

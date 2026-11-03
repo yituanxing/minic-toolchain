@@ -10,6 +10,7 @@
 #include <string.h>
 
 typedef struct ProbeCase {
+    MinicTargetInvocation invocation;
     MinicC0Program program;
     MinicExpression expr[2];
     MinicInlineAsm src;
@@ -32,6 +33,10 @@ static bool initialize_case(ProbeCase *test, const char *source,
                             MinicType first, MinicType second,
                             bool acquire, bool raw) {
     memset(test, 0, sizeof(*test));
+    if (!minic_target_invocation_begin(
+            &test->invocation,
+            minic_target_info_for_architecture(MINIC_TARGET_ARCH_AARCH64)))
+        return false;
     test->program.expressions = test->expr;
     test->program.expression_count = 2U;
     test->expr[0].type = first;
@@ -68,14 +73,14 @@ static bool initialize_case(ProbeCase *test, const char *source,
         test->expr[0].value_category = MINIC_VALUE_RVALUE;
     }
     return minic_aarch64_qualify_inline_asm(
-        &test->program, &test->src, &test->contract);
+        &test->invocation, &test->program, &test->src, &test->contract);
 }
 
 static bool check_normalization(ProbeCase *test, const char *machine,
                                 uint32_t form, uint32_t width) {
     MinicTargetInlineAsmContract candidate = test->contract;
     if (!minic_aarch64_seal_normalized_inline_asm(
-            &test->program, &test->src, machine, strlen(machine),
+            &test->invocation, &test->program, &test->src, machine, strlen(machine),
             &candidate) ||
         candidate.target_machine_form_id != form ||
         candidate.target_machine_form_variant != width ||
@@ -91,7 +96,7 @@ static bool check_normalization(ProbeCase *test, const char *machine,
 static bool check_reject(ProbeCase *test, const char *wrong) {
     MinicTargetInlineAsmContract candidate = test->contract;
     return !minic_aarch64_seal_normalized_inline_asm(
-        &test->program, &test->src, wrong, strlen(wrong), &candidate);
+        &test->invocation, &test->program, &test->src, wrong, strlen(wrong), &candidate);
 }
 
 int main(void) {

@@ -2,6 +2,7 @@
 #include "frontend/type.h"
 #include "target/data_layout.h"
 #include "target/data_layout_source.h"
+#include "target/source_policy/source_info.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -9,7 +10,7 @@
 /* An explicit field extent and an existing nested ArrayType must converge to
  * the same materialized field shape, including aggregate relocation slots. */
 static bool check_record_array_shape_equivalence(MinicC0Program *program,
-                                                 const MinicDataLayout *layout) {
+                                                 const MinicTargetInvocation *layout) {
     MinicRecordId legacy_id, materialized_id, zero_id;
     MinicType pointer_type, pointer_array, zero_array, inner_array, outer_array;
     const MinicRecord *legacy, *materialized;
@@ -89,8 +90,12 @@ int main(void) {
     MinicGlobalRelocation reloc;
     size_t offset, bytes, alignment, empty_bytes, empty_alignment;
     bool valid_record = false, invalid_array = false, matching_field_shapes = false;
-    const MinicDataLayout *layout = minic_x86_64_linux_data_layout();
+    MinicTargetInvocation invocation;
+    const MinicTargetInvocation *layout = &invocation;
 
+    if (!minic_target_invocation_begin(
+            &invocation, minic_target_info_for_architecture(MINIC_TARGET_ARCH_X86_64)))
+        return 2;
     minic_c0_program_initialize(&program);
     memset(&object, 0, sizeof(object));
     memset(&reloc, 0, sizeof(reloc));

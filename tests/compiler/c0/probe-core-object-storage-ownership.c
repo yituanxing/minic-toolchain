@@ -8,7 +8,7 @@
  * probe checks actual Common CoreObjectStorage ownership and error paths
  * without involving a platform's ABI, machine code or target runtime. */
 static size_t type_queries;
-bool minic_data_layout_type(const MinicDataLayout *layout,
+bool minic_data_layout_type(const struct MinicTargetInvocation *layout,
                             const MinicC0Program *program, MinicType type,
                             size_t *size, size_t *alignment) {
     (void)type;

@@ -24,12 +24,12 @@ typedef struct MinicCoreFunctionSet {
 void minic_core_function_set_initialize(MinicCoreFunctionSet *set);
 void minic_core_function_set_destroy(MinicCoreFunctionSet *set);
 bool minic_prepare_core_function_set(const MinicC0Program *program,
-                                     const MinicTargetInfo *target,
+                                     const MinicTargetInvocation *target,
                                      MinicCoreFunctionSet *output);
 /* Final C->Core module snapshot, after static pruning and DataLayout checks.
  * On failure the existing CoreFunctionSet remains owned by its caller. */
 bool minic_finalize_core_function_set_module(const MinicC0Program *program,
-                                            const MinicTargetInfo *target,
+                                            const MinicTargetInvocation *target,
                                             MinicCoreFunctionSet *set);
 
 #endif

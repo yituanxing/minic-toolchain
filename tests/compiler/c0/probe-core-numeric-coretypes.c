@@ -12,7 +12,7 @@
  * Core -> C fallback in the attached live path. Standalone legacy tests keep
  * their old model through separate probes. */
 static size_t legacy_integer_queries;
-bool minic_target_info_integer_width(const MinicTargetInfo *target,
+bool minic_target_info_integer_width(const MinicTargetInvocation *target,
                                      const MinicC0Program *program,
                                      MinicType type, unsigned int *bits) {
     (void)target;

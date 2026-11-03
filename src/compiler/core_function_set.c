@@ -65,7 +65,7 @@ void minic_core_function_set_destroy(MinicCoreFunctionSet *set) {
  * publishes one Core/status slot per FunctionId, even if individual function
  * lowerings recorded an error status; the Compiler validates those separately. */
 bool minic_prepare_core_function_set(const MinicC0Program *program,
-                                            const MinicTargetInfo *target,
+                                            const MinicTargetInvocation *target,
                                             MinicCoreFunctionSet *output) {
     MinicCoreFunctionSet set;
     MinicCoreTypeImporter *importer;
@@ -88,7 +88,7 @@ bool minic_prepare_core_function_set(const MinicC0Program *program,
     }
     importer = set.type_importer;
     if (!minic_core_type_importer_initialize(importer, program,
-                                            target->data_layout, set.type_context)) {
+                                            target, set.type_context)) {
         minic_core_function_set_destroy(&set);
         return false;
     }
@@ -178,7 +178,7 @@ bool minic_prepare_core_function_set(const MinicC0Program *program,
 }
 
 bool minic_finalize_core_function_set_module(const MinicC0Program *program,
-                                            const MinicTargetInfo *target,
+                                            const MinicTargetInvocation *target,
                                             MinicCoreFunctionSet *set) {
     bool ok;
     if (program == NULL || target == NULL || set == NULL ||

@@ -7,7 +7,7 @@
 /* The resolved five-target Core object path must never reopen C DataLayout.
  * This deliberately conflicting C stub makes accidental fallback visible. */
 static unsigned int legacy_layout_queries;
-bool minic_data_layout_type(const MinicDataLayout *layout,
+bool minic_data_layout_type(const struct MinicTargetInvocation *layout,
                             const MinicC0Program *program, MinicType type,
                             size_t *size, size_t *alignment) {
     (void)type;

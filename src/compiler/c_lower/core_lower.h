@@ -4,7 +4,7 @@
 #include "compiler/c_lower/core_ir_source.h"
 #include "compiler/c_lower/reentry_index.h"
 #include "frontend/function_body.h"
-#include "target/target_info.h"
+#include "target/source_policy/source_info.h"
 
 typedef enum MinicCoreLowerStatus {
     MINIC_CORE_LOWER_OK = 0,
@@ -13,10 +13,10 @@ typedef enum MinicCoreLowerStatus {
 } MinicCoreLowerStatus;
 
 MinicCoreLowerStatus minic_core_lower_function(const MinicFunctionBodyView *body,
-                                               const MinicTargetInfo *target,
+                                               const MinicTargetInvocation *target,
                                                MinicCoreSourceBuilder *output);
 MinicCoreLowerStatus minic_core_lower_function_with_index(
-    const MinicFunctionBodyView *body, const MinicTargetInfo *target,
+    const MinicFunctionBodyView *body, const MinicTargetInvocation *target,
     MinicCoreSourceBuilder *output, MinicCoreReentryIndex *index);
 
 #endif

@@ -10,7 +10,7 @@ bool minic_loongarch64_simd_qualify_source(
     const MinicC0Program *, const MinicInlineAsm *,
     MinicTargetInlineAsmContract *);
 bool minic_loongarch64_simd_seal_normalized(
-    const MinicC0Program *, const MinicInlineAsm *,
+    const MinicTargetInvocation *, const MinicC0Program *, const MinicInlineAsm *,
     const char *, size_t, MinicTargetInlineAsmContract *);
 
 #endif

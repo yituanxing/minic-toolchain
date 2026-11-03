@@ -346,7 +346,7 @@ static bool parse_expression_or_assignment_statement(MinicParser *parser,
         right_expression = minic_c0_program_expression(parser->program, right_id);
         if (right_expression == NULL || !minic_type_is_integer(first_type) ||
             !minic_type_is_integer(right_expression->type) ||
-            !minic_target_info_integer_common_for_program(parser->target_info,
+            !minic_target_info_integer_common_for_program(parser->invocation,
                                                           parser->program,
                                                           first_type,
                                                           right_expression->type,
@@ -405,7 +405,7 @@ static bool parse_expression_or_assignment_statement(MinicParser *parser,
             }
             common_type = first_type;
         } else if (!minic_type_is_integer(first_type) ||
-                   !minic_target_info_integer_common_for_program(parser->target_info,
+                   !minic_target_info_integer_common_for_program(parser->invocation,
                                                                  parser->program,
                                                                  first_type,
                                                                  right_expression->type,
@@ -454,7 +454,7 @@ static bool parse_expression_or_assignment_statement(MinicParser *parser,
             }
             common_type = first_type;
         } else if (!minic_type_is_integer(first_type) ||
-                   !minic_target_info_integer_common_for_program(parser->target_info,
+                   !minic_target_info_integer_common_for_program(parser->invocation,
                                                                  parser->program,
                                                                  first_type,
                                                                  right_expression->type,
@@ -501,7 +501,7 @@ static bool parse_expression_or_assignment_statement(MinicParser *parser,
         shift.value.binary.left = statement.target_expression;
         shift.value.binary.right = right_id;
         if (!minic_target_info_integer_common_for_program(
-                parser->target_info, parser->program, first_type, first_type, &shift.type) ||
+                parser->invocation, parser->program, first_type, first_type, &shift.type) ||
             !minic_parser_add_expression(parser, &shift, &statement.expression)) {
             return false;
         }
@@ -519,7 +519,7 @@ static bool parse_expression_or_assignment_statement(MinicParser *parser,
 
             if (assigned_expression == NULL || !minic_type_is_integer(first_type) ||
                 !minic_type_is_integer(assigned_expression->type) ||
-                !minic_target_info_integer_common_for_program(parser->target_info,
+                !minic_target_info_integer_common_for_program(parser->invocation,
                                                               parser->program,
                                                               first_type,
                                                               assigned_expression->type,

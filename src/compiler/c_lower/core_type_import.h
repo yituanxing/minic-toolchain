@@ -5,11 +5,11 @@
  * adapter from core_type.h, the verifier, or machine emitters. */
 #include "core/core_type.h"
 #include "frontend/ast.h"
-#include "target/data_layout.h"
+#include "target/source_policy/source_info.h"
 
 typedef struct MinicCoreTypeImporter {
     const MinicC0Program *program;
-    const MinicDataLayout *layout;
+    const MinicTargetInvocation *invocation;
     MinicCoreTypeContext *context;
     MinicCoreTypeId *record_types;
     size_t record_count;
@@ -22,7 +22,7 @@ typedef struct MinicCoreTypeImporter {
 
 bool minic_core_type_importer_initialize(MinicCoreTypeImporter *importer,
                                         const MinicC0Program *program,
-                                        const MinicDataLayout *layout,
+                                        const MinicTargetInvocation *invocation,
                                         MinicCoreTypeContext *context);
 void minic_core_type_importer_destroy(MinicCoreTypeImporter *importer);
 /* The importer is a compilation-unit transaction. On failure it is poisoned;

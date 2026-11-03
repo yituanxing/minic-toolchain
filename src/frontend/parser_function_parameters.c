@@ -41,7 +41,7 @@ static bool calling_convention_scalar_type_supported(
     return minic_type_is_integer(type) &&
            !minic_type_is_int128_integer(type) &&
            minic_target_info_integer_width(
-               parser->target_info, parser->program, type, &width) &&
+               parser->invocation, parser->program, type, &width) &&
            width != 0U && width <= 64U;
 }
 
@@ -50,11 +50,11 @@ bool minic_parser_calling_convention_fixed_scalar_supported(
     MinicType return_type, const MinicType *parameter_types,
     size_t parameter_count, bool is_variadic) {
     size_t i;
-    if (parser == NULL || parser->target_info == NULL || is_variadic ||
+    if (parser == NULL || parser->invocation == NULL || is_variadic ||
         parameter_count > MINIC_MAX_FUNCTION_PARAMETERS ||
         (parameter_count != 0U && parameter_types == NULL) ||
         !minic_target_info_function_calling_convention_scalar_call_supported(
-            parser->target_info, convention) ||
+            &parser->invocation->machine, convention) ||
         !calling_convention_scalar_type_supported(parser, return_type, true))
         return false;
     for (i = 0U; i < parameter_count; ++i)

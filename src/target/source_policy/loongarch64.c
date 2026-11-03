@@ -1,29 +1,9 @@
 #include "target/source_policy/source_policy.h"
+#include "target/machine_register.h"
 #include "frontend/ast.h"
 #include "target/loongarch64/machine_builtin_form.h"
 
 #include <string.h>
-
-static bool loong_fixed_register_read(const char *name, size_t length) {
-    /* Linux LoongArch reserves TP/SP/r21 for live global register aliases. */
-    return (length == 3U &&
-            (memcmp(name, "$tp", 3U) == 0 || memcmp(name, "$sp", 3U) == 0)) ||
-           (length == 4U && memcmp(name, "$r21", 4U) == 0);
-}
-
-static bool loong_fixed_register_write(const char *name, size_t length) {
-    /* A write of reserved TP/r21 is not an ELF global store. Never SP. */
-    return (length == 3U && memcmp(name, "$tp", 3U) == 0) ||
-           (length == 4U && memcmp(name, "$r21", 4U) == 0);
-}
-
-static bool loong_local_fixed_register(const char *name, size_t length) {
-    /* Exact original GNU Linux local named-register declaration catalog.
-     * Admitting a declaration is not physical ASM-register reservation. */
-    return length == 2U && ((name[0] == 't' && name[1] == '0') ||
-                            (name[0] == 'a' &&
-                             (name[1] == '0' || name[1] == '1' || name[1] == '7')));
-}
 
 static bool loong_register_clobber(const char *name, size_t length) {
     /* $tN/tN, $aN/aN and $s0 recognize GNU syntax only. The Loong machine
@@ -64,7 +44,7 @@ typedef struct LoongBuiltinDesc {
     size_t immediate_index;
 } LoongBuiltinDesc;
 
-static MinicType loong_builtin_type(const MinicTargetInfo *target,
+static MinicType loong_builtin_type(const MinicTargetInvocation *target,
                                     LoongBuiltinScalar scalar) {
     switch (scalar) {
     case LOONG_BUILTIN_CHAR: {
@@ -149,7 +129,7 @@ static const LoongBuiltinDesc *loong_builtin_descriptor_suffix(
 /* Original GNU source spelling and a few admitted header wrappers map to
  * one unspellable internal Core callee. Source alone performs this mapping. */
 static const LoongBuiltinDesc *loong_source_builtin_descriptor(
-    const MinicTargetInfo *target, const char *spelling, size_t length,
+    const MinicTargetInvocation *target, const char *spelling, size_t length,
     char *callee, size_t callee_capacity) {
     static const char gnu_prefix[] = "__builtin_loongarch_";
     static const char internal_prefix[] = "__minic_target_builtin_loongarch_";
@@ -224,7 +204,7 @@ bool minic_loongarch64_machine_builtin_form(
 }
 
 static bool loong_machine_builtin_signature(
-    const MinicTargetInfo *target, const char *spelling, size_t length,
+    const MinicTargetInvocation *target, const char *spelling, size_t length,
     char *callee, size_t callee_capacity, MinicType *result,
     MinicType arguments[3], size_t *argument_count,
     const char **mnemonic, size_t *immediate_index) {
@@ -246,9 +226,9 @@ static bool loong_machine_builtin_signature(
 }
 
 const MinicTargetAsmSourcePolicy minic_loongarch64_asm_source_policy = {
-    .fixed_register_read = loong_fixed_register_read,
-    .fixed_register_write = loong_fixed_register_write,
-    .local_fixed_register = loong_local_fixed_register,
+    .fixed_register_read = minic_loongarch64_machine_fixed_register_read,
+    .fixed_register_write = minic_loongarch64_machine_fixed_register_write,
+    .local_fixed_register = minic_loongarch64_machine_local_fixed_register,
     .register_clobber = loong_register_clobber,
     .immediate_constraint = loong_immediate,
     .immediate_may_defer = true,
@@ -290,7 +270,7 @@ static bool loong_syscall_alias_names_match(const MinicFunction *alias,
             strcmp(owner->assembler_name, sanitizer) == 0);
 }
 
-static bool loong_syscall_alias_word_pair(const MinicTargetInfo *target,
+static bool loong_syscall_alias_word_pair(const MinicTargetInvocation *target,
                                           const MinicC0Program *program,
                                           MinicType public_type,
                                           MinicType sanitizer_type) {
@@ -310,10 +290,10 @@ static bool loong_syscall_alias_word_pair(const MinicTargetInfo *target,
 }
 
 static bool loong_syscall_alias_abi_compatible(
-    const MinicTargetInfo *target, const MinicC0Program *program,
+    const MinicTargetInvocation *target, const MinicC0Program *program,
     const MinicFunction *alias, const MinicFunction *owner) {
     size_t i;
-    if (target == NULL || target->architecture != MINIC_TARGET_ARCH_LOONGARCH64 ||
+    if (target == NULL || target->machine.architecture != MINIC_TARGET_ARCH_LOONGARCH64 ||
         program == NULL || alias == NULL || owner == NULL ||
         alias->parameter_count == 0U || alias->parameter_count > 6U ||
         alias->parameter_count != owner->parameter_count ||

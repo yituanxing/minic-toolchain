@@ -120,7 +120,7 @@ bool minic_parser_consume_function_pointer_attribute(MinicParser *parser,
          * emit an actual MS x64 call.  TargetInfo owns both decisions. */
         if (!attribute->has_arguments &&
             minic_target_info_function_pointer_calling_convention_declaration_supported(
-                parser->target_info, MINIC_CALLING_CONVENTION_MS_X64) &&
+                parser->invocation, MINIC_CALLING_CONVENTION_MS_X64) &&
             minic_c0_program_function_pointer_with_calling_convention(
                 parser->program, *pointer_type,
                 MINIC_CALLING_CONVENTION_MS_X64, pointer_type)) {
@@ -782,9 +782,9 @@ bool minic_parser_apply_alignment_attribute(MinicParser *parser,
     if (!exact_argument_end ||
         expression == NULL || !minic_type_is_integer(expression->type) ||
         !minic_const_eval_integer(
-            parser->program, parser->target_info, expression_id, &constant_value) ||
+            parser->program, parser->invocation, expression_id, &constant_value) ||
         !minic_const_value_as_int64(
-            parser->program, parser->target_info, &constant_value, &parsed_alignment)) {
+            parser->program, parser->invocation, &constant_value, &parsed_alignment)) {
         if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
             minic_parser_error(
                 parser, "GNU %s alignment requires one integer constant expression", subject);

@@ -12,7 +12,7 @@
  * Function bodies remain from the validated monolithic optimizer. */
 static bool minic_inline_symbolic_static_expression_depth(
     const MinicC0Program *program,
-    const MinicTargetInfo *target,
+    const MinicTargetInvocation *target,
     MinicExpressionId expression_id,
     unsigned int depth) {
     const MinicExpression *expression;
@@ -96,7 +96,7 @@ static bool minic_inline_symbolic_static_expression_depth(
 
 static bool minic_inline_symbolic_static_expression(
     const MinicC0Program *program,
-    const MinicTargetInfo *target,
+    const MinicTargetInvocation *target,
     MinicExpressionId expression_id) {
     return minic_inline_symbolic_static_expression_depth(
         program, target, expression_id, 0U);
@@ -104,7 +104,7 @@ static bool minic_inline_symbolic_static_expression(
 
 static bool minic_inline_close_symbolic_expression_depth(
     MinicC0Program *program,
-    const MinicTargetInfo *target,
+    const MinicTargetInvocation *target,
     const MinicFunction *caller,
     MinicExpressionId expression_id,
     MinicExpressionId *closed_id,
@@ -353,7 +353,7 @@ static bool minic_inline_close_symbolic_expression_depth(
 
 static bool minic_inline_symbolic_argument_expression(
     MinicC0Program *program,
-    const MinicTargetInfo *target,
+    const MinicTargetInvocation *target,
     const MinicFunction *caller,
     MinicExpressionId expression_id,
     MinicExpressionId *symbolic_expression,
@@ -521,7 +521,7 @@ bool minic_add_inline_symbolic_specialization(
 
 bool minic_specialize_inline_symbolic_calls(
     MinicC0Program *program,
-    const MinicTargetInfo *target) {
+    const MinicTargetInvocation *target) {
     size_t expression_index;
     size_t initial_clone_count = 0U;
     size_t transitive_clone_count = 0U;

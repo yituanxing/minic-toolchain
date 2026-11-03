@@ -776,7 +776,7 @@ static bool core_cfg_const_pointer_bits(const MinicCoreLowerContext *context,
                                                &index_wide) ||
             !minic_c0_pointer_arithmetic_element_size(
                 context->body->program,
-                minic_target_info_data_layout(context->target),
+                context->target,
                 minic_c0_program_expression(context->body->program, pointer_id)->type,
                 &element_size) ||
             element_size == 0U) {
@@ -858,7 +858,7 @@ static bool core_cfg_global_address_fact(const MinicCoreLowerContext *context,
                 !core_cfg_global_address_fact(context,
                     addressed->value.member.base, depth + 1U, &base) ||
                 !minic_data_layout_record_field_offset(
-                    minic_target_info_data_layout(context->target), program, record,
+                    context->target, program, record,
                     addressed->value.member.field_index, &field_offset) ||
                 field_offset > SIZE_MAX - base.byte_offset) {
                 return false;
@@ -891,7 +891,7 @@ static bool core_cfg_global_address_fact(const MinicCoreLowerContext *context,
                                                minic_type_long(), &widened) ||
             (int64_t)widened.bits < 0 ||
             !minic_c0_pointer_arithmetic_element_size(
-                program, minic_target_info_data_layout(context->target),
+                program, context->target,
                 base_expression->type, &element_size) || element_size == 0U ||
             widened.bits > (SIZE_MAX - base.byte_offset) / element_size) {
             return false;
@@ -914,7 +914,7 @@ static bool core_cfg_global_address_fact(const MinicCoreLowerContext *context,
  * a byte offset relative to its exact compound-literal backing local. */
 static bool core_cfg_compound_member_layout(
     const MinicC0Program *program,
-    const MinicDataLayout *layout,
+    const MinicTargetInvocation *invocation,
     const MinicExpression *member,
     MinicLocalId root_local,
     unsigned int depth,
@@ -927,7 +927,7 @@ static bool core_cfg_compound_member_layout(
     size_t parent_offset = 0U;
     size_t local_offset;
 
-    if (program == NULL || layout == NULL || member == NULL ||
+    if (program == NULL || invocation == NULL || member == NULL ||
         member->kind != MINIC_EXPRESSION_MEMBER ||
         byte_offset == NULL || bit_offset == NULL || depth > 8U) {
         return false;
@@ -945,7 +945,7 @@ static bool core_cfg_compound_member_layout(
         }
     } else if (parent->kind == MINIC_EXPRESSION_MEMBER) {
         size_t parent_bit_offset;
-        if (!core_cfg_compound_member_layout(program, layout, parent, root_local,
+        if (!core_cfg_compound_member_layout(program, invocation, parent, root_local,
                                              depth + 1U, &parent_offset,
                                              &parent_bit_offset) ||
             parent_bit_offset != 0U) {
@@ -958,7 +958,7 @@ static bool core_cfg_compound_member_layout(
     field = minic_c0_record_field(record, member->value.member.field_index);
     if (field == NULL ||
         !minic_data_layout_record_field_layout(
-            layout, program, record, member->value.member.field_index,
+            invocation, program, record, member->value.member.field_index,
             &local_offset, bit_offset) ||
         local_offset > SIZE_MAX - parent_offset) {
         return false;
@@ -1001,7 +1001,7 @@ static bool core_cfg_const_record_compound_read(
         return false;
     }
     program = context->body->program;
-    layout = minic_target_info_data_layout(context->target);
+    layout = context->target->machine.data_layout;
     if (layout == NULL || layout->byte_order != MINIC_BYTE_ORDER_LITTLE ||
         !minic_target_info_sizeof_type(context->target, program, compound->type,
                                        &record_size) ||
@@ -1052,7 +1052,7 @@ static bool core_cfg_const_record_compound_read(
             !minic_const_value_convert_integer(program, context->target,
                                                &constant, target->type, &converted) ||
             !core_cfg_compound_member_layout(
-                program, layout, target,
+                program, context->target, target,
                 compound->value.compound_literal.local_id, 0U,
                 &byte_offset, &bit_offset) || byte_offset >= record_size) {
             return false;
@@ -1203,7 +1203,7 @@ static bool core_cfg_zero_union_scalar_read(
     local = minic_c0_program_local(p, root);
     record = local != NULL && minic_type_is_record(local->type)
                  ? minic_c0_program_record(p, local->type.record_id) : NULL;
-    layout = minic_target_info_data_layout(c->target);
+    layout = c->target->machine.data_layout;
     if (local == NULL || record == NULL || !record->is_union ||
         !record->is_complete || minic_c0_local_array_object_info(p, root, NULL) ||
         minic_type_is_volatile(local->type) ||
@@ -1214,7 +1214,7 @@ static bool core_cfg_zero_union_scalar_read(
         !minic_target_info_sizeof_type(c->target, p, read->type, &read_size) ||
         union_size == 0U || union_size > 8U || read_size != union_size ||
         !core_cfg_compound_member_layout(
-            p, layout, read, root, 0U, &read_offset, &bit_offset) ||
+            p, c->target, read, root, 0U, &read_offset, &bit_offset) ||
         read_offset != 0U || bit_offset != 0U ||
         (entry = minic_c0_program_block(p, local->declaration_block)) == NULL ||
         entry->statement_count == 0U || entry->statement_count > 64U) return false;
@@ -1251,7 +1251,7 @@ static bool core_cfg_zero_union_scalar_read(
             !minic_type_is_integer(target->type) ||
             !core_program_expr_is_literal_zero(c, s->expression) ||
             !core_cfg_compound_member_layout(
-                p, layout, target, root, 0U, &offset, &target_bit) ||
+                p, c->target, target, root, 0U, &offset, &target_bit) ||
             target_bit != 0U ||
             !minic_target_info_sizeof_type(
                 c->target, p, target->type, &target_size) ||

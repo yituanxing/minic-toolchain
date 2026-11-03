@@ -10,7 +10,7 @@
 typedef struct MinicModuleFragmentSinkContext {
     MinicCoreModuleGlobal *global;
     const MinicC0Program *program;
-    const MinicTargetInfo *target;
+    const MinicTargetInvocation *target;
     size_t cursor;
 } MinicModuleFragmentSinkContext;
 
@@ -127,7 +127,7 @@ static bool module_sink_relocation(void *context,
         source_symbol = minic_multi_global_relocation_target_name(sink->program, source);
         if (source_symbol == NULL || source_symbol[0] == '\0' ||
             !minic_data_layout_global_relocation_target_addend(
-                sink->target->data_layout, sink->program, source, &addend))
+                sink->target, sink->program, source, &addend))
             return false;
         owned_symbol = module_c_string(source_symbol);
         if (owned_symbol == NULL) return false;
@@ -151,7 +151,7 @@ static bool module_sink_relocation(void *context,
 
 static bool module_capture_global(MinicCoreModuleGlobal *destination,
                                   const MinicC0Program *program,
-                                  const MinicTargetInfo *target,
+                                  const MinicTargetInvocation *target,
                                   MinicCoreTypeImporter *importer,
                                   const MinicGlobalObject *source, size_t index) {
     MinicMultiGlobalEmissionPlan plan;
@@ -254,12 +254,12 @@ static bool module_capture_function(MinicCoreModuleFunctionSymbol *destination,
 
 bool minic_core_module_build_from_program(MinicCoreModule *output,
                                           const MinicC0Program *program,
-                                          const MinicTargetInfo *target,
+                                          const MinicTargetInvocation *target,
                                           MinicCoreTypeImporter *importer) {
     MinicCoreModule staged;
     size_t index;
     if (output == NULL || program == NULL || target == NULL ||
-        target->data_layout == NULL || importer == NULL || importer->failed ||
+        target->machine.data_layout == NULL || importer == NULL || importer->failed ||
         importer->program != program || importer->context == NULL ||
         program->global_object_count > SIZE_MAX / sizeof(*staged.globals) ||
         program->function_count > SIZE_MAX / sizeof(*staged.function_symbols) ||

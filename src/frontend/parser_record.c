@@ -345,15 +345,15 @@ static bool parse_record_bit_field_width(MinicParser *parser,
     if (!minic_parser_expect(parser, MINIC_TOKEN_COLON, "expected ':' before bit-field width") ||
         !minic_parser_parse_expression(parser, &width_expression, 0U) ||
         !minic_const_eval_integer(
-            parser->program, parser->target_info, width_expression, &width_value) ||
-        !minic_const_value_as_int64(parser->program, parser->target_info, &width_value, &width)) {
+            parser->program, parser->invocation, width_expression, &width_value) ||
+        !minic_const_value_as_int64(parser->program, parser->invocation, &width_value, &width)) {
         if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
             minic_parser_error(parser, "bit-field width must be an integer constant expression");
         }
         return false;
     }
     if (!minic_target_info_integer_width(
-            parser->target_info, parser->program, field_type, &type_bits)) {
+            parser->invocation, parser->program, field_type, &type_bits)) {
         minic_parser_error(parser, "cannot determine target width of bit-field type");
         return false;
     }

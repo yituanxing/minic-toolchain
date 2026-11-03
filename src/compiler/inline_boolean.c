@@ -642,7 +642,7 @@ static bool minic_close_original_inline_caller_sections(MinicC0Program *program)
 
 static bool minic_specialize_inline_boolean_range_calls_for_pass(
     MinicC0Program *program,
-    const MinicTargetInfo *target, MinicInlineBooleanDomainPassState *state) {
+    const MinicTargetInvocation *target, MinicInlineBooleanDomainPassState *state) {
     size_t expression_index;
     size_t direct_clone_count = 0U;
     size_t transitive_clone_count = 0U;
@@ -1033,7 +1033,7 @@ static bool minic_specialize_inline_boolean_range_calls_for_pass(
 
 /* Own the cache over the complete pass, even on conservative early failure. */
 bool minic_specialize_inline_boolean_range_calls(
-    MinicC0Program *program, const MinicTargetInfo *target,
+    MinicC0Program *program, const MinicTargetInvocation *target,
     MinicInlineBooleanDomainStats *stats_out) {
     MinicInlineBooleanDomainPassState state;
     bool success;

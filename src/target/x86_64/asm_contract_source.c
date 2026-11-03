@@ -16,9 +16,10 @@ static bool target_constraint_is(const MinicInlineAsmOperand *, const char *);
 static bool clobber_is(const MinicInlineAsmRegisterClobber *, const char *);
 
 
-static bool x86_linux_gs_testcc_source(
+static bool x86_linux_gs_testcc_source(const MinicTargetInvocation *invocation,
     const MinicC0Program *program, const MinicInlineAsm *src,
     MinicTargetInlineAsmContract *contract) {
+    (void)invocation;
     const unsigned int form = src ? minic_x86_64_linux_gs_testcc_form(
         src->template_text, src->template_length) : 0U;
     const MinicExpression *flag, *memory, *index;
@@ -51,9 +52,10 @@ static bool x86_linux_gs_testcc_source(
     return true;
 }
 
-static bool x86_linux_testcc_source(
+static bool x86_linux_testcc_source(const MinicTargetInvocation *invocation,
     const MinicC0Program *program, const MinicInlineAsm *src,
     MinicTargetInlineAsmContract *contract) {
+    (void)invocation;
     const unsigned int form = src ? minic_x86_64_linux_testcc_form(
         src->template_text, src->template_length) : 0U;
     const MinicExpression *flag, *memory, *mask;
@@ -146,9 +148,10 @@ bool minic_x86_64_requires_qualified_input_asm(const MinicInlineAsm *src) {
         src, reserved, sizeof(reserved) / sizeof(reserved[0]));
 }
 
-static bool x86_linux_crash_register_source(
+static bool x86_linux_crash_register_source(const MinicTargetInvocation *invocation,
     const MinicC0Program *program, const MinicInlineAsm *src,
     MinicTargetInlineAsmContract *contract) {
+    (void)invocation;
     const unsigned int gpr = src ? minic_x86_64_linux_crash_gpr_snapshot_form(
         src->template_text, src->template_length) : 0U;
     const unsigned int misc = src ? minic_x86_64_linux_crash_misc_snapshot_form(
@@ -175,9 +178,10 @@ static bool x86_linux_crash_register_source(
     return true;
 }
 
-static bool x86_linux_pm_trace_source(
+static bool x86_linux_pm_trace_source(const MinicTargetInvocation *invocation,
     const MinicC0Program *program, const MinicInlineAsm *src,
     MinicTargetInlineAsmContract *contract) {
+    (void)invocation;
     const MinicExpression *out, *line, *filename;
     if (!program || !src || !contract ||
         !minic_x86_64_linux_pm_trace_form(
@@ -209,9 +213,10 @@ static bool x86_linux_pm_trace_source(
     return true;
 }
 
-static bool x86_linux_vmware_stealclock_alt_source(
+static bool x86_linux_vmware_stealclock_alt_source(const MinicTargetInvocation *invocation,
     const MinicC0Program *program, const MinicInlineAsm *src,
     MinicTargetInlineAsmContract *contract) {
+    (void)invocation;
     static const char *const regs[] = {"a", "b", "c", "d", "S", "D"};
     const MinicExpression *expr;
     MinicType plain;
@@ -246,9 +251,10 @@ static bool x86_linux_vmware_stealclock_alt_source(
     return true;
 }
 
-static bool x86_linux_kvm_hypercall_alt_source(
+static bool x86_linux_kvm_hypercall_alt_source(const MinicTargetInvocation *invocation,
     const MinicC0Program *program, const MinicInlineAsm *src,
     MinicTargetInlineAsmContract *contract) {
+    (void)invocation;
     static const char *const regs[] = {"a", "b", "c", "d", "S"};
     const MinicExpression *output, *arg;
     bool alt;
@@ -284,9 +290,10 @@ static bool x86_linux_kvm_hypercall_alt_source(
     return true;
 }
 
-static bool x86_linux_exception_stack_call_source(
+static bool x86_linux_exception_stack_call_source(const MinicTargetInvocation *invocation,
     const MinicC0Program *program, const MinicInlineAsm *src,
     MinicTargetInlineAsmContract *contract) {
+    (void)invocation;
     static const char *const outputs[] = {"+r", "+r"};
     static const char *const inputs[] = {"i", "r", "r", "r", "r"};
     static const char *const clobbers[] = {
@@ -342,9 +349,10 @@ static bool x86_linux_exception_stack_call_source(
     return true;
 }
 
-static bool x86_linux_alt_reloc_selftest_source(const MinicC0Program *program,
+static bool x86_linux_alt_reloc_selftest_source(const MinicTargetInvocation *invocation, const MinicC0Program *program,
                                                  const MinicInlineAsm *src,
                                                  MinicTargetInlineAsmContract *contract) {
+    (void)invocation;
     const MinicExpression *value;
     if (!src || !program || !contract || !src->is_volatile || src->is_goto ||
         !minic_x86_64_linux_alt_reloc_selftest_form(src->template_text,
@@ -362,9 +370,10 @@ static bool x86_linux_alt_reloc_selftest_source(const MinicC0Program *program,
     return true;
 }
 
-static bool x86_linux_real_mode_far_jump_source(
+static bool x86_linux_real_mode_far_jump_source(const MinicTargetInvocation *invocation,
     const MinicC0Program *program, const MinicInlineAsm *src,
     MinicTargetInlineAsmContract *contract) {
+    (void)invocation;
     const MinicExpression *destination, *restart_type;
     MinicType type;
     if (!program || !src || !contract || !src->is_volatile || src->is_goto ||
@@ -402,9 +411,10 @@ bool minic_x86_64_linux_mmio_type_matches(MinicType type, unsigned int width) {
     }
 }
 
-static bool x86_linux_mmio_write_source(const MinicC0Program *program,
+static bool x86_linux_mmio_write_source(const MinicTargetInvocation *invocation, const MinicC0Program *program,
                                         const MinicInlineAsm *src,
                                         MinicTargetInlineAsmContract *contract) {
+    (void)invocation;
     const MinicExpression *value, *memory;
     const unsigned int width = src ? minic_x86_64_linux_mmio_write_form(
         src->template_text, src->template_length) : 0U;
@@ -427,9 +437,10 @@ static bool x86_linux_mmio_write_source(const MinicC0Program *program,
     return true;
 }
 
-static bool x86_linux_mmio_read_source(const MinicC0Program *program,
+static bool x86_linux_mmio_read_source(const MinicTargetInvocation *invocation, const MinicC0Program *program,
                                        const MinicInlineAsm *src,
                                        MinicTargetInlineAsmContract *contract) {
+    (void)invocation;
     const MinicExpression *output, *memory;
     const unsigned int width = src ? minic_x86_64_linux_mmio_read_form(
         src->template_text, src->template_length) : 0U;
@@ -456,9 +467,10 @@ static bool x86_linux_mmio_read_source(const MinicC0Program *program,
     return true;
 }
 
-static bool x86_linux_pci_mmconfig_source(
+static bool x86_linux_pci_mmconfig_source(const MinicTargetInvocation *invocation,
     const MinicC0Program *program, const MinicInlineAsm *source,
     MinicTargetInlineAsmContract *contract) {
+    (void)invocation;
     const bool read = source && source->output_count == 1U;
     const unsigned int width = source ? minic_x86_64_linux_pci_mmconfig_form(
         source->template_text, source->template_length, !read) : 0U;
@@ -490,9 +502,10 @@ static bool x86_linux_pci_mmconfig_source(
     return true;
 }
 
-static bool x86_linux_rep_string_io_source(
+static bool x86_linux_rep_string_io_source(const MinicTargetInvocation *invocation,
     const MinicC0Program *program, const MinicInlineAsm *src,
     MinicTargetInlineAsmContract *contract) {
+    (void)invocation;
     const MinicExpression *address, *count, *port;
     const unsigned int form = src ? minic_x86_64_linux_rep_string_io_form(
         src->template_text, src->template_length) : 0U;
@@ -521,9 +534,10 @@ static bool x86_linux_rep_string_io_source(
     return true;
 }
 
-static bool x86_linux_i915_movntdqa_source(
+static bool x86_linux_i915_movntdqa_source(const MinicTargetInvocation *invocation,
     const MinicC0Program *program, const MinicInlineAsm *source,
     MinicTargetInlineAsmContract *contract) {
+    (void)invocation;
     const unsigned int form = source ? minic_x86_64_linux_i915_movntdqa_form(
         source->template_text, source->template_length) : 0U;
     size_t i;
@@ -551,9 +565,10 @@ static bool x86_linux_i915_movntdqa_source(
  * syntax is owned by raid6_simd.c, never parsed by target-neutral Core.
  * Both GNU basic asm (zero operands) and extended asm with up to eight real
  * memory addresses have explicit hardware side effects. */
-static bool x86_linux_raid6_simd_source(
+static bool x86_linux_raid6_simd_source(const MinicTargetInvocation *invocation,
     const MinicC0Program *program, const MinicInlineAsm *source,
     MinicTargetInlineAsmContract *contract) {
+    (void)invocation;
     size_t i, count;
     if (!program || !source || !contract || !source->is_volatile ||
         source->is_goto || source->label_count ||
@@ -597,9 +612,10 @@ bool minic_x86_64_kvm_movdqa_u32x4_type(MinicType type) {
  * data layout owns sizeof/alignof=16, while Linux -mno-sse forbids implicit
  * SIMD code. This admission permits only the fixed-register MOVDQA memory
  * load/store, not arithmetic or vector by-value ABI. */
-static bool x86_linux_kvm_movdqa_source(
+static bool x86_linux_kvm_movdqa_source(const MinicTargetInvocation *invocation,
     const MinicC0Program *program, const MinicInlineAsm *src,
     MinicTargetInlineAsmContract *contract) {
+    (void)invocation;
     const unsigned int form = src ? minic_x86_64_kvm_movdqa_form(
         src->template_text, src->template_length) : 0U;
     const bool read = form <= 16U;
@@ -629,9 +645,10 @@ static bool x86_linux_kvm_movdqa_source(
     return true;
 }
 
-static bool x86_linux_iomem_copy_source(
+static bool x86_linux_iomem_copy_source(const MinicTargetInvocation *invocation,
     const MinicC0Program *program, const MinicInlineAsm *src,
     MinicTargetInlineAsmContract *contract) {
+    (void)invocation;
     const unsigned int form = src ? minic_x86_64_linux_iomem_copy_form(
         src->template_text, src->template_length) : 0U;
     static const char *const rep_outputs[] = {"=&c", "=&D", "=&S"};
@@ -671,9 +688,10 @@ static bool x86_linux_iomem_copy_source(
     return true;
 }
 
-static bool x86_linux_flushcache_copy_source(
+static bool x86_linux_flushcache_copy_source(const MinicTargetInvocation *invocation,
     const MinicC0Program *program, const MinicInlineAsm *src,
     MinicTargetInlineAsmContract *contract) {
+    (void)invocation;
     const unsigned int form = src ? minic_x86_64_linux_flushcache_copy_form(
         src->template_text, src->template_length) : 0U;
     const MinicExpression *expr;
@@ -713,9 +731,10 @@ static bool x86_linux_flushcache_copy_source(
     return true;
 }
 
-static bool x86_linux_atomic_xchg_source(
+static bool x86_linux_atomic_xchg_source(const MinicTargetInvocation *invocation,
     const MinicC0Program *program, const MinicInlineAsm *src,
     MinicTargetInlineAsmContract *contract) {
+    (void)invocation;
     const MinicExpression *reg, *mem;
     MinicType reg_type, mem_type;
     const unsigned int width = src ? minic_x86_64_linux_atomic_xchg_form(
@@ -744,9 +763,10 @@ static bool x86_linux_atomic_xchg_source(
     return true;
 }
 
-static bool x86_linux_pvclock_scale_source(const MinicC0Program *program,
+static bool x86_linux_pvclock_scale_source(const MinicTargetInvocation *invocation, const MinicC0Program *program,
                                             const MinicInlineAsm *src,
                                             MinicTargetInlineAsmContract *contract) {
+    (void)invocation;
     static const char *const output_constraints[] = {"=a", "=d"};
     const MinicExpression *expressions[4];
     size_t i;
@@ -775,9 +795,10 @@ static bool x86_linux_pvclock_scale_source(const MinicC0Program *program,
     return true;
 }
 
-static bool x86_linux_pv_indirect_call_source(const MinicC0Program *program,
+static bool x86_linux_pv_indirect_call_source(const MinicTargetInvocation *invocation, const MinicC0Program *program,
                                                const MinicInlineAsm *src,
                                                MinicTargetInlineAsmContract *contract) {
+    (void)invocation;
     static const char *const outputs[] = {"=D", "=S", "=d", "=c", "+r"};
     static const char *const input_regs[] = {"D", "S", "d", "c"};
     static const char *const clobbers[] = {"cc", "rax", "r8", "r9", "r10", "r11"};
@@ -829,9 +850,10 @@ static bool x86_linux_pv_indirect_call_source(const MinicC0Program *program,
     return true;
 }
 
-static bool x86_linux_task_control_source(const MinicC0Program *program,
+static bool x86_linux_task_control_source(const MinicTargetInvocation *invocation, const MinicC0Program *program,
                                            const MinicInlineAsm *src,
                                            MinicTargetInlineAsmContract *contract) {
+    (void)invocation;
     const MinicExpression *expr;
     const unsigned int form = src ? minic_x86_64_linux_task_control_form(
         src->template_text, src->template_length) : 0U;
@@ -856,9 +878,10 @@ static bool x86_linux_task_control_source(const MinicC0Program *program,
     return true;
 }
 
-static bool x86_linux_iret_to_self_source(const MinicC0Program *program,
+static bool x86_linux_iret_to_self_source(const MinicTargetInvocation *invocation, const MinicC0Program *program,
                                           const MinicInlineAsm *src,
                                           MinicTargetInlineAsmContract *contract) {
+    (void)invocation;
     const MinicExpression *tmp, *stack;
     if (!program || !src || !contract || !src->is_volatile || src->is_goto ||
         !minic_x86_64_linux_iret_to_self_form(src->template_text, src->template_length) ||
@@ -880,9 +903,10 @@ static bool x86_linux_iret_to_self_source(const MinicC0Program *program,
     return true;
 }
 
-static bool x86_linux_int3_selftest_source(const MinicC0Program *program,
+static bool x86_linux_int3_selftest_source(const MinicTargetInvocation *invocation, const MinicC0Program *program,
                                             const MinicInlineAsm *src,
                                             MinicTargetInlineAsmContract *contract) {
+    (void)invocation;
     const MinicExpression *stack, *address;
     if (!program || !src || !contract || !src->is_volatile || src->is_goto ||
         !minic_x86_64_linux_int3_selftest_form(src->template_text, src->template_length) ||
@@ -903,9 +927,10 @@ static bool x86_linux_int3_selftest_source(const MinicC0Program *program,
     return true;
 }
 
-static bool x86_linux_lidt_source(
+static bool x86_linux_lidt_source(const MinicTargetInvocation *invocation,
     const MinicC0Program *program, const MinicInlineAsm *src,
     MinicTargetInlineAsmContract *contract) {
+    (void)invocation;
     const MinicExpression *descriptor;
     const MinicRecord *record;
     MinicType unqualified;
@@ -944,9 +969,10 @@ static bool x86_linux_lidt_source(
     return true;
 }
 
-static bool x86_linux_boot_segments_source(
+static bool x86_linux_boot_segments_source(const MinicTargetInvocation *invocation,
     const MinicC0Program *program, const MinicInlineAsm *src,
     MinicTargetInlineAsmContract *contract) {
+    (void)invocation;
     const MinicExpression *value;
     MinicType type;
     if (!program || !src || !contract || !src->is_volatile || src->is_goto ||
@@ -977,9 +1003,10 @@ static bool x86_linux_is_u64_type(MinicType type) {
 /* Linux include/linux/math64.h: mul_u64_u64_div_u64 uses one RAX result,
  * three genuine input values and the explicit RDX clobber. A 128-bit
  * intermediate is mandatory: (a * mul) / div cannot be truncated to u64. */
-static bool x86_linux_muldiv_u64_source(
+static bool x86_linux_muldiv_u64_source(const MinicTargetInvocation *invocation,
     const MinicC0Program *program, const MinicInlineAsm *source,
     MinicTargetInlineAsmContract *contract) {
+    (void)invocation;
     const char *const constraints[] = {"=a", "a", "rm", "rm"};
     size_t i;
     if (!program || !source || !contract ||
@@ -1012,9 +1039,10 @@ static bool x86_linux_muldiv_u64_source(
     return true;
 }
 
-static bool x86_linux_crash_segment_snapshot_source(
+static bool x86_linux_crash_segment_snapshot_source(const MinicTargetInvocation *invocation,
     const MinicC0Program *program, const MinicInlineAsm *source,
     MinicTargetInlineAsmContract *contract) {
+    (void)invocation;
     const MinicExpression *output;
     MinicType type;
     if (!program || !source || !contract ||
@@ -1038,9 +1066,10 @@ static bool x86_linux_crash_segment_snapshot_source(
     return true;
 }
 
-static bool x86_linux_via_xstore_source(
+static bool x86_linux_via_xstore_source(const MinicTargetInvocation *invocation,
     const MinicC0Program *program, const MinicInlineAsm *source,
     MinicTargetInlineAsmContract *contract) {
+    (void)invocation;
     const char *const constraints[] = {"=m", "=a", "+d", "+D"};
     const MinicExpression *expressions[4], *mem_base;
     MinicType types[4], pointee;
@@ -1087,9 +1116,10 @@ static bool x86_linux_via_xstore_source(
     return true;
 }
 
-static bool x86_linux_kaslr_mul_source(
+static bool x86_linux_kaslr_mul_source(const MinicTargetInvocation *invocation,
     const MinicC0Program *program, const MinicInlineAsm *source,
     MinicTargetInlineAsmContract *contract) {
+    (void)invocation;
     const char *const names[] = {"=a", "=d", "a", "rm"};
     unsigned int i;
     if (!program || !source || !contract ||
@@ -1121,9 +1151,10 @@ static bool x86_linux_kaslr_mul_source(
     return true;
 }
 
-static bool x86_linux_gen_endbr_source(
+static bool x86_linux_gen_endbr_source(const MinicTargetInvocation *invocation,
     const MinicC0Program *program, const MinicInlineAsm *source,
     MinicTargetInlineAsmContract *contract) {
+    (void)invocation;
     const MinicExpression *expression;
     MinicType type;
     if (!program || !source || !contract ||
@@ -1149,9 +1180,10 @@ static bool x86_linux_gen_endbr_source(
     return true;
 }
 
-static bool x86_linux_preempt_gs_dec_source(
+static bool x86_linux_preempt_gs_dec_source(const MinicTargetInvocation *invocation,
     const MinicC0Program *program, const MinicInlineAsm *source,
     MinicTargetInlineAsmContract *contract) {
+    (void)invocation;
     const MinicExpression *memory, *zero;
     MinicType mem_type, flag_type;
     if (!program || !source || !contract ||
@@ -1187,9 +1219,10 @@ static bool x86_linux_preempt_gs_dec_source(
     return true;
 }
 
-static bool x86_linux_preempt_static_call_source(
+static bool x86_linux_preempt_static_call_source(const MinicTargetInvocation *invocation,
     const MinicC0Program *program, const MinicInlineAsm *source,
     MinicTargetInlineAsmContract *contract) {
+    (void)invocation;
     const unsigned int form = source ? minic_x86_64_linux_preempt_static_call_form(
         source->template_text, source->template_length) : 0U;
     const MinicExpression *stack;
@@ -1228,7 +1261,8 @@ static bool x86_linux_preempt_static_call_source(
 }
 
 bool minic_x86_64_qualify_inline_asm_goto(
-    const MinicC0Program *program, const MinicInlineAsm *source) {
+    const MinicTargetInvocation *invocation, const MinicC0Program *program, const MinicInlineAsm *source) {
+    if (invocation == NULL) return false;
     static const char *const names[] = {"feature", "bitnum", "cap_byte"};
     static const char *const labels[] = {"t_yes", "t_no"};
     const MinicExpression *expression;
@@ -1271,14 +1305,15 @@ bool minic_x86_64_qualify_inline_asm_goto(
     }
     return true;
 }
-static bool x86_linux_three_call_alternative_source(
+static bool x86_linux_three_call_alternative_source(const MinicTargetInvocation *invocation,
     const MinicC0Program *program, const MinicInlineAsm *src,
     MinicTargetInlineAsmContract *contract);
 
 
-static bool x86_linux_irq_stack_call_source(
+static bool x86_linux_irq_stack_call_source(const MinicTargetInvocation *invocation,
     const MinicC0Program *program, const MinicInlineAsm *src,
     MinicTargetInlineAsmContract *contract) {
+    (void)invocation;
     static const char *const expected_clobbers[] = {
         "cc", "rax", "rcx", "rdx", "rsi", "rdi", "r8", "r9", "r10"
     };
@@ -1350,9 +1385,10 @@ static bool x86_linux_irq_stack_call_source(
     return true;
 }
 
-static bool x86_linux_three_call_alternative_source(
+static bool x86_linux_three_call_alternative_source(const MinicTargetInvocation *invocation,
     const MinicC0Program *program, const MinicInlineAsm *src,
     MinicTargetInlineAsmContract *contract) {
+    (void)invocation;
     const MinicExpression *value;
     const MinicExpression *address;
     const MinicFixedRegisterBinding *fixed;
@@ -1406,9 +1442,10 @@ static bool x86_linux_three_call_alternative_source(
     return true;
 }
 
-static bool x86_linux_control_register_source(
+static bool x86_linux_control_register_source(const MinicTargetInvocation *invocation,
     const MinicC0Program *program, const MinicInlineAsm *source,
     MinicTargetInlineAsmContract *contract) {
+    (void)invocation;
     const unsigned int form = source ? minic_x86_64_linux_control_register_form(
         source->template_text, source->template_length) : 0U;
     const bool read_cr = form != 0U && form <= 4U;
@@ -1472,8 +1509,9 @@ static bool x86_linux_control_register_source(
     return true;
 }
 
-static bool x86_linux_tlb_cache_source(const MinicC0Program *program,
+static bool x86_linux_tlb_cache_source(const MinicTargetInvocation *invocation, const MinicC0Program *program,
     const MinicInlineAsm *src, MinicTargetInlineAsmContract *contract) {
+    (void)invocation;
     const unsigned int form = src ? minic_x86_64_linux_tlb_cache_form(
         src->template_text, src->template_length) : 0U;
     const MinicExpression *expr;
@@ -1509,9 +1547,10 @@ static bool x86_linux_tlb_cache_source(const MinicC0Program *program,
     return true;
 }
 
-static bool x86_linux_alternative_wrmsr_source(
+static bool x86_linux_alternative_wrmsr_source(const MinicTargetInvocation *invocation,
     const MinicC0Program *program, const MinicInlineAsm *src,
     MinicTargetInlineAsmContract *contract) {
+    (void)invocation;
     const MinicExpression *value;
     MinicType plain;
     size_t i;
@@ -1544,9 +1583,10 @@ static bool target_constraint_is(const MinicInlineAsmOperand *op, const char *s)
            memcmp(op->constraint_text, s, n) == 0;
 }
 
-static bool x86_linux_ip_here_source(
+static bool x86_linux_ip_here_source(const MinicTargetInvocation *invocation,
     const MinicC0Program *program, const MinicInlineAsm *src,
     MinicTargetInlineAsmContract *contract) {
+    (void)invocation;
     const MinicExpression *dst;
     MinicType plain;
     if (program == NULL || src == NULL || contract == NULL ||
@@ -1637,8 +1677,9 @@ static bool x86_linux_zero_barrier_source(
     contract->target_machine_form_variant = form;
     return true;
 }
-static bool x86_counter_source(const MinicC0Program *p,const MinicInlineAsm *s,
+static bool x86_counter_source(const MinicTargetInvocation *invocation, const MinicC0Program *p,const MinicInlineAsm *s,
                                MinicTargetInlineAsmContract *ct) {
+    (void)invocation;
     const unsigned int f=s?minic_x86_64_linux_counter_form(
         s->template_text,s->template_length):0U;
     const MinicExpression *e0,*e1,*v;
@@ -1683,9 +1724,10 @@ static bool x86_counter_source(const MinicC0Program *p,const MinicInlineAsm *s,
 /* XCR0/XSS write is architecturally privileged and requires all three
  * physical 32-bit input registers. A plain C call or memory store would not
  * update extended processor state, so keep its effect in the x86 target. */
-static bool x86_xsetbv_source(const MinicC0Program *program,
+static bool x86_xsetbv_source(const MinicTargetInvocation *invocation, const MinicC0Program *program,
                              const MinicInlineAsm *source,
                              MinicTargetInlineAsmContract *contract) {
+    (void)invocation;
     static const char *const constraints[] = {"a", "d", "c"};
     size_t i;
     if (!program || !source || !contract || !source->is_volatile ||
@@ -1710,9 +1752,10 @@ static bool x86_xsetbv_source(const MinicC0Program *program,
     return true;
 }
 
-static bool x86_fxsave_source(const MinicC0Program *program,
+static bool x86_fxsave_source(const MinicTargetInvocation *invocation, const MinicC0Program *program,
                              const MinicInlineAsm *source,
                              MinicTargetInlineAsmContract *contract) {
+    (void)invocation;
     const unsigned int form = source ? minic_x86_64_linux_fxsave_form(
         source->template_text, source->template_length) : 0U;
     const MinicExpression *destination;
@@ -1735,8 +1778,7 @@ static bool x86_fxsave_source(const MinicC0Program *program,
     if (!destination || destination->value_category != MINIC_VALUE_LVALUE ||
         minic_type_is_const(destination->type) ||
         !minic_data_layout_type(
-            minic_target_info_data_layout(minic_target_info_for_architecture(
-                MINIC_TARGET_ARCH_X86_64)),
+            invocation,
             program, destination->type, &size, &alignment) ||
         size < 512U || alignment < 16U) return false;
     contract->operand_count = 1U;
@@ -1747,9 +1789,10 @@ static bool x86_fxsave_source(const MinicC0Program *program,
     return true;
 }
 
-static bool x86_x87_probe_source(const MinicC0Program *program,
+static bool x86_x87_probe_source(const MinicTargetInvocation *invocation, const MinicC0Program *program,
                                  const MinicInlineAsm *source,
                                  MinicTargetInlineAsmContract *contract) {
+    (void)invocation;
     size_t i;
     if (!program || !source || !contract || !source->is_volatile ||
         source->is_goto || !minic_x86_64_linux_x87_probe_form(
@@ -1775,8 +1818,9 @@ static bool x86_x87_probe_source(const MinicC0Program *program,
     contract->implicit_memory_effect = true;
     return true;
 }
-static bool x86_hweight_source(const MinicC0Program *program,
+static bool x86_hweight_source(const MinicTargetInvocation *invocation, const MinicC0Program *program,
     const MinicInlineAsm *s,MinicTargetInlineAsmContract *ct){
+    (void)invocation;
     const unsigned int w=s?minic_x86_64_hweight_alternative_form(
        s->template_text,s->template_length):0U;
     const MinicExpression *out,*arg;MinicType to,ti;
@@ -1808,9 +1852,10 @@ static bool x86_hweight_source(const MinicC0Program *program,
     return true;
 }
 
-static bool x86_linux_vmware_hypercall_source(
+static bool x86_linux_vmware_hypercall_source(const MinicTargetInvocation *invocation,
     const MinicC0Program *program, const MinicInlineAsm *source,
     MinicTargetInlineAsmContract *contract) {
+    (void)invocation;
     static const char *const regs[] = {"a", "c", "d", "b"};
     size_t i;
     if (!program || !source || !contract ||
@@ -1846,9 +1891,10 @@ static bool x86_linux_vmware_hypercall_source(
     return true;
 }
 
-static bool x86_linux_legacy_fnsave_source(
+static bool x86_linux_legacy_fnsave_source(const MinicTargetInvocation *invocation,
     const MinicC0Program *program, const MinicInlineAsm *source,
     MinicTargetInlineAsmContract *contract) {
+    (void)invocation;
     const MinicExpression *image;
     size_t size, alignment;
     if (!program || !source || !contract ||
@@ -1867,17 +1913,17 @@ static bool x86_linux_legacy_fnsave_source(
     if (!image || image->value_category != MINIC_VALUE_LVALUE ||
         minic_type_is_const(image->type) ||
         !minic_data_layout_type(
-            minic_target_info_data_layout(minic_target_info_for_architecture(
-                MINIC_TARGET_ARCH_X86_64)), program, image->type,
+            invocation, program, image->type,
             &size, &alignment) || size < 108U) return false;
     contract->operand_count = 1U;
     contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT;
     return true;
 }
 
-static bool x86_linux_kexec_load_segments_source(
+static bool x86_linux_kexec_load_segments_source(const MinicTargetInvocation *invocation,
     const MinicC0Program *program, const MinicInlineAsm *source,
     MinicTargetInlineAsmContract *contract) {
+    (void)invocation;
     const MinicExpression *selector;
     MinicType type;
     if (!program || !source || !contract ||
@@ -1898,9 +1944,10 @@ static bool x86_linux_kexec_load_segments_source(
     return true;
 }
 
-static bool x86_linux_efi_kernel_transfer_source(
+static bool x86_linux_efi_kernel_transfer_source(const MinicTargetInvocation *invocation,
     const MinicC0Program *program, const MinicInlineAsm *source,
     MinicTargetInlineAsmContract *contract) {
+    (void)invocation;
     const MinicExpression *entry, *boot;
     MinicType type;
     if (!program || !source || !contract ||
@@ -1925,8 +1972,9 @@ static bool x86_linux_efi_kernel_transfer_source(
     contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     return true;
 }
-static bool x86_linux_msr_source(const MinicC0Program *program,
+static bool x86_linux_msr_source(const MinicTargetInvocation *invocation, const MinicC0Program *program,
     const MinicInlineAsm *src,MinicTargetInlineAsmContract *contract) {
+    (void)invocation;
     const unsigned int form=src?minic_x86_64_linux_msr_form(
         src->template_text,src->template_length):0U;
     const MinicExpression *e;MinicType type;
@@ -2005,8 +2053,9 @@ static bool x86_linux_msr_source(const MinicC0Program *program,
             MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     return true;
 }
-static bool x86_ip_fast_csum_source(const MinicC0Program *p,
+static bool x86_ip_fast_csum_source(const MinicTargetInvocation *invocation, const MinicC0Program *p,
     const MinicInlineAsm *s, MinicTargetInlineAsmContract *ct) {
+    (void)invocation;
     const MinicExpression *expr;
     MinicType type;
     size_t i;
@@ -2040,8 +2089,9 @@ static bool x86_ip_fast_csum_source(const MinicC0Program *p,
                     MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     return true;
 }
-static bool x86_checksum_source(const MinicC0Program *p,
+static bool x86_checksum_source(const MinicTargetInvocation *invocation, const MinicC0Program *p,
     const MinicInlineAsm *src,MinicTargetInlineAsmContract *ct){
+    (void)invocation;
     size_t i;
     if(!p||!src||!ct||src->is_volatile||src->is_goto||
        src->output_count!=1U||src->input_count!=2U||
@@ -2072,8 +2122,9 @@ static bool x86_checksum_source(const MinicC0Program *p,
     ct->kinds[2]=MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     return true;
 }
-static bool x86_percpu_gs_source(const MinicC0Program *program,
+static bool x86_percpu_gs_source(const MinicTargetInvocation *invocation, const MinicC0Program *program,
     const MinicInlineAsm *src,MinicTargetInlineAsmContract *contract){
+    (void)invocation;
     unsigned int op;size_t width,i;
     const MinicExpression *e;
     if(!program||!src||!contract||src->is_goto||src->label_count||
@@ -2126,9 +2177,10 @@ static bool x86_percpu_gs_source(const MinicC0Program *program,
     return true;
 }
 
-static bool x86_gs_tied_alu_source(
+static bool x86_gs_tied_alu_source(const MinicTargetInvocation *invocation,
     const MinicC0Program *program, const MinicInlineAsm *src,
     MinicTargetInlineAsmContract *contract) {
+    (void)invocation;
     const MinicExpression *output, *mem, *seed;
     MinicType out_type, mem_type, seed_type;
     size_t opcode_width=0U, width;
@@ -2185,9 +2237,10 @@ static bool x86_gs_tied_alu_source(
     return true;
 }
 
-static bool x86_apic_amd_alt_source(
+static bool x86_apic_amd_alt_source(const MinicTargetInvocation *invocation,
     const MinicC0Program *program,const MinicInlineAsm *src,
     MinicTargetInlineAsmContract *contract) {
+    (void)invocation;
     const unsigned int form=src?minic_x86_64_linux_apic_amd_alt_form(
         src->template_text,src->template_length):0U;
     size_t i;
@@ -2244,9 +2297,10 @@ static bool x86_apic_amd_alt_source(
         contract->kinds[i]=MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     return true;
 }
-static bool x86_prefetchw_alt_source(
+static bool x86_prefetchw_alt_source(const MinicTargetInvocation *invocation,
     const MinicC0Program *program,const MinicInlineAsm *src,
     MinicTargetInlineAsmContract *contract) {
+    (void)invocation;
     const MinicExpression *imm,*memory;
     if(!program||!src||!contract||!src->is_volatile||src->is_goto||
        src->output_count!=0U||src->input_count!=2U||src->inputs==NULL||
@@ -2268,9 +2322,10 @@ static bool x86_prefetchw_alt_source(
     return true;
 }
 
-static bool x86_linux_tcpudp_nofold_source(
+static bool x86_linux_tcpudp_nofold_source(const MinicTargetInvocation *invocation,
     const MinicC0Program *p, const MinicInlineAsm *s,
     MinicTargetInlineAsmContract *c) {
+    (void)invocation;
     size_t i;
     if (!p || !s || !c || s->is_volatile || s->is_goto ||
         s->has_memory_clobber || s->label_count || s->clobber_count ||
@@ -2300,8 +2355,9 @@ static bool x86_linux_tcpudp_nofold_source(
         c->kinds[i] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     return true;
 }
-static bool x86_add32_carry_source(const MinicC0Program *p,
+static bool x86_add32_carry_source(const MinicTargetInvocation *invocation, const MinicC0Program *p,
     const MinicInlineAsm *s,MinicTargetInlineAsmContract *c){
+    (void)invocation;
     size_t i;
     if(!p||!s||!c||s->is_volatile||s->is_goto||
        s->has_memory_clobber||s->label_count||s->clobber_count||
@@ -2364,9 +2420,10 @@ static bool x86_nospec_source(const MinicC0Program *program,
          size_type.integer_rank == MINIC_INTEGER_RANK_LONG ||
          size_type.integer_rank == MINIC_INTEGER_RANK_LONG_LONG);
 }
-static bool x86_linux_raw_cmpxchg_source(
+static bool x86_linux_raw_cmpxchg_source(const MinicTargetInvocation *invocation,
     const MinicC0Program *program, const MinicInlineAsm *src,
     MinicTargetInlineAsmContract *contract) {
+    (void)invocation;
     const MinicX86TryCas form = src ? minic_x86_64_raw_cmpxchg_form(
         src->template_text, src->template_length) : MINIC_X86_TRYCAS_NONE;
     const MinicX86TryCasDesc *d = minic_x86_64_trycas_desc(form);
@@ -2411,8 +2468,9 @@ static bool x86_linux_raw_cmpxchg_source(
     contract->target_machine_form_variant = (uint32_t)form;
     return true;
 }
-static bool x86_port_io_source(const MinicC0Program *program,
+static bool x86_port_io_source(const MinicTargetInvocation *invocation, const MinicC0Program *program,
     const MinicInlineAsm *src,MinicTargetInlineAsmContract *contract){
+    (void)invocation;
     const MinicX86PortIo form=src?minic_x86_64_port_io_form(
         src->template_text,src->template_length):MINIC_X86_PORT_IO_NONE;
     const MinicX86PortIoDesc *d=minic_x86_64_port_io_description(form);
@@ -2452,9 +2510,10 @@ static bool x86_port_io_source(const MinicC0Program *program,
     return true;
 }
 
-static bool x86_trycas_source(
+static bool x86_trycas_source(const MinicTargetInvocation *invocation,
     const MinicC0Program *program,const MinicInlineAsm *src,
     MinicTargetInlineAsmContract *contract) {
+    (void)invocation;
     const MinicX86TryCas form=src ?
         minic_x86_64_trycas_form(src->template_text,src->template_length):
         MINIC_X86_TRYCAS_NONE;
@@ -2513,9 +2572,10 @@ static bool x86_trycas_source(
     contract->target_machine_form_variant=(uint32_t)form;
     return true;
 }
-static bool x86_linux_atomic_rmw_source(
+static bool x86_linux_atomic_rmw_source(const MinicTargetInvocation *invocation,
     const MinicC0Program *program,const MinicInlineAsm *src,
     MinicTargetInlineAsmContract *contract) {
+    (void)invocation;
     const MinicX86AtomicRmw form=src?
         minic_x86_64_atomic_rmw_form(src->template_text,src->template_length):
         MINIC_X86_ATOMIC_RMW_NONE;
@@ -2756,9 +2816,10 @@ static bool x86_linux_gs_cmpxchg_source(
 /* Dispatch once to the target-owned machine decision. Each variant still
  * verifies its original GNU operand ABI; no generic Core layer needs to
  * understand SMP locks, GS addressing or the CMPXCHG accumulator. */
-static bool x86_linux_gs_atomic_source(
+static bool x86_linux_gs_atomic_source(const MinicTargetInvocation *invocation,
     const MinicC0Program *program, const MinicInlineAsm *source,
     MinicTargetInlineAsmContract *contract) {
+    (void)invocation;
     const MinicX86GsAtomicPlan plan = source ? minic_x86_64_gs_atomic_plan(
         source->template_text, source->template_length) :
         (MinicX86GsAtomicPlan){0};
@@ -2778,9 +2839,10 @@ static bool x86_linux_gs_atomic_source(
     return false;
 }
 
-static bool x86_linux_rep_stos_source(
+static bool x86_linux_rep_stos_source(const MinicTargetInvocation *invocation,
     const MinicC0Program *program, const MinicInlineAsm *source,
     MinicTargetInlineAsmContract *contract) {
+    (void)invocation;
     const size_t width = source ? minic_x86_64_linux_rep_stos_width(
         source->template_text, source->template_length) : 0U;
     const MinicExpression *output_count, *output_dest, *value, *dest, *count;
@@ -2832,9 +2894,10 @@ static bool x86_linux_rep_stos_source(
     return true;
 }
 
-static bool x86_linux_lowlevel_scalar_source(
+static bool x86_linux_lowlevel_scalar_source(const MinicTargetInvocation *invocation,
     const MinicC0Program *program, const MinicInlineAsm *source,
     MinicTargetInlineAsmContract *contract) {
+    (void)invocation;
     const unsigned int form = source ? minic_x86_64_linux_lowlevel_scalar_form(
         source->template_text, source->template_length) : 0U;
     const MinicExpression *operand;
@@ -2949,9 +3012,10 @@ static bool x86_linux_lowlevel_scalar_source(
     return false;
 }
 
-static bool x86_linux_delay_wait_source(
+static bool x86_linux_delay_wait_source(const MinicTargetInvocation *invocation,
     const MinicC0Program *program, const MinicInlineAsm *source,
     MinicTargetInlineAsmContract *contract) {
+    (void)invocation;
     static const char *const tpause_constraints[] = {"c", "d", "a"};
     const unsigned int form = source ? minic_x86_64_linux_delay_wait_form(
         source->template_text, source->template_length) : 0U;
@@ -2989,9 +3053,10 @@ static bool x86_linux_delay_wait_source(
     return true;
 }
 
-static bool x86_linux_identity_load_source(
+static bool x86_linux_identity_load_source(const MinicTargetInvocation *invocation,
     const MinicC0Program *program, const MinicInlineAsm *source,
     MinicTargetInlineAsmContract *contract) {
+    (void)invocation;
     const MinicExpression *expr;
     if (!program || !source || !contract ||
         !minic_x86_64_linux_identity_load_form(
@@ -3012,9 +3077,10 @@ static bool x86_linux_identity_load_source(
     return true;
 }
 
-static bool x86_linux_ipv6_checksum_source(
+static bool x86_linux_ipv6_checksum_source(const MinicTargetInvocation *invocation,
     const MinicC0Program *program, const MinicInlineAsm *source,
     MinicTargetInlineAsmContract *contract) {
+    (void)invocation;
     static const char *const constraints[] = {"=r", "[sum]", "r", "r"};
     const MinicExpression *expr;
     size_t i;
@@ -3045,9 +3111,10 @@ static bool x86_linux_ipv6_checksum_source(
     return true;
 }
 
-static bool x86_linux_csum_partial_source(
+static bool x86_linux_csum_partial_source(const MinicTargetInvocation *invocation,
     const MinicC0Program *program, const MinicInlineAsm *source,
     MinicTargetInlineAsmContract *contract) {
+    (void)invocation;
     const unsigned int form = source ? minic_x86_64_linux_csum_partial_form(
         source->template_text, source->template_length) : 0U;
     const MinicExpression *expression;
@@ -3123,9 +3190,10 @@ static bool x86_linux_csum_partial_source(
     return true;
 }
 
-static bool x86_linux_delay_mul_source(
+static bool x86_linux_delay_mul_source(const MinicTargetInvocation *invocation,
     const MinicC0Program *program, const MinicInlineAsm *source,
     MinicTargetInlineAsmContract *contract) {
+    (void)invocation;
     static const char *const output_constraints[] = {"=d", "=&a"};
     static const char *const input_constraints[] = {"1", "0"};
     const MinicExpression *expr;
@@ -3159,9 +3227,10 @@ static bool x86_linux_delay_mul_source(
     return true;
 }
 
-static bool x86_linux_boot_flags_source(
+static bool x86_linux_boot_flags_source(const MinicTargetInvocation *invocation,
     const MinicC0Program *program, const MinicInlineAsm *source,
     MinicTargetInlineAsmContract *contract) {
+    (void)invocation;
     const unsigned int form = source ? minic_x86_64_linux_boot_flags_form(
         source->template_text, source->template_length) : 0U;
     static const char *const cpuid_outputs[] = {"=a", "=b", "=c", "=d"};
@@ -3241,9 +3310,10 @@ static bool x86_linux_boot_flags_source(
     return true;
 }
 
-static bool x86_linux_lock_bitcc_source(
+static bool x86_linux_lock_bitcc_source(const MinicTargetInvocation *invocation,
     const MinicC0Program *program, const MinicInlineAsm *source,
     MinicTargetInlineAsmContract *contract) {
+    (void)invocation;
     const unsigned int form = source ? minic_x86_64_linux_lock_bitcc_form(
         source->template_text, source->template_length) : 0U;
     const MinicExpression *mem, *flag, *input;
@@ -3280,9 +3350,10 @@ static bool x86_linux_lock_bitcc_source(
     return true;
 }
 
-static bool x86_linux_boot_string_source(
+static bool x86_linux_boot_string_source(const MinicTargetInvocation *invocation,
     const MinicC0Program *program, const MinicInlineAsm *source,
     MinicTargetInlineAsmContract *contract) {
+    (void)invocation;
     static const char *const cmps_out[] = {
         "=@ccnz", "+D", "+S", "+c"
     };
@@ -3341,9 +3412,10 @@ static bool x86_linux_boot_string_source(
     return true;
 }
 
-static bool x86_linux_vdso_syscall_source(
+static bool x86_linux_vdso_syscall_source(const MinicTargetInvocation *invocation,
     const MinicC0Program *program, const MinicInlineAsm *source,
     MinicTargetInlineAsmContract *contract) {
+    (void)invocation;
     const bool clock_form = source && source->output_count == 2U;
     const MinicExpression *ret, *outmem, *number, *arg1, *arg2;
     if (!program || !source || !contract ||
@@ -3392,9 +3464,10 @@ static bool x86_linux_vdso_syscall_source(
     return true;
 }
 
-static bool x86_linux_vdso_cpunode_source(
+static bool x86_linux_vdso_cpunode_source(const MinicTargetInvocation *invocation,
     const MinicC0Program *program, const MinicInlineAsm *source,
     MinicTargetInlineAsmContract *contract) {
+    (void)invocation;
     const MinicExpression *p,*zero,*selector;
     if (!program || !source || !contract ||
         !minic_x86_64_linux_vdso_cpunode_form(
@@ -3423,9 +3496,10 @@ static bool x86_linux_vdso_cpunode_source(
     return true;
 }
 
-static bool x86_linux_atomic_cc_source(
+static bool x86_linux_atomic_cc_source(const MinicTargetInvocation *invocation,
     const MinicC0Program *program, const MinicInlineAsm *src,
     MinicTargetInlineAsmContract *contract) {
+    (void)invocation;
     const MinicExpression *mem, *flag, *value;
     MinicType mt, ft, vt;
     const MinicX86AtomicCC form = src ?
@@ -3479,9 +3553,10 @@ static bool x86_linux_atomic_cc_source(
             ? MINIC_X86_ATOMIC_CC_LOCK_VARIANT : 0U);
     return true;
 }
-static bool x86_linux_bitops_source(
+static bool x86_linux_bitops_source(const MinicTargetInvocation *invocation,
     const MinicC0Program *program,const MinicInlineAsm *src,
     MinicTargetInlineAsmContract *contract) {
+    (void)invocation;
     const MinicX86BitopsForm form=src ?
         minic_x86_64_linux_bitops_form(
             src->template_text,src->template_length):MINIC_X86_BITOPS_NONE;
@@ -3582,9 +3657,10 @@ static bool x86_bit_scan_operand_type(
  * its EAX/ECX *inputs* are ordinary 32-bit integers (not tied "0"/"2"
  * operands). The omitted registers are declared clobbered in the source;
  * the machine implementation still saves the ABI-preserved RBX. */
-static bool x86_zstd_cpuid_source(
+static bool x86_zstd_cpuid_source(const MinicTargetInvocation *invocation,
     const MinicC0Program *program, const MinicInlineAsm *source,
     MinicTargetInlineAsmContract *contract) {
+    (void)invocation;
     static const char *const form_out[][3] = {
         {"=a", NULL, NULL}, {"=a", "=c", "=d"}, {"=a", "=b", "=c"}
     };
@@ -3774,9 +3850,10 @@ static bool qualified(const MinicC0Program *program,
     return true;
 }
 
-static bool x86_linux_monitor_wait_source(
+static bool x86_linux_monitor_wait_source(const MinicTargetInvocation *invocation,
     const MinicC0Program *program, const MinicInlineAsm *source,
     MinicTargetInlineAsmContract *contract) {
+    (void)invocation;
     static const char *const regs_acd[] = {"a", "c", "d"};
     static const char *const regs_abc[] = {"a", "b", "c"};
     const unsigned int form = source ? minic_x86_64_linux_monitor_wait_form(
@@ -3807,9 +3884,10 @@ static bool x86_linux_monitor_wait_source(
     return true;
 }
 
-static bool x86_linux_segment_read_source(
+static bool x86_linux_segment_read_source(const MinicTargetInvocation *invocation,
     const MinicC0Program *program, const MinicInlineAsm *source,
     MinicTargetInlineAsmContract *contract) {
+    (void)invocation;
     const MinicExpression *dst;
     MinicType plain;
     const unsigned int form = source ? minic_x86_64_linux_segment_read_form(
@@ -3845,9 +3923,10 @@ static bool x86_linux_segment_read_source(
     return true;
 }
 
-static bool x86_linux_segment_load_extable_source(
+static bool x86_linux_segment_load_extable_source(const MinicTargetInvocation *invocation,
     const MinicC0Program *program, const MinicInlineAsm *source,
     MinicTargetInlineAsmContract *contract) {
+    (void)invocation;
     const MinicExpression *value;
     MinicType type;
     if (!program || !source || !contract ||
@@ -3869,9 +3948,10 @@ static bool x86_linux_segment_load_extable_source(
     return true;
 }
 
-static bool x86_linux_lkgs_extable_source(
+static bool x86_linux_lkgs_extable_source(const MinicTargetInvocation *invocation,
     const MinicC0Program *program, const MinicInlineAsm *source,
     MinicTargetInlineAsmContract *contract) {
+    (void)invocation;
     const MinicExpression *selector;
     MinicType type;
     if (!program || !source || !contract ||
@@ -3896,9 +3976,10 @@ static bool x86_linux_lkgs_extable_source(
     return true;
 }
 
-static bool x86_linux_fsgsbase_source(
+static bool x86_linux_fsgsbase_source(const MinicTargetInvocation *invocation,
     const MinicC0Program *program, const MinicInlineAsm *source,
     MinicTargetInlineAsmContract *contract) {
+    (void)invocation;
     const unsigned int form = source ? minic_x86_64_linux_fsgsbase_form(
         source->template_text, source->template_length) : 0U;
     const bool reading = form <= 2U;
@@ -3930,9 +4011,10 @@ static bool x86_linux_fsgsbase_source(
     return true;
 }
 
-static bool x86_linux_kernel_nofault_goto_source(
+static bool x86_linux_kernel_nofault_goto_source(const MinicTargetInvocation *invocation,
     const MinicC0Program *program, const MinicInlineAsm *source,
     MinicTargetInlineAsmContract *contract) {
+    (void)invocation;
     const unsigned int form = source ?
         minic_x86_64_linux_kernel_nofault_goto_form(
             source->template_text, source->template_length) : 0U;
@@ -3984,9 +4066,10 @@ static bool x86_linux_kernel_nofault_goto_source(
     return true;
 }
 
-static bool x86_linux_rep_stosb_alternative_source(
+static bool x86_linux_rep_stosb_alternative_source(const MinicTargetInvocation *invocation,
     const MinicC0Program *program, const MinicInlineAsm *source,
     MinicTargetInlineAsmContract *contract) {
+    (void)invocation;
     static const char *const constraints[] = {"+c", "+D", "+r"};
     const MinicExpression *expr;
     const MinicFixedRegisterBinding *stack;
@@ -4035,9 +4118,10 @@ static bool x86_linux_rep_stosb_alternative_source(
     return true;
 }
 
-static bool x86_linux_fpu_user_frame_source(
+static bool x86_linux_fpu_user_frame_source(const MinicTargetInvocation *invocation,
     const MinicC0Program *program, const MinicInlineAsm *source,
     MinicTargetInlineAsmContract *contract) {
+    (void)invocation;
     const MinicExpression *error, *output, *input, *zero;
     const unsigned int form = source ?
         minic_x86_64_linux_fpu_user_frame_form(
@@ -4086,9 +4170,10 @@ static bool x86_linux_fpu_user_frame_source(
  * The hardware CSR side effect and 32-bit operand width belong to x86.
  * Preserve both numeric and named GNU operands, including optional stronger
  * compiler memory clobbers admitted by the old generic path. */
-static bool x86_linux_mxcsr_source(
+static bool x86_linux_mxcsr_source(const MinicTargetInvocation *invocation,
     const MinicC0Program *program, const MinicInlineAsm *source,
     MinicTargetInlineAsmContract *contract) {
+    (void)invocation;
     const unsigned int form = source ? minic_x86_64_linux_mxcsr_form(
         source->template_text, source->template_length) : 0U;
     const bool reading_memory = form == 1U;
@@ -4124,9 +4209,10 @@ static bool x86_linux_mxcsr_source(
 /* ORC's live RIP/RSP/RBP snapshot has three *independent* register outputs.
  * Keep this x86-specific privileged register view out of generic Core ASM
  * admission; no memory operand, clobber or extra instruction is permitted. */
-static bool x86_linux_unwind_context_source(
+static bool x86_linux_unwind_context_source(const MinicTargetInvocation *invocation,
     const MinicC0Program *program, const MinicInlineAsm *source,
     MinicTargetInlineAsmContract *contract) {
+    (void)invocation;
     size_t i;
     if (!program || !source || !contract ||
         !minic_x86_64_linux_unwind_context_form(
@@ -4153,9 +4239,10 @@ static bool x86_linux_unwind_context_source(
     return true;
 }
 
-static bool x86_linux_task_size_alt_source(
+static bool x86_linux_task_size_alt_source(const MinicTargetInvocation *invocation,
     const MinicC0Program *program, const MinicInlineAsm *source,
     MinicTargetInlineAsmContract *contract) {
+    (void)invocation;
     const MinicExpression *output, *input;
     MinicType type;
     size_t i;
@@ -4185,9 +4272,10 @@ static bool x86_linux_task_size_alt_source(
     return true;
 }
 
-static bool x86_linux_x87_fild_prepare_source(
+static bool x86_linux_x87_fild_prepare_source(const MinicTargetInvocation *invocation,
     const MinicC0Program *program, const MinicInlineAsm *source,
     MinicTargetInlineAsmContract *contract) {
+    (void)invocation;
     const MinicExpression *input;
     if (!program || !source || !contract || !source->is_volatile ||
         source->is_goto || source->output_count != 0U ||
@@ -4206,9 +4294,10 @@ static bool x86_linux_x87_fild_prepare_source(
     return true;
 }
 
-static bool x86_linux_fpu_kernel_restore_source(
+static bool x86_linux_fpu_kernel_restore_source(const MinicTargetInvocation *invocation,
     const MinicC0Program *program, const MinicInlineAsm *source,
     MinicTargetInlineAsmContract *contract) {
+    (void)invocation;
     const MinicExpression *output, *input;
     const MinicExpression *out_base, *in_base;
     const unsigned int form = source ? minic_x86_64_linux_fpu_kernel_restore_form(
@@ -4245,9 +4334,10 @@ static bool x86_linux_fpu_kernel_restore_source(
     return true;
 }
 
-static bool x86_linux_fxrstor_safe_source(
+static bool x86_linux_fxrstor_safe_source(const MinicTargetInvocation *invocation,
     const MinicC0Program *program, const MinicInlineAsm *source,
     MinicTargetInlineAsmContract *contract) {
+    (void)invocation;
     const MinicExpression *error, *memory, *zero, *input;
     if (!program || !source || !contract ||
         !minic_x86_64_linux_fxrstor_safe_form(
@@ -4289,9 +4379,10 @@ static bool x86_linux_fxrstor_safe_source(
     return true;
 }
 
-static bool x86_linux_xstate_fault_source(
+static bool x86_linux_xstate_fault_source(const MinicTargetInvocation *invocation,
     const MinicC0Program *program, const MinicInlineAsm *source,
     MinicTargetInlineAsmContract *contract) {
+    (void)invocation;
     const MinicExpression *err, *ptr, *mem, *low, *high;
     MinicType pointee, plain;
     if (!program || !source || !contract ||
@@ -4335,9 +4426,10 @@ static bool x86_linux_xstate_fault_source(
     return true;
 }
 
-static bool x86_linux_xrstor_alternative_source(
+static bool x86_linux_xrstor_alternative_source(const MinicTargetInvocation *invocation,
     const MinicC0Program *program, const MinicInlineAsm *source,
     MinicTargetInlineAsmContract *contract) {
+    (void)invocation;
     const MinicExpression *ptr, *mem, *low, *high;
     MinicType pointee;
     if (!program || !source || !contract ||
@@ -4374,9 +4466,10 @@ static bool x86_linux_xrstor_alternative_source(
     return true;
 }
 
-static bool x86_linux_xsave_triple_alternative_source(
+static bool x86_linux_xsave_triple_alternative_source(const MinicTargetInvocation *invocation,
     const MinicC0Program *program, const MinicInlineAsm *source,
     MinicTargetInlineAsmContract *contract) {
+    (void)invocation;
     const MinicExpression *error, *ptr, *mem, *low, *high;
     MinicType pointee, plain;
     if (!program || !source || !contract ||
@@ -4447,9 +4540,10 @@ static bool x86_linux_jump_label_source(
     return true;
 }
 
-static bool x86_linux_pkru_source(
+static bool x86_linux_pkru_source(const MinicTargetInvocation *invocation,
     const MinicC0Program *program, const MinicInlineAsm *source,
     MinicTargetInlineAsmContract *contract) {
+    (void)invocation;
     const unsigned int form = source ? minic_x86_64_linux_pkru_form(
         source->template_text, source->template_length) : 0U;
     const bool read = form == 1U;
@@ -4498,9 +4592,10 @@ static bool x86_linux_pkru_source(
     return true;
 }
 
-static bool x86_linux_fdiv_bug_source(
+static bool x86_linux_fdiv_bug_source(const MinicTargetInvocation *invocation,
     const MinicC0Program *program, const MinicInlineAsm *source,
     MinicTargetInlineAsmContract *contract) {
+    (void)invocation;
     const MinicExpression *expression;
     MinicType type;
     size_t i;
@@ -4539,9 +4634,10 @@ static bool x86_linux_fdiv_bug_source(
     return true;
 }
 
-static bool x86_linux_load_unaligned_zeropad_source(
+static bool x86_linux_load_unaligned_zeropad_source(const MinicTargetInvocation *invocation,
     const MinicC0Program *program, const MinicInlineAsm *source,
     MinicTargetInlineAsmContract *contract) {
+    (void)invocation;
     const MinicExpression *output, *memory;
     if (!program || !source || !contract ||
         !minic_x86_64_linux_load_unaligned_zeropad_form(
@@ -4572,9 +4668,10 @@ static bool x86_linux_load_unaligned_zeropad_source(
     return true;
 }
 
-static bool x86_linux_lar_selector_source(
+static bool x86_linux_lar_selector_source(const MinicTargetInvocation *invocation,
     const MinicC0Program *program, const MinicInlineAsm *source,
     MinicTargetInlineAsmContract *contract) {
+    (void)invocation;
     const MinicExpression *rights, *selector;
     MinicType plain;
     if (!program || !source || !contract ||
@@ -4606,9 +4703,10 @@ static bool x86_linux_lar_selector_source(
     return true;
 }
 
-static bool x86_linux_random_seed_source(
+static bool x86_linux_random_seed_source(const MinicTargetInvocation *invocation,
     const MinicC0Program *program, const MinicInlineAsm *source,
     MinicTargetInlineAsmContract *contract) {
+    (void)invocation;
     const MinicExpression *flag, *output;
     const unsigned int form = source ? minic_x86_64_linux_random_seed_form(
         source->template_text, source->template_length) : 0U;
@@ -4641,9 +4739,10 @@ static bool x86_linux_random_seed_source(
     return true;
 }
 
-static bool x86_linux_smap_alternative_source(
+static bool x86_linux_smap_alternative_source(const MinicTargetInvocation *invocation,
     const MinicC0Program *program, const MinicInlineAsm *source,
     MinicTargetInlineAsmContract *contract) {
+    (void)invocation;
     const MinicExpression *expression;
     const unsigned int form = source ?
         minic_x86_64_linux_smap_alternative_form(
@@ -4675,9 +4774,10 @@ static bool x86_linux_smap_alternative_source(
     return true;
 }
 
-static bool x86_linux_rep_movsb_alternative_source(
+static bool x86_linux_rep_movsb_alternative_source(const MinicTargetInvocation *invocation,
     const MinicC0Program *program, const MinicInlineAsm *source,
     MinicTargetInlineAsmContract *contract) {
+    (void)invocation;
     static const char *const constraints[] = {"+c", "+D", "+S", "+r"};
     const MinicExpression *expression;
     const MinicFixedRegisterBinding *stack_binding;
@@ -4725,9 +4825,10 @@ static bool x86_linux_rep_movsb_alternative_source(
     return true;
 }
 
-static bool x86_linux_segment_register_extable_source(
+static bool x86_linux_segment_register_extable_source(const MinicTargetInvocation *invocation,
     const MinicC0Program *program, const MinicInlineAsm *source,
     MinicTargetInlineAsmContract *contract) {
+    (void)invocation;
     const MinicExpression *selector;
     MinicType type;
     if (!program || !source || !contract ||
@@ -4753,9 +4854,10 @@ static bool x86_linux_segment_register_extable_source(
     return true;
 }
 
-static bool x86_linux_cmpxchg128_source(
+static bool x86_linux_cmpxchg128_source(const MinicTargetInvocation *invocation,
     const MinicC0Program *program, const MinicInlineAsm *source,
     MinicTargetInlineAsmContract *contract) {
+    (void)invocation;
     const unsigned int form = source ? minic_x86_64_linux_cmpxchg128_form(
         source->template_text, source->template_length) : 0U;
     const MinicExpression *cc, *memory, *low, *high, *new_low, *new_high;
@@ -4818,9 +4920,10 @@ static bool x86_linux_cmpxchg128_source(
     return true;
 }
 
-static bool x86_linux_put_user_call_source(
+static bool x86_linux_put_user_call_source(const MinicTargetInvocation *invocation,
     const MinicC0Program *program, const MinicInlineAsm *source,
     MinicTargetInlineAsmContract *contract) {
+    (void)invocation;
     const unsigned int form = source ? minic_x86_64_linux_put_user_call_form(
         source->template_text, source->template_length) : 0U;
     const MinicExpression *error, *stack, *user, *value, *size;
@@ -4894,9 +4997,10 @@ static bool x86_linux_put_user_call_source(
     return true;
 }
 
-static bool x86_linux_get_user_call_source(
+static bool x86_linux_get_user_call_source(const MinicTargetInvocation *invocation,
     const MinicC0Program *program, const MinicInlineAsm *source,
     MinicTargetInlineAsmContract *contract) {
+    (void)invocation;
     const unsigned int form = source ? minic_x86_64_linux_get_user_call_form(
         source->template_text, source->template_length) : 0U;
     const MinicExpression *error, *value, *stack, *pointer, *size;
@@ -4964,9 +5068,10 @@ static bool x86_linux_get_user_call_source(
     return true;
 }
 
-static bool x86_linux_pat_clflushopt_source(
+static bool x86_linux_pat_clflushopt_source(const MinicTargetInvocation *invocation,
     const MinicC0Program *program, const MinicInlineAsm *source,
     MinicTargetInlineAsmContract *contract) {
+    (void)invocation;
     const MinicExpression *address, *zero;
     MinicType plain;
     if (!program || !source || !contract || !source->is_volatile ||
@@ -4996,9 +5101,10 @@ static bool x86_linux_pat_clflushopt_source(
     return true;
 }
 
-static bool x86_linux_futex_extable_source(
+static bool x86_linux_futex_extable_source(const MinicTargetInvocation *invocation,
     const MinicC0Program *program, const MinicInlineAsm *source,
     MinicTargetInlineAsmContract *contract) {
+    (void)invocation;
     const unsigned int form = source ? minic_x86_64_linux_futex_extable_form(
         source->template_text, source->template_length) : 0U;
     const bool loop = form >= 4U;
@@ -5048,9 +5154,10 @@ static bool x86_linux_futex_extable_source(
     return true;
 }
 
-static bool x86_linux_idle_clflush_alt_source(
+static bool x86_linux_idle_clflush_alt_source(const MinicTargetInvocation *invocation,
     const MinicC0Program *program, const MinicInlineAsm *source,
     MinicTargetInlineAsmContract *contract) {
+    (void)invocation;
     const MinicExpression *zero, *address;
     if (!program || !source || !contract || !source->is_volatile ||
         source->is_goto || source->output_count || source->input_count != 2U ||
@@ -5078,9 +5185,10 @@ static bool x86_linux_idle_clflush_alt_source(
     return true;
 }
 
-static bool x86_linux_verw_clear_source(
+static bool x86_linux_verw_clear_source(const MinicTargetInvocation *invocation,
     const MinicC0Program *program, const MinicInlineAsm *source,
     MinicTargetInlineAsmContract *contract) {
+    (void)invocation;
     const MinicExpression *selector;
     MinicType plain;
     if (!program || !source || !contract || !source->is_volatile ||
@@ -5106,9 +5214,10 @@ static bool x86_linux_verw_clear_source(
     return true;
 }
 
-static bool x86_linux_debug_register_source(
+static bool x86_linux_debug_register_source(const MinicTargetInvocation *invocation,
     const MinicC0Program *program, const MinicInlineAsm *source,
     MinicTargetInlineAsmContract *contract) {
+    (void)invocation;
     const unsigned int form = source ? minic_x86_64_linux_debug_register_form(
         source->template_text, source->template_length) : 0U;
     const bool read = form >= 1U && form <= 6U;
@@ -5153,14 +5262,15 @@ static bool x86_linux_debug_register_source(
 /* The source-level ABI recognizers share one admission signature. This
  * adapter keeps the no-operand memory barrier in the same ordered inventory
  * instead of making it a hidden exceptional dispatch branch. */
-static bool x86_linux_zero_barrier_qualifier(
+static bool x86_linux_zero_barrier_qualifier(const MinicTargetInvocation *invocation,
     const MinicC0Program *program, const MinicInlineAsm *source,
     MinicTargetInlineAsmContract *contract) {
+    (void)invocation;
     (void)program;
     return x86_linux_zero_barrier_source(source, contract);
 }
 typedef bool (*MinicX86SourceQualifier)(
-    const MinicC0Program *, const MinicInlineAsm *,
+    const MinicTargetInvocation *, const MinicC0Program *, const MinicInlineAsm *,
     MinicTargetInlineAsmContract *);
 
 /* Source matching is a policy table, not a machine emitter or Core opcode.
@@ -5292,16 +5402,16 @@ static const MinicX86SourceQualifierEntry minic_x86_source_qualifiers[] = {
 
 
 bool minic_x86_64_qualify_inline_asm(
-    const MinicC0Program *program, const MinicInlineAsm *source,
+    const MinicTargetInvocation *invocation, const MinicC0Program *program, const MinicInlineAsm *source,
     MinicTargetInlineAsmContract *contract) {
     bool is_mulacc = false;
     size_t i, count;
-    if (!contract) return false;
+    if (!invocation || !contract) return false;
     for (i = 0U;
          i < sizeof(minic_x86_source_qualifiers) /
                  sizeof(minic_x86_source_qualifiers[0]);
          ++i) {
-        if (minic_x86_source_qualifiers[i].qualify(program, source, contract)) {
+        if (minic_x86_source_qualifiers[i].qualify(invocation, program, source, contract)) {
             contract->target_machine_form_id =
                 (uint32_t)minic_x86_source_qualifiers[i].machine_form;
             return true;

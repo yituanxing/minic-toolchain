@@ -6,6 +6,7 @@
  * source clone policy must never enter the machine-backend descriptor. */
 #include "core/core_ir.h"
 #include "target/target_info.h"
+#include "target/source_policy/source_info.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -42,15 +43,17 @@ bool minic_source_backend_capture_asm_operand_source(
 uint64_t minic_source_backend_asm_source_form_id(const MinicInlineAsm *);
 
 typedef bool (*MinicSourceQualifyInlineAsm)(
-    const MinicC0Program *, const MinicInlineAsm *, MinicTargetInlineAsmContract *);
+    const MinicTargetInvocation *, const MinicC0Program *,
+    const MinicInlineAsm *, MinicTargetInlineAsmContract *);
 /* Source -> normalized equivalence can seal only target machine-form IDs,
  * never alter the already accepted GNU constraints or memory effects. */
 typedef bool (*MinicSourceSealNormalizedInlineAsm)(
-    const MinicC0Program *, const MinicInlineAsm *, const char *, size_t,
+    const MinicTargetInvocation *, const MinicC0Program *,
+    const MinicInlineAsm *, const char *, size_t,
     MinicTargetInlineAsmContract *);
 typedef bool (*MinicSourceRequiresQualifiedInputAsm)(const MinicInlineAsm *);
 typedef bool (*MinicSourceQualifyInlineAsmGoto)(
-    const MinicC0Program *, const MinicInlineAsm *);
+    const MinicTargetInvocation *, const MinicC0Program *, const MinicInlineAsm *);
 typedef bool (*MinicSourceCloneSafeOpaqueAsm)(const MinicInlineAsm *);
 
 typedef struct MinicSourceBackend {
@@ -67,17 +70,20 @@ const MinicSourceBackend *minic_source_backend_for_target(
     const MinicTargetInfo *target);
 
 bool minic_source_backend_qualify_inline_asm(
-    const MinicSourceBackend *, const MinicC0Program *, const MinicInlineAsm *,
+    const MinicSourceBackend *, const MinicTargetInvocation *,
+    const MinicC0Program *, const MinicInlineAsm *,
     MinicTargetInlineAsmContract *);
 bool minic_source_backend_seal_normalized_inline_asm(
-    const MinicSourceBackend *, const MinicC0Program *, const MinicInlineAsm *,
+    const MinicSourceBackend *, const MinicTargetInvocation *,
+    const MinicC0Program *, const MinicInlineAsm *,
     const char *, size_t, MinicTargetInlineAsmContract *);
 bool minic_source_backend_inline_asm_prefix_matches(
     const MinicInlineAsm *, const char *const *, size_t);
 bool minic_source_backend_requires_qualified_input_asm(
     const MinicSourceBackend *, const MinicInlineAsm *);
 bool minic_source_backend_qualify_inline_asm_goto(
-    const MinicSourceBackend *, const MinicC0Program *, const MinicInlineAsm *);
+    const MinicSourceBackend *, const MinicTargetInvocation *,
+    const MinicC0Program *, const MinicInlineAsm *);
 bool minic_source_backend_clone_safe_opaque_asm(
     const MinicSourceBackend *, const MinicInlineAsm *);
 

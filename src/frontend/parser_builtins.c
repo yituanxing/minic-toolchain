@@ -146,7 +146,7 @@ static bool parse_builtin_atomic_load(MinicParser *parser,
     address = minic_c0_program_expression(parser->program, address_id);
     if (address == NULL || !minic_type_pointee(address->type, &pointee) ||
         !(minic_type_is_integer(pointee) || minic_type_is_pointer(pointee)) ||
-        !minic_target_info_sizeof_type(parser->target_info, parser->program,
+        !minic_target_info_sizeof_type(parser->invocation, parser->program,
                                        pointee, &bytes) ||
         (bytes != 1U && bytes != 2U && bytes != 4U && bytes != 8U) ||
         !minic_type_unqualified(pointee, &result)) {
@@ -202,7 +202,7 @@ static bool parse_builtin_atomic_store(MinicParser *parser,
     if (address == NULL || source == NULL ||
         !minic_type_pointee(address->type, &pointee) ||
         !(minic_type_is_integer(pointee) || minic_type_is_pointer(pointee)) || minic_type_is_const(pointee) ||
-        !minic_target_info_sizeof_type(parser->target_info, parser->program,
+        !minic_target_info_sizeof_type(parser->invocation, parser->program,
                                        pointee, &bytes) ||
         (bytes != 1U && bytes != 2U && bytes != 4U && bytes != 8U) ||
         !minic_c0_assignment_compatible(parser->program, pointee, source_id)) {
@@ -466,7 +466,7 @@ static bool parse_offsetof_array_segment(MinicParser *parser,
     stride.value.sizeof_type = selected_type;
     if (!minic_parser_add_expression(parser, &stride, &stride_id) ||
         !minic_target_info_integer_common_for_program(
-            parser->target_info, parser->program, index_type, stride.type, &scaled_type)) {
+            parser->invocation, parser->program, index_type, stride.type, &scaled_type)) {
         minic_parser_error(parser, "cannot type __builtin_offsetof array index scale");
         return false;
     }
@@ -732,9 +732,9 @@ parse_builtin_choose_expr(MinicParser *parser, MinicExpressionId *expression_id,
             MINIC_BUILTIN_UNARY_CONSTANT_P) {
         condition_is_zero = true;
     } else if (!minic_const_eval_integer(
-                   parser->program, parser->target_info, condition_id, &condition_value) ||
+                   parser->program, parser->invocation, condition_id, &condition_value) ||
                !minic_const_value_is_zero(
-                   parser->program, parser->target_info,
+                   parser->program, parser->invocation,
                    &condition_value, &condition_is_zero)) {
         minic_parser_error(
             parser, "__builtin_choose_expr condition must be an integer constant expression");
@@ -768,15 +768,15 @@ static bool object_extent_direct_object(const MinicParser *parser,
         if (!minic_c0_local_array_object_info(
                 parser->program, expression->value.local_id, &array_info)) {
             return minic_target_info_sizeof_type(
-                parser->target_info, parser->program, local->type, extent);
+                parser->invocation, parser->program, local->type, extent);
         }
         if (array_info.has_materialized_type) {
             return minic_target_info_sizeof_type(
-                parser->target_info, parser->program, local->type, extent);
+                parser->invocation, parser->program, local->type, extent);
         }
         if (array_info.element_count == 0U ||
             !minic_target_info_sizeof_type(
-                parser->target_info, parser->program,
+                parser->invocation, parser->program,
                 array_info.element_type, &element_size) ||
             element_size > SIZE_MAX / array_info.element_count) {
             return false;
@@ -790,7 +790,7 @@ static bool object_extent_direct_object(const MinicParser *parser,
         object =
             minic_c0_program_global_object(parser->program, expression->value.global_object_id);
         return object != NULL && minic_target_info_sizeof_type(
-                                     parser->target_info, parser->program, object->type, extent);
+                                     parser->invocation, parser->program, object->type, extent);
     }
     return false;
 }
@@ -928,7 +928,7 @@ static bool parse_builtin_constant_p(MinicParser *parser, MinicExpressionId *exp
     }
     end = parser->current.span.end;
     is_constant =
-        minic_const_eval_integer(parser->program, parser->target_info, operand_id, &constant_value);
+        minic_const_eval_integer(parser->program, parser->invocation, operand_id, &constant_value);
     if (!minic_parser_advance(parser)) {
         return false;
     }
@@ -976,14 +976,14 @@ static bool parse_builtin_call_frame_address(MinicParser *parser,
     }
     level_expression = minic_c0_program_expression(parser->program, level_id);
     if (level_expression == NULL || !minic_type_is_integer(level_expression->type) ||
-        !minic_const_eval_integer(parser->program, parser->target_info, level_id, &level_value) ||
-        !minic_const_value_as_int64(parser->program, parser->target_info, &level_value, &level)) {
+        !minic_const_eval_integer(parser->program, parser->invocation, level_id, &level_value) ||
+        !minic_const_value_as_int64(parser->program, parser->invocation, &level_value, &level)) {
         minic_parser_error(parser, "%s level must be an integer constant", spelling);
         return false;
     }
     if (level < 0 || (uint64_t)level > (uint64_t)UINT_MAX ||
         !minic_target_info_call_frame_address_supported(
-            parser->target_info, kind, (unsigned int)level)) {
+            &parser->invocation->machine, kind, (unsigned int)level)) {
         minic_parser_error(parser, "%s level is not supported by target", spelling);
         return false;
     }
@@ -1294,12 +1294,12 @@ static bool normalize_overflow_integer_operand(MinicParser *parser,
         return false;
     }
     if (minic_c0_integer_range_representable_in_type(
-            parser->program, parser->target_info, operand->type, result_type)) {
+            parser->program, parser->invocation, operand->type, result_type)) {
         return true;
     }
-    if (!minic_const_eval_integer(parser->program, parser->target_info, source_id, &constant) ||
+    if (!minic_const_eval_integer(parser->program, parser->invocation, source_id, &constant) ||
         !minic_const_value_integer_representable_in_type(
-            parser->program, parser->target_info, &constant, result_type)) {
+            parser->program, parser->invocation, &constant, result_type)) {
         /* GNU overflow builtins operate in infinite precision and only then
            compare/store through the result pointer type.  A dynamic wider
            operand therefore must retain its original type through Core. */
@@ -1510,7 +1510,7 @@ static bool parse_builtin_va_list_target(MinicParser *parser,
     target = minic_c0_program_expression(parser->program, *target_id);
     if (target == NULL ||
         !minic_target_info_va_cursor_source_operand_supported(
-            parser->target_info, parser->program, target->type,
+            parser->invocation, parser->program, target->type,
             target->value_category == MINIC_VALUE_LVALUE)) {
         minic_parser_error(parser, "GNU va builtin requires a modifiable va_list lvalue");
         return false;
@@ -1608,12 +1608,12 @@ static bool parse_builtin_va_copy(MinicParser *parser, MinicExpressionId *expres
     source = minic_c0_program_expression(parser->program, source_id);
     if (target == NULL || source == NULL ||
         !minic_target_info_va_cursor_source_operand_supported(
-            parser->target_info, parser->program, source->type,
+            parser->invocation, parser->program, source->type,
             source->value_category == MINIC_VALUE_LVALUE)) {
         minic_parser_error(parser, "__builtin_va_copy source must be a va_list lvalue");
         return false;
     }
-    if (parser->target_info->variadic_copy_kind ==
+    if (parser->invocation->machine.variadic_copy_kind ==
             MINIC_VARIADIC_COPY_SCALAR_ASSIGNMENT &&
         !minic_c0_types_compatible(parser->program, target->type, source->type)) {
         minic_parser_error(parser, "__builtin_va_copy source type must match destination type");
@@ -2061,7 +2061,7 @@ static bool parse_target_builtin(
         return true;
     name_length = minic_parser_span_length(parser->current.span);
     if (!minic_target_info_machine_builtin_signature(
-            parser->target_info,
+            parser->invocation,
             parser->source + parser->current.span.begin.offset, name_length,
             internal_name, sizeof(internal_name), &result_type,
             parameter_types, &parameter_count, &mnemonic, &immediate_index))

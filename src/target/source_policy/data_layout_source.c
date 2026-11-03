@@ -1,4 +1,5 @@
 #include "target/data_layout_source.h"
+#include "target/source_policy/source_info.h"
 #include "frontend/ast.h"
 
 #include <stdint.h>
@@ -39,7 +40,7 @@ static bool minic_data_layout_apply_explicit_alignment(MinicType type, size_t *a
     return true;
 }
 
-static bool minic_data_layout_type_depth(const MinicDataLayout *layout,
+static bool minic_data_layout_type_depth(const MinicTargetInvocation *invocation,
                                          const MinicC0Program *program,
                                          MinicType type,
                                          unsigned int depth,
@@ -117,7 +118,7 @@ static bool minic_data_layout_field_storage(const MinicC0Program *program,
     return true;
 }
 
-static bool minic_data_layout_record_depth(const MinicDataLayout *layout,
+static bool minic_data_layout_record_depth(const MinicTargetInvocation *invocation,
                                            const MinicC0Program *program,
                                            const MinicRecord *record,
                                            unsigned int depth,
@@ -131,7 +132,7 @@ static bool minic_data_layout_record_depth(const MinicDataLayout *layout,
     size_t pack_alignment;
     size_t index;
 
-    if (layout == NULL || program == NULL || record == NULL || size == NULL || alignment == NULL ||
+    if (invocation == NULL || invocation->machine.data_layout == NULL || program == NULL || record == NULL || size == NULL || alignment == NULL ||
         !record->is_complete || depth > MINIC_DATA_LAYOUT_MAX_DEPTH) {
         return false;
     }
@@ -153,7 +154,7 @@ static bool minic_data_layout_record_depth(const MinicDataLayout *layout,
         field = &record->fields[index];
         if (!minic_data_layout_field_storage(program, field, &storage) ||
             !minic_data_layout_type_depth(
-                layout, program, storage.storage_type, depth + 1U,
+                invocation, program, storage.storage_type, depth + 1U,
                 &element_size, &field_alignment)) {
             return false;
         }
@@ -295,19 +296,19 @@ static bool minic_data_layout_record_depth(const MinicDataLayout *layout,
     return true;
 }
 
-static bool minic_data_layout_type_depth(const MinicDataLayout *layout,
+static bool minic_data_layout_type_depth(const MinicTargetInvocation *invocation,
                                          const MinicC0Program *program,
                                          MinicType type,
                                          unsigned int depth,
                                          size_t *size,
                                          size_t *alignment) {
-    if (layout == NULL || program == NULL || size == NULL || alignment == NULL ||
+    if (invocation == NULL || invocation->machine.data_layout == NULL || program == NULL || size == NULL || alignment == NULL ||
         depth > MINIC_DATA_LAYOUT_MAX_DEPTH) {
         return false;
     }
     if (minic_type_is_pointer(type)) {
-        *size = layout->pointer_size;
-        *alignment = layout->pointer_alignment;
+        *size = invocation->machine.data_layout->pointer_size;
+        *alignment = invocation->machine.data_layout->pointer_alignment;
         return true;
     }
     if (minic_type_is_enum(type)) {
@@ -322,33 +323,33 @@ static bool minic_data_layout_type_depth(const MinicDataLayout *layout,
         size_t rank = (size_t)type.integer_rank;
 
         if (rank == (size_t)MINIC_INTEGER_RANK_NONE || rank > (size_t)MINIC_INTEGER_RANK_INT128 ||
-            layout->integer_size[rank] == 0U || layout->integer_alignment[rank] == 0U) {
+            invocation->source_info.integer_size[rank] == 0U || invocation->source_info.integer_alignment[rank] == 0U) {
             return false;
         }
-        *size = layout->integer_size[rank];
-        *alignment = layout->integer_alignment[rank];
+        *size = invocation->source_info.integer_size[rank];
+        *alignment = invocation->source_info.integer_alignment[rank];
         return minic_data_layout_apply_explicit_alignment(type, alignment);
     }
     if (minic_type_is_float(type)) {
-        *size = layout->float_size;
-        *alignment = layout->float_alignment;
+        *size = invocation->machine.data_layout->float_size;
+        *alignment = invocation->machine.data_layout->float_alignment;
         return minic_data_layout_apply_explicit_alignment(type, alignment);
     }
     if (minic_type_is_double(type)) {
-        *size = layout->double_size;
-        *alignment = layout->double_alignment;
+        *size = invocation->machine.data_layout->double_size;
+        *alignment = invocation->machine.data_layout->double_alignment;
         return minic_data_layout_apply_explicit_alignment(type, alignment);
     }
     if (minic_type_is_long_double(type)) {
-        *size = layout->long_double_size;
-        *alignment = layout->long_double_alignment;
+        *size = invocation->machine.data_layout->long_double_size;
+        *alignment = invocation->machine.data_layout->long_double_alignment;
         return minic_data_layout_apply_explicit_alignment(type, alignment);
     }
     if (minic_type_is_float128(type)) {
-        if (layout->float128_size == 0U || layout->float128_alignment == 0U)
+        if (invocation->machine.data_layout->float128_size == 0U || invocation->machine.data_layout->float128_alignment == 0U)
             return false;
-        *size = layout->float128_size;
-        *alignment = layout->float128_alignment;
+        *size = invocation->machine.data_layout->float128_size;
+        *alignment = invocation->machine.data_layout->float128_alignment;
         return minic_data_layout_apply_explicit_alignment(type, alignment);
     }
     /* TS 18661 variants retain distinct C type identities even if their
@@ -359,20 +360,20 @@ static bool minic_data_layout_type_depth(const MinicDataLayout *layout,
         type.base_kind == MINIC_TYPE_BASE_FLOAT64 ||
         type.base_kind == MINIC_TYPE_BASE_FLOAT32X ||
         type.base_kind == MINIC_TYPE_BASE_FLOAT64X) {
-        if (layout->float128_size == 0U) return false;
+        if (invocation->machine.data_layout->float128_size == 0U) return false;
         switch (type.base_kind) {
         case MINIC_TYPE_BASE_FLOAT32:
-            *size = layout->float_size;
-            *alignment = layout->float_alignment;
+            *size = invocation->machine.data_layout->float_size;
+            *alignment = invocation->machine.data_layout->float_alignment;
             break;
         case MINIC_TYPE_BASE_FLOAT64:
         case MINIC_TYPE_BASE_FLOAT32X:
-            *size = layout->double_size;
-            *alignment = layout->double_alignment;
+            *size = invocation->machine.data_layout->double_size;
+            *alignment = invocation->machine.data_layout->double_alignment;
             break;
         case MINIC_TYPE_BASE_FLOAT64X:
-            *size = layout->long_double_size;
-            *alignment = layout->long_double_alignment;
+            *size = invocation->machine.data_layout->long_double_size;
+            *alignment = invocation->machine.data_layout->long_double_alignment;
             break;
         default:
             return false;
@@ -381,19 +382,19 @@ static bool minic_data_layout_type_depth(const MinicDataLayout *layout,
     }
     if (minic_type_builtin_declaration_role(type.base_kind) ==
         MINIC_BUILTIN_DECLARATION_FIXED_VECTOR128_STORAGE) {
-        if (layout->fixed_vector128_size == 0U ||
-            layout->fixed_vector128_alignment == 0U)
+        if (invocation->machine.data_layout->fixed_vector128_size == 0U ||
+            invocation->machine.data_layout->fixed_vector128_alignment == 0U)
             return false;
-        *size = layout->fixed_vector128_size;
-        *alignment = layout->fixed_vector128_alignment;
+        *size = invocation->machine.data_layout->fixed_vector128_size;
+        *alignment = invocation->machine.data_layout->fixed_vector128_alignment;
         return minic_data_layout_apply_explicit_alignment(type, alignment);
     }
     if (minic_type_is_gnu_fixed_vector(type)) {
         size_t scalar_size;
         size_t scalar_alignment;
         MinicType element;
-        if (layout->gnu_fixed_vector_max_storage_bytes == 0U ||
-            type.gnu_vector_bytes > layout->gnu_fixed_vector_max_storage_bytes ||
+        if (invocation->machine.data_layout->gnu_fixed_vector_max_storage_bytes == 0U ||
+            type.gnu_vector_bytes > invocation->machine.data_layout->gnu_fixed_vector_max_storage_bytes ||
             (type.gnu_vector_bytes & (type.gnu_vector_bytes - 1U)) != 0U)
             return false;
         element = minic_type_void();
@@ -401,7 +402,7 @@ static bool minic_data_layout_type_depth(const MinicDataLayout *layout,
         element.integer_sign = type.integer_sign;
         element.integer_rank = type.integer_rank;
         element.is_plain_char = type.is_plain_char;
-        if (!minic_data_layout_type_depth(layout, program, element, depth + 1U,
+        if (!minic_data_layout_type_depth(invocation, program, element, depth + 1U,
                                           &scalar_size, &scalar_alignment) ||
             scalar_size == 0U || type.gnu_vector_bytes % scalar_size != 0U)
             return false;
@@ -417,7 +418,7 @@ static bool minic_data_layout_type_depth(const MinicDataLayout *layout,
         array_type = minic_c0_program_array_type(program, type.array_type_id);
         if (array_type == NULL ||
             (array_type->element_count == 0U && !array_type->is_zero_length) ||
-            !minic_data_layout_type_depth(layout,
+            !minic_data_layout_type_depth(invocation,
                                           program,
                                           array_type->element_type,
                                           depth + 1U,
@@ -442,7 +443,7 @@ static bool minic_data_layout_type_depth(const MinicDataLayout *layout,
 
         record = minic_c0_program_record(program, type.record_id);
         if (!minic_data_layout_record_depth(
-                layout, program, record, depth + 1U, SIZE_MAX, NULL, NULL, size, alignment)) {
+                invocation, program, record, depth + 1U, SIZE_MAX, NULL, NULL, size, alignment)) {
             return false;
         }
         return minic_data_layout_apply_explicit_alignment(type, alignment);
@@ -450,15 +451,15 @@ static bool minic_data_layout_type_depth(const MinicDataLayout *layout,
     return false;
 }
 
-bool minic_data_layout_type(const MinicDataLayout *layout,
+bool minic_data_layout_type(const MinicTargetInvocation *invocation,
                             const MinicC0Program *program,
                             MinicType type,
                             size_t *size,
                             size_t *alignment) {
-    return minic_data_layout_type_depth(layout, program, type, 0U, size, alignment);
+    return minic_data_layout_type_depth(invocation, program, type, 0U, size, alignment);
 }
 
-bool minic_data_layout_global_object(const MinicDataLayout *layout,
+bool minic_data_layout_global_object(const MinicTargetInvocation *invocation,
                                      const MinicC0Program *program,
                                      const MinicGlobalObject *object,
                                      size_t *size,
@@ -466,7 +467,7 @@ bool minic_data_layout_global_object(const MinicDataLayout *layout,
     size_t object_size;
     size_t object_alignment;
 
-    if (layout == NULL || program == NULL || object == NULL || size == NULL || alignment == NULL) {
+    if (invocation == NULL || invocation->machine.data_layout == NULL || program == NULL || object == NULL || size == NULL || alignment == NULL) {
         return false;
     }
     if (object->is_extern && minic_type_is_void(object->type)) {
@@ -494,7 +495,7 @@ bool minic_data_layout_global_object(const MinicDataLayout *layout,
             return true;
         }
     }
-    if (!minic_data_layout_type(layout, program, object->type, &object_size, &object_alignment)) {
+    if (!minic_data_layout_type(invocation, program, object->type, &object_size, &object_alignment)) {
         return false;
     }
     if (object->flexible_array_initializer_count != 0U) {
@@ -517,7 +518,7 @@ bool minic_data_layout_global_object(const MinicDataLayout *layout,
         if (!minic_data_layout_field_storage(program, field, &storage) ||
             !storage.is_flexible || field->is_bit_field ||
             !minic_data_layout_type(
-                layout, program, storage.storage_type,
+                invocation, program, storage.storage_type,
                 &element_size, &element_alignment) ||
             element_size == 0U ||
             object->flexible_array_initializer_count > SIZE_MAX / element_size) {
@@ -548,9 +549,9 @@ bool minic_data_layout_global_object(const MinicDataLayout *layout,
  * contribute any slots to emitted Core functions. Apply identical checks
  * uniformly before target emission, without modifying AST/Core objects. */
 MinicDataLayoutProgramCheck minic_data_layout_validate_program(
-    const MinicDataLayout *layout, const MinicC0Program *program) {
+    const MinicTargetInvocation *invocation, const MinicC0Program *program) {
     size_t record_index, object_index;
-    if (layout == NULL || program == NULL ||
+    if (invocation == NULL || invocation->machine.data_layout == NULL || program == NULL ||
         (program->record_count != 0U && program->records == NULL) ||
         (program->global_object_count != 0U && program->global_objects == NULL))
         return MINIC_DATA_LAYOUT_PROGRAM_INVALID_INPUT;
@@ -558,26 +559,26 @@ MinicDataLayoutProgramCheck minic_data_layout_validate_program(
         const MinicRecord *record = &program->records[record_index];
         size_t bytes, alignment, field_index;
         if (!record->is_complete) continue;
-        if (!minic_data_layout_type(layout, program,
+        if (!minic_data_layout_type(invocation, program,
                 minic_type_record(record_index), &bytes, &alignment))
             return MINIC_DATA_LAYOUT_PROGRAM_INVALID_RECORD;
         for (field_index = 0U; field_index < record->field_count; ++field_index) {
             size_t offset, bit_offset;
             if (!minic_data_layout_record_field_layout(
-                    layout, program, record, field_index, &offset, &bit_offset))
+                    invocation, program, record, field_index, &offset, &bit_offset))
                 return MINIC_DATA_LAYOUT_PROGRAM_INVALID_RECORD;
         }
     }
     for (object_index = 0U; object_index < program->global_object_count; ++object_index) {
         size_t bytes, alignment;
-        if (!minic_data_layout_global_object(layout, program,
+        if (!minic_data_layout_global_object(invocation, program,
                 &program->global_objects[object_index], &bytes, &alignment))
             return MINIC_DATA_LAYOUT_PROGRAM_INVALID_GLOBAL;
     }
     return MINIC_DATA_LAYOUT_PROGRAM_OK;
 }
 
-bool minic_data_layout_record_field_alignment(const MinicDataLayout *layout,
+bool minic_data_layout_record_field_alignment(const MinicTargetInvocation *invocation,
                                               const MinicC0Program *program,
                                               const MinicRecord *record,
                                               size_t field_index,
@@ -588,7 +589,7 @@ bool minic_data_layout_record_field_alignment(const MinicDataLayout *layout,
     size_t field_alignment;
     size_t pack_alignment;
 
-    if (layout == NULL || program == NULL || record == NULL || alignment == NULL ||
+    if (invocation == NULL || invocation->machine.data_layout == NULL || program == NULL || record == NULL || alignment == NULL ||
         field_index >= record->field_count) {
         return false;
     }
@@ -596,7 +597,7 @@ bool minic_data_layout_record_field_alignment(const MinicDataLayout *layout,
     if (field->is_bit_field ||
         !minic_data_layout_field_storage(program, field, &storage) ||
         !minic_data_layout_record_pack(record, &pack_alignment) ||
-        !minic_data_layout_type(layout, program, storage.storage_type,
+        !minic_data_layout_type(invocation, program, storage.storage_type,
                                 &field_size, &field_alignment)) {
         return false;
     }
@@ -605,7 +606,7 @@ bool minic_data_layout_record_field_alignment(const MinicDataLayout *layout,
         field, pack_alignment, field_alignment, alignment);
 }
 
-bool minic_data_layout_record_field_layout(const MinicDataLayout *layout,
+bool minic_data_layout_record_field_layout(const MinicTargetInvocation *invocation,
                                            const MinicC0Program *program,
                                            const MinicRecord *record,
                                            size_t field_index,
@@ -619,10 +620,10 @@ bool minic_data_layout_record_field_layout(const MinicDataLayout *layout,
         return false;
     }
     return minic_data_layout_record_depth(
-        layout, program, record, 0U, field_index, offset, bit_offset, &size, &alignment);
+        invocation, program, record, 0U, field_index, offset, bit_offset, &size, &alignment);
 }
 
-bool minic_data_layout_record_field_offset(const MinicDataLayout *layout,
+bool minic_data_layout_record_field_offset(const MinicTargetInvocation *invocation,
                                            const MinicC0Program *program,
                                            const MinicRecord *record,
                                            size_t field_index,
@@ -630,7 +631,7 @@ bool minic_data_layout_record_field_offset(const MinicDataLayout *layout,
     size_t bit_offset;
 
     return minic_data_layout_record_field_layout(
-        layout, program, record, field_index, offset, &bit_offset);
+        invocation, program, record, field_index, offset, &bit_offset);
 }
 
 static bool data_layout_global_object_union_member_selection(const MinicC0Program *program,
@@ -660,7 +661,7 @@ static bool data_layout_global_object_union_member_selection(const MinicC0Progra
     return false;
 }
 
-static bool aggregate_scalar_slot_layout_for_object(const MinicDataLayout *layout,
+static bool aggregate_scalar_slot_layout_for_object(const MinicTargetInvocation *invocation,
                                                     const MinicC0Program *program,
                                                     const MinicGlobalObject *object,
                                                     MinicType type,
@@ -670,7 +671,7 @@ static bool aggregate_scalar_slot_layout_for_object(const MinicDataLayout *layou
                                                     MinicType *slot_type,
                                                     size_t *slot_offset,
                                                     bool *found) {
-    if (layout == NULL || program == NULL || object == NULL || slot_cursor == NULL ||
+    if (invocation == NULL || invocation->machine.data_layout == NULL || program == NULL || object == NULL || slot_cursor == NULL ||
         slot_type == NULL || slot_offset == NULL || found == NULL) {
         return false;
     }
@@ -703,7 +704,7 @@ static bool aggregate_scalar_slot_layout_for_object(const MinicDataLayout *layou
         array_type = minic_c0_program_array_type(program, type.array_type_id);
         if (array_type == NULL ||
             !minic_data_layout_type(
-                layout, program, array_type->element_type, &element_size, &element_alignment)) {
+                invocation, program, array_type->element_type, &element_size, &element_alignment)) {
             return false;
         }
         (void)element_alignment;
@@ -730,7 +731,7 @@ static bool aggregate_scalar_slot_layout_for_object(const MinicDataLayout *layou
             }
             element_offset = base_offset + element_index * element_size;
             before_cursor = *slot_cursor;
-            if (!aggregate_scalar_slot_layout_for_object(layout,
+            if (!aggregate_scalar_slot_layout_for_object(invocation,
                                                          program,
                                                          object,
                                                          array_type->element_type,
@@ -795,9 +796,9 @@ static bool aggregate_scalar_slot_layout_for_object(const MinicDataLayout *layou
             field = minic_c0_record_field(record, field_index);
             if (!minic_data_layout_field_storage(program, field, &storage) ||
                 !minic_data_layout_record_field_offset(
-                    layout, program, record, field_index, &field_offset) ||
+                    invocation, program, record, field_index, &field_offset) ||
                 !minic_data_layout_type(
-                    layout, program, storage.storage_type,
+                    invocation, program, storage.storage_type,
                     &element_size, &element_alignment)) {
                 return false;
             }
@@ -826,7 +827,7 @@ static bool aggregate_scalar_slot_layout_for_object(const MinicDataLayout *layou
                     return false;
                 }
                 element_offset = base_offset + field_offset + element_index * element_size;
-                if (!aggregate_scalar_slot_layout_for_object(layout,
+                if (!aggregate_scalar_slot_layout_for_object(invocation,
                                                              program,
                                                              object,
                                                              storage.storage_type,
@@ -860,7 +861,7 @@ static bool aggregate_scalar_slot_layout_for_object(const MinicDataLayout *layou
     return false;
 }
 
-bool minic_data_layout_global_relocation_offset(const MinicDataLayout *layout,
+bool minic_data_layout_global_relocation_offset(const MinicTargetInvocation *invocation,
                                                 const MinicC0Program *program,
                                                 const MinicGlobalObject *object,
                                                 const MinicGlobalRelocation *relocation,
@@ -870,14 +871,14 @@ bool minic_data_layout_global_relocation_offset(const MinicDataLayout *layout,
     size_t relocation_width;
     size_t resolved_offset;
 
-    if (layout == NULL || program == NULL || object == NULL || relocation == NULL ||
+    if (invocation == NULL || invocation->machine.data_layout == NULL || program == NULL || object == NULL || relocation == NULL ||
         offset == NULL ||
         !minic_data_layout_global_object(
-            layout, program, object, &object_size, &object_alignment)) {
+            invocation, program, object, &object_size, &object_alignment)) {
         return false;
     }
     (void)object_alignment;
-    relocation_width = layout->pointer_size;
+    relocation_width = invocation->machine.data_layout->pointer_size;
     if (relocation->location_kind == MINIC_GLOBAL_RELOCATION_LOCATION_SCALAR) {
         if (relocation->location_index != 0U ||
             (!minic_type_is_pointer(object->type) &&
@@ -897,7 +898,7 @@ bool minic_data_layout_global_relocation_offset(const MinicDataLayout *layout,
         if (array_type == NULL || relocation->location_index >= array_type->element_count ||
             !minic_type_is_pointer(array_type->element_type) ||
             !minic_data_layout_type(
-                layout, program, array_type->element_type, &element_size, &element_alignment) ||
+                invocation, program, array_type->element_type, &element_size, &element_alignment) ||
             element_size == 0U || relocation->location_index > SIZE_MAX / element_size) {
             return false;
         }
@@ -917,7 +918,7 @@ bool minic_data_layout_global_relocation_offset(const MinicDataLayout *layout,
             field->is_bit_field ||
             storage.is_flexible || !minic_type_is_pointer(storage.storage_type) ||
             !minic_data_layout_record_field_offset(
-                layout, program, record, relocation->location_index, &resolved_offset)) {
+                invocation, program, record, relocation->location_index, &resolved_offset)) {
             return false;
         }
     } else if (relocation->location_kind == MINIC_GLOBAL_RELOCATION_LOCATION_AGGREGATE_SCALAR) {
@@ -928,7 +929,7 @@ bool minic_data_layout_global_relocation_offset(const MinicDataLayout *layout,
 
         found = false;
         slot_cursor = 0U;
-        if (!aggregate_scalar_slot_layout_for_object(layout,
+        if (!aggregate_scalar_slot_layout_for_object(invocation,
                                                      program,
                                                      object,
                                                      object->type,
@@ -940,7 +941,7 @@ bool minic_data_layout_global_relocation_offset(const MinicDataLayout *layout,
                                                      &found) ||
             !found || (!minic_type_is_pointer(slot_type) && !minic_type_is_integer(slot_type)) ||
             !minic_data_layout_type(
-                layout, program, slot_type, &relocation_width, &slot_alignment)) {
+                invocation, program, slot_type, &relocation_width, &slot_alignment)) {
             return false;
         }
         (void)slot_alignment;
@@ -954,7 +955,7 @@ bool minic_data_layout_global_relocation_offset(const MinicDataLayout *layout,
     return true;
 }
 
-bool minic_data_layout_global_relocation_target_addend(const MinicDataLayout *layout,
+bool minic_data_layout_global_relocation_target_addend(const MinicTargetInvocation *invocation,
                                                        const MinicC0Program *program,
                                                        const MinicGlobalRelocation *relocation,
                                                        int64_t *addend) {
@@ -963,7 +964,7 @@ bool minic_data_layout_global_relocation_target_addend(const MinicDataLayout *la
     size_t result;
     size_t depth;
 
-    if (layout == NULL || program == NULL || relocation == NULL || addend == NULL) {
+    if (invocation == NULL || invocation->machine.data_layout == NULL || program == NULL || relocation == NULL || addend == NULL) {
         return false;
     }
     if (relocation->target_kind == MINIC_GLOBAL_RELOCATION_FUNCTION ||
@@ -1010,7 +1011,7 @@ bool minic_data_layout_global_relocation_target_addend(const MinicDataLayout *la
         if (!minic_data_layout_field_storage(program, field, &storage) ||
             field->is_bit_field ||
             !minic_data_layout_record_field_offset(
-                layout, program, record, relocation->target_member_indices[depth], &field_offset) ||
+                invocation, program, record, relocation->target_member_indices[depth], &field_offset) ||
             result > SIZE_MAX - field_offset) {
             return false;
         }

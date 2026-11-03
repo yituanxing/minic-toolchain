@@ -157,7 +157,7 @@ bool minic_parser_parse_preprocessor_directive(MinicParser *parser) {
                 return false;
             }
             if (!minic_target_info_gnu_pragma_target_options(
-                    parser->target_info, text + target_option_begin,
+                    parser->invocation, text + target_option_begin,
                     cursor - target_option_begin, &parser->gnu_target_options,
                     &next_options)) {
                 minic_parser_error(parser, "unsupported GCC target option for selected target");

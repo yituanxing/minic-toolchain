@@ -27,7 +27,7 @@ int minic_compile_preprocessed_file(const char *input_path,
 
 /* GNU-compatible layout selection: false (default) shares .text;
  * true (-ffunction-sections) gives each function an input section. */
-struct MinicTargetInfo;
+struct MinicTargetInvocation;
 
 /* Target-aware C-to-assembly entry point. All five targets share
  * Frontend/Core lowering and one checked assembly-output transaction.
@@ -37,7 +37,7 @@ struct MinicTargetInfo;
  * to host code. Assembly, linking and runtime remain distinct gates. */
 int minic_compile_preprocessed_file_for_target(const char *input_path,
                                                const char *output_path,
-                                               const struct MinicTargetInfo *target_info,
+                                               const struct MinicTargetInvocation *invocation,
                                                bool function_sections,
                                                MinicDiagnostic *diagnostic);
 
