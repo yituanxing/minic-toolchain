@@ -1067,3 +1067,15 @@ Release `minic-cc`, the RV32 target gate (including `rv32_irq_save_legacy`)
 and the 2026-10-29 five-ISA review batch all pass after the correction. The
 workflow's unrelated AArch64 ACLE Stage3 unsupported GCC pragma and hosted
 KVM CPUID VMX blocker remain separate from this fix.
+
+### IR-P17 strict CI fixture correction — GNU extern-inline declaration-only
+
+The next strict native step had a pre-existing contradictory test: its only
+GNU `extern inline` declaration legally emits an existing but zero-byte `.s`,
+yet the fixture required a nonempty file. Both the pre-migration compiler and
+the new SourceDraft compiler produce the same successful zero-byte output.
+Check file existence instead of nonemptiness, retaining the stronger negative
+assertion that no strong `prefix_extern_inline_identity` symbol appears and the
+unrelated invalid `no_sanitize` source must be rejected. The complete native
+step's function-metadata, fixed-register, five-target inline ASM, empty ASM
+and constant-switch regressions pass after the test-only correction.

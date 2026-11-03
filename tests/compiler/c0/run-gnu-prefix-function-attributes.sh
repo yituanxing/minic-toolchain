@@ -80,7 +80,7 @@ done
 "$minic" -S "$work/gnu_extern_inline_attribute.i" \
     -o "$work/gnu_extern_inline_attribute.s" \
     >"$work/gnu_extern_inline_attribute.out" 2>"$work/gnu_extern_inline_attribute.err"
-test -s "$work/gnu_extern_inline_attribute.s"
+test -f "$work/gnu_extern_inline_attribute.s"
 # The existing shared parser now supports true GNU extern inline: a body
 # is syntax-checked but must not become a second externally strong symbol.
 # The old test demanded a compiler failure even for valid implementation.
@@ -102,4 +102,4 @@ fi
 grep -F 'GNU no_sanitize requires one string literal' \
     "$work/no-sanitize-invalid.err" >/dev/null
 
-printf '%s\n' 'PASS compiler/c0/gnu_prefix_function_attributes five_target_language_policy=1 gnu_const_aliases=5_targets prefix=1 metadata=unused,no-instrument,artificial,externally-visible function+object=1 reachability=parse-only public-linkage=preserved gnu-inline=static+bare+plain-spelling always-inline=underscored+plain-spelling extern-inline=fail-closed no-sanitize-address=parse-only no-stack-protector=parse-only'
+printf '%s\n' 'PASS compiler/c0/gnu_prefix_function_attributes five_target_language_policy=1 gnu_const_aliases=5_targets prefix=1 metadata=unused,no-instrument,artificial,externally-visible function+object=1 reachability=parse-only public-linkage=preserved gnu-inline=static+bare+plain-spelling always-inline=underscored+plain-spelling extern-inline=declaration-only no-sanitize-address=parse-only no-stack-protector=parse-only'
