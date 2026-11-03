@@ -2,26 +2,10 @@
 
 #include <stdio.h>
 
-bool minic_aarch64_neon_vector128_type(MinicType type) {
-    MinicType canonical;
-    switch (type.base_kind) {
-    case MINIC_TYPE_BASE_AARCH64_UINT64X2:
-    case MINIC_TYPE_BASE_AARCH64_UINT8X16:
-    case MINIC_TYPE_BASE_AARCH64_INT8X16:
-    case MINIC_TYPE_BASE_AARCH64_POLY8X16:
-        canonical = minic_type_aarch64_fixed_vector128(type.base_kind);
-        return type.pointer_depth == 0U &&
-               type.base_qualifiers == MINIC_TYPE_QUALIFIER_NONE &&
-               type.explicit_alignment == 0U &&
-               minic_type_equal(type, canonical);
-    default:
-        return false;
-    }
-}
-
 bool minic_aarch64_neon_vector128_core_type(
     const MinicCoreTypeContext *types, MinicCoreTypeId id) {
-    const MinicCoreType *vector = minic_core_type_get(types, id);
+    const MinicCoreType *vector = minic_core_type_get(
+        types, minic_core_type_unqualified(types, id));
     const MinicCoreType *element;
     if (vector == NULL || vector->kind != MINIC_CORE_TYPE_VECTOR ||
         !vector->value.vector.is_builtin || !vector->has_layout ||
@@ -48,12 +32,6 @@ static bool neon_emit_load_machine(FILE *out, const MinicA64FrameView *frame,
                                      16U, result_slot);
 }
 
-bool minic_aarch64_neon_emit_load(FILE *out, const MinicA64FrameView *frame,
-    MinicType type, size_t pointer_slot, size_t result_slot) {
-    return minic_aarch64_neon_vector128_type(type) &&
-           neon_emit_load_machine(out, frame, pointer_slot, result_slot);
-}
-
 bool minic_aarch64_neon_emit_load_core(FILE *out, const MinicA64FrameView *frame,
     const MinicCoreTypeContext *types, MinicCoreTypeId id,
     size_t pointer_slot, size_t result_slot) {
@@ -69,12 +47,6 @@ static bool neon_emit_store_machine(FILE *out, const MinicA64FrameView *frame,
            minic_a64_emit_owned_slot(out, frame, false, MINIC_A64_REG_Q,
                                      16U, value_slot) &&
            fputs("  str q16, [x10]\n", out) != EOF;
-}
-
-bool minic_aarch64_neon_emit_store(FILE *out, const MinicA64FrameView *frame,
-    MinicType type, size_t pointer_slot, size_t value_slot) {
-    return minic_aarch64_neon_vector128_type(type) &&
-           neon_emit_store_machine(out, frame, pointer_slot, value_slot);
 }
 
 bool minic_aarch64_neon_emit_store_core(FILE *out, const MinicA64FrameView *frame,
@@ -96,16 +68,10 @@ static bool neon_emit_xor_machine(FILE *out, const MinicA64FrameView *frame,
                                   16U, result_slot);
 }
 
-bool minic_aarch64_neon_emit_xor(FILE *out, const MinicA64FrameView *frame,
-    MinicType type, size_t left_slot, size_t right_slot, size_t result_slot) {
-    /* v16-v18 are caller-clobbered, unlike low-half preserved v8-v15. */
-    return minic_aarch64_neon_vector128_type(type) &&
-           neon_emit_xor_machine(out, frame, left_slot, right_slot, result_slot);
-}
-
 bool minic_aarch64_neon_emit_xor_core(FILE *out, const MinicA64FrameView *frame,
     const MinicCoreTypeContext *types, MinicCoreTypeId id,
     size_t left_slot, size_t right_slot, size_t result_slot) {
+    /* v16-v18 are caller-clobbered, unlike low-half preserved v8-v15. */
     return minic_aarch64_neon_vector128_core_type(types, id) &&
            neon_emit_xor_machine(out, frame, left_slot, right_slot, result_slot);
 }

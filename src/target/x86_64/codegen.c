@@ -883,7 +883,7 @@ static bool x86_between(
     return true;
 }
 
-static bool x86_write_core_program_impl(
+static bool x86_write_core_module_impl(
     const char *path, const MinicTargetInfo *target,
     const MinicCoreFunction *core_functions, size_t core_function_count,
     bool function_sections, const MinicCoreModule *module,
@@ -921,13 +921,13 @@ static bool x86_write_core_program_impl(
     return success;
 }
 
-bool minic_x86_64_write_c0_program_with_core_module(
+bool minic_x86_64_write_core_module(
     const char *path, const MinicTargetInfo *target,
     const MinicCoreFunction *core_functions, size_t core_function_count,
     bool function_sections, const MinicCoreModule *module,
     MinicDiagnostic *diagnostic) {
     return module != NULL &&
-           x86_write_core_program_impl(path, target, core_functions,
+           x86_write_core_module_impl(path, target, core_functions,
                                        core_function_count, function_sections,
                                        module, diagnostic);
 }

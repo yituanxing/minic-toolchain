@@ -1140,3 +1140,47 @@ check-fast` exited zero (including staged writer rollback and five-target
 linkage/ABI/ASM probes). Check-fast is native/source-level evidence only;
 five-architecture Linux GNU-link and QEMU runtime acceptance remain NOT RUN
 for this refactor. Record independent acceptance before declaring a Linux pass.
+
+## IR-P20 — Retire parallel C machine emitters and name the Module owner (2026-11-03)
+
+Read all five writers through `MinicBackend.emit_module`, the common
+function/global visitation, RISC-V relocation and PIC symbol decisions, and
+the independent ABI/NEON tests. P19 sealed the production Module-only API;
+P20 removes the *unused alternative implementations* instead of preserving
+two competing models indefinitely:
+
+- **RV32/RV64 and Common globals:** delete the old `MinicC0Program`/FILE
+  global serialization, C relocation walkers, and compatibility ELF alias
+  wrappers together. Keep the active `MinicCoreModule` fragment, relocation,
+  symbol and section writers. Drop the no-call C aggregate storage-shape
+  helper; retain the Core nominal-record shape calculation.
+- **x86-64:** delete unused C AST/type ABI classification, record return
+  adaptation, and duplicate C global output. Keep the CoreType SysV ABI
+  classifier and Module global writer. The native Core ABI shape probe still
+  tests one/two eightbytes, unaligned aggregates and hidden results.
+- **RV64:** remove C Program-dependent standalone function emission,
+  duplicate C ABI cursor/placement logic and dead C function-symbol aliases.
+  The production emitter requires a finalized Module when PIC is enabled;
+  Core-only standalone fixtures cannot pretend to know ELF preemption.
+  Rewrite the ABI fixture against a constructed CoreTypeContext and remove
+  its unused frontend/DataLayout link dependencies.
+- **AArch64:** remove legacy C-type NEON selection wrappers. Test sealed
+  Core vector128 machine operations and malformed-shape failures directly.
+  Qualifier stripping for the machine vector shape remains distinct from C
+  source inline-ASM type qualification.
+- **Shared names and wiring:** rename five ISA writer entrypoints to
+  `write_core_module`, the direct writer to `direct_write_module`, and its
+  configuration to `DirectModuleConfig`; update backend dispatch and strict
+  ownership checks together. These are renames, not an added adapter layer.
+
+Do **not** remove source C types in GNU inline-ASM constraint qualification:
+those interfaces operate before Core publication and must still apply C
+rank, lvalue and operand compatibility rules. The target-machine paths no
+longer expose the retired C global/ABI/function-output alternatives.
+
+**Verification:** strict backend boundary and native AArch64 Core NEON
+contract tests PASS; RV64 Core ABI fixture PASS without frontend linkage;
+debug `make check-fast` PASS. This is compiler cleanup and native/source-
+level regression evidence, **not** a claim that five Linux images boot under
+QEMU. Cross-toolchain GNU assembly/link and five-architecture runtime
+certification remain outside this refactor's execution evidence.

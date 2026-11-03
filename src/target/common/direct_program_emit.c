@@ -46,7 +46,7 @@ bool minic_multi_direct_machine_reject(const MinicCoreFunction *fn, const char *
 /* This adapter retains the M1 diagnostic and census behavior while the
  * program-wide walk is shared with x86/RV32/RV64. */
 typedef struct MinicDirectVisitContext {
-    const MinicMultiDirectProgramConfig *config;
+    const MinicMultiDirectModuleConfig *config;
     const MinicCoreModule *module;
     size_t scanned_functions, rejected_functions;
     bool census;
@@ -157,11 +157,11 @@ static bool direct_between(
                out, module, ctx->config->elf_function_type);
 }
 
-bool minic_multi_direct_write_program_with_module(
+bool minic_multi_direct_write_module(
     const char *path,
     const MinicTargetInfo *target, const MinicCoreFunction *core_functions,
     size_t core_function_count, bool function_sections,
-    const MinicCoreModule *module, const MinicMultiDirectProgramConfig *config,
+    const MinicCoreModule *module, const MinicMultiDirectModuleConfig *config,
     MinicDiagnostic *diagnostic) {
     bool success;
     const bool census = getenv("MINIC_BACKEND_CENSUS") != NULL;

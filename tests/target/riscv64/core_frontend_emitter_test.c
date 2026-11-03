@@ -6,6 +6,8 @@
 #include "frontend/function_body.h"
 #include "frontend/parser.h"
 #include "target/riscv64/core_codegen.h"
+#include "target/riscv64/core_admission.h"
+#include "target/riscv64/function_abi_plan.h"
 #include "target/target_info.h"
 
 #include <stdint.h>
@@ -90,6 +92,8 @@ static bool emit_frontend_functions(FILE *file, const MinicC0Program *program) {
         MinicCoreFunction core;
         MinicCoreLowerStatus status;
         MinicRiscvFunctionSymbol symbol;
+        MinicRiscv64FunctionAbiPlan abi_plan = {0};
+        MinicCoreModuleFunctionSymbol sealed_symbol = {0};
         bool success;
 
         function = minic_c0_program_function(program, function_index);
@@ -104,12 +108,24 @@ static bool emit_frontend_functions(FILE *file, const MinicC0Program *program) {
         }
         minic_core_function_initialize(&core);
         status = minic_core_lower_function(&body, minic_default_target_info(), &core);
+        /* The test's source fixture builds the same sealed descriptor that
+         * production ModuleIR owns; the machine receives no C function. */
+        /* Module descriptor owns its spelling in production; this fixture
+         * borrows the source symbol for the duration of immediate emission. */
+        sealed_symbol.name = (char *)minic_c0_function_symbol_name(function);
+        sealed_symbol.section_name = function->section_name;
+        sealed_symbol.explicit_alignment = function->explicit_alignment;
+        sealed_symbol.is_internal = function->is_internal;
+        sealed_symbol.is_weak = function->is_weak;
+        sealed_symbol.visibility = (MinicCoreModuleVisibility)function->visibility;
         success = status == MINIC_CORE_LOWER_OK && minic_core_function_verify(&core) &&
-                  minic_riscv64_core_function_can_emit_for_program(program, &core) &&
-                  minic_riscv_function_symbol_from_function(function, &symbol);
+                  minic_riscv64_core_function_admit(true, &core, &abi_plan) &&
+                  function->visibility <= MINIC_SYMBOL_VISIBILITY_PROTECTED &&
+                  minic_riscv_function_symbol_from_module(&sealed_symbol, &symbol);
+        minic_riscv64_function_abi_plan_destroy(&abi_plan);
         if (success) {
-            success = minic_riscv64_emit_core_function_for_program_with_symbol(
-                file, program, &core, &symbol);
+            success = minic_riscv64_emit_prepared_core_function_with_symbol(
+                file, &core, &symbol, false, NULL, NULL);
         }
         if (!success) {
             (void)fprintf(stderr,

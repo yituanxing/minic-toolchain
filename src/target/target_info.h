@@ -214,31 +214,8 @@ bool minic_target_info_gnu_pragma_target_options(
     const MinicTargetInfo *target, const char *value, size_t value_length,
     const MinicTargetGnuPragmaOptionState *current,
     MinicTargetGnuPragmaOptionState *next);
-/* ELF linkage is a source-program property shared by the two LP64 targets.
- * A proven TU-local symbol may use PC-relative addressing in PIC; all other
- * addresses need a target-specific GOT sequence. */
-bool minic_target_info_elf_object_is_tu_local(const MinicC0Program *program,
-                                              const char *symbol);
-bool minic_target_info_elf_function_is_tu_local(const MinicC0Program *program,
-                                                const char *symbol);
-/* ELF local-binding decision for PIC address materialization. Unlike
- * *_is_tu_local, a hidden/internal external declaration is nonpreemptible
- * even when its definition is supplied by another object in the same DSO. */
-bool minic_target_info_elf_object_is_nonpreemptible(const MinicC0Program *program,
-                                                    const char *symbol);
-bool minic_target_info_elf_function_is_nonpreemptible(const MinicC0Program *program,
-                                                      const char *symbol);
-/* A missing weak definition may legally resolve to address zero. AArch64
- * cannot use ADRP+ADD against that absolute zero from a high kernel address;
- * it must retain an indirection even with -fno-pic. */
-bool minic_target_info_elf_object_is_undefined_weak(const MinicC0Program *program,
-                                                    const char *symbol);
-bool minic_target_info_elf_function_is_undefined_weak(const MinicC0Program *program,
-                                                      const char *symbol);
-/* Machine PIC/ELF classification consumes the sealed ModuleIR symbol table.
- * These six decisions mirror the source-ingress queries above, but do not
- * reopen a C declaration after CoreModule has been finalized. A missing
- * symbol is never guessed local, nonpreemptible or undefined-weak. */
+/* Machine PIC/ELF classification consumes sealed ModuleIR symbols.
+ * Missing symbols are never guessed local, nonpreemptible or weak. */
 bool minic_target_info_elf_module_object_is_tu_local(
     const struct MinicCoreModule *module, const char *symbol);
 bool minic_target_info_elf_module_function_is_tu_local(

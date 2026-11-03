@@ -19,7 +19,6 @@
 #include "core/value_uses.h"
 #include "target/common/core_block_walk.h"
 #include "target/common/core_instruction_family.h"
-#include "target/data_layout.h"
 #include "target/target_info.h"
 
 #include <inttypes.h>
@@ -34,7 +33,6 @@ static bool core_frame_fail(MinicRiscv64CoreFrame *frame) {
     return false;
 }
 static bool emit_instruction(FILE *file,
-                             const MinicC0Program *program,
                              const MinicCoreModule *module,
                              const MinicCoreFunction *function,
                              const MinicRiscv64CoreFrame *frame,
@@ -265,11 +263,8 @@ static bool emit_instruction(FILE *file,
          * linked high virtual address before enabling the MMU. */
         if (fprintf(file,
                     position_independent &&
-                            !(module != NULL
-                              ? minic_target_info_elf_module_object_is_nonpreemptible(
-                                    module, function->globals[instruction->value.global_id].name)
-                              : minic_target_info_elf_object_is_nonpreemptible(
-                                    program, function->globals[instruction->value.global_id].name))
+                            !minic_target_info_elf_module_object_is_nonpreemptible(
+                                module, function->globals[instruction->value.global_id].name)
                         ? "  .option push\n  .option pic\n  la t0, %s\n  .option pop\n"
                         : "  lla t0, %s\n",
                     function->globals[instruction->value.global_id].name) < 0) {
@@ -281,13 +276,9 @@ static bool emit_instruction(FILE *file,
             return false;
         if (fprintf(file,
                     position_independent &&
-                            !(module != NULL
-                              ? minic_target_info_elf_module_function_is_nonpreemptible(
-                                    module, function->function_symbols[
-                                        instruction->value.function_symbol_id].name)
-                              : minic_target_info_elf_function_is_nonpreemptible(
-                                    program, function->function_symbols[
-                                        instruction->value.function_symbol_id].name))
+                            !minic_target_info_elf_module_function_is_nonpreemptible(
+                                module, function->function_symbols[
+                                    instruction->value.function_symbol_id].name)
                         ? "  .option push\n  .option pic\n  la t0, %s\n  .option pop\n"
                         : "  lla t0, %s\n",
                     function->function_symbols[instruction->value.function_symbol_id].name) < 0) {
@@ -509,10 +500,10 @@ static bool emit_terminator(FILE *file,
    the function entry and close over explicit Core terminator edges. Synthetic
    switch blocks with no executable predecessor remain unmarked. */
 static bool emit_core_function_with_symbol(FILE *file,
-                                                    const MinicC0Program *program,
                                                     const MinicCoreModule *module,
                                                     const MinicCoreFunction *function,
                                                     const MinicRiscvFunctionSymbol *symbol,
+                                                    bool require_prepared_abi,
                                                     bool position_independent,
                                                     const MinicRiscvIsa *isa,
                                                     MinicDiagnostic *diagnostic,
@@ -525,10 +516,10 @@ static bool emit_core_function_with_symbol(FILE *file,
     size_t block_index;
     MinicCoreBlockWalk machine_blocks = {0};
     bool bootstrap_trace;
-    const bool require_prepared_abi = program != NULL || module != NULL;
 
     if (file == NULL || symbol == NULL || symbol->symbol_name == NULL ||
-        symbol->symbol_name[0] == '\0') {
+        symbol->symbol_name[0] == '\0' ||
+        (position_independent && (module == NULL || !module->finalized))) {
         return false;
     }
     /* Legacy standalone Core emitters have no common TU visitor. Preserve
@@ -726,7 +717,7 @@ static bool emit_core_function_with_symbol(FILE *file,
             const MinicCoreInstruction *ins = NULL;
             if (!minic_core_block_instruction_at(function, block, instruction_index,
                                                  &instruction_id, &ins) ||
-                !emit_instruction(file, program, module, function, &frame, symbol_name,
+                !emit_instruction(file, module, function, &frame, symbol_name,
                                   ins, (size_t)instruction_id, position_independent, isa)) {
                 return core_frame_fail(&frame);
             }
@@ -803,45 +794,33 @@ static bool emit_core_function_with_symbol(FILE *file,
 
 bool minic_riscv64_emit_core_function_with_symbol(
     FILE *file, const MinicCoreFunction *function, const MinicRiscvFunctionSymbol *symbol) {
-    return emit_core_function_with_symbol(file, NULL, NULL, function, symbol, false,
+    return emit_core_function_with_symbol(file, NULL, function, symbol, false, false,
                                           NULL, NULL, NULL, NULL);
 }
 
-bool minic_riscv64_emit_core_function_for_program_with_symbol_with_storage(
-    FILE *file, const MinicC0Program *program, const MinicCoreFunction *function,
-    const MinicRiscvFunctionSymbol *symbol, const MinicCoreFunctionFacts *facts,
-    const MinicCoreObjectStoragePlan *storage, bool position_independent,
-    const MinicRiscvIsa *isa, MinicDiagnostic *diagnostic) {
-    return program != NULL && facts != NULL &&
-           emit_core_function_with_symbol(file, program, NULL, function, symbol,
-                                          position_independent, isa, diagnostic,
-                                          facts, storage);
-}
-
-bool minic_riscv64_emit_core_function_for_program_with_symbol_with_storage_module(
-    FILE *file, const MinicC0Program *program, const MinicCoreModule *module,
+bool minic_riscv64_emit_core_function_with_symbol_with_storage_module(
+    FILE *file, const MinicCoreModule *module,
     const MinicCoreFunction *function, const MinicRiscvFunctionSymbol *symbol,
     const MinicCoreFunctionFacts *facts, const MinicCoreObjectStoragePlan *storage,
     bool position_independent, const MinicRiscvIsa *isa,
     MinicDiagnostic *diagnostic) {
     return module != NULL && module->finalized && facts != NULL &&
-           emit_core_function_with_symbol(file, program, module, function, symbol,
-                                          position_independent, isa, diagnostic,
+           emit_core_function_with_symbol(file, module, function, symbol,
+                                          true, position_independent, isa, diagnostic,
                                           facts, storage);
 }
 
-bool minic_riscv64_emit_core_function_for_program_with_symbol(
+bool minic_riscv64_emit_prepared_core_function_with_symbol(
     FILE *file,
-    const MinicC0Program *program,
     const MinicCoreFunction *function,
     const MinicRiscvFunctionSymbol *symbol,
     bool position_independent,
     const MinicRiscvIsa *isa,
     MinicDiagnostic *diagnostic) {
     MinicCoreFunctionFacts facts;
-    return program != NULL &&
+    return !position_independent &&
            minic_core_function_facts_analyze(function, &facts) &&
-           emit_core_function_with_symbol(file, program, NULL, function, symbol,
-                                          position_independent, isa, diagnostic,
+           emit_core_function_with_symbol(file, NULL, function, symbol,
+                                          true, position_independent, isa, diagnostic,
                                           &facts, NULL);
 }

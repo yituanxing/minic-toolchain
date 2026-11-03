@@ -6,7 +6,6 @@
 #include "target/common/core_spill_layout.h"
 #include "target/riscv64/record_snapshot.h"
 #include "target/riscv64/core_type_query.h"
-#include "target/data_layout.h"
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>

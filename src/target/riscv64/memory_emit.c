@@ -6,7 +6,6 @@
 #include "target/riscv64/legalize.h"
 #include "target/riscv64/core_type_query.h"
 #include "target/common/core_abi_value_shape.h"
-#include "target/data_layout.h"
 #include <stdint.h>
 #include <stdio.h>
 

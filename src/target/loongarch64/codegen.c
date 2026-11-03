@@ -669,18 +669,18 @@ static bool loongarch64_emit_function(
     return success;
 }
 
-bool minic_loongarch64_write_c0_program_with_core_module(
+bool minic_loongarch64_write_core_module(
     const char *path,
     const MinicTargetInfo *target, const MinicCoreFunction *core_functions,
     size_t core_function_count, bool function_sections,
     const MinicCoreModule *module, MinicDiagnostic *diagnostic) {
-    static const MinicMultiDirectProgramConfig config = {
+    static const MinicMultiDirectModuleConfig config = {
         MINIC_TARGET_ARCH_LOONGARCH64, "loongarch64", "LoongArch64",
         ".section .note.GNU-stack,\"\",@progbits\n",
         "@function", "@object",
         loongarch64_emit_function
     };
-    return minic_multi_direct_write_program_with_module(
+    return minic_multi_direct_write_module(
         path, target, core_functions, core_function_count,
         function_sections, module, &config, diagnostic);
 }

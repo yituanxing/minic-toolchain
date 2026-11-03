@@ -7,7 +7,6 @@
 #include "target/riscv64/codegen_internal.h"
 #include "target/riscv64/core_codegen.h"
 #include "target/riscv/function_symbol.h"
-#include "target/data_layout.h"
 #include "target/riscv64/isa.h"
 
 #include <errno.h>
@@ -78,8 +77,8 @@ static bool rv64_visit_function(
         success = minic_riscv_function_symbol_from_module(module_decl, &symbol);
         symbol.function_sections = function_sections;
         success = success &&
-            minic_riscv64_emit_core_function_for_program_with_symbol_with_storage_module(
-                file, NULL, module, core_function, &symbol, facts, storage,
+            minic_riscv64_emit_core_function_with_symbol_with_storage_module(
+                file, module, core_function, &symbol, facts, storage,
                 target != NULL && target->position_independent,
                 target != NULL ? &target->riscv_isa : NULL, ctx->diagnostic);
         if (success && is_constructor) {
@@ -182,7 +181,7 @@ static bool rv64_write_core_program_impl(const char *path,
     return success;
 }
 
-bool minic_riscv64_write_c0_program_with_core_module(
+bool minic_riscv64_write_core_module(
     const char *path,
     const MinicCoreFunction *core_functions, size_t core_function_count,
     bool function_sections, const MinicTargetInfo *target,

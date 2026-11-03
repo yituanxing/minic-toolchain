@@ -23,25 +23,18 @@
  * carried separately from Core IR through MinicRiscvFunctionSymbol.
  */
 bool minic_riscv64_core_function_can_emit(const MinicCoreFunction *function);
-bool minic_riscv64_core_function_can_emit_for_program(const MinicC0Program *program,
-                                                       const MinicCoreFunction *function);
 
 bool minic_riscv64_emit_core_function_with_symbol(
     FILE *file, const MinicCoreFunction *function, const MinicRiscvFunctionSymbol *symbol);
-bool minic_riscv64_emit_core_function_for_program_with_symbol_with_storage(
-    FILE *, const MinicC0Program *, const MinicCoreFunction *,
-    const MinicRiscvFunctionSymbol *, const MinicCoreFunctionFacts *,
-    const MinicCoreObjectStoragePlan *, bool, const MinicRiscvIsa *, MinicDiagnostic *);
-/* The Module form is the production PIC provenance authority.  Preserve
- * the no-Module entry point for existing isolated machine/ABI fixtures. */
-bool minic_riscv64_emit_core_function_for_program_with_symbol_with_storage_module(
-    FILE *, const MinicC0Program *, const MinicCoreModule *,
+/* Production PIC codegen accepts sealed Module symbol provenance only. */
+bool minic_riscv64_emit_core_function_with_symbol_with_storage_module(
+    FILE *, const MinicCoreModule *,
     const MinicCoreFunction *, const MinicRiscvFunctionSymbol *,
     const MinicCoreFunctionFacts *, const MinicCoreObjectStoragePlan *,
     bool, const MinicRiscvIsa *, MinicDiagnostic *);
-bool minic_riscv64_emit_core_function_for_program_with_symbol(
+/* Standalone Core ABI proof without C Program or PIE fallback. */
+bool minic_riscv64_emit_prepared_core_function_with_symbol(
     FILE *file,
-    const MinicC0Program *program,
     const MinicCoreFunction *function,
     const MinicRiscvFunctionSymbol *symbol,
     bool position_independent,

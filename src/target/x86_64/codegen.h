@@ -12,7 +12,7 @@
 
 /* M1: conservative Core -> GNU x86-64 assembly emitter, Linux SysV.
  * Unsupported Core operations and program constructs must fail explicitly. */
-bool minic_x86_64_write_c0_program_with_core_module(
+bool minic_x86_64_write_core_module(
     const char *path,
     const MinicTargetInfo *target,
     const MinicCoreFunction *core_functions, size_t core_function_count,

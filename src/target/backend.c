@@ -16,7 +16,7 @@ static bool emit_riscv64_module(
     const MinicCoreFunction *functions,
     size_t function_count, bool function_sections,
     const MinicCoreModule *module, MinicDiagnostic *diagnostic) {
-    return minic_riscv64_write_c0_program_with_core_module(
+    return minic_riscv64_write_core_module(
         output_path, functions, function_count,
         function_sections, target, module, diagnostic);
 }
@@ -33,14 +33,14 @@ static const MinicBackend riscv32_backend = {
     .emit_reachable_core_blocks_only = true,
 };
 static const MinicBackend x86_64_backend = {
-    .emit_module = minic_x86_64_write_c0_program_with_core_module,
+    .emit_module = minic_x86_64_write_core_module,
     .emit_reachable_core_blocks_only = true,
     .qualify_inline_asm = minic_x86_64_qualify_inline_asm,
     .requires_qualified_input_asm = minic_x86_64_requires_qualified_input_asm,
     .qualify_inline_asm_goto = minic_x86_64_qualify_inline_asm_goto,
 };
 static const MinicBackend aarch64_backend = {
-    .emit_module = minic_aarch64_write_c0_program_with_core_module,
+    .emit_module = minic_aarch64_write_core_module,
     .emit_reachable_core_blocks_only = true,
     .qualify_inline_asm = minic_aarch64_qualify_inline_asm,
     .seal_normalized_inline_asm = minic_aarch64_seal_normalized_inline_asm,
@@ -49,7 +49,7 @@ static const MinicBackend aarch64_backend = {
     .clone_safe_opaque_asm = minic_aarch64_clone_safe_opaque_asm,
 };
 static const MinicBackend loongarch64_backend = {
-    .emit_module = minic_loongarch64_write_c0_program_with_core_module,
+    .emit_module = minic_loongarch64_write_core_module,
     .emit_reachable_core_blocks_only = true,
     .qualify_inline_asm = minic_loongarch64_qualify_inline_asm,
     .seal_normalized_inline_asm = minic_loongarch64_seal_normalized_inline_asm,

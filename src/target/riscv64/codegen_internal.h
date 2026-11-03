@@ -2,9 +2,7 @@
 #define MINIC_TARGET_RISCV64_CODEGEN_INTERNAL_H
 
 #include "core/core_type.h"
-#include "frontend/ast.h"
 #include "minic/compiler.h"
-#include "target/data_layout.h"
 #include "target/riscv/frame_address_policy.h"
 
 #include <stddef.h>

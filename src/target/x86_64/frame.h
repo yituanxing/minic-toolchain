@@ -19,7 +19,7 @@
  * The extra limb is x86 backend-owned; Core IR identities are unchanged. */
 typedef struct MinicX86Frame {
     /* Sealed module ownership for PIC/ELF symbol binding during machine
-     * execution. NULL is reserved for the legacy source-program test writer;
+     * execution. NULL remains possible only in isolated Core machine tests;
      * the production Module writer must not reopen C declarations. */
     const MinicCoreModule *module;
     size_t value_count;

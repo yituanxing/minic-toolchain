@@ -2,8 +2,6 @@
 #define MINIC_TARGET_COMMON_ELF_ALIAS_EMIT_H
 
 #include "core/module_ir.h"
-#include "frontend/ast.h"
-#include "target/common/global_emit.h"
 #include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
@@ -29,17 +27,6 @@ static inline bool minic_multi_elf_emit_alias_directive(
         return false;
     return fprintf(out, ".type %s, %s\n.set %s, %s\n",
                    alias_name, type_directive, alias_name, target_name) >= 0;
-}
-
-static inline bool minic_multi_elf_emit_alias(
-    FILE *out, const char *alias_name, const char *target_name,
-    bool internal, bool weak, MinicSymbolVisibility visibility,
-    const char *type_directive) {
-    const char *directive = minic_multi_elf_visibility_directive(visibility);
-    return (visibility == MINIC_SYMBOL_VISIBILITY_DEFAULT || directive != NULL) &&
-           minic_multi_elf_emit_alias_directive(
-               out, alias_name, target_name, internal, weak, directive,
-               type_directive);
 }
 
 static inline const char *minic_multi_elf_module_visibility_directive(
@@ -118,55 +105,6 @@ static inline bool minic_multi_elf_emit_module_function_aliases(
     for (index = 0U; index < module->function_count; ++index)
         if (!minic_multi_elf_emit_module_function_alias(
                 out, module, index, type_directive)) return false;
-    return true;
-}
-
-/* The parser and AST verifier already require a defined, representation-
- * compatible same-TU target.  The GNU object-alias boundary also allows
- * cv-qualified array elements to name the same storage; ordinary C type
- * compatibility elsewhere still remains strict. */
-static inline bool minic_multi_elf_emit_object_alias(
-    FILE *out, const MinicC0Program *program,
-    const MinicGlobalObject *alias, const char *type_directive) {
-    const MinicGlobalObject *target;
-    if (program == NULL || alias == NULL || !alias->is_extern ||
-        alias->alias_target == MINIC_GLOBAL_OBJECT_INVALID ||
-        alias->alias_target >= program->global_object_count)
-        return false;
-    target = minic_c0_program_global_object(program, alias->alias_target);
-    return target != NULL && target != alias &&
-           !target->is_extern && !target->is_tentative &&
-           minic_c0_object_alias_types_compatible(program, alias->type, target->type) &&
-           minic_multi_elf_emit_alias(
-               out, alias->name, target->name, alias->is_internal,
-               alias->is_weak, alias->visibility, type_directive);
-}
-
-/* The program visitor emits only live function definitions for x86/Direct
- * LP64. This common declaration stage is the single owner of their aliases;
- * don't make the machine function emitters fabricate dummy Core bodies. */
-static inline bool minic_multi_elf_emit_function_aliases(
-    FILE *out, const MinicC0Program *program, const char *type_directive) {
-    size_t index;
-    if (out == NULL || program == NULL || type_directive == NULL)
-        return false;
-    for (index = 0U; index < program->function_count; ++index) {
-        const MinicFunction *alias = &program->functions[index];
-        const MinicFunction *target;
-        if (alias->alias_target == MINIC_FUNCTION_INVALID)
-            continue;
-        if (alias->is_defined ||
-            alias->alias_target >= program->function_count)
-            return false;
-        target = minic_c0_program_function(program, alias->alias_target);
-        if (target == NULL || !target->is_defined ||
-            target->alias_target != MINIC_FUNCTION_INVALID ||
-            !minic_multi_elf_emit_alias(
-                out, minic_c0_function_symbol_name(alias),
-                minic_c0_function_symbol_name(target), alias->is_internal,
-                alias->is_weak, alias->visibility, type_directive))
-            return false;
-    }
     return true;
 }
 

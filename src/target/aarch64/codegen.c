@@ -149,18 +149,18 @@ static bool aarch64_emit_function(
         id, function_sections, &emitter);
 }
 
-bool minic_aarch64_write_c0_program_with_core_module(
+bool minic_aarch64_write_core_module(
     const char *path,
     const MinicTargetInfo *target, const MinicCoreFunction *core_functions,
     size_t core_function_count, bool function_sections,
     const MinicCoreModule *module, MinicDiagnostic *diagnostic) {
-    static const MinicMultiDirectProgramConfig config = {
+    static const MinicMultiDirectModuleConfig config = {
         MINIC_TARGET_ARCH_AARCH64, "aarch64", "AArch64",
         ".section .note.GNU-stack,\"\",%progbits\n",
         "%function", "%object",
         aarch64_emit_function
     };
-    return minic_multi_direct_write_program_with_module(
+    return minic_multi_direct_write_module(
         path, target, core_functions, core_function_count,
         function_sections, module, &config, diagnostic);
 }

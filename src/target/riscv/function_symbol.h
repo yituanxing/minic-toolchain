@@ -1,7 +1,7 @@
 #ifndef MINIC_TARGET_RISCV_FUNCTION_SYMBOL_H
 #define MINIC_TARGET_RISCV_FUNCTION_SYMBOL_H
 
-#include "frontend/ast.h"
+#include "core/module_ir.h"
 #include "target/common/elf_alias_emit.h"
 
 #include <stdbool.h>
@@ -29,42 +29,6 @@ static inline bool minic_riscv_function_symbol_for_name(
     return true;
 }
 
-static inline bool minic_riscv_function_visibility_from_source(
-    MinicSymbolVisibility source, MinicCoreModuleVisibility *result) {
-    if (result == NULL) return false;
-    switch (source) {
-    case MINIC_SYMBOL_VISIBILITY_DEFAULT:
-        *result = MINIC_CORE_MODULE_VISIBILITY_DEFAULT; return true;
-    case MINIC_SYMBOL_VISIBILITY_HIDDEN:
-        *result = MINIC_CORE_MODULE_VISIBILITY_HIDDEN; return true;
-    case MINIC_SYMBOL_VISIBILITY_INTERNAL:
-        *result = MINIC_CORE_MODULE_VISIBILITY_INTERNAL; return true;
-    case MINIC_SYMBOL_VISIBILITY_PROTECTED:
-        *result = MINIC_CORE_MODULE_VISIBILITY_PROTECTED; return true;
-    }
-    return false;
-}
-
-static inline bool minic_riscv_function_symbol_from_function(const MinicFunction *function,
-                                                               MinicRiscvFunctionSymbol *symbol) {
-    const char *symbol_name;
-
-    if (function == NULL || symbol == NULL) {
-        return false;
-    }
-    symbol_name = minic_c0_function_symbol_name(function);
-    if (!minic_riscv_function_symbol_for_name(symbol_name, symbol)) {
-        return false;
-    }
-    symbol->section_name = function->section_name;
-    symbol->explicit_alignment = function->explicit_alignment;
-    if (!minic_riscv_function_visibility_from_source(
-            function->visibility, &symbol->visibility)) return false;
-    symbol->is_internal = function->is_internal;
-    symbol->is_weak = function->is_weak;
-    return true;
-}
-
 /* Production sealed ModuleIR descriptor. Never reopen C declarations for
  * symbol identity, visibility, section, alignment or linkage attributes. */
 static inline bool minic_riscv_function_symbol_from_module(
@@ -78,24 +42,6 @@ static inline bool minic_riscv_function_symbol_from_module(
     symbol->is_internal = function->is_internal;
     symbol->is_weak = function->is_weak;
     return true;
-}
-
-/* RISC-V shares the exact GNU ELF alias semantics with x86/Direct LP64.
- * Keep the ABI and ISA emission owned by the target; this is symbol
- * metadata only, no new machine instruction or object format. */
-static inline bool minic_riscv_emit_function_alias(
-    FILE *file, const MinicC0Program *program,
-    const MinicFunction *function) {
-    const MinicFunction *owner;
-    if (file == NULL || program == NULL || function == NULL ||
-        function->alias_target == MINIC_FUNCTION_INVALID)
-        return false;
-    owner = minic_c0_program_function(program, function->alias_target);
-    return owner != NULL && owner->is_defined &&
-           minic_multi_elf_emit_alias(
-               file, minic_c0_function_symbol_name(function),
-               minic_c0_function_symbol_name(owner), function->is_internal,
-               function->is_weak, function->visibility, "@function");
 }
 
 static inline bool

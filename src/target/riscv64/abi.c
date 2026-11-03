@@ -24,120 +24,6 @@ const char *const minic_riscv64_abi_floating_argument_registers[8] = {
     "fa7",
 };
 
-
-#include "target/data_layout.h"
-
-#include <stdint.h>
-
-/* LP64D's integer-convention record path is a psABI classification, not a
- * structural property of common DataLayout. Unions are opaque integer ABI
- * leaves even if one alternative is floating-point; never flatten them.
- * A genuine FP struct/array leaf remains in the separate, not-yet-supported
- * FPR-aggregate path and must continue to fail closed. */
-static bool rv64_integer_convention_record_tree(const MinicC0Program *program,
-                                                 MinicType type,
-                                                 unsigned int depth) {
-    const MinicRecord *record;
-    const MinicArrayType *array;
-    size_t index;
-
-    if (program == NULL || depth > 256U) return false;
-    if (minic_type_is_integer(type) || minic_type_is_pointer(type)) return true;
-    if (minic_type_is_array(type)) {
-        array = minic_c0_program_array_type(program, type.array_type_id);
-        return array != NULL && rv64_integer_convention_record_tree(
-            program, array->element_type, depth + 1U);
-    }
-    if (!minic_type_is_record(type)) return false;
-    record = minic_c0_program_record(program, type.record_id);
-    if (record == NULL || !record->is_complete) return false;
-    if (record->is_union) return true;
-    for (index = 0U; index < record->field_count; ++index) {
-        const MinicRecordField *field = minic_c0_record_field(record, index);
-        if (field == NULL || !rv64_integer_convention_record_tree(
-                program, field->type, depth + 1U)) return false;
-    }
-    return true;
-}
-
-bool minic_riscv64_classify_abi_value_profile(
-    const MinicC0Program *program, MinicType type, bool lp64_soft_float,
-    MinicRiscv64AbiValue *result) {
-    size_t alignment;
-    size_t size;
-
-    if (program == NULL || result == NULL) {
-        return false;
-    }
-    result->kind = MINIC_RISCV64_ABI_VALUE_INVALID;
-    result->storage_size = 0U;
-    result->register_chunks = 0U;
-    result->slot_count = 0U;
-    if (minic_type_is_void(type)) {
-        result->kind = MINIC_RISCV64_ABI_VALUE_VOID;
-        return true;
-    }
-    if (minic_type_is_record(type)) {
-        MinicAggregateStorageShape shape;
-        if (!minic_common_aggregate_storage_shape(
-                program, minic_default_data_layout(), type, 8U, &shape))
-            return false;
-        size = shape.bytes;
-        alignment = shape.alignment;
-    } else if (!minic_data_layout_type(
-                   minic_default_data_layout(), program, type,
-                   &size, &alignment)) {
-        return false;
-    }
-    (void)alignment;
-
-    result->storage_size = size;
-
-    if (minic_type_is_record(type)) {
-        if (size == 0U) {
-            result->kind = MINIC_RISCV64_ABI_VALUE_IGNORE;
-            return true;
-        }
-        if (size <= 16U) {
-            /* LP64D flattens genuine FP struct leaves into FPRs. That
-             * placement is not yet implemented, so keep it rejected.
-             * Unions (including nested fields) are opaque, non-flattened
-             * integer-convention values; LP64 and unnamed LP64D arguments
-             * likewise use integer registers/stack without this filter. */
-            if (!lp64_soft_float &&
-                !rv64_integer_convention_record_tree(program, type, 0U))
-                return false;
-            result->kind = MINIC_RISCV64_ABI_VALUE_AGGREGATE;
-            result->register_chunks = (size + 7U) / 8U;
-            return true;
-        }
-        result->kind = MINIC_RISCV64_ABI_VALUE_INDIRECT;
-        return true;
-    }
-
-    if (minic_type_is_float(type) || minic_type_is_double(type)) {
-        result->kind = MINIC_RISCV64_ABI_VALUE_FLOAT;
-        result->register_chunks = 1U;
-        return true;
-    }
-    /* __int128 always occupies two XLEN words under both LP64 and LP64D.
-     * The hard/soft FLOAT ABI selects FPRs for float/double, not the size
-     * of an integer. The old soft-float-only condition silently reduced
-     * hard-float __int128 CALL returns/arguments to a single a-register. */
-    if ((minic_type_is_long_double(type) ||
-         minic_type_is_int128_integer(type)) && size == 16U) {
-        result->kind = MINIC_RISCV64_ABI_VALUE_WIDE_SCALAR;
-        result->register_chunks = 2U;
-        return true;
-    }
-    if (minic_type_is_integer(type) || minic_type_is_pointer(type)) {
-        result->kind = MINIC_RISCV64_ABI_VALUE_INTEGER;
-        result->register_chunks = 1U;
-        return true;
-    }
-    return false;
-}
-
 #define MINIC_RISCV64_ABI_ARGUMENT_REGISTER_COUNT 8U
 
 void minic_riscv64_abi_cursor_initialize(MinicRiscv64AbiCursor *cursor) {
@@ -150,38 +36,6 @@ void minic_riscv64_abi_cursor_initialize(MinicRiscv64AbiCursor *cursor) {
     cursor->lp64_soft_float = false;
 }
 
-bool minic_riscv64_abi_cursor_initialize_for_return_profile(
-    const MinicC0Program *program, MinicType return_type,
-    bool lp64_soft_float, MinicRiscv64AbiCursor *cursor,
-    MinicRiscv64AbiValue *return_value) {
-    MinicRiscv64AbiCursor next;
-    MinicRiscv64AbiValue result;
-
-    if (cursor == NULL || return_value == NULL ||
-        !minic_riscv64_abi_classify_value_profile(
-            program, return_type, lp64_soft_float, &result)) {
-        return false;
-    }
-    minic_riscv64_abi_cursor_initialize(&next);
-    next.lp64_soft_float = lp64_soft_float;
-    if (result.kind == MINIC_RISCV64_ABI_VALUE_INDIRECT) {
-        if (!minic_type_is_record(return_type) || result.storage_size <= 16U) {
-            return false;
-        }
-        next.integer_register_count = 1U;
-    }
-    *cursor = next;
-    *return_value = result;
-    return true;
-}
-
-bool minic_riscv64_abi_cursor_initialize_for_return(
-    const MinicC0Program *program, MinicType return_type,
-    MinicRiscv64AbiCursor *cursor, MinicRiscv64AbiValue *return_value) {
-    return minic_riscv64_abi_cursor_initialize_for_return_profile(
-        program, return_type, false, cursor, return_value);
-}
-
 bool minic_riscv64_abi_variadic_prefix_from_cursor(
     const MinicRiscv64AbiCursor *cursor, size_t *integer_parameter_count,
     size_t *fixed_stack_slots) {
@@ -192,32 +46,6 @@ bool minic_riscv64_abi_variadic_prefix_from_cursor(
     *integer_parameter_count = cursor->integer_register_count;
     *fixed_stack_slots = cursor->stack_slot_count;
     return true;
-}
-
-bool minic_riscv64_abi_classify_value_profile(
-    const MinicC0Program *program, MinicType type, bool lp64_soft_float,
-    MinicRiscv64AbiValue *value) {
-    if (!minic_riscv64_classify_abi_value_profile(
-            program, type, lp64_soft_float, value)) {
-        return false;
-    }
-    if (value->kind == MINIC_RISCV64_ABI_VALUE_VOID ||
-        value->kind == MINIC_RISCV64_ABI_VALUE_IGNORE) {
-        value->slot_count = 0U;
-    } else if (value->kind == MINIC_RISCV64_ABI_VALUE_AGGREGATE ||
-               value->kind == MINIC_RISCV64_ABI_VALUE_WIDE_SCALAR) {
-        value->slot_count = value->register_chunks;
-    } else {
-        value->slot_count = 1U;
-    }
-    return true;
-}
-
-bool minic_riscv64_abi_classify_value(
-    const MinicC0Program *program, MinicType type,
-    MinicRiscv64AbiValue *value) {
-    return minic_riscv64_abi_classify_value_profile(
-        program, type, false, value);
 }
 
 /* A real LP64D floating aggregate requires a dedicated FPR aggregate
@@ -341,8 +169,8 @@ bool minic_riscv64_abi_cursor_initialize_for_core_return_profile(
     return true;
 }
 
-/* The register cursor is independent of the source language. Legacy C and
- * resolved Core paths supply the same classified ABI value and alignment. */
+/* The register cursor consumes classified Core ABI values and alignment;
+ * source declaration layout has no machine-side fallback. */
 static bool rv64_place_classified_argument(
     const MinicRiscv64AbiValue *classified, size_t alignment,
     bool is_fixed_parameter, MinicRiscv64AbiCursor *cursor,
@@ -414,22 +242,4 @@ bool minic_riscv64_abi_place_core_argument(
     return rv64_place_classified_argument(
         &classified, type->alignment == 0U ? 1U : type->alignment,
         is_fixed_parameter, cursor, location);
-}
-
-bool minic_riscv64_abi_place_argument(const MinicC0Program *program,
-                                      MinicType type,
-                                      bool is_fixed_parameter,
-                                      MinicRiscv64AbiCursor *cursor,
-                                      MinicRiscv64AbiArgumentLocation *location) {
-    MinicRiscv64AbiValue classified;
-    size_t size, alignment = 1U;
-    if (cursor == NULL ||
-        !minic_riscv64_abi_classify_value_profile(
-            program, type, cursor->lp64_soft_float || !is_fixed_parameter,
-            &classified)) return false;
-    if (!is_fixed_parameter && classified.slot_count == 2U &&
-        !minic_data_layout_type(minic_default_data_layout(), program, type,
-                                &size, &alignment)) return false;
-    return rv64_place_classified_argument(
-        &classified, alignment, is_fixed_parameter, cursor, location);
 }

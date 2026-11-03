@@ -8,7 +8,6 @@
 #include "target/riscv64/function_abi_plan.h"
 #include "target/riscv64/codegen_internal.h"
 #include "target/riscv64/core_type_query.h"
-#include "target/data_layout.h"
 #include <inttypes.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -334,14 +333,5 @@ bool minic_riscv64_core_function_admit(
 }
 bool minic_riscv64_core_function_can_emit(const MinicCoreFunction *function) {
     return core_function_can_emit(false, function, NULL, false, NULL, NULL);
-}
-bool minic_riscv64_core_function_can_emit_for_program(
-    const MinicC0Program *program, const MinicCoreFunction *function) {
-    MinicRiscv64FunctionAbiPlan plan = {0};
-    bool ok;
-    if (program == NULL) return false;
-    ok = minic_riscv64_core_function_admit(true, function, &plan);
-    minic_riscv64_function_abi_plan_destroy(&plan);
-    return ok;
 }
 

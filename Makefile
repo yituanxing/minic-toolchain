@@ -407,10 +407,6 @@ LAYOUT_TEST_BINARY  := $(BUILD_DIR)/tests/target/riscv64/layout-test
 
 RV64_ABI_TEST_SOURCES := \
 	src/core/core_type.c \
-	src/frontend/ast.c \
-	src/frontend/ast_global.c \
-	src/frontend/type.c \
-	src/target/data_layout.c \
 	src/target/common/aggregate_shape.c \
 	src/target/riscv64/abi.c \
 	src/target/riscv64/function_abi_plan.c \

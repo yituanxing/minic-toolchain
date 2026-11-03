@@ -26,7 +26,7 @@ typedef bool (*MinicMultiDirectEmitFunction)(
     const MinicCoreObjectStoragePlan *storage, size_t function_id,
     bool function_sections);
 
-typedef struct MinicMultiDirectProgramConfig {
+typedef struct MinicMultiDirectModuleConfig {
     MinicTargetArchitecture architecture;
     const char *architecture_name; /* diagnostic/trace lowercase ISA name */
     const char *display_name;      /* AArch64 / LoongArch64 */
@@ -34,14 +34,14 @@ typedef struct MinicMultiDirectProgramConfig {
     const char *elf_function_type; /* target GNU AS type spelling, e.g. %function */
     const char *elf_object_type;   /* target GNU AS type spelling, e.g. %object */
     MinicMultiDirectEmitFunction emit_function;
-} MinicMultiDirectProgramConfig;
+} MinicMultiDirectModuleConfig;
 
 /* Sealed ModuleIR is the sole ELF and function symbol authority. */
-bool minic_multi_direct_write_program_with_module(
+bool minic_multi_direct_write_module(
     const char *path,
     const MinicTargetInfo *target, const MinicCoreFunction *core_functions,
     size_t core_function_count, bool function_sections,
-    const MinicCoreModule *module, const MinicMultiDirectProgramConfig *config,
+    const MinicCoreModule *module, const MinicMultiDirectModuleConfig *config,
     MinicDiagnostic *diagnostic);
 
 /* Shared byte-identical opt-in Core reject diagnostics. The caller passes

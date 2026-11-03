@@ -14,7 +14,7 @@ typedef struct MinicCoreModule MinicCoreModule;
 /* Real M1 narrow integer Core -> LoongArch64 GNU ELF emitter.
  * Unsupported operations never silently become another target's code. */
 
-bool minic_loongarch64_write_c0_program_with_core_module(
+bool minic_loongarch64_write_core_module(
     const char *path,
     const MinicTargetInfo *target, const MinicCoreFunction *core_functions,
     size_t core_function_count, bool function_sections,

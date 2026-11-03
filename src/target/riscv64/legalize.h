@@ -1,7 +1,6 @@
 #ifndef MINIC_TARGET_RISCV64_LEGALIZE_H
 #define MINIC_TARGET_RISCV64_LEGALIZE_H
 #include "core/core_ir.h"
-#include "frontend/ast.h"
 #include "target/common/core_call_view.h"
 #include "target/riscv64/frame_requirements.h"
 #include <stdbool.h>

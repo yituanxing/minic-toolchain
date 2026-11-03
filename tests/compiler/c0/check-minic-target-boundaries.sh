@@ -152,16 +152,17 @@ has src/target/loongarch64/asm_contract.c 'loong_mask_nospec_source('
 has src/target/loongarch64/asm_contract.c 'loong_mask_nospec_emit('
 lacks src/core/core_lower_asm_target.c 'sltu'
 
-# All targets reuse one ELF custom section and binding owner.
-has src/target/common/global_emit.c 'minic_multi_emit_elf_global_section('
-has src/target/common/global_emit.c 'minic_multi_emit_elf_global_binding('
+# All targets reuse the sealed Module ELF custom section/binding owner.
+has src/target/common/module_global_emit.c 'minic_multi_module_emit_elf_section('
+has src/target/common/module_global_emit.c 'minic_multi_module_emit_elf_binding('
 has src/target/common/global_emit.c 'minic_multi_elf_safe_section_name('
 # The only C/DataLayout global byte walk belongs to Compiler ingress.
 # Target/Common retains output serialization adapters, not a second walker.
 exists src/compiler/global_payload.c
 exists src/compiler/global_payload.h
 has src/compiler/global_payload.c 'minic_multi_global_payload_visit('
-has src/target/common/global_emit.c 'minic_multi_global_payload_visit('
+lacks src/target/common/global_emit.c 'minic_multi_global_payload_visit('
+lacks src/target/common/global_emit.c 'minic_multi_emit_global_payload('
 lacks src/compiler/module_ir_build.c 'target/common/global_emit.h'
 lacks src/target/common/global_emit.c 'static bool minic_multi_visit_record_bit_field_run('
 
@@ -256,21 +257,22 @@ lacks src/core/core_lower_asm_target.c 'vmalle1is'
 # physical ABIs. RV32 must never inherit the 8-byte LP64 word policy.
 exists src/target/common/aggregate_shape.h
 exists src/target/common/aggregate_shape.c
-has src/target/common/aggregate_shape.c 'bool minic_common_aggregate_storage_shape('
+has src/target/common/aggregate_shape.c 'bool minic_common_aggregate_storage_shape_core('
+lacks src/target/common/aggregate_shape.c 'bool minic_common_aggregate_storage_shape('
 # MC-059: DataLayout owns storage shape, not LP64D integer/FPR ABI eligibility.
 # The old Common leaf classifier was retired; the union-sensitive policy is RV64-owned.
 lacks src/target/common/aggregate_shape.c 'minic_common_aggregate_integral_tree('
 lacks src/target/common/aggregate_shape.h 'minic_common_aggregate_integral_tree('
-for consumer in src/target/x86_64/abi.c \
-                src/target/riscv64/abi.c; do
-  has "$consumer" 'minic_common_aggregate_storage_shape('
-done
+lacks src/target/x86_64/abi.c 'minic_common_aggregate_storage_shape('
+lacks src/target/riscv64/abi.c 'minic_common_aggregate_storage_shape('
+has src/target/x86_64/abi.c 'minic_x86_64_core_one_gp_record('
+has src/target/riscv64/abi.c 'minic_riscv64_abi_classify_core_value_profile('
 has src/target/common/lp64_aggregate.c 'minic_common_aggregate_storage_shape_core('
 lacks src/target/common/lp64_aggregate.c 'minic_common_aggregate_storage_shape('
 has src/target/riscv32/rv32_abi_plan.c 'minic_common_aggregate_storage_shape_core('
 lacks src/target/riscv32/rv32_abi_plan.c 'minic_common_aggregate_storage_shape('
-has src/target/riscv64/abi.c 'static bool rv64_integer_convention_record_tree('
-has src/target/riscv64/abi.c '!rv64_integer_convention_record_tree('
+has src/target/riscv64/abi.c 'static bool rv64_core_integer_convention_record_tree('
+has src/target/riscv64/abi.c '!rv64_core_integer_convention_record_tree('
 lacks src/target/riscv64/abi.c 'minic_riscv64_integer_aggregate_member_type('
 
 # Exhaustive Common Core semantic vocabulary must be used by all five targets.
@@ -291,9 +293,9 @@ has src/target/riscv64/core_admission.c 'RV64 atomic ISA/memory-order lowering i
 # assembler spelling belongs to the target configuration and must not leak
 # architecture conditionals back into the common program visitor.
 exists src/target/common/elf_alias_emit.h
-has src/target/common/elf_alias_emit.h 'minic_multi_elf_emit_alias('
-has src/target/common/elf_alias_emit.h 'minic_multi_elf_emit_object_alias('
-has src/target/riscv/function_symbol.h 'minic_multi_elf_emit_alias('
+has src/target/common/elf_alias_emit.h 'minic_multi_elf_emit_module_function_alias('
+has src/target/common/elf_alias_emit.h 'minic_multi_elf_emit_module_object_alias('
+has src/target/riscv/function_symbol.h 'minic_riscv_function_symbol_from_module('
 has src/target/riscv64/codegen_function.c 'minic_multi_elf_emit_module_object_alias('
 has src/target/x86_64/codegen.c 'minic_multi_elf_emit_module_object_alias('
 has src/target/common/direct_program_emit.c 'ctx->config->elf_function_type'
@@ -525,12 +527,13 @@ has src/target/riscv32/rv32_emit.c 'rv32_emit_integer_instruction('
 exists src/target/riscv/function_symbol.h
 [[ ! -e src/target/riscv64/function_symbol.h ]] || fail 'duplicate old RV64 symbol owner'
 for user in src/target/riscv32/rv32_emit.c \
-            src/target/riscv64/global_emit.c \
             src/target/riscv64/codegen_function.c \
             src/target/riscv64/core_codegen.h; do
   has "$user" 'target/riscv/function_symbol.h'
   lacks "$user" 'target/riscv64/function_symbol.h'
 done
+lacks src/target/riscv64/global_emit.c 'target/riscv/function_symbol.h'
+has src/target/riscv64/global_emit.c 'target/common/module_global_emit.h'
 
 # ISA/ABI profile names must be shared between native compiler and staged
 # product driver. Only machine legalization owns the actual feature bits.
@@ -707,7 +710,7 @@ lacks src/target/riscv32/rv32_emit.c 'call __adddf3'
 lacks src/target/riscv32/rv32_emit.c 'minic_riscv_emit_record_copy_bytes('
 
 has src/frontend/parser_expression.c 'thread-local object access requires target TLS relocation'
-has src/target/riscv32/rv32_global_emit.c 'rv32_array_of_records('
+has src/target/riscv32/rv32_global_emit.c 'rv32_module_array_of_records('
 
 # Full-source global coverage: a change to ANY frontend/IR/compiler/target
 # .c or .h must reach the four-runtime-target matrix, on PR and main.
@@ -825,7 +828,7 @@ has src/target/common/core_function_plan.c 'minic_core_object_storage_plan_build
 has src/target/common/core_function_plan.c 'minic_core_object_storage_plan_destroy(&plan->objects)'
 has src/target/x86_64/codegen.c 'minic_x86_64_frame_init_with_storage('
 has src/target/riscv32/rv32_emit.c 'rv32_frame_init_with_storage('
-has src/target/riscv64/codegen_function.c 'minic_riscv64_emit_core_function_for_program_with_symbol_with_storage_module('
+has src/target/riscv64/codegen_function.c 'minic_riscv64_emit_core_function_with_symbol_with_storage_module('
 has src/target/aarch64/codegen.c 'minic_multi_direct_lp64_emit_function('
 has src/target/loongarch64/codegen.c 'minic_multi_direct_lp64_emit_function('
 # All four physical frame owners use the single Common borrowing contract.
@@ -1020,8 +1023,8 @@ has src/target/riscv64/call_emit.c 'static bool emit_core_call_wide_result('
 lacks src/target/riscv64/legalize.c 'static bool rv64_wide_call_argument_supported('
 has src/target/riscv64/legalize.c 'static bool rv64_core_call_return_supported('
 has src/target/riscv64/legalize.c 'case MINIC_RISCV64_ABI_VALUE_WIDE_SCALAR:'
-has src/target/riscv64/abi.c 'minic_type_is_int128_integer(type)) && size == 16U'
-lacks src/target/riscv64/abi.c '(lp64_soft_float && minic_type_is_int128_integer(type))'
+has src/target/riscv64/abi.c 'base->value.integer.bit_width == 128U)) && type->size == 16U'
+lacks src/target/riscv64/abi.c '(lp64_soft_float &&'
 if [[ "$(grep -Fc 'return emit_core_call_wide_result(' src/target/riscv64/call_emit.c)" != 1 ]]; then
   fail 'RV64 unified direct/indirect CALL lost its dual-word result'
 fi
@@ -1108,12 +1111,12 @@ lacks src/target/backend.c 'minic_backend_emit_assembly('
 lacks src/target/backend.c '.emit_program ='
 has src/target/backend.c '.emit_module = emit_riscv64_module,'
 has src/target/backend.c '.emit_module = minic_riscv32_write_core_module,'
-has src/target/backend.c '.emit_module = minic_x86_64_write_c0_program_with_core_module,'
+has src/target/backend.c '.emit_module = minic_x86_64_write_core_module,'
 # All target-catalog tests consume the sealed Module backend registration.
 lacks tests/compiler/c0/check-four-target-model-m0.c 'backend->emit_program'
 has tests/compiler/c0/check-four-target-model-m0.c 'backend->emit_module'
-has src/target/backend.c '.emit_module = minic_aarch64_write_c0_program_with_core_module,'
-has src/target/backend.c '.emit_module = minic_loongarch64_write_c0_program_with_core_module,'
+has src/target/backend.c '.emit_module = minic_aarch64_write_core_module,'
+has src/target/backend.c '.emit_module = minic_loongarch64_write_core_module,'
 exists src/target/common/program_emit.h
 has src/target/common/program_emit.h 'minic_program_visit_module_globals('
 has src/target/common/program_emit.h 'minic_program_visit_prepared_functions_module('
@@ -1121,6 +1124,27 @@ has src/target/common/program_emit.h 'minic_program_emit_write_module('
 has src/target/common/program_emit.h 'if (!ok) (void)remove(temporary);'
 lacks src/target/common/program_emit.h 'out = fopen(path, "wb");'
 has src/target/common/direct_program_emit.c 'minic_program_emit_write_module('
+# Historical standalone C ABI/global/NEON machine adapters are deleted,
+# not retained as a silent second implementation beside the Module owner.
+for owner in \
+  src/target/x86_64/abi.c src/target/x86_64/abi.h \
+  src/target/x86_64/global_emit.c src/target/x86_64/global_emit.h \
+  src/target/aarch64/neon_emit.c src/target/aarch64/neon_emit.h \
+  src/target/riscv64/abi.c src/target/riscv64/abi.h \
+  src/target/riscv64/core_codegen.c src/target/riscv64/core_codegen.h \
+  src/target/riscv64/global_emit.c src/target/riscv64/global_emit.h \
+  src/target/riscv32/rv32_global_emit.c src/target/riscv32/rv32_global_emit.h \
+  src/target/common/global_emit.c src/target/common/global_emit.h \
+  src/target/common/elf_alias_emit.h src/target/riscv/function_symbol.h; do
+  lacks "$owner" 'MinicC0Program'
+  lacks "$owner" 'MinicType'
+done
+lacks src/target/target_info.h 'minic_target_info_elf_object_is_nonpreemptible('
+lacks src/target/target_info.h 'minic_target_info_elf_function_is_undefined_weak('
+has src/target/target_info.h 'minic_target_info_elf_module_function_is_undefined_weak('
+lacks src/target/common/elf_alias_emit.h 'minic_multi_elf_emit_object_alias('
+lacks src/target/common/elf_alias_emit.h 'minic_multi_elf_emit_function_aliases('
+has src/target/aarch64/neon_emit.h 'minic_aarch64_neon_emit_xor_core('
 # The executable translation-unit writers and their Core-facing dispatch
 # cannot regain a C Program argument or re-enter C global/function tables.
 for owner in \
