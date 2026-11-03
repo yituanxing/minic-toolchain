@@ -83,9 +83,7 @@ bool minic_backend_emit_assembly_with_module(
                 &module->function_symbols[index],
                 MINIC_PROGRAM_FUNCTION_LIVE_DEFINITIONS))
             continue;
-        if (functions[index].type_context != module->type_context ||
-            functions[index].source_draft != NULL ||
-            functions[index].source_draft_release != NULL)
+        if (functions[index].type_context != module->type_context)
             return false;
     }
     return backend->emit_module(output_path, target,

@@ -29,10 +29,6 @@ static bool register_void_type(MinicCoreTypeContext *context,
     return minic_core_type_register(context, &type, id);
 }
 
-static void simulated_source_draft_release(MinicCoreSourceDraft *draft) {
-    (void)draft;
-}
-
 static bool create_void_return_function(MinicCoreFunction *function,
                                         MinicCoreTypeContext *context,
                                         MinicCoreTypeId void_id) {
@@ -122,15 +118,14 @@ int main(void) {
         backend, path, target, NULL, 1U, false, &module, NULL));
     REQUIRE(access(path, F_OK) != 0);
 
-    /* Source adapters are only temporary during lowering, not publishable. */
-    function.source_draft = (MinicCoreSourceDraft *)&absent_function;
-    function.source_draft_release = simulated_source_draft_release;
-    REQUIRE(minic_core_function_verify(&function));
+    /* A machine consumer must reject an unsealed Core function even when
+     * its otherwise valid instructions and type IDs are unchanged. */
+    function.type_context = NULL;
+    REQUIRE(!minic_core_function_verify(&function));
     REQUIRE(!minic_backend_emit_assembly_with_module(
         backend, path, target, &function, 1U, false, &module, NULL));
     REQUIRE(access(path, F_OK) != 0);
-    function.source_draft = NULL;
-    function.source_draft_release = NULL;
+    function.type_context = &good_types;
 
     /* Unlowered declaration or unreachable static slots are legal. */
     module.function_symbols[0].is_defined = false;

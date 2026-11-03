@@ -214,17 +214,6 @@ void minic_core_function_initialize(MinicCoreFunction *function) {
     function->core_return_type_id = MINIC_CORE_TYPE_INVALID;
 }
 
-/* The source adapter supplies its own destructor only while a draft exists.
- * This keeps independent Core builders and link-only Core tests entirely
- * free of frontend/type.c and its representation. */
-void minic_core_function_release_source_draft(MinicCoreFunction *function) {
-    if (function == NULL || function->source_draft == NULL) return;
-    if (function->source_draft_release == NULL) return;
-    function->source_draft_release(function->source_draft);
-    function->source_draft = NULL;
-    function->source_draft_release = NULL;
-}
-
 void minic_core_function_destroy(MinicCoreFunction *function) {
     size_t block_index;
     size_t callee_index;
@@ -237,7 +226,6 @@ void minic_core_function_destroy(MinicCoreFunction *function) {
     if (function == NULL) {
         return;
     }
-    minic_core_function_release_source_draft(function);
     for (block_index = 0U; function->blocks != NULL &&
                              block_index < function->block_count; ++block_index) {
         free(function->blocks[block_index].instructions);

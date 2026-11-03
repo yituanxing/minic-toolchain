@@ -12,16 +12,17 @@ type_sources=(
 )
 import_sources=(
     "$root/src/core/core_type.c"
-    "$root/src/core/core_type_import.c"
+    "$root/src/compiler/c_lower/core_type_import.c"
     "$root/src/frontend/ast.c"
     "$root/src/frontend/type.c"
     "$root/src/target/data_layout.c"
+    "$root/src/target/source_policy/data_layout_source.c"
     "$root/tests/core/core_type_import_test.c"
 )
 snapshot_sources=(
     "$root/src/core/core_type.c"
     "$root/src/core/core_ir.c"
-    "$root/src/core/core_ir_source.c"
+    "$root/src/compiler/c_lower/core_ir_source.c"
     "$root/src/core/core_ir_verify.c"
     "$root/src/frontend/type.c"
     "$root/tests/core/core_type_snapshot_test.c"

@@ -97,28 +97,20 @@ int main(void) {
                                                 &width, &sign));
     values[1].core_type_id = i32;
 
-    /* An enum's Core representation may be an ordinary i8. Lowering must
-     * capture the source restriction because checking the C *pointer* for
-     * enum origin would always return false. The attached target reads only
-     * the source proof, not the untrusted frontend descriptor. */
+    /* A valid narrow integer pointer is a normal, source-neutral Core
+     * execution type. Enum destination rejection happened before publication;
+     * machine shape tests must never depend on C source-origin flags. */
     values[2].core_type_id = p_i8;
     REQUIRE(minic_core_integer_overflow_narrow_result_shape(
         &fn, &ins, &narrow));
     REQUIRE(narrow.result_width == 1U && narrow.result_signed);
-    /* Enum-origin eligibility is sealed as a separate source proof. Values
-     * intentionally have no C descriptor after the Core boundary. */
-    ins.value.integer_overflow.source_overflow_destination_ineligible = true;
+    REQUIRE(legacy_integer_queries == 0U);
+    /* Invalid Core-only pointee shape is rejected using CoreType alone. */
+    values[2].core_type_id = i32;
     REQUIRE(!minic_core_integer_overflow_narrow_result_shape(
         &fn, &ins, &narrow));
-    REQUIRE(!minic_core_integer_overflow_shape(
-        &fn, &ins, &width, &sign));
-    REQUIRE(legacy_integer_queries == 0U);
-    ins.value.integer_overflow.source_overflow_destination_ineligible = false;
+    REQUIRE(!minic_core_integer_overflow_shape(&fn, &ins, &width, &sign));
     values[2].core_type_id = p_i32;
-    ins.value.integer_overflow.source_overflow_destination_ineligible = true;
-    REQUIRE(!minic_core_integer_overflow_shape(
-        &fn, &ins, &width, &sign));
-    ins.value.integer_overflow.source_overflow_destination_ineligible = false;
     REQUIRE(minic_core_integer_overflow_shape(
         &fn, &ins, &width, &sign));
 
@@ -293,6 +285,6 @@ int main(void) {
     REQUIRE(!minic_multi_direct_scalar_zero_shape(
         &fn, &ins, &width, &sign, &pointer));
     minic_core_type_context_destroy(&types);
-    (void)puts("CORE_NUMERIC_CORETYPE=PASS overflow enum_source_proof bitscan LP64_scalar bitcast atomic_no_C_query");
+    (void)puts("CORE_NUMERIC_CORETYPE=PASS overflow source_neutral_shape bitscan LP64_scalar bitcast atomic_no_C_query");
     return 0;
 }

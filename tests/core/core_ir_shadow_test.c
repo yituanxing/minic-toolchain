@@ -1,5 +1,5 @@
-#include "core/core_ir_source_internal.h"
-#include "core/core_lower.h"
+#include "compiler/c_lower/core_ir_source_internal.h"
+#include "compiler/c_lower/core_lower.h"
 #include "frontend/ast.h"
 #include "frontend/function_body.h"
 #include "target/target_info.h"
@@ -171,24 +171,25 @@ static int test_scalar_shadow_lowering(void) {
                                    "  return %2\n";
     MinicC0Program program;
     MinicFunctionBodyView view;
-    MinicCoreFunction core;
+    MinicCoreSourceBuilder builder;
     int status;
 
     if (!build_return_function(&program, MINIC_BINARY_ADD, &view)) {
         minic_c0_program_destroy(&program);
         return 1;
     }
-    minic_core_function_initialize(&core);
-    if (minic_core_lower_function(&view, minic_default_target_info(), &core) !=
+    minic_core_source_builder_initialize(&builder);
+    if (minic_core_lower_function(&view, minic_default_target_info(), &builder) !=
             MINIC_CORE_LOWER_OK ||
-        !minic_core_function_verify_source_ingress(&core) || core.block_count != 1U ||
-        core.instruction_count != 3U || core.value_count != 3U) {
-        minic_core_function_destroy(&core);
+        !minic_core_function_verify_source_ingress(&builder) ||
+        builder.core.block_count != 1U ||
+        builder.core.instruction_count != 3U || builder.core.value_count != 3U) {
+        minic_core_source_builder_destroy(&builder);
         minic_c0_program_destroy(&program);
         return 2;
     }
-    status = dump_matches(&core, expected, 3);
-    minic_core_function_destroy(&core);
+    status = dump_matches(&builder.core, expected, 3);
+    minic_core_source_builder_destroy(&builder);
     minic_c0_program_destroy(&program);
     return status;
 }
@@ -206,24 +207,25 @@ static int test_parameter_ingress_and_conversion_lowering(void) {
                                    "  return %4\n";
     MinicC0Program program;
     MinicFunctionBodyView view;
-    MinicCoreFunction core;
+    MinicCoreSourceBuilder builder;
     int status;
 
     if (!build_parameter_function(&program, &view)) {
         minic_c0_program_destroy(&program);
         return 6;
     }
-    minic_core_function_initialize(&core);
-    if (minic_core_lower_function(&view, minic_default_target_info(), &core) !=
+    minic_core_source_builder_initialize(&builder);
+    if (minic_core_lower_function(&view, minic_default_target_info(), &builder) !=
             MINIC_CORE_LOWER_OK ||
-        !minic_core_function_verify_source_ingress(&core) || core.object_count != 1U ||
-        core.instruction_count != 6U || core.value_count != 5U) {
-        minic_core_function_destroy(&core);
+        !minic_core_function_verify_source_ingress(&builder) ||
+        builder.core.object_count != 1U ||
+        builder.core.instruction_count != 6U || builder.core.value_count != 5U) {
+        minic_core_source_builder_destroy(&builder);
         minic_c0_program_destroy(&program);
         return 7;
     }
-    status = dump_matches(&core, expected, 8);
-    minic_core_function_destroy(&core);
+    status = dump_matches(&builder.core, expected, 8);
+    minic_core_source_builder_destroy(&builder);
     minic_c0_program_destroy(&program);
     return status;
 }
@@ -231,33 +233,34 @@ static int test_parameter_ingress_and_conversion_lowering(void) {
 static int test_unsupported_expression_is_distinct(void) {
     MinicC0Program program;
     MinicFunctionBodyView view;
-    MinicCoreFunction core;
+    MinicCoreSourceBuilder builder;
 
     if (!build_return_function(&program, MINIC_BINARY_SUBTRACT, &view)) {
         minic_c0_program_destroy(&program);
         return 11;
     }
-    minic_core_function_initialize(&core);
-    if (minic_core_lower_function(&view, minic_default_target_info(), &core) !=
+    minic_core_source_builder_initialize(&builder);
+    if (minic_core_lower_function(&view, minic_default_target_info(), &builder) !=
             MINIC_CORE_LOWER_UNSUPPORTED ||
-        core.name != NULL || core.block_count != 0U || core.instruction_count != 0U ||
-        core.value_count != 0U) {
-        minic_core_function_destroy(&core);
+        builder.core.name != NULL || builder.core.block_count != 0U ||
+        builder.core.instruction_count != 0U || builder.core.value_count != 0U) {
+        minic_core_source_builder_destroy(&builder);
         minic_c0_program_destroy(&program);
         return 12;
     }
-    minic_core_function_destroy(&core);
+    minic_core_source_builder_destroy(&builder);
     minic_c0_program_destroy(&program);
     return 0;
 }
 
 static int test_invalid_input_is_error(void) {
-    MinicCoreFunction core;
+    MinicCoreSourceBuilder builder;
     int status;
 
-    minic_core_function_initialize(&core);
-    status = minic_core_lower_function(NULL, &core) == MINIC_CORE_LOWER_ERROR ? 0 : 13;
-    minic_core_function_destroy(&core);
+    minic_core_source_builder_initialize(&builder);
+    status = minic_core_lower_function(NULL, minic_default_target_info(), &builder) ==
+                     MINIC_CORE_LOWER_ERROR ? 0 : 13;
+    minic_core_source_builder_destroy(&builder);
     return status;
 }
 

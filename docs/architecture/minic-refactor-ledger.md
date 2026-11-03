@@ -695,9 +695,10 @@ strict ISA 的 saved-RA libcall 条件，沿五目标共同数值形状一直读
    `CoreFunction + CoreInstruction` 唯一接口，删除
    `MinicC0Program`/`MinicTargetInfo` 参数与所有 C 整数宽度和类型
    fallback；x86-64、AArch64、LoongArch64、RV64 的调用点同步改签。
-   GNU overflow 对 enum 目的地的源语义禁入仍由 Core 上已封存
-   `source_overflow_destination_ineligible` 证明，不能误把 enum
-   降到普通 i8 后重新放行。
+   当时 GNU overflow 对 enum 目的地的源语义禁入依赖 Core 上的
+   `source_overflow_destination_ineligible` 标志；该历史设计已在
+   IR-P30 退休，现由 Frontend/C lowering/source ingress 在 Core 发布前
+   拒绝 enum，不能误把 enum 降到普通 i8 后重新放行。
 2. RV32 `scalar`、`integer`、`wide`、`memory`、`emit` 六文件及其
    internal 合约一次性删去 `rv32_resolved_*`、C scalar/width/canon/
    load/store/is-wide 实现。统一只用 Core ID 判断 ILP32 一/二
@@ -1579,3 +1580,89 @@ transparent union and field layout) are intentionally retained.
 | Full Debug `check-fast` | **PASS**, exit 0; 367 PASS lines, 3 environment SKIPs |
 | Release `-Werror` compiler | **PASS**, `MODE=release BUILD_DIR=build/p28-final CFLAGS=-Werror` |
 | Five-target GNU ELF/QEMU Linux runtime | **NOT RUN**; cross runtime tools unavailable in this environment |
+
+## IR-P30 — One C-to-Core ingress owner and physical Source/Machine separation (2026-11-03)
+
+**Baseline:** PR #674 remote `8d8065b` (P28 source plus a CI trigger). The
+premature exact-head Linux campaign did **not** recertify this compiler: its
+seven-way C owner shards failed before new QEMU proof. This is an architectural
+ownership batch; no full Linux rebuild is part of its acceptance gate.
+
+### Source transaction is no longer a CoreFunction field
+
+- C-only `MinicCoreSourceBuilder` owns the unsealed CoreFunction **and** the
+  parallel `MinicType` source draft. Source lowering, enum metadata, typed
+  SSA construction and source-ingress verifier take this explicit builder.
+  All Core-only constructors/verifiers/consumers still take `MinicCoreFunction`.
+- A successful source snapshot atomically installs CoreType IDs and frees
+  the source draft. Failed imports preserve the original draft for retry;
+  builder destruction frees partial Core and source state without requiring
+  the pure Core destructor to link frontend/type.c. A sealed-only `take_core`
+  moves the Core function into Compiler's function set; failures never
+  publish an unsealed object.
+- Remove both `source_draft` and its language-aware release callback from
+  `MinicCoreFunction`, its general destructor, verifier and machine-backend
+  entry check. There is **no** `void *` hidden compatibility owner or second
+  path that bypasses C ingress. `CoreTypeContext` remains borrowed from
+  the Compiler-owned Module/FunctionSet transaction.
+- Move **all 45 C/AST-dependent Core lowering and type-import files** into
+  `src/compiler/c_lower/` with Git move history preserved. The **13 files
+  remaining under `src/core/`** contain no C AST, `MinicType`, `MinicC0Program`
+  or Frontend include; no old-path forwarding headers survive.
+- The C AST and its input buffer are now destroyed **before** machine backend
+  emission, following sealed FunctionSet/Module publication. Codegen traces
+  take function counts from the sealed Core set instead of the dead Program.
+- Checked integer overflow's last C-only enum eligibility bit is retired
+  from published Core IR. Frontend, AST verification, C lowering and source
+  ingress reject enum destinations before publishing any Core instruction;
+  pure machine numeric shape checks now see only executable Core types.
+
+### Five ISA source policy and machine codegen no longer cohabit an object
+
+- `target/data_layout.c` now keeps only five machine ABI descriptors;
+  `source_policy/data_layout_source.c` owns nominal C records, objects,
+  arrays and initializer layout (original algorithm moved unchanged).
+- `target/target_info.c` now owns machine target descriptors. Separate
+  `source_policy/target_source_info.c` owns C integer/wchar models and
+  target-language policy, exposing an opaque lookup without copying or
+  reinterpreting architecture machine facts.
+- x86-64, AArch64 and LoongArch64 `asm_contract.c` implementations are now
+  machine-only. Their C source qualification and operands move to matching
+  `asm_contract_source.c` files; one private `asm_contract_internal.h` per
+  target shares **one** ISA form recognizer implementation and typed form
+  metadata instead of duplicating template parsers. Existing target-specific
+  machine emitters, register/ABI distinctions and accepted source forms stay
+  separate. RISC-V source/machine splitting was already present.
+- Live Makefile/bootstrap/test-workflow source inventories and boundary
+  assertions track the new owners. Archived pinned patch scripts that
+  deliberately target older source trees are not alternate production paths.
+
+### Verification and remaining architectural work
+
+| Gate | P30 result |
+| --- | --- |
+| Full Release `MODE=release CFLAGS=-Werror all` (including toolchain binaries) | **PASS** |
+| CoreType snapshot/rollback, Core shapes, Core verifier, native + sanitizers | **PASS** |
+| Core Module rollback/fragments, machine header isolation, five-target source registration, sealed symbols | **PASS** |
+| Source shapes five target `.s`; Loong typed/forgery/normalized seal; A64 seal | **PASS** |
+| Two GNU-preprocessed `.i` fixtures × five targets: before/after `.s` byte comparison | **10/10 identical** |
+| Full Debug `check-fast` (including the MiniAS assembly contract) | **PASS**, exit 0; 574 matching PASS lines, 3 environment SKIPs |
+| Overflow enum source negative / pure Core numeric positive, native + sanitizers | **PASS**, dedicated gates |
+| RV64 historical Core emitter tests using sealed SourceBuilder/FunctionSet | **PASS**, 187 / 858 assembly lines; no QEMU claim |
+| Full five-ISA Linux Kbuild/GNU ELF/QEMU | **NOT RUN**: architecture batch; historical QEMU results do not certify P30 |
+
+This closes the C draft *ownership* leak and mixed source/machine translation
+units; it does **not** claim that backend generic algorithm deduplication,
+register/frame ABI modeling, Machine IR, object-format work, or five-target
+runtime recertification is finished. These remain distinct architectural
+work with separate evidence requirements.
+
+The next *whole-owner* refactors are specifically known, not fixed in P30:
+`MinicTargetInfo` still carries an opaque `source_info` pointer; removing it
+requires switching the complete Parser/SourcePolicy/C lowering family to a
+per-compilation Source+Machine invocation without losing signed-char/wchar
+overrides. Separately, the three post-lowering Core reachability passes still
+mutate C Program function/global emission flags; their complete root set
+(alias, initializer relocation, file/inline ASM, owner, clone and entry)
+must be sealed into ModuleIR and closed in one Core+Module reachability pass.
+Neither deserves a transitional C fallback in pure Core or machine Target.

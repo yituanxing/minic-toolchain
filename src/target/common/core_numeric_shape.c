@@ -26,7 +26,6 @@ static bool core_numeric_overflow_result(const MinicCoreFunction *fn,
     if (fn == NULL || fn->type_context == NULL || fn->values == NULL ||
         ins == NULL || pointee == NULL ||
         ins->kind != MINIC_CORE_INSTRUCTION_INTEGER_OVERFLOW ||
-        ins->value.integer_overflow.source_overflow_destination_ineligible ||
         (ins->value.integer_overflow.operator_kind != MINIC_CORE_INTEGER_OVERFLOW_ADD &&
          ins->value.integer_overflow.operator_kind != MINIC_CORE_INTEGER_OVERFLOW_SUBTRACT &&
          ins->value.integer_overflow.operator_kind != MINIC_CORE_INTEGER_OVERFLOW_MULTIPLY) ||

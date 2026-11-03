@@ -12,9 +12,9 @@ static bool storage_shape_is_valid(const void *data, size_t count, size_t capaci
     return count <= capacity && (count == 0U || data != NULL);
 }
 
-/* Source descriptors coexist temporarily with the fully resolved Core
- * snapshots. These checks are independent of C integer rank/enum tables and
- * deliberately fail closed when a TypeId belongs to another (or no) arena. */
+/* Only sealed CoreType snapshots reach this verifier; any mutable C source
+ * descriptor is confined to compiler-owned ingress and has been released.
+ * Invalid, foreign-arena and incomplete Core TypeIds fail closed. */
 static const MinicCoreType *core_snapshot_base_type(const MinicCoreFunction *function,
                                                     MinicCoreTypeId type_id) {
     MinicCoreTypeId base;
@@ -95,8 +95,6 @@ bool minic_core_function_verify_core_type_snapshot(const MinicCoreFunction *func
     const MinicCoreType *type;
     size_t i, j;
     if (function == NULL || function->type_context == NULL ||
-        (function->source_draft == NULL) !=
-            (function->source_draft_release == NULL) ||
         !storage_shape_is_valid(function->fixed_register_bindings,
                                 function->fixed_register_binding_count,
                                 function->fixed_register_binding_capacity) ||

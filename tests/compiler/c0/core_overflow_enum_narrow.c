@@ -6,11 +6,13 @@ enum signed_byte_kind {
     SIGNED_BYTE_MAX = 127
 } __attribute__((__mode__(byte)));
 
-#ifdef MINIC_OVERFLOW_ENUM_NEGATIVE
+#ifdef MINIC_OVERFLOW_ENUM_POINTER_NEGATIVE
 int checked_enum_add(int left, int right, enum signed_byte_kind *result) {
     return __builtin_add_overflow(left, right, result);
 }
+#endif
 
+#ifdef MINIC_OVERFLOW_ENUM_PREDICATE_NEGATIVE
 int checked_enum_predicate(int left, int right) {
     return __builtin_add_overflow_p(left, right, (enum signed_byte_kind)0);
 }

@@ -1,6 +1,6 @@
 /* White-box AST effect-summary contract. This deliberately constructs the
  * smallest source tree needed to validate address and GNU-tail traversal. */
-#include "core/core_lower_internal.h"
+#include "compiler/c_lower/core_lower_internal.h"
 
 #include <stdbool.h>
 #include <stddef.h>

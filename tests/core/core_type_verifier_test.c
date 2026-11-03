@@ -1,6 +1,6 @@
 /* Deliberately corrupted, otherwise well-formed Core function fixtures.
  * The type verifier must inspect semantic Core types, not C descriptors. */
-#include "core/core_ir_source.h"
+#include "compiler/c_lower/core_ir_source.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -53,6 +53,8 @@ static bool resolve_type(void *data, MinicType source, MinicCoreTypeId *result) 
 /* Value IDs: 0=int, 1=int, 2=int*, 3=add, 4=load, 5=bitcast, 6=add. */
 static bool build_function(MinicCoreFunction *fn, MinicCoreTypeContext *context,
                            const Types *types) {
+    MinicCoreSourceBuilder builder;
+    MinicCoreFunction *source = &builder.core;
     MinicType params[3];
     MinicCoreInstruction op = {0};
     MinicCoreTerminator term = {0};
@@ -60,19 +62,20 @@ static bool build_function(MinicCoreFunction *fn, MinicCoreTypeContext *context,
     MinicCoreValueId id;
     size_t index;
 
+    minic_core_source_builder_initialize(&builder);
     minic_core_function_initialize(fn);
     params[0] = minic_type_int();
     params[1] = minic_type_int();
     params[2] = types->source_ptr_i32;
-    if (!minic_core_function_set_signature(fn, "typed", 5U,
+    if (!minic_core_function_set_signature(&builder, "typed", 5U,
                                            minic_type_int(), params, 3U) ||
-        !minic_core_function_add_block(fn, &block)) return false;
+        !minic_core_function_add_block(source, &block)) return false;
     for (index = 0U; index < 3U; ++index) {
         (void)memset(&op, 0, sizeof(op));
         op.kind = MINIC_CORE_INSTRUCTION_PARAMETER;
         op.value.parameter_index = index;
         if (!minic_core_function_append_source_value_instruction(
-                fn, block, &op, params[index], &id) ||
+                &builder, block, &op, params[index], &id) ||
             id != index) return false;
     }
     (void)memset(&op, 0, sizeof(op));
@@ -80,32 +83,38 @@ static bool build_function(MinicCoreFunction *fn, MinicCoreTypeContext *context,
     op.value.binary.left = 0U;
     op.value.binary.right = 1U;
     if (!minic_core_function_append_source_value_instruction(
-            fn, block, &op, minic_type_int(), &id) ||
+            &builder, block, &op, minic_type_int(), &id) ||
         id != 3U) return false;
     (void)memset(&op, 0, sizeof(op));
     op.kind = MINIC_CORE_INSTRUCTION_LOAD;
     op.value.load.address = 2U;
     if (!minic_core_function_append_source_value_instruction(
-            fn, block, &op, minic_type_int(), &id) ||
+            &builder, block, &op, minic_type_int(), &id) ||
         id != 4U) return false;
     (void)memset(&op, 0, sizeof(op));
     op.kind = MINIC_CORE_INSTRUCTION_SCALAR_BITCAST;
     op.value.operand = 2U;
     if (!minic_core_function_append_source_value_instruction(
-            fn, block, &op, minic_type_int(), &id) ||
+            &builder, block, &op, minic_type_int(), &id) ||
         id != 5U) return false;
     (void)memset(&op, 0, sizeof(op));
     op.kind = MINIC_CORE_INSTRUCTION_INTEGER_ADD;
     op.value.binary.left = 3U;
     op.value.binary.right = 4U;
     if (!minic_core_function_append_source_value_instruction(
-            fn, block, &op, minic_type_int(), &id) ||
+            &builder, block, &op, minic_type_int(), &id) ||
         id != 6U) return false;
     term.kind = MINIC_CORE_TERMINATOR_RETURN;
     term.return_value = 6U;
     term.return_object = MINIC_CORE_OBJECT_INVALID;
-    if (!minic_core_function_set_terminator(fn, block, &term)) return false;
-    return minic_core_function_snapshot_types(fn, context, resolve_type, (void *)types);
+    if (!minic_core_function_set_terminator(source, block, &term) ||
+        !minic_core_function_snapshot_types(&builder, context, resolve_type, (void *)types) ||
+        !minic_core_source_builder_take_core(&builder, fn)) {
+        minic_core_source_builder_destroy(&builder);
+        return false;
+    }
+    minic_core_source_builder_destroy(&builder);
+    return true;
 }
 
 static int check_invalid_mutations(MinicCoreFunction *fn, const Types *types) {

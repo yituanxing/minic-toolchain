@@ -15,7 +15,8 @@ minic_cc=${MINIC_CC:-build/release/bin/minic-cc}
 "$host_cc" -std=c11 -O2 -Wall -Wextra -Werror \
     -ffunction-sections -fdata-sections -Isrc -Iinclude \
     tests/compiler/c0/aarch64_clone_safe_asm_policy.c \
-    src/target/aarch64/asm_contract.c -Wl,--gc-sections \
+    src/target/aarch64/asm_contract.c \
+    src/target/aarch64/asm_contract_source.c -Wl,--gc-sections \
     -o "$probe_dir/asm-policy"
 "$probe_dir/asm-policy"
 

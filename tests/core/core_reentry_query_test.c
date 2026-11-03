@@ -1,6 +1,6 @@
 /* Indexed and standalone Core reentry queries must produce the same typed
  * source-edge reasons. This is a white-box C0 graph, not a machine-code test. */
-#include "core/reentry_index.h"
+#include "compiler/c_lower/reentry_index.h"
 
 #include <stdbool.h>
 #include <stddef.h>

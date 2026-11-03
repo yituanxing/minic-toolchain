@@ -24,8 +24,8 @@ on:
       - 'src/target/x86_64/**'
       # Core materializes target-qualified GNU ASM contracts, while the
       # ISA-specific constraint classifier lives under target/x86_64.
-      - 'src/core/core_lower_asm_target.c'
-      - 'src/core/core_lower_asm.c'
+      - 'src/compiler/c_lower/core_lower_asm_target.c'
+      - 'src/compiler/c_lower/core_lower_asm.c'
       # Original GNU BusyBox SELinux callback/type compatibility owners.
       - 'src/frontend/parser_statement.c'
       - 'src/frontend/parser_function_parameters.c'

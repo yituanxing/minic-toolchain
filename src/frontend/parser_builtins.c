@@ -1351,7 +1351,8 @@ static bool parse_builtin_overflow_typed(MinicParser *parser,
     result_pointer = minic_c0_program_expression(parser->program, result_pointer_id);
     if (left == NULL || right == NULL || result_pointer == NULL ||
         !minic_type_pointee(result_pointer->type, &result_type) ||
-        !minic_type_is_integer(result_type) || minic_type_is_bool_integer(result_type)) {
+        !minic_type_is_integer(result_type) || minic_type_is_bool_integer(result_type) ||
+        minic_type_is_enum(result_type)) {
         minic_parser_error(parser,
                            "overflow builtin requires integer operands and a non-bool integer "
                            "result pointee");
@@ -1430,6 +1431,7 @@ static bool parse_builtin_overflow_predicate(MinicParser *parser,
     if (left == NULL || right == NULL || result == NULL ||
         !minic_type_is_integer(left->type) || !minic_type_is_integer(right->type) ||
         !minic_type_is_integer(result->type) || minic_type_is_bool_integer(result->type) ||
+        minic_type_is_enum(result->type) ||
         !minic_type_unqualified(result->type, &result_type)) {
         minic_parser_error(parser, "overflow predicate requires three integer operands");
         return false;

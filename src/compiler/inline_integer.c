@@ -1,6 +1,6 @@
 #include "compiler/inline_specialize.h"
 #include "compiler/inline_specialize_internal.h"
-#include "core/opt_pure_statement.h"
+#include "compiler/c_lower/opt_pure_statement.h"
 #include "frontend/const_eval.h"
 #include "frontend/function_body.h"
 #include "target/backend_source.h"

@@ -23,21 +23,25 @@ for file in \
   exists "$file"
 done
 
-# The published Core IR schema cannot expose C nominal descriptors. They
-# exist only in the source-only draft and must disappear after publication.
-has src/core/core_ir.h 'MinicCoreSourceDraft *source_draft;'
-has src/core/core_ir_source.h 'struct MinicCoreSourceDraft {'
-exists src/core/core_ir_source.c
-exists src/core/core_ir_source_internal.h
+# The published Core IR schema cannot expose source-language draft pointers.
+# Source ingress owns a separate builder and publishes only sealed Core data.
+lacks src/core/core_ir.h 'MinicCoreSourceDraft *source_draft;'
+lacks src/core/core_ir.h 'MinicCoreSourceDraftRelease'
+has src/compiler/c_lower/core_ir_source.h 'MinicCoreSourceBuilder'
+has src/compiler/c_lower/core_ir_source.h 'MinicCoreSourceDraft *source_draft;'
+has src/compiler/c_lower/core_ir_source.h 'struct MinicCoreSourceDraft {'
+exists src/compiler/c_lower/core_ir_source.c
+exists src/compiler/c_lower/core_ir_source_internal.h
 exists src/core/core_ir_storage.h
-has src/core/core_ir_source_internal.h '#include "core/core_ir_source.h"'
-has src/core/core_lower_internal.h '#include "core/core_ir_source_internal.h"'
+has src/compiler/c_lower/core_ir_source_internal.h '#include "compiler/c_lower/core_ir_source.h"'
+has src/compiler/c_lower/core_lower_internal.h '#include "compiler/c_lower/core_ir_source_internal.h"'
 if [[ -e src/core/core_ir_internal.h ]]; then
   fail 'legacy Core internal header still owns C source ingress'
 fi
-has src/core/core_ir_source.c 'minic_core_function_snapshot_types('
-has src/core/core_ir_source.c 'minic_source_placeholder('
-has src/core/core_ir.c 'minic_core_function_release_source_draft('
+has src/compiler/c_lower/core_ir_source.c 'minic_core_function_snapshot_types('
+has src/compiler/c_lower/core_ir_source.c 'minic_source_placeholder('
+lacks src/core/core_ir.c 'minic_core_function_release_source_draft('
+has src/compiler/c_lower/core_ir_source.c 'minic_core_source_builder_destroy('
 has src/core/core_ir.h 'char *local_label_symbol;'
 has src/core/core_ir.h 'char *deferred_immediate_symbol;'
 has src/core/module_ir.h 'char *relocation_symbol;'
@@ -69,6 +73,7 @@ done
 # Frontend and compiler ingress, never transitively through a target emitter.
 exists src/target/source_policy/source_info.h
 exists src/target/data_layout_source.h
+exists src/target/source_policy/data_layout_source.c
 for arch in x86_64 aarch64 loongarch64; do
   exists "src/target/$arch/asm_contract_source.h"
   for symbol in 'MinicType' 'MinicC0Program' 'MinicInlineAsm' 'MinicExpression'; do
@@ -85,7 +90,7 @@ done
 
 has src/target/loongarch64/asm_contract.c 'loong_pte_form('
 has src/target/loongarch64/asm_contract.c 'loong_pte_emit('
-lacks src/core/core_lower_asm_target.c 'll.d'
+lacks src/compiler/c_lower/core_lower_asm_target.c 'll.d'
 has src/target/common/direct_instruction_semantics.c \
   'minic_multi_direct_machine_instruction_shape('
 # The sealed Core execution-type contract now spans x86, RV32/RV64 and
@@ -108,7 +113,7 @@ lacks src/target/riscv64/frame_layout.c 'if (program != NULL)'
 # ISA proof is minted AFTER GNU named-operand normalization, never by
 # the source ID or hash alone. The machine emitter revalidates the sealed
 # form and typed operands without reopening the mutable source Program.
-has src/core/core_lower_asm_target.c 'minic_source_backend_seal_normalized_inline_asm('
+has src/compiler/c_lower/core_lower_asm_target.c 'minic_source_backend_seal_normalized_inline_asm('
 has src/target/backend_source.c 'minic_loongarch64_seal_normalized_inline_asm'
 has src/target/loongarch64/simd_source_policy.c 'loong_simd_same_machine_effects(&original, &machine)'
 has src/target/loongarch64/simd_asm.c 'MINIC_LOONG_MACHINE_ASM_SIMD'
@@ -209,16 +214,16 @@ has src/target/common/core_spill_layout.c \
 
 # Real GNU ARM64 sysreg output is u64 (unsigned long long); Source proves
 # the exact C spelling, while machine writeback checks sealed Core u64.
-has src/target/aarch64/asm_contract.c 'aarch64_linux_sysreg_u64_type('
+has src/target/aarch64/asm_contract_source.c 'aarch64_linux_sysreg_u64_type('
 has src/target/aarch64/asm_contract.c '!aarch64_asm_core_integer(fn,op[0].value,true,8U,0)'
-lacks src/core/core_lower_asm_target.c 'mrs x9, daif'
+lacks src/compiler/c_lower/core_lower_asm_target.c 'mrs x9, daif'
 
 # Original LoongArch64 Linux array_index_mask_nospec is exact target-owned
 # SLTU + SUB.D with output/register contract, not a cloned Core algorithm.
 has src/target/loongarch64/asm_contract.c 'loong_mask_nospec_form('
-has src/target/loongarch64/asm_contract.c 'loong_mask_nospec_source('
+has src/target/loongarch64/asm_contract_source.c 'loong_mask_nospec_source('
 has src/target/loongarch64/asm_contract.c 'loong_mask_nospec_emit('
-lacks src/core/core_lower_asm_target.c 'sltu'
+lacks src/compiler/c_lower/core_lower_asm_target.c 'sltu'
 
 # All targets reuse the sealed Module ELF custom section/binding owner.
 has src/target/common/module_global_emit.c 'minic_multi_module_emit_elf_section('
@@ -236,11 +241,11 @@ lacks src/target/common/global_emit.c 'static bool minic_multi_visit_record_bit_
 
 # GNU Linux local_add(long) + atomic64_t.counter(long long) is a
 # cross-C-rank 8-byte machine operand, not a fake ABI identity.
-has src/target/x86_64/asm_contract.c 'vt.integer_rank!=MINIC_INTEGER_RANK_LONG_LONG'
+has src/target/x86_64/asm_contract_source.c 'vt.integer_rank!=MINIC_INTEGER_RANK_LONG_LONG'
 # Linux local_t plain INC/DEC uses the same x86 target RMW descriptor as SMP.
 has src/target/x86_64/asm_contract.c '{"incq",8U,false,true}'
 has src/target/x86_64/asm_contract.h 'MINIC_X86_ATOMIC_RMW_LOCAL_DEC64'
-lacks src/core/core_lower_asm_target.c 'local_inc'
+lacks src/compiler/c_lower/core_lower_asm_target.c 'local_inc'
 
 # One shared Core frame-level-0 verifier, two target-owned SP machine forms;
 # level >0 and RISC-V/x86 frame ABI remain unchanged.
@@ -249,53 +254,54 @@ has src/target/loongarch64/residual_emit.c 'MINIC_CORE_CALL_FRAME_ADDRESS_FRAME'
 
 # Linux local_add_return uses ONE x86 target ISA XADD contract and existing
 # Core REGISTER_READWRITE+MEMORY_READWRITE effects, never a new Core opcode.
-has src/target/x86_64/asm_contract.c 'x86_linux_local_xadd_source('
+has src/target/x86_64/asm_contract_source.c 'x86_linux_local_xadd_source('
 has src/target/x86_64/machine_asm.c 'emit_linux_local_xadd('
-lacks src/core/core_lower_asm_target.c 'local_add_return'
+lacks src/compiler/c_lower/core_lower_asm_target.c 'local_add_return'
 # SMP-lock, local, GS-XADD, and GS-CMPXCHG/retry are now one typed target
 # decision shared by source admission and machine revalidation. The machine
 # dispatcher does not independently repeat several string-family scans.
 has src/target/x86_64/asm_contract.h 'MinicX86GsAtomicPlan'
-has src/target/x86_64/asm_contract.c 'x86_linux_gs_atomic_source('
+has src/target/x86_64/asm_contract_source.c 'x86_linux_gs_atomic_source('
 has src/target/x86_64/machine_asm.c 'switch (atomic.kind)'
 lacks src/target/x86_64/asm_contract.h 'minic_x86_64_linux_smp_xadd_width('
 lacks src/target/x86_64/asm_contract.h 'minic_x86_64_linux_gs_cmpxchg_loop('
 
 # The original x86 cmpxchg and trycmpxchg share one target descriptor
 # but DIFFER in Core operand roles and semantics (old value vs hardware ZF).
-has src/target/x86_64/asm_contract.c 'x86_linux_raw_cmpxchg_source('
+has src/target/x86_64/asm_contract_source.c 'x86_linux_raw_cmpxchg_source('
 has src/target/x86_64/machine_asm.c 'emit_linux_raw_cmpxchg('
-lacks src/core/core_lower_asm_target.c 'cmpxchgb'
+lacks src/compiler/c_lower/core_lower_asm_target.c 'cmpxchgb'
 
 # The immutable C integer argument fact survives universal Core call
 # argument snapshot. Only LoongArch machine code interprets it as CSR index.
 has src/core/core_ir.h 'has_constant_integer;'
-has src/core/core_lower_calls.c 'minic_const_eval_arithmetic_to_integer('
+has src/compiler/c_lower/core_lower_calls.c 'minic_const_eval_arithmetic_to_integer('
 has src/target/loongarch64/call_emit.c 'immediate_arg->has_constant_integer'
-lacks src/core/core_lower_calls.c '__builtin_loongarch_csrrd_w'
+lacks src/compiler/c_lower/core_lower_calls.c '__builtin_loongarch_csrrd_w'
 
 # Genuine LoongArch C original __percpu_{read,write,add,and,or} and
 # kernel_fpu_begin hardware ISA classified only in native Target owner.
-has src/target/loongarch64/asm_contract.c 'loong_percpu_indexed_source('
-has src/target/loongarch64/asm_contract.c 'loong_percpu_amo_source('
-has src/target/loongarch64/asm_contract.c 'loong_fcsr0_write_source('
-lacks src/core/core_lower_asm_target.c 'movgr2fcsr'
+has src/target/loongarch64/asm_contract_source.c 'loong_percpu_indexed_source('
+has src/target/loongarch64/asm_contract_source.c 'loong_percpu_amo_source('
+has src/target/loongarch64/asm_contract_source.c 'loong_fcsr0_write_source('
+lacks src/compiler/c_lower/core_lower_asm_target.c 'movgr2fcsr'
 
 # AArch64 Linux __io_par is a real two-ISA-instruction dependency:
 # keep eor/cbnz out of the target-neutral Core machine vocabulary.
-has src/target/aarch64/asm_contract.c 'aarch64_linux_io_dependency_source('
+has src/target/aarch64/asm_contract_source.c 'aarch64_linux_io_dependency_source('
 has src/target/aarch64/asm_contract.c 'aarch64_linux_io_dependency_emit('
-lacks src/core/core_lower_asm_target.c 'cbnz'
+lacks src/compiler/c_lower/core_lower_asm_target.c 'cbnz'
 
 # Original arm64 sysreg.h whole GNU macro is lowered only by target
 # using whitelist machine SYS_* encodings, not Core ASM string passthrough.
 has src/target/aarch64/asm_contract.c 'aarch64_linux_encoded_sysreg_form('
 has src/target/aarch64/asm_contract.c 'aarch64_linux_encoded_sysreg_emit('
-lacks src/core/core_lower_asm_target.c 'mrs_s'
+lacks src/compiler/c_lower/core_lower_asm_target.c 'mrs_s'
 
 # GNU PIC policy is declared in TargetInfo, never a Driver target switch.
 has src/target/target_info.h 'pic_lowering_supported;'
-has src/target/target_info.c 'minic_target_language_descriptors[]'
+has src/target/target_info.c 'minic_target_machine_descriptors[]'
+has src/target/source_policy/target_source_info.c 'minic_target_source_descriptors[]'
 has src/target/target_info.c '.pic_lowering_supported = true,'
 # Architecture IDs come exclusively from the single registration inventory;
 # TargetInfo supplies each ISA's language/ABI facts without duplicating IDs.
@@ -305,6 +311,7 @@ for arch in RISCV32 RISCV64 X86_64 AARCH64 LOONGARCH64; do
   lacks src/target/target_info.c ".architecture = MINIC_TARGET_ARCH_$arch,"
 done
 has src/target/target_info.c '#include "target/target_registration.def"'
+has src/target/source_policy/target_source_info.c '#include "target/target_registration.def"'
 has src/target/backend.c '#include "target/target_registration.def"'
 has src/target/backend_source.c '#include "target/target_registration.def"'
 has src/target/target_catalog.c '#include "target/target_registration.def"'
@@ -318,9 +325,9 @@ has tools/minic-cc/main.c '!target_info->pic_lowering_supported'
 
 # Original Linux arm64 tlbflush __tlbi and __tlbi_sync_s1ish are
 # kernel ISA hardware, not portable Core memory fences.
-has src/target/aarch64/asm_contract.c 'aarch64_linux_tlbi_source('
+has src/target/aarch64/asm_contract_source.c 'aarch64_linux_tlbi_source('
 has src/target/aarch64/asm_contract.c 'aarch64_linux_tlbi_emit('
-lacks src/core/core_lower_asm_target.c 'vmalle1is'
+lacks src/compiler/c_lower/core_lower_asm_target.c 'vmalle1is'
 
 # Four ISA families, five target profiles: one storage-shape owner, distinct
 # physical ABIs. RV32 must never inherit the 8-byte LP64 word policy.
@@ -377,17 +384,17 @@ has src/target/aarch64/asm_contract.c 'aarch64_barrier_template('
 # operand roles and must never fake a TPIDR register load or patch table.
 has src/target/aarch64/asm_contract.c 'aarch64_linux_percpu_alternative_template('
 has src/target/aarch64/asm_contract.c '.pushsection .altinstructions'
-has src/target/aarch64/asm_contract.c '"bic", ".if"'
-has src/target/aarch64/asm_contract.c 'aarch64_atomic_operations[op].name'
+has src/target/aarch64/asm_contract_source.c '"bic", ".if"'
+has src/target/aarch64/asm_contract_source.c 'aarch64_atomic_operations[op].name'
 has src/target/aarch64/asm_contract.c 'aarch64_linux_percpu_rmw_form('
 has src/target/aarch64/asm_contract.c 'p.op->alu'
-lacks src/core/core_lower_asm_target.c 'ldxrb'
+lacks src/compiler/c_lower/core_lower_asm_target.c 'ldxrb'
 has src/target/aarch64/asm_contract.c 'aarch64_atomic_return_form('
 has src/target/aarch64/asm_contract.c 'ret.op->alu'
-lacks src/core/core_lower_asm_target.c 'atomic64_add_return'
+lacks src/compiler/c_lower/core_lower_asm_target.c 'atomic64_add_return'
 has src/target/aarch64/asm_contract.c 'aarch64_linux_xchg_form('
 has src/target/aarch64/asm_contract.c 'aarch64_xchg_ld[xchg.mode]'
-lacks src/core/core_lower_asm_target.c 'ldaxrb'
+lacks src/compiler/c_lower/core_lower_asm_target.c 'ldaxrb'
 has src/target/aarch64/asm_contract.c 'aarch64_atomic_form('
 has src/target/backend_source.c 'minic_source_backend_inline_asm_prefix_matches('
 has src/frontend/parser_local_declarations.c 'consume_static_local_interleaved_attribute, attributes'
@@ -395,39 +402,39 @@ has src/frontend/parser_function.c 'has_const_qualifier'
 has src/frontend/parser_function.c '!minic_type_add_const(base_type, &base_type)'
 has src/frontend/parser_function.c '!minic_type_add_volatile(base_type, &base_type)'
 has src/target/source_policy/x86_64.c "name[0] == '%'"
-lacks src/core/core_lower_asm_target.c 'discard.addressable'
+lacks src/compiler/c_lower/core_lower_asm_target.c 'discard.addressable'
 has src/target/x86_64/asm_contract.c '"cmp%1,%2;sbb%0,%0;"'
 has src/target/x86_64/asm_contract.c 'MINIC_X86_BIT_SCAN_BSR32_TIED'
 has src/target/x86_64/asm_contract.c 'MINIC_X86_BIT_SCAN_BSR64_READWRITE'
-has src/target/x86_64/asm_contract.c 'x86_linux_atomic_cc_source('
-has src/target/x86_64/asm_contract.c 'x86_trycas_source('
-has src/target/x86_64/asm_contract.c 'src->input_count == 2U'
+has src/target/x86_64/asm_contract_source.c 'x86_linux_atomic_cc_source('
+has src/target/x86_64/asm_contract_source.c 'x86_trycas_source('
+has src/target/x86_64/asm_contract_source.c 'src->input_count == 2U'
 has src/target/x86_64/machine_asm.c 'operand_count == 6U'
-lacks src/core/core_lower_asm_target.c 'native_cpuid'
+lacks src/compiler/c_lower/core_lower_asm_target.c 'native_cpuid'
 has src/target/x86_64/machine_asm.c 'emit_linux_trycas('
-lacks src/core/core_lower_asm_target.c 'cmpxchgb'
+lacks src/compiler/c_lower/core_lower_asm_target.c 'cmpxchgb'
 has src/target/x86_64/asm_contract.c 'MINIC_X86_ATOMIC_CC_ADD64_SIGN'
-has src/target/x86_64/asm_contract.c 'mem_type.integer_rank != MINIC_INTEGER_RANK_CHAR'
+has src/target/x86_64/asm_contract_source.c 'mem_type.integer_rank != MINIC_INTEGER_RANK_CHAR'
 has src/target/x86_64/asm_contract.c 'x86_atomic_cc_forms[]'
-lacks src/core/core_lower_asm_target.c 'MINIC_X86_ATOMIC_CC_SUB32_ZERO'
-has src/target/x86_64/asm_contract.c 'x86_linux_bitops_source('
+lacks src/compiler/c_lower/core_lower_asm_target.c 'MINIC_X86_ATOMIC_CC_SUB32_ZERO'
+has src/target/x86_64/asm_contract_source.c 'x86_linux_bitops_source('
 has src/target/x86_64/machine_asm.c 'emit_linux_bitops('
-lacks src/core/core_lower_asm_target.c 'btcq'
+lacks src/compiler/c_lower/core_lower_asm_target.c 'btcq'
 has src/target/x86_64/machine_asm.c 'emit_linux_atomic_cc('
-lacks src/core/core_lower_asm_target.c '=@cce'
+lacks src/compiler/c_lower/core_lower_asm_target.c '=@cce'
 has src/target/x86_64/machine_asm.c 'emit_linux_tied_bit_scan'
-lacks src/core/core_lower_asm_target.c 'bsrl'
-lacks src/core/core_lower_asm_target.c 'sbb %0,%0'
+lacks src/compiler/c_lower/core_lower_asm_target.c 'bsrl'
+lacks src/compiler/c_lower/core_lower_asm_target.c 'sbb %0,%0'
 lacks src/target/backend.c 'aarch64_qualified_inputs'
 lacks src/target/backend.c 'loongarch64_qualified_inputs'
 lacks src/target/backend.c 'x86_64_qualified_inputs'
 lacks src/target/backend.h 'qualified_input_mnemonic_count'
-lacks src/core/core_lower_asm_target.c 'tpidr_el1'
-lacks src/core/core_lower_asm_target.c '.altinstructions'
+lacks src/compiler/c_lower/core_lower_asm_target.c 'tpidr_el1'
+lacks src/compiler/c_lower/core_lower_asm_target.c '.altinstructions'
 has src/target/backend_source.c 'minic_loongarch64_qualify_inline_asm'
 has src/target/loongarch64/residual_emit.c 'minic_loongarch64_emit_qualified_structured_asm'
-has src/core/core_lower_asm_scalar_forms.c 'e->kind == MINIC_EXPRESSION_FIXED_REGISTER'
-has src/core/core_lower_asm_scalar_forms.c 'minic_target_info_fixed_register_write_supported('
+has src/compiler/c_lower/core_lower_asm_scalar_forms.c 'e->kind == MINIC_EXPRESSION_FIXED_REGISTER'
+has src/compiler/c_lower/core_lower_asm_scalar_forms.c 'minic_target_info_fixed_register_write_supported('
 has src/target/loongarch64/asm_contract.c 'loongarch64_dbar_hint'
 has src/target/loongarch64/asm_contract.c 'loongarch64_dbar_hint'
 has src/target/loongarch64/codegen.c '"@function", "@object"'
@@ -642,16 +649,16 @@ has src/frontend/ast_verifier.c 'minic_target_info_language_type_supported('
 # New capabilities must extend the existing Backend/Target contract, not
 # introduce ISA switches into Core or duplicate GNU template qualification.
 for file in src/target/x86_64/asm_contract.c src/target/x86_64/asm_contract.h \
-            src/core/core_lower_asm_target.c; do exists "$file"; done
+            src/compiler/c_lower/core_lower_asm_target.c; do exists "$file"; done
 has src/target/backend_source.c 'minic_x86_64_qualify_inline_asm'
-has src/core/core_lower_asm_target.c 'minic_source_backend_qualify_inline_asm('
+has src/compiler/c_lower/core_lower_asm_target.c 'minic_source_backend_qualify_inline_asm('
 has src/target/x86_64/machine_asm.c 'minic_x86_64_asm_mulacc_template('
 has src/target/x86_64/machine_asm.c 'minic_x86_64_asm_matched_template('
-lacks src/core/core_lower_asm.c 'core_asm_try_x86_register_contract('
-lacks src/core/core_lower_varargs.c 'MINIC_TARGET_ARCH_X86_64'
-has src/core/core_lower_varargs.c 'MINIC_VARIADIC_COPY_ABI_STATE'
+lacks src/compiler/c_lower/core_lower_asm.c 'core_asm_try_x86_register_contract('
+lacks src/compiler/c_lower/core_lower_varargs.c 'MINIC_TARGET_ARCH_X86_64'
+has src/compiler/c_lower/core_lower_varargs.c 'MINIC_VARIADIC_COPY_ABI_STATE'
 has src/target/target_info.h 'MinicVariadicCopyKind'
-if [[ -e src/core/core_lower_asm_x86.c ]]; then
+if [[ -e src/compiler/c_lower/core_lower_asm_x86.c ]]; then
   fail 'legacy x86-specific Core classifier must not return'
 fi
 
@@ -920,7 +927,7 @@ has src/compiler/compiler.c 'minic_data_layout_validate_program(target_info->dat
 lacks src/compiler/compiler.c 'backend->prepare_program'
 lacks src/target/backend.h 'MinicBackendPrepareProgram'
 lacks src/target/riscv64/codegen_internal.h 'target/riscv64/layout.h'
-has src/target/data_layout.c 'MinicDataLayoutProgramCheck minic_data_layout_validate_program('
+has src/target/source_policy/data_layout_source.c 'MinicDataLayoutProgramCheck minic_data_layout_validate_program('
 for obsolete in src/target/riscv64/layout.c src/target/riscv64/layout.h; do
   [[ ! -e "$obsolete" ]] || fail "old RV64 AST layout survived: $obsolete"
 done
@@ -1543,7 +1550,7 @@ cc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror \
 cc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror \
   -ffunction-sections -fdata-sections -Wl,--gc-sections \
   -Iinclude -Isrc tests/compiler/c0/probe-core-call-convention-intern.c \
-  src/core/core_ir.c src/core/core_ir_source.c src/frontend/type.c \
+  src/core/core_ir.c src/compiler/c_lower/core_ir_source.c src/frontend/type.c \
   -o "$work/core-call-convention-intern-probe"
 "$work/core-call-convention-intern-probe"
 

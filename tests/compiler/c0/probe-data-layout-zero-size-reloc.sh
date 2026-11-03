@@ -16,6 +16,7 @@ cc -I"$root/include" -I"$root/src" -std=c11 -O0 -g \
     "$root/src/frontend/ast.c" \
     "$root/src/frontend/type.c" \
     "$root/src/target/data_layout.c" \
+    "$root/src/target/source_policy/data_layout_source.c" \
     "$root/tests/target/data_layout_zero_size_reloc_test.c" \
     -o "$work/layout-ubsan"
 "$work/layout-ubsan"

@@ -14,7 +14,7 @@ trap 'rm -rf "$temp"' EXIT
     -I"$root/include" -I"$root/src" \
     "$root/tests/core/asm_operand_plan_test.c" \
     "$root/src/target/backend_source.c" \
-    "$root/src/core/core_lower_asm_operands.c" \
+    "$root/src/compiler/c_lower/core_lower_asm_operands.c" \
     -Wl,--gc-sections -o "$temp/asm-plan-unit"
 "$temp/asm-plan-unit"
 

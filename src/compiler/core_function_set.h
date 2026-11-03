@@ -2,7 +2,7 @@
 #define MINIC_COMPILER_CORE_FUNCTION_SET_H
 #include "core/core_ir.h"
 #include "core/module_ir.h"
-#include "core/core_lower.h"
+#include "compiler/c_lower/core_lower.h"
 #include <stddef.h>
 
 /* Translation-unit-aligned Core functions and their lowering verdicts.

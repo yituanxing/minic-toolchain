@@ -13,7 +13,7 @@ mkdir -p "$work"
     -Wstrict-prototypes -Wmissing-prototypes -Werror \
     -I"$root/src" -I"$root/include" \
     "$root/tests/core/core_reentry_query_test.c" \
-    "$root/src/core/reentry_index.c" -o "$work/core_reentry_query_test"
+    "$root/src/compiler/c_lower/reentry_index.c" -o "$work/core_reentry_query_test"
 "$work/core_reentry_query_test"
 
 # Directly guard canonical source-subtree membership without dragging machine
@@ -23,7 +23,7 @@ mkdir -p "$work"
     -ffunction-sections -fdata-sections -Wl,--gc-sections \
     -I"$root/src" -I"$root/include" \
     "$root/tests/core/core_source_subtree_membership_test.c" \
-    "$root/src/core/core_lower.c" -o "$work/core_source_subtree_membership_test"
+    "$root/src/compiler/c_lower/core_lower.c" -o "$work/core_source_subtree_membership_test"
 "$work/core_source_subtree_membership_test"
 
 for name in core_reentry_policy_runtime m144_unreferenced_loop_label_metadata; do

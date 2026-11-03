@@ -1,5 +1,5 @@
-#include "core/core_lower_asm_internal.h"
-#include "core/core_ir_source_internal.h"
+#include "compiler/c_lower/core_lower_asm_internal.h"
+#include "compiler/c_lower/core_ir_source_internal.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -37,7 +37,8 @@ static bool must_reject(MinicInlineAsm *source, const char *raw) {
 }
 
 static bool verify_core_roles(size_t count, bool corrupt_index, bool expected) {
-    MinicCoreFunction function;
+    MinicCoreSourceBuilder builder;
+    MinicCoreFunction *function = &builder.core;
     MinicCoreTypeContext context;
     MinicCoreType type = {0};
     MinicCoreTypeId integer_type, void_type;
@@ -68,20 +69,20 @@ static bool verify_core_roles(size_t count, bool corrupt_index, bool expected) {
         minic_core_type_context_destroy(&context);
         return false;
     }
-    minic_core_function_initialize(&function);
+    minic_core_source_builder_initialize(&builder);
     (void)memset(&integer, 0, sizeof(integer));
     (void)memset(&asm_effect, 0, sizeof(asm_effect));
     (void)memset(&terminator, 0, sizeof(terminator));
     initialized = minic_core_function_set_signature(
-                      &function, "capacity", 8U, minic_type_void(), NULL, 0U) &&
-                  minic_core_function_add_block(&function, &block) &&
+                      &builder, "capacity", 8U, minic_type_void(), NULL, 0U) &&
+                  minic_core_function_add_block(function, &block) &&
                   minic_core_function_add_opaque_inline_asm(
-                      &function, "# sixteen slots", 15U, true, false, &asm_id);
+                      function, "# sixteen slots", 15U, true, false, &asm_id);
     if (initialized) {
         integer.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
         integer.value.integer_value = 1;
         initialized = minic_core_function_append_value_instruction(
-            &function, block, &integer, &scalar);
+            function, block, &integer, &scalar);
     }
     if (initialized) {
         asm_effect.kind = MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM;
@@ -102,19 +103,19 @@ static bool verify_core_roles(size_t count, bool corrupt_index, bool expected) {
         terminator.return_value = MINIC_CORE_VALUE_INVALID;
         terminator.return_object = MINIC_CORE_OBJECT_INVALID;
         initialized = minic_core_function_append_effect_instruction(
-                          &function, block, &asm_effect) &&
+                          function, block, &asm_effect) &&
                       minic_core_function_set_terminator(
-                          &function, block, &terminator);
+                          function, block, &terminator);
     }
     if (initialized) {
-        function.core_return_type_id = void_type;
-        function.values[0].core_type_id = integer_type;
-        function.instructions[0].core_type_id = integer_type;
-        function.instructions[1].core_type_id = void_type;
-        verified = minic_core_function_attach_type_context(&function, &context) &&
-                   minic_core_function_verify(&function);
+        function->core_return_type_id = void_type;
+        function->values[0].core_type_id = integer_type;
+        function->instructions[0].core_type_id = integer_type;
+        function->instructions[1].core_type_id = void_type;
+        verified = minic_core_function_attach_type_context(function, &context) &&
+                   minic_core_function_verify(function);
     }
-    minic_core_function_destroy(&function);
+    minic_core_source_builder_destroy(&builder);
     minic_core_type_context_destroy(&context);
     return initialized && verified == expected;
 }

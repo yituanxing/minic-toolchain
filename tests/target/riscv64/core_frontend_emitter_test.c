@@ -1,5 +1,5 @@
 #include "core/core_ir.h"
-#include "core/core_lower.h"
+#include "compiler/core_function_set.h"
 #include "frontend/ast.h"
 #include "frontend/ast_verifier.h"
 #include "frontend/cast_normalization.h"
@@ -69,7 +69,7 @@ static bool prepare_program(const char *path,
                             MinicDiagnostic *diagnostic) {
     const MinicTargetInfo *target_info;
 
-    target_info = minic_default_target_info();
+    target_info = minic_target_info_for_architecture(MINIC_TARGET_ARCH_RISCV64);
     if (!minic_parse_c0_program(path, buffer->data, buffer->size, program, diagnostic) ||
         !minic_c0_program_verify_target(program, MINIC_C0_AST_PARSED, target_info) ||
         !minic_c0_program_validate_function_body_ownership(program) ||
@@ -82,15 +82,23 @@ static bool prepare_program(const char *path,
 }
 
 static bool emit_frontend_functions(FILE *file, const MinicC0Program *program) {
+    MinicCoreFunctionSet core_set;
     size_t function_index;
     size_t emitted_count;
+    bool all_ok;
 
+    minic_core_function_set_initialize(&core_set);
+    if (!minic_prepare_core_function_set(program,
+                                         minic_target_info_for_architecture(
+                                             MINIC_TARGET_ARCH_RISCV64),
+                                         &core_set)) {
+        return false;
+    }
     emitted_count = 0U;
+    all_ok = true;
     for (function_index = 0U; function_index < program->function_count; ++function_index) {
         const MinicFunction *function;
-        MinicFunctionBodyView body;
-        MinicCoreFunction core;
-        MinicCoreLowerStatus status;
+        const MinicCoreFunction *sealed;
         MinicRiscvFunctionSymbol symbol;
         MinicRiscv64FunctionAbiPlan abi_plan = {0};
         MinicCoreModuleFunctionSymbol sealed_symbol = {0};
@@ -98,18 +106,15 @@ static bool emit_frontend_functions(FILE *file, const MinicC0Program *program) {
 
         function = minic_c0_program_function(program, function_index);
         if (function == NULL) {
-            return false;
+            all_ok = false;
+            break;
         }
-        if (!function->is_defined) {
+        if (!function->is_defined || (function->is_internal && !function->is_referenced)) {
             continue;
         }
-        if (!minic_c0_function_body_view(program, function_index, &body)) {
-            return false;
-        }
-        minic_core_function_initialize(&core);
-        status = minic_core_lower_function(&body, minic_default_target_info(), &core);
-        /* The test's source fixture builds the same sealed descriptor that
-         * production ModuleIR owns; the machine receives no C function. */
+        sealed = &core_set.functions[function_index];
+        /* Production's AST-to-Core transaction owns C type import, snapshots
+         * and sealing. Target admission here must see the published Core. */
         /* Module descriptor owns its spelling in production; this fixture
          * borrows the source symbol for the duration of immediate emission. */
         sealed_symbol.name = (char *)minic_c0_function_symbol_name(function);
@@ -118,28 +123,32 @@ static bool emit_frontend_functions(FILE *file, const MinicC0Program *program) {
         sealed_symbol.is_internal = function->is_internal;
         sealed_symbol.is_weak = function->is_weak;
         sealed_symbol.visibility = (MinicCoreModuleVisibility)function->visibility;
-        success = status == MINIC_CORE_LOWER_OK && minic_core_function_verify(&core) &&
-                  minic_riscv64_core_function_admit(true, &core, &abi_plan) &&
+        success = core_set.statuses[function_index] == MINIC_CORE_LOWER_OK &&
+                  sealed->type_context != NULL &&
+                  minic_core_function_verify_core_type_snapshot(sealed) &&
+                  minic_core_function_verify(sealed) &&
+                  minic_riscv64_core_function_admit(true, sealed, &abi_plan) &&
                   function->visibility <= MINIC_SYMBOL_VISIBILITY_PROTECTED &&
                   minic_riscv_function_symbol_from_module(&sealed_symbol, &symbol);
         minic_riscv64_function_abi_plan_destroy(&abi_plan);
         if (success) {
             success = minic_riscv64_emit_prepared_core_function_with_symbol(
-                file, &core, &symbol, false, NULL, NULL);
+                file, sealed, &symbol, false, NULL, NULL);
         }
         if (!success) {
             (void)fprintf(stderr,
                           "frontend Core emitter rejected function '%s' status=%d\n",
                           function->name != NULL ? function->name : "<unnamed>",
-                          (int)status);
+                          (int)core_set.statuses[function_index]);
         }
-        minic_core_function_destroy(&core);
         if (!success) {
-            return false;
+            all_ok = false;
+            break;
         }
         emitted_count += 1U;
     }
-    return emitted_count != 0U;
+    minic_core_function_set_destroy(&core_set);
+    return all_ok && emitted_count != 0U;
 }
 
 int main(int argc, char **argv) {

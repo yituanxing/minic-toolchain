@@ -40,6 +40,7 @@ done
     -ffunction-sections -fdata-sections -I"$root/include" -I"$root/src" \
     "$root/tests/target/x86_64_typed_scalar_families_test.c" \
     "$root/src/target/x86_64/asm_contract.c" \
+    "$root/src/target/x86_64/asm_contract_source.c" \
     "$root/src/target/x86_64/raid6_simd.c" \
     -Wl,--gc-sections -o "$work/machine-gate"
 "$work/machine-gate"

@@ -4,7 +4,7 @@
 /* C -> Core Module ingress. This compiler-only adapter is never included
  * from a Core verifier or target emitter. */
 #include "core/module_ir.h"
-#include "core/core_type_import.h"
+#include "compiler/c_lower/core_type_import.h"
 #include "target/target_info.h"
 
 bool minic_core_module_build_from_program(MinicCoreModule *output,

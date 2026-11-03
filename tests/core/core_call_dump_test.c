@@ -1,4 +1,4 @@
-#include "core/core_ir_source_internal.h"
+#include "compiler/c_lower/core_ir_source_internal.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -74,7 +74,8 @@ static bool attach_dump_types(MinicCoreFunction *function,
     return minic_core_function_attach_type_context(function, context);
 }
 
-static bool build_call_dump_function(MinicCoreFunction *function) {
+static bool build_call_dump_function(MinicCoreSourceBuilder *builder) {
+    MinicCoreFunction *function = &builder->core;
     MinicType parameters[2] = {minic_type_int(), minic_type_record(0U)};
     MinicType function_pointer;
     MinicCoreBlockId block;
@@ -89,16 +90,16 @@ static bool build_call_dump_function(MinicCoreFunction *function) {
     size_t argument_begin;
 
     if (!minic_type_pointer_to(minic_type_function(0U), &function_pointer) ||
-        !minic_core_function_set_signature(function, "probe", 5U,
+        !minic_core_function_set_signature(builder, "probe", 5U,
                                            minic_type_int(), NULL, 0U) ||
         !minic_core_function_add_block(function, &block) ||
-        !minic_core_function_add_object(function, (MinicSourceSpan){0},
+        !minic_core_function_add_object(builder, (MinicSourceSpan){0},
                                         parameters[1], &object) ||
         !minic_core_function_add_function_symbol(function, "target", 6U, &symbol) ||
-        !minic_core_function_add_callee(function, "target", 6U,
+        !minic_core_function_add_callee(builder, "target", 6U,
                                         minic_type_int(), parameters, 2U, false,
                                         MINIC_CALLING_CONVENTION_DEFAULT, &callee) ||
-        !minic_core_function_add_call_signature(function, 0U,
+        !minic_core_function_add_call_signature(builder, 0U,
                                                  minic_type_int(), parameters, 2U,
                                                  false, MINIC_CALLING_CONVENTION_DEFAULT,
                                                  &signature)) return false;
@@ -107,13 +108,13 @@ static bool build_call_dump_function(MinicCoreFunction *function) {
     instruction.kind = MINIC_CORE_INSTRUCTION_FUNCTION_ADDRESS;
     instruction.value.function_symbol_id = symbol;
     if (!minic_core_function_append_source_value_instruction(
-            function, block, &instruction, function_pointer, &function_address)) return false;
+            builder, block, &instruction, function_pointer, &function_address)) return false;
 
     (void)memset(&instruction, 0, sizeof(instruction));
     instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
     instruction.value.integer_value = 7;
     if (!minic_core_function_append_source_value_instruction(
-            function, block, &instruction, minic_type_int(), &integer)) return false;
+            builder, block, &instruction, minic_type_int(), &integer)) return false;
 
     (void)memset(arguments, 0, sizeof(arguments));
     arguments[0].kind = MINIC_CORE_CALL_ARGUMENT_VALUE;
@@ -130,7 +131,7 @@ static bool build_call_dump_function(MinicCoreFunction *function) {
     instruction.value.call.argument_count = 2U;
     instruction.value.call.result_object = MINIC_CORE_OBJECT_INVALID;
     if (!minic_core_function_append_source_value_instruction(
-            function, block, &instruction, minic_type_int(), &result)) return false;
+            builder, block, &instruction, minic_type_int(), &result)) return false;
 
     (void)memset(&instruction, 0, sizeof(instruction));
     instruction.kind = MINIC_CORE_INSTRUCTION_INDIRECT_CALL;
@@ -140,7 +141,7 @@ static bool build_call_dump_function(MinicCoreFunction *function) {
     instruction.value.indirect_call.argument_count = 2U;
     instruction.value.indirect_call.result_object = MINIC_CORE_OBJECT_INVALID;
     if (!minic_core_function_append_source_value_instruction(
-            function, block, &instruction, minic_type_int(), &result)) return false;
+            builder, block, &instruction, minic_type_int(), &result)) return false;
 
     (void)memset(&terminator, 0, sizeof(terminator));
     terminator.kind = MINIC_CORE_TERMINATOR_RETURN;
@@ -159,7 +160,8 @@ int main(void) {
         "  %2 = call @target(%1, %o0)\n"
         "  %3 = call.indirect %0(%1, %o0) signature=0\n"
         "  return %3\n";
-    MinicCoreFunction function;
+    MinicCoreSourceBuilder builder;
+    MinicCoreFunction *function = &builder.core;
     MinicCoreTypeContext type_context;
     DumpTypes types = {0};
     FILE *output;
@@ -169,13 +171,13 @@ int main(void) {
     bool type_context_ready;
     bool built, attached, verified, dumped;
 
-    minic_core_function_initialize(&function);
+    minic_core_source_builder_initialize(&builder);
     type_context_ready = make_dump_types(&type_context, &types);
     output = tmpfile();
-    built = type_context_ready && build_call_dump_function(&function);
-    attached = built && attach_dump_types(&function, &type_context, &types);
-    verified = attached && minic_core_function_verify(&function);
-    dumped = verified && output != NULL && minic_core_function_dump(output, &function);
+    built = type_context_ready && build_call_dump_function(&builder);
+    attached = built && attach_dump_types(function, &type_context, &types);
+    verified = attached && minic_core_function_verify(function);
+    dumped = verified && output != NULL && minic_core_function_dump(output, function);
     if (!dumped || fflush(output) != 0 || fseek(output, 0L, SEEK_SET) != 0) {
         (void)fprintf(stderr,
                       "CORE_CALL_DUMP=FAIL typed=%d built=%d attached=%d verified=%d dumped=%d\n",
@@ -187,7 +189,7 @@ int main(void) {
         if (ferror(output) || strcmp(buffer, expected) != 0) status = 2;
     }
     if (output != NULL) (void)fclose(output);
-    minic_core_function_destroy(&function);
+    minic_core_source_builder_destroy(&builder);
     minic_core_type_context_destroy(&type_context);
     if (status == 0) (void)puts("CORE_CALL_DUMP=PASS direct+indirect value+object exact-text");
     return status;

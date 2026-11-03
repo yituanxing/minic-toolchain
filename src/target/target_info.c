@@ -1,62 +1,19 @@
 #include "target/target_info.h"
 #include "core/module_ir.h"
 #include "target/loongarch64/machine_builtin_form.h"
-#include "target/source_policy/source_policy.h"
+#include "target/source_policy/target_source_info.h"
 
 #include <stdint.h>
 #include <string.h>
 
-/* Integer widths and signedness are C language-model facts, not calling
- * conventions. These three models may be shared by targets with identical
- * C integer semantics without conflating their ABIs or machine lowering. */
-static const MinicTargetIntegerModel minic_lp64_unsigned_char_integer_model = {
-    .plain_char_sign = MINIC_INTEGER_SIGN_UNSIGNED,
-    .semantic_width_bits = {[MINIC_INTEGER_RANK_BOOL] = 1U,
-                            [MINIC_INTEGER_RANK_CHAR] = 8U,
-                            [MINIC_INTEGER_RANK_SHORT] = 16U,
-                            [MINIC_INTEGER_RANK_INT] = 32U,
-                            [MINIC_INTEGER_RANK_LONG] = 64U,
-                            [MINIC_INTEGER_RANK_LONG_LONG] = 64U,
-                            [MINIC_INTEGER_RANK_INT128] = 128U},
-};
-
-/* RV32 Linux ILP32; semantic integer conversions must not inherit LP64.
- * Plain char is unsigned on RISC-V; wchar_t uses the normal signed int ABI. */
-static const MinicTargetIntegerModel minic_ilp32_unsigned_char_integer_model = {
-    .plain_char_sign = MINIC_INTEGER_SIGN_UNSIGNED,
-    .semantic_width_bits = {[MINIC_INTEGER_RANK_BOOL] = 1U,
-                            [MINIC_INTEGER_RANK_CHAR] = 8U,
-                            [MINIC_INTEGER_RANK_SHORT] = 16U,
-                            [MINIC_INTEGER_RANK_INT] = 32U,
-                            [MINIC_INTEGER_RANK_LONG] = 32U,
-                            [MINIC_INTEGER_RANK_LONG_LONG] = 64U,
-                            [MINIC_INTEGER_RANK_INT128] = 128U},
-};
-
-/* LP64, signed plain char and signed 32-bit wchar_t on x86-64 Linux. */
-static const MinicTargetIntegerModel minic_lp64_signed_char_integer_model = {
-    .plain_char_sign = MINIC_INTEGER_SIGN_SIGNED,
-    .semantic_width_bits = {[MINIC_INTEGER_RANK_BOOL] = 1U,
-                            [MINIC_INTEGER_RANK_CHAR] = 8U,
-                            [MINIC_INTEGER_RANK_SHORT] = 16U,
-                            [MINIC_INTEGER_RANK_INT] = 32U,
-                            [MINIC_INTEGER_RANK_LONG] = 64U,
-                            [MINIC_INTEGER_RANK_LONG_LONG] = 64U,
-                            [MINIC_INTEGER_RANK_INT128] = 128U},
-};
-
-/* One catalog owns machine capability and a distinct immutable C source
- * profile; the invocation constructs a writable copy of both. */
-typedef struct MinicTargetLanguageDescriptor {
+/* Physical ISA capabilities and byte layout belong to machine TargetInfo.
+ * The immutable C-language registry is owned separately by SourcePolicy. */
+typedef struct MinicTargetMachineDescriptor {
     MinicTargetInfo target;
-    MinicTargetSourceInfo source;
     const MinicDataLayout *(*layout)(void);
-    MinicIntegerSign wide_character_sign;
-    MinicIntegerRank wide_character_rank;
-    MinicIntegerRank libc_size_rank;
-} MinicTargetLanguageDescriptor;
+} MinicTargetMachineDescriptor;
 
-static const MinicTargetLanguageDescriptor minic_language_riscv32 = {
+static const MinicTargetMachineDescriptor minic_machine_riscv32 = {
     .target = {
         .variadic_scalar_read_kind = MINIC_VARIADIC_SCALAR_READ_LINEAR_SLOT,
         .variadic_linear_slot_bytes = 4U,
@@ -67,20 +24,9 @@ static const MinicTargetLanguageDescriptor minic_language_riscv32 = {
         .riscv_isa = {.xlen = 32U, .abi = MINIC_RISCV_ABI_ILP32,
                       .strict_isa = true},
     },
-    .source = {
-        .asm_source_policy = &minic_riscv32_asm_source_policy,
-        .integer_model = &minic_ilp32_unsigned_char_integer_model,
-        .word_integer_rank = MINIC_INTEGER_RANK_INT,
-        .long_double_significand_bits = 113U,
-        .gnu_sizeof_void_is_one = true,
-        .gnu_sizeof_function_is_one = true,
-    },
     .layout = minic_riscv32_linux_data_layout,
-    .wide_character_sign = MINIC_INTEGER_SIGN_SIGNED,
-    .wide_character_rank = MINIC_INTEGER_RANK_INT,
-    .libc_size_rank = MINIC_INTEGER_RANK_INT,
 };
-static const MinicTargetLanguageDescriptor minic_language_riscv64 = {
+static const MinicTargetMachineDescriptor minic_machine_riscv64 = {
     .target = {
         .variadic_scalar_read_kind = MINIC_VARIADIC_SCALAR_READ_LINEAR_SLOT,
         .variadic_linear_slot_bytes = 8U,
@@ -91,21 +37,9 @@ static const MinicTargetLanguageDescriptor minic_language_riscv64 = {
         .riscv_isa = {.xlen = 64U, .abi = MINIC_RISCV_ABI_LP64D,
                       .strict_isa = false},
     },
-    .source = {
-        .asm_source_policy = &minic_riscv64_asm_source_policy,
-        .integer_model = &minic_lp64_unsigned_char_integer_model,
-        .word_integer_rank = MINIC_INTEGER_RANK_LONG,
-        .long_double_significand_bits = 113U,
-        .language_type_capabilities = MINIC_TARGET_LANG_EXTENDED_FLOAT_DECLARATIONS,
-        .gnu_sizeof_void_is_one = true,
-        .gnu_sizeof_function_is_one = true,
-    },
     .layout = minic_default_data_layout,
-    .wide_character_sign = MINIC_INTEGER_SIGN_SIGNED,
-    .wide_character_rank = MINIC_INTEGER_RANK_INT,
-    .libc_size_rank = MINIC_INTEGER_RANK_LONG,
 };
-static const MinicTargetLanguageDescriptor minic_language_x86_64 = {
+static const MinicTargetMachineDescriptor minic_machine_x86_64 = {
     .target = {
         .call_lowering_capabilities = MINIC_TARGET_CALL_MS_X64_FIXED_SCALAR,
         .variadic_scalar_read_kind = MINIC_VARIADIC_SCALAR_READ_ABI_CURSOR,
@@ -114,25 +48,9 @@ static const MinicTargetLanguageDescriptor minic_language_x86_64 = {
         .call_frame_return_address_level0 = true,
         .call_frame_frame_address_level0 = true,
     },
-    .source = {
-        .asm_source_policy = &minic_x86_64_asm_source_policy,
-        .source_language_policy = &minic_x86_64_source_language_policy,
-        .va_cursor_source_abi_policy = &minic_x86_64_va_cursor_source_abi_policy,
-        .integer_model = &minic_lp64_signed_char_integer_model,
-        .word_integer_rank = MINIC_INTEGER_RANK_LONG,
-        .long_double_significand_bits = 64U,
-        .language_type_capabilities = MINIC_TARGET_LANG_EXTENDED_FLOAT_DECLARATIONS |
-            MINIC_TARGET_LANG_MS_X64_FUNCTION_POINTER_DECLARATIONS |
-            MINIC_TARGET_LANG_GNU_FIXED_VECTOR_STORAGE,
-        .gnu_sizeof_void_is_one = true,
-        .gnu_sizeof_function_is_one = true,
-    },
     .layout = minic_x86_64_linux_data_layout,
-    .wide_character_sign = MINIC_INTEGER_SIGN_SIGNED,
-    .wide_character_rank = MINIC_INTEGER_RANK_INT,
-    .libc_size_rank = MINIC_INTEGER_RANK_LONG,
 };
-static const MinicTargetLanguageDescriptor minic_language_aarch64 = {
+static const MinicTargetMachineDescriptor minic_machine_aarch64 = {
     .target = {
         .variadic_scalar_read_kind = MINIC_VARIADIC_SCALAR_READ_ABI_CURSOR,
         .variadic_copy_kind = MINIC_VARIADIC_COPY_ABI_STATE,
@@ -141,25 +59,9 @@ static const MinicTargetLanguageDescriptor minic_language_aarch64 = {
         .call_frame_frame_address_level0 = true,
         .call_frame_frame_address_level1 = true,
     },
-    .source = {
-        .asm_source_policy = &minic_aarch64_asm_source_policy,
-        .source_language_policy = &minic_aarch64_source_language_policy,
-        .va_cursor_source_abi_policy = &minic_aarch64_va_cursor_source_abi_policy,
-        .integer_model = &minic_lp64_unsigned_char_integer_model,
-        .word_integer_rank = MINIC_INTEGER_RANK_LONG,
-        .long_double_significand_bits = 113U,
-        .language_type_capabilities = MINIC_TARGET_LANG_EXTENDED_FLOAT_DECLARATIONS |
-            MINIC_TARGET_LANG_OPAQUE_VECTOR_HEADER_DECLARATIONS |
-            MINIC_TARGET_LANG_FIXED_VECTOR128_STORAGE_DECLARATIONS,
-        .gnu_sizeof_void_is_one = true,
-        .gnu_sizeof_function_is_one = true,
-    },
     .layout = minic_aarch64_linux_data_layout,
-    .wide_character_sign = MINIC_INTEGER_SIGN_UNSIGNED,
-    .wide_character_rank = MINIC_INTEGER_RANK_INT,
-    .libc_size_rank = MINIC_INTEGER_RANK_LONG,
 };
-static const MinicTargetLanguageDescriptor minic_language_loongarch64 = {
+static const MinicTargetMachineDescriptor minic_machine_loongarch64 = {
     .target = {
         .machine_builtin_form_lookup = minic_loongarch64_machine_builtin_form,
         .variadic_scalar_read_kind = MINIC_VARIADIC_SCALAR_READ_LINEAR_SLOT,
@@ -169,28 +71,14 @@ static const MinicTargetLanguageDescriptor minic_language_loongarch64 = {
         .call_frame_return_address_level0 = true,
         .call_frame_frame_address_level0 = true,
     },
-    .source = {
-        .asm_source_policy = &minic_loongarch64_asm_source_policy,
-        .machine_builtin_policy = &minic_loongarch64_machine_builtin_policy,
-        .alias_abi_policy = &minic_loongarch64_alias_abi_policy,
-        .integer_model = &minic_lp64_signed_char_integer_model,
-        .word_integer_rank = MINIC_INTEGER_RANK_LONG,
-        .long_double_significand_bits = 113U,
-        .language_type_capabilities = MINIC_TARGET_LANG_EXTENDED_FLOAT_DECLARATIONS,
-        .gnu_sizeof_void_is_one = true,
-        .gnu_sizeof_function_is_one = true,
-    },
     .layout = minic_loongarch64_linux_data_layout,
-    .wide_character_sign = MINIC_INTEGER_SIGN_SIGNED,
-    .wide_character_rank = MINIC_INTEGER_RANK_INT,
-    .libc_size_rank = MINIC_INTEGER_RANK_LONG,
 };
 
-/* The catalog is the sole target registration order, shared by the driver,
- * source ABI profiles and five machine backends. */
-static const MinicTargetLanguageDescriptor *const minic_target_language_descriptors[] = {
+/* This is the one machine registration order, shared with the driver and
+ * independently maintained source-language registry through the catalog. */
+static const MinicTargetMachineDescriptor *const minic_target_machine_descriptors[] = {
 #define MINIC_TARGET_REGISTRATION(arch, id, spelling, stages, isa) \
-    &minic_language_##id,
+    &minic_machine_##id,
 #include "target/target_registration.def"
 #undef MINIC_TARGET_REGISTRATION
 };
@@ -198,37 +86,29 @@ static const MinicTargetLanguageDescriptor *const minic_target_language_descript
 const MinicTargetInfo *minic_target_info_for_architecture(
     MinicTargetArchitecture architecture) {
     static MinicTargetInfo canonical_targets[
-        sizeof(minic_target_language_descriptors) /
-        sizeof(minic_target_language_descriptors[0])];
-    static MinicTargetSourceInfo canonical_source_profiles[
-        sizeof(minic_target_language_descriptors) /
-        sizeof(minic_target_language_descriptors[0])];
+        sizeof(minic_target_machine_descriptors) /
+        sizeof(minic_target_machine_descriptors[0])];
     const MinicTargetCatalogEntry *catalog;
     size_t count;
     size_t index;
 
     catalog = minic_target_catalog_all(&count);
-    if (count != sizeof(minic_target_language_descriptors) /
-                 sizeof(minic_target_language_descriptors[0])) return NULL;
+    if (count != sizeof(minic_target_machine_descriptors) /
+                 sizeof(minic_target_machine_descriptors[0])) return NULL;
     for (index = 0U; index < count; ++index) {
-        const MinicTargetLanguageDescriptor *descriptor = minic_target_language_descriptors[index];
+        const MinicTargetMachineDescriptor *descriptor =
+            minic_target_machine_descriptors[index];
         MinicTargetInfo *target = &canonical_targets[index];
         if (catalog[index].architecture != architecture) continue;
         if (target->data_layout == NULL) {
             MinicTargetInfo initialized = descriptor->target;
-            MinicTargetSourceInfo source = descriptor->source;
             initialized.architecture = catalog[index].architecture;
             initialized.data_layout = descriptor->layout();
+            initialized.source_info = minic_target_source_info_for_architecture(
+                catalog[index].architecture);
             if (initialized.data_layout == NULL ||
-                !minic_target_source_integer_type_with_rank(descriptor->wide_character_sign,
-                                        descriptor->wide_character_rank,
-                                        &source.wide_character_type) ||
-                !minic_target_source_integer_type_with_rank(MINIC_INTEGER_SIGN_UNSIGNED,
-                                        descriptor->libc_size_rank,
-                                        &source.libc_size_type))
+                initialized.source_info == NULL)
                 return NULL;
-            canonical_source_profiles[index] = source;
-            initialized.source_info = &canonical_source_profiles[index];
             *target = initialized;
         }
         return target;

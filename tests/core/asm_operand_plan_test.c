@@ -1,4 +1,4 @@
-#include "core/core_lower_asm_internal.h"
+#include "compiler/c_lower/core_lower_asm_internal.h"
 
 #include <assert.h>
 #include <stdint.h>

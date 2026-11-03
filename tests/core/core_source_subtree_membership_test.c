@@ -1,6 +1,6 @@
 /* The source owner must not traverse non-CFG statements' unused block fields.
  * Malformed ancestry must fail closed rather than manufacture a safe set. */
-#include "core/core_lower_internal.h"
+#include "compiler/c_lower/core_lower_internal.h"
 
 #include <string.h>
 

@@ -4,7 +4,7 @@
 #include "compiler/core_reachability.h"
 
 #include "core/core_ir.h"
-#include "core/core_lower.h"
+#include "compiler/c_lower/core_lower.h"
 #include "frontend/ast.h"
 #include "frontend/ast_verifier.h"
 #include "frontend/cast_normalization.h"
@@ -415,8 +415,14 @@ int minic_compile_preprocessed_file_for_target(const char *input_path,
             success = false;
         }
     }
+    /* Source ownership ends at the Core/Module publication boundary.  No
+     * backend may rely on the C AST or its input buffer staying alive: its
+     * entire machine-facing input is the sealed Core FunctionSet + ModuleIR.
+     * This also releases the C graph on every earlier diagnostic failure. */
+    minic_c0_program_destroy(&program);
+    free(buffer.data);
     if (success) {
-        minic_bootstrap_trace_stage(input_path, "codegen", "begin", program.function_count);
+        minic_bootstrap_trace_stage(input_path, "codegen", "begin", core_set.function_count);
         success = minic_backend_emit_assembly_with_module(
             backend, output_path, target_info, core_set.functions,
             core_set.function_count, function_sections, &core_set.module,
@@ -424,15 +430,13 @@ int minic_compile_preprocessed_file_for_target(const char *input_path,
         minic_bootstrap_trace_stage(input_path,
                                     "codegen",
                                     success ? "end-ok" : "end-fail",
-                                    program.function_count);
+                                    core_set.function_count);
     }
 
     minic_core_function_set_destroy(&core_set);
-    minic_c0_program_destroy(&program);
     if (getenv("MINIC_BOOLEAN_DOMAIN_PERF") != NULL) {
         minic_inline_boolean_domain_perf_dump(stderr, &boolean_stats);
     }
-    free(buffer.data);
     return success ? 0 : 1;
 }
 

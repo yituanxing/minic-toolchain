@@ -16,6 +16,7 @@ sources=(
     "$root/src/frontend/type.c"
     "$root/src/frontend/ast.c"
     "$root/src/target/data_layout.c"
+    "$root/src/target/source_policy/data_layout_source.c"
     "$root/src/target/common/lp64_aggregate.c"
     "$root/src/target/common/aggregate_shape.c"
 )

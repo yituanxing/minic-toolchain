@@ -59,6 +59,8 @@ MINIC_LDFLAGS := $(MODE_LDFLAGS) $(LDFLAGS)
 MINIC_INCLUDES := -Iinclude -Isrc
 
 TARGET_SOURCE_POLICY_SOURCES := \
+	src/target/source_policy/data_layout_source.c \
+	src/target/source_policy/target_source_info.c \
 	src/target/source_policy/language_semantics.c \
 	src/target/source_policy/riscv32.c \
 	src/target/source_policy/riscv64.c \
@@ -77,43 +79,43 @@ MINIC_SOURCES := \
 	src/compiler/inline_reference.c \
 	src/compiler/core_reachability.c \
 	src/core/core_ir.c \
-	src/core/core_ir_source.c \
+	src/compiler/c_lower/core_ir_source.c \
 	src/core/core_type.c \
 	src/core/module_ir.c \
-	src/core/core_type_import.c \
+	src/compiler/c_lower/core_type_import.c \
 	src/core/core_ir_verify.c \
 	src/core/core_ir_dump.c \
 	src/core/value_uses.c \
-	src/core/reentry_index.c \
-	src/core/core_lower.c \
-	src/core/core_lower_expression.c \
-	src/core/core_lower_address.c \
-	src/core/core_lower_scalar_values.c \
-	src/core/core_lower_bit_fields.c \
-	src/core/core_lower_assignments.c \
-	src/core/core_lower_record.c \
-	src/core/core_lower_varargs.c \
-	src/core/core_lower_local_effects.c \
-	src/core/core_lower_loop.c \
-	src/core/core_lower_if.c \
-	src/core/core_lower_switch.c \
-	src/core/core_lower_calls.c \
-	src/core/core_lower_expr_flow.c \
-	src/core/core_lower_expr_scalar.c \
-	src/core/core_lower_arithmetic.c \
-	src/core/core_lower_const_facts.c \
-	src/core/core_const_global_record.c \
-	src/core/cfg_constant_calls.c \
-	src/core/local_facts.c \
-	src/core/source_loop_shapes.c \
-	src/core/core_lower_bool.c \
-	src/core/core_lower_types.c \
-	src/core/core_lower_metadata.c \
-	src/core/core_lower_asm.c \
-	src/core/core_lower_asm_target.c \
-	src/core/core_lower_asm_operands.c \
-	src/core/core_lower_asm_structured.c \
-	src/core/core_lower_asm_scalar_forms.c \
+	src/compiler/c_lower/reentry_index.c \
+	src/compiler/c_lower/core_lower.c \
+	src/compiler/c_lower/core_lower_expression.c \
+	src/compiler/c_lower/core_lower_address.c \
+	src/compiler/c_lower/core_lower_scalar_values.c \
+	src/compiler/c_lower/core_lower_bit_fields.c \
+	src/compiler/c_lower/core_lower_assignments.c \
+	src/compiler/c_lower/core_lower_record.c \
+	src/compiler/c_lower/core_lower_varargs.c \
+	src/compiler/c_lower/core_lower_local_effects.c \
+	src/compiler/c_lower/core_lower_loop.c \
+	src/compiler/c_lower/core_lower_if.c \
+	src/compiler/c_lower/core_lower_switch.c \
+	src/compiler/c_lower/core_lower_calls.c \
+	src/compiler/c_lower/core_lower_expr_flow.c \
+	src/compiler/c_lower/core_lower_expr_scalar.c \
+	src/compiler/c_lower/core_lower_arithmetic.c \
+	src/compiler/c_lower/core_lower_const_facts.c \
+	src/compiler/c_lower/core_const_global_record.c \
+	src/compiler/c_lower/cfg_constant_calls.c \
+	src/compiler/c_lower/local_facts.c \
+	src/compiler/c_lower/source_loop_shapes.c \
+	src/compiler/c_lower/core_lower_bool.c \
+	src/compiler/c_lower/core_lower_types.c \
+	src/compiler/c_lower/core_lower_metadata.c \
+	src/compiler/c_lower/core_lower_asm.c \
+	src/compiler/c_lower/core_lower_asm_target.c \
+	src/compiler/c_lower/core_lower_asm_operands.c \
+	src/compiler/c_lower/core_lower_asm_structured.c \
+	src/compiler/c_lower/core_lower_asm_scalar_forms.c \
 	src/frontend/attribute.c \
 	src/frontend/ast.c \
 	src/frontend/expression_semantics.c \
@@ -228,6 +230,7 @@ MINIC_SOURCES := \
 	src/target/x86_64/codegen.c \
 	src/target/x86_64/machine_emit.c \
 	src/target/x86_64/asm_contract.c \
+	src/target/x86_64/asm_contract_source.c \
 	src/target/x86_64/raid6_simd.c \
 	src/target/x86_64/machine_asm.c \
 	src/target/x86_64/machine_support.c \
@@ -243,6 +246,7 @@ MINIC_SOURCES := \
 	src/target/aarch64/neon_emit.c \
 	src/target/aarch64/block_emit.c \
 	src/target/aarch64/asm_contract.c \
+	src/target/aarch64/asm_contract_source.c \
 	src/target/aarch64/residual_emit.c \
 	src/target/aarch64/scalar_normalize.c \
 	src/target/aarch64/memory_emit.c \
@@ -252,6 +256,7 @@ MINIC_SOURCES := \
 	src/target/loongarch64/codegen.c \
 	src/target/loongarch64/machine_text_opt.c \
 	src/target/loongarch64/asm_contract.c \
+	src/target/loongarch64/asm_contract_source.c \
 	src/target/loongarch64/simd_asm.c \
 	src/target/loongarch64/simd_source_policy.c \
 	src/target/loongarch64/block_emit.c \
@@ -1912,7 +1917,7 @@ check-x86-reachable-vma-assert: $(MINIC_CC_BINARY)
 check-fast: check-packed-zero-width-bitfield-barrier
 check-fast: check-binary128-literal-oracle check-long-double-literal-precision
 check-fast: check-core-ir-shapes check-core-ir-shapes-source check-core-type-verifier check-rv64-coretype-target-admission
-check-fast: check-x86-reachable-vma-assert check-static-const-source-boundaries check-aarch64-fixmap-cross-static-const check-rv64-pic-elf-nonpreemptible check-elf-hidden-undefined-pic-source check-x86-vdso-hidden-unused check-x86-reachable-gnu-runtime check-gnu-if-condition-local-owner check-direct-lp64-reachable-source-labels check-static-local-owner-reachability check-gnu-runtime-if-effect-facts check-gnu-builtin-constant-p-if-guard check-asm-operand-plan check-x86-linux-control-state check-linux-three-arch-trap-state check-x86-linux-uaccess-and-abi check-linux-symbolic-integer-and-record check-packed-bitfield-field-layout check-target-selection-m0 check-x86_64-m1 check-token-model check-lexer check-type check-record check-semantic-snapshot check-type-alias check-layout check-rv64-abi check-static-functions check-unsigned-declarations check-long-types check-for-loops check-unbounded-for-break check-prefix-decrement-update check-cast-expressions check-unsigned-char-layout check-pointer-subscripts check-pointer-arithmetic check-pointer-object-const check-const-locals check-global-objects check-bitwise-xor check-integer-bit-operations check-pointer-members check-expression-statements check-postfix-subscripts check-compound-xor-assignment $(MINIC_BINARY)
+check-fast: check-x86-reachable-vma-assert check-static-const-source-boundaries check-aarch64-fixmap-cross-static-const check-rv64-pic-elf-nonpreemptible check-elf-hidden-undefined-pic-source check-x86-vdso-hidden-unused check-x86-reachable-gnu-runtime check-gnu-if-condition-local-owner check-direct-lp64-reachable-source-labels check-static-local-owner-reachability check-gnu-runtime-if-effect-facts check-gnu-builtin-constant-p-if-guard check-asm-operand-plan check-x86-linux-control-state check-linux-three-arch-trap-state check-x86-linux-uaccess-and-abi check-linux-symbolic-integer-and-record check-packed-bitfield-field-layout check-target-selection-m0 check-x86_64-m1 check-token-model check-lexer check-type check-record check-semantic-snapshot check-type-alias check-layout check-rv64-abi check-static-functions check-unsigned-declarations check-long-types check-for-loops check-unbounded-for-break check-prefix-decrement-update check-cast-expressions check-unsigned-char-layout check-pointer-subscripts check-pointer-arithmetic check-pointer-object-const check-const-locals check-global-objects check-bitwise-xor check-integer-bit-operations check-pointer-members check-expression-statements check-postfix-subscripts check-compound-xor-assignment $(MINIC_BINARY) $(MINIAS_BINARY)
 	MINIC="$(abspath $(MINIC_BINARY))" \
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" \
 	HOST_CC="$(CC)" \
@@ -2280,7 +2285,8 @@ check-loong-scalar-normalized-seal: $(MINIC_CC_BINARY)
 	$(CC) $(CPPFLAGS) $(MINIC_INCLUDES) $(MINIC_CFLAGS) \
 	  -ffunction-sections -fdata-sections -Wl,--gc-sections \
 	  tests/compiler/c0/probe-loong-scalar-normalized-seal.c \
-	  src/target/loongarch64/asm_contract.c $(MINIC_LDFLAGS) \
+	  src/target/loongarch64/asm_contract.c \
+	  src/target/loongarch64/asm_contract_source.c $(MINIC_LDFLAGS) \
 	  -o "$(BUILD_DIR)/tests/compiler/c0/loong-scalar-normalized-seal"
 	"$(abspath $(BUILD_DIR))/tests/compiler/c0/loong-scalar-normalized-seal"
 	bash tests/compiler/c0/probe-loong-scalar-source-rank.sh \

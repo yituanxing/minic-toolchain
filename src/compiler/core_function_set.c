@@ -1,8 +1,8 @@
 #include "compiler/core_function_set.h"
-#include "core/core_type_import.h"
-#include "core/core_ir_source.h"
+#include "compiler/c_lower/core_type_import.h"
+#include "compiler/c_lower/core_ir_source.h"
 #include "compiler/module_ir_build.h"
-#include "core/reentry_index.h"
+#include "compiler/c_lower/reentry_index.h"
 #include "frontend/function_body.h"
 #include <stdint.h>
 #include <stdio.h>
@@ -113,6 +113,7 @@ bool minic_prepare_core_function_set(const MinicC0Program *program,
     for (function_index = 0U; function_index < set.function_count; ++function_index) {
         const MinicFunction *function;
         MinicFunctionBodyView body;
+        MinicCoreSourceBuilder source_builder;
 
         function = minic_c0_program_function(program, function_index);
         if (function == NULL) {
@@ -137,16 +138,24 @@ bool minic_prepare_core_function_set(const MinicC0Program *program,
                           function->name != NULL ? function->name : "?");
             (void)fflush(stderr);
         }
+        /* Source-language construction has a distinct, compiler-owned
+         * lifetime. Only a sealed Core function is published into the
+         * machine-facing set; even failed C imports cannot leave a source
+         * draft reachable through its CoreFunction array. */
+        minic_core_source_builder_initialize(&source_builder);
         set.statuses[function_index] =
             minic_core_lower_function_with_index(&body, target,
-                                                &set.functions[function_index], index);
+                                                &source_builder, index);
         if (set.statuses[function_index] == MINIC_CORE_LOWER_OK &&
             (!minic_core_function_snapshot_types(
-                &set.functions[function_index], set.type_context,
+                &source_builder, set.type_context,
                 minic_core_set_import_type, importer) ||
-             !minic_core_function_verify(&set.functions[function_index]))) {
+             !minic_core_function_verify(&source_builder.core) ||
+             !minic_core_source_builder_take_core(
+                 &source_builder, &set.functions[function_index]))) {
             set.statuses[function_index] = MINIC_CORE_LOWER_ERROR;
         }
+        minic_core_source_builder_destroy(&source_builder);
         if (set.statuses[function_index] == MINIC_CORE_LOWER_OK)
             (void)minic_core_function_fold_literal_branches(
                 &set.functions[function_index]);

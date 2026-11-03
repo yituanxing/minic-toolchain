@@ -953,6 +953,7 @@ static bool verify_expression(const MinicC0Program *program,
                     ? minic_type_unqualified(result_pointer->type, &result_type)
                     : minic_type_pointee(result_pointer->type, &result_type)) &&
                minic_type_is_integer(result_type) && !minic_type_is_bool_integer(result_type) &&
+               !minic_type_is_enum(result_type) &&
                minic_type_is_integer(overflow_left->type) &&
                minic_type_is_integer(overflow_right->type);
     }

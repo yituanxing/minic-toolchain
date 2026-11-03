@@ -386,11 +386,6 @@ typedef struct MinicCoreInstruction {
             MinicCoreValueId left;
             MinicCoreValueId right;
             MinicCoreValueId result_address;
-            /* Source admission proof captured once by lowering. Some source
-             * destinations (notably enums) have a valid Core integer
-             * execution representation but are ineligible for GNU checked
-             * arithmetic. Target never reopens the C pointee descriptor. */
-            bool source_overflow_destination_ineligible;
         } integer_overflow;
         MinicCoreValueId operand;
         /* An ABI cursor has independently addressable state. va_start
@@ -539,19 +534,9 @@ typedef struct MinicCoreBlock {
     char *local_label_symbol;
 } MinicCoreBlock;
 
-/* The source-language lowering adapter is owned by Core only while a draft
- * function is being constructed. A published Core function has no source
- * draft: target consumers see only the CoreTypeId snapshots below. */
-typedef struct MinicCoreSourceDraft MinicCoreSourceDraft;
-typedef void (*MinicCoreSourceDraftRelease)(MinicCoreSourceDraft *draft);
-
 typedef struct MinicCoreFunction {
     char *name;
     size_t name_length;
-    MinicCoreSourceDraft *source_draft;
-    /* A transient C adapter owns this cleanup callback. Pure Core functions
-     * need no frontend implementation to destroy or verify themselves. */
-    MinicCoreSourceDraftRelease source_draft_release;
     /* The attached type arena is borrowed and must outlive this function and
      * all target consumers. */
     const MinicCoreTypeContext *type_context;

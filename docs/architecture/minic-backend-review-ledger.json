@@ -39,6 +39,16 @@
       "review_depth": "targeted",
       "ci_touched_in": []
     },
+    "src/target/aarch64/asm_contract_internal.h": {
+      "blob": "91b226569726e449bca1a6a0b2c7c197007c207e",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/aarch64/asm_contract_source.c": {
+      "blob": "5fa4e331142e0301e8df741071c1225eea833002",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
     "src/target/aarch64/asm_contract_source.h": {
       "blob": "bcd900f8cee0c0f8d4167c6f5ad5a64d42545b3a",
       "review_depth": "inventory",
@@ -176,6 +186,16 @@
       "ci_touched_in": [
         665
       ]
+    },
+    "src/target/backend_source.c": {
+      "blob": "f8306d32081eafca301bc9d52cd46e57c856514b",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/backend_source.h": {
+      "blob": "45d87b6ba6784c4e31a360a37da4ab99c70d35d0",
+      "review_depth": "inventory",
+      "ci_touched_in": []
     },
     "src/target/common/aggregate_shape.c": {
       "blob": "9b5f4015ec35087bbc7697f28a957e629476b268",
@@ -600,6 +620,16 @@
     "src/target/loongarch64/asm_contract.h": {
       "blob": "7fb73c185c090dc691d0ee40530f3273e2beb699",
       "review_depth": "targeted",
+      "ci_touched_in": []
+    },
+    "src/target/loongarch64/asm_contract_internal.h": {
+      "blob": "4158e465bfe45476282146ed28b5fda848243fc7",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/loongarch64/asm_contract_source.c": {
+      "blob": "f61d53338f3d020354287bef8f106d98f8f0b87c",
+      "review_depth": "inventory",
       "ci_touched_in": []
     },
     "src/target/loongarch64/asm_contract_source.h": {
@@ -1188,6 +1218,11 @@
       "ci_touched_in": [],
       "note": "2026-10-29 batch19: AArch64 GNU ASM source admission extracted from TargetInfo; paired source and machine ownership reviewed."
     },
+    "src/target/source_policy/data_layout_source.c": {
+      "blob": "64cf91ac2d959a18037c4f458fdd51dbb981063a",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
     "src/target/source_policy/language_semantics.c": {
       "blob": "a3716b2cc9f3887fea6a74ee01fcfad05e91bf02",
       "review_depth": "inventory",
@@ -1219,6 +1254,16 @@
     },
     "src/target/source_policy/source_info.h": {
       "blob": "4e83a5b6aec4a8bbfdd43572b397cbb05d941045",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/source_policy/target_source_info.c": {
+      "blob": "bc1e77645b982b7f7cb6b96a675fc5eeade41817",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/source_policy/target_source_info.h": {
+      "blob": "50887ac94ac5cc93f4457631d13dcad6d54d22a3",
       "review_depth": "inventory",
       "ci_touched_in": []
     },
@@ -1278,6 +1323,16 @@
     },
     "src/target/x86_64/asm_contract.h": {
       "blob": "4415b188ef25e10d2ef04bf219d402bc57ab206d",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/x86_64/asm_contract_internal.h": {
+      "blob": "d9a55199c0f25f6f8c8052eddbce7c6fc8ed0872",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/x86_64/asm_contract_source.c": {
+      "blob": "e5cc183c0d2e70cae0407253d9884fead45f2327",
       "review_depth": "inventory",
       "ci_touched_in": []
     },

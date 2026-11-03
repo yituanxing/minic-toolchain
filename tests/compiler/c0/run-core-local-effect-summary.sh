@@ -12,7 +12,7 @@ mkdir -p "$work"
 "$CC" -std=c11 -Wall -Wextra -Werror -pedantic \
     -I"$root/include" -I"$root/src" \
     "$root/tests/core/core_local_effect_summary_test.c" \
-    "$root/src/core/core_lower_local_effects.c" \
+    "$root/src/compiler/c_lower/core_lower_local_effects.c" \
     -o "$work/effects-unit"
 "$work/effects-unit"
 
