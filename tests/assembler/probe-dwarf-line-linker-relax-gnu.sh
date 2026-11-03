@@ -14,10 +14,13 @@ loong_as=${LOONG_GNU_AS:-loongarch64-linux-gnu-as}
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
-# Four source line addresses: 0, 8, 12, 12+gap, followed by a four-byte
-# instruction.  Thus the four consecutive spans (including end_sequence) are
-# 8, 4, gap, 4.  A 50000-byte span fits fixed_advance_pc; 50004 forces GAS's
-# ADDR_DELTA_LIMIT=50000 set_address fallback, not a truncated 16-bit fixup.
+# Four *instruction* line addresses: 0, 8, 12, 12+gap, followed by a
+# four-byte instruction.  GAS records .loc at the following instruction,
+# not at an intervening .space directive; include a real four-byte
+# instruction for line 12 and reserve gap-4 bytes after it.  Thus the four
+# consecutive spans (including end_sequence) are 8, 4, gap, 4.  A 50000-byte
+# span fits fixed_advance_pc; 50004 forces GAS's ADDR_DELTA_LIMIT=50000
+# set_address fallback, not a truncated 16-bit fixup.
 make_source() {
   local profile=$1 mode=$2 gap=$3 out=$4
   if [[ $profile == rv* ]]; then
@@ -26,7 +29,8 @@ make_source() {
       printf '%s\n' '.globl line_start' 'line_start:' '.loc 1 10 0' \
         '    call external_line_target' '.loc 1 11 0' \
         '    addi a0,a0,0' '.loc 1 12 0'
-      printf '    .space %s\n' "$gap"
+      printf '%s\n' '    addi a2,a2,0'
+      printf '    .space %s\n' "$((gap - 4))"
       printf '%s\n' '.loc 1 13 0' '    addi a1,a1,0'
     } >"$out"
   else
@@ -41,7 +45,8 @@ make_source() {
       printf '%s\n' '.globl line_start' 'line_start:' '.loc 1 10 0' \
         '    la.local $a0,line_end' '.loc 1 11 0' \
         '    addi.d $a1,$a1,0' '.loc 1 12 0'
-      printf '    .space %s\n' "$gap"
+      printf '%s\n' '    addi.d $a3,$a3,0'
+      printf '    .space %s\n' "$((gap - 4))"
       printf '%s\n' '.loc 1 13 0' 'line_end:' '    addi.d $a2,$a2,0'
     } >"$out"
   fi
