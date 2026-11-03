@@ -102,6 +102,40 @@ LDS
 "$MINILD" -melf64lriscv -pie --dynamic-linker=/lib/ld-musl-riscv64.so.1 \
     -e _start -o "$work/pie.elf" "$work/input.o"
 
+# A surviving empty TLS fragment may start the TLS block before the first
+# nonempty fragment.  Reserve a non-TLS prefix so the empty section starts
+# before the next TLS section's stronger alignment boundary.  PT_TLS base and
+# both static/dynamic STT_TLS values must use the same retained TLS origin.
+cat >"$work/tls-empty-first.s" <<'ASM'
+.section .text.start,"ax",@progbits
+.globl _start
+_start:
+  ret
+
+.section .data.prefix,"aw",@progbits
+.balign 8
+  .dword 0x12345678
+
+.section .tdata.anchor,"awT",@progbits
+.balign 8
+.globl tls_anchor
+.type tls_anchor,@tls_object
+tls_anchor:
+.size tls_anchor,0
+
+.section .tdata.value,"awT",@progbits
+.balign 64
+.globl tls_value
+.type tls_value,@tls_object
+tls_value:
+  .dword 0x8877665544332211
+.size tls_value,8
+ASM
+"$MINIAS" -march=rv64i -mabi=lp64 \
+    -o "$work/tls-empty-first.o" "$work/tls-empty-first.s"
+"$MINILD" -melf64lriscv -shared \
+    -o "$work/shared-tls-empty-first.so" "$work/tls-empty-first.o"
+
 # The vDSO script deliberately excludes writable/TLS inputs. It must preserve
 # the fixed four PHDRs (including the empty explicit EH-frame header).
 cat >"$work/vdso-input.s" <<'ASM'
@@ -120,6 +154,49 @@ ASM
 "$MINILD" -melf64lriscv -shared --hash-style=both -soname libsegment.so \
     -T "$work/vdso.lds" \
     -o "$work/vdso.so" "$work/vdso-input.o"
+
+# Scripted ET_DYN prunes real input sections before dynamic metadata sizing.
+# Allocated TLS sections removed by /DISCARD/ must also be invisible to the
+# later PT_TLS segment planner, including SHT_NOBITS inputs whose size was
+# reset to zero by the pre-prune pass.
+sed '/^  .dynamic :/a\  /DISCARD/ : { *(.data.word) *(.tdata.slot) *(.tbss.slot) }' \
+    "$work/vdso.lds" >"$work/vdso-tls-discard.lds"
+if ! "$MINILD" -melf64lriscv -shared --hash-style=both \
+    -soname libsegment-tls-discard.so -T "$work/vdso-tls-discard.lds" \
+    -o "$work/vdso-tls-discard.so" "$work/input.o" \
+    >"$work/vdso-tls-discard.stdout" \
+    2>"$work/vdso-tls-discard.stderr"; then
+    echo 'MINILD_SEGMENT_CHECK=FAIL mode=vdso-tls-discard unexpected-rejection' >&2
+    sed -n '1,12p' "$work/vdso-tls-discard.stderr" >&2
+    exit 1
+fi
+
+# A surviving TLS input cannot be represented by this constrained Linux
+# vDSO script: its PHDRS require a single read/execute PT_LOAD and have no
+# PT_TLS entry or writable PT_LOAD.  Do not accept live TLS accidentally while
+# fixing the discarded-only case.  Exercise both initialized and NOBITS TLS.
+sed '/^  .dynamic :/a\  .tdata : { *(.tdata.slot) } :text\
+  /DISCARD/ : { *(.data.word) *(.tbss.slot) }' \
+    "$work/vdso.lds" >"$work/vdso-tls-live-data.lds"
+sed '/^  .dynamic :/a\  .tbss : { *(.tbss.slot) } :text\
+  /DISCARD/ : { *(.data.word) *(.tdata.slot) }' \
+    "$work/vdso.lds" >"$work/vdso-tls-live-bss.lds"
+for kind in data bss; do
+    if "$MINILD" -melf64lriscv -shared --hash-style=both \
+        -soname libsegment-tls-live.so -T "$work/vdso-tls-live-$kind.lds" \
+        -o "$work/vdso-tls-live-$kind.so" "$work/input.o" \
+        >"$work/vdso-tls-live-$kind.stdout" \
+        2>"$work/vdso-tls-live-$kind.stderr"; then
+        echo "MINILD_SEGMENT_CHECK=FAIL mode=vdso-tls-live-$kind unexpectedly-linked" >&2
+        exit 1
+    fi
+    if ! grep -q 'invalid-shared-tls-segment-layout' \
+        "$work/vdso-tls-live-$kind.stderr"; then
+        echo "MINILD_SEGMENT_CHECK=FAIL mode=vdso-tls-live-$kind missing-diagnostic" >&2
+        sed -n '1,12p' "$work/vdso-tls-live-$kind.stderr" >&2
+        exit 1
+    fi
+done
 
 python3 - "$work" <<'PY'
 import struct
@@ -199,6 +276,51 @@ assert tls[0][5] > 0 and tls[0][6] > tls[0][5], ('TLS .tdata + .tbss', tls[0])
 assert covers(tls[0], one(names, '.tdata.slot')) and covers(tls[0], one(names, '.tbss.slot'))
 print('MINILD_SEGMENT_CHECK=PASS mode=shared PT_DYNAMIC=true PT_TLS=true')
 
+raw, ph, names = inspect('shared-tls-empty-first.so', 3)
+tls = [p for p in ph if p[0] == 7]
+assert len(tls) == 1, ('empty-first TLS segment count', ph)
+anchor = one(names, '.tdata.anchor')
+value = one(names, '.tdata.value')
+assert anchor[5] == 0 and value[5] == 8, ('TLS fixture section sizes', anchor, value)
+assert anchor[3] < value[3], ('empty TLS must precede aligned nonempty TLS', anchor, value)
+assert tls[0][3] == anchor[3], ('PT_TLS must begin at retained empty TLS section', tls[0], anchor)
+rw_loads = [p for p in ph if p[0] == 1 and p[1] == 6]
+assert len(rw_loads) == 1, ('TLS writable LOAD missing', ph)
+# A zero-length section may have sh_offset=0 in the section table, even
+# though its virtual address is inside the mapped TLS template.
+assert tls[0][2] == rw_loads[0][2] + anchor[3] - rw_loads[0][3], (
+    'PT_TLS file base must be derived from writable LOAD', tls[0], rw_loads[0])
+assert tls[0][5] == tls[0][6] == value[3] + value[5] - anchor[3], (
+    'PT_TLS span must include alignment gap', tls[0], anchor, value)
+
+
+def tls_symbols(section_name, str_name):
+    table = one(names, section_name)
+    strings = one(names, str_name)
+    names_blob = raw[strings[4]:strings[4] + strings[5]]
+    records = {}
+    for offset in range(table[4], table[4] + table[5], 24):
+        name, info, _, shndx, address, size = struct.unpack_from('<IBBHQQ', raw, offset)
+        if not name:
+            continue
+        end = names_blob.find(b'\0', name)
+        assert end > name, ('TLS symbol name bounds', section_name, name)
+        records[names_blob[name:end].decode()] = (info, shndx, address, size)
+    return records
+
+
+expected_tls_offsets = {'tls_anchor': 0, 'tls_value': value[3] - anchor[3]}
+for table_name, str_name in (('.symtab', '.strtab'), ('.dynsym', '.dynstr')):
+    records = tls_symbols(table_name, str_name)
+    for name, expected in expected_tls_offsets.items():
+        assert name in records, ('TLS symbol missing', table_name, name)
+        info, shndx, offset, size = records[name]
+        assert info & 0xf == 6 and shndx != 0, ('not a defined STT_TLS', table_name, name)
+        assert offset == expected, ('TLS relative value mismatch', table_name, name,
+                                     offset, expected)
+print('MINILD_SEGMENT_CHECK=PASS mode=shared-tls-empty-first PT_TLS=retained-zero-origin'
+      ' STT_TLS=static+dynamic')
+
 raw, ph, names = inspect('pie.elf', 3)
 loads = [p for p in ph if p[0] == 1]
 phdr = [p for p in ph if p[0] == 6]
@@ -219,6 +341,16 @@ assert ph[1][2] == one(names, '.dynamic')[4] and ph[1][3] == one(names, '.dynami
 assert ph[2][2] == one(names, '.note')[4] and ph[2][3] == one(names, '.note')[3]
 assert ph[3][5] == ph[3][6] == 0, ('empty explicit EH header', ph[3])
 print('MINILD_SEGMENT_CHECK=PASS mode=vdso PHDRS=4 empty_eh=true')
+
+raw, ph, names = inspect('vdso-tls-discard.so', 3)
+assert [p[0] for p in ph] == [1, 2, 4, 0x6474e550], (
+    'discarded TLS must not synthesize PT_TLS', ph)
+assert not any(p[0] == 7 for p in ph), ('unexpected discarded PT_TLS', ph)
+for discarded in ('.tdata.slot', '.tbss.slot', '.data.word', '.tdata', '.tbss'):
+    assert discarded not in names, ('discarded TLS/data leaked', discarded)
+assert len([p for p in ph if p[0] == 1]) == 1
+print('MINILD_SEGMENT_CHECK=PASS mode=vdso-tls-discard PT_TLS=absent')
+print('MINILD_SEGMENT_CHECK=PASS mode=vdso-tls-live-mixed fail_closed=2')
 PY
 
-echo 'MINILD_SEGMENTS=PASS modes=5'
+echo 'MINILD_SEGMENTS=PASS modes=9'

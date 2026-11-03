@@ -1715,9 +1715,10 @@ static bool shared_patch_final_layout_relocations(
     return true;
 }
 
-static bool shared_fill_plt(MiniLdState *state,
-                            const MiniLdLayout *layout,
-                            const MiniLdSharedImage *shared) {
+/* Emit optional dynamic PLT entries and always resolve local CALL pairs. */
+static bool shared_finalize_plt_and_calls(MiniLdState *state,
+                                          const MiniLdLayout *layout,
+                                          const MiniLdSharedImage *shared) {
     MiniLdSection *plt;
     MiniLdSection *gotplt;
     MiniLdSection *rela_plt;
@@ -1728,19 +1729,16 @@ static bool shared_fill_plt(MiniLdState *state,
     int64_t lo;
     size_t i;
 
-    if (shared->plt_count == 0U) {
-        return true;
-    }
-
     plt = &state->work.sections[shared->plt_section];
     gotplt = &state->work.sections[shared->gotplt_section];
     rela_plt = &state->work.sections[shared->rela_plt_section];
     plt_address = layout->section_vaddr[shared->plt_section];
     gotplt_address = layout->section_vaddr[shared->gotplt_section];
 
-    if (plt->size != shared->plt_count * 16U ||
-        gotplt->size != (3U + shared->plt_count) * 8U ||
-        rela_plt->size != shared->plt_count * sizeof(Elf64_Rela)) {
+    if (shared->plt_count != 0U &&
+        (plt->size != shared->plt_count * 16U ||
+         gotplt->size != (3U + shared->plt_count) * 8U ||
+         rela_plt->size != shared->plt_count * sizeof(Elf64_Rela))) {
         fprintf(state->diagnostics,
                 "minic-ld: invalid-shared-plt-size\n");
         return false;
@@ -1756,9 +1754,11 @@ static bool shared_fill_plt(MiniLdState *state,
      *
      * R_RISCV_JUMP_SLOT plus DT_BIND_NOW resolves each slot before first use.
      */
-    memset(plt->data, 0, plt->size);
-    memset(gotplt->data, 0, gotplt->size);
-    memset(rela_plt->data, 0, rela_plt->size);
+    if (shared->plt_count != 0U) {
+        memset(plt->data, 0, plt->size);
+        memset(gotplt->data, 0, gotplt->size);
+        memset(rela_plt->data, 0, rela_plt->size);
+    }
 
     for (i = 0U; i < state->resolver.count; ++i) {
         size_t plt_index = shared->plt_index[i];
@@ -1951,6 +1951,7 @@ typedef struct MiniLdSharedTlsSegment {
 
 static bool shared_tls_segment(const MiniLdState *state,
                                const MiniLdLayout *layout,
+                               const MiniLdOutputPlan *output_plan,
                                MiniLdSharedTlsSegment *tls) {
     uint64_t base = UINT64_MAX;
     uint64_t memory_end = 0U;
@@ -1958,6 +1959,7 @@ static bool shared_tls_segment(const MiniLdState *state,
     uint64_t alignment = 1U;
     size_t i;
     bool have_file = false;
+    bool have_nonempty = false;
 
     memset(tls, 0, sizeof(*tls));
     for (i = 0U; i < state->work.count; ++i) {
@@ -1965,10 +1967,19 @@ static bool shared_tls_segment(const MiniLdState *state,
         uint64_t start;
         uint64_t end;
 
+        /* Final section membership, not the original SHF_TLS bit, decides
+         * whether an input can contribute to PT_TLS.  In particular a
+         * linker-script /DISCARD/ input has already been pruned before
+         * layout and can retain its original flags with size zero. */
         if ((section->flags & (SHF_ALLOC | SHF_TLS)) !=
-            (SHF_ALLOC | SHF_TLS)) {
+                (SHF_ALLOC | SHF_TLS) ||
+            minild_output_shndx(output_plan, i) == 0U) {
             continue;
         }
+        /* Keep surviving empty TLS sections in the base calculation to
+         * agree with the final TLS-symbol view, but do not emit PT_TLS
+         * when every surviving TLS fragment is empty. */
+        have_nonempty |= section->size != 0U;
         start = layout->section_vaddr[i];
         if (section->size > UINT64_MAX - start) {
             return false;
@@ -1995,7 +2006,8 @@ static bool shared_tls_segment(const MiniLdState *state,
         tls->present = true;
     }
 
-    if (!tls->present) {
+    if (!have_nonempty) {
+        tls->present = false;
         return true;
     }
     if (!layout->have_rw || base < layout->rw_vaddr ||
@@ -2019,6 +2031,7 @@ static bool shared_tls_segment(const MiniLdState *state,
 static bool minild_shared_program_plan_build(
     const MiniLdState *state,
     const MiniLdLayout *layout,
+    const MiniLdOutputPlan *output_plan,
     const MiniLdSharedImage *shared,
     MiniLdProgramPlan *plan) {
     MiniLdSharedTlsSegment tls;
@@ -2028,7 +2041,7 @@ static bool minild_shared_program_plan_build(
     Elf64_Phdr *programs;
 
     memset(plan, 0, sizeof(*plan));
-    if (!shared_tls_segment(state, layout, &tls)) {
+    if (!shared_tls_segment(state, layout, output_plan, &tls)) {
         fprintf(state->diagnostics,
                 "minic-ld: invalid-shared-tls-segment-layout\n");
         return false;
@@ -2310,7 +2323,7 @@ static bool shared_write_object(MiniLdState *state,
     FILE *file = NULL;
     bool ok = false;
 
-    if (!minild_shared_program_plan_build(state, layout, shared,
+    if (!minild_shared_program_plan_build(state, layout, output_plan, shared,
                                           &program_plan)) {
         goto done;
     }
@@ -2656,7 +2669,7 @@ int minild_link_shared_elf64_riscv_inputs_options(
         !shared_fill_relocations(&state, &layout, &shared) ||
         !shared_patch_final_layout_relocations(&state, &layout, &shared) ||
         !minild_eh_fill(&state, &layout, &shared) ||
-        !shared_fill_plt(&state, &layout, &shared) ||
+        !shared_finalize_plt_and_calls(&state, &layout, &shared) ||
         !shared_fill_dynamic(&state, &layout, &shared) ||
         !shared_write_object(&state,
                              &layout,

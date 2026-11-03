@@ -141,6 +141,10 @@ SECTIONS {
     *dead.o(.data.dead)
     *(.text.retain)
     *(.text.comdat_dead)
+    *(.got)
+    *(.plt)
+    *(.got.plt)
+    *(.rela.plt)
   }
 }
 PHDRS {
@@ -216,6 +220,17 @@ _, symtab = get_one('.symtab', 2)
 strtab_i, strtab = get_one('.strtab', 3)
 _, rela = get_one('.rela.dyn', 4)
 _, dynamic = get_one('.dynamic', 6)
+if label == 'native':
+    # There are no GOT/PLT users in this fixture. The linker script may
+    # discard their zero-byte synthetic sections without dangling ELF
+    # references or manufacturing nonempty dynamic dependencies.
+    for name in ('.got', '.plt', '.got.plt', '.rela.plt'):
+        if name in by_name:
+            raise SystemExit(f'{label}: discarded empty synthetic {name} emitted')
+    dynamic_tags = [struct.unpack_from('<qQ', payload(dynamic), offset)[0]
+                    for offset in range(0, len(payload(dynamic)), 16)]
+    if 3 in dynamic_tags or 23 in dynamic_tags:
+        raise SystemExit(f'{label}: unused PLT dynamic tag survived')
 if (dynsym[6] != dynstr_i or symtab[6] != strtab_i or
         rela[6] != dynsym_i or dynamic[6] != dynstr_i or
         meta[6] != text_i):

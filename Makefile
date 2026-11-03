@@ -802,6 +802,12 @@ check-minild-shared-discard-inputs: $(MINIAS_BINARY) $(MINILD_BINARY)
 	MINILD="$(abspath $(MINILD_BINARY))" \
 	bash tests/linker/probe-shared-discard-inputs.sh
 
+.PHONY: check-minild-shared-synthetic-discard
+check-minild-shared-synthetic-discard: $(MINIAS_BINARY) $(MINILD_BINARY)
+	MINIAS="$(abspath $(MINIAS_BINARY))" \
+	MINILD="$(abspath $(MINILD_BINARY))" \
+	bash tests/linker/probe-shared-synthetic-discard.sh
+
 .PHONY: check-minild-final-symbol-view
 check-minild-final-symbol-view: $(MINIAS_BINARY) $(MINILD_BINARY)
 	MINIAS="$(abspath $(MINIAS_BINARY))" \
