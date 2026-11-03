@@ -243,8 +243,13 @@ bool minias_section_append_sleb(MiniAs *, int, int64_t);
 /* Inspect the retained expression program, never source text. Only a
  * canonical symbolic difference (with optional absolute addend) qualifies
  * for a linker-visible paired ULEB relocation. */
-bool minias_deferred_symbol_difference(const MiniAsDeferredExpr *,
+bool minias_deferred_symbol_difference(const MiniAs *,const MiniAsDeferredExpr *,
                                        size_t *,size_t *,int64_t *);
+/* Detect link-time motion dependencies in any retained scalar AST, including
+ * dot, repeated anchors and nonlinear arithmetic. Pure affine cancellation
+ * remains static; unsupported moving LEB expressions must fail closed. */
+bool minias_deferred_expr_may_move_at_link(MiniAs *,
+    const MiniAsDeferredExpr *,uint64_t,int,bool *);
 /* Post-materialization relocation synthesis retains the original fragment
  * owner even after the ordinary encoder has committed its bytes. */
 bool minias_add_late_fragment_fixup(MiniAs *,size_t,MiniAsFixupKind,
@@ -252,6 +257,8 @@ bool minias_add_late_fragment_fixup(MiniAs *,size_t,MiniAsFixupKind,
 bool minias_emit_deferred_leb_relocations(MiniAs *);
 /* Shared post-encoding predicate for CFI and ULEB code-distance fields. */
 bool minias_span_has_linker_relaxation(MiniAs *,size_t,size_t,bool *);
+bool minias_offset_span_has_linker_relaxation(MiniAs *,int,uint64_t,
+                                              uint64_t,bool *);
 /* Pre-emission counterpart: conservative final-Section scan over immutable
  * typed instruction sites and linker-relaxable ALIGN Fragments. */
 bool minias_span_may_link_relax(MiniAs *,int,uint64_t,uint64_t,bool *);

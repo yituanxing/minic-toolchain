@@ -748,20 +748,101 @@ typedef struct DeferredDifferenceParts {
     int64_t addend;
 } DeferredDifferenceParts;
 
-static bool deferred_collect_difference(const MiniAsDeferredExpr *tree,
+/* Recognize constant-only scalar subtrees so arithmetic identity wrappers do
+ * not hide an otherwise perfectly representable ELF symbol difference. */
+static bool deferred_constant_subtree(const MiniAs *as,
+                                      const MiniAsDeferredExpr *tree,
+                                      size_t index,int64_t *value) {
+    const DeferredNode *node;
+    int64_t lhs,rhs;
+    MiniAsSymbolView symbol;
+    if(index>=tree->count)return false;
+    node=&tree->nodes[index];
+    switch(node->op) {
+    case DEF_LITERAL:*value=node->value;return true;
+    case DEF_SYMBOL:
+        if(!minias_common_context_symbol_view(as,node->symbol_index,&symbol) ||
+           !symbol.defined || symbol.section!=MINIAS_SECTION_ABS)return false;
+        *value=signed_from_bits(symbol.value);return true;
+    case DEF_NEG:
+        return deferred_constant_subtree(as,tree,node->left,&lhs) &&
+               lhs!=INT64_MIN && (*value=-lhs,true);
+    case DEF_INV:
+        if(!deferred_constant_subtree(as,tree,node->left,&lhs))return false;
+        *value=~lhs;return true;
+    case DEF_LNOT:
+        if(!deferred_constant_subtree(as,tree,node->left,&lhs))return false;
+        *value=lhs==0?1:0;return true;
+    case DEF_BINARY:
+        return deferred_constant_subtree(as,tree,node->left,&lhs) &&
+               deferred_constant_subtree(as,tree,node->right,&rhs) &&
+               evaluate_absolute_binary(node->binary,lhs,rhs,value);
+    default:return false;
+    }
+}
+
+typedef enum DeferredIdentity {
+    DEF_ID_NONE, DEF_ID_ZERO, DEF_ID_LEFT, DEF_ID_RIGHT,
+    DEF_ID_NEG_LEFT, DEF_ID_NEG_RIGHT
+} DeferredIdentity;
+
+/* Identity simplification shared by relocation extraction and link-motion
+ * detection.  A syntax wrapper must never affect whether the same value is
+ * link-relocatable (x/1), link-static (x*0), or genuinely non-linear (x/2). */
+static DeferredIdentity deferred_identity(const MiniAs *as,
+                                          const MiniAsDeferredExpr *tree,
+                                          const DeferredNode *node) {
+    int64_t l=0,r=0;
+    bool left=deferred_constant_subtree(as,tree,node->left,&l);
+    bool right=deferred_constant_subtree(as,tree,node->right,&r);
+    switch(node->binary) {
+    case MINIAS_EXPR_OP_MUL:
+        if((left && l==0) || (right && r==0))return DEF_ID_ZERO;
+        if(left && l==1)return DEF_ID_RIGHT;
+        if(right && r==1)return DEF_ID_LEFT;
+        if(left && l==-1)return DEF_ID_NEG_RIGHT;
+        if(right && r==-1)return DEF_ID_NEG_LEFT;
+        break;
+    case MINIAS_EXPR_OP_DIV:
+        if(right && r==1)return DEF_ID_LEFT;
+        if(right && r==-1)return DEF_ID_NEG_LEFT;
+        break;
+    case MINIAS_EXPR_OP_MOD:
+        if(right && (r==1 || r==-1))return DEF_ID_ZERO;
+        break;
+    case MINIAS_EXPR_OP_AND:
+        if((left && l==0) || (right && r==0))return DEF_ID_ZERO;
+        if(left && l==-1)return DEF_ID_RIGHT;
+        if(right && r==-1)return DEF_ID_LEFT;
+        break;
+    case MINIAS_EXPR_OP_OR:case MINIAS_EXPR_OP_XOR:
+        if(left && l==0)return DEF_ID_RIGHT;
+        if(right && r==0)return DEF_ID_LEFT;
+        break;
+    case MINIAS_EXPR_OP_SHL:case MINIAS_EXPR_OP_SHR:
+        if(right && r==0)return DEF_ID_LEFT;
+        break;
+    default:break;
+    }
+    return DEF_ID_NONE;
+}
+
+static bool deferred_collect_difference(const MiniAs *as,
+                                        const MiniAsDeferredExpr *tree,
                                         size_t index,int sign,
                                         DeferredDifferenceParts *parts) {
     const DeferredNode *node;
     int64_t value;
     if(index>=tree->count || (sign!=1 && sign!=-1))return false;
     node=&tree->nodes[index];
-    switch(node->op) {
-    case DEF_LITERAL:
+    if(deferred_constant_subtree(as,tree,index,&value)) {
         if(sign<0) {
-            if(node->value==INT64_MIN)return false;
-            value=-node->value;
-        }else value=node->value;
+            if(value==INT64_MIN)return false;
+            value=-value;
+        }
         return minias_checked_add_i64(parts->addend,value,&parts->addend);
+    }
+    switch(node->op) {
     case DEF_SYMBOL:
         if(sign>0) {
             if(parts->has_positive)return false;
@@ -775,29 +856,186 @@ static bool deferred_collect_difference(const MiniAsDeferredExpr *tree,
         return true;
     case DEF_BINARY:
         if(node->binary!=MINIAS_EXPR_OP_ADD &&
-           node->binary!=MINIAS_EXPR_OP_SUB)return false;
-        return deferred_collect_difference(tree,node->left,sign,parts) &&
-               deferred_collect_difference(tree,node->right,
+           node->binary!=MINIAS_EXPR_OP_SUB) {
+            switch(deferred_identity(as,tree,node)) {
+            case DEF_ID_ZERO:return true;
+            case DEF_ID_LEFT:
+                return deferred_collect_difference(as,tree,node->left,sign,parts);
+            case DEF_ID_RIGHT:
+                return deferred_collect_difference(as,tree,node->right,sign,parts);
+            case DEF_ID_NEG_LEFT:
+                return deferred_collect_difference(as,tree,node->left,-sign,parts);
+            case DEF_ID_NEG_RIGHT:
+                return deferred_collect_difference(as,tree,node->right,-sign,parts);
+            default:return false;
+            }
+        }
+        return deferred_collect_difference(as,tree,node->left,sign,parts) &&
+               deferred_collect_difference(as,tree,node->right,
                    node->binary==MINIAS_EXPR_OP_ADD?sign:-sign,parts);
     case DEF_NEG:
-        return deferred_collect_difference(tree,node->left,-sign,parts);
+        return deferred_collect_difference(as,tree,node->left,-sign,parts);
     default:
         return false;
     }
 }
 
-bool minias_deferred_symbol_difference(const MiniAsDeferredExpr *tree,
+bool minias_deferred_symbol_difference(const MiniAs *as,
+                                       const MiniAsDeferredExpr *tree,
                                        size_t *positive,size_t *negative,
                                        int64_t *addend) {
     DeferredDifferenceParts parts={0};
-    if(tree==NULL || positive==NULL || negative==NULL || addend==NULL ||
+    if(as==NULL || tree==NULL || positive==NULL || negative==NULL || addend==NULL ||
        tree->count==0U || tree->root>=tree->count ||
-       !deferred_collect_difference(tree,tree->root,1,&parts) ||
+       !deferred_collect_difference(as,tree,tree->root,1,&parts) ||
        !parts.has_positive || !parts.has_negative)return false;
     *positive=parts.positive;
     *negative=parts.negative;
     *addend=parts.addend;
     return true;
+}
+
+typedef struct DeferredMotionAnchor {
+    size_t nonlinear_group;
+    int section;
+    uint64_t offset;
+    int coefficient;
+} DeferredMotionAnchor;
+
+typedef struct DeferredMotionWork {
+    size_t node;
+    int sign;
+    size_t nonlinear_group;
+} DeferredMotionWork;
+
+static int compare_deferred_motion_anchors(const void *lhs,const void *rhs) {
+    const DeferredMotionAnchor *a=lhs,*b=rhs;
+    if(a->nonlinear_group!=b->nonlinear_group)
+        return a->nonlinear_group<b->nonlinear_group?-1:1;
+    if(a->section!=b->section)return a->section<b->section?-1:1;
+    if(a->offset!=b->offset)return a->offset<b->offset?-1:1;
+    return 0;
+}
+
+/* Link-time instruction deletion moves *anchor positions*, not entire ELF
+ * sections uniformly. Inspect every bound symbolic leaf of a retained AST;
+ * linear +/- cancellations at the same position are exact, while arbitrary
+ * operators preserve conservative dependency on their underlying anchors.
+ * A literal expression, or one whose anchors are on the same side of every
+ * emitted RELAX/ALIGN site, needs no linker rewrite at all. */
+bool minias_deferred_expr_may_move_at_link(MiniAs *as,
+    const MiniAsDeferredExpr *tree,uint64_t dot,int dot_section,bool *moves) {
+    DeferredMotionWork *stack=NULL;
+    DeferredMotionAnchor *anchors=NULL;
+    size_t pending=0U,count=0U,i;
+    bool success=false;
+    if(as==NULL || tree==NULL || moves==NULL || tree->count==0U ||
+       tree->count>MINIAS_EXPR_MAX_NODES || tree->root>=tree->count)
+        return false;
+    *moves=false;
+    stack=malloc(tree->count*sizeof(*stack));
+    anchors=malloc(tree->count*sizeof(*anchors));
+    if(stack==NULL || anchors==NULL)goto done;
+    stack[pending++]=(DeferredMotionWork){tree->root,1,0U};
+    while(pending!=0U) {
+        const DeferredMotionWork work=stack[--pending];
+        const DeferredNode *node=&tree->nodes[work.node];
+        MiniAsSymbolView symbol;
+        int section=MINIAS_SECTION_ABS;
+        uint64_t offset=0U;
+        bool visit_children=false;
+        size_t group=work.nonlinear_group;
+        int left_sign=work.sign,right_sign=work.sign;
+        switch(node->op) {
+        case DEF_SYMBOL:
+            if(!minias_common_context_symbol_view(as,node->symbol_index,
+                                                   &symbol) || !symbol.defined)
+                goto done;
+            section=symbol.section;offset=symbol.value;
+            break;
+        case DEF_DOT:
+            section=dot_section;offset=dot;break;
+        case DEF_LITERAL:break;
+        case DEF_NEG:
+            left_sign=-work.sign;visit_children=true;break;
+        case DEF_BINARY:
+            visit_children=true;
+            if(node->binary==MINIAS_EXPR_OP_SUB)right_sign=-work.sign;
+            else if(node->binary!=MINIAS_EXPR_OP_ADD) {
+                const DeferredIdentity identity=deferred_identity(as,tree,node);
+                size_t chosen=tree->count;
+                switch(identity) {
+                case DEF_ID_ZERO:visit_children=false;break;
+                case DEF_ID_LEFT:chosen=node->left;break;
+                case DEF_ID_RIGHT:chosen=node->right;break;
+                case DEF_ID_NEG_LEFT:
+                    chosen=node->left;left_sign=-work.sign;break;
+                case DEF_ID_NEG_RIGHT:
+                    chosen=node->right;right_sign=-work.sign;break;
+                default:break;
+                }
+                if(chosen!=tree->count) {
+                    if(chosen>=tree->count || pending>=tree->count)goto done;
+                    stack[pending++]=(DeferredMotionWork){
+                        chosen,chosen==node->left?left_sign:right_sign,group};
+                    visit_children=false;
+                }else if(identity==DEF_ID_NONE && group==0U)
+                    group=work.node+1U;
+            }
+            break;
+        case DEF_INV:case DEF_LNOT:
+            if(group==0U)group=work.node+1U;
+            visit_children=true;break;
+        default:goto done;
+        }
+        if(section>=0) {
+            if(count>=tree->count)goto done;
+            anchors[count++]=(DeferredMotionAnchor){
+                group,section,offset,work.sign};
+        }
+        if(!visit_children)continue;
+        if(node->op==DEF_BINARY) {
+            if(node->right>=tree->count || pending>=tree->count)goto done;
+            stack[pending++]=(DeferredMotionWork){
+                node->right,right_sign,group};
+        }
+        if(node->left>=tree->count || pending>=tree->count)goto done;
+        stack[pending++]=(DeferredMotionWork){node->left,left_sign,group};
+    }
+    if(count>1U)qsort(anchors,count,sizeof(*anchors),
+                      compare_deferred_motion_anchors);
+    for(i=0U;i<count;) {
+        size_t end=i+1U,j;
+        int coefficient=0;
+        uint64_t previous=anchors[i].offset;
+        bool crosses=false;
+        while(end<count && anchors[end].section==anchors[i].section &&
+              anchors[end].nonlinear_group==anchors[i].nonlinear_group)++end;
+        for(j=i;j<end;) {
+            const uint64_t position=anchors[j].offset;
+            if(previous!=position &&
+               (anchors[i].nonlinear_group!=0U || coefficient!=0)) {
+                if(!minias_offset_span_has_linker_relaxation(
+                    as,anchors[i].section,previous,position,&crosses))goto done;
+                if(crosses) {
+                    *moves=true;
+                    success=true;
+                    goto done;
+                }
+            }
+            while(j<end && anchors[j].offset==position) {
+                coefficient+=anchors[j].coefficient;
+                ++j;
+            }
+            previous=position;
+        }
+        i=end;
+    }
+    success=true;
+done:
+    free(stack);
+    free(anchors);
+    return success;
 }
 
 bool minias_compile_variable_exprs(MiniAs *as,MiniAsStmt *stmt) {

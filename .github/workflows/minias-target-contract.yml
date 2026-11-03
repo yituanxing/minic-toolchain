@@ -255,6 +255,14 @@ jobs:
         run: |
           REQUIRE_ALL_GNU=1 MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
             bash tests/assembler/probe-rv-data-difference-final-link-gnu.sh
+      - name: GNU RV32/RV64 both CFI frames follow final linked CALL PCs
+        run: |
+          REQUIRE_ALL_GNU=1 MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-cfi-both-frames-final-link-relax-gnu.sh
+      - name: RV32 RV64 and LoongArch deferred LEB link-motion expression correctness
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-link-motion-deferred-leb-expression.sh
       - name: TargetSpec to lexical relaxation mode across all four backends
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
@@ -269,6 +277,10 @@ jobs:
         run: |
           REQUIRE_ALL_GNU=1 MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
             bash tests/assembler/probe-loong-scoped-relax-correctness.sh
+      - name: GNU LoongArch final link semantic motion of PCALA data ULEB and both CFI frames
+        run: |
+          REQUIRE_ALL_GNU=1 MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-loong-link-motion-semantics-gnu.sh
       - name: GNU RISC-V and LoongArch DWARF line programs survive linker relaxation
         run: |
           REQUIRE_ALL_GNU=1 MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \

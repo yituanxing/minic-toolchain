@@ -2091,6 +2091,22 @@ static bool la_plan_instruction_relaxation(MiniAsRelaxContext *ctx,
     return true;
 }
 
+/* The same typed LoongArch instruction-site policy drives both the pre-layout
+ * Section summary for branch relocation and Common's final-Section span
+ * oracle for DATA expressions.  Neither consumer guesses ISA mode bits or
+ * reads source mnemonic text.  Only the two address macros produce
+ * R_LARCH_RELAX companions; R_LARCH_ALIGN is a separate generic Fragment. */
+static bool la_site_may_link_relax(unsigned opcode,
+                                   MiniAsTargetSiteState site) {
+    return (site.mode_bits&LA_SITE_RELAX)!=0U &&
+           (opcode==LA_MC_PCREL_PSEUDO || opcode==LA_MC_GOT_PSEUDO);
+}
+
+static bool la_instruction_may_link_relax(const MiniAsInstructionView *stmt) {
+    return stmt!=NULL && stmt->inst!=NULL &&
+           la_site_may_link_relax(stmt->inst->opcode,stmt->site);
+}
+
 /* GNU GAS retains same-section branch fixups if a later PCALA/GOT macro may
  * shrink at link time. Run this forward-looking Target analysis once, after
  * the entire SourceGraph is parsed but before Common solves MCLayout. The
@@ -2125,9 +2141,7 @@ static bool la_prepare_layout(const MiniAsPreLayoutView *view,
              stmt.alignment_linker_relaxable) ||
             (stmt.kind==MINIAS_FRAGMENT_INSTRUCTION &&
              stmt.has_instruction &&
-             (stmt.site.mode_bits&LA_SITE_RELAX)!=0U &&
-             (stmt.instruction_opcode==LA_MC_PCREL_PSEUDO ||
-              stmt.instruction_opcode==LA_MC_GOT_PSEUDO))))
+            la_site_may_link_relax(stmt.instruction_opcode,stmt.site))))
             sections[(size_t)stmt.section]=true;
     }
     free(state->relaxable_sections);
@@ -2688,6 +2702,7 @@ static const MiniAsTargetOps ops={
     .destroy_target_state=la_destroy_target_state,
     .prepare_layout=la_prepare_layout,
     .measure_mcinst=la_measure,.encode=la_encode,
+    .instruction_may_link_relax=la_instruction_may_link_relax,
     .plan_instruction_relaxation=la_plan_instruction_relaxation,
     .plan_code_alignment=la_plan_code_alignment,
     .supports_link_relax_cli=true,

@@ -124,6 +124,16 @@ static bool advance_cfi(MiniAs *as,int sec,size_t from_symbol,
     size_t field;
     if(!minias_common_context_symbol_view(as,from_symbol,&from) ||
        !minias_common_context_symbol_view(as,to_symbol,&to))return false;
+    /* .debug_frame uses the same code PC delta as .eh_frame.  Its FDE
+     * initial location and range already remain linker-relocatable, but
+     * a previously fixed DW_CFA_advance_loc within the FDE would still
+     * point to the pre-relaxation PC. Keep stable debug-frame byte parity
+     * and request an ADD/SUB field only for an actual RELAX/ALIGN span. */
+    if(!eh && as->target->cfi_advance_reloc_mode!=0U) {
+        if(!minias_span_has_linker_relaxation(as,from_symbol,to_symbol,
+                                             &crosses_relaxation))return false;
+        reloc=crosses_relaxation;
+    }
     if(to.value<from.value || (to.value-from.value)%align!=0U)return false;
     delta=(to.value-from.value)/align;
     if(delta==0U)return true;

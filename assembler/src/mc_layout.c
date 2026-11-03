@@ -1141,26 +1141,22 @@ bool minias_span_may_link_relax(MiniAs *as,int section,
  * shrinking; Common checks the final fragment-owned fixup graph and stable
  * anchor values. CFI and ULEB must share this predicate, including source
  * subsections whose serialized order differs from parser encounter order. */
-bool minias_span_has_linker_relaxation(MiniAs *as,size_t from_symbol,
-                                      size_t to_symbol,bool *crosses) {
-    MiniAsSymbolView from_value,to_value;
-    const MiniAsSymbolView *from=&from_value,*to=&to_value;
-    uint64_t begin,end;
+bool minias_offset_span_has_linker_relaxation(MiniAs *as,int section,
+                                              uint64_t first,uint64_t last,
+                                              bool *crosses) {
+    uint64_t begin=first<last?first:last;
+    uint64_t end=first>last?first:last;
     size_t i;
-    const MiniAsFixupSpan fixups=minias_emission_fixups(as);
-    if(as==NULL || crosses==NULL ||
-       !minias_common_context_symbol_view(as,from_symbol,&from_value) ||
-       !minias_common_context_symbol_view(as,to_symbol,&to_value))return false;
+    MiniAsFixupSpan fixups;
+    if(as==NULL || crosses==NULL || section<0 ||
+       (size_t)section>=as->section_count)return false;
     *crosses=false;
-    if(!from->defined || !to->defined || from->section<0 ||
-       from->section!=to->section)return false;
     if(as->target->cfi_linker_relaxation_marker==NULL)return true;
-    begin=from->value<to->value?from->value:to->value;
-    end=from->value>to->value?from->value:to->value;
+    fixups=minias_emission_fixups(as);
     for(i=0U;i<fixups.count;++i) {
         const MiniAsFixup *fixup=&fixups.data[i];
         uint64_t site;
-        if(fixup->section!=from->section ||
+        if(fixup->section!=section ||
            !as->target->cfi_linker_relaxation_marker(fixup->kind))continue;
         if(fixup->origin==MINIAS_FIXUP_ORIGIN_FRAGMENT) {
             const MiniAsStmt *owner;
@@ -1178,6 +1174,19 @@ bool minias_span_has_linker_relaxation(MiniAs *as,size_t from_symbol,
     return true;
 }
 
+bool minias_span_has_linker_relaxation(MiniAs *as,size_t from_symbol,
+                                      size_t to_symbol,bool *crosses) {
+    MiniAsSymbolView from,to;
+    if(as==NULL || crosses==NULL ||
+       !minias_common_context_symbol_view(as,from_symbol,&from) ||
+       !minias_common_context_symbol_view(as,to_symbol,&to))return false;
+    *crosses=false;
+    if(!from.defined || !to.defined || from.section<0 ||
+       from.section!=to.section)return false;
+    return minias_offset_span_has_linker_relaxation(
+        as,from.section,from.value,to.value,crosses);
+}
+
 /* Called after *all* Target instructions have been encoded, because a
  * linker-relaxable MCInst may occur after its `.uleb128 end-start` source
  * directive (or in a section that was parsed later). All operands here are
@@ -1186,6 +1195,38 @@ bool minias_emit_deferred_leb_relocations(MiniAs *as) {
     const unsigned mode=as->target->leb128_reloc_mode;
     bool final_mode_allows_relocations=true;
     size_t i;
+    /* There is no RISC-V or LoongArch psABI relocation that can rewrite a
+     * *signed* LEB128 byte stream after a linker shortens instructions.
+     * Detect the real emitted RELAX/ALIGN fixup span before the final-option
+     * ULEB gate, including a file ending with .option norelax.  This is a
+     * supported assembler expression only while its numeric value is stable;
+     * silently encoding the prelink value would corrupt DWARF at final link. */
+    if(as->target->cfi_linker_relaxation_marker!=NULL) {
+        for(i=0U;i<as->stmt_count;++i) {
+            const MiniAsStmt *stmt=&as->stmts[i];
+            size_t positive,negative;
+            int64_t addend;
+            bool crosses=false;
+            if(stmt->fragment_kind!=MINIAS_FRAGMENT_BYTES ||
+               !stmt->payload.bytes.deferred_size ||
+               stmt->payload.bytes.leb_expr==NULL)
+                continue;
+            if(stmt->payload.bytes.leb_mode==1U &&
+               minias_deferred_symbol_difference(as,stmt->payload.bytes.leb_expr,
+                                                 &positive,&negative,&addend))
+                continue; /* Handled by the paired ULEB relocation below. */
+            if(!minias_deferred_expr_may_move_at_link(
+                as,stmt->payload.bytes.leb_expr,stmt->offset,stmt->section,
+                &crosses))return false;
+            if(crosses) {
+                minias_set_error(as,
+                    "unrepresentable-link-relax-%s-expression:line=%zu",
+                    stmt->payload.bytes.leb_mode==2U?"sleb":"uleb",
+                    stmt->line);
+                return false;
+            }
+        }
+    }
     if(mode==0U)return true;
     if(as->target->leb128_relocations_enabled!=NULL &&
        !as->target->leb128_relocations_enabled(minias_target_abi_view(as)))
@@ -1213,7 +1254,7 @@ bool minias_emit_deferred_leb_relocations(MiniAs *as) {
            stmt->payload.bytes.leb_mode!=1U ||
            !stmt->payload.bytes.deferred_size ||
            stmt->payload.bytes.leb_expr==NULL ||
-           !minias_deferred_symbol_difference(stmt->payload.bytes.leb_expr,
+           !minias_deferred_symbol_difference(as,stmt->payload.bytes.leb_expr,
                                                &pos_id,&neg_id,&addend))
             continue;
         if(!minias_common_context_symbol_view(as,pos_id,&positive_value) ||
