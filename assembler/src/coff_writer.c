@@ -301,7 +301,7 @@ bool minias_write_coff_object(MiniAsCoffObjectView *object,const char *path) {
     CoffStringTable strings={0};
     unsigned char *image=NULL;
     size_t image_size=0U,symbol_table_offset=0U;
-    size_t symbol_records=0U,section_count,symbol_count,fixup_count;
+    size_t coff_symbol_record_count=0U,section_count,symbol_count,fixup_count;
     size_t i,private_suffix=0U;
     bool ok=false;
 
@@ -462,14 +462,14 @@ bool minias_write_coff_object(MiniAsCoffObjectView *object,const char *path) {
             goto done;
         }
 
-    symbol_records=2U*section_count;
+    coff_symbol_record_count=2U*section_count;
     for(i=0U;i<symbol_count;++i) {
-        if(symbol_records>UINT32_MAX-1U-function_aux[i]) {
+        if(coff_symbol_record_count>UINT32_MAX-1U-function_aux[i]) {
             coff_error(object,"coff-symbol-table-overflow");
             goto done;
         }
-        symbol_ordinals[i]=(uint32_t)symbol_records;
-        symbol_records+=1U+function_aux[i];
+        symbol_ordinals[i]=(uint32_t)coff_symbol_record_count;
+        coff_symbol_record_count+=1U+function_aux[i];
     }
     if(section_count>(UINT32_MAX-COFF_FILE_HEADER_SIZE)/COFF_SECTION_HEADER_SIZE) {
         coff_error(object,"coff-header-size-overflow");
@@ -494,8 +494,8 @@ bool minias_write_coff_object(MiniAsCoffObjectView *object,const char *path) {
     }
     if(!coff_align4(&image_size))goto size_overflow;
     symbol_table_offset=image_size;
-    if(symbol_records>UINT32_MAX/COFF_SYMBOL_SIZE ||
-       !coff_advance(&image_size,symbol_records*COFF_SYMBOL_SIZE) ||
+    if(coff_symbol_record_count>UINT32_MAX/COFF_SYMBOL_SIZE ||
+       !coff_advance(&image_size,coff_symbol_record_count*COFF_SYMBOL_SIZE) ||
        !coff_advance(&image_size,strings.size))goto size_overflow;
     if(strings.size>UINT32_MAX)goto size_overflow;
     coff_u32(strings.data,(uint32_t)strings.size);
@@ -507,7 +507,7 @@ bool minias_write_coff_object(MiniAsCoffObjectView *object,const char *path) {
     coff_u16(image,(uint16_t)object->machine);
     coff_u16(image+2U,(uint16_t)section_count);
     coff_u32(image+8U,(uint32_t)symbol_table_offset);
-    coff_u32(image+12U,(uint32_t)symbol_records);
+    coff_u32(image+12U,(uint32_t)coff_symbol_record_count);
     /* Timestamp=0, OptionalHeaderSize=0, Characteristics=0: relocatable. */
 
     for(i=0U;i<section_count;++i) {
@@ -603,7 +603,7 @@ bool minias_write_coff_object(MiniAsCoffObjectView *object,const char *path) {
             }
         }
     }
-    memcpy(image+symbol_table_offset+symbol_records*COFF_SYMBOL_SIZE,
+    memcpy(image+symbol_table_offset+coff_symbol_record_count*COFF_SYMBOL_SIZE,
            strings.data,strings.size);
     ok=minias_object_publish_image(path,image,image_size,
                                    object->error,sizeof(object->error));
