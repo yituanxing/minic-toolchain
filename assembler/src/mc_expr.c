@@ -927,9 +927,6 @@ bool minias_compile_data_mc(MiniAs *as, MiniAsStmt *stmt,
                     out->constant=value;
                     matched=true;
                 }else if(affine_lower_syntax(as,&syntax,&affine) &&
-                         ((width==2U || width==4U || width==8U) ||
-                          (affine.kind!=MINIAS_MC_EXPR_SYMBOL_MINUS_DOT &&
-                           affine.kind!=MINIAS_MC_EXPR_SYMBOL_MINUS_DOT_DIV)) &&
                          (width==1U || width==2U || width==4U || width==8U)) {
                     out->kind=affine.kind;
                     out->divisor=affine.divisor;
@@ -1027,12 +1024,12 @@ static bool emit_symbol_minus_dot(MiniAs *as,
      * Unlike LoongArch ADD/SUB pairs, one semantic fixup is sufficient.
      * A target describes this choice, Common never tests its name. */
     {
-        /* Both supported ELF64 targets directly represent S+A-P at
-         * either 32 or 64 bits. The Target reports whether it supports
-         * the semantic relocation; no architecture-name branching here. */
-        MiniAsFixupKind kind=(width==2U || width==4U)?
+        /* The Target alone decides whether its object ABI can represent
+         * the requested PC-relative width (e.g. x86 PC8/PC16/PC32).
+         * Do not reject short fields before querying that capability. */
+        MiniAsFixupKind kind=(width==1U || width==2U || width==4U)?
             as->target->dot_relative_fixup:MINIAS_FIXUP_PREL64;
-        if((width==2U || width==4U || width==8U) &&
+        if((width==1U || width==2U || width==4U || width==8U) &&
            kind!=MINIAS_FIXUP_NONE &&
            target_supports_fixup(as,kind,width))
             return minias_section_append_zero(as,stmt->section,width) &&

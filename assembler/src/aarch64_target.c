@@ -41,8 +41,10 @@ typedef struct A64ProfileData {
 enum {
     AARCH64_R_ABS64 = 257U,
     AARCH64_R_ABS32 = 258U,
+    AARCH64_R_ABS16 = 259U,
     AARCH64_R_PREL64 = 260U,
     AARCH64_R_PREL32 = 261U,
+    AARCH64_R_PREL16 = 262U,
     AARCH64_R_LD_PREL_LO19 = 273U,
     AARCH64_R_ADR_PREL_LO21 = 274U,
     AARCH64_R_ADR_PREL_PG_HI21 = 275U,
@@ -5550,8 +5552,12 @@ static const struct {
     uint32_t relocation;
     const char *named_spelling; /* NULL: not accepted by .reloc name grammar */
 } aarch64_fixup_forms[] = {
+    {MINIAS_FIXUP_ABS, 2U, AARCH64_R_ABS16, "R_AARCH64_ABS16"},
     {MINIAS_FIXUP_ABS, 4U, AARCH64_R_ABS32, "R_AARCH64_ABS32"},
     {MINIAS_FIXUP_ABS, 8U, AARCH64_R_ABS64, "R_AARCH64_ABS64"},
+    /* Common's PC-relative capability carries the field width separately;
+     * the same semantic PREL family covers ELF16/32/64 data relocations. */
+    {MINIAS_FIXUP_PREL32, 2U, AARCH64_R_PREL16, "R_AARCH64_PREL16"},
     {MINIAS_FIXUP_PREL32, 4U, AARCH64_R_PREL32, "R_AARCH64_PREL32"},
     {MINIAS_FIXUP_PREL64, 8U, AARCH64_R_PREL64, "R_AARCH64_PREL64"},
     {MINIAS_FIXUP_A64_CALL26, 4U, AARCH64_R_CALL26, NULL},

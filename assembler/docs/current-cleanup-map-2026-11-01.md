@@ -1,5 +1,27 @@
 # MiniAS 当前清理与所有权总览（2026-11-01）
 
+> **2026-11-03 COMMON 固定宽度重定位及跨对象 CFI 正确性矩阵
+> （本轮工作树，远端 exact-head 尚待确认）：** 单一
+> `probe-common-relocation-widths-gnu.sh` 在六种实际 ELF profile
+> （AMD64/i386、RV32/RV64、AArch64、LoongArch64）上统一跑
+> 1/2/4/8-byte × `A-B` 跨 Section、`A-.` 跨 Section、`A` 绝对符号
+> 共 72 个场景。**GNU 在对应目标 ABI 接受与拒绝的能力就是判据**：
+> GNU 拒绝时 MiniAS 必须拒绝且无对象，GNU 接受时要求有效 ELF
+> class/machine、归一化语义而非对象文件逐字节相同，并用独立前置
+> GNU 对象通过 `ld -r` 重定位后再次检查。x86 本地两模式
+> **24/24** 场景（14 接受/10 同拒绝）、14 组 `ld -r` PASS，
+> 跨 GNU 工具及 pyelftools 缺失的部分不冒充本地 PASS。
+> Target 专项门禁另外核验 x86 PC8/PC16/ABS8/ABS16 和溢出、
+> RV32/64 ADD8/SUB8 配对、AArch64 ABS16/PREL16 与 ABS8 拒绝；
+> LoongArch 复用原始 Linux `.alternative` ADD8/SUB8/ADD32/SUB32
+> 严格 GNU 证据。`probe-cfi-debug-frame-link-gnu.sh` 保留 x86
+> ELF32/64 真正 GNU `ld -r` 双对象 CIE/FDE 图对照，并增加
+> RV32/RV64/A64/Loong 的同一双对象交叉 GNU 链接验证；新的
+> CI 设置 `REQUIRE_ALL_GNU=1`，缺交叉 GNU 不会自动绿。
+> **本地证据不是远端最终验收**；待整批合并 SHA 后执行新的
+> Target CI，若发现目标与 GNU 不同的合法重定位能力，应定点修正
+> 所属 Target/MC，不通过模糊 ELF 字节比较或跳过来掩盖差异。
+
 > **2026-11-03 Target ISA/ABI→Emission→ObjectWriter 整链收口（本轮
 > 工作树，最终提交 SHA/远端 exact-head 仍待确认）：** `TargetOps.resolve_profile`
 > 将四架构的 `-march/-mabi` 解析成不可变 `MiniAsTargetSpec`；Target

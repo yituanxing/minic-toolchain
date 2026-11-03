@@ -7,6 +7,46 @@ for tool in as ld readelf python3; do command -v "$tool" >/dev/null; done
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
+# The actual CIE/FDE graph matters, not the producer's CIE byte offsets:
+# GNU ld -r concatenates .debug_frame from independent input objects.
+compare_frames() {
+  python3 - "$@" <<'PY'
+import pathlib
+import re
+import sys
+
+label, reference, actual = sys.argv[1:]
+
+def parse(path):
+    cies, fdes, current = [], [], None
+    for line in pathlib.Path(path).read_text().splitlines():
+        cie = re.search(r'^\s*([0-9a-f]{8})\s+[0-9a-f]+\s+[0-9a-f]+\s+CIE\b', line)
+        fde = re.search(r'^\s*([0-9a-f]{8})\s+[0-9a-f]+\s+[0-9a-f]+\s+FDE\s+cie=([0-9a-f]{8})\b', line)
+        if cie:
+            current = dict(addr=cie.group(1), rules=[])
+            cies.append(current)
+        elif fde:
+            current = dict(cie=fde.group(2), rules=[])
+            fdes.append(current)
+        elif current is not None and 'DW_CFA_' in line:
+            rule = line.split('DW_CFA_', 1)[1].strip()
+            if rule != 'nop' and not rule.startswith('advance_loc'):
+                current['rules'].append(rule)
+    addresses = {cie['addr']: i for i, cie in enumerate(cies)}
+    assert len(cies) == 2 and len(fdes) == 4, (label, path, cies, fdes)
+    assert all(fde['cie'] in addresses for fde in fdes), (label, path, fdes)
+    return {'cie_rules': [cie['rules'] for cie in cies],
+            'fde_cies': [addresses[fde['cie']] for fde in fdes],
+            'fde_rules': [fde['rules'] for fde in fdes]}
+
+gnu, mini = parse(reference), parse(actual)
+assert gnu['fde_cies'] == [0, 0, 1, 1], (label, gnu)
+if mini != gnu:
+    raise SystemExit(f'{label} ld -r CIE-link mismatch:\nGNU={gnu}\nMini={mini}')
+print(f'MINIAS_CFI_LINK=PASS {label} GNU_ld_r CIE=2 FDE=4 linked_CIE_refs=exact')
+PY
+}
+
 # Every FDE in .debug_frame needs a relocation for its CIE pointer, even
 # when the CIE begins at offset zero in the original ET_REL.  GNU ld -r may
 # concatenate multiple such sections, shifting later objects' CIE offsets.
@@ -42,41 +82,7 @@ for bits in 32 64; do
   readelf --debug-dump=frames "$work/gg.o" >"$work/gg.frames"
   readelf --debug-dump=frames "$work/gm.o" >"$work/gm.frames"
 
-  python3 - "$bits" "$work/gg.frames" "$work/gm.frames" <<'PY'
-import pathlib
-import re
-import sys
-
-bits, reference, actual = sys.argv[1:]
-
-def parse(path):
-    cies, fdes, current = [], [], None
-    for line in pathlib.Path(path).read_text().splitlines():
-        cie = re.search(r'^\s*([0-9a-f]{8})\s+[0-9a-f]+\s+[0-9a-f]+\s+CIE\b', line)
-        fde = re.search(r'^\s*([0-9a-f]{8})\s+[0-9a-f]+\s+[0-9a-f]+\s+FDE\s+cie=([0-9a-f]{8})\b', line)
-        if cie:
-            current = dict(addr=cie.group(1), rules=[])
-            cies.append(current)
-        elif fde:
-            current = dict(cie=fde.group(2), rules=[])
-            fdes.append(current)
-        elif current is not None and 'DW_CFA_' in line:
-            rule = line.split('DW_CFA_', 1)[1].strip()
-            if rule != 'nop' and not rule.startswith('advance_loc'):
-                current['rules'].append(rule)
-    addresses = {cie['addr']: i for i, cie in enumerate(cies)}
-    assert len(cies) == 2 and len(fdes) == 4, (path, cies, fdes)
-    assert all(fde['cie'] in addresses for fde in fdes), (path, cies, fdes)
-    return {'cie_rules': [cie['rules'] for cie in cies],
-            'fde_cies': [addresses[fde['cie']] for fde in fdes],
-            'fde_rules': [fde['rules'] for fde in fdes]}
-
-gnu, mini = parse(reference), parse(actual)
-assert gnu['fde_cies'] == [0, 0, 1, 1], (bits, gnu)
-if mini != gnu:
-    raise SystemExit(f'ELF{bits} ld -r CIE-link mismatch:\nGNU={gnu}\nMini={mini}')
-print(f'MINIAS_CFI_LINK=PASS ELF{bits} GNU_ld_r CIE=2 FDE=4 linked_CIE_refs=exact')
-PY
+  compare_frames "ELF$bits" "$work/gg.frames" "$work/gm.frames"
 done
 
 # A GNU RISC-V cross linker is not required for this structural contract:
@@ -99,3 +105,58 @@ types = re.findall(r'\b(R_RISCV_\w+)\b', section.group())
 assert types.count('R_RISCV_32') == 2, types
 print('MINIAS_CFI_LINK=PASS RV64 .debug_frame CIE_relocations=R_RISCV_32x2')
 PY
+
+# Four target families plus RV32: a second source object moves the later CIE
+# away from section offset zero. Only real GNU cross linkers can certify the
+# corresponding CIE relocations. Do not count unavailable cross tools as a
+# passing test in the required exact-head CI lane.
+check_cross_frames() {
+  local profile=$1 gas=$2 linker=$3 gasflags=$4 ldflags=$5 miniargs=$6 instruction=$7 cfa=$8
+  local -a gas_args=() ld_args=() mini_args=()
+  read -r -a gas_args <<<"$gasflags"
+  read -r -a ld_args <<<"$ldflags"
+  read -r -a mini_args <<<"$miniargs"
+  if ! command -v "$gas" >/dev/null || ! command -v "$linker" >/dev/null; then
+    if [[ ${REQUIRE_ALL_GNU:-0} == 1 ]]; then
+      echo "MINIAS_CFI_LINK=BLOCKED profile=$profile missing=$gas/$linker" >&2
+      return 2
+    fi
+    echo "MINIAS_CFI_LINK=SKIP profile=$profile cross_gnu_unavailable"
+    return 0
+  fi
+  cat >"$work/$profile.s" <<ASM
+.cfi_sections .debug_frame
+.text
+one:
+.cfi_startproc simple
+.cfi_def_cfa $cfa,16
+$instruction
+.cfi_endproc
+two:
+.cfi_startproc simple
+.cfi_def_cfa $cfa,32
+$instruction
+.cfi_endproc
+ASM
+  "$gas" "${gas_args[@]}" -o "$work/$profile.gnu.o" "$work/$profile.s"
+  "$MINIAS" "${mini_args[@]}" -o "$work/$profile.mini.o" "$work/$profile.s"
+  "$linker" "${ld_args[@]}" -r -o "$work/$profile.gg.o" \
+    "$work/$profile.gnu.o" "$work/$profile.gnu.o"
+  "$linker" "${ld_args[@]}" -r -o "$work/$profile.gm.o" \
+    "$work/$profile.gnu.o" "$work/$profile.mini.o"
+  readelf --debug-dump=frames "$work/$profile.gg.o" >"$work/$profile.gg.frames"
+  readelf --debug-dump=frames "$work/$profile.gm.o" >"$work/$profile.gm.frames"
+  compare_frames "$profile" "$work/$profile.gg.frames" "$work/$profile.gm.frames"
+}
+
+check_cross_frames rv32 riscv64-linux-gnu-as riscv64-linux-gnu-ld \
+  '-march=rv32i -mabi=ilp32' '-m elf32lriscv' \
+  '--target=riscv -march=rv32i -mabi=ilp32' 'addi x0,x0,0' 2
+check_cross_frames rv64 riscv64-linux-gnu-as riscv64-linux-gnu-ld \
+  '-march=rv64i -mabi=lp64' '-m elf64lriscv' \
+  '--target=riscv -march=rv64i -mabi=lp64' 'addi x0,x0,0' 2
+check_cross_frames aarch64 aarch64-linux-gnu-as aarch64-linux-gnu-ld \
+  '-march=armv8-a' '' '--target=aarch64 -march=armv8-a -mabi=lp64' 'nop' 31
+check_cross_frames loong loongarch64-linux-gnu-as loongarch64-linux-gnu-ld \
+  '-mabi=lp64d' '' '--target=loongarch64 -march=loongarch64 -mabi=lp64d' \
+  'addi.d $r0,$r0,0' 3

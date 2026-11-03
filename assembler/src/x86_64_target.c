@@ -4846,12 +4846,18 @@ static uint32_t x64_reloc(MiniAsFixupKind kind,unsigned width) {
     if(kind==MINIAS_FIXUP_ABS) {
         if(width==8U)return 1U;    /* R_X86_64_64 */
         if(width==4U)return 10U;   /* R_X86_64_32 */
+        if(width==2U)return 12U;   /* R_X86_64_16 */
+        if(width==1U)return 14U;   /* R_X86_64_8 */
         return 0U;
     }
     if(kind==MINIAS_FIXUP_X64_ABS64)
         return width==8U?1U:0U; /* R_X86_64_64 */
     if(kind==MINIAS_FIXUP_PREL64)
         return width==8U?24U:0U; /* R_X86_64_PC64 */
+    if(kind==MINIAS_FIXUP_PREL32) {
+        if(width==1U)return 15U;   /* R_X86_64_PC8 */
+        if(width==2U)return 13U;   /* R_X86_64_PC16 */
+    }
     if(width!=4U)return 0U;
     if(kind==MINIAS_FIXUP_X64_PC32 || kind==MINIAS_FIXUP_PREL32)
         return 2U;  /* R_X86_64_PC32 */
@@ -4899,18 +4905,19 @@ static uint32_t x64_reloc_for_object(MiniAsTargetABIView view,
 static bool x64_supports_amd64_fixup(MiniAsFixupKind kind,unsigned width) {
     switch(kind) {
         case MINIAS_FIXUP_ABS:
-            return width==4U || width==8U;
+            return width==1U || width==2U || width==4U || width==8U;
         case MINIAS_FIXUP_X64_ABS64:
         case MINIAS_FIXUP_PREL64:
             return width==8U;
         case MINIAS_FIXUP_X64_PC32:
-        case MINIAS_FIXUP_PREL32:
         case MINIAS_FIXUP_X64_PLT32:
         case MINIAS_FIXUP_X64_ABS32S:
         case MINIAS_FIXUP_X64_GOTPCREL:
         case MINIAS_FIXUP_X64_GOTPCRELX:
         case MINIAS_FIXUP_X64_REX_GOTPCRELX:
             return width==4U;
+        case MINIAS_FIXUP_PREL32:
+            return width==1U || width==2U || width==4U;
         default:
             return false;
     }
@@ -5100,6 +5107,10 @@ static bool x64_named_relocation(MiniAsTargetABIView view,const char *name,
         MiniAsFixupKind kind;
         unsigned width;
     } amd64_forms[]={
+        {"R_X86_64_8",MINIAS_FIXUP_ABS,1U},
+        {"R_X86_64_16",MINIAS_FIXUP_ABS,2U},
+        {"R_X86_64_PC8",MINIAS_FIXUP_PREL32,1U},
+        {"R_X86_64_PC16",MINIAS_FIXUP_PREL32,2U},
         {"R_X86_64_PC32",MINIAS_FIXUP_X64_PC32,4U},
         {"R_X86_64_PLT32",MINIAS_FIXUP_X64_PLT32,4U},
         {"R_X86_64_GOTPCREL",MINIAS_FIXUP_X64_GOTPCREL,4U},

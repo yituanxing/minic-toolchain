@@ -132,6 +132,20 @@ jobs:
         run: |
           MINIAS_REQUIRE_SIX_GNU=1 MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
             bash tests/assembler/probe-target-datalayout-format-boundary.sh
+      - name: Common symbol differences and PC-relative widths across all six GNU ELF profiles
+        run: |
+          REQUIRE_ALL_GNU=1 MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-common-relocation-widths-gnu.sh
+      - name: Per-target narrow relocation psABI contracts with GNU positive and negative cases
+        run: |
+          command -v riscv64-linux-gnu-as
+          command -v aarch64-linux-gnu-as
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-x86-narrow-symbol-relocs-gnu.sh
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-rv-add8-sub8-gnu.sh
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-aarch64-narrow-data-relocations.sh
       - name: GNU x86 ELF32 i386 ISA and object ABI must agree in both directions
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
@@ -237,9 +251,9 @@ jobs:
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
             bash tests/assembler/probe-cfi-i386-gnu.sh
-      - name: GNU ELF32/ELF64 cross-object linked CFI section relocation semantics
+      - name: Six-profile GNU ld -r cross-object CFI CIE and FDE relocation semantics
         run: |
-          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+          REQUIRE_ALL_GNU=1 MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
             bash tests/assembler/probe-cfi-debug-frame-link-gnu.sh
       - name: GNU Common CFI absolute expressions and invalid operands across targets
         run: |

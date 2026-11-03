@@ -147,6 +147,7 @@ const struct MiniAsSymbolRef *minias_riscv_branch_bound_symbol(
 #define MINIAS_R_RISCV_HI20 26U
 #define MINIAS_R_RISCV_LO12_I 27U
 #define MINIAS_R_RISCV_LO12_S 28U
+#define MINIAS_R_RISCV_ADD8 33U
 #define MINIAS_R_RISCV_ADD16 34U
 #define MINIAS_R_RISCV_ADD32 35U
 #define MINIAS_R_RISCV_ADD64 36U
