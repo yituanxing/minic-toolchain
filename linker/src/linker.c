@@ -28,6 +28,222 @@ void minild_cli_enable_gc_sections_v0(void) {
     minild_gc_sections_enabled = true;
 }
 
+/* The ordinary ET_EXEC/ET_DYN path admits independent source sections first.
+ * Archives and COMDAT may change the chosen input set while that graph is
+ * growing, so name coalescing belongs AFTER admission, before symbol layout
+ * or synthetic GOT/PLT/TLS sections are built.  This projection reproduces
+ * the old default-link order, padding and RISC-V attribute aggregation, but
+ * it never changes immutable InputSection/source-symbol coordinates. */
+static bool minild_finish_default_input_merge(MiniLdState *state) {
+    MiniLdSectionWorkspace work = {0};
+    size_t *old_to_new = NULL;
+    size_t *old_base = NULL;
+    const size_t old_count = state->work.count;
+    size_t i;
+    bool ok = false;
+
+    if (!state->defer_default_input_merge || state->relocatable_output ||
+        state->work.placement_count != state->inputs.section_count ||
+        !relocations_require_editable(&state->relocations,
+                                       state->diagnostics, "default-coalesce")) {
+        fprintf(state->diagnostics, "minic-ld: invalid-default-input-phase\n");
+        return false;
+    }
+    old_to_new = malloc((old_count == 0U ? 1U : old_count) *
+                        sizeof(*old_to_new));
+    old_base = malloc((old_count == 0U ? 1U : old_count) *
+                      sizeof(*old_base));
+    if (old_to_new == NULL || old_base == NULL) {
+        fprintf(state->diagnostics, "minic-ld: out-of-memory:default-input-map\n");
+        goto done;
+    }
+    for (i = 0U; i < old_count; ++i) {
+        old_to_new[i] = SIZE_MAX;
+        old_base[i] = 0U;
+    }
+
+    for (i = 0U; i < state->inputs.section_count; ++i) {
+        const MiniLdInputSection *input = &state->inputs.sections[i];
+        const MiniLdInputPlacement *placement = &state->work.placements[i];
+        MiniLdSection *output;
+        size_t index;
+        size_t base;
+        const uint64_t flags = input->flags & ~(uint64_t)SHF_GROUP;
+        const bool distinct = (input->flags & SHF_LINK_ORDER) != 0U;
+
+        /* SHT_GROUP is source-only; its selected members have independent
+         * InputSection IDs, but it has no work bytes or output section. */
+        if (placement->merged_section == SIZE_MAX) {
+            if (input->type != SHT_GROUP) {
+                fprintf(state->diagnostics,
+                        "minic-ld: default-input-unmapped-source\n");
+                goto done;
+            }
+            continue;
+        }
+        if (placement->merged_section >= old_count ||
+            old_to_new[placement->merged_section] != SIZE_MAX ||
+            !work_sections_find_or_add(&work, state->diagnostics,
+                                       input->name, input->type, flags,
+                                       input->align, input->entsize,
+                                       distinct, &index)) {
+            fprintf(state->diagnostics,
+                    "minic-ld: invalid-default-input-owner:%s\n",
+                    input->name);
+            goto done;
+        }
+        output = &work.sections[index];
+        if (input->type == MINILD_SHT_RISCV_ATTRIBUTES) {
+            base = 0U;
+            if (input->size == 0U || input->data == NULL ||
+                !section_append_data(
+                    output,
+                    input->data + (output->size == 0U ? 0U : 1U),
+                    input->size - (output->size == 0U ? 0U : 1U))) {
+                fprintf(state->diagnostics,
+                        "minic-ld: invalid-default-attributes:%s\n",
+                        input->name);
+                goto done;
+            }
+        } else {
+            if (!align_up_size(output->size, input->align, &base) ||
+                !section_append_zero(output, base - output->size) ||
+                (input->type == SHT_NOBITS
+                     ? !section_append_zero(output, input->size)
+                     : !section_append_data(output, input->data,
+                                            input->size))) {
+                fprintf(state->diagnostics,
+                        "minic-ld: cannot-coalesce-input:%s\n",
+                        input->name);
+                goto done;
+            }
+        }
+        old_to_new[placement->merged_section] = index;
+        old_base[placement->merged_section] = base;
+    }
+
+    /* SHF_LINK_ORDER targets are source identities, not name-matches.
+     * Their final work target must be resolved against the coalesced owner. */
+    for (i = 0U; i < state->inputs.section_count; ++i) {
+        const MiniLdInputSection *input = &state->inputs.sections[i];
+        const MiniLdInputPlacement *placement = &state->work.placements[i];
+        const MiniLdInputPlacement *target;
+        MiniLdSection *output;
+
+        if (input->link_order_input == SIZE_MAX) {
+            continue;
+        }
+        if (input->link_order_input >= state->inputs.section_count ||
+            placement->merged_section >= old_count) {
+            fprintf(state->diagnostics,
+                    "minic-ld: invalid-default-link-order\n");
+            goto done;
+        }
+        target = &state->work.placements[input->link_order_input];
+        if (target->merged_section >= old_count ||
+            old_to_new[target->merged_section] == SIZE_MAX) {
+            fprintf(state->diagnostics,
+                    "minic-ld: invalid-default-link-target\n");
+            goto done;
+        }
+        output = &work.sections[old_to_new[placement->merged_section]];
+        output->has_link_order_target = true;
+        output->link_order_target = old_to_new[target->merged_section];
+    }
+
+    /* All range checks happen before mutating canonical symbol IDs or the
+     * relocation list; failure leaves the original admission state owned by
+     * its normal destructor. */
+    for (i = 0U; i < state->resolver.count; ++i) {
+        const MiniLdResolvedSymbol *symbol = &state->resolver.entries[i];
+        const MiniLdInputSymbol *source;
+        size_t old;
+
+        if (symbol->source_symbol == SIZE_MAX) {
+            continue;
+        }
+        if (symbol->source_symbol >= state->inputs.symbol_count) {
+            goto invalid;
+        }
+        source = &state->inputs.symbols[symbol->source_symbol];
+        if (source->input_section == SIZE_MAX) {
+            continue;
+        }
+        if (source->input_section >= state->inputs.section_count) {
+            goto invalid;
+        }
+        old = state->work.placements[source->input_section].merged_section;
+        if (old >= old_count || old_to_new[old] == SIZE_MAX ||
+            source->value > UINT64_MAX - old_base[old]) {
+            goto invalid;
+        }
+    }
+    for (i = 0U; i < state->relocations.count; ++i) {
+        const MiniLdReloc *reloc = &state->relocations.entries[i];
+        size_t old;
+
+        if (reloc->input_section >= state->inputs.section_count) {
+            goto invalid;
+        }
+        old = state->work.placements[reloc->input_section].merged_section;
+        if (old >= old_count || old_to_new[old] == SIZE_MAX ||
+            reloc->input_offset > UINT64_MAX - old_base[old]) {
+            goto invalid;
+        }
+    }
+
+    for (i = 0U; i < state->resolver.count; ++i) {
+        MiniLdResolvedSymbol *symbol = &state->resolver.entries[i];
+        const MiniLdInputSymbol *source;
+        size_t old;
+
+        if (symbol->source_symbol == SIZE_MAX) {
+            continue;
+        }
+        source = &state->inputs.symbols[symbol->source_symbol];
+        if (source->input_section == SIZE_MAX) {
+            continue;
+        }
+        old = state->work.placements[source->input_section].merged_section;
+        symbol->section = (int)old_to_new[old];
+        symbol->value = source->value + old_base[old];
+    }
+    for (i = 0U; i < state->relocations.count; ++i) {
+        MiniLdReloc *reloc = &state->relocations.entries[i];
+        size_t old = state->work.placements[reloc->input_section].merged_section;
+
+        reloc->section = old_to_new[old];
+        reloc->offset = reloc->input_offset + old_base[old];
+    }
+    for (i = 0U; i < state->work.placement_count; ++i) {
+        MiniLdInputPlacement *placement = &state->work.placements[i];
+        if (placement->merged_section != SIZE_MAX) {
+            placement->merged_section = old_to_new[placement->merged_section];
+        }
+    }
+
+    work.placements = state->work.placements;
+    work.placement_count = state->work.placement_count;
+    work.placement_capacity = state->work.placement_capacity;
+    state->work.placements = NULL;
+    state->work.placement_count = 0U;
+    state->work.placement_capacity = 0U;
+    work_sections_destroy(&state->work);
+    state->work = work;
+    memset(&work, 0, sizeof(work));
+    state->defer_default_input_merge = false;
+    ok = true;
+    goto done;
+
+invalid:
+    fprintf(state->diagnostics, "minic-ld: invalid-default-input-map\n");
+done:
+    work_sections_destroy(&work);
+    free(old_base);
+    free(old_to_new);
+    return ok;
+}
+
 /*
  * Re-materialize exact input sections for scripts and GC.  Their bytes, alignment and
  * section ownership were captured before legacy name-based concatenation.
@@ -1184,6 +1400,7 @@ static int minild_link_static_pipeline(
         }
         have_script = true;
     }
+    state.defer_default_input_merge = !garbage_collect && !have_script;
     entry_symbol = options != NULL && options->entry_symbol != NULL
                        ? options->entry_symbol
                        : have_script && script.entry_symbol != NULL
@@ -1196,6 +1413,8 @@ static int minild_link_static_pipeline(
     minild_perf_phase("inputs", &phase_start, &state, diagnostics);
 
     if (!state.have_input ||
+        (state.defer_default_input_merge &&
+         !minild_finish_default_input_merge(&state)) ||
         ((garbage_collect || have_script) &&
          (!minild_materialize_input_sections(&state, have_script) ||
           !minild_restore_input_order(&state))) ||

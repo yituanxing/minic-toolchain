@@ -10,7 +10,7 @@ the existing RISC-V ELF linker, not a new target or linker algorithm.
 | --- | --- | --- |
 | `MiniLdInputGraph` (`linker_input.inc`) | Source files, original ELF sections, original symbols, copied bytes and names, file-to-section ID maps | Append-only input file/section/symbol IDs, including extracted archive members |
 | `MiniLdSectionWorkspace` (`linker_work_sections.inc`) | Merged and materialized work sections, name index, `MiniLdInputPlacement[]` | Work-section indices change during materialization and reorder |
-| `MiniLdSymbolResolver` (`linker_symbol_resolver.inc`) | Canonical resolved symbols and global-name index | Canonical IDs remain stable; winning section/value may change |
+| `MiniLdSymbolResolver` (`linker_symbol.inc`) | Canonical resolved symbols and global-name index | Canonical IDs remain stable; winning section/value may change |
 | Final-symbol / output-section projections | Serialized symbol/section order after planning | Disposable output ELF indexes |
 
 `MiniLdInputPlacement[i]` corresponds to `MiniLdInputGraph.sections[i]`.
@@ -63,3 +63,31 @@ COMDAT signature admission state and some driver/output planning state still
 reside directly in `MiniLdState`. Their next ownership boundaries should be
 decided from the full admission and output dataflows rather than adding
 parallel caches or a transitional copy of the input graph.
+
+## Ordinary final-link deferred coalescing checkpoint
+
+For no-script/no-GC ET_EXEC and no-script ET_DYN, the reader now admits each
+source section as its own initially empty working-section identity. It
+records original input bytes, symbols and relocation offsets without rebasing
+them into a same-named aggregate during archive/COMDAT selection. Once the
+complete input sequence is known, `minild_finish_default_input_merge` builds
+the historical name-coalesced work projection in one pass, preserving input
+order, alignment gaps, RISC-V attribute vendor-record concatenation and
+exact `SHF_LINK_ORDER` targets. It then remaps the *mutable* canonical winner
+symbols and relocation coordinates from their immutable source records.
+
+The late projection replaces its former temporary working-section owner
+atomically after validating every symbol and relocation reference. Original
+InputGraph IDs never change. Shared GOT/PLT/TLS/dynamic metadata preparation
+and static layout occur only after that projection is complete.
+
+`check-minild-default-input-late-coalesce` verifies direct and `-r`-then-final
+ET_EXEC links with repeated `.text.same`/`.data.refs` from separate objects,
+different alignments, one final section per name, and eight checked final
+pointer relocations. Existing native shared/PIE and archive/COMDAT tests also
+exercise the delayed no-script path.
+
+**Boundary:** `-r`, scripted/GC static links and scripted shared links still
+use their earlier eager-merge or materialize-before-select paths. This is a
+real default-link migration, not a claim that all input admission is now
+uniform or that GNU RISC-V/QEMU Linux compatibility has been requalified.

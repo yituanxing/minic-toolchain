@@ -70,9 +70,29 @@ The layout object is consumed by both executable and shared-object output.
 Its name is `MiniLdLayout`, with direct consumers migrated rather than a
 compatibility alias.
 
+## RISC-V final relocation owner checkpoint
+
+The existing relocation semantics are now located at explicit included
+implementation boundaries without changing phase order or output formats:
+
+- `linker_riscv_fixup.inc`: shared RV64 instruction encoders, HI20/LO12 and
+  PC-relative pairing helpers, plus the single checked ADD/SUB/SET arithmetic
+  relocation byte writer used by ET_EXEC and ET_DYN.
+- `linker_static_reloc_apply.inc`: the ET_EXEC final relocation application
+  pass, after static layout/GOT preparation.
+- `linker_shared_reloc_apply.inc`: ET_DYN dynamic relocation construction,
+  link-time arithmetic/final fixups and PLT/CALL finalization, still after
+  shared metadata reservation and layout.
+
+These modules are included by the same C translation unit and deliberately
+retain distinct static and shared relocation policies: preemption, TLS,
+GOT/PLT and dynamic relocation reservation are not target-neutral byte
+patching. `R_RISCV_RELAX` instruction rewriting and paired ULEB final
+relocations are not added by this ownership change.
+
 ## Validation and limits
 
-The strict `MODE=release CFLAGS=-Werror` host gate covers 19 MiniLD targets,
+The strict `MODE=release CFLAGS=-Werror` host gate now covers 25 MiniLD targets,
 including input/work-section ownership, COMDAT/archive admission, RISC-V
 relocation lifecycle, script/GC, output-section ownership, ET_EXEC and
 ET_DYN output.  Its outputs are host ELF fixture checks; Linux/QEMU runtime

@@ -446,6 +446,7 @@ help:
 		"  make check-minild-script-a1 Validate script-directed ET_EXEC symbol semantics" \
 		"  make check-minild-as-section-contract Exercise MiniAS/MiniLD COMDAT, LINK_ORDER and -r ownership" \
 		"  make check-minild-input-section-gc Verify source-section GC with no STT_SECTION or GNU tools" \
+		"  make check-minild-default-input-late-coalesce Verify post-admission ET_EXEC input section merging" \
 		"  make check-fast         Run the fast frontend and C0 gates" \
 		"  make check-token-model  Run the token data-model unit gate" \
 		"  make check-lexer        Run the C0 lexer unit gate" \
@@ -849,6 +850,12 @@ check-minild-input-work-section-boundary: $(MINIAS_BINARY) $(MINILD_BINARY)
 	MINIAS="$(abspath $(MINIAS_BINARY))" \
 	MINILD="$(abspath $(MINILD_BINARY))" \
 	bash tests/linker/probe-input-work-section-boundary.sh
+
+.PHONY: check-minild-default-input-late-coalesce
+check-minild-default-input-late-coalesce: $(MINIAS_BINARY) $(MINILD_BINARY)
+	MINIAS="$(abspath $(MINIAS_BINARY))" \
+	MINILD="$(abspath $(MINILD_BINARY))" \
+	bash tests/linker/probe-default-input-late-coalesce.sh
 
 .PHONY: check-minild-reloc-owner-lifecycle
 check-minild-reloc-owner-lifecycle: $(MINIAS_BINARY) $(MINILD_BINARY)

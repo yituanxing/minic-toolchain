@@ -233,6 +233,11 @@ typedef struct MiniLdState {
     bool have_input;
     bool allow_dso_inputs;
     bool relocatable_output;
+    /* Ordinary final links retain one work identity per source section while
+     * resolving all objects and archives.  Their historical name-based byte
+     * coalescing happens once after admission, before layout.  Script/GC and
+     * -r continue to use their respective established selection policies. */
+    bool defer_default_input_merge;
     FILE *diagnostics;
 } MiniLdState;
 
@@ -241,6 +246,7 @@ typedef struct MiniLdState {
  * inputs independently, so shared scripts retain full source identity. */
 static bool minild_materialize_input_sections(
     MiniLdState *state, bool include_nonalloc);
+static bool minild_finish_default_input_merge(MiniLdState *state);
 static bool minild_restore_input_order(MiniLdState *state);
 static bool minild_shared_prune_script_inputs(MiniLdState *state,
                                               const MiniLdScript *script);
@@ -945,7 +951,8 @@ static bool process_input_data(MiniLdState *state,
         if (!state->relocatable_output) {
             output_flags &= ~(uint64_t)SHF_GROUP;
         }
-        distinct = ((input.flags & SHF_LINK_ORDER) != 0U) ||
+        distinct = state->defer_default_input_merge ||
+                   ((input.flags & SHF_LINK_ORDER) != 0U) ||
                    (state->relocatable_output &&
                     (group_index != SIZE_MAX || link_order_targets[i]));
         if (!find_or_add_section_with_identity(state,
@@ -968,10 +975,10 @@ static bool process_input_data(MiniLdState *state,
                 !minielf_section_data(&elf, i, &section_data,
                                       &section_size) ||
                 !riscv_attributes_valid(section_data, section_size) ||
-                !section_append_data(
+                (!state->defer_default_input_merge && !section_append_data(
                     output,
                     section_data + (output->size == 0U ? 0U : 1U),
-                    section_size - (output->size == 0U ? 0U : 1U))) {
+                    section_size - (output->size == 0U ? 0U : 1U)))) {
                 fprintf(state->diagnostics,
                         "minic-ld: invalid-riscv-attributes:%s\n", path);
                 goto done;
@@ -990,25 +997,31 @@ static bool process_input_data(MiniLdState *state,
             section_map[i].mapped = true;
             continue;
         }
-        if (!align_up_size(output->size, alignment, &base) ||
-            !section_append_zero(output, base - output->size)) {
+        if ((!state->defer_default_input_merge &&
+             (!align_up_size(output->size, alignment, &base) ||
+              !section_append_zero(output, base - output->size)))) {
             fprintf(state->diagnostics,
                     "minic-ld: cannot-align-section:%s\n",
                     name);
             goto done;
+        }
+        if (state->defer_default_input_merge) {
+            base = 0U;
         }
         if (input.size > SIZE_MAX) {
             fprintf(state->diagnostics, "minic-ld: section-too-large:%s\n", name);
             goto done;
         }
         if (input.type == SHT_NOBITS) {
-            if (!section_append_zero(output, (size_t)input.size)) {
+            if (!state->defer_default_input_merge &&
+                !section_append_zero(output, (size_t)input.size)) {
                 fprintf(state->diagnostics, "minic-ld: section-overflow:%s\n", name);
                 goto done;
             }
         } else {
             if (!minielf_section_data(&elf, i, &section_data, &section_size) ||
-                !section_append_data(output, section_data, section_size)) {
+                (!state->defer_default_input_merge &&
+                 !section_append_data(output, section_data, section_size))) {
                 fprintf(state->diagnostics, "minic-ld: invalid-section-data:%s\n", name);
                 goto done;
             }
