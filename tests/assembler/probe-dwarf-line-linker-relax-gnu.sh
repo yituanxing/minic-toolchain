@@ -30,7 +30,9 @@ make_source() {
         '    call external_line_target' '.loc 1 11 0' \
         '    addi a0,a0,0' '.loc 1 12 0'
       printf '%s\n' '    addi a2,a2,0'
-      printf '    .space %s\n' "$((gap - 4))"
+      if ((gap > 4)); then
+        printf '    .space %s\n' "$((gap - 4))"
+      fi
       printf '%s\n' '.loc 1 13 0' '    addi a1,a1,0'
     } >"$out"
   else
@@ -46,7 +48,9 @@ make_source() {
         '    la.local $a0,line_end' '.loc 1 11 0' \
         '    addi.d $a1,$a1,0' '.loc 1 12 0'
       printf '%s\n' '    addi.d $a3,$a3,0'
-      printf '    .space %s\n' "$((gap - 4))"
+      if ((gap > 4)); then
+        printf '    .space %s\n' "$((gap - 4))"
+      fi
       printf '%s\n' '.loc 1 13 0' 'line_end:' '    addi.d $a2,$a2,0'
     } >"$out"
   fi
@@ -72,8 +76,11 @@ assemble_gnu() {
             -o "$object" "$source" ;;
     rv64) "$rv_as" --gdwarf-4 -march=rv64i -mabi=lp64 \
             -o "$object" "$source" ;;
-    loong) "$loong_as" --gdwarf-4 -mabi=lp64d "-m$mode" \
-            -o "$object" "$source" ;;
+    loong)
+      local relax_flag=-mrelax
+      if [[ $mode == norelax ]]; then relax_flag=-mno-relax; fi
+      "$loong_as" --gdwarf-4 -mabi=lp64d "$relax_flag" \
+          -o "$object" "$source" ;;
   esac
 }
 
