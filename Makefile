@@ -1921,6 +1921,14 @@ check-inline-specialize-common:
 
 check-fast: check-inline-specialize-common
 
+.PHONY: check-mc058-specialization-correctness
+check-mc058-specialization-correctness: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" \
+		HOST_CC="$(CC)" \
+		bash tests/compiler/c0/probe-mc058-specialization-correctness.sh
+
+check-fast: check-mc058-specialization-correctness
+
 .PHONY: check-loongarch64-linux-va-fixed-overflow
 check-loongarch64-linux-va-fixed-overflow: $(MINIC_CC_BINARY)
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" \

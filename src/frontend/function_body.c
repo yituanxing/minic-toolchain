@@ -70,6 +70,89 @@ MinicBlockId minic_c0_function_body_root_block(const MinicFunctionBodyView *view
     return function != NULL && function->is_defined ? function->body_block : MINIC_BLOCK_INVALID;
 }
 
+/* A parameter's entry specialization facts belong to the parameter object,
+ * not to every later value read from its LocalId. The Program retains source
+ * expressions after clones reuse FunctionBodies; scan every possible source
+ * write/escape only once and key the result by canonical source LocalId.
+ * This deliberately treats even an unreachable write as a kill: no CFG proof
+ * is needed for an AST-time speculative specialization. */
+static MinicLocalId stable_parameter_direct_local(
+    const MinicC0Program *program, MinicExpressionId expression_id) {
+    const MinicExpression *expression =
+        minic_c0_program_expression(program, expression_id);
+    return expression != NULL && expression->kind == MINIC_EXPRESSION_LOCAL
+        ? expression->value.local_id : MINIC_LOCAL_INVALID;
+}
+
+bool minic_c0_program_stable_parameter_locals(
+    const MinicC0Program *program, bool *stable, size_t stable_count) {
+    size_t index;
+    if (program == NULL || stable_count != program->local_count ||
+        (stable_count != 0U && (stable == NULL || program->locals == NULL)) ||
+        (program->function_count != 0U && program->functions == NULL) ||
+        (program->statement_count != 0U && program->statements == NULL) ||
+        (program->expression_count != 0U && program->expressions == NULL) ||
+        (program->inline_asm_count != 0U && program->inline_asms == NULL))
+        return false;
+    if (stable_count != 0U) (void)memset(stable, 0, stable_count * sizeof(*stable));
+
+    for (index = 0U; index < program->function_count; ++index) {
+        const MinicFunction *function = &program->functions[index];
+        size_t parameter;
+        if (!function->is_defined) continue;
+        if (function->local_begin > stable_count ||
+            function->parameter_count > stable_count - function->local_begin ||
+            function->parameter_count > function->local_count) return false;
+        for (parameter = 0U; parameter < function->parameter_count; ++parameter) {
+            MinicLocalId local_id = function->local_begin + parameter;
+            /* A volatile parameter is an observable memory read, not an
+             * immutable substituted entry value (even without source writes). */
+            stable[local_id] =
+                !minic_type_is_volatile(program->locals[local_id].type);
+        }
+    }
+
+    for (index = 0U; index < program->statement_count; ++index) {
+        const MinicStatement *statement = &program->statements[index];
+        MinicLocalId local;
+        if (statement->kind != MINIC_STATEMENT_ASSIGN &&
+            statement->kind != MINIC_STATEMENT_RECORD_COPY &&
+            statement->kind != MINIC_STATEMENT_RECORD_INITIALIZE &&
+            statement->kind != MINIC_STATEMENT_XOR_ASSIGN) continue;
+        local = stable_parameter_direct_local(program, statement->target_expression);
+        if (local < stable_count) stable[local] = false;
+    }
+    for (index = 0U; index < program->expression_count; ++index) {
+        const MinicExpression *expression = &program->expressions[index];
+        MinicLocalId local = MINIC_LOCAL_INVALID;
+        if (expression->kind == MINIC_EXPRESSION_ADDRESS_OF) {
+            local = stable_parameter_direct_local(program, expression->value.unary.operand);
+        } else if (expression->kind == MINIC_EXPRESSION_ASSIGNMENT ||
+                   expression->kind == MINIC_EXPRESSION_COMPOUND_ASSIGNMENT) {
+            local = stable_parameter_direct_local(program, expression->value.binary.left);
+        } else if (expression->kind == MINIC_EXPRESSION_UNARY &&
+                   (expression->value.unary.operator_kind == MINIC_UNARY_PRE_INCREMENT ||
+                    expression->value.unary.operator_kind == MINIC_UNARY_PRE_DECREMENT ||
+                    expression->value.unary.operator_kind == MINIC_UNARY_POST_INCREMENT ||
+                    expression->value.unary.operator_kind == MINIC_UNARY_POST_DECREMENT)) {
+            local = stable_parameter_direct_local(program, expression->value.unary.operand);
+        }
+        if (local < stable_count) stable[local] = false;
+    }
+    for (index = 0U; index < program->inline_asm_count; ++index) {
+        const MinicInlineAsm *inline_asm = &program->inline_asms[index];
+        size_t output;
+        if (inline_asm->output_count != 0U && inline_asm->outputs == NULL)
+            return false;
+        for (output = 0U; output < inline_asm->output_count; ++output) {
+            MinicLocalId local = stable_parameter_direct_local(
+                program, inline_asm->outputs[output].expression);
+            if (local < stable_count) stable[local] = false;
+        }
+    }
+    return true;
+}
+
 static bool visit_read_expression_id(MinicExpressionId *expression_id, void *opaque_context) {
     MinicExpressionIdReadContext *context;
 

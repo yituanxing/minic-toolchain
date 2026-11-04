@@ -1,4 +1,5 @@
 #include "compiler/c_lower/core_lower_asm_internal.h"
+#include "compiler/c_lower/local_facts.h"
 
 #include "frontend/const_eval.h"
 #include "frontend/expression_semantics.h"
@@ -232,6 +233,25 @@ static bool core_inline_asm_parameter_index(
            *parameter_index < MINIC_MAX_FUNCTION_PARAMETERS;
 }
 
+/* An immutable clone entrance fact is not an immutable value of a mutable
+ * C parameter object. Core local facts track writes, escape and CFG merges;
+ * consult that current state before substituting a parameter into a GNU `i`
+ * operand. The same check guards numeric, symbolic-address and legacy-name
+ * fallback paths, including inline asm after `p = another_object`. */
+static bool core_inline_asm_parameter_fact_stable(
+    const MinicCoreLowerContext *context, MinicLocalId local_id) {
+    size_t local_index;
+    const MinicCoreLocalIntegerConstant *fact;
+    const MinicLocal *local;
+    if (!minic_core_local_fact_index(context, local_id, &local_index))
+        return false;
+    local = minic_c0_program_local(context->body->program, local_id);
+    if (local == NULL || minic_type_is_volatile(local->type))
+        return false;
+    fact = &context->local_integer_constants[local_index];
+    return !fact->escaped && !fact->specialization_modified;
+}
+
 static bool core_inline_asm_specialized_integer(
     const MinicCoreLowerContext *context,
     MinicExpressionId expression_id,
@@ -326,6 +346,8 @@ static bool core_inline_asm_specialized_integer(
         MinicConstValue specialized;
         if (!core_inline_asm_parameter_index(
                 context, expression->value.local_id, &parameter_index) ||
+            !core_inline_asm_parameter_fact_stable(
+                context, expression->value.local_id) ||
             !function->specialization_integer_known[parameter_index]) {
             return false;
         }
@@ -336,6 +358,42 @@ static bool core_inline_asm_specialized_integer(
             context->body->program, context->target, &specialized, value);
     }
     return false;
+}
+
+/* Symbolic GNU `i` operands carry ELF symbol + BYTE addend, whereas C
+ * pointer arithmetic carries a count of pointee elements. Keep the signed
+ * scale and add operations checked before formatting any assembler text.
+ * In particular, negating INT64_MIN or multiplying it by a stride greater
+ * than one would otherwise overflow a host signed integer. */
+static bool core_inline_asm_scale_symbolic_offset(
+    int64_t count, size_t stride, bool subtract, int64_t *byte_offset) {
+    int64_t scaled;
+    if (byte_offset == NULL || stride > (size_t)INT64_MAX)
+        return false;
+    if (stride == 0U) {
+        scaled = 0;
+    } else {
+        const int64_t size = (int64_t)stride;
+        if (count > 0 && count > INT64_MAX / size) return false;
+        if (count < 0 && count < INT64_MIN / size) return false;
+        scaled = count * size;
+    }
+    if (subtract) {
+        if (scaled == INT64_MIN) return false;
+        scaled = -scaled;
+    }
+    *byte_offset = scaled;
+    return true;
+}
+
+static bool core_inline_asm_add_symbolic_offset(
+    int64_t base, int64_t delta, int64_t *result) {
+    if (result == NULL ||
+        (delta > 0 && base > INT64_MAX - delta) ||
+        (delta < 0 && base < INT64_MIN - delta))
+        return false;
+    *result = base + delta;
+    return true;
 }
 
 static bool core_inline_asm_symbolic_address_depth(
@@ -479,27 +537,23 @@ static bool core_inline_asm_symbolic_lvalue_address(
                 element_type,
                 &element_size,
                 &element_alignment) ||
-            /* A GNU zero-sized element has no address stride. Do not feed
-             * that size to the signed overflow division below; an inline
-             * relocation cannot assign meaningful offsets to its elements. */
-            element_size == 0U ||
-            element_size > (size_t)INT64_MAX ||
             !core_inline_asm_specialized_integer(
                 context, expression->value.subscript.index, &index, depth + 1U)) {
             return false;
         }
-        if (index != 0 &&
-            ((index > 0 && index > INT64_MAX / (int64_t)element_size) ||
-             (index < 0 && index < INT64_MIN / (int64_t)element_size))) {
-            return false;
-        }
-        scaled = index * (int64_t)element_size;
-        if ((scaled > 0 && base_addend > INT64_MAX - scaled) ||
-            (scaled < 0 && base_addend < INT64_MIN - scaled)) {
-            return false;
-        }
-        *addend = base_addend + scaled;
-        return true;
+        /* An array-to-pointer decay may be represented by &base[0]. For
+         * GNU complete zero-sized elements, its index-zero address is the
+         * base symbol even though the element size is zero. An explicitly
+         * indexed &base[n] with n!=0 remains unsupported (the existing
+         * zero-stride immediate fail-closed contract), while later pointer
+         * arithmetic on the decayed pointer can use the zero-byte stride. */
+        if (element_size == 0U)
+            return index == 0 &&
+                   core_inline_asm_add_symbolic_offset(base_addend, 0, addend);
+        return core_inline_asm_scale_symbolic_offset(
+                   index, element_size, false, &scaled) &&
+               core_inline_asm_add_symbolic_offset(
+                   base_addend, scaled, addend);
     }
     return false;
 }
@@ -572,6 +626,8 @@ static bool core_inline_asm_symbolic_address_depth(
         MinicExpressionId specialized_expression;
         if (!core_inline_asm_parameter_index(
                 context, expression->value.local_id, &parameter_index) ||
+            !core_inline_asm_parameter_fact_stable(
+                context, expression->value.local_id) ||
             !context->source_function->specialization_symbolic_known[parameter_index]) {
             return false;
         }
@@ -595,34 +651,83 @@ static bool core_inline_asm_symbolic_address_depth(
     if (expression->kind == MINIC_EXPRESSION_BINARY &&
         (expression->value.binary.operator_kind == MINIC_BINARY_ADD ||
          expression->value.binary.operator_kind == MINIC_BINARY_SUBTRACT)) {
-        int64_t integer;
-        int64_t base_addend;
-        if (core_inline_asm_symbolic_address_depth(
-                context,
-                expression->value.binary.left,
-                symbol,
-                &base_addend,
-                depth + 1U) &&
-            core_inline_asm_specialized_integer(
-                context,
-                expression->value.binary.right,
-                &integer,
-                depth + 1U)) {
-            if (expression->value.binary.operator_kind == MINIC_BINARY_SUBTRACT) {
-                if (integer == INT64_MIN) {
-                    return false;
-                }
-                integer = -integer;
-            }
-            if ((integer > 0 && base_addend > INT64_MAX - integer) ||
-                (integer < 0 && base_addend < INT64_MIN - integer)) {
+        const MinicExpression *left = minic_c0_program_expression(
+            program, expression->value.binary.left);
+        const MinicExpression *right = minic_c0_program_expression(
+            program, expression->value.binary.right);
+        const MinicExpression *pointer_operand;
+        MinicExpressionId pointer_id;
+        MinicExpressionId index_id;
+        int64_t index, base_addend, byte_delta;
+        size_t stride = 1U;
+        bool subtract = expression->value.binary.operator_kind ==
+            MINIC_BINARY_SUBTRACT;
+
+        if (left == NULL || right == NULL) return false;
+        if (minic_type_is_pointer(expression->type)) {
+            /* Match the ordinary Core POINTER_OFFSET operand selection:
+             * `p+n`, `n+p`, `p-n` use the type of the pointer operand,
+             * including explicit (char*) casts that change the stride. */
+            if (minic_type_is_pointer(left->type) &&
+                minic_type_is_integer(right->type)) {
+                pointer_operand = left;
+                pointer_id = expression->value.binary.left;
+                index_id = expression->value.binary.right;
+            } else if (!subtract && minic_type_is_integer(left->type) &&
+                       minic_type_is_pointer(right->type)) {
+                pointer_operand = right;
+                pointer_id = expression->value.binary.right;
+                index_id = expression->value.binary.left;
+            } else {
                 return false;
             }
-            *addend = base_addend + integer;
-            return true;
+            if (!minic_c0_pointer_arithmetic_element_size(
+                    program, context->target, pointer_operand->type, &stride))
+                return false;
+        } else if (minic_type_is_integer(expression->type)) {
+            /* A pointer explicitly cast to an integer then incremented
+             * is byte arithmetic, not C pointer arithmetic. Preserve the
+             * preexisting integer relocation extension at stride one. */
+            pointer_id = expression->value.binary.left;
+            index_id = expression->value.binary.right;
+        } else {
+            return false;
         }
+        if (core_inline_asm_symbolic_address_depth(
+                context, pointer_id, symbol, &base_addend, depth + 1U) &&
+            core_inline_asm_specialized_integer(
+                context, index_id, &index, depth + 1U) &&
+            core_inline_asm_scale_symbolic_offset(
+                index, stride, subtract, &byte_delta) &&
+            core_inline_asm_add_symbolic_offset(
+                base_addend, byte_delta, addend))
+            return true;
+
+        /* Integer relocation addition is commutative too. Its operand
+         * scale is one byte; pointer-result cases are handled above. */
+        if (!subtract && minic_type_is_integer(expression->type) &&
+            core_inline_asm_specialized_integer(
+                context, expression->value.binary.left, &index, depth + 1U) &&
+            core_inline_asm_symbolic_address_depth(
+                context, expression->value.binary.right, symbol,
+                &base_addend, depth + 1U) &&
+            core_inline_asm_add_symbolic_offset(base_addend, index, addend))
+            return true;
     }
     return false;
+}
+
+/* The AST specialization planner and the late Core call selector must agree
+ * on a canonical symbolic address: emitted ELF symbol identity plus signed
+ * BYTE offset. Keep this query independent of template formatting, which is
+ * a separate final GNU-asm consumer of the same fact. */
+bool core_inline_asm_symbolic_address_fact(
+    const MinicCoreLowerContext *context,
+    MinicExpressionId expression_id,
+    const char **symbol,
+    int64_t *byte_addend) {
+    return core_inline_asm_symbolic_address_depth(
+        context, expression_id, symbol, byte_addend, 0U);
 }
 
 static bool core_inline_asm_specialized_symbolic_text(
@@ -637,8 +742,8 @@ static bool core_inline_asm_specialized_symbolic_text(
     int written;
 
     if (buffer == NULL || capacity == 0U || text_out == NULL || length_out == NULL ||
-        !core_inline_asm_symbolic_address_depth(
-            context, expression_id, &symbol, &addend, 0U)) {
+        !core_inline_asm_symbolic_address_fact(
+            context, expression_id, &symbol, &addend)) {
         return false;
     }
     if (addend == 0) {
@@ -690,6 +795,8 @@ static bool core_inline_asm_local_integer_fact_depth(
             return false;
         }
         fact = &context->local_integer_constants[local_index];
+        /* This is a LIVE local fact, not the immutable incoming clone key.
+         * A reassignment to a newly proven constant remains admissible. */
         if (!fact->known || fact->escaped) {
             return false;
         }
@@ -774,6 +881,7 @@ static const char *core_inline_asm_specialized_symbolic_name_depth(
     parameter_index = local_id - source->local_begin;
     if (parameter_index >= source->parameter_count ||
         parameter_index >= MINIC_MAX_FUNCTION_PARAMETERS ||
+        !core_inline_asm_parameter_fact_stable(context, local_id) ||
         !specialized->specialization_symbolic_known[parameter_index] ||
         specialized->specialization_symbolic_expression[parameter_index] ==
             MINIC_EXPRESSION_INVALID) {

@@ -68,6 +68,15 @@ bool core_inline_asm_immediate_text(
     const char **text_out,
     size_t *length_out);
 
+/* Canonical GNU symbolic immediate, independent of how many AST wrappers or
+ * pointer-arithmetic steps produced it. The displacement is in bytes, not C
+ * pointer elements; callers compare assembler symbol + displacement together. */
+bool core_inline_asm_symbolic_address_fact(
+    const MinicCoreLowerContext *context,
+    MinicExpressionId expression_id,
+    const char **symbol,
+    int64_t *byte_addend);
+
 bool core_inline_asm_single_label_goto_supported(
     const MinicCoreLowerContext *context, const MinicInlineAsm *source);
 

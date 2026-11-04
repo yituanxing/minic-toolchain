@@ -50,6 +50,7 @@ static bool core_cfg_specialized_function_symbol(
         const MinicFunction *source;
         MinicLocalId local_id;
         size_t parameter_index;
+        size_t local_fact_index;
 
         if (!specialized->is_integer_specialization ||
             specialized->specialization_source >= program->function_count) {
@@ -68,7 +69,11 @@ static bool core_cfg_specialized_function_symbol(
             parameter_index >= MINIC_MAX_FUNCTION_PARAMETERS ||
             !specialized->specialization_symbolic_known[parameter_index] ||
             specialized->specialization_symbolic_expression[parameter_index] ==
-                MINIC_EXPRESSION_INVALID) {
+                MINIC_EXPRESSION_INVALID ||
+            !minic_core_local_fact_index(context, local_id, &local_fact_index) ||
+            context->local_integer_constants[local_fact_index].specialization_modified ||
+            context->local_integer_constants[local_fact_index].escaped ||
+            minic_type_is_volatile(program->locals[local_id].type)) {
             return false;
         }
         return core_cfg_specialized_function_symbol(
@@ -584,11 +589,22 @@ bool minic_core_lower_boolean_range_expression(
             context->source_function->specialization_source];
         MinicLocalId local_id = expression->value.local_id;
         size_t parameter_index;
+        size_t local_fact_index;
 
         if (local_id < source->local_begin) {
             return false;
         }
         parameter_index = local_id - source->local_begin;
+        /* The entry {0,1} fact is a property of a parameter's incoming
+         * value, not of the mutable local throughout its CFG. A write or
+         * address escape invalidates it even when this clone has no exact
+         * integer specialization (the fact table tracks those kills too). */
+        if (!minic_core_local_fact_index(context, local_id, &local_fact_index) ||
+            context->local_integer_constants[local_fact_index].specialization_modified ||
+            context->local_integer_constants[local_fact_index].escaped ||
+            minic_type_is_volatile(
+                context->body->program->locals[local_id].type))
+            return false;
         return parameter_index < source->parameter_count &&
                parameter_index < MINIC_MAX_FUNCTION_PARAMETERS &&
                context->source_function->specialization_boolean_range_known[

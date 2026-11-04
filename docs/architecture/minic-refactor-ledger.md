@@ -2106,3 +2106,69 @@ GNU `i` operands; the Core asm symbolic reducer currently emits an unscaled
 Next batch must unify pointer-stride and transitive symbolic fact handling
 across the Core reducer, AST specialization and exact Core callsite selector,
 with both commuted addition and subtraction checked against DataLayout.
+
+## IR-P40 — MC-058 symbolic byte offsets and live specialization facts (2026-11-04)
+
+**Baseline:** P39 PR #674 `4222b2c`. This is a correctness batch grounded in
+actual GCC/MiniC counterexamples, not an ISA-support expansion or an unrelated
+architecture redesign. It closes both the symbolic address chain **and** the
+parameter-fact liveness chain across AST, Core call selection and GNU asm.
+
+- **Byte-accurate symbolic relocations.** GNU `i` text now derives a signed
+  byte addend from the *pointer operand's* C pointee stride, using the same
+  language-semantic element-size query as ordinary Core `POINTER_OFFSET`.
+  Handle `p+n`, `n+p`, `p-n`, nested arithmetic, explicit casts that alter
+  stride, zero-size GNU complete-object stride and integer-cast byte addition.
+  Check signed scale, negate and addend overflow; preserve the earlier
+  conservative rejection of invalid nonzero zero-size indexed addresses.
+  Expose the normalizer as a Core `symbol name + byte addend` fact query.
+- **Complete symbolic transitive closure.** The AST Symbolic pass can close
+  pointer parameters inside constant pointer arithmetic with the original
+  parameter pointer type retained, including two-hop nesting. Structurally
+  reuse synthesized expressions and never rewrite a source-FunctionBody CALL
+  on behalf of one clone. The late Core selector compares normalized symbol
+  and byte addend, not incidental AST ExpressionId, and it revalidates the
+  exact active caller. Integer/Symbolic/Boolean selectors cannot choose a
+  candidate carrying additional unproved facts from a later selector.
+- **No stale ingress facts after mutation.** One linear Program-wide
+  source-LocalId stability bitmap rejects speculative reuse of parameter
+  facts after assignments, compound assignments, ++/--, taking an address,
+  GNU asm output or top-level `volatile`. Integer, Symbolic and Boolean AST
+  passes consume this source fact, including initial volatile formal checks.
+  Core local CFG facts now record writes/escapes for *all* specialization
+  families, rather than only exact integer constants. The Boolean range,
+  function-pointer symbolic identity, late Core selectors, GNU asm numeric/
+  symbolic/name fallbacks and loop mutation barrier all honor live state.
+  A newly assigned, genuinely known constant remains usable; a stale entry
+  constant or pointer symbol does not.
+
+**Real failures before P40:** `int key_slots[4] + 1` emitted an unsafe +1
+instead of +4 relocation; transitive `mid(key) → leaf(key+1)` failed to
+resolve GNU `i`; Boolean `mid(int x){x=2;return leaf(x);}` with incoming
+`(_Bool)z` returned the wrong native value; reassigned pointer parameters
+still emitted the previous global symbol; an overwritten integer parameter
+could incorrectly supply an `i` operand from its old entry constant.
+
+**Code/build/test batch:** 27 paths, **+1147/−129 (net +1018)** before this
+ledger paragraph. The 11 production C/H files are **+617/−129 (net +488)**;
+Makefile +8; 15 new test/probe files +522. No fallback compatibility fields
+or new target-specific ISA feature were introduced.
+
+| Gate | P40 result |
+| --- | --- |
+| Strict Release compiler and full Debug `check-fast` | **PASS**, exit 0; optional absent GNU cross/QEMU runtime remains SKIP |
+| New MC-058 integrated target (`check-mc058-specialization-correctness`) | **PASS**: RV32/RV64 eight GCC-equal typed relocation offsets, zero stride, illegal index and signed overflow, four transitive call routes/two canonical addends |
+| Parameter mutability and volatile regression | **PASS**: overwritten dynamic integer and volatile GNU `i` are correctly rejected; fresh `x=2` emits `.byte 2`; stale Symbolic is conservatively rejected rather than misrelocated |
+| Boolean/Integer native, shared-body and MC001 | **PASS**: Boolean five-ISA compilation + GCC/MiniC x86 execution; integer transitive five-ISA + native; Symbolic MC001 90 five-ISA assemblies and 6 native cases |
+| P39 vs P40 broad five-ISA `.i` differential | **255/255 same outcomes**: 187 byte-identical assembly, 68 both rejected, 0 differing |
+| P39 vs P40 inline/section `.i` differential | **55 byte-identical, 15 both rejected, 10 intentional assembly differences** out of 80; differences are two symbolic fixture families selecting preexisting equivalent clones, with GNU/MiniC native probes PASS |
+| Target admission for structured symbolic `.quad` immediate on x86/AArch64/LoongArch | **3 explicit SKIP**; cannot infer these ISA ports implement that GNU asm form |
+| Five-ISA Linux GNU ELF/QEMU runtime | **NOT RUN** in this focused correctness batch; an ABI/Linux all-pass claim would be false |
+
+**Remaining supportedness gap:** A reassigned symbolic pointer that is now a
+different static global may still be conservatively **rejected** by MiniC
+where GCC proves the new `i` operand. This is safer than emitting a stale ELF
+relocation, but does not yet establish GCC acceptance parity. The source
+static-initializer pointer relocation evaluator remains separate from GNU asm
+normalization, and these two sources of layout semantics need differential
+coverage when further acceptance work is scheduled.

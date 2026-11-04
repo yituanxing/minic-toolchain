@@ -423,10 +423,28 @@ bool minic_add_inline_integer_specialization(
 
 
 
+static bool minic_inline_integer_formal_admits_entry_fact(
+    const MinicC0Program *program, const MinicFunction *source,
+    size_t parameter_index) {
+    const MinicLocal *local;
+    if (program == NULL || source == NULL ||
+        parameter_index >= source->parameter_count ||
+        source->local_begin > SIZE_MAX - parameter_index)
+        return false;
+    local = minic_c0_program_local(
+        program, source->local_begin + parameter_index);
+    /* A top-level volatile parameter must be read as a volatile C object.
+     * A literal actual argument does not turn its later reads into GNU
+     * immediate operands or enable compile-time folding. */
+    return local != NULL && !minic_type_is_volatile(local->type);
+}
+
 static bool minic_inline_specialization_argument_value(
     const MinicC0Program *program,
     const MinicTargetInvocation *target,
     const MinicFunction *caller,
+    const bool *stable_parameter_locals,
+    size_t stable_local_count,
     MinicExpressionId expression_id,
     MinicType target_type,
     MinicConstValue *value,
@@ -459,6 +477,8 @@ static bool minic_inline_specialization_argument_value(
                 program,
                 target,
                 caller,
+                stable_parameter_locals,
+                stable_local_count,
                 expression->value.unary.operand,
                 expression->type,
                 &operand_value,
@@ -477,7 +497,13 @@ static bool minic_inline_specialization_argument_value(
 
         source = &program->functions[caller->specialization_source];
         local_id = expression->value.local_id;
-        if (local_id < source->local_begin) {
+        /* A specialization fact describes the entry value. A reassigned or
+         * escaped parameter is a different runtime value at this CALL, even
+         * if all clones share the same canonical source FunctionBody. */
+        if (stable_parameter_locals == NULL ||
+            local_id >= stable_local_count ||
+            !stable_parameter_locals[local_id] ||
+            local_id < source->local_begin) {
             return false;
         }
         parameter_index = local_id - source->local_begin;
@@ -580,7 +606,9 @@ bool minic_specialize_inline_integer_calls(MinicC0Program *program,
             const MinicExpression *argument_expression = minic_c0_program_expression(
                 program, argument_id);
             bool argument_known;
-            if (!minic_type_is_integer(source.parameter_types[i])) {
+            if (!minic_type_is_integer(source.parameter_types[i]) ||
+                !minic_inline_integer_formal_admits_entry_fact(
+                    program, &source, i)) {
                 continue;
             }
             argument_known = minic_const_eval_integer(program, target, argument_id,
@@ -674,13 +702,30 @@ bool minic_specialize_inline_integer_calls(MinicC0Program *program,
         size_t caller_index;
         size_t refinement_count = 0U;
         MinicInlineCallWorklist calls = {0};
+        bool *stable_parameter_locals = NULL;
+        size_t stable_local_count = program->local_count;
         size_t integer_call_candidates = 0U;
         size_t integer_owner_skipped = 0U;
+        /* One source-wide, conservative stability screen for ALL transitive
+         * parameter facts. If unavailable, speculative transitive facts are
+         * disabled; a missing optional proof must never fabricate a clone. */
+        if (stable_local_count <= SIZE_MAX / sizeof(*stable_parameter_locals)) {
+            stable_parameter_locals = calloc(
+                stable_local_count == 0U ? 1U : stable_local_count,
+                sizeof(*stable_parameter_locals));
+            if (stable_parameter_locals != NULL &&
+                !minic_c0_program_stable_parameter_locals(
+                    program, stable_parameter_locals, stable_local_count)) {
+                free(stable_parameter_locals);
+                stable_parameter_locals = NULL;
+            }
+        }
         /* Stable CALL IDs are grouped by their canonical FunctionBody
          * source; unowned/shared and late-appended expressions still visit
          * each caller. Allocation failure reverts to the complete scan. */
         if (!minic_inline_call_worklist_build(
                 program, original_function_count, &calls)) {
+            free(stable_parameter_locals);
             minic_core_reentry_index_destroy(pure_guard_reentry_index);
             return false;
         }
@@ -753,10 +798,14 @@ bool minic_specialize_inline_integer_calls(MinicC0Program *program,
                     bool argument_used_caller_fact = false;
 
                     if (!minic_type_is_integer(nested_source.parameter_types[parameter_index]) ||
+                        !minic_inline_integer_formal_admits_entry_fact(
+                            program, &nested_source, parameter_index) ||
                         !minic_inline_specialization_argument_value(
                             program,
                             target,
                             &caller,
+                            stable_parameter_locals,
+                            stable_local_count,
                             minic_c0_call_argument(nested, parameter_index),
                             nested_source.parameter_types[parameter_index],
                             &argument_value,
@@ -806,6 +855,7 @@ bool minic_specialize_inline_integer_calls(MinicC0Program *program,
                                       program->function_count,
                                       (size_t)nested_source_id);
                         minic_inline_call_worklist_destroy(&calls);
+                        free(stable_parameter_locals);
                         minic_core_reentry_index_destroy(pure_guard_reentry_index);
                         return false;
                     }
@@ -823,6 +873,7 @@ bool minic_specialize_inline_integer_calls(MinicC0Program *program,
                                       program->function_count,
                                       (size_t)nested_source_id);
                         minic_inline_call_worklist_destroy(&calls);
+                        free(stable_parameter_locals);
                         minic_core_reentry_index_destroy(pure_guard_reentry_index);
                         return false;
                     }
@@ -843,6 +894,7 @@ bool minic_specialize_inline_integer_calls(MinicC0Program *program,
                           (unsigned int)!calls.owner_ready);
         }
         minic_inline_call_worklist_destroy(&calls);
+        free(stable_parameter_locals);
         if (refinement_count != 0U) {
             (void)fprintf(stderr,
                           "MINIC_INLINE_INTEGER_SPECIALIZATION_TRANSITIVE_V0 refined=%zu clones=%zu functions=%zu\n",

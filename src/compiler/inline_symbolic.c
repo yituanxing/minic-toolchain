@@ -103,10 +103,67 @@ static bool minic_inline_symbolic_static_expression(
         program, target, expression_id, 0U);
 }
 
+/* Intern only synthetic pure closure expressions, not source AST nodes.
+ * Reusing child IDs bottom-up makes this shallow equality canonical for all
+ * builders below. Clone facts must not acquire a fresh ExpressionId every
+ * time another caller traverses the same shared FunctionBody. */
+static bool minic_inline_symbolic_add_closed_expression(
+    MinicC0Program *program, const MinicExpression *closed,
+    size_t synthetic_begin, MinicExpressionId *expression_id) {
+    size_t i;
+    if (program == NULL || closed == NULL || expression_id == NULL ||
+        synthetic_begin > program->expression_count) return false;
+    for (i = synthetic_begin; i < program->expression_count; ++i) {
+        const MinicExpression *existing = &program->expressions[i];
+        if (existing->kind != closed->kind ||
+            !minic_type_equal(existing->type, closed->type) ||
+            existing->value_category != closed->value_category) continue;
+        switch (closed->kind) {
+            case MINIC_EXPRESSION_INTEGER:
+                if (existing->value.integer_value != closed->value.integer_value)
+                    continue;
+                break;
+            case MINIC_EXPRESSION_CAST:
+            case MINIC_EXPRESSION_BITCAST:
+            case MINIC_EXPRESSION_CONVERSION:
+            case MINIC_EXPRESSION_LVALUE_READ:
+            case MINIC_EXPRESSION_ADDRESS_OF:
+            case MINIC_EXPRESSION_DEREFERENCE:
+                if (existing->value.unary.operand != closed->value.unary.operand)
+                    continue;
+                break;
+            case MINIC_EXPRESSION_SUBSCRIPT:
+                if (existing->value.subscript.base != closed->value.subscript.base ||
+                    existing->value.subscript.index != closed->value.subscript.index)
+                    continue;
+                break;
+            case MINIC_EXPRESSION_MEMBER:
+                if (existing->value.member.base != closed->value.member.base ||
+                    existing->value.member.record_id != closed->value.member.record_id ||
+                    existing->value.member.field_index != closed->value.member.field_index)
+                    continue;
+                break;
+            case MINIC_EXPRESSION_BINARY:
+                if (existing->value.binary.operator_kind != closed->value.binary.operator_kind ||
+                    existing->value.binary.left != closed->value.binary.left ||
+                    existing->value.binary.right != closed->value.binary.right)
+                    continue;
+                break;
+            default: return false;
+        }
+        *expression_id = i;
+        return true;
+    }
+    return minic_c0_program_add_expression(program, closed, expression_id);
+}
+
 static bool minic_inline_close_symbolic_expression_depth(
     MinicC0Program *program,
     const MinicTargetInvocation *target,
     const MinicFunction *caller,
+    const bool *stable_locals,
+    size_t stable_local_count,
+    size_t synthetic_begin,
     MinicExpressionId expression_id,
     MinicExpressionId *closed_id,
     bool *used_caller_integer_fact,
@@ -145,10 +202,21 @@ static bool minic_inline_close_symbolic_expression_depth(
         parameter_index = local_id - caller_source->local_begin;
         if (parameter_index >= caller_source->parameter_count ||
             parameter_index >= MINIC_MAX_FUNCTION_PARAMETERS ||
-            !caller->specialization_integer_known[parameter_index] ||
-            !minic_type_is_integer(caller_source->parameter_types[parameter_index])) {
+            stable_locals == NULL || local_id >= stable_local_count ||
+            !stable_locals[local_id]) {
             return false;
         }
+        if (minic_type_is_pointer(caller_source->parameter_types[parameter_index]) &&
+            caller->specialization_symbolic_known[parameter_index] &&
+            caller->specialization_symbolic_expression[parameter_index] !=
+                MINIC_EXPRESSION_INVALID) {
+            *closed_id = caller->specialization_symbolic_expression[parameter_index];
+            *used_caller_integer_fact = true;
+            return true;
+        }
+        if (!caller->specialization_integer_known[parameter_index] ||
+            !minic_type_is_integer(caller_source->parameter_types[parameter_index]))
+            return false;
         (void)memset(&closed, 0, sizeof(closed));
         closed.kind = MINIC_EXPRESSION_INTEGER;
         closed.span = expression->span;
@@ -156,7 +224,8 @@ static bool minic_inline_close_symbolic_expression_depth(
         closed.value_category = MINIC_VALUE_RVALUE;
         bits = caller->specialization_integer_bits[parameter_index];
         (void)memcpy(&closed.value.integer_value, &bits, sizeof(bits));
-        if (!minic_c0_program_add_expression(program, &closed, closed_id)) {
+        if (!minic_inline_symbolic_add_closed_expression(
+                program, &closed, synthetic_begin, closed_id)) {
             return false;
         }
         *used_caller_integer_fact = true;
@@ -171,6 +240,9 @@ static bool minic_inline_close_symbolic_expression_depth(
                     program,
                     target,
                     caller,
+                    stable_locals,
+                    stable_local_count,
+                    synthetic_begin,
                     expression->value.unary.operand,
                     &left_id,
                     &left_used,
@@ -178,7 +250,20 @@ static bool minic_inline_close_symbolic_expression_depth(
                 !left_used) {
                 return false;
             }
-            *closed_id = left_id;
+            /* A symbolic pointer argument may itself originate from a global
+             * array. Preserve the source parameter's pointer type at this
+             * read: substituting the bare GLOBAL_OBJECT (array type) into
+             * `pointer + 1` would lose its pointee stride. */
+            if (minic_type_is_pointer(expression->type)) {
+                MinicExpression cast = *expression;
+                cast.kind = MINIC_EXPRESSION_CAST;
+                cast.value.unary.operand = left_id;
+                if (!minic_inline_symbolic_add_closed_expression(
+                        program, &cast, synthetic_begin, closed_id))
+                    return false;
+            } else {
+                *closed_id = left_id;
+            }
             *used_caller_integer_fact = true;
             return true;
         }
@@ -195,6 +280,9 @@ static bool minic_inline_close_symbolic_expression_depth(
                 program,
                 target,
                 caller,
+                stable_locals,
+                stable_local_count,
+                synthetic_begin,
                 operand_id,
                 &left_id,
                 &left_used,
@@ -211,7 +299,8 @@ static bool minic_inline_close_symbolic_expression_depth(
         }
         closed = *expression;
         closed.value.unary.operand = left_id;
-        if (!minic_c0_program_add_expression(program, &closed, closed_id)) {
+        if (!minic_inline_symbolic_add_closed_expression(
+                program, &closed, synthetic_begin, closed_id)) {
             return false;
         }
         *used_caller_integer_fact = true;
@@ -229,6 +318,9 @@ static bool minic_inline_close_symbolic_expression_depth(
                        program,
                        target,
                        caller,
+                       stable_locals,
+                       stable_local_count,
+                       synthetic_begin,
                        base_id,
                        &left_id,
                        &left_used,
@@ -242,6 +334,9 @@ static bool minic_inline_close_symbolic_expression_depth(
                        program,
                        target,
                        caller,
+                       stable_locals,
+                       stable_local_count,
+                       synthetic_begin,
                        index_id,
                        &right_id,
                        &right_used,
@@ -259,7 +354,8 @@ static bool minic_inline_close_symbolic_expression_depth(
         closed = *expression;
         closed.value.subscript.base = left_id;
         closed.value.subscript.index = right_id;
-        if (!minic_c0_program_add_expression(program, &closed, closed_id)) {
+        if (!minic_inline_symbolic_add_closed_expression(
+                program, &closed, synthetic_begin, closed_id)) {
             return false;
         }
         *used_caller_integer_fact = left_used || right_used;
@@ -277,6 +373,9 @@ static bool minic_inline_close_symbolic_expression_depth(
                 program,
                 target,
                 caller,
+                stable_locals,
+                stable_local_count,
+                synthetic_begin,
                 base_id,
                 &left_id,
                 &left_used,
@@ -293,7 +392,8 @@ static bool minic_inline_close_symbolic_expression_depth(
         }
         closed = *expression;
         closed.value.member.base = left_id;
-        if (!minic_c0_program_add_expression(program, &closed, closed_id)) {
+        if (!minic_inline_symbolic_add_closed_expression(
+                program, &closed, synthetic_begin, closed_id)) {
             return false;
         }
         *used_caller_integer_fact = true;
@@ -305,13 +405,18 @@ static bool minic_inline_close_symbolic_expression_depth(
          expression->value.binary.operator_kind == MINIC_BINARY_SUBTRACT)) {
         MinicExpressionId operand_left = expression->value.binary.left;
         MinicExpressionId operand_right = expression->value.binary.right;
+        MinicConstValue ignored;
         if (minic_inline_symbolic_static_expression(
-                program, target, operand_left)) {
+                program, target, operand_left) ||
+            minic_const_eval_integer(program, target, operand_left, &ignored)) {
             left_id = operand_left;
         } else if (!minic_inline_close_symbolic_expression_depth(
                        program,
                        target,
                        caller,
+                       stable_locals,
+                       stable_local_count,
+                       synthetic_begin,
                        operand_left,
                        &left_id,
                        &left_used,
@@ -319,12 +424,17 @@ static bool minic_inline_close_symbolic_expression_depth(
             return false;
         }
         if (minic_const_eval_integer(
-                program, target, operand_right, &(MinicConstValue){0})) {
+                program, target, operand_right, &ignored) ||
+            minic_inline_symbolic_static_expression(
+                program, target, operand_right)) {
             right_id = operand_right;
         } else if (!minic_inline_close_symbolic_expression_depth(
                        program,
                        target,
                        caller,
+                       stable_locals,
+                       stable_local_count,
+                       synthetic_begin,
                        operand_right,
                        &right_id,
                        &right_used,
@@ -342,7 +452,8 @@ static bool minic_inline_close_symbolic_expression_depth(
         closed = *expression;
         closed.value.binary.left = left_id;
         closed.value.binary.right = right_id;
-        if (!minic_c0_program_add_expression(program, &closed, closed_id)) {
+        if (!minic_inline_symbolic_add_closed_expression(
+                program, &closed, synthetic_begin, closed_id)) {
             return false;
         }
         *used_caller_integer_fact = left_used || right_used;
@@ -356,6 +467,9 @@ static bool minic_inline_symbolic_argument_expression(
     MinicC0Program *program,
     const MinicTargetInvocation *target,
     const MinicFunction *caller,
+    const bool *stable_locals,
+    size_t stable_local_count,
+    size_t synthetic_begin,
     MinicExpressionId expression_id,
     MinicExpressionId *symbolic_expression,
     bool *used_caller_fact,
@@ -363,10 +477,6 @@ static bool minic_inline_symbolic_argument_expression(
     const MinicExpression *expression;
     MinicExpressionId closed_id;
     bool used_integer_fact = false;
-
-    /* FIXME(MC-058): transitive closure carries direct symbolic operands and
-     * integer facts, but not (known global pointer + constant element offset).
-     * GNU "i" operand users therefore fail for a one-hop specialized caller. */
 
     if (program == NULL || target == NULL || symbolic_expression == NULL ||
         used_caller_fact == NULL || depth > 32U) {
@@ -386,6 +496,9 @@ static bool minic_inline_symbolic_argument_expression(
             program,
             target,
             caller,
+            stable_locals,
+            stable_local_count,
+            synthetic_begin,
             expression_id,
             &closed_id,
             &used_integer_fact,
@@ -409,6 +522,9 @@ static bool minic_inline_symbolic_argument_expression(
             program,
             target,
             caller,
+            stable_locals,
+            stable_local_count,
+            synthetic_begin,
             expression->value.unary.operand,
             symbolic_expression,
             used_caller_fact,
@@ -425,6 +541,8 @@ static bool minic_inline_symbolic_argument_expression(
         parameter_index = local_id - source->local_begin;
         if (parameter_index >= source->parameter_count ||
             parameter_index >= MINIC_MAX_FUNCTION_PARAMETERS ||
+            stable_locals == NULL || local_id >= stable_local_count ||
+            !stable_locals[local_id] ||
             !caller->specialization_symbolic_known[parameter_index]) {
             return false;
         }
@@ -497,14 +615,30 @@ bool minic_specialize_inline_symbolic_calls(
     size_t transitive_clone_count = 0U;
     size_t original_function_count;
     MinicInlineInitialOwners initial_owners = {0};
+    bool *stable_locals = NULL;
+    size_t stable_local_count;
 
     if (program == NULL || target == NULL) {
         return false;
     }
     original_function_count = program->function_count;
+    stable_local_count = program->local_count;
+    if (stable_local_count != 0U &&
+        stable_local_count <= SIZE_MAX / sizeof(*stable_locals)) {
+        stable_locals = malloc(stable_local_count * sizeof(*stable_locals));
+        if (stable_locals != NULL && !minic_c0_program_stable_parameter_locals(
+                program, stable_locals, stable_local_count)) {
+            free(stable_locals);
+            stable_locals = NULL;
+        }
+    }
+    /* Failure to establish local stability must remove transitive ingress
+     * facts, never let a modified pointer or integer parameter masquerade
+     * as the original call value. */
     if (!minic_inline_initial_owners_build(
             program, original_function_count, &initial_owners)) {
         (void)fprintf(stderr, "MINIC_INLINE_SECTION_OWNER_INDEX=FAIL symbolic\n");
+        free(stable_locals);
         return false;
     }
 
@@ -554,6 +688,7 @@ bool minic_specialize_inline_symbolic_calls(
         if (!minic_inline_spec_key_from_function(
                 &key, &current, source.parameter_count)) {
             minic_inline_initial_owners_destroy(&initial_owners);
+            free(stable_locals);
             return false;
         }
         /* Do not manufacture a half-specialized variant for a helper whose
@@ -567,6 +702,7 @@ bool minic_specialize_inline_symbolic_calls(
         for (i = 0U; i < source.parameter_count; ++i) {
             MinicExpressionId argument_id = minic_c0_call_argument(call, i);
             if (!minic_type_is_pointer(source.parameter_types[i]) ||
+                minic_type_is_volatile(source.parameter_types[i]) ||
                 !minic_inline_symbolic_static_expression(
                     program, target, argument_id)) {
                 continue;
@@ -596,6 +732,7 @@ bool minic_specialize_inline_symbolic_calls(
                     key.symbolic_expression,
                     &variant_id)) {
                 minic_inline_initial_owners_destroy(&initial_owners);
+                free(stable_locals);
                 return false;
             }
             initial_clone_count += 1U;
@@ -606,12 +743,16 @@ bool minic_specialize_inline_symbolic_calls(
 
     {
         size_t caller_index;
+        size_t synthetic_begin = program->expression_count;
         MinicInlineCallWorklist worklist = {0};
         /* Canonical source-owned CALL bucket + ambiguous/unowned bucket.
          * Common retains append-only expression IDs and an OOM full-scan
          * fallback, preserving the historical shared FunctionBody closure. */
         if (!minic_inline_call_worklist_build(
-                program, original_function_count, &worklist)) return false;
+                program, original_function_count, &worklist)) {
+            free(stable_locals);
+            return false;
+        }
         for (caller_index = 0U;
              caller_index < program->function_count;
              ++caller_index) {
@@ -667,6 +808,7 @@ bool minic_specialize_inline_symbolic_calls(
                 if (!minic_inline_spec_key_from_function(
                         &key, &current, source.parameter_count)) {
                     minic_inline_call_worklist_destroy(&worklist);
+                    free(stable_locals);
                     return false;
                 }
                 if (!needs_section_clone &&
@@ -678,10 +820,14 @@ bool minic_specialize_inline_symbolic_calls(
                     MinicExpressionId resolved_expression;
                     bool argument_used_caller_fact = false;
                     if (!minic_type_is_pointer(source.parameter_types[i]) ||
+                        minic_type_is_volatile(source.parameter_types[i]) ||
                         !minic_inline_symbolic_argument_expression(
                             program,
                             target,
                             &caller,
+                            stable_locals,
+                            stable_local_count,
+                            synthetic_begin,
                             /* Earlier arguments may have grown this arena. */
                             minic_c0_call_argument(
                                 &program->expressions[nested_expression_index], i),
@@ -718,6 +864,7 @@ bool minic_specialize_inline_symbolic_calls(
                             key.symbolic_expression,
                             &variant_id)) {
                         minic_inline_call_worklist_destroy(&worklist);
+                        free(stable_locals);
                         return false;
                     }
                     transitive_clone_count += 1U;
@@ -730,6 +877,8 @@ bool minic_specialize_inline_symbolic_calls(
         }
         minic_inline_call_worklist_destroy(&worklist);
     }
+
+    free(stable_locals);
 
     if (initial_clone_count != 0U || transitive_clone_count != 0U) {
         (void)fprintf(stderr,

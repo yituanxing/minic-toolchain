@@ -213,6 +213,9 @@ static bool minic_inline_local_boolean_domain_legacy(
 typedef struct MinicInlineLocalBooleanDomainCache {
     const MinicC0Program *program;
     bool *values;
+    /* Immutable ingress source parameters only; distinct from the Boolean
+     * value-domain proof for ordinary mutable locals. */
+    bool *stable_parameters;
     size_t local_count;
     size_t statement_count;
     size_t expression_count;
@@ -236,6 +239,7 @@ void minic_inline_boolean_domain_perf_dump(
 static bool minic_inline_build_local_boolean_domain_cache(
     const MinicC0Program *program, MinicInlineBooleanDomainPassState *state) {
     bool *values = NULL;
+    bool *stable_parameters = NULL;
     bool *parameter = NULL;
     bool *saw_assignment = NULL;
     bool *invalid = NULL;
@@ -251,6 +255,9 @@ static bool minic_inline_build_local_boolean_domain_cache(
     }
     values = (bool *)calloc(program->local_count == 0U ? 1U : program->local_count,
                             sizeof(*values));
+    stable_parameters = (bool *)calloc(
+        program->local_count == 0U ? 1U : program->local_count,
+        sizeof(*stable_parameters));
     parameter = (bool *)calloc(program->local_count == 0U ? 1U : program->local_count,
                                sizeof(*parameter));
     saw_assignment =
@@ -258,9 +265,13 @@ static bool minic_inline_build_local_boolean_domain_cache(
                        sizeof(*saw_assignment));
     invalid = (bool *)calloc(program->local_count == 0U ? 1U : program->local_count,
                              sizeof(*invalid));
-    if (values == NULL || parameter == NULL || saw_assignment == NULL ||
+    if (values == NULL || stable_parameters == NULL ||
+        !minic_c0_program_stable_parameter_locals(
+            program, stable_parameters, program->local_count) ||
+        parameter == NULL || saw_assignment == NULL ||
         invalid == NULL) {
         free(values);
+        free(stable_parameters);
         free(parameter);
         free(saw_assignment);
         free(invalid);
@@ -366,14 +377,42 @@ static bool minic_inline_build_local_boolean_domain_cache(
     free(saw_assignment);
     free(invalid);
     free(state->cache.values);
+    free(state->cache.stable_parameters);
     state->cache.program = program;
     state->cache.values = values;
+    state->cache.stable_parameters = stable_parameters;
     state->cache.local_count = program->local_count;
     state->cache.statement_count = program->statement_count;
     state->cache.expression_count = program->expression_count;
     state->cache.inline_asm_count = program->inline_asm_count;
     state->stats.builds += 1U;
     return true;
+}
+
+static bool minic_inline_boolean_domain_cache_current(
+    const MinicC0Program *program,
+    const MinicInlineBooleanDomainPassState *state) {
+    return state != NULL && state->cache.program == program &&
+           state->cache.local_count == program->local_count &&
+           state->cache.statement_count == program->statement_count &&
+           state->cache.expression_count == program->expression_count &&
+           state->cache.inline_asm_count == program->inline_asm_count &&
+           state->cache.values != NULL &&
+           state->cache.stable_parameters != NULL;
+}
+
+static bool minic_inline_boolean_specialization_parameter_stable(
+    const MinicC0Program *program,
+    MinicLocalId local_id, MinicInlineBooleanDomainPassState *state) {
+    if (program == NULL || state == NULL || local_id >= program->local_count)
+        return false;
+    if (!minic_inline_boolean_domain_cache_current(program, state) &&
+        !minic_inline_build_local_boolean_domain_cache(program, state)) {
+        state->stats.fallbacks += 1U;
+        /* Cannot use an unverified ingress fact on cache allocation failure. */
+        return false;
+    }
+    return state->cache.stable_parameters[local_id];
 }
 
 
@@ -387,12 +426,7 @@ static bool minic_inline_local_boolean_domain(
     state->stats.queries += 1U;
     /* An appended clone may grow the underlying arenas without changing
      * the Program address. All arenas referenced by write scanning matter. */
-    if (state->cache.program != program ||
-        state->cache.local_count != program->local_count ||
-        state->cache.statement_count != program->statement_count ||
-        state->cache.expression_count != program->expression_count ||
-        state->cache.inline_asm_count != program->inline_asm_count ||
-        state->cache.values == NULL) {
+    if (!minic_inline_boolean_domain_cache_current(program, state)) {
         if (!minic_inline_build_local_boolean_domain_cache(program, state)) {
             state->stats.fallbacks += 1U;
             return minic_inline_local_boolean_domain_legacy(program, local_id);
@@ -448,7 +482,9 @@ static bool minic_inline_boolean_range_argument(
             parameter_index = local_id - source->local_begin;
             if (parameter_index >= source->parameter_count ||
                 parameter_index >= MINIC_MAX_FUNCTION_PARAMETERS ||
-                !caller->specialization_boolean_range_known[parameter_index]) {
+                !caller->specialization_boolean_range_known[parameter_index] ||
+                !minic_inline_boolean_specialization_parameter_stable(
+                    program, local_id, state)) {
                 return false;
             }
             *used_caller_fact = true;
@@ -843,5 +879,6 @@ bool minic_specialize_inline_boolean_range_calls(
     success = minic_specialize_inline_boolean_range_calls_for_pass(program, target, &state);
     if (stats_out != NULL) *stats_out = state.stats;
     free(state.cache.values);
+    free(state.cache.stable_parameters);
     return success;
 }

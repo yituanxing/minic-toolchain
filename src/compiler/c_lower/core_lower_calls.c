@@ -1,4 +1,5 @@
 #include "compiler/c_lower/core_lower_internal.h"
+#include "compiler/c_lower/core_lower_asm_internal.h"
 #include "compiler/c_lower/local_facts.h"
 #include "compiler/c_lower/cfg_constant_calls.h"
 #include "frontend/const_eval.h"
@@ -318,6 +319,13 @@ static const MinicFunction *core_select_transitive_integer_specialization(
         for (parameter_index = 0U; parameter_index < source->parameter_count;
              ++parameter_index) {
             if (best->specialization_integer_known[parameter_index]) {
+                if (!known[parameter_index] ||
+                    best->specialization_integer_bits[parameter_index] !=
+                        bits[parameter_index]) {
+                    best = source;
+                    best_known_count = 0U;
+                    break;
+                }
                 best_known_count += 1U;
             }
         }
@@ -334,6 +342,20 @@ static const MinicFunction *core_select_transitive_integer_specialization(
             continue;
         }
         for (parameter_index = 0U; parameter_index < source->parameter_count; ++parameter_index) {
+            /* The integer selector runs before symbolic and Boolean
+             * revalidation. Never select a clone whose additional facts
+             * have not been proved at this exact callsite. */
+            bool old_symbol = current_callee->is_integer_specialization &&
+                current_callee->specialization_symbolic_known[parameter_index];
+            bool old_range = current_callee->is_integer_specialization &&
+                current_callee->specialization_boolean_range_known[parameter_index];
+            if (candidate->specialization_symbolic_known[parameter_index] != old_symbol ||
+                (old_symbol && candidate->specialization_symbolic_expression[parameter_index] !=
+                    current_callee->specialization_symbolic_expression[parameter_index]) ||
+                candidate->specialization_boolean_range_known[parameter_index] != old_range) {
+                compatible = false;
+                break;
+            }
             if (!candidate->specialization_integer_known[parameter_index]) {
                 continue;
             }
@@ -364,56 +386,17 @@ static const MinicFunction *core_select_transitive_integer_specialization(
 
 
 
-static bool core_inline_symbolic_argument_expression(
+static bool core_inline_symbolic_fact_matches(
     const MinicCoreLowerContext *context,
-    MinicExpressionId expression_id,
-    MinicExpressionId *symbolic_expression,
-    unsigned int depth) {
-    const MinicExpression *expression;
-    const MinicFunction *caller;
-    const MinicFunction *source;
-
-    if (context == NULL || context->body == NULL || context->body->program == NULL ||
-        context->source_function == NULL || symbolic_expression == NULL || depth > 32U) {
-        return false;
-    }
-    caller = context->source_function;
-    if (!caller->is_integer_specialization ||
-        caller->specialization_source >= context->body->program->function_count) {
-        return false;
-    }
-    source = &context->body->program->functions[caller->specialization_source];
-    expression = minic_c0_program_expression(context->body->program, expression_id);
-    if (expression == NULL) {
-        return false;
-    }
-    if (expression->kind == MINIC_EXPRESSION_CAST ||
-        expression->kind == MINIC_EXPRESSION_BITCAST ||
-        expression->kind == MINIC_EXPRESSION_CONVERSION ||
-        expression->kind == MINIC_EXPRESSION_LVALUE_READ) {
-        return core_inline_symbolic_argument_expression(
-            context,
-            expression->value.unary.operand,
-            symbolic_expression,
-            depth + 1U);
-    }
-    if (expression->kind == MINIC_EXPRESSION_LOCAL) {
-        MinicLocalId local_id = expression->value.local_id;
-        size_t parameter_index;
-        if (local_id < source->local_begin) {
-            return false;
-        }
-        parameter_index = local_id - source->local_begin;
-        if (parameter_index >= source->parameter_count ||
-            parameter_index >= MINIC_MAX_FUNCTION_PARAMETERS ||
-            !caller->specialization_symbolic_known[parameter_index]) {
-            return false;
-        }
-        *symbolic_expression =
-            caller->specialization_symbolic_expression[parameter_index];
-        return *symbolic_expression != MINIC_EXPRESSION_INVALID;
-    }
-    return false;
+    MinicExpressionId candidate_expression,
+    const char *actual_symbol, int64_t actual_addend) {
+    const char *candidate_symbol = NULL;
+    int64_t candidate_addend = 0;
+    return actual_symbol != NULL &&
+        core_inline_asm_symbolic_address_fact(
+            context, candidate_expression, &candidate_symbol, &candidate_addend) &&
+        candidate_symbol != NULL && candidate_addend == actual_addend &&
+        strcmp(candidate_symbol, actual_symbol) == 0;
 }
 
 static const MinicFunction *core_select_transitive_symbolic_specialization(
@@ -425,7 +408,8 @@ static const MinicFunction *core_select_transitive_symbolic_specialization(
     const MinicFunction *source;
     const MinicFunction *best;
     size_t best_symbol_count;
-    MinicExpressionId actual_symbol[MINIC_MAX_FUNCTION_PARAMETERS];
+    const char *actual_symbol[MINIC_MAX_FUNCTION_PARAMETERS];
+    int64_t actual_addend[MINIC_MAX_FUNCTION_PARAMETERS];
     bool actual_known[MINIC_MAX_FUNCTION_PARAMETERS];
     size_t i;
     size_t candidate_index;
@@ -457,24 +441,30 @@ static const MinicFunction *core_select_transitive_symbolic_specialization(
         return current_callee;
     }
     (void)memset(actual_known, 0, sizeof(actual_known));
-    for (i = 0U; i < MINIC_MAX_FUNCTION_PARAMETERS; ++i) {
-        actual_symbol[i] = MINIC_EXPRESSION_INVALID;
-    }
+    (void)memset(actual_symbol, 0, sizeof(actual_symbol));
+    (void)memset(actual_addend, 0, sizeof(actual_addend));
     for (i = 0U; i < source->parameter_count; ++i) {
         if (!minic_type_is_pointer(source->parameter_types[i])) {
             continue;
         }
-        actual_known[i] = core_inline_symbolic_argument_expression(
+        actual_known[i] = core_inline_asm_symbolic_address_fact(
             context,
             minic_c0_call_argument(expression, i),
             &actual_symbol[i],
-            0U);
+            &actual_addend[i]);
     }
     best = core_inline_same_facts_section_clone(context, source, current_callee);
     best_symbol_count = 0U;
     if (best->is_integer_specialization) {
         for (i = 0U; i < source->parameter_count; ++i) {
             if (best->specialization_symbolic_known[i]) {
+                if (!actual_known[i] || !core_inline_symbolic_fact_matches(
+                        context, best->specialization_symbolic_expression[i],
+                        actual_symbol[i], actual_addend[i])) {
+                    best = source;
+                    best_symbol_count = 0U;
+                    break;
+                }
                 best_symbol_count += 1U;
             }
         }
@@ -492,6 +482,14 @@ static const MinicFunction *core_select_transitive_symbolic_specialization(
             continue;
         }
         for (i = 0U; i < source->parameter_count; ++i) {
+            /* The next selector validates Boolean ranges. A symbol-only
+             * selector cannot inherit a stronger, unproved range clone. */
+            if (candidate->specialization_boolean_range_known[i] !=
+                (current_callee->is_integer_specialization &&
+                 current_callee->specialization_boolean_range_known[i])) {
+                compatible = false;
+                break;
+            }
             if (current_callee->is_integer_specialization) {
                 if (candidate->specialization_integer_known[i] !=
                         current_callee->specialization_integer_known[i] ||
@@ -512,8 +510,9 @@ static const MinicFunction *core_select_transitive_symbolic_specialization(
                 continue;
             }
             symbol_count += 1U;
-            if (!actual_known[i] ||
-                candidate->specialization_symbolic_expression[i] != actual_symbol[i]) {
+            if (!actual_known[i] || !core_inline_symbolic_fact_matches(
+                    context, candidate->specialization_symbolic_expression[i],
+                    actual_symbol[i], actual_addend[i])) {
                 compatible = false;
                 break;
             }
@@ -608,6 +607,15 @@ static const MinicFunction *core_select_boolean_range_specialization(
     if (best->is_integer_specialization) {
         for (i = 0U; i < source->parameter_count; ++i) {
             if (best->specialization_boolean_range_known[i]) {
+                if (!actual_range[i]) {
+                    /* A CALL in the shared FunctionBody can carry an old
+                     * ingress range clone even after the active caller
+                     * assigned to its parameter. Validate `best` exactly
+                     * like all later candidates. */
+                    best = source;
+                    best_count = 0U;
+                    break;
+                }
                 best_count += 1U;
             }
         }
@@ -640,7 +648,9 @@ static const MinicFunction *core_select_boolean_range_specialization(
                 break;
             }
         }
-        if (compatible && range_count > best_count) {
+        if (compatible &&
+            (range_count > best_count ||
+             (best == source && range_count == 0U))) {
             best = candidate;
             best_count = range_count;
         }

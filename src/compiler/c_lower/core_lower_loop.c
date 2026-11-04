@@ -394,8 +394,19 @@ static void core_invalidate_loop_mutated_specialization_facts(
         MinicLocalId local_id = context->source_function->local_begin + index;
         const MinicCoreLocalIntegerConstant *fact =
             &context->local_integer_constants[index];
+        /* Boolean ranges and symbolic addresses are also *entry* facts of
+         * specialized parameters. They need the same pre-loop kill as exact
+         * integer specialization even when no integer value was seeded in
+         * local_facts. Otherwise a backedge may observe a stale fact. */
+        bool has_entry_specialization =
+            context->source_function->is_integer_specialization &&
+            index < context->source_function->parameter_count &&
+            (context->source_function->specialization_integer_known[index] ||
+             context->source_function->specialization_symbolic_known[index] ||
+             context->source_function->specialization_boolean_range_known[index]);
         bool may_mutate;
-        if (!fact->specialization_known || fact->specialization_modified) {
+        if ((!fact->specialization_known && !has_entry_specialization) ||
+            fact->specialization_modified) {
             continue;
         }
         /* NULL means the whole-subtree collector could not allocate its

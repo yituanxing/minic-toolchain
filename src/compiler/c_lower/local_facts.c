@@ -212,8 +212,12 @@ void minic_core_local_fact_invalidate(MinicCoreLowerContext *context,
         fact->known = false;
         fact->possible_one_bits_valid = false;
         fact->nonnegative_range_valid = false;
+        /* Every entry specialization (integer, symbolic address, Boolean
+         * range) is invalid after a local write, even when no exact integer
+         * constant was seeded into this fact slot. CFG meet/restore already
+         * propagates this bit. */
+        fact->specialization_modified = true;
         if (fact->specialization_known) {
-            fact->specialization_modified = true;
             if (minic_core_inline_spec_fact_trace_enabled(context)) {
                 (void)fprintf(stderr,
                               "INLINE_SPEC_FACT event=invalidate function=%s source=%zu local=%zu bits=%" PRIu64 "\n",
@@ -237,8 +241,8 @@ void minic_core_local_fact_escape(MinicCoreLowerContext *context,
         fact->escaped = true;
         fact->possible_one_bits_valid = false;
         fact->nonnegative_range_valid = false;
+        fact->specialization_modified = true;
         if (fact->specialization_known) {
-            fact->specialization_modified = true;
             if (minic_core_inline_spec_fact_trace_enabled(context)) {
                 (void)fprintf(stderr,
                               "INLINE_SPEC_FACT event=escape function=%s source=%zu local=%zu bits=%" PRIu64 "\n",
