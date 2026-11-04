@@ -594,6 +594,58 @@ assert lo==0x02c0018c, ('undefined weak LO12 zero',hex(lo))
 print('MINILD_LOONGARCH_STATIC=PASS PCALA_HI20_undefweak=absolute_lu12i_zero')
 PY
 
+# GNU BFD resolves direct b/bl to an undefined weak FUNC by replacing each
+# call instruction with JIRL through $r0 (address zero); a PC-relative B26
+# displacement from ET_EXEC's high image VMA would overflow signed 28 bits.
+"$MINIAS" --target=loongarch64 -march=loongarch64 -mabi=lp64d \
+    -o "$work/b26-weak.o" \
+    "$repo/tests/linker/fixtures/loongarch-b26-undefweak.S"
+test "$(readelf -Wr "$work/b26-weak.o" | grep -c R_LARCH_B26)" -eq 2
+"$MINILD" -m elf64loongarch -static -e _start \
+    -o "$work/b26-weak-mini.elf" "$work/b26-weak.o"
+python3 - "$work/b26-weak-mini.elf" <<'PY'
+from pathlib import Path
+import struct,sys
+b=Path(sys.argv[1]).read_bytes()
+off=struct.unpack_from('<Q',b,40)[0]
+n=struct.unpack_from('<H',b,60)[0]
+si=struct.unpack_from('<H',b,62)[0]
+sections=[struct.unpack_from('<IIQQQQIIQQ',b,off+64*i) for i in range(n)]
+shstr=sections[si]; names=b[shstr[4]:shstr[4]+shstr[5]]
+def name(s):
+    p=s[0]; return names[p:names.index(0,p)].decode()
+text=next(s for s in sections if name(s)=='.text')
+branch,weak_b,weak_bl=struct.unpack_from('<III',b,text[4])
+assert branch&0xfc000000==0x50000000, 'live local branch remains b'
+assert weak_b==0x4c000000, ('weak b becomes JIRL $r0,$r0,0',hex(weak_b))
+assert weak_bl==0x4c000001, ('weak bl becomes JIRL $r1,$r0,0',hex(weak_bl))
+print('MINILD_LOONGARCH_STATIC=PASS B26_undefweak=JIRL_r0_r1_zero')
+PY
+
+# Even an undefined-weak call must first have a legal B26 instruction.
+cp "$work/b26-weak.o" "$work/b26-weak-bad-opcode.o"
+python3 - "$work/b26-weak-bad-opcode.o" <<'PY'
+from pathlib import Path
+import struct,sys
+p=Path(sys.argv[1]); b=bytearray(p.read_bytes())
+off=struct.unpack_from('<Q',b,40)[0]
+n=struct.unpack_from('<H',b,60)[0]
+sections=[struct.unpack_from('<IIQQQQIIQQ',b,off+64*i) for i in range(n)]
+text=next(s for s in sections if s[1]==1 and s[2]&4)
+assert struct.unpack_from('<I',b,text[4]+4)[0]&0xfc000000==0x50000000
+struct.pack_into('<I',b,text[4]+4,0)
+p.write_bytes(b)
+PY
+if "$MINILD" -m elf64loongarch -static -e _start \
+    -o "$work/b26-weak-bad-opcode.elf" "$work/b26-weak-bad-opcode.o" \
+    >"$work/b26-weak-bad-opcode.log" 2>&1; then
+    echo 'MINILD_LOONGARCH_STATIC=FAIL accepted_malformed_B26_weak_opcode' >&2
+    exit 1
+fi
+grep -Fq 'nonriscv-relocation-overflow-or-encoding:258:66' \
+    "$work/b26-weak-bad-opcode.log"
+echo 'MINILD_LOONGARCH_STATIC=PASS malformed_B26_weak_opcode=rejected'
+
 cat >"$work/align-ok.s" <<'ASM'
 .text
 .option relax
@@ -650,6 +702,8 @@ if command -v "$GNU_LD" >/dev/null && command -v "$QEMU_USER" >/dev/null; then
         -o "$work/pcala-rounding-gnu.elf" "$work/pcala-rounding.o"
     "$GNU_LD" -m elf64loongarch -static -e _start \
         -o "$work/pcala-weak-gnu.elf" "$work/pcala-weak.o"
+    "$GNU_LD" -m elf64loongarch -static -e _start \
+        -o "$work/b26-weak-gnu.elf" "$work/b26-weak.o"
     mini_rc=0; gnu_rc=0
     timeout 15s "$QEMU_USER" "$work/mini.elf" >"$work/mini.out" \
         2>"$work/mini.err" || mini_rc=$?
@@ -686,6 +740,15 @@ if command -v "$GNU_LD" >/dev/null && command -v "$QEMU_USER" >/dev/null; then
     cmp "$work/pcala-weak-mini.out" "$work/pcala-weak-gnu.out"
     cmp "$work/pcala-weak-mini.err" "$work/pcala-weak-gnu.err"
     echo 'MINILD_LOONGARCH_STATIC=PASS GNU_BFD_QEMU_PCALA_undefweak_runtime_parity=1'
+    mini_b26_rc=0; gnu_b26_rc=0
+    timeout 15s "$QEMU_USER" "$work/b26-weak-mini.elf" \
+        >"$work/b26-weak-mini.out" 2>"$work/b26-weak-mini.err" || mini_b26_rc=$?
+    timeout 15s "$QEMU_USER" "$work/b26-weak-gnu.elf" \
+        >"$work/b26-weak-gnu.out" 2>"$work/b26-weak-gnu.err" || gnu_b26_rc=$?
+    test "$mini_b26_rc" -eq 0 && test "$gnu_b26_rc" -eq 0
+    cmp "$work/b26-weak-mini.out" "$work/b26-weak-gnu.out"
+    cmp "$work/b26-weak-mini.err" "$work/b26-weak-gnu.err"
+    echo 'MINILD_LOONGARCH_STATIC=PASS GNU_BFD_QEMU_B26_undefweak_runtime_parity=1'
 else
     echo 'MINILD_LOONGARCH_STATIC=SKIP GNU_BFD_QEMU_runtime_parity missing_cross_tools'
 fi

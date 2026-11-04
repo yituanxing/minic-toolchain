@@ -199,6 +199,23 @@ static bool minild_loongarch_static_write_instruction(
                         reloc->type == R_LARCH_B21 ? 23U :
                         reloc->type == R_LARCH_PCREL20_S2 ? 22U : 28U;
 
+        /* GNU BFD IS_CALL_RELOC: a direct b/bl to an undefined weak
+         * function resolves to address zero.  Branching PC-relatively to
+         * zero would overflow a normal high-base ET_EXEC image; replace
+         * the instruction with jirl $r0/$r1,$r0,0 instead.  This is an
+         * intentional call-to-null, not a fabricated long-branch veneer. */
+        if (reloc->type == R_LARCH_B26 && undefined_weak) {
+            if (!minild_loongarch_branch_opcode(reloc->type, instruction)) {
+                return false;
+            }
+            instruction = (instruction & UINT32_C(0xfc000000)) ==
+                                  UINT32_C(0x54000000)
+                              ? UINT32_C(0x4c000001)
+                              : UINT32_C(0x4c000000);
+            store_u32le(slot, instruction);
+            return true;
+        }
+
         if ((reloc->type == R_LARCH_PCREL20_S2 &&
              (instruction & UINT32_C(0xfe000000)) !=
                  UINT32_C(0x18000000)) ||

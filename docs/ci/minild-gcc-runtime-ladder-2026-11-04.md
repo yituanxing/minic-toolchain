@@ -136,6 +136,12 @@ uses the historical exact GNU golden cache key, verifies its original GCC
 object SHA manifest, and replays only that one link. A cache miss is a hard
 blocker, **not** permission to rebuild 2,064 C inputs. Even a successful
 single cached final link is not a fresh QEMU P1 certification.
+The first cache-only check,
+[#41836643714](https://github.com/yituanxing/minic-toolchain/actions/runs/41836643714),
+failed closed at `actions/cache/restore` because the exact historical cache
+key was absent. No Linux C files were rebuilt and no current-head Linux
+link success was claimed. This check is now manual-only to avoid repeatedly
+installing a cross-toolchain for a known-missing cache on every source push.
 
 The original MiniAS RV64 C ladder used `rv64gc/lp64d`.  MiniC's Linux
 code-generation contract is separately `rv64i/lp64`; they are **not the same

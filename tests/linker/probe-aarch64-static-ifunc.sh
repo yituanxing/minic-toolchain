@@ -6,6 +6,11 @@ set -Eeuo pipefail
 : "${MINILD:?MINILD must point to minic-ld}"
 repo=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
 for tool in python3 readelf timeout cmp; do command -v "$tool" >/dev/null; done
+fixture="$repo/tests/linker/fixtures/aarch64-static-ifunc-irelative.s"
+if [[ ! -f $fixture ]]; then
+    echo "MINILD_AARCH64_IFUNC=FAIL missing_checked_in_fixture=$fixture" >&2
+    exit 2
+fi
 work=$(mktemp -d "${TMPDIR:-/tmp}/minild-a64-ifunc.XXXXXX")
 finish() {
     if [[ ${MINILD_AARCH64_IFUNC_KEEP:-0} == 1 ]]; then
@@ -17,8 +22,7 @@ finish() {
 trap finish EXIT
 
 "$MINIAS" --target=aarch64 -march=armv8-a -mabi=lp64 \
-    -o "$work/entry.o" \
-    "$repo/tests/linker/fixtures/aarch64-static-ifunc-irelative.s"
+    -o "$work/entry.o" "$fixture"
 readelf -Ws "$work/entry.o" >"$work/entry.symbols"
 grep -Eq '[[:space:]]IFUNC[[:space:]]+GLOBAL.*test_ifunc$' \
     "$work/entry.symbols"

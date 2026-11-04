@@ -2,13 +2,6 @@ name: MiniLD RV64 Linux Cached Final Link Recertification
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - refactor/minias-target-isa-abi-core
-    paths:
-      - .github/workflows/minild-rv64-linux-cached-final-recert.yml
-      - linker/src/**
-      - tools/ci/minild-linux-cache-final-replay-v1.sh
 
 jobs:
   rv64-cached-final-link:
