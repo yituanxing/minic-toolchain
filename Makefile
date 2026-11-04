@@ -1709,6 +1709,12 @@ check-x86-linux-smp-xadd-i64: $(MINIC_CC_BINARY)
 
 check-fast: check-x86-linux-smp-xadd-i64
 
+.PHONY: check-x86-linux-percpu-xadd-enum
+check-x86-linux-percpu-xadd-enum: $(MINIC_CC_BINARY)
+	bash tests/compiler/c0/probe-x86-linux-percpu-xadd-enum.sh "$(abspath $(MINIC_CC_BINARY))"
+
+check-fast: check-x86-linux-percpu-xadd-enum
+
 .PHONY: check-record-field-declarator-realloc
 check-record-field-declarator-realloc: $(MINIC_CC_BINARY)
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \

@@ -2733,10 +2733,12 @@ static bool x86_linux_local_xadd_source(
 }
 
 static bool x86_linux_percpu_xadd_source(
+    const MinicTargetInvocation *invocation,
     const MinicC0Program *program, const MinicInlineAsm *source,
     MinicTargetInlineAsmContract *contract, MinicX86GsAtomicPlan plan) {
     const MinicExpression *reg, *memory;
     MinicType reg_type, mem_type;
+    size_t memory_bytes, memory_alignment;
     const size_t width = plan.kind == MINIC_X86_GS_ATOMIC_XADD_PERCPU ?
         plan.width : 0U;
     if (!program || !source || !contract || width == 0U ||
@@ -2757,7 +2759,11 @@ static bool x86_linux_percpu_xadd_source(
         !minic_type_unqualified(reg->type, &reg_type) ||
         !minic_type_unqualified(memory->type, &mem_type) ||
         !x86_linux_xadd_integer_width(reg_type,width) ||
-        !x86_linux_xadd_integer_width(mem_type,width))
+        !(x86_linux_xadd_integer_width(mem_type,width) ||
+          (minic_type_is_enum(mem_type) &&
+           minic_data_layout_type(invocation, program, mem_type,
+                                  &memory_bytes, &memory_alignment) &&
+           memory_bytes == width)))
         return false;
     contract->operand_count = 2U;
     contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE;
@@ -2822,7 +2828,6 @@ static bool x86_linux_gs_cmpxchg_source(
 static bool x86_linux_gs_atomic_source(const MinicTargetInvocation *invocation,
     const MinicC0Program *program, const MinicInlineAsm *source,
     MinicTargetInlineAsmContract *contract) {
-    (void)invocation;
     const MinicX86GsAtomicPlan plan = source ? minic_x86_64_gs_atomic_plan(
         source->template_text, source->template_length) :
         (MinicX86GsAtomicPlan){0};
@@ -2832,7 +2837,8 @@ static bool x86_linux_gs_atomic_source(const MinicTargetInvocation *invocation,
     case MINIC_X86_GS_ATOMIC_XADD_LOCAL:
         return x86_linux_local_xadd_source(program, source, contract, plan);
     case MINIC_X86_GS_ATOMIC_XADD_PERCPU:
-        return x86_linux_percpu_xadd_source(program, source, contract, plan);
+        return x86_linux_percpu_xadd_source(invocation, program, source,
+                                            contract, plan);
     case MINIC_X86_GS_ATOMIC_CMPXCHG:
     case MINIC_X86_GS_ATOMIC_CMPXCHG_RETRY:
         return x86_linux_gs_cmpxchg_source(program, source, contract, plan);
