@@ -30,6 +30,13 @@ as -o "$work/roafter.gnu.o" tests/linker/script-merge-section-roafter.S
     tests/linker/script-merge-section-homogeneous-rv64.S
 "$MINIAS" -march=rv64i -mabi=lp64 -o "$work/incompatible.o" \
     tests/linker/script-merge-section-incompatible-rv64.S
+as -o "$work/initpi.gnu.o" tests/linker/script-mixed-progbits-nobits.S
+as -o "$work/initpi-start.gnu.o" \
+    tests/linker/script-mixed-progbits-nobits-x86-start.S
+"$MINIAS" -march=rv64i -mabi=lp64 -o "$work/initpi.rv64.o" \
+    tests/linker/script-mixed-progbits-nobits.S
+"$MINIAS" -march=rv64i -mabi=lp64 -o "$work/initpi-start.rv64.o" \
+    tests/linker/script-mixed-progbits-nobits-rv64-start.S
 
 for case in grouped separate sorted keep gap roafter; do
     flags=()
@@ -77,6 +84,34 @@ for case in grouped separate sorted keep gap roafter; do
     fi
 done
 
+for order in forward reverse; do
+    suffix=
+    rv64_suffix=
+    if [[ "$order" == reverse ]]; then
+        suffix=-reverse
+        rv64_suffix=-reverse
+    fi
+    ld -m elf_x86_64 -static \
+        -T "tests/linker/script-mixed-progbits-nobits${suffix}.lds" \
+        -o "$work/initpi-$order.gnu.elf" \
+        "$work/initpi-start.gnu.o" "$work/initpi.gnu.o" \
+        2>"$work/initpi-$order.gnu.stderr"
+    "$MINILD" -melf64lriscv -static \
+        -T "tests/linker/script-mixed-progbits-nobits${rv64_suffix}-rv64.lds" \
+        -o "$work/initpi-$order.rv64.elf" \
+        "$work/initpi-start.rv64.o" "$work/initpi.rv64.o" \
+        >"$work/initpi-$order.mini.stdout" \
+        2>"$work/initpi-$order.mini.stderr"
+    if command -v timeout >/dev/null; then
+        timeout 5s "$work/initpi-$order.gnu.elf"
+    else
+        "$work/initpi-$order.gnu.elf"
+    fi
+    if command -v qemu-riscv64 >/dev/null; then
+        qemu-riscv64 "$work/initpi-$order.rv64.elf" >/dev/null
+    fi
+done
+
 cross_gnu=0
 if command -v riscv64-linux-gnu-ld >/dev/null; then
     for case in grouped separate sorted keep gap roafter; do
@@ -96,6 +131,15 @@ if command -v riscv64-linux-gnu-ld >/dev/null; then
         riscv64-linux-gnu-ld -m elf64lriscv -static "${flags[@]}" \
             -T "$script" -o "$work/$case.rv64-gnu.elf" \
             "$work/rv64.o" "${extra[@]}"
+    done
+    for order in forward reverse; do
+        suffix=
+        [[ "$order" == reverse ]] && suffix=-reverse
+        riscv64-linux-gnu-ld -m elf64lriscv -static \
+            -T "tests/linker/script-mixed-progbits-nobits${suffix}-rv64.lds" \
+            -o "$work/initpi-$order.rv64-gnu.elf" \
+            "$work/initpi-start.rv64.o" "$work/initpi.rv64.o" \
+            2>"$work/initpi-$order.rv64-gnu.stderr"
     done
     cross_gnu=1
 elif [[ ${MINILD_REQUIRE_GNU:-0} == 1 ]]; then
@@ -180,7 +224,7 @@ def verify_no_page_alias(path, expect_single):
                 raise SystemExit(f"MINILD_SCRIPT_MERGE=FAIL aliased_load_pages:{path}")
 
 
-def elf_section(path, machine, check_symbols=True):
+def elf_section(path, machine, check_symbols=True, section_name=".rodata"):
     blob = path.read_bytes()
     if blob[:6] != b"\x7fELF\x02\x01":
         raise SystemExit(f"MINILD_SCRIPT_MERGE=FAIL ELF_format:{path}")
@@ -202,11 +246,11 @@ def elf_section(path, machine, check_symbols=True):
             raise SystemExit("MINILD_SCRIPT_MERGE=FAIL shstrtab")
         return names[pos:end].decode("ascii")
 
-    rodata = [(i, sh) for i, sh in enumerate(headers)
-              if name(sh[0]) == ".rodata"]
-    if len(rodata) != 1:
-        raise SystemExit(f"MINILD_SCRIPT_MERGE=FAIL rodata_count:{path}")
-    index, sh = rodata[0]
+    selected = [(i, sh) for i, sh in enumerate(headers)
+                if name(sh[0]) == section_name]
+    if len(selected) != 1:
+        raise SystemExit(f"MINILD_SCRIPT_MERGE=FAIL section_count:{path}:{section_name}")
+    index, sh = selected[0]
     data = blob[sh[4]:sh[4] + sh[5]]
     if len(data) != sh[5] or sh[1] != 1:
         raise SystemExit(f"MINILD_SCRIPT_MERGE=FAIL rodata_bounds:{path}")
@@ -226,11 +270,17 @@ def elf_section(path, machine, check_symbols=True):
             raise SystemExit(f"MINILD_SCRIPT_MERGE=FAIL strtab:{path}")
         observed[symnames[symname:end].decode("ascii")] = value - sh[3]
     if check_symbols:
-        required = [("merge_text", alpha), ("merge_const", constant),
-                    ("normal_const", normal)]
-        if path.name.startswith("roafter."):
-            required.append(("ro_after_init_value",
-                             struct.pack("<Q", 0x1122334455667788)))
+        if section_name == ".init.pi":
+            required = [("init_pi_data", struct.pack("<Q", 0x8877665544332211)),
+                        ("init_pi_zero", b"\0" * 16)]
+        elif section_name == ".tail":
+            required = [("init_pi_tail", struct.pack("<Q", 0xaabbccdd10203040))]
+        else:
+            required = [("merge_text", alpha), ("merge_const", constant),
+                        ("normal_const", normal)]
+            if path.name.startswith("roafter."):
+                required.append(("ro_after_init_value",
+                                 struct.pack("<Q", 0x1122334455667788)))
         for symbol, raw in required:
             where = observed.get(symbol)
             if where is None or data[where:where + len(raw)] != raw:
@@ -254,6 +304,31 @@ for case, wanted in expected.items():
     print(f"MINILD_SCRIPT_MERGE_CASE=PASS case={case} "
           f"byte_count={len(wanted)} flags=A entsize=0")
 
+data_bytes = struct.pack("<Q", 0x8877665544332211)
+tail_bytes = struct.pack("<Q", 0xaabbccdd10203040)
+for order in ("forward", "reverse"):
+    wanted = data_bytes + b"\0" * 16 if order == "forward" else b"\0" * 16 + data_bytes
+    reference = elf_section(work / f"initpi-{order}.gnu.elf", 62,
+                            section_name=".init.pi")
+    candidate = elf_section(work / f"initpi-{order}.rv64.elf", 243,
+                            section_name=".init.pi")
+    if reference != candidate or candidate != (wanted, 0x7, 0):
+        raise SystemExit(f"MINILD_SCRIPT_MERGE=FAIL mixed_nobits:{order} "
+                         f"reference={reference} candidate={candidate}")
+    for path, machine in ((work / f"initpi-{order}.gnu.elf", 62),
+                          (work / f"initpi-{order}.rv64.elf", 243)):
+        tail = elf_section(path, machine, section_name=".tail")
+        if tail != (tail_bytes, 0x3, 0):
+            raise SystemExit(f"MINILD_SCRIPT_MERGE=FAIL mixed_nobits_tail:{path}:{tail}")
+        verify_no_page_alias(path, expect_single=False)
+    if cross_gnu:
+        same_isa = elf_section(work / f"initpi-{order}.rv64-gnu.elf", 243,
+                               section_name=".init.pi")
+        if same_isa != candidate:
+            raise SystemExit(f"MINILD_SCRIPT_MERGE=FAIL mixed_RV64_GNU:{order}")
+    print(f"MINILD_SCRIPT_MERGE_CASE=PASS case=initpi-{order} "
+          "mixed=PROGBITS+NOBITS zero_filled=16 flags=WAX trailing_section=ok")
+
 homogeneous = elf_section(work / "homogeneous.rv64.elf", 243,
                           check_symbols=False)
 if homogeneous[1:] != (0x32, 1):
@@ -261,6 +336,7 @@ if homogeneous[1:] != (0x32, 1):
 print("MINILD_SCRIPT_MERGE=PASS grouped=GNU_bytes separate=GNU_bytes "
       "sorted=GNU_bytes KEEP_GC=GNU_bytes page_gap=GNU_bytes "
       "ro_after_init=GNU_write_union same_page_load_coalesced=1 homogeneous=AMS/1 "
+      "mixed_nobits=2 GNU_byte_oracle=1 "
       "incompatible_flags=reject incompatible_type=reject "
       f"same_ISA_GNU={cross_gnu}")
 PY_ELF

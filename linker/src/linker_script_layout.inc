@@ -1045,6 +1045,7 @@ static bool static_build_script_layout(MiniLdState *state,
     size_t last_file_backed = SIZE_MAX;
     uint64_t *owner_max_align = NULL;
     size_t *owner_remaining = NULL;
+    bool *owner_file_backed = NULL;
     size_t storage_count;
     size_t file_cursor;
     size_t header_size;
@@ -1077,11 +1078,14 @@ static bool static_build_script_layout(MiniLdState *state,
                               script->command_count, sizeof(*owner_max_align));
     owner_remaining = calloc(script->command_count == 0U ? 1U :
                               script->command_count, sizeof(*owner_remaining));
+    owner_file_backed = calloc(script->command_count == 0U ? 1U :
+                               script->command_count,
+                               sizeof(*owner_file_backed));
 
     if (layout->work == NULL || layout->script_outputs == NULL ||
         script_state.section_placed == NULL ||
         command_deferred == NULL || owner_max_align == NULL ||
-        owner_remaining == NULL) {
+        owner_remaining == NULL || owner_file_backed == NULL) {
         fprintf(state->diagnostics,
                 "minic-ld: out-of-memory:linker-script-layout\n");
         goto done;
@@ -1226,6 +1230,9 @@ static bool static_build_script_layout(MiniLdState *state,
         }
         if (owner != SIZE_MAX && owner < script->command_count) {
             ++owner_remaining[owner];
+            if (section->type != SHT_NOBITS) {
+                owner_file_backed[owner] = true;
+            }
         }
         ++alloc_count;
         if ((section->flags & SHF_WRITE) != 0U) {
@@ -1434,8 +1441,12 @@ static bool static_build_script_layout(MiniLdState *state,
                     section->name);
             goto done;
         }
+        /* A mixed PROGBITS/NOBITS script output is itself PROGBITS. Reserve
+         * file bytes through the trailing BSS even when its last member has
+         * no payload; the next output must not reuse that zero-filled span.
+         * Pure NOBITS outputs still consume no file bytes. */
         if (owner != SIZE_MAX && owner < script->command_count &&
-            --owner_remaining[owner] == 0U && section->type != SHT_NOBITS) {
+            --owner_remaining[owner] == 0U && owner_file_backed[owner]) {
             uint64_t span = layout->script_outputs[owner].end -
                             layout->script_outputs[owner].start;
             size_t end;
@@ -1463,6 +1474,7 @@ done:
     free(file_order);
     free(owner_max_align);
     free(owner_remaining);
+    free(owner_file_backed);
     free(command_deferred);
     free(script_state.symbol_provenance);
     free(script_state.section_placed);

@@ -98,7 +98,10 @@ static int minild_output_section_compare(const void *left,
  * final section and PT_LOAD describe the wrong runtime permissions.
  * Mergeable strings/constants, meanwhile, lose their M/S/entsize identity
  * when combined with ordinary bytes.  Keep SHF_ALLOC, TLS, LINK_ORDER,
- * GROUP, NOBITS and section type strict: these are not permission bits. */
+ * GROUP and unrelated section types strict: these are not permission bits.
+ * A scripted output containing both initialized PROGBITS and zero-initialized
+ * NOBITS becomes file-backed PROGBITS, including the NOBITS zero-filled span
+ * in its sh_size. GNU uses this for Linux .init.pi.data + .init.pi.bss. */
 static uint64_t minild_output_plan_combinable_flags(uint32_t type) {
     uint64_t flags = SHF_MERGE | SHF_STRINGS;
 
@@ -112,18 +115,31 @@ static bool minild_output_plan_combine_attributes(
     MiniLdOutputSection *output,
     const MiniLdSection *part) {
     const uint64_t optional = SHF_MERGE | SHF_STRINGS;
+    const bool mixed_nobits =
+        ((output->type == SHT_PROGBITS && part->type == SHT_NOBITS) ||
+         (output->type == SHT_NOBITS && part->type == SHT_PROGBITS)) &&
+        (output->flags & SHF_ALLOC) != 0U &&
+        (part->flags & SHF_ALLOC) != 0U &&
+        ((output->flags | part->flags) &
+         (SHF_TLS | SHF_MERGE | SHF_STRINGS)) == 0U;
+    const uint32_t combined_type = mixed_nobits ? SHT_PROGBITS : output->type;
     const uint64_t combinable =
-        minild_output_plan_combinable_flags(output->type);
+        minild_output_plan_combinable_flags(combined_type);
     const uint64_t existing = output->flags & optional;
     const uint64_t incoming = part->flags & optional;
 
-    if (part->type != output->type ||
+    if ((part->type != output->type && !mixed_nobits) ||
         (part->flags & ~combinable) != (output->flags & ~combinable)) {
         return false;
     }
+    if (existing == 0U && incoming == 0U &&
+        part->entsize != output->entsize) {
+        return false;
+    }
+    output->type = combined_type;
     output->flags |= part->flags & (SHF_WRITE | SHF_EXECINSTR);
     if (existing == 0U && incoming == 0U) {
-        return part->entsize == output->entsize;
+        return true;
     }
     if ((existing & SHF_MERGE) != 0U &&
         (incoming & SHF_MERGE) != 0U &&
@@ -587,6 +603,31 @@ static bool minild_output_plan_emit_sections(
             }
             memset(image + output->file_offset, output->fill,
                    (size_t)output->size);
+            /* A script's FILL pattern applies to alignment holes, not to
+             * SHT_NOBITS members that were promoted into PROGBITS. GNU
+             * materializes those BSS bytes as zeros in the output file. */
+            for (size_t j = 0U; j < output->member_count; ++j) {
+                size_t work = output->members[j];
+                const MiniLdSection *part = &state->work.sections[work];
+                uint64_t delta;
+                size_t offset;
+
+                if (part->type != SHT_NOBITS || part->size == 0U) {
+                    continue;
+                }
+                if (layout->work[work].vaddr < output->vaddr ||
+                    (delta = layout->work[work].vaddr - output->vaddr) >
+                        SIZE_MAX - output->file_offset ||
+                    !range_ok(output->file_offset + (size_t)delta,
+                              part->size, image_size)) {
+                    fprintf(state->diagnostics,
+                            "minic-ld: invalid-mixed-NOBITS-fill:%s\n",
+                            output->name);
+                    return false;
+                }
+                offset = output->file_offset + (size_t)delta;
+                memset(image + offset, 0, part->size);
+            }
         }
     }
     for (i = 0U; i < state->work.count; ++i) {

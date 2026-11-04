@@ -12,3 +12,5 @@ _start:
     .long 0xdecafbad
 .section .rodata.nobits,"a",@nobits
     .space 4
+.section .rodata.note,"a",@note
+    .long 0xabcd1234
