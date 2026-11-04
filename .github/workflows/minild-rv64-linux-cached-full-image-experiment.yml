@@ -1,8 +1,15 @@
 name: MiniLD RV64 Linux Cached Full Image Experiment
 
-# Explicitly opt in: no push trigger, no changes to existing green CI.
+# Explicitly opt in: manual dispatch or a clearly tagged branch commit only;
+# all other pushes skip this expensive experiment and do not touch green CI.
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - refactor/minias-target-isa-abi-core
+    paths:
+      - .github/workflows/minild-rv64-linux-cached-full-image-experiment.yml
+      - tools/ci/minild-rv64-linux-cached-full-image-experiment-v1.sh
 
 permissions:
   contents: read
@@ -10,6 +17,7 @@ permissions:
 
 jobs:
   rv64-mini-ld-full-image:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[minild-rv64-full-image]')
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     steps:
