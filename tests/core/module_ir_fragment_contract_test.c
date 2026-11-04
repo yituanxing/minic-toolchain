@@ -350,6 +350,54 @@ static int verify_materialized_relocation_edges(
     return 0;
 }
 
+/* A hand-built Core Module producer has no C initializer syntax or slot
+ * cardinality. It can still seal the linker-relevant definition class,
+ * typed storage and exactly covered bytes for downstream RV32/RV64 policy. */
+static int verify_source_free_zero_definition_facts(
+    const MinicCoreModule *baseline, MinicCoreTypeContext *types) {
+    MinicCoreType word = {0};
+    MinicCoreTypeId word_id;
+    MinicCoreModuleFragment zero = {
+        .kind = MINIC_CORE_MODULE_FRAGMENT_ZERO,
+        .byte_offset = 0U, .byte_count = 4U
+    };
+    MinicCoreModuleGlobal objects[3] = {
+        {.name = "weak_tentative", .is_weak = true,
+         .is_tentative = true, .emittable = true,
+         .storage_size = 4U, .storage_alignment = 4U,
+         .fragments = &zero, .fragment_count = 1U,
+         .alias_target_index = SIZE_MAX, .owner_function_index = SIZE_MAX},
+        {.name = "weak_empty", .is_weak = true,
+         .is_zero_initialized = true, .emittable = true,
+         .storage_size = 4U, .storage_alignment = 4U,
+         .fragments = &zero, .fragment_count = 1U,
+         .alias_target_index = SIZE_MAX, .owner_function_index = SIZE_MAX},
+        {.name = "weak_counted_zero", .is_weak = true,
+         .emittable = true, .storage_size = 4U,
+         .storage_alignment = 4U, .fragments = &zero,
+         .fragment_count = 1U, .alias_target_index = SIZE_MAX,
+         .owner_function_index = SIZE_MAX}
+    };
+    MinicCoreModule module = *baseline;
+    size_t i;
+
+    word.kind = MINIC_CORE_TYPE_INTEGER;
+    word.has_layout = true;
+    word.size = 4U;
+    word.alignment = 4U;
+    word.value.integer.bit_width = 32U;
+    CHECK(minic_core_type_register(types, &word, &word_id), 110);
+    for (i = 0U; i < 3U; ++i) objects[i].core_type_id = word_id;
+    module.globals = objects;
+    module.global_count = 3U;
+    CHECK(minic_core_module_verify(&module), 111);
+    CHECK(objects[0].is_tentative && !objects[1].is_tentative &&
+          objects[1].is_zero_initialized && !objects[2].is_zero_initialized &&
+          objects[0].fragments == objects[1].fragments &&
+          objects[1].fragments == objects[2].fragments, 112);
+    return 0;
+}
+
 int main(void) {
     MinicCoreModuleFragment parts[3] = {
         {.kind = MINIC_CORE_MODULE_FRAGMENT_ZERO,
@@ -434,9 +482,10 @@ int main(void) {
     CHECK(verify_module_function_symbol_range(&module) == 0, 69);
     CHECK(verify_module_emitted_symbol_namespace(&module, &types) == 0, 89);
     CHECK(verify_materialized_relocation_edges(&module, &types) == 0, 100);
+    CHECK(verify_source_free_zero_definition_facts(&module, &types) == 0, 113);
     symbols[0].name = NULL;
     CHECK(!minic_core_module_verify(&module), 19);
     minic_core_type_context_destroy(&types);
-    puts("CORE_MODULE_FRAGMENT_CONTRACT=PASS bounds forms names alias-index=14 clone_provenance=5 forged_owner_label=5 name_range=9 emitted_elf_namespace=18 canonical_source=valid relocation_edge_identity=8");
+    puts("CORE_MODULE_FRAGMENT_CONTRACT=PASS bounds forms names alias-index=14 clone_provenance=5 forged_owner_label=5 name_range=9 emitted_elf_namespace=18 canonical_source=valid relocation_edge_identity=8 source_free_zero_facts=3");
     return 0;
 }

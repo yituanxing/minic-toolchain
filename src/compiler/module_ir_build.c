@@ -198,7 +198,6 @@ static bool module_capture_global_identity(MinicCoreModuleGlobal *destination,
     destination->is_tentative = source->is_tentative;
     destination->is_block_scope_extern_only = source->is_block_scope_extern_only;
     destination->is_thread_local = source->is_thread_local;
-    destination->initializer_slot_count = source->initializer_count;
     destination->was_source_emission_pruned = source->is_emission_pruned;
     destination->is_file_scope_reachability_root =
         source->owner_function == MINIC_FUNCTION_INVALID &&
@@ -268,7 +267,6 @@ static bool module_capture_global_payload(MinicCoreModuleGlobal *destination,
     if (destination->is_extern) return true;
     if (!minic_multi_global_payload_plan_build(program, target, source, &plan))
         return false;
-    destination->payload_kind = plan.payload_kind;
     destination->default_section = plan.default_section;
     destination->common_elf_bss_admitted =
         minic_multi_global_explicit_bss_admitted(source);

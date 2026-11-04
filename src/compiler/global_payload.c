@@ -988,7 +988,7 @@ bool minic_multi_global_payload_plan_build(
      * A fully zero record remains bytewise zero including bitfield padding. */
     if (obj->initializer_count == 0U && obj->relocation_count == 0U &&
         obj->union_selection_count == 0U) {
-        plan->payload_kind = MINIC_CORE_MODULE_PAYLOAD_ZERO;
+        plan->payload_kind = MINIC_SOURCE_GLOBAL_PAYLOAD_ZERO;
         plan->default_section = obj->is_read_only
             ? MINIC_CORE_MODULE_SECTION_RODATA : MINIC_CORE_MODULE_SECTION_BSS;
         return true;
@@ -998,7 +998,7 @@ bool minic_multi_global_payload_plan_build(
          minic_type_is_record(obj->type) ||
          (minic_type_is_integer(obj->type) &&
           size == target->machine.data_layout->pointer_size))) {
-        plan->payload_kind = MINIC_CORE_MODULE_PAYLOAD_ZERO_RELOCATIONS;
+        plan->payload_kind = MINIC_SOURCE_GLOBAL_PAYLOAD_ZERO_RELOCATIONS;
         plan->default_section = obj->is_read_only
             ? MINIC_CORE_MODULE_SECTION_RELRO : MINIC_CORE_MODULE_SECTION_DATA;
         return true;
@@ -1015,7 +1015,7 @@ bool minic_multi_global_payload_plan_build(
             }
         }
         if (all_zero) {
-            plan->payload_kind = MINIC_CORE_MODULE_PAYLOAD_ZERO;
+            plan->payload_kind = MINIC_SOURCE_GLOBAL_PAYLOAD_ZERO;
             plan->default_section = obj->is_read_only
                 ? MINIC_CORE_MODULE_SECTION_RODATA : MINIC_CORE_MODULE_SECTION_BSS;
             return true;
@@ -1026,10 +1026,10 @@ bool minic_multi_global_payload_plan_build(
             minic_c0_program_record(program, obj->type.record_id);
         if (record == NULL) return false;
         plan->payload_kind = obj->flexible_array_initializer_count != 0U
-            ? MINIC_CORE_MODULE_PAYLOAD_RECORD_FLEXIBLE
+            ? MINIC_SOURCE_GLOBAL_PAYLOAD_RECORD_FLEXIBLE
             : minic_multi_record_initializer_needs_recursive(program, record, obj)
-            ? MINIC_CORE_MODULE_PAYLOAD_RECORD_RECURSIVE
-            : MINIC_CORE_MODULE_PAYLOAD_RECORD_FLAT;
+            ? MINIC_SOURCE_GLOBAL_PAYLOAD_RECORD_RECURSIVE
+            : MINIC_SOURCE_GLOBAL_PAYLOAD_RECORD_FLAT;
         plan->default_section = obj->is_read_only
             ? (obj->relocation_count != 0U
                ? MINIC_CORE_MODULE_SECTION_RELRO : MINIC_CORE_MODULE_SECTION_RODATA)
@@ -1058,10 +1058,10 @@ bool minic_multi_global_payload_plan_build(
             !nested_record) return false;
         if (record_array || nested_record || obj->relocation_count != 0U) {
             plan->payload_kind = record_array
-                ? MINIC_CORE_MODULE_PAYLOAD_ARRAY_RECORD
+                ? MINIC_SOURCE_GLOBAL_PAYLOAD_ARRAY_RECORD
                 : nested_record || nested_relocatable
-                ? MINIC_CORE_MODULE_PAYLOAD_ARRAY_RECURSIVE
-                : MINIC_CORE_MODULE_PAYLOAD_ARRAY_SCALAR_RELOCATIONS;
+                ? MINIC_SOURCE_GLOBAL_PAYLOAD_ARRAY_RECURSIVE
+                : MINIC_SOURCE_GLOBAL_PAYLOAD_ARRAY_SCALAR_RELOCATIONS;
             plan->default_section = obj->is_read_only
                 ? (obj->relocation_count != 0U
                    ? MINIC_CORE_MODULE_SECTION_RELRO : MINIC_CORE_MODULE_SECTION_RODATA)
@@ -1087,7 +1087,7 @@ bool minic_multi_global_payload_plan_build(
             reloc->location_index != 0U) {
             return false;
         }
-        plan->payload_kind = MINIC_CORE_MODULE_PAYLOAD_SCALAR_RELOCATION;
+        plan->payload_kind = MINIC_SOURCE_GLOBAL_PAYLOAD_SCALAR_RELOCATION;
         plan->scalar_type = obj->type;
         plan->scalar_width = size;
         plan->default_section = obj->is_read_only
@@ -1112,7 +1112,7 @@ bool minic_multi_global_payload_plan_build(
         width > size || obj->initializer_count > size / width)
         return false;
     (void)scalar_alignment;
-    plan->payload_kind = MINIC_CORE_MODULE_PAYLOAD_SCALAR_BITS;
+    plan->payload_kind = MINIC_SOURCE_GLOBAL_PAYLOAD_SCALAR_BITS;
     plan->scalar_type = scalar;
     plan->scalar_width = width;
     plan->default_section = obj->is_read_only ? MINIC_CORE_MODULE_SECTION_RODATA
@@ -1134,44 +1134,44 @@ bool minic_multi_global_payload_visit(
         return false;
     }
     switch (plan->payload_kind) {
-    case MINIC_CORE_MODULE_PAYLOAD_ZERO:
+    case MINIC_SOURCE_GLOBAL_PAYLOAD_ZERO:
         if (!minic_payload_zero(sink, plan->storage_size)) return false;
         break;
-    case MINIC_CORE_MODULE_PAYLOAD_ZERO_RELOCATIONS:
+    case MINIC_SOURCE_GLOBAL_PAYLOAD_ZERO_RELOCATIONS:
         if (!minic_multi_visit_zero_relocation_global(
                 sink, program, target, obj, plan->storage_size)) return false;
         break;
-    case MINIC_CORE_MODULE_PAYLOAD_RECORD_FLAT:
+    case MINIC_SOURCE_GLOBAL_PAYLOAD_RECORD_FLAT:
         if (!minic_multi_visit_flat_record_global(
                 sink, program, target, obj, plan->storage_size)) return false;
         break;
-    case MINIC_CORE_MODULE_PAYLOAD_RECORD_RECURSIVE:
+    case MINIC_SOURCE_GLOBAL_PAYLOAD_RECORD_RECURSIVE:
         if (!minic_type_is_record(obj->type) ||
             !minic_multi_visit_recursive_aggregate_global(
                 sink, program, target, obj, plan->storage_size)) return false;
         break;
-    case MINIC_CORE_MODULE_PAYLOAD_RECORD_FLEXIBLE:
+    case MINIC_SOURCE_GLOBAL_PAYLOAD_RECORD_FLEXIBLE:
         if (!minic_multi_visit_flexible_record_global(
                 sink, program, target, obj, plan->storage_size)) return false;
         break;
-    case MINIC_CORE_MODULE_PAYLOAD_ARRAY_RECORD:
+    case MINIC_SOURCE_GLOBAL_PAYLOAD_ARRAY_RECORD:
         if (!minic_multi_visit_record_array_global(
                 sink, program, target, obj, plan->storage_size)) return false;
         break;
-    case MINIC_CORE_MODULE_PAYLOAD_ARRAY_RECURSIVE:
+    case MINIC_SOURCE_GLOBAL_PAYLOAD_ARRAY_RECURSIVE:
         if (!minic_multi_visit_recursive_aggregate_global(
                 sink, program, target, obj, plan->storage_size)) return false;
         break;
-    case MINIC_CORE_MODULE_PAYLOAD_ARRAY_SCALAR_RELOCATIONS:
+    case MINIC_SOURCE_GLOBAL_PAYLOAD_ARRAY_SCALAR_RELOCATIONS:
         if (!minic_multi_visit_relocatable_scalar_array(
                 sink, program, target, obj, plan->storage_size)) return false;
         break;
-    case MINIC_CORE_MODULE_PAYLOAD_SCALAR_RELOCATION:
+    case MINIC_SOURCE_GLOBAL_PAYLOAD_SCALAR_RELOCATION:
         if (obj->relocation_count != 1U ||
             !minic_payload_relocation(sink, &obj->relocations[0],
                                       plan->scalar_width)) return false;
         break;
-    case MINIC_CORE_MODULE_PAYLOAD_SCALAR_BITS:
+    case MINIC_SOURCE_GLOBAL_PAYLOAD_SCALAR_BITS:
         if (obj->initializer_count == 0U) {
             if (!minic_payload_zero(sink, plan->storage_size))
                 return false;

@@ -28,22 +28,6 @@ typedef enum MinicCoreModuleRelocationKind {
     MINIC_CORE_MODULE_RELOCATION_LABEL
 } MinicCoreModuleRelocationKind;
 
-/* These are target-neutral initializer *shapes*, not instructions or ELF
- * encodings. Retaining the ingress classifier's exact evidence also lets
- * an ISA retain an intentionally narrower global-initializer policy. */
-typedef enum MinicCoreModulePayloadKind {
-    MINIC_CORE_MODULE_PAYLOAD_ZERO = 0,
-    MINIC_CORE_MODULE_PAYLOAD_ZERO_RELOCATIONS,
-    MINIC_CORE_MODULE_PAYLOAD_RECORD_FLAT,
-    MINIC_CORE_MODULE_PAYLOAD_RECORD_RECURSIVE,
-    MINIC_CORE_MODULE_PAYLOAD_RECORD_FLEXIBLE,
-    MINIC_CORE_MODULE_PAYLOAD_ARRAY_RECORD,
-    MINIC_CORE_MODULE_PAYLOAD_ARRAY_RECURSIVE,
-    MINIC_CORE_MODULE_PAYLOAD_ARRAY_SCALAR_RELOCATIONS,
-    MINIC_CORE_MODULE_PAYLOAD_SCALAR_RELOCATION,
-    MINIC_CORE_MODULE_PAYLOAD_SCALAR_BITS
-} MinicCoreModulePayloadKind;
-
 typedef enum MinicCoreModuleDefaultSection {
     MINIC_CORE_MODULE_SECTION_BSS = 0,
     MINIC_CORE_MODULE_SECTION_DATA,
@@ -90,16 +74,12 @@ typedef struct MinicCoreModuleGlobal {
     MinicCoreTypeId core_type_id;
     size_t storage_size;
     size_t storage_alignment;
-    /* Sealed initializer-shape evidence (not C types or AST locations).
-     * Some targets intentionally admit only nonempty flattened payloads. */
-    size_t initializer_slot_count;
     /* Relocation cardinality and canonical target identities are owned by
      * references[] before reachability and must match materialized fragments
      * after sealing. There is no independent relocation count. */
     size_t alias_target_index; /* SIZE_MAX when not an alias. */
     size_t owner_function_index; /* SIZE_MAX at file scope. */
     MinicCoreModuleVisibility visibility;
-    MinicCoreModulePayloadKind payload_kind;
     MinicCoreModuleDefaultSection default_section;
     bool emittable;
     bool is_extern;

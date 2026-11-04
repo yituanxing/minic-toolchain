@@ -94,12 +94,11 @@ static bool direct_visit_module_global(
             out, module, obj, ctx->config->elf_object_type);
     if (!success && getenv("MINIC_M1_TRACE") != NULL)
         (void)fprintf(stderr,
-            "MINIC_M4_GLOBAL_FRONTIER arch=%s name=%s payload_kind=%d "
-            "storage=%zu reloc=%zu\n",
+            "MINIC_M4_GLOBAL_FRONTIER arch=%s name=%s "
+            "storage=%zu fragments=%zu reloc=%zu\n",
             ctx->config->architecture_name,
             obj->name != NULL ? obj->name : "<unnamed>",
-            (int)obj->payload_kind, obj->storage_size,
-            obj->reference_count);
+            obj->storage_size, obj->fragment_count, obj->reference_count);
     return success;
 }
 

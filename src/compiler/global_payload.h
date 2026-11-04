@@ -12,12 +12,24 @@
 #include <stddef.h>
 #include <stdint.h>
 
-/* Source/DataLayout owns the C initializer walk, but it publishes the
- * target-neutral ModuleIR classification directly.  Do not maintain a
- * second 10-way payload taxonomy or smuggle GAS section spelling through
- * the C ingress: the backend owns physical ELF/assembly serialization. */
+/* Source-only classification chooses the C initializer walker. It is not a
+ * published Core Module contract: the machine sees the resulting complete
+ * byte fragments, Core type layout, relocations, and linker symbol facts. */
+typedef enum MinicSourceGlobalPayloadKind {
+    MINIC_SOURCE_GLOBAL_PAYLOAD_ZERO = 0,
+    MINIC_SOURCE_GLOBAL_PAYLOAD_ZERO_RELOCATIONS,
+    MINIC_SOURCE_GLOBAL_PAYLOAD_RECORD_FLAT,
+    MINIC_SOURCE_GLOBAL_PAYLOAD_RECORD_RECURSIVE,
+    MINIC_SOURCE_GLOBAL_PAYLOAD_RECORD_FLEXIBLE,
+    MINIC_SOURCE_GLOBAL_PAYLOAD_ARRAY_RECORD,
+    MINIC_SOURCE_GLOBAL_PAYLOAD_ARRAY_RECURSIVE,
+    MINIC_SOURCE_GLOBAL_PAYLOAD_ARRAY_SCALAR_RELOCATIONS,
+    MINIC_SOURCE_GLOBAL_PAYLOAD_SCALAR_RELOCATION,
+    MINIC_SOURCE_GLOBAL_PAYLOAD_SCALAR_BITS
+} MinicSourceGlobalPayloadKind;
+
 typedef struct MinicMultiGlobalEmissionPlan {
-    MinicCoreModulePayloadKind payload_kind;
+    MinicSourceGlobalPayloadKind payload_kind;
     MinicCoreModuleDefaultSection default_section;
     size_t storage_size;
     size_t storage_alignment;

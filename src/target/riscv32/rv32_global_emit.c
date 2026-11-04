@@ -29,6 +29,25 @@ static const char *rv32_module_common_directive(size_t width) {
            width == 4U ? ".4byte" : width == 8U ? ".8byte" : NULL;
 }
 
+/* A tentative or explicit empty initializer has no semantic scalar slots.
+ * The C ingress separately records that definition status; Core fragments
+ * prove that its entire materialized payload is zero. An explicitly listed
+ * {0} record is byte-identical but must NOT acquire this weak-zero policy. */
+static bool rv32_module_weak_zero_payload(const MinicCoreModuleGlobal *global) {
+    const MinicCoreModuleFragment *fragment;
+    if (global == NULL ||
+        (!global->is_tentative && !global->is_zero_initialized) ||
+        global->reference_count != 0U)
+        return false;
+    if (global->storage_size == 0U) return global->fragment_count == 0U;
+    if (global->fragment_count != 1U || global->fragments == NULL)
+        return false;
+    fragment = &global->fragments[0];
+    return fragment->kind == MINIC_CORE_MODULE_FRAGMENT_ZERO &&
+        fragment->byte_offset == 0U &&
+        fragment->byte_count == global->storage_size;
+}
+
 bool minic_riscv32_emit_module_global(FILE *out, const MinicTargetInfo *target,
                                       const MinicCoreModule *module, size_t ordinal) {
     const MinicCoreModuleGlobal *global;
@@ -60,24 +79,15 @@ bool minic_riscv32_emit_module_global(FILE *out, const MinicTargetInfo *target,
     /* The preexisting RV32 zero-size and weak-undefined definitions are
      * distinct ELF symbol policies, not C layout computations. */
     weak_zero = global->is_weak && global->section_name == NULL &&
-        global->initializer_slot_count == 0U &&
-        global->reference_count == 0U &&
-        global->payload_kind == MINIC_CORE_MODULE_PAYLOAD_ZERO;
+        rv32_module_weak_zero_payload(global);
     shared_style = global->storage_size != 0U &&
         global->section_name == NULL && !global->is_weak &&
-        (special_aggregate || global->reference_count != 0U ||
-         global->payload_kind == MINIC_CORE_MODULE_PAYLOAD_RECORD_FLEXIBLE ||
-         global->payload_kind == MINIC_CORE_MODULE_PAYLOAD_RECORD_RECURSIVE ||
-         global->payload_kind == MINIC_CORE_MODULE_PAYLOAD_ARRAY_RECURSIVE);
+        (special_aggregate || global->reference_count != 0U);
     if (!shared_style && !special_aggregate &&
         global->reference_count == 0U && global->storage_size != 0U &&
         !minic_multi_module_global_scalar_width(
             module->type_context, base, &scalar_width) &&
         !weak_zero) return false;
-    if (!shared_style && !special_aggregate &&
-        global->reference_count == 0U && scalar_width != 0U &&
-        global->initializer_slot_count > global->storage_size / scalar_width)
-        return false;
     fallback_override = shared_style ? NULL :
         global->is_read_only ? ".section .rodata" :
         weak_zero ? ".bss" : ".data";

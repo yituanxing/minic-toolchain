@@ -45,6 +45,21 @@ has src/compiler/c_lower/core_ir_source.c 'minic_core_source_builder_destroy('
 has src/core/core_ir.h 'char *local_label_symbol;'
 has src/core/core_ir.h 'char *deferred_immediate_symbol;'
 has src/core/module_ir.h 'char *relocation_symbol;'
+# C initializer syntax is consumed before publishing Core Module globals.
+# The generic ELF definition facts, typed fragments and reference edges are
+# sufficient to drive the five machine owners without shadow initializer
+# cardinality or the C serializer's ten-way payload classification.
+for owner in src/core/module_ir.h src/core/module_ir.c \
+             src/compiler/module_ir_build.c \
+             src/target/riscv32/rv32_global_emit.c \
+             src/target/riscv64/global_emit.c \
+             src/target/common/direct_program_emit.c; do
+  lacks "$owner" 'initializer_slot_count'
+  lacks "$owner" 'payload_kind'
+  lacks "$owner" 'MINIC_SOURCE_GLOBAL_PAYLOAD_'
+done
+has src/compiler/global_payload.h 'MinicSourceGlobalPayloadKind'
+has src/compiler/global_payload.c 'MINIC_SOURCE_GLOBAL_PAYLOAD_ZERO'
 # Module symbols have one alias identity (target index + canonical target
 # name in the same Module), not a second owned alias spelling or boolean.
 # Ingress may still retain C aliases while resolving these Core identities.

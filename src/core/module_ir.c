@@ -376,8 +376,7 @@ bool minic_core_module_verify(const MinicCoreModule *module) {
             if (global->fragment_count != 0U) return false;
             continue;
         }
-        if (global->default_section > MINIC_CORE_MODULE_SECTION_RELRO ||
-            global->payload_kind > MINIC_CORE_MODULE_PAYLOAD_SCALAR_BITS)
+        if (global->default_section > MINIC_CORE_MODULE_SECTION_RELRO)
             return false;
         if (!type->has_layout || !valid_power_two(global->storage_alignment) ||
             !minic_core_module_global_fragments_valid(global) ||

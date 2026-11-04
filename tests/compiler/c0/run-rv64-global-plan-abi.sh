@@ -43,6 +43,31 @@ grep -Fq '  .dword rv64_plan_add' "$work/mini.s"
 grep -Fq '.section .bss.minic.rv64.plan' "$work/mini.s"
 grep -Fq '.section .bssish.minic.rv64.plan' "$work/mini.s"
 
+# The same source shapes as RV32 must be admitted solely from sealed Core
+# types/fragments/definition facts, without source slot cardinality. RV64
+# intentionally uses .data even for weak tentative definitions.
+shape_source="$root/tests/compiler/c0/global_payload_definition_shapes.c"
+"$host_cc" -std=gnu11 -Wall -Wextra -Werror -fsyntax-only "$shape_source"
+"$host_cc" -std=gnu11 -E -P -x c "$shape_source" -o "$work/definition-shapes.i"
+"$minic" --target=riscv64-linux -S "$work/definition-shapes.i" \
+    -o "$work/definition-shapes.s"
+section_of() {
+    awk -v symbol="$1:" '
+        /^\.bss$/ { section = "bss" }
+        /^\.data$/ { section = "data" }
+        $0 == symbol { print section; exit }
+    ' "$work/definition-shapes.s"
+}
+for symbol in weak_tentative weak_explicit_zero weak_empty_array \
+              weak_zero_array weak_empty_record weak_zero_record \
+              nested_scalar_array zero_nested_scalar_array nested_records; do
+    test "$(section_of "$symbol")" = data
+done
+test "$(sed -n '/^nested_scalar_array:$/,/^\.size nested_scalar_array,/p' \
+    "$work/definition-shapes.s" | grep -Fc '  .word ')" -eq 4
+test "$(sed -n '/^nested_records:$/,/^\.size nested_records,/p' \
+    "$work/definition-shapes.s" | grep -Fc '  .word ')" -eq 8
+
 # Section-name injection must never be printed into a valid GAS output.
 rm -f "$work/mini-bad-section.s"
 if "$minic" --target=riscv64-linux -S "$work/bad-section.i" \
@@ -98,7 +123,7 @@ if test -n "$baseline"; then
     echo "RV64_GLOBAL_PLAN_DIFF=PASS identical_positive_s=1 section_injection_rejected=1 bss_admission=$mini_bss"
 fi
 
-echo "RV64_GLOBAL_PLAN_SOURCE=PASS positive=13 nested_reloc=1 flexible=1 bitfield=1 section_injection_rejected=1 historical_bss_admission=$mini_bss GNU_ELF=NOT_RUN"
+echo "RV64_GLOBAL_PLAN_SOURCE=PASS positive=13 nested_reloc=1 flexible=1 bitfield=1 section_injection_rejected=1 historical_bss_admission=$mini_bss weak_shapes=6 nested_shapes=3 GNU_ELF=NOT_RUN"
 
 if test "${MINIC_RV64_GLOBAL_GNU_ELF:-0}" != 1; then
     exit 0

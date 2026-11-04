@@ -3266,3 +3266,51 @@ five-ISA assembly, native `42/42` and 4/4 must-retain diagnostic guards;
 original `mm/memory.i` replay was absent from this local environment and
 needs the Linux receiver. The new probe is a short dependency of `check-fast`;
 no new Linux Image/QEMU test was launched for P64.
+
+## IR-P65 — Publish only sealed global fragments and linker facts (2026-11-04)
+
+**Source/Core ownership:** The ten-way `payload_kind` (C scalar/array/record
+initializer taxonomy) and `initializer_slot_count` have both been removed
+from public `MinicCoreModuleGlobal`, its builder, verifier and target
+consumers. The ten-way source-private `MinicSourceGlobalPayloadKind` remains
+in Compiler's `global_payload` serializer only, where it is still needed to
+consume C initializer shapes and construct deterministic ZERO/BITS/RELOCATION
+fragments. No copied Core field, compatibility enum or shadow slot count
+replaces either removed field. Common trace reports fragment count; the
+target-boundary gate rejects a recurrence of the source classifiers in
+published Core/Module, common output or RV32/RV64 owners.
+
+**RV32/RV64 equivalence:** Both targets make admission and ELF section/data
+directive decisions from sealed CoreType, exact fragment coverage and
+reference edges, generic definition facts (`is_tentative`,
+`is_zero_initialized`), weak/linkage/section policy and ABI widths. RV32's
+weak tentative-zero `.bss` case remains distinct from explicitly initialized
+weak all-zero records/arrays in `.data` although the serialized bytes may be
+identical; it requires a Core zero-definition fact plus one complete ZERO
+fragment. RV32 recursive/record shared style was already implied by a typed
+record base or references, so its three source-kind OR terms were removed
+together. RV64 preserves its previous zero-extent and typed scalar/aggregate
+admission gates without accepting unmaterialized nonzero definitions.
+
+**P65 local evidence:** isolated Debug `-Werror` eight-tool build PASS,
+`check-minic-target-boundaries.sh` PASS, source-private and hand-built
+`check-core-module-fragment-contract` PASS (three deliberately identical
+ZERO-fragment weak globals with different generic definition facts),
+RV32/RV64 GlobalPlan PASS including six weak and three nested shapes each,
+`check-p47-five-isa-output-smoke` PASS including the x86 GNU-native
+global ABI gate. The nine-shape frozen P64 `.s` oracle is byte-identical to
+the P65 output for **both** RV32 and RV64, covering weak tentative,
+explicit 0, empty and `{0}` arrays/records, recursive scalar arrays and
+nested record arrays. GNU's scalar `weak int x = {};` is rejected at the
+MiniC source parser on both P64 and P65 and is **not** counted as an
+accepted-code ELF regression. Optional RV cross-GNU ELF and QEMU runtime
+stages were not run; P65 is **not** a new Linux Image/P1 certificate.
+
+**P66 follow-up, outside P65 scope:** The general Core Module verifier should
+strengthen its type-to-storage extent invariant for independent producers
+(e.g. a complete fixed array with 16-byte CoreType layout but a global
+storage size of zero), and decide the target-neutral legality of contradictory
+zero/tentative facts with nonzero BITS or relocations. These preexisting
+producer-contract questions are deliberately not papered over by new C
+cardinality fields or a P65-only target-specific compatibility layer. Their
+implementation needs a separate five-ISA negative producer matrix.

@@ -66,6 +66,31 @@ static bool rv64_module_zero_extent_legal(const MinicCoreType *type) {
           type->value.array.is_complete));
 }
 
+/* A sealed Module has already consumed every source initializer slot and
+ * validated exact byte coverage. From this point onward RV64 admits only
+ * typed object extents, serialized fragments, relocations, and the generic
+ * definition class (tentative, explicit zero or initialized definition).
+ * Replaying C initializer cardinality here would reject independent Core
+ * producers whose byte-accurate payload has no C syntax at all. */
+static bool rv64_module_definition_payload_valid(
+    const MinicCoreModuleGlobal *global) {
+    size_t i;
+    if (global == NULL) return false;
+    if (global->fragment_count != 0U && global->fragments == NULL)
+        return false;
+    if (global->is_tentative && global->reference_count != 0U) return false;
+    if (!global->is_tentative && !global->is_zero_initialized)
+        return global->storage_size != 0U && global->fragment_count != 0U;
+    /* An uninitialized/zero definition cannot secretly contain nonzero
+     * scalar bytes. Relocations are legal for explicit symbolic zeros. */
+    for (i = 0U; i < global->fragment_count; ++i) {
+        const MinicCoreModuleFragment *fragment = &global->fragments[i];
+        if (fragment->kind == MINIC_CORE_MODULE_FRAGMENT_BITS &&
+            fragment->bits != 0U) return false;
+    }
+    return true;
+}
+
 static bool rv64_module_admit_global(const MinicCoreModule *module,
                                     const MinicCoreModuleGlobal *global) {
     const MinicCoreType *type;
@@ -82,22 +107,22 @@ static bool rv64_module_admit_global(const MinicCoreModule *module,
     zero_extent = global->storage_size == 0U && rv64_module_zero_extent_legal(type);
     if (global->storage_size == 0U && !zero_extent) return false;
     if (zero_extent) {
-        if (global->initializer_slot_count != 0U ||
+        if (global->fragment_count != 0U ||
             global->reference_count != 0U) return false;
+    } else if (!rv64_module_definition_payload_valid(global)) {
+        return false;
     } else if (global->is_zero_initialized || global->is_tentative) {
-        if (global->initializer_slot_count != 0U) return false;
+        /* The zero payload may contain a target-width relocation; the
+         * fragment verifier has already checked its byte placement. */
     } else if (type->kind == MINIC_CORE_TYPE_RECORD) {
-        if (!type->value.record.is_complete ||
-            global->initializer_slot_count == 0U) return false;
+        if (!type->value.record.is_complete) return false;
     } else if (rv64_module_array_recursive(module->type_context, type) ||
                (type->kind == MINIC_CORE_TYPE_ARRAY &&
                 global->reference_count != 0U)) {
-        if (global->initializer_slot_count == 0U) return false;
+        if (global->fragment_count == 0U) return false;
     } else if (global->reference_count != 0U ||
                !minic_multi_module_global_scalar_width(
-                   module->type_context, type, &scalar_width) ||
-               global->initializer_slot_count >
-                    global->storage_size / scalar_width) {
+                   module->type_context, type, &scalar_width)) {
         return false;
     }
     return true;

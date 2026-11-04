@@ -49,6 +49,32 @@ for symbol in rv32_plan_weak_zero rv32_plan_weak_value rv32_plan_weak_array; do
     grep -Fq ".weak $symbol" "$work/mini.s"
 done
 
+# P65 Core-only definition facts must preserve the historical RV32 section
+# distinction across identical ZERO fragments. Recursive scalar arrays use
+# RV32 .word; nested record arrays still use the shared .4byte form.
+shape_source="$root/tests/compiler/c0/global_payload_definition_shapes.c"
+"$host_cc" -std=gnu11 -Wall -Wextra -Werror -fsyntax-only "$shape_source"
+"$host_cc" -std=gnu11 -E -P -x c "$shape_source" -o "$work/definition-shapes.i"
+"$minic" --target=riscv32-linux -march=rv32i -mabi=ilp32 \
+    -S "$work/definition-shapes.i" -o "$work/definition-shapes.s"
+section_of() {
+    awk -v symbol="$1:" '
+        /^\.bss$/ { section = "bss" }
+        /^\.data$/ { section = "data" }
+        $0 == symbol { print section; exit }
+    ' "$work/definition-shapes.s"
+}
+test "$(section_of weak_tentative)" = bss
+for symbol in weak_explicit_zero weak_empty_array weak_zero_array \
+              weak_empty_record weak_zero_record nested_scalar_array \
+              zero_nested_scalar_array nested_records; do
+    test "$(section_of "$symbol")" = data
+done
+test "$(sed -n '/^nested_scalar_array:$/,/^\.size nested_scalar_array,/p' \
+    "$work/definition-shapes.s" | grep -Fc '  .word ')" -eq 4
+test "$(sed -n '/^nested_records:$/,/^\.size nested_records,/p' \
+    "$work/definition-shapes.s" | grep -Fc '  .4byte ')" -eq 8
+
 rm -f "$work/mini-bad-section.s"
 if "$minic" --target=riscv32-linux -march=rv32i -mabi=ilp32 \
     -S "$work/bad-section.i" -o "$work/mini-bad-section.s" \
@@ -83,7 +109,7 @@ if test -n "$baseline"; then
     echo 'RV32_GLOBAL_PLAN_DIFF=PASS source_same_i=1 asm_byte_identical=1 section_injection_rejected=1'
 fi
 
-echo 'RV32_GLOBAL_PLAN_SOURCE=PASS objects=14 weak=3 zero_size=2 named_bss_progbits=1 nested=1 reloc_addend32=1 scalar_8byte=1 injection_rejected=1 GNU_ELF=NOT_RUN'
+echo 'RV32_GLOBAL_PLAN_SOURCE=PASS objects=14 weak=3 zero_size=2 named_bss_progbits=1 nested=1 reloc_addend32=1 scalar_8byte=1 injection_rejected=1 source_free_definition_shadows=0 weak_shapes=6 nested_shapes=3 GNU_ELF=NOT_RUN'
 if test "${MINIC_RV32_GLOBAL_GNU_ELF:-0}" != 1; then
     exit 0
 fi
