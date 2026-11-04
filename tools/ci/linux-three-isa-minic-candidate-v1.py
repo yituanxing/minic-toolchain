@@ -430,6 +430,65 @@ def make_objects(rows: list[dict], work: Path, compiler: Path, output: Path,
     return results
 
 
+def failed_owner_family(result: dict) -> str:
+    """Classify only the first *observed* diagnostic, never infer a fix.
+
+    The seven-shard campaign is unchanged; this label only guides which
+    immutable GNU -E inputs survive the eight-owner evidence budget.
+    """
+    detail = result.get("detail") or ""
+    machine = re.search(r"Core instruction unsupported:.*?\bkind (\d+)\b",
+                        detail)
+    if machine:
+        return f"MACHINE_KIND_{machine.group(1)}"
+    if "Core IR does not yet support function" in detail:
+        return "CORE_UNSUPPORTED"
+    if "Core IR lowering failed for function" in detail:
+        return "CORE_LOWERING"
+    if "parsed AST contract failed" in detail:
+        return "AST_CONTRACT"
+    if "snapshot" in detail.lower() and "Core" in detail:
+        return "CORE_SNAPSHOT"
+    return result.get("status") or "UNCLASSIFIED"
+
+
+def select_failed_owner_evidence(failures: list[dict], limit: int) -> list[dict]:
+    """Prefer distinct root families before repeating path-order first errors.
+
+    Known recurrent Linux first barriers need enough slots to distinguish
+    descriptor-table ASM from uncommon x86 ASM using the same Core kind 43.
+    Do not change C-owner compilation, object inclusion, or linker verdict.
+    """
+    families: dict[str, list[dict]] = {}
+    for failure in failures:
+        families.setdefault(failed_owner_family(failure), []).append(failure)
+    selected: list[dict] = []
+    selected_names: set[str] = set()
+
+    def include(failure: dict) -> None:
+        name = failure["object"]
+        if len(selected) < limit and name not in selected_names:
+            selected.append(failure)
+            selected_names.add(name)
+
+    # Three kind-43 samples preserve both common descriptor instructions and
+    # uncommon net/trace forms even when they occur later in the manifest.
+    for family, quota in (("MACHINE_KIND_43", 3),
+                          ("CORE_UNSUPPORTED", 2),
+                          ("CORE_LOWERING", 2)):
+        for failure in families.get(family, [])[:quota]:
+            include(failure)
+    # Preserve other rare machine instruction kinds and distinct semantic
+    # families before assigning the rest by stable original manifest order.
+    for family in families:
+        if family not in ("MACHINE_KIND_43", "CORE_UNSUPPORTED",
+                          "CORE_LOWERING"):
+            include(families[family][0])
+    for failure in failures:
+        include(failure)
+    return selected
+
+
 def preserve_first_failed_owners(work: Path, output: Path, rows: list[dict],
                                  results: list[dict], limit: int = 8) -> dict:
     """Retain bounded *original* GNU -E and exact .o.cmd failure reproductions.
@@ -437,6 +496,8 @@ def preserve_first_failed_owners(work: Path, output: Path, rows: list[dict],
     Failed owner inputs are never swapped with GNU compiler output and are
     never retried during the campaign. This only copies first-error evidence
     before the existing fail-closed no-partial-C-owner gate rejects the run.
+    Root-stratified selection avoids hiding rare machine instruction failures
+    behind earlier path-ordered lowering failures within this strict budget.
     """
     failures = [item for item in results if item["status"] != "MINIC_S_GNU_AS_PASS"]
     if not failures:
@@ -451,11 +512,12 @@ def preserve_first_failed_owners(work: Path, output: Path, rows: list[dict],
               "sample_count": 0, "diagnostics_only": True,
               "no_gcc_retry_or_fallback": True, "samples": [],
               "diagnostic_errors": []}
-    for failed in failures[:limit]:
+    for failed in select_failed_owner_evidence(failures, limit):
         name = PurePosixPath(failed["object"])
         folder = samples / name.with_suffix("")
         folder.mkdir(parents=True, exist_ok=False)
         entry = {"owner": str(name), "failure_status": failed["status"],
+                 "failure_family": failed_owner_family(failed),
                  "error_tail": failed.get("detail", ""), "files": {}}
         row = by_name.get(str(name))
         if row is None:
@@ -1978,8 +2040,9 @@ def self_test() -> None:
             {"object": "arch/loongarch/vdso/vgetcpu.o"},
             {"object": "arch/loongarch/vdso/vgettimeofday.o"}], "loongarch64")) == 3
         failures_checked += 1
-        # Preserve only the first eight authentic frozen failures; no GCC
-        # replay or fallback is permitted even when ten owners failed.
+        # Preserve at most eight authentic frozen failures; no GCC replay or
+        # fallback is permitted even when ten owners failed. Without an
+        # observed diagnostic family the original manifest order wins.
         first_work = Path(temp) / "first-errors-work"
         first_out = Path(temp) / "first-errors-output"
         first_out.mkdir()
@@ -2020,6 +2083,40 @@ def self_test() -> None:
         assert (first_out / "failed-owner-diagnostics/kernel/first_error_1/minic.s").is_file()
         assert not (first_out / "failed-owner-diagnostics/kernel/first_error_8").exists()
         assert len((first_owner / "tool-stderr.txt").read_text()) > 600
+        failures_checked += 1
+        # In a later Linux campaign three distinct Core kind-43 machine ASM
+        # failures can occur after the first eight paths. The diagnostic
+        # collector must keep their frozen original .i and .o.cmd artifacts
+        # while retaining representatives of Core lowering/unsupported.
+        stratified_results = [dict(item) for item in failed_results]
+        for index in (4, 7, 8):
+            stratified_results[index]["detail"] = (
+                f"error: x86-64 Core instruction unsupported: "
+                f"function original_machine_{index}, kind 43")
+        for index in (1, 6, 9):
+            stratified_results[index]["detail"] = (
+                f"error: Core IR does not yet support function 'original_{index}'")
+        stratified_results[2]["detail"] = (
+            "error: Core IR lowering failed for function 'original_2'")
+        stratified_results[3]["detail"] = (
+            "error: Core IR lowering failed for function 'original_3'")
+        stratified_out = Path(temp) / "stratified-errors-output"
+        stratified_out.mkdir()
+        shutil.copytree(first_out / "staged", stratified_out / "staged")
+        stratified = preserve_first_failed_owners(
+            first_work, stratified_out, failed_rows, stratified_results)
+        assert stratified["verdict"] == "FIRST_FAILED_OWNER_DIAGNOSTICS_COMPLETE"
+        assert stratified["sample_count"] == 8
+        captured = {row["owner"]: row["failure_family"]
+                    for row in stratified["samples"]}
+        for index in (4, 7, 8):
+            name = f"kernel/first_error_{index}.o"
+            assert captured[name] == "MACHINE_KIND_43"
+            assert sha(stratified_out / "failed-owner-diagnostics/kernel" /
+                       f"first_error_{index}/original.gnu.i") == failed_rows[index]["sha256"]
+        assert sum(family == "CORE_UNSUPPORTED" for family in captured.values()) >= 2
+        assert sum(family == "CORE_LOWERING" for family in captured.values()) >= 2
+        assert "kernel/first_error_9.o" not in captured
         failures_checked += 1
         # On original-GNU *link* failure there are no failed MiniC C owners.
         # GNU LD can print only a basename; exactly one matching manifest

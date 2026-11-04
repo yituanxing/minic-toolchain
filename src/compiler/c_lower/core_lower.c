@@ -1232,14 +1232,16 @@ minic_core_lower_internal_lower_block(MinicCoreLowerContext *context, const Mini
            cleanup-expression lowering, which remains fail-closed here. */
         /* M142_NONEDGE_CLEANUP_METADATA_OWNER: cleanup ids describe the
            current lifetime context as well as executable cleanup transitions.
-           ASSIGN and LABEL have no outgoing control edge of their own: the
-           eventual RETURN/BREAK/GOTO/scope-exit owns cleanup execution. GNU
-           source labels inside an active cleanup context must carry their
-           actual context for a goto to resolve the correct lifetime boundary.
-           Keep other nonzero-distance shapes fail-closed. */
+           ASSIGN, LABEL and INLINE_ASM do not themselves exit that lifetime:
+           a regular asm falls through, and the parser already proves every
+           `asm goto` target stays in the SAME GNU cleanup lifetime. The
+           eventual RETURN/BREAK/GOTO/scope-exit owns destructor execution.
+           Reject unclaimed nonzero-distance control effects, not an ordinary
+           asm merely because a cleanup local is active around it. */
         if (statement->cleanup_context != statement->cleanup_stop_context &&
             statement->kind != MINIC_STATEMENT_RETURN &&
             statement->kind != MINIC_STATEMENT_ASSIGN &&
+            statement->kind != MINIC_STATEMENT_INLINE_ASM &&
             statement->kind != MINIC_STATEMENT_BREAK &&
             statement->kind != MINIC_STATEMENT_LABEL &&
             !(statement->kind == MINIC_STATEMENT_GOTO &&

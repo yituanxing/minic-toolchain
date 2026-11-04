@@ -69,6 +69,27 @@ static bool x86_asm_core_unsigned_integer_width(
            x86_asm_core_width(fn, id, &actual) && actual == width;
 }
 
+/* LIDT/LGDT/SIDT/SGDT consume a packed memory image, never a scalar value.
+ * The source ASM contract already checked C member names and GNU "m"/"=m"
+ * constraints. Recheck the lowered Core object representation here so that
+ * the CPU receives exactly the 16-bit limit followed by a 64-bit base. */
+static bool x86_asm_core_descriptor_table_record(
+    const MinicCoreFunction *fn, MinicCoreTypeId id) {
+    const MinicCoreType *record = x86_asm_core_type(fn, id);
+    const MinicCoreRecordField *fields;
+    if (!record || record->kind != MINIC_CORE_TYPE_RECORD ||
+        !record->has_layout || record->size != 10U || record->alignment != 1U ||
+        !record->value.record.is_complete || record->value.record.is_union ||
+        record->value.record.field_count != 2U ||
+        !(fields = record->value.record.fields) ||
+        fields[0].is_bit_field || fields[1].is_bit_field ||
+        fields[0].byte_offset != 0U || fields[1].byte_offset != 2U ||
+        fields[0].bit_offset != 0U || fields[1].bit_offset != 0U)
+        return false;
+    return x86_asm_core_unsigned_integer_width(fn, fields[0].type_id, 2U) &&
+           x86_asm_core_unsigned_integer_width(fn, fields[1].type_id, 8U);
+}
+
 static bool x86_asm_core_signed_integer_width(
     const MinicCoreFunction *fn, MinicCoreTypeId id, size_t width) {
     const MinicCoreType *type = x86_asm_core_type(fn, id);
@@ -5967,7 +5988,6 @@ bool minic_x86_64_emit_structured_asm(
         if (table != 0U) {
         const MinicCoreStructuredInlineAsmOperand *operand = bindings;
         MinicCoreTypeId desc_type;
-        size_t size;
         if (!operand || !info->is_volatile || info->is_goto ||
             !info->has_memory_clobber || info->register_clobber_count != 0U ||
             ins->value.structured_inline_asm.operand_count != 1U ||
@@ -5978,9 +5998,7 @@ bool minic_x86_64_emit_structured_asm(
             operand[0].early_clobber || operand[0].has_fixed_register_binding ||
             operand[0].value >= fn->value_count ||
             !x86_asm_operand_type(fn,operand[0].value,true,&desc_type) ||
-            !x86_asm_core_is_kind(fn,desc_type,MINIC_CORE_TYPE_RECORD) ||
-            !x86_asm_core_width(fn,desc_type,&size) ||
-            size != 10U)
+            !x86_asm_core_descriptor_table_record(fn,desc_type))
             return false;
         /* Memory input is the Core lvalue address. LIDT atomically consumes
          * the packed 10-byte descriptor; no fabricated doubleword load or

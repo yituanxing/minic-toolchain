@@ -2531,6 +2531,29 @@ check-qualified-array-address-verifier: $(MINIC_CC_BINARY)
 
 check-fast: check-qualified-array-address-verifier
 
+# C-to-Core function signature ingress, qualified record storage and GNU
+# cleanup inline-asm are shared frontend/Core contracts. Keep their GNU
+# differential and five-ISA source probes in the regular fast gate.
+.PHONY: check-core-qualified-record-function-pointer check-gnu-cleanup-asm-lifetime
+check-core-qualified-record-function-pointer: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	  bash tests/compiler/c0/probe-core-qualified-record-function-pointer.sh
+
+check-gnu-cleanup-asm-lifetime: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	  bash tests/compiler/c0/probe-gnu-cleanup-goto-lifetime.sh
+
+# Descriptor-table instructions have a strict 10-byte packed Core record
+# memory operand, unlike scalar integer loads/stores; verify true GNU ELF
+# emission without trying to execute privileged LIDT/LGDT in user mode.
+.PHONY: check-x86-linux-descriptor-table-elf
+check-x86-linux-descriptor-table-elf: $(MINIC_CC_BINARY)
+	bash tests/compiler/c0/probe-x86-linux-descriptor-table-elf.sh \
+	  "$(abspath $(MINIC_CC_BINARY))"
+
+check-fast: check-core-qualified-record-function-pointer \
+	check-gnu-cleanup-asm-lifetime check-x86-linux-descriptor-table-elf
+
 # Materialized typedef and fixed local arrays must retain the same C semantics
 # across all five emitters. Host GNU provides
 # native runtime and 16 independent invalid-input oracles (80 target rejects).

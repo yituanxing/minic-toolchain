@@ -272,6 +272,23 @@ static bool core_is_record(const MinicCoreFunction *function, MinicCoreTypeId id
     return core_is(function, id, MINIC_CORE_TYPE_RECORD);
 }
 
+/* An aggregate's nominal record identity determines its copied bytes, while
+ * each object's own CoreType retains top-level cv and ABI alignment (e.g.
+ * `typedef struct S aligned_S __attribute__((aligned(4)))`).  Stripping the
+ * alignment override from the object/signature itself would lose its stack
+ * and calling-convention layout.  Only use unqualification for the comparison
+ * of the underlying record value, and keep its complete byte extent exact. */
+static bool core_record_storage_matches(const MinicCoreFunction *function,
+                                        MinicCoreTypeId left, MinicCoreTypeId right) {
+    const MinicCoreType *left_type = minic_core_function_type_get(function, left);
+    const MinicCoreType *right_type = minic_core_function_type_get(function, right);
+    return left_type != NULL && right_type != NULL &&
+           left_type->has_layout && right_type->has_layout &&
+           left_type->size == right_type->size &&
+           core_is_record(function, left) && core_is_record(function, right) &&
+           core_unqualified(function, left) == core_unqualified(function, right);
+}
+
 static bool core_is_void(const MinicCoreFunction *function, MinicCoreTypeId id) {
     return core_is(function, id, MINIC_CORE_TYPE_VOID);
 }
@@ -766,7 +783,6 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
     }
     case MINIC_CORE_INSTRUCTION_PARAMETER_OBJECT: {
         MinicCoreObjectId object_id;
-        MinicCoreTypeId object_value_type;
         size_t parameter_index;
 
         object_id = instruction->value.parameter_object.object_id;
@@ -774,9 +790,9 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
         return instruction->result == MINIC_CORE_VALUE_INVALID &&
                ct_is_void(instruction->core_type_id) &&
                parameter_index < function->parameter_count && object_id < function->object_count &&
-               ct_is_record(function->core_parameter_type_ids[parameter_index]) &&
-               ct_unqualified(function->objects[object_id].core_type_id, &object_value_type) &&
-               ct_equal(function->core_parameter_type_ids[parameter_index], object_value_type);
+               core_record_storage_matches(function,
+                   function->core_parameter_type_ids[parameter_index],
+                   function->objects[object_id].core_type_id);
     }
     case MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS: {
         MinicCoreTypeId pointee;
@@ -918,6 +934,7 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
     case MINIC_CORE_INSTRUCTION_STORE: {
         MinicCoreTypeId pointee;
         MinicCoreTypeId value_type;
+        MinicCoreTypeId stored_type;
         MinicCoreValueId stored_value;
 
         stored_value = instruction->value.store.stored_value;
@@ -929,31 +946,29 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
             !ct_unqualified(pointee, &value_type)) {
             return false;
         }
-        return ct_equal(value_type, function->values[stored_value].core_type_id) &&
+        return ct_unqualified(function->values[stored_value].core_type_id, &stored_type) &&
+               ct_equal(value_type, stored_type) &&
                instruction->value.store.is_volatile == ct_is_volatile(pointee);
     }
     /* BATCH_M_RECORD_LOAD: source qualification is semantic metadata.  The
        destination is an unqualified private snapshot object. */
     case MINIC_CORE_INSTRUCTION_RECORD_LOAD: {
         MinicCoreObjectId destination_object;
-        MinicCoreTypeId record_type;
         MinicCoreTypeId source_pointee;
-        MinicCoreTypeId source_type;
 
         destination_object = instruction->value.record_load.destination_object;
         return instruction->result == MINIC_CORE_VALUE_INVALID &&
                ct_is_record(instruction->core_type_id) &&
-               ct_unqualified(instruction->core_type_id, &record_type) &&
-               ct_equal(record_type, instruction->core_type_id) &&
                destination_object < function->object_count &&
-               ct_equal(function->objects[destination_object].core_type_id,
-                                instruction->core_type_id) &&
+               core_record_storage_matches(function,
+                   function->objects[destination_object].core_type_id,
+                   instruction->core_type_id) &&
                available_pointer_pointee(function,
                                          available_values,
                                          instruction->value.record_load.source_address,
                                          &source_pointee) &&
-               ct_unqualified(source_pointee, &source_type) &&
-               ct_equal(source_type, instruction->core_type_id) &&
+               core_record_storage_matches(function, source_pointee,
+                                           instruction->core_type_id) &&
                instruction->value.record_load.is_volatile ==
                    ct_is_volatile(source_pointee);
     }
@@ -962,15 +977,10 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
        destination is already established by the frontend initializer/copy node. */
     case MINIC_CORE_INSTRUCTION_RECORD_COPY: {
         MinicCoreTypeId destination_pointee;
-        MinicCoreTypeId destination_type;
         MinicCoreTypeId source_pointee;
-        MinicCoreTypeId source_type;
-        MinicCoreTypeId record_type;
 
         return instruction->result == MINIC_CORE_VALUE_INVALID &&
                ct_is_record(instruction->core_type_id) &&
-               ct_unqualified(instruction->core_type_id, &record_type) &&
-               ct_equal(record_type, instruction->core_type_id) &&
                available_pointer_pointee(function,
                                          available_values,
                                          instruction->value.record_copy.destination_address,
@@ -979,10 +989,10 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
                                          available_values,
                                          instruction->value.record_copy.source_address,
                                          &source_pointee) &&
-               ct_unqualified(destination_pointee, &destination_type) &&
-               ct_unqualified(source_pointee, &source_type) &&
-               ct_equal(destination_type, instruction->core_type_id) &&
-               ct_equal(source_type, instruction->core_type_id);
+               core_record_storage_matches(function, destination_pointee,
+                                           instruction->core_type_id) &&
+               core_record_storage_matches(function, source_pointee,
+                                           instruction->core_type_id);
     }
     case MINIC_CORE_INSTRUCTION_VECTOR_STORAGE_COPY: {
         MinicCoreTypeId destination_pointee, source_pointee;
@@ -1346,7 +1356,7 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
         } else if (ct_is_record(return_type)) {
             if (instruction->result != MINIC_CORE_VALUE_INVALID ||
                 instruction->value.call.result_object >= function->object_count ||
-                !ct_equal(
+                !core_record_storage_matches(function,
                     function->objects[instruction->value.call.result_object].core_type_id,
                     return_type)) {
                 return false;
@@ -1411,7 +1421,8 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
                     }
                     object_id = argument->value.object_id;
                     if (object_id >= function->object_count ||
-                        !ct_equal(function->objects[object_id].core_type_id, parameter_type)) {
+                        !core_record_storage_matches(function,
+                            function->objects[object_id].core_type_id, parameter_type)) {
                         return false;
                     }
                 } else {
@@ -1464,7 +1475,7 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
         } else if (ct_is_record(signature_type->value.function.return_type)) {
             if (instruction->result != MINIC_CORE_VALUE_INVALID ||
                 instruction->value.indirect_call.result_object >= function->object_count ||
-                !ct_equal(
+                !core_record_storage_matches(function,
                     function->objects[instruction->value.indirect_call.result_object].core_type_id,
                     signature_type->value.function.return_type))
                 return false;
@@ -1521,7 +1532,8 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
                     }
                     object_id = argument->value.object_id;
                     if (object_id >= function->object_count ||
-                        !ct_equal(function->objects[object_id].core_type_id, parameter_type)) {
+                        !core_record_storage_matches(function,
+                            function->objects[object_id].core_type_id, parameter_type)) {
                         return false;
                     }
                 } else {
@@ -1547,7 +1559,6 @@ static bool terminator_is_valid(const MinicCoreFunction *function,
             return terminator->return_value == MINIC_CORE_VALUE_INVALID;
         }
         if (ct_is_record(function->core_return_type_id)) {
-            MinicCoreTypeId result_type;
             /* Returning a const-qualified LOCAL record copies its value.
              * C discards top-level qualifiers on the returned rvalue, not
              * nested member or pointee qualifiers. The Core return object
@@ -1555,10 +1566,9 @@ static bool terminator_is_valid(const MinicCoreFunction *function,
              * identity after removing only that top-level qualifier. */
             return terminator->return_value == MINIC_CORE_VALUE_INVALID &&
                    terminator->return_object < function->object_count &&
-                   ct_unqualified(
+                   core_record_storage_matches(function,
                        function->objects[terminator->return_object].core_type_id,
-                       &result_type) &&
-                   ct_equal(result_type, function->core_return_type_id);
+                       function->core_return_type_id);
         }
         return terminator->return_value < function->value_count &&
                available_values[terminator->return_value] &&

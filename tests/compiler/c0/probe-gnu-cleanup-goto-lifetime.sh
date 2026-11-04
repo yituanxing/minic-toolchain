@@ -24,4 +24,12 @@ if "$MINIC_CC" --target=x86_64-linux -S \
 fi
 grep -Fq 'goto cannot enter a different GNU cleanup lifetime' "$work/invalid.log"
 test ! -e "$work/invalid.s"
-echo 'MINIC_GNU_GOTO_CLEANUP=PASS native_forward_backward_same_scope=3 invalid_entry_rejected=1'
+if "$MINIC_CC" --target=x86_64-linux -S \
+    "$root/tests/compiler/c0/gnu_cleanup_asm_goto_cross_scope.c" \
+    -o "$work/invalid-asm-goto.s" 2>"$work/invalid-asm-goto.log"; then
+    echo 'MINIC_GNU_GOTO_CLEANUP=FAIL asm_goto_cross_lifetime' >&2
+    exit 1
+fi
+grep -Fq 'GNU asm goto cannot cross a GNU cleanup lifetime' "$work/invalid-asm-goto.log"
+test ! -e "$work/invalid-asm-goto.s"
+echo 'MINIC_GNU_GOTO_CLEANUP=PASS native_cleanup_inline_asm=1 invalid_entry_rejected=1 invalid_asm_cross=1'

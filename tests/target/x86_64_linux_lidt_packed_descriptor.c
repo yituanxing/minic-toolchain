@@ -12,3 +12,11 @@ void minic_test_linux_lidt(const struct desc_ptr *descriptor) {
 void minic_test_linux_lgdt(const struct desc_ptr *descriptor) {
     asm volatile("lgdt %0" : : "m" (*descriptor));
 }
+
+void minic_test_linux_sgdt(struct desc_ptr *descriptor) {
+    asm volatile("sgdt %0" : "=m" (*descriptor));
+}
+
+void minic_test_linux_sidt(struct desc_ptr *descriptor) {
+    asm volatile("sidt %0" : "=m" (*descriptor));
+}

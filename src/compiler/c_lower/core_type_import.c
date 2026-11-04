@@ -224,6 +224,35 @@ static bool import_function(MinicCoreTypeImporter *importer, MinicType source,
     for (i = 0U; i < function->parameter_count; ++i)
         if (!import_type(importer, function->parameter_types[i], &params[i], depth + 1U))
             goto failed;
+
+    /* C declarations can manufacture distinct source FunctionType IDs for
+     * the same fully resolved execution signature (notably a function
+     * pointer record field versus its initializer).  This importer-local
+     * canonicalization keeps their nested POINTER CoreTypes identical; the
+     * Core arena itself still preserves independent producers' nominal
+     * function identities and the indirect-call verifier's exact TypeId
+     * contract.  Compare EVERY ABI-relevant signature component rather than
+     * merely return/parameter register classes. */
+    for (i = 0U; i < importer->function_count; ++i) {
+        const MinicCoreType *existing;
+        MinicCoreTypeId previous = importer->function_types[i];
+        if (previous == MINIC_CORE_TYPE_INVALID) continue;
+        existing = minic_core_type_get(importer->context, previous);
+        if (existing == NULL || existing->kind != MINIC_CORE_TYPE_FUNCTION ||
+            existing->value.function.return_type != type.value.function.return_type ||
+            existing->value.function.parameter_count != function->parameter_count ||
+            existing->value.function.is_variadic != function->is_variadic ||
+            existing->value.function.calling_convention != function->calling_convention ||
+            (function->parameter_count != 0U &&
+             (existing->value.function.parameters == NULL ||
+              memcmp(existing->value.function.parameters, params,
+                     function->parameter_count * sizeof(*params)) != 0)))
+            continue;
+        *result = previous;
+        importer->function_types[source.function_type_id] = previous;
+        free(params);
+        return true;
+    }
     if (!minic_core_type_register(importer->context, &type, result)) goto failed;
     importer->function_types[source.function_type_id] = *result;
     free(params);

@@ -77,6 +77,16 @@ static int linux_guard_shape(void) {
     return cleanup_trace;
 }
 
+static int inline_asm_inside_cleanup(void) {
+    cleanup_trace = 0;
+    {
+        int guard __attribute__((cleanup(cleanup_record))) = 9;
+        asm volatile("" : "+r"(guard));
+        ++guard;
+    }
+    return cleanup_trace;
+}
+
 int main(void) {
     int returned;
 
@@ -101,6 +111,9 @@ int main(void) {
     }
     if (linux_guard_shape() != 5) {
         return 14;
+    }
+    if (inline_asm_inside_cleanup() != 10) {
+        return 18;
     }
     return 0;
 }
