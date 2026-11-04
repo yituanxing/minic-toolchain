@@ -3,6 +3,8 @@
 # x86-64, AArch64 and LoongArch64 MiniAS objects.  Common output owns PT_LOAD,
 # sections and symbols; each target must resolve its own absolute relocation.
 # x86-64 additionally proves a real Linux syscall and GNU ld runtime parity.
+# Negative fixtures keep genuine MiniAS ELF sections/symbols, mutating only
+# the affected relocation or instruction to exercise target-vs-mode fences.
 set -Eeuo pipefail
 
 : "${MINIAS:?MINIAS must point to the exact-head minic-as binary}"
@@ -319,27 +321,100 @@ for name in ('x86_64', 'aarch64', 'loongarch64'):
     struct.pack_into('<Q', updated, info_offset,
                      (old_info & 0xffffffff00000000) | 0xf0000001)
     (root / f'{name}-unknown-reloc.o').write_bytes(updated)
-print('MINILD_MULTITARGET_STATIC_NEGATIVE_FIXTURES=PASS unknown_types=3')
+
+    # The pointer in .data is exactly eight bytes. Moving an otherwise valid
+    # ABS64 relocation four bytes forward must not write across its boundary.
+    # A narrow ABS32 replacement with an enormous positive addend must fail
+    # representability, rather than silently truncate a 64-bit symbol value.
+    # A target-defined GOT relocation must not be accepted as a static fixup
+    # merely because that relocation is valid in some other link mode.
+    absolute_type, narrow_type, got_type = {
+        'x86_64': (1, 10, 9),
+        'aarch64': (257, 258, 311),
+        'loongarch64': (2, 1, 75),
+    }[name]
+    rel_data = [s for i, s in enumerate(original.sections)
+                if original.names[i] == '.rela.data']
+    ensure(len(rel_data) == 1 and rel_data[0][5] == 24,
+           f'missing_exact_abs64_relocation={name}')
+    data_reloc = rel_data[0]
+    info_at = data_reloc[4] + 8
+    addend_at = data_reloc[4] + 16
+    source_info = struct.unpack_from('<Q', original.data, info_at)[0]
+    ensure((source_info & 0xffffffff) == absolute_type and
+           source_info >> 32 != 0,
+           f'unexpected_abs64_relocation={name}')
+    for variant in ('out-of-bounds', 'narrow-overflow', 'got-mode-leak'):
+        damaged = bytearray(original.data)
+        if variant == 'out-of-bounds':
+            struct.pack_into('<Q', damaged, data_reloc[4], 4)
+        elif variant == 'narrow-overflow':
+            struct.pack_into('<Q', damaged, info_at,
+                             (source_info & 0xffffffff00000000) | narrow_type)
+            struct.pack_into('<q', damaged, addend_at, (1 << 63) - 1)
+        else:
+            struct.pack_into('<Q', damaged, info_at,
+                             (source_info & 0xffffffff00000000) | got_type)
+        (root / f'{name}-{variant}.o').write_bytes(damaged)
+
+# An AArch64 CALL26 relocation may only patch a BL; a well-formed reference
+# attached to a NOP is a malformed instruction/relocation pair.
+original = Elf64(root / 'aarch64-entry.o')
+damaged = bytearray(original.data)
+text = next(s for i, s in enumerate(original.sections)
+            if original.names[i] == '.text')
+struct.pack_into('<I', damaged, text[4], 0xd503201f)  # A64 NOP
+(root / 'aarch64-invalid-call-encoding.o').write_bytes(damaged)
+print('MINILD_MULTITARGET_STATIC_NEGATIVE_FIXTURES=PASS '
+      'unknown_types=3 out_of_bounds=3 narrow_overflow=3 '
+      'got_mode_leak=3 invalid_call_encoding=1')
 PY
+
+negative_rejections=0
+reject_static() {
+    local id=$1 name=$2 expected=$3
+    shift 3
+    local output="$work/$id-should-not-exist.elf"
+    if "$MINILD" "$@" -o "$output" >"$work/$id.stdout" 2>"$work/$id.stderr"; then
+        echo "MINILD_MULTITARGET_STATIC=FAIL accepted_invalid_case=$id" >&2
+        exit 1
+    fi
+    if [[ -e "$output" ]] || ! grep -Fq "$expected" "$work/$id.stderr"; then
+        echo "MINILD_MULTITARGET_STATIC=FAIL bad_rejection=$id target=$name" >&2
+        sed -n '1,10p' "$work/$id.stderr" >&2
+        exit 1
+    fi
+    negative_rejections=$((negative_rejections + 1))
+}
 
 for name in x86_64 aarch64 loongarch64; do
     case "$name" in
-        x86_64) emulation=elf_x86_64 ;;
-        aarch64) emulation=aarch64linux ;;
-        loongarch64) emulation=elf64loongarch ;;
+        x86_64) emulation=elf_x86_64 machine=62 ;;
+        aarch64) emulation=aarch64linux machine=183 ;;
+        loongarch64) emulation=elf64loongarch machine=258 ;;
     esac
-    output="$work/$name-unknown-should-not-exist.elf"
-    if "$MINILD" -m "$emulation" -static -e _start -o "$output" \
-        "$work/$name-unknown-reloc.o" "$work/$name-data.o" \
-        >"$work/$name-unknown.stdout" 2>"$work/$name-unknown.stderr"; then
-        echo "MINILD_MULTITARGET_STATIC=FAIL accepted_unknown_reloc=$name" >&2
-        exit 1
-    fi
-    if [[ -e "$output" || ! -s "$work/$name-unknown.stderr" ]]; then
-        echo "MINILD_MULTITARGET_STATIC=FAIL published_or_silent_unknown=$name" >&2
-        exit 1
-    fi
+    reject_static "$name-unknown" "$name" \
+        "unsupported-static-relocation:$machine:4026531841" \
+        -m "$emulation" -static -e _start \
+        "$work/$name-unknown-reloc.o" "$work/$name-data.o"
+    reject_static "$name-out-of-bounds" "$name" \
+        "nonriscv-relocation-offset-out-of-range:$machine:" \
+        -m "$emulation" -static -e _start \
+        "$work/$name-out-of-bounds.o" "$work/$name-data.o"
+    reject_static "$name-narrow-overflow" "$name" \
+        "nonriscv-relocation-overflow-or-encoding:$machine:" \
+        -m "$emulation" -static -e _start \
+        "$work/$name-narrow-overflow.o" "$work/$name-data.o"
+    reject_static "$name-got-mode-leak" "$name" \
+        "unsupported-static-relocation:$machine:" \
+        -m "$emulation" -static -e _start \
+        "$work/$name-got-mode-leak.o" "$work/$name-data.o"
 done
+reject_static aarch64-invalid-call-encoding aarch64 \
+    'nonriscv-relocation-overflow-or-encoding:183:283' \
+    -m aarch64linux -static -e _start \
+    "$work/aarch64-invalid-call-encoding.o" "$work/aarch64-data.o"
+test "$negative_rejections" -eq 13
 
 if [[ $(uname -m) != x86_64 ]]; then
     echo 'MINILD_MULTITARGET_STATIC=INCONCLUSIVE x86_native_runtime_requires_x86_64' >&2
@@ -384,4 +459,4 @@ for name in aarch64 loongarch64; do
     echo "MINILD_MULTITARGET_STATIC_RUNTIME=PASS target=$name qemu_exit=0 stages=2"
 done
 
-echo 'MINILD_MULTITARGET_STATIC=PASS structures=6 absolute_relocs=6 branch_relocs=4 unknown_reloc_rejections=3 x86_native_gnu=PASS roundtrips=3 non_x86_runtime=separately_reported'
+echo 'MINILD_MULTITARGET_STATIC=PASS structures=6 absolute_relocs=6 branch_relocs=4 fail_closed_rejections=13 x86_native_gnu=PASS roundtrips=3 non_x86_runtime=separately_reported'

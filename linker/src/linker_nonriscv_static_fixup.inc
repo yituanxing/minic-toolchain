@@ -256,10 +256,12 @@ static bool minild_nonriscv_write_fixup(MiniLdSection *section,
 }
 
 static bool minild_nonriscv_apply_static_relocations(
-    MiniLdState *state, const MiniLdLayout *layout) {
+    MiniLdState *state, const MiniLdLayout *layout,
+    const MiniLdStaticTargetPlan *plan) {
     uint16_t machine;
     size_t i;
 
+    (void)plan;
     if (state == NULL || state->target == NULL || layout == NULL ||
         layout->work == NULL) {
         return false;

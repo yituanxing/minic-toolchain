@@ -48,6 +48,7 @@ files = (
     'linker_eh_frame.inc',
     'linker_version.inc',
     'linker_shared_reloc_apply.inc',
+    'linker_shared_riscv_target.inc',
 )
 sources = {}
 for name in files:
@@ -78,6 +79,7 @@ edges = {
     ('linker_shared_pre_layout.inc', 'linker_eh_frame.inc'),
     ('linker_shared_finalize.inc', 'linker_version.inc'),
     ('linker_shared_finalize.inc', 'linker_shared_reloc_apply.inc'),
+    ('linker_shared_reloc_apply.inc', 'linker_shared_riscv_target.inc'),
 }
 targets = set(files) - {'linker_core.inc'}
 for name, source in sources.items():
@@ -152,15 +154,23 @@ if 'shared->symbols[' not in pre or \
         'shared->symbols[' not in sources['linker_version.inc']:
     raise SystemExit('MINILD_SHARED_PHASE_STRUCTURE=FAIL symbol_plan_consumers')
 
-# Only the RISC-V target may choose instruction words.  ET_DYN keeps PLT
-# slot allocation and JUMP_SLOT relocations, but delegates AUIPC/LD/JALR/NOP.
+# ET_DYN only projects ordinary dynamic RELA records. The RISC-V leaf owns
+# final HI/LO instruction fixups, CALL/PLT patching and PLT instruction words;
+# the shared mode may still reserve slots and name JUMP_SLOT relocations.
 target_fixup = (src / 'linker_riscv_fixup.inc').read_text(encoding='utf-8')
 shared_apply = sources['linker_shared_reloc_apply.inc']
+shared_target = sources['linker_shared_riscv_target.inc']
 if len(re.findall(r'\bstatic\s+void\s+minild_target_emit_plt_entry\s*\(',
                   target_fixup)) != 1 or \
-        shared_apply.count('minild_target_emit_plt_entry(') != 1 or \
-        re.search(r'\bshared_riscv_(?:u|i)type\b|store_u32le\(plt->data',
-                  shared_apply):
+        shared_target.count('minild_target_emit_plt_entry(') != 1 or \
+        'minild_target_emit_plt_entry(' in shared_apply or \
+        re.search(r'\bR_RISCV_\w+\b|\bminild_riscv_\w+\b|'
+                  r'\bminild_target_apply_(?:final_instruction|pcrel_lo12)\s*\(|'
+                  r'\bshared_riscv_(?:u|i)type\b|store_u32le\(plt->data',
+                  shared_apply) or \
+        shared_target.count('minild_target_apply_pcrel_lo12(') != 1 or \
+        shared_target.count('minild_target_apply_final_instruction(') != 2 or \
+        shared_apply.count('#include "linker_shared_riscv_target.inc"') != 1:
     raise SystemExit('MINILD_SHARED_PHASE_STRUCTURE=FAIL target_plt_owner')
 for kind, typename, expected_owner in (
         ('struct', 'MiniLdSharedTlsSegment', 'linker_shared_program_plan.inc'),
@@ -199,8 +209,10 @@ functions = {
     ),
     'linker_shared_reloc_apply.inc': (
         'shared_fill_relocations',
-        'shared_patch_final_layout_relocations',
-        'shared_finalize_plt_and_calls',
+    ),
+    'linker_shared_riscv_target.inc': (
+        'riscv_shared_patch_final_layout_relocations',
+        'riscv_shared_finalize_plt_and_calls',
     ),
 }
 definitions = 0
@@ -238,9 +250,9 @@ for func in ('shared_prepare_metadata', 'shared_build_vdso_script_layout',
         raise SystemExit('MINILD_SHARED_PHASE_STRUCTURE=FAIL '
                          f'driver_missing_call={func}')
 
-print('MINILD_SHARED_PHASE_STRUCTURE=PASS modules=4 '
+print('MINILD_SHARED_PHASE_STRUCTURE=PASS modules=5 '
       f'owner_functions={definitions} shared_image=single '
-      'symbol_plan=single target_plt=1 '
+      'symbol_plan=single target_plt=1 target_instruction_fixups=1 '
       'build=single_translation_unit order=reserve,fill,program,write')
 PY
 
@@ -278,4 +290,4 @@ for fixture in "${fixtures[@]}"; do
     printf 'MINILD_SHARED_PHASE_CHECK=PASS fixture=%s\n' "$script"
     ((passed += 1))
 done
-echo "MINILD_SHARED_PHASE=PASS fixtures=$passed modules=4 compiler=Werror"
+echo "MINILD_SHARED_PHASE=PASS fixtures=$passed modules=5 compiler=Werror"

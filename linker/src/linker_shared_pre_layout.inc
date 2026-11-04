@@ -13,6 +13,7 @@ typedef struct MiniLdSharedSymbolPlan {
 /* ET_DYN pre-layout metadata and source-symbol policy. The one
  * MiniLdSharedImage is sized before address placement. */
 typedef struct MiniLdSharedImage {
+    const MiniLdSharedTargetAbi *abi;
     size_t dynstr_section;
     size_t dynsym_section;
     size_t hash_section;
@@ -359,6 +360,12 @@ static bool shared_prepare_metadata(MiniLdState *state,
     size_t i;
 
     memset(shared, 0, sizeof(*shared));
+    shared->abi = minild_shared_target_abi(state);
+    if (shared->abi == NULL) {
+        fprintf(state->diagnostics,
+                "minic-ld: unsupported-shared-target-abi\n");
+        return false;
+    }
     shared->dynstr_section = SIZE_MAX;
     shared->dynsym_section = SIZE_MAX;
     shared->hash_section = SIZE_MAX;
@@ -444,22 +451,22 @@ static bool shared_prepare_metadata(MiniLdState *state,
                              ".got",
                              SHT_PROGBITS,
                              SHF_ALLOC | SHF_WRITE,
-                             8U,
-                             8U,
+                             shared->abi->got_slot_bytes,
+                             shared->abi->got_slot_bytes,
                              &shared->got_section) ||
         !find_or_add_section(state,
                              ".plt",
                              SHT_PROGBITS,
                              SHF_ALLOC | SHF_EXECINSTR,
-                             16U,
-                             16U,
+                             shared->abi->plt_entry_bytes,
+                             shared->abi->plt_entry_bytes,
                              &shared->plt_section) ||
         !find_or_add_section(state,
                              ".got.plt",
                              SHT_PROGBITS,
                              SHF_ALLOC | SHF_WRITE,
-                             8U,
-                             8U,
+                             shared->abi->gotplt_slot_bytes,
+                             shared->abi->gotplt_slot_bytes,
                              &shared->gotplt_section) ||
         !find_or_add_section(state,
                              ".rela.plt",
@@ -662,14 +669,16 @@ static bool shared_prepare_metadata(MiniLdState *state,
             goto fail;
         }
     }
-    if (shared->got_count > SIZE_MAX / 8U ||
-        shared->tls_gd_count > SIZE_MAX / 16U ||
-        shared->got_count * 8U >
-            SIZE_MAX - shared->tls_gd_count * 16U) {
+    if (shared->got_count > SIZE_MAX / shared->abi->got_slot_bytes ||
+        shared->tls_gd_count > SIZE_MAX / shared->abi->tls_gd_slot_bytes ||
+        shared->got_count * shared->abi->got_slot_bytes >
+            SIZE_MAX -
+                shared->tls_gd_count * shared->abi->tls_gd_slot_bytes) {
         goto oom;
     }
     if (shared->tls_gd_count != 0U) {
-        size_t got_prefix = shared->got_count * 8U;
+        size_t got_prefix =
+            shared->got_count * shared->abi->got_slot_bytes;
 
         for (i = 0U; i < state->resolver.count; ++i) {
             if (shared->symbols[i].tls_gd_offset != SIZE_MAX) {
@@ -679,8 +688,9 @@ static bool shared_prepare_metadata(MiniLdState *state,
     }
     if ((shared->got_count != 0U || shared->tls_gd_count != 0U) &&
         !section_append_zero(got,
-                             shared->got_count * 8U +
-                                 shared->tls_gd_count * 16U)) {
+                             shared->got_count * shared->abi->got_slot_bytes +
+                                 shared->tls_gd_count *
+                                     shared->abi->tls_gd_slot_bytes)) {
         goto oom;
     }
     if (shared->rela_count > SIZE_MAX / sizeof(Elf64_Rela) ||
@@ -694,13 +704,19 @@ static bool shared_prepare_metadata(MiniLdState *state,
         size_t gotplt_size;
         size_t rela_plt_size;
 
-        if (shared->plt_count > (SIZE_MAX - 32U) / 16U ||
-            shared->plt_count > (SIZE_MAX - 16U) / 8U ||
+        if (shared->plt_count >
+                SIZE_MAX / shared->abi->plt_entry_bytes ||
+            shared->abi->gotplt_header_slots >
+                SIZE_MAX / shared->abi->gotplt_slot_bytes ||
+            shared->plt_count >
+                SIZE_MAX / shared->abi->gotplt_slot_bytes -
+                    shared->abi->gotplt_header_slots ||
             shared->plt_count > SIZE_MAX / sizeof(Elf64_Rela)) {
             goto oom;
         }
-        plt_size = shared->plt_count * 16U;
-        gotplt_size = (3U + shared->plt_count) * 8U;
+        plt_size = shared->plt_count * shared->abi->plt_entry_bytes;
+        gotplt_size = (shared->abi->gotplt_header_slots + shared->plt_count) *
+            shared->abi->gotplt_slot_bytes;
         rela_plt_size = shared->plt_count * sizeof(Elf64_Rela);
         if (!section_append_zero(plt, plt_size) ||
             !section_append_zero(gotplt, gotplt_size) ||

@@ -11,6 +11,7 @@ static MiniLdSharedRelocScanResult
 shared_scan_relocation_requirements(MiniLdState *state,
                                     MiniLdSharedImage *shared) {
     size_t i;
+    const MiniLdSharedTargetAbi *abi = shared->abi;
 
     for (i = 0U; i < state->relocations.count; ++i) {
         MiniLdReloc *reloc = &state->relocations.entries[i];
@@ -37,12 +38,13 @@ shared_scan_relocation_requirements(MiniLdState *state,
                 bool static_abs = shared_symbol_is_static_absolute(
                     state, shared, reloc->symbol);
 
-                if (shared->got_count > (SIZE_MAX / 8U) - 1U ||
+                if (shared->got_count >
+                        (SIZE_MAX / abi->got_slot_bytes) - 1U ||
                     (!static_abs && shared->rela_count == SIZE_MAX)) {
                     return MINILD_SHARED_RELOC_SCAN_OOM;
                 }
                 shared->symbols[reloc->symbol].got_slot_offset =
-                    shared->got_count * 8U;
+                    shared->got_count * abi->got_slot_bytes;
                 ++shared->got_count;
                 if (!static_abs) {
                     ++shared->rela_count;
@@ -59,11 +61,12 @@ shared_scan_relocation_requirements(MiniLdState *state,
                 return MINILD_SHARED_RELOC_SCAN_INVALID;
             }
             if (shared->symbols[reloc->symbol].tls_gd_offset == SIZE_MAX) {
-                if (shared->tls_gd_count > (SIZE_MAX / 16U) - 1U) {
+                if (shared->tls_gd_count >
+                        (SIZE_MAX / abi->tls_gd_slot_bytes) - 1U) {
                     return MINILD_SHARED_RELOC_SCAN_OOM;
                 }
                 shared->symbols[reloc->symbol].tls_gd_offset =
-                    shared->tls_gd_count * 16U;
+                    shared->tls_gd_count * abi->tls_gd_slot_bytes;
                 ++shared->tls_gd_count;
                 if (shared->rela_count > SIZE_MAX - 2U) {
                     return MINILD_SHARED_RELOC_SCAN_OOM;

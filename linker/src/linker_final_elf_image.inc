@@ -108,12 +108,7 @@ static bool minild_final_pack_elf_header(unsigned char *out,
                                          const MiniLdProgramPlan *program,
                                          const MiniLdFinalSectionTables *tables) {
     unsigned char elf_class = state->target->elf_class;
-    size_t header_size = elf_class == ELFCLASS32
-                             ? sizeof(Elf32_Ehdr) : sizeof(Elf64_Ehdr);
-    size_t program_size = elf_class == ELFCLASS32
-                              ? sizeof(Elf32_Phdr) : sizeof(Elf64_Phdr);
-    size_t section_size = elf_class == ELFCLASS32
-                              ? sizeof(Elf32_Shdr) : sizeof(Elf64_Shdr);
+    MiniLdElfAbiSizes abi = minild_elf_abi_sizes(elf_class);
 
     if ((elf_class != ELFCLASS32 && elf_class != ELFCLASS64) ||
         state->target->data_encoding != ELFDATA2LSB ||
@@ -134,24 +129,24 @@ static bool minild_final_pack_elf_header(unsigned char *out,
     store_u32le(out + 20U, EV_CURRENT);
     if (elf_class == ELFCLASS64) {
         store_u64le(out + 24U, entry);
-        store_u64le(out + 32U, header_size);
+        store_u64le(out + 32U, abi.ehdr);
         store_u64le(out + 40U, tables->header_offset);
         store_u32le(out + 48U, state->elf_flags);
-        store_u16le(out + 52U, (uint16_t)header_size);
-        store_u16le(out + 54U, (uint16_t)program_size);
+        store_u16le(out + 52U, (uint16_t)abi.ehdr);
+        store_u16le(out + 54U, (uint16_t)abi.phdr);
         store_u16le(out + 56U, (uint16_t)program->count);
-        store_u16le(out + 58U, (uint16_t)section_size);
+        store_u16le(out + 58U, (uint16_t)abi.shdr);
         store_u16le(out + 60U, (uint16_t)tables->count);
         store_u16le(out + 62U, (uint16_t)tables->shstrtab_index);
     } else {
         store_u32le(out + 24U, (uint32_t)entry);
-        store_u32le(out + 28U, (uint32_t)header_size);
+        store_u32le(out + 28U, (uint32_t)abi.ehdr);
         store_u32le(out + 32U, (uint32_t)tables->header_offset);
         store_u32le(out + 36U, state->elf_flags);
-        store_u16le(out + 40U, (uint16_t)header_size);
-        store_u16le(out + 42U, (uint16_t)program_size);
+        store_u16le(out + 40U, (uint16_t)abi.ehdr);
+        store_u16le(out + 42U, (uint16_t)abi.phdr);
         store_u16le(out + 44U, (uint16_t)program->count);
-        store_u16le(out + 46U, (uint16_t)section_size);
+        store_u16le(out + 46U, (uint16_t)abi.shdr);
         store_u16le(out + 48U, (uint16_t)tables->count);
         store_u16le(out + 50U, (uint16_t)tables->shstrtab_index);
     }
@@ -170,14 +165,7 @@ static bool minild_final_write_image(
     const char *path) {
     unsigned char *image = NULL;
     unsigned char elf_class = state->target->elf_class;
-    const size_t header_size = elf_class == ELFCLASS32
-                                   ? sizeof(Elf32_Ehdr) : sizeof(Elf64_Ehdr);
-    const size_t program_size = elf_class == ELFCLASS32
-                                    ? sizeof(Elf32_Phdr) : sizeof(Elf64_Phdr);
-    const size_t section_size = elf_class == ELFCLASS32
-                                    ? sizeof(Elf32_Shdr) : sizeof(Elf64_Shdr);
-    const size_t symbol_size = elf_class == ELFCLASS32
-                                   ? sizeof(Elf32_Sym) : sizeof(Elf64_Sym);
+    const MiniLdElfAbiSizes abi = minild_elf_abi_sizes(elf_class);
     const size_t total_size = tables->total_size;
     const char *oom_context = elf_type == ET_DYN
                                   ? "shared-writer" : "static-output";
@@ -188,13 +176,13 @@ static bool minild_final_write_image(
     if ((elf_type != ET_EXEC && elf_type != ET_DYN) ||
         (elf_class != ELFCLASS32 && elf_class != ELFCLASS64) ||
         program_plan->count > UINT16_MAX || tables->count > UINT16_MAX ||
-        !range_ok(0U, header_size, total_size) ||
-        program_plan->count > (total_size - header_size) / program_size ||
+        !range_ok(0U, abi.ehdr, total_size) ||
+        program_plan->count > (total_size - abi.ehdr) / abi.phdr ||
         !range_ok(tables->header_offset,
-                  tables->count * section_size, total_size) ||
-        symbols->entry_count > SIZE_MAX / symbol_size ||
+                  tables->count * abi.shdr, total_size) ||
+        symbols->entry_count > SIZE_MAX / abi.sym ||
         !range_ok(tables->symtab_offset,
-                  symbols->entry_count * symbol_size, total_size)) {
+                  symbols->entry_count * abi.sym, total_size)) {
         fprintf(state->diagnostics,
                 "minic-ld: invalid-final-elf-image\n");
         return false;
@@ -212,7 +200,7 @@ static bool minild_final_write_image(
     }
     for (i = 0U; i < program_plan->count; ++i) {
         if (!minild_final_pack_program_header(
-                image + header_size + i * program_size, elf_class,
+                image + abi.ehdr + i * abi.phdr, elf_class,
                 &program_plan->entries[i])) {
             fprintf(state->diagnostics,
                     "minic-ld: final-elf-program-header-overflow:%zu\n", i);
@@ -226,7 +214,7 @@ static bool minild_final_write_image(
     minild_final_section_tables_emit(tables, symbols, image);
     for (i = 0U; i < symbols->entry_count; ++i) {
         if (!minild_final_pack_symbol(
-                image + tables->symtab_offset + i * symbol_size, elf_class,
+                image + tables->symtab_offset + i * abi.sym, elf_class,
                 &symbols->entries[i])) {
             fprintf(state->diagnostics,
                     "minic-ld: final-elf-symbol-overflow:%zu\n", i);
@@ -235,7 +223,7 @@ static bool minild_final_write_image(
     }
     for (i = 0U; i < tables->count; ++i) {
         if (!minild_final_pack_section_header(
-                image + tables->header_offset + i * section_size, elf_class,
+                image + tables->header_offset + i * abi.shdr, elf_class,
                 &tables->headers[i])) {
             fprintf(state->diagnostics,
                     "minic-ld: final-elf-section-header-overflow:%zu\n", i);

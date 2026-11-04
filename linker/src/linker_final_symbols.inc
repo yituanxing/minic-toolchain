@@ -220,9 +220,7 @@ static bool minild_final_section_tables_build(
     MiniLdFinalSymbolTableOrder order,
     MiniLdFinalSectionTables *tables) {
     size_t symbol_bytes;
-    size_t symbol_entry_size;
-    size_t section_header_size;
-    size_t word_alignment;
+    MiniLdElfAbiSizes abi;
     size_t cursor;
     size_t i;
     uint32_t symtab_name, strtab_name, shstrtab_name;
@@ -234,12 +232,8 @@ static bool minild_final_section_tables_build(
         plan->count > UINT16_MAX - 4U) {
         return false;
     }
-    symbol_entry_size = state->target->elf_class == ELFCLASS32
-                            ? sizeof(Elf32_Sym) : sizeof(Elf64_Sym);
-    section_header_size = state->target->elf_class == ELFCLASS32
-                              ? sizeof(Elf32_Shdr) : sizeof(Elf64_Shdr);
-    word_alignment = state->target->elf_class == ELFCLASS32 ? 4U : 8U;
-    if (symbols->entry_count > SIZE_MAX / symbol_entry_size ||
+    abi = minild_elf_abi_sizes(state->target->elf_class);
+    if (symbols->entry_count > SIZE_MAX / abi.sym ||
         symbols->local_count > UINT32_MAX) {
         return false;
     }
@@ -247,7 +241,7 @@ static bool minild_final_section_tables_build(
     tables->symtab_index = plan->count + 1U;
     tables->strtab_index = plan->count + 2U;
     tables->shstrtab_index = plan->count + 3U;
-    symbol_bytes = symbols->entry_count * symbol_entry_size;
+    symbol_bytes = symbols->entry_count * abi.sym;
     tables->headers = calloc(tables->count, sizeof(*tables->headers));
     tables->output_name_offsets = calloc(plan->count == 0U ? 1U : plan->count,
                                           sizeof(*tables->output_name_offsets));
@@ -273,7 +267,7 @@ static bool minild_final_section_tables_build(
 
     cursor = end_nonalloc;
     if (order == MINILD_FINAL_SYMTAB_FIRST) {
-        if (!align_up_size(cursor, word_alignment, &tables->symtab_offset) ||
+        if (!align_up_size(cursor, abi.word_alignment, &tables->symtab_offset) ||
             !add_size(tables->symtab_offset, symbol_bytes,
                       &tables->strtab_offset) ||
             !add_size(tables->strtab_offset, symbols->names.size,
@@ -283,7 +277,7 @@ static bool minild_final_section_tables_build(
     } else {
         tables->strtab_offset = cursor;
         if (!add_size(cursor, symbols->names.size, &cursor) ||
-            !align_up_size(cursor, word_alignment, &tables->symtab_offset) ||
+            !align_up_size(cursor, abi.word_alignment, &tables->symtab_offset) ||
             !add_size(tables->symtab_offset, symbol_bytes,
                       &tables->shstrtab_offset)) {
             return false;
@@ -291,13 +285,13 @@ static bool minild_final_section_tables_build(
     }
     if (!add_size(tables->shstrtab_offset, tables->section_names.size,
                   &cursor) ||
-        !align_up_size(cursor, word_alignment, &tables->header_offset) ||
+        !align_up_size(cursor, abi.word_alignment, &tables->header_offset) ||
         tables->count > (SIZE_MAX - tables->header_offset) /
-                            section_header_size) {
+                            abi.shdr) {
         return false;
     }
     tables->total_size = tables->header_offset +
-                         tables->count * section_header_size;
+                         tables->count * abi.shdr;
 
     tables->headers[tables->symtab_index] = (MiniElfSection){
         .name = symtab_name,
@@ -306,8 +300,8 @@ static bool minild_final_section_tables_build(
         .size = symbol_bytes,
         .link = (uint32_t)tables->strtab_index,
         .info = (uint32_t)symbols->local_count,
-        .alignment = word_alignment,
-        .entry_size = symbol_entry_size
+        .alignment = abi.word_alignment,
+        .entry_size = abi.sym
     };
     tables->headers[tables->strtab_index] = (MiniElfSection){
         .name = strtab_name,

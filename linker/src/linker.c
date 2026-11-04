@@ -33,7 +33,7 @@ static int minild_link_static_pipeline(
     MiniLdState state;
     MiniLdLayout layout;
     MiniLdOutputPlan output_plan = {0};
-    MiniLdStaticGot got;
+    MiniLdStaticTargetPlan static_reloc_plan = {0};
     MiniLdScript script;
     const char *entry_symbol;
     uint64_t entry = 0U;
@@ -57,9 +57,7 @@ static int minild_link_static_pipeline(
     memset(&state, 0, sizeof(state));
     state.target = target;
     memset(&layout, 0, sizeof(layout));
-    memset(&got, 0, sizeof(got));
     minild_script_initialize(&script);
-    got.section = SIZE_MAX;
     state.diagnostics = diagnostics;
     if (options != NULL && options->script_path != NULL) {
         if (!minild_script_parse_file(options->script_path, &script,
@@ -107,7 +105,7 @@ static int minild_link_static_pipeline(
         (garbage_collect && !have_script &&
          (!minild_gc_group_default_output_classes(&state) ||
           !minild_gc_sort_default_output_alignment(&state))) ||
-        !static_build_got(&state, &got) ||
+        !static_reserve_target_relocations(&state, &static_reloc_plan) ||
         !(have_script
               ? static_build_script_layout(&state, &script, &layout, 0U)
               : static_build_layout(&state, &layout))) {
@@ -116,8 +114,8 @@ static int minild_link_static_pipeline(
     minild_perf_phase("layout", &phase_start, &state, diagnostics);
 
     if (!static_synthesize_runtime_boundaries(&state, &layout) ||
-        !static_fill_got(&state, &layout, &got) ||
-        !static_apply_relocations(&state, &layout, &got)) {
+        !static_fill_target_relocations(&state, &layout, &static_reloc_plan) ||
+        !static_apply_relocations(&state, &layout, &static_reloc_plan)) {
         goto done;
     }
     minild_perf_phase("relocations", &phase_start, &state, diagnostics);
@@ -135,7 +133,7 @@ done:
     minild_output_plan_destroy(&output_plan);
     minild_layout_destroy(&layout);
     minild_script_destroy(&script);
-    static_got_destroy(&got);
+    static_target_plan_destroy(&state, &static_reloc_plan);
     state_destroy(&state);
     minild_perf_phase("cleanup", &phase_start, &state, diagnostics);
     return ok ? 0 : 1;

@@ -29,10 +29,7 @@ static bool minild_static_program_plan_build(
     const MiniLdOutputPlan *output_plan,
     MiniLdProgramPlan *plan) {
     MiniLdStaticLoadSegment *loads = NULL;
-    size_t elf_header_size = state->target->elf_class == ELFCLASS32
-                                 ? sizeof(Elf32_Ehdr) : sizeof(Elf64_Ehdr);
-    size_t program_header_size = state->target->elf_class == ELFCLASS32
-                                     ? sizeof(Elf32_Phdr) : sizeof(Elf64_Phdr);
+    MiniLdElfAbiSizes abi = minild_elf_abi_sizes(state->target->elf_class);
     size_t count = 0U;
     size_t i;
 
@@ -99,8 +96,8 @@ static bool minild_static_program_plan_build(
         count = (layout->have_rx ? 1U : 0U) +
                 (layout->have_rw ? 1U : 0U);
     }
-    if (count > UINT16_MAX ||
-        count > (SIZE_MAX - elf_header_size) / program_header_size) {
+    if (abi.phdr == 0U || count > UINT16_MAX ||
+        count > (SIZE_MAX - abi.ehdr) / abi.phdr) {
         fprintf(state->diagnostics, "minic-ld: too-many-static-segments\n");
         goto failed;
     }
@@ -162,10 +159,7 @@ static bool static_write_executable(MiniLdState *state,
                                     const char *path,
                                     uint64_t entry) {
     MiniLdFinalImage final = {0};
-    size_t elf_header_size = state->target->elf_class == ELFCLASS32
-                                 ? sizeof(Elf32_Ehdr) : sizeof(Elf64_Ehdr);
-    size_t program_header_size = state->target->elf_class == ELFCLASS32
-                                     ? sizeof(Elf32_Phdr) : sizeof(Elf64_Phdr);
+    MiniLdElfAbiSizes abi = minild_elf_abi_sizes(state->target->elf_class);
     size_t load_image_size;
     size_t i;
     bool ok = false;
@@ -174,8 +168,7 @@ static bool static_write_executable(MiniLdState *state,
                                           &final.program)) {
         goto done;
     }
-    load_image_size = elf_header_size +
-                      final.program.count * program_header_size;
+    load_image_size = abi.ehdr + final.program.count * abi.phdr;
 
     if (layout->scripted) {
         for (i = 0U; i < output_plan->count; ++i) {

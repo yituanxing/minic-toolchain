@@ -48,10 +48,7 @@ static bool minild_shared_program_plan_build(
     MiniLdProgramPlan *plan) {
     MiniLdSharedTlsSegment tls;
     size_t phnum;
-    size_t elf_header_size = state->target->elf_class == ELFCLASS32
-                                 ? sizeof(Elf32_Ehdr) : sizeof(Elf64_Ehdr);
-    size_t program_header_size = state->target->elf_class == ELFCLASS32
-                                     ? sizeof(Elf32_Phdr) : sizeof(Elf64_Phdr);
+    MiniLdElfAbiSizes abi = minild_elf_abi_sizes(state->target->elf_class);
     size_t program_index = 0U;
     size_t i;
     MiniElfProgramHeader *programs;
@@ -70,8 +67,8 @@ static bool minild_shared_program_plan_build(
             (layout->have_rx ? 1U : 0U) +
             (layout->have_rw ? 1U : 0U) +
             (tls.present ? 1U : 0U) + 1U;
-    if (phnum > UINT16_MAX ||
-        phnum > (SIZE_MAX - elf_header_size) / program_header_size) {
+    if (abi.phdr == 0U || phnum > UINT16_MAX ||
+        phnum > (SIZE_MAX - abi.ehdr) / abi.phdr) {
         fprintf(state->diagnostics, "minic-ld: too-many-shared-segments\n");
         return false;
     }
@@ -97,12 +94,12 @@ static bool minild_shared_program_plan_build(
             layout->rx_vaddr - (uint64_t)layout->rx_file_offset;
         ph->type = PT_PHDR;
         ph->flags = PF_R;
-        ph->offset = elf_header_size;
-        ph->virtual_address = header_vaddr + elf_header_size;
+        ph->offset = abi.ehdr;
+        ph->virtual_address = header_vaddr + abi.ehdr;
         ph->physical_address = ph->virtual_address;
-        ph->file_size = phnum * program_header_size;
+        ph->file_size = phnum * abi.phdr;
         ph->memory_size = ph->file_size;
-        ph->alignment = state->target->elf_class == ELFCLASS32 ? 4U : 8U;
+        ph->alignment = abi.word_alignment;
     }
     if (shared->have_interp) {
         MiniElfProgramHeader *ph = &programs[program_index++];

@@ -1,5 +1,6 @@
 /* ET_DYN output driver: validation, final writer and shared-link entry.
  * Pre-layout, post-layout and PHDR policies have distinct owners. */
+#include "linker_shared_riscv_abi.inc"
 #include "linker_shared_pre_layout.inc"
 #include "linker_shared_finalize.inc"
 #include "linker_shared_program_plan.inc"
@@ -11,15 +12,29 @@ static bool shared_write_object(MiniLdState *state,
                                 const char *path,
                                 uint64_t entry) {
     MiniLdFinalImage final = {0};
+    MiniLdElfAbiSizes abi = minild_elf_abi_sizes(state->target->elf_class);
     size_t image_size;
     bool ok = false;
 
+    /* This ET_DYN writer still emits ELF64 dynamic records.  Keep that
+     * admission explicit while sharing the generic ELF header-size model. */
+    if (state->target->elf_class != ELFCLASS64 ||
+        abi.ehdr != sizeof(Elf64_Ehdr) ||
+        abi.phdr != sizeof(Elf64_Phdr)) {
+        fprintf(state->diagnostics,
+                "minic-ld: unsupported-shared-elf-class\n");
+        goto done;
+    }
     if (!minild_shared_program_plan_build(state, layout, output_plan, shared,
                                           &final.program)) {
         goto done;
     }
-    image_size = sizeof(Elf64_Ehdr) +
-                 final.program.count * sizeof(Elf64_Phdr);
+    if (final.program.count > (SIZE_MAX - abi.ehdr) / abi.phdr) {
+        fprintf(state->diagnostics,
+                "minic-ld: shared-program-header-overflow\n");
+        goto done;
+    }
+    image_size = abi.ehdr + final.program.count * abi.phdr;
 
     if (output_plan->count > UINT16_MAX - 4U) {
         fprintf(state->diagnostics,
@@ -272,10 +287,10 @@ int minild_link_shared_elf64_riscv_inputs_options(
         !shared_fill_gnu_hash(&state, &shared) ||
         !shared_fill_versions(&state, &shared) ||
         !shared_fill_relocations(&state, &layout, &output_plan, &shared) ||
-        !shared_patch_final_layout_relocations(&state, &layout,
-                                               &output_plan, &shared) ||
+        !riscv_shared_patch_final_layout_relocations(&state, &layout,
+                                                      &output_plan, &shared) ||
         !minild_eh_fill(&state, &layout, &shared) ||
-        !shared_finalize_plt_and_calls(&state, &layout, &output_plan, &shared) ||
+        !riscv_shared_finalize_plt_and_calls(&state, &layout, &output_plan, &shared) ||
         !shared_fill_dynamic(&state, &layout, &shared) ||
         !shared_write_object(&state,
                              &layout,

@@ -304,6 +304,30 @@ static bool align_up_size(size_t value, uint64_t alignment, size_t *out) {
     return true;
 }
 
+/* ELF class selects the on-disk ABI record widths once. Layout, script
+ * header reservations and final serialization must use the same contract;
+ * no output phase may silently assume the host's or another target's ELF64
+ * record sizes. This is file geometry, not an ISA or relocation decision. */
+typedef struct MiniLdElfAbiSizes {
+    size_t ehdr;
+    size_t phdr;
+    size_t shdr;
+    size_t sym;
+    size_t word_alignment;
+} MiniLdElfAbiSizes;
+
+static MiniLdElfAbiSizes minild_elf_abi_sizes(unsigned char elf_class) {
+    if (elf_class == ELFCLASS32) {
+        return (MiniLdElfAbiSizes){sizeof(Elf32_Ehdr), sizeof(Elf32_Phdr),
+                                   sizeof(Elf32_Shdr), sizeof(Elf32_Sym), 4U};
+    }
+    if (elf_class == ELFCLASS64) {
+        return (MiniLdElfAbiSizes){sizeof(Elf64_Ehdr), sizeof(Elf64_Phdr),
+                                   sizeof(Elf64_Shdr), sizeof(Elf64_Sym), 8U};
+    }
+    return (MiniLdElfAbiSizes){0};
+}
+
 static bool buffer_reserve(MiniLdBuffer *buffer, size_t extra) {
     size_t required;
     size_t next;

@@ -1195,14 +1195,18 @@ static bool static_build_script_layout(MiniLdState *state,
         }
     }
 
-    if (alloc_count > (SIZE_MAX - sizeof(Elf64_Ehdr)) / sizeof(Elf64_Phdr) ||
-        !align_up_size(sizeof(Elf64_Ehdr) +
-                           alloc_count * sizeof(Elf64_Phdr),
-                       4096U,
-                       &header_size)) {
-        fprintf(state->diagnostics,
-                "minic-ld: linker-script-header-overflow\n");
-        goto done;
+    {
+        MiniLdElfAbiSizes abi =
+            minild_elf_abi_sizes(state->target->elf_class);
+
+        if (abi.phdr == 0U ||
+            alloc_count > (SIZE_MAX - abi.ehdr) / abi.phdr ||
+            !align_up_size(abi.ehdr + alloc_count * abi.phdr,
+                           state->target->page_size, &header_size)) {
+            fprintf(state->diagnostics,
+                    "minic-ld: linker-script-header-overflow\n");
+            goto done;
+        }
     }
     file_cursor = header_size;
     if (alloc_count > SIZE_MAX / sizeof(*file_order)) {

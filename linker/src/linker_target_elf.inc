@@ -5,8 +5,20 @@
 #define MINILD_SHT_RISCV_ATTRIBUTES UINT32_C(0x70000003)
 
 struct MiniLdLayout;
+struct MiniLdStaticTargetPlan;
 static bool minild_nonriscv_apply_static_relocations(
-    MiniLdState *state, const struct MiniLdLayout *layout);
+    MiniLdState *state, const struct MiniLdLayout *layout,
+    const struct MiniLdStaticTargetPlan *plan);
+static bool minild_riscv_reserve_static_relocations(
+    MiniLdState *state, struct MiniLdStaticTargetPlan *plan);
+static bool minild_riscv_fill_static_relocations(
+    MiniLdState *state, const struct MiniLdLayout *layout,
+    const struct MiniLdStaticTargetPlan *plan);
+static bool minild_riscv_apply_static_relocations(
+    MiniLdState *state, const struct MiniLdLayout *layout,
+    const struct MiniLdStaticTargetPlan *plan);
+static void minild_riscv_destroy_static_relocations(
+    struct MiniLdStaticTargetPlan *plan);
 static bool minild_riscv_relax_section(MiniLdState *state,
                                       size_t section_index,
                                       uint64_t address);
@@ -31,7 +43,6 @@ struct MiniLdTargetProfile {
     uint32_t attributes_type;
     uint64_t static_image_base;
     size_t page_size;
-    bool uses_riscv_got;
     bool supports_relocatable;
     bool supports_static;
     bool supports_static_script;
@@ -40,8 +51,18 @@ struct MiniLdTargetProfile {
     bool supports_pie;
     MiniLdTargetFlagsMerge merge_flags;
     bool (*relax_section)(MiniLdState *, size_t, uint64_t);
+    /* The target reserves size-changing synthetic relocation sections before
+     * placement, then fills and patches them only after final addresses.
+     * The plan is opaque to Core; NULL hooks are valid for no-op stages. */
+    bool (*reserve_static_relocations)(MiniLdState *,
+                                        struct MiniLdStaticTargetPlan *);
+    bool (*fill_static_relocations)(MiniLdState *,
+                                     const struct MiniLdLayout *,
+                                     const struct MiniLdStaticTargetPlan *);
     bool (*apply_static_relocations)(MiniLdState *,
-                                      const struct MiniLdLayout *);
+                                      const struct MiniLdLayout *,
+                                      const struct MiniLdStaticTargetPlan *);
+    void (*destroy_static_relocations)(struct MiniLdStaticTargetPlan *);
     /* GNU linker-script PROVIDE symbols with psABI-specific names belong
      * to Target. Common owns the language-independent init/fini arrays. */
     bool (*synthesize_default_symbols)(MiniLdState *,
@@ -66,34 +87,42 @@ static bool minild_loongarch_v1_elf_flags(uint32_t flags);
 static const MiniLdTargetProfile minild_target_profiles[] = {
     {"elf64lriscv", ELFCLASS64, ELFDATA2LSB, EM_RISCV, "riscv",
      "/lib/ld-musl-riscv64.so.1", MINILD_SHT_RISCV_ATTRIBUTES,
-     UINT64_C(0x10000), 4096U, true,
+     UINT64_C(0x10000), 4096U,
      true, true, true, true, true, true, minild_riscv_merge_flags,
-     minild_riscv_relax_section, NULL,
+     minild_riscv_relax_section,
+     minild_riscv_reserve_static_relocations,
+     minild_riscv_fill_static_relocations,
+     minild_riscv_apply_static_relocations,
+     minild_riscv_destroy_static_relocations,
      minild_riscv_synthesize_gnu_default_boundaries,
      MINILD_SHARED_RISCV_ELF64, NULL},
     {"elf32lriscv", ELFCLASS32, ELFDATA2LSB, EM_RISCV, "riscv",
      NULL, MINILD_SHT_RISCV_ATTRIBUTES,
-     UINT64_C(0x10000), 4096U, true,
+     UINT64_C(0x10000), 4096U,
      true, false, false, false, true, false, minild_riscv_merge_flags,
-     minild_riscv_relax_section, NULL, NULL,
+     minild_riscv_relax_section,
+     minild_riscv_reserve_static_relocations,
+     minild_riscv_fill_static_relocations,
+     minild_riscv_apply_static_relocations,
+     minild_riscv_destroy_static_relocations, NULL,
      MINILD_SHARED_RISCV32_COMPAT_VDSO, NULL},
     {"elf_x86_64", ELFCLASS64, ELFDATA2LSB, EM_X86_64, "i386:x86-64",
-     NULL, 0U, UINT64_C(0x400000), 4096U, false,
+     NULL, 0U, UINT64_C(0x400000), 4096U,
      true, true, false, false, false, false,
-     minild_exact_merge_flags, NULL,
-     minild_nonriscv_apply_static_relocations, NULL,
+     minild_exact_merge_flags, NULL, NULL, NULL,
+     minild_nonriscv_apply_static_relocations, NULL, NULL,
      MINILD_SHARED_UNSUPPORTED, minild_zero_elf_flags},
     {"aarch64linux", ELFCLASS64, ELFDATA2LSB, EM_AARCH64, "aarch64",
-     NULL, 0U, UINT64_C(0x400000), 4096U, false,
+     NULL, 0U, UINT64_C(0x400000), 4096U,
      true, true, false, false, false, false,
-     minild_exact_merge_flags, NULL,
-     minild_nonriscv_apply_static_relocations, NULL,
+     minild_exact_merge_flags, NULL, NULL, NULL,
+     minild_nonriscv_apply_static_relocations, NULL, NULL,
      MINILD_SHARED_UNSUPPORTED, minild_zero_elf_flags},
     {"elf64loongarch", ELFCLASS64, ELFDATA2LSB, EM_LOONGARCH, "loongarch64",
-     NULL, 0U, UINT64_C(0x400000), 4096U, false,
+     NULL, 0U, UINT64_C(0x400000), 4096U,
      true, true, false, false, false, false,
-     minild_exact_merge_flags, NULL,
-     minild_nonriscv_apply_static_relocations, NULL,
+     minild_exact_merge_flags, NULL, NULL, NULL,
+     minild_nonriscv_apply_static_relocations, NULL, NULL,
      MINILD_SHARED_UNSUPPORTED, minild_loongarch_v1_elf_flags}
 };
 

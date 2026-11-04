@@ -12,8 +12,8 @@ command -v python3 >/dev/null 2>&1 || {
 }
 
 # Keep psABI type numbers, final fixup codecs and loader relocation encodings
-# in the Target owner. The ET_EXEC/ET_DYN stages may decide symbol liveness,
-# GOT/TLS/PLT allocation and error messages, but must consume semantic kinds.
+# in Target. ET_EXEC delegates its whole reserve/fill/apply lifetime through
+# target hooks; ET_DYN currently consumes target-classified relocation kinds.
 src_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 python3 - "$src_root/linker/src" <<'PY'
 from pathlib import Path
@@ -22,6 +22,7 @@ import sys
 
 source = Path(sys.argv[1])
 target = (source / 'linker_riscv_fixup.inc').read_text(encoding='utf-8')
+profile = (source / 'linker_target_elf.inc').read_text(encoding='utf-8')
 target_apis = (
     'minild_target_reloc_class',
     'minild_target_absolute_width',
@@ -35,21 +36,37 @@ for name in target_apis:
                      r'\s*\(', target):
         raise SystemExit(f'MINILD_RISCV_POLICY_OWNER=FAIL missing_target={name}')
 
+for hook in ('reserve_static_relocations', 'fill_static_relocations',
+             'apply_static_relocations', 'destroy_static_relocations'):
+    if hook not in profile:
+        raise SystemExit(f'MINILD_RISCV_POLICY_OWNER=FAIL '
+                         f'missing_target_hook={hook}')
+
 for name in ('linker_static_reloc_scan.inc',
              'linker_static_reloc_apply.inc',
              'linker_shared_reloc_scan.inc',
-             'linker_shared_reloc_apply.inc'):
+             'linker_shared_reloc_apply.inc',
+             'linker_static_got.inc'):
     body = (source / name).read_text(encoding='utf-8')
     body = re.sub(r'"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'|'
                   r'/\*.*?\*/|//[^\n]*', '', body, flags=re.S)
     if re.search(r'\bR_RISCV_\w+\b|\bminild_riscv_\w+\b', body):
         raise SystemExit(f'MINILD_RISCV_POLICY_OWNER=FAIL '
                          f'isa_logic_in_mode={name}')
-    if 'minild_target_reloc_class(' not in body:
+    hook = {
+        'linker_static_reloc_scan.inc': '->reserve_static_relocations',
+        'linker_static_reloc_apply.inc': '->apply_static_relocations',
+        'linker_static_got.inc': '->fill_static_relocations',
+    }.get(name)
+    if hook and hook not in body:
         raise SystemExit(f'MINILD_RISCV_POLICY_OWNER=FAIL '
-                         f'no_target_contract={name}')
-print('MINILD_RISCV_POLICY_OWNER=PASS stages=4 type_owner=target '
-      'dynamic_reloc_owner=target final_fixup_owner=target')
+                         f'no_target_contract={name}:{hook}')
+    if name.startswith('linker_shared_') and \
+            'minild_target_reloc_class(' not in body:
+        raise SystemExit(f'MINILD_RISCV_POLICY_OWNER=FAIL '
+                         f'no_shared_target_classification={name}')
+print('MINILD_RISCV_POLICY_OWNER=PASS stages=5 static_hooks=4 '
+      'shared_target_classification=2 final_fixup_owner=target')
 PY
 
 work=$(mktemp -d "${TMPDIR:-/tmp}/minild-rv-final-fixup.XXXXXX")
@@ -308,8 +325,6 @@ PY
 for kind in static shared; do
     options=(-static -e broken_start)
     if [[ $kind == shared ]]; then options=(-shared); fi
-    options=(-static -e far_start)
-    if [[ $kind == shared ]]; then options=(-shared); fi
     if "$MINILD" -melf64lriscv "${options[@]}" \
         -o "$work/$kind-missing.elf" "$work/missing-pcrel.o" "$work/targets.o" \
         >"$work/$kind-missing.log" 2>&1; then
@@ -320,6 +335,8 @@ for kind in static shared; do
         echo "MINILD_RISCV_FINAL_FIXUP=FAIL case=$kind-missing partial_output" >&2
         exit 1
     fi
+    options=(-static -e far_start)
+    if [[ $kind == shared ]]; then options=(-shared); fi
     if "$MINILD" -melf64lriscv "${options[@]}" \
         -o "$work/$kind-overflow.elf" "$work/overflow.o" "$work/far.o" \
         >"$work/$kind-overflow.log" 2>&1; then
