@@ -252,6 +252,7 @@
 - **可重现输入：** `/tmp/minic-riscv-va-frame-probe.c` 含 `va_frame_one(int tag, ...)`（`aligned(64)` 局部 + 连续读取 9 个 `int` 变参）和 `va_frame_eight(int a0,...,int a7, ...)`（无剩余变参 GPR）。GNU `cc -E -P` 预处理后 `build/debug/bin/minic-cc --target=riscv32-linux -S` 通过。
 - **汇编/ABI 交叉证据：** `va_frame_one` 的入口为 `E=t2`，帧基址 `S=alignDown(E-160,64)`；保存 `a1..a7` 在 `S+132..156`，变参游标最终走到 `S+160`，而调用方第一个栈参数在原入口 `E`。两者在 `E` 的不同 64B 相位下可相差 16/32/48B。`va_frame_eight` 直接从 `S+128` 而非 `E` 起读，也错位。`rv32_call.c` 的 outgoing stack slot 从 caller 当前 SP 起写，与 callee 入口 SP 的 ABI 身份互相确认。
 - **修复门槛：** 正确衔接寄存器溢出到 caller stack、零 GPR 路径，并以实际交叉工具链/QEMU 检验四类入口 SP 相位。
+- **P50 候选（机器运行未验收）：** RV32 实对齐栈帧下，以保存的原入口 E 而非实对齐帧 S 为变参保存区和 va_start 的唯一基准：剩余 a 寄存器存入 [E−V,E)，零 GPR 时游标取 E+named_stack_words*4。同一 GNU C 源汇编探针覆盖一／七／八／九个具名寄存器使用边界和动态 alloca 五种函数（含第九具名参数位于 caller 栈），以及四类入口 E mod64 相位：RV32 **5/5 函数 × 4/4 相位 SOURCE-ASM PASS**。本地缺 GNU/QEMU，保持 OPEN；不以地址代数证明冒充动态执行。
 
 ### MC-015 RV64 变参与过对齐栈帧交界
 
@@ -259,6 +260,7 @@
 - **状态更新（第四轮）：** `OPEN` / P0 / `ASM-ONLY`；同一个合法预处理输入 RV64 `-S` 成功。`va_frame_one` 中 `E=t0`、`S=alignDown(E-144,64)`，`a1..a7` 保存在 `S+88..136`，第 8 个变参按线性游标指向 `S+144`，但 caller 栈起点为 `E=S+144+δ`，其中 `δ` 可取 0/16/32/48；已在生成汇编和 `rv64/call_emit.c` outgoing 参数布局交叉核对。**还没有** RV64 GNU GAS/QEMU 机器运行差分。
 - **明确排除：** 对相同 fixture 的 `va_frame_eight`，RV64 在没有剩余 GPR 时确实从保存的 `entry_sp_offset` 恢复 `E` 初始化 `va_list`；这一子路径正确，不能把 RV32 的额外错误泛化到 RV64。
 - **修复门槛：** 解决跨界后的地址连续性，GNU/QEMU 验证；在动态运行确认前保持“汇编级高置信风险”。
+- **P50 候选（机器运行未验收）：** RV64 实对齐栈帧下，在剩余 a 寄存器时改以保存的 E 写 [E−V,E)，并将 va_list 指向 E−V；零剩余寄存器时原有 E+fixed_stack_slots*8 正确路径不变。与 RV32 共享同一 GNU C 源及源汇编验证，RV64 **5/5 函数 × 4/4 相位 SOURCE-ASM PASS**，包含第九具名参数占据首个 caller stack slot 的原有正确偏移；本地缺 GNU/QEMU，仍保持 OPEN，等待独立交叉运行验证。
 
 ### MC-016 线性 va_list 类型准入过宽
 

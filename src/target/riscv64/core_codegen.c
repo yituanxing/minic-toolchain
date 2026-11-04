@@ -192,7 +192,15 @@ static bool emit_instruction(FILE *file,
             return false;
         }
         if (frame->varargs_size != 0U) {
-            if (!minic_riscv64_frame_emit_address(file, frame, "t0", frame->varargs_offset)) {
+            if (frame->has_dynamic_stack_alignment) {
+                /* A realigned frame is not the ABI anchor: the register
+                 * save interval ends at the original incoming stack. */
+                if (!minic_riscv64_frame_emit_load64(
+                        file, frame, "t0", frame->entry_sp_offset) ||
+                    fprintf(file, "  addi t0, t0, -%zu\n", frame->varargs_size) < 0)
+                    return false;
+            } else if (!minic_riscv64_frame_emit_address(
+                           file, frame, "t0", frame->varargs_offset)) {
                 return false;
             }
         } else {
@@ -677,15 +685,24 @@ static bool emit_core_function_with_symbol(FILE *file,
     }
     if (frame.has_variadic_argument_address) {
         size_t register_index;
-
+        if (frame.varargs_size != 0U && frame.has_dynamic_stack_alignment &&
+            !minic_riscv64_frame_emit_load64(
+                file, &frame, "t0", frame.entry_sp_offset))
+            return core_frame_fail(&frame);
         for (register_index = frame.integer_parameter_count; register_index < 8U;
              ++register_index) {
             size_t offset = frame.varargs_offset +
                             (register_index - frame.integer_parameter_count) * 8U;
-            if (!minic_riscv64_frame_emit_store64(
-                    file, &frame, minic_riscv64_abi_integer_argument_registers[register_index], offset)) {
-                return core_frame_fail(&frame);
-            }
+            if (frame.has_dynamic_stack_alignment) {
+                if (fprintf(file, "  sd %s, -%zu(t0)\n",
+                            minic_riscv64_abi_integer_argument_registers[register_index],
+                            frame.varargs_size -
+                                (register_index - frame.integer_parameter_count) * 8U) < 0)
+                    return core_frame_fail(&frame);
+            } else if (!minic_riscv64_frame_emit_store64(
+                           file, &frame,
+                           minic_riscv64_abi_integer_argument_registers[register_index],
+                           offset)) return core_frame_fail(&frame);
         }
     }
     if (!emit_far_jump_to_block(file, symbol_name, function->entry_block)) {

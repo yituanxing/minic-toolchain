@@ -708,6 +708,27 @@ static bool rv32_emit_ins(FILE *out,
         if (!fr->is_variadic || fr->abi.named_gpr_words > 8U ||
             fr->abi.named_stack_words > (SIZE_MAX - fr->frame_size) / 4U)
             return false;
+        if (fr->has_dynamic_stack_alignment) {
+            /* The linear va_list must cross from the saved a-registers
+             * directly into the caller's arguments at original entry sp.
+             * The over-aligned frame base is not a stable ABI coordinate. */
+            if (!rv32_fixed_stack(out, fr, "lw", "t0", fr->entry_sp_offset))
+                return false;
+            if (fr->varargs_size != 0U) {
+                if (fprintf(out, "  addi t0, t0, -%zu\n", fr->varargs_size) < 0)
+                    return false;
+            } else if (fr->abi.named_stack_words != 0U) {
+                size_t stack_bytes = fr->abi.named_stack_words * 4U;
+                if (stack_bytes <= 2047U) {
+                    if (fprintf(out, "  addi t0, t0, %zu\n", stack_bytes) < 0)
+                        return false;
+                } else if (fprintf(out, "  li t1, %zu\n  add t0, t0, t1\n",
+                                   stack_bytes) < 0) {
+                    return false;
+                }
+            }
+            return rv32_slot(out, fr, ins->result, "t0", false);
+        }
         offset = fr->varargs_size != 0U ?
             fr->varargs_offset :
             fr->frame_size + fr->abi.named_stack_words * 4U;
@@ -866,11 +887,21 @@ static bool rv32_func(FILE *out, const MinicCoreModule *module,
           fprintf(out, "  mv s0, sp\n") < 0))) goto done;
     if (fr.is_variadic && fr.varargs_size != 0U) {
         const size_t first = fr.abi.named_gpr_words;
+        /* Dynamic realignment leaves a runtime-sized gap above frame_size.
+         * Save the arguments immediately below original entry sp instead;
+         * the frame already reserves varargs_size and alignment slack. */
+        if (fr.has_dynamic_stack_alignment &&
+            !rv32_fixed_stack(out, &fr, "lw", "t0", fr.entry_sp_offset))
+            goto done;
         for (i = first; i < 8U; ++i) {
             char reg[4];
             (void)snprintf(reg, sizeof(reg), "a%zu", i);
-            if (!rv32_fixed_stack(out, &fr, "sw", reg,
-                                   fr.varargs_offset + (i - first) * 4U))
+            if (fr.has_dynamic_stack_alignment) {
+                if (fprintf(out, "  sw %s, -%zu(t0)\n", reg,
+                            fr.varargs_size - (i - first) * 4U) < 0)
+                    goto done;
+            } else if (!rv32_fixed_stack(out, &fr, "sw", reg,
+                                           fr.varargs_offset + (i - first) * 4U))
                 goto done;
         }
     }

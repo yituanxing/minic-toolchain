@@ -23,6 +23,8 @@ on:
       - "src/target/riscv64/isa.h"
       - "tests/compiler/c0/probe-riscv-shared-word-operations.sh"
       - "tests/compiler/c0/probe-rv32-pic-gnu-elf-qemu.sh"
+      - "tests/compiler/c0/probe-riscv-overaligned-varargs-qemu.sh"
+      - "tests/compiler/c0/riscv_overaligned_varargs.c"
       - "tests/compiler/c0/elf_hidden_undefined_pic.c"
       - "tests/compiler/c0/elf_hidden_undefined_pic_owner.c"
       - ".github/workflows/minic-rv32-cjson-runtime.yml"
@@ -53,6 +55,8 @@ on:
       - "tests/compiler/c0/probe-rv32-musl-busybox-kbuild.sh"
       - "tests/compiler/c0/probe-rv32-dynamic-frame-qemu.sh"
       - "tests/compiler/c0/probe-rv32-pic-gnu-elf-qemu.sh"
+      - "tests/compiler/c0/probe-riscv-overaligned-varargs-qemu.sh"
+      - "tests/compiler/c0/riscv_overaligned_varargs.c"
       - "tests/compiler/c0/elf_hidden_undefined_pic.c"
       - "tests/compiler/c0/elf_hidden_undefined_pic_owner.c"
       - "tests/compiler/c0/probe-core-volatile-update-qemu.sh"
@@ -97,6 +101,12 @@ jobs:
         run: |
           set -Eeuo pipefail
           make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/rv32cjson all
+      - name: RISC-V ILP32 aligned(64) variadic register-to-stack GNU QEMU differential
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          MINIC_CC="$GITHUB_WORKSPACE/build/rv32cjson/bin/minic-cc" \
+            bash tests/compiler/c0/probe-riscv-overaligned-varargs-qemu.sh rv32
       - name: RV32 ELF32 PIC hidden/default GNU AS LD QEMU differential
         shell: bash
         run: |

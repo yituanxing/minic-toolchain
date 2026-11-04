@@ -2810,3 +2810,50 @@ The unified permanent gate is
 `tests/compiler/c0/probe-x86-linux-cmpxchg16b-native.sh`; it exercises both
 Linux original atomic and ALT sources. No empty placeholder source or
 standalone smoke was substituted for actual native/ELF verification.
+
+## IR-P50 — One RISC-V incoming-stack-anchored variadic ABI (2026-11-04)
+
+**Scope:** MC-014 RV32 ILP32 and MC-015 RV64 LP64 together. The independent
+frame emitters had the same physical ABI defect: a 64-byte-aligned local
+forces machine frame base S = alignDown(E − frame_size, 64), but only the
+original incoming E is contiguous with the caller's spilled arguments.
+Saving remaining a-registers at S + varargs_offset instead of immediately
+below E misplaces the register-to-stack cursor by a runtime phase of
+0/16/32/48 bytes. RV32 additionally used false S + frame_size when no
+GPR remained; RV64 already recovered saved E there.
+
+- Both machine emitters now make E the source of truth whenever dynamic
+  frame alignment is active. For V = (8 − named_gprs) × XLEN/8, remaining
+  incoming register words occupy exactly [E − V, E), and va_start begins
+  at E − V. No C type, parser hint, ABI plan clone, extra Core opcode
+  or redundant xlen-specific source analysis was introduced.
+- When V=0, RV32 now derives the variadic cursor as E plus named stack
+  slots times 4, not a distance from the realigned frame. RV64's
+  existing E-based zero-GPR path and both architectures' ordinary
+  16-byte aligned frames remain unchanged.
+- Frame storage remains legal: both frame planners already reserve V
+  bytes above fixed objects and preserve E in a private frame slot;
+  the actual realignment adds nonnegative slack. For each permitted E
+  mod64 phase, E−V stays above the saved entry-SP slot and below the
+  caller's first stack argument. Physical register spills and va_start
+  now use that same interval, including moving alloca stack functions.
+- One permanent GNU C source exercises one/seven/eight/nine named
+  arguments plus moving alloca, all with a live 64-byte-aligned local.
+  The ninth named argument exercises the nonzero named stack-slot offset.
+  The source/ISA
+  probe checks actual RV32/RV64 register offsets, the exact saved
+  entry-SP reload in each function, and four E mod64 phases
+  algebraically; it rejects old positive realigned-SP spill offsets.
+
+| P50 focused verification | Observed |
+|---|---|
+| Debug MiniC compiler build after both target changes | **PASS** |
+| GNU C host semantic/preprocessor source accepted by MiniC RV32I/ILP32 and RV64I/LP64 | **PASS** |
+| RV32 source assembly: one/seven/eight/nine named arguments, moving alloca | **5/5 PASS**, each **4/4** entry-SP phases |
+| RV64 source assembly: same five cases | **5/5 PASS**, each **4/4** entry-SP phases |
+| Genuine GNU GAS/LD ELF and QEMU for RV32/RV64 | **NOT RUN locally** (cross GCC, binutils and QEMU unavailable); execution remains mandatory |
+| Complete five-ISA Linux boot/runtime | **NOT RUN** in this ABI-focused batch |
+
+The focused target is make check-p50-riscv-overaligned-varargs, included
+in check-fast. MC-014 and MC-015 retain OPEN until both independently
+execute GNU-vs-MiniC real ELF/QEMU against the same four stack phases.
