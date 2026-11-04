@@ -876,6 +876,10 @@ check-minild-output-script-edges: $(MINIAS_BINARY) $(MINILD_BINARY)
 	MINILD="$(abspath $(MINILD_BINARY))" \
 	bash tests/linker/probe-output-script-edges.sh
 
+.PHONY: check-minild-final-elf-audit
+check-minild-final-elf-audit:
+	bash tests/linker/probe-final-elf-audit.sh
+
 .PHONY: check-minild-script-merge-section-flags
 check-minild-script-merge-section-flags: $(MINIAS_BINARY) $(MINILD_BINARY)
 	MINIAS="$(abspath $(MINIAS_BINARY))" \
