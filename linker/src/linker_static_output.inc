@@ -201,14 +201,22 @@ static bool minild_static_program_plan_build(
                     next->vaddr / state->target->page_size;
                 ordered = next->vaddr >= previous_vend &&
                     next->laddr >= previous_lend &&
-                    next->file_offset >= previous_fend;
+                    (next->file_size == 0U ||
+                     next->file_offset >= previous_fend);
                 if (ordered) {
                     vgap = next->vaddr - previous_vend;
                     lgap = next->laddr - previous_lend;
-                    fgap = next->file_offset - previous_fend;
+                    if (next->file_size != 0U) {
+                        fgap = next->file_offset - previous_fend;
+                    }
                 }
+                /* A NOBITS tail needs no corresponding file gap: the
+                 * unwritten VMA alignment bytes are already zero-filled.
+                 * A following PROGBITS section, in contrast, must have an
+                 * exact file/VMA/LMA affine offset. */
                 linear_gap = ordered &&
-                    vgap == lgap && vgap == fgap &&
+                    vgap == lgap &&
+                    (next->file_size == 0U || vgap == fgap) &&
                     vgap <= UINT64_MAX - next->mem_size &&
                     prev->mem_size <= UINT64_MAX - vgap - next->mem_size &&
                     (next->file_size == 0U ||
@@ -238,9 +246,18 @@ static bool minild_static_program_plan_build(
                 if (same_page || next->vaddr < previous_vend) {
                     fprintf(state->diagnostics,
                             "minic-ld: unsupported-script-load-page-overlap:"
-                            "vaddr=0x%llx:next=0x%llx\n",
+                            "vaddr=0x%llx:next=0x%llx:"
+                            "file=0x%llx+0x%llx:next_file=0x%llx:"
+                            "lma=0x%llx:next_lma=0x%llx:"
+                            "flags=0x%x:next_flags=0x%x\n",
                             (unsigned long long)prev->vaddr,
-                            (unsigned long long)next->vaddr);
+                            (unsigned long long)next->vaddr,
+                            (unsigned long long)prev->file_offset,
+                            (unsigned long long)prev->file_size,
+                            (unsigned long long)next->file_offset,
+                            (unsigned long long)prev->laddr,
+                            (unsigned long long)next->laddr,
+                            prev->flags, next->flags);
                     goto failed;
                 }
             }
