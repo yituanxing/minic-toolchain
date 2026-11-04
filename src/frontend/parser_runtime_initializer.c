@@ -1178,9 +1178,8 @@ static bool add_zero_initialized_record_lvalue(MinicParser *parser,
         (void)memset(&member, 0, sizeof(member));
         member.kind = MINIC_EXPRESSION_MEMBER;
         member.span = initializer_span;
-        member.type = field->type;
-        if (minic_type_is_const(base_type) && !minic_type_add_const(member.type, &member.type)) {
-            minic_parser_error(parser, "cannot propagate const to zero-initialized record member");
+        if (!minic_type_record_member(base_type, field->type, &member.type)) {
+            minic_parser_error(parser, "cannot propagate zero-initialized record member qualifiers");
             return false;
         }
         member.value_category = MINIC_VALUE_LVALUE;
@@ -1250,9 +1249,8 @@ static bool add_record_field_lvalue(MinicParser *parser,
     (void)memset(&member, 0, sizeof(member));
     member.kind = MINIC_EXPRESSION_MEMBER;
     member.span = span;
-    member.type = field->type;
-    if (minic_type_is_const(target_type) && !minic_type_add_const(member.type, &member.type)) {
-        minic_parser_error(parser, "cannot propagate const to record initializer member");
+    if (!minic_type_record_member(target_type, field->type, &member.type)) {
+        minic_parser_error(parser, "cannot propagate record initializer member qualifiers");
         return false;
     }
     member.value_category = MINIC_VALUE_LVALUE;

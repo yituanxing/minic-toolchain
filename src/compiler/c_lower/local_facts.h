@@ -30,6 +30,11 @@ bool minic_core_local_facts_meet(
 
 void minic_core_local_facts_clear_known(MinicCoreLowerContext *context);
 
+/* A bounded write may retain current-value/range information, but every
+ * write invalidates the *entry* facts of an inline specialization. */
+void minic_core_local_fact_revoke_entry_specialization(
+    MinicCoreLowerContext *context, MinicLocalId local_id);
+
 void minic_core_local_fact_invalidate(MinicCoreLowerContext *context,
                                            MinicLocalId local_id);
 

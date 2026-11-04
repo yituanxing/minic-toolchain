@@ -252,6 +252,45 @@ static bool core_inline_asm_parameter_fact_stable(
     return !fact->escaped && !fact->specialization_modified;
 }
 
+/* The integer specialization key carries target integer bits.  A GNU `i`
+ * operand can contain C arithmetic over that key; arithmetic and explicit
+ * casts must retain the RESULT type's width and signedness at every step.
+ * The earlier int64-only walker silently stripped conversions, turning
+ * (unsigned char)(258+1) into assembler text 259 instead of 3. Reuse the
+ * Frontend's target-aware constant conversion rather than reconstructing
+ * unsigned/enum/_Bool type layout inside Core. */
+static bool core_inline_asm_normalize_integer_result(
+    const MinicCoreLowerContext *context,
+    MinicType result_type,
+    int64_t raw_value,
+    bool allow_signed_shift_bit_pattern,
+    int64_t *value) {
+    MinicConstValue raw;
+    MinicConstValue converted;
+    MinicType effective_type;
+    const MinicC0Program *program;
+
+    if (context == NULL || context->body == NULL ||
+        context->body->program == NULL || context->target == NULL ||
+        value == NULL || !minic_type_is_integer(result_type))
+        return false;
+    program = context->body->program;
+    raw.type = minic_type_long_long();
+    raw.bits = (uint64_t)raw_value;
+    if (!minic_c0_type_effective_integer_type(
+            program, result_type, &effective_type))
+        return false;
+    if (minic_type_is_signed_integer(effective_type) &&
+        !allow_signed_shift_bit_pattern &&
+        !minic_const_value_integer_representable_in_type(
+            program, context->target, &raw, result_type))
+        return false;
+    return minic_const_value_convert_integer(
+               program, context->target, &raw, result_type, &converted) &&
+           minic_const_value_as_int64(
+               program, context->target, &converted, value);
+}
+
 static bool core_inline_asm_specialized_integer(
     const MinicCoreLowerContext *context,
     MinicExpressionId expression_id,
@@ -276,10 +315,70 @@ static bool core_inline_asm_specialized_integer(
     }
     if (expression->kind == MINIC_EXPRESSION_CAST ||
         expression->kind == MINIC_EXPRESSION_BITCAST ||
-        expression->kind == MINIC_EXPRESSION_CONVERSION ||
-        expression->kind == MINIC_EXPRESSION_LVALUE_READ) {
+        expression->kind == MINIC_EXPRESSION_CONVERSION) {
+        const MinicExpression *operand = minic_c0_program_expression(
+            context->body->program, expression->value.unary.operand);
+        MinicConstValue operand_constant;
+        MinicConstValue converted;
+        unsigned int source_width;
+        unsigned int destination_width;
+        int64_t operand_value;
+
+        if (operand == NULL || !minic_type_is_integer(operand->type) ||
+            !minic_type_is_integer(expression->type) ||
+            !core_inline_asm_specialized_integer(
+                context, expression->value.unary.operand,
+                &operand_value, depth + 1U))
+            return false;
+        if (expression->kind == MINIC_EXPRESSION_BITCAST &&
+            (!minic_target_info_integer_width(
+                 context->target, context->body->program,
+                 operand->type, &source_width) ||
+             !minic_target_info_integer_width(
+                 context->target, context->body->program,
+                 expression->type, &destination_width) ||
+             source_width != destination_width))
+            return false;
+        operand_constant.type = operand->type;
+        operand_constant.bits = (uint64_t)operand_value;
+        return minic_const_value_convert_integer(
+                   context->body->program, context->target,
+                   &operand_constant, expression->type, &converted) &&
+               minic_const_value_as_int64(
+                   context->body->program, context->target,
+                   &converted, value);
+    }
+    if (expression->kind == MINIC_EXPRESSION_LVALUE_READ) {
         return core_inline_asm_specialized_integer(
             context, expression->value.unary.operand, value, depth + 1U);
+    }
+    if (expression->kind == MINIC_EXPRESSION_UNARY) {
+        int64_t operand_value;
+        int64_t raw_result;
+        if (!core_inline_asm_specialized_integer(
+                context, expression->value.unary.operand,
+                &operand_value, depth + 1U))
+            return false;
+        switch (expression->value.unary.operator_kind) {
+            case MINIC_UNARY_PLUS:
+                raw_result = operand_value;
+                break;
+            case MINIC_UNARY_NEGATE:
+                if (operand_value == INT64_MIN) return false;
+                raw_result = -operand_value;
+                break;
+            case MINIC_UNARY_BITWISE_NOT:
+                raw_result = ~operand_value;
+                break;
+            case MINIC_UNARY_LOGICAL_NOT:
+                raw_result = operand_value == 0 ? 1 : 0;
+                break;
+            default:
+                /* Side-effecting ++/-- cannot be constant folded. */
+                return false;
+        }
+        return core_inline_asm_normalize_integer_result(
+            context, expression->type, raw_result, false, value);
     }
     /* Specialization replaces parameters with compile-time integers, but a
      * GNU `i` operand can still be an expression over those parameters.
@@ -288,34 +387,49 @@ static bool core_inline_asm_specialized_integer(
      * runtime register.  Reject undefined shifts, division and overflow. */
     if (expression->kind == MINIC_EXPRESSION_BINARY) {
         int64_t left, right;
+        unsigned int result_width;
         if (!core_inline_asm_specialized_integer(
                 context, expression->value.binary.left, &left, depth + 1U) ||
             !core_inline_asm_specialized_integer(
                 context, expression->value.binary.right, &right, depth + 1U))
             return false;
+        int64_t raw_result;
+        bool allow_shift_extension = false;
         switch (expression->value.binary.operator_kind) {
-            case MINIC_BINARY_BITWISE_AND: *value = left & right; return true;
-            case MINIC_BINARY_BITWISE_OR: *value = left | right; return true;
-            case MINIC_BINARY_BITWISE_XOR: *value = left ^ right; return true;
+            case MINIC_BINARY_BITWISE_AND: raw_result = left & right; break;
+            case MINIC_BINARY_BITWISE_OR: raw_result = left | right; break;
+            case MINIC_BINARY_BITWISE_XOR: raw_result = left ^ right; break;
             case MINIC_BINARY_SHIFT_RIGHT:
-                if (left < 0 || right < 0 || right >= 63) return false;
-                *value = left >> (unsigned)right;
-                return true;
+                if (left < 0 || right < 0 ||
+                    !minic_target_info_integer_width(
+                        context->target, context->body->program,
+                        expression->type, &result_width) ||
+                    right >= (int64_t)result_width || right >= 63)
+                    return false;
+                raw_result = left >> (unsigned)right;
+                break;
             case MINIC_BINARY_SHIFT_LEFT:
-                if (left < 0 || right < 0 || right >= 63 ||
+                if (left < 0 || right < 0 ||
+                    !minic_target_info_integer_width(
+                        context->target, context->body->program,
+                        expression->type, &result_width) ||
+                    right >= (int64_t)result_width || right >= 63 ||
                     left > (INT64_MAX >> (unsigned)right)) return false;
-                *value = left << (unsigned)right;
-                return true;
+                raw_result = left << (unsigned)right;
+                /* GNU C folds sign-bit-setting shifts in integer constant
+                 * expressions using the target-width bit pattern. */
+                allow_shift_extension = true;
+                break;
             case MINIC_BINARY_ADD:
                 if ((right > 0 && left > INT64_MAX - right) ||
                     (right < 0 && left < INT64_MIN - right)) return false;
-                *value = left + right;
-                return true;
+                raw_result = left + right;
+                break;
             case MINIC_BINARY_SUBTRACT:
                 if ((right < 0 && left > INT64_MAX + right) ||
                     (right > 0 && left < INT64_MIN + right)) return false;
-                *value = left - right;
-                return true;
+                raw_result = left - right;
+                break;
             case MINIC_BINARY_MULTIPLY:
                 if (right > 0 &&
                     (left > INT64_MAX / right || left < INT64_MIN / right))
@@ -324,20 +438,23 @@ static bool core_inline_asm_specialized_integer(
                     (left > INT64_MIN / right || left < INT64_MAX / right))
                     return false;
                 if (right == -1 && left == INT64_MIN) return false;
-                *value = left * right;
-                return true;
+                raw_result = left * right;
+                break;
             case MINIC_BINARY_DIVIDE:
                 if (right == 0 || (left == INT64_MIN && right == -1))
                     return false;
-                *value = left / right;
-                return true;
+                raw_result = left / right;
+                break;
             case MINIC_BINARY_REMAINDER:
                 if (right == 0 || (left == INT64_MIN && right == -1))
                     return false;
-                *value = left % right;
-                return true;
+                raw_result = left % right;
+                break;
             default: return false;
         }
+        return core_inline_asm_normalize_integer_result(
+            context, expression->type, raw_result,
+            allow_shift_extension, value);
     }
     if (expression->kind == MINIC_EXPRESSION_LOCAL) {
         size_t parameter_index;

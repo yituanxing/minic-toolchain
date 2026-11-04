@@ -2172,3 +2172,64 @@ relocation, but does not yet establish GCC acceptance parity. The source
 static-initializer pointer relocation evaluator remains separate from GNU asm
 normalization, and these two sources of layout semantics need differential
 coverage when further acceptance work is scheduled.
+
+## IR-P41 — Source member CV and typed/live GNU ASM facts (2026-11-04)
+
+**Baseline:** P40 PR #674 `1c7619e`. Five independently reading tracks
+followed source type construction through verifier, AST inline-specialization,
+Core local facts, target-aware immediate evaluation and all five ASM emitters.
+Three tracks found live, reproducible wrong-code and closed their complete
+consumer chains together. Two exploratory tracks **did not** introduce
+unproven architecture changes.
+
+- **One source type rule for record members.** A member selected from
+  `volatile struct/union` had lost the enclosing `volatile`, despite already
+  inheriting `const`; `_Generic(&p->field)` returned a different value from
+  GCC and Core could omit one of two required volatile loads. New
+  `minic_type_record_member()` propagates both qualifiers. Pointer and
+  rvalue member parsing, synthesized runtime record initializer MEMBER nodes
+  and AST verifier share the same rule; field pointee qualifiers remain
+  untouched. Coverage includes anonymous/nested records, arrays, pointers,
+  bitfields, two reads, stores and const-volatile members.
+- **One typed integer evaluator for specialized GNU `i`.** Previously the
+  Core walker ignored C casts and result widths, so
+  `(unsigned char)(value+1U)` with specialized `value=258` emitted `.long 259`
+  instead of GCC's `.long 3`. The evaluator now uses the existing target
+  integer conversion/representability API for casts and each unary/binary
+  result, including sign extension, unsigned wrap, `_Bool`, promotions,
+  shifts and overflow guards. The pointer-arithmetic relocation path is
+  tested with a narrowed index and verifies `symbol+12`.
+- **Bounded-OR writes revoke entry specialization.** In `if(y) x |= 2`, the
+  Core bit-set facts legitimately stayed useful, but an old specialization
+  `x=0` remained usable as GNU `i` after CFG joins; MiniC emitted `.byte 0`
+  where GCC rejected the dynamic operand. Separate the current-value bitset
+  lattice from the immutability of the caller's entry fact. All bounded-OR
+  paths mark `specialization_modified`; valid straight-line `x|=2` still
+  produces the fresh `.byte 2`. ASM output writes, loops, native runtime and
+  five-ISA Core negative admission are covered.
+
+**Independent architectural restraint:** GNU aligned pointer typedefs and
+reduced-alignment record value loads show safe admission gaps, not confirmed
+wrong-code; no per-pointer-level alignment representation was invented.
+P38 Source ASM operand roots currently prevent MC-064's historical missing
+static-function link, but over-retain symbols in dead ASM. Replacing them
+requires complete typed per-instance Core ASM relocation edges across every
+target-qualified/structured/generic form and a reachable-block consumer;
+no unsafe partial deletion or borrowed Source identity was introduced.
+MC-043 clone quota also still needs genuine always-inline/caller-context
+semantics, not a blind optional-fallback `continue`.
+
+**Batch size:** 22 paths, **+774/−41**; the nine production
+C/H files contribute **+182/−37**. New GNU/native/five-ISA regression C and
+shell files are kept together with one `check-fast` Makefile target and the
+corrected historical issue statuses, rather than split into tiny commits.
+
+| Gate | P41 result |
+| --- | --- |
+| Strict Release compiler and full Debug `check-fast` | **PASS**; source and new P41 gates together, exit 0 |
+| `check-p41-typed-asm-and-live-facts` | **PASS**: typed GNU `i` 12 integer + 1 pointer relocation cases per RV32/RV64, GCC assembly parity; 5-ISA dynamic immediate safely rejected; live known value `.byte 2` preserved |
+| Volatile member semantics | **PASS**: 5/5 target `-S`, GNU and MiniC x86 native runtime, five `_Generic` qualifier forms, two volatile loads and bitfield |
+| Local fact control flow | **PASS**: five-ISA non-ASM generation, GNU/MiniC native branches/loops, ASM output negative; 3 ISA structured-ASM admission **explicit SKIP** |
+| P39 vs P41 broad five-ISA `.i` differential | **255/255 same outcomes**: 187 byte-identical `.s`, 68 both rejected, 0 differing (P40 gave identical broad results) |
+| P39 vs P41 symbolic specialization differential | **55 byte-identical, 15 both rejected, 10 expected changes** out of 80, exactly the two P40 symbolic clone-selection fixture families; P41 adds no further variant differences |
+| Five-ISA original Linux GNU ELF/QEMU | **NOT RUN**; original Linux end-to-end remains separate, no result invented |

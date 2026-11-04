@@ -204,6 +204,14 @@ void minic_core_local_facts_clear_known(MinicCoreLowerContext *context) {
     }
 }
 
+void minic_core_local_fact_revoke_entry_specialization(
+    MinicCoreLowerContext *context, MinicLocalId local_id) {
+    size_t index;
+    if (minic_core_local_fact_index(context, local_id, &index)) {
+        context->local_integer_constants[index].specialization_modified = true;
+    }
+}
+
 void minic_core_local_fact_invalidate(MinicCoreLowerContext *context,
                                            MinicLocalId local_id) {
     size_t index;
@@ -348,6 +356,10 @@ bool minic_core_local_fact_or_constant(
         return false;
     }
     previous = fact->known ? fact->value.bits : fact->possible_one_bits;
+    /* A bounded OR may preserve useful possible-one bits, but it still
+     * writes the C object. Never allow a later CFG clear/meet to restore
+     * the clone's older integer/Boolean/symbolic *entry* specialization. */
+    minic_core_local_fact_revoke_entry_specialization(context, local_id);
     fact->possible_one_bits = previous | converted.bits;
     fact->possible_one_bits_valid = true;
     fact->nonnegative_range_valid = false;

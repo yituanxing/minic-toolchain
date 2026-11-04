@@ -651,9 +651,7 @@ static bool verify_expression(const MinicC0Program *program,
                    expression->value_category != MINIC_VALUE_LVALUE) {
             return false;
         }
-        expected_type = field->type;
-        if (minic_type_is_const(record_type) &&
-            !minic_type_add_const(expected_type, &expected_type)) {
+        if (!minic_type_record_member(record_type, field->type, &expected_type)) {
             return false;
         }
         return minic_type_equal(expression->type, expected_type);

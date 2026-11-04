@@ -1929,6 +1929,18 @@ check-mc058-specialization-correctness: $(MINIC_CC_BINARY)
 
 check-fast: check-mc058-specialization-correctness
 
+# P41: verify the C type/fact boundary as a single GNU differential family.
+.PHONY: check-p41-typed-asm-and-live-facts
+check-p41-typed-asm-and-live-facts: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+		bash tests/compiler/c0/probe-p41-asm-specialized-integer-width.sh
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+		bash tests/compiler/c0/probe-p41-bounded-or-specialization.sh
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+		bash tests/compiler/c0/probe-p41-volatile-record-member.sh
+
+check-fast: check-p41-typed-asm-and-live-facts
+
 .PHONY: check-loongarch64-linux-va-fixed-overflow
 check-loongarch64-linux-va-fixed-overflow: $(MINIC_CC_BINARY)
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" \

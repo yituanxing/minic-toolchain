@@ -95,9 +95,8 @@ static bool add_pointer_record_field(MinicParser *parser,
         record_type.record_id != record_id) {
         return false;
     }
-    member_type = field->type;
-    if (minic_type_is_const(record_type) && !minic_type_add_const(member_type, &member_type)) {
-        minic_parser_error(parser, "cannot propagate const to record member");
+    if (!minic_type_record_member(record_type, field->type, &member_type)) {
+        minic_parser_error(parser, "cannot propagate record member qualifiers");
         return false;
     }
 
@@ -267,9 +266,8 @@ static bool parse_record_rvalue_member(MinicParser *parser,
         minic_parser_error(parser, "record rvalue member field is invalid");
         return false;
     }
-    member_type = field->type;
-    if (minic_type_is_const(base_type) && !minic_type_add_const(member_type, &member_type)) {
-        minic_parser_error(parser, "cannot propagate const to record rvalue member");
+    if (!minic_type_record_member(base_type, field->type, &member_type)) {
+        minic_parser_error(parser, "cannot propagate record rvalue member qualifiers");
         return false;
     }
     if (!minic_parser_advance(parser)) {

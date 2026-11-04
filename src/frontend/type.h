@@ -154,6 +154,10 @@ MinicType minic_type_record(MinicRecordId record_id);
 MinicType minic_type_array(MinicArrayTypeId array_type_id);
 bool minic_type_add_const(MinicType type, MinicType *result);
 bool minic_type_add_volatile(MinicType type, MinicType *result);
+/* A struct/union member lvalue inherits both object qualifiers from its
+ * containing record; its declared pointer-pointee qualifiers are unchanged. */
+bool minic_type_record_member(MinicType record_type, MinicType field_type,
+                              MinicType *result);
 bool minic_type_unqualified(MinicType type, MinicType *result);
 bool minic_type_pointer_to(MinicType pointee, MinicType *result);
 bool minic_type_pointee(MinicType pointer, MinicType *result);

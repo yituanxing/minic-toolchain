@@ -356,6 +356,16 @@ bool minic_type_add_volatile(MinicType type, MinicType *result) {
     return true;
 }
 
+bool minic_type_record_member(MinicType record_type, MinicType field_type,
+                              MinicType *result) {
+    if (result == NULL || !minic_type_is_record(record_type)) return false;
+    *result = field_type;
+    return (!minic_type_is_const(record_type) ||
+            minic_type_add_const(*result, result)) &&
+           (!minic_type_is_volatile(record_type) ||
+            minic_type_add_volatile(*result, result));
+}
+
 bool minic_type_unqualified(MinicType type, MinicType *result) {
     if (result == NULL || !minic_type_pointer_qualifiers_are_valid(type)) {
         return false;

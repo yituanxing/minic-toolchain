@@ -78,13 +78,13 @@
 | [MC-053](#mc-053-rv64i-lp64-软浮点只覆盖四则) | P2 | OPEN | LOCAL-COMPILE-DIFF | RV64 | LP64 已实现软四则，但比较、取负、转换的 10 个合法函数均无法 `-S` |
 | [MC-056](#mc-056-运行时-record-顺序初始化器跨扩容借用) | P0 | FIXED-UNVERIFIED | ASAN | Frontend | RecordId 重新获取、字段按值快照；五目标容量相位 ASan 与 x86 GNU native 对照通过，完整目标验收待做 |
 | [MC-057](#mc-057-gnu-空-record-返回及实参-abi-缺口) | P2 | OPEN（RV32 子项 FIXED-UNVERIFIED） | GNU-NATIVE/5ISA-S | RV32/RV64/x86 | RV32 空 Record 定义/返回已过多路径回归；RV64、x86 独立拒编仍 OPEN，不能整项结案 |
-| [MC-058](#mc-058-符号指针加常量偏移的传递特化丢失) | P1 | OPEN | LOCAL-COMPILE-DIFF | Compiler | 唯一 caller 的 static pointer+offset 经 inline wrapper 后无法解析 GNU ASM `i` |
+| [MC-058](#mc-058-符号指针加常量偏移的传递特化丢失) | P1 | FIXED-UNVERIFIED | LOCAL-COMPILE-DIFF | Compiler | P40 统一字节偏移／AST 传递闭包／Core 调用选择，RV32/64 定向 GCC 差分 PASS；五 ISA Linux/QEMU 未验 |
 | [MC-059](#mc-059-rv64-lp64d-含浮点成员-union-被误当-fp-aggregate) | P2 | FIXED-UNVERIFIED | LOCAL-COMPILE-DIFF | RV64 ABI | 已按 psABI 让含 FP 字段 union 走 INTEGER convention；LP64 11/11、LP64D 10/10 定点通过，完整目标 GNU ELF/QEMU 待验 |
 | [MC-060](#mc-060-lp64-两个目标的大聚合-2048-字节硬上限) | P2 | OPEN | LOCAL-COMPILE-DIFF | Common LP64/A64/Loong | 合法 2049B Record 的按值参数/返回在 A64/Loong preflight 错拒，2048B 通过 |
 | [MC-061](#mc-061-record-字段声明中-pointer-to-array-跨扩容借用) | P0 | FIXED-UNVERIFIED | ASAN | Frontend | `449eab2` 递归 field declarator 后按 RecordId 重新取指针；五目标×三容量 ASan、GNU/MiniC native 通过，完整 Linux 未验 |
 | [MC-062](#mc-062-x86-alt-reloc-的-memory-输入源机约束分裂) | P2 | OPEN | LOCAL-COMPILE-DIFF | x86-64 ASM | Source 允许任意 GNU m lvalue，Machine 硬编码唯一符号，合法替代重定位遭拒 |
 | [MC-063](#mc-063-带标签的裸-record-声明被误作匿名成员) | P1 | FIXED-UNVERIFIED | GNU-NATIVE-DIFF | Frontend/DataLayout | `6aac3c1` 区分 direct tagless anonymous 与 tagged/typedef bare declaration；GNU/MiniC x86 native exit48 同值，完整目标 ABI 未验 |
-| [MC-064](#mc-064-inline-asm-仅符号引用的静态函数被错误裁剪) | P1 | OPEN | RV64-ELF-LINK-DIFF | Core Reachability | GNU ASM-only static 函数符号被降成文本后丢失可达性边；同源 GNU ELF/QEMU PASS，MiniC GNU AS PASS、GNU LD undefined，等待 typed Core 引用方案 |
+| [MC-064](#mc-064-inline-asm-仅符号引用的静态函数被错误裁剪) | P1 | OPEN（链接错裁已缓解，Core 边仍欠缺） | RV64-ELF-LINK-DIFF | Core Reachability | P38 的 Source ASM 根避免函数被错裁，但会保留死代码中的引用；仍需精确的 Core ASM typed relocation 边 |
 | [MC-066](#mc-066-aarch64-浮点指针字段被误判为浮点聚合) | P2 | FIXED-UNVERIFIED | GNU-NATIVE/5ISA-S | AArch64 ABI | 现基线 pointer/array 在 FP base_kind 之前分类；134 项五目标 -S 与四种尺寸 GNU native PASS，A64 FP HFA 仍 fail-closed |
 | [MC-067](#mc-067-带-gnu-属性的-record-前向声明被错判为定义) | P2 | FIXED-UNVERIFIED | GNU-NATIVE-DIFF/SOURCE | Frontend | `072ca74` 识别前/后置 GNU 属性的文件/块作用域 struct/union forward；GNU/MiniC x86 native 0/4、四目标 -S PASS，完整矩阵未验 |
 | [MC-069](#mc-069-aarch64-linux-vdso-在-gnu-ld-拒绝动态重定位) | P1 | OPEN | GNU/MiniC-ELF-AB | AArch64 Linux vDSO ELF visibility | 4108 项 MiniC `-S`/GNU AS 通过；GNU 的 HIDDEN 未定义数据符号经 ADR_PREL，而 MiniC 错为 DEFAULT+GOT，GNU LD 拒绝动态重定位 |
@@ -594,7 +594,7 @@
 
 ### MC-058 符号指针加常量偏移的传递特化丢失
 
-- **状态：** `OPEN`，P1，`LOCAL-COMPILE-DIFF`；是 MiniC 生成汇编前的合法 GNU C 接受缺口，尚无该条 MiniC 机器码输出可供执行比较。
+- **当前状态：** `FIXED-UNVERIFIED`，P1，`LOCAL-COMPILE-DIFF`。P40 `1c7619e` 已将符号地址归一为 symbol＋有符号**字节**偏移，统一 AST transitive、Core late selector 与 GNU `i` immediate。RV32/RV64 的 8 种步长／转换结果与 GCC 一致，两跳传递和共享 clone 原生回归通过；不宣称其它三目标结构化 ASM 准入或五 ISA Linux/QEMU 通过。已修改形参重新指向新全局时，MiniC 仍可能安全拒绝 GCC 可接受的立即数，这是另一接受能力余项。
 - **位置/现象：** `src/compiler/inline_symbolic.c:335–413` 的 transitive symbolic argument closure 识别直接 LOCAL 静态参数事实，但没有表示“symbolic base + C 常量 pointer offset”的可传播事实。`mid_key(int *key){ return leaf_key(key+1); }` 传入的 `key` 已由唯一 caller 专门化为静态全局 `key_slots`，callee 内联 GNU `"i"(key)` 却得不到 `key_slots+4`，因而 `immediate_resolved=0`、Core 拒绝。
 - **严格隔离：** `tests/compiler/audit/mc058_inline_symbolic_pointer_offset_direct.c` 与 `_transitive.c` 的 `leaf_key` 完全相同，都是 GNU `asm volatile(".byte 0" : : "i"(key))`；仅直达 `leaf(key_slots+1)` vs 经 `mid(key_slots)`/`leaf(key+1)` 不同。GNU x86 `gcc -std=gnu11 -O2 -c` 两者 PASS；相同 `.i` 的 MiniC `--target=riscv64-linux -S` 直接 case PASS (`direct=1`)，传递 case FAIL (`direct=1 transitive=0 immediate_resolved=0`)。另完整 `.quad %c0` GCC source 可以生成 `.data+4/.data+8/.data+c` relocs，但 MiniC x86 的 opaque-ASM backend 另有失配，**不得把 `.quad` x86 MiniC FAIL 当本问题的单一因果**。
 - **独立性/修复门槛：** 仅一个 caller、没有整数形参事实或共享 CALL 的多 caller 污染，故区别 MC-006（跨实例污染）与 MC-008（整数运行时参数禁止符号特化）。需由实例事实承载 base symbol + byte offset，保证指针加法的元素大小/type normalization，保留 caller identity，回归 offsets 0/1/2、两层传递、不同全局及 GNU ASM `i` 的目标 GAS/relocs；不要直接污染共享 AST CALL。
@@ -638,7 +638,7 @@
 
 ### MC-064 Inline ASM 仅符号引用的静态函数被错误裁剪
 
-- **状态：** `OPEN`，P1，`RV64-ELF-LINK-DIFF`；已由仅生成汇编证据升级为**真实目标 GNU LD undefined static function**。负例无法链接，故不能宣称负例已 QEMU 执行；GNU 同源正例和两个 MiniC 控制例已 QEMU native 运行。
+- **当前状态：** `OPEN`，P1，`RV64-ELF-LINK-DIFF`。以下 undefined static function 是 **P38 之前的历史真实链接反例**。P38 `module_capture_asm_operand_roots()` 已从 Source ASM 操作数记录函数／对象身份并将其作为 Module 保活根，缓解原来“已使用却错裁”的危险。P41 复核发现相反的**过度保活**：未调用的静态函数中的 GNU `i` 引用会让其目标静态函数被发射，而 GCC `-O2` 会裁掉两者。精确架构仍应由每个 Core ASM 实例持有 typed function/object relocation edges，最终可达块闭包消费这些边；不能复用 deferred `source_inline_asm_id` 或直接删除 P38 的安全根。P41 没有实施半套迁移；本项按架构闭包继续 OPEN。
 - **链路：** `src/core/core_lower_asm_operands.c:core_inline_asm_immediate_text` / `core_inline_asm_specialize_immediates` 将 GNU `"i"(asm_only_target)` 的静态函数引用转成裸字符串；`src/core/core_lower_asm_scalar_forms.c` 形成 `OPAQUE_INLINE_ASM`。`src/compiler/core_reachability.c:minic_walk_reachable_core_edges` 只跟 `CALL`、`FUNCTION_ADDRESS`，`minic_prune_inline_specializations_from_core` 把缺少普通 C 引用的静态函数标记不发射。前端/Lower 已通过，缺失发生于可达性身份转换。
 - **持久反例：** 原 x86 专属 `%c0` 文件 `tests/compiler/audit/mc064_asm_only_static_function_reachability.c`（GNU x86 `-O0/-O2` 保留 LOCAL FUNC）；新目标合法 `%0` 文件 `tests/compiler/audit/mc064_rv64_asm_static_symbol.c` 和 `probe-mc064-rv64-elf-link.sh`。同一个 GNU RV64 预处理 `.i`：GNU GCC→GNU LD→QEMU exit11 PASS；MiniC `-S`→GNU AS PASS，但 GNU LD `.rodata` 报 `undefined reference to asm_only_target`。改为 `MC064_DIRECT_CALL` 时双方 QEMU exit23；ASM-only static object `&asm_only_object` 时双方 exit11。不能泛化为所有 ASM 符号缺失。
 - **修复与验收：** 将 ASM 中 function/object relocation source identity 保持在 Core **独立 typed 符号引用**中并加入 reachable Core block 的 reachability roots，不能用全文本符号子串推测身份，也不能重载现有 `source_inline_asm_id`（RV32/RV64/A64 将其视作 deferred ASM owner，Loong 还会据此回读原 C0）。当前**未修复**，无需碰触 opaque ASM 的文本输出合同；最窄接缝和证据见 `docs/architecture/review-2026-11-01-mc064-rv64-elf-reachability.md`。后续需验有/无普通 C 引用、别名、used、死 Core block、多个目标 GNU AS/ELF relocation 与链接。

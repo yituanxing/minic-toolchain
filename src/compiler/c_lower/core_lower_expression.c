@@ -107,7 +107,10 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
                               (size_t)fact_target->value.local_id,
                               (size_t)expression_id);
             }
-            if (!bounded_or)
+            if (bounded_or)
+                minic_core_local_fact_revoke_entry_specialization(
+                    context, fact_target->value.local_id);
+            else
                 minic_core_local_fact_invalidate(context, fact_target->value.local_id);
         }
     }
