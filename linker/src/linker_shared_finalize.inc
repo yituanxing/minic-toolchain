@@ -208,11 +208,11 @@ static bool shared_fill_dynamic(MiniLdState *state,
     MINILD_DYN(DT_STRTAB, layout->work[shared->dynstr_section].vaddr);
     MINILD_DYN(DT_SYMTAB, layout->work[shared->dynsym_section].vaddr);
     MINILD_DYN(DT_STRSZ, state->work.sections[shared->dynstr_section].size);
-    MINILD_DYN(DT_SYMENT, sizeof(Elf64_Sym));
+    MINILD_DYN(DT_SYMENT, shared->abi->dynsym_record_bytes);
     if (shared->rela_count != 0U) {
         MINILD_DYN(DT_RELA, layout->work[shared->rela_section].vaddr);
         MINILD_DYN(DT_RELASZ, state->work.sections[shared->rela_section].size);
-        MINILD_DYN(DT_RELAENT, sizeof(Elf64_Rela));
+        MINILD_DYN(DT_RELAENT, shared->abi->rela_record_bytes);
     }
     if (shared->have_textrel) {
         MINILD_DYN(DT_TEXTREL, 0U);
@@ -248,7 +248,8 @@ static bool shared_fill_dynamic(MiniLdState *state,
 
 #undef MINILD_DYN
 
-    if (index * sizeof(Elf64_Dyn) != dynamic->size) {
+    if (index > SIZE_MAX / shared->abi->dynamic_record_bytes ||
+        index * shared->abi->dynamic_record_bytes != dynamic->size) {
         fprintf(state->diagnostics,
                 "minic-ld: shared-dynamic-size-mismatch\n");
         return false;

@@ -16,7 +16,8 @@ shared_scan_relocation_requirements(MiniLdState *state,
     for (i = 0U; i < state->relocations.count; ++i) {
         MiniLdReloc *reloc = &state->relocations.entries[i];
         MiniLdResolvedSymbol *target;
-        MiniLdTargetRelocClass kind = minild_target_reloc_class(reloc->type);
+        MiniLdTargetRelocClass kind =
+            abi->classify_relocation(reloc->type);
 
         if (reloc->section >= state->work.count ||
             (state->work.sections[reloc->section].flags & SHF_ALLOC) == 0U) {
@@ -75,7 +76,7 @@ shared_scan_relocation_requirements(MiniLdState *state,
             }
             continue;
         }
-        if (shared_relocation_is_final_layout(reloc->type)) {
+        if (abi->relocation_at_final_layout(reloc->type)) {
             continue;
         }
         if (kind == MINILD_TARGET_RELOC_CALL) {

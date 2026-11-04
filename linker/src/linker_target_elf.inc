@@ -6,6 +6,8 @@
 
 struct MiniLdLayout;
 struct MiniLdStaticTargetPlan;
+struct MiniLdSharedTargetAbi;
+static const struct MiniLdSharedTargetAbi *minild_riscv_shared_target_abi(void);
 static bool minild_x86_apply_static_relocations(
     MiniLdState *state, const struct MiniLdLayout *layout,
     const struct MiniLdStaticTargetPlan *plan);
@@ -33,11 +35,9 @@ static bool minild_riscv_synthesize_gnu_default_boundaries(
 
 typedef bool (*MiniLdTargetFlagsMerge)(MiniLdState *, uint32_t, bool,
                                        const char *);
-typedef enum MiniLdTargetSharedBackend {
-    MINILD_SHARED_UNSUPPORTED,
-    MINILD_SHARED_RISCV_ELF64,
-    MINILD_SHARED_RISCV32_COMPAT_VDSO
-} MiniLdTargetSharedBackend;
+typedef int (*MiniLdTargetSharedLink)(const char *, const MiniLdInput *,
+                                      size_t, const MiniLdSharedOptions *,
+                                      FILE *);
 
 struct MiniLdTargetProfile {
     const char *emulation;
@@ -73,7 +73,11 @@ struct MiniLdTargetProfile {
      * to Target. Common owns the language-independent init/fini arrays. */
     bool (*synthesize_default_symbols)(MiniLdState *,
                                         const struct MiniLdLayout *);
-    MiniLdTargetSharedBackend shared_backend;
+    /* Full ET_DYN ABI is target-supplied, while an independent narrow
+     * compatibility linker can expose only its admitted shared mode.
+     * Core selects neither one by an architecture enumeration. */
+    const struct MiniLdSharedTargetAbi *(*shared_abi)(void);
+    MiniLdTargetSharedLink link_shared;
     bool (*valid_elf_flags)(uint32_t);
 };
 
@@ -101,7 +105,8 @@ static const MiniLdTargetProfile minild_target_profiles[] = {
      minild_riscv_apply_static_relocations,
      minild_riscv_destroy_static_relocations,
      minild_riscv_synthesize_gnu_default_boundaries,
-     MINILD_SHARED_RISCV_ELF64, NULL},
+     minild_riscv_shared_target_abi,
+     minild_link_shared_elf64_riscv_inputs_options, NULL},
     {"elf32lriscv", ELFCLASS32, ELFDATA2LSB, EM_RISCV, "riscv",
      NULL, MINILD_SHT_RISCV_ATTRIBUTES,
      UINT64_C(0x10000), 4096U,
@@ -111,25 +116,25 @@ static const MiniLdTargetProfile minild_target_profiles[] = {
      minild_riscv_fill_static_relocations,
      minild_riscv_apply_static_relocations,
      minild_riscv_destroy_static_relocations, NULL,
-     MINILD_SHARED_RISCV32_COMPAT_VDSO, NULL},
+     NULL, minild_link_elf32_compat_vdso, NULL},
     {"elf_x86_64", ELFCLASS64, ELFDATA2LSB, EM_X86_64, "i386:x86-64",
      NULL, 0U, UINT64_C(0x400000), 4096U,
      true, true, false, false, false, false,
      minild_exact_merge_flags, NULL, NULL, NULL,
      minild_x86_apply_static_relocations, NULL, NULL,
-     MINILD_SHARED_UNSUPPORTED, minild_zero_elf_flags},
+     NULL, NULL, minild_zero_elf_flags},
     {"aarch64linux", ELFCLASS64, ELFDATA2LSB, EM_AARCH64, "aarch64",
      NULL, 0U, UINT64_C(0x400000), 4096U,
      true, true, false, false, false, false,
      minild_exact_merge_flags, NULL, NULL, NULL,
      minild_aarch64_apply_static_relocations, NULL, NULL,
-     MINILD_SHARED_UNSUPPORTED, minild_zero_elf_flags},
+     NULL, NULL, minild_zero_elf_flags},
     {"elf64loongarch", ELFCLASS64, ELFDATA2LSB, EM_LOONGARCH, "loongarch64",
      NULL, 0U, UINT64_C(0x400000), 4096U,
      true, true, false, false, false, false,
      minild_exact_merge_flags, NULL, NULL, NULL,
      minild_loongarch_apply_static_relocations, NULL, NULL,
-     MINILD_SHARED_UNSUPPORTED, minild_loongarch_v1_elf_flags}
+     NULL, NULL, minild_loongarch_v1_elf_flags}
 };
 
 static const MiniLdTargetProfile *minild_target_find(const char *emulation) {

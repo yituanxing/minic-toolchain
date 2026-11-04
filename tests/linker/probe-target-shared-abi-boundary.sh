@@ -94,6 +94,10 @@ done
 # rejects a generic DSO contract with a specific target-level diagnostic.
 reject rv32-compat-dispatch elf32-unsupported-link-contract \
     -m elf32lriscv -shared -soname=not-compat.so "$work/riscv32.o"
+reject rv32-compat-valid-soname-incomplete-contract elf32-unsupported-link-contract \
+    -m elf32lriscv -shared -soname=linux-compat_vdso.so.1 "$work/riscv32.o"
+reject rv32-pie-contract unsupported-emulation-or-link-mode \
+    -m elf32lriscv -pie "$work/riscv32.o"
 reject rv32-static-mode unsupported-emulation-or-link-mode \
     -m elf32lriscv -static "$work/riscv32.o"
 
@@ -123,4 +127,46 @@ readelf -h "$work/riscv64-shared.elf" | grep -q 'DYN (Shared object file)' || {
     echo 'MINILD_SHARED_ABI=FAIL rv64_shared_regression' >&2
     exit 1
 }
-echo 'MINILD_SHARED_ABI=PASS rejected_shared_pie=6 invalid_flag_modes=10 rv32_compat_dispatch=PASS rv32_static_rejected=PASS loongarch_v1_flags=3 rv64_shared=PASS'
+python3 - "$work/riscv64-shared.elf" <<'PY'
+from pathlib import Path
+import struct
+import sys
+
+data = Path(sys.argv[1]).read_bytes()
+if len(data) < 64 or data[:6] != b'\x7fELF\x02\x01':
+    raise SystemExit('MINILD_SHARED_ABI=FAIL rv64_not_elf64le')
+kind, machine, flags = struct.unpack_from('<HH', data, 16)[0], \
+    struct.unpack_from('<H', data, 18)[0], \
+    struct.unpack_from('<I', data, 48)[0]
+if (kind, machine, flags) != (3, 243, 0):
+    raise SystemExit('MINILD_SHARED_ABI=FAIL rv64_wrong_header')
+offset = struct.unpack_from('<Q', data, 40)[0]
+entry_size, count, names_index = struct.unpack_from('<HHH', data, 58)
+if entry_size != 64 or not 0 < names_index < count or \
+        offset + count * entry_size > len(data):
+    raise SystemExit('MINILD_SHARED_ABI=FAIL rv64_bad_shdr_table')
+headers = [struct.unpack_from('<IIQQQQIIQQ', data, offset + i * 64)
+           for i in range(count)]
+name_header = headers[names_index]
+strings = data[name_header[4]:name_header[4]+name_header[5]]
+sections = {}
+for h in headers:
+    start = h[0]
+    if start >= len(strings):
+        raise SystemExit('MINILD_SHARED_ABI=FAIL rv64_invalid_section_name')
+    name = strings[start:strings.find(b'\0', start)].decode()
+    sections[name] = h
+for name, kind, entry_size in (('.dynsym', 11, 24),
+                               ('.rela.dyn', 4, 24),
+                               ('.dynamic', 6, 16)):
+    h = sections.get(name)
+    if h is None or h[1] != kind or h[9] != entry_size or \
+            h[5] % entry_size:
+        raise SystemExit(f'MINILD_SHARED_ABI=FAIL rv64_record_geometry={name}')
+if sections['.dynsym'][6] >= count or \
+        headers[sections['.dynsym'][6]] != sections['.dynstr']:
+    raise SystemExit('MINILD_SHARED_ABI=FAIL rv64_dynsym_link')
+print('MINILD_SHARED_ABI_CHECK=PASS target=rv64 '
+      'ELFCLASS=64 ET_DYN=true dynsym_entry=24 rela_entry=24 dynamic_entry=16')
+PY
+echo 'MINILD_SHARED_ABI=PASS rejected_shared_pie=6 invalid_flag_modes=10 rv32_compat_dispatch=3 rv32_static_rejected=PASS loongarch_v1_flags=3 rv64_shared=PASS'

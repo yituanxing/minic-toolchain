@@ -45,6 +45,8 @@ files = (
     'linker_shared_finalize.inc',
     'linker_shared_program_plan.inc',
     'linker_shared_reloc_scan.inc',
+    'linker_shared_target_abi.inc',
+    'linker_shared_riscv_abi.inc',
     'linker_eh_frame.inc',
     'linker_version.inc',
     'linker_shared_reloc_apply.inc',
@@ -72,6 +74,8 @@ if compiled.count('linker/src/linker.c') != 1 or any(
 
 edges = {
     ('linker_core.inc', 'linker_shared_output.inc'),
+    ('linker_shared_output.inc', 'linker_shared_target_abi.inc'),
+    ('linker_shared_target_abi.inc', 'linker_shared_riscv_abi.inc'),
     ('linker_shared_output.inc', 'linker_shared_pre_layout.inc'),
     ('linker_shared_output.inc', 'linker_shared_finalize.inc'),
     ('linker_shared_output.inc', 'linker_shared_program_plan.inc'),
@@ -103,6 +107,9 @@ if not (driver.index('#include "linker_shared_pre_layout.inc"') <
         driver.index('#include "linker_shared_program_plan.inc"') <
         driver.index('static bool shared_write_object(')):
     raise SystemExit('MINILD_SHARED_PHASE_STRUCTURE=FAIL driver_stage_order')
+if not (driver.index('#include "linker_shared_target_abi.inc"') <
+        driver.index('#include "linker_shared_pre_layout.inc"')):
+    raise SystemExit('MINILD_SHARED_PHASE_STRUCTURE=FAIL target_abi_before_mode')
 if not (pre.index('#include "linker_shared_reloc_scan.inc"') <
         pre.index('#include "linker_eh_frame.inc"') <
         pre.index('static bool shared_prepare_metadata(')):
@@ -160,6 +167,8 @@ if 'shared->symbols[' not in pre or \
 target_fixup = (src / 'linker_riscv_fixup.inc').read_text(encoding='utf-8')
 shared_apply = sources['linker_shared_reloc_apply.inc']
 shared_target = sources['linker_shared_riscv_target.inc']
+shared_abi = sources['linker_shared_target_abi.inc']
+shared_riscv_abi = sources['linker_shared_riscv_abi.inc']
 if len(re.findall(r'\bstatic\s+void\s+minild_target_emit_plt_entry\s*\(',
                   target_fixup)) != 1 or \
         shared_target.count('minild_target_emit_plt_entry(') != 1 or \
@@ -172,6 +181,85 @@ if len(re.findall(r'\bstatic\s+void\s+minild_target_emit_plt_entry\s*\(',
         shared_target.count('minild_target_apply_final_instruction(') != 2 or \
         shared_apply.count('#include "linker_shared_riscv_target.inc"') != 1:
     raise SystemExit('MINILD_SHARED_PHASE_STRUCTURE=FAIL target_plt_owner')
+
+# The currently RV64-only ET_DYN machinery has a generic layout and
+# preemption pipeline; ISA classification, dynamic relocation numbering,
+# instruction bytes and ELF record geometry are target-owned contracts.
+target_callbacks = ('classify_relocation', 'relocation_at_final_layout',
+                    'dynamic_relocation_info', 'absolute_relocation_width',
+                    'store_absolute', 'patch_final_relocations',
+                    'finalize_plt_and_calls')
+for callback in target_callbacks:
+    if len(re.findall(r'\(\*' + callback + r'\)\s*\(', shared_abi)) != 1:
+        raise SystemExit('MINILD_SHARED_PHASE_STRUCTURE=FAIL '
+                         f'target_abi_missing_callback={callback}')
+for record in ('dynsym_record_bytes', 'rela_record_bytes',
+               'dynamic_record_bytes'):
+    if len(re.findall(r'\b' + record + r'\s*;', shared_abi)) != 1:
+        raise SystemExit('MINILD_SHARED_PHASE_STRUCTURE=FAIL '
+                         f'target_abi_missing_geometry={record}')
+if 'minild_riscv64_shared_abi' not in shared_riscv_abi or \
+        'minild_riscv_shared_target_abi(void)' not in shared_riscv_abi or \
+        '#include "linker_shared_riscv_abi.inc"' not in shared_abi or \
+        not re.search(r'state->target->shared_abi\s*\(', shared_abi):
+    raise SystemExit('MINILD_SHARED_PHASE_STRUCTURE=FAIL '
+                     'target_backend_selection_boundary')
+
+# Common must not enumerate machine-specific shared linkers.  The five
+# immutable TargetProfiles select RV64 full ABI and RV32 compat-vDSO by
+# callbacks; the other three Linux targets deliberately lack ET_DYN hooks.
+target_profile = (src / 'linker_target_elf.inc').read_text(encoding='utf-8')
+linker_entry = (src / 'linker.c').read_text(encoding='utf-8')
+for name, code in (('target_profile', target_profile),
+                   ('shared_abi', shared_abi),
+                   ('linker_entry', linker_entry)):
+    if 'MiniLdTargetSharedBackend' in code or \
+            re.search(r'\bMINILD_SHARED_(?:RISCV|UNSUPPORTED)', code) or \
+            re.search(r'\bshared_backend\b', code):
+        raise SystemExit('MINILD_SHARED_PHASE_STRUCTURE=FAIL '
+                         f'architecture_enum_in_common={name}')
+if not re.search(r'\(\*shared_abi\)\s*\(void\)', target_profile) or \
+        not re.search(r'\bMiniLdTargetSharedLink\s+link_shared\s*;', target_profile) or \
+        not re.search(r'\btarget->link_shared\s*\(', linker_entry):
+    raise SystemExit('MINILD_SHARED_PHASE_STRUCTURE=FAIL '
+                     'target_shared_callbacks_missing')
+profile_rows = {
+    row_name: row_body
+    for row_name, row_body in re.findall(
+        r'\{"([^"]+)"(.*?)\}(?:,|\s*$)',
+        target_profile.split('static const MiniLdTargetProfile minild_target_profiles[] = {', 1)[1]
+                      .split('\n};', 1)[0], re.S)
+}
+if set(profile_rows) != {'elf64lriscv', 'elf32lriscv', 'elf_x86_64',
+                         'aarch64linux', 'elf64loongarch'}:
+    raise SystemExit('MINILD_SHARED_PHASE_STRUCTURE=FAIL '
+                     f'target_profile_count={sorted(profile_rows)}')
+if not re.search(r'minild_riscv_shared_target_abi\s*,\s*'
+                 r'minild_link_shared_elf64_riscv_inputs_options',
+                 profile_rows['elf64lriscv']) or \
+        not re.search(r'NULL\s*,\s*minild_link_elf32_compat_vdso',
+                      profile_rows['elf32lriscv']):
+    raise SystemExit('MINILD_SHARED_PHASE_STRUCTURE=FAIL '
+                     'riscv_shared_backend_bindings')
+for emulation in ('elf_x86_64', 'aarch64linux', 'elf64loongarch'):
+    if not re.search(r'NULL\s*,\s*NULL\s*,\s*'
+                     r'minild_\w+_elf_flags\s*$',
+                     profile_rows[emulation].strip()):
+        raise SystemExit('MINILD_SHARED_PHASE_STRUCTURE=FAIL '
+                         f'unsupported_shared_hooks={emulation}')
+for name in ('linker_shared_reloc_scan.inc',
+             'linker_shared_reloc_apply.inc'):
+    code = sources[name]
+    if '->classify_relocation(' not in code or re.search(
+            r'\bminild_target_reloc_class\s*\(', code):
+        raise SystemExit('MINILD_SHARED_PHASE_STRUCTURE=FAIL '
+                         f'common_machine_classifier={name}')
+for name, callback in (('linker_shared_output.inc', 'patch_final_relocations'),
+                       ('linker_shared_output.inc', 'finalize_plt_and_calls'),
+                       ('linker_shared_reloc_apply.inc', 'dynamic_relocation_info')):
+    if '->' + callback + '(' not in sources[name]:
+        raise SystemExit('MINILD_SHARED_PHASE_STRUCTURE=FAIL '
+                         f'missing_target_dispatch={name}:{callback}')
 for kind, typename, expected_owner in (
         ('struct', 'MiniLdSharedTlsSegment', 'linker_shared_program_plan.inc'),
         ('enum', 'MiniLdSharedRelocScanResult',
@@ -253,7 +341,9 @@ for func in ('shared_prepare_metadata', 'shared_build_vdso_script_layout',
 print('MINILD_SHARED_PHASE_STRUCTURE=PASS modules=5 '
       f'owner_functions={definitions} shared_image=single '
       'symbol_plan=single target_plt=1 target_instruction_fixups=1 '
-      'build=single_translation_unit order=reserve,fill,program,write')
+      'shared_target_hooks=7 record_sizes=3 '
+      'backend_callbacks=5 build=single_translation_unit '
+      'order=reserve,fill,program,write')
 PY
 
 # Each of these existing integration fixtures exercises actual ELF content,

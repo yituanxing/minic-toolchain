@@ -1,24 +1,29 @@
-/* Machine-owned slot geometry for the currently supported RV64 ET_DYN ABI.
- * Shared mode owns whether symbols need GOT, PLT and TLS-GD reservations;
- * the target owns the byte layout of each reservation.  This is deliberately
- * not an assertion that other architectures share RV64's eager PLT recipe. */
-typedef struct MiniLdSharedTargetAbi {
-    size_t got_slot_bytes;
-    size_t tls_gd_slot_bytes;
-    size_t plt_entry_bytes;
-    size_t gotplt_header_slots;
-    size_t gotplt_slot_bytes;
-} MiniLdSharedTargetAbi;
+/* RV64 shared psABI: the current eager-PLT layout and relocation operators.
+ * New targets should add their own leaf, not redefine the common interface. */
+
+static bool riscv_shared_patch_final_layout_relocations(
+    MiniLdState *state, const MiniLdLayout *layout,
+    const MiniLdOutputPlan *output_plan,
+    const struct MiniLdSharedImage *shared);
+static bool riscv_shared_finalize_plt_and_calls(
+    MiniLdState *state, const MiniLdLayout *layout,
+    const MiniLdOutputPlan *output_plan,
+    const struct MiniLdSharedImage *shared);
 
 static const MiniLdSharedTargetAbi minild_riscv64_shared_abi = {
-    8U, 16U, 16U, 3U, 8U
+    8U, 16U, 16U, 3U, 8U,
+    sizeof(Elf64_Sym), sizeof(Elf64_Rela), sizeof(Elf64_Dyn),
+    minild_target_reloc_class,
+    minild_target_reloc_at_final_layout,
+    minild_target_dynamic_reloc_info,
+    minild_target_addend_bits,
+    minild_target_absolute_width,
+    minild_target_store_absolute,
+    riscv_shared_patch_final_layout_relocations,
+    riscv_shared_finalize_plt_and_calls
 };
 
-static const MiniLdSharedTargetAbi *
-minild_shared_target_abi(const MiniLdState *state) {
-    if (state->target != NULL &&
-        state->target->shared_backend == MINILD_SHARED_RISCV_ELF64) {
-        return &minild_riscv64_shared_abi;
-    }
-    return NULL;
+static const struct MiniLdSharedTargetAbi *
+minild_riscv_shared_target_abi(void) {
+    return &minild_riscv64_shared_abi;
 }

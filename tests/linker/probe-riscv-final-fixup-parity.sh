@@ -13,7 +13,7 @@ command -v python3 >/dev/null 2>&1 || {
 
 # Keep psABI type numbers, final fixup codecs and loader relocation encodings
 # in Target. ET_EXEC delegates its whole reserve/fill/apply lifetime through
-# target hooks; ET_DYN currently consumes target-classified relocation kinds.
+# target hooks; ET_DYN consumes machine policy through its shared target ABI.
 src_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 python3 - "$src_root/linker/src" <<'PY'
 from pathlib import Path
@@ -22,7 +22,11 @@ import sys
 
 source = Path(sys.argv[1])
 target = (source / 'linker_riscv_fixup.inc').read_text(encoding='utf-8')
+semantics = (source / 'linker_target_reloc_semantics.inc').read_text(encoding='utf-8')
+layout = (source / 'linker_layout.inc').read_text(encoding='utf-8')
 profile = (source / 'linker_target_elf.inc').read_text(encoding='utf-8')
+shared_abi = (source / 'linker_shared_target_abi.inc').read_text(encoding='utf-8')
+shared_riscv_abi = (source / 'linker_shared_riscv_abi.inc').read_text(encoding='utf-8')
 target_apis = (
     'minild_target_reloc_class',
     'minild_target_absolute_width',
@@ -35,6 +39,15 @@ for name in target_apis:
     if not re.search(r'\bstatic\s+[A-Za-z_][\w\s\*]*\b' + name +
                      r'\s*\(', target):
         raise SystemExit(f'MINILD_RISCV_POLICY_OWNER=FAIL missing_target={name}')
+
+for kind in ('MiniLdTargetRelocClass', 'MiniLdDynamicRelocSemantic'):
+    pattern = r'\btypedef\s+enum\s+' + kind + r'\s*\{'
+    if len(re.findall(pattern, semantics)) != 1 or \
+            re.search(pattern, target):
+        raise SystemExit(f'MINILD_RISCV_POLICY_OWNER=FAIL '
+                         f'generic_semantic_type_owner={kind}')
+if '#include "linker_target_reloc_semantics.inc"' not in layout:
+    raise SystemExit('MINILD_RISCV_POLICY_OWNER=FAIL semantic_type_order')
 
 for hook in ('reserve_static_relocations', 'fill_static_relocations',
              'apply_static_relocations', 'destroy_static_relocations'):
@@ -62,11 +75,41 @@ for name in ('linker_static_reloc_scan.inc',
         raise SystemExit(f'MINILD_RISCV_POLICY_OWNER=FAIL '
                          f'no_target_contract={name}:{hook}')
     if name.startswith('linker_shared_') and \
-            'minild_target_reloc_class(' not in body:
+            '->classify_relocation(' not in body:
         raise SystemExit(f'MINILD_RISCV_POLICY_OWNER=FAIL '
-                         f'no_shared_target_classification={name}')
+                         f'no_shared_target_classification_hook={name}')
+
+# Shared mode must not call the RISC-V classifier or psABI encoders directly.
+# A second target is introduced by providing a new ABI leaf, not by adding
+# RISC-V type dispatch to pre-layout or final-layout common stages.
+for name in ('linker_shared_reloc_scan.inc',
+             'linker_shared_reloc_apply.inc'):
+    body = (source / name).read_text(encoding='utf-8')
+    if re.search(r'\bminild_target_(?:reloc_class|dynamic_reloc_info|'
+                 r'absolute_width|store_absolute|reloc_at_final_layout)\s*\(',
+                 body):
+        raise SystemExit(f'MINILD_RISCV_POLICY_OWNER=FAIL '
+                         f'direct_riscv_policy={name}')
+
+for callback in ('classify_relocation', 'relocation_at_final_layout',
+                 'dynamic_relocation_info', 'absolute_relocation_width',
+                 'store_absolute', 'patch_final_relocations',
+                 'finalize_plt_and_calls'):
+    if len(re.findall(r'\(\*' + callback + r'\)\s*\(', shared_abi)) != 1:
+        raise SystemExit(f'MINILD_RISCV_POLICY_OWNER=FAIL '
+                         f'shared_abi_hook={callback}')
+for record in ('dynsym_record_bytes', 'rela_record_bytes',
+               'dynamic_record_bytes'):
+    if not re.search(r'\b' + record + r'\s*;', shared_abi):
+        raise SystemExit(f'MINILD_RISCV_POLICY_OWNER=FAIL '
+                         f'shared_record_geometry={record}')
+if '#include "linker_shared_riscv_abi.inc"' not in shared_abi or \
+        'minild_riscv64_shared_abi' not in shared_riscv_abi:
+    raise SystemExit('MINILD_RISCV_POLICY_OWNER=FAIL shared_leaf_binding')
 print('MINILD_RISCV_POLICY_OWNER=PASS stages=5 static_hooks=4 '
-      'shared_target_classification=2 final_fixup_owner=target')
+      'shared_target_classification_hooks=2 shared_abi_hooks=7 '
+      'shared_record_sizes=3 generic_semantic_enums=2 '
+      'final_fixup_owner=target')
 PY
 
 work=$(mktemp -d "${TMPDIR:-/tmp}/minild-rv-final-fixup.XXXXXX")

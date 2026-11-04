@@ -1,6 +1,6 @@
 /* ET_DYN output driver: validation, final writer and shared-link entry.
  * Pre-layout, post-layout and PHDR policies have distinct owners. */
-#include "linker_shared_riscv_abi.inc"
+#include "linker_shared_target_abi.inc"
 #include "linker_shared_pre_layout.inc"
 #include "linker_shared_finalize.inc"
 #include "linker_shared_program_plan.inc"
@@ -287,10 +287,11 @@ int minild_link_shared_elf64_riscv_inputs_options(
         !shared_fill_gnu_hash(&state, &shared) ||
         !shared_fill_versions(&state, &shared) ||
         !shared_fill_relocations(&state, &layout, &output_plan, &shared) ||
-        !riscv_shared_patch_final_layout_relocations(&state, &layout,
-                                                      &output_plan, &shared) ||
+        !shared.abi->patch_final_relocations(&state, &layout,
+                                             &output_plan, &shared) ||
         !minild_eh_fill(&state, &layout, &shared) ||
-        !riscv_shared_finalize_plt_and_calls(&state, &layout, &output_plan, &shared) ||
+        !shared.abi->finalize_plt_and_calls(&state, &layout,
+                                            &output_plan, &shared) ||
         !shared_fill_dynamic(&state, &layout, &shared) ||
         !shared_write_object(&state,
                              &layout,

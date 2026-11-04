@@ -301,20 +301,6 @@ static bool minild_riscv_is_arithmetic_relocation(uint32_t type) {
  * semantic classes.  ET_REL preserves original types; ET_EXEC and ET_DYN
  * decide resolution/preemption/liveness using these classes, never by
  * decoding ISA relocation numbers a second time. */
-typedef enum MiniLdTargetRelocClass {
-    MINILD_TARGET_RELOC_NOOP,
-    MINILD_TARGET_RELOC_ALIGN,
-    MINILD_TARGET_RELOC_ABS32,
-    MINILD_TARGET_RELOC_ABS64,
-    MINILD_TARGET_RELOC_ARITHMETIC,
-    MINILD_TARGET_RELOC_FINAL,
-    MINILD_TARGET_RELOC_PCREL_LO,
-    MINILD_TARGET_RELOC_CALL,
-    MINILD_TARGET_RELOC_GOT,
-    MINILD_TARGET_RELOC_TLS_GD,
-    MINILD_TARGET_RELOC_UNSUPPORTED
-} MiniLdTargetRelocClass;
-
 static MiniLdTargetRelocClass minild_target_reloc_class(uint32_t type) {
     if (minild_riscv_is_arithmetic_relocation(type)) {
         return MINILD_TARGET_RELOC_ARITHMETIC;
@@ -379,14 +365,6 @@ static bool minild_target_reloc_at_final_layout(uint32_t type) {
 
 /* Dynamic relocation semantics are target-neutral: the RISC-V backend
  * selects actual ELF relocation numbers for each loader operation. */
-typedef enum MiniLdDynamicRelocSemantic {
-    MINILD_DYNAMIC_RELOC_RELATIVE,
-    MINILD_DYNAMIC_RELOC_ABSOLUTE,
-    MINILD_DYNAMIC_RELOC_TLS_MODULE,
-    MINILD_DYNAMIC_RELOC_TLS_OFFSET,
-    MINILD_DYNAMIC_RELOC_JUMP_SLOT
-} MiniLdDynamicRelocSemantic;
-
 static Elf64_Xword minild_target_dynamic_reloc_info(
     size_t symbol_index, MiniLdDynamicRelocSemantic semantic) {
     uint32_t type;

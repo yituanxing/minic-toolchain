@@ -279,13 +279,6 @@ static bool shared_symbol_is_static_absolute(const MiniLdState *state,
     }
     return symbol->section == MINILD_SECTION_ABS;
 }
-
-
-
-static bool shared_relocation_is_final_layout(uint32_t type) {
-    return minild_target_reloc_at_final_layout(type);
-}
-
 #include "linker_shared_reloc_scan.inc"
 
 static bool shared_define_linker_symbols_pre_layout(
@@ -361,7 +354,26 @@ static bool shared_prepare_metadata(MiniLdState *state,
 
     memset(shared, 0, sizeof(*shared));
     shared->abi = minild_shared_target_abi(state);
-    if (shared->abi == NULL) {
+    if (shared->abi == NULL ||
+        /* Shared metadata serializers still emit ELF64 wire records.
+         * A distinct ELF32 ABI must bring real encoders before admission. */
+        state->target == NULL ||
+        state->target->elf_class != ELFCLASS64 ||
+        shared->abi->dynsym_record_bytes != sizeof(Elf64_Sym) ||
+        shared->abi->rela_record_bytes != sizeof(Elf64_Rela) ||
+        shared->abi->dynamic_record_bytes != sizeof(Elf64_Dyn) ||
+        shared->abi->got_slot_bytes == 0U ||
+        shared->abi->tls_gd_slot_bytes == 0U ||
+        shared->abi->plt_entry_bytes == 0U ||
+        shared->abi->gotplt_slot_bytes == 0U ||
+        shared->abi->classify_relocation == NULL ||
+        shared->abi->relocation_at_final_layout == NULL ||
+        shared->abi->dynamic_relocation_info == NULL ||
+        shared->abi->addend_bits == NULL ||
+        shared->abi->absolute_relocation_width == NULL ||
+        shared->abi->store_absolute == NULL ||
+        shared->abi->patch_final_relocations == NULL ||
+        shared->abi->finalize_plt_and_calls == NULL) {
         fprintf(state->diagnostics,
                 "minic-ld: unsupported-shared-target-abi\n");
         return false;
@@ -431,7 +443,7 @@ static bool shared_prepare_metadata(MiniLdState *state,
                              SHT_DYNSYM,
                              SHF_ALLOC,
                              8U,
-                             sizeof(Elf64_Sym),
+                             shared->abi->dynsym_record_bytes,
                              &shared->dynsym_section) ||
         !find_or_add_section(state,
                              ".hash",
@@ -445,7 +457,7 @@ static bool shared_prepare_metadata(MiniLdState *state,
                              SHT_RELA,
                              SHF_ALLOC,
                              8U,
-                             sizeof(Elf64_Rela),
+                             shared->abi->rela_record_bytes,
                              &shared->rela_section) ||
         !find_or_add_section(state,
                              ".got",
@@ -473,14 +485,14 @@ static bool shared_prepare_metadata(MiniLdState *state,
                              SHT_RELA,
                              SHF_ALLOC,
                              8U,
-                             sizeof(Elf64_Rela),
+                             shared->abi->rela_record_bytes,
                              &shared->rela_plt_section) ||
         !find_or_add_section(state,
                              ".dynamic",
                              SHT_DYNAMIC,
                              SHF_ALLOC | SHF_WRITE,
                              8U,
-                             sizeof(Elf64_Dyn),
+                             shared->abi->dynamic_record_bytes,
                              &shared->dynamic_section)) {
         goto fail;
     }
@@ -624,10 +636,11 @@ static bool shared_prepare_metadata(MiniLdState *state,
         goto oom;
     }
 
-    if (shared->dynsym_count > SIZE_MAX / sizeof(Elf64_Sym)) {
+    if (shared->dynsym_count >
+        SIZE_MAX / shared->abi->dynsym_record_bytes) {
         goto oom;
     }
-    dynsym_size = shared->dynsym_count * sizeof(Elf64_Sym);
+    dynsym_size = shared->dynsym_count * shared->abi->dynsym_record_bytes;
     if (!section_append_zero(dynsym, dynsym_size)) {
         goto oom;
     }
@@ -693,9 +706,11 @@ static bool shared_prepare_metadata(MiniLdState *state,
                                      shared->abi->tls_gd_slot_bytes)) {
         goto oom;
     }
-    if (shared->rela_count > SIZE_MAX / sizeof(Elf64_Rela) ||
+    if (shared->rela_count >
+            SIZE_MAX / shared->abi->rela_record_bytes ||
         !section_append_zero(rela,
-                             shared->rela_count * sizeof(Elf64_Rela))) {
+                             shared->rela_count *
+                                 shared->abi->rela_record_bytes)) {
         goto oom;
     }
 
@@ -711,13 +726,15 @@ static bool shared_prepare_metadata(MiniLdState *state,
             shared->plt_count >
                 SIZE_MAX / shared->abi->gotplt_slot_bytes -
                     shared->abi->gotplt_header_slots ||
-            shared->plt_count > SIZE_MAX / sizeof(Elf64_Rela)) {
+            shared->plt_count >
+                SIZE_MAX / shared->abi->rela_record_bytes) {
             goto oom;
         }
         plt_size = shared->plt_count * shared->abi->plt_entry_bytes;
         gotplt_size = (shared->abi->gotplt_header_slots + shared->plt_count) *
             shared->abi->gotplt_slot_bytes;
-        rela_plt_size = shared->plt_count * sizeof(Elf64_Rela);
+        rela_plt_size =
+            shared->plt_count * shared->abi->rela_record_bytes;
         if (!section_append_zero(plt, plt_size) ||
             !section_append_zero(gotplt, gotplt_size) ||
             !section_append_zero(rela_plt, rela_plt_size)) {
@@ -751,9 +768,11 @@ static bool shared_prepare_metadata(MiniLdState *state,
     if (shared->pie) {
         ++dynamic_entries; /* FLAGS_1 */
     }
-    if (dynamic_entries > SIZE_MAX / sizeof(Elf64_Dyn) ||
+    if (dynamic_entries >
+            SIZE_MAX / shared->abi->dynamic_record_bytes ||
         !section_append_zero(dynamic,
-                             dynamic_entries * sizeof(Elf64_Dyn))) {
+                             dynamic_entries *
+                                 shared->abi->dynamic_record_bytes)) {
         goto oom;
     }
 

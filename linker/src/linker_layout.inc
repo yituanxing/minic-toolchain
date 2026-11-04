@@ -98,6 +98,8 @@ static void store_u64le(unsigned char *data, uint64_t value) {
     }
 }
 
+#include "linker_target_reloc_semantics.inc"
+
 #include "linker_riscv_fixup.inc"
 
 #include "linker_static_got.inc"

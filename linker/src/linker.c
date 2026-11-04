@@ -3,8 +3,8 @@
  * source admission belong to the shared Core. */
 #include <limits.h>
 
-#include "linker_core.inc"
 #include "minild_elf32_vdso.h"
+#include "linker_core.inc"
 
 int minild_link_static_elf64_riscv_inputs_options(
     const char *output_path,
@@ -176,15 +176,9 @@ int minild_link_shared_inputs_target(
         }
         return 2;
     }
-    switch (target->shared_backend) {
-    case MINILD_SHARED_RISCV_ELF64:
-        return minild_link_shared_elf64_riscv_inputs_options(
-            output_path, inputs, input_count, options, diagnostics);
-    case MINILD_SHARED_RISCV32_COMPAT_VDSO:
-        return minild_link_elf32_compat_vdso(
-            output_path, inputs, input_count, options, diagnostics);
-    case MINILD_SHARED_UNSUPPORTED:
-        break;
+    if (target->link_shared != NULL) {
+        return target->link_shared(output_path, inputs, input_count,
+                                   options, diagnostics);
     }
     fprintf(diagnostics,
             "minic-ld: unimplemented-target-shared-backend:%s\n",

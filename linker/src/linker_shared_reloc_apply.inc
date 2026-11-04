@@ -84,6 +84,31 @@ static bool shared_resolve_static_relocation_target(
     return minild_layout_resolve_symbol(state, layout, reloc->symbol, value_out);
 }
 
+/* The shared planner is the sole owner of the dynamic RELA budget.  Every
+ * producer (GOT, source ABS64 and TLS-GD) goes through one bounds-checked
+ * writer so an unplanned relocation cannot overwrite another section before
+ * the final count check notices the mismatch. */
+static bool shared_rela_append(MiniLdState *state,
+                               const MiniLdSharedImage *shared,
+                               size_t *written,
+                               const Elf64_Rela *record) {
+    MiniLdSection *section = &state->work.sections[shared->rela_section];
+    size_t stride = shared->abi->rela_record_bytes;
+
+    if (stride == 0U || stride != sizeof(*record) ||
+        *written >= shared->rela_count ||
+        *written > SIZE_MAX / stride ||
+        !range_ok(*written * stride, stride, section->size)) {
+        fprintf(state->diagnostics,
+                "minic-ld: shared-relocation-count-mismatch:%zu:%zu\n",
+                *written + 1U, shared->rela_count);
+        return false;
+    }
+    memcpy(section->data + *written * stride, record, stride);
+    ++*written;
+    return true;
+}
+
 static bool shared_fill_relocations(MiniLdState *state,
                                     const MiniLdLayout *layout,
                                     const MiniLdOutputPlan *output_plan,
@@ -117,8 +142,9 @@ static bool shared_fill_relocations(MiniLdState *state,
                         target->name);
                 return false;
             }
-            store_u64le(state->work.sections[shared->got_section].data + offset,
-                        target_value);
+            shared->abi->store_absolute(
+                state->work.sections[shared->got_section].data + offset,
+                MINILD_TARGET_RELOC_ABS64, target_value);
             continue;
         }
         if (target->section == MINILD_SECTION_ABS &&
@@ -138,7 +164,7 @@ static bool shared_fill_relocations(MiniLdState *state,
             if (!minild_layout_resolve_symbol(state, layout, i, &target_value)) {
                 return false;
             }
-            output.r_info = minild_target_dynamic_reloc_info(
+            output.r_info = shared->abi->dynamic_relocation_info(
                 0U, MINILD_DYNAMIC_RELOC_RELATIVE);
             output.r_addend = (Elf64_Sxword)target_value;
         } else {
@@ -150,14 +176,13 @@ static bool shared_fill_relocations(MiniLdState *state,
                         target->name);
                 return false;
             }
-            output.r_info = minild_target_dynamic_reloc_info(
+            output.r_info = shared->abi->dynamic_relocation_info(
                 dynamic_index, MINILD_DYNAMIC_RELOC_ABSOLUTE);
             output.r_addend = 0;
         }
-        memcpy(rela->data + write_index * sizeof(output),
-               &output,
-               sizeof(output));
-        ++write_index;
+        if (!shared_rela_append(state, shared, &write_index, &output)) {
+            return false;
+        }
     }
 
     for (i = 0U; i < state->relocations.count; ++i) {
@@ -167,7 +192,8 @@ static bool shared_fill_relocations(MiniLdState *state,
         Elf64_Rela output;
         size_t dynamic_index = 0U;
         bool live;
-        MiniLdTargetRelocClass kind = minild_target_reloc_class(input->type);
+        MiniLdTargetRelocClass kind =
+            shared->abi->classify_relocation(input->type);
 
         if (!shared_relocation_live_source(state, output_plan,
                                            input->section, &live)) {
@@ -191,7 +217,7 @@ static bool shared_fill_relocations(MiniLdState *state,
                         input->type);
                 return false;
             }
-            if (shared_relocation_is_final_layout(input->type)) {
+            if (shared->abi->relocation_at_final_layout(input->type)) {
                 continue;
             }
             if (kind != MINILD_TARGET_RELOC_ABS64 &&
@@ -201,7 +227,7 @@ static bool shared_fill_relocations(MiniLdState *state,
                         input->type);
                 return false;
             }
-            width = minild_target_absolute_width(kind);
+            width = shared->abi->absolute_relocation_width(kind);
             if (source->type == SHT_NOBITS || input->offset > SIZE_MAX ||
                 !range_ok((size_t)input->offset, width, source->size)) {
                 fprintf(state->diagnostics,
@@ -213,12 +239,12 @@ static bool shared_fill_relocations(MiniLdState *state,
                 return false;
             }
             value = resolved + (uint64_t)input->addend;
-            minild_target_store_absolute(
+            shared->abi->store_absolute(
                 source->data + (size_t)input->offset, kind, value);
             continue;
         }
         if (kind == MINILD_TARGET_RELOC_CALL ||
-            shared_relocation_is_final_layout(input->type)) {
+            shared->abi->relocation_at_final_layout(input->type)) {
             continue;
         }
         if (kind != MINILD_TARGET_RELOC_ABS64 ||
@@ -231,7 +257,9 @@ static bool shared_fill_relocations(MiniLdState *state,
         }
         if (source->type == SHT_NOBITS ||
             input->offset > SIZE_MAX ||
-            !range_ok((size_t)input->offset, 8U, source->size)) {
+            !range_ok((size_t)input->offset,
+                      shared->abi->absolute_relocation_width(kind),
+                      source->size)) {
             fprintf(state->diagnostics,
                     "minic-ld: shared-relocation-offset-out-of-range\n");
             return false;
@@ -249,7 +277,7 @@ static bool shared_fill_relocations(MiniLdState *state,
                         target->name);
                 return false;
             }
-            minild_target_store_absolute(
+            shared->abi->store_absolute(
                 source->data + (size_t)input->offset, kind,
                 target_value + (uint64_t)input->addend);
             continue;
@@ -275,10 +303,10 @@ static bool shared_fill_relocations(MiniLdState *state,
                                        &target_value)) {
                 return false;
             }
-            output.r_info = minild_target_dynamic_reloc_info(
+            output.r_info = shared->abi->dynamic_relocation_info(
                 0U, MINILD_DYNAMIC_RELOC_RELATIVE);
             output.r_addend =
-                minild_target_addend_bits(target_value, input->addend);
+                shared->abi->addend_bits(target_value, input->addend);
         } else {
             dynamic_index = shared->symbols[input->symbol].dynsym_index;
             if (dynamic_index == SIZE_MAX) {
@@ -287,16 +315,15 @@ static bool shared_fill_relocations(MiniLdState *state,
                         target->name);
                 return false;
             }
-            output.r_info = minild_target_dynamic_reloc_info(
+            output.r_info = shared->abi->dynamic_relocation_info(
                 dynamic_index, MINILD_DYNAMIC_RELOC_ABSOLUTE);
             output.r_addend = input->addend;
         }
-        minild_target_store_absolute(
+        shared->abi->store_absolute(
             source->data + (size_t)input->offset, kind, 0U);
-        memcpy(rela->data + write_index * sizeof(output),
-               &output,
-               sizeof(output));
-        ++write_index;
+        if (!shared_rela_append(state, shared, &write_index, &output)) {
+            return false;
+        }
     }
 
     for (i = 0U; i < state->resolver.count; ++i) {
@@ -320,21 +347,19 @@ static bool shared_fill_relocations(MiniLdState *state,
 
         memset(&output, 0, sizeof(output));
         output.r_offset = slot_address;
-        output.r_info = minild_target_dynamic_reloc_info(
+        output.r_info = shared->abi->dynamic_relocation_info(
             dynamic_index, MINILD_DYNAMIC_RELOC_TLS_MODULE);
-        memcpy(rela->data + write_index * sizeof(output),
-               &output,
-               sizeof(output));
-        ++write_index;
+        if (!shared_rela_append(state, shared, &write_index, &output)) {
+            return false;
+        }
 
         memset(&output, 0, sizeof(output));
         output.r_offset = slot_address + shared->abi->got_slot_bytes;
-        output.r_info = minild_target_dynamic_reloc_info(
+        output.r_info = shared->abi->dynamic_relocation_info(
             dynamic_index, MINILD_DYNAMIC_RELOC_TLS_OFFSET);
-        memcpy(rela->data + write_index * sizeof(output),
-               &output,
-               sizeof(output));
-        ++write_index;
+        if (!shared_rela_append(state, shared, &write_index, &output)) {
+            return false;
+        }
     }
 
     if (write_index != shared->rela_count) {

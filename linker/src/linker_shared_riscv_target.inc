@@ -82,7 +82,7 @@ static bool riscv_shared_patch_final_layout_relocations(
             kind == MINILD_TARGET_RELOC_ARITHMETIC) {
             continue;
         }
-        if (!shared_relocation_is_final_layout(reloc->type)) {
+        if (!minild_target_reloc_at_final_layout(reloc->type)) {
             continue;
         }
         source = &state->work.sections[reloc->section];
@@ -232,7 +232,8 @@ static bool riscv_shared_finalize_plt_and_calls(MiniLdState *state,
         (plt->size != shared->plt_count * shared->abi->plt_entry_bytes ||
          gotplt->size != (shared->abi->gotplt_header_slots +
                           shared->plt_count) * shared->abi->gotplt_slot_bytes ||
-         rela_plt->size != shared->plt_count * sizeof(Elf64_Rela))) {
+         rela_plt->size !=
+             shared->plt_count * shared->abi->rela_record_bytes)) {
         fprintf(state->diagnostics,
                 "minic-ld: invalid-shared-plt-size\n");
         return false;
@@ -292,7 +293,8 @@ static bool riscv_shared_finalize_plt_and_calls(MiniLdState *state,
         relocation.r_info = minild_target_dynamic_reloc_info(
             dynamic_index, MINILD_DYNAMIC_RELOC_JUMP_SLOT);
         relocation.r_addend = 0;
-        memcpy(rela_plt->data + plt_index * sizeof(relocation),
+        memcpy(rela_plt->data +
+                   plt_index * shared->abi->rela_record_bytes,
                &relocation,
                sizeof(relocation));
     }
