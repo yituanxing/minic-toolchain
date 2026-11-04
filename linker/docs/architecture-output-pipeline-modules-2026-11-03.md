@@ -9,12 +9,16 @@ are **physical phase boundaries**, not independently compiled objects: the
 linker still has one C translation unit, and the public linker API, ELF
 format decisions, and runtime behavior remain unchanged.
 
-| Included module (in order) | Owned output-stage work | Reason for boundary |
+| Module / owner | Owned output-stage work | Reason for boundary |
 | --- | --- | --- |
-| `linker_layout.inc` | Physical Layout state, RISC-V fixup/ALIGN helpers and default ET_EXEC/ET_DYN placement | Owns the common layout contract and includes the stage-specific implementations in dependency order. |
+| `linker_layout.inc` | Physical Layout state, byte-order helpers and default ET_EXEC/ET_DYN placement | Owns address/file placement and invokes the target's section-placement preparation at the point where section VMA becomes known. |
+| `linker_riscv_align_relax.inc` | `R_RISCV_ALIGN` relocation-driven section-size adjustment, RISC-V NOP padding and offset remapping | Target-specific layout-time mutation; never part of the generic VMA/file-position algorithm. |
+| `linker_static_got.inc` | Static GOT reservation, lifetime and post-layout content filling | Its reservation precedes section placement; its symbol-address writes follow it. One static relocation-workspace owner spans both steps. |
 | `linker_script_layout.inc` | Script expression/provenance, input-section matching, command placement, BYTE/fill and script VMA/LMA/file offsets | Operates on the one `MiniLdLayout` before output-section projection. |
 | `linker_vdso_layout.inc` | vDSO-specific PHDR membership and script file-base remapping | Keeps ET_DYN/vDSO policy separate from the general script evaluator. |
-| `linker_layout_finalize.inc` | Post-layout runtime-boundary symbols, static GOT materialization, layout symbol resolution and static relocation application | Runs only after the selected layout producer; does not create another layout owner. |
+| `linker_riscv_default_symbols.inc` | GNU RISC-V default-script boundary symbols, including `__global_pointer$` | Keeps a target ABI/linker-script convention out of generic layout finalization. |
+| `linker_layout_symbols.inc` | Post-layout canonical symbol-address resolution and entry-point lookup | ET_EXEC and ET_DYN share address resolution without relying on a statically named output owner. |
+| `linker_layout_finalize.inc` | Post-layout constructor/destructor array-boundary symbols and static relocation application | Coordinates final static-specific work after placement; common symbol lookup and target-specific policy have dedicated owners. |
 | `linker_output_plan.inc` | `MiniLdOutputPlan`, surviving output-section identity, non-alloc placement, section headers and bytes | Projects the placed working sections into output sections; does not own original input identities. |
 | `linker_final_symbols.inc` | `MiniLdFinalSymbols` plus `MiniLdFinalSectionTables` projection | Reads canonical symbols and the OutputPlan; builds the shared final ELF symbol/name/section-header trailer. |
 | `linker_program_plan.inc` | Common `MiniLdProgramPlan` lifetime and final PHDR range validation | Both writers consume one output-neutral program-header contract, while each retains its own segment policy. |
@@ -34,6 +38,7 @@ own archive extraction and ordered input traversal.
 both ET_EXEC and ET_DYN, before either layout stage starts.
 `linker_input.inc`, `linker_work_sections.inc` and
 `linker_relocations.inc` own their separate state lifetimes. The
+`linker_static_reloc_scan.inc` remains nested under its static GOT owner;
 `linker_eh_frame.inc` remains nested in shared pre-layout; `linker_version.inc`
 and `linker_shared_reloc_apply.inc` remain nested in shared finalization,
 with the same relative dependency order. `shared_build_layout` stays with common
@@ -46,10 +51,21 @@ without reversing their dependencies or making extra translation units.
 The previous `linker_layout.inc` mixed default placement, RISC-V ALIGN
 relaxation, linker-script evaluation, vDSO policy and final GOT/symbol work
 in one implementation body. These responsibilities now have explicit
-physical owners, preserving the **same `MiniLdLayout` state and the same
-single-translation-unit ordering**. The RISC-V fixup owner and static
-relocation scan still precede layout; the final static relocation apply
-still follows the layout symbol resolver. No linker-script syntax, ISA,
+owners, preserving the **same `MiniLdLayout` state and the same
+single-translation-unit ordering**. RISC-V relaxation changes physical
+section length and also remaps symbol/relocation offsets: both the default
+allocator and linker-script allocator must call the same target hook
+immediately after assigning section VMA, *before* their respective cursors
+advance. A separate post-layout relaxation pass would change linker-script
+symbol values and output placement, so the current operation order is a
+behavioral contract.
+
+Static GOT slots are reserved before layout and filled only once symbol
+addresses are known, while target-specific GNU default symbols are computed
+after section placement. Common post-layout symbol resolution is consumed by
+both ET_EXEC and ET_DYN, including their relocation writers and optional
+entry-point lookup. These phases no longer borrow their ownership from the
+generic `MiniLdLayout` implementation. No linker-script syntax, ISA,
 relocation type or ELF output behavior is added.
 
 The source-defined COMMON allocation runs after input projection and before
@@ -209,8 +225,10 @@ implementation boundaries without changing phase order or output formats:
 - `linker_shared_reloc_apply.inc`: ET_DYN dynamic relocation construction,
   link-time arithmetic/final fixups and PLT/CALL finalization, still after
   shared metadata reservation and layout.
-- `linker_static_reloc_scan.inc`: ET_EXEC pre-layout static GOT site scan and
-  slot reservation, called from the layout stage.
+- `linker_static_got.inc`: static GOT workspace lifetime and pre/post-layout
+  orchestration. Its nested `linker_static_reloc_scan.inc` performs the
+  ET_EXEC pre-layout site scan and slot reservation, while GOT contents are
+  materialized with final resolved addresses after placement.
 - `linker_shared_reloc_scan.inc`: ET_DYN pre-layout dynamic RELA, GOT, PLT,
   TLS GD and TEXTREL reservation, called from shared metadata preparation.
 
@@ -223,6 +241,25 @@ retain distinct static and shared relocation policies: preemption, TLS,
 GOT/PLT and dynamic relocation reservation are not target-neutral byte
 patching. `R_RISCV_RELAX` instruction rewriting and paired ULEB final
 relocations are not added by this ownership change.
+
+### Target and symbol resolution boundary (2026-11-04)
+
+The architecture pass separates code by **who decides**, not just by when
+it runs. Generic layout decides VMA/LMA/file placement and script command
+ownership; RISC-V decides whether an `R_RISCV_ALIGN` site shortens its
+working section and which NOP bytes remain. Both default and scripted
+placement preserve that target operation at the original section-address
+assignment point. The target's offset rewriting is internal to its owner;
+generic placement only observes the resulting section size.
+
+The RISC-V default linker-script symbol calculation, including GNU's
+`__global_pointer$` window rule, is separate from output-neutral constructor
+array marker synthesis. A common post-layout resolver supplies canonical
+symbol VMAs to both relocation modes. Static GOT reservation/fill retain
+their own lifetime instead of residing alongside `MiniLdLayout`, which is
+neither a GOT nor a symbol-value store. The script work/output owners,
+vDSO PHDR policy, OutputPlan projection, ET_EXEC/ET_DYN final images and
+ELF serializer remain unchanged.
 
 ### Final RV64 fixup convergence (2026-11-04)
 

@@ -38,7 +38,7 @@ static bool static_apply_relocations(MiniLdState *state,
             continue;
         }
         if (reloc->symbol != SIZE_MAX) {
-            if (!static_resolve_symbol(state, layout,
+            if (!minild_layout_resolve_symbol(state, layout,
                                        reloc->symbol, &symbol_value)) {
                 goto fail;
             }

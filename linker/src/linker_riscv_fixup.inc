@@ -3,6 +3,12 @@
  * static and shared final-link consumers use the same checked encoders.
  */
 
+typedef struct MiniLdPcrelSlot {
+    size_t section_plus_one;
+    uint64_t offset;
+    int64_t delta;
+} MiniLdPcrelSlot;
+
 static int64_t riscv_hi20(int64_t value) {
     int64_t high = value / INT64_C(4096);
     int64_t low = value % INT64_C(4096);

@@ -80,7 +80,7 @@ static bool shared_resolve_static_relocation_target(
                 state->resolver.entries[reloc->symbol].value, value_out);
         }
     }
-    return static_resolve_symbol(state, layout, reloc->symbol, value_out);
+    return minild_layout_resolve_symbol(state, layout, reloc->symbol, value_out);
 }
 
 static bool shared_patch_arithmetic_relocations(
@@ -149,7 +149,7 @@ static bool shared_fill_relocations(MiniLdState *state,
             uint64_t target_value;
 
             if (target->section != MINILD_SECTION_ABS ||
-                !static_resolve_symbol(state, layout, i, &target_value)) {
+                !minild_layout_resolve_symbol(state, layout, i, &target_value)) {
                 fprintf(state->diagnostics,
                         "minic-ld: unresolved-planned-static-absolute:%s\n",
                         target->name);
@@ -173,7 +173,7 @@ static bool shared_fill_relocations(MiniLdState *state,
             !shared->preemptible[i]) {
             uint64_t target_value;
 
-            if (!static_resolve_symbol(state, layout, i, &target_value)) {
+            if (!minild_layout_resolve_symbol(state, layout, i, &target_value)) {
                 return false;
             }
             output.r_info = ELF64_R_INFO(0U, R_RISCV_RELATIVE);
@@ -286,7 +286,7 @@ static bool shared_fill_relocations(MiniLdState *state,
             uint64_t target_value;
 
             if (target->section != MINILD_SECTION_ABS ||
-                !static_resolve_symbol(state, layout, input->symbol,
+                !minild_layout_resolve_symbol(state, layout, input->symbol,
                                        &target_value)) {
                 fprintf(state->diagnostics,
                         "minic-ld: unresolved-planned-static-absolute:%s\n",
@@ -312,7 +312,7 @@ static bool shared_fill_relocations(MiniLdState *state,
             !shared->preemptible[input->symbol]) {
             uint64_t target_value;
 
-            if (!static_resolve_symbol(state,
+            if (!minild_layout_resolve_symbol(state,
                                        layout,
                                        input->symbol,
                                        &target_value)) {
@@ -719,7 +719,7 @@ static bool shared_finalize_plt_and_calls(MiniLdState *state,
             }
             destination = plt_address + plt_index * 16U;
         } else {
-            if (!static_resolve_symbol(state,
+            if (!minild_layout_resolve_symbol(state,
                                        layout,
                                        reloc->symbol,
                                        &destination)) {

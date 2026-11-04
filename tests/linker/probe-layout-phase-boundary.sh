@@ -46,6 +46,13 @@ names = (
     'linker_vdso_layout.inc',
     'linker_layout_finalize.inc',
     'linker_common_allocation.inc',
+    'linker_riscv_fixup.inc',
+    'linker_riscv_align_relax.inc',
+    'linker_static_got.inc',
+    'linker_static_reloc_scan.inc',
+    'linker_layout_symbols.inc',
+    'linker_riscv_default_symbols.inc',
+    'linker_static_reloc_apply.inc',
 )
 sources = {}
 for name in names:
@@ -80,9 +87,16 @@ expected = {
     ('linker.c', 'linker_core.inc'),
     ('linker_core.inc', 'linker_common_allocation.inc'),
     ('linker_core.inc', 'linker_layout.inc'),
+    ('linker_layout.inc', 'linker_riscv_fixup.inc'),
+    ('linker_layout.inc', 'linker_static_got.inc'),
+    ('linker_layout.inc', 'linker_riscv_align_relax.inc'),
     ('linker_layout.inc', 'linker_script_layout.inc'),
     ('linker_layout.inc', 'linker_vdso_layout.inc'),
     ('linker_layout.inc', 'linker_layout_finalize.inc'),
+    ('linker_static_got.inc', 'linker_static_reloc_scan.inc'),
+    ('linker_layout_finalize.inc', 'linker_riscv_default_symbols.inc'),
+    ('linker_layout_finalize.inc', 'linker_layout_symbols.inc'),
+    ('linker_layout_finalize.inc', 'linker_static_reloc_apply.inc'),
 }
 targets = set(names) | {'linker_core.inc'}
 for source, contents in includes.items():
@@ -98,23 +112,61 @@ if not (layout.index('#include "linker_script_layout.inc"') <
         layout.index('#include "linker_vdso_layout.inc"') <
         layout.index('#include "linker_layout_finalize.inc"')):
     raise SystemExit('MINILD_LAYOUT_PHASE_STRUCTURE=FAIL layout_phase_order')
+if not (layout.index('#include "linker_riscv_fixup.inc"') <
+        layout.index('#include "linker_static_got.inc"') <
+        layout.index('#include "linker_riscv_align_relax.inc"') <
+        layout.index('static bool static_build_layout_at(')):
+    raise SystemExit('MINILD_LAYOUT_PHASE_STRUCTURE=FAIL prelayout_target_order')
 if not (core.index('#include "linker_common_allocation.inc"') <
         core.index('#include "linker_admission.inc"')):
     raise SystemExit('MINILD_LAYOUT_PHASE_STRUCTURE=FAIL common_allocation_order')
 
 # Prevent a second layout state/type owner from silently reappearing.
-layout_type = re.compile(r'\btypedef\s+struct\s+MiniLdLayout\s*\{')
-for name, contents in sources.items():
-    want = 1 if name == 'linker_layout.inc' else 0
-    if len(layout_type.findall(contents)) != want:
+type_owners = {
+    'MiniLdLayout': 'linker_layout.inc',
+    'MiniLdPcrelSlot': 'linker_riscv_fixup.inc',
+    'MiniLdAlignSite': 'linker_riscv_align_relax.inc',
+    'MiniLdRelaxEvent': 'linker_riscv_align_relax.inc',
+    'MiniLdStaticGot': 'linker_static_got.inc',
+}
+for type_name, expected_owner in type_owners.items():
+    pattern = re.compile(r'\btypedef\s+struct\s+' +
+                         re.escape(type_name) + r'\s*\{')
+    owners_for_type = [name for name, contents in sources.items()
+                       for _ in pattern.findall(contents)]
+    if owners_for_type != [expected_owner]:
         raise SystemExit(f'MINILD_LAYOUT_PHASE_STRUCTURE=FAIL '
-                         f'layout_type_owner={name}')
+                         f'type={type_name} owners={owners_for_type}')
+
+# Physical placement, script placement and array-boundary synthesis are
+# target-neutral.  Any new RISC-V operation must be wired through its explicit
+# Target owner, never implemented in a generic layout phase.
+for name in ('linker_layout.inc', 'linker_script_layout.inc',
+             'linker_layout_finalize.inc'):
+    body = re.sub(r'^\s*#\s*include\s+"[^"]+"\s*$', '',
+                  sources[name], flags=re.M)
+    if re.search(r'\bR_RISCV_\w*|\bstatic_riscv_\w*|\bminild_riscv_\w*',
+                 body):
+        raise SystemExit(f'MINILD_LAYOUT_PHASE_STRUCTURE=FAIL '
+                         f'target_logic_in_generic_layout={name}')
 
 owners = {
     'linker_common_allocation.inc': ('minild_allocate_common',),
     'linker_layout.inc': (
-        'static_relax_align_section', 'static_build_layout_at',
-        'static_build_layout', 'shared_build_layout',
+        'static_build_layout_at', 'static_build_layout',
+        'shared_build_layout',
+    ),
+    'linker_riscv_align_relax.inc': (
+        'static_relax_align_section', 'minild_target_relax_section',
+    ),
+    'linker_riscv_fixup.inc': (
+        'minild_riscv_reloc_kind',
+    ),
+    'linker_static_got.inc': (
+        'static_got_destroy', 'static_fill_got',
+    ),
+    'linker_static_reloc_scan.inc': (
+        'static_build_got',
     ),
     'linker_script_layout.inc': (
         'minild_script_declare_shared_symbols', 'script_layout_process_output',
@@ -125,15 +177,23 @@ owners = {
         'shared_build_vdso_script_layout',
     ),
     'linker_layout_finalize.inc': (
-        'static_fill_got', 'static_synthesize_runtime_boundaries',
-        'minild_layout_destroy', 'static_resolve_symbol',
-        'static_entry_address',
+        'static_synthesize_runtime_boundaries',
+        'minild_layout_destroy',
+    ),
+    'linker_riscv_default_symbols.inc': (
+        'static_synthesize_gnu_default_boundaries',
+    ),
+    'linker_layout_symbols.inc': (
+        'minild_layout_resolve_symbol', 'static_entry_address',
+    ),
+    'linker_static_reloc_apply.inc': (
+        'static_apply_relocations',
     ),
 }
 for expected_owner, functions in owners.items():
     for function in functions:
         definition = re.compile(
-            r'\bstatic\s+(?:bool|void|int|size_t|uint64_t)\s+' +
+            r'\bstatic\s+(?:bool|void|int|size_t|uint64_t|MiniLdRiscvRelocKind)\s+' +
             re.escape(function) + r'\s*\([^;{}]*\)\s*\{', re.S)
         actual = {name: len(definition.findall(contents))
                   for name, contents in sources.items()}
@@ -141,8 +201,9 @@ for expected_owner, functions in owners.items():
             raise SystemExit(f'MINILD_LAYOUT_PHASE_STRUCTURE=FAIL '
                              f'function={function} definitions={actual}')
 
-print('MINILD_LAYOUT_PHASE_STRUCTURE=PASS modules=5 '
-      'single_layout_type=1 unique_phase_functions=15 '
+print('MINILD_LAYOUT_PHASE_STRUCTURE=PASS modules=12 '
+      'single_layout_type=1 explicit_target_owners=3 '
+      'unique_phase_functions=21 '
       'include_graph=nonrecursive build=single_translation_unit')
 PY
 
@@ -193,4 +254,4 @@ if ! HOST_CC="${HOST_CC:-cc}" BUILD_DIR="$work/parser" \
 fi
 echo 'MINILD_LAYOUT_PHASE_CHECK=PASS fixture=run-script-a0.sh'
 ((passed += 1))
-echo "MINILD_LAYOUT_PHASE=PASS fixtures=$passed modules=5 compiler=Werror"
+echo "MINILD_LAYOUT_PHASE=PASS fixtures=$passed modules=12 compiler=Werror"

@@ -404,7 +404,7 @@ static bool script_layout_place_section(MiniLdScriptLayoutState *script_state,
     script_state->layout->work[section_index].owner_command = command_index;
 
     if ((section->flags & SHF_ALLOC) != 0U &&
-        !static_relax_align_section(script_state->state,
+        !minild_target_relax_section(script_state->state,
                                     section_index,
                                     script_state->dot)) {
         return false;
