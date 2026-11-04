@@ -1683,6 +1683,13 @@ check-tagged-bare-record-members: $(MINIC_CC_BINARY)
 
 check-fast: check-tagged-bare-record-members
 
+.PHONY: check-anonymous-qualified-record-members
+check-anonymous-qualified-record-members: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	bash tests/compiler/c0/probe-anonymous-qualified-record-members.sh
+
+check-fast: check-anonymous-qualified-record-members
+
 .PHONY: check-record-field-declarator-realloc
 check-record-field-declarator-realloc: $(MINIC_CC_BINARY)
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \

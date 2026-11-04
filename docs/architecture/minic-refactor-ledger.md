@@ -2855,5 +2855,59 @@ GPR remained; RV64 already recovered saved E there.
 | Complete five-ISA Linux boot/runtime | **NOT RUN** in this ABI-focused batch |
 
 The focused target is make check-p50-riscv-overaligned-varargs, included
-in check-fast. MC-014 and MC-015 retain OPEN until both independently
-execute GNU-vs-MiniC real ELF/QEMU against the same four stack phases.
+in check-fast. This paragraph records the initial local-only gate; the
+subsequent exact-head remote GNU/ELF/QEMU results follow.
+
+**P50 actual machine evidence (2026-11-04):**
+
+| Original GNU/MiniC binary execution | Exact-head CI verdict |
+|---|---|
+| RV32 GNU GAS/LD ELF32 QEMU, four E mod64 phases × five functions | [run #41830221934](https://github.com/yituanxing/minic-toolchain/actions/runs/41830221934) **GNU 20/20 PASS; MiniC 20/20 PASS** (later unrelated Zstd stage failed) |
+| RV64 GNU GAS/LD ELF64 QEMU, four E mod64 phases × five functions | [run #41830222237](https://github.com/yituanxing/minic-toolchain/actions/runs/41830222237) **GNU 20/20 PASS; MiniC 20/20 PASS**, full four-ISA runtime matrix 4/4 SUCCESS |
+| x86 original Linux 6.6.143 frozen 2758 `.i` units, seven independent producers | [run #41830221931](https://github.com/yituanxing/minic-toolchain/actions/runs/41830221931) **653/2758 MiniC C units compile**, seven producers blocked; linker/QEMU receiver **NOT RUN** (no seven complete candidate artifacts). This is not an x86 guest kernel failure. |
+
+MC-014 and MC-015 now `FIXED-UNVERIFIED` with true GNU ELF/QEMU
+focused machine evidence; complete multi-ISA Linux remains a separate gate.
+
+## IR-P51 — One qualified GNU anonymous-record declaration contract (2026-11-04)
+
+**Single shared-language fix, not a 2030-file special case.** The exact-head
+seven-shard x86 Linux 6.6.143 campaign
+[#41830221931](https://github.com/yituanxing/minic-toolchain/actions/runs/41830221931)
+compiled 653 of 2758 frozen original GNU `.i` owner files. Its 2105 first
+failures comprise 2030 `record has no such member`, 27 module-global snapshot,
+24 Core lowering, 16 Core unsupported, seven typed inline ASM, one AST
+contract. In 44 retained original `.i` diagnostics from the affected
+family, the member errors point to Linux's `vma_end_read(vmf->vma)` inline. This
+is a single common source declaration contract, not independent errors in
+drivers, net, fs or arch.
+
+`parse_record_field` previously sampled `current == KW_STRUCT/KW_UNION`
+*before* `minic_parser_parse_type_specifiers`, which consumes `const` /
+`volatile`. GNU's valid `const struct { T *vma; ... };` is therefore
+silently omitted from the enclosing record. The common existing anonymous
+member field-path search, type qualifier propagation and Core layout
+already own downstream semantics correctly. P51 changes only direct
+record-specifier classification to use a lexer-only non-mutating lookahead
+across qualifiers / GNU `__extension__`. It preserves true tagged or
+typedef-only bare declarations, whose meaning is *no* nested member.
+
+The permanent `check-anonymous-qualified-record-members` proof compares
+GNU and MiniC on the same preprocessed C source, x86 native runtime and
+five target `-S` outputs; it also rejects modification of promoted
+const members and rechecks tagged/typedef nonmembers. Unmodified original
+Linux `arch/x86/entry/vdso/extable.i` (40,716 lines) now proceeds through
+MiniC machine assembly and GNU AS to ELF64 relocatable `.o`. Unmodified
+Linux `arch/x86/events/core.i` (2,900,614 bytes, SHA-256
+`2a1835a5577862cb7b4a1ae7c57d8680a7f45b6d903927219491494a1ba93578`)
+no longer fails at `:23797:21` on `vmf->vma`; with its original GNU Kbuild
+flags it reaches a different later blocker, Core lowering for
+`perf_events_lapic_init`. A later failure is **not** a full original `.i`
+PASS. A complete **56/56** preserved frozen `.i` sample (eight authentic
+first-failure owners per shard, seven shards) was recompiled by fixed MiniC
+with the original x86 effective flags: **16/56 successfully emitted `.s`**;
+the other 40 advanced to new failures (**19** Core lowering, **13** Core
+unsupported, **7** ModuleIR global snapshots and **1** structured inline
+ASM), and **0/56** retained the old `record has no such member` error.
+All 2758 owners and linker/QEMU remain to be reverified separately;
+2030 cannot be credited as fixed-to-completion from first-failure census.

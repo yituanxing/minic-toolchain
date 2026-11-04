@@ -710,6 +710,41 @@ static bool parse_record_type_attributes(MinicParser *parser,
     return true;
 }
 
+/* A directly written anonymous `const struct { ... };` is still an anonymous
+ * record field: its qualifiers apply to the promoted members, rather than
+ * turning it into a memberless declaration.  Use only the lexer to look past
+ * the declaration's leading qualifiers/GNU extension marker.  In particular,
+ * `const TypedefName;` must NOT be promoted even when the alias designates a
+ * tagless record, and `volatile struct Named;` must stay memberless.  The
+ * canonical field type/layout and its qualifiers remain owned by the normal
+ * type-specifier parser below. */
+static bool record_field_has_direct_record_specifier(const MinicParser *parser) {
+    MinicLexer lexer;
+    MinicToken current;
+
+    if (parser == NULL) {
+        return false;
+    }
+    lexer = parser->lexer;
+    current = parser->current;
+    for (;;) {
+        bool extension_marker =
+            current.kind == MINIC_TOKEN_IDENTIFIER &&
+            minic_parser_span_length(current.span) == sizeof("__extension__") - 1U &&
+            memcmp(parser->source + current.span.begin.offset,
+                   "__extension__", sizeof("__extension__") - 1U) == 0;
+        if (current.kind != MINIC_TOKEN_KW_CONST &&
+            current.kind != MINIC_TOKEN_KW_VOLATILE && !extension_marker) {
+            return current.kind == MINIC_TOKEN_KW_STRUCT ||
+                   current.kind == MINIC_TOKEN_KW_UNION;
+        }
+        if (!minic_lexer_next(&lexer, &current, NULL)) {
+            /* Let the real parser diagnose malformed source. */
+            return false;
+        }
+    }
+}
+
 static bool parse_record_field(MinicParser *parser, MinicRecordId record_id) {
     MinicParsedAttributeList declaration_attributes;
     MinicType base_type;
@@ -734,8 +769,7 @@ static bool parse_record_field(MinicParser *parser, MinicRecordId record_id) {
     if (!minic_parser_collect_gnu_attribute_lists(parser, &declaration_attributes)) {
         return false;
     }
-    direct_record_specifier = parser->current.kind == MINIC_TOKEN_KW_STRUCT ||
-                              parser->current.kind == MINIC_TOKEN_KW_UNION;
+    direct_record_specifier = record_field_has_direct_record_specifier(parser);
     if (!minic_parser_parse_type_specifiers(parser, &base_type)) {
         return false;
     }

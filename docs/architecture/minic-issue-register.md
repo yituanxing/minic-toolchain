@@ -54,8 +54,8 @@
 | [MC-011](#mc-011-source-only-的-qemu-结果报告不实) | P1 | OPEN | CI-LOG | CI | Source-only 仍报告 `GNU_QEMU=2` |
 | [MC-012](#mc-012-source-only-的-elf-结果报告不实) | P1 | OPEN | CI-LOG | CI | `.s` 字符串检查被表述为 ELF reloc 验证 |
 | [MC-013](#mc-013-native-gate-的-测试触发白名单缺口) | P2 | OPEN | SOURCE-TRACE | CI | 修改 review-batch 编排未必触发 native gate |
-| [MC-014](#mc-014-rv32-变参与过对齐栈帧交界) | P0 | OPEN | ASM-ONLY | RV32 | 合法 aligned(64) 变参函数：保存区与 caller stack 不连续；零剩余 GPR 的首址也错位 |
-| [MC-015](#mc-015-rv64-变参与过对齐栈帧交界) | P0 | OPEN | ASM-ONLY | RV64 | 合法 aligned(64) 变参函数：保存区跨向 caller stack 的物理地址错位 |
+| [MC-014](#mc-014-rv32-变参与过对齐栈帧交界) | P0 | FIXED-UNVERIFIED | GNU-ELF-QEMU | RV32 | P50 入口 SP 锚定保存区与零 GPR 游标已通过四相位 × 五函数、GNU/MiniC 真 ELF/QEMU 差分；完整 Linux 尚未验收 |
+| [MC-015](#mc-015-rv64-变参与过对齐栈帧交界) | P0 | FIXED-UNVERIFIED | GNU-ELF-QEMU | RV64 | P50 入口 SP 锚定保存区已通过四相位 × 五函数、GNU/MiniC 真 ELF/QEMU 差分；完整 Linux 尚未验收 |
 | [MC-028](#mc-028-rv64-的-int128-移位计数类型限制) | P2 | OPEN | LOCAL-COMPILE-DIFF | RV64 | 合法 GNU C 的宽移位计数导致 MiniC `-S` 拒绝，窄计数可过 |
 | [MC-033](#mc-033-core-独立自增自减语句保留过时常量事实) | P0 | FIXED-UNVERIFIED | GNU-NATIVE-DIFF | Core | 原语句捷径过时 fact 错码已被现行 invalidation 覆盖；新增五目标与原生运行回归 |
 | [MC-034](#mc-034-静态-record-设计符查找对无关对象做指针相减) | P1 | FIXED-UNVERIFIED | ASAN-POINTER-PAIR | Frontend | 静态设计符用稳定 RecordId 重取 Program-owned 描述符；六相位五目标 SAN/Release 及 GNU/MiniC native PASS |
@@ -104,6 +104,8 @@
 | [MC-087](#mc-087-common-lp64-单函数-257-条合法-inline-asm-硬拒) | P2 | FIXED-UNVERIFIED | LOCAL-COMPILE-DIFF | Common Direct LP64 preflight | 257 人为上限已移除，A64/Loong 255/256/257/512 源汇编与伪造 Core 负例 PASS；目标 GNU ELF 未测 |
 | [MC-088](#mc-088-rv32-宽整数条件分支只检查低-32-位造成静默错编) | P1 | FIXED-UNVERIFIED | GNU-QEMU-DIFF/ELF32 | RV32 Core terminator | 64 位条件仅高 32 位非零时被当作假；修复前 GNU ELF32 QEMU PASS、MiniC exit11；修复后 8 组双 ELF32/QEMU PASS |
 | [MC-089](#mc-089-x87-long-double-大于比较方向错误) | P0 | FIXED-UNVERIFIED | GNU-NATIVE-DIFF | Core/x86 x87 | x87 比较 helper 的 32→64 位有符号扩展错编已修；GNU/MiniC 原生有序比较回归通过，完整目标矩阵待验 |
+| [MC-090](#mc-090-x86-linux-cmpxchg16b-的合法-16-字节内存对象被标量宽度门拒绝) | P1 | FIXED-UNVERIFIED | GNU-NATIVE-ELF | x86 structured ASM | P49 原始 Linux CMPXCHG16B 16B 对齐内存操作经 GNU/MiniC 原生 CAS 与 ALT relocation 验证 |
+| [MC-091](#mc-091-限定符前缀导致合法-gnu-匿名-record-成员被丢弃) | P0 | FIXED-UNVERIFIED | GNU-ORIGINAL-LINUX-I | C Frontend | P51 `const struct { ... };` 被错误当作无成员声明；七路原始 Linux 首错 2030/2105 同因，真实 `.i` 定点复现及 x86/五目标校验 |
 
 ## 索引：尚待验证的风险
 
@@ -253,6 +255,7 @@
 - **汇编/ABI 交叉证据：** `va_frame_one` 的入口为 `E=t2`，帧基址 `S=alignDown(E-160,64)`；保存 `a1..a7` 在 `S+132..156`，变参游标最终走到 `S+160`，而调用方第一个栈参数在原入口 `E`。两者在 `E` 的不同 64B 相位下可相差 16/32/48B。`va_frame_eight` 直接从 `S+128` 而非 `E` 起读，也错位。`rv32_call.c` 的 outgoing stack slot 从 caller 当前 SP 起写，与 callee 入口 SP 的 ABI 身份互相确认。
 - **修复门槛：** 正确衔接寄存器溢出到 caller stack、零 GPR 路径，并以实际交叉工具链/QEMU 检验四类入口 SP 相位。
 - **P50 候选（机器运行未验收）：** RV32 实对齐栈帧下，以保存的原入口 E 而非实对齐帧 S 为变参保存区和 va_start 的唯一基准：剩余 a 寄存器存入 [E−V,E)，零 GPR 时游标取 E+named_stack_words*4。同一 GNU C 源汇编探针覆盖一／七／八／九个具名寄存器使用边界和动态 alloca 五种函数（含第九具名参数位于 caller 栈），以及四类入口 E mod64 相位：RV32 **5/5 函数 × 4/4 相位 SOURCE-ASM PASS**。本地缺 GNU/QEMU，保持 OPEN；不以地址代数证明冒充动态执行。
+- **P50 独立机器验收（2026-11-04，覆盖前述历史 OPEN 状态）：** [RV32 GitHub Actions #41830221934](https://github.com/yituanxing/minic-toolchain/actions/runs/41830221934) 真 GNU GAS/LD、ELF32、QEMU；GNU **20/20 PASS**、MiniC **20/20 PASS**，均为四相位 × 五函数。该工作流后续无关 Zstd 测试失败，不能抹掉本 probe 成功，也不能将整个 RV32 Linux 标为 PASS。现为 `FIXED-UNVERIFIED`，待完整 Linux 运行验收。
 
 ### MC-015 RV64 变参与过对齐栈帧交界
 
@@ -261,6 +264,7 @@
 - **明确排除：** 对相同 fixture 的 `va_frame_eight`，RV64 在没有剩余 GPR 时确实从保存的 `entry_sp_offset` 恢复 `E` 初始化 `va_list`；这一子路径正确，不能把 RV32 的额外错误泛化到 RV64。
 - **修复门槛：** 解决跨界后的地址连续性，GNU/QEMU 验证；在动态运行确认前保持“汇编级高置信风险”。
 - **P50 候选（机器运行未验收）：** RV64 实对齐栈帧下，在剩余 a 寄存器时改以保存的 E 写 [E−V,E)，并将 va_list 指向 E−V；零剩余寄存器时原有 E+fixed_stack_slots*8 正确路径不变。与 RV32 共享同一 GNU C 源及源汇编验证，RV64 **5/5 函数 × 4/4 相位 SOURCE-ASM PASS**，包含第九具名参数占据首个 caller stack slot 的原有正确偏移；本地缺 GNU/QEMU，仍保持 OPEN，等待独立交叉运行验证。
+- **P50 独立机器验收（2026-11-04，覆盖前述历史 OPEN 状态）：** [RV64 GitHub Actions #41830222237](https://github.com/yituanxing/minic-toolchain/actions/runs/41830222237) 真 GNU GAS/LD、ELF64、QEMU；GNU **20/20 PASS**、MiniC **20/20 PASS**，均为四相位 × 五函数；同一四目标矩阵 **4/4 jobs SUCCESS**。现为 `FIXED-UNVERIFIED`，待完整 Linux 运行验收。
 
 ### MC-016 线性 va_list 类型准入过宽
 
@@ -840,6 +844,14 @@
 - **完整责任链：** `x86_64/asm_contract_source.c:x86_linux_cmpxchg128_source` 已限定来源和 GNU 寄存器约束；`compiler/c_lower/core_lower_asm_target.c` 正确发布 6 个结构化 Core binding；机器 `x86_64/machine_asm.c:emit_linux_cmpxchg128` 使用 `x86_asm_operand_integer(...16...)` 验证 `+m`。该 helper 间接调用 `target/common/lp64_scalar.c:minic_lp64_core_integer_width`，按设计仅允许 1/2/4/8 字节寄存器标量，因而拒绝合法的 `__int128` 16 字节内存对象。
 - **P49 定点修复：** 在 x86 机器入口仅对 `CMPXCHG128` 的一个内存角色检查已导入 CoreType 的 `INTEGER/128-bit/size16/align>=16/has_layout`，保留 Core/Frontend 分层及所有普通寄存器标量宽度限制；没有为 Linux 模板增加新语言专用 Core opcode，也未改 RV32/RV64、GNU 汇编器或链接器。
 - **实际差分：** `make MODE=debug all` 后同一持久脚本 **PASS**：GNU/MiniC 的真实原生硬件原子 CAS 成功与失败路径均 exit **42**，生成 `lock; cmpxchg16b` 和即时 `sete`；未执行的 kernel ALT 分支通过 GNU AS/ELF 结构比对，14 字节 `.altinstructions` 记录、feature **141**、old/new **8/5**、2 条 PC32 relocation 正确。更广的全 Linux 原始源码/Boot 和五架构 GNU/QEMU 仍待独立验收。
+
+### MC-091 限定符前缀导致合法 GNU 匿名 Record 成员被丢弃
+
+- **状态：** `FIXED-UNVERIFIED`，P0，`GNU-ORIGINAL-LINUX-I`；P51 在 MiniC PR #674 同一分支修复公共 C 前端声明头判断。完整 Linux 编译、ELF/QEMU 未通过，因此不标 `VERIFIED`。
+- **真实首错统计：** [x86 Linux 6.6.143 七路构建 #41830221931](https://github.com/yituanxing/minic-toolchain/actions/runs/41830221931) 中冻结的 2758 个 GNU 预处理 `.i`，653 个成功、2105 个失败；七份真实 failure ZIP 的首错归类为 **2030 条 `record has no such member`（96.44% 的失败）**、27 个全局快照、24 个 Core lowering、16 个 Core unsupported、7 个 x86 ASM kind43、1 个 AST contract。保留的 44 份该类原始失败 `.i` 中，成员错误均指向 `vma_end_read(vmf->vma);`，不能据此推断 2030 个文件已经修复全部后续问题。
+- **根因/所有者：** `src/frontend/parser_record.c::parse_record_field` 在类型限定符被消费前即判断 `current==struct/union`；合法 `struct vm_fault { const struct { struct vm_area_struct *vma; ... }; ... };` 因首 token 为 `const`，在分号分支将匿名成员默默丢弃。`parser_member.c` 的匿名递归提升、`minic_type_record_member` 的 const/volatile 传播和 Core IR 类型/布局消费者已有正确通道，无须复制或更改公共 IR 算法。
+- **完整边界修复：** 在声明头只做 lexer 前瞻，跳过 `const`、`volatile` 和 GNU `__extension__`，再判定是否是*直接写出*的 struct/union；类型和限定符仍由原类型解析器持有。保留 `const TypedefName;`、`volatile struct Tagged;` 是无成员声明的行为，避免把 typedef/带标签的空声明意外升级为匿名字段。
+- **回归与验收范围：** 持久 GNU/MiniC 同源回归覆盖 Linux 型 `vmf->vma` 提升、嵌套 const/volatile union、GNU extension、字段偏移、无成员 tagged/typedef、对 const 指针字段赋值的负例；GNU/MiniC x86 原生及五架构 `-S` 均 PASS，`check-fast` PASS。七份 ZIP **56/56 原始 GNU `.i`** 用修复后 MiniC 重新编译：**16/56 完整生成 `.s`，40/56 进入下一层不同失败（19 Core lowering、13 Core unsupported、7 Core globals snapshot、1 x86 ASM kind43），旧 `record has no such member` 为 0/56**。其中 `arch/x86/entry/vdso/extable.i` 通过 MiniC→GNU AS/ELF64；`arch/x86/events/core.i` 消除旧 `vmf->vma` 错误后进入下一层 `perf_events_lapic_init` Core lowering 失败。仍待全 2758 文件七路统计和 Linux 链接/QEMU 验收。
 
 ## 已核对并排除的误判（不要在未有新证据时重新打开）
 
