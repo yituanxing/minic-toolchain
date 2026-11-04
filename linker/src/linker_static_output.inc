@@ -228,8 +228,16 @@ static bool minild_static_program_plan_build(
                       prev->mem_size <= UINT64_MAX - vgap - next->file_size));
                 plain_contiguous = linear_gap && vgap == 0U &&
                     prev->file_size == prev->mem_size;
+                /* Do not create an RWX load by merging an RX section with
+                 * an independent RW section. If a member is already RWX,
+                 * however, coalescing it with adjacent sections in the
+                 * same mapped page cannot introduce a new W+X page.
+                 * Linux .init.pi is explicitly WAX and may share its page
+                 * with its preceding RW initialization metadata. */
                 safe_permissions =
-                    (combined_flags & (PF_W | PF_X)) != (PF_W | PF_X);
+                    (combined_flags & (PF_W | PF_X)) != (PF_W | PF_X) ||
+                    (prev->flags & (PF_W | PF_X)) == (PF_W | PF_X) ||
+                    (next->flags & (PF_W | PF_X)) == (PF_W | PF_X);
 
                 /* A loader maps PT_LOAD at page granularity.  Separate RX
                  * text and R rodata mappings inside one page would let the

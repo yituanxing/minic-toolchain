@@ -320,7 +320,7 @@ for order in ("forward", "reverse"):
         tail = elf_section(path, machine, section_name=".tail")
         if tail != (tail_bytes, 0x3, 0):
             raise SystemExit(f"MINILD_SCRIPT_MERGE=FAIL mixed_nobits_tail:{path}:{tail}")
-        verify_no_page_alias(path, expect_single=False)
+        verify_no_page_alias(path, expect_single=True)
     if cross_gnu:
         same_isa = elf_section(work / f"initpi-{order}.rv64-gnu.elf", 243,
                                section_name=".init.pi")
