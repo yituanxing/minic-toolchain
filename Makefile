@@ -887,6 +887,13 @@ check-minild-graph-only-admission: $(MINIAS_BINARY) $(MINILD_BINARY)
 	MINILD="$(abspath $(MINILD_BINARY))" \
 	bash tests/linker/probe-input-graph-only-admission.sh
 
+.PHONY: check-minild-input-phase-owners
+check-minild-input-phase-owners: $(MINIAS_BINARY) $(MINILD_BINARY)
+	MINIAS="$(abspath $(MINIAS_BINARY))" \
+	MINILD="$(abspath $(MINILD_BINARY))" \
+	HOST_CC="$(CC)" \
+	bash tests/linker/probe-input-phase-owners.sh
+
 .PHONY: check-minild-reloc-owner-lifecycle
 check-minild-reloc-owner-lifecycle: $(MINIAS_BINARY) $(MINILD_BINARY)
 	MINIAS="$(abspath $(MINIAS_BINARY))" \

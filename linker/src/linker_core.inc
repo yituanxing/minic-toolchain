@@ -240,9 +240,9 @@ typedef struct MiniLdState {
     FILE *diagnostics;
 } MiniLdState;
 
-/* Implemented by the input-projection owner in linker.c, after this shared
- * core is included. The EH indexer scans projected source CFI fragments,
- * so shared scripts retain original input identity. */
+/* Implemented by the input-projection owner included by linker.c after this
+ * core. The EH indexer scans projected source CFI fragments, so shared
+ * scripts retain original input identity. */
 typedef enum MiniLdInputProjection {
     MINILD_PROJECTION_RELOCATABLE,
     MINILD_PROJECTION_MERGED,
@@ -255,35 +255,6 @@ static bool minild_project_admitted_inputs(MiniLdState *state,
 static bool minild_restore_input_order(MiniLdState *state);
 static bool minild_shared_prune_script_inputs(MiniLdState *state,
                                               const MiniLdScript *script);
-
-typedef struct MiniLdParsedGroup {
-    size_t signature_symbol;
-    uint32_t flags;
-    bool selected;
-} MiniLdParsedGroup;
-
-typedef enum MiniLdArchiveKind {
-    MINILD_ARCHIVE_THIN = 1,
-    MINILD_ARCHIVE_REGULAR = 2
-} MiniLdArchiveKind;
-
-typedef struct MiniLdArchiveMember {
-    char *name;
-    /* Thin members own an external path; regular members borrow archive data. */
-    char *path;
-    size_t data_offset;
-    size_t data_size;
-    bool selected;
-} MiniLdArchiveMember;
-
-typedef struct MiniLdArchive {
-    MiniLdArchiveKind kind;
-    unsigned char *data;
-    size_t size;
-    MiniLdArchiveMember *members;
-    size_t count;
-    size_t capacity;
-} MiniLdArchive;
 
 static char *minild_strdup(const char *text) {
     size_t size = strlen(text) + 1U;
