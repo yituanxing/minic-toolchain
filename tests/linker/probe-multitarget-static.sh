@@ -138,6 +138,15 @@ assemble_static_pair() {
     "$MINILD" -m "$emulation" -static -e _start \
         -o "$work/$name-minild.elf" \
         "$work/$name-entry.o" "$work/$name-data.o"
+
+    # Exercise the same producer objects through the complete two-stage
+    # linker boundary. No architecture may rely on a direct-only admission,
+    # symbol-identity or relocation path to produce a runnable ELF.
+    "$MINILD" -m "$emulation" -r \
+        -o "$work/$name-partial.o" \
+        "$work/$name-entry.o" "$work/$name-data.o"
+    "$MINILD" -m "$emulation" -static -e _start \
+        -o "$work/$name-roundtrip.elf" "$work/$name-partial.o"
 }
 
 assemble_static_pair x86_64 x86_64 x86-64 sysv elf_x86_64
@@ -248,45 +257,46 @@ class Elf64:
 for name, machine, flags in (('x86_64', 62, 0),
                              ('aarch64', 183, 0),
                              ('loongarch64', 258, 0x43)):
-    elf = Elf64(root / f'{name}-minild.elf')
-    ensure((elf.kind, elf.machine, elf.flags) == (2, machine, flags),
-           f'bad_exec_identity={name} kind={elf.kind} '
-           f'machine={elf.machine} flags={elf.flags:#x}')
-    ensure(elf.entry > 0 and any(p[0] == 1 and p[5] > 0 for p in elf.programs),
-           f'missing_loadable_entry={name}')
-    ensure(all(s[1] != 4 or s[5] == 0 for s in elf.sections),
-           f'unresolved_relocations={name}')
-    for symbol in ('_start', 'fixture_ptr', 'fixture_target'):
-        ensure(symbol in elf.symbols and 0 < elf.symbols[symbol][0] <
-               len(elf.sections), f'missing_symbol={name}:{symbol}')
-    ensure(elf.entry == elf.symbols['_start'][1],
-           f'entry_mismatch={name}')
-    ensure(elf.read_symbol_qword('fixture_ptr') ==
-           elf.symbols['fixture_target'][1],
-           f'absolute_relocation_not_applied={name}')
-    if name in ('aarch64', 'loongarch64'):
-        ensure('fixture_helper' in elf.symbols,
-               f'missing_cross_object_helper={name}')
-        word = elf.read_symbol_word('_start')
-        if name == 'aarch64':
-            ensure((word & 0xfc000000) == 0x94000000,
-                   f'bad_aarch64_bl_opcode={word:#x}')
-            units = word & 0x03ffffff
-        else:
-            ensure((word & 0xfc000000) == 0x54000000,
-                   f'bad_loongarch_bl_opcode={word:#x}')
-            units = ((word >> 10) & 0xffff) | ((word & 0x3ff) << 16)
-        if units & (1 << 25):
-            units -= 1 << 26
-        branch_destination = elf.symbols['_start'][1] + units * 4
-        ensure(branch_destination == elf.symbols['fixture_helper'][1],
-               f'cross_object_branch_not_applied={name} '
-               f'actual={branch_destination:#x} '
-               f'expected={elf.symbols["fixture_helper"][1]:#x}')
-    print(f'MINILD_MULTITARGET_STATIC_STRUCTURE=PASS target={name} '
-          f'machine={machine} ptr_relocation=resolved '
-          f'branch_relocation={"resolved" if name != "x86_64" else "runtime"} '
-          f'PT_LOAD=yes')
+    for stage in ('minild', 'roundtrip'):
+        elf = Elf64(root / f'{name}-{stage}.elf')
+        ensure((elf.kind, elf.machine, elf.flags) == (2, machine, flags),
+               f'bad_exec_identity={name}:{stage} kind={elf.kind} '
+               f'machine={elf.machine} flags={elf.flags:#x}')
+        ensure(elf.entry > 0 and any(p[0] == 1 and p[5] > 0 for p in elf.programs),
+               f'missing_loadable_entry={name}:{stage}')
+        ensure(all(s[1] != 4 or s[5] == 0 for s in elf.sections),
+               f'unresolved_relocations={name}:{stage}')
+        for symbol in ('_start', 'fixture_ptr', 'fixture_target'):
+            ensure(symbol in elf.symbols and 0 < elf.symbols[symbol][0] <
+                   len(elf.sections), f'missing_symbol={name}:{stage}:{symbol}')
+        ensure(elf.entry == elf.symbols['_start'][1],
+               f'entry_mismatch={name}:{stage}')
+        ensure(elf.read_symbol_qword('fixture_ptr') ==
+               elf.symbols['fixture_target'][1],
+               f'absolute_relocation_not_applied={name}:{stage}')
+        if name in ('aarch64', 'loongarch64'):
+            ensure('fixture_helper' in elf.symbols,
+                   f'missing_cross_object_helper={name}:{stage}')
+            word = elf.read_symbol_word('_start')
+            if name == 'aarch64':
+                ensure((word & 0xfc000000) == 0x94000000,
+                       f'bad_aarch64_bl_opcode={word:#x}')
+                units = word & 0x03ffffff
+            else:
+                ensure((word & 0xfc000000) == 0x54000000,
+                       f'bad_loongarch_bl_opcode={word:#x}')
+                units = ((word >> 10) & 0xffff) | ((word & 0x3ff) << 16)
+            if units & (1 << 25):
+                units -= 1 << 26
+            branch_destination = elf.symbols['_start'][1] + units * 4
+            ensure(branch_destination == elf.symbols['fixture_helper'][1],
+                   f'cross_object_branch_not_applied={name}:{stage} '
+                   f'actual={branch_destination:#x} '
+                   f'expected={elf.symbols["fixture_helper"][1]:#x}')
+        print(f'MINILD_MULTITARGET_STATIC_STRUCTURE=PASS target={name} '
+              f'stage={stage} machine={machine} ptr_relocation=resolved '
+              f'branch_relocation={"resolved" if name != "x86_64" else "runtime"} '
+              f'PT_LOAD=yes')
 
 gnu = Elf64(root / 'x86_64-gnu.elf')
 ensure(gnu.kind == 2 and gnu.machine == 62 and
@@ -335,17 +345,19 @@ if [[ $(uname -m) != x86_64 ]]; then
     echo 'MINILD_MULTITARGET_STATIC=INCONCLUSIVE x86_native_runtime_requires_x86_64' >&2
     exit 8
 fi
-timeout 5s "$work/x86_64-minild.elf" >"$work/x86-minild.stdout"
 timeout 5s "$work/x86_64-gnu.elf" >"$work/x86-gnu.stdout"
-printf 'MINILD_STATIC_X86_OK\n' | cmp -s - "$work/x86-minild.stdout" || {
-    echo 'MINILD_MULTITARGET_STATIC=FAIL x86_native_output_mismatch' >&2
-    exit 1
-}
-cmp "$work/x86-minild.stdout" "$work/x86-gnu.stdout" || {
-    echo 'MINILD_MULTITARGET_STATIC=FAIL x86_gnu_runtime_differential' >&2
-    exit 1
-}
-echo 'MINILD_MULTITARGET_STATIC_RUNTIME=PASS target=x86_64 native_syscall=1 gnu_ld=equal'
+for stage in minild roundtrip; do
+    timeout 5s "$work/x86_64-$stage.elf" >"$work/x86-$stage.stdout"
+    printf 'MINILD_STATIC_X86_OK\n' | cmp -s - "$work/x86-$stage.stdout" || {
+        echo "MINILD_MULTITARGET_STATIC=FAIL x86_native_output_mismatch:$stage" >&2
+        exit 1
+    }
+    cmp "$work/x86-$stage.stdout" "$work/x86-gnu.stdout" || {
+        echo "MINILD_MULTITARGET_STATIC=FAIL x86_gnu_runtime_differential:$stage" >&2
+        exit 1
+    }
+done
+echo 'MINILD_MULTITARGET_STATIC_RUNTIME=PASS target=x86_64 native_syscall=2 gnu_ld=equal'
 
 for name in aarch64 loongarch64; do
     case "$name" in
@@ -360,13 +372,16 @@ for name in aarch64 loongarch64; do
         echo "MINILD_MULTITARGET_STATIC_RUNTIME=UNVERIFIED target=$name reason=missing_qemu"
         continue
     fi
-    timeout 5s "$qemu" "$work/$name-minild.elf" \
-        >"$work/$name-qemu.stdout" 2>"$work/$name-qemu.stderr" || {
-        echo "MINILD_MULTITARGET_STATIC=FAIL qemu_runtime=$name" >&2
-        exit 1
-    }
-    test ! -s "$work/$name-qemu.stdout"
-    echo "MINILD_MULTITARGET_STATIC_RUNTIME=PASS target=$name qemu_exit=0"
+    for stage in minild roundtrip; do
+        timeout 5s "$qemu" "$work/$name-$stage.elf" \
+            >"$work/$name-$stage-qemu.stdout" \
+            2>"$work/$name-$stage-qemu.stderr" || {
+            echo "MINILD_MULTITARGET_STATIC=FAIL qemu_runtime=$name:$stage" >&2
+            exit 1
+        }
+        test ! -s "$work/$name-$stage-qemu.stdout"
+    done
+    echo "MINILD_MULTITARGET_STATIC_RUNTIME=PASS target=$name qemu_exit=0 stages=2"
 done
 
-echo 'MINILD_MULTITARGET_STATIC=PASS structures=3 absolute_relocs=3 branch_relocs=2 unknown_reloc_rejections=3 x86_native_gnu=PASS non_x86_runtime=separately_reported'
+echo 'MINILD_MULTITARGET_STATIC=PASS structures=6 absolute_relocs=6 branch_relocs=4 unknown_reloc_rejections=3 x86_native_gnu=PASS roundtrips=3 non_x86_runtime=separately_reported'

@@ -23,12 +23,12 @@ format decisions, and runtime behavior remain unchanged.
 | `linker_output_plan.inc` | `MiniLdOutputPlan`, surviving output-section identity, non-alloc placement, section headers and bytes | Projects the placed working sections into output sections; does not own original input identities. |
 | `linker_final_symbols.inc` | `MiniLdFinalSymbols` plus `MiniLdFinalSectionTables` projection | Reads canonical symbols and the OutputPlan; builds the shared final ELF symbol/name/section-header trailer. |
 | `linker_program_plan.inc` | Common `MiniLdProgramPlan` lifetime and final PHDR range validation | Both writers consume one output-neutral program-header contract, while each retains its own segment policy. |
-| `linker_final_elf64_plan.inc` | One `MiniLdFinalElf64Image` owner for final ProgramPlan, symbols and section tables | ET_EXEC and ET_DYN share non-ALLOC placement, final table construction, generic section-header projection, validation and cleanup without merging mode-specific policies. |
-| `linker_elf64_image.inc` | Final ELF64 Ehdr/PHDR/section-byte/table serialization and file sink | Consumes already-finalized plans; does not decide section selection, relocation or layout. |
+| `linker_final_image_plan.inc` | One `MiniLdFinalImage` owner for final ProgramPlan, symbols and section tables | ET_EXEC and ET_DYN share non-ALLOC placement, final table construction, generic section-header projection, validation and cleanup without merging mode-specific policies. |
+| `linker_final_elf_image.inc` | Checked ELF32/64 Ehdr/PHDR/Sym/SHDR record packing, section-byte emission and file sink | Consumes canonical, already-finalized plans; no ABI-specific struct is stored in the output model. |
 | `linker_static_output.inc` | Static PT_LOAD selection and ET_EXEC writer | Owns executable segment policy and final static emission, including scripted output. |
 | `linker_shared_pre_layout.inc` | One `MiniLdSharedImage` owner, per-symbol dynamic plan, symbol preemption policy, dynamic metadata sizing and pre-layout relocation reservations | ET_DYN output capacities are fixed before physical layout; every resolver symbol has one consistent reservation/projection record. |
 | `linker_shared_finalize.inc` | Dynamic symbol/hash/version/relocation content, `__ehdr_start` resolution and dynamic tags | Uses final addresses and OutputPlan indices without a second metadata owner. |
-| `linker_shared_program_plan.inc` | ET_DYN TLS and PHDR policy plus dynamic section-header links | Keeps ET_DYN segment decisions separate from the common ELF64 serializer and ET_EXEC. |
+| `linker_shared_program_plan.inc` | ET_DYN TLS and PHDR policy plus dynamic section-header links | Keeps ET_DYN segment decisions separate from the common class-aware serializer and ET_EXEC. |
 | `linker_shared_output.inc` | ET_DYN writer, input checks and shared-link entry point | Calls phases in original order and owns the cleanup path. |
 
 `linker_core.inc` defines the shared core types and include order, while
@@ -184,18 +184,20 @@ surviving final ELF sections, after layout has finalized mutable work sizes,
 ownership and offsets. A premature OutputPlan would introduce a second
 partially initialized output state.
 
-ET_EXEC and ET_DYN now borrow one `MiniLdFinalElf64Image` lifetime owner
+ET_EXEC and ET_DYN now borrow one `MiniLdFinalImage` lifetime owner
 for `MiniLdProgramPlan`, `MiniLdFinalSymbols` and
 `MiniLdFinalSectionTables`. A common final preparation pass handles
 non-ALLOC placement, final symbols, synthetic tables, generic ELF section
 headers and PHDR validation. The separate writers still choose their
 respective PHDR policies, file-layout extent, symbol-table physical order
 (`SYMTAB_FIRST` versus `STRTAB_FIRST`) and ET_DYN's dynamic header links.
-The existing `minild_elf64_write_image` remains the sole file serializer;
-no new target-neutral writer, output format or relocation semantics are
-introduced.
+The `minild_final_write_image` serializer consumes class-neutral MiniELF
+program/section/symbol descriptors and packs ELF32/64 records with checked
+narrowing. The shared plans do not store ABI-specific `Elf64_*` records.
+This does not itself enable RV32 static linking: target relocations and GOT
+size remain explicitly unsupported for that mode.
 
-## OutputPlan lifecycle and final ELF64 boundary
+## OutputPlan lifecycle and final ELF32/64 boundary
 
 `MiniLdOutputPlan` already owns the actual ordered `OutputSection` objects,
 their work members, script command ownership, `work_shndx`, physical offsets
@@ -209,7 +211,7 @@ which require final output-section indexes. Both final writers borrow their
 plan. Static and shared ProgramPlan builders retain their own PT_LOAD/PHDR
 policies, while final symbols, section-table ownership and emission are common.
 
-`minild_elf64_write_image` receives finalized output/program/symbol/section
+`minild_final_write_image` receives finalized output/program/symbol/section
 plans, ELF kind and entry address. It owns the temporary image bytes and final
 file sink; output-mode writers supply section-header links before invoking it.
 The script-layout producer owns VMA/LMA, script BYTE and fill decisions until

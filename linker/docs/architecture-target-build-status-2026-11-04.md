@@ -23,6 +23,8 @@ Evidence in the source tree:
 
 - `tools/minic-ld/main_core.inc` chooses an explicit emulation, and an
   immutable target policy refuses link modes which do not have a backend.
+  All shared/PIE dispatch now uses `minild_link_shared_inputs_target`: the
+  Driver no longer guesses RV32 from an emulation string.
 - `linker/src/linker_target_elf.inc` owns five ELF identity, e_flags and
   attributes policies; Common admission and -r output borrow this profile.
 - `linker/src/elf32_compat_vdso.c` implements its own narrow RV32 vDSO path.
@@ -30,9 +32,12 @@ Evidence in the source tree:
   new `linker_nonriscv_static_fixup.inc` owns bounded x86-64/AArch64/
   LoongArch64 static patches. Shared GOT/PLT/TLS and relaxation remain
   independent target acceptance frontiers.
-- `linker/src/linker_elf64_image.inc` serializes ELF64 only. The Target owns
-  linker-script architecture and default PIE interpreter policy; only RV64
-  currently accepts scripted static and dynamic links.
+- `linker/src/linker_final_image_plan.inc` owns the final class-neutral
+  ProgramPlan, symbols and sections. `linker_final_elf_image.inc` alone packs
+  ELF32/ELF64 records with narrow-field overflow checks; RV32 static is still
+  mode-gated until RV32 relocation, GOT and ABI policies are accepted.
+  The Target owns linker-script architecture and default PIE interpreter
+  policy; only RV64 currently accepts scripted static and dynamic links.
 - `Makefile` has one `MINILD_SOURCES`/`MINILD_BINARY` build and no backend
   binary matrix. `check-minild-multitarget-relocatable` is an actual five-target
   ET_REL contract, and `check-minild-multitarget-static` exercises three
@@ -68,6 +73,20 @@ An invocation now owns `--gc-sections` as a static option rather than a
 process-global variable or a command-line wrapper. It remains an RV64-only
 qualified mode until the new target GC contracts are tested.
 
+The next architecture pass moved final `Elf64_Phdr`, `Elf64_Shdr` and
+`Elf64_Sym` **out of the canonical plans**. All final metadata is now
+class-neutral `MiniElfProgramHeader`, `MiniElfSection` and `MiniElfSymbol`;
+the sole final serializer packs according to ELF class, checking ELF32
+address/offset/size limits before publication. Three ELF64 static targets
+also pass a two-stage `MiniAS -> MiniLD -r -> MiniLD -static` roundtrip.
+RISC-V psABI-only synthetic symbols (`__global_pointer$` etc.) are now
+Target-scoped; non-RISC-V outputs retain only Common boundaries.
+The same Target profile owns shared-backend dispatch and validates incoming
+ABI flags: x86/AArch64 require zero; LoongArch64 accepts only psABI v1
+LP64S/F/D `0x41/0x42/0x43` and still rejects mixing flags across objects.
+Tests reject invalid flags on both `-r` and static links, preserve RV32's
+special compat-vDSO refusal contract, and exercise RV64 ET_DYN.
+
 This is not full Linux distribution support: RISC-V RV32 ELF32 final output,
 target-wide relocation coverage, TLS, dynamic linking and per-ISA runtime
 acceptance remain separate gates. `-r` alone is not runtime correctness.
@@ -81,7 +100,7 @@ reused rather than copied for each new target:
 2. Working-section projection, GC, linker-script matching and symbols.
 3. Mode-owned pre-layout reservations and shared physical Layout.
 4. A final OutputPlan and shared symbol/section/program-header projections.
-5. ELF64 serialization and a distinct ET_REL-to-MiniELF writer.
+5. ELF32/64 final serialization and a distinct ET_REL-to-MiniELF writer.
 
 The largest remaining ISA boundary was final relocation handling: RISC-V
 relocation classification and encoding appeared both in the target fixup

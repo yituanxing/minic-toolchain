@@ -552,9 +552,9 @@ static bool find_or_add_section(MiniLdState *state,
 
 #include "linker_program_plan.inc"
 
-#include "linker_final_elf64_plan.inc"
+#include "linker_final_image_plan.inc"
 
-#include "linker_elf64_image.inc"
+#include "linker_final_elf_image.inc"
 
 #include "linker_static_output.inc"
 

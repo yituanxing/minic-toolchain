@@ -4,6 +4,7 @@
 #include <limits.h>
 
 #include "linker_core.inc"
+#include "minild_elf32_vdso.h"
 
 int minild_link_static_elf64_riscv_inputs_options(
     const char *output_path,
@@ -154,6 +155,43 @@ int minild_link_static_elf64_inputs_target(
                                        options != NULL && options->gc_sections,
                                        minild_target_find(emulation),
                                        diagnostics);
+}
+
+int minild_link_shared_inputs_target(
+    const char *output_path,
+    const MiniLdInput *inputs,
+    size_t input_count,
+    const MiniLdSharedOptions *options,
+    const char *emulation,
+    FILE *diagnostics) {
+    const MiniLdTargetProfile *target = minild_target_find(emulation);
+    const MiniLdLinkMode mode = options != NULL && options->pie
+                                    ? MINILD_LINK_PIE : MINILD_LINK_SHARED;
+
+    if (output_path == NULL || inputs == NULL || input_count == 0U ||
+        diagnostics == NULL || target == NULL ||
+        !minild_emulation_supports_mode(emulation, mode)) {
+        if (diagnostics != NULL) {
+            fprintf(diagnostics,
+                    "minic-ld: unsupported-target-shared-mode:%s\n",
+                    emulation == NULL ? "(null)" : emulation);
+        }
+        return 2;
+    }
+    switch (target->shared_backend) {
+    case MINILD_SHARED_RISCV_ELF64:
+        return minild_link_shared_elf64_riscv_inputs_options(
+            output_path, inputs, input_count, options, diagnostics);
+    case MINILD_SHARED_RISCV32_COMPAT_VDSO:
+        return minild_link_elf32_compat_vdso(
+            output_path, inputs, input_count, options, diagnostics);
+    case MINILD_SHARED_UNSUPPORTED:
+        break;
+    }
+    fprintf(diagnostics,
+            "minic-ld: unimplemented-target-shared-backend:%s\n",
+            emulation);
+    return 2;
 }
 
 int minild_link_static_elf64_riscv_inputs_options(

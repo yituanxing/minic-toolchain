@@ -4,7 +4,7 @@
  * relocated values and ELF string table; ET_REL keeps its source policy. */
 typedef struct MiniLdFinalSymbols {
     MiniLdBuffer names;
-    Elf64_Sym *entries;
+    MiniElfSymbol *entries;
     size_t entry_count;
     size_t local_count;
 } MiniLdFinalSymbols;
@@ -69,7 +69,7 @@ static bool minild_final_symbols_build_with_version(
     size_t next = 1U;
     size_t pass, i;
 
-    if (state->resolver.count >= SIZE_MAX / sizeof(Elf64_Sym) - 1U) {
+    if (state->resolver.count >= SIZE_MAX / sizeof(MiniElfSymbol) - 1U) {
         return false;
     }
     final->entry_count = state->resolver.count + 1U;
@@ -85,7 +85,7 @@ static bool minild_final_symbols_build_with_version(
                                                    version_script);
             bool localized = local &&
                              ELF64_ST_BIND(source->info) != STB_LOCAL;
-            Elf64_Sym *output;
+            MiniElfSymbol *output;
 
             if (local != (pass == 0U)) {
                 continue;
@@ -93,41 +93,41 @@ static bool minild_final_symbols_build_with_version(
             output = &final->entries[next++];
             if (source->name[0] != '\0' &&
                 !buffer_append_string(&final->names, source->name,
-                                      &output->st_name)) {
+                                      &output->name)) {
                 return false;
             }
-            output->st_info = localized
+            output->info = localized
                                   ? ELF64_ST_INFO(STB_LOCAL,
                                                   ELF64_ST_TYPE(source->info))
                                   : source->info;
             /* GNU's localized .symtab entries use DEFAULT visibility;
              * preserve input locals and target-specific high st_other bits. */
-            output->st_other = localized
+            output->other = localized
                                    ? (unsigned char)(source->other & ~3U)
                                    : source->other;
-            output->st_size = source->size;
+            output->size = source->size;
             if (source->section == MINILD_SECTION_UNDEF) {
-                output->st_shndx = SHN_UNDEF;
+                output->section_index = SHN_UNDEF;
             } else if (source->section == MINILD_SECTION_ABS) {
-                output->st_shndx = SHN_ABS;
-                output->st_value = source->value;
+                output->section_index = SHN_ABS;
+                output->value = source->value;
             } else if (source->section == MINILD_SECTION_COMMON) {
-                output->st_shndx = SHN_COMMON;
-                output->st_value = source->value;
+                output->section_index = SHN_COMMON;
+                output->value = source->value;
             } else if (source->section >= 0 &&
                        (size_t)source->section < state->work.count) {
                 size_t section = (size_t)source->section;
                 if (plan->work_shndx[section] == 0U) {
-                    output->st_shndx = SHN_UNDEF;
+                    output->section_index = SHN_UNDEF;
                 } else {
-                    output->st_shndx =
-                        (Elf64_Half)plan->work_shndx[section];
+                    output->section_index =
+                        (uint16_t)plan->work_shndx[section];
                     if (ELF64_ST_TYPE(source->info) == STT_TLS) {
                         /* A final TLS symbol is relative to the TLS block,
                          * not the section VMA (ET_EXEC and ET_DYN alike). */
                         if (!minild_output_plan_tls_symbol_value(
                                 state, layout, plan, section,
-                                source->value, &output->st_value)) {
+                                source->value, &output->value)) {
                             fprintf(state->diagnostics,
                                     "minic-ld: invalid-final-tls-symbol:%s\n",
                                     source->name);
@@ -135,7 +135,7 @@ static bool minild_final_symbols_build_with_version(
                         }
                     } else if ((state->work.sections[section].flags &
                                 SHF_ALLOC) != 0U) {
-                        output->st_value =
+                        output->value =
                             layout->work[section].vaddr + source->value;
                     } else {
                         /* sh_addr is zero for non-ALLOC output sections.
@@ -152,8 +152,8 @@ static bool minild_final_symbols_build_with_version(
                                     source->name);
                             return false;
                         }
-                        output->st_value = start - owner->vaddr +
-                                           source->value;
+                        output->value = start - owner->vaddr +
+                                        source->value;
                     }
                 }
             } else {
@@ -192,7 +192,7 @@ typedef enum MiniLdFinalSymbolTableOrder {
 typedef struct MiniLdFinalSectionTables {
     MiniLdBuffer section_names;
     uint32_t *output_name_offsets;
-    Elf64_Shdr *headers;
+    MiniElfSection *headers;
     size_t count;
     size_t symtab_index;
     size_t strtab_index;
@@ -213,26 +213,41 @@ static void minild_final_section_tables_destroy(
 }
 
 static bool minild_final_section_tables_build(
+    const MiniLdState *state,
     const MiniLdOutputPlan *plan,
     const MiniLdFinalSymbols *symbols,
     size_t end_nonalloc,
     MiniLdFinalSymbolTableOrder order,
     MiniLdFinalSectionTables *tables) {
     size_t symbol_bytes;
+    size_t symbol_entry_size;
+    size_t section_header_size;
+    size_t word_alignment;
     size_t cursor;
     size_t i;
     uint32_t symtab_name, strtab_name, shstrtab_name;
 
     memset(tables, 0, sizeof(*tables));
-    if (plan->count > UINT16_MAX - 4U ||
-        symbols->entry_count > SIZE_MAX / sizeof(Elf64_Sym)) {
+    if (state->target == NULL ||
+        (state->target->elf_class != ELFCLASS32 &&
+         state->target->elf_class != ELFCLASS64) ||
+        plan->count > UINT16_MAX - 4U) {
+        return false;
+    }
+    symbol_entry_size = state->target->elf_class == ELFCLASS32
+                            ? sizeof(Elf32_Sym) : sizeof(Elf64_Sym);
+    section_header_size = state->target->elf_class == ELFCLASS32
+                              ? sizeof(Elf32_Shdr) : sizeof(Elf64_Shdr);
+    word_alignment = state->target->elf_class == ELFCLASS32 ? 4U : 8U;
+    if (symbols->entry_count > SIZE_MAX / symbol_entry_size ||
+        symbols->local_count > UINT32_MAX) {
         return false;
     }
     tables->count = plan->count + 4U;
     tables->symtab_index = plan->count + 1U;
     tables->strtab_index = plan->count + 2U;
     tables->shstrtab_index = plan->count + 3U;
-    symbol_bytes = symbols->entry_count * sizeof(Elf64_Sym);
+    symbol_bytes = symbols->entry_count * symbol_entry_size;
     tables->headers = calloc(tables->count, sizeof(*tables->headers));
     tables->output_name_offsets = calloc(plan->count == 0U ? 1U : plan->count,
                                           sizeof(*tables->output_name_offsets));
@@ -258,7 +273,7 @@ static bool minild_final_section_tables_build(
 
     cursor = end_nonalloc;
     if (order == MINILD_FINAL_SYMTAB_FIRST) {
-        if (!align_up_size(cursor, 8U, &tables->symtab_offset) ||
+        if (!align_up_size(cursor, word_alignment, &tables->symtab_offset) ||
             !add_size(tables->symtab_offset, symbol_bytes,
                       &tables->strtab_offset) ||
             !add_size(tables->strtab_offset, symbols->names.size,
@@ -268,7 +283,7 @@ static bool minild_final_section_tables_build(
     } else {
         tables->strtab_offset = cursor;
         if (!add_size(cursor, symbols->names.size, &cursor) ||
-            !align_up_size(cursor, 8U, &tables->symtab_offset) ||
+            !align_up_size(cursor, word_alignment, &tables->symtab_offset) ||
             !add_size(tables->symtab_offset, symbol_bytes,
                       &tables->shstrtab_offset)) {
             return false;
@@ -276,37 +291,37 @@ static bool minild_final_section_tables_build(
     }
     if (!add_size(tables->shstrtab_offset, tables->section_names.size,
                   &cursor) ||
-        !align_up_size(cursor, 8U, &tables->header_offset) ||
+        !align_up_size(cursor, word_alignment, &tables->header_offset) ||
         tables->count > (SIZE_MAX - tables->header_offset) /
-                            sizeof(*tables->headers)) {
+                            section_header_size) {
         return false;
     }
     tables->total_size = tables->header_offset +
-                         tables->count * sizeof(*tables->headers);
+                         tables->count * section_header_size;
 
-    tables->headers[tables->symtab_index] = (Elf64_Shdr){
-        .sh_name = symtab_name,
-        .sh_type = SHT_SYMTAB,
-        .sh_offset = tables->symtab_offset,
-        .sh_size = symbol_bytes,
-        .sh_link = (Elf64_Word)tables->strtab_index,
-        .sh_info = (Elf64_Word)symbols->local_count,
-        .sh_addralign = 8U,
-        .sh_entsize = sizeof(Elf64_Sym)
+    tables->headers[tables->symtab_index] = (MiniElfSection){
+        .name = symtab_name,
+        .type = SHT_SYMTAB,
+        .offset = tables->symtab_offset,
+        .size = symbol_bytes,
+        .link = (uint32_t)tables->strtab_index,
+        .info = (uint32_t)symbols->local_count,
+        .alignment = word_alignment,
+        .entry_size = symbol_entry_size
     };
-    tables->headers[tables->strtab_index] = (Elf64_Shdr){
-        .sh_name = strtab_name,
-        .sh_type = SHT_STRTAB,
-        .sh_offset = tables->strtab_offset,
-        .sh_size = symbols->names.size,
-        .sh_addralign = 1U
+    tables->headers[tables->strtab_index] = (MiniElfSection){
+        .name = strtab_name,
+        .type = SHT_STRTAB,
+        .offset = tables->strtab_offset,
+        .size = symbols->names.size,
+        .alignment = 1U
     };
-    tables->headers[tables->shstrtab_index] = (Elf64_Shdr){
-        .sh_name = shstrtab_name,
-        .sh_type = SHT_STRTAB,
-        .sh_offset = tables->shstrtab_offset,
-        .sh_size = tables->section_names.size,
-        .sh_addralign = 1U
+    tables->headers[tables->shstrtab_index] = (MiniElfSection){
+        .name = shstrtab_name,
+        .type = SHT_STRTAB,
+        .offset = tables->shstrtab_offset,
+        .size = tables->section_names.size,
+        .alignment = 1U
     };
     return true;
 }
@@ -315,12 +330,10 @@ static void minild_final_section_tables_emit(
     const MiniLdFinalSectionTables *tables,
     const MiniLdFinalSymbols *symbols,
     unsigned char *image) {
-    memcpy(image + tables->symtab_offset, symbols->entries,
-           symbols->entry_count * sizeof(*symbols->entries));
+    /* Final symbol and section headers are canonical descriptors; ELF32 or
+     * ELF64 record packing is exclusively the final serializer's job. */
     memcpy(image + tables->strtab_offset, symbols->names.data,
            symbols->names.size);
     memcpy(image + tables->shstrtab_offset, tables->section_names.data,
            tables->section_names.size);
-    memcpy(image + tables->header_offset, tables->headers,
-           tables->count * sizeof(*tables->headers));
 }

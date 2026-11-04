@@ -10,9 +10,16 @@ static bool minild_nonriscv_apply_static_relocations(
 static bool minild_riscv_relax_section(MiniLdState *state,
                                       size_t section_index,
                                       uint64_t address);
+static bool minild_riscv_synthesize_gnu_default_boundaries(
+    MiniLdState *state, const struct MiniLdLayout *layout);
 
 typedef bool (*MiniLdTargetFlagsMerge)(MiniLdState *, uint32_t, bool,
                                        const char *);
+typedef enum MiniLdTargetSharedBackend {
+    MINILD_SHARED_UNSUPPORTED,
+    MINILD_SHARED_RISCV_ELF64,
+    MINILD_SHARED_RISCV32_COMPAT_VDSO
+} MiniLdTargetSharedBackend;
 
 struct MiniLdTargetProfile {
     const char *emulation;
@@ -35,6 +42,12 @@ struct MiniLdTargetProfile {
     bool (*relax_section)(MiniLdState *, size_t, uint64_t);
     bool (*apply_static_relocations)(MiniLdState *,
                                       const struct MiniLdLayout *);
+    /* GNU linker-script PROVIDE symbols with psABI-specific names belong
+     * to Target. Common owns the language-independent init/fini arrays. */
+    bool (*synthesize_default_symbols)(MiniLdState *,
+                                        const struct MiniLdLayout *);
+    MiniLdTargetSharedBackend shared_backend;
+    bool (*valid_elf_flags)(uint32_t);
 };
 
 static bool minild_riscv_merge_flags(MiniLdState *state,
@@ -45,6 +58,8 @@ static bool minild_exact_merge_flags(MiniLdState *state,
                                      uint32_t incoming_flags,
                                      bool incoming_has_code,
                                      const char *path);
+static bool minild_zero_elf_flags(uint32_t flags);
+static bool minild_loongarch_v1_elf_flags(uint32_t flags);
 
 /* GNU ld emulation spellings are the public target selection contract.
  * RV32's shared mode is its separate, narrow compat-vDSO implementation. */
@@ -53,27 +68,33 @@ static const MiniLdTargetProfile minild_target_profiles[] = {
      "/lib/ld-musl-riscv64.so.1", MINILD_SHT_RISCV_ATTRIBUTES,
      UINT64_C(0x10000), 4096U, true,
      true, true, true, true, true, true, minild_riscv_merge_flags,
-     minild_riscv_relax_section, NULL},
+     minild_riscv_relax_section, NULL,
+     minild_riscv_synthesize_gnu_default_boundaries,
+     MINILD_SHARED_RISCV_ELF64, NULL},
     {"elf32lriscv", ELFCLASS32, ELFDATA2LSB, EM_RISCV, "riscv",
      NULL, MINILD_SHT_RISCV_ATTRIBUTES,
      UINT64_C(0x10000), 4096U, true,
      true, false, false, false, true, false, minild_riscv_merge_flags,
-     minild_riscv_relax_section, NULL},
+     minild_riscv_relax_section, NULL, NULL,
+     MINILD_SHARED_RISCV32_COMPAT_VDSO, NULL},
     {"elf_x86_64", ELFCLASS64, ELFDATA2LSB, EM_X86_64, "i386:x86-64",
      NULL, 0U, UINT64_C(0x400000), 4096U, false,
      true, true, false, false, false, false,
      minild_exact_merge_flags, NULL,
-     minild_nonriscv_apply_static_relocations},
+     minild_nonriscv_apply_static_relocations, NULL,
+     MINILD_SHARED_UNSUPPORTED, minild_zero_elf_flags},
     {"aarch64linux", ELFCLASS64, ELFDATA2LSB, EM_AARCH64, "aarch64",
      NULL, 0U, UINT64_C(0x400000), 4096U, false,
      true, true, false, false, false, false,
      minild_exact_merge_flags, NULL,
-     minild_nonriscv_apply_static_relocations},
+     minild_nonriscv_apply_static_relocations, NULL,
+     MINILD_SHARED_UNSUPPORTED, minild_zero_elf_flags},
     {"elf64loongarch", ELFCLASS64, ELFDATA2LSB, EM_LOONGARCH, "loongarch64",
      NULL, 0U, UINT64_C(0x400000), 4096U, false,
      true, true, false, false, false, false,
      minild_exact_merge_flags, NULL,
-     minild_nonriscv_apply_static_relocations}
+     minild_nonriscv_apply_static_relocations, NULL,
+     MINILD_SHARED_UNSUPPORTED, minild_loongarch_v1_elf_flags}
 };
 
 static const MiniLdTargetProfile *minild_target_find(const char *emulation) {
@@ -123,13 +144,6 @@ static void minild_target_set_relocatable_identity(
     spec->elf_class = target->elf_class;
     spec->data_encoding = target->data_encoding;
     spec->machine = target->machine;
-}
-
-static void minild_target_set_final_elf_identity(
-    const MiniLdTargetProfile *target, Elf64_Ehdr *header) {
-    header->e_ident[EI_CLASS] = target->elf_class;
-    header->e_ident[EI_DATA] = target->data_encoding;
-    header->e_machine = target->machine;
 }
 
 /* Linker-script OUTPUT_ARCH and the default PIE loader are target ABI
@@ -237,6 +251,18 @@ static bool minild_riscv_merge_flags(MiniLdState *state,
 
 /* Non-RISC-V psABIs cannot silently combine differing ELF flag contracts.
  * x86-64/AArch64 normally use zero; LoongArch64 carries LP64 ABI flags. */
+static bool minild_zero_elf_flags(uint32_t flags) {
+    return flags == 0U;
+}
+
+/* LoongArch psABI v1 has ELF flag version 0x40 and LP64S/F/D ABI codes
+ * 1, 2, 3 respectively. Other version/ABI combinations are not accepted
+ * by this target profile even if all source objects agree with each other. */
+static bool minild_loongarch_v1_elf_flags(uint32_t flags) {
+    return flags == UINT32_C(0x41) || flags == UINT32_C(0x42) ||
+           flags == UINT32_C(0x43);
+}
+
 static bool minild_exact_merge_flags(MiniLdState *state,
                                      uint32_t incoming_flags,
                                      bool incoming_has_code,
@@ -251,8 +277,8 @@ static bool minild_exact_merge_flags(MiniLdState *state,
                 (unsigned)incoming_flags);
         return false;
     }
-    if ((state->target->machine == EM_X86_64 ||
-         state->target->machine == EM_AARCH64) && incoming_flags != 0U) {
+    if (state->target->valid_elf_flags == NULL ||
+        !state->target->valid_elf_flags(incoming_flags)) {
         fprintf(state->diagnostics,
                 "minic-ld: unsupported-target-elf-flags:%s:0x%08x\n",
                 path, (unsigned)incoming_flags);

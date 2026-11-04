@@ -43,7 +43,7 @@ files = (
     'linker_input_projection.inc', 'linker_script_input_selection.inc',
     'linker_input_gc.inc', 'linker_target_elf.inc',
     'linker_relocatable_output.inc',
-    'linker_elf64_image.inc',
+    'linker_final_elf_image.inc',
 )
 sources = {}
 for name in files:
@@ -73,7 +73,7 @@ expected_edges = {
     ('linker_core.inc', 'linker_admission.inc'),
     ('linker_core.inc', 'linker_target_elf.inc'),
     ('linker_core.inc', 'linker_relocatable_output.inc'),
-    ('linker_core.inc', 'linker_elf64_image.inc'),
+    ('linker_core.inc', 'linker_final_elf_image.inc'),
     ('linker_admission.inc', 'linker_archive_admission.inc'),
     ('linker_admission.inc', 'linker_input_sequence.inc'),
 }
@@ -105,7 +105,7 @@ if not (core.index('#include "linker_common_allocation.inc"') <
         core.index('#include "linker_admission.inc"') <
         core.index('#include "linker_relocatable_output.inc"') <
         core.index('#include "linker_layout.inc"') <
-        core.index('#include "linker_elf64_image.inc"')):
+        core.index('#include "linker_final_elf_image.inc"')):
     raise SystemExit('MINILD_INPUT_PHASE_STRUCTURE=FAIL core_stage_order')
 
 # All modes consume one target ELF identity/ABI owner. Generic source
@@ -113,9 +113,8 @@ if not (core.index('#include "linker_common_allocation.inc"') <
 # independently choose processor-specific machine/class/attributes rules.
 for name in ('linker_core.inc', 'linker_admission.inc',
              'linker_archive_admission.inc', 'linker_input_projection.inc',
-             'linker_elf64_image.inc'):
+             'linker_final_elf_image.inc'):
     if re.search(r'\b(?:EM_RISCV|EM_X86_64|EM_AARCH64|EM_LOONGARCH|'
-                 r'ELFDATA2LSB|'
                  r'MINILD_SHT_RISCV_ATTRIBUTES)\b', sources[name]):
         raise SystemExit(f'MINILD_INPUT_PHASE_STRUCTURE=FAIL '
                          f'target_elf_identity_in_generic_owner={name}')
@@ -145,7 +144,6 @@ functions = {
     'linker_target_elf.inc': (
         'minild_target_accept_elf',
         'minild_target_set_relocatable_identity',
-        'minild_target_set_final_elf_identity',
         'minild_target_accept_script_arch',
         'minild_target_default_pie_interpreter',
         'minild_target_is_attributes_section',
@@ -163,6 +161,9 @@ functions = {
     ),
     'linker_relocatable_output.inc': (
         'minild_write_relocatable_output',
+    ),
+    'linker_final_elf_image.inc': (
+        'minild_final_pack_elf_header',
     ),
     'linker_script_input_selection.inc': (
         'minild_select_script_inputs',

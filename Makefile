@@ -728,6 +728,18 @@ check-minild-multitarget-static: $(MINIAS_BINARY) $(MINILD_BINARY)
 	MINILD="$(abspath $(MINILD_BINARY))" \
 	bash tests/linker/probe-multitarget-static.sh
 
+.PHONY: check-minild-target-default-symbols
+check-minild-target-default-symbols: $(MINIAS_BINARY) $(MINILD_BINARY)
+	MINIAS="$(abspath $(MINIAS_BINARY))" \
+	MINILD="$(abspath $(MINILD_BINARY))" \
+	bash tests/linker/probe-target-default-symbols.sh
+
+.PHONY: check-minild-target-shared-abi-boundary
+check-minild-target-shared-abi-boundary: $(MINIAS_BINARY) $(MINILD_BINARY)
+	MINIAS="$(abspath $(MINIAS_BINARY))" \
+	MINILD="$(abspath $(MINILD_BINARY))" \
+	bash tests/linker/probe-target-shared-abi-boundary.sh
+
 .PHONY: check-minild-riscv-abi
 $(BUILD_DIR)/tests/linker/riscv-elf-abi-test: linker/src/riscv_elf_abi.c linker/src/riscv_elf_abi.h tests/linker/riscv_elf_abi_test.c
 	@mkdir -p "$(dir $@)"

@@ -48,5 +48,8 @@ jobs:
           make MODE=release CFLAGS=-Werror \
             check-minild-multitarget-relocatable \
             check-minild-multitarget-static \
+            check-minild-target-default-symbols \
+            check-minild-target-shared-abi-boundary \
             check-minild-riscv-abi-integration \
-            check-minild-input-phase-owners
+            check-minild-input-phase-owners \
+            check-minild-final-elf64-owner-lifecycle

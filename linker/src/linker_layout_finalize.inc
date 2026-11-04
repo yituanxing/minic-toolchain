@@ -109,7 +109,8 @@ static bool static_need_array_bound_pair(
 static bool static_synthesize_runtime_boundaries(
     MiniLdState *state,
     const MiniLdLayout *layout) {
-    return static_synthesize_gnu_default_boundaries(state, layout) &&
+    return (state->target->synthesize_default_symbols == NULL ||
+            state->target->synthesize_default_symbols(state, layout)) &&
            (!static_need_array_bound_pair(state, layout, ".preinit_array",
                                           "__preinit_array_start",
                                           "__preinit_array_end") ||

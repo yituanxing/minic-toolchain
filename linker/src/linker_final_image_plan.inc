@@ -1,15 +1,15 @@
 /* ET_EXEC and ET_DYN differ in segment policy and dynamic metadata, but
- * their final ELF64 tables have one lifecycle.  Keep the ProgramPlan,
+ * their final ELF32/64 tables have one lifecycle. Keep the ProgramPlan,
  * final symbol projection and synthetic section-table projection under one
  * owner; the caller supplies its already-decided segment and table policies.
  * This stage does not mutate canonical input or resolver identities. */
-typedef struct MiniLdFinalElf64Image {
+typedef struct MiniLdFinalImage {
     MiniLdProgramPlan program;
     MiniLdFinalSymbols symbols;
     MiniLdFinalSectionTables tables;
-} MiniLdFinalElf64Image;
+} MiniLdFinalImage;
 
-static void minild_final_elf64_image_destroy(MiniLdFinalElf64Image *final) {
+static void minild_final_image_destroy(MiniLdFinalImage *final) {
     minild_final_section_tables_destroy(&final->tables);
     minild_program_plan_destroy(&final->program);
     minild_final_symbols_destroy(&final->symbols);
@@ -20,11 +20,11 @@ static void minild_final_elf64_image_destroy(MiniLdFinalElf64Image *final) {
  * Everything after those decisions and before dynamic sh_link policy is a
  * single final-file projection for both output modes.  ET_DYN may still
  * refine dynamic section-header links before calling the serializer. */
-static bool minild_final_elf64_image_prepare(
+static bool minild_final_image_prepare(
     MiniLdState *state,
     const MiniLdLayout *layout,
     MiniLdOutputPlan *output_plan,
-    MiniLdFinalElf64Image *final,
+    MiniLdFinalImage *final,
     size_t load_image_end,
     const MiniLdScript *version_script,
     MiniLdFinalSymbolTableOrder table_order,
@@ -33,7 +33,7 @@ static bool minild_final_elf64_image_prepare(
 
     if (elf_type != ET_EXEC && elf_type != ET_DYN) {
         fprintf(state->diagnostics,
-                "minic-ld: invalid-final-elf64-image\n");
+                "minic-ld: invalid-final-image\n");
         return false;
     }
     if (!minild_output_plan_place_nonalloc(state, layout, output_plan,
@@ -55,7 +55,7 @@ static bool minild_final_elf64_image_prepare(
                 elf_type == ET_DYN ? "shared-writer" : "static-output");
         return false;
     }
-    if (!minild_final_section_tables_build(output_plan, &final->symbols,
+    if (!minild_final_section_tables_build(state, output_plan, &final->symbols,
                                            end_nonalloc, table_order,
                                            &final->tables)) {
         fprintf(state->diagnostics,

@@ -84,12 +84,12 @@ same final output-section index. Violations fail closed with diagnostics.
 - `MiniLdOutputPlan`: output-owner membership, final ELF section indexes,
   non-ALLOC output/member file spans and generic section-header projection.
 - `MiniLdFinalSymbols`: the read-only final ET_EXEC/ET_DYN symbol view.
-- `MiniLdProgramPlan`: owns final `Elf64_Phdr[]`, independently produced for
+- `MiniLdProgramPlan`: owns final class-neutral `MiniElfProgramHeader[]`, independently produced for
   default/scripted static or shared/PIE/TLS/vDSO policy and checked against
   the final file size. Static `-T` retains independent LMA and `p_align=1`;
   ET_DYN RX `PT_LOAD` maps file headers, and vDSO preserves its prescribed
   four PHDR types, including a possibly empty `PT_GNU_EH_FRAME`.
-- `MiniLdFinalElf64Image`: jointly owns the final ProgramPlan, symbol view
+- `MiniLdFinalImage`: jointly owns the final ProgramPlan, symbol view
   and synthetic section tables for the duration of either final ELF writer;
   each output mode still supplies its own segment and dynamic-table policies.
 - ELF writers: place synthetic symbol/name tables and serialize already
@@ -105,7 +105,7 @@ resolved symbol, so output order accidentally became a property of the global
 resolver's state.  Both final ELF writers now consume one temporary
 `MiniLdFinalSymbols` view, built from the final `OutputPlan` and layout:
 
-- It owns an ordered ELF64 `Elf64_Sym` array, a symbol-name string table,
+- It owns an ordered class-neutral `MiniElfSymbol` array, a symbol-name string table,
   and the local/global boundary used for `sh_info`.
 - It resolves `SHN_UNDEF`, `SHN_ABS`, `SHN_COMMON`, final `st_shndx`, section
   address values and TLS-block-relative `STT_TLS` values once.  The TLS

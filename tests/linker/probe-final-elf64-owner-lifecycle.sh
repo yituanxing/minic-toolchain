@@ -60,22 +60,46 @@ def function_body(text, name):
     raise SystemExit(f'final-elf64-owner: unclosed {name}')
 
 core = source('linker_core.inc')
-final_owner = source('linker_final_elf64_plan.inc')
+final_owner = source('linker_final_image_plan.inc')
 work = struct_body(core, 'MiniLdSection')
 if re.search(r'\boutput_name\b', work):
     raise SystemExit('final-elf64-owner: working section retains final output name')
 
-if '#include "linker_final_elf64_plan.inc"' not in core:
+if '#include "linker_final_image_plan.inc"' not in core:
     raise SystemExit('final-elf64-owner: missing final ELF64 owner module')
 
-image = struct_body(final_owner, 'MiniLdFinalElf64Image')
+image = struct_body(final_owner, 'MiniLdFinalImage')
 for owner in ('MiniLdProgramPlan', 'MiniLdFinalSymbols',
               'MiniLdFinalSectionTables'):
     if not re.search(r'\b' + owner + r'\b', image):
         raise SystemExit(f'final-elf64-owner: final image lacks {owner}')
 
-for name in ('minild_final_elf64_image_prepare',
-             'minild_final_elf64_image_destroy'):
+# No final semantic owner is allowed to retain an ABI-packed record. The
+# output target chooses 32/64 bit packing only after layout and resolution.
+for name, descriptor in (
+    ('linker_program_plan.inc', 'MiniElfProgramHeader'),
+    ('linker_final_symbols.inc', 'MiniElfSymbol'),
+    ('linker_final_symbols.inc', 'MiniElfSection'),
+    ('linker_output_plan.inc', 'MiniElfSection'),
+    ('linker_shared_program_plan.inc', 'MiniElfProgramHeader'),
+    ('linker_static_output.inc', 'MiniElfProgramHeader'),
+):
+    text = source(name)
+    if descriptor not in text or re.search(
+            r'\bElf64_(?:Phdr|Shdr|Sym)\s*\*', text):
+        raise SystemExit(f'final-elf64-owner: ABI packed plan in {name}')
+
+serializer = source('linker_final_elf_image.inc')
+for required in ('ELFCLASS32', 'ELFCLASS64',
+                 'minild_final_pack_program_header',
+                 'minild_final_pack_section_header',
+                 'minild_final_pack_symbol',
+                 'minild_final_u32_fits'):
+    if required not in serializer:
+        raise SystemExit(f'final-elf64-owner: serializer lacks {required}')
+
+for name in ('minild_final_image_prepare',
+             'minild_final_image_destroy'):
     function_body(final_owner, name)
 
 for forbidden in ('minild_project_admitted_inputs',
@@ -83,7 +107,7 @@ for forbidden in ('minild_project_admitted_inputs',
                   'work_sections_find_or_add',
                   'shared_prepare_metadata'):
     if forbidden in function_body(final_owner,
-                                  'minild_final_elf64_image_prepare'):
+                                  'minild_final_image_prepare'):
         raise SystemExit(f'final-elf64-owner: preparation owns input stage {forbidden}')
 
 static = source('linker_static_output.inc')
@@ -95,13 +119,13 @@ for mode, text, writer, builder, order in (
      'minild_shared_program_plan_build', 'MINILD_FINAL_STRTAB_FIRST'),
 ):
     body = function_body(text, writer)
-    for required in (builder, order, 'minild_final_elf64_image_prepare',
-                     'minild_elf64_write_image',
-                     'minild_final_elf64_image_destroy'):
+    for required in (builder, order, 'minild_final_image_prepare',
+                     'minild_final_write_image',
+                     'minild_final_image_destroy'):
         if required not in body:
             raise SystemExit(f'final-elf64-owner: {mode} lacks {required}')
-    if body.index('minild_final_elf64_image_prepare') > body.index(
-            'minild_elf64_write_image'):
+    if body.index('minild_final_image_prepare') > body.index(
+            'minild_final_write_image'):
         raise SystemExit(f'final-elf64-owner: {mode} emits before preparation')
     for forbidden in ('MiniLdFinalSymbols final_symbols',
                       'MiniLdFinalSectionTables final_tables',
@@ -110,8 +134,8 @@ for mode, text, writer, builder, order in (
         if forbidden in body:
             raise SystemExit(f'final-elf64-owner: {mode} duplicates {forbidden}')
 
-emission = function_body(source('linker_elf64_image.inc'),
-                         'minild_elf64_write_image')
+emission = function_body(source('linker_final_elf_image.inc'),
+                         'minild_final_write_image')
 for forbidden in ('minild_final_symbols_build(',
                   'minild_final_section_tables_build(',
                   'minild_output_plan_build(',

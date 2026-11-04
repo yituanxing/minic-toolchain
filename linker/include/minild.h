@@ -63,6 +63,14 @@ int minild_link_static_elf64_inputs_target(
     const char *emulation,
     FILE *diagnostics);
 
+int minild_link_shared_inputs_target(
+    const char *output_path,
+    const MiniLdInput *inputs,
+    size_t input_count,
+    const MiniLdSharedOptions *options,
+    const char *emulation,
+    FILE *diagnostics);
+
 int minild_link_relocatable_elf64_riscv(const char *output_path,
                                         const char *const *input_paths,
                                         size_t input_count,

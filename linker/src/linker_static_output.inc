@@ -29,6 +29,10 @@ static bool minild_static_program_plan_build(
     const MiniLdOutputPlan *output_plan,
     MiniLdProgramPlan *plan) {
     MiniLdStaticLoadSegment *loads = NULL;
+    size_t elf_header_size = state->target->elf_class == ELFCLASS32
+                                 ? sizeof(Elf32_Ehdr) : sizeof(Elf64_Ehdr);
+    size_t program_header_size = state->target->elf_class == ELFCLASS32
+                                     ? sizeof(Elf32_Phdr) : sizeof(Elf64_Phdr);
     size_t count = 0U;
     size_t i;
 
@@ -96,7 +100,7 @@ static bool minild_static_program_plan_build(
                 (layout->have_rw ? 1U : 0U);
     }
     if (count > UINT16_MAX ||
-        count > (SIZE_MAX - sizeof(Elf64_Ehdr)) / sizeof(Elf64_Phdr)) {
+        count > (SIZE_MAX - elf_header_size) / program_header_size) {
         fprintf(state->diagnostics, "minic-ld: too-many-static-segments\n");
         goto failed;
     }
@@ -109,36 +113,36 @@ static bool minild_static_program_plan_build(
     if (layout->scripted) {
         for (i = 0U; i < count; ++i) {
             const MiniLdStaticLoadSegment *load = &loads[i];
-            Elf64_Phdr *ph = &plan->entries[i];
-            ph->p_type = PT_LOAD;
-            ph->p_flags = load->flags;
-            ph->p_offset = load->file_offset;
-            ph->p_vaddr = load->vaddr;
-            ph->p_paddr = load->laddr;
-            ph->p_filesz = load->file_size;
-            ph->p_memsz = load->mem_size;
-            ph->p_align = 1U;
+            MiniElfProgramHeader *ph = &plan->entries[i];
+            ph->type = PT_LOAD;
+            ph->flags = load->flags;
+            ph->offset = load->file_offset;
+            ph->virtual_address = load->vaddr;
+            ph->physical_address = load->laddr;
+            ph->file_size = load->file_size;
+            ph->memory_size = load->mem_size;
+            ph->alignment = 1U;
         }
     } else {
         size_t index = 0U;
         if (layout->have_rx) {
-            Elf64_Phdr *ph = &plan->entries[index++];
-            ph->p_type = PT_LOAD;
-            ph->p_flags = PF_R | PF_X;
-            ph->p_offset = layout->rx_file_offset;
-            ph->p_vaddr = ph->p_paddr = layout->rx_vaddr;
-            ph->p_filesz = ph->p_memsz = layout->rx_file_size;
-            ph->p_align = state->target->page_size;
+            MiniElfProgramHeader *ph = &plan->entries[index++];
+            ph->type = PT_LOAD;
+            ph->flags = PF_R | PF_X;
+            ph->offset = layout->rx_file_offset;
+            ph->virtual_address = ph->physical_address = layout->rx_vaddr;
+            ph->file_size = ph->memory_size = layout->rx_file_size;
+            ph->alignment = state->target->page_size;
         }
         if (layout->have_rw) {
-            Elf64_Phdr *ph = &plan->entries[index++];
-            ph->p_type = PT_LOAD;
-            ph->p_flags = PF_R | PF_W;
-            ph->p_offset = layout->rw_file_offset;
-            ph->p_vaddr = ph->p_paddr = layout->rw_vaddr;
-            ph->p_filesz = layout->rw_file_size;
-            ph->p_memsz = layout->rw_mem_size;
-            ph->p_align = state->target->page_size;
+            MiniElfProgramHeader *ph = &plan->entries[index++];
+            ph->type = PT_LOAD;
+            ph->flags = PF_R | PF_W;
+            ph->offset = layout->rw_file_offset;
+            ph->virtual_address = ph->physical_address = layout->rw_vaddr;
+            ph->file_size = layout->rw_file_size;
+            ph->memory_size = layout->rw_mem_size;
+            ph->alignment = state->target->page_size;
         }
     }
     free(loads);
@@ -157,7 +161,11 @@ static bool static_write_executable(MiniLdState *state,
                                     MiniLdOutputPlan *output_plan,
                                     const char *path,
                                     uint64_t entry) {
-    MiniLdFinalElf64Image final = {0};
+    MiniLdFinalImage final = {0};
+    size_t elf_header_size = state->target->elf_class == ELFCLASS32
+                                 ? sizeof(Elf32_Ehdr) : sizeof(Elf64_Ehdr);
+    size_t program_header_size = state->target->elf_class == ELFCLASS32
+                                     ? sizeof(Elf32_Phdr) : sizeof(Elf64_Phdr);
     size_t load_image_size;
     size_t i;
     bool ok = false;
@@ -166,8 +174,8 @@ static bool static_write_executable(MiniLdState *state,
                                           &final.program)) {
         goto done;
     }
-    load_image_size = sizeof(Elf64_Ehdr) +
-                      final.program.count * sizeof(Elf64_Phdr);
+    load_image_size = elf_header_size +
+                      final.program.count * program_header_size;
 
     if (layout->scripted) {
         for (i = 0U; i < output_plan->count; ++i) {
@@ -221,13 +229,13 @@ static bool static_write_executable(MiniLdState *state,
             goto done;
         }
     }
-    if (!minild_final_elf64_image_prepare(state, layout, output_plan,
+    if (!minild_final_image_prepare(state, layout, output_plan,
                                           &final, load_image_size, NULL,
                                           MINILD_FINAL_SYMTAB_FIRST,
                                           ET_EXEC)) {
         goto done;
     }
-    ok = minild_elf64_write_image(state, layout, output_plan,
+    ok = minild_final_write_image(state, layout, output_plan,
                                   &final.program, &final.tables,
                                   &final.symbols, ET_EXEC, entry, path);
 
@@ -237,6 +245,6 @@ done:
     if (!ok) {
         (void)remove(path);
     }
-    minild_final_elf64_image_destroy(&final);
+    minild_final_image_destroy(&final);
     return ok;
 }

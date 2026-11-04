@@ -1,5 +1,4 @@
 #include "minild.h"
-#include "minild_elf32_vdso.h"
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -453,11 +452,6 @@ int main(int argc, char **argv) {
             return 2;
         }
     }
-    if (strcmp(emulation, "elf32lriscv") == 0 && !shared_link &&
-        !relocatable) {
-        fprintf(stderr, "minic-ld: elf32-only-relocatable-or-compat-vdso\n");
-        return 2;
-    }
     if (relocatable) {
         return minild_link_relocatable_inputs_target(
             output, inputs, input_count, emulation, stderr);
@@ -476,19 +470,8 @@ int main(int argc, char **argv) {
         options.hash_style_both = hash_style_both;
         options.eh_frame_hdr = eh_frame_hdr;
         options.pie = pie_link;
-        if (strcmp(emulation, "elf32lriscv") == 0) {
-            if (!shared_link) {
-                fprintf(stderr, "minic-ld: elf32-only-shared-compat-vdso\n");
-                return 2;
-            }
-            return minild_link_elf32_compat_vdso(output, inputs, input_count,
-                                                 &options, stderr);
-        }
-        return minild_link_shared_elf64_riscv_inputs_options(output,
-                                                              inputs,
-                                                              input_count,
-                                                              &options,
-                                                              stderr);
+        return minild_link_shared_inputs_target(
+            output, inputs, input_count, &options, emulation, stderr);
     }
 
     {

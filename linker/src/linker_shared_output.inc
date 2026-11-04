@@ -10,7 +10,7 @@ static bool shared_write_object(MiniLdState *state,
                                 const MiniLdSharedImage *shared,
                                 const char *path,
                                 uint64_t entry) {
-    MiniLdFinalElf64Image final = {0};
+    MiniLdFinalImage final = {0};
     size_t image_size;
     bool ok = false;
 
@@ -37,7 +37,7 @@ static bool shared_write_object(MiniLdState *state,
     /* GNU nm reads the final .symtab from the vDSO, not only .dynsym.
      * Synthetic non-ALLOC names and symbols are after the LOAD image.
      * Dynamic section-header links remain ET_DYN-specific policy. */
-    if (!minild_final_elf64_image_prepare(state, layout, output_plan,
+    if (!minild_final_image_prepare(state, layout, output_plan,
                                           &final, image_size,
                                           shared->version_script,
                                           MINILD_FINAL_STRTAB_FIRST,
@@ -46,7 +46,7 @@ static bool shared_write_object(MiniLdState *state,
     }
     minild_shared_output_section_links(output_plan, shared,
                                         final.tables.headers);
-    ok = minild_elf64_write_image(state, layout, output_plan, &final.program,
+    ok = minild_final_write_image(state, layout, output_plan, &final.program,
                                   &final.tables, &final.symbols,
                                   ET_DYN, entry, path);
 
@@ -57,7 +57,7 @@ done:
     if (!ok) {
         (void)remove(path);
     }
-    minild_final_elf64_image_destroy(&final);
+    minild_final_image_destroy(&final);
     return ok;
 }
 

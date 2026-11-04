@@ -48,9 +48,13 @@ static bool minild_shared_program_plan_build(
     MiniLdProgramPlan *plan) {
     MiniLdSharedTlsSegment tls;
     size_t phnum;
+    size_t elf_header_size = state->target->elf_class == ELFCLASS32
+                                 ? sizeof(Elf32_Ehdr) : sizeof(Elf64_Ehdr);
+    size_t program_header_size = state->target->elf_class == ELFCLASS32
+                                     ? sizeof(Elf32_Phdr) : sizeof(Elf64_Phdr);
     size_t program_index = 0U;
     size_t i;
-    Elf64_Phdr *programs;
+    MiniElfProgramHeader *programs;
 
     memset(plan, 0, sizeof(*plan));
     if (!shared_tls_segment(layout, output_plan, &tls)) {
@@ -67,7 +71,7 @@ static bool minild_shared_program_plan_build(
             (layout->have_rw ? 1U : 0U) +
             (tls.present ? 1U : 0U) + 1U;
     if (phnum > UINT16_MAX ||
-        phnum > (SIZE_MAX - sizeof(Elf64_Ehdr)) / sizeof(Elf64_Phdr)) {
+        phnum > (SIZE_MAX - elf_header_size) / program_header_size) {
         fprintf(state->diagnostics, "minic-ld: too-many-shared-segments\n");
         return false;
     }
@@ -80,7 +84,7 @@ static bool minild_shared_program_plan_build(
     programs = plan->entries;
 
     if (shared->pie) {
-        Elf64_Phdr *ph = &programs[program_index++];
+        MiniElfProgramHeader *ph = &programs[program_index++];
         uint64_t header_vaddr;
 
         if (!layout->have_rx ||
@@ -91,17 +95,17 @@ static bool minild_shared_program_plan_build(
         }
         header_vaddr =
             layout->rx_vaddr - (uint64_t)layout->rx_file_offset;
-        ph->p_type = PT_PHDR;
-        ph->p_flags = PF_R;
-        ph->p_offset = sizeof(Elf64_Ehdr);
-        ph->p_vaddr = header_vaddr + sizeof(Elf64_Ehdr);
-        ph->p_paddr = ph->p_vaddr;
-        ph->p_filesz = phnum * sizeof(Elf64_Phdr);
-        ph->p_memsz = ph->p_filesz;
-        ph->p_align = sizeof(Elf64_Addr);
+        ph->type = PT_PHDR;
+        ph->flags = PF_R;
+        ph->offset = elf_header_size;
+        ph->virtual_address = header_vaddr + elf_header_size;
+        ph->physical_address = ph->virtual_address;
+        ph->file_size = phnum * program_header_size;
+        ph->memory_size = ph->file_size;
+        ph->alignment = state->target->elf_class == ELFCLASS32 ? 4U : 8U;
     }
     if (shared->have_interp) {
-        Elf64_Phdr *ph = &programs[program_index++];
+        MiniElfProgramHeader *ph = &programs[program_index++];
         const MiniLdSection *interp;
 
         if (shared->interp_section >= state->work.count ||
@@ -111,17 +115,17 @@ static bool minild_shared_program_plan_build(
             goto failed;
         }
         interp = &state->work.sections[shared->interp_section];
-        ph->p_type = PT_INTERP;
-        ph->p_flags = PF_R;
-        ph->p_offset = layout->work[shared->interp_section].file_offset;
-        ph->p_vaddr = layout->work[shared->interp_section].vaddr;
-        ph->p_paddr = ph->p_vaddr;
-        ph->p_filesz = interp->size;
-        ph->p_memsz = interp->size;
-        ph->p_align = 1U;
+        ph->type = PT_INTERP;
+        ph->flags = PF_R;
+        ph->offset = layout->work[shared->interp_section].file_offset;
+        ph->virtual_address = layout->work[shared->interp_section].vaddr;
+        ph->physical_address = ph->virtual_address;
+        ph->file_size = interp->size;
+        ph->memory_size = interp->size;
+        ph->alignment = 1U;
     }
     if (layout->have_rx) {
-        Elf64_Phdr *ph = &programs[program_index++];
+        MiniElfProgramHeader *ph = &programs[program_index++];
         uint64_t header_vaddr;
 
         if ((uint64_t)layout->rx_file_offset > layout->rx_vaddr ||
@@ -133,40 +137,40 @@ static bool minild_shared_program_plan_build(
         }
         header_vaddr =
             layout->rx_vaddr - (uint64_t)layout->rx_file_offset;
-        ph->p_type = PT_LOAD;
-        ph->p_flags = PF_R | PF_X;
-        ph->p_offset = 0U;
-        ph->p_vaddr = header_vaddr;
-        ph->p_paddr = header_vaddr;
-        ph->p_filesz =
+        ph->type = PT_LOAD;
+        ph->flags = PF_R | PF_X;
+        ph->offset = 0U;
+        ph->virtual_address = header_vaddr;
+        ph->physical_address = header_vaddr;
+        ph->file_size =
             (uint64_t)(layout->rx_file_offset + layout->rx_file_size);
-        ph->p_memsz = ph->p_filesz;
-        ph->p_align = 4096U;
+        ph->memory_size = ph->file_size;
+        ph->alignment = state->target->page_size;
     }
     if (layout->have_rw) {
-        Elf64_Phdr *ph = &programs[program_index++];
-        ph->p_type = PT_LOAD;
-        ph->p_flags = PF_R | PF_W;
-        ph->p_offset = layout->rw_file_offset;
-        ph->p_vaddr = layout->rw_vaddr;
-        ph->p_paddr = layout->rw_vaddr;
-        ph->p_filesz = layout->rw_file_size;
-        ph->p_memsz = layout->rw_mem_size;
-        ph->p_align = 4096U;
+        MiniElfProgramHeader *ph = &programs[program_index++];
+        ph->type = PT_LOAD;
+        ph->flags = PF_R | PF_W;
+        ph->offset = layout->rw_file_offset;
+        ph->virtual_address = layout->rw_vaddr;
+        ph->physical_address = layout->rw_vaddr;
+        ph->file_size = layout->rw_file_size;
+        ph->memory_size = layout->rw_mem_size;
+        ph->alignment = state->target->page_size;
     }
     if (tls.present) {
-        Elf64_Phdr *ph = &programs[program_index++];
-        ph->p_type = PT_TLS;
-        ph->p_flags = PF_R;
-        ph->p_offset = tls.file_offset;
-        ph->p_vaddr = tls.vaddr;
-        ph->p_paddr = tls.vaddr;
-        ph->p_filesz = tls.filesz;
-        ph->p_memsz = tls.memsz;
-        ph->p_align = tls.align;
+        MiniElfProgramHeader *ph = &programs[program_index++];
+        ph->type = PT_TLS;
+        ph->flags = PF_R;
+        ph->offset = tls.file_offset;
+        ph->virtual_address = tls.vaddr;
+        ph->physical_address = tls.vaddr;
+        ph->file_size = tls.filesz;
+        ph->memory_size = tls.memsz;
+        ph->alignment = tls.align;
     }
     {
-        Elf64_Phdr *ph = &programs[program_index++];
+        MiniElfProgramHeader *ph = &programs[program_index++];
         MiniLdSection *dynamic = &state->work.sections[shared->dynamic_section];
         size_t offset = layout->work[shared->dynamic_section].file_offset;
 
@@ -175,14 +179,14 @@ static bool minild_shared_program_plan_build(
                     "minic-ld: missing-shared-dynamic-file-offset\n");
             goto failed;
         }
-        ph->p_type = PT_DYNAMIC;
-        ph->p_flags = shared->layout_script != NULL ? PF_R : PF_R | PF_W;
-        ph->p_offset = offset;
-        ph->p_vaddr = layout->work[shared->dynamic_section].vaddr;
-        ph->p_paddr = ph->p_vaddr;
-        ph->p_filesz = dynamic->size;
-        ph->p_memsz = dynamic->size;
-        ph->p_align = 8U;
+        ph->type = PT_DYNAMIC;
+        ph->flags = shared->layout_script != NULL ? PF_R : PF_R | PF_W;
+        ph->offset = offset;
+        ph->virtual_address = layout->work[shared->dynamic_section].vaddr;
+        ph->physical_address = ph->virtual_address;
+        ph->file_size = dynamic->size;
+        ph->memory_size = dynamic->size;
+        ph->alignment = 8U;
     }
 
     if (shared->layout_script != NULL) {
@@ -225,22 +229,22 @@ static bool minild_shared_program_plan_build(
             goto failed;
         }
         {
-            Elf64_Phdr *ph = &programs[program_index++];
-            ph->p_type = PT_NOTE;
-            ph->p_flags = PF_R;
-            ph->p_offset = note_offset;
-            ph->p_vaddr = note_addr;
-            ph->p_paddr = note_addr;
-            ph->p_filesz = note_end - note_addr;
-            ph->p_memsz = ph->p_filesz;
-            ph->p_align = 4U;
+            MiniElfProgramHeader *ph = &programs[program_index++];
+            ph->type = PT_NOTE;
+            ph->flags = PF_R;
+            ph->offset = note_offset;
+            ph->virtual_address = note_addr;
+            ph->physical_address = note_addr;
+            ph->file_size = note_end - note_addr;
+            ph->memory_size = ph->file_size;
+            ph->alignment = 4U;
         }
     }
     if (shared->have_eh_frame_hdr ||
         shared->layout_script != NULL) {
-        Elf64_Phdr *ph = &programs[program_index++];
+        MiniElfProgramHeader *ph = &programs[program_index++];
         memset(ph, 0, sizeof(*ph));
-        ph->p_type = PT_GNU_EH_FRAME;
+        ph->type = PT_GNU_EH_FRAME;
         if (shared->have_eh_frame_hdr) {
             size_t h = shared->eh_frame_hdr_section;
             if (h >= state->work.count ||
@@ -249,17 +253,17 @@ static bool minild_shared_program_plan_build(
                         "minic-ld: missing-eh-frame-hdr-file-offset\n");
                 goto failed;
             }
-            ph->p_flags = PF_R;
-            ph->p_offset = layout->work[h].file_offset;
-            ph->p_vaddr = layout->work[h].vaddr;
-            ph->p_paddr = ph->p_vaddr;
-            ph->p_filesz = state->work.sections[h].size;
-            ph->p_memsz = ph->p_filesz;
-            ph->p_align = 4U;
+            ph->flags = PF_R;
+            ph->offset = layout->work[h].file_offset;
+            ph->virtual_address = layout->work[h].vaddr;
+            ph->physical_address = ph->virtual_address;
+            ph->file_size = state->work.sections[h].size;
+            ph->memory_size = ph->file_size;
+            ph->alignment = 4U;
         } else {
             /* GNU's explicit-script header when all vDSO CFI FDEs
              * disappear: 0-byte PT_GNU_EH_FRAME, no invented section. */
-            ph->p_align = 8U;
+            ph->alignment = 8U;
         }
     }
     if (program_index != phnum) {
@@ -278,27 +282,27 @@ failed:
 static void minild_shared_output_section_links(
     const MiniLdOutputPlan *output_plan,
     const MiniLdSharedImage *shared,
-    Elf64_Shdr *section_headers) {
+    MiniElfSection *section_headers) {
     size_t i;
     for (i = 0U; i < output_plan->count; ++i) {
-        Elf64_Shdr *sh = &section_headers[i + 1U];
+        MiniElfSection *sh = &section_headers[i + 1U];
 
         if (i + 1U == minild_output_shndx(output_plan,
                                            shared->dynsym_section)) {
-            sh->sh_link = (Elf64_Word)
+            sh->link = (uint32_t)
                 minild_output_shndx(output_plan, shared->dynstr_section);
-            sh->sh_info = 1U;
+            sh->info = 1U;
         } else if (shared->version_script != NULL &&
                    i + 1U == minild_output_shndx(output_plan,
                                                   shared->versym_section)) {
-            sh->sh_link = (Elf64_Word)
+            sh->link = (uint32_t)
                 minild_output_shndx(output_plan, shared->dynsym_section);
         } else if (shared->version_script != NULL &&
                    i + 1U == minild_output_shndx(output_plan,
                                                   shared->verdef_section)) {
-            sh->sh_link = (Elf64_Word)
+            sh->link = (uint32_t)
                 minild_output_shndx(output_plan, shared->dynstr_section);
-            sh->sh_info = 2U;
+            sh->info = 2U;
         } else if (i + 1U == minild_output_shndx(output_plan,
                                                   shared->hash_section) ||
                    (shared->have_gnu_hash &&
@@ -308,11 +312,11 @@ static void minild_shared_output_section_links(
                                                   shared->rela_section) ||
                    i + 1U == minild_output_shndx(output_plan,
                                                   shared->rela_plt_section)) {
-            sh->sh_link = (Elf64_Word)
+            sh->link = (uint32_t)
                 minild_output_shndx(output_plan, shared->dynsym_section);
         } else if (i + 1U == minild_output_shndx(output_plan,
                                                   shared->dynamic_section)) {
-            sh->sh_link = (Elf64_Word)
+            sh->link = (uint32_t)
                 minild_output_shndx(output_plan, shared->dynstr_section);
         }
     }

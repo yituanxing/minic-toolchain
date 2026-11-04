@@ -479,12 +479,12 @@ static bool minild_output_plan_section_headers(
     const MiniLdState *state,
     const MiniLdOutputPlan *plan,
     const uint32_t *name_offsets,
-    Elf64_Shdr *headers) {
+    MiniElfSection *headers) {
     size_t i;
 
     for (i = 0U; i < plan->count; ++i) {
         const MiniLdOutputSection *section = &plan->sections[i];
-        Elf64_Shdr *header = &headers[i + 1U];
+        MiniElfSection *header = &headers[i + 1U];
         size_t j;
 
         if (section->type != SHT_NOBITS && section->size != 0U &&
@@ -494,21 +494,21 @@ static bool minild_output_plan_section_headers(
                     section->name);
             return false;
         }
-        header->sh_name = name_offsets[i];
-        header->sh_type = section->type;
-        header->sh_flags = section->flags;
-        header->sh_addr = (section->flags & SHF_ALLOC) != 0U
+        header->name = name_offsets[i];
+        header->type = section->type;
+        header->flags = section->flags;
+        header->address = (section->flags & SHF_ALLOC) != 0U
                               ? section->vaddr : 0U;
-        header->sh_offset = section->type == SHT_NOBITS ||
-                                    section->size == 0U
-                                ? 0U : section->file_offset;
-        header->sh_size = section->size;
-        header->sh_addralign = section->align == 0U ? 1U : section->align;
-        header->sh_entsize = section->entsize;
+        header->offset = section->type == SHT_NOBITS ||
+                                  section->size == 0U
+                             ? 0U : section->file_offset;
+        header->size = section->size;
+        header->alignment = section->align == 0U ? 1U : section->align;
+        header->entry_size = section->entsize;
         for (j = 0U; j < section->member_count; ++j) {
             const MiniLdSection *part = &state->work.sections[section->members[j]];
             if (part->has_link_order_target) {
-                header->sh_link = (Elf64_Word)
+                header->link = (uint32_t)
                     plan->work_shndx[part->link_order_target];
                 break;
             }
