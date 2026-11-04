@@ -1636,7 +1636,7 @@ int minild_link_shared_elf64_riscv_inputs_options(
                                         : MINILD_PROJECTION_MERGED) ||
         (script_path != NULL && !minild_restore_input_order(&state)) ||
         (strip_debug && !shared_strip_debug_preflight(&state)) ||
-        !static_allocate_common(&state) ||
+        !minild_allocate_common(&state) ||
         (script_path != NULL &&
          !minild_shared_prune_script_inputs(&state, &layout_script)) ||
         (script_path != NULL &&

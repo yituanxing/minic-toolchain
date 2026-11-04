@@ -11,7 +11,10 @@ format decisions, and runtime behavior remain unchanged.
 
 | Included module (in order) | Owned output-stage work | Reason for boundary |
 | --- | --- | --- |
-| `linker_layout.inc` | RISC-V relocation encoding, static GOT and relaxation, static/shared address layout, linker-script expression and section placement | Computes and mutates working-section placement before ELF output is serialized. |
+| `linker_layout.inc` | Physical Layout state, RISC-V fixup/ALIGN helpers and default ET_EXEC/ET_DYN placement | Owns the common layout contract and includes the stage-specific implementations in dependency order. |
+| `linker_script_layout.inc` | Script expression/provenance, input-section matching, command placement, BYTE/fill and script VMA/LMA/file offsets | Operates on the one `MiniLdLayout` before output-section projection. |
+| `linker_vdso_layout.inc` | vDSO-specific PHDR membership and script file-base remapping | Keeps ET_DYN/vDSO policy separate from the general script evaluator. |
+| `linker_layout_finalize.inc` | Post-layout runtime-boundary symbols, static GOT materialization, layout symbol resolution and static relocation application | Runs only after the selected layout producer; does not create another layout owner. |
 | `linker_output_plan.inc` | `MiniLdOutputPlan`, surviving output-section identity, non-alloc placement, section headers and bytes | Projects the placed working sections into output sections; does not own original input identities. |
 | `linker_final_symbols.inc` | `MiniLdFinalSymbols` plus `MiniLdFinalSectionTables` projection | Reads canonical symbols and the OutputPlan; builds the shared final ELF symbol/name/section-header trailer. |
 | `linker_program_plan.inc` | Common `MiniLdProgramPlan` lifetime and final PHDR range validation | Both writers consume one output-neutral program-header contract, while each retains its own segment policy. |
@@ -22,14 +25,31 @@ format decisions, and runtime behavior remain unchanged.
 
 `linker_core.inc` defines the shared core types and include order, while
 `linker_admission.inc` owns source-only ELF/archive/COMDAT admission.
+`linker_common_allocation.inc` owns post-projection COMMON allocation for
+both ET_EXEC and ET_DYN, before either layout stage starts.
 `linker_input.inc`, `linker_work_sections.inc` and
 `linker_relocations.inc` own their separate state lifetimes. The
 `linker_eh_frame.inc` and
 `linker_version.inc` includes remain nested in the shared-output phase at
-the same relative point as before.  `shared_build_layout` and
-`shared_build_vdso_script_layout` intentionally remain with layout helpers
-even though the shared-output writer calls them: this split does not yet
-invert those intra-translation-unit dependencies.
+the same relative point as before. `shared_build_layout` stays with common
+default placement; `shared_build_vdso_script_layout` stays with the vDSO
+script-layout policy. Both are invoked later by the shared-output driver,
+without reversing their dependencies or making extra translation units.
+
+### Layout owner split (2026-11-04)
+
+The previous `linker_layout.inc` mixed default placement, RISC-V ALIGN
+relaxation, linker-script evaluation, vDSO policy and final GOT/symbol work
+in one implementation body. These responsibilities now have explicit
+physical owners, preserving the **same `MiniLdLayout` state and the same
+single-translation-unit ordering**. The RISC-V fixup owner and static
+relocation scan still precede layout; the final static relocation apply
+still follows the layout symbol resolver. No linker-script syntax, ISA,
+relocation type or ELF output behavior is added.
+
+The source-defined COMMON allocation runs after input projection and before
+both static and shared layout. It belongs to work/symbol preparation rather
+than physical placement, so it no longer lives in the layout implementation.
 
 ## Invariants retained
 

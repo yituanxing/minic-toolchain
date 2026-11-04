@@ -1277,7 +1277,7 @@ static int minild_link_static_pipeline(
                               MINILD_PROJECTION_MERGED) ||
         ((garbage_collect || have_script) &&
          !minild_restore_input_order(&state)) ||
-        !static_allocate_common(&state) ||
+        !minild_allocate_common(&state) ||
         (garbage_collect && have_script &&
          !minild_select_script_inputs(&state, &script)) ||
         (garbage_collect && !minild_gc_prune_static(&state, entry_symbol)) ||

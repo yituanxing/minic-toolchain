@@ -556,6 +556,8 @@ static bool find_or_add_section(MiniLdState *state,
                                      false, section_out);
 }
 
+#include "linker_common_allocation.inc"
+
 #include "linker_admission.inc"
 static bool write_output(MiniLdState *state, const char *path) {
     MiniElfWriteSection *sections = NULL;
