@@ -171,5 +171,15 @@ for label in 'Class:' 'Data:' 'Type:' 'Machine:'; do
     exit 77
   fi
 done
+# A matching ELF identity alone is insufficient for a Linux link verdict:
+# validate entrypoint, load congruence/file bounds, all SHF_ALLOC placement,
+# and exact GNU/MiniLD allocated section geometry before reporting PASS.
+if ! python3 tools/ci/minild-final-elf-audit.py "$gnu_out" "$mini_out" \
+    >"$evidence/elf-structure.stdout" 2>"$evidence/elf-structure.stderr"; then
+  cat "$evidence/elf-structure.stderr" >&2
+  echo 'MINILD_LINUX_FINAL_REPLAY=FAIL structural_ELF_differential' >&2
+  exit 78
+fi
+cat "$evidence/elf-structure.stdout"
 sha256sum "$gnu_out" "$mini_out" >"$evidence/replayed-ELF.sha256"
 printf 'MINILD_LINUX_FINAL_REPLAY=PASS real_kallsyms1=true GNU_and_MiniLD=true SHA_verified_GNU_Kbuild_inputs=true vmlinux_Image_QEMU=NOT_RUN\n'
