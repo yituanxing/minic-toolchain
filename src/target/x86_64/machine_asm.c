@@ -5720,9 +5720,10 @@ bool minic_x86_64_emit_structured_asm(
           info->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_GENERIC_STRUCTURED)))
         return false;
     /* Only the target qualifier can publish an opcode family. Core transports
-     * the result without interpreting ISA data; the source_form_id fingerprint
-     * stays independent. Unknown IDs fail closed. Every enumerated family is
-     * ID-gated before machine-native template and Core-operand validation. */
+     * the result without interpreting ISA data; the GNU source fingerprint
+     * stays exclusively in Source admission. Unknown IDs fail closed. Every
+     * enumerated family is ID-gated before machine-native template and
+     * Core-operand validation. */
     if (info->target_machine_form_id != MINIC_X86_MACHINE_ASM_NONE) {
         if (info->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED)
             return false;

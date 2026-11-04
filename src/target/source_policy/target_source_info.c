@@ -109,6 +109,7 @@ static const MinicTargetSourceDescriptor minic_source_x86_64 = {
         .language_type_capabilities = MINIC_TARGET_LANG_EXTENDED_FLOAT_DECLARATIONS |
             MINIC_TARGET_LANG_MS_X64_FUNCTION_POINTER_DECLARATIONS |
             MINIC_TARGET_LANG_GNU_FIXED_VECTOR_STORAGE,
+        .gnu_fixed_vector_max_storage_bytes = 16U,
         .gnu_sizeof_void_is_one = true,
         .gnu_sizeof_function_is_one = true,
     },

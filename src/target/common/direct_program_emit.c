@@ -61,7 +61,8 @@ static bool direct_emit_module_global(FILE *out,
                                       const MinicCoreModuleGlobal *obj) {
     MinicModuleElfGlobalPlan plan;
     if (out == NULL || obj == NULL || obj->name == NULL ||
-        obj->name[0] == '\0' || obj->is_extern ||
+        obj->name[0] == '\0' ||
+        obj->definition_kind == MINIC_CORE_MODULE_DEFINITION_DECLARATION ||
         obj->alias_target_index != SIZE_MAX ||
         !minic_multi_module_elf_global_plan_build(
             obj, NULL, true, direct_module_data_directive, false, 8U, &plan))
@@ -86,7 +87,7 @@ static bool direct_visit_module_global(
     (void)index;
     if (out == NULL || module == NULL || ctx == NULL || obj == NULL ||
         ctx->config == NULL || !obj->emittable) return false;
-    if (!obj->is_extern)
+    if (obj->definition_kind != MINIC_CORE_MODULE_DEFINITION_DECLARATION)
         success = direct_emit_module_global(out, obj);
     else if (obj->alias_target_index != SIZE_MAX)
         success = minic_multi_elf_emit_module_object_alias(

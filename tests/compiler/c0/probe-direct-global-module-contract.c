@@ -99,9 +99,9 @@ int main(void) {
     MinicCoreModuleGlobal globals[2] = {
         {.name = "owned", .emittable = true, .storage_size = 4U,
          .storage_alignment = 4U, .fragments = &zero, .fragment_count = 1U,
-         .is_zero_initialized = true,
+         .data_policy = MINIC_CORE_MODULE_DATA_ZERO_NUMERIC,
          .alias_target_index = SIZE_MAX, .owner_function_index = SIZE_MAX},
-        {.name = "external", .is_extern = true,
+        {.name = "external", .definition_kind = MINIC_CORE_MODULE_DEFINITION_DECLARATION,
          .alias_target_index = SIZE_MAX, .owner_function_index = SIZE_MAX}
     };
     MinicCoreModule module = {
@@ -162,13 +162,11 @@ int main(void) {
     CHECK_CASE("zero_visible_byte", true, true, true, true, NULL, NULL);
     bits.bits = 42U;
     CHECK_CASE("zero_tag_nonzero_bits", false, false, false, false, NULL, NULL);
-    object->is_zero_initialized = false;
+    object->data_policy = MINIC_CORE_MODULE_DATA_MATERIALIZED;
     CHECK_CASE("default_bss_nonzero", false, false, false, false, NULL, NULL);
-    object->is_zero_initialized = true;
-    object->is_tentative = true;
+    object->data_policy = (MinicCoreModuleDataPolicy)3;
     CHECK_CASE("conflicting_flags", false, false, false, false, NULL, NULL);
-    object->is_tentative = false;
-    object->is_zero_initialized = false;
+    object->data_policy = MINIC_CORE_MODULE_DATA_MATERIALIZED;
     object->default_section = MINIC_CORE_MODULE_SECTION_DATA;
     object->core_type_id = word_id;
     object->storage_size = object->storage_alignment = bits.byte_count = 4U;
@@ -184,12 +182,13 @@ int main(void) {
     object->fragments = &reloc;
     object->references = &reference;
     object->reference_count = 1U;
-    object->is_zero_initialized = true;
+    object->data_policy = MINIC_CORE_MODULE_DATA_ZERO_NUMERIC;
     CHECK_CASE("zero_tag_symbol_relocation", true, false, true, true, NULL, NULL);
-    object->is_tentative = true;
-    object->is_zero_initialized = false;
+    object->definition_kind = MINIC_CORE_MODULE_DEFINITION_ZERO_FILL;
+    object->data_policy = MINIC_CORE_MODULE_DATA_ZERO_ONLY;
     CHECK_CASE("tentative_relocation", false, false, false, false, NULL, NULL);
-    object->is_tentative = false;
+    object->definition_kind = MINIC_CORE_MODULE_DEFINITION_REGULAR;
+    object->data_policy = MINIC_CORE_MODULE_DATA_MATERIALIZED;
     object->default_section = MINIC_CORE_MODULE_SECTION_BSS;
     CHECK_CASE("bss_relocation", false, false, false, false, NULL, NULL);
     object->default_section = MINIC_CORE_MODULE_SECTION_DATA;
@@ -224,11 +223,12 @@ int main(void) {
     object->storage_size = object->storage_alignment = reloc.byte_count = 4U;
     object->references = &reference;
     object->reference_count = 1U;
-    object->is_zero_initialized = true;
+    object->data_policy = MINIC_CORE_MODULE_DATA_ZERO_NUMERIC;
     if (!minic_core_module_verify_global(&module, 0U) ||
         !probe_emit(PROBE_RV32, &module, true, NULL)) goto done;
 
-    object->is_extern = true;
+    object->definition_kind = MINIC_CORE_MODULE_DEFINITION_DECLARATION;
+    object->data_policy = MINIC_CORE_MODULE_DATA_MATERIALIZED;
     object->storage_size = 0U;
     object->storage_alignment = 0U;
     object->fragments = NULL;

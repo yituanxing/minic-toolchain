@@ -18,6 +18,7 @@
 #include "target/target_info.h"
 
 #include <errno.h>
+#include <limits.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdarg.h>
@@ -74,15 +75,17 @@ static void minic_set_diagnostic(MinicDiagnostic *diagnostic,
 
 static bool minic_validate_core_functions(const char *input_path,
                                           const MinicCoreFunctionSet *set,
+                                          const MinicC0Program *program,
                                           MinicDiagnostic *diagnostic) {
     size_t function_index;
     const bool report_all = getenv("MINIC_CORE_FAILURE_CENSUS") != NULL;
     bool found_failure = false;
 
-    if (set == NULL) {
+    if (set == NULL || program == NULL) {
         return false;
     }
     if (set->function_count != set->module.function_count ||
+        set->function_count != program->function_count ||
         (set->function_count != 0U &&
          (set->functions == NULL || set->statuses == NULL ||
           set->module.function_symbols == NULL))) {
@@ -92,9 +95,18 @@ static bool minic_validate_core_functions(const char *input_path,
     }
     for (function_index = 0U; function_index < set->function_count; ++function_index) {
         const MinicCoreModuleFunctionSymbol *function;
+        const MinicFunction *source_function;
+        const char *source_name;
+        int source_name_length;
         MinicCoreLowerStatus status;
 
         function = &set->module.function_symbols[function_index];
+        source_function = minic_c0_program_function(program, function_index);
+        source_name = source_function != NULL && source_function->name != NULL
+            ? source_function->name : "?";
+        source_name_length = source_function != NULL && source_function->name != NULL
+            ? (source_function->name_length > (size_t)INT_MAX
+                ? INT_MAX : (int)source_function->name_length) : 1;
         if (function == NULL) {
             minic_set_diagnostic(
                 diagnostic, input_path, 1U, 1U, "Core lowering cannot access function");
@@ -120,19 +132,19 @@ static bool minic_validate_core_functions(const char *input_path,
          * semantics, nor does it mask any previously rejected function. */
         if (report_all) {
             (void)fprintf(stderr,
-                "MINIC_CORE_FUNCTION_FAILURE kind=%s index=%zu function=%s\n",
+                "MINIC_CORE_FUNCTION_FAILURE kind=%s index=%zu function=%.*s\n",
                 status == MINIC_CORE_LOWER_UNSUPPORTED ? "UNSUPPORTED" : "ERROR",
-                function_index, function->source_name != NULL ? function->source_name : "?");
+                function_index, source_name_length, source_name);
         }
         if (!found_failure) {
             if (status == MINIC_CORE_LOWER_UNSUPPORTED) {
                 minic_set_diagnostic(diagnostic, input_path, 1U, 1U,
-                    "Core IR does not yet support function '%s'",
-                    function->source_name);
+                    "Core IR does not yet support function '%.*s'",
+                    source_name_length, source_name);
             } else {
                 minic_set_diagnostic(diagnostic, input_path, 1U, 1U,
-                    "Core IR lowering failed for function '%s'",
-                    function->source_name);
+                    "Core IR lowering failed for function '%.*s'",
+                    source_name_length, source_name);
             }
             found_failure = true;
         }
@@ -376,7 +388,7 @@ int minic_compile_preprocessed_file_for_target(const char *input_path,
     if (success) {
         minic_bootstrap_trace_stage(input_path, "core-validate", "begin", program.function_count);
         success =
-            minic_validate_core_functions(input_path, &core_set, diagnostic);
+            minic_validate_core_functions(input_path, &core_set, &program, diagnostic);
         minic_bootstrap_trace_stage(input_path,
                                     "core-validate",
                                     success ? "end-ok" : "end-fail",

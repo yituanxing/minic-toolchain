@@ -179,7 +179,9 @@ static int verify_language_admission(void) {
             minic_target_info_language_type_supported(
                 t, MINIC_TYPE_BASE_FLOAT128) != has_extended_float ||
             minic_target_info_language_type_supported(
-                t, MINIC_TYPE_BASE_FLOAT32X) != has_extended_float) {
+                t, MINIC_TYPE_BASE_FLOAT32X) != has_extended_float ||
+            t->source_info.gnu_fixed_vector_max_storage_bytes !=
+                (i == 2U ? 16U : 0U)) {
             (void)fprintf(stderr, "FAIL target language/varargs contract: %s\\n", names[i]);
             return 1;
         }

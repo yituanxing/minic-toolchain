@@ -193,8 +193,6 @@ static void check_machine_boundary(ProbeArch arch) {
     form.operand_plan_owner = proof.owner;
     form.target_machine_form_id = proof.target_machine_form_id;
     form.target_machine_form_variant = proof.target_machine_form_variant;
-    form.source_form_id = proof.source_form_id;
-    form.source_output_count = proof.output_count;
     ins.kind = MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM;
     ins.core_type_id = void_id;
     ins.result = MINIC_CORE_VALUE_INVALID;
@@ -289,7 +287,6 @@ static void check_machine_boundary(ProbeArch arch) {
     form.operand_plan_owner = MINIC_ASM_OPERAND_PLAN_GENERIC_STRUCTURED;
     form.target_machine_form_id = 0U;
     form.target_machine_form_variant = 0U;
-    form.source_form_id = 0U;
     if (arch == PROBE_X86) {
         form.template_text = "movq %%rbx, %0";
         form.template_length = strlen(form.template_text);

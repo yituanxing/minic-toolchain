@@ -305,7 +305,8 @@ static bool minic_program_emit_undefined_symbol_visibility_module(
     {
         for (index = 0U; index < module->global_count; ++index) {
             const MinicCoreModuleGlobal *object = &module->globals[index];
-            if (object->is_extern && !object->is_internal &&
+            if (object->definition_kind == MINIC_CORE_MODULE_DEFINITION_DECLARATION &&
+                !object->is_internal &&
                 object->alias_target_index == SIZE_MAX) {
                 const char *directive =
                     minic_multi_elf_module_visibility_directive(object->visibility);

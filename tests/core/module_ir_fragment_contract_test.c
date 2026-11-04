@@ -71,7 +71,8 @@ static int verify_module_provenance_edges(const MinicCoreModule *baseline) {
 static int verify_module_alias_index_ownership(const MinicCoreModule *baseline) {
     MinicCoreModuleGlobal objects[2] = {
         {.name = "real_object", .alias_target_index = SIZE_MAX},
-        {.name = "object_alias", .is_extern = true, .alias_target_index = 0U}
+        {.name = "object_alias", .definition_kind = MINIC_CORE_MODULE_DEFINITION_DECLARATION,
+         .alias_target_index = 0U}
     };
     MinicCoreModuleFunctionSymbol functions[2] = {
         {.name = "real_function", .is_defined = true,
@@ -93,12 +94,13 @@ static int verify_module_alias_index_ownership(const MinicCoreModule *baseline) 
     objects[1].alias_target_index = 1U;
     CHECK(!minic_core_module_verify(&module), 42); /* self alias */
     objects[1].alias_target_index = 0U;
-    objects[0].is_extern = true;
+    objects[0].definition_kind = MINIC_CORE_MODULE_DEFINITION_DECLARATION;
     CHECK(!minic_core_module_verify(&module), 43); /* undefined owner */
-    objects[0].is_extern = false;
-    objects[0].is_tentative = true;
+    objects[0].definition_kind = MINIC_CORE_MODULE_DEFINITION_ZERO_FILL;
+    objects[0].data_policy = MINIC_CORE_MODULE_DATA_ZERO_ONLY;
     CHECK(!minic_core_module_verify(&module), 44); /* tentative owner */
-    objects[0].is_tentative = false;
+    objects[0].definition_kind = MINIC_CORE_MODULE_DEFINITION_REGULAR;
+    objects[0].data_policy = MINIC_CORE_MODULE_DATA_MATERIALIZED;
     objects[0].alias_target_index = 1U;
     CHECK(!minic_core_module_verify(&module), 45); /* chained alias */
     objects[0].alias_target_index = SIZE_MAX;
@@ -127,9 +129,9 @@ static int verify_module_alias_index_ownership(const MinicCoreModule *baseline) 
 
 static int verify_module_function_symbol_range(const MinicCoreModule *baseline) {
     MinicCoreModuleFunctionSymbol functions[3] = {
-        {.name = "shared", .source_name = "external_c_name",
+        {.name = "shared",
          .specialization_source_index = SIZE_MAX, .alias_target_index = SIZE_MAX},
-        {.name = "shared", .source_name = "static_c_name", .is_defined = true,
+        {.name = "shared", .is_defined = true,
          .is_internal = true, .is_referenced = true,
          .specialization_source_index = SIZE_MAX, .alias_target_index = SIZE_MAX},
         {.name = "elsewhere", .is_defined = true,
@@ -188,9 +190,10 @@ static int verify_module_emitted_symbol_namespace(
          .storage_alignment = 1U, .fragments = &byte_payload,
          .fragment_count = 1U, .alias_target_index = SIZE_MAX,
          .owner_function_index = SIZE_MAX},
-        {.name = "object_alias", .is_extern = true, .emittable = true,
+        {.name = "object_alias", .definition_kind = MINIC_CORE_MODULE_DEFINITION_DECLARATION,
+         .emittable = true,
          .alias_target_index = 0U, .owner_function_index = SIZE_MAX},
-        {.name = "declaration_only", .is_extern = true,
+        {.name = "declaration_only", .definition_kind = MINIC_CORE_MODULE_DEFINITION_DECLARATION,
          .alias_target_index = SIZE_MAX, .owner_function_index = SIZE_MAX}
     };
     MinicCoreModule module = *baseline;
@@ -247,9 +250,9 @@ static int verify_module_emitted_symbol_namespace(
     functions[3].is_internal = false;
     objects[2].name = "real_function";
     CHECK(minic_core_module_verify(&module), 86); /* extern-only has no symbol */
-    objects[2].is_extern = false;
+    objects[2].definition_kind = MINIC_CORE_MODULE_DEFINITION_REGULAR;
     CHECK(minic_core_module_verify(&module), 87); /* pruned object has no symbol */
-    objects[2].is_extern = true;
+    objects[2].definition_kind = MINIC_CORE_MODULE_DEFINITION_DECLARATION;
     functions[1].is_internal = true;
     functions[1].is_referenced = false;
     functions[1].name = "another_function";
@@ -282,7 +285,7 @@ static int verify_materialized_relocation_edges(
          .references = references, .reference_count = 2U,
          .fragments = fragments, .fragment_count = 2U,
          .alias_target_index = SIZE_MAX, .owner_function_index = SIZE_MAX},
-        {.name = "target_object", .is_extern = true,
+        {.name = "target_object", .definition_kind = MINIC_CORE_MODULE_DEFINITION_DECLARATION,
          .alias_target_index = SIZE_MAX, .owner_function_index = SIZE_MAX}
     };
     MinicCoreModuleFunctionSymbol functions[1] = {
@@ -345,8 +348,12 @@ static int verify_materialized_relocation_edges(
     globals[0].fragments = NULL;
     globals[0].fragment_count = 0U;
     CHECK(minic_core_module_verify(&module), 101); /* dead data keeps edges, no bytes */
-    globals[0].is_extern = true;
+    globals[0].definition_kind = MINIC_CORE_MODULE_DEFINITION_DECLARATION;
     globals[0].emittable = true;
+    globals[0].storage_size = 0U;
+    globals[0].storage_alignment = 0U;
+    globals[0].references = NULL;
+    globals[0].reference_count = 0U;
     CHECK(minic_core_module_verify(&module), 102); /* unmaterialized declaration */
     return 0;
 }
@@ -364,12 +371,13 @@ static int verify_source_free_zero_definition_facts(
     };
     MinicCoreModuleGlobal objects[3] = {
         {.name = "weak_tentative", .is_weak = true,
-         .is_tentative = true, .emittable = true,
+         .definition_kind = MINIC_CORE_MODULE_DEFINITION_ZERO_FILL,
+         .data_policy = MINIC_CORE_MODULE_DATA_ZERO_ONLY, .emittable = true,
          .storage_size = 4U, .storage_alignment = 4U,
          .fragments = &zero, .fragment_count = 1U,
          .alias_target_index = SIZE_MAX, .owner_function_index = SIZE_MAX},
         {.name = "weak_empty", .is_weak = true,
-         .is_zero_initialized = true, .emittable = true,
+         .data_policy = MINIC_CORE_MODULE_DATA_ZERO_NUMERIC, .emittable = true,
          .storage_size = 4U, .storage_alignment = 4U,
          .fragments = &zero, .fragment_count = 1U,
          .alias_target_index = SIZE_MAX, .owner_function_index = SIZE_MAX},
@@ -392,8 +400,10 @@ static int verify_source_free_zero_definition_facts(
     module.globals = objects;
     module.global_count = 3U;
     CHECK(minic_core_module_verify(&module), 111);
-    CHECK(objects[0].is_tentative && !objects[1].is_tentative &&
-          objects[1].is_zero_initialized && !objects[2].is_zero_initialized &&
+    CHECK(objects[0].definition_kind == MINIC_CORE_MODULE_DEFINITION_ZERO_FILL &&
+          objects[0].data_policy == MINIC_CORE_MODULE_DATA_ZERO_ONLY &&
+          objects[1].data_policy == MINIC_CORE_MODULE_DATA_ZERO_NUMERIC &&
+          objects[2].data_policy == MINIC_CORE_MODULE_DATA_MATERIALIZED &&
           objects[0].fragments == objects[1].fragments &&
           objects[1].fragments == objects[2].fragments, 112);
     return 0;
@@ -434,7 +444,7 @@ static int verify_source_free_global_definition_contract(
          .storage_size = 4U, .storage_alignment = 4U,
          .fragments = &zero, .fragment_count = 1U,
          .alias_target_index = SIZE_MAX, .owner_function_index = SIZE_MAX},
-        {.name = "defined_elsewhere", .is_extern = true,
+        {.name = "defined_elsewhere", .definition_kind = MINIC_CORE_MODULE_DEFINITION_DECLARATION,
          .alias_target_index = SIZE_MAX, .owner_function_index = SIZE_MAX}
     };
     MinicCoreModule module = *baseline;
@@ -543,16 +553,18 @@ static int verify_source_free_global_definition_contract(
     object->storage_alignment = 4U;
     object->storage_size = 4U;
     CHECK(minic_core_module_verify(&module), 138); /* reset zero scalar */
-    object->is_tentative = true;
+    object->definition_kind = MINIC_CORE_MODULE_DEFINITION_ZERO_FILL;
+    object->data_policy = MINIC_CORE_MODULE_DATA_ZERO_ONLY;
     CHECK(minic_core_module_verify(&module), 139);
-    object->is_zero_initialized = true;
-    CHECK(!minic_core_module_verify(&module), 140); /* mutual exclusion */
-    object->is_tentative = false;
+    object->data_policy = (MinicCoreModuleDataPolicy)3;
+    CHECK(!minic_core_module_verify(&module), 140); /* invalid physical policy */
+    object->definition_kind = MINIC_CORE_MODULE_DEFINITION_REGULAR;
+    object->data_policy = MINIC_CORE_MODULE_DATA_ZERO_NUMERIC;
     CHECK(minic_core_module_verify(&module), 141);
 
     object->fragments = &bits;
     CHECK(!minic_core_module_verify(&module), 142); /* zero-tag numeric 42 */
-    object->is_zero_initialized = false;
+    object->data_policy = MINIC_CORE_MODULE_DATA_MATERIALIZED;
     CHECK(!minic_core_module_verify(&module), 143); /* BSS numeric 42 */
     object->default_section = MINIC_CORE_MODULE_SECTION_DATA;
     CHECK(minic_core_module_verify(&module), 144); /* ordinary initialized */
@@ -563,20 +575,21 @@ static int verify_source_free_global_definition_contract(
     object->fragments = &reloc;
     object->references = &reference;
     object->reference_count = 1U;
-    object->is_zero_initialized = true;
+    object->data_policy = MINIC_CORE_MODULE_DATA_ZERO_NUMERIC;
     CHECK(minic_core_module_verify(&module), 146); /* pointer = &symbol */
-    object->is_zero_initialized = false;
+    object->data_policy = MINIC_CORE_MODULE_DATA_MATERIALIZED;
     object->default_section = MINIC_CORE_MODULE_SECTION_BSS;
     CHECK(!minic_core_module_verify(&module), 147); /* BSS relocation */
     object->default_section = MINIC_CORE_MODULE_SECTION_DATA;
-    object->is_tentative = true;
+    object->definition_kind = MINIC_CORE_MODULE_DEFINITION_ZERO_FILL;
+    object->data_policy = MINIC_CORE_MODULE_DATA_ZERO_ONLY;
     CHECK(!minic_core_module_verify(&module), 148); /* tentative relocation */
-    object->is_tentative = false;
-    object->is_zero_initialized = true;
+    object->definition_kind = MINIC_CORE_MODULE_DEFINITION_REGULAR;
+    object->data_policy = MINIC_CORE_MODULE_DATA_ZERO_NUMERIC;
     object->section_name = ".bss.explicit_relocation";
     CHECK(minic_core_module_verify(&module), 149); /* target-owned section */
     object->section_name = NULL;
-    object->is_zero_initialized = false;
+    object->data_policy = MINIC_CORE_MODULE_DATA_MATERIALIZED;
     object->references = NULL;
     object->reference_count = 0U;
     object->fragments = &zero;
@@ -585,17 +598,54 @@ static int verify_source_free_global_definition_contract(
 
     /* Unmaterialized declarations and discarded symbols may preserve an
      * incomplete type, an unspecified extent, or no Core type at all. */
-    object->is_extern = true;
+    object->definition_kind = MINIC_CORE_MODULE_DEFINITION_DECLARATION;
     object->core_type_id = incomplete_id;
     object->storage_size = 0U;
     object->storage_alignment = 0U;
     object->fragments = NULL;
     object->fragment_count = 0U;
     CHECK(minic_core_module_verify(&module), 151);
-    object->is_extern = false;
+    object->definition_kind = MINIC_CORE_MODULE_DEFINITION_REGULAR;
     object->emittable = false;
     object->core_type_id = MINIC_CORE_TYPE_INVALID;
     CHECK(minic_core_module_verify(&module), 152);
+    /* Both enum domains and their cross-product must be checked even for
+     * dead objects and declarations, before the no-payload early returns. */
+    object->definition_kind = (MinicCoreModuleDefinitionKind)-1;
+    CHECK(!minic_core_module_verify(&module), 159);
+    object->definition_kind = (MinicCoreModuleDefinitionKind)3;
+    CHECK(!minic_core_module_verify(&module), 160);
+    object->definition_kind = MINIC_CORE_MODULE_DEFINITION_REGULAR;
+    object->data_policy = (MinicCoreModuleDataPolicy)-1;
+    CHECK(!minic_core_module_verify(&module), 161);
+    object->data_policy = (MinicCoreModuleDataPolicy)3;
+    CHECK(!minic_core_module_verify(&module), 162);
+    object->data_policy = MINIC_CORE_MODULE_DATA_ZERO_ONLY;
+    CHECK(minic_core_module_verify(&module), 163); /* ordinary zero-only body */
+    object->definition_kind = MINIC_CORE_MODULE_DEFINITION_ZERO_FILL;
+    CHECK(minic_core_module_verify(&module), 164);
+    object->data_policy = MINIC_CORE_MODULE_DATA_MATERIALIZED;
+    CHECK(!minic_core_module_verify(&module), 165);
+    object->data_policy = MINIC_CORE_MODULE_DATA_ZERO_NUMERIC;
+    CHECK(!minic_core_module_verify(&module), 166);
+    object->definition_kind = MINIC_CORE_MODULE_DEFINITION_DECLARATION;
+    CHECK(!minic_core_module_verify(&module), 167);
+    object->data_policy = MINIC_CORE_MODULE_DATA_ZERO_ONLY;
+    CHECK(!minic_core_module_verify(&module), 168);
+    object->data_policy = MINIC_CORE_MODULE_DATA_MATERIALIZED;
+    CHECK(minic_core_module_verify(&module), 169);
+    object->fragments = &zero;
+    object->fragment_count = 1U;
+    CHECK(!minic_core_module_verify(&module), 170); /* dead declaration bytes */
+    object->fragments = NULL;
+    object->fragment_count = 0U;
+    object->references = &reference;
+    object->reference_count = 1U;
+    CHECK(!minic_core_module_verify(&module), 171); /* declaration init edge */
+    object->references = NULL;
+    object->reference_count = 0U;
+    object->definition_kind = MINIC_CORE_MODULE_DEFINITION_REGULAR;
+    object->data_policy = MINIC_CORE_MODULE_DATA_MATERIALIZED;
     return 0;
 }
 

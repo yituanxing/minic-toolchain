@@ -1397,7 +1397,7 @@ static bool x86_visit_module_global(
     FILE *out, const MinicCoreModule *module, const MinicTargetInfo *target,
     const MinicCoreModuleGlobal *global, size_t index, void *opaque) {
     MinicX86VisitContext *ctx = opaque;
-    if (global->is_extern) {
+    if (global->definition_kind == MINIC_CORE_MODULE_DEFINITION_DECLARATION) {
         if (global->alias_target_index != SIZE_MAX)
             return minic_multi_elf_emit_module_object_alias(
                 out, module, global, "@object");

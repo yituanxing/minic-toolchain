@@ -250,66 +250,11 @@ bool minic_c0_program_set_global_object_owner(MinicC0Program *program,
     return true;
 }
 
-bool minic_c0_program_global_object_emittable(const MinicC0Program *program,
-                                              const MinicGlobalObject *object) {
-    MinicFunctionId owner;
-    size_t index;
-    if (program == NULL || object == NULL) return false;
-    owner = object->owner_function;
-    if (owner == MINIC_FUNCTION_INVALID) return !object->is_emission_pruned;
-    if (owner >= program->function_count) return false;
-    if (program->functions[owner].is_defined &&
-        (!program->functions[owner].is_internal ||
-         program->functions[owner].is_referenced))
-        return true;
-    /* Specialization clones borrow the original function-scope storage. */
-    for (index = 0U; index < program->function_count; ++index) {
-        const MinicFunction *function = &program->functions[index];
-        if (function->is_integer_specialization &&
-            function->specialization_source == owner && function->is_defined &&
-            (!function->is_internal || function->is_referenced))
-            return true;
-    }
-    return false;
-}
-
 bool minic_c0_program_set_global_object_force_emit(MinicC0Program *program,
                                                     MinicGlobalObjectId object_id) {
     if (program == NULL || object_id >= program->global_object_count) return false;
     program->global_objects[object_id].force_emit = true;
     return true;
-}
-
-bool *minic_c0_program_build_global_owner_live_map(const MinicC0Program *program) {
-    bool *live;
-    size_t index;
-    if (program == NULL) return NULL;
-    live = calloc(program->function_count == 0U ? 1U : program->function_count,
-                  sizeof(*live));
-    if (live == NULL) return NULL;
-    for (index = 0U; index < program->function_count; ++index) {
-        const MinicFunction *function = &program->functions[index];
-        if (!function->is_defined ||
-            (function->is_internal && !function->is_referenced))
-            continue;
-        live[index] = true;
-        if (function->is_integer_specialization &&
-            function->specialization_source < program->function_count)
-            live[function->specialization_source] = true;
-    }
-    return live;
-}
-
-bool minic_c0_program_global_object_emittable_with_map(
-    const MinicC0Program *program, const MinicGlobalObject *object,
-    const bool *owner_live_map) {
-    MinicFunctionId owner;
-    if (program == NULL || object == NULL) return false;
-    if (owner_live_map == NULL)
-        return minic_c0_program_global_object_emittable(program, object);
-    owner = object->owner_function;
-    return (owner == MINIC_FUNCTION_INVALID && !object->is_emission_pruned) ||
-           (owner < program->function_count && owner_live_map[owner]);
 }
 
 static bool global_object_initial_state_valid(const MinicGlobalObjectInitialState *state) {

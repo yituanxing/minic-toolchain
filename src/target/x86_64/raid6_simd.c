@@ -211,7 +211,7 @@ bool minic_x86_64_emit_raid6_simd(
     const MinicCoreStructuredInlineAsmOperand *b;
     const size_t count = ins ?
         ins->value.structured_inline_asm.operand_count : 0U;
-    size_t i;
+    size_t i, output_operand_count;
     if (!out || !fn || !frame || !ins || !info ||
         info->target_machine_form_id != MINIC_X86_MACHINE_ASM_RAID6_SIMD ||
         info->target_machine_form_variant != count || !info->is_volatile ||
@@ -219,12 +219,14 @@ bool minic_x86_64_emit_raid6_simd(
         !minic_x86_64_raid6_simd_template(info->template_text,
                                          info->template_length, count))
         return false;
+    if (!minic_core_asm_output_operand_count(ins, &output_operand_count))
+        return false;
     b = ins->value.structured_inline_asm.operands;
     if (count && !b) return false;
     for (i = 0U; i < count; ++i) {
         if (b[i].operand_index != i || b[i].value >= fn->value_count ||
             b[i].early_clobber || b[i].has_fixed_register_binding ||
-            b[i].kind != (i < info->source_output_count
+            b[i].kind != (i < output_operand_count
                  ? MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT
                  : MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT) ||
             !raid6_core_pointer(fn, fn->values[b[i].value].core_type_id) ||
@@ -264,6 +266,7 @@ bool minic_x86_64_emit_kvm_movdqa(
     const unsigned int form = info ? minic_x86_64_kvm_movdqa_form(
         info->template_text, info->template_length) : 0U;
     const bool load = form <= 16U;
+    size_t output_operand_count;
     if (!out || !fn || !frame || !ins || !info || !form ||
         info->target_machine_form_id != MINIC_X86_MACHINE_ASM_KVM_MOVDQA ||
         info->target_machine_form_variant != form || !info->is_volatile ||
@@ -271,7 +274,8 @@ bool minic_x86_64_emit_kvm_movdqa(
         info->has_memory_clobber != !load ||
         info->register_clobber_count ||
         ins->value.structured_inline_asm.operand_count != 1U ||
-        info->source_output_count != (load ? 0U : 1U)) return false;
+        !minic_core_asm_output_operand_count(ins, &output_operand_count) ||
+        output_operand_count != (load ? 0U : 1U)) return false;
     b = ins->value.structured_inline_asm.operands;
     if (!b || b[0].operand_index != 0U || b[0].value >= fn->value_count ||
         b[0].early_clobber || b[0].has_fixed_register_binding ||

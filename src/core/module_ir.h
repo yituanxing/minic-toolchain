@@ -35,6 +35,29 @@ typedef enum MinicCoreModuleDefaultSection {
     MINIC_CORE_MODULE_SECTION_RELRO
 } MinicCoreModuleDefaultSection;
 
+/* Physical definition contract after source-language declaration merging.
+ * MATERIALIZED permits ordinary bits and symbol relocations. ZERO_NUMERIC
+ * requires every visible numeric byte to be zero but permits symbolic
+ * relocations; UNINITIALIZED requires only zero bytes, with no relocations.
+ * These are mutually exclusive emission policies, not C declaration flags. */
+typedef enum MinicCoreModuleDataPolicy {
+    MINIC_CORE_MODULE_DATA_MATERIALIZED = 0,
+    MINIC_CORE_MODULE_DATA_ZERO_NUMERIC,
+    MINIC_CORE_MODULE_DATA_ZERO_ONLY
+} MinicCoreModuleDataPolicy;
+
+/* Source-independent linker definition identity. A declaration owns no
+ * storage; a regular definition owns an ordinary object; ZERO_FILL is a
+ * definition without explicit initialized contents. This is separate from
+ * physical byte/relocation policy: a regular definition may also carry a
+ * ZERO_ONLY payload, but a ZERO_FILL definition must. Weak/internal binding
+ * remains orthogonal to both identities. */
+typedef enum MinicCoreModuleDefinitionKind {
+    MINIC_CORE_MODULE_DEFINITION_REGULAR = 0,
+    MINIC_CORE_MODULE_DEFINITION_ZERO_FILL,
+    MINIC_CORE_MODULE_DEFINITION_DECLARATION
+} MinicCoreModuleDefinitionKind;
+
 typedef struct MinicCoreModuleFragment {
     MinicCoreModuleFragmentKind kind;
     size_t byte_offset;
@@ -81,20 +104,17 @@ typedef struct MinicCoreModuleGlobal {
     size_t owner_function_index; /* SIZE_MAX at file scope. */
     MinicCoreModuleVisibility visibility;
     MinicCoreModuleDefaultSection default_section;
+    MinicCoreModuleDataPolicy data_policy;
+    MinicCoreModuleDefinitionKind definition_kind;
     bool emittable;
-    bool is_extern;
     bool is_internal;
     bool is_weak;
     bool is_read_only;
-    bool is_zero_initialized;
-    bool is_tentative;
-    bool is_block_scope_extern_only;
     bool is_thread_local;
     /* The complete static-symbol closure runs on these source-independent
      * facts before any live object's byte payload is materialized. */
     bool is_file_scope_reachability_root;
     bool is_file_asm_root; /* Raw file ASM is always emitted, unlike inline ASM. */
-    bool was_source_emission_pruned;
     MinicCoreModuleReference *references;
     size_t reference_count;
     MinicCoreModuleFragment *fragments;
@@ -104,7 +124,6 @@ typedef struct MinicCoreModuleGlobal {
 
 typedef struct MinicCoreModuleFunctionSymbol {
     char *name; /* canonical assembler-facing symbol, not a C declarator */
-    char *source_name; /* diagnostic/opaque-ASM source spelling, owned */
     char *section_name;
     size_t explicit_alignment;
     size_t alias_target_index; /* SIZE_MAX when not an alias. */

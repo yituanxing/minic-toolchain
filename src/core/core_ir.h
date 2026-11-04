@@ -290,16 +290,14 @@ typedef struct MinicCoreInlineAsm {
     size_t template_length;
     bool is_volatile;
     bool has_memory_clobber;
-    /* Immutable typed Source -> Core -> Target summary. The hash identifies
-     * the exact source GNU form, including ordered constraints and clobbers;
-     * the machine emitter must still validate its ISA-specific semantics. */
+    /* Immutable typed source-admission result. The source-form fingerprint
+     * remains entirely in the C ingress; machine emission consumes this
+     * normalized operand/effect contract and its target-owned form ID. */
     MinicAsmOperandPlanOwner operand_plan_owner;
-    uint64_t source_form_id;
     /* Opaque target-produced ASM dispatch facts. A source hash is only
      * provenance; it must never be interpreted as this machine form ID. */
     uint32_t target_machine_form_id;
     uint32_t target_machine_form_variant;
-    size_t source_output_count;
     bool explicit_memory_clobber;
     bool implicit_memory_effect;
     /* BATCH_L_STRUCTURED_REGISTER_READWRITE: keep register-clobber spelling
@@ -367,13 +365,13 @@ typedef struct MinicCoreStructuredInlineAsmOperand {
     /* M126A_GENERIC_STRUCTURED_ASM: preserve GCC `&` early-clobber semantics
        as target-neutral scheduling/allocation metadata. */
     bool early_clobber;
-    /* Target-qualified GNU physical-register `&` source constraint. Unlike
+    /* Normalized native physical-register early-clobber constraint. Unlike
      * `early_clobber` above this describes the native operand assignment,
      * not Core value/address transport. A target may represent `=&r` as a
      * Core MEMORY_OUTPUT (aggregate result) while still requiring a distinct
      * physical register from all live inputs. */
-    bool gnu_early_clobber;
-    bool gnu_readwrite;
+    bool physical_early_clobber;
+    bool physical_read_write;
     bool has_tied_output;
     size_t tied_output_index;
 } MinicCoreStructuredInlineAsmOperand;
@@ -521,6 +519,43 @@ typedef struct MinicCoreInstruction {
         } indirect_call;
     } value;
 } MinicCoreInstruction;
+
+/* Output roles are already encoded in typed Core operands, so neither Core
+ * nor machine emitters carry a second GNU source output-count shadow.
+ * Output operands form one leading prefix; reject malformed independent
+ * Core producers instead of guessing a count. */
+static inline bool minic_core_asm_output_operand_count(
+    const MinicCoreInstruction *instruction, size_t *output_count) {
+    size_t i, count = 0U;
+    bool seen_input = false;
+    if (instruction == NULL || output_count == NULL ||
+        instruction->kind != MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM ||
+        instruction->value.structured_inline_asm.operand_count >
+            MINIC_CORE_STRUCTURED_INLINE_ASM_OPERAND_LIMIT)
+        return false;
+    for (i = 0U; i < instruction->value.structured_inline_asm.operand_count; ++i) {
+        bool output;
+        switch (instruction->value.structured_inline_asm.operands[i].kind) {
+        case MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT:
+        case MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE:
+        case MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT:
+        case MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE:
+            output = true;
+            break;
+        case MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT:
+        case MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT:
+            output = false;
+            break;
+        default:
+            return false;
+        }
+        if (output && seen_input) return false;
+        if (output) ++count;
+        else seen_input = true;
+    }
+    *output_count = count;
+    return true;
+}
 
 typedef struct MinicCoreTerminator {
     MinicCoreTerminatorKind kind;

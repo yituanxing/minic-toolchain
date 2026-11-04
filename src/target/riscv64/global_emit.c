@@ -73,7 +73,8 @@ static bool rv64_module_admit_global(const MinicCoreModule *module,
     bool zero_extent;
     if (module == NULL || module->type_context == NULL || global == NULL ||
         !minic_core_assembler_symbol_lexically_safe(global->name) ||
-        !global->emittable || global->is_extern ||
+        !global->emittable ||
+        global->definition_kind == MINIC_CORE_MODULE_DEFINITION_DECLARATION ||
         global->alias_target_index != SIZE_MAX || global->is_thread_local ||
         (global->is_internal && global->is_weak) ||
         global->storage_alignment == 0U ||
@@ -85,7 +86,7 @@ static bool rv64_module_admit_global(const MinicCoreModule *module,
     if (zero_extent) {
         if (global->fragment_count != 0U ||
             global->reference_count != 0U) return false;
-    } else if (global->is_zero_initialized || global->is_tentative) {
+    } else if (global->data_policy != MINIC_CORE_MODULE_DATA_MATERIALIZED) {
         /* The zero payload may contain a target-width relocation; the
          * fragment verifier has already checked its byte placement. */
     } else if (type->kind == MINIC_CORE_TYPE_RECORD) {

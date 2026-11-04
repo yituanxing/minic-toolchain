@@ -119,16 +119,18 @@ static int check_module_snapshot_output(const char *path) {
     MinicCoreModuleGlobal globals[4] = {
         { .name = "owned", .emittable = true, .fragments = &fragment,
           .fragment_count = 1U, .alias_target_index = SIZE_MAX },
-        { .name = "weak_ext", .is_extern = true, .is_weak = true,
+        { .name = "weak_ext", .definition_kind = MINIC_CORE_MODULE_DEFINITION_DECLARATION,
+          .is_weak = true,
           .visibility = MINIC_CORE_MODULE_VISIBILITY_HIDDEN,
           .alias_target_index = SIZE_MAX },
-        { .name = "unused_hidden", .is_extern = true,
+        { .name = "unused_hidden", .definition_kind = MINIC_CORE_MODULE_DEFINITION_DECLARATION,
           .visibility = MINIC_CORE_MODULE_VISIBILITY_HIDDEN,
           .alias_target_index = SIZE_MAX },
         /* Real ModuleIR ingress seals lexical raw file-ASM references into
          * this ownership bit. A hand-built module must carry that fact too;
          * the output writer must not parse source ASM a second time. */
-        { .name = "asm_weak", .is_extern = true, .is_weak = true,
+        { .name = "asm_weak", .definition_kind = MINIC_CORE_MODULE_DEFINITION_DECLARATION,
+          .is_weak = true,
           .is_file_asm_root = true,
           .visibility = MINIC_CORE_MODULE_VISIBILITY_HIDDEN,
           .alias_target_index = SIZE_MAX }
@@ -198,7 +200,7 @@ static int check_module_snapshot_output(const char *path) {
               .specialization_source_index = SIZE_MAX }
         };
         MinicCoreModuleGlobal alias = {
-            .name = "alias_obj", .is_extern = true,
+            .name = "alias_obj", .definition_kind = MINIC_CORE_MODULE_DEFINITION_DECLARATION,
             .alias_target_index = 0U
         };
         FILE *tmp = tmpfile();

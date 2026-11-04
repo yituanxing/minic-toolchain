@@ -67,7 +67,7 @@ has src/core/module_ir.c 'module_live_global_layout_valid('
 has src/core/module_ir.c 'module_live_global_definition_valid('
 has src/core/module_ir.c 'global->storage_size == declared->size'
 has src/core/module_ir.c 'tail->value.array.is_complete'
-has src/core/module_ir.c 'global->is_tentative || global->is_zero_initialized || bss'
+has src/core/module_ir.c 'global->data_policy != MINIC_CORE_MODULE_DATA_MATERIALIZED || bss'
 has src/core/module_ir.c '!module_live_global_layout_valid(module->type_context, type, global)'
 has tests/core/module_ir_fragment_contract_test.c 'verify_source_free_global_definition_contract('
 # Explicit `.bss.*` spelling alone does not imply @nobits on RV targets.

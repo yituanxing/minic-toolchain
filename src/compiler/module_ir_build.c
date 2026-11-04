@@ -190,15 +190,28 @@ static bool module_capture_global_identity(MinicCoreModuleGlobal *destination,
     destination->alias_target_index = SIZE_MAX;
     destination->owner_function_index = source->owner_function == MINIC_FUNCTION_INVALID
         ? SIZE_MAX : (size_t)source->owner_function;
-    destination->is_extern = source->is_extern;
     destination->is_internal = source->is_internal;
     destination->is_weak = source->is_weak;
     destination->is_read_only = source->is_read_only;
-    destination->is_zero_initialized = source->is_zero_initialized;
-    destination->is_tentative = source->is_tentative;
-    destination->is_block_scope_extern_only = source->is_block_scope_extern_only;
+    /* Resolve the C declaration form once. All downstream consumers see
+     * only one mutually exclusive physical data policy. */
+    if (source->is_block_scope_extern_only && !source->is_extern)
+        return false;
+    if (source->is_tentative && source->is_zero_initialized)
+        return false;
+    if (source->is_tentative && source->is_extern)
+        return false;
+    destination->definition_kind = source->is_tentative
+        ? MINIC_CORE_MODULE_DEFINITION_ZERO_FILL
+        : source->is_extern
+            ? MINIC_CORE_MODULE_DEFINITION_DECLARATION
+            : MINIC_CORE_MODULE_DEFINITION_REGULAR;
+    destination->data_policy = source->is_tentative
+        ? MINIC_CORE_MODULE_DATA_ZERO_ONLY
+        : source->is_zero_initialized
+            ? MINIC_CORE_MODULE_DATA_ZERO_NUMERIC
+            : MINIC_CORE_MODULE_DATA_MATERIALIZED;
     destination->is_thread_local = source->is_thread_local;
-    destination->was_source_emission_pruned = source->is_emission_pruned;
     destination->is_file_scope_reachability_root =
         source->owner_function == MINIC_FUNCTION_INVALID &&
         (!source->is_internal || source->force_emit ||
@@ -264,7 +277,8 @@ static bool module_capture_global_payload(MinicCoreModuleGlobal *destination,
     if (!destination->emittable) return true;
     if (!minic_core_type_import(importer, source->type,
                                 &destination->core_type_id)) return false;
-    if (destination->is_extern) return true;
+    if (destination->definition_kind == MINIC_CORE_MODULE_DEFINITION_DECLARATION)
+        return true;
     if (!minic_multi_global_payload_plan_build(program, target, source, &plan))
         return false;
     destination->default_section = plan.default_section;
@@ -286,8 +300,6 @@ static bool module_capture_function(MinicCoreModuleFunctionSymbol *destination,
                                     const MinicFunction *source, size_t index) {
     const char *symbol = minic_c0_function_symbol_name(source);
     if (symbol == NULL || (destination->name = module_c_string(symbol)) == NULL ||
-        (destination->source_name = module_owned_string(
-            source->name, source->name_length)) == NULL ||
         !module_visibility(source->visibility, &destination->visibility))
         return false;
     destination->section_name = module_c_string(source->section_name);

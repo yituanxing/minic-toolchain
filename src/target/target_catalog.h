@@ -8,7 +8,8 @@
 /* The architecture identifier and spelling catalog is independent of C
  * types, Core IR, ABI layout and machine code. The standalone product driver
  * can consult it without linking the compiler or duplicating an ISA allowlist.
- * TargetInfo remains the single source of C layout and semantic facts. */
+ * C/GNU semantic facts live in SourceInfo; machine ABI layout belongs to
+ * TargetInfo/DataLayout, and product stages are explicitly registered. */
 typedef enum MinicTargetArchitecture {
     MINIC_TARGET_ARCH_RISCV64 = 0,
     MINIC_TARGET_ARCH_X86_64,

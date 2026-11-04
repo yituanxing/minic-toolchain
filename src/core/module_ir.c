@@ -49,7 +49,6 @@ void minic_core_module_destroy(MinicCoreModule *module) {
     for (index = 0U; module->function_symbols != NULL &&
                      index < module->function_count; ++index) {
         free(module->function_symbols[index].name);
-        free(module->function_symbols[index].source_name);
         free(module->function_symbols[index].section_name);
     }
     for (index = 0U; module->file_asms != NULL &&
@@ -202,7 +201,8 @@ static bool module_emitted_symbol_names_unique(const MinicCoreModule *module) {
     for (i = 0U; i < module->global_count; ++i) {
         const MinicCoreModuleGlobal *global = &module->globals[i];
         if (!global->emittable ||
-            (global->is_extern && global->alias_target_index == SIZE_MAX))
+            (global->definition_kind == MINIC_CORE_MODULE_DEFINITION_DECLARATION &&
+             global->alias_target_index == SIZE_MAX))
             continue;
         names[count].name = global->name;
         names[count++].name_length = strlen(global->name);
@@ -352,24 +352,23 @@ static bool module_live_global_layout_valid(
         (global->storage_size - declared->size) % element->size == 0U;
 }
 
-/* Only numeric bits are constrained by the zero-definition marker: a
- * pointer/integer initialized to a symbol legitimately carries a relocation
- * while its source scalar initializer slots remain zero. Tentative objects,
- * in contrast, cannot carry a relocation at all. Default BSS also requires
- * physical zero bytes, independently of a user-specified section name. */
+/* Check the one sealed physical data policy. ZERO_NUMERIC may contain
+ * a relocation while its numeric bytes are zero; ZERO_ONLY cannot.
+ * Default BSS independently forbids relocation and nonzero physical bytes. */
 static bool module_live_global_definition_valid(
     const MinicCoreModuleGlobal *global) {
     const bool bss = global->default_section == MINIC_CORE_MODULE_SECTION_BSS;
     size_t index;
-    if (global->is_tentative &&
-        (global->is_zero_initialized || global->reference_count != 0U))
+    if (global->data_policy == MINIC_CORE_MODULE_DATA_ZERO_ONLY &&
+        global->reference_count != 0U)
         return false;
     for (index = 0U; index < global->fragment_count; ++index) {
         const MinicCoreModuleFragment *fragment = &global->fragments[index];
         if (fragment->kind == MINIC_CORE_MODULE_FRAGMENT_RELOCATION) {
-            if (global->is_tentative || bss) return false;
+            if (global->data_policy == MINIC_CORE_MODULE_DATA_ZERO_ONLY || bss)
+                return false;
         } else if (fragment->kind == MINIC_CORE_MODULE_FRAGMENT_BITS &&
-                   (global->is_tentative || global->is_zero_initialized || bss)) {
+                   (global->data_policy != MINIC_CORE_MODULE_DATA_MATERIALIZED || bss)) {
             const uint64_t visible_bits = fragment->byte_count == 8U
                 ? fragment->bits
                 : fragment->bits & ((UINT64_C(1) <<
@@ -390,6 +389,19 @@ static bool module_verify_global_one(const MinicCoreModule *module,
         module->type_context, global->core_type_id);
     if (global->name == NULL || global->name[0] == '\0' ||
         !valid_visibility(global->visibility) ||
+        (global->definition_kind != MINIC_CORE_MODULE_DEFINITION_REGULAR &&
+         global->definition_kind != MINIC_CORE_MODULE_DEFINITION_ZERO_FILL &&
+         global->definition_kind != MINIC_CORE_MODULE_DEFINITION_DECLARATION) ||
+        (global->data_policy != MINIC_CORE_MODULE_DATA_MATERIALIZED &&
+         global->data_policy != MINIC_CORE_MODULE_DATA_ZERO_NUMERIC &&
+         global->data_policy != MINIC_CORE_MODULE_DATA_ZERO_ONLY) ||
+        (global->definition_kind == MINIC_CORE_MODULE_DEFINITION_ZERO_FILL &&
+         global->data_policy != MINIC_CORE_MODULE_DATA_ZERO_ONLY) ||
+        (global->definition_kind == MINIC_CORE_MODULE_DEFINITION_DECLARATION &&
+         global->data_policy != MINIC_CORE_MODULE_DATA_MATERIALIZED) ||
+        (global->definition_kind == MINIC_CORE_MODULE_DEFINITION_DECLARATION &&
+         (global->storage_size != 0U || global->storage_alignment != 0U ||
+          global->reference_count != 0U || global->fragment_count != 0U)) ||
         (global->reference_count != 0U && global->references == NULL) ||
         (global->owner_function_index != SIZE_MAX &&
          global->owner_function_index >= module->function_count))
@@ -419,12 +431,13 @@ static bool module_verify_global_one(const MinicCoreModule *module,
     }
     if (global->alias_target_index != SIZE_MAX) {
         const MinicCoreModuleGlobal *target;
-        if (!global->is_extern || global->alias_target_index >= module->global_count ||
+        if (global->definition_kind != MINIC_CORE_MODULE_DEFINITION_DECLARATION ||
+            global->alias_target_index >= module->global_count ||
             global->alias_target_index == index)
             return false;
         target = &module->globals[global->alias_target_index];
         if ((global->emittable && !target->emittable) ||
-            target->is_extern || target->is_tentative ||
+            target->definition_kind != MINIC_CORE_MODULE_DEFINITION_REGULAR ||
             target->alias_target_index != SIZE_MAX ||
             target->name == NULL || target->name[0] == '\0')
             return false;
@@ -432,7 +445,7 @@ static bool module_verify_global_one(const MinicCoreModule *module,
     if (!global->emittable)
         return global->fragment_count == 0U;
     if (type == NULL) return false;
-    if (global->is_extern)
+    if (global->definition_kind == MINIC_CORE_MODULE_DEFINITION_DECLARATION)
         return global->fragment_count == 0U;
     if (global->default_section > MINIC_CORE_MODULE_SECTION_RELRO)
         return false;

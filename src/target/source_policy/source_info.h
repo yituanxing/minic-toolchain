@@ -98,6 +98,9 @@ typedef struct MinicTargetSourceInfo {
     MinicIntegerRank word_integer_rank;
     unsigned int long_double_significand_bits;
     unsigned int language_type_capabilities;
+    /* C/GNU vector_size declaration admission, not an ABI register or
+     * machine DataLayout capability. Zero rejects source vector_size types. */
+    size_t gnu_fixed_vector_max_storage_bytes;
     bool gnu_sizeof_void_is_one;
     bool gnu_sizeof_function_is_one;
 } MinicTargetSourceInfo;

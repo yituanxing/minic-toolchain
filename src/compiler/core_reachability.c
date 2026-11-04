@@ -374,8 +374,7 @@ bool minic_core_function_set_close_reachability(
             g->emittable = canonical_owner_live[g->owner_function_index] ||
                 c.objects_live[i];
         else
-            g->emittable = !g->was_source_emission_pruned &&
-                (!g->is_internal || c.objects_live[i]);
+            g->emittable = !g->is_internal || c.objects_live[i];
     }
     if (kept != 0U || pruned != 0U)
         (void)fprintf(stderr,

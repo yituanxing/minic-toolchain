@@ -27,7 +27,7 @@ static bool rv64_visit_module_global(
     FILE *file, const MinicCoreModule *module, const MinicTargetInfo *target,
     const MinicCoreModuleGlobal *global, size_t index, void *opaque) {
     Rv64ProgramContext *ctx = opaque;
-    if (global->is_extern) {
+    if (global->definition_kind == MINIC_CORE_MODULE_DEFINITION_DECLARATION) {
         if (global->alias_target_index != SIZE_MAX)
             return minic_multi_elf_emit_module_object_alias(
                 file, module, global, "@object");

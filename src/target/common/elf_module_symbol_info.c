@@ -27,20 +27,18 @@ MinicElfModuleSymbolFacts minic_multi_elf_module_symbol_facts(
             if (object->name == NULL || strcmp(object->name, symbol) != 0)
                 continue;
             local = object->emittable && object->is_internal &&
-                    ((!object->is_extern &&
-                      !object->is_block_scope_extern_only) ||
+                    (object->definition_kind != MINIC_CORE_MODULE_DEFINITION_DECLARATION ||
                      object->alias_target_index != SIZE_MAX);
             owner = object->emittable &&
-                    ((!object->is_extern &&
-                      !object->is_block_scope_extern_only) ||
-                     object->is_tentative ||
+                    (object->definition_kind != MINIC_CORE_MODULE_DEFINITION_DECLARATION ||
                      object->alias_target_index != SIZE_MAX);
             facts.tu_local |= local;
             facts.nonpreemptible |= local ||
-                ((object->emittable || object->is_extern) &&
+                ((object->emittable ||
+                  object->definition_kind == MINIC_CORE_MODULE_DEFINITION_DECLARATION) &&
                  elf_visibility_nonpreemptible(object->visibility));
-            facts.undefined_weak |= object->is_weak && object->is_extern &&
-                                    !object->is_tentative;
+            facts.undefined_weak |= object->is_weak &&
+                object->definition_kind == MINIC_CORE_MODULE_DEFINITION_DECLARATION;
             defined |= owner;
         }
     } else {

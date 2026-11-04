@@ -36,7 +36,16 @@ static bool must_reject(MinicInlineAsm *source, const char *raw) {
     return !accepted;
 }
 
-static bool verify_core_roles(size_t count, bool corrupt_index, bool expected) {
+typedef enum CoreAsmPoison {
+    CORE_ASM_VALID = 0,
+    CORE_ASM_BAD_INDEX,
+    CORE_ASM_MIXED_OUTPUT_AFTER_INPUT,
+    CORE_ASM_EARLY_CLOBBER_INPUT,
+    CORE_ASM_READWRITE_INPUT,
+    CORE_ASM_UNCLAIMED_INPUT_TIE
+} CoreAsmPoison;
+
+static bool verify_core_roles(size_t count, CoreAsmPoison poison, bool expected) {
     MinicCoreSourceBuilder builder;
     MinicCoreFunction *function = &builder.core;
     MinicCoreTypeContext context;
@@ -97,8 +106,22 @@ static bool verify_core_roles(size_t count, bool corrupt_index, bool expected) {
             operand->operand_index = index;
             operand->value = scalar;
         }
-        if (corrupt_index)
+        if (poison == CORE_ASM_BAD_INDEX)
             asm_effect.value.structured_inline_asm.operands[count - 1U].operand_index = count;
+        if (poison == CORE_ASM_MIXED_OUTPUT_AFTER_INPUT)
+            asm_effect.value.structured_inline_asm.operands[count - 1U].kind =
+                MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT;
+        if (poison == CORE_ASM_EARLY_CLOBBER_INPUT)
+            asm_effect.value.structured_inline_asm.operands[count - 1U].physical_early_clobber = true;
+        if (poison == CORE_ASM_READWRITE_INPUT) {
+            function->inline_asms[asm_id].operand_plan_owner =
+                MINIC_ASM_OPERAND_PLAN_GENERIC_STRUCTURED;
+            asm_effect.value.structured_inline_asm.operands[count - 1U].physical_read_write = true;
+        }
+        if (poison == CORE_ASM_UNCLAIMED_INPUT_TIE) {
+            asm_effect.value.structured_inline_asm.operands[count - 1U].has_tied_output = true;
+            asm_effect.value.structured_inline_asm.operands[count - 1U].tied_output_index = 0U;
+        }
         terminator.kind = MINIC_CORE_TERMINATOR_RETURN;
         terminator.return_value = MINIC_CORE_VALUE_INVALID;
         terminator.return_object = MINIC_CORE_OBJECT_INVALID;
@@ -152,10 +175,14 @@ int main(void) {
         (void)fprintf(stderr, "FAIL 16-operand Core normalization\n");
         return 1;
     }
-    if (!verify_core_roles(13U, false, true) ||
-        !verify_core_roles(16U, false, true) ||
-        !verify_core_roles(16U, true, false) ||
-        !verify_core_roles(17U, false, false)) {
+    if (!verify_core_roles(13U, CORE_ASM_VALID, true) ||
+        !verify_core_roles(16U, CORE_ASM_VALID, true) ||
+        !verify_core_roles(16U, CORE_ASM_BAD_INDEX, false) ||
+        !verify_core_roles(17U, CORE_ASM_VALID, false) ||
+        !verify_core_roles(13U, CORE_ASM_MIXED_OUTPUT_AFTER_INPUT, false) ||
+        !verify_core_roles(13U, CORE_ASM_EARLY_CLOBBER_INPUT, false) ||
+        !verify_core_roles(13U, CORE_ASM_READWRITE_INPUT, false) ||
+        !verify_core_roles(13U, CORE_ASM_UNCLAIMED_INPUT_TIE, false)) {
         (void)fprintf(stderr, "FAIL 13-16 operand Core verifier boundary\n");
         return 5;
     }

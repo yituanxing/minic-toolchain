@@ -22,7 +22,8 @@ bool minic_x86_64_emit_module_global(FILE *out, const MinicTargetInfo *target,
         module->globals == NULL || ordinal >= module->global_count)
         return false;
     global = &module->globals[ordinal];
-    if (!global->emittable || global->is_extern ||
+    if (!global->emittable ||
+        global->definition_kind == MINIC_CORE_MODULE_DEFINITION_DECLARATION ||
         global->alias_target_index != SIZE_MAX ||
         global->is_thread_local ||
         (global->fragment_count != 0U && global->fragments == NULL) ||

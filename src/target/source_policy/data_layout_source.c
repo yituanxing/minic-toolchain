@@ -403,8 +403,8 @@ static bool minic_data_layout_type_depth(const MinicTargetInvocation *invocation
         size_t scalar_size;
         size_t scalar_alignment;
         MinicType element;
-        if (invocation->machine.data_layout->gnu_fixed_vector_max_storage_bytes == 0U ||
-            type.gnu_vector_bytes > invocation->machine.data_layout->gnu_fixed_vector_max_storage_bytes ||
+        if (invocation->source_info.gnu_fixed_vector_max_storage_bytes == 0U ||
+            type.gnu_vector_bytes > invocation->source_info.gnu_fixed_vector_max_storage_bytes ||
             (type.gnu_vector_bytes & (type.gnu_vector_bytes - 1U)) != 0U)
             return false;
         element = minic_type_void();

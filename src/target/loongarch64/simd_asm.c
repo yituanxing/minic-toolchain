@@ -292,7 +292,7 @@ bool minic_loongarch64_simd_emit_structured(
     const MinicCoreFunction *fn;
     const MinicCoreStructuredInlineAsmOperand *operands;
     LoongSimdProgram parsed;
-    size_t i;
+    size_t i, output_operand_count;
     bool named, expected_memory_effect;
     if (!out || !ctx || !(fn = ctx->fn) || !ins || !source ||
         fn->type_context == NULL ||
@@ -312,6 +312,8 @@ bool minic_loongarch64_simd_emit_structured(
         parsed.operand_count != ins->value.structured_inline_asm.operand_count ||
         !(operands = ins->value.structured_inline_asm.operands))
         return false;
+    if (!minic_core_asm_output_operand_count(ins, &output_operand_count))
+        return false;
     /* The post-normalization ingress comparison sealed exact opcode,
      * register, placeholder and offset effects. Machine emission validates
      * the immutable typed form and Core operand/effect witness again. */
@@ -329,10 +331,10 @@ bool minic_loongarch64_simd_emit_structured(
      * the original GNU source had no literal "memory" clobber. Named r
      * pointer forms carry that explicit source clobber. */
     if (named && !source->has_memory_clobber) return false;
-    if (named && (source->source_output_count != 0U ||
+    if (named && (output_operand_count != 0U ||
                   parsed.operand_count < 2U || parsed.operand_count > 5U))
         return false;
-    if (!named && source->source_output_count > parsed.operand_count)
+    if (!named && output_operand_count > parsed.operand_count)
         return false;
     for (i = 0U; i < parsed.operand_count; ++i) {
         const MinicCoreStructuredInlineAsmOperand *operand = &operands[i];
@@ -347,11 +349,11 @@ bool minic_loongarch64_simd_emit_structured(
             if (kind != MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT)
                 return false;
         } else if (kind == MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT) {
-            if (i < source->source_output_count || !read || written) return false;
+            if (i < output_operand_count || !read || written) return false;
         } else if (kind == MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT) {
-            if (i >= source->source_output_count || read || !written) return false;
+            if (i >= output_operand_count || read || !written) return false;
         } else if (kind == MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE) {
-            if (i >= source->source_output_count || !read || !written) return false;
+            if (i >= output_operand_count || !read || !written) return false;
         } else return false;
     }
     /* All instructions are validated first; a new opcode cannot leak into

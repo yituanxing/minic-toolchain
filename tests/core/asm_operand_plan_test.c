@@ -79,15 +79,43 @@ static void check_source_plan(MinicAsmOperandPlanOwner owner) {
         ins.value.structured_inline_asm.operands[i].operand_index = i;
     }
     assert(core_asm_publish_operand_plan(&ins, &effect, &plan));
-    assert(effect.operand_plan_owner == owner && effect.source_form_id == initial_id &&
-           effect.source_output_count == 3U && !effect.explicit_memory_clobber &&
+    assert(effect.operand_plan_owner == owner && !effect.explicit_memory_clobber &&
            effect.implicit_memory_effect);
+    {
+        size_t output_count = 0U;
+        assert(minic_core_asm_output_operand_count(&ins, &output_count));
+        assert(output_count == 3U);
+        ins.value.structured_inline_asm.operands[5].kind =
+            MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT;
+        assert(!minic_core_asm_output_operand_count(&ins, &output_count));
+        ins.value.structured_inline_asm.operands[5].kind =
+            MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    }
     assert(effect.target_machine_form_id == plan.target_machine_form_id &&
            effect.target_machine_form_variant == plan.target_machine_form_variant);
-    assert(ins.value.structured_inline_asm.operands[0].gnu_early_clobber &&
-           ins.value.structured_inline_asm.operands[0].gnu_readwrite &&
+    assert(ins.value.structured_inline_asm.operands[0].physical_early_clobber &&
+           ins.value.structured_inline_asm.operands[0].physical_read_write &&
            ins.value.structured_inline_asm.operands[3].has_tied_output &&
            ins.value.structured_inline_asm.operands[3].tied_output_index == 0U);
+
+    /* A target qualifier cannot publish a syntactically valid GNU source
+     * count that contradicts its sealed typed output/input roles. */
+    {
+        const MinicAsmOperandPlanOwner before_owner = effect.operand_plan_owner;
+        ins.value.structured_inline_asm.operands[5].kind =
+            MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT;
+        assert(!core_asm_publish_operand_plan(&ins, &effect, &plan));
+        assert(effect.operand_plan_owner == before_owner);
+        ins.value.structured_inline_asm.operands[5].kind =
+            MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    }
+    {
+        MinicAsmOperandPlan poisoned = plan;
+        poisoned.gnu_early_clobber[0] = false;
+        poisoned.tied_output_index[4] = poisoned.output_count;
+        assert(!core_asm_publish_operand_plan(&ins, &effect, &poisoned));
+        assert(ins.value.structured_inline_asm.operands[0].physical_early_clobber);
+    }
 
     outputs[0].constraint_text = "=r";
     outputs[0].constraint_length = 2U;

@@ -29,14 +29,13 @@ static const char *rv32_module_common_directive(size_t width) {
            width == 4U ? ".4byte" : width == 8U ? ".8byte" : NULL;
 }
 
-/* A tentative or explicit empty initializer has no semantic scalar slots.
- * The C ingress separately records that definition status; Core fragments
- * prove that its entire materialized payload is zero. An explicitly listed
+/* A sealed uninitialized or zero-numeric payload has no scalar slots.
+ * Core fragments prove that its entire materialized payload is zero. An explicitly listed
  * {0} record is byte-identical but must NOT acquire this weak-zero policy. */
 static bool rv32_module_weak_zero_payload(const MinicCoreModuleGlobal *global) {
     const MinicCoreModuleFragment *fragment;
     if (global == NULL ||
-        (!global->is_tentative && !global->is_zero_initialized) ||
+        global->data_policy == MINIC_CORE_MODULE_DATA_MATERIALIZED ||
         global->reference_count != 0U)
         return false;
     if (global->storage_size == 0U) return global->fragment_count == 0U;
@@ -66,7 +65,8 @@ bool minic_riscv32_emit_module_global(FILE *out, const MinicTargetInfo *target,
         ordinal >= module->global_count)
         return false;
     global = &module->globals[ordinal];
-    if (global->is_extern) return global->alias_target_index == SIZE_MAX;
+    if (global->definition_kind == MINIC_CORE_MODULE_DEFINITION_DECLARATION)
+        return global->alias_target_index == SIZE_MAX;
     if (!global->emittable) return false;
     base = minic_multi_module_global_core_base(
         module->type_context, global->core_type_id);

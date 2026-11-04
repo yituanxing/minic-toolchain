@@ -59,12 +59,14 @@ static inline bool minic_multi_elf_emit_module_object_alias(
     const MinicCoreModuleGlobal *alias, const char *type_directive) {
     const MinicCoreModuleGlobal *target;
     if (module == NULL || !module->finalized || alias == NULL ||
-        module->globals == NULL || !alias->is_extern ||
+        module->globals == NULL ||
+        alias->definition_kind != MINIC_CORE_MODULE_DEFINITION_DECLARATION ||
         alias->alias_target_index == SIZE_MAX ||
         alias->alias_target_index >= module->global_count)
         return false;
     target = &module->globals[alias->alias_target_index];
-    return target != alias && !target->is_extern && !target->is_tentative &&
+    return target != alias &&
+           target->definition_kind == MINIC_CORE_MODULE_DEFINITION_REGULAR &&
            target->alias_target_index == SIZE_MAX && target->name != NULL &&
            target->name[0] != '\0' &&
            minic_multi_elf_emit_module_alias(

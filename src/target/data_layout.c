@@ -51,7 +51,6 @@ static const MinicDataLayout minic_x86_64_linux_data_layout_value = {
     .long_double_alignment = 16U,
     .float128_size = 16U,
     .float128_alignment = 16U,
-    .gnu_fixed_vector_max_storage_bytes = 16U,
 };
 
 /* AAPCS64 LP64, unsigned plain char, 16-byte IEEE quad long double.
