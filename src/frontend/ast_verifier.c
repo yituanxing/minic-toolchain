@@ -336,12 +336,28 @@ static bool array_object_type_matches(const MinicC0Program *program,
                                       const MinicArrayObjectInfo *info,
                                       MinicType array_type) {
     const MinicArrayType *materialized;
+    MinicType effective_element;
 
     if (program == NULL || info == NULL || !minic_type_is_array(array_type)) {
         return false;
     }
     materialized = minic_c0_program_array_type(program, array_type.array_type_id);
-    if (materialized == NULL || !minic_type_equal(materialized->element_type, info->element_type)) {
+    if (materialized == NULL) {
+        return false;
+    }
+    /* A const/volatile record lvalue qualifies its array member and every
+     * element of that array. The interned array descriptor records the
+     * declaration's element type, while expression_array_qualified_shape()
+     * reports the effective element type after the enclosing lvalue's cv
+     * qualifiers. Compare those same effective types for `&obj->array`,
+     * including flexible/incomplete and GNU zero-length members; do not
+     * weaken the actual element identity or array extent checks below. */
+    effective_element = materialized->element_type;
+    if ((minic_type_is_const(array_type) &&
+         !minic_type_add_const(effective_element, &effective_element)) ||
+        (minic_type_is_volatile(array_type) &&
+         !minic_type_add_volatile(effective_element, &effective_element)) ||
+        !minic_type_equal(effective_element, info->element_type)) {
         return false;
     }
     if (info->is_zero_length) {

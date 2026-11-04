@@ -108,6 +108,8 @@
 | [MC-091](#mc-091-限定符前缀导致合法-gnu-匿名-record-成员被丢弃) | P0 | FIXED-UNVERIFIED | GNU-ORIGINAL-LINUX-I | C Frontend | P51 `const struct { ... };` 被错误当作无成员声明；七路原始 Linux 首错 2030/2105 同因，真实 `.i` 定点复现及 x86/五目标校验 |
 | [MC-092](#mc-092-x86-64-位-smp-xadd-错误限定-c-long-整数-rank) | P1 | FIXED-UNVERIFIED | GNU-NATIVE-ASM | x86 structured ASM | P52 保持 `lock xaddq` 机器约束，只将正确的 `long long` 64 位操作数并入合法 C rank；Linux atomic64 原生差分 PASS |
 | [MC-093](#mc-093-不完整-enum-跨函数指针类型导入-core-时被误认为必须有整数布局) | P0 | FIXED-UNVERIFIED | GNU-ORIGINAL-LINUX-I | Compiler/CoreType ingress | P53 在共同 C→Core 类型导入器将不完整 enum 保留为名义无布局 OPAQUE，避免全局与函数签名的传递性导入失败；真实 `.i` 定点验证 |
+| [MC-094](#mc-094-初始跳过的-internal-函数被-core-闭包重新引用却未补做降低) | P0 | FIXED-UNVERIFIED | GNU-ORIGINAL-LINUX-ELF | Compiler/Core reachability | P54 Core/Module 闭包固定点补降低新发现的 live 函数，避免 `wrmsr` 等被假报 unsupported；56 份原始 `.i` 50 份完整 GNU ELF |
+| [MC-095](#mc-095-合格数组左值的-cv-传播在-ast-验证中被误当成元素类型不一致) | P0 | FIXED-UNVERIFIED | GNU-ORIGINAL-LINUX-ELF | Frontend AST verifier | P55 const/volatile 聚合数组成员与元素的有效限定符比较修复；原始 Linux `.i` 11/11 ELF 验证 |
 
 ## 索引：尚待验证的风险
 
@@ -867,6 +869,20 @@
 - **真实根因：** `src/compiler/c_lower/core_type_import.c::import_type` 将任何 `enum` 强制经 `minic_c0_type_effective_integer_type` 转为具体整数 ABI；合法 GNU 内核 `extern int (*platform_notify)(struct device*)` 的传递式成员类型 `fwnode_operations.device_get_dma_attr` 返回仅前向声明的 `enum dev_dma_attr`，另一路 `consw.con_build_attr` 参数为不完整 `enum vc_intensity`。即使这些是无调用的指针签名，只要 Core Function/Module 快照试图表示它们，旧代码就错误要求完整对象布局并返回失败。
 - **统一 CoreType 设计：** 源端完整 `enum` 继续导入其确切整数 ABI，不完整 `enum` 保留为已有的 `MINIC_CORE_TYPE_OPAQUE`、无 object layout 的名义身份，缓存按 `(enum/source builtin 种类, source ID)` 区分；指针及函数签名可持有此类型，但真正按值定义/使用不完整对象必须在 C 和 Core 验证处 fail closed。不增加平台枚举表、额外 Core IR 指令或常量宽度猜测。
 - **定点机验证：** 7/7 原始 Linux 全局快照失败 `.i` 使用单一补丁后生成 `.s`，`probe_64.i` 进一步由 GNU AS 生成 x86 ELF relocatable；原始 `events/core.i` 的 `perf_events_lapic_init` 类型快照失败转入后续 `wrmsr` 问题。P51 新失败产物保留 56 份原始 `.i` 同编译选项差分：P53 后 **20/56 完整 `.s`（基线 0），Core globals 12→0、Core lowering 24→2**，其余进入下一层实际缺口。五目标 `-S`、GNU/MiniC native、core type importer nominal/no-layout/complete enum 反例与原生/SAN 检查通过；不得将 56 样本等同 2758 完整验收。
+
+### MC-094 初始跳过的 internal 函数被 Core 闭包重新引用却未补做降低
+
+- **状态：** P54 `FIXED-UNVERIFIED`，P0，`GNU-ORIGINAL-LINUX-ELF`；仍待最新 HEAD 七路全量 Linux 编译和 GNU 链接/QEMU。
+- **根因：** `src/compiler/core_function_set.c::minic_prepare_core_function_set` 依据最初 C 端 `is_referenced` 提示，刻意跳过不少 dead static/internal Body（状态默认 `MINIC_CORE_LOWER_UNSUPPORTED`）；之后独立 Core/ModuleIR 闭包发现已发布 Core 调用／ASM 符号重定位重新指向这些 Body，却没有重新 Lower。最终校验因这类 now-live 函数从未降低，给出误导性的 `Core IR does not yet support function 'wrmsr'`（同类还见 `cpuid`、`rdtsc`），并非目标 ISA 不支持相应汇编模板。
+- **一体机制：** 统一 `lower_one` 作为初始和迟到函数的唯一事务入口（SourceBuilder→CoreType snapshot→Core verify→take→literal fold），以每个 FunctionId 的 `attempted` 区分真正降低失败与有意未尝试。Compiler 在原 Core/ModuleIR 独立闭包后，针对新增 live、尚未 attempted 的内部函数按同一契约补降低，再重新计算闭包，直到固定点；每轮至少消耗一个函数，按 FunctionCount 有界，保留死 Body 的跳过与 fail-closed，不重设计机器端。
+- **真实差分：** 以 P53 为前置，全 56 份 P51 保留的真实 GNU Linux `.i` 冻结样本由 **20/56** 提升至 **50/56 完整 `.s`**，其 **50/50** 均由 GNU GAS 生成 x86 ELF64 relocatable；包含 `arch/x86/events/core.i` 的 1.18MB 汇编成功与 `wrmsr` 真实使用、`cpuid`、`rdtsc`。旧 19 个 Core lowering 样本中 16 个现成功，2 个 EFI verifier 另行阻塞，1 个确实缺 ASM 立即量。非样本 2758 的整体验收尚需复跑。
+
+### MC-095 合格数组左值的 cv 传播在 AST 验证中被误当成元素类型不一致
+
+- **状态：** P55 `FIXED-UNVERIFIED`，P0，`GNU-ORIGINAL-LINUX-ELF`；尚未声称 65 个 net AST 错误全部被修复。
+- **根因：** `src/frontend/ast_verifier.c::array_object_type_matches` 将材料化 ArrayType 的*未限定声明元素*直接与表达式 `MinicArrayObjectInfo.element_type` 比较。实际上 `src/frontend/ast.c::expression_array_qualified_shape` 已正确将 `const/volatile` 结构体左值的限定符传播至其数组成员和元素；合法 GNU `const struct ieee80211_he_operation *he_oper; ret = (const void *)&he_oper->optional;` 中 `optional` 是 flexible byte array，验证器却误报 `parsed AST contract failed expression[...]`。P51 七路 72 个 AST 首错中 65 个来自 net 源。
+- **统一判定修正：** 在比较之前按 ArrayType 的 cv 限定符推导材料化元素的*有效* cv 资格，保持真正的元素类型身份、fixed/zero/incomplete extent、数组对象所有权检查不变；不为 Linux 字段名建立特殊通道。永久 probe 覆盖柔性/零长/固定/嵌套数组、GNU/MiniC native、五目标 `-S`、不合法 const 写及错元素指针负例。
+- **真实差分：** 保留同一原始 GNU 预处理 Linux 文件、原 x86 Kbuild flags：`net/mac80211`、`net/wireless`、`net/netfilter`、`fs/lockd` 共 **11/11** 来自 P51 shard0 的 AST 失败 `.i`，现全部从 AST 错误推进至 `.s`，GNU AS 形成真实 ELF64 relocatable `.o`。完整 2758 owner 的新 PASS/FAIL 数待最新 HEAD 七路运行。
 
 ## 已核对并排除的误判（不要在未有新证据时重新打开）
 

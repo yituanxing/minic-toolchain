@@ -362,11 +362,13 @@ int minic_compile_preprocessed_file_for_target(const char *input_path,
                                     success ? "end-ok" : "end-fail",
                                     program.function_count);
     }
-    /* One joint function/object fixed-point closure consumes only Core IR and
-     * ModuleIR symbol facts. It never asks the mutable source AST to decide
-     * an already-lowered function or object's emission. */
-    if (success && !minic_core_function_set_close_reachability(
-                       &core_set, backend->emit_reachable_core_blocks_only)) {
+    /* Core/ModuleIR owns symbol reachability. If the closure reaches a C
+     * function deferred by the source-only emission hint, the compiler
+     * completes its normal sealed Core ingress and closes again until the
+     * executable graph is stable. Core closure itself never reads C AST. */
+    if (success && !minic_complete_core_function_set_reachability(
+                       &program, invocation, &core_set,
+                       backend->emit_reachable_core_blocks_only)) {
         minic_set_diagnostic(diagnostic, input_path, 1U, 1U,
                              "cannot compute Core/Module symbol reachability");
         success = false;

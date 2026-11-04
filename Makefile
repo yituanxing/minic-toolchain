@@ -1696,6 +1696,13 @@ check-incomplete-enum-coretype: $(MINIC_CC_BINARY)
 
 check-fast: check-incomplete-enum-coretype
 
+.PHONY: check-core-late-live-closure
+check-core-late-live-closure: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+		bash tests/compiler/c0/probe-core-late-live-closure.sh
+
+check-fast: check-core-late-live-closure
+
 .PHONY: check-x86-linux-smp-xadd-i64
 check-x86-linux-smp-xadd-i64: $(MINIC_CC_BINARY)
 	bash tests/compiler/c0/probe-x86-linux-abi-carry-xadd.sh "$(abspath $(MINIC_CC_BINARY))"
@@ -2513,6 +2520,16 @@ check-array-shape-convergence: $(MINIC_CC_BINARY)
 	  sh tests/compiler/c0/run-array-shape-convergence.sh
 
 check-fast: check-array-shape-convergence
+
+# Array address-of validation must compare *effective* element qualifiers:
+# const/volatile on a record lvalue also qualify flexible/incomplete, GNU
+# zero-length and fixed array members without changing their stored extent.
+.PHONY: check-qualified-array-address-verifier
+check-qualified-array-address-verifier: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	  bash tests/compiler/c0/probe-qualified-array-address-verifier.sh
+
+check-fast: check-qualified-array-address-verifier
 
 # Materialized typedef and fixed local arrays must retain the same C semantics
 # across all five emitters. Host GNU provides

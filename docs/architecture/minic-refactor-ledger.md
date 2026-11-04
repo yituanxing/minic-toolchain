@@ -2972,3 +2972,61 @@ function CoreType snapshot to a later `wrmsr` reachability problem. Comparing
 remaining 34 moved to later blockers or existing unchanged categories.
 This is source-verified evidence, **not** proof that all 1019+156 original
 owners pass; fresh seven-way full corpus remains mandatory.
+
+## IR-P54 — Core/ModuleIR reachability-driven late lowering fixed point (2026-11-04)
+
+The P53 incomplete enum repair exposed that many genuine Linux 6.6.143
+`Core IR does not yet support function 'wrmsr'` (also `cpuid` / `rdtsc`)
+were not ISA operation gaps at all. `minic_prepare_core_function_set`
+intentionally skipped initially C-unreferenced internal function bodies,
+recording the default `MINIC_CORE_LOWER_UNSUPPORTED`. The later Core/Module
+symbol closure marked some of those definitions live through a real Core
+call, inline ASM symbol or object relocation, but the compiler never
+revisited their body. The final validation mistook *never tried* for
+*unsupported* and rejected the translation unit.
+
+P54 adds a **compiler-owned per-FunctionId attempted ledger** and extracts
+the initial C-to-Core lowering into one transactional lower-one path (one
+SourceBuilder, type snapshot, Core verifier, take and fold). A single
+closure-completion stage runs existing source-independent Core/Module
+reachability, lowers just newly live, still-unattempted definitions,
+then recloses until the live graph stabilizes. A nonfinal round consumes
+at least one function, making it bounded; dead bodies still avoid Core
+lowering and genuine failures still fail closed. No new ISA instruction,
+target-specific heuristic or duplicated Core lowering path was added.
+
+**Authentic Linux evidence:** 19 prior original `Core lowering failed`
+owners were rebuilt with this P53+P54 compiler: **16/19** emit `.s`, two
+EFI Core verifier problems remain, one `arch_static_branch` has a true
+remaining operand constraint. For the complete 56 SHA-locked P51 failure
+sample, P53 alone emitted **20/56** `.s`; P53+P54 emits **50/56**, and
+**all 50/50** assemble via GNU GAS into true `ELF64` x86-64 relocatable
+objects. Authentic `arch/x86/events/core.i` emits ~1.18MB `.s`, GNU
+relocatable `.o` ~302KB with one late-live function (`wrmsr`) lowered.
+One permanent Core closure test covers transitive late-live symbolic
+retention and all five source targets; full Linux 2758 owner and QEMU
+remain separately required.
+
+## IR-P55 — AST array-object qualifier agreement for GNU C (2026-11-04)
+
+P51's exact seven-shard census contained **72** `invalid expression
+contract` first failures, **65** in networking. One authentic GNU
+`net/mac80211/agg-tx.i` failed at `(const void *)&he_oper->optional`:
+`he_oper` points to a `const struct ieee80211_he_operation` whose
+`optional` field is a flexible array. The AST producer correctly promotes
+the enclosing lvalue's const/volatile to the array elements, while
+`ast_verifier.c::array_object_type_matches` compared the expression's
+qualified element against the raw unqualified interned ArrayType element.
+The verifier rejected a valid, already represented language type.
+
+P55 compares the **effective** cv-qualified materialized element to
+the actual expression element, preserving original element identity,
+incomplete/flexible/zero/fixed array extent and object ownership checks.
+The permanent GNU/MiniC probe covers fixed, GNU zero-length, flexible and
+nested array members, five-ISA `-S`, x86 native execution and negative
+const-write / wrong-element-pointer cases. Exact original GNU Linux `.i`
+with their pinned x86 Kbuild flags from `net/mac80211`, `net/wireless`,
+`net/netfilter` and `fs/lockd` (all **11/11** retained shard0 AST-failed
+owners) proceed through MiniC `-S` and GNU GAS to real ELF64 relocatable `.o`. This
+confirms a shared C language verifier bug; no 65/72 full-corpus claim
+without a fresh seven-shard run.

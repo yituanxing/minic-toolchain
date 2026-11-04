@@ -1,4 +1,5 @@
 #include "compiler/core_function_set.h"
+#include "compiler/core_reachability.h"
 #include "compiler/c_lower/core_type_import.h"
 #include "compiler/c_lower/core_ir_source.h"
 #include "compiler/module_ir_build.h"
@@ -31,6 +32,7 @@ void minic_core_function_set_initialize(MinicCoreFunctionSet *set) {
     }
     set->functions = NULL;
     set->statuses = NULL;
+    set->attempted = NULL;
     set->function_count = 0U;
     set->type_context = NULL;
     set->type_importer = NULL;
@@ -50,6 +52,7 @@ void minic_core_function_set_destroy(MinicCoreFunctionSet *set) {
     }
     free(set->functions);
     free(set->statuses);
+    free(set->attempted);
     minic_core_module_destroy(&set->module);
     if (set->type_importer != NULL) {
         minic_core_type_importer_destroy(set->type_importer);
@@ -60,6 +63,65 @@ void minic_core_function_set_destroy(MinicCoreFunctionSet *set) {
         free(set->type_context);
     }
     minic_core_function_set_initialize(set);
+}
+
+/* Both initially eligible source functions and later Core-closure discoveries
+ * use this ONE transactional C->Core ingress. The ledger distinguishes a
+ * dead function intentionally not attempted from a supported function whose
+ * lowering legitimately failed. A failed draft never reaches executable Core. */
+static void minic_core_set_lower_one(const MinicC0Program *program,
+                                     const MinicTargetInvocation *target,
+                                     MinicCoreFunctionSet *set,
+                                     size_t function_index,
+                                     MinicCoreReentryIndex *index) {
+    const MinicFunction *function;
+    MinicFunctionBodyView body;
+    MinicCoreSourceBuilder source_builder;
+
+    if (function_index >= set->function_count || set->attempted[function_index])
+        return;
+    set->attempted[function_index] = true;
+    function = minic_c0_program_function(program, function_index);
+    if (function == NULL || !function->is_defined ||
+        !minic_c0_function_body_view(program, function_index, &body)) {
+        set->statuses[function_index] = MINIC_CORE_LOWER_ERROR;
+        return;
+    }
+    if (minic_core_set_bootstrap_trace_enabled()) {
+        (void)fprintf(stderr,
+                      "MINIC_BOOTSTRAP_TRACE stage=core-lower state=begin "
+                      "index=%zu function=%s\n",
+                      function_index,
+                      function->name != NULL ? function->name : "?");
+        (void)fflush(stderr);
+    }
+    minic_core_source_builder_initialize(&source_builder);
+    set->statuses[function_index] =
+        minic_core_lower_function_with_index(&body, target, &source_builder, index);
+    if (set->statuses[function_index] == MINIC_CORE_LOWER_OK &&
+        (!minic_core_function_snapshot_types(
+            &source_builder, set->type_context,
+            minic_core_set_import_type, set->type_importer) ||
+         !minic_core_function_verify(&source_builder.core) ||
+         !minic_core_source_builder_take_core(
+             &source_builder, &set->functions[function_index]))) {
+        set->statuses[function_index] = MINIC_CORE_LOWER_ERROR;
+    }
+    minic_core_source_builder_destroy(&source_builder);
+    if (set->statuses[function_index] == MINIC_CORE_LOWER_OK)
+        (void)minic_core_function_fold_literal_branches(
+            &set->functions[function_index]);
+    if (minic_core_set_bootstrap_trace_enabled()) {
+        (void)fprintf(stderr,
+                      "MINIC_BOOTSTRAP_TRACE stage=core-lower state=end "
+                      "index=%zu function=%s status=%d blocks=%zu instructions=%zu\n",
+                      function_index,
+                      function->name != NULL ? function->name : "?",
+                      (int)set->statuses[function_index],
+                      set->functions[function_index].block_count,
+                      set->functions[function_index].instruction_count);
+        (void)fflush(stderr);
+    }
 }
 
 /* False means structural allocation failed and leaves output untouched. True
@@ -100,7 +162,8 @@ bool minic_prepare_core_function_set(const MinicC0Program *program,
             (MinicCoreFunction *)calloc(set.function_count, sizeof(*set.functions));
         set.statuses = (MinicCoreLowerStatus *)malloc(set.function_count *
                                                        sizeof(*set.statuses));
-        if (set.functions == NULL || set.statuses == NULL) {
+        set.attempted = (bool *)calloc(set.function_count, sizeof(*set.attempted));
+        if (set.functions == NULL || set.statuses == NULL || set.attempted == NULL) {
             minic_core_function_set_destroy(&set);
             return false;
         }
@@ -126,12 +189,11 @@ bool minic_prepare_core_function_set(const MinicC0Program *program,
     index = minic_core_reentry_index_create(program);
     for (function_index = 0U; function_index < set.function_count; ++function_index) {
         const MinicFunction *function;
-        MinicFunctionBodyView body;
-        MinicCoreSourceBuilder source_builder;
 
         function = minic_c0_program_function(program, function_index);
         if (function == NULL) {
             set.statuses[function_index] = MINIC_CORE_LOWER_ERROR;
+            set.attempted[function_index] = true;
             continue;
         }
         if (!function->is_defined) {
@@ -154,56 +216,73 @@ bool minic_prepare_core_function_set(const MinicC0Program *program,
                 last - first <= 1U)
                 continue;
         }
-        if (!minic_c0_function_body_view(program, function_index, &body)) {
-            set.statuses[function_index] = MINIC_CORE_LOWER_ERROR;
-            continue;
-        }
-        if (minic_core_set_bootstrap_trace_enabled()) {
-            (void)fprintf(stderr,
-                          "MINIC_BOOTSTRAP_TRACE stage=core-lower state=begin "
-                          "index=%zu function=%s\n",
-                          function_index,
-                          function->name != NULL ? function->name : "?");
-            (void)fflush(stderr);
-        }
-        /* Source-language construction has a distinct, compiler-owned
-         * lifetime. Only a sealed Core function is published into the
-         * machine-facing set; even failed C imports cannot leave a source
-         * draft reachable through its CoreFunction array. */
-        minic_core_source_builder_initialize(&source_builder);
-        set.statuses[function_index] =
-            minic_core_lower_function_with_index(&body, target,
-                                                &source_builder, index);
-        if (set.statuses[function_index] == MINIC_CORE_LOWER_OK &&
-            (!minic_core_function_snapshot_types(
-                &source_builder, set.type_context,
-                minic_core_set_import_type, importer) ||
-             !minic_core_function_verify(&source_builder.core) ||
-             !minic_core_source_builder_take_core(
-                 &source_builder, &set.functions[function_index]))) {
-            set.statuses[function_index] = MINIC_CORE_LOWER_ERROR;
-        }
-        minic_core_source_builder_destroy(&source_builder);
-        if (set.statuses[function_index] == MINIC_CORE_LOWER_OK)
-            (void)minic_core_function_fold_literal_branches(
-                &set.functions[function_index]);
-        if (minic_core_set_bootstrap_trace_enabled()) {
-            (void)fprintf(stderr,
-                          "MINIC_BOOTSTRAP_TRACE stage=core-lower state=end "
-                          "index=%zu function=%s status=%d blocks=%zu instructions=%zu\n",
-                          function_index,
-                          function->name != NULL ? function->name : "?",
-                          (int)set.statuses[function_index],
-                          set.functions[function_index].block_count,
-                          set.functions[function_index].instruction_count);
-            (void)fflush(stderr);
-        }
+        minic_core_set_lower_one(program, target, &set, function_index, index);
     }
     minic_core_reentry_index_destroy(index);
     minic_core_module_function_name_index_destroy(&names);
     minic_core_function_set_destroy(output);
     *output = set;
     return true;
+}
+
+bool minic_complete_core_function_set_reachability(
+    const MinicC0Program *program, const MinicTargetInvocation *target,
+    MinicCoreFunctionSet *set, bool emit_reachable_core_blocks_only) {
+    MinicCoreReentryIndex *index = NULL;
+    size_t round, total_late_lowered = 0U;
+
+    if (program == NULL || target == NULL || set == NULL ||
+        set->type_context == NULL || set->type_importer == NULL ||
+        set->module.finalized || set->function_count != program->function_count ||
+        set->module.function_count != set->function_count ||
+        (set->function_count != 0U &&
+         (set->functions == NULL || set->statuses == NULL ||
+          set->attempted == NULL || set->module.function_symbols == NULL)))
+        return false;
+
+    /* The closure itself consumes exclusively sealed Core and ModuleIR, but
+     * an initial C emission hint may omit an internal function later reached
+     * by a live Core CALL/ASM/global relocation (for example a GNU inline
+     * wrapper after specialization). Its initial UNSUPPORTED status meant
+     * "never attempted", not "invalid C". Re-enter the ONE source->Core
+     * lowering transaction for exactly those newly live functions, then
+     * recompute the Core-only closure: their own calls may discover another
+     * late-live function. Each nonfinal round consumes at least one distinct
+     * FunctionId, so the process is finite without sacrificing dead-body
+     * pruning or allowing a failed Core draft to escape. */
+    for (round = 0U; round <= set->function_count; ++round) {
+        size_t function_index;
+        bool added = false;
+
+        if (!minic_core_function_set_close_reachability(
+                set, emit_reachable_core_blocks_only))
+            goto failed;
+        for (function_index = 0U; function_index < set->function_count;
+             ++function_index) {
+            const MinicCoreModuleFunctionSymbol *symbol =
+                &set->module.function_symbols[function_index];
+            if (!symbol->is_defined || !symbol->is_referenced ||
+                set->attempted[function_index])
+                continue;
+            if (index == NULL)
+                index = minic_core_reentry_index_create(program);
+            minic_core_set_lower_one(
+                program, target, set, function_index, index);
+            added = true;
+            ++total_late_lowered;
+        }
+        if (!added) {
+            minic_core_reentry_index_destroy(index);
+            if (total_late_lowered != 0U)
+                (void)fprintf(stderr,
+                              "MINIC_CORE_LATE_LOWER_CLOSURE rounds=%zu functions=%zu\n",
+                              round, total_late_lowered);
+            return true;
+        }
+    }
+failed:
+    minic_core_reentry_index_destroy(index);
+    return false;
 }
 
 bool minic_finalize_core_function_set_module(const MinicC0Program *program,
