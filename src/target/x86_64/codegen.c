@@ -264,41 +264,18 @@ static bool x86_no_sse_function_safe(
                  x86_no_sse_fp_type(fn,
                      fn->values[ins->result].core_type_id)))
                 return false;
-            if (ins->kind == MINIC_CORE_INSTRUCTION_CALL) {
-                const MinicCoreCallee *callee;
+            if (ins->kind == MINIC_CORE_INSTRUCTION_CALL ||
+                ins->kind == MINIC_CORE_INSTRUCTION_INDIRECT_CALL) {
+                MinicCoreCallView call;
                 size_t k;
-                if (ins->value.call.callee_id >= fn->callee_count)
+                if (!minic_core_call_view_build(fn, ins, &call) ||
+                    (call.parameter_count != 0U &&
+                     call.core_parameter_type_ids == NULL) ||
+                    x86_no_sse_fp_type(fn, call.core_return_type_id))
                     return false;
-                callee = &fn->callees[ins->value.call.callee_id];
-                if ((callee->parameter_count != 0U &&
-                     callee->core_parameter_type_ids == NULL) ||
-                    x86_no_sse_fp_type(fn, callee->core_return_type_id))
-                    return false;
-                for (k = 0U; k < callee->parameter_count; ++k)
+                for (k = 0U; k < call.parameter_count; ++k)
                     if (x86_no_sse_fp_type(fn,
-                            callee->core_parameter_type_ids[k]))
-                        return false;
-            } else if (ins->kind == MINIC_CORE_INSTRUCTION_INDIRECT_CALL) {
-                const MinicCoreCallSignature *signature;
-                const MinicCoreType *function_type;
-                size_t k;
-                if (ins->value.indirect_call.signature_id >=
-                    fn->call_signature_count) return false;
-                signature = &fn->call_signatures[
-                    ins->value.indirect_call.signature_id];
-                function_type = minic_core_type_get(fn->type_context,
-                    minic_core_type_unqualified(fn->type_context,
-                        signature->core_function_type_id));
-                if (function_type == NULL ||
-                    function_type->kind != MINIC_CORE_TYPE_FUNCTION ||
-                    (function_type->value.function.parameter_count != 0U &&
-                     function_type->value.function.parameters == NULL) ||
-                    x86_no_sse_fp_type(fn,
-                        function_type->value.function.return_type))
-                    return false;
-                for (k = 0U; k < function_type->value.function.parameter_count; ++k)
-                    if (x86_no_sse_fp_type(fn,
-                            function_type->value.function.parameters[k]))
+                            call.core_parameter_type_ids[k]))
                         return false;
             }
         }
@@ -716,26 +693,6 @@ typedef struct MinicX86VisitContext {
     const MinicCoreModule *module;
 } MinicX86VisitContext;
 
-typedef struct MinicX86FunctionNameIndex {
-    const char *name;
-    size_t index;
-} MinicX86FunctionNameIndex;
-
-static int x86_compare_function_names(const void *left, const void *right) {
-    const MinicX86FunctionNameIndex *a = left, *b = right;
-    return strcmp(a->name, b->name);
-}
-
-static size_t x86_find_function_name(
-    const MinicX86FunctionNameIndex *names, size_t count, const char *name) {
-    const MinicX86FunctionNameIndex key = {name, 0U};
-    const MinicX86FunctionNameIndex *found;
-    if (name == NULL) return SIZE_MAX;
-    found = bsearch(&key, names, count, sizeof(*names),
-                    x86_compare_function_names);
-    return found != NULL ? found->index : SIZE_MAX;
-}
-
 /* An unannotated static helper called exclusively from .head.text executes
  * before the normal kernel virtual mapping exists. The section annotation
  * belongs to the caller, but its address-role contract reaches the callee:
@@ -745,11 +702,14 @@ static size_t x86_find_function_name(
 static bool *x86_head_address_call_closure(
     const MinicCoreFunction *functions, size_t function_count,
     const MinicCoreModule *module) {
-    MinicX86FunctionNameIndex *names = NULL;
+    MinicCoreModuleFunctionNameIndex names = {0};
     bool *head = NULL, *head_call = NULL, *normal_call = NULL, *address_taken = NULL;
     bool changed;
     size_t i;
-    names = calloc(function_count == 0U ? 1U : function_count, sizeof(*names));
+    if (module == NULL || module->function_count != function_count ||
+        (function_count != 0U && functions == NULL) ||
+        !minic_core_module_function_name_index_build(module, &names))
+        return NULL;
     head = calloc(function_count == 0U ? 1U : function_count, sizeof(*head));
     head_call = calloc(function_count == 0U ? 1U : function_count,
                        sizeof(*head_call));
@@ -757,34 +717,38 @@ static bool *x86_head_address_call_closure(
                          sizeof(*normal_call));
     address_taken = calloc(function_count == 0U ? 1U : function_count,
                            sizeof(*address_taken));
-    if (!names || !head || !head_call || !normal_call || !address_taken)
+    if (!head || !head_call || !normal_call || !address_taken)
         goto fail;
     for (i = 0U; i < function_count; ++i) {
         const MinicCoreModuleFunctionSymbol *module_decl =
             &module->function_symbols[i];
         const char *section = module_decl->section_name;
-        names[i].name = module_decl->name;
-        names[i].index = i;
-        if (names[i].name == NULL) goto fail;
         head[i] = section != NULL && strcmp(section, ".head.text") == 0;
     }
-    qsort(names, function_count, sizeof(*names), x86_compare_function_names);
     /* Taking a function's address permits an opaque, possibly non-head
      * caller, regardless of the direct-call census. */
     for (i = 0U; i < function_count; ++i) {
         const MinicCoreFunction *fn = &functions[i];
         size_t j;
+        /* The source of an address edge must itself be emitted. In
+         * particular, same-asm-name static candidates can be lowered for
+         * Core reachability without surviving its final fixed point. */
+        if (!minic_program_module_function_selected(
+                &module->function_symbols[i],
+                MINIC_PROGRAM_FUNCTION_LIVE_DEFINITIONS)) continue;
         for (j = 0U; j < fn->instruction_count; ++j) {
             const MinicCoreInstruction *ins = &fn->instructions[j];
-            size_t callee_index;
+            size_t begin, end, k;
+            const MinicCoreFunctionSymbol *symbol;
             if (ins->kind != MINIC_CORE_INSTRUCTION_FUNCTION_ADDRESS ||
                 ins->value.function_symbol_id >= fn->function_symbol_count)
                 continue;
-            callee_index = x86_find_function_name(
-                names, function_count,
-                fn->function_symbols[ins->value.function_symbol_id].name);
-            if (callee_index < function_count)
-                address_taken[callee_index] = true;
+            symbol = &fn->function_symbols[ins->value.function_symbol_id];
+            if (!minic_core_module_function_name_index_find(
+                    &names, symbol->name, symbol->name_length, &begin, &end))
+                goto fail;
+            for (k = begin; k < end; ++k)
+                address_taken[names.entries[k].function_index] = true;
         }
     }
     do {
@@ -794,18 +758,25 @@ static bool *x86_head_address_call_closure(
         for (i = 0U; i < function_count; ++i) {
             const MinicCoreFunction *fn = &functions[i];
             size_t j;
+            if (!minic_program_module_function_selected(
+                    &module->function_symbols[i],
+                    MINIC_PROGRAM_FUNCTION_LIVE_DEFINITIONS)) continue;
             for (j = 0U; j < fn->instruction_count; ++j) {
                 const MinicCoreInstruction *ins = &fn->instructions[j];
-                size_t callee_index;
+                size_t begin, end, k;
+                const MinicCoreCallee *callee;
                 if (ins->kind != MINIC_CORE_INSTRUCTION_CALL ||
                     ins->value.call.callee_id >= fn->callee_count)
                     continue;
-                callee_index = x86_find_function_name(
-                    names, function_count,
-                    fn->callees[ins->value.call.callee_id].name);
-                if (callee_index >= function_count) continue;
-                if (head[i]) head_call[callee_index] = true;
-                else normal_call[callee_index] = true;
+                callee = &fn->callees[ins->value.call.callee_id];
+                if (!minic_core_module_function_name_index_find(
+                        &names, callee->name, callee->name_length,
+                        &begin, &end)) goto fail;
+                for (k = begin; k < end; ++k) {
+                    const size_t target_index = names.entries[k].function_index;
+                    if (head[i]) head_call[target_index] = true;
+                    else normal_call[target_index] = true;
+                }
             }
         }
         for (i = 0U; i < function_count; ++i) {
@@ -820,13 +791,13 @@ static bool *x86_head_address_call_closure(
             }
         }
     } while (changed);
-    free(names);
+    minic_core_module_function_name_index_destroy(&names);
     free(head_call);
     free(normal_call);
     free(address_taken);
     return head;
 fail:
-    free(names);
+    minic_core_module_function_name_index_destroy(&names);
     free(head);
     free(head_call);
     free(normal_call);

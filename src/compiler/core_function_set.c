@@ -7,6 +7,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 /* The compiler owns the AST->Core function-set transaction. It brackets the
  * optional source incoming-edge index once per compilation and preserves
@@ -70,6 +71,7 @@ bool minic_prepare_core_function_set(const MinicC0Program *program,
     MinicCoreFunctionSet set;
     MinicCoreTypeImporter *importer;
     MinicCoreReentryIndex *index;
+    MinicCoreModuleFunctionNameIndex names = {0};
     size_t function_index;
 
     if (program == NULL || target == NULL || output == NULL ||
@@ -115,6 +117,10 @@ bool minic_prepare_core_function_set(const MinicC0Program *program,
         minic_core_function_set_destroy(&set);
         return false;
     }
+    if (!minic_core_module_function_name_index_build(&set.module, &names)) {
+        minic_core_function_set_destroy(&set);
+        return false;
+    }
     /* The AST statement/expression graph is immutable during Core Lowering.
      * Reuse one validated incoming-edge map for all ordinary and clone bodies. */
     index = minic_core_reentry_index_create(program);
@@ -135,7 +141,18 @@ bool minic_prepare_core_function_set(const MinicC0Program *program,
             !set.module.function_symbols[function_index].is_reachability_root &&
             !set.module.function_symbols[function_index].is_source_asm_operand_root &&
             !set.module.function_symbols[function_index].is_source_label_relocation_owner) {
-            continue;
+            const char *name = set.module.function_symbols[function_index].name;
+            size_t first, last;
+            /* An external declaration and a local definition may share an
+             * assembler name even if their C identifiers differ. They have
+             * distinct source-reference bits; lower a duplicate local body
+             * speculatively so the later Core symbol closure can keep it if
+             * a live CALL reaches that assembler name. Ordinary dead static
+             * bodies still avoid all C-to-Core work. */
+            if (name == NULL || !minic_core_module_function_name_index_find(
+                    &names, name, strlen(name), &first, &last) ||
+                last - first <= 1U)
+                continue;
         }
         if (!minic_c0_function_body_view(program, function_index, &body)) {
             set.statuses[function_index] = MINIC_CORE_LOWER_ERROR;
@@ -183,6 +200,7 @@ bool minic_prepare_core_function_set(const MinicC0Program *program,
         }
     }
     minic_core_reentry_index_destroy(index);
+    minic_core_module_function_name_index_destroy(&names);
     minic_core_function_set_destroy(output);
     *output = set;
     return true;

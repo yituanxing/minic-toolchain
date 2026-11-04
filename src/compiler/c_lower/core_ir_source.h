@@ -84,7 +84,7 @@ typedef bool (*MinicCoreTypeSnapshotResolver)(void *user_data,
                                               MinicCoreTypeId *core_type_id);
 
 bool minic_core_function_snapshot_types(MinicCoreSourceBuilder *builder,
-                                        const MinicCoreTypeContext *context,
+                                        MinicCoreTypeContext *context,
                                         MinicCoreTypeSnapshotResolver resolver,
                                         void *user_data);
 bool minic_core_scalar_bitcast_types_valid(MinicType target_type,

@@ -60,12 +60,8 @@ static bool attach_dump_types(MinicCoreFunction *function,
         function->values[i].core_type_id = types->integer;
         function->instructions[i].core_type_id = types->integer;
     }
-    callee->core_return_type_id = types->integer;
+    callee->core_function_type_id = types->function;
     signature->core_function_type_id = types->function;
-    callee->core_parameter_type_ids = malloc(2U * sizeof(MinicCoreTypeId));
-    if (callee->core_parameter_type_ids == NULL) return false;
-    callee->core_parameter_type_ids[0] = types->integer;
-    callee->core_parameter_type_ids[1] = types->record;
     return minic_core_function_attach_type_context(function, context);
 }
 

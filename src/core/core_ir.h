@@ -220,14 +220,9 @@ typedef struct MinicCoreFunctionSymbol {
 typedef struct MinicCoreCallee {
     char *name;
     size_t name_length;
-    MinicCoreTypeId core_return_type_id;
-    MinicCoreTypeId *core_parameter_type_ids;
-    size_t parameter_count;
-    /* The Core parameter type IDs describe the fixed prefix; variadic tail
-       types are the semantic Core types of each call argument. */
-    bool is_variadic;
-    /* Semantic ABI identity; machine register/stack placement is target-owned. */
-    MinicFunctionCallingConvention calling_convention;
+    /* One nominal Core FUNCTION owns the executable direct-call contract.
+     * The name is independent: synthetic libcalls need no Module declaration. */
+    MinicCoreTypeId core_function_type_id;
 } MinicCoreCallee;
 
 /* M83_FIRST_CLASS_INDIRECT_CALL: one nominal Core FUNCTION identity owns the

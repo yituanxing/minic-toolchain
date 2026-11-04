@@ -10,6 +10,18 @@ static bool register_type(MinicCoreTypeContext *context, MinicCoreType type,
     return minic_core_type_register(context, &type, result);
 }
 
+static bool register_signature(MinicCoreTypeContext *context,
+                               MinicCoreTypeId result_type,
+                               const MinicCoreTypeId *parameters, size_t count,
+                               MinicCoreTypeId *result) {
+    MinicCoreType type = {0};
+    type.kind = MINIC_CORE_TYPE_FUNCTION;
+    type.value.function.return_type = result_type;
+    type.value.function.parameters = (MinicCoreTypeId *)parameters;
+    type.value.function.parameter_count = count;
+    return register_type(context, type, result);
+}
+
 /* Call marshaling follows sealed Core scalar layout on every ISA. No C
  * descriptor can be reached through these public Core ABI records. */
 static bool probe_abi_value_shapes(void) {
@@ -83,6 +95,7 @@ int main(void) {
     MinicCoreTypeContext context;
     MinicCoreType type = {0};
     MinicCoreTypeId integer, record, other_record, signature_type;
+    MinicCoreTypeId direct_type, direct_record, direct_qualified, direct_return;
     MinicCoreTypeId pointer_type, other_signature, other_pointer;
     MinicCoreTypeId qualified_record, qualified_pointer;
     MinicCoreValue values[2];
@@ -150,6 +163,12 @@ int main(void) {
     type.value.qualified.base = pointer_type;
     if (!register_type(&context, type, &qualified_pointer)) return 16;
 
+    if (!register_signature(&context, integer, &integer, 1U, &direct_type) ||
+        !register_signature(&context, integer, &record, 1U, &direct_record) ||
+        !register_signature(&context, integer, &qualified_record, 1U,
+                            &direct_qualified) ||
+        !register_signature(&context, record, NULL, 0U, &direct_return)) return 24;
+
     function.type_context = &context;
     function.values = values;
     function.value_count = 2U;
@@ -166,9 +185,7 @@ int main(void) {
     objects[0].core_type_id = record;
     objects[1].core_type_id = other_record;
 
-    callee.core_return_type_id = integer;
-    callee.core_parameter_type_ids = &integer;
-    callee.parameter_count = 1U;
+    callee.core_function_type_id = direct_type;
     argument.kind = MINIC_CORE_CALL_ARGUMENT_VALUE;
     argument.value.value_id = 0U;
     call.kind = MINIC_CORE_INSTRUCTION_CALL;
@@ -184,9 +201,9 @@ int main(void) {
     call.core_type_id = record;
     if (minic_core_call_view_build(&function, &call, &view)) return 7;
     call.core_type_id = integer;
-    callee.core_return_type_id = MINIC_CORE_TYPE_INVALID;
+    callee.core_function_type_id = MINIC_CORE_TYPE_INVALID;
     if (minic_core_call_view_build(&function, &call, &view)) return 20;
-    callee.core_return_type_id = integer;
+    callee.core_function_type_id = direct_type;
     values[0].core_type_id = MINIC_CORE_TYPE_INVALID;
     if (minic_core_call_view_build(&function, &call, &view)) return 21;
     values[0].core_type_id = integer;
@@ -194,23 +211,21 @@ int main(void) {
     /* Record by value: same shape and layout never replaces nominal type. */
     argument.kind = MINIC_CORE_CALL_ARGUMENT_OBJECT;
     argument.value.object_id = 0U;
-    callee.core_parameter_type_ids = &record;
+    callee.core_function_type_id = direct_record;
     if (!minic_core_call_view_build(&function, &call, &view)) return 8;
     argument.value.object_id = 1U;
     if (minic_core_call_view_build(&function, &call, &view)) return 9;
     argument.value.object_id = 0U;
     objects[0].core_type_id = qualified_record;
     if (minic_core_call_view_build(&function, &call, &view)) return 17;
-    callee.core_parameter_type_ids = &qualified_record;
+    callee.core_function_type_id = direct_qualified;
     if (!minic_core_call_view_build(&function, &call, &view)) return 18;
     objects[0].core_type_id = record;
-    callee.core_parameter_type_ids = &record;
+    callee.core_function_type_id = direct_record;
 
     /* Aggregate return identity and storage form are Core obligations. */
-    callee.parameter_count = 0U;
-    callee.core_parameter_type_ids = NULL;
+    callee.core_function_type_id = direct_return;
     call.value.call.argument_count = 0U;
-    callee.core_return_type_id = record;
     call.core_type_id = record;
     call.result = MINIC_CORE_VALUE_INVALID;
     call.value.call.result_object = 0U;

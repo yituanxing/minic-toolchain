@@ -57,7 +57,7 @@ static int run(void) {
     MinicCoreTypeId void_id, int_id, wide_id, record_id, pointer_id, record_pointer_id;
     MinicCoreTypeId volatile_record_id, volatile_record_pointer_id;
     MinicCoreTypeId bool_id, unsigned_id;
-    MinicCoreTypeId malformed_pointer_id, other_record_id;
+    MinicCoreTypeId malformed_pointer_id, other_record_id, direct_signature_id;
     MinicCoreType qualifier = {0};
     MinicCoreValue values[4];
     MinicCoreObject objects[1];
@@ -309,11 +309,18 @@ static int run(void) {
 
     /* The prepared CALL ABI must not consult the C signature or the C
      * argument type. Its authoritative fixed prefix is the CoreTypeId. */
+    {
+        MinicCoreType direct_signature = {0};
+        direct_signature.kind = MINIC_CORE_TYPE_FUNCTION;
+        direct_signature.value.function.return_type = int_id;
+        direct_signature.value.function.parameters = &int_id;
+        direct_signature.value.function.parameter_count = 1U;
+        REQUIRE(minic_core_type_register(&types, &direct_signature,
+                                         &direct_signature_id));
+    }
     callee.name = "core_target_callee";
     callee.name_length = strlen(callee.name);
-    callee.core_return_type_id = int_id;
-    callee.core_parameter_type_ids = &int_id;
-    callee.parameter_count = 1U;
+    callee.core_function_type_id = direct_signature_id;
     call_argument.kind = MINIC_CORE_CALL_ARGUMENT_VALUE;
     call_argument.value.value_id = 3U;
     function.call_arguments = &call_argument;
@@ -328,6 +335,7 @@ static int run(void) {
     call_site.instruction_id = 0U;
     call_site.view.callee = &callee;
     call_site.view.arguments = &call_argument;
+    call_site.view.core_function_type_id = direct_signature_id;
     call_site.view.core_return_type_id = int_id;
     call_site.view.core_parameter_type_ids = &int_id;
     call_site.view.argument_count = 1U;

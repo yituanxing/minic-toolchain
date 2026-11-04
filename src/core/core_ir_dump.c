@@ -554,7 +554,7 @@ static bool dump_instruction(FILE *output,
             return false;
         }
         callee = &function->callees[instruction->value.call.callee_id];
-        if (dump_type_is_record(function, callee->core_return_type_id)) {
+        if (dump_type_is_record(function, instruction->core_type_id)) {
             if (fprintf(output,
                         "  %%o%" PRIu32 " = call @",
                         instruction->value.call.result_object) < 0) {

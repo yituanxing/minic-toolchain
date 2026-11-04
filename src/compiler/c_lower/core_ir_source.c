@@ -354,8 +354,9 @@ static bool callee_signature_equal(const MinicCoreCallee *callee,
     /* The only caller already found this callee by exact name and length. */
     if (callee == NULL || source == NULL ||
         !minic_type_equal(source->return_type, return_type) ||
-        callee->parameter_count != parameter_count || callee->is_variadic != is_variadic ||
-        callee->calling_convention != calling_convention) {
+        source->parameter_count != parameter_count ||
+        source->is_variadic != is_variadic ||
+        source->calling_convention != calling_convention) {
         return false;
     }
     for (index = 0U; index < parameter_count; ++index) {
@@ -437,12 +438,12 @@ bool minic_core_function_add_callee(MinicCoreSourceBuilder *builder,
                      parameter_count * sizeof(*source_stored.parameter_types));
     }
     stored.name_length = name_length;
-    stored.core_return_type_id = MINIC_CORE_TYPE_INVALID;
-    stored.parameter_count = parameter_count;
-    stored.is_variadic = is_variadic;
-    stored.calling_convention = calling_convention;
+    stored.core_function_type_id = MINIC_CORE_TYPE_INVALID;
     source_stored.function_type_id = MINIC_FUNCTION_TYPE_INVALID;
     source_stored.return_type = return_type;
+    source_stored.parameter_count = parameter_count;
+    source_stored.is_variadic = is_variadic;
+    source_stored.calling_convention = calling_convention;
     if (!minic_core_ir_grow_array((void **)&function->callees,
                     &function->callee_capacity,
                     function->callee_count,
@@ -647,10 +648,7 @@ static void clear_core_type_snapshots(MinicCoreFunction *function) {
     for (index = 0U; index < function->global_count; ++index)
         function->globals[index].core_type_id = MINIC_CORE_TYPE_INVALID;
     for (index = 0U; index < function->callee_count; ++index) {
-        MinicCoreCallee *callee = &function->callees[index];
-        callee->core_return_type_id = MINIC_CORE_TYPE_INVALID;
-        free(callee->core_parameter_type_ids);
-        callee->core_parameter_type_ids = NULL;
+        function->callees[index].core_function_type_id = MINIC_CORE_TYPE_INVALID;
     }
     for (index = 0U; index < function->call_signature_count; ++index) {
         MinicCoreCallSignature *signature = &function->call_signatures[index];
@@ -832,16 +830,16 @@ bool minic_core_function_verify_source_ingress(const MinicCoreSourceBuilder *bui
     for (i = 0U; i < function->callee_count; ++i)
         if (function->callees[i].name == NULL ||
             draft->callees[i].function_type_id != MINIC_FUNCTION_TYPE_INVALID ||
-            (function->callees[i].parameter_count != 0U &&
+            (draft->callees[i].parameter_count != 0U &&
              draft->callees[i].parameter_types == NULL) ||
-            function->callees[i].parameter_count >
+            draft->callees[i].parameter_count >
                 SIZE_MAX / sizeof(*draft->callees[i].parameter_types) ||
-            !minic_function_calling_convention_valid(function->callees[i].calling_convention) ||
+            !minic_function_calling_convention_valid(draft->callees[i].calling_convention) ||
             !minic_core_ir_direct_call_return_type(draft->callees[i].return_type) ||
             !ingress_enum_scalar_registered(builder, draft->callees[i].return_type))
             return false;
     for (i = 0U; i < function->callee_count; ++i)
-        for (j = 0U; j < function->callees[i].parameter_count; ++j)
+        for (j = 0U; j < draft->callees[i].parameter_count; ++j)
             if (!minic_core_ir_call_parameter_type(draft->callees[i].parameter_types[j]) ||
                 !ingress_enum_scalar_registered(builder, draft->callees[i].parameter_types[j]))
                 return false;
@@ -904,7 +902,7 @@ bool minic_core_function_verify_source_ingress(const MinicCoreSourceBuilder *bui
 }
 
 bool minic_core_function_snapshot_types(MinicCoreSourceBuilder *builder,
-                                        const MinicCoreTypeContext *context,
+                                        MinicCoreTypeContext *context,
                                         MinicCoreTypeSnapshotResolver resolver,
                                         void *user_data) {
     MinicCoreFunction *function = builder == NULL ? NULL : &builder->core;
@@ -942,11 +940,27 @@ bool minic_core_function_snapshot_types(MinicCoreSourceBuilder *builder,
     for (index = 0U; index < function->callee_count; ++index) {
         MinicCoreCallee *callee = &function->callees[index];
         const MinicCoreSourceCallType *source_callee = &draft->callees[index];
+        MinicCoreType direct_signature = {0};
+        MinicCoreTypeId *parameters = NULL;
+        direct_signature.kind = MINIC_CORE_TYPE_FUNCTION;
+        direct_signature.value.function.parameter_count = source_callee->parameter_count;
+        direct_signature.value.function.is_variadic = source_callee->is_variadic;
+        direct_signature.value.function.calling_convention = source_callee->calling_convention;
         if (!snapshot_one_type(context, resolver, user_data, source_callee->return_type,
-                               &callee->core_return_type_id) ||
+                               &direct_signature.value.function.return_type) ||
             !snapshot_type_array(context, resolver, user_data,
-                                 source_callee->parameter_types, callee->parameter_count,
-                                 &callee->core_parameter_type_ids)) goto failed;
+                                 source_callee->parameter_types,
+                                 source_callee->parameter_count, &parameters)) {
+            free(parameters);
+            goto failed;
+        }
+        direct_signature.value.function.parameters = parameters;
+        if (!minic_core_type_register(context, &direct_signature,
+                                      &callee->core_function_type_id)) {
+            free(parameters);
+            goto failed;
+        }
+        free(parameters);
     }
     for (index = 0U; index < function->call_signature_count; ++index) {
         MinicCoreCallSignature *signature = &function->call_signatures[index];

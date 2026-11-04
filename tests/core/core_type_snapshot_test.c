@@ -14,6 +14,7 @@
 
 typedef struct TypeIds {
     MinicCoreTypeId boolean, i8, i32, u32, array_i32_2;
+    MinicCoreTypeId f64, long_double;
     MinicCoreTypeId record_a, record_b, incomplete_record;
     MinicCoreTypeId ptr_record_a, ptr_record_b, ptr_i8, ptr_i32;
     MinicCoreTypeId function_a, function_b, ptr_function_a;
@@ -42,6 +43,18 @@ static bool make_type_context(MinicCoreTypeContext *context, TypeIds *ids) {
     if (!minic_core_type_register(context, &type, &ids->i32)) return false;
     type.value.integer.is_signed = false;
     if (!minic_core_type_register(context, &type, &ids->u32)) return false;
+
+    (void)memset(&type, 0, sizeof(type));
+    type.kind = MINIC_CORE_TYPE_FLOAT;
+    type.has_layout = true;
+    type.size = 8U;
+    type.alignment = 8U;
+    type.value.floating.format = MINIC_CORE_FLOAT_BINARY64;
+    if (!minic_core_type_register(context, &type, &ids->f64)) return false;
+    type.size = 16U;
+    type.alignment = 16U;
+    type.value.floating.format = MINIC_CORE_FLOAT_EXTENDED;
+    if (!minic_core_type_register(context, &type, &ids->long_double)) return false;
 
     /* Fixed object repetition lives in one Core ARRAY type; CoreObject itself
      * has no second independent extent. */
@@ -283,6 +296,7 @@ static bool build_core_only_function(MinicCoreFunction *function,
 
 typedef struct ResolverState {
     MinicCoreTypeId i32;
+    MinicCoreTypeId f64, long_double;
     MinicCoreTypeId function_i32_i32;
     size_t call_count;
     size_t fail_on_call;
@@ -294,10 +308,86 @@ static bool resolve_source_type(void *data, MinicType source, MinicCoreTypeId *i
     if (state->call_count == state->fail_on_call) return false;
     if (minic_type_equal(source, minic_type_int()))
         *id = state->i32;
+    else if (minic_type_equal(source, minic_type_double()))
+        *id = state->f64;
+    else if (minic_type_equal(source, minic_type_long_double()))
+        *id = state->long_double;
     else if (minic_type_equal(source, minic_type_function(29U)))
         *id = state->function_i32_i32;
     else return false;
     return true;
+}
+
+/* Synthetic TF libcalls have no C Program FunctionId/Module declaration.
+ * The direct callee's independent linker name must still own one nominal
+ * Core FUNCTION identity, including both result and fixed argument types. */
+static bool build_tf_libcall_function(MinicCoreSourceBuilder *builder) {
+    MinicCoreFunction *function = &builder->core;
+    const MinicType tf = minic_type_long_double();
+    const MinicType f64 = minic_type_double();
+    MinicType input_types[2] = {0};
+    MinicCoreCalleeId add, trunc, repeated_add;
+    MinicCoreBlockId block;
+    MinicCoreValueId inputs[2], sum, result;
+    MinicCoreCallArgument args[2] = {{0}, {0}};
+    MinicCoreInstruction instruction = {0};
+    MinicCoreTerminator terminator = {0};
+    size_t begin;
+
+    input_types[0] = input_types[1] = tf;
+    minic_core_source_builder_initialize(builder);
+    if (!minic_core_function_set_signature(builder, "tf_roundtrip", 12U,
+                                           f64, input_types, 2U) ||
+        !minic_core_function_add_callee(builder, "__addtf3", 8U, tf,
+                                       input_types, 2U, false,
+                                       MINIC_CALLING_CONVENTION_DEFAULT, &add) ||
+        !minic_core_function_add_callee(builder, "__addtf3", 8U, tf,
+                                       input_types, 2U, false,
+                                       MINIC_CALLING_CONVENTION_DEFAULT,
+                                       &repeated_add) ||
+        add != repeated_add ||
+        !minic_core_function_add_callee(builder, "__trunctfdf2", 12U, f64,
+                                       &tf, 1U, false,
+                                       MINIC_CALLING_CONVENTION_DEFAULT, &trunc) ||
+        add == trunc || function->callee_count != 2U ||
+        !minic_core_function_add_block(function, &block)) return false;
+    instruction.kind = MINIC_CORE_INSTRUCTION_PARAMETER;
+    instruction.value.parameter_index = 0U;
+    if (!minic_core_function_append_source_value_instruction(builder, block,
+            &instruction, tf, &inputs[0])) return false;
+    instruction.value.parameter_index = 1U;
+    if (!minic_core_function_append_source_value_instruction(builder, block,
+            &instruction, tf, &inputs[1])) return false;
+
+    args[0].kind = args[1].kind = MINIC_CORE_CALL_ARGUMENT_VALUE;
+    args[0].value.value_id = inputs[0];
+    args[1].value.value_id = inputs[1];
+    if (!minic_core_function_append_call_arguments(function, args, 2U, &begin))
+        return false;
+    instruction = (MinicCoreInstruction){0};
+    instruction.kind = MINIC_CORE_INSTRUCTION_CALL;
+    instruction.value.call.callee_id = add;
+    instruction.value.call.argument_begin = begin;
+    instruction.value.call.argument_count = 2U;
+    instruction.value.call.result_object = MINIC_CORE_OBJECT_INVALID;
+    if (!minic_core_function_append_source_value_instruction(builder, block,
+            &instruction, tf, &sum)) return false;
+
+    args[0].value.value_id = sum;
+    if (!minic_core_function_append_call_arguments(function, args, 1U, &begin))
+        return false;
+    instruction = (MinicCoreInstruction){0};
+    instruction.kind = MINIC_CORE_INSTRUCTION_CALL;
+    instruction.value.call.callee_id = trunc;
+    instruction.value.call.argument_begin = begin;
+    instruction.value.call.argument_count = 1U;
+    instruction.value.call.result_object = MINIC_CORE_OBJECT_INVALID;
+    if (!minic_core_function_append_source_value_instruction(builder, block,
+            &instruction, f64, &result)) return false;
+    terminator.kind = MINIC_CORE_TERMINATOR_RETURN;
+    terminator.return_value = result;
+    terminator.return_object = MINIC_CORE_OBJECT_INVALID;
+    return minic_core_function_set_terminator(function, block, &terminator);
 }
 
 static bool build_simple_function(MinicCoreSourceBuilder *builder) {
@@ -539,6 +629,7 @@ int main(void) {
                                                resolve_source_type, &resolver));
     CHECK(function->type_context == NULL &&
           function->core_return_type_id == MINIC_CORE_TYPE_INVALID);
+    CHECK(function->callees[0].core_function_type_id == MINIC_CORE_TYPE_INVALID);
     CHECK(function->values[0].core_type_id == MINIC_CORE_TYPE_INVALID);
     /* A rejected import must leave every C draft available for a retry. */
     CHECK(builder.source_draft != NULL &&
@@ -572,6 +663,7 @@ int main(void) {
     CHECK(!minic_core_function_snapshot_types(&builder, &context,
                                               resolve_source_type, &resolver));
     CHECK(function->type_context == NULL && builder.source_draft != NULL &&
+          function->callees[0].core_function_type_id == MINIC_CORE_TYPE_INVALID &&
           function->call_signatures[0].core_function_type_id ==
               MINIC_CORE_TYPE_INVALID);
     builder.source_draft->call_signatures[0].calling_convention =
@@ -580,6 +672,20 @@ int main(void) {
     CHECK(minic_core_function_snapshot_types(&builder, &context,
                                               resolve_source_type, &resolver));
     CHECK(minic_core_function_verify_core_type_snapshot(function));
+    {
+        const MinicCoreType *callee_type = minic_core_type_get(
+            &context, function->callees[0].core_function_type_id);
+        CHECK(callee_type != NULL && callee_type->kind == MINIC_CORE_TYPE_FUNCTION &&
+              callee_type->value.function.return_type == ids.i32 &&
+              callee_type->value.function.parameter_count == 1U &&
+              callee_type->value.function.parameters != NULL &&
+              callee_type->value.function.parameters[0] == ids.i32 &&
+              !callee_type->value.function.is_variadic &&
+              callee_type->value.function.calling_convention ==
+                  MINIC_CALLING_CONVENTION_DEFAULT &&
+              function->callees[0].core_function_type_id !=
+                  function->call_signatures[0].core_function_type_id);
+    }
     /* Publication physically releases the C ingress sidecar; Core has no
      * residual C descriptors to poison or accidentally inspect. */
     CHECK(function->type_context == &context && builder.source_draft == NULL);
@@ -594,6 +700,49 @@ int main(void) {
     CHECK(minic_core_function_verify(&published));
     CHECK(published.type_context == &context);
     minic_core_function_destroy(&published);
+
+    /* The first synthesized callee may have been registered when a later
+     * libcalls import fails. Retry must clear both direct IDs, without
+     * requiring the synthetic linker names to exist in a C symbol table. */
+    CHECK(build_tf_libcall_function(&builder));
+    resolver.i32 = ids.i32;
+    resolver.f64 = ids.f64;
+    resolver.long_double = ids.long_double;
+    resolver.call_count = 0U;
+    resolver.fail_on_call = 7U; /* second direct callee's return type */
+    CHECK(!minic_core_function_snapshot_types(&builder, &context,
+                                              resolve_source_type, &resolver));
+    CHECK(builder.source_draft != NULL && function->type_context == NULL &&
+          function->callees[0].core_function_type_id == MINIC_CORE_TYPE_INVALID &&
+          function->callees[1].core_function_type_id == MINIC_CORE_TYPE_INVALID);
+    resolver.call_count = 0U;
+    resolver.fail_on_call = 0U;
+    CHECK(minic_core_function_snapshot_types(&builder, &context,
+                                             resolve_source_type, &resolver));
+    CHECK(minic_core_function_verify(function));
+    {
+        const MinicCoreCallee *add = &function->callees[0];
+        const MinicCoreCallee *trunc = &function->callees[1];
+        const MinicCoreType *add_type = minic_core_type_get(
+            &context, add->core_function_type_id);
+        const MinicCoreType *trunc_type = minic_core_type_get(
+            &context, trunc->core_function_type_id);
+        CHECK(strcmp(add->name, "__addtf3") == 0 &&
+              strcmp(trunc->name, "__trunctfdf2") == 0 &&
+              add->core_function_type_id != trunc->core_function_type_id &&
+              add_type != NULL && add_type->kind == MINIC_CORE_TYPE_FUNCTION &&
+              add_type->value.function.return_type == ids.long_double &&
+              add_type->value.function.parameter_count == 2U &&
+              add_type->value.function.parameters != NULL &&
+              add_type->value.function.parameters[0] == ids.long_double &&
+              add_type->value.function.parameters[1] == ids.long_double &&
+              trunc_type != NULL && trunc_type->kind == MINIC_CORE_TYPE_FUNCTION &&
+              trunc_type->value.function.return_type == ids.f64 &&
+              trunc_type->value.function.parameter_count == 1U &&
+              trunc_type->value.function.parameters != NULL &&
+              trunc_type->value.function.parameters[0] == ids.long_double);
+    }
+    minic_core_source_builder_destroy(&builder);
 
     CHECK(build_overflow_function(&builder, true));
     CHECK(!minic_core_function_verify_source_ingress(&builder));

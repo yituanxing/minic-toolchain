@@ -1563,7 +1563,7 @@ for source in src/target/aarch64/call_emit.c \
   lacks "$source" 'instruction->type'
 done
 has src/target/loongarch64/call_emit.c 'minic_target_info_machine_builtin_form('
-has src/target/loongarch64/call_emit.c 'ins->core_type_id != callee->core_return_type_id'
+has src/target/loongarch64/call_emit.c 'ins->core_type_id != builtin_call.core_return_type_id'
 lacks src/target/loongarch64/call_emit.c 'minic_type_equal('
 lacks src/target/loongarch64/call_emit.c 'ins->type'
 lacks src/target/riscv32/rv32_call.c 'rv32_resolved_'

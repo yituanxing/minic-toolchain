@@ -61,13 +61,12 @@ bool core_capture_enum_metadata(MinicCoreLowerContext *context) {
         }
     }
     for (index = 0U; index < function->callee_count; ++index) {
-        const MinicCoreCallee *callee = &function->callees[index];
         const MinicCoreSourceCallType *source_callee = &source->callees[index];
 
         if (!core_capture_enum_type_metadata(context, source_callee->return_type)) {
             return false;
         }
-        for (parameter_index = 0U; parameter_index < callee->parameter_count; ++parameter_index) {
+        for (parameter_index = 0U; parameter_index < source_callee->parameter_count; ++parameter_index) {
             if (!core_capture_enum_type_metadata(context, source_callee->parameter_types[parameter_index])) {
                 return false;
             }

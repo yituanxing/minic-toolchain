@@ -138,7 +138,6 @@ typedef struct MinicCoreModuleFunctionSymbol {
     bool is_reachability_root;
     bool is_source_asm_operand_root;
     bool is_source_label_relocation_owner;
-    bool is_specialization;
     size_t specialization_source_index; /* SIZE_MAX unless a source clone. */
 } MinicCoreModuleFunctionSymbol;
 
@@ -161,6 +160,33 @@ typedef struct MinicCoreModule {
     bool preserve_all_static_objects;
     bool finalized;
 } MinicCoreModule;
+
+/* A source-independent, borrowed name index over the Module's canonical
+ * assembler-facing function symbols. Multiple distinct C declarations may
+ * legitimately have the same GNU assembler name: lookups return the entire
+ * matching range, never an arbitrary first declaration. The entries own no
+ * strings and must be destroyed before the Module is destroyed. */
+typedef struct MinicCoreModuleFunctionNameEntry {
+    const char *name;
+    size_t name_length;
+    size_t function_index;
+} MinicCoreModuleFunctionNameEntry;
+
+typedef struct MinicCoreModuleFunctionNameIndex {
+    MinicCoreModuleFunctionNameEntry *entries;
+    size_t count;
+} MinicCoreModuleFunctionNameIndex;
+
+/* Build accepts an initially zeroed index, including before Module finalize.
+ * Query succeeds with begin == end for a valid external/synthetic symbol. */
+bool minic_core_module_function_name_index_build(
+    const MinicCoreModule *module, MinicCoreModuleFunctionNameIndex *index);
+void minic_core_module_function_name_index_destroy(
+    MinicCoreModuleFunctionNameIndex *index);
+bool minic_core_module_function_name_index_find(
+    const MinicCoreModuleFunctionNameIndex *index,
+    const char *name, size_t name_length,
+    size_t *begin, size_t *end);
 
 void minic_core_module_initialize(MinicCoreModule *module);
 void minic_core_module_destroy(MinicCoreModule *module);

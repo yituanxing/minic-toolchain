@@ -24,14 +24,14 @@ int main(void) {
     };
     MinicCoreModuleFunctionSymbol functions[] = {
         {.name = "internal_function", .is_defined = true, .is_internal = true,
-         .alias_target_index = SIZE_MAX},
+         .alias_target_index = SIZE_MAX, .specialization_source_index = SIZE_MAX},
         {.name = "hidden_function",
          .visibility = MINIC_CORE_MODULE_VISIBILITY_INTERNAL,
-         .alias_target_index = SIZE_MAX},
+         .alias_target_index = SIZE_MAX, .specialization_source_index = SIZE_MAX},
         {.name = "weak_function", .is_weak = true,
-         .alias_target_index = SIZE_MAX},
+         .alias_target_index = SIZE_MAX, .specialization_source_index = SIZE_MAX},
         {.name = "visible_function", .is_defined = true,
-         .alias_target_index = SIZE_MAX},
+         .alias_target_index = SIZE_MAX, .specialization_source_index = SIZE_MAX},
     };
     MinicCoreModule module = {
         .globals = globals,

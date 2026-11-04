@@ -72,11 +72,18 @@ static bool loongarch64_lp64s_executable_supported(
      * or no FP-typed SSA operand survives in the call lowering. */
     for (i = 0U; i < fn->callee_count; ++i) {
         const MinicCoreCallee *call = &fn->callees[i];
+        const MinicCoreType *signature = minic_core_type_get(
+            fn->type_context,
+            minic_core_type_unqualified(fn->type_context,
+                call->core_function_type_id));
+        if (signature == NULL || signature->kind != MINIC_CORE_TYPE_FUNCTION ||
+            (signature->value.function.parameter_count != 0U &&
+             signature->value.function.parameters == NULL)) return false;
         if (loongarch64_core_executed_fp_type(fn->type_context,
-                call->core_return_type_id)) return false;
-        for (j = 0U; j < call->parameter_count; ++j)
+                signature->value.function.return_type)) return false;
+        for (j = 0U; j < signature->value.function.parameter_count; ++j)
             if (loongarch64_core_executed_fp_type(fn->type_context,
-                    call->core_parameter_type_ids[j]))
+                    signature->value.function.parameters[j]))
                 return false;
     }
     for (i = 0U; i < fn->call_signature_count; ++i) {

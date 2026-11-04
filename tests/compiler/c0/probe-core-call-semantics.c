@@ -9,7 +9,20 @@
 typedef struct TypeIds {
     MinicCoreTypeId integer, record, other_record;
     MinicCoreTypeId function, other_function, function_pointer;
+    MinicCoreTypeId direct_default, direct_record, direct_other_record;
+    MinicCoreTypeId direct_record_result;
 } TypeIds;
+
+static bool register_signature(MinicCoreTypeContext *context,
+    MinicCoreTypeId return_type, MinicCoreTypeId *parameters, size_t count,
+    MinicCoreTypeId *out) {
+    MinicCoreType type = {0};
+    type.kind = MINIC_CORE_TYPE_FUNCTION;
+    type.value.function.return_type = return_type;
+    type.value.function.parameters = parameters;
+    type.value.function.parameter_count = count;
+    return minic_core_type_register(context, &type, out);
+}
 
 static bool register_types(MinicCoreTypeContext *context, TypeIds *ids) {
     MinicCoreType type = {0};
@@ -43,7 +56,15 @@ static bool register_types(MinicCoreTypeContext *context, TypeIds *ids) {
     type.size = 8U;
     type.alignment = 8U;
     type.value.pointer.pointee = ids->function;
-    return minic_core_type_register(context, &type, &ids->function_pointer);
+    return minic_core_type_register(context, &type, &ids->function_pointer) &&
+        register_signature(context, ids->integer, &ids->integer, 1U,
+                           &ids->direct_default) &&
+        register_signature(context, ids->integer, &ids->record, 1U,
+                           &ids->direct_record) &&
+        register_signature(context, ids->integer, &ids->other_record, 1U,
+                           &ids->direct_other_record) &&
+        register_signature(context, ids->record, NULL, 0U,
+                           &ids->direct_record_result);
 }
 
 #define CHECK(expr, code) do { \
@@ -78,9 +99,7 @@ int main(void) {
     object.core_type_id = types.record;
     callee.name = "probe";
     callee.name_length = 5U;
-    callee.core_return_type_id = types.integer;
-    callee.core_parameter_type_ids = &types.integer;
-    callee.parameter_count = 1U;
+    callee.core_function_type_id = types.direct_default;
     argument.kind = MINIC_CORE_CALL_ARGUMENT_VALUE;
     argument.value.value_id = 0U;
     call.kind = MINIC_CORE_INSTRUCTION_CALL;
@@ -95,12 +114,15 @@ int main(void) {
           view.calling_convention == MINIC_CALLING_CONVENTION_DEFAULT &&
           minic_core_call_view_argument_core_type(&fn, &view, 0U, &actual) &&
           actual == types.integer, 3);
-    callee.calling_convention = MINIC_CALLING_CONVENTION_MS_X64;
+    callee.core_function_type_id = types.function;
     CHECK(minic_core_call_view_build(&fn, &call, &view) &&
           view.calling_convention == MINIC_CALLING_CONVENTION_MS_X64, 28);
-    callee.calling_convention = (MinicFunctionCallingConvention)99;
+    context.types[types.function].value.function.calling_convention =
+        (MinicFunctionCallingConvention)99;
     CHECK(!minic_core_call_view_build(&fn, &call, &view), 29);
-    callee.calling_convention = MINIC_CALLING_CONVENTION_DEFAULT;
+    context.types[types.function].value.function.calling_convention =
+        MINIC_CALLING_CONVENTION_MS_X64;
+    callee.core_function_type_id = types.direct_default;
 
     call.core_type_id = types.record;
     CHECK(!minic_core_call_view_build(&fn, &call, &view), 4);
@@ -114,16 +136,14 @@ int main(void) {
     argument.value.object_id = 0U;
     CHECK(!minic_core_call_view_build(&fn, &call, &view), 7);
 
-    callee.core_parameter_type_ids = &types.record;
+    callee.core_function_type_id = types.direct_record;
     CHECK(minic_core_call_view_build(&fn, &call, &view) &&
           minic_core_call_view_argument_core_type(&fn, &view, 0U, &actual) &&
           actual == types.record, 8);
-    callee.core_parameter_type_ids = &types.other_record;
+    callee.core_function_type_id = types.direct_other_record;
     CHECK(!minic_core_call_view_build(&fn, &call, &view), 9);
-    callee.core_parameter_type_ids = NULL;
-    callee.parameter_count = 0U;
+    callee.core_function_type_id = types.direct_record_result;
     call.value.call.argument_count = 0U;
-    callee.core_return_type_id = types.record;
     call.core_type_id = types.record;
     call.result = MINIC_CORE_VALUE_INVALID;
     call.value.call.result_object = 0U;
@@ -140,10 +160,11 @@ int main(void) {
      * Use a real Core void type instead. */
     {
         MinicCoreType type = {0};
-        MinicCoreTypeId void_id;
+        MinicCoreTypeId void_id, void_function;
         type.kind = MINIC_CORE_TYPE_VOID;
         CHECK(minic_core_type_register(&context, &type, &void_id), 31);
-        callee.core_return_type_id = void_id;
+        CHECK(register_signature(&context, void_id, NULL, 0U, &void_function), 32);
+        callee.core_function_type_id = void_function;
         call.core_type_id = void_id;
         call.value.call.result_object = MINIC_CORE_OBJECT_INVALID;
         CHECK(minic_core_call_view_build(&fn, &call, &view) &&
@@ -190,9 +211,7 @@ int main(void) {
         ordered[4].value.call.callee_id = 0U;
         ordered[4].value.call.argument_count = 1U;
         ordered[4].value.call.result_object = MINIC_CORE_OBJECT_INVALID;
-        callee.core_return_type_id = types.integer;
-        callee.core_parameter_type_ids = &types.integer;
-        callee.parameter_count = 1U;
+        callee.core_function_type_id = types.direct_default;
         fn.instructions = ordered;
         fn.instruction_count = 5U;
         CHECK(minic_core_call_index_build(&fn, 2U, &index) &&

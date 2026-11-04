@@ -36,6 +36,96 @@ void minic_core_module_destroy(MinicCoreModule *module) {
     minic_core_module_initialize(module);
 }
 
+static int module_function_name_compare(
+    const MinicCoreModuleFunctionNameEntry *left,
+    const MinicCoreModuleFunctionNameEntry *right) {
+    int result;
+    if (left->name_length < right->name_length) return -1;
+    if (left->name_length > right->name_length) return 1;
+    result = memcmp(left->name, right->name, left->name_length);
+    if (result != 0) return result;
+    if (left->function_index < right->function_index) return -1;
+    if (left->function_index > right->function_index) return 1;
+    return 0;
+}
+
+static int module_function_name_sort_compare(const void *left,
+                                             const void *right) {
+    return module_function_name_compare(left, right);
+}
+
+void minic_core_module_function_name_index_destroy(
+    MinicCoreModuleFunctionNameIndex *index) {
+    if (index == NULL) return;
+    free(index->entries);
+    index->entries = NULL;
+    index->count = 0U;
+}
+
+bool minic_core_module_function_name_index_build(
+    const MinicCoreModule *module, MinicCoreModuleFunctionNameIndex *index) {
+    MinicCoreModuleFunctionNameEntry *entries;
+    size_t i;
+    if (module == NULL || index == NULL || index->entries != NULL ||
+        index->count != 0U ||
+        (module->function_count != 0U && module->function_symbols == NULL) ||
+        module->function_count > SIZE_MAX / sizeof(*entries))
+        return false;
+    if (module->function_count == 0U) return true;
+    entries = malloc(module->function_count * sizeof(*entries));
+    if (entries == NULL) return false;
+    for (i = 0U; i < module->function_count; ++i) {
+        const char *name = module->function_symbols[i].name;
+        if (name == NULL || name[0] == '\0') {
+            free(entries);
+            return false;
+        }
+        entries[i].name = name;
+        entries[i].name_length = strlen(name);
+        entries[i].function_index = i;
+    }
+    qsort(entries, module->function_count, sizeof(*entries),
+          module_function_name_sort_compare);
+    index->entries = entries;
+    index->count = module->function_count;
+    return true;
+}
+
+bool minic_core_module_function_name_index_find(
+    const MinicCoreModuleFunctionNameIndex *index,
+    const char *name, size_t name_length,
+    size_t *begin, size_t *end) {
+    size_t lo, hi, first;
+    MinicCoreModuleFunctionNameEntry key;
+    if (index == NULL || name == NULL || name_length == 0U ||
+        begin == NULL || end == NULL ||
+        (index->count != 0U && index->entries == NULL))
+        return false;
+    key.name = name;
+    key.name_length = name_length;
+    key.function_index = 0U;
+    lo = 0U;
+    hi = index->count;
+    while (lo < hi) {
+        const size_t mid = lo + (hi - lo) / 2U;
+        if (module_function_name_compare(&index->entries[mid], &key) < 0)
+            lo = mid + 1U;
+        else hi = mid;
+    }
+    first = lo;
+    key.function_index = SIZE_MAX;
+    hi = index->count;
+    while (lo < hi) {
+        const size_t mid = lo + (hi - lo) / 2U;
+        if (module_function_name_compare(&index->entries[mid], &key) <= 0)
+            lo = mid + 1U;
+        else hi = mid;
+    }
+    *begin = first;
+    *end = lo;
+    return true;
+}
+
 static bool valid_visibility(MinicCoreModuleVisibility visibility) {
     return visibility >= MINIC_CORE_MODULE_VISIBILITY_DEFAULT &&
            visibility <= MINIC_CORE_MODULE_VISIBILITY_PROTECTED;
@@ -43,6 +133,64 @@ static bool valid_visibility(MinicCoreModuleVisibility visibility) {
 
 static bool valid_power_two(size_t value) {
     return value != 0U && (value & (value - 1U)) == 0U;
+}
+
+typedef struct ModuleEmittedSymbolName {
+    const char *name;
+    size_t name_length;
+} ModuleEmittedSymbolName;
+
+static int module_emitted_symbol_name_compare(const void *left,
+                                              const void *right) {
+    const ModuleEmittedSymbolName *a = left, *b = right;
+    if (a->name_length < b->name_length) return -1;
+    if (a->name_length > b->name_length) return 1;
+    return memcmp(a->name, b->name, a->name_length);
+}
+
+/* ELF has one assembler-symbol namespace for functions, objects and aliases.
+ * Count exactly the symbols the module visitors emit: a plain declaration
+ * owns no symbol, and a pruned internal definition owns no symbol. Function
+ * aliases are emitted even when their source reference bit is false; object
+ * aliases are emitted only when their Module global is emittable. */
+static bool module_emitted_symbol_names_unique(const MinicCoreModule *module) {
+    ModuleEmittedSymbolName *names;
+    size_t capacity, count = 0U, i;
+    bool unique = true;
+    if (module->function_count > SIZE_MAX - module->global_count)
+        return false;
+    capacity = module->function_count + module->global_count;
+    if (capacity == 0U) return true;
+    if (capacity > SIZE_MAX / sizeof(*names)) return false;
+    names = malloc(capacity * sizeof(*names));
+    if (names == NULL) return false;
+    for (i = 0U; i < module->function_count; ++i) {
+        const MinicCoreModuleFunctionSymbol *symbol =
+            &module->function_symbols[i];
+        if (symbol->alias_target_index == SIZE_MAX &&
+            (!symbol->is_defined ||
+             (symbol->is_internal && !symbol->is_referenced)))
+            continue;
+        names[count].name = symbol->name;
+        names[count++].name_length = strlen(symbol->name);
+    }
+    for (i = 0U; i < module->global_count; ++i) {
+        const MinicCoreModuleGlobal *global = &module->globals[i];
+        if (!global->emittable ||
+            (global->is_extern && global->alias_target_index == SIZE_MAX))
+            continue;
+        names[count].name = global->name;
+        names[count++].name_length = strlen(global->name);
+    }
+    qsort(names, count, sizeof(*names), module_emitted_symbol_name_compare);
+    for (i = 1U; i < count; ++i)
+        if (module_emitted_symbol_name_compare(&names[i - 1U],
+                                               &names[i]) == 0) {
+            unique = false;
+            break;
+        }
+    free(names);
+    return unique;
 }
 
 bool minic_core_module_global_fragments_valid(const MinicCoreModuleGlobal *global) {
@@ -118,7 +266,7 @@ bool minic_core_module_verify(const MinicCoreModule *module) {
                     const MinicCoreModuleFunctionSymbol *owner =
                         &module->function_symbols[reference->target_index];
                     if (global->owner_function_index != reference->target_index ||
-                        !owner->is_defined || owner->is_specialization)
+                        !owner->is_defined || owner->specialization_source_index != SIZE_MAX)
                         return false;
                 }
             }
@@ -154,13 +302,14 @@ bool minic_core_module_verify(const MinicCoreModule *module) {
         const MinicCoreModuleFunctionSymbol *symbol = &module->function_symbols[index];
         if (symbol->name == NULL || symbol->name[0] == '\0' ||
             !valid_visibility(symbol->visibility) ||
-            (symbol->is_specialization &&
+            (symbol->specialization_source_index != SIZE_MAX &&
              (symbol->specialization_source_index >= module->function_count ||
               symbol->specialization_source_index == index))) return false;
-        if (symbol->is_specialization) {
+        if (symbol->specialization_source_index != SIZE_MAX) {
             const MinicCoreModuleFunctionSymbol *source =
                 &module->function_symbols[symbol->specialization_source_index];
-            if (!source->is_defined || source->is_specialization) return false;
+            if (!source->is_defined ||
+                source->specialization_source_index != SIZE_MAX) return false;
         }
         if (symbol->alias_target_index != SIZE_MAX) {
             const MinicCoreModuleFunctionSymbol *target;
@@ -173,6 +322,7 @@ bool minic_core_module_verify(const MinicCoreModule *module) {
                 return false;
         }
     }
+    if (!module_emitted_symbol_names_unique(module)) return false;
     for (index = 0U; index < module->file_asm_count; ++index)
         if ((module->file_asms[index].length != 0U &&
              module->file_asms[index].text == NULL) ||

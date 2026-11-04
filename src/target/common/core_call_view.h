@@ -24,7 +24,7 @@ typedef struct MinicCoreCallView {
      * nominal source descriptors remain owned by Core's legacy ingress. */
     const MinicCoreTypeId *core_parameter_type_ids;
     MinicCoreTypeId core_return_type_id;
-    MinicCoreTypeId core_function_type_id; /* indirect only */
+    MinicCoreTypeId core_function_type_id; /* direct or indirect */
     MinicCoreValueId function_pointer;         /* indirect only */
     size_t argument_begin;
     size_t argument_count;

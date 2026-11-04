@@ -71,14 +71,21 @@ bool minic_core_call_view_build(const MinicCoreFunction *function,
     view.core_function_type_id = MINIC_CORE_TYPE_INVALID;
     if (instruction->kind == MINIC_CORE_INSTRUCTION_CALL) {
         const size_t id = instruction->value.call.callee_id;
+        const MinicCoreType *function_type;
         if (id >= function->callee_count || function->callees == NULL)
             return false;
         view.callee = &function->callees[id];
-        view.core_return_type_id = view.callee->core_return_type_id;
-        view.core_parameter_type_ids = view.callee->core_parameter_type_ids;
-        view.parameter_count = view.callee->parameter_count;
-        view.is_variadic = view.callee->is_variadic;
-        view.calling_convention = view.callee->calling_convention;
+        view.core_function_type_id = view.callee->core_function_type_id;
+        function_type = minic_core_call_type(function,
+            minic_core_type_unqualified(function->type_context,
+                                        view.core_function_type_id));
+        if (function_type == NULL || function_type->kind != MINIC_CORE_TYPE_FUNCTION)
+            return false;
+        view.core_return_type_id = function_type->value.function.return_type;
+        view.core_parameter_type_ids = function_type->value.function.parameters;
+        view.parameter_count = function_type->value.function.parameter_count;
+        view.is_variadic = function_type->value.function.is_variadic;
+        view.calling_convention = function_type->value.function.calling_convention;
         begin = instruction->value.call.argument_begin;
         count = instruction->value.call.argument_count;
     } else if (instruction->kind == MINIC_CORE_INSTRUCTION_INDIRECT_CALL) {

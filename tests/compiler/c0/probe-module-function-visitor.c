@@ -66,6 +66,7 @@ int main(void) {
     symbol.explicit_alignment = 32U;
     symbol.is_defined = true;
     symbol.is_referenced = true;
+    symbol.specialization_source_index = SIZE_MAX;
     module.function_symbols = &symbol;
     module.function_count = 1U;
     module.finalized = true;

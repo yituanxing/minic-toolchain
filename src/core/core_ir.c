@@ -257,7 +257,6 @@ void minic_core_function_destroy(MinicCoreFunction *function) {
     for (callee_index = 0U; function->callees != NULL &&
                               callee_index < function->callee_count; ++callee_index) {
         free(function->callees[callee_index].name);
-        free(function->callees[callee_index].core_parameter_type_ids);
     }
     for (global_index = 0U; function->globals != NULL &&
                              global_index < function->global_count; ++global_index) {

@@ -87,6 +87,7 @@ int main(void) {
     module.function_symbols[0].name = strdup("arena_probe");
     REQUIRE(module.function_symbols[0].name != NULL);
     module.function_symbols[0].alias_target_index = SIZE_MAX;
+    module.function_symbols[0].specialization_source_index = SIZE_MAX;
     module.function_symbols[0].is_defined = true;
     module.finalized = true;
     REQUIRE(minic_core_module_verify(&module));

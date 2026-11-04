@@ -1997,3 +1997,57 @@ retained. Source/test changes prior to this documentation record: **35 files,
 | Source/Core/AST contract, call signature, target builtin, record bitfield and `va_copy` probes | **PASS** on available native tools |
 | Five-ISA P36 vs P37 targeted `.i` differential | **255/255 matched outcomes**: 187 byte-identical `.s`, 68 both rejected, 0 differing |
 | Five-ISA original Linux GNU ELF/QEMU runtime | **NOT RUN** in this owner batch; absent cross toolchains are not counted as passes |
+
+## IR-P38 — Canonical Core direct-call type and Module assembler-name closure (2026-11-04)
+
+**Baseline:** P37 PR #674 `b0520b7`. This batch follows two related
+source-independent ownership chains end to end, without adding an ISA feature
+or changing the five target ABI policies.
+
+- Direct `MinicCoreCallee` now owns its emitted symbol name and exactly one
+  nominal Core `FUNCTION` TypeId. Remove its duplicate return TypeId,
+  parameter TypeId allocation/count, variadic bit and calling convention.
+  C-only call signature facts remain in the SourceDraft until snapshot;
+  snapshot registers the canonical Core FUNCTION shape. Core verifier,
+  CallView, dump and x86/LoongArch machine consumers all read that one type.
+  Failed partial snapshots clear published call TypeIds for safe retry;
+  synthetic compiler libcalls do not need a C Program FunctionId.
+- ModuleIR owns a sorted, borrowed **assembler-symbol name → complete function
+  index range** query. C names are not substituted for GNU `asm("name")`
+  spellings. Calls, function-address edges, global object-to-function
+  initializer relocations and GNU asm operand roots use every matching
+  assembler definition; an extern declaration must not hide an internal
+  same-name definition. A candidate static body is lowered before closure
+  when its assembler name is shared, while ordinary dead static lowering is
+  still skipped. Core closure prunes unreferenced candidates before emission.
+  The Module verifier checks the **entire emitted ELF symbol namespace**:
+  live function bodies, function aliases, emitted object definitions and
+  object aliases cannot collide. Extern-only declarations and pruned internal
+  bodies do not count as emitted symbol owners.
+- Canonical local-label/alias owners retain their exact FunctionId because
+  these references name an owner, not an arbitrary equal-spelled function.
+  Remove the redundant Module `is_specialization` boolean; the existing
+  `specialization_source_index != SIZE_MAX` is the sole specialization fact.
+  x86 `.head.text` early-address call closure reuses the Module name index
+  and scans only emitted function bodies, avoiding dead candidates.
+
+Before updating this record: **33 production/test files**, including one new
+real GNU-assembler collision fixture; production **18 C/H files,
++423/-197 lines (net +226)**, tests **+465/-58** (including new 48-line
+fixture). No compatibility shadow fields or duplicate x86 name index remain.
+
+| Gate | P38 result |
+| --- | --- |
+| Strict Release MiniC `-Werror` | **PASS**, exit 0 |
+| Full Debug `check-fast` | **PASS**, exit 0, after final emitted-symbol namespace and arena fixture edits |
+| Core type snapshot and call tests, native + ASAN/UBSAN | **4/4 native + 4/4 sanitizer PASS**; synthetic `__addtf3` → `__trunctfdf2`, nominal identities, failure/retry |
+| Module symbol reachability and object initializer, `asm` roots | **PASS**; five-ISA assembler generation and x86 MiniC/GNU native execution |
+| x86 kernel `.head.text` section and GNU link/address relocation | **PASS**; unchanged early-boot `R_X86_64_32S`/`PC32` contracts |
+| Target-boundary checker, Core Module fragment, rollback and backend arena | **PASS**; 18 additional emitted-ELF-namespace cases covering cross-kind aliases and dead-vs-live definitions; hand-built Core module fixture sets specialization sentinel explicitly |
+| Five-ISA P37 vs P38 GNU-preprocessed `.i` differential | **255/255 matching outcomes**: 187 `.s` byte-identical, 68 both rejected, 0 differing |
+| Five-ISA original Linux GNU ELF/QEMU runtime | **NOT RUN** in this type/symbol-owner batch |
+
+The next independent architecture family is the three Core inline
+specialization producers, which still duplicate local-body analysis and
+clone-state ownership; do not mistake this P38 symbol closure for their
+full migration.

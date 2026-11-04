@@ -188,8 +188,10 @@ static int check_module_snapshot_output(const char *path) {
     fragment.relocation_symbol = "weak_ext";
     {
         MinicCoreModuleFunctionSymbol symbols[2] = {
-            { .name = "real_fn", .is_defined = true, .alias_target_index = SIZE_MAX },
-            { .name = "alias_fn", .alias_target_index = 0U }
+            { .name = "real_fn", .is_defined = true, .alias_target_index = SIZE_MAX,
+              .specialization_source_index = SIZE_MAX },
+            { .name = "alias_fn", .alias_target_index = 0U,
+              .specialization_source_index = SIZE_MAX }
         };
         MinicCoreModuleGlobal alias = {
             .name = "alias_obj", .is_extern = true,
@@ -236,7 +238,8 @@ int main(int argc, char **argv) {
     };
     MinicCoreModuleFunctionSymbol declaration = {
         .name = "fixture_function", .is_defined = true,
-        .is_referenced = true, .alias_target_index = SIZE_MAX
+        .is_referenced = true, .alias_target_index = SIZE_MAX,
+        .specialization_source_index = SIZE_MAX
     };
     MinicCoreFunction ir = {0};
     MinicCoreTypeContext synthetic_types = {0};
@@ -323,7 +326,7 @@ int main(int argc, char **argv) {
     {
         MinicCoreModuleFunctionSymbol module_decl = {
             .name = "sealed_function", .is_defined = true, .is_referenced = true,
-            .alias_target_index = SIZE_MAX
+            .alias_target_index = SIZE_MAX, .specialization_source_index = SIZE_MAX
         };
         MinicCoreModule owned_module = {
             .function_symbols = &module_decl, .function_count = 1U,

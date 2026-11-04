@@ -20,6 +20,7 @@ typedef struct ModuleClosure {
     size_t *function_queue, *object_queue, *owned_heads, *owned_next;
     size_t function_head, function_count, object_head, object_count;
     ModuleObjectSymbol *symbols;
+    MinicCoreModuleFunctionNameIndex function_names;
 } ModuleClosure;
 
 static int compare_object_symbol(const void *a, const void *b) {
@@ -59,20 +60,18 @@ static bool enqueue_function(ModuleClosure *c, size_t id) {
     c->function_queue[c->function_count++] = id;
     if (!enqueue_owned(c, id)) return false;
     /* A clone executes the source FunctionBody and borrows its local statics. */
-    return !f->is_specialization ||
+    return f->specialization_source_index == SIZE_MAX ||
         enqueue_owned(c, f->specialization_source_index);
 }
 
 static bool enqueue_named_function(ModuleClosure *c, const char *name, size_t n) {
-    const MinicCoreModule *m = &c->set->module;
-    size_t i;
+    size_t first, last, i;
     if (name == NULL || n == 0U) return false;
-    for (i = 0U; i < m->function_count; ++i) {
-        const char *candidate = m->function_symbols[i].name;
-        if (candidate != NULL && strlen(candidate) == n &&
-            memcmp(candidate, name, n) == 0)
-            return enqueue_function(c, i);
-    }
+    if (!minic_core_module_function_name_index_find(
+            &c->function_names, name, n, &first, &last)) return false;
+    for (i = first; i < last; ++i)
+        if (!enqueue_function(c, c->function_names.entries[i].function_index))
+            return false;
     return true; /* External/target-synthesized function. */
 }
 
@@ -161,6 +160,7 @@ done:
 }
 
 static void destroy_closure(ModuleClosure *c) {
+    minic_core_module_function_name_index_destroy(&c->function_names);
     free(c->symbols);
     free(c->owned_next);
     free(c->owned_heads);
@@ -190,6 +190,8 @@ static bool initialize_closure(ModuleClosure *c) {
         c->objects_live == NULL || c->function_queue == NULL ||
         c->object_queue == NULL || c->owned_heads == NULL ||
         c->owned_next == NULL || c->symbols == NULL) return false;
+    if (!minic_core_module_function_name_index_build(
+            m, &c->function_names)) return false;
     for (i = 0U; i < m->function_count; ++i) c->owned_heads[i] = SIZE_MAX;
     for (i = 0U; i < m->global_count; ++i) {
         const MinicCoreModuleGlobal *g = &m->globals[i];
@@ -234,8 +236,11 @@ bool minic_core_function_set_close_reachability(
 
     for (i = 0U; i < m->function_count; ++i) {
         const MinicCoreModuleFunctionSymbol *f = &m->function_symbols[i];
-        if ((f->is_reachability_root || f->is_source_asm_operand_root) &&
-            !enqueue_function(&c, i)) goto done;
+        if (f->is_reachability_root && !enqueue_function(&c, i)) goto done;
+        /* Source asm operands name emitted assembler symbols, not C source
+         * declarations: all definitions sharing the spelling may satisfy it. */
+        if (f->is_source_asm_operand_root &&
+            !enqueue_named_function(&c, f->name, strlen(f->name))) goto done;
         /* Alias definitions can remain linker-visible without a C callsite. */
         if (f->alias_target_index != SIZE_MAX &&
             !enqueue_function(&c, f->alias_target_index)) goto done;
@@ -260,8 +265,16 @@ bool minic_core_function_set_close_reachability(
                 const MinicCoreModuleReference *ref = &g->references[j];
                 if (ref->kind == MINIC_CORE_MODULE_REFERENCE_OBJECT) {
                     if (!enqueue_object(&c, ref->target_index)) goto done;
-                } else if (ref->kind == MINIC_CORE_MODULE_REFERENCE_FUNCTION ||
-                           ref->kind == MINIC_CORE_MODULE_REFERENCE_OWNER_LABEL) {
+                } else if (ref->kind == MINIC_CORE_MODULE_REFERENCE_FUNCTION) {
+                    const char *name;
+                    if (ref->target_index >= m->function_count) goto done;
+                    name = m->function_symbols[ref->target_index].name;
+                    /* A function pointer relocates by assembler spelling.
+                     * Its original Module FunctionId may be only an extern
+                     * declaration while an internal definition has the name. */
+                    if (name == NULL ||
+                        !enqueue_named_function(&c, name, strlen(name))) goto done;
+                } else if (ref->kind == MINIC_CORE_MODULE_REFERENCE_OWNER_LABEL) {
                     /* A label relocation specifically retains the canonical
                      * owner's FunctionBody, never a source-sharing clone. */
                     if (!enqueue_function(&c, ref->target_index)) goto done;
@@ -283,14 +296,14 @@ bool minic_core_function_set_close_reachability(
         const MinicCoreModuleFunctionSymbol *f = &m->function_symbols[i];
         if (!c.functions_live[i]) continue;
         canonical_owner_live[i] = true;
-        if (f->is_specialization)
+        if (f->specialization_source_index != SIZE_MAX)
             canonical_owner_live[f->specialization_source_index] = true;
     }
     /* Transactional publication: no C program writes, no partial pruning. */
     for (i = 0U; i < m->function_count; ++i) {
         MinicCoreModuleFunctionSymbol *f = &m->function_symbols[i];
         if (f->is_defined && f->is_internal) f->is_referenced = c.functions_live[i];
-        if (f->is_specialization) {
+        if (f->specialization_source_index != SIZE_MAX) {
             if (f->is_referenced) ++kept;
             else ++pruned;
         }

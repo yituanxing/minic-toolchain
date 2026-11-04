@@ -358,9 +358,9 @@ static bool x86_emit_call_result(FILE *out, const MinicCoreFunction *fn,
  * __addtf3/__extenddftf2 would silently use the wrong floating format. */
 static bool x86_emit_x87_core_helper(FILE *out, const MinicCoreFunction *fn,
                                       const MinicX86Frame *frame,
-                                      const MinicCoreCallee *callee,
+                                      const MinicCoreCallView *call,
                                       const MinicCoreInstruction *ins) {
-    const char *name = callee->name;
+    const char *name = call->callee != NULL ? call->callee->name : NULL;
     size_t begin = ins->value.call.argument_begin;
     size_t count = ins->value.call.argument_count;
     MinicCoreValueId a, b = MINIC_CORE_VALUE_INVALID;
@@ -379,11 +379,11 @@ static bool x86_emit_x87_core_helper(FILE *out, const MinicCoreFunction *fn,
         b = fn->call_arguments[begin + 1U].value.value_id;
         if (b >= fn->value_count) return false;
     }
-    result_ld = x86_call_is_float_format(fn, callee->core_return_type_id,
+    result_ld = x86_call_is_float_format(fn, call->core_return_type_id,
                                          MINIC_CORE_FLOAT_EXTENDED);
     source_ld = x86_call_is_float_format(fn, fn->values[a].core_type_id,
                                          MINIC_CORE_FLOAT_EXTENDED);
-    if (fn->values[ins->result].core_type_id != callee->core_return_type_id)
+    if (fn->values[ins->result].core_type_id != call->core_return_type_id)
         return false;
     if (count == 1U) {
         if (result_ld && source_ld && strcmp(name, "__negtf2") == 0)
@@ -405,24 +405,24 @@ static bool x86_emit_x87_core_helper(FILE *out, const MinicCoreFunction *fn,
                            frame->value_offsets[a]) >= 0 &&
                    x86_x87_store(out, frame, ins->result);
         if (source_ld && x86_call_is_float_format(
-                fn, callee->core_return_type_id,
+                fn, call->core_return_type_id,
                 MINIC_CORE_FLOAT_BINARY64) &&
             strcmp(name, "__trunctfdf2") == 0)
             return x86_x87_load(out, frame, a) &&
                    fprintf(out, "  fstpl -%zu(%%rbp)\n",
                            frame->value_offsets[ins->result]) >= 0;
         if (source_ld && x86_call_is_float_format(
-                fn, callee->core_return_type_id,
+                fn, call->core_return_type_id,
                 MINIC_CORE_FLOAT_BINARY32) &&
             strcmp(name, "__trunctfsf2") == 0)
             return x86_x87_load(out, frame, a) &&
                    fprintf(out, "  fstps -%zu(%%rbp)\n",
                            frame->value_offsets[ins->result]) >= 0;
         if (source_ld && x86_call_is_integer(
-                fn, callee->core_return_type_id, NULL)) {
+                fn, call->core_return_type_id, NULL)) {
             bool unsigned_value;
             bool to_64, to_32;
-            if (!x86_call_is_integer(fn, callee->core_return_type_id,
+            if (!x86_call_is_integer(fn, call->core_return_type_id,
                                      &unsigned_value)) return false;
             to_64 = strcmp(name, unsigned_value ? "__fixunstfdi" : "__fixtfdi") == 0;
             to_32 = strcmp(name, unsigned_value ? "__fixunstfsi" : "__fixtfsi") == 0;
@@ -521,7 +521,7 @@ static bool x86_emit_x87_core_helper(FILE *out, const MinicCoreFunction *fn,
         return fprintf(out, "  %s %%st, %%st(1)\n", instruction) >= 0 &&
                x86_x87_store(out, frame, ins->result);
     }
-    if (!x86_call_is_integer(fn, callee->core_return_type_id, NULL) ||
+    if (!x86_call_is_integer(fn, call->core_return_type_id, NULL) ||
         (strcmp(name, "__eqtf2") != 0 &&
          strcmp(name, "__lttf2") != 0 &&
          strcmp(name, "__letf2") != 0)) return false;
@@ -613,27 +613,27 @@ bool minic_x86_64_emit_call_instruction(
                     "X86_CALL_GATE function=%s callee=%s stage=record-result "
                     "result_object=%" PRIu32 " arg_count=%zu fixed=%zu\n",
                     fn->name, callee->name != NULL ? callee->name : "?",
-                    ins->value.call.result_object, count, callee->parameter_count);
+                    ins->value.call.result_object, count, call.parameter_count);
             return false;
         }
-        if (x86_call_is_float_format(fn, callee->core_return_type_id,
+        if (x86_call_is_float_format(fn, call.core_return_type_id,
                                      MINIC_CORE_FLOAT_EXTENDED) ||
-            (callee->parameter_count != 0U &&
+            (call.parameter_count != 0U &&
              x86_call_is_float_format(fn,
-                 callee->core_parameter_type_ids != NULL
-                     ? callee->core_parameter_type_ids[0]
+                 call.core_parameter_type_ids != NULL
+                     ? call.core_parameter_type_ids[0]
                      : MINIC_CORE_TYPE_INVALID,
                  MINIC_CORE_FLOAT_EXTENDED))) {
             if (strncmp(callee->name, "__", 2U) == 0 &&
                 (strstr(callee->name, "tf") != NULL ||
                  strstr(callee->name, "TF") != NULL)) {
-                bool handled = x86_emit_x87_core_helper(out, fn, frame, callee, ins);
+                bool handled = x86_emit_x87_core_helper(out, fn, frame, &call, ins);
                 if (!handled && getenv("MINIC_X86_CALL_TRACE") != NULL)
                     (void)fprintf(stderr,
                         "X86_CALL_GATE function=%s callee=%s stage=x87-helper "
                         "return_ld=%d argc=%zu first_ld=%d\n",
                         fn->name, callee->name,
-                        x86_call_is_float_format(fn, callee->core_return_type_id,
+                        x86_call_is_float_format(fn, call.core_return_type_id,
                             MINIC_CORE_FLOAT_EXTENDED) ? 1 : 0,
                         count,
                         count != 0U &&
@@ -652,8 +652,8 @@ bool minic_x86_64_emit_call_instruction(
                 (void)fprintf(stderr,
                     "X86_CALL_GATE function=%s callee=%s stage=arguments "
                     "count=%zu fixed=%zu variadic=%d\n",
-                    fn->name, callee->name, count, callee->parameter_count,
-                    callee->is_variadic ? 1 : 0);
+                    fn->name, callee->name, count, call.parameter_count,
+                    call.is_variadic ? 1 : 0);
                 for (j = 0U; j < count && begin + j < fn->call_argument_count; ++j) {
                     const MinicCoreCallArgument *arg = &fn->call_arguments[begin + j];
                     (void)fprintf(stderr,
@@ -662,10 +662,10 @@ bool minic_x86_64_emit_call_instruction(
                         callee->name, j, (int)arg->kind,
                         arg->kind == MINIC_CORE_CALL_ARGUMENT_VALUE
                             ? arg->value.value_id : arg->value.object_id,
-                        j < callee->parameter_count &&
-                        callee->core_parameter_type_ids != NULL &&
+                        j < call.parameter_count &&
+                        call.core_parameter_type_ids != NULL &&
                         minic_core_abi_kind(fn,
-                            callee->core_parameter_type_ids[j],
+                            call.core_parameter_type_ids[j],
                             MINIC_CORE_TYPE_RECORD) ? 1 : 0);
                 }
             }
@@ -681,20 +681,20 @@ bool minic_x86_64_emit_call_instruction(
                   ? (ins->result == MINIC_CORE_VALUE_INVALID &&
                      x86_emit_call_record_result(
                          out, fn, frame,
-                         callee->core_return_type_id,
+                         call.core_return_type_id,
                          ins->value.call.result_object))
                   : x86_emit_call_result(out, fn, frame,
-                                         callee->core_return_type_id, ins->result))) {
+                                         call.core_return_type_id, ins->result))) {
             if (getenv("MINIC_X86_CALL_TRACE") != NULL)
                 (void)fprintf(stderr,
                     "X86_CALL_GATE function=%s callee=%s stage=return "
                     "long_double=%d double=%d record=%d\n",
                     fn->name, callee->name,
-                    x86_call_is_float_format(fn, callee->core_return_type_id,
+                    x86_call_is_float_format(fn, call.core_return_type_id,
                         MINIC_CORE_FLOAT_EXTENDED) ? 1 : 0,
-                    x86_call_is_float_format(fn, callee->core_return_type_id,
+                    x86_call_is_float_format(fn, call.core_return_type_id,
                         MINIC_CORE_FLOAT_BINARY64) ? 1 : 0,
-                    x86_call_is_record(fn, callee->core_return_type_id) ? 1 : 0);
+                    x86_call_is_record(fn, call.core_return_type_id) ? 1 : 0);
             return false;
         }
         return true;

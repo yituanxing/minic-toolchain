@@ -356,10 +356,9 @@ static bool module_capture_function(MinicCoreModuleFunctionSymbol *destination,
     destination->is_referenced = source->is_referenced;
     destination->is_weak = source->is_weak;
     destination->is_constructor = source->is_constructor;
-    destination->is_specialization = source->is_integer_specialization;
     destination->specialization_source_index = source->is_integer_specialization
         ? (size_t)source->specialization_source : SIZE_MAX;
-    if (destination->is_specialization &&
+    if (destination->specialization_source_index != SIZE_MAX &&
         destination->specialization_source_index >= program->function_count)
         return false;
     destination->is_reachability_root =

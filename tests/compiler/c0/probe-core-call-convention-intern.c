@@ -30,7 +30,8 @@ int main(void) {
             &builder, "efi_method", 10U, scalar, &scalar, 1U, false,
             MINIC_CALLING_CONVENTION_MS_X64, &repeated_direct) ||
         direct != repeated_direct || fn->callee_count != 1U ||
-        fn->callees[direct].calling_convention != MINIC_CALLING_CONVENTION_MS_X64)
+        builder.source_draft->callees[direct].calling_convention !=
+            MINIC_CALLING_CONVENTION_MS_X64)
         return 3;
 
     /* Same ELF symbol must never be interned with conflicting ABI metadata. */
@@ -47,7 +48,8 @@ int main(void) {
             &builder, "sysv_helper", 11U, scalar, &scalar, 1U, false,
             MINIC_CALLING_CONVENTION_DEFAULT, &distinct_direct) ||
         distinct_direct == direct || fn->callee_count != 2U ||
-        fn->callees[distinct_direct].calling_convention != MINIC_CALLING_CONVENTION_DEFAULT)
+        builder.source_draft->callees[distinct_direct].calling_convention !=
+            MINIC_CALLING_CONVENTION_DEFAULT)
         return 5;
 
     if (!minic_core_function_add_call_signature(

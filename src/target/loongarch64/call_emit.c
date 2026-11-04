@@ -6,6 +6,7 @@
 #include "target/common/lp64_scalar.h"
 #include "target/common/lp64_aggregate.h"
 #include "target/common/core_abi_value_shape.h"
+#include "target/common/core_call_view.h"
 #include "target/loongarch64/frame_emit.h"
 #include <stdio.h>
 #include <stdint.h>
@@ -317,16 +318,18 @@ bool minic_loongarch64_emit_abi_instruction(
                 if (callee->name != NULL &&
                     strncmp(callee->name, internal_prefix,
                             sizeof(internal_prefix) - 1U) == 0) {
+                    MinicCoreCallView builtin_call;
                     const char *mnemonic = NULL;
                     size_t argc = 0U, immediate_index = SIZE_MAX;
                     size_t k;
                     uint64_t imm = 0U;
-                    if (!minic_target_info_machine_builtin_form(
+                    if (!minic_core_call_view_build(fn, ins, &builtin_call) ||
+                        !minic_target_info_machine_builtin_form(
                             target, callee->name, strlen(callee->name),
                             &argc, &mnemonic, &immediate_index) ||
-                        ins->core_type_id != callee->core_return_type_id ||
-                        callee->parameter_count != argc || callee->is_variadic ||
-                        (argc != 0U && callee->core_parameter_type_ids == NULL) ||
+                        ins->core_type_id != builtin_call.core_return_type_id ||
+                        builtin_call.parameter_count != argc || builtin_call.is_variadic ||
+                        (argc != 0U && builtin_call.core_parameter_type_ids == NULL) ||
                         count != argc || count > 3U ||
                         stack_bytes != 0U || mnemonic == NULL)
                         return false;
@@ -336,7 +339,7 @@ bool minic_loongarch64_emit_abi_instruction(
                         if (arg->kind != MINIC_CORE_CALL_ARGUMENT_VALUE ||
                             arg->value.value_id >= fn->value_count ||
                             fn->values[arg->value.value_id].core_type_id !=
-                                callee->core_parameter_type_ids[k] ||
+                                builtin_call.core_parameter_type_ids[k] ||
                             call_plan->arguments[k].gp_first != k ||
                             call_plan->arguments[k].gp_registers != 1U ||
                             call_plan->arguments[k].fp_registers != 0U ||
