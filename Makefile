@@ -2366,6 +2366,16 @@ check-p45-machine-form-boundary: $(LOONG_TYPED_DESCRIPTOR_TEST_OBJECTS) $(MINIC_
 
 check-fast: check-p45-machine-form-boundary
 
+# The original 16 AArch64 per-CPU LL/SC variants have named GNU operands.
+# Core canonicalization erases tmp/ret name differences: machine variants
+# must carry only properties still independently recognizable afterward.
+.PHONY: check-p451-a64-percpu-normalized
+check-p451-a64-percpu-normalized: $(MINIC_CC_BINARY)
+	bash tests/compiler/c0/probe-p451-a64-percpu-normalized.sh \
+	  "$(abspath $(MINIC_CC_BINARY))"
+
+check-fast: check-p451-a64-percpu-normalized
+
 # Source -> Core -> normalized-machine ASM proof is a single admission
 # contract. Check whole instruction families, including hostile rewrites,
 # without requiring cross GNU/QEMU tools or granting opaque source IDs power.

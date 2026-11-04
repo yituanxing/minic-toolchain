@@ -680,6 +680,7 @@ SRC
     # three operations plus add_return = sixteen LL/SC hardware variants.
     # Separate GNU/GAS and MiniC/GAS QEMU execution proves real atomicity
     # and exact 1/2/4/8B access widths. No frontend ISA branch or C RMW.
+    # P45_FIXTURE_PERCPU_LL_SC_BEGIN
     : > "$work/aarch64-percpu-llsc.i"
     for bits in 8 16 32 64; do
         case "$bits" in
@@ -727,6 +728,7 @@ int main(void) {
            test_percpu_32() && test_percpu_64() ? 0 : 1;
 }
 SRC
+    # P45_FIXTURE_PERCPU_LL_SC_END
     "$cross_cc" -O0 -x c "$work/aarch64-percpu-llsc.i" \
         -o "$work/aarch64-percpu-llsc.gnu.elf"
     "$MINIC_CC" --target=aarch64-linux -S "$work/aarch64-percpu-llsc.i" \
@@ -774,6 +776,7 @@ SRC
     # The ALTERNATIVE patch table must survive as an ELF section containing
     # TWO relocation entries. A privileged MRS cannot run in QEMU-user:
     # GNU GCC/GAS and MiniC/GAS object/relocation equivalence is the oracle.
+    # P45_FIXTURE_PERCPU_ALTERNATIVE_BEGIN
     cat > "$work/aarch64-percpu-alternative.i" <<'SRC'
 register unsigned long current_stack_pointer asm ("sp");
 unsigned long linux_kern_my_cpu_offset(void) {
@@ -795,6 +798,7 @@ unsigned long linux_kern_my_cpu_offset(void) {
 }
 int main(void) { return 0; }
 SRC
+    # P45_FIXTURE_PERCPU_ALTERNATIVE_END
     "$cross_cc" -O0 -c -x c "$work/aarch64-percpu-alternative.i" \
         -o "$work/aarch64-percpu-alternative.gnu.o"
     # Scope machine-reject diagnostics to this exact original Linux

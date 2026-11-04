@@ -4674,9 +4674,17 @@ bool aarch64_machine_asm_identify(const char *text, size_t length,
     A64_MACHINE_FORM(width != 0U, LDAR, width);
     width = aarch64_stlr_width(text,length);
     A64_MACHINE_FORM(width != 0U, STLR, width);
+    /* A bare per-CPU LL/SC add and add_return have identical numeric
+     * machine templates: GNU's named `[tmp]` versus `[ret]` disappears
+     * when the operands become %1. Both execute the same exact LL/SC
+     * sequence and write the resulting value to the same Core output.
+     * Preserve the independently recognizable width and ALU identity, not
+     * the C operand's name. An ALTERNATIVE+LSE form retains its replacement
+     * opcode in the normalized text, verified by the shared recognizer. */
     A64_MACHINE_FORM(aarch64_linux_percpu_rmw_form(text,length,&percpu),
                      PERCPU_RMW,
-                     ((unsigned int)percpu.width << 8) | (unsigned int)percpu.returns_new);
+                     ((unsigned int)percpu.width << 8) |
+                     (unsigned int)(percpu.op - aarch64_atomic_operations));
     A64_MACHINE_FORM(aarch64_atomic_return_form(text,length,&atomic),
                      ATOMIC_RETURN,
                      ((unsigned int)atomic.width << 8) | atomic.mode);

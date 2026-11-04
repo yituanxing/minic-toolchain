@@ -2502,3 +2502,42 @@ before rendering text** as the next ownership target. Do not reopen already
 finished P38/P39/P42/P43/P44 type, clone, linkage or reachability work, and
 do not confuse architectural ownership improvements with five-ISA Linux/QEMU
 runtime correctness.
+
+### P45.1 — Restore machine-observable AArch64 per-CPU LL/SC variants
+
+After publishing P45, the **exact new PR head** uncovered one previously
+uncovered change in the four-architecture GNU runtime CI: the 16-variant
+original Linux arm64 per-CPU LL/SC sample failed Core lowering at
+`percpu_8_add_return`, whereas P44's identical CI step succeeded. This was
+**a new P45 regression**, not one of the inherited, still-red CI jobs.
+
+The root cause was ownership, not an unsupported ISA operation: GNU's named
+`[tmp]` versus `[ret]` output templates denote the same bare LL/SC machine
+text after Core normalization replaces both with `%1`. P45 had incorrectly
+encoded that erased Source name in `PERCPU_RMW`'s machine variant. Keep exact
+Source named-operand admission, but now seal only the independently visible
+machine **width and ALU operation** in its variant. Original and normalized
+form IDs/variants then agree for all four widths × add/andnot/or/add_return.
+An actual LSE `.altinstructions` replacement remains distinguishable by its
+`ldadd` versus `stadd` opcode and the original, unchanged emitter/parser.
+
+The host-only `check-p451-a64-percpu-normalized` gate executes the literal
+two fixture-generation blocks from the **existing** cross GNU/QEMU oracle
+(`probe-gnu-file-asm-multitarget.sh`), rather than maintaining second-source
+templates. It checks the 16 LL/SC emissions, one original per-CPU **offset**
+EL1/EL2 alternative (not the LL/SC LSE replacement),
+17/17 nonzero FormIds, and **nine** invalid GNU template/operand cases;
+when `P44_MINIC_CC` is available, it compares the resulting full `.s` bytes.
+Exact P44/P45.1 byte diffs are **identical** for both fixtures (SHA256 prefixes
+`39e402bc` and `bfb32d0a`), with no cross toolchain or QEMU claim. The
+broader Debug `check-fast` and Release `-Werror` also pass locally.
+
+PR #674 P45 head `a204fde` still had inherited P44 red jobs: x86 KVM guest
+CPUID VMX missing, Native Strict isolated link missing
+`minic_core_asm_names_symbol`, AArch64 NEON GCC pragma, RV32 full Zstd Core
+lowering, and original x86 CMPXCHG128 Core instruction. Their P44 predecessor
+steps failed for the **same concrete reasons**; none was silently treated as
+this AArch64 regression. A new exact-head four-architecture CI run, not a
+host source-only probe, must establish that the repaired arm64 LL/SC cross
+GNU/QEMU step has recovered. Five-ISA complete Linux boot certification
+remains separate.
