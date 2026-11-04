@@ -453,7 +453,8 @@ static bool x86_emit_mixed_integer_overflow(
                     : "  subq %r10, %rax\n  sbbq %r9, %r8\n", out) == EOF)
             return false;
     }
-    if (!x86_value_load(out, frame, address, "%r10") ||
+    if (!x86_head_load_memory_address_into(out, fn, frame, address,
+                                           "%r10", "%rcx") ||
         fprintf(out, "  %s\n  %s\n", store, result_extension) < 0 ||
         fputs("  cmpq %r11, %rax\n"
               "  setne %r9b\n"
@@ -922,7 +923,8 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicCoreModule *module
             (!is_fp && !minic_x86_64_core_scalar_width(fn->type_context,
                 ins->core_type_id, &ignored_width, &ignored_signed)))
             return false;
-        if (!x86_value_load(out, frame, ins->value.operand, "%r10"))
+        if (!x86_head_load_memory_address_into(
+                out, fn, frame, ins->value.operand, "%r10", "%r11"))
             return false;
         if (fprintf(out, "  movl %u(%%r10), %%ecx\n"
                          "  cmpl $%u, %%ecx\n"
@@ -953,10 +955,12 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicCoreModule *module
         /* 24-byte SysV __va_list_tag = two u32 offsets plus two pointers.
          * Copy three aligned eightbytes into the private tag allocated by
          * VARIADIC_ARGUMENT_ADDRESS. Do not alias the source cursor. */
-        if (!x86_value_load(out, frame,
-                            ins->value.variadic_copy.destination, "%r10") ||
-            !x86_value_load(out, frame,
-                            ins->value.variadic_copy.source, "%r11"))
+        if (!x86_head_load_memory_address_into(
+                out, fn, frame, ins->value.variadic_copy.destination,
+                "%r10", "%rax") ||
+            !x86_head_load_memory_address_into(
+                out, fn, frame, ins->value.variadic_copy.source,
+                "%r11", "%rax"))
             return false;
         return fprintf(out,
                 "  movq 0(%%r11), %%rax\n"
@@ -1293,7 +1297,8 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicCoreModule *module
                       "  setne %r11b\n  sarq $63, %r9\n"
                       "  cmpq %r9, %r8\n  setne %r8b\n"
                       "  orb %r8b, %r11b\n", out) == EOF ||
-                !x86_value_load(out, frame, address, "%r10") ||
+                !x86_head_load_memory_address_into(
+                    out, fn, frame, address, "%r10", "%rcx") ||
                 fputs("  movl %eax, (%r10)\n"
                       "  movzbq %r11b, %rax\n", out) == EOF)
                 return false;
@@ -1331,7 +1336,8 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicCoreModule *module
         /* Snapshot the arithmetic flag before any later arithmetic.
          * Two-address result memory is written before returning the bool. */
         if (fprintf(out, "  %s %%r11b\n", flag) < 0 ||
-            !x86_value_load(out, frame, address, "%r10") ||
+            !x86_head_load_memory_address_into(
+                out, fn, frame, address, "%r10", "%rcx") ||
             fprintf(out, width == 8U
                            ? "  movq %%rax, (%%r10)\n"
                            : "  movl %%eax, (%%r10)\n") < 0 ||

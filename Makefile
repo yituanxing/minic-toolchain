@@ -2418,6 +2418,17 @@ check-p47-five-isa-output-smoke: check-p46-aggregate-and-loong-oracle check-p46-
 
 check-fast: check-x86-global-plan-abi check-five-isa-global-section-source
 
+# One complete P48 x86 early-head memory provenance proof: local pointer
+# slots, dynamic offsets, CFG join, aggregate pointer field and opaque alias
+# boundary. GNU same-source controls and real ELF displaced native runtime
+# must both run; this is not a full Linux QEMU boot certification.
+.PHONY: check-p48-x86-head-local-provenance
+check-p48-x86-head-local-provenance: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	  bash tests/compiler/c0/probe-p48-head-local-provenance.sh
+
+check-fast: check-p48-x86-head-local-provenance
+
 # Source -> Core -> normalized-machine ASM proof is a single admission
 # contract. Check whole instruction families, including hostile rewrites,
 # without requiring cross GNU/QEMU tools or granting opaque source IDs power.

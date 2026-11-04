@@ -199,6 +199,19 @@ jobs:
             make MODE=release CFLAGS=-Werror BUILD_DIR=build/minic-native-backend \
               HOST_CC=gcc CC=gcc check-p47-five-isa-output-smoke
           echo 'MINIC_P47_FIVE_ISA_OUTPUT=PASS p46_aggregate=1 p46_head=1 x86_global_abi=1 rv32_source=1 rv64_source=1 global_section_sources=5 GNU_AS_LD_x86=1 other_ELF=NOT_RUN QEMU_other_ISA=NOT_RUN'
+      - name: P48 x86 early head local pointer provenance and displaced ELF oracle
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(uname -m)" = x86_64
+          for tool in gcc readelf nm; do
+            command -v "$tool" >/dev/null || {
+              echo "MINIC_P48_HEAD_PROVENANCE=FAIL missing required GNU tool: $tool" >&2
+              exit 1
+            }
+          done
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/minic-native-backend \
+            HOST_CC=gcc CC=gcc check-p48-x86-head-local-provenance
       - name: Full-source review architecture and correctness batch native oracles
         shell: bash
         run: |

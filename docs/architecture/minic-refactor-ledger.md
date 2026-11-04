@@ -2694,3 +2694,74 @@ share safe arithmetic primitives while preserving the distinct C static
 initializer member paths and GNU ASM specialisation/zero-stride admission.
 No P38–P46 type, clone, ASM symbol-reachability or aggregate-copy migration
 should be reopened merely because this ELF owner is being consolidated.
+
+## IR-P48 — x86 early-head physical/VMA provenance through Core local memory (2026-11-04)
+
+**Status:** one x86-address-provenance mechanism batch, on the same
+`refactor/minic-target-language-boundary` branch / PR #674. The local host
+and GNU ELF proof below was observed; full x86 Linux pre-MMU QEMU and full
+five-ISA Linux runtime remain **NOT RUN** at this head. Keep MC-076 `OPEN`
+until independent opaque alias/cross-function proofs and real boot evidence.
+
+### The complete owner, not per-opcode bandages
+
+- **Actual prior wrongcode:** the P47 `x86_head_address_global` def-walk
+  stopped on Core pointer `LOAD`. A pointer stored into a local Core object
+  and reloaded could retain the *link VMA* while used as a displaced physical
+  address. New `.head.text` + `.head.data` same-displacement native tests
+  reproduced eight failures on the old host binary, including independent
+  direct global data traffic poisoning a conflicting local pointer's numeric
+  VMA return. These are real displaced execution failures, not solely text
+  mismatches.
+- **One x86 plan:** the `x86_64/codegen.c` HeadAddressPlan derives facts
+  from frozen Core SSA and `ObjectId`, not C AST or frontend symbol text.
+  Every derived local address must prove an exact `(object_id, byte_offset)`
+  through object/field/constant offset forms; 8-byte pointer/integer slots
+  have a Core type and extent check. The **entire address-use graph** is
+  scanned for escapes, indirect/opaque uses, aggregate/parameter effects and
+  unproven offsets. Those invalidate private memory provenance.
+- **Cross-block transfer is real memory flow:** local `STORE` updates the
+  slot's `{global_id, crossed_vma_cast}`; local `LOAD` uses the current slot
+  fact; predecessor joins retain only agreed origins, including variable
+  field offsets at the *global* consumer. The fixed point checks both slot
+  state and SSA origin convergence, including reversed block order/loops.
+  Core currently has no PHI opcode; do not invent PHI handling.
+- **One producer of the three machine roles:** the completed address plan
+  fills the existing physical direct-global, VMA scalar-cast, and
+  memory-rebase arrays. `machine_emit.c` remains target owner of actual
+  RIP/absolute selection. Numeric VMA casts are a consumer effect, so an
+  SSA value can still feed real displaced memory and a link-VMA computation.
+  The same `x86_head_memory_addresses` census now includes aggregate/vector
+  copies, `INTEGER_OVERFLOW.result_address`, `VARIADIC_NEXT_SCALAR` and both
+  sides of `VARIADIC_COPY`. Machine rebasing preserves live arithmetic
+  registers and flags (overflow paths reserve `%rcx` scratch).
+- **Proven versus unknown:** an exact private pointer slot, dynamic global
+  field offset and same-origin branch join are supported. Conflicting or
+  escaped aliases which could inherit another direct use's physical global
+  representation cause an explicit head-provenance compile rejection,
+  rather than a guessed binding or silently wrong executable. Opaque
+  cross-function pointer effects remain beyond this local proof.
+- **No unrelated redesign:** non-head `.text`, PIC/PIE global addressing,
+  Core language types, other four target backends, GNU assembler and linker
+  stages are unchanged. P46's record-copy owner and P47's global-output
+  plan remain independent and fully exercised.
+
+### Verified targeted host/GNU evidence
+
+| Independent gate | P48 observed result |
+|---|---|
+| P47 Debug prior to fix, physically displaced `.head.text` native oracle | **8/11 FAIL** in the strengthened pre-fix fixture; real physical data and link-VMA wrongcode confirmed |
+| P48 same-source GNU-AS/LD ELF and physically relocated MiniC execution | **9/9 PASS**: direct controls, local pointer, two numeric/pointer roundtrips, two agreed branch paths, pointer-containing Record field, overflow result address |
+| Ambiguous conflicting global and escaped alias with independent direct memory role | **2/2 expected rejection** with explicit diagnostic and no partial output; these are intentionally **not** claimed as executable physical positive controls |
+| GCC `-O2` same-source displaced controls | **2/2 PASS**; GNU `-O0` local pointer storage does not reliably produce a displaced-physical oracle |
+| Original MC-076 scalar and P46 aggregate GNU ELF/physically displaced native | **PASS**, separately rerun |
+| Ordinary `.text`, PIC/PIE, GNU link/relocations and x86 host execution | **PASS** in the P48 focused gate |
+| Debug `make -s -j8 MODE=debug check-fast` and Release `make -s -j8 MODE=release CFLAGS=-Werror all` | **PASS**, complete local exit 0 after combining P48 production, one-gate fixtures and review records |
+| `bash tests/compiler/c0/check-minic-target-boundaries.sh`, `git diff --check` and P48 Bash syntax | **PASS**, source/target ownership unchanged |
+| Full x86 GNU Linux `Image` pre-MMU under QEMU for P48 exact head | **NOT RUN**, required before declaring MC-076 Linux-safe |
+| Full five-ISA Linux GNU ELF/QEMU | **NOT RUN**; x86 host ELF does not certify other architectures |
+
+The complete new evidence is one `make check-p48-x86-head-local-provenance`
+target (included by `check-fast`) and one native strict CI step, backed by
+`tests/compiler/c0/probe-p48-head-local-provenance.sh` and its same-source C,
+displaced native driver, and separate deliberately uncertain negative fixture.
