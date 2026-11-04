@@ -4,6 +4,7 @@
 #include "target/common/core_instruction_family.h"
 #include "target/common/core_numeric_shape.h"
 #include "target/common/core_scalar_conversion.h"
+#include "target/common/elf_module_symbol_info.h"
 #include "target/common/direct_residual_plan.h"
 #include "target/common/direct_instruction_semantics.h"
 #include "target/common/lp64_scalar.h"
@@ -15,6 +16,14 @@
 #include <stdlib.h>
 #include <string.h>
 
+static bool x86_elf_pic_direct_symbol(const MinicCoreModule *module,
+                                      const char *symbol,
+                                      MinicElfModuleSymbolKind kind) {
+    const MinicElfModuleSymbolFacts facts =
+        minic_multi_elf_module_symbol_facts(module, symbol, kind);
+    return facts.nonpreemptible && !facts.undefined_weak;
+}
+
 static const MinicCoreType *x86_emit_core_type(const MinicCoreFunction *fn,
                                                MinicCoreTypeId id) {
     return fn != NULL && fn->type_context != NULL
@@ -23,9 +32,8 @@ static const MinicCoreType *x86_emit_core_type(const MinicCoreFunction *fn,
         : NULL;
 }
 
-/* Execution shape has one owner after Core ingress. The remaining Program
- * argument to the outer emitter is solely for source-qualified Linux asm
- * and ELF symbol preemption, never C value layout or signedness. */
+/* Execution shape has one owner after Core ingress. ELF relocation binding
+ * is handled by the sealed Module symbol facts, never C value layout. */
 static bool x86_emit_core_kind(const MinicCoreFunction *fn,
                                MinicCoreTypeId id, MinicCoreTypeKind kind) {
     const MinicCoreType *type = x86_emit_core_type(fn, id);
@@ -785,10 +793,9 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicCoreModule *module
          * an undefined weak must still use GOT (it may resolve to zero),
          * even when its visibility is hidden. */
         if (!target->position_independent ||
-            (minic_target_info_elf_module_object_is_nonpreemptible(
-                 module, fn->globals[ins->value.global_id].name) &&
-             !minic_target_info_elf_module_object_is_undefined_weak(
-                 module, fn->globals[ins->value.global_id].name)))
+            x86_elf_pic_direct_symbol(
+                module, fn->globals[ins->value.global_id].name,
+                MINIC_ELF_MODULE_SYMBOL_OBJECT))
             return fprintf(out, "  leaq %s(%%rip), %%rax\n",
                            fn->globals[ins->value.global_id].name) >= 0 &&
                    x86_value_store(out, frame, ins->result);
@@ -802,12 +809,9 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicCoreModule *module
         if (ins->value.function_symbol_id >= fn->function_symbol_count ||
             fn->function_symbols[ins->value.function_symbol_id].name == NULL) return false;
         if (!target->position_independent ||
-            (minic_target_info_elf_module_function_is_nonpreemptible(
-                 module, fn->function_symbols[
-                     ins->value.function_symbol_id].name) &&
-             !minic_target_info_elf_module_function_is_undefined_weak(
-                 module, fn->function_symbols[
-                     ins->value.function_symbol_id].name)))
+            x86_elf_pic_direct_symbol(
+                module, fn->function_symbols[ins->value.function_symbol_id].name,
+                MINIC_ELF_MODULE_SYMBOL_FUNCTION))
             return fprintf(out, "  leaq %s(%%rip), %%rax\n",
                            fn->function_symbols[ins->value.function_symbol_id].name) >= 0 &&
                    x86_value_store(out, frame, ins->result);

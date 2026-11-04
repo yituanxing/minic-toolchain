@@ -31,7 +31,6 @@ typedef enum MinicTargetCallCapability {
     MINIC_TARGET_CALL_MS_X64_FIXED_SCALAR = 1U << 0
 } MinicTargetCallCapability;
 
-struct MinicCoreModule;
 struct MinicTargetInfo;
 
 /* Query a sealed machine-internal builtin name, never a C signature. */
@@ -74,20 +73,6 @@ bool minic_target_info_machine_builtin_form(
     const MinicTargetInfo *target, const char *internal_callee, size_t length,
     size_t *argument_count,
     const char **mnemonic, size_t *immediate_index);
-
-/* Sealed Module ELF symbol facts; never inferred from unsealed source AST. */
-bool minic_target_info_elf_module_object_is_tu_local(
-    const struct MinicCoreModule *module, const char *symbol);
-bool minic_target_info_elf_module_function_is_tu_local(
-    const struct MinicCoreModule *module, const char *symbol);
-bool minic_target_info_elf_module_object_is_nonpreemptible(
-    const struct MinicCoreModule *module, const char *symbol);
-bool minic_target_info_elf_module_function_is_nonpreemptible(
-    const struct MinicCoreModule *module, const char *symbol);
-bool minic_target_info_elf_module_object_is_undefined_weak(
-    const struct MinicCoreModule *module, const char *symbol);
-bool minic_target_info_elf_module_function_is_undefined_weak(
-    const struct MinicCoreModule *module, const char *symbol);
 
 bool minic_target_info_function_calling_convention_scalar_call_supported(
     const MinicTargetInfo *target, MinicFunctionCallingConvention convention);

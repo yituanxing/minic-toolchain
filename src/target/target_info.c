@@ -1,9 +1,7 @@
 #include "target/target_info.h"
-#include "core/module_ir.h"
 #include "target/loongarch64/machine_builtin_form.h"
 
 #include <stdint.h>
-#include <string.h>
 
 /* Physical ISA capabilities and byte layout belong to machine TargetInfo.
  * The immutable C-language registry is owned separately by SourcePolicy. */
@@ -136,100 +134,6 @@ const MinicTargetInfo *minic_target_info_from_name(const char *name) {
 
 const MinicDataLayout *minic_target_info_data_layout(const MinicTargetInfo *target) {
     return target == NULL ? NULL : target->data_layout;
-}
-
-static bool minic_elf_module_visibility_is_nonpreemptible(
-    MinicCoreModuleVisibility visibility) {
-    return visibility == MINIC_CORE_MODULE_VISIBILITY_HIDDEN ||
-           visibility == MINIC_CORE_MODULE_VISIBILITY_INTERNAL;
-}
-
-bool minic_target_info_elf_module_object_is_tu_local(
-    const MinicCoreModule *module, const char *symbol) {
-    size_t index;
-    if (module == NULL || !module->finalized || symbol == NULL ||
-        (module->global_count != 0U && module->globals == NULL)) return false;
-    for (index = 0U; index < module->global_count; ++index) {
-        const MinicCoreModuleGlobal *object = &module->globals[index];
-        if (object->name != NULL && strcmp(object->name, symbol) == 0 &&
-            object->is_internal && !object->is_extern &&
-            !object->is_block_scope_extern_only) return true;
-    }
-    return false;
-}
-
-bool minic_target_info_elf_module_function_is_tu_local(
-    const MinicCoreModule *module, const char *symbol) {
-    size_t index;
-    if (module == NULL || !module->finalized || symbol == NULL ||
-        (module->function_count != 0U && module->function_symbols == NULL)) return false;
-    for (index = 0U; index < module->function_count; ++index) {
-        const MinicCoreModuleFunctionSymbol *function =
-            &module->function_symbols[index];
-        if (function->name != NULL && strcmp(function->name, symbol) == 0 &&
-            function->is_defined && function->is_internal) return true;
-    }
-    return false;
-}
-
-bool minic_target_info_elf_module_object_is_nonpreemptible(
-    const MinicCoreModule *module, const char *symbol) {
-    size_t index;
-    if (module == NULL || !module->finalized || symbol == NULL ||
-        (module->global_count != 0U && module->globals == NULL)) return false;
-    for (index = 0U; index < module->global_count; ++index) {
-        const MinicCoreModuleGlobal *object = &module->globals[index];
-        if (object->name != NULL && strcmp(object->name, symbol) == 0 &&
-            ((object->is_internal && !object->is_extern &&
-              !object->is_block_scope_extern_only) ||
-             minic_elf_module_visibility_is_nonpreemptible(object->visibility)))
-            return true;
-    }
-    return false;
-}
-
-bool minic_target_info_elf_module_function_is_nonpreemptible(
-    const MinicCoreModule *module, const char *symbol) {
-    size_t index;
-    if (module == NULL || !module->finalized || symbol == NULL ||
-        (module->function_count != 0U && module->function_symbols == NULL)) return false;
-    for (index = 0U; index < module->function_count; ++index) {
-        const MinicCoreModuleFunctionSymbol *function =
-            &module->function_symbols[index];
-        if (function->name != NULL && strcmp(function->name, symbol) == 0 &&
-            ((function->is_defined && function->is_internal) ||
-             minic_elf_module_visibility_is_nonpreemptible(function->visibility)))
-            return true;
-    }
-    return false;
-}
-
-bool minic_target_info_elf_module_object_is_undefined_weak(
-    const MinicCoreModule *module, const char *symbol) {
-    size_t index;
-    if (module == NULL || !module->finalized || symbol == NULL ||
-        (module->global_count != 0U && module->globals == NULL)) return false;
-    for (index = 0U; index < module->global_count; ++index) {
-        const MinicCoreModuleGlobal *object = &module->globals[index];
-        if (object->name != NULL && strcmp(object->name, symbol) == 0)
-            return object->is_weak && object->is_extern &&
-                   !object->is_tentative;
-    }
-    return false;
-}
-
-bool minic_target_info_elf_module_function_is_undefined_weak(
-    const MinicCoreModule *module, const char *symbol) {
-    size_t index;
-    if (module == NULL || !module->finalized || symbol == NULL ||
-        (module->function_count != 0U && module->function_symbols == NULL)) return false;
-    for (index = 0U; index < module->function_count; ++index) {
-        const MinicCoreModuleFunctionSymbol *function =
-            &module->function_symbols[index];
-        if (function->name != NULL && strcmp(function->name, symbol) == 0)
-            return function->is_weak && !function->is_defined;
-    }
-    return false;
 }
 
 bool minic_target_info_function_calling_convention_scalar_call_supported(

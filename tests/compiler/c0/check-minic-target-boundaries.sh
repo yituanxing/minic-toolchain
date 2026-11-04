@@ -1310,7 +1310,9 @@ for owner in \
 done
 lacks src/target/target_info.h 'minic_target_info_elf_object_is_nonpreemptible('
 lacks src/target/target_info.h 'minic_target_info_elf_function_is_undefined_weak('
-has src/target/target_info.h 'minic_target_info_elf_module_function_is_undefined_weak('
+lacks src/target/target_info.h 'minic_target_info_elf_module_function_is_undefined_weak('
+has src/target/common/elf_module_symbol_info.h 'minic_multi_elf_module_symbol_facts('
+has src/target/common/elf_module_symbol_info.c 'defined |= owner;'
 lacks src/target/common/elf_alias_emit.h 'minic_multi_elf_emit_object_alias('
 lacks src/target/common/elf_alias_emit.h 'minic_multi_elf_emit_function_aliases('
 has src/target/aarch64/neon_emit.h 'minic_aarch64_neon_emit_xor_core('
@@ -1485,12 +1487,11 @@ cc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror \
 
 # Machine PIC and ELF-address eligibility must come from the immutable
 # ModuleIR linkage snapshot, never from a late C Program lookup. The same
-# six proofs cover RV32/RV64, x86-64, AArch64, and LoongArch64 policies.
+# six facts cover RV32/RV64, x86-64, AArch64, and LoongArch64 policies.
 cc -std=c11 -O2 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror \
   -ffunction-sections -fdata-sections -Wl,--gc-sections \
   -Iinclude -Isrc tests/compiler/c0/probe-core-module-elf-linkage.c \
-  src/target/target_info.c \
-  src/target/source_policy/language_semantics.c \
+  src/target/common/elf_module_symbol_info.c \
   -o "$work/core-module-elf-linkage-probe"
 "$work/core-module-elf-linkage-probe"
 

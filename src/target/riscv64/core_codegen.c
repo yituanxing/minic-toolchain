@@ -1,4 +1,5 @@
 #include "target/riscv64/core_codegen.h"
+#include "target/common/elf_module_symbol_info.h"
 #include "target/riscv64/core_admission.h"
 #include "target/riscv64/function_abi_plan.h"
 
@@ -264,8 +265,9 @@ static bool emit_instruction(FILE *file,
          * linked high virtual address before enabling the MMU. */
         if (fprintf(file,
                     position_independent &&
-                            !minic_target_info_elf_module_object_is_nonpreemptible(
-                                module, function->globals[instruction->value.global_id].name)
+                            !minic_multi_elf_module_symbol_facts(
+                                module, function->globals[instruction->value.global_id].name,
+                                MINIC_ELF_MODULE_SYMBOL_OBJECT).nonpreemptible
                         ? "  .option push\n  .option pic\n  la t0, %s\n  .option pop\n"
                         : "  lla t0, %s\n",
                     function->globals[instruction->value.global_id].name) < 0) {
@@ -277,9 +279,10 @@ static bool emit_instruction(FILE *file,
             return false;
         if (fprintf(file,
                     position_independent &&
-                            !minic_target_info_elf_module_function_is_nonpreemptible(
+                            !minic_multi_elf_module_symbol_facts(
                                 module, function->function_symbols[
-                                    instruction->value.function_symbol_id].name)
+                                    instruction->value.function_symbol_id].name,
+                                MINIC_ELF_MODULE_SYMBOL_FUNCTION).nonpreemptible
                         ? "  .option push\n  .option pic\n  la t0, %s\n  .option pop\n"
                         : "  lla t0, %s\n",
                     function->function_symbols[instruction->value.function_symbol_id].name) < 0) {

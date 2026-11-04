@@ -6,6 +6,7 @@
 #include "target/common/direct_instruction_semantics.h"
 #include "target/common/lp64_scalar.h"
 #include "target/common/direct_program_emit.h"
+#include "target/common/elf_module_symbol_info.h"
 #include "target/aarch64/abi.h"
 #include <inttypes.h>
 #include <stdint.h>
@@ -345,14 +346,15 @@ bool minic_aarch64_emit_residual_instruction(
         }
         case MINIC_CORE_INSTRUCTION_GLOBAL_ADDRESS: {
             const char *symbol;
+            MinicElfModuleSymbolFacts linkage;
             if (!minic_multi_direct_global_address_symbol(fn, ins, &symbol))
                 return minic_multi_direct_machine_reject(
                     fn, "aarch64", name, reject_stage, reject_block, reject_ins, __LINE__);
-            if (!minic_target_info_elf_module_object_is_undefined_weak(
-                    module, symbol) &&
+            linkage = minic_multi_elf_module_symbol_facts(
+                module, symbol, MINIC_ELF_MODULE_SYMBOL_OBJECT);
+            if (!linkage.undefined_weak &&
                 (!target->position_independent ||
-                 minic_target_info_elf_module_object_is_nonpreemptible(
-                     module, symbol))) {
+                 linkage.nonpreemptible)) {
                 /* Static definitions and ELF hidden/internal declarations
                  * bind locally, including undefined symbols resolved by the
                  * final shared link (Linux vDSO). Non-PIC code can also use
@@ -386,14 +388,15 @@ bool minic_aarch64_emit_residual_instruction(
         }
         case MINIC_CORE_INSTRUCTION_FUNCTION_ADDRESS: {
             const char *symbol;
+            MinicElfModuleSymbolFacts linkage;
             if (!minic_multi_direct_function_address_symbol(fn, ins, &symbol))
                 return minic_multi_direct_machine_reject(fn, "aarch64", name, reject_stage,
                                            reject_block, reject_ins, __LINE__);
-            if (!minic_target_info_elf_module_function_is_undefined_weak(
-                    module, symbol) &&
+            linkage = minic_multi_elf_module_symbol_facts(
+                module, symbol, MINIC_ELF_MODULE_SYMBOL_FUNCTION);
+            if (!linkage.undefined_weak &&
                 (!target->position_independent ||
-                 minic_target_info_elf_module_function_is_nonpreemptible(
-                     module, symbol))) {
+                 linkage.nonpreemptible)) {
                 if (fprintf(out, "  adrp x9, %s\n"
                                  "  add x9, x9, :lo12:%s\n",
                             symbol, symbol) < 0)

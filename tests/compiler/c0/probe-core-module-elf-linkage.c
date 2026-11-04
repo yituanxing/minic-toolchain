@@ -1,16 +1,20 @@
 /* A machine PIC/ELF decision must use ModuleIR's sealed linkage snapshot,
  * even if a later C Program declares a completely different symbol. */
 #include "core/module_ir.h"
-#include "target/target_info.h"
+#include "target/common/elf_module_symbol_info.h"
 
 #include <stdio.h>
 
 #define CHECK(check, code) do { if (!(check)) return (code); } while (0)
+#define OBJ(symbol) minic_multi_elf_module_symbol_facts( \
+    &module, (symbol), MINIC_ELF_MODULE_SYMBOL_OBJECT)
+#define FN(symbol) minic_multi_elf_module_symbol_facts( \
+    &module, (symbol), MINIC_ELF_MODULE_SYMBOL_FUNCTION)
 
 int main(void) {
     MinicCoreModuleGlobal globals[] = {
         {.name = "internal_object", .is_internal = true,
-         .alias_target_index = SIZE_MAX},
+         .emittable = true, .alias_target_index = SIZE_MAX},
         {.name = "hidden_object", .is_extern = true,
          .visibility = MINIC_CORE_MODULE_VISIBILITY_HIDDEN,
          .alias_target_index = SIZE_MAX},
@@ -24,7 +28,8 @@ int main(void) {
     };
     MinicCoreModuleFunctionSymbol functions[] = {
         {.name = "internal_function", .is_defined = true, .is_internal = true,
-         .alias_target_index = SIZE_MAX, .specialization_source_index = SIZE_MAX},
+         .is_referenced = true, .alias_target_index = SIZE_MAX,
+         .specialization_source_index = SIZE_MAX},
         {.name = "hidden_function",
          .visibility = MINIC_CORE_MODULE_VISIBILITY_INTERNAL,
          .alias_target_index = SIZE_MAX, .specialization_source_index = SIZE_MAX},
@@ -32,6 +37,44 @@ int main(void) {
          .alias_target_index = SIZE_MAX, .specialization_source_index = SIZE_MAX},
         {.name = "visible_function", .is_defined = true,
          .alias_target_index = SIZE_MAX, .specialization_source_index = SIZE_MAX},
+    };
+    MinicCoreModuleGlobal mixed_globals[] = {
+        {.name = "weak_first", .is_extern = true, .is_weak = true,
+         .alias_target_index = SIZE_MAX},
+        {.name = "weak_first", .is_internal = true, .emittable = true,
+         .alias_target_index = SIZE_MAX},
+        {.name = "strong_first", .is_internal = true, .emittable = true,
+         .alias_target_index = SIZE_MAX},
+        {.name = "strong_first", .is_extern = true, .is_weak = true,
+         .alias_target_index = SIZE_MAX},
+        {.name = "weak_alias", .is_extern = true, .is_weak = true,
+         .emittable = true, .alias_target_index = 1U},
+        {.name = "pruned", .is_internal = true,
+         .alias_target_index = SIZE_MAX},
+        {.name = "pruned", .is_extern = true, .is_weak = true,
+         .alias_target_index = SIZE_MAX},
+        {.name = "local_alias", .is_internal = true, .is_extern = true,
+         .emittable = true, .alias_target_index = 1U},
+    };
+    MinicCoreModuleFunctionSymbol mixed_functions[] = {
+        {.name = "weak_first", .is_weak = true,
+         .alias_target_index = SIZE_MAX, .specialization_source_index = SIZE_MAX},
+        {.name = "weak_first", .is_defined = true, .is_internal = true,
+         .is_referenced = true, .alias_target_index = SIZE_MAX,
+         .specialization_source_index = SIZE_MAX},
+        {.name = "strong_first", .is_defined = true, .is_internal = true,
+         .is_referenced = true, .alias_target_index = SIZE_MAX,
+         .specialization_source_index = SIZE_MAX},
+        {.name = "strong_first", .is_weak = true,
+         .alias_target_index = SIZE_MAX, .specialization_source_index = SIZE_MAX},
+        {.name = "weak_alias", .is_weak = true, .alias_target_index = 1U,
+         .specialization_source_index = SIZE_MAX},
+        {.name = "pruned", .is_defined = true, .is_internal = true,
+         .alias_target_index = SIZE_MAX, .specialization_source_index = SIZE_MAX},
+        {.name = "pruned", .is_weak = true,
+         .alias_target_index = SIZE_MAX, .specialization_source_index = SIZE_MAX},
+        {.name = "local_alias", .is_internal = true,
+         .alias_target_index = 1U, .specialization_source_index = SIZE_MAX},
     };
     MinicCoreModule module = {
         .globals = globals,
@@ -43,62 +86,61 @@ int main(void) {
 
     /* Locality is stricter than nonpreemptibility: external hidden
      * declarations may be nonpreemptible without a TU-owned definition. */
-    CHECK(minic_target_info_elf_module_object_is_tu_local(
-              &module, "internal_object"), 1);
-    CHECK(!minic_target_info_elf_module_object_is_tu_local(
-              &module, "hidden_object"), 2);
-    CHECK(!minic_target_info_elf_module_object_is_tu_local(
-              &module, "scope_extern"), 3);
-    CHECK(minic_target_info_elf_module_function_is_tu_local(
-              &module, "internal_function"), 4);
-    CHECK(!minic_target_info_elf_module_function_is_tu_local(
-              &module, "hidden_function"), 5);
-    CHECK(minic_target_info_elf_module_object_is_nonpreemptible(
-              &module, "internal_object"), 6);
-    CHECK(minic_target_info_elf_module_object_is_nonpreemptible(
-              &module, "hidden_object"), 7);
-    CHECK(!minic_target_info_elf_module_object_is_nonpreemptible(
-              &module, "weak_object"), 8);
-    CHECK(!minic_target_info_elf_module_object_is_nonpreemptible(
-              &module, "scope_extern"), 9);
-    CHECK(minic_target_info_elf_module_function_is_nonpreemptible(
-              &module, "internal_function"), 10);
-    CHECK(minic_target_info_elf_module_function_is_nonpreemptible(
-              &module, "hidden_function"), 11);
-    CHECK(!minic_target_info_elf_module_function_is_nonpreemptible(
-              &module, "visible_function"), 12);
-    CHECK(minic_target_info_elf_module_object_is_undefined_weak(
-              &module, "weak_object"), 13);
-    CHECK(!minic_target_info_elf_module_object_is_undefined_weak(
-              &module, "tentative_object"), 14);
-    CHECK(minic_target_info_elf_module_function_is_undefined_weak(
-              &module, "weak_function"), 15);
-    CHECK(!minic_target_info_elf_module_function_is_undefined_weak(
-              &module, "internal_function"), 16);
-    CHECK(!minic_target_info_elf_module_object_is_tu_local(
-              &module, "source_only_name") &&
-          !minic_target_info_elf_module_object_is_nonpreemptible(
-              &module, "source_only_name") &&
-          !minic_target_info_elf_module_object_is_undefined_weak(
-              &module, "source_only_name") &&
-          !minic_target_info_elf_module_function_is_tu_local(
-              &module, "source_only_name") &&
-          !minic_target_info_elf_module_function_is_nonpreemptible(
-              &module, "source_only_name") &&
-          !minic_target_info_elf_module_function_is_undefined_weak(
-              &module, "source_only_name"), 17);
+    CHECK(OBJ("internal_object").tu_local, 1);
+    CHECK(!OBJ("hidden_object").tu_local, 2);
+    CHECK(!OBJ("scope_extern").tu_local, 3);
+    CHECK(FN("internal_function").tu_local, 4);
+    CHECK(!FN("hidden_function").tu_local, 5);
+    CHECK(OBJ("internal_object").nonpreemptible, 6);
+    CHECK(OBJ("hidden_object").nonpreemptible, 7);
+    CHECK(!OBJ("weak_object").nonpreemptible, 8);
+    CHECK(!OBJ("scope_extern").nonpreemptible, 9);
+    CHECK(FN("internal_function").nonpreemptible, 10);
+    CHECK(FN("hidden_function").nonpreemptible, 11);
+    CHECK(!FN("visible_function").nonpreemptible, 12);
+    CHECK(OBJ("weak_object").undefined_weak, 13);
+    CHECK(!OBJ("tentative_object").undefined_weak, 14);
+    CHECK(FN("weak_function").undefined_weak, 15);
+    CHECK(!FN("internal_function").undefined_weak, 16);
+    CHECK(!OBJ("source_only_name").tu_local &&
+          !OBJ("source_only_name").nonpreemptible &&
+          !OBJ("source_only_name").undefined_weak &&
+          !FN("source_only_name").tu_local &&
+          !FN("source_only_name").nonpreemptible &&
+          !FN("source_only_name").undefined_weak, 17);
     module.finalized = false;
-    CHECK(!minic_target_info_elf_module_object_is_nonpreemptible(
-              &module, "internal_object") &&
-          !minic_target_info_elf_module_function_is_undefined_weak(
-              &module, "weak_function"), 18);
+    CHECK(!OBJ("internal_object").nonpreemptible &&
+          !FN("weak_function").undefined_weak, 18);
     module.finalized = true;
     module.globals = NULL;
-    CHECK(!minic_target_info_elf_module_object_is_tu_local(
-              &module, "internal_object"), 19);
+    CHECK(!OBJ("internal_object").tu_local, 19);
     module.function_symbols = NULL;
-    CHECK(!minic_target_info_elf_module_function_is_tu_local(
-              &module, "internal_function"), 20);
-    puts("MINIC_CORE_MODULE_ELF_LINKAGE=PASS six_predicates=6 cases=20");
+    CHECK(!FN("internal_function").tu_local, 20);
+    module.globals = mixed_globals;
+    module.global_count = sizeof(mixed_globals) / sizeof(mixed_globals[0]);
+    module.function_symbols = mixed_functions;
+    module.function_count = sizeof(mixed_functions) / sizeof(mixed_functions[0]);
+    /* The emitted symbol owner wins over an extern-only weak declaration,
+     * irrespective of source order. A weak alias is itself emitted, not an
+     * unresolved weak. A dead internal body does not claim a local symbol. */
+    CHECK(OBJ("weak_first").tu_local && OBJ("weak_first").nonpreemptible &&
+          !OBJ("weak_first").undefined_weak, 21);
+    CHECK(OBJ("strong_first").tu_local &&
+          !OBJ("strong_first").undefined_weak, 22);
+    CHECK(!OBJ("weak_alias").undefined_weak, 23);
+    CHECK(!OBJ("pruned").tu_local && OBJ("pruned").undefined_weak, 24);
+    CHECK(FN("weak_first").tu_local && FN("weak_first").nonpreemptible &&
+          !FN("weak_first").undefined_weak, 25);
+    CHECK(FN("strong_first").tu_local &&
+          !FN("strong_first").undefined_weak, 26);
+    CHECK(!FN("weak_alias").undefined_weak, 27);
+    CHECK(!FN("pruned").tu_local && FN("pruned").undefined_weak, 28);
+    CHECK(!minic_multi_elf_module_symbol_facts(
+          &module, "weak_first", (MinicElfModuleSymbolKind)99).tu_local, 29);
+    CHECK(OBJ("local_alias").tu_local &&
+          OBJ("local_alias").nonpreemptible, 30);
+    CHECK(FN("local_alias").tu_local &&
+          FN("local_alias").nonpreemptible, 31);
+    puts("MINIC_CORE_MODULE_ELF_LINKAGE=PASS facts=3 kinds=2 cases=31");
     return 0;
 }

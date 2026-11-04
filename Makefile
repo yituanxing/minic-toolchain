@@ -180,6 +180,7 @@ MINIC_SOURCES := \
 	src/target/backend_core_usage.c \
 	src/target/common/global_emit.c \
 	src/target/common/module_global_emit.c \
+	src/target/common/elf_module_symbol_info.c \
 	src/target/common/program_visit.c \
 	src/target/common/program_emit.c \
 	src/target/common/direct_program_emit.c \

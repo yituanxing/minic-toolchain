@@ -575,6 +575,17 @@
         665
       ]
     },
+    "src/target/common/elf_module_symbol_info.c": {
+      "blob": "7a4cc03337e14e8ded8dd13d2c77f2d71de94193",
+      "review_depth": "targeted",
+      "ci_touched_in": [],
+      "note": "ELF Module linkage owner: one facts query, all five emitters, same-name declaration and emitted alias tests."
+    },
+    "src/target/common/elf_module_symbol_info.h": {
+      "blob": "db12438677747700b8a50a8cd7136a9dd7210553",
+      "review_depth": "targeted",
+      "ci_touched_in": []
+    },
     "src/target/common/module_global_emit.c": {
       "blob": "07ff30e742fe2e17e1099c57a29ef14fe29585eb",
       "review_depth": "inventory",

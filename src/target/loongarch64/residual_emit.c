@@ -7,6 +7,7 @@
 #include "target/common/direct_instruction_semantics.h"
 #include "target/common/lp64_scalar.h"
 #include "target/common/direct_program_emit.h"
+#include "target/common/elf_module_symbol_info.h"
 #include "target/data_layout.h"
 #include "target/loongarch64/frame_emit.h"
 #include "core/value_uses.h"
@@ -362,8 +363,9 @@ bool minic_loongarch64_emit_residual_instruction(
              * references use LoongArch's GOT-based la.global sequence. */
             if (!minic_multi_direct_global_address_symbol(fn, ins, &symbol) ||
                 fprintf(out, "  %s $t0, %s\n",
-                        minic_target_info_elf_module_object_is_tu_local(
-                            module, symbol)
+                        minic_multi_elf_module_symbol_facts(
+                            module, symbol,
+                            MINIC_ELF_MODULE_SYMBOL_OBJECT).tu_local
                             ? "la.local" : "la.global", symbol) < 0 ||
                 !emit_sp_mem(out, "st.d", "$t0", offset))
                 return minic_multi_direct_machine_reject(fn, "loongarch64", name, reject_stage,
@@ -374,8 +376,9 @@ bool minic_loongarch64_emit_residual_instruction(
             const char *symbol;
             if (!minic_multi_direct_function_address_symbol(fn, ins, &symbol) ||
                 fprintf(out, "  %s $t0, %s\n",
-                        minic_target_info_elf_module_function_is_tu_local(
-                            module, symbol)
+                        minic_multi_elf_module_symbol_facts(
+                            module, symbol,
+                            MINIC_ELF_MODULE_SYMBOL_FUNCTION).tu_local
                             ? "la.local" : "la.global", symbol) < 0 ||
                 !emit_sp_mem(out, "st.d", "$t0", offset)) return minic_multi_direct_machine_reject(fn, "loongarch64", name, reject_stage,
                                     reject_block, reject_ins, __LINE__);

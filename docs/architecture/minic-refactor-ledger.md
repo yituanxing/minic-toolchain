@@ -2233,3 +2233,49 @@ corrected historical issue statuses, rather than split into tiny commits.
 | P39 vs P41 broad five-ISA `.i` differential | **255/255 same outcomes**: 187 byte-identical `.s`, 68 both rejected, 0 differing (P40 gave identical broad results) |
 | P39 vs P41 symbolic specialization differential | **55 byte-identical, 15 both rejected, 10 expected changes** out of 80, exactly the two P40 symbolic clone-selection fixture families; P41 adds no further variant differences |
 | Five-ISA original Linux GNU ELF/QEMU | **NOT RUN**; original Linux end-to-end remains separate, no result invented |
+
+## IR-P42 — ELF Module linkage facts have one object-format owner (2026-11-04)
+
+**Baseline:** P41 PR #674 `86a9f48`. Read the complete sealed Module symbol
+graph, emitted-symbol verifier, TargetInfo's six linkage predicates and all
+five machine consumers before changing the interface. Core and machine
+emitters already have **zero** direct `MinicType`/`MinicC0Program` reads;
+the legitimate SourcePolicy and C-to-Core ingress are deliberately untouched.
+
+- **One ELF facts query.** `target/common/elf_module_symbol_info.[ch]` owns a
+  source-independent object/function lookup producing TU-local,
+  nonpreemptible, and undefined-weak facts in one pass. Remove all six
+  duplicate scanners and their misplaced declarations from `TargetInfo`.
+  The physical ELF-specific decision does not pollute format-neutral Core IR
+  or become a generic ISA capability. Five machine consumers use the sealed
+  Module fact while retaining their original, distinct ISA instructions:
+  RV `lla/la`, x86 RIP/GOT, AArch64 ADRP/GOT and BL/BLR, LoongArch `la.local`
+  versus `la.global`.
+- **Actual emitted owner beats a prototype.** An extern-only weak declaration
+  sharing a GNU assembler name with an emitted definition can no longer
+  shadow the definition through a first-match array lookup. Emitted object
+  and function aliases are not undefined weak references, even when the
+  source declaration is `weak`. Internal definitions pruned by Core closure
+  cannot claim TU-local linkage; actual emitted local aliases can. Hidden
+  extern-only declarations still remain nonpreemptible without becoming
+  TU-owned definitions. Weak-only declarations are aggregated independently
+  of source order and lose their undefined status when a real owner exists.
+- **One verification family.** Existing 20 native ELF linkage cases are
+  expanded to 31 with extern/definition order reversal, emitted weak/local
+  aliases, pruned definitions, and invalid symbol-kind admission. Update the
+  Target Boundary's API ownership check and standalone probe link list.
+  Add both Common files to the backend-review source inventory without
+  claiming a complete deep review of otherwise untouched targets.
+
+**Batch size before this ledger entry:** 14 paths, **+267/−204 lines**;
+ten production C/H paths **+152/−144 (net +8)**. This is a whole-owner
+migration, not six compatibility wrappers or a new ISA/ABI feature.
+
+| Gate | P42 result |
+| --- | --- |
+| Native ELF Module linkage fact test | **PASS**, 31/31 |
+| Strict Release `-Werror` full toolchain `all` and full Debug `check-fast` | **PASS**, both exit 0; optional unavailable cross GNU/QEMU tests remain SKIP |
+| Target Boundary and backend review inventory | **PASS**, 253 C/H files, zero new/missing/invalid inventory entries |
+| Exact P41 vs P42 five-ISA `.i` broad differential | **255/255 same outcomes**, 187 byte-identical `.s`, 68 both rejected, zero different |
+| Exact P41 vs P42 Inline/Section differential | **80/80 same outcomes**, 65 byte-identical `.s`, 15 both rejected, zero different |
+| Five-ISA original Linux GNU ELF/QEMU | **NOT RUN** in this architecture batch; historical or gate-only passes are not current-head certification |

@@ -1,4 +1,5 @@
 #include "target/riscv32/rv32_internal.h"
+#include "target/common/elf_module_symbol_info.h"
 #include "target/riscv/record_copy_bytes.h"
 #include "target/riscv/typed_memory.h"
 #include "target/riscv/instruction_select.h"
@@ -207,7 +208,8 @@ bool rv32_emit_memory_instruction(FILE *out,
         if (ins->value.global_id >= f->global_count) return false;
         symbol = f->globals[ins->value.global_id].name;
         preemptible = target->position_independent &&
-            !minic_target_info_elf_module_object_is_nonpreemptible(module, symbol);
+            !minic_multi_elf_module_symbol_facts(
+                module, symbol, MINIC_ELF_MODULE_SYMBOL_OBJECT).nonpreemptible;
         return fprintf(out, preemptible
                        ? "  .option push\n  .option pic\n  la t0, %s\n  .option pop\n"
                        : "  lla t0, %s\n", symbol) >= 0 &&
@@ -220,7 +222,8 @@ bool rv32_emit_memory_instruction(FILE *out,
             return false;
         symbol = f->function_symbols[ins->value.function_symbol_id].name;
         preemptible = target->position_independent &&
-            !minic_target_info_elf_module_function_is_nonpreemptible(module, symbol);
+            !minic_multi_elf_module_symbol_facts(
+                module, symbol, MINIC_ELF_MODULE_SYMBOL_FUNCTION).nonpreemptible;
         return fprintf(out, preemptible
                        ? "  .option push\n  .option pic\n  la t0, %s\n  .option pop\n"
                        : "  lla t0, %s\n", symbol) >= 0 &&
