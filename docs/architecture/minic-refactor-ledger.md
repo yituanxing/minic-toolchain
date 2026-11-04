@@ -2911,3 +2911,64 @@ unsupported, **7** ModuleIR global snapshots and **1** structured inline
 ASM), and **0/56** retained the old `record has no such member` error.
 All 2758 owners and linker/QEMU remain to be reverified separately;
 2030 cannot be credited as fixed-to-completion from first-failure census.
+
+**P51 exact-head full requalification:** [run #41832840551](https://github.com/yituanxing/minic-toolchain/actions/runs/41832840551) used the corrected MiniC and the same 2758 SHA-locked original Linux `.i` owners, 394/shard × 7 shards. Results were respectively **199, 206, 201, 210, 206, 209, 207** successful MiniC/GNU AS objects: **1438/2758 = 52.14%**, up from **653/2758 = 23.68%** (**+785 verified complete C units**). The old member-not-found error disappeared across the entire corpus. Remaining 1320 first failures: **1019 Core lowering**, **156 Core Module globals**, **72 AST contract**, **52 Core unsupported**, **21 x86 machine ASM kind43**. Seven runners still failed to furnish complete object sets; receiver final GNU LD and QEMU **NOT RUN**. This is an important real improvement, not a Linux Boot PASS.
+
+## IR-P52 — x86 Linux SMP XADDq independent 64-bit integer rank admission (2026-11-04)
+
+The existing typed x86 Linux SMP LOCK XADD lowering recognized the exact
+template, memory clobber, `+r`/`+m`, machine width and `.smp_locks` section,
+but its source contract rejected the legal `signed long long` operand used
+by GNU Linux's `atomic64_t.counter` (source `__s64`) because it demanded
+only `MINIC_INTEGER_RANK_LONG` for width eight. The correction handles the
+complete **8-byte XADDq operand class** once: independent signed/unsigned
+`long` and `long long` C scalar ranks on both read/write operands, with
+old width 1/2/4 rank admission and existing x86 machine emission unchanged.
+No Linux function-name whitelist, no new Core opcode, and no source-to-machine
+ABI bypass.
+
+The existing `probe-x86-linux-abi-carry-xadd.sh` now exercises actual
+GNU/MiniC native atomic `lock xaddq` hardware for eight cases, including
+64-bit signed/unsigned/mixed ranks and kernel-shaped `atomic64_add_return`;
+both compilers agree on returned values and updated memory, illegal widths
+fail closed. Focused x86 native PASS **8/8** and GNU/MiniC reference
+PASS; Debug `check-fast` and Release `-Werror` PASS. Current complete
+Linux P51 21 kind43 failures include nine `arch_atomic64_add_return`
+cases plus related `arch_atomic64_fetch_add`/`local_add_return`. Exact
+original all-file requalification of P52 is still mandatory.
+
+## IR-P53 — Nominal incomplete-enum CoreType without false integer ABI (2026-11-04)
+
+After P51, authentic x86 Linux original GNU `.i` samples exposed a shared
+**Core type import** failure with two diagnostic faces: ModuleIR globals
+`cannot snapshot Core module globals` and function `Core IR lowering failed`
+(even when the function's CFG lowering had actually succeeded). The common
+trigger is a forward `enum` in a transitive function-pointer signature:
+`fwnode_operations.device_get_dma_attr` returns incomplete
+`enum dev_dma_attr` beneath `extern platform_notify`, and `con_build_attr`
+takes incomplete `enum vc_intensity` beneath `conswitchp`. No storage or
+calling ABI is needed merely to retain these function-pointer types, yet
+`import_type` incorrectly forced incomplete enums through C's effective
+integer type (which legitimately refuses incomplete layout).
+
+P53 extends **one existing nominal opaque CoreType cache**, keyed by source
+identity plus incomplete-enum vs target-builtin class. Truly incomplete
+C enums become distinct `MINIC_CORE_TYPE_OPAQUE` IDs with `has_layout=0`;
+complete enums still become their actual integer representation. No Target
+or C language identity is enumerated in the Core IR, and by-value incomplete
+objects are still rejected. New importer unit tests assert two nominal
+incomplete enums differ, retain no layout, and survive pointer wrapping,
+while complete enums have integer ABI. The GNU C fixture uses both actual
+public extern function-pointer globals and native complete-enum callback,
+with five-target `-S`, GNU/MiniC native, negative incomplete-object, SAN
+and `check-fast` all PASS.
+
+**Original Linux evidence:** seven of seven initial frozen ModuleIR globals
+failures advance to complete `.s`, with `apic/probe_64.i` assembled into
+GNU ELF64. Authentic `events/core.i` moves past `perf_events_lapic_init`
+function CoreType snapshot to a later `wrmsr` reachability problem. Comparing
+56 current frozen P51 failure `.i` samples before/after P53 shows
+**0→20 complete `.s`**, Core lowering **24→2**, Module globals **12→0**;
+remaining 34 moved to later blockers or existing unchanged categories.
+This is source-verified evidence, **not** proof that all 1019+156 original
+owners pass; fresh seven-way full corpus remains mandatory.

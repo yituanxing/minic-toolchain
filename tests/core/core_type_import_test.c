@@ -20,12 +20,15 @@ int main(void) {
     const MinicTargetInvocation *source = &invocation;
     MinicRecordId node_record, twin_record, qualified_record;
     MinicRecordId packed_record, flexible_record, zero_record;
+    MinicEnumId incomplete_enum_a, incomplete_enum_b, complete_enum;
     MinicType node_source, twin_source, aligned_node_source;
     MinicType pointer_source, pointer_const_source;
     MinicType qualified_record_source, qualified_record_cv, qualified_record_pointer;
     MinicType integer_pointer_source;
     MinicType array_source, function_source, vector_source, const_integer;
     MinicType volatile_integer, const_volatile_integer;
+    MinicType incomplete_enum_a_type, incomplete_enum_b_type;
+    MinicType incomplete_enum_pointer, complete_enum_type;
     MinicType packed_source, flexible_source, zero_source;
     MinicType flexible_array_source, zero_array_source;
     MinicType parameters[2];
@@ -36,6 +39,9 @@ int main(void) {
     MinicCoreTypeId integer_pointer_id;
     MinicCoreTypeId array_id, function_id, repeated_function_id, vector_id, bad_id;
     MinicCoreTypeId register_vector_id;
+    MinicCoreTypeId incomplete_enum_a_id, incomplete_enum_b_id;
+    MinicCoreTypeId incomplete_enum_pointer_id, repeated_incomplete_enum_a_id;
+    MinicCoreTypeId complete_enum_id;
     MinicCoreTypeId packed_id, flexible_id, zero_id;
     MinicCoreType register_vector;
     const MinicCoreType *node, *pointer, *array, *function, *vector, *int_type;
@@ -116,6 +122,19 @@ int main(void) {
     CHECK(minic_c0_program_finish_record(&program, zero_record));
     CHECK(minic_c0_program_add_array_type(&program, minic_type_int(), 5U,
                                           &array_source));
+
+    /* GNU permits forward enums in declarations of callback signatures.
+     * They carry nominal identity, but no integer ABI or object storage until
+     * completed. An unrelated complete enum still imports as its integer ABI. */
+    CHECK(minic_c0_program_add_enum(&program, "OpaqueA", 7U, &incomplete_enum_a));
+    CHECK(minic_c0_program_add_enum(&program, "OpaqueB", 7U, &incomplete_enum_b));
+    CHECK(minic_c0_program_add_enum(&program, "Complete", 8U, &complete_enum));
+    CHECK(minic_c0_program_finish_enum(&program, complete_enum,
+                                       minic_type_unsigned_int()));
+    incomplete_enum_a_type = minic_type_enum(incomplete_enum_a);
+    incomplete_enum_b_type = minic_type_enum(incomplete_enum_b);
+    complete_enum_type = minic_type_enum(complete_enum);
+    CHECK(minic_type_pointer_to(incomplete_enum_a_type, &incomplete_enum_pointer));
 
     parameters[0] = pointer_source;
     parameters[1] = minic_type_int();
@@ -206,6 +225,28 @@ int main(void) {
               qualified_record_pointer_id);
     }
     CHECK(minic_core_type_import(&importer, minic_type_int(), &int_id));
+    CHECK(minic_core_type_import(&importer, incomplete_enum_a_type, &incomplete_enum_a_id));
+    CHECK(minic_core_type_import(&importer, incomplete_enum_b_type, &incomplete_enum_b_id));
+    CHECK(minic_core_type_import(&importer, incomplete_enum_a_type,
+                                  &repeated_incomplete_enum_a_id));
+    CHECK(incomplete_enum_a_id == repeated_incomplete_enum_a_id &&
+          incomplete_enum_a_id != incomplete_enum_b_id);
+    CHECK(minic_core_type_get(&context, incomplete_enum_a_id)->kind ==
+          MINIC_CORE_TYPE_OPAQUE &&
+          !minic_core_type_get(&context, incomplete_enum_a_id)->has_layout);
+    CHECK(minic_core_type_get(&context, incomplete_enum_b_id)->kind ==
+          MINIC_CORE_TYPE_OPAQUE &&
+          !minic_core_type_get(&context, incomplete_enum_b_id)->has_layout);
+    CHECK(minic_core_type_import(&importer, incomplete_enum_pointer,
+                                  &incomplete_enum_pointer_id));
+    CHECK(minic_core_type_get(&context, incomplete_enum_pointer_id)->kind ==
+          MINIC_CORE_TYPE_POINTER &&
+          minic_core_type_get(&context, incomplete_enum_pointer_id)
+              ->value.pointer.pointee == incomplete_enum_a_id);
+    CHECK(minic_core_type_import(&importer, complete_enum_type, &complete_enum_id));
+    CHECK(minic_core_type_get(&context, complete_enum_id)->kind ==
+          MINIC_CORE_TYPE_INTEGER &&
+          minic_core_type_get(&context, complete_enum_id)->has_layout);
     CHECK(minic_core_type_import(&importer, const_integer, &const_int_id));
     CHECK(int_id != const_int_id); /* CV semantics must survive the C ingress. */
     CHECK(minic_core_type_get(&context, const_int_id)->kind == MINIC_CORE_TYPE_QUALIFIED);
@@ -306,6 +347,6 @@ int main(void) {
     minic_core_type_importer_destroy(&importer);
     minic_core_type_context_destroy(&context);
     minic_c0_program_destroy(&program);
-    (void)puts("CORE_TYPE_IMPORT=PASS recursion nominal layout packed flexible zero_array array_field bitfield function vector poison");
+    (void)puts("CORE_TYPE_IMPORT=PASS recursion nominal incomplete_enum_opaque complete_enum_integer layout packed flexible zero_array array_field bitfield function vector poison");
     return 0;
 }

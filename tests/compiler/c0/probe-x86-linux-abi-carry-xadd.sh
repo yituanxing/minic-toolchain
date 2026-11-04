@@ -30,11 +30,32 @@ unsigned int e=9;
 void f2(void) {asm volatile(".pushsection .smp_locks,\"a\"\n.balign 4\n.long 671f - .\n.popsection\n671:\n\tlock; xaddl %0, %1\n" : "+r"(e),"+m"(l)::"memory","cc");}
 unsigned long f=10;
 void f3(void) {asm volatile(".pushsection .smp_locks,\"a\"\n.balign 4\n.long 671f - .\n.popsection\n671:\n\tlock; xaddq %q0, %1\n" : "+r"(f),"+m"(q)::"memory","cc");}
+long long qll=40;
+long long addll=-3;
+void f4(void) {asm volatile(".pushsection .smp_locks,\"a\"\n.balign 4\n.long 671f - .\n.popsection\n671:\n\tlock; xaddq %q0, %1\n" : "+r"(addll),"+m"(qll)::"memory","cc");}
+unsigned long long qull=13;
+unsigned long long addull=3;
+void f5(void) {asm volatile(".pushsection .smp_locks,\"a\"\n.balign 4\n.long 671f - .\n.popsection\n671:\n\tlock; xaddq %q0, %1\n" : "+r"(addull),"+m"(qull)::"memory","cc");}
+unsigned long mixedmem=23;
+long long mixedreg=-2;
+void f6(void) {asm volatile(".pushsection .smp_locks,\"a\"\n.balign 4\n.long 671f - .\n.popsection\n671:\n\tlock; xaddq %q0, %1\n" : "+r"(mixedreg),"+m"(mixedmem)::"memory","cc");}
+typedef long long s64;
+typedef struct {s64 counter;} atomic64_t;
+static inline s64 kernel_atomic64_add_return(s64 i,atomic64_t *v) {
+ s64 prior=i;
+ asm volatile(".pushsection .smp_locks,\"a\"\n.balign 4\n.long 671f - .\n.popsection\n671:\n\tlock; xaddq %q0, %1\n" : "+r"(prior),"+m"(v->counter)::"memory","cc");
+ return i+prior;
+}
 int main(void) {
  f0();if(a!=1||b!=8)return 1;
  f1();if(c!=2||w!=10)return 2;
  f2();if(e!=3||l!=12)return 3;
  f3();if(f!=4||q!=14)return 4;
+ f4();if(addll!=40||qll!=37)return 5;
+ f5();if(addull!=13||qull!=16)return 6;
+ f6();if(mixedreg!=23||mixedmem!=21)return 7;
+ atomic64_t counter={17};
+ if(kernel_atomic64_add_return(5,&counter)!=22||counter.counter!=22)return 8;
  return 42;
 }
 SRC
@@ -67,4 +88,9 @@ if "$cc" --target=x86_64-linux -S "$d/unsafe.i" -o "$d/unsafe.s" >/dev/null 2>&1
  echo 'unqualified lock xadd accepted' >&2;exit 1
 fi
 test ! -e "$d/unsafe.s"
-echo 'ORIGINAL_X86_LINUX_CARRY_XADD_RECORD=PASS GNU_oracle=3/3 hardware_XADD=4/4 no_unsafe_fallback=1'
+sed 's/long long qll=40;/int qll=40;/' "$d/smp.i" > "$d/wrong-width.i"
+if "$cc" --target=x86_64-linux -S "$d/wrong-width.i" -o "$d/wrong-width.s" >/dev/null 2>&1;then
+ echo 'width-mismatched xaddq accepted' >&2;exit 1
+fi
+test ! -e "$d/wrong-width.s"
+echo 'ORIGINAL_X86_LINUX_CARRY_XADD_RECORD=PASS GNU_oracle=3/3 hardware_XADD=8/8 signed_long_long=1 unsigned_long_long=1 mixed_long_ll=1 kernel_atomic64_add_return=1 width_reject=1 no_unsafe_fallback=1'

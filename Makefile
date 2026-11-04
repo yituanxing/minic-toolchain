@@ -1690,6 +1690,18 @@ check-anonymous-qualified-record-members: $(MINIC_CC_BINARY)
 
 check-fast: check-anonymous-qualified-record-members
 
+.PHONY: check-incomplete-enum-coretype
+check-incomplete-enum-coretype: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" bash tests/compiler/c0/probe-incomplete-enum-coretype.sh
+
+check-fast: check-incomplete-enum-coretype
+
+.PHONY: check-x86-linux-smp-xadd-i64
+check-x86-linux-smp-xadd-i64: $(MINIC_CC_BINARY)
+	bash tests/compiler/c0/probe-x86-linux-abi-carry-xadd.sh "$(abspath $(MINIC_CC_BINARY))"
+
+check-fast: check-x86-linux-smp-xadd-i64
+
 .PHONY: check-record-field-declarator-realloc
 check-record-field-declarator-realloc: $(MINIC_CC_BINARY)
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \

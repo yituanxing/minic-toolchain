@@ -2678,8 +2678,20 @@ static bool x86_linux_smp_xadd_source(const MinicC0Program *program,
         !minic_type_unqualified(mem->type,&mt)||
         !minic_type_is_integer(rt)||!minic_type_is_integer(mt)||
         rt.base_kind!=MINIC_TYPE_BASE_INT||mt.base_kind!=MINIC_TYPE_BASE_INT||
-        rt.pointer_depth||mt.pointer_depth||
-        rt.integer_rank!=rank||mt.integer_rank!=rank)return false;
+        rt.pointer_depth||mt.pointer_depth)return false;
+    /* On x86-64 both C long and long long are 64-bit scalar GPR/memory
+     * types. Linux's atomic64_t.counter is signed long long, whereas
+     * non-kernel users of this same xaddq machine form often use long.
+     * Constraint +r/+m and the precise 8-byte machine width, not a single
+     * C integer rank, determine the legal hardware operand shape. */
+    if (width == 8U) {
+        if ((rt.integer_rank != MINIC_INTEGER_RANK_LONG &&
+             rt.integer_rank != MINIC_INTEGER_RANK_LONG_LONG) ||
+            (mt.integer_rank != MINIC_INTEGER_RANK_LONG &&
+             mt.integer_rank != MINIC_INTEGER_RANK_LONG_LONG)) return false;
+    } else if (rt.integer_rank != rank || mt.integer_rank != rank) {
+        return false;
+    }
     contract->operand_count=2U;
     contract->kinds[0]=MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE;
     contract->kinds[1]=MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE;

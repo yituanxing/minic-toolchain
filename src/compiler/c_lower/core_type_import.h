@@ -15,9 +15,10 @@ typedef struct MinicCoreTypeImporter {
     size_t record_count;
     MinicCoreTypeId *function_types;
     size_t function_count;
-    /* Source-builtin opaque identities are target-owned and open-ended.
-     * Preserve one nominal Core opaque type per registered source identity,
-     * without making the generic C->Core ingress enumerate any ISA's types. */
+    /* Nominal source types with no object layout (a target builtin or an
+     * incomplete C enum) still need distinct identities in function pointer
+     * signatures and transitive record members.  Keep one Core opaque ID per
+     * kind/source identity; never infer a machine ABI for an incomplete enum. */
     struct MinicCoreOpaqueSourceTypeCacheEntry *opaque_types;
     size_t opaque_type_count;
     size_t opaque_type_capacity;
@@ -25,7 +26,8 @@ typedef struct MinicCoreTypeImporter {
 } MinicCoreTypeImporter;
 
 typedef struct MinicCoreOpaqueSourceTypeCacheEntry {
-    unsigned int source_builtin_id;
+    size_t source_id;
+    bool is_incomplete_enum;
     MinicCoreTypeId type_id;
 } MinicCoreOpaqueSourceTypeCacheEntry;
 

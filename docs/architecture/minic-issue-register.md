@@ -106,6 +106,8 @@
 | [MC-089](#mc-089-x87-long-double-大于比较方向错误) | P0 | FIXED-UNVERIFIED | GNU-NATIVE-DIFF | Core/x86 x87 | x87 比较 helper 的 32→64 位有符号扩展错编已修；GNU/MiniC 原生有序比较回归通过，完整目标矩阵待验 |
 | [MC-090](#mc-090-x86-linux-cmpxchg16b-的合法-16-字节内存对象被标量宽度门拒绝) | P1 | FIXED-UNVERIFIED | GNU-NATIVE-ELF | x86 structured ASM | P49 原始 Linux CMPXCHG16B 16B 对齐内存操作经 GNU/MiniC 原生 CAS 与 ALT relocation 验证 |
 | [MC-091](#mc-091-限定符前缀导致合法-gnu-匿名-record-成员被丢弃) | P0 | FIXED-UNVERIFIED | GNU-ORIGINAL-LINUX-I | C Frontend | P51 `const struct { ... };` 被错误当作无成员声明；七路原始 Linux 首错 2030/2105 同因，真实 `.i` 定点复现及 x86/五目标校验 |
+| [MC-092](#mc-092-x86-64-位-smp-xadd-错误限定-c-long-整数-rank) | P1 | FIXED-UNVERIFIED | GNU-NATIVE-ASM | x86 structured ASM | P52 保持 `lock xaddq` 机器约束，只将正确的 `long long` 64 位操作数并入合法 C rank；Linux atomic64 原生差分 PASS |
+| [MC-093](#mc-093-不完整-enum-跨函数指针类型导入-core-时被误认为必须有整数布局) | P0 | FIXED-UNVERIFIED | GNU-ORIGINAL-LINUX-I | Compiler/CoreType ingress | P53 在共同 C→Core 类型导入器将不完整 enum 保留为名义无布局 OPAQUE，避免全局与函数签名的传递性导入失败；真实 `.i` 定点验证 |
 
 ## 索引：尚待验证的风险
 
@@ -852,6 +854,19 @@
 - **根因/所有者：** `src/frontend/parser_record.c::parse_record_field` 在类型限定符被消费前即判断 `current==struct/union`；合法 `struct vm_fault { const struct { struct vm_area_struct *vma; ... }; ... };` 因首 token 为 `const`，在分号分支将匿名成员默默丢弃。`parser_member.c` 的匿名递归提升、`minic_type_record_member` 的 const/volatile 传播和 Core IR 类型/布局消费者已有正确通道，无须复制或更改公共 IR 算法。
 - **完整边界修复：** 在声明头只做 lexer 前瞻，跳过 `const`、`volatile` 和 GNU `__extension__`，再判定是否是*直接写出*的 struct/union；类型和限定符仍由原类型解析器持有。保留 `const TypedefName;`、`volatile struct Tagged;` 是无成员声明的行为，避免把 typedef/带标签的空声明意外升级为匿名字段。
 - **回归与验收范围：** 持久 GNU/MiniC 同源回归覆盖 Linux 型 `vmf->vma` 提升、嵌套 const/volatile union、GNU extension、字段偏移、无成员 tagged/typedef、对 const 指针字段赋值的负例；GNU/MiniC x86 原生及五架构 `-S` 均 PASS，`check-fast` PASS。七份 ZIP **56/56 原始 GNU `.i`** 用修复后 MiniC 重新编译：**16/56 完整生成 `.s`，40/56 进入下一层不同失败（19 Core lowering、13 Core unsupported、7 Core globals snapshot、1 x86 ASM kind43），旧 `record has no such member` 为 0/56**。其中 `arch/x86/entry/vdso/extable.i` 通过 MiniC→GNU AS/ELF64；`arch/x86/events/core.i` 消除旧 `vmf->vma` 错误后进入下一层 `perf_events_lapic_init` Core lowering 失败。仍待全 2758 文件七路统计和 Linux 链接/QEMU 验收。
+
+### MC-092 x86 64 位 SMP XADD 错误限定 C long 整数 rank
+
+- **状态：** P52 `FIXED-UNVERIFIED`，P1，`GNU-NATIVE-ASM`。P51 全 2758 个原始 x86 Linux `.i` 的 21 条 machine-ASM 首错中，九条发生在 `arch_atomic64_add_return`，其余还有 `arch_atomic64_fetch_add`、`local_add_return`；本项尚不能据此声明 21/21 全修复。
+- **根因：** `src/target/x86_64/asm_contract_source.c::x86_linux_smp_xadd_source` 的精确 `lock xaddq` 特化机型已按 8B、`+r`/`+m` 与 clobber 接纳，却错误要求两个 C 整数的 `integer_rank` 都必须是 `LONG`。Linux 的 `atomic64_t.counter` 来自 `__s64=long long`，是合法 SysV 64 位同宽 GPR/内存操作数。该限制在 C 源端拒绝之后，下层机器已无法接收到正确 Core ASM。
+- **完整机型修复与门槛：** 8 字节约束下允许独立的 `long`/`long long`（含 signed/unsigned）组合，仍严格保持 `xaddq` 模板、寄存器与内存 READWRITE 绑定、`lock` 节标记以及原 1/2/4B 的 rank 检查；不扩展通用机器整数宽度、不改机器发射器。原持久 GNU/MiniC x86 native probe 扩展为 **8/8 实硬件 XADD**，包括 GNU C kernel 型 atomic64 返回值差分与错误宽度拒绝；Release `-Werror`、`check-fast` 通过。原 21 条错误的最新 HEAD 七路复核仍待执行。
+
+### MC-093 不完整 enum 跨函数指针类型导入 Core 时被误认为必须有整数布局
+
+- **状态：** P53 `FIXED-UNVERIFIED`，P0，`GNU-ORIGINAL-LINUX-I`；尚待新精确 HEAD 的全 2758 原始 Linux GNU `.i` 七路及 GNU LD/QEMU 验收。
+- **真实根因：** `src/compiler/c_lower/core_type_import.c::import_type` 将任何 `enum` 强制经 `minic_c0_type_effective_integer_type` 转为具体整数 ABI；合法 GNU 内核 `extern int (*platform_notify)(struct device*)` 的传递式成员类型 `fwnode_operations.device_get_dma_attr` 返回仅前向声明的 `enum dev_dma_attr`，另一路 `consw.con_build_attr` 参数为不完整 `enum vc_intensity`。即使这些是无调用的指针签名，只要 Core Function/Module 快照试图表示它们，旧代码就错误要求完整对象布局并返回失败。
+- **统一 CoreType 设计：** 源端完整 `enum` 继续导入其确切整数 ABI，不完整 `enum` 保留为已有的 `MINIC_CORE_TYPE_OPAQUE`、无 object layout 的名义身份，缓存按 `(enum/source builtin 种类, source ID)` 区分；指针及函数签名可持有此类型，但真正按值定义/使用不完整对象必须在 C 和 Core 验证处 fail closed。不增加平台枚举表、额外 Core IR 指令或常量宽度猜测。
+- **定点机验证：** 7/7 原始 Linux 全局快照失败 `.i` 使用单一补丁后生成 `.s`，`probe_64.i` 进一步由 GNU AS 生成 x86 ELF relocatable；原始 `events/core.i` 的 `perf_events_lapic_init` 类型快照失败转入后续 `wrmsr` 问题。P51 新失败产物保留 56 份原始 `.i` 同编译选项差分：P53 后 **20/56 完整 `.s`（基线 0），Core globals 12→0、Core lowering 24→2**，其余进入下一层实际缺口。五目标 `-S`、GNU/MiniC native、core type importer nominal/no-layout/complete enum 反例与原生/SAN 检查通过；不得将 56 样本等同 2758 完整验收。
 
 ## 已核对并排除的误判（不要在未有新证据时重新打开）
 

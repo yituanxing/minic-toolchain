@@ -271,18 +271,20 @@ static bool import_vector(MinicCoreTypeImporter *importer, MinicType source,
     return minic_core_type_register(importer->context, &type, result);
 }
 
-/* An opaque header declaration has no object representation, but distinct
- * registered source identities still require distinct nominal CoreType IDs.
- * The cache is keyed by target-local IDs instead of a fixed ISA enumeration. */
-static bool import_target_opaque(MinicCoreTypeImporter *importer,
-                                 unsigned int source_builtin_id,
+/* A source type with no complete object representation can still appear
+ * beneath a pointer or in an uncalled function-pointer signature.  Preserve
+ * nominal identity for both incomplete C enums and target header opaque types
+ * without pretending the former have an integer ABI or a storage layout. */
+static bool import_source_opaque(MinicCoreTypeImporter *importer,
+                                 size_t source_id, bool is_incomplete_enum,
                                  MinicCoreTypeId *result) {
     MinicCoreOpaqueSourceTypeCacheEntry *entries;
     MinicCoreType type = {0};
     MinicCoreTypeId id;
     size_t i, next_capacity;
     for (i = 0U; i < importer->opaque_type_count; ++i) {
-        if (importer->opaque_types[i].source_builtin_id == source_builtin_id) {
+        if (importer->opaque_types[i].source_id == source_id &&
+            importer->opaque_types[i].is_incomplete_enum == is_incomplete_enum) {
             *result = importer->opaque_types[i].type_id;
             return true;
         }
@@ -300,7 +302,8 @@ static bool import_target_opaque(MinicCoreTypeImporter *importer,
     type.kind = MINIC_CORE_TYPE_OPAQUE;
     if (!minic_core_type_register(importer->context, &type, &id)) return false;
     entries = importer->opaque_types;
-    entries[importer->opaque_type_count].source_builtin_id = source_builtin_id;
+    entries[importer->opaque_type_count].source_id = source_id;
+    entries[importer->opaque_type_count].is_incomplete_enum = is_incomplete_enum;
     entries[importer->opaque_type_count].type_id = id;
     importer->opaque_type_count++;
     *result = id;
@@ -349,7 +352,12 @@ static bool import_type(MinicCoreTypeImporter *importer, MinicType source,
                minic_core_type_register(importer->context, &type, result);
     }
     if (minic_type_is_enum(source)) {
+        const MinicEnum *source_enum =
+            minic_c0_program_enum(importer->program, source.enum_id);
         MinicType integer;
+        if (source_enum == NULL) return false;
+        if (!source_enum->is_complete)
+            return import_source_opaque(importer, source.enum_id, true, result);
         return minic_c0_type_effective_integer_type(importer->program, source, &integer) &&
                import_type(importer, integer, result, depth + 1U);
     }
@@ -399,7 +407,7 @@ static bool import_type(MinicCoreTypeImporter *importer, MinicType source,
         case MINIC_TARGET_BUILTIN_CORE_IMPORT_VECTOR128:
             return import_vector(importer, source, result, depth + 1U);
         case MINIC_TARGET_BUILTIN_CORE_IMPORT_OPAQUE:
-            return import_target_opaque(importer, source.target_builtin_id, result);
+            return import_source_opaque(importer, source.target_builtin_id, false, result);
         default:
             return false;
         }
