@@ -1,8 +1,9 @@
 name: MiniLD Four-Arch Frozen Linux First Link Recertification
 
 # Reuse the SHA-verified GNU Kbuild pool and recorded true kallsyms1 LD argv
-# from the prior four-architecture source run. No Linux C source, GNU Kbuild,
-# MiniAS or QEMU run occurs here. One independent GNU/MiniLD link replay only.
+# from the prior four-architecture source run. Restore a durable producer
+# artifact when the Actions cache has been evicted; never rebuild GNU C in
+# this recertification. One independent GNU/MiniLD link replay only.
 # A first-kallsyms1 PASS is not a vmlinux/Image/guest P1 certification.
 on:
   workflow_dispatch:
@@ -53,7 +54,7 @@ jobs:
           set -Eeuo pipefail
           sudo apt-get -o Acquire::Retries=3 update -qq
           sudo apt-get -o Acquire::Retries=3 install -y -qq --no-install-recommends \
-            gcc make binutils python3
+            gcc make binutils python3 zstd
           case '${{ matrix.arch }}' in
             rv32)
               sudo apt-get -o Acquire::Retries=3 install -y -qq --no-install-recommends \
@@ -67,13 +68,87 @@ jobs:
                 binutils-loongarch64-linux-gnu ;;
           esac
 
-      - name: Restore exact GNU Kbuild frozen object tree
+      - name: Restore exact GNU Kbuild frozen object tree when cached
         id: cache
         uses: actions/cache/restore@v4
         with:
           path: build/minild-linux-fourarch/${{ matrix.arch }}/${{ (matrix.arch == 'rv32' || matrix.arch == 'x86_64') && 'gnu-out' || 'out' }}
           key: minild-gnu-linux-first-kallsyms1-6.6.143-${{ matrix.arch }}-${{ env.PRODUCER_SHA }}
-          fail-on-cache-miss: true
+          fail-on-cache-miss: false
+
+      - name: Download immutable GNU Kbuild archive when cache was evicted
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ env.PRODUCER_RUN_ID }}
+          name: minild-gnu-kbuild-tree-${{ matrix.arch }}-${{ env.PRODUCER_SHA }}
+          path: build/minild-linux-fourarch/${{ matrix.arch }}
+
+      - name: Verify and unpack immutable GNU Kbuild archive
+        if: steps.cache.outputs.cache-hit != 'true'
+        shell: bash
+        timeout-minutes: 8
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/minild-linux-fourarch/${{ matrix.arch }}"
+          case '${{ matrix.arch }}' in
+            rv32|x86_64) tree=gnu-out ;;
+            aarch64|loongarch64) tree=out ;;
+          esac
+          test -s "$work/gnu-kbuild-frozen-tree.sha256"
+          shopt -s nullglob
+          parts=("$work"/gnu-kbuild-frozen-tree.tar.zst.part*)
+          if (( ${#parts[@]} == 0 )); then
+            echo 'MINILD_FROZEN=FAIL producer_archive_parts_absent' >&2
+            exit 81
+          fi
+          python3 -c '
+          from pathlib import Path
+          import re
+          import sys
+
+          work = Path(sys.argv[1])
+          actual = sorted(p.name for p in work.glob(
+              "gnu-kbuild-frozen-tree.tar.zst.part*"))
+          listed = []
+          for line in (work / "gnu-kbuild-frozen-tree.sha256").read_text().splitlines():
+              match = re.fullmatch(
+                  r"[0-9a-f]{64}  (gnu-kbuild-frozen-tree\.tar\.zst\.part\d{3})",
+                  line)
+              if match is None:
+                  raise SystemExit("MINILD_FROZEN=FAIL invalid_archive_manifest")
+              listed.append(match.group(1))
+          if not listed or sorted(set(listed)) != actual or len(listed) != len(actual):
+              raise SystemExit("MINILD_FROZEN=FAIL archive_chunk_set_mismatch")
+          print(f"MINILD_FROZEN=ARCHIVE_SHA_MANIFEST_PASS parts={len(actual)}")
+          ' "$work"
+          (cd "$work" && \
+            sha256sum --quiet --check gnu-kbuild-frozen-tree.sha256)
+          # Check every tar entry before extraction: only the expected Kbuild
+          # subtree is admissible, never absolute paths or parent traversal.
+          cat "${parts[@]}" | tar --zstd -tf - |
+            python3 -c '
+          from pathlib import PurePosixPath
+          import sys
+
+          root = sys.argv[1]
+          entries = 0
+          for line in sys.stdin:
+              name = line.strip().rstrip("/")
+              path = PurePosixPath(name)
+              if (not name or path.is_absolute() or
+                      ".." in path.parts or path.parts[0] != root):
+                  raise SystemExit("MINILD_FROZEN=FAIL unsafe_archive_path")
+              entries += 1
+          if entries < 500:
+              raise SystemExit("MINILD_FROZEN=FAIL incomplete_archive_tree")
+          print(f"MINILD_FROZEN=ARCHIVE_MANIFEST_PASS entries={entries}")
+          ' "$tree"
+          cat "${parts[@]}" | tar -C "$work" --zstd -xf -
+          test -s "$work/$tree/vmlinux"
+          echo "MINILD_FROZEN=ARTIFACT_RESTORED arch=${{ matrix.arch }} cache_miss=true"
 
       - name: Download first-kallsyms1 captured argv and GNU object hash manifest
         uses: actions/download-artifact@v4

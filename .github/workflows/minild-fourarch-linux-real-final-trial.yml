@@ -173,6 +173,44 @@ jobs:
           path: ${{ steps.corpus.outputs.out_dir }}
           key: minild-gnu-linux-first-kallsyms1-6.6.143-${{ matrix.arch }}-${{ github.sha }}
 
+      # GitHub may evict a successfully written Actions cache during bursts
+      # of unrelated CI.  Publish an independently downloadable, SHA-checked
+      # complete GNU Kbuild tree as immutable artifact chunks.  Split AFTER
+      # zstd compression so no uploaded file approaches the 2 GiB limit.
+      - name: Seal complete GNU Kbuild tree independently of cache eviction
+        if: always() && steps.corpus.outputs.cache_ready == 'true'
+        shell: bash
+        timeout-minutes: 12
+        run: |
+          set -Eeuo pipefail
+          case '${{ matrix.arch }}' in
+            rv32|x86_64) tree=gnu-out ;;
+            aarch64|loongarch64) tree=out ;;
+          esac
+          test -s "$WORK_DIR/$tree/vmlinux"
+          test -s "$WORK_DIR/ld-evidence/gnu-kbuild-objects.sha256"
+          tar -C "$WORK_DIR" --zstd -cf - "$tree" |
+            split -b 1700m -d -a 3 - \
+              "$WORK_DIR/gnu-kbuild-frozen-tree.tar.zst.part"
+          (cd "$WORK_DIR" && \
+            sha256sum gnu-kbuild-frozen-tree.tar.zst.part* \
+              >gnu-kbuild-frozen-tree.sha256)
+          test -s "$WORK_DIR/gnu-kbuild-frozen-tree.sha256"
+          echo "MINILD_GNU_TREE_ARTIFACT=SEALED arch=${{ matrix.arch }} "
+          wc -c "$WORK_DIR"/gnu-kbuild-frozen-tree.tar.zst.part*
+
+      - name: Keep durable GNU Kbuild inputs independently of Actions cache
+        if: always() && steps.corpus.outputs.cache_ready == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: minild-gnu-kbuild-tree-${{ matrix.arch }}-${{ github.sha }}
+          path: |
+            build/minild-linux-fourarch/${{ matrix.arch }}/gnu-kbuild-frozen-tree.tar.zst.part*
+            build/minild-linux-fourarch/${{ matrix.arch }}/gnu-kbuild-frozen-tree.sha256
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Differential replay of actual Linux kallsyms1 via GNU and MiniLD
         id: replay
         if: always() && steps.corpus.outputs.cache_ready == 'true'
