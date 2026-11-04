@@ -885,7 +885,12 @@ minic_core_lower_switch(MinicCoreLowerContext *context, const MinicStatement *st
         MinicConstValue selector_constant;
         MinicConstValue selector_converted;
 
-        if (core_const_eval_integer_with_locals(context,
+        /* The selector above has already been evaluated into its snapshot.
+         * Re-evaluating a mutable-local fact after that evaluation can give
+         * a different value from the one captured by this very switch. */
+        if (minic_core_cfg_pure_call_argument(
+                context, statement->expression, 0U) &&
+            core_const_eval_integer_with_locals(context,
                                                 statement->expression,
                                                 &selector_constant) &&
             minic_const_value_convert_integer(context->body->program,

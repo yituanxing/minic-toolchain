@@ -614,6 +614,13 @@ check-gnu-linux-memory-encode-page-boolean-range: $(MINIC_CC_BINARY)
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" \
 		sh tests/compiler/c0/probe-gnu-linux-memory-encode-page-boolean-range.sh
 
+.PHONY: check-core-cfg-effectful-boolean-fact-barrier
+check-core-cfg-effectful-boolean-fact-barrier: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+		sh tests/compiler/c0/probe-core-cfg-effectful-boolean-fact-barrier.sh
+
+check-fast: check-core-cfg-effectful-boolean-fact-barrier
+
 check-fast: check-gnu-linux-memory-encode-page-boolean-range
 
 .PHONY: check-gnu-linux-nvme-prp-guard

@@ -1338,14 +1338,14 @@ static uint64_t core_cfg_integer_width_mask(unsigned int width) {
 
 static uint64_t core_cfg_possible_one_bits(
     const MinicCoreLowerContext *context, MinicExpressionId id,
-    unsigned int depth);
+    unsigned int depth, bool allow_local_facts);
 
 /* Interpret an operand's possible bits in the containing integer type.
  * Widening signed types may extend the sign bit into all upper bits; do not
  * accidentally treat those upper bits as impossible. */
 static uint64_t core_cfg_possible_one_bits_as(
     const MinicCoreLowerContext *context, MinicExpressionId id,
-    unsigned int result_width, unsigned int depth) {
+    unsigned int result_width, unsigned int depth, bool allow_local_facts) {
     const MinicExpression *operand = minic_c0_program_expression(
         context->body->program, id);
     unsigned int operand_width;
@@ -1357,7 +1357,7 @@ static uint64_t core_cfg_possible_one_bits_as(
         operand_width == 0U || operand_width > 64U) {
         return UINT64_MAX;
     }
-    bits = core_cfg_possible_one_bits(context, id, depth);
+    bits = core_cfg_possible_one_bits(context, id, depth, allow_local_facts);
     if (result_width > operand_width &&
         minic_type_is_signed_integer(operand->type) &&
         (bits & (UINT64_C(1) << (operand_width - 1U))) != 0U) {
@@ -1368,7 +1368,7 @@ static uint64_t core_cfg_possible_one_bits_as(
 
 static uint64_t core_cfg_possible_one_bits(
     const MinicCoreLowerContext *context, MinicExpressionId id,
-    unsigned int depth) {
+    unsigned int depth, bool allow_local_facts) {
     const MinicExpression *expression;
     MinicConstValue constant;
     unsigned int width;
@@ -1401,7 +1401,8 @@ static uint64_t core_cfg_possible_one_bits(
     case MINIC_EXPRESSION_LVALUE_READ: {
         MinicLocalId fact_local;
         uint64_t possible_bits;
-        if (minic_core_lower_direct_local_read(context, id, &fact_local) &&
+        if (allow_local_facts &&
+            minic_core_lower_direct_local_read(context, id, &fact_local) &&
             minic_core_local_fact_possible_one_bits(
                 context, fact_local, &possible_bits)) {
             return possible_bits & full;
@@ -1411,28 +1412,35 @@ static uint64_t core_cfg_possible_one_bits(
     case MINIC_EXPRESSION_BINARY:
         if (expression->value.binary.operator_kind == MINIC_BINARY_BITWISE_AND) {
             return (core_cfg_possible_one_bits_as(
-                        context, expression->value.binary.left, width, depth + 1U) &
+                        context, expression->value.binary.left, width, depth + 1U,
+                        allow_local_facts) &
                     core_cfg_possible_one_bits_as(
-                        context, expression->value.binary.right, width, depth + 1U)) & full;
+                        context, expression->value.binary.right, width, depth + 1U,
+                        allow_local_facts)) & full;
         }
         if (expression->value.binary.operator_kind == MINIC_BINARY_BITWISE_OR ||
             expression->value.binary.operator_kind == MINIC_BINARY_BITWISE_XOR) {
             return (core_cfg_possible_one_bits_as(
-                        context, expression->value.binary.left, width, depth + 1U) |
+                        context, expression->value.binary.left, width, depth + 1U,
+                        allow_local_facts) |
                     core_cfg_possible_one_bits_as(
-                        context, expression->value.binary.right, width, depth + 1U)) & full;
+                        context, expression->value.binary.right, width, depth + 1U,
+                        allow_local_facts)) & full;
         }
         break;
     case MINIC_EXPRESSION_CONDITIONAL:
         return (core_cfg_possible_one_bits_as(
-                    context, expression->value.conditional.when_true, width, depth + 1U) |
+                    context, expression->value.conditional.when_true, width, depth + 1U,
+                    allow_local_facts) |
                 core_cfg_possible_one_bits_as(
-                    context, expression->value.conditional.when_false, width, depth + 1U)) & full;
+                    context, expression->value.conditional.when_false, width, depth + 1U,
+                    allow_local_facts)) & full;
     case MINIC_EXPRESSION_CAST:
     case MINIC_EXPRESSION_BITCAST:
     case MINIC_EXPRESSION_CONVERSION: {
         return core_cfg_possible_one_bits_as(
-            context, expression->value.unary.operand, width, depth + 1U);
+            context, expression->value.unary.operand, width, depth + 1U,
+            allow_local_facts);
     }
     default:
         break;
@@ -1447,7 +1455,8 @@ static uint64_t core_cfg_possible_one_bits(
  * runtime selection condition here; this only proves result bounds. */
 static bool core_cfg_nonnegative_range_impl(
     const MinicCoreLowerContext *context, MinicExpressionId id,
-    unsigned int depth, uint64_t *minimum, uint64_t *maximum) {
+    unsigned int depth, bool allow_local_facts,
+    uint64_t *minimum, uint64_t *maximum) {
     const MinicExpression *expression;
     MinicConstValue constant, converted;
     unsigned int width;
@@ -1464,7 +1473,14 @@ static bool core_cfg_nonnegative_range_impl(
     type_max = minic_type_is_signed_integer(expression->type)
         ? ((UINT64_C(1) << (width - 1U)) - UINT64_C(1))
         : core_cfg_integer_width_mask(width);
-    if (core_const_eval_integer_with_locals(context, id, &constant) &&
+    /* A value computed after an effectful subexpression must not consult a
+     * pre-evaluation local fact: f(&local) ? local : local is NOT bounded by
+     * the value of local before f executes. Source-intrinsic constants and
+     * bit shapes remain admissible regardless of expression effects. */
+    if ((allow_local_facts
+            ? core_const_eval_integer_with_locals(context, id, &constant)
+            : minic_const_eval_integer(context->body->program,
+                                      context->target, id, &constant)) &&
         minic_const_value_convert_integer(context->body->program,
             context->target, &constant, expression->type, &converted) &&
         converted.bits <= type_max) {
@@ -1476,7 +1492,8 @@ static bool core_cfg_nonnegative_range_impl(
     case MINIC_EXPRESSION_LVALUE_READ: {
         MinicLocalId local;
         uint64_t possible_one_bits;
-        if (minic_core_lower_direct_local_read(context, id, &local)) {
+        if (allow_local_facts &&
+            minic_core_lower_direct_local_read(context, id, &local)) {
             if (minic_core_local_fact_nonnegative_range_get(
                     context, local, minimum, maximum) && *maximum <= type_max)
                 return true;
@@ -1496,7 +1513,8 @@ static bool core_cfg_nonnegative_range_impl(
         /* Boolean-range clones carry a {0,1} entry contract, but the
          * original parameter is not an ordinary local range fact. Its
          * no-write/no-escape policy is checked by this existing helper. */
-        if (minic_core_lower_boolean_range_expression(context, id, 0U)) {
+        if (allow_local_facts &&
+            minic_core_lower_boolean_range_expression(context, id, 0U)) {
             *minimum = 0U;
             *maximum = 1U;
             return true;
@@ -1507,9 +1525,11 @@ static bool core_cfg_nonnegative_range_impl(
         uint64_t true_min, true_max, false_min, false_max;
         if (!core_cfg_nonnegative_range_impl(context,
                 expression->value.conditional.when_true, depth + 1U,
+                allow_local_facts,
                 &true_min, &true_max) ||
             !core_cfg_nonnegative_range_impl(context,
                 expression->value.conditional.when_false, depth + 1U,
+                allow_local_facts,
                 &false_min, &false_max)) return false;
         *minimum = true_min < false_min ? true_min : false_min;
         *maximum = true_max > false_max ? true_max : false_max;
@@ -1520,6 +1540,7 @@ static bool core_cfg_nonnegative_range_impl(
     case MINIC_EXPRESSION_CONVERSION:
         return core_cfg_nonnegative_range_impl(context,
                    expression->value.unary.operand, depth + 1U,
+                   allow_local_facts,
                    minimum, maximum) && *maximum <= type_max;
     case MINIC_EXPRESSION_BINARY:
         if (expression->value.binary.operator_kind == MINIC_BINARY_SUBTRACT) {
@@ -1527,9 +1548,14 @@ static bool core_cfg_nonnegative_range_impl(
             MinicConstValue rhs;
             if (!core_cfg_nonnegative_range_impl(context,
                     expression->value.binary.left, depth + 1U,
+                    allow_local_facts,
                     minimum, maximum) ||
-                !core_const_eval_integer_with_locals(context,
-                    expression->value.binary.right, &rhs) ||
+                !(allow_local_facts
+                      ? core_const_eval_integer_with_locals(
+                            context, expression->value.binary.right, &rhs)
+                      : minic_const_eval_integer(
+                            context->body->program, context->target,
+                            expression->value.binary.right, &rhs)) ||
                 !minic_const_value_convert_integer(context->body->program,
                     context->target, &rhs, expression->type, &converted))
                 return false;
@@ -1551,6 +1577,7 @@ bool minic_core_cfg_nonnegative_range(
     const MinicCoreLowerContext *context, MinicExpressionId id,
     uint64_t *minimum, uint64_t *maximum) {
     return core_cfg_nonnegative_range_impl(context, id, 0U,
+                                           minic_core_cfg_pure_call_argument(context, id, 0U),
                                            minimum, maximum);
 }
 
@@ -1562,6 +1589,7 @@ bool minic_core_cfg_bounded_comparison_is_false(
     const MinicCoreLowerContext *context, MinicExpressionId id) {
     const MinicExpression *expression;
     unsigned int negations = 0U, depth;
+    bool allow_local_facts;
     uint64_t left_min, left_max, right_min, right_max;
     if (context == NULL || context->body == NULL ||
         context->body->program == NULL) return false;
@@ -1578,15 +1606,18 @@ bool minic_core_cfg_bounded_comparison_is_false(
     expression = minic_c0_program_expression(context->body->program, id);
     if (expression == NULL || expression->kind != MINIC_EXPRESSION_BINARY)
         return false;
+    allow_local_facts = minic_core_cfg_pure_call_argument(context, id, 0U);
     if (expression->value.binary.operator_kind != MINIC_BINARY_GREATER &&
         expression->value.binary.operator_kind != MINIC_BINARY_GREATER_EQUAL &&
         expression->value.binary.operator_kind != MINIC_BINARY_LESS &&
         expression->value.binary.operator_kind != MINIC_BINARY_LESS_EQUAL)
         return false;
-    if (!minic_core_cfg_nonnegative_range(
-            context, expression->value.binary.left, &left_min, &left_max) ||
-        !minic_core_cfg_nonnegative_range(
-            context, expression->value.binary.right, &right_min, &right_max))
+    if (!core_cfg_nonnegative_range_impl(
+            context, expression->value.binary.left, 0U,
+            allow_local_facts, &left_min, &left_max) ||
+        !core_cfg_nonnegative_range_impl(
+            context, expression->value.binary.right, 0U,
+            allow_local_facts, &right_min, &right_max))
         return false;
     if (expression->value.binary.operator_kind == MINIC_BINARY_GREATER)
         return left_max <= right_min;
@@ -1627,7 +1658,9 @@ bool minic_core_cfg_disjoint_bitmask_is_zero(
     return negations == 0U && expression != NULL &&
            expression->kind == MINIC_EXPRESSION_BINARY &&
            expression->value.binary.operator_kind == MINIC_BINARY_BITWISE_AND &&
-           core_cfg_possible_one_bits(context, id, 0U) == 0U;
+           core_cfg_possible_one_bits(
+               context, id, 0U,
+               minic_core_cfg_pure_call_argument(context, id, 0U)) == 0U;
 }
 
 bool minic_core_cfg_pure_guard_truth(void *opaque,
@@ -1813,6 +1846,12 @@ bool core_const_eval_integer_with_locals(const MinicCoreLowerContext *context,
                                               expression->type, value)) {
             return true;
         }
+        /* Never interpret a source-level write as a no-effect constant proof
+         * unless its target is a fresh temporary owned by this GNU block and
+         * all initializer/result expressions are observationally pure. */
+        if (!minic_core_cfg_pure_statement_local_assignments(
+                context, expression_id, 0U))
+            return false;
         statement_block = minic_c0_program_block(
             context->body->program, expression->value.statement_expression.block);
         if (statement_block == NULL || statement_block->statement_count == 0U) {
@@ -2337,7 +2376,7 @@ statement_expression_done:
     if (expression->kind == MINIC_EXPRESSION_BINARY &&
         expression->value.binary.operator_kind == MINIC_BINARY_BITWISE_AND &&
         minic_core_cfg_pure_call_argument(context, expression_id, 0U) &&
-        core_cfg_possible_one_bits(context, expression_id, 0U) == 0U) {
+        core_cfg_possible_one_bits(context, expression_id, 0U, true) == 0U) {
         value->type = expression->type;
         value->bits = 0U;
         return true;

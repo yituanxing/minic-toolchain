@@ -3217,3 +3217,52 @@ The last x86 GNU LD symbol comes from `include/linux/mm_types.h`'s always-inline
 This coherent three-part correction uses existing Core facts without relaxing any source rules: a stable local's may-one-bit mask now supplies a conservative nonnegative interval `[0,mask]` (rejecting signed sign-bit uncertainty, volatile and escaped locals), Core callsite selection may admit the established `{0,1}` clone only when that interval is wholly `<=1`, and the existing false-only bounded comparison proof now also handles strict `>` and `<=` with mathematically correct inequalities. The selected clone's immutable entry contract supplies `[0,1]` to the nested `encode_page` guard. The original predicate remains lowered before discarding its impossible diagnostic branch, preserving runtime effects; a local with possible value `4`, an address-escaped local, volatile reads, and arbitrary runtime parameters retain the unresolved guard. No weak definition, GNU-C fallback, source-string-specific rule, or suppress-all-asserts shortcut is introduced.
 
 **Local original owner proof:** the SHA-authenticated `mm/memory.i` and real `.o.cmd` `-mno-sse -funsigned-char -fshort-wchar` ABI options now compile to MiniC `.s` and GNU GAS ELF64 ET_REL; `nm -u` contains **zero `__compiletime_assert_161`** references. A five-ISA source regression with a nested always-inline caller, mutable 0/1 local and observable runtime condition passes five-target assembly, native GNU/MiniC exit42 and **4/4 must-retain negative variants**. Isolated Debug and Release `check-fast` both **PASS**. This does **not** constitute a newly linked MiniC Linux Image or QEMU P0/P1 proof; only the next exact-head seven-runner GNU LD and QEMU receiver can establish that.
+
+## IR-P64 — Effectful source expressions cannot consume pre-evaluation Core-local ranges (2026-11-04)
+
+**Reason:** P63's new `{0,1}` callsite specialization exposed a C semantic
+miscompile: a caller with `flags=0` passed `mutate_condition(&flags) ? flags :
+flags` to an always-inline Boolean-range clone. MiniC chose the clone from
+the *pre-expression* local fact before the call changed `flags` to `4`,
+returning `1` where native GCC returned `42`. The same stale local fact
+could suppress a true `>3` branch or `&4` bitmask test; a sibling argument
+could also mutate a fact used by an earlier argument. Pure literal arms
+still permit false-only guards despite observable condition mutations.
+
+**Generic barrier:** Core direct-call specialization checks the *entire
+source argument group* for effects before using any caller-local range,
+known integer or symbolic fact. Effectful groups permit only intrinsic
+source constants and type-level `_Bool` bounds; all arguments retain their
+real evaluation. `core_cfg_nonnegative_range_impl`, its possible-one-bits
+evaluator, bounded comparisons, bitmask proofs and subtraction RHS constant
+fallback share the whole-expression admission: an effectful expression
+cannot consume its pre-execution local facts. Source-only literal/bitmask
+and conditional-arm shape proofs remain available. The generic condition
+branch constant bypass requires proven purity, as does the second constant
+switch dispatch after selector evaluation.
+
+**GNU block-owned locals:** GNU `({ ... })` from Linux `min_t` initialize
+private local temporaries, and can be discarded if their whole integer
+result is constant. A shared, fail-closed observational-purity certificate
+accepts straight-line `MINIC_STATEMENT_ASSIGN` writes *only* to nonvolatile
+locals whose parser-recorded `has_declaration_block` owner exactly matches
+the GNU expression block, with recursively pure RHS and result expressions.
+The local-constant interpreter now reuses that certificate: it cannot
+interpret writes to an enclosing local as effect-free constants. External
+assignments, volatile writes, unrecognized control flow, calls that cannot
+be proved pure, and reentry are rejected. No C facts or ownership metadata
+enter Core IR or TargetInfo; no filename or assertion is special-cased.
+
+**P64 local evidence (not a Linux full-corpus claim):** Debug and strict
+Release `-Werror` builds PASS. `check-core-cfg-effectful-boolean-fact-barrier`
+passes five Linux target `-S` configurations and executable GNU/MiniC x86
+native differential (`42/42`), covering effectful ternary, comma,
+assignment, sibling call arguments, bounded compare, disjoint bitmask,
+subtraction RHS, `if`, `switch` and GNU statement expressions that write
+an enclosing local. The existing Linux `encode_page` source probe passes
+five-ISA assembly, native `42/42` and 4/4 must-retain diagnostic guards;
+`check-gnu-if-condition-local-owner` also passes, with zero surviving RV64
+`__compiletime_assert_645` references from `min_t`. Optional SHA-authenticated
+original `mm/memory.i` replay was absent from this local environment and
+needs the Linux receiver. The new probe is a short dependency of `check-fast`;
+no new Linux Image/QEMU test was launched for P64.

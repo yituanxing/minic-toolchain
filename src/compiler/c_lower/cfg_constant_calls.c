@@ -142,6 +142,56 @@ static bool core_cfg_pure_pointer_getter_call(const MinicCoreLowerContext *conte
  * expose static-inline predicates that are exactly one constant return.  Such
  * a call is safe to consume as a CFG fact when all arguments are side-effect
  * free.  Ordinary expression lowering remains unchanged. */
+bool minic_core_cfg_pure_statement_local_assignments(
+    const MinicCoreLowerContext *context, MinicExpressionId expression_id,
+    unsigned int depth) {
+    const MinicC0Program *program;
+    const MinicExpression *expression;
+    const MinicBlock *block;
+    MinicBlockId block_id;
+    size_t i;
+
+    if (context == NULL || context->body == NULL ||
+        (program = context->body->program) == NULL || depth > 32U)
+        return false;
+    expression = minic_c0_program_expression(program, expression_id);
+    if (expression == NULL || expression->kind != MINIC_EXPRESSION_STATEMENT ||
+        expression->value.statement_expression.result == MINIC_EXPRESSION_INVALID)
+        return false;
+    block_id = expression->value.statement_expression.block;
+    block = minic_c0_program_block(program, block_id);
+    if (block == NULL || block->statement_count == 0U ||
+        block->statement_count > 256U)
+        return false;
+    for (i = 0U; i < block->statement_count; ++i) {
+        const MinicStatement *statement = minic_c0_program_statement(
+            program, block->statements[i]);
+        if (statement == NULL ||
+            statement->cleanup_context != statement->cleanup_stop_context)
+            return false;
+        if (statement->kind == MINIC_STATEMENT_ASSIGN) {
+            const MinicExpression *target = minic_c0_program_expression(
+                program, statement->target_expression);
+            const MinicLocal *local;
+            if (target == NULL || target->kind != MINIC_EXPRESSION_LOCAL ||
+                target->value_category != MINIC_VALUE_LVALUE ||
+                (local = minic_c0_program_local(program, target->value.local_id)) == NULL ||
+                !local->has_declaration_block || local->declaration_block != block_id ||
+                minic_type_is_volatile(local->type) ||
+                !minic_core_cfg_pure_call_argument(
+                    context, statement->expression, depth + 1U))
+                return false;
+            continue;
+        }
+        if (statement->kind != MINIC_STATEMENT_EXPRESSION ||
+            i + 1U != block->statement_count ||
+            statement->expression != expression->value.statement_expression.result)
+            return false;
+    }
+    return minic_core_cfg_pure_call_argument(
+        context, expression->value.statement_expression.result, depth + 1U);
+}
+
 bool minic_core_cfg_pure_call_argument(const MinicCoreLowerContext *context,
                                         MinicExpressionId expression_id,
                                         unsigned int depth) {
@@ -228,8 +278,10 @@ bool minic_core_cfg_pure_call_argument(const MinicCoreLowerContext *context,
                 context->body->program, context->target,
                 context->reentry_index,
                 expression->value.statement_expression.block,
-                (void *)context, minic_core_cfg_pure_guard_truth, depth + 1U))
-            return false;
+                (void *)context, minic_core_cfg_pure_guard_truth, depth + 1U)) {
+            return minic_core_cfg_pure_statement_local_assignments(
+                context, expression_id, depth + 1U);
+        }
         return expression->value.statement_expression.result ==
                    MINIC_EXPRESSION_INVALID ||
                minic_core_cfg_pure_call_argument(

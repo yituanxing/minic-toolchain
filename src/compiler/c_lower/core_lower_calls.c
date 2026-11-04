@@ -228,6 +228,7 @@ static const MinicFunction *core_select_direct_call_specialization(
     size_t best_integer = 0U, best_symbolic = 0U, best_boolean = 0U;
     size_t best_exact_symbolic = 0U;
     size_t candidate_index, i;
+    bool arguments_pure = true;
 
     if (context == NULL || context->body == NULL ||
         (program = context->body->program) == NULL ||
@@ -246,31 +247,54 @@ static const MinicFunction *core_select_direct_call_specialization(
         source->parameter_count > MINIC_MAX_FUNCTION_PARAMETERS)
         return source_callee;
 
+    /* All arguments are evaluated AFTER variant selection. Even though the
+     * emitted call preserves each argument's effects, a sibling argument or
+     * a nested conditional can mutate a local before another argument reads
+     * it. Never select a clone from pre-evaluation CFG facts in that case.
+     * Source-intrinsic integer constants and the _Bool value type remain
+     * valid independently of the order in which effects execute. */
+    for (i = 0U; i < source->parameter_count; ++i) {
+        if (!minic_core_cfg_pure_call_argument(
+                context, minic_c0_call_argument(expression, i), 0U)) {
+            arguments_pure = false;
+            break;
+        }
+    }
     (void)memset(actual, 0, sizeof(actual));
     for (i = 0U; i < source->parameter_count; ++i) {
         MinicExpressionId argument_id = minic_c0_call_argument(expression, i);
+        const MinicExpression *argument =
+            minic_c0_program_expression(program, argument_id);
         MinicType formal = source->parameter_types[i];
         if (minic_type_is_integer(formal)) {
             MinicConstValue value, converted;
-            if (core_const_eval_integer_with_locals(
-                    context, argument_id, &value) &&
+            if ((arguments_pure
+                     ? core_const_eval_integer_with_locals(
+                           context, argument_id, &value)
+                     : minic_const_eval_integer(
+                           program, context->target, argument_id, &value)) &&
                 minic_const_value_convert_integer(
                     program, context->target, &value, formal, &converted)) {
                 actual[i].integer_known = true;
                 actual[i].integer_bits = converted.bits;
             }
             actual[i].boolean_range_known =
-                minic_core_lower_boolean_range_expression(
-                    context, argument_id, 0U);
-            if (!actual[i].boolean_range_known) {
+                arguments_pure
+                    ? minic_core_lower_boolean_range_expression(
+                          context, argument_id, 0U)
+                    : argument != NULL &&
+                          minic_type_is_bool_integer(argument->type);
+            if (!actual[i].boolean_range_known && arguments_pure) {
                 uint64_t minimum, maximum;
                 actual[i].boolean_range_known =
                     minic_core_cfg_nonnegative_range(
                         context, argument_id, &minimum, &maximum) &&
                     maximum <= 1U;
             }
+            if (!actual[i].boolean_range_known && actual[i].integer_known)
+                actual[i].boolean_range_known = actual[i].integer_bits <= 1U;
         } else if (minic_type_is_pointer(formal)) {
-            actual[i].symbolic_known =
+            actual[i].symbolic_known = arguments_pure &&
                 core_inline_asm_symbolic_address_fact(
                     context, argument_id, &actual[i].symbol,
                     &actual[i].symbol_addend);

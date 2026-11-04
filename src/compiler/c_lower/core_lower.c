@@ -693,7 +693,11 @@ MinicCoreLowerStatus minic_core_lower_internal_lower_condition_branch(MinicCoreL
     if (minic_type_is_integer(expression->type)) {
         MinicConstValue condition_constant;
         bool condition_is_zero;
-        if (core_const_eval_integer_with_locals(context, expression_id, &condition_constant) &&
+        /* CFG-local facts describe the state BEFORE the condition executes.
+         * Do not bypass lowering an assignment, call or GNU statement
+         * expression just because its final integer value looks constant. */
+        if (minic_core_cfg_pure_call_argument(context, expression_id, 0U) &&
+            core_const_eval_integer_with_locals(context, expression_id, &condition_constant) &&
             minic_const_value_is_zero(context->body->program,
                                       context->target,
                                       &condition_constant,
