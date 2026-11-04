@@ -12,6 +12,43 @@ typedef struct MiniLdStaticRelocOperands {
     const char *symbol_name;
 } MiniLdStaticRelocOperands;
 
+/* ET_EXEC relocations in non-ALLOC debug/metadata sections may refer to
+ * local labels in other non-ALLOC sections.  Such a section has sh_addr=0,
+ * so the relocated value is its final section-relative offset, not a
+ * runtime virtual address.  Keep ordinary allocated relocations on the
+ * strict address resolver: a text/data reference to a discarded/non-ALLOC
+ * symbol must never silently become an address in unmapped memory.
+ *
+ * The default (unscripted) layout keeps non-ALLOC work-section VAs at zero.
+ * Script-owned non-ALLOC output offsets require an output-section projection
+ * and are intentionally not admitted by this fallback. */
+static bool minild_static_reloc_resolve_symbol(
+    MiniLdState *state, const MiniLdLayout *layout,
+    const MiniLdReloc *reloc, uint64_t *value_out) {
+    const MiniLdResolvedSymbol *symbol;
+
+    if (reloc->section >= state->work.count ||
+        reloc->symbol >= state->resolver.count || layout->work == NULL) {
+        return minild_layout_resolve_symbol(state, layout, reloc->symbol,
+                                            value_out);
+    }
+    symbol = &state->resolver.entries[reloc->symbol];
+
+    if (!layout->scripted &&
+        (state->work.sections[reloc->section].flags & SHF_ALLOC) == 0U &&
+        ELF64_ST_BIND(symbol->info) == STB_LOCAL && symbol->section >= 0 &&
+        (size_t)symbol->section < state->work.count &&
+        (state->work.sections[symbol->section].flags & SHF_ALLOC) == 0U &&
+        !state->work.sections[symbol->section].gc_discarded &&
+        !layout->work[symbol->section].discarded &&
+        layout->work[symbol->section].vaddr == 0U) {
+        *value_out = symbol->value;
+        return true;
+    }
+    return minild_layout_resolve_symbol(state, layout, reloc->symbol,
+                                        value_out);
+}
+
 static bool minild_static_reloc_source(
     MiniLdState *state, const MiniLdLayout *layout,
     const MiniLdReloc *reloc, const char *invalid_section_diagnostic,
@@ -40,8 +77,8 @@ static bool minild_static_reloc_operands(
 
     memset(out, 0, sizeof(*out));
     if (reloc->symbol != SIZE_MAX) {
-        if (!minild_layout_resolve_symbol(state, layout,
-                                          reloc->symbol, &symbol_value)) {
+        if (!minild_static_reloc_resolve_symbol(state, layout, reloc,
+                                                &symbol_value)) {
             return false;
         }
         out->symbol_name = state->resolver.entries[reloc->symbol].name;

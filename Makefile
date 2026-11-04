@@ -746,6 +746,18 @@ check-minild-aarch64-static-got: $(MINIAS_BINARY) $(MINILD_BINARY)
 	MINILD="$(abspath $(MINILD_BINARY))" \
 	bash tests/linker/probe-aarch64-static-got.sh
 
+.PHONY: check-minild-aarch64-static-tls
+check-minild-aarch64-static-tls: $(MINIAS_BINARY) $(MINILD_BINARY)
+	MINIAS="$(abspath $(MINIAS_BINARY))" \
+	MINILD="$(abspath $(MINILD_BINARY))" \
+	bash tests/linker/probe-aarch64-static-tls.sh
+
+.PHONY: check-minild-static-nonalloc-relocations
+check-minild-static-nonalloc-relocations: $(MINIAS_BINARY) $(MINILD_BINARY)
+	MINIAS="$(abspath $(MINIAS_BINARY))" \
+	MINILD="$(abspath $(MINILD_BINARY))" \
+	bash tests/linker/probe-static-nonalloc-relocations.sh
+
 .PHONY: check-minild-loongarch-static-relocs
 check-minild-loongarch-static-relocs: $(MINIAS_BINARY) $(MINILD_BINARY)
 	MINIAS="$(abspath $(MINIAS_BINARY))" \

@@ -18,6 +18,12 @@ trap 'rm -rf -- "$work"' EXIT
 "$MINIAS" --target=riscv -march=rv64i -mabi=lp64 \
     -o "$work/rv64.original.o" \
     "$repo/tests/linker/fixtures/riscv64-static-tls-ie.S"
+for profile in 'rv32i ilp32 rv32' 'rv64i lp64 rv64'; do
+    read -r march mabi prefix <<<"$profile"
+    "$MINIAS" --target=riscv "-march=$march" "-mabi=$mabi" \
+        -o "$work/$prefix.weak.original.o" \
+        "$repo/tests/linker/fixtures/riscv-static-tls-weak.S"
+done
 
 python3 - "$work/rv32.original.o" "$work/rv32.tls.o" \
           "$work/rv64.original.o" "$work/rv64.tls.o" <<'PY'
@@ -76,6 +82,68 @@ assert updated == 1, updated
 Path(sys.argv[4]).write_bytes(rv64)
 PY
 
+python3 - "$work/rv32.weak.original.o" "$work/rv32.weak.o" \
+          "$work/rv32.strong.o" "$work/rv64.weak.original.o" \
+          "$work/rv64.weak.o" "$work/rv64.strong.o" <<'PY'
+import struct
+from pathlib import Path
+import sys
+
+for orig, weak_out, strong_out, elf_class in (
+    (*sys.argv[1:4], 1), (*sys.argv[4:7], 2)
+):
+    obj = bytearray(Path(orig).read_bytes())
+    assert obj[:5] == b'\x7fELF' + bytes((elf_class,))
+    if elf_class == 1:
+        shoff, = struct.unpack_from('<I', obj, 32)
+        shnum, = struct.unpack_from('<H', obj, 48)
+        hfmt, shsize, relsize, symstride = '<IIIIIIIIII', 40, 12, 16
+    else:
+        shoff, = struct.unpack_from('<Q', obj, 40)
+        shnum, = struct.unpack_from('<H', obj, 60)
+        hfmt, shsize, relsize, symstride = '<IIQQQQIIQQ', 64, 24, 24
+    headers = [struct.unpack_from(hfmt, obj, shoff + i * shsize)
+               for i in range(shnum)]
+    rels = [h for h in headers if h[1] == 4]
+    assert len(rels) == 1
+    rel = rels[0]
+    assert rel[5] == 4 * relsize
+    # Keep both GOT_HI20 source symbols intact: weak undefined and defined
+    # TLS receive distinct slots with offsets zero and eight respectively.
+    symidx = None
+    patched = 0
+    for off in range(rel[4], rel[4] + rel[5], relsize):
+        if elf_class == 1:
+            src, info, addend = struct.unpack_from('<IIi', obj, off)
+            typ = info & 255
+            index = info >> 8
+            info_pos = off + 4
+            fmt = '<I'
+            typmask = 255
+        else:
+            src, info, addend = struct.unpack_from('<QQq', obj, off)
+            typ = info & 0xffffffff
+            index = info >> 32
+            info_pos = off + 8
+            fmt = '<Q'
+            typmask = 0xffffffff
+        if typ != 20:
+            assert typ == 24, ('unexpected weak TLS relocation', src, typ)
+            continue
+        assert src in (0, 16) and addend == 0
+        struct.pack_into(fmt, obj, info_pos, (info & ~typmask) | 21)
+        if src == 0:
+            symidx = index
+        patched += 1
+    assert patched == 2 and symidx is not None, (patched, symidx)
+    symtab = next(h for h in headers if h[1] == 2)
+    info_off = symtab[4] + symidx * symstride + (12 if elf_class == 1 else 4)
+    assert obj[info_off] == 0x26, (elf_class, obj[info_off])
+    Path(weak_out).write_bytes(obj)
+    obj[info_off] = 0x16  # TLS GLOBAL UNDEF must remain a hard error.
+    Path(strong_out).write_bytes(obj)
+PY
+
 readelf -Wr "$work/rv32.tls.o" > "$work/rv32.relocations"
 readelf -Wr "$work/rv64.tls.o" > "$work/rv64.relocations"
 for name in R_RISCV_TPREL_HI20 R_RISCV_TPREL_LO12_I \
@@ -88,8 +156,22 @@ grep -Fq R_RISCV_TLS_GOT_HI20 "$work/rv64.relocations"
     -o "$work/rv32.exe" "$work/rv32.tls.o"
 "$MINILD" -m elf64lriscv -static -e _start \
     -o "$work/rv64.exe" "$work/rv64.tls.o"
+"$MINILD" -m elf32lriscv -static -e _start \
+    -o "$work/rv32.weak.exe" "$work/rv32.weak.o"
+"$MINILD" -m elf64lriscv -static -e _start \
+    -o "$work/rv64.weak.exe" "$work/rv64.weak.o"
+for prefix in rv32 rv64; do
+    if "$MINILD" -m "elf${prefix#rv}lriscv" -static -e _start \
+       -o "$work/$prefix.strong.exe" "$work/$prefix.strong.o" \
+       >"$work/$prefix.strong.log" 2>&1; then
+        echo 'MINILD_RISCV_STATIC_TLS=FAIL strong_undefined_tls_accepted' >&2
+        exit 1
+    fi
+    grep -Fq 'invalid-riscv-static-tls-symbol' "$work/$prefix.strong.log"
+done
 
-python3 - "$work/rv32.exe" "$work/rv64.exe" <<'PY'
+python3 - "$work/rv32.exe" "$work/rv64.exe" \
+          "$work/rv32.weak.exe" "$work/rv64.weak.exe" <<'PY'
 import struct
 from pathlib import Path
 import sys
@@ -155,6 +237,17 @@ got = s64['.got']
 assert got[5] == 8 and got[8] == 8, (got[5], got[8])
 value, = struct.unpack_from('<Q', rv64, got[4])
 assert value == 8, ('RV64 IE GOT value must be TP-relative', value)
+for file, is64 in ((sys.argv[3], False), (sys.argv[4], True)):
+    weak = Path(file).read_bytes()
+    got_weak = sections(weak, is64)['.got']
+    width = 8 if is64 else 4
+    assert got_weak[5] == 2 * width
+    values = struct.unpack_from('<QQ' if is64 else '<II',
+                                weak, got_weak[4])
+    assert values == (0, 8), ('weak and defined TLS IE GOT differ', file,
+                              values)
 print('MINILD_RISCV_STATIC_TLS=PASS rv32_le_hi_lo_i_lo_s_add=1 '
-      'rv64_ie_got=1 xlen_slot=1 pt_tls=2 structural=1 runtime=UNVERIFIED')
+      'rv64_ie_got=1 weak_undefined_tls=2 defined_nonzero_tprel=2 '
+      'strong_undefined_rejected=2 '
+      'xlen_slot=1 pt_tls=2 structural=1 runtime=UNVERIFIED')
 PY

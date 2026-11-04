@@ -193,15 +193,22 @@ cat >"$work/tls.s" <<'ASM'
 _start:
     la.local $r12,tls_value
     la.global $r13,tls_value
+    la.global $r14,missing_weak_tls
     ori $r4,$r0,0
     ori $r11,$r0,93
     syscall 0
 .section .tdata,"awT",@progbits
 .p2align 3
+.globl tls_prefix
+.type tls_prefix,@tls_object
+tls_prefix:
+    .quad 9
 .globl tls_value
 .type tls_value,@tls_object
 tls_value:
     .quad 123
+.weak missing_weak_tls
+.type missing_weak_tls,@tls_object
 ASM
 "$MINIAS" --target=loongarch64 -march=loongarch64 -mabi=lp64d \
     -o "$work/tls.o" "$work/tls.s"
@@ -232,7 +239,7 @@ for sec in sects:
         else: continue
         struct.pack_into('<Q',b,off+8,(info&~0xffffffff)|new)
         seen.append(new)
-assert sorted(seen)==[83,84,87,88],seen
+assert sorted(seen)==[83,84,87,87,88,88],seen
 p.write_bytes(b)
 PY
 readelf -Wr "$work/tls.o" >"$work/tls.reloc"
@@ -261,12 +268,48 @@ st=sec[si]; strings=b[st[4]:st[4]+st[5]]
 def name(i):
     n=sec[i][0]; return strings[n:strings.index(0,n)].decode()
 got=[sec[i] for i in range(num) if name(i)=='.got']
-assert len(got)==1 and got[0][5]>=8,('missing TLS IE GOT',got)
+assert len(got)==1 and got[0][5]>=16,('missing defined+weak TLS IE GOT',got)
 vals=[struct.unpack_from('<Q',b,got[0][4]+i)[0]
       for i in range(0,got[0][5],8)]
-assert 0 in vals,('TLS symbol at start of PT_TLS must have TP offset 0',vals)
-print('MINILD_LOONGARCH_STATIC=PASS TLS_LE_IE=2 PT_TLS=1 IE_GOT_TPREL=0')
+assert vals[:2]==[8,0],('defined TLS TPREL=8, weak undefined TLS TPREL=0',vals)
+textsec=next(sec[i] for i in range(num) if name(i)=='.text')
+le_low12=struct.unpack_from('<I',b,textsec[4]+4)[0]
+assert ((le_low12>>10)&0xfff)==8,('local-exec encoded TPREL low12',hex(le_low12))
+print('MINILD_LOONGARCH_STATIC=PASS TLS_LE_IE=2 PT_TLS=1 LE_TPREL=8 IE_GOT_TPREL=8 weak_undef_tls=0')
 PY
+
+# A weak undefined TLS symbol is legal in a static GOT, but that exception
+# must never admit a weak non-TLS symbol through a TLS relocation.  Mutate
+# only its symbol type, preserving the already valid IE relocation pair.
+cp "$work/tls.o" "$work/tls-nontls.o"
+python3 - "$work/tls-nontls.o" <<'PY'
+from pathlib import Path
+import struct,sys
+p=Path(sys.argv[1]); b=bytearray(p.read_bytes())
+shoff=struct.unpack_from('<Q',b,40)[0]
+num=struct.unpack_from('<H',b,60)[0]
+ss=[struct.unpack_from('<IIQQQQIIQQ',b,shoff+64*i) for i in range(num)]
+symtab=next(s for s in ss if s[1]==2)
+strtab=ss[symtab[6]]
+strings=b[strtab[4]:strtab[4]+strtab[5]]
+patched=0
+for at in range(symtab[4],symtab[4]+symtab[5],24):
+    name,info,other,shndx,value,size=struct.unpack_from('<IBBHQQ',b,at)
+    if name and strings[name:strings.find(0,name)]==b'missing_weak_tls':
+        assert info>>4==2 and info&15==6 and shndx==0
+        b[at+4]=info&0xf0
+        patched+=1
+assert patched==1,patched
+p.write_bytes(b)
+PY
+if "$MINILD" -m elf64loongarch -static -e _start \
+    -o "$work/tls-nontls.elf" "$work/tls-nontls.o" \
+    >"$work/tls-nontls.log" 2>&1; then
+    echo 'MINILD_LOONGARCH_STATIC=FAIL admitted_weak_nontls_as_tls' >&2
+    exit 1
+fi
+grep -Fq invalid-loongarch-static-got-reloc "$work/tls-nontls.log"
+echo 'MINILD_LOONGARCH_STATIC=PASS weak_undef_tls=zero weak_undef_nontls=fail_closed'
 
 # For a relaxation-enabled alignment whose reserved NOPs do not already
 # produce a correct boundary, fail closed until target section relaxation is

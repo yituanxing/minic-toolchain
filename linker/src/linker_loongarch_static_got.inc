@@ -85,6 +85,16 @@ static bool minild_loongarch_static_tls_offset(
         return false;
     }
     symbol = &state->resolver.entries[symbol_index];
+    /* An unresolved weak TLS reference has no thread-local definition to
+     * place in PT_TLS.  Like GNU's static TLS GOT entry, its IE/LE TPREL is
+     * zero.  Keep the exception narrow: defined TLS must still resolve to
+     * SHF_TLS storage, and an undefined non-TLS symbol is never accepted. */
+    if (symbol->section == MINILD_SECTION_UNDEF &&
+        ELF64_ST_BIND(symbol->info) == STB_WEAK &&
+        ELF64_ST_TYPE(symbol->info) == STT_TLS) {
+        *offset = 0U;
+        return true;
+    }
     minild_layout_project_tls(state, layout, &tls);
     if (!tls.valid_extents || !tls.has_nonempty_section ||
         ELF64_ST_TYPE(symbol->info) != STT_TLS ||

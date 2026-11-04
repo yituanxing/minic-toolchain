@@ -15,10 +15,33 @@ static MiniLdNonRiscvFixup minild_aarch64_static_fixup_class(uint32_t type) {
     case R_AARCH64_JUMP26:
     case R_AARCH64_ADR_PREL_PG_HI21:
     case R_AARCH64_ADR_GOT_PAGE:
+    case R_AARCH64_TLSIE_ADR_GOTTPREL_PAGE21:
     case R_AARCH64_GOT_LD_PREL19:
+    case R_AARCH64_TLSIE_LD_GOTTPREL_PREL19:
     case R_AARCH64_LD64_GOTOFF_LO15:
     case R_AARCH64_LD64_GOT_LO12_NC:
+    case R_AARCH64_TLSIE_LD64_GOTTPREL_LO12_NC:
     case R_AARCH64_LD64_GOTPAGE_LO15:
+    case R_AARCH64_TLSIE_MOVW_GOTTPREL_G1:
+    case R_AARCH64_TLSIE_MOVW_GOTTPREL_G0_NC:
+    case R_AARCH64_TLSLE_MOVW_TPREL_G2:
+    case R_AARCH64_TLSLE_MOVW_TPREL_G1:
+    case R_AARCH64_TLSLE_MOVW_TPREL_G1_NC:
+    case R_AARCH64_TLSLE_MOVW_TPREL_G0:
+    case R_AARCH64_TLSLE_MOVW_TPREL_G0_NC:
+    case R_AARCH64_TLSLE_ADD_TPREL_HI12:
+    case R_AARCH64_TLSLE_ADD_TPREL_LO12:
+    case R_AARCH64_TLSLE_ADD_TPREL_LO12_NC:
+    case R_AARCH64_TLSLE_LDST8_TPREL_LO12:
+    case R_AARCH64_TLSLE_LDST8_TPREL_LO12_NC:
+    case R_AARCH64_TLSLE_LDST16_TPREL_LO12:
+    case R_AARCH64_TLSLE_LDST16_TPREL_LO12_NC:
+    case R_AARCH64_TLSLE_LDST32_TPREL_LO12:
+    case R_AARCH64_TLSLE_LDST32_TPREL_LO12_NC:
+    case R_AARCH64_TLSLE_LDST64_TPREL_LO12:
+    case R_AARCH64_TLSLE_LDST64_TPREL_LO12_NC:
+    case R_AARCH64_TLSLE_LDST128_TPREL_LO12:
+    case R_AARCH64_TLSLE_LDST128_TPREL_LO12_NC:
     case R_AARCH64_ADD_ABS_LO12_NC:
     case R_AARCH64_LDST8_ABS_LO12_NC:
     case R_AARCH64_LDST16_ABS_LO12_NC:
@@ -28,6 +51,39 @@ static MiniLdNonRiscvFixup minild_aarch64_static_fixup_class(uint32_t type) {
         return MINILD_NONRISCV_TARGET_INSTRUCTION;
     default: return MINILD_NONRISCV_INVALID;
     }
+}
+
+/* Encode the complete A64 MOVW family: checking relocations select MOVZ
+ * (positive) or MOVN (negative), whereas _NC forms must retain MOVK. */
+static bool minild_aarch64_static_write_tls_movw(
+    unsigned char *slot, uint64_t value, unsigned group, bool checking) {
+    uint32_t word = load_u32le(slot);
+    uint64_t magnitude = (value >> 63U) != 0U ? ~value : value;
+    uint32_t imm;
+
+    if (group > 2U || ((word >> 21U) & 3U) != group) {
+        return false;
+    }
+    if (checking) {
+        uint64_t limit = UINT64_C(1) << ((group + 1U) * 16U);
+
+        if ((word & UINT32_C(0x9f800000)) != UINT32_C(0x92800000) ||
+            (value >= limit && value < UINT64_MAX - (limit - 1U))) {
+            return false;
+        }
+        word &= ~UINT32_C(0x601fffe0);
+        word |= ((value >> 63U) == 0U ? 2U : 0U) << 29U;
+    } else {
+        if ((word & UINT32_C(0xff800000)) != UINT32_C(0xf2800000)) {
+            return false;
+        }
+        word &= ~UINT32_C(0x001fffe0);
+        magnitude = value;
+    }
+    imm = ((uint32_t)(magnitude >> (group * 16U))) & UINT32_C(0xffff);
+    word |= imm << 5U;
+    store_u32le(slot, word);
+    return true;
 }
 
 static bool minild_aarch64_static_write_instruction(
@@ -57,7 +113,8 @@ static bool minild_aarch64_static_write_instruction(
                            (((uint32_t)delta >> 2U) & UINT32_C(0x03ffffff)));
         return true;
     case R_AARCH64_ADR_PREL_PG_HI21:
-    case R_AARCH64_ADR_GOT_PAGE: {
+    case R_AARCH64_ADR_GOT_PAGE:
+    case R_AARCH64_TLSIE_ADR_GOTTPREL_PAGE21: {
         uint64_t page_delta = (target >> 12U) - (place >> 12U);
 
         if (!minild_nonriscv_signed_fits(page_delta, 21U)) {
@@ -75,12 +132,23 @@ static bool minild_aarch64_static_write_instruction(
         return true;
     }
     case R_AARCH64_ADD_ABS_LO12_NC:
+    case R_AARCH64_TLSLE_ADD_TPREL_HI12:
+    case R_AARCH64_TLSLE_ADD_TPREL_LO12:
+    case R_AARCH64_TLSLE_ADD_TPREL_LO12_NC:
         instruction = load_u32le(slot);
-        if ((instruction & UINT32_C(0x7f400000)) != UINT32_C(0x11000000)) {
+        if ((instruction & UINT32_C(0x7f400000)) !=
+            (reloc->type == R_AARCH64_TLSLE_ADD_TPREL_HI12 ?
+             UINT32_C(0x11400000) : UINT32_C(0x11000000)) ||
+            (reloc->type == R_AARCH64_TLSLE_ADD_TPREL_HI12 &&
+             target >= (UINT64_C(1) << 24U)) ||
+            (reloc->type == R_AARCH64_TLSLE_ADD_TPREL_LO12 &&
+             target >= (UINT64_C(1) << 12U))) {
             return false;
         }
         instruction &= ~UINT32_C(0x003ffc00);
-        instruction |= ((uint32_t)target & UINT32_C(0xfff)) << 10U;
+        instruction |= (((uint32_t)(target >>
+                         (reloc->type == R_AARCH64_TLSLE_ADD_TPREL_HI12 ?
+                          12U : 0U))) & UINT32_C(0xfff)) << 10U;
         store_u32le(slot, instruction);
         return true;
     case R_AARCH64_LDST8_ABS_LO12_NC:
@@ -88,12 +156,14 @@ static bool minild_aarch64_static_write_instruction(
     case R_AARCH64_LDST32_ABS_LO12_NC:
     case R_AARCH64_LDST64_ABS_LO12_NC:
     case R_AARCH64_LD64_GOT_LO12_NC:
+    case R_AARCH64_TLSIE_LD64_GOTTPREL_LO12_NC:
     case R_AARCH64_LDST128_ABS_LO12_NC: {
         unsigned shift = reloc->type == R_AARCH64_LDST8_ABS_LO12_NC ? 0U :
                          reloc->type == R_AARCH64_LDST16_ABS_LO12_NC ? 1U :
                          reloc->type == R_AARCH64_LDST32_ABS_LO12_NC ? 2U :
                          (reloc->type == R_AARCH64_LDST64_ABS_LO12_NC ||
-                          reloc->type == R_AARCH64_LD64_GOT_LO12_NC) ? 3U : 4U;
+                          reloc->type == R_AARCH64_LD64_GOT_LO12_NC ||
+                          reloc->type == R_AARCH64_TLSIE_LD64_GOTTPREL_LO12_NC) ? 3U : 4U;
         uint32_t mask = (UINT32_C(1) << shift) - 1U;
 
         /* Scaled unsigned load/store immediates must retain alignment. */
@@ -101,7 +171,8 @@ static bool minild_aarch64_static_write_instruction(
             return false;
         }
         instruction = load_u32le(slot);
-        if (reloc->type == R_AARCH64_LD64_GOT_LO12_NC &&
+        if ((reloc->type == R_AARCH64_LD64_GOT_LO12_NC ||
+             reloc->type == R_AARCH64_TLSIE_LD64_GOTTPREL_LO12_NC) &&
             (instruction & UINT32_C(0xffc00000)) != UINT32_C(0xf9400000)) {
             return false;
         }
@@ -112,6 +183,7 @@ static bool minild_aarch64_static_write_instruction(
         return true;
     }
     case R_AARCH64_GOT_LD_PREL19:
+    case R_AARCH64_TLSIE_LD_GOTTPREL_PREL19:
         /* LDR (literal, 64-bit): 19 signed words, PC-relative. */
         if ((delta & 3U) != 0U ||
             !minild_nonriscv_signed_fits(delta, 21U)) {
@@ -139,6 +211,57 @@ static bool minild_aarch64_static_write_instruction(
         instruction |= ((uint32_t)(target >> 3U) & UINT32_C(0xfff)) << 10U;
         store_u32le(slot, instruction);
         return true;
+    case R_AARCH64_TLSIE_MOVW_GOTTPREL_G1:
+    case R_AARCH64_TLSLE_MOVW_TPREL_G1:
+        return minild_aarch64_static_write_tls_movw(slot, target, 1U, true);
+    case R_AARCH64_TLSIE_MOVW_GOTTPREL_G0_NC:
+    case R_AARCH64_TLSLE_MOVW_TPREL_G0_NC:
+        return minild_aarch64_static_write_tls_movw(slot, target, 0U, false);
+    case R_AARCH64_TLSLE_MOVW_TPREL_G2:
+        return minild_aarch64_static_write_tls_movw(slot, target, 2U, true);
+    case R_AARCH64_TLSLE_MOVW_TPREL_G1_NC:
+        return minild_aarch64_static_write_tls_movw(slot, target, 1U, false);
+    case R_AARCH64_TLSLE_MOVW_TPREL_G0:
+        return minild_aarch64_static_write_tls_movw(slot, target, 0U, true);
+    case R_AARCH64_TLSLE_LDST8_TPREL_LO12:
+    case R_AARCH64_TLSLE_LDST8_TPREL_LO12_NC:
+    case R_AARCH64_TLSLE_LDST16_TPREL_LO12:
+    case R_AARCH64_TLSLE_LDST16_TPREL_LO12_NC:
+    case R_AARCH64_TLSLE_LDST32_TPREL_LO12:
+    case R_AARCH64_TLSLE_LDST32_TPREL_LO12_NC:
+    case R_AARCH64_TLSLE_LDST64_TPREL_LO12:
+    case R_AARCH64_TLSLE_LDST64_TPREL_LO12_NC:
+    case R_AARCH64_TLSLE_LDST128_TPREL_LO12:
+    case R_AARCH64_TLSLE_LDST128_TPREL_LO12_NC: {
+        unsigned shift = reloc->type >= R_AARCH64_TLSLE_LDST128_TPREL_LO12 ?
+                             4U :
+                         reloc->type >= R_AARCH64_TLSLE_LDST64_TPREL_LO12 ?
+                             3U :
+                         reloc->type >= R_AARCH64_TLSLE_LDST32_TPREL_LO12 ?
+                             2U :
+                         reloc->type >= R_AARCH64_TLSLE_LDST16_TPREL_LO12 ?
+                             1U : 0U;
+        bool checked = reloc->type == R_AARCH64_TLSLE_LDST8_TPREL_LO12 ||
+                       reloc->type == R_AARCH64_TLSLE_LDST16_TPREL_LO12 ||
+                       reloc->type == R_AARCH64_TLSLE_LDST32_TPREL_LO12 ||
+                       reloc->type == R_AARCH64_TLSLE_LDST64_TPREL_LO12 ||
+                       reloc->type == R_AARCH64_TLSLE_LDST128_TPREL_LO12;
+
+        instruction = load_u32le(slot);
+        if ((target & ((UINT64_C(1) << shift) - 1U)) != 0U ||
+            (checked && target >= UINT64_C(0x1000)) ||
+            (instruction & UINT32_C(0x3b000000)) != UINT32_C(0x39000000) ||
+            (shift == 4U ?
+              (instruction & UINT32_C(0x3f000000)) != UINT32_C(0x3d000000) :
+              (((instruction >> 30U) & 3U) != shift ||
+               (instruction & UINT32_C(0x04000000)) != 0U))) {
+            return false;
+        }
+        instruction &= ~UINT32_C(0x003ffc00);
+        instruction |= (((uint32_t)target & UINT32_C(0xfff)) >> shift) << 10U;
+        store_u32le(slot, instruction);
+        return true;
+    }
     default:
         return false;
     }

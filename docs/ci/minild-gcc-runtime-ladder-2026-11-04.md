@@ -49,11 +49,59 @@ No missing QEMU may be silently counted as a runtime pass.
 
 | Target | Current level | Ordinary five-stage MiniLD result |
 |---|---|---|
-| x86-64 | GNU BFD native 5/5; MiniLD native CRT/TLS/IFUNC probes PASS | **5/5 PASS locally**, GNU BFD runtime parity 5/5; CI pending |
-| RV64 | Historical MiniLD musl/Lua/QEMU success on a different revision | New GCC/glibc ladder requires CI rerun |
-| AArch64 | MiniAS object + MiniLD minimal ET_EXEC, QEMU success in earlier CI | New GCC/glibc ladder requires CI rerun |
-| LoongArch64 | MiniAS object + MiniLD minimal ET_EXEC, QEMU success in earlier CI | New GCC/glibc ladder requires CI rerun |
-| RV32 | ET_REL plus newly enabled ELF32 ET_EXEC; RV32 GOT is 4B, wrong-width relocation rejected | Two-object ET_EXEC structure PASS locally; GNU LD/QEMU and Picolibc five-C-stage ladder await CI |
+| x86-64 | GNU BFD native 5/5; MiniLD native CRT/TLS/IFUNC probes PASS | **5/5 PASS on GitHub CI**; GNU BFD and MiniLD both link and QEMU run the same MiniAS objects |
+| RV64 | RISC-V static TLS IE/LE structural probe PASS | **0/5 real glibc**; first linker diagnostic `invalid-riscv-static-tls-symbol:_nl_current_LC_COLLATE` |
+| AArch64 | GOT structural/GNU BFD link acceptance; trivial static QEMU program PASS | **0/5 real glibc**; first linker diagnostic `unsupported-static-relocation:183:541` (TLS IE) |
+| LoongArch64 | GOT/TLS structural + GNU BFD/QEMU trivial static parity PASS | **0/5 real glibc**; first linker diagnostic `invalid-loongarch-static-tls-symbol:_nl_current_LC_COLLATE` |
+| RV32 | ELF32 ET_EXEC GNU BFD/QEMU trivial parity PASS; separate Picolibc+Linux syscall bridge | **0/5 Picolibc** including TLS preflight; first linker diagnostic `unsupported-static-symbol:.Ldebug_abbrev0` (or `.L0`) |
+
+The first real GCC/libc CI cohort is
+[`41830734058`](https://github.com/yituanxing/minic-toolchain/actions/runs/41830734058).
+Its five jobs completed: x86-64 succeeded and the other four reported
+precise linker diagnostics above.  The independently passing ELF boundary
+workflow is
+[`41830435620`](https://github.com/yituanxing/minic-toolchain/actions/runs/41830435620):
+five ELF relocatable targets, three trivial static ELF targets, RV32 GNU/QEMU,
+and x86 CRT/IFUNC/GOT parity are genuinely covered.  It does **not** execute
+the five real libc workloads on every architecture.
+
+### Separate Linux kernel link acceptance
+
+Keep four levels as separately scored outcomes:
+
+1. MiniAS `.s` to ET_REL and MiniLD `-r`, with GNU oracle and ELF checks;
+2. MiniLD `-static` basic non-libc executable, with QEMU runtime parity;
+3. real GCC/CRT/libc application, GNU BFD versus MiniLD on identical objects,
+   both independently executed and compared (the five-stage matrix above);
+4. Linux kernel **final** link by MiniLD (`vmlinux`/Image), ELF/relocation
+   inspection and actual QEMU boot.  A Linux build where GNU BFD performs the
+   final link must be labeled `GNU final`, regardless of MiniLD intermediate
+   `-r` success.
+
+Historical `minild-integration-v1.yml` RV64 `linux-rel-boundaries` tests only
+replaced two **intermediate `-r` links**; GNU BFD linked their eventual
+`vmlinux`.  That specific workflow cannot count as MiniLD-final acceptance.
+However, the *separate* real Kbuild native-union workflow subsequently
+certified RV64 MiniLD Linux final links and actual QEMU P1.  Strongest
+record: [CI #38542731056](https://github.com/yituanxing/minic-toolchain/actions/runs/38542731056),
+commit `a44067096709ee51db4ed113202ceb4eec0b3af0`, documented in
+`docs/ci/linux-native-vdso64-p1-certified-2026-10-14.md`: six actual
+MiniLD `vmlinux` kallsyms/final links, MiniLD `vmlinux.o -r`, purgatory
+and real ELF64 vDSO shared link; GNU BFD still performed the single RV32
+compat-vDSO shared link.  The 12/12 P1 syscall oracle passed.  This
+historical RV64 success has **not** been repeated on the present refactor
+head and does **not** establish five-architecture MiniLD Linux-final success.
+
+At this refactor head, `linker/src/linker_target_elf.inc` advertises
+`supports_static_script=true` and `supports_static_gc=true` for RV64, but
+both features are still `false` for RV32, x86-64, AArch64 and LoongArch64.
+Those four targets therefore cannot yet accept the actual Kbuild
+`-T vmlinux.lds` final-link command, even if their ordinary `-static`
+application ladders later pass.  Do not conflate the existing ET_EXEC/ET_REL
+target support with linker-script/GC support.  The smallest historic RV64
+final-link replay is `tools/ci/minild-linux-cache-final-replay-v1.sh`, which
+reuses pinned GNU-object caches for a single kallsyms target rather than
+recompiling all 2,064 Linux C sources.
 
 The original MiniAS RV64 C ladder used `rv64gc/lp64d`.  MiniC's Linux
 code-generation contract is separately `rv64i/lp64`; they are **not the same

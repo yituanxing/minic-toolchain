@@ -26,6 +26,17 @@ static bool minild_riscv_static_tls_offset(
         return false;
     }
     symbol = &state->resolver.entries[symbol_index];
+    /* An unresolved weak TLS symbol is a valid static IE/LE operand: the
+     * executable has no TLS allocation for it and the linker resolves its
+     * offset to zero.  This is used by glibc's optional weak TLS variables
+     * (for example _nl_current_LC_COLLATE).  Ordinary undefined symbols,
+     * including strong TLS, must still fail the strict section check. */
+    if (symbol->section == MINILD_SECTION_UNDEF &&
+        ELF64_ST_BIND(symbol->info) == STB_WEAK &&
+        ELF64_ST_TYPE(symbol->info) == STT_TLS) {
+        *offset_out = 0U;
+        return true;
+    }
     minild_layout_project_tls(state, layout, &tls);
     if (!tls.valid_extents || !tls.has_nonempty_section ||
         ELF64_ST_TYPE(symbol->info) != STT_TLS ||

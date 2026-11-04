@@ -56,7 +56,9 @@ jobs:
             check-minild-rv32-static-runtime \
             check-minild-riscv-static-tls \
             check-minild-aarch64-static-got \
+            check-minild-aarch64-static-tls \
             check-minild-loongarch-static-relocs \
+            check-minild-static-nonalloc-relocations \
             check-minild-x86-crt-got-relax \
             check-minild-target-default-symbols \
             check-minild-target-shared-abi-boundary \

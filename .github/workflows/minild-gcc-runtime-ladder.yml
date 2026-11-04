@@ -63,8 +63,9 @@ jobs:
         run: |
           case '${{ matrix.arch }}' in
             x86_64) make MODE=release CFLAGS=-Werror check-minild-x86-crt-got-relax ;;
-            riscv32|riscv64) make MODE=release CFLAGS=-Werror check-minild-riscv-static-tls ;;
-            aarch64) make MODE=release CFLAGS=-Werror check-minild-aarch64-static-got ;;
+            riscv32) make MODE=release CFLAGS=-Werror check-minild-riscv-static-tls check-minild-static-nonalloc-relocations ;;
+            riscv64) make MODE=release CFLAGS=-Werror check-minild-riscv-static-tls ;;
+            aarch64) make MODE=release CFLAGS=-Werror check-minild-aarch64-static-got check-minild-aarch64-static-tls ;;
             loongarch64) make MODE=release CFLAGS=-Werror check-minild-loongarch-static-relocs ;;
           esac
       - name: Run independent five-stage real-C link/runtime probes
