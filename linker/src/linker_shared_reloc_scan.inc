@@ -15,16 +15,17 @@ shared_scan_relocation_requirements(MiniLdState *state,
     for (i = 0U; i < state->relocations.count; ++i) {
         MiniLdReloc *reloc = &state->relocations.entries[i];
         MiniLdResolvedSymbol *target;
-        MiniLdRiscvRelocKind kind = minild_riscv_reloc_kind(reloc->type);
+        MiniLdTargetRelocClass kind = minild_target_reloc_class(reloc->type);
 
         if (reloc->section >= state->work.count ||
             (state->work.sections[reloc->section].flags & SHF_ALLOC) == 0U) {
             continue;
         }
-        if (kind == MINILD_RV_RELOC_NOOP || kind == MINILD_RV_RELOC_ALIGN) {
+        if (kind == MINILD_TARGET_RELOC_NOOP ||
+            kind == MINILD_TARGET_RELOC_ALIGN) {
             continue;
         }
-        if (kind == MINILD_RV_RELOC_GOT) {
+        if (kind == MINILD_TARGET_RELOC_GOT) {
             if (reloc->symbol == SIZE_MAX ||
                 reloc->symbol >= state->resolver.count ||
                 reloc->addend != 0) {
@@ -49,7 +50,7 @@ shared_scan_relocation_requirements(MiniLdState *state,
             }
             continue;
         }
-        if (kind == MINILD_RV_RELOC_TLS_GD) {
+        if (kind == MINILD_TARGET_RELOC_TLS_GD) {
             if (reloc->symbol == SIZE_MAX ||
                 reloc->symbol >= state->resolver.count ||
                 shared->symbols[reloc->symbol].dynsym_index == SIZE_MAX) {
@@ -74,7 +75,7 @@ shared_scan_relocation_requirements(MiniLdState *state,
         if (shared_relocation_is_final_layout(reloc->type)) {
             continue;
         }
-        if (kind == MINILD_RV_RELOC_CALL) {
+        if (kind == MINILD_TARGET_RELOC_CALL) {
             if (reloc->symbol == SIZE_MAX ||
                 reloc->symbol >= state->resolver.count) {
                 fprintf(state->diagnostics,
@@ -96,7 +97,7 @@ shared_scan_relocation_requirements(MiniLdState *state,
             }
             continue;
         }
-        if (kind != MINILD_RV_RELOC_ABS64) {
+        if (kind != MINILD_TARGET_RELOC_ABS64) {
             fprintf(state->diagnostics,
                     "minic-ld: unsupported-shared-relocation:%u\n",
                     reloc->type);

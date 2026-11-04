@@ -21,6 +21,7 @@ target architecture is added.
 | `linker_script_input_selection.inc` | Source-fragment matching and script /DISCARD/ selection before final layout |
 | `linker_input_gc.inc` | Reachability, KEEP roots, section/link-order/group dependency closure and GC pruning |
 | `linker_riscv_input_abi.inc` | One target-owned ELF class/machine/ABI and attributes acceptance contract shared by direct ET_REL inputs, extracted archive members and accepted ET_DYN inputs; also supplies ET_REL/final ELF header identity |
+| `linker_relocatable_output.inc` | ET_REL-only symbol, section and RELA projection into the existing MiniELF relocatable writer; owns its temporary allocations and file sink without constructing a final OutputPlan |
 | `linker.c` | Public ET_EXEC link driver, CLI GC switch and ordered phase calls |
 
 The archive parser and extraction stage does **not** construct a provisional
@@ -44,7 +45,11 @@ them through the shared Core type declarations.
 
 ET_DYN keeps its distinct script pruning and dynamic symbol predeclaration
 before metadata reservation. ET_REL keeps its existing projection and
-emission path. The static pipeline remains the only ET_EXEC phase driver;
+emission path, now physically isolated from the shared Core as one output
+owner. Its symbols and relocations still project directly from the working
+section/resolver state into MiniELF and retain the same target ELF identity;
+the ET_EXEC/ET_DYN FinalElf64Image is not reused for ET_REL.
+The static pipeline remains the only ET_EXEC phase driver;
 the input owner files are not separate compiler objects or additional
 competing pipeline controllers.
 
@@ -54,6 +59,9 @@ competing pipeline controllers.
 acceptance as **target policy**,
 not separate choices to repeat in the archive prefilter, object/DSO
 admission, source-to-work projection, ET_REL writer and final ELF64 writer.
+The same owner now supplies linker-script `OUTPUT_ARCH` comparison and the
+default PIE interpreter path; generic ET_EXEC/ET_DYN drivers use those hooks
+instead of hardcoding a RISC-V architecture spelling or runtime path.
 The target owns the checks for ELF identity, supported ABI flags and the
 existing `.riscv.attributes` treatment. Each generic consumer calls that
 same target policy at its original phase boundary, without inventing

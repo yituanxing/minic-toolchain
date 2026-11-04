@@ -24,7 +24,8 @@ static bool static_build_got(MiniLdState *state, MiniLdStaticGot *got) {
         MiniLdSection *section;
         size_t aligned;
 
-        if (minild_riscv_reloc_kind(reloc->type) != MINILD_RV_RELOC_GOT) {
+        if (minild_target_reloc_class(reloc->type) !=
+            MINILD_TARGET_RELOC_GOT) {
             continue;
         }
         if (reloc->symbol == SIZE_MAX ||

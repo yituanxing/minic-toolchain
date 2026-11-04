@@ -22,6 +22,22 @@ typedef struct MiniLdOutputSection {
     bool have_content;
 } MiniLdOutputSection;
 
+/* Final TLS placement is a property of surviving work fragments, not of
+ * either ELF symbol table or a particular program-header writer. Keep
+ * empty surviving TLS fragments in block_base: they may precede the first
+ * nonempty TLS fragment and affect every STT_TLS value. Segment emission
+ * uses has_nonempty_section; .symtab/.dynsym use has_surviving_section. */
+typedef struct MiniLdTlsProjection {
+    bool has_surviving_section;
+    bool has_nonempty_section;
+    bool has_file_contents;
+    bool valid_extents;
+    uint64_t block_base;
+    uint64_t memory_end;
+    uint64_t file_end;
+    uint64_t alignment;
+} MiniLdTlsProjection;
+
 typedef struct MiniLdOutputPlan {
     MiniLdOutputSection *sections;
     size_t count;
@@ -33,6 +49,7 @@ typedef struct MiniLdOutputPlan {
      * non-ALLOC members that acquire file storage after LOAD layout. */
     size_t *work_file_offsets;
     size_t *command_shndx;
+    MiniLdTlsProjection tls;
 } MiniLdOutputPlan;
 
 static void minild_output_plan_destroy(MiniLdOutputPlan *plan) {
@@ -51,6 +68,84 @@ static void minild_output_plan_destroy(MiniLdOutputPlan *plan) {
 static size_t minild_output_shndx(const MiniLdOutputPlan *plan,
                                   size_t work) {
     return work < plan->work_count ? plan->work_shndx[work] : 0U;
+}
+
+/* Consume the FINAL (post-script, post-GC) section map exactly once. Store
+ * invalid file/size extents for PT_TLS to reject at its existing stage;
+ * static output and TLS symbol values do not require these segment fields. */
+static void minild_output_plan_project_tls(const MiniLdState *state,
+                                           const MiniLdLayout *layout,
+                                           MiniLdOutputPlan *plan) {
+    MiniLdTlsProjection *tls = &plan->tls;
+    size_t i;
+
+    memset(tls, 0, sizeof(*tls));
+    tls->valid_extents = true;
+    tls->alignment = 1U;
+    for (i = 0U; i < plan->work_count; ++i) {
+        const MiniLdSection *section = &state->work.sections[i];
+        uint64_t start;
+        uint64_t end;
+
+        if ((section->flags & (SHF_ALLOC | SHF_TLS)) !=
+                (SHF_ALLOC | SHF_TLS) ||
+            minild_output_shndx(plan, i) == 0U) {
+            continue;
+        }
+        start = layout->work[i].vaddr;
+        if (!tls->has_surviving_section || start < tls->block_base) {
+            tls->block_base = start;
+        }
+        tls->has_surviving_section = true;
+        tls->has_nonempty_section |= section->size != 0U;
+        if (section->align > tls->alignment) {
+            tls->alignment = section->align;
+        }
+        if (section->size > UINT64_MAX - start) {
+            tls->valid_extents = false;
+            continue;
+        }
+        end = start + (uint64_t)section->size;
+        if (end > tls->memory_end) {
+            tls->memory_end = end;
+        }
+        if (section->type != SHT_NOBITS && section->size != 0U) {
+            if (layout->work[i].file_offset == SIZE_MAX) {
+                tls->valid_extents = false;
+            }
+            if (!tls->has_file_contents || end > tls->file_end) {
+                tls->file_end = end;
+            }
+            tls->has_file_contents = true;
+        }
+    }
+}
+
+/* A single checked conversion serves both final symbol tables. A TLS
+ * symbol is an offset from the retained TLS origin, not an absolute VMA.
+ * Callers keep their existing table-specific diagnostic spellings. */
+static bool minild_output_plan_tls_symbol_value(
+    const MiniLdState *state,
+    const MiniLdLayout *layout,
+    const MiniLdOutputPlan *plan,
+    size_t work,
+    uint64_t input_value,
+    uint64_t *result) {
+    uint64_t displacement;
+
+    if (work >= plan->work_count ||
+        !plan->tls.has_surviving_section ||
+        minild_output_shndx(plan, work) == 0U ||
+        (state->work.sections[work].flags & SHF_TLS) == 0U ||
+        layout->work[work].vaddr < plan->tls.block_base) {
+        return false;
+    }
+    displacement = layout->work[work].vaddr - plan->tls.block_base;
+    if (input_value > UINT64_MAX - displacement) {
+        return false;
+    }
+    *result = displacement + input_value;
+    return true;
 }
 
 static int minild_output_section_compare(const void *left,
@@ -292,6 +387,7 @@ static bool minild_output_plan_build(const MiniLdState *state,
             }
         }
     }
+    minild_output_plan_project_tls(state, layout, plan);
     ok = true;
 
 done:

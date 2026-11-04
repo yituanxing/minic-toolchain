@@ -160,7 +160,7 @@ owners = {
         'static_relax_align_section', 'minild_target_relax_section',
     ),
     'linker_riscv_fixup.inc': (
-        'minild_riscv_reloc_kind',
+        'minild_target_reloc_class',
     ),
     'linker_static_got.inc': (
         'static_got_destroy', 'static_fill_got',
@@ -193,7 +193,7 @@ owners = {
 for expected_owner, functions in owners.items():
     for function in functions:
         definition = re.compile(
-            r'\bstatic\s+(?:bool|void|int|size_t|uint64_t|MiniLdRiscvRelocKind)\s+' +
+            r'\bstatic\s+(?:bool|void|int|size_t|uint64_t|MiniLdTargetRelocClass)\s+' +
             re.escape(function) + r'\s*\([^;{}]*\)\s*\{', re.S)
         actual = {name: len(definition.findall(contents))
                   for name, contents in sources.items()}

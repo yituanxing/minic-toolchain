@@ -297,40 +297,39 @@ static bool minild_riscv_is_arithmetic_relocation(uint32_t type) {
     }
 }
 
-/* Only the RISC-V psABI type is classified here.  Whether a relocation
- * reserves a dynamic record, needs a PLT, or can be resolved without a
- * loader is an output-mode decision (especially under PIE/preemption).
- * The same shape classification feeds static and shared pre-layout scans. */
-typedef enum MiniLdRiscvRelocKind {
-    MINILD_RV_RELOC_NOOP,
-    MINILD_RV_RELOC_ALIGN,
-    MINILD_RV_RELOC_ABS32,
-    MINILD_RV_RELOC_ABS64,
-    MINILD_RV_RELOC_ARITHMETIC,
-    MINILD_RV_RELOC_FINAL,
-    MINILD_RV_RELOC_CALL,
-    MINILD_RV_RELOC_GOT,
-    MINILD_RV_RELOC_TLS_GD,
-    MINILD_RV_RELOC_UNSUPPORTED
-} MiniLdRiscvRelocKind;
+/* The RISC-V backend maps psABI relocation numbers to mode-independent
+ * semantic classes.  ET_REL preserves original types; ET_EXEC and ET_DYN
+ * decide resolution/preemption/liveness using these classes, never by
+ * decoding ISA relocation numbers a second time. */
+typedef enum MiniLdTargetRelocClass {
+    MINILD_TARGET_RELOC_NOOP,
+    MINILD_TARGET_RELOC_ALIGN,
+    MINILD_TARGET_RELOC_ABS32,
+    MINILD_TARGET_RELOC_ABS64,
+    MINILD_TARGET_RELOC_ARITHMETIC,
+    MINILD_TARGET_RELOC_FINAL,
+    MINILD_TARGET_RELOC_PCREL_LO,
+    MINILD_TARGET_RELOC_CALL,
+    MINILD_TARGET_RELOC_GOT,
+    MINILD_TARGET_RELOC_TLS_GD,
+    MINILD_TARGET_RELOC_UNSUPPORTED
+} MiniLdTargetRelocClass;
 
-static MiniLdRiscvRelocKind minild_riscv_reloc_kind(uint32_t type) {
+static MiniLdTargetRelocClass minild_target_reloc_class(uint32_t type) {
     if (minild_riscv_is_arithmetic_relocation(type)) {
-        return MINILD_RV_RELOC_ARITHMETIC;
+        return MINILD_TARGET_RELOC_ARITHMETIC;
     }
     switch (type) {
     case R_RISCV_NONE:
     case R_RISCV_RELAX:
-        return MINILD_RV_RELOC_NOOP;
+        return MINILD_TARGET_RELOC_NOOP;
     case R_RISCV_ALIGN:
-        return MINILD_RV_RELOC_ALIGN;
+        return MINILD_TARGET_RELOC_ALIGN;
     case R_RISCV_32:
-        return MINILD_RV_RELOC_ABS32;
+        return MINILD_TARGET_RELOC_ABS32;
     case R_RISCV_64:
-        return MINILD_RV_RELOC_ABS64;
+        return MINILD_TARGET_RELOC_ABS64;
     case R_RISCV_PCREL_HI20:
-    case R_RISCV_PCREL_LO12_I:
-    case R_RISCV_PCREL_LO12_S:
     case R_RISCV_HI20:
     case R_RISCV_LO12_I:
     case R_RISCV_LO12_S:
@@ -339,16 +338,19 @@ static MiniLdRiscvRelocKind minild_riscv_reloc_kind(uint32_t type) {
     case R_RISCV_RVC_BRANCH:
     case R_RISCV_RVC_JUMP:
     case R_RISCV_32_PCREL:
-        return MINILD_RV_RELOC_FINAL;
+        return MINILD_TARGET_RELOC_FINAL;
+    case R_RISCV_PCREL_LO12_I:
+    case R_RISCV_PCREL_LO12_S:
+        return MINILD_TARGET_RELOC_PCREL_LO;
     case R_RISCV_CALL:
     case R_RISCV_CALL_PLT:
-        return MINILD_RV_RELOC_CALL;
+        return MINILD_TARGET_RELOC_CALL;
     case R_RISCV_GOT_HI20:
-        return MINILD_RV_RELOC_GOT;
+        return MINILD_TARGET_RELOC_GOT;
     case R_RISCV_TLS_GD_HI20:
-        return MINILD_RV_RELOC_TLS_GD;
+        return MINILD_TARGET_RELOC_TLS_GD;
     default:
-        return MINILD_RV_RELOC_UNSUPPORTED;
+        return MINILD_TARGET_RELOC_UNSUPPORTED;
     }
 }
 
@@ -356,20 +358,75 @@ static MiniLdRiscvRelocKind minild_riscv_reloc_kind(uint32_t type) {
  * carries no binding or reachability dependency.  Keep that ISA decision
  * here instead of spelling RISC-V relocation numbers in generic selection. */
 static bool minild_target_ignored_script_reloc(uint32_t type) {
-    MiniLdRiscvRelocKind kind = minild_riscv_reloc_kind(type);
+    MiniLdTargetRelocClass kind = minild_target_reloc_class(type);
 
-    return kind == MINILD_RV_RELOC_NOOP || kind == MINILD_RV_RELOC_ALIGN;
+    return kind == MINILD_TARGET_RELOC_NOOP ||
+           kind == MINILD_TARGET_RELOC_ALIGN;
 }
 
-static bool minild_riscv_reloc_final_layout(uint32_t type) {
-    switch (minild_riscv_reloc_kind(type)) {
-    case MINILD_RV_RELOC_ARITHMETIC:
-    case MINILD_RV_RELOC_FINAL:
-    case MINILD_RV_RELOC_GOT:
-    case MINILD_RV_RELOC_TLS_GD:
+static bool minild_target_reloc_at_final_layout(uint32_t type) {
+    switch (minild_target_reloc_class(type)) {
+    case MINILD_TARGET_RELOC_ARITHMETIC:
+    case MINILD_TARGET_RELOC_FINAL:
+    case MINILD_TARGET_RELOC_PCREL_LO:
+    case MINILD_TARGET_RELOC_GOT:
+    case MINILD_TARGET_RELOC_TLS_GD:
         return true;
     default:
         return false;
+    }
+}
+
+/* Dynamic relocation semantics are target-neutral: the RISC-V backend
+ * selects actual ELF relocation numbers for each loader operation. */
+typedef enum MiniLdDynamicRelocSemantic {
+    MINILD_DYNAMIC_RELOC_RELATIVE,
+    MINILD_DYNAMIC_RELOC_ABSOLUTE,
+    MINILD_DYNAMIC_RELOC_TLS_MODULE,
+    MINILD_DYNAMIC_RELOC_TLS_OFFSET,
+    MINILD_DYNAMIC_RELOC_JUMP_SLOT
+} MiniLdDynamicRelocSemantic;
+
+static Elf64_Xword minild_target_dynamic_reloc_info(
+    size_t symbol_index, MiniLdDynamicRelocSemantic semantic) {
+    uint32_t type;
+
+    switch (semantic) {
+    case MINILD_DYNAMIC_RELOC_RELATIVE:
+        type = R_RISCV_RELATIVE;
+        break;
+    case MINILD_DYNAMIC_RELOC_ABSOLUTE:
+        type = R_RISCV_64;
+        break;
+    case MINILD_DYNAMIC_RELOC_TLS_MODULE:
+        type = R_RISCV_TLS_DTPMOD64;
+        break;
+    case MINILD_DYNAMIC_RELOC_TLS_OFFSET:
+        type = R_RISCV_TLS_DTPREL64;
+        break;
+    case MINILD_DYNAMIC_RELOC_JUMP_SLOT:
+        type = R_RISCV_JUMP_SLOT;
+        break;
+    default:
+        return 0U;
+    }
+    return ELF64_R_INFO(symbol_index, type);
+}
+
+/* Word width and psABI truncation belong to the target. Caller retains
+ * section bounds checks and its mode-specific diagnostics. */
+static size_t minild_target_absolute_width(MiniLdTargetRelocClass kind) {
+    return kind == MINILD_TARGET_RELOC_ABS32 ? 4U :
+           kind == MINILD_TARGET_RELOC_ABS64 ? 8U : 0U;
+}
+
+static void minild_target_store_absolute(unsigned char *address,
+                                         MiniLdTargetRelocClass kind,
+                                         uint64_t value) {
+    if (kind == MINILD_TARGET_RELOC_ABS32) {
+        store_u32le(address, (uint32_t)value);
+    } else {
+        store_u64le(address, value);
     }
 }
 
@@ -377,12 +434,12 @@ static bool minild_riscv_reloc_final_layout(uint32_t type) {
  * stage, not to either ET_EXEC or ET_DYN output driver.  The table is built
  * only after layout, when R_RISCV_ALIGN has settled all current work offsets.
  * Section identities are already stable at that point. */
-typedef struct MiniLdRiscvPcrelPairs {
+typedef struct MiniLdTargetRelocPairs {
     MiniLdPcrelSlot *slots;
     size_t capacity;
-} MiniLdRiscvPcrelPairs;
+} MiniLdTargetRelocPairs;
 
-static bool minild_riscv_pairs_init(MiniLdRiscvPcrelPairs *pairs,
+static bool minild_target_reloc_pairs_init(MiniLdTargetRelocPairs *pairs,
                                    size_t relocation_count,
                                    bool shared_output,
                                    FILE *diagnostics) {
@@ -404,7 +461,7 @@ static bool minild_riscv_pairs_init(MiniLdRiscvPcrelPairs *pairs,
     return true;
 }
 
-static void minild_riscv_pairs_destroy(MiniLdRiscvPcrelPairs *pairs) {
+static void minild_target_reloc_pairs_destroy(MiniLdTargetRelocPairs *pairs) {
     free(pairs->slots);
     pairs->slots = NULL;
     pairs->capacity = 0U;
@@ -413,7 +470,7 @@ static void minild_riscv_pairs_destroy(MiniLdRiscvPcrelPairs *pairs) {
 /* All ELF input addends are signed, but work-section and symbol offsets are
  * unsigned.  Keep coordinates in unsigned space and reject out-of-bounds
  * anchors instead of wrapping negative addends into arbitrary HI20 sites. */
-static bool minild_riscv_checked_add_u64_s64(uint64_t base,
+static bool minild_target_checked_add_u64_s64(uint64_t base,
                                              int64_t addend,
                                              uint64_t *result) {
     if (addend >= 0) {
@@ -436,7 +493,7 @@ static bool minild_riscv_checked_add_u64_s64(uint64_t base,
  * In particular, the kernel half of RV64 address space is valid input:
  * neither an unsigned-to-signed out-of-range cast nor a signed subtraction
  * is needed to obtain its signed PC-relative displacement. */
-static int64_t minild_riscv_signed_bits(uint64_t bits) {
+static int64_t minild_target_signed_bits(uint64_t bits) {
     if (bits <= (uint64_t)INT64_MAX) {
         return (int64_t)bits;
     }
@@ -444,9 +501,9 @@ static int64_t minild_riscv_signed_bits(uint64_t bits) {
 }
 
 /* Preserve the low 64-bit S+A bit pattern without a signed overflow. */
-static int64_t minild_riscv_addend_bits(uint64_t symbol_value,
+static int64_t minild_target_addend_bits(uint64_t symbol_value,
                                        int64_t addend) {
-    return minild_riscv_signed_bits(symbol_value + (uint64_t)addend);
+    return minild_target_signed_bits(symbol_value + (uint64_t)addend);
 }
 
 /* RV64 PC-relative arithmetic is modulo 2^64.  A high-half place and target
@@ -454,7 +511,7 @@ static int64_t minild_riscv_addend_bits(uint64_t symbol_value,
  * would break legitimate kernel links.  Width-constrained relocations still
  * validate the resulting signed displacement at their individual encoder. */
 static int64_t minild_riscv_pc_delta_bits(int64_t target, uint64_t place) {
-    return minild_riscv_signed_bits((uint64_t)target - place);
+    return minild_target_signed_bits((uint64_t)target - place);
 }
 
 /* The caller resolves target to S+A, except GOT/TLS GD where it supplies
@@ -462,8 +519,8 @@ static int64_t minild_riscv_pc_delta_bits(int64_t target, uint64_t place) {
  * dispatcher is therefore independent of PIE preemption and output-section
  * ownership.  CALL pairs are patched only when their output mode resolves
  * the final destination, which is later than PLT reservation for ET_DYN. */
-static bool minild_riscv_apply_final_instruction(
-    MiniLdRiscvPcrelPairs *pairs,
+static bool minild_target_apply_final_instruction(
+    MiniLdTargetRelocPairs *pairs,
     MiniLdSection *source,
     const MiniLdReloc *reloc,
     int64_t target,
@@ -576,14 +633,14 @@ static bool minild_riscv_apply_final_instruction(
     }
 }
 
-typedef enum MiniLdRiscvLo12Status {
-    MINILD_RV_LO12_OK,
-    MINILD_RV_LO12_MISSING,
-    MINILD_RV_LO12_PATCH_FAILED
-} MiniLdRiscvLo12Status;
+typedef enum MiniLdTargetLo12Status {
+    MINILD_TARGET_LO12_OK,
+    MINILD_TARGET_LO12_MISSING,
+    MINILD_TARGET_LO12_PATCH_FAILED
+} MiniLdTargetLo12Status;
 
-static MiniLdRiscvLo12Status minild_riscv_apply_pcrel_lo12(
-    const MiniLdRiscvPcrelPairs *pairs,
+static MiniLdTargetLo12Status minild_target_apply_pcrel_lo12(
+    const MiniLdTargetRelocPairs *pairs,
     MiniLdSection *source,
     const MiniLdReloc *reloc,
     size_t anchor_section,
@@ -593,7 +650,7 @@ static MiniLdRiscvLo12Status minild_riscv_apply_pcrel_lo12(
 
     if (!pcrel_find(pairs->slots, pairs->capacity,
                     anchor_section, anchor_offset, &delta)) {
-        return MINILD_RV_LO12_MISSING;
+        return MINILD_TARGET_LO12_MISSING;
     }
     if ((reloc->type == R_RISCV_PCREL_LO12_I &&
          static_patch_itype(source, reloc->offset,
@@ -601,12 +658,12 @@ static MiniLdRiscvLo12Status minild_riscv_apply_pcrel_lo12(
         (reloc->type == R_RISCV_PCREL_LO12_S &&
          static_patch_stype(source, reloc->offset,
                             riscv_lo12(delta), diagnostics))) {
-        return MINILD_RV_LO12_OK;
+        return MINILD_TARGET_LO12_OK;
     }
-    return MINILD_RV_LO12_PATCH_FAILED;
+    return MINILD_TARGET_LO12_PATCH_FAILED;
 }
 
-static bool minild_riscv_apply_arithmetic(MiniLdSection *section,
+static bool minild_target_apply_arithmetic(MiniLdSection *section,
                                            const MiniLdReloc *reloc,
                                            int64_t target,
                                            bool shared_output,
@@ -761,12 +818,12 @@ static uint32_t minild_riscv_encode_itype(unsigned opcode,
            (uint32_t)opcode;
 }
 
-static void minild_riscv_emit_plt_entry(unsigned char *data,
+static void minild_target_emit_plt_entry(unsigned char *data,
                                         size_t offset,
                                         uint64_t entry_address,
                                         uint64_t slot_address) {
     int64_t delta = minild_riscv_pc_delta_bits(
-        minild_riscv_signed_bits(slot_address), entry_address);
+        minild_target_signed_bits(slot_address), entry_address);
     int64_t hi = riscv_hi20(delta);
     int64_t lo = riscv_lo12(delta);
 

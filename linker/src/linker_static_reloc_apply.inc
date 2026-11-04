@@ -5,10 +5,10 @@
 static bool static_apply_relocations(MiniLdState *state,
                                      const MiniLdLayout *layout,
                                      const MiniLdStaticGot *got) {
-    MiniLdRiscvPcrelPairs pairs;
+    MiniLdTargetRelocPairs pairs;
     size_t i;
 
-    if (!minild_riscv_pairs_init(&pairs, state->relocations.count,
+    if (!minild_target_reloc_pairs_init(&pairs, state->relocations.count,
                                  false, state->diagnostics)) {
         return false;
     }
@@ -23,6 +23,7 @@ static bool static_apply_relocations(MiniLdState *state,
         uint64_t place;
         int64_t target;
         const char *symbol_name = NULL;
+        MiniLdTargetRelocClass kind = minild_target_reloc_class(reloc->type);
 
         if (layout->scripted &&
             ((section->flags & SHF_ALLOC) == 0U ||
@@ -30,11 +31,9 @@ static bool static_apply_relocations(MiniLdState *state,
             continue;
         }
         place = layout->work[reloc->section].vaddr + reloc->offset;
-        if (reloc->type == R_RISCV_NONE ||
-            reloc->type == R_RISCV_RELAX ||
-            reloc->type == R_RISCV_ALIGN ||
-            reloc->type == R_RISCV_PCREL_LO12_I ||
-            reloc->type == R_RISCV_PCREL_LO12_S) {
+        if (kind == MINILD_TARGET_RELOC_NOOP ||
+            kind == MINILD_TARGET_RELOC_ALIGN ||
+            kind == MINILD_TARGET_RELOC_PCREL_LO) {
             continue;
         }
         if (reloc->symbol != SIZE_MAX) {
@@ -46,38 +45,33 @@ static bool static_apply_relocations(MiniLdState *state,
                 symbol_name = state->resolver.entries[reloc->symbol].name;
             }
         }
-        target = minild_riscv_addend_bits(symbol_value, reloc->addend);
+        target = minild_target_addend_bits(symbol_value, reloc->addend);
 
-        if (minild_riscv_is_arithmetic_relocation(reloc->type)) {
-            if (!minild_riscv_apply_arithmetic(
+        if (kind == MINILD_TARGET_RELOC_ARITHMETIC) {
+            if (!minild_target_apply_arithmetic(
                     section, reloc, target, false, state->diagnostics)) {
                 goto fail;
             }
             continue;
         }
 
-        switch (reloc->type) {
-        case R_RISCV_64:
+        switch (kind) {
+        case MINILD_TARGET_RELOC_ABS64:
+        case MINILD_TARGET_RELOC_ABS32:
             if (section->type == SHT_NOBITS || reloc->offset > SIZE_MAX ||
-                !range_ok((size_t)reloc->offset, 8U, section->size)) {
+                !range_ok((size_t)reloc->offset,
+                          minild_target_absolute_width(kind), section->size)) {
                 fprintf(state->diagnostics,
-                        "minic-ld: R_RISCV_64-offset-out-of-range\n");
+                        "minic-ld: %s\n",
+                        kind == MINILD_TARGET_RELOC_ABS64
+                            ? "R_RISCV_64-offset-out-of-range"
+                            : "R_RISCV_32-offset-out-of-range");
                 goto fail;
             }
-            store_u64le(section->data + (size_t)reloc->offset,
-                        (uint64_t)target);
+            minild_target_store_absolute(section->data + (size_t)reloc->offset,
+                                         kind, (uint64_t)target);
             break;
-        case R_RISCV_32:
-            if (section->type == SHT_NOBITS || reloc->offset > SIZE_MAX ||
-                !range_ok((size_t)reloc->offset, 4U, section->size)) {
-                fprintf(state->diagnostics,
-                        "minic-ld: R_RISCV_32-offset-out-of-range\n");
-                goto fail;
-            }
-            store_u32le(section->data + (size_t)reloc->offset,
-                        (uint32_t)target);
-            break;
-        case R_RISCV_GOT_HI20:
+        case MINILD_TARGET_RELOC_GOT:
             if (!got->present || reloc->symbol == SIZE_MAX ||
                 reloc->symbol >= got->symbol_count ||
                 got->slot_offsets[reloc->symbol] == SIZE_MAX ||
@@ -86,14 +80,14 @@ static bool static_apply_relocations(MiniLdState *state,
                         "minic-ld: invalid-R_RISCV_GOT_HI20-slot\n");
                 goto fail;
             }
-            target = minild_riscv_addend_bits(
+            target = minild_target_addend_bits(
                 layout->work[got->section].vaddr +
                     (uint64_t)got->slot_offsets[reloc->symbol],
                 0);
             /* Fall through to the target-level final instruction writer. */
             /* FALLTHROUGH */
         default:
-            if (!minild_riscv_apply_final_instruction(
+            if (!minild_target_apply_final_instruction(
                     &pairs, section, reloc, target, place,
                     false, symbol_name, state->diagnostics)) {
                 goto fail;
@@ -108,11 +102,11 @@ static bool static_apply_relocations(MiniLdState *state,
     for (i = 0U; i < state->relocations.count; ++i) {
         MiniLdReloc *reloc = &state->relocations.entries[i];
         MiniLdResolvedSymbol *label;
-        MiniLdRiscvLo12Status result;
+        MiniLdTargetLo12Status result;
         uint64_t anchor_offset;
 
-        if (reloc->type != R_RISCV_PCREL_LO12_I &&
-            reloc->type != R_RISCV_PCREL_LO12_S) {
+        if (minild_target_reloc_class(reloc->type) !=
+            MINILD_TARGET_RELOC_PCREL_LO) {
             continue;
         }
         if (layout->scripted &&
@@ -128,30 +122,30 @@ static bool static_apply_relocations(MiniLdState *state,
         label = &state->resolver.entries[reloc->symbol];
         if (label->section < 0 ||
             (size_t)label->section >= state->work.count ||
-            !minild_riscv_checked_add_u64_s64(
+            !minild_target_checked_add_u64_s64(
                 label->value, reloc->addend, &anchor_offset)) {
             fprintf(state->diagnostics,
                     "minic-ld: missing-matching-pcrel-hi20\n");
             goto fail;
         }
-        result = minild_riscv_apply_pcrel_lo12(
+        result = minild_target_apply_pcrel_lo12(
             &pairs, &state->work.sections[reloc->section], reloc,
             (size_t)label->section, anchor_offset,
             state->diagnostics);
-        if (result == MINILD_RV_LO12_MISSING) {
+        if (result == MINILD_TARGET_LO12_MISSING) {
             fprintf(state->diagnostics,
                     "minic-ld: missing-matching-pcrel-hi20\n");
             goto fail;
         }
-        if (result != MINILD_RV_LO12_OK) {
+        if (result != MINILD_TARGET_LO12_OK) {
             goto fail;
         }
     }
 
-    minild_riscv_pairs_destroy(&pairs);
+    minild_target_reloc_pairs_destroy(&pairs);
     return true;
 
 fail:
-    minild_riscv_pairs_destroy(&pairs);
+    minild_target_reloc_pairs_destroy(&pairs);
     return false;
 }

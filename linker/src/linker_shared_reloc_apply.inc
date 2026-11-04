@@ -96,7 +96,8 @@ static bool shared_patch_arithmetic_relocations(
         int64_t target;
         bool live;
 
-        if (!minild_riscv_is_arithmetic_relocation(reloc->type)) {
+        if (minild_target_reloc_class(reloc->type) !=
+            MINILD_TARGET_RELOC_ARITHMETIC) {
             continue;
         }
         if (!shared_relocation_live_source(state, output_plan,
@@ -112,9 +113,9 @@ static bool shared_patch_arithmetic_relocations(
                 (section->flags & SHF_ALLOC) == 0U, &symbol_value)) {
             return false;
         }
-        target = minild_riscv_addend_bits(symbol_value, reloc->addend);
+        target = minild_target_addend_bits(symbol_value, reloc->addend);
 
-        if (!minild_riscv_apply_arithmetic(
+        if (!minild_target_apply_arithmetic(
                 section, reloc, target, true, state->diagnostics)) {
             return false;
         }
@@ -176,7 +177,8 @@ static bool shared_fill_relocations(MiniLdState *state,
             if (!minild_layout_resolve_symbol(state, layout, i, &target_value)) {
                 return false;
             }
-            output.r_info = ELF64_R_INFO(0U, R_RISCV_RELATIVE);
+            output.r_info = minild_target_dynamic_reloc_info(
+                0U, MINILD_DYNAMIC_RELOC_RELATIVE);
             output.r_addend = (Elf64_Sxword)target_value;
         } else {
             size_t dynamic_index = shared->symbols[i].dynsym_index;
@@ -187,7 +189,8 @@ static bool shared_fill_relocations(MiniLdState *state,
                         target->name);
                 return false;
             }
-            output.r_info = ELF64_R_INFO(dynamic_index, R_RISCV_64);
+            output.r_info = minild_target_dynamic_reloc_info(
+                dynamic_index, MINILD_DYNAMIC_RELOC_ABSOLUTE);
             output.r_addend = 0;
         }
         memcpy(rela->data + write_index * sizeof(output),
@@ -203,14 +206,14 @@ static bool shared_fill_relocations(MiniLdState *state,
         Elf64_Rela output;
         size_t dynamic_index = 0U;
         bool live;
+        MiniLdTargetRelocClass kind = minild_target_reloc_class(input->type);
 
         if (!shared_relocation_live_source(state, output_plan,
                                            input->section, &live)) {
             return false;
         }
-        if (!live || input->type == R_RISCV_NONE ||
-            input->type == R_RISCV_RELAX ||
-            input->type == R_RISCV_ALIGN) {
+        if (!live || kind == MINILD_TARGET_RELOC_NOOP ||
+            kind == MINILD_TARGET_RELOC_ALIGN) {
             continue;
         }
         source = &state->work.sections[input->section];
@@ -219,10 +222,9 @@ static bool shared_fill_relocations(MiniLdState *state,
             uint64_t value;
             size_t width;
 
-            if (input->type == R_RISCV_CALL ||
-                input->type == R_RISCV_CALL_PLT ||
-                input->type == R_RISCV_GOT_HI20 ||
-                input->type == R_RISCV_TLS_GD_HI20) {
+            if (kind == MINILD_TARGET_RELOC_CALL ||
+                kind == MINILD_TARGET_RELOC_GOT ||
+                kind == MINILD_TARGET_RELOC_TLS_GD) {
                 fprintf(state->diagnostics,
                         "minic-ld: unsupported-shared-nonalloc-relocation:%u\n",
                         input->type);
@@ -231,14 +233,14 @@ static bool shared_fill_relocations(MiniLdState *state,
             if (shared_relocation_is_final_layout(input->type)) {
                 continue;
             }
-            if (input->type != R_RISCV_64 &&
-                input->type != R_RISCV_32) {
+            if (kind != MINILD_TARGET_RELOC_ABS64 &&
+                kind != MINILD_TARGET_RELOC_ABS32) {
                 fprintf(state->diagnostics,
                         "minic-ld: unsupported-shared-nonalloc-relocation:%u\n",
                         input->type);
                 return false;
             }
-            width = input->type == R_RISCV_64 ? 8U : 4U;
+            width = minild_target_absolute_width(kind);
             if (source->type == SHT_NOBITS || input->offset > SIZE_MAX ||
                 !range_ok((size_t)input->offset, width, source->size)) {
                 fprintf(state->diagnostics,
@@ -250,22 +252,15 @@ static bool shared_fill_relocations(MiniLdState *state,
                 return false;
             }
             value = resolved + (uint64_t)input->addend;
-            if (input->type == R_RISCV_32) {
-                /* R_RISCV_32 writes the low word of S+A, matching the
-                 * psABI and the existing static-link relocation path. */
-                store_u32le(source->data + (size_t)input->offset,
-                            (uint32_t)value);
-            } else {
-                store_u64le(source->data + (size_t)input->offset, value);
-            }
+            minild_target_store_absolute(
+                source->data + (size_t)input->offset, kind, value);
             continue;
         }
-        if (input->type == R_RISCV_CALL ||
-            input->type == R_RISCV_CALL_PLT ||
+        if (kind == MINILD_TARGET_RELOC_CALL ||
             shared_relocation_is_final_layout(input->type)) {
             continue;
         }
-        if (input->type != R_RISCV_64 ||
+        if (kind != MINILD_TARGET_RELOC_ABS64 ||
             input->symbol == SIZE_MAX ||
             input->symbol >= state->resolver.count) {
             fprintf(state->diagnostics,
@@ -293,8 +288,9 @@ static bool shared_fill_relocations(MiniLdState *state,
                         target->name);
                 return false;
             }
-            store_u64le(source->data + (size_t)input->offset,
-                        target_value + (uint64_t)input->addend);
+            minild_target_store_absolute(
+                source->data + (size_t)input->offset, kind,
+                target_value + (uint64_t)input->addend);
             continue;
         }
         if (target->section == MINILD_SECTION_ABS &&
@@ -318,9 +314,10 @@ static bool shared_fill_relocations(MiniLdState *state,
                                        &target_value)) {
                 return false;
             }
-            output.r_info = ELF64_R_INFO(0U, R_RISCV_RELATIVE);
+            output.r_info = minild_target_dynamic_reloc_info(
+                0U, MINILD_DYNAMIC_RELOC_RELATIVE);
             output.r_addend =
-                minild_riscv_addend_bits(target_value, input->addend);
+                minild_target_addend_bits(target_value, input->addend);
         } else {
             dynamic_index = shared->symbols[input->symbol].dynsym_index;
             if (dynamic_index == SIZE_MAX) {
@@ -329,10 +326,12 @@ static bool shared_fill_relocations(MiniLdState *state,
                         target->name);
                 return false;
             }
-            output.r_info = ELF64_R_INFO(dynamic_index, R_RISCV_64);
+            output.r_info = minild_target_dynamic_reloc_info(
+                dynamic_index, MINILD_DYNAMIC_RELOC_ABSOLUTE);
             output.r_addend = input->addend;
         }
-        store_u64le(source->data + (size_t)input->offset, 0U);
+        minild_target_store_absolute(
+            source->data + (size_t)input->offset, kind, 0U);
         memcpy(rela->data + write_index * sizeof(output),
                &output,
                sizeof(output));
@@ -360,8 +359,8 @@ static bool shared_fill_relocations(MiniLdState *state,
 
         memset(&output, 0, sizeof(output));
         output.r_offset = slot_address;
-        output.r_info =
-            ELF64_R_INFO(dynamic_index, R_RISCV_TLS_DTPMOD64);
+        output.r_info = minild_target_dynamic_reloc_info(
+            dynamic_index, MINILD_DYNAMIC_RELOC_TLS_MODULE);
         memcpy(rela->data + write_index * sizeof(output),
                &output,
                sizeof(output));
@@ -369,8 +368,8 @@ static bool shared_fill_relocations(MiniLdState *state,
 
         memset(&output, 0, sizeof(output));
         output.r_offset = slot_address + 8U;
-        output.r_info =
-            ELF64_R_INFO(dynamic_index, R_RISCV_TLS_DTPREL64);
+        output.r_info = minild_target_dynamic_reloc_info(
+            dynamic_index, MINILD_DYNAMIC_RELOC_TLS_OFFSET);
         memcpy(rela->data + write_index * sizeof(output),
                &output,
                sizeof(output));
@@ -392,14 +391,14 @@ static bool shared_patch_final_layout_relocations(
     const MiniLdLayout *layout,
     const MiniLdOutputPlan *output_plan,
     const MiniLdSharedImage *shared) {
-    MiniLdRiscvPcrelPairs pairs = {0};
+    MiniLdTargetRelocPairs pairs = {0};
     size_t i;
     bool ok = false;
 
     if (!shared_patch_arithmetic_relocations(state, layout, output_plan)) {
         return false;
     }
-    if (!minild_riscv_pairs_init(&pairs, state->relocations.count, true,
+    if (!minild_target_reloc_pairs_init(&pairs, state->relocations.count, true,
                                 state->diagnostics)) {
         return false;
     }
@@ -412,20 +411,18 @@ static bool shared_patch_final_layout_relocations(
         int64_t target;
         bool live;
         bool nonalloc;
+        MiniLdTargetRelocClass kind = minild_target_reloc_class(reloc->type);
 
         if (!shared_relocation_live_source(state, output_plan,
                                            reloc->section, &live)) {
             goto done;
         }
-        if (!live || reloc->type == R_RISCV_NONE ||
-            reloc->type == R_RISCV_RELAX ||
-            reloc->type == R_RISCV_ALIGN ||
-            reloc->type == R_RISCV_64 ||
-            reloc->type == R_RISCV_CALL ||
-            reloc->type == R_RISCV_CALL_PLT ||
-            reloc->type == R_RISCV_PCREL_LO12_I ||
-            reloc->type == R_RISCV_PCREL_LO12_S ||
-            minild_riscv_is_arithmetic_relocation(reloc->type)) {
+        if (!live || kind == MINILD_TARGET_RELOC_NOOP ||
+            kind == MINILD_TARGET_RELOC_ALIGN ||
+            kind == MINILD_TARGET_RELOC_ABS64 ||
+            kind == MINILD_TARGET_RELOC_CALL ||
+            kind == MINILD_TARGET_RELOC_PCREL_LO ||
+            kind == MINILD_TARGET_RELOC_ARITHMETIC) {
             continue;
         }
         if (!shared_relocation_is_final_layout(reloc->type)) {
@@ -433,16 +430,16 @@ static bool shared_patch_final_layout_relocations(
         }
         source = &state->work.sections[reloc->section];
         nonalloc = (source->flags & SHF_ALLOC) == 0U;
-        if (nonalloc && (reloc->type == R_RISCV_GOT_HI20 ||
-                         reloc->type == R_RISCV_TLS_GD_HI20)) {
+        if (nonalloc && (kind == MINILD_TARGET_RELOC_GOT ||
+                         kind == MINILD_TARGET_RELOC_TLS_GD)) {
             fprintf(state->diagnostics,
                     "minic-ld: unsupported-shared-nonalloc-relocation:%u\n",
                     reloc->type);
             goto done;
         }
         if (reloc->symbol != SIZE_MAX &&
-            reloc->type != R_RISCV_GOT_HI20 &&
-            reloc->type != R_RISCV_TLS_GD_HI20 &&
+            kind != MINILD_TARGET_RELOC_GOT &&
+            kind != MINILD_TARGET_RELOC_TLS_GD &&
             !shared_resolve_static_relocation_target(
                 state, layout, output_plan, reloc, nonalloc,
                 &symbol_value)) {
@@ -458,10 +455,10 @@ static bool shared_patch_final_layout_relocations(
         } else {
             place = layout->work[reloc->section].vaddr + reloc->offset;
         }
-        target = minild_riscv_addend_bits(symbol_value, reloc->addend);
+        target = minild_target_addend_bits(symbol_value, reloc->addend);
         /* The shared linker chooses GOT/TLSGD slot addresses and output
          * liveness; the RISC-V target owner encodes all instruction types. */
-        if (reloc->type == R_RISCV_GOT_HI20) {
+        if (kind == MINILD_TARGET_RELOC_GOT) {
             if (reloc->symbol == SIZE_MAX ||
                 reloc->symbol >= state->resolver.count ||
                 shared->symbols[reloc->symbol].got_slot_offset == SIZE_MAX) {
@@ -469,10 +466,10 @@ static bool shared_patch_final_layout_relocations(
                         "minic-ld: missing-shared-got-slot\n");
                 goto done;
             }
-            target = minild_riscv_signed_bits(
+            target = minild_target_signed_bits(
                 layout->work[shared->got_section].vaddr +
                 shared->symbols[reloc->symbol].got_slot_offset);
-        } else if (reloc->type == R_RISCV_TLS_GD_HI20) {
+        } else if (kind == MINILD_TARGET_RELOC_TLS_GD) {
             if (reloc->symbol == SIZE_MAX ||
                 reloc->symbol >= state->resolver.count ||
                 shared->symbols[reloc->symbol].tls_gd_offset == SIZE_MAX) {
@@ -480,11 +477,11 @@ static bool shared_patch_final_layout_relocations(
                         "minic-ld: missing-shared-tls-gd-slot\n");
                 goto done;
             }
-            target = minild_riscv_addend_bits(
+            target = minild_target_addend_bits(
                 layout->work[shared->got_section].vaddr +
                 shared->symbols[reloc->symbol].tls_gd_offset, reloc->addend);
         }
-        if (!minild_riscv_apply_final_instruction(
+        if (!minild_target_apply_final_instruction(
                 &pairs, source, reloc, target, place, true,
                 reloc->symbol < state->resolver.count
                     ? state->resolver.entries[reloc->symbol].name : "<none>",
@@ -498,11 +495,11 @@ static bool shared_patch_final_layout_relocations(
         MiniLdResolvedSymbol *anchor;
         MiniLdSection *source;
         uint64_t anchor_offset;
-        MiniLdRiscvLo12Status status;
+        MiniLdTargetLo12Status status;
         bool live;
 
-        if (reloc->type != R_RISCV_PCREL_LO12_I &&
-            reloc->type != R_RISCV_PCREL_LO12_S) {
+        if (minild_target_reloc_class(reloc->type) !=
+            MINILD_TARGET_RELOC_PCREL_LO) {
             continue;
         }
         if (!shared_relocation_live_source(state, output_plan,
@@ -526,7 +523,7 @@ static bool shared_patch_final_layout_relocations(
                     anchor->name);
             goto done;
         }
-        if (!minild_riscv_checked_add_u64_s64(
+        if (!minild_target_checked_add_u64_s64(
                 anchor->value, reloc->addend, &anchor_offset)) {
             fprintf(state->diagnostics,
                     "minic-ld: missing-shared-pcrel-hi20:%s\n",
@@ -534,17 +531,17 @@ static bool shared_patch_final_layout_relocations(
             goto done;
         }
         source = &state->work.sections[reloc->section];
-        status = minild_riscv_apply_pcrel_lo12(&pairs, source, reloc,
+        status = minild_target_apply_pcrel_lo12(&pairs, source, reloc,
                                                (size_t)anchor->section,
                                                anchor_offset,
                                                state->diagnostics);
-        if (status == MINILD_RV_LO12_MISSING) {
+        if (status == MINILD_TARGET_LO12_MISSING) {
             fprintf(state->diagnostics,
                     "minic-ld: missing-shared-pcrel-hi20:%s\n",
                     anchor->name);
             goto done;
         }
-        if (status != MINILD_RV_LO12_OK) {
+        if (status != MINILD_TARGET_LO12_OK) {
             goto done;
         }
     }
@@ -552,7 +549,7 @@ static bool shared_patch_final_layout_relocations(
     ok = true;
 
 done:
-    minild_riscv_pairs_destroy(&pairs);
+    minild_target_reloc_pairs_destroy(&pairs);
     return ok;
 }
 
@@ -628,13 +625,13 @@ static bool shared_finalize_plt_and_calls(MiniLdState *state,
         got_offset = (3U + plt_index) * 8U;
         entry_address = plt_address + plt_offset;
         slot_address = gotplt_address + got_offset;
-        minild_riscv_emit_plt_entry(plt->data, plt_offset,
+        minild_target_emit_plt_entry(plt->data, plt_offset,
                                      entry_address, slot_address);
 
         memset(&relocation, 0, sizeof(relocation));
         relocation.r_offset = slot_address;
-        relocation.r_info =
-            ELF64_R_INFO(dynamic_index, R_RISCV_JUMP_SLOT);
+        relocation.r_info = minild_target_dynamic_reloc_info(
+            dynamic_index, MINILD_DYNAMIC_RELOC_JUMP_SLOT);
         relocation.r_addend = 0;
         memcpy(rela_plt->data + plt_index * sizeof(relocation),
                &relocation,
@@ -649,8 +646,8 @@ static bool shared_finalize_plt_and_calls(MiniLdState *state,
         int64_t signed_destination;
         bool live;
 
-        if (reloc->type != R_RISCV_CALL &&
-            reloc->type != R_RISCV_CALL_PLT) {
+        if (minild_target_reloc_class(reloc->type) !=
+            MINILD_TARGET_RELOC_CALL) {
             continue;
         }
         if (!shared_relocation_live_source(state, output_plan,
@@ -696,9 +693,9 @@ static bool shared_finalize_plt_and_calls(MiniLdState *state,
         /* R_RISCV_CALL(_PLT) is S + A - P in both cases: S names either the
          * local definition or the selected PLT entry.  The JUMP_SLOT's own
          * addend remains zero; this addend belongs to the caller's pair. */
-        signed_destination = minild_riscv_addend_bits(destination,
+        signed_destination = minild_target_addend_bits(destination,
                                                     reloc->addend);
-        if (!minild_riscv_apply_final_instruction(
+        if (!minild_target_apply_final_instruction(
                 NULL, source, reloc, signed_destination,
                 layout->work[reloc->section].vaddr + reloc->offset,
                 true, target->name, state->diagnostics)) {

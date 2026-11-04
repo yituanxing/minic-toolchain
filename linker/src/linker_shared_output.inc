@@ -164,7 +164,7 @@ int minild_link_shared_elf64_riscv_inputs_options(
     const char *interpreter_path =
         options != NULL && options->interpreter_path != NULL
             ? options->interpreter_path
-            : pie ? "/lib/ld-musl-riscv64.so.1" : NULL;
+            : pie ? minild_target_default_pie_interpreter() : NULL;
     MiniLdState state;
     MiniLdLayout layout;
     MiniLdSharedImage shared;
@@ -209,7 +209,7 @@ int minild_link_shared_elf64_riscv_inputs_options(
             layout_script.version_global_count == 0U ||
             !layout_script.version_local_all ||
             layout_script.output_arch == NULL ||
-            strcmp(layout_script.output_arch, "riscv") != 0 ||
+            !minild_target_accept_script_arch(layout_script.output_arch) ||
             soname == NULL || soname[0] == '\0') {
             fprintf(diagnostics,
                     "minic-ld: unsupported-shared-script-contract:%s\n",

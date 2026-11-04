@@ -62,7 +62,7 @@ static int minild_link_static_pipeline(
             goto done;
         }
         if (script.output_arch != NULL &&
-            strcmp(script.output_arch, "riscv") != 0) {
+            !minild_target_accept_script_arch(script.output_arch)) {
             fprintf(diagnostics,
                     "minic-ld: unsupported-linker-script-arch:%s\n",
                     script.output_arch);

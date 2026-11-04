@@ -59,25 +59,14 @@ static bool shared_fill_dynsym(MiniLdState *state,
             output.st_shndx =
                 (Elf64_Section)output_plan->work_shndx[input->section];
             if (ELF64_ST_TYPE(input->info) == STT_TLS) {
-                uint64_t tls_base = 0U;
-                bool tls_present = false;
-
-                if (!minild_final_tls_base_address(state,
-                                                    layout,
-                                                    output_plan,
-                                                    &tls_base,
-                                                    &tls_present) ||
-                    !tls_present ||
-                    layout->work[input->section].vaddr + input->value <
-                        tls_base) {
+                if (!minild_output_plan_tls_symbol_value(
+                        state, layout, output_plan, (size_t)input->section,
+                        input->value, &output.st_value)) {
                     fprintf(state->diagnostics,
                             "minic-ld: invalid-shared-tls-symbol:%s\n",
                             input->name);
                     return false;
                 }
-                output.st_value =
-                    layout->work[input->section].vaddr +
-                    input->value - tls_base;
             } else {
                 output.st_value =
                     layout->work[input->section].vaddr + input->value;

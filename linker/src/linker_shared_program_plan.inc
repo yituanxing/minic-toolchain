@@ -9,80 +9,32 @@ typedef struct MiniLdSharedTlsSegment {
     uint64_t align;
 } MiniLdSharedTlsSegment;
 
-static bool shared_tls_segment(const MiniLdState *state,
-                               const MiniLdLayout *layout,
+static bool shared_tls_segment(const MiniLdLayout *layout,
                                const MiniLdOutputPlan *output_plan,
                                MiniLdSharedTlsSegment *tls) {
-    uint64_t base = UINT64_MAX;
-    uint64_t memory_end = 0U;
-    uint64_t file_end = 0U;
-    uint64_t alignment = 1U;
-    size_t i;
-    bool have_file = false;
-    bool have_nonempty = false;
+    const MiniLdTlsProjection *projection = &output_plan->tls;
+    uint64_t base = projection->block_base;
 
     memset(tls, 0, sizeof(*tls));
-    for (i = 0U; i < state->work.count; ++i) {
-        const MiniLdSection *section = &state->work.sections[i];
-        uint64_t start;
-        uint64_t end;
-
-        /* Final section membership, not the original SHF_TLS bit, decides
-         * whether an input can contribute to PT_TLS.  In particular a
-         * linker-script /DISCARD/ input has already been pruned before
-         * layout and can retain its original flags with size zero. */
-        if ((section->flags & (SHF_ALLOC | SHF_TLS)) !=
-                (SHF_ALLOC | SHF_TLS) ||
-            minild_output_shndx(output_plan, i) == 0U) {
-            continue;
-        }
-        /* Keep surviving empty TLS sections in the base calculation to
-         * agree with the final TLS-symbol view, but do not emit PT_TLS
-         * when every surviving TLS fragment is empty. */
-        have_nonempty |= section->size != 0U;
-        start = layout->work[i].vaddr;
-        if (section->size > UINT64_MAX - start) {
-            return false;
-        }
-        end = start + (uint64_t)section->size;
-        if (!tls->present || start < base) {
-            base = start;
-        }
-        if (!tls->present || end > memory_end) {
-            memory_end = end;
-        }
-        if (section->align > alignment) {
-            alignment = section->align;
-        }
-        if (section->type != SHT_NOBITS && section->size != 0U) {
-            if (layout->work[i].file_offset == SIZE_MAX) {
-                return false;
-            }
-            if (!have_file || end > file_end) {
-                file_end = end;
-            }
-            have_file = true;
-        }
-        tls->present = true;
-    }
-
-    if (!have_nonempty) {
-        tls->present = false;
+    if (!projection->has_nonempty_section) {
         return true;
     }
-    if (!layout->have_rw || base < layout->rw_vaddr ||
+    if (!projection->valid_extents ||
+        !layout->have_rw || base < layout->rw_vaddr ||
         base - layout->rw_vaddr > SIZE_MAX ||
         layout->rw_file_offset >
             SIZE_MAX - (size_t)(base - layout->rw_vaddr)) {
         return false;
     }
 
+    tls->present = true;
     tls->vaddr = base;
     tls->file_offset =
         layout->rw_file_offset + (size_t)(base - layout->rw_vaddr);
-    tls->filesz = have_file ? file_end - base : 0U;
-    tls->memsz = memory_end - base;
-    tls->align = alignment == 0U ? 1U : alignment;
+    tls->filesz = projection->has_file_contents
+                      ? projection->file_end - base : 0U;
+    tls->memsz = projection->memory_end - base;
+    tls->align = projection->alignment;
     return true;
 }
 
@@ -101,7 +53,7 @@ static bool minild_shared_program_plan_build(
     Elf64_Phdr *programs;
 
     memset(plan, 0, sizeof(*plan));
-    if (!shared_tls_segment(state, layout, output_plan, &tls)) {
+    if (!shared_tls_segment(layout, output_plan, &tls)) {
         fprintf(state->diagnostics,
                 "minic-ld: invalid-shared-tls-segment-layout\n");
         return false;

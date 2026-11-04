@@ -11,6 +11,47 @@ command -v python3 >/dev/null 2>&1 || {
     exit 8
 }
 
+# Keep psABI type numbers, final fixup codecs and loader relocation encodings
+# in the Target owner. The ET_EXEC/ET_DYN stages may decide symbol liveness,
+# GOT/TLS/PLT allocation and error messages, but must consume semantic kinds.
+src_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
+python3 - "$src_root/linker/src" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+source = Path(sys.argv[1])
+target = (source / 'linker_riscv_fixup.inc').read_text(encoding='utf-8')
+target_apis = (
+    'minild_target_reloc_class',
+    'minild_target_absolute_width',
+    'minild_target_store_absolute',
+    'minild_target_dynamic_reloc_info',
+    'minild_target_apply_final_instruction',
+    'minild_target_emit_plt_entry',
+)
+for name in target_apis:
+    if not re.search(r'\bstatic\s+[A-Za-z_][\w\s\*]*\b' + name +
+                     r'\s*\(', target):
+        raise SystemExit(f'MINILD_RISCV_POLICY_OWNER=FAIL missing_target={name}')
+
+for name in ('linker_static_reloc_scan.inc',
+             'linker_static_reloc_apply.inc',
+             'linker_shared_reloc_scan.inc',
+             'linker_shared_reloc_apply.inc'):
+    body = (source / name).read_text(encoding='utf-8')
+    body = re.sub(r'"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'|'
+                  r'/\*.*?\*/|//[^\n]*', '', body, flags=re.S)
+    if re.search(r'\bR_RISCV_\w+\b|\bminild_riscv_\w+\b', body):
+        raise SystemExit(f'MINILD_RISCV_POLICY_OWNER=FAIL '
+                         f'isa_logic_in_mode={name}')
+    if 'minild_target_reloc_class(' not in body:
+        raise SystemExit(f'MINILD_RISCV_POLICY_OWNER=FAIL '
+                         f'no_target_contract={name}')
+print('MINILD_RISCV_POLICY_OWNER=PASS stages=4 type_owner=target '
+      'dynamic_reloc_owner=target final_fixup_owner=target')
+PY
+
 work=$(mktemp -d "${TMPDIR:-/tmp}/minild-rv-final-fixup.XXXXXX")
 cleanup() {
     if [[ ${MINILD_RV_FIXUP_KEEP:-0} == 1 ]]; then

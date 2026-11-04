@@ -12,6 +12,7 @@ format decisions, and runtime behavior remain unchanged.
 | Module / owner | Owned output-stage work | Reason for boundary |
 | --- | --- | --- |
 | `linker_layout.inc` | Physical Layout state, byte-order helpers and default ET_EXEC/ET_DYN placement | Owns address/file placement and invokes the target's section-placement preparation at the point where section VMA becomes known. |
+| `linker_relocatable_output.inc` | Standalone ET_REL projection and MiniELF serialization | `-r` consumes source/work sections, canonical resolver and relocations before any final-link Layout/OutputPlan exists; it must not borrow ET_EXEC or ET_DYN final tables. |
 | `linker_riscv_align_relax.inc` | `R_RISCV_ALIGN` relocation-driven section-size adjustment, RISC-V NOP padding and offset remapping | Target-specific layout-time mutation; never part of the generic VMA/file-position algorithm. |
 | `linker_static_got.inc` | Static GOT reservation, lifetime and post-layout content filling | Its reservation precedes section placement; its symbol-address writes follow it. One static relocation-workspace owner spans both steps. |
 | `linker_script_layout.inc` | Script expression/provenance, input-section matching, command placement, BYTE/fill and script VMA/LMA/file offsets | Operates on the one `MiniLdLayout` before output-section projection. |
@@ -299,10 +300,10 @@ ET_EXEC and ET_DYN now share the **final instruction encoding and PCREL
 HI20/LO12 pairing owner**, in addition to the earlier relocation-type
 classifier and arithmetic byte writer:
 
-- `MiniLdRiscvPcrelPairs` owns one post-layout HI20 site table keyed by
+- `MiniLdTargetRelocPairs` owns one post-layout HI20 site table keyed by
   current working-section identity and offset. Both modes use the same
   initialization, lookup, LO12 field patch and cleanup path.
-- `minild_riscv_apply_final_instruction` patches the common U/I/S, CALL,
+- `minild_target_apply_final_instruction` patches the common U/I/S, CALL,
   BRANCH/JAL/RVC and `R_RISCV_32_PCREL` instruction or data fields. Its
   callers provide the already-selected target and the output-mode-correct
   place address; the encoder does not resolve symbols or reserve metadata.
@@ -319,6 +320,29 @@ instruction pass; static arithmetic stays interleaved with other input-order
 relocations. Shared PLT slot generation and CALL destination selection retain
 their own later phase, while CALL instruction encoding uses the target helper.
 This does not add a new relocation family or change GNU compatibility scope.
+
+### Target relocation policy boundary (2026-11-04)
+
+Static/shared pre-layout scanners and post-layout fixup drivers now consume
+the same **target-owned semantic relocation contract**. `MiniLdTargetRelocClass`
+names no-op, alignment, absolute 32/64-bit, arithmetic, final instruction,
+PCREL LO12, call, GOT and TLS GD operations; only the RISC-V owner maps
+`R_RISCV_*` numbers to those operations. The output-mode stages do not contain
+RISC-V relocation-number switch statements or instruction encodings.
+
+The RISC-V target also owns:
+
+- byte width and store/truncation rules for absolute 32/64-bit writes;
+- ELF relocation numbers for generic loader actions (`RELATIVE`, dynamic
+  absolute, TLS module/offset and `JUMP_SLOT`);
+- PCREL pair lifetime, final instruction fields and PLT instruction words.
+
+ET_DYN still owns whether a relocation exists, the dynamic symbol index,
+preemptibility, TLS GD/GOT/PLT slot allocation and final source liveness.
+ET_EXEC keeps its original input-order application and error text. Thus this
+boundary prepares future ISA adapters without pretending that the CLI or ELF
+writer already support another target. The final-fixup probe now checks this
+separation structurally as well as comparing actual ET_EXEC/ET_DYN bytes.
 
 ## Validation and limits
 

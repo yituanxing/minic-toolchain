@@ -282,7 +282,7 @@ static bool shared_symbol_is_static_absolute(const MiniLdState *state,
 
 
 static bool shared_relocation_is_final_layout(uint32_t type) {
-    return minild_riscv_reloc_final_layout(type);
+    return minild_target_reloc_at_final_layout(type);
 }
 
 #include "linker_shared_reloc_scan.inc"

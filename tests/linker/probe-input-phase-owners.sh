@@ -42,6 +42,7 @@ files = (
     'linker_archive_admission.inc', 'linker_input_sequence.inc',
     'linker_input_projection.inc', 'linker_script_input_selection.inc',
     'linker_input_gc.inc', 'linker_riscv_input_abi.inc',
+    'linker_relocatable_output.inc',
     'linker_elf64_image.inc',
 )
 sources = {}
@@ -71,6 +72,7 @@ expected_edges = {
     ('linker.c', 'linker_input_gc.inc'),
     ('linker_core.inc', 'linker_admission.inc'),
     ('linker_core.inc', 'linker_riscv_input_abi.inc'),
+    ('linker_core.inc', 'linker_relocatable_output.inc'),
     ('linker_core.inc', 'linker_elf64_image.inc'),
     ('linker_admission.inc', 'linker_archive_admission.inc'),
     ('linker_admission.inc', 'linker_input_sequence.inc'),
@@ -101,6 +103,7 @@ if not (driver.index('#include "linker_core.inc"') <
 if not (core.index('#include "linker_common_allocation.inc"') <
         core.index('#include "linker_riscv_input_abi.inc"') <
         core.index('#include "linker_admission.inc"') <
+        core.index('#include "linker_relocatable_output.inc"') <
         core.index('#include "linker_layout.inc"') <
         core.index('#include "linker_elf64_image.inc"')):
     raise SystemExit('MINILD_INPUT_PHASE_STRUCTURE=FAIL core_stage_order')
@@ -119,6 +122,17 @@ if re.search(r'\bR_RISCV_(?:NONE|RELAX|ALIGN)\b',
              sources['linker_script_input_selection.inc']):
     raise SystemExit('MINILD_INPUT_PHASE_STRUCTURE=FAIL '
                      'target_reloc_types_in_script_gc')
+if re.search(r'OUTPUT_ARCH\s*\(\s*riscv\s*\)|'
+             r'"/lib/ld-musl-riscv64\.so\.1"',
+             sources['linker.c']):
+    raise SystemExit('MINILD_INPUT_PHASE_STRUCTURE=FAIL '
+                     'target_policy_in_static_driver')
+shared_driver = (src / 'linker_shared_output.inc').read_text(encoding='utf-8')
+if '"/lib/ld-musl-riscv64.so.1"' in shared_driver or re.search(
+        r'strcmp\s*\(\s*layout_script\.output_arch\s*,\s*"riscv"',
+        shared_driver):
+    raise SystemExit('MINILD_INPUT_PHASE_STRUCTURE=FAIL '
+                     'target_policy_in_shared_driver')
 if not (admission.index('static bool process_input_data(') <
         admission.index('static bool process_dso_input_data(') <
         admission.index('static bool process_input(') <
@@ -131,6 +145,8 @@ functions = {
         'minild_target_accept_elf',
         'minild_target_set_relocatable_identity',
         'minild_target_set_final_elf_identity',
+        'minild_target_accept_script_arch',
+        'minild_target_default_pie_interpreter',
         'minild_target_is_attributes_section',
         'minild_riscv_attributes_valid',
         'minild_target_accept_attributes',
@@ -143,6 +159,9 @@ functions = {
         'minild_restore_input_order',
         'minild_gc_group_default_output_classes',
         'minild_gc_sort_default_output_alignment',
+    ),
+    'linker_relocatable_output.inc': (
+        'minild_write_relocatable_output',
     ),
     'linker_script_input_selection.inc': (
         'minild_select_script_inputs',
@@ -177,7 +196,8 @@ count = 0
 for expected_owner, names in functions.items():
     for name in names:
         definition = re.compile(
-            r'\bstatic\s+(?:bool|void|int|size_t|uint64_t|char\s*\*)\s*' +
+            r'\bstatic\s+(?:bool|void|int|size_t|uint64_t|'
+            r'(?:const\s+)?char\s*\*)\s*' +
             re.escape(name) + r'\s*\([^;{}]*\)\s*\{', re.S)
         locations = {owner: len(definition.findall(text))
                      for owner, text in sources.items()}
@@ -210,7 +230,7 @@ shared = (src / 'linker_shared_output.inc').read_text(encoding='utf-8')
 if 'minild_project_admitted_inputs(' not in shared:
     raise SystemExit('MINILD_INPUT_PHASE_STRUCTURE=FAIL shared_projection')
 
-print(f'MINILD_INPUT_PHASE_STRUCTURE=PASS modules=8 '
+print(f'MINILD_INPUT_PHASE_STRUCTURE=PASS modules=9 '
       f'owner_functions={count} owner_types={len(types)} '
       'build=single_translation_unit order=projection,script,gc')
 PY

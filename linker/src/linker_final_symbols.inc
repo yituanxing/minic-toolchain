@@ -15,30 +15,6 @@ static void minild_final_symbols_destroy(MiniLdFinalSymbols *final) {
     memset(final, 0, sizeof(*final));
 }
 
-static bool minild_final_tls_base_address(const MiniLdState *state,
-                                          const MiniLdLayout *layout,
-                                          const MiniLdOutputPlan *plan,
-                                          uint64_t *base_out,
-                                          bool *present_out) {
-    uint64_t base = UINT64_MAX;
-    size_t i;
-
-    for (i = 0U; i < state->work.count; ++i) {
-        const MiniLdSection *section = &state->work.sections[i];
-        if ((section->flags & (SHF_ALLOC | SHF_TLS)) !=
-                (SHF_ALLOC | SHF_TLS) ||
-            plan->work_shndx[i] == 0U) {
-            continue;
-        }
-        if (layout->work[i].vaddr < base) {
-            base = layout->work[i].vaddr;
-        }
-    }
-    *present_out = base != UINT64_MAX;
-    *base_out = base == UINT64_MAX ? 0U : base;
-    return true;
-}
-
 /* A VERSION { global: ...; local: *; } script hides final definitions
  * from the dynamic interface by making them local in the ordinary symbol
  * table too.  Compute that final ELF binding without changing canonical
@@ -90,14 +66,10 @@ static bool minild_final_symbols_build_with_version(
     const MiniLdOutputPlan *plan,
     const MiniLdScript *version_script,
     MiniLdFinalSymbols *final) {
-    uint64_t tls_base = 0U;
-    bool have_tls = false;
     size_t next = 1U;
     size_t pass, i;
 
-    if (state->resolver.count >= SIZE_MAX / sizeof(Elf64_Sym) - 1U ||
-        !minild_final_tls_base_address(state, layout, plan,
-                                       &tls_base, &have_tls)) {
+    if (state->resolver.count >= SIZE_MAX / sizeof(Elf64_Sym) - 1U) {
         return false;
     }
     final->entry_count = state->resolver.count + 1U;
@@ -153,19 +125,14 @@ static bool minild_final_symbols_build_with_version(
                     if (ELF64_ST_TYPE(source->info) == STT_TLS) {
                         /* A final TLS symbol is relative to the TLS block,
                          * not the section VMA (ET_EXEC and ET_DYN alike). */
-                        if (!have_tls ||
-                            (state->work.sections[section].flags & SHF_TLS) == 0U ||
-                            layout->work[section].vaddr < tls_base ||
-                            source->value > UINT64_MAX -
-                                (layout->work[section].vaddr - tls_base)) {
+                        if (!minild_output_plan_tls_symbol_value(
+                                state, layout, plan, section,
+                                source->value, &output->st_value)) {
                             fprintf(state->diagnostics,
                                     "minic-ld: invalid-final-tls-symbol:%s\n",
                                     source->name);
                             return false;
                         }
-                        output->st_value =
-                            layout->work[section].vaddr - tls_base +
-                            source->value;
                     } else if ((state->work.sections[section].flags &
                                 SHF_ALLOC) != 0U) {
                         output->st_value =

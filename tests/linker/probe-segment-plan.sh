@@ -133,8 +133,31 @@ tls_value:
 ASM
 "$MINIAS" -march=rv64i -mabi=lp64 \
     -o "$work/tls-empty-first.o" "$work/tls-empty-first.s"
+"$MINILD" -melf64lriscv -e _start \
+    -o "$work/static-tls-empty-first.elf" "$work/tls-empty-first.o"
 "$MINILD" -melf64lriscv -shared \
     -o "$work/shared-tls-empty-first.so" "$work/tls-empty-first.o"
+
+# Zero-length surviving TLS still defines the origin for STT_TLS, but by
+# itself must not produce a PT_TLS program header.
+cat >"$work/tls-all-empty.s" <<'ASM'
+.section .text.start,"ax",@progbits
+.globl _start
+_start:
+  ret
+.section .data.prefix,"aw",@progbits
+  .dword 0x12345678
+.section .tdata.empty,"awT",@progbits
+.balign 64
+.globl tls_empty
+.type tls_empty,@tls_object
+tls_empty:
+.size tls_empty,0
+ASM
+"$MINIAS" -march=rv64i -mabi=lp64 \
+    -o "$work/tls-all-empty.o" "$work/tls-all-empty.s"
+"$MINILD" -melf64lriscv -shared \
+    -o "$work/shared-tls-all-empty.so" "$work/tls-all-empty.o"
 
 # The vDSO script deliberately excludes writable/TLS inputs. It must preserve
 # the fixed four PHDRs (including the empty explicit EH-frame header).
@@ -321,6 +344,25 @@ for table_name, str_name in (('.symtab', '.strtab'), ('.dynsym', '.dynstr')):
 print('MINILD_SEGMENT_CHECK=PASS mode=shared-tls-empty-first PT_TLS=retained-zero-origin'
       ' STT_TLS=static+dynamic')
 
+raw, ph, names = inspect('static-tls-empty-first.elf', 2)
+anchor = one(names, '.tdata.anchor')
+value = one(names, '.tdata.value')
+assert anchor[3] < value[3], ('static empty-first TLS section VMA order', anchor, value)
+for name, expected in {'tls_anchor': 0, 'tls_value': value[3] - anchor[3]}.items():
+    info, shndx, offset, size = tls_symbols('.symtab', '.strtab')[name]
+    assert info & 0xf == 6 and shndx != 0 and offset == expected, (
+        'ET_EXEC TLS origin mismatch', name, offset, expected)
+print('MINILD_SEGMENT_CHECK=PASS mode=static-tls-empty-first STT_TLS=retained-zero-origin')
+
+raw, ph, names = inspect('shared-tls-all-empty.so', 3)
+assert not any(p[0] == 7 for p in ph), ('empty-only TLS incorrectly produced PT_TLS', ph)
+assert one(names, '.tdata.empty')[5] == 0, 'empty TLS section not retained'
+for table_name, strings_name in (('.symtab', '.strtab'), ('.dynsym', '.dynstr')):
+    info, shndx, offset, size = tls_symbols(table_name, strings_name)['tls_empty']
+    assert info & 0xf == 6 and shndx != 0 and offset == size == 0, (
+        'empty-only TLS symbol mismatch', table_name, offset, size)
+print('MINILD_SEGMENT_CHECK=PASS mode=shared-tls-all-empty PT_TLS=absent STT_TLS=defined')
+
 raw, ph, names = inspect('pie.elf', 3)
 loads = [p for p in ph if p[0] == 1]
 phdr = [p for p in ph if p[0] == 6]
@@ -353,4 +395,4 @@ print('MINILD_SEGMENT_CHECK=PASS mode=vdso-tls-discard PT_TLS=absent')
 print('MINILD_SEGMENT_CHECK=PASS mode=vdso-tls-live-mixed fail_closed=2')
 PY
 
-echo 'MINILD_SEGMENTS=PASS modes=9'
+echo 'MINILD_SEGMENTS=PASS modes=11'

@@ -25,6 +25,17 @@ static void minild_target_set_final_elf_identity(Elf64_Ehdr *header) {
     header->e_machine = EM_RISCV;
 }
 
+/* Linker-script OUTPUT_ARCH and the default PIE loader are target ABI
+ * properties. Generic ET_EXEC/ET_DYN drivers only validate or borrow them;
+ * they must not enumerate machine names or hardcode a target runtime. */
+static bool minild_target_accept_script_arch(const char *arch) {
+    return arch != NULL && strcmp(arch, "riscv") == 0;
+}
+
+static const char *minild_target_default_pie_interpreter(void) {
+    return "/lib/ld-musl-riscv64.so.1";
+}
+
 static bool minild_target_is_attributes_section(uint32_t section_type) {
     return section_type == MINILD_SHT_RISCV_ATTRIBUTES;
 }

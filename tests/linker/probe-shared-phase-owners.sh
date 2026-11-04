@@ -156,9 +156,9 @@ if 'shared->symbols[' not in pre or \
 # slot allocation and JUMP_SLOT relocations, but delegates AUIPC/LD/JALR/NOP.
 target_fixup = (src / 'linker_riscv_fixup.inc').read_text(encoding='utf-8')
 shared_apply = sources['linker_shared_reloc_apply.inc']
-if len(re.findall(r'\bstatic\s+void\s+minild_riscv_emit_plt_entry\s*\(',
+if len(re.findall(r'\bstatic\s+void\s+minild_target_emit_plt_entry\s*\(',
                   target_fixup)) != 1 or \
-        shared_apply.count('minild_riscv_emit_plt_entry(') != 1 or \
+        shared_apply.count('minild_target_emit_plt_entry(') != 1 or \
         re.search(r'\bshared_riscv_(?:u|i)type\b|store_u32le\(plt->data',
                   shared_apply):
     raise SystemExit('MINILD_SHARED_PHASE_STRUCTURE=FAIL target_plt_owner')
