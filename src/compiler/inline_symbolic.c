@@ -1,5 +1,6 @@
 #include "compiler/inline_specialize.h"
 #include "compiler/inline_specialize_internal.h"
+#include "compiler/inline_specialize_common.h"
 #include "frontend/const_eval.h"
 #include "frontend/function_body.h"
 #include <stdbool.h>
@@ -451,37 +452,6 @@ static bool minic_inline_symbolic_integer_inputs_are_closed(
     return true;
 }
 
-static bool minic_inline_symbolic_variant_matches(
-    const MinicFunction *candidate,
-    const MinicFunction *source,
-    const MinicFunction *caller,
-    MinicFunctionId source_id,
-    const bool *integer_known,
-    const uint64_t *integer_bits,
-    const bool *symbolic_known,
-    const MinicExpressionId *symbolic_expression,
-    size_t parameter_count) {
-    size_t i;
-
-    if (candidate == NULL || !candidate->is_integer_specialization ||
-        candidate->specialization_source != source_id ||
-        candidate->parameter_count != parameter_count ||
-        !minic_inline_specialization_section_matches(candidate, source, caller)) {
-        return false;
-    }
-    for (i = 0U; i < parameter_count; ++i) {
-        if (candidate->specialization_integer_known[i] != integer_known[i] ||
-            (integer_known[i] &&
-             candidate->specialization_integer_bits[i] != integer_bits[i]) ||
-            candidate->specialization_symbolic_known[i] != symbolic_known[i] ||
-            (symbolic_known[i] &&
-             candidate->specialization_symbolic_expression[i] != symbolic_expression[i])) {
-            return false;
-        }
-    }
-    return true;
-}
-
 bool minic_add_inline_symbolic_specialization(
     MinicC0Program *program,
     MinicFunctionId source_id,
@@ -526,26 +496,14 @@ bool minic_specialize_inline_symbolic_calls(
     size_t initial_clone_count = 0U;
     size_t transitive_clone_count = 0U;
     size_t original_function_count;
-    MinicFunctionId *initial_expression_owners = NULL;
-    bool initial_owner_index_ready = false;
+    MinicInlineInitialOwners initial_owners = {0};
 
     if (program == NULL || target == NULL) {
         return false;
     }
     original_function_count = program->function_count;
-    if (minic_inline_section_owner_index_required(program) &&
-        program->expression_count != 0U &&
-        program->expression_count <= SIZE_MAX / sizeof(*initial_expression_owners)) {
-        initial_expression_owners = malloc(program->expression_count *
-                                           sizeof(*initial_expression_owners));
-        if (initial_expression_owners != NULL)
-            initial_owner_index_ready = minic_perf_program_build_expression_source_owners(
-                program, original_function_count, initial_expression_owners,
-                program->expression_count);
-    }
-    if (minic_inline_section_owner_index_required(program) &&
-        program->expression_count != 0U && !initial_owner_index_ready) {
-        free(initial_expression_owners);
+    if (!minic_inline_initial_owners_build(
+            program, original_function_count, &initial_owners)) {
         (void)fprintf(stderr, "MINIC_INLINE_SECTION_OWNER_INDEX=FAIL symbolic\n");
         return false;
     }
@@ -559,13 +517,9 @@ bool minic_specialize_inline_symbolic_calls(
         MinicFunction current;
         MinicFunction source;
         const MinicFunction *caller = NULL;
-        bool integer_known[MINIC_MAX_FUNCTION_PARAMETERS];
-        uint64_t integer_bits[MINIC_MAX_FUNCTION_PARAMETERS];
-        bool symbolic_known[MINIC_MAX_FUNCTION_PARAMETERS];
-        MinicExpressionId symbolic_expression[MINIC_MAX_FUNCTION_PARAMETERS];
+        MinicInlineSpecializationKey key;
         bool adds_symbol = false;
         size_t i;
-        size_t candidate_index;
 
         if (call->kind != MINIC_EXPRESSION_CALL ||
             call->value.call.function_id == MINIC_FUNCTION_INVALID) {
@@ -583,10 +537,13 @@ bool minic_specialize_inline_symbolic_calls(
             continue;
         }
         source = program->functions[source_id];
-        if (initial_owner_index_ready &&
-            initial_expression_owners[expression_index] < original_function_count)
-            caller = &program->functions[initial_expression_owners[expression_index]];
-        else if (current.is_integer_specialization)
+        {
+            MinicFunctionId owner = minic_inline_initial_owners_get(
+                &initial_owners, expression_index);
+            if (owner < original_function_count)
+                caller = &program->functions[owner];
+        }
+        if (caller == NULL && current.is_integer_specialization)
             caller = &program->functions[current_id];
         if (!source.is_defined || !source.is_internal || !source.is_inline ||
             source.is_variadic || source.alias_target != MINIC_FUNCTION_INVALID ||
@@ -594,26 +551,17 @@ bool minic_specialize_inline_symbolic_calls(
             source.parameter_count != call->value.call.argument_count) {
             continue;
         }
-        (void)memset(integer_known, 0, sizeof(integer_known));
-        (void)memset(integer_bits, 0, sizeof(integer_bits));
-        (void)memset(symbolic_known, 0, sizeof(symbolic_known));
-        for (i = 0U; i < MINIC_MAX_FUNCTION_PARAMETERS; ++i) {
-            symbolic_expression[i] = MINIC_EXPRESSION_INVALID;
-        }
-        if (current.is_integer_specialization) {
-            for (i = 0U; i < source.parameter_count; ++i) {
-                integer_known[i] = current.specialization_integer_known[i];
-                integer_bits[i] = current.specialization_integer_bits[i];
-                symbolic_known[i] = current.specialization_symbolic_known[i];
-                symbolic_expression[i] =
-                    current.specialization_symbolic_expression[i];
-            }
+        if (!minic_inline_spec_key_from_function(
+                &key, &current, source.parameter_count)) {
+            minic_inline_initial_owners_destroy(&initial_owners);
+            return false;
         }
         /* Do not manufacture a half-specialized variant for a helper whose
          * integer parameters are still runtime values.  GNU immediate-only
          * asm inside helpers such as arch_static_branch requires both the
          * symbolic key and the branch integer to be closed before Core lower. */
-        if (!minic_inline_symbolic_integer_inputs_are_closed(&source, integer_known)) {
+        if (!minic_inline_symbolic_integer_inputs_are_closed(
+                &source, key.integer_known)) {
             continue;
         }
         for (i = 0U; i < source.parameter_count; ++i) {
@@ -623,212 +571,74 @@ bool minic_specialize_inline_symbolic_calls(
                     program, target, argument_id)) {
                 continue;
             }
-            if (!symbolic_known[i] || symbolic_expression[i] != argument_id) {
-                symbolic_known[i] = true;
-                symbolic_expression[i] = argument_id;
+            if (!key.symbolic_known[i] ||
+                key.symbolic_expression[i] != argument_id) {
+                key.symbolic_known[i] = true;
+                key.symbolic_expression[i] = argument_id;
                 adds_symbol = true;
             }
         }
         if (!adds_symbol) {
             continue;
         }
-        for (candidate_index = 0U; candidate_index < program->function_count;
-             ++candidate_index) {
-            if (minic_inline_symbolic_variant_matches(
-                    &program->functions[candidate_index],
-                    &source, caller,
-                    source_id,
-                    integer_known,
-                    integer_bits,
-                    symbolic_known,
-                    symbolic_expression,
-                    source.parameter_count)) {
-                variant_id = candidate_index;
-                break;
-            }
-        }
+        variant_id = minic_inline_spec_find_variant(
+            program, &source, caller, source_id, &key,
+            MINIC_INLINE_SPEC_FACT_INTEGER | MINIC_INLINE_SPEC_FACT_SYMBOLIC, 0U);
         if (variant_id == MINIC_FUNCTION_INVALID) {
             if (program->function_count >= SIZE_MAX - 1U ||
                 !minic_add_inline_symbolic_specialization(
                     program,
                     source_id,
                     caller,
-                    integer_known,
-                    integer_bits,
-                    symbolic_known,
-                    symbolic_expression,
+                    key.integer_known,
+                    key.integer_bits,
+                    key.symbolic_known,
+                    key.symbolic_expression,
                     &variant_id)) {
-                free(initial_expression_owners);
+                minic_inline_initial_owners_destroy(&initial_owners);
                 return false;
             }
             initial_clone_count += 1U;
         }
         program->expressions[expression_index].value.call.function_id = variant_id;
     }
-    free(initial_expression_owners);
+    minic_inline_initial_owners_destroy(&initial_owners);
 
     {
         size_t caller_index;
-        size_t symbolic_owned_expression_count = program->expression_count;
-        MinicFunctionId *symbolic_expression_owners =
-            symbolic_owned_expression_count == 0U
-                ? NULL
-                : (MinicFunctionId *)malloc(
-                      symbolic_owned_expression_count *
-                      sizeof(*symbolic_expression_owners));
-
-        /* Optimization only: never fail an otherwise valid compiler input
-         * just because an optional ownership index cannot be allocated or
-         * constructed. Revert to the original unfiltered transitive walk. */
-        bool symbolic_owner_index_ready =
-            (symbolic_owned_expression_count == 0U ||
-             symbolic_expression_owners != NULL) &&
-            minic_perf_program_build_expression_source_owners(
-                program,
-                original_function_count,
-                symbolic_expression_owners,
-                symbolic_owned_expression_count);
-        if (!symbolic_owner_index_ready) {
-            free(symbolic_expression_owners);
-            symbolic_expression_owners = NULL;
-        }
-        /* Indexed CALLs are grouped by their *canonical* source owner.
-         * Shared, ambiguous and orphan CALLs are retained in the common bucket.
-         * Retain ascending ExpressionId order using a two-way merge.
-         * All storage is optional; any OOM falls back to the original scan.
-         * Late appends are scanned separately using the live expression_count. */
-        size_t *symbolic_source_bucket_offsets = NULL;
-        size_t *symbolic_source_bucket_calls = NULL;
-        size_t *symbolic_source_bucket_writes = NULL;
-        bool symbolic_source_buckets_ready = false;
-        if (symbolic_owner_index_ready &&
-            symbolic_owned_expression_count != 0U &&
-            original_function_count <= SIZE_MAX / sizeof(size_t) - 2U &&
-            symbolic_owned_expression_count <= SIZE_MAX / sizeof(size_t)) {
-            size_t n = original_function_count;
-            size_t idx;
-            symbolic_source_bucket_offsets = (size_t *)calloc(
-                n + 2U, sizeof(*symbolic_source_bucket_offsets));
-            symbolic_source_bucket_calls = (size_t *)malloc(
-                symbolic_owned_expression_count * sizeof(*symbolic_source_bucket_calls));
-            symbolic_source_bucket_writes = (size_t *)malloc(
-                (n + 1U) * sizeof(*symbolic_source_bucket_writes));
-            if (symbolic_source_bucket_offsets != NULL &&
-                symbolic_source_bucket_calls != NULL &&
-                symbolic_source_bucket_writes != NULL) {
-                for (idx = 0U; idx < symbolic_owned_expression_count; ++idx) {
-                    if (program->expressions[idx].kind == MINIC_EXPRESSION_CALL) {
-                        MinicFunctionId owner = symbolic_expression_owners[idx];
-                        size_t bucket = (owner != MINIC_FUNCTION_INVALID && owner < n)
-                                            ? (size_t)owner : n;
-                        ++symbolic_source_bucket_offsets[bucket + 1U];
-                    }
-                }
-                for (idx = 0U; idx < n + 1U; ++idx) {
-                    symbolic_source_bucket_offsets[idx + 1U] +=
-                        symbolic_source_bucket_offsets[idx];
-                }
-                (void)memcpy(symbolic_source_bucket_writes,
-                             symbolic_source_bucket_offsets,
-                             (n + 1U) * sizeof(*symbolic_source_bucket_writes));
-                for (idx = 0U; idx < symbolic_owned_expression_count; ++idx) {
-                    if (program->expressions[idx].kind == MINIC_EXPRESSION_CALL) {
-                        MinicFunctionId owner = symbolic_expression_owners[idx];
-                        size_t bucket = (owner != MINIC_FUNCTION_INVALID && owner < n)
-                                            ? (size_t)owner : n;
-                        symbolic_source_bucket_calls[
-                            symbolic_source_bucket_writes[bucket]++] = idx;
-                    }
-                }
-                symbolic_source_buckets_ready = true;
-            }
-        }
-        free(symbolic_source_bucket_writes);
-        if (!symbolic_source_buckets_ready) {
-            free(symbolic_source_bucket_offsets);
-            free(symbolic_source_bucket_calls);
-            symbolic_source_bucket_offsets = NULL;
-            symbolic_source_bucket_calls = NULL;
-        }
+        MinicInlineCallWorklist worklist = {0};
+        /* Canonical source-owned CALL bucket + ambiguous/unowned bucket.
+         * Common retains append-only expression IDs and an OOM full-scan
+         * fallback, preserving the historical shared FunctionBody closure. */
+        if (!minic_inline_call_worklist_build(
+                program, original_function_count, &worklist)) return false;
         for (caller_index = 0U;
              caller_index < program->function_count;
              ++caller_index) {
             const MinicFunction caller = program->functions[caller_index];
-            size_t symbolic_full_cursor = 0U;
-            size_t symbolic_own_cursor = 0U;
-            size_t symbolic_own_end = 0U;
-            size_t symbolic_common_cursor = 0U;
-            size_t symbolic_common_end = 0U;
-            size_t symbolic_late_cursor = symbolic_owned_expression_count;
+            MinicInlineCallCursor cursor;
+            MinicExpressionId nested_expression_index;
 
             if (!caller.is_integer_specialization ||
                 caller.specialization_source >= program->function_count) {
                 continue;
             }
-            if (symbolic_source_buckets_ready) {
-                size_t n = original_function_count;
-                if (caller.specialization_source < n) {
-                    symbolic_own_cursor =
-                        symbolic_source_bucket_offsets[caller.specialization_source];
-                    symbolic_own_end =
-                        symbolic_source_bucket_offsets[caller.specialization_source + 1U];
-                }
-                symbolic_common_cursor = symbolic_source_bucket_offsets[n];
-                symbolic_common_end = symbolic_source_bucket_offsets[n + 1U];
-            }
-            for (;;) {
-                size_t nested_expression_index;
-                if (!symbolic_source_buckets_ready) {
-                    if (symbolic_full_cursor >= program->expression_count) {
-                        break;
-                    }
-                    nested_expression_index = symbolic_full_cursor++;
-                } else if (symbolic_own_cursor < symbolic_own_end ||
-                           symbolic_common_cursor < symbolic_common_end) {
-                    if (symbolic_common_cursor == symbolic_common_end ||
-                        (symbolic_own_cursor < symbolic_own_end &&
-                         symbolic_source_bucket_calls[symbolic_own_cursor] <
-                             symbolic_source_bucket_calls[symbolic_common_cursor])) {
-                        nested_expression_index =
-                            symbolic_source_bucket_calls[symbolic_own_cursor++];
-                    } else {
-                        nested_expression_index =
-                            symbolic_source_bucket_calls[symbolic_common_cursor++];
-                    }
-                } else if (symbolic_late_cursor < program->expression_count) {
-                    /* The old loop observes append-only expressions, including
-                     * ones created while processing this same caller. */
-                    nested_expression_index = symbolic_late_cursor++;
-                } else {
-                    break;
-                }
+            minic_inline_call_cursor_begin(
+                &worklist, caller.specialization_source, &cursor);
+            while (minic_inline_call_cursor_next(
+                       &cursor, program, &nested_expression_index)) {
                 const MinicExpression *nested =
                     &program->expressions[nested_expression_index];
                 MinicFunctionId current_id;
-
-                if (symbolic_owner_index_ready &&
-                    nested_expression_index < symbolic_owned_expression_count) {
-                    MinicFunctionId nested_owner =
-                        symbolic_expression_owners[nested_expression_index];
-                    if (nested_owner != MINIC_FUNCTION_INVALID &&
-                        nested_owner < original_function_count &&
-                        nested_owner != caller.specialization_source) {
-                        continue;
-                    }
-                }
                 MinicFunctionId source_id;
                 MinicFunctionId variant_id = MINIC_FUNCTION_INVALID;
                 MinicFunction current;
                 MinicFunction source;
-                bool integer_known[MINIC_MAX_FUNCTION_PARAMETERS];
-                uint64_t integer_bits[MINIC_MAX_FUNCTION_PARAMETERS];
-                bool symbolic_known[MINIC_MAX_FUNCTION_PARAMETERS];
-                MinicExpressionId symbolic_expression[MINIC_MAX_FUNCTION_PARAMETERS];
+                MinicInlineSpecializationKey key;
                 bool used_caller_fact = false;
                 bool adds_symbol = false;
                 bool needs_section_clone;
                 size_t i;
-                size_t candidate_index;
 
                 if (nested->kind != MINIC_EXPRESSION_CALL ||
                     nested->value.call.function_id == MINIC_FUNCTION_INVALID) {
@@ -853,24 +663,15 @@ bool minic_specialize_inline_symbolic_calls(
                     continue;
                 }
                 needs_section_clone = current.is_integer_specialization &&
-                    !minic_inline_specialization_section_matches(&current, &source, &caller);
-                (void)memset(integer_known, 0, sizeof(integer_known));
-                (void)memset(integer_bits, 0, sizeof(integer_bits));
-                (void)memset(symbolic_known, 0, sizeof(symbolic_known));
-                for (i = 0U; i < MINIC_MAX_FUNCTION_PARAMETERS; ++i) {
-                    symbolic_expression[i] = MINIC_EXPRESSION_INVALID;
-                }
-                if (current.is_integer_specialization) {
-                    for (i = 0U; i < source.parameter_count; ++i) {
-                        integer_known[i] = current.specialization_integer_known[i];
-                        integer_bits[i] = current.specialization_integer_bits[i];
-                        symbolic_known[i] = current.specialization_symbolic_known[i];
-                        symbolic_expression[i] =
-                            current.specialization_symbolic_expression[i];
-                    }
+                    !minic_inline_spec_section_matches(&current, &source, &caller);
+                if (!minic_inline_spec_key_from_function(
+                        &key, &current, source.parameter_count)) {
+                    minic_inline_call_worklist_destroy(&worklist);
+                    return false;
                 }
                 if (!needs_section_clone &&
-                    !minic_inline_symbolic_integer_inputs_are_closed(&source, integer_known)) {
+                    !minic_inline_symbolic_integer_inputs_are_closed(
+                        &source, key.integer_known)) {
                     continue;
                 }
                 for (i = 0U; i < source.parameter_count; ++i) {
@@ -891,45 +692,32 @@ bool minic_specialize_inline_symbolic_calls(
                     }
                     used_caller_fact =
                         used_caller_fact || argument_used_caller_fact;
-                    if (!symbolic_known[i] ||
-                        symbolic_expression[i] != resolved_expression) {
-                        symbolic_known[i] = true;
-                        symbolic_expression[i] = resolved_expression;
+                    if (!key.symbolic_known[i] ||
+                        key.symbolic_expression[i] != resolved_expression) {
+                        key.symbolic_known[i] = true;
+                        key.symbolic_expression[i] = resolved_expression;
                         adds_symbol = true;
                     }
                 }
                 if ((!used_caller_fact || !adds_symbol) && !needs_section_clone) {
                     continue;
                 }
-                for (candidate_index = 0U;
-                     candidate_index < program->function_count;
-                     ++candidate_index) {
-                    if (minic_inline_symbolic_variant_matches(
-                            &program->functions[candidate_index],
-                            &source, &caller,
-                            source_id,
-                            integer_known,
-                            integer_bits,
-                            symbolic_known,
-                            symbolic_expression,
-                            source.parameter_count)) {
-                        variant_id = candidate_index;
-                        break;
-                    }
-                }
+                variant_id = minic_inline_spec_find_variant(
+                    program, &source, &caller, source_id, &key,
+                    MINIC_INLINE_SPEC_FACT_INTEGER |
+                        MINIC_INLINE_SPEC_FACT_SYMBOLIC,
+                    0U);
                 if (variant_id == MINIC_FUNCTION_INVALID) {
                     if (!minic_add_inline_symbolic_specialization(
                             program,
                             source_id,
                             &caller,
-                            integer_known,
-                            integer_bits,
-                            symbolic_known,
-                            symbolic_expression,
+                            key.integer_known,
+                            key.integer_bits,
+                            key.symbolic_known,
+                            key.symbolic_expression,
                             &variant_id)) {
-                        free(symbolic_source_bucket_offsets);
-                        free(symbolic_source_bucket_calls);
-                        free(symbolic_expression_owners);
+                        minic_inline_call_worklist_destroy(&worklist);
                         return false;
                     }
                     transitive_clone_count += 1U;
@@ -940,9 +728,7 @@ bool minic_specialize_inline_symbolic_calls(
                  * concrete clone from the active caller specialization. */
             }
         }
-        free(symbolic_source_bucket_offsets);
-        free(symbolic_source_bucket_calls);
-        free(symbolic_expression_owners);
+        minic_inline_call_worklist_destroy(&worklist);
     }
 
     if (initial_clone_count != 0U || transitive_clone_count != 0U) {

@@ -80,6 +80,7 @@ MINIC_SOURCES := \
 	src/compiler/core_function_set.c \
 	src/compiler/module_ir_build.c \
 	src/compiler/global_payload.c \
+	src/compiler/inline_specialize_common.c \
 	src/compiler/inline_integer.c \
 	src/compiler/inline_symbolic.c \
 	src/compiler/inline_boolean.c \
@@ -1908,6 +1909,17 @@ check-core-module-fragment-contract:
 	"$(abspath $(BUILD_DIR))/tests/core/module-ir-fragment-contract"
 
 check-fast: check-core-module-fragment-contract
+
+.PHONY: check-inline-specialize-common
+check-inline-specialize-common:
+	@mkdir -p "$(BUILD_DIR)/tests/compiler"
+	$(CC) $(CPPFLAGS) $(MINIC_INCLUDES) $(MINIC_CFLAGS) \
+		tests/compiler/inline_specialize_common_test.c \
+		src/compiler/inline_specialize_common.c $(MINIC_LDFLAGS) \
+		-o "$(BUILD_DIR)/tests/compiler/inline-specialize-common"
+	"$(abspath $(BUILD_DIR))/tests/compiler/inline-specialize-common"
+
+check-fast: check-inline-specialize-common
 
 .PHONY: check-loongarch64-linux-va-fixed-overflow
 check-loongarch64-linux-va-fixed-overflow: $(MINIC_CC_BINARY)

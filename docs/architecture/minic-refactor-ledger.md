@@ -2051,3 +2051,58 @@ The next independent architecture family is the three Core inline
 specialization producers, which still duplicate local-body analysis and
 clone-state ownership; do not mistake this P38 symbol closure for their
 full migration.
+
+## IR-P39 — One AST inline-specialization owner and transitive call worklist (2026-11-04)
+
+**Baseline:** P38 PR #674 `a5c3d7c`. Read the three full AST specialization
+passes (`inline_integer.c`, `inline_symbolic.c`, `inline_boolean.c`) together
+with FunctionBody source ownership, the Core call selectors, target lowerers,
+section closure and original-ELF test fixtures. Consolidate **four shared
+families in one change** while preserving each pass's domain-specific proof:
+
+- New `inline_specialize_common.[ch]` owns one AST-only fact key (integer
+  known/bits, relocatable symbolic expression, Boolean `[0,1]` known),
+  mask-selectable candidate comparison and variant lookup. The three passes
+  retain their own constant/symbolic/range proof, GNU static eligibility,
+  clone quotas, source `FunctionBody` and Core callsite revalidation.
+- The shared `MinicInlineInitialOwners` owns original `ExpressionId →`
+  **canonical source FunctionId** discovery when section names exist. It
+  fails closed on an unavailable required index, and bounds every lookup by
+  the **captured original function limit**: a former ambiguous-owner sentinel
+  must not become a new valid FunctionId when specialization appends clones.
+- The shared optional `MinicInlineCallWorklist` groups stable CALL IDs by
+  canonical owner, combines the current source's bucket with the ambiguous
+  bucket in ascending expression order, then scans dynamically appended
+  expressions. If indexing cannot be allocated or owners cannot be computed,
+  its live full scan remains valid. No transitive pass rewrites a shared
+  source AST CALL to guess which clone will execute.
+- Remove all three duplicated variant predicates, repeated source-owner
+  arrays, repeated CALL-index allocation/ordering and the old cross-pass
+  section helper declarations. Preserve existing diagnostics/perf counters;
+  in a representative Boolean section fixture, candidate scans fall from
+  **198 to 9** with the exact same direct/transitive clones.
+
+**Code/build/test batch:** 9 paths, **+869/−747 lines (net +122)**, plus this
+ledger entry (10 total paths, +923/−747, net +176). The six
+production C/H files are **+609/−747 (net −138)**, including the new 401-line
+shared implementation/header; Makefile +12; two new test files +248.
+The existing three domain implementation files alone are **+208/−740
+(net −532)**. There is no backward-compatibility alias for a removed helper.
+
+| Gate | P39 result |
+| --- | --- |
+| Strict Release `minic-cc`, Debug compiler and full Debug `check-fast` | **PASS**, exit 0; optional absent cross GNU/QEMU paths remain SKIP |
+| Shared AST Key/Section/Owner/CALL test | **PASS**, including ambiguous ID after clone, stable merged bucket order, appended calls, optional OOM/owner fallback |
+| Integer/Symbolic/Boolean targeted GNU and MiniC native, x86 `.head.text`, MC001 arena, kmalloc/CFG guard | **PASS**, including 90 MC001 five-ISA assembly variants and 6 native cases |
+| Full target-boundary checker | **PASS** |
+| P38 vs P39 inline/section GNU-preprocessed `.i` differential | **80/80 matching outcomes**: 65 `.s` byte-identical, 15 both rejected, 0 different |
+| P38 vs P39 five-ISA broad Core execution/type `.i` differential | **255/255 matching outcomes**: 187 `.s` byte-identical, 68 both rejected, 0 different |
+| Five-ISA original Linux GNU ELF/QEMU runtime | **NOT RUN** in this AST refactor; cannot infer Linux end-to-end correctness from `.s` parity |
+
+**P40 correctness follow-up (not claimed fixed by P39):** MC-058 symbolic
+pointer-arithmetic closure is still incomplete for transitive `key + 1`
+GNU `i` operands; the Core asm symbolic reducer currently emits an unscaled
+`key_slots+1` for `int key_slots[4] + 1`, whereas GCC relocates +4 bytes.
+Next batch must unify pointer-stride and transitive symbolic fact handling
+across the Core reducer, AST specialization and exact Core callsite selector,
+with both commuted addition and subtraction checked against DataLayout.

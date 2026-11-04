@@ -1,5 +1,6 @@
 #include "compiler/inline_specialize.h"
 #include "compiler/inline_specialize_internal.h"
+#include "compiler/inline_specialize_common.h"
 #include "compiler/c_lower/opt_pure_statement.h"
 #include "frontend/const_eval.h"
 #include "frontend/function_body.h"
@@ -329,55 +330,6 @@ blocked_error:
     return NULL;
 }
 
-static bool minic_inline_integer_specialization_matches(
-    const MinicFunction *candidate,
-    const MinicFunction *source,
-    const MinicFunction *caller,
-    MinicFunctionId source_id,
-    const bool *known,
-    const uint64_t *bits,
-    size_t parameter_count) {
-    size_t i;
-    if (candidate == NULL || !candidate->is_integer_specialization ||
-        candidate->specialization_source != source_id ||
-        candidate->parameter_count != parameter_count ||
-        !minic_inline_specialization_section_matches(candidate, source, caller)) {
-        return false;
-    }
-    for (i = 0U; i < parameter_count; ++i) {
-        if (candidate->specialization_integer_known[i] != known[i] ||
-            (known[i] && candidate->specialization_integer_bits[i] != bits[i])) {
-            return false;
-        }
-    }
-    return true;
-}
-
-bool minic_inline_specialization_section_matches(
-    const MinicFunction *candidate,
-    const MinicFunction *source,
-    const MinicFunction *caller) {
-    const MinicFunction *owner;
-    const char *wanted;
-    size_t length;
-
-    if (candidate == NULL || source == NULL) return false;
-    owner = source->section_name != NULL ? source : caller;
-    wanted = owner != NULL ? owner->section_name : NULL;
-    length = wanted != NULL ? owner->section_name_length : 0U;
-    if ((candidate->section_name == NULL) != (wanted == NULL) ||
-        candidate->section_name_length != length) return false;
-    return wanted == NULL || memcmp(candidate->section_name, wanted, length) == 0;
-}
-
-bool minic_inline_section_owner_index_required(const MinicC0Program *program) {
-    size_t index;
-    if (program == NULL) return false;
-    for (index = 0U; index < program->function_count; ++index)
-        if (program->functions[index].section_name != NULL) return true;
-    return false;
-}
-
 /* An unresolved __builtin_constant_p(expr) is evaluated later, from the
  * current caller's Core facts.  A conservative zero-result clone is useful
  * for GNU inline helpers whose fallback is legal only when expr is not
@@ -557,26 +509,14 @@ bool minic_specialize_inline_integer_calls(MinicC0Program *program,
     bool static_sources_checked = false;
     MinicCoreReentryIndex *pure_guard_reentry_index = NULL;
     bool pure_guard_index_attempted = false;
-    MinicFunctionId *initial_expression_owners = NULL;
-    bool initial_owner_index_ready = false;
+    MinicInlineInitialOwners initial_owners = {0};
 
     if (program == NULL || target == NULL) {
         return false;
     }
     original_function_count = program->function_count;
-    if (minic_inline_section_owner_index_required(program) &&
-        program->expression_count != 0U &&
-        program->expression_count <= SIZE_MAX / sizeof(*initial_expression_owners)) {
-        initial_expression_owners = malloc(program->expression_count *
-                                           sizeof(*initial_expression_owners));
-        if (initial_expression_owners != NULL)
-            initial_owner_index_ready = minic_perf_program_build_expression_source_owners(
-                program, original_function_count, initial_expression_owners,
-                program->expression_count);
-    }
-    if (minic_inline_section_owner_index_required(program) &&
-        program->expression_count != 0U && !initial_owner_index_ready) {
-        free(initial_expression_owners);
+    if (!minic_inline_initial_owners_build(program, original_function_count,
+                                           &initial_owners)) {
         (void)fprintf(stderr, "MINIC_INLINE_SECTION_OWNER_INDEX=FAIL integer\n");
         return false;
     }
@@ -587,10 +527,8 @@ bool minic_specialize_inline_integer_calls(MinicC0Program *program,
         MinicFunctionId specialized_id = MINIC_FUNCTION_INVALID;
         MinicFunction source;
         const MinicFunction *caller = NULL;
-        bool known[MINIC_MAX_FUNCTION_PARAMETERS];
-        uint64_t bits[MINIC_MAX_FUNCTION_PARAMETERS];
+        MinicInlineSpecializationKey key;
         size_t i;
-        size_t candidate_index;
         bool has_integer_constant = false;
         bool unresolved_constant_query = false;
 
@@ -603,9 +541,12 @@ bool minic_specialize_inline_integer_calls(MinicC0Program *program,
             continue;
         }
         source = program->functions[source_id];
-        if (initial_owner_index_ready &&
-            initial_expression_owners[expression_index] < original_function_count)
-            caller = &program->functions[initial_expression_owners[expression_index]];
+        {
+            MinicFunctionId owner_id = minic_inline_initial_owners_get(
+                &initial_owners, expression_index);
+            if (owner_id < original_function_count)
+                caller = &program->functions[owner_id];
+        }
         if (!source.is_defined || !source.is_internal ||
             (!source.is_inline && !minic_static_integer_specialization_eligible(&source)) ||
             !source.is_referenced || source.is_variadic ||
@@ -631,8 +572,7 @@ bool minic_specialize_inline_integer_calls(MinicC0Program *program,
                 continue;
             }
         }
-        (void)memset(known, 0, sizeof(known));
-        (void)memset(bits, 0, sizeof(bits));
+        minic_inline_spec_key_clear(&key);
         for (i = 0U; i < source.parameter_count; ++i) {
             MinicConstValue argument_value;
             MinicConstValue converted_value;
@@ -660,31 +600,24 @@ bool minic_specialize_inline_integer_calls(MinicC0Program *program,
                                                   &argument_value,
                                                   source.parameter_types[i],
                                                   &converted_value)) {
-                known[i] = true;
-                bits[i] = converted_value.bits;
+                key.integer_known[i] = true;
+                key.integer_bits[i] = converted_value.bits;
                 has_integer_constant = true;
             } else if (minic_inline_integer_unresolved_constant_query(
                            program, argument_id, 0U)) {
                 /* This speculative 0 must be revalidated in Core at the
                  * real callsite; never replace the shared source CALL. */
-                known[i] = true;
-                bits[i] = 0U;
+                key.integer_known[i] = true;
+                key.integer_bits[i] = 0U;
                 unresolved_constant_query = true;
             }
         }
         if (!has_integer_constant && !unresolved_constant_query) {
             continue;
         }
-        for (candidate_index = original_function_count;
-             candidate_index < program->function_count; ++candidate_index) {
-            if (minic_inline_integer_specialization_matches(
-                    &program->functions[candidate_index], &source, caller,
-                    source_id, known, bits,
-                    source.parameter_count)) {
-                specialized_id = candidate_index;
-                break;
-            }
-        }
+        specialized_id = minic_inline_spec_find_variant(
+            program, &source, caller, source_id, &key,
+            MINIC_INLINE_SPEC_FACT_INTEGER, original_function_count);
         if (specialized_id == MINIC_FUNCTION_INVALID) {
             if (!source.is_inline &&
                 (static_specialization_count >= MINIC_STATIC_INTEGER_SPECIALIZATION_LIMIT ||
@@ -709,11 +642,11 @@ bool minic_specialize_inline_integer_calls(MinicC0Program *program,
                               (size_t)source_id);
                 minic_core_reentry_index_destroy(pure_guard_reentry_index);
                 free(static_blocked_sources);
-                free(initial_expression_owners);
+                minic_inline_initial_owners_destroy(&initial_owners);
                 return false;
             }
             if (!minic_add_inline_integer_specialization(program, source_id, caller,
-                                                         known, bits,
+                                                         key.integer_known, key.integer_bits,
                                                          specialization_count,
                                                          &specialized_id)) {
                 (void)fprintf(stderr,
@@ -723,7 +656,7 @@ bool minic_specialize_inline_integer_calls(MinicC0Program *program,
                               (size_t)source_id);
                 minic_core_reentry_index_destroy(pure_guard_reentry_index);
                 free(static_blocked_sources);
-                free(initial_expression_owners);
+                minic_inline_initial_owners_destroy(&initial_owners);
                 return false;
             }
             specialization_count += 1U;
@@ -735,91 +668,51 @@ bool minic_specialize_inline_integer_calls(MinicC0Program *program,
             program->expressions[expression_index].value.call.function_id = specialized_id;
     }
     free(static_blocked_sources);
-    free(initial_expression_owners);
+    minic_inline_initial_owners_destroy(&initial_owners);
 
     {
         size_t caller_index;
         size_t refinement_count = 0U;
-        size_t *calls = NULL, call_count = 0U, pos;
-        const size_t expression_limit = program->expression_count;
-        /* Reuse the canonical source-FunctionBody ownership index.  Only
-         * uniquely-owned calls from another source may be skipped.  Shared,
-         * ambiguous, and unowned expressions retain the original path.
-         * Allocation/validation failure deliberately falls back to all calls. */
-        MinicFunctionId *integer_expression_owners = NULL;
-        bool integer_owner_index_ready = false;
-        size_t integer_owner_skipped = 0U;
+        MinicInlineCallWorklist calls = {0};
         size_t integer_call_candidates = 0U;
-        if (expression_limit != 0U &&
-            expression_limit <= SIZE_MAX / sizeof(*integer_expression_owners)) {
-            integer_expression_owners =
-                (MinicFunctionId *)malloc(expression_limit *
-                                          sizeof(*integer_expression_owners));
-            if (integer_expression_owners != NULL) {
-                integer_owner_index_ready =
-                    minic_perf_program_build_expression_source_owners(
-                        program, original_function_count,
-                        integer_expression_owners, expression_limit);
-                if (!integer_owner_index_ready) {
-                    free(integer_expression_owners);
-                    integer_expression_owners = NULL;
-                }
-            }
-        }
-        if (expression_limit > 0U &&
-            expression_limit <= SIZE_MAX / sizeof(*calls)) {
-            calls = malloc(expression_limit * sizeof(*calls));
-            if (calls != NULL) {
-                for (pos = 0U; pos < expression_limit; ++pos)
-                    if (program->expressions[pos].kind == MINIC_EXPRESSION_CALL)
-                        calls[call_count++] = pos;
-            }
+        size_t integer_owner_skipped = 0U;
+        /* Stable CALL IDs are grouped by their canonical FunctionBody
+         * source; unowned/shared and late-appended expressions still visit
+         * each caller. Allocation failure reverts to the complete scan. */
+        if (!minic_inline_call_worklist_build(
+                program, original_function_count, &calls)) {
+            minic_core_reentry_index_destroy(pure_guard_reentry_index);
+            return false;
         }
 
         for (caller_index = original_function_count;
              caller_index < program->function_count;
              ++caller_index) {
             const MinicFunction caller = program->functions[caller_index];
-            size_t nested_scan_index;
+            MinicInlineCallCursor cursor;
+            MinicExpressionId nested_expression_index;
 
             if (!caller.is_integer_specialization ||
                 caller.specialization_source >= original_function_count) {
                 continue;
             }
-            for (nested_scan_index = 0U;
-                 nested_scan_index < ((calls != NULL &&
-                    program->expression_count == expression_limit)
-                        ? call_count : program->expression_count);
-                 ++nested_scan_index) {
-                size_t nested_expression_index =
-                    (calls != NULL && program->expression_count == expression_limit)
-                    ? calls[nested_scan_index] : nested_scan_index;
+            minic_inline_call_cursor_begin(
+                &calls, caller.specialization_source, &cursor);
+            while (minic_inline_call_cursor_next(
+                    &cursor, program, &nested_expression_index)) {
                 const MinicExpression *nested = &program->expressions[nested_expression_index];
                 MinicFunctionId current_callee_id;
 
                 integer_call_candidates += 1U;
-                if (integer_owner_index_ready &&
-                    nested_expression_index < expression_limit) {
-                    MinicFunctionId expression_owner =
-                        integer_expression_owners[nested_expression_index];
-                    if (expression_owner != MINIC_FUNCTION_INVALID &&
-                        expression_owner < original_function_count &&
-                        expression_owner != caller.specialization_source) {
-                        integer_owner_skipped += 1U;
-                        continue;
-                    }
-                }
                 MinicFunctionId nested_source_id;
                 MinicFunctionId refined_id = MINIC_FUNCTION_INVALID;
                 MinicFunction current_callee;
                 MinicFunction nested_source;
-                bool nested_known[MINIC_MAX_FUNCTION_PARAMETERS];
-                uint64_t nested_bits[MINIC_MAX_FUNCTION_PARAMETERS];
+                MinicInlineSpecializationKey nested_key;
                 bool used_caller_fact = false;
                 bool adds_fact = false;
                 bool needs_section_clone;
                 size_t parameter_index;
-                size_t nested_candidate_index;
 
                 if (nested->kind != MINIC_EXPRESSION_CALL ||
                     nested->value.call.function_id == MINIC_FUNCTION_INVALID) {
@@ -850,10 +743,9 @@ bool minic_specialize_inline_integer_calls(MinicC0Program *program,
                     continue;
                 }
                 needs_section_clone = current_callee.is_integer_specialization &&
-                    !minic_inline_specialization_section_matches(
+                    !minic_inline_spec_section_matches(
                         &current_callee, &nested_source, &caller);
-                (void)memset(nested_known, 0, sizeof(nested_known));
-                (void)memset(nested_bits, 0, sizeof(nested_bits));
+                minic_inline_spec_key_clear(&nested_key);
                 for (parameter_index = 0U;
                      parameter_index < nested_source.parameter_count;
                      ++parameter_index) {
@@ -871,8 +763,8 @@ bool minic_specialize_inline_integer_calls(MinicC0Program *program,
                             &argument_used_caller_fact)) {
                         continue;
                     }
-                    nested_known[parameter_index] = true;
-                    nested_bits[parameter_index] = argument_value.bits;
+                    nested_key.integer_known[parameter_index] = true;
+                    nested_key.integer_bits[parameter_index] = argument_value.bits;
                     used_caller_fact = used_caller_fact || argument_used_caller_fact;
                     if (!current_callee.is_integer_specialization ||
                         !current_callee.specialization_integer_known[parameter_index] ||
@@ -890,10 +782,10 @@ bool minic_specialize_inline_integer_calls(MinicC0Program *program,
                     for (parameter_index = 0U;
                          parameter_index < nested_source.parameter_count;
                          ++parameter_index) {
-                        if (!nested_known[parameter_index] &&
+                        if (!nested_key.integer_known[parameter_index] &&
                             current_callee.specialization_integer_known[parameter_index]) {
-                            nested_known[parameter_index] = true;
-                            nested_bits[parameter_index] =
+                            nested_key.integer_known[parameter_index] = true;
+                            nested_key.integer_bits[parameter_index] =
                                 current_callee.specialization_integer_bits[parameter_index];
                         }
                     }
@@ -901,20 +793,10 @@ bool minic_specialize_inline_integer_calls(MinicC0Program *program,
                 if ((!used_caller_fact || !adds_fact) && !needs_section_clone) {
                     continue;
                 }
-                for (nested_candidate_index = original_function_count;
-                     nested_candidate_index < program->function_count;
-                     ++nested_candidate_index) {
-                    if (minic_inline_integer_specialization_matches(
-                            &program->functions[nested_candidate_index],
-                            &nested_source, &caller,
-                            nested_source_id,
-                            nested_known,
-                            nested_bits,
-                            nested_source.parameter_count)) {
-                        refined_id = nested_candidate_index;
-                        break;
-                    }
-                }
+                refined_id = minic_inline_spec_find_variant(
+                    program, &nested_source, &caller, nested_source_id,
+                    &nested_key, MINIC_INLINE_SPEC_FACT_INTEGER,
+                    original_function_count);
                 if (refined_id == MINIC_FUNCTION_INVALID) {
                     if (specialization_count >= MINIC_INLINE_INTEGER_SPECIALIZATION_LIMIT) {
                         (void)fprintf(stderr,
@@ -923,8 +805,7 @@ bool minic_specialize_inline_integer_calls(MinicC0Program *program,
                                       (unsigned int)MINIC_INLINE_INTEGER_SPECIALIZATION_LIMIT,
                                       program->function_count,
                                       (size_t)nested_source_id);
-                        free(integer_expression_owners);
-                        free(calls);
+                        minic_inline_call_worklist_destroy(&calls);
                         minic_core_reentry_index_destroy(pure_guard_reentry_index);
                         return false;
                     }
@@ -932,8 +813,8 @@ bool minic_specialize_inline_integer_calls(MinicC0Program *program,
                             program,
                             nested_source_id,
                             &caller,
-                            nested_known,
-                            nested_bits,
+                            nested_key.integer_known,
+                            nested_key.integer_bits,
                             specialization_count,
                             &refined_id)) {
                         (void)fprintf(stderr,
@@ -941,8 +822,7 @@ bool minic_specialize_inline_integer_calls(MinicC0Program *program,
                                       specialization_count,
                                       program->function_count,
                                       (size_t)nested_source_id);
-                        free(integer_expression_owners);
-                        free(calls);
+                        minic_inline_call_worklist_destroy(&calls);
                         minic_core_reentry_index_destroy(pure_guard_reentry_index);
                         return false;
                     }
@@ -950,19 +830,19 @@ bool minic_specialize_inline_integer_calls(MinicC0Program *program,
                     refinement_count += 1U;
                 }
             }
+            integer_owner_skipped += cursor.skipped_other_owner;
         }
-        free(calls);
-        free(integer_expression_owners);
         if (getenv("MINIC_INTEGER_OWNER_PERF") != NULL) {
             (void)fprintf(stderr,
                           "MINIC_INTEGER_OWNER_FILTER ready=%u "
                           "candidates=%zu skipped_other_owner=%zu "
                           "fallback=%u\n",
-                          (unsigned int)integer_owner_index_ready,
+                          (unsigned int)calls.owner_ready,
                           integer_call_candidates,
                           integer_owner_skipped,
-                          (unsigned int)!integer_owner_index_ready);
+                          (unsigned int)!calls.owner_ready);
         }
+        minic_inline_call_worklist_destroy(&calls);
         if (refinement_count != 0U) {
             (void)fprintf(stderr,
                           "MINIC_INLINE_INTEGER_SPECIALIZATION_TRANSITIVE_V0 refined=%zu clones=%zu functions=%zu\n",

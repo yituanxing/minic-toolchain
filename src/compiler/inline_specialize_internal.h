@@ -22,13 +22,6 @@ bool minic_add_inline_integer_specialization(
     const uint64_t *bits,
     size_t ordinal,
     MinicFunctionId *specialized_id);
-/* A callee's explicit section wins.  Otherwise an out-of-line inline clone
- * inherits its callsite's section, and that section is part of its identity. */
-bool minic_inline_specialization_section_matches(
-    const MinicFunction *candidate,
-    const MinicFunction *source,
-    const MinicFunction *caller);
-bool minic_inline_section_owner_index_required(const MinicC0Program *program);
 bool minic_add_inline_symbolic_specialization(
     MinicC0Program *program,
     MinicFunctionId source_id,
