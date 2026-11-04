@@ -834,6 +834,53 @@ static bool parse_directive_with_identifier(ScriptParser *parser,
     return true;
 }
 
+/* GNU BFD target names such as i386:x86-64 contain characters that the
+ * section/expression lexer deliberately keeps as separate tokens.  Join
+ * those tokens only for OUTPUT_ARCH; ENTRY remains a plain identifier and
+ * section punctuation retains its existing meaning. */
+static bool parse_output_arch_name(ScriptParser *parser, char **value_out) {
+    const char *begin;
+    const char *end;
+    char *value;
+
+    if (!minild_script_parser_next(parser) ||
+        !minild_script_expect(parser, TOKEN_LPAREN,
+                              "expected-'('-after-directive") ||
+        parser->token.kind != TOKEN_IDENTIFIER) {
+        return minild_script_parser_error(parser,
+                                          "expected-identifier-in-directive");
+    }
+    begin = parser->token.begin;
+    end = begin;
+    do {
+        if (parser->token.begin != end ||
+            (parser->token.kind != TOKEN_IDENTIFIER &&
+             parser->token.kind != TOKEN_NUMBER &&
+             parser->token.kind != TOKEN_COLON &&
+             parser->token.kind != TOKEN_MINUS)) {
+            return minild_script_parser_error(parser,
+                                              "invalid-output-arch-spelling");
+        }
+        end += parser->token.length;
+        if (!minild_script_parser_next(parser)) {
+            return false;
+        }
+    } while (parser->token.kind != TOKEN_RPAREN &&
+             parser->token.kind != TOKEN_EOF);
+    if (parser->token.kind != TOKEN_RPAREN) {
+        return minild_script_parser_error(parser,
+                                          "expected-')'-after-directive");
+    }
+    value = minild_script_strdup_range(begin, (size_t)(end - begin));
+    if (value == NULL || !minild_script_parser_next(parser)) {
+        free(value);
+        return false;
+    }
+    free(*value_out);
+    *value_out = value;
+    return true;
+}
+
 void minild_script_initialize(MiniLdScript *script) {
     memset(script, 0, sizeof(*script));
 }
@@ -926,8 +973,7 @@ bool minild_script_parse_file(const char *path,
 
     while (parser.token.kind != TOKEN_EOF) {
         if (minild_script_token_is(&parser, "OUTPUT_ARCH")) {
-            if (!parse_directive_with_identifier(&parser,
-                                                 &script->output_arch)) {
+            if (!parse_output_arch_name(&parser, &script->output_arch)) {
                 goto done;
             }
         } else if (minild_script_token_is(&parser, "ENTRY")) {

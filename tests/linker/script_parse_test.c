@@ -48,6 +48,43 @@ int main(int argc, char **argv) {
         return 1;
     }
 
+    /* OUTPUT_ARCH admits GNU's exact target names without relaxing the
+     * lexer for symbol expressions or the separate ENTRY directive. */
+    {
+        MiniLdScript x86;
+        MiniLdScript malformed;
+
+        minild_script_initialize(&x86);
+        if (!minild_script_parse_file("tests/linker/output-arch-x86.lds",
+                                      &x86, stderr) ||
+            x86.output_arch == NULL ||
+            strcmp(x86.output_arch, "i386:x86-64") != 0 ||
+            x86.entry_symbol == NULL ||
+            strcmp(x86.entry_symbol, "_start") != 0) {
+            minild_script_destroy(&x86);
+            minild_script_destroy(&script);
+            return 1;
+        }
+        minild_script_destroy(&x86);
+        minild_script_initialize(&malformed);
+        if (minild_script_parse_file("tests/linker/output-arch-invalid.lds",
+                                      &malformed, stderr)) {
+            minild_script_destroy(&malformed);
+            minild_script_destroy(&script);
+            return 1;
+        }
+        minild_script_destroy(&malformed);
+        minild_script_initialize(&malformed);
+        if (minild_script_parse_file("tests/linker/output-entry-invalid.lds",
+                                      &malformed, stderr)) {
+            minild_script_destroy(&malformed);
+            minild_script_destroy(&script);
+            return 1;
+        }
+        minild_script_destroy(&malformed);
+        puts("MINILD_SCRIPT_ARCH=PASS GNU_i386_colon_dash=1 invalid_arch=reject invalid_ENTRY=reject");
+    }
+
     memset(&pattern, 0, sizeof(pattern));
     pattern.text = ".text.*";
     if (!minild_script_pattern_matches(&pattern, ".text.hot") ||

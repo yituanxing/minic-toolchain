@@ -51,8 +51,8 @@ No missing QEMU may be silently counted as a runtime pass.
 |---|---|---|
 | x86-64 | GNU BFD + MiniLD native CRT/TLS/IFUNC, five ordinary C stages | **5/5 PASS** with native execution and GNU output parity |
 | RV64 | RISC-V TLS and ULEB128 GNU BFD/QEMU differential | **5/5 PASS** with real glibc and QEMU output parity |
-| AArch64 | GOT/TLS IE/LE and static IFUNC GNU BFD/QEMU differential | **0/5**, all real glibc stages MiniLD-link but QEMU exit 139; GNU works; the current fault is a discontinuous `.init_array` range |
-| LoongArch64 | GOT/TLS, true ALIGN-shrink, PCALA K12 and undefweak B26 GNU BFD/QEMU differential | **0/5**, all real glibc stages MiniLD-link but QEMU exit 139; GNU works; the current output lacks static IFUNC relocation synthesis |
+| AArch64 | GOT/TLS IE/LE, static IFUNC and contiguous CRT arrays GNU BFD/QEMU differential | **5/5 PASS** with real glibc and QEMU output parity |
+| LoongArch64 | GOT/TLS, ALIGN-shrink, PCALA K12, undefweak B26 and static IFUNC GNU BFD/QEMU differential | **5/5 PASS** with real glibc and QEMU output parity |
 | RV32 | ELF32/ILP32, TLS LE and ULEB128 GNU BFD/QEMU differential | **5/5 PASS** with real RV32I Picolibc, Linux-syscall bridge and QEMU output parity |
 
 The first real GCC/libc CI cohort is
@@ -119,6 +119,35 @@ and [#41838522839](https://github.com/yituanxing/minic-toolchain/actions/runs/41
 Passing boundary CI and successfully writing five ELF executables are
 necessary milestones, but neither is a substitute for QEMU runtime parity.
 
+The next exact-commit cohort,
+[CI #41840428526](https://github.com/yituanxing/minic-toolchain/actions/runs/41840428526)
+at `b3d2bad`, **closed the real-program ladder at 25/25**: x86-64, RV32I,
+RV64, AArch64 and LoongArch64 each link **all five** independently with GNU
+BFD and MiniLD and execute both ELF binaries successfully with matching
+exit/stdout/stderr. AArch64's general CRT array layout fix groups
+`.preinit_array`, `.init_array` and `.fini_array` contiguously and sorts
+numeric priorities without disturbing relocation section indices or explicit
+linker-script layout; its exact QEMU glibc startup now passes. LoongArch64
+now emits GNU-compatible `.iplt`, `.igot.plt` and `R_LARCH_IRELATIVE`,
+including IFUNC alias deduplication and live `__rela_iplt_start/end`;
+its GNU BFD/QEMU resolver side-effect oracle passes too. RV32's real libc
+remains Picolibc with an ILP32 Linux syscall bridge, not RV64 glibc.
+The accompanying current-source five-target ELF boundary
+[#41840438066](https://github.com/yituanxing/minic-toolchain/actions/runs/41840438066)
+completed successfully.
+
+The script/GC policy follow-up at `92ffdc6` passed two independent current
+head boundary runs, including
+[#41841673258](https://github.com/yituanxing/minic-toolchain/actions/runs/41841673258).
+Real GNU BFD and QEMU independently ran a tiny static executable for all
+five targets. RV64 additionally linked and ran a `-T` + `--gc-sections`
+positive case with `KEEP` and `/DISCARD/` parity. For RV32, x86-64,
+AArch64 and LoongArch64, all three unsupported modes (`-T`, GC, both) were
+correctly rejected **before** any output ELF was written, with GNU BFD/QEMU
+used as a positive reference. These **correct rejections are not Linux link
+passes**; enabling each target requires a subsequent positive script/GC
+differential and ultimately the actual Kbuild final-link input.
+
 ### Separate Linux kernel link acceptance
 
 Keep four levels as separately scored outcomes:
@@ -164,9 +193,25 @@ single cached final link is not a fresh QEMU P1 certification.
 The first cache-only check,
 [#41836643714](https://github.com/yituanxing/minic-toolchain/actions/runs/41836643714),
 failed closed at `actions/cache/restore` because the exact historical cache
-key was absent. No Linux C files were rebuilt and no current-head Linux
-link success was claimed. This check is now manual-only to avoid repeatedly
-installing a cross-toolchain for a known-missing cache on every source push.
+key was **unavailable to this branch**. A later read-only GitHub Actions cache
+inventory found that same 72,642,984-byte cache under
+`refs/pull/674/merge` (a different PR branch). GitHub cache scope isolation
+prevents the current refactor branch from restoring it, even with a key-prefix
+fallback; the failed run did **not** prove the old bytes expired. No Linux C
+files were rebuilt and no current-head Linux link success was claimed.
+The original replay check is manual-only to avoid needless repeat cache misses.
+
+The existing GNU baseline producer in
+`.github/workflows/linux-runtime-gcc-baseline.yml` can instead build Linux
+6.6.143 **once** on the current refactor branch, verify the GNU Image with
+QEMU full/P1 and store its SHA-verified Kbuild object pool within the correct
+cache scope. A one-shot `[minild-golden-refresh]` workflow path can then run
+the existing `minild-linux-cache-final-replay-v1.sh` on that *same* object
+pool immediately after saving it. This is one real MiniLD
+`.tmp_vmlinux.kallsyms1` final-link attempt, **not** a completed `vmlinux`,
+Image or MiniLD QEMU P1 acceptance. If the MiniLD link fails, the already
+saved certified GNU inputs can be reused for targeted repairs without
+recompiling Linux C each round.
 
 The original MiniAS RV64 C ladder used `rv64gc/lp64d`.  MiniC's Linux
 code-generation contract is separately `rv64i/lp64`; they are **not the same
@@ -198,9 +243,11 @@ The default `gcc-glibc` profile preserves the original `rv64gc/lp64d` ladder.
    now link and run; GNU BFD links the exact same objects, and exit/stdout/
    stderr agree for `exit`, `control`, `memory`, `multitu` and `io`.
 
-The next milestones remain exact five-architecture CI/QEMU differential,
-then cJSON, zlib, Lua, BusyBox, and eventually Linux. In particular, one
-x86-64 5/5 does **not** establish five-architecture Linux correctness.
+The five-architecture ordinary-program 25/25 ladder is now fully accepted.
+The next milestones are cJSON, zlib, Lua and BusyBox on the MiniLD final
+linker, and actual Linux `vmlinux` final linking with ELF/QEMU acceptance.
+Even 25/25 real libc programs do **not** establish five-architecture Linux
+linker correctness.
 
 ## Verified locally on this revision
 

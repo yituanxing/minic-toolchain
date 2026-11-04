@@ -165,7 +165,7 @@ probe_arch() {
     "$gnu_ld" -m "$emulation" -static --gc-sections \
         -T "$dir/script.lds" -o "$dir/script-gnu.elf" \
         "$dir/entry.o" "$dir/dead.o" >"$dir/script-gnu.log" 2>&1 || die script_gnu
-    check_elf "$dir/script-gnu.elf" gc
+    check_elf "$dir/script-gnu.elf" script_gc
     run_elf "$dir/script-gnu.elf" script_gnu
     if [[ $policy == false ]]; then
         local option stage
@@ -186,12 +186,42 @@ probe_arch() {
         done
         echo "MINILD_SCRIPT_GC_5ARCH=GATED arch=$arch profile_script=false profile_gc=false gnu_reference=PASS minild_negative=3/3 plain_runtime=PASS"
     else
+        # Independently admit and exercise each flag, not only the combined
+        # mode. Script-only must exclude dead.o: its missing_dead reference
+        # is supposed to fail without --gc-sections, not be silently lost.
+        "$gnu_ld" -m "$emulation" -static \
+            -T "$dir/script.lds" -o "$dir/script-only-gnu.elf" \
+            "$dir/entry.o" >"$dir/script-only-gnu.log" 2>&1 || die script_only_gnu
+        "$MINILD" -m "$emulation" -static \
+            -T "$dir/script.lds" -o "$dir/script-only-mini.elf" \
+            "$dir/entry.o" >"$dir/script-only-mini.log" 2>&1 || die script_only_mini
+        for producer in gnu mini; do
+            check_elf "$dir/script-only-$producer.elf" script_only
+            run_elf "$dir/script-only-$producer.elf" "script_only_$producer"
+        done
+
+        # No linker script: the unreferenced KEEP fixture must now disappear.
+        # The separate dead object contains an unresolved relocation that
+        # both linkers must prune before resolving live symbols.
+        "$gnu_ld" -m "$emulation" -static --gc-sections -e _start \
+            -o "$dir/gc-only-gnu.elf" "$dir/entry.o" "$dir/dead.o" \
+            >"$dir/gc-only-gnu.log" 2>&1 || die gc_only_gnu
+        "$MINILD" -m "$emulation" -static --gc-sections -e _start \
+            -o "$dir/gc-only-mini.elf" "$dir/entry.o" "$dir/dead.o" \
+            >"$dir/gc-only-mini.log" 2>&1 || die gc_only_mini
+        for producer in gnu mini; do
+            check_elf "$dir/gc-only-$producer.elf" gc_only
+            run_elf "$dir/gc-only-$producer.elf" "gc_only_$producer"
+        done
+
+        # Finally combine the two independent features: KEEP retains the
+        # otherwise dead .text.keep; /DISCARD/ and GC remove the other inputs.
         "$MINILD" -m "$emulation" -static --gc-sections \
             -T "$dir/script.lds" -o "$dir/script-mini.elf" \
             "$dir/entry.o" "$dir/dead.o" >"$dir/script-mini.log" 2>&1 || die script_mini
-        check_elf "$dir/script-mini.elf" gc
+        check_elf "$dir/script-mini.elf" script_gc
         run_elf "$dir/script-mini.elf" script_mini
-        echo "MINILD_SCRIPT_GC_5ARCH=PASS arch=$arch profile_script=true profile_gc=true gnu_reference=PASS minild_gc_runtime=PASS plain_runtime=PASS"
+        echo "MINILD_SCRIPT_GC_5ARCH=PASS arch=$arch profile_script=true profile_gc=true gnu_mini_modes=3/3 script_only=PASS gc_only=PASS script_gc=PASS plain_runtime=PASS"
     fi
 }
 
@@ -218,8 +248,13 @@ def defined(name):
                and parts[6] != 'UND' for line in symbols.splitlines())
 if not defined('_start'):
     raise SystemExit(f'MINILD_SCRIPT_GC_5ARCH=FAIL missing_entry={path}')
-if mode == 'gc' and (not defined('keep_fn') or defined('dead_fn') or defined('discard_fn')):
-    raise SystemExit(f'MINILD_SCRIPT_GC_5ARCH=FAIL bad_KEEP_GC_DISCARD={path}')
+if mode in ('script_only', 'script_gc') and not defined('keep_fn'):
+    raise SystemExit(f'MINILD_SCRIPT_GC_5ARCH=FAIL KEEP_missing={path}')
+if mode == 'gc_only' and defined('keep_fn'):
+    raise SystemExit(f'MINILD_SCRIPT_GC_5ARCH=FAIL nonKEEP_section_survived_GC={path}')
+if mode in ('script_only', 'script_gc', 'gc_only') and (
+        defined('dead_fn') or defined('discard_fn')):
+    raise SystemExit(f'MINILD_SCRIPT_GC_5ARCH=FAIL bad_dead_or_DISCARD={path}')
 PY
 }
 
