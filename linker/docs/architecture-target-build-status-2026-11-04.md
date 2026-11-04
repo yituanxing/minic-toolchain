@@ -9,11 +9,11 @@ target coverage. A host x86-64 `minic-ld` is still primarily an RV64 linker.
 
 | Requested output target | CLI / link implementation | Build / acceptance status |
 | --- | --- | --- |
-| RV64 ELF64 little-endian | `elf64lriscv`: ET_REL, ET_EXEC, ET_DYN, PIE | Implemented subset; host fixtures and dedicated RV64 integration jobs |
-| RV32 ELF32 little-endian | `elf32lriscv`: special Linux compat-vDSO ET_DYN only | Not a general RV32 linker; fixed compatibility contract |
-| x86-64 ELF64 | No target emulation or relocation implementation | Not supported or linked |
-| AArch64 ELF64 | No target emulation or relocation implementation | Not supported or linked |
-| LoongArch64 ELF64 | No target emulation or relocation implementation | Not supported or linked |
+| RV64 ELF64 little-endian | `elf64lriscv`: ET_REL, ET_EXEC, ET_DYN, PIE | Existing RV64 subset and separate integration contracts |
+| RV32 ELF32 little-endian | `elf32lriscv`: generic ET_REL; special Linux compat-vDSO ET_DYN | ET_REL five-target contract; no generic ELF32 ET_EXEC / PIE |
+| x86-64 ELF64 | `elf_x86_64`: ET_REL and baseline static ET_EXEC | GNU AS/LD differential, real native Linux syscall runtime |
+| AArch64 ELF64 | `aarch64linux`: ET_REL and baseline static ET_EXEC | ELF64/RELA, absolute and cross-object CALL26 relocation; local QEMU runtime pending |
+| LoongArch64 ELF64 | `elf64loongarch`: ET_REL and baseline static ET_EXEC | ELF64/RELA, absolute and cross-object B26 relocation; local QEMU runtime pending |
 
 This matrix reports target **link** support, not whether the linker itself
 can be cross-compiled to execute on these architectures. The latter is a
@@ -21,18 +21,56 @@ separate host-tool portability task and does not establish target correctness.
 
 Evidence in the source tree:
 
-- `tools/minic-ld/main_core.inc` selects only two RISC-V emulations and
-  dispatches `-r`, static, shared and PIE to RV64-specialized public APIs.
-- `linker/src/linker_riscv_input_abi.inc` is the one RV64 ELF admission and
-  identity owner; it requires `ELFCLASS64` and `EM_RISCV`.
+- `tools/minic-ld/main_core.inc` chooses an explicit emulation, and an
+  immutable target policy refuses link modes which do not have a backend.
+- `linker/src/linker_target_elf.inc` owns five ELF identity, e_flags and
+  attributes policies; Common admission and -r output borrow this profile.
 - `linker/src/elf32_compat_vdso.c` implements its own narrow RV32 vDSO path.
-- `linker/src/linker_riscv_fixup.inc` owns RISC-V final instruction fixups;
-  other target relocation implementations do not yet exist.
-- `linker/src/linker_elf64_image.inc` serializes ELF64 only. The
-  linker-script architecture and default PIE interpreter policy are still
-  RISC-V-specific.
+- `linker/src/linker_riscv_fixup.inc` owns RV64 final relocations; the
+  new `linker_nonriscv_static_fixup.inc` owns bounded x86-64/AArch64/
+  LoongArch64 static patches. Shared GOT/PLT/TLS and relaxation remain
+  independent target acceptance frontiers.
+- `linker/src/linker_elf64_image.inc` serializes ELF64 only. The Target owns
+  linker-script architecture and default PIE interpreter policy; only RV64
+  currently accepts scripted static and dynamic links.
 - `Makefile` has one `MINILD_SOURCES`/`MINILD_BINARY` build and no backend
-  matrix; `.github/workflows/minild-integration-v1.yml` is RV64-focused.
+  binary matrix. `check-minild-multitarget-relocatable` is an actual five-target
+  ET_REL contract, and `check-minild-multitarget-static` exercises three
+  baseline ELF64 final targets. `.github/workflows/minild-integration-v1.yml`
+  remains RV64-focused; the new focused boundary CI is separate.
+
+## Five-target architecture exercise — 2026-11-04
+
+The new ET_REL path is not five copied linkers. It reuses the same admission,
+archive graph, canonical symbol resolution, working-section projection and
+MiniELF writer with one invocation-owned output target. The producer is the
+actual MiniAS corresponding to each target, not a synthetic header-only ELF.
+
+`make check-minild-multitarget-relocatable` checks two cross-object references
+and two real RELA records for each of the five targets (including RV32 ELF32),
+plus GNU ld -r semantic parity on x86-64. It must reject mixed target inputs
+and unsupported link modes without writing an apparent success artifact.
+
+The second stage also exercises **baseline static ET_EXEC** on three new
+ELF64 targets. MiniLD resolves one cross-object absolute address for each,
+checks ET_EXEC/PT_LOAD/entry/symbol identity and rejects an unknown machine
+relocation without writing an output. AArch64 and LoongArch64 also check an
+actual MiniAS-emitted, cross-object CALL26/B26 branch by decoding the final
+instruction and comparing the computed destination with the resolved symbol.
+An x86-64 Linux syscall executable runs natively and agrees with GNU ld on
+identical inputs. The focused CI installs QEMU user emulators and treats guest
+runtime as a required gate; at this local checkpoint they are unavailable,
+so their QEMU runtime and extensive GNU final-link parity are **not** yet
+accepted. Their static linker scripts,
+GC, shared/PIE, GOT/PLT and TLS explicitly remain disabled.
+
+An invocation now owns `--gc-sections` as a static option rather than a
+process-global variable or a command-line wrapper. It remains an RV64-only
+qualified mode until the new target GC contracts are tested.
+
+This is not full Linux distribution support: RISC-V RV32 ELF32 final output,
+target-wide relocation coverage, TLS, dynamic linking and per-ISA runtime
+acceptance remain separate gates. `-r` alone is not runtime correctness.
 
 ## Architecture inventory after the input/output ownership passes
 

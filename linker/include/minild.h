@@ -20,6 +20,7 @@ typedef struct MiniLdInput {
 typedef struct MiniLdStaticOptions {
     const char *entry_symbol;
     const char *script_path;
+    bool gc_sections;
 } MiniLdStaticOptions;
 
 typedef struct MiniLdSharedOptions {
@@ -35,6 +36,32 @@ typedef struct MiniLdSharedOptions {
     bool eh_frame_hdr;
     bool pie;
 } MiniLdSharedOptions;
+
+/* A link target describes the OUTPUT ELF ABI, independently of the host
+ * running minic-ld. Unsupported link modes must fail before writing output. */
+typedef enum MiniLdLinkMode {
+    MINILD_LINK_RELOCATABLE,
+    MINILD_LINK_STATIC,
+    MINILD_LINK_SHARED,
+    MINILD_LINK_PIE
+} MiniLdLinkMode;
+
+bool minild_emulation_supports_mode(const char *emulation,
+                                    MiniLdLinkMode mode);
+
+int minild_link_relocatable_inputs_target(const char *output_path,
+                                          const MiniLdInput *inputs,
+                                          size_t input_count,
+                                          const char *emulation,
+                                          FILE *diagnostics);
+
+int minild_link_static_elf64_inputs_target(
+    const char *output_path,
+    const MiniLdInput *inputs,
+    size_t input_count,
+    const MiniLdStaticOptions *options,
+    const char *emulation,
+    FILE *diagnostics);
 
 int minild_link_relocatable_elf64_riscv(const char *output_path,
                                         const char *const *input_paths,

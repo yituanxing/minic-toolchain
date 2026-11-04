@@ -93,7 +93,7 @@ static bool minild_write_relocatable_output(MiniLdState *state,
     }
 
     memset(&spec, 0, sizeof(spec));
-    minild_target_set_relocatable_identity(&spec);
+    minild_target_set_relocatable_identity(state->target, &spec);
     spec.flags = state->elf_flags;
     spec.sections = sections;
     spec.section_count = state->work.count;

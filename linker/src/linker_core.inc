@@ -224,10 +224,13 @@ typedef struct MiniLdSymbolResolver {
     size_t global_count;
 } MiniLdSymbolResolver;
 
+typedef struct MiniLdTargetProfile MiniLdTargetProfile;
+
 static void symbol_resolver_destroy(MiniLdSymbolResolver *resolver);
 static void work_sections_destroy(MiniLdSectionWorkspace *work);
 
 typedef struct MiniLdState {
+    const MiniLdTargetProfile *target;
     MiniLdInputGraph inputs;
     MiniLdSectionWorkspace work;
     MiniLdSymbolResolver resolver;
@@ -529,9 +532,9 @@ static bool find_or_add_section(MiniLdState *state,
 
 #include "linker_common_allocation.inc"
 
-/* RISC-V psABI/ELF identity is a Target decision shared by every input and
- * output mode; it is available before archive admission and ET_REL writing. */
-#include "linker_riscv_input_abi.inc"
+/* ELF/psABI identity is a Target decision shared by every input and output
+ * mode; it is available before archive admission and ET_REL writing. */
+#include "linker_target_elf.inc"
 
 #include "linker_admission.inc"
 #include "linker_relocatable_output.inc"
@@ -580,18 +583,26 @@ static void minild_perf_phase(const char *phase,
     *last = now;
 }
 
-int minild_link_relocatable_elf64_riscv_inputs(const char *output_path,
-                                               const MiniLdInput *inputs,
-                                               size_t input_count,
-                                               FILE *diagnostics) {
+int minild_link_relocatable_inputs_target(const char *output_path,
+                                          const MiniLdInput *inputs,
+                                          size_t input_count,
+                                          const char *emulation,
+                                          FILE *diagnostics) {
     MiniLdState state;
+    const MiniLdTargetProfile *target = minild_target_find(emulation);
     bool ok = false;
 
     if (output_path == NULL || inputs == NULL || input_count == 0U ||
         diagnostics == NULL) {
         return 2;
     }
+    if (target == NULL || !target->supports_relocatable) {
+        fprintf(diagnostics, "minic-ld: unsupported-target-relocatable:%s\n",
+                emulation == NULL ? "(null)" : emulation);
+        return 2;
+    }
     memset(&state, 0, sizeof(state));
+    state.target = target;
     state.diagnostics = diagnostics;
     state.relocatable_output = true;
 
@@ -610,6 +621,14 @@ int minild_link_relocatable_elf64_riscv_inputs(const char *output_path,
 done:
     state_destroy(&state);
     return ok ? 0 : 1;
+}
+
+int minild_link_relocatable_elf64_riscv_inputs(const char *output_path,
+                                               const MiniLdInput *inputs,
+                                               size_t input_count,
+                                               FILE *diagnostics) {
+    return minild_link_relocatable_inputs_target(
+        output_path, inputs, input_count, "elf64lriscv", diagnostics);
 }
 
 int minild_link_relocatable_elf64_riscv(const char *output_path,

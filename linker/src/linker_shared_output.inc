@@ -164,7 +164,8 @@ int minild_link_shared_elf64_riscv_inputs_options(
     const char *interpreter_path =
         options != NULL && options->interpreter_path != NULL
             ? options->interpreter_path
-            : pie ? minild_target_default_pie_interpreter() : NULL;
+            : pie ? minild_target_default_pie_interpreter(
+                        minild_target_find("elf64lriscv")) : NULL;
     MiniLdState state;
     MiniLdLayout layout;
     MiniLdSharedImage shared;
@@ -180,6 +181,7 @@ int minild_link_shared_elf64_riscv_inputs_options(
         return 2;
     }
     memset(&state, 0, sizeof(state));
+    state.target = minild_target_find("elf64lriscv");
     memset(&layout, 0, sizeof(layout));
     memset(&shared, 0, sizeof(shared));
     minild_script_initialize(&version_script);
@@ -209,7 +211,8 @@ int minild_link_shared_elf64_riscv_inputs_options(
             layout_script.version_global_count == 0U ||
             !layout_script.version_local_all ||
             layout_script.output_arch == NULL ||
-            !minild_target_accept_script_arch(layout_script.output_arch) ||
+            !minild_target_accept_script_arch(state.target,
+                                              layout_script.output_arch) ||
             soname == NULL || soname[0] == '\0') {
             fprintf(diagnostics,
                     "minic-ld: unsupported-shared-script-contract:%s\n",

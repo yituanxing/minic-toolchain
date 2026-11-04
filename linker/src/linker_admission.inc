@@ -147,7 +147,7 @@ static bool process_input_data(MiniLdState *state,
     bool ok = false;
 
     if (!minielf_open(&elf, data, size) ||
-        !minild_target_accept_elf(&elf, ET_REL) ||
+        !minild_target_accept_elf(state, &elf, ET_REL) ||
         elf.version != EV_CURRENT ||
         elf.section_count == 0U ||
         elf.section_name_table_index == SHN_UNDEF) {
@@ -185,7 +185,8 @@ static bool process_input_data(MiniLdState *state,
     }
     if (symtab_index == SIZE_MAX ||
         symtab.link >= elf.section_count ||
-        symtab.entry_size < sizeof(Elf64_Sym)) {
+        symtab.entry_size < (state->target->elf_class == ELFCLASS32
+                                 ? sizeof(Elf32_Sym) : sizeof(Elf64_Sym))) {
         fprintf(state->diagnostics, "minic-ld: missing-symtab:%s\n", path);
         goto done;
     }
@@ -296,9 +297,10 @@ static bool process_input_data(MiniLdState *state,
                     "minic-ld: invalid-section-name:%s\n", path);
             goto done;
         }
-        if (minild_target_is_attributes_section(input.type)) {
+        if (minild_target_is_attributes_section(state, input.type)) {
             if (!minild_target_accept_attributes(
-                    &elf, i, name, &input, &section_data, &section_size)) {
+                    state, &elf, i, name, &input,
+                    &section_data, &section_size)) {
                 fprintf(state->diagnostics,
                         "minic-ld: invalid-riscv-attributes:%s\n", path);
                 goto done;
@@ -497,7 +499,9 @@ static bool process_input_data(MiniLdState *state,
                  &state->inputs, file_index, rela_section.info)) ==
                 SIZE_MAX ||
             state->inputs.sections[target_input_id].type == SHT_GROUP ||
-            rela_section.entry_size < sizeof(Elf64_Rela)) {
+            rela_section.entry_size < (state->target->elf_class == ELFCLASS32
+                                           ? sizeof(Elf32_Rela)
+                                           : sizeof(Elf64_Rela))) {
             fprintf(state->diagnostics, "minic-ld: invalid-rela:%s\n", path);
             goto done;
         }
@@ -569,7 +573,7 @@ static bool process_dso_input_data(MiniLdState *state,
     size_t i;
 
     if (!minielf_open(&elf, data, size) ||
-        !minild_target_accept_elf(&elf, ET_DYN) ||
+        !minild_target_accept_elf(state, &elf, ET_DYN) ||
         elf.version != EV_CURRENT) {
         fprintf(state->diagnostics,
                 "minic-ld: unsupported-shared-input:%s\n",

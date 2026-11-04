@@ -20,7 +20,7 @@ target architecture is added.
 | `linker_input_projection.inc` | The one InputGraph-to-WorkSection projection and work-section order remaps |
 | `linker_script_input_selection.inc` | Source-fragment matching and script /DISCARD/ selection before final layout |
 | `linker_input_gc.inc` | Reachability, KEEP roots, section/link-order/group dependency closure and GC pruning |
-| `linker_riscv_input_abi.inc` | One target-owned ELF class/machine/ABI and attributes acceptance contract shared by direct ET_REL inputs, extracted archive members and accepted ET_DYN inputs; also supplies ET_REL/final ELF header identity |
+| `linker_target_elf.inc` | One invocation-scoped target ELF class/machine/ABI and attributes acceptance contract shared by direct ET_REL inputs, extracted archive members and accepted ET_DYN inputs; also supplies ET_REL/final ELF header identity |
 | `linker_relocatable_output.inc` | ET_REL-only symbol, section and RELA projection into the existing MiniELF relocatable writer; owns its temporary allocations and file sink without constructing a final OutputPlan |
 | `linker.c` | Public ET_EXEC link driver, CLI GC switch and ordered phase calls |
 
@@ -55,7 +55,7 @@ competing pipeline controllers.
 
 ## Target ELF/ABI and attributes boundary (2026-11-04)
 
-`linker_riscv_input_abi.inc` owns RISC-V ELF identity and attribute-section
+`linker_target_elf.inc` owns ELF identity, per-target flags and RISC-V attribute-section
 acceptance as **target policy**,
 not separate choices to repeat in the archive prefilter, object/DSO
 admission, source-to-work projection, ET_REL writer and final ELF64 writer.

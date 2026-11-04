@@ -1,0 +1,52 @@
+name: MiniLD Five-Target ELF Boundary
+
+on:
+  push:
+    branches:
+      - refactor/minias-target-isa-abi-core
+    paths:
+      - linker/**
+      - elf/**
+      - assembler/**
+      - tools/minic-ld/**
+      - tests/linker/**
+      - Makefile
+      - .github/workflows/minild-multitarget-boundary.yml
+  pull_request:
+    paths:
+      - linker/**
+      - elf/**
+      - assembler/**
+      - tools/minic-ld/**
+      - tests/linker/**
+      - Makefile
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  five-target-contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install AArch64 and LoongArch64 Linux user emulators
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq qemu-user
+          command -v qemu-aarch64
+          command -v qemu-loongarch64
+      - name: Build exact-head MiniAS and MiniLD
+        run: |
+          make -j4 MODE=release CFLAGS=-Werror \
+            build/release/bin/minic-as build/release/bin/minic-ld
+      - name: Exercise ELF32/64 relocatable targets and three static targets
+        env:
+          MINILD_REQUIRE_QEMU: '1'
+        run: |
+          make MODE=release CFLAGS=-Werror \
+            check-minild-multitarget-relocatable \
+            check-minild-multitarget-static \
+            check-minild-riscv-abi-integration \
+            check-minild-input-phase-owners

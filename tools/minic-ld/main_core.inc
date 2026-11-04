@@ -92,7 +92,7 @@ static void usage(FILE *out, const char *argv0) {
     fprintf(out,
             "usage: %s [-r|-static|-shared|-pie] -o OUTPUT [-e SYMBOL] [-soname NAME] "
             "[--dynamic-list FILE] [--needed NAME] [--dynamic-linker PATH] "
-            "[-L DIR] [-l NAME] "
+            "[-m EMULATION] [-L DIR] [-l NAME] "
             "[--whole-archive ARCHIVE --no-whole-archive] "
             "[--start-group ARCHIVE --end-group] INPUT...\n",
             argv0);
@@ -120,7 +120,9 @@ int main(int argc, char **argv) {
     bool eh_frame_hdr = false;
     bool whole_archive = false;
     bool group_mode = false;
-    bool elf32_emulation = false;
+    bool gc_sections = false;
+    bool emulation_explicit = false;
+    const char *emulation = "elf64lriscv";
     int i;
 
     if (argc == 2 &&
@@ -300,6 +302,8 @@ int main(int argc, char **argv) {
             script_path = argv[i];
         } else if (strcmp(argv[i], "--whole-archive") == 0) {
             whole_archive = true;
+        } else if (strcmp(argv[i], "--gc-sections") == 0) {
+            gc_sections = true;
         } else if (strcmp(argv[i], "--no-whole-archive") == 0) {
             whole_archive = false;
         } else if (strcmp(argv[i], "--start-group") == 0 ||
@@ -309,25 +313,21 @@ int main(int argc, char **argv) {
                    strcmp(argv[i], "-)") == 0) {
             group_mode = false;
         } else if (strncmp(argv[i], "-m", 2U) == 0) {
-            const char *emulation = argv[i] + 2;
-            if (*emulation == '\0') {
+            const char *requested_emulation = argv[i] + 2;
+            if (*requested_emulation == '\0') {
                 if (++i >= argc) {
                     usage(stderr, argv[0]);
                     return 2;
                 }
-                emulation = argv[i];
+                requested_emulation = argv[i];
             }
-            if (strcmp(emulation, "elf32lriscv") == 0) {
-                elf32_emulation = true;
-            } else if (strcmp(emulation, "elf64lriscv") == 0) {
-                if (elf32_emulation) {
-                    fprintf(stderr, "minic-ld: conflicting-emulations\n");
-                    return 2;
-                }
-            } else {
-                fprintf(stderr, "minic-ld: unsupported-emulation:%s\n", emulation);
+            if (emulation_explicit &&
+                strcmp(emulation, requested_emulation) != 0) {
+                fprintf(stderr, "minic-ld: conflicting-emulations\n");
                 return 2;
             }
+            emulation_explicit = true;
+            emulation = requested_emulation;
         } else if (strcmp(argv[i], "-z") == 0) {
             if (++i >= argc) {
                 usage(stderr, argv[0]);
@@ -419,6 +419,11 @@ int main(int argc, char **argv) {
         fprintf(stderr, "minic-ld: dynamic-linker-requires-pie\n");
         return 2;
     }
+    if (gc_sections && (relocatable || shared_link || pie_link)) {
+        fprintf(stderr,
+                "minic-ld: --gc-sections is currently supported only for final static links\n");
+        return 2;
+    }
     /*
      * A shared ELF link must honor -T. Previously the CLI parsed the
      * script and silently discarded it in the shared/PIE path, which could
@@ -438,15 +443,24 @@ int main(int argc, char **argv) {
         return 2;
     }
 
-    if (elf32_emulation && !shared_link) {
-        fprintf(stderr, "minic-ld: elf32-only-shared-compat-vdso\n");
+    {
+        MiniLdLinkMode mode = relocatable ? MINILD_LINK_RELOCATABLE :
+                              shared_link ? MINILD_LINK_SHARED :
+                              pie_link ? MINILD_LINK_PIE : MINILD_LINK_STATIC;
+        if (!minild_emulation_supports_mode(emulation, mode)) {
+            fprintf(stderr, "minic-ld: unsupported-emulation-or-link-mode:%s\n",
+                    emulation);
+            return 2;
+        }
+    }
+    if (strcmp(emulation, "elf32lriscv") == 0 && !shared_link &&
+        !relocatable) {
+        fprintf(stderr, "minic-ld: elf32-only-relocatable-or-compat-vdso\n");
         return 2;
     }
     if (relocatable) {
-        return minild_link_relocatable_elf64_riscv_inputs(output,
-                                                           inputs,
-                                                           input_count,
-                                                           stderr);
+        return minild_link_relocatable_inputs_target(
+            output, inputs, input_count, emulation, stderr);
     }
     if (shared_link || pie_link) {
         MiniLdSharedOptions options;
@@ -462,7 +476,7 @@ int main(int argc, char **argv) {
         options.hash_style_both = hash_style_both;
         options.eh_frame_hdr = eh_frame_hdr;
         options.pie = pie_link;
-        if (elf32_emulation) {
+        if (strcmp(emulation, "elf32lriscv") == 0) {
             if (!shared_link) {
                 fprintf(stderr, "minic-ld: elf32-only-shared-compat-vdso\n");
                 return 2;
@@ -483,10 +497,8 @@ int main(int argc, char **argv) {
         (void)static_link;
         options.entry_symbol = entry_symbol;
         options.script_path = script_path;
-        return minild_link_static_elf64_riscv_inputs_options(output,
-                                                              inputs,
-                                                              input_count,
-                                                              &options,
-                                                              stderr);
+        options.gc_sections = gc_sections;
+        return minild_link_static_elf64_inputs_target(
+            output, inputs, input_count, &options, emulation, stderr);
     }
 }

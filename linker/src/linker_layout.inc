@@ -104,11 +104,21 @@ static void store_u64le(unsigned char *data, uint64_t value) {
 
 #include "linker_riscv_align_relax.inc"
 
+/* Relaxation is a target machine-byte policy, never a generic relocation
+ * number switch. Other targets retain their bytes until their own hook is
+ * installed; an unsupported final relocation still fails closed below. */
+static bool minild_target_relax_section(MiniLdState *state,
+                                        size_t section_index,
+                                        uint64_t address) {
+    return state->target->relax_section == NULL ||
+           state->target->relax_section(state, section_index, address);
+}
+
 static bool static_build_layout_at(MiniLdState *state,
                                    MiniLdLayout *layout,
                                    uint64_t base_vaddr) {
-    const size_t page = 4096U;
-    const size_t header_page = 4096U;
+    const size_t page = state->target->page_size;
+    const size_t header_page = state->target->page_size;
     size_t rx_cursor = 0U;
     size_t rw_file_cursor = 0U;
     size_t rw_mem_cursor = 0U;
@@ -244,7 +254,8 @@ static bool static_build_layout_at(MiniLdState *state,
 
 static bool static_build_layout(MiniLdState *state,
                                 MiniLdLayout *layout) {
-    return static_build_layout_at(state, layout, UINT64_C(0x10000));
+    return static_build_layout_at(state, layout,
+                                  state->target->static_image_base);
 }
 
 static bool shared_build_layout(MiniLdState *state,

@@ -142,4 +142,5 @@ static void minild_layout_destroy(MiniLdLayout *layout) {
 
 #include "linker_layout_symbols.inc"
 
+#include "linker_nonriscv_static_fixup.inc"
 #include "linker_static_reloc_apply.inc"

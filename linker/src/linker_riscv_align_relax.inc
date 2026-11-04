@@ -270,7 +270,7 @@ done:
 
 /* Both physical and linker-script layout request target relaxation only
  * after section placement has established the section VMA. */
-static bool minild_target_relax_section(MiniLdState *state,
+static bool minild_riscv_relax_section(MiniLdState *state,
                                        size_t section_index,
                                        uint64_t base_addr) {
     return static_relax_align_section(state, section_index, base_addr);

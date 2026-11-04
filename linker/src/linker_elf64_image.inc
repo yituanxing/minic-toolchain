@@ -36,7 +36,7 @@ static bool minild_elf64_write_image(
 
     memset(&header, 0, sizeof(header));
     memcpy(header.e_ident, ELFMAG, SELFMAG);
-    minild_target_set_final_elf_identity(&header);
+    minild_target_set_final_elf_identity(state->target, &header);
     header.e_ident[EI_VERSION] = EV_CURRENT;
     header.e_ident[EI_OSABI] = ELFOSABI_NONE;
     header.e_type = elf_type;

@@ -8,6 +8,10 @@ static bool static_apply_relocations(MiniLdState *state,
     MiniLdTargetRelocPairs pairs;
     size_t i;
 
+    if (state->target->apply_static_relocations != NULL) {
+        return state->target->apply_static_relocations(state, layout);
+    }
+
     if (!minild_target_reloc_pairs_init(&pairs, state->relocations.count,
                                  false, state->diagnostics)) {
         return false;

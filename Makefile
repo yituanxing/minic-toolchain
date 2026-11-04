@@ -716,6 +716,18 @@ check-minild-a6: $(MINILD_BINARY)
 	BUILD_DIR="$(abspath $(BUILD_DIR))" \
 	sh tests/linker/run-a6.sh
 
+.PHONY: check-minild-multitarget-relocatable
+check-minild-multitarget-relocatable: $(MINIAS_BINARY) $(MINILD_BINARY)
+	MINIAS="$(abspath $(MINIAS_BINARY))" \
+	MINILD="$(abspath $(MINILD_BINARY))" \
+	bash tests/linker/probe-multitarget-relocatable.sh
+
+.PHONY: check-minild-multitarget-static
+check-minild-multitarget-static: $(MINIAS_BINARY) $(MINILD_BINARY)
+	MINIAS="$(abspath $(MINIAS_BINARY))" \
+	MINILD="$(abspath $(MINILD_BINARY))" \
+	bash tests/linker/probe-multitarget-static.sh
+
 .PHONY: check-minild-riscv-abi
 $(BUILD_DIR)/tests/linker/riscv-elf-abi-test: linker/src/riscv_elf_abi.c linker/src/riscv_elf_abi.h tests/linker/riscv_elf_abi_test.c
 	@mkdir -p "$(dir $@)"

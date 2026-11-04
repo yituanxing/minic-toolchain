@@ -7,6 +7,9 @@ static bool static_build_got(MiniLdState *state, MiniLdStaticGot *got) {
 
     memset(got, 0, sizeof(*got));
     got->section = SIZE_MAX;
+    if (!state->target->uses_riscv_got) {
+        return true;
+    }
     got->symbol_count = state->resolver.count;
     got->slot_offsets =
         malloc((got->symbol_count == 0U ? 1U : got->symbol_count) *

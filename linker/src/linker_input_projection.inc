@@ -3,9 +3,10 @@
  * name-based work sections or exact source fragments for script/GC.  In
  * particular a script/GC link never builds and then throws away an eager
  * merged byte buffer. All map and coordinate updates commit together. */
-static bool minild_projection_fragment(MiniLdInputProjection projection,
+static bool minild_projection_fragment(const MiniLdState *state,
+                                        MiniLdInputProjection projection,
                                         const MiniLdInputSection *input) {
-    if (minild_target_is_attributes_section(input->type)) {
+    if (minild_target_is_attributes_section(state, input->type)) {
         return false;
     }
     return projection == MINILD_PROJECTION_SCRIPT ||
@@ -51,7 +52,8 @@ static bool minild_project_admitted_inputs(MiniLdState *state,
     next.placement_capacity = source_count;
     for (i = 0U; i < source_count; ++i) {
         const MiniLdInputSection *input = &state->inputs.sections[i];
-        const bool fragment = minild_projection_fragment(projection, input);
+        const bool fragment = minild_projection_fragment(state, projection,
+                                                         input);
         const bool distinct =
             fragment || (input->flags & SHF_LINK_ORDER) != 0U ||
             (projection == MINILD_PROJECTION_RELOCATABLE &&
@@ -134,7 +136,7 @@ static bool minild_project_admitted_inputs(MiniLdState *state,
             output->group_flags = input_group_u32(group->data);
             output->group_signature_symbol = signature_symbol;
         }
-        if (minild_target_is_attributes_section(input->type)) {
+        if (minild_target_is_attributes_section(state, input->type)) {
             if (!minild_target_append_attributes(output, input)) {
                 fprintf(state->diagnostics,
                         "minic-ld: invalid-projected-attributes:%s\n",

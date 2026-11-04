@@ -5,9 +5,6 @@
 
 #include "linker_core.inc"
 
-static bool minild_gc_sections_enabled;
-
-void minild_cli_enable_gc_sections_v0(void);
 int minild_link_static_elf64_riscv_inputs_options(
     const char *output_path,
     const MiniLdInput *inputs,
@@ -20,10 +17,6 @@ int minild_link_static_elf64_riscv_inputs(const char *output_path,
                                           const char *entry_symbol,
                                           FILE *diagnostics);
 
-void minild_cli_enable_gc_sections_v0(void) {
-    minild_gc_sections_enabled = true;
-}
-
 #include "linker_input_projection.inc"
 #include "linker_script_input_selection.inc"
 #include "linker_input_gc.inc"
@@ -34,6 +27,7 @@ static int minild_link_static_pipeline(
     size_t input_count,
     const MiniLdStaticOptions *options,
     bool garbage_collect,
+    const MiniLdTargetProfile *target,
     FILE *diagnostics) {
     MiniLdState state;
     MiniLdLayout layout;
@@ -47,10 +41,20 @@ static int minild_link_static_pipeline(
     clock_t phase_start = clock();
 
     if (output_path == NULL || inputs == NULL || input_count == 0U ||
-        diagnostics == NULL) {
+        diagnostics == NULL || target == NULL || !target->supports_static ||
+        target->elf_class != ELFCLASS64) {
+        return 2;
+    }
+    if (options != NULL &&
+        ((options->script_path != NULL && !target->supports_static_script) ||
+         (options->gc_sections && !target->supports_static_gc))) {
+        fprintf(diagnostics,
+                "minic-ld: unsupported-target-static-script-or-gc:%s\n",
+                target->emulation);
         return 2;
     }
     memset(&state, 0, sizeof(state));
+    state.target = target;
     memset(&layout, 0, sizeof(layout));
     memset(&got, 0, sizeof(got));
     minild_script_initialize(&script);
@@ -62,7 +66,8 @@ static int minild_link_static_pipeline(
             goto done;
         }
         if (script.output_arch != NULL &&
-            !minild_target_accept_script_arch(script.output_arch)) {
+            !minild_target_accept_script_arch(state.target,
+                                              script.output_arch)) {
             fprintf(diagnostics,
                     "minic-ld: unsupported-linker-script-arch:%s\n",
                     script.output_arch);
@@ -135,18 +140,31 @@ done:
     return ok ? 0 : 1;
 }
 
+int minild_link_static_elf64_inputs_target(
+    const char *output_path,
+    const MiniLdInput *inputs,
+    size_t input_count,
+    const MiniLdStaticOptions *options,
+    const char *emulation,
+    FILE *diagnostics) {
+    return minild_link_static_pipeline(output_path,
+                                       inputs,
+                                       input_count,
+                                       options,
+                                       options != NULL && options->gc_sections,
+                                       minild_target_find(emulation),
+                                       diagnostics);
+}
+
 int minild_link_static_elf64_riscv_inputs_options(
     const char *output_path,
     const MiniLdInput *inputs,
     size_t input_count,
     const MiniLdStaticOptions *options,
     FILE *diagnostics) {
-    return minild_link_static_pipeline(output_path,
-                                       inputs,
-                                       input_count,
-                                       options,
-                                       minild_gc_sections_enabled,
-                                       diagnostics);
+    return minild_link_static_elf64_inputs_target(
+        output_path, inputs, input_count, options, "elf64lriscv",
+        diagnostics);
 }
 
 int minild_link_static_elf64_riscv_inputs(const char *output_path,
@@ -158,6 +176,7 @@ int minild_link_static_elf64_riscv_inputs(const char *output_path,
 
     options.entry_symbol = entry_symbol;
     options.script_path = NULL;
+    options.gc_sections = false;
     return minild_link_static_elf64_riscv_inputs_options(output_path,
                                                           inputs,
                                                           input_count,

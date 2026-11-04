@@ -41,7 +41,7 @@ files = (
     'linker.c', 'linker_core.inc', 'linker_admission.inc',
     'linker_archive_admission.inc', 'linker_input_sequence.inc',
     'linker_input_projection.inc', 'linker_script_input_selection.inc',
-    'linker_input_gc.inc', 'linker_riscv_input_abi.inc',
+    'linker_input_gc.inc', 'linker_target_elf.inc',
     'linker_relocatable_output.inc',
     'linker_elf64_image.inc',
 )
@@ -71,7 +71,7 @@ expected_edges = {
     ('linker.c', 'linker_script_input_selection.inc'),
     ('linker.c', 'linker_input_gc.inc'),
     ('linker_core.inc', 'linker_admission.inc'),
-    ('linker_core.inc', 'linker_riscv_input_abi.inc'),
+    ('linker_core.inc', 'linker_target_elf.inc'),
     ('linker_core.inc', 'linker_relocatable_output.inc'),
     ('linker_core.inc', 'linker_elf64_image.inc'),
     ('linker_admission.inc', 'linker_archive_admission.inc'),
@@ -101,20 +101,21 @@ if not (driver.index('#include "linker_core.inc"') <
         driver.index('static int minild_link_static_pipeline(')):
     raise SystemExit('MINILD_INPUT_PHASE_STRUCTURE=FAIL driver_stage_order')
 if not (core.index('#include "linker_common_allocation.inc"') <
-        core.index('#include "linker_riscv_input_abi.inc"') <
+        core.index('#include "linker_target_elf.inc"') <
         core.index('#include "linker_admission.inc"') <
         core.index('#include "linker_relocatable_output.inc"') <
         core.index('#include "linker_layout.inc"') <
         core.index('#include "linker_elf64_image.inc"')):
     raise SystemExit('MINILD_INPUT_PHASE_STRUCTURE=FAIL core_stage_order')
 
-# All modes consume one RISC-V ELF identity/ABI owner.  Generic source
+# All modes consume one target ELF identity/ABI owner. Generic source
 # admission, archive preflight, projection and both ELF writers must not
 # independently choose processor-specific machine/class/attributes rules.
 for name in ('linker_core.inc', 'linker_admission.inc',
              'linker_archive_admission.inc', 'linker_input_projection.inc',
              'linker_elf64_image.inc'):
-    if re.search(r'\b(?:EM_RISCV|ELFCLASS64|ELFDATA2LSB|'
+    if re.search(r'\b(?:EM_RISCV|EM_X86_64|EM_AARCH64|EM_LOONGARCH|'
+                 r'ELFDATA2LSB|'
                  r'MINILD_SHT_RISCV_ATTRIBUTES)\b', sources[name]):
         raise SystemExit(f'MINILD_INPUT_PHASE_STRUCTURE=FAIL '
                          f'target_elf_identity_in_generic_owner={name}')
@@ -141,7 +142,7 @@ if not (admission.index('static bool process_input_data(') <
     raise SystemExit('MINILD_INPUT_PHASE_STRUCTURE=FAIL admission_stage_order')
 
 functions = {
-    'linker_riscv_input_abi.inc': (
+    'linker_target_elf.inc': (
         'minild_target_accept_elf',
         'minild_target_set_relocatable_identity',
         'minild_target_set_final_elf_identity',

@@ -128,7 +128,7 @@ static bool minild_static_program_plan_build(
             ph->p_offset = layout->rx_file_offset;
             ph->p_vaddr = ph->p_paddr = layout->rx_vaddr;
             ph->p_filesz = ph->p_memsz = layout->rx_file_size;
-            ph->p_align = 4096U;
+            ph->p_align = state->target->page_size;
         }
         if (layout->have_rw) {
             Elf64_Phdr *ph = &plan->entries[index++];
@@ -138,7 +138,7 @@ static bool minild_static_program_plan_build(
             ph->p_vaddr = ph->p_paddr = layout->rw_vaddr;
             ph->p_filesz = layout->rw_file_size;
             ph->p_memsz = layout->rw_mem_size;
-            ph->p_align = 4096U;
+            ph->p_align = state->target->page_size;
         }
     }
     free(loads);

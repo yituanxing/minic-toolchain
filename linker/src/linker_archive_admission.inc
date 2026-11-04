@@ -351,7 +351,7 @@ static bool object_data_defines_needed_symbol(MiniLdState *state,
 
     *needed_out = false;
     if (!minielf_open(&elf, data, size) ||
-        !minild_target_accept_elf(&elf, ET_REL)) {
+        !minild_target_accept_elf(state, &elf, ET_REL)) {
         fprintf(state->diagnostics,
                 "minic-ld: unsupported-archive-object:%s\n",
                 path);
@@ -383,7 +383,8 @@ static bool object_data_defines_needed_symbol(MiniLdState *state,
         goto done;
     }
     if (symtab.link >= elf.section_count ||
-        symtab.entry_size != sizeof(Elf64_Sym) ||
+        symtab.entry_size != (state->target->elf_class == ELFCLASS32
+                                  ? sizeof(Elf32_Sym) : sizeof(Elf64_Sym)) ||
         !minielf_section(&elf, symtab.link, &strtab) ||
         strtab.type != SHT_STRTAB) {
         fprintf(state->diagnostics,
