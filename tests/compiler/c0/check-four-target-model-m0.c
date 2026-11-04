@@ -1,6 +1,7 @@
 /* M0 metadata-only ABI audit. No new target code is emitted here. */
 #include "target/target_info.h"
 #include "target/source_policy/source_info.h"
+#include "target/source_policy/source_policy.h"
 #include "target/data_layout_source.h"
 #include "target/backend.h"
 #include "frontend/ast.h"
@@ -88,6 +89,67 @@ static int verify_rv32(void) {
     return puts("RV32_ILP32_MODEL=PASS xlen=32 ptr=4 long=4 longlong=8 signedness=qualified") == EOF ? 1 : 0;
 }
 
+/* The entire target registration must be unambiguous: rejecting only the
+ * particular entry encountered would admit a different interpretation from
+ * the source-name and Core-import entry points. */
+static int verify_target_builtin_registry_rejection(void) {
+    MinicTargetInvocation invocation;
+    MinicTargetSourceLanguagePolicy policy;
+    MinicTargetSourceBuiltinTypeDescriptor entries[2];
+    const MinicTargetSourceBuiltinTypeDescriptor *registered;
+    MinicType builtin = minic_type_header_builtin(
+        1U, MINIC_BUILTIN_DECLARATION_HEADER_ONLY_OPAQUE);
+    if (!minic_target_invocation_begin(
+            &invocation, minic_target_info_for_architecture(
+                MINIC_TARGET_ARCH_AARCH64))) return 1;
+    policy = *invocation.source_info.source_language_policy;
+    registered = policy.builtin_types;
+    entries[0] = registered[0];
+    entries[1] = registered[1];
+    policy.builtin_types = entries;
+    policy.builtin_type_count = 2U;
+    invocation.source_info.source_language_policy = &policy;
+    if (!minic_target_info_named_builtin_type(
+            &invocation, "__Float32x4_t", sizeof("__Float32x4_t") - 1U,
+            NULL)) return 2;
+
+    entries[1].id = entries[0].id; /* distinct names, ambiguous nominal ID */
+    if (minic_target_info_source_builtin_type_descriptor(
+            &invocation, builtin, NULL)) return 3;
+    entries[1] = registered[1];
+    entries[1].spelling = entries[0].spelling; /* duplicated C spelling */
+    if (minic_target_info_named_builtin_type(
+            &invocation, entries[0].spelling, strlen(entries[0].spelling), NULL))
+        return 4;
+    entries[1] = registered[1];
+
+    entries[0].core_import = MINIC_TARGET_BUILTIN_CORE_IMPORT_VECTOR128;
+    if (minic_target_info_source_builtin_type_descriptor(
+            &invocation, builtin, NULL)) return 5;
+    entries[0] = registered[0];
+    entries[0].vector_element = MINIC_TARGET_BUILTIN_SCALAR_UNSIGNED_CHAR;
+    if (minic_target_info_source_builtin_type_descriptor(
+            &invocation, builtin, NULL)) return 6;
+    entries[0] = registered[0];
+    entries[0].required_capability =
+        MINIC_TARGET_LANG_FIXED_VECTOR128_STORAGE_DECLARATIONS;
+    if (minic_target_info_source_builtin_type_descriptor(
+            &invocation, builtin, NULL)) return 7;
+
+    entries[0] = registered[5]; /* valid fixed-width vector descriptor */
+    entries[1] = registered[6];
+    entries[0].core_import = MINIC_TARGET_BUILTIN_CORE_IMPORT_OPAQUE;
+    if (minic_target_info_named_builtin_type(
+            &invocation, entries[1].spelling, strlen(entries[1].spelling), NULL))
+        return 8;
+    entries[0] = registered[5];
+    entries[0].vector_element = MINIC_TARGET_BUILTIN_SCALAR_NONE;
+    if (minic_target_info_named_builtin_type(
+            &invocation, entries[1].spelling, strlen(entries[1].spelling), NULL))
+        return 9;
+    return 0;
+}
+
 /* Parser/verifier language admission and ABI cursor identity must agree on
  * all five target descriptors. Declaration admission is not codegen support. */
 static int verify_language_admission(void) {
@@ -95,12 +157,20 @@ static int verify_language_admission(void) {
         "riscv32-linux", "riscv64-linux", "x86_64-linux",
         "aarch64-linux", "loongarch64-linux"
     };
+    static const char *const builtin_names[] = {
+        "__Float32x4_t", "__Float64x2_t", "__SVFloat32_t",
+        "__SVFloat64_t", "__SVBool_t", "__Uint8x16_t",
+        "__Uint64x2_t", "__Int8x16_t", "__Poly8x16_t"
+    };
     size_t i;
     for (i = 0U; i < sizeof(names) / sizeof(names[0]); ++i) {
         MinicTargetInvocation invocation;
         const MinicTargetInvocation *t = &invocation;
         MinicType vector_type;
         MinicType vector_pointer;
+        MinicType first_opaque = minic_type_header_builtin(
+            1U, MINIC_BUILTIN_DECLARATION_HEADER_ONLY_OPAQUE);
+        size_t builtin_index;
         bool is_arm = i == 3U;
         bool has_extended_float = i != 0U;
         bool has_vector;
@@ -109,19 +179,73 @@ static int verify_language_admission(void) {
             minic_target_info_language_type_supported(
                 t, MINIC_TYPE_BASE_FLOAT128) != has_extended_float ||
             minic_target_info_language_type_supported(
-                t, MINIC_TYPE_BASE_FLOAT32X) != has_extended_float ||
-            minic_target_info_language_type_supported(
-                t, MINIC_TYPE_BASE_AARCH64_SVE_BOOL) != is_arm ||
-            minic_target_info_language_type_supported(
-                t, MINIC_TYPE_BASE_AARCH64_UINT8X16) != is_arm ||
-            minic_target_info_language_type_supported(
-                t, MINIC_TYPE_BASE_AARCH64_UINT64X2) != is_arm ||
-            minic_target_info_language_type_supported(
-                t, MINIC_TYPE_BASE_AARCH64_INT8X16) != is_arm ||
-            minic_target_info_language_type_supported(
-                t, MINIC_TYPE_BASE_AARCH64_POLY8X16) != is_arm) {
+                t, MINIC_TYPE_BASE_FLOAT32X) != has_extended_float) {
             (void)fprintf(stderr, "FAIL target language/varargs contract: %s\\n", names[i]);
             return 1;
+        }
+        for (builtin_index = 0U;
+             builtin_index < sizeof(builtin_names) / sizeof(builtin_names[0]);
+             ++builtin_index) {
+            MinicType discovered = minic_type_void();
+            MinicTargetSourceBuiltinTypeDescriptor descriptor;
+            MinicBuiltinDeclarationRole expected_role = builtin_index < 5U
+                ? MINIC_BUILTIN_DECLARATION_HEADER_ONLY_OPAQUE
+                : MINIC_BUILTIN_DECLARATION_FIXED_VECTOR128_STORAGE;
+            bool admitted = minic_target_info_named_builtin_type(
+                t, builtin_names[builtin_index], strlen(builtin_names[builtin_index]),
+                &discovered);
+            if (admitted != is_arm ||
+                (is_arm && (discovered.base_kind != MINIC_TYPE_BASE_TARGET_BUILTIN ||
+                            discovered.target_builtin_id != builtin_index + 1U ||
+                            discovered.target_builtin_role != expected_role ||
+                            !minic_target_info_source_builtin_type_descriptor(
+                                t, discovered, &descriptor) ||
+                            descriptor.id != discovered.target_builtin_id ||
+                            descriptor.role != expected_role ||
+                            (descriptor.core_import ==
+                             MINIC_TARGET_BUILTIN_CORE_IMPORT_VECTOR128) !=
+                                (builtin_index >= 5U))) ||
+                (is_arm && minic_type_is_fixed_vector128_storage(discovered) !=
+                               (builtin_index >= 5U))) {
+                (void)fprintf(stderr, "FAIL target builtin registry: %s: %s\n",
+                              names[i], builtin_names[builtin_index]);
+                return 1;
+            }
+        }
+        if (minic_target_info_language_type_supported_for_type(
+                t, first_opaque) != is_arm ||
+            minic_target_info_language_type_supported_for_type(
+                t, minic_type_header_builtin(
+                    999U, MINIC_BUILTIN_DECLARATION_HEADER_ONLY_OPAQUE)) ||
+            minic_target_info_language_type_supported_for_type(
+                t, minic_type_header_builtin(
+                    1U, MINIC_BUILTIN_DECLARATION_FIXED_VECTOR128_STORAGE))) {
+            (void)fprintf(stderr, "FAIL target builtin identity forgery: %s\n", names[i]);
+            return 1;
+        }
+        {
+            MinicType forged[9];
+            size_t forged_index;
+            for (forged_index = 0U; forged_index < 9U; ++forged_index)
+                forged[forged_index] = first_opaque;
+            forged[0].gnu_vector_bytes = 16U;
+            forged[1].gnu_vector_element_kind = MINIC_TYPE_BASE_INT;
+            forged[2].integer_rank = MINIC_INTEGER_RANK_INT;
+            forged[3].integer_sign = MINIC_INTEGER_SIGN_SIGNED;
+            forged[4].is_plain_char = true;
+            forged[5].record_id = (MinicRecordId)0U;
+            forged[6].array_type_id = (MinicArrayTypeId)0U;
+            forged[7].function_type_id = (MinicFunctionTypeId)0U;
+            forged[8].enum_id = (MinicEnumId)0U;
+            for (forged_index = 0U; forged_index < 9U; ++forged_index) {
+                if (minic_target_info_source_builtin_type_descriptor(
+                        t, forged[forged_index], NULL)) {
+                    (void)fprintf(stderr,
+                                  "FAIL target builtin field forgery: %s variant=%zu\n",
+                                  names[i], forged_index);
+                    return 1;
+                }
+            }
         }
         if (minic_target_info_header_attribute_supported(
                 t, "__aarch64_vector_pcs__",
@@ -149,16 +273,33 @@ static int verify_language_admission(void) {
             return 1;
         }
         if (!minic_type_pointer_to(
-                minic_type_header_builtin(
-                    MINIC_TYPE_BASE_AARCH64_FLOAT32X4), &vector_pointer)) {
+                first_opaque, &vector_pointer)) {
             (void)fprintf(stderr, "FAIL target vector pointer construction: %s\n", names[i]);
             return 1;
         }
+        {
+            MinicType qualified = first_opaque;
+            MinicType pointer_qualified = vector_pointer;
+            qualified.base_qualifiers = MINIC_TYPE_QUALIFIER_CONST |
+                                        MINIC_TYPE_QUALIFIER_VOLATILE;
+            pointer_qualified.pointer_qualifiers = 1U;
+            pointer_qualified.pointer_volatile_qualifiers = 1U;
+            if (minic_target_info_source_builtin_type_descriptor(
+                    t, qualified, NULL) != is_arm ||
+                minic_target_info_source_builtin_type_descriptor(
+                    t, vector_pointer, NULL) != is_arm ||
+                minic_target_info_source_builtin_type_descriptor(
+                    t, pointer_qualified, NULL) != is_arm) {
+                (void)fprintf(stderr, "FAIL target builtin legitimate qualifiers/pointers: %s\n",
+                              names[i]);
+                return 1;
+            }
+        }
         if (has_vector != is_arm ||
-            (is_arm && vector_type.base_kind != MINIC_TYPE_BASE_AARCH64_SVE_BOOL) ||
+            (is_arm && (vector_type.base_kind != MINIC_TYPE_BASE_TARGET_BUILTIN ||
+                        vector_type.target_builtin_id != 5U)) ||
             minic_target_info_header_opaque_vector_return(
-                t, minic_type_header_builtin(
-                       MINIC_TYPE_BASE_AARCH64_FLOAT32X4)) != is_arm ||
+                t, first_opaque) != is_arm ||
             minic_target_info_header_opaque_vector_return(
                 t, minic_type_float128()) ||
             minic_target_info_header_opaque_vector_return(
@@ -230,6 +371,10 @@ static int verify_va_cursor_source_abi(void) {
             !minic_type_equal(program.type_aliases[1].type, source_type) ||
             !minic_target_info_va_cursor_source_operand_supported(
                 t, &program, source_type, true) ||
+            !minic_target_info_va_cursor_source_copy_types_compatible(
+                t, &program, source_type, source_type) ||
+            minic_target_info_va_cursor_source_copy_types_compatible(
+                t, &program, source_type, minic_type_int()) != opaque ||
             (opaque && minic_target_info_va_cursor_source_operand_supported(
                 t, &program, void_pointer, true)) ||
             (x86 && !minic_target_info_va_cursor_source_operand_supported(
@@ -781,7 +926,9 @@ int main(void) {
         verify_lp64("riscv64-linux", MINIC_TARGET_ARCH_RISCV64,
                     MINIC_INTEGER_SIGN_UNSIGNED, MINIC_INTEGER_RANK_INT,
                     MINIC_INTEGER_SIGN_SIGNED) != 0 ||
-        verify_invocation_language_abi() != 0 || verify_language_admission() != 0 ||
+        verify_invocation_language_abi() != 0 ||
+        verify_target_builtin_registry_rejection() != 0 ||
+        verify_language_admission() != 0 ||
         verify_va_cursor_source_abi() != 0 || verify_rv32() != 0 ||
         verify_lp64("aarch64-linux", MINIC_TARGET_ARCH_AARCH64,
                     MINIC_INTEGER_SIGN_UNSIGNED, MINIC_INTEGER_RANK_INT,

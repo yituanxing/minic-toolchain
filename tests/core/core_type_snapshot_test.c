@@ -180,12 +180,6 @@ static bool build_indirect_fixture(MinicCoreSourceBuilder *builder, const TypeId
     function->instructions[1].core_type_id = ids->i32;
     function->instructions[2].core_type_id = ids->i32;
     function->call_signatures[signature].core_function_type_id = ids->function_a;
-    function->call_signatures[signature].core_return_type_id = ids->i32;
-    function->call_signatures[signature].core_parameter_type_ids =
-        malloc(sizeof(MinicCoreTypeId));
-    if (function->call_signatures[signature].core_parameter_type_ids == NULL)
-        return false;
-    function->call_signatures[signature].core_parameter_type_ids[0] = ids->i32;
     return true;
 }
 
@@ -447,9 +441,9 @@ int main(void) {
     function->call_signatures[0].core_function_type_id = ids.function_b;
     CHECK(!minic_core_function_verify_core_type_snapshot(function));
     function->call_signatures[0].core_function_type_id = saved;
-    function->call_signatures[0].core_parameter_type_ids[0] = ids.u32;
+    context.types[ids.function_a].value.function.parameters[0] = MINIC_CORE_TYPE_INVALID;
     CHECK(!minic_core_function_verify_core_type_snapshot(function));
-    function->call_signatures[0].core_parameter_type_ids[0] = ids.i32;
+    context.types[ids.function_a].value.function.parameters[0] = ids.i32;
     saved = function->values[0].core_type_id;
     function->values[0].core_type_id = MINIC_CORE_TYPE_INVALID;
     CHECK(!minic_core_function_verify_core_type_snapshot(function));
@@ -570,6 +564,19 @@ int main(void) {
     builder.source_draft->instruction_types[0] = minic_type_int();
     resolver.call_count = 0U;
     resolver.fail_on_call = 0U;
+    /* A declared source convention must match its imported nominal FUNCTION
+     * type. The verifier no longer has a duplicate Core ABI copy to compare;
+     * the single C -> Core boundary rejects contradictory source facts. */
+    builder.source_draft->call_signatures[0].calling_convention =
+        MINIC_CALLING_CONVENTION_MS_X64;
+    CHECK(!minic_core_function_snapshot_types(&builder, &context,
+                                              resolve_source_type, &resolver));
+    CHECK(function->type_context == NULL && builder.source_draft != NULL &&
+          function->call_signatures[0].core_function_type_id ==
+              MINIC_CORE_TYPE_INVALID);
+    builder.source_draft->call_signatures[0].calling_convention =
+        MINIC_CALLING_CONVENTION_DEFAULT;
+    resolver.call_count = 0U;
     CHECK(minic_core_function_snapshot_types(&builder, &context,
                                               resolve_source_type, &resolver));
     CHECK(minic_core_function_verify_core_type_snapshot(function));

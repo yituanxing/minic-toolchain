@@ -62,15 +62,10 @@ static bool attach_dump_types(MinicCoreFunction *function,
     }
     callee->core_return_type_id = types->integer;
     signature->core_function_type_id = types->function;
-    signature->core_return_type_id = types->integer;
     callee->core_parameter_type_ids = malloc(2U * sizeof(MinicCoreTypeId));
-    signature->core_parameter_type_ids = malloc(2U * sizeof(MinicCoreTypeId));
-    if (callee->core_parameter_type_ids == NULL ||
-        signature->core_parameter_type_ids == NULL) return false;
+    if (callee->core_parameter_type_ids == NULL) return false;
     callee->core_parameter_type_ids[0] = types->integer;
     callee->core_parameter_type_ids[1] = types->record;
-    signature->core_parameter_type_ids[0] = types->integer;
-    signature->core_parameter_type_ids[1] = types->record;
     return minic_core_function_attach_type_context(function, context);
 }
 

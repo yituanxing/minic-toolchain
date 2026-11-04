@@ -29,10 +29,13 @@ static bool builtin_declaration_type_is_valid(const MinicTargetInvocation *targe
                                               MinicType type) {
     MinicBuiltinDeclarationRole role;
 
-    role = minic_type_builtin_declaration_role(type.base_kind);
+    role = minic_type_builtin_declaration_role(type);
     if (role == MINIC_BUILTIN_DECLARATION_INVALID ||
         (role != MINIC_BUILTIN_DECLARATION_STANDARD_FLOAT &&
-         !minic_target_info_language_type_supported(target, type.base_kind))) {
+         !minic_target_info_language_type_supported_for_type(target, type)) ||
+        (type.base_kind != MINIC_TYPE_BASE_TARGET_BUILTIN &&
+         (type.target_builtin_id != 0U ||
+          type.target_builtin_role != MINIC_BUILTIN_DECLARATION_INVALID))) {
         return false;
     }
     /* All target header-only identities share the same C type storage shape.
@@ -50,7 +53,10 @@ type_is_valid(const MinicC0Program *program, const MinicTargetInvocation *target
     if (program == NULL ||
         (type.base_qualifiers & ~((unsigned int)MINIC_TYPE_QUALIFIER_CONST |
                                   (unsigned int)MINIC_TYPE_QUALIFIER_VOLATILE)) != 0U ||
-        !pointer_qualifiers_are_valid(type)) {
+        !pointer_qualifiers_are_valid(type) ||
+        (type.base_kind != MINIC_TYPE_BASE_TARGET_BUILTIN &&
+         (type.target_builtin_id != 0U ||
+          type.target_builtin_role != MINIC_BUILTIN_DECLARATION_INVALID))) {
         return false;
     }
     if (type.base_kind != MINIC_TYPE_BASE_ENUM && type.enum_id != MINIC_ENUM_INVALID) {
@@ -227,7 +233,7 @@ static bool verify_binary_type(const MinicC0Program *program,
     if (expression->value.binary.operator_kind == MINIC_BINARY_BITWISE_XOR &&
         minic_type_is_fixed_vector128_storage(left->type)) {
         MinicType result_type;
-        return minic_target_info_language_type_supported(target, left->type.base_kind) &&
+        return minic_target_info_language_type_supported_for_type(target, left->type) &&
                minic_type_fixed_vector128_xor_result(left->type, right->type,
                                                       &result_type) &&
                minic_type_equal(expression->type, result_type);
@@ -661,8 +667,8 @@ static bool verify_expression(const MinicC0Program *program,
                 minic_type_is_pointer(expression->type) || minic_type_is_double(expression->type) ||
                 minic_type_is_record(expression->type) ||
                 (minic_type_is_fixed_vector128_storage(expression->type) &&
-                 minic_target_info_language_type_supported(
-                     target, expression->type.base_kind)));
+                 minic_target_info_language_type_supported_for_type(
+                     target, expression->type)));
     case MINIC_EXPRESSION_ASSIGNMENT:
         left = expression_before(program, expression->value.binary.left, expression_index);
         right = expression_before(program, expression->value.binary.right, expression_index);
@@ -831,8 +837,8 @@ static bool verify_expression(const MinicC0Program *program,
                minic_target_info_va_cursor_source_operand_supported(
                    target, program, right->type,
                    right->value_category == MINIC_VALUE_LVALUE) &&
-               (target->machine.variadic_copy_kind != MINIC_VARIADIC_COPY_SCALAR_ASSIGNMENT ||
-                minic_c0_types_compatible(program, left->type, right->type)) &&
+               minic_target_info_va_cursor_source_copy_types_compatible(
+                   target, program, left->type, right->type) &&
                expression->value_category == MINIC_VALUE_RVALUE &&
                minic_type_is_void(expression->type);
     case MINIC_EXPRESSION_BUILTIN_UNARY: {

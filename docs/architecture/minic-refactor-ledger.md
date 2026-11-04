@@ -1948,3 +1948,52 @@ independent x86/RV32/RV64 global emitters as one ownership family.
 | Five-ISA P35 vs P36 GNU `.i` byte parity | **65/65 byte-identical**: ten C-origin fixtures plus three real function-alias fixtures × five ISAs; all 15 aliases emit `.set alias_fn, target` |
 | Architecture boundary and backend-review manifest | **PASS** (`inventory=251`, no invalid/new/removed; pre-existing stale entries reported) |
 | Five-ISA original Linux GNU ELF/QEMU runtime | **NOT RUN** in this Module-owner batch |
+
+## IR-P37 — One type identity and ABI fact per owner (2026-11-04)
+
+**Baseline:** P36 PR #674 `e4facb9`. Read Core indirect calls, C-to-Core
+type import, target source builtin registration, record DataLayout, and
+`va_copy` from their producers through all consumers before changing their
+representation. Migrate the complete related call sites in one batch:
+
+- The indirect `MinicCoreCallSignature` owns only a sealed Core FUNCTION
+  `TypeId`. Core verification, common call view and machine backends read
+  return type, parameter types/count, variadic flag and calling convention
+  from that one immutable function type. C lowering rejects mismatched source
+  signature facts before publishing the snapshot, preserving rollback.
+  Direct callees remain a separate Core fact and are not conflated with
+  indirect calls.
+- Replace nine AArch64-specific generic C base-type enum values with a
+  `TARGET_BUILTIN` type carrying target-owned identity and declaration role.
+  AArch64 SourcePolicy registers the builtin names, admission capabilities,
+  Core import forms and optional vector scalar types. Source semantics,
+  AST verifier and C-to-Core importer use that descriptor rather than
+  per-target generic switches. Header-only builtin types do not gain a
+  synthetic Core representation; opaque SVE identities and NEON vector
+  identities retain their intended distinction. Foreign or forged target
+  builtin identities are rejected.
+- The Source DataLayout record-field storage alignment result is now the
+  authority for C-to-Core bitfield import, including packed records and
+  zero-width barriers. Remove the second local alignment algorithm.
+- Parser and AST verifier share one SourcePolicy `va_copy` cursor-type
+  compatibility query; machine ABI specifics stay behind the target policy.
+
+The target registry is checked as a whole before lookup: IDs and spellings
+must be unique, declaration role/capability/Core import/vector element must
+agree, and forged record, array, function, enum, integer or GNU-vector fields
+cannot piggyback on a target builtin identity. Legal pointer/CV qualifiers
+remain supported. Invalid registry and forged-type cases are negative tests.
+
+This is an owner/boundary change, not an announcement of new instruction,
+cross-target ABI, or runtime support. No temporary legacy-field adapter was
+retained. Source/test changes prior to this documentation record: **35 files,
++752/-391 lines (net +361)**.
+
+| Gate | P37 result |
+| --- | --- |
+| Strict Release MiniC `-Werror` | **PASS**, exit 0 |
+| Debug MiniC compiler build | **PASS** |
+| Full Debug `check-fast` | **PASS**, exit 0; optional unavailable cross GNU/QEMU paths explicitly skipped |
+| Source/Core/AST contract, call signature, target builtin, record bitfield and `va_copy` probes | **PASS** on available native tools |
+| Five-ISA P36 vs P37 targeted `.i` differential | **255/255 matched outcomes**: 187 byte-identical `.s`, 68 both rejected, 0 differing |
+| Five-ISA original Linux GNU ELF/QEMU runtime | **NOT RUN** in this owner batch; absent cross toolchains are not counted as passes |

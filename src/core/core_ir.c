@@ -241,7 +241,6 @@ void minic_core_function_initialize(MinicCoreFunction *function) {
 void minic_core_function_destroy(MinicCoreFunction *function) {
     size_t block_index;
     size_t callee_index;
-    size_t call_signature_index;
     size_t global_index;
     size_t function_symbol_index;
     size_t inline_asm_index;
@@ -259,12 +258,6 @@ void minic_core_function_destroy(MinicCoreFunction *function) {
                               callee_index < function->callee_count; ++callee_index) {
         free(function->callees[callee_index].name);
         free(function->callees[callee_index].core_parameter_type_ids);
-    }
-    for (call_signature_index = 0U;
-         function->call_signatures != NULL &&
-         call_signature_index < function->call_signature_count;
-         ++call_signature_index) {
-        free(function->call_signatures[call_signature_index].core_parameter_type_ids);
     }
     for (global_index = 0U; function->globals != NULL &&
                              global_index < function->global_count; ++global_index) {

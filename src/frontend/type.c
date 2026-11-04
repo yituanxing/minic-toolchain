@@ -39,6 +39,8 @@ static MinicType minic_type_scalar(MinicTypeBaseKind base_kind) {
     type.explicit_alignment = 0U;
     type.gnu_vector_element_kind = MINIC_TYPE_BASE_VOID;
     type.gnu_vector_bytes = 0U;
+    type.target_builtin_id = 0U;
+    type.target_builtin_role = MINIC_BUILTIN_DECLARATION_INVALID;
     return type;
 }
 
@@ -97,7 +99,9 @@ static bool minic_type_same_unqualified_identity(MinicType left, MinicType right
            left.integer_sign == right.integer_sign && left.integer_rank == right.integer_rank &&
            left.is_plain_char == right.is_plain_char && left.pointer_depth == right.pointer_depth &&
            left.gnu_vector_element_kind == right.gnu_vector_element_kind &&
-           left.gnu_vector_bytes == right.gnu_vector_bytes;
+           left.gnu_vector_bytes == right.gnu_vector_bytes &&
+           left.target_builtin_id == right.target_builtin_id &&
+           left.target_builtin_role == right.target_builtin_role;
 }
 
 static bool minic_type_pointer_qualification_compatible(MinicType target, MinicType source) {
@@ -241,8 +245,8 @@ MinicType minic_type_float64x(void) {
     return minic_type_scalar(MINIC_TYPE_BASE_FLOAT64X);
 }
 
-MinicBuiltinDeclarationRole minic_type_builtin_declaration_role(MinicTypeBaseKind kind) {
-    switch (kind) {
+MinicBuiltinDeclarationRole minic_type_builtin_declaration_role(MinicType type) {
+    switch (type.base_kind) {
     case MINIC_TYPE_BASE_FLOAT:
     case MINIC_TYPE_BASE_DOUBLE:
     case MINIC_TYPE_BASE_LONG_DOUBLE:
@@ -253,17 +257,12 @@ MinicBuiltinDeclarationRole minic_type_builtin_declaration_role(MinicTypeBaseKin
     case MINIC_TYPE_BASE_FLOAT32X:
     case MINIC_TYPE_BASE_FLOAT64X:
         return MINIC_BUILTIN_DECLARATION_EXTENDED_FLOAT;
-    case MINIC_TYPE_BASE_AARCH64_FLOAT32X4:
-    case MINIC_TYPE_BASE_AARCH64_FLOAT64X2:
-    case MINIC_TYPE_BASE_AARCH64_SVE_FLOAT32:
-    case MINIC_TYPE_BASE_AARCH64_SVE_FLOAT64:
-    case MINIC_TYPE_BASE_AARCH64_SVE_BOOL:
-        return MINIC_BUILTIN_DECLARATION_HEADER_ONLY_OPAQUE;
-    case MINIC_TYPE_BASE_AARCH64_UINT8X16:
-    case MINIC_TYPE_BASE_AARCH64_UINT64X2:
-    case MINIC_TYPE_BASE_AARCH64_INT8X16:
-    case MINIC_TYPE_BASE_AARCH64_POLY8X16:
-        return MINIC_BUILTIN_DECLARATION_FIXED_VECTOR128_STORAGE;
+    case MINIC_TYPE_BASE_TARGET_BUILTIN:
+        if (type.target_builtin_id == 0U) return MINIC_BUILTIN_DECLARATION_INVALID;
+        if (type.target_builtin_role == MINIC_BUILTIN_DECLARATION_HEADER_ONLY_OPAQUE ||
+            type.target_builtin_role == MINIC_BUILTIN_DECLARATION_FIXED_VECTOR128_STORAGE)
+            return type.target_builtin_role;
+        return MINIC_BUILTIN_DECLARATION_INVALID;
     default:
         return MINIC_BUILTIN_DECLARATION_INVALID;
     }
@@ -272,17 +271,22 @@ MinicBuiltinDeclarationRole minic_type_builtin_declaration_role(MinicTypeBaseKin
 /* Source-level declaration identity; target source policy controls admission.
  * Both opaque-only and storage-capable kinds remain distinct from machine
  * support and must never be inferred to imply a register calling convention. */
-MinicType minic_type_header_builtin(MinicTypeBaseKind base_kind) {
-    MinicBuiltinDeclarationRole role = minic_type_builtin_declaration_role(base_kind);
-    if (role != MINIC_BUILTIN_DECLARATION_HEADER_ONLY_OPAQUE &&
-        role != MINIC_BUILTIN_DECLARATION_FIXED_VECTOR128_STORAGE)
+MinicType minic_type_header_builtin(unsigned int builtin_id,
+                                    MinicBuiltinDeclarationRole role) {
+    MinicType type;
+    if (builtin_id == 0U ||
+        (role != MINIC_BUILTIN_DECLARATION_HEADER_ONLY_OPAQUE &&
+         role != MINIC_BUILTIN_DECLARATION_FIXED_VECTOR128_STORAGE))
         return minic_type_void();
-    return minic_type_scalar(base_kind);
+    type = minic_type_scalar(MINIC_TYPE_BASE_TARGET_BUILTIN);
+    type.target_builtin_id = builtin_id;
+    type.target_builtin_role = role;
+    return type;
 }
 
 bool minic_type_is_fixed_vector128_storage(MinicType type) {
     if (type.pointer_depth != 0U ||
-        minic_type_builtin_declaration_role(type.base_kind) !=
+        minic_type_builtin_declaration_role(type) !=
             MINIC_BUILTIN_DECLARATION_FIXED_VECTOR128_STORAGE)
         return false;
     return true;

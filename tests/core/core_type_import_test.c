@@ -39,7 +39,7 @@ int main(void) {
     MinicCoreTypeId packed_id, flexible_id, zero_id;
     MinicCoreType register_vector;
     const MinicCoreType *node, *pointer, *array, *function, *vector, *int_type;
-    size_t node_size, node_alignment, field_offset, bit_offset;
+    size_t node_size, node_alignment, field_offset, bit_offset, storage_alignment;
     size_t previous_count;
 
     CHECK(minic_target_invocation_begin(
@@ -86,6 +86,12 @@ int main(void) {
                                     minic_type_int(), 1U));
     program.records[packed_record].is_packed = true;
     program.records[packed_record].fields[0].is_packed = true;
+    CHECK(minic_c0_record_add_bit_field(&program, packed_record, "flags", 5U,
+                                        minic_type_unsigned_int(), 3U));
+    CHECK(minic_c0_record_add_unnamed_bit_field(&program, packed_record,
+                                               minic_type_unsigned_int(), 0U));
+    CHECK(minic_c0_record_add_field(&program, packed_record, "tail", 4U,
+                                    minic_type_signed_char(), 1U));
     CHECK(minic_c0_program_finish_record(&program, packed_record));
 
     CHECK(minic_c0_program_add_incomplete_array_type(
@@ -136,6 +142,21 @@ int main(void) {
     CHECK(minic_core_type_get(&context, packed_id)->value.record.has_nondefault_layout_policy);
     CHECK(minic_core_type_get(&context, packed_id)->value.record.fields[0]
               .has_nondefault_layout_policy);
+    {
+        const MinicCoreType *packed = minic_core_type_get(&context, packed_id);
+        const MinicRecord *source_record = minic_c0_program_record(&program, packed_record);
+        CHECK(packed != NULL && packed->value.record.field_count == 4U);
+        CHECK(packed->value.record.fields[1].is_bit_field &&
+              packed->value.record.fields[1].alignment == 1U);
+        CHECK(packed->value.record.fields[2].is_bit_field &&
+              packed->value.record.fields[2].bit_width == 0U &&
+              packed->value.record.fields[2].alignment == 4U);
+        CHECK(minic_data_layout_record_field_storage_alignment(
+                  source, &program, source_record, 2U, &storage_alignment) &&
+              storage_alignment == packed->value.record.fields[2].alignment);
+        CHECK(!minic_data_layout_record_field_alignment(
+                  source, &program, source_record, 2U, &storage_alignment));
+    }
     CHECK(minic_core_type_import(&importer, flexible_source, &flexible_id));
     CHECK(minic_core_type_import(&importer, zero_source, &zero_id));
     {

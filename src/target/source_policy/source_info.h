@@ -40,6 +40,32 @@ typedef enum MinicTargetLanguageCapability {
     MINIC_TARGET_LANG_GNU_FIXED_VECTOR_STORAGE = 1U << 4
 } MinicTargetLanguageCapability;
 
+/* The source target owns *all* builtin header type names and identities.
+ * These descriptions never enable a machine instruction or vector PCS. */
+typedef enum MinicTargetBuiltinCoreImportKind {
+    MINIC_TARGET_BUILTIN_CORE_IMPORT_NONE = 0,
+    MINIC_TARGET_BUILTIN_CORE_IMPORT_OPAQUE,
+    MINIC_TARGET_BUILTIN_CORE_IMPORT_VECTOR128
+} MinicTargetBuiltinCoreImportKind;
+
+typedef enum MinicTargetBuiltinScalarElementKind {
+    MINIC_TARGET_BUILTIN_SCALAR_NONE = 0,
+    MINIC_TARGET_BUILTIN_SCALAR_FLOAT32,
+    MINIC_TARGET_BUILTIN_SCALAR_FLOAT64,
+    MINIC_TARGET_BUILTIN_SCALAR_UNSIGNED_CHAR,
+    MINIC_TARGET_BUILTIN_SCALAR_SIGNED_CHAR,
+    MINIC_TARGET_BUILTIN_SCALAR_UNSIGNED_LONG_LONG
+} MinicTargetBuiltinScalarElementKind;
+
+typedef struct MinicTargetSourceBuiltinTypeDescriptor {
+    unsigned int id; /* nonzero target-local nominal identity */
+    const char *spelling;
+    MinicBuiltinDeclarationRole role;
+    unsigned int required_capability;
+    MinicTargetBuiltinCoreImportKind core_import;
+    MinicTargetBuiltinScalarElementKind vector_element;
+} MinicTargetSourceBuiltinTypeDescriptor;
+
 typedef enum MinicTargetGnuFunctionAttributeKind {
     MINIC_TARGET_GNU_FUNCTION_NOCF_CHECK = 0,
     MINIC_TARGET_GNU_FUNCTION_INDIRECT_BRANCH,
@@ -97,6 +123,11 @@ const MinicTargetIntegerModel *minic_target_info_integer_model(
     const MinicTargetInvocation *target);
 bool minic_target_info_language_type_supported(
     const MinicTargetInvocation *target, MinicTypeBaseKind kind);
+bool minic_target_info_language_type_supported_for_type(
+    const MinicTargetInvocation *target, MinicType type);
+bool minic_target_info_source_builtin_type_descriptor(
+    const MinicTargetInvocation *target, MinicType type,
+    MinicTargetSourceBuiltinTypeDescriptor *descriptor);
 bool minic_target_info_named_builtin_type(
     const MinicTargetInvocation *target,
     const char *spelling, size_t length, MinicType *type);
@@ -127,6 +158,12 @@ bool minic_target_info_va_cursor_source_type_supported(
 bool minic_target_info_va_cursor_source_operand_supported(
     const MinicTargetInvocation *target, const MinicC0Program *program,
     MinicType type, bool is_lvalue);
+/* A scalar cursor assignment copies a C pointer object, so both operands
+ * must have compatible types. Structured ABI-state cursors copy their
+ * private tag through the source type's existing admission rules. */
+bool minic_target_info_va_cursor_source_copy_types_compatible(
+    const MinicTargetInvocation *target, const MinicC0Program *program,
+    MinicType destination, MinicType source);
 bool minic_target_info_plain_char_sign(
     const MinicTargetInvocation *target, MinicIntegerSign *sign);
 bool minic_target_info_plain_char_type(const MinicTargetInvocation *target, MinicType *type);

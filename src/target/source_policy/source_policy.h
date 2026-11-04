@@ -51,8 +51,10 @@ typedef struct MinicTargetAliasAbiPolicy {
  * linker/ELF contract. A caller checks C syntax/arity; the registered target
  * decides which source spellings and qualified values it may admit. */
 typedef struct MinicTargetSourceLanguagePolicy {
-    bool (*named_builtin_type)(const MinicTargetInvocation *,
-                               const char *, size_t, MinicType *);
+    /* Immutable target-owned source builtin type registry. One descriptor
+     * owns the name, nominal identity, admission and Core ingress shape. */
+    const MinicTargetSourceBuiltinTypeDescriptor *builtin_types;
+    size_t builtin_type_count;
     bool (*header_opaque_return)(const MinicTargetInvocation *, MinicType);
     bool (*header_attribute)(const MinicTargetInvocation *, const char *, size_t);
     bool (*gnu_function_attribute_name)(const char *, size_t);

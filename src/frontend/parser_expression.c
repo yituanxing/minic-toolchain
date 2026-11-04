@@ -2410,7 +2410,7 @@ static bool binary_result_type(const MinicTargetInvocation *target,
      * identity; this does not admit general GNU vectors or machine SIMD. */
     if (kind == MINIC_TOKEN_CARET &&
         minic_type_is_fixed_vector128_storage(left) &&
-        minic_target_info_language_type_supported(target, left.base_kind)) {
+        minic_target_info_language_type_supported_for_type(target, left)) {
         if (minic_type_fixed_vector128_xor_result(left, right, result))
             return true;
     }

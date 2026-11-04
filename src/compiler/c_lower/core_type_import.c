@@ -27,9 +27,6 @@ bool minic_core_type_importer_initialize(MinicCoreTypeImporter *importer,
     importer->context = context;
     importer->record_count = program->record_count;
     importer->function_count = program->function_type_count;
-    for (i = 0U; i < sizeof(importer->opaque_types) /
-                       sizeof(importer->opaque_types[0]); ++i)
-        importer->opaque_types[i] = MINIC_CORE_TYPE_INVALID;
     if (program->record_count != 0U) {
         if (program->records == NULL ||
             program->record_count > SIZE_MAX / sizeof(*importer->record_types)) {
@@ -70,6 +67,7 @@ void minic_core_type_importer_destroy(MinicCoreTypeImporter *importer) {
     if (importer == NULL) return;
     free(importer->record_types);
     free(importer->function_types);
+    free(importer->opaque_types);
     (void)memset(importer, 0, sizeof(*importer));
 }
 
@@ -79,34 +77,6 @@ static bool source_layout(MinicCoreTypeImporter *importer, MinicType source,
                                 source, &type->size, &type->alignment))
         return false;
     type->has_layout = true;
-    return true;
-}
-
-/* The public DataLayout field-alignment query intentionally rejects bit
- * fields; bit-field *placement* remains authoritative in its offset query.
- * Snapshot the effective storage boundary as the same pack/explicit-align
- * rule used by the DataLayout record walker. */
-static bool bit_field_storage_alignment(const MinicRecord *record,
-                                        const MinicRecordField *field,
-                                        size_t natural_alignment,
-                                        size_t *result) {
-    size_t pack = record->is_packed ? 1U : record->pack_alignment;
-    size_t alignment = natural_alignment;
-    if (natural_alignment == 0U ||
-        (pack != 0U && (pack > 16U || (pack & (pack - 1U)) != 0U)))
-        return false;
-    if (pack != 0U && alignment > pack) alignment = pack;
-    if (field->is_packed) alignment = 1U;
-    if (field->explicit_alignment != 0U) {
-        if ((field->explicit_alignment & (field->explicit_alignment - 1U)) != 0U)
-            return false;
-        if (field->explicit_alignment > alignment)
-            alignment = field->explicit_alignment;
-    }
-    if (field->bit_width == 0U && field->name_length == 0U &&
-        natural_alignment > alignment)
-        alignment = natural_alignment;
-    *result = alignment;
     return true;
 }
 
@@ -210,12 +180,9 @@ static bool import_record(MinicCoreTypeImporter *importer, MinicType source,
         fields[i].is_bit_field = field->is_bit_field;
         fields[i].bit_width = field->is_bit_field ? field->bit_width : 0U;
         fields[i].has_nondefault_layout_policy = field->is_packed;
-        if (field->is_bit_field) {
-            if (!bit_field_storage_alignment(record, field, field_alignment,
-                                             &fields[i].alignment)) goto failed;
-        } else if (!minic_data_layout_record_field_alignment(
-                       importer->invocation, importer->program, record, i,
-                       &fields[i].alignment)) {
+        if (!minic_data_layout_record_field_storage_alignment(
+                importer->invocation, importer->program, record, i,
+                &fields[i].alignment)) {
             goto failed;
         }
     }
@@ -271,24 +238,25 @@ static bool import_vector(MinicCoreTypeImporter *importer, MinicType source,
     MinicCoreType type = {0};
     MinicType element = minic_type_void();
     size_t element_size, element_alignment;
-    MinicBuiltinDeclarationRole role;
+    MinicTargetSourceBuiltinTypeDescriptor descriptor;
     type.kind = MINIC_CORE_TYPE_VECTOR;
-    role = minic_type_builtin_declaration_role(source.base_kind);
     if (source.base_kind == MINIC_TYPE_BASE_GNU_FIXED_VECTOR) {
         type.value.vector.representation = MINIC_CORE_VECTOR_STORAGE_ONLY;
         element.base_kind = source.gnu_vector_element_kind;
         element.integer_sign = source.integer_sign;
         element.integer_rank = source.integer_rank;
         element.is_plain_char = source.is_plain_char;
-    } else if (role == MINIC_BUILTIN_DECLARATION_FIXED_VECTOR128_STORAGE) {
+    } else if (minic_target_info_source_builtin_type_descriptor(
+                   importer->invocation, source, &descriptor) &&
+               descriptor.core_import == MINIC_TARGET_BUILTIN_CORE_IMPORT_VECTOR128) {
         type.value.vector.representation = MINIC_CORE_VECTOR_REGISTER_VALUE;
-        switch (source.base_kind) {
-        case MINIC_TYPE_BASE_AARCH64_FLOAT32X4: element = minic_type_float(); break;
-        case MINIC_TYPE_BASE_AARCH64_FLOAT64X2: element = minic_type_double(); break;
-        case MINIC_TYPE_BASE_AARCH64_UINT64X2: element = minic_type_unsigned_long_long(); break;
-        case MINIC_TYPE_BASE_AARCH64_INT8X16: element = minic_type_signed_char(); break;
-        case MINIC_TYPE_BASE_AARCH64_UINT8X16:
-        case MINIC_TYPE_BASE_AARCH64_POLY8X16: element = minic_type_unsigned_char(); break;
+        switch (descriptor.vector_element) {
+        case MINIC_TARGET_BUILTIN_SCALAR_FLOAT32: element = minic_type_float(); break;
+        case MINIC_TARGET_BUILTIN_SCALAR_FLOAT64: element = minic_type_double(); break;
+        case MINIC_TARGET_BUILTIN_SCALAR_UNSIGNED_LONG_LONG:
+            element = minic_type_unsigned_long_long(); break;
+        case MINIC_TARGET_BUILTIN_SCALAR_SIGNED_CHAR: element = minic_type_signed_char(); break;
+        case MINIC_TARGET_BUILTIN_SCALAR_UNSIGNED_CHAR: element = minic_type_unsigned_char(); break;
         default: return false;
         }
     } else return false;
@@ -301,6 +269,42 @@ static bool import_vector(MinicCoreTypeImporter *importer, MinicType source,
     (void)element_alignment;
     type.value.vector.element_count = type.size / element_size;
     return minic_core_type_register(importer->context, &type, result);
+}
+
+/* An opaque header declaration has no object representation, but distinct
+ * registered source identities still require distinct nominal CoreType IDs.
+ * The cache is keyed by target-local IDs instead of a fixed ISA enumeration. */
+static bool import_target_opaque(MinicCoreTypeImporter *importer,
+                                 unsigned int source_builtin_id,
+                                 MinicCoreTypeId *result) {
+    MinicCoreOpaqueSourceTypeCacheEntry *entries;
+    MinicCoreType type = {0};
+    MinicCoreTypeId id;
+    size_t i, next_capacity;
+    for (i = 0U; i < importer->opaque_type_count; ++i) {
+        if (importer->opaque_types[i].source_builtin_id == source_builtin_id) {
+            *result = importer->opaque_types[i].type_id;
+            return true;
+        }
+    }
+    if (importer->opaque_type_count == importer->opaque_type_capacity) {
+        next_capacity = importer->opaque_type_capacity == 0U
+            ? 8U : importer->opaque_type_capacity * 2U;
+        if (next_capacity <= importer->opaque_type_capacity ||
+            next_capacity > SIZE_MAX / sizeof(*entries)) return false;
+        entries = realloc(importer->opaque_types, next_capacity * sizeof(*entries));
+        if (entries == NULL) return false;
+        importer->opaque_types = entries;
+        importer->opaque_type_capacity = next_capacity;
+    }
+    type.kind = MINIC_CORE_TYPE_OPAQUE;
+    if (!minic_core_type_register(importer->context, &type, &id)) return false;
+    entries = importer->opaque_types;
+    entries[importer->opaque_type_count].source_builtin_id = source_builtin_id;
+    entries[importer->opaque_type_count].type_id = id;
+    importer->opaque_type_count++;
+    *result = id;
+    return true;
 }
 
 static bool import_type(MinicCoreTypeImporter *importer, MinicType source,
@@ -387,30 +391,20 @@ static bool import_type(MinicCoreTypeImporter *importer, MinicType source,
         return import_function(importer, source, result, depth + 1U);
     case MINIC_TYPE_BASE_GNU_FIXED_VECTOR:
         return import_vector(importer, source, result, depth + 1U);
-    default:
-        if (minic_type_builtin_declaration_role(source.base_kind) ==
-            MINIC_BUILTIN_DECLARATION_FIXED_VECTOR128_STORAGE)
+    case MINIC_TYPE_BASE_TARGET_BUILTIN: {
+        MinicTargetSourceBuiltinTypeDescriptor descriptor;
+        if (!minic_target_info_source_builtin_type_descriptor(
+                importer->invocation, source, &descriptor)) return false;
+        switch (descriptor.core_import) {
+        case MINIC_TARGET_BUILTIN_CORE_IMPORT_VECTOR128:
             return import_vector(importer, source, result, depth + 1U);
-        if (minic_type_builtin_declaration_role(source.base_kind) ==
-            MINIC_BUILTIN_DECLARATION_HEADER_ONLY_OPAQUE) {
-            size_t index;
-            switch (source.base_kind) {
-            case MINIC_TYPE_BASE_AARCH64_SVE_FLOAT32: index = 0U; break;
-            case MINIC_TYPE_BASE_AARCH64_SVE_FLOAT64: index = 1U; break;
-            case MINIC_TYPE_BASE_AARCH64_SVE_BOOL: index = 2U; break;
-            default: return false;
-            }
-            if (importer->opaque_types[index] != MINIC_CORE_TYPE_INVALID) {
-                *result = importer->opaque_types[index];
-                return true;
-            }
-            type.kind = MINIC_CORE_TYPE_OPAQUE;
-            /* A declaration is representable, but cannot be stored or passed. */
-            if (!minic_core_type_register(importer->context, &type, result)) return false;
-            importer->opaque_types[index] = *result;
-            return true;
+        case MINIC_TARGET_BUILTIN_CORE_IMPORT_OPAQUE:
+            return import_target_opaque(importer, source.target_builtin_id, result);
+        default:
+            return false;
         }
-        return false;
+    }
+    default: return false;
     }
     type.kind = MINIC_CORE_TYPE_FLOAT;
     return source_layout(importer, source, &type) &&

@@ -703,14 +703,12 @@ bool minic_x86_64_emit_call_instruction(
         MinicCoreCallView call;
         const MinicX86ArgumentPlan *cached_plan;
         const MinicCoreValueId callee = ins->value.indirect_call.callee;
-        const MinicCoreCallSignature *signature;
         size_t outgoing_bytes = 0U;
         if (!x86_resolve_call_view(fn, frame, ins, instruction_id,
                                    &call, &cached_plan))
             return false;
         if (call.signature == NULL)
             return false;
-        signature = call.signature;
         if (!x86_emit_call_arguments(out, fn, frame,
                                      &call, cached_plan, &outgoing_bytes) ||
             !x86_prepare_call_sret(out, fn, frame,
@@ -729,11 +727,11 @@ bool minic_x86_64_emit_call_instruction(
         if (call.return_form == MINIC_CORE_CALL_RETURN_OBJECT) {
             return ins->result == MINIC_CORE_VALUE_INVALID &&
                    x86_emit_call_record_result(out, fn, frame,
-                      signature->core_return_type_id,
+                      call.core_return_type_id,
                       ins->value.indirect_call.result_object);
         }
         return x86_emit_call_result(out, fn, frame,
-                                    signature->core_return_type_id, ins->result);
+                                    call.core_return_type_id, ins->result);
     }
     default:
         return false;

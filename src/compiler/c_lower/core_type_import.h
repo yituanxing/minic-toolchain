@@ -15,10 +15,19 @@ typedef struct MinicCoreTypeImporter {
     size_t record_count;
     MinicCoreTypeId *function_types;
     size_t function_count;
-    /* Private source-builtin identity cache, never exposed to Core users. */
-    MinicCoreTypeId opaque_types[3];
+    /* Source-builtin opaque identities are target-owned and open-ended.
+     * Preserve one nominal Core opaque type per registered source identity,
+     * without making the generic C->Core ingress enumerate any ISA's types. */
+    struct MinicCoreOpaqueSourceTypeCacheEntry *opaque_types;
+    size_t opaque_type_count;
+    size_t opaque_type_capacity;
     bool failed;
 } MinicCoreTypeImporter;
+
+typedef struct MinicCoreOpaqueSourceTypeCacheEntry {
+    unsigned int source_builtin_id;
+    MinicCoreTypeId type_id;
+} MinicCoreOpaqueSourceTypeCacheEntry;
 
 bool minic_core_type_importer_initialize(MinicCoreTypeImporter *importer,
                                         const MinicC0Program *program,

@@ -21,6 +21,10 @@ typedef struct MinicCoreSourceCallType {
     MinicFunctionTypeId function_type_id;
     MinicType return_type;
     MinicType *parameter_types;
+    /* Pre-import C-only facts. Published Core has only FUNCTION TypeId. */
+    size_t parameter_count;
+    bool is_variadic;
+    MinicFunctionCallingConvention calling_convention;
 } MinicCoreSourceCallType;
 
 /* Parallel arrays are indexed by the corresponding Core collection ID.

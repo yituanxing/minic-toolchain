@@ -1613,9 +1613,8 @@ static bool parse_builtin_va_copy(MinicParser *parser, MinicExpressionId *expres
         minic_parser_error(parser, "__builtin_va_copy source must be a va_list lvalue");
         return false;
     }
-    if (parser->invocation->machine.variadic_copy_kind ==
-            MINIC_VARIADIC_COPY_SCALAR_ASSIGNMENT &&
-        !minic_c0_types_compatible(parser->program, target->type, source->type)) {
+    if (!minic_target_info_va_cursor_source_copy_types_compatible(
+            parser->invocation, parser->program, target->type, source->type)) {
         minic_parser_error(parser, "__builtin_va_copy source type must match destination type");
         return false;
     }

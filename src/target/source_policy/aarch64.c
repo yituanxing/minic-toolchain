@@ -35,54 +35,52 @@ const MinicTargetAsmSourcePolicy minic_aarch64_asm_source_policy = {
         "GNU asm 'I' input requires an AArch64 unsigned imm12 (optional shift 12)",
 };
 
-/* The original five names remain opaque header-only identities. The four
- * explicitly registered NEON byte/word spellings additionally have real
- * target-owned 16-byte object layout, but still have NO vector arithmetic,
- * V-register transport or function-call PCS implementation. */
-static bool aarch_named_header_builtin(const MinicTargetInvocation *target,
-                                       const char *name, size_t length,
-                                       MinicType *type) {
-    static const struct {
-        const char *name;
-        MinicTypeBaseKind kind;
-    } names[] = {
-        {"__Float32x4_t", MINIC_TYPE_BASE_AARCH64_FLOAT32X4},
-        {"__Float64x2_t", MINIC_TYPE_BASE_AARCH64_FLOAT64X2},
-        {"__SVFloat32_t", MINIC_TYPE_BASE_AARCH64_SVE_FLOAT32},
-        {"__SVFloat64_t", MINIC_TYPE_BASE_AARCH64_SVE_FLOAT64},
-        {"__SVBool_t", MINIC_TYPE_BASE_AARCH64_SVE_BOOL},
-        {"__Uint8x16_t", MINIC_TYPE_BASE_AARCH64_UINT8X16},
-        {"__Uint64x2_t", MINIC_TYPE_BASE_AARCH64_UINT64X2},
-        {"__Int8x16_t", MINIC_TYPE_BASE_AARCH64_INT8X16},
-        {"__Poly8x16_t", MINIC_TYPE_BASE_AARCH64_POLY8X16}
-    };
-    size_t i;
-    for (i = 0U; i < sizeof(names) / sizeof(names[0]); ++i) {
-        if (aarch_register_is(name, length, names[i].name) &&
-            minic_target_info_language_type_supported(target, names[i].kind)) {
-            if (type != NULL)
-                *type = minic_type_header_builtin(names[i].kind);
-            return true;
-        }
-    }
-    return false;
-}
+/* The original five header names remain opaque declarations (only the SVE
+ * three have a Core opaque identity). Four NEON byte/word spellings have
+ * genuine 16-byte storage and target-owned scalar element types, but NO
+ * general vector arithmetic or function-call PCS is implied. The IDs are
+ * intentionally local to this target policy, never a generic C enum. */
+static const MinicTargetSourceBuiltinTypeDescriptor aarch_builtin_types[] = {
+    {1U, "__Float32x4_t", MINIC_BUILTIN_DECLARATION_HEADER_ONLY_OPAQUE,
+     MINIC_TARGET_LANG_OPAQUE_VECTOR_HEADER_DECLARATIONS,
+     MINIC_TARGET_BUILTIN_CORE_IMPORT_NONE, MINIC_TARGET_BUILTIN_SCALAR_NONE},
+    {2U, "__Float64x2_t", MINIC_BUILTIN_DECLARATION_HEADER_ONLY_OPAQUE,
+     MINIC_TARGET_LANG_OPAQUE_VECTOR_HEADER_DECLARATIONS,
+     MINIC_TARGET_BUILTIN_CORE_IMPORT_NONE, MINIC_TARGET_BUILTIN_SCALAR_NONE},
+    {3U, "__SVFloat32_t", MINIC_BUILTIN_DECLARATION_HEADER_ONLY_OPAQUE,
+     MINIC_TARGET_LANG_OPAQUE_VECTOR_HEADER_DECLARATIONS,
+     MINIC_TARGET_BUILTIN_CORE_IMPORT_OPAQUE, MINIC_TARGET_BUILTIN_SCALAR_NONE},
+    {4U, "__SVFloat64_t", MINIC_BUILTIN_DECLARATION_HEADER_ONLY_OPAQUE,
+     MINIC_TARGET_LANG_OPAQUE_VECTOR_HEADER_DECLARATIONS,
+     MINIC_TARGET_BUILTIN_CORE_IMPORT_OPAQUE, MINIC_TARGET_BUILTIN_SCALAR_NONE},
+    {5U, "__SVBool_t", MINIC_BUILTIN_DECLARATION_HEADER_ONLY_OPAQUE,
+     MINIC_TARGET_LANG_OPAQUE_VECTOR_HEADER_DECLARATIONS,
+     MINIC_TARGET_BUILTIN_CORE_IMPORT_OPAQUE, MINIC_TARGET_BUILTIN_SCALAR_NONE},
+    {6U, "__Uint8x16_t", MINIC_BUILTIN_DECLARATION_FIXED_VECTOR128_STORAGE,
+     MINIC_TARGET_LANG_FIXED_VECTOR128_STORAGE_DECLARATIONS,
+     MINIC_TARGET_BUILTIN_CORE_IMPORT_VECTOR128,
+     MINIC_TARGET_BUILTIN_SCALAR_UNSIGNED_CHAR},
+    {7U, "__Uint64x2_t", MINIC_BUILTIN_DECLARATION_FIXED_VECTOR128_STORAGE,
+     MINIC_TARGET_LANG_FIXED_VECTOR128_STORAGE_DECLARATIONS,
+     MINIC_TARGET_BUILTIN_CORE_IMPORT_VECTOR128,
+     MINIC_TARGET_BUILTIN_SCALAR_UNSIGNED_LONG_LONG},
+    {8U, "__Int8x16_t", MINIC_BUILTIN_DECLARATION_FIXED_VECTOR128_STORAGE,
+     MINIC_TARGET_LANG_FIXED_VECTOR128_STORAGE_DECLARATIONS,
+     MINIC_TARGET_BUILTIN_CORE_IMPORT_VECTOR128,
+     MINIC_TARGET_BUILTIN_SCALAR_SIGNED_CHAR},
+    {9U, "__Poly8x16_t", MINIC_BUILTIN_DECLARATION_FIXED_VECTOR128_STORAGE,
+     MINIC_TARGET_LANG_FIXED_VECTOR128_STORAGE_DECLARATIONS,
+     MINIC_TARGET_BUILTIN_CORE_IMPORT_VECTOR128,
+     MINIC_TARGET_BUILTIN_SCALAR_UNSIGNED_CHAR}
+};
 
 static bool aarch_header_opaque_return(const MinicTargetInvocation *target,
                                        MinicType type) {
-    if (type.pointer_depth != 0U ||
-        !minic_target_info_language_type_supported(target, type.base_kind))
-        return false;
-    switch (type.base_kind) {
-    case MINIC_TYPE_BASE_AARCH64_FLOAT32X4:
-    case MINIC_TYPE_BASE_AARCH64_FLOAT64X2:
-    case MINIC_TYPE_BASE_AARCH64_SVE_FLOAT32:
-    case MINIC_TYPE_BASE_AARCH64_SVE_FLOAT64:
-    case MINIC_TYPE_BASE_AARCH64_SVE_BOOL:
-        return true;
-    default:
-        return false;
-    }
+    MinicTargetSourceBuiltinTypeDescriptor descriptor;
+    return type.pointer_depth == 0U &&
+           minic_target_info_source_builtin_type_descriptor(
+               target, type, &descriptor) &&
+           descriptor.role == MINIC_BUILTIN_DECLARATION_HEADER_ONLY_OPAQUE;
 }
 
 static bool aarch_header_attribute(const MinicTargetInvocation *target,
@@ -114,7 +112,8 @@ static bool aarch_pragma_target_options(
 }
 
 const MinicTargetSourceLanguagePolicy minic_aarch64_source_language_policy = {
-    .named_builtin_type = aarch_named_header_builtin,
+    .builtin_types = aarch_builtin_types,
+    .builtin_type_count = sizeof(aarch_builtin_types) / sizeof(aarch_builtin_types[0]),
     .header_opaque_return = aarch_header_opaque_return,
     .header_attribute = aarch_header_attribute,
     .gnu_pragma_target_options = aarch_pragma_target_options,

@@ -48,18 +48,10 @@ static bool minic_core_call_view_core_signature_valid(
         const MinicCoreType *signature = minic_core_call_type(
             function, minic_core_type_unqualified(function->type_context,
                                                    view->core_function_type_id));
-        if (signature == NULL || signature->kind != MINIC_CORE_TYPE_FUNCTION ||
-            signature->value.function.return_type != view->core_return_type_id ||
-            signature->value.function.parameter_count != view->parameter_count ||
-            signature->value.function.is_variadic != view->is_variadic ||
-            signature->value.function.calling_convention != view->calling_convention ||
-            (view->parameter_count != 0U &&
-             signature->value.function.parameters == NULL))
+        /* Only the FUNCTION snapshot owns these fields.  The view borrows
+         * its immutable array rather than comparing a parallel Core copy. */
+        if (signature == NULL || signature->kind != MINIC_CORE_TYPE_FUNCTION)
             return false;
-        for (i = 0U; i < view->parameter_count; ++i)
-            if (signature->value.function.parameters[i] !=
-                view->core_parameter_type_ids[i])
-                return false;
     }
     return true;
 }
@@ -92,6 +84,7 @@ bool minic_core_call_view_build(const MinicCoreFunction *function,
     } else if (instruction->kind == MINIC_CORE_INSTRUCTION_INDIRECT_CALL) {
         const size_t id = instruction->value.indirect_call.signature_id;
         const MinicCoreValueId pointer = instruction->value.indirect_call.callee;
+        const MinicCoreType *function_type;
         if (id >= function->call_signature_count ||
             function->call_signatures == NULL ||
             pointer >= function->value_count || function->values == NULL)
@@ -109,13 +102,18 @@ bool minic_core_call_view_build(const MinicCoreFunction *function,
                                      view.signature->core_function_type_id,
                                      MINIC_CORE_TYPE_FUNCTION))
             return false;
+        function_type = minic_core_call_type(function,
+            minic_core_type_unqualified(function->type_context,
+                view.signature->core_function_type_id));
+        if (function_type == NULL || function_type->kind != MINIC_CORE_TYPE_FUNCTION)
+            return false;
         view.function_pointer = pointer;
         view.core_function_type_id = view.signature->core_function_type_id;
-        view.core_return_type_id = view.signature->core_return_type_id;
-        view.core_parameter_type_ids = view.signature->core_parameter_type_ids;
-        view.parameter_count = view.signature->parameter_count;
-        view.is_variadic = view.signature->is_variadic;
-        view.calling_convention = view.signature->calling_convention;
+        view.core_return_type_id = function_type->value.function.return_type;
+        view.core_parameter_type_ids = function_type->value.function.parameters;
+        view.parameter_count = function_type->value.function.parameter_count;
+        view.is_variadic = function_type->value.function.is_variadic;
+        view.calling_convention = function_type->value.function.calling_convention;
         begin = instruction->value.indirect_call.argument_begin;
         count = instruction->value.indirect_call.argument_count;
     } else {

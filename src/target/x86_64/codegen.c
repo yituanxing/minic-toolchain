@@ -280,18 +280,25 @@ static bool x86_no_sse_function_safe(
                         return false;
             } else if (ins->kind == MINIC_CORE_INSTRUCTION_INDIRECT_CALL) {
                 const MinicCoreCallSignature *signature;
+                const MinicCoreType *function_type;
                 size_t k;
                 if (ins->value.indirect_call.signature_id >=
                     fn->call_signature_count) return false;
                 signature = &fn->call_signatures[
                     ins->value.indirect_call.signature_id];
-                if ((signature->parameter_count != 0U &&
-                     signature->core_parameter_type_ids == NULL) ||
-                    x86_no_sse_fp_type(fn, signature->core_return_type_id))
+                function_type = minic_core_type_get(fn->type_context,
+                    minic_core_type_unqualified(fn->type_context,
+                        signature->core_function_type_id));
+                if (function_type == NULL ||
+                    function_type->kind != MINIC_CORE_TYPE_FUNCTION ||
+                    (function_type->value.function.parameter_count != 0U &&
+                     function_type->value.function.parameters == NULL) ||
+                    x86_no_sse_fp_type(fn,
+                        function_type->value.function.return_type))
                     return false;
-                for (k = 0U; k < signature->parameter_count; ++k)
+                for (k = 0U; k < function_type->value.function.parameter_count; ++k)
                     if (x86_no_sse_fp_type(fn,
-                            signature->core_parameter_type_ids[k]))
+                            function_type->value.function.parameters[k]))
                         return false;
             }
         }

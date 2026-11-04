@@ -189,8 +189,8 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
         MinicCoreValueId address_id;
         MinicType unqualified_type;
         MinicCoreLowerStatus status;
-        if (!minic_target_info_language_type_supported(
-                context->target, expression->type.base_kind) ||
+        if (!minic_target_info_language_type_supported_for_type(
+                context->target, expression->type) ||
             !minic_type_unqualified(expression->type, &unqualified_type))
             return MINIC_CORE_LOWER_UNSUPPORTED;
         status = lower_address(context, expression_id, &address_id);

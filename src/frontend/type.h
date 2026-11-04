@@ -37,26 +37,14 @@ typedef enum MinicTypeBaseKind {
     MINIC_TYPE_BASE_FLOAT64,
     MINIC_TYPE_BASE_FLOAT32X,
     MINIC_TYPE_BASE_FLOAT64X,
-    /* AArch64 glibc declares GCC's NEON/SVE builtin vector types even when
-     * the C program never uses SIMD. Preserve separate opaque identities:
-     * typedef parsing is supported; layout and machine operations reject
-     * until each vector ABI has been implemented and verified. */
-    MINIC_TYPE_BASE_AARCH64_FLOAT32X4,
-    MINIC_TYPE_BASE_AARCH64_FLOAT64X2,
-    MINIC_TYPE_BASE_AARCH64_SVE_FLOAT32,
-    MINIC_TYPE_BASE_AARCH64_SVE_FLOAT64,
-    MINIC_TYPE_BASE_AARCH64_SVE_BOOL,
-    /* Fixed-width NEON byte and 64-bit-lane source identities. They have
-     * target-owned real 128-bit object layout; arithmetic, V-register
-     * transport and calling conventions remain independently gated. */
-    MINIC_TYPE_BASE_AARCH64_UINT8X16,
-    MINIC_TYPE_BASE_AARCH64_UINT64X2,
-    MINIC_TYPE_BASE_AARCH64_INT8X16,
-    MINIC_TYPE_BASE_AARCH64_POLY8X16,
     /* GNU vector_size(N) is a target-neutral C type identity, distinct
      * from every target builtin vector. Storage does not grant SIMD ALU or
-     * by-value calling convention support. */
-    MINIC_TYPE_BASE_GNU_FIXED_VECTOR
+     * by-value calling convention support. Its historical numeric value 24
+     * remains stable; 15..23 are retired former architecture-specific kinds. */
+    MINIC_TYPE_BASE_GNU_FIXED_VECTOR = 24,
+    /* All target-owned header builtin identities share one source category.
+     * The selected SourcePolicy validates target_builtin_id and role. */
+    MINIC_TYPE_BASE_TARGET_BUILTIN
 } MinicTypeBaseKind;
 
 /* Source-language declaration shape only: this neither approves an extension
@@ -70,8 +58,6 @@ typedef enum MinicBuiltinDeclarationRole {
     MINIC_BUILTIN_DECLARATION_HEADER_ONLY_OPAQUE,
     MINIC_BUILTIN_DECLARATION_FIXED_VECTOR128_STORAGE
 } MinicBuiltinDeclarationRole;
-
-MinicBuiltinDeclarationRole minic_type_builtin_declaration_role(MinicTypeBaseKind kind);
 
 typedef enum MinicIntegerSign {
     MINIC_INTEGER_SIGN_NONE = 0,
@@ -117,7 +103,13 @@ typedef struct MinicType {
      * All ordinary C types leave these two fields zeroed. */
     MinicTypeBaseKind gnu_vector_element_kind;
     size_t gnu_vector_bytes;
+    /* Target-local header builtin identity. Zero/INVALID for all ordinary C
+     * types; not a machine ISA request or vector calling-convention grant. */
+    unsigned int target_builtin_id;
+    MinicBuiltinDeclarationRole target_builtin_role;
 } MinicType;
+
+MinicBuiltinDeclarationRole minic_type_builtin_declaration_role(MinicType type);
 
 bool minic_type_gnu_fixed_vector(MinicType element_type, size_t bytes, MinicType *result);
 bool minic_type_is_gnu_fixed_vector(MinicType type);
@@ -149,7 +141,8 @@ MinicType minic_type_float64x(void);
 /* Construct only registered header builtin declaration identities (opaque or
  * fixed-width storage). The selected target still admits the actual spelling
  * and type separately; this never grants machine SIMD or a vector call ABI. */
-MinicType minic_type_header_builtin(MinicTypeBaseKind base_kind);
+MinicType minic_type_header_builtin(unsigned int builtin_id,
+                                    MinicBuiltinDeclarationRole role);
 /* Source C object identity, not a machine SIMD operation or ISA permit. */
 bool minic_type_is_fixed_vector128_storage(MinicType type);
 /* Source C identity and CV-qualification check shared by parser and verifier.

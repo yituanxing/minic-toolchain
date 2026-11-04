@@ -230,17 +230,11 @@ typedef struct MinicCoreCallee {
     MinicFunctionCallingConvention calling_convention;
 } MinicCoreCallee;
 
-/* M83_FIRST_CLASS_INDIRECT_CALL: Core owns enough static signature data to
-   verify an indirect call without consulting frontend Program state. */
+/* M83_FIRST_CLASS_INDIRECT_CALL: one nominal Core FUNCTION identity owns the
+   entire indirect-call contract (return, formals, varargs and convention).
+   Call planners resolve these facts through the sealed Core type arena. */
 typedef struct MinicCoreCallSignature {
     MinicCoreTypeId core_function_type_id;
-    MinicCoreTypeId core_return_type_id;
-    MinicCoreTypeId *core_parameter_type_ids;
-    size_t parameter_count;
-    /* The Core parameter type IDs describe the fixed prefix; variadic tail
-       VALUE arguments carry their own Core scalar type. */
-    bool is_variadic;
-    MinicFunctionCallingConvention calling_convention;
 } MinicCoreCallSignature;
 
 /* M85_RECORD_CALL_ARGUMENT: Core call arguments carry semantic storage form,

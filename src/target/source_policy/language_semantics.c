@@ -4,6 +4,7 @@
 #include "target/source_policy/target_source_info.h"
 
 #include <stdint.h>
+#include <string.h>
 
 /* C/GNU source-language interpretation: never imported by a machine emitter. */
 
@@ -183,19 +184,6 @@ bool minic_target_info_language_type_supported(const MinicTargetInvocation *targ
     case MINIC_TYPE_BASE_FLOAT64X:
         required = MINIC_TARGET_LANG_EXTENDED_FLOAT_DECLARATIONS;
         break;
-    case MINIC_TYPE_BASE_AARCH64_FLOAT32X4:
-    case MINIC_TYPE_BASE_AARCH64_FLOAT64X2:
-    case MINIC_TYPE_BASE_AARCH64_SVE_FLOAT32:
-    case MINIC_TYPE_BASE_AARCH64_SVE_FLOAT64:
-    case MINIC_TYPE_BASE_AARCH64_SVE_BOOL:
-        required = MINIC_TARGET_LANG_OPAQUE_VECTOR_HEADER_DECLARATIONS;
-        break;
-    case MINIC_TYPE_BASE_AARCH64_UINT8X16:
-    case MINIC_TYPE_BASE_AARCH64_UINT64X2:
-    case MINIC_TYPE_BASE_AARCH64_INT8X16:
-    case MINIC_TYPE_BASE_AARCH64_POLY8X16:
-        required = MINIC_TARGET_LANG_FIXED_VECTOR128_STORAGE_DECLARATIONS;
-        break;
     case MINIC_TYPE_BASE_GNU_FIXED_VECTOR:
         required = MINIC_TARGET_LANG_GNU_FIXED_VECTOR_STORAGE;
         break;
@@ -205,17 +193,109 @@ bool minic_target_info_language_type_supported(const MinicTargetInvocation *targ
     return (target->source_info.language_type_capabilities & required) != 0U;
 }
 
+/* A target's immutable builtin registry is one semantic contract, not just a
+ * collection of individually matching IDs. Reject ambiguous source spellings
+ * or IDs and descriptions that would accidentally grant storage to an opaque
+ * declaration (or erase storage from a fixed-width vector). */
+static bool target_source_builtin_registry_valid(
+    const MinicTargetSourceLanguagePolicy *policy) {
+    size_t i, j;
+    if (policy == NULL || policy->builtin_types == NULL ||
+        policy->builtin_type_count == 0U) return false;
+    for (i = 0U; i < policy->builtin_type_count; ++i) {
+        const MinicTargetSourceBuiltinTypeDescriptor *entry =
+            &policy->builtin_types[i];
+        if (entry->id == 0U || entry->spelling == NULL ||
+            entry->spelling[0] == '\0') return false;
+        if (entry->role == MINIC_BUILTIN_DECLARATION_HEADER_ONLY_OPAQUE) {
+            if (entry->required_capability !=
+                    MINIC_TARGET_LANG_OPAQUE_VECTOR_HEADER_DECLARATIONS ||
+                (entry->core_import != MINIC_TARGET_BUILTIN_CORE_IMPORT_NONE &&
+                 entry->core_import != MINIC_TARGET_BUILTIN_CORE_IMPORT_OPAQUE) ||
+                entry->vector_element != MINIC_TARGET_BUILTIN_SCALAR_NONE)
+                return false;
+        } else if (entry->role == MINIC_BUILTIN_DECLARATION_FIXED_VECTOR128_STORAGE) {
+            if (entry->required_capability !=
+                    MINIC_TARGET_LANG_FIXED_VECTOR128_STORAGE_DECLARATIONS ||
+                entry->core_import != MINIC_TARGET_BUILTIN_CORE_IMPORT_VECTOR128 ||
+                entry->vector_element < MINIC_TARGET_BUILTIN_SCALAR_FLOAT32 ||
+                entry->vector_element > MINIC_TARGET_BUILTIN_SCALAR_UNSIGNED_LONG_LONG)
+                return false;
+        } else return false;
+        for (j = 0U; j < i; ++j)
+            if (entry->id == policy->builtin_types[j].id ||
+                strcmp(entry->spelling, policy->builtin_types[j].spelling) == 0)
+                return false;
+    }
+    return true;
+}
+
+bool minic_target_info_source_builtin_type_descriptor(
+    const MinicTargetInvocation *target, MinicType type,
+    MinicTargetSourceBuiltinTypeDescriptor *descriptor) {
+    const MinicTargetSourceLanguagePolicy *policy;
+    size_t i;
+    if (target == NULL || target->source_info.integer_model == NULL ||
+        type.base_kind != MINIC_TYPE_BASE_TARGET_BUILTIN ||
+        type.target_builtin_id == 0U ||
+        type.target_builtin_role == MINIC_BUILTIN_DECLARATION_INVALID ||
+        type.record_id != MINIC_RECORD_INVALID ||
+        type.array_type_id != MINIC_ARRAY_TYPE_INVALID ||
+        type.function_type_id != MINIC_FUNCTION_TYPE_INVALID ||
+        type.enum_id != MINIC_ENUM_INVALID ||
+        type.integer_sign != MINIC_INTEGER_SIGN_NONE ||
+        type.integer_rank != MINIC_INTEGER_RANK_NONE || type.is_plain_char ||
+        type.gnu_vector_element_kind != MINIC_TYPE_BASE_VOID ||
+        type.gnu_vector_bytes != 0U)
+        return false;
+    policy = target->source_info.source_language_policy;
+    if (!target_source_builtin_registry_valid(policy)) return false;
+    for (i = 0U; i < policy->builtin_type_count; ++i) {
+        const MinicTargetSourceBuiltinTypeDescriptor *entry = &policy->builtin_types[i];
+        if (entry->id != type.target_builtin_id ||
+            entry->role != type.target_builtin_role ||
+            entry->required_capability == 0U ||
+            (target->source_info.language_type_capabilities &
+             entry->required_capability) != entry->required_capability)
+            continue;
+        if (descriptor != NULL) *descriptor = *entry;
+        return true;
+    }
+    return false;
+}
+
+bool minic_target_info_language_type_supported_for_type(
+    const MinicTargetInvocation *target, MinicType type) {
+    return type.base_kind == MINIC_TYPE_BASE_TARGET_BUILTIN
+        ? minic_target_info_source_builtin_type_descriptor(target, type, NULL)
+        : minic_target_info_language_type_supported(target, type.base_kind);
+}
+
 /* Source-language vocabulary is owned by the selected target policy.
  * Frontend never names an architecture; the ABI layout and machine emitter
  * do not inherit a capability merely from a recognized header spelling. */
 bool minic_target_info_named_builtin_type(const MinicTargetInvocation *target,
                                           const char *spelling, size_t length,
                                           MinicType *type) {
-    const MinicTargetSourceLanguagePolicy *policy =
-        (target == NULL || target->source_info.integer_model == NULL) ? NULL : target->source_info.source_language_policy;
-    return policy != NULL && spelling != NULL &&
-           policy->named_builtin_type != NULL &&
-           policy->named_builtin_type(target, spelling, length, type);
+    const MinicTargetSourceLanguagePolicy *policy;
+    size_t i;
+    if (target == NULL || target->source_info.integer_model == NULL ||
+        spelling == NULL) return false;
+    policy = target->source_info.source_language_policy;
+    if (!target_source_builtin_registry_valid(policy)) return false;
+    for (i = 0U; i < policy->builtin_type_count; ++i) {
+        const MinicTargetSourceBuiltinTypeDescriptor *entry = &policy->builtin_types[i];
+        MinicType candidate;
+        if (entry->spelling == NULL || strlen(entry->spelling) != length ||
+            memcmp(spelling, entry->spelling, length) != 0 ||
+            entry->id == 0U) continue;
+        candidate = minic_type_header_builtin(entry->id, entry->role);
+        if (!minic_target_info_source_builtin_type_descriptor(target, candidate, NULL))
+            return false;
+        if (type != NULL) *type = candidate;
+        return true;
+    }
+    return false;
 }
 
 bool minic_target_info_header_opaque_vector_return(const MinicTargetInvocation *target,
@@ -352,6 +432,15 @@ bool minic_target_info_va_cursor_source_operand_supported(
         return is_lvalue && !minic_type_is_volatile(type);
     return shape.kind == MINIC_VA_CURSOR_SOURCE_OPAQUE_RECORD_ARRAY_ONE &&
            !minic_type_is_volatile(type);
+}
+
+bool minic_target_info_va_cursor_source_copy_types_compatible(
+    const MinicTargetInvocation *target, const MinicC0Program *program,
+    MinicType destination, MinicType source) {
+    return target != NULL && program != NULL &&
+           (target->machine.variadic_copy_kind !=
+                MINIC_VARIADIC_COPY_SCALAR_ASSIGNMENT ||
+            minic_c0_types_compatible(program, destination, source));
 }
 
 bool minic_target_info_plain_char_sign(const MinicTargetInvocation *target, MinicIntegerSign *sign) {

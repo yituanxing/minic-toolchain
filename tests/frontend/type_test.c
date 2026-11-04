@@ -21,42 +21,40 @@ static int test_builtin_declaration_roles(void) {
         {MINIC_TYPE_BASE_FLOAT32, MINIC_BUILTIN_DECLARATION_EXTENDED_FLOAT},
         {MINIC_TYPE_BASE_FLOAT64, MINIC_BUILTIN_DECLARATION_EXTENDED_FLOAT},
         {MINIC_TYPE_BASE_FLOAT32X, MINIC_BUILTIN_DECLARATION_EXTENDED_FLOAT},
-        {MINIC_TYPE_BASE_FLOAT64X, MINIC_BUILTIN_DECLARATION_EXTENDED_FLOAT},
-        {MINIC_TYPE_BASE_AARCH64_FLOAT32X4, MINIC_BUILTIN_DECLARATION_HEADER_ONLY_OPAQUE},
-        {MINIC_TYPE_BASE_AARCH64_FLOAT64X2, MINIC_BUILTIN_DECLARATION_HEADER_ONLY_OPAQUE},
-        {MINIC_TYPE_BASE_AARCH64_SVE_FLOAT32, MINIC_BUILTIN_DECLARATION_HEADER_ONLY_OPAQUE},
-        {MINIC_TYPE_BASE_AARCH64_SVE_FLOAT64, MINIC_BUILTIN_DECLARATION_HEADER_ONLY_OPAQUE},
-        {MINIC_TYPE_BASE_AARCH64_SVE_BOOL, MINIC_BUILTIN_DECLARATION_HEADER_ONLY_OPAQUE},
-        {MINIC_TYPE_BASE_AARCH64_UINT8X16,
-         MINIC_BUILTIN_DECLARATION_FIXED_VECTOR128_STORAGE},
-        {MINIC_TYPE_BASE_AARCH64_UINT64X2,
-         MINIC_BUILTIN_DECLARATION_FIXED_VECTOR128_STORAGE},
-        {MINIC_TYPE_BASE_AARCH64_INT8X16,
-         MINIC_BUILTIN_DECLARATION_FIXED_VECTOR128_STORAGE},
-        {MINIC_TYPE_BASE_AARCH64_POLY8X16,
-         MINIC_BUILTIN_DECLARATION_FIXED_VECTOR128_STORAGE}
+        {MINIC_TYPE_BASE_FLOAT64X, MINIC_BUILTIN_DECLARATION_EXTENDED_FLOAT}
     };
     size_t index;
 
     for (index = 0U; index < sizeof(cases) / sizeof(cases[0]); ++index) {
-        if (minic_type_builtin_declaration_role(cases[index].kind) != cases[index].role) {
+        MinicType type = minic_type_void();
+        type.base_kind = cases[index].kind;
+        if (minic_type_builtin_declaration_role(type) != cases[index].role) {
             return fail("extended C builtin declaration trait classification");
         }
     }
-    if (minic_type_builtin_declaration_role(MINIC_TYPE_BASE_VOID) !=
+    if (minic_type_builtin_declaration_role(minic_type_void()) !=
             MINIC_BUILTIN_DECLARATION_INVALID ||
-        minic_type_builtin_declaration_role(MINIC_TYPE_BASE_INT) !=
+        minic_type_builtin_declaration_role(minic_type_int()) !=
             MINIC_BUILTIN_DECLARATION_INVALID ||
-        !minic_type_is_void(minic_type_header_builtin(MINIC_TYPE_BASE_FLOAT128)) ||
-        !minic_type_is_void(minic_type_header_builtin(MINIC_TYPE_BASE_INT)) ||
-        minic_type_header_builtin(MINIC_TYPE_BASE_AARCH64_SVE_BOOL).base_kind !=
-            MINIC_TYPE_BASE_AARCH64_SVE_BOOL ||
-        minic_type_header_builtin(MINIC_TYPE_BASE_AARCH64_UINT64X2).base_kind !=
-            MINIC_TYPE_BASE_AARCH64_UINT64X2 ||
+        !minic_type_is_void(minic_type_header_builtin(
+            0U, MINIC_BUILTIN_DECLARATION_HEADER_ONLY_OPAQUE)) ||
+        !minic_type_is_void(minic_type_header_builtin(
+            1U, MINIC_BUILTIN_DECLARATION_STANDARD_FLOAT)) ||
+        minic_type_header_builtin(1U, MINIC_BUILTIN_DECLARATION_HEADER_ONLY_OPAQUE).base_kind !=
+            MINIC_TYPE_BASE_TARGET_BUILTIN ||
+        minic_type_header_builtin(2U, MINIC_BUILTIN_DECLARATION_FIXED_VECTOR128_STORAGE).base_kind !=
+            MINIC_TYPE_BASE_TARGET_BUILTIN ||
+        minic_type_builtin_declaration_role(minic_type_header_builtin(
+            1U, MINIC_BUILTIN_DECLARATION_HEADER_ONLY_OPAQUE)) !=
+            MINIC_BUILTIN_DECLARATION_HEADER_ONLY_OPAQUE ||
         !minic_type_is_fixed_vector128_storage(
-            minic_type_header_builtin(MINIC_TYPE_BASE_AARCH64_UINT64X2)) ||
+            minic_type_header_builtin(2U, MINIC_BUILTIN_DECLARATION_FIXED_VECTOR128_STORAGE)) ||
         minic_type_is_fixed_vector128_storage(
-            minic_type_header_builtin(MINIC_TYPE_BASE_AARCH64_SVE_BOOL))) {
+            minic_type_header_builtin(1U, MINIC_BUILTIN_DECLARATION_HEADER_ONLY_OPAQUE)) ||
+        minic_type_equal(minic_type_header_builtin(
+            1U, MINIC_BUILTIN_DECLARATION_HEADER_ONLY_OPAQUE),
+                         minic_type_header_builtin(
+            2U, MINIC_BUILTIN_DECLARATION_HEADER_ONLY_OPAQUE))) {
         /* __builtin_va_list now materializes a canonical record/array C
          * type per translation unit, not a special frontend scalar kind.
          * Its shape and identity are tested by four-target-model-m0. */
@@ -66,9 +64,12 @@ static int test_builtin_declaration_roles(void) {
 }
 
 static int test_header_fixed_vector_xor_type(void) {
-    MinicType vector_u8 = minic_type_header_builtin(MINIC_TYPE_BASE_AARCH64_UINT8X16);
-    MinicType vector_u64 = minic_type_header_builtin(MINIC_TYPE_BASE_AARCH64_UINT64X2);
-    MinicType opaque = minic_type_header_builtin(MINIC_TYPE_BASE_AARCH64_SVE_BOOL);
+    MinicType vector_u8 = minic_type_header_builtin(
+        6U, MINIC_BUILTIN_DECLARATION_FIXED_VECTOR128_STORAGE);
+    MinicType vector_u64 = minic_type_header_builtin(
+        7U, MINIC_BUILTIN_DECLARATION_FIXED_VECTOR128_STORAGE);
+    MinicType opaque = minic_type_header_builtin(
+        5U, MINIC_BUILTIN_DECLARATION_HEADER_ONLY_OPAQUE);
     MinicType qualified, pointer, result;
 
     if (!minic_type_add_const(vector_u8, &qualified) ||

@@ -463,8 +463,7 @@ bool minic_core_function_add_callee(MinicCoreSourceBuilder *builder,
     return true;
 }
 
-static bool call_signature_equal(const MinicCoreCallSignature *signature,
-                                 const MinicCoreSourceCallType *source,
+static bool call_signature_equal(const MinicCoreSourceCallType *source,
                                  MinicFunctionTypeId function_type_id,
                                  MinicType return_type,
                                  const MinicType *parameter_types,
@@ -473,12 +472,12 @@ static bool call_signature_equal(const MinicCoreCallSignature *signature,
                                  MinicFunctionCallingConvention calling_convention) {
     size_t index;
 
-    if (signature == NULL || source == NULL ||
+    if (source == NULL ||
         source->function_type_id != function_type_id ||
         !minic_type_equal(source->return_type, return_type) ||
-        signature->parameter_count != parameter_count ||
-        signature->is_variadic != is_variadic ||
-        signature->calling_convention != calling_convention) {
+        source->parameter_count != parameter_count ||
+        source->is_variadic != is_variadic ||
+        source->calling_convention != calling_convention) {
         return false;
     }
     for (index = 0U; index < parameter_count; ++index) {
@@ -522,8 +521,7 @@ bool minic_core_function_add_call_signature(MinicCoreSourceBuilder *builder,
         }
     }
     for (index = 0U; index < function->call_signature_count; ++index) {
-        if (call_signature_equal(&function->call_signatures[index],
-                                 &draft->call_signatures[index],
+        if (call_signature_equal(&draft->call_signatures[index],
                                  function_type_id,
                                  return_type,
                                  parameter_types,
@@ -538,11 +536,10 @@ bool minic_core_function_add_call_signature(MinicCoreSourceBuilder *builder,
     (void)memset(&source_stored, 0, sizeof(source_stored));
     source_stored.function_type_id = function_type_id;
     stored.core_function_type_id = MINIC_CORE_TYPE_INVALID;
-    stored.core_return_type_id = MINIC_CORE_TYPE_INVALID;
     source_stored.return_type = return_type;
-    stored.parameter_count = parameter_count;
-    stored.is_variadic = is_variadic;
-    stored.calling_convention = calling_convention;
+    source_stored.parameter_count = parameter_count;
+    source_stored.is_variadic = is_variadic;
+    source_stored.calling_convention = calling_convention;
     if (parameter_count != 0U) {
         source_stored.parameter_types =
             (MinicType *)malloc(parameter_count * sizeof(*source_stored.parameter_types));
@@ -658,9 +655,6 @@ static void clear_core_type_snapshots(MinicCoreFunction *function) {
     for (index = 0U; index < function->call_signature_count; ++index) {
         MinicCoreCallSignature *signature = &function->call_signatures[index];
         signature->core_function_type_id = MINIC_CORE_TYPE_INVALID;
-        signature->core_return_type_id = MINIC_CORE_TYPE_INVALID;
-        free(signature->core_parameter_type_ids);
-        signature->core_parameter_type_ids = NULL;
     }
     for (index = 0U; index < function->value_count; ++index)
         function->values[index].core_type_id = MINIC_CORE_TYPE_INVALID;
@@ -852,18 +846,18 @@ bool minic_core_function_verify_source_ingress(const MinicCoreSourceBuilder *bui
                 !ingress_enum_scalar_registered(builder, draft->callees[i].parameter_types[j]))
                 return false;
     for (i = 0U; i < function->call_signature_count; ++i)
-        if ((function->call_signatures[i].parameter_count != 0U &&
+        if ((draft->call_signatures[i].parameter_count != 0U &&
              draft->call_signatures[i].parameter_types == NULL) ||
-            function->call_signatures[i].parameter_count >
+            draft->call_signatures[i].parameter_count >
                 SIZE_MAX / sizeof(*draft->call_signatures[i].parameter_types) ||
             draft->call_signatures[i].function_type_id == MINIC_FUNCTION_TYPE_INVALID ||
             !minic_function_calling_convention_valid(
-                function->call_signatures[i].calling_convention) ||
+                draft->call_signatures[i].calling_convention) ||
             !minic_core_ir_direct_call_return_type(draft->call_signatures[i].return_type) ||
             !ingress_enum_scalar_registered(builder, draft->call_signatures[i].return_type))
             return false;
     for (i = 0U; i < function->call_signature_count; ++i)
-        for (j = 0U; j < function->call_signatures[i].parameter_count; ++j)
+        for (j = 0U; j < draft->call_signatures[i].parameter_count; ++j)
             if (!minic_core_ir_call_parameter_type(
                     draft->call_signatures[i].parameter_types[j]) ||
                 !ingress_enum_scalar_registered(
@@ -957,16 +951,45 @@ bool minic_core_function_snapshot_types(MinicCoreSourceBuilder *builder,
     for (index = 0U; index < function->call_signature_count; ++index) {
         MinicCoreCallSignature *signature = &function->call_signatures[index];
         const MinicCoreSourceCallType *source_signature = &draft->call_signatures[index];
+        const MinicCoreType *imported_function;
+        MinicCoreType function_snapshot;
+        MinicCoreTypeId imported_return;
+        size_t parameter_index;
         /* C's declaration-table ID lives only in this migration adapter.
-         * The resulting Core FUNCTION ID is an executable call contract. */
+         * The resulting Core FUNCTION ID is the sole executable contract.
+         * Compare the source draft exactly once at the ingress boundary,
+         * without retaining a second Core parameter/ABI snapshot. */
         const MinicType source_function = minic_type_function(source_signature->function_type_id);
         if (!snapshot_one_type(context, resolver, user_data, source_function,
-                               &signature->core_function_type_id) ||
-            !snapshot_one_type(context, resolver, user_data, source_signature->return_type,
-                               &signature->core_return_type_id) ||
-            !snapshot_type_array(context, resolver, user_data,
-                                 source_signature->parameter_types, signature->parameter_count,
-                                 &signature->core_parameter_type_ids)) goto failed;
+                               &signature->core_function_type_id)) goto failed;
+        imported_function = minic_core_type_get(
+            context, minic_core_type_unqualified(context,
+                signature->core_function_type_id));
+        if (imported_function == NULL) goto failed;
+        function_snapshot = *imported_function;
+        if (function_snapshot.kind != MINIC_CORE_TYPE_FUNCTION ||
+            function_snapshot.value.function.parameter_count !=
+                source_signature->parameter_count ||
+            function_snapshot.value.function.is_variadic !=
+                source_signature->is_variadic ||
+            function_snapshot.value.function.calling_convention !=
+                source_signature->calling_convention ||
+            (source_signature->parameter_count != 0U &&
+             function_snapshot.value.function.parameters == NULL) ||
+            !snapshot_one_type(context, resolver, user_data,
+                source_signature->return_type, &imported_return) ||
+            function_snapshot.value.function.return_type != imported_return)
+            goto failed;
+        for (parameter_index = 0U;
+             parameter_index < source_signature->parameter_count; ++parameter_index) {
+            MinicCoreTypeId imported_parameter;
+            if (!snapshot_one_type(context, resolver, user_data,
+                    source_signature->parameter_types[parameter_index],
+                    &imported_parameter) ||
+                function_snapshot.value.function.parameters[parameter_index] !=
+                    imported_parameter)
+                goto failed;
+        }
     }
     for (index = 0U; index < function->value_count; ++index)
         if (!snapshot_one_type(context, resolver, user_data,

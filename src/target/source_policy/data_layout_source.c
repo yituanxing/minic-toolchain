@@ -84,6 +84,22 @@ static bool minic_data_layout_effective_field_alignment(
     return true;
 }
 
+/* The placement walker and the C->Core importer must publish precisely the
+ * same bit-field storage boundary. An unnamed zero-width bit-field has the
+ * natural type boundary even inside a packed record; that fence does not
+ * change the enclosing record's alignment. */
+static bool minic_data_layout_effective_storage_alignment(
+    const MinicRecordField *field, size_t pack_alignment,
+    size_t natural_alignment, size_t *alignment) {
+    if (!minic_data_layout_effective_field_alignment(
+            field, pack_alignment, natural_alignment, alignment))
+        return false;
+    if (field->is_bit_field && field->bit_width == 0U &&
+        field->name_length == 0U && natural_alignment > *alignment)
+        *alignment = natural_alignment;
+    return true;
+}
+
 /* Record array dimensions are owned by MinicArrayType.  The layout walker
  * stores one source type per field; a flexible tail alone substitutes its
  * element type because the outer incomplete array has no static extent. */
@@ -146,7 +162,6 @@ static bool minic_data_layout_record_depth(const MinicTargetInvocation *invocati
         size_t element_size;
         size_t field_size;
         size_t field_alignment;
-        size_t type_alignment;
         size_t field_offset;
         size_t field_bit_offset;
         MinicLayoutFieldStorage storage;
@@ -158,16 +173,9 @@ static bool minic_data_layout_record_depth(const MinicTargetInvocation *invocati
                 &element_size, &field_alignment)) {
             return false;
         }
-        type_alignment = field_alignment;
-        if (!minic_data_layout_effective_field_alignment(
+        if (!minic_data_layout_effective_storage_alignment(
                 field, pack_alignment, field_alignment, &field_alignment))
             return false;
-        /* GNU's unnamed zero-width bit-field ends the current storage unit
-         * at the declared type's natural boundary even under packed or
-         * #pragma pack.  This fence does not raise the record's alignment. */
-        if (field->is_bit_field && field->bit_width == 0U &&
-            field->name_length == 0U && type_alignment > field_alignment)
-            field_alignment = type_alignment;
         field_bit_offset = 0U;
         if (field->is_bit_field) {
             size_t type_bits;
@@ -380,8 +388,10 @@ static bool minic_data_layout_type_depth(const MinicTargetInvocation *invocation
         }
         return minic_data_layout_apply_explicit_alignment(type, alignment);
     }
-    if (minic_type_builtin_declaration_role(type.base_kind) ==
+    if (minic_type_builtin_declaration_role(type) ==
         MINIC_BUILTIN_DECLARATION_FIXED_VECTOR128_STORAGE) {
+        if (!minic_target_info_language_type_supported_for_type(
+                invocation, type)) return false;
         if (invocation->machine.data_layout->fixed_vector128_size == 0U ||
             invocation->machine.data_layout->fixed_vector128_alignment == 0U)
             return false;
@@ -583,6 +593,16 @@ bool minic_data_layout_record_field_alignment(const MinicTargetInvocation *invoc
                                               const MinicRecord *record,
                                               size_t field_index,
                                               size_t *alignment) {
+    if (record == NULL || field_index >= record->field_count ||
+        record->fields[field_index].is_bit_field)
+        return false;
+    return minic_data_layout_record_field_storage_alignment(
+        invocation, program, record, field_index, alignment);
+}
+
+bool minic_data_layout_record_field_storage_alignment(
+    const MinicTargetInvocation *invocation, const MinicC0Program *program,
+    const MinicRecord *record, size_t field_index, size_t *alignment) {
     const MinicRecordField *field;
     MinicLayoutFieldStorage storage;
     size_t field_size;
@@ -594,15 +614,14 @@ bool minic_data_layout_record_field_alignment(const MinicTargetInvocation *invoc
         return false;
     }
     field = &record->fields[field_index];
-    if (field->is_bit_field ||
-        !minic_data_layout_field_storage(program, field, &storage) ||
+    if (!minic_data_layout_field_storage(program, field, &storage) ||
         !minic_data_layout_record_pack(record, &pack_alignment) ||
         !minic_data_layout_type(invocation, program, storage.storage_type,
                                 &field_size, &field_alignment)) {
         return false;
     }
     (void)field_size;
-    return minic_data_layout_effective_field_alignment(
+    return minic_data_layout_effective_storage_alignment(
         field, pack_alignment, field_alignment, alignment);
 }
 

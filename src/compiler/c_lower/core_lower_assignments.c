@@ -164,8 +164,8 @@ static MinicCoreLowerStatus minic_core_lower_assignment_pair_impl(MinicCoreLower
         MinicType store_source_type = minic_type_void();
         MinicCoreValueId vector_value, target_address;
         if (source == NULL ||
-            !minic_target_info_language_type_supported(
-                context->target, target->type.base_kind) ||
+            !minic_target_info_language_type_supported_for_type(
+                context->target, target->type) ||
             minic_type_is_const(target->type) ||
             !minic_type_unqualified(target->type, &stored_type) ||
             !minic_type_assignment_compatible(stored_type, source->type))

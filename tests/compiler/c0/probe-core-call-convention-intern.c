@@ -57,7 +57,8 @@ int main(void) {
             &builder, 7U, scalar, &scalar, 1U, false,
             MINIC_CALLING_CONVENTION_MS_X64, &repeated_indirect) ||
         indirect != repeated_indirect || fn->call_signature_count != 1U ||
-        fn->call_signatures[indirect].calling_convention != MINIC_CALLING_CONVENTION_MS_X64)
+        builder.source_draft->call_signatures[indirect].calling_convention !=
+            MINIC_CALLING_CONVENTION_MS_X64)
         return 6;
 
     /* Defensive Core interning checks convention even when a malformed

@@ -266,8 +266,8 @@ MinicCoreLowerStatus minic_core_lower_try_arithmetic_binary(
         MinicCoreValueId left, right;
         MinicCoreLowerStatus status;
         *handled = true;
-        if (!minic_target_info_language_type_supported(
-                context->target, expression->type.base_kind))
+        if (!minic_target_info_language_type_supported_for_type(
+                context->target, expression->type))
             return MINIC_CORE_LOWER_UNSUPPORTED;
         status = lower_expression(context, expression->value.binary.left, &left);
         if (status != MINIC_CORE_LOWER_OK) return status;

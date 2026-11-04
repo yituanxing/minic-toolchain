@@ -39,6 +39,12 @@ bool minic_data_layout_record_field_alignment(const struct MinicTargetInvocation
                                               const MinicRecord *record,
                                               size_t field_index,
                                               size_t *alignment);
+/* The C storage boundary, including for bit-fields. Unlike the public
+ * __alignof__(member) query above, this permits bit-field members and
+ * applies the unnamed zero-width natural-alignment fence. */
+bool minic_data_layout_record_field_storage_alignment(
+    const struct MinicTargetInvocation *invocation, const MinicC0Program *program,
+    const MinicRecord *record, size_t field_index, size_t *alignment);
 bool minic_data_layout_record_field_layout(const struct MinicTargetInvocation *invocation,
                                            const MinicC0Program *program,
                                            const MinicRecord *record,

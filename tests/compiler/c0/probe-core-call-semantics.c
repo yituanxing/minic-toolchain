@@ -154,10 +154,6 @@ int main(void) {
     call.result = MINIC_CORE_VALUE_INVALID;
 
     signature.core_function_type_id = types.function;
-    signature.core_return_type_id = types.integer;
-    signature.core_parameter_type_ids = &types.integer;
-    signature.parameter_count = 1U;
-    signature.calling_convention = MINIC_CALLING_CONVENTION_MS_X64;
     fn.call_signatures = &signature;
     fn.call_signature_count = 1U;
     argument.kind = MINIC_CORE_CALL_ARGUMENT_VALUE;
@@ -173,9 +169,11 @@ int main(void) {
           view.signature == &signature &&
           view.calling_convention == MINIC_CALLING_CONVENTION_MS_X64 &&
           view.function_pointer == 1U, 15);
-    signature.calling_convention = (MinicFunctionCallingConvention)99;
+    context.types[types.function].value.function.calling_convention =
+        (MinicFunctionCallingConvention)99;
     CHECK(!minic_core_call_view_build(&fn, &call, &view), 30);
-    signature.calling_convention = MINIC_CALLING_CONVENTION_MS_X64;
+    context.types[types.function].value.function.calling_convention =
+        MINIC_CALLING_CONVENTION_MS_X64;
 
     /* The sparse Common CALL index is shared by all five target ABI plans. */
     {

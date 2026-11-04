@@ -221,9 +221,6 @@ int main(void) {
     if (minic_core_call_view_build(&function, &call, &view)) return 11;
 
     signature.core_function_type_id = signature_type;
-    signature.core_return_type_id = integer;
-    signature.core_parameter_type_ids = &integer;
-    signature.parameter_count = 1U;
     argument.kind = MINIC_CORE_CALL_ARGUMENT_VALUE;
     argument.value.value_id = 0U;
     call.kind = MINIC_CORE_INSTRUCTION_INDIRECT_CALL;
@@ -245,7 +242,7 @@ int main(void) {
     signature.core_function_type_id = MINIC_CORE_TYPE_INVALID;
     if (minic_core_call_view_build(&function, &call, &view)) return 22;
     signature.core_function_type_id = signature_type;
-    signature.core_parameter_type_ids = &record;
+    context.types[signature_type].value.function.parameters[0] = record;
     if (minic_core_call_view_build(&function, &call, &view)) return 14;
 
     minic_core_type_context_destroy(&context);
