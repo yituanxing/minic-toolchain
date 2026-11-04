@@ -24,6 +24,8 @@ typedef struct MiniLdStaticOptions {
     /* GNU -n/--nmagic: script file layout uses section alignment rather
      * than maximum-page alignment. This is not GNU -N/--omagic. */
     bool nmagic;
+    /* GNU -X: omit temporary .L* locals from the final ET_EXEC symtab only. */
+    bool discard_locals;
 } MiniLdStaticOptions;
 
 typedef struct MiniLdSharedOptions {

@@ -122,6 +122,8 @@ int main(int argc, char **argv) {
     bool group_mode = false;
     bool gc_sections = false;
     bool nmagic = false;
+    bool discard_locals = false;
+    bool no_dynamic_linker = false;
     bool no_undefined = false;
     /* 0 = default target byte order; 1 = -EL, 2 = -EB. */
     unsigned int requested_endianness = 0U;
@@ -320,6 +322,11 @@ int main(int argc, char **argv) {
             continue;
         } else if (strcmp(argv[i], "--no-undefined") == 0) {
             no_undefined = true;
+        } else if (strcmp(argv[i], "--no-dynamic-linker") == 0) {
+            no_dynamic_linker = true;
+        } else if (strcmp(argv[i], "-X") == 0 ||
+                   strcmp(argv[i], "--discard-locals") == 0) {
+            discard_locals = true;
         } else if (strcmp(argv[i], "-EL") == 0 ||
                    strcmp(argv[i], "-EB") == 0) {
             unsigned int next = strcmp(argv[i], "-EL") == 0 ? 1U : 2U;
@@ -443,6 +450,15 @@ int main(int argc, char **argv) {
         fprintf(stderr, "minic-ld: dynamic-linker-requires-pie\n");
         return 2;
     }
+    if (no_dynamic_linker &&
+        (relocatable || shared_link || pie_link || interpreter_path != NULL)) {
+        fprintf(stderr, "minic-ld: --no-dynamic-linker-requires-static-link\n");
+        return 2;
+    }
+    if (discard_locals && (relocatable || shared_link || pie_link)) {
+        fprintf(stderr, "minic-ld: --discard-locals-requires-static-link\n");
+        return 2;
+    }
     if (gc_sections && (relocatable || shared_link || pie_link)) {
         fprintf(stderr,
                 "minic-ld: --gc-sections is currently supported only for final static links\n");
@@ -532,6 +548,7 @@ int main(int argc, char **argv) {
         options.script_path = script_path;
         options.gc_sections = gc_sections;
         options.nmagic = nmagic;
+        options.discard_locals = discard_locals;
         return minild_link_static_elf64_inputs_target(
             output, inputs, input_count, &options, emulation, stderr);
     }

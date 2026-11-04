@@ -241,6 +241,7 @@ typedef struct MiniLdState {
     bool allow_dso_inputs;
     bool relocatable_output;
     bool nmagic;
+    bool discard_locals;
     FILE *diagnostics;
 } MiniLdState;
 

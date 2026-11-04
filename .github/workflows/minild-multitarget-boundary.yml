@@ -75,6 +75,7 @@ jobs:
             check-minild-script-mixed-bss \
             check-minild-script-nmagic \
             check-minild-linux-cli-gnu-parity \
+            check-minild-linux-static-cli-target-options \
             check-minild-linux-final-replay-vmlinux-o \
             check-minild-explicit-endianness \
             check-minild-layout-phase-boundary \

@@ -67,12 +67,25 @@ static bool minild_final_symbols_build_with_version(
     const MiniLdScript *version_script,
     MiniLdFinalSymbols *final) {
     size_t next = 1U;
-    size_t pass, i;
+    size_t pass, i, kept = 0U;
 
-    if (state->resolver.count >= SIZE_MAX / sizeof(MiniElfSymbol) - 1U) {
+    /* -X applies only to the output table. Input/resolver symbol indices
+     * remain stable for relocation and script evaluation. ELF mapping
+     * symbols ($x/$d) and named local symbols are not .L* temporaries. */
+    for (i = 0U; i < state->resolver.count; ++i) {
+        const MiniLdResolvedSymbol *source = &state->resolver.entries[i];
+        if (state->discard_locals &&
+            ELF64_ST_BIND(source->info) == STB_LOCAL &&
+            source->name[0] == '.' && source->name[1] == 'L') {
+            continue;
+        }
+        ++kept;
+    }
+
+    if (kept >= SIZE_MAX / sizeof(MiniElfSymbol) - 1U) {
         return false;
     }
-    final->entry_count = state->resolver.count + 1U;
+    final->entry_count = kept + 1U;
     final->entries = calloc(final->entry_count,
                             sizeof(*final->entries));
     if (final->entries == NULL || !buffer_append_zero(&final->names, 1U)) {
@@ -81,6 +94,11 @@ static bool minild_final_symbols_build_with_version(
     for (pass = 0U; pass < 2U; ++pass) {
         for (i = 0U; i < state->resolver.count; ++i) {
             const MiniLdResolvedSymbol *source = &state->resolver.entries[i];
+            if (state->discard_locals &&
+                ELF64_ST_BIND(source->info) == STB_LOCAL &&
+                source->name[0] == '.' && source->name[1] == 'L') {
+                continue;
+            }
             bool local = minild_final_symbol_local(source, state, plan,
                                                    version_script);
             bool localized = local &&

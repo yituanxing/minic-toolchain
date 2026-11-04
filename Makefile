@@ -903,6 +903,11 @@ check-minild-linux-cli-gnu-parity: $(MINILD_BINARY)
 	MINILD="$(abspath $(MINILD_BINARY))" \
 	bash tests/linker/probe-linux-cli-gnu-parity.sh
 
+.PHONY: check-minild-linux-static-cli-target-options
+check-minild-linux-static-cli-target-options: $(MINILD_BINARY)
+	MINILD="$(abspath $(MINILD_BINARY))" \
+	bash tests/linker/probe-linux-static-cli-target-options.sh
+
 .PHONY: check-minild-linux-final-replay-vmlinux-o
 check-minild-linux-final-replay-vmlinux-o: $(MINILD_BINARY)
 	MINILD="$(abspath $(MINILD_BINARY))" \

@@ -63,6 +63,7 @@ static int minild_link_static_pipeline(
     memset(&state, 0, sizeof(state));
     state.target = target;
     state.nmagic = options != NULL && options->nmagic;
+    state.discard_locals = options != NULL && options->discard_locals;
     memset(&layout, 0, sizeof(layout));
     minild_script_initialize(&script);
     state.diagnostics = diagnostics;
@@ -215,6 +216,7 @@ int minild_link_static_elf64_riscv_inputs(const char *output_path,
     options.script_path = NULL;
     options.gc_sections = false;
     options.nmagic = false;
+    options.discard_locals = false;
     return minild_link_static_elf64_riscv_inputs_options(output_path,
                                                           inputs,
                                                           input_count,
