@@ -34,7 +34,6 @@ typedef struct MiniLdSection {
     /* Non-owning path of the exact input fragment, NULL for synthesized or
      * legacy merged sections.  InputFile owns this string until teardown. */
     const char *input_path;
-    const char *output_name;
     uint32_t type;
     uint64_t flags;
     uint64_t align;
@@ -710,6 +709,8 @@ done:
 #include "linker_final_symbols.inc"
 
 #include "linker_program_plan.inc"
+
+#include "linker_final_elf64_plan.inc"
 
 #include "linker_elf64_image.inc"
 

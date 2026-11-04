@@ -135,11 +135,10 @@ static bool minild_project_admitted_inputs(MiniLdState *state,
         free(generated_name);
         output = &next.sections[index];
         if (fragment) {
-            /* Non-owning original names and paths survive output-name
-             * selection.  The generated work name is never a source fact. */
+            /* Non-owning original source names and paths survive script
+             * selection. The generated work name is never a source fact. */
             output->input_name = input->name;
             output->input_path = state->inputs.files[input->file].path;
-            output->output_name = input->name;
             ++fragments;
         }
         if (projection == MINILD_PROJECTION_RELOCATABLE &&

@@ -15,6 +15,7 @@ format decisions, and runtime behavior remain unchanged.
 | `linker_output_plan.inc` | `MiniLdOutputPlan`, surviving output-section identity, non-alloc placement, section headers and bytes | Projects the placed working sections into output sections; does not own original input identities. |
 | `linker_final_symbols.inc` | `MiniLdFinalSymbols` plus `MiniLdFinalSectionTables` projection | Reads canonical symbols and the OutputPlan; builds the shared final ELF symbol/name/section-header trailer. |
 | `linker_program_plan.inc` | Common `MiniLdProgramPlan` lifetime and final PHDR range validation | Both writers consume one output-neutral program-header contract, while each retains its own segment policy. |
+| `linker_final_elf64_plan.inc` | One `MiniLdFinalElf64Image` owner for final ProgramPlan, symbols and section tables | ET_EXEC and ET_DYN share non-ALLOC placement, final table construction, generic section-header projection, validation and cleanup without merging mode-specific policies. |
 | `linker_elf64_image.inc` | Final ELF64 Ehdr/PHDR/section-byte/table serialization and file sink | Consumes already-finalized plans; does not decide section selection, relocation or layout. |
 | `linker_static_output.inc` | Static PT_LOAD selection and ET_EXEC writer | Owns executable segment policy and final static emission, including scripted output. |
 | `linker_shared_output.inc` | `MiniLdSharedImage`, dynamic symbols/relocations, dynamic metadata, ET_DYN writer and shared-link entry point | Owns shared-object output state and its writer without mixing it into ET_EXEC policy. |
@@ -74,6 +75,36 @@ than only moving implementation text:
 The layout object is consumed by both executable and shared-object output.
 Its name is `MiniLdLayout`, with direct consumers migrated rather than a
 compatibility alias.
+
+### Output naming and final ELF ownership checkpoint (2026-11-04)
+
+`MiniLdSection` no longer carries an `output_name` mirror. Work fragments
+retain their input source name/path for GC, COMDAT, and section matching.
+Script output names are borrowed from the parsed command into
+`MiniLdLayout.script_outputs[command].name` and projected by
+`minild_output_plan_build`; default and GC projections use the original
+input name (or the canonical work name for synthesized sections). This is
+especially important for GC, where a fragment's private work name differs
+from the ELF output section's public name.
+
+`MiniLdLayoutScriptOutput` is deliberately **not** merged with
+`MiniLdOutputSection`: the former exists for every script command and is
+needed during expression evaluation, BYTE/fill handling, synthetic work
+anchor creation and vDSO file-base adjustment. The latter represents only
+surviving final ELF sections, after layout has finalized mutable work sizes,
+ownership and offsets. A premature OutputPlan would introduce a second
+partially initialized output state.
+
+ET_EXEC and ET_DYN now borrow one `MiniLdFinalElf64Image` lifetime owner
+for `MiniLdProgramPlan`, `MiniLdFinalSymbols` and
+`MiniLdFinalSectionTables`. A common final preparation pass handles
+non-ALLOC placement, final symbols, synthetic tables, generic ELF section
+headers and PHDR validation. The separate writers still choose their
+respective PHDR policies, file-layout extent, symbol-table physical order
+(`SYMTAB_FIRST` versus `STRTAB_FIRST`) and ET_DYN's dynamic header links.
+The existing `minild_elf64_write_image` remains the sole file serializer;
+no new target-neutral writer, output format or relocation semantics are
+introduced.
 
 ## OutputPlan lifecycle and final ELF64 boundary
 

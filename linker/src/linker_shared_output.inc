@@ -1420,34 +1420,21 @@ static bool shared_write_object(MiniLdState *state,
                                 const MiniLdSharedImage *shared,
                                 const char *path,
                                 uint64_t entry) {
-    MiniLdProgramPlan program_plan = {0};
+    MiniLdFinalElf64Image final = {0};
     size_t image_size;
-    MiniLdFinalSymbols final_symbols = {0};
-    MiniLdFinalSectionTables final_tables = {0};
-    size_t end_nonalloc;
-    size_t total_size;
     bool ok = false;
 
     if (!minild_shared_program_plan_build(state, layout, output_plan, shared,
-                                          &program_plan)) {
+                                          &final.program)) {
         goto done;
     }
     image_size = sizeof(Elf64_Ehdr) +
-                 program_plan.count * sizeof(Elf64_Phdr);
+                 final.program.count * sizeof(Elf64_Phdr);
 
     if (output_plan->count > UINT16_MAX - 4U) {
         fprintf(state->diagnostics,
                 "minic-ld: too-many-shared-sections\n");
         goto done;
-    }
-    /* GNU nm uses the non-ALLOC .symtab in Linux's vDSO build, not only
-     * .dynsym.  Both executable kinds consume the same final symbol view. */
-    if (!minild_final_symbols_build_with_version(state, layout, output_plan,
-                                                shared->version_script,
-                                                &final_symbols)) {
-        fprintf(state->diagnostics,
-                "minic-ld: cannot-build-shared-static-symbols\n");
-        goto oom;
     }
     if (layout->have_rx &&
         layout->rx_file_offset + layout->rx_file_size > image_size) {
@@ -1457,34 +1444,20 @@ static bool shared_write_object(MiniLdState *state,
         layout->rw_file_offset + layout->rw_file_size > image_size) {
         image_size = layout->rw_file_offset + layout->rw_file_size;
     }
-    /* Synthetic non-ALLOC symbol/name tables are after the LOAD image;
-     * no change to program headers or script-derived section positions.
-     */
-    if (!minild_output_plan_place_nonalloc(state, layout, output_plan,
-                                           image_size,
-                                           &end_nonalloc)) {
-        goto done;
-    }
-    if (!minild_final_section_tables_build(output_plan, &final_symbols,
-                                           end_nonalloc,
-                                           MINILD_FINAL_STRTAB_FIRST,
-                                           &final_tables)) {
-        goto oom;
-    }
-    total_size = final_tables.total_size;
-
-    if (!minild_program_plan_validate(state, &program_plan, total_size)) {
-        goto done;
-    }
-    if (!minild_output_plan_section_headers(state, output_plan,
-                                             final_tables.output_name_offsets,
-                                             final_tables.headers)) {
+    /* GNU nm reads the final .symtab from the vDSO, not only .dynsym.
+     * Synthetic non-ALLOC names and symbols are after the LOAD image.
+     * Dynamic section-header links remain ET_DYN-specific policy. */
+    if (!minild_final_elf64_image_prepare(state, layout, output_plan,
+                                          &final, image_size,
+                                          shared->version_script,
+                                          MINILD_FINAL_STRTAB_FIRST,
+                                          ET_DYN)) {
         goto done;
     }
     minild_shared_output_section_links(output_plan, shared,
-                                        final_tables.headers);
-    ok = minild_elf64_write_image(state, layout, output_plan, &program_plan,
-                                  &final_tables, &final_symbols,
+                                        final.tables.headers);
+    ok = minild_elf64_write_image(state, layout, output_plan, &final.program,
+                                  &final.tables, &final.symbols,
                                   ET_DYN, entry, path);
 
 done:
@@ -1494,15 +1467,8 @@ done:
     if (!ok) {
         (void)remove(path);
     }
-    minild_program_plan_destroy(&program_plan);
-    minild_final_section_tables_destroy(&final_tables);
-    minild_final_symbols_destroy(&final_symbols);
+    minild_final_elf64_image_destroy(&final);
     return ok;
-
-oom:
-    fprintf(state->diagnostics,
-            "minic-ld: out-of-memory:shared-writer\n");
-    goto done;
 }
 
 static bool shared_validate_pie_dso_symbols(

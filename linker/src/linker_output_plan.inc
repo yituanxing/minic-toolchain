@@ -118,9 +118,20 @@ static bool minild_output_plan_build(const MiniLdState *state,
             output = &plan->sections[owner_to_output[command]];
         }
         if (output == NULL) {
+            const char *name = part->input_name != NULL
+                                   ? part->input_name : part->name;
+
+            if (command != SIZE_MAX &&
+                command < layout->script_command_count &&
+                layout->script_outputs != NULL &&
+                layout->script_outputs[command].name != NULL) {
+                name = layout->script_outputs[command].name;
+            }
             output = &plan->sections[plan->count++];
-            output->name = part->output_name != NULL
-                               ? part->output_name : part->name;
+            /* Script command owns the output name, not a mutable work
+             * fragment. GC work fragments keep their original input name
+             * instead of exposing the generated private work identity. */
+            output->name = name;
             output->command = command;
             output->file_offset = SIZE_MAX;
             if (command != SIZE_MAX && command < layout->script_command_count) {

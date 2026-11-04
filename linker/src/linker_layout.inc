@@ -25,6 +25,8 @@ typedef struct MiniLdLayoutWorkPlacement {
  * fragments it selects.  The OutputPlan later projects these into final ELF
  * OutputSections, without retaining redundant per-field owner arrays. */
 typedef struct MiniLdLayoutScriptOutput {
+    /* Borrowed from the parsed script; never owned by a working section. */
+    const char *name;
     uint64_t start;
     uint64_t end;
     size_t file_base;
@@ -995,11 +997,6 @@ static bool script_layout_place_section(MiniLdScriptLayoutState *script_state,
     script_state->layout->work[section_index].vaddr = script_state->dot;
     script_state->section_placed[section_index] = true;
     script_state->layout->work[section_index].owner_command = command_index;
-    if (script_state->script->commands[command_index].kind ==
-            MINILD_SCRIPT_OUTPUT_SECTION) {
-        section->output_name =
-            script_state->script->commands[command_index].value.section.name;
-    }
 
     if ((section->flags & SHF_ALLOC) != 0U &&
         !static_relax_align_section(script_state->state,
@@ -1203,6 +1200,8 @@ static bool script_layout_process_output(MiniLdScriptLayoutState *script_state,
     uint64_t lma_start;
     size_t byte_start = script_state->layout->script_byte_count;
     size_t i;
+
+    script_state->layout->script_outputs[command_index].name = output->name;
 
     if (output->fill != MINILD_SCRIPT_EXPR_NONE) {
         uint64_t fill;
@@ -2007,10 +2006,16 @@ static bool shared_validate_vdso_script_phdr_membership(
         if (owner >= command_count ||
             script->commands[owner].kind != MINILD_SCRIPT_OUTPUT_SECTION ||
             script->commands[owner].value.section.discard) {
+            const char *name = section->input_name != NULL
+                                   ? section->input_name : section->name;
+
+            if (owner < command_count &&
+                script->commands[owner].kind == MINILD_SCRIPT_OUTPUT_SECTION) {
+                name = script->commands[owner].value.section.name;
+            }
             fprintf(state->diagnostics,
                     "minic-ld: unsupported-shared-script-PHDR-membership:%s\n",
-                    section->output_name != NULL
-                        ? section->output_name : section->name);
+                    name);
             goto done;
         }
         command_has_alloc[owner] = true;

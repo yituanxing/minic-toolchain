@@ -157,21 +157,17 @@ static bool static_write_executable(MiniLdState *state,
                                     MiniLdOutputPlan *output_plan,
                                     const char *path,
                                     uint64_t entry) {
-    MiniLdProgramPlan program_plan = {0};
-    MiniLdFinalSectionTables final_tables = {0};
+    MiniLdFinalElf64Image final = {0};
     size_t load_image_size;
-    size_t cursor;
-    size_t total_size;
-    MiniLdFinalSymbols final_symbols = {0};
     size_t i;
     bool ok = false;
 
     if (!minild_static_program_plan_build(state, layout, output_plan,
-                                          &program_plan)) {
+                                          &final.program)) {
         goto done;
     }
     load_image_size = sizeof(Elf64_Ehdr) +
-                      program_plan.count * sizeof(Elf64_Phdr);
+                      final.program.count * sizeof(Elf64_Phdr);
 
     if (layout->scripted) {
         for (i = 0U; i < output_plan->count; ++i) {
@@ -211,10 +207,6 @@ static bool static_write_executable(MiniLdState *state,
         goto done;
     }
 
-    if (!minild_output_plan_place_nonalloc(state, layout, output_plan,
-                                           load_image_size, &cursor)) {
-        goto done;
-    }
     for (i = 0U; i < state->work.count; ++i) {
         const MiniLdSection *section = &state->work.sections[i];
         if (output_plan->work_shndx[i] != 0U &&
@@ -229,32 +221,15 @@ static bool static_write_executable(MiniLdState *state,
             goto done;
         }
     }
-    if (!minild_final_symbols_build(state, layout, output_plan,
-                                    &final_symbols)) {
-        goto oom;
-    }
-    if (!minild_final_section_tables_build(output_plan, &final_symbols,
-                                           cursor, MINILD_FINAL_SYMTAB_FIRST,
-                                           &final_tables)) {
-        goto oom;
-    }
-    if (!minild_output_plan_section_headers(
-            state, output_plan, final_tables.output_name_offsets,
-            final_tables.headers)) {
-        goto done;
-    }
-    total_size = final_tables.total_size;
-    if (!minild_program_plan_validate(state, &program_plan, total_size)) {
+    if (!minild_final_elf64_image_prepare(state, layout, output_plan,
+                                          &final, load_image_size, NULL,
+                                          MINILD_FINAL_SYMTAB_FIRST,
+                                          ET_EXEC)) {
         goto done;
     }
     ok = minild_elf64_write_image(state, layout, output_plan,
-                                  &program_plan, &final_tables,
-                                  &final_symbols, ET_EXEC, entry, path);
-    goto done;
-
-oom:
-    fprintf(state->diagnostics,
-            "minic-ld: out-of-memory:static-output\n");
+                                  &final.program, &final.tables,
+                                  &final.symbols, ET_EXEC, entry, path);
 
 done:
     /* Retain the prior fail-closed contract even if preparation failed
@@ -262,8 +237,6 @@ done:
     if (!ok) {
         (void)remove(path);
     }
-    minild_final_section_tables_destroy(&final_tables);
-    minild_program_plan_destroy(&program_plan);
-    minild_final_symbols_destroy(&final_symbols);
+    minild_final_elf64_image_destroy(&final);
     return ok;
 }

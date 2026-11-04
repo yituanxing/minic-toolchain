@@ -779,6 +779,12 @@ check-minild-output-plan-owner-lifecycle: $(MINIAS_BINARY) $(MINILD_BINARY)
 	MINILD="$(abspath $(MINILD_BINARY))" \
 	bash tests/linker/probe-output-plan-owner-lifecycle.sh
 
+.PHONY: check-minild-final-elf64-owner-lifecycle
+check-minild-final-elf64-owner-lifecycle: $(MINIAS_BINARY) $(MINILD_BINARY)
+	MINIAS="$(abspath $(MINIAS_BINARY))" \
+	MINILD="$(abspath $(MINILD_BINARY))" \
+	bash tests/linker/probe-final-elf64-owner-lifecycle.sh
+
 .PHONY: check-minild-shared-output-section
 check-minild-shared-output-section: $(MINIAS_BINARY) $(MINILD_BINARY)
 	MINIAS="$(abspath $(MINIAS_BINARY))" \
