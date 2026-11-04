@@ -74,6 +74,8 @@ jobs:
             check-minild-script-ro-after-init \
             check-minild-script-mixed-bss \
             check-minild-script-nmagic \
+            check-minild-linux-cli-gnu-parity \
+            check-minild-linux-final-replay-vmlinux-o \
             check-minild-explicit-endianness \
             check-minild-layout-phase-boundary \
             check-minild-shared-phase-owners \

@@ -12,12 +12,12 @@ on:
         description: 'Run that produced both the GNU object caches and link artifacts'
         required: true
         type: string
-        default: '41848589048'
+        default: '41856204967'
       producer_sha:
         description: 'Full original GNU corpus producer SHA'
         required: true
         type: string
-        default: 'a2971c39371a4f9227748cc1120998ffe8c782cc'
+        default: '3107037abc80b0c0019129364693422aee2818aa'
   push:
     branches:
       - refactor/minias-target-isa-abi-core
@@ -40,8 +40,8 @@ jobs:
       matrix:
         arch: [rv32, x86_64, aarch64, loongarch64]
     env:
-      PRODUCER_RUN_ID: ${{ inputs.producer_run_id || '41848589048' }}
-      PRODUCER_SHA: ${{ inputs.producer_sha || 'a2971c39371a4f9227748cc1120998ffe8c782cc' }}
+      PRODUCER_RUN_ID: ${{ inputs.producer_run_id || '41856204967' }}
+      PRODUCER_SHA: ${{ inputs.producer_sha || '3107037abc80b0c0019129364693422aee2818aa' }}
     steps:
       - uses: actions/checkout@v4
         with:

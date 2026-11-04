@@ -91,7 +91,8 @@ static void usage(FILE *out, const char *argv0) {
     fprintf(out,
             "usage: %s [-r|-static|-shared|-pie] -o OUTPUT [-e SYMBOL] [-soname NAME] "
             "[--dynamic-list FILE] [--needed NAME] [--dynamic-linker PATH] "
-            "[-m EMULATION] [-EL|-EB] [-n|--nmagic] [-L DIR] [-l NAME] "
+            "[-m EMULATION] [-EL|-EB] [-n|--nmagic] [-nostdlib] "
+            "[--no-undefined] [-L DIR] [-l NAME] "
             "[--whole-archive ARCHIVE --no-whole-archive] "
             "[--start-group ARCHIVE --end-group] INPUT...\n",
             argv0);
@@ -121,6 +122,7 @@ int main(int argc, char **argv) {
     bool group_mode = false;
     bool gc_sections = false;
     bool nmagic = false;
+    bool no_undefined = false;
     /* 0 = default target byte order; 1 = -EL, 2 = -EB. */
     unsigned int requested_endianness = 0U;
     bool emulation_explicit = false;
@@ -309,6 +311,15 @@ int main(int argc, char **argv) {
         } else if (strcmp(argv[i], "-n") == 0 ||
                    strcmp(argv[i], "--nmagic") == 0) {
             nmagic = true;
+        } else if (strcmp(argv[i], "-nostdlib") == 0) {
+            /*
+             * GNU ld: inhibit searches of its built-in library paths.
+             * MiniLD already resolves -l exclusively from explicit -L
+             * directories, regardless of emulation and output mode.
+             */
+            continue;
+        } else if (strcmp(argv[i], "--no-undefined") == 0) {
+            no_undefined = true;
         } else if (strcmp(argv[i], "-EL") == 0 ||
                    strcmp(argv[i], "-EB") == 0) {
             unsigned int next = strcmp(argv[i], "-EL") == 0 ? 1U : 2U;
@@ -441,6 +452,17 @@ int main(int argc, char **argv) {
                    script_path == NULL)) {
         fprintf(stderr,
                 "minic-ld: --nmagic-requires-static-script\n");
+        return 2;
+    }
+    if (no_undefined && (relocatable || shared_link || pie_link)) {
+        /*
+         * Static final links already reject unresolved strong references
+         * (while allowing undefined weak references to resolve to zero).
+         * Other link modes need their own explicit --no-undefined policy;
+         * rejecting them prevents accidentally accepting a weaker contract.
+         */
+        fprintf(stderr,
+                "minic-ld: --no-undefined-requires-final-static-link\n");
         return 2;
     }
     /*

@@ -898,6 +898,16 @@ check-minild-script-nmagic: $(MINIAS_BINARY) $(MINILD_BINARY)
 	MINILD="$(abspath $(MINILD_BINARY))" \
 	bash tests/linker/probe-nmagic-script.sh
 
+.PHONY: check-minild-linux-cli-gnu-parity
+check-minild-linux-cli-gnu-parity: $(MINILD_BINARY)
+	MINILD="$(abspath $(MINILD_BINARY))" \
+	bash tests/linker/probe-linux-cli-gnu-parity.sh
+
+.PHONY: check-minild-linux-final-replay-vmlinux-o
+check-minild-linux-final-replay-vmlinux-o: $(MINILD_BINARY)
+	MINILD="$(abspath $(MINILD_BINARY))" \
+	bash tests/linker/probe-linux-final-replay-vmlinux-o.sh
+
 .PHONY: check-minild-script-mixed-bss
 check-minild-script-mixed-bss: $(MINIAS_BINARY) $(MINILD_BINARY)
 	MINIAS="$(abspath $(MINIAS_BINARY))" \

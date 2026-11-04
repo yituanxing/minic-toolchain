@@ -46,8 +46,9 @@ sha256sum --quiet --check "$capture/first-kallsyms1.gnu-ld.sha256" || {
 # All paths are resolved relative to the original Kbuild linker cwd.  This
 # intentionally fails closed when command-line inputs disappeared after make.
 declare -A known_inputs=()
-have_archive=false
-have_script=false
+have_vmlinux_archive=false
+have_vmlinux_object=false
+have_kernel_script=false
 expect_script=false
 (
   cd -- "$cwd"
@@ -78,16 +79,35 @@ expect_script=false
 
 # The captured link must actually be a kernel final-link invocation.  A
 # small test ELF or one intermediate '-r' link does not meet this criterion.
-# Kbuild may pass all production objects through vmlinux.a, with no direct
-# .o argv member. A direct .o requirement would incorrectly reject such a
-# legitimate final link despite the GNU capture, archive and target script.
+# Kbuild may pass all production objects through vmlinux.a, while x86-64
+# consolidates them into the exact vmlinux.o aggregate before kallsyms1.
+# Neither an arbitrary .o or .a nor a non-kernel linker script qualifies as
+# proof of a real kernel final link. GNU capture and frozen input hashes above
+# are independently required for both representations.
 for arg in "${original[@]}"; do
-  case "$arg" in
-    *.a) have_archive=true ;;
-    *.lds|*.ld|--script=*|-T*) have_script=true ;;
-  esac
+  script=''
+  if $expect_script; then
+    script=$arg
+    expect_script=false
+  else
+    case "$arg" in
+      vmlinux.a|*/vmlinux.a) have_vmlinux_archive=true ;;
+      vmlinux.o|*/vmlinux.o) have_vmlinux_object=true ;;
+      -T|--script) expect_script=true ;;
+      --script=*) script=${arg#--script=} ;;
+      -T?*) script=${arg#-T} ;;
+      *.lds|*.ld) script=$arg ;;
+    esac
+  fi
+  if [[ -n $script ]]; then
+    case "$script" in
+      arch/*/kernel/vmlinux.lds|./arch/*/kernel/vmlinux.lds|*/arch/*/kernel/vmlinux.lds)
+        have_kernel_script=true ;;
+    esac
+  fi
 done
-if ! $have_archive || ! $have_script; then
+if ! $have_kernel_script ||
+    { ! $have_vmlinux_archive && ! $have_vmlinux_object; }; then
   echo 'MINILD_LINUX_FINAL_REPLAY=INCONCLUSIVE no_real_kernel_archive_or_linker_script' >&2
   exit 71
 fi
