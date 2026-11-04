@@ -20,6 +20,7 @@ target architecture is added.
 | `linker_input_projection.inc` | The one InputGraph-to-WorkSection projection and work-section order remaps |
 | `linker_script_input_selection.inc` | Source-fragment matching and script /DISCARD/ selection before final layout |
 | `linker_input_gc.inc` | Reachability, KEEP roots, section/link-order/group dependency closure and GC pruning |
+| `linker_riscv_input_abi.inc` | One target-owned ELF class/machine/ABI and attributes acceptance contract shared by direct ET_REL inputs, extracted archive members and accepted ET_DYN inputs; also supplies ET_REL/final ELF header identity |
 | `linker.c` | Public ET_EXEC link driver, CLI GC switch and ordered phase calls |
 
 The archive parser and extraction stage does **not** construct a provisional
@@ -46,6 +47,30 @@ before metadata reservation. ET_REL keeps its existing projection and
 emission path. The static pipeline remains the only ET_EXEC phase driver;
 the input owner files are not separate compiler objects or additional
 competing pipeline controllers.
+
+## Target ELF/ABI and attributes boundary (2026-11-04)
+
+`linker_riscv_input_abi.inc` owns RISC-V ELF identity and attribute-section
+acceptance as **target policy**,
+not separate choices to repeat in the archive prefilter, object/DSO
+admission, source-to-work projection, ET_REL writer and final ELF64 writer.
+The target owns the checks for ELF identity, supported ABI flags and the
+existing `.riscv.attributes` treatment. Each generic consumer calls that
+same target policy at its original phase boundary, without inventing
+an additional parser or delaying input rejection until final emission.
+
+The important distinction is *admission versus projection*: rejecting an
+unsupported file or section belongs to admission; preserving the accepted
+attributes bytes as one projected work section belongs to projection.
+Archive members are screened before extraction can admit their symbols;
+direct objects and DSO inputs obey the same target contract. ET_REL and
+ET_EXEC/ET_DYN emit the same previously supported RISC-V ELF identity and
+flags through the target-owned header policy. This consolidation neither
+admits a new psABI variant nor changes how duplicate attributes are handled.
+
+The InputGraph remains canonical and immutable after admission. The target
+checks do not create WorkSections, affect COMDAT winner selection or alter
+the timing of archive symbol resolution, GC, script matching or relocation.
 
 ## Validation
 

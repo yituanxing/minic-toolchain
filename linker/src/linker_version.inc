@@ -26,7 +26,7 @@ static bool shared_fill_versions(MiniLdState *state,
     memset(versym->data, 0, versym->size);
     memset(verdef->data, 0, verdef->size);
     for (i = 0U; i < state->resolver.count; ++i) {
-        size_t dynindex = shared->dynsym_index[i];
+        size_t dynindex = shared->symbols[i].dynsym_index;
         uint16_t version;
         if (dynindex == SIZE_MAX) {
             continue;

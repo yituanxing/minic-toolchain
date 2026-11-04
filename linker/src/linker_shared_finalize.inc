@@ -31,14 +31,14 @@ static bool shared_fill_dynsym(MiniLdState *state,
     memset(dynsym->data, 0, dynsym->size);
     for (i = 0U; i < state->resolver.count; ++i) {
         MiniLdResolvedSymbol *input = &state->resolver.entries[i];
-        size_t dynamic_index = shared->dynsym_index[i];
+        size_t dynamic_index = shared->symbols[i].dynsym_index;
         Elf64_Sym output;
 
         if (dynamic_index == SIZE_MAX) {
             continue;
         }
         memset(&output, 0, sizeof(output));
-        output.st_name = shared->dynstr_name_offset[i];
+        output.st_name = shared->symbols[i].dynstr_name_offset;
         output.st_info = input->info;
         output.st_other = input->other;
         output.st_size = input->size;
@@ -116,7 +116,7 @@ static bool shared_fill_hash(MiniLdState *state,
     chains = buckets + nbucket;
 
     for (i = 0U; i < state->resolver.count; ++i) {
-        size_t dynamic_index = shared->dynsym_index[i];
+        size_t dynamic_index = shared->symbols[i].dynsym_index;
         uint32_t bucket;
         uint32_t *slot;
 
@@ -165,7 +165,7 @@ static bool shared_fill_gnu_hash(MiniLdState *state,
     store_u32le(section->data + 24U,
                 shared->dynsym_count == 1U ? 0U : 1U);
     for (i = 0U; i < state->resolver.count; ++i) {
-        size_t index = shared->dynsym_index[i];
+        size_t index = shared->symbols[i].dynsym_index;
         uint32_t hash;
         if (index == SIZE_MAX) {
             continue;

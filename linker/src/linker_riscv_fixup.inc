@@ -352,6 +352,15 @@ static MiniLdRiscvRelocKind minild_riscv_reloc_kind(uint32_t type) {
     }
 }
 
+/* Script input selection only needs to know whether a target relocation
+ * carries no binding or reachability dependency.  Keep that ISA decision
+ * here instead of spelling RISC-V relocation numbers in generic selection. */
+static bool minild_target_ignored_script_reloc(uint32_t type) {
+    MiniLdRiscvRelocKind kind = minild_riscv_reloc_kind(type);
+
+    return kind == MINILD_RV_RELOC_NOOP || kind == MINILD_RV_RELOC_ALIGN;
+}
+
 static bool minild_riscv_reloc_final_layout(uint32_t type) {
     switch (minild_riscv_reloc_kind(type)) {
     case MINILD_RV_RELOC_ARITHMETIC:
@@ -726,4 +735,46 @@ static bool minild_riscv_apply_arithmetic(MiniLdSection *section,
         return false;
     }
     return true;
+}
+
+/* Eager RV64 PLT entry encoding belongs to the target.  ET_DYN decides
+ * which symbol needs a PLT, the slot address, and its JUMP_SLOT relocation;
+ * only this routine decides the machine instruction words.  Preserve the
+ * four-word AUIPC/LD/JALR/NOP sequence and its original truncation rules. */
+static uint32_t minild_riscv_encode_utype(unsigned opcode,
+                                          unsigned rd,
+                                          int64_t imm20) {
+    return (((uint32_t)imm20 & UINT32_C(0xfffff)) << 12U) |
+           ((uint32_t)rd << 7U) |
+           (uint32_t)opcode;
+}
+
+static uint32_t minild_riscv_encode_itype(unsigned opcode,
+                                          unsigned rd,
+                                          unsigned funct3,
+                                          unsigned rs1,
+                                          int64_t imm12) {
+    return (((uint32_t)imm12 & UINT32_C(0xfff)) << 20U) |
+           ((uint32_t)rs1 << 15U) |
+           ((uint32_t)funct3 << 12U) |
+           ((uint32_t)rd << 7U) |
+           (uint32_t)opcode;
+}
+
+static void minild_riscv_emit_plt_entry(unsigned char *data,
+                                        size_t offset,
+                                        uint64_t entry_address,
+                                        uint64_t slot_address) {
+    int64_t delta = minild_riscv_pc_delta_bits(
+        minild_riscv_signed_bits(slot_address), entry_address);
+    int64_t hi = riscv_hi20(delta);
+    int64_t lo = riscv_lo12(delta);
+
+    store_u32le(data + offset + 0U,
+                minild_riscv_encode_utype(0x17U, 28U, hi));
+    store_u32le(data + offset + 4U,
+                minild_riscv_encode_itype(0x03U, 28U, 3U, 28U, lo));
+    store_u32le(data + offset + 8U,
+                minild_riscv_encode_itype(0x67U, 0U, 0U, 28U, 0));
+    store_u32le(data + offset + 12U, UINT32_C(0x00000013));
 }

@@ -36,12 +36,10 @@ static bool minild_elf64_write_image(
 
     memset(&header, 0, sizeof(header));
     memcpy(header.e_ident, ELFMAG, SELFMAG);
-    header.e_ident[EI_CLASS] = ELFCLASS64;
-    header.e_ident[EI_DATA] = ELFDATA2LSB;
+    minild_target_set_final_elf_identity(&header);
     header.e_ident[EI_VERSION] = EV_CURRENT;
     header.e_ident[EI_OSABI] = ELFOSABI_NONE;
     header.e_type = elf_type;
-    header.e_machine = EM_RISCV;
     header.e_version = EV_CURRENT;
     header.e_entry = entry;
     header.e_phoff = sizeof(Elf64_Ehdr);

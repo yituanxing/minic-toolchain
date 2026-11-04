@@ -32,7 +32,7 @@ shared_scan_relocation_requirements(MiniLdState *state,
                         "minic-ld: invalid-shared-got-hi20-relocation\n");
                 return MINILD_SHARED_RELOC_SCAN_INVALID;
             }
-            if (shared->got_slot_offset[reloc->symbol] == SIZE_MAX) {
+            if (shared->symbols[reloc->symbol].got_slot_offset == SIZE_MAX) {
                 bool static_abs = shared_symbol_is_static_absolute(
                     state, shared, reloc->symbol);
 
@@ -40,7 +40,7 @@ shared_scan_relocation_requirements(MiniLdState *state,
                     (!static_abs && shared->rela_count == SIZE_MAX)) {
                     return MINILD_SHARED_RELOC_SCAN_OOM;
                 }
-                shared->got_slot_offset[reloc->symbol] =
+                shared->symbols[reloc->symbol].got_slot_offset =
                     shared->got_count * 8U;
                 ++shared->got_count;
                 if (!static_abs) {
@@ -52,16 +52,16 @@ shared_scan_relocation_requirements(MiniLdState *state,
         if (kind == MINILD_RV_RELOC_TLS_GD) {
             if (reloc->symbol == SIZE_MAX ||
                 reloc->symbol >= state->resolver.count ||
-                shared->dynsym_index[reloc->symbol] == SIZE_MAX) {
+                shared->symbols[reloc->symbol].dynsym_index == SIZE_MAX) {
                 fprintf(state->diagnostics,
                         "minic-ld: invalid-shared-tls-gd-relocation\n");
                 return MINILD_SHARED_RELOC_SCAN_INVALID;
             }
-            if (shared->tls_gd_offset[reloc->symbol] == SIZE_MAX) {
+            if (shared->symbols[reloc->symbol].tls_gd_offset == SIZE_MAX) {
                 if (shared->tls_gd_count > (SIZE_MAX / 16U) - 1U) {
                     return MINILD_SHARED_RELOC_SCAN_OOM;
                 }
-                shared->tls_gd_offset[reloc->symbol] =
+                shared->symbols[reloc->symbol].tls_gd_offset =
                     shared->tls_gd_count * 16U;
                 ++shared->tls_gd_count;
                 if (shared->rela_count > SIZE_MAX - 2U) {
@@ -85,14 +85,14 @@ shared_scan_relocation_requirements(MiniLdState *state,
             if (shared_symbol_needs_plt(state,
                                         shared,
                                         reloc->symbol) &&
-                shared->plt_index[reloc->symbol] == SIZE_MAX) {
-                if (shared->dynsym_index[reloc->symbol] == SIZE_MAX) {
+                shared->symbols[reloc->symbol].plt_index == SIZE_MAX) {
+                if (shared->symbols[reloc->symbol].dynsym_index == SIZE_MAX) {
                     fprintf(state->diagnostics,
                             "minic-ld: missing-dynsym-for-plt:%s\n",
                             target->name);
                     return MINILD_SHARED_RELOC_SCAN_INVALID;
                 }
-                shared->plt_index[reloc->symbol] = shared->plt_count++;
+                shared->symbols[reloc->symbol].plt_index = shared->plt_count++;
             }
             continue;
         }

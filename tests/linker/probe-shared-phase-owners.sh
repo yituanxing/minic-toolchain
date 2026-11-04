@@ -121,6 +121,47 @@ owners = {name: len(layout_type.findall(source))
           for name, source in sources.items()}
 if owners.get('linker_shared_pre_layout.inc') != 1 or sum(owners.values()) != 1:
     raise SystemExit(f'MINILD_SHARED_PHASE_STRUCTURE=FAIL shared_image_owner={owners}')
+
+# Every resolver index has exactly one dynamic-link symbol projection.  The
+# old six parallel arrays admitted independently sized/owned symbol maps.
+symbol_plan_type = re.compile(r'\btypedef\s+struct\s+MiniLdSharedSymbolPlan\s*\{')
+plan_owners = {name: len(symbol_plan_type.findall(source))
+               for name, source in sources.items()}
+if plan_owners.get('linker_shared_pre_layout.inc') != 1 or \
+        sum(plan_owners.values()) != 1 or \
+        len(re.findall(r'\bMiniLdSharedSymbolPlan\s*\*symbols\s*;', pre)) != 1:
+    raise SystemExit('MINILD_SHARED_PHASE_STRUCTURE=FAIL symbol_plan_owner')
+symbol_fields = ('dynsym_index', 'dynstr_name_offset', 'plt_index',
+                 'got_slot_offset', 'tls_gd_offset', 'preemptible')
+plan_body = re.search(r'typedef\s+struct\s+MiniLdSharedSymbolPlan\s*\{(.*?)\}',
+                      pre, re.S)
+if plan_body is None or any(
+        len(re.findall(r'\b' + field + r'\s*;', plan_body.group(1))) != 1
+        for field in symbol_fields):
+    raise SystemExit('MINILD_SHARED_PHASE_STRUCTURE=FAIL symbol_plan_fields')
+for name, code in sources.items():
+    if re.search(r'\bsymbol_map_capacity\b', code) or any(
+            re.search(r'\bshared->' + field + r'(?:\[|\b)', code)
+            for field in symbol_fields):
+        raise SystemExit(f'MINILD_SHARED_PHASE_STRUCTURE=FAIL '
+                         f'parallel_symbol_maps={name}')
+if 'shared->symbols[' not in pre or \
+        'shared->symbols[' not in sources['linker_shared_reloc_scan.inc'] or \
+        'shared->symbols[' not in sources['linker_shared_reloc_apply.inc'] or \
+        'shared->symbols[' not in fin or \
+        'shared->symbols[' not in sources['linker_version.inc']:
+    raise SystemExit('MINILD_SHARED_PHASE_STRUCTURE=FAIL symbol_plan_consumers')
+
+# Only the RISC-V target may choose instruction words.  ET_DYN keeps PLT
+# slot allocation and JUMP_SLOT relocations, but delegates AUIPC/LD/JALR/NOP.
+target_fixup = (src / 'linker_riscv_fixup.inc').read_text(encoding='utf-8')
+shared_apply = sources['linker_shared_reloc_apply.inc']
+if len(re.findall(r'\bstatic\s+void\s+minild_riscv_emit_plt_entry\s*\(',
+                  target_fixup)) != 1 or \
+        shared_apply.count('minild_riscv_emit_plt_entry(') != 1 or \
+        re.search(r'\bshared_riscv_(?:u|i)type\b|store_u32le\(plt->data',
+                  shared_apply):
+    raise SystemExit('MINILD_SHARED_PHASE_STRUCTURE=FAIL target_plt_owner')
 for kind, typename, expected_owner in (
         ('struct', 'MiniLdSharedTlsSegment', 'linker_shared_program_plan.inc'),
         ('enum', 'MiniLdSharedRelocScanResult',
@@ -199,6 +240,7 @@ for func in ('shared_prepare_metadata', 'shared_build_vdso_script_layout',
 
 print('MINILD_SHARED_PHASE_STRUCTURE=PASS modules=4 '
       f'owner_functions={definitions} shared_image=single '
+      'symbol_plan=single target_plt=1 '
       'build=single_translation_unit order=reserve,fill,program,write')
 PY
 

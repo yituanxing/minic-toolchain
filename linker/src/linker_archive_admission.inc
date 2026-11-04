@@ -351,10 +351,7 @@ static bool object_data_defines_needed_symbol(MiniLdState *state,
 
     *needed_out = false;
     if (!minielf_open(&elf, data, size) ||
-        elf.elf_class != ELFCLASS64 ||
-        elf.data_encoding != ELFDATA2LSB ||
-        elf.type != ET_REL ||
-        elf.machine != EM_RISCV) {
+        !minild_target_accept_elf(&elf, ET_REL)) {
         fprintf(state->diagnostics,
                 "minic-ld: unsupported-archive-object:%s\n",
                 path);

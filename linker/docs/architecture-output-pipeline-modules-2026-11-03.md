@@ -25,7 +25,7 @@ format decisions, and runtime behavior remain unchanged.
 | `linker_final_elf64_plan.inc` | One `MiniLdFinalElf64Image` owner for final ProgramPlan, symbols and section tables | ET_EXEC and ET_DYN share non-ALLOC placement, final table construction, generic section-header projection, validation and cleanup without merging mode-specific policies. |
 | `linker_elf64_image.inc` | Final ELF64 Ehdr/PHDR/section-byte/table serialization and file sink | Consumes already-finalized plans; does not decide section selection, relocation or layout. |
 | `linker_static_output.inc` | Static PT_LOAD selection and ET_EXEC writer | Owns executable segment policy and final static emission, including scripted output. |
-| `linker_shared_pre_layout.inc` | One `MiniLdSharedImage` owner, symbol preemption policy, dynamic metadata sizing and pre-layout relocation reservations | ET_DYN output capacities are fixed before physical layout. |
+| `linker_shared_pre_layout.inc` | One `MiniLdSharedImage` owner, per-symbol dynamic plan, symbol preemption policy, dynamic metadata sizing and pre-layout relocation reservations | ET_DYN output capacities are fixed before physical layout; every resolver symbol has one consistent reservation/projection record. |
 | `linker_shared_finalize.inc` | Dynamic symbol/hash/version/relocation content, `__ehdr_start` resolution and dynamic tags | Uses final addresses and OutputPlan indices without a second metadata owner. |
 | `linker_shared_program_plan.inc` | ET_DYN TLS and PHDR policy plus dynamic section-header links | Keeps ET_DYN segment decisions separate from the common ELF64 serializer and ET_EXEC. |
 | `linker_shared_output.inc` | ET_DYN writer, input checks and shared-link entry point | Calls phases in original order and owns the cleanup path. |
@@ -86,6 +86,38 @@ The distinction between relocation **scan** (capacity and GOT/PLT
 reservation before layout) and relocation **apply** (addresses and dynamic
 relocation contents after layout) remains intact. No target relocation,
 linker-script command, input kind or ELF output feature is added.
+
+### Single ET_DYN symbol projection and Target PLT boundary (2026-11-04)
+
+`MiniLdSharedImage.symbols[i]` owns one `MiniLdSharedSymbolPlan` for each
+resolver symbol admitted before ET_DYN metadata reservation. Its fields are
+the dynamic symbol index, dynamic string name offset, PLT index, ordinary
+GOT offset, TLS-GD offset and the resolved preemption decision. The former
+six separately allocated symbol-indexed maps (and their independent
+capacity bookkeeping) are removed. `prepared_symbol_count` remains the
+explicit bound: script symbol predeclaration completes **before** this
+reservation, and the resolver may not append new symbol identities during
+layout or dynamic table filling.
+
+Scan and apply are deliberately separate consumers of the **same** record.
+Pre-layout scanning reserves dynsym/GOT/PLT/TLS-GD storage; post-layout
+relocation, dynamic hash/symbol/version tables and PLT finalization read the
+already assigned indexes and addresses. This does not merge ELF local/global
+binding, symbol preemption and instruction encoding into one algorithm.
+In particular, missing slots continue to use explicit `SIZE_MAX` sentinels,
+whereas a legitimate dynamic string offset or symbol index can be zero.
+
+The ET_DYN owner still decides *which* symbols need PLT entries and builds
+their `R_RISCV_JUMP_SLOT` dynamic relocations. The RISC-V Target fixup owner
+decides *how* a PLT instruction sequence is encoded from the supplied
+already resolved slot and entry addresses. Keeping those two decisions
+apart prevents output-mode policy from becoming a second instruction encoder
+while preserving the existing PLT byte sequence and reservation order.
+
+Likewise, ELF64 serialization owns writing finalized header bytes, while
+RISC-V target policy supplies machine/ABI/flag identity consistently with
+accepted object and archive inputs and ET_REL emission. No additional
+machine type, ABI configuration or output format is implied by this split.
 
 ## Invariants retained
 

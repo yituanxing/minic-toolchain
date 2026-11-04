@@ -41,7 +41,8 @@ files = (
     'linker.c', 'linker_core.inc', 'linker_admission.inc',
     'linker_archive_admission.inc', 'linker_input_sequence.inc',
     'linker_input_projection.inc', 'linker_script_input_selection.inc',
-    'linker_input_gc.inc',
+    'linker_input_gc.inc', 'linker_riscv_input_abi.inc',
+    'linker_elf64_image.inc',
 )
 sources = {}
 for name in files:
@@ -69,6 +70,8 @@ expected_edges = {
     ('linker.c', 'linker_script_input_selection.inc'),
     ('linker.c', 'linker_input_gc.inc'),
     ('linker_core.inc', 'linker_admission.inc'),
+    ('linker_core.inc', 'linker_riscv_input_abi.inc'),
+    ('linker_core.inc', 'linker_elf64_image.inc'),
     ('linker_admission.inc', 'linker_archive_admission.inc'),
     ('linker_admission.inc', 'linker_input_sequence.inc'),
 }
@@ -96,9 +99,26 @@ if not (driver.index('#include "linker_core.inc"') <
         driver.index('static int minild_link_static_pipeline(')):
     raise SystemExit('MINILD_INPUT_PHASE_STRUCTURE=FAIL driver_stage_order')
 if not (core.index('#include "linker_common_allocation.inc"') <
+        core.index('#include "linker_riscv_input_abi.inc"') <
         core.index('#include "linker_admission.inc"') <
-        core.index('#include "linker_layout.inc"')):
+        core.index('#include "linker_layout.inc"') <
+        core.index('#include "linker_elf64_image.inc"')):
     raise SystemExit('MINILD_INPUT_PHASE_STRUCTURE=FAIL core_stage_order')
+
+# All modes consume one RISC-V ELF identity/ABI owner.  Generic source
+# admission, archive preflight, projection and both ELF writers must not
+# independently choose processor-specific machine/class/attributes rules.
+for name in ('linker_core.inc', 'linker_admission.inc',
+             'linker_archive_admission.inc', 'linker_input_projection.inc',
+             'linker_elf64_image.inc'):
+    if re.search(r'\b(?:EM_RISCV|ELFCLASS64|ELFDATA2LSB|'
+                 r'MINILD_SHT_RISCV_ATTRIBUTES)\b', sources[name]):
+        raise SystemExit(f'MINILD_INPUT_PHASE_STRUCTURE=FAIL '
+                         f'target_elf_identity_in_generic_owner={name}')
+if re.search(r'\bR_RISCV_(?:NONE|RELAX|ALIGN)\b',
+             sources['linker_script_input_selection.inc']):
+    raise SystemExit('MINILD_INPUT_PHASE_STRUCTURE=FAIL '
+                     'target_reloc_types_in_script_gc')
 if not (admission.index('static bool process_input_data(') <
         admission.index('static bool process_dso_input_data(') <
         admission.index('static bool process_input(') <
@@ -107,6 +127,16 @@ if not (admission.index('static bool process_input_data(') <
     raise SystemExit('MINILD_INPUT_PHASE_STRUCTURE=FAIL admission_stage_order')
 
 functions = {
+    'linker_riscv_input_abi.inc': (
+        'minild_target_accept_elf',
+        'minild_target_set_relocatable_identity',
+        'minild_target_set_final_elf_identity',
+        'minild_target_is_attributes_section',
+        'minild_riscv_attributes_valid',
+        'minild_target_accept_attributes',
+        'minild_target_append_attributes',
+        'minild_target_merge_elf_flags',
+    ),
     'linker_input_projection.inc': (
         'minild_project_admitted_inputs',
         'minild_install_work_section_order',
@@ -180,7 +210,7 @@ shared = (src / 'linker_shared_output.inc').read_text(encoding='utf-8')
 if 'minild_project_admitted_inputs(' not in shared:
     raise SystemExit('MINILD_INPUT_PHASE_STRUCTURE=FAIL shared_projection')
 
-print(f'MINILD_INPUT_PHASE_STRUCTURE=PASS modules=6 '
+print(f'MINILD_INPUT_PHASE_STRUCTURE=PASS modules=8 '
       f'owner_functions={count} owner_types={len(types)} '
       'build=single_translation_unit order=projection,script,gc')
 PY
@@ -220,4 +250,4 @@ for item in "${fixtures[@]}"; do
     echo "MINILD_INPUT_PHASE_CHECK=PASS fixture=$script"
     ((passed += 1))
 done
-echo "MINILD_INPUT_PHASE=PASS fixtures=$passed modules=6 compiler=Werror"
+echo "MINILD_INPUT_PHASE=PASS fixtures=$passed modules=8 compiler=Werror"

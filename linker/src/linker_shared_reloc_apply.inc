@@ -137,7 +137,7 @@ static bool shared_fill_relocations(MiniLdState *state,
     }
 
     for (i = 0U; i < state->resolver.count; ++i) {
-        size_t offset = shared->got_slot_offset[i];
+        size_t offset = shared->symbols[i].got_slot_offset;
         MiniLdResolvedSymbol *target;
         Elf64_Rela output;
 
@@ -160,7 +160,7 @@ static bool shared_fill_relocations(MiniLdState *state,
             continue;
         }
         if (target->section == MINILD_SECTION_ABS &&
-            !shared->preemptible[i]) {
+            !shared->symbols[i].preemptible) {
             fprintf(state->diagnostics,
                     "minic-ld: unplanned-shared-absolute-got:%s\n",
                     target->name);
@@ -170,7 +170,7 @@ static bool shared_fill_relocations(MiniLdState *state,
         output.r_offset =
             layout->work[shared->got_section].vaddr + (uint64_t)offset;
         if (target->section != MINILD_SECTION_UNDEF &&
-            !shared->preemptible[i]) {
+            !shared->symbols[i].preemptible) {
             uint64_t target_value;
 
             if (!minild_layout_resolve_symbol(state, layout, i, &target_value)) {
@@ -179,7 +179,7 @@ static bool shared_fill_relocations(MiniLdState *state,
             output.r_info = ELF64_R_INFO(0U, R_RISCV_RELATIVE);
             output.r_addend = (Elf64_Sxword)target_value;
         } else {
-            size_t dynamic_index = shared->dynsym_index[i];
+            size_t dynamic_index = shared->symbols[i].dynsym_index;
 
             if (dynamic_index == SIZE_MAX) {
                 fprintf(state->diagnostics,
@@ -298,7 +298,7 @@ static bool shared_fill_relocations(MiniLdState *state,
             continue;
         }
         if (target->section == MINILD_SECTION_ABS &&
-            !shared->preemptible[input->symbol]) {
+            !shared->symbols[input->symbol].preemptible) {
             fprintf(state->diagnostics,
                     "minic-ld: unplanned-shared-absolute-relocation:%s\n",
                     target->name);
@@ -309,7 +309,7 @@ static bool shared_fill_relocations(MiniLdState *state,
         output.r_offset =
             layout->work[input->section].vaddr + input->offset;
         if (target->section != MINILD_SECTION_UNDEF &&
-            !shared->preemptible[input->symbol]) {
+            !shared->symbols[input->symbol].preemptible) {
             uint64_t target_value;
 
             if (!minild_layout_resolve_symbol(state,
@@ -322,7 +322,7 @@ static bool shared_fill_relocations(MiniLdState *state,
             output.r_addend =
                 minild_riscv_addend_bits(target_value, input->addend);
         } else {
-            dynamic_index = shared->dynsym_index[input->symbol];
+            dynamic_index = shared->symbols[input->symbol].dynsym_index;
             if (dynamic_index == SIZE_MAX) {
                 fprintf(state->diagnostics,
                         "minic-ld: missing-dynsym-for-relocation:%s\n",
@@ -340,7 +340,7 @@ static bool shared_fill_relocations(MiniLdState *state,
     }
 
     for (i = 0U; i < state->resolver.count; ++i) {
-        size_t offset = shared->tls_gd_offset[i];
+        size_t offset = shared->symbols[i].tls_gd_offset;
         size_t dynamic_index;
         uint64_t slot_address;
         Elf64_Rela output;
@@ -348,7 +348,7 @@ static bool shared_fill_relocations(MiniLdState *state,
         if (offset == SIZE_MAX) {
             continue;
         }
-        dynamic_index = shared->dynsym_index[i];
+        dynamic_index = shared->symbols[i].dynsym_index;
         if (dynamic_index == SIZE_MAX ||
             shared->got_section >= state->work.count) {
             fprintf(state->diagnostics,
@@ -385,26 +385,6 @@ static bool shared_fill_relocations(MiniLdState *state,
         return false;
     }
     return true;
-}
-
-static uint32_t shared_riscv_utype(unsigned opcode,
-                                   unsigned rd,
-                                   int64_t imm20) {
-    return (((uint32_t)imm20 & UINT32_C(0xfffff)) << 12U) |
-           ((uint32_t)rd << 7U) |
-           (uint32_t)opcode;
-}
-
-static uint32_t shared_riscv_itype(unsigned opcode,
-                                   unsigned rd,
-                                   unsigned funct3,
-                                   unsigned rs1,
-                                   int64_t imm12) {
-    return (((uint32_t)imm12 & UINT32_C(0xfff)) << 20U) |
-           ((uint32_t)rs1 << 15U) |
-           ((uint32_t)funct3 << 12U) |
-           ((uint32_t)rd << 7U) |
-           (uint32_t)opcode;
 }
 
 static bool shared_patch_final_layout_relocations(
@@ -484,25 +464,25 @@ static bool shared_patch_final_layout_relocations(
         if (reloc->type == R_RISCV_GOT_HI20) {
             if (reloc->symbol == SIZE_MAX ||
                 reloc->symbol >= state->resolver.count ||
-                shared->got_slot_offset[reloc->symbol] == SIZE_MAX) {
+                shared->symbols[reloc->symbol].got_slot_offset == SIZE_MAX) {
                 fprintf(state->diagnostics,
                         "minic-ld: missing-shared-got-slot\n");
                 goto done;
             }
             target = minild_riscv_signed_bits(
                 layout->work[shared->got_section].vaddr +
-                shared->got_slot_offset[reloc->symbol]);
+                shared->symbols[reloc->symbol].got_slot_offset);
         } else if (reloc->type == R_RISCV_TLS_GD_HI20) {
             if (reloc->symbol == SIZE_MAX ||
                 reloc->symbol >= state->resolver.count ||
-                shared->tls_gd_offset[reloc->symbol] == SIZE_MAX) {
+                shared->symbols[reloc->symbol].tls_gd_offset == SIZE_MAX) {
                 fprintf(state->diagnostics,
                         "minic-ld: missing-shared-tls-gd-slot\n");
                 goto done;
             }
             target = minild_riscv_addend_bits(
                 layout->work[shared->got_section].vaddr +
-                shared->tls_gd_offset[reloc->symbol], reloc->addend);
+                shared->symbols[reloc->symbol].tls_gd_offset, reloc->addend);
         }
         if (!minild_riscv_apply_final_instruction(
                 &pairs, source, reloc, target, place, true,
@@ -586,9 +566,6 @@ static bool shared_finalize_plt_and_calls(MiniLdState *state,
     MiniLdSection *rela_plt;
     uint64_t plt_address;
     uint64_t gotplt_address;
-    int64_t delta;
-    int64_t hi;
-    int64_t lo;
     size_t i;
 
     plt = &state->work.sections[shared->plt_section];
@@ -623,7 +600,7 @@ static bool shared_finalize_plt_and_calls(MiniLdState *state,
     }
 
     for (i = 0U; i < state->resolver.count; ++i) {
-        size_t plt_index = shared->plt_index[i];
+        size_t plt_index = shared->symbols[i].plt_index;
         size_t plt_offset;
         size_t got_offset;
         uint64_t entry_address;
@@ -639,7 +616,7 @@ static bool shared_finalize_plt_and_calls(MiniLdState *state,
                     "minic-ld: invalid-shared-plt-index\n");
             return false;
         }
-        dynamic_index = shared->dynsym_index[i];
+        dynamic_index = shared->symbols[i].dynsym_index;
         if (dynamic_index == SIZE_MAX) {
             fprintf(state->diagnostics,
                     "minic-ld: missing-dynsym-for-jump-slot:%s\n",
@@ -651,18 +628,8 @@ static bool shared_finalize_plt_and_calls(MiniLdState *state,
         got_offset = (3U + plt_index) * 8U;
         entry_address = plt_address + plt_offset;
         slot_address = gotplt_address + got_offset;
-        delta = minild_riscv_pc_delta_bits(
-            minild_riscv_signed_bits(slot_address), entry_address);
-        hi = riscv_hi20(delta);
-        lo = riscv_lo12(delta);
-
-        store_u32le(plt->data + plt_offset + 0U,
-                    shared_riscv_utype(0x17U, 28U, hi));
-        store_u32le(plt->data + plt_offset + 4U,
-                    shared_riscv_itype(0x03U, 28U, 3U, 28U, lo));
-        store_u32le(plt->data + plt_offset + 8U,
-                    shared_riscv_itype(0x67U, 0U, 0U, 28U, 0));
-        store_u32le(plt->data + plt_offset + 12U, UINT32_C(0x00000013));
+        minild_riscv_emit_plt_entry(plt->data, plt_offset,
+                                     entry_address, slot_address);
 
         memset(&relocation, 0, sizeof(relocation));
         relocation.r_offset = slot_address;
@@ -709,7 +676,7 @@ static bool shared_finalize_plt_and_calls(MiniLdState *state,
         source = &state->work.sections[reloc->section];
         target = &state->resolver.entries[reloc->symbol];
         if (shared_symbol_needs_plt(state, shared, reloc->symbol)) {
-            size_t plt_index = shared->plt_index[reloc->symbol];
+            size_t plt_index = shared->symbols[reloc->symbol].plt_index;
 
             if (plt_index == SIZE_MAX) {
                 fprintf(state->diagnostics,

@@ -529,6 +529,10 @@ static bool find_or_add_section(MiniLdState *state,
 
 #include "linker_common_allocation.inc"
 
+/* RISC-V psABI/ELF identity is a Target decision shared by every input and
+ * output mode; it is available before archive admission and ET_REL writing. */
+#include "linker_riscv_input_abi.inc"
+
 #include "linker_admission.inc"
 static bool write_output(MiniLdState *state, const char *path) {
     MiniElfWriteSection *sections = NULL;
@@ -619,9 +623,7 @@ static bool write_output(MiniLdState *state, const char *path) {
     }
 
     memset(&spec, 0, sizeof(spec));
-    spec.elf_class = ELFCLASS64;
-    spec.data_encoding = ELFDATA2LSB;
-    spec.machine = EM_RISCV;
+    minild_target_set_relocatable_identity(&spec);
     spec.flags = state->elf_flags;
     spec.sections = sections;
     spec.section_count = state->work.count;

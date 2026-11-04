@@ -123,47 +123,6 @@ static bool select_input_groups(MiniLdState *state,
     return true;
 }
 
-/* ELF processor-specific RISC-V attributes are a single 'A' format
- * marker followed by length-delimited vendor subsections. Ordinary
- * SHF_MERGE-style concatenation of complete input sections creates
- * 'A vendor A vendor', which readelf cannot parse. Preserve each input
- * vendor subsection (including unknown vendors) but emit 'A' only once.
- * Validate all bounds before accepting a foreign .o or archive member.
- * This is metadata, not executable data and not an ABI override. */
-#define MINILD_SHT_RISCV_ATTRIBUTES UINT32_C(0x70000003)
-static bool riscv_attributes_valid(const unsigned char *bytes, size_t size) {
-    size_t pos = 1U;
-
-    if (size < 7U || bytes[0] != (unsigned char)'A') {
-        return false;
-    }
-    while (pos < size) {
-        size_t vendor_end;
-        uint32_t length;
-        if (!range_ok(pos, 4U, size)) {
-            return false;
-        }
-        length = (uint32_t)bytes[pos] |
-                 ((uint32_t)bytes[pos + 1U] << 8U) |
-                 ((uint32_t)bytes[pos + 2U] << 16U) |
-                 ((uint32_t)bytes[pos + 3U] << 24U);
-        if (length < 6U || !range_ok(pos, (size_t)length, size)) {
-            return false;
-        }
-        vendor_end = pos + 4U;
-        while (vendor_end < pos + (size_t)length &&
-               bytes[vendor_end] != 0U) {
-            ++vendor_end;
-        }
-        if (vendor_end == pos + (size_t)length ||
-            vendor_end == pos + 4U) {
-            return false;
-        }
-        pos += (size_t)length;
-    }
-    return pos == size;
-}
-
 /* Admission records only immutable input identities and canonical symbol/RELA
  * references.  No WorkSection exists until the complete archive/COMDAT graph
  * has been admitted and the single post-admission projection runs. */
@@ -188,10 +147,7 @@ static bool process_input_data(MiniLdState *state,
     bool ok = false;
 
     if (!minielf_open(&elf, data, size) ||
-        elf.elf_class != ELFCLASS64 ||
-        elf.data_encoding != ELFDATA2LSB ||
-        elf.type != ET_REL ||
-        elf.machine != EM_RISCV ||
+        !minild_target_accept_elf(&elf, ET_REL) ||
         elf.version != EV_CURRENT ||
         elf.section_count == 0U ||
         elf.section_name_table_index == SHN_UNDEF) {
@@ -340,12 +296,9 @@ static bool process_input_data(MiniLdState *state,
                     "minic-ld: invalid-section-name:%s\n", path);
             goto done;
         }
-        if (input.type == MINILD_SHT_RISCV_ATTRIBUTES) {
-            if (strcmp(name, ".riscv.attributes") != 0 ||
-                input.flags != 0U ||
-                !minielf_section_data(&elf, i, &section_data,
-                                      &section_size) ||
-                !riscv_attributes_valid(section_data, section_size)) {
+        if (minild_target_is_attributes_section(input.type)) {
+            if (!minild_target_accept_attributes(
+                    &elf, i, name, &input, &section_data, &section_size)) {
                 fprintf(state->diagnostics,
                         "minic-ld: invalid-riscv-attributes:%s\n", path);
                 goto done;
@@ -587,23 +540,9 @@ static bool process_input_data(MiniLdState *state,
         }
     }
 
-    {
-        uint32_t merged_flags = 0U;
-        const char *abi_reason = NULL;
-
-        if (!minild_riscv_elf_abi_merge(
-                state->elf_flags, elf.flags,
-                state->processed_object_count != 0U, incoming_has_code,
-                &merged_flags, &abi_reason)) {
-            fprintf(state->diagnostics,
-                    "minic-ld: incompatible-riscv-elf-flags:%s:%s:"
-                    "current=0x%08x:incoming=0x%08x\n",
-                    path,
-                    abi_reason == NULL ? "unknown" : abi_reason,
-                    (unsigned)state->elf_flags, (unsigned)elf.flags);
-            goto done;
-        }
-        state->elf_flags = merged_flags;
+    if (!minild_target_merge_elf_flags(state, elf.flags,
+                                       incoming_has_code, path)) {
+        goto done;
     }
     ++state->processed_object_count;
     state->have_input = true;
@@ -630,10 +569,7 @@ static bool process_dso_input_data(MiniLdState *state,
     size_t i;
 
     if (!minielf_open(&elf, data, size) ||
-        elf.elf_class != ELFCLASS64 ||
-        elf.data_encoding != ELFDATA2LSB ||
-        elf.type != ET_DYN ||
-        elf.machine != EM_RISCV ||
+        !minild_target_accept_elf(&elf, ET_DYN) ||
         elf.version != EV_CURRENT) {
         fprintf(state->diagnostics,
                 "minic-ld: unsupported-shared-input:%s\n",

@@ -153,9 +153,7 @@ static bool minild_shared_prune_script_inputs(MiniLdState *state,
             goto done;
         }
         if (discarded[reloc->section] ||
-            reloc->type == R_RISCV_NONE ||
-            reloc->type == R_RISCV_RELAX ||
-            reloc->type == R_RISCV_ALIGN ||
+            minild_target_ignored_script_reloc(reloc->type) ||
             reloc->symbol == SIZE_MAX) {
             continue;
         }

@@ -1,3 +1,15 @@
+/* One final-link projection per canonical resolver symbol.  Dynamic symbol
+ * identity, preemption, and GOT/PLT/TLS reservations have one shared slot,
+ * so no independently allocated symbol-indexed arrays can get out of sync. */
+typedef struct MiniLdSharedSymbolPlan {
+    size_t dynsym_index;
+    size_t plt_index;
+    size_t got_slot_offset;
+    size_t tls_gd_offset;
+    uint32_t dynstr_name_offset;
+    bool preemptible;
+} MiniLdSharedSymbolPlan;
+
 /* ET_DYN pre-layout metadata and source-symbol policy. The one
  * MiniLdSharedImage is sized before address placement. */
 typedef struct MiniLdSharedImage {
@@ -22,16 +34,10 @@ typedef struct MiniLdSharedImage {
     uint32_t soname_offset;
     uint32_t *needed_offsets;
     size_t needed_count;
-    size_t *dynsym_index;
-    uint32_t *dynstr_name_offset;
-    size_t *plt_index;
-    size_t *got_slot_offset;
-    size_t *tls_gd_offset;
-    bool *preemptible;
+    MiniLdSharedSymbolPlan *symbols;
     unsigned char *dynamic_list_data;
     size_t dynamic_list_size;
     size_t dynsym_count;
-    size_t symbol_map_capacity;
     size_t prepared_symbol_count;
     size_t rela_count;
     size_t plt_count;
@@ -47,20 +53,10 @@ typedef struct MiniLdSharedImage {
 } MiniLdSharedImage;
 
 static void shared_image_destroy(MiniLdSharedImage *shared) {
-    free(shared->dynsym_index);
-    free(shared->dynstr_name_offset);
-    free(shared->plt_index);
-    free(shared->got_slot_offset);
-    free(shared->tls_gd_offset);
-    free(shared->preemptible);
+    free(shared->symbols);
     free(shared->needed_offsets);
     free(shared->dynamic_list_data);
-    shared->dynsym_index = NULL;
-    shared->dynstr_name_offset = NULL;
-    shared->plt_index = NULL;
-    shared->got_slot_offset = NULL;
-    shared->tls_gd_offset = NULL;
-    shared->preemptible = NULL;
+    shared->symbols = NULL;
     shared->needed_offsets = NULL;
     shared->needed_count = 0U;
     shared->dynamic_list_data = NULL;
@@ -259,7 +255,7 @@ static bool shared_symbol_needs_plt(const MiniLdState *state,
         !state->resolver.entries[index].script_planned_defined) {
         return true;
     }
-    return shared->preemptible[index];
+    return shared->symbols[index].preemptible;
 }
 
 /* A nonpreemptible SHN_ABS address is a load-independent constant.  Script
@@ -270,7 +266,7 @@ static bool shared_symbol_is_static_absolute(const MiniLdState *state,
                                              size_t index) {
     const MiniLdResolvedSymbol *symbol;
 
-    if (index >= state->resolver.count || shared->preemptible[index]) {
+    if (index >= state->resolver.count || shared->symbols[index].preemptible) {
         return false;
     }
     symbol = &state->resolver.entries[index];
@@ -384,35 +380,15 @@ static bool shared_prepare_metadata(MiniLdState *state,
      * before this phase.  No resolver index may be appended during layout:
      * dynamic table size and hash indices are fixed here, not afterward. */
     shared->prepared_symbol_count = state->resolver.count;
-    shared->symbol_map_capacity = shared->prepared_symbol_count;
-    if (shared->symbol_map_capacity >
-        SIZE_MAX / sizeof(*shared->dynsym_index)) {
+    if (shared->prepared_symbol_count >
+        SIZE_MAX / sizeof(*shared->symbols)) {
         fprintf(state->diagnostics,
                 "minic-ld: script-symbol-map-overflow\n");
         goto fail;
     }
-    if (shared->symbol_map_capacity == 0U) {
-        shared->symbol_map_capacity = 1U;
-    }
-
-    shared->dynsym_index =
-        malloc(shared->symbol_map_capacity *
-               sizeof(*shared->dynsym_index));
-    shared->dynstr_name_offset =
-        calloc(shared->symbol_map_capacity,
-               sizeof(*shared->dynstr_name_offset));
-    shared->plt_index =
-        malloc(shared->symbol_map_capacity *
-               sizeof(*shared->plt_index));
-    shared->got_slot_offset =
-        malloc(shared->symbol_map_capacity *
-               sizeof(*shared->got_slot_offset));
-    shared->tls_gd_offset =
-        malloc(shared->symbol_map_capacity *
-               sizeof(*shared->tls_gd_offset));
-    shared->preemptible =
-        calloc(shared->symbol_map_capacity,
-               sizeof(*shared->preemptible));
+    shared->symbols = calloc(shared->prepared_symbol_count == 0U
+                                 ? 1U : shared->prepared_symbol_count,
+                             sizeof(*shared->symbols));
     {
         size_t maximum_needed = input_graph_dso_needed_count(&state->inputs) +
             (needed_name != NULL && needed_name[0] != '\0' ? 1U : 0U);
@@ -421,21 +397,16 @@ static bool shared_prepare_metadata(MiniLdState *state,
             calloc(maximum_needed == 0U ? 1U : maximum_needed,
                    sizeof(*shared->needed_offsets));
     }
-    if (shared->dynsym_index == NULL ||
-        shared->dynstr_name_offset == NULL ||
-        shared->plt_index == NULL ||
-        shared->got_slot_offset == NULL ||
-        shared->tls_gd_offset == NULL ||
-        shared->preemptible == NULL ||
+    if (shared->symbols == NULL ||
         shared->needed_offsets == NULL) {
         fprintf(state->diagnostics, "minic-ld: out-of-memory:shared-symbol-map\n");
         goto fail;
     }
-    for (i = 0U; i < shared->symbol_map_capacity; ++i) {
-        shared->dynsym_index[i] = SIZE_MAX;
-        shared->plt_index[i] = SIZE_MAX;
-        shared->got_slot_offset[i] = SIZE_MAX;
-        shared->tls_gd_offset[i] = SIZE_MAX;
+    for (i = 0U; i < shared->prepared_symbol_count; ++i) {
+        shared->symbols[i].dynsym_index = SIZE_MAX;
+        shared->symbols[i].plt_index = SIZE_MAX;
+        shared->symbols[i].got_slot_offset = SIZE_MAX;
+        shared->symbols[i].tls_gd_offset = SIZE_MAX;
     }
     if (!shared_load_dynamic_list(state, shared, dynamic_list_path)) {
         goto fail;
@@ -554,7 +525,7 @@ static bool shared_prepare_metadata(MiniLdState *state,
         goto fail;
     }
     for (i = 0U; i < state->resolver.count; ++i) {
-        shared->preemptible[i] =
+        shared->symbols[i].preemptible =
             shared_symbol_preemptible(state, shared, i) &&
             (version_script == NULL ||
              (state->resolver.entries[i].section == MINILD_SECTION_UNDEF &&
@@ -627,13 +598,13 @@ static bool shared_prepare_metadata(MiniLdState *state,
         if (dynstr->size > UINT32_MAX) {
             goto oom;
         }
-        shared->dynstr_name_offset[i] = (uint32_t)dynstr->size;
+        shared->symbols[i].dynstr_name_offset = (uint32_t)dynstr->size;
         if (!section_append_data(dynstr,
                                  (const unsigned char *)state->resolver.entries[i].name,
                                  strlen(state->resolver.entries[i].name) + 1U)) {
             goto oom;
         }
-        shared->dynsym_index[i] = shared->dynsym_count++;
+        shared->symbols[i].dynsym_index = shared->dynsym_count++;
     }
 
     if (version_script != NULL &&
@@ -701,8 +672,8 @@ static bool shared_prepare_metadata(MiniLdState *state,
         size_t got_prefix = shared->got_count * 8U;
 
         for (i = 0U; i < state->resolver.count; ++i) {
-            if (shared->tls_gd_offset[i] != SIZE_MAX) {
-                shared->tls_gd_offset[i] += got_prefix;
+            if (shared->symbols[i].tls_gd_offset != SIZE_MAX) {
+                shared->symbols[i].tls_gd_offset += got_prefix;
             }
         }
     }

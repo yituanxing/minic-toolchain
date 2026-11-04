@@ -5,7 +5,7 @@
  * merged byte buffer. All map and coordinate updates commit together. */
 static bool minild_projection_fragment(MiniLdInputProjection projection,
                                         const MiniLdInputSection *input) {
-    if (input->type == MINILD_SHT_RISCV_ATTRIBUTES) {
+    if (minild_target_is_attributes_section(input->type)) {
         return false;
     }
     return projection == MINILD_PROJECTION_SCRIPT ||
@@ -134,15 +134,8 @@ static bool minild_project_admitted_inputs(MiniLdState *state,
             output->group_flags = input_group_u32(group->data);
             output->group_signature_symbol = signature_symbol;
         }
-        if (input->type == MINILD_SHT_RISCV_ATTRIBUTES) {
-            /* One 'A' marker, all original length-delimited vendor
-             * subsections, including unknown vendors. */
-            if (input->size == 0U || input->data == NULL ||
-                !section_append_data(output,
-                                     input->data +
-                                         (output->size == 0U ? 0U : 1U),
-                                     input->size -
-                                         (output->size == 0U ? 0U : 1U))) {
+        if (minild_target_is_attributes_section(input->type)) {
+            if (!minild_target_append_attributes(output, input)) {
                 fprintf(state->diagnostics,
                         "minic-ld: invalid-projected-attributes:%s\n",
                         input->name);
