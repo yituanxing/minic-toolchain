@@ -886,3 +886,7 @@ if command -v "$GNU_LD" >/dev/null && command -v "$QEMU_USER" >/dev/null; then
 else
     echo 'MINILD_LOONGARCH_STATIC=SKIP GNU_BFD_QEMU_runtime_parity missing_cross_tools'
 fi
+
+# IFUNC is a separate target-owned runtime contract: a call must go through
+# an IPLT stub whose IRELATIVE slot glibc fills with the resolver result.
+bash "$repo/tests/linker/probe-loongarch-static-ifunc.sh"

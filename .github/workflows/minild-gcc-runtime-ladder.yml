@@ -8,8 +8,9 @@ name: MiniLD GCC Runtime Ladder (Exploratory)
 # before attempting the full GCC+libc five-stage GNU BFD differential.
 # Follow-up cohort: AArch64 checked-in IFUNC oracle and LoongArch B26
 # undefined-weak branch handling after the first real-glibc differential.
-# Next differential: LoongArch legal PCALA_LO12 K12 consumers and precise
-# AArch64 static-glibc QEMU fault PC/si_addr capture, without changing gates.
+# Next five-architecture real-glibc differential: shared ordered CRT array
+# placement and LoongArch static IRELATIVE/IPLT/IGOT initialization, after
+# fault tracing confirmed both independent startup correctness gaps.
 on:
   workflow_dispatch:
   push:

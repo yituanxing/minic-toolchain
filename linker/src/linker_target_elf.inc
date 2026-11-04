@@ -42,6 +42,8 @@ static bool minild_loongarch_fill_static_relocations(
     const struct MiniLdStaticTargetPlan *plan);
 static void minild_loongarch_destroy_static_relocations(
     struct MiniLdStaticTargetPlan *plan);
+static bool minild_loongarch_synthesize_default_boundaries(
+    MiniLdState *state, const struct MiniLdLayout *layout);
 static bool minild_riscv_reserve_static_relocations(
     MiniLdState *state, struct MiniLdStaticTargetPlan *plan);
 static bool minild_riscv_fill_static_relocations(
@@ -176,7 +178,8 @@ static const MiniLdTargetProfile minild_target_profiles[] = {
      minild_loongarch_reserve_static_relocations,
      minild_loongarch_fill_static_relocations,
      minild_loongarch_apply_static_relocations,
-     minild_loongarch_destroy_static_relocations, NULL,
+     minild_loongarch_destroy_static_relocations,
+     minild_loongarch_synthesize_default_boundaries,
      NULL, NULL, minild_loongarch_v1_elf_flags, true}
 };
 

@@ -182,16 +182,167 @@ static bool minild_target_relax_section(MiniLdState *state,
            state->target->relax_section(state, section_index, address);
 }
 
+/* The CRT walks every pointer between __init_array_start/end (and the
+ * corresponding preinit/fini symbols).  Grouping only the symbols while
+ * leaving input sections interleaved with ordinary .data turns unrelated
+ * data into constructor pointers.  GNU BFD first groups .init_array.* and
+ * .fini_array.* by numeric priority, followed by the unsuffixed section. */
+typedef struct {
+    size_t index;
+    unsigned bucket;
+    uint32_t priority;
+} MiniLdStaticRwOrder;
+
+static bool static_section_has_prefix(const char *name, const char *prefix);
+
+static uint32_t static_array_priority(const char *name, const char *prefix) {
+    const char *suffix = name + strlen(prefix);
+    uint32_t value = 0U;
+
+    if (*suffix++ != '.' || *suffix == '\0') {
+        return UINT32_MAX;
+    }
+    for (; *suffix != '\0'; ++suffix) {
+        unsigned digit;
+        if (*suffix < '0' || *suffix > '9') {
+            return UINT32_MAX;
+        }
+        digit = (unsigned)(*suffix - '0');
+        if (value > (UINT32_MAX - digit) / 10U) {
+            return UINT32_MAX;
+        }
+        value = value * 10U + digit;
+    }
+    return value;
+}
+
+static unsigned static_rw_section_bucket(const MiniLdSection *section) {
+    const char *name = section->input_name != NULL
+                           ? section->input_name : section->name;
+
+    if (section->type == SHT_NOBITS) {
+        return (section->flags & SHF_TLS) != 0U ? 5U : 6U;
+    }
+    if ((section->flags & SHF_TLS) != 0U) {
+        return 4U;
+    }
+    if (static_section_has_prefix(name, ".preinit_array")) {
+        return 1U;
+    }
+    if (static_section_has_prefix(name, ".init_array")) {
+        return 2U;
+    }
+    if (static_section_has_prefix(name, ".fini_array")) {
+        return 3U;
+    }
+    return 0U;
+}
+
+static int static_compare_rw_order(const void *left, const void *right) {
+    const MiniLdStaticRwOrder *a = left;
+    const MiniLdStaticRwOrder *b = right;
+
+    if (a->bucket != b->bucket) {
+        return a->bucket < b->bucket ? -1 : 1;
+    }
+    if (a->priority != b->priority) {
+        return a->priority < b->priority ? -1 : 1;
+    }
+    return a->index < b->index ? -1 : a->index > b->index ? 1 : 0;
+}
+
+static bool static_place_rw_sections(MiniLdState *state,
+                                     MiniLdLayout *layout) {
+    MiniLdStaticRwOrder *order;
+    size_t count = 0U;
+    size_t rw_mem_cursor = 0U;
+    size_t rw_file_cursor = 0U;
+    size_t i;
+    bool success = false;
+
+    order = calloc(state->work.count == 0U ? 1U : state->work.count,
+                   sizeof(*order));
+    if (order == NULL) {
+        fprintf(state->diagnostics, "minic-ld: out-of-memory:static-rw-order\n");
+        return false;
+    }
+    for (i = 0U; i < state->work.count; ++i) {
+        const MiniLdSection *section = &state->work.sections[i];
+        const char *name = section->input_name != NULL
+                               ? section->input_name : section->name;
+        MiniLdStaticRwOrder *entry;
+
+        if ((section->flags & (SHF_ALLOC | SHF_WRITE)) !=
+            (SHF_ALLOC | SHF_WRITE)) {
+            continue;
+        }
+        entry = &order[count++];
+        entry->index = i;
+        entry->bucket = static_rw_section_bucket(section);
+        entry->priority = UINT32_MAX;
+        if (entry->bucket == 1U) {
+            entry->priority = static_array_priority(name,
+                                                    ".preinit_array");
+        } else if (entry->bucket == 2U) {
+            entry->priority = static_array_priority(name,
+                                                    ".init_array");
+        } else if (entry->bucket == 3U) {
+            entry->priority = static_array_priority(name,
+                                                    ".fini_array");
+        }
+    }
+    qsort(order, count, sizeof(*order), static_compare_rw_order);
+
+    /* Keep the initialized TLS block last, TLS NOBITS immediately after it,
+     * and ordinary NOBITS last. The buckets also make every array contiguous
+     * in both the memory image and the file image. */
+    for (i = 0U; i < count; ++i) {
+        size_t index = order[i].index;
+        MiniLdSection *section = &state->work.sections[index];
+        bool is_nobits = section->type == SHT_NOBITS;
+        size_t aligned;
+
+        if (!align_up_size(rw_mem_cursor, section->align, &aligned)) {
+            fprintf(state->diagnostics, "minic-ld: static-layout-overflow\n");
+            goto done;
+        }
+        rw_mem_cursor = aligned;
+        if (!is_nobits) {
+            rw_file_cursor = aligned;
+        }
+        layout->work[index].vaddr = layout->rw_vaddr + rw_mem_cursor;
+        layout->work[index].laddr = layout->work[index].vaddr;
+        if (!is_nobits) {
+            layout->work[index].file_offset =
+                layout->rw_file_offset + rw_file_cursor;
+        }
+        if (!minild_target_relax_section(state, index,
+                                         layout->work[index].vaddr)) {
+            goto done;
+        }
+        if (!add_size(rw_mem_cursor, section->size, &rw_mem_cursor) ||
+            (!is_nobits &&
+             !add_size(rw_file_cursor, section->size, &rw_file_cursor))) {
+            fprintf(state->diagnostics, "minic-ld: static-layout-overflow\n");
+            goto done;
+        }
+        layout->have_rw = true;
+    }
+    layout->rw_file_size = rw_file_cursor;
+    layout->rw_mem_size = rw_mem_cursor;
+    success = true;
+done:
+    free(order);
+    return success;
+}
+
 static bool static_build_layout_at(MiniLdState *state,
                                    MiniLdLayout *layout,
                                    uint64_t base_vaddr) {
     const size_t page = state->target->page_size;
     const size_t header_page = state->target->page_size;
     size_t rx_cursor = 0U;
-    size_t rw_file_cursor = 0U;
-    size_t rw_mem_cursor = 0U;
     size_t i;
-    unsigned rw_pass;
 
     memset(layout, 0, sizeof(*layout));
     layout->work =
@@ -261,57 +412,7 @@ static bool static_build_layout_at(MiniLdState *state,
         layout->rw_vaddr = (uint64_t)next_vaddr;
     }
 
-    /* All initialized RW sections precede NOBITS in the ordinary image.
-     * Within that constraint put .tdata last and .tbss first, so PT_TLS
-     * describes one contiguous block and non-TLS .bss never interrupts it.
-     * GNU's variant-II TLS offset is relative to this whole aligned block.
-     * Other sections retain their preexisting relative placement order. */
-    for (rw_pass = 0U; rw_pass < 4U; ++rw_pass) {
-        for (i = 0U; i < state->work.count; ++i) {
-            MiniLdSection *section = &state->work.sections[i];
-            bool is_tls = (section->flags & SHF_TLS) != 0U;
-            bool is_nobits = section->type == SHT_NOBITS;
-            bool pass_tls = rw_pass == 1U || rw_pass == 2U;
-            bool pass_nobits = rw_pass >= 2U;
-            size_t aligned;
-
-            if ((section->flags & (SHF_ALLOC | SHF_WRITE)) !=
-                    (SHF_ALLOC | SHF_WRITE) || is_tls != pass_tls ||
-                is_nobits != pass_nobits) {
-                continue;
-            }
-            if (!align_up_size(rw_mem_cursor, section->align, &aligned)) {
-                fprintf(state->diagnostics, "minic-ld: static-layout-overflow\n");
-                return false;
-            }
-            rw_mem_cursor = aligned;
-            if (!is_nobits) {
-                rw_file_cursor = aligned;
-            }
-            layout->work[i].vaddr = layout->rw_vaddr + rw_mem_cursor;
-            layout->work[i].laddr = layout->work[i].vaddr;
-            if (!is_nobits) {
-                layout->work[i].file_offset =
-                    layout->rw_file_offset + rw_file_cursor;
-            }
-            if (!minild_target_relax_section(state,
-                                            i,
-                                            layout->work[i].vaddr)) {
-                return false;
-            }
-            if (!add_size(rw_mem_cursor, section->size, &rw_mem_cursor) ||
-                (!is_nobits &&
-                 !add_size(rw_file_cursor, section->size, &rw_file_cursor))) {
-                fprintf(state->diagnostics, "minic-ld: static-layout-overflow\n");
-                return false;
-            }
-            layout->have_rw = true;
-        }
-    }
-
-    layout->rw_file_size = rw_file_cursor;
-    layout->rw_mem_size = rw_mem_cursor;
-    return layout->have_rx;
+    return static_place_rw_sections(state, layout) && layout->have_rx;
 }
 
 static bool static_build_layout(MiniLdState *state,

@@ -51,8 +51,8 @@ No missing QEMU may be silently counted as a runtime pass.
 |---|---|---|
 | x86-64 | GNU BFD + MiniLD native CRT/TLS/IFUNC, five ordinary C stages | **5/5 PASS** with native execution and GNU output parity |
 | RV64 | RISC-V TLS and ULEB128 GNU BFD/QEMU differential | **5/5 PASS** with real glibc and QEMU output parity |
-| AArch64 | GOT/TLS IE/LE GNU BFD/QEMU differential | **0/5**, all real glibc stages MiniLD-link but QEMU exit 139; GNU works |
-| LoongArch64 | GOT/TLS and true ALIGN-shrink GNU BFD/QEMU differential | **0/5**, real glibc MiniLD link fails at `R_LARCH_PCALA_HI20` (type 71) |
+| AArch64 | GOT/TLS IE/LE and static IFUNC GNU BFD/QEMU differential | **0/5**, all real glibc stages MiniLD-link but QEMU exit 139; GNU works; the current fault is a discontinuous `.init_array` range |
+| LoongArch64 | GOT/TLS, true ALIGN-shrink, PCALA K12 and undefweak B26 GNU BFD/QEMU differential | **0/5**, all real glibc stages MiniLD-link but QEMU exit 139; GNU works; the current output lacks static IFUNC relocation synthesis |
 | RV32 | ELF32/ILP32, TLS LE and ULEB128 GNU BFD/QEMU differential | **5/5 PASS** with real RV32I Picolibc, Linux-syscall bridge and QEMU output parity |
 
 The first real GCC/libc CI cohort is
@@ -93,6 +93,31 @@ probes both passed.  The paired five-target ELF boundary CI
 [#41835291703](https://github.com/yituanxing/minic-toolchain/actions/runs/41835291703)
 also completed successfully. These structural and library workloads are
 distinct from Linux kernel `vmlinux` final linking.
+
+The latest fifth-stage ordinary-program cohort,
+[CI #41838512487](https://github.com/yituanxing/minic-toolchain/actions/runs/41838512487)
+at refactor commit `2de4541`, independently reconfirmed x86-64/RV32/RV64
+at **5/5** each. It advanced LoongArch64 from unresolved `PCALA_HI20` /
+undefweak `B26` / `PCALA_LO12` linker relocations to **five produced static
+glibc ELF executables**, while all five still crashed in QEMU (`139`). Its
+new LoongArch GNU BFD/QEMU ISA differential tests passed. All five AArch64
+glibc programs also linked but returned QEMU `139`; bounded real CPU tracing
+identified the first `__libc_start_main` crash (`PC=0x400630`, `si_addr=NULL`).
+An exact binary comparison then showed the MiniLD `.init_array` at
+`0x47c1b0` separated from `.init_array.00090` at `0x481298`, while its
+`__init_array_start/end` symbols incorrectly span the intervening gap.
+glibc calls the NULL second entry. GNU BFD packs those entries contiguously.
+This is a generic static-layout correctness bug, **not** evidence that the
+IFUNC relocation probe was wrong. Independently, the LoongArch GNU reference
+contains 14 `R_LARCH_IRELATIVE` records and valid `.iplt`/`.igot.plt`,
+while MiniLD's static glibc executable contains none; the LoongArch target
+must synthesize its IFUNC resolver records before real execution can pass.
+
+The five-target ELF boundary CI remained green in both
+[#41838512398](https://github.com/yituanxing/minic-toolchain/actions/runs/41838512398)
+and [#41838522839](https://github.com/yituanxing/minic-toolchain/actions/runs/41838522839).
+Passing boundary CI and successfully writing five ELF executables are
+necessary milestones, but neither is a substitute for QEMU runtime parity.
 
 ### Separate Linux kernel link acceptance
 
@@ -191,6 +216,6 @@ x86-64 5/5 does **not** establish five-architecture Linux correctness.
   differential 5/5; TLS and IFUNC evidence retained in
   `build/minild-gcc-runtime-ladder/x86_64/**/evidence`.
 - RV32 ELF32 `-static` two-stage/roundtrip structural checks, GOT width and
-  invalid relocation rejection: PASS locally. Independent GNU BFD and QEMU
-  actual RV32 execution remain UNVERIFIED on this host (missing tools), and
-  the RV32 Picolibc five-stage acceptance has not yet run in CI.
+  invalid relocation rejection: PASS locally. The host lacks RV32 GNU BFD
+  and QEMU, but the independent **real RV32I Picolibc 5/5 GNU/QEMU** job
+  passed in [CI #41838512487](https://github.com/yituanxing/minic-toolchain/actions/runs/41838512487).

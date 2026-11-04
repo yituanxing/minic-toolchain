@@ -44,10 +44,39 @@ write_fixture() {
             ;;
         *) exit 2 ;;
     esac
+    # Mimic glibc's .init_array plus CRT priority fragments, while inserting
+    # unrelated RW payload between the fragments in input order.  An array
+    # start/end min/max over unsorted RW placements would span these payloads
+    # and make __libc_start_main call zero/data as a constructor.
     printf '%s\n' \
+        '.text' \
+        'fixture_preinit_20: .byte 0' \
+        'fixture_preinit_default: .byte 0' \
+        'fixture_ctor_90: .byte 0' \
+        'fixture_ctor_400: .byte 0' \
+        'fixture_ctor_default: .byte 0' \
+        'fixture_fini_30: .byte 0' \
+        'fixture_fini_default: .byte 0' \
         '.data' '.globl fixture_data' 'fixture_data: .quad 0' \
         '.section .init_array,"aw",@init_array' \
-        '    .p2align 3' '    .quad _start' \
+        '    .p2align 3' '    .quad fixture_ctor_default' \
+        '.section .data.rel.local,"aw",@progbits' \
+        '    .quad 0' '    .quad 0' \
+        '    .quad __init_array_start' '    .quad __init_array_end' \
+        '.section .fini_array,"aw",@fini_array' \
+        '    .p2align 3' '    .quad fixture_fini_default' \
+        '.section .init_array.00400,"aw",@init_array' \
+        '    .p2align 3' '    .quad fixture_ctor_400' \
+        '.section .preinit_array,"aw",@preinit_array' \
+        '    .p2align 3' '    .quad fixture_preinit_default' \
+        '.section .fini_array.00030,"aw",@fini_array' \
+        '    .p2align 3' '    .quad fixture_fini_30' \
+        '.section .data.rel.ro,"aw",@progbits' \
+        '    .quad 0' '    .quad 0' \
+        '.section .init_array.00090,"aw",@init_array' \
+        '    .p2align 3' '    .quad fixture_ctor_90' \
+        '.section .preinit_array.00020,"aw",@preinit_array' \
+        '    .p2align 3' '    .quad fixture_preinit_20' \
         >>"$work/$name.s"
     if [[ $name == riscv64 ]]; then
         # GNU static libc references this linker-defined ELF-header address.
@@ -71,7 +100,29 @@ for name in riscv64 x86_64 aarch64 loongarch64; do
         -o "$work/$name.o" "$work/$name.s"
     "$MINILD" -m "$emulation" -static -e _start \
         -o "$work/$name.elf" "$work/$name.o"
+    if [[ $name == riscv64 ]]; then
+        # Non-scripted input-section GC is currently RV64-only.
+        "$MINILD" -m "$emulation" -static --gc-sections -e _start \
+            -o "$work/$name-gc.elf" "$work/$name.o"
+    fi
 done
+
+# Empty arrays referenced by a static application must yield equal bounds,
+# not a fabricated nonempty range or an unresolved CRT symbol.
+printf '%s\n' \
+    '.text' '.globl _start' '_start:' \
+    '    movq $60,%rax' '    xorq %rdi,%rdi' '    syscall' \
+    '.data' '    .quad __preinit_array_start' \
+    '    .quad __preinit_array_end' \
+    '    .quad __init_array_start' \
+    '    .quad __init_array_end' \
+    '    .quad __fini_array_start' \
+    '    .quad __fini_array_end' \
+    >"$work/no-arrays.s"
+"$MINIAS" --target=x86_64 -march=x86-64 -mabi=sysv \
+    -o "$work/no-arrays.o" "$work/no-arrays.s"
+"$MINILD" -m elf_x86_64 -static -e _start \
+    -o "$work/no-arrays.elf" "$work/no-arrays.o"
 
 # GNU ld is an independent x86-64 reference for the special symbols. It may
 # export ordinary _edata/_end markers, but not RISC-V's __global_pointer$.
@@ -164,13 +215,56 @@ if gnu_rv64.exists():
 print(f'MINILD_RV64_EHDR_START=PASS mapped_header={mini_ehdr:#x} '
       f'gnu_bfd={"PASS" if gnu_rv64.exists() else "SKIP"}')
 
+expected_arrays = {
+    'preinit': ('fixture_preinit_20', 'fixture_preinit_default'),
+    'init': ('fixture_ctor_90', 'fixture_ctor_400', 'fixture_ctor_default'),
+    'fini': ('fixture_fini_30', 'fixture_fini_default'),
+}
+
+
+def verify_arrays(path, found, *, gnu=False):
+    blob = path.read_bytes()
+    phoff = struct.unpack_from('<Q', blob, 32)[0]
+    phentsize, phnum = struct.unpack_from('<HH', blob, 54)
+    loads = []
+    for i in range(phnum):
+        base = phoff + i * phentsize
+        typ, flags, offset, vaddr, paddr, size, memsize, alignment = \
+            struct.unpack_from('<IIQQQQQQ', blob, base)
+        if typ == 1:
+            loads.append((offset, vaddr, size))
+    kinds = ('init',) if gnu else ('preinit', 'init', 'fini')
+    for kind in kinds:
+        start_name, end_name = f'__{kind}_array_start', f'__{kind}_array_end'
+        if start_name not in found or end_name not in found:
+            raise SystemExit(f'MINILD_DEFAULT_SYMBOLS=FAIL missing_{kind}_bounds={path}')
+        start, end = found[start_name], found[end_name]
+        expected = expected_arrays[kind]
+        if end - start != len(expected) * 8:
+            raise SystemExit(f'MINILD_DEFAULT_SYMBOLS=FAIL {kind}_array_hole='
+                             f'{path}:{start:#x}..{end:#x}')
+        for slot, symbol in enumerate(expected):
+            address = start + slot * 8
+            offsets = [offset + address - vaddr
+                       for offset, vaddr, size in loads
+                       if vaddr <= address and address + 8 <= vaddr + size]
+            if len(offsets) != 1 or offsets[0] + 8 > len(blob):
+                raise SystemExit(f'MINILD_DEFAULT_SYMBOLS=FAIL '
+                                 f'unmapped_array_slot={path}:{kind}:{slot}')
+            pointer = struct.unpack_from('<Q', blob, offsets[0])[0]
+            if pointer != found[symbol]:
+                raise SystemExit(f'MINILD_DEFAULT_SYMBOLS=FAIL '
+                                 f'array_slot_mismatch={path}:{kind}:{slot}:'
+                                 f'{pointer:#x}!={found[symbol]:#x}')
+
+
+verify_arrays(root / 'x86_64-gnu.elf', gnu, gnu=True)
 for name in ('riscv64', 'x86_64', 'aarch64', 'loongarch64'):
     found = symbols(root / (name + '.elf'))
-    if any(key not in found for key in ('__init_array_start',
-                                        '__init_array_end')):
-        raise SystemExit(f'MINILD_DEFAULT_SYMBOLS=FAIL missing_common_arrays={name}')
-    if found['__init_array_end'] - found['__init_array_start'] != 8:
-        raise SystemExit(f'MINILD_DEFAULT_SYMBOLS=FAIL wrong_array_range={name}')
+    verify_arrays(root / (name + '.elf'), found)
+    if name == 'riscv64':
+        gc_found = symbols(root / (name + '-gc.elf'))
+        verify_arrays(root / (name + '-gc.elf'), gc_found)
     actual = [key for key in riscv_only if key in found]
     if name == 'riscv64':
         if len(actual) != len(riscv_only):
@@ -179,8 +273,15 @@ for name in ('riscv64', 'x86_64', 'aarch64', 'loongarch64'):
         raise SystemExit(f'MINILD_DEFAULT_SYMBOLS=FAIL leaked_riscv_symbols={name}:{actual}')
     print(f'MINILD_DEFAULT_SYMBOLS_TARGET=PASS target={name} '
           f'riscv_psabi={"provided" if name == "riscv64" else "absent"} '
-          'common_init_array=provided')
+          'common_arrays=contiguous_and_priority_sorted')
 
-print('MINILD_DEFAULT_SYMBOLS=PASS targets=4 common_arrays=4 '
+empty = symbols(root / 'no-arrays.elf')
+for kind in expected_arrays:
+    if empty.get(f'__{kind}_array_start') is None or \
+            empty[f'__{kind}_array_start'] != empty.get(f'__{kind}_array_end'):
+        raise SystemExit(f'MINILD_DEFAULT_SYMBOLS=FAIL nonempty_missing_array={kind}')
+
+print('MINILD_DEFAULT_SYMBOLS=PASS targets=4 common_arrays=15 '
+      'gc_priority=PASS empty_arrays=PASS '
       'riscv_specific_symbols=4 x86_gnu_differential=PASS')
 PY
