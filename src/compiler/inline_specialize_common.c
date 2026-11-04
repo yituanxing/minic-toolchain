@@ -4,6 +4,113 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* Opaque assembly's unparsed symbol references keep C names alive, including
+ * when the same name is also a source for inline specializations. */
+static bool minic_asm_text_mentions_symbol(const char *text,
+                                           size_t text_length,
+                                           const char *name,
+                                           size_t name_length) {
+    size_t offset;
+    if (text == NULL || name == NULL || name_length == 0U ||
+        name_length > text_length) {
+        return false;
+    }
+    for (offset = 0U; offset <= text_length - name_length; ++offset) {
+        if (memcmp(text + offset, name, name_length) == 0)
+            return true;
+    }
+    return false;
+}
+
+bool minic_program_has_opaque_asm_symbol(const MinicC0Program *program,
+                                         const char *name, size_t name_length) {
+    size_t index;
+    if (program == NULL || name == NULL || name_length == 0U)
+        return true;
+    for (index = 0U; index < program->file_asm_count; ++index) {
+        const MinicFileAsm *source_asm = &program->file_asms[index];
+        if (minic_asm_text_mentions_symbol(
+                source_asm->text, source_asm->length, name, name_length))
+            return true;
+    }
+    for (index = 0U; index < program->inline_asm_count; ++index) {
+        const MinicInlineAsm *source_asm = &program->inline_asms[index];
+        if (minic_asm_text_mentions_symbol(
+                source_asm->template_text, source_asm->template_length,
+                name, name_length))
+            return true;
+    }
+    return false;
+}
+
+bool minic_inline_source_has_opaque_asm_reference(
+    const MinicC0Program *program, const MinicFunction *source) {
+    if (source == NULL) return true;
+    return minic_program_has_opaque_asm_symbol(
+        program, source->name, source->name_length);
+}
+
+bool minic_inline_call_plan_initialize(
+    MinicInlineCallPlan *plan, const MinicC0Program *program) {
+    if (plan == NULL || program == NULL || plan->program != NULL ||
+        plan->selected != NULL || plan->selected_count != 0U)
+        return false;
+    plan->program = program;
+    return true;
+}
+
+MinicFunctionId minic_inline_call_plan_get(
+    const MinicInlineCallPlan *plan, MinicExpressionId expression_id) {
+    const MinicC0Program *program;
+    if (plan == NULL || (program = plan->program) == NULL ||
+        expression_id >= program->expression_count ||
+        program->expressions[expression_id].kind != MINIC_EXPRESSION_CALL)
+        return MINIC_FUNCTION_INVALID;
+    if (expression_id < plan->selected_count)
+        return plan->selected[expression_id];
+    /* A newly appended expression has never been specialized. The AST is
+     * canonical and can safely supply its original target without copying. */
+    return program->expressions[expression_id].value.call.function_id;
+}
+
+bool minic_inline_call_plan_set(
+    MinicInlineCallPlan *plan, MinicExpressionId expression_id,
+    MinicFunctionId function_id) {
+    const MinicC0Program *program;
+    size_t i, wanted_count;
+    MinicFunctionId *selected;
+    if (plan == NULL || (program = plan->program) == NULL ||
+        expression_id >= program->expression_count ||
+        program->expressions[expression_id].kind != MINIC_EXPRESSION_CALL ||
+        function_id >= program->function_count ||
+        expression_id == SIZE_MAX)
+        return false;
+    if (expression_id >= plan->selected_count) {
+        wanted_count = (size_t)expression_id + 1U;
+        if (wanted_count > SIZE_MAX / sizeof(*selected))
+            return false;
+        /* Realloc never commits partial state on OOM. Initialize every
+         * unplanned earlier ID from the canonical arena, which may itself
+         * have moved while new clones were appended. */
+        selected = realloc(plan->selected, wanted_count * sizeof(*selected));
+        if (selected == NULL) return false;
+        for (i = plan->selected_count; i < wanted_count; ++i)
+            selected[i] = program->expressions[i].kind == MINIC_EXPRESSION_CALL
+                ? program->expressions[i].value.call.function_id
+                : MINIC_FUNCTION_INVALID;
+        plan->selected = selected;
+        plan->selected_count = wanted_count;
+    }
+    plan->selected[expression_id] = function_id;
+    return true;
+}
+
+void minic_inline_call_plan_destroy(MinicInlineCallPlan *plan) {
+    if (plan == NULL) return;
+    free(plan->selected);
+    (void)memset(plan, 0, sizeof(*plan));
+}
+
 void minic_inline_spec_key_clear(MinicInlineSpecializationKey *key) {
     size_t i;
     if (key == NULL) return;

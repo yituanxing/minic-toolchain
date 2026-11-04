@@ -93,7 +93,8 @@ static bool minic_static_integer_claim_block(
  * retain its original source-label aliases. A clone deliberately suppresses
  * those aliases, so do not specialize such a source in the first place. */
 static unsigned char *minic_static_integer_blocked_sources(
-    const MinicC0Program *program, const MinicTargetInvocation *target) {
+    const MinicC0Program *program, const MinicTargetInvocation *target,
+    const MinicInlineCallPlan *call_plan) {
     unsigned char *blocked;
     const MinicSourceBackend *backend;
     unsigned char *inline_has_external_guard = NULL;
@@ -180,7 +181,7 @@ static unsigned char *minic_static_integer_blocked_sources(
                 owners[index] >= program->function_count) {
                 continue;
             }
-            callee_id = call->value.call.function_id;
+            callee_id = minic_inline_call_plan_get(call_plan, index);
             if (callee_id < program->function_count &&
                 !program->functions[callee_id].is_defined) {
                 inline_has_external_guard[owners[index]] = 1U;
@@ -202,7 +203,7 @@ static unsigned char *minic_static_integer_blocked_sources(
                 owners[index] >= program->function_count) {
                 continue;
             }
-            callee_id = call->value.call.function_id;
+            callee_id = minic_inline_call_plan_get(call_plan, index);
             if (callee_id < program->function_count &&
                 program->functions[callee_id].is_defined &&
                 program->functions[callee_id].is_internal &&
@@ -412,6 +413,10 @@ bool minic_add_inline_integer_specialization(
     specialized = &program->functions[*specialized_id];
     specialized->visibility = source.visibility;
     specialized->explicit_alignment = source.explicit_alignment;
+    /* The former source-AST finalizer propagated this to every clone.
+     * Do it at creation now: Core preparation is the sole later authority
+     * for pruning and must be able to lower each candidate variant. */
+    specialized->is_referenced = source.is_referenced;
     specialized->specialization_source = source_id;
     specialized->is_integer_specialization = true;
     for (i = 0U; i < source.parameter_count; ++i) {
@@ -526,7 +531,7 @@ static bool minic_inline_specialization_argument_value(
 }
 
 bool minic_specialize_inline_integer_calls(MinicC0Program *program,
-                                                  const MinicTargetInvocation *target) {
+    const MinicTargetInvocation *target, MinicInlineCallPlan *call_plan) {
     size_t expression_index;
     size_t original_function_count;
     size_t specialization_count = 0U;
@@ -537,7 +542,8 @@ bool minic_specialize_inline_integer_calls(MinicC0Program *program,
     bool pure_guard_index_attempted = false;
     MinicInlineInitialOwners initial_owners = {0};
 
-    if (program == NULL || target == NULL) {
+    if (program == NULL || target == NULL || call_plan == NULL ||
+        call_plan->program != program) {
         return false;
     }
     original_function_count = program->function_count;
@@ -558,11 +564,10 @@ bool minic_specialize_inline_integer_calls(MinicC0Program *program,
         bool has_integer_constant = false;
         bool unresolved_constant_query = false;
 
-        if (expression->kind != MINIC_EXPRESSION_CALL ||
-            expression->value.call.function_id == MINIC_FUNCTION_INVALID) {
+        if (expression->kind != MINIC_EXPRESSION_CALL) {
             continue;
         }
-        source_id = expression->value.call.function_id;
+        source_id = minic_inline_call_plan_get(call_plan, expression_index);
         if (source_id >= original_function_count) {
             continue;
         }
@@ -583,7 +588,7 @@ bool minic_specialize_inline_integer_calls(MinicC0Program *program,
         if (!source.is_inline) {
             if (!static_sources_checked) {
                 static_blocked_sources = minic_static_integer_blocked_sources(
-                    program, target);
+                    program, target, call_plan);
                 static_sources_checked = true;
             }
             if (static_blocked_sources == NULL) {
@@ -692,8 +697,13 @@ bool minic_specialize_inline_integer_calls(MinicC0Program *program,
                 static_specialization_count += 1U;
             }
         }
-        if (!unresolved_constant_query)
-            program->expressions[expression_index].value.call.function_id = specialized_id;
+        if (!unresolved_constant_query && !minic_inline_call_plan_set(
+                call_plan, expression_index, specialized_id)) {
+            minic_core_reentry_index_destroy(pure_guard_reentry_index);
+            free(static_blocked_sources);
+            minic_inline_initial_owners_destroy(&initial_owners);
+            return false;
+        }
     }
     free(static_blocked_sources);
     minic_inline_initial_owners_destroy(&initial_owners);
@@ -759,11 +769,11 @@ bool minic_specialize_inline_integer_calls(MinicC0Program *program,
                 bool needs_section_clone;
                 size_t parameter_index;
 
-                if (nested->kind != MINIC_EXPRESSION_CALL ||
-                    nested->value.call.function_id == MINIC_FUNCTION_INVALID) {
+                if (nested->kind != MINIC_EXPRESSION_CALL) {
                     continue;
                 }
-                current_callee_id = nested->value.call.function_id;
+                current_callee_id = minic_inline_call_plan_get(
+                    call_plan, nested_expression_index);
                 if (current_callee_id >= program->function_count) {
                     continue;
                 }
@@ -822,11 +832,10 @@ bool minic_specialize_inline_integer_calls(MinicC0Program *program,
                         adds_fact = true;
                     }
                 }
-                /* The shared source AST can already name a clone made for a
-                 * different section. Recreate the identical known-value facts
-                 * in this specialized caller's section even when no argument
-                 * gains a new transitive fact; otherwise Core falls back to an
-                 * unlowerable generic Linux inline helper. */
+                /* The direct plan can already select a clone for a different
+                 * section. Recreate the same known-value facts in this
+                 * caller's section even without a new transitive argument
+                 * fact; otherwise Core may fall back to a generic helper. */
                 if (needs_section_clone) {
                     for (parameter_index = 0U;
                          parameter_index < nested_source.parameter_count;

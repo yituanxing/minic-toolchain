@@ -84,7 +84,6 @@ MINIC_SOURCES := \
 	src/compiler/inline_integer.c \
 	src/compiler/inline_symbolic.c \
 	src/compiler/inline_boolean.c \
-	src/compiler/inline_reference.c \
 	src/compiler/core_reachability.c \
 	src/core/core_ir.c \
 	src/compiler/c_lower/core_ir_source.c \
@@ -1921,6 +1920,19 @@ check-inline-specialize-common:
 	"$(abspath $(BUILD_DIR))/tests/compiler/inline-specialize-common"
 
 check-fast: check-inline-specialize-common
+
+.PHONY: check-p43-direct-record-callsite
+check-p43-direct-record-callsite: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+		bash tests/compiler/c0/probe-p43-direct-record-callsite.sh
+
+check-fast: check-p43-direct-record-callsite
+
+.PHONY: check-p43-inline-call-plan-identity
+check-p43-inline-call-plan-identity:
+	HOST_CC="$(CC)" bash tests/compiler/c0/probe-p43-inline-call-plan-identity.sh
+
+check-fast: check-p43-inline-call-plan-identity
 
 .PHONY: check-mc058-specialization-correctness
 check-mc058-specialization-correctness: $(MINIC_CC_BINARY)

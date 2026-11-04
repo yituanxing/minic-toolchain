@@ -23,6 +23,31 @@ enum {
     MINIC_INLINE_SPEC_FACT_ALL = 7U
 };
 
+/* Source-only opaque GNU asm reachability/clone eligibility. */
+bool minic_program_has_opaque_asm_symbol(
+    const MinicC0Program *program, const char *name, size_t name_length);
+bool minic_inline_source_has_opaque_asm_reference(
+    const MinicC0Program *program, const MinicFunction *source);
+
+/* Transient C Compiler-stage specialization decisions. A shared source AST
+ * always retains its canonical CALL.function_id; later passes consult this
+ * table to see the direct-call clone selected by preceding passes. Clones
+ * appended after initialization do not invalidate ExpressionId bindings. */
+typedef struct MinicInlineCallPlan {
+    const MinicC0Program *program;
+    MinicFunctionId *selected;
+    size_t selected_count;
+} MinicInlineCallPlan;
+
+bool minic_inline_call_plan_initialize(
+    MinicInlineCallPlan *plan, const MinicC0Program *program);
+MinicFunctionId minic_inline_call_plan_get(
+    const MinicInlineCallPlan *plan, MinicExpressionId expression_id);
+bool minic_inline_call_plan_set(
+    MinicInlineCallPlan *plan, MinicExpressionId expression_id,
+    MinicFunctionId function_id);
+void minic_inline_call_plan_destroy(MinicInlineCallPlan *plan);
+
 void minic_inline_spec_key_clear(MinicInlineSpecializationKey *key);
 bool minic_inline_spec_key_from_function(
     MinicInlineSpecializationKey *key, const MinicFunction *function,

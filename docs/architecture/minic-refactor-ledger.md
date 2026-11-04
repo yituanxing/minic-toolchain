@@ -2279,3 +2279,67 @@ migration, not six compatibility wrappers or a new ISA/ABI feature.
 | Exact P41 vs P42 five-ISA `.i` broad differential | **255/255 same outcomes**, 187 byte-identical `.s`, 68 both rejected, zero different |
 | Exact P41 vs P42 Inline/Section differential | **80/80 same outcomes**, 65 byte-identical `.s`, 15 both rejected, zero different |
 | Five-ISA original Linux GNU ELF/QEMU | **NOT RUN** in this architecture batch; historical or gate-only passes are not current-head certification |
+
+## IR-P43 — Canonical source CALL, one contextual Core resolver (2026-11-04)
+
+**Baseline:** P42 PR #674 (local `0ebf0c3`). Reviewed the complete AST
+Integer/Symbolic/Boolean variant-producer chain, Core direct scalar/record
+call consumers, function-reference retirement, and Module reachability before
+editing. This batch owns the *whole* caller-to-callee identity boundary, not
+one target-specific code generator or another compatibility layer.
+
+- **Immutable source CALL.** The three AST specialization passes no longer
+  overwrite the shared `Expression.value.call.function_id`. A compiler-owned,
+  append-safe `MinicInlineCallPlan` holds *lexical planning* selections across
+  all three passes, including original-owner section closure. It is destroyed
+  **before** Core lowering. Cloned FunctionBodies can therefore share their
+  original canonical CALL without accidentally sharing one active caller's
+  target.
+- **One contextual Core choice.** Replace four staged candidate selectors
+  with one callsite-proven scan over integer constants, normalized symbolic
+  name/byte-addend, Boolean ranges, and the exact caller section. Never use
+  facts invalidated by writes or unproved by the current context. For equal
+  symbolic facts, prefer the exact source argument ExpressionId so two
+  distinct inline GNU `asm volatile` callsites retain their separate emitted
+  clone identity (`mc058_words+4` remains present twice).
+- **One direct call producer.** Scalar, void, and Record-returning direct
+  calls now share contextual callee selection, left-to-right argument value
+  and Record-object snapshots, callee signature, and Core CALL append.
+  Preserve the separate indirect path, empty-void-helper elision, Record
+  variadic admission boundary, and machine ABI responsibility.
+- **Retire AST-pruning finalizer.** Delete the entire 227-line
+  `inline_reference.c` and its invocation/inventory. Clone creation inherits
+  initial source reference status, while the already-existing P32 Core/Module
+  closure determines final live emission. Move the still-needed opaque GNU
+  asm name scanners to the existing specialization common module, retaining
+  both compiler and ModuleIR consumers; no parallel reachability algorithm.
+- **A verified GCC counterexample.** Prior P42 emitted five-ISA assembly for
+  a section-qualified, multi-fact, direct Record-return call test, but its
+  x86 GNU-linked executable returned **11** while GCC `-O2` returned **0**.
+  P43's single Core path makes the MiniC result **0**. New identity unit
+  tests verify plan growth, three sequential selections and canonical source
+  CALL IDs after plan teardown.
+
+**Batch size before this size paragraph:** 17 paths, **+781/−881**
+(net **−100**); ten production paths **+414/−879** (net **−465**).
+The four new integration/unit test files add 295 lines; this deliberately
+replaces duplicate selection code and deletes an obsolete 227-line source.
+
+**Verification:** strict Release `-Werror` build; Debug `check-fast` including
+the new GNU/native and plan-identity gates; MC058 full relocations and stale
+facts; exact P42/P43 255-case five-target broad differential and 80-case
+inline/section differential. New P43 five-target `-S` plus x86 GNU AS/LD,
+native return and ELF `.head.text`/`.init.text` checks are distinct from
+five-target Linux/QEMU *runtime* verification. Optional cross-toolchain
+paths may report SKIP when unavailable; do not count them as passing.
+
+**Still open:** MC-007/008 mixed-fact counterexample coverage, MC-043 clone
+budget semantics and MC-068 GNU always-inline return-address effects. The
+direct Core selector currently scans all function variants linearly; a
+measured per-source variant index is an optimization candidate, not a
+correctness gate. The historical `b0-sources.txt` manifest was already out
+of sync with more than this deleted source in P42, so no Stage4 self-host
+claim is made here. Next full-owner batch: live typed GNU-ASM relocation
+edges and truly const AST traversal, then five-target source/machine ASM
+FormId contracts and shared machine dispatcher ownership. These are separate
+from the original five-ISA Linux GNU ELF/QEMU acceptance campaign.

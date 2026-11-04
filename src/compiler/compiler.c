@@ -246,6 +246,7 @@ int minic_compile_preprocessed_file_for_target(const char *input_path,
     MinicC0AstVerifyFailure verify_failure;
     const MinicBackend *backend;
     MinicInlineBooleanDomainStats boolean_stats = {0};
+    MinicInlineCallPlan inline_call_plan = {0};
     bool success;
 
     if (input_path == NULL || output_path == NULL) {
@@ -321,26 +322,32 @@ int minic_compile_preprocessed_file_for_target(const char *input_path,
                              "cannot compute inline emission reachability");
         success = false;
     }
-    if (success && !minic_specialize_inline_integer_calls(&program, invocation)) {
+    if (success && !minic_inline_call_plan_initialize(&inline_call_plan, &program)) {
+        minic_set_diagnostic(diagnostic, input_path, 1U, 1U,
+                             "cannot initialize inline specialization plan");
+        success = false;
+    }
+    if (success && !minic_specialize_inline_integer_calls(
+            &program, invocation, &inline_call_plan)) {
         minic_set_diagnostic(diagnostic, input_path, 1U, 1U,
                              "cannot specialize inline integer call sites");
         success = false;
     }
-    if (success && !minic_specialize_inline_symbolic_calls(&program, invocation)) {
+    if (success && !minic_specialize_inline_symbolic_calls(
+            &program, invocation, &inline_call_plan)) {
         minic_set_diagnostic(diagnostic, input_path, 1U, 1U,
                              "cannot specialize inline symbolic address call sites");
         success = false;
     }
-    if (success && !minic_specialize_inline_boolean_range_calls(&program, invocation, &boolean_stats)) {
+    if (success && !minic_specialize_inline_boolean_range_calls(
+            &program, invocation, &inline_call_plan, &boolean_stats)) {
         minic_set_diagnostic(diagnostic, input_path, 1U, 1U,
                              "cannot specialize inline boolean range call sites");
         success = false;
     }
-    if (success && !minic_finalize_inline_integer_specialization_references(&program)) {
-        minic_set_diagnostic(diagnostic, input_path, 1U, 1U,
-                             "cannot finalize inline specialization reachability");
-        success = false;
-    }
+    /* The source AST is never retargeted; the plan belongs exclusively to
+     * variant discovery and is intentionally invisible to Core lowering. */
+    minic_inline_call_plan_destroy(&inline_call_plan);
     if (success) {
         minic_bootstrap_trace_stage(input_path, "core-set", "begin", program.function_count);
     }

@@ -609,7 +609,7 @@ bool minic_add_inline_symbolic_specialization(
 
 bool minic_specialize_inline_symbolic_calls(
     MinicC0Program *program,
-    const MinicTargetInvocation *target) {
+    const MinicTargetInvocation *target, MinicInlineCallPlan *call_plan) {
     size_t expression_index;
     size_t initial_clone_count = 0U;
     size_t transitive_clone_count = 0U;
@@ -618,7 +618,8 @@ bool minic_specialize_inline_symbolic_calls(
     bool *stable_locals = NULL;
     size_t stable_local_count;
 
-    if (program == NULL || target == NULL) {
+    if (program == NULL || target == NULL || call_plan == NULL ||
+        call_plan->program != program) {
         return false;
     }
     original_function_count = program->function_count;
@@ -655,11 +656,10 @@ bool minic_specialize_inline_symbolic_calls(
         bool adds_symbol = false;
         size_t i;
 
-        if (call->kind != MINIC_EXPRESSION_CALL ||
-            call->value.call.function_id == MINIC_FUNCTION_INVALID) {
+        if (call->kind != MINIC_EXPRESSION_CALL) {
             continue;
         }
-        current_id = call->value.call.function_id;
+        current_id = minic_inline_call_plan_get(call_plan, expression_index);
         if (current_id >= program->function_count) {
             continue;
         }
@@ -737,7 +737,11 @@ bool minic_specialize_inline_symbolic_calls(
             }
             initial_clone_count += 1U;
         }
-        program->expressions[expression_index].value.call.function_id = variant_id;
+        if (!minic_inline_call_plan_set(call_plan, expression_index, variant_id)) {
+            minic_inline_initial_owners_destroy(&initial_owners);
+            free(stable_locals);
+            return false;
+        }
     }
     minic_inline_initial_owners_destroy(&initial_owners);
 
@@ -781,11 +785,11 @@ bool minic_specialize_inline_symbolic_calls(
                 bool needs_section_clone;
                 size_t i;
 
-                if (nested->kind != MINIC_EXPRESSION_CALL ||
-                    nested->value.call.function_id == MINIC_FUNCTION_INVALID) {
+                if (nested->kind != MINIC_EXPRESSION_CALL) {
                     continue;
                 }
-                current_id = nested->value.call.function_id;
+                current_id = minic_inline_call_plan_get(
+                    call_plan, nested_expression_index);
                 if (current_id >= program->function_count) {
                     continue;
                 }

@@ -522,13 +522,14 @@ static bool minic_add_inline_boolean_range_specialization(
     return true;
 }
 
-/* Direct specialization rewrites a shared source-AST call once, but that AST
- * remains the body of its original (non-specialized) inline owner too. A
- * later caller-specific section can therefore make that original body's
- * call point at a clone from .init.text/.head.text. Close the *original*
- * owner's section as well as the transitive clone owners below, preserving
- * integer, symbolic and Boolean-range facts verbatim. */
-static bool minic_close_original_inline_caller_sections(MinicC0Program *program) {
+/* The direct-call plan selects a clone once per shared ExpressionId, but the
+ * immutable source AST is also executed by its original inline owner. A
+ * caller-specific section may select a clone in .init.text/.head.text that
+ * differs from the original body's section. Close the original owner's
+ * section as well as the transitive clone owners below, preserving integer,
+ * symbolic and Boolean-range facts verbatim. */
+static bool minic_close_original_inline_caller_sections(
+    MinicC0Program *program, const MinicInlineCallPlan *call_plan) {
     MinicInlineInitialOwners owners = {0};
     size_t expression_index;
     size_t added = 0U;
@@ -552,12 +553,14 @@ static bool minic_close_original_inline_caller_sections(MinicC0Program *program)
         MinicFunctionId variant_id = MINIC_FUNCTION_INVALID;
         MinicInlineSpecializationKey key;
 
+        MinicFunctionId current_id = minic_inline_call_plan_get(
+            call_plan, expression_index);
         if (expression->kind != MINIC_EXPRESSION_CALL ||
-            expression->value.call.function_id >= program->function_count ||
+            current_id >= program->function_count ||
             owner_id >= program->function_count) continue;
         caller = program->functions[owner_id];
         if (!caller.is_defined || caller.is_integer_specialization) continue;
-        current = program->functions[expression->value.call.function_id];
+        current = program->functions[current_id];
         if (!current.is_integer_specialization ||
             current.specialization_source >= program->function_count) continue;
         source_id = current.specialization_source;
@@ -594,13 +597,15 @@ static bool minic_close_original_inline_caller_sections(MinicC0Program *program)
 
 static bool minic_specialize_inline_boolean_range_calls_for_pass(
     MinicC0Program *program,
-    const MinicTargetInvocation *target, MinicInlineBooleanDomainPassState *state) {
+    const MinicTargetInvocation *target, MinicInlineCallPlan *call_plan,
+    MinicInlineBooleanDomainPassState *state) {
     size_t expression_index;
     size_t direct_clone_count = 0U;
     size_t transitive_clone_count = 0U;
     MinicInlineInitialOwners initial_owners = {0};
 
-    if (program == NULL || target == NULL) {
+    if (program == NULL || target == NULL || call_plan == NULL ||
+        call_plan->program != program) {
         return false;
     }
     if (!minic_inline_initial_owners_build(
@@ -609,8 +614,8 @@ static bool minic_specialize_inline_boolean_range_calls_for_pass(
         return false;
     }
 
-    /* First, calls whose source expression itself has _Bool type are safe to
-       rewrite globally: that {0,1} property does not depend on caller state. */
+    /* First, source-expression _Bool facts apply to all direct uses of this
+     * ExpressionId; record them in the plan without mutating source CALLs. */
     for (expression_index = 0U; expression_index < program->expression_count;
          ++expression_index) {
         MinicExpression *call = &program->expressions[expression_index];
@@ -624,11 +629,10 @@ static bool minic_specialize_inline_boolean_range_calls_for_pass(
         bool adds_range = false;
         size_t i;
 
-        if (call->kind != MINIC_EXPRESSION_CALL ||
-            call->value.call.function_id == MINIC_FUNCTION_INVALID) {
+        if (call->kind != MINIC_EXPRESSION_CALL) {
             continue;
         }
-        current_id = call->value.call.function_id;
+        current_id = minic_inline_call_plan_get(call_plan, expression_index);
         if (current_id >= program->function_count) {
             continue;
         }
@@ -703,10 +707,14 @@ static bool minic_specialize_inline_boolean_range_calls_for_pass(
             }
             direct_clone_count += 1U;
         }
-        program->expressions[expression_index].value.call.function_id = variant_id;
+        if (!minic_inline_call_plan_set(call_plan, expression_index, variant_id)) {
+            minic_inline_initial_owners_destroy(&initial_owners);
+            return false;
+        }
     }
     minic_inline_initial_owners_destroy(&initial_owners);
-    if (!minic_close_original_inline_caller_sections(program)) return false;
+    if (!minic_close_original_inline_caller_sections(program, call_plan))
+        return false;
 
     /* Then close range facts through already-specialized callers.  Do not
        rewrite the shared source AST here; Core lowering selects the matching
@@ -775,12 +783,12 @@ static bool minic_specialize_inline_boolean_range_calls_for_pass(
                 bool needs_section_clone;
                 size_t parameter_index;
 
-                if (nested->kind != MINIC_EXPRESSION_CALL ||
-                    nested->value.call.function_id == MINIC_FUNCTION_INVALID) {
+                if (nested->kind != MINIC_EXPRESSION_CALL) {
                     continue;
                 }
                 boolean_call_candidates += 1U;
-                current_id = nested->value.call.function_id;
+                current_id = minic_inline_call_plan_get(
+                    call_plan, nested_expression_index);
                 if (current_id >= program->function_count) {
                     continue;
                 }
@@ -872,11 +880,12 @@ static bool minic_specialize_inline_boolean_range_calls_for_pass(
 /* Own the cache over the complete pass, even on conservative early failure. */
 bool minic_specialize_inline_boolean_range_calls(
     MinicC0Program *program, const MinicTargetInvocation *target,
-    MinicInlineBooleanDomainStats *stats_out) {
+    MinicInlineCallPlan *call_plan, MinicInlineBooleanDomainStats *stats_out) {
     MinicInlineBooleanDomainPassState state;
     bool success;
     (void)memset(&state, 0, sizeof(state));
-    success = minic_specialize_inline_boolean_range_calls_for_pass(program, target, &state);
+    success = minic_specialize_inline_boolean_range_calls_for_pass(
+        program, target, call_plan, &state);
     if (stats_out != NULL) *stats_out = state.stats;
     free(state.cache.values);
     free(state.cache.stable_parameters);
