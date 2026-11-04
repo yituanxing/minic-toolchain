@@ -15,8 +15,9 @@ on:
     branches:
       - "main"
       # A single opt-in GNU golden refresh for MiniLD final-link replay.
-      # Job-level gates below require this exact workflow file in the head
-      # commit plus [minild-golden-refresh]; regular feature pushes are skip.
+      # Push path filtering requires this workflow change, and the job-level
+      # marker below opts in exactly one GNU golden refresh.  Avoid relying
+      # on head_commit.modified, which is absent in some GitHub ref updates.
       - "refactor/minias-target-isa-abi-core"
     paths:
       - '.github/workflows/linux-runtime-gcc-baseline.yml'
@@ -74,8 +75,7 @@ jobs:
       (github.ref == 'refs/heads/main' && contains(github.event.head_commit.message, '[linux-runtime-gcc]')) ||
       (github.event_name == 'push' &&
        github.ref == 'refs/heads/refactor/minias-target-isa-abi-core' &&
-       contains(github.event.head_commit.message, '[minild-golden-refresh]') &&
-       contains(github.event.head_commit.modified, '.github/workflows/linux-runtime-gcc-baseline.yml'))
+       contains(github.event.head_commit.message, '[minild-golden-refresh]'))
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
@@ -247,8 +247,7 @@ jobs:
         if: >-
           github.event_name == 'push' &&
           github.ref == 'refs/heads/refactor/minias-target-isa-abi-core' &&
-          contains(github.event.head_commit.message, '[minild-golden-refresh]') &&
-          contains(github.event.head_commit.modified, '.github/workflows/linux-runtime-gcc-baseline.yml')
+          contains(github.event.head_commit.message, '[minild-golden-refresh]')
         timeout-minutes: 5
         shell: bash
         run: |
@@ -278,8 +277,7 @@ jobs:
         if: >-
           always() && github.event_name == 'push' &&
           github.ref == 'refs/heads/refactor/minias-target-isa-abi-core' &&
-          contains(github.event.head_commit.message, '[minild-golden-refresh]') &&
-          contains(github.event.head_commit.modified, '.github/workflows/linux-runtime-gcc-baseline.yml')
+          contains(github.event.head_commit.message, '[minild-golden-refresh]')
         uses: actions/upload-artifact@v4
         with:
           name: minild-rv64-fresh-golden-final-${{ github.sha }}
