@@ -311,9 +311,9 @@ fi
 grep -Fq invalid-loongarch-static-got-reloc "$work/tls-nontls.log"
 echo 'MINILD_LOONGARCH_STATIC=PASS weak_undef_tls=zero weak_undef_nontls=fail_closed'
 
-# For a relaxation-enabled alignment whose reserved NOPs do not already
-# produce a correct boundary, fail closed until target section relaxation is
-# implemented.  A link success here would silently corrupt alignment.
+# R_LARCH_ALIGN must delete unnecessary NOPs while preserving symbol
+# addresses and instruction fixups.  The historical failure here was the
+# missing target relaxation hook, not a legal fail-closed output.
 cat >"$work/align.s" <<'ASM'
 .text
 .option relax
@@ -327,14 +327,178 @@ ASM
 "$MINIAS" --target=loongarch64 -march=loongarch64 -mabi=lp64d \
     -o "$work/align.o" "$work/align.s"
 grep -Fq R_LARCH_ALIGN <(readelf -Wr "$work/align.o")
+"$MINILD" -m elf64loongarch -static -e _start \
+    -o "$work/align.elf" "$work/align.o"
+python3 - "$work/align.o" "$work/align.elf" <<'PY'
+from pathlib import Path
+import struct,sys
+
+def load(path):
+    b=Path(path).read_bytes()
+    off=struct.unpack_from('<Q',b,40)[0]
+    num=struct.unpack_from('<H',b,60)[0]
+    names_index=struct.unpack_from('<H',b,62)[0]
+    sec=[struct.unpack_from('<IIQQQQIIQQ',b,off+64*i)
+         for i in range(num)]
+    tab=sec[names_index]; strings=b[tab[4]:tab[4]+tab[5]]
+    def name(s):
+        p=s[0]; return strings[p:strings.index(0,p)].decode()
+    sections={name(s):s for s in sec}
+    sym=sections['.symtab']; strings_section=sec[sym[6]]
+    st=b[strings_section[4]:strings_section[4]+strings_section[5]]
+    symbols={}
+    for pos in range(sym[4],sym[4]+sym[5],24):
+        p,_,_,_,value,_=struct.unpack_from('<IBBHQQ',b,pos)
+        if p: symbols[st[p:st.index(0,p)].decode()]=value
+    return sections,symbols
+
+raw,raw_symbols=load(sys.argv[1]); exe,exe_symbols=load(sys.argv[2])
+assert exe['.text'][5]==raw['.text'][5]-4, ('NOP shrink',raw['.text'][5],exe['.text'][5])
+assert (exe_symbols['after_align']-exe['.text'][3])%16==0, 'misaligned label'
+assert exe_symbols['after_align']-exe['.text'][3]==16, 'wrong aligned symbol'
+print('MINILD_LOONGARCH_STATIC=PASS mandatory_ALIGN_shrink=4 symbol_aligned=16')
+PY
+
+# Two independent alignment sites affect the branch relocation and function
+# size simultaneously.  Test source is also independently linked/run by GNU
+# BFD + QEMU below; MiniAS is deliberately the common input producer.
+"$MINIAS" --target=loongarch64 -march=loongarch64 -mabi=lp64d \
+    -o "$work/two-aligns.o" \
+    "$repo/tests/linker/fixtures/loongarch-align-two-shrinks.S"
+test "$(readelf -Wr "$work/two-aligns.o" | grep -c R_LARCH_ALIGN)" -eq 2
+"$MINILD" -m elf64loongarch -static -e _start \
+    -o "$work/two-aligns-mini.elf" "$work/two-aligns.o"
+python3 - "$work/two-aligns.o" "$work/two-aligns-mini.elf" <<'PY'
+from pathlib import Path
+import struct,sys
+
+def load(path):
+    b=Path(path).read_bytes()
+    assert b[:6]==b'\x7fELF\x02\x01' and struct.unpack_from('<H',b,18)[0]==258
+    off=struct.unpack_from('<Q',b,40)[0]
+    n=struct.unpack_from('<H',b,60)[0]
+    si=struct.unpack_from('<H',b,62)[0]
+    secs=[struct.unpack_from('<IIQQQQIIQQ',b,off+64*i) for i in range(n)]
+    names=b[secs[si][4]:secs[si][4]+secs[si][5]]
+    def name(s):
+        p=s[0]; return names[p:names.index(0,p)].decode()
+    sections={name(s):s for s in secs}
+    sym=sections['.symtab']; st=secs[sym[6]]
+    strings=b[st[4]:st[4]+st[5]]; symbols={}
+    for p in range(sym[4],sym[4]+sym[5],24):
+        idx,info,_,_,value,size=struct.unpack_from('<IBBHQQ',b,p)
+        if idx: symbols[strings[idx:strings.index(0,idx)].decode()]=(value,size,info&15)
+    return b,sections,symbols
+
+raw,raw_sec,raw_sym=load(sys.argv[1]); b,sec,sym=load(sys.argv[2])
+text=sec['.text']; old=raw_sec['.text']
+assert old[5]==52 and text[5]==44, ('two shrink events',old[5],text[5])
+assert text[3]%16==0 and sym['aligned_one'][0]-text[3]==16
+assert sym['aligned_two'][0]-text[3]==32
+assert sym['_start']==(text[3],44,2), ('function size must track shrink',sym['_start'])
+insn=struct.unpack_from('<I',b,text[4])[0]
+assert insn&0xfc000000==0x50000000
+disp=((insn>>10)&0xffff)|((insn&0x3ff)<<16)
+assert disp<<2==32, ('B26 relocation should target shrunk aligned_two',hex(insn))
+phoff=struct.unpack_from('<Q',b,32)[0]
+phnum=struct.unpack_from('<H',b,56)[0]
+assert any(struct.unpack_from('<I',b,phoff+i*56)[0]==1 for i in range(phnum)), 'no PT_LOAD'
+print('MINILD_LOONGARCH_STATIC=PASS ALIGN_two_shrinks=8 remapped_symbols=2 branch_B26=32 function_size=44')
+PY
+
+# Corrupt one assembler-reserved NOP.  An invalid R_LARCH_ALIGN must never be
+# silently removed by a generic no-op relocation filter.
+cp "$work/two-aligns.o" "$work/two-aligns-bad-nop.o"
+python3 - "$work/two-aligns-bad-nop.o" <<'PY'
+from pathlib import Path
+import struct,sys
+p=Path(sys.argv[1]); b=bytearray(p.read_bytes())
+off=struct.unpack_from('<Q',b,40)[0]
+n=struct.unpack_from('<H',b,60)[0]
+secs=[struct.unpack_from('<IIQQQQIIQQ',b,off+64*i) for i in range(n)]
+patched=0
+for sec in secs:
+    if sec[1]!=4: continue
+    text=secs[sec[7]]
+    for pos in range(sec[4],sec[4]+sec[5],24):
+        at,info,addend=struct.unpack_from('<QQq',b,pos)
+        if info&0xffffffff==102:
+            start=text[4]+at
+            assert struct.unpack_from('<I',b,start)[0]==0x03400000
+            struct.pack_into('<I',b,start,0)
+            patched+=1
+            break
+    if patched: break
+assert patched==1,patched
+p.write_bytes(b)
+PY
 if "$MINILD" -m elf64loongarch -static -e _start \
-    -o "$work/align.elf" "$work/align.o" >"$work/align.log" 2>&1; then
-    echo 'MINILD_LOONGARCH_STATIC=FAIL ignored_alignment_shrink_requirement' >&2
+    -o "$work/two-aligns-bad-nop.elf" "$work/two-aligns-bad-nop.o" \
+    >"$work/two-aligns-bad-nop.log" 2>&1; then
+    echo 'MINILD_LOONGARCH_STATIC=FAIL accepted_malformed_ALIGN_NOP' >&2
     exit 1
 fi
-grep -Eq 'loongarch-align-needs-relaxation|invalid-loongarch-static-align' \
-    "$work/align.log"
-echo 'MINILD_LOONGARCH_STATIC=PASS mandatory_align_relaxation=fail_closed'
+grep -Fq invalid-loongarch-align-nop "$work/two-aligns-bad-nop.log"
+echo 'MINILD_LOONGARCH_STATIC=PASS malformed_ALIGN_NOP=rejected'
+
+# A second alignment relocation cannot claim bytes inside a preceding NOP
+# reservation; otherwise the linker would consume bytes twice.
+cp "$work/two-aligns.o" "$work/two-aligns-overlap.o"
+python3 - "$work/two-aligns-overlap.o" <<'PY'
+from pathlib import Path
+import struct,sys
+p=Path(sys.argv[1]); b=bytearray(p.read_bytes())
+off=struct.unpack_from('<Q',b,40)[0]
+n=struct.unpack_from('<H',b,60)[0]
+secs=[struct.unpack_from('<IIQQQQIIQQ',b,off+64*i) for i in range(n)]
+aligns=[]
+for sec in secs:
+    if sec[1]==4:
+        aligns += [pos for pos in range(sec[4],sec[4]+sec[5],24)
+                   if struct.unpack_from('<Q',b,pos+8)[0]&0xffffffff==102]
+assert len(aligns)==2,aligns
+struct.pack_into('<Q',b,aligns[1],12)
+p.write_bytes(b)
+PY
+if "$MINILD" -m elf64loongarch -static -e _start \
+    -o "$work/two-aligns-overlap.elf" "$work/two-aligns-overlap.o" \
+    >"$work/two-aligns-overlap.log" 2>&1; then
+    echo 'MINILD_LOONGARCH_STATIC=FAIL accepted_overlapping_ALIGN_sites' >&2
+    exit 1
+fi
+grep -Fq loongarch-align-overlap "$work/two-aligns-overlap.log"
+echo 'MINILD_LOONGARCH_STATIC=PASS overlapping_ALIGN_sites=rejected'
+
+# A named live symbol in the removable tail of NOPs cannot be projected to
+# an arbitrary address.  Leave it fatal instead of fabricating its meaning.
+cp "$work/two-aligns.o" "$work/two-aligns-deleted-symbol.o"
+python3 - "$work/two-aligns-deleted-symbol.o" <<'PY'
+from pathlib import Path
+import struct,sys
+p=Path(sys.argv[1]); b=bytearray(p.read_bytes())
+off=struct.unpack_from('<Q',b,40)[0]
+n=struct.unpack_from('<H',b,60)[0]
+secs=[struct.unpack_from('<IIQQQQIIQQ',b,off+64*i) for i in range(n)]
+sym=next(s for s in secs if s[1]==2)
+st=secs[sym[6]]; names=b[st[4]:st[4]+st[5]]
+changed=0
+for pos in range(sym[4],sym[4]+sym[5],24):
+    idx=struct.unpack_from('<I',b,pos)[0]
+    if idx and names[idx:names.index(0,idx)]==b'aligned_one':
+        assert struct.unpack_from('<Q',b,pos+8)[0]==20
+        struct.pack_into('<Q',b,pos+8,18)
+        changed+=1
+assert changed==1,changed
+p.write_bytes(b)
+PY
+if "$MINILD" -m elf64loongarch -static -e _start \
+    -o "$work/two-aligns-deleted-symbol.elf" "$work/two-aligns-deleted-symbol.o" \
+    >"$work/two-aligns-deleted-symbol.log" 2>&1; then
+    echo 'MINILD_LOONGARCH_STATIC=FAIL accepted_symbol_in_deleted_ALIGN_NOP' >&2
+    exit 1
+fi
+grep -Fq loongarch-align-deleted-symbol "$work/two-aligns-deleted-symbol.log"
+echo 'MINILD_LOONGARCH_STATIC=PASS symbol_in_deleted_ALIGN_NOP=rejected'
 
 cat >"$work/align-ok.s" <<'ASM'
 .text
@@ -386,6 +550,8 @@ fi
 if command -v "$GNU_LD" >/dev/null && command -v "$QEMU_USER" >/dev/null; then
     "$GNU_LD" -m elf64loongarch -static -e _start \
         -o "$work/gnu.elf" "$work/control.o"
+    "$GNU_LD" -m elf64loongarch -static -e _start \
+        -o "$work/two-aligns-gnu.elf" "$work/two-aligns.o"
     mini_rc=0; gnu_rc=0
     timeout 15s "$QEMU_USER" "$work/mini.elf" >"$work/mini.out" \
         2>"$work/mini.err" || mini_rc=$?
@@ -395,6 +561,15 @@ if command -v "$GNU_LD" >/dev/null && command -v "$QEMU_USER" >/dev/null; then
     cmp "$work/mini.out" "$work/gnu.out"
     cmp "$work/mini.err" "$work/gnu.err"
     echo 'MINILD_LOONGARCH_STATIC=PASS GNU_BFD_QEMU_runtime_parity=1'
+    mini_align_rc=0; gnu_align_rc=0
+    timeout 15s "$QEMU_USER" "$work/two-aligns-mini.elf" \
+        >"$work/two-aligns-mini.out" 2>"$work/two-aligns-mini.err" || mini_align_rc=$?
+    timeout 15s "$QEMU_USER" "$work/two-aligns-gnu.elf" \
+        >"$work/two-aligns-gnu.out" 2>"$work/two-aligns-gnu.err" || gnu_align_rc=$?
+    test "$mini_align_rc" -eq 0 && test "$gnu_align_rc" -eq 0
+    cmp "$work/two-aligns-mini.out" "$work/two-aligns-gnu.out"
+    cmp "$work/two-aligns-mini.err" "$work/two-aligns-gnu.err"
+    echo 'MINILD_LOONGARCH_STATIC=PASS GNU_BFD_QEMU_ALIGN_two_shrink_runtime_parity=1'
 else
     echo 'MINILD_LOONGARCH_STATIC=SKIP GNU_BFD_QEMU_runtime_parity missing_cross_tools'
 fi

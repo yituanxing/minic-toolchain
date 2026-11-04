@@ -166,7 +166,11 @@ static void store_u64le(unsigned char *data, uint64_t value) {
 
 #include "linker_static_got.inc"
 
+#include "linker_align_relax_common.inc"
+
 #include "linker_riscv_align_relax.inc"
+
+#include "linker_loongarch_align_relax.inc"
 
 /* Relaxation is a target machine-byte policy, never a generic relocation
  * number switch. Other targets retain their bytes until their own hook is

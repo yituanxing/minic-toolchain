@@ -46,6 +46,8 @@ _start:
     ldr x15,[x13]
     add x24,x24,:lo12:tls_missing
 .size _start,.-_start
+.type tls_alpha,@tls_object
+.type tls_beta,@tls_object
 .weak tls_missing
 .type tls_missing,@tls_object
 ASM

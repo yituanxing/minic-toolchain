@@ -55,6 +55,7 @@ jobs:
             check-minild-multitarget-static \
             check-minild-rv32-static-runtime \
             check-minild-riscv-static-tls \
+            check-minild-riscv-uleb-static \
             check-minild-aarch64-static-got \
             check-minild-aarch64-static-tls \
             check-minild-loongarch-static-relocs \

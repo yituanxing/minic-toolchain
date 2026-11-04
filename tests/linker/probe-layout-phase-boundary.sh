@@ -47,7 +47,9 @@ names = (
     'linker_layout_finalize.inc',
     'linker_common_allocation.inc',
     'linker_riscv_fixup.inc',
+    'linker_align_relax_common.inc',
     'linker_riscv_align_relax.inc',
+    'linker_loongarch_align_relax.inc',
     'linker_static_got.inc',
     'linker_static_reloc_scan.inc',
     'linker_static_reloc_operands.inc',
@@ -96,7 +98,9 @@ expected = {
     ('linker_core.inc', 'linker_layout.inc'),
     ('linker_layout.inc', 'linker_riscv_fixup.inc'),
     ('linker_layout.inc', 'linker_static_got.inc'),
+    ('linker_layout.inc', 'linker_align_relax_common.inc'),
     ('linker_layout.inc', 'linker_riscv_align_relax.inc'),
+    ('linker_layout.inc', 'linker_loongarch_align_relax.inc'),
     ('linker_layout.inc', 'linker_script_layout.inc'),
     ('linker_layout.inc', 'linker_vdso_layout.inc'),
     ('linker_layout.inc', 'linker_layout_finalize.inc'),
@@ -140,7 +144,7 @@ type_owners = {
     'MiniLdLayout': 'linker_layout.inc',
     'MiniLdPcrelSlot': 'linker_riscv_fixup.inc',
     'MiniLdAlignSite': 'linker_riscv_align_relax.inc',
-    'MiniLdRelaxEvent': 'linker_riscv_align_relax.inc',
+    'MiniLdRelaxEvent': 'linker_align_relax_common.inc',
     'MiniLdStaticTargetPlan': 'linker_static_got.inc',
     'MiniLdStaticRelocOperands': 'linker_static_reloc_operands.inc',
     'MiniLdRiscvStaticGot': 'linker_riscv_static_got.inc',
@@ -275,7 +279,7 @@ for expected_owner, functions in owners.items():
             raise SystemExit(f'MINILD_LAYOUT_PHASE_STRUCTURE=FAIL '
                              f'function={function} definitions={actual}')
 
-print('MINILD_LAYOUT_PHASE_STRUCTURE=PASS modules=19 '
+print('MINILD_LAYOUT_PHASE_STRUCTURE=PASS modules=21 '
       'single_layout_type=1 target_opaque_static_plan=1 '
       'explicit_target_owners=10 unique_phase_functions=30 '
       'include_graph=nonrecursive build=single_translation_unit')

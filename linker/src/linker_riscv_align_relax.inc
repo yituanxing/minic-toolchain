@@ -7,11 +7,6 @@ typedef struct MiniLdAlignSite {
     size_t max_padding;
 } MiniLdAlignSite;
 
-typedef struct MiniLdRelaxEvent {
-    size_t raw_end;
-    size_t cumulative_deleted;
-} MiniLdRelaxEvent;
-
 static int static_align_site_compare(const void *left, const void *right) {
     const MiniLdAlignSite *a = left;
     const MiniLdAlignSite *b = right;
@@ -50,22 +45,6 @@ static bool static_append_riscv_nops(unsigned char *output,
         length = 0U;
     }
     return length == 0U;
-}
-
-static size_t static_map_relaxed_offset(
-    size_t raw_offset,
-    const MiniLdRelaxEvent *events,
-    size_t event_count) {
-    size_t deleted = 0U;
-    size_t i;
-
-    for (i = 0U; i < event_count; ++i) {
-        if (raw_offset < events[i].raw_end) {
-            break;
-        }
-        deleted = events[i].cumulative_deleted;
-    }
-    return raw_offset - deleted;
 }
 
 static bool static_relax_align_section(MiniLdState *state,

@@ -35,6 +35,40 @@ static bool riscv_shared_patch_arithmetic_relocations(
         }
         target = minild_target_addend_bits(symbol_value, reloc->addend);
 
+        if (reloc->type == R_RISCV_SET_ULEB128) {
+            const MiniLdReloc *sub_reloc;
+            bool sub_live;
+            uint64_t sub_symbol_value;
+
+            if (i + 1U >= state->relocations.count) {
+                fprintf(state->diagnostics,
+                        "minic-ld: riscv-uleb-unpaired-relocation\n");
+                return false;
+            }
+            sub_reloc = &state->relocations.entries[i + 1U];
+            if (!shared_relocation_live_source(
+                    state, output_plan, sub_reloc->section, &sub_live) ||
+                !sub_live || sub_reloc->section != reloc->section ||
+                !shared_resolve_static_relocation_target(
+                    state, layout, output_plan, sub_reloc,
+                    (section->flags & SHF_ALLOC) == 0U,
+                    &sub_symbol_value) ||
+                !minild_riscv_apply_uleb128_pair(
+                    section, reloc, sub_reloc, (uint64_t)target,
+                    (uint64_t)minild_target_addend_bits(
+                        sub_symbol_value, sub_reloc->addend),
+                    state->diagnostics)) {
+                return false;
+            }
+            ++i;
+            continue;
+        }
+        if (reloc->type == R_RISCV_SUB_ULEB128) {
+            fprintf(state->diagnostics,
+                    "minic-ld: riscv-uleb-unpaired-relocation\n");
+            return false;
+        }
+
         if (!minild_target_apply_arithmetic(
                 section, reloc, target, true, state->diagnostics)) {
             return false;

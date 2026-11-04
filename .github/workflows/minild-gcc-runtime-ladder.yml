@@ -63,8 +63,8 @@ jobs:
         run: |
           case '${{ matrix.arch }}' in
             x86_64) make MODE=release CFLAGS=-Werror check-minild-x86-crt-got-relax ;;
-            riscv32) make MODE=release CFLAGS=-Werror check-minild-riscv-static-tls check-minild-static-nonalloc-relocations ;;
-            riscv64) make MODE=release CFLAGS=-Werror check-minild-riscv-static-tls ;;
+            riscv32) make MODE=release CFLAGS=-Werror check-minild-riscv-static-tls check-minild-riscv-uleb-static check-minild-static-nonalloc-relocations ;;
+            riscv64) make MODE=release CFLAGS=-Werror check-minild-riscv-static-tls check-minild-riscv-uleb-static ;;
             aarch64) make MODE=release CFLAGS=-Werror check-minild-aarch64-static-got check-minild-aarch64-static-tls ;;
             loongarch64) make MODE=release CFLAGS=-Werror check-minild-loongarch-static-relocs ;;
           esac

@@ -395,13 +395,6 @@ static bool minild_loongarch_static_validate_aligns(
 
     for (i = 0U; i < state->relocations.count; ++i) {
         const MiniLdReloc *reloc = &state->relocations.entries[i];
-        MiniLdSection *section;
-        uint64_t alignment;
-        uint64_t bytes;
-        uint64_t place;
-        size_t off;
-        size_t j;
-
         if (reloc->type != R_LARCH_ALIGN) {
             continue;
         }
@@ -409,62 +402,12 @@ static bool minild_loongarch_static_validate_aligns(
             (layout->scripted && layout->work[reloc->section].discarded)) {
             continue;
         }
-        section = &state->work.sections[reloc->section];
-        if (section->type != SHT_PROGBITS ||
-            (section->flags & SHF_EXECINSTR) == 0U ||
-            reloc->addend < 0 || reloc->offset > SIZE_MAX) {
-            goto invalid_align;
-        }
-        if (reloc->symbol != SIZE_MAX) {
-            unsigned exponent = (unsigned)((uint64_t)reloc->addend & 0xffU);
-            uint64_t skip_limit = (uint64_t)reloc->addend >> 8U;
-
-            if (exponent < 2U || exponent > 20U) {
-                goto invalid_align;
-            }
-            alignment = UINT64_C(1) << exponent;
-            bytes = alignment - 4U;
-            /* Max-skip directives cannot retain all of their temporary
-             * reserve bytes: GNU's relaxation must remove them. */
-            if (skip_limit != 0U && bytes > skip_limit) {
-                goto invalid_align;
-            }
-        } else {
-            bytes = (uint64_t)reloc->addend;
-            if (bytes > UINT64_C(0x100000) || (bytes & 3U) != 0U) {
-                goto invalid_align;
-            }
-            alignment = 4U;
-            while (alignment <= bytes) {
-                alignment <<= 1U;
-            }
-        }
-        off = (size_t)reloc->offset;
-        if (bytes > SIZE_MAX || !range_ok(off, (size_t)bytes, section->size) ||
-            layout->work[reloc->section].vaddr > UINT64_MAX - reloc->offset ||
-            (place = layout->work[reloc->section].vaddr + reloc->offset) >
-                UINT64_MAX - bytes) {
-            goto invalid_align;
-        }
-        for (j = 0U; j < (size_t)bytes; j += 4U) {
-            if (load_u32le(section->data + off + j) !=
-                UINT32_C(0x03400000)) {
-                goto invalid_align;
-            }
-        }
-        if ((place + bytes) % alignment != 0U) {
-            fprintf(state->diagnostics,
-                    "minic-ld: loongarch-align-needs-relaxation:%s:%zu"
-                    ":alignment=%llu:reserved=%llu\n",
-                    section->name, off, (unsigned long long)alignment,
-                    (unsigned long long)bytes);
-            return false;
-        }
-        continue;
-
-    invalid_align:
+        /* Every allocated live alignment site must have been validated,
+         * shortened and marked NONE by the pre-layout target hook.  A
+         * leftover site in a non-allocated or otherwise skipped section is
+         * unsupported, never silently discarded. */
         fprintf(state->diagnostics,
-                "minic-ld: invalid-loongarch-static-align:%zu\n", i);
+                "minic-ld: unrelaxed-loongarch-static-align:%zu\n", i);
         return false;
     }
     return true;

@@ -291,6 +291,8 @@ static bool minild_riscv_is_arithmetic_relocation(uint32_t type) {
     case R_RISCV_SET8:
     case R_RISCV_SET16:
     case R_RISCV_SET32:
+    case R_RISCV_SET_ULEB128:
+    case R_RISCV_SUB_ULEB128:
         return true;
     default:
         return false;
@@ -803,6 +805,69 @@ static bool minild_target_apply_arithmetic(MiniLdSection *section,
         break;
     default:
         return false;
+    }
+    return true;
+}
+
+/* GNU RISC-V emits these two relocations together for DWARF ULEB128
+ * differences.  Patching SET before SUB is incorrect: the intermediate
+ * absolute symbol can need more bits than the reserved ULEB, even when
+ * the final difference fits.  Resolve both operands, then write the
+ * difference once, preserving the assembler-reserved byte count. */
+static bool minild_riscv_apply_uleb128_pair(
+    MiniLdSection *section, const MiniLdReloc *set_reloc,
+    const MiniLdReloc *sub_reloc, uint64_t set_value, uint64_t sub_value,
+    FILE *diagnostics) {
+    size_t offset, length = 0U, i;
+    uint64_t value;
+
+    if (set_reloc->type != R_RISCV_SET_ULEB128 ||
+        sub_reloc->type != R_RISCV_SUB_ULEB128 ||
+        set_reloc->section != sub_reloc->section ||
+        set_reloc->offset != sub_reloc->offset) {
+        fprintf(diagnostics, "minic-ld: riscv-uleb-unpaired-relocation\n");
+        return false;
+    }
+    if (section->type == SHT_NOBITS || set_reloc->offset > SIZE_MAX ||
+        !range_ok((size_t)set_reloc->offset, 1U, section->size)) {
+        fprintf(diagnostics, "minic-ld: riscv-uleb-invalid-offset\n");
+        return false;
+    }
+    offset = (size_t)set_reloc->offset;
+    while (length < 10U && range_ok(offset, length + 1U, section->size)) {
+        uint8_t byte = section->data[offset + length];
+
+        ++length;
+        if ((byte & UINT8_C(0x80)) == 0U) {
+            /* The final byte of a 64-bit ULEB128 can carry one bit. */
+            if (length == 10U && byte > 1U) {
+                fprintf(diagnostics, "minic-ld: riscv-uleb-invalid-encoding\n");
+                return false;
+            }
+            break;
+        }
+    }
+    if (length == 0U ||
+        (section->data[offset + length - 1U] & UINT8_C(0x80)) != 0U) {
+        fprintf(diagnostics, "minic-ld: riscv-uleb-unterminated\n");
+        return false;
+    }
+    if (set_value < sub_value) {
+        fprintf(diagnostics, "minic-ld: riscv-uleb-negative-difference\n");
+        return false;
+    }
+    value = set_value - sub_value;
+    if (length < 10U && (value >> (7U * length)) != 0U) {
+        fprintf(diagnostics, "minic-ld: riscv-uleb-reserved-width-overflow\n");
+        return false;
+    }
+    for (i = 0U; i < length; ++i) {
+        uint8_t byte = (uint8_t)((value >> (7U * i)) & UINT64_C(0x7f));
+
+        if (i + 1U < length) {
+            byte = (uint8_t)(byte | UINT8_C(0x80));
+        }
+        section->data[offset + i] = byte;
     }
     return true;
 }

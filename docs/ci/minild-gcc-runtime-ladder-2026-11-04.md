@@ -65,6 +65,23 @@ five ELF relocatable targets, three trivial static ELF targets, RV32 GNU/QEMU,
 and x86 CRT/IFUNC/GOT parity are genuinely covered.  It does **not** execute
 the five real libc workloads on every architecture.
 
+The next cohort,
+[`41832776917`](https://github.com/yituanxing/minic-toolchain/actions/runs/41832776917)
+at refactor commit `930581e8`, confirmed that the first blockers were actually
+removed.  x86-64 still passed **5/5**; the other four again had **0/5** real
+libc acceptance, but exposed deeper, different first errors:
+
+| Target | New observed blocking frontier |
+|---|---|
+| RV32 | `R_RISCV_SET_ULEB128` (type 60), including real Picolibc debug data |
+| RV64 | `__ehdr_start` runtime-defined ELF header symbol (and type 60 at `io`) |
+| AArch64 | New TLS IE/LE structural test passed; GNU BFD rejected a fixture mixing TLS and non-TLS relocations, so the actual libc ladder did not execute in this cohort |
+| LoongArch64 | `R_LARCH_ALIGN` needs real section relaxation (`.text:0:alignment=8:reserved=4`) |
+
+In particular, an invalid GNU oracle fixture is not evidence of MiniLD
+glibc failure or success.  These are failure-first diagnostics, not claims
+of a completed five-architecture user-mode program runtime.
+
 ### Separate Linux kernel link acceptance
 
 Keep four levels as separately scored outcomes:

@@ -66,6 +66,41 @@ static bool minild_riscv_apply_static_relocations(
         }
 
         if (kind == MINILD_TARGET_RELOC_ARITHMETIC) {
+            if (reloc->type == R_RISCV_SET_ULEB128) {
+                const MiniLdReloc *sub_reloc;
+                MiniLdSection *sub_section;
+                MiniLdStaticRelocOperands sub_operands;
+                bool sub_live;
+
+                if (i + 1U >= state->relocations.count) {
+                    fprintf(state->diagnostics,
+                            "minic-ld: riscv-uleb-unpaired-relocation\n");
+                    goto fail;
+                }
+                sub_reloc = &state->relocations.entries[i + 1U];
+                if (!minild_static_reloc_source(
+                        state, layout, sub_reloc,
+                        "riscv-invalid-relocation-section",
+                        &sub_section, &sub_live) || !sub_live ||
+                    sub_section != section ||
+                    !minild_static_reloc_operands(
+                        state, layout, sub_reloc,
+                        "riscv-relocation-place-overflow",
+                        &sub_operands) ||
+                    !minild_riscv_apply_uleb128_pair(
+                        section, reloc, sub_reloc,
+                        operands.target_bits, sub_operands.target_bits,
+                        state->diagnostics)) {
+                    goto fail;
+                }
+                ++i;
+                continue;
+            }
+            if (reloc->type == R_RISCV_SUB_ULEB128) {
+                fprintf(state->diagnostics,
+                        "minic-ld: riscv-uleb-unpaired-relocation\n");
+                goto fail;
+            }
             if (state->target->elf_class == ELFCLASS32 &&
                 (reloc->type == R_RISCV_ADD64 ||
                  reloc->type == R_RISCV_SUB64)) {

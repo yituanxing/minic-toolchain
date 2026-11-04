@@ -53,6 +53,9 @@ static void minild_riscv_destroy_static_relocations(
 static bool minild_riscv_relax_section(MiniLdState *state,
                                       size_t section_index,
                                       uint64_t address);
+static bool minild_loongarch_relax_section(MiniLdState *state,
+                                          size_t section_index,
+                                          uint64_t address);
 static bool minild_riscv_synthesize_gnu_default_boundaries(
     MiniLdState *state, const struct MiniLdLayout *layout);
 
@@ -132,7 +135,7 @@ static const MiniLdTargetProfile minild_target_profiles[] = {
      minild_riscv_destroy_static_relocations,
      minild_riscv_synthesize_gnu_default_boundaries,
      minild_riscv_shared_target_abi,
-     minild_link_shared_elf64_riscv_inputs_options, NULL, false},
+     minild_link_shared_elf64_riscv_inputs_options, NULL, true},
     {"elf32lriscv", ELFCLASS32, ELFDATA2LSB, EM_RISCV, "riscv",
      NULL, MINILD_SHT_RISCV_ATTRIBUTES,
      UINT64_C(0x10000), 4096U,
@@ -166,7 +169,7 @@ static const MiniLdTargetProfile minild_target_profiles[] = {
     {"elf64loongarch", ELFCLASS64, ELFDATA2LSB, EM_LOONGARCH, "loongarch64",
      NULL, 0U, UINT64_C(0x120000000), 4096U,
      true, true, false, false, false, false,
-     minild_exact_merge_flags, NULL,
+     minild_exact_merge_flags, minild_loongarch_relax_section,
      minild_loongarch_reserve_static_relocations,
      minild_loongarch_fill_static_relocations,
      minild_loongarch_apply_static_relocations,

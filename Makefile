@@ -740,6 +740,12 @@ check-minild-riscv-static-tls: $(MINIAS_BINARY) $(MINILD_BINARY)
 	MINILD="$(abspath $(MINILD_BINARY))" \
 	bash tests/linker/probe-riscv-static-tls.sh
 
+.PHONY: check-minild-riscv-uleb-static
+check-minild-riscv-uleb-static: $(MINIAS_BINARY) $(MINILD_BINARY)
+	MINIAS="$(abspath $(MINIAS_BINARY))" \
+	MINILD="$(abspath $(MINILD_BINARY))" \
+	bash tests/linker/probe-riscv-uleb-static.sh
+
 .PHONY: check-minild-aarch64-static-got
 check-minild-aarch64-static-got: $(MINIAS_BINARY) $(MINILD_BINARY)
 	MINIAS="$(abspath $(MINIAS_BINARY))" \

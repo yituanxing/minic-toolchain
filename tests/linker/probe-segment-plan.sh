@@ -273,8 +273,31 @@ loads = [p for p in ph if p[0] == 1]
 tls = [p for p in ph if p[0] == 7]
 assert len(loads) == 2 and len(tls) == 1 and len(ph) == 3, ('ET_EXEC default PHDRs', ph)
 assert loads[0][1] == 5 and loads[1][1] == 6 and all(p[7] == 4096 for p in loads)
-assert loads[0][2] >= 4096 and loads[0][3] >= 0x10000
-assert not (loads[0][2] <= 0 < loads[0][2] + loads[0][5]), 'static LOAD must exclude ELF header'
+# A plain ET_EXEC with a static CRT maps the ELF and PHDR bytes in its
+# initial LOAD.  The linker-synthesized __ehdr_start must identify that
+# actual mapped header, while the Linux-scripted path below retains its
+# separate explicit section/segment placement contract.
+assert loads[0][2] == 0 and loads[0][5] >= 64 + len(ph) * 56, (
+    'static default ELF+PHDR must be mapped', loads[0])
+assert loads[0][3] + 64 + len(ph) * 56 <= loads[0][3] + loads[0][6], (
+    'static default ELF+PHDR memory extent', loads[0])
+assert struct.unpack_from('<Q', raw, 32)[0] == 64, 'static default PHDR offset'
+symtab = one(names, '.symtab')
+strtab = one(names, '.strtab')
+symnames = raw[strtab[4]:strtab[4] + strtab[5]]
+ehdr_symbols = []
+for offset in range(symtab[4], symtab[4] + symtab[5], 24):
+    name, info, other, shndx, value, size = struct.unpack_from(
+        '<IBBHQQ', raw, offset)
+    if not name:
+        continue
+    end = symnames.find(b'\0', name)
+    assert end > name, ('static default symbol string bounds', name)
+    if symnames[name:end] == b'__ehdr_start':
+        ehdr_symbols.append((shndx, value))
+assert ehdr_symbols == [(0xfff1, loads[0][3])], (
+    'linker-synthesized __ehdr_start must equal mapped ELF header',
+    ehdr_symbols, loads[0])
 assert covers(loads[0], one(names, '.text.start'))
 assert covers(loads[1], one(names, '.data.word'))
 assert tls[0][2] == one(names, '.tdata.slot')[4]
@@ -282,7 +305,8 @@ assert tls[0][3] == one(names, '.tdata.slot')[3]
 assert tls[0][4] == tls[0][3] and tls[0][5] == 8 and tls[0][6] == 24 and tls[0][7] == 8
 assert covers(loads[1], one(names, '.tdata.slot'))
 assert covers(tls[0], one(names, '.tbss.slot'))
-print('MINILD_SEGMENT_CHECK=PASS mode=static-default loads=2 PT_TLS=true')
+print('MINILD_SEGMENT_CHECK=PASS mode=static-default loads=2 '
+      'PT_TLS=true mapped_ehdr_phdr=true ehdr_start=verified')
 
 raw, ph, names = inspect('static-script.elf', 2)
 loads = [p for p in ph if p[0] == 1]
