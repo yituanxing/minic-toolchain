@@ -35,7 +35,7 @@ guard_make() {
   [[ $# == 4 && $1 == -f && $2 == "$MINILD_EXP_SRC/scripts/Makefile.build" &&
      $3 == obj=init && $4 == init/version-timestamp.o ]] ||
     die "unexpected_recursive_make=$*"
-  (cd "$MINILD_EXP_OUT" && sha256sum -q -c "$MINILD_EXP_EV/version-timestamp.sha256") ||
+  (cd "$MINILD_EXP_OUT" && sha256sum --quiet -c "$MINILD_EXP_EV/version-timestamp.sha256") ||
     die 'frozen_version_timestamp_changed'
   printf '%s\n' 'frozen_existing_init/version-timestamp.o' >>"$MINILD_EXP_EV/make-guard-invocations.log"
   echo 'MINILD_RV64_FROZEN_MAKE=PASS regenerated_kernel_C_objects=0'
@@ -168,14 +168,14 @@ for line in lines:
         raise SystemExit('MINILD_RV64_GOLDEN=FAIL unsafe_or_duplicate_manifest')
     seen.add(str(p))
 PY_MANIFEST
-  (cd "$out" && sha256sum -q -c "$manifest") || die 'GNU_object_manifest_sha_mismatch'
+  (cd "$out" && sha256sum --quiet -c "$manifest") || die 'GNU_object_manifest_sha_mismatch'
   cp "$meta" "$ev/verified-gcc-baseline.txt"
   cp "$manifest" "$ev/verified-original-gnu-objects.sha256"
   # Only generated kallsyms .o are intentionally mutable in the full link.
   # All true Linux input .o (including init/version-timestamp.o) stay frozen.
   sed '/  \.tmp_vmlinux\.kallsyms[123]\.o$/d' "$manifest" \
     >"$ev/immutable-gnu-objects.sha256"
-  (cd "$out" && sha256sum -q -c "$ev/immutable-gnu-objects.sha256") ||
+  (cd "$out" && sha256sum --quiet -c "$ev/immutable-gnu-objects.sha256") ||
     die 'immutable_GNU_object_manifest_failed'
   (cd "$out" && sha256sum init/version-timestamp.o) >"$ev/version-timestamp.sha256"
   sha256sum "$out/vmlinux.a" "$out/.vmlinux.export.o" \
@@ -215,11 +215,11 @@ verify_source() {
 
 verify_frozen_after() {
   local out=$1 ev=$2
-  (cd "$out" && sha256sum -q -c "$ev/immutable-gnu-objects.sha256") ||
+  (cd "$out" && sha256sum --quiet -c "$ev/immutable-gnu-objects.sha256") ||
     die 'frozen_GNU_objects_mutated'
-  (cd "$out" && sha256sum -q -c "$ev/version-timestamp.sha256") ||
+  (cd "$out" && sha256sum --quiet -c "$ev/version-timestamp.sha256") ||
     die 'frozen_version_timestamp_mutated'
-  (cd "$out" && sha256sum -q -c "$ev/gnu-frozen-extra-inputs.sha256") ||
+  (cd "$out" && sha256sum --quiet -c "$ev/gnu-frozen-extra-inputs.sha256") ||
     die 'frozen_link_inputs_mutated'
 }
 
@@ -347,7 +347,7 @@ image() {
   must_file "$out/vmlinux"
   must_file "$out/System.map"
   must_file "$ev/minild-final-vmlinux.sha256"
-  sha256sum -q -c "$ev/minild-final-vmlinux.sha256" || die 'final_vmlinux_changed_since_stage_A'
+  sha256sum --quiet -c "$ev/minild-final-vmlinux.sha256" || die 'final_vmlinux_changed_since_stage_A'
   verify_frozen_after "$out" "$ev"
   [[ ! -s $out/arch/riscv/boot/Image.minild ]] || die 'image_already_generated'
   # This exact command is OBJCOPYFLAGS_Image from Linux 6.6.143's
@@ -368,8 +368,8 @@ audit_final() {
   [[ $(property mini_sha "$ev/stage-a.ok") == "$(digest "$mini")" ]] ||
     die 'MiniLD_changed_after_QEMU'
   verify_frozen_after "$out" "$ev"
-  (cd "$out" && sha256sum -q -c "$ev/minild-final-vmlinux.sha256" &&
-    sha256sum -q -c "$ev/minild-Image.sha256") ||
+  (cd "$out" && sha256sum --quiet -c "$ev/minild-final-vmlinux.sha256" &&
+    sha256sum --quiet -c "$ev/minild-Image.sha256") ||
     die 'MiniLD_vmlinux_or_Image_changed_after_QEMU'
   echo 'MINILD_RV64_FINAL_AUDIT=PASS frozen_GNU_kernel_C_objects=true MiniLD_vmlinux_Image_unchanged=true'
 }
