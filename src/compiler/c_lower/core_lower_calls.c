@@ -425,11 +425,23 @@ static MinicCoreLowerStatus core_reload_call_arguments(
     size_t i;
     for (i = 0U; i < count; ++i) {
         MinicCoreLowerStatus status;
+        MinicCoreValueId reloaded;
         if (arguments[i].kind == MINIC_CORE_CALL_ARGUMENT_OBJECT) continue;
         status = minic_core_lower_internal_reload_scalar_value(
-            context, call->span, types[i], snapshots[i],
-            &arguments[i].value.value_id);
+            context, call->span, types[i], snapshots[i], &reloaded);
         if (status != MINIC_CORE_LOWER_OK) return status;
+        /* Reloading an aligned integer parameter removes the storage-only
+         * qualifier from its SSA value. Re-express the fixed argument in
+         * the callee's exact declared ABI type view before CALL verification. */
+        if (minic_type_is_integer(types[i]) && types[i].pointer_depth == 0U &&
+            types[i].explicit_alignment != 0U) {
+            status = minic_core_lower_internal_append_integer_conversion(
+                context, call->span, types[i], reloaded,
+                &arguments[i].value.value_id);
+            if (status != MINIC_CORE_LOWER_OK) return status;
+        } else {
+            arguments[i].value.value_id = reloaded;
+        }
     }
     return MINIC_CORE_LOWER_OK;
 }

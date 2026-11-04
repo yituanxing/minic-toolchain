@@ -14,6 +14,14 @@ int mini_xadd32(int delta, int *p) {
  asm volatile(" xaddl %0, %1;" : "+r"(delta), "+m"(*p) : : "memory");
  return delta;
 }
+long mini_xadd64_long_ll(long delta, long long *p) {
+ asm volatile(" xaddq %0, %1;" : "+r"(delta), "+m"(*p) : : "memory");
+ return delta;
+}
+long long mini_xadd64_ll_long(long long delta, long *p) {
+ asm volatile(" xaddq %0, %1;" : "+r"(delta), "+m"(*p) : : "memory");
+ return delta;
+}
 SRC
 "$cc" --target=x86_64-linux -S "$d/xadd.i" -o "$d/xadd.s"
 grep -Fq '  xaddq %r10, (%r11)' "$d/xadd.s"
@@ -24,6 +32,8 @@ gcc -c -x assembler "$d/xadd.s" -o "$d/mini.o"
 cat > "$d/main.c" <<'SRC'
 extern long mini_xadd64(long,long*),gnu_xadd64(long,long*);
 extern int mini_xadd32(int,int*),gnu_xadd32(int,int*);
+extern long mini_xadd64_long_ll(long,long long*),gnu_xadd64_long_ll(long,long long*);
+extern long long mini_xadd64_ll_long(long long,long*),gnu_xadd64_ll_long(long long,long*);
 int main(void) {
  for(int i=-42;i<=42;++i) for(int d=-7;d<=7;++d) {
   long a=i,b=i;
@@ -32,21 +42,33 @@ int main(void) {
   int c=i,e=i;
   int oldc=mini_xadd32(d,&c),olde=gnu_xadd32(d,&e);
   if(oldc!=olde||c!=e)return 2;
+  long long f=i,g=i;
+  long oldf=mini_xadd64_long_ll(d,&f),oldg=gnu_xadd64_long_ll(d,&g);
+  if(oldf!=oldg||f!=g)return 3;
+  long h=i,j=i;
+  long long oldh=mini_xadd64_ll_long(d,&h),oldj=gnu_xadd64_ll_long(d,&j);
+  if(oldh!=oldj||h!=j)return 4;
  }
  return 0;
 }
 SRC
 gcc -O0 -no-pie "$d/main.c" "$d/mini.o" "$d/gnu.o" -o "$d/run"
 "$d/run"
-for bad in extra wrong-constraint wrong-width;do
+for bad in extra wrong-constraint wrong-width wrong-memory-width;do
  case "$bad" in
   extra) sed 's/xaddq %0, %1;/xaddq %0, %1; nop/' "$d/xadd.i" >"$d/bad.i";;
   wrong-constraint) sed 's/"+r"(delta)/"=r"(delta)/' "$d/xadd.i" >"$d/bad.i";;
   wrong-width) sed 's/xaddq %0, %1;/xaddl %0, %1;/' "$d/xadd.i" >"$d/bad.i";;
+  wrong-memory-width) sed 's/long long \*p)/int *p)/' "$d/xadd.i" >"$d/bad.i";;
  esac
- if "$cc" --target=x86_64-linux -S "$d/bad.i" -o "$d/bad.s" >/dev/null 2>&1;then
+ if "$cc" --target=x86_64-linux -S "$d/bad.i" -o "$d/bad.s" >"$d/bad.stdout" 2>"$d/bad.stderr";then
    echo "FAIL unsafe xadd $bad accepted" >&2;exit 1
+ fi
+ if [ "$bad" = wrong-memory-width ] &&
+    ! grep -Fq 'Core instruction unsupported:' "$d/bad.stderr";then
+    echo 'FAIL wrong-width xadd rejected for an unrelated frontend reason' >&2
+    exit 1
  fi
  test ! -e "$d/bad.s"
 done
-echo 'MINIC_X86_LOCAL_XADD=PASS original_linux=1 two_native_widths=1 GNU_differential_pairs=2550 negatives=3'
+echo 'MINIC_X86_LOCAL_XADD=PASS original_linux=1 two_native_widths=1 mixed_64bit_ranks=2 GNU_differential_pairs=5100 negatives=4'

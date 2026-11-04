@@ -2653,15 +2653,32 @@ static bool x86_linux_atomic_rmw_source(const MinicTargetInvocation *invocation,
     contract->target_machine_form_variant=(uint32_t)form;
     return true;
 }
+/* For x86-64 XADD the GNU +r/+m operands are sized by the instruction,
+ * not by equal C type ranks. In particular `long` and `long long` both
+ * represent a valid 64-bit register or memory operand, independently.
+ * Linux local_t wraps atomic_long_t whose counter can use the other rank.
+ * Keep one source-side size contract for SMP, local and GS/percpu XADD;
+ * the target Core emitter independently rechecks signedness and byte width. */
+static bool x86_linux_xadd_integer_width(MinicType type, size_t width) {
+    if (!minic_type_is_integer(type) ||
+        type.base_kind != MINIC_TYPE_BASE_INT || type.pointer_depth)
+        return false;
+    switch (width) {
+    case 1U: return type.integer_rank == MINIC_INTEGER_RANK_CHAR;
+    case 2U: return type.integer_rank == MINIC_INTEGER_RANK_SHORT;
+    case 4U: return type.integer_rank == MINIC_INTEGER_RANK_INT;
+    case 8U: return type.integer_rank == MINIC_INTEGER_RANK_LONG ||
+                   type.integer_rank == MINIC_INTEGER_RANK_LONG_LONG;
+    default: return false;
+    }
+}
+
 static bool x86_linux_smp_xadd_source(const MinicC0Program *program,
     const MinicInlineAsm *src,MinicTargetInlineAsmContract *contract,
     MinicX86GsAtomicPlan plan) {
     const size_t width=plan.kind==MINIC_X86_GS_ATOMIC_XADD_SMP?plan.width:0U;
     const MinicExpression *reg,*mem;
     MinicType rt,mt;
-    const MinicIntegerRank rank=width==1U?MINIC_INTEGER_RANK_CHAR:
-        width==2U?MINIC_INTEGER_RANK_SHORT:
-        width==4U?MINIC_INTEGER_RANK_INT:MINIC_INTEGER_RANK_LONG;
     if(!program||!src||!contract||!width||!src->is_volatile||src->is_goto||
         !src->outputs||src->output_count!=2U||src->input_count||
         src->label_count||!src->has_memory_clobber||src->clobber_count!=2U||
@@ -2676,22 +2693,8 @@ static bool x86_linux_smp_xadd_source(const MinicC0Program *program,
         minic_type_is_const(reg->type)||minic_type_is_const(mem->type)||
         !minic_type_unqualified(reg->type,&rt)||
         !minic_type_unqualified(mem->type,&mt)||
-        !minic_type_is_integer(rt)||!minic_type_is_integer(mt)||
-        rt.base_kind!=MINIC_TYPE_BASE_INT||mt.base_kind!=MINIC_TYPE_BASE_INT||
-        rt.pointer_depth||mt.pointer_depth)return false;
-    /* On x86-64 both C long and long long are 64-bit scalar GPR/memory
-     * types. Linux's atomic64_t.counter is signed long long, whereas
-     * non-kernel users of this same xaddq machine form often use long.
-     * Constraint +r/+m and the precise 8-byte machine width, not a single
-     * C integer rank, determine the legal hardware operand shape. */
-    if (width == 8U) {
-        if ((rt.integer_rank != MINIC_INTEGER_RANK_LONG &&
-             rt.integer_rank != MINIC_INTEGER_RANK_LONG_LONG) ||
-            (mt.integer_rank != MINIC_INTEGER_RANK_LONG &&
-             mt.integer_rank != MINIC_INTEGER_RANK_LONG_LONG)) return false;
-    } else if (rt.integer_rank != rank || mt.integer_rank != rank) {
-        return false;
-    }
+        !x86_linux_xadd_integer_width(rt,width) ||
+        !x86_linux_xadd_integer_width(mt,width))return false;
     contract->operand_count=2U;
     contract->kinds[0]=MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE;
     contract->kinds[1]=MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE;
@@ -2720,15 +2723,8 @@ static bool x86_linux_local_xadd_source(
         minic_type_is_const(reg->type) || minic_type_is_const(mem->type) ||
         !minic_type_unqualified(reg->type, &reg_type) ||
         !minic_type_unqualified(mem->type, &mem_type) ||
-        reg_type.base_kind != MINIC_TYPE_BASE_INT ||
-        mem_type.base_kind != MINIC_TYPE_BASE_INT ||
-        !minic_type_is_integer(reg_type) || !minic_type_is_integer(mem_type) ||
-        reg_type.pointer_depth || mem_type.pointer_depth ||
-        reg_type.integer_rank != mem_type.integer_rank ||
-        (width == 8U
-         ? (reg_type.integer_rank != MINIC_INTEGER_RANK_LONG &&
-            reg_type.integer_rank != MINIC_INTEGER_RANK_LONG_LONG)
-         : reg_type.integer_rank != MINIC_INTEGER_RANK_INT))
+        !x86_linux_xadd_integer_width(reg_type,width) ||
+        !x86_linux_xadd_integer_width(mem_type,width))
         return false;
     contract->operand_count = 2U;
     contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE;
@@ -2760,13 +2756,8 @@ static bool x86_linux_percpu_xadd_source(
         minic_type_is_const(reg->type) || minic_type_is_const(memory->type) ||
         !minic_type_unqualified(reg->type, &reg_type) ||
         !minic_type_unqualified(memory->type, &mem_type) ||
-        !minic_type_is_integer(reg_type) ||
-        !minic_type_is_integer(mem_type) ||
-        (width == 1U && reg_type.integer_rank != MINIC_INTEGER_RANK_CHAR) ||
-        (width == 2U && reg_type.integer_rank != MINIC_INTEGER_RANK_SHORT) ||
-        (width == 4U && reg_type.integer_rank != MINIC_INTEGER_RANK_INT) ||
-        (width == 8U && reg_type.integer_rank != MINIC_INTEGER_RANK_LONG &&
-                         reg_type.integer_rank != MINIC_INTEGER_RANK_LONG_LONG))
+        !x86_linux_xadd_integer_width(reg_type,width) ||
+        !x86_linux_xadd_integer_width(mem_type,width))
         return false;
     contract->operand_count = 2U;
     contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE;

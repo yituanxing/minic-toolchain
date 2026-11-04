@@ -351,7 +351,11 @@ static bool import_type(MinicCoreTypeImporter *importer, MinicType source,
         const MinicCoreType *base;
         size_t size, alignment;
         if (!minic_type_unqualified(source, &unqualified)) return false;
-        unqualified.explicit_alignment = 0U;
+        /* Qualifying the pointer object cannot erase its pointee's ABI
+         * alignment. Only an unqualified base scalar/record loses its own
+         * top-level storage-alignment wrapper here. */
+        if (source.pointer_depth == 0U)
+            unqualified.explicit_alignment = 0U;
         if (!import_type(importer, unqualified, &type.value.qualified.base, depth + 1U))
             return false;
         base = minic_core_type_get(importer->context, type.value.qualified.base);

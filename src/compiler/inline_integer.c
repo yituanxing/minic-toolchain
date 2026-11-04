@@ -428,7 +428,7 @@ bool minic_add_inline_integer_specialization(
 
 
 
-static bool minic_inline_integer_formal_admits_entry_fact(
+bool minic_inline_spec_integer_formal_admits_entry_fact(
     const MinicC0Program *program, const MinicFunction *source,
     size_t parameter_index) {
     const MinicLocal *local;
@@ -438,92 +438,72 @@ static bool minic_inline_integer_formal_admits_entry_fact(
         return false;
     local = minic_c0_program_local(
         program, source->local_begin + parameter_index);
-    /* A top-level volatile parameter must be read as a volatile C object.
-     * A literal actual argument does not turn its later reads into GNU
-     * immediate operands or enable compile-time folding. */
+    /* A volatile C parameter must be read at its actual use. Neither a
+     * literal argument nor a clone changes that source-language rule. */
     return local != NULL && !minic_type_is_volatile(local->type);
 }
 
-static bool minic_inline_specialization_argument_value(
-    const MinicC0Program *program,
-    const MinicTargetInvocation *target,
-    const MinicFunction *caller,
-    const bool *stable_parameter_locals,
-    size_t stable_local_count,
-    MinicExpressionId expression_id,
-    MinicType target_type,
-    MinicConstValue *value,
+bool minic_inline_spec_integer_argument_value(
+    const MinicC0Program *program, const MinicTargetInvocation *target,
+    const MinicFunction *caller, const bool *stable_parameter_locals,
+    size_t stable_local_count, MinicExpressionId expression_id,
+    MinicType target_type, MinicConstValue *value,
     bool *used_caller_fact) {
     const MinicExpression *expression;
     MinicConstValue operand_value;
     MinicConstValue constant_value;
 
-    if (program == NULL || target == NULL || caller == NULL || value == NULL ||
-        used_caller_fact == NULL || !caller->is_integer_specialization ||
-        caller->specialization_source >= program->function_count ||
-        !minic_type_is_integer(target_type)) {
+    if (program == NULL || target == NULL || value == NULL ||
+        used_caller_fact == NULL || !minic_type_is_integer(target_type))
         return false;
-    }
     *used_caller_fact = false;
     if (minic_const_eval_integer(program, target, expression_id, &constant_value) &&
         minic_const_value_convert_integer(
-            program, target, &constant_value, target_type, value)) {
+            program, target, &constant_value, target_type, value))
         return true;
-    }
-    expression = minic_c0_program_expression(program, expression_id);
-    if (expression == NULL || !minic_type_is_integer(expression->type)) {
+    if (caller == NULL || !caller->is_integer_specialization ||
+        caller->specialization_source >= program->function_count)
         return false;
-    }
+    expression = minic_c0_program_expression(program, expression_id);
+    if (expression == NULL || !minic_type_is_integer(expression->type))
+        return false;
     if (expression->kind == MINIC_EXPRESSION_CAST ||
         expression->kind == MINIC_EXPRESSION_CONVERSION ||
         expression->kind == MINIC_EXPRESSION_LVALUE_READ) {
         bool operand_used_caller_fact = false;
-        if (!minic_inline_specialization_argument_value(
-                program,
-                target,
-                caller,
-                stable_parameter_locals,
-                stable_local_count,
-                expression->value.unary.operand,
-                expression->type,
-                &operand_value,
-                &operand_used_caller_fact) ||
+        if (!minic_inline_spec_integer_argument_value(
+                program, target, caller, stable_parameter_locals,
+                stable_local_count, expression->value.unary.operand,
+                expression->type, &operand_value, &operand_used_caller_fact) ||
             !minic_const_value_convert_integer(
-                program, target, &operand_value, target_type, value)) {
+                program, target, &operand_value, target_type, value))
             return false;
-        }
         *used_caller_fact = operand_used_caller_fact;
         return true;
     }
     if (expression->kind == MINIC_EXPRESSION_LOCAL) {
-        const MinicFunction *source;
-        MinicLocalId local_id;
+        const MinicFunction *source =
+            &program->functions[caller->specialization_source];
+        MinicLocalId local_id = expression->value.local_id;
         size_t parameter_index;
-
-        source = &program->functions[caller->specialization_source];
-        local_id = expression->value.local_id;
-        /* A specialization fact describes the entry value. A reassigned or
-         * escaped parameter is a different runtime value at this CALL, even
-         * if all clones share the same canonical source FunctionBody. */
+        /* Shared canonical FunctionBody facts remain valid only for an
+         * unchanged, non-escaped parameter at the current callsite. */
         if (stable_parameter_locals == NULL ||
             local_id >= stable_local_count ||
             !stable_parameter_locals[local_id] ||
-            local_id < source->local_begin) {
+            local_id < source->local_begin)
             return false;
-        }
         parameter_index = local_id - source->local_begin;
         if (parameter_index >= source->parameter_count ||
             parameter_index >= MINIC_MAX_FUNCTION_PARAMETERS ||
             !caller->specialization_integer_known[parameter_index] ||
-            !minic_type_is_integer(source->parameter_types[parameter_index])) {
+            !minic_type_is_integer(source->parameter_types[parameter_index]))
             return false;
-        }
         constant_value.type = source->parameter_types[parameter_index];
         constant_value.bits = caller->specialization_integer_bits[parameter_index];
         if (!minic_const_value_convert_integer(
-                program, target, &constant_value, target_type, value)) {
+                program, target, &constant_value, target_type, value))
             return false;
-        }
         *used_caller_fact = true;
         return true;
     }
@@ -612,7 +592,7 @@ bool minic_specialize_inline_integer_calls(MinicC0Program *program,
                 program, argument_id);
             bool argument_known;
             if (!minic_type_is_integer(source.parameter_types[i]) ||
-                !minic_inline_integer_formal_admits_entry_fact(
+                !minic_inline_spec_integer_formal_admits_entry_fact(
                     program, &source, i)) {
                 continue;
             }
@@ -808,9 +788,9 @@ bool minic_specialize_inline_integer_calls(MinicC0Program *program,
                     bool argument_used_caller_fact = false;
 
                     if (!minic_type_is_integer(nested_source.parameter_types[parameter_index]) ||
-                        !minic_inline_integer_formal_admits_entry_fact(
+                        !minic_inline_spec_integer_formal_admits_entry_fact(
                             program, &nested_source, parameter_index) ||
-                        !minic_inline_specialization_argument_value(
+                        !minic_inline_spec_integer_argument_value(
                             program,
                             target,
                             &caller,

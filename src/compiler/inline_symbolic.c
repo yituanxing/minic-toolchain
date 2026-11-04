@@ -554,6 +554,38 @@ static bool minic_inline_symbolic_argument_expression(
     return false;
 }
 
+/* An integer-only pass may decline a clone for a currently dead inline
+ * helper, while a later symbolic call site makes that helper reachable.
+ * A helper with a GNU `i` operand still needs ALL integer and symbolic
+ * entry facts in one candidate. Derive the literal/stable integer facts
+ * again here rather than treating the earlier pass's optional CALL plan as
+ * the only source of truth. The Core callsite selector independently proves
+ * every candidate fact before choosing a clone. */
+static void minic_inline_symbolic_close_integer_arguments(
+    const MinicC0Program *program, const MinicTargetInvocation *target,
+    const MinicFunction *source, const MinicFunction *caller,
+    const bool *stable_locals, size_t stable_local_count,
+    const MinicExpression *call, MinicInlineSpecializationKey *key) {
+    size_t i;
+    if (program == NULL || target == NULL || source == NULL || call == NULL ||
+        key == NULL || call->kind != MINIC_EXPRESSION_CALL)
+        return;
+    for (i = 0U; i < source->parameter_count; ++i) {
+        MinicConstValue value;
+        bool used_caller_fact;
+        if (!minic_type_is_integer(source->parameter_types[i]) ||
+            !minic_inline_spec_integer_formal_admits_entry_fact(
+                program, source, i) ||
+            !minic_inline_spec_integer_argument_value(
+                program, target, caller, stable_locals, stable_local_count,
+                minic_c0_call_argument(call, i),
+                source->parameter_types[i], &value, &used_caller_fact))
+            continue;
+        key->integer_known[i] = true;
+        key->integer_bits[i] = value.bits;
+    }
+}
+
 static bool minic_inline_symbolic_integer_inputs_are_closed(
     const MinicFunction *source,
     const bool *integer_known) {
@@ -691,6 +723,8 @@ bool minic_specialize_inline_symbolic_calls(
             free(stable_locals);
             return false;
         }
+        minic_inline_symbolic_close_integer_arguments(
+            program, target, &source, caller, NULL, 0U, call, &key);
         /* Do not manufacture a half-specialized variant for a helper whose
          * integer parameters are still runtime values.  GNU immediate-only
          * asm inside helpers such as arch_static_branch requires both the
@@ -815,6 +849,9 @@ bool minic_specialize_inline_symbolic_calls(
                     free(stable_locals);
                     return false;
                 }
+                minic_inline_symbolic_close_integer_arguments(
+                    program, target, &source, &caller, stable_locals,
+                    stable_local_count, nested, &key);
                 if (!needs_section_clone &&
                     !minic_inline_symbolic_integer_inputs_are_closed(
                         &source, key.integer_known)) {

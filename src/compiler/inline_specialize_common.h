@@ -2,6 +2,7 @@
 #define MINIC_COMPILER_INLINE_SPECIALIZE_COMMON_H
 
 #include "frontend/ast.h"
+#include "frontend/const_eval.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -52,6 +53,19 @@ void minic_inline_spec_key_clear(MinicInlineSpecializationKey *key);
 bool minic_inline_spec_key_from_function(
     MinicInlineSpecializationKey *key, const MinicFunction *function,
     size_t parameter_count);
+/* One source-language entry-fact oracle for both integer and symbolic clone
+ * producers. It accepts pure literal arguments without a caller clone, and
+ * stable specialized parameter values when a concrete caller is available.
+ * It must never infer facts from mutable/volatile parameter objects. */
+bool minic_inline_spec_integer_formal_admits_entry_fact(
+    const MinicC0Program *program, const MinicFunction *source,
+    size_t parameter_index);
+bool minic_inline_spec_integer_argument_value(
+    const MinicC0Program *program, const MinicTargetInvocation *target,
+    const MinicFunction *caller, const bool *stable_parameter_locals,
+    size_t stable_local_count, MinicExpressionId expression_id,
+    MinicType target_type, MinicConstValue *value,
+    bool *used_caller_fact);
 bool minic_inline_spec_section_matches(
     const MinicFunction *candidate, const MinicFunction *source,
     const MinicFunction *caller);

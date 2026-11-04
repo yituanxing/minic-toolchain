@@ -44,6 +44,38 @@ void run_node(Node *node) {
     if (node->done) node->done(node);
 }
 
+/* Nested const on the pointer object must not discard the ABI alignment
+ * of its pointee during C -> Core type import.  These field accesses also
+ * exercise the exact FIELD_ADDRESS Core identity contract. */
+typedef struct AlignedGuidSlot {
+    EfiGuid *pointer;
+} AlignedGuidSlot;
+
+EfiGuid *load_guid_from_const_slot(const AlignedGuidSlot *slot) {
+    return slot->pointer;
+}
+
+typedef struct ReadOnlyGuidSlot {
+    const EfiGuid *const pointer;
+} ReadOnlyGuidSlot;
+
+const EfiGuid *load_const_guid_from_slot(const ReadOnlyGuidSlot *slot) {
+    return slot->pointer;
+}
+
+/* An aligned integer typedef is ABI-relevant on a fixed call signature,
+ * but its storage alignment is not part of the scalar LOAD result. */
+typedef unsigned long long AlignedU64 __attribute__((aligned(16)));
+extern AlignedU64 echo_aligned_u64(AlignedU64 value);
+
+AlignedU64 call_aligned_u64(AlignedU64 input) {
+    AlignedU64 copy = input;
+    return echo_aligned_u64(copy);
+}
+
+_Static_assert(!__builtin_types_compatible_p(EfiGuid *, const EfiGuid *),
+               "discarding pointee const is not allowed by C types");
+
 /* These MUST remain different ABI signatures when canonicalizing imported
  * function types: fixed and variadic are not interchangeable. */
 typedef int FixedFn(int);

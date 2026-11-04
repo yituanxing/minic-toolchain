@@ -87,7 +87,11 @@ MinicCoreLowerStatus minic_core_lower_internal_append_integer_conversion(MinicCo
     if (!minic_type_is_integer(source_type)) {
         return MINIC_CORE_LOWER_UNSUPPORTED;
     }
-    if (minic_type_equal(source_type, target_type)) {
+    /* C type equality intentionally ignores storage alignment, but Core
+     * records that distinct type view in its snapshot. A conversion to the
+     * requested scalar integer representation must remain explicit. */
+    if (minic_type_equal(source_type, target_type) &&
+        source_type.explicit_alignment == target_type.explicit_alignment) {
         *value_id = source_value;
         return MINIC_CORE_LOWER_OK;
     }
@@ -117,7 +121,10 @@ MinicCoreLowerStatus append_scalar_bitcast(MinicCoreLowerContext *context,
         return MINIC_CORE_LOWER_ERROR;
     }
     source_type = minic_core_function_source_value_type(context->source, source_value);
-    if (minic_type_equal(source_type, target_type)) {
+    /* A pointer to an explicitly aligned typedef may be C-compatible with
+     * its unaligned view, yet have a different nested Core pointee TypeId. */
+    if (minic_type_equal(source_type, target_type) &&
+        source_type.explicit_alignment == target_type.explicit_alignment) {
         *value_id = source_value;
         return MINIC_CORE_LOWER_OK;
     }
@@ -145,6 +152,11 @@ MinicCoreLowerStatus minic_core_lower_internal_emit_scalar_load(
     MinicType instruction_source_type = minic_type_void();
     if (context == NULL || context->function == NULL || value_id == NULL)
         return MINIC_CORE_LOWER_ERROR;
+    /* A non-pointer scalar's alignment describes the addressed C object,
+     * not the SSA value loaded from it. Pointer-valued scalars must retain
+     * their deeper pointee ABI alignment. */
+    if (type.pointer_depth == 0U)
+        type.explicit_alignment = 0U;
     (void)memset(&instruction, 0, sizeof(instruction));
     instruction.kind = MINIC_CORE_INSTRUCTION_LOAD;
     instruction.span = span;
@@ -162,8 +174,25 @@ MinicCoreLowerStatus minic_core_lower_internal_emit_scalar_store(
     MinicCoreValueId address_id, MinicCoreValueId stored_value, bool is_volatile) {
     MinicCoreInstruction instruction;
     MinicType instruction_source_type = minic_type_void();
+    MinicType address_type, target_type, source_type;
+    MinicCoreValueId converted_value;
+    MinicCoreLowerStatus status;
     if (context == NULL || context->function == NULL)
         return MINIC_CORE_LOWER_ERROR;
+    address_type = minic_core_function_source_value_type(context->source, address_id);
+    source_type = minic_core_function_source_value_type(context->source, stored_value);
+    /* The C frontend has already admitted compatible types. Preserve the
+     * strict Core STORE contract when just the nested aligned-record view
+     * differs by materializing an explicit pointer bitcast at this seam. */
+    if (minic_type_pointee(address_type, &target_type) &&
+        minic_type_is_pointer(target_type) && minic_type_is_pointer(source_type) &&
+        minic_type_equal(target_type, source_type) &&
+        target_type.explicit_alignment != source_type.explicit_alignment) {
+        status = append_scalar_bitcast(context, span, target_type,
+                                       stored_value, &converted_value);
+        if (status != MINIC_CORE_LOWER_OK) return status;
+        stored_value = converted_value;
+    }
     (void)memset(&instruction, 0, sizeof(instruction));
     instruction.kind = MINIC_CORE_INSTRUCTION_STORE;
     instruction.span = span;
