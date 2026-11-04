@@ -114,7 +114,7 @@ typedef struct MinicCoreModuleGlobal {
     /* The complete static-symbol closure runs on these source-independent
      * facts before any live object's byte payload is materialized. */
     bool is_file_scope_reachability_root;
-    bool is_source_asm_operand_root;
+    bool is_file_asm_root; /* Raw file ASM is always emitted, unlike inline ASM. */
     bool was_source_emission_pruned;
     MinicCoreModuleReference *references;
     size_t reference_count;
@@ -136,7 +136,7 @@ typedef struct MinicCoreModuleFunctionSymbol {
     bool is_weak;
     bool is_constructor;
     bool is_reachability_root;
-    bool is_source_asm_operand_root;
+    bool is_file_asm_root;
     bool is_source_label_relocation_owner;
     size_t specialization_source_index; /* SIZE_MAX unless a source clone. */
 } MinicCoreModuleFunctionSymbol;
@@ -155,9 +155,8 @@ typedef struct MinicCoreModule {
     size_t function_count;
     MinicCoreModuleFileAsm *file_asms;
     size_t file_asm_count;
-    /* Source ASM operand shapes that cannot be proven statically suppress
-     * object pruning conservatively, without retaining the source AST. */
-    bool preserve_all_static_objects;
+    /* The finalized Module is an immutable, source-independent emission
+     * contract for all supported targets. */
     bool finalized;
 } MinicCoreModule;
 
@@ -190,6 +189,11 @@ bool minic_core_module_function_name_index_find(
 
 void minic_core_module_initialize(MinicCoreModule *module);
 void minic_core_module_destroy(MinicCoreModule *module);
+/* Exact assembler-identifier token reference in already-sealed raw ASM text.
+ * This is deliberately conservative, not a parser for every GAS dialect;
+ * both ingress and ELF output consume the same lexical boundary rule. */
+bool minic_core_asm_names_symbol(const char *text, size_t length,
+                                 const char *symbol);
 /* Pure, target-neutral initializer layout contract, reusable by each object
  * format writer. ISA-specific relocation widths/directives remain Target-owned. */
 bool minic_core_module_global_fragments_valid(const MinicCoreModuleGlobal *global);

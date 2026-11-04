@@ -64,15 +64,31 @@ duplicate_source="$root/tests/compiler/c0/core_duplicate_assembler_name_reachabi
 "$host_cc" -std=gnu11 -O0 -Wall -Wextra -Werror -fno-pie -no-pie \
     "$duplicate_source" -o "$work/duplicate-name.gnu"
 "$work/duplicate-name.gnu"
-"$host_cc" -std=gnu11 -E -P -x c -DMINIC_TEST_ASM_ROOT \
+"$host_cc" -std=gnu11 -E -P -x c \
     "$duplicate_source" -o "$work/duplicate-name.i"
 for target in x86_64 riscv32 riscv64 aarch64 loongarch64; do
     "$minic" --target="$target-linux" -S "$work/duplicate-name.i" \
         -o "$work/duplicate-name.$target.s"
     if ! grep -Fxq 'mc_duplicate_asm:' "$work/duplicate-name.$target.s" ||
        ! grep -Fxq 'mc_duplicate_address_asm:' "$work/duplicate-name.$target.s" ||
-       ! grep -Fxq 'mc_duplicate_asm_root:' "$work/duplicate-name.$target.s"; then
-        echo "CORE_MODULE_REACHABILITY=FAIL target=$target duplicate_asm_call_initializer_or_source_asm_root_definition_pruned" >&2
+       grep -Fxq 'mc_duplicate_asm_root:' "$work/duplicate-name.$target.s"; then
+        echo "CORE_MODULE_REACHABILITY=FAIL target=$target duplicate_asm_call_initializer_or_dead_root" >&2
+        exit 1
+    fi
+done
+# The GNU `i` form for a function's assembler alias is currently admitted
+# on RISC-V; its owner must now be an actually live Core CALL in `main`, not
+# a dead source function rescued by a global source-ASM operand scan. Other
+# ISA machine ASM forms stay fail-closed, while their CALL/initializer tests
+# above remain mandatory on all five targets.
+"$host_cc" -std=gnu11 -E -P -x c -DMINIC_TEST_ASM_ROOT \
+    "$duplicate_source" -o "$work/duplicate-live-asm.i"
+for target in riscv32 riscv64; do
+    "$minic" --target="$target-linux" -S "$work/duplicate-live-asm.i" \
+        -o "$work/duplicate-live-asm.$target.s"
+    if ! grep -Fxq 'mc_duplicate_asm_root:' \
+            "$work/duplicate-live-asm.$target.s"; then
+        echo "CORE_MODULE_REACHABILITY=FAIL target=$target live_duplicate_asm_root_pruned" >&2
         exit 1
     fi
 done
@@ -80,7 +96,7 @@ done
     -o "$work/duplicate-name.minic.o"
 "$host_cc" -no-pie "$work/duplicate-name.minic.o" -o "$work/duplicate-name.minic"
 "$work/duplicate-name.minic"
-echo 'CORE_MODULE_DUPLICATE_FUNCTION_SYMBOL=PASS call_initializer_source_asm_operand five_ISA=5 GNU_native=0 MiniC_native=0'
+echo 'CORE_MODULE_DUPLICATE_FUNCTION_SYMBOL=PASS call_initializer_five_ISA=5 live_source_asm_RV=2 dead_source_asm_pruned=5 GNU_native=0 MiniC_native=0'
 
 # MC-064: x86-specific %c0 would require a different backend ASM grammar;
 # use the original RV64 GNU-valid %0 symbolic immediate in all variants.

@@ -1,10 +1,97 @@
 #include "frontend/ast.h"
+#include "frontend/ast_traversal.h"
 #include "frontend/ast_verifier.h"
 #include "frontend/cast_normalization.h"
 #include "target/source_policy/source_info.h"
 
 #include <stdbool.h>
 #include <string.h>
+
+typedef struct MinicTestChildIds {
+    MinicExpressionId values[MINIC_MAX_FUNCTION_PARAMETERS + 1U];
+    size_t count;
+} MinicTestChildIds;
+
+static bool collect_child_id(MinicExpressionId id, void *opaque) {
+    MinicTestChildIds *ids = opaque;
+    if (ids == NULL || ids->count >= MINIC_MAX_FUNCTION_PARAMETERS + 1U)
+        return false;
+    ids->values[ids->count++] = id;
+    return true;
+}
+
+static bool increment_child_id(MinicExpressionId *id, void *opaque) {
+    (void)opaque;
+    if (id == NULL || *id == SIZE_MAX) return false;
+    *id += 1U;
+    return true;
+}
+
+/* A source CALL may have up to 56 separately allocated overflow arguments.
+ * Old nominally-const walkers would write each value back through the same
+ * heap pointer, even when given a shallow copy of the Expression. Keep the
+ * backing array in read-only storage to enforce the new physical contract. */
+static int test_const_call_child_visitor(void) {
+    static const uint32_t readonly_overflow[
+        MINIC_MAX_FUNCTION_PARAMETERS - MINIC_CALL_INLINE_ARGUMENTS] = {101U, 102U};
+    uint32_t writable_overflow[
+        MINIC_MAX_FUNCTION_PARAMETERS - MINIC_CALL_INLINE_ARGUMENTS];
+    MinicExpression call;
+    MinicTestChildIds ids = {{0}, 0U};
+    size_t i;
+
+    (void)memset(&call, 0, sizeof(call));
+    call.kind = MINIC_EXPRESSION_CALL;
+    call.value.call.function_id = 3U;
+    call.value.call.callee = MINIC_EXPRESSION_INVALID;
+    call.value.call.argument_count = MINIC_MAX_FUNCTION_PARAMETERS;
+    for (i = 0U; i < MINIC_CALL_INLINE_ARGUMENTS; ++i)
+        call.value.call.arguments[i] = (uint32_t)(i + 10U);
+    /* The cast does not grant writes: a const visitor must only load from
+     * the borrowed C representation, whose historical ABI is `uint32_t *`. */
+    call.value.call.overflow_arguments = (uint32_t *)(const void *)readonly_overflow;
+    if (!minic_c0_expression_visit_child_ids(&call, collect_child_id, &ids) ||
+        ids.count != MINIC_MAX_FUNCTION_PARAMETERS || ids.values[0] != 10U ||
+        ids.values[MINIC_CALL_INLINE_ARGUMENTS] != 101U ||
+        ids.values[MINIC_CALL_INLINE_ARGUMENTS + 1U] != 102U ||
+        ids.values[MINIC_MAX_FUNCTION_PARAMETERS - 1U] != 0U ||
+        call.value.call.overflow_arguments != (uint32_t *)(const void *)readonly_overflow)
+        return 90;
+
+    /* The indirect CALL's function-expression edge precedes all arguments. */
+    call.value.call.function_id = MINIC_FUNCTION_INVALID;
+    call.value.call.callee = 777U;
+    (void)memset(&ids, 0, sizeof(ids));
+    if (!minic_c0_expression_visit_child_ids(&call, collect_child_id, &ids) ||
+        ids.count != MINIC_MAX_FUNCTION_PARAMETERS + 1U ||
+        ids.values[0] != 777U || ids.values[1] != 10U ||
+        ids.values[1U + MINIC_CALL_INLINE_ARGUMENTS] != 101U ||
+        call.value.call.callee != 777U) return 91;
+
+    /* A real rewriting pass keeps the same edge order, and *can* mutate
+     * the independent overflow array. No writable visitor is used by a
+     * validator, ModuleIR importer, or Core constant-fact query. */
+    (void)memcpy(writable_overflow, readonly_overflow, sizeof(writable_overflow));
+    call.value.call.overflow_arguments = writable_overflow;
+    if (!minic_c0_expression_remap_child_ids(&call, increment_child_id, NULL) ||
+        call.value.call.callee != 778U ||
+        call.value.call.arguments[0] != 11U ||
+        call.value.call.arguments[MINIC_CALL_INLINE_ARGUMENTS - 1U] !=
+            10U + MINIC_CALL_INLINE_ARGUMENTS ||
+        writable_overflow[0] != 102U || writable_overflow[1] != 103U)
+        return 92;
+
+    call.value.call.argument_count = MINIC_MAX_FUNCTION_PARAMETERS + 1U;
+    if (minic_c0_expression_visit_child_ids(&call, collect_child_id, &ids) ||
+        minic_c0_expression_remap_child_ids(&call, increment_child_id, NULL))
+        return 93;
+    call.value.call.argument_count = MINIC_CALL_INLINE_ARGUMENTS + 1U;
+    call.value.call.overflow_arguments = NULL;
+    if (minic_c0_expression_visit_child_ids(&call, collect_child_id, &ids) ||
+        minic_c0_expression_remap_child_ids(&call, increment_child_id, NULL))
+        return 94;
+    return 0;
+}
 
 static MinicSourceSpan test_span(size_t offset) {
     MinicSourceSpan span;
@@ -827,6 +914,10 @@ int main(void) {
         return status;
     }
     status = test_call_argument_overflow_normalization();
+    if (status != 0) {
+        return status;
+    }
+    status = test_const_call_child_visitor();
     if (status != 0) {
         return status;
     }

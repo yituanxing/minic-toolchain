@@ -295,6 +295,11 @@ void minic_core_function_destroy(MinicCoreFunction *function) {
             free(inline_asm->register_clobbers[clobber_index].name);
         }
         free(inline_asm->register_clobbers);
+        for (clobber_index = 0U; inline_asm->symbol_references != NULL &&
+                                  clobber_index < inline_asm->symbol_reference_count;
+             ++clobber_index)
+            free(inline_asm->symbol_references[clobber_index].name);
+        free(inline_asm->symbol_references);
     }
     free(function->name);
     free(function->core_parameter_type_ids);
@@ -488,6 +493,46 @@ bool minic_core_function_add_inline_asm_register_clobber(
     stored = &inline_asm->register_clobbers[inline_asm->register_clobber_count++];
     stored->name = name_copy;
     stored->name_length = name_length;
+    return true;
+}
+
+bool minic_core_function_add_inline_asm_symbol_reference(
+    MinicCoreFunction *function, MinicCoreInlineAsmId inline_asm_id,
+    MinicCoreInlineAsmSymbolKind kind, const char *name,
+    size_t name_length, int64_t byte_addend) {
+    MinicCoreInlineAsm *assembly;
+    MinicCoreInlineAsmSymbolReference *stored;
+    char *copy;
+    size_t i;
+    if (function == NULL || inline_asm_id >= function->inline_asm_count ||
+        (kind != MINIC_CORE_INLINE_ASM_SYMBOL_FUNCTION &&
+         kind != MINIC_CORE_INLINE_ASM_SYMBOL_OBJECT) ||
+        name == NULL || name_length == 0U || name_length == SIZE_MAX ||
+        memchr(name, '\0', name_length) != NULL)
+        return false;
+    assembly = &function->inline_asms[inline_asm_id];
+    for (i = 0U; i < assembly->symbol_reference_count; ++i) {
+        const MinicCoreInlineAsmSymbolReference *existing =
+            &assembly->symbol_references[i];
+        if (existing->kind == kind && existing->name_length == name_length &&
+            existing->byte_addend == byte_addend &&
+            memcmp(existing->name, name, name_length) == 0)
+            return true;
+    }
+    copy = minic_core_ir_copy_name(name, name_length);
+    if (copy == NULL ||
+        !minic_core_ir_grow_array((void **)&assembly->symbol_references,
+            &assembly->symbol_reference_capacity,
+            assembly->symbol_reference_count,
+            sizeof(*assembly->symbol_references))) {
+        free(copy);
+        return false;
+    }
+    stored = &assembly->symbol_references[assembly->symbol_reference_count++];
+    stored->kind = kind;
+    stored->name = copy;
+    stored->name_length = name_length;
+    stored->byte_addend = byte_addend;
     return true;
 }
 

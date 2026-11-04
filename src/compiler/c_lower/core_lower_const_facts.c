@@ -1148,9 +1148,9 @@ typedef struct CoreUnionRefCheck {
     bool used;
 } CoreUnionRefCheck;
 
-static bool core_cfg_union_check_child(MinicExpressionId *id, void *opaque) {
+static bool core_cfg_union_check_child(MinicExpressionId id, void *opaque) {
     CoreUnionRefCheck *check = (CoreUnionRefCheck *)opaque;
-    if (id != NULL && *id == check->needle) check->used = true;
+    if (id == check->needle) check->used = true;
     return true;
 }
 
@@ -1164,10 +1164,9 @@ static bool core_cfg_union_id_is_only_member_address(
     size_t i;
     for (i = 0U; i < p->expression_count; ++i) {
         const MinicExpression *parent = &p->expressions[i];
-        MinicExpression copy = *parent;
         CoreUnionRefCheck check = {id, false};
-        if (!minic_c0_expression_visit_child_id_refs(
-                &copy, core_cfg_union_check_child, &check)) return false;
+        if (!minic_c0_expression_visit_child_ids(
+                parent, core_cfg_union_check_child, &check)) return false;
         if (check.used &&
             (parent->kind != allowed_parent ||
              (allowed_parent == MINIC_EXPRESSION_ADDRESS_OF &&

@@ -91,6 +91,61 @@ static bool enqueue_named_object(ModuleClosure *c, const char *name, size_t n) {
     return true; /* External/target-synthesized object. */
 }
 
+static bool core_asm_id_for_instruction(const MinicCoreInstruction *ins,
+                                        MinicCoreInlineAsmId *id) {
+    switch (ins->kind) {
+    case MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM:
+    case MINIC_CORE_INSTRUCTION_REGISTER_OUTPUT_INLINE_ASM:
+        *id = ins->value.inline_asm_id; return true;
+    case MINIC_CORE_INSTRUCTION_REGISTER_OUTPUT_INPUT_INLINE_ASM:
+        *id = ins->value.register_output_input_inline_asm.inline_asm_id; return true;
+    case MINIC_CORE_INSTRUCTION_MEMORY_READWRITE_SCALAR_INPUT_INLINE_ASM:
+        *id = ins->value.memory_readwrite_scalar_input_inline_asm.inline_asm_id; return true;
+    case MINIC_CORE_INSTRUCTION_SCALAR_INPUT_INLINE_ASM:
+        *id = ins->value.scalar_input_inline_asm.inline_asm_id; return true;
+    case MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM:
+        *id = ins->value.structured_inline_asm.inline_asm_id; return true;
+    default: return false;
+    }
+}
+
+/* Only a live Core instruction can contribute these edges. Literal GNU ASM
+ * text has no C operand identity: conservatively resolve whole assembler
+ * tokens, while typed operand references remain exact and source-independent. */
+static bool scan_core_inline_asm(ModuleClosure *c,
+                                  const MinicCoreInlineAsm *assembly) {
+    const MinicCoreModule *m = &c->set->module;
+    size_t i;
+    for (i = 0U; i < assembly->symbol_reference_count; ++i) {
+        const MinicCoreInlineAsmSymbolReference *ref =
+            &assembly->symbol_references[i];
+        if (ref->kind == MINIC_CORE_INLINE_ASM_SYMBOL_FUNCTION) {
+            if (!enqueue_named_function(c, ref->name, ref->name_length)) return false;
+        } else if (ref->kind == MINIC_CORE_INLINE_ASM_SYMBOL_OBJECT) {
+            if (!enqueue_named_object(c, ref->name, ref->name_length)) return false;
+        } else return false;
+    }
+    if (assembly->preserve_all_static_objects)
+        for (i = 0U; i < m->global_count; ++i)
+            if (!enqueue_object(c, i)) return false;
+    if (assembly->template_text == NULL) return false;
+    for (i = 0U; i < m->function_count; ++i) {
+        const MinicCoreModuleFunctionSymbol *f = &m->function_symbols[i];
+        if (f->name != NULL &&
+            minic_core_asm_names_symbol(assembly->template_text,
+                assembly->template_length, f->name) &&
+            !enqueue_named_function(c, f->name, strlen(f->name))) return false;
+    }
+    for (i = 0U; i < m->global_count; ++i) {
+        const MinicCoreModuleGlobal *g = &m->globals[i];
+        if (g->name != NULL &&
+            minic_core_asm_names_symbol(assembly->template_text,
+                assembly->template_length, g->name) &&
+            !enqueue_named_object(c, g->name, strlen(g->name))) return false;
+    }
+    return true;
+}
+
 static bool scan_core_function(ModuleClosure *c, size_t id) {
     const MinicCoreFunction *fn = &c->set->functions[id];
     bool *reach = NULL;
@@ -138,6 +193,11 @@ static bool scan_core_function(ModuleClosure *c, size_t id) {
                 if (global >= fn->global_count ||
                     !enqueue_named_object(c, fn->globals[global].name,
                                           fn->globals[global].name_length)) goto done;
+            } else {
+                MinicCoreInlineAsmId asm_id;
+                if (core_asm_id_for_instruction(ins, &asm_id) &&
+                    (asm_id >= fn->inline_asm_count ||
+                     !scan_core_inline_asm(c, &fn->inline_asms[asm_id]))) goto done;
             }
             /* BLOCK_ADDRESS denotes a Core-local block, not a TU symbol. */
         }
@@ -237,9 +297,9 @@ bool minic_core_function_set_close_reachability(
     for (i = 0U; i < m->function_count; ++i) {
         const MinicCoreModuleFunctionSymbol *f = &m->function_symbols[i];
         if (f->is_reachability_root && !enqueue_function(&c, i)) goto done;
-        /* Source asm operands name emitted assembler symbols, not C source
-         * declarations: all definitions sharing the spelling may satisfy it. */
-        if (f->is_source_asm_operand_root &&
+        /* Always-emitted file-scope ASM is a true Module root. Function-body
+         * ASM operand references instead close through live Core effects. */
+        if (f->is_file_asm_root &&
             !enqueue_named_function(&c, f->name, strlen(f->name))) goto done;
         /* Alias definitions can remain linker-visible without a C callsite. */
         if (f->alias_target_index != SIZE_MAX &&
@@ -247,10 +307,10 @@ bool minic_core_function_set_close_reachability(
     }
     for (i = 0U; i < m->global_count; ++i) {
         const MinicCoreModuleGlobal *g = &m->globals[i];
-        if ((g->is_source_asm_operand_root ||
+        if ((g->is_file_asm_root ||
              (g->owner_function_index == SIZE_MAX &&
               (g->is_file_scope_reachability_root ||
-               m->preserve_all_static_objects || c.duplicate_objects))) &&
+               c.duplicate_objects))) &&
             !enqueue_object(&c, i)) goto done;
     }
 
@@ -311,7 +371,8 @@ bool minic_core_function_set_close_reachability(
     for (i = 0U; i < m->global_count; ++i) {
         MinicCoreModuleGlobal *g = &m->globals[i];
         if (g->owner_function_index != SIZE_MAX)
-            g->emittable = canonical_owner_live[g->owner_function_index];
+            g->emittable = canonical_owner_live[g->owner_function_index] ||
+                c.objects_live[i];
         else
             g->emittable = !g->was_source_emission_pruned &&
                 (!g->is_internal || c.objects_live[i]);

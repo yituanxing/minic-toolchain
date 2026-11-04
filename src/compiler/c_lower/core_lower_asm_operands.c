@@ -1295,9 +1295,10 @@ bool core_inline_asm_specialize_immediates(const MinicCoreLowerContext *context,
 
 /* BATCH_I_REGISTER_OUTPUT_IMMEDIATE_SPECIALIZATION: a value-producing
    asm may have one runtime register output plus compile-time-only immediate
-   inputs. Preserve %0 for the output and bake %1..%9 into target text using
-   the existing i/I constant/symbol resolver. No target instruction meaning is
-   introduced into Core. */
+   inputs. Preserve %0 for the output and bake %1..%9 / GNU %c1..%c9 into
+   target text using the existing i/I constant/symbol resolver. The `c`
+   modifier suppresses a target immediate prefix; Core's normalized text
+   already has no such prefix. No target instruction meaning is introduced. */
 bool core_inline_asm_specialize_register_output_immediates(
     const MinicCoreLowerContext *context,
     const MinicInlineAsm *source,
@@ -1334,6 +1335,9 @@ bool core_inline_asm_specialize_register_output_immediates(
     output_length = 0U;
     while (cursor < source->template_length) {
         size_t operand_index;
+        size_t operand_width = 2U;
+        bool bare_immediate = false;
+        char digit;
 
         if (source->template_text[cursor] != '%') {
             if (output_length == SIZE_MAX) return false;
@@ -1348,12 +1352,19 @@ bool core_inline_asm_specialize_register_output_immediates(
             cursor += 2U;
             continue;
         }
-        if (source->template_text[cursor + 1U] < '0' ||
-            source->template_text[cursor + 1U] > '9') {
+        digit = source->template_text[cursor + 1U];
+        if (digit == 'c') {
+            if (cursor + 2U >= source->template_length) return false;
+            digit = source->template_text[cursor + 2U];
+            operand_width = 3U;
+            bare_immediate = true;
+        }
+        if (digit < '0' || digit > '9') {
             return false;
         }
-        operand_index = (size_t)(source->template_text[cursor + 1U] - '0');
+        operand_index = (size_t)(digit - '0');
         if (operand_index == 0U) {
+            if (bare_immediate) return false; /* Output %0 is a register. */
             if (output_length > SIZE_MAX - 2U) return false;
             output_length += 2U;
         } else {
@@ -1364,7 +1375,7 @@ bool core_inline_asm_specialize_register_output_immediates(
             }
             output_length += replacement_lengths[input_index];
         }
-        cursor += 2U;
+        cursor += operand_width;
     }
     if (output_length == SIZE_MAX) return false;
     specialized = (char *)malloc(output_length + 1U);
@@ -1374,6 +1385,8 @@ bool core_inline_asm_specialize_register_output_immediates(
     output_cursor = 0U;
     while (cursor < source->template_length) {
         size_t operand_index;
+        size_t operand_width = 2U;
+        char digit;
 
         if (source->template_text[cursor] != '%') {
             specialized[output_cursor++] = source->template_text[cursor++];
@@ -1384,7 +1397,12 @@ bool core_inline_asm_specialize_register_output_immediates(
             cursor += 2U;
             continue;
         }
-        operand_index = (size_t)(source->template_text[cursor + 1U] - '0');
+        digit = source->template_text[cursor + 1U];
+        if (digit == 'c') {
+            digit = source->template_text[cursor + 2U]; /* Checked above. */
+            operand_width = 3U;
+        }
+        operand_index = (size_t)(digit - '0');
         if (operand_index == 0U) {
             specialized[output_cursor++] = '%';
             specialized[output_cursor++] = '0';
@@ -1395,7 +1413,7 @@ bool core_inline_asm_specialize_register_output_immediates(
                          replacement_lengths[input_index]);
             output_cursor += replacement_lengths[input_index];
         }
-        cursor += 2U;
+        cursor += operand_width;
     }
     specialized[output_cursor] = '\0';
     if (output_cursor != output_length) {

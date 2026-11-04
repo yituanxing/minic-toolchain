@@ -1,9 +1,7 @@
 #include "compiler/module_ir_build.h"
-#include "compiler/inline_specialize_internal.h"
 #include "core/symbol_identity.h"
 
 #include "compiler/global_payload.h"
-#include "frontend/ast_traversal.h"
 #include "target/data_layout_source.h"
 #include <stdint.h>
 #include <stdlib.h>
@@ -16,76 +14,28 @@ typedef struct MinicModuleFragmentSinkContext {
     size_t cursor;
 } MinicModuleFragmentSinkContext;
 
-typedef struct MinicModuleAsmRootWalk {
-    const MinicC0Program *program;
-    MinicCoreModule *module;
-    unsigned int depth;
-} MinicModuleAsmRootWalk;
-
-/* All source GNU asm operand expressions, including an unreachable asm,
- * may become symbolic immediates without a Core address instruction.  Capture
- * typed function/object roots once; never ask Core closure to parse C syntax
- * or architecture-dependent template text. An opaque nested expression
- * conservatively disables object pruning, matching the historical contract. */
-static bool module_asm_operand_root_visit(MinicExpressionId *id_opaque,
-                                          void *context_opaque) {
-    MinicModuleAsmRootWalk *walk = context_opaque;
-    const MinicExpression *expression;
-    MinicExpression expression_view;
-    bool ok;
-    if (walk == NULL || id_opaque == NULL || walk->program == NULL ||
-        walk->module == NULL || walk->depth >= 64U ||
-        *id_opaque >= walk->program->expression_count) return false;
-    expression = minic_c0_program_expression(walk->program, *id_opaque);
-    if (expression == NULL) return false;
-    if (expression->kind == MINIC_EXPRESSION_GLOBAL_OBJECT) {
-        size_t id = expression->value.global_object_id;
-        if (id >= walk->module->global_count) return false;
-        walk->module->globals[id].is_source_asm_operand_root = true;
-        return true;
-    }
-    if (expression->kind == MINIC_EXPRESSION_FUNCTION) {
-        size_t id = expression->value.function_id;
-        if (id >= walk->module->function_count) return false;
-        walk->module->function_symbols[id].is_source_asm_operand_root = true;
-        return true;
-    }
-    if (expression->kind == MINIC_EXPRESSION_COMPOUND_LITERAL ||
-        expression->kind == MINIC_EXPRESSION_STATEMENT) return false;
-    expression_view = *expression;
-    ++walk->depth;
-    ok = minic_c0_expression_visit_child_id_refs(
-        &expression_view, module_asm_operand_root_visit, walk);
-    --walk->depth;
-    return ok;
-}
-
-static void module_capture_asm_operand_roots(MinicCoreModule *module,
-                                             const MinicC0Program *program) {
-    size_t i;
-    for (i = 0U; i < program->inline_asm_count; ++i) {
-        const MinicInlineAsm *source = &program->inline_asms[i];
-        MinicModuleAsmRootWalk walk = {program, module, 0U};
-        size_t j;
-        if ((source->input_count != 0U && source->inputs == NULL) ||
-            (source->output_count != 0U && source->outputs == NULL)) {
-            module->preserve_all_static_objects = true;
-            return;
-        }
-        for (j = 0U; j < source->input_count; ++j) {
-            MinicExpressionId id = source->inputs[j].expression;
-            if (!module_asm_operand_root_visit(&id, &walk)) {
-                module->preserve_all_static_objects = true;
-                return;
+/* File-level GNU ASM is always emitted. Capture only its assembler-token
+ * references in the sealed Module; function-body ASM roots instead belong to
+ * reachable Core ASM instructions, never an all-Source declaration scan. */
+static void module_capture_file_asm_roots(MinicCoreModule *module) {
+    size_t symbol_index, asm_index;
+    for (symbol_index = 0U; symbol_index < module->global_count; ++symbol_index) {
+        MinicCoreModuleGlobal *symbol = &module->globals[symbol_index];
+        for (asm_index = 0U; asm_index < module->file_asm_count; ++asm_index)
+            if (minic_core_asm_names_symbol(module->file_asms[asm_index].text,
+                    module->file_asms[asm_index].length, symbol->name)) {
+                symbol->is_file_asm_root = true;
+                break;
             }
-        }
-        for (j = 0U; j < source->output_count; ++j) {
-            MinicExpressionId id = source->outputs[j].expression;
-            if (!module_asm_operand_root_visit(&id, &walk)) {
-                module->preserve_all_static_objects = true;
-                return;
+    }
+    for (symbol_index = 0U; symbol_index < module->function_count; ++symbol_index) {
+        MinicCoreModuleFunctionSymbol *symbol = &module->function_symbols[symbol_index];
+        for (asm_index = 0U; asm_index < module->file_asm_count; ++asm_index)
+            if (minic_core_asm_names_symbol(module->file_asms[asm_index].text,
+                    module->file_asms[asm_index].length, symbol->name)) {
+                symbol->is_file_asm_root = true;
+                break;
             }
-        }
     }
 }
 
@@ -257,9 +207,7 @@ static bool module_capture_global_identity(MinicCoreModuleGlobal *destination,
          source->section_name != NULL ||
          source->alias_target < program->global_object_count ||
          source->is_weak || source->is_thread_local ||
-         source->visibility != MINIC_SYMBOL_VISIBILITY_DEFAULT ||
-         minic_program_has_opaque_asm_symbol(
-             program, source->name, source->name_length));
+         source->visibility != MINIC_SYMBOL_VISIBILITY_DEFAULT);
     destination->emittable = false;
     destination->core_type_id = MINIC_CORE_TYPE_INVALID;
     if (source->alias_target != MINIC_GLOBAL_OBJECT_INVALID) {
@@ -442,7 +390,7 @@ bool minic_core_module_prepare_from_program(MinicCoreModule *output,
         staged.file_asms[index].length = source->length;
         if (staged.file_asms[index].text == NULL) goto failed;
     }
-    module_capture_asm_operand_roots(&staged, program);
+    module_capture_file_asm_roots(&staged);
     minic_core_module_destroy(output);
     *output = staged;
     return true;

@@ -5,20 +5,42 @@ typedef struct MinicExpressionIdRemapContext {
     size_t mapping_count;
 } MinicExpressionIdRemapContext;
 
+typedef struct MinicExpressionChildVisitor {
+    const MinicExpression *expression;
+    MinicExpression *writable;
+    MinicExpressionIdReadVisitor read;
+    MinicExpressionIdRefVisitor rewrite;
+    void *context;
+} MinicExpressionChildVisitor;
+
 static bool visit_expression_id(MinicExpressionId *expression_id,
                                 MinicExpressionIdRefVisitor visitor,
                                 void *context) {
     return expression_id != NULL && visitor != NULL && visitor(expression_id, context);
 }
 
-bool minic_c0_expression_visit_child_id_refs(MinicExpression *expression,
-                                             MinicExpressionIdRefVisitor visitor,
-                                             void *context) {
+static bool visit_child_id(const MinicExpressionChildVisitor *walk,
+                           MinicExpressionId value, MinicExpressionId *writable) {
+    if (walk == NULL) return false;
+    if (walk->read != NULL) return walk->read(value, walk->context);
+    return visit_expression_id(writable, walk->rewrite, walk->context);
+}
+
+/* One enumeration and ordering for const readers and actual AST remappers.
+ * The read path never takes a mutable pointer to a Program-owned child ID. */
+static bool visit_expression_children(const MinicExpressionChildVisitor *walk) {
+    const MinicExpression *expression;
+    MinicExpression *writable;
     size_t argument_index;
 
-    if (expression == NULL || visitor == NULL) {
-        return false;
-    }
+    if (walk == NULL || (expression = walk->expression) == NULL ||
+        ((walk->read == NULL) == (walk->rewrite == NULL))) return false;
+    writable = walk->writable;
+    if (walk->rewrite != NULL && writable == NULL) return false;
+
+#define VISIT_FIELD(field) \
+    visit_child_id(walk, expression->value.field, \
+        writable != NULL ? &writable->value.field : NULL)
 
     switch (expression->kind) {
     case MINIC_EXPRESSION_INTEGER:
@@ -47,43 +69,44 @@ bool minic_c0_expression_visit_child_id_refs(MinicExpression *expression,
     case MINIC_EXPRESSION_BUILTIN_VA_START:
     case MINIC_EXPRESSION_BUILTIN_VA_END:
     case MINIC_EXPRESSION_BUILTIN_VA_ARG:
-        return visit_expression_id(&expression->value.unary.operand, visitor, context);
+        return VISIT_FIELD(unary.operand);
 
     case MINIC_EXPRESSION_SUBSCRIPT:
-        return visit_expression_id(&expression->value.subscript.base, visitor, context) &&
-               visit_expression_id(&expression->value.subscript.index, visitor, context);
+        return VISIT_FIELD(subscript.base) && VISIT_FIELD(subscript.index);
 
     case MINIC_EXPRESSION_MEMBER:
-        return visit_expression_id(&expression->value.member.base, visitor, context);
+        return VISIT_FIELD(member.base);
 
     case MINIC_EXPRESSION_ASSIGNMENT:
     case MINIC_EXPRESSION_COMPOUND_ASSIGNMENT:
     case MINIC_EXPRESSION_BINARY:
     case MINIC_EXPRESSION_BUILTIN_VA_COPY:
-        return visit_expression_id(&expression->value.binary.left, visitor, context) &&
-               visit_expression_id(&expression->value.binary.right, visitor, context);
+        return VISIT_FIELD(binary.left) && VISIT_FIELD(binary.right);
 
     case MINIC_EXPRESSION_CONDITIONAL:
-        return visit_expression_id(&expression->value.conditional.condition, visitor, context) &&
-               visit_expression_id(&expression->value.conditional.when_true, visitor, context) &&
-               visit_expression_id(&expression->value.conditional.when_false, visitor, context);
+        return VISIT_FIELD(conditional.condition) &&
+               VISIT_FIELD(conditional.when_true) &&
+               VISIT_FIELD(conditional.when_false);
 
     case MINIC_EXPRESSION_CALL:
-        if (expression->value.call.argument_count > MINIC_MAX_FUNCTION_PARAMETERS) {
+        if (expression->value.call.argument_count > MINIC_MAX_FUNCTION_PARAMETERS ||
+            (expression->value.call.argument_count > MINIC_CALL_INLINE_ARGUMENTS &&
+             expression->value.call.overflow_arguments == NULL)) {
             return false;
         }
         if (expression->value.call.function_id == MINIC_FUNCTION_INVALID &&
-            !visit_expression_id(&expression->value.call.callee, visitor, context)) {
+            !VISIT_FIELD(call.callee)) {
             return false;
         }
         for (argument_index = 0U; argument_index < expression->value.call.argument_count;
              ++argument_index) {
             MinicExpressionId argument_id =
                 minic_c0_call_argument(expression, argument_index);
-            if (!visit_expression_id(&argument_id, visitor, context) ||
-                !minic_c0_call_set_argument(expression, argument_index, argument_id)) {
+            if (!visit_child_id(walk, argument_id, writable != NULL ? &argument_id : NULL))
                 return false;
-            }
+            if (writable != NULL &&
+                !minic_c0_call_set_argument(writable, argument_index, argument_id))
+                return false;
         }
         return true;
 
@@ -91,26 +114,38 @@ bool minic_c0_expression_visit_child_id_refs(MinicExpression *expression,
         if (expression->value.statement_expression.result == MINIC_EXPRESSION_INVALID) {
             return true;
         }
-        return visit_expression_id(
-            &expression->value.statement_expression.result, visitor, context);
+        return VISIT_FIELD(statement_expression.result);
 
     case MINIC_EXPRESSION_BUILTIN_UNARY:
-        return visit_expression_id(&expression->value.builtin_unary.operand, visitor, context);
+        return VISIT_FIELD(builtin_unary.operand);
 
     case MINIC_EXPRESSION_BUILTIN_ATOMIC_LOAD:
-        return visit_expression_id(&expression->value.atomic_load.address, visitor, context);
+        return VISIT_FIELD(atomic_load.address);
     case MINIC_EXPRESSION_BUILTIN_ATOMIC_STORE:
-        return visit_expression_id(&expression->value.atomic_store.address, visitor, context) &&
-               visit_expression_id(&expression->value.atomic_store.source, visitor, context);
+        return VISIT_FIELD(atomic_store.address) && VISIT_FIELD(atomic_store.source);
 
     case MINIC_EXPRESSION_BUILTIN_OVERFLOW:
     case MINIC_EXPRESSION_BUILTIN_OVERFLOW_P:
-        return visit_expression_id(&expression->value.overflow.left, visitor, context) &&
-               visit_expression_id(&expression->value.overflow.right, visitor, context) &&
-               visit_expression_id(&expression->value.overflow.result_pointer, visitor, context);
+        return VISIT_FIELD(overflow.left) && VISIT_FIELD(overflow.right) &&
+               VISIT_FIELD(overflow.result_pointer);
     }
 
+#undef VISIT_FIELD
     return false;
+}
+
+bool minic_c0_expression_visit_child_ids(const MinicExpression *expression,
+                                         MinicExpressionIdReadVisitor visitor,
+                                         void *context) {
+    MinicExpressionChildVisitor walk = {expression, NULL, visitor, NULL, context};
+    return visit_expression_children(&walk);
+}
+
+bool minic_c0_expression_remap_child_ids(MinicExpression *expression,
+                                         MinicExpressionIdRefVisitor visitor,
+                                         void *context) {
+    MinicExpressionChildVisitor walk = {expression, expression, NULL, visitor, context};
+    return visit_expression_children(&walk);
 }
 
 static bool external_expression_ref_storage_is_valid(const MinicC0Program *program) {

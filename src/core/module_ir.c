@@ -4,6 +4,31 @@
 #include <stdlib.h>
 #include <string.h>
 
+bool minic_core_asm_names_symbol(const char *text, size_t length,
+                                 const char *symbol) {
+    size_t index, name_length;
+    if (text == NULL || symbol == NULL ||
+        (name_length = strlen(symbol)) == 0U || name_length > length)
+        return false;
+    for (index = 0U; index <= length - name_length; ++index) {
+        const unsigned char before = index == 0U ? 0U : (unsigned char)text[index - 1U];
+        const unsigned char after = index + name_length == length ? 0U :
+            (unsigned char)text[index + name_length];
+        const bool left_identifier =
+            (before >= 'a' && before <= 'z') || (before >= 'A' && before <= 'Z') ||
+            (before >= '0' && before <= '9') || before == '_' || before == '.' ||
+            before == '$';
+        const bool right_identifier =
+            (after >= 'a' && after <= 'z') || (after >= 'A' && after <= 'Z') ||
+            (after >= '0' && after <= '9') || after == '_' || after == '.' ||
+            after == '$';
+        if (!left_identifier && !right_identifier &&
+            memcmp(text + index, symbol, name_length) == 0)
+            return true;
+    }
+    return false;
+}
+
 void minic_core_module_initialize(MinicCoreModule *module) {
     if (module != NULL) (void)memset(module, 0, sizeof(*module));
 }

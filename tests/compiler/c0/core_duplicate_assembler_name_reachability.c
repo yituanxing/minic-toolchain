@@ -29,10 +29,11 @@ static int mc_duplicate_asm_root_local(void) {
     return 9;
 }
 
-/* Deliberately uncalled: the source operand is collected before Core
- * reachability and preserves the symbol. This architecture-specific GNU
- * asm operand is enabled only for MiniC's five-ISA -S oracle; the native
- * executable checks the CALL and global initializer relocations instead. */
+/* The ASM operand owner must be live before its symbolic dependency can
+ * retain the definition. GCC -O2 drops an uncalled static ASM anchor; an
+ * earlier source-global root test incorrectly relied on that dead owner.
+ * This architecture-specific GNU form is enabled only for MiniC's -S
+ * oracle; the native executable checks the other two reference classes. */
 #ifdef MINIC_TEST_ASM_ROOT
 static void mc_duplicate_asm_operand_anchor(void) __attribute__((unused));
 static void mc_duplicate_asm_operand_anchor(void) {
@@ -43,6 +44,9 @@ static void mc_duplicate_asm_operand_anchor(void) {
 #endif
 
 int main(void) {
+#ifdef MINIC_TEST_ASM_ROOT
+    mc_duplicate_asm_operand_anchor();
+#endif
     return mc_duplicate_external() == 42 && mc_duplicate_address_ptr() == 7
         ? 0 : 1;
 }

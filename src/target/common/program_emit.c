@@ -101,47 +101,16 @@ static bool minic_program_symbol_use_add_asm(MinicProgramSymbolUses *uses,
     return true;
 }
 
-/* Source-owned file/inline ASM may name an external symbol without a Core
- * address or CALL. Check complete assembler tokens, not arbitrary substrings. */
-static bool minic_program_asm_names_symbol(const char *source,
-                                                   size_t length,
-                                                   const char *name) {
-    size_t index, name_length;
-    if (source == NULL || name == NULL || (name_length = strlen(name)) == 0U ||
-        name_length > length)
-        return false;
-    for (index = 0U; index <= length - name_length; ++index) {
-        const unsigned char before = index == 0U ? 0U : (unsigned char)source[index - 1U];
-        const unsigned char after = index + name_length == length ? 0U :
-            (unsigned char)source[index + name_length];
-        const bool left_identifier =
-            (before >= 'a' && before <= 'z') || (before >= 'A' && before <= 'Z') ||
-            (before >= '0' && before <= '9') || before == '_' || before == '.' ||
-            before == '$';
-        const bool right_identifier =
-            (after >= 'a' && after <= 'z') || (after >= 'A' && after <= 'Z') ||
-            (after >= '0' && after <= '9') || after == '_' || after == '.' ||
-            after == '$';
-        if (!left_identifier && !right_identifier &&
-            memcmp(source + index, name, name_length) == 0)
-            return true;
-    }
-    return false;
-}
-
-static bool minic_program_symbol_used_in_source_asm_module(
-    const MinicProgramSymbolUses *uses, const char *name,
-    const MinicCoreModule *module) {
+static bool minic_program_symbol_used_in_live_raw_core_asm(
+    const MinicProgramSymbolUses *uses, const char *name) {
     size_t index;
-    if (uses == NULL || module == NULL) return false;
-    for (index = 0U; index < module->file_asm_count; ++index)
-        if (minic_program_asm_names_symbol(module->file_asms[index].text,
-                                           module->file_asms[index].length, name))
-            return true;
+    if (uses == NULL) return false;
     /* Only Core ASM instructions in blocks the target actually emits count.
-     * A dead static inline body with a hidden declaration is not a use. */
+     * A dead static inline body with a hidden declaration is not a use.
+     * Raw text has no typed operand identity; all provable operand references
+     * are also captured directly from the sealed Core ASM symbol ledger. */
     for (index = 0U; index < uses->asm_count; ++index)
-        if (minic_program_asm_names_symbol(
+        if (minic_core_asm_names_symbol(
                 uses->asm_uses[index].text, uses->asm_uses[index].length, name))
             return true;
     return false;
@@ -264,6 +233,24 @@ static bool minic_program_emit_collect_symbol_uses_module(
                             uses, &function->inline_asms[asm_id])) {
                         free(reachable); return false;
                     }
+                    {
+                        const MinicCoreInlineAsm *core_asm =
+                            &function->inline_asms[asm_id];
+                        size_t reference_index;
+                        if (core_asm->symbol_reference_count != 0U &&
+                            core_asm->symbol_references == NULL) {
+                            free(reachable); return false;
+                        }
+                        for (reference_index = 0U;
+                             reference_index < core_asm->symbol_reference_count;
+                             ++reference_index) {
+                            const MinicCoreInlineAsmSymbolReference *ref =
+                                &core_asm->symbol_references[reference_index];
+                            if (!minic_program_symbol_use_add(uses, ref->name)) {
+                                free(reachable); return false;
+                            }
+                        }
+                    }
                 }
                 if (!minic_program_symbol_use_add(uses, name)) {
                     free(reachable); return false;
@@ -305,8 +292,9 @@ static bool minic_program_emit_undefined_symbol_visibility_module(
                     minic_multi_elf_module_visibility_directive(object->visibility);
                 const bool used =
                     minic_program_symbol_use_has(&uses, object->name) ||
-                    minic_program_symbol_used_in_source_asm_module(
-                        &uses, object->name, module);
+                    object->is_file_asm_root ||
+                    minic_program_symbol_used_in_live_raw_core_asm(
+                        &uses, object->name);
                 if (used && (object->name == NULL ||
                     (object->is_weak &&
                      fprintf(out, ".weak %s\n", object->name) < 0) ||
@@ -327,8 +315,9 @@ static bool minic_program_emit_undefined_symbol_visibility_module(
                     minic_multi_elf_module_visibility_directive(function->visibility);
                 const bool used =
                     minic_program_symbol_use_has(&uses, function->name) ||
-                    minic_program_symbol_used_in_source_asm_module(
-                        &uses, function->name, module);
+                    function->is_file_asm_root ||
+                    minic_program_symbol_used_in_live_raw_core_asm(
+                        &uses, function->name);
                 if (used && (function->name == NULL ||
                     (function->is_weak &&
                      fprintf(out, ".weak %s\n", function->name) < 0) ||

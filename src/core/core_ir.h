@@ -269,6 +269,22 @@ typedef enum MinicAsmOperandPlanOwner {
     MINIC_ASM_OPERAND_PLAN_GENERIC_STRUCTURED
 } MinicAsmOperandPlanOwner;
 
+/* An emitted Core ASM effect can reference a linker-visible name even when
+ * its operand is an immediate rather than an ordinary Core address value.
+ * The spelling and byte displacement are immutable, owned Core facts; no
+ * source ExpressionId or target relocation policy crosses this boundary. */
+typedef enum MinicCoreInlineAsmSymbolKind {
+    MINIC_CORE_INLINE_ASM_SYMBOL_FUNCTION = 0,
+    MINIC_CORE_INLINE_ASM_SYMBOL_OBJECT
+} MinicCoreInlineAsmSymbolKind;
+
+typedef struct MinicCoreInlineAsmSymbolReference {
+    MinicCoreInlineAsmSymbolKind kind;
+    char *name;
+    size_t name_length;
+    int64_t byte_addend;
+} MinicCoreInlineAsmSymbolReference;
+
 typedef struct MinicCoreInlineAsm {
     char *template_text;
     size_t template_length;
@@ -309,6 +325,14 @@ typedef struct MinicCoreInlineAsm {
      * constant texts; no machine syntax or relocation policy is stored. */
     char *resolved_immediates[3];
     size_t resolved_immediate_count;
+    /* These references root definitions only when the corresponding Core
+     * instruction survives the post-lowering reachable-block closure. */
+    MinicCoreInlineAsmSymbolReference *symbol_references;
+    size_t symbol_reference_count;
+    size_t symbol_reference_capacity;
+    /* Source operands with uninspectable nested expressions may reference
+     * static storage; preserve it only when this exact ASM effect is live. */
+    bool preserve_all_static_objects;
 } MinicCoreInlineAsm;
 
 /* Core-wide bound for GNU extended-asm operand roles. Keep this independent
@@ -615,6 +639,10 @@ bool minic_core_function_add_inline_asm_register_clobber(
     MinicCoreInlineAsmId inline_asm_id,
     const char *name,
     size_t name_length);
+bool minic_core_function_add_inline_asm_symbol_reference(
+    MinicCoreFunction *function, MinicCoreInlineAsmId inline_asm_id,
+    MinicCoreInlineAsmSymbolKind kind, const char *name,
+    size_t name_length, int64_t byte_addend);
 bool minic_core_function_append_call_arguments(MinicCoreFunction *function,
                                                const MinicCoreCallArgument *arguments,
                                                size_t argument_count,

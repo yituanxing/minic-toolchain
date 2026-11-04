@@ -2343,3 +2343,83 @@ claim is made here. Next full-owner batch: live typed GNU-ASM relocation
 edges and truly const AST traversal, then five-target source/machine ASM
 FormId contracts and shared machine dispatcher ownership. These are separate
 from the original five-ISA Linux GNU ELF/QEMU acceptance campaign.
+
+## IR-P44 — Live Core ASM symbol edges and genuinely read-only AST (2026-11-04)
+
+**Baseline:** P43 local `b631d99`, PR #674. Read as one connected
+ownership path: Source GNU ASM operands and specialization facts → seven Core
+ASM admission handlers → six Core ASM instruction forms → reachable Core
+blocks → Module function/object closure → common five-ISA ELF declarations.
+Also read the AST CALL child walk together with its read-only and mutating
+consumers. GCC's extended-ASM operand contract and LLVM's distinction between
+function inline ASM and module-level ASM informed the ownership boundary;
+neither reference grants MiniC the ability to parse arbitrary GAS text.
+
+- **Seal live ASM facts in Core.** Each `MinicCoreInlineAsm` owns a verified,
+  de-duplicated list of function/object assembler names and signed *byte*
+  addends. Snapshot symbolic GNU `i` inputs at dispatcher entry, before
+  output lvalue lowering can invalidate source-local specialization facts;
+  publish them only on successful, matching Core ASM effects. The Core
+  verifier, destructor and six ASM instruction kinds are migrated as one
+  unit. No Source `ExpressionId` or C type leaks into the Core symbol edge.
+- **Liveness is no longer source-global.** Remove the scan that promoted
+  *every* Source inline-ASM operand into a Module root, including dead
+  functions and folded dead branches. Only reachable Core ASM instructions
+  now enqueue the names of needed definitions. Raw template spellings retain
+  a narrowly scoped, live-ASM conservative fallback. Actual file-level GNU
+  ASM is always emitted, so its lexical function/object roots are sealed
+  separately at Module ingestion. Drop the producerless Module-wide
+  `preserve_all_static_objects` flag; opaque nested operand storage retains
+  a per-live-Core-ASM fallback instead. Preserve assembler-name aliases and
+  emitted static-local ownership when a live ASM edge requires them.
+- **One output fact.** Five targets continue to share the existing common
+  staged output transaction. It uses emitted Core ASM's typed references
+  to decide undefined `.weak` / `.hidden` declarations, and only scans raw
+  templates of actually emitted Core effects. File-ASM roots use Module facts.
+  No architecture gains another source scanner or a new machine layer.
+- **Correct GNU `%cN` for the existing register-output/`i` form.** Complete
+  the one-register-output immediate specialization to accept `%c1`–`%c9`,
+  which emits a bare symbolic immediate. Keep `%0` as the register output
+  and reject `%c0`. This exposes a genuine case where lowering `+r(*(&p))`
+  invalidates the local fact *after* a symbol was rendered; the early Core
+  snapshot preserves that live relocation.
+- **No mutating read visitor.** Replace the historical child traversal with
+  one shared child enumerator behind two distinct APIs: a `const` read-only
+  visitor and an explicit remapper. Migrate FunctionBody, Core constant facts
+  and normalization together. The 64-argument CALL test covers overflow
+  storage, indirect CALL, exact source identity and actual remapping without
+  writing through a shallow copy during a read.
+- **Build dependency correction.** Include the missing generated `.d` files
+  for frontend semantic-snapshot, function-diagnostic and backend Module
+  arena test objects. A changed Module header otherwise left a stale test
+  object containing the previous structure layout and caused a false
+  `BACKEND_MODULE_ARENA` failure despite the updated compiler being valid.
+
+**New GNU oracle:** `p44_live_asm_reachability.c` keeps live function/
+object references and nested `+4` / `+8` symbolic byte-addends; GCC `-O2`
+produces four `R_X86_64_64` relocations and drops dead function, dead object,
+and `if (0)` ASM references. RV32/RV64 MiniC match the desired live/dead
+symbol identities and emit the exact addends. The separate
+`p44_inline_asm_mutating_symbolic.c` gives one GCC ELF relocation and a
+GNU-native zero exit; RV32/RV64 retain the same symbol through a `+r`
+output-lvalue escape. The x86/AArch64/LoongArch structured-immediate cases
+are explicitly **SKIP** when their form is unadmitted; no cross-toolchain
+runtime result is invented. An old duplicate-assembler-name test had to
+change because GCC also prunes unused ASM and its unused static target.
+
+| Gate | P44 result |
+|---|---|
+| Debug full `check-fast`, strict Release `-Werror` | **PASS** after regenerating the stale backend-arena test object |
+| Core/Module MC064 + MC072 + MC073, x86 vDSO hidden unused | **PASS**; MC064 RV64 symbol pairing 3 relocations, MC072 four-ISA source checks |
+| GNU `-O2` ELF/native oracle and P44 live/mutating ASM | **PASS**; GNU ELF 4+1 relocations, RV32/RV64 2/2 admissible forms in each probe, other three explicit SKIP |
+| Exact P43/P44 new deterministic broad cohort | **255 outcomes unchanged**; 122 byte-identical, 133 both rejected, 0 differing (51 successfully preprocessed source cases × five ISA) |
+| Exact P43/P44 new ASM/inline/section cohort | **80 outcomes unchanged**; 59 byte-identical, 21 both rejected, 0 differing (16 successfully preprocessed cases × five ISA) |
+| Original five-ISA Linux GNU ELF/QEMU execution | **NOT RUN** in P44; source/ELF-level green gates do not certify whole Linux runtime |
+
+**Still open:** raw live ASM needs conservative lexical matching, which can
+cost `O(live ASM × Module symbols × template length)` on very large translation
+units; profile Linux first and introduce a shared token/name index only if
+that shows meaningful cost. The remaining Source/Target ASM FormId admission,
+machine dispatcher C-descriptor boundary, MIR policy and the independent
+five-ISA Linux GNU/QEMU correctness campaign are subsequent work, not silently
+certified by this batch.

@@ -139,7 +139,7 @@ bool minic_prepare_core_function_set(const MinicC0Program *program,
         }
         if (function->is_internal && !function->is_referenced &&
             !set.module.function_symbols[function_index].is_reachability_root &&
-            !set.module.function_symbols[function_index].is_source_asm_operand_root &&
+            !set.module.function_symbols[function_index].is_file_asm_root &&
             !set.module.function_symbols[function_index].is_source_label_relocation_owner) {
             const char *name = set.module.function_symbols[function_index].name;
             size_t first, last;

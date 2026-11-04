@@ -55,7 +55,7 @@ static bool remap_non_cast_expression(MinicExpression *expression,
     context.mapping = mapping;
     context.old_expression_count = old_expression_count;
     context.current_old_index = current_old_index;
-    return minic_c0_expression_visit_child_id_refs(expression, remap_child_expression_id, &context);
+    return minic_c0_expression_remap_child_ids(expression, remap_child_expression_id, &context);
 }
 
 static bool append_normalized_bitcast(MinicC0Program *rewritten,

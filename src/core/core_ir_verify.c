@@ -1799,6 +1799,18 @@ bool minic_core_function_verify(const MinicCoreFunction *function) {
     }
     for (index = 0U; index < function->inline_asm_count; ++index) {
         const MinicCoreInlineAsm *assembly = &function->inline_asms[index];
+        size_t ref_index;
+        if (!storage_shape_is_valid(assembly->symbol_references,
+                assembly->symbol_reference_count,
+                assembly->symbol_reference_capacity)) return false;
+        for (ref_index = 0U; ref_index < assembly->symbol_reference_count; ++ref_index) {
+            const MinicCoreInlineAsmSymbolReference *ref =
+                &assembly->symbol_references[ref_index];
+            if ((ref->kind != MINIC_CORE_INLINE_ASM_SYMBOL_FUNCTION &&
+                 ref->kind != MINIC_CORE_INLINE_ASM_SYMBOL_OBJECT) ||
+                ref->name == NULL || ref->name_length == 0U ||
+                strlen(ref->name) != ref->name_length) return false;
+        }
         if (assembly->deferred_immediate_symbol != NULL &&
             (!minic_core_deferred_asm_symbol_valid(assembly->deferred_immediate_symbol) ||
              !assembly->is_goto ||

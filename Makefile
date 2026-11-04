@@ -1934,6 +1934,20 @@ check-p43-inline-call-plan-identity:
 
 check-fast: check-p43-inline-call-plan-identity
 
+.PHONY: check-p44-live-asm-roots
+check-p44-live-asm-roots: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+		bash tests/compiler/c0/probe-p44-live-asm-roots.sh
+
+check-fast: check-p44-live-asm-roots
+
+.PHONY: check-p44-mutating-symbolic-asm
+check-p44-mutating-symbolic-asm: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+		bash tests/compiler/c0/probe-p44-inline-asm-mutating-symbolic.sh
+
+check-fast: check-p44-mutating-symbolic-asm
+
 .PHONY: check-mc058-specialization-correctness
 check-mc058-specialization-correctness: $(MINIC_CC_BINARY)
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" \
@@ -2159,10 +2173,13 @@ distclean:
 -include $(LEXER_TEST_OBJECTS:.o=.d)
 -include $(TYPE_TEST_OBJECTS:.o=.d)
 -include $(RECORD_TEST_OBJECTS:.o=.d)
+-include $(SEMANTIC_SNAPSHOT_TEST_OBJECTS:.o=.d)
 -include $(TYPE_ALIAS_TEST_OBJECTS:.o=.d)
 -include $(AST_CONTRACT_TEST_OBJECTS:.o=.d)
 -include $(LAYOUT_TEST_OBJECTS:.o=.d)
 -include $(RV64_ABI_TEST_OBJECTS:.o=.d)
+-include $(FUNCTION_DIAGNOSTIC_TEST_OBJECT:.o=.d)
+-include $(BACKEND_MODULE_ARENA_TEST_OBJECT:.o=.d)
 
 # Cross-target semantics/options smoke without the GNU QEMU toolchains.
 .PHONY: check-minic-target-abi-options

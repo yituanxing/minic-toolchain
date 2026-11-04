@@ -6,13 +6,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-typedef bool (*MinicExpressionIdReadVisitor)(MinicExpressionId expression_id, void *context);
-
-typedef struct MinicExpressionIdReadContext {
-    MinicExpressionIdReadVisitor visitor;
-    void *context;
-} MinicExpressionIdReadContext;
-
 typedef struct MinicFunctionBodyValidation {
     const MinicC0Program *program;
     MinicFunctionId *block_owners;
@@ -151,35 +144,6 @@ bool minic_c0_program_stable_parameter_locals(
         }
     }
     return true;
-}
-
-static bool visit_read_expression_id(MinicExpressionId *expression_id, void *opaque_context) {
-    MinicExpressionIdReadContext *context;
-
-    if (expression_id == NULL || opaque_context == NULL) {
-        return false;
-    }
-    context = (MinicExpressionIdReadContext *)opaque_context;
-    return context->visitor(*expression_id, context->context);
-}
-
-static bool visit_expression_child_ids(const MinicExpression *expression,
-                                       MinicExpressionIdReadVisitor visitor,
-                                       void *context) {
-    MinicExpression copy;
-    MinicExpressionIdReadContext read_context;
-
-    if (expression == NULL || visitor == NULL) {
-        return false;
-    }
-    /* This is logically read-only, not physically const: the generic visitor
-     * writes each CALL argument back. For overflow arguments, this shallow
-     * copy aliases the Program-owned buffer and performs an identical write.
-     * Do not use as a concurrent read-only traversal (MC-030). */
-    copy = *expression;
-    read_context.visitor = visitor;
-    read_context.context = context;
-    return minic_c0_expression_visit_child_id_refs(&copy, visit_read_expression_id, &read_context);
 }
 
 static bool validation_storage_is_valid(const MinicC0Program *program) {
@@ -592,7 +556,8 @@ static bool process_expression(MinicFunctionBodyValidation *validation,
         return false;
     }
 
-    return visit_expression_child_ids(expression, enqueue_expression_visitor, validation);
+    return minic_c0_expression_visit_child_ids(
+        expression, enqueue_expression_visitor, validation);
 }
 
 static bool validate_semantic_edges(const MinicFunctionBodyValidation *validation) {
