@@ -17,11 +17,13 @@ bool minic_x86_64_emit_module_global(FILE *out, const MinicTargetInfo *target,
     if (out == NULL || target == NULL ||
         target->architecture != MINIC_TARGET_ARCH_X86_64 ||
         target->data_layout == NULL || target->data_layout->pointer_size != 8U ||
-        module == NULL || !module->finalized || module->type_context == NULL ||
+        module == NULL || !minic_core_module_verify_global(module, ordinal) ||
+        module->type_context == NULL ||
         module->globals == NULL || ordinal >= module->global_count)
         return false;
     global = &module->globals[ordinal];
-    if (global->is_extern || global->alias_target_index != SIZE_MAX ||
+    if (!global->emittable || global->is_extern ||
+        global->alias_target_index != SIZE_MAX ||
         global->is_thread_local ||
         (global->fragment_count != 0U && global->fragments == NULL) ||
         global->storage_alignment == 0U ||

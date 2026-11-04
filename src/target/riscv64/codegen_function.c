@@ -77,7 +77,7 @@ static bool rv64_visit_function(
         success = minic_riscv_function_symbol_from_module(module_decl, &symbol);
         symbol.function_sections = function_sections;
         success = success &&
-            minic_riscv64_emit_core_function_with_symbol_with_storage_module(
+            minic_riscv64_emit_core_function_with_symbol_with_storage_module_trusted(
                 file, module, core_function, &symbol, facts, storage,
                 target != NULL && target->position_independent,
                 target != NULL ? &target->riscv_isa : NULL, ctx->diagnostic);
@@ -186,7 +186,9 @@ bool minic_riscv64_write_core_module(
     const MinicCoreFunction *core_functions, size_t core_function_count,
     bool function_sections, const MinicTargetInfo *target,
     const MinicCoreModule *module, MinicDiagnostic *diagnostic) {
-    return module != NULL && rv64_write_core_program_impl(path,
+    return minic_program_emit_module_preflight(
+               module, core_functions, core_function_count) &&
+           rv64_write_core_program_impl(path,
         core_functions, core_function_count, function_sections,
         target, module, diagnostic);
 }

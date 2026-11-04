@@ -66,38 +66,14 @@ static bool rv64_module_zero_extent_legal(const MinicCoreType *type) {
           type->value.array.is_complete));
 }
 
-/* A sealed Module has already consumed every source initializer slot and
- * validated exact byte coverage. From this point onward RV64 admits only
- * typed object extents, serialized fragments, relocations, and the generic
- * definition class (tentative, explicit zero or initialized definition).
- * Replaying C initializer cardinality here would reject independent Core
- * producers whose byte-accurate payload has no C syntax at all. */
-static bool rv64_module_definition_payload_valid(
-    const MinicCoreModuleGlobal *global) {
-    size_t i;
-    if (global == NULL) return false;
-    if (global->fragment_count != 0U && global->fragments == NULL)
-        return false;
-    if (global->is_tentative && global->reference_count != 0U) return false;
-    if (!global->is_tentative && !global->is_zero_initialized)
-        return global->storage_size != 0U && global->fragment_count != 0U;
-    /* An uninitialized/zero definition cannot secretly contain nonzero
-     * scalar bytes. Relocations are legal for explicit symbolic zeros. */
-    for (i = 0U; i < global->fragment_count; ++i) {
-        const MinicCoreModuleFragment *fragment = &global->fragments[i];
-        if (fragment->kind == MINIC_CORE_MODULE_FRAGMENT_BITS &&
-            fragment->bits != 0U) return false;
-    }
-    return true;
-}
-
 static bool rv64_module_admit_global(const MinicCoreModule *module,
                                     const MinicCoreModuleGlobal *global) {
     const MinicCoreType *type;
     size_t scalar_width;
     bool zero_extent;
     if (module == NULL || module->type_context == NULL || global == NULL ||
-        !minic_core_assembler_symbol_lexically_safe(global->name) || global->is_extern ||
+        !minic_core_assembler_symbol_lexically_safe(global->name) ||
+        !global->emittable || global->is_extern ||
         global->alias_target_index != SIZE_MAX || global->is_thread_local ||
         (global->is_internal && global->is_weak) ||
         global->storage_alignment == 0U ||
@@ -109,8 +85,6 @@ static bool rv64_module_admit_global(const MinicCoreModule *module,
     if (zero_extent) {
         if (global->fragment_count != 0U ||
             global->reference_count != 0U) return false;
-    } else if (!rv64_module_definition_payload_valid(global)) {
-        return false;
     } else if (global->is_zero_initialized || global->is_tentative) {
         /* The zero payload may contain a target-width relocation; the
          * fragment verifier has already checked its byte placement. */
@@ -137,7 +111,7 @@ bool minic_riscv64_emit_module_global(FILE *file, const MinicTargetInfo *target,
     if (file == NULL || target == NULL ||
         target->architecture != MINIC_TARGET_ARCH_RISCV64 ||
         target->data_layout == NULL || target->data_layout->pointer_size != 8U ||
-        module == NULL || !module->finalized ||
+        module == NULL || !minic_core_module_verify_global(module, ordinal) ||
         ordinal >= module->global_count || module->globals == NULL)
         return false;
     global = &module->globals[ordinal];

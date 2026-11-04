@@ -3419,3 +3419,54 @@ ELF SHT_NOBITS section. Existing RV32/RV64
 GlobalPlan and strict five-target boundaries are the minimal regression
 set. This scope does **not** claim current-head Linux linking or guest
 runtime certification.
+
+## IR-P68 — One verified Core admission boundary for independently callable machine writers (2026-11-05)
+
+**Whole-program ownership:** The production `minic_backend_emit_assembly_with_module`
+already checked a complete finalized Core Module and the type-arena identity
+of every selected live CoreFunction. However, the independently callable
+RV32, RV64 and x86 full-module writers previously entered machine planning
+with only a `finalized` flag; the x86 head-address call closure ran before
+the common output transaction. AArch64 and LoongArch64 shared a different
+full-Module check but did not share the live function-arena preflight.
+One Common admission function now owns the exact Module + live-function
+ownership contract, and all five program writers and the production facade
+invoke it before target planning or file output. The generic output
+transaction retains its independent, source-free, temporary-file commit
+role; it is not made responsible for semantic Core verification.
+
+**Per-global ownership without quadratic scans:** Three cross-translation-unit
+global emitters (RV32, RV64 and x86) were independently callable with
+forged `finalized=true` Modules. The Core Module verifier now shares its
+one-object validation body with `minic_core_module_verify_global`, which
+checks safe root/table preconditions and the requested object's CoreType,
+byte extent, fragment coverage, definition state and reference identity.
+Public per-global writers fail closed on invalid/dead objects before emitting
+assembly, but do not rescan all other globals or the Module's namespace.
+Complete writers still perform full Module verification exactly once per
+entry. RV64's duplicate zero/tentative check was removed: unlike the Core
+physical-byte test, it treated masked-off high bits as nonzero and could
+reject an otherwise legal serialized byte. RISC-V explicit `.bss.*`
+PROGBITS and x86 NOBITS output policies remain target-owned.
+
+**RV64 per-function ownership:** The only independent function writer
+consuming a Core Module previously accepted externally supplied prepared
+facts whose pointer-identity flag could be forged. Its checked interface
+now rebuilds canonical CoreFunction facts and object storage via the common
+CoreFunctionPlan after verifying Module and matching type arenas. Its
+production callback uses an explicitly internal, already-admitted trusted
+variant to reuse the common visitor's prepared plan without repeating a
+whole-Module scan per function. Two additional standalone RV64 CoreFunction
+entrypoints verify Core before performing facts analysis. ISA instruction
+helpers and block emitters are internal prepared-machine operations, not
+additional complete-Module admission owners.
+
+**Targeted evidence and limits:** Independent source-free Core-producer
+tests should reject forged extents, missing reference tables, mismatched
+type arenas, inconsistent zero/BSS/relocation data, and invalid dead-object
+emission; positive cases retain zero-size objects, flexible records,
+symbolic relocations, width-masked zeros and both ELF `.bss` dialects.
+Shared preflight and all five target emitter paths are tested under strict
+`-Werror`, with no new C initializer shadows or per-architecture verifier
+algorithms. The exact-head full Linux/QEMU runtime qualification remains a
+separate, explicit requirement, not implied by these structural probes.

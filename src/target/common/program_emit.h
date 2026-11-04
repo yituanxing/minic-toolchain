@@ -24,6 +24,13 @@ typedef struct MinicProgramEmitConfig {
     bool continue_after_failure;
 } MinicProgramEmitConfig;
 
+/* Public module writers and the backend facade share one admission check:
+ * complete Core Module validity plus matching live-function type ownership.
+ * This runs once before any target-specific planning or output transaction. */
+bool minic_program_emit_module_preflight(
+    const MinicCoreModule *module, const MinicCoreFunction *functions,
+    size_t function_count);
+
 /* Source ASM is copied only from a finalized, sealed ModuleIR. */
 bool minic_program_emit_source_file_asm_module(
     FILE *out, const MinicCoreModule *module);

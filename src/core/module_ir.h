@@ -176,6 +176,10 @@ bool minic_core_asm_names_symbol(const char *text, size_t length,
 /* Pure, target-neutral initializer layout contract, reusable by each object
  * format writer. ISA-specific relocation widths/directives remain Target-owned. */
 bool minic_core_module_global_fragments_valid(const MinicCoreModuleGlobal *global);
+/* Standalone object output can check its indexed Core definition without
+ * traversing unrelated globals. Complete Module emission must still call
+ * minic_core_module_verify to establish the symbol namespace and functions. */
+bool minic_core_module_verify_global(const MinicCoreModule *module, size_t ordinal);
 bool minic_core_module_verify(const MinicCoreModule *module);
 
 #endif

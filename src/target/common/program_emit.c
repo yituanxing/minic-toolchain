@@ -14,6 +14,25 @@
 extern int mkstemp(char *);
 extern FILE *fdopen(int, const char *);
 
+bool minic_program_emit_module_preflight(
+    const MinicCoreModule *module, const MinicCoreFunction *functions,
+    size_t function_count) {
+    size_t index;
+    if (!minic_core_module_verify(module) ||
+        module->function_count != function_count ||
+        (function_count != 0U && functions == NULL))
+        return false;
+    for (index = 0U; index < function_count; ++index) {
+        if (!minic_program_module_function_selected(
+                &module->function_symbols[index],
+                MINIC_PROGRAM_FUNCTION_LIVE_DEFINITIONS))
+            continue;
+        if (functions[index].type_context != module->type_context)
+            return false;
+    }
+    return true;
+}
+
 /* File-scope GNU ASM is sealed into ModuleIR at source ingress; the
  * machine writer emits the original bytes without reopening C Program. */
 bool minic_program_emit_source_file_asm_module(

@@ -1093,7 +1093,9 @@ bool minic_riscv32_write_core_module(const char *path,
                                       bool function_sections,
                                       const MinicCoreModule *module,
                                       MinicDiagnostic *diagnostic) {
-    return module != NULL && rv32_write_core_program_impl(
+    return minic_program_emit_module_preflight(
+               module, functions, function_count) &&
+           rv32_write_core_program_impl(
         path, target, functions, function_count,
         function_sections, module, diagnostic);
 }

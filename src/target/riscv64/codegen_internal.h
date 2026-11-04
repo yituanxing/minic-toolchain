@@ -4,6 +4,7 @@
 #include "core/core_type.h"
 #include "minic/compiler.h"
 #include "target/riscv/frame_address_policy.h"
+#include "target/riscv64/core_codegen.h"
 
 #include <stddef.h>
 #include <stdio.h>
@@ -25,6 +26,13 @@ static inline MinicRiscvFrameAddressPolicy minic_riscv64_machine_frame_policy(
 void minic_riscv64_set_diagnostic(MinicDiagnostic *diagnostic,
                                   const char *path,
                                   const char *message);
+/* Backend-only fast path: the Common writer already checked the entire
+ * Module and its live Core function arena once before traversal. */
+bool minic_riscv64_emit_core_function_with_symbol_with_storage_module_trusted(
+    FILE *, const MinicCoreModule *,
+    const MinicCoreFunction *, const MinicRiscvFunctionSymbol *,
+    const MinicCoreFunctionFacts *, const MinicCoreObjectStoragePlan *,
+    bool, const MinicRiscvIsa *, MinicDiagnostic *);
 bool minic_riscv64_emit_stack_allocate(FILE *file, size_t size);
 bool minic_riscv64_emit_stack_release(FILE *file, size_t size);
 bool minic_riscv64_emit_sp_store64(FILE *file, const char *register_name, size_t offset);

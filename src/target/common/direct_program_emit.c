@@ -162,8 +162,8 @@ bool minic_multi_direct_write_module(
     if (path == NULL || module == NULL || target == NULL ||
         target->architecture != config->architecture ||
         (core_function_count > 0U && core_functions == NULL) ||
-        !minic_core_module_verify(module) || !module->finalized ||
-        module->function_count != core_function_count)
+        !minic_program_emit_module_preflight(
+            module, core_functions, core_function_count))
         return minic_multi_direct_fail(diagnostic, path, config->display_name,
                                        "invalid Core or target configuration");
     {

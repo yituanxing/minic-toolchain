@@ -30,7 +30,6 @@ bool minic_riscv64_emit_core_function_with_symbol(
 bool minic_riscv64_emit_core_function_with_symbol_with_storage_module(
     FILE *, const MinicCoreModule *,
     const MinicCoreFunction *, const MinicRiscvFunctionSymbol *,
-    const MinicCoreFunctionFacts *, const MinicCoreObjectStoragePlan *,
     bool, const MinicRiscvIsa *, MinicDiagnostic *);
 /* Standalone Core ABI proof without C Program or PIE fallback. */
 bool minic_riscv64_emit_prepared_core_function_with_symbol(

@@ -1503,7 +1503,8 @@ bool minic_x86_64_write_core_module(
     const MinicCoreFunction *core_functions, size_t core_function_count,
     bool function_sections, const MinicCoreModule *module,
     MinicDiagnostic *diagnostic) {
-    return module != NULL &&
+    return minic_program_emit_module_preflight(
+               module, core_functions, core_function_count) &&
            x86_write_core_module_impl(path, target, core_functions,
                                        core_function_count, function_sections,
                                        module, diagnostic);

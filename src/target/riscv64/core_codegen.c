@@ -1,5 +1,6 @@
 #include "target/riscv64/core_codegen.h"
 #include "target/common/elf_module_symbol_info.h"
+#include "target/common/core_function_plan.h"
 #include "target/riscv64/core_admission.h"
 #include "target/riscv64/function_abi_plan.h"
 
@@ -817,20 +818,40 @@ static bool emit_core_function_with_symbol(FILE *file,
 
 bool minic_riscv64_emit_core_function_with_symbol(
     FILE *file, const MinicCoreFunction *function, const MinicRiscvFunctionSymbol *symbol) {
-    return emit_core_function_with_symbol(file, NULL, function, symbol, false, false,
-                                          NULL, NULL, NULL, NULL);
+    return minic_core_function_verify(function) &&
+           emit_core_function_with_symbol(file, NULL, function, symbol, false,
+                                          false, NULL, NULL, NULL, NULL);
 }
 
-bool minic_riscv64_emit_core_function_with_symbol_with_storage_module(
+bool minic_riscv64_emit_core_function_with_symbol_with_storage_module_trusted(
     FILE *file, const MinicCoreModule *module,
     const MinicCoreFunction *function, const MinicRiscvFunctionSymbol *symbol,
     const MinicCoreFunctionFacts *facts, const MinicCoreObjectStoragePlan *storage,
     bool position_independent, const MinicRiscvIsa *isa,
     MinicDiagnostic *diagnostic) {
     return module != NULL && module->finalized && facts != NULL &&
+           function != NULL && function->type_context == module->type_context &&
            emit_core_function_with_symbol(file, module, function, symbol,
                                           true, position_independent, isa, diagnostic,
                                           facts, storage);
+}
+
+bool minic_riscv64_emit_core_function_with_symbol_with_storage_module(
+    FILE *file, const MinicCoreModule *module,
+    const MinicCoreFunction *function, const MinicRiscvFunctionSymbol *symbol,
+    bool position_independent, const MinicRiscvIsa *isa,
+    MinicDiagnostic *diagnostic) {
+    MinicCoreFunctionPlan plan = {0};
+    bool success;
+    if (!minic_core_module_verify(module) || function == NULL ||
+        function->type_context != module->type_context ||
+        !minic_core_function_plan_build(function, &plan))
+        return false;
+    success = minic_riscv64_emit_core_function_with_symbol_with_storage_module_trusted(
+        file, module, function, symbol, &plan.facts, &plan.objects,
+        position_independent, isa, diagnostic);
+    minic_core_function_plan_destroy(&plan);
+    return success;
 }
 
 bool minic_riscv64_emit_prepared_core_function_with_symbol(
@@ -841,7 +862,7 @@ bool minic_riscv64_emit_prepared_core_function_with_symbol(
     const MinicRiscvIsa *isa,
     MinicDiagnostic *diagnostic) {
     MinicCoreFunctionFacts facts;
-    return !position_independent &&
+    return !position_independent && minic_core_function_verify(function) &&
            minic_core_function_facts_analyze(function, &facts) &&
            emit_core_function_with_symbol(file, NULL, function, symbol,
                                           true, position_independent, isa, diagnostic,

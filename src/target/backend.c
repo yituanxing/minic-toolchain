@@ -1,6 +1,6 @@
 #include "target/backend.h"
 #include "core/module_ir.h"
-#include "target/common/program_visit.h"
+#include "target/common/program_emit.h"
 
 #include "target/riscv64/codegen.h"
 #include "target/riscv32/rv32_emit.h"
@@ -68,24 +68,11 @@ bool minic_backend_emit_assembly_with_module(
     const MinicCoreFunction *functions, size_t function_count,
     bool function_sections, const MinicCoreModule *module,
     MinicDiagnostic *diagnostic) {
-    size_t index;
     if (backend == NULL || target == NULL || module == NULL ||
         backend != minic_backend_for_target(target) ||
         backend->emit_module == NULL ||
-        !minic_core_module_verify(module) ||
-        module->function_count != function_count ||
-        (function_count != 0U && functions == NULL))
+        !minic_program_emit_module_preflight(module, functions, function_count))
         return false;
-    /* Core type IDs have arena-local meaning. A machine emitter accepts only
-     * a sealed module paired with functions from the exact same type arena. */
-    for (index = 0U; index < function_count; ++index) {
-        if (!minic_program_module_function_selected(
-                &module->function_symbols[index],
-                MINIC_PROGRAM_FUNCTION_LIVE_DEFINITIONS))
-            continue;
-        if (functions[index].type_context != module->type_context)
-            return false;
-    }
     return backend->emit_module(output_path, target,
         functions, function_count, function_sections, module, diagnostic);
 }

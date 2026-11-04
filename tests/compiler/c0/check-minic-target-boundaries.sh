@@ -72,7 +72,9 @@ has src/core/module_ir.c '!module_live_global_layout_valid(module->type_context,
 has tests/core/module_ir_fragment_contract_test.c 'verify_source_free_global_definition_contract('
 # Explicit `.bss.*` spelling alone does not imply @nobits on RV targets.
 lacks src/core/module_ir.c 'minic_module_elf_bss_section('
-has src/target/riscv64/global_emit.c 'rv64_module_definition_payload_valid('
+# The direct RV64 entry now calls Core's real per-global verifier; its
+# former shadow numeric/definition guard must not diverge from P66 facts.
+lacks src/target/riscv64/global_emit.c 'rv64_module_definition_payload_valid('
 # ELF @nobits admission is an output-format decision on materialized Core
 # bytes, never an independent mutable C initializer summary sealed into IR.
 for owner in src/core/module_ir.h src/compiler/module_ir_build.c \
@@ -88,6 +90,32 @@ has src/target/common/module_global_emit.c 'explicit_bss_nobits &&'
 has src/target/common/module_global_emit.c 'minic_module_elf_bss_section(global->section_name)'
 has tests/compiler/c0/probe-module-global-fragments.c 'physical_nobits=5'
 has tests/compiler/c0/probe-linux-global-section-reloc.sh 'MINIC_P67_ELF_BSS=PASS'
+# A forged `finalized` flag alone cannot bypass the public Core global
+# entrypoints. Production still validates whole Modules once; the three
+# independently callable per-global functions verify the addressed object.
+has src/core/module_ir.h 'minic_core_module_verify_global('
+for owner in src/target/riscv32/rv32_global_emit.c \
+             src/target/riscv64/global_emit.c \
+             src/target/x86_64/global_emit.c; do
+  has "$owner" 'minic_core_module_verify_global('
+done
+has src/target/common/program_emit.h 'minic_program_emit_module_preflight('
+has tests/compiler/c0/probe-direct-global-module-contract.c 'DIRECT_GLOBAL_MODULE_CONTRACT=PASS'
+has tests/compiler/c0/probe-module-emit-preflight-contract.c 'MODULE_EMIT_PREFLIGHT_CONTRACT=PASS'
+for owner in src/target/backend.c src/target/riscv32/rv32_emit.c \
+             src/target/riscv64/codegen_function.c \
+             src/target/x86_64/codegen.c \
+             src/target/common/direct_program_emit.c; do
+  has "$owner" 'minic_program_emit_module_preflight('
+done
+# RV64's public Module-bearing function entry checks a complete Module and
+# shared type arena; production's private trusted path reuses the once-only
+# preflight. Standalone RV64 function entrypoints check Core by themselves.
+has src/target/riscv64/codegen_internal.h 'minic_riscv64_emit_core_function_with_symbol_with_storage_module_trusted('
+lacks src/target/riscv64/core_codegen.h 'minic_riscv64_emit_core_function_with_symbol_with_storage_module_trusted('
+has src/target/riscv64/core_codegen.c 'minic_core_function_verify(function)'
+has src/target/riscv64/core_codegen.c 'minic_core_function_plan_build(function, &plan)'
+has src/target/riscv64/codegen_function.c 'minic_riscv64_emit_core_function_with_symbol_with_storage_module_trusted('
 # Module symbols have one alias identity (target index + canonical target
 # name in the same Module), not a second owned alias spelling or boolean.
 # Ingress may still retain C aliases while resolving these Core identities.
@@ -234,7 +262,8 @@ for header in \
   lacks "$header" 'frontend/ast.h'
 done
 has src/target/common/linux_jump_label_source.h 'minic_multi_qualify_linux_jump_label_asm_goto('
-has src/target/backend.c 'functions[index].type_context != module->type_context'
+has src/target/common/program_emit.c 'functions[index].type_context != module->type_context'
+lacks src/target/backend.c 'functions[index].type_context != module->type_context'
 # GNU/C source admission has its own target descriptor. No C AST handles or
 # assembler template qualification are permitted in the machine contract.
 has src/target/backend_source.h 'typedef struct MinicSourceBackend {'
@@ -1048,7 +1077,7 @@ has src/target/common/core_function_plan.c 'minic_core_object_storage_plan_build
 has src/target/common/core_function_plan.c 'minic_core_object_storage_plan_destroy(&plan->objects)'
 has src/target/x86_64/codegen.c 'minic_x86_64_frame_init_with_storage('
 has src/target/riscv32/rv32_emit.c 'rv32_frame_init_with_storage('
-has src/target/riscv64/codegen_function.c 'minic_riscv64_emit_core_function_with_symbol_with_storage_module('
+has src/target/riscv64/codegen_function.c 'minic_riscv64_emit_core_function_with_symbol_with_storage_module_trusted('
 has src/target/aarch64/codegen.c 'minic_multi_direct_lp64_emit_function('
 has src/target/loongarch64/codegen.c 'minic_multi_direct_lp64_emit_function('
 # All four physical frame owners use the single Common borrowing contract.
@@ -1405,7 +1434,7 @@ for owner in \
 done
 has src/target/common/program_emit.c 'module->function_count != function_count'
 has src/target/common/program_visit.c '!module->finalized'
-has src/target/common/direct_program_emit.c '!minic_core_module_verify(module)'
+has src/target/common/direct_program_emit.c '!minic_program_emit_module_preflight('
 has src/target/x86_64/codegen.c 'minic_program_emit_write_module('
 has src/target/riscv32/rv32_emit.c 'minic_program_emit_write_module('
 has src/target/riscv64/codegen_function.c 'minic_program_emit_write_module('
@@ -1545,6 +1574,28 @@ cc -std=c11 -O2 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror \
   src/target/common/global_emit.c \
   -o "$work/module-global-fragments-probe"
 "$work/module-global-fragments-probe"
+
+# Directly invoke the three public target global emitters on independently
+# assembled Core Modules, including fabricated finalized invalid definitions.
+# Keep this host-only: no target GCC, Linux image or QEMU run is required.
+cc -std=c11 -O2 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror \
+  -ffunction-sections -fdata-sections -Wl,--gc-sections \
+  -Iinclude -Isrc tests/compiler/c0/probe-direct-global-module-contract.c \
+  src/core/core_type.c src/core/module_ir.c \
+  src/target/common/module_global_emit.c \
+  src/target/riscv32/rv32_global_emit.c \
+  src/target/riscv64/global_emit.c \
+  src/target/x86_64/global_emit.c \
+  -o "$work/direct-global-module-contract"
+"$work/direct-global-module-contract"
+
+cc -std=c11 -O2 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror \
+  -ffunction-sections -fdata-sections -Wl,--gc-sections \
+  -Iinclude -Isrc tests/compiler/c0/probe-module-emit-preflight-contract.c \
+  src/core/core_type.c src/core/module_ir.c \
+  src/target/common/program_emit.c src/target/common/program_visit.c \
+  -o "$work/module-emit-preflight-contract"
+"$work/module-emit-preflight-contract"
 
 # In an attached module, function selection and symbol metadata come from
 # ModuleIR, even when a deliberately poisoned legacy C declaration disagrees.
