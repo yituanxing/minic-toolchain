@@ -37,6 +37,10 @@ typedef struct MiniLdScriptPattern {
     char *text;
     /* NULL matches any input file, otherwise a GNU file-name wildcard. */
     char *file_pattern;
+    /* One GNU parenthesized file selector may contain multiple unsorted
+     * patterns. They match in input-object order as a union, unlike separate
+     * selectors, which are consumed one after another. Zero is ungrouped. */
+    size_t selector_id;
     bool keep;
     bool sort;
     bool common;

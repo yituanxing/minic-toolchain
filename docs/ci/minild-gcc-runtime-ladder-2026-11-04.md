@@ -148,6 +148,16 @@ used as a positive reference. These **correct rejections are not Linux link
 passes**; enabling each target requires a subsequent positive script/GC
 differential and ultimately the actual Kbuild final-link input.
 
+The later independent [five-target exploratory trial #41844386646](
+https://github.com/yituanxing/minic-toolchain/actions/runs/41844386646)
+temporarily enabled those four policies **inside the runner only**. It
+passed all **15/15** GNU BFD versus MiniLD executable comparisons across
+RV32, RV64, x86-64, AArch64, and LoongArch64: separate `-T`-only,
+`--gc-sections`-only, and combined modes on each. `KEEP`, `/DISCARD/`,
+unreferenced section GC, ELF and native/QEMU execution were checked.
+The checked-in product policy remains unchanged; these are small
+executables, **not** real Linux final links.
+
 ### Separate Linux kernel link acceptance
 
 Keep four levels as separately scored outcomes:
@@ -199,7 +209,9 @@ inventory found that same 72,642,984-byte cache under
 prevents the current refactor branch from restoring it, even with a key-prefix
 fallback; the failed run did **not** prove the old bytes expired. No Linux C
 files were rebuilt and no current-head Linux link success was claimed.
-The original replay check is manual-only to avoid needless repeat cache misses.
+The original replay check was manual-only while no cache in this branch's
+scope existed; once the new exact GNU pool was saved, it acquired an explicit
+`[minild-cached-replay]` push opt-in to reuse that pool without Kbuild.
 
 The existing GNU baseline producer in
 `.github/workflows/linux-runtime-gcc-baseline.yml` can instead build Linux
@@ -212,6 +224,27 @@ pool immediately after saving it. This is one real MiniLD
 Image or MiniLD QEMU P1 acceptance. If the MiniLD link fails, the already
 saved certified GNU inputs can be reused for targeted repairs without
 recompiling Linux C each round.
+
+This path was actually run at
+[#41844824994](https://github.com/yituanxing/minic-toolchain/actions/runs/41844824994):
+GNU GCC Linux 6.6.143 `Image`, system QEMU full runtime and P1 all **PASS**;
+the new exact-config manifest and cache save both **PASS**. The first current
+MiniLD `.tmp_vmlinux.kallsyms1` final link encountered **2074 ELF objects,
+601793 initial symbols and 1279429 relocations**; it stopped after 837 ms
+at `unsupported-script-output-type:.rodata`. This is an authentic Linux
+linker blocker, **not** a kernel/Image/QEMU MiniLD PASS. The saved GNU pool
+allows subsequent cached single-link trials without another Linux build.
+
+For RV32, x86-64, AArch64 and LoongArch64, the next source-level trial is
+`.github/workflows/minild-fourarch-linux-real-final-trial.yml`. It reuses the
+existing Linux 6.6.143 GNU Kbuild/QEMU reference scripts with an opt-in
+transparent `LD=` recorder, preserving the **first successful** real
+`.tmp_vmlinux.kallsyms1` GNU link's working directory and NUL-separated argv.
+The replay hashes the actual `.o`/`.a`/script inputs and independently runs
+GNU BFD and MiniLD on them. Four script/GC policies are enabled only in the
+runner for this exploratory input test. The workflow saves the GNU object
+pool before an expected MiniLD blocker, keeping full vmlinux/Image/QEMU
+MiniLD certification explicitly unclaimed.
 
 The original MiniAS RV64 C ladder used `rv64gc/lp64d`.  MiniC's Linux
 code-generation contract is separately `rv64i/lp64`; they are **not the same

@@ -52,6 +52,7 @@ static bool append_section_item(MiniLdScriptOutputSection *section,
 static bool append_pattern_text(ScriptParser *parser,
                                 bool keep,
                                 bool sort,
+                                size_t selector_id,
                                 const char *file_pattern,
                                 MiniLdScriptOutputSection *section) {
     char buffer[512];
@@ -120,6 +121,7 @@ static bool append_pattern_text(ScriptParser *parser,
     }
     item.value.pattern.keep = keep;
     item.value.pattern.sort = sort;
+    item.value.pattern.selector_id = selector_id;
     item.value.pattern.common = strcmp(buffer, "COMMON") == 0;
     if (item.value.pattern.text == NULL ||
         (file_pattern != NULL && item.value.pattern.file_pattern == NULL) ||
@@ -184,7 +186,14 @@ static bool parse_pattern_list(ScriptParser *parser,
                                bool keep,
                                MiniLdScriptOutputSection *section) {
     char *file_pattern = NULL;
+    size_t selector_id;
     bool ok = false;
+
+    if (section->item_count == SIZE_MAX) {
+        return minild_script_parser_error(parser,
+                                          "input-selector-id-overflow");
+    }
+    selector_id = section->item_count + 1U;
 
     if (!parse_input_file_selector(parser, &file_pattern)) {
         free(file_pattern);
@@ -198,14 +207,16 @@ static bool parse_pattern_list(ScriptParser *parser,
                 !minild_script_expect(parser,
                                       TOKEN_LPAREN,
                                       "expected-'('-after-SORT") ||
-                !append_pattern_text(parser, keep, true, file_pattern,
+                !append_pattern_text(parser, keep, true, selector_id,
+                                     file_pattern,
                                      section) ||
                 !minild_script_expect(parser,
                                       TOKEN_RPAREN,
                                       "expected-')'-after-SORT")) {
                 goto done;
             }
-        } else if (!append_pattern_text(parser, keep, false, file_pattern,
+        } else if (!append_pattern_text(parser, keep, false, selector_id,
+                                        file_pattern,
                                         section)) {
             goto done;
         }

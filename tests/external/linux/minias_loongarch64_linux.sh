@@ -235,10 +235,19 @@ capture_final_kconfig() {
 }
 
 started=$(date +%s)
+gnu_ld_override=()
+if [[ -n ${MINILD_GNU_LD_WRAPPER:-} ]]; then
+  if [[ $as_backend != gnu || $MINILD_GNU_LD_WRAPPER != /* || ! -x $MINILD_GNU_LD_WRAPPER ]]; then
+    echo 'MINIAS_LINUX_FOURARCH_BUILD=FAIL arch=loongarch64 invalid_GNU_LD_capture_mode' >&2
+    exit 2
+  fi
+  gnu_ld_override=("LD=$MINILD_GNU_LD_WRAPPER")
+fi
 if ! make -C "$kernel_src" O="$kernel_out" ARCH=loongarch \
     CROSS_COMPILE=loongarch64-linux-gnu- \
     CC="$build_cc" \
     AS="$build_as" \
+    "${gnu_ld_override[@]}" \
     KCFLAGS=-Wno-error \
     -j4 -k vmlinuz.efi >"$kbuild_log" 2>&1; then
   echo 'MINIAS_LINUX_FOURARCH_BUILD=FAIL arch=loongarch64 stage=make-vmlinuz.efi'

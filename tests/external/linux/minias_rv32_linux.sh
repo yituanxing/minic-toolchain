@@ -278,8 +278,16 @@ echo 'MINIAS_RV32_PREFLIGHT=PASS authentic_owner=init/main.o MiniAS_only=1'
 run_image() {
     local out=$1 cc=$2 as=$3 label=$4
     local log="$work/evidence/$label-kbuild.log"
+    local -a gnu_ld_override=()
+    if [[ $label == gnu && -n ${MINILD_GNU_LD_WRAPPER:-} ]]; then
+        if [[ $MINILD_GNU_LD_WRAPPER != /* || ! -x $MINILD_GNU_LD_WRAPPER ]]; then
+            echo 'MINIAS_RV32_KBUILD=FAIL invalid_MINILD_GNU_LD_WRAPPER' >&2
+            exit 2
+        fi
+        gnu_ld_override=("LD=$MINILD_GNU_LD_WRAPPER")
+    fi
     if ! make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE="$cross" \
-        CC="$cc" AS="$as" -j"$jobs" Image >"$log" 2>&1; then
+        CC="$cc" AS="$as" "${gnu_ld_override[@]}" -j"$jobs" Image >"$log" 2>&1; then
         echo "MINIAS_RV32_KBUILD=FAIL lane=$label" >&2
         grep -nEi 'minic-as:|error:|undefined reference|Error [0-9]+|unsupported-' \
           "$log" | head -n 70 >&2 || true
@@ -302,6 +310,10 @@ run_image() {
 # miss always builds the control from scratch.  Even a verified cache hit
 # MUST boot the original GNU Image under this run's actual QEMU/PID1 script.
 gnu_control_image="$gnu_out/arch/riscv/boot/Image"
+if [[ -n ${MINILD_GNU_LD_WRAPPER:-} && ${RV32_GNU_GOLDEN_CACHE_HIT:-false} == true ]]; then
+    echo 'MINIAS_RV32_KBUILD=FAIL cannot_capture_GNU_LD_from_cached_Image' >&2
+    exit 2
+fi
 case "${RV32_GNU_GOLDEN_CACHE_HIT:-false}" in
     true)
         : "${RV32_GNU_GOLDEN_ROOT:?cached GNU golden root required on cache hit}"

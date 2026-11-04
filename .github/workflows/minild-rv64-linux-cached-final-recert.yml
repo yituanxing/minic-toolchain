@@ -1,13 +1,21 @@
 name: MiniLD RV64 Linux Cached Final Link Recertification
 
 on:
-  # Manual-only until a GNU golden pool has been produced in a cache scope
-  # visible to this branch. The historical exact cache exists under another
-  # PR merge ref and cannot be restored from this refactor branch.
   workflow_dispatch:
+  # Opt-in source pushes replay only the single real kallsyms1 link using
+  # the QEMU-certified GNU pool cached by the feature branch itself.
+  # No Linux C source is recompiled in this workflow.
+  push:
+    branches:
+      - refactor/minias-target-isa-abi-core
+    paths:
+      - .github/workflows/minild-rv64-linux-cached-final-recert.yml
+      - linker/**
+      - tools/ci/minild-linux-cache-final-replay-v1.sh
 
 jobs:
   rv64-cached-final-link:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[minild-cached-replay]')
     runs-on: ubuntu-24.04
     timeout-minutes: 12
     steps:

@@ -447,15 +447,42 @@ static const char *script_section_source_name(const MiniLdSection *section) {
     return section->input_name != NULL ? section->input_name : section->name;
 }
 
-static bool script_layout_place_pattern(MiniLdScriptLayoutState *script_state,
-                                        const MiniLdScriptPattern *pattern,
-                                        size_t command_index,
-                                        bool discard) {
+/* GNU scans input sections once for *(.foo .bar): these names are one
+ * parenthesized selector, not two successive selectors. SORT_BY_NAME is an
+ * explicit ordering boundary, and separate selectors remain independent. */
+static size_t script_layout_selector_span(
+    const MiniLdScriptOutputSection *output, size_t first) {
+    const MiniLdScriptPattern *pattern =
+        &output->items[first].value.pattern;
+    size_t end = first + 1U;
+
+    if (pattern->selector_id == 0U || pattern->sort || pattern->common) {
+        return 1U;
+    }
+    while (end < output->item_count) {
+        const MiniLdScriptSectionItem *item = &output->items[end];
+        if (item->kind != MINILD_SCRIPT_SECTION_PATTERN ||
+            item->value.pattern.selector_id != pattern->selector_id ||
+            item->value.pattern.sort || item->value.pattern.common) {
+            break;
+        }
+        ++end;
+    }
+    return end - first;
+}
+
+static bool script_layout_place_patterns(
+    MiniLdScriptLayoutState *script_state,
+    const MiniLdScriptSectionItem *items,
+    size_t item_count,
+    size_t command_index,
+    bool discard) {
+    const MiniLdScriptPattern *first = &items[0].value.pattern;
     size_t *matches;
     size_t count = 0U;
     size_t i;
 
-    if (pattern->common) {
+    if (first->common) {
         return true;
     }
 
@@ -475,15 +502,25 @@ static bool script_layout_place_pattern(MiniLdScriptLayoutState *script_state,
             script_state->layout->work[i].discarded) {
             continue;
         }
-        if (minild_script_pattern_matches_input(
-                pattern,
-                script_section_source_name(&script_state->state->work.sections[i]),
-                script_state->state->work.sections[i].input_path)) {
+        bool selected = false;
+        size_t item_index;
+
+        for (item_index = 0U; item_index < item_count; ++item_index) {
+            if (minild_script_pattern_matches_input(
+                    &items[item_index].value.pattern,
+                    script_section_source_name(
+                        &script_state->state->work.sections[i]),
+                    script_state->state->work.sections[i].input_path)) {
+                selected = true;
+                break;
+            }
+        }
+        if (selected) {
             matches[count++] = i;
         }
     }
 
-    if (pattern->sort && count > 1U) {
+    if (first->sort && count > 1U) {
         MiniLdNamedMatch *sorted;
         if (count > SIZE_MAX / sizeof(*sorted)) {
             free(matches);
@@ -629,12 +666,13 @@ static bool script_layout_process_output(MiniLdScriptLayoutState *script_state,
         for (i = 0U; i < output->item_count; ++i) {
             const MiniLdScriptSectionItem *item = &output->items[i];
 
-            if (item->kind == MINILD_SCRIPT_SECTION_PATTERN &&
-                !script_layout_place_pattern(script_state,
-                                             &item->value.pattern,
-                                             command_index,
-                                             true)) {
-                return false;
+            if (item->kind == MINILD_SCRIPT_SECTION_PATTERN) {
+                size_t span = script_layout_selector_span(output, i);
+                if (!script_layout_place_patterns(script_state, item, span,
+                                                  command_index, true)) {
+                    return false;
+                }
+                i += span - 1U;
             }
         }
         return true;
@@ -726,14 +764,15 @@ static bool script_layout_process_output(MiniLdScriptLayoutState *script_state,
         uint64_t value;
 
         switch (item->kind) {
-        case MINILD_SCRIPT_SECTION_PATTERN:
-            if (!script_layout_place_pattern(script_state,
-                                             &item->value.pattern,
-                                             command_index,
-                                             false)) {
+        case MINILD_SCRIPT_SECTION_PATTERN: {
+            size_t span = script_layout_selector_span(output, i);
+            if (!script_layout_place_patterns(script_state, item, span,
+                                              command_index, false)) {
                 return false;
             }
+            i += span - 1U;
             break;
+        }
         case MINILD_SCRIPT_SECTION_DEFINE_SYMBOL:
             if (!script_layout_evaluate(script_state,
                                         item->value.symbol.expression,

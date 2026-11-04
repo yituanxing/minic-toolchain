@@ -299,6 +299,14 @@ capture_final_kconfig() {
   fi
 }
 start=$(date +%s)
+gnu_ld_override=()
+if [[ -n ${MINILD_GNU_LD_WRAPPER:-} ]]; then
+  if [[ $as_backend != gnu || $MINILD_GNU_LD_WRAPPER != /* || ! -x $MINILD_GNU_LD_WRAPPER ]]; then
+    echo 'MINIAS_LINUX_FOURARCH_BUILD=FAIL arch=aarch64 invalid_GNU_LD_capture_mode' >&2
+    exit 2
+  fi
+  gnu_ld_override=("LD=$MINILD_GNU_LD_WRAPPER")
+fi
 printf 'MINIAS_AARCH64_STAGE=KBUILD_START epoch=%s\n' "$start"
 # Keep long GNU Kbuild stages observable without changing the production
 # assembler, build exit status, or acceptance markers. Its normal output stays
@@ -323,7 +331,7 @@ trap stop_progress_monitor EXIT
 ) &
 progress_monitor_pid=$!
 if ! make -C "$src" O="$out" ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- \
-  CC="$build_cc" AS="$build_as" \
+  CC="$build_cc" AS="$build_as" "${gnu_ld_override[@]}" \
   -j4 -k Image >"$work/kbuild.log" 2>&1; then
   stop_progress_monitor
   echo 'MINIAS_LINUX_FOURARCH_BUILD=FAIL arch=aarch64 stage=make-Image'

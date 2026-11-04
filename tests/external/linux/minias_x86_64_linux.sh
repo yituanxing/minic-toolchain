@@ -359,7 +359,16 @@ record_kconfig gnu pre "$gnu_out"
 config_parity_rc=0
 compare_kconfig pre || config_parity_rc=1
 gnu_build_rc=0
-if ! make -C "$src" O="$gnu_out" ARCH=x86_64 CC=gcc AS=as -j"$jobs" bzImage \
+gnu_ld_override=()
+if [[ -n ${MINILD_GNU_LD_WRAPPER:-} ]]; then
+    if [[ $MINILD_GNU_LD_WRAPPER != /* || ! -x $MINILD_GNU_LD_WRAPPER ]]; then
+        echo 'MINIAS_LINUX_FOURARCH_GNU_BASELINE=FAIL invalid_MINILD_GNU_LD_WRAPPER' >&2
+        exit 2
+    fi
+    gnu_ld_override=("LD=$MINILD_GNU_LD_WRAPPER")
+fi
+if ! make -C "$src" O="$gnu_out" ARCH=x86_64 CC=gcc AS=as \
+    "${gnu_ld_override[@]}" -j"$jobs" bzImage \
     >"$work/kbuild-gnu.log" 2>&1; then
     echo 'MINIAS_LINUX_FOURARCH_GNU_BASELINE=FAIL arch=x86_64' >&2
     tail -n 160 "$work/kbuild-gnu.log" >&2

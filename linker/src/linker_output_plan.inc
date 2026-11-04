@@ -92,6 +92,36 @@ static int minild_output_section_compare(const void *left,
            a->members[0] > b->members[0] ? 1 : 0;
 }
 
+/* An output section may contain mergeable strings/constants alongside
+ * ordinary bytes.  SHF_MERGE/SHF_STRINGS and sh_entsize describe the *whole*
+ * section, not individual fragments: GNU BFD drops those attributes when
+ * fragments disagree.  Keep the strict identity check for every other ELF
+ * flag and sh_type; in particular, neither TLS nor NOBITS can be silently
+ * reinterpreted as ordinary PROGBITS by this projection. */
+static bool minild_output_plan_combine_attributes(
+    MiniLdOutputSection *output,
+    const MiniLdSection *part) {
+    const uint64_t optional = SHF_MERGE | SHF_STRINGS;
+    const uint64_t existing = output->flags & optional;
+    const uint64_t incoming = part->flags & optional;
+
+    if (part->type != output->type ||
+        (part->flags & ~optional) != (output->flags & ~optional)) {
+        return false;
+    }
+    if (existing == 0U && incoming == 0U) {
+        return part->entsize == output->entsize;
+    }
+    if ((existing & SHF_MERGE) != 0U &&
+        (incoming & SHF_MERGE) != 0U &&
+        existing == incoming && part->entsize == output->entsize) {
+        return true;
+    }
+    output->flags &= ~optional;
+    output->entsize = 0U;
+    return true;
+}
+
 static bool minild_output_plan_build(const MiniLdState *state,
                                      const MiniLdLayout *layout,
                                      MiniLdOutputPlan *plan) {
@@ -206,8 +236,7 @@ static bool minild_output_plan_build(const MiniLdState *state,
             uint64_t low = output->vaddr;
             uint64_t high;
             uint64_t end;
-            if (part->type != output->type || part->flags != output->flags ||
-                part->entsize != output->entsize ||
+            if (!minild_output_plan_combine_attributes(output, part) ||
                 part->size > UINT64_MAX - layout->work[i].vaddr ||
                 output->size > UINT64_MAX - output->vaddr) {
                 fprintf(state->diagnostics,
