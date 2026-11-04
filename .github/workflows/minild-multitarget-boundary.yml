@@ -48,6 +48,7 @@ jobs:
           make MODE=release CFLAGS=-Werror \
             check-minild-multitarget-relocatable \
             check-minild-multitarget-static \
+            check-minild-x86-crt-got-relax \
             check-minild-target-default-symbols \
             check-minild-target-shared-abi-boundary \
             check-minild-riscv-abi-integration \

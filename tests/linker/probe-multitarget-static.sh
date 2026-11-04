@@ -393,10 +393,11 @@ for name in ('x86_64', 'aarch64', 'loongarch64'):
     # ABS64 relocation four bytes forward must not write across its boundary.
     # A narrow ABS32 replacement with an enormous positive addend must fail
     # representability, rather than silently truncate a 64-bit symbol value.
-    # A target-defined GOT relocation must not be accepted as a static fixup
-    # merely because that relocation is valid in some other link mode.
+    # A relocation requiring an as-yet-unimplemented GOT/TLS mode must not
+    # fall through to ordinary scalar handling. x86 plain GOTPCREL now has
+    # genuine static GOT support, so its remaining negative is GOTTPOFF.
     absolute_type, narrow_type, got_type = {
-        'x86_64': (1, 10, 9),
+        'x86_64': (1, 10, 22),
         'aarch64': (257, 258, 311),
         'loongarch64': (2, 1, 75),
     }[name]

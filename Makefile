@@ -728,6 +728,19 @@ check-minild-multitarget-static: $(MINIAS_BINARY) $(MINILD_BINARY)
 	MINILD="$(abspath $(MINILD_BINARY))" \
 	bash tests/linker/probe-multitarget-static.sh
 
+# Opt-in full GCC/CRT/libc real-program acceptance. This is intentionally
+# separate from the five-target ELF structure checks while support is growing.
+.PHONY: check-minild-gcc-runtime-ladder
+check-minild-gcc-runtime-ladder: $(MINIAS_BINARY) $(MINILD_BINARY)
+	MINIAS="$(abspath $(MINIAS_BINARY))" \
+	MINILD="$(abspath $(MINILD_BINARY))" \
+	bash tests/linker/probe-minild-gcc-runtime-ladder.sh "$(if $(ARCH),$(ARCH),x86_64)"
+
+.PHONY: check-minild-x86-crt-got-relax
+check-minild-x86-crt-got-relax: $(MINILD_BINARY)
+	MINILD="$(abspath $(MINILD_BINARY))" \
+	bash tests/linker/probe-x86-crt-got-relax.sh
+
 .PHONY: check-minild-target-default-symbols
 check-minild-target-default-symbols: $(MINIAS_BINARY) $(MINILD_BINARY)
 	MINIAS="$(abspath $(MINIAS_BINARY))" \

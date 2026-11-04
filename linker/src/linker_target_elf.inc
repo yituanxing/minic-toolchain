@@ -11,6 +11,13 @@ static const struct MiniLdSharedTargetAbi *minild_riscv_shared_target_abi(void);
 static bool minild_x86_apply_static_relocations(
     MiniLdState *state, const struct MiniLdLayout *layout,
     const struct MiniLdStaticTargetPlan *plan);
+static bool minild_x86_reserve_static_relocations(
+    MiniLdState *state, struct MiniLdStaticTargetPlan *plan);
+static bool minild_x86_fill_static_relocations(
+    MiniLdState *state, const struct MiniLdLayout *layout,
+    const struct MiniLdStaticTargetPlan *plan);
+static void minild_x86_destroy_static_relocations(
+    struct MiniLdStaticTargetPlan *plan);
 static bool minild_aarch64_apply_static_relocations(
     MiniLdState *state, const struct MiniLdLayout *layout,
     const struct MiniLdStaticTargetPlan *plan);
@@ -120,8 +127,11 @@ static const MiniLdTargetProfile minild_target_profiles[] = {
     {"elf_x86_64", ELFCLASS64, ELFDATA2LSB, EM_X86_64, "i386:x86-64",
      NULL, 0U, UINT64_C(0x400000), 4096U,
      true, true, false, false, false, false,
-     minild_exact_merge_flags, NULL, NULL, NULL,
-     minild_x86_apply_static_relocations, NULL, NULL,
+     minild_exact_merge_flags, NULL,
+     minild_x86_reserve_static_relocations,
+     minild_x86_fill_static_relocations,
+     minild_x86_apply_static_relocations,
+     minild_x86_destroy_static_relocations, NULL,
      NULL, NULL, minild_zero_elf_flags},
     {"aarch64linux", ELFCLASS64, ELFDATA2LSB, EM_AARCH64, "aarch64",
      NULL, 0U, UINT64_C(0x400000), 4096U,

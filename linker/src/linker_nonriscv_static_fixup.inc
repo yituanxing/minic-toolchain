@@ -16,12 +16,18 @@ typedef enum MiniLdNonRiscvFixup {
 
 typedef struct MiniLdNonRiscvStaticOps {
     MiniLdNonRiscvFixup (*classify)(uint32_t type);
+    /* Target-only address transformations, e.g. x86 GOTPCREL G+A rather
+     * than the ordinary symbol S+A.  Common still owns relocation walking
+     * and scalar displacement encoding. */
+    bool (*resolve_target)(MiniLdState *, const MiniLdLayout *,
+                           const MiniLdStaticTargetPlan *,
+                           const MiniLdReloc *, uint64_t *);
     /* Only instruction encodings reach this hook; scalar writes are Common. */
     size_t (*instruction_width)(uint32_t type);
     bool (*write_instruction)(unsigned char *slot,
                               const MiniLdReloc *reloc,
-                              uint64_t target,
-                              uint64_t place);
+                              uint64_t target, uint64_t place,
+                              bool undefined_weak);
 } MiniLdNonRiscvStaticOps;
 
 static size_t minild_nonriscv_word_instruction_width(uint32_t type) {
@@ -45,6 +51,7 @@ static bool minild_nonriscv_write_fixup(MiniLdSection *section,
                                         const MiniLdNonRiscvStaticOps *ops,
                                         uint64_t target,
                                         uint64_t place,
+                                        bool undefined_weak,
                                         FILE *diagnostics) {
     size_t width = kind == MINILD_NONRISCV_ABS64 ||
                    kind == MINILD_NONRISCV_PCREL64 ? 8U : 4U;
@@ -96,7 +103,8 @@ static bool minild_nonriscv_write_fixup(MiniLdSection *section,
         return true;
     case MINILD_NONRISCV_TARGET_INSTRUCTION:
         if (ops->write_instruction != NULL &&
-            ops->write_instruction(slot, reloc, target, place)) {
+            ops->write_instruction(slot, reloc, target, place,
+                                   undefined_weak)) {
             return true;
         }
         break;
@@ -116,7 +124,6 @@ static bool minild_nonriscv_apply_with_ops(
     uint16_t machine;
     size_t i;
 
-    (void)plan;
     if (state == NULL || state->target == NULL || layout == NULL ||
         layout->work == NULL || ops == NULL || ops->classify == NULL) {
         return false;
@@ -127,6 +134,7 @@ static bool minild_nonriscv_apply_with_ops(
         MiniLdNonRiscvFixup kind = ops->classify(reloc->type);
         MiniLdSection *section;
         MiniLdStaticRelocOperands operands;
+        bool undefined_weak = false;
         bool live;
 
         if (kind == MINILD_NONRISCV_INVALID) {
@@ -151,8 +159,21 @@ static bool minild_nonriscv_apply_with_ops(
                 &operands)) {
             return false;
         }
+        if (ops->resolve_target != NULL &&
+            !ops->resolve_target(state, layout, plan, reloc,
+                                 &operands.target_bits)) {
+            return false;
+        }
+        if (reloc->symbol != SIZE_MAX &&
+            reloc->symbol < state->resolver.count) {
+            const MiniLdResolvedSymbol *symbol =
+                &state->resolver.entries[reloc->symbol];
+            undefined_weak = symbol->section == MINILD_SECTION_UNDEF &&
+                ELF64_ST_BIND(symbol->info) == STB_WEAK;
+        }
         if (!minild_nonriscv_write_fixup(section, reloc, machine, kind, ops,
                                          operands.target_bits, operands.place,
+                                         undefined_weak,
                                          state->diagnostics)) {
             return false;
         }

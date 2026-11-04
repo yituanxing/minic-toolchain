@@ -183,23 +183,44 @@ static bool process_input_data(MiniLdState *state,
             symtab_index = i;
         }
     }
-    if (symtab_index == SIZE_MAX ||
-        symtab.link >= elf.section_count ||
-        symtab.entry_size < (state->target->elf_class == ELFCLASS32
-                                 ? sizeof(Elf32_Sym) : sizeof(Elf64_Sym))) {
-        fprintf(state->diagnostics, "minic-ld: missing-symtab:%s\n", path);
-        goto done;
-    }
-    strtab_index = symtab.link;
-    if (!minielf_section(&elf, strtab_index, &strtab) ||
-        strtab.type != SHT_STRTAB) {
-        fprintf(state->diagnostics, "minic-ld: invalid-symtab:%s\n", path);
-        goto done;
-    }
-    symbol_count = minielf_symbol_count(&elf, &symtab);
-    if (symbol_count == 0U) {
-        fprintf(state->diagnostics, "minic-ld: invalid-symtab:%s\n", path);
-        goto done;
+    if (symtab_index == SIZE_MAX) {
+        /* GNU CRT tail objects (for example crtn.o) can legally contain
+         * allocatable .init/.fini bytes without any symbols.  They can be
+         * admitted as section-only inputs, but must not carry relocations
+         * or COMDAT groups, both of which require a symbol table. */
+        for (i = 1U; i < elf.section_count; ++i) {
+            MiniElfSection section;
+
+            if (!minielf_section(&elf, i, &section) ||
+                section.type == SHT_RELA || section.type == SHT_REL ||
+                section.type == SHT_GROUP ||
+                (section.flags & SHF_GROUP) != 0U) {
+                fprintf(state->diagnostics,
+                        "minic-ld: missing-symtab-for-relocations-or-groups:%s\n",
+                        path);
+                goto done;
+            }
+        }
+        /* Preserve the reserved ELF null-symbol slot for downstream maps. */
+        symbol_count = 1U;
+    } else {
+        if (symtab.link >= elf.section_count ||
+            symtab.entry_size < (state->target->elf_class == ELFCLASS32
+                                     ? sizeof(Elf32_Sym) : sizeof(Elf64_Sym))) {
+            fprintf(state->diagnostics, "minic-ld: invalid-symtab:%s\n", path);
+            goto done;
+        }
+        strtab_index = symtab.link;
+        if (!minielf_section(&elf, strtab_index, &strtab) ||
+            strtab.type != SHT_STRTAB) {
+            fprintf(state->diagnostics, "minic-ld: invalid-symtab:%s\n", path);
+            goto done;
+        }
+        symbol_count = minielf_symbol_count(&elf, &symtab);
+        if (symbol_count == 0U) {
+            fprintf(state->diagnostics, "minic-ld: invalid-symtab:%s\n", path);
+            goto done;
+        }
     }
     groups = calloc(elf.section_count, sizeof(*groups));
     group_for_section = malloc(elf.section_count * sizeof(*group_for_section));

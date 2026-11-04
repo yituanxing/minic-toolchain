@@ -24,10 +24,12 @@ static MiniLdNonRiscvFixup minild_aarch64_static_fixup_class(uint32_t type) {
 
 static bool minild_aarch64_static_write_instruction(
     unsigned char *slot, const MiniLdReloc *reloc,
-    uint64_t target, uint64_t place) {
+    uint64_t target, uint64_t place, bool undefined_weak) {
     uint64_t delta = target - place;
     uint32_t instruction;
     uint32_t imm;
+
+    (void)undefined_weak;
 
     switch (reloc->type) {
     case R_AARCH64_CALL26:
@@ -104,6 +106,7 @@ static bool minild_aarch64_apply_static_relocations(
     const MiniLdStaticTargetPlan *plan) {
     static const MiniLdNonRiscvStaticOps ops = {
         minild_aarch64_static_fixup_class,
+        NULL,
         minild_nonriscv_word_instruction_width,
         minild_aarch64_static_write_instruction
     };

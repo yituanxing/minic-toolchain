@@ -22,6 +22,11 @@ ownership migrations and exact test boundaries are recorded in:
 
 **[MiniLD input-section and MiniAS contract review](docs/architecture-input-sections-as-contract-2026-11-03.md)**
 
+The independent MiniLD ordinary-C execution ladder and its current
+five-target capability gaps are tracked in
+`../docs/ci/minild-gcc-runtime-ladder-2026-11-04.md`.  A green MiniAS +
+GNU BFD runtime run must not be presented as a MiniLD final-link success.
+
 Production entry points live in `linker/src/linker.c`,
 `linker/src/linker_core.inc`, `linker/src/linker_script_*.c` and
 `linker/src/elf32_compat_vdso.c`. The executable driver is
