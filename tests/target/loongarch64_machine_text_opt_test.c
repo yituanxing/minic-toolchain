@@ -14,9 +14,9 @@ typedef struct MachineTextCase {
 } MachineTextCase;
 
 static bool verify_case(const MachineTextCase *test) {
-    FILE *temporary = NULL, *result = NULL;
-    char *first = NULL, *second = NULL;
-    size_t first_length = 0U, second_length = 0U;
+    FILE *temporary = NULL, *result = NULL, *fused_file = NULL;
+    char *first = NULL, *second = NULL, *fused = NULL;
+    size_t first_length = 0U, second_length = 0U, fused_length = 0U;
     bool success = false;
     temporary = open_memstream(&first, &first_length);
     if (temporary == NULL)
@@ -35,18 +35,31 @@ static bool verify_case(const MachineTextCase *test) {
     if (fclose(result) != 0) success = false;
     result = NULL;
     if (!success) goto done;
+    fused_file = open_memstream(&fused, &fused_length);
+    if (fused_file == NULL) goto done;
+    success = minic_loongarch64_forward_and_compact(
+        fused_file, test->input, strlen(test->input),
+        test->use_counts, test->value_count);
+    if (fclose(fused_file) != 0) success = false;
+    fused_file = NULL;
+    if (!success) goto done;
     success = second_length == strlen(test->expected) &&
-              memcmp(second, test->expected, second_length) == 0;
+              memcmp(second, test->expected, second_length) == 0 &&
+              fused_length == second_length &&
+              memcmp(fused, second, fused_length) == 0;
     if (!success) {
         (void)fprintf(stderr,
-            "FAIL loong machine text %s\nexpected:\n%s\nactual:\n%s\n",
-            test->name, test->expected, second != NULL ? second : "<none>");
+            "FAIL loong machine text %s\nexpected:\n%s\nold two-step:\n%s\nnew fused:\n%s\n",
+            test->name, test->expected, second != NULL ? second : "<none>",
+            fused != NULL ? fused : "<none>");
     }
 done:
     if (temporary != NULL) (void)fclose(temporary);
     if (result != NULL) (void)fclose(result);
+    if (fused_file != NULL) (void)fclose(fused_file);
     free(first);
     free(second);
+    free(fused);
     return success;
 }
 
@@ -169,6 +182,46 @@ int main(void) {
             "redundant_word_sext",
             "  li.w $t0, 3\n  slli.w $t0, $t0, 0\n",
             NULL, 0U, "  li.w $t0, 3\n"
+        },
+        {
+            "inline_asm_preserves_native_syntax",
+            "  st.d $t0, $sp, 8\n"
+            "# MINI_LOONG_SSA_WRITEBACK 0\n"
+            "# MINI_LOONG_INLINE_ASM_BEGIN\n"
+            "  li.w $t0, 3\n"
+            "  slli.w $t0, $t0, 0\n"
+            "# MINI_LOONG_INLINE_ASM_END\n"
+            "  ld.d $t0, $sp, 8\n",
+            multiple_uses, 1U,
+            "  st.d $t0, $sp, 8\n"
+            "# MINI_LOONG_INLINE_ASM_BEGIN\n"
+            "  li.w $t0, 3\n"
+            "  slli.w $t0, $t0, 0\n"
+            "# MINI_LOONG_INLINE_ASM_END\n"
+            "  ld.d $t0, $sp, 8\n"
+        },
+        {
+            "forwarding_before_asm_barrier",
+            "  st.d $t0, $sp, 8\n"
+            "# MINI_LOONG_SSA_WRITEBACK 0\n"
+            "  ld.d $t0, $sp, 8\n"
+            "# MINI_LOONG_INLINE_ASM_BEGIN\n"
+            "  ld.d $t0, $sp, 8\n"
+            "# MINI_LOONG_INLINE_ASM_END\n",
+            single_use, 1U,
+            "# MINI_LOONG_INLINE_ASM_BEGIN\n"
+            "  ld.d $t0, $sp, 8\n"
+            "# MINI_LOONG_INLINE_ASM_END\n"
+        },
+        {
+            "transient_parameter_forward_line",
+            "  st.w $a3, $s0, 32\n"
+            "# MINI_LOONG_SSA_PARAMETER 0 3\n"
+            "  ld.w $t0, $s0, 32\n"
+            "  slli.w $t0, $t0, 0\n",
+            single_use, 1U,
+            "  slli.w $t0, $a3, 0\n"
+            "  slli.w $t0, $t0, 0\n"
         }
     };
     size_t index;

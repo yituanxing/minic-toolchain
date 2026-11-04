@@ -202,12 +202,9 @@ static bool loongarch64_emit_function(
     };
     char *generated = NULL;
     size_t generated_length = 0U;
-    char *single_use_generated = NULL;
-    size_t single_use_generated_length = 0U;
     const size_t *uses = NULL;
     size_t *owned_uses = NULL;
     FILE *temporary;
-    FILE *single_use_output;
     bool success;
     if (target == NULL || fn == NULL) return false;
     if (target->loongarch64_soft_float_abi) {
@@ -236,23 +233,12 @@ static bool loongarch64_emit_function(
             uses = owned_uses;
         }
     }
-    single_use_output = success
-        ? open_memstream(&single_use_generated, &single_use_generated_length)
-        : NULL;
-    if (success && single_use_output == NULL) success = false;
     if (success)
-        success = minic_loongarch64_forward_single_use_spills(
-            single_use_output, generated, generated_length,
-            uses, fn->value_count);
-    if (single_use_output != NULL && fclose(single_use_output) != 0)
-        success = false;
-    if (success)
-        success = minic_loongarch64_emit_compact_assembly(
-                      out, single_use_generated,
-                      single_use_generated_length) &&
+        success = minic_loongarch64_forward_and_compact(
+                      out, generated, generated_length,
+                      uses, fn->value_count) &&
                   minic_loongarch64_memory_helpers_end(out);
     free(generated);
-    free(single_use_generated);
     free(owned_uses);
     return success;
 }

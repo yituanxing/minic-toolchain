@@ -2376,6 +2376,22 @@ check-p451-a64-percpu-normalized: $(MINIC_CC_BINARY)
 
 check-fast: check-p451-a64-percpu-normalized
 
+# P46 verifies both the five-ISA source output contract and native SysV
+# behavior while collapsing target machine copies and Loong text passes.
+.PHONY: check-p46-aggregate-and-loong-oracle
+check-p46-aggregate-and-loong-oracle: $(MINIC_CC_BINARY)
+	bash tests/compiler/c0/probe-p46-oracle.sh \
+	  "$(abspath $(MINIC_CC_BINARY))"
+
+# An early x86 kernel .head.text aggregate uses independent source/dest
+# physical memory addresses, but retains link VMA for numeric casts.
+.PHONY: check-p46-x86-head-aggregate
+check-p46-x86-head-aggregate: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" \
+	  bash tests/compiler/c0/probe-p46-head-aggregate.sh
+
+check-fast: check-p46-aggregate-and-loong-oracle check-p46-x86-head-aggregate
+
 # Source -> Core -> normalized-machine ASM proof is a single admission
 # contract. Check whole instruction families, including hostile rewrites,
 # without requiring cross GNU/QEMU tools or granting opaque source IDs power.

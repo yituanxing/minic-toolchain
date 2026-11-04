@@ -124,19 +124,14 @@ static bool x86_emit_call_arguments_planned(
                 /* Scalar registers holding prior arguments are live. Copy
                  * stack-passed >16-byte record without touching them, and
                  * never overread the exact final partial eightbyte. */
-                size_t j, dest = loc->stack_index * 8U;
+                size_t dest;
                 if (loc->stack_index > SIZE_MAX / 8U ||
-                    dest > SIZE_MAX - loc->record_bytes) return false;
-                for (j = 0U; j + 8U <= loc->record_bytes; j += 8U)
-                    if (fprintf(out,
-                          "  movq %zu(%%r11), %%rax\n"
-                          "  movq %%rax, %zu(%%rsp)\n", j, dest + j) < 0)
-                        return false;
-                for (; j < loc->record_bytes; ++j)
-                    if (fprintf(out,
-                          "  movzbq %zu(%%r11), %%rax\n"
-                          "  movb %%al, %zu(%%rsp)\n", j, dest + j) < 0)
-                        return false;
+                    loc->stack_index * 8U > SIZE_MAX - loc->record_bytes)
+                    return false;
+                dest = loc->stack_index * 8U;
+                if (!x86_emit_record_move_bytes(out, "%r11", 0U, "%rsp",
+                                                dest, loc->record_bytes, false))
+                    return false;
                 continue;
             }
             if (loc->kind != MINIC_X86_ARG_RECORD_TWO_GP) return false;

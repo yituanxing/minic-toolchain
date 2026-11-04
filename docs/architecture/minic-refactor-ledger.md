@@ -2541,3 +2541,78 @@ this AArch64 regression. A new exact-head four-architecture CI run, not a
 host source-only probe, must establish that the repaired arm64 LL/SC cross
 GNU/QEMU step has recovered. Five-ISA complete Linux boot certification
 remains separate.
+
+The exact P45.1 four-architecture CI run `41781854184` subsequently
+confirmed the AArch64 GNU file-scope ASM step **PASS**. The RV64,
+AArch64, and LoongArch64 jobs completed successfully; x86-64 remained
+red at the same preexisting original Linux CMPXCHG16B Core case. The
+strict three-ISA GNU LD/QEMU Linux P0/P1 workflow also succeeded at
+that head. This evidence closes the specific P45-induced arm64 regression,
+not the independent five-ISA full Linux runtime qualification.
+
+## IR-P46 — Coherent machine-text transport, aggregate copy, head address roles (2026-11-04)
+
+**Provenance:** based on the exact P45.1 PR head `c9dcfa7`. An earlier
+uncommitted P46 implementation passed the tests below but its transient
+worktree disappeared after the executor disconnected. Both local snapshots
+and remote refs were searched; no P46 patch survived. This P46 is an
+independently **reconstructed and reverified** batch on a fresh clone of
+P45.1, not a claim that the lost files were recovered. Work remained on
+the same `refactor/minic-target-language-boundary` branch and PR #674.
+
+### One related machine-output cleanup, without a new MIR
+
+- **LoongArch64:** remove `single_use_generated` and a second full-function
+  `open_memstream`. The old single-use spill forwarding produces complete
+  lines for a stateful compactor directly; the latter stores native GPR,
+  frame-slot and 32-bit sign-extension facts, no dangling reference to a
+  previous text line. Original two public passes remain as differential
+  reference APIs. Exact source-owned GNU inline-ASM begin/end barriers
+  prevent transforming user instructions. This removes redundant full-text
+  materialization, **not** all post-assembly-text optimization: early
+  structured MachineIR ownership remains a separate future change.
+- **x86-64:** unify four independent record/aggregate byte transports
+  (Core RECORD_LOAD, RECORD_COPY, incoming parameter object and outgoing
+  CALL memory argument) into one ISA-owned `x86_emit_record_move_bytes`.
+  Small transfers retain the exact previous byte or qword/tail operations;
+  large transfers use bounded-text `rep movsb`, preserving `rdi/rsi/rcx`,
+  correcting outgoing `%rsp` relative offsets after three pushes and
+  leaving overlapping-copy direction and exact byte extent unchanged.
+- **x86 .head.text:** an independent same-source GCC GNU AS/LD and physically
+  displaced native runtime oracle found a **real existing wrongcode**.
+  RECORD_LOAD/COPY (and the analogous VECTOR_STORAGE_COPY) escaped the
+  early-head physical-memory address census; two aggregate pointer operands
+  were emitted as unrebased link-VMAs. Extend the same owner-owned role
+  census to one/two addresses and rebase each emitted `r10`/`r11` address
+  independently with `rax` scratch. Preserve numeric pointer→integer casts
+  as link-VMAs and preserve the existing scalar path. Do not generalize
+  provenance through pointer LOAD/PHI, opaque aliases or helper effects;
+  those remain the unresolved MC-076 gap.
+
+### Reconstructed direct correctness evidence
+
+| Gate | Rebuilt P46 result |
+|---|---|
+| Loong machine-text standalone, preserving original two-step output | **17/17 PASS**, including user ASM barriers |
+| Full `tests/compiler/c0/*.c` Loong P45.1/P46 differential | **1,052 cases**: 680 byte-identical `.s`, 372 both rejected, **0 changed**; 61 preprocessing skips |
+| Nine aggregate sizes 1,3,7,8,9,2048,4096,4097,16384, five-ISA `-S` | **PASS**, x86 GNU AS/LD and same-source GCC/MiniC native PASS; byte guards, source mutation, self-copy |
+| Nine-size x86 ASM text size with identical native result | P45.1 **2,649,716** bytes → P46 **98,696** bytes, **96.28% less** on this fixture |
+| x86 early-head physical role, previous wrongcode versus GCC | Reconstructed GNU/MiniC displacement **3/3 PASS**: direct record copy, cast round-trip, record load; ELF PC32 vs integer link-VMA 32S and PIE admission PASS |
+| Original MC-076 scalar, x86 M1, MC082 GNU/MiniC SysV mixed caller/callee | **PASS**, four mixed ABI modes |
+| Full Debug `make -s -j8 MODE=debug check-fast`, strict Release `MODE=release all`, `git diff --check` | **PASS** after combining all reconstructed P46 production and tests |
+| Five-ISA complete Linux GNU ELF/QEMU kernel runtime | **NOT RUN** in P46; above host-oracle evidence is not five Linux boot certification |
+
+The supporting host gates are `check-p46-aggregate-and-loong-oracle`,
+`check-p46-x86-head-aggregate` and the extended existing Loong text-opt test.
+Their same-source GNU C producer and GNU GAS/LD runtime checks are independent
+of the tiny optimized assembly size; they guard semantics, not code volume.
+
+**Separate remaining architecture owners from the global audit:** RV32/RV64,
+x86 and Direct A64/Loong have duplicate ELF default-section/output policy
+even though P42 already sealed symbol linkage and Module fragments. Their
+ABI/`.bss` assembler dialects differ and require one target-flavored ELF
+output plan, not a blind identical switch. Static initializer `symbol+
+byte_addend` keeps member paths and strict C storage rules, whereas GNU
+`i` evaluates specialization-local facts and GNU zero-size/void strides;
+share only checked byte arithmetic and sealed facts, not C walkers. These
+are P47 candidates, not silently patched into this machine P46 batch.

@@ -133,21 +133,40 @@ static MinicCoreGlobalId x86_head_address_global(
     return MINIC_CORE_GLOBAL_INVALID;
 }
 
-/* Both head-address passes inspect the same memory-address operand. Keep
- * the census and the cast/rebase decision separate, but not their decoding. */
-static MinicCoreValueId x86_head_memory_address(
-    const MinicCoreInstruction *ins) {
+/* Both head-address passes inspect exactly the same memory-address roles.
+ * Aggregate COPY and vector storage have two independently rebased
+ * addresses, unlike scalar LOAD/STORE. Keep this Core decoding local to
+ * the head-address policy and do not infer pointer provenance through PHI. */
+static size_t x86_head_memory_addresses(
+    const MinicCoreInstruction *ins, MinicCoreValueId addresses[2]) {
+    addresses[0] = MINIC_CORE_VALUE_INVALID;
+    addresses[1] = MINIC_CORE_VALUE_INVALID;
     switch (ins->kind) {
     case MINIC_CORE_INSTRUCTION_LOAD:
-        return ins->value.load.address;
+        addresses[0] = ins->value.load.address;
+        return 1U;
     case MINIC_CORE_INSTRUCTION_STORE:
-        return ins->value.store.address;
+        addresses[0] = ins->value.store.address;
+        return 1U;
     case MINIC_CORE_INSTRUCTION_ATOMIC_LOAD:
-        return ins->value.atomic_load.address;
+        addresses[0] = ins->value.atomic_load.address;
+        return 1U;
     case MINIC_CORE_INSTRUCTION_ATOMIC_STORE:
-        return ins->value.atomic_store.address;
+        addresses[0] = ins->value.atomic_store.address;
+        return 1U;
+    case MINIC_CORE_INSTRUCTION_RECORD_LOAD:
+        addresses[0] = ins->value.record_load.source_address;
+        return 1U;
+    case MINIC_CORE_INSTRUCTION_RECORD_COPY:
+        addresses[0] = ins->value.record_copy.destination_address;
+        addresses[1] = ins->value.record_copy.source_address;
+        return 2U;
+    case MINIC_CORE_INSTRUCTION_VECTOR_STORAGE_COPY:
+        addresses[0] = ins->value.vector_storage_copy.destination_address;
+        addresses[1] = ins->value.vector_storage_copy.source_address;
+        return 2U;
     default:
-        return MINIC_CORE_VALUE_INVALID;
+        return 0U;
     }
 }
 
@@ -180,12 +199,16 @@ static bool x86_head_plan_address_roles(
         for (j = 0U; j < block->instruction_count; ++j) {
             const MinicCoreInstructionId id = block->instructions[j];
             const MinicCoreInstruction *ins;
-            MinicCoreGlobalId global;
+            MinicCoreValueId addresses[2];
+            size_t k, count;
             if (id >= fn->instruction_count) { free(defs); return false; }
             ins = &fn->instructions[id];
-            global = x86_head_address_global(
-                fn, defs, x86_head_memory_address(ins), NULL);
-            if (global < fn->global_count) direct[global] = true;
+            count = x86_head_memory_addresses(ins, addresses);
+            for (k = 0U; k < count; ++k) {
+                MinicCoreGlobalId global = x86_head_address_global(
+                    fn, defs, addresses[k], NULL);
+                if (global < fn->global_count) direct[global] = true;
+            }
         }
     }
     /* Only after the global data-use census is complete can we choose the
@@ -196,12 +219,13 @@ static bool x86_head_plan_address_roles(
         for (j = 0U; j < block->instruction_count; ++j) {
             const MinicCoreInstructionId id = block->instructions[j];
             const MinicCoreInstruction *ins;
-            MinicCoreValueId address;
+            MinicCoreValueId addresses[2];
             MinicCoreGlobalId global;
             bool crossed_vma_cast = false;
+            size_t k, count;
             if (id >= fn->instruction_count) { free(defs); return false; }
             ins = &fn->instructions[id];
-            address = x86_head_memory_address(ins);
+            count = x86_head_memory_addresses(ins, addresses);
             switch (ins->kind) {
             case MINIC_CORE_INSTRUCTION_SCALAR_BITCAST:
                 if (ins->result < fn->value_count &&
@@ -221,11 +245,14 @@ static bool x86_head_plan_address_roles(
             default:
                 break;
             }
-            global = x86_head_address_global(
-                fn, defs, address, &crossed_vma_cast);
-            if (address < fn->value_count && global < fn->global_count &&
-                direct[global] && crossed_vma_cast)
-                memory_rebase_globals[address] = global;
+            for (k = 0U; k < count; ++k) {
+                MinicCoreValueId address = addresses[k];
+                global = x86_head_address_global(
+                    fn, defs, address, &crossed_vma_cast);
+                if (address < fn->value_count && global < fn->global_count &&
+                    direct[global] && crossed_vma_cast)
+                    memory_rebase_globals[address] = global;
+            }
         }
     }
     free(defs);

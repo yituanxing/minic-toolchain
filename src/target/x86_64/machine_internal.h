@@ -31,6 +31,15 @@ bool x86_store_memory_at(FILE *, size_t, const char *);
 bool x86_load_memory(FILE *, size_t, bool);
 bool x86_store_memory(FILE *, size_t);
 
+/* Target-owned exact record byte transport, shared by incoming stack
+ * parameters, outgoing call objects, and Core record load/copy. The final
+ * boolean requests legacy bytewise reads for small/volatile transfers. */
+bool x86_emit_record_move_bytes(FILE *, const char *source_register,
+                                size_t source_offset,
+                                const char *destination_register,
+                                size_t destination_offset,
+                                size_t byte_count, bool bytewise);
+
 bool minic_x86_64_emit_fp_instruction(
     FILE *, const MinicCoreFunction *, const MinicX86Frame *,
     const MinicCoreInstruction *);

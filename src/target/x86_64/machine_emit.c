@@ -16,6 +16,76 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* Core supplies the exact record extent. This is solely ISA-local byte
+ * transport: tiny objects preserve previous unrolled accesses, whereas
+ * large objects use a bounded-size REP MOVSB. Outgoing call arguments may
+ * already occupy RDI/RSI/RCX; preserve all three registers while shifting
+ * stack-relative addresses for the temporary pushes. */
+bool x86_emit_record_move_bytes(FILE *out, const char *source_register,
+                                size_t source_offset,
+                                const char *destination_register,
+                                size_t destination_offset,
+                                size_t byte_count, bool bytewise) {
+    size_t i = 0U;
+    const size_t saved_register_bytes = 3U * 8U;
+    const bool source_on_rsp = source_register != NULL &&
+        strcmp(source_register, "%rsp") == 0;
+    const bool destination_on_rsp = destination_register != NULL &&
+        strcmp(destination_register, "%rsp") == 0;
+    const bool source_base_valid = source_register != NULL &&
+        (strcmp(source_register, "%r11") == 0 ||
+         strcmp(source_register, "%r10") == 0 ||
+         strcmp(source_register, "%rbp") == 0 || source_on_rsp);
+    const bool destination_base_valid = destination_register != NULL &&
+        (strcmp(destination_register, "%r11") == 0 ||
+         strcmp(destination_register, "%r10") == 0 ||
+         strcmp(destination_register, "%rbp") == 0 || destination_on_rsp);
+    if (out == NULL || !source_base_valid || !destination_base_valid ||
+        source_offset > SIZE_MAX - byte_count ||
+        destination_offset > SIZE_MAX - byte_count)
+        return false;
+    if (byte_count == 0U) return true;
+    if (byte_count <= 128U) {
+        if (!bytewise) {
+            for (; i + 8U <= byte_count; i += 8U)
+                if (fprintf(out, "  movq %zu(%s), %%rax\n"
+                                 "  movq %%rax, %zu(%s)\n",
+                            source_offset + i, source_register,
+                            destination_offset + i, destination_register) < 0)
+                    return false;
+        }
+        for (; i < byte_count; ++i)
+            if (fprintf(out, "  movzbq %zu(%s), %%rax\n"
+                             "  movb %%al, %zu(%s)\n",
+                        source_offset + i, source_register,
+                        destination_offset + i, destination_register) < 0)
+                return false;
+        return true;
+    }
+    /* Temporary stack pushes cannot alter the caller's outgoing stack
+     * arguments. Rebase any %rsp reference by exactly the saved 24 bytes. */
+    if ((source_on_rsp && source_offset > SIZE_MAX - saved_register_bytes) ||
+        (destination_on_rsp &&
+         destination_offset > SIZE_MAX - saved_register_bytes))
+        return false;
+    if (source_on_rsp) source_offset += saved_register_bytes;
+    if (destination_on_rsp) destination_offset += saved_register_bytes;
+    return fprintf(out,
+        "  pushq %%rdi\n"
+        "  pushq %%rsi\n"
+        "  pushq %%rcx\n"
+        "  leaq %zu(%s), %%rsi\n"
+        "  leaq %zu(%s), %%rdi\n"
+        "  movabsq $%zu, %%rcx\n"
+        "  cld\n"
+        "  rep movsb\n"
+        "  popq %%rcx\n"
+        "  popq %%rsi\n"
+        "  popq %%rdi\n",
+        source_offset, source_register,
+        destination_offset, destination_register, byte_count) >= 0;
+}
+
 static bool x86_elf_pic_direct_symbol(const MinicCoreModule *module,
                                       const char *symbol,
                                       MinicElfModuleSymbolKind kind) {
@@ -93,14 +163,17 @@ static bool x86_emit_core_atomic_scalar(const MinicCoreFunction *fn,
 /* In early head code a direct-global SSA pointer normally stays physical,
  * including when passed to an out-of-line data helper. If a pointer has
  * instead passed through a numeric link-VMA cast and is converted back to a
- * pointer, only its LOAD/STORE memory use is rebased onto physical memory.
+ * pointer, its memory consumer must rebase to the physical address.
+ * Aggregate and vector copies have TWO pointer operands: keep their R10/R11
+ * registers live while rebasing each independently using RAX as scratch.
  * Subtracting the link base preserves field and dynamic pointer offsets. */
-static bool x86_head_load_memory_address(
+static bool x86_head_load_memory_address_into(
     FILE *out, const MinicCoreFunction *fn, const MinicX86Frame *frame,
-    MinicCoreValueId address) {
+    MinicCoreValueId address, const char *address_register,
+    const char *scratch_register) {
     MinicCoreGlobalId global;
     const char *symbol;
-    if (!x86_value_load(out, frame, address, "%r10")) return false;
+    if (!x86_value_load(out, frame, address, address_register)) return false;
     if (!frame->kernel_head_link_addresses ||
         frame->kernel_head_memory_rebase_globals == NULL)
         return true;
@@ -111,10 +184,19 @@ static bool x86_head_load_memory_address(
         return false;
     symbol = fn->globals[global].name;
     return fprintf(out,
-        "  movq $%s, %%r11\n"
-        "  subq %%r11, %%r10\n"
-        "  leaq %s(%%rip), %%r11\n"
-        "  addq %%r11, %%r10\n", symbol, symbol) >= 0;
+        "  movq $%s, %s\n"
+        "  subq %s, %s\n"
+        "  leaq %s(%%rip), %s\n"
+        "  addq %s, %s\n", symbol, scratch_register,
+        scratch_register, address_register, symbol, scratch_register,
+        scratch_register, address_register) >= 0;
+}
+
+static bool x86_head_load_memory_address(
+    FILE *out, const MinicCoreFunction *fn, const MinicX86Frame *frame,
+    MinicCoreValueId address) {
+    return x86_head_load_memory_address_into(
+        out, fn, frame, address, "%r10", "%r11");
 }
 
 /* Qualified GNU `i` symbolic operands are resolved by Common Core. Every
@@ -724,24 +806,16 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicCoreModule *module
         if (!x86_object_address(out, frame, object, "%r10"))
             return false;
         if (location->kind == MINIC_X86_ARG_RECORD_MEMORY) {
-            size_t j, source;
+            size_t source;
             if (!location->on_stack || location->stack_index > SIZE_MAX / 8U ||
                 location->stack_index * 8U > (size_t)INT32_MAX - 16U ||
                 location->record_bytes > (size_t)INT32_MAX - 16U -
                                           location->stack_index * 8U)
                 return false;
             source = 16U + location->stack_index * 8U;
-            for (j = 0U; j + 8U <= location->record_bytes; j += 8U)
-                if (fprintf(out,
-                    "  movq %zu(%%rbp), %%rax\n"
-                    "  movq %%rax, %zu(%%r10)\n",
-                    source + j, j) < 0) return false;
-            for (; j < location->record_bytes; ++j)
-                if (fprintf(out,
-                    "  movzbq %zu(%%rbp), %%rax\n"
-                    "  movb %%al, %zu(%%r10)\n",
-                    source + j, j) < 0) return false;
-            return true;
+            return x86_emit_record_move_bytes(out, "%rbp", source,
+                                              "%r10", 0U,
+                                              location->record_bytes, false);
         }
         if (location->kind == MINIC_X86_ARG_RECORD_ONE_GP) {
             if (!location->on_stack) {
@@ -942,7 +1016,7 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicCoreModule *module
          * This mirrors the common DirectLP64 record-load contract. */
         MinicCoreTypeId source_pointee;
         const MinicCoreType *record, *source_type;
-        size_t extent, offset;
+        size_t extent;
         const MinicCoreObjectId dest =
             ins->value.record_load.destination_object;
         const MinicCoreValueId source =
@@ -965,27 +1039,23 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicCoreModule *module
             ins->value.record_load.is_volatile != source_type->is_volatile ||
             frame->object_storage.objects == NULL ||
             (extent = record->size) > frame->object_storage.objects[dest].extent ||
-            !x86_value_load(out, frame, source, "%r11"))
+            !x86_head_load_memory_address_into(
+                out, fn, frame, source, "%r11", "%rax"))
             return false;
         if (frame->objects_from_aligned_rsp) {
             if (fprintf(out, "  leaq %zu(%%rsp), %%r10\n",
                         frame->object_offsets[dest]) < 0) return false;
         } else if (fprintf(out, "  leaq -%zu(%%rbp), %%r10\n",
                            frame->object_offsets[dest]) < 0) return false;
-        for (offset = 0U; offset < extent; ++offset)
-            if (fprintf(out,
-                    "  movzbq %zu(%%r11), %%rax\n"
-                    "  movb %%al, %zu(%%r10)\n",
-                    offset, offset) < 0)
-                return false;
-        return true;
+        return x86_emit_record_move_bytes(out, "%r11", 0U, "%r10", 0U,
+                                          extent, true);
     }
     case MINIC_CORE_INSTRUCTION_RECORD_COPY: {
         /* Byte-preserving copy between already-evaluated addresses.
          * Do not assume field layout or alignment; match RV64 semantics. */
         MinicCoreTypeId dst_pointee, src_pointee;
         const MinicCoreType *record;
-        size_t record_size, copied;
+        size_t record_size;
         if (ins->result != MINIC_CORE_VALUE_INVALID ||
             !x86_emit_core_kind(fn, ins->core_type_id,
                                 MINIC_CORE_TYPE_RECORD) ||
@@ -1003,30 +1073,17 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicCoreModule *module
                 src_pointee, ins->core_type_id) ||
             (record = x86_emit_core_type(fn, ins->core_type_id)) == NULL ||
             !record->has_layout || record->alignment == 0U ||
-            !x86_value_load(out, frame, ins->value.record_copy.destination_address, "%r10") ||
-            !x86_value_load(out, frame, ins->value.record_copy.source_address, "%r11"))
+            !x86_head_load_memory_address_into(
+                out, fn, frame, ins->value.record_copy.destination_address,
+                "%r10", "%rax") ||
+            !x86_head_load_memory_address_into(
+                out, fn, frame, ins->value.record_copy.source_address,
+                "%r11", "%rax"))
             return false;
         record_size = record->size;
         /* GNU zero-size records have no bytes to copy. */
-        copied = 0U;
-        while (copied < record_size) {
-            size_t chunk = record_size - copied;
-            size_t offset;
-            if (chunk > 2048U) chunk = 2048U;
-            for (offset = 0U; offset < chunk; ++offset) {
-                if (fprintf(out,
-                            "  movzbq %zu(%%r11), %%rax\n"
-                            "  movb %%al, %zu(%%r10)\n",
-                            offset, offset) < 0)
-                    return false;
-            }
-            copied += chunk;
-            if (copied < record_size &&
-                fprintf(out, "  addq $%zu, %%r10\n  addq $%zu, %%r11\n",
-                        chunk, chunk) < 0)
-                return false;
-        }
-        return true;
+        return x86_emit_record_move_bytes(out, "%r11", 0U, "%r10", 0U,
+                                          record_size, true);
     }
     case MINIC_CORE_INSTRUCTION_VECTOR_STORAGE_COPY: {
         MinicCoreTypeId dst_pointee, src_pointee;
@@ -1055,8 +1112,10 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicCoreModule *module
                 dst_pointee, ins->core_type_id) ||
             !minic_lp64_core_equal_unqualified(fn->type_context,
                 src_pointee, ins->core_type_id) ||
-            !x86_value_load(out, frame, dst, "%r10") ||
-            !x86_value_load(out, frame, src, "%r11"))
+            !x86_head_load_memory_address_into(
+                out, fn, frame, dst, "%r10", "%rax") ||
+            !x86_head_load_memory_address_into(
+                out, fn, frame, src, "%r11", "%rax"))
             return false;
         /* Plain integer GPR memory traffic under Linux -mno-sse/-mno-mmx.
          * Load both halves first to preserve overlapping source storage. */

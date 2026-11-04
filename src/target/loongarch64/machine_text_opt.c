@@ -1,5 +1,7 @@
 #include "target/loongarch64/machine_text_opt.h"
 #include <stdio.h>
+#include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
 
 /* Native post-emission transformations operate on complete, compiler-owned
@@ -125,14 +127,27 @@ static bool loongarch64_gp_already_sext32(const char *line,
     return false;
 }
 
-bool minic_loongarch64_forward_single_use_spills(FILE *out,
+typedef bool (*LoongMachineLineWriter)(void *context,
+                                      const char *line, size_t length);
+
+static bool loongarch64_write_file_line(void *context,
+                                       const char *line, size_t length) {
+    FILE *out = (FILE *)context;
+    return fwrite(line, 1U, length, out) == length;
+}
+
+/* The SSA forwarder feeds complete lines to a target-owned consumer. The
+ * public legacy API uses a FILE writer; codegen streams into compaction so
+ * there is no second whole-function assembly buffer or reparsing boundary. */
+static bool loongarch64_forward_to_writer(
+    LoongMachineLineWriter write, void *context,
     const char *buffer, size_t length, const size_t *uses,
     size_t value_count) {
     const char *line = buffer, *end = buffer + length;
     const char *previous = NULL;
     size_t previous_length = 0U;
     bool inline_asm = false;
-    if (out == NULL || buffer == NULL) return false;
+    if (write == NULL || buffer == NULL) return false;
     while (line < end) {
         size_t n = loongarch64_machine_line_length(line, end);
         const char *marker = line + n;
@@ -159,7 +174,7 @@ bool minic_loongarch64_forward_single_use_spills(FILE *out,
                 size_t f = loongarch64_machine_line_length(fallthrough, end);
                 if (loongarch64_branch_falls_into(
                         marker, m, "  b ", fallthrough, f)) {
-                    if (fwrite(line, 1U, n, out) != n) return false;
+                    if (!write(context, line, n)) return false;
                     previous = NULL;
                     line = fallthrough;
                     continue;
@@ -171,10 +186,24 @@ bool minic_loongarch64_forward_single_use_spills(FILE *out,
                 if (length < 1000000U &&
                     loongarch64_branch_falls_into(
                         line, n, "  bnez $t0, ", fallthrough, f)) {
-                    if (fprintf(out, "  beqz $t0, %.*s\n",
-                            (int)(m - strlen("  b ") - 1U),
-                            marker + strlen("  b ")) < 0)
+                    static const char replacement_prefix[] = "  beqz $t0, ";
+                    const size_t target_length = m - sizeof("  b ");
+                    const size_t prefix_length = sizeof(replacement_prefix) - 1U;
+                    char *replacement;
+                    bool written;
+                    if (target_length >= SIZE_MAX - prefix_length - 2U)
                         return false;
+                    replacement = malloc(prefix_length + target_length + 2U);
+                    if (replacement == NULL) return false;
+                    memcpy(replacement, replacement_prefix, prefix_length);
+                    memcpy(replacement + prefix_length,
+                           marker + sizeof("  b ") - 1U, target_length);
+                    replacement[prefix_length + target_length] = '\n';
+                    replacement[prefix_length + target_length + 1U] = '\0';
+                    written = write(context, replacement,
+                                    prefix_length + target_length + 1U);
+                    free(replacement);
+                    if (!written) return false;
                     previous = NULL;
                     line = fallthrough;
                     continue;
@@ -201,7 +230,8 @@ bool minic_loongarch64_forward_single_use_spills(FILE *out,
                     !(previous != NULL &&
                       loongarch64_gp_already_sext32(
                           previous, previous_length)) &&
-                    fputs("  slli.w $t0, $t0, 0\n", out) == EOF)
+                    !write(context, "  slli.w $t0, $t0, 0\n",
+                           sizeof("  slli.w $t0, $t0, 0\n") - 1U))
                     return false;
                 line = load + loongarch64_machine_line_length(load, end);
                 previous = NULL;
@@ -225,11 +255,13 @@ bool minic_loongarch64_forward_single_use_spills(FILE *out,
                     line, n, load,
                     loongarch64_machine_line_length(load, end), parameter);
                 if (direct_forward != 0U) {
-                    if (fprintf(out,
-                            direct_forward == 1U
-                                ? "  move $t0, $a%u\n"
-                                : "  slli.w $t0, $a%u, 0\n",
-                            parameter) < 0)
+                    char replacement[48];
+                    int written = snprintf(replacement, sizeof(replacement),
+                        direct_forward == 1U
+                            ? "  move $t0, $a%u\n"
+                            : "  slli.w $t0, $a%u, 0\n", parameter);
+                    if (written < 0 || (size_t)written >= sizeof(replacement) ||
+                        !write(context, replacement, (size_t)written))
                         return false;
                     line = load + loongarch64_machine_line_length(load, end);
                     previous = NULL;
@@ -237,12 +269,20 @@ bool minic_loongarch64_forward_single_use_spills(FILE *out,
                 }
             }
         }
-        if (fwrite(line, 1U, n, out) != n) return false;
+        if (!write(context, line, n)) return false;
         previous = line;
         previous_length = n;
         line += n;
     }
     return true;
+}
+
+bool minic_loongarch64_forward_single_use_spills(FILE *out,
+    const char *buffer, size_t length, const size_t *uses,
+    size_t value_count) {
+    return out != NULL && loongarch64_forward_to_writer(
+        loongarch64_write_file_line, out, buffer, length,
+        uses, value_count);
 }
 
 typedef struct LoongGPFrameCache {
@@ -333,103 +373,133 @@ static bool loongarch64_pure_scalar_opcode(const char *op) {
     return false;
 }
 
-static bool loongarch64_redundant_sign_extend(
-    const char *previous, size_t previous_length,
+static bool loongarch64_redundant_sign_extend_source(
     const char *line, size_t length) {
+    return loongarch64_line_starts(line, length, "  ld.w $t0, ") ||
+           loongarch64_line_starts(line, length, "  ldptr.w $t0, ") ||
+           loongarch64_line_starts(line, length, "  li.w $t0, ") ||
+           loongarch64_line_starts(line, length, "  add.w $t0, ") ||
+           loongarch64_line_starts(line, length, "  sub.w $t0, ") ||
+           loongarch64_line_starts(line, length, "  mul.w $t0, ");
+}
+
+typedef struct LoongMachineTextCompactor {
+    FILE *out;
+    LoongGPFrameCache cache[9];
+    bool inline_asm;
+    /* Store semantic machine facts rather than pointers to previous text:
+     * the upstream forwarder may supply an ephemeral replacement line. */
+    bool previous_frame_store;
+    unsigned int previous_reg;
+    char previous_base[3];
+    size_t previous_offset;
+    bool previous_sext32;
+} LoongMachineTextCompactor;
+
+static bool loongarch64_compact_line(LoongMachineTextCompactor *compactor,
+                                    const char *line, size_t length) {
+    LoongGPFrameCache *cache = compactor->cache;
+    unsigned int reg = 0U;
+    char base[3] = {0};
+    size_t offset = 0U;
+    bool skip = false;
     static const char zero_shift[] = "  slli.w $t0, $t0, 0\n";
-    return length == sizeof(zero_shift) - 1U &&
-           memcmp(line, zero_shift, sizeof(zero_shift) - 1U) == 0 &&
-           (loongarch64_line_starts(previous, previous_length, "  ld.w $t0, ") ||
-            loongarch64_line_starts(previous, previous_length, "  ldptr.w $t0, ") ||
-            loongarch64_line_starts(previous, previous_length, "  li.w $t0, ") ||
-            loongarch64_line_starts(previous, previous_length, "  add.w $t0, ") ||
-            loongarch64_line_starts(previous, previous_length, "  sub.w $t0, ") ||
-            loongarch64_line_starts(previous, previous_length, "  mul.w $t0, "));
+    if (loongarch64_line_starts(line, length,
+                               "# MINI_LOONG_SSA_WRITEBACK")) {
+        if (compactor->previous_frame_store)
+            loongarch64_cache_add(&cache[compactor->previous_reg],
+                                  compactor->previous_base,
+                                  compactor->previous_offset);
+        return true;
+    }
+    if (loongarch64_line_starts(line, length,
+                               "# MINI_LOONG_SSA_PARAMETER"))
+        return true;
+    if (loongarch64_line_starts(line, length,
+                               "# MINI_LOONG_INLINE_ASM_BEGIN")) {
+        memset(cache, 0, sizeof(compactor->cache));
+        compactor->inline_asm = true;
+    } else if (loongarch64_line_starts(line, length,
+                                      "# MINI_LOONG_INLINE_ASM_END")) {
+        memset(cache, 0, sizeof(compactor->cache));
+        compactor->inline_asm = false;
+    } else if (compactor->inline_asm) {
+        /* GNU/user ASM is opaque to machine optimizers. */
+    } else if (loongarch64_parse_frame_gpr(line, "ld.d", &reg,
+                                            base, &offset)) {
+        skip = loongarch64_cache_has(&cache[reg], base, offset);
+        if (!skip) cache[reg].count = 0U;
+    } else if (loongarch64_line_starts(line, length, "  st.") ||
+               loongarch64_line_starts(line, length, "  stptr.")) {
+        if (!loongarch64_invalidate_frame_store(cache, line))
+            memset(cache, 0, sizeof(compactor->cache));
+    } else if (loongarch64_line_starts(line, length, "  ld.")) {
+        char op[24], dest[24];
+        if (sscanf(line, "  %23s %23[^, \t\n]", op, dest) == 2 &&
+            sscanf(dest, "$t%u", &reg) == 1 && reg <= 8U)
+            cache[reg].count = 0U;
+        else
+            memset(cache, 0, sizeof(compactor->cache));
+    } else if (loongarch64_line_starts(line, length, "  ")) {
+        char op[24], dest[24];
+        if (sscanf(line, "  %23s %23[^, \t\n]", op, dest) != 2 ||
+            !loongarch64_pure_scalar_opcode(op))
+            memset(cache, 0, sizeof(compactor->cache));
+        else if (sscanf(dest, "$t%u", &reg) == 1 && reg <= 8U)
+            cache[reg].count = 0U;
+        else if (strcmp(dest, "$sp") == 0 || strcmp(dest, "$s0") == 0)
+            memset(cache, 0, sizeof(compactor->cache));
+    } else {
+        memset(cache, 0, sizeof(compactor->cache));
+    }
+    if (!compactor->inline_asm && compactor->previous_sext32 &&
+        length == sizeof(zero_shift) - 1U &&
+        memcmp(line, zero_shift, sizeof(zero_shift) - 1U) == 0)
+        skip = true;
+    if (skip) return true;
+    if (fwrite(line, 1U, length, compactor->out) != length) return false;
+    compactor->previous_frame_store =
+        loongarch64_parse_frame_gpr(line, "st.d", &reg, base, &offset);
+    if (compactor->previous_frame_store) {
+        compactor->previous_reg = reg;
+        memcpy(compactor->previous_base, base, sizeof(base));
+        compactor->previous_offset = offset;
+    }
+    compactor->previous_sext32 =
+        loongarch64_redundant_sign_extend_source(line, length);
+    return true;
+}
+
+static bool loongarch64_compact_writer(void *context,
+                                      const char *line, size_t length) {
+    return loongarch64_compact_line((LoongMachineTextCompactor *)context,
+                                   line, length);
 }
 
 bool minic_loongarch64_emit_compact_assembly(FILE *out,
                                               const char *buffer,
                                               size_t buffer_length) {
-    const char *line = buffer, *previous = NULL;
-    size_t previous_length = 0U;
-    const char *end = buffer + buffer_length;
-    LoongGPFrameCache cache[9];
-    bool inline_asm = false;
+    LoongMachineTextCompactor compactor = {0};
+    const char *line, *end;
     if (out == NULL || buffer == NULL) return false;
-    memset(cache, 0, sizeof(cache));
+    compactor.out = out;
+    line = buffer;
+    end = buffer + buffer_length;
     while (line < end) {
         size_t length = loongarch64_machine_line_length(line, end);
-        unsigned int reg = 0U;
-        char base[3] = {0};
-        size_t offset = 0U;
-        bool skip = false;
-        if (loongarch64_line_starts(line, length,
-                                   "# MINI_LOONG_SSA_WRITEBACK")) {
-            if (previous != NULL &&
-                loongarch64_parse_frame_gpr(previous, "st.d", &reg,
-                                            base, &offset))
-                loongarch64_cache_add(&cache[reg], base, offset);
-            line += length;
-            continue;
-        }
-        if (loongarch64_line_starts(line, length,
-                                   "# MINI_LOONG_SSA_PARAMETER")) {
-            line += length;
-            continue;
-        }
-        if (loongarch64_line_starts(line, length,
-                                   "# MINI_LOONG_INLINE_ASM_BEGIN")) {
-            memset(cache, 0, sizeof(cache));
-            inline_asm = true;
-        } else if (loongarch64_line_starts(line, length,
-                                          "# MINI_LOONG_INLINE_ASM_END")) {
-            memset(cache, 0, sizeof(cache));
-            inline_asm = false;
-        } else if (inline_asm) {
-            /* Do not examine, remove, or rewrite GNU/user instructions. */
-        } else if (loongarch64_parse_frame_gpr(line, "ld.d", &reg,
-                                                base, &offset)) {
-            skip = loongarch64_cache_has(&cache[reg], base, offset);
-            if (!skip) cache[reg].count = 0U;
-        } else if (loongarch64_line_starts(line, length, "  st.") ||
-                   loongarch64_line_starts(line, length, "  stptr.")) {
-            /* Exact native frame stores cannot modify disjoint SSA slots.
-             * Any indirect store remains a hard alias barrier. */
-            if (!loongarch64_invalidate_frame_store(cache, line))
-                memset(cache, 0, sizeof(cache));
-        } else if (loongarch64_line_starts(line, length, "  ld.")) {
-            char op[24], dest[24];
-            if (sscanf(line, "  %23s %23[^, \t\n]", op, dest) == 2 &&
-                sscanf(dest, "$t%u", &reg) == 1 && reg <= 8U)
-                cache[reg].count = 0U;
-            else
-                memset(cache, 0, sizeof(cache));
-        } else if (loongarch64_line_starts(line, length, "  ")) {
-            char op[24], dest[24];
-            if (sscanf(line, "  %23s %23[^, \t\n]", op, dest) != 2 ||
-                !loongarch64_pure_scalar_opcode(op))
-                memset(cache, 0, sizeof(cache));
-            else if (sscanf(dest, "$t%u", &reg) == 1 && reg <= 8U)
-                cache[reg].count = 0U;
-            else if (strcmp(dest, "$sp") == 0 ||
-                     strcmp(dest, "$s0") == 0)
-                memset(cache, 0, sizeof(cache));
-        } else {
-            /* .L labels and branches join multiple predecessor states. */
-            memset(cache, 0, sizeof(cache));
-        }
-        if (!inline_asm && previous != NULL &&
-            loongarch64_redundant_sign_extend(previous, previous_length,
-                                              line, length))
-            skip = true;
-        if (skip) {
-            line += length;
-            continue;
-        }
-        if (fwrite(line, 1U, length, out) != length) return false;
-        previous = line;
-        previous_length = length;
+        if (!loongarch64_compact_line(&compactor, line, length)) return false;
         line += length;
     }
     return true;
+}
+
+bool minic_loongarch64_forward_and_compact(FILE *out,
+    const char *buffer, size_t length, const size_t *uses,
+    size_t value_count) {
+    LoongMachineTextCompactor compactor = {0};
+    if (out == NULL || buffer == NULL) return false;
+    compactor.out = out;
+    return loongarch64_forward_to_writer(
+        loongarch64_compact_writer, &compactor,
+        buffer, length, uses, value_count);
 }
