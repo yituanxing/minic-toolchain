@@ -188,6 +188,61 @@ if ! grep -q 'unsafe-script-load-page-overlap' "$work/script-page-wx.stderr"; th
     echo 'MINILD_SEGMENT_CHECK=FAIL same-page-RX-RW missing-diagnostic' >&2
     exit 1
 fi
+
+# Linux .init.pi deliberately collects writable executable pieces in one
+# output area.  When one side *already* requires RWX, joining an adjacent RW
+# section on that very page does not invent an RWX permission class.  This
+# differs from the RX+RW negative case above, where neither side requested
+# RWX and the linker must reject an implicit permission escalation.
+cat >"$work/script-page-existing-rwx.s" <<'ASM'
+.section .pi.rw,"aw",@progbits
+.globl pi_rw_value
+pi_rw_value:
+  .dword 0x12345678
+.section .pi.rwx,"awx",@progbits
+.globl pi_rwx_value
+pi_rwx_value:
+  .dword 0x88776655
+ASM
+cat >"$work/script-page-existing-rwx.lds" <<'LDS'
+OUTPUT_ARCH(riscv)
+ENTRY(_start)
+SECTIONS {
+  . = 0x10000;
+  .text : { *(.text.start) }
+  .rodata : { *(.rodata.literal) }
+  . = ALIGN(0x1000);
+  .data : { *(.data.word) }
+  .pi_rw : { *(.pi.rw) }
+  .pi_rwx : { *(.pi.rwx) }
+  . = ALIGN(0x1000);
+  .bss : { *(.bss.value) }
+}
+LDS
+"$MINIAS" -march=rv64i -mabi=lp64 \
+    -o "$work/script-page-existing-rwx.o" \
+    "$work/script-page-existing-rwx.s"
+"$MINILD" -melf64lriscv -T "$work/script-page-existing-rwx.lds" \
+    -o "$work/script-page-existing-rwx.elf" \
+    "$work/script-page.o" "$work/script-page-existing-rwx.o"
+if command -v riscv64-linux-gnu-ld >/dev/null 2>&1; then
+    riscv64-linux-gnu-ld -m elf64lriscv -static \
+        -T "$work/script-page-existing-rwx.lds" \
+        -o "$work/script-page-existing-rwx-gnu.elf" \
+        "$work/script-page.o" "$work/script-page-existing-rwx.o"
+fi
+if command -v qemu-riscv64 >/dev/null 2>&1; then
+    qemu-riscv64 "$work/script-page-existing-rwx.elf" || {
+        echo 'MINILD_SEGMENT_CHECK=FAIL existing-rwx-MiniLD-qemu' >&2
+        exit 1
+    }
+    if [[ -s "$work/script-page-existing-rwx-gnu.elf" ]]; then
+        qemu-riscv64 "$work/script-page-existing-rwx-gnu.elf" || {
+            echo 'MINILD_SEGMENT_CHECK=FAIL existing-rwx-GNU-qemu' >&2
+            exit 1
+        }
+    fi
+fi
 if command -v riscv64-linux-gnu-ld >/dev/null 2>&1; then
     riscv64-linux-gnu-ld -m elf64lriscv -static \
         -T "$work/script-page.lds" -o "$work/script-page-gnu.elf" \
@@ -396,6 +451,35 @@ assert rodata[4] % 4096 == rodata[3] % 4096 and (
     'script output sections must have mmap-compatible file addresses', rodata, data, bss)
 print('MINILD_SEGMENT_CHECK=PASS mode=script-same-page RX+R=coalesced '
       'RW=separate-page BSS=NOBITS-only W+X=fail-closed GNU+QEMU=if-available')
+
+
+raw, ph, names = inspect('script-page-existing-rwx.elf', 2)
+loads = [p for p in ph if p[0] == 1]
+assert len(loads) == 3, ('already-RWX scripted LOAD count', ph)
+assert [p[1] for p in loads] == [5, 7, 6], (
+    'already-RWX permissions should be preserved without overlapping pages', ph)
+rw = one(names, '.pi_rw')
+rwx = one(names, '.pi_rwx')
+assert rw[3] // 4096 == rwx[3] // 4096 and (
+    covers(loads[1], rw) and covers(loads[1], rwx)), (
+    'existing RWX fragment must share its already-RWX load page', loads, rw, rwx)
+assert loads[1][2] % 4096 == loads[1][3] % 4096, (
+    'merged RWX load file/VMA congruence', loads[1])
+assert raw[rw[4]:rw[4] + 8] == (0x12345678).to_bytes(8, 'little')
+assert raw[rwx[4]:rwx[4] + 8] == (0x88776655).to_bytes(8, 'little')
+if (base / 'script-page-existing-rwx-gnu.elf').is_file():
+    gnu_raw, gnu_ph, gnu_names = inspect('script-page-existing-rwx-gnu.elf', 2)
+    gnu_rw = one(gnu_names, '.pi_rw')
+    gnu_rwx = one(gnu_names, '.pi_rwx')
+    assert any(p[0] == 1 and p[1] == 7 and
+               covers(p, gnu_rw) and covers(p, gnu_rwx)
+               for p in gnu_ph), (
+        'GNU must agree that same-page already-RWX sections occupy one RWX LOAD',
+        gnu_ph, gnu_rw, gnu_rwx)
+    assert gnu_raw[gnu_rw[4]:gnu_rw[4] + 8] == raw[rw[4]:rw[4] + 8]
+    assert gnu_raw[gnu_rwx[4]:gnu_rwx[4] + 8] == raw[rwx[4]:rwx[4] + 8]
+print('MINILD_SEGMENT_CHECK=PASS mode=script-existing-RWX '
+      'RW+RWX=same-page-coalesced RX+RW=still-rejected GNU+QEMU=if-available')
 
 
 raw, ph, names = inspect('static-default.elf', 2)
