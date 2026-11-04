@@ -53,10 +53,6 @@ bool minic_multi_global_payload_visit(
     const MinicC0Program *program, const MinicTargetInvocation *target,
     const MinicGlobalObject *object, const MinicMultiGlobalEmissionPlan *plan,
     const MinicMultiGlobalPayloadSink *sink);
-/* Source initializer admission for explicitly named ELF .bss/.bss.*:
- * Common's NOBITS serializer cannot encode nonzero bytes or relocations.
- * This decision is sealed by the ModuleIR ingress for every backend. */
-bool minic_multi_global_explicit_bss_admitted(const MinicGlobalObject *object);
 bool minic_multi_record_initializer_needs_recursive(
     const MinicC0Program *program, const MinicRecord *record,
     const MinicGlobalObject *object);

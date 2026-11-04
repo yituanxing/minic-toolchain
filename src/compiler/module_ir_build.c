@@ -268,8 +268,6 @@ static bool module_capture_global_payload(MinicCoreModuleGlobal *destination,
     if (!minic_multi_global_payload_plan_build(program, target, source, &plan))
         return false;
     destination->default_section = plan.default_section;
-    destination->common_elf_bss_admitted =
-        minic_multi_global_explicit_bss_admitted(source);
     destination->storage_size = plan.storage_size;
     destination->storage_alignment = plan.storage_alignment;
     sink.global = destination;

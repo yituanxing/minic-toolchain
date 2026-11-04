@@ -103,6 +103,31 @@ int main(void) {
         global.section_name = ".bss.test";
         global.visibility = MINIC_CORE_MODULE_VISIBILITY_HIDDEN;
         global.is_read_only = true;
+        /* The preceding standalone relocation fragment is *not* a valid
+         * ELF SHT_NOBITS payload. RV's explicit @progbits policy retains it. */
+        if (minic_multi_module_elf_global_plan_build(
+                &global, ".data", true, lp64_directive, false, 4U, &plan))
+            return 11;
+        if (!minic_multi_module_elf_global_plan_build(
+                &global, ".data", false, lp64_directive, false, 4U, &plan) ||
+            strcmp(plan.explicit_section_type, "progbits") != 0)
+            return 12;
+        fragments[0].kind = MINIC_CORE_MODULE_FRAGMENT_BITS;
+        fragments[0].relocation_symbol = NULL;
+        fragments[0].bits = 1U;
+        if (minic_multi_module_elf_global_plan_build(
+                &global, ".data", true, lp64_directive, false, 4U, &plan))
+            return 13;
+        /* Numeric data is interpreted by its physical width; high bits
+         * beyond a byte do not become nonzero ELF section contents. */
+        fragments[0].byte_count = global.storage_size = 1U;
+        fragments[0].bits = 0x100U;
+        if (!minic_multi_module_elf_global_plan_build(
+                &global, ".data", true, lp64_directive, false, 4U, &plan) ||
+            strcmp(plan.explicit_section_type, "nobits") != 0)
+            return 14;
+        fragments[0].kind = MINIC_CORE_MODULE_FRAGMENT_ZERO;
+        fragments[0].byte_count = global.storage_size = 4U;
         if (!minic_multi_module_elf_global_plan_build(
                 &global, ".data", true, lp64_directive, false, 4U, &plan) ||
             !minic_multi_module_elf_global_emit_visibility(out, &plan) ||
@@ -110,16 +135,16 @@ int main(void) {
             !minic_multi_module_elf_global_emit_binding(out, &plan) ||
             fclose(out) != 0) {
             free(text);
-            return 11;
+            return 15;
         }
         if (strcmp(text,
                    ".hidden test_obj\n.section .bss.test,\"a\",@nobits\n"
                    ".globl test_obj\n") != 0) {
             free(text);
-            return 12;
+            return 16;
         }
         free(text);
     }
-    puts("MODULE_GLOBAL_FRAGMENTS=PASS zero bits signed reloc label strict_layout ELF_section");
+    puts("MODULE_GLOBAL_FRAGMENTS=PASS zero bits signed reloc label strict_layout ELF_section physical_nobits=5");
     return 0;
 }

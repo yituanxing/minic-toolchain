@@ -3369,3 +3369,53 @@ source smoke all PASS. The frozen nine-shape P64 RV32/RV64 GNU assembly
 oracles match the P66 compiler output byte-for-byte. This is **not** a
 full Linux compile, GNU ELF32/ELF64 cross-architecture link or QEMU P1
 recertification; those remain separate target runtime milestones.
+
+## IR-P67 — ELF NOBITS admission consumes sealed Core bytes (2026-11-04)
+
+**Remaining cross-layer shadow removed:** P65 deleted C initializer shape
+from the public Core Module; P66 validated physically materialized live
+definitions. A separate `common_elf_bss_admitted` Boolean still remained in
+`MinicCoreModuleGlobal`. Compiler ingress computed it from C source
+`initializer_values[]` and `relocation_count` before the byte serializer had
+produced the actual fragments; x86/AArch64/LoongArch64 writers trusted this
+unverified field and x86 independently repeated a partial fragment check.
+Even a valid source-free producer could not emit an ordinary `.data` Core
+global if its unrelated default-initialized Boolean was false. Conversely a
+forged true flag could ask the two Direct LP64 writers to emit nonzero data
+or a relocation into ELF `SHT_NOBITS` without validating actual contents.
+
+The single Common ELF global-plan builder now checks physical `BITS`, `ZERO`
+and `RELOCATION` fragments whenever the caller selects **explicit `.bss` or
+`.bss.*` as `@nobits`**. It rejects relocations and nonzero *visible* bytes;
+bits above a 1/2/4-byte scalar's serialized width are correctly masked.
+This is an output-format admission check, not C constant evaluation, not a
+Core ISA rule and not a new architecture-specific ABI algorithm. Compiler
+ingress no longer generates a Boolean, Core Module does not publish one,
+and x86 no longer has a second independently evolving checker. The
+production Core Module verifier retains P66's separate *default* BSS
+zero/relo contract for all targets.
+
+**Five-target dialect policy retained:** x86_64, AArch64 and LoongArch64
+pass `explicit_bss_nobits=true`, so `.bss.*` remains GNU-style NOBITS and
+rejects physical nonzero/relocation payload. RV32 and RV64 pass false and
+retain their previously accepted explicit `.bss.* @progbits` bytes; `.bssish`
+is never misclassified as `.bss`. In particular, the change can admit a
+source spelling such as `unsigned char b = 256` in an explicit `.bss.*`
+section after its C conversion serializes a real zero byte; this agrees
+with GNU GCC's `@nobits` output (which warns about truncation) and avoids
+rejecting a physically valid ELF definition based solely on an untruncated
+C initializer value. This is intentional, not a relaxation for nonzero
+physical ELF contents.
+
+**P67 evidence:** The standalone Common ELF plan probe now rejects its old
+invalid `.bss.test` plus label relocation, admits it under the RV-style
+PROGBITS switch, rejects visible nonzero bits, admits a masked-width numeric
+zero and a genuinely ZERO fragment. The five ISA global section probe
+checks explicit NOBITS/PROGBITS dialects, zero/narrowed-zero payloads,
+`.bssish` data, and rejection or retained source admission of nonzero and
+symbol relocation payloads. The x86 GNU native global ABI gate independently
+assembles both GCC and MiniC narrowed-zero cases and observes the same
+ELF SHT_NOBITS section. Existing RV32/RV64
+GlobalPlan and strict five-target boundaries are the minimal regression
+set. This scope does **not** claim current-head Linux linking or guest
+runtime certification.

@@ -55,22 +55,6 @@ static bool minic_payload_record_field_shape(
     return true;
 }
 
-bool minic_multi_global_explicit_bss_admitted(const MinicGlobalObject *object) {
-    size_t index;
-    const char *name;
-    if (object == NULL) return false;
-    name = object->section_name;
-    if (name == NULL || strncmp(name, ".bss", 4U) != 0 ||
-        (name[4] != '\0' && name[4] != '.'))
-        return true;
-    if (object->relocation_count != 0U ||
-        (object->initializer_count != 0U && object->initializer_values == NULL))
-        return false;
-    for (index = 0U; index < object->initializer_count; ++index)
-        if (object->initializer_values[index] != 0U) return false;
-    return true;
-}
-
 static bool minic_multi_visit_record_bit_field_run(
     const MinicMultiGlobalPayloadSink *sink,
     const MinicC0Program *program, const MinicTargetInvocation *target,

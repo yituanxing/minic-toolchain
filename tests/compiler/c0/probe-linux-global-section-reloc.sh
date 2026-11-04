@@ -114,4 +114,50 @@ if "$cc" --target="$target-linux" -S "$work/inject.i" -o "$work/inject.s" >"$wor
   exit 1
 fi
 test ! -e "$work/inject.s"
+
+# The three ELF NOBITS writers admit explicit .bss.* from the sealed bytes,
+# not the C initializer slot count. RISC-V intentionally keeps its older
+# explicit @progbits dialect, even for nonzero bytes and relocations.
+cat > "$work/p67-zero-bss.i" <<'SRC'
+unsigned char __attribute__((used,section(".bss.minic.p67.zero"))) zero = 0;
+unsigned char __attribute__((used,section(".bss.minic.p67.narrow"))) narrow = 256;
+int __attribute__((used,section(".bssish.minic.p67"))) looks_like_bss = 42;
+SRC
+"$cc" --target="$target-linux" -S "$work/p67-zero-bss.i" -o "$work/p67-zero-bss.s"
+test -s "$work/p67-zero-bss.s"
+grep -Fq '.section .bssish.minic.p67,"aw",@progbits' "$work/p67-zero-bss.s"
+case "$target" in
+  x86_64|aarch64|loongarch64)
+    grep -Fq '.section .bss.minic.p67.zero,"aw",@nobits' "$work/p67-zero-bss.s"
+    grep -Fq '.section .bss.minic.p67.narrow,"aw",@nobits' "$work/p67-zero-bss.s"
+    ;;
+  riscv32|riscv64)
+    grep -Fq '.section .bss.minic.p67.zero,"aw",@progbits' "$work/p67-zero-bss.s"
+    grep -Fq '.section .bss.minic.p67.narrow,"aw",@progbits' "$work/p67-zero-bss.s"
+    ;;
+  *) echo "unexpected MiniC target $target" >&2; exit 1 ;;
+esac
+cat > "$work/p67-nonzero-bss.i" <<'SRC'
+int __attribute__((used,section(".bss.minic.p67.nonzero"))) nonzero = 7;
+SRC
+cat > "$work/p67-reloc-bss.i" <<'SRC'
+int anchor;
+int * __attribute__((used,section(".bss.minic.p67.reloc"))) relocated = &anchor;
+SRC
+for bss_kind in nonzero reloc; do
+  source="$work/p67-$bss_kind-bss.i"
+  assembly="$work/p67-$bss_kind-bss.s"
+  if [[ "$target" == riscv32 || "$target" == riscv64 ]]; then
+    "$cc" --target="$target-linux" -S "$source" -o "$assembly"
+    grep -Fq ".section .bss.minic.p67.$bss_kind,\"aw\",@progbits" "$assembly"
+  else
+    if "$cc" --target="$target-linux" -S "$source" -o "$assembly" \
+         >"$work/p67-$bss_kind.stdout" 2>"$work/p67-$bss_kind.stderr"; then
+      echo "invalid @nobits $bss_kind payload accepted $target" >&2
+      exit 1
+    fi
+    test ! -e "$assembly"
+  fi
+done
+echo "MINIC_P67_ELF_BSS=PASS target=$target physical_zero=2 bssish_progbits=1 nonzero_and_reloc_dialect=2"
 echo "MINIC_LINUX_GLOBAL_SECTION=PASS target=$target sections=3 weak=1 reloc=1 injected_directive=rejected"

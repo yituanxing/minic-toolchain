@@ -113,6 +113,29 @@ static bool minic_module_elf_bss_section(const char *name) {
            (name[4] == '\0' || name[4] == '.');
 }
 
+/* ELF SHT_NOBITS cannot encode literal nonzero data or a relocation. This
+ * checks the *serialized* Core byte fragments, not an ingress C initializer
+ * count: a value narrowed to zero still has a valid NOBITS representation.
+ * The RISC-V writers deliberately opt out for explicit .bss.*: their
+ * historical target spelling uses @progbits for that section name. */
+static bool minic_module_elf_nobits_payload_valid(
+    const MinicCoreModuleGlobal *global) {
+    size_t index;
+    for (index = 0U; index < global->fragment_count; ++index) {
+        const MinicCoreModuleFragment *fragment = &global->fragments[index];
+        if (fragment->kind == MINIC_CORE_MODULE_FRAGMENT_RELOCATION)
+            return false;
+        if (fragment->kind == MINIC_CORE_MODULE_FRAGMENT_BITS) {
+            const uint64_t visible_bits = fragment->byte_count == 8U
+                ? fragment->bits
+                : fragment->bits & ((UINT64_C(1) <<
+                                      (8U * fragment->byte_count)) - UINT64_C(1));
+            if (visible_bits != 0U) return false;
+        }
+    }
+    return true;
+}
+
 static const char *minic_module_elf_default_section(
     MinicCoreModuleDefaultSection section) {
     switch (section) {
@@ -150,6 +173,9 @@ bool minic_multi_module_elf_global_plan_build(
          !minic_elf_section_name_valid(global->section_name)) ||
         !minic_module_global_fragment_directives_supported(
             global, directive, relocation_width)) return false;
+    if (explicit_bss_nobits &&
+        minic_module_elf_bss_section(global->section_name) &&
+        !minic_module_elf_nobits_payload_valid(global)) return false;
     fallback = fallback_override != NULL
         ? fallback_override
         : minic_module_elf_default_section(global->default_section);

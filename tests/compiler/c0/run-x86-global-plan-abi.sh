@@ -62,4 +62,21 @@ if "$minic" -S "$work/invalid.i" --target=x86_64-linux -o "$work/invalid.s" \
     exit 1
 fi
 
-printf '%s\n' 'PASS x86-global-plan-abi gnu-native=1 minic-native=1 bss-nobits=1 bssish-progbits=1 bss-nonzero-reject=1 scalar-fp=2 symbol-sizes=9 reloc-data=8 flexible=1 nested-reloc=1'
+# GCC warns about the source conversion but correctly accepts the resulting
+# zero physical byte in NOBITS. Admission must use the emitted Core payload,
+# not a stale, pre-conversion C initializer-slot integer.
+cat > "$work/narrowed-bss.c" <<'SOURCE'
+unsigned char __attribute__((used,section(".bss.minic.narrowed"))) narrowed = 256;
+SOURCE
+"$gnu" -std=gnu11 -c "$work/narrowed-bss.c" -o "$work/gnu-narrowed.o" \
+    >"$work/gnu-narrowed.stdout" 2>"$work/gnu-narrowed.stderr"
+"$gnu" -E -P -x c "$work/narrowed-bss.c" -o "$work/narrowed.i"
+"$minic" -S "$work/narrowed.i" --target=x86_64-linux -o "$work/mini-narrowed.s"
+"$gnu" -c -x assembler "$work/mini-narrowed.s" -o "$work/mini-narrowed.o"
+for owner in gnu mini; do
+    readelf -SW "$work/$owner-narrowed.o" > "$work/$owner-narrowed.sections"
+    awk '$3 == ".bss.minic.narrowed" && $4 == "NOBITS" { valid = 1 }
+         END { exit valid ? 0 : 1 }' "$work/$owner-narrowed.sections"
+done
+
+printf '%s\n' 'PASS x86-global-plan-abi gnu-native=1 minic-native=1 bss-nobits=1 bssish-progbits=1 bss-nonzero-reject=1 narrowed_zero_nobits=1 scalar-fp=2 symbol-sizes=9 reloc-data=8 flexible=1 nested-reloc=1'

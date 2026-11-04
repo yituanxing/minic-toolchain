@@ -73,6 +73,21 @@ has tests/core/module_ir_fragment_contract_test.c 'verify_source_free_global_def
 # Explicit `.bss.*` spelling alone does not imply @nobits on RV targets.
 lacks src/core/module_ir.c 'minic_module_elf_bss_section('
 has src/target/riscv64/global_emit.c 'rv64_module_definition_payload_valid('
+# ELF @nobits admission is an output-format decision on materialized Core
+# bytes, never an independent mutable C initializer summary sealed into IR.
+for owner in src/core/module_ir.h src/compiler/module_ir_build.c \
+             src/target/common/direct_program_emit.c \
+             src/target/x86_64/global_emit.c; do
+  lacks "$owner" 'common_elf_bss_admitted'
+done
+lacks src/compiler/global_payload.h 'minic_multi_global_explicit_bss_admitted('
+lacks src/compiler/global_payload.c 'minic_multi_global_explicit_bss_admitted('
+lacks src/target/x86_64/global_emit.c 'x86_module_explicit_bss_contents_valid('
+has src/target/common/module_global_emit.c 'minic_module_elf_nobits_payload_valid('
+has src/target/common/module_global_emit.c 'explicit_bss_nobits &&'
+has src/target/common/module_global_emit.c 'minic_module_elf_bss_section(global->section_name)'
+has tests/compiler/c0/probe-module-global-fragments.c 'physical_nobits=5'
+has tests/compiler/c0/probe-linux-global-section-reloc.sh 'MINIC_P67_ELF_BSS=PASS'
 # Module symbols have one alias identity (target index + canonical target
 # name in the same Module), not a second owned alias spelling or boolean.
 # Ingress may still retain C aliases while resolving these Core identities.

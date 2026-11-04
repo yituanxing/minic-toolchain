@@ -90,9 +90,6 @@ typedef struct MinicCoreModuleGlobal {
     bool is_tentative;
     bool is_block_scope_extern_only;
     bool is_thread_local;
-    /* Sealed target-neutral proof for Common ELF NOBITS .bss policy.
-     * RV64's independent explicit-section @progbits policy need not use it. */
-    bool common_elf_bss_admitted;
     /* The complete static-symbol closure runs on these source-independent
      * facts before any live object's byte payload is materialized. */
     bool is_file_scope_reachability_root;
