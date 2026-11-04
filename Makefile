@@ -609,6 +609,13 @@ check-gnu-linux-kbuild-disjoint-bitmask-assert: $(MINIC_CC_BINARY)
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" BUILD_DIR="$(abspath $(BUILD_DIR))" \
 		sh tests/compiler/c0/probe-gnu-linux-kbuild-disjoint-bitmask-assert.sh
 
+.PHONY: check-gnu-linux-memory-encode-page-boolean-range
+check-gnu-linux-memory-encode-page-boolean-range: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" \
+		sh tests/compiler/c0/probe-gnu-linux-memory-encode-page-boolean-range.sh
+
+check-fast: check-gnu-linux-memory-encode-page-boolean-range
+
 .PHONY: check-gnu-linux-nvme-prp-guard
 check-gnu-linux-nvme-prp-guard: $(MINIC_CC_BINARY)
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \

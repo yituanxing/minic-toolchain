@@ -262,6 +262,13 @@ static const MinicFunction *core_select_direct_call_specialization(
             actual[i].boolean_range_known =
                 minic_core_lower_boolean_range_expression(
                     context, argument_id, 0U);
+            if (!actual[i].boolean_range_known) {
+                uint64_t minimum, maximum;
+                actual[i].boolean_range_known =
+                    minic_core_cfg_nonnegative_range(
+                        context, argument_id, &minimum, &maximum) &&
+                    maximum <= 1U;
+            }
         } else if (minic_type_is_pointer(formal)) {
             actual[i].symbolic_known =
                 core_inline_asm_symbolic_address_fact(

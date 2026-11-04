@@ -1475,9 +1475,33 @@ static bool core_cfg_nonnegative_range_impl(
     case MINIC_EXPRESSION_LOCAL:
     case MINIC_EXPRESSION_LVALUE_READ: {
         MinicLocalId local;
-        return minic_core_lower_direct_local_read(context, id, &local) &&
-            minic_core_local_fact_nonnegative_range_get(
-                context, local, minimum, maximum) && *maximum <= type_max;
+        uint64_t possible_one_bits;
+        if (minic_core_lower_direct_local_read(context, id, &local)) {
+            if (minic_core_local_fact_nonnegative_range_get(
+                    context, local, minimum, maximum) && *maximum <= type_max)
+                return true;
+            /* A merged local can have different exact values on different
+             * paths (e.g. 0 or 1), while still retaining a sound may-one
+             * bit mask. Every nonnegative value is then within [0, mask].
+             * Signed locals are admitted only if their sign bit is proved
+             * clear by the same mask. */
+            if (minic_core_local_fact_possible_one_bits(
+                    context, local, &possible_one_bits) &&
+                possible_one_bits <= type_max) {
+                *minimum = 0U;
+                *maximum = possible_one_bits;
+                return true;
+            }
+        }
+        /* Boolean-range clones carry a {0,1} entry contract, but the
+         * original parameter is not an ordinary local range fact. Its
+         * no-write/no-escape policy is checked by this existing helper. */
+        if (minic_core_lower_boolean_range_expression(context, id, 0U)) {
+            *minimum = 0U;
+            *maximum = 1U;
+            return true;
+        }
+        return false;
     }
     case MINIC_EXPRESSION_CONDITIONAL: {
         uint64_t true_min, true_max, false_min, false_max;
@@ -1554,17 +1578,24 @@ bool minic_core_cfg_bounded_comparison_is_false(
     expression = minic_c0_program_expression(context->body->program, id);
     if (expression == NULL || expression->kind != MINIC_EXPRESSION_BINARY)
         return false;
-    if (expression->value.binary.operator_kind != MINIC_BINARY_GREATER_EQUAL &&
-        expression->value.binary.operator_kind != MINIC_BINARY_LESS) return false;
+    if (expression->value.binary.operator_kind != MINIC_BINARY_GREATER &&
+        expression->value.binary.operator_kind != MINIC_BINARY_GREATER_EQUAL &&
+        expression->value.binary.operator_kind != MINIC_BINARY_LESS &&
+        expression->value.binary.operator_kind != MINIC_BINARY_LESS_EQUAL)
+        return false;
     if (!minic_core_cfg_nonnegative_range(
             context, expression->value.binary.left, &left_min, &left_max) ||
         !minic_core_cfg_nonnegative_range(
             context, expression->value.binary.right, &right_min, &right_max))
         return false;
+    if (expression->value.binary.operator_kind == MINIC_BINARY_GREATER)
+        return left_max <= right_min;
     if (expression->value.binary.operator_kind == MINIC_BINARY_GREATER_EQUAL)
         return left_max < right_min;
     if (expression->value.binary.operator_kind == MINIC_BINARY_LESS)
         return left_min >= right_max;
+    if (expression->value.binary.operator_kind == MINIC_BINARY_LESS_EQUAL)
+        return left_min > right_max;
     return false;
 }
 
