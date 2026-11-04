@@ -166,8 +166,15 @@ if "$MINILD" -m aarch64linux -static -e _start \
 fi
 grep -q 'invalid-aarch64-static-got-relocation:311' "$work/bad.stderr"
 
-# Optional independent GNU oracle: use exactly the same MiniAS-produced
-# objects, so this validates their ELF/relocation contract through GNU ld.
+# Independent GNU oracle: use exactly the same MiniAS-produced objects, so
+# this validates their ELF/relocation contract through GNU ld.  A developer
+# host may lack cross tools, but CI must not report PASS after skipping this
+# oracle when it explicitly requires GNU parity.
+if [[ ${MINILD_REQUIRE_GNU:-0} == 1 ]] && \
+   ! command -v aarch64-linux-gnu-ld >/dev/null 2>&1; then
+    echo 'MINILD_AARCH64_STATIC_GOT=FAIL required_gnu_oracle_missing:aarch64-linux-gnu-ld' >&2
+    exit 1
+fi
 if command -v aarch64-linux-gnu-ld >/dev/null; then
     aarch64-linux-gnu-ld -m aarch64linux -static -e _start \
         -o "$work/gnu.elf" "$work/entry.o" "$work/data.o"

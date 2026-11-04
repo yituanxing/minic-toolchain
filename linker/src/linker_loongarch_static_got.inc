@@ -3,6 +3,22 @@
  * an IE-TLS slot instead holds its symbol's TP-relative offset.  Reserve all
  * slots before Common places sections, then fill them from the final layout. */
 
+/* These newer psABI relocations are absent from the elf.h shipped by some
+ * supported build hosts.  Keep the assigned ABI numbers here so a host libc
+ * update is not required just to link LoongArch objects. */
+#ifndef R_LARCH_CALL36
+#define R_LARCH_CALL36 110
+#endif
+#ifndef R_LARCH_TLS_LE_HI20_R
+#define R_LARCH_TLS_LE_HI20_R 121
+#endif
+#ifndef R_LARCH_TLS_LE_ADD_R
+#define R_LARCH_TLS_LE_ADD_R 122
+#endif
+#ifndef R_LARCH_TLS_LE_LO12_R
+#define R_LARCH_TLS_LE_LO12_R 123
+#endif
+
 typedef struct MiniLdLoongarchStaticGot {
     size_t section;
     size_t symbol_count;

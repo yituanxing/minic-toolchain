@@ -327,6 +327,19 @@ assert b[t[0][4]+4:t[0][4]+16]==bytes.fromhex('00004003')*3
 print('MINILD_LOONGARCH_STATIC=PASS ALIGN_preserved_nops=3 aligned_boundary=16')
 PY
 
+# An optional local smoke run may skip cross tools, but the CI contract
+# requires independent GNU BFD and QEMU oracles.  Do not silently downgrade
+# an explicitly required runtime comparison into a structural-only PASS.
+if [[ ${MINILD_REQUIRE_GNU:-0} == 1 ]] && \
+   ! command -v "$GNU_LD" >/dev/null 2>&1; then
+    echo "MINILD_LOONGARCH_STATIC=FAIL required_gnu_oracle_missing:$GNU_LD" >&2
+    exit 1
+fi
+if [[ ${MINILD_REQUIRE_QEMU:-0} == 1 ]] && \
+   ! command -v "$QEMU_USER" >/dev/null 2>&1; then
+    echo "MINILD_LOONGARCH_STATIC=FAIL required_qemu_missing:$QEMU_USER" >&2
+    exit 1
+fi
 if command -v "$GNU_LD" >/dev/null && command -v "$QEMU_USER" >/dev/null; then
     "$GNU_LD" -m elf64loongarch -static -e _start \
         -o "$work/gnu.elf" "$work/control.o"
