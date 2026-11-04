@@ -132,8 +132,11 @@ static uint64_t minild_loongarch_page_delta(uint64_t target, uint64_t place,
 static bool minild_loongarch_low12_opcode(uint32_t word) {
     uint32_t op = word & UINT32_C(0xffc00000);
 
-    /* Signed/unsigned arithmetic immediates and byte/word/dword memory
-     * accesses are the only K12 encodings in the non-vector base ISA. */
+    /* K12 consumers supported by the LoongArch psABI: integer arithmetic,
+     * scalar load/store, prefetch, floating-point load/store and LSX/LASX
+     * vector load/store all carry their signed low12 in instruction [21:10].
+     * Validate their opcode families precisely; a PCALA_LO12 attached to
+     * an arbitrary non-K12 instruction remains an encoding error. */
     switch (op) {
     case UINT32_C(0x02000000):
     case UINT32_C(0x02400000):
@@ -152,7 +155,16 @@ static bool minild_loongarch_low12_opcode(uint32_t word) {
     case UINT32_C(0x29c00000):
     case UINT32_C(0x2a000000):
     case UINT32_C(0x2a400000):
-    case UINT32_C(0x2a800000): return true;
+    case UINT32_C(0x2a800000):
+    case UINT32_C(0x2ac00000): /* preld */
+    case UINT32_C(0x2b000000): /* fld.s */
+    case UINT32_C(0x2b400000): /* fst.s */
+    case UINT32_C(0x2b800000): /* fld.d */
+    case UINT32_C(0x2bc00000): /* fst.d */
+    case UINT32_C(0x2c000000): /* vld */
+    case UINT32_C(0x2c400000): /* vst */
+    case UINT32_C(0x2c800000): /* xvld */
+    case UINT32_C(0x2cc00000): /* xvst */ return true;
     default: return false;
     }
 }

@@ -594,6 +594,41 @@ assert lo==0x02c0018c, ('undefined weak LO12 zero',hex(lo))
 print('MINILD_LOONGARCH_STATIC=PASS PCALA_HI20_undefweak=absolute_lu12i_zero')
 PY
 
+# GNU glibc also uses PCALA_LO12 with a JIRL (function call), not just a K12
+# addi.d/ld.d.  Emit the relocation via MiniAS, substitute only its consumer
+# instruction into JIRL and leave the zero-address weak call unreachable.
+"$MINIAS" --target=loongarch64 -march=loongarch64 -mabi=lp64d \
+    -o "$work/pcala-weak-jirl.o" \
+    "$repo/tests/linker/fixtures/loongarch-pcala-weak-jirl.S"
+python3 - "$work/pcala-weak-jirl.o" <<'PY'
+from pathlib import Path
+import struct,sys
+p=Path(sys.argv[1]); b=bytearray(p.read_bytes())
+off=struct.unpack_from('<Q',b,40)[0]
+n=struct.unpack_from('<H',b,60)[0]
+sections=[struct.unpack_from('<IIQQQQIIQQ',b,off+i*64) for i in range(n)]
+text=next(s for s in sections if s[1]==1 and s[2]&4)
+assert struct.unpack_from('<I',b,text[4]+8)[0]&0xffc00000==0x02c00000
+struct.pack_into('<I',b,text[4]+8,0x4c000181)
+p.write_bytes(b)
+PY
+"$MINILD" -m elf64loongarch -static -e _start \
+    -o "$work/pcala-weak-jirl-mini.elf" "$work/pcala-weak-jirl.o"
+python3 - "$work/pcala-weak-jirl-mini.elf" <<'PY'
+from pathlib import Path
+import struct,sys
+b=Path(sys.argv[1]).read_bytes()
+off=struct.unpack_from('<Q',b,40)[0]
+n=struct.unpack_from('<H',b,60)[0]
+text=next(s for i in range(n)
+          if (s:=struct.unpack_from('<IIQQQQIIQQ',b,off+i*64))[1]==1
+          and s[2]&4)
+hi,lo=struct.unpack_from('<II',b,text[4]+4)
+assert hi==0x1400000c,('weak PCALA HI20 becomes absolute LU12I.W',hex(hi))
+assert lo==0x4c000181,('weak PCALA LO12 JIRL immediate zero',hex(lo))
+print('MINILD_LOONGARCH_STATIC=PASS PCALA_LO12_undefweak_JIRL=zero')
+PY
+
 # GNU BFD resolves direct b/bl to an undefined weak FUNC by replacing each
 # call instruction with JIRL through $r0 (address zero); a PC-relative B26
 # displacement from ET_EXEC's high image VMA would overflow signed 28 bits.
@@ -645,6 +680,74 @@ fi
 grep -Fq 'nonriscv-relocation-overflow-or-encoding:258:66' \
     "$work/b26-weak-bad-opcode.log"
 echo 'MINILD_LOONGARCH_STATIC=PASS malformed_B26_weak_opcode=rejected'
+
+# GNU-as glibc objects may attach PCALA_LO12 to any LoongArch K12 consumer,
+# including prefetch, FP and LSX/LASX loads/stores.  MiniAS's scalar producer
+# does not expose symbolic FP/vector operands yet, so preserve a real MiniAS
+# PCALA pair and mutate only the instruction opcode as an ELF input fixture.
+"$MINIAS" --target=loongarch64 -march=loongarch64 -mabi=lp64d \
+    -o "$work/pcala-k12.o" \
+    "$repo/tests/linker/fixtures/loongarch-pcala-k12-consumers.S"
+grep -Fq R_LARCH_PCALA_LO12 <(readelf -Wr "$work/pcala-k12.o")
+python3 - "$work/pcala-k12.o" "$work" <<'PY'
+from pathlib import Path
+import struct,sys
+b=bytearray(Path(sys.argv[1]).read_bytes())
+off=struct.unpack_from('<Q',b,40)[0]
+n=struct.unpack_from('<H',b,60)[0]
+ss=[struct.unpack_from('<IIQQQQIIQQ',b,off+i*64) for i in range(n)]
+text=next(s for s in ss if s[1]==1 and s[2]&4)
+place=text[4]+8
+word=struct.unpack_from('<I',b,place)[0]
+assert word&0xffc00000==0x02c00000,hex(word)
+consumers={'preld':0x2ac00000,'fld_s':0x2b000000,
+           'fst_s':0x2b400000,'fld_d':0x2b800000,
+           'fst_d':0x2bc00000,'vld':0x2c000000,
+           'vst':0x2c400000,'xvld':0x2c800000,
+           'xvst':0x2cc00000,'invalid':0x00000000}
+for name,opcode in consumers.items():
+    obj=bytearray(b)
+    struct.pack_into('<I',obj,place,(word&0x003fffff)|opcode)
+    Path(sys.argv[2],f'pcala-k12-{name}.o').write_bytes(obj)
+PY
+for consumer in preld fld_s fst_s fld_d fst_d vld vst xvld xvst; do
+    "$MINILD" -m elf64loongarch -static -e _start \
+        -o "$work/pcala-k12-$consumer-mini.elf" \
+        "$work/pcala-k12-$consumer.o"
+done
+python3 - "$work" <<'PY'
+from pathlib import Path
+import struct,sys
+work=Path(sys.argv[1])
+ops={'preld':0x2ac00000,'fld_s':0x2b000000,
+     'fst_s':0x2b400000,'fld_d':0x2b800000,
+     'fst_d':0x2bc00000,'vld':0x2c000000,
+     'vst':0x2c400000,'xvld':0x2c800000,
+     'xvst':0x2cc00000}
+for name,op in ops.items():
+    b=(work/f'pcala-k12-{name}-mini.elf').read_bytes()
+    off=struct.unpack_from('<Q',b,40)[0]
+    n=struct.unpack_from('<H',b,60)[0]
+    si=struct.unpack_from('<H',b,62)[0]
+    ss=[struct.unpack_from('<IIQQQQIIQQ',b,off+64*i) for i in range(n)]
+    tab=ss[si]; names=b[tab[4]:tab[4]+tab[5]]
+    def sname(s):
+        p=s[0]; return names[p:names.index(0,p)].decode()
+    text=next(s for s in ss if sname(s)=='.text')
+    insn=struct.unpack_from('<I',b,text[4]+8)[0]
+    assert insn&0xffc00000==op,(name,hex(insn))
+    assert (insn>>10)&0xfff==0x808,(name,hex(insn))
+print('MINILD_LOONGARCH_STATIC=PASS PCALA_LO12_K12_consumer_families=9')
+PY
+if "$MINILD" -m elf64loongarch -static -e _start \
+    -o "$work/pcala-k12-invalid.elf" "$work/pcala-k12-invalid.o" \
+    >"$work/pcala-k12-invalid.log" 2>&1; then
+    echo 'MINILD_LOONGARCH_STATIC=FAIL accepted_PCALA_LO12_non_K12_opcode' >&2
+    exit 1
+fi
+grep -Fq 'nonriscv-relocation-overflow-or-encoding:258:72' \
+    "$work/pcala-k12-invalid.log"
+echo 'MINILD_LOONGARCH_STATIC=PASS malformed_PCALA_LO12_non_K12=rejected'
 
 cat >"$work/align-ok.s" <<'ASM'
 .text
@@ -703,7 +806,14 @@ if command -v "$GNU_LD" >/dev/null && command -v "$QEMU_USER" >/dev/null; then
     "$GNU_LD" -m elf64loongarch -static -e _start \
         -o "$work/pcala-weak-gnu.elf" "$work/pcala-weak.o"
     "$GNU_LD" -m elf64loongarch -static -e _start \
+        -o "$work/pcala-weak-jirl-gnu.elf" "$work/pcala-weak-jirl.o"
+    "$GNU_LD" -m elf64loongarch -static -e _start \
         -o "$work/b26-weak-gnu.elf" "$work/b26-weak.o"
+    for consumer in preld fld_s fst_s fld_d fst_d vld vst xvld xvst; do
+        "$GNU_LD" -m elf64loongarch -static -e _start \
+            -o "$work/pcala-k12-$consumer-gnu.elf" \
+            "$work/pcala-k12-$consumer.o"
+    done
     mini_rc=0; gnu_rc=0
     timeout 15s "$QEMU_USER" "$work/mini.elf" >"$work/mini.out" \
         2>"$work/mini.err" || mini_rc=$?
@@ -740,6 +850,15 @@ if command -v "$GNU_LD" >/dev/null && command -v "$QEMU_USER" >/dev/null; then
     cmp "$work/pcala-weak-mini.out" "$work/pcala-weak-gnu.out"
     cmp "$work/pcala-weak-mini.err" "$work/pcala-weak-gnu.err"
     echo 'MINILD_LOONGARCH_STATIC=PASS GNU_BFD_QEMU_PCALA_undefweak_runtime_parity=1'
+    mini_weak_jirl_rc=0; gnu_weak_jirl_rc=0
+    timeout 15s "$QEMU_USER" "$work/pcala-weak-jirl-mini.elf" \
+        >"$work/pcala-weak-jirl-mini.out" 2>"$work/pcala-weak-jirl-mini.err" || mini_weak_jirl_rc=$?
+    timeout 15s "$QEMU_USER" "$work/pcala-weak-jirl-gnu.elf" \
+        >"$work/pcala-weak-jirl-gnu.out" 2>"$work/pcala-weak-jirl-gnu.err" || gnu_weak_jirl_rc=$?
+    test "$mini_weak_jirl_rc" -eq 0 && test "$gnu_weak_jirl_rc" -eq 0
+    cmp "$work/pcala-weak-jirl-mini.out" "$work/pcala-weak-jirl-gnu.out"
+    cmp "$work/pcala-weak-jirl-mini.err" "$work/pcala-weak-jirl-gnu.err"
+    echo 'MINILD_LOONGARCH_STATIC=PASS GNU_BFD_QEMU_PCALA_undefweak_JIRL_runtime_parity=1'
     mini_b26_rc=0; gnu_b26_rc=0
     timeout 15s "$QEMU_USER" "$work/b26-weak-mini.elf" \
         >"$work/b26-weak-mini.out" 2>"$work/b26-weak-mini.err" || mini_b26_rc=$?
@@ -749,6 +868,21 @@ if command -v "$GNU_LD" >/dev/null && command -v "$QEMU_USER" >/dev/null; then
     cmp "$work/b26-weak-mini.out" "$work/b26-weak-gnu.out"
     cmp "$work/b26-weak-mini.err" "$work/b26-weak-gnu.err"
     echo 'MINILD_LOONGARCH_STATIC=PASS GNU_BFD_QEMU_B26_undefweak_runtime_parity=1'
+    for consumer in preld fld_s fst_s fld_d fst_d vld vst xvld xvst; do
+        mini_k12_rc=0; gnu_k12_rc=0
+        timeout 15s "$QEMU_USER" "$work/pcala-k12-$consumer-mini.elf" \
+            >"$work/pcala-k12-$consumer-mini.out" \
+            2>"$work/pcala-k12-$consumer-mini.err" || mini_k12_rc=$?
+        timeout 15s "$QEMU_USER" "$work/pcala-k12-$consumer-gnu.elf" \
+            >"$work/pcala-k12-$consumer-gnu.out" \
+            2>"$work/pcala-k12-$consumer-gnu.err" || gnu_k12_rc=$?
+        test "$mini_k12_rc" -eq 0 && test "$gnu_k12_rc" -eq 0
+        cmp "$work/pcala-k12-$consumer-mini.out" \
+            "$work/pcala-k12-$consumer-gnu.out"
+        cmp "$work/pcala-k12-$consumer-mini.err" \
+            "$work/pcala-k12-$consumer-gnu.err"
+    done
+    echo 'MINILD_LOONGARCH_STATIC=PASS GNU_BFD_QEMU_PCALA_K12_9_consumer_runtime_parity=1'
 else
     echo 'MINILD_LOONGARCH_STATIC=SKIP GNU_BFD_QEMU_runtime_parity missing_cross_tools'
 fi

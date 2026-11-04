@@ -227,6 +227,13 @@ for stage in exit control memory multitu io; do
       fail "invalid-static-elf:$flavor"
       continue
     fi
+    if [[ $arch == aarch64 ]]; then
+      # Preserve the actual BFD/MiniLD static-glibc section, relocation and
+      # symbol tables for an exact fault-address-to-section differential.
+      "$readelf" -SW "$program" >"$stage_dir/evidence/$flavor-sections.txt"
+      "$readelf" -Wr "$program" >"$stage_dir/evidence/$flavor-relocations.txt"
+      "$readelf" -Ws "$program" >"$stage_dir/evidence/$flavor-symbols.txt"
+    fi
     if [[ $arch == x86_64 ]]; then
       # Static glibc genuinely installs variant-II TLS and resolves IFUNCs
       # through IRELATIVE before calling their selected implementations.
@@ -254,6 +261,30 @@ for stage in exit control memory multitu io; do
       >"$stage_dir/evidence/$flavor-stdout.txt" \
       2>"$stage_dir/evidence/$flavor-stderr.txt" || result=$?
     printf '%s\n' "$result" >"$stage_dir/evidence/$flavor-exit.txt"
+    if [[ $arch == aarch64 && $stage == exit && $flavor == mini &&
+          $result == 139 ]]; then
+      # One representative failure, not all five: QEMU -strace provides the
+      # actual guest SIGSEGV si_addr; in_asm,cpu records the last guest PC.
+      # Keep full logs in the uploaded artifact but print only bounded tails
+      # in Actions output. Diagnostics must never change the acceptance.
+      trace_log="$stage_dir/evidence/mini-qemu-strace.txt"
+      cpu_log="$stage_dir/evidence/mini-qemu-last-pc.txt"
+      trace_status=0
+      timeout --signal=TERM 15s "${qemu[@]}" -strace \
+        -d in_asm,cpu -D "$cpu_log" "$program" \
+        >"$stage_dir/evidence/mini-qemu-trace-stdout.txt" \
+        2>"$trace_log" || trace_status=$?
+      printf '%s\n' "$trace_status" >"$stage_dir/evidence/mini-qemu-trace-exit.txt"
+      echo "MINILD_AARCH64_GLIBC_FAULT_TRACE rerun_exit=$trace_status"
+      if [[ -s $trace_log ]]; then
+        echo 'MINILD_AARCH64_GLIBC_FAULT_TRACE strace_tail_begin'
+        tail -n 24 "$trace_log"
+      fi
+      if [[ -s $cpu_log ]]; then
+        echo 'MINILD_AARCH64_GLIBC_FAULT_TRACE guest_pc_tail_begin'
+        tail -n 48 "$cpu_log"
+      fi
+    fi
     if (( result != 0 )); then fail "runtime-exit:$flavor:$result"; fi
     if ! cmp -s "$stage_dir/evidence/expected.stdout" \
                  "$stage_dir/evidence/$flavor-stdout.txt"; then
