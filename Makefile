@@ -919,6 +919,13 @@ check-minild-layout-phase-boundary: $(MINIAS_BINARY) $(MINILD_BINARY)
 	HOST_CC="$(CC)" \
 	bash tests/linker/probe-layout-phase-boundary.sh
 
+.PHONY: check-minild-shared-phase-owners
+check-minild-shared-phase-owners: $(MINIAS_BINARY) $(MINILD_BINARY)
+	MINIAS="$(abspath $(MINIAS_BINARY))" \
+	MINILD="$(abspath $(MINILD_BINARY))" \
+	HOST_CC="$(CC)" \
+	bash tests/linker/probe-shared-phase-owners.sh
+
 check-minild-script-a0: $(MINILD_BINARY)
 	HOST_CC="$(CC)" \
 	BUILD_DIR="$(abspath $(BUILD_DIR))" \

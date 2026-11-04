@@ -21,17 +21,22 @@ format decisions, and runtime behavior remain unchanged.
 | `linker_final_elf64_plan.inc` | One `MiniLdFinalElf64Image` owner for final ProgramPlan, symbols and section tables | ET_EXEC and ET_DYN share non-ALLOC placement, final table construction, generic section-header projection, validation and cleanup without merging mode-specific policies. |
 | `linker_elf64_image.inc` | Final ELF64 Ehdr/PHDR/section-byte/table serialization and file sink | Consumes already-finalized plans; does not decide section selection, relocation or layout. |
 | `linker_static_output.inc` | Static PT_LOAD selection and ET_EXEC writer | Owns executable segment policy and final static emission, including scripted output. |
-| `linker_shared_output.inc` | `MiniLdSharedImage`, dynamic symbols/relocations, dynamic metadata, ET_DYN writer and shared-link entry point | Owns shared-object output state and its writer without mixing it into ET_EXEC policy. |
+| `linker_shared_pre_layout.inc` | One `MiniLdSharedImage` owner, symbol preemption policy, dynamic metadata sizing and pre-layout relocation reservations | ET_DYN output capacities are fixed before physical layout. |
+| `linker_shared_finalize.inc` | Dynamic symbol/hash/version/relocation content, `__ehdr_start` resolution and dynamic tags | Uses final addresses and OutputPlan indices without a second metadata owner. |
+| `linker_shared_program_plan.inc` | ET_DYN TLS and PHDR policy plus dynamic section-header links | Keeps ET_DYN segment decisions separate from the common ELF64 serializer and ET_EXEC. |
+| `linker_shared_output.inc` | ET_DYN writer, input checks and shared-link entry point | Calls phases in original order and owns the cleanup path. |
 
 `linker_core.inc` defines the shared core types and include order, while
-`linker_admission.inc` owns source-only ELF/archive/COMDAT admission.
+`linker_admission.inc` owns source-only ELF/COMDAT admission, while
+`linker_archive_admission.inc` and `linker_input_sequence.inc` separately
+own archive extraction and ordered input traversal.
 `linker_common_allocation.inc` owns post-projection COMMON allocation for
 both ET_EXEC and ET_DYN, before either layout stage starts.
 `linker_input.inc`, `linker_work_sections.inc` and
 `linker_relocations.inc` own their separate state lifetimes. The
-`linker_eh_frame.inc` and
-`linker_version.inc` includes remain nested in the shared-output phase at
-the same relative point as before. `shared_build_layout` stays with common
+`linker_eh_frame.inc` remains nested in shared pre-layout; `linker_version.inc`
+and `linker_shared_reloc_apply.inc` remain nested in shared finalization,
+with the same relative dependency order. `shared_build_layout` stays with common
 default placement; `shared_build_vdso_script_layout` stays with the vDSO
 script-layout policy. Both are invoked later by the shared-output driver,
 without reversing their dependencies or making extra translation units.
@@ -50,6 +55,21 @@ relocation type or ELF output behavior is added.
 The source-defined COMMON allocation runs after input projection and before
 both static and shared layout. It belongs to work/symbol preparation rather
 than physical placement, so it no longer lives in the layout implementation.
+
+### Shared output phase owners (2026-11-04)
+
+The formerly monolithic ET_DYN implementation is now one included phase
+chain: pre-layout metadata and relocation budget; post-layout dynamic
+contents and final fixups; ET_DYN-specific program and section-header
+policy; final writer and link driver. All stages use the same
+`MiniLdSharedImage`, `MiniLdLayout` and final OutputPlan.
+`shared_finalize_ehdr_symbol` is defined beside post-layout finalization
+but is still called at its original point after the OutputPlan exists.
+
+The distinction between relocation **scan** (capacity and GOT/PLT
+reservation before layout) and relocation **apply** (addresses and dynamic
+relocation contents after layout) remains intact. No target relocation,
+linker-script command, input kind or ELF output feature is added.
 
 ## Invariants retained
 
