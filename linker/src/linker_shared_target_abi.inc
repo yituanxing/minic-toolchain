@@ -16,7 +16,7 @@ typedef struct MiniLdSharedTargetAbi {
     size_t dynamic_record_bytes;
     MiniLdTargetRelocClass (*classify_relocation)(uint32_t);
     bool (*relocation_at_final_layout)(uint32_t);
-    Elf64_Xword (*dynamic_relocation_info)(
+    uint64_t (*dynamic_relocation_info)(
         size_t, MiniLdDynamicRelocSemantic);
     int64_t (*addend_bits)(uint64_t, int64_t);
     size_t (*absolute_relocation_width)(MiniLdTargetRelocClass);

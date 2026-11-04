@@ -32,43 +32,51 @@ static bool shared_fill_dynsym(MiniLdState *state,
     for (i = 0U; i < state->resolver.count; ++i) {
         MiniLdResolvedSymbol *input = &state->resolver.entries[i];
         size_t dynamic_index = shared->symbols[i].dynsym_index;
-        Elf64_Sym output;
+        MiniElfSymbol output;
+        size_t stride = shared->abi->dynsym_record_bytes;
 
         if (dynamic_index == SIZE_MAX) {
             continue;
         }
         memset(&output, 0, sizeof(output));
-        output.st_name = shared->symbols[i].dynstr_name_offset;
-        output.st_info = input->info;
-        output.st_other = input->other;
-        output.st_size = input->size;
+        output.name = shared->symbols[i].dynstr_name_offset;
+        output.info = input->info;
+        output.other = input->other;
+        output.size = input->size;
         if (input->section == MINILD_SECTION_UNDEF) {
-            output.st_shndx = SHN_UNDEF;
-            output.st_value = 0U;
+            output.section_index = SHN_UNDEF;
+            output.value = 0U;
         } else if (input->section == MINILD_SECTION_ABS) {
-            output.st_shndx = SHN_ABS;
-            output.st_value = input->value;
+            output.section_index = SHN_ABS;
+            output.value = input->value;
         } else if (input->section >= 0 &&
                    (size_t)input->section < state->work.count) {
             if (output_plan->work_shndx[input->section] == 0U) {
-                output.st_shndx = SHN_UNDEF;
-                memcpy(dynsym->data + dynamic_index * sizeof(output),
-                       &output, sizeof(output));
-                continue;
+                output.section_index = SHN_UNDEF;
+            } else if (output_plan->work_shndx[input->section] > UINT16_MAX) {
+                fprintf(state->diagnostics,
+                        "minic-ld: invalid-shared-dynsym-section:%s\n",
+                        input->name);
+                return false;
+            } else {
+                output.section_index =
+                    (uint16_t)output_plan->work_shndx[input->section];
             }
-            output.st_shndx =
-                (Elf64_Section)output_plan->work_shndx[input->section];
-            if (ELF64_ST_TYPE(input->info) == STT_TLS) {
+            if (output.section_index == SHN_UNDEF) {
+                /* A discarded definition becomes an undefined dynamic
+                 * symbol and carries no stale section-relative value. */
+                output.value = 0U;
+            } else if (ELF64_ST_TYPE(input->info) == STT_TLS) {
                 if (!minild_output_plan_tls_symbol_value(
                         state, layout, output_plan, (size_t)input->section,
-                        input->value, &output.st_value)) {
+                        input->value, &output.value)) {
                     fprintf(state->diagnostics,
                             "minic-ld: invalid-shared-tls-symbol:%s\n",
                             input->name);
                     return false;
                 }
             } else {
-                output.st_value =
+                output.value =
                     layout->work[input->section].vaddr + input->value;
             }
         } else {
@@ -77,9 +85,16 @@ static bool shared_fill_dynsym(MiniLdState *state,
                     input->name);
             return false;
         }
-        memcpy(dynsym->data + dynamic_index * sizeof(output),
-               &output,
-               sizeof(output));
+        if (stride == 0U || dynamic_index > SIZE_MAX / stride ||
+            !range_ok(dynamic_index * stride, stride, dynsym->size) ||
+            !minild_final_pack_symbol(
+                dynsym->data + dynamic_index * stride,
+                state->target->elf_class, &output)) {
+            fprintf(state->diagnostics,
+                    "minic-ld: invalid-shared-dynsym-record:%s\n",
+                    input->name);
+            return false;
+        }
     }
     return true;
 }
@@ -90,38 +105,53 @@ static bool shared_fill_hash(MiniLdState *state,
     size_t nbucket = shared->dynsym_count < 4U
                          ? 1U
                          : shared->dynsym_count / 4U;
-    uint32_t *words = (uint32_t *)(void *)hash->data;
-    uint32_t *buckets;
-    uint32_t *chains;
     size_t i;
 
     if (nbucket == 0U) {
         nbucket = 1U;
     }
+    if (nbucket > UINT32_MAX || shared->dynsym_count > UINT32_MAX ||
+        shared->dynsym_count > SIZE_MAX - 2U ||
+        nbucket > SIZE_MAX - 2U - shared->dynsym_count ||
+        nbucket + shared->dynsym_count + 2U > SIZE_MAX / sizeof(uint32_t) ||
+        hash->size != (nbucket + shared->dynsym_count + 2U) * sizeof(uint32_t)) {
+        fprintf(state->diagnostics, "minic-ld: invalid-shared-hash-layout\n");
+        return false;
+    }
     memset(hash->data, 0, hash->size);
-    words[0] = (uint32_t)nbucket;
-    words[1] = (uint32_t)shared->dynsym_count;
-    buckets = words + 2U;
-    chains = buckets + nbucket;
+    store_u32le(hash->data, (uint32_t)nbucket);
+    store_u32le(hash->data + sizeof(uint32_t),
+                (uint32_t)shared->dynsym_count);
 
     for (i = 0U; i < state->resolver.count; ++i) {
         size_t dynamic_index = shared->symbols[i].dynsym_index;
         uint32_t bucket;
-        uint32_t *slot;
+        size_t slot;
 
         if (dynamic_index == SIZE_MAX) {
             continue;
         }
         bucket = shared_elf_hash(state->resolver.entries[i].name) % (uint32_t)nbucket;
-        slot = &buckets[bucket];
-        if (*slot == 0U) {
-            *slot = (uint32_t)dynamic_index;
+        slot = 2U + (size_t)bucket;
+        if (load_u32le(hash->data + slot * sizeof(uint32_t)) == 0U) {
+            store_u32le(hash->data + slot * sizeof(uint32_t),
+                        (uint32_t)dynamic_index);
         } else {
-            uint32_t cursor = *slot;
-            while (chains[cursor] != 0U) {
-                cursor = chains[cursor];
+            uint32_t cursor = load_u32le(hash->data + slot * sizeof(uint32_t));
+            uint32_t next;
+            while (cursor < shared->dynsym_count &&
+                   (next = load_u32le(hash->data +
+                       (2U + nbucket + (size_t)cursor) * sizeof(uint32_t))) != 0U) {
+                cursor = next;
             }
-            chains[cursor] = (uint32_t)dynamic_index;
+            if (cursor >= shared->dynsym_count) {
+                fprintf(state->diagnostics,
+                        "minic-ld: invalid-shared-hash-chain\n");
+                return false;
+            }
+            store_u32le(hash->data +
+                        (2U + nbucket + (size_t)cursor) * sizeof(uint32_t),
+                        (uint32_t)dynamic_index);
         }
     }
     return true;
@@ -181,18 +211,40 @@ static bool shared_fill_gnu_hash(MiniLdState *state,
  * input still needs link-time fixups, but must never acquire a DT_RELA. */
 #include "linker_shared_reloc_apply.inc"
 
+/* Reserve .dynamic before layout, then fill exactly the reserved records.
+ * The shared planner owns the DT_* entries; the class-neutral ELF Writer
+ * owns bytes, field widths and endianness. */
+static bool shared_dynamic_append(MiniLdState *state,
+                                   const MiniLdSharedImage *shared,
+                                   size_t *index,
+                                   uint64_t tag, uint64_t value) {
+    MiniLdSection *dynamic = &state->work.sections[shared->dynamic_section];
+    size_t stride = shared->abi->dynamic_record_bytes;
+
+    if (stride == 0U || *index >= dynamic->size / stride ||
+        *index > SIZE_MAX / stride ||
+        !range_ok(*index * stride, stride, dynamic->size) ||
+        !minild_final_pack_dynamic(dynamic->data + *index * stride,
+                                   state->target->elf_class, tag, value)) {
+        fprintf(state->diagnostics,
+                "minic-ld: invalid-shared-dynamic-record\n");
+        return false;
+    }
+    ++*index;
+    return true;
+}
+
 static bool shared_fill_dynamic(MiniLdState *state,
                                 const MiniLdLayout *layout,
                                 const MiniLdSharedImage *shared) {
     MiniLdSection *dynamic = &state->work.sections[shared->dynamic_section];
-    Elf64_Dyn *entries = (Elf64_Dyn *)(void *)dynamic->data;
     size_t index = 0U;
 
 #define MINILD_DYN(TAG, VALUE)          \
     do {                                \
-        entries[index].d_tag = (TAG);   \
-        entries[index].d_un.d_val = (VALUE); \
-        ++index;                        \
+        if (!shared_dynamic_append(state, shared, &index, (TAG), (VALUE))) { \
+            return false;               \
+        }                                \
     } while (0)
 
     memset(dynamic->data, 0, dynamic->size);
@@ -248,7 +300,8 @@ static bool shared_fill_dynamic(MiniLdState *state,
 
 #undef MINILD_DYN
 
-    if (index > SIZE_MAX / shared->abi->dynamic_record_bytes ||
+    if (shared->abi->dynamic_record_bytes == 0U ||
+        index > SIZE_MAX / shared->abi->dynamic_record_bytes ||
         index * shared->abi->dynamic_record_bytes != dynamic->size) {
         fprintf(state->diagnostics,
                 "minic-ld: shared-dynamic-size-mismatch\n");

@@ -127,7 +127,22 @@ readelf -h "$work/riscv64-shared.elf" | grep -q 'DYN (Shared object file)' || {
     echo 'MINILD_SHARED_ABI=FAIL rv64_shared_regression' >&2
     exit 1
 }
-python3 - "$work/riscv64-shared.elf" <<'PY'
+# A second real ET_REL input carries a nonempty dynamic RELA, a defined
+# dynamic export, and an unresolved symbol with a signed source addend.
+# This verifies actual wire records in addition to section entry widths.
+printf '%s\n' \
+    '.section .data.wire,"aw",@progbits' \
+    '.balign 8' \
+    '.globl wire_pointer' \
+    '.type wire_pointer,@object' \
+    'wire_pointer:' \
+    '  .dword external_wire_symbol-17' \
+    '.size wire_pointer,8' >"$work/riscv64-wire.s"
+"$MINIAS" --target=riscv -march=rv64i -mabi=lp64 \
+    -o "$work/riscv64-wire.o" "$work/riscv64-wire.s"
+"$MINILD" -m elf64lriscv -shared -soname=libminild-wire.so \
+    -o "$work/riscv64-wire.elf" "$work/riscv64-wire.o"
+python3 - "$work/riscv64-shared.elf" "$work/riscv64-wire.elf" <<'PY'
 from pathlib import Path
 import struct
 import sys
@@ -166,6 +181,118 @@ for name, kind, entry_size in (('.dynsym', 11, 24),
 if sections['.dynsym'][6] >= count or \
         headers[sections['.dynsym'][6]] != sections['.dynstr']:
     raise SystemExit('MINILD_SHARED_ABI=FAIL rv64_dynsym_link')
+
+# Read the second, nontrivial object independently: these unpack formats
+# are the actual ELF64 little-endian wire contract, not C host struct sizes.
+wire = Path(sys.argv[2]).read_bytes()
+if wire[:6] != b'\x7fELF\x02\x01':
+    raise SystemExit('MINILD_SHARED_ABI=FAIL wire_not_elf64le')
+offset = struct.unpack_from('<Q', wire, 40)[0]
+entsize, count, shstr_index = struct.unpack_from('<HHH', wire, 58)
+if entsize != 64 or not 0 < shstr_index < count or \
+        offset + count * entsize > len(wire):
+    raise SystemExit('MINILD_SHARED_ABI=FAIL wire_bad_shdr_table')
+headers = [struct.unpack_from('<IIQQQQIIQQ', wire, offset + i * 64)
+           for i in range(count)]
+shstr = headers[shstr_index]
+strings = wire[shstr[4]:shstr[4] + shstr[5]]
+sections = {}
+for h in headers:
+    end = strings.find(b'\0', h[0])
+    if h[0] >= len(strings) or end < 0:
+        raise SystemExit('MINILD_SHARED_ABI=FAIL wire_bad_section_name')
+    sections[strings[h[0]:end].decode()] = h
+
+def bytes_for(name):
+    h = sections.get(name)
+    if h is None or h[4] + h[5] > len(wire):
+        raise SystemExit(f'MINILD_SHARED_ABI=FAIL wire_missing_section={name}')
+    return wire[h[4]:h[4] + h[5]]
+
+dynsym = bytes_for('.dynsym')
+dynstr = bytes_for('.dynstr')
+rela = bytes_for('.rela.dyn')
+dynamic = bytes_for('.dynamic')
+sysv_hash = bytes_for('.hash')
+if len(dynsym) % 24 or len(rela) != 24 or len(dynamic) % 16:
+    raise SystemExit('MINILD_SHARED_ABI=FAIL wire_record_lengths')
+sym_records = [struct.unpack_from('<IBBHQQ', dynsym, i)
+               for i in range(0, len(dynsym), 24)]
+if sym_records[0] != (0, 0, 0, 0, 0, 0):
+    raise SystemExit('MINILD_SHARED_ABI=FAIL wire_dynsym_null')
+if len(sysv_hash) < 12 or len(sysv_hash) % 4:
+    raise SystemExit('MINILD_SHARED_ABI=FAIL wire_sysv_hash_size')
+bucket_count, chain_count = struct.unpack_from('<II', sysv_hash)
+if bucket_count == 0 or chain_count != len(sym_records) or \
+        len(sysv_hash) != (2 + bucket_count + chain_count) * 4:
+    raise SystemExit('MINILD_SHARED_ABI=FAIL wire_sysv_hash_words')
+
+symbols = {}
+for index, (name_offset, info, other, shndx, value, size) in \
+        enumerate(sym_records):
+    if name_offset == 0:
+        continue
+    if name_offset >= len(dynstr) or \
+            dynstr.find(b'\0', name_offset) < 0:
+        raise SystemExit('MINILD_SHARED_ABI=FAIL wire_dynstr_name')
+    end = dynstr.find(b'\0', name_offset)
+    symbols[dynstr[name_offset:end].decode()] = \
+        (index, info, other, shndx, value, size)
+
+def elf_hash(name):
+    value = 0
+    for ch in name.encode():
+        value = (value << 4) + ch
+        high = value & 0xf0000000
+        if high:
+            value ^= high >> 24
+        value &= ~high
+    return value
+
+# A valid SysV hash must resolve every emitted dynamic name through the
+# actual little-endian bucket/chain records, not merely report the size.
+words = struct.unpack('<' + 'I' * (len(sysv_hash) // 4), sysv_hash)
+buckets = words[2:2 + bucket_count]
+chains = words[2 + bucket_count:]
+for name, (expected_index, *_rest) in symbols.items():
+    index = buckets[elf_hash(name) % bucket_count]
+    for _ in range(chain_count):
+        if index == expected_index:
+            break
+        if index == 0 or index >= chain_count:
+            raise SystemExit(f'MINILD_SHARED_ABI=FAIL wire_hash_lookup={name}')
+        index = chains[index]
+    else:
+        raise SystemExit(f'MINILD_SHARED_ABI=FAIL wire_hash_cycle={name}')
+exported = symbols.get('wire_pointer')
+undefined = symbols.get('external_wire_symbol')
+if exported is None or undefined is None or \
+        exported[3] == 0 or exported[5] != 8 or \
+        undefined[3] != 0 or undefined[4] != 0:
+    raise SystemExit('MINILD_SHARED_ABI=FAIL wire_symbol_semantics')
+
+rel_offset, rel_info, rel_addend = struct.unpack_from('<QQq', rela)
+if rel_info >> 32 != undefined[0] or rel_info & 0xffffffff != 2 or \
+        rel_addend != -17:
+    raise SystemExit('MINILD_SHARED_ABI=FAIL wire_rela_semantics')
+wire_data = sections.get('.data.wire') or sections.get('.data')
+if wire_data is None or not (wire_data[3] <= rel_offset <
+                             wire_data[3] + wire_data[5]):
+    raise SystemExit('MINILD_SHARED_ABI=FAIL wire_rela_offset')
+
+dyn_records = [struct.unpack_from('<qQ', dynamic, i)
+               for i in range(0, len(dynamic), 16)]
+if not dyn_records or dyn_records[-1] != (0, 0):
+    raise SystemExit('MINILD_SHARED_ABI=FAIL wire_dynamic_terminator')
+tags = {tag: val for tag, val in dyn_records}
+if tags.get(11) != 24 or tags.get(9) != 24 or tags.get(8) != 24 or \
+        tags.get(10) != len(dynstr) or 5 not in tags or 6 not in tags or \
+        7 not in tags:
+    raise SystemExit('MINILD_SHARED_ABI=FAIL wire_dynamic_semantics')
+print('MINILD_SHARED_ABI_WIRE=PASS target=rv64 '
+      'dynsym=defined+undefined rela=R_RISCV_64 addend=-17 '
+      'dynamic=DT_SYMENT+DT_RELAENT+DT_RELASZ+DT_NULL '
+      'hash=ELF32-word-little-endian')
 print('MINILD_SHARED_ABI_CHECK=PASS target=rv64 '
       'ELFCLASS=64 ET_DYN=true dynsym_entry=24 rela_entry=24 dynamic_entry=16')
 PY

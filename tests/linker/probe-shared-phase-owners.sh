@@ -169,6 +169,7 @@ shared_apply = sources['linker_shared_reloc_apply.inc']
 shared_target = sources['linker_shared_riscv_target.inc']
 shared_abi = sources['linker_shared_target_abi.inc']
 shared_riscv_abi = sources['linker_shared_riscv_abi.inc']
+final_writer = (src / 'linker_final_elf_image.inc').read_text(encoding='utf-8')
 if len(re.findall(r'\bstatic\s+void\s+minild_target_emit_plt_entry\s*\(',
                   target_fixup)) != 1 or \
         shared_target.count('minild_target_emit_plt_entry(') != 1 or \
@@ -179,7 +180,9 @@ if len(re.findall(r'\bstatic\s+void\s+minild_target_emit_plt_entry\s*\(',
                   shared_apply) or \
         shared_target.count('minild_target_apply_pcrel_lo12(') != 1 or \
         shared_target.count('minild_target_apply_final_instruction(') != 2 or \
-        shared_apply.count('#include "linker_shared_riscv_target.inc"') != 1:
+        shared_apply.count('#include "linker_shared_riscv_target.inc"') != 1 or \
+        'minild_final_pack_rela(' not in shared_target or \
+        re.search(r'\bElf64_Rela\s+\w+\s*;', shared_target):
     raise SystemExit('MINILD_SHARED_PHASE_STRUCTURE=FAIL target_plt_owner')
 
 # The currently RV64-only ET_DYN machinery has a generic layout and
@@ -204,6 +207,25 @@ if 'minild_riscv64_shared_abi' not in shared_riscv_abi or \
         not re.search(r'state->target->shared_abi\s*\(', shared_abi):
     raise SystemExit('MINILD_SHARED_PHASE_STRUCTURE=FAIL '
                      'target_backend_selection_boundary')
+
+# The shared pipeline plans canonical metadata while the common ELF writer
+# serializes class-specific records.  Relocation type numbering remains a
+# target-specific psABI decision; there must be no host-native memcpy path.
+for function in ('minild_final_pack_symbol', 'minild_final_pack_rela',
+                 'minild_final_pack_dynamic'):
+    if not re.search(r'\b' + function + r'\s*\(', final_writer):
+        raise SystemExit('MINILD_SHARED_PHASE_STRUCTURE=FAIL '
+                         f'common_elf_pack_owner={function}')
+for name in ('linker_shared_finalize.inc',
+             'linker_shared_reloc_apply.inc'):
+    source = sources[name]
+    if re.search(r'\bElf64_(?:Sym|Rela|Dyn)\s+\w+\s*;', source) or \
+            re.search(r'\(Elf64_(?:Sym|Rela|Dyn)\s*\*\)', source):
+        raise SystemExit('MINILD_SHARED_PHASE_STRUCTURE=FAIL '
+                         f'host_elf64_record_in_common={name}')
+if re.search(r'\(uint32_t\s*\*\)\s*\(void\s*\*\)', fin):
+    raise SystemExit('MINILD_SHARED_PHASE_STRUCTURE=FAIL '
+                     'host_endian_sysv_hash_projection')
 
 # Common must not enumerate machine-specific shared linkers.  The five
 # immutable TargetProfiles select RV64 full ABI and RV32 compat-vDSO by
@@ -341,7 +363,7 @@ for func in ('shared_prepare_metadata', 'shared_build_vdso_script_layout',
 print('MINILD_SHARED_PHASE_STRUCTURE=PASS modules=5 '
       f'owner_functions={definitions} shared_image=single '
       'symbol_plan=single target_plt=1 target_instruction_fixups=1 '
-      'shared_target_hooks=7 record_sizes=3 '
+      'shared_target_hooks=7 record_sizes=3 common_elf_packers=3 '
       'backend_callbacks=5 build=single_translation_unit '
       'order=reserve,fill,program,write')
 PY

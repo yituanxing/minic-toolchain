@@ -1,3 +1,14 @@
+/* GNU ELF symbol-version table records have invariant wire layouts across
+ * ELFCLASS32 and ELFCLASS64.  Reserve explicit on-disk bytes rather than
+ * relying on native Elf64_* struct padding and host endianness. */
+enum {
+    MINILD_GNU_VERSYM_WIRE_BYTES = 2U,
+    MINILD_GNU_VERDEF_WIRE_BYTES = 20U,
+    MINILD_GNU_VERDAUX_WIRE_BYTES = 8U,
+    MINILD_GNU_VERDEF_NODE_WIRE_BYTES =
+        MINILD_GNU_VERDEF_WIRE_BYTES + MINILD_GNU_VERDAUX_WIRE_BYTES
+};
+
 /* One final-link projection per canonical resolver symbol.  Dynamic symbol
  * identity, preemption, and GOT/PLT/TLS reservations have one shared slot,
  * so no independently allocated symbol-indexed arrays can get out of sync. */
@@ -627,12 +638,11 @@ static bool shared_prepare_metadata(MiniLdState *state,
     }
 
     if (version_script != NULL &&
-        (shared->dynsym_count > SIZE_MAX / sizeof(Elf64_Half) ||
+        (shared->dynsym_count > SIZE_MAX / MINILD_GNU_VERSYM_WIRE_BYTES ||
          !section_append_zero(&state->work.sections[shared->versym_section],
-                              shared->dynsym_count * sizeof(Elf64_Half)) ||
+                              shared->dynsym_count * MINILD_GNU_VERSYM_WIRE_BYTES) ||
          !section_append_zero(&state->work.sections[shared->verdef_section],
-                              2U * (sizeof(Elf64_Verdef) +
-                                    sizeof(Elf64_Verdaux))))) {
+                              2U * MINILD_GNU_VERDEF_NODE_WIRE_BYTES))) {
         goto oom;
     }
 

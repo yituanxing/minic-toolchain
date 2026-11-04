@@ -259,9 +259,10 @@ static bool riscv_shared_finalize_plt_and_calls(MiniLdState *state,
         size_t plt_index = shared->symbols[i].plt_index;
         size_t plt_offset;
         size_t got_offset;
+        size_t rela_offset;
         uint64_t entry_address;
         uint64_t slot_address;
-        Elf64_Rela relocation;
+        MiniElfRela relocation;
         size_t dynamic_index;
 
         if (plt_index == SIZE_MAX) {
@@ -279,24 +280,41 @@ static bool riscv_shared_finalize_plt_and_calls(MiniLdState *state,
                     state->resolver.entries[i].name);
             return false;
         }
+        if (dynamic_index > UINT32_MAX ||
+            shared->abi->rela_record_bytes == 0U ||
+            plt_index > SIZE_MAX / shared->abi->rela_record_bytes) {
+            fprintf(state->diagnostics,
+                    "minic-ld: invalid-shared-jump-slot-record\n");
+            return false;
+        }
 
         plt_offset = plt_index * shared->abi->plt_entry_bytes;
         got_offset = (shared->abi->gotplt_header_slots + plt_index) *
             shared->abi->gotplt_slot_bytes;
+        rela_offset = plt_index * shared->abi->rela_record_bytes;
+        if (!range_ok(rela_offset, shared->abi->rela_record_bytes,
+                      rela_plt->size)) {
+            fprintf(state->diagnostics,
+                    "minic-ld: invalid-shared-jump-slot-record\n");
+            return false;
+        }
         entry_address = plt_address + plt_offset;
         slot_address = gotplt_address + got_offset;
         minild_target_emit_plt_entry(plt->data, plt_offset,
                                      entry_address, slot_address);
 
         memset(&relocation, 0, sizeof(relocation));
-        relocation.r_offset = slot_address;
-        relocation.r_info = minild_target_dynamic_reloc_info(
+        relocation.offset = slot_address;
+        relocation.info = minild_target_dynamic_reloc_info(
             dynamic_index, MINILD_DYNAMIC_RELOC_JUMP_SLOT);
-        relocation.r_addend = 0;
-        memcpy(rela_plt->data +
-                   plt_index * shared->abi->rela_record_bytes,
-               &relocation,
-               sizeof(relocation));
+        relocation.addend = 0;
+        if (!minild_final_pack_rela(rela_plt->data + rela_offset,
+                                    state->target->elf_class,
+                                    &relocation)) {
+            fprintf(state->diagnostics,
+                    "minic-ld: invalid-shared-jump-slot-relocation\n");
+            return false;
+        }
     }
 
     for (i = 0U; i < state->relocations.count; ++i) {

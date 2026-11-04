@@ -12,7 +12,7 @@ static bool riscv_shared_finalize_plt_and_calls(
 
 static const MiniLdSharedTargetAbi minild_riscv64_shared_abi = {
     8U, 16U, 16U, 3U, 8U,
-    sizeof(Elf64_Sym), sizeof(Elf64_Rela), sizeof(Elf64_Dyn),
+    24U, 24U, 16U, /* ELF64 sym, RELA and dynamic record bytes. */
     minild_target_reloc_class,
     minild_target_reloc_at_final_layout,
     minild_target_dynamic_reloc_info,

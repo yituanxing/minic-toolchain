@@ -101,6 +101,51 @@ static bool minild_final_pack_symbol(unsigned char *out,
     return true;
 }
 
+/* The ELF record format is determined by ELFCLASS, not by the instruction
+ * set.  Keep dynamic RELA serialization beside the existing final symbol,
+ * program-header and section-header packers.  Target policy has already
+ * selected the psABI relocation type in r_info before this boundary. */
+static bool minild_final_pack_rela(unsigned char *out,
+                                   unsigned char elf_class,
+                                   const MiniElfRela *reloc) {
+    if (elf_class == ELFCLASS64) {
+        store_u64le(out, reloc->offset);
+        store_u64le(out + 8U, reloc->info);
+        store_u64le(out + 16U, (uint64_t)reloc->addend);
+        return true;
+    }
+    if (elf_class != ELFCLASS32 ||
+        !minild_final_u32_fits(reloc->offset) ||
+        !minild_final_u32_fits(reloc->info) ||
+        reloc->addend < INT32_MIN || reloc->addend > INT32_MAX) {
+        return false;
+    }
+    store_u32le(out, (uint32_t)reloc->offset);
+    store_u32le(out + 4U, (uint32_t)reloc->info);
+    store_u32le(out + 8U, (uint32_t)reloc->addend);
+    return true;
+}
+
+/* DT_* entries are ordinary ELFCLASS wire records, even when the target
+ * ABI chooses which tags and relocation kinds a dynamic loader consumes. */
+static bool minild_final_pack_dynamic(unsigned char *out,
+                                      unsigned char elf_class,
+                                      uint64_t tag, uint64_t value) {
+    if (elf_class == ELFCLASS64) {
+        store_u64le(out, tag);
+        store_u64le(out + 8U, value);
+        return true;
+    }
+    if (elf_class != ELFCLASS32 ||
+        !minild_final_u32_fits(tag) ||
+        !minild_final_u32_fits(value)) {
+        return false;
+    }
+    store_u32le(out, (uint32_t)tag);
+    store_u32le(out + 4U, (uint32_t)value);
+    return true;
+}
+
 static bool minild_final_pack_elf_header(unsigned char *out,
                                          const MiniLdState *state,
                                          uint16_t elf_type,

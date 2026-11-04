@@ -365,7 +365,7 @@ static bool minild_target_reloc_at_final_layout(uint32_t type) {
 
 /* Dynamic relocation semantics are target-neutral: the RISC-V backend
  * selects actual ELF relocation numbers for each loader operation. */
-static Elf64_Xword minild_target_dynamic_reloc_info(
+static uint64_t minild_target_dynamic_reloc_info(
     size_t symbol_index, MiniLdDynamicRelocSemantic semantic) {
     uint32_t type;
 
@@ -388,7 +388,9 @@ static Elf64_Xword minild_target_dynamic_reloc_info(
     default:
         return 0U;
     }
-    return ELF64_R_INFO(symbol_index, type);
+    /* ELF64 r_info carries a 32-bit dynsym index and a 32-bit psABI type.
+     * The wire record is packed by Common's class-neutral ELF serializer. */
+    return ((uint64_t)symbol_index << 32U) | (uint64_t)type;
 }
 
 /* Word width and psABI truncation belong to the target. Caller retains
