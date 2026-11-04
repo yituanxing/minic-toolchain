@@ -831,6 +831,14 @@
 - **最小修复与回归：** `src/target/x86_64/machine_call.c` 的 helper 终点在 `x86_value_store` 前加 `movslq %eax,%rax`，保持 `-1/0/+1` 的有符号含义。两个持久测试 TU `mc089_x87_ordered_comparisons{,_support}.c` 用 GNU/MiniC x86 GNU AS/LD 原生差分六运算符 × 十二组正负有限值、`±0`、无穷及 NaN，另含直接 `2.0L > 1.0L`；旧 MiniC **13 个 mismatch**，修后 GNU/MiniC 都 **0**。合入主线后 Release `-Werror`、`check-mc089-x87-ordered-comparisons` 及 x86/RV64/A64/Loong 四目标 `-S` PASS；RV32 的既有 long-double frame 限制不计通过。
 - **验收边界：** MC-051 负零原生独立回归保持通过；不混入 MC-041 的精度变更。未运行完整 Linux 五目标 ELF/QEMU、MiniAS/MiniLD 联合验收，故继续保留 `FIXED-UNVERIFIED`。
 
+### MC-090 x86 Linux CMPXCHG16B 的合法 16 字节内存对象被标量宽度门拒绝
+
+- **状态：** `FIXED-UNVERIFIED`，P1，`GNU-NATIVE-ELF`；P49 在同一 MiniC PR #674 分支上定点修复。这里的 `kind 43` 是结构化 Inline ASM Core 指令，不是缺失通用原子 Core opcode。
+- **修复前实际反例：** `tests/compiler/c0/probe-x86-linux-cmpxchg16b-native.sh` 中 Linux `arch_try_cmpxchg128` 的原始 `=@cce` ZF、16 字节 `+m`、`+a/+d` 与 `b/c` 寄存器组合，MiniC 生成汇编前报 `x86-64 Core instruction unsupported: function cmpxchg128, kind 43`；P48 和此前 P47 同一源码/步骤均失败。GNU C 编译及真实硬件运行是正控。
+- **完整责任链：** `x86_64/asm_contract_source.c:x86_linux_cmpxchg128_source` 已限定来源和 GNU 寄存器约束；`compiler/c_lower/core_lower_asm_target.c` 正确发布 6 个结构化 Core binding；机器 `x86_64/machine_asm.c:emit_linux_cmpxchg128` 使用 `x86_asm_operand_integer(...16...)` 验证 `+m`。该 helper 间接调用 `target/common/lp64_scalar.c:minic_lp64_core_integer_width`，按设计仅允许 1/2/4/8 字节寄存器标量，因而拒绝合法的 `__int128` 16 字节内存对象。
+- **P49 定点修复：** 在 x86 机器入口仅对 `CMPXCHG128` 的一个内存角色检查已导入 CoreType 的 `INTEGER/128-bit/size16/align>=16/has_layout`，保留 Core/Frontend 分层及所有普通寄存器标量宽度限制；没有为 Linux 模板增加新语言专用 Core opcode，也未改 RV32/RV64、GNU 汇编器或链接器。
+- **实际差分：** `make MODE=debug all` 后同一持久脚本 **PASS**：GNU/MiniC 的真实原生硬件原子 CAS 成功与失败路径均 exit **42**，生成 `lock; cmpxchg16b` 和即时 `sete`；未执行的 kernel ALT 分支通过 GNU AS/ELF 结构比对，14 字节 `.altinstructions` 记录、feature **141**、old/new **8/5**、2 条 PC32 relocation 正确。更广的全 Linux 原始源码/Boot 和五架构 GNU/QEMU 仍待独立验收。
+
 ## 已核对并排除的误判（不要在未有新证据时重新打开）
 
 | 项目 | 结论及当前依据 |

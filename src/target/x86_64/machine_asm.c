@@ -134,6 +134,24 @@ static bool x86_asm_operand_integer(
     return bytes == 0U || bytes == actual;
 }
 
+/* A cmpxchg16b "+m" operand is a 128-bit *memory object*, not a
+ * register-sized LP64 scalar.  Keep the ordinary scalar-width contract at
+ * 1/2/4/8 bytes: admitting 16 here must not accidentally allow a 128-bit
+ * GNU register binding in any other machine-ASM family.  The x86 machine
+ * owner checks the complete Core storage layout for this one memory role. */
+static bool x86_asm_operand_i128_memory(
+    const MinicCoreFunction *fn, MinicCoreValueId value) {
+    MinicCoreTypeId pointee;
+    const MinicCoreType *type;
+    return x86_asm_operand_type(fn, value, true, &pointee) &&
+           (type = x86_asm_core_type(fn, pointee)) != NULL &&
+           type->kind == MINIC_CORE_TYPE_INTEGER &&
+           type->has_layout && type->size == 16U &&
+           type->alignment >= 16U &&
+           type->value.integer.bit_width == 128U &&
+           !type->value.integer.is_bool;
+}
+
 static bool x86_asm_operand_kind(
     const MinicCoreFunction *fn, MinicCoreValueId value,
     bool address, MinicCoreTypeKind kind) {
@@ -3488,7 +3506,7 @@ static bool emit_linux_cmpxchg128(
             b[i].has_fixed_register_binding)
             return false;
         if (i==at) {
-            if (!x86_asm_operand_integer(fn,b[i].value,true,16U,-1))
+            if (!x86_asm_operand_i128_memory(fn,b[i].value))
                 return false;
         } else if (!x86_asm_operand_width(fn,b[i].value,i<at+3U,&width) ||
                    width != (!alt && i==0U ? 1U : 8U))

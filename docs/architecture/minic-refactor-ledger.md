@@ -2765,3 +2765,48 @@ The complete new evidence is one `make check-p48-x86-head-local-provenance`
 target (included by `check-fast`) and one native strict CI step, backed by
 `tests/compiler/c0/probe-p48-head-local-provenance.sh` and its same-source C,
 displaced native driver, and separate deliberately uncertain negative fixture.
+
+## IR-P49 — x86 `CMPXCHG16B` GNU 128-bit memory shape (2026-11-04)
+
+**Owner:** one complete x86 structured-ASM machine admission correction and
+its *already-existing* two-source GNU/native/ELF differential gate. No new
+generic Core atomic opcode, second ABI algorithm, or 16-byte LP64 register
+scalar path. The original in-flight P48 exact-head CI failed this pre-existing
+test, including at its previous P47 parent.
+
+### End-to-end source/Core/machine proof
+
+- The x86 source qualifier already admits exactly two distinct original
+  Linux template forms: a locked native 16-byte CAS with `=@cce` condition
+  output and `.smp_locks` relocation, and a GS per-CPU alternative with an
+  old kernel emulation call plus replacement instruction. Each carries a
+  single 16-byte `+m` value and four exact x86 register scalar roles. Source
+  lowers all operand effects to one structured Core ASM plan; the verifier
+  accepts the typed pointer object and effect. None of this needed changing.
+- The machine `emit_linux_cmpxchg128` previously used the ordinary scalar
+  width predicate to validate the **16-byte memory object**. Its Common
+  LP64 integer classifier, correctly limited to 1/2/4/8-byte GPR scalars,
+  necessarily rejects 128-bit objects. Before the fix, the original native
+  script emitted `function cmpxchg128, kind 43` unsupported Core diagnostic.
+- P49 adds a target-only CoreType memory predicate requiring `INTEGER`,
+  `bit_width==128`, full 16-byte layout and at least 16-byte alignment, and
+  applies it solely to the CMPXCHG128 memory binding. The other source-
+  qualified flags, registers, GNU clobbers, machine template, ELF section
+  and emitted x86 instruction remain under their existing exact proof.
+  In particular ordinary register operands still cannot become 16-byte
+  scalar GPRs just because CMPXCHG16B accepts a 128-bit *memory* operand.
+
+### Current exact-working-tree verification
+
+| Gate | P49 observed result |
+|---|---|
+| GNU C source and MiniC `-S` through GNU AS/LD native hardware | **PASS**, both CAS success/failure routes, independent GNU/MiniC executables each exit **42** |
+| x86 machine sequence | **PASS**, `lock; cmpxchg16b (%r11)` and immediate `sete %r10b` |
+| Kernel ALT Linux ELF metadata | **PASS**, 14-byte `.altinstructions` record, feature **141**, branch lengths **8/5**, two PC32 ELF relocations; replacement **not executed** |
+| Debug `make -s -j8 MODE=debug all` | **PASS**, exit 0 |
+| Full five-ISA GNU Linux/QEMU and latest-head x86 original kernel boot | **NOT RUN**, targeted host/ELF proof is not full Linux acceptance |
+
+The unified permanent gate is
+`tests/compiler/c0/probe-x86-linux-cmpxchg16b-native.sh`; it exercises both
+Linux original atomic and ALT sources. No empty placeholder source or
+standalone smoke was substituted for actual native/ELF verification.
