@@ -2423,3 +2423,82 @@ that shows meaningful cost. The remaining Source/Target ASM FormId admission,
 machine dispatcher C-descriptor boundary, MIR policy and the independent
 five-ISA Linux GNU/QEMU correctness campaign are subsequent work, not silently
 certified by this batch.
+
+## IR-P45 — Whole-family GNU ASM machine-identity ownership (2026-11-04)
+
+**Baseline:** P44 local `cdf1efd`, same-tree PR #674. Independently reread
+five-target Source→Core→Machine ASM and the GCC extended-ASM / LLVM inline-ASM
+ownership models before changing code. Machine emitters already consume
+Core/Module/TargetInfo without reopening C AST or C types; the real gap was
+that many Linux source-approved forms had no ISA-owned machine identity and
+were reclassified solely by raw machine-stage template text. This batch does
+**not** add MIR, new GNU syntax, ISA extensions, or broaden the C admission set.
+
+### One connected Source/Core/Machine migration
+
+- **x86-64:** preserve the ordered 111-entry C/GNU source qualifier table and
+  its exact type, constraint, clobber and operand-count contracts. Add **69**
+  FormIds to its previous **42**: **111/111 table entries now have a nonzero
+  machine family identity**. All 111 IDs have matching target-owned native
+  template checks and machine dispatch. The old 69 raw-machine branches now
+  require their own exact family ID; a different/unknown ID never reaches
+  another family's emitter. Existing source qualifiers for `nospec`, `percpu`
+  and generic arithmetic/CPUID below the table still legitimately use ID0.
+  The new 69 IDs seal **families**, not every sub-mode: their variant remains
+  zero and the original machine-native matcher validates width/opcode/mode.
+  No fabricated nonzero variant can claim one of those families.
+- **AArch64:** census **29 named source qualifiers plus 23 direct branches**;
+  reconcile these 52 admission paths with **51 machine FormIds** (the old four
+  plus 47; two C `MRS` branches use one machine identity). The existing four
+  strict LDAR/STLR/RAW_IO seals remain unchanged. All other source-approved
+  forms must have matching original and normalized machine-family ID/variant
+  before their C owner disappears. One target-owned classifier reuses the
+  preexisting native matchers; machine emission independently rechecks the
+  normalized form and its `TARGET_QUALIFIED` owner before any instruction.
+  This includes LSE, HYP_SPIN, SMCCC, TLBI, alternatives and system registers.
+- **ID0 is a real, narrow contract**, not a way around FormId: on both
+  targets it requires variant zero and a valid owner, and unknown typed IDs
+  fail closed. AArch64 forbids ID0 for its 51 sealed families except the
+  existing exact generic zero-operand barrier; its full KEXEC crash-register
+  snapshot remains a separately verified **GENERIC_STRUCTURED + ID0** form.
+  x86 keeps the existing Core generic GPR/memory snapshot and generic
+  arithmetic/CPUID shapes through their own exact native checks. Rejecting
+  these blanketly would have regressed real Linux and prior Core consumers.
+  Core IR data layout and the 32/64-bit RISC-V and Loong ISA ownership remain
+  unchanged. `MINIC_ASM_OPERAND_PLAN_TRACE` now prints FormId and variant so
+  original GNU C admission and later Core machine identity can be audited.
+
+The new direct-machine adversarial test deliberately manufactures invalid
+FormId, variant, owner, normalized template, Core pointee/type and SSA ID,
+and requires **zero emitted bytes**. It also checks forbidden ID0 re-entry
+into x86/AArch64 target-qualified ISA forms while protecting legitimate ID0
+consumers. That test found and drove fixes for an x86 generic regression,
+x86 nonzero ID0 variant, and AArch64 bad owner/ID0 fallback; the previous
+hand-built `typed_asm_core_poison` fixture was updated to use legally owned
+Core identities instead of treating owner=0 as a positive example.
+
+### Exact evidence, including negative results
+
+| Gate | P45 result |
+|---|---|
+| Full Debug `make -s -j8 MODE=debug check-fast`, strict Release `MODE=release all`, `git diff --check` | **PASS** |
+| `check-p45-machine-form-boundary` and old `check-typed-asm-core-poison` | **PASS**; source→machine positives, forbidden IDs/owners/variants, poisoned Core types/SSA, no partial output |
+| x86 futex GNU AS/LD/native + AArch64 hyp spin + AArch64 KEXEC crash snapshot | **PASS**; x86 native exit 42, exception table nine entries, A64 15 GPR pairs/large-frame negative cases; AArch64 cross-GNU GAS **SKIP** |
+| Same GNU-preprocessed 22 true Linux ASM fixtures against P44 | **20/20 byte-identical `.s`**, **2/2 both rejected** at prior unrelated Core lowering; 244 source-qualified ASM instances, 243 with nonzero FormId and one intentional generic x86 ID0, **0 changed** |
+| P44/P45 51-case five-ISA source cohort | **255 outcomes identical**; 122 byte-identical, 133 both rejected, 0 changed; 4 preprocessing skips |
+| P44/P45 16-case five-ISA ASM/section cohort | **80 outcomes identical**; 59 byte-identical, 21 both rejected, 0 changed; 2 preprocessing skips |
+| RV64 strict I/ABI + opcode-origin audit; x86 GNU file ASM | **PASS**; compiler I=61/non-I=0, Source ASM M/A/CSR/Zifencei retained; x86 ELF alias/native |
+| Five-ISA Linux GNU ELF + QEMU kernel runtime | **NOT RUN**; these source/host oracles do **not** certify five Linux boots |
+
+**Remaining independent architecture owners after P45 (not deferred patches of
+this same GNU ASM change):** LoongArch's machine-text reparse/stack-spill
+forwarding after GNU `.s` exists; x86 head physical-VMA use-role side tables
+(MC-076); common Module global payload versus target-local ELF section
+classification; duplicated C `symbol + byte_addend` evaluation for static
+initializers and GNU `i`; x86 multiple bytewise aggregate-copy emitters
+(MC-084's 4 KiB sample emitted 8,223 lines versus GCC's 65). GCC's
+GIMPLE→RTL and LLVM's IR→MachineInstr layering reinforce **machine decisions
+before rendering text** as the next ownership target. Do not reopen already
+finished P38/P39/P42/P43/P44 type, clone, linkage or reachability work, and
+do not confuse architectural ownership improvements with five-ISA Linux/QEMU
+runtime correctness.

@@ -1822,6 +1822,7 @@ bool minic_aarch64_seal_normalized_inline_asm(
     const Aarch64RawIoRead *old_read, *new_read;
     const Aarch64RawIoStore *old_store, *new_store;
     size_t original_width, machine_width;
+    uint32_t source_form, source_variant, machine_form, machine_variant;
     if (!invocation || !program || !source || !source->template_text ||
         !normalized || !length || !contract)
         return false;
@@ -1883,5 +1884,19 @@ bool minic_aarch64_seal_normalized_inline_asm(
         contract->target_machine_form_variant = (uint32_t)old_store->width;
         return true;
     }
+    /* All remaining source-approved structured forms must carry a target
+     * identity before the C program can be discarded. Both spellings must
+     * be the same ISA form; the target machine repeats this check after
+     * lowering, independent of the GNU C source constraint qualification.
+     * In particular an unrecognized form cannot silently acquire ID 0. */
+    if (!aarch64_machine_asm_identify(
+            source->template_text, source->template_length, false,
+            &source_form, &source_variant) ||
+        !aarch64_machine_asm_identify(normalized, length, true,
+                                      &machine_form, &machine_variant) ||
+        source_form != machine_form || source_variant != machine_variant)
+        return false;
+    contract->target_machine_form_id = source_form;
+    contract->target_machine_form_variant = source_variant;
     return true;
 }

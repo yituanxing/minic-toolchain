@@ -5672,10 +5672,18 @@ bool minic_x86_64_emit_structured_asm(
     bindings = ins->value.structured_inline_asm.operands;
     if (!info->template_text)
         return false;
+    /* FormId zero never carries a machine variant. Enforce this at the
+     * machine ingress even for a standalone Core producer that bypasses the
+     * upstream Core verifier. Preserve only the two explicit ID0 owners. */
+    if (info->target_machine_form_id == MINIC_X86_MACHINE_ASM_NONE &&
+        (info->target_machine_form_variant != 0U ||
+         (info->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED &&
+          info->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_GENERIC_STRUCTURED)))
+        return false;
     /* Only the target qualifier can publish an opcode family. Core transports
      * the result without interpreting ISA data; the source_form_id fingerprint
-     * stays independent. Unknown typed IDs must fail closed, never fall back
-     * to the legacy text recognizer. Every emitter still checks Core operands. */
+     * stays independent. Unknown IDs fail closed. Every enumerated family is
+     * ID-gated before machine-native template and Core-operand validation. */
     if (info->target_machine_form_id != MINIC_X86_MACHINE_ASM_NONE) {
         if (info->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED)
             return false;
@@ -5769,140 +5777,152 @@ bool minic_x86_64_emit_structured_asm(
         case MINIC_X86_MACHINE_ASM_VDSO_CPUNODE:
             return emit_linux_vdso_cpunode(out, fn, frame, ins, info);
         default:
+            /* All old source-qualified families now carry nonzero IDs.
+             * Their existing Core-operand proofs remain in the cases below. */
+            if (info->target_machine_form_id >= MINIC_X86_MACHINE_ASM_CRASH_REGISTER &&
+                info->target_machine_form_id <= MINIC_X86_MACHINE_ASM_CSUM_PARTIAL)
+                break;
             return false;
         }
     }
-    if (minic_x86_64_linux_crash_gpr_snapshot_form(
+    /* A standalone generic Core client may still submit the exact original
+     * single-register snapshot, independently of Source qualification.
+     * Keep this narrow Core path: the machine recognizers and the emitter's
+     * operand/type checks remain mandatory for generic FormId zero. */
+    if ((info->target_machine_form_id == MINIC_X86_MACHINE_ASM_CRASH_REGISTER ||
+         (info->target_machine_form_id == MINIC_X86_MACHINE_ASM_NONE &&
+          info->operand_plan_owner == MINIC_ASM_OPERAND_PLAN_GENERIC_STRUCTURED)) &&
+        (minic_x86_64_linux_crash_gpr_snapshot_form(
             info->template_text, info->template_length) ||
         minic_x86_64_linux_crash_misc_snapshot_form(
-            info->template_text, info->template_length))
+            info->template_text, info->template_length)))
         return emit_linux_crash_register_snapshot(out, fn, frame, ins, info);
-    if (minic_x86_64_linux_irq_stack_call_form(
-            info->template_text, info->template_length))
+    if (info->target_machine_form_id == MINIC_X86_MACHINE_ASM_IRQ_STACK_CALL && (minic_x86_64_linux_irq_stack_call_form(
+            info->template_text, info->template_length)))
         return emit_linux_irq_stack_call(out, fn, frame, ins, info);
-    if (minic_x86_64_linux_task_control_form(
-            info->template_text, info->template_length))
+    if (info->target_machine_form_id == MINIC_X86_MACHINE_ASM_TASK_CONTROL && (minic_x86_64_linux_task_control_form(
+            info->template_text, info->template_length)))
         return emit_linux_task_control(out, fn, frame, ins, info);
-    if (minic_x86_64_linux_iret_to_self_form(
-            info->template_text, info->template_length))
+    if (info->target_machine_form_id == MINIC_X86_MACHINE_ASM_IRET_TO_SELF && (minic_x86_64_linux_iret_to_self_form(
+            info->template_text, info->template_length)))
         return emit_linux_iret_to_self(out, fn, frame, ins, info);
-    if (minic_x86_64_linux_int3_selftest_form(
-            info->template_text, info->template_length))
+    if (info->target_machine_form_id == MINIC_X86_MACHINE_ASM_INT3_SELFTEST && (minic_x86_64_linux_int3_selftest_form(
+            info->template_text, info->template_length)))
         return emit_linux_int3_selftest(out, fn, frame, ins, info);
-    if (minic_x86_64_linux_pv_indirect_call_form(
-            info->template_text, info->template_length))
+    if (info->target_machine_form_id == MINIC_X86_MACHINE_ASM_PV_INDIRECT_CALL && (minic_x86_64_linux_pv_indirect_call_form(
+            info->template_text, info->template_length)))
         return emit_linux_pv_indirect_call(out, fn, frame, ins, info);
-    if (minic_x86_64_linux_kvm_hypercall_alt_form(
+    if (info->target_machine_form_id == MINIC_X86_MACHINE_ASM_KVM_HYPERCALL_ALT && (minic_x86_64_linux_kvm_hypercall_alt_form(
             info->template_text, info->template_length) ||
         (ins->value.structured_inline_asm.operand_count <= 5U &&
          minic_x86_64_linux_kvm_hypercall_direct_form(
-             info->template_text, info->template_length)))
+             info->template_text, info->template_length))))
         return emit_linux_kvm_hypercall(out, fn, frame, ins, info);
-    if (minic_x86_64_linux_exception_stack_call_form(
-            info->template_text, info->template_length))
+    if (info->target_machine_form_id == MINIC_X86_MACHINE_ASM_EXCEPTION_STACK_CALL && (minic_x86_64_linux_exception_stack_call_form(
+            info->template_text, info->template_length)))
         return emit_linux_exception_stack_call(out, fn, frame, ins, info);
-    if (minic_x86_64_linux_alt_reloc_selftest_form(
-            info->template_text, info->template_length))
+    if (info->target_machine_form_id == MINIC_X86_MACHINE_ASM_ALT_RELOC_SELFTEST && (minic_x86_64_linux_alt_reloc_selftest_form(
+            info->template_text, info->template_length)))
         return emit_linux_alt_reloc_selftest(out, fn, ins, info);
-    if (minic_x86_64_linux_real_mode_far_jump_form(
-            info->template_text, info->template_length))
+    if (info->target_machine_form_id == MINIC_X86_MACHINE_ASM_REAL_MODE_FAR_JUMP && (minic_x86_64_linux_real_mode_far_jump_form(
+            info->template_text, info->template_length)))
         return emit_linux_real_mode_far_jump(out, fn, frame, ins, info);
-    if (minic_x86_64_linux_pci_mmconfig_form(
+    if (info->target_machine_form_id == MINIC_X86_MACHINE_ASM_PCI_MMCONFIG && (minic_x86_64_linux_pci_mmconfig_form(
             info->template_text, info->template_length, false) ||
         minic_x86_64_linux_pci_mmconfig_form(
-            info->template_text, info->template_length, true))
+            info->template_text, info->template_length, true)))
         return emit_linux_pci_mmconfig(out, module, target,
                                       fn, frame, ins, info);
-    if (minic_x86_64_linux_rep_string_io_form(
-            info->template_text, info->template_length))
+    if (info->target_machine_form_id == MINIC_X86_MACHINE_ASM_REP_STRING_IO && (minic_x86_64_linux_rep_string_io_form(
+            info->template_text, info->template_length)))
         return emit_linux_rep_string_io(out, fn, frame, ins, info);
-    if (minic_x86_64_linux_iomem_copy_form(
-            info->template_text, info->template_length))
+    if (info->target_machine_form_id == MINIC_X86_MACHINE_ASM_IOMEM_COPY && (minic_x86_64_linux_iomem_copy_form(
+            info->template_text, info->template_length)))
         return emit_linux_iomem_copy(out, fn, frame, ins, info);
-    if (minic_x86_64_linux_flushcache_copy_form(
-            info->template_text, info->template_length))
+    if (info->target_machine_form_id == MINIC_X86_MACHINE_ASM_FLUSHCACHE_COPY && (minic_x86_64_linux_flushcache_copy_form(
+            info->template_text, info->template_length)))
         return emit_linux_flushcache_copy(out, fn, frame, ins, info);
-    if (minic_x86_64_linux_task_size_alt_form(
-            info->template_text, info->template_length))
+    if (info->target_machine_form_id == MINIC_X86_MACHINE_ASM_TASK_SIZE_ALT && (minic_x86_64_linux_task_size_alt_form(
+            info->template_text, info->template_length)))
         return emit_linux_task_size_alt(out, fn, frame, ins, info);
-    if (minic_x86_64_linux_segment_load_extable_form(
-            info->template_text, info->template_length))
+    if (info->target_machine_form_id == MINIC_X86_MACHINE_ASM_SEGMENT_LOAD_EXTABLE && (minic_x86_64_linux_segment_load_extable_form(
+            info->template_text, info->template_length)))
         return emit_linux_segment_load_extable(out, fn, frame, ins, info);
-    if (minic_x86_64_linux_lkgs_extable_form(
-            info->template_text, info->template_length))
+    if (info->target_machine_form_id == MINIC_X86_MACHINE_ASM_LKGS_EXTABLE && (minic_x86_64_linux_lkgs_extable_form(
+            info->template_text, info->template_length)))
         return emit_linux_lkgs_extable(out, fn, frame, ins, info);
-    if (minic_x86_64_linux_kernel_nofault_goto_form(
-            info->template_text, info->template_length))
+    if (info->target_machine_form_id == MINIC_X86_MACHINE_ASM_KERNEL_NOFAULT_GOTO && (minic_x86_64_linux_kernel_nofault_goto_form(
+            info->template_text, info->template_length)))
         return emit_linux_kernel_nofault_goto(
             out, module, target, fn, frame, ins, info, function_id);
-    if (minic_x86_64_linux_rep_movsb_alternative_form(
-            info->template_text, info->template_length))
+    if (info->target_machine_form_id == MINIC_X86_MACHINE_ASM_REP_MOVSB_ALTERNATIVE && (minic_x86_64_linux_rep_movsb_alternative_form(
+            info->template_text, info->template_length)))
         return emit_linux_rep_movsb_alternative(out, fn, frame, ins, info);
-    if (minic_x86_64_linux_rep_stosb_alternative_form(
-            info->template_text, info->template_length))
+    if (info->target_machine_form_id == MINIC_X86_MACHINE_ASM_REP_STOSB_ALTERNATIVE && (minic_x86_64_linux_rep_stosb_alternative_form(
+            info->template_text, info->template_length)))
         return emit_linux_rep_stosb_alternative(out, fn, frame, ins, info);
-    if (minic_x86_64_linux_fpu_user_frame_form(
-            info->template_text, info->template_length))
+    if (info->target_machine_form_id == MINIC_X86_MACHINE_ASM_FPU_USER_FRAME && (minic_x86_64_linux_fpu_user_frame_form(
+            info->template_text, info->template_length)))
         return emit_linux_fpu_user_frame(out, fn, frame, ins, info);
-    if (minic_x86_64_linux_fpu_kernel_restore_form(
-            info->template_text, info->template_length))
+    if (info->target_machine_form_id == MINIC_X86_MACHINE_ASM_FPU_KERNEL_RESTORE && (minic_x86_64_linux_fpu_kernel_restore_form(
+            info->template_text, info->template_length)))
         return emit_linux_fpu_kernel_restore(out, fn, frame, ins, info);
-    if (minic_x86_64_linux_fxrstor_safe_form(
-            info->template_text, info->template_length))
+    if (info->target_machine_form_id == MINIC_X86_MACHINE_ASM_FXRSTOR_SAFE && (minic_x86_64_linux_fxrstor_safe_form(
+            info->template_text, info->template_length)))
         return emit_linux_fxrstor_safe(out, fn, frame, ins, info);
-    if (minic_x86_64_linux_xstate_fault_form(
-            info->template_text, info->template_length))
+    if (info->target_machine_form_id == MINIC_X86_MACHINE_ASM_XSTATE_FAULT && (minic_x86_64_linux_xstate_fault_form(
+            info->template_text, info->template_length)))
         return emit_linux_xstate_fault(out, fn, frame, ins, info);
-    if (minic_x86_64_linux_xrstor_alternative_form(
-            info->template_text, info->template_length))
+    if (info->target_machine_form_id == MINIC_X86_MACHINE_ASM_XRSTOR_ALTERNATIVE && (minic_x86_64_linux_xrstor_alternative_form(
+            info->template_text, info->template_length)))
         return emit_linux_xrstor_alternative(out, fn, frame, ins, info);
-    if (minic_x86_64_linux_xsave_triple_alternative_form(
-            info->template_text, info->template_length))
+    if (info->target_machine_form_id == MINIC_X86_MACHINE_ASM_XSAVE_TRIPLE_ALTERNATIVE && (minic_x86_64_linux_xsave_triple_alternative_form(
+            info->template_text, info->template_length)))
         return emit_linux_xsave_triple_alternative(out, fn, frame, ins, info);
-    if (minic_x86_64_linux_load_unaligned_zeropad_form(
-            info->template_text, info->template_length))
+    if (info->target_machine_form_id == MINIC_X86_MACHINE_ASM_LOAD_UNALIGNED_ZEROPAD && (minic_x86_64_linux_load_unaligned_zeropad_form(
+            info->template_text, info->template_length)))
         return emit_linux_load_unaligned_zeropad(out, fn, frame, ins, info);
-    if (minic_x86_64_linux_smap_alternative_form(
-            info->template_text, info->template_length))
+    if (info->target_machine_form_id == MINIC_X86_MACHINE_ASM_SMAP_ALTERNATIVE && (minic_x86_64_linux_smap_alternative_form(
+            info->template_text, info->template_length)))
         return minic_x86_64_emit_linux_smap_alternative(
             out, fn, frame, ins, info);
-    if (minic_x86_64_linux_segment_register_extable_form(
-            info->template_text, info->template_length))
+    if (info->target_machine_form_id == MINIC_X86_MACHINE_ASM_SEGMENT_REGISTER_EXTABLE && (minic_x86_64_linux_segment_register_extable_form(
+            info->template_text, info->template_length)))
         return emit_linux_segment_register_extable(out, fn, frame, ins, info);
-    if (minic_x86_64_linux_put_user_call_form(
-            info->template_text, info->template_length))
+    if (info->target_machine_form_id == MINIC_X86_MACHINE_ASM_PUT_USER_CALL && (minic_x86_64_linux_put_user_call_form(
+            info->template_text, info->template_length)))
         return emit_linux_put_user_call(
             out, fn, frame, ins, info);
-    if (minic_x86_64_linux_get_user_call_form(
-            info->template_text, info->template_length))
+    if (info->target_machine_form_id == MINIC_X86_MACHINE_ASM_GET_USER_CALL && (minic_x86_64_linux_get_user_call_form(
+            info->template_text, info->template_length)))
         return emit_linux_get_user_call(
             out, fn, frame, ins, info);
-    if (minic_x86_64_linux_idle_clflush_alt_form(
-            info->template_text, info->template_length, true))
+    if (info->target_machine_form_id == MINIC_X86_MACHINE_ASM_IDLE_CLFLUSH_ALT && (minic_x86_64_linux_idle_clflush_alt_form(
+            info->template_text, info->template_length, true)))
         return emit_linux_idle_clflush_alt(out, fn, frame, ins, info);
-    if (minic_x86_64_linux_pat_clflushopt_form(
-            info->template_text, info->template_length))
+    if (info->target_machine_form_id == MINIC_X86_MACHINE_ASM_PAT_CLFLUSHOPT && (minic_x86_64_linux_pat_clflushopt_form(
+            info->template_text, info->template_length)))
         return emit_linux_pat_clflushopt(out, fn, frame, ins, info);
-    if (minic_x86_64_linux_futex_extable_form(
-            info->template_text, info->template_length))
+    if (info->target_machine_form_id == MINIC_X86_MACHINE_ASM_FUTEX_EXTABLE && (minic_x86_64_linux_futex_extable_form(
+            info->template_text, info->template_length)))
         return emit_linux_futex_extable(out, fn, frame, ins, info);
-    if (minic_x86_64_linux_debug_register_form(
-            info->template_text, info->template_length))
+    if (info->target_machine_form_id == MINIC_X86_MACHINE_ASM_DEBUG_REGISTER && (minic_x86_64_linux_debug_register_form(
+            info->template_text, info->template_length)))
         return emit_linux_debug_register(out, fn, frame, ins, info);
-    if (minic_x86_64_linux_alternative_wrmsr_form(
-            info->template_text, info->template_length))
+    if (info->target_machine_form_id == MINIC_X86_MACHINE_ASM_ALTERNATIVE_WRMSR && (minic_x86_64_linux_alternative_wrmsr_form(
+            info->template_text, info->template_length)))
         return emit_linux_alternative_wrmsr(
             out, module, target, fn, frame, ins, info);
-    if (minic_x86_64_linux_control_register_form(
-            info->template_text, info->template_length))
+    if (info->target_machine_form_id == MINIC_X86_MACHINE_ASM_CONTROL_REGISTER && (minic_x86_64_linux_control_register_form(
+            info->template_text, info->template_length)))
         return emit_linux_control_register(
             out, fn, frame, ins, info);
-    if (minic_x86_64_linux_three_call_alternative_form(
-            info->template_text, info->template_length))
+    if (info->target_machine_form_id == MINIC_X86_MACHINE_ASM_THREE_CALL_ALTERNATIVE && (minic_x86_64_linux_three_call_alternative_form(
+            info->template_text, info->template_length)))
         return emit_linux_three_call_alternative(
             out, module, target, fn, frame, ins, info);
-    if (minic_x86_64_linux_boot_segments_template(
-            info->template_text, info->template_length)) {
+    if (info->target_machine_form_id == MINIC_X86_MACHINE_ASM_BOOT_SEGMENTS && (minic_x86_64_linux_boot_segments_template(
+            info->template_text, info->template_length))) {
         const MinicCoreStructuredInlineAsmOperand *operand = bindings;
         size_t width;
         if (!operand || !info->is_volatile || info->is_goto ||
@@ -5924,8 +5944,8 @@ bool minic_x86_64_emit_structured_asm(
                      "  movw %ax, %es\n", out) != EOF;
     }
     {
-        const unsigned int table = minic_x86_64_linux_descriptor_table_form(
-            info->template_text, info->template_length);
+        const unsigned int table = (info->target_machine_form_id == MINIC_X86_MACHINE_ASM_LIDT ? minic_x86_64_linux_descriptor_table_form(
+            info->template_text, info->template_length) : 0U);
         if (table != 0U) {
         const MinicCoreStructuredInlineAsmOperand *operand = bindings;
         MinicCoreTypeId desc_type;
@@ -5955,8 +5975,8 @@ bool minic_x86_64_emit_structured_asm(
         }
     }
     {
-        if (minic_x86_64_linux_via_xstore_form(
-                info->template_text, info->template_length)) {
+        if (info->target_machine_form_id == MINIC_X86_MACHINE_ASM_VIA_XSTORE && (minic_x86_64_linux_via_xstore_form(
+                info->template_text, info->template_length))) {
             const MinicCoreStructuredInlineAsmOperand *b = bindings;
             static const MinicCoreStructuredInlineAsmOperandKind expected[] = {
                 MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT,
@@ -6001,8 +6021,8 @@ bool minic_x86_64_emit_structured_asm(
     }
     {
         const unsigned int segment =
-            minic_x86_64_linux_crash_segment_snapshot_form(
-                info->template_text, info->template_length);
+            (info->target_machine_form_id == MINIC_X86_MACHINE_ASM_CRASH_SEGMENT_SNAPSHOT ? minic_x86_64_linux_crash_segment_snapshot_form(
+                info->template_text, info->template_length) : 0U);
         if (segment) {
             const MinicCoreStructuredInlineAsmOperand *b = bindings;
             size_t width;
@@ -6028,8 +6048,8 @@ bool minic_x86_64_emit_structured_asm(
         }
     }
     {
-        if (minic_x86_64_linux_muldiv_u64_form(
-                info->template_text, info->template_length)) {
+        if (info->target_machine_form_id == MINIC_X86_MACHINE_ASM_MULDIV_U64 && (minic_x86_64_linux_muldiv_u64_form(
+                info->template_text, info->template_length))) {
             const MinicCoreStructuredInlineAsmOperand *b = bindings;
             if (!info->is_volatile || info->is_goto ||
                 info->has_memory_clobber || info->register_clobber_count != 1U ||
@@ -6059,8 +6079,8 @@ bool minic_x86_64_emit_structured_asm(
         }
     }
     {
-        if (minic_x86_64_linux_kaslr_mul_form(
-                info->template_text, info->template_length)) {
+        if (info->target_machine_form_id == MINIC_X86_MACHINE_ASM_KASLR_MUL && (minic_x86_64_linux_kaslr_mul_form(
+                info->template_text, info->template_length))) {
             const MinicCoreStructuredInlineAsmOperand *b = bindings;
             if (!info->is_volatile || info->is_goto ||
                 info->has_memory_clobber || info->register_clobber_count ||
@@ -6089,8 +6109,8 @@ bool minic_x86_64_emit_structured_asm(
         }
     }
     {
-        if (minic_x86_64_linux_gen_endbr_form(
-                info->template_text, info->template_length)) {
+        if (info->target_machine_form_id == MINIC_X86_MACHINE_ASM_GEN_ENDBR && (minic_x86_64_linux_gen_endbr_form(
+                info->template_text, info->template_length))) {
             const MinicCoreStructuredInlineAsmOperand *output = bindings;
             if (!info->is_volatile || info->is_goto ||
                 info->has_memory_clobber || info->register_clobber_count ||
@@ -6109,8 +6129,8 @@ bool minic_x86_64_emit_structured_asm(
         }
     }
     {
-        if (minic_x86_64_linux_preempt_gs_dec_form(
-                info->template_text, info->template_length)) {
+        if (info->target_machine_form_id == MINIC_X86_MACHINE_ASM_PREEMPT_GS_DEC && (minic_x86_64_linux_preempt_gs_dec_form(
+                info->template_text, info->template_length))) {
             const MinicCoreStructuredInlineAsmOperand *b = bindings;
             MinicCoreTypeId type_id;
             if (!info->is_volatile || info->is_goto ||
@@ -6135,8 +6155,8 @@ bool minic_x86_64_emit_structured_asm(
         }
     }
     {
-        const unsigned int gs_bit = minic_x86_64_linux_gs_testcc_form(
-            info->template_text, info->template_length);
+        const unsigned int gs_bit = (info->target_machine_form_id == MINIC_X86_MACHINE_ASM_GS_TESTCC ? minic_x86_64_linux_gs_testcc_form(
+            info->template_text, info->template_length) : 0U);
         if (gs_bit != 0U) {
             const MinicCoreStructuredInlineAsmOperand *b = bindings;
             MinicCoreTypeId flag_type;
@@ -6168,8 +6188,8 @@ bool minic_x86_64_emit_structured_asm(
         }
     }
     {
-        const unsigned int testcc = minic_x86_64_linux_testcc_form(
-            info->template_text, info->template_length);
+        const unsigned int testcc = (info->target_machine_form_id == MINIC_X86_MACHINE_ASM_TESTCC ? minic_x86_64_linux_testcc_form(
+            info->template_text, info->template_length) : 0U);
         if (testcc != 0U) {
             const MinicCoreStructuredInlineAsmOperand *b = bindings;
             MinicCoreTypeId result_type;
@@ -6198,63 +6218,63 @@ bool minic_x86_64_emit_structured_asm(
     }
     {
         unsigned int percpu_op=0U;size_t percpu_width=0U;
-        if (minic_x86_64_linux_percpu_form(info->template_text,
-              info->template_length,&percpu_op,&percpu_width))
+        if (info->target_machine_form_id == MINIC_X86_MACHINE_ASM_PERCPU_GS && (minic_x86_64_linux_percpu_form(info->template_text,
+              info->template_length,&percpu_op,&percpu_width)))
             return emit_linux_percpu_gs(out,module,target,fn,frame,ins,info);
     }
-    if(minic_x86_64_linux_prefetchw_alt_form(
-          info->template_text,info->template_length))
+    if(info->target_machine_form_id == MINIC_X86_MACHINE_ASM_PREFETCHW_ALT && (minic_x86_64_linux_prefetchw_alt_form(
+          info->template_text,info->template_length)))
         return emit_linux_prefetchw_alt(out,fn,frame,ins,info);
-    if(minic_x86_64_linux_apic_amd_alt_form(
-          info->template_text,info->template_length))
+    if(info->target_machine_form_id == MINIC_X86_MACHINE_ASM_APIC_AMD_ALT && (minic_x86_64_linux_apic_amd_alt_form(
+          info->template_text,info->template_length)))
         return emit_linux_apic_amd_alt(out,fn,frame,ins,info);
     { size_t gs_tied_width=0U;
-      if(minic_x86_64_gs_tied_alu_form(
-             info->template_text,info->template_length,&gs_tied_width))
+      if(info->target_machine_form_id == MINIC_X86_MACHINE_ASM_GS_TIED_ALU && (minic_x86_64_gs_tied_alu_form(
+             info->template_text,info->template_length,&gs_tied_width)))
           return emit_linux_gs_tied_alu(out,module,target,fn,frame,ins,info);
     }
-    if (minic_x86_64_add32_carry_template(
-            info->template_text,info->template_length))
+    if (info->target_machine_form_id == MINIC_X86_MACHINE_ASM_ADD32_CARRY && (minic_x86_64_add32_carry_template(
+            info->template_text,info->template_length)))
         return emit_add32_carry(out,module,target,fn,frame,ins,info);
-    if (minic_x86_64_linux_tcpudp_nofold_template(
-            info->template_text,info->template_length))
+    if (info->target_machine_form_id == MINIC_X86_MACHINE_ASM_TCPUDP_NOFOLD && (minic_x86_64_linux_tcpudp_nofold_template(
+            info->template_text,info->template_length)))
         return emit_linux_tcpudp_nofold(out,module,target,fn,frame,ins,info);
-    if (minic_x86_64_ip_fast_csum_template(
-            info->template_text,info->template_length))
+    if (info->target_machine_form_id == MINIC_X86_MACHINE_ASM_IP_FAST_CSUM && (minic_x86_64_ip_fast_csum_template(
+            info->template_text,info->template_length)))
         return emit_ip_fast_csum(out,module,target,fn,frame,ins,info);
-    if (minic_x86_64_checksum_fold_template(
-            info->template_text,info->template_length))
+    if (info->target_machine_form_id == MINIC_X86_MACHINE_ASM_CHECKSUM && (minic_x86_64_checksum_fold_template(
+            info->template_text,info->template_length)))
         return emit_checksum_fold(out,module,target,fn,frame,ins,info);
-    if (minic_x86_64_linux_vmware_hypercall_form(
-            info->template_text, info->template_length))
+    if (info->target_machine_form_id == MINIC_X86_MACHINE_ASM_VMWARE_HYPERCALL && (minic_x86_64_linux_vmware_hypercall_form(
+            info->template_text, info->template_length)))
         return emit_linux_vmware_hypercall(out, module, target,
                                           fn, frame, ins, info);
-    if (minic_x86_64_linux_vmware_stealclock_alt_form(
-            info->template_text, info->template_length))
+    if (info->target_machine_form_id == MINIC_X86_MACHINE_ASM_VMWARE_STEALCLOCK_ALT && (minic_x86_64_linux_vmware_stealclock_alt_form(
+            info->template_text, info->template_length)))
         return emit_linux_vmware_stealclock_alt(out, module, target,
                                                fn, frame, ins, info);
-    if (minic_x86_64_linux_legacy_fnsave_form(
-            info->template_text, info->template_length))
+    if (info->target_machine_form_id == MINIC_X86_MACHINE_ASM_LEGACY_FNSAVE && (minic_x86_64_linux_legacy_fnsave_form(
+            info->template_text, info->template_length)))
         return emit_linux_legacy_fnsave(out, module, target,
                                        fn, frame, ins, info);
-    if (minic_x86_64_linux_kexec_load_segments_form(
-            info->template_text, info->template_length))
+    if (info->target_machine_form_id == MINIC_X86_MACHINE_ASM_KEXEC_LOAD_SEGMENTS && (minic_x86_64_linux_kexec_load_segments_form(
+            info->template_text, info->template_length)))
         return emit_linux_kexec_load_segments(out, fn, frame, ins, info);
-    if (minic_x86_64_linux_efi_kernel_transfer_form(
-            info->template_text, info->template_length))
+    if (info->target_machine_form_id == MINIC_X86_MACHINE_ASM_EFI_KERNEL_TRANSFER && (minic_x86_64_linux_efi_kernel_transfer_form(
+            info->template_text, info->template_length)))
         return emit_linux_efi_kernel_transfer(out, fn, frame, ins, info);
-    if (minic_x86_64_linux_msr_form(
-            info->template_text,info->template_length))
+    if (info->target_machine_form_id == MINIC_X86_MACHINE_ASM_MSR && (minic_x86_64_linux_msr_form(
+            info->template_text,info->template_length)))
         return emit_linux_msr(out,module,target,fn,frame,ins,info);
-    if (minic_x86_64_hweight_alternative_form(
-            info->template_text,info->template_length))
+    if (info->target_machine_form_id == MINIC_X86_MACHINE_ASM_HWEIGHT && (minic_x86_64_hweight_alternative_form(
+            info->template_text,info->template_length)))
         return emit_hweight_alternative(out,module,target,fn,frame,ins,info);
-    if (minic_x86_64_linux_counter_form(
-            info->template_text,info->template_length))
+    if (info->target_machine_form_id == MINIC_X86_MACHINE_ASM_COUNTER && (minic_x86_64_linux_counter_form(
+            info->template_text,info->template_length)))
         return emit_x86_counter(out,module,target,fn,frame,ins,info);
     {
-        const MinicX86GsAtomicPlan atomic = minic_x86_64_gs_atomic_plan(
-            info->template_text, info->template_length);
+        const MinicX86GsAtomicPlan atomic = (info->target_machine_form_id == MINIC_X86_MACHINE_ASM_GS_ATOMIC ? minic_x86_64_gs_atomic_plan(
+            info->template_text, info->template_length) : (MinicX86GsAtomicPlan){MINIC_X86_GS_ATOMIC_NONE, 0U});
         switch (atomic.kind) {
         case MINIC_X86_GS_ATOMIC_XADD_SMP:
         case MINIC_X86_GS_ATOMIC_XADD_LOCAL:
@@ -6269,19 +6289,23 @@ bool minic_x86_64_emit_structured_asm(
             break;
         }
     }
-    if (minic_x86_64_linux_rep_stos_width(
-            info->template_text, info->template_length))
+    if (info->target_machine_form_id == MINIC_X86_MACHINE_ASM_REP_STOS && (minic_x86_64_linux_rep_stos_width(
+            info->template_text, info->template_length)))
         return emit_linux_rep_stos(out, module, target, fn, frame, ins, info);
-    if (minic_x86_64_linux_lock_bitcc_form(
-            info->template_text, info->template_length))
+    if (info->target_machine_form_id == MINIC_X86_MACHINE_ASM_LOCK_BITCC && (minic_x86_64_linux_lock_bitcc_form(
+            info->template_text, info->template_length)))
         return emit_linux_lock_bitcc(
             out, module, target, fn, frame, ins, info);
-    if (minic_x86_64_linux_csum_partial_form(
-            info->template_text, info->template_length))
+    if (info->target_machine_form_id == MINIC_X86_MACHINE_ASM_CSUM_PARTIAL && (minic_x86_64_linux_csum_partial_form(
+            info->template_text, info->template_length)))
         return emit_linux_csum_partial(out, module, target, fn, frame, ins, info);
-    if (minic_x86_64_linux_cmpxchg128_form(
-            info->template_text, info->template_length))
+    if (info->target_machine_form_id == MINIC_X86_MACHINE_ASM_CMPXCHG128 && (minic_x86_64_linux_cmpxchg128_form(
+            info->template_text, info->template_length)))
         return emit_linux_cmpxchg128(out,module,target,fn,frame,ins,info);
+    /* All source-qualified nonzero forms must emit through their specific
+     * machine family. Missing cases fail closed; only form ID zero remains
+     * eligible for the deliberate generic Core/target-qualified fallback. */
+    if (info->target_machine_form_id != MINIC_X86_MACHINE_ASM_NONE) return false;
     /* Preserve the pre-existing memory-clobber family (including its
      * valid two-operand dec_mod shape). Only DISJOINT no-clobber,
      * register-output two-operand templates enter the BSF/BSR selector.

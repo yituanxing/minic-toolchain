@@ -2348,6 +2348,24 @@ check-typed-asm-core-poison: $(LOONG_TYPED_DESCRIPTOR_TEST_OBJECTS)
 
 check-fast: check-typed-asm-core-poison
 
+# All target-qualified GNU ASM forms must be sealed into a machine-owned
+# FormId before Core dispatch; generic structured Core ASM deliberately
+# remains ID 0. Test Source admission, direct machine poison, and GNU output.
+P45_MACHINE_FORM_TEST_BINARY := $(BUILD_DIR)/tests/target/p45-machine-form-boundary
+
+.PHONY: check-p45-machine-form-boundary
+check-p45-machine-form-boundary: $(LOONG_TYPED_DESCRIPTOR_TEST_OBJECTS) $(MINIC_CC_BINARY)
+	@mkdir -p "$(BUILD_DIR)/tests/target"
+	$(CC) $(CPPFLAGS) $(MINIC_INCLUDES) $(MINIC_CFLAGS) \
+	  tests/target/p45_machine_form_boundary_test.c \
+	  $(LOONG_TYPED_DESCRIPTOR_TEST_OBJECTS) $(MINIC_LDFLAGS) \
+	  -o "$(P45_MACHINE_FORM_TEST_BINARY)"
+	"$(abspath $(P45_MACHINE_FORM_TEST_BINARY))"
+	bash tests/compiler/c0/probe-p45-machine-form-trace.sh \
+	  "$(abspath $(MINIC_CC_BINARY))"
+
+check-fast: check-p45-machine-form-boundary
+
 # Source -> Core -> normalized-machine ASM proof is a single admission
 # contract. Check whole instruction families, including hostile rewrites,
 # without requiring cross GNU/QEMU tools or granting opaque source IDs power.

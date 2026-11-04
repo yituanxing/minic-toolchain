@@ -11,6 +11,8 @@
 bool minic_x86_64_typed_machine_form_matches_template(
     uint32_t form_id, uint32_t variant, const char *text, size_t length) {
     unsigned int form = 0U;
+    unsigned int percpu_operation = 0U;
+    size_t percpu_width = 0U;
     if (!text) return false;
     switch ((MinicX86MachineAsmForm)form_id) {
     case MINIC_X86_MACHINE_ASM_ZSTD_CPUID:
@@ -140,9 +142,223 @@ bool minic_x86_64_typed_machine_form_matches_template(
     case MINIC_X86_MACHINE_ASM_X87_PROBE:
         return variant == 0U &&
             minic_x86_64_linux_x87_probe_form(text, length);
+    case MINIC_X86_MACHINE_ASM_CRASH_REGISTER:
+        form = (unsigned int)((minic_x86_64_linux_crash_gpr_snapshot_form(text, length) || minic_x86_64_linux_crash_misc_snapshot_form(text, length)) ? 1U : 0U);
+        break;
+    case MINIC_X86_MACHINE_ASM_VMWARE_HYPERCALL:
+        form = (unsigned int)minic_x86_64_linux_vmware_hypercall_form(text, length);
+        break;
+    case MINIC_X86_MACHINE_ASM_VMWARE_STEALCLOCK_ALT:
+        form = (unsigned int)minic_x86_64_linux_vmware_stealclock_alt_form(text, length);
+        break;
+    case MINIC_X86_MACHINE_ASM_KVM_HYPERCALL_ALT:
+        form = (unsigned int)((minic_x86_64_linux_kvm_hypercall_alt_form(text, length) || minic_x86_64_linux_kvm_hypercall_direct_form(text, length)) ? 1U : 0U);
+        break;
+    case MINIC_X86_MACHINE_ASM_EXCEPTION_STACK_CALL:
+        form = (unsigned int)minic_x86_64_linux_exception_stack_call_form(text, length);
+        break;
+    case MINIC_X86_MACHINE_ASM_LEGACY_FNSAVE:
+        form = (unsigned int)minic_x86_64_linux_legacy_fnsave_form(text, length);
+        break;
+    case MINIC_X86_MACHINE_ASM_KEXEC_LOAD_SEGMENTS:
+        form = (unsigned int)minic_x86_64_linux_kexec_load_segments_form(text, length);
+        break;
+    case MINIC_X86_MACHINE_ASM_EFI_KERNEL_TRANSFER:
+        form = (unsigned int)minic_x86_64_linux_efi_kernel_transfer_form(text, length);
+        break;
+    case MINIC_X86_MACHINE_ASM_PCI_MMCONFIG:
+        form = (unsigned int)(minic_x86_64_linux_pci_mmconfig_form(text, length, false) ? minic_x86_64_linux_pci_mmconfig_form(text, length, false) : minic_x86_64_linux_pci_mmconfig_form(text, length, true));
+        break;
+    case MINIC_X86_MACHINE_ASM_CMPXCHG128:
+        form = (unsigned int)minic_x86_64_linux_cmpxchg128_form(text, length);
+        break;
+    case MINIC_X86_MACHINE_ASM_TASK_SIZE_ALT:
+        form = (unsigned int)minic_x86_64_linux_task_size_alt_form(text, length);
+        break;
+    case MINIC_X86_MACHINE_ASM_IRQ_STACK_CALL:
+        form = (unsigned int)minic_x86_64_linux_irq_stack_call_form(text, length);
+        break;
+    case MINIC_X86_MACHINE_ASM_PREEMPT_GS_DEC:
+        form = (unsigned int)minic_x86_64_linux_preempt_gs_dec_form(text, length);
+        break;
+    case MINIC_X86_MACHINE_ASM_GEN_ENDBR:
+        form = (unsigned int)minic_x86_64_linux_gen_endbr_form(text, length);
+        break;
+    case MINIC_X86_MACHINE_ASM_KASLR_MUL:
+        form = (unsigned int)minic_x86_64_linux_kaslr_mul_form(text, length);
+        break;
+    case MINIC_X86_MACHINE_ASM_MULDIV_U64:
+        form = (unsigned int)minic_x86_64_linux_muldiv_u64_form(text, length);
+        break;
+    case MINIC_X86_MACHINE_ASM_VIA_XSTORE:
+        form = (unsigned int)minic_x86_64_linux_via_xstore_form(text, length);
+        break;
+    case MINIC_X86_MACHINE_ASM_CRASH_SEGMENT_SNAPSHOT:
+        form = (unsigned int)minic_x86_64_linux_crash_segment_snapshot_form(text, length);
+        break;
+    case MINIC_X86_MACHINE_ASM_TASK_CONTROL:
+        form = (unsigned int)minic_x86_64_linux_task_control_form(text, length);
+        break;
+    case MINIC_X86_MACHINE_ASM_IRET_TO_SELF:
+        form = (unsigned int)minic_x86_64_linux_iret_to_self_form(text, length);
+        break;
+    case MINIC_X86_MACHINE_ASM_INT3_SELFTEST:
+        form = (unsigned int)minic_x86_64_linux_int3_selftest_form(text, length);
+        break;
+    case MINIC_X86_MACHINE_ASM_PV_INDIRECT_CALL:
+        form = (unsigned int)minic_x86_64_linux_pv_indirect_call_form(text, length);
+        break;
+    case MINIC_X86_MACHINE_ASM_ALT_RELOC_SELFTEST:
+        form = (unsigned int)minic_x86_64_linux_alt_reloc_selftest_form(text, length);
+        break;
+    case MINIC_X86_MACHINE_ASM_REAL_MODE_FAR_JUMP:
+        form = (unsigned int)minic_x86_64_linux_real_mode_far_jump_form(text, length);
+        break;
+    case MINIC_X86_MACHINE_ASM_REP_STRING_IO:
+        form = (unsigned int)minic_x86_64_linux_rep_string_io_form(text, length);
+        break;
+    case MINIC_X86_MACHINE_ASM_IOMEM_COPY:
+        form = (unsigned int)minic_x86_64_linux_iomem_copy_form(text, length);
+        break;
+    case MINIC_X86_MACHINE_ASM_FLUSHCACHE_COPY:
+        form = (unsigned int)minic_x86_64_linux_flushcache_copy_form(text, length);
+        break;
+    case MINIC_X86_MACHINE_ASM_SEGMENT_LOAD_EXTABLE:
+        form = (unsigned int)minic_x86_64_linux_segment_load_extable_form(text, length);
+        break;
+    case MINIC_X86_MACHINE_ASM_LKGS_EXTABLE:
+        form = (unsigned int)minic_x86_64_linux_lkgs_extable_form(text, length);
+        break;
+    case MINIC_X86_MACHINE_ASM_LOAD_UNALIGNED_ZEROPAD:
+        form = (unsigned int)minic_x86_64_linux_load_unaligned_zeropad_form(text, length);
+        break;
+    case MINIC_X86_MACHINE_ASM_KERNEL_NOFAULT_GOTO:
+        form = (unsigned int)minic_x86_64_linux_kernel_nofault_goto_form(text, length);
+        break;
+    case MINIC_X86_MACHINE_ASM_REP_MOVSB_ALTERNATIVE:
+        form = (unsigned int)minic_x86_64_linux_rep_movsb_alternative_form(text, length);
+        break;
+    case MINIC_X86_MACHINE_ASM_REP_STOSB_ALTERNATIVE:
+        form = (unsigned int)minic_x86_64_linux_rep_stosb_alternative_form(text, length);
+        break;
+    case MINIC_X86_MACHINE_ASM_FPU_USER_FRAME:
+        form = (unsigned int)minic_x86_64_linux_fpu_user_frame_form(text, length);
+        break;
+    case MINIC_X86_MACHINE_ASM_FPU_KERNEL_RESTORE:
+        form = (unsigned int)minic_x86_64_linux_fpu_kernel_restore_form(text, length);
+        break;
+    case MINIC_X86_MACHINE_ASM_FXRSTOR_SAFE:
+        form = (unsigned int)minic_x86_64_linux_fxrstor_safe_form(text, length);
+        break;
+    case MINIC_X86_MACHINE_ASM_XSTATE_FAULT:
+        form = (unsigned int)minic_x86_64_linux_xstate_fault_form(text, length);
+        break;
+    case MINIC_X86_MACHINE_ASM_XRSTOR_ALTERNATIVE:
+        form = (unsigned int)minic_x86_64_linux_xrstor_alternative_form(text, length);
+        break;
+    case MINIC_X86_MACHINE_ASM_XSAVE_TRIPLE_ALTERNATIVE:
+        form = (unsigned int)minic_x86_64_linux_xsave_triple_alternative_form(text, length);
+        break;
+    case MINIC_X86_MACHINE_ASM_SMAP_ALTERNATIVE:
+        form = (unsigned int)minic_x86_64_linux_smap_alternative_form(text, length);
+        break;
+    case MINIC_X86_MACHINE_ASM_SEGMENT_REGISTER_EXTABLE:
+        form = (unsigned int)minic_x86_64_linux_segment_register_extable_form(text, length);
+        break;
+    case MINIC_X86_MACHINE_ASM_PUT_USER_CALL:
+        form = (unsigned int)minic_x86_64_linux_put_user_call_form(text, length);
+        break;
+    case MINIC_X86_MACHINE_ASM_GET_USER_CALL:
+        form = (unsigned int)minic_x86_64_linux_get_user_call_form(text, length);
+        break;
+    case MINIC_X86_MACHINE_ASM_IDLE_CLFLUSH_ALT:
+        form = (unsigned int)minic_x86_64_linux_idle_clflush_alt_form(text, length, true);
+        break;
+    case MINIC_X86_MACHINE_ASM_PAT_CLFLUSHOPT:
+        form = (unsigned int)minic_x86_64_linux_pat_clflushopt_form(text, length);
+        break;
+    case MINIC_X86_MACHINE_ASM_FUTEX_EXTABLE:
+        form = (unsigned int)minic_x86_64_linux_futex_extable_form(text, length);
+        break;
+    case MINIC_X86_MACHINE_ASM_DEBUG_REGISTER:
+        form = (unsigned int)minic_x86_64_linux_debug_register_form(text, length);
+        break;
+    case MINIC_X86_MACHINE_ASM_ALTERNATIVE_WRMSR:
+        form = (unsigned int)minic_x86_64_linux_alternative_wrmsr_form(text, length);
+        break;
+    case MINIC_X86_MACHINE_ASM_CONTROL_REGISTER:
+        form = (unsigned int)minic_x86_64_linux_control_register_form(text, length);
+        break;
+    case MINIC_X86_MACHINE_ASM_THREE_CALL_ALTERNATIVE:
+        form = (unsigned int)minic_x86_64_linux_three_call_alternative_form(text, length);
+        break;
+    case MINIC_X86_MACHINE_ASM_BOOT_SEGMENTS:
+        form = (unsigned int)minic_x86_64_linux_boot_segments_template(text, length);
+        break;
+    case MINIC_X86_MACHINE_ASM_LIDT:
+        form = (unsigned int)minic_x86_64_linux_descriptor_table_form(text, length);
+        break;
+    case MINIC_X86_MACHINE_ASM_GS_TESTCC:
+        form = (unsigned int)minic_x86_64_linux_gs_testcc_form(text, length);
+        break;
+    case MINIC_X86_MACHINE_ASM_TESTCC:
+        form = (unsigned int)minic_x86_64_linux_testcc_form(text, length);
+        break;
+    case MINIC_X86_MACHINE_ASM_PREFETCHW_ALT:
+        form = (unsigned int)minic_x86_64_linux_prefetchw_alt_form(text, length);
+        break;
+    case MINIC_X86_MACHINE_ASM_APIC_AMD_ALT:
+        form = (unsigned int)minic_x86_64_linux_apic_amd_alt_form(text, length);
+        break;
+    case MINIC_X86_MACHINE_ASM_GS_TIED_ALU:
+        form = (unsigned int)minic_x86_64_gs_tied_alu_form(text, length, &percpu_width);
+        break;
+    case MINIC_X86_MACHINE_ASM_ADD32_CARRY:
+        form = (unsigned int)minic_x86_64_add32_carry_template(text, length);
+        break;
+    case MINIC_X86_MACHINE_ASM_TCPUDP_NOFOLD:
+        form = (unsigned int)minic_x86_64_linux_tcpudp_nofold_template(text, length);
+        break;
+    case MINIC_X86_MACHINE_ASM_PERCPU_GS:
+        form = (unsigned int)minic_x86_64_linux_percpu_form(text, length, &percpu_operation, &percpu_width);
+        break;
+    case MINIC_X86_MACHINE_ASM_IP_FAST_CSUM:
+        form = (unsigned int)minic_x86_64_ip_fast_csum_template(text, length);
+        break;
+    case MINIC_X86_MACHINE_ASM_CHECKSUM:
+        form = (unsigned int)minic_x86_64_checksum_fold_template(text, length);
+        break;
+    case MINIC_X86_MACHINE_ASM_MSR:
+        form = (unsigned int)minic_x86_64_linux_msr_form(text, length);
+        break;
+    case MINIC_X86_MACHINE_ASM_HWEIGHT:
+        form = (unsigned int)minic_x86_64_hweight_alternative_form(text, length);
+        break;
+    case MINIC_X86_MACHINE_ASM_COUNTER:
+        form = (unsigned int)minic_x86_64_linux_counter_form(text, length);
+        break;
+    case MINIC_X86_MACHINE_ASM_GS_ATOMIC:
+        form = (unsigned int)(minic_x86_64_gs_atomic_plan(text, length).kind != MINIC_X86_GS_ATOMIC_NONE);
+        break;
+    case MINIC_X86_MACHINE_ASM_REP_STOS:
+        form = (unsigned int)minic_x86_64_linux_rep_stos_width(text, length);
+        break;
+    case MINIC_X86_MACHINE_ASM_LOCK_BITCC:
+        form = (unsigned int)minic_x86_64_linux_lock_bitcc_form(text, length);
+        break;
+    case MINIC_X86_MACHINE_ASM_CSUM_PARTIAL:
+        form = (unsigned int)minic_x86_64_linux_csum_partial_form(text, length);
+        break;
     default:
         return false;
     }
+    /* All 69 newly tagged source families historically publish variant zero.
+     * Their native machine parser independently selects the exact opcode,
+     * width and relocation shape. Reject forged nonzero variants instead of
+     * treating a synthetic Core form as a source-qualified instruction. */
+    if (form_id >= MINIC_X86_MACHINE_ASM_CRASH_REGISTER &&
+        form_id <= MINIC_X86_MACHINE_ASM_CSUM_PARTIAL)
+        return form != 0U && variant == 0U;
     return form != 0U && variant == form;
 }
 

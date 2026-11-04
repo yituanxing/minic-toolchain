@@ -53,12 +53,15 @@ bool core_asm_publish_operand_plan(MinicCoreInstruction *instruction,
         (void)fprintf(stderr,
             "CORE_ASM_OPERAND_PLAN owner=%d source_form=%016" PRIx64
             " outputs=%zu operands=%zu gnu_early=%zu tied=%zu "
-            "explicit_memory=%d implicit_memory=%d effective_memory=%d\n",
+            "explicit_memory=%d implicit_memory=%d effective_memory=%d "
+            "machine_form=%u machine_variant=%u\n",
             (int)plan->owner, plan->source_form_id, plan->output_count,
             plan->operand_count, early, tied,
             plan->explicit_memory_clobber ? 1 : 0,
             plan->implicit_memory_effect ? 1 : 0,
-            plan->effective_memory_effect ? 1 : 0);
+            plan->effective_memory_effect ? 1 : 0,
+            plan->target_machine_form_id,
+            plan->target_machine_form_variant);
     }
     return true;
 }

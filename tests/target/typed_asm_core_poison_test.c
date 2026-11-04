@@ -3,6 +3,7 @@
  * positive emissions and reject malformed sealed Core identities. */
 #include "core/core_ir.h"
 #include "target/aarch64/asm_contract.h"
+#include "target/aarch64/asm_contract_internal.h"
 #include "target/x86_64/machine_internal.h"
 
 #ifdef NDEBUG
@@ -106,7 +107,16 @@ static void machine_core_poison(PoisonMachine machine) {
     inline_asm.template_text = (char *)template_text;
     inline_asm.template_length = strlen(template_text);
     inline_asm.is_volatile = true;
-    inline_asm.target_machine_form_id = 0U;
+    /* P45 closes the source-qualified-machine handshake. The AArch64 MRS
+     * hardware instruction must carry its exact target-owned machine ID,
+     * while x86's longstanding MOV memory-output probe exercises the
+     * deliberately independent, legal generic-structured ID0 path. */
+    inline_asm.operand_plan_owner = machine == POISON_AARCH64
+        ? MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED
+        : MINIC_ASM_OPERAND_PLAN_GENERIC_STRUCTURED;
+    inline_asm.target_machine_form_id = machine == POISON_AARCH64
+        ? AARCH64_MACHINE_ASM_MRS : 0U;
+    inline_asm.target_machine_form_variant = 0U;
     instruction.kind = MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM;
     instruction.core_type_id = void_id;
     instruction.result = MINIC_CORE_VALUE_INVALID;
@@ -132,6 +142,16 @@ static void machine_core_poison(PoisonMachine machine) {
         assert(0 && "sealed Core identities must govern machine emission");
     }
     assert(strcmp(normal, poisoned) == 0);
+
+    /* An unowned Core record is not a source qualification, even when its
+     * template happens to spell a supported architectural instruction. */
+    inline_asm.operand_plan_owner = MINIC_ASM_OPERAND_PLAN_NONE;
+    assert(!emit_one(machine, &function, &instruction, rejected,
+                     sizeof(rejected)));
+    assert(rejected[0] == '\0');
+    inline_asm.operand_plan_owner = machine == POISON_AARCH64
+        ? MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED
+        : MINIC_ASM_OPERAND_PLAN_GENERIC_STRUCTURED;
 
     /* A wrong Core pointee or a nonpointer carrier may not emit even one
      * instruction; an absent type arena is never a C fallback invitation. */
@@ -159,6 +179,6 @@ static void machine_core_poison(PoisonMachine machine) {
 int main(void) {
     machine_core_poison(POISON_AARCH64);
     machine_core_poison(POISON_X86_64);
-    puts("TYPED_ASM_CORE_POISON=PASS targets=2 positive=2 sealed_core_stable=2 wrong_core=4 null_context=2 invalid_ssa=2 partial_asm=0");
+    puts("TYPED_ASM_CORE_POISON=PASS targets=2 positive=2 sealed_core_stable=2 wrong_owner=2 wrong_core=4 null_context=2 invalid_ssa=2 partial_asm=0");
     return 0;
 }

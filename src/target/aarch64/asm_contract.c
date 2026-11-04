@@ -4564,6 +4564,137 @@ static bool aarch64_linux_crash_regs_emit(
            fputs("  str x10, [x0]\n", out) != EOF;
 }
 
+/* This inventory is the one machine-owned name for every AArch64 GNU
+ * structured form admitted by its source backend. Source checks C types,
+ * constraints, and effects; machine checks this ISA identity again against
+ * the normalized Core template. Neither half may infer an instruction from
+ * the diagnostic source hash or a GNU constraint string. */
+bool aarch64_machine_asm_identify(const char *text, size_t length,
+                                  bool normalized, uint32_t *id,
+                                  uint32_t *variant) {
+    Aarch64LseForm lse;
+    Aarch64AtomicForm atomic;
+    Aarch64PerCpuForm percpu;
+    Aarch64XchgForm xchg;
+    Aarch64UaccessForm uaccess;
+    Aarch64LinuxVheSysregAlternative vhe;
+    const Aarch64RawIoRead *read;
+    const Aarch64RawIoStore *store;
+    unsigned int mode;
+    size_t width;
+    if (!text || !length || !id || !variant) return false;
+    *id = 0U;
+    *variant = 0U;
+#define A64_MACHINE_FORM(predicate, form, detail) do { \
+    if (predicate) { \
+        *id = AARCH64_MACHINE_ASM_##form; \
+        *variant = (uint32_t)(detail); \
+        return true; \
+    } \
+} while (0)
+    /* Preserve the prior machine dispatch priority where pattern families
+     * might overlap; do not let a broader opcode family shadow an exact
+     * Linux alternative or memory model. */
+    A64_MACHINE_FORM(aarch64_linux_kvm_va_mask_form(text,length), KVM_VA_MASK, 0U);
+    A64_MACHINE_FORM(aarch64_linux_pstate_alternative(text,length).cap,
+                     PSTATE_ALTERNATIVE, 0U);
+    A64_MACHINE_FORM((mode = aarch64_linux_hyp_spin_form(text,length)) != 0U,
+                     HYP_SPIN, mode);
+    A64_MACHINE_FORM(length == sizeof("rbit %w0, %w1") - 1U &&
+                     memcmp(text,"rbit %w0, %w1",length) == 0,
+                     BIT_REVERSE, 0U);
+    A64_MACHINE_FORM(aarch64_lse_form(text,length,normalized,&lse), LSE,
+                     ((unsigned int)lse.kind << 16) | ((unsigned int)lse.width << 8) | lse.mode);
+    A64_MACHINE_FORM((mode = aarch64_linux_lse_casp128_form(text,length)) != 0U,
+                     LSE_CASP128, mode);
+    A64_MACHINE_FORM(aarch64_linux_lse_dec_positive_form(text,length),
+                     LSE_DEC_POSITIVE, 0U);
+    A64_MACHINE_FORM(aarch64_linux_kvm_at_fixup_template(text,length), KVM_AT_FIXUP, 0U);
+    A64_MACHINE_FORM(aarch64_linux_vhe_sysreg_alternative_form(text,length,&vhe),
+                     VHE_SYSREG_ALTERNATIVE, 0U);
+    A64_MACHINE_FORM(aarch64_linux_at_s1e1r_template(text,length), AT_S1E1R, 0U);
+    A64_MACHINE_FORM(aarch64_linux_barrier_alternative(text,length) != NULL,
+                     BARRIER_ALTERNATIVE, 0U);
+    A64_MACHINE_FORM(aarch64_linux_percpu_write_alternative_template(text,length),
+                     PERCPU_WRITE_ALTERNATIVE, 0U);
+    A64_MACHINE_FORM(aarch64_linux_qcom_return_stack_form(text,length),
+                     QCOM_RETURN_STACK, 0U);
+    A64_MACHINE_FORM((mode = aarch64_linux_rng_sysreg_form(text,length)) != 0U,
+                     RNG_SYSREG, mode);
+    A64_MACHINE_FORM(aarch64_linux_counter_ordering_form(text,length),
+                     COUNTER_ORDERING, 0U);
+    A64_MACHINE_FORM((mode = aarch64_linux_timer_alternative_form(text,length)) != 0U,
+                     TIMER_ALTERNATIVE, mode);
+    A64_MACHINE_FORM(aarch64_linux_xpaclri_form(text,length), XPACLRI, 0U);
+    A64_MACHINE_FORM((mode = aarch64_linux_smccc_form(text,length)) != 0U,
+                     SMCCC, mode);
+    A64_MACHINE_FORM(aarch64_linux_svc_form(text,length), SVC, 0U);
+    A64_MACHINE_FORM(aarch64_linux_atomic_dec_positive_form(text,length),
+                     ATOMIC_DEC_POSITIVE, 0U);
+    A64_MACHINE_FORM((mode = aarch64_linux_cmpxchg128_form(text,length)) != 0U,
+                     CMPXCHG128, mode);
+    A64_MACHINE_FORM((mode = aarch64_linux_futex_form(text,length)) != 0U,
+                     FUTEX, mode);
+    A64_MACHINE_FORM((mode = aarch64_linux_disabled_hw_pan_form(text,length)) != 0U,
+                     DISABLED_HW_PAN, mode);
+    A64_MACHINE_FORM((mode = aarch64_linux_wfxt_form(text,length)) != 0U,
+                     WFXT, mode);
+    A64_MACHINE_FORM(aarch64_linux_uaccess_form(text,length,&uaccess), UACCESS,
+                     ((unsigned int)uaccess.is_load << 16) |
+                     ((unsigned int)uaccess.width << 8) | uaccess.exception_type);
+    A64_MACHINE_FORM(aarch64_linux_zeropad_form(text,length), ZEROPAD, 0U);
+    A64_MACHINE_FORM(aarch64_linux_user_cache_fault_form(text,length) != NULL,
+                     USER_CACHE_FAULT, 0U);
+    A64_MACHINE_FORM(aarch64_linux_cache_op_form(text,length) != NULL,
+                     CACHE_OP, 0U);
+    A64_MACHINE_FORM((mode = aarch64_linux_encoded_sysreg_write_form(text,length)) != 0U,
+                     ENCODED_SYSREG_WRITE, mode);
+    A64_MACHINE_FORM((mode = aarch64_linux_tlbi_form(text,length)) != 0U,
+                     TLBI, mode);
+    A64_MACHINE_FORM((mode = aarch64_linux_cmpwait_form(text,length)) != 0U,
+                     CMPWAIT, mode);
+    A64_MACHINE_FORM(aarch64_barrier_template(text,length) != NULL,
+                     BARRIER, 0U);
+    A64_MACHINE_FORM((mode = aarch64_linux_encoded_sysreg_form(text,length)) != 0U,
+                     ENCODED_SYSREG_READ, mode);
+    A64_MACHINE_FORM(aarch64_linux_prefetch_template(text,length) != NULL,
+                     PREFETCH, 0U);
+    A64_MACHINE_FORM(aarch64_linux_msr_register(text,length) != NULL, MSR, 0U);
+    A64_MACHINE_FORM(aarch64_linux_brk_template(text,length), BRK, 0U);
+    A64_MACHINE_FORM(aarch64_linux_mrs_register(text,length) != NULL, MRS, 0U);
+    A64_MACHINE_FORM(aarch64_linux_io_dependency_form(text,length),
+                     IO_DEPENDENCY, 0U);
+    A64_MACHINE_FORM(aarch64_linux_percpu_alternative_template(text,length),
+                     PERCPU_ALTERNATIVE, 0U);
+    read = aarch64_raw_io_read(text,length);
+    A64_MACHINE_FORM(read != NULL, RAW_IO_READ, read ? read->width : 0U);
+    store = aarch64_raw_io_store(text,length);
+    A64_MACHINE_FORM(store != NULL, RAW_IO_STORE, store ? store->width : 0U);
+    width = aarch64_load_acquire_width(text,length);
+    A64_MACHINE_FORM(width != 0U, LDAR, width);
+    width = aarch64_stlr_width(text,length);
+    A64_MACHINE_FORM(width != 0U, STLR, width);
+    A64_MACHINE_FORM(aarch64_linux_percpu_rmw_form(text,length,&percpu),
+                     PERCPU_RMW,
+                     ((unsigned int)percpu.width << 8) | (unsigned int)percpu.returns_new);
+    A64_MACHINE_FORM(aarch64_atomic_return_form(text,length,&atomic),
+                     ATOMIC_RETURN,
+                     ((unsigned int)atomic.width << 8) | atomic.mode);
+    A64_MACHINE_FORM(aarch64_linux_xchg_form(text,length,&xchg), XCHG,
+                     ((unsigned int)xchg.width << 8) | xchg.mode);
+    A64_MACHINE_FORM((mode = aarch64_linux_cmpxchg_form(text,length,normalized)) != 0U,
+                     CMPXCHG, mode);
+    A64_MACHINE_FORM(aarch64_atomic_form(text,length,false,&atomic), ATOMIC_RMW,
+                     ((unsigned int)atomic.width << 8) | atomic.mode);
+    A64_MACHINE_FORM(aarch64_atomic_form(text,length,true,&atomic), ATOMIC_FETCH,
+                     ((unsigned int)atomic.width << 8) | atomic.mode);
+    A64_MACHINE_FORM(aarch64_linux_uaccess_bic_template(text,length),
+                     UACCESS_BIC, 0U);
+    A64_MACHINE_FORM(mask_template(text,length), MASK, 0U);
+#undef A64_MACHINE_FORM
+    return false;
+}
+
 bool minic_aarch64_emit_qualified_structured_asm(
     FILE *out, const MinicDirectLP64BlockContext *ctx,
     const MinicCoreInstruction *ins) {
@@ -4580,35 +4711,37 @@ bool minic_aarch64_emit_qualified_structured_asm(
     if (ins->value.structured_inline_asm.inline_asm_id >= fn->inline_asm_count)
         return false;
     info = &fn->inline_asms[ins->value.structured_inline_asm.inline_asm_id];
-    /* A sealed form must agree with its normalized machine syntax. No
-     * fallback to an unsealed template or source hash is permitted. */
-    switch (info->target_machine_form_id) {
-    case 0U: break;
-    case AARCH64_MACHINE_ASM_LDAR:
-        if (info->target_machine_form_variant !=
-            aarch64_load_acquire_width(info->template_text, info->template_length))
+    /* Source-qualified forms have immutable ISA identity. A genuine
+     * generic-Core zero-op/opaque template can still arrive with ID 0;
+     * it is handled by the old precisely guarded machine fallback below. */
+    if (info->target_machine_form_id != 0U) {
+        uint32_t machine_id, machine_variant;
+        if (info->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
+            !aarch64_machine_asm_identify(
+                info->template_text, info->template_length, true,
+                &machine_id, &machine_variant) ||
+            info->target_machine_form_id != machine_id ||
+            info->target_machine_form_variant != machine_variant)
             return false;
-        break;
-    case AARCH64_MACHINE_ASM_STLR:
-        if (info->target_machine_form_variant !=
-            aarch64_stlr_width(info->template_text, info->template_length))
+    } else {
+        uint32_t recognized_id, recognized_variant;
+        /* ID 0 is a genuine generic-Core route, not an escape hatch around
+         * C's stricter GNU constraint and type checks. In particular it
+         * must never redispatch the 48 Linux forms sealed above through
+         * their legacy raw-template branches. The exact no-operand ISA
+         * barrier/hint table also has a valid generic Core owner and is
+         * independently checked below; keep that narrow exception.
+         * The existing generic crash-register save is NOT a source-qualified
+         * member of this form inventory and retains its original path. */
+        if (info->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_GENERIC_STRUCTURED ||
+            info->target_machine_form_variant != 0U)
             return false;
-        break;
-    case AARCH64_MACHINE_ASM_RAW_IO_READ: {
-        const Aarch64RawIoRead *read = aarch64_raw_io_read(
-            info->template_text, info->template_length);
-        if (!read || info->target_machine_form_variant != read->width)
+        if (aarch64_machine_asm_identify(
+                info->template_text, info->template_length, true,
+                &recognized_id, &recognized_variant) &&
+            (recognized_id != AARCH64_MACHINE_ASM_BARRIER ||
+             info->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_GENERIC_STRUCTURED))
             return false;
-        break;
-    }
-    case AARCH64_MACHINE_ASM_RAW_IO_STORE: {
-        const Aarch64RawIoStore *store = aarch64_raw_io_store(
-            info->template_text, info->template_length);
-        if (!store || info->target_machine_form_variant != store->width)
-            return false;
-        break;
-    }
-    default: return false;
     }
     /* Linux arm-smmu-v3 uses dma_wmb() after a runtime-sized stack frame.
      * The zero-operand DMB touches no stack slots, so its architectural
