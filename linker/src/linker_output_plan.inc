@@ -236,12 +236,42 @@ static bool minild_output_plan_build(const MiniLdState *state,
             uint64_t low = output->vaddr;
             uint64_t high;
             uint64_t end;
-            if (!minild_output_plan_combine_attributes(output, part) ||
-                part->size > UINT64_MAX - layout->work[i].vaddr ||
-                output->size > UINT64_MAX - output->vaddr) {
+            bool attributes_ok =
+                minild_output_plan_combine_attributes(output, part);
+            bool address_ok =
+                part->size <= UINT64_MAX - layout->work[i].vaddr &&
+                output->size <= UINT64_MAX - output->vaddr;
+            if (!attributes_ok || !address_ok) {
+                const uint64_t merge_attributes = SHF_MERGE | SHF_STRINGS;
+                const char *reason = "address-overflow";
+                if (!attributes_ok) {
+                    if (part->type != output->type) {
+                        reason = "sh_type";
+                    } else if ((part->flags & ~merge_attributes) !=
+                               (output->flags & ~merge_attributes)) {
+                        reason = "sh_flags";
+                    } else {
+                        reason = "sh_entsize";
+                    }
+                }
                 fprintf(state->diagnostics,
                         "minic-ld: unsupported-script-output-type:%s\n",
                         output->name);
+                fprintf(state->diagnostics,
+                        "minic-ld: script-output-conflict:output=%s "
+                        "input_section=%s input_file=%s reason=%s "
+                        "output_type=0x%x output_flags=0x%llx "
+                        "output_entsize=0x%llx input_type=0x%x "
+                        "input_flags=0x%llx input_entsize=0x%llx\n",
+                        output->name,
+                        part->input_name != NULL ? part->input_name : part->name,
+                        part->input_path != NULL ? part->input_path : "(synthetic)",
+                        reason, (unsigned int)output->type,
+                        (unsigned long long)output->flags,
+                        (unsigned long long)output->entsize,
+                        (unsigned int)part->type,
+                        (unsigned long long)part->flags,
+                        (unsigned long long)part->entsize);
                 goto done;
             }
             high = output->vaddr + output->size;
