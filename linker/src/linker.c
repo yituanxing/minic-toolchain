@@ -5,6 +5,8 @@
  * archive/COMDAT admission. One post-admission projection chooses exact
  * source fragments for script/GC or name coalescence for ordinary/-r links.
  */
+#include <limits.h>
+
 #include "linker_core.inc"
 
 static bool minild_gc_sections_enabled;
@@ -44,17 +46,15 @@ static bool minild_projection_fragment(MiniLdInputProjection projection,
 static bool minild_project_admitted_inputs(MiniLdState *state,
                                            MiniLdInputProjection projection) {
     MiniLdSectionWorkspace next = {0};
-    size_t *source_to_work = NULL;
     size_t *source_base = NULL;
     const size_t source_count = state->inputs.section_count;
-    const size_t old_count = state->work.count;
     size_t fragments = 0U;
     size_t i;
     bool ok = false;
 
     if (projection < MINILD_PROJECTION_RELOCATABLE ||
         projection > MINILD_PROJECTION_SCRIPT ||
-        state->work.placement_count != source_count ||
+        state->work.count != 0U || state->work.placement_count != 0U ||
         !relocations_require_editable(&state->relocations,
                                        state->diagnostics,
                                        "input-projection")) {
@@ -62,20 +62,25 @@ static bool minild_project_admitted_inputs(MiniLdState *state,
                 "minic-ld: invalid-input-projection-phase\n");
         return false;
     }
-    source_to_work = malloc((source_count == 0U ? 1U : source_count) *
-                            sizeof(*source_to_work));
+    if (source_count > SIZE_MAX / sizeof(*next.placements) ||
+        source_count > SIZE_MAX / sizeof(*source_base)) {
+        fprintf(state->diagnostics,
+                "minic-ld: input-projection-count-overflow\n");
+        goto done;
+    }
+    next.placements = malloc((source_count == 0U ? 1U : source_count) *
+                             sizeof(*next.placements));
     source_base = calloc(source_count == 0U ? 1U : source_count,
                          sizeof(*source_base));
-    if (source_to_work == NULL || source_base == NULL) {
+    if (next.placements == NULL || source_base == NULL) {
         fprintf(state->diagnostics,
                 "minic-ld: out-of-memory:input-projection-map\n");
         goto done;
     }
+    next.placement_count = source_count;
+    next.placement_capacity = source_count;
     for (i = 0U; i < source_count; ++i) {
         const MiniLdInputSection *input = &state->inputs.sections[i];
-        const MiniLdInputPlacement *old_placement =
-            &state->work.placements[i];
-        const size_t old_section = old_placement->work_section;
         const bool fragment = minild_projection_fragment(projection, input);
         const bool distinct =
             fragment || (input->flags & SHF_LINK_ORDER) != 0U ||
@@ -90,19 +95,13 @@ static bool minild_project_admitted_inputs(MiniLdState *state,
         size_t index;
         size_t base = 0U;
 
-        source_to_work[i] = SIZE_MAX;
+        next.placements[i].work_section = SIZE_MAX;
         /* SHT_GROUP remains an immutable source-graph node. -r synthesizes
          * its live group headers from each projected member's signature. */
-        if (old_section == SIZE_MAX) {
-            if (input->type != SHT_GROUP) {
-                fprintf(state->diagnostics,
-                        "minic-ld: input-projection-unmapped-source\n");
-                goto done;
-            }
+        if (input->type == SHT_GROUP) {
             continue;
         }
-        if (input->type == SHT_GROUP || old_section >= old_count ||
-            input->file >= state->inputs.file_count) {
+        if (input->file >= state->inputs.file_count) {
             fprintf(state->diagnostics,
                     "minic-ld: invalid-input-projection-owner:%s\n",
                     input->name);
@@ -143,14 +142,28 @@ static bool minild_project_admitted_inputs(MiniLdState *state,
             output->output_name = input->name;
             ++fragments;
         }
-        if (projection == MINILD_PROJECTION_RELOCATABLE) {
-            const MiniLdSection *original =
-                &state->work.sections[old_section];
+        if (projection == MINILD_PROJECTION_RELOCATABLE &&
+            input->group_input != SIZE_MAX) {
+            const MiniLdInputSection *group;
+            size_t signature_symbol;
 
-            output->has_group = original->has_group;
-            output->group_flags = original->group_flags;
-            output->group_signature_symbol =
-                original->group_signature_symbol;
+            if (input->group_input >= source_count) {
+                goto invalid;
+            }
+            group = &state->inputs.sections[input->group_input];
+            if (group->type != SHT_GROUP || group->file != input->file ||
+                group->size < 4U || group->data == NULL ||
+                group->info == 0U) {
+                goto invalid;
+            }
+            signature_symbol = input_graph_canonical_symbol_id(
+                &state->inputs, input->file, (size_t)group->info);
+            if (signature_symbol == SIZE_MAX) {
+                goto invalid;
+            }
+            output->has_group = true;
+            output->group_flags = input_group_u32(group->data);
+            output->group_signature_symbol = signature_symbol;
         }
         if (input->type == MINILD_SHT_RISCV_ATTRIBUTES) {
             /* One 'A' marker, all original length-delimited vendor
@@ -177,7 +190,7 @@ static bool minild_project_admitted_inputs(MiniLdState *state,
                     input->name);
             goto done;
         }
-        source_to_work[i] = index;
+        next.placements[i].work_section = index;
         source_base[i] = base;
     }
 
@@ -193,15 +206,16 @@ static bool minild_project_admitted_inputs(MiniLdState *state,
             continue;
         }
         if (input->link_order_input >= source_count ||
-            source_to_work[i] == SIZE_MAX ||
-            (target = source_to_work[input->link_order_input]) == SIZE_MAX ||
+            next.placements[i].work_section == SIZE_MAX ||
+            (target = next.placements[input->link_order_input]
+                          .work_section) == SIZE_MAX ||
             (projection == MINILD_PROJECTION_GC &&
              next.sections[target].input_name == NULL)) {
             fprintf(state->diagnostics,
                     "minic-ld: invalid-projected-link-order\n");
             goto done;
         }
-        output = &next.sections[source_to_work[i]];
+        output = &next.sections[next.placements[i].work_section];
         output->has_link_order_target = true;
         output->link_order_target = target;
     }
@@ -225,9 +239,16 @@ static bool minild_project_admitted_inputs(MiniLdState *state,
         }
         id = source->input_section;
         if (id == SIZE_MAX) {
+            /* A defined source may remain provisional only until its
+             * owning source section has a final work placement. */
+            if (symbol->section == MINILD_SECTION_PENDING) {
+                goto invalid;
+            }
             continue;
         }
-        if (id >= source_count || source_to_work[id] == SIZE_MAX ||
+        if (id >= source_count ||
+            next.placements[id].work_section == SIZE_MAX ||
+            next.placements[id].work_section > INT_MAX ||
             source->value > UINT64_MAX - source_base[id]) {
             goto invalid;
         }
@@ -236,7 +257,8 @@ static bool minild_project_admitted_inputs(MiniLdState *state,
         const MiniLdReloc *reloc = &state->relocations.entries[i];
         size_t id = reloc->input_section;
 
-        if (id >= source_count || source_to_work[id] == SIZE_MAX ||
+        if (id >= source_count ||
+            next.placements[id].work_section == SIZE_MAX ||
             reloc->input_offset > UINT64_MAX - source_base[id]) {
             goto invalid;
         }
@@ -253,7 +275,7 @@ static bool minild_project_admitted_inputs(MiniLdState *state,
         source = &state->inputs.symbols[symbol->source_symbol];
         id = source->input_section;
         if (id != SIZE_MAX) {
-            symbol->section = (int)source_to_work[id];
+            symbol->section = (int)next.placements[id].work_section;
             symbol->value = source->value + source_base[id];
         }
     }
@@ -261,19 +283,9 @@ static bool minild_project_admitted_inputs(MiniLdState *state,
         MiniLdReloc *reloc = &state->relocations.entries[i];
         size_t id = reloc->input_section;
 
-        reloc->section = source_to_work[id];
+        reloc->section = next.placements[id].work_section;
         reloc->offset = reloc->input_offset + source_base[id];
     }
-    for (i = 0U; i < source_count; ++i) {
-        state->work.placements[i].work_section = source_to_work[i];
-    }
-
-    next.placements = state->work.placements;
-    next.placement_count = state->work.placement_count;
-    next.placement_capacity = state->work.placement_capacity;
-    state->work.placements = NULL;
-    state->work.placement_count = 0U;
-    state->work.placement_capacity = 0U;
     work_sections_destroy(&state->work);
     state->work = next;
     memset(&next, 0, sizeof(next));
@@ -294,7 +306,6 @@ invalid:
 done:
     work_sections_destroy(&next);
     free(source_base);
-    free(source_to_work);
     return ok;
 }
 typedef struct MiniLdInputSectionOrder {

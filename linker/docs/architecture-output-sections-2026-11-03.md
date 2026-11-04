@@ -147,9 +147,10 @@ Linux inputs not available in this workspace. Host structural results are
 
 ## Deliberate remaining boundaries
 
-1. Without script or GC, historical identical-name source sections stay
-   folded in the ordinary fast path.  Script and GC paths now rematerialize
-   individual input sections before source-specific selection and ordering.
+1. Without script or GC, compatible identical-name input sections coalesce
+   during the single post-admission projection. Script and GC projections
+   instead create exact source fragments for selection and ordering, without
+   an earlier merged work-section copy.
 2. The script evaluator supports only a subset of GNU ld grammar. The new
    post-output `= fill` accepts a byte-sized pattern; larger GNU repeated
    hex patterns are diagnosed as unsupported.

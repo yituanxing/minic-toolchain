@@ -26,10 +26,10 @@ relations remain available to GC.
 
 ## Relocation phase contract
 
-1. ET_REL admission appends one relocation with a stable origin ID/offset and
-   a distinct, empty source-section work placeholder. A single post-admission
-   projection chooses the `-r` or final-link work section and its mutable
-   offset; repeated `-r` is handled by re-admission.
+1. ET_REL admission appends one relocation with a stable origin ID/offset;
+   there is no initial work-section placeholder. The single post-admission
+   projection allocates the `-r` or final-link work section and sets its
+   mutable offset; repeated `-r` is handled by re-admission.
 2. The single post-admission projection derives each surviving relocation's
    work section and offset directly from its immutable source ID and offset.
    Exact script/GC fragments retain their original offsets; coalesced work

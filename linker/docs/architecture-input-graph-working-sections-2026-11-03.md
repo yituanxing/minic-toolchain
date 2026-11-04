@@ -15,18 +15,18 @@ the existing RISC-V ELF linker, not a new target or linker algorithm.
 
 `MiniLdInputPlacement[i]` corresponds to `MiniLdInputGraph.sections[i]`.
 Its single `work_section` field records the selected post-admission work slot;
-the former `merged_section`/`current_section` pair is removed. During
-admission there is exactly one initially empty work placeholder per input
-section. The original `MiniLdInputSection` no longer stores placement,
+the former `merged_section`/`current_section` pair is removed. No work
+sections or placements exist during input admission. The original
+`MiniLdInputSection` does not store placement,
 GC section indexes or linker-script KEEP/DISCARD/selection flags. Those flags
 belong to the work section.
 
 ## Admission and reordering
 
-1. Input admission records a source section and appends exactly one placement;
-   the coordination helper checks equal counts and rolls back the placement
-   count on a failed source-record operation. Lazy archive extraction uses the
-   same path as ordinary ET_REL inputs.
+1. Input admission records immutable file/section/symbol identities and
+   original relocations only. Its sole ELF shndx-to-source-ID mapping lives
+   in `MiniLdInputFile.section_ids`. Lazy archive extraction uses the same
+   source-only path as ordinary ET_REL inputs.
 2. Once complete object/archive/COMDAT selection is known,
    `minild_project_admitted_inputs` builds the chosen work view **once**:
    `-r` preserves COMDAT/group and LINK_ORDER identities, ordinary final links
@@ -65,15 +65,14 @@ The current gate establishes these ownership contracts; it does **not**
 establish GNU linker feature parity or demonstrate QEMU/Linux boot. Dynamic
 relocation, ABI and runtime coverage remain separate acceptance work.
 
-COMDAT signature admission state and some driver/output planning state still
-reside directly in `MiniLdState`. Their next ownership boundaries should be
-decided from the full admission and output dataflows rather than adding
-parallel caches or a transitional copy of the input graph.
+COMDAT signature admission state belongs to `MiniLdInputGraph`. The link
+driver retains phase policy, while output planning has its own owner. Future
+changes must not add another copy of the source graph or canonical resolver.
 
 ## Uniform post-admission projection checkpoint
 
 For `-r`, ET_EXEC and ET_DYN (including script/GC), the reader admits each
-source section as its own initially empty working-section identity. It
+source section only as an immutable input-graph identity. It
 records original input bytes, symbols and relocation offsets without rebasing
 them into a same-named aggregate during archive/COMDAT selection. Once the
 complete input sequence is known, `minild_project_admitted_inputs` builds
@@ -84,8 +83,8 @@ group members/signatures and LINK_ORDER target identities. Only the *mutable*
 canonical winner symbols and relocation coordinates are rebased from their
 immutable source records.
 
-The late projection replaces its former temporary working-section owner
-atomically after validating every symbol and relocation reference. Original
+The late projection creates the only working-section owner atomically after
+validating every symbol and relocation reference. Original
 InputGraph IDs never change. Shared GOT/PLT/TLS/dynamic metadata preparation
 and static layout occur only after that projection is complete.
 
@@ -104,3 +103,25 @@ GC without `-T` still merges ordinary non-ALLOC metadata; scripts retain
 source identity for non-ALLOC inputs and LINK_ORDER. Script selection and GC
 reachability remain distinct policies; no universal linker engine was added.
 GNU RISC-V/QEMU Linux compatibility has not been requalified.
+
+## Graph-only admission checkpoint (2026-11-04)
+
+The legacy empty WorkSection placeholders and duplicated `MiniLdSectionMap`
+have been removed. `linker_admission.inc` owns ET_REL/DSO admission, archive
+extraction and COMDAT selection; it only records immutable InputGraph facts,
+canonical pre-layout symbol resolution and relocation origin records. It
+never constructs `MiniLdSectionWorkspace` or a placement table.
+
+Selected, not-yet-projected section definitions use
+`MINILD_SECTION_PENDING` so strong/weak and archive extraction still treat
+them as defined. Relocations carry the immutable `input_section` and
+`input_offset` until projection fills the current work coordinates. The
+projector alone allocates `MiniLdInputPlacement[]` and work sections; for
+`-r`, it reconstructs GROUP flags/signature symbols and LINK_ORDER from
+their original InputGraph relationships. No additional persistent group
+mapping or compatibility branch was introduced.
+
+`check-minild-graph-only-admission` asserts that ownership at source level
+and runs archive (including thin), COMDAT, LINK_ORDER, repeated `-r`,
+GC/script/COMMON and ET_DYN fixtures. This is architectural and host-ELF
+validation, not a new feature or Linux boot acceptance.

@@ -19,9 +19,11 @@ format decisions, and runtime behavior remain unchanged.
 | `linker_static_output.inc` | Static PT_LOAD selection and ET_EXEC writer | Owns executable segment policy and final static emission, including scripted output. |
 | `linker_shared_output.inc` | `MiniLdSharedImage`, dynamic symbols/relocations, dynamic metadata, ET_DYN writer and shared-link entry point | Owns shared-object output state and its writer without mixing it into ET_EXEC policy. |
 
-`linker_core.inc` continues to own the earlier admission, input graph,
-working sections, and relocation workspace, as well as the outer link
-orchestration after these includes.  The `linker_eh_frame.inc` and
+`linker_core.inc` defines the shared core types and include order, while
+`linker_admission.inc` owns source-only ELF/archive/COMDAT admission.
+`linker_input.inc`, `linker_work_sections.inc` and
+`linker_relocations.inc` own their separate state lifetimes. The
+`linker_eh_frame.inc` and
 `linker_version.inc` includes remain nested in the shared-output phase at
 the same relative point as before.  `shared_build_layout` and
 `shared_build_vdso_script_layout` intentionally remain with layout helpers

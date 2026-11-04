@@ -14,34 +14,6 @@ static void work_sections_destroy(MiniLdSectionWorkspace *work) {
     memset(work, 0, sizeof(*work));
 }
 
-/* Per-input placement is mutable linking state, keyed by the stable source
- * input-section ID. Projection and later permutations both remap one slot. */
-static bool work_placement_append(MiniLdSectionWorkspace *work,
-                                  size_t work_section) {
-    MiniLdInputPlacement *next;
-    size_t capacity;
-
-    if (work->placement_count == work->placement_capacity) {
-        capacity = work->placement_capacity == 0U ? 64U :
-                   work->placement_capacity * 2U;
-        if (capacity < work->placement_capacity ||
-            capacity > SIZE_MAX / sizeof(*work->placements)) {
-            return false;
-        }
-        next = realloc(work->placements,
-                       capacity * sizeof(*work->placements));
-        if (next == NULL) {
-            return false;
-        }
-        work->placements = next;
-        work->placement_capacity = capacity;
-    }
-    work->placements[work->placement_count++] = (MiniLdInputPlacement){
-        .work_section = work_section
-    };
-    return true;
-}
-
 static bool work_sections_ensure_capacity(MiniLdSectionWorkspace *work) {
     MiniLdSection *next;
     size_t capacity;

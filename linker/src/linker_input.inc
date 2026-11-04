@@ -150,6 +150,41 @@ static bool input_graph_record_file(MiniLdInputGraph *graph,
     return true;
 }
 
+/* File-local ELF indexes resolve only through the immutable InputGraph.
+ * Absent or intentionally discarded source sections have no stable ID. */
+static size_t input_graph_section_id(const MiniLdInputGraph *graph,
+                                     size_t file, size_t elf_section) {
+    if (file >= graph->file_count ||
+        elf_section >= graph->files[file].section_slot_count) {
+        return SIZE_MAX;
+    }
+    return graph->files[file].section_ids[elf_section];
+}
+
+/* Original non-null ELF symbol indexes enter each file contiguously, even
+ * for losing COMDAT candidates. The source symbol's canonical link is the
+ * group signature index required by the ET_REL output projection. */
+static size_t input_graph_canonical_symbol_id(
+    const MiniLdInputGraph *graph, size_t file, size_t elf_symbol) {
+    const MiniLdInputFile *owner;
+    const MiniLdInputSymbol *source;
+    size_t offset;
+
+    if (file >= graph->file_count || elf_symbol == 0U) {
+        return SIZE_MAX;
+    }
+    owner = &graph->files[file];
+    offset = elf_symbol - 1U;
+    if (offset >= owner->symbol_count ||
+        owner->first_symbol > SIZE_MAX - offset ||
+        owner->first_symbol + offset >= graph->symbol_count) {
+        return SIZE_MAX;
+    }
+    source = &graph->symbols[owner->first_symbol + offset];
+    return source->file == file && source->elf_index == elf_symbol
+               ? source->canonical_symbol : SIZE_MAX;
+}
+
 static bool input_graph_record_section(MiniLdInputGraph *graph,
                                        size_t file_index,
                                        size_t elf_index,
