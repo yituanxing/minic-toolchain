@@ -8,5 +8,7 @@ _start:
     .long 0x12345678
 .section .rodata.mutable,"aw",@progbits
     .long 0xdeadbeef
+.section .rodata.tls,"awT",@progbits
+    .long 0xdecafbad
 .section .rodata.nobits,"a",@nobits
     .space 4

@@ -21,15 +21,20 @@ finish() {
 trap finish EXIT
 
 as -o "$work/gnu.o" tests/linker/script-merge-section-flags.S
+as -o "$work/roafter.gnu.o" tests/linker/script-merge-section-roafter.S
 "$MINIAS" -march=rv64i -mabi=lp64 -o "$work/rv64.o" \
     tests/linker/script-merge-section-flags-rv64.S
+"$MINIAS" -march=rv64i -mabi=lp64 -o "$work/roafter.rv64.o" \
+    tests/linker/script-merge-section-roafter.S
 "$MINIAS" -march=rv64i -mabi=lp64 -o "$work/homogeneous.o" \
     tests/linker/script-merge-section-homogeneous-rv64.S
 "$MINIAS" -march=rv64i -mabi=lp64 -o "$work/incompatible.o" \
     tests/linker/script-merge-section-incompatible-rv64.S
 
-for case in grouped separate sorted keep gap; do
+for case in grouped separate sorted keep gap roafter; do
     flags=()
+    x86_extra=()
+    rv64_extra=()
     case "$case" in
         grouped)
             x86=tests/linker/script-merge-section-flags.lds
@@ -47,11 +52,16 @@ for case in grouped separate sorted keep gap; do
         gap)
             x86=tests/linker/script-merge-section-gap.lds
             rv64=tests/linker/script-merge-section-gap-rv64.lds ;;
+        roafter)
+            x86=tests/linker/script-merge-section-roafter.lds
+            rv64=tests/linker/script-merge-section-roafter-rv64.lds
+            x86_extra=("$work/roafter.gnu.o")
+            rv64_extra=("$work/roafter.rv64.o") ;;
     esac
     ld -m elf_x86_64 -static "${flags[@]}" -T "$x86" \
-        -o "$work/$case.gnu.elf" "$work/gnu.o"
+        -o "$work/$case.gnu.elf" "$work/gnu.o" "${x86_extra[@]}"
     "$MINILD" -melf64lriscv -static "${flags[@]}" -T "$rv64" \
-        -o "$work/$case.rv64.elf" "$work/rv64.o" \
+        -o "$work/$case.rv64.elf" "$work/rv64.o" "${rv64_extra[@]}" \
         >"$work/$case.mini.stdout" 2>"$work/$case.mini.stderr"
     if command -v timeout >/dev/null; then
         observed=$(timeout 5s "$work/$case.gnu.elf")
@@ -69,8 +79,9 @@ done
 
 cross_gnu=0
 if command -v riscv64-linux-gnu-ld >/dev/null; then
-    for case in grouped separate sorted keep gap; do
+    for case in grouped separate sorted keep gap roafter; do
         flags=()
+        extra=()
         [[ $case == keep ]] && flags=(--gc-sections)
         case "$case" in
             grouped) script=tests/linker/script-merge-section-flags-rv64.lds ;;
@@ -78,9 +89,13 @@ if command -v riscv64-linux-gnu-ld >/dev/null; then
             sorted) script=tests/linker/script-merge-section-sorted-rv64.lds ;;
             keep) script=tests/linker/script-merge-section-keep-rv64.lds ;;
             gap) script=tests/linker/script-merge-section-gap-rv64.lds ;;
+            roafter)
+                script=tests/linker/script-merge-section-roafter-rv64.lds
+                extra=("$work/roafter.rv64.o") ;;
         esac
         riscv64-linux-gnu-ld -m elf64lriscv -static "${flags[@]}" \
-            -T "$script" -o "$work/$case.rv64-gnu.elf" "$work/rv64.o"
+            -T "$script" -o "$work/$case.rv64-gnu.elf" \
+            "$work/rv64.o" "${extra[@]}"
     done
     cross_gnu=1
 elif [[ ${MINILD_REQUIRE_GNU:-0} == 1 ]]; then
@@ -124,6 +139,8 @@ expected = {
     "sorted": constant + alpha + normal,
     "keep": alpha + b"\0" + constant + normal,
     "gap": alpha + b"\0" + constant + normal,
+    "roafter": alpha + b"\0" + constant + normal + b"\0" * 4 +
+               struct.pack("<Q", 0x1122334455667788),
 }
 
 
@@ -200,8 +217,12 @@ def elf_section(path, machine, check_symbols=True):
             raise SystemExit(f"MINILD_SCRIPT_MERGE=FAIL strtab:{path}")
         observed[symnames[symname:end].decode("ascii")] = value - sh[3]
     if check_symbols:
-        for symbol, raw in (("merge_text", alpha), ("merge_const", constant),
-                            ("normal_const", normal)):
+        required = [("merge_text", alpha), ("merge_const", constant),
+                    ("normal_const", normal)]
+        if path.name.startswith("roafter."):
+            required.append(("ro_after_init_value",
+                             struct.pack("<Q", 0x1122334455667788)))
+        for symbol, raw in required:
             where = observed.get(symbol)
             if where is None or data[where:where + len(raw)] != raw:
                 raise SystemExit(f"MINILD_SCRIPT_MERGE=FAIL symbol:{path}:{symbol}")
@@ -211,7 +232,8 @@ def elf_section(path, machine, check_symbols=True):
 for case, wanted in expected.items():
     reference = elf_section(work / f"{case}.gnu.elf", 62)
     candidate = elf_section(work / f"{case}.rv64.elf", 243)
-    if reference != candidate or reference != (wanted, 0x2, 0):
+    wanted_flags = 0x3 if case == "roafter" else 0x2
+    if reference != candidate or reference != (wanted, wanted_flags, 0):
         raise SystemExit(f"MINILD_SCRIPT_MERGE=FAIL GNU_byte_or_flags_diff:{case} "
                          f"reference={reference} candidate={candidate}")
     verify_no_page_alias(work / f"{case}.rv64.elf", expect_single=True)
@@ -228,7 +250,7 @@ if homogeneous[1:] != (0x32, 1):
     raise SystemExit("MINILD_SCRIPT_MERGE=FAIL homogeneous_merge_flags")
 print("MINILD_SCRIPT_MERGE=PASS grouped=GNU_bytes separate=GNU_bytes "
       "sorted=GNU_bytes KEEP_GC=GNU_bytes page_gap=GNU_bytes "
-      "same_page_load_coalesced=1 homogeneous=AMS/1 "
+      "ro_after_init=GNU_write_union same_page_load_coalesced=1 homogeneous=AMS/1 "
       "incompatible_flags=reject incompatible_type=reject "
       f"same_ISA_GNU={cross_gnu}")
 PY_ELF

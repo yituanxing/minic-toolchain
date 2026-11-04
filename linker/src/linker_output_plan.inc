@@ -92,23 +92,36 @@ static int minild_output_section_compare(const void *left,
            a->members[0] > b->members[0] ? 1 : 0;
 }
 
-/* An output section may contain mergeable strings/constants alongside
- * ordinary bytes.  SHF_MERGE/SHF_STRINGS and sh_entsize describe the *whole*
- * section, not individual fragments: GNU BFD drops those attributes when
- * fragments disagree.  Keep the strict identity check for every other ELF
- * flag and sh_type; in particular, neither TLS nor NOBITS can be silently
- * reinterpreted as ordinary PROGBITS by this projection. */
+/* GNU output PROGBITS sections acquire WRITE/EXEC flags from the union of
+ * their inputs. Linux places writable .data..ro_after_init in the script's
+ * .rodata output: rejecting that input or clearing SHF_WRITE would make the
+ * final section and PT_LOAD describe the wrong runtime permissions.
+ * Mergeable strings/constants, meanwhile, lose their M/S/entsize identity
+ * when combined with ordinary bytes.  Keep SHF_ALLOC, TLS, LINK_ORDER,
+ * GROUP, NOBITS and section type strict: these are not permission bits. */
+static uint64_t minild_output_plan_combinable_flags(uint32_t type) {
+    uint64_t flags = SHF_MERGE | SHF_STRINGS;
+
+    if (type == SHT_PROGBITS) {
+        flags |= SHF_WRITE | SHF_EXECINSTR;
+    }
+    return flags;
+}
+
 static bool minild_output_plan_combine_attributes(
     MiniLdOutputSection *output,
     const MiniLdSection *part) {
     const uint64_t optional = SHF_MERGE | SHF_STRINGS;
+    const uint64_t combinable =
+        minild_output_plan_combinable_flags(output->type);
     const uint64_t existing = output->flags & optional;
     const uint64_t incoming = part->flags & optional;
 
     if (part->type != output->type ||
-        (part->flags & ~optional) != (output->flags & ~optional)) {
+        (part->flags & ~combinable) != (output->flags & ~combinable)) {
         return false;
     }
+    output->flags |= part->flags & (SHF_WRITE | SHF_EXECINSTR);
     if (existing == 0U && incoming == 0U) {
         return part->entsize == output->entsize;
     }
@@ -242,7 +255,8 @@ static bool minild_output_plan_build(const MiniLdState *state,
                 part->size <= UINT64_MAX - layout->work[i].vaddr &&
                 output->size <= UINT64_MAX - output->vaddr;
             if (!attributes_ok || !address_ok) {
-                const uint64_t merge_attributes = SHF_MERGE | SHF_STRINGS;
+                const uint64_t merge_attributes =
+                    minild_output_plan_combinable_flags(output->type);
                 const char *reason = "address-overflow";
                 if (!attributes_ok) {
                     if (part->type != output->type) {
