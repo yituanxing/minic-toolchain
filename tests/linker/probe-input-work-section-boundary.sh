@@ -117,9 +117,12 @@ SECTIONS {
   . = 0x10000;
   .text : { *(.text.entry) *(.text.work) }
   .rodata : { *(.rodata.*) }
+  . = ALIGN(0x1000);
   .data : { *(.data.refs) }
+  . = ALIGN(0x1000);
   .meta : { *(.meta.work) }
   .meta_note : { *(.meta.note) }
+  . = ALIGN(0x1000);
   .bss : { *(.bss) *(COMMON) }
   /DISCARD/ : { *(.text.dead) }
 }

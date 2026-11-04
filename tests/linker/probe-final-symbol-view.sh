@@ -76,6 +76,7 @@ ENTRY(canonical_fn)
 SECTIONS {
   . = 0x10000;
   .text : { *(.text.core) }
+  . = ALIGN(0x1000);
   .data : { *(.data.core) }
   .tdata : { *(.tdata.slot) }
   .meta : { *(.meta.info) }

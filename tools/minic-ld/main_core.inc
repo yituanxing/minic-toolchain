@@ -91,7 +91,7 @@ static void usage(FILE *out, const char *argv0) {
     fprintf(out,
             "usage: %s [-r|-static|-shared|-pie] -o OUTPUT [-e SYMBOL] [-soname NAME] "
             "[--dynamic-list FILE] [--needed NAME] [--dynamic-linker PATH] "
-            "[-m EMULATION] [-L DIR] [-l NAME] "
+            "[-m EMULATION] [-EL|-EB] [-n|--nmagic] [-L DIR] [-l NAME] "
             "[--whole-archive ARCHIVE --no-whole-archive] "
             "[--start-group ARCHIVE --end-group] INPUT...\n",
             argv0);
@@ -120,6 +120,9 @@ int main(int argc, char **argv) {
     bool whole_archive = false;
     bool group_mode = false;
     bool gc_sections = false;
+    bool nmagic = false;
+    /* 0 = default target byte order; 1 = -EL, 2 = -EB. */
+    unsigned int requested_endianness = 0U;
     bool emulation_explicit = false;
     const char *emulation = "elf64lriscv";
     int i;
@@ -303,6 +306,17 @@ int main(int argc, char **argv) {
             whole_archive = true;
         } else if (strcmp(argv[i], "--gc-sections") == 0) {
             gc_sections = true;
+        } else if (strcmp(argv[i], "-n") == 0 ||
+                   strcmp(argv[i], "--nmagic") == 0) {
+            nmagic = true;
+        } else if (strcmp(argv[i], "-EL") == 0 ||
+                   strcmp(argv[i], "-EB") == 0) {
+            unsigned int next = strcmp(argv[i], "-EL") == 0 ? 1U : 2U;
+            if (requested_endianness != 0U && requested_endianness != next) {
+                fprintf(stderr, "minic-ld: conflicting-endianness-options\n");
+                return 2;
+            }
+            requested_endianness = next;
         } else if (strcmp(argv[i], "--no-whole-archive") == 0) {
             whole_archive = false;
         } else if (strcmp(argv[i], "--start-group") == 0 ||
@@ -423,6 +437,12 @@ int main(int argc, char **argv) {
                 "minic-ld: --gc-sections is currently supported only for final static links\n");
         return 2;
     }
+    if (nmagic && (relocatable || shared_link || pie_link ||
+                   script_path == NULL)) {
+        fprintf(stderr,
+                "minic-ld: --nmagic-requires-static-script\n");
+        return 2;
+    }
     /*
      * A shared ELF link must honor -T. Previously the CLI parsed the
      * script and silently discarded it in the shared/PIE path, which could
@@ -449,6 +469,14 @@ int main(int argc, char **argv) {
         if (!minild_emulation_supports_mode(emulation, mode)) {
             fprintf(stderr, "minic-ld: unsupported-emulation-or-link-mode:%s\n",
                     emulation);
+            return 2;
+        }
+        if (requested_endianness != 0U &&
+            !minild_emulation_supports_endianness(
+                emulation, requested_endianness == 1U)) {
+            fprintf(stderr, "minic-ld: unsupported-target-endianness:%s:%s\n",
+                    emulation,
+                    requested_endianness == 1U ? "little" : "big");
             return 2;
         }
     }
@@ -481,6 +509,7 @@ int main(int argc, char **argv) {
         options.entry_symbol = entry_symbol;
         options.script_path = script_path;
         options.gc_sections = gc_sections;
+        options.nmagic = nmagic;
         return minild_link_static_elf64_inputs_target(
             output, inputs, input_count, &options, emulation, stderr);
     }

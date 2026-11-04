@@ -215,6 +215,14 @@ bool minild_emulation_supports_mode(const char *emulation,
     return false;
 }
 
+bool minild_emulation_supports_endianness(const char *emulation,
+                                          bool little_endian) {
+    const MiniLdTargetProfile *target = minild_target_find(emulation);
+
+    return target != NULL &&
+           target->data_encoding == (little_endian ? ELFDATA2LSB : ELFDATA2MSB);
+}
+
 static bool minild_target_accept_elf(const MiniLdState *state,
                                      const MiniElfView *elf,
                                      uint16_t type) {

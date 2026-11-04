@@ -55,6 +55,7 @@ ENTRY(_start)
 SECTIONS {
   . = 0x10000;
   .text : { *(.text.entry) *(.text.helper) *(.text.dead) }
+  . = ALIGN(0x1000);
   .data : { *(.data.live) }
 }
 LDS

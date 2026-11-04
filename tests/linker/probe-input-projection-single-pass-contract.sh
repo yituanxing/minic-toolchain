@@ -118,6 +118,7 @@ SECTIONS {
     *alpha.o(.text.same)
     *(.text.group)
   }
+  . = ALIGN(0x1000);
   .data : { *(.data.refs) }
   .meta : { *(.meta.order) }
   .meta_group : { *(.meta.group) }
@@ -132,6 +133,7 @@ ENTRY(_start)
 SECTIONS {
   . = 0x10000;
   .text : { KEEP(*(.text.entry)) *(.text.same) *(.text.group) }
+  . = ALIGN(0x1000);
   .data : { *(.data.refs) }
   .meta : { *(.meta.order) }
   .meta_group : { *(.meta.group) }

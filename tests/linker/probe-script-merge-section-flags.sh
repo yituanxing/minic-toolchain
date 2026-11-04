@@ -118,7 +118,16 @@ for bad in flags type; do
     fi
     if ! grep -q 'unsupported-script-output-type:\.rodata' \
         "$work/bad-$bad.stderr" || [[ -e "$work/bad-$bad.elf" ]]; then
-        echo "MINILD_SCRIPT_MERGE=FAIL wrong_incompatible_$bad_rejection" >&2
+        echo "MINILD_SCRIPT_MERGE=FAIL wrong_incompatible_${bad}_rejection" >&2
+        exit 1
+    fi
+    case "$bad" in
+        flags) reason=sh_flags ;;
+        type) reason=sh_type ;;
+    esac
+    if ! grep -Eq "script-output-conflict:output=\\.rodata .*reason=$reason .*output_type=0x[0-9a-f]+ .*input_type=0x[0-9a-f]+" \
+        "$work/bad-$bad.stderr"; then
+        echo "MINILD_SCRIPT_MERGE=FAIL missing_attribute_diagnostics_$bad" >&2
         exit 1
     fi
 done
@@ -236,7 +245,8 @@ for case, wanted in expected.items():
     if reference != candidate or reference != (wanted, wanted_flags, 0):
         raise SystemExit(f"MINILD_SCRIPT_MERGE=FAIL GNU_byte_or_flags_diff:{case} "
                          f"reference={reference} candidate={candidate}")
-    verify_no_page_alias(work / f"{case}.rv64.elf", expect_single=True)
+    verify_no_page_alias(work / f"{case}.rv64.elf",
+                         expect_single=case == "gap")
     if cross_gnu:
         same_isa_reference = elf_section(work / f"{case}.rv64-gnu.elf", 243)
         if same_isa_reference != candidate:

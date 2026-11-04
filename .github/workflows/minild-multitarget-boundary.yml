@@ -67,7 +67,12 @@ jobs:
             check-minild-target-shared-abi-boundary \
             check-minild-riscv-abi-integration \
             check-minild-riscv-final-fixup-parity \
+            check-minild-rv32-addsub64 \
+            check-minild-segment-plan \
             check-minild-script-merge-section-flags \
+            check-minild-script-ro-after-init \
+            check-minild-script-nmagic \
+            check-minild-explicit-endianness \
             check-minild-layout-phase-boundary \
             check-minild-shared-phase-owners \
             check-minild-input-phase-owners \

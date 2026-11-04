@@ -46,7 +46,6 @@ sha256sum --quiet --check "$capture/first-kallsyms1.gnu-ld.sha256" || {
 # All paths are resolved relative to the original Kbuild linker cwd.  This
 # intentionally fails closed when command-line inputs disappeared after make.
 declare -A known_inputs=()
-have_object=false
 have_archive=false
 have_script=false
 expect_script=false
@@ -79,15 +78,17 @@ expect_script=false
 
 # The captured link must actually be a kernel final-link invocation.  A
 # small test ELF or one intermediate '-r' link does not meet this criterion.
+# Kbuild may pass all production objects through vmlinux.a, with no direct
+# .o argv member. A direct .o requirement would incorrectly reject such a
+# legitimate final link despite the GNU capture, archive and target script.
 for arg in "${original[@]}"; do
   case "$arg" in
-    *.o) have_object=true ;;
     *.a) have_archive=true ;;
     *.lds|*.ld|--script=*|-T*) have_script=true ;;
   esac
 done
-if ! $have_object || ! $have_archive || ! $have_script; then
-  echo 'MINILD_LINUX_FINAL_REPLAY=INCONCLUSIVE no_real_kernel_archive_objects_or_linker_script' >&2
+if ! $have_archive || ! $have_script; then
+  echo 'MINILD_LINUX_FINAL_REPLAY=INCONCLUSIVE no_real_kernel_archive_or_linker_script' >&2
   exit 71
 fi
 sha256sum --quiet -c "$evidence/input-objects-and-scripts.sha256" || {

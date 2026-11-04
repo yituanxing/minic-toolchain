@@ -6,7 +6,7 @@ _start:
     ecall
 .section .rodata,"a",@progbits
     .long 0x12345678
-.section .rodata.mutable,"aw",@progbits
+.section .rodata.mutable,"awT",@progbits
     .long 0xdeadbeef
 .section .rodata.tls,"awT",@progbits
     .long 0xdecafbad

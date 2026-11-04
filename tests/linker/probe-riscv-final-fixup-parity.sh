@@ -251,6 +251,7 @@ ENTRY(kernel_entry)
 SECTIONS {
   . = 0xffffffff80000000;
   .text : { KEEP(*(.text.kernel)) *(.text.kerneljump) }
+  . = ALIGN(0x1000);
   .data : { *(.data.kernel) }
   /DISCARD/ : { *(.text.dead) }
 }

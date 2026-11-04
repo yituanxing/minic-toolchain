@@ -1242,6 +1242,7 @@ static bool static_build_script_layout(MiniLdState *state,
         if (abi.phdr == 0U ||
             alloc_count > (SIZE_MAX - abi.ehdr) / abi.phdr ||
             !align_up_size(abi.ehdr + alloc_count * abi.phdr,
+                           state->nmagic ? 1U :
                            state->target->page_size, &header_size)) {
             fprintf(state->diagnostics,
                     "minic-ld: linker-script-header-overflow\n");
@@ -1294,7 +1295,8 @@ static bool static_build_script_layout(MiniLdState *state,
          * both without mapping unrelated file bytes over the first section.
          * Do this before choosing a new output-section file base.  Members
          * of an existing output already get exact dot-hole offsets below. */
-        if (last_file_backed != SIZE_MAX &&
+        if (!state->nmagic && state->target->page_size != 0U &&
+            last_file_backed != SIZE_MAX &&
             section->type != SHT_NOBITS) {
             size_t previous = last_file_backed;
             const MiniLdSection *prior = &state->work.sections[previous];
@@ -1383,9 +1385,18 @@ static bool static_build_script_layout(MiniLdState *state,
             if (owner != SIZE_MAX && owner < script->command_count) {
                 /* Later members may be more strictly aligned than the
                  * first. Match the owner's maximum alignment modulo its
-                 * VMA now, so later VMA gaps also have correct file gaps. */
+                 * VMA now, so later VMA gaps also have correct file gaps.
+                 * Each scripted PT_LOAD is mmap'ed at host page granularity:
+                 * a new output section must additionally satisfy
+                 * p_offset % page_size == p_vaddr % page_size even when
+                 * its ELF sh_addralign is only 1 or 8.  A shared vDSO script
+                 * subsequently installs its explicit FILEHDR/PHDRS offsets. */
                 size_t alignment = (size_t)(owner_max_align[owner] == 0U
                                                ? 1U : owner_max_align[owner]);
+                if (!state->nmagic &&
+                    alignment < state->target->page_size) {
+                    alignment = state->target->page_size;
+                }
                 uint64_t leading = layout->work[best].vaddr -
                                    layout->script_outputs[owner].start;
                 size_t wanted = (size_t)(layout->work[best].vaddr % alignment);

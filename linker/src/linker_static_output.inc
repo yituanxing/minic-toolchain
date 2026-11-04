@@ -179,7 +179,10 @@ static bool minild_static_program_plan_build(
                 MiniLdStaticLoadSegment *prev = &loads[count - 1U];
                 uint64_t previous_vend, previous_lend, previous_fend;
                 uint64_t vgap = 0U, lgap = 0U, fgap = 0U;
-                bool ordered, same_page, linear_gap;
+                uint32_t combined_flags = prev->flags | next->flags;
+                uint64_t page_size = state->target->page_size;
+                bool ordered, same_page, linear_gap, plain_contiguous;
+                bool safe_permissions;
 
                 if (prev->vaddr > UINT64_MAX - prev->mem_size ||
                     prev->laddr > UINT64_MAX - prev->mem_size ||
@@ -196,9 +199,10 @@ static bool minild_static_program_plan_build(
                  * extend that tail without increasing p_filesz. */
                 previous_fend = prev->file_offset +
                     (next->file_size == 0U ? prev->file_size : prev->mem_size);
-                same_page = prev->mem_size != 0U &&
-                    (previous_vend - 1U) / state->target->page_size ==
-                    next->vaddr / state->target->page_size;
+                same_page = page_size != 0U && prev->mem_size != 0U &&
+                    next->mem_size != 0U &&
+                    (previous_vend - 1U) / page_size ==
+                    next->vaddr / page_size;
                 ordered = next->vaddr >= previous_vend &&
                     next->laddr >= previous_lend &&
                     (next->file_size == 0U ||
@@ -222,6 +226,10 @@ static bool minild_static_program_plan_build(
                     (next->file_size == 0U ||
                      (vgap <= UINT64_MAX - next->file_size &&
                       prev->mem_size <= UINT64_MAX - vgap - next->file_size));
+                plain_contiguous = linear_gap && vgap == 0U &&
+                    prev->file_size == prev->mem_size;
+                safe_permissions =
+                    (combined_flags & (PF_W | PF_X)) != (PF_W | PF_X);
 
                 /* A loader maps PT_LOAD at page granularity.  Separate RX
                  * text and R rodata mappings inside one page would let the
@@ -231,21 +239,25 @@ static bool minild_static_program_plan_build(
                  * together (including zero-filled alignment holes).
                  * A BSS tail is padded with real zero file bytes only if a
                  * later file-backed section re-enters the same load page.
-                 * Non-linear AT() mapping cannot share that load. */
-                if (linear_gap &&
-                    ((vgap == 0U && prev->flags == next->flags) ||
-                     same_page)) {
+                 * Non-linear AT() mapping cannot share that load.
+                 * GNU -n is a separate explicit non-page-mapped policy,
+                 * which may intentionally coalesce writable text into RWE. */
+                if ((state->nmagic && plain_contiguous) ||
+                    (!state->nmagic &&
+                     ((plain_contiguous && prev->flags == next->flags) ||
+                      (same_page && linear_gap && safe_permissions)))) {
                     if (next->file_size != 0U) {
                         prev->file_size = prev->mem_size + vgap +
                                           next->file_size;
                     }
                     prev->mem_size += vgap + next->mem_size;
-                    prev->flags |= next->flags;
+                    prev->flags = combined_flags;
                     continue;
                 }
-                if (same_page || next->vaddr < previous_vend) {
+                if ((!state->nmagic && same_page) ||
+                    next->vaddr < previous_vend) {
                     fprintf(state->diagnostics,
-                            "minic-ld: unsupported-script-load-page-overlap:"
+                            "minic-ld: unsafe-script-load-page-overlap:"
                             "vaddr=0x%llx:next=0x%llx:"
                             "file=0x%llx+0x%llx:next_file=0x%llx:"
                             "lma=0x%llx:next_lma=0x%llx:"
@@ -307,6 +319,17 @@ static bool minild_static_program_plan_build(
         for (i = 0U; i < load_count; ++i) {
             const MiniLdStaticLoadSegment *load = &loads[i];
             MiniElfProgramHeader *ph = &plan->entries[i];
+            if (!state->nmagic &&
+                (state->target->page_size == 0U ||
+                 load->file_offset % state->target->page_size !=
+                     load->vaddr % state->target->page_size)) {
+                fprintf(state->diagnostics,
+                        "minic-ld: invalid-script-load-page-congruence:"
+                        "vaddr=0x%llx offset=0x%llx\n",
+                        (unsigned long long)load->vaddr,
+                        (unsigned long long)load->file_offset);
+                goto failed;
+            }
             ph->type = PT_LOAD;
             ph->flags = load->flags;
             ph->offset = load->file_offset;
@@ -314,7 +337,8 @@ static bool minild_static_program_plan_build(
             ph->physical_address = load->laddr;
             ph->file_size = load->file_size;
             ph->memory_size = load->mem_size;
-            ph->alignment = 1U;
+            ph->alignment = state->nmagic ? 1U :
+                            state->target->page_size;
         }
     } else {
         size_t index = 0U;

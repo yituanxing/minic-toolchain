@@ -19,8 +19,9 @@ static bool minild_program_plan_validate(const MiniLdState *state,
         const MiniElfProgramHeader *ph = &plan->entries[i];
         uint64_t align = ph->alignment;
         if (ph->file_size > ph->memory_size ||
-            ph->offset > image_size ||
-            ph->file_size > image_size - (size_t)ph->offset ||
+            (ph->file_size != 0U &&
+             (ph->offset > image_size ||
+              ph->file_size > image_size - (size_t)ph->offset)) ||
             ph->virtual_address > UINT64_MAX - ph->memory_size ||
             (align > 1U &&
              (((align & (align - 1U)) != 0U) ||

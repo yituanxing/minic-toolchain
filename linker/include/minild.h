@@ -21,6 +21,9 @@ typedef struct MiniLdStaticOptions {
     const char *entry_symbol;
     const char *script_path;
     bool gc_sections;
+    /* GNU -n/--nmagic: script file layout uses section alignment rather
+     * than maximum-page alignment. This is not GNU -N/--omagic. */
+    bool nmagic;
 } MiniLdStaticOptions;
 
 typedef struct MiniLdSharedOptions {
@@ -48,6 +51,11 @@ typedef enum MiniLdLinkMode {
 
 bool minild_emulation_supports_mode(const char *emulation,
                                     MiniLdLinkMode mode);
+/* A linker -EL/-EB request selects the output byte order, which must agree
+ * with the target's declared ELF encoding. The CLI never guesses from the
+ * host machine or silently changes a target to an unsupported endian ABI. */
+bool minild_emulation_supports_endianness(const char *emulation,
+                                          bool little_endian);
 
 int minild_link_relocatable_inputs_target(const char *output_path,
                                           const MiniLdInput *inputs,

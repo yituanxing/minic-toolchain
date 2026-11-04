@@ -3,5 +3,6 @@ ENTRY(_start)
 SECTIONS {
   . = 0x400000;
   .text : { *(.text) }
+  . = ALIGN(0x1000);
   .rodata : { *(SORT_BY_NAME(.rodata.*) .rodata) }
 }

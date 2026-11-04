@@ -740,6 +740,12 @@ check-minild-rv32-static-runtime: $(MINIAS_BINARY) $(MINILD_BINARY)
 	MINILD="$(abspath $(MINILD_BINARY))" \
 	bash tests/linker/probe-rv32-static-runtime.sh
 
+.PHONY: check-minild-rv32-addsub64
+check-minild-rv32-addsub64: $(MINIAS_BINARY) $(MINILD_BINARY)
+	MINIAS="$(abspath $(MINIAS_BINARY))" \
+	MINILD="$(abspath $(MINILD_BINARY))" \
+	bash tests/linker/probe-rv32-addsub64.sh
+
 .PHONY: check-minild-riscv-static-tls
 check-minild-riscv-static-tls: $(MINIAS_BINARY) $(MINILD_BINARY)
 	MINIAS="$(abspath $(MINIAS_BINARY))" \
@@ -875,6 +881,24 @@ check-minild-script-merge-section-flags: $(MINIAS_BINARY) $(MINILD_BINARY)
 	MINIAS="$(abspath $(MINIAS_BINARY))" \
 	MINILD="$(abspath $(MINILD_BINARY))" \
 	bash tests/linker/probe-script-merge-section-flags.sh
+
+.PHONY: check-minild-script-ro-after-init
+check-minild-script-ro-after-init: $(MINIAS_BINARY) $(MINILD_BINARY)
+	MINIAS="$(abspath $(MINIAS_BINARY))" \
+	MINILD="$(abspath $(MINILD_BINARY))" \
+	bash tests/linker/probe-script-ro-after-init.sh
+
+.PHONY: check-minild-script-nmagic
+check-minild-script-nmagic: $(MINIAS_BINARY) $(MINILD_BINARY)
+	MINIAS="$(abspath $(MINIAS_BINARY))" \
+	MINILD="$(abspath $(MINILD_BINARY))" \
+	bash tests/linker/probe-nmagic-script.sh
+
+.PHONY: check-minild-explicit-endianness
+check-minild-explicit-endianness: $(MINIAS_BINARY) $(MINILD_BINARY)
+	MINIAS="$(abspath $(MINIAS_BINARY))" \
+	MINILD="$(abspath $(MINILD_BINARY))" \
+	bash tests/linker/probe-explicit-endianness.sh
 
 .PHONY: check-minild-output-plan-owner-lifecycle
 check-minild-output-plan-owner-lifecycle: $(MINIAS_BINARY) $(MINILD_BINARY)

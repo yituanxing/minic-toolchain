@@ -129,7 +129,9 @@ SECTIONS {
   .text : { *(.text.entry) *(.text.live) }
   .keeper : { KEEP(*(.text.keep)) }
   .init : { *(.init) }
+  . = ALIGN(0x1000);
   .bss : { *(.bss) *(COMMON) }
+  . = ALIGN(0x1000);
   .texts : { *(.text.orphan) *(.text.dead) }
   /DISCARD/ : { *(.discard.*) }
 }

@@ -102,6 +102,7 @@ ENTRY(_start)
 SECTIONS {
   . = 0x10000;
   .text : { *(.text.entry) *(.text.weak) *(.text.strong) *(.text.archive) }
+  . = ALIGN(0x1000);
   .data : { *(.data.refs) }
   .bss : { *(.bss) *(COMMON) }
   PROVIDE(provided_tag = 0x44556677);

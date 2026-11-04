@@ -55,8 +55,14 @@ static int minild_link_static_pipeline(
                 target->emulation);
         return 2;
     }
+    if (options != NULL && options->nmagic && options->script_path == NULL) {
+        fprintf(diagnostics,
+                "minic-ld: --nmagic-requires-static-script\n");
+        return 2;
+    }
     memset(&state, 0, sizeof(state));
     state.target = target;
+    state.nmagic = options != NULL && options->nmagic;
     memset(&layout, 0, sizeof(layout));
     minild_script_initialize(&script);
     state.diagnostics = diagnostics;
@@ -208,6 +214,7 @@ int minild_link_static_elf64_riscv_inputs(const char *output_path,
     options.entry_symbol = entry_symbol;
     options.script_path = NULL;
     options.gc_sections = false;
+    options.nmagic = false;
     return minild_link_static_elf64_riscv_inputs_options(output_path,
                                                           inputs,
                                                           input_count,

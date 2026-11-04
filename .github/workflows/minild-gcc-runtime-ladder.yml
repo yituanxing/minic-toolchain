@@ -2,8 +2,8 @@ name: MiniLD GCC Runtime Ladder (Exploratory)
 
 # This is deliberately separate from the green ELF boundary workflow.
 # A red job is evidence of a missing MiniLD capability, not a regression
-# of the already accepted MiniAS -> GNU LD path.  Changing this workflow
-# triggers one staged cohort; ordinary linker edits do not repeatedly run it.
+# of the already accepted MiniAS -> GNU LD path.  A normal linker edit does
+# not rerun this expensive cohort unless its commit opts in explicitly.
 # This cohort also verifies the target's TLS/GOT/branch relocation family
 # before attempting the full GCC+libc five-stage GNU BFD differential.
 # Follow-up cohort: AArch64 checked-in IFUNC oracle and LoongArch B26
@@ -18,12 +18,16 @@ on:
       - refactor/minias-target-isa-abi-core
     paths:
       - .github/workflows/minild-gcc-runtime-ladder.yml
+      - linker/**
+      - tools/minic-ld/**
+      - tests/linker/**
 
 permissions:
   contents: read
 
 jobs:
   gcc-minild-execution:
+    if: ${{ github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[minild-gcc-runtime-ladder]') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     strategy:

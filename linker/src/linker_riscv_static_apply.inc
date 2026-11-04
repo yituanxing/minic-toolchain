@@ -101,13 +101,13 @@ static bool minild_riscv_apply_static_relocations(
                         "minic-ld: riscv-uleb-unpaired-relocation\n");
                 goto fail;
             }
-            if (state->target->elf_class == ELFCLASS32 &&
-                (reloc->type == R_RISCV_ADD64 ||
-                 reloc->type == R_RISCV_SUB64)) {
-                fprintf(state->diagnostics,
-                        "minic-ld: rv32-unsupported-64bit-arithmetic\n");
-                goto fail;
-            }
+            /* ADD64/SUB64 describe the width of the target *data field*,
+             * not the XLEN of the linked image.  ELF32/ILP32 producers use
+             * them for 64-bit symbol differences (including DWARF).  The
+             * common arithmetic writer bounds-checks all eight bytes and
+             * performs the calculation modulo 2^64.  R_RISCV_64, which
+             * encodes an absolute 64-bit address, remains separately gated
+             * for RV32 below. */
             if (!minild_target_apply_arithmetic(
                     section, reloc, target, false, state->diagnostics)) {
                 goto fail;

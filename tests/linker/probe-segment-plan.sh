@@ -9,6 +9,16 @@ command -v python3 >/dev/null 2>&1 || {
     echo "MINILD_SEGMENTS=INCONCLUSIVE missing_tool=python3" >&2
     exit 8
 }
+if [[ ${MINILD_REQUIRE_QEMU:-0} == 1 ]] &&
+   ! command -v qemu-riscv64 >/dev/null 2>&1; then
+    echo 'MINILD_SEGMENTS=INCONCLUSIVE missing_tool=qemu-riscv64' >&2
+    exit 8
+fi
+if [[ ${MINILD_REQUIRE_GNU:-0} == 1 ]] &&
+   ! command -v riscv64-linux-gnu-ld >/dev/null 2>&1; then
+    echo 'MINILD_SEGMENTS=INCONCLUSIVE missing_tool=riscv64-linux-gnu-ld' >&2
+    exit 8
+fi
 
 work=$(mktemp -d "${TMPDIR:-/tmp}/minild-segment-plan.XXXXXX")
 finish() {
@@ -101,6 +111,100 @@ LDS
 "$MINILD" -melf64lriscv -shared -o "$work/shared.so" "$work/input.o"
 "$MINILD" -melf64lriscv -pie --dynamic-linker=/lib/ld-musl-riscv64.so.1 \
     -e _start -o "$work/pie.elf" "$work/input.o"
+
+# A scripted RX .text immediately followed by R .rodata occupies one host
+# mapping page.  Separate PT_LOADs would revoke X permission on that page
+# when QEMU/Linux maps the later R-only LOAD.  Verify both the ELF headers
+# and actual Linux user-mode execution; compare the same objects with GNU ld
+# whenever its RISC-V driver is available.
+cat >"$work/script-page.s" <<'ASM'
+.section .text.start,"ax",@progbits
+.globl _start
+_start:
+  lla t0,script_ro_value
+  lbu t1,0(t0)
+  addi t2,zero,114
+  bne t1,t2,script_bad_data
+  lla t0,script_rw_value
+  ld t1,0(t0)
+  addi t2,zero,37
+  bne t1,t2,script_bad_data
+  lla t0,script_bss_value
+  ld t1,0(t0)
+  bne t1,zero,script_bad_data
+  addi a0,zero,0
+  addi a7,zero,93
+  ecall
+script_bad_data:
+  addi a0,zero,1
+  addi a7,zero,93
+  ecall
+.section .rodata.literal,"a",@progbits
+script_ro_value:
+  .ascii "read-only-data\0"
+.section .data.word,"aw",@progbits
+script_rw_value:
+  .dword 37
+.section .bss.value,"aw",@nobits
+.balign 8
+script_bss_value:
+  .zero 8
+ASM
+cat >"$work/script-page.lds" <<'LDS'
+OUTPUT_ARCH(riscv)
+ENTRY(_start)
+SECTIONS {
+  . = 0x10000;
+  .text : { *(.text.start) }
+  .rodata : { *(.rodata.literal) }
+  . = ALIGN(0x1000);
+  .data : { *(.data.word) }
+  . = ALIGN(0x1000);
+  .bss : { *(.bss.value) }
+}
+LDS
+cat >"$work/script-page-wx.lds" <<'LDS'
+OUTPUT_ARCH(riscv)
+ENTRY(_start)
+SECTIONS {
+  . = 0x10000;
+  .text : { *(.text.start) }
+  .data : { *(.data.word) }
+  .rodata : { *(.rodata.literal) }
+  .bss : { *(.bss.value) }
+}
+LDS
+"$MINIAS" -march=rv64i -mabi=lp64 \
+    -o "$work/script-page.o" "$work/script-page.s"
+"$MINILD" -melf64lriscv -T "$work/script-page.lds" \
+    -o "$work/script-page.elf" "$work/script-page.o"
+if "$MINILD" -melf64lriscv -T "$work/script-page-wx.lds" \
+    -o "$work/script-page-wx.elf" "$work/script-page.o" \
+    >"$work/script-page-wx.stdout" 2>"$work/script-page-wx.stderr"; then
+    echo 'MINILD_SEGMENT_CHECK=FAIL same-page-RX-RW unexpectedly-accepted' >&2
+    exit 1
+fi
+if ! grep -q 'unsafe-script-load-page-overlap' "$work/script-page-wx.stderr"; then
+    echo 'MINILD_SEGMENT_CHECK=FAIL same-page-RX-RW missing-diagnostic' >&2
+    exit 1
+fi
+if command -v riscv64-linux-gnu-ld >/dev/null 2>&1; then
+    riscv64-linux-gnu-ld -m elf64lriscv -static \
+        -T "$work/script-page.lds" -o "$work/script-page-gnu.elf" \
+        "$work/script-page.o"
+    if command -v qemu-riscv64 >/dev/null 2>&1; then
+        qemu-riscv64 "$work/script-page-gnu.elf" || {
+            echo 'MINILD_SEGMENT_CHECK=FAIL same-page-GNU-qemu' >&2
+            exit 1
+        }
+    fi
+fi
+if command -v qemu-riscv64 >/dev/null 2>&1; then
+    qemu-riscv64 "$work/script-page.elf" || {
+        echo 'MINILD_SEGMENT_CHECK=FAIL same-page-MiniLD-qemu' >&2
+        exit 1
+    }
+fi
 
 # A surviving empty TLS fragment may start the TLS block before the first
 # nonempty fragment.  Reserve a non-TLS prefix so the empty section starts
@@ -252,7 +356,9 @@ def inspect(filename, etype):
         names.setdefault(strings[start:end].decode(), []).append(sec)
     for segment in ph:
         typ, flags, off, vaddr, paddr, filesz, memsz, align = segment
-        assert filesz <= memsz and off + filesz <= len(raw), (filename, 'segment extent', segment)
+        assert filesz <= memsz and (
+            filesz == 0 or off + filesz <= len(raw)
+        ), (filename, 'segment extent', segment)
         assert align in (0, 1) or (align & (align - 1)) == 0, (filename, 'alignment')
         if align > 1:
             assert (vaddr - off) % align == 0, (filename, 'segment congruence')
@@ -266,6 +372,30 @@ def one(names, name):
 
 def covers(segment, sec):
     return (segment[3] <= sec[3] and sec[3] + sec[5] <= segment[3] + segment[6])
+
+
+raw, ph, names = inspect('script-page.elf', 2)
+loads = [p for p in ph if p[0] == 1]
+text = one(names, '.text')
+rodata = one(names, '.rodata')
+data = one(names, '.data')
+assert len(loads) == 3, ('same-page LOAD count', ph)
+assert [p[1] for p in loads] == [5, 6, 6], ('same-page permissions', ph)
+assert text[3] // 4096 == rodata[3] // 4096, ('same-page fixture', text, rodata)
+assert covers(loads[0], text) and covers(loads[0], rodata), (
+    'RX and R sections must share executable LOAD', loads[0], text, rodata)
+assert covers(loads[1], data) and data[3] // 4096 != text[3] // 4096, (
+    'writable section must retain its own page and LOAD', loads[1], data)
+bss = one(names, '.bss')
+assert bss[1] == 8 and covers(loads[2], bss) and (
+    loads[2][5] == 0 and loads[2][6] == bss[5]), (
+    'pure NOBITS page requires zero-file-size writable LOAD', loads[2], bss)
+assert rodata[4] % 4096 == rodata[3] % 4096 and (
+    data[4] % 4096 == data[3] % 4096) and (
+    loads[2][2] % 4096 == loads[2][3] % 4096), (
+    'script output sections must have mmap-compatible file addresses', rodata, data, bss)
+print('MINILD_SEGMENT_CHECK=PASS mode=script-same-page RX+R=coalesced '
+      'RW=separate-page BSS=NOBITS-only W+X=fail-closed GNU+QEMU=if-available')
 
 
 raw, ph, names = inspect('static-default.elf', 2)
@@ -311,7 +441,9 @@ print('MINILD_SEGMENT_CHECK=PASS mode=static-default loads=2 '
 raw, ph, names = inspect('static-script.elf', 2)
 loads = [p for p in ph if p[0] == 1]
 tls = [p for p in ph if p[0] == 7]
-assert len(loads) == 2 and all(p[7] == 1 for p in loads), ('script LOAD alignment', ph)
+assert len(loads) == 2 and all(
+    p[7] == 4096 and p[2] % 4096 == p[3] % 4096 for p in loads
+), ('script LOAD page congruence', ph)
 assert len(tls) == 1 and len(ph) == 3, ('scripted PT_TLS', ph)
 data = one(names, '.data')
 assert any(covers(p, data) and p[4] != p[3] for p in loads), ('AT() LMA lost', ph)

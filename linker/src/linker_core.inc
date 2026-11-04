@@ -240,6 +240,7 @@ typedef struct MiniLdState {
     bool have_input;
     bool allow_dso_inputs;
     bool relocatable_output;
+    bool nmagic;
     FILE *diagnostics;
 } MiniLdState;
 
