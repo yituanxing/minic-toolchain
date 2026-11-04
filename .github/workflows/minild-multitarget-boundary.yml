@@ -69,6 +69,7 @@ jobs:
             check-minild-riscv-final-fixup-parity \
             check-minild-rv32-addsub64 \
             check-minild-segment-plan \
+            check-minild-final-elf-audit \
             check-minild-script-merge-section-flags \
             check-minild-script-ro-after-init \
             check-minild-script-mixed-bss \
