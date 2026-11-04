@@ -267,33 +267,33 @@ bool minic_x86_64_plan_incoming_arguments(
     size_t i;
     if (fn == NULL ||
         fn->type_context == NULL || plan == NULL ||
-        !minic_function_calling_convention_valid(fn->calling_convention) ||
-        (fn->parameter_count != 0U &&
-         fn->core_parameter_type_ids == NULL) ||
-        !x86_sysv_plan_alloc(fn->parameter_count, plan)) return false;
-    plan->calling_convention = fn->calling_convention;
-    if (fn->calling_convention == MINIC_CALLING_CONVENTION_MS_X64) {
+        !minic_function_calling_convention_valid(minic_core_function_calling_convention(fn)) ||
+        (minic_core_function_parameter_count(fn) != 0U &&
+         minic_core_function_parameter_types(fn) == NULL) ||
+        !x86_sysv_plan_alloc(minic_core_function_parameter_count(fn), plan)) return false;
+    plan->calling_convention = minic_core_function_calling_convention(fn);
+    if (minic_core_function_calling_convention(fn) == MINIC_CALLING_CONVENTION_MS_X64) {
         const MinicX86AbiRegisters *abi = minic_x86_64_abi_registers(
             MINIC_CALLING_CONVENTION_MS_X64);
         if (abi == NULL) goto failed;
-        if (!x86_ms_x64_scalar_return(fn, fn->core_return_type_id))
+        if (!x86_ms_x64_scalar_return(fn, minic_core_function_return_type(fn)))
             goto failed;
-        for (i = 0U; i < fn->parameter_count; ++i)
-            if (!x86_ms_x64_place(fn, fn->core_parameter_type_ids[i], i,
+        for (i = 0U; i < minic_core_function_parameter_count(fn); ++i)
+            if (!x86_ms_x64_place(fn, minic_core_function_parameter_types(fn)[i], i,
                                   &plan->locations[i])) goto failed;
-        if (fn->parameter_count > abi->gp_argument_count)
-            cursor.stack_slots = fn->parameter_count - abi->gp_argument_count;
+        if (minic_core_function_parameter_count(fn) > abi->gp_argument_count)
+            cursor.stack_slots = minic_core_function_parameter_count(fn) - abi->gp_argument_count;
         plan->end = cursor;
         return true;
     }
     {
         size_t result_bytes;
-        if (x86_plan_memory_result_record(fn, fn->core_return_type_id,
+        if (x86_plan_memory_result_record(fn, minic_core_function_return_type(fn),
                                           &result_bytes))
             cursor.gp_used = 1U;
     }
-    for (i = 0U; i < fn->parameter_count; ++i)
-        if (!x86_sysv_place(fn, fn->core_parameter_type_ids[i], &cursor,
+    for (i = 0U; i < minic_core_function_parameter_count(fn); ++i)
+        if (!x86_sysv_place(fn, minic_core_function_parameter_types(fn)[i], &cursor,
                             &plan->locations[i])) goto failed;
     plan->end = cursor;
     return true;

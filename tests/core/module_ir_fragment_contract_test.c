@@ -257,6 +257,99 @@ static int verify_module_emitted_symbol_namespace(
     return 0;
 }
 
+static int verify_materialized_relocation_edges(
+    const MinicCoreModule *baseline, MinicCoreTypeContext *types) {
+    MinicCoreType word = {0}, array = {0};
+    MinicCoreTypeId word_id, array_id;
+    MinicCoreModuleReference references[2] = {
+        {.kind = MINIC_CORE_MODULE_REFERENCE_OBJECT, .target_index = 1U},
+        {.kind = MINIC_CORE_MODULE_REFERENCE_FUNCTION, .target_index = 0U}
+    };
+    MinicCoreModuleFragment fragments[2] = {
+        {.kind = MINIC_CORE_MODULE_FRAGMENT_RELOCATION,
+         .byte_offset = 0U, .byte_count = 8U,
+         .relocation_kind = MINIC_CORE_MODULE_RELOCATION_OBJECT,
+         .relocation_symbol = "target_object"},
+        {.kind = MINIC_CORE_MODULE_FRAGMENT_RELOCATION,
+         .byte_offset = 8U, .byte_count = 8U,
+         .relocation_kind = MINIC_CORE_MODULE_RELOCATION_FUNCTION,
+         .relocation_symbol = "callee"}
+    };
+    MinicCoreModuleGlobal globals[2] = {
+        {.name = "live_payload", .emittable = true,
+         .storage_size = 16U, .storage_alignment = 8U,
+         .references = references, .reference_count = 2U,
+         .fragments = fragments, .fragment_count = 2U,
+         .alias_target_index = SIZE_MAX, .owner_function_index = SIZE_MAX},
+        {.name = "target_object", .is_extern = true,
+         .alias_target_index = SIZE_MAX, .owner_function_index = SIZE_MAX}
+    };
+    MinicCoreModuleFunctionSymbol functions[1] = {
+        {.name = "callee", .is_defined = true,
+         .alias_target_index = SIZE_MAX,
+         .specialization_source_index = SIZE_MAX}
+    };
+    MinicCoreModule module = *baseline;
+
+    word.kind = MINIC_CORE_TYPE_INTEGER;
+    word.has_layout = true;
+    word.size = 8U;
+    word.alignment = 8U;
+    word.value.integer.bit_width = 64U;
+    CHECK(minic_core_type_register(types, &word, &word_id), 90);
+    array.kind = MINIC_CORE_TYPE_ARRAY;
+    array.has_layout = true;
+    array.size = 16U;
+    array.alignment = 8U;
+    array.value.array.element = word_id;
+    array.value.array.count = 2U;
+    array.value.array.is_complete = true;
+    CHECK(minic_core_type_register(types, &array, &array_id), 91);
+    globals[0].core_type_id = array_id;
+    module.globals = globals;
+    module.global_count = 2U;
+    module.function_symbols = functions;
+    module.function_count = 1U;
+    CHECK(minic_core_module_verify(&module), 92); /* correct ordered edges */
+
+    globals[0].reference_count = 1U;
+    CHECK(!minic_core_module_verify(&module), 93); /* extra ELF relocation */
+    globals[0].reference_count = 2U;
+    fragments[1].kind = MINIC_CORE_MODULE_FRAGMENT_ZERO;
+    fragments[1].relocation_symbol = NULL;
+    CHECK(!minic_core_module_verify(&module), 94); /* missing ELF relocation */
+    fragments[1].kind = MINIC_CORE_MODULE_FRAGMENT_RELOCATION;
+    fragments[1].relocation_symbol = "callee";
+    fragments[0].relocation_symbol = "wrong_object";
+    CHECK(!minic_core_module_verify(&module), 95); /* different target symbol */
+    fragments[0].relocation_symbol = "target_object";
+    references[0].kind = MINIC_CORE_MODULE_REFERENCE_FUNCTION;
+    CHECK(!minic_core_module_verify(&module), 96); /* mismatched target kind */
+    references[0].kind = MINIC_CORE_MODULE_REFERENCE_OBJECT;
+    references[0].target_index = 0U;
+    CHECK(!minic_core_module_verify(&module), 97); /* wrong target identity */
+    references[0].target_index = 1U;
+    references[0].kind = MINIC_CORE_MODULE_REFERENCE_OWNER_LABEL;
+    references[0].target_index = 0U;
+    globals[0].owner_function_index = 0U;
+    fragments[0].relocation_kind = MINIC_CORE_MODULE_RELOCATION_LABEL;
+    fragments[0].relocation_symbol = ".Luser_23";
+    CHECK(minic_core_module_verify(&module), 98); /* a legal owner label */
+    fragments[0].relocation_symbol = "target_object";
+    CHECK(!minic_core_module_verify(&module), 99); /* not a lexical Core label */
+    references[0].kind = MINIC_CORE_MODULE_REFERENCE_OBJECT;
+    references[0].target_index = 1U;
+    globals[0].owner_function_index = SIZE_MAX;
+    globals[0].emittable = false;
+    globals[0].fragments = NULL;
+    globals[0].fragment_count = 0U;
+    CHECK(minic_core_module_verify(&module), 101); /* dead data keeps edges, no bytes */
+    globals[0].is_extern = true;
+    globals[0].emittable = true;
+    CHECK(minic_core_module_verify(&module), 102); /* unmaterialized declaration */
+    return 0;
+}
+
 int main(void) {
     MinicCoreModuleFragment parts[3] = {
         {.kind = MINIC_CORE_MODULE_FRAGMENT_ZERO,
@@ -340,9 +433,10 @@ int main(void) {
     CHECK(verify_module_alias_index_ownership(&module) == 0, 54);
     CHECK(verify_module_function_symbol_range(&module) == 0, 69);
     CHECK(verify_module_emitted_symbol_namespace(&module, &types) == 0, 89);
+    CHECK(verify_materialized_relocation_edges(&module, &types) == 0, 100);
     symbols[0].name = NULL;
     CHECK(!minic_core_module_verify(&module), 19);
     minic_core_type_context_destroy(&types);
-    puts("CORE_MODULE_FRAGMENT_CONTRACT=PASS bounds forms names alias-index=14 clone_provenance=5 forged_owner_label=5 name_range=9 emitted_elf_namespace=18 canonical_source=valid");
+    puts("CORE_MODULE_FRAGMENT_CONTRACT=PASS bounds forms names alias-index=14 clone_provenance=5 forged_owner_label=5 name_range=9 emitted_elf_namespace=18 canonical_source=valid relocation_edge_identity=8");
     return 0;
 }

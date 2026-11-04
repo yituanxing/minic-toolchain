@@ -237,14 +237,14 @@ bool minic_lp64_plan_incoming_parameters(
     types = fn->type_context;
     hidden_indirect_result =
         abi->indirect_result_argument_registers != 0U &&
-        minic_lp64_core_kind(types, fn->core_return_type_id,
+        minic_lp64_core_kind(types, minic_core_function_return_type(fn),
                              MINIC_CORE_TYPE_RECORD) &&
         abi->core_indirect_record != NULL &&
-        abi->core_indirect_record(types, fn->core_return_type_id,
+        abi->core_indirect_record(types, minic_core_function_return_type(fn),
                                   &return_bytes) &&
         return_bytes > 16U;
-    return minic_lp64_plan_types(types, fn->core_parameter_type_ids,
-        fn->parameter_count, fn->parameter_count, false, abi,
+    return minic_lp64_plan_types(types, minic_core_function_parameter_types(fn),
+        minic_core_function_parameter_count(fn), minic_core_function_parameter_count(fn), false, abi,
         hidden_indirect_result, plan);
 }
 

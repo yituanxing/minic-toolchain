@@ -83,7 +83,7 @@ static bool rv64_module_admit_global(const MinicCoreModule *module,
     if (global->storage_size == 0U && !zero_extent) return false;
     if (zero_extent) {
         if (global->initializer_slot_count != 0U ||
-            global->relocation_slot_count != 0U) return false;
+            global->reference_count != 0U) return false;
     } else if (global->is_zero_initialized || global->is_tentative) {
         if (global->initializer_slot_count != 0U) return false;
     } else if (type->kind == MINIC_CORE_TYPE_RECORD) {
@@ -91,9 +91,9 @@ static bool rv64_module_admit_global(const MinicCoreModule *module,
             global->initializer_slot_count == 0U) return false;
     } else if (rv64_module_array_recursive(module->type_context, type) ||
                (type->kind == MINIC_CORE_TYPE_ARRAY &&
-                global->relocation_slot_count != 0U)) {
+                global->reference_count != 0U)) {
         if (global->initializer_slot_count == 0U) return false;
-    } else if (global->relocation_slot_count != 0U ||
+    } else if (global->reference_count != 0U ||
                !minic_multi_module_global_scalar_width(
                    module->type_context, type, &scalar_width) ||
                global->initializer_slot_count >
@@ -120,7 +120,7 @@ bool minic_riscv64_emit_module_global(FILE *file, const MinicTargetInfo *target,
         !minic_riscv64_alignment_power(global->storage_alignment,
                                         &alignment_power)) return false;
     fallback_override = global->is_read_only
-        ? (global->relocation_slot_count != 0U
+        ? (global->reference_count != 0U
                ? ".section .data.rel.ro" : ".section .rodata")
         : ".data";
     if (!minic_multi_module_elf_global_plan_build(

@@ -176,23 +176,23 @@ static bool core_function_can_emit_with_index(
         return core_rv64_capability_reject(function, "sealed-types", 0U, -1);
     if (!require_prepared_abi) {
         const MinicCoreType *ret = rv64_admit_core_base(
-            function, function->core_return_type_id);
+            function, minic_core_function_return_type(function));
         if (ret == NULL ||
-            (function->parameter_count != 0U &&
-             function->core_parameter_type_ids == NULL) ||
+            (minic_core_function_parameter_count(function) != 0U &&
+             minic_core_function_parameter_types(function) == NULL) ||
             (ret->kind != MINIC_CORE_TYPE_VOID && !rv64_admit_core_scalar(ret)))
             return core_rv64_capability_reject(function, "core-return", 0U, -1);
-        for (index = 0U; index < function->parameter_count; ++index) {
+        for (index = 0U; index < minic_core_function_parameter_count(function); ++index) {
             if (!rv64_admit_core_scalar(rv64_admit_core_base(
-                    function, function->core_parameter_type_ids[index])))
+                    function, minic_core_function_parameter_types(function)[index])))
                 return core_rv64_capability_reject(function, "core-parameter", index, -1);
         }
     } else if (abi_plan == NULL || !abi_plan->prepared ||
-               abi_plan->parameter_location_count != function->parameter_count ||
+               abi_plan->parameter_location_count != minic_core_function_parameter_count(function) ||
                abi_plan->outgoing_calls.count != semantic_calls->count ||
                (semantic_calls->count != 0U &&
                 abi_plan->outgoing_calls.sites == NULL) ||
-               (function->parameter_count != 0U &&
+               (minic_core_function_parameter_count(function) != 0U &&
                 abi_plan->parameter_locations == NULL)) {
         /* The function ABI planner owns *all* return/parameter capability
          * checks. Do not second-guess its immutable, qualified placements. */

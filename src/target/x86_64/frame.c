@@ -23,7 +23,7 @@ static bool x86_frame_preflight_reject(
             "MINIC_X86_FRAME_PREFLIGHT function=%s stage=%s parameters=%zu "
             "values=%zu objects=%zu\n",
             fn->name ? fn->name : "?", stage,
-            fn->parameter_count, fn->value_count, fn->object_count);
+            minic_core_function_parameter_count(fn), fn->value_count, fn->object_count);
     return false;
 }
 
@@ -58,7 +58,7 @@ bool minic_x86_64_frame_init_with_storage(const MinicTargetInfo *target, const M
     size_t pos, i, value_bytes, maximum_alignment = 16U;
     if (target == NULL || fn == NULL ||
         fn->type_context == NULL ||
-        (fn->parameter_count != 0U && fn->core_parameter_type_ids == NULL) ||
+        (minic_core_function_parameter_count(fn) != 0U && minic_core_function_parameter_types(fn) == NULL) ||
         facts == NULL || frame == NULL ||
         fn->value_count > (size_t)INT32_MAX / 8U) return false;
     (void)memset(frame, 0, sizeof(*frame));
@@ -106,7 +106,7 @@ bool minic_x86_64_frame_init_with_storage(const MinicTargetInfo *target, const M
     {
         size_t result_bytes;
         frame->has_sret = minic_x86_64_core_memory_result_record(
-            fn->type_context, fn->core_return_type_id, &result_bytes);
+            fn->type_context, minic_core_function_return_type(fn), &result_bytes);
         if (frame->has_sret) {
             if (value_bytes > (size_t)INT32_MAX - 8U)
                 return x86_frame_preflight_reject(fn, "sret-slot");
@@ -119,8 +119,8 @@ bool minic_x86_64_frame_init_with_storage(const MinicTargetInfo *target, const M
      * an early __int128 parameter may destroy a later GP parameter before
      * its PARAMETER instruction executes. No overhead for functions without
      * TI parameters. 48 bytes also preserves 16-byte frame alignment. */
-    for (i = 0U; i < fn->parameter_count; ++i)
-        if (x86_frame_int128_type(fn, fn->core_parameter_type_ids[i])) {
+    for (i = 0U; i < minic_core_function_parameter_count(fn); ++i)
+        if (x86_frame_int128_type(fn, minic_core_function_parameter_types(fn)[i])) {
             const MinicX86AbiRegisters *abi = minic_x86_64_abi_registers(
                 MINIC_CALLING_CONVENTION_DEFAULT);
             size_t bank_bytes;
@@ -135,7 +135,7 @@ bool minic_x86_64_frame_init_with_storage(const MinicTargetInfo *target, const M
             value_bytes += bank_bytes;
             break;
         }
-    if (fn->calling_convention == MINIC_CALLING_CONVENTION_MS_X64) {
+    if (minic_core_function_calling_convention(fn) == MINIC_CALLING_CONVENTION_MS_X64) {
         const MinicX86AbiRegisters *abi = minic_x86_64_abi_registers(
             MINIC_CALLING_CONVENTION_MS_X64);
         size_t gp_bytes, xmm_bytes, nonvolatile_bytes;

@@ -44,7 +44,7 @@ static bool make_dump_types(MinicCoreTypeContext *context, DumpTypes *types) {
 }
 
 static bool attach_dump_types(MinicCoreFunction *function,
-                              const MinicCoreTypeContext *context,
+                              MinicCoreTypeContext *context,
                               const DumpTypes *types) {
     size_t i;
     MinicCoreCallee *callee = &function->callees[0];
@@ -52,7 +52,9 @@ static bool attach_dump_types(MinicCoreFunction *function,
     if (function->value_count != 4U || function->instruction_count != 4U ||
         function->object_count != 1U || function->callee_count != 1U ||
         function->call_signature_count != 1U) return false;
-    function->core_return_type_id = types->integer;
+    if (!minic_core_function_define_signature(
+            function, context, types->integer, NULL, 0U,
+            MINIC_CALLING_CONVENTION_DEFAULT, false)) return false;
     function->objects[0].core_type_id = types->record;
     function->values[0].core_type_id = types->pointer_function;
     function->instructions[0].core_type_id = types->pointer_function;

@@ -121,19 +121,17 @@ static bool make_type_context(MinicCoreTypeContext *context, TypeIds *ids) {
 }
 
 static bool set_snapshot_signature(MinicCoreFunction *function,
+                                   MinicCoreTypeContext *context,
                                    MinicCoreTypeId return_id,
-                                   const MinicCoreTypeId *parameters) {
-    size_t count = function->parameter_count;
-    function->core_return_type_id = return_id;
-    if (count == 0U) return true;
-    function->core_parameter_type_ids = malloc(count * sizeof(*parameters));
-    if (function->core_parameter_type_ids == NULL) return false;
-    (void)memcpy(function->core_parameter_type_ids, parameters,
-                 count * sizeof(*parameters));
-    return true;
+                                   const MinicCoreTypeId *parameters,
+                                   size_t count) {
+    return minic_core_function_define_signature(
+        function, context, return_id, parameters, count,
+        MINIC_CALLING_CONVENTION_DEFAULT, false);
 }
 
-static bool build_indirect_fixture(MinicCoreSourceBuilder *builder, const TypeIds *ids) {
+static bool build_indirect_fixture(MinicCoreSourceBuilder *builder,
+                                   MinicCoreTypeContext *context, const TypeIds *ids) {
     MinicCoreFunction *function = &builder->core;
     MinicType source_parameters[2], source_function_pointer;
     MinicCoreTypeId core_parameters[2];
@@ -154,7 +152,7 @@ static bool build_indirect_fixture(MinicCoreSourceBuilder *builder, const TypeId
     core_parameters[1] = ids->i32;
     if (!minic_core_function_set_signature(builder, "invoke", 6U,
                                            minic_type_int(), source_parameters, 2U) ||
-        !set_snapshot_signature(function, ids->i32, core_parameters) ||
+        !set_snapshot_signature(function, context, ids->i32, core_parameters, 2U) ||
         !minic_core_function_add_call_signature(builder, 0U, minic_type_int(),
                                                 &source_parameters[1], 1U, false,
                                                 MINIC_CALLING_CONVENTION_DEFAULT,
@@ -196,7 +194,8 @@ static bool build_indirect_fixture(MinicCoreSourceBuilder *builder, const TypeId
     return true;
 }
 
-static bool build_field_fixture(MinicCoreSourceBuilder *builder, const TypeIds *ids) {
+static bool build_field_fixture(MinicCoreSourceBuilder *builder,
+                                MinicCoreTypeContext *context, const TypeIds *ids) {
     MinicCoreFunction *function = &builder->core;
     MinicType source_pointer_record, source_pointer_int;
     MinicCoreTypeId core_parameter;
@@ -211,7 +210,7 @@ static bool build_field_fixture(MinicCoreSourceBuilder *builder, const TypeIds *
     core_parameter = ids->ptr_record_a;
     if (!minic_core_function_set_signature(builder, "member", 6U,
                                            source_pointer_int, &source_pointer_record, 1U) ||
-        !set_snapshot_signature(function, ids->ptr_i32, &core_parameter) ||
+        !set_snapshot_signature(function, context, ids->ptr_i32, &core_parameter, 1U) ||
         !minic_core_function_add_block(function, &block)) return false;
     instruction.kind = MINIC_CORE_INSTRUCTION_PARAMETER;
     instruction.value.parameter_index = 0U;
@@ -236,7 +235,8 @@ static bool build_field_fixture(MinicCoreSourceBuilder *builder, const TypeIds *
     return true;
 }
 
-static bool build_object_fixture(MinicCoreSourceBuilder *builder, const TypeIds *ids) {
+static bool build_object_fixture(MinicCoreSourceBuilder *builder,
+                                 MinicCoreTypeContext *context, const TypeIds *ids) {
     MinicCoreFunction *function = &builder->core;
     MinicCoreObjectId object_id;
     MinicCoreBlockId block;
@@ -247,7 +247,7 @@ static bool build_object_fixture(MinicCoreSourceBuilder *builder, const TypeIds 
     minic_core_source_builder_initialize(builder);
     if (!minic_core_function_set_signature(builder, "storage", 7U,
                                            minic_type_int(), NULL, 0U) ||
-        !set_snapshot_signature(function, ids->i32, NULL) ||
+        !set_snapshot_signature(function, context, ids->i32, NULL, 0U) ||
         !minic_core_function_add_object(builder, span, minic_type_int(), &object_id) ||
         !minic_core_function_add_block(function, &block)) return false;
     function->objects[object_id].core_type_id = ids->array_i32_2;
@@ -266,7 +266,7 @@ static bool build_object_fixture(MinicCoreSourceBuilder *builder, const TypeIds 
 /* An independent Core producer does not import C declarations, allocate a
  * SourceDraft, or call the C-facing builder. Publication is CoreType-only. */
 static bool build_core_only_function(MinicCoreFunction *function,
-                                     const TypeIds *ids) {
+                                     MinicCoreTypeContext *context, const TypeIds *ids) {
     MinicCoreInstruction instruction = {0};
     MinicCoreTerminator terminator = {0};
     MinicCoreBlockId block;
@@ -278,7 +278,9 @@ static bool build_core_only_function(MinicCoreFunction *function,
     if (function->name == NULL) return false;
     (void)memcpy(function->name, name, sizeof(name));
     function->name_length = sizeof(name) - 1U;
-    function->core_return_type_id = ids->i32;
+    if (!minic_core_function_define_signature(
+            function, context, ids->i32, NULL, 0U,
+            MINIC_CALLING_CONVENTION_DEFAULT, false)) return false;
     if (!minic_core_function_add_block(function, &block)) return false;
     instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
     instruction.core_type_id = ids->i32;
@@ -499,12 +501,12 @@ int main(void) {
     ResolverState resolver;
 
     CHECK(make_type_context(&context, &ids));
-    CHECK(build_core_only_function(&pure, &ids));
+    CHECK(build_core_only_function(&pure, &context, &ids));
     CHECK(minic_core_function_attach_type_context(&pure, &context));
     CHECK(minic_core_function_verify(&pure));
     minic_core_function_destroy(&pure);
 
-    CHECK(build_indirect_fixture(&builder, &ids));
+    CHECK(build_indirect_fixture(&builder, &context, &ids));
     CHECK(minic_core_function_attach_type_context(function, &context));
     CHECK(minic_core_function_verify_core_type_snapshot(function));
     CHECK(!minic_core_function_attach_type_context(function, &context));
@@ -518,13 +520,13 @@ int main(void) {
     CHECK(!minic_core_function_value_is_kind(function,
                                              MINIC_CORE_VALUE_INVALID,
                                              MINIC_CORE_TYPE_POINTER));
-    saved = function->core_return_type_id;
-    function->core_return_type_id = MINIC_CORE_TYPE_INVALID;
+    saved = function->core_function_type_id;
+    function->core_function_type_id = MINIC_CORE_TYPE_INVALID;
     CHECK(!minic_core_function_verify_core_type_snapshot(function));
-    function->core_return_type_id = saved;
-    function->core_parameter_type_ids[0] = MINIC_CORE_TYPE_INVALID;
+    function->core_function_type_id = saved;
+    context.types[saved].value.function.parameters[0] = MINIC_CORE_TYPE_INVALID;
     CHECK(!minic_core_function_verify_core_type_snapshot(function));
-    function->core_parameter_type_ids[0] = ids.ptr_function_a;
+    context.types[saved].value.function.parameters[0] = ids.ptr_function_a;
 
     /* Same ABI shape is not the same nominal indirect function identity. */
     saved = function->call_signatures[0].core_function_type_id;
@@ -541,7 +543,7 @@ int main(void) {
     CHECK(minic_core_function_verify_core_type_snapshot(function));
     minic_core_source_builder_destroy(&builder);
 
-    CHECK(build_field_fixture(&builder, &ids));
+    CHECK(build_field_fixture(&builder, &context, &ids));
     CHECK(minic_core_function_attach_type_context(function, &context));
     CHECK(minic_core_function_verify_core_type_snapshot(function));
     CHECK(minic_core_function_verify(function));
@@ -580,7 +582,7 @@ int main(void) {
     CHECK(minic_core_function_verify_core_type_snapshot(function));
     minic_core_source_builder_destroy(&builder);
 
-    CHECK(build_object_fixture(&builder, &ids));
+    CHECK(build_object_fixture(&builder, &context, &ids));
     CHECK(minic_core_function_attach_type_context(function, &context));
     CHECK(minic_core_function_object_layout(function, 0U, &extent, &alignment));
     CHECK(extent == 8U && alignment == 4U);
@@ -628,7 +630,7 @@ int main(void) {
     CHECK(!minic_core_function_snapshot_types(&builder, &context,
                                                resolve_source_type, &resolver));
     CHECK(function->type_context == NULL &&
-          function->core_return_type_id == MINIC_CORE_TYPE_INVALID);
+          function->core_function_type_id == MINIC_CORE_TYPE_INVALID);
     CHECK(function->callees[0].core_function_type_id == MINIC_CORE_TYPE_INVALID);
     CHECK(function->values[0].core_type_id == MINIC_CORE_TYPE_INVALID);
     /* A rejected import must leave every C draft available for a retry. */

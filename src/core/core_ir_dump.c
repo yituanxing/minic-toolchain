@@ -616,7 +616,7 @@ static bool dump_terminator(FILE *output,
                             const MinicCoreTerminator *terminator) {
     switch (terminator->kind) {
     case MINIC_CORE_TERMINATOR_RETURN:
-        if (dump_type_is_record(function, function->core_return_type_id)) {
+        if (dump_type_is_record(function, minic_core_function_return_type(function))) {
             return fprintf(output, "  return.object %%o%" PRIu32 "\n", terminator->return_object) >=
                    0;
         }

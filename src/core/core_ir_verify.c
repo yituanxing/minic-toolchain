@@ -141,10 +141,10 @@ bool minic_core_function_verify_core_type_snapshot(const MinicCoreFunction *func
         !storage_shape_is_valid(function->call_arguments,
                                 function->call_argument_count,
                                 function->call_argument_capacity) ||
-        !core_snapshot_exists(function, function->core_return_type_id) ||
+        !core_snapshot_exists(function, minic_core_function_return_type(function)) ||
         !core_snapshot_parameter_list_valid(function,
-                                            function->core_parameter_type_ids,
-                                            function->parameter_count)) return false;
+                                            minic_core_function_parameter_types(function),
+                                            minic_core_function_parameter_count(function))) return false;
     for (i = 0U; i < function->fixed_register_binding_count; ++i)
         if (!core_snapshot_exists(function,
                                   function->fixed_register_bindings[i].core_type_id))
@@ -752,8 +752,8 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
     }
     case MINIC_CORE_INSTRUCTION_PARAMETER:
         return instruction_result_is_valid(function, instruction) &&
-               instruction->value.parameter_index < function->parameter_count &&
-               ct_equal(function->core_parameter_type_ids[instruction->value.parameter_index],
+               instruction->value.parameter_index < minic_core_function_parameter_count(function) &&
+               ct_equal(minic_core_function_parameter_types(function)[instruction->value.parameter_index],
                                 instruction->core_type_id);
     case MINIC_CORE_INSTRUCTION_FIXED_REGISTER_READ: {
         size_t binding_id = instruction->value.fixed_register_binding_id;
@@ -789,9 +789,9 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
         parameter_index = instruction->value.parameter_object.parameter_index;
         return instruction->result == MINIC_CORE_VALUE_INVALID &&
                ct_is_void(instruction->core_type_id) &&
-               parameter_index < function->parameter_count && object_id < function->object_count &&
+               parameter_index < minic_core_function_parameter_count(function) && object_id < function->object_count &&
                core_record_storage_matches(function,
-                   function->core_parameter_type_ids[parameter_index],
+                   minic_core_function_parameter_types(function)[parameter_index],
                    function->objects[object_id].core_type_id);
     }
     case MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS: {
@@ -1555,10 +1555,10 @@ static bool terminator_is_valid(const MinicCoreFunction *function,
     }
     switch (terminator->kind) {
     case MINIC_CORE_TERMINATOR_RETURN:
-        if (ct_is_void(function->core_return_type_id)) {
+        if (ct_is_void(minic_core_function_return_type(function))) {
             return terminator->return_value == MINIC_CORE_VALUE_INVALID;
         }
-        if (ct_is_record(function->core_return_type_id)) {
+        if (ct_is_record(minic_core_function_return_type(function))) {
             /* Returning a const-qualified LOCAL record copies its value.
              * C discards top-level qualifiers on the returned rvalue, not
              * nested member or pointee qualifiers. The Core return object
@@ -1568,12 +1568,12 @@ static bool terminator_is_valid(const MinicCoreFunction *function,
                    terminator->return_object < function->object_count &&
                    core_record_storage_matches(function,
                        function->objects[terminator->return_object].core_type_id,
-                       function->core_return_type_id);
+                       minic_core_function_return_type(function));
         }
         return terminator->return_value < function->value_count &&
                available_values[terminator->return_value] &&
                ct_equal(function->values[terminator->return_value].core_type_id,
-                                function->core_return_type_id);
+                                minic_core_function_return_type(function));
     case MINIC_CORE_TERMINATOR_UNREACHABLE:
         return terminator->return_value == MINIC_CORE_VALUE_INVALID &&
                terminator->return_object == MINIC_CORE_OBJECT_INVALID;
@@ -1684,8 +1684,8 @@ bool minic_core_function_verify(const MinicCoreFunction *function) {
     bool valid;
 
     if (function == NULL || function->name == NULL || function->name_length == 0U ||
-        !minic_function_calling_convention_valid(function->calling_convention) ||
-        (function->parameter_count != 0U && function->core_parameter_type_ids == NULL) ||
+        !minic_function_calling_convention_valid(minic_core_function_calling_convention(function)) ||
+        (minic_core_function_parameter_count(function) != 0U && minic_core_function_parameter_types(function) == NULL) ||
         !storage_shape_is_valid(function->fixed_register_bindings,
                                 function->fixed_register_binding_count,
                                 function->fixed_register_binding_capacity) ||
@@ -1719,9 +1719,9 @@ bool minic_core_function_verify(const MinicCoreFunction *function) {
     /* No source-only fallback: the ingress first materializes its complete
      * CoreType snapshot, then validates this sealed function. */
     if (!minic_core_function_verify_core_type_snapshot(function) ||
-        !core_call_return_type(function, function->core_return_type_id)) return false;
-    for (index = 0U; index < function->parameter_count; ++index)
-        if (!core_call_type(function, function->core_parameter_type_ids[index])) return false;
+        !core_call_return_type(function, minic_core_function_return_type(function))) return false;
+    for (index = 0U; index < minic_core_function_parameter_count(function); ++index)
+        if (!core_call_type(function, minic_core_function_parameter_types(function)[index])) return false;
     for (index = 0U; index < function->fixed_register_binding_count; ++index) {
         const MinicCoreFixedRegisterBinding *binding = &function->fixed_register_bindings[index];
         if (binding->register_name == NULL || binding->register_name_length == 0U ||

@@ -32,6 +32,9 @@ typedef struct MinicCoreSourceCallType {
 typedef struct MinicCoreSourceDraft {
     MinicType return_type;
     MinicType *parameter_types;
+    size_t parameter_count;
+    MinicFunctionCallingConvention calling_convention;
+    bool is_variadic;
 
     MinicCoreEnumType *enum_types;
     size_t enum_type_count;
@@ -96,6 +99,9 @@ bool minic_core_function_set_signature(MinicCoreSourceBuilder *builder,
                                        MinicType return_type,
                                        const MinicType *parameter_types,
                                        size_t parameter_count);
+bool minic_core_function_set_calling_convention(
+    MinicCoreSourceBuilder *builder, MinicFunctionCallingConvention convention);
+bool minic_core_function_set_variadic(MinicCoreSourceBuilder *builder, bool is_variadic);
 bool minic_core_function_add_enum_type(MinicCoreSourceBuilder *builder,
                                        MinicEnumId enum_id,
                                        MinicType effective_integer_type);

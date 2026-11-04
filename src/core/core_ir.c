@@ -235,7 +235,7 @@ void minic_core_function_initialize(MinicCoreFunction *function) {
     }
     (void)memset(function, 0, sizeof(*function));
     function->entry_block = MINIC_CORE_BLOCK_INVALID;
-    function->core_return_type_id = MINIC_CORE_TYPE_INVALID;
+    function->core_function_type_id = MINIC_CORE_TYPE_INVALID;
 }
 
 void minic_core_function_destroy(MinicCoreFunction *function) {
@@ -302,7 +302,6 @@ void minic_core_function_destroy(MinicCoreFunction *function) {
         free(inline_asm->symbol_references);
     }
     free(function->name);
-    free(function->core_parameter_type_ids);
     free(function->fixed_register_bindings);
     free(function->globals);
     free(function->function_symbols);
@@ -318,20 +317,27 @@ void minic_core_function_destroy(MinicCoreFunction *function) {
 }
 
 
-bool minic_core_function_set_calling_convention(
-    MinicCoreFunction *function, MinicFunctionCallingConvention convention) {
-    if (function == NULL || function->name == NULL ||
+bool minic_core_function_define_signature(MinicCoreFunction *function,
+    MinicCoreTypeContext *context, MinicCoreTypeId return_type,
+    const MinicCoreTypeId *parameters, size_t parameter_count,
+    MinicFunctionCallingConvention convention, bool is_variadic) {
+    MinicCoreType type = {0};
+    MinicCoreTypeId identity;
+    if (function == NULL || context == NULL ||
+        function->core_function_type_id != MINIC_CORE_TYPE_INVALID ||
+        (function->type_context != NULL && function->type_context != context) ||
         !minic_function_calling_convention_valid(convention) ||
-        (function->calling_convention != MINIC_CALLING_CONVENTION_DEFAULT &&
-         function->calling_convention != convention))
+        (parameter_count != 0U && parameters == NULL) ||
+        minic_core_type_get(context, return_type) == NULL)
         return false;
-    function->calling_convention = convention;
-    return true;
-}
-
-bool minic_core_function_set_variadic(MinicCoreFunction *function, bool is_variadic) {
-    if (function == NULL || function->name == NULL) return false;
-    function->is_variadic = is_variadic;
+    type.kind = MINIC_CORE_TYPE_FUNCTION;
+    type.value.function.return_type = return_type;
+    type.value.function.parameters = (MinicCoreTypeId *)parameters;
+    type.value.function.parameter_count = parameter_count;
+    type.value.function.calling_convention = convention;
+    type.value.function.is_variadic = is_variadic;
+    if (!minic_core_type_register(context, &type, &identity)) return false;
+    function->core_function_type_id = identity;
     return true;
 }
 

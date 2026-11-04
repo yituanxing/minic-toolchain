@@ -826,11 +826,11 @@ static bool x86_no_sse_function_safe(
     const MinicCoreFunction *fn, const bool *reachable) {
     size_t i, j;
     if (fn == NULL || fn->type_context == NULL ||
-        (fn->parameter_count != 0U && fn->core_parameter_type_ids == NULL))
+        (minic_core_function_parameter_count(fn) != 0U && minic_core_function_parameter_types(fn) == NULL))
         return false;
-    if (x86_no_sse_fp_type(fn, fn->core_return_type_id)) return false;
-    for (i = 0U; i < fn->parameter_count; ++i)
-        if (x86_no_sse_fp_type(fn, fn->core_parameter_type_ids[i]))
+    if (x86_no_sse_fp_type(fn, minic_core_function_return_type(fn))) return false;
+    for (i = 0U; i < minic_core_function_parameter_count(fn); ++i)
+        if (x86_no_sse_fp_type(fn, minic_core_function_parameter_types(fn)[i]))
             return false;
     for (i = 0U; i < fn->block_count; ++i) {
         const MinicCoreBlock *block = &fn->blocks[i];
@@ -912,7 +912,7 @@ static bool x86_emit_function(FILE *out,
                     named ? name : "(unnamed)",
                     !named ? "invalid-name" :
                     !verified ? "core-verification" : "abi-or-frame",
-                    fn->value_count, fn->parameter_count, fn->block_count);
+                    fn->value_count, minic_core_function_parameter_count(fn), fn->block_count);
                 if (verified)
                     (void)minic_core_function_dump(stderr, fn);
             }

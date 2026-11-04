@@ -748,7 +748,7 @@ static bool rv32_term(FILE *out, const MinicCoreFunction *f,
                        const char *symbol) {
     switch (term->kind) {
     case MINIC_CORE_TERMINATOR_RETURN:
-        if (rv32_emit_type_is(f, f->core_return_type_id,
+        if (rv32_emit_type_is(f, minic_core_function_return_type(f),
                              MINIC_CORE_TYPE_RECORD)) {
             /* GNU empty records have a real Core return object, but RISC-V
              * psABI ignores their zero-byte value: no a0/a1 payload and no
@@ -758,11 +758,11 @@ static bool rv32_term(FILE *out, const MinicCoreFunction *f,
             if (fr->abi.indirect_return ||
                 term->return_object >= fr->object_count)
                 return false;
-        } else if (!rv32_emit_type_is(f, f->core_return_type_id,
+        } else if (!rv32_emit_type_is(f, minic_core_function_return_type(f),
                                       MINIC_CORE_TYPE_VOID)) {
             unsigned words;
             if (!rv32_core_scalar_storage_words(f,
-                    f->core_return_type_id, &words))
+                    minic_core_function_return_type(f), &words))
                 return false;
             if (words == 2U) {
                 if (!rv32_pair_slot(out, fr, term->return_value,
@@ -839,12 +839,12 @@ static bool rv32_func(FILE *out, const MinicCoreModule *module,
      * before constructing the frame. Its placements are the sole ILP32
      * authority for call, prologue and return emission. */
     if (!rv32_frame_init_with_storage(
-            &fr, f, target, f->is_variadic, facts, storage)) {
+            &fr, f, target, minic_core_function_is_variadic(f), facts, storage)) {
         if (getenv("MINIC_RV32_FRAME_TRACE") != NULL)
             (void)fprintf(stderr,
                 "RV32_FRAME_OWNER function=%s parameters=%zu values=%zu objects=%zu instructions=%zu\n",
                 module_decl->name != NULL ? module_decl->name : "<unnamed>",
-                f->parameter_count, f->value_count, f->object_count,
+                minic_core_function_parameter_count(f), f->value_count, f->object_count,
                 f->instruction_count);
         rv32_diag(diag, "<rv32-frame>", "rv32i: cannot allocate an ILP32 Core frame");
         rv32_frame_destroy(&fr);

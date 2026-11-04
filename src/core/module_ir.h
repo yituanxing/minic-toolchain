@@ -93,7 +93,9 @@ typedef struct MinicCoreModuleGlobal {
     /* Sealed initializer-shape evidence (not C types or AST locations).
      * Some targets intentionally admit only nonempty flattened payloads. */
     size_t initializer_slot_count;
-    size_t relocation_slot_count;
+    /* Relocation cardinality and canonical target identities are owned by
+     * references[] before reachability and must match materialized fragments
+     * after sealing. There is no independent relocation count. */
     size_t alias_target_index; /* SIZE_MAX when not an alias. */
     size_t owner_function_index; /* SIZE_MAX at file scope. */
     MinicCoreModuleVisibility visibility;

@@ -97,13 +97,13 @@ static bool rv32_plan_incoming(const MinicCoreFunction *function,
      * not walk the signature again. */
     if (function == NULL || function->type_context == NULL ||
         plan == NULL) return false;
-    if (!rv32_abi_core_is(function, function->core_return_type_id,
+    if (!rv32_abi_core_is(function, minic_core_function_return_type(function),
                          MINIC_CORE_TYPE_VOID)) {
-        if (!rv32_plan_shape(function, function->core_return_type_id,
+        if (!rv32_plan_shape(function, minic_core_function_return_type(function),
                              &result_shape))
             return rv32_abi_reject("incoming_return", 0U, function,
-                                   function->core_return_type_id);
-        if (rv32_abi_core_is(function, function->core_return_type_id,
+                                   minic_core_function_return_type(function));
+        if (rv32_abi_core_is(function, minic_core_function_return_type(function),
                             MINIC_CORE_TYPE_RECORD)) {
             plan->record_return_size = result_shape.record_size;
             plan->indirect_return = result_shape.indirect_record;
@@ -112,11 +112,11 @@ static bool rv32_plan_incoming(const MinicCoreFunction *function,
                 cursor.register_words = 1U;
         }
     }
-    if (function->parameter_count != 0U &&
-        function->core_parameter_type_ids == NULL) return false;
-    if (function->parameter_count > SIZE_MAX / sizeof(*plan->parameters))
+    if (minic_core_function_parameter_count(function) != 0U &&
+        minic_core_function_parameter_types(function) == NULL) return false;
+    if (minic_core_function_parameter_count(function) > SIZE_MAX / sizeof(*plan->parameters))
         return false;
-    plan->parameter_count = function->parameter_count;
+    plan->parameter_count = minic_core_function_parameter_count(function);
     if (plan->parameter_count != 0U) {
         plan->parameters = calloc(plan->parameter_count,
                                   sizeof(*plan->parameters));
@@ -124,7 +124,7 @@ static bool rv32_plan_incoming(const MinicCoreFunction *function,
     }
     for (i = 0U; i < plan->parameter_count; ++i) {
         Rv32AbiWordLocation *entry = &plan->parameters[i];
-        const MinicCoreTypeId parameter_type = function->core_parameter_type_ids[i];
+        const MinicCoreTypeId parameter_type = minic_core_function_parameter_types(function)[i];
         if (!rv32_plan_shape(function, parameter_type, entry))
             return rv32_abi_reject("incoming_type", i, function, parameter_type);
         if (entry->words == 0U) continue;

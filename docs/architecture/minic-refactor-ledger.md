@@ -3050,3 +3050,72 @@ The 22 P56 first failures split into three *shared semantic defects*, not 22 fil
 The four remaining machine-ASM errors all used the same valid `xaddq` form with an eight-byte `long` register and an eight-byte `long long` memory operand. A single strict x86 source-size predicate now validates actual width independently across SMP, LOCAL and GS/percpu XADD; the target machine contract still rechecks operands. All **4/4** frozen `.i` compile and assemble to GNU ELF64. The permanent source differential probe runs **5100** native GCC/MiniC comparison pairs, four negative constraints, plus the existing SMP and GS/percpu probes. The three `arch_static_branch` immediate failures arose when the symbolic static-key clone pass could not recover a proven literal branch integer from an initially unreferenced helper. Integer and symbolic specializers now share a stable-entry integer fact oracle, preserving mutable/volatile rejection and clone budgets (the historical MC043 2048/2049 limit remains enforced). All **3/3** frozen original `.i` compile and assemble via GNU GAS with authentic `__jump_table` relocation sections; dynamic `i(key)` remains rejected by both GNU and MiniC, and EFI uses its genuine `-fshort-wchar` Kbuild ABI option.
 
 Thus the **22/22 first-error owners pass local exact-source MiniC plus GNU GAS**; Debug `check-fast` and Release builds also pass on the integrated code. This is not yet a new seven-shard 2758/2758 receipt: newly exposed later failures or final GNU Kbuild relocation/undefined symbols may still occur. Only an exact-head seven-runner receiver may assert completed C ownership, candidate GNU LD and QEMU P0/P1.
+## IR-P59 — One sealed Core FUNCTION signature for definitions (2026-11-04)
+
+The Core call graph already represented direct and indirect call contracts by
+`core_function_type_id`, but a definition still maintained five independent
+facts (`core_return_type_id`, `core_parameter_type_ids`, `parameter_count`,
+`calling_convention` and `is_variadic`). The verifier, common ABI planners
+and all five machine backends read those parallel definition fields. This
+was a real source of semantic drift, not a missing ISA instruction or a reason
+to introduce MIR.
+
+P59 physically removes the parallel fields. One nominal Core FUNCTION type
+now owns each definition's return, parameter list, arity, convention and
+variadic rule. The C-to-Core builder keeps unfinished source facts only in
+its private `MinicCoreSourceDraft`; snapshot publication registers a complete
+FUNCTION type transactionally. Pure Core producers use the explicit
+definition-signature constructor. Core verifiers, dumpers, Common call/ABI
+plans and all five target emitters resolve the sealed type through the same
+checked Core API, without reopening C declarations. Small independent ABI
+test binaries use header-local Core accessors without a new link dependency.
+
+`ModuleFunctionSymbol` still independently owns assembler symbol spelling,
+visibility, aliasing and reachability: those are linker facts, not duplicate
+function-type signatures. No old fields, compatibility shadow signature,
+new optimization or MIR stage was kept.
+
+## IR-P60 — Module relocation references and emitted fragments agree (2026-11-04)
+
+Module construction necessarily first records symbolic `references[]` for
+Core/Module reachability and only then materializes live global initializer
+fragments. Previously `relocation_slot_count` duplicated `reference_count`,
+while neither count was checked against the eventual relocation fragments.
+P60 removes that redundant scalar. The finalized Module verifier now checks
+each emittable non-extern global's relocation fragments against the preserved
+reference edges, in order, for count, object/function/owner-label kind and
+canonical target identity; poisoned mismatches fail closed before ELF output.
+RV32/RV64 admission uses the single reference count rather than another C
+snapshot. Dead static and extern-only declarations retain their preclosure
+edges without being forced to materialize payloads. The separate
+`initializer_slot_count` and `payload_kind` source-shape evidence remains for
+strict target admission; a byte stream alone cannot reconstruct those rules.
+
+**P59/P60 combined local evidence (before merging remote P58):** Debug `all` and `check-fast` PASS;
+Release `-Werror all` PASS; Core Module fragment/rollback/reachability
+contracts PASS, including forged count/kind/symbol/label negatives and dead or
+extern positives; five-target global/section source smoke, RV32/RV64 global
+plans, x86 GNU AS/LD/native and P46 output oracle PASS; `git diff --check`
+PASS. Cross GNU/QEMU targets not provided locally remain SKIP, not PASS.
+
+**Independent Linux boundary:** prior exact-head P57 seven-runner
+[run #41843210178](https://github.com/yituanxing/minic-toolchain/actions/runs/41843210178)
+assembled **2736/2758** original x86 Linux 6.6.143 C owners (99.20%),
+with 22 failed originals and therefore no complete GNU LD/Image/QEMU boot.
+The 22 original `.i` and `.o.cmd` effective flags were replayed against the
+separate P59/P60 local binary **before** the new upstream P58 fix was
+integrated: its 22 first errors remained unchanged, as expected for an IR
+ownership refactor. The upstream P58 ledger above separately records its
+own 22/22 GNU AS local fix. Neither local result is a current integrated
+full-corpus or Linux P1 recertification; same-head acceptance remains required.
+
+**Integrated exact-source P58+P59/P60 replay:** after fast-forwarding the
+same PR branch to `95513f3` and applying both structure batches, all **22/22**
+frozen P57 original GNU Linux `.i` owners compile with the new Debug MiniC
+under their original `.o.cmd` C flags (`-fshort-wchar`, `-funsigned-char`,
+`-mno-sse`) and all **22/22** assemble using the real matching GNU AS flags
+to ELF64 x86-64 relocatable objects (`readelf` machine verified). No GNU C
+fallback or stale candidate object was used. The combined Debug `check-fast`
+and strict Release `-Werror all` also pass; the seven independent Linux
+candidate producer shards and final GNU LD/QEMU receivers have not yet been
+rerun at this integrated tree and are **not** counted as certified.

@@ -72,7 +72,8 @@ bool minic_core_function_set_signature(MinicCoreSourceBuilder *builder,
     MinicCoreSourceDraft *draft;
 
     if (function == NULL || function->name != NULL || builder->source_draft != NULL ||
-        function->parameter_count != 0U || name == NULL || name_length == 0U ||
+        function->core_function_type_id != MINIC_CORE_TYPE_INVALID ||
+        name == NULL || name_length == 0U ||
         (parameter_count != 0U && parameter_types == NULL) ||
         parameter_count > SIZE_MAX / sizeof(*parameters_copy)) {
         return false;
@@ -101,7 +102,26 @@ bool minic_core_function_set_signature(MinicCoreSourceBuilder *builder,
     draft->return_type = return_type;
     draft->parameter_types = parameters_copy;
     builder->source_draft = draft;
-    function->parameter_count = parameter_count;
+    draft->parameter_count = parameter_count;
+    return true;
+}
+
+bool minic_core_function_set_calling_convention(
+    MinicCoreSourceBuilder *builder, MinicFunctionCallingConvention convention) {
+    MinicCoreSourceDraft *draft = builder == NULL ? NULL : builder->source_draft;
+    if (draft == NULL || builder->core.type_context != NULL ||
+        !minic_function_calling_convention_valid(convention) ||
+        (draft->calling_convention != MINIC_CALLING_CONVENTION_DEFAULT &&
+         draft->calling_convention != convention))
+        return false;
+    draft->calling_convention = convention;
+    return true;
+}
+
+bool minic_core_function_set_variadic(MinicCoreSourceBuilder *builder, bool is_variadic) {
+    MinicCoreSourceDraft *draft = builder == NULL ? NULL : builder->source_draft;
+    if (draft == NULL || builder->core.type_context != NULL) return false;
+    draft->is_variadic = is_variadic;
     return true;
 }
 
@@ -638,9 +658,7 @@ static void clear_core_type_snapshots(MinicCoreFunction *function) {
 
     if (function == NULL) return;
     function->type_context = NULL;
-    function->core_return_type_id = MINIC_CORE_TYPE_INVALID;
-    free(function->core_parameter_type_ids);
-    function->core_parameter_type_ids = NULL;
+    function->core_function_type_id = MINIC_CORE_TYPE_INVALID;
     for (index = 0U; index < function->fixed_register_binding_count; ++index)
         function->fixed_register_bindings[index].core_type_id = MINIC_CORE_TYPE_INVALID;
     for (index = 0U; index < function->object_count; ++index)
@@ -736,8 +754,8 @@ bool minic_core_function_verify_source_ingress(const MinicCoreSourceBuilder *bui
     if (
         function->name == NULL || function->name_length == 0U ||
         function->name_length == SIZE_MAX ||
-        (function->parameter_count != 0U && draft->parameter_types == NULL) ||
-        function->parameter_count > SIZE_MAX / sizeof(*draft->parameter_types) ||
+        (draft->parameter_count != 0U && draft->parameter_types == NULL) ||
+        draft->parameter_count > SIZE_MAX / sizeof(*draft->parameter_types) ||
         !ingress_storage_valid(function->fixed_register_bindings,
                                function->fixed_register_binding_count,
                                function->fixed_register_binding_capacity) ||
@@ -791,10 +809,10 @@ bool minic_core_function_verify_source_ingress(const MinicCoreSourceBuilder *bui
         function->instruction_count >= (size_t)UINT32_MAX ||
         function->block_count >= (size_t)UINT32_MAX ||
         function->value_count > function->instruction_count ||
-        !minic_function_calling_convention_valid(function->calling_convention) ||
+        !minic_function_calling_convention_valid(draft->calling_convention) ||
         !ingress_enum_scalar_registered(builder, draft->return_type))
         return false;
-    for (i = 0U; i < function->parameter_count; ++i)
+    for (i = 0U; i < draft->parameter_count; ++i)
         if (!ingress_enum_scalar_registered(builder, draft->parameter_types[i]))
             return false;
     for (i = 0U; i < draft->enum_type_count; ++i)
@@ -917,11 +935,25 @@ bool minic_core_function_snapshot_types(MinicCoreSourceBuilder *builder,
     /* This cleanup is deliberately idempotent. It also permits a caller to
      * retry with a fresh importer after an earlier failed translation. */
     clear_core_type_snapshots(function);
-    if (!snapshot_one_type(context, resolver, user_data, draft->return_type,
-                           &function->core_return_type_id) ||
-        !snapshot_type_array(context, resolver, user_data,
-                             draft->parameter_types, function->parameter_count,
-                             &function->core_parameter_type_ids)) goto failed;
+    {
+        MinicCoreTypeId return_id;
+        MinicCoreTypeId *parameters = NULL;
+        if (!snapshot_one_type(context, resolver, user_data, draft->return_type,
+                               &return_id) ||
+            !snapshot_type_array(context, resolver, user_data,
+                                 draft->parameter_types, draft->parameter_count,
+                                 &parameters)) {
+            free(parameters);
+            goto failed;
+        }
+        if (!minic_core_function_define_signature(
+                function, context, return_id, parameters, draft->parameter_count,
+                draft->calling_convention, draft->is_variadic)) {
+            free(parameters);
+            goto failed;
+        }
+        free(parameters);
+    }
     for (index = 0U; index < function->fixed_register_binding_count; ++index)
         if (!snapshot_one_type(context, resolver, user_data,
                                draft->fixed_register_binding_types[index],

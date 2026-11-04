@@ -94,13 +94,13 @@ bool rv32_frame_init_with_storage(Rv32Frame *frame,
      * lowering of calls and arithmetic runtime helpers deterministic. */
     if (frame->outgoing_size > SIZE_MAX - (frame->abi.indirect_return ? 8U : 4U))
         return rv32_frame_reject("sret_frame_overflow", 0U, f,
-                                 f->core_return_type_id);
+                                 minic_core_function_return_type(f));
     frame->sret_offset = frame->outgoing_size + 4U;
     frame->saved_base_offset = frame->outgoing_size +
                                (frame->abi.indirect_return ? 8U : 4U);
     if (frame->has_dynamic_stack && frame->saved_base_offset > SIZE_MAX - 4U)
         return rv32_frame_reject("saved_base", 0U, f,
-                                 f->core_return_type_id);
+                                 minic_core_function_return_type(f));
     next = frame->saved_base_offset + (frame->has_dynamic_stack ? 4U : 0U);
     /* The already merged RV64 P1 first-write/escape/lifetime proof is
      * target-independent and lives in common CoreObject analysis.

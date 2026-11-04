@@ -190,8 +190,8 @@ bool minic_riscv64_core_frame_initialize_with_storage(
     if (abi_plan != NULL) {
         MinicRiscv64AbiValue return_value;
         if (!abi_plan->prepared ||
-            abi_plan->parameter_location_count != function->parameter_count ||
-            (function->parameter_count != 0U &&
+            abi_plan->parameter_location_count != minic_core_function_parameter_count(function) ||
+            (minic_core_function_parameter_count(function) != 0U &&
              abi_plan->parameter_locations == NULL)) {
             return false;
         }
@@ -205,7 +205,7 @@ bool minic_riscv64_core_frame_initialize_with_storage(
         abi_plan->prepared = false;
         if (return_value.kind == MINIC_RISCV64_ABI_VALUE_INDIRECT) {
             if (!minic_riscv64_core_is_record(
-                    function, function->core_return_type_id) ||
+                    function, minic_core_function_return_type(function)) ||
                 return_value.storage_size <= 16U || return_value.slot_count != 1U ||
                 !minic_core_frame_align_up(storage_size, 8U, &frame->hidden_result_pointer_offset) ||
                 frame->hidden_result_pointer_offset > SIZE_MAX - 8U) {

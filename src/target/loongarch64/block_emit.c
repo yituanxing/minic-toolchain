@@ -267,7 +267,7 @@ static bool loongarch64_return_indirect_record(
     if (out == NULL ||
         fn == NULL || fn->type_context == NULL ||
         !minic_multi_indirect_record_core(fn->type_context,
-            fn->core_return_type_id, &bytes) ||
+            minic_core_function_return_type(fn), &bytes) ||
         bytes <= 16U || bytes > 2048U ||
         !minic_lp64_frame_plan_object(frame_plan, object_id, &src) ||
         !minic_loongarch64_emit_frame_address(
@@ -293,17 +293,17 @@ bool minic_loongarch64_emit_terminator(FILE *out,
         switch (block->terminator.kind) {
         case MINIC_CORE_TERMINATOR_RETURN:
             if (minic_lp64_core_kind(fn->type_context,
-                    fn->core_return_type_id, MINIC_CORE_TYPE_RECORD)) {
+                    minic_core_function_return_type(fn), MINIC_CORE_TYPE_RECORD)) {
                 size_t src, bytes, slots, fp_elements, fp_width, fp;
                 const MinicCoreObjectId object_id = block->terminator.return_object;
                 if (object_id >= fn->object_count ||
                     !minic_lp64_frame_plan_object(frame_plan, object_id, &src))
                     return false;
                 if (minic_multi_empty_record_core(fn->type_context,
-                        fn->core_return_type_id)) {
+                        minic_core_function_return_type(fn))) {
                     /* Complete zero-byte record returns have no payload. */
                 } else if (minic_multi_fp_return_record_core(fn->type_context,
-                               fn->core_return_type_id, &fp_elements, &fp_width)) {
+                               minic_core_function_return_type(fn), &fp_elements, &fp_width)) {
                     for (fp = 0U; fp < fp_elements; ++fp)
                         if (!minic_loongarch64_emit_frame_mem(
                                 out, fp_width == 4U ? "fld.s" : "fld.d",
@@ -316,12 +316,12 @@ bool minic_loongarch64_emit_terminator(FILE *out,
                             indirect_return_offset, dynamic_frame))
                         return false;
                 } else if (!minic_multi_gp_record_core(fn->type_context,
-                               fn->core_return_type_id, &bytes, &slots) ||
+                               minic_core_function_return_type(fn), &bytes, &slots) ||
                            !loongarch64_return_gp_record(out, src, bytes,
                                                          dynamic_frame))
                     return false;
             }
-            if (loongarch64_block_wide(fn, fn->core_return_type_id)) {
+            if (loongarch64_block_wide(fn, minic_core_function_return_type(fn))) {
                 size_t src;
                 if (!minic_lp64_frame_plan_wide_slot(frame_plan, block->terminator.return_value, &src) ||
                     !emit_sp_mem(out, "ld.d", "$a0", src) ||
@@ -329,21 +329,21 @@ bool minic_loongarch64_emit_terminator(FILE *out,
                     return false;
             }
             if ((!minic_lp64_core_kind(fn->type_context,
-                       fn->core_return_type_id, MINIC_CORE_TYPE_VOID) &&
+                       minic_core_function_return_type(fn), MINIC_CORE_TYPE_VOID) &&
                  !minic_lp64_core_kind(fn->type_context,
-                       fn->core_return_type_id, MINIC_CORE_TYPE_RECORD) &&
-                 !loongarch64_block_wide(fn, fn->core_return_type_id) &&
+                       minic_core_function_return_type(fn), MINIC_CORE_TYPE_RECORD) &&
+                 !loongarch64_block_wide(fn, minic_core_function_return_type(fn)) &&
                  !((loongarch64_block_fp_format(fn,
-                           fn->core_return_type_id, MINIC_CORE_FLOAT_BINARY64) ||
+                           minic_core_function_return_type(fn), MINIC_CORE_FLOAT_BINARY64) ||
                     loongarch64_block_fp_format(fn,
-                           fn->core_return_type_id, MINIC_CORE_FLOAT_BINARY32))
+                           minic_core_function_return_type(fn), MINIC_CORE_FLOAT_BINARY32))
                        ? emit_sp_mem(out,
                                      loongarch64_block_fp_format(fn,
-                                           fn->core_return_type_id, MINIC_CORE_FLOAT_BINARY32)
+                                           minic_core_function_return_type(fn), MINIC_CORE_FLOAT_BINARY32)
                                          ? "fld.s" : "fld.d", "$fa0",
                                      minic_lp64_frame_value_offset(frame_plan, block->terminator.return_value))
                        : emit_sp_mem(out, loongarch64_block_register64(fn,
-                                             fn->core_return_type_id)
+                                             minic_core_function_return_type(fn))
                                           ? "ld.d" : "ld.w", "$a0",
                                      minic_lp64_frame_value_offset(frame_plan, block->terminator.return_value)))) ||
                 (has_direct_calls && !emit_sp_mem(out, "ld.d", "$ra", save_offset)) ||

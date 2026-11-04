@@ -201,13 +201,13 @@ bool rv32_emit_parameter_object(FILE *out, const MinicCoreFunction *f,
     idx = ins->value.parameter_object.parameter_index;
     object_id = ins->value.parameter_object.object_id;
     if (idx >= fr->abi.parameter_count ||
-        object_id >= fr->object_count || idx >= f->parameter_count)
+        object_id >= fr->object_count || idx >= minic_core_function_parameter_count(f))
         return false;
-    if (f->core_parameter_type_ids == NULL ||
-        !minic_core_abi_kind(f, f->core_parameter_type_ids[idx],
+    if (minic_core_function_parameter_types(f) == NULL ||
+        !minic_core_abi_kind(f, minic_core_function_parameter_types(f)[idx],
                              MINIC_CORE_TYPE_RECORD) ||
         minic_core_type_unqualified(f->type_context,
-            f->core_parameter_type_ids[idx]) !=
+            minic_core_function_parameter_types(f)[idx]) !=
         minic_core_type_unqualified(f->type_context,
             f->objects[object_id].core_type_id)) {
         return false;
@@ -306,7 +306,7 @@ bool rv32_emit_parameter(FILE *out, const MinicCoreFunction *f,
         ins->kind != MINIC_CORE_INSTRUCTION_PARAMETER)
         return false;
     idx = ins->value.parameter_index;
-    if (idx >= f->parameter_count || idx >= fr->abi.parameter_count ||
+    if (idx >= minic_core_function_parameter_count(f) || idx >= fr->abi.parameter_count ||
         fr->abi.parameters == NULL)
         return false;
     entry = &fr->abi.parameters[idx];

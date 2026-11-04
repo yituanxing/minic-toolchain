@@ -117,7 +117,8 @@ static bool build_function(MinicCoreFunction *fn, MinicCoreTypeContext *context,
     return true;
 }
 
-static int check_invalid_mutations(MinicCoreFunction *fn, const Types *types) {
+static int check_invalid_mutations(MinicCoreFunction *fn, MinicCoreTypeContext *context,
+                                   const Types *types) {
     MinicCoreTypeId saved_type;
     MinicCoreValueId saved_value;
     size_t saved_index;
@@ -161,9 +162,9 @@ static int check_invalid_mutations(MinicCoreFunction *fn, const Types *types) {
     REQUIRE(!minic_core_function_verify(fn));
     fn->blocks[0].terminator.return_value = saved_value;
 
-    fn->core_return_type_id = types->u32;
+    context->types[fn->core_function_type_id].value.function.return_type = types->u32;
     REQUIRE(!minic_core_function_verify(fn));
-    fn->core_return_type_id = types->i32;
+    context->types[fn->core_function_type_id].value.function.return_type = types->i32;
 
     fn->values[2].core_type_id = types->ptr_u32;
     REQUIRE(!minic_core_function_verify(fn));
@@ -179,7 +180,7 @@ int main(void) {
     int result;
     REQUIRE(register_types(&context, &types));
     REQUIRE(build_function(&fn, &context, &types));
-    result = check_invalid_mutations(&fn, &types);
+    result = check_invalid_mutations(&fn, &context, &types);
     minic_core_function_destroy(&fn);
     minic_core_type_context_destroy(&context);
     if (result != 0) return result;

@@ -38,7 +38,9 @@ static bool create_void_return_function(MinicCoreFunction *function,
     function->name = strdup("arena_probe");
     if (function->name == NULL) return false;
     function->name_length = 11U;
-    function->core_return_type_id = void_id;
+    if (!minic_core_function_define_signature(
+            function, context, void_id, NULL, 0U,
+            MINIC_CALLING_CONVENTION_DEFAULT, false)) return false;
     if (!minic_core_function_add_block(function, &entry)) return false;
     terminator.kind = MINIC_CORE_TERMINATOR_RETURN;
     terminator.return_value = MINIC_CORE_VALUE_INVALID;

@@ -61,28 +61,28 @@ bool minic_riscv32_emit_module_global(FILE *out, const MinicTargetInfo *target,
      * distinct ELF symbol policies, not C layout computations. */
     weak_zero = global->is_weak && global->section_name == NULL &&
         global->initializer_slot_count == 0U &&
-        global->relocation_slot_count == 0U &&
+        global->reference_count == 0U &&
         global->payload_kind == MINIC_CORE_MODULE_PAYLOAD_ZERO;
     shared_style = global->storage_size != 0U &&
         global->section_name == NULL && !global->is_weak &&
-        (special_aggregate || global->relocation_slot_count != 0U ||
+        (special_aggregate || global->reference_count != 0U ||
          global->payload_kind == MINIC_CORE_MODULE_PAYLOAD_RECORD_FLEXIBLE ||
          global->payload_kind == MINIC_CORE_MODULE_PAYLOAD_RECORD_RECURSIVE ||
          global->payload_kind == MINIC_CORE_MODULE_PAYLOAD_ARRAY_RECURSIVE);
     if (!shared_style && !special_aggregate &&
-        global->relocation_slot_count == 0U && global->storage_size != 0U &&
+        global->reference_count == 0U && global->storage_size != 0U &&
         !minic_multi_module_global_scalar_width(
             module->type_context, base, &scalar_width) &&
         !weak_zero) return false;
     if (!shared_style && !special_aggregate &&
-        global->relocation_slot_count == 0U && scalar_width != 0U &&
+        global->reference_count == 0U && scalar_width != 0U &&
         global->initializer_slot_count > global->storage_size / scalar_width)
         return false;
     fallback_override = shared_style ? NULL :
         global->is_read_only ? ".section .rodata" :
         weak_zero ? ".bss" : ".data";
     data_directive = (shared_style || special_aggregate ||
-                      global->relocation_slot_count != 0U)
+                      global->reference_count != 0U)
                          ? rv32_module_common_directive
                          : rv32_module_directive;
     if (!minic_multi_module_elf_global_plan_build(

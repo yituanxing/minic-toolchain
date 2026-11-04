@@ -99,7 +99,7 @@ static bool direct_visit_module_global(
             ctx->config->architecture_name,
             obj->name != NULL ? obj->name : "<unnamed>",
             (int)obj->payload_kind, obj->storage_size,
-            obj->relocation_slot_count);
+            obj->reference_count);
     return success;
 }
 
@@ -123,7 +123,7 @@ static bool direct_visit_function(
             "values=%zu instructions=%zu\n",
             ctx->config->architecture_name,
             fn->name != NULL ? fn->name : "<unnamed>",
-            fn->block_count, fn->object_count, fn->parameter_count,
+            fn->block_count, fn->object_count, minic_core_function_parameter_count(fn),
             fn->value_count, fn->instruction_count);
         if (!ctx->census) (void)minic_core_function_dump(stderr, fn);
     }

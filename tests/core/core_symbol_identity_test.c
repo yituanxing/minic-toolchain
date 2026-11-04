@@ -46,7 +46,9 @@ int main(void) {
     function.name = owned("symbols");
     REQUIRE(function.name != NULL);
     function.name_length = strlen(function.name);
-    function.core_return_type_id = void_type;
+    REQUIRE(minic_core_function_define_signature(
+        &function, &types, void_type, NULL, 0U,
+        MINIC_CALLING_CONVENTION_DEFAULT, false));
     REQUIRE(minic_core_function_add_block(&function, &blocks[0]));
     REQUIRE(minic_core_function_add_block(&function, &blocks[1]));
     terminator.kind = MINIC_CORE_TERMINATOR_RETURN;

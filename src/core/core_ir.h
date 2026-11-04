@@ -553,13 +553,9 @@ typedef struct MinicCoreFunction {
     /* The attached type arena is borrowed and must outlive this function and
      * all target consumers. */
     const MinicCoreTypeContext *type_context;
-    MinicCoreTypeId core_return_type_id;
-    MinicCoreTypeId *core_parameter_type_ids;
-    size_t parameter_count;
-    MinicFunctionCallingConvention calling_convention;
-    /* Definition-side signature fact: ABI callee entry (notably RV32
-       register-save areas) must not have to reopen the C function. */
-    bool is_variadic;
+    /* The sole sealed definition signature: return, formals, ABI convention
+       and variadic policy all live in one nominal Core FUNCTION type. */
+    MinicCoreTypeId core_function_type_id;
     /* Integer-specialization clones share Semantic statement ids with their
        source. Their executable Core block labels are already function-scoped,
        so do not also export the source-id .Luser_* compatibility aliases. */
@@ -620,9 +616,48 @@ bool minic_core_function_object_layout(const MinicCoreFunction *function,
 
 void minic_core_function_initialize(MinicCoreFunction *function);
 void minic_core_function_destroy(MinicCoreFunction *function);
-bool minic_core_function_set_calling_convention(
-    MinicCoreFunction *function, MinicFunctionCallingConvention convention);
-bool minic_core_function_set_variadic(MinicCoreFunction *function, bool is_variadic);
+static inline const MinicCoreType *minic_core_function_signature_type(
+    const MinicCoreFunction *function) {
+    const MinicCoreType *type;
+    if (function == NULL || function->type_context == NULL ||
+        function->core_function_type_id == MINIC_CORE_TYPE_INVALID)
+        return NULL;
+    type = minic_core_type_get(function->type_context,
+        minic_core_type_unqualified(function->type_context,
+                                    function->core_function_type_id));
+    return type != NULL && type->kind == MINIC_CORE_TYPE_FUNCTION ? type : NULL;
+}
+/* A one-shot, language-independent producer API. It publishes a complete
+ * FUNCTION identity, not parallel signature fields on CoreFunction. */
+bool minic_core_function_define_signature(MinicCoreFunction *function,
+    MinicCoreTypeContext *context, MinicCoreTypeId return_type,
+    const MinicCoreTypeId *parameters, size_t parameter_count,
+    MinicFunctionCallingConvention convention, bool is_variadic);
+static inline MinicCoreTypeId minic_core_function_return_type(
+    const MinicCoreFunction *function) {
+    const MinicCoreType *type = minic_core_function_signature_type(function);
+    return type == NULL ? MINIC_CORE_TYPE_INVALID : type->value.function.return_type;
+}
+static inline const MinicCoreTypeId *minic_core_function_parameter_types(
+    const MinicCoreFunction *function) {
+    const MinicCoreType *type = minic_core_function_signature_type(function);
+    return type == NULL ? NULL : type->value.function.parameters;
+}
+static inline size_t minic_core_function_parameter_count(
+    const MinicCoreFunction *function) {
+    const MinicCoreType *type = minic_core_function_signature_type(function);
+    return type == NULL ? 0U : type->value.function.parameter_count;
+}
+static inline MinicFunctionCallingConvention minic_core_function_calling_convention(
+    const MinicCoreFunction *function) {
+    const MinicCoreType *type = minic_core_function_signature_type(function);
+    return type == NULL ? (MinicFunctionCallingConvention)-1 :
+                          type->value.function.calling_convention;
+}
+static inline bool minic_core_function_is_variadic(const MinicCoreFunction *function) {
+    const MinicCoreType *type = minic_core_function_signature_type(function);
+    return type != NULL && type->value.function.is_variadic;
+}
 bool minic_core_function_add_block(MinicCoreFunction *function, MinicCoreBlockId *block_id);
 bool minic_core_function_add_function_symbol(MinicCoreFunction *function,
                                              const char *name,

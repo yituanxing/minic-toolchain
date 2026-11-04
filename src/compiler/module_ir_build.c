@@ -199,7 +199,6 @@ static bool module_capture_global_identity(MinicCoreModuleGlobal *destination,
     destination->is_block_scope_extern_only = source->is_block_scope_extern_only;
     destination->is_thread_local = source->is_thread_local;
     destination->initializer_slot_count = source->initializer_count;
-    destination->relocation_slot_count = source->relocation_count;
     destination->was_source_emission_pruned = source->is_emission_pruned;
     destination->is_file_scope_reachability_root =
         source->owner_function == MINIC_FUNCTION_INVALID &&

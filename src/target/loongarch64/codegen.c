@@ -61,12 +61,12 @@ static bool loongarch64_lp64s_executable_supported(
     if (fn == NULL || target == NULL ||
         fn->type_context == NULL ||
         loongarch64_core_executed_fp_type(fn->type_context,
-                                         fn->core_return_type_id)) return false;
+                                         minic_core_function_return_type(fn))) return false;
     if (minic_multi_fp_return_record_core(fn->type_context,
-            fn->core_return_type_id, &count, &width)) return false;
-    for (i = 0U; i < fn->parameter_count; ++i)
+            minic_core_function_return_type(fn), &count, &width)) return false;
+    for (i = 0U; i < minic_core_function_parameter_count(fn); ++i)
         if (loongarch64_core_executed_fp_type(fn->type_context,
-                fn->core_parameter_type_ids[i])) return false;
+                minic_core_function_parameter_types(fn)[i])) return false;
     /* Validate actual Core call signatures, not every source declaration.
      * An FP formal type can exist even when argument conversion was folded
      * or no FP-typed SSA operand survives in the call lowering. */

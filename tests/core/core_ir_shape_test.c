@@ -70,7 +70,7 @@ static bool build_function(MinicCoreSourceBuilder *builder, const char *mode) {
         return false;
     }
     if ((strcmp(mode, "variadic") == 0 &&
-         !minic_core_function_set_variadic(function, true)) ||
+         !minic_core_function_set_variadic(builder, true)) ||
         !minic_core_function_add_block(function, &block) ||
         !minic_core_function_append_source_value_instruction(
             builder, block, &instruction, result_type, &value)) return false;
@@ -102,11 +102,11 @@ static int run_case(const char *case_name) {
         return 91;
     }
     if (strcmp(case_name, "variadic") == 0 &&
-        (!function->is_variadic ||
-         !minic_core_function_set_variadic(function, false) ||
-         function->is_variadic ||
-         !minic_core_function_set_variadic(function, true) ||
-         !function->is_variadic)) {
+        (!builder.source_draft->is_variadic ||
+         !minic_core_function_set_variadic(&builder, false) ||
+         builder.source_draft->is_variadic ||
+         !minic_core_function_set_variadic(&builder, true) ||
+         !builder.source_draft->is_variadic)) {
         minic_core_source_builder_destroy(&builder);
         return 94;
     }

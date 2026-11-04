@@ -29,18 +29,18 @@ MinicDirectLP64ProfileResult minic_multi_direct_lp64_profile_function(
         incoming == NULL || profile == NULL ||
         !minic_direct_lp64_abi_policy_valid(abi))
         return MINIC_DIRECT_LP64_PROFILE_PARAMETER_SHAPE;
-    if ((fn->parameter_count != 0U && fn->core_parameter_type_ids == NULL) ||
+    if ((minic_core_function_parameter_count(fn) != 0U && minic_core_function_parameter_types(fn) == NULL) ||
         abi->core_indirect_record == NULL ||
         abi->core_indirect_return == NULL)
         return MINIC_DIRECT_LP64_PROFILE_PARAMETER_SHAPE;
     (void)memset(profile, 0, sizeof(*profile));
     profile->variadic_address_count = facts->variadic_address_count;
     profile->has_dynamic_stack = facts->uses_dynamic_stack_alloc;
-    if (fn->is_variadic) {
-        for (i = 0U; i < fn->parameter_count; ++i)
+    if (minic_core_function_is_variadic(fn)) {
+        for (i = 0U; i < minic_core_function_parameter_count(fn); ++i)
             if (!abi->variadic_named_double_supported &&
                 direct_profile_core_float_format(fn->type_context,
-                    fn->core_parameter_type_ids[i], MINIC_CORE_FLOAT_BINARY64))
+                    minic_core_function_parameter_types(fn)[i], MINIC_CORE_FLOAT_BINARY64))
                 return MINIC_DIRECT_LP64_PROFILE_VARIADIC_FIXED_FLOAT;
     }
     /* The incoming ABI classifier is the source of truth for consumed
@@ -48,9 +48,9 @@ MinicDirectLP64ProfileResult minic_multi_direct_lp64_profile_function(
      * floating argument can occupy an FAR, and a hidden indirect result
      * consumes the first LoongArch GAR. Counting C parameters as GARs
      * would position va_start at the wrong byte address. */
-    for (i = 0U; i < fn->parameter_count; ++i) {
+    for (i = 0U; i < minic_core_function_parameter_count(fn); ++i) {
         size_t record_size, record_slots;
-        const MinicCoreTypeId id = fn->core_parameter_type_ids[i];
+        const MinicCoreTypeId id = minic_core_function_parameter_types(fn)[i];
         if (!minic_lp64_core_valid_parameter_type(fn->type_context, id) &&
             !minic_multi_empty_record_core(fn->type_context, id) &&
             !minic_multi_gp_record_core(fn->type_context, id,
@@ -86,7 +86,7 @@ MinicDirectLP64ProfileResult minic_multi_direct_lp64_profile_function(
                     (loc->kind == MINIC_LP64_ARGUMENT_WIDE &&
                      abi->long_double_in_fp_register &&
                      direct_profile_core_float_format(fn->type_context,
-                         fn->core_parameter_type_ids[i], MINIC_CORE_FLOAT_EXTENDED))) {
+                         minic_core_function_parameter_types(fn)[i], MINIC_CORE_FLOAT_EXTENDED))) {
                     profile->fixed_fp_count = abi->fp_argument_registers;
                 } else {
                     profile->fixed_gp_count = abi->gp_argument_registers;
@@ -113,16 +113,16 @@ MinicDirectLP64ProfileResult minic_multi_direct_lp64_profile_function(
          * already tracks those slots. Rejecting >8 fixed arguments here
          * suppressed a valid ABI case and hid cursor-placement bugs. */
         if (cursors != profile->variadic_address_count ||
-            (starts != 0U && !fn->is_variadic))
+            (starts != 0U && !minic_core_function_is_variadic(fn)))
             return MINIC_DIRECT_LP64_PROFILE_VARIADIC_SHAPE;
     } else if (profile->variadic_address_count != 0U) {
         size_t starts = 0U, cursors = 0U, consumed_gp = 0U;
         size_t indirect_bytes = 0U;
         const bool hidden_indirect_result =
             minic_lp64_core_kind(fn->type_context,
-                fn->core_return_type_id, MINIC_CORE_TYPE_RECORD) &&
+                minic_core_function_return_type(fn), MINIC_CORE_TYPE_RECORD) &&
             abi->core_indirect_record(fn->type_context,
-                fn->core_return_type_id, &indirect_bytes) &&
+                minic_core_function_return_type(fn), &indirect_bytes) &&
             indirect_bytes > 16U;
         consumed_gp = hidden_indirect_result ? 1U : 0U;
         for (i = 0U; i < incoming->argument_count; ++i) {
@@ -147,7 +147,7 @@ MinicDirectLP64ProfileResult minic_multi_direct_lp64_profile_function(
          * mutable 32-byte va_list state. Multiple GNU va_start executions
          * are valid and each receives the same ABI starting address.
          * A Core ABI-state va_copy must never be confused with va_start. */
-        if (!fn->is_variadic || cursors != profile->variadic_address_count ||
+        if (!minic_core_function_is_variadic(fn) || cursors != profile->variadic_address_count ||
             starts != cursors || starts == 0U)
             return MINIC_DIRECT_LP64_PROFILE_VARIADIC_SHAPE;
     }

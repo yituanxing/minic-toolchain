@@ -92,12 +92,12 @@ bool minic_riscv64_emit_incoming_parameter(FILE *file,
         !minic_core_abi_value_shape(function, instruction->core_type_id, &core))
         return false;
     parameter_index = instruction->value.parameter_index;
-    if (parameter_index >= function->parameter_count) {
+    if (parameter_index >= minic_core_function_parameter_count(function)) {
         return false;
     }
-    if (function->core_parameter_type_ids == NULL ||
+    if (minic_core_function_parameter_types(function) == NULL ||
         minic_core_type_unqualified(function->type_context,
-            function->core_parameter_type_ids[parameter_index]) !=
+            minic_core_function_parameter_types(function)[parameter_index]) !=
         minic_core_type_unqualified(function->type_context,
             instruction->core_type_id)) return false;
     is_fp = core.kind == MINIC_CORE_TYPE_FLOAT &&
@@ -226,20 +226,20 @@ bool minic_riscv64_emit_incoming_parameter_object(FILE *file,
     if (!minic_riscv64_core_frame_parameter_location(
             frame, instruction->value.parameter_object.parameter_index, &location) ||
         object_id >= function->object_count ||
-        instruction->value.parameter_object.parameter_index >= function->parameter_count ||
+        instruction->value.parameter_object.parameter_index >= minic_core_function_parameter_count(function) ||
         !minic_riscv64_core_frame_object_offset(function, frame, object_id, &object_offset)) {
         return false;
     }
     if (function->type_context == NULL ||
-        function->core_parameter_type_ids == NULL ||
+        minic_core_function_parameter_types(function) == NULL ||
         !minic_core_abi_kind(function,
-            function->core_parameter_type_ids[
+            minic_core_function_parameter_types(function)[
                 instruction->value.parameter_object.parameter_index],
             MINIC_CORE_TYPE_RECORD) ||
         minic_core_type_unqualified(function->type_context,
             function->objects[object_id].core_type_id) !=
         minic_core_type_unqualified(function->type_context,
-            function->core_parameter_type_ids[
+            minic_core_function_parameter_types(function)[
                 instruction->value.parameter_object.parameter_index]))
         return false;
     if (location.value.kind == MINIC_RISCV64_ABI_VALUE_IGNORE) {

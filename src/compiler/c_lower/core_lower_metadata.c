@@ -44,13 +44,13 @@ bool core_capture_enum_metadata(MinicCoreLowerContext *context) {
         source->call_signature_count != function->call_signature_count ||
         source->object_type_count != function->object_count ||
         source->instruction_type_count != function->instruction_count ||
-        (function->parameter_count != 0U && source->parameter_types == NULL)) {
+        (source->parameter_count != 0U && source->parameter_types == NULL)) {
         return false;
     }
     if (!core_capture_enum_type_metadata(context, source->return_type)) {
         return false;
     }
-    for (index = 0U; index < function->parameter_count; ++index) {
+    for (index = 0U; index < source->parameter_count; ++index) {
         if (!core_capture_enum_type_metadata(context, source->parameter_types[index])) {
             return false;
         }

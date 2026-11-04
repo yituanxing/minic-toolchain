@@ -368,7 +368,7 @@ static bool emit_terminator(FILE *file,
         const MinicCoreType *core_return;
         bool record_return, wide_return, fp_return, double_return;
         core_return = minic_riscv64_core_base_type(
-            function, function->core_return_type_id);
+            function, minic_core_function_return_type(function));
         if (core_return == NULL) return false;
         record_return = core_return->kind == MINIC_CORE_TYPE_RECORD;
         wide_return = (core_return->kind == MINIC_CORE_TYPE_INTEGER &&
@@ -392,9 +392,9 @@ static bool emit_terminator(FILE *file,
                 minic_core_type_unqualified(function->type_context,
                     function->objects[terminator->return_object].core_type_id) !=
                 minic_core_type_unqualified(function->type_context,
-                    function->core_return_type_id) ||
+                    minic_core_function_return_type(function)) ||
                 !minic_riscv64_abi_classify_core_value_profile(
-                    function->type_context, function->core_return_type_id,
+                    function->type_context, minic_core_function_return_type(function),
                     frame->named_parameter_cursor.lp64_soft_float,
                     &return_value) ||
                 !minic_riscv64_core_frame_object_offset(function, frame, terminator->return_object, &object_offset) ||
@@ -405,13 +405,13 @@ static bool emit_terminator(FILE *file,
                 if (return_value.slot_count == 0U || return_value.slot_count > 2U ||
                     !minic_riscv64_emit_integer_aggregate_load_chunk_core_profile(
                         file, function->type_context,
-                        function->core_return_type_id, 0U, "a0", "t0",
+                        minic_core_function_return_type(function), 0U, "a0", "t0",
                         frame->named_parameter_cursor.lp64_soft_float,
                         object_offset) ||
                     (return_value.slot_count == 2U &&
                      !minic_riscv64_emit_integer_aggregate_load_chunk_core_profile(
                          file, function->type_context,
-                         function->core_return_type_id, 1U, "a1", "t0",
+                         minic_core_function_return_type(function), 1U, "a1", "t0",
                          frame->named_parameter_cursor.lp64_soft_float,
                          object_offset))) {
                     return false;

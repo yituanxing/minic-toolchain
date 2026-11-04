@@ -280,7 +280,7 @@ static bool aarch64_emit_indirect_record_return(
     size_t src, bytes;
     if (fn->type_context == NULL ||
         !minic_aarch64_indirect_record_core(
-            fn->type_context, fn->core_return_type_id, &bytes) ||
+            fn->type_context, minic_core_function_return_type(fn), &bytes) ||
         bytes <= 16U || bytes > 2048U ||
         !minic_lp64_frame_plan_object(frame_plan, object_id, &src) ||
         !minic_a64_emit_owned_address(out, view, src, 11U) ||
@@ -309,24 +309,24 @@ bool minic_aarch64_emit_terminator(FILE *out,
         const MinicA64FrameView view = {
             dynamic_frame, frame, 0U, saved_entry_sp_offset
         };
-        if (a64_block_type(fn, fn->core_return_type_id) == NULL)
+        if (a64_block_type(fn, minic_core_function_return_type(fn)) == NULL)
             return false;
         switch (block->terminator.kind) {
         case MINIC_CORE_TERMINATOR_RETURN:
-            if (a64_block_class(fn, fn->core_return_type_id,
+            if (a64_block_class(fn, minic_core_function_return_type(fn),
                                 MINIC_CORE_TYPE_RECORD)) {
                 size_t src, bytes, slots, fp_elements, fp_width, fp;
                 const MinicCoreObjectId object_id = block->terminator.return_object;
                 if (object_id >= fn->object_count)
                     return false;
-                if (a64_block_empty_record(fn, fn->core_return_type_id)) {
+                if (a64_block_empty_record(fn, minic_core_function_return_type(fn))) {
                     if (!a64_block_empty_record(fn,
                             fn->objects[object_id].core_type_id))
                         return false;
                 } else if (!minic_lp64_frame_plan_object(
                         frame_plan, object_id, &src))
                     return false;
-                else if (a64_block_fp_record(fn, fn->core_return_type_id,
+                else if (a64_block_fp_record(fn, minic_core_function_return_type(fn),
                        &fp_elements, &fp_width)) {
                     for (fp = 0U; fp < fp_elements; ++fp) {
                         size_t off = src + fp * fp_width;
@@ -342,12 +342,12 @@ bool minic_aarch64_emit_terminator(FILE *out,
                             object_id, ctx->indirect_return_offset, &view))
                         return false;
                 } else if (!a64_block_gp_record(
-                               fn, fn->core_return_type_id, &bytes, &slots) ||
+                               fn, minic_core_function_return_type(fn), &bytes, &slots) ||
                            !aarch64_return_gp_record(out, src, bytes,
                                                       &view))
                     return false;
             }
-            if (a64_block_i128(fn, fn->core_return_type_id)) {
+            if (a64_block_i128(fn, minic_core_function_return_type(fn))) {
                 size_t src;
                 if (!minic_lp64_frame_plan_wide_slot(
                         frame_plan, block->terminator.return_value, &src) ||
@@ -357,7 +357,7 @@ bool minic_aarch64_emit_terminator(FILE *out,
                         MINIC_A64_REG_X, 1U, src + 8U))
                     return false;
             }
-            if (a64_block_fp(fn, fn->core_return_type_id,
+            if (a64_block_fp(fn, minic_core_function_return_type(fn),
                              MINIC_CORE_FLOAT_EXTENDED, 16U)) {
                 size_t src;
                 if (!minic_lp64_frame_plan_wide_slot(frame_plan, block->terminator.return_value, &src) ||
@@ -365,19 +365,19 @@ bool minic_aarch64_emit_terminator(FILE *out,
                         MINIC_A64_REG_Q, 0U, src))
                     return false;
             }
-            if (!a64_block_class(fn, fn->core_return_type_id,
+            if (!a64_block_class(fn, minic_core_function_return_type(fn),
                                  MINIC_CORE_TYPE_VOID) &&
-                !a64_block_class(fn, fn->core_return_type_id,
+                !a64_block_class(fn, minic_core_function_return_type(fn),
                                  MINIC_CORE_TYPE_RECORD) &&
-                !a64_block_fp(fn, fn->core_return_type_id,
+                !a64_block_fp(fn, minic_core_function_return_type(fn),
                               MINIC_CORE_FLOAT_EXTENDED, 16U) &&
-                !a64_block_i128(fn, fn->core_return_type_id)) {
+                !a64_block_i128(fn, minic_core_function_return_type(fn))) {
                 const MinicA64FrameRegisterClass kind =
-                    a64_block_fp(fn, fn->core_return_type_id,
+                    a64_block_fp(fn, minic_core_function_return_type(fn),
                                  MINIC_CORE_FLOAT_BINARY64, 8U) ? MINIC_A64_REG_D
-                    : a64_block_fp(fn, fn->core_return_type_id,
+                    : a64_block_fp(fn, minic_core_function_return_type(fn),
                                    MINIC_CORE_FLOAT_BINARY32, 4U) ? MINIC_A64_REG_S
-                    : a64_block_register64(fn, fn->core_return_type_id)
+                    : a64_block_register64(fn, minic_core_function_return_type(fn))
                         ? MINIC_A64_REG_X : MINIC_A64_REG_W;
                 if (!minic_a64_emit_owned_slot(out, &view, false, kind, 0U,
                         minic_lp64_frame_value_offset(frame_plan, block->terminator.return_value)))

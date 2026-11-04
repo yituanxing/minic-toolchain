@@ -784,12 +784,12 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicCoreModule *module
         const MinicCoreObjectId object = ins->value.parameter_object.object_id;
         const MinicX86ArgLocation *location;
         const bool type_compatible = fn->type_context != NULL &&
-            position < fn->parameter_count &&
+            position < minic_core_function_parameter_count(fn) &&
             object < fn->object_count &&
-            fn->core_parameter_type_ids != NULL &&
+            minic_core_function_parameter_types(fn) != NULL &&
             minic_x86_64_core_record_abi_compatible(
                 fn->type_context, fn->objects[object].core_type_id,
-                fn->core_parameter_type_ids[position]);
+                minic_core_function_parameter_types(fn)[position]);
         if (abi == NULL || frame->incoming_arguments.calling_convention !=
                 MINIC_CALLING_CONVENTION_DEFAULT ||
             position >= frame->incoming_arguments.argument_count ||
@@ -1666,22 +1666,22 @@ bool minic_x86_64_emit_core_terminator(FILE *out,
             if (!frame || !fn || !fn->type_context || !fn->objects ||
                 term->return_value != MINIC_CORE_VALUE_INVALID ||
                 term->return_object >= fn->object_count ||
-                !x86_emit_core_kind(fn, fn->core_return_type_id,
+                !x86_emit_core_kind(fn, minic_core_function_return_type(fn),
                                     MINIC_CORE_TYPE_RECORD) ||
                 !minic_x86_64_core_record_abi_compatible(
-                    fn->type_context, fn->core_return_type_id,
+                    fn->type_context, minic_core_function_return_type(fn),
                     fn->objects[term->return_object].core_type_id) ||
                 !x86_object_address(out, frame, term->return_object, "%r11"))
                 return false;
             if (minic_x86_64_core_one_gp_record(
-                    fn->type_context, fn->core_return_type_id, &bytes)) {
+                    fn->type_context, minic_core_function_return_type(fn), &bytes)) {
                 if (!x86_one_gp_load(out, bytes, 0U)) return false;
             } else if (minic_x86_64_core_two_gp_record(
-                    fn->type_context, fn->core_return_type_id)) {
+                    fn->type_context, minic_core_function_return_type(fn))) {
                 const MinicX86AbiRegisters *abi = minic_x86_64_abi_registers(
                     MINIC_CALLING_CONVENTION_DEFAULT);
                 const MinicCoreType *resolved = x86_emit_core_type(
-                    fn, fn->core_return_type_id);
+                    fn, minic_core_function_return_type(fn));
                 if (resolved == NULL || !resolved->has_layout) return false;
                 bytes = resolved->size;
                 if (abi == NULL || abi->gp_result_count < 2U ||
@@ -1693,7 +1693,7 @@ bool minic_x86_64_emit_core_terminator(FILE *out,
                     return false;
             } else if (frame->has_sret && frame->sret_save_offset != 0U &&
                        minic_x86_64_core_memory_result_record(
-                           fn->type_context, fn->core_return_type_id, &bytes)) {
+                           fn->type_context, minic_core_function_return_type(fn), &bytes)) {
                 /* Caller passes a private destination in RDI. Its saved
                  * value is stable across nested calls; a bounded byte copy
                  * preserves tail bytes and does not read past the record. */
@@ -1713,11 +1713,11 @@ bool minic_x86_64_emit_core_terminator(FILE *out,
             return fprintf(out,"  jmp .Lmini_x86_f%zu_ret\n",function_id)>=0;
         }
         if (term->return_value != MINIC_CORE_VALUE_INVALID) {
-            if (x86_emit_core_float(fn, fn->core_return_type_id,
+            if (x86_emit_core_float(fn, minic_core_function_return_type(fn),
                                     MINIC_CORE_FLOAT_EXTENDED))
                 return x86_x87_load(out, frame, term->return_value) &&
                        fprintf(out, "  jmp .Lmini_x86_f%zu_ret\n", function_id) >= 0;
-            if (x86_emit_core_int128(fn, fn->core_return_type_id)) {
+            if (x86_emit_core_int128(fn, minic_core_function_return_type(fn))) {
                 const MinicX86AbiRegisters *abi = minic_x86_64_abi_registers(
                     MINIC_CALLING_CONVENTION_DEFAULT);
                 return abi != NULL && abi->gp_result_count >= 2U &&
@@ -1727,10 +1727,10 @@ bool minic_x86_64_emit_core_terminator(FILE *out,
             }
             if (!x86_value_load(out, frame, term->return_value, "%rax"))
                 return false;
-            if (x86_emit_core_float(fn, fn->core_return_type_id,
+            if (x86_emit_core_float(fn, minic_core_function_return_type(fn),
                                     MINIC_CORE_FLOAT_BINARY64)) {
                 if (fprintf(out, "  movq %%rax, %%xmm0\n") < 0) return false;
-            } else if (x86_emit_core_float(fn, fn->core_return_type_id,
+            } else if (x86_emit_core_float(fn, minic_core_function_return_type(fn),
                                            MINIC_CORE_FLOAT_BINARY32)) {
                 if (fprintf(out, "  movd %%eax, %%xmm0\n") < 0) return false;
             }

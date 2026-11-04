@@ -36,10 +36,10 @@ static bool minic_riscv64_function_abi_plan_qualified(
     size_t index;
         MinicRiscv64AbiValue return_value;
         if (function == NULL || function->type_context == NULL ||
-            (function->parameter_count != 0U &&
-             function->core_parameter_type_ids == NULL) ||
+            (minic_core_function_parameter_count(function) != 0U &&
+             minic_core_function_parameter_types(function) == NULL) ||
             abi_plan == NULL || !abi_plan->prepared ||
-            abi_plan->parameter_location_count != function->parameter_count) {
+            abi_plan->parameter_location_count != minic_core_function_parameter_count(function)) {
             return false;
         }
         return_value = abi_plan->return_value;
@@ -51,27 +51,27 @@ static bool minic_riscv64_function_abi_plan_qualified(
                 return false;
             }
         } else if (return_value.kind == MINIC_RISCV64_ABI_VALUE_INDIRECT) {
-            if (!rv64_fn_is_record(function, function->core_return_type_id) ||
+            if (!rv64_fn_is_record(function, minic_core_function_return_type(function)) ||
                 return_value.storage_size <= 16U || return_value.slot_count != 1U) {
                 return false;
             }
         } else if (return_value.kind == MINIC_RISCV64_ABI_VALUE_WIDE_SCALAR) {
-            if (!rv64_fn_is_wide_scalar(function, function->core_return_type_id) ||
+            if (!rv64_fn_is_wide_scalar(function, minic_core_function_return_type(function)) ||
                 return_value.storage_size != 16U || return_value.slot_count != 2U) {
                 return false;
             }
         } else if (return_value.kind != MINIC_RISCV64_ABI_VALUE_VOID &&
                    return_value.kind != MINIC_RISCV64_ABI_VALUE_INTEGER &&
                    !(return_value.kind == MINIC_RISCV64_ABI_VALUE_FLOAT &&
-                     rv64_fn_is_fp_scalar(function, function->core_return_type_id))) {
+                     rv64_fn_is_fp_scalar(function, minic_core_function_return_type(function)))) {
             return false;
         }
-        for (index = 0U; index < function->parameter_count; ++index) {
+        for (index = 0U; index < minic_core_function_parameter_count(function); ++index) {
             const MinicRiscv64AbiArgumentLocation location =
                 abi_plan->parameter_locations[index];
             if (location.value.kind == MINIC_RISCV64_ABI_VALUE_INDIRECT) {
                 if (!rv64_fn_is_record(function,
-                        function->core_parameter_type_ids[index]) ||
+                        minic_core_function_parameter_types(function)[index]) ||
                     location.value.storage_size == 0U || location.value.slot_count != 1U ||
                     location.floating_register_count != 0U ||
                     !((location.integer_register_count == 1U &&
@@ -97,13 +97,13 @@ static bool minic_riscv64_function_abi_plan_qualified(
                             (location.integer_register_count == 0U &&
                              location.stack_slot_count == 1U)));
                 if (!rv64_fn_is_fp_scalar(function,
-                        function->core_parameter_type_ids[index]) ||
+                        minic_core_function_parameter_types(function)[index]) ||
                     !correct_location) {
                     return false;
                 }
             } else if (location.value.kind == MINIC_RISCV64_ABI_VALUE_WIDE_SCALAR) {
                 if (!rv64_fn_is_wide_scalar(function,
-                        function->core_parameter_type_ids[index]) ||
+                        minic_core_function_parameter_types(function)[index]) ||
                     location.value.storage_size != 16U || location.value.slot_count != 2U ||
                     location.floating_register_count != 0U ||
                     location.integer_register_count + location.stack_slot_count != 2U ||
@@ -129,27 +129,27 @@ bool minic_riscv64_function_abi_plan_build_profile(
     size_t i;
     if (fn == NULL || fn->type_context == NULL || plan == NULL ||
         plan->prepared || plan->parameter_locations != NULL ||
-        (fn->parameter_count != 0U && fn->core_parameter_type_ids == NULL) ||
-        fn->parameter_count > SIZE_MAX / sizeof(*plan->parameter_locations) ||
+        (minic_core_function_parameter_count(fn) != 0U && minic_core_function_parameter_types(fn) == NULL) ||
+        minic_core_function_parameter_count(fn) > SIZE_MAX / sizeof(*plan->parameter_locations) ||
         !minic_riscv64_abi_cursor_initialize_for_core_return_profile(
-            fn->type_context, fn->core_return_type_id, lp64_soft_float,
+            fn->type_context, minic_core_function_return_type(fn), lp64_soft_float,
             &cursor, &plan->return_value))
         return false;
-    if (fn->parameter_count != 0U) {
+    if (minic_core_function_parameter_count(fn) != 0U) {
         plan->parameter_locations = (MinicRiscv64AbiArgumentLocation *)calloc(
-            fn->parameter_count, sizeof(*plan->parameter_locations));
+            minic_core_function_parameter_count(fn), sizeof(*plan->parameter_locations));
         if (plan->parameter_locations == NULL) return false;
     }
-    for (i = 0U; i < fn->parameter_count; ++i) {
+    for (i = 0U; i < minic_core_function_parameter_count(fn); ++i) {
         if (!minic_riscv64_abi_place_core_argument(
-                fn->type_context, fn->core_parameter_type_ids[i], true,
+                fn->type_context, minic_core_function_parameter_types(fn)[i], true,
                 &cursor, &plan->parameter_locations[i])) {
             minic_riscv64_function_abi_plan_destroy(plan);
             return false;
         }
     }
     plan->named_parameter_cursor = cursor;
-    plan->parameter_location_count = fn->parameter_count;
+    plan->parameter_location_count = minic_core_function_parameter_count(fn);
     plan->prepared = true;
     if (!minic_riscv64_function_abi_plan_qualified(fn, plan)) {
         minic_riscv64_function_abi_plan_destroy(plan);

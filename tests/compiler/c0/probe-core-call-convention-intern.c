@@ -16,11 +16,11 @@ int main(void) {
     minic_core_source_builder_initialize(&builder);
     if (!minic_core_function_set_signature(
             &builder, "caller", 6U, scalar, &scalar, 1U) ||
-        fn->calling_convention != MINIC_CALLING_CONVENTION_DEFAULT ||
-        !minic_core_function_set_calling_convention(fn, MINIC_CALLING_CONVENTION_MS_X64) ||
-        fn->calling_convention != MINIC_CALLING_CONVENTION_MS_X64 ||
-        minic_core_function_set_calling_convention(fn, MINIC_CALLING_CONVENTION_DEFAULT) ||
-        minic_core_function_set_calling_convention(fn, invalid))
+        builder.source_draft->calling_convention != MINIC_CALLING_CONVENTION_DEFAULT ||
+        !minic_core_function_set_calling_convention(&builder, MINIC_CALLING_CONVENTION_MS_X64) ||
+        builder.source_draft->calling_convention != MINIC_CALLING_CONVENTION_MS_X64 ||
+        minic_core_function_set_calling_convention(&builder, MINIC_CALLING_CONVENTION_DEFAULT) ||
+        minic_core_function_set_calling_convention(&builder, invalid))
         return 2;
 
     if (!minic_core_function_add_callee(

@@ -1539,9 +1539,9 @@ MinicCoreLowerStatus minic_core_lower_function_with_index(const MinicFunctionBod
                                            source_function->parameter_types,
                                            source_function->parameter_count) ||
         !minic_core_function_set_calling_convention(
-            &lowered.core, source_function->calling_convention) ||
+            &lowered, source_function->calling_convention) ||
         !minic_core_function_set_variadic(
-            &lowered.core, source_function->is_variadic) ||
+            &lowered, source_function->is_variadic) ||
         !minic_core_function_add_block(&lowered.core, &block_id)) {
         free(statement_blocks); free(local_integer_constants); free(local_objects); minic_core_source_builder_destroy(&lowered); return MINIC_CORE_LOWER_ERROR;
     }

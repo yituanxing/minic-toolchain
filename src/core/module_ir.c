@@ -256,6 +256,65 @@ bool minic_core_module_global_fragments_valid(const MinicCoreModuleGlobal *globa
     return offset == global->storage_size;
 }
 
+/* References are the pre-payload reachability edges. Once a live object has
+ * been materialized, its relocation fragments must consume exactly those
+ * edges in order and point at the same sealed Module symbols. Otherwise
+ * reachability and emitted ELF data could disagree about a relocation's
+ * target, or a target emitter could classify the same object differently.
+ * Dead globals and declarations have no materialized payload to reconcile. */
+static bool module_live_global_relocations_match(
+    const MinicCoreModule *module, const MinicCoreModuleGlobal *global) {
+    size_t fragment_index, reference_index = 0U;
+    if (module == NULL || global == NULL) return false;
+    for (fragment_index = 0U; fragment_index < global->fragment_count;
+         ++fragment_index) {
+        const MinicCoreModuleFragment *fragment =
+            &global->fragments[fragment_index];
+        const MinicCoreModuleReference *reference;
+        const char *symbol = NULL;
+        if (fragment->kind != MINIC_CORE_MODULE_FRAGMENT_RELOCATION)
+            continue;
+        if (reference_index >= global->reference_count ||
+            global->references == NULL) return false;
+        reference = &global->references[reference_index++];
+        switch (reference->kind) {
+        case MINIC_CORE_MODULE_REFERENCE_OBJECT:
+            if (fragment->relocation_kind !=
+                    MINIC_CORE_MODULE_RELOCATION_OBJECT ||
+                reference->target_index >= module->global_count)
+                return false;
+            symbol = module->globals[reference->target_index].name;
+            break;
+        case MINIC_CORE_MODULE_REFERENCE_FUNCTION:
+            if (fragment->relocation_kind !=
+                    MINIC_CORE_MODULE_RELOCATION_FUNCTION ||
+                reference->target_index >= module->function_count)
+                return false;
+            symbol = module->function_symbols[reference->target_index].name;
+            break;
+        case MINIC_CORE_MODULE_REFERENCE_OWNER_LABEL:
+            /* Owner identity and lexical label spelling are checked by the
+             * surrounding Module verifier and fragment validator. The
+             * source label's Core BlockId is not in this reference edge. */
+            if (fragment->relocation_kind !=
+                    MINIC_CORE_MODULE_RELOCATION_LABEL ||
+                reference->target_index != global->owner_function_index)
+                return false;
+            break;
+        default:
+            return false;
+        }
+        if (symbol != NULL &&
+            (fragment->relocation_symbol == NULL ||
+             strcmp(fragment->relocation_symbol, symbol) != 0))
+            return false;
+        if (symbol == NULL && reference->kind !=
+                MINIC_CORE_MODULE_REFERENCE_OWNER_LABEL)
+            return false;
+    }
+    return reference_index == global->reference_count;
+}
+
 bool minic_core_module_verify(const MinicCoreModule *module) {
     size_t index;
     if (module == NULL || !module->finalized || module->type_context == NULL ||
@@ -321,7 +380,8 @@ bool minic_core_module_verify(const MinicCoreModule *module) {
             global->payload_kind > MINIC_CORE_MODULE_PAYLOAD_SCALAR_BITS)
             return false;
         if (!type->has_layout || !valid_power_two(global->storage_alignment) ||
-            !minic_core_module_global_fragments_valid(global)) return false;
+            !minic_core_module_global_fragments_valid(global) ||
+            !module_live_global_relocations_match(module, global)) return false;
     }
     for (index = 0U; index < module->function_count; ++index) {
         const MinicCoreModuleFunctionSymbol *symbol = &module->function_symbols[index];

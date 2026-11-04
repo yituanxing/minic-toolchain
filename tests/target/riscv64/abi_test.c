@@ -2,6 +2,8 @@
 #include "target/riscv64/abi.h"
 #include "target/riscv64/function_abi_plan.h"
 
+#include <string.h>
+
 #include <stdio.h>
 
 #define CHECK(condition)                                                                           \
@@ -399,12 +401,25 @@ static bool register_plan_type(MinicCoreTypeContext *types,
     return minic_core_type_register(types, &type, id);
 }
 
+static bool set_plan_signature(MinicCoreFunction *fn, MinicCoreTypeContext *types,
+                               MinicCoreTypeId result, const MinicCoreTypeId *params,
+                               size_t count) {
+    MinicCoreType type = {0};
+    fn->core_function_type_id = MINIC_CORE_TYPE_INVALID;
+    type.kind = MINIC_CORE_TYPE_FUNCTION;
+    type.value.function.return_type = result;
+    type.value.function.parameters = (MinicCoreTypeId *)params;
+    type.value.function.parameter_count = count;
+    type.value.function.calling_convention = MINIC_CALLING_CONVENTION_DEFAULT;
+    return minic_core_type_register(types, &type, &fn->core_function_type_id);
+}
+
 /* Real function-plan admission: the owner must reject unsupported
  * placements and roll back its allocation rather than relying on the
  * downstream RV64 opcode verifier to discover them. */
 static bool test_function_abi_plan_qualification(void) {
     MinicCoreTypeContext types;
-    MinicCoreFunction fn = {0};
+    MinicCoreFunction fn;
     MinicRiscv64FunctionAbiPlan plan = {0};
     MinicCoreTypeId params[9];
     MinicCoreTypeId void_id, double_id, long_id, record24_id;
@@ -413,13 +428,12 @@ static bool test_function_abi_plan_qualification(void) {
     size_t i;
 
     minic_core_type_context_initialize(&types);
+    (void)memset(&fn, 0, sizeof(fn));
     CHECK(register_plan_type(&types, MINIC_CORE_TYPE_VOID, 0U, &void_id));
     CHECK(register_plan_type(&types, MINIC_CORE_TYPE_FLOAT, 8U, &double_id));
     CHECK(register_plan_type(&types, MINIC_CORE_TYPE_INTEGER, 8U, &long_id));
-    fn.core_return_type_id = void_id;
-    fn.core_parameter_type_ids = params;
-    fn.parameter_count = 8U;
     for (i = 0U; i < 9U; ++i) params[i] = double_id;
+    CHECK(set_plan_signature(&fn, &types, void_id, params, 8U));
     /* Standalone plans must also be sealed: legacy function types do not
      * authorize an untyped ABI decision. */
     CHECK(!minic_riscv64_function_abi_plan_build_profile(&fn, &plan, false));
@@ -432,7 +446,7 @@ static bool test_function_abi_plan_qualification(void) {
     minic_riscv64_function_abi_plan_destroy(&plan);
 
     /* RV64 LP64D named FP9 is legal: fa0..fa7, then a0. */
-    fn.parameter_count = 9U;
+    CHECK(set_plan_signature(&fn, &types, void_id, params, 9U));
     CHECK(minic_riscv64_function_abi_plan_build_profile(&fn, &plan, false));
     CHECK(plan.prepared && plan.parameter_location_count == 9U);
     CHECK(plan.parameter_locations[8].floating_register_count == 0U &&
@@ -441,7 +455,7 @@ static bool test_function_abi_plan_qualification(void) {
     minic_riscv64_function_abi_plan_destroy(&plan);
 
     /* The same value is legal under soft-float LP64 as a GPR argument. */
-    fn.parameter_count = 1U;
+    CHECK(set_plan_signature(&fn, &types, void_id, params, 1U));
     CHECK(minic_riscv64_function_abi_plan_build_profile(&fn, &plan, true));
     CHECK(plan.named_parameter_cursor.lp64_soft_float);
     CHECK(plan.parameter_locations[0].floating_register_count == 0U);
@@ -461,9 +475,8 @@ static bool test_function_abi_plan_qualification(void) {
     record24.value.record.field_count = 3U;
     record24.value.record.is_complete = true;
     CHECK(minic_core_type_register(&types, &record24, &record24_id));
-    fn.core_return_type_id = record24_id;
-    fn.parameter_count = 1U;
     params[0] = long_id;
+    CHECK(set_plan_signature(&fn, &types, record24_id, params, 1U));
     CHECK(minic_riscv64_function_abi_plan_build_profile(&fn, &plan, false));
     CHECK(plan.return_value.kind == MINIC_RISCV64_ABI_VALUE_INDIRECT);
     CHECK(plan.parameter_locations[0].integer_register_begin == 1U);
@@ -471,9 +484,11 @@ static bool test_function_abi_plan_qualification(void) {
 
     /* Rejected Core argument placement rolls back the plan allocation. */
     params[0] = void_id;
+    CHECK(set_plan_signature(&fn, &types, record24_id, params, 1U));
     CHECK(!minic_riscv64_function_abi_plan_build_profile(&fn, &plan, false));
     CHECK(!plan.prepared && plan.parameter_locations == NULL);
     params[0] = long_id;
+    CHECK(set_plan_signature(&fn, &types, record24_id, params, 1U));
     CHECK(minic_riscv64_function_abi_plan_build_profile(&fn, &plan, false));
     minic_riscv64_function_abi_plan_destroy(&plan);
     minic_core_type_context_destroy(&types);

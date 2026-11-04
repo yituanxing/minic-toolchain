@@ -108,7 +108,9 @@ static bool verify_core_roles(size_t count, bool corrupt_index, bool expected) {
                           function, block, &terminator);
     }
     if (initialized) {
-        function->core_return_type_id = void_type;
+        initialized = minic_core_function_define_signature(
+            function, &context, void_type, NULL, 0U,
+            MINIC_CALLING_CONVENTION_DEFAULT, false);
         function->values[0].core_type_id = integer_type;
         function->instructions[0].core_type_id = integer_type;
         function->instructions[1].core_type_id = void_type;

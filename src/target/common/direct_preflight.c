@@ -125,7 +125,7 @@ bool minic_multi_direct_lp64_function_preflight(
     verified = minic_core_function_facts_verified(facts, fn) ||
                minic_core_function_verify(fn);
     return_valid = minic_lp64_core_valid_return_with_indirect(
-        fn->type_context, fn->core_return_type_id, abi->core_indirect_return);
+        fn->type_context, minic_core_function_return_type(fn), abi->core_indirect_return);
     visibility_valid =
         module_decl->visibility == MINIC_CORE_MODULE_VISIBILITY_DEFAULT ||
         minic_multi_elf_module_visibility_directive(module_decl->visibility) != NULL;
@@ -150,7 +150,7 @@ bool minic_multi_direct_lp64_function_preflight(
         else if(fn->block_count>2048U)reason="block_cap";
         else if(!direct_lp64_only_structured_asm(fn, qualify_opaque_asm))
             reason="gnu_asm_qualification";
-        else if(fn->parameter_count>MINIC_DIRECT_LP64_MAX_CALL_ARGUMENTS)
+        else if(minic_core_function_parameter_count(fn)>MINIC_DIRECT_LP64_MAX_CALL_ARGUMENTS)
             reason="parameter_cap";
         else if(!minic_lp64_baseline_values_fit_frame(fn->value_count))reason="value_cap";
         else if(fn->object_count>8192U)reason="object_cap";
@@ -161,7 +161,7 @@ bool minic_multi_direct_lp64_function_preflight(
                 "MINIC_BACKEND_PREFLIGHT_ROOT arch=%s function=%s reason=%s "
                 "blocks=%zu parameters=%zu inline=%zu\n",
                 arch,name!=NULL?name:"<unnamed>",reason,
-                fn->block_count,fn->parameter_count,fn->inline_asm_count);
+                fn->block_count,minic_core_function_parameter_count(fn),fn->inline_asm_count);
     }
     if (name == NULL || name[0] == '\0' ||
         !verified ||
@@ -173,7 +173,7 @@ bool minic_multi_direct_lp64_function_preflight(
         /* The shared ABI plan and both target emitters iterate all argument
          * locations, including the spill region after eight GP registers.
          * Keep function and call-side capacity at the same proven 64. */
-        fn->parameter_count > MINIC_DIRECT_LP64_MAX_CALL_ARGUMENTS ||
+        minic_core_function_parameter_count(fn) > MINIC_DIRECT_LP64_MAX_CALL_ARGUMENTS ||
         !minic_lp64_baseline_values_fit_frame(fn->value_count) ||
         fn->object_count > 8192U)
         {
@@ -185,7 +185,7 @@ bool minic_multi_direct_lp64_function_preflight(
                               "constructor=%d weak=%d visibility=%d section=%d\n",
                               arch, name != NULL ? name : "<unnamed>",
                               fn->block_count, fn->value_count, fn->object_count,
-                              fn->parameter_count, (unsigned int)fn->entry_block,
+                              minic_core_function_parameter_count(fn), (unsigned int)fn->entry_block,
                               fn->inline_asm_count,
                               return_valid ? 1 : 0,
                               verified ? 1 : 0,
@@ -217,17 +217,17 @@ bool minic_multi_direct_lp64_cfg_preflight(
         switch (term->kind) {
         case MINIC_CORE_TERMINATOR_RETURN:
             if (minic_lp64_core_kind(fn->type_context,
-                    fn->core_return_type_id, MINIC_CORE_TYPE_RECORD)) {
+                    minic_core_function_return_type(fn), MINIC_CORE_TYPE_RECORD)) {
                 size_t bytes, slots, fp_elements, fp_width;
                 size_t indirect_bytes = 0U;
                 const MinicCoreTypeContext *types = fn->type_context;
-                if ((!minic_multi_empty_record_core(types, fn->core_return_type_id) &&
-                     !minic_multi_gp_record_core(types, fn->core_return_type_id,
+                if ((!minic_multi_empty_record_core(types, minic_core_function_return_type(fn)) &&
+                     !minic_multi_gp_record_core(types, minic_core_function_return_type(fn),
                                                  &bytes, &slots) &&
-                     !minic_multi_fp_return_record_core(types, fn->core_return_type_id,
+                     !minic_multi_fp_return_record_core(types, minic_core_function_return_type(fn),
                                                         &fp_elements, &fp_width) &&
                      !(abi->core_indirect_return != NULL &&
-                       abi->core_indirect_return(types, fn->core_return_type_id,
+                       abi->core_indirect_return(types, minic_core_function_return_type(fn),
                                                  &indirect_bytes) &&
                        indirect_bytes > 16U)) ||
                     term->return_value != MINIC_CORE_VALUE_INVALID ||
@@ -235,7 +235,7 @@ bool minic_multi_direct_lp64_cfg_preflight(
                     fn->objects == NULL ||
                     minic_core_type_unqualified(types,
                             fn->objects[term->return_object].core_type_id) !=
-                        minic_core_type_unqualified(types, fn->core_return_type_id))
+                        minic_core_type_unqualified(types, minic_core_function_return_type(fn)))
                     return false;
             } else if (term->return_object != MINIC_CORE_OBJECT_INVALID) {
                 return false;

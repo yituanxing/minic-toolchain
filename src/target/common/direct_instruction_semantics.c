@@ -265,18 +265,18 @@ bool minic_multi_direct_parameter_object_location(
     obj_id = ins->value.parameter_object.object_id;
     if (ins->kind != MINIC_CORE_INSTRUCTION_PARAMETER_OBJECT ||
         position >= incoming_plan->argument_count ||
-        position >= fn->parameter_count)
+        position >= minic_core_function_parameter_count(fn))
         return false;
     loc = &incoming_plan->arguments[position];
     if (ins->result != MINIC_CORE_VALUE_INVALID ||
         obj_id >= fn->object_count ||
         fn->objects == NULL ||
-        fn->core_parameter_type_ids == NULL ||
+        minic_core_function_parameter_types(fn) == NULL ||
         /* GNU top-level const on a by-value parameter has no ABI effect.
          * Only remove top-level qualification, preserving nested pointee
          * and member qualifiers and the exact record identity. */
         !direct_core_equal_unqualified(fn, fn->objects[obj_id].core_type_id,
-                                       fn->core_parameter_type_ids[position]) ||
+                                       minic_core_function_parameter_types(fn)[position]) ||
         (loc->kind != MINIC_LP64_ARGUMENT_RECORD &&
          loc->kind != MINIC_LP64_ARGUMENT_INDIRECT_RECORD &&
          loc->kind != MINIC_LP64_ARGUMENT_EMPTY_RECORD) ||
@@ -414,12 +414,12 @@ bool minic_multi_direct_scalar_parameter_location(
     if (fn == NULL || fn->type_context == NULL || ins == NULL ||
         incoming == NULL || location == NULL ||
         ins->kind != MINIC_CORE_INSTRUCTION_PARAMETER ||
-        fn->core_parameter_type_ids == NULL)
+        minic_core_function_parameter_types(fn) == NULL)
         return false;
     ordinal = (size_t)ins->value.parameter_index;
-    if (ordinal >= fn->parameter_count ||
+    if (ordinal >= minic_core_function_parameter_count(fn) ||
         ordinal >= incoming->argument_count ||
-        ins->core_type_id != fn->core_parameter_type_ids[ordinal] ||
+        ins->core_type_id != minic_core_function_parameter_types(fn)[ordinal] ||
         incoming->arguments[ordinal].kind == MINIC_LP64_ARGUMENT_RECORD ||
         incoming->arguments[ordinal].kind == MINIC_LP64_ARGUMENT_INDIRECT_RECORD)
         return false;
