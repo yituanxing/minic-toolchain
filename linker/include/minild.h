@@ -26,6 +26,11 @@ typedef struct MiniLdStaticOptions {
     bool nmagic;
     /* GNU -X: omit temporary .L* locals from the final ET_EXEC symtab only. */
     bool discard_locals;
+    /* Kernel ET_DYN is a statically resolved image, not an ELF DSO. */
+    bool output_et_dyn;
+    /* AArch64 -shared -Bsymbolic --no-apply-dynamic-relocs cannot silently
+     * consume fixups which instead require emitted runtime .rela.dyn. */
+    bool kernel_shared_no_dynamic_relocations;
 } MiniLdStaticOptions;
 
 typedef struct MiniLdSharedOptions {
@@ -53,6 +58,7 @@ typedef enum MiniLdLinkMode {
 
 bool minild_emulation_supports_mode(const char *emulation,
                                     MiniLdLinkMode mode);
+bool minild_emulation_supports_kernel_shared_image(const char *emulation);
 /* A linker -EL/-EB request selects the output byte order, which must agree
  * with the target's declared ELF encoding. The CLI never guesses from the
  * host machine or silently changes a target to an unsupported endian ABI. */

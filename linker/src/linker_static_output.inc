@@ -416,12 +416,14 @@ static bool static_write_executable(MiniLdState *state,
                                     const MiniLdLayout *layout,
                                     MiniLdOutputPlan *output_plan,
                                     const char *path,
-                                    uint64_t entry) {
+                                    uint64_t entry,
+                                    bool output_et_dyn) {
     MiniLdFinalImage final = {0};
     MiniLdElfAbiSizes abi = minild_elf_abi_sizes(state->target->elf_class);
     size_t load_image_size;
     size_t i;
     bool ok = false;
+    const uint16_t elf_type = output_et_dyn ? ET_DYN : ET_EXEC;
 
     if (!minild_static_program_plan_build(state, layout, output_plan,
                                           &final.program)) {
@@ -484,12 +486,12 @@ static bool static_write_executable(MiniLdState *state,
     if (!minild_final_image_prepare(state, layout, output_plan,
                                           &final, load_image_size, NULL,
                                           MINILD_FINAL_SYMTAB_FIRST,
-                                          ET_EXEC)) {
+                                          elf_type)) {
         goto done;
     }
     ok = minild_final_write_image(state, layout, output_plan,
                                   &final.program, &final.tables,
-                                  &final.symbols, ET_EXEC, entry, path);
+                                  &final.symbols, elf_type, entry, path);
 
 done:
     /* Retain the prior fail-closed contract even if preparation failed

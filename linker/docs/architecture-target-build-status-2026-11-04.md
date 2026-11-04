@@ -19,6 +19,35 @@ This matrix reports target **link** support, not whether the linker itself
 can be cross-compiled to execute on these architectures. The latter is a
 separate host-tool portability task and does not establish target correctness.
 
+## 2026-11-05 update: promoted script/GC and kernel ET_DYN boundary
+
+The table and older gate descriptions below are the original November 4
+checkpoint. The five Target profiles now all admit baseline static `-T` and
+`--gc-sections`, reusing the same input projection, GC, layout, relocations,
+and final ELF writer. `check-minild-kernel-et-dyn-modes` uses exact-head MiniAS
+objects and validates all five static scripted ET_EXEC outputs (including
+RV32 ELF32). x86-64's real-script `vmlinux.o` and `vmlinux.a` capture/replay
+fixtures pass MiniLD 2/2 locally; native x86-64 script-only, GC-only, and
+combined differential/runtime probes pass GNU `ld` 3/3.
+
+The final static pipeline also accepts two deliberately narrow Linux kernel
+ET_DYN modes, without conflating them with user-space PIE or a shared library:
+
+- RV64/LoongArch64 kernel-style `-static -pie --no-dynamic-linker -n -T`;
+  this writes ET_DYN and PT_LOAD without PT_INTERP or PT_DYNAMIC.
+- AArch64 GNU `aarch64elf` alias and kernel-style `-shared -Bsymbolic
+  --no-apply-dynamic-relocs -T`; this similarly emits ET_DYN only for the
+  Target-authorized kernel convention. Allocated absolute/data relocations
+  that would need retained runtime `.rela.dyn` are rejected, not silently
+  converted into fixed relocation values.
+
+These are **basic link-mode contracts, not Linux PASS**. Actual AArch64 kernel
+rebase relocation emission, Cortex-A53 erratum handling, and range veneers
+remain incomplete. x86-64 `--emit-relocs`, RV32 GNU relaxation/layout parity,
+LoongArch64 real Linux script/rebase parity, and full five-arch GNU/QEMU
+Linux checks remain separate gates. The real four-arch Linux CI now consumes
+the checked-in Target policies without temporarily patching them.
+
 Evidence in the source tree:
 
 - `tools/minic-ld/main_core.inc` chooses an explicit emulation, and an

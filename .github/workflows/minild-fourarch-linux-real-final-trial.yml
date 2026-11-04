@@ -71,7 +71,7 @@ jobs:
               ;;
           esac
 
-      - name: Temporarily enable script and GC policies for this runner only
+      - name: Verify checked-in five-target script and GC policies
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -80,24 +80,21 @@ jobs:
           import re
           import sys
 
-          source = Path(sys.argv[1])
-          content = source.read_text()
+          content = Path(sys.argv[1]).read_text()
           emulations = ("elf32lriscv", "elf_x86_64", "aarch64linux",
                         "elf64loongarch")
           for emulation in emulations:
               pattern = (r'(\{"' + re.escape(emulation) +
                          r'"[^{}]*?4096U,\s*true,\s*true,\s*)'
-                         r'false,\s*false,')
-              content, count = re.subn(pattern, r'\g<1>true, true,', content)
-              if count != 1:
+                         r'true,\s*true,')
+              if re.search(pattern, content) is None:
                   raise SystemExit(
-                      f'MINILD_LINUX_TRIAL=FAIL policy_count:{emulation}:{count}')
+                      f'MINILD_LINUX_TRIAL=FAIL script_gc_not_enabled:{emulation}')
           if not re.search(
                   r'\{"elf64lriscv"[^{}]*?4096U,\s*'
                   r'true,\s*true,\s*true,\s*true,', content):
               raise SystemExit('MINILD_LINUX_TRIAL=FAIL RV64_policy_changed')
-          source.write_text(content)
-          print('MINILD_LINUX_TRIAL=RUNNER_ONLY temporary_script_gc_targets=4')
+          print('MINILD_LINUX_TRIAL=CHECKED_IN script_gc_targets=5')
           PY_TRIAL
           test "$(git rev-parse HEAD)" = '${{ github.sha }}'
           test -x "$MINILD_GNU_LD_WRAPPER"

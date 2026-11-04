@@ -104,6 +104,8 @@ static int minild_link_static_pipeline(
             have_script ? MINILD_PROJECTION_SCRIPT :
             garbage_collect ? MINILD_PROJECTION_GC :
                               MINILD_PROJECTION_MERGED) ||
+        (options != NULL && options->kernel_shared_no_dynamic_relocations &&
+         !minild_target_validate_kernel_shared_relocations(&state)) ||
         ((garbage_collect || have_script) &&
          !minild_restore_input_order(&state)) ||
         !minild_allocate_common(&state) ||
@@ -131,7 +133,8 @@ static int minild_link_static_pipeline(
     if (!static_entry_address(&state, &layout, entry_symbol, &entry) ||
         !minild_output_plan_build(&state, &layout, &output_plan) ||
         !static_write_executable(&state, &layout, &output_plan,
-                                 output_path, entry)) {
+                                 output_path, entry,
+                                 options != NULL && options->output_et_dyn)) {
         goto done;
     }
     minild_perf_phase("output", &phase_start, &state, diagnostics);
@@ -217,6 +220,8 @@ int minild_link_static_elf64_riscv_inputs(const char *output_path,
     options.gc_sections = false;
     options.nmagic = false;
     options.discard_locals = false;
+    options.output_et_dyn = false;
+    options.kernel_shared_no_dynamic_relocations = false;
     return minild_link_static_elf64_riscv_inputs_options(output_path,
                                                           inputs,
                                                           input_count,

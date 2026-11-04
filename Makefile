@@ -734,6 +734,12 @@ check-minild-multitarget-script-gc-boundary: $(MINIAS_BINARY) $(MINILD_BINARY)
 	MINILD="$(abspath $(MINILD_BINARY))" \
 	bash tests/linker/probe-multitarget-script-gc-boundary.sh
 
+.PHONY: check-minild-kernel-et-dyn-modes
+check-minild-kernel-et-dyn-modes: $(MINIAS_BINARY) $(MINILD_BINARY)
+	MINIAS="$(abspath $(MINIAS_BINARY))" \
+	MINILD="$(abspath $(MINILD_BINARY))" \
+	bash tests/linker/probe-kernel-et-dyn-modes.sh
+
 .PHONY: check-minild-rv32-static-runtime
 check-minild-rv32-static-runtime: $(MINIAS_BINARY) $(MINILD_BINARY)
 	MINIAS="$(abspath $(MINIAS_BINARY))" \

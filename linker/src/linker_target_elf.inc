@@ -85,6 +85,9 @@ struct MiniLdTargetProfile {
     bool supports_static_gc;
     bool supports_shared;
     bool supports_pie;
+    /* Linux's fixed-address -shared -Bsymbolic -T kernel convention is
+     * not interchangeable with a user-space DSO on other targets. */
+    bool supports_kernel_shared_image;
     MiniLdTargetFlagsMerge merge_flags;
     bool (*relax_section)(MiniLdState *, size_t, uint64_t);
     /* The target reserves size-changing synthetic relocation sections before
@@ -131,7 +134,7 @@ static const MiniLdTargetProfile minild_target_profiles[] = {
     {"elf64lriscv", ELFCLASS64, ELFDATA2LSB, EM_RISCV, "riscv",
      "/lib/ld-musl-riscv64.so.1", MINILD_SHT_RISCV_ATTRIBUTES,
      UINT64_C(0x10000), 4096U,
-     true, true, true, true, true, true, minild_riscv_merge_flags,
+     true, true, true, true, true, true, false, minild_riscv_merge_flags,
      minild_riscv_relax_section,
      minild_riscv_reserve_static_relocations,
      minild_riscv_fill_static_relocations,
@@ -143,7 +146,7 @@ static const MiniLdTargetProfile minild_target_profiles[] = {
     {"elf32lriscv", ELFCLASS32, ELFDATA2LSB, EM_RISCV, "riscv",
      NULL, MINILD_SHT_RISCV_ATTRIBUTES,
      UINT64_C(0x10000), 4096U,
-     true, true, false, false, true, false, minild_riscv_merge_flags,
+     true, true, true, true, true, false, false, minild_riscv_merge_flags,
      minild_riscv_relax_section,
      minild_riscv_reserve_static_relocations,
      minild_riscv_fill_static_relocations,
@@ -153,7 +156,7 @@ static const MiniLdTargetProfile minild_target_profiles[] = {
      NULL, minild_link_elf32_compat_vdso, NULL, true},
     {"elf_x86_64", ELFCLASS64, ELFDATA2LSB, EM_X86_64, "i386:x86-64",
      NULL, 0U, UINT64_C(0x400000), 4096U,
-     true, true, false, false, false, false,
+     true, true, true, true, false, false, false,
      minild_exact_merge_flags, NULL,
      minild_x86_reserve_static_relocations,
      minild_x86_fill_static_relocations,
@@ -163,7 +166,7 @@ static const MiniLdTargetProfile minild_target_profiles[] = {
      NULL, NULL, minild_zero_elf_flags, true},
     {"aarch64linux", ELFCLASS64, ELFDATA2LSB, EM_AARCH64, "aarch64",
      NULL, 0U, UINT64_C(0x400000), 4096U,
-     true, true, false, false, false, false,
+     true, true, true, true, false, false, true,
      minild_exact_merge_flags, NULL,
      minild_aarch64_reserve_static_relocations,
      minild_aarch64_fill_static_relocations,
@@ -173,7 +176,7 @@ static const MiniLdTargetProfile minild_target_profiles[] = {
      NULL, NULL, minild_zero_elf_flags, true},
     {"elf64loongarch", ELFCLASS64, ELFDATA2LSB, EM_LOONGARCH, "loongarch64",
      NULL, 0U, UINT64_C(0x120000000), 4096U,
-     true, true, false, false, false, false,
+     true, true, true, true, false, false, false,
      minild_exact_merge_flags, minild_loongarch_relax_section,
      minild_loongarch_reserve_static_relocations,
      minild_loongarch_fill_static_relocations,
@@ -188,6 +191,11 @@ static const MiniLdTargetProfile *minild_target_find(const char *emulation) {
 
     if (emulation == NULL) {
         return NULL;
+    }
+    /* GNU BFD's AArch64 bare emulation and our Linux spelling describe
+     * the same ELF64 LE machine/ABI. Keep one target descriptor. */
+    if (strcmp(emulation, "aarch64elf") == 0) {
+        emulation = "aarch64linux";
     }
     for (i = 0U;
          i < sizeof(minild_target_profiles) / sizeof(minild_target_profiles[0]);
@@ -213,6 +221,48 @@ bool minild_emulation_supports_mode(const char *emulation,
     case MINILD_LINK_PIE: return target->supports_pie;
     }
     return false;
+}
+
+bool minild_emulation_supports_kernel_shared_image(const char *emulation) {
+    const MiniLdTargetProfile *target = minild_target_find(emulation);
+
+    return target != NULL && target->supports_kernel_shared_image;
+}
+
+/* Only PC-relative relocations whose encoded values remain unchanged when
+ * the entire ET_DYN is rebased may bypass .rela.dyn. The AArch64 Linux
+ * kernel's dynamic relocation retention needs its own output phase; until
+ * then reject the data/GOT/TLS/absolute classes rather than emitting a
+ * plausible but non-relocatable kernel image. */
+static bool minild_target_validate_kernel_shared_relocations(
+    const MiniLdState *state) {
+    size_t i;
+
+    if (state->target == NULL ||
+        !state->target->supports_kernel_shared_image) {
+        return false;
+    }
+    for (i = 0U; i < state->relocations.count; ++i) {
+        const MiniLdReloc *reloc = &state->relocations.entries[i];
+        uint32_t type = reloc->type;
+
+        if (reloc->section >= state->work.count) {
+            return false;
+        }
+        if ((state->work.sections[reloc->section].flags & SHF_ALLOC) == 0U) {
+            continue;
+        }
+        if (type != R_AARCH64_NONE && type != R_AARCH64_PREL32 &&
+            type != R_AARCH64_PREL64 && type != R_AARCH64_CALL26 &&
+            type != R_AARCH64_JUMP26 &&
+            type != R_AARCH64_ADR_PREL_PG_HI21) {
+            fprintf(state->diagnostics,
+                    "minic-ld: unsupported-kernel-shared-runtime-relocation:%u\n",
+                    (unsigned)type);
+            return false;
+        }
+    }
+    return true;
 }
 
 bool minild_emulation_supports_endianness(const char *emulation,

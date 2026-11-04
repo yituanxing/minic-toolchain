@@ -1,8 +1,7 @@
 name: MiniLD Script GC Five-Target Positive Trial
 
-# Exploratory policy override ONLY inside this CI runner.  The checked-in
-# MiniLD target capabilities remain unchanged until a complete positive
-# GNU BFD/QEMU contract (and later real Linux Kbuild) is demonstrated.
+# Five-target positive GNU BFD/QEMU contract for the now checked-in script/GC
+# capability. The real Linux Kbuild check remains a separate workflow.
 on:
   workflow_dispatch:
   push:
@@ -34,7 +33,7 @@ jobs:
             command -v "$tool"
           done
 
-      - name: Temporarily enable four target policies only in this runner
+      - name: Verify checked-in five-target script and GC policies
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -42,45 +41,34 @@ jobs:
           mkdir -p "$ev/tmp"
           source=linker/src/linker_target_elf.inc
           sha256sum "$source" >"$ev/checked-in-target-profile.sha256"
-          python3 - "$source" "$ev" <<'PY_TRIAL'
+          python3 - "$source" <<'PY_TRIAL'
           from pathlib import Path
           import re
           import sys
 
-          source = Path(sys.argv[1])
-          evidence = Path(sys.argv[2])
-          text = source.read_text(encoding="utf-8")
+          text = Path(sys.argv[1]).read_text(encoding="utf-8")
           targets = ("elf32lriscv", "elf_x86_64", "aarch64linux",
                      "elf64loongarch")
           for emulation in targets:
               pattern = (r'(\{"' + re.escape(emulation) +
                          r'"[^{}]*?4096U,\s*true,\s*true,\s*)'
-                         r'false,\s*false,')
-              text, count = re.subn(pattern, r'\g<1>true, true,', text)
-              if count != 1:
+                         r'true,\s*true,')
+              if re.search(pattern, text) is None:
                   raise SystemExit(
-                      f'MINILD_SCRIPT_GC_TRIAL=FAIL policy_count:{emulation}:{count}')
+                      f'MINILD_SCRIPT_GC_TRIAL=FAIL policy_not_enabled:{emulation}')
           if not re.search(
                   r'\{"elf64lriscv"[^{}]*?4096U,\s*'
                   r'true,\s*true,\s*true,\s*true,', text):
               raise SystemExit('MINILD_SCRIPT_GC_TRIAL=FAIL RV64_policy_changed')
-          source.write_text(text, encoding="utf-8")
-          (evidence / "trial-policy.txt").write_text(
-              "TRIAL_NOT_PRODUCT_GATE=true\n"
-              "temporarily_enabled=" + ",".join(targets) + "\n"
-              "RV64_original_policy=preserved\n",
-              encoding="utf-8")
-          print("MINILD_SCRIPT_GC_TRIAL=OVERRIDE_ONLY targets=4 "
-                "product_target_policy_unchanged=true")
+          print("MINILD_SCRIPT_GC_TRIAL=CHECKED_IN targets=5")
           PY_TRIAL
-          sha256sum "$source" >"$ev/temporary-target-profile.sha256"
 
       - name: Build trial MiniAS and MiniLD with Werror
         run: |
           set -Eeuo pipefail
           make -j4 MODE=release CFLAGS=-Werror \
             build/release/bin/minic-as build/release/bin/minic-ld
-          echo 'MINILD_SCRIPT_GC_TRIAL=BUILD_PASS temporary_target_policy=true'
+          echo 'MINILD_SCRIPT_GC_TRIAL=BUILD_PASS checked_in_target_policy=true'
 
       - name: Run three independent GNU versus MiniLD script GC modes on five targets
         shell: bash
@@ -93,11 +81,11 @@ jobs:
           ev="$GITHUB_WORKSPACE/build/minild-script-gc-positive-trial"
           mkdir -p "$ev/tmp"
           export TMPDIR="$ev/tmp"
-          echo 'MINILD_SCRIPT_GC_TRIAL=RUN product_gate_unchanged=true mode=-T-only,GC-only,combined'
+          echo 'MINILD_SCRIPT_GC_TRIAL=RUN checked_in_target_policy=true mode=-T-only,GC-only,combined'
           make MODE=release CFLAGS=-Werror \
             check-minild-multitarget-script-gc-boundary \
             2>&1 | tee "$ev/trial.log"
-          echo 'MINILD_SCRIPT_GC_TRIAL=PASS five_targets=5 modes_per_target=3 GNU_BFD_QEMU=true TRIAL_NOT_PRODUCT_GATE=true'
+          echo 'MINILD_SCRIPT_GC_TRIAL=PASS five_targets=5 modes_per_target=3 GNU_BFD_QEMU=true'
 
       - name: Preserve exact trial inputs and failing ELF or runtime logs
         if: always()
