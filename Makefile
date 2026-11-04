@@ -728,6 +728,12 @@ check-minild-multitarget-static: $(MINIAS_BINARY) $(MINILD_BINARY)
 	MINILD="$(abspath $(MINILD_BINARY))" \
 	bash tests/linker/probe-multitarget-static.sh
 
+.PHONY: check-minild-multitarget-script-gc-boundary
+check-minild-multitarget-script-gc-boundary: $(MINIAS_BINARY) $(MINILD_BINARY)
+	MINIAS="$(abspath $(MINIAS_BINARY))" \
+	MINILD="$(abspath $(MINILD_BINARY))" \
+	bash tests/linker/probe-multitarget-script-gc-boundary.sh
+
 .PHONY: check-minild-rv32-static-runtime
 check-minild-rv32-static-runtime: $(MINIAS_BINARY) $(MINILD_BINARY)
 	MINIAS="$(abspath $(MINIAS_BINARY))" \

@@ -53,6 +53,7 @@ jobs:
           make MODE=release CFLAGS=-Werror \
             check-minild-multitarget-relocatable \
             check-minild-multitarget-static \
+            check-minild-multitarget-script-gc-boundary \
             check-minild-rv32-static-runtime \
             check-minild-riscv-static-tls \
             check-minild-riscv-uleb-static \
