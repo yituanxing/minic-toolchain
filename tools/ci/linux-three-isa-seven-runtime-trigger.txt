@@ -35,3 +35,4 @@
 # FIVE_ISA_RV32_GOT_PIC_VDSO_PREPARE_AND_X86_PIE_BUSYBOX_RECHECK=1
 # 2026-10-31 explicit final five-target acceptance: fresh 3x7 MiniC C + GNU AS/LD + same-Image QEMU P0/P1; PR [minic-full] independently executes full RV32 ELF32, RV64 complete Linux is certified separately; no partial/reuse flags.
 # 2026-11-03 IR-P28 exact-head 3x7 source/Core array representation recertification; pinned GNU source from historical all-three real QEMU P0/P1 run #41181106144, fresh current compiler C objects, no candidate-object SHA reuse, GNU final LD/QEMU receipt required; GNU option equivalence remains strict.
+# 2026-11-04 P48-P50 x86-only exact-head Linux 6.6.143 requalification: seven fresh MiniC C shards, authenticated GNU inputs, GNU AS/LD and real QEMU P0/P1; no AArch64/LoongArch receiver and no cached candidate-object substitution.
