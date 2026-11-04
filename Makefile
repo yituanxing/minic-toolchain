@@ -881,6 +881,12 @@ check-minild-reloc-owner-lifecycle: $(MINIAS_BINARY) $(MINILD_BINARY)
 	MINILD="$(abspath $(MINILD_BINARY))" \
 	bash tests/linker/probe-reloc-owner-lifecycle.sh
 
+.PHONY: check-minild-riscv-final-fixup-parity
+check-minild-riscv-final-fixup-parity: $(MINIAS_BINARY) $(MINILD_BINARY)
+	MINIAS="$(abspath $(MINIAS_BINARY))" \
+	MINILD="$(abspath $(MINILD_BINARY))" \
+	bash tests/linker/probe-riscv-final-fixup-parity.sh
+
 .PHONY: check-minild-static-pipeline-boundaries
 check-minild-static-pipeline-boundaries: $(MINIAS_BINARY) $(MINILD_BINARY)
 	MINIAS="$(abspath $(MINIAS_BINARY))" \

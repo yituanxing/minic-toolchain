@@ -151,13 +151,47 @@ GOT/PLT and dynamic relocation reservation are not target-neutral byte
 patching. `R_RISCV_RELAX` instruction rewriting and paired ULEB final
 relocations are not added by this ownership change.
 
+### Final RV64 fixup convergence (2026-11-04)
+
+ET_EXEC and ET_DYN now share the **final instruction encoding and PCREL
+HI20/LO12 pairing owner**, in addition to the earlier relocation-type
+classifier and arithmetic byte writer:
+
+- `MiniLdRiscvPcrelPairs` owns one post-layout HI20 site table keyed by
+  current working-section identity and offset. Both modes use the same
+  initialization, lookup, LO12 field patch and cleanup path.
+- `minild_riscv_apply_final_instruction` patches the common U/I/S, CALL,
+  BRANCH/JAL/RVC and `R_RISCV_32_PCREL` instruction or data fields. Its
+  callers provide the already-selected target and the output-mode-correct
+  place address; the encoder does not resolve symbols or reserve metadata.
+- RV64 S+A and PC-relative displacement arithmetic interpret the complete
+  64-bit address space, including high-half kernel addresses, using defined
+  unsigned bit operations. HI20/LO12 rounding avoids signed overflow and
+  negative signed shifts. LO12 anchor offsets reject underflow/overflow.
+
+The **mode boundary is still deliberate**: ET_EXEC resolves absolute writes,
+static GOT slots and its detailed JAL overflow diagnostic in input order;
+ET_DYN decides section liveness, non-ALLOC placement, preemption, GOT/TLS GD,
+dynamic RELA and PLT destinations. Shared arithmetic runs before its final
+instruction pass; static arithmetic stays interleaved with other input-order
+relocations. Shared PLT slot generation and CALL destination selection retain
+their own later phase, while CALL instruction encoding uses the target helper.
+This does not add a new relocation family or change GNU compatibility scope.
+
 ## Validation and limits
 
-The strict `MODE=release CFLAGS=-Werror` host gate now covers 27 MiniLD targets,
+The strict `MODE=release CFLAGS=-Werror` host gate now covers MiniLD targets,
 including input/work-section ownership, COMDAT/archive admission, RISC-V
 relocation lifecycle, script/GC, output-section ownership, ET_EXEC and
 ET_DYN output.  Its outputs are host ELF fixture checks; Linux/QEMU runtime
 acceptance is separate and is not claimed here.
+
+The dedicated `check-minild-riscv-final-fixup-parity` gate decodes output
+instruction fields for ET_EXEC and ET_DYN, tests positive/negative PCREL
+LO12 addends, GOT and PLT metadata, branches, compressed branches and CFI PCREL32,
+and checks missing-pair and out-of-range failures. A scripted static kernel
+VMA at `0xffffffff80000000` covers nearby PCREL/JAL and a GC-discarded
+unmatched LO12. This is linker-byte correctness evidence, not a boot test.
 
 Two regression extensions specifically guard the consolidated output
 contract: static profile phases must occur exactly once in their existing

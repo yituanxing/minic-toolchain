@@ -112,7 +112,7 @@ static bool shared_patch_arithmetic_relocations(
                 (section->flags & SHF_ALLOC) == 0U, &symbol_value)) {
             return false;
         }
-        target = (int64_t)symbol_value + reloc->addend;
+        target = minild_riscv_addend_bits(symbol_value, reloc->addend);
 
         if (!minild_riscv_apply_arithmetic(
                 section, reloc, target, true, state->diagnostics)) {
@@ -320,7 +320,7 @@ static bool shared_fill_relocations(MiniLdState *state,
             }
             output.r_info = ELF64_R_INFO(0U, R_RISCV_RELATIVE);
             output.r_addend =
-                (Elf64_Sxword)((int64_t)target_value + input->addend);
+                minild_riscv_addend_bits(target_value, input->addend);
         } else {
             dynamic_index = shared->dynsym_index[input->symbol];
             if (dynamic_index == SIZE_MAX) {
@@ -412,22 +412,15 @@ static bool shared_patch_final_layout_relocations(
     const MiniLdLayout *layout,
     const MiniLdOutputPlan *output_plan,
     const MiniLdSharedImage *shared) {
-    size_t capacity = pcrel_capacity_for(state->relocations.count);
-    MiniLdPcrelSlot *pcrel;
+    MiniLdRiscvPcrelPairs pairs = {0};
     size_t i;
+    bool ok = false;
 
     if (!shared_patch_arithmetic_relocations(state, layout, output_plan)) {
         return false;
     }
-    if (capacity == 0U) {
-        fprintf(state->diagnostics,
-                "minic-ld: shared-pcrel-index-overflow\n");
-        return false;
-    }
-    pcrel = calloc(capacity, sizeof(*pcrel));
-    if (pcrel == NULL) {
-        fprintf(state->diagnostics,
-                "minic-ld: out-of-memory:shared-pcrel-index\n");
+    if (!minild_riscv_pairs_init(&pairs, state->relocations.count, true,
+                                state->diagnostics)) {
         return false;
     }
 
@@ -437,14 +430,12 @@ static bool shared_patch_final_layout_relocations(
         uint64_t symbol_value = 0U;
         uint64_t place;
         int64_t target;
-        int64_t delta;
         bool live;
         bool nonalloc;
 
         if (!shared_relocation_live_source(state, output_plan,
                                            reloc->section, &live)) {
-            free(pcrel);
-            return false;
+            goto done;
         }
         if (!live || reloc->type == R_RISCV_NONE ||
             reloc->type == R_RISCV_RELAX ||
@@ -467,8 +458,7 @@ static bool shared_patch_final_layout_relocations(
             fprintf(state->diagnostics,
                     "minic-ld: unsupported-shared-nonalloc-relocation:%u\n",
                     reloc->type);
-            free(pcrel);
-            return false;
+            goto done;
         }
         if (reloc->symbol != SIZE_MAX &&
             reloc->type != R_RISCV_GOT_HI20 &&
@@ -476,184 +466,50 @@ static bool shared_patch_final_layout_relocations(
             !shared_resolve_static_relocation_target(
                 state, layout, output_plan, reloc, nonalloc,
                 &symbol_value)) {
-            free(pcrel);
-            return false;
+            goto done;
         }
 
         if (nonalloc) {
             if (!shared_nonalloc_output_offset(state, layout, output_plan,
                                                 reloc->section, reloc->offset,
                                                 &place)) {
-                free(pcrel);
-                return false;
+                goto done;
             }
         } else {
             place = layout->work[reloc->section].vaddr + reloc->offset;
         }
-        target = (int64_t)symbol_value + reloc->addend;
-
-        switch (reloc->type) {
-        case R_RISCV_GOT_HI20: {
-            size_t offset;
-            uint64_t got_address;
-
+        target = minild_riscv_addend_bits(symbol_value, reloc->addend);
+        /* The shared linker chooses GOT/TLSGD slot addresses and output
+         * liveness; the RISC-V target owner encodes all instruction types. */
+        if (reloc->type == R_RISCV_GOT_HI20) {
             if (reloc->symbol == SIZE_MAX ||
                 reloc->symbol >= state->resolver.count ||
                 shared->got_slot_offset[reloc->symbol] == SIZE_MAX) {
                 fprintf(state->diagnostics,
                         "minic-ld: missing-shared-got-slot\n");
-                free(pcrel);
-                return false;
+                goto done;
             }
-            offset = shared->got_slot_offset[reloc->symbol];
-            got_address =
-                layout->work[shared->got_section].vaddr + (uint64_t)offset;
-            delta = (int64_t)got_address - (int64_t)place;
-            if (!static_patch_utype(source,
-                                    reloc->offset,
-                                    riscv_hi20(delta),
-                                    state->diagnostics)) {
-                free(pcrel);
-                return false;
-            }
-            pcrel_insert(pcrel,
-                         capacity,
-                         reloc->section,
-                         reloc->offset,
-                         delta);
-            break;
-        }
-        case R_RISCV_TLS_GD_HI20: {
-            uint64_t descriptor;
-
+            target = minild_riscv_signed_bits(
+                layout->work[shared->got_section].vaddr +
+                shared->got_slot_offset[reloc->symbol]);
+        } else if (reloc->type == R_RISCV_TLS_GD_HI20) {
             if (reloc->symbol == SIZE_MAX ||
                 reloc->symbol >= state->resolver.count ||
                 shared->tls_gd_offset[reloc->symbol] == SIZE_MAX) {
                 fprintf(state->diagnostics,
                         "minic-ld: missing-shared-tls-gd-slot\n");
-                free(pcrel);
-                return false;
+                goto done;
             }
-            descriptor =
+            target = minild_riscv_addend_bits(
                 layout->work[shared->got_section].vaddr +
-                (uint64_t)shared->tls_gd_offset[reloc->symbol];
-            delta = (int64_t)descriptor + reloc->addend - (int64_t)place;
-            if (!static_patch_utype(source,
-                                    reloc->offset,
-                                    riscv_hi20(delta),
-                                    state->diagnostics)) {
-                free(pcrel);
-                return false;
-            }
-            pcrel_insert(pcrel,
-                         capacity,
-                         reloc->section,
-                         reloc->offset,
-                         delta);
-            break;
+                shared->tls_gd_offset[reloc->symbol], reloc->addend);
         }
-        case R_RISCV_PCREL_HI20:
-            delta = target - (int64_t)place;
-            if (!static_patch_utype(source,
-                                    reloc->offset,
-                                    riscv_hi20(delta),
-                                    state->diagnostics)) {
-                free(pcrel);
-                return false;
-            }
-            pcrel_insert(pcrel,
-                         capacity,
-                         reloc->section,
-                         reloc->offset,
-                         delta);
-            break;
-        case R_RISCV_HI20:
-            if (!static_patch_utype(source,
-                                    reloc->offset,
-                                    riscv_hi20(target),
-                                    state->diagnostics)) {
-                free(pcrel);
-                return false;
-            }
-            break;
-        case R_RISCV_LO12_I:
-            if (!static_patch_itype(source,
-                                    reloc->offset,
-                                    riscv_lo12(target),
-                                    state->diagnostics)) {
-                free(pcrel);
-                return false;
-            }
-            break;
-        case R_RISCV_LO12_S:
-            if (!static_patch_stype(source,
-                                    reloc->offset,
-                                    riscv_lo12(target),
-                                    state->diagnostics)) {
-                free(pcrel);
-                return false;
-            }
-            break;
-        case R_RISCV_BRANCH:
-            delta = target - (int64_t)place;
-            if (!static_patch_branch(source,
-                                     reloc->offset,
-                                     delta,
-                                     state->diagnostics)) {
-                free(pcrel);
-                return false;
-            }
-            break;
-        case R_RISCV_JAL:
-            delta = target - (int64_t)place;
-            if (!static_patch_jal(source,
-                                  reloc->offset,
-                                  delta,
-                                  state->diagnostics)) {
-                free(pcrel);
-                return false;
-            }
-            break;
-        case R_RISCV_RVC_BRANCH:
-            delta = target - (int64_t)place;
-            if (!static_patch_rvc_branch(source,
-                                         reloc->offset,
-                                         delta,
-                                         state->diagnostics)) {
-                free(pcrel);
-                return false;
-            }
-            break;
-        case R_RISCV_RVC_JUMP:
-            delta = target - (int64_t)place;
-            if (!static_patch_rvc_jump(source,
-                                       reloc->offset,
-                                       delta,
-                                       state->diagnostics)) {
-                free(pcrel);
-                return false;
-            }
-            break;
-        case R_RISCV_32_PCREL:
-            delta = target - (int64_t)place;
-            if (delta < INT32_MIN || delta > INT32_MAX ||
-                source->type == SHT_NOBITS ||
-                reloc->offset > SIZE_MAX ||
-                !range_ok((size_t)reloc->offset, 4U, source->size)) {
-                fprintf(state->diagnostics,
-                        "minic-ld: shared-R_RISCV_32_PCREL-range\n");
-                free(pcrel);
-                return false;
-            }
-            store_u32le(source->data + (size_t)reloc->offset,
-                        (uint32_t)(int32_t)delta);
-            break;
-        default:
-            fprintf(state->diagnostics,
-                    "minic-ld: unsupported-shared-final-layout:%u\n",
-                    reloc->type);
-            free(pcrel);
-            return false;
+        if (!minild_riscv_apply_final_instruction(
+                &pairs, source, reloc, target, place, true,
+                reloc->symbol < state->resolver.count
+                    ? state->resolver.entries[reloc->symbol].name : "<none>",
+                state->diagnostics)) {
+            goto done;
         }
     }
 
@@ -661,8 +517,8 @@ static bool shared_patch_final_layout_relocations(
         MiniLdReloc *reloc = &state->relocations.entries[i];
         MiniLdResolvedSymbol *anchor;
         MiniLdSection *source;
-        int64_t anchor_offset;
-        int64_t delta;
+        uint64_t anchor_offset;
+        MiniLdRiscvLo12Status status;
         bool live;
 
         if (reloc->type != R_RISCV_PCREL_LO12_I &&
@@ -671,8 +527,7 @@ static bool shared_patch_final_layout_relocations(
         }
         if (!shared_relocation_live_source(state, output_plan,
                                            reloc->section, &live)) {
-            free(pcrel);
-            return false;
+            goto done;
         }
         if (!live) {
             continue;
@@ -681,8 +536,7 @@ static bool shared_patch_final_layout_relocations(
             reloc->symbol >= state->resolver.count) {
             fprintf(state->diagnostics,
                     "minic-ld: invalid-shared-pcrel-lo-symbol\n");
-            free(pcrel);
-            return false;
+            goto done;
         }
         anchor = &state->resolver.entries[reloc->symbol];
         if (anchor->section < 0 ||
@@ -690,40 +544,36 @@ static bool shared_patch_final_layout_relocations(
             fprintf(state->diagnostics,
                     "minic-ld: invalid-shared-pcrel-lo-anchor:%s\n",
                     anchor->name);
-            free(pcrel);
-            return false;
+            goto done;
         }
-        anchor_offset = (int64_t)anchor->value + reloc->addend;
-        if (anchor_offset < 0 ||
-            !pcrel_find(pcrel,
-                        capacity,
-                        (size_t)anchor->section,
-                        (uint64_t)anchor_offset,
-                        &delta)) {
+        if (!minild_riscv_checked_add_u64_s64(
+                anchor->value, reloc->addend, &anchor_offset)) {
             fprintf(state->diagnostics,
                     "minic-ld: missing-shared-pcrel-hi20:%s\n",
                     anchor->name);
-            free(pcrel);
-            return false;
+            goto done;
         }
         source = &state->work.sections[reloc->section];
-        if ((reloc->type == R_RISCV_PCREL_LO12_I &&
-             !static_patch_itype(source,
-                                 reloc->offset,
-                                 riscv_lo12(delta),
-                                 state->diagnostics)) ||
-            (reloc->type == R_RISCV_PCREL_LO12_S &&
-             !static_patch_stype(source,
-                                 reloc->offset,
-                                 riscv_lo12(delta),
-                                 state->diagnostics))) {
-            free(pcrel);
-            return false;
+        status = minild_riscv_apply_pcrel_lo12(&pairs, source, reloc,
+                                               (size_t)anchor->section,
+                                               anchor_offset,
+                                               state->diagnostics);
+        if (status == MINILD_RV_LO12_MISSING) {
+            fprintf(state->diagnostics,
+                    "minic-ld: missing-shared-pcrel-hi20:%s\n",
+                    anchor->name);
+            goto done;
+        }
+        if (status != MINILD_RV_LO12_OK) {
+            goto done;
         }
     }
 
-    free(pcrel);
-    return true;
+    ok = true;
+
+done:
+    minild_riscv_pairs_destroy(&pairs);
+    return ok;
 }
 
 /* Emit optional dynamic PLT entries and always resolve local CALL pairs. */
@@ -801,7 +651,8 @@ static bool shared_finalize_plt_and_calls(MiniLdState *state,
         got_offset = (3U + plt_index) * 8U;
         entry_address = plt_address + plt_offset;
         slot_address = gotplt_address + got_offset;
-        delta = (int64_t)slot_address - (int64_t)entry_address;
+        delta = minild_riscv_pc_delta_bits(
+            minild_riscv_signed_bits(slot_address), entry_address);
         hi = riscv_hi20(delta);
         lo = riscv_lo12(delta);
 
@@ -828,6 +679,7 @@ static bool shared_finalize_plt_and_calls(MiniLdState *state,
         MiniLdSection *source;
         MiniLdResolvedSymbol *target;
         uint64_t destination;
+        int64_t signed_destination;
         bool live;
 
         if (reloc->type != R_RISCV_CALL &&
@@ -877,19 +729,12 @@ static bool shared_finalize_plt_and_calls(MiniLdState *state,
         /* R_RISCV_CALL(_PLT) is S + A - P in both cases: S names either the
          * local definition or the selected PLT entry.  The JUMP_SLOT's own
          * addend remains zero; this addend belongs to the caller's pair. */
-        destination = (uint64_t)((int64_t)destination + reloc->addend);
-
-        delta = (int64_t)destination -
-                (int64_t)(layout->work[reloc->section].vaddr +
-                          reloc->offset);
-        if (!static_patch_utype(source,
-                                reloc->offset,
-                                riscv_hi20(delta),
-                                state->diagnostics) ||
-            !static_patch_itype(source,
-                                reloc->offset + 4U,
-                                riscv_lo12(delta),
-                                state->diagnostics)) {
+        signed_destination = minild_riscv_addend_bits(destination,
+                                                    reloc->addend);
+        if (!minild_riscv_apply_final_instruction(
+                NULL, source, reloc, signed_destination,
+                layout->work[reloc->section].vaddr + reloc->offset,
+                true, target->name, state->diagnostics)) {
             return false;
         }
     }

@@ -4,12 +4,29 @@
  */
 
 static int64_t riscv_hi20(int64_t value) {
-    return (value + INT64_C(0x800)) >> 12;
+    int64_t high = value / INT64_C(4096);
+    int64_t low = value % INT64_C(4096);
+
+    /* Signed division truncates toward zero.  Explicitly round to the
+     * canonical signed LO12 interval without overflowing value+0x800,
+     * shifting a negative signed value, or relying on signed right shift. */
+    if (low >= INT64_C(2048)) {
+        ++high;
+    } else if (low < -INT64_C(2048)) {
+        --high;
+    }
+    return high;
 }
 
 static int64_t riscv_lo12(int64_t value) {
-    int64_t high = riscv_hi20(value);
-    return value - (high << 12);
+    int64_t low = value % INT64_C(4096);
+
+    if (low >= INT64_C(2048)) {
+        low -= INT64_C(4096);
+    } else if (low < -INT64_C(2048)) {
+        low += INT64_C(4096);
+    }
+    return low;
 }
 
 static bool static_patch_utype(MiniLdSection *section,
@@ -339,6 +356,239 @@ static bool minild_riscv_reloc_final_layout(uint32_t type) {
     default:
         return false;
     }
+}
+
+/* A final-link PCREL HI20/LO12 pairing table belongs to the RISC-V fixup
+ * stage, not to either ET_EXEC or ET_DYN output driver.  The table is built
+ * only after layout, when R_RISCV_ALIGN has settled all current work offsets.
+ * Section identities are already stable at that point. */
+typedef struct MiniLdRiscvPcrelPairs {
+    MiniLdPcrelSlot *slots;
+    size_t capacity;
+} MiniLdRiscvPcrelPairs;
+
+static bool minild_riscv_pairs_init(MiniLdRiscvPcrelPairs *pairs,
+                                   size_t relocation_count,
+                                   bool shared_output,
+                                   FILE *diagnostics) {
+    memset(pairs, 0, sizeof(*pairs));
+    pairs->capacity = pcrel_capacity_for(relocation_count);
+    if (pairs->capacity == 0U) {
+        fprintf(diagnostics, "minic-ld: %s\n",
+                shared_output ? "shared-pcrel-index-overflow"
+                              : "relocation-index-overflow");
+        return false;
+    }
+    pairs->slots = calloc(pairs->capacity, sizeof(*pairs->slots));
+    if (pairs->slots == NULL) {
+        fprintf(diagnostics, "minic-ld: out-of-memory:%s\n",
+                shared_output ? "shared-pcrel-index" : "pcrel-index");
+        pairs->capacity = 0U;
+        return false;
+    }
+    return true;
+}
+
+static void minild_riscv_pairs_destroy(MiniLdRiscvPcrelPairs *pairs) {
+    free(pairs->slots);
+    pairs->slots = NULL;
+    pairs->capacity = 0U;
+}
+
+/* All ELF input addends are signed, but work-section and symbol offsets are
+ * unsigned.  Keep coordinates in unsigned space and reject out-of-bounds
+ * anchors instead of wrapping negative addends into arbitrary HI20 sites. */
+static bool minild_riscv_checked_add_u64_s64(uint64_t base,
+                                             int64_t addend,
+                                             uint64_t *result) {
+    if (addend >= 0) {
+        if (base > UINT64_MAX - (uint64_t)addend) {
+            return false;
+        }
+        *result = base + (uint64_t)addend;
+    } else {
+        uint64_t magnitude = UINT64_C(0) - (uint64_t)addend;
+
+        if (base < magnitude) {
+            return false;
+        }
+        *result = base - magnitude;
+    }
+    return true;
+}
+
+/* Explicit, portable two's-complement interpretation of a 64-bit pattern.
+ * In particular, the kernel half of RV64 address space is valid input:
+ * neither an unsigned-to-signed out-of-range cast nor a signed subtraction
+ * is needed to obtain its signed PC-relative displacement. */
+static int64_t minild_riscv_signed_bits(uint64_t bits) {
+    if (bits <= (uint64_t)INT64_MAX) {
+        return (int64_t)bits;
+    }
+    return -INT64_C(1) - (int64_t)(UINT64_MAX - bits);
+}
+
+/* Preserve the low 64-bit S+A bit pattern without a signed overflow. */
+static int64_t minild_riscv_addend_bits(uint64_t symbol_value,
+                                       int64_t addend) {
+    return minild_riscv_signed_bits(symbol_value + (uint64_t)addend);
+}
+
+/* RV64 PC-relative arithmetic is modulo 2^64.  A high-half place and target
+ * may differ by a small positive displacement: rejecting place>INT64_MAX
+ * would break legitimate kernel links.  Width-constrained relocations still
+ * validate the resulting signed displacement at their individual encoder. */
+static int64_t minild_riscv_pc_delta_bits(int64_t target, uint64_t place) {
+    return minild_riscv_signed_bits((uint64_t)target - place);
+}
+
+/* The caller resolves target to S+A, except GOT/TLS GD where it supplies
+ * the chosen slot/descriptor address (including TLS addend).  The target
+ * dispatcher is therefore independent of PIE preemption and output-section
+ * ownership.  CALL pairs are patched only when their output mode resolves
+ * the final destination, which is later than PLT reservation for ET_DYN. */
+static bool minild_riscv_apply_final_instruction(
+    MiniLdRiscvPcrelPairs *pairs,
+    MiniLdSection *source,
+    const MiniLdReloc *reloc,
+    int64_t target,
+    uint64_t place,
+    bool shared_output,
+    const char *symbol_name,
+    FILE *diagnostics) {
+    int64_t delta = 0;
+
+    /* Absolute HI20/LO12 never subtract P.  Only PC-relative forms need the
+     * RV64 modular displacement; both low and high-half addresses work. */
+    switch (reloc->type) {
+    case R_RISCV_CALL:
+    case R_RISCV_CALL_PLT:
+    case R_RISCV_GOT_HI20:
+    case R_RISCV_TLS_GD_HI20:
+    case R_RISCV_PCREL_HI20:
+    case R_RISCV_BRANCH:
+    case R_RISCV_JAL:
+    case R_RISCV_RVC_BRANCH:
+    case R_RISCV_RVC_JUMP:
+    case R_RISCV_32_PCREL:
+        delta = minild_riscv_pc_delta_bits(target, place);
+        break;
+    default:
+        break;
+    }
+
+    switch (reloc->type) {
+    case R_RISCV_CALL:
+    case R_RISCV_CALL_PLT:
+        return static_patch_utype(source, reloc->offset,
+                                  riscv_hi20(delta), diagnostics) &&
+               static_patch_itype(source, reloc->offset + 4U,
+                                  riscv_lo12(delta), diagnostics);
+    case R_RISCV_GOT_HI20:
+    case R_RISCV_TLS_GD_HI20:
+    case R_RISCV_PCREL_HI20:
+        /* ET_EXEC has no TLS GD descriptor reservation.  The type may be
+         * valid for ET_DYN, but must remain rejected in static final links. */
+        if (!shared_output && reloc->type == R_RISCV_TLS_GD_HI20) {
+            fprintf(diagnostics,
+                    "minic-ld: unsupported-static-relocation:%u\n",
+                    reloc->type);
+            return false;
+        }
+        if (!static_patch_utype(source, reloc->offset,
+                                riscv_hi20(delta), diagnostics)) {
+            return false;
+        }
+        pcrel_insert(pairs->slots, pairs->capacity, reloc->section,
+                     reloc->offset, delta);
+        return true;
+    case R_RISCV_HI20:
+        return static_patch_utype(source, reloc->offset,
+                                  riscv_hi20(target), diagnostics);
+    case R_RISCV_LO12_I:
+        return static_patch_itype(source, reloc->offset,
+                                  riscv_lo12(target), diagnostics);
+    case R_RISCV_LO12_S:
+        return static_patch_stype(source, reloc->offset,
+                                  riscv_lo12(target), diagnostics);
+    case R_RISCV_BRANCH:
+        return static_patch_branch(source, reloc->offset, delta, diagnostics);
+    case R_RISCV_JAL:
+        if (!shared_output &&
+            ((delta & 1) != 0 || delta < -1048576 || delta > 1048574)) {
+            fprintf(diagnostics,
+                    "minic-ld: R_RISCV_JAL-overflow:"
+                    "section=%s:offset=%llu:symbol=%s:"
+                    "place=0x%llx:target=0x%llx:delta=%lld\n",
+                    source->name,
+                    (unsigned long long)reloc->offset,
+                    symbol_name == NULL ? "<none>" : symbol_name,
+                    (unsigned long long)place,
+                    (unsigned long long)(uint64_t)target,
+                    (long long)delta);
+            return false;
+        }
+        return static_patch_jal(source, reloc->offset, delta, diagnostics);
+    case R_RISCV_RVC_BRANCH:
+        return static_patch_rvc_branch(source, reloc->offset,
+                                       delta, diagnostics);
+    case R_RISCV_RVC_JUMP:
+        return static_patch_rvc_jump(source, reloc->offset,
+                                     delta, diagnostics);
+    case R_RISCV_32_PCREL:
+        if (delta < INT32_MIN || delta > INT32_MAX ||
+            source->type == SHT_NOBITS || reloc->offset > SIZE_MAX ||
+            !range_ok((size_t)reloc->offset, 4U, source->size)) {
+            if (shared_output) {
+                fprintf(diagnostics,
+                        "minic-ld: shared-R_RISCV_32_PCREL-range\n");
+            } else {
+                fprintf(diagnostics,
+                        "minic-ld: R_RISCV_32_PCREL-overflow-or-range:delta=%lld\n",
+                        (long long)delta);
+            }
+            return false;
+        }
+        store_u32le(source->data + (size_t)reloc->offset,
+                    (uint32_t)(int32_t)delta);
+        return true;
+    default:
+        fprintf(diagnostics, "minic-ld: %s:%u\n",
+                shared_output ? "unsupported-shared-final-layout"
+                              : "unsupported-static-relocation",
+                reloc->type);
+        return false;
+    }
+}
+
+typedef enum MiniLdRiscvLo12Status {
+    MINILD_RV_LO12_OK,
+    MINILD_RV_LO12_MISSING,
+    MINILD_RV_LO12_PATCH_FAILED
+} MiniLdRiscvLo12Status;
+
+static MiniLdRiscvLo12Status minild_riscv_apply_pcrel_lo12(
+    const MiniLdRiscvPcrelPairs *pairs,
+    MiniLdSection *source,
+    const MiniLdReloc *reloc,
+    size_t anchor_section,
+    uint64_t anchor_offset,
+    FILE *diagnostics) {
+    int64_t delta;
+
+    if (!pcrel_find(pairs->slots, pairs->capacity,
+                    anchor_section, anchor_offset, &delta)) {
+        return MINILD_RV_LO12_MISSING;
+    }
+    if ((reloc->type == R_RISCV_PCREL_LO12_I &&
+         static_patch_itype(source, reloc->offset,
+                            riscv_lo12(delta), diagnostics)) ||
+        (reloc->type == R_RISCV_PCREL_LO12_S &&
+         static_patch_stype(source, reloc->offset,
+                            riscv_lo12(delta), diagnostics))) {
+        return MINILD_RV_LO12_OK;
+    }
+    return MINILD_RV_LO12_PATCH_FAILED;
 }
 
 static bool minild_riscv_apply_arithmetic(MiniLdSection *section,

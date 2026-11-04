@@ -53,7 +53,9 @@ relations remain available to GC.
 7. RISC-V relocation *type* classification is shared by the static and shared
    pre-layout scanners. The static GOT reservation and shared GOT/PLT/TLS,
    dynamic RELA and TEXTREL reservation are separate included phase owners;
-   output-mode symbol preemption and all final application remain separate.
+   output-mode symbol preemption, relocation eligibility, and metadata
+   construction remain separate. Final RV64 instruction encoding and
+   PCREL HI20/LO12 pairing converge on one target-level implementation.
 
 No extra parallel relocation counter is stored in work sections: its old
 `relocation_count` value was incremented or reset but never read.
