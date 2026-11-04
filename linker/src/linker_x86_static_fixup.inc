@@ -10,6 +10,10 @@ static MiniLdNonRiscvFixup minild_x86_static_fixup_class(uint32_t type) {
     case R_X86_64_PC32:
     case R_X86_64_PLT32: return MINILD_NONRISCV_PCREL32;
     case R_X86_64_GOTPCREL: return MINILD_NONRISCV_PCREL32;
+    case R_X86_64_GOTTPOFF: return MINILD_NONRISCV_PCREL32;
+    case R_X86_64_TPOFF32:
+    case R_X86_64_DTPOFF32: return MINILD_NONRISCV_ABS32_SIGNED;
+    case R_X86_64_DTPOFF64: return MINILD_NONRISCV_ABS64;
     case R_X86_64_GOTPCRELX:
     case R_X86_64_REX_GOTPCRELX:
         return MINILD_NONRISCV_TARGET_INSTRUCTION;
@@ -24,6 +28,32 @@ static bool minild_x86_resolve_static_got_target(
     const MiniLdX86StaticGot *got = plan->target_data;
     size_t slot;
     uint64_t got_va;
+    uint64_t tls_offset;
+
+    if (reloc->symbol != SIZE_MAX &&
+        reloc->symbol < state->resolver.count &&
+        ELF64_ST_TYPE(state->resolver.entries[reloc->symbol].info) ==
+            STT_GNU_IFUNC &&
+        (reloc->type == R_X86_64_PC32 ||
+         reloc->type == R_X86_64_PLT32 ||
+         reloc->type == R_X86_64_64 ||
+         reloc->type == R_X86_64_32 ||
+         reloc->type == R_X86_64_32S)) {
+        size_t offset;
+
+        if (got == NULL || reloc->symbol >= got->symbol_count ||
+            got->ifunc_stub_section >= state->work.count ||
+            (offset = got->ifunc_stub_offsets[reloc->symbol]) == SIZE_MAX ||
+            offset > UINT64_MAX -
+                         layout->work[got->ifunc_stub_section].vaddr) {
+            fprintf(state->diagnostics,
+                    "minic-ld: invalid-x86-static-ifunc-plt-relocation\n");
+            return false;
+        }
+        *target_bits = layout->work[got->ifunc_stub_section].vaddr +
+                       (uint64_t)offset + (uint64_t)reloc->addend;
+        return true;
+    }
 
     if (reloc->symbol != SIZE_MAX &&
         reloc->symbol < state->resolver.count &&
@@ -36,13 +66,47 @@ static bool minild_x86_resolve_static_got_target(
                 "minic-ld: unsupported-x86-static-ifunc-got-relocation\n");
         return false;
     }
-    if (reloc->type != R_X86_64_GOTPCREL) {
+    if (reloc->type == R_X86_64_TPOFF32 ||
+        reloc->type == R_X86_64_DTPOFF32 ||
+        reloc->type == R_X86_64_DTPOFF64) {
+        if (got == NULL ||
+            !minild_x86_static_tls_symbol_offset(state, layout, got,
+                                                   reloc->symbol,
+                                                   &tls_offset)) {
+            return false;
+        }
+        if (reloc->type != R_X86_64_TPOFF32 &&
+            !(state->resolver.entries[reloc->symbol].section ==
+                  MINILD_SECTION_UNDEF &&
+              ELF64_ST_BIND(state->resolver.entries[reloc->symbol].info) ==
+                  STB_WEAK)) {
+            tls_offset += got->tls_span;
+        }
+        *target_bits = tls_offset + (uint64_t)reloc->addend;
         return true;
+    }
+    if (reloc->type != R_X86_64_GOTPCREL &&
+        reloc->type != R_X86_64_GOTTPOFF) {
+        return true;
+    }
+    if (got != NULL && reloc->type == R_X86_64_GOTTPOFF) {
+        if (reloc->symbol == SIZE_MAX ||
+            reloc->symbol >= got->symbol_count ||
+            got->tls_slot_offsets[reloc->symbol] == SIZE_MAX) {
+            fprintf(state->diagnostics,
+                    "minic-ld: invalid-x86-static-tls-got-relocation\n");
+            return false;
+        }
+        slot = got->tls_slot_offsets[reloc->symbol];
+    } else if (got != NULL && reloc->symbol != SIZE_MAX &&
+               reloc->symbol < got->symbol_count) {
+        slot = got->slot_offsets[reloc->symbol];
+    } else {
+        slot = SIZE_MAX;
     }
     if (got == NULL || !got->present || layout == NULL ||
         layout->work == NULL || got->section >= state->work.count ||
-        reloc->symbol == SIZE_MAX || reloc->symbol >= got->symbol_count ||
-        (slot = got->slot_offsets[reloc->symbol]) == SIZE_MAX ||
+        slot == SIZE_MAX ||
         (uint64_t)slot > UINT64_MAX -
                              layout->work[got->section].vaddr) {
         fprintf(state->diagnostics,

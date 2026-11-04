@@ -265,7 +265,7 @@ if not re.search(r'minild_riscv_shared_target_abi\s*,\s*'
                      'riscv_shared_backend_bindings')
 for emulation in ('elf_x86_64', 'aarch64linux', 'elf64loongarch'):
     if not re.search(r'NULL\s*,\s*NULL\s*,\s*'
-                     r'minild_\w+_elf_flags\s*$',
+                     r'minild_\w+_elf_flags\s*,\s*(?:true|false)\s*$',
                      profile_rows[emulation].strip()):
         raise SystemExit('MINILD_SHARED_PHASE_STRUCTURE=FAIL '
                          f'unsupported_shared_hooks={emulation}')

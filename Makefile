@@ -728,6 +728,18 @@ check-minild-multitarget-static: $(MINIAS_BINARY) $(MINILD_BINARY)
 	MINILD="$(abspath $(MINILD_BINARY))" \
 	bash tests/linker/probe-multitarget-static.sh
 
+.PHONY: check-minild-rv32-static-runtime
+check-minild-rv32-static-runtime: $(MINIAS_BINARY) $(MINILD_BINARY)
+	MINIAS="$(abspath $(MINIAS_BINARY))" \
+	MINILD="$(abspath $(MINILD_BINARY))" \
+	bash tests/linker/probe-rv32-static-runtime.sh
+
+.PHONY: check-minild-rv32-picolibc-ladder
+check-minild-rv32-picolibc-ladder: $(MINIAS_BINARY) $(MINILD_BINARY)
+	MINIAS="$(abspath $(MINIAS_BINARY))" \
+	MINILD="$(abspath $(MINILD_BINARY))" \
+	bash tests/linker/probe-rv32-picolibc-ladder.sh
+
 # Opt-in full GCC/CRT/libc real-program acceptance. This is intentionally
 # separate from the five-target ELF structure checks while support is growing.
 .PHONY: check-minild-gcc-runtime-ladder

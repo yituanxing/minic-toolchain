@@ -20,8 +20,104 @@ static int static_load_segment_compare(const void *lhs, const void *rhs) {
     return 0;
 }
 
-/* The static segment policy is deliberately distinct from ET_DYN: default
- * executables leave the ELF header outside PT_LOAD, while scripted images
+/* Resolve a static PT_TLS file base from the actual final work-section
+ * placement, including linker-script AT() addresses.  The ordinary RW LOAD
+ * shortcut does not exist for scripted layouts.  Keep the required ELF
+ * p_offset/p_vaddr congruence and reject interleaved non-TLS bytes. */
+static bool minild_static_tls_file_location(
+    const MiniLdState *state, const MiniLdLayout *layout,
+    const MiniLdOutputPlan *output_plan, size_t *file_offset_out,
+    uint64_t *physical_address_out) {
+    const MiniLdTlsProjection *tls = &output_plan->tls;
+    uint64_t base = tls->block_base;
+    uint64_t end = tls->memory_end;
+    size_t file_offset = 0U;
+    uint64_t physical_base = base;
+    bool found_file = false;
+    bool found_physical = false;
+    size_t i;
+
+    if (!tls->valid_extents || !tls->has_nonempty_section ||
+        tls->alignment == 0U ||
+        end < base ||
+        (tls->has_file_contents &&
+         (tls->file_end < base || tls->file_end > end))) {
+        return false;
+    }
+    for (i = 0U; i < state->work.count; ++i) {
+        const MiniLdSection *section = &state->work.sections[i];
+        const MiniLdLayoutWorkPlacement *place = &layout->work[i];
+        uint64_t start = place->vaddr;
+        uint64_t finish;
+        uint64_t delta;
+
+        if (output_plan->work_shndx[i] == 0U ||
+            (section->flags & SHF_ALLOC) == 0U) {
+            continue;
+        }
+        if (section->size > UINT64_MAX - start) {
+            return false;
+        }
+        finish = start + (uint64_t)section->size;
+        if ((section->flags & SHF_TLS) == 0U) {
+            /* The single PT_TLS memory image may include alignment holes,
+             * but no unrelated RW fragment may occupy those bytes. */
+            if ((section->flags & SHF_WRITE) != 0U &&
+                section->size != 0U && start < end && finish > base) {
+                return false;
+            }
+            continue;
+        }
+        if ((section->flags & SHF_WRITE) == 0U || start < base ||
+            finish > end || place->laddr < start - base) {
+            return false;
+        }
+        delta = start - base;
+        if (!found_physical) {
+            physical_base = place->laddr - delta;
+            found_physical = true;
+        } else if (physical_base != place->laddr - delta) {
+            return false;
+        }
+        if (section->type == SHT_NOBITS || section->size == 0U) {
+            continue;
+        }
+        if (place->file_offset == SIZE_MAX ||
+            delta > place->file_offset) {
+            return false;
+        }
+        if (!found_file) {
+            file_offset = place->file_offset - (size_t)delta;
+            found_file = true;
+        } else if (file_offset != place->file_offset - (size_t)delta) {
+            return false;
+        }
+    }
+    if (!found_file) {
+        if (!layout->scripted && layout->have_rw &&
+            base >= layout->rw_vaddr &&
+            base - layout->rw_vaddr <= SIZE_MAX &&
+            layout->rw_file_offset <=
+                SIZE_MAX - (size_t)(base - layout->rw_vaddr)) {
+            file_offset = layout->rw_file_offset +
+                          (size_t)(base - layout->rw_vaddr);
+        } else {
+            /* A pure NOBITS template has p_filesz=0.  No bytes must be
+             * read at p_offset, but ELF still requires congruence. */
+            file_offset = (size_t)(base % tls->alignment);
+        }
+    }
+    if (tls->alignment > 1U &&
+        (uint64_t)file_offset % tls->alignment != base % tls->alignment) {
+        return false;
+    }
+    *file_offset_out = file_offset;
+    *physical_address_out = physical_base;
+    return true;
+}
+
+/* The static segment policy is deliberately distinct from ET_DYN: each
+ * target chooses ordinary CRT header mapping while scripted Linux images
  * preserve LMA and merge only three-way-contiguous sections. */
 static bool minild_static_program_plan_build(
     const MiniLdState *state,
@@ -29,13 +125,17 @@ static bool minild_static_program_plan_build(
     const MiniLdOutputPlan *output_plan,
     MiniLdProgramPlan *plan) {
     MiniLdStaticLoadSegment *loads = NULL;
+    const MiniLdTlsProjection *tls = &output_plan->tls;
     MiniLdElfAbiSizes abi = minild_elf_abi_sizes(state->target->elf_class);
     size_t count = 0U;
+    size_t load_count;
+    size_t tls_file_offset = 0U;
+    uint64_t tls_paddr = 0U;
     size_t i;
 
     memset(plan, 0, sizeof(*plan));
     if (layout->scripted) {
-        size_t load_count = 0U;
+        size_t scripted_count = 0U;
         loads = calloc(output_plan->count == 0U ? 1U : output_plan->count,
                        sizeof(*loads));
         if (loads == NULL) {
@@ -56,7 +156,7 @@ static bool minild_static_program_plan_build(
                         section->name);
                 goto failed;
             }
-            load = &loads[load_count++];
+            load = &loads[scripted_count++];
             load->file_offset = section->file_offset;
             load->vaddr = section->vaddr;
             load->laddr = section->laddr;
@@ -71,8 +171,8 @@ static bool minild_static_program_plan_build(
                 load->flags |= PF_X;
             }
         }
-        qsort(loads, load_count, sizeof(*loads), static_load_segment_compare);
-        for (i = 0U; i < load_count; ++i) {
+        qsort(loads, scripted_count, sizeof(*loads), static_load_segment_compare);
+        for (i = 0U; i < scripted_count; ++i) {
             const MiniLdStaticLoadSegment *next = &loads[i];
 
             if (count != 0U) {
@@ -96,6 +196,31 @@ static bool minild_static_program_plan_build(
         count = (layout->have_rx ? 1U : 0U) +
                 (layout->have_rw ? 1U : 0U);
     }
+    load_count = count;
+    if (tls->has_nonempty_section) {
+        uint64_t tls_base = tls->block_base;
+        uint64_t tls_memsz;
+        uint64_t tls_filesz;
+
+        /* Static TLS is loaded by libc from PT_TLS.  Reject irregular
+         * scripted / malformed placements instead of publishing offsets
+         * that do not agree with the target's TPOFF relocations. */
+        if (!minild_static_tls_file_location(
+                state, layout, output_plan, &tls_file_offset, &tls_paddr)) {
+            fprintf(state->diagnostics,
+                    "minic-ld: invalid-static-tls-segment-layout\n");
+            goto failed;
+        }
+        tls_memsz = tls->memory_end - tls_base;
+        tls_filesz = tls->has_file_contents
+                         ? tls->file_end - tls_base : 0U;
+        if (tls_filesz > tls_memsz) {
+            fprintf(state->diagnostics,
+                    "minic-ld: invalid-static-tls-segment-size\n");
+            goto failed;
+        }
+        ++count;
+    }
     if (abi.phdr == 0U || count > UINT16_MAX ||
         count > (SIZE_MAX - abi.ehdr) / abi.phdr) {
         fprintf(state->diagnostics, "minic-ld: too-many-static-segments\n");
@@ -108,7 +233,7 @@ static bool minild_static_program_plan_build(
     }
     plan->count = count;
     if (layout->scripted) {
-        for (i = 0U; i < count; ++i) {
+        for (i = 0U; i < load_count; ++i) {
             const MiniLdStaticLoadSegment *load = &loads[i];
             MiniElfProgramHeader *ph = &plan->entries[i];
             ph->type = PT_LOAD;
@@ -124,11 +249,29 @@ static bool minild_static_program_plan_build(
         size_t index = 0U;
         if (layout->have_rx) {
             MiniElfProgramHeader *ph = &plan->entries[index++];
+            if ((uint64_t)layout->rx_file_offset > layout->rx_vaddr ||
+                layout->rx_file_size >
+                    SIZE_MAX - layout->rx_file_offset) {
+                fprintf(state->diagnostics,
+                        "minic-ld: invalid-static-header-load-layout\n");
+                goto failed;
+            }
             ph->type = PT_LOAD;
             ph->flags = PF_R | PF_X;
-            ph->offset = layout->rx_file_offset;
-            ph->virtual_address = ph->physical_address = layout->rx_vaddr;
-            ph->file_size = ph->memory_size = layout->rx_file_size;
+            /* Keep the ELF/program headers mapped so __ehdr_start is
+             * dereferenceable by real static libc. The first section keeps
+             * its preexisting VMA and file offset. */
+            if (state->target->map_static_elf_headers) {
+                ph->offset = 0U;
+                ph->virtual_address = ph->physical_address =
+                    layout->rx_vaddr - (uint64_t)layout->rx_file_offset;
+                ph->file_size = ph->memory_size =
+                    layout->rx_file_offset + layout->rx_file_size;
+            } else {
+                ph->offset = layout->rx_file_offset;
+                ph->virtual_address = ph->physical_address = layout->rx_vaddr;
+                ph->file_size = ph->memory_size = layout->rx_file_size;
+            }
             ph->alignment = state->target->page_size;
         }
         if (layout->have_rw) {
@@ -141,6 +284,19 @@ static bool minild_static_program_plan_build(
             ph->memory_size = layout->rw_mem_size;
             ph->alignment = state->target->page_size;
         }
+    }
+    if (tls->has_nonempty_section) {
+        MiniElfProgramHeader *ph = &plan->entries[load_count];
+
+        ph->type = PT_TLS;
+        ph->flags = PF_R;
+        ph->offset = tls_file_offset;
+        ph->virtual_address = tls->block_base;
+        ph->physical_address = tls_paddr;
+        ph->file_size = tls->has_file_contents
+                            ? tls->file_end - tls->block_base : 0U;
+        ph->memory_size = tls->memory_end - tls->block_base;
+        ph->alignment = tls->alignment;
     }
     free(loads);
     return true;

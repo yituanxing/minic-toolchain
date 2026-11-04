@@ -393,9 +393,10 @@ for name in ('x86_64', 'aarch64', 'loongarch64'):
     # ABS64 relocation four bytes forward must not write across its boundary.
     # A narrow ABS32 replacement with an enormous positive addend must fail
     # representability, rather than silently truncate a 64-bit symbol value.
-    # A relocation requiring an as-yet-unimplemented GOT/TLS mode must not
-    # fall through to ordinary scalar handling. x86 plain GOTPCREL now has
-    # genuine static GOT support, so its remaining negative is GOTTPOFF.
+    # A GOT/TLS relocation may be admitted by the target but must not
+    # silently evaluate as a scalar when its required TLS block is absent.
+    # x86 GOTTPOFF has real IE-TLS support; this intentionally malformed
+    # fixture references a non-TLS symbol and still must fail closed.
     absolute_type, narrow_type, got_type = {
         'x86_64': (1, 10, 22),
         'aarch64': (257, 258, 311),
@@ -514,8 +515,12 @@ for name in x86_64 aarch64 loongarch64; do
         "nonriscv-relocation-overflow-or-encoding:$machine:" \
         -m "$emulation" -static -e _start \
         "$work/$name-narrow-overflow.o" "$work/$name-data.o"
+    got_mode_diagnostic="unsupported-static-relocation:$machine:"
+    if [[ $name == x86_64 ]]; then
+        got_mode_diagnostic='missing-x86-static-tls-block'
+    fi
     reject_static "$name-got-mode-leak" "$name" \
-        "unsupported-static-relocation:$machine:" \
+        "$got_mode_diagnostic" \
         -m "$emulation" -static -e _start \
         "$work/$name-got-mode-leak.o" "$work/$name-data.o"
     reject_static "$name-strong-undefined" "$name" \

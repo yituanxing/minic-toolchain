@@ -55,11 +55,10 @@ case "$arch" in
     emulation=elf64loongarch; machine='LoongArch'; isa=loongarch64; abi=lp64d
     ;;
   riscv32)
-    # The current ELF32 target accepts generic -r and a special compat-vDSO,
-    # but not ordinary ET_EXEC.  Never misreport a five-architecture pass.
-    printf '%s\n' 'MINILD_RUNTIME_LADDER=UNSUPPORTED arch=riscv32 mode=static-ET_EXEC reason=target-mode-gated' |
-      tee "$work/evidence/summary.txt" >&2
-    exit 2
+    # GNU's riscv64-linux-gnu glibc has no RV32I/ILP32 runtime.  Dispatch to
+    # the project's authentic RV32 Picolibc + Linux syscall bridge ladder;
+    # the same GNU-BFD-vs-MiniLD runtime parity is mandatory there.
+    exec bash "$repo/tests/linker/probe-rv32-picolibc-ladder.sh"
     ;;
   *) printf 'MINILD_RUNTIME_LADDER=ERROR unsupported_arch=%s\n' "$arch" >&2; exit 64 ;;
 esac
@@ -227,6 +226,28 @@ for stage in exit control memory multitu io; do
        grep -Fq INTERP "$stage_dir/evidence/$flavor-program-headers.txt"; then
       fail "invalid-static-elf:$flavor"
       continue
+    fi
+    if [[ $arch == x86_64 ]]; then
+      # Static glibc genuinely installs variant-II TLS and resolves IFUNCs
+      # through IRELATIVE before calling their selected implementations.
+      # A file that links but drops either ABI contract is not a pass.
+      if ! grep -Eq '^[[:space:]]+TLS[[:space:]]' \
+           "$stage_dir/evidence/$flavor-program-headers.txt" ||
+         ! "$readelf" -Wr "$program" > \
+           "$stage_dir/evidence/$flavor-relocations.txt" ||
+         ! grep -Fq R_X86_64_IRELATIVE \
+           "$stage_dir/evidence/$flavor-relocations.txt" ||
+         ! "$readelf" -Ws "$program" > \
+           "$stage_dir/evidence/$flavor-symbols.txt" ||
+         ! awk '$NF == "__rela_iplt_start" && $7 != "UND" &&
+                 $2 !~ /^0+$/ { found=1 } END { exit !found }' \
+           "$stage_dir/evidence/$flavor-symbols.txt" ||
+         ! awk '$NF == "__rela_iplt_end" && $7 != "UND" &&
+                 $2 !~ /^0+$/ { found=1 } END { exit !found }' \
+           "$stage_dir/evidence/$flavor-symbols.txt"; then
+        fail "missing-static-tls-or-ifunc:$flavor"
+        continue
+      fi
     fi
     result=0
     timeout --signal=TERM 30s "${qemu[@]}" "$program" \

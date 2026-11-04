@@ -45,6 +45,13 @@ static bool minild_riscv_apply_static_relocations(
         target = minild_target_signed_bits(operands.target_bits);
 
         if (kind == MINILD_TARGET_RELOC_ARITHMETIC) {
+            if (state->target->elf_class == ELFCLASS32 &&
+                (reloc->type == R_RISCV_ADD64 ||
+                 reloc->type == R_RISCV_SUB64)) {
+                fprintf(state->diagnostics,
+                        "minic-ld: rv32-unsupported-64bit-arithmetic\n");
+                goto fail;
+            }
             if (!minild_target_apply_arithmetic(
                     section, reloc, target, false, state->diagnostics)) {
                 goto fail;
@@ -55,6 +62,12 @@ static bool minild_riscv_apply_static_relocations(
         switch (kind) {
         case MINILD_TARGET_RELOC_ABS64:
         case MINILD_TARGET_RELOC_ABS32:
+            if (kind == MINILD_TARGET_RELOC_ABS64 &&
+                state->target->elf_class == ELFCLASS32) {
+                fprintf(state->diagnostics,
+                        "minic-ld: rv32-unsupported-R_RISCV_64\n");
+                goto fail;
+            }
             if (section->type == SHT_NOBITS || reloc->offset > SIZE_MAX ||
                 !range_ok((size_t)reloc->offset,
                           minild_target_absolute_width(kind), section->size)) {

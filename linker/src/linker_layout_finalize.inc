@@ -109,6 +109,17 @@ static bool static_need_array_bound_pair(
 static bool static_synthesize_runtime_boundaries(
     MiniLdState *state,
     const MiniLdLayout *layout) {
+    /* GCC's static CRT/libc expects a mapped ELF header; its start is a
+     * real linker-defined symbol, not an unresolved reference to metadata.
+     * Scripted kernels retain their own exact segment/header contract. */
+    if (!layout->scripted && state->target->map_static_elf_headers &&
+        layout->have_rx &&
+        ((uint64_t)layout->rx_file_offset > layout->rx_vaddr ||
+         !static_define_absolute_if_undefined(
+             state, "__ehdr_start",
+             layout->rx_vaddr - (uint64_t)layout->rx_file_offset))) {
+        return false;
+    }
     return (state->target->synthesize_default_symbols == NULL ||
             state->target->synthesize_default_symbols(state, layout)) &&
            (!static_need_array_bound_pair(state, layout, ".preinit_array",

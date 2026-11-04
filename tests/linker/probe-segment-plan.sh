@@ -270,23 +270,38 @@ def covers(segment, sec):
 
 raw, ph, names = inspect('static-default.elf', 2)
 loads = [p for p in ph if p[0] == 1]
-assert len(loads) == 2 and len(ph) == 2, ('ET_EXEC default PHDRs', ph)
+tls = [p for p in ph if p[0] == 7]
+assert len(loads) == 2 and len(tls) == 1 and len(ph) == 3, ('ET_EXEC default PHDRs', ph)
 assert loads[0][1] == 5 and loads[1][1] == 6 and all(p[7] == 4096 for p in loads)
 assert loads[0][2] >= 4096 and loads[0][3] >= 0x10000
 assert not (loads[0][2] <= 0 < loads[0][2] + loads[0][5]), 'static LOAD must exclude ELF header'
 assert covers(loads[0], one(names, '.text.start'))
 assert covers(loads[1], one(names, '.data.word'))
-print('MINILD_SEGMENT_CHECK=PASS mode=static-default loads=2')
+assert tls[0][2] == one(names, '.tdata.slot')[4]
+assert tls[0][3] == one(names, '.tdata.slot')[3]
+assert tls[0][4] == tls[0][3] and tls[0][5] == 8 and tls[0][6] == 24 and tls[0][7] == 8
+assert covers(loads[1], one(names, '.tdata.slot'))
+assert covers(tls[0], one(names, '.tbss.slot'))
+print('MINILD_SEGMENT_CHECK=PASS mode=static-default loads=2 PT_TLS=true')
 
 raw, ph, names = inspect('static-script.elf', 2)
 loads = [p for p in ph if p[0] == 1]
+tls = [p for p in ph if p[0] == 7]
 assert len(loads) == 3 and all(p[7] == 1 for p in loads), ('script LOAD alignment', ph)
+assert len(tls) == 1 and len(ph) == 4, ('scripted PT_TLS', ph)
 data = one(names, '.data')
 assert any(covers(p, data) and p[4] != p[3] for p in loads), ('AT() LMA lost', ph)
 assert any(covers(p, one(names, '.text')) for p in loads)
 assert any(p[1] == 6 and p[6] > p[5] for p in loads), ('NOBITS LOAD tail', ph)
 assert one(names, '.note')[5] == 20
-print(f'MINILD_SEGMENT_CHECK=PASS mode=static-script loads={len(loads)} AT_LMA=true')
+assert tls[0][3] == one(names, '.tdata')[3]
+assert tls[0][2] == one(names, '.tdata')[4]
+assert tls[0][5] == 8 and tls[0][6] == 24 and tls[0][7] == 8
+assert covers(tls[0], one(names, '.tbss'))
+assert any(p[1] == 6 and covers(p, one(names, '.tdata')) and
+           tls[0][4] - tls[0][3] == p[4] - p[3] for p in loads), (
+    'scripted PT_TLS LMA must retain AT() mapping', ph)
+print(f'MINILD_SEGMENT_CHECK=PASS mode=static-script loads={len(loads)} AT_LMA=true PT_TLS=true')
 
 raw, ph, names = inspect('shared.so', 3)
 loads = [p for p in ph if p[0] == 1]
@@ -348,11 +363,15 @@ raw, ph, names = inspect('static-tls-empty-first.elf', 2)
 anchor = one(names, '.tdata.anchor')
 value = one(names, '.tdata.value')
 assert anchor[3] < value[3], ('static empty-first TLS section VMA order', anchor, value)
+tls = [p for p in ph if p[0] == 7]
+assert len(tls) == 1 and tls[0][3] == anchor[3] and tls[0][7] == 64, (
+    'ET_EXEC empty-first PT_TLS origin/alignment', ph)
+assert tls[0][5] == tls[0][6] == value[3] + value[5] - anchor[3]
 for name, expected in {'tls_anchor': 0, 'tls_value': value[3] - anchor[3]}.items():
     info, shndx, offset, size = tls_symbols('.symtab', '.strtab')[name]
     assert info & 0xf == 6 and shndx != 0 and offset == expected, (
         'ET_EXEC TLS origin mismatch', name, offset, expected)
-print('MINILD_SEGMENT_CHECK=PASS mode=static-tls-empty-first STT_TLS=retained-zero-origin')
+print('MINILD_SEGMENT_CHECK=PASS mode=static-tls-empty-first PT_TLS=retained-zero-origin STT_TLS=retained-zero-origin')
 
 raw, ph, names = inspect('shared-tls-all-empty.so', 3)
 assert not any(p[0] == 7 for p in ph), ('empty-only TLS incorrectly produced PT_TLS', ph)

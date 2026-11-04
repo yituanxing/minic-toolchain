@@ -18,6 +18,8 @@ static bool minild_x86_fill_static_relocations(
     const struct MiniLdStaticTargetPlan *plan);
 static void minild_x86_destroy_static_relocations(
     struct MiniLdStaticTargetPlan *plan);
+static bool minild_x86_synthesize_default_boundaries(
+    MiniLdState *state, const struct MiniLdLayout *layout);
 static bool minild_aarch64_apply_static_relocations(
     MiniLdState *state, const struct MiniLdLayout *layout,
     const struct MiniLdStaticTargetPlan *plan);
@@ -86,6 +88,9 @@ struct MiniLdTargetProfile {
     const struct MiniLdSharedTargetAbi *(*shared_abi)(void);
     MiniLdTargetSharedLink link_shared;
     bool (*valid_elf_flags)(uint32_t);
+    /* Static CRTs differ in whether ELF headers belong to the first LOAD.
+     * Scripted Linux images retain their explicit load-image contract. */
+    bool map_static_elf_headers;
 };
 
 static bool minild_riscv_merge_flags(MiniLdState *state,
@@ -113,17 +118,18 @@ static const MiniLdTargetProfile minild_target_profiles[] = {
      minild_riscv_destroy_static_relocations,
      minild_riscv_synthesize_gnu_default_boundaries,
      minild_riscv_shared_target_abi,
-     minild_link_shared_elf64_riscv_inputs_options, NULL},
+     minild_link_shared_elf64_riscv_inputs_options, NULL, false},
     {"elf32lriscv", ELFCLASS32, ELFDATA2LSB, EM_RISCV, "riscv",
      NULL, MINILD_SHT_RISCV_ATTRIBUTES,
      UINT64_C(0x10000), 4096U,
-     true, false, false, false, true, false, minild_riscv_merge_flags,
+     true, true, false, false, true, false, minild_riscv_merge_flags,
      minild_riscv_relax_section,
      minild_riscv_reserve_static_relocations,
      minild_riscv_fill_static_relocations,
      minild_riscv_apply_static_relocations,
-     minild_riscv_destroy_static_relocations, NULL,
-     NULL, minild_link_elf32_compat_vdso, NULL},
+     minild_riscv_destroy_static_relocations,
+     minild_riscv_synthesize_gnu_default_boundaries,
+     NULL, minild_link_elf32_compat_vdso, NULL, false},
     {"elf_x86_64", ELFCLASS64, ELFDATA2LSB, EM_X86_64, "i386:x86-64",
      NULL, 0U, UINT64_C(0x400000), 4096U,
      true, true, false, false, false, false,
@@ -131,20 +137,21 @@ static const MiniLdTargetProfile minild_target_profiles[] = {
      minild_x86_reserve_static_relocations,
      minild_x86_fill_static_relocations,
      minild_x86_apply_static_relocations,
-     minild_x86_destroy_static_relocations, NULL,
-     NULL, NULL, minild_zero_elf_flags},
+     minild_x86_destroy_static_relocations,
+     minild_x86_synthesize_default_boundaries,
+     NULL, NULL, minild_zero_elf_flags, true},
     {"aarch64linux", ELFCLASS64, ELFDATA2LSB, EM_AARCH64, "aarch64",
      NULL, 0U, UINT64_C(0x400000), 4096U,
      true, true, false, false, false, false,
      minild_exact_merge_flags, NULL, NULL, NULL,
      minild_aarch64_apply_static_relocations, NULL, NULL,
-     NULL, NULL, minild_zero_elf_flags},
+     NULL, NULL, minild_zero_elf_flags, false},
     {"elf64loongarch", ELFCLASS64, ELFDATA2LSB, EM_LOONGARCH, "loongarch64",
      NULL, 0U, UINT64_C(0x400000), 4096U,
      true, true, false, false, false, false,
      minild_exact_merge_flags, NULL, NULL, NULL,
      minild_loongarch_apply_static_relocations, NULL, NULL,
-     NULL, NULL, minild_loongarch_v1_elf_flags}
+     NULL, NULL, minild_loongarch_v1_elf_flags, false}
 };
 
 static const MiniLdTargetProfile *minild_target_find(const char *emulation) {

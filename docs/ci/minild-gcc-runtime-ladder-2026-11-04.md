@@ -13,6 +13,9 @@ make -j4 MODE=release CFLAGS=-Werror \
 ALLOW_NATIVE_X86_64=1 make MODE=release check-minild-gcc-runtime-ladder ARCH=x86_64
 make MODE=release CFLAGS=-Werror check-minild-x86-crt-got-relax \
   check-minild-multitarget-relocatable check-minild-multitarget-static
+make MODE=release CFLAGS=-Werror check-minild-rv32-static-runtime
+# CI only: needs genuine RV32I Picolibc multilib, GNU BFD and QEMU.
+make MODE=release check-minild-rv32-picolibc-ladder
 ```
 
 `probe-minild-gcc-runtime-ladder.sh` runs each stage independently:
@@ -32,20 +35,25 @@ in-memory ELF-only or GNU-linked candidate is accepted.  Complete per-stage
 input hashes, diagnostics and outputs are kept under `WORK_DIR`.
 
 The workflow `.github/workflows/minild-gcc-runtime-ladder.yml` is
-**manual-only** during initial gap collection, separate from the established
-five-target ELF boundary CI.  It installs the actual cross-GCC/sysroot and
-QEMU for each architecture and uploads failing artifacts.  No missing QEMU
-may be silently counted as a runtime pass.
+**manually dispatchable**, and changing that workflow file triggers an
+independent five-target exploratory cohort on the refactor branch. Ordinary
+linker-only edits do **not** repeatedly launch it, separate from the established
+five-target ELF boundary CI. It installs the actual cross-GCC/sysroot and
+QEMU for each architecture and uploads failing artifacts. RV32's ILP32 runtime
+is **real Debian Picolibc with the project's Linux syscall bridge**, not the
+ABI-incompatible RV64 glibc; its five C stages use the separate
+`probe-rv32-picolibc-ladder.sh` while preserving GNU BFD/MiniLD parity.
+No missing QEMU may be silently counted as a runtime pass.
 
 ## Observed acceptance, not a projected pass rate
 
 | Target | Current level | Ordinary five-stage MiniLD result |
 |---|---|---|
-| x86-64 | GNU BFD native 5/5; MiniLD genuine CRT/GOT probes native PASS | **0/5**, first block is TLS relocations |
+| x86-64 | GNU BFD native 5/5; MiniLD native CRT/TLS/IFUNC probes PASS | **5/5 PASS locally**, GNU BFD runtime parity 5/5; CI pending |
 | RV64 | Historical MiniLD musl/Lua/QEMU success on a different revision | New GCC/glibc ladder requires CI rerun |
 | AArch64 | MiniAS object + MiniLD minimal ET_EXEC, QEMU success in earlier CI | New GCC/glibc ladder requires CI rerun |
 | LoongArch64 | MiniAS object + MiniLD minimal ET_EXEC, QEMU success in earlier CI | New GCC/glibc ladder requires CI rerun |
-| RV32 | ET_REL and narrow compat-vDSO only | `elf32lriscv -static` is explicitly unsupported |
+| RV32 | ET_REL plus newly enabled ELF32 ET_EXEC; RV32 GOT is 4B, wrong-width relocation rejected | Two-object ET_EXEC structure PASS locally; GNU LD/QEMU and Picolibc five-C-stage ladder await CI |
 
 The original MiniAS RV64 C ladder used `rv64gc/lp64d`.  MiniC's Linux
 code-generation contract is separately `rv64i/lp64`; they are **not the same
@@ -66,17 +74,20 @@ The default `gcc-glibc` profile preserves the original `rv64gc/lp64d` ladder.
    links, executes and GNU-compares **two** programs (CRT/no-symtab/weak GOT
    and non-relaxable true GOT): PASS. A static IFUNC-GOT reference is
    deliberately rejected until IPLT/IRELATIVE support exists.
-4. Re-running all five real C stages now stops first at
-   `R_X86_64_TPOFF32` (exit) / `R_X86_64_GOTTPOFF` (the other four).
-   Five-stage MiniLD status is therefore still **0/5**.
+4. The next failures were `R_X86_64_TPOFF32` / `R_X86_64_GOTTPOFF` and then
+   static glibc IFUNC initialization. TLS is now placed as a contiguous
+   `.tdata`/`.tbss` block, with `PT_TLS` and target-owned x86 Variant II
+   offsets.  `R_X86_64_IRELATIVE` records, IPLT/IGOT slots and live
+   `__rela_iplt_start/end` are synthesized so glibc's actual startup can
+   resolve IFUNC before it calls optimized libc functions.  Unsupported
+   IFUNC GOT forms still fail closed.
+5. On the local host, **all five** GCC→MiniAS→MiniLD static-glibc executables
+   now link and run; GNU BFD links the exact same objects, and exit/stdout/
+   stderr agree for `exit`, `control`, `memory`, `multitu` and `io`.
 
-**Do not implement TLS by treating these as ordinary PC-relative fixups.**
-Static glibc needs contiguous `.tdata`/`.tbss`, PT_TLS, TLS layout and
-offset semantics, and still has IFUNC/IPLT/IRELATIVE initialization paths.
-The current generic static layout places all RW PROGBITS before RW NOBITS,
-so merely emitting PT_TLS without updating section placement is incorrect.
-This is the next coherent architectural change, followed by exact GNU BFD
-runtime differential, then cJSON, zlib, Lua, BusyBox, and eventually Linux.
+The next milestones remain exact five-architecture CI/QEMU differential,
+then cJSON, zlib, Lua, BusyBox, and eventually Linux. In particular, one
+x86-64 5/5 does **not** establish five-architecture Linux correctness.
 
 ## Verified locally on this revision
 
@@ -88,5 +99,10 @@ runtime differential, then cJSON, zlib, Lua, BusyBox, and eventually Linux.
   locally** because cross-QEMU is absent.
 - x86 CRT/no-symtab + GOTPCREL(X) isolated programs: 4 actual native runs,
   two GNU/MiniLD parity checks, PASS.
-- New x86 full glibc five-stage ladder: GNU 5/5, MiniLD 0/5; TLS blockers
-  retained in `build/minild-gcc-runtime-ladder/x86_64/**/evidence`.
+- New x86 full glibc five-stage ladder: GNU 5/5, MiniLD 5/5, native runtime
+  differential 5/5; TLS and IFUNC evidence retained in
+  `build/minild-gcc-runtime-ladder/x86_64/**/evidence`.
+- RV32 ELF32 `-static` two-stage/roundtrip structural checks, GOT width and
+  invalid relocation rejection: PASS locally. Independent GNU BFD and QEMU
+  actual RV32 execution remain UNVERIFIED on this host (missing tools), and
+  the RV32 Picolibc five-stage acceptance has not yet run in CI.

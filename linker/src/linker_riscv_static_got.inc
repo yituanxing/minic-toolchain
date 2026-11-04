@@ -23,6 +23,7 @@ static void minild_riscv_destroy_static_relocations(
 static bool minild_riscv_reserve_static_relocations(
     MiniLdState *state, MiniLdStaticTargetPlan *plan) {
     MiniLdRiscvStaticGot *got;
+    size_t slot_width = state->target->elf_class == ELFCLASS32 ? 4U : 8U;
     size_t i;
 
     if (plan->target_data != NULL) {
@@ -67,7 +68,7 @@ static bool minild_riscv_reserve_static_relocations(
         }
         if (!got->present) {
             if (!find_or_add_section(state, ".got", SHT_PROGBITS,
-                                     SHF_ALLOC | SHF_WRITE, 8U, 0U,
+                                     SHF_ALLOC | SHF_WRITE, slot_width, 0U,
                                      &got->section)) {
                 return false;
             }
@@ -77,9 +78,9 @@ static bool minild_riscv_reserve_static_relocations(
         }
 
         section = &state->work.sections[got->section];
-        if (!align_up_size(section->size, 8U, &aligned) ||
+        if (!align_up_size(section->size, slot_width, &aligned) ||
             !section_append_zero(section, aligned - section->size) ||
-            !section_append_zero(section, 8U)) {
+            !section_append_zero(section, slot_width)) {
             fprintf(state->diagnostics,
                     "minic-ld: static-got-allocation-overflow\n");
             return false;
@@ -93,6 +94,7 @@ static bool minild_riscv_fill_static_relocations(
     MiniLdState *state, const MiniLdLayout *layout,
     const MiniLdStaticTargetPlan *plan) {
     const MiniLdRiscvStaticGot *got = plan->target_data;
+    size_t slot_width = state->target->elf_class == ELFCLASS32 ? 4U : 8U;
     MiniLdSection *section;
     size_t i;
 
@@ -116,10 +118,18 @@ static bool minild_riscv_fill_static_relocations(
             continue;
         }
         if (!minild_layout_resolve_symbol(state, layout, i, &value) ||
-            !range_ok(got->slot_offsets[i], 8U, section->size)) {
+            (slot_width == 4U && value > UINT32_MAX) ||
+            !range_ok(got->slot_offsets[i], slot_width, section->size)) {
+            fprintf(state->diagnostics,
+                    "minic-ld: invalid-riscv-static-got-value-or-range\n");
             return false;
         }
-        store_u64le(section->data + got->slot_offsets[i], value);
+        if (slot_width == 4U) {
+            store_u32le(section->data + got->slot_offsets[i],
+                        (uint32_t)value);
+        } else {
+            store_u64le(section->data + got->slot_offsets[i], value);
+        }
     }
     return true;
 }

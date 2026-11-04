@@ -48,6 +48,68 @@ typedef struct MiniLdLayout {
     bool scripted;
 } MiniLdLayout;
 
+/* The surviving TLS block has one layout identity for ET_EXEC fixups,
+ * .symtab values and PT_TLS.  Do not let targets independently infer where
+ * the TLS image starts or ends: x86 TPOFF, for example, must describe the
+ * same block that the runtime will install from PT_TLS. */
+typedef struct MiniLdTlsProjection {
+    bool has_surviving_section;
+    bool has_nonempty_section;
+    bool has_file_contents;
+    bool valid_extents;
+    uint64_t block_base;
+    uint64_t memory_end;
+    uint64_t file_end;
+    uint64_t alignment;
+} MiniLdTlsProjection;
+
+static void minild_layout_project_tls(const MiniLdState *state,
+                                      const MiniLdLayout *layout,
+                                      MiniLdTlsProjection *tls) {
+    size_t i;
+
+    memset(tls, 0, sizeof(*tls));
+    tls->valid_extents = true;
+    tls->alignment = 1U;
+    for (i = 0U; i < state->work.count; ++i) {
+        const MiniLdSection *section = &state->work.sections[i];
+        uint64_t start;
+        uint64_t end;
+
+        if ((section->flags & (SHF_ALLOC | SHF_TLS)) !=
+                (SHF_ALLOC | SHF_TLS) || section->gc_discarded ||
+            (layout->scripted && layout->work[i].discarded)) {
+            continue;
+        }
+        start = layout->work[i].vaddr;
+        if (!tls->has_surviving_section || start < tls->block_base) {
+            tls->block_base = start;
+        }
+        tls->has_surviving_section = true;
+        tls->has_nonempty_section |= section->size != 0U;
+        if (section->align > tls->alignment) {
+            tls->alignment = section->align;
+        }
+        if (section->size > UINT64_MAX - start) {
+            tls->valid_extents = false;
+            continue;
+        }
+        end = start + (uint64_t)section->size;
+        if (end > tls->memory_end) {
+            tls->memory_end = end;
+        }
+        if (section->type != SHT_NOBITS && section->size != 0U) {
+            if (layout->work[i].file_offset == SIZE_MAX) {
+                tls->valid_extents = false;
+            }
+            if (!tls->has_file_contents || end > tls->file_end) {
+                tls->file_end = end;
+            }
+            tls->has_file_contents = true;
+        }
+    }
+}
+
 static uint8_t load_u8(const unsigned char *data) {
     return data[0];
 }
@@ -125,6 +187,7 @@ static bool static_build_layout_at(MiniLdState *state,
     size_t rw_file_cursor = 0U;
     size_t rw_mem_cursor = 0U;
     size_t i;
+    unsigned rw_pass;
 
     memset(layout, 0, sizeof(*layout));
     layout->work =
@@ -194,59 +257,52 @@ static bool static_build_layout_at(MiniLdState *state,
         layout->rw_vaddr = (uint64_t)next_vaddr;
     }
 
-    for (i = 0U; i < state->work.count; ++i) {
-        MiniLdSection *section = &state->work.sections[i];
-        size_t aligned;
+    /* All initialized RW sections precede NOBITS in the ordinary image.
+     * Within that constraint put .tdata last and .tbss first, so PT_TLS
+     * describes one contiguous block and non-TLS .bss never interrupts it.
+     * GNU's variant-II TLS offset is relative to this whole aligned block.
+     * Other sections retain their preexisting relative placement order. */
+    for (rw_pass = 0U; rw_pass < 4U; ++rw_pass) {
+        for (i = 0U; i < state->work.count; ++i) {
+            MiniLdSection *section = &state->work.sections[i];
+            bool is_tls = (section->flags & SHF_TLS) != 0U;
+            bool is_nobits = section->type == SHT_NOBITS;
+            bool pass_tls = rw_pass == 1U || rw_pass == 2U;
+            bool pass_nobits = rw_pass >= 2U;
+            size_t aligned;
 
-        if ((section->flags & (SHF_ALLOC | SHF_WRITE)) !=
-                (SHF_ALLOC | SHF_WRITE) ||
-            section->type == SHT_NOBITS) {
-            continue;
+            if ((section->flags & (SHF_ALLOC | SHF_WRITE)) !=
+                    (SHF_ALLOC | SHF_WRITE) || is_tls != pass_tls ||
+                is_nobits != pass_nobits) {
+                continue;
+            }
+            if (!align_up_size(rw_mem_cursor, section->align, &aligned)) {
+                fprintf(state->diagnostics, "minic-ld: static-layout-overflow\n");
+                return false;
+            }
+            rw_mem_cursor = aligned;
+            if (!is_nobits) {
+                rw_file_cursor = aligned;
+            }
+            layout->work[i].vaddr = layout->rw_vaddr + rw_mem_cursor;
+            layout->work[i].laddr = layout->work[i].vaddr;
+            if (!is_nobits) {
+                layout->work[i].file_offset =
+                    layout->rw_file_offset + rw_file_cursor;
+            }
+            if (!minild_target_relax_section(state,
+                                            i,
+                                            layout->work[i].vaddr)) {
+                return false;
+            }
+            if (!add_size(rw_mem_cursor, section->size, &rw_mem_cursor) ||
+                (!is_nobits &&
+                 !add_size(rw_file_cursor, section->size, &rw_file_cursor))) {
+                fprintf(state->diagnostics, "minic-ld: static-layout-overflow\n");
+                return false;
+            }
+            layout->have_rw = true;
         }
-        if (!align_up_size(rw_file_cursor, section->align, &aligned)) {
-            fprintf(state->diagnostics, "minic-ld: static-layout-overflow\n");
-            return false;
-        }
-        rw_file_cursor = aligned;
-        rw_mem_cursor = aligned;
-        layout->work[i].vaddr = layout->rw_vaddr + rw_mem_cursor;
-        layout->work[i].laddr = layout->work[i].vaddr;
-        layout->work[i].file_offset =
-            layout->rw_file_offset + rw_file_cursor;
-        if (!minild_target_relax_section(state,
-                                        i,
-                                        layout->work[i].vaddr)) {
-            return false;
-        }
-        if (!add_size(rw_file_cursor, section->size, &rw_file_cursor) ||
-            !add_size(rw_mem_cursor, section->size, &rw_mem_cursor)) {
-            fprintf(state->diagnostics, "minic-ld: static-layout-overflow\n");
-            return false;
-        }
-        layout->have_rw = true;
-    }
-
-    for (i = 0U; i < state->work.count; ++i) {
-        MiniLdSection *section = &state->work.sections[i];
-        size_t aligned;
-
-        if ((section->flags & (SHF_ALLOC | SHF_WRITE)) !=
-                (SHF_ALLOC | SHF_WRITE) ||
-            section->type != SHT_NOBITS) {
-            continue;
-        }
-        if (!align_up_size(rw_mem_cursor, section->align, &aligned)) {
-            fprintf(state->diagnostics, "minic-ld: static-layout-overflow\n");
-            return false;
-        }
-        rw_mem_cursor = aligned;
-        layout->work[i].vaddr = layout->rw_vaddr + rw_mem_cursor;
-        layout->work[i].laddr = layout->work[i].vaddr;
-        if (!add_size(rw_mem_cursor, section->size, &rw_mem_cursor)) {
-            fprintf(state->diagnostics, "minic-ld: static-layout-overflow\n");
-            return false;
-        }
-        layout->have_rw = true;
     }
 
     layout->rw_file_size = rw_file_cursor;

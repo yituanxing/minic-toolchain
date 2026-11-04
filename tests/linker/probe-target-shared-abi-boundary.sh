@@ -98,8 +98,12 @@ reject rv32-compat-valid-soname-incomplete-contract elf32-unsupported-link-contr
     -m elf32lriscv -shared -soname=linux-compat_vdso.so.1 "$work/riscv32.o"
 reject rv32-pie-contract unsupported-emulation-or-link-mode \
     -m elf32lriscv -pie "$work/riscv32.o"
-reject rv32-static-mode unsupported-emulation-or-link-mode \
-    -m elf32lriscv -static "$work/riscv32.o"
+"$MINILD" -m elf32lriscv -static -e _start \
+    -o "$work/riscv32-static.elf" "$work/riscv32.o"
+readelf -h "$work/riscv32-static.elf" >"$work/riscv32-static.header"
+grep -Eq 'Class:[[:space:]]+ELF32' "$work/riscv32-static.header"
+grep -Eq 'Type:[[:space:]]+EXEC' "$work/riscv32-static.header"
+grep -Eq 'Machine:[[:space:]]+RISC-V' "$work/riscv32-static.header"
 
 "$MINILD" -m elf64loongarch -r \
     -o "$work/loongarch64-default-r.o" "$work/loongarch64.o"
@@ -296,4 +300,4 @@ print('MINILD_SHARED_ABI_WIRE=PASS target=rv64 '
 print('MINILD_SHARED_ABI_CHECK=PASS target=rv64 '
       'ELFCLASS=64 ET_DYN=true dynsym_entry=24 rela_entry=24 dynamic_entry=16')
 PY
-echo 'MINILD_SHARED_ABI=PASS rejected_shared_pie=6 invalid_flag_modes=10 rv32_compat_dispatch=3 rv32_static_rejected=PASS loongarch_v1_flags=3 rv64_shared=PASS'
+echo 'MINILD_SHARED_ABI=PASS rejected_shared_pie=6 invalid_flag_modes=10 rv32_compat_dispatch=3 rv32_static_elf32=PASS loongarch_v1_flags=3 rv64_shared=PASS'

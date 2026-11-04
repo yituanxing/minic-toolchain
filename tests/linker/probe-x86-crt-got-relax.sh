@@ -106,4 +106,32 @@ if [[ -e "$work/ifunc-should-not-exist" ]] ||
   echo 'MINILD_X86_CRT=FAIL bad_ifunc_rejection' >&2
   exit 1
 fi
-echo 'MINILD_X86_CRT=PASS crt_symtabless=1 gotpcrelx=2 gotpcrel=1 weak_undef=1 gnu_ld_parity=2 runtime=4 ifunc_rejected=1'
+
+# Positive IFUNC shape: a real SHT_RELA/R_X86_64_IRELATIVE table must map
+# a resolver to a writable slot, and the IPLT dispatch must call its result.
+# The fixture's CRT increments a counter in the resolver exactly once.
+as -o "$work/ifunc-positive.o" \
+  "$repo/tests/linker/fixtures/x86-static-ifunc-irelative.s"
+ld.bfd -m elf_x86_64 -static -e _start -o "$work/gnu-ifunc" \
+  "$work/ifunc-positive.o"
+"$minild" -m elf_x86_64 -static -e _start -o "$work/mini-ifunc" \
+  "$work/ifunc-positive.o"
+for flavor in gnu mini; do
+  readelf -Wr "$work/$flavor-ifunc" >"$work/$flavor-ifunc.relocations"
+  grep -Fq R_X86_64_IRELATIVE "$work/$flavor-ifunc.relocations"
+  readelf -sW "$work/$flavor-ifunc" >"$work/$flavor-ifunc.symbols"
+  grep -Fq __rela_iplt_start "$work/$flavor-ifunc.symbols"
+  grep -Fq __rela_iplt_end "$work/$flavor-ifunc.symbols"
+  status=0
+  timeout --signal=TERM 10s "$work/$flavor-ifunc" \
+    >"$work/$flavor-ifunc.stdout" 2>"$work/$flavor-ifunc.stderr" || status=$?
+  printf '%s\n' "$status" >"$work/$flavor-ifunc.exit"
+  if (( status != 0 )); then
+    echo "MINILD_X86_CRT=FAIL ifunc_runtime=$flavor exit=$status" >&2
+    exit 1
+  fi
+done
+for channel in stdout stderr exit; do
+  cmp "$work/gnu-ifunc.$channel" "$work/mini-ifunc.$channel"
+done
+echo 'MINILD_X86_CRT=PASS crt_symtabless=1 gotpcrelx=2 gotpcrel=1 weak_undef=1 gnu_ld_parity=3 runtime=6 ifunc_irelative=1 ifunc_resolver_side_effect=1 ifunc_got_rejected=1'

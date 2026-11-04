@@ -43,7 +43,8 @@ static int minild_link_static_pipeline(
 
     if (output_path == NULL || inputs == NULL || input_count == 0U ||
         diagnostics == NULL || target == NULL || !target->supports_static ||
-        target->elf_class != ELFCLASS64) {
+        (target->elf_class != ELFCLASS64 &&
+         target->elf_class != ELFCLASS32)) {
         return 2;
     }
     if (options != NULL &&

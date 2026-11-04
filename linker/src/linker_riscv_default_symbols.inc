@@ -1,4 +1,4 @@
-/* GNU RISC-V ELF64 unscripted default linker script PROVIDEs data/BSS
+/* GNU RISC-V ELF32/ELF64 unscripted default linker script PROVIDEs data/BSS
  * markers and __global_pointer$.  These are psABI linker-output policy,
  * distinct from generic array boundaries and the symbol value view. */
 static bool minild_riscv_synthesize_gnu_default_boundaries(
