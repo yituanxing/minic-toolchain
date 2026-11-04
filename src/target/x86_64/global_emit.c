@@ -50,7 +50,8 @@ bool minic_x86_64_emit_module_global(FILE *out, const MinicTargetInfo *target,
         return false;
     global = &module->globals[ordinal];
     fallback = x86_module_default_section(global->default_section);
-    if (global->is_extern || global->is_alias || global->is_thread_local ||
+    if (global->is_extern || global->alias_target_index != SIZE_MAX ||
+        global->is_thread_local ||
         (global->fragment_count != 0U && global->fragments == NULL) ||
         !global->common_elf_bss_admitted ||
         global->storage_alignment == 0U || fallback == NULL ||

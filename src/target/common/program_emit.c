@@ -168,11 +168,13 @@ static bool minic_program_emit_collect_symbol_uses_module(
         for (index = 0U; index < module->global_count; ++index) {
             const MinicCoreModuleGlobal *object = &module->globals[index];
             if (!object->emittable) continue;
-            if (object->is_alias &&
-                (object->alias_target_name == NULL ||
-                 object->alias_target_name[0] == '\0' ||
-                 !minic_program_symbol_use_add(uses, object->alias_target_name)))
-                return false;
+            if (object->alias_target_index != SIZE_MAX) {
+                const char *alias_target;
+                if (object->alias_target_index >= module->global_count) return false;
+                alias_target = module->globals[object->alias_target_index].name;
+                if (alias_target == NULL || alias_target[0] == '\0' ||
+                    !minic_program_symbol_use_add(uses, alias_target)) return false;
+            }
             if (object->fragment_count != 0U && object->fragments == NULL)
                 return false;
             for (ordinal = 0U; ordinal < object->fragment_count; ++ordinal) {
@@ -194,11 +196,13 @@ static bool minic_program_emit_collect_symbol_uses_module(
         for (index = 0U; index < module->function_count; ++index) {
             const MinicCoreModuleFunctionSymbol *function =
                 &module->function_symbols[index];
-            if (function->alias_target_index != SIZE_MAX &&
-                (function->alias_target_name == NULL ||
-                 function->alias_target_name[0] == '\0' ||
-                 !minic_program_symbol_use_add(uses, function->alias_target_name)))
-                return false;
+            if (function->alias_target_index != SIZE_MAX) {
+                const char *alias_target;
+                if (function->alias_target_index >= module->function_count) return false;
+                alias_target = module->function_symbols[function->alias_target_index].name;
+                if (alias_target == NULL || alias_target[0] == '\0' ||
+                    !minic_program_symbol_use_add(uses, alias_target)) return false;
+            }
         }
     }
     for (index = 0U; index < function_count; ++index) {
@@ -295,7 +299,8 @@ static bool minic_program_emit_undefined_symbol_visibility_module(
     {
         for (index = 0U; index < module->global_count; ++index) {
             const MinicCoreModuleGlobal *object = &module->globals[index];
-            if (object->is_extern && !object->is_internal && !object->is_alias) {
+            if (object->is_extern && !object->is_internal &&
+                object->alias_target_index == SIZE_MAX) {
                 const char *directive =
                     minic_multi_elf_module_visibility_directive(object->visibility);
                 const bool used =

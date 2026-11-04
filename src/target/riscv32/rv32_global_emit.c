@@ -88,9 +88,9 @@ bool minic_riscv32_emit_module_global(FILE *out, const MinicTargetInfo *target,
         ordinal >= module->global_count)
         return false;
     global = &module->globals[ordinal];
-    if (global->is_extern) return !global->is_alias;
+    if (global->is_extern) return global->alias_target_index == SIZE_MAX;
     base = rv32_module_core_base(module->type_context, global->core_type_id);
-    if (base == NULL || global->is_alias || global->is_thread_local ||
+    if (base == NULL || global->alias_target_index != SIZE_MAX || global->is_thread_local ||
         (global->fragment_count != 0U && global->fragments == NULL) ||
         global->name == NULL || global->name[0] == '\0' ||
         global->storage_alignment == 0U ||

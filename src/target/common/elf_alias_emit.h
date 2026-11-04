@@ -59,14 +59,14 @@ static inline bool minic_multi_elf_emit_module_object_alias(
     const MinicCoreModuleGlobal *alias, const char *type_directive) {
     const MinicCoreModuleGlobal *target;
     if (module == NULL || !module->finalized || alias == NULL ||
-        module->globals == NULL || !alias->is_extern || !alias->is_alias ||
+        module->globals == NULL || !alias->is_extern ||
+        alias->alias_target_index == SIZE_MAX ||
         alias->alias_target_index >= module->global_count)
         return false;
     target = &module->globals[alias->alias_target_index];
     return target != alias && !target->is_extern && !target->is_tentative &&
-           !target->is_alias && target->name != NULL &&
-           alias->alias_target_name != NULL &&
-           strcmp(target->name, alias->alias_target_name) == 0 &&
+           target->alias_target_index == SIZE_MAX && target->name != NULL &&
+           target->name[0] != '\0' &&
            minic_multi_elf_emit_module_alias(
                out, alias->name, target->name, alias->is_internal,
                alias->is_weak, alias->visibility, type_directive);
@@ -88,8 +88,7 @@ static inline bool minic_multi_elf_emit_module_function_alias(
     target = &module->function_symbols[alias->alias_target_index];
     return target != alias && target->is_defined &&
            target->alias_target_index == SIZE_MAX &&
-           target->name != NULL && alias->alias_target_name != NULL &&
-           strcmp(alias->alias_target_name, target->name) == 0 &&
+           target->name != NULL && target->name[0] != '\0' &&
            minic_multi_elf_emit_module_alias(
                out, alias->name, target->name, alias->is_internal,
                alias->is_weak, alias->visibility, type_directive);

@@ -45,6 +45,24 @@ has src/compiler/c_lower/core_ir_source.c 'minic_core_source_builder_destroy('
 has src/core/core_ir.h 'char *local_label_symbol;'
 has src/core/core_ir.h 'char *deferred_immediate_symbol;'
 has src/core/module_ir.h 'char *relocation_symbol;'
+# Module symbols have one alias identity (target index + canonical target
+# name in the same Module), not a second owned alias spelling or boolean.
+# Ingress may still retain C aliases while resolving these Core identities.
+for source in src/core/module_ir.h src/core/module_ir.c \
+              src/target/common/elf_alias_emit.h \
+              src/target/common/program_emit.c; do
+  lacks "$source" 'alias_target_name'
+done
+lacks src/core/module_ir.h 'bool is_alias;'
+lacks src/core/module_ir.h 'bool is_variadic;'
+has src/core/module_ir.h 'size_t alias_target_index;'
+has src/target/common/elf_alias_emit.h 'alias->alias_target_index'
+has src/target/common/program_emit.c 'alias_target_index'
+# Do not prune a canonical function before lowering if an initializer
+# contains a source-local label relocation; function ABI alignment is live.
+has src/core/module_ir.h 'is_source_label_relocation_owner;'
+has src/compiler/core_function_set.c 'is_source_label_relocation_owner'
+has src/core/module_ir.h 'size_t explicit_alignment;'
 exists src/core/symbol_identity.h
 has src/core/symbol_identity.h 'minic_core_label_symbol_valid('
 has src/core/symbol_identity.h 'minic_core_deferred_asm_symbol_valid('

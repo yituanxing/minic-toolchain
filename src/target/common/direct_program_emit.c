@@ -72,7 +72,8 @@ static bool direct_emit_module_global(FILE *out,
                                       const MinicCoreModuleGlobal *obj) {
     const char *fallback;
     if (out == NULL || obj == NULL || obj->name == NULL ||
-        obj->name[0] == '\0' || obj->is_extern || obj->is_alias ||
+        obj->name[0] == '\0' || obj->is_extern ||
+        obj->alias_target_index != SIZE_MAX ||
         !obj->common_elf_bss_admitted ||
         (fallback = direct_module_default_section(obj->default_section)) == NULL)
         return false;
@@ -100,7 +101,7 @@ static bool direct_visit_module_global(
         ctx->config == NULL || !obj->emittable) return false;
     if (!obj->is_extern)
         success = direct_emit_module_global(out, obj);
-    else if (obj->is_alias)
+    else if (obj->alias_target_index != SIZE_MAX)
         success = minic_multi_elf_emit_module_object_alias(
             out, module, obj, ctx->config->elf_object_type);
     if (!success && getenv("MINIC_M1_TRACE") != NULL)

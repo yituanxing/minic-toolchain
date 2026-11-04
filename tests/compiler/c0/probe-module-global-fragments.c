@@ -31,7 +31,7 @@ static bool emitted_matches(const MinicCoreModuleGlobal *global,
 }
 
 int main(void) {
-    MinicCoreModuleGlobal global = {0};
+    MinicCoreModuleGlobal global = {.alias_target_index = SIZE_MAX};
     MinicCoreModuleFragment fragments[] = {
         {.kind = MINIC_CORE_MODULE_FRAGMENT_ZERO, .byte_offset = 0U,
          .byte_count = 3U},

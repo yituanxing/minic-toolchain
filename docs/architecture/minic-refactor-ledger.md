@@ -1909,3 +1909,42 @@ one owner chain, together with their source-layout and Core probe consumers.
 | GNU C-origin probes (transparent union, array identity/local, packed record) × five ISAs | **20/20 byte-identical** |
 | Core architecture boundary/native probes (incl. newly forged ABI tails) | **PASS** |
 | Five-ISA original Linux GNU ELF/QEMU runtime | **NOT RUN** in this type-owner batch |
+
+## IR-P36 — One canonical Module symbol/alias owner (2026-11-04)
+
+**Baseline:** P35 PR #674 `fc54cf9`. Trace source symbol aliases from
+`module_ir_build` through Module verification, Common source-symbol use
+closure, ELF alias serialization, Direct AArch64/LoongArch64 and the three
+independent x86/RV32/RV64 global emitters as one ownership family.
+
+- The alias relationship in published Module IR is represented by exactly one
+  `alias_target_index` (or `SIZE_MAX` when absent) and the canonical target
+  symbol name already owned by the referenced module entry. Remove the second
+  alias-name allocation and the object's independent `is_alias` boolean.
+  Reject out-of-range, self-referential, chained, tentative, undefined, and
+  invalid-definition aliases before emitting any target-specific ELF text.
+- Remove global `explicit_alignment`, which was copied from the source but
+  never consumed after the effective `storage_alignment` was sealed. Preserve
+  `MinicCoreModuleFunctionSymbol.explicit_alignment`, which is consumed by
+  function entry emission.
+- Remove function-symbol `is_variadic`, an unused copy of the semantic Core
+  function signature. Preserve CoreFunction's variadic ABI flag. Preserve the
+  function-symbol `is_source_label_relocation_owner` flag and its pre-lowering
+  retention check: initializer `&&label` can require the canonical owner even
+  when ordinary C lexical call references were pruned.
+- The two-stage reference and payload storage is intentional. Source-free
+  `MinicCoreModuleReference` edges must be available for static reachability
+  closure before live initializer fragments are materialized; folding the
+  structures would import otherwise unreachable unsupported C data.
+- Synthetic Core Module tests explicitly initialize non-alias entries with
+  `SIZE_MAX`, and exercise malformed object/function alias indices, owner
+  definition status and emitted `.set` canonical target spellings.
+
+| Gate | P36 result |
+| --- | --- |
+| Strict Release MiniC `-Werror` | **PASS**, exit 0 |
+| Full Debug `check-fast` | **PASS**, exit 0 |
+| Core Module alias-index verifier and Common output transaction | **PASS**, including 14 alias-index cases, rollback and five-target output transactions |
+| Five-ISA P35 vs P36 GNU `.i` byte parity | **65/65 byte-identical**: ten C-origin fixtures plus three real function-alias fixtures × five ISAs; all 15 aliases emit `.set alias_fn, target` |
+| Architecture boundary and backend-review manifest | **PASS** (`inventory=251`, no invalid/new/removed; pre-existing stale entries reported) |
+| Five-ISA original Linux GNU ELF/QEMU runtime | **NOT RUN** in this Module-owner batch |

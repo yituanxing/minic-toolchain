@@ -16,7 +16,7 @@ static bool fragment_assembly(const char *symbol,
                               int64_t addend, bool accepted,
                               const char *expected) {
     MinicCoreModuleFragment fragment = {0};
-    MinicCoreModuleGlobal global = {0};
+    MinicCoreModuleGlobal global = {.alias_target_index = SIZE_MAX};
     FILE *output;
     char *assembly = NULL;
     size_t length = 0U;

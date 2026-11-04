@@ -15,7 +15,6 @@ void minic_core_module_destroy(MinicCoreModule *module) {
         MinicCoreModuleGlobal *global = &module->globals[index];
         free(global->name);
         free(global->section_name);
-        free(global->alias_target_name);
         free(global->references);
         for (part = 0U; global->fragments != NULL &&
                          part < global->fragment_count; ++part)
@@ -27,7 +26,6 @@ void minic_core_module_destroy(MinicCoreModule *module) {
         free(module->function_symbols[index].name);
         free(module->function_symbols[index].source_name);
         free(module->function_symbols[index].section_name);
-        free(module->function_symbols[index].alias_target_name);
     }
     for (index = 0U; module->file_asms != NULL &&
                      index < module->file_asm_count; ++index)
@@ -125,19 +123,18 @@ bool minic_core_module_verify(const MinicCoreModule *module) {
                 }
             }
         }
-        if (global->is_alias) {
+        if (global->alias_target_index != SIZE_MAX) {
             const MinicCoreModuleGlobal *target;
             if (!global->is_extern || global->alias_target_index >= module->global_count ||
-                global->alias_target_index == index || global->alias_target_name == NULL)
+                global->alias_target_index == index)
                 return false;
             target = &module->globals[global->alias_target_index];
             if ((global->emittable && !target->emittable) ||
-                target->is_extern || target->is_tentative || target->is_alias ||
-                target->name == NULL ||
-                strcmp(target->name, global->alias_target_name) != 0)
+                target->is_extern || target->is_tentative ||
+                target->alias_target_index != SIZE_MAX ||
+                target->name == NULL || target->name[0] == '\0')
                 return false;
-        } else if (global->alias_target_index != SIZE_MAX ||
-                   global->alias_target_name != NULL) return false;
+        }
         if (!global->emittable) {
             if (global->fragment_count != 0U) return false;
             continue;
@@ -168,14 +165,13 @@ bool minic_core_module_verify(const MinicCoreModule *module) {
         if (symbol->alias_target_index != SIZE_MAX) {
             const MinicCoreModuleFunctionSymbol *target;
             if (symbol->is_defined || symbol->alias_target_index >= module->function_count ||
-                symbol->alias_target_index == index || symbol->alias_target_name == NULL)
+                symbol->alias_target_index == index)
                 return false;
             target = &module->function_symbols[symbol->alias_target_index];
             if (!target->is_defined || target->alias_target_index != SIZE_MAX ||
-                target->name == NULL ||
-                strcmp(target->name, symbol->alias_target_name) != 0)
+                target->name == NULL || target->name[0] == '\0')
                 return false;
-        } else if (symbol->alias_target_name != NULL) return false;
+        }
     }
     for (index = 0U; index < module->file_asm_count; ++index)
         if ((module->file_asms[index].length != 0U &&

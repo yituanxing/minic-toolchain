@@ -9,21 +9,29 @@
 
 int main(void) {
     MinicCoreModuleGlobal globals[] = {
-        {.name = "internal_object", .is_internal = true},
+        {.name = "internal_object", .is_internal = true,
+         .alias_target_index = SIZE_MAX},
         {.name = "hidden_object", .is_extern = true,
-         .visibility = MINIC_CORE_MODULE_VISIBILITY_HIDDEN},
-        {.name = "weak_object", .is_extern = true, .is_weak = true},
+         .visibility = MINIC_CORE_MODULE_VISIBILITY_HIDDEN,
+         .alias_target_index = SIZE_MAX},
+        {.name = "weak_object", .is_extern = true, .is_weak = true,
+         .alias_target_index = SIZE_MAX},
         {.name = "tentative_object", .is_extern = true, .is_weak = true,
-         .is_tentative = true},
+         .is_tentative = true, .alias_target_index = SIZE_MAX},
         {.name = "scope_extern", .is_internal = true,
-         .is_block_scope_extern_only = true},
+         .is_block_scope_extern_only = true,
+         .alias_target_index = SIZE_MAX},
     };
     MinicCoreModuleFunctionSymbol functions[] = {
-        {.name = "internal_function", .is_defined = true, .is_internal = true},
+        {.name = "internal_function", .is_defined = true, .is_internal = true,
+         .alias_target_index = SIZE_MAX},
         {.name = "hidden_function",
-         .visibility = MINIC_CORE_MODULE_VISIBILITY_INTERNAL},
-        {.name = "weak_function", .is_weak = true},
-        {.name = "visible_function", .is_defined = true},
+         .visibility = MINIC_CORE_MODULE_VISIBILITY_INTERNAL,
+         .alias_target_index = SIZE_MAX},
+        {.name = "weak_function", .is_weak = true,
+         .alias_target_index = SIZE_MAX},
+        {.name = "visible_function", .is_defined = true,
+         .alias_target_index = SIZE_MAX},
     };
     MinicCoreModule module = {
         .globals = globals,

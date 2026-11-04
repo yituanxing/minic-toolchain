@@ -94,7 +94,7 @@ static bool rv64_module_admit_global(const MinicCoreModule *module,
     bool zero_extent;
     if (module == NULL || module->type_context == NULL || global == NULL ||
         !minic_core_assembler_symbol_lexically_safe(global->name) || global->is_extern ||
-        global->is_alias || global->is_thread_local ||
+        global->alias_target_index != SIZE_MAX || global->is_thread_local ||
         (global->is_internal && global->is_weak) ||
         global->storage_alignment == 0U ||
         (type = rv64_module_core_base(module->type_context,

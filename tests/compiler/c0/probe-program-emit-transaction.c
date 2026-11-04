@@ -118,13 +118,16 @@ static int check_module_snapshot_output(const char *path) {
     };
     MinicCoreModuleGlobal globals[4] = {
         { .name = "owned", .emittable = true, .fragments = &fragment,
-          .fragment_count = 1U },
+          .fragment_count = 1U, .alias_target_index = SIZE_MAX },
         { .name = "weak_ext", .is_extern = true, .is_weak = true,
-          .visibility = MINIC_CORE_MODULE_VISIBILITY_HIDDEN },
+          .visibility = MINIC_CORE_MODULE_VISIBILITY_HIDDEN,
+          .alias_target_index = SIZE_MAX },
         { .name = "unused_hidden", .is_extern = true,
-          .visibility = MINIC_CORE_MODULE_VISIBILITY_HIDDEN },
+          .visibility = MINIC_CORE_MODULE_VISIBILITY_HIDDEN,
+          .alias_target_index = SIZE_MAX },
         { .name = "asm_weak", .is_extern = true, .is_weak = true,
-          .visibility = MINIC_CORE_MODULE_VISIBILITY_HIDDEN }
+          .visibility = MINIC_CORE_MODULE_VISIBILITY_HIDDEN,
+          .alias_target_index = SIZE_MAX }
     };
     MinicCoreModuleFileAsm file_asm = { " .quad asm_weak", 15U };
     MinicCoreModule module = {
@@ -186,17 +189,31 @@ static int check_module_snapshot_output(const char *path) {
     {
         MinicCoreModuleFunctionSymbol symbols[2] = {
             { .name = "real_fn", .is_defined = true, .alias_target_index = SIZE_MAX },
-            { .name = "alias_fn", .alias_target_index = 0U,
-              .alias_target_name = "real_fn" }
+            { .name = "alias_fn", .alias_target_index = 0U }
         };
         MinicCoreModuleGlobal alias = {
-            .name = "alias_obj", .is_extern = true, .is_alias = true,
-            .alias_target_index = 0U, .alias_target_name = "owned"
+            .name = "alias_obj", .is_extern = true,
+            .alias_target_index = 0U
         };
         FILE *tmp = tmpfile();
         if (tmp == NULL) return 5;
         module.function_symbols = symbols;
         module.function_count = 2U;
+        alias.alias_target_index = module.global_count;
+        if (minic_multi_elf_emit_module_object_alias(
+                tmp, &module, &alias, "@object"))
+            { (void)fclose(tmp); return 15; }
+        alias.alias_target_index = 1U; /* undefined weak is not an alias owner */
+        if (minic_multi_elf_emit_module_object_alias(
+                tmp, &module, &alias, "@object"))
+            { (void)fclose(tmp); return 16; }
+        alias.alias_target_index = 0U;
+        symbols[1].alias_target_index = 2U;
+        if (minic_multi_elf_emit_module_function_aliases(
+                tmp, &module, "@function"))
+            { (void)fclose(tmp); return 17; }
+        symbols[1].alias_target_index = 0U;
+        if (ftell(tmp) != 0L) { (void)fclose(tmp); return 18; }
         if (!minic_multi_elf_emit_module_object_alias(
                 tmp, &module, &alias, "@object") ||
             !minic_multi_elf_emit_module_function_aliases(
@@ -214,7 +231,8 @@ static int check_module_snapshot_output(const char *path) {
 
 int main(int argc, char **argv) {
     MinicCoreModuleGlobal object = {
-        .name = "fixture_global", .emittable = true
+        .name = "fixture_global", .emittable = true,
+        .alias_target_index = SIZE_MAX
     };
     MinicCoreModuleFunctionSymbol declaration = {
         .name = "fixture_function", .is_defined = true,

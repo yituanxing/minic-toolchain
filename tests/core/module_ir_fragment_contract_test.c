@@ -67,6 +67,62 @@ static int verify_module_provenance_edges(const MinicCoreModule *baseline) {
     return 0;
 }
 
+static int verify_module_alias_index_ownership(const MinicCoreModule *baseline) {
+    MinicCoreModuleGlobal objects[2] = {
+        {.name = "real_object", .alias_target_index = SIZE_MAX},
+        {.name = "object_alias", .is_extern = true, .alias_target_index = 0U}
+    };
+    MinicCoreModuleFunctionSymbol functions[2] = {
+        {.name = "real_function", .is_defined = true,
+         .alias_target_index = SIZE_MAX},
+        {.name = "function_alias", .alias_target_index = 0U}
+    };
+    MinicCoreModule module = *baseline;
+    module.globals = objects;
+    module.global_count = 2U;
+    module.function_symbols = functions;
+    module.function_count = 2U;
+
+    /* Symbol indices and the target's sealed canonical name are the single
+     * alias identity. No duplicate alias-name string or alias boolean. */
+    CHECK(minic_core_module_verify(&module), 40);
+    objects[1].alias_target_index = 2U;
+    CHECK(!minic_core_module_verify(&module), 41); /* out of range */
+    objects[1].alias_target_index = 1U;
+    CHECK(!minic_core_module_verify(&module), 42); /* self alias */
+    objects[1].alias_target_index = 0U;
+    objects[0].is_extern = true;
+    CHECK(!minic_core_module_verify(&module), 43); /* undefined owner */
+    objects[0].is_extern = false;
+    objects[0].is_tentative = true;
+    CHECK(!minic_core_module_verify(&module), 44); /* tentative owner */
+    objects[0].is_tentative = false;
+    objects[0].alias_target_index = 1U;
+    CHECK(!minic_core_module_verify(&module), 45); /* chained alias */
+    objects[0].alias_target_index = SIZE_MAX;
+    objects[0].name = NULL;
+    CHECK(!minic_core_module_verify(&module), 46); /* unnamed target */
+    objects[0].name = "real_object";
+    CHECK(minic_core_module_verify(&module), 47);
+
+    functions[1].alias_target_index = 2U;
+    CHECK(!minic_core_module_verify(&module), 48); /* out of range */
+    functions[1].alias_target_index = 1U;
+    CHECK(!minic_core_module_verify(&module), 49); /* self alias */
+    functions[1].alias_target_index = 0U;
+    functions[0].is_defined = false;
+    CHECK(!minic_core_module_verify(&module), 50); /* undefined owner */
+    functions[0].is_defined = true;
+    functions[0].alias_target_index = 1U;
+    CHECK(!minic_core_module_verify(&module), 51); /* chained alias */
+    functions[0].alias_target_index = SIZE_MAX;
+    functions[1].is_defined = true;
+    CHECK(!minic_core_module_verify(&module), 52); /* defined alias */
+    functions[1].is_defined = false;
+    CHECK(minic_core_module_verify(&module), 53);
+    return 0;
+}
+
 int main(void) {
     MinicCoreModuleFragment parts[3] = {
         {.kind = MINIC_CORE_MODULE_FRAGMENT_ZERO,
@@ -85,8 +141,7 @@ int main(void) {
     MinicCoreTypeContext types;
     MinicCoreModuleFunctionSymbol symbols[2] = {
         {.name = "callee", .is_defined = true, .alias_target_index = SIZE_MAX},
-        {.name = "alias", .alias_target_index = 0U,
-         .alias_target_name = "callee"}
+        {.name = "alias", .alias_target_index = 0U}
     };
     MinicCoreModule module = {
         .type_context = &types,
@@ -146,9 +201,10 @@ int main(void) {
 
     CHECK(minic_core_module_verify(&module), 18);
     CHECK(verify_module_provenance_edges(&module) == 0, 32);
+    CHECK(verify_module_alias_index_ownership(&module) == 0, 54);
     symbols[0].name = NULL;
     CHECK(!minic_core_module_verify(&module), 19);
     minic_core_type_context_destroy(&types);
-    puts("CORE_MODULE_FRAGMENT_CONTRACT=PASS bounds forms names alias-target clone_provenance=5 forged_owner_label=5 canonical_source=valid");
+    puts("CORE_MODULE_FRAGMENT_CONTRACT=PASS bounds forms names alias-index=14 clone_provenance=5 forged_owner_label=5 canonical_source=valid");
     return 0;
 }

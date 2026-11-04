@@ -248,7 +248,6 @@ static bool module_capture_global_identity(MinicCoreModuleGlobal *destination,
     destination->is_tentative = source->is_tentative;
     destination->is_block_scope_extern_only = source->is_block_scope_extern_only;
     destination->is_thread_local = source->is_thread_local;
-    destination->explicit_alignment = source->explicit_alignment;
     destination->initializer_slot_count = source->initializer_count;
     destination->relocation_slot_count = source->relocation_count;
     destination->was_source_emission_pruned = source->is_emission_pruned;
@@ -262,9 +261,8 @@ static bool module_capture_global_identity(MinicCoreModuleGlobal *destination,
          minic_program_has_opaque_asm_symbol(
              program, source->name, source->name_length));
     destination->emittable = false;
-    destination->is_alias = source->alias_target != MINIC_GLOBAL_OBJECT_INVALID;
     destination->core_type_id = MINIC_CORE_TYPE_INVALID;
-    if (destination->is_alias) {
+    if (source->alias_target != MINIC_GLOBAL_OBJECT_INVALID) {
         if (!source->is_extern || source->alias_target >= program->global_object_count ||
             source->alias_target == index) return false;
         alias_target = &program->global_objects[source->alias_target];
@@ -273,8 +271,6 @@ static bool module_capture_global_identity(MinicCoreModuleGlobal *destination,
                                                       alias_target->type))
             return false;
         destination->alias_target_index = source->alias_target;
-        destination->alias_target_name = module_c_string(alias_target->name);
-        if (destination->alias_target_name == NULL) return false;
     }
     if (source->relocation_count != 0U && source->relocations == NULL)
         return false;
@@ -360,7 +356,6 @@ static bool module_capture_function(MinicCoreModuleFunctionSymbol *destination,
     destination->is_referenced = source->is_referenced;
     destination->is_weak = source->is_weak;
     destination->is_constructor = source->is_constructor;
-    destination->is_variadic = source->is_variadic;
     destination->is_specialization = source->is_integer_specialization;
     destination->specialization_source_index = source->is_integer_specialization
         ? (size_t)source->specialization_source : SIZE_MAX;
@@ -387,9 +382,6 @@ static bool module_capture_function(MinicCoreModuleFunctionSymbol *destination,
         if (!target->is_defined || target->alias_target != MINIC_FUNCTION_INVALID)
             return false;
         destination->alias_target_index = source->alias_target;
-        destination->alias_target_name = module_c_string(
-            minic_c0_function_symbol_name(target));
-        if (destination->alias_target_name == NULL) return false;
     }
     return true;
 }

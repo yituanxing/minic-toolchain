@@ -87,11 +87,9 @@ typedef struct MinicCoreModuleReference {
 typedef struct MinicCoreModuleGlobal {
     char *name;
     char *section_name;
-    char *alias_target_name;
     MinicCoreTypeId core_type_id;
     size_t storage_size;
     size_t storage_alignment;
-    size_t explicit_alignment;
     /* Sealed initializer-shape evidence (not C types or AST locations).
      * Some targets intentionally admit only nonempty flattened payloads. */
     size_t initializer_slot_count;
@@ -103,7 +101,6 @@ typedef struct MinicCoreModuleGlobal {
     MinicCoreModuleDefaultSection default_section;
     bool emittable;
     bool is_extern;
-    bool is_alias;
     bool is_internal;
     bool is_weak;
     bool is_read_only;
@@ -132,14 +129,12 @@ typedef struct MinicCoreModuleFunctionSymbol {
     char *section_name;
     size_t explicit_alignment;
     size_t alias_target_index; /* SIZE_MAX when not an alias. */
-    char *alias_target_name;
     MinicCoreModuleVisibility visibility;
     bool is_defined;
     bool is_internal;
     bool is_referenced;
     bool is_weak;
     bool is_constructor;
-    bool is_variadic;
     bool is_reachability_root;
     bool is_source_asm_operand_root;
     bool is_source_label_relocation_owner;
