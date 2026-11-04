@@ -1,0 +1,75 @@
+name: MiniLD RV64 Linux Cached Final Link Recertification
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - refactor/minias-target-isa-abi-core
+    paths:
+      - .github/workflows/minild-rv64-linux-cached-final-recert.yml
+      - linker/src/**
+      - tools/ci/minild-linux-cache-final-replay-v1.sh
+
+jobs:
+  rv64-cached-final-link:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install original GNU cross-toolchain without rebuilding Linux
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu
+
+      - name: Reconstruct exact historical GNU golden identity
+        id: golden
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          config=eeb04f304ebfb97a1079c187dc0c2ea3cc61fc50a55aa3cc776237c16ab19bbe
+          gcc_sig=$(sha256sum "$(command -v riscv64-linux-gnu-gcc)" | cut -c1-16)
+          ld_sig=$(sha256sum "$(command -v riscv64-linux-gnu-ld)" | cut -c1-16)
+          key="linux-gnu-golden-v1-6.6.143-$config-$gcc_sig-$ld_sig"
+          printf 'GNU_GOLDEN_KEY=%s\n' "$key"
+          printf 'key=%s\n' "$key" >> "$GITHUB_OUTPUT"
+
+      - name: Restore the frozen Linux 6.6.143 GNU Kbuild objects
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            build/linux-runtime-gcc/out
+            build/linux-runtime-gcc/provenance
+          key: ${{ steps.golden.outputs.key }}
+          fail-on-cache-miss: true
+
+      - name: Verify all original GCC objects against their frozen manifest
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-runtime-gcc"
+          test -s "$work/provenance/gcc-objects.sha256"
+          (cd "$work/out" && sha256sum --quiet -c "$work/provenance/gcc-objects.sha256")
+          printf 'MINILD_RV64_GOLDEN=PASS all_frozen_GCC_objects_sha_verified=true\n'
+
+      - name: Replay actual vmlinux kallsyms1 final link with current MiniLD
+        shell: bash
+        timeout-minutes: 5
+        run: |
+          set -Eeuo pipefail
+          bash tools/ci/minild-linux-cache-final-replay-v1.sh \
+            "$GITHUB_WORKSPACE/build/linux-runtime-gcc/out" \
+            "$GITHUB_WORKSPACE/build/minild-rv64-recert-tools" \
+            "$GITHUB_WORKSPACE/build/minild-rv64-recert-evidence"
+
+      - name: Keep ELF and linkage evidence, even if replay fails
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: minild-rv64-cached-final-recert-${{ github.sha }}
+          path: build/minild-rv64-recert-evidence/
+          if-no-files-found: warn
+          retention-days: 14

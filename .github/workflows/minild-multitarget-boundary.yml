@@ -58,6 +58,7 @@ jobs:
             check-minild-riscv-uleb-static \
             check-minild-aarch64-static-got \
             check-minild-aarch64-static-tls \
+            check-minild-aarch64-static-ifunc \
             check-minild-loongarch-static-relocs \
             check-minild-static-nonalloc-relocations \
             check-minild-x86-crt-got-relax \

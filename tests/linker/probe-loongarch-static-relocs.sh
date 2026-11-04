@@ -500,6 +500,100 @@ fi
 grep -Fq loongarch-align-deleted-symbol "$work/two-aligns-deleted-symbol.log"
 echo 'MINILD_LOONGARCH_STATIC=PASS symbol_in_deleted_ALIGN_NOP=rejected'
 
+# BFD RELOCATE_CALC_PC32_HI20 differs from the 64-bit four-instruction
+# pcalau12i adjustment.  At the low12=0x800 sign-extension boundary, a
+# PCALA_HI20 pair must carry +0x1000, NOT subtract 0x100000000 (which would
+# spuriously overflow a perfectly near target in real glibc objects).
+"$MINIAS" --target=loongarch64 -march=loongarch64 -mabi=lp64d \
+    -o "$work/pcala-rounding.o" \
+    "$repo/tests/linker/fixtures/loongarch-pcala-page-rounding.S"
+test "$(readelf -Wr "$work/pcala-rounding.o" | grep -c R_LARCH_PCALA_HI20)" -eq 2
+"$MINILD" -m elf64loongarch -static -e _start \
+    -o "$work/pcala-rounding-mini.elf" "$work/pcala-rounding.o"
+python3 - "$work/pcala-rounding-mini.elf" <<'PY'
+from pathlib import Path
+import struct,sys
+b=Path(sys.argv[1]).read_bytes()
+off=struct.unpack_from('<Q',b,40)[0]
+n=struct.unpack_from('<H',b,60)[0]
+si=struct.unpack_from('<H',b,62)[0]
+secs=[struct.unpack_from('<IIQQQQIIQQ',b,off+i*64) for i in range(n)]
+st=secs[si]; names=b[st[4]:st[4]+st[5]]
+def name(s):
+    i=s[0]; return names[i:names.index(0,i)].decode()
+sections={name(s):s for s in secs}
+sym=sections['.symtab']; stab=secs[sym[6]]
+strings=b[stab[4]:stab[4]+stab[5]]
+symbols={}
+for pos in range(sym[4],sym[4]+sym[5],24):
+    idx,_,_,_,value,_=struct.unpack_from('<IBBHQQ',b,pos)
+    if idx: symbols[strings[idx:strings.index(0,idx)].decode()]=value
+text=sections['.text']
+assert symbols['pcala_low_7ff']&0xfff==0x7ff
+assert symbols['pcala_low_800']&0xfff==0x800
+words=[struct.unpack_from('<I',b,text[4]+p)[0] for p in (0,4,8,12)]
+assert words[0]&0xfe000000==0x1a000000
+assert words[2]&0xfe000000==0x1a000000
+assert (words[0]>>5)&0xfffff==1, ('low12=0x7ff no carry',hex(words[0]))
+assert (words[2]>>5)&0xfffff==2, ('low12=0x800 carries +0x1000',hex(words[2]))
+assert (words[1]>>10)&0xfff==0x7ff
+assert (words[3]>>10)&0xfff==0x800
+print('MINILD_LOONGARCH_STATIC=PASS PCALA_HI20_page_rounding low12=7ff/800 hi20=1/2')
+PY
+
+# The new width-specific calculation must not weaken opcode validation.
+cp "$work/pcala-rounding.o" "$work/pcala-rounding-bad-opcode.o"
+python3 - "$work/pcala-rounding-bad-opcode.o" <<'PY'
+from pathlib import Path
+import struct,sys
+p=Path(sys.argv[1]); b=bytearray(p.read_bytes())
+off=struct.unpack_from('<Q',b,40)[0]
+n=struct.unpack_from('<H',b,60)[0]
+sections=[struct.unpack_from('<IIQQQQIIQQ',b,off+i*64) for i in range(n)]
+text=next(s for s in sections if s[1]==1 and s[2]&4)
+assert struct.unpack_from('<I',b,text[4])[0]&0xfe000000==0x1a000000
+struct.pack_into('<I',b,text[4],0)
+p.write_bytes(b)
+PY
+if "$MINILD" -m elf64loongarch -static -e _start \
+    -o "$work/pcala-rounding-bad-opcode.elf" "$work/pcala-rounding-bad-opcode.o" \
+    >"$work/pcala-rounding-bad-opcode.log" 2>&1; then
+    echo 'MINILD_LOONGARCH_STATIC=FAIL accepted_malformed_PCALA_opcode' >&2
+    exit 1
+fi
+grep -Fq 'nonriscv-relocation-overflow-or-encoding:258:71' \
+    "$work/pcala-rounding-bad-opcode.log"
+echo 'MINILD_LOONGARCH_STATIC=PASS malformed_PCALA_HI20_opcode=rejected'
+
+# In a static ET_EXEC, a defined weak is PC-relative but an *undefined* weak
+# resolves to S+A=0.  GNU BFD rewrites its PCALA_HI20 pcalau12i to lu12i.w;
+# otherwise even a plain address-zero optional function incorrectly overflows
+# from the LoongArch default image VMA 0x120000000.
+"$MINIAS" --target=loongarch64 -march=loongarch64 -mabi=lp64d \
+    -o "$work/pcala-weak.o" \
+    "$repo/tests/linker/fixtures/loongarch-pcala-undefweak.S"
+grep -Eq 'FUNC[[:space:]]+WEAK[[:space:]]+DEFAULT[[:space:]]+UND[[:space:]]+optional_weak' \
+    <(readelf -Ws "$work/pcala-weak.o")
+"$MINILD" -m elf64loongarch -static -e _start \
+    -o "$work/pcala-weak-mini.elf" "$work/pcala-weak.o"
+python3 - "$work/pcala-weak-mini.elf" <<'PY'
+from pathlib import Path
+import struct,sys
+b=Path(sys.argv[1]).read_bytes()
+off=struct.unpack_from('<Q',b,40)[0]
+n=struct.unpack_from('<H',b,60)[0]
+si=struct.unpack_from('<H',b,62)[0]
+sections=[struct.unpack_from('<IIQQQQIIQQ',b,off+64*i) for i in range(n)]
+shstr=sections[si]; names=b[shstr[4]:shstr[4]+shstr[5]]
+def name(s):
+    p=s[0]; return names[p:names.index(0,p)].decode()
+text=next(s for s in sections if name(s)=='.text')
+hi,lo=struct.unpack_from('<II',b,text[4])
+assert hi==0x1400000c, ('undefined weak becomes LU12I.W target zero',hex(hi))
+assert lo==0x02c0018c, ('undefined weak LO12 zero',hex(lo))
+print('MINILD_LOONGARCH_STATIC=PASS PCALA_HI20_undefweak=absolute_lu12i_zero')
+PY
+
 cat >"$work/align-ok.s" <<'ASM'
 .text
 .option relax
@@ -552,6 +646,10 @@ if command -v "$GNU_LD" >/dev/null && command -v "$QEMU_USER" >/dev/null; then
         -o "$work/gnu.elf" "$work/control.o"
     "$GNU_LD" -m elf64loongarch -static -e _start \
         -o "$work/two-aligns-gnu.elf" "$work/two-aligns.o"
+    "$GNU_LD" -m elf64loongarch -static -e _start \
+        -o "$work/pcala-rounding-gnu.elf" "$work/pcala-rounding.o"
+    "$GNU_LD" -m elf64loongarch -static -e _start \
+        -o "$work/pcala-weak-gnu.elf" "$work/pcala-weak.o"
     mini_rc=0; gnu_rc=0
     timeout 15s "$QEMU_USER" "$work/mini.elf" >"$work/mini.out" \
         2>"$work/mini.err" || mini_rc=$?
@@ -570,6 +668,24 @@ if command -v "$GNU_LD" >/dev/null && command -v "$QEMU_USER" >/dev/null; then
     cmp "$work/two-aligns-mini.out" "$work/two-aligns-gnu.out"
     cmp "$work/two-aligns-mini.err" "$work/two-aligns-gnu.err"
     echo 'MINILD_LOONGARCH_STATIC=PASS GNU_BFD_QEMU_ALIGN_two_shrink_runtime_parity=1'
+    mini_pcala_rc=0; gnu_pcala_rc=0
+    timeout 15s "$QEMU_USER" "$work/pcala-rounding-mini.elf" \
+        >"$work/pcala-rounding-mini.out" 2>"$work/pcala-rounding-mini.err" || mini_pcala_rc=$?
+    timeout 15s "$QEMU_USER" "$work/pcala-rounding-gnu.elf" \
+        >"$work/pcala-rounding-gnu.out" 2>"$work/pcala-rounding-gnu.err" || gnu_pcala_rc=$?
+    test "$mini_pcala_rc" -eq 0 && test "$gnu_pcala_rc" -eq 0
+    cmp "$work/pcala-rounding-mini.out" "$work/pcala-rounding-gnu.out"
+    cmp "$work/pcala-rounding-mini.err" "$work/pcala-rounding-gnu.err"
+    echo 'MINILD_LOONGARCH_STATIC=PASS GNU_BFD_QEMU_PCALA_rounding_runtime_parity=1'
+    mini_weak_rc=0; gnu_weak_rc=0
+    timeout 15s "$QEMU_USER" "$work/pcala-weak-mini.elf" \
+        >"$work/pcala-weak-mini.out" 2>"$work/pcala-weak-mini.err" || mini_weak_rc=$?
+    timeout 15s "$QEMU_USER" "$work/pcala-weak-gnu.elf" \
+        >"$work/pcala-weak-gnu.out" 2>"$work/pcala-weak-gnu.err" || gnu_weak_rc=$?
+    test "$mini_weak_rc" -eq 0 && test "$gnu_weak_rc" -eq 0
+    cmp "$work/pcala-weak-mini.out" "$work/pcala-weak-gnu.out"
+    cmp "$work/pcala-weak-mini.err" "$work/pcala-weak-gnu.err"
+    echo 'MINILD_LOONGARCH_STATIC=PASS GNU_BFD_QEMU_PCALA_undefweak_runtime_parity=1'
 else
     echo 'MINILD_LOONGARCH_STATIC=SKIP GNU_BFD_QEMU_runtime_parity missing_cross_tools'
 fi

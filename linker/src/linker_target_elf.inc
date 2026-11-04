@@ -30,6 +30,8 @@ static bool minild_aarch64_fill_static_relocations(
     const struct MiniLdStaticTargetPlan *plan);
 static void minild_aarch64_destroy_static_relocations(
     struct MiniLdStaticTargetPlan *plan);
+static bool minild_aarch64_synthesize_default_boundaries(
+    MiniLdState *state, const struct MiniLdLayout *layout);
 static bool minild_loongarch_apply_static_relocations(
     MiniLdState *state, const struct MiniLdLayout *layout,
     const struct MiniLdStaticTargetPlan *plan);
@@ -164,7 +166,8 @@ static const MiniLdTargetProfile minild_target_profiles[] = {
      minild_aarch64_reserve_static_relocations,
      minild_aarch64_fill_static_relocations,
      minild_aarch64_apply_static_relocations,
-     minild_aarch64_destroy_static_relocations, NULL,
+     minild_aarch64_destroy_static_relocations,
+     minild_aarch64_synthesize_default_boundaries,
      NULL, NULL, minild_zero_elf_flags, true},
     {"elf64loongarch", ELFCLASS64, ELFDATA2LSB, EM_LOONGARCH, "loongarch64",
      NULL, 0U, UINT64_C(0x120000000), 4096U,

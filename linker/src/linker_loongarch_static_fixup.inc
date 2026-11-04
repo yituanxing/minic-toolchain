@@ -87,9 +87,24 @@ static size_t minild_loongarch_static_instruction_width(uint32_t type) {
     }
 }
 
-/* The architectural pcalau12i adjustment compensates the low immediate's
- * sign extension and the follow-up lu32i.d / lu52i.d instructions.  This is
- * the LoongArch psABI's signed rounded page delta, not (S-P+0x800)>>12. */
+/* The two-instruction pcalau12i + 12-bit consumer uses GNU BFD's
+ * RELOCATE_CALC_PC32_HI20: compensate only the consumer's signed low12.
+ * The 64-bit four-instruction sequence has different high-half carry rules,
+ * and its adjustment MUST NOT be used for R_LARCH_PCALA_HI20. */
+static uint64_t minild_loongarch_pc32_page_delta(uint64_t target,
+                                                  uint64_t place) {
+    uint64_t value = (target & ~UINT64_C(0xfff)) -
+                     (place & ~UINT64_C(0xfff));
+
+    if ((target & UINT64_C(0xfff)) > UINT64_C(0x7ff)) {
+        value += UINT64_C(0x1000);
+    }
+    return value;
+}
+
+/* Four-instruction pcalau12i + low12 + lu32i.d + lu52i.d page delta.
+ * Compensate the sign extensions and upper-word carry as specified by the
+ * LoongArch psABI's RELOCATE_CALC_PC64_HI32 calculation. */
 static uint64_t minild_loongarch_page_delta(uint64_t target, uint64_t place,
                                             uint32_t type) {
     uint64_t pc = place;
@@ -171,7 +186,6 @@ static bool minild_loongarch_static_write_instruction(
     size_t i;
     bool sub;
 
-    (void)undefined_weak;
     if (minild_loongarch_static_instruction_width(reloc->type) >= 4U) {
         instruction = load_u32le(slot);
     }
@@ -245,10 +259,21 @@ static bool minild_loongarch_static_write_instruction(
                      ? UINT32_C(0x1a000000) : UINT32_C(0x14000000))) {
             return false;
         }
-        if (reloc->type == R_LARCH_PCALA_HI20 ||
+        if (reloc->type == R_LARCH_PCALA_HI20 && undefined_weak) {
+            /* GNU BFD's static undefined-weak PCALA resolution uses
+             * absolute S+A (normally zero) and changes pcalau12i into
+             * lu12i.w.  A PC-relative 32-bit page check would reject
+             * zero from a regular ET_EXEC image above 2 GiB. */
+            if (!minild_nonriscv_signed_fits(target, 32U)) {
+                return false;
+            }
+            instruction = (instruction & ~UINT32_C(0xfe000000)) |
+                          UINT32_C(0x14000000);
+            value = target;
+        } else if (reloc->type == R_LARCH_PCALA_HI20 ||
             reloc->type == R_LARCH_GOT_PC_HI20 ||
             reloc->type == R_LARCH_TLS_IE_PC_HI20) {
-            value = minild_loongarch_page_delta(target, place, reloc->type);
+            value = minild_loongarch_pc32_page_delta(target, place);
             if (!minild_nonriscv_signed_fits(value, 32U)) {
                 return false;
             }

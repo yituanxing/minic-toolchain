@@ -49,11 +49,11 @@ No missing QEMU may be silently counted as a runtime pass.
 
 | Target | Current level | Ordinary five-stage MiniLD result |
 |---|---|---|
-| x86-64 | GNU BFD native 5/5; MiniLD native CRT/TLS/IFUNC probes PASS | **5/5 PASS on GitHub CI**; GNU BFD and MiniLD both link and QEMU run the same MiniAS objects |
-| RV64 | RISC-V static TLS IE/LE structural probe PASS | **0/5 real glibc**; first linker diagnostic `invalid-riscv-static-tls-symbol:_nl_current_LC_COLLATE` |
-| AArch64 | GOT structural/GNU BFD link acceptance; trivial static QEMU program PASS | **0/5 real glibc**; first linker diagnostic `unsupported-static-relocation:183:541` (TLS IE) |
-| LoongArch64 | GOT/TLS structural + GNU BFD/QEMU trivial static parity PASS | **0/5 real glibc**; first linker diagnostic `invalid-loongarch-static-tls-symbol:_nl_current_LC_COLLATE` |
-| RV32 | ELF32 ET_EXEC GNU BFD/QEMU trivial parity PASS; separate Picolibc+Linux syscall bridge | **0/5 Picolibc** including TLS preflight; first linker diagnostic `unsupported-static-symbol:.Ldebug_abbrev0` (or `.L0`) |
+| x86-64 | GNU BFD + MiniLD native CRT/TLS/IFUNC, five ordinary C stages | **5/5 PASS** with native execution and GNU output parity |
+| RV64 | RISC-V TLS and ULEB128 GNU BFD/QEMU differential | **5/5 PASS** with real glibc and QEMU output parity |
+| AArch64 | GOT/TLS IE/LE GNU BFD/QEMU differential | **0/5**, all real glibc stages MiniLD-link but QEMU exit 139; GNU works |
+| LoongArch64 | GOT/TLS and true ALIGN-shrink GNU BFD/QEMU differential | **0/5**, real glibc MiniLD link fails at `R_LARCH_PCALA_HI20` (type 71) |
+| RV32 | ELF32/ILP32, TLS LE and ULEB128 GNU BFD/QEMU differential | **5/5 PASS** with real RV32I Picolibc, Linux-syscall bridge and QEMU output parity |
 
 The first real GCC/libc CI cohort is
 [`41830734058`](https://github.com/yituanxing/minic-toolchain/actions/runs/41830734058).
@@ -81,6 +81,18 @@ libc acceptance, but exposed deeper, different first errors:
 In particular, an invalid GNU oracle fixture is not evidence of MiniLD
 glibc failure or success.  These are failure-first diagnostics, not claims
 of a completed five-architecture user-mode program runtime.
+
+The third cohort, [CI #41835291488](https://github.com/yituanxing/minic-toolchain/actions/runs/41835291488),
+commit `a35cc6a`, is the first to reach three complete five-stage ordinary
+program runtime passes: **x86-64 glibc 5/5, RV64 glibc 5/5, and RV32I
+Picolibc 5/5**.  The same CI observed AArch64 real-glibc output links but
+immediate QEMU status 139 at all five stages; LoongArch64 real-glibc output
+links fail at `nonriscv-relocation-overflow-or-encoding:258:71`.  Its separate
+LoongArch64 GNU/QEMU two-ALIGN-shrink and AArch64 GNU/QEMU TLS IE/LE target
+probes both passed.  The paired five-target ELF boundary CI
+[#41835291703](https://github.com/yituanxing/minic-toolchain/actions/runs/41835291703)
+also completed successfully. These structural and library workloads are
+distinct from Linux kernel `vmlinux` final linking.
 
 ### Separate Linux kernel link acceptance
 
@@ -119,6 +131,11 @@ target support with linker-script/GC support.  The smallest historic RV64
 final-link replay is `tools/ci/minild-linux-cache-final-replay-v1.sh`, which
 reuses pinned GNU-object caches for a single kallsyms target rather than
 recompiling all 2,064 Linux C sources.
+The refactor-specific `.github/workflows/minild-rv64-linux-cached-final-recert.yml`
+uses the historical exact GNU golden cache key, verifies its original GCC
+object SHA manifest, and replays only that one link. A cache miss is a hard
+blocker, **not** permission to rebuild 2,064 C inputs. Even a successful
+single cached final link is not a fresh QEMU P1 certification.
 
 The original MiniAS RV64 C ladder used `rv64gc/lp64d`.  MiniC's Linux
 code-generation contract is separately `rv64i/lp64`; they are **not the same
