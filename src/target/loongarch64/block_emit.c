@@ -486,13 +486,8 @@ static bool loongarch64_machine_store_gp(
     FILE *out, const MinicDirectLP64BlockContext *ctx,
     const MinicCoreInstruction *ins, size_t offset, bool include_double) {
     return loongarch64_emit_gp_result(
-               out, ctx->fn,
-               ins, offset, include_double,
-               ctx->dynamic_frame) &&
-           /* The native compactor may cache only certified SSA spill slots,
-            * never address-taken/volatile C objects or GNU inline ASM. */
-           fprintf(out, "# MINI_LOONG_SSA_WRITEBACK %u\n",
-                   (unsigned int)ins->result) >= 0;
+        out, ctx->fn, ins, offset, include_double,
+        ctx->dynamic_frame);
 }
 
 static bool loongarch64_machine_emit_terminator(

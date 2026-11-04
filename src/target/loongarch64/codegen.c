@@ -1,17 +1,13 @@
-#define _POSIX_C_SOURCE 200809L
 #include "target/loongarch64/codegen.h"
 #include "target/loongarch64/block_emit.h"
 #include "target/loongarch64/frame_emit.h"
 #include "target/loongarch64/memory_emit.h"
-#include "target/loongarch64/machine_text_opt.h"
 #include "target/loongarch64/asm_contract.h"
 #include "target/common/direct_function_emit.h"
 #include "target/common/lp64_aggregate.h"
 #include "target/common/direct_program_emit.h"
-#include "core/value_uses.h"
 #include <stdint.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 
 /* LoongArch LP64D is not AAPCS64 with renamed registers: notably the first
@@ -200,11 +196,6 @@ static bool loongarch64_emit_function(
         loongarch64_emit_prologue, minic_loongarch64_emit_core_blocks,
         minic_loongarch64_qualified_opaque_asm
     };
-    char *generated = NULL;
-    size_t generated_length = 0U;
-    const size_t *uses = NULL;
-    size_t *owned_uses = NULL;
-    FILE *temporary;
     bool success;
     if (target == NULL || fn == NULL) return false;
     if (target->loongarch64_soft_float_abi) {
@@ -217,30 +208,13 @@ static bool loongarch64_emit_function(
         abi.fp_argument_registers = 0U;
     }
     minic_loongarch64_memory_helpers_begin(id);
-    temporary = open_memstream(&generated, &generated_length);
-    if (temporary == NULL) return false;
+    /* Machine decisions are made by the native Core/ABI emitters. Assembly
+     * text is the final serialization, never an optimization input. The
+     * target-owned unaligned-memory helpers follow the function's .size. */
     success = minic_multi_direct_lp64_emit_function(
-        temporary, target, module, module_decl, fn, facts, storage,
+        out, target, module, module_decl, fn, facts, storage,
         id, function_sections, &emitter);
-    if (fclose(temporary) != 0) success = false;
-    if (success && minic_core_function_facts_verified(facts, fn))
-        uses = facts->value_use_counts;
-    if (success && uses == NULL && fn->value_count != 0U &&
-        fn->value_count <= SIZE_MAX / sizeof(*owned_uses)) {
-        owned_uses = malloc(fn->value_count * sizeof(*owned_uses));
-        if (owned_uses != NULL && minic_core_function_value_use_counts(
-                fn, owned_uses, fn->value_count)) {
-            uses = owned_uses;
-        }
-    }
-    if (success)
-        success = minic_loongarch64_forward_and_compact(
-                      out, generated, generated_length,
-                      uses, fn->value_count) &&
-                  minic_loongarch64_memory_helpers_end(out);
-    free(generated);
-    free(owned_uses);
-    return success;
+    return success && minic_loongarch64_memory_helpers_end(out);
 }
 
 bool minic_loongarch64_write_core_module(

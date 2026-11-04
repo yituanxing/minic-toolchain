@@ -62,8 +62,16 @@ def _self_test_component_isolation() -> None:
     raw_script = Path(__file__).resolve().read_bytes()
     raw_makefile = (ROOT / "Makefile").read_bytes()
     old_script = _legacy_cache_script(raw_script)
-    assert old_script is not None, "cache-key script baseline mismatch"
-    assert _git_blob_sha1(old_script) == _BASELINE_SCRIPT_BLOB
+    if old_script is None:
+        # New profile-input rules must invalidate the historical script key;
+        # the compatibility normalizer may recognize ONLY the exact legacy.
+        assert _compiler_scoped_bytes(Path(__file__).resolve(), raw_script) == raw_script
+        script_scope = "changed_script_cache_invalidated"
+        scoped_script = raw_script
+    else:
+        assert _git_blob_sha1(old_script) == _BASELINE_SCRIPT_BLOB
+        script_scope = "unchanged_legacy_script"
+        scoped_script = old_script
     assert raw_makefile.count(_ELF32_SOURCE_INSERTION) == 1
     old_makefile = _compiler_scoped_bytes(ROOT / "Makefile", raw_makefile)
     # The compiler may legitimately add a translation unit later.
@@ -79,9 +87,9 @@ def _self_test_component_isolation() -> None:
     # Changes to ANY other Makefile byte MUST invalidate this identity.
     assert _compiler_scoped_bytes(ROOT / "Makefile", raw_makefile + b"\n") != old_makefile
     # Changes outside the narrowly pinned compatibility block MUST invalidate.
-    assert _compiler_scoped_bytes(Path(__file__).resolve(), raw_script + b"\n") != old_script
+    assert _compiler_scoped_bytes(Path(__file__).resolve(), raw_script + b"\n") != scoped_script
     print("MINIC_CACHE_COMPONENT_ISOLATION=PASS "
-          "scope=" + compiler_key + " "
+          "scope=" + compiler_key + " script=" + script_scope + " "
           "linker_source_only=true other_changes_invalidate=true "
           "no_network_no_git_history=true")
 
@@ -103,10 +111,11 @@ if not patch_names or len(patch_names) != len(set(patch_names)):
 files: set[Path] = set()
 for directory in (ROOT / "src", ROOT / "include"):
     files.update(path for path in directory.rglob("*") if path.is_file())
+files.update(path for path in (ROOT / "tools/minic").rglob("*")
+             if path.is_file() and path.suffix in {".c", ".h"})
 
 for relative in (
     "Makefile",
-    "tools/minic/main.c",
     "tools/minic-cc/main.c",
     "tools/ci/linux-runtime-build-minic-profile-v1.sh",
     "tools/ci/linux-runtime-profile-cache-id-v1.py",

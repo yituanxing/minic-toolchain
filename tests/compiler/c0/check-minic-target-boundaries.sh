@@ -390,9 +390,19 @@ has src/target/backend_source.c '#include "target/target_registration.def"'
 has src/target/target_catalog.c '#include "target/target_registration.def"'
 has src/target/backend.c 'backend != minic_backend_for_target(target)'
 lacks src/target/backend.c 'case MINIC_TARGET_ARCH_'
-lacks tools/minic/main.c 'MINIC_TARGET_ARCH_'
+for owner in tools/minic/main.c tools/minic/driver_cli.c \
+             tools/minic/driver_pipeline.c; do
+  lacks "$owner" 'MINIC_TARGET_ARCH_'
+done
 lacks tools/minic-cc/main.c 'MINIC_TARGET_ARCH_'
-has tools/minic/main.c 'minic_target_catalog_default()'
+exists tools/minic/driver_internal.h
+has Makefile 'MINIC_DRIVER_SOURCES :='
+has Makefile 'tools/minic/driver_cli.c'
+has Makefile 'tools/minic/driver_pipeline.c'
+has Makefile 'MINIC_DRIVER_OBJECTS := $(patsubst'
+has tools/minic/main.c 'minic_driver_cli_parse(argc, argv, &invocation)'
+has tools/minic/main.c 'minic_driver_execute(argv[0], &invocation)'
+has tools/minic/driver_cli.c 'minic_target_catalog_default()'
 has tools/minic-cc/main.c 'minic_target_catalog_default()'
 has tools/minic-cc/main.c '!target_info->pic_lowering_supported'
 
@@ -627,8 +637,8 @@ has src/target/source_policy/language_semantics.c 'minic_target_invocation_plain
 has src/target/source_policy/language_semantics.c 'minic_target_invocation_short_wchar('
 lacks src/target/target_info.c '#include "frontend/ast.h"'
 has tools/minic-cc/main.c 'minic_target_invocation_begin('
-has tools/minic/main.c 'minic_driver_plain_char_unsigned('
-has tools/minic/main.c 'language.relocation != NULL'
+has tools/minic/driver_pipeline.c 'minic_driver_plain_char_unsigned('
+has tools/minic/driver_cli.c 'language.relocation != NULL'
 lacks tools/minic-cc/main.c 'selected_target.wide_character_type ='
 exists tests/compiler/c0/probe-target-language-abi-options.sh
 
@@ -691,19 +701,19 @@ has src/target/riscv64/global_emit.c 'target/common/module_global_emit.h'
 # ISA/ABI profile names must be shared between native compiler and staged
 # product driver. Only machine legalization owns the actual feature bits.
 has src/target/riscv/isa_resolve.c 'minic_riscv_profile_find(march)'
-has tools/minic/main.c 'minic_riscv_profile_find(march)'
+has tools/minic/driver_cli.c 'minic_riscv_profile_find(march)'
 has src/target/target_catalog.c 'minic_riscv_profile_all('
-lacks tools/minic/main.c 'strcmp(march, "rv64im")'
+lacks tools/minic/driver_cli.c 'strcmp(march, "rv64im")'
 
 # A single catalog owns target spelling for driver, compiler and TargetInfo.
 # The product driver must not silently select RV64 AS/LD for other ISAs.
 exists src/target/target_catalog.c
 exists src/target/target_catalog.h
 has src/target/target_info.c 'minic_target_catalog_find(name)'
-has tools/minic/main.c 'minic_target_catalog_find(target_name)'
+has tools/minic/driver_cli.c 'minic_target_catalog_find(target_name)'
 has tools/minic-cc/main.c 'minic_target_catalog_all(&count)'
 has src/target/target_catalog.c 'MINIC_TARGET_STAGE_STAGED_ASSEMBLER_AND_LINKER'
-lacks tools/minic/main.c 'strcmp(target_name, "riscv64-linux")'
+lacks tools/minic/driver_cli.c 'strcmp(target_name, "riscv64-linux")'
 lacks src/target/target_info.c 'strcmp(name, "riscv64-linux")'
 
 # The frontend may query C language capabilities, but it must never grow
@@ -715,12 +725,17 @@ has src/target/source_policy/language_semantics.c 'minic_target_info_language_ty
 lacks src/target/target_info.c 'minic_target_info_language_type_supported('
 has src/target/source_policy/language_semantics.c 'minic_target_info_integer_promotion('
 lacks src/target/target_info.c 'minic_target_info_integer_promotion('
-has src/target/loongarch64/codegen.c 'minic_loongarch64_forward_and_compact('
-lacks src/target/loongarch64/codegen.c 'single_use_generated'
-has src/target/loongarch64/machine_text_opt.c 'minic_loongarch64_forward_single_use_spills('
-has src/target/loongarch64/machine_text_opt.c 'minic_loongarch64_emit_compact_assembly('
-has src/target/loongarch64/machine_text_opt.c '# MINI_LOONG_INLINE_ASM_BEGIN'
-lacks src/target/loongarch64/machine_text_opt.c '#include "frontend/ast.h"'
+has src/target/loongarch64/codegen.c 'minic_multi_direct_lp64_emit_function('
+has src/target/loongarch64/codegen.c 'out, target, module, module_decl, fn, facts, storage,'
+has src/target/loongarch64/codegen.c 'minic_loongarch64_memory_helpers_end(out)'
+lacks src/target/loongarch64/codegen.c 'open_memstream('
+lacks src/target/loongarch64/codegen.c 'forward_and_compact('
+lacks src/target/loongarch64/block_emit.c 'MINI_LOONG_SSA_WRITEBACK'
+lacks src/target/loongarch64/call_emit.c 'MINI_LOONG_SSA_PARAMETER'
+lacks src/target/loongarch64/residual_emit.c 'MINI_LOONG_INLINE_ASM_BEGIN'
+lacks src/target/loongarch64/residual_emit.c 'MINI_LOONG_INLINE_ASM_END'
+[[ ! -e src/target/loongarch64/machine_text_opt.c ]] || fail 'Loong machine-text optimizer is still present'
+[[ ! -e src/target/loongarch64/machine_text_opt.h ]] || fail 'Loong machine-text optimizer header is still present'
 has src/frontend/parser_type.c 'minic_target_info_named_builtin_type('
 has src/frontend/ast_verifier.c 'minic_target_info_language_type_supported('
 
@@ -1157,7 +1172,7 @@ lacks src/target/riscv64/frame_layout.c 'free(frame->reachable_blocks)'
 has src/target/common/direct_function_emit.h '.core_facts = facts'
 has src/target/common/direct_machine_dispatch.h 'value_use_counts = ctx->core_facts->value_use_counts'
 has src/target/common/direct_machine_dispatch.h 'reachable = ctx->core_facts->reachable_blocks'
-has src/target/loongarch64/codegen.c 'uses = facts->value_use_counts'
+lacks src/target/loongarch64/codegen.c 'uses = facts->value_use_counts'
 has src/target/x86_64/codegen.c 'minic_core_function_facts_verified(facts, fn)'
 has src/target/common/direct_preflight.c 'minic_core_function_facts_verified(facts, fn)'
 has src/target/riscv64/core_admission.c 'minic_core_function_facts_verified(facts, function)'

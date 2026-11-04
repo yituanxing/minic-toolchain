@@ -3134,3 +3134,78 @@ fallback or a claim that the subsequent remote rerun is already green.
 ## IR-P59 — Preserve complete-enum GS/percpu XADD source operands (2026-11-04)
 
 The P58 sole first failure, authentic `arch/x86/kernel/nmi.i`/`nmi.o`, revealed a real regression in P58's new shared x86 XADD *source* rank gate. `exc_nmi` uses `xaddl %0, %%gs:%1` with a 4-byte complete `enum nmi_states` memory lvalue. The previous per-CPU source contract intentionally admitted integral `+m` enum objects but the shared `x86_linux_xadd_integer_width` restricted every operand to `MINIC_TYPE_BASE_INT`, erroneously dropping this legal 4-byte enum into the unsupported kind43 form. This is not a missing GS/percpu machine instruction. Only the per-CPU `+m` enum case now uses the existing source DataLayout to validate the **complete enum's actual target byte width** against the exact `xaddl` template; incomplete or wrong-width enums remain rejected. The register, SMP and LOCAL machine-form contracts retain their original strict operand policies and the backend rechecks Core integer width. The exact retained `nmi.i` with its original x86 Linux Kbuild flags has locally completed MiniC `-S` followed by GNU GAS `ELF64 ET_REL`; another exact-head seven-runner and real GNU LD/QEMU receiver proof remain mandatory.
+## IR-P61 — Retire LoongArch post-serialization machine rewrites (2026-11-04)
+
+The Direct LP64 emitters already select every native instruction, stack slot,
+ABI register and inline-ASM form from sealed Core facts. LoongArch alone still
+buffered every emitted function with `open_memstream`, parsed the resulting GNU
+assembly text and then rewrote SSA spill/reloads, parameter reloads, branches,
+frame loads and sign extensions. That text parser depended on synthetic SSA and
+inline-ASM comment markers. These were semantic decisions *after* assembly
+serialization and had no equivalent in the other four machine paths.
+
+P61 makes LoongArch emit directly to the owning module stream, as AArch64
+already does. The target/Core/ABI emitters still make the original instruction
+and alignment decisions; function-local outlined unaligned memory helpers
+still follow the function body. The entire 505-line post-text optimizer, its
+interface, staging buffer, redundant use census, markers and optimizer-only
+test harness are removed together with their source inventories. No MIR,
+compatibility pass or ISA extension is introduced. This deliberately retires
+text peephole optimizations until there is an owned, structured machine stage.
+
+**P61 local evidence:** Debug `minic-cc` rebuild PASS;
+`check-minic-target-boundaries.sh` PASS; Loong direct frame-fold PASS
+(`work_lines=75`, under the existing 150-line budget), Core dead-SSA writeback
+PASS (`dead_lines=24`, under the existing 37-line budget), Core GP forward PASS,
+Loong immediate folding PASS, P46 five-target assembly oracle PASS and five-ISA
+spill-pressure PASS (Loong assembly 51,088 bytes). These verify source and
+assembly contracts only: Loong GNU AS/QEMU are unavailable locally, so native
+runtime remains **unverified**. The existing x86 Linux seven-runner for
+concurrent remote `2dad513` was still running when this local work started;
+P61 is not a current Linux Image/P1 certification.
+## IR-P62 — One product Driver invocation across parse and pipeline (2026-11-04)
+
+The product `minic` previously kept command-line parsing, ISA/ABI admission,
+RV64-specific GNU macro exposure, process execution, temporary-file lifecycle,
+preprocessing, assembling and linking in one nearly thousand-line `main.c`.
+P62 moves ownership into `driver_internal.h` (the validated invocation),
+`driver_cli.c` (parse, catalog and fail-closed mode/target admission), and
+`driver_pipeline.c` (tool paths, subprocesses, CPP/CC/AS/LD and cleanup).
+`main.c` now only parses, dispatches and returns the final status. The Makefile
+has a single `MINIC_DRIVER_SOURCES` inventory from which product objects are
+derived; the Stage2 toolchain script consumes that same inventory instead of
+silently self-hosting only `main.c`. The runtime profile cache fingerprints all
+driver C/headers so future edits cannot reuse stale compiled tool artifacts.
+Strict architecture assertions now inspect their actual owning units.
+
+This is a **behavior-preserving ownership refactor**, not newly qualified ISA
+support: five registered backends still accept already-preprocessed `.i` under
+`-S`; only RV64 has the product MiniPP→MiniC-CC→MiniAS `-c` and MiniLD final
+link pipeline. Target-sensitive GNU preprocessing, external GNU AS/LD, ABI
+sysroot/runtime selection and source-vs-machine capability negotiation remain
+necessary before exposing five-architecture `-c/link`; merely flipping the
+TargetCatalog stage flag would silently run RV64 tools on other targets.
+
+**P62 local evidence:** strict Debug `-Werror` build PASS; five-target `-S`
+catalog and byte parity PASS, non-RV64 `-c` fail-closed PASS, five-target
+language ABI option PASS, RV64 GNU CPP predefine PASS, strict target-boundary
+suite PASS, Stage2 eight-tool source plan PASS (`minic` now four translation
+units), runtime cache component-isolation selftest PASS. Driver RV64 ELF
+readelf/link preflight and negative controls ran, but local QEMU and
+cross-GNU LD availability prevented full driver runtime checks; these stages
+are **unverified**, not incorrectly counted as passing. A separate historical
+compiler B1 source manifest currently disagrees with Makefile (`202` vs `192`
+entries); it was already stale and is not silently re-baselined as part of
+product Driver ownership.
+
+**Concurrent Linux full-corpus receipt at remote `2dad513`:**
+[run #41850988524](https://github.com/yituanxing/minic-toolchain/actions/runs/41850988524)
+completed all seven fresh x86-64 GNU Linux 6.6.143 Kbuild C-owner producer
+shards successfully: **2758/2758 MiniC `-S` plus real GNU AS ET_REL objects**.
+The receiver then attempted genuine GNU Kbuild linking and failed on exactly
+one unresolved compile-time assertion, `__compiletime_assert_161`, retained
+in the candidate `mm/memory.o` under `encode_page(flags > 3ul)` in the pinned
+original GNU `.i`. No final candidate Image or QEMU P0/P1 was produced.
+The next corrective work is Core/source constant-fact propagation through
+the real inlining/call chain, not a filename-specific assertion suppression.
+This receipt predates local P61/P62 and is not credited to those changes.

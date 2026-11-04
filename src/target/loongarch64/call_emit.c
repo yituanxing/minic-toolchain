@@ -515,13 +515,6 @@ bool minic_loongarch64_emit_abi_instruction(
                                      ? "st.d" : "st.w",
                                  gp_regs[location->gp_first], offset))
                     return false;
-                /* The subsequent target-only pass may forward a sole
-                 * immediately adjacent use straight from its incoming GAR.
-                 * No ABI register is kept live across any machine opcode. */
-                if (fprintf(out, "# MINI_LOONG_SSA_PARAMETER %u %zu\n",
-                            (unsigned int)ins->result,
-                            location->gp_first) < 0)
-                    return false;
             } else {
                 const char *const load =
                     loongarch64_call_register64(fn, ins->core_type_id) ||

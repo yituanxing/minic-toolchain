@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # P46: five-target source acceptance and a real GNU assembler/linker/native
 # byte-image oracle for the x86 machine aggregate-copy transport. Reuse a
-# pinned original Linux LoongArch GNU inline-asm fixture as a text barrier.
+# pinned original Linux LoongArch GNU inline-asm fixture as a payload oracle.
 set -Eeuo pipefail
 root=$(cd "$(dirname "$0")/../../.." && pwd)
 minic=${1:-"$root/build/debug/bin/minic-cc"}
@@ -43,9 +43,8 @@ cmp -s "$work/gnu.out" "$work/minic.out" \
 grep -Fxq 'P46_AGGREGATE_COPY=PASS' "$work/minic.out" \
     || die 'invalid native success marker'
 
-# Keep the actual Linux LoongArch user-origin ASM byte stream untouched.
-# This catches a text compactor that accidentally forwards/rewrites across
-# the compiler's inline-ASM barrier, even without cross GAS or QEMU.
+# Keep the actual Linux LoongArch user-origin ASM payload untouched,
+# even without cross GAS or QEMU.
 loong="$root/tests/compiler/c0/loongarch64_linux_final_opaque_asm.c"
 "$cc" -E -P -w -std=gnu11 -x c "$loong" -o "$work/loong.i" \
     || die 'original LoongArch Linux preprocessing'
@@ -59,10 +58,11 @@ done
 baseline=${P46_BASELINE_MINIC_CC:-}
 if test -n "$baseline"; then
     test -x "$baseline" || die "baseline compiler missing: $baseline"
-    "$baseline" --target=loongarch64-linux -S "$work/loong.i" \
-        -o "$work/loong-baseline.s" || die 'Loong baseline emission'
-    cmp -s "$work/loong-baseline.s" "$work/loong.s" \
-        || die 'original LoongArch user ASM drift against P45.1'
+    # P46 previously required byte-for-byte equality of complete LoongArch
+    # functions against the old text-compaction pass. Native instructions now
+    # serialize directly from the machine emitter, so the surrounding spill
+    # and branch spellings may legitimately differ. The original inline ASM
+    # payload is verified above, independent of those implementation details.
     "$baseline" --target=x86_64-linux -S "$work/copy.i" \
         -o "$work/x86-baseline.s" || die 'x86 baseline emission'
     baseline_bytes=$(wc -c < "$work/x86-baseline.s")
@@ -70,7 +70,7 @@ if test -n "$baseline"; then
     if (( current_bytes * 2 >= baseline_bytes )); then
         die "large copy assembly not compacted old=$baseline_bytes new=$current_bytes"
     fi
-    printf 'P46_ORACLE_BASELINE=PASS x86_old_bytes=%s x86_new_bytes=%s Loong_native_byte_equal=1\n' \
+    printf 'P46_ORACLE_BASELINE=PASS x86_old_bytes=%s x86_new_bytes=%s Loong_inline_asm_preserved=1\n' \
         "$baseline_bytes" "$current_bytes"
 fi
 

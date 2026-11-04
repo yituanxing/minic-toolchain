@@ -265,7 +265,6 @@ MINIC_SOURCES := \
 	src/target/aarch64/integer_emit.c \
 	src/target/aarch64/fp_emit.c \
 	src/target/loongarch64/codegen.c \
-	src/target/loongarch64/machine_text_opt.c \
 	src/target/loongarch64/asm_contract.c \
 	src/target/loongarch64/asm_contract_source.c \
 	src/target/loongarch64/simd_asm.c \
@@ -286,8 +285,12 @@ FUNCTION_DIAGNOSTIC_TEST_BINARY := $(BUILD_DIR)/tests/frontend/function-diagnost
 BACKEND_MODULE_ARENA_TEST_OBJECT := $(BUILD_DIR)/obj/tests/target/backend_module_arena_test.o
 BACKEND_MODULE_ARENA_TEST_BINARY := $(BUILD_DIR)/tests/target/backend-module-arena-test
 DIRECT_LP64_ASM_UNIT_BINARY := $(BUILD_DIR)/tests/compiler/c0/direct-lp64-asm-preflight-unit
-MINIC_DRIVER_OBJECTS := $(BUILD_DIR)/obj/tools/minic/main.o \
-	$(BUILD_DIR)/obj/src/target/target_catalog.o
+MINIC_DRIVER_SOURCES := \
+	src/target/target_catalog.c \
+	tools/minic/driver_cli.c \
+	tools/minic/driver_pipeline.c \
+	tools/minic/main.c
+MINIC_DRIVER_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(MINIC_DRIVER_SOURCES))
 # The compiler boundary stays in minic-cc. minic is the user-facing staged
 # driver and preserves the historical -S preprocessed-input compatibility path.
 MINIC_BINARY  := $(BUILD_DIR)/bin/minic
@@ -2302,20 +2305,6 @@ check-target-machine-header-boundary:
 	@echo "TARGET_MACHINE_HEADER_BOUNDARY=PASS c_ast=absent c_type=absent"
 
 check-fast: check-target-machine-header-boundary
-
-# LoongArch machine-text optimization is a native codegen stage, independent
-# of Source C policy and structured GNU inline-ASM admission. Keep its exact
-# barriers and sign-extension/SSA-use rules under a standalone host gate.
-.PHONY: check-loongarch64-machine-text-opt
-check-loongarch64-machine-text-opt:
-	mkdir -p "$(BUILD_DIR)/tests"
-	$(CC) $(MINIC_CFLAGS) $(MINIC_INCLUDES) \
-	  tests/target/loongarch64_machine_text_opt_test.c \
-	  src/target/loongarch64/machine_text_opt.c \
-	  -o "$(BUILD_DIR)/tests/loongarch64-machine-text-opt-test"
-	"$(BUILD_DIR)/tests/loongarch64-machine-text-opt-test"
-
-check-fast: check-loongarch64-machine-text-opt
 
 # x86 Linux structured ASM families retire legacy machine-side template
 # dispatch; GNU ELF/native is available on the host, no cross toolchain.

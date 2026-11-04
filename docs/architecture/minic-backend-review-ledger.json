@@ -755,16 +755,6 @@
       "review_depth": "inventory",
       "ci_touched_in": []
     },
-    "src/target/loongarch64/machine_text_opt.c": {
-      "blob": "acc05a787366c570da37bdce62b00deffe9b8e6b",
-      "review_depth": "inventory",
-      "ci_touched_in": []
-    },
-    "src/target/loongarch64/machine_text_opt.h": {
-      "blob": "097ca6532263665a4d04ae59603066522db4891c",
-      "review_depth": "inventory",
-      "ci_touched_in": []
-    },
     "src/target/loongarch64/residual_emit.c": {
       "blob": "8e97841497c85dc611c309f4022ce9865c92147c",
       "review_depth": "targeted",
