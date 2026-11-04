@@ -894,6 +894,12 @@ check-minild-script-nmagic: $(MINIAS_BINARY) $(MINILD_BINARY)
 	MINILD="$(abspath $(MINILD_BINARY))" \
 	bash tests/linker/probe-nmagic-script.sh
 
+.PHONY: check-minild-script-mixed-bss
+check-minild-script-mixed-bss: $(MINIAS_BINARY) $(MINILD_BINARY)
+	MINIAS="$(abspath $(MINIAS_BINARY))" \
+	MINILD="$(abspath $(MINILD_BINARY))" \
+	bash tests/linker/probe-script-mixed-bss.sh
+
 .PHONY: check-minild-explicit-endianness
 check-minild-explicit-endianness: $(MINIAS_BINARY) $(MINILD_BINARY)
 	MINIAS="$(abspath $(MINIAS_BINARY))" \

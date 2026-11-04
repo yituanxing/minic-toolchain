@@ -71,6 +71,7 @@ jobs:
             check-minild-segment-plan \
             check-minild-script-merge-section-flags \
             check-minild-script-ro-after-init \
+            check-minild-script-mixed-bss \
             check-minild-script-nmagic \
             check-minild-explicit-endianness \
             check-minild-layout-phase-boundary \
