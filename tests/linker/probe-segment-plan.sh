@@ -311,12 +311,22 @@ print('MINILD_SEGMENT_CHECK=PASS mode=static-default loads=2 '
 raw, ph, names = inspect('static-script.elf', 2)
 loads = [p for p in ph if p[0] == 1]
 tls = [p for p in ph if p[0] == 7]
-assert len(loads) == 3 and all(p[7] == 1 for p in loads), ('script LOAD alignment', ph)
-assert len(tls) == 1 and len(ph) == 4, ('scripted PT_TLS', ph)
+assert len(loads) == 2 and all(p[7] == 1 for p in loads), ('script LOAD alignment', ph)
+assert len(tls) == 1 and len(ph) == 3, ('scripted PT_TLS', ph)
 data = one(names, '.data')
 assert any(covers(p, data) and p[4] != p[3] for p in loads), ('AT() LMA lost', ph)
 assert any(covers(p, one(names, '.text')) for p in loads)
-assert any(p[1] == 6 and p[6] > p[5] for p in loads), ('NOBITS LOAD tail', ph)
+# The script places NOTE after .tbss in the same page. A distinct R-only
+# PT_LOAD would remap the preceding RW .data/.tdata page read-only. The
+# combined RW segment must materialize zero file padding for the SHT_NOBITS
+# hole, without changing the section type or the independent PT_TLS filesz.
+tbss = one(names, '.tbss')
+assert tbss[1] == 8 and covers(loads[1], tbss), ('NOBITS section preserved', ph)
+assert loads[1][1] == 6 and covers(loads[1], one(names, '.note')), (
+    'same-page RW + NOTE merge', ph)
+tbss_file = loads[1][2] + tbss[3] - loads[1][3]
+assert raw[tbss_file:tbss_file + tbss[5]] == b'\0' * tbss[5], (
+    'scripted BSS file padding', ph)
 assert one(names, '.note')[5] == 20
 assert tls[0][3] == one(names, '.tdata')[3]
 assert tls[0][2] == one(names, '.tdata')[4]
@@ -325,7 +335,8 @@ assert covers(tls[0], one(names, '.tbss'))
 assert any(p[1] == 6 and covers(p, one(names, '.tdata')) and
            tls[0][4] - tls[0][3] == p[4] - p[3] for p in loads), (
     'scripted PT_TLS LMA must retain AT() mapping', ph)
-print(f'MINILD_SEGMENT_CHECK=PASS mode=static-script loads={len(loads)} AT_LMA=true PT_TLS=true')
+print(f'MINILD_SEGMENT_CHECK=PASS mode=static-script loads={len(loads)} '
+      'AT_LMA=true PT_TLS=true same_page_NOBITS_file_padding=true')
 
 raw, ph, names = inspect('shared.so', 3)
 loads = [p for p in ph if p[0] == 1]

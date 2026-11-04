@@ -28,7 +28,7 @@ as -o "$work/gnu.o" tests/linker/script-merge-section-flags.S
 "$MINIAS" -march=rv64i -mabi=lp64 -o "$work/incompatible.o" \
     tests/linker/script-merge-section-incompatible-rv64.S
 
-for case in grouped separate sorted keep; do
+for case in grouped separate sorted keep gap; do
     flags=()
     case "$case" in
         grouped)
@@ -44,6 +44,9 @@ for case in grouped separate sorted keep; do
             x86=tests/linker/script-merge-section-keep.lds
             rv64=tests/linker/script-merge-section-keep-rv64.lds
             flags=(--gc-sections) ;;
+        gap)
+            x86=tests/linker/script-merge-section-gap.lds
+            rv64=tests/linker/script-merge-section-gap-rv64.lds ;;
     esac
     ld -m elf_x86_64 -static "${flags[@]}" -T "$x86" \
         -o "$work/$case.gnu.elf" "$work/gnu.o"
@@ -66,7 +69,7 @@ done
 
 cross_gnu=0
 if command -v riscv64-linux-gnu-ld >/dev/null; then
-    for case in grouped separate sorted keep; do
+    for case in grouped separate sorted keep gap; do
         flags=()
         [[ $case == keep ]] && flags=(--gc-sections)
         case "$case" in
@@ -74,6 +77,7 @@ if command -v riscv64-linux-gnu-ld >/dev/null; then
             separate) script=tests/linker/script-merge-section-separate-rv64.lds ;;
             sorted) script=tests/linker/script-merge-section-sorted-rv64.lds ;;
             keep) script=tests/linker/script-merge-section-keep-rv64.lds ;;
+            gap) script=tests/linker/script-merge-section-gap-rv64.lds ;;
         esac
         riscv64-linux-gnu-ld -m elf64lriscv -static "${flags[@]}" \
             -T "$script" -o "$work/$case.rv64-gnu.elf" "$work/rv64.o"
@@ -119,7 +123,35 @@ expected = {
     "separate": normal + alpha + b"\0" + constant,
     "sorted": constant + alpha + normal,
     "keep": alpha + b"\0" + constant + normal,
+    "gap": alpha + b"\0" + constant + normal,
 }
+
+
+def load_segments(path):
+    blob = path.read_bytes()
+    phoff = struct.unpack_from("<Q", blob, 32)[0]
+    entsize, count = struct.unpack_from("<HH", blob, 54)
+    if entsize != 56 or phoff + count * entsize > len(blob):
+        raise SystemExit(f"MINILD_SCRIPT_MERGE=FAIL program_headers:{path}")
+    return [struct.unpack_from("<IIQQQQQQ", blob, phoff + i * entsize)
+            for i in range(count)
+            if struct.unpack_from("<I", blob, phoff + i * entsize)[0] == 1]
+
+
+def verify_no_page_alias(path, expect_single):
+    loads = load_segments(path)
+    if expect_single and len(loads) != 1:
+        raise SystemExit(f"MINILD_SCRIPT_MERGE=FAIL same_page_load_split:{path}:{loads}")
+    for i, left in enumerate(loads):
+        start = left[3]
+        end = start + left[6]
+        for right in loads[i + 1:]:
+            rstart = right[3]
+            rend = rstart + right[6]
+            if end > start and rend > rstart and (start // 4096 <=
+                    (rend - 1) // 4096 and rstart // 4096 <=
+                    (end - 1) // 4096):
+                raise SystemExit(f"MINILD_SCRIPT_MERGE=FAIL aliased_load_pages:{path}")
 
 
 def elf_section(path, machine, check_symbols=True):
@@ -182,6 +214,7 @@ for case, wanted in expected.items():
     if reference != candidate or reference != (wanted, 0x2, 0):
         raise SystemExit(f"MINILD_SCRIPT_MERGE=FAIL GNU_byte_or_flags_diff:{case} "
                          f"reference={reference} candidate={candidate}")
+    verify_no_page_alias(work / f"{case}.rv64.elf", expect_single=True)
     if cross_gnu:
         same_isa_reference = elf_section(work / f"{case}.rv64-gnu.elf", 243)
         if same_isa_reference != candidate:
@@ -194,7 +227,8 @@ homogeneous = elf_section(work / "homogeneous.rv64.elf", 243,
 if homogeneous[1:] != (0x32, 1):
     raise SystemExit("MINILD_SCRIPT_MERGE=FAIL homogeneous_merge_flags")
 print("MINILD_SCRIPT_MERGE=PASS grouped=GNU_bytes separate=GNU_bytes "
-      "sorted=GNU_bytes KEEP_GC=GNU_bytes homogeneous=AMS/1 "
+      "sorted=GNU_bytes KEEP_GC=GNU_bytes page_gap=GNU_bytes "
+      "same_page_load_coalesced=1 homogeneous=AMS/1 "
       "incompatible_flags=reject incompatible_type=reject "
       f"same_ISA_GNU={cross_gnu}")
 PY_ELF

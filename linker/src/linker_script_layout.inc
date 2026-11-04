@@ -1042,6 +1042,7 @@ static bool static_build_script_layout(MiniLdState *state,
     bool *command_deferred = NULL;
     size_t i;
     size_t alloc_count = 0U;
+    size_t last_file_backed = SIZE_MAX;
     uint64_t *owner_max_align = NULL;
     size_t *owner_remaining = NULL;
     size_t storage_count;
@@ -1287,6 +1288,59 @@ static bool static_build_script_layout(MiniLdState *state,
         size_t owner = layout->work[best].owner_command;
         size_t aligned;
 
+        /* A pair of output sections may occupy the same ELF load page even
+         * though their names/flags differ.  Preserve the VMA/LMA distance in
+         * their file positions: otherwise no single PT_LOAD can describe
+         * both without mapping unrelated file bytes over the first section.
+         * Do this before choosing a new output-section file base.  Members
+         * of an existing output already get exact dot-hole offsets below. */
+        if (last_file_backed != SIZE_MAX &&
+            section->type != SHT_NOBITS) {
+            size_t previous = last_file_backed;
+            const MiniLdSection *prior = &state->work.sections[previous];
+            const MiniLdLayoutWorkPlacement *prior_place =
+                &layout->work[previous];
+            const MiniLdLayoutWorkPlacement *this_place =
+                &layout->work[best];
+            uint64_t previous_end;
+
+            if (prior->size <= UINT64_MAX - prior_place->vaddr &&
+                prior->size <= UINT64_MAX - prior_place->laddr) {
+                previous_end = prior_place->vaddr + (uint64_t)prior->size;
+                if (previous_end != 0U &&
+                    previous_end <= this_place->vaddr &&
+                    (previous_end - 1U) / state->target->page_size ==
+                        this_place->vaddr / state->target->page_size &&
+                    this_place->laddr >=
+                        prior_place->laddr + (uint64_t)prior->size &&
+                    this_place->laddr -
+                        (prior_place->laddr + (uint64_t)prior->size) ==
+                        this_place->vaddr - previous_end) {
+                    uint64_t gap = this_place->vaddr - previous_end;
+                    size_t desired;
+
+                    if (prior_place->file_offset == SIZE_MAX ||
+                        gap > SIZE_MAX - prior_place->file_offset ||
+                        prior->size > SIZE_MAX - prior_place->file_offset -
+                                      (size_t)gap) {
+                        fprintf(state->diagnostics,
+                                "minic-ld: script-same-page-file-overflow:%s\n",
+                                section->name);
+                        goto done;
+                    }
+                    desired = prior_place->file_offset + prior->size +
+                              (size_t)gap;
+                    if (file_cursor > desired) {
+                        fprintf(state->diagnostics,
+                                "minic-ld: unsupported-script-same-page-file-order:%s\n",
+                                section->name);
+                        goto done;
+                    }
+                    file_cursor = desired;
+                }
+            }
+        }
+
         if (!align_up_size(file_cursor,
                            section->align == 0U ? 1U : section->align,
                            &aligned)) {
@@ -1384,6 +1438,9 @@ static bool static_build_script_layout(MiniLdState *state,
             if (end > file_cursor) {
                 file_cursor = end;
             }
+        }
+        if (section->type != SHT_NOBITS) {
+            last_file_backed = best;
         }
     }
 

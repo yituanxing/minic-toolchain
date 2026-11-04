@@ -177,17 +177,71 @@ static bool minild_static_program_plan_build(
 
             if (count != 0U) {
                 MiniLdStaticLoadSegment *prev = &loads[count - 1U];
-                if (prev->flags == next->flags &&
-                    prev->file_size == prev->mem_size &&
-                    prev->laddr <= UINT64_MAX - prev->mem_size &&
-                    prev->vaddr <= UINT64_MAX - prev->mem_size &&
-                    prev->file_offset <= UINT64_MAX - prev->file_size &&
-                    prev->laddr + prev->mem_size == next->laddr &&
-                    prev->vaddr + prev->mem_size == next->vaddr &&
-                    prev->file_offset + prev->file_size == next->file_offset) {
-                    prev->mem_size += next->mem_size;
-                    prev->file_size += next->file_size;
+                uint64_t previous_vend, previous_lend, previous_fend;
+                uint64_t vgap = 0U, lgap = 0U, fgap = 0U;
+                bool ordered, same_page, linear_gap;
+
+                if (prev->vaddr > UINT64_MAX - prev->mem_size ||
+                    prev->laddr > UINT64_MAX - prev->mem_size ||
+                    prev->file_offset > UINT64_MAX - prev->mem_size) {
+                    fprintf(state->diagnostics,
+                            "minic-ld: invalid-script-load-range\n");
+                    goto failed;
+                }
+                previous_vend = prev->vaddr + prev->mem_size;
+                previous_lend = prev->laddr + prev->mem_size;
+                /* A file-backed section after SHT_NOBITS must follow the
+                 * entire memory span in the file, with zero bytes filling
+                 * the former BSS tail.  Another NOBITS section can still
+                 * extend that tail without increasing p_filesz. */
+                previous_fend = prev->file_offset +
+                    (next->file_size == 0U ? prev->file_size : prev->mem_size);
+                same_page = prev->mem_size != 0U &&
+                    (previous_vend - 1U) / state->target->page_size ==
+                    next->vaddr / state->target->page_size;
+                ordered = next->vaddr >= previous_vend &&
+                    next->laddr >= previous_lend &&
+                    next->file_offset >= previous_fend;
+                if (ordered) {
+                    vgap = next->vaddr - previous_vend;
+                    lgap = next->laddr - previous_lend;
+                    fgap = next->file_offset - previous_fend;
+                }
+                linear_gap = ordered &&
+                    vgap == lgap && vgap == fgap &&
+                    vgap <= UINT64_MAX - next->mem_size &&
+                    prev->mem_size <= UINT64_MAX - vgap - next->mem_size &&
+                    (next->file_size == 0U ||
+                     (vgap <= UINT64_MAX - next->file_size &&
+                      prev->mem_size <= UINT64_MAX - vgap - next->file_size));
+
+                /* A loader maps PT_LOAD at page granularity.  Separate RX
+                 * text and R rodata mappings inside one page would let the
+                 * later mapping remove execute permission from _start.
+                 * Preserve distinct protection at page boundaries, but
+                 * coalesce same-page spans only when file/VMA/LMA advance
+                 * together (including zero-filled alignment holes).
+                 * A BSS tail is padded with real zero file bytes only if a
+                 * later file-backed section re-enters the same load page.
+                 * Non-linear AT() mapping cannot share that load. */
+                if (linear_gap &&
+                    ((vgap == 0U && prev->flags == next->flags) ||
+                     same_page)) {
+                    if (next->file_size != 0U) {
+                        prev->file_size = prev->mem_size + vgap +
+                                          next->file_size;
+                    }
+                    prev->mem_size += vgap + next->mem_size;
+                    prev->flags |= next->flags;
                     continue;
+                }
+                if (same_page || next->vaddr < previous_vend) {
+                    fprintf(state->diagnostics,
+                            "minic-ld: unsupported-script-load-page-overlap:"
+                            "vaddr=0x%llx:next=0x%llx\n",
+                            (unsigned long long)prev->vaddr,
+                            (unsigned long long)next->vaddr);
+                    goto failed;
                 }
             }
             loads[count++] = *next;
