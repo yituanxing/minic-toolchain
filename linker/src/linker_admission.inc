@@ -448,6 +448,20 @@ static bool process_input_data(MiniLdState *state,
             if (minielf_symbol_bind(input_symbol.info) == STB_LOCAL) {
                 continue;
             }
+        } else if (input_symbol.section_index < elf.section_count &&
+                   groups[input_symbol.section_index].signature_symbol != 0U &&
+                   minielf_symbol_type(input_symbol.info) == STT_SECTION &&
+                   minielf_symbol_bind(input_symbol.info) == STB_LOCAL &&
+                   input_symbol.name == 0U && input_symbol.value == 0U &&
+                   input_symbol.size == 0U) {
+            /* GNU AS can emit additional anonymous local section symbols
+             * whose st_shndx names the SHT_GROUP metadata header.  Only the
+             * actual group signature (handled above) can own that header in
+             * our -r output.  The other metadata-only symbols have no
+             * allocatable section or link-time value to project, so retain
+             * their immutable input record without a canonical definition.
+             * A relocation referring to one still fails symbol-map lookup. */
+            continue;
         } else if (input_symbol.section_index >= elf.section_count ||
                    (input_section = input_graph_section_id(
                         &state->inputs, file_index,

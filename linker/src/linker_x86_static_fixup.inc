@@ -1,5 +1,6 @@
-/* x86-64 ELF64 ET_EXEC psABI relocations. No x86 machine instruction
- * encoder is needed for the currently admitted scalar/PC-relative forms. */
+/* x86-64 ELF64 ET_EXEC psABI relocations. The GOTPCRELX relocation is
+ * always a four-byte G+A-P displacement. Relaxation to S+A-P is an optional
+ * target-owned opcode rewrite, never a prerequisite for a valid relocation. */
 
 static MiniLdNonRiscvFixup minild_x86_static_fixup_class(uint32_t type) {
     switch (type) {
@@ -16,9 +17,69 @@ static MiniLdNonRiscvFixup minild_x86_static_fixup_class(uint32_t type) {
     case R_X86_64_DTPOFF64: return MINILD_NONRISCV_ABS64;
     case R_X86_64_GOTPCRELX:
     case R_X86_64_REX_GOTPCRELX:
-        return MINILD_NONRISCV_TARGET_INSTRUCTION;
+        return MINILD_NONRISCV_PCREL32;
     default: return MINILD_NONRISCV_INVALID;
     }
+}
+
+/* GNU AS emits GOTPCRELX on both relaxable and non-relaxable RIP-relative
+ * operands. Only transform the encodings whose semantics are proven; every
+ * other input retains the original machine instruction and uses a real GOT
+ * slot. Linkers must not reject a valid relocation merely because a chosen
+ * instruction isn't an optimization candidate (Ubuntu libc uses more forms
+ * than Debian's startup fixture).
+ *
+ * The operand supplied by Common is S+A, and P is the displacement's own
+ * address, four bytes before the next instruction.  Rewrite only when the
+ * full S+A-P displacement is representable, preserving the section length. */
+static bool minild_x86_try_relax_static_gotpcrelx(
+    MiniLdState *state, const MiniLdLayout *layout,
+    const MiniLdReloc *reloc, uint64_t target_bits) {
+    MiniLdSection *source;
+    unsigned char *slot;
+    unsigned char modrm;
+    uint64_t place;
+    uint64_t delta;
+
+    if (reloc->addend != -4 || reloc->section >= state->work.count ||
+        reloc->offset < 2U || reloc->offset > SIZE_MAX ||
+        layout->work[reloc->section].vaddr >
+            UINT64_MAX - reloc->offset) {
+        return false;
+    }
+    source = &state->work.sections[reloc->section];
+    if (source->type == SHT_NOBITS ||
+        !range_ok((size_t)reloc->offset, 4U, source->size)) {
+        return false;
+    }
+    place = layout->work[reloc->section].vaddr + reloc->offset;
+    delta = target_bits - place;
+    if (!minild_nonriscv_signed_fits(delta, 32U)) {
+        return false;
+    }
+    slot = source->data + (size_t)reloc->offset;
+    modrm = slot[-1];
+    if (reloc->type == R_X86_64_REX_GOTPCRELX) {
+        if (reloc->offset < 3U || (slot[-3] & 0xf0U) != 0x40U ||
+            slot[-2] != 0x8bU || (modrm & 0xc7U) != 0x05U) {
+            return false;
+        }
+        slot[-2] = 0x8dU; /* MOV reg,[rip+GOT] -> LEA reg,[rip+sym]. */
+        return true;
+    }
+    if (reloc->type == R_X86_64_GOTPCRELX) {
+        if (slot[-2] == 0xffU &&
+            (modrm == 0x15U || modrm == 0x25U)) {
+            slot[-2] = 0x67U; /* Indirect CALL/JMP -> addr32 direct. */
+            slot[-1] = modrm == 0x15U ? 0xe8U : 0xe9U;
+            return true;
+        }
+        if (slot[-2] == 0x8bU && (modrm & 0xc7U) == 0x05U) {
+            slot[-2] = 0x8dU;
+            return true;
+        }
+    }
+    return false;
 }
 
 static bool minild_x86_resolve_static_got_target(
@@ -86,7 +147,21 @@ static bool minild_x86_resolve_static_got_target(
         return true;
     }
     if (reloc->type != R_X86_64_GOTPCREL &&
+        reloc->type != R_X86_64_GOTPCRELX &&
+        reloc->type != R_X86_64_REX_GOTPCRELX &&
         reloc->type != R_X86_64_GOTTPOFF) {
+        return true;
+    }
+    if ((reloc->type == R_X86_64_GOTPCRELX ||
+         reloc->type == R_X86_64_REX_GOTPCRELX) &&
+        reloc->symbol != SIZE_MAX &&
+        reloc->symbol < state->resolver.count &&
+        !(state->resolver.entries[reloc->symbol].section ==
+              MINILD_SECTION_UNDEF &&
+          ELF64_ST_BIND(state->resolver.entries[reloc->symbol].info) ==
+              STB_WEAK) &&
+        minild_x86_try_relax_static_gotpcrelx(
+            state, layout, reloc, *target_bits)) {
         return true;
     }
     if (got != NULL && reloc->type == R_X86_64_GOTTPOFF) {
@@ -118,89 +193,14 @@ static bool minild_x86_resolve_static_got_target(
     return true;
 }
 
-/* In a non-preemptible static image the x86 psABI's relaxable GOT forms
- * can refer directly to the symbol.  Verify the opcode before rewriting;
- * an unrecognized instruction must never silently receive an S+A-P fixup.
- * The displacement always starts four bytes before the next RIP. */
-static size_t minild_x86_static_instruction_width(uint32_t type) {
-    return type == R_X86_64_GOTPCRELX ||
-                   type == R_X86_64_REX_GOTPCRELX ? 4U : 0U;
-}
-
-static bool minild_x86_static_write_instruction(
-    unsigned char *slot, const MiniLdReloc *reloc,
-    uint64_t target, uint64_t place, bool undefined_weak) {
-    uint64_t delta = target - place;
-    unsigned char modrm;
-
-    if (reloc->addend != -4 || reloc->offset < 2U) {
-        return false;
-    }
-    modrm = slot[-1];
-    if (reloc->type == R_X86_64_REX_GOTPCRELX) {
-        unsigned char rex;
-
-        if (reloc->offset < 3U) {
-            return false;
-        }
-        rex = slot[-3];
-        if ((rex & 0xf0U) != 0x40U || (modrm & 0xc7U) != 0x05U ||
-            slot[-2] != 0x8bU) {
-            return false;
-        }
-        if (undefined_weak) {
-            /* An unresolved weak symbol must evaluate to zero, not the
-             * address of a synthesized GOT entry or an out-of-range LEA. */
-            if ((rex & 0x01U) != 0U) {
-                return false;
-            }
-            slot[-2] = 0xc7U;
-            slot[-1] = (unsigned char)(0xc0U | ((modrm >> 3U) & 7U));
-            store_u32le(slot, 0U);
-            return true;
-        }
-        if (!minild_nonriscv_signed_fits(delta, 32U)) {
-            return false;
-        }
-        slot[-2] = 0x8dU; /* MOV reg,[rip+GOT] -> LEA reg,[rip+sym] */
-        store_u32le(slot, (uint32_t)delta);
-        return true;
-    }
-    if (reloc->type == R_X86_64_GOTPCRELX) {
-        if (undefined_weak && slot[-2] == 0x8bU &&
-            (modrm & 0xc7U) == 0x05U) {
-            slot[-2] = 0xc7U; /* MOV r32,0; zero extends to r64. */
-            slot[-1] = (unsigned char)(0xc0U | ((modrm >> 3U) & 7U));
-            store_u32le(slot, 0U);
-            return true;
-        }
-        if (slot[-2] == 0xffU &&
-            !undefined_weak &&
-            (modrm == 0x15U || modrm == 0x25U) &&
-            minild_nonriscv_signed_fits(delta, 32U)) {
-            slot[-2] = 0x67U; /* 6-byte indirect CALL/JMP -> addr32 CALL/JMP */
-            slot[-1] = modrm == 0x15U ? 0xe8U : 0xe9U;
-            store_u32le(slot, (uint32_t)delta);
-            return true;
-        }
-        if (slot[-2] == 0x8bU && (modrm & 0xc7U) == 0x05U &&
-            minild_nonriscv_signed_fits(delta, 32U)) {
-            slot[-2] = 0x8dU;
-            store_u32le(slot, (uint32_t)delta);
-            return true;
-        }
-    }
-    return false;
-}
-
 static bool minild_x86_apply_static_relocations(
     MiniLdState *state, const MiniLdLayout *layout,
     const MiniLdStaticTargetPlan *plan) {
     static const MiniLdNonRiscvStaticOps ops = {
         minild_x86_static_fixup_class,
         minild_x86_resolve_static_got_target,
-        minild_x86_static_instruction_width,
-        minild_x86_static_write_instruction
+        NULL,
+        NULL
     };
 
     return minild_nonriscv_apply_with_ops(state, layout, plan, &ops);

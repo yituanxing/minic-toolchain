@@ -23,9 +23,23 @@ static bool minild_x86_synthesize_default_boundaries(
 static bool minild_aarch64_apply_static_relocations(
     MiniLdState *state, const struct MiniLdLayout *layout,
     const struct MiniLdStaticTargetPlan *plan);
+static bool minild_aarch64_reserve_static_relocations(
+    MiniLdState *state, struct MiniLdStaticTargetPlan *plan);
+static bool minild_aarch64_fill_static_relocations(
+    MiniLdState *state, const struct MiniLdLayout *layout,
+    const struct MiniLdStaticTargetPlan *plan);
+static void minild_aarch64_destroy_static_relocations(
+    struct MiniLdStaticTargetPlan *plan);
 static bool minild_loongarch_apply_static_relocations(
     MiniLdState *state, const struct MiniLdLayout *layout,
     const struct MiniLdStaticTargetPlan *plan);
+static bool minild_loongarch_reserve_static_relocations(
+    MiniLdState *state, struct MiniLdStaticTargetPlan *plan);
+static bool minild_loongarch_fill_static_relocations(
+    MiniLdState *state, const struct MiniLdLayout *layout,
+    const struct MiniLdStaticTargetPlan *plan);
+static void minild_loongarch_destroy_static_relocations(
+    struct MiniLdStaticTargetPlan *plan);
 static bool minild_riscv_reserve_static_relocations(
     MiniLdState *state, struct MiniLdStaticTargetPlan *plan);
 static bool minild_riscv_fill_static_relocations(
@@ -129,7 +143,7 @@ static const MiniLdTargetProfile minild_target_profiles[] = {
      minild_riscv_apply_static_relocations,
      minild_riscv_destroy_static_relocations,
      minild_riscv_synthesize_gnu_default_boundaries,
-     NULL, minild_link_elf32_compat_vdso, NULL, false},
+     NULL, minild_link_elf32_compat_vdso, NULL, true},
     {"elf_x86_64", ELFCLASS64, ELFDATA2LSB, EM_X86_64, "i386:x86-64",
      NULL, 0U, UINT64_C(0x400000), 4096U,
      true, true, false, false, false, false,
@@ -143,15 +157,21 @@ static const MiniLdTargetProfile minild_target_profiles[] = {
     {"aarch64linux", ELFCLASS64, ELFDATA2LSB, EM_AARCH64, "aarch64",
      NULL, 0U, UINT64_C(0x400000), 4096U,
      true, true, false, false, false, false,
-     minild_exact_merge_flags, NULL, NULL, NULL,
-     minild_aarch64_apply_static_relocations, NULL, NULL,
-     NULL, NULL, minild_zero_elf_flags, false},
+     minild_exact_merge_flags, NULL,
+     minild_aarch64_reserve_static_relocations,
+     minild_aarch64_fill_static_relocations,
+     minild_aarch64_apply_static_relocations,
+     minild_aarch64_destroy_static_relocations, NULL,
+     NULL, NULL, minild_zero_elf_flags, true},
     {"elf64loongarch", ELFCLASS64, ELFDATA2LSB, EM_LOONGARCH, "loongarch64",
-     NULL, 0U, UINT64_C(0x400000), 4096U,
+     NULL, 0U, UINT64_C(0x120000000), 4096U,
      true, true, false, false, false, false,
-     minild_exact_merge_flags, NULL, NULL, NULL,
-     minild_loongarch_apply_static_relocations, NULL, NULL,
-     NULL, NULL, minild_loongarch_v1_elf_flags, false}
+     minild_exact_merge_flags, NULL,
+     minild_loongarch_reserve_static_relocations,
+     minild_loongarch_fill_static_relocations,
+     minild_loongarch_apply_static_relocations,
+     minild_loongarch_destroy_static_relocations, NULL,
+     NULL, NULL, minild_loongarch_v1_elf_flags, true}
 };
 
 static const MiniLdTargetProfile *minild_target_find(const char *emulation) {

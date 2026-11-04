@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # RV32I/ILP32 authentic Picolibc on Linux syscall adapter: five real C stages.
-# GNU GCC -> MiniAS ET_REL -> exactly same input objects -> GNU BFD and MiniLD.
+# Ordinary stages: GNU GCC -> MiniAS ET_REL -> same objects -> GNU BFD/MiniLD.
+# Independent TLS relocation gate: GCC -> GNU GAS ET_REL -> same linkers;
+# MiniAS `%tprel_*` source syntax is independently unsupported for now.
 # GNU's rv64 Linux glibc is NOT an RV32 ILP32 runtime; the existing upstream
 # RV32 Picolibc archives and the project's tested Linux entry are reused.
 set -Eeuo pipefail
@@ -21,7 +23,7 @@ fatal() {
     exit 127
 }
 for tool in "$cc" "$gnu_ld" "$readelf" "$qemu" "$minias" "$minild" \
-            timeout cmp sha256sum; do
+            timeout cmp sha256sum python3; do
     command -v "$tool" >/dev/null 2>&1 || fatal "missing_tool:$tool"
 done
 "$gnu_ld" --version | grep -Fq 'GNU ld' || fatal 'gnu_ld_not_bfd'
@@ -71,12 +73,17 @@ done
 sha256sum "${runtime_objects[@]}" >>"$work/evidence/tools.sha256"
 
 pass_count=0
+tls_pass=0
 failures=()
-for stage in exit control memory multitu io; do
+for stage in tls exit control memory multitu io; do
     dir="$work/$stage"
     mkdir -p "$dir/asm" "$dir/obj" "$dir/gnu" "$dir/mini" "$dir/evidence"
     errors=()
     case "$stage" in
+        tls)
+            sources=("$repo/tests/linker/fixtures/rv32-picolibc-tls-le.c")
+            opt=(-O1 -ftls-model=local-exec)
+            expected='MINILD_RV32_TLS init=74 zero=11 errno=19 status=PASS' ;;
         exit)
             sources=("$repo/tests/assembler/runtime-gcc-ladder/exit.c")
             opt=(-O0); expected='' ;;
@@ -110,21 +117,56 @@ for stage in exit control memory multitu io; do
             errors+=("gcc-S:$name")
             continue
         fi
-        if ! "$minias" --target=riscv -march=rv32i -mabi=ilp32 \
-                -o "$obj" "$asm" \
-                >"$dir/evidence/minias-$name.log" 2>&1; then
-            errors+=("minias:$name")
-            continue
+        if [[ $stage == tls ]]; then
+            # MiniAS does not yet accept GCC's `%tprel_*` assembler syntax.
+            # This separate *linker* TLS gate feeds both linkers one genuine
+            # GNU GAS ET_REL with all local-exec relocations preserved.
+            # Ordinary C stages below still exclusively use MiniAS objects.
+            if ! "$cc" "${target[@]}" -c "$asm" -o "$obj" \
+                    >"$dir/evidence/gnu-as-$name.log" 2>&1; then
+                errors+=("gnu-as-tls:$name")
+                continue
+            fi
+        else
+            if ! "$minias" --target=riscv -march=rv32i -mabi=ilp32 \
+                    -o "$obj" "$asm" \
+                    >"$dir/evidence/minias-$name.log" 2>&1; then
+                errors+=("minias:$name")
+                continue
+            fi
         fi
         objects+=("$obj")
         sha256sum "$source" "$asm" "$obj" \
             >>"$dir/evidence/inputs.sha256"
     done
+    if [[ $stage == tls && ${#objects[@]} -eq 1 ]]; then
+        if ! "$readelf" -Wr "${objects[0]}" \
+                 >"$dir/evidence/tls-relocations.txt" ||
+           ! grep -q 'R_RISCV_TPREL_HI20' \
+                 "$dir/evidence/tls-relocations.txt" ||
+           ! grep -q 'R_RISCV_TPREL_ADD' \
+                 "$dir/evidence/tls-relocations.txt" ||
+           ! grep -q 'R_RISCV_TPREL_LO12_I' \
+                 "$dir/evidence/tls-relocations.txt" ||
+           ! grep -q 'R_RISCV_TPREL_LO12_S' \
+                 "$dir/evidence/tls-relocations.txt"; then
+            errors+=(missing_real_local_exec_tls_relocations)
+        fi
+        if ! "$readelf" -SW "${objects[0]}" \
+                 >"$dir/evidence/tls-sections.txt" ||
+           ! grep -Eq '\.tdata[[:space:]]+PROGBITS' \
+                 "$dir/evidence/tls-sections.txt" ||
+           ! grep -Eq '\.tbss[[:space:]]+NOBITS' \
+                 "$dir/evidence/tls-sections.txt"; then
+            errors+=(missing_initialized_or_zero_tls_sections)
+        fi
+    fi
     if (( ${#objects[@]} != ${#sources[@]} )); then
         errors+=(missing-object)
     else
-        # Same platform CRT/syscall objects, MiniAS C objects and archive
-        # ordering for both GNU BFD and MiniLD; no compiler driver fallback.
+        # Identical platform CRT/syscall objects, app objects and archive
+        # ordering for both GNU BFD and MiniLD; the ordinary five app stages
+        # use MiniAS, and only the isolated TLS gate uses GNU GAS.
         inputs=("${runtime_objects[@]}" "${objects[@]}"
                 --start-group "$libm" "$libc" "$libgcc" --end-group)
         for linker in gnu mini; do
@@ -147,6 +189,34 @@ for stage in exit control memory multitu io; do
                     >"$dir/evidence/$linker-program-headers.txt" ||
                grep -Fq INTERP "$dir/evidence/$linker-program-headers.txt"; then
                 errors+=("invalid-elf:$linker")
+                continue
+            fi
+            # The real Linux/Picolibc entry obtains PT_TLS using AT_PHDR.
+            # ELF headers outside all PT_LOADs make that pointer unreadable.
+            if ! python3 - "$program" \
+                    >"$dir/evidence/$linker-linux-phdr.log" 2>&1 <<'PY'
+from pathlib import Path
+import struct
+import sys
+
+data = Path(sys.argv[1]).read_bytes()
+if data[:6] != b'\x7fELF\x01\x01':
+    raise SystemExit('not_linux_elf32le')
+phoff = struct.unpack_from('<I', data, 28)[0]
+phentsize, phnum = struct.unpack_from('<HH', data, 42)
+if phentsize != 32 or phnum == 0 or phoff + phentsize * phnum > len(data):
+    raise SystemExit('invalid_elf32_phdr_table')
+headers = [struct.unpack_from('<IIIIIIII', data, phoff + 32*i)
+           for i in range(phnum)]
+if not any(h[0] == 1 and h[1] <= phoff and
+           h[1] + h[4] >= phoff + phentsize * phnum for h in headers):
+    raise SystemExit('AT_PHDR_not_backed_by_PT_LOAD')
+tls = [h for h in headers if h[0] == 7]
+if len(tls) != 1 or tls[0][4] > tls[0][5] or tls[0][5] == 0:
+    raise SystemExit('invalid_or_missing_PT_TLS')
+PY
+            then
+                errors+=("linux-phdr-or-tls:$linker")
                 continue
             fi
             result=0
@@ -176,8 +246,13 @@ for stage in exit control memory multitu io; do
         fi
     fi
     if (( ${#errors[@]} == 0 )); then
-        ((pass_count += 1))
-        echo "MINILD_RV32_PICOLIBC_STAGE=PASS stage=$stage gnu_bfd=1 minild=1 qemu=2 parity=1"
+        if [[ $stage == tls ]]; then
+            tls_pass=1
+            echo 'MINILD_RV32_TLS_LE=PASS gnu_as_tls_obj=1 minias_tls_asm=UNSUPPORTED gcc_tprel=1 pt_tls_qemu=2 errno=real_picolibc_tls gnu_bfd_parity=1'
+        else
+            ((pass_count += 1))
+            echo "MINILD_RV32_PICOLIBC_STAGE=PASS stage=$stage gnu_bfd=1 minild=1 qemu=2 parity=1"
+        fi
     else
         failures+=("$stage:${errors[*]}")
         echo "MINILD_RV32_PICOLIBC_STAGE=FAIL stage=$stage reasons=${errors[*]}" >&2
@@ -195,5 +270,5 @@ if (( ${#failures[@]} != 0 )); then
         tee "$work/evidence/summary.txt" >&2
     exit 1
 fi
-echo 'MINILD_RV32_PICOLIBC=PASS passed=5/5 libc=authentic_rv32i_picolibc linux_syscalls=1 gnu_bfd_parity=5' |
+echo "MINILD_RV32_PICOLIBC=PASS passed=5/5 tls_le=$tls_pass libc=authentic_rv32i_picolibc linux_syscalls=1 gnu_bfd_parity=5" |
     tee "$work/evidence/summary.txt"

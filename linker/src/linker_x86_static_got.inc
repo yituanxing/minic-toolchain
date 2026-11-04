@@ -181,6 +181,8 @@ static bool minild_x86_reserve_static_relocations(
         }
 
         if (reloc->type != R_X86_64_GOTPCREL &&
+            reloc->type != R_X86_64_GOTPCRELX &&
+            reloc->type != R_X86_64_REX_GOTPCRELX &&
             reloc->type != R_X86_64_GOTTPOFF) {
             continue;
         }
@@ -190,7 +192,7 @@ static bool minild_x86_reserve_static_relocations(
                     "minic-ld: invalid-x86-static-got-symbol\n");
             return false;
         }
-        if ((reloc->type == R_X86_64_GOTPCREL
+        if ((reloc->type != R_X86_64_GOTTPOFF
                  ? got->slot_offsets : got->tls_slot_offsets)
                 [reloc->symbol] != SIZE_MAX) {
             continue;
@@ -212,7 +214,7 @@ static bool minild_x86_reserve_static_relocations(
                     "minic-ld: x86-static-got-allocation-overflow\n");
             return false;
         }
-        if (reloc->type == R_X86_64_GOTPCREL) {
+        if (reloc->type != R_X86_64_GOTTPOFF) {
             got->slot_offsets[reloc->symbol] = aligned;
         } else {
             got->tls_slot_offsets[reloc->symbol] = aligned;

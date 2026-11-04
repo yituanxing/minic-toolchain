@@ -587,6 +587,82 @@ for testcase in duplicate distinct link_order same_link; do
     done
 done
 
+# GNU AS may carry an extra anonymous STT_SECTION symbol against an SHT_GROUP
+# header.  It describes metadata, not a projected input section or an extra
+# COMDAT signature.  Synthesize that exact ELF edge on the MiniAS fixture as
+# a host-only regression, so an absent cross-GNU-AS cannot hide the failure.
+group_local="$work/same_link-mini-group-local.o"
+group_invalid="$work/same_link-mini-group-invalid.o"
+cp "$work/same_link-mini-same_a.o" "$group_local"
+cp "$group_local" "$group_invalid"
+python3 - "$group_local" "$group_invalid" <<'PY'
+import struct
+import sys
+from pathlib import Path
+
+for output, invalid in ((Path(sys.argv[1]), False),
+                        (Path(sys.argv[2]), True)):
+    image = bytearray(output.read_bytes())
+    if image[:6] != b"\x7fELF\x02\x01":
+        raise SystemExit("group-local fixture needs ELF64LE")
+    shoff = struct.unpack_from("<Q", image, 40)[0]
+    shentsize, count = struct.unpack_from("<HH", image, 58)
+    if shentsize != 64:
+        raise SystemExit("group-local fixture needs ELF64 section headers")
+    groups, symtabs = [], []
+    for index in range(count):
+        kind = struct.unpack_from("<I", image, shoff + index * 64 + 4)[0]
+        if kind == 17:  # SHT_GROUP
+            groups.append(index)
+        elif kind == 2:  # SHT_SYMTAB
+            symtabs.append(index)
+    if len(groups) != 1 or len(symtabs) != 1:
+        raise SystemExit("unexpected group-local fixture input")
+    header = shoff + symtabs[0] * 64
+    offset, length = struct.unpack_from("<QQ", image, header + 24)
+    entry_size = struct.unpack_from("<Q", image, header + 56)[0]
+    signature = struct.unpack_from("<I", image,
+                                   shoff + groups[0] * 64 + 44)[0]
+    if entry_size != 24 or length % 24 != 0:
+        raise SystemExit("unexpected group-local symbol table")
+    for index in range(1, length // 24):
+        entry = offset + index * 24
+        name, info = struct.unpack_from("<IB", image, entry)
+        value, size = struct.unpack_from("<QQ", image, entry + 8)
+        if index != signature and name == 0 and info == 3 and \
+           value == 0 and size == 0:  # local STT_SECTION
+            struct.pack_into("<H", image, entry + 6, groups[0])
+            if invalid:
+                image[entry + 4] = 0  # NOTYPE is not a section symbol
+            output.write_bytes(image)
+            break
+    else:
+        raise SystemExit("no disposable section symbol in fixture")
+PY
+
+group_objects=("$group_local" "$work/same_link-mini-same_b.o"
+               "$work/same_link-mini-same_entry.o")
+group_base="$work/same_link-mini-group-local"
+"$MINILD" -melf64lriscv -static --gc-sections -e _start \
+    -o "$group_base.direct.elf" "${group_objects[@]}"
+python3 "$work/check.py" same_link final "$group_base.direct.elf"
+"$MINILD" -melf64lriscv -r -o "$group_base.r.o" "${group_objects[@]}"
+python3 "$work/check.py" same_link reloc "$group_base.r.o"
+"$MINILD" -melf64lriscv -r -o "$group_base.rr.o" "$group_base.r.o"
+python3 "$work/check.py" same_link reloc "$group_base.rr.o"
+"$MINILD" -melf64lriscv -static --gc-sections -e _start \
+    -o "$group_base.elf" "$group_base.rr.o"
+python3 "$work/check.py" same_link final "$group_base.elf"
+if "$MINILD" -melf64lriscv -r -o "$work/group-invalid.o" \
+    "$group_invalid" "$work/same_link-mini-same_b.o" \
+    >"$work/group-invalid.stdout" 2>"$work/group-invalid.stderr" || \
+   ! grep -q 'unsupported-symbol-section' "$work/group-invalid.stderr"; then
+    echo "MINILD_AS_GROUP_SYMBOL=FAIL accepted malformed group-local symbol" >&2
+    failures=$((failures + 1))
+else
+    echo "MINILD_AS_GROUP_SYMBOL=PASS metadata_local=ignored stages=4 malformed=fail_closed"
+fi
+
 if (( failures )); then
     echo "MINILD_AS_SECTION_CONTRACT=BLOCKED failures=$failures gnu_oracle=$gnu_available" >&2
     exit 1

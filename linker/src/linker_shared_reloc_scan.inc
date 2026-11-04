@@ -27,6 +27,16 @@ shared_scan_relocation_requirements(MiniLdState *state,
             kind == MINILD_TARGET_RELOC_ALIGN) {
             continue;
         }
+        /* Static IE GOT slots and LE instruction immediates encode TP-
+         * relative offsets.  ET_DYN has different TLS binding rules and
+         * must not silently treat either as ordinary GOT / final S + A. */
+        if (kind == MINILD_TARGET_RELOC_TLS_IE ||
+            kind == MINILD_TARGET_RELOC_TLS_LE) {
+            fprintf(state->diagnostics,
+                    "minic-ld: unsupported-shared-tls-static-relocation:%u\n",
+                    reloc->type);
+            return MINILD_SHARED_RELOC_SCAN_INVALID;
+        }
         if (kind == MINILD_TARGET_RELOC_GOT) {
             if (reloc->symbol == SIZE_MAX ||
                 reloc->symbol >= state->resolver.count ||

@@ -333,6 +333,13 @@ static MiniLdTargetRelocClass minild_target_reloc_class(uint32_t type) {
         return MINILD_TARGET_RELOC_CALL;
     case R_RISCV_GOT_HI20:
         return MINILD_TARGET_RELOC_GOT;
+    case R_RISCV_TLS_GOT_HI20:
+        return MINILD_TARGET_RELOC_TLS_IE;
+    case R_RISCV_TPREL_HI20:
+    case R_RISCV_TPREL_LO12_I:
+    case R_RISCV_TPREL_LO12_S:
+    case R_RISCV_TPREL_ADD:
+        return MINILD_TARGET_RELOC_TLS_LE;
     case R_RISCV_TLS_GD_HI20:
         return MINILD_TARGET_RELOC_TLS_GD;
     default:
@@ -356,6 +363,8 @@ static bool minild_target_reloc_at_final_layout(uint32_t type) {
     case MINILD_TARGET_RELOC_FINAL:
     case MINILD_TARGET_RELOC_PCREL_LO:
     case MINILD_TARGET_RELOC_GOT:
+    case MINILD_TARGET_RELOC_TLS_IE:
+    case MINILD_TARGET_RELOC_TLS_LE:
     case MINILD_TARGET_RELOC_TLS_GD:
         return true;
     default:
@@ -516,6 +525,7 @@ static bool minild_target_apply_final_instruction(
     case R_RISCV_CALL:
     case R_RISCV_CALL_PLT:
     case R_RISCV_GOT_HI20:
+    case R_RISCV_TLS_GOT_HI20:
     case R_RISCV_TLS_GD_HI20:
     case R_RISCV_PCREL_HI20:
     case R_RISCV_BRANCH:
@@ -537,6 +547,7 @@ static bool minild_target_apply_final_instruction(
                static_patch_itype(source, reloc->offset + 4U,
                                   riscv_lo12(delta), diagnostics);
     case R_RISCV_GOT_HI20:
+    case R_RISCV_TLS_GOT_HI20:
     case R_RISCV_TLS_GD_HI20:
     case R_RISCV_PCREL_HI20:
         /* ET_EXEC has no TLS GD descriptor reservation.  The type may be
@@ -555,14 +566,36 @@ static bool minild_target_apply_final_instruction(
                      reloc->offset, delta);
         return true;
     case R_RISCV_HI20:
+    case R_RISCV_TPREL_HI20:
         return static_patch_utype(source, reloc->offset,
                                   riscv_hi20(target), diagnostics);
     case R_RISCV_LO12_I:
+    case R_RISCV_TPREL_LO12_I:
         return static_patch_itype(source, reloc->offset,
                                   riscv_lo12(target), diagnostics);
     case R_RISCV_LO12_S:
+    case R_RISCV_TPREL_LO12_S:
         return static_patch_stype(source, reloc->offset,
                                   riscv_lo12(target), diagnostics);
+    case R_RISCV_TPREL_ADD: {
+        uint32_t instruction;
+
+        /* TPREL_ADD marks the add rd, rs, tp instruction.  It does not
+         * contribute an immediate and must preserve the original opcode. */
+        if (source->type == SHT_NOBITS || reloc->offset > SIZE_MAX ||
+            !range_ok((size_t)reloc->offset, 4U, source->size)) {
+            fprintf(diagnostics, "minic-ld: riscv-tprel-add-out-of-range\n");
+            return false;
+        }
+        instruction = load_u32le(source->data + (size_t)reloc->offset);
+        if ((instruction & UINT32_C(0xfe00707f)) != UINT32_C(0x33) ||
+            (((instruction >> 15U) & 31U) != 4U &&
+             ((instruction >> 20U) & 31U) != 4U)) {
+            fprintf(diagnostics, "minic-ld: invalid-R_RISCV_TPREL_ADD\n");
+            return false;
+        }
+        return true;
+    }
     case R_RISCV_BRANCH:
         return static_patch_branch(source, reloc->offset, delta, diagnostics);
     case R_RISCV_JAL:

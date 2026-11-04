@@ -4,9 +4,44 @@
 typedef struct MiniLdRiscvStaticGot {
     size_t section;
     size_t *slot_offsets;
+    /* IE TLS slots contain S - TP, not the ordinary GOT's absolute S.
+     * A symbol may legitimately need both representations. */
+    size_t *tls_slot_offsets;
     size_t symbol_count;
     bool present;
 } MiniLdRiscvStaticGot;
+
+/* RISC-V TLS variant I initializes tp to the beginning of the PT_TLS
+ * image.  Use the same projected TLS base that the ELF writer materializes,
+ * rather than the symbol's absolute VMA or an independently counted span. */
+static bool minild_riscv_static_tls_offset(
+    MiniLdState *state, const MiniLdLayout *layout,
+    size_t symbol_index, uint64_t *offset_out) {
+    const MiniLdResolvedSymbol *symbol;
+    MiniLdTlsProjection tls;
+    uint64_t address;
+
+    if (symbol_index >= state->resolver.count) {
+        fprintf(state->diagnostics, "minic-ld: riscv-tls-symbol-out-of-range\n");
+        return false;
+    }
+    symbol = &state->resolver.entries[symbol_index];
+    minild_layout_project_tls(state, layout, &tls);
+    if (!tls.valid_extents || !tls.has_nonempty_section ||
+        ELF64_ST_TYPE(symbol->info) != STT_TLS ||
+        symbol->section < 0 ||
+        (size_t)symbol->section >= state->work.count ||
+        (state->work.sections[symbol->section].flags & SHF_TLS) == 0U ||
+        !minild_layout_resolve_symbol(state, layout, symbol_index, &address) ||
+        address < tls.block_base || address > tls.memory_end) {
+        fprintf(state->diagnostics,
+                "minic-ld: invalid-riscv-static-tls-symbol:%s\n",
+                symbol->name);
+        return false;
+    }
+    *offset_out = address - tls.block_base;
+    return true;
+}
 
 static void minild_riscv_destroy_static_relocations(
     MiniLdStaticTargetPlan *plan) {
@@ -16,6 +51,7 @@ static void minild_riscv_destroy_static_relocations(
         return;
     }
     free(got->slot_offsets);
+    free(got->tls_slot_offsets);
     free(got);
     plan->target_data = NULL;
 }
@@ -38,32 +74,54 @@ static bool minild_riscv_reserve_static_relocations(
     plan->target_data = got;
     got->section = SIZE_MAX;
     got->symbol_count = state->resolver.count;
+    if (got->symbol_count > SIZE_MAX / sizeof(*got->slot_offsets)) {
+        fprintf(state->diagnostics,
+                "minic-ld: riscv-static-got-symbol-count-overflow\n");
+        return false;
+    }
     got->slot_offsets = malloc((got->symbol_count == 0U ? 1U : got->symbol_count) *
                                sizeof(*got->slot_offsets));
-    if (got->slot_offsets == NULL) {
+    got->tls_slot_offsets = malloc(
+        (got->symbol_count == 0U ? 1U : got->symbol_count) *
+        sizeof(*got->tls_slot_offsets));
+    if (got->slot_offsets == NULL || got->tls_slot_offsets == NULL) {
         fprintf(state->diagnostics, "minic-ld: out-of-memory:static-got\n");
         return false;
     }
     for (i = 0U; i < got->symbol_count; ++i) {
         got->slot_offsets[i] = SIZE_MAX;
+        got->tls_slot_offsets[i] = SIZE_MAX;
     }
 
     for (i = 0U; i < state->relocations.count; ++i) {
         MiniLdReloc *reloc = &state->relocations.entries[i];
         MiniLdSection *section;
+        MiniLdTargetRelocClass kind = minild_target_reloc_class(reloc->type);
+        size_t *offsets;
         size_t aligned;
 
-        if (minild_target_reloc_class(reloc->type) !=
-            MINILD_TARGET_RELOC_GOT) {
+        if (kind != MINILD_TARGET_RELOC_GOT &&
+            kind != MINILD_TARGET_RELOC_TLS_IE) {
             continue;
         }
+        offsets = kind == MINILD_TARGET_RELOC_TLS_IE
+                      ? got->tls_slot_offsets : got->slot_offsets;
         if (reloc->symbol == SIZE_MAX ||
             reloc->symbol >= got->symbol_count ||
             reloc->addend != 0) {
-            fprintf(state->diagnostics, "minic-ld: invalid-R_RISCV_GOT_HI20\n");
+            fprintf(state->diagnostics,
+                    "minic-ld: invalid-riscv-static-got-relocation:%u\n",
+                    reloc->type);
             return false;
         }
-        if (got->slot_offsets[reloc->symbol] != SIZE_MAX) {
+        if (kind == MINILD_TARGET_RELOC_TLS_IE &&
+            ELF64_ST_TYPE(state->resolver.entries[reloc->symbol].info) !=
+                STT_TLS) {
+            fprintf(state->diagnostics,
+                    "minic-ld: riscv-tls-ie-non-tls-symbol\n");
+            return false;
+        }
+        if (offsets[reloc->symbol] != SIZE_MAX) {
             continue;
         }
         if (!got->present) {
@@ -85,7 +143,7 @@ static bool minild_riscv_reserve_static_relocations(
                     "minic-ld: static-got-allocation-overflow\n");
             return false;
         }
-        got->slot_offsets[reloc->symbol] = aligned;
+        offsets[reloc->symbol] = aligned;
     }
     return true;
 }
@@ -112,23 +170,32 @@ static bool minild_riscv_fill_static_relocations(
     section = &state->work.sections[got->section];
 
     for (i = 0U; i < got->symbol_count; ++i) {
-        uint64_t value;
+        size_t mode;
 
-        if (got->slot_offsets[i] == SIZE_MAX) {
-            continue;
-        }
-        if (!minild_layout_resolve_symbol(state, layout, i, &value) ||
-            (slot_width == 4U && value > UINT32_MAX) ||
-            !range_ok(got->slot_offsets[i], slot_width, section->size)) {
-            fprintf(state->diagnostics,
-                    "minic-ld: invalid-riscv-static-got-value-or-range\n");
-            return false;
-        }
-        if (slot_width == 4U) {
-            store_u32le(section->data + got->slot_offsets[i],
-                        (uint32_t)value);
-        } else {
-            store_u64le(section->data + got->slot_offsets[i], value);
+        for (mode = 0U; mode < 2U; ++mode) {
+            bool tls = mode != 0U;
+            size_t offset = tls ? got->tls_slot_offsets[i] :
+                                  got->slot_offsets[i];
+            uint64_t value;
+
+            if (offset == SIZE_MAX) {
+                continue;
+            }
+            if (!(tls ? minild_riscv_static_tls_offset(
+                             state, layout, i, &value) :
+                         minild_layout_resolve_symbol(
+                             state, layout, i, &value)) ||
+                (slot_width == 4U && value > UINT32_MAX) ||
+                !range_ok(offset, slot_width, section->size)) {
+                fprintf(state->diagnostics,
+                        "minic-ld: invalid-riscv-static-got-value-or-range\n");
+                return false;
+            }
+            if (slot_width == 4U) {
+                store_u32le(section->data + offset, (uint32_t)value);
+            } else {
+                store_u64le(section->data + offset, value);
+            }
         }
     }
     return true;

@@ -44,6 +44,27 @@ static bool minild_riscv_apply_static_relocations(
         }
         target = minild_target_signed_bits(operands.target_bits);
 
+        /* Local-exec TLS relocations encode S - TP (+ A), not S + A.  The
+         * TPREL_ADD record is a non-mutating binding marker for the add tp
+         * instruction, which is verified by the target instruction writer. */
+        if (reloc->type == R_RISCV_TPREL_HI20 ||
+            reloc->type == R_RISCV_TPREL_LO12_I ||
+            reloc->type == R_RISCV_TPREL_LO12_S ||
+            reloc->type == R_RISCV_TPREL_ADD) {
+            uint64_t tls_offset;
+
+            if (reloc->symbol == SIZE_MAX ||
+                !minild_riscv_static_tls_offset(
+                    state, layout, reloc->symbol, &tls_offset) ||
+                (state->target->elf_class == ELFCLASS32 &&
+                 tls_offset > UINT32_MAX)) {
+                fprintf(state->diagnostics,
+                        "minic-ld: invalid-riscv-static-tprel\n");
+                goto fail;
+            }
+            target = minild_target_addend_bits(tls_offset, reloc->addend);
+        }
+
         if (kind == MINILD_TARGET_RELOC_ARITHMETIC) {
             if (state->target->elf_class == ELFCLASS32 &&
                 (reloc->type == R_RISCV_ADD64 ||
@@ -82,20 +103,40 @@ static bool minild_riscv_apply_static_relocations(
                                          kind, (uint64_t)target);
             break;
         case MINILD_TARGET_RELOC_GOT:
+        case MINILD_TARGET_RELOC_TLS_IE: {
+            size_t offset;
+
+            if (reloc->symbol >= got->symbol_count ||
+                reloc->symbol == SIZE_MAX) {
+                fprintf(state->diagnostics,
+                        "minic-ld: invalid-riscv-static-got-symbol\n");
+                goto fail;
+            }
+            offset = kind == MINILD_TARGET_RELOC_TLS_IE
+                         ? got->tls_slot_offsets[reloc->symbol]
+                         : got->slot_offsets[reloc->symbol];
             if (!got->present || reloc->symbol == SIZE_MAX ||
                 reloc->symbol >= got->symbol_count ||
-                got->slot_offsets[reloc->symbol] == SIZE_MAX ||
+                offset == SIZE_MAX ||
+                got->section >= state->work.count ||
+                layout->work[got->section].vaddr > UINT64_MAX - offset ||
                 reloc->addend != 0) {
                 fprintf(state->diagnostics,
-                        "minic-ld: invalid-R_RISCV_GOT_HI20-slot\n");
+                        "minic-ld: invalid-riscv-static-got-slot:%u\n",
+                        reloc->type);
                 goto fail;
             }
             target = minild_target_addend_bits(
                 layout->work[got->section].vaddr +
-                    (uint64_t)got->slot_offsets[reloc->symbol],
+                    (uint64_t)offset,
                 0);
-            /* Fall through to the target-level final instruction writer. */
-            /* FALLTHROUGH */
+            if (!minild_target_apply_final_instruction(
+                    &pairs, section, reloc, target, operands.place,
+                    false, operands.symbol_name, state->diagnostics)) {
+                goto fail;
+            }
+            break;
+        }
         default:
             if (!minild_target_apply_final_instruction(
                     &pairs, section, reloc, target, operands.place,

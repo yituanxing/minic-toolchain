@@ -734,6 +734,24 @@ check-minild-rv32-static-runtime: $(MINIAS_BINARY) $(MINILD_BINARY)
 	MINILD="$(abspath $(MINILD_BINARY))" \
 	bash tests/linker/probe-rv32-static-runtime.sh
 
+.PHONY: check-minild-riscv-static-tls
+check-minild-riscv-static-tls: $(MINIAS_BINARY) $(MINILD_BINARY)
+	MINIAS="$(abspath $(MINIAS_BINARY))" \
+	MINILD="$(abspath $(MINILD_BINARY))" \
+	bash tests/linker/probe-riscv-static-tls.sh
+
+.PHONY: check-minild-aarch64-static-got
+check-minild-aarch64-static-got: $(MINIAS_BINARY) $(MINILD_BINARY)
+	MINIAS="$(abspath $(MINIAS_BINARY))" \
+	MINILD="$(abspath $(MINILD_BINARY))" \
+	bash tests/linker/probe-aarch64-static-got.sh
+
+.PHONY: check-minild-loongarch-static-relocs
+check-minild-loongarch-static-relocs: $(MINIAS_BINARY) $(MINILD_BINARY)
+	MINIAS="$(abspath $(MINIAS_BINARY))" \
+	MINILD="$(abspath $(MINILD_BINARY))" \
+	bash tests/linker/probe-loongarch-static-relocs.sh
+
 .PHONY: check-minild-rv32-picolibc-ladder
 check-minild-rv32-picolibc-ladder: $(MINIAS_BINARY) $(MINILD_BINARY)
 	MINIAS="$(abspath $(MINIAS_BINARY))" \

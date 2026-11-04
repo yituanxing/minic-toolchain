@@ -310,6 +310,13 @@ for name, machine, flags in (('x86_64', 62, 0),
                f'machine={elf.machine} flags={elf.flags:#x}')
         ensure(elf.entry > 0 and any(p[0] == 1 and p[5] > 0 for p in elf.programs),
                f'missing_loadable_entry={name}:{stage}')
+        # Linux supplies AT_PHDR into the mapped program-header table. The
+        # static CRT/TLS loader must not receive a pointer to an unmapped
+        # file header (GNU BFD maps these bytes in the first PT_LOAD).
+        ensure(any(p[0] == 1 and p[2] == 0 and
+                   p[5] >= 64 + 56 * len(elf.programs)
+                   for p in elf.programs),
+               f'unmapped_static_program_headers={name}:{stage}')
         ensure(all(s[1] != 4 or s[5] == 0 for s in elf.sections),
                f'unresolved_relocations={name}:{stage}')
         for symbol in ('_start', 'fixture_ptr', 'fixture_target',
@@ -518,6 +525,14 @@ for name in x86_64 aarch64 loongarch64; do
     got_mode_diagnostic="unsupported-static-relocation:$machine:"
     if [[ $name == x86_64 ]]; then
         got_mode_diagnostic='missing-x86-static-tls-block'
+    elif [[ $name == aarch64 ]]; then
+        # AArch64 GOT_PAGE is now supported for valid ADRP instructions;
+        # this mutation targets .data bytes, which must still fail closed.
+        got_mode_diagnostic='nonriscv-relocation-overflow-or-encoding:183:311'
+    elif [[ $name == loongarch64 ]]; then
+        # LoongArch GOT_HI20 likewise requires a matching machine opcode;
+        # arbitrary .data bytes are not an instruction relocation site.
+        got_mode_diagnostic='loongarch-instruction-reloc-in-nonexec:75'
     fi
     reject_static "$name-got-mode-leak" "$name" \
         "$got_mode_diagnostic" \

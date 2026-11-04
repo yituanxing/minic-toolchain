@@ -31,10 +31,12 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
-      - name: Install Linux user emulators and RV32 GNU BFD oracle
+      - name: Install Linux user emulators and GNU BFD cross-target oracles
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq qemu-user binutils-riscv64-linux-gnu
+          sudo apt-get install -y -qq qemu-user \
+            binutils-riscv64-linux-gnu binutils-aarch64-linux-gnu \
+            binutils-loongarch64-linux-gnu
           command -v qemu-aarch64
           command -v qemu-loongarch64
           command -v qemu-riscv32
@@ -52,6 +54,9 @@ jobs:
             check-minild-multitarget-relocatable \
             check-minild-multitarget-static \
             check-minild-rv32-static-runtime \
+            check-minild-riscv-static-tls \
+            check-minild-aarch64-static-got \
+            check-minild-loongarch-static-relocs \
             check-minild-x86-crt-got-relax \
             check-minild-target-default-symbols \
             check-minild-target-shared-abi-boundary \

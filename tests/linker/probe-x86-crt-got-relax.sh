@@ -134,4 +134,38 @@ done
 for channel in stdout stderr exit; do
   cmp "$work/gnu-ifunc.$channel" "$work/mini-ifunc.$channel"
 done
-echo 'MINILD_X86_CRT=PASS crt_symtabless=1 gotpcrelx=2 gotpcrel=1 weak_undef=1 gnu_ld_parity=3 runtime=6 ifunc_irelative=1 ifunc_resolver_side_effect=1 ifunc_got_rejected=1'
+
+# GCC/glibc versions can emit REX_GOTPCRELX for non-MOV operations. The
+# relocation promises a valid GOT displacement, not a relaxable opcode. GNU
+# BFD may also relax ADD/XOR to an immediate; preserving the original
+# RIP-relative GOT operand is equally correct if its slot is materialized.
+# Cover both X forms, direct MOV relaxation and a weak undefined symbol.
+as --64 -o "$work/gotpcrelx-mixed.o" \
+  "$repo/tests/linker/fixtures/x86-gotpcrelx-mixed.s"
+readelf -Wr "$work/gotpcrelx-mixed.o" >"$work/gotpcrelx-mixed.relocations"
+if (( $(grep -Fc R_X86_64_REX_GOTPCRELX "$work/gotpcrelx-mixed.relocations") < 4 )) ||
+   ! grep -Fq R_X86_64_GOTPCRELX "$work/gotpcrelx-mixed.relocations"; then
+  echo 'MINILD_X86_CRT=FAIL mixed_gotpcrelx_fixture_missing_relocations' >&2
+  exit 1
+fi
+for flavor in gnu mini; do
+  if [[ $flavor == gnu ]]; then linker=ld.bfd; else linker=$minild; fi
+  "$linker" -m elf_x86_64 -static -e _start \
+    -o "$work/$flavor-gotpcrelx-mixed" "$work/gotpcrelx-mixed.o"
+  status=0
+  timeout --signal=TERM 10s "$work/$flavor-gotpcrelx-mixed" \
+    >"$work/$flavor-gotpcrelx-mixed.stdout" \
+    2>"$work/$flavor-gotpcrelx-mixed.stderr" || status=$?
+  printf '%s\n' "$status" >"$work/$flavor-gotpcrelx-mixed.exit"
+  if (( status != 0 )); then
+    echo "MINILD_X86_CRT=FAIL mixed_gotpcrelx_runtime=$flavor exit=$status" >&2
+    exit 1
+  fi
+done
+readelf -SW "$work/mini-gotpcrelx-mixed" >"$work/mini-gotpcrelx-mixed.sections"
+grep -Eq '\] \.got[[:space:]]+PROGBITS' "$work/mini-gotpcrelx-mixed.sections"
+for channel in stdout stderr exit; do
+  cmp "$work/gnu-gotpcrelx-mixed.$channel" \
+      "$work/mini-gotpcrelx-mixed.$channel"
+done
+echo 'MINILD_X86_CRT=PASS crt_symtabless=1 gotpcrelx=2 gotpcrel=1 weak_undef=1 gnu_ld_parity=4 runtime=8 ifunc_irelative=1 ifunc_resolver_side_effect=1 ifunc_got_rejected=1 mixed_rex_nonmov=2 mixed_nonrex=1 weak_got=1 far_symbol_got=1'

@@ -4,6 +4,8 @@ name: MiniLD GCC Runtime Ladder (Exploratory)
 # A red job is evidence of a missing MiniLD capability, not a regression
 # of the already accepted MiniAS -> GNU LD path.  Changing this workflow
 # triggers one staged cohort; ordinary linker edits do not repeatedly run it.
+# This cohort also verifies the target's TLS/GOT/branch relocation family
+# before attempting the full GCC+libc five-stage GNU BFD differential.
 on:
   workflow_dispatch:
   push:
@@ -54,6 +56,14 @@ jobs:
         run: |
           make -j4 MODE=release CFLAGS=-Werror \
             build/release/bin/minic-as build/release/bin/minic-ld
+      - name: Verify ISA-specific static relocation family
+        run: |
+          case '${{ matrix.arch }}' in
+            x86_64) make MODE=release CFLAGS=-Werror check-minild-x86-crt-got-relax ;;
+            riscv32|riscv64) make MODE=release CFLAGS=-Werror check-minild-riscv-static-tls ;;
+            aarch64) make MODE=release CFLAGS=-Werror check-minild-aarch64-static-got ;;
+            loongarch64) make MODE=release CFLAGS=-Werror check-minild-loongarch-static-relocs ;;
+          esac
       - name: Run independent five-stage real-C link/runtime probes
         env:
           CC: ${{ matrix.cc }}
