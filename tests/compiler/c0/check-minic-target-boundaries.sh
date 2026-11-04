@@ -60,6 +60,19 @@ for owner in src/core/module_ir.h src/core/module_ir.c \
 done
 has src/compiler/global_payload.h 'MinicSourceGlobalPayloadKind'
 has src/compiler/global_payload.c 'MINIC_SOURCE_GLOBAL_PAYLOAD_ZERO'
+# A live, source-free Module definition must be checked once for its typed
+# object extent and physical BSS/zero/tentative data facts before any target
+# sees it. Incomplete externs and dead objects retain their existing bypass.
+has src/core/module_ir.c 'module_live_global_layout_valid('
+has src/core/module_ir.c 'module_live_global_definition_valid('
+has src/core/module_ir.c 'global->storage_size == declared->size'
+has src/core/module_ir.c 'tail->value.array.is_complete'
+has src/core/module_ir.c 'global->is_tentative || global->is_zero_initialized || bss'
+has src/core/module_ir.c '!module_live_global_layout_valid(module->type_context, type, global)'
+has tests/core/module_ir_fragment_contract_test.c 'verify_source_free_global_definition_contract('
+# Explicit `.bss.*` spelling alone does not imply @nobits on RV targets.
+lacks src/core/module_ir.c 'minic_module_elf_bss_section('
+has src/target/riscv64/global_emit.c 'rv64_module_definition_payload_valid('
 # Module symbols have one alias identity (target index + canonical target
 # name in the same Module), not a second owned alias spelling or boolean.
 # Ingress may still retain C aliases while resolving these Core identities.

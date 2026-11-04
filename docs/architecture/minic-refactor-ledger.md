@@ -3314,3 +3314,58 @@ zero/tentative facts with nonzero BITS or relocations. These preexisting
 producer-contract questions are deliberately not papered over by new C
 cardinality fields or a P65-only target-specific compatibility layer. Their
 implementation needs a separate five-ISA negative producer matrix.
+
+## IR-P66 — Seal live Module global layout and definition semantics once (2026-11-04)
+
+**Source-independent Core contract:** `minic_core_module_verify` now requires
+every materialized non-extern global to occupy exactly its declared CoreType
+extent with at least that type's alignment. The one legal larger extent is a
+complete non-union record whose **last Core field** is an incomplete array:
+the additional byte length must be a whole number of complete, positive-size
+element extents. This retains GNU flexible-record static initializers (an
+8-byte record with three four-byte tail elements emits a 20-byte object),
+without accepting a forged complete `int[4]` CoreType of 16 bytes as a
+zero-byte definition. Complete zero-length arrays and empty records retain
+genuine zero-byte definitions. Qualified Core type wrappers are peeled only
+to inspect the underlying field shape; declared alignment remains effective.
+Dead/pruned objects, extern declarations, aliases, incomplete declarations,
+and TLS target capability policy are not rewritten as initialized storage.
+
+**Definition/ELF facts:** Tentative and explicit-zero definition flags are
+mutually exclusive; tentative storage has no relocation references and no
+nonzero materialized numeric bits. `is_zero_initialized` permits symbolic
+RELOCATION fragments: `int *p=&x`, a pointer-sized integer cast of `&x`, and
+string-literal addresses intentionally have zero source numeric slots plus
+a real linker relocation. Only their numeric BITS fragments must serialize
+to zero. The Module default BSS section independently requires zero numeric
+bytes and no relocation, even for explicit `{0}` records whose generic
+zero-initialization flag is false. This rule does **not** infer ELF section
+type from `section_name`: RV32/RV64 accept explicitly named `.bss.*` with
+nonzero scalar bytes or relocations as GNU `@progbits`, whereas LP64 direct
+targets separately enforce their `@nobits` admission. Fragment byte coverage
+and ordered relocation/reference identities are verified before these new
+semantic facts, with no source C cardinality, per-architecture shadow verifier,
+or ELF directive introduced into Core.
+
+**Direct emitter trust boundary:** The production backend entry verifies
+the entire sealed Module before dispatching into the five target writers.
+RV64's independently callable `minic_riscv64_emit_module_global` accepts a
+`finalized` flag without re-running that global check; its existing narrow
+duplicate zero/tentative admission guard remains as direct-entry defense in
+depth. Deleting that guard would expand direct-API admission for a forged
+finalized Module. Simplifying it is a separate interface-contract decision,
+not part of this source-independent verifier migration.
+
+**P66 focused evidence:** A new independent Core Module definition matrix
+exercises matching/forged array and scalar extents, underalignment,
+nonmultiple flexible tails, complete zero extents, weak tentative and zero
+definitions, zero-tagged symbolic relocation, nonzero numeric payload,
+default BSS contradictions, explicit `.bss.*` target ownership, extern
+incomplete type and dead objects. The Core Module contract compiles and runs
+under strict `-Werror`; the existing five-target output-transaction probe
+passes its own strict compile and runtime. RV32/RV64 GlobalPlan source
+probes, x86 GNU-native GlobalPlan, and five-target Linux global section
+source smoke all PASS. The frozen nine-shape P64 RV32/RV64 GNU assembly
+oracles match the P66 compiler output byte-for-byte. This is **not** a
+full Linux compile, GNU ELF32/ELF64 cross-architecture link or QEMU P1
+recertification; those remain separate target runtime milestones.

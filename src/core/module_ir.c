@@ -315,6 +315,71 @@ static bool module_live_global_relocations_match(
     return reference_index == global->reference_count;
 }
 
+/* A live object owns precisely its typed extent. The sole extensible shape
+ * is a complete, non-union record with a final incomplete array member:
+ * those storage-only tail elements are materialized beyond sizeof(record).
+ * This predicate consumes sealed Core types, never source initializer slots. */
+static bool module_live_global_layout_valid(
+    const MinicCoreTypeContext *types, const MinicCoreType *declared,
+    const MinicCoreModuleGlobal *global) {
+    const MinicCoreType *base, *tail, *element;
+    const MinicCoreRecordField *last;
+    if (types == NULL || declared == NULL || global == NULL ||
+        !declared->has_layout || declared->alignment == 0U ||
+        global->storage_alignment < declared->alignment)
+        return false;
+    base = minic_core_type_get(types, minic_core_type_unqualified(
+        types, global->core_type_id));
+    if (base == NULL || !base->has_layout ||
+        global->storage_alignment < base->alignment)
+        return false;
+    if (global->storage_size == declared->size) return true;
+    if (global->storage_size < declared->size ||
+        base->kind != MINIC_CORE_TYPE_RECORD ||
+        !base->value.record.is_complete || base->value.record.is_union ||
+        base->value.record.field_count == 0U ||
+        base->value.record.fields == NULL)
+        return false;
+    last = &base->value.record.fields[base->value.record.field_count - 1U];
+    tail = minic_core_type_get(types, minic_core_type_unqualified(
+        types, last->type_id));
+    if (tail == NULL || tail->kind != MINIC_CORE_TYPE_ARRAY ||
+        tail->value.array.is_complete || tail->value.array.count != 0U)
+        return false;
+    element = minic_core_type_get(types, minic_core_type_unqualified(
+        types, tail->value.array.element));
+    return element != NULL && element->has_layout && element->size != 0U &&
+        (global->storage_size - declared->size) % element->size == 0U;
+}
+
+/* Only numeric bits are constrained by the zero-definition marker: a
+ * pointer/integer initialized to a symbol legitimately carries a relocation
+ * while its source scalar initializer slots remain zero. Tentative objects,
+ * in contrast, cannot carry a relocation at all. Default BSS also requires
+ * physical zero bytes, independently of a user-specified section name. */
+static bool module_live_global_definition_valid(
+    const MinicCoreModuleGlobal *global) {
+    const bool bss = global->default_section == MINIC_CORE_MODULE_SECTION_BSS;
+    size_t index;
+    if (global->is_tentative &&
+        (global->is_zero_initialized || global->reference_count != 0U))
+        return false;
+    for (index = 0U; index < global->fragment_count; ++index) {
+        const MinicCoreModuleFragment *fragment = &global->fragments[index];
+        if (fragment->kind == MINIC_CORE_MODULE_FRAGMENT_RELOCATION) {
+            if (global->is_tentative || bss) return false;
+        } else if (fragment->kind == MINIC_CORE_MODULE_FRAGMENT_BITS &&
+                   (global->is_tentative || global->is_zero_initialized || bss)) {
+            const uint64_t visible_bits = fragment->byte_count == 8U
+                ? fragment->bits
+                : fragment->bits & ((UINT64_C(1) <<
+                                      (8U * fragment->byte_count)) - UINT64_C(1));
+            if (visible_bits != 0U) return false;
+        }
+    }
+    return true;
+}
+
 bool minic_core_module_verify(const MinicCoreModule *module) {
     size_t index;
     if (module == NULL || !module->finalized || module->type_context == NULL ||
@@ -380,7 +445,9 @@ bool minic_core_module_verify(const MinicCoreModule *module) {
             return false;
         if (!type->has_layout || !valid_power_two(global->storage_alignment) ||
             !minic_core_module_global_fragments_valid(global) ||
-            !module_live_global_relocations_match(module, global)) return false;
+            !module_live_global_relocations_match(module, global) ||
+            !module_live_global_layout_valid(module->type_context, type, global) ||
+            !module_live_global_definition_valid(global)) return false;
     }
     for (index = 0U; index < module->function_count; ++index) {
         const MinicCoreModuleFunctionSymbol *symbol = &module->function_symbols[index];
