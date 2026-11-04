@@ -35,6 +35,13 @@ static bool minild_layout_resolve_symbol(MiniLdState *state,
                 symbol->name);
         return false;
     }
+    if (symbol->value >
+        UINT64_MAX - layout->work[symbol->section].vaddr) {
+        fprintf(state->diagnostics,
+                "minic-ld: relocation-symbol-address-overflow:%s\n",
+                symbol->name);
+        return false;
+    }
     *value_out = layout->work[symbol->section].vaddr + symbol->value;
     return true;
 }

@@ -223,7 +223,7 @@ done
 # syntax, neutralize only its HI relocation in the temporary ELF fixture.
 # The remaining LO references a valid anchor, but no matching HI survives.
 python3 - "$work/fixups.o" "$work/missing-pcrel.o" \
-    "$work/overflow.o" "$work/dead.o" <<'PY'
+    "$work/overflow.o" "$work/dead.o" "$work/kernel.o" <<'PY'
 from pathlib import Path
 import struct
 import sys
@@ -311,6 +311,32 @@ for pos, (symbol, kind) in zip(records, (
     struct.pack_into('<Q', raw, pos, symbol_offsets[symbol])
     struct.pack_into('<Q', raw, pos + 8, (old & ~0xffffffff) | kind)
 path.write_bytes(raw)
+
+# A defined source symbol with a syntactically valid ELF64 st_value can
+# still overflow when its final scripted high-half section VMA is added.
+# Preserve the original kernel object for the positive runtime-image test.
+path = Path(sys.argv[5])
+raw = bytearray(path.read_bytes())
+shoff = struct.unpack_from('<Q', raw, 40)[0]
+count = struct.unpack_from('<H', raw, 60)[0]
+sections = [struct.unpack_from('<IIQQQQIIQQ', raw, shoff + i * 64)
+            for i in range(count)]
+patched = 0
+for section in sections:
+    if section[1] != 2:  # SHT_SYMTAB
+        continue
+    strings = sections[section[6]]
+    pool = raw[strings[4]:strings[4] + strings[5]]
+    for pos in range(section[4], section[4] + section[5], 24):
+        nameoff, info, other, shndx, value, size = struct.unpack_from(
+            '<IBBHQQ', raw, pos)
+        end = pool.index(0, nameoff)
+        if pool[nameoff:end] == b'kernel_target':
+            assert 0 < shndx < count and value == 0
+            struct.pack_into('<Q', raw, pos + 8, (1 << 64) - 1)
+            patched += 1
+assert patched == 1, f'expected one high-half target, got {patched}'
+path.with_name('kernel-symbol-overflow.o').write_bytes(raw)
 PY
 
 "$MINILD" -melf64lriscv -static -e fix_entry \
@@ -321,6 +347,19 @@ PY
 "$MINILD" -melf64lriscv -static --gc-sections \
     -T "$work/kernel.lds" -o "$work/kernel.elf" \
     "$work/kernel.o" "$work/dead.o"
+
+if "$MINILD" -melf64lriscv -static --gc-sections \
+        -T "$work/kernel.lds" -o "$work/kernel-symbol-overflow.elf" \
+        "$work/kernel-symbol-overflow.o" "$work/dead.o" \
+        >"$work/kernel-symbol-overflow.log" 2>&1 || \
+   [[ -e "$work/kernel-symbol-overflow.elf" ]] || \
+   ! grep -Fq 'relocation-symbol-address-overflow:kernel_target' \
+       "$work/kernel-symbol-overflow.log"; then
+    echo 'MINILD_RISCV_FINAL_FIXUP=FAIL kernel-symbol-overflow' >&2
+    sed -n '1,12p' "$work/kernel-symbol-overflow.log" >&2
+    exit 1
+fi
+echo 'MINILD_RISCV_FINAL_FIXUP_CHECK=PASS mode=kernel-symbol-overflow fail_closed=true'
 
 for kind in static shared; do
     options=(-static -e broken_start)
@@ -647,5 +686,5 @@ for name, file, key in (
     ensure(key in actual, f'{name}: wrong rejection diagnostic: {actual[:500]}')
     print(f'MINILD_RISCV_FINAL_FIXUP_CHECK=PASS mode={name} fail_closed=true')
 
-print('MINILD_RISCV_FINAL_FIXUP=PASS modes=static,shared,kernel-highhalf,negative_4')
+print('MINILD_RISCV_FINAL_FIXUP=PASS modes=static,shared,kernel-highhalf,negative_5')
 PY

@@ -21,34 +21,28 @@ static bool minild_riscv_apply_static_relocations(
      * Instruction encoding and HI20 pairing remain target-local. */
     for (i = 0U; i < state->relocations.count; ++i) {
         MiniLdReloc *reloc = &state->relocations.entries[i];
-        MiniLdSection *section = &state->work.sections[reloc->section];
-        uint64_t symbol_value = 0U;
-        uint64_t place;
+        MiniLdSection *section;
+        MiniLdStaticRelocOperands operands;
         int64_t target;
-        const char *symbol_name = NULL;
+        bool live;
         MiniLdTargetRelocClass kind = minild_target_reloc_class(reloc->type);
 
-        if (layout->scripted &&
-            ((section->flags & SHF_ALLOC) == 0U ||
-             layout->work[reloc->section].discarded)) {
-            continue;
+        if (!minild_static_reloc_source(
+                state, layout, reloc,
+                "riscv-invalid-relocation-section", &section, &live)) {
+            goto fail;
         }
-        place = layout->work[reloc->section].vaddr + reloc->offset;
-        if (kind == MINILD_TARGET_RELOC_NOOP ||
+        if (!live || kind == MINILD_TARGET_RELOC_NOOP ||
             kind == MINILD_TARGET_RELOC_ALIGN ||
             kind == MINILD_TARGET_RELOC_PCREL_LO) {
             continue;
         }
-        if (reloc->symbol != SIZE_MAX) {
-            if (!minild_layout_resolve_symbol(state, layout,
-                                              reloc->symbol, &symbol_value)) {
-                goto fail;
-            }
-            if (reloc->symbol < state->resolver.count) {
-                symbol_name = state->resolver.entries[reloc->symbol].name;
-            }
+        if (!minild_static_reloc_operands(
+                state, layout, reloc, "riscv-relocation-place-overflow",
+                &operands)) {
+            goto fail;
         }
-        target = minild_target_addend_bits(symbol_value, reloc->addend);
+        target = minild_target_signed_bits(operands.target_bits);
 
         if (kind == MINILD_TARGET_RELOC_ARITHMETIC) {
             if (!minild_target_apply_arithmetic(
@@ -91,8 +85,8 @@ static bool minild_riscv_apply_static_relocations(
             /* FALLTHROUGH */
         default:
             if (!minild_target_apply_final_instruction(
-                    &pairs, section, reloc, target, place,
-                    false, symbol_name, state->diagnostics)) {
+                    &pairs, section, reloc, target, operands.place,
+                    false, operands.symbol_name, state->diagnostics)) {
                 goto fail;
             }
             break;
@@ -105,14 +99,19 @@ static bool minild_riscv_apply_static_relocations(
         MiniLdResolvedSymbol *label;
         MiniLdTargetLo12Status result;
         uint64_t anchor_offset;
+        MiniLdSection *section;
+        bool live;
 
         if (minild_target_reloc_class(reloc->type) !=
             MINILD_TARGET_RELOC_PCREL_LO) {
             continue;
         }
-        if (layout->scripted &&
-            ((state->work.sections[reloc->section].flags & SHF_ALLOC) == 0U ||
-             layout->work[reloc->section].discarded)) {
+        if (!minild_static_reloc_source(
+                state, layout, reloc,
+                "riscv-invalid-relocation-section", &section, &live)) {
+            goto fail;
+        }
+        if (!live) {
             continue;
         }
         if (reloc->symbol == SIZE_MAX ||
@@ -130,7 +129,7 @@ static bool minild_riscv_apply_static_relocations(
             goto fail;
         }
         result = minild_target_apply_pcrel_lo12(
-            &pairs, &state->work.sections[reloc->section], reloc,
+            &pairs, section, reloc,
             (size_t)label->section, anchor_offset,
             state->diagnostics);
         if (result == MINILD_TARGET_LO12_MISSING) {

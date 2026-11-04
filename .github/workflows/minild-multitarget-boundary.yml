@@ -51,5 +51,8 @@ jobs:
             check-minild-target-default-symbols \
             check-minild-target-shared-abi-boundary \
             check-minild-riscv-abi-integration \
+            check-minild-riscv-final-fixup-parity \
+            check-minild-layout-phase-boundary \
+            check-minild-shared-phase-owners \
             check-minild-input-phase-owners \
             check-minild-final-elf64-owner-lifecycle

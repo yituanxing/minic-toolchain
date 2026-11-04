@@ -50,7 +50,11 @@ names = (
     'linker_riscv_align_relax.inc',
     'linker_static_got.inc',
     'linker_static_reloc_scan.inc',
+    'linker_static_reloc_operands.inc',
     'linker_nonriscv_static_fixup.inc',
+    'linker_x86_static_fixup.inc',
+    'linker_aarch64_static_fixup.inc',
+    'linker_loongarch_static_fixup.inc',
     'linker_riscv_static_got.inc',
     'linker_riscv_static_apply.inc',
     'linker_layout_symbols.inc',
@@ -99,7 +103,11 @@ expected = {
     ('linker_static_got.inc', 'linker_static_reloc_scan.inc'),
     ('linker_layout_finalize.inc', 'linker_riscv_default_symbols.inc'),
     ('linker_layout_finalize.inc', 'linker_layout_symbols.inc'),
+    ('linker_layout_finalize.inc', 'linker_static_reloc_operands.inc'),
     ('linker_layout_finalize.inc', 'linker_nonriscv_static_fixup.inc'),
+    ('linker_layout_finalize.inc', 'linker_x86_static_fixup.inc'),
+    ('linker_layout_finalize.inc', 'linker_aarch64_static_fixup.inc'),
+    ('linker_layout_finalize.inc', 'linker_loongarch_static_fixup.inc'),
     ('linker_layout_finalize.inc', 'linker_riscv_static_got.inc'),
     ('linker_layout_finalize.inc', 'linker_riscv_static_apply.inc'),
     ('linker_layout_finalize.inc', 'linker_static_reloc_apply.inc'),
@@ -134,6 +142,7 @@ type_owners = {
     'MiniLdAlignSite': 'linker_riscv_align_relax.inc',
     'MiniLdRelaxEvent': 'linker_riscv_align_relax.inc',
     'MiniLdStaticTargetPlan': 'linker_static_got.inc',
+    'MiniLdStaticRelocOperands': 'linker_static_reloc_operands.inc',
     'MiniLdRiscvStaticGot': 'linker_riscv_static_got.inc',
 }
 for type_name, expected_owner in type_owners.items():
@@ -151,6 +160,7 @@ for type_name, expected_owner in type_owners.items():
 for name in ('linker_layout.inc', 'linker_script_layout.inc',
              'linker_layout_finalize.inc', 'linker_static_got.inc',
              'linker_static_reloc_scan.inc',
+             'linker_static_reloc_operands.inc',
              'linker_static_reloc_apply.inc'):
     body = re.sub(r'^\s*#\s*include\s+"[^"]+"\s*$', '',
                   sources[name], flags=re.M)
@@ -158,6 +168,26 @@ for name in ('linker_layout.inc', 'linker_script_layout.inc',
                  body):
         raise SystemExit(f'MINILD_LAYOUT_PHASE_STRUCTURE=FAIL '
                          f'target_logic_in_generic_layout={name}')
+
+# Non-RISC-V is a family of three independent target codecs, not a second
+# architecture switch hidden in a generic static target leaf. The shared
+# pass resolves operands and walks sources; only each ISA leaf knows its
+# relocation IDs and instruction encodings.
+nonrv = sources['linker_nonriscv_static_fixup.inc']
+if re.search(r'\b(?:EM_X86_64|EM_AARCH64|EM_LOONGARCH|'
+             r'R_X86_64_\w+|R_AARCH64_\w+|R_LARCH_\w+)\b', nonrv) or \
+        re.search(r'\bswitch\s*\(\s*machine\s*\)', nonrv):
+    raise SystemExit('MINILD_LAYOUT_PHASE_STRUCTURE=FAIL '
+                     'machine_switch_in_nonriscv_common')
+for leaf, foreign in (
+    ('linker_x86_static_fixup.inc', ('R_AARCH64_', 'R_LARCH_')),
+    ('linker_aarch64_static_fixup.inc', ('R_X86_64_', 'R_LARCH_')),
+    ('linker_loongarch_static_fixup.inc', ('R_X86_64_', 'R_AARCH64_')),
+):
+    body = sources[leaf]
+    if any(token in body for token in foreign):
+        raise SystemExit(f'MINILD_LAYOUT_PHASE_STRUCTURE=FAIL '
+                         f'foreign_machine_codec={leaf}')
 
 # The generic lifetime is an opaque pointer, and only the RV leaf may know
 # GOT slot details. No generic stage may allocate or encode RV GOT bytes.
@@ -190,7 +220,19 @@ owners = {
         'static_reserve_target_relocations',
     ),
     'linker_nonriscv_static_fixup.inc': (
-        'minild_nonriscv_apply_static_relocations',
+        'minild_nonriscv_apply_with_ops',
+    ),
+    'linker_static_reloc_operands.inc': (
+        'minild_static_reloc_source', 'minild_static_reloc_operands',
+    ),
+    'linker_x86_static_fixup.inc': (
+        'minild_x86_apply_static_relocations',
+    ),
+    'linker_aarch64_static_fixup.inc': (
+        'minild_aarch64_apply_static_relocations',
+    ),
+    'linker_loongarch_static_fixup.inc': (
+        'minild_loongarch_apply_static_relocations',
     ),
     'linker_riscv_static_got.inc': (
         'minild_riscv_destroy_static_relocations',
@@ -233,9 +275,9 @@ for expected_owner, functions in owners.items():
             raise SystemExit(f'MINILD_LAYOUT_PHASE_STRUCTURE=FAIL '
                              f'function={function} definitions={actual}')
 
-print('MINILD_LAYOUT_PHASE_STRUCTURE=PASS modules=15 '
+print('MINILD_LAYOUT_PHASE_STRUCTURE=PASS modules=19 '
       'single_layout_type=1 target_opaque_static_plan=1 '
-      'explicit_target_owners=6 unique_phase_functions=25 '
+      'explicit_target_owners=10 unique_phase_functions=30 '
       'include_graph=nonrecursive build=single_translation_unit')
 PY
 
@@ -286,4 +328,4 @@ if ! HOST_CC="${HOST_CC:-cc}" BUILD_DIR="$work/parser" \
 fi
 echo 'MINILD_LAYOUT_PHASE_CHECK=PASS fixture=run-script-a0.sh'
 ((passed += 1))
-echo "MINILD_LAYOUT_PHASE=PASS fixtures=$passed modules=15 compiler=Werror"
+echo "MINILD_LAYOUT_PHASE=PASS fixtures=$passed modules=19 compiler=Werror"

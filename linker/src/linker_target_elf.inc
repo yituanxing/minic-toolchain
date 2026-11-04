@@ -6,7 +6,13 @@
 
 struct MiniLdLayout;
 struct MiniLdStaticTargetPlan;
-static bool minild_nonriscv_apply_static_relocations(
+static bool minild_x86_apply_static_relocations(
+    MiniLdState *state, const struct MiniLdLayout *layout,
+    const struct MiniLdStaticTargetPlan *plan);
+static bool minild_aarch64_apply_static_relocations(
+    MiniLdState *state, const struct MiniLdLayout *layout,
+    const struct MiniLdStaticTargetPlan *plan);
+static bool minild_loongarch_apply_static_relocations(
     MiniLdState *state, const struct MiniLdLayout *layout,
     const struct MiniLdStaticTargetPlan *plan);
 static bool minild_riscv_reserve_static_relocations(
@@ -110,19 +116,19 @@ static const MiniLdTargetProfile minild_target_profiles[] = {
      NULL, 0U, UINT64_C(0x400000), 4096U,
      true, true, false, false, false, false,
      minild_exact_merge_flags, NULL, NULL, NULL,
-     minild_nonriscv_apply_static_relocations, NULL, NULL,
+     minild_x86_apply_static_relocations, NULL, NULL,
      MINILD_SHARED_UNSUPPORTED, minild_zero_elf_flags},
     {"aarch64linux", ELFCLASS64, ELFDATA2LSB, EM_AARCH64, "aarch64",
      NULL, 0U, UINT64_C(0x400000), 4096U,
      true, true, false, false, false, false,
      minild_exact_merge_flags, NULL, NULL, NULL,
-     minild_nonriscv_apply_static_relocations, NULL, NULL,
+     minild_aarch64_apply_static_relocations, NULL, NULL,
      MINILD_SHARED_UNSUPPORTED, minild_zero_elf_flags},
     {"elf64loongarch", ELFCLASS64, ELFDATA2LSB, EM_LOONGARCH, "loongarch64",
      NULL, 0U, UINT64_C(0x400000), 4096U,
      true, true, false, false, false, false,
      minild_exact_merge_flags, NULL, NULL, NULL,
-     minild_nonriscv_apply_static_relocations, NULL, NULL,
+     minild_loongarch_apply_static_relocations, NULL, NULL,
      MINILD_SHARED_UNSUPPORTED, minild_loongarch_v1_elf_flags}
 };
 

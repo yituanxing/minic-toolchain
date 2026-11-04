@@ -81,7 +81,24 @@ assemble_static_pair() {
         '.type fixture_ptr,@object' \
         'fixture_ptr:' \
         '    .quad fixture_target' \
-        '.size fixture_ptr,8' >>"$work/$name-entry.s"
+        '.size fixture_ptr,8' \
+        '.globl fixture_addend_ptr' \
+        'fixture_addend_ptr:' \
+        '    .quad fixture_target-17' \
+        '.weak fixture_missing_weak' \
+        '.globl fixture_weak_ptr' \
+        'fixture_weak_ptr:' \
+        '    .quad fixture_missing_weak' \
+        '.globl fixture_pcrel32' \
+        'fixture_pcrel32:' >>"$work/$name-entry.s"
+    if [[ $name == loongarch64 ]]; then
+        # MiniAS currently expresses a LoongArch symbol difference as an
+        # ADD32/SUB32 pair. This positive fixture below changes its one
+        # emitted absolute relocation into the supported R_LARCH_32_PCREL.
+        printf '%s\n' '    .long fixture_target + 7' >>"$work/$name-entry.s"
+    else
+        printf '%s\n' '    .long fixture_target - . + 7' >>"$work/$name-entry.s"
+    fi
     case "$name" in
         aarch64)
             printf '%s\n' \
@@ -121,6 +138,33 @@ assemble_static_pair() {
         "$MINIAS" "--target=$target" "-march=$march" "-mabi=$mabi" \
             -o "$work/$name-$part.o" "$work/$name-$part.s"
     done
+    if [[ $name == loongarch64 ]]; then
+        # The ELF remains a genuine MiniAS object; only the source's one
+        # 32-bit absolute relocation kind changes to 32-bit PC-relative.
+        python3 - "$work/$name-entry.o" <<'PY'
+from pathlib import Path
+import struct
+import sys
+
+path = Path(sys.argv[1])
+raw = bytearray(path.read_bytes())
+section_offset = struct.unpack_from('<Q', raw, 40)[0]
+section_count = struct.unpack_from('<H', raw, 60)[0]
+patched = 0
+for i in range(section_count):
+    sh = struct.unpack_from('<IIQQQQIIQQ', raw, section_offset + i * 64)
+    if sh[1] != 4:
+        continue
+    for off in range(sh[4], sh[4] + sh[5], 24):
+        offset, info, addend = struct.unpack_from('<QQq', raw, off)
+        if offset == 24 and (info & 0xffffffff) == 1 and addend == 7:
+            struct.pack_into('<Q', raw, off + 8,
+                             (info & ~0xffffffff) | 99)
+            patched += 1
+assert patched == 1, f'expected one R_LARCH_32 at +24, got {patched}'
+path.write_bytes(raw)
+PY
+    fi
     case "$name" in
         aarch64)
             readelf -Wr "$work/$name-entry.o" |
@@ -268,7 +312,9 @@ for name, machine, flags in (('x86_64', 62, 0),
                f'missing_loadable_entry={name}:{stage}')
         ensure(all(s[1] != 4 or s[5] == 0 for s in elf.sections),
                f'unresolved_relocations={name}:{stage}')
-        for symbol in ('_start', 'fixture_ptr', 'fixture_target'):
+        for symbol in ('_start', 'fixture_ptr', 'fixture_target',
+                       'fixture_addend_ptr', 'fixture_weak_ptr',
+                       'fixture_pcrel32'):
             ensure(symbol in elf.symbols and 0 < elf.symbols[symbol][0] <
                    len(elf.sections), f'missing_symbol={name}:{stage}:{symbol}')
         ensure(elf.entry == elf.symbols['_start'][1],
@@ -276,6 +322,19 @@ for name, machine, flags in (('x86_64', 62, 0),
         ensure(elf.read_symbol_qword('fixture_ptr') ==
                elf.symbols['fixture_target'][1],
                f'absolute_relocation_not_applied={name}:{stage}')
+        ensure(elf.read_symbol_qword('fixture_addend_ptr') ==
+               elf.symbols['fixture_target'][1] - 17,
+               f'negative_addend_not_applied={name}:{stage}')
+        ensure(elf.read_symbol_qword('fixture_weak_ptr') == 0 and
+               'fixture_missing_weak' in elf.symbols and
+               elf.symbols['fixture_missing_weak'][0] == 0,
+               f'undefined_weak_not_zero={name}:{stage}')
+        actual_pcrel = elf.read_symbol_word('fixture_pcrel32')
+        expected_pcrel = (elf.symbols['fixture_target'][1] + 7 -
+                          elf.symbols['fixture_pcrel32'][1]) & 0xffffffff
+        ensure(actual_pcrel == expected_pcrel,
+               f'pcrel_addend_not_applied={name}:{stage} '
+               f'actual={actual_pcrel:#x} expected={expected_pcrel:#x}')
         if name in ('aarch64', 'loongarch64'):
             ensure('fixture_helper' in elf.symbols,
                    f'missing_cross_object_helper={name}:{stage}')
@@ -297,13 +356,21 @@ for name, machine, flags in (('x86_64', 62, 0),
                    f'expected={elf.symbols["fixture_helper"][1]:#x}')
         print(f'MINILD_MULTITARGET_STATIC_STRUCTURE=PASS target={name} '
               f'stage={stage} machine={machine} ptr_relocation=resolved '
+              f'negative_addend=resolved weak_undef=zero '
+              f'pcrel_addend=resolved '
               f'branch_relocation={"resolved" if name != "x86_64" else "runtime"} '
               f'PT_LOAD=yes')
 
 gnu = Elf64(root / 'x86_64-gnu.elf')
 ensure(gnu.kind == 2 and gnu.machine == 62 and
        gnu.read_symbol_qword('fixture_ptr') ==
-       gnu.symbols['fixture_target'][1],
+       gnu.symbols['fixture_target'][1] and
+       gnu.read_symbol_qword('fixture_addend_ptr') ==
+       gnu.symbols['fixture_target'][1] - 17 and
+       gnu.read_symbol_qword('fixture_weak_ptr') == 0 and
+       gnu.read_symbol_word('fixture_pcrel32') ==
+       ((gnu.symbols['fixture_target'][1] + 7 -
+         gnu.symbols['fixture_pcrel32'][1]) & 0xffffffff),
        'gnu_reference_incorrect')
 
 
@@ -335,9 +402,13 @@ for name in ('x86_64', 'aarch64', 'loongarch64'):
     }[name]
     rel_data = [s for i, s in enumerate(original.sections)
                 if original.names[i] == '.rela.data']
-    ensure(len(rel_data) == 1 and rel_data[0][5] == 24,
+    ensure(len(rel_data) == 1 and rel_data[0][5] >= 24,
            f'missing_exact_abs64_relocation={name}')
     data_reloc = rel_data[0]
+    data_sections = [s for i, s in enumerate(original.sections)
+                     if original.names[i] == '.data']
+    ensure(len(data_sections) == 1 and data_sections[0][5] >= 8,
+           f'missing_data_section={name}')
     info_at = data_reloc[4] + 8
     addend_at = data_reloc[4] + 16
     source_info = struct.unpack_from('<Q', original.data, info_at)[0]
@@ -347,7 +418,8 @@ for name in ('x86_64', 'aarch64', 'loongarch64'):
     for variant in ('out-of-bounds', 'narrow-overflow', 'got-mode-leak'):
         damaged = bytearray(original.data)
         if variant == 'out-of-bounds':
-            struct.pack_into('<Q', damaged, data_reloc[4], 4)
+            struct.pack_into('<Q', damaged, data_reloc[4],
+                             data_sections[0][5] - 4)
         elif variant == 'narrow-overflow':
             struct.pack_into('<Q', damaged, info_at,
                              (source_info & 0xffffffff00000000) | narrow_type)
@@ -356,6 +428,41 @@ for name in ('x86_64', 'aarch64', 'loongarch64'):
             struct.pack_into('<Q', damaged, info_at,
                              (source_info & 0xffffffff00000000) | got_type)
         (root / f'{name}-{variant}.o').write_bytes(damaged)
+
+    # A genuinely undefined weak operand resolves to zero (tested above),
+    # whereas changing only its binding to GLOBAL must fail at symbol
+    # resolution. The input section and relocation remain otherwise valid.
+    damaged = bytearray(original.data)
+    weak_patched = 0
+    for sec in original.sections:
+        if sec[1] != 2:  # SHT_SYMTAB
+            continue
+        strings = original.section_data(sec[6])
+        for pos in range(sec[4], sec[4] + sec[5], 24):
+            symname, info, other, shndx, value, size = struct.unpack_from(
+                '<IBBHQQ', damaged, pos)
+            if symname and original.cstr(strings, symname) == 'fixture_missing_weak':
+                ensure(info >> 4 == 2 and shndx == 0,
+                       f'not_undefined_weak_source={name}')
+                damaged[pos + 4] = (1 << 4) | (info & 15)
+                weak_patched += 1
+    ensure(weak_patched == 1, f'missing_weak_source={name}')
+    (root / f'{name}-strong-undefined.o').write_bytes(damaged)
+
+    # S+A-P must retain signed-range checking after common operand
+    # projection. The exact same supported 32-bit PC-relative relocation is
+    # reused with an out-of-range addend; no ISA instruction is introduced.
+    damaged = bytearray(original.data)
+    pcrel_type = {'x86_64': 2, 'aarch64': 261, 'loongarch64': 99}[name]
+    pcrel_patched = 0
+    for pos in range(data_reloc[4], data_reloc[4] + data_reloc[5], 24):
+        rel_offset, rel_info, rel_addend = struct.unpack_from(
+            '<QQq', damaged, pos)
+        if rel_offset == 24 and (rel_info & 0xffffffff) == pcrel_type:
+            struct.pack_into('<q', damaged, pos + 16, (1 << 63) - 1)
+            pcrel_patched += 1
+    ensure(pcrel_patched == 1, f'missing_pcrel_source={name}')
+    (root / f'{name}-pcrel32-overflow.o').write_bytes(damaged)
 
 # An AArch64 CALL26 relocation may only patch a BL; a well-formed reference
 # attached to a NOP is a malformed instruction/relocation pair.
@@ -367,7 +474,8 @@ struct.pack_into('<I', damaged, text[4], 0xd503201f)  # A64 NOP
 (root / 'aarch64-invalid-call-encoding.o').write_bytes(damaged)
 print('MINILD_MULTITARGET_STATIC_NEGATIVE_FIXTURES=PASS '
       'unknown_types=3 out_of_bounds=3 narrow_overflow=3 '
-      'got_mode_leak=3 invalid_call_encoding=1')
+      'got_mode_leak=3 strong_undefined=3 pcrel32_overflow=3 '
+      'invalid_call_encoding=1')
 PY
 
 negative_rejections=0
@@ -409,12 +517,20 @@ for name in x86_64 aarch64 loongarch64; do
         "unsupported-static-relocation:$machine:" \
         -m "$emulation" -static -e _start \
         "$work/$name-got-mode-leak.o" "$work/$name-data.o"
+    reject_static "$name-strong-undefined" "$name" \
+        'undefined-reference:fixture_missing_weak' \
+        -m "$emulation" -static -e _start \
+        "$work/$name-strong-undefined.o" "$work/$name-data.o"
+    reject_static "$name-pcrel32-overflow" "$name" \
+        "nonriscv-relocation-overflow-or-encoding:$machine:" \
+        -m "$emulation" -static -e _start \
+        "$work/$name-pcrel32-overflow.o" "$work/$name-data.o"
 done
 reject_static aarch64-invalid-call-encoding aarch64 \
     'nonriscv-relocation-overflow-or-encoding:183:283' \
     -m aarch64linux -static -e _start \
     "$work/aarch64-invalid-call-encoding.o" "$work/aarch64-data.o"
-test "$negative_rejections" -eq 13
+test "$negative_rejections" -eq 19
 
 if [[ $(uname -m) != x86_64 ]]; then
     echo 'MINILD_MULTITARGET_STATIC=INCONCLUSIVE x86_native_runtime_requires_x86_64' >&2
@@ -459,4 +575,4 @@ for name in aarch64 loongarch64; do
     echo "MINILD_MULTITARGET_STATIC_RUNTIME=PASS target=$name qemu_exit=0 stages=2"
 done
 
-echo 'MINILD_MULTITARGET_STATIC=PASS structures=6 absolute_relocs=6 branch_relocs=4 fail_closed_rejections=13 x86_native_gnu=PASS roundtrips=3 non_x86_runtime=separately_reported'
+echo 'MINILD_MULTITARGET_STATIC=PASS structures=6 absolute_relocs=6 branch_relocs=4 signed_addends=6 weak_undef=6 pcrel_addends=6 fail_closed_rejections=19 x86_native_gnu=PASS roundtrips=3 non_x86_runtime=separately_reported'
