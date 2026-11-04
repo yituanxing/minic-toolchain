@@ -125,7 +125,11 @@ static int check_module_snapshot_output(const char *path) {
         { .name = "unused_hidden", .is_extern = true,
           .visibility = MINIC_CORE_MODULE_VISIBILITY_HIDDEN,
           .alias_target_index = SIZE_MAX },
+        /* Real ModuleIR ingress seals lexical raw file-ASM references into
+         * this ownership bit. A hand-built module must carry that fact too;
+         * the output writer must not parse source ASM a second time. */
         { .name = "asm_weak", .is_extern = true, .is_weak = true,
+          .is_file_asm_root = true,
           .visibility = MINIC_CORE_MODULE_VISIBILITY_HIDDEN,
           .alias_target_index = SIZE_MAX }
     };

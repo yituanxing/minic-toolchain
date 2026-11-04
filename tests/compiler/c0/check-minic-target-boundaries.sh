@@ -291,9 +291,16 @@ has src/target/loongarch64/asm_contract_source.c 'loong_mask_nospec_source('
 has src/target/loongarch64/asm_contract.c 'loong_mask_nospec_emit('
 lacks src/compiler/c_lower/core_lower_asm_target.c 'sltu'
 
-# All targets reuse the sealed Module ELF custom section/binding owner.
-has src/target/common/module_global_emit.c 'minic_multi_module_emit_elf_section('
-has src/target/common/module_global_emit.c 'minic_multi_module_emit_elf_binding('
+# All targets share one validated ELF global output plan. Section/binding
+# emitters only serialize this plan; legacy direct-global entrypoints must
+# not outlive their final test consumers.
+has src/target/common/module_global_emit.c 'minic_multi_module_elf_global_plan_build('
+has src/target/common/module_global_emit.c 'minic_multi_module_elf_global_emit_section('
+has src/target/common/module_global_emit.c 'minic_multi_module_elf_global_emit_binding('
+has src/target/common/direct_program_emit.c 'minic_multi_module_elf_global_plan_build('
+lacks src/target/common/module_global_emit.c 'minic_multi_module_emit_elf_section('
+lacks src/target/common/module_global_emit.c 'minic_multi_module_emit_elf_binding('
+has src/target/common/module_global_emit.c 'minic_multi_module_emit_elf_symbol_visibility('
 has src/target/common/global_emit.c 'minic_multi_elf_safe_section_name('
 # The only C/DataLayout global byte walk belongs to Compiler ingress.
 # Target/Common retains output serialization adapters, not a second walker.
@@ -1579,7 +1586,7 @@ fi
 cc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror \
   -ffunction-sections -fdata-sections -Wl,--gc-sections \
   -Iinclude -Isrc tests/compiler/c0/probe-program-emit-transaction.c \
-  src/core/core_ir.c src/core/value_uses.c \
+  src/core/core_ir.c src/core/module_ir.c src/core/value_uses.c \
   src/frontend/ast_global.c \
   src/target/common/core_function_facts.c \
   src/target/common/core_function_plan.c \

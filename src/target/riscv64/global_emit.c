@@ -48,35 +48,14 @@ bool minic_riscv64_emit_file_asm_bytes(FILE *file, const char *text,
 
 /* GNU RV64 globals consume finalized ModuleIR; source-policy and layout
  * are sealed before entering this target writer. */
-static const MinicCoreType *rv64_module_core_base(
-    const MinicCoreTypeContext *types, MinicCoreTypeId id) {
-    return minic_core_type_get(types, minic_core_type_unqualified(types, id));
-}
-
 static bool rv64_module_array_recursive(
     const MinicCoreTypeContext *types, const MinicCoreType *type) {
     const MinicCoreType *element;
     if (type == NULL || type->kind != MINIC_CORE_TYPE_ARRAY) return false;
-    element = rv64_module_core_base(types, type->value.array.element);
+    element = minic_multi_module_global_core_base(
+        types, type->value.array.element);
     return element != NULL && (element->kind == MINIC_CORE_TYPE_RECORD ||
                                element->kind == MINIC_CORE_TYPE_ARRAY);
-}
-
-static bool rv64_module_scalar_width(
-    const MinicCoreTypeContext *types, const MinicCoreType *type,
-    size_t *width) {
-    while (type != NULL && type->kind == MINIC_CORE_TYPE_ARRAY)
-        type = rv64_module_core_base(types, type->value.array.element);
-    if (type == NULL || !type->has_layout ||
-        (type->kind != MINIC_CORE_TYPE_INTEGER &&
-         type->kind != MINIC_CORE_TYPE_POINTER &&
-         !(type->kind == MINIC_CORE_TYPE_FLOAT &&
-           (type->value.floating.format == MINIC_CORE_FLOAT_BINARY32 ||
-            type->value.floating.format == MINIC_CORE_FLOAT_BINARY64))) ||
-        (type->size != 1U && type->size != 2U &&
-         type->size != 4U && type->size != 8U)) return false;
-    *width = type->size;
-    return true;
 }
 
 static bool rv64_module_zero_extent_legal(const MinicCoreType *type) {
@@ -97,8 +76,8 @@ static bool rv64_module_admit_global(const MinicCoreModule *module,
         global->alias_target_index != SIZE_MAX || global->is_thread_local ||
         (global->is_internal && global->is_weak) ||
         global->storage_alignment == 0U ||
-        (type = rv64_module_core_base(module->type_context,
-                                      global->core_type_id)) == NULL)
+        (type = minic_multi_module_global_core_base(
+             module->type_context, global->core_type_id)) == NULL)
         return false;
     zero_extent = global->storage_size == 0U && rv64_module_zero_extent_legal(type);
     if (global->storage_size == 0U && !zero_extent) return false;
@@ -115,8 +94,8 @@ static bool rv64_module_admit_global(const MinicCoreModule *module,
                 global->relocation_slot_count != 0U)) {
         if (global->initializer_slot_count == 0U) return false;
     } else if (global->relocation_slot_count != 0U ||
-               !rv64_module_scalar_width(module->type_context, type,
-                                          &scalar_width) ||
+               !minic_multi_module_global_scalar_width(
+                   module->type_context, type, &scalar_width) ||
                global->initializer_slot_count >
                     global->storage_size / scalar_width) {
         return false;
@@ -124,21 +103,12 @@ static bool rv64_module_admit_global(const MinicCoreModule *module,
     return true;
 }
 
-static const char *rv64_module_visibility(MinicCoreModuleVisibility visibility) {
-    switch (visibility) {
-    case MINIC_CORE_MODULE_VISIBILITY_DEFAULT: return NULL;
-    case MINIC_CORE_MODULE_VISIBILITY_HIDDEN: return ".hidden";
-    case MINIC_CORE_MODULE_VISIBILITY_INTERNAL: return ".internal";
-    case MINIC_CORE_MODULE_VISIBILITY_PROTECTED: return ".protected";
-    default: return NULL;
-    }
-}
-
 bool minic_riscv64_emit_module_global(FILE *file, const MinicTargetInfo *target,
                                       const MinicCoreModule *module, size_t ordinal) {
     const MinicCoreModuleGlobal *global;
+    MinicModuleElfGlobalPlan plan;
     unsigned int alignment_power;
-    const char *visibility;
+    const char *fallback_override;
     if (file == NULL || target == NULL ||
         target->architecture != MINIC_TARGET_ARCH_RISCV64 ||
         target->data_layout == NULL || target->data_layout->pointer_size != 8U ||
@@ -147,36 +117,26 @@ bool minic_riscv64_emit_module_global(FILE *file, const MinicTargetInfo *target,
         return false;
     global = &module->globals[ordinal];
     if (!rv64_module_admit_global(module, global) ||
-        !minic_riscv64_alignment_power(global->storage_alignment, &alignment_power) ||
-        (global->visibility != MINIC_CORE_MODULE_VISIBILITY_DEFAULT &&
-         rv64_module_visibility(global->visibility) == NULL)) return false;
-    if (global->section_name != NULL) {
-        if (!minic_multi_elf_safe_section_name(global->section_name) ||
-            fprintf(file, ".section %s,\"%s\",@progbits\n",
-                    global->section_name,
-                    global->is_read_only ? "a" : "aw") < 0) return false;
-    } else if (fprintf(file, "%s\n",
-                       global->is_read_only
-                           ? (global->relocation_slot_count != 0U
-                                ? ".section .data.rel.ro" : ".section .rodata")
-                           : ".data") < 0) {
+        !minic_riscv64_alignment_power(global->storage_alignment,
+                                        &alignment_power)) return false;
+    fallback_override = global->is_read_only
+        ? (global->relocation_slot_count != 0U
+               ? ".section .data.rel.ro" : ".section .rodata")
+        : ".data";
+    if (!minic_multi_module_elf_global_plan_build(
+            global, fallback_override, false,
+            minic_riscv64_integer_data_directive, true, 8U, &plan) ||
+        !minic_multi_module_elf_global_emit_section(file, &plan) ||
+        (!global->is_internal &&
+         (!minic_multi_module_elf_global_emit_binding(file, &plan) ||
+          !minic_multi_module_elf_global_emit_visibility(file, &plan))))
         return false;
-    }
-    if (!global->is_internal) {
-        visibility = rv64_module_visibility(global->visibility);
-        if (fprintf(file, "%s %s\n", global->is_weak ? ".weak" : ".globl",
-                    global->name) < 0 ||
-            (visibility != NULL &&
-             fprintf(file, "%s %s\n", visibility, global->name) < 0))
-            return false;
-    }
     if (fprintf(file, ".type %s, @object\n.align %u\n%s:\n",
                 global->name, alignment_power, global->name) < 0)
         return false;
     /* GNU zero-extent definitions contain no payload directives. */
     if (global->storage_size != 0U &&
-        !minic_multi_module_emit_global_fragments(
-            file, global, minic_riscv64_integer_data_directive, true, 8U))
+        !minic_multi_module_elf_global_emit_fragments(file, &plan))
         return false;
     return fprintf(file, ".size %s, %zu\n",
                    global->name, global->storage_size) >= 0;

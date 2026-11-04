@@ -34,6 +34,18 @@ on:
       - 'tests/compiler/c0/probe-direct-lp64-dispatch.c'
       - 'tests/compiler/c0/probe-core-facts-one-pass.c'
       - 'tests/compiler/c0/probe-program-emit-transaction.c'
+      - 'tests/compiler/c0/probe-p46-*.sh'
+      - 'tests/compiler/c0/p46_*'
+      - 'tests/compiler/c0/run-x86-global-plan-abi.sh'
+      - 'tests/compiler/c0/x86_global_plan_abi.c'
+      - 'tests/compiler/c0/invalid_x86_bss_nonzero_initializer.c'
+      - 'tests/compiler/c0/run-rv32-global-plan-abi.sh'
+      - 'tests/compiler/c0/rv32_global_plan_abi.c'
+      - 'tests/compiler/c0/invalid_rv32_global_plan_section_injection.c'
+      - 'tests/compiler/c0/run-rv64-global-plan-abi.sh'
+      - 'tests/compiler/c0/rv64_global_plan_abi.c'
+      - 'tests/compiler/c0/invalid_rv64_global_plan_*.c'
+      - 'tests/compiler/c0/probe-linux-global-section-reloc.sh'
       - '.github/workflows/minic-native-refactor-gate.yml'
   push:
     branches:
@@ -109,6 +121,18 @@ on:
       - 'tests/compiler/c0/probe-rv64-extended-float-native.sh'
       - 'tests/compiler/c0/probe-rv64-pic-glibc-got.sh'
       - 'tests/compiler/c0/probe-rv64i-strict-isa.sh'
+      - 'tests/compiler/c0/probe-p46-*.sh'
+      - 'tests/compiler/c0/p46_*'
+      - 'tests/compiler/c0/run-x86-global-plan-abi.sh'
+      - 'tests/compiler/c0/x86_global_plan_abi.c'
+      - 'tests/compiler/c0/invalid_x86_bss_nonzero_initializer.c'
+      - 'tests/compiler/c0/run-rv32-global-plan-abi.sh'
+      - 'tests/compiler/c0/rv32_global_plan_abi.c'
+      - 'tests/compiler/c0/invalid_rv32_global_plan_section_injection.c'
+      - 'tests/compiler/c0/run-rv64-global-plan-abi.sh'
+      - 'tests/compiler/c0/rv64_global_plan_abi.c'
+      - 'tests/compiler/c0/invalid_rv64_global_plan_*.c'
+      - 'tests/compiler/c0/probe-linux-global-section-reloc.sh'
   workflow_dispatch:
 
 concurrency:
@@ -160,6 +184,21 @@ jobs:
           make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/minic-native-backend all
           test -x build/minic-native-backend/bin/minic
           test -x build/minic-native-backend/bin/minic-cc
+      - name: P47 five-ISA global output smoke with focused x86 GNU ABI oracles
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(uname -m)" = x86_64
+          for tool in gcc readelf; do
+            command -v "$tool" >/dev/null || {
+              echo "MINIC_NATIVE_FOCUSED_ORACLES=FAIL missing required GNU tool: $tool" >&2
+              exit 1
+            }
+          done
+          MINIC_RV32_GLOBAL_GNU_ELF=0 MINIC_RV64_GLOBAL_GNU_ELF=0 \
+            make MODE=release CFLAGS=-Werror BUILD_DIR=build/minic-native-backend \
+              HOST_CC=gcc CC=gcc check-p47-five-isa-output-smoke
+          echo 'MINIC_P47_FIVE_ISA_OUTPUT=PASS p46_aggregate=1 p46_head=1 x86_global_abi=1 rv32_source=1 rv64_source=1 global_section_sources=5 GNU_AS_LD_x86=1 other_ELF=NOT_RUN QEMU_other_ISA=NOT_RUN'
       - name: Full-source review architecture and correctness batch native oracles
         shell: bash
         run: |

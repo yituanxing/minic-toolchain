@@ -10,19 +10,6 @@ static const char *x86_data_directive(size_t size) {
            size == 4U ? ".long" : size == 8U ? ".quad" : NULL;
 }
 
-/* Every byte, symbol identity and relocation addend is
- * snapped into a neutral ModuleIR before the target sees this definition.
- * Preserve the exact x86 GNU section, binding and data spelling. */
-static const char *x86_module_default_section(MinicCoreModuleDefaultSection section) {
-    switch (section) {
-    case MINIC_CORE_MODULE_SECTION_BSS: return ".bss";
-    case MINIC_CORE_MODULE_SECTION_DATA: return ".data";
-    case MINIC_CORE_MODULE_SECTION_RODATA: return ".section .rodata";
-    case MINIC_CORE_MODULE_SECTION_RELRO: return ".section .data.rel.ro";
-    default: return NULL;
-    }
-}
-
 static bool x86_module_explicit_bss_contents_valid(
     const MinicCoreModuleGlobal *global) {
     size_t i;
@@ -41,7 +28,7 @@ static bool x86_module_explicit_bss_contents_valid(
 bool minic_x86_64_emit_module_global(FILE *out, const MinicTargetInfo *target,
                                       const MinicCoreModule *module, size_t ordinal) {
     const MinicCoreModuleGlobal *global;
-    const char *fallback;
+    MinicModuleElfGlobalPlan plan;
     if (out == NULL || target == NULL ||
         target->architecture != MINIC_TARGET_ARCH_X86_64 ||
         target->data_layout == NULL || target->data_layout->pointer_size != 8U ||
@@ -49,24 +36,23 @@ bool minic_x86_64_emit_module_global(FILE *out, const MinicTargetInfo *target,
         module->globals == NULL || ordinal >= module->global_count)
         return false;
     global = &module->globals[ordinal];
-    fallback = x86_module_default_section(global->default_section);
     if (global->is_extern || global->alias_target_index != SIZE_MAX ||
         global->is_thread_local ||
         (global->fragment_count != 0U && global->fragments == NULL) ||
         !global->common_elf_bss_admitted ||
-        global->storage_alignment == 0U || fallback == NULL ||
+        global->storage_alignment == 0U ||
         minic_core_type_get(module->type_context, global->core_type_id) == NULL ||
         !x86_module_explicit_bss_contents_valid(global) ||
-        !minic_multi_module_emit_elf_section(out, global, fallback) ||
-        !minic_multi_module_emit_elf_binding(out, global) ||
+        !minic_multi_module_elf_global_plan_build(
+            global, NULL, true, x86_data_directive, false, 8U, &plan) ||
+        !minic_multi_module_elf_global_emit_section(out, &plan) ||
+        !minic_multi_module_elf_global_emit_binding(out, &plan) ||
         (!global->is_internal &&
-         !minic_multi_module_emit_elf_symbol_visibility(
-             out, global->visibility, global->name)))
+         !minic_multi_module_elf_global_emit_visibility(out, &plan)))
         return false;
     if (fprintf(out, "  .balign %zu\n.type %s,@object\n%s:\n",
                 global->storage_alignment, global->name, global->name) < 0 ||
-        !minic_multi_module_emit_global_fragments(
-            out, global, x86_data_directive, false, 8U))
+        !minic_multi_module_elf_global_emit_fragments(out, &plan))
         return false;
     return fprintf(out, ".size %s,%zu\n", global->name,
                    global->storage_size) >= 0;

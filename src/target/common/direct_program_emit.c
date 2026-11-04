@@ -57,35 +57,23 @@ static const char *direct_module_data_directive(size_t width) {
            width == 4U ? ".4byte" : width == 8U ? ".8byte" : NULL;
 }
 
-static const char *direct_module_default_section(
-    MinicCoreModuleDefaultSection section) {
-    switch (section) {
-    case MINIC_CORE_MODULE_SECTION_BSS: return ".bss";
-    case MINIC_CORE_MODULE_SECTION_DATA: return ".data";
-    case MINIC_CORE_MODULE_SECTION_RODATA: return ".section .rodata";
-    case MINIC_CORE_MODULE_SECTION_RELRO: return ".section .data.rel.ro";
-    default: return NULL;
-    }
-}
-
 static bool direct_emit_module_global(FILE *out,
                                       const MinicCoreModuleGlobal *obj) {
-    const char *fallback;
+    MinicModuleElfGlobalPlan plan;
     if (out == NULL || obj == NULL || obj->name == NULL ||
         obj->name[0] == '\0' || obj->is_extern ||
         obj->alias_target_index != SIZE_MAX ||
         !obj->common_elf_bss_admitted ||
-        (fallback = direct_module_default_section(obj->default_section)) == NULL)
+        !minic_multi_module_elf_global_plan_build(
+            obj, NULL, true, direct_module_data_directive, false, 8U, &plan))
         return false;
     return (obj->is_internal ||
-            minic_multi_module_emit_elf_symbol_visibility(
-                out, obj->visibility, obj->name)) &&
-           minic_multi_module_emit_elf_section(out, obj, fallback) &&
-           minic_multi_module_emit_elf_binding(out, obj) &&
+            minic_multi_module_elf_global_emit_visibility(out, &plan)) &&
+           minic_multi_module_elf_global_emit_section(out, &plan) &&
+           minic_multi_module_elf_global_emit_binding(out, &plan) &&
            fprintf(out, "  .balign %zu\n.type %s,@object\n%s:\n",
                    obj->storage_alignment, obj->name, obj->name) >= 0 &&
-           minic_multi_module_emit_global_fragments(
-               out, obj, direct_module_data_directive, false, 8U) &&
+           minic_multi_module_elf_global_emit_fragments(out, &plan) &&
            fprintf(out, ".size %s,%zu\n", obj->name,
                    obj->storage_size) >= 0;
 }

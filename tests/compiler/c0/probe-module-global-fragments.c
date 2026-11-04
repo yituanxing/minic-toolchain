@@ -97,15 +97,17 @@ int main(void) {
     {
         char *text = NULL;
         size_t length = 0U;
+        MinicModuleElfGlobalPlan plan;
         FILE *out = open_memstream(&text, &length);
         if (out == NULL) return 10;
         global.section_name = ".bss.test";
         global.visibility = MINIC_CORE_MODULE_VISIBILITY_HIDDEN;
         global.is_read_only = true;
-        if (!minic_multi_module_emit_elf_symbol_visibility(
-                out, global.visibility, global.name) ||
-            !minic_multi_module_emit_elf_section(out, &global, ".data") ||
-            !minic_multi_module_emit_elf_binding(out, &global) ||
+        if (!minic_multi_module_elf_global_plan_build(
+                &global, ".data", true, lp64_directive, false, 4U, &plan) ||
+            !minic_multi_module_elf_global_emit_visibility(out, &plan) ||
+            !minic_multi_module_elf_global_emit_section(out, &plan) ||
+            !minic_multi_module_elf_global_emit_binding(out, &plan) ||
             fclose(out) != 0) {
             free(text);
             return 11;

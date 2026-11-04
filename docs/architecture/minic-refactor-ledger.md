@@ -2616,3 +2616,81 @@ byte_addend` keeps member paths and strict C storage rules, whereas GNU
 `i` evaluates specialization-local facts and GNU zero-size/void strides;
 share only checked byte arithmetic and sealed facts, not C walkers. These
 are P47 candidates, not silently patched into this machine P46 batch.
+
+## IR-P47 — Five-ISA ModuleIR ELF global-output plan (2026-11-04)
+
+**Status:** one coherent implementation batch on
+`refactor/minic-target-language-boundary` / PR #674, **local focused gates
+verified; cross GNU ELF/QEMU Linux execution NOT RUN**.
+P47 continues the completed P42 Core Module payload/symbol ownership and
+P46's explicitly deferred global-output boundary. The exact submitted
+commit must be recorded after integration; the local source/host oracles
+below are completed evidence, **not** a five-ISA Linux execution claim.
+
+### One output decision with target-specific ELF dialects
+
+- **Core/Module boundary stays sealed:** `src/core/module_ir.h` continues
+  to own symbol identity, visibility, linkage, default-section intent,
+  layout, initializer fragments and relocations. No `MinicType`, C AST
+  initializer or parser symbol ID is read by the ELF object writers.
+- **Common ELF object plan:** `src/target/common/module_global_emit.[ch]`
+  introduces `MinicModuleElfGlobalPlan` and a checked builder that resolves
+  default/explicit section, `PROGBITS` versus `NOBITS`, section flags,
+  binding, visibility, data-directive callback, signed literal treatment
+  and relocation field width *before writing output*. The same Common
+  emitter serializes the planned section, binding, visibility and payload.
+  Keep function-symbol visibility as its separate public primitive; this
+  plan is for global **objects**, not an unrequested whole-linker redesign.
+- **Five ISAs, four writer families:** `target/riscv32/rv32_global_emit.c`,
+  `target/riscv64/global_emit.c`, `target/x86_64/global_emit.c` and
+  `target/common/direct_program_emit.c` (shared by AArch64/LoongArch64)
+  consume that one plan rather than each reconstructing the Common policy.
+  The target may still choose a legacy default-section fallback, assembler
+  directive spelling, relocation width and explicit `.bss[.*]` section
+  convention. In particular RV32/RV64's explicit `@progbits` behavior is
+  intentionally **not** rewritten to x86/Direct's `@nobits` convention.
+- **One Core-only scalar shape query:** the identical RV32/RV64 imported
+  Core type unwrap/width classification moves into the Common module
+  global emitter; each RISC-V target still owns admission for Record/Union,
+  zero extent, weak-zero storage and its machine/ABI-specific directives.
+- **Removed the superseded second decision:** old Common standalone global
+  `emit_elf_section` and `emit_elf_binding` entry points and duplicated
+  target-local policy switches are removed in this same batch. Keep
+  existing `minic_multi_module_emit_global_fragments` as the single
+  checked, contiguous storage/relocation serializer. Do **not** add MIR,
+  move C constant evaluation into Target or change the five backends' ABI.
+
+The architecture comparison is deliberately narrow: GCC separates C
+initialization/decl semantics from assembler/linker section and symbol
+decisions; LLVM IR separates global linkage/initializer facts from ELF
+object-file lowering. MiniC's equivalent seam is **C ingress → sealed
+Core Module → one target-flavored ELF output plan → GNU `.s`**. GNU GAS/ELF
+dialect differences remain data/policy choices inside the individual
+writer, not reasons for four more copies of the symbol algorithm.
+
+### Verified focused gates and explicit non-claims
+
+| Gate | P47 observed result |
+|---|---|
+| Core Module global-fragment standalone probe, migrated to the new ELF plan interface | **PASS** (local standalone); this is not a GNU cross-target ELF execution |
+| Pre-P47 compiler versus new Debug RV32/RV64 204-case source/output differential | **PASS**, **98** byte-identical `.s`, **106** both rejected, **0** changed; this is 204 target cases, not a claim that all five ISAs were covered |
+| `check-p47-five-isa-output-smoke` (six dependent groups) | **PASS**, includes both P46 x86 GNU AS/LD/native gates, nine-object x86 ELF ABI, RV32 and RV64 source ABI, and five-ISA section/weak/sparse/relocation/injection source probes |
+| Five-ISA default/explicit section, weak binding, sparse storage, relocation and malformed-input source evidence | **PASS** under the focused smoke gate; this is `-S` source-level coverage for non-host targets |
+| RV32/RV64 legacy scalar directives and weak-zero, x86/Direct explicit NOBITS policy | **PASS** in the respective source ABI/section probes; deliberately different GNU dialects retained |
+| `tests/compiler/c0/check-minic-target-boundaries.sh` | **PASS**, no reintroduced C AST/Type dependencies below Module ingress |
+| Debug `make -s -j8 MODE=debug check-fast` | **PASS**, local exit 0 after the Common plan and target-writer changes |
+| Strict Release `make -s -j8 MODE=release CFLAGS=-Werror all` | **PASS**, local exit 0 |
+| x86 nine-object global ABI GNU AS/LD/native oracle | **PASS**, GNU ELF/native execution on host; does not imply remaining targets' GNU ELF/QEMU success |
+| YAML syntax, Bash syntax and `git diff --check` | **PASS** in local focused verification |
+| Cross GNU AS/ELF, GNU LD and QEMU execution for RV32/RV64/AArch64/LoongArch64 at this P47 head | **NOT RUN** — source/host passes cannot substitute for cross-target object and runtime certification |
+| Four-architecture GNU runtime CI and three-ISA Linux GNU/QEMU P0/P1 workflows at this P47 head | **NOT RUN** — historical predecessor workflow successes do not certify this head |
+| Complete five-ISA Linux GNU ELF/QEMU kernel runtime | **NOT RUN** in P47; source `.s` and host GNU ELF checks are not Linux boot evidence |
+
+**Next independent owners after P47:** the unresolved x86 `.head.text`
+physical-VMA provenance through pointer LOAD/PHI/alias (MC-076), and
+duplicated checked 64-bit arithmetic in static initializer relocation,
+GNU `i` specialization and bounded Core constant facts. The latter should
+share safe arithmetic primitives while preserving the distinct C static
+initializer member paths and GNU ASM specialisation/zero-stride admission.
+No P38–P46 type, clone, ASM symbol-reachability or aggregate-copy migration
+should be reopened merely because this ELF owner is being consolidated.

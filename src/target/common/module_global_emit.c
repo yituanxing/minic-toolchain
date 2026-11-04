@@ -6,6 +6,30 @@
 #include <stdint.h>
 #include <string.h>
 
+const MinicCoreType *minic_multi_module_global_core_base(
+    const MinicCoreTypeContext *types, MinicCoreTypeId id) {
+    return minic_core_type_get(types, minic_core_type_unqualified(types, id));
+}
+
+bool minic_multi_module_global_scalar_width(
+    const MinicCoreTypeContext *types, const MinicCoreType *type,
+    size_t *width) {
+    if (types == NULL || width == NULL) return false;
+    while (type != NULL && type->kind == MINIC_CORE_TYPE_ARRAY)
+        type = minic_multi_module_global_core_base(
+            types, type->value.array.element);
+    if (type == NULL || !type->has_layout ||
+        (type->kind != MINIC_CORE_TYPE_INTEGER &&
+         type->kind != MINIC_CORE_TYPE_POINTER &&
+         !(type->kind == MINIC_CORE_TYPE_FLOAT &&
+           (type->value.floating.format == MINIC_CORE_FLOAT_BINARY32 ||
+            type->value.floating.format == MINIC_CORE_FLOAT_BINARY64))) ||
+        (type->size != 1U && type->size != 2U &&
+         type->size != 4U && type->size != 8U)) return false;
+    *width = type->size;
+    return true;
+}
+
 /* Core owns the target-neutral initializer layout and symbol proof. The
  * object writer only checks what this GNU data-directive dialect can express:
  * scalar directive spelling and this target's relocation field width. */
@@ -89,37 +113,106 @@ static bool minic_module_elf_bss_section(const char *name) {
            (name[4] == '\0' || name[4] == '.');
 }
 
-bool minic_multi_module_emit_elf_section(
-    FILE *out, const MinicCoreModuleGlobal *global, const char *fallback) {
-    if (out == NULL || global == NULL || fallback == NULL) return false;
-    if (global->section_name == NULL)
-        return fprintf(out, "%s\n", fallback) >= 0;
-    if (!minic_elf_section_name_valid(global->section_name)) return false;
-    return fprintf(out, ".section %s,\"%s\",@%s\n",
-        global->section_name, global->is_read_only ? "a" : "aw",
-        minic_module_elf_bss_section(global->section_name)
-            ? "nobits" : "progbits") >= 0;
+static const char *minic_module_elf_default_section(
+    MinicCoreModuleDefaultSection section) {
+    switch (section) {
+    case MINIC_CORE_MODULE_SECTION_BSS: return ".bss";
+    case MINIC_CORE_MODULE_SECTION_DATA: return ".data";
+    case MINIC_CORE_MODULE_SECTION_RODATA: return ".section .rodata";
+    case MINIC_CORE_MODULE_SECTION_RELRO: return ".section .data.rel.ro";
+    default: return NULL;
+    }
 }
 
-bool minic_multi_module_emit_elf_binding(
-    FILE *out, const MinicCoreModuleGlobal *global) {
-    if (out == NULL || global == NULL ||
-        !minic_core_assembler_symbol_lexically_safe(global->name)) return false;
-    if (global->is_internal) return !global->is_weak;
-    return fprintf(out, "%s %s\n", global->is_weak ? ".weak" : ".globl",
-                   global->name) >= 0;
+static bool minic_module_elf_visibility_directive(
+    MinicCoreModuleVisibility visibility, const char **directive) {
+    if (directive == NULL) return false;
+    switch (visibility) {
+    case MINIC_CORE_MODULE_VISIBILITY_DEFAULT: *directive = NULL; return true;
+    case MINIC_CORE_MODULE_VISIBILITY_HIDDEN: *directive = ".hidden"; return true;
+    case MINIC_CORE_MODULE_VISIBILITY_INTERNAL: *directive = ".internal"; return true;
+    case MINIC_CORE_MODULE_VISIBILITY_PROTECTED: *directive = ".protected"; return true;
+    default: return false;
+    }
+}
+
+bool minic_multi_module_elf_global_plan_build(
+    const MinicCoreModuleGlobal *global, const char *fallback_override,
+    bool explicit_bss_nobits, MinicModuleDataDirectiveFn directive,
+    bool signed_integer_bits, size_t relocation_width,
+    MinicModuleElfGlobalPlan *plan) {
+    const char *fallback;
+    const char *visibility;
+    if (global == NULL || plan == NULL ||
+        !minic_core_assembler_symbol_lexically_safe(global->name) ||
+        (global->is_internal && global->is_weak) ||
+        (global->section_name != NULL &&
+         !minic_elf_section_name_valid(global->section_name)) ||
+        !minic_module_global_fragment_directives_supported(
+            global, directive, relocation_width)) return false;
+    fallback = fallback_override != NULL
+        ? fallback_override
+        : minic_module_elf_default_section(global->default_section);
+    if (fallback == NULL) return false;
+    if (!minic_module_elf_visibility_directive(global->visibility,
+                                                &visibility)) return false;
+    plan->global = global;
+    plan->fallback_section = fallback;
+    plan->explicit_section_type = explicit_bss_nobits &&
+        minic_module_elf_bss_section(global->section_name)
+        ? "nobits" : "progbits";
+    plan->section_flags = global->is_read_only ? "a" : "aw";
+    plan->binding_directive = global->is_internal ? NULL :
+        (global->is_weak ? ".weak" : ".globl");
+    plan->visibility_directive = visibility;
+    plan->data_directive = directive;
+    plan->relocation_width = relocation_width;
+    plan->signed_integer_bits = signed_integer_bits;
+    return true;
+}
+
+bool minic_multi_module_elf_global_emit_section(
+    FILE *out, const MinicModuleElfGlobalPlan *plan) {
+    if (out == NULL || plan == NULL || plan->global == NULL ||
+        plan->fallback_section == NULL || plan->section_flags == NULL ||
+        plan->explicit_section_type == NULL) return false;
+    if (plan->global->section_name == NULL)
+        return fprintf(out, "%s\n", plan->fallback_section) >= 0;
+    return fprintf(out, ".section %s,\"%s\",@%s\n",
+                   plan->global->section_name, plan->section_flags,
+                   plan->explicit_section_type) >= 0;
+}
+
+bool minic_multi_module_elf_global_emit_binding(
+    FILE *out, const MinicModuleElfGlobalPlan *plan) {
+    if (out == NULL || plan == NULL || plan->global == NULL) return false;
+    return plan->binding_directive == NULL ||
+        fprintf(out, "%s %s\n", plan->binding_directive,
+                plan->global->name) >= 0;
+}
+
+bool minic_multi_module_elf_global_emit_visibility(
+    FILE *out, const MinicModuleElfGlobalPlan *plan) {
+    if (out == NULL || plan == NULL || plan->global == NULL) return false;
+    return plan->visibility_directive == NULL ||
+        fprintf(out, "%s %s\n", plan->visibility_directive,
+                plan->global->name) >= 0;
+}
+
+bool minic_multi_module_elf_global_emit_fragments(
+    FILE *out, const MinicModuleElfGlobalPlan *plan) {
+    return plan != NULL && plan->global != NULL &&
+        minic_multi_module_emit_global_fragments(
+            out, plan->global, plan->data_directive,
+            plan->signed_integer_bits, plan->relocation_width);
 }
 
 bool minic_multi_module_emit_elf_symbol_visibility(
     FILE *out, MinicCoreModuleVisibility visibility, const char *symbol) {
     const char *directive;
-    if (out == NULL || !minic_core_assembler_symbol_lexically_safe(symbol)) return false;
-    switch (visibility) {
-    case MINIC_CORE_MODULE_VISIBILITY_DEFAULT: return true;
-    case MINIC_CORE_MODULE_VISIBILITY_HIDDEN: directive = ".hidden"; break;
-    case MINIC_CORE_MODULE_VISIBILITY_INTERNAL: directive = ".internal"; break;
-    case MINIC_CORE_MODULE_VISIBILITY_PROTECTED: directive = ".protected"; break;
-    default: return false;
-    }
+    if (out == NULL || !minic_core_assembler_symbol_lexically_safe(symbol) ||
+        !minic_module_elf_visibility_directive(visibility, &directive))
+        return false;
+    if (directive == NULL) return true;
     return fprintf(out, "%s %s\n", directive, symbol) >= 0;
 }

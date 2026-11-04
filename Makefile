@@ -2392,6 +2392,32 @@ check-p46-x86-head-aggregate: $(MINIC_CC_BINARY)
 
 check-fast: check-p46-aggregate-and-loong-oracle check-p46-x86-head-aggregate
 
+# The x86 global object plan is an ELF ABI contract, not merely emitted
+# source: compare GNU/MiniC native execution, named section types, symbol
+# sizes, relocation counts and invalid nonzero .bss initializers.
+.PHONY: check-x86-global-plan-abi
+check-x86-global-plan-abi: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" BUILD_DIR="$(abspath $(BUILD_DIR))" \
+	  sh tests/compiler/c0/run-x86-global-plan-abi.sh
+
+# Reuse the existing RV32/RV64 source-only targets defined above; the
+# separate opt-in cross GNU ELF/QEMU targets retain their BLOCKED semantics.
+.PHONY: check-five-isa-global-section-source
+check-five-isa-global-section-source: $(MINIC_CC_BINARY)
+	@for target in x86_64 aarch64 loongarch64 riscv32 riscv64; do \
+	  MINIC_SECTION_ONLY=1 bash tests/compiler/c0/probe-linux-global-section-reloc.sh \
+	    "$(abspath $(MINIC_CC_BINARY))" "$$target" || exit $$?; \
+	done
+	@echo 'P47_FIVE_ISA_GLOBAL_SECTION_SOURCE=PASS targets=5 GNU_ELF=NOT_RUN QEMU=NOT_RUN'
+
+# One focused fail-closed gate for P47's five-ISA ELF global-output boundary.
+# P46 exercises GNU AS/LD and real native x86 runtime, while RV32/RV64 and
+# the remaining ISAs are source-only until separately certified under QEMU.
+.PHONY: check-p47-five-isa-output-smoke
+check-p47-five-isa-output-smoke: check-p46-aggregate-and-loong-oracle check-p46-x86-head-aggregate check-x86-global-plan-abi check-rv32-global-plan-source check-rv64-global-plan-source check-five-isa-global-section-source
+
+check-fast: check-x86-global-plan-abi check-five-isa-global-section-source
+
 # Source -> Core -> normalized-machine ASM proof is a single admission
 # contract. Check whole instruction families, including hostile rewrites,
 # without requiring cross GNU/QEMU tools or granting opaque source IDs power.
