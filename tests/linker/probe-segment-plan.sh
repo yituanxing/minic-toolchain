@@ -411,9 +411,14 @@ def inspect(filename, etype):
         names.setdefault(strings[start:end].decode(), []).append(sec)
     for segment in ph:
         typ, flags, off, vaddr, paddr, filesz, memsz, align = segment
-        assert filesz <= memsz and (
-            filesz == 0 or off + filesz <= len(raw)
-        ), (filename, 'segment extent', segment)
+        # GNU RISC-V emits PT_RISCV_ATTRIBUTES (0x70000003) with a
+        # file-backed payload and p_memsz=0.  Only memory-mapped LOAD/TLS
+        # segments require p_filesz <= p_memsz; all program-header file
+        # ranges must still stay within the ELF image.
+        if typ in (1, 7):
+            assert filesz <= memsz, (filename, 'mapped segment extent', segment)
+        assert filesz == 0 or off + filesz <= len(raw), (
+            filename, 'segment file extent', segment)
         assert align in (0, 1) or (align & (align - 1)) == 0, (filename, 'alignment')
         if align > 1:
             assert (vaddr - off) % align == 0, (filename, 'segment congruence')
