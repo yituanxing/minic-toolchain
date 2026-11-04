@@ -1665,10 +1665,10 @@ int minild_link_shared_elf64_riscv_inputs_options(
 
     if (!process_input_sequence(&state, inputs, input_count) ||
         !state.have_input ||
-        !minild_finish_input_merge(&state) ||
-        (script_path != NULL &&
-         (!minild_materialize_input_sections(&state, true) ||
-          !minild_restore_input_order(&state))) ||
+        !minild_project_admitted_inputs(
+            &state, script_path != NULL ? MINILD_PROJECTION_SCRIPT
+                                        : MINILD_PROJECTION_MERGED) ||
+        (script_path != NULL && !minild_restore_input_order(&state)) ||
         (strip_debug && !shared_strip_debug_preflight(&state)) ||
         !static_allocate_common(&state) ||
         (script_path != NULL &&

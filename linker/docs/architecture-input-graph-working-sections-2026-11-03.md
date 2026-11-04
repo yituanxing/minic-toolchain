@@ -9,15 +9,15 @@ the existing RISC-V ELF linker, not a new target or linker algorithm.
 | Owner | Owns | Stable or mutable identity |
 | --- | --- | --- |
 | `MiniLdInputGraph` (`linker_input.inc`) | Source files, original ELF sections, original symbols, copied bytes and names, file-to-section ID maps | Append-only input file/section/symbol IDs, including extracted archive members |
-| `MiniLdSectionWorkspace` (`linker_work_sections.inc`) | Merged and materialized work sections, name index, `MiniLdInputPlacement[]` | Work-section indices change during materialization and reorder |
+| `MiniLdSectionWorkspace` (`linker_work_sections.inc`) | Projected work sections, name index, `MiniLdInputPlacement[]` | Work-section indices change during projection and reorder |
 | `MiniLdSymbolResolver` (`linker_symbol.inc`) | Canonical resolved symbols and global-name index | Canonical IDs remain stable; winning section/value may change |
 | Final-symbol / output-section projections | Serialized symbol/section order after planning | Disposable output ELF indexes |
 
 `MiniLdInputPlacement[i]` corresponds to `MiniLdInputGraph.sections[i]`.
-`merged_section` records the work slot assigned **after** post-admission
-projection; `current_section` records the live materialized fragment after
-sorting. During admission there is exactly one initially empty work placeholder
-per input section. The original `MiniLdInputSection` no longer stores placement,
+Its single `work_section` field records the selected post-admission work slot;
+the former `merged_section`/`current_section` pair is removed. During
+admission there is exactly one initially empty work placeholder per input
+section. The original `MiniLdInputSection` no longer stores placement,
 GC section indexes or linker-script KEEP/DISCARD/selection flags. Those flags
 belong to the work section.
 
@@ -27,25 +27,28 @@ belong to the work section.
    the coordination helper checks equal counts and rolls back the placement
    count on a failed source-record operation. Lazy archive extraction uses the
    same path as ordinary ET_REL inputs.
-2. Once the complete object/archive/COMDAT selection is known,
-   `minild_finish_input_merge` projects those distinct source placeholders
-   into work sections. Name merging respects `-r` COMDAT group members,
-   LINK_ORDER sources and targets, alignment and RISC-V attributes; `indexable`
-   records distinct identities explicitly, including after name-index rebuilds.
-3. Script/GC materialization then copies only selected original section data into
-   new work fragments, preserving source IDs and original symbol offsets.
-   Work placement then points to each new fragment.
+2. Once complete object/archive/COMDAT selection is known,
+   `minild_project_admitted_inputs` builds the chosen work view **once**:
+   `-r` preserves COMDAT/group and LINK_ORDER identities, ordinary final links
+   coalesce compatible sources, static GC keeps exact ALLOC and LINK_ORDER
+   fragments, and script links keep each eligible source fragment. The common
+   `.riscv.attributes` vendor record remains merged. There is no eager merged
+   byte buffer that script/GC later discards.
+3. Original input IDs, bytes and source offsets remain immutable. One
+   validated source-to-work map atomically rebinds placements, canonical
+   winners and relocations to their final work coordinates. Exact fragments
+   start at source offset zero; merged sections retain alignment gaps.
 4. Input-order, output-class and output-alignment sorts use one permutation
    installer. It validates an in-range, one-to-one mapping and all referenced
    section IDs, allocates a new name index first, then remaps canonical symbol
    sections, relocation sections, LINK_ORDER targets and input placements
-   together. It does not mutate original source IDs or `merged_section`.
+   together. It does not mutate original source IDs.
 5. Layout, relocation indexes, ELF output-section plans and final symbol
    projections run after these work permutations; they must not retain stale
    work-section indexes across a later sort.
 
 `MiniLdSectionWorkspace` is destroyed before `MiniLdInputGraph` because the
-materialized work sections borrow source names and input paths. Ownership of
+projected work sections borrow source names and input paths. Ownership of
 each allocation remains unique, and borrowed strings are not double-freed.
 
 ## Verification and remaining scope
@@ -73,7 +76,7 @@ For `-r`, ET_EXEC and ET_DYN (including script/GC), the reader admits each
 source section as its own initially empty working-section identity. It
 records original input bytes, symbols and relocation offsets without rebasing
 them into a same-named aggregate during archive/COMDAT selection. Once the
-complete input sequence is known, `minild_finish_input_merge` builds
+complete input sequence is known, `minild_project_admitted_inputs` builds
 a mode-aware work projection in one pass. Final links retain name coalescing,
 input order, alignment gaps, RISC-V attribute vendor-record concatenation and
 exact `SHF_LINK_ORDER` targets. `-r` additionally preserves independent COMDAT
@@ -94,9 +97,10 @@ two COMDAT groups, LINK_ORDER metadata, merged `SHT_NOBITS` and RISC-V
 attributes. Existing native
 shared/PIE and archive/COMDAT tests exercise the same admission boundary.
 
-**Boundary:** script/GC still materialize source identities **after** the
-shared projection, which may copy bytes twice; preserving non-ALLOC and
-attribute behavior takes priority over bypassing that step. The admission
-path is uniform, but output planning and script-specific selection are not
-unified into a universal linker engine. GNU RISC-V/QEMU Linux compatibility
-has not been requalified.
+**Updated boundary (2026-11-04):** Script/GC now select exact source
+fragments *within* the single post-admission projection. The previous
+merge-then-materialize pass and its empty discarded section holders are gone.
+GC without `-T` still merges ordinary non-ALLOC metadata; scripts retain
+source identity for non-ALLOC inputs and LINK_ORDER. Script selection and GC
+reachability remain distinct policies; no universal linker engine was added.
+GNU RISC-V/QEMU Linux compatibility has not been requalified.

@@ -143,9 +143,9 @@ static bool static_allocate_common(MiniLdState *state) {
                                  &bss_index)) {
             return false;
         }
-        /* An input-backed .bss may leave an empty GC merger placeholder.
-         * COMMON allocation turns that holder into a real synthetic output
-         * section again, independently of the original input fragments. */
+        /* Source-exact GC/script projections do not create an empty merged
+         * .bss holder. COMMON owns this indexable work section independently
+         * of any original input fragments, and it must survive GC. */
         state->work.sections[bss_index].gc_discarded = false;
         alignment = symbol->value == 0U ? 1U : symbol->value;
         if (!align_up_size(state->work.sections[bss_index].size,

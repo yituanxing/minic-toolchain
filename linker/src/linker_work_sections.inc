@@ -15,10 +15,9 @@ static void work_sections_destroy(MiniLdSectionWorkspace *work) {
 }
 
 /* Per-input placement is mutable linking state, keyed by the stable source
- * input-section ID.  Its original merged work-section ID is retained across
- * materialization; only current_section follows work-section permutations. */
+ * input-section ID. Projection and later permutations both remap one slot. */
 static bool work_placement_append(MiniLdSectionWorkspace *work,
-                                  size_t merged_section) {
+                                  size_t work_section) {
     MiniLdInputPlacement *next;
     size_t capacity;
 
@@ -38,8 +37,7 @@ static bool work_placement_append(MiniLdSectionWorkspace *work,
         work->placement_capacity = capacity;
     }
     work->placements[work->placement_count++] = (MiniLdInputPlacement){
-        .merged_section = merged_section,
-        .current_section = SIZE_MAX
+        .work_section = work_section
     };
     return true;
 }

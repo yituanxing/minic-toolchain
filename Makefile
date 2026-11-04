@@ -869,6 +869,12 @@ check-minild-relocatable-input-projection: $(MINIAS_BINARY) $(MINILD_BINARY)
 	MINILD="$(abspath $(MINILD_BINARY))" \
 	bash tests/linker/probe-relocatable-input-projection.sh
 
+.PHONY: check-minild-input-projection-contract
+check-minild-input-projection-contract: $(MINIAS_BINARY) $(MINILD_BINARY)
+	MINIAS="$(abspath $(MINIAS_BINARY))" \
+	MINILD="$(abspath $(MINILD_BINARY))" \
+	bash tests/linker/probe-input-projection-single-pass-contract.sh
+
 .PHONY: check-minild-reloc-owner-lifecycle
 check-minild-reloc-owner-lifecycle: $(MINIAS_BINARY) $(MINILD_BINARY)
 	MINIAS="$(abspath $(MINIAS_BINARY))" \

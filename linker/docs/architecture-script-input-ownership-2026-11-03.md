@@ -7,6 +7,29 @@ and
 The implementation target remains **RV64 ELF**; this is neither a claim of
 full GNU ld script support nor evidence of a new Linux/QEMU runtime pass.
 
+## Superseding single-pass projection (2026-11-04)
+
+The implementation below records the **previous** merge-and-rematerialize
+checkpoint. It has now been replaced across `-r`, ET_EXEC and ET_DYN by one
+post-admission `minild_project_admitted_inputs` phase:
+
+- Source identities remain immutable until archive/COMDAT admission finishes.
+  The projection directly chooses name-coalesced work or source-exact
+  fragments according to relocatable, default, GC and script mode.
+- Script links retain all eligible distinct input fragments; static GC without
+  a script preserves ALLOC and LINK_ORDER identities while merging ordinary
+  non-ALLOC metadata. `.riscv.attributes` keeps its vendor-record aggregation.
+- A single input-ID-to-work-slot placement replaces `merged_section` plus
+  `current_section`. Canonical symbols, relocations and LINK_ORDER targets
+  are rebound once, before permutation, layout and all dynamic metadata.
+- No empty discarded merged holders or second copy of script/GC bytes remain.
+  The script/GC selector and RISC-V layout algorithms stay unchanged.
+
+The subsequent sections are retained as historical rationale for why source
+identity, filename-qualified selection and shared CFI indexing matter. For
+the current single-pass boundary use
+[`architecture-input-graph-working-sections-2026-11-03.md`](architecture-input-graph-working-sections-2026-11-03.md).
+
 ## Problem and data-flow correction
 
 `process_input_data` originally concatenates same-named ET_REL input sections

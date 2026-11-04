@@ -160,14 +160,27 @@ if observed != expected:
     raise SystemExit(f'MINILD_STATIC_PIPELINE=FAIL case={case} '
                      f'phase_order={observed!r} expected={expected!r}')
 PY
-    if [[ $case == plain ]]; then
-        if grep -q 'materialized-input-sections:' "$work/$case.stderr"; then
-            echo 'MINILD_STATIC_PIPELINE=FAIL case=plain unexpected_materialization' >&2
-            exit 1
-        fi
-    elif ! grep -q 'materialized-input-sections:' "$work/$case.stderr"; then
-        echo "MINILD_STATIC_PIPELINE=FAIL case=$case missing_materialization" >&2
-        exit 1
-    fi
+    # The admission graph is projected exactly once for GC/script selection.
+    # Plain final linking uses a coalesced projection and need not advertise
+    # a source-fragment expansion; the legacy materialization stage is gone.
+    python3 - "$case" "$work/$case.stderr" <<'PY'
+from pathlib import Path
+import sys
+
+case, logfile = sys.argv[1:]
+lines = Path(logfile).read_text().splitlines()
+events = [line for line in lines if line.startswith(
+    'minic-ld: projected-input-sections:')]
+legacy = [line for line in lines if 'materialized-input-sections:' in line]
+if legacy:
+    raise SystemExit(f'{case}: legacy materialization event still emitted')
+if case == 'plain':
+    if events:
+        raise SystemExit(f'{case}: unexpected source-fragment projection: {events}')
+else:
+    mode = 'script' if case in ('script', 'script_gc') else 'gc'
+    if len(events) != 1 or not events[0].endswith(f':mode={mode}'):
+        raise SystemExit(f'{case}: expected one {mode} projector event: {events}')
+PY
 done
-echo 'MINILD_STATIC_PIPELINE=PASS cases=4 profile_phases=5 fast_path=preserved'
+echo 'MINILD_STATIC_PIPELINE=PASS cases=4 profile_phases=5 projector=single_pass'

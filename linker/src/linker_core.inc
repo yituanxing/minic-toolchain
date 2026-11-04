@@ -193,11 +193,10 @@ typedef struct MiniLdIndexSlot {
 } MiniLdIndexSlot;
 
 /* Parallel to InputGraph.sections, indexed by stable input-section ID.
- * The initial coalesced section is used only during materialization; the
- * current work section is remapped whenever work sections are reordered. */
+ * Projection replaces its initial distinct admission placeholder with the
+ * final work-section identity, then work permutations remap this one owner. */
 typedef struct MiniLdInputPlacement {
-    size_t merged_section;
-    size_t current_section;
+    size_t work_section;
 } MiniLdInputPlacement;
 
 typedef struct MiniLdSectionWorkspace {
@@ -239,12 +238,18 @@ typedef struct MiniLdState {
     FILE *diagnostics;
 } MiniLdState;
 
-/* Implemented by the final-link input-section owner in linker.c, after this
- * shared core is included.  The EH header indexer scans materialized CFI
- * inputs independently, so shared scripts retain full source identity. */
-static bool minild_materialize_input_sections(
-    MiniLdState *state, bool include_nonalloc);
-static bool minild_finish_input_merge(MiniLdState *state);
+/* Implemented by the input-projection owner in linker.c, after this shared
+ * core is included. The EH indexer scans projected source CFI fragments,
+ * so shared scripts retain original input identity. */
+typedef enum MiniLdInputProjection {
+    MINILD_PROJECTION_RELOCATABLE,
+    MINILD_PROJECTION_MERGED,
+    MINILD_PROJECTION_GC,
+    MINILD_PROJECTION_SCRIPT
+} MiniLdInputProjection;
+
+static bool minild_project_admitted_inputs(MiniLdState *state,
+                                           MiniLdInputProjection projection);
 static bool minild_restore_input_order(MiniLdState *state);
 static bool minild_shared_prune_script_inputs(MiniLdState *state,
                                               const MiniLdScript *script);
@@ -534,14 +539,6 @@ static void insert_index_slot(MiniLdIndexSlot *slots,
  * Its index rebuild is also used by the final-link permutation transaction. */
 #include "linker_work_sections.inc"
 
-static bool ensure_section_capacity(MiniLdState *state) {
-    return work_sections_ensure_capacity(&state->work);
-}
-
-static bool rebuild_section_index(MiniLdState *state, size_t capacity) {
-    return work_sections_rebuild_index(&state->work, capacity);
-}
-
 static size_t find_section_index(const MiniLdState *state,
                                  const char *name,
                                  uint64_t hash) {
@@ -743,12 +740,12 @@ static bool admit_input_section(MiniLdState *state,
                                 const MiniElfSection *header,
                                 const unsigned char *bytes,
                                 size_t data_size,
-                                size_t merged_section,
+                                size_t work_section,
                                 size_t *input_id_out) {
     size_t placement_before = state->work.placement_count;
 
     if (placement_before != state->inputs.section_count ||
-        !work_placement_append(&state->work, merged_section)) {
+        !work_placement_append(&state->work, work_section)) {
         return false;
     }
     if (!input_graph_record_section(&state->inputs, file, elf_index,
@@ -2485,7 +2482,8 @@ int minild_link_relocatable_elf64_riscv_inputs(const char *output_path,
     }
 
     if (!state.have_input ||
-        !minild_finish_input_merge(&state) ||
+        !minild_project_admitted_inputs(&state,
+                                        MINILD_PROJECTION_RELOCATABLE) ||
         !write_output(&state, output_path)) {
         goto done;
     }

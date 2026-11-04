@@ -6,7 +6,7 @@ MiniLD already distinguished original input files/sections from mutable work
 fragments, and already built a temporary final-symbol view. The remaining
 problem was that a single `MiniLdSymbol` record simultaneously held the
 *winning input definition's provenance* and mutable state for resolution,
-script overrides, GC rematerialization, relaxation and final ELF output.
+   script overrides, GC source projection, relaxation and final ELF output.
 
 This pass separates **ownership**, without changing the canonical symbol
 index used by relocations or introducing new GNU-compatible symbol features.
@@ -40,10 +40,11 @@ definitions and linker-synthesized symbols have no input source.
    the existing weak/strong winner rules update the resolved record's
    `source_symbol` only when a candidate wins; losing source records remain
    intact. Archive extraction and relocations keep canonical numeric IDs.
-3. When script selection or GC rematerializes source sections, recover the
-   selected canonical symbol's original offset from the winning
-   `MiniLdInputSymbol`, then set the *working* section and value. Never
-   recover the input identity by reverse-engineering merged section names.
+3. During the one post-admission projection, recover the selected canonical
+   symbol's original offset from the winning `MiniLdInputSymbol`, then set
+   its work section and value directly. Script/GC exact fragments have no
+   merged-section base; ordinary coalescing applies source alignment once.
+   Never recover input identity by reverse-engineering section names.
 4. Script assignments may override a canonical definition, clearing its
    `source_symbol` because the current value no longer belongs to an input
    object. COMMON allocation, relaxation and final VMA assignment likewise
@@ -58,7 +59,7 @@ definitions and linker-synthesized symbols have no input source.
   relocations; input source IDs are append-only.
 - A winning symbol always refers to its own raw source value, even if earlier
   weak definitions, discarded COMDATs or script/GC reordered fragments.
-- Script and synthesized definitions cannot accidentally rematerialize an
+- Script and synthesized definitions cannot accidentally resurrect an
   old input value through stale provenance.
 - The final ELF writer neither picks a winning input nor mutates the global
   resolver in order to assign output symbol indexes.

@@ -30,17 +30,19 @@ relations remain available to GC.
    a distinct, empty source-section work placeholder. A single post-admission
    projection chooses the `-r` or final-link work section and its mutable
    offset; repeated `-r` is handled by re-admission.
-2. Final-link materialization restores each surviving relocation's original
-   offset from the input section. Section permutations remap relocation
-   current-section IDs simultaneously with resolved symbols, LINK_ORDER
-   targets and input placements.
+2. The single post-admission projection derives each surviving relocation's
+   work section and offset directly from its immutable source ID and offset.
+   Exact script/GC fragments retain their original offsets; coalesced work
+   sections add the source's alignment base once. Section permutations then
+   remap relocation section IDs simultaneously with resolved symbols,
+   LINK_ORDER targets and input placements.
 3. Script discard and static GC compact the worklist before final layout;
    discarded-section relocations never leak into GOT/PLT/dynamic metadata.
 4. RISC-V ALIGN relaxation lazily builds a CSR index over the **current work
    sections**. Build cost is O(sections + relocations), with stable list order
    within each section. Relaxation may update offsets and section data, but
    not move a relocation to another section.
-5. Once CSR exists, admission, materialization, reordering and GC/script
+5. Once CSR exists, admission, projection, reordering and GC/script
    compaction are rejected. Synthetic sections created during later layout
    are allowed but cannot add relocation records to the frozen worklist.
 6. Static relocation application and shared dynamic relocation construction
