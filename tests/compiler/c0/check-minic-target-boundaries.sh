@@ -1046,7 +1046,10 @@ for source in \
   lacks "$source" 'minic_type_'
 done
 has src/target/common/direct_call_plan.c 'abi->core_indirect_return'
-has src/target/common/direct_function_profile.c 'fn->core_return_type_id'
+has src/target/common/direct_function_profile.c 'minic_core_function_return_type(fn)'
+has src/core/core_ir.h 'minic_core_function_signature_type('
+lacks src/core/core_ir.h 'MinicCoreTypeId core_return_type_id;'
+lacks src/core/core_ir.h 'MinicCoreTypeId *core_parameter_type_ids;'
 # RV64 machine execution and the LoongArch64 integer pipeline no longer
 # have source C type fallbacks; retain source-ASM qualification separately.
 for source in \

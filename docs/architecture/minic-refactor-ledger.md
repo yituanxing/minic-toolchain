@@ -3119,3 +3119,12 @@ fallback or stale candidate object was used. The combined Debug `check-fast`
 and strict Release `-Werror all` also pass; the seven independent Linux
 candidate producer shards and final GNU LD/QEMU receivers have not yet been
 rerun at this integrated tree and are **not** counted as certified.
+
+**Strict CI boundary maintenance:** the first P59/P60 remote Native Strict
+job stopped at a stale source-text assertion requiring the physically deleted
+`fn->core_return_type_id` in Direct LP64 profile code. The checker now
+requires the actual sealed `minic_core_function_return_type(fn)` consumer
+and rejects reintroduced parallel CoreFunction return/parameter fields.
+The standalone `check-minic-target-boundaries.sh` passes locally, including
+its negative/ownership probes. This is a test-contract update, not a new ABI
+fallback or a claim that the subsequent remote rerun is already green.
