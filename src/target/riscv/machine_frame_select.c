@@ -57,8 +57,8 @@ static MinicMachineOperand rv_address(unsigned xlen, unsigned base,
     return result;
 }
 
-static bool rv_emit(MinicMachineBuilder *builder, uint32_t opcode,
-                    const MinicMachineOperand *operands, size_t count) {
+bool minic_riscv_machine_emit_selected(MinicMachineBuilder *builder,
+    uint32_t opcode, const MinicMachineOperand *operands, size_t count) {
     MinicMachineOpcodeContract contract = {0};
     const MinicTargetInfo *target;
     size_t i;
@@ -78,6 +78,8 @@ static bool rv_emit(MinicMachineBuilder *builder, uint32_t opcode,
         contract.implicit_count != 0U ? contract.implicit : NULL,
         contract.implicit_count);
 }
+
+#define rv_emit minic_riscv_machine_emit_selected
 
 static bool rv_li(MinicMachineBuilder *builder, unsigned dst, int64_t number) {
     const unsigned xlen = rv_xlen(builder);

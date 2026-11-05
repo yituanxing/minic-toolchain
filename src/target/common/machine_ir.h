@@ -224,6 +224,11 @@ typedef struct MinicMachineInstruction {
 typedef struct MinicMachineBlock {
     size_t id;
     bool machine_auxiliary; /* target inserted; still obeys physical CFG */
+    /* Exactly one primary machine block identifies each reachable Core block.
+     * Target-created prologue/branch islands are auxiliary and have no Core
+     * block identity; this is independent of per-instruction provenance. */
+    bool has_core_block_origin;
+    size_t core_block_id;
     char *exported_label;
     /* Several externally referenced names can resolve to one block entry,
      * for example a Core block name and an address-taken label. */

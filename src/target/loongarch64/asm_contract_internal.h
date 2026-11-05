@@ -48,6 +48,17 @@ struct MinicLoongAtomicTemplate {
     size_t width;
 };
 
+typedef struct LoongPerCpuAmoTemplate {
+    const char *compact;
+    const char *mnemonic;
+    size_t width;
+} LoongPerCpuAmoTemplate;
+
+/* Exact Linux exception-table ABI form bytes, decoded by MachineASM; direct
+ * code emission reads the same immutable machine-owned metadata. */
+extern const LoongPerCpuAmoTemplate loong_percpu_amo[6];
+extern const char loong_linux_exception_gpr_map[];
+
 /* Stable ordinal contract shared by source admission and machine dispatch. */
 enum MinicLoongDescriptorId {
     LOONG_DESC_CACOP = 1,

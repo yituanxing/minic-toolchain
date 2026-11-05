@@ -51,6 +51,21 @@ bool minic_machine_builder_create_block(MinicMachineBuilder *builder,
     return minic_machine_builder_position_at(builder, *block_id);
 }
 
+bool minic_machine_builder_mark_core_block(MinicMachineBuilder *builder,
+    size_t core_block_id) {
+    MinicMachineBlock *block;
+    if (builder == NULL || builder->function == NULL ||
+        !builder->has_position ||
+        builder->current_block >= builder->function->block_count)
+        return false;
+    block = &builder->function->blocks[builder->current_block];
+    if (block->machine_auxiliary || block->has_core_block_origin)
+        return false;
+    block->has_core_block_origin = true;
+    block->core_block_id = core_block_id;
+    return true;
+}
+
 void minic_machine_builder_set_origin(MinicMachineBuilder *builder,
     size_t core_block_id, size_t core_instruction_id) {
     if (builder == NULL) return;

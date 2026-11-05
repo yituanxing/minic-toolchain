@@ -758,7 +758,13 @@ bool minic_x86_64_machine_opcode_lookup(const MinicTargetInfo *target,
     }
     out->required_generated_features=info->required_features;
     out->required_effects=info->effects;
-    out->permitted_effects=info->effects;
+    /* Selected physical memory instructions may preserve a Core volatile
+     * access as an additional ordering fact.  Volatile is not a second
+     * instruction or a GNU text escape: the same validated load/store owns
+     * both the physical memory effect and the compiler-side barrier. */
+    out->permitted_effects=info->effects |
+        ((info->effects & (MR|MW)) != 0U
+            ? MINIC_MACHINE_EFFECT_VOLATILE : 0U);
     out->terminates_block=info->terminates_block;
     out->permits_fallthrough=info->permits_fallthrough;
     out->has_indirect_successors=info->indirect_successors;

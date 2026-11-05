@@ -194,8 +194,9 @@ static bool a64_features(const MinicTargetInfo *target,
                          uint64_t features, void *context) {
     (void)context;
     return target != NULL && target->architecture == MINIC_TARGET_ARCH_AARCH64 &&
-        features == (MINIC_A64_MACHINE_FEATURE_BASE |
-                     MINIC_A64_MACHINE_FEATURE_FP_SIMD);
+        (features == MINIC_A64_MACHINE_FEATURE_BASE ||
+         features == (MINIC_A64_MACHINE_FEATURE_BASE |
+                      MINIC_A64_MACHINE_FEATURE_FP_SIMD));
 }
 
 static bool a64_relocation(const MinicTargetInfo *target,

@@ -31,11 +31,21 @@ typedef struct LoongSelector {
     size_t *block_ids;
     size_t *aux_true;
     size_t *aux_false;
+    /* Each dynamic alloca owns two adjacent machine blocks: overflow trap
+     * and valid continuation. This is CFG, never a private text label. */
+    size_t *alloc_trap;
+    size_t *alloc_continue;
+    /* A double-to-unsigned64 conversion has two real ordered conversion
+     * paths. Three auxiliary MIR blocks replace the old textual labels. */
+    size_t *u64_high;
+    size_t *u64_low;
+    size_t *u64_done;
     bool *reachable;
 } LoongSelector;
 
 static bool loong_local_frame_address(LoongSelector *,
     unsigned int reg, size_t offset);
+static bool loong_branch(LoongSelector *, uint32_t, size_t, bool, bool);
 
 static MinicMachineRegister loong_reg(unsigned int number) {
     return (MinicMachineRegister){number, 64U,
@@ -630,8 +640,30 @@ static bool loong_float_register_op(MinicMachineBuilder *b, uint32_t opcode,
     const MinicMachineOperand ops[] = {
         loong_fp(dst, width, MINIC_MACHINE_REGISTER_WRITE),
         loong_fp(src, opcode == MINIC_LOONG_MACHINE_FCVT_D_S
-            ? 32U : opcode == MINIC_LOONG_MACHINE_FCVT_S_D
+            || opcode == MINIC_LOONG_MACHINE_FFINT_D_W
+            ? 32U : opcode == MINIC_LOONG_MACHINE_FCVT_S_D ||
+                      opcode == MINIC_LOONG_MACHINE_FTINTRZ_W_D
                 ? 64U : width, MINIC_MACHINE_REGISTER_READ)
+    };
+    return loong_selected(b, opcode, ops, 2U);
+}
+
+static bool loong_float_from_gp(MinicMachineBuilder *b, uint32_t opcode,
+    unsigned int dst, unsigned int src) {
+    const MinicMachineOperand ops[] = {
+        loong_fp(dst, opcode == MINIC_LOONG_MACHINE_MOVGR2FR_W
+            ? 32U : 64U, MINIC_MACHINE_REGISTER_WRITE),
+        loong_gp(src, MINIC_MACHINE_REGISTER_READ)
+    };
+    return loong_selected(b, opcode, ops, 2U);
+}
+
+static bool loong_gp_from_float(MinicMachineBuilder *b, uint32_t opcode,
+    unsigned int dst, unsigned int src) {
+    const MinicMachineOperand ops[] = {
+        loong_gp(dst, MINIC_MACHINE_REGISTER_WRITE),
+        loong_fp(src, opcode == MINIC_LOONG_MACHINE_MOVFR2GR_S
+            ? 32U : 64U, MINIC_MACHINE_REGISTER_READ)
     };
     return loong_selected(b, opcode, ops, 2U);
 }
@@ -642,6 +674,16 @@ static bool loong_float_binary_op(MinicMachineBuilder *b, uint32_t opcode,
         loong_fp(8U, width, MINIC_MACHINE_REGISTER_WRITE),
         loong_fp(8U, width, MINIC_MACHINE_REGISTER_READ),
         loong_fp(9U, width, MINIC_MACHINE_REGISTER_READ)
+    };
+    return loong_selected(b, opcode, ops, 3U);
+}
+
+static bool loong_float_binary_regs(MinicMachineBuilder *b,
+    uint32_t opcode, unsigned int rd, unsigned int lhs, unsigned int rhs) {
+    const MinicMachineOperand ops[] = {
+        loong_fp(rd, 64U, MINIC_MACHINE_REGISTER_WRITE),
+        loong_fp(lhs, 64U, MINIC_MACHINE_REGISTER_READ),
+        loong_fp(rhs, 64U, MINIC_MACHINE_REGISTER_READ)
     };
     return loong_selected(b, opcode, ops, 3U);
 }
@@ -765,6 +807,117 @@ static bool loong_select_float(LoongSelector *sel,
     default:
         return false;
     }
+}
+
+/* LP64D provides only SIGNED hardware conversion. Cover every C-defined
+ * scalar width explicitly; unsigned 64-bit is exact in FP64 by splitting
+ * the source at 32 bits (convert each exact half, one final FP add). The
+ * reverse conversion uses real auxiliary CFG blocks for the 2^63 range,
+ * never an untracked assembler-local label or textual fallback. */
+static bool loong_select_float_integer_cast(LoongSelector *sel,
+    const MinicCoreInstruction *ins, MinicCoreInstructionId ins_id) {
+    const MinicCoreFunction *fn = sel->ctx->fn;
+    MinicMachineBuilder *b = &sel->builder;
+    size_t width;
+    bool sign;
+    if (!minic_multi_direct_floating_shape(fn, ins, &width, &sign) ||
+        (width != 1U && width != 2U && width != 4U && width != 8U))
+        return false;
+    if (ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_TO_DOUBLE) {
+        if (!loong_load_value(sel, ins->value.operand, LOONG_T0, false) ||
+            (width < 4U && !loong_normalize_integer(b, width, sign)))
+            return false;
+        if (width == 8U && !sign) {
+            /* High 32 and low 32 each convert without loss; 2^32 itself
+             * has one exact binary64 representation. */
+            if (!loong_rri(b, MINIC_LOONG_MACHINE_SRLI_D,
+                    LOONG_T1, LOONG_T0, 32) ||
+                !loong_bstrpick_d(b, LOONG_T0, 31U) ||
+                !loong_float_from_gp(b, MINIC_LOONG_MACHINE_MOVGR2FR_D,
+                    8U, LOONG_T1) ||
+                !loong_float_register_op(b, MINIC_LOONG_MACHINE_FFINT_D_L,
+                    8U, 8U, 64U) ||
+                !loong_float_from_gp(b, MINIC_LOONG_MACHINE_MOVGR2FR_D,
+                    9U, LOONG_T0) ||
+                !loong_float_register_op(b, MINIC_LOONG_MACHINE_FFINT_D_L,
+                    9U, 9U, 64U) ||
+                !loong_ri(b, MINIC_LOONG_MACHINE_LI_D,
+                    LOONG_T2, INT64_C(0x41f0000000000000)) ||
+                !loong_float_from_gp(b, MINIC_LOONG_MACHINE_MOVGR2FR_D,
+                    10U, LOONG_T2) ||
+                !loong_float_binary_regs(b, MINIC_LOONG_MACHINE_FMUL_D,
+                    8U, 8U, 10U) ||
+                !loong_float_binary_regs(b, MINIC_LOONG_MACHINE_FADD_D,
+                    8U, 8U, 9U)) return false;
+        } else if (width == 4U && !sign) {
+            if (!loong_bstrpick_d(b, LOONG_T0, 31U) ||
+                !loong_float_from_gp(b, MINIC_LOONG_MACHINE_MOVGR2FR_D,
+                    8U, LOONG_T0) ||
+                !loong_float_register_op(b, MINIC_LOONG_MACHINE_FFINT_D_L,
+                    8U, 8U, 64U)) return false;
+        } else {
+            if (!loong_float_from_gp(b, width == 8U
+                    ? MINIC_LOONG_MACHINE_MOVGR2FR_D :
+                      MINIC_LOONG_MACHINE_MOVGR2FR_W,
+                    8U, LOONG_T0) ||
+                !loong_float_register_op(b, width == 8U
+                    ? MINIC_LOONG_MACHINE_FFINT_D_L :
+                      MINIC_LOONG_MACHINE_FFINT_D_W,
+                    8U, 8U, 64U)) return false;
+        }
+        return loong_float_value(sel, ins->result, 8U, 64U, false);
+    }
+    if (ins->kind != MINIC_CORE_INSTRUCTION_DOUBLE_TO_INTEGER ||
+        !loong_float_value(sel, ins->value.operand, 8U, 64U, true))
+        return false;
+    if (width == 8U && !sign) {
+        const size_t high = sel->u64_high[ins_id];
+        const size_t low = sel->u64_low[ins_id];
+        const size_t done = sel->u64_done[ins_id];
+        if (high == SIZE_MAX || low == SIZE_MAX || done == SIZE_MAX ||
+            !loong_ri(b, MINIC_LOONG_MACHINE_LI_D, LOONG_T1,
+                INT64_C(0x43e0000000000000)) ||
+            !loong_float_from_gp(b, MINIC_LOONG_MACHINE_MOVGR2FR_D,
+                9U, LOONG_T1) ||
+            !loong_float_compare(sel, MINIC_LOONG_MACHINE_FCMP_CLT_D) ||
+            !loong_branch(sel, MINIC_LOONG_MACHINE_BNEZ,
+                low, true, false) ||
+            !minic_machine_builder_set_fallthrough(b, high) ||
+            !minic_machine_builder_position_at(b, high) ||
+            !loong_float_binary_regs(b, MINIC_LOONG_MACHINE_FSUB_D,
+                8U, 8U, 9U) ||
+            !loong_float_register_op(b, MINIC_LOONG_MACHINE_FTINTRZ_L_D,
+                8U, 8U, 64U) ||
+            !loong_gp_from_float(b, MINIC_LOONG_MACHINE_MOVFR2GR_D,
+                LOONG_T0, 8U) ||
+            !loong_ri(b, MINIC_LOONG_MACHINE_LI_D, LOONG_T1, INT64_MIN) ||
+            !loong_rrr(b, MINIC_LOONG_MACHINE_OR,
+                LOONG_T0, LOONG_T0, LOONG_T1) ||
+            !loong_branch(sel, MINIC_LOONG_MACHINE_B,
+                done, false, false) ||
+            !minic_machine_builder_position_at(b, low) ||
+            !loong_float_register_op(b, MINIC_LOONG_MACHINE_FTINTRZ_L_D,
+                8U, 8U, 64U) ||
+            !loong_gp_from_float(b, MINIC_LOONG_MACHINE_MOVFR2GR_D,
+                LOONG_T0, 8U) ||
+            !loong_branch(sel, MINIC_LOONG_MACHINE_B,
+                done, false, false) ||
+            !minic_machine_builder_position_at(b, done)) return false;
+    } else {
+        if (!loong_float_register_op(b, width == 4U && sign
+                ? MINIC_LOONG_MACHINE_FTINTRZ_W_D :
+                  MINIC_LOONG_MACHINE_FTINTRZ_L_D,
+                8U, 8U, width == 4U && sign ? 32U : 64U) ||
+            !loong_gp_from_float(b, width == 4U && sign
+                ? MINIC_LOONG_MACHINE_MOVFR2GR_S :
+                  MINIC_LOONG_MACHINE_MOVFR2GR_D,
+                LOONG_T0, 8U) ||
+            (width == 4U && !sign &&
+             !loong_bstrpick_d(b, LOONG_T0, 31U)) ||
+            (width < 4U && !loong_normalize_integer(b, width, sign)))
+            return false;
+    }
+    return loong_store_value(sel, ins, LOONG_T0, false);
 }
 
 /* The first typed transport uses exact-byte scalar loads/stores for
@@ -1268,6 +1421,52 @@ static bool loong_select_variadic_address(LoongSelector *sel,
         loong_store_value(sel, ins, LOONG_T0, true);
 }
 
+/* The old LP64 lowering detects unsigned size+15 overflow before modifying
+ * the stack pointer. Keep the check as machine CFG: a trap block is the
+ * physical fallthrough of `beqz`, and the successful continuation is a real
+ * branch target. Multiple allocas inside one Core block can chain these
+ * disjoint auxiliary pairs without synthesizing textual local labels. */
+static bool loong_select_dynamic_alloc(LoongSelector *sel,
+    const MinicCoreInstruction *ins) {
+    const MinicCoreFunction *fn = sel->ctx->fn;
+    const MinicCoreInstructionId id = (MinicCoreInstructionId)(
+        ins - fn->instructions);
+    const MinicMachineOperand branch[] = {
+        loong_gp(LOONG_T2, MINIC_MACHINE_REGISTER_READ),
+        {.kind = MINIC_MACHINE_OPERAND_BLOCK,
+         .value.block_id = id < fn->instruction_count
+             ? sel->alloc_continue[id] : SIZE_MAX}
+    };
+    MinicMachineBuilder *b = &sel->builder;
+    const size_t trap = id < fn->instruction_count
+        ? sel->alloc_trap[id] : SIZE_MAX;
+    const size_t continuation = id < fn->instruction_count
+        ? sel->alloc_continue[id] : SIZE_MAX;
+    if (id >= fn->instruction_count || trap == SIZE_MAX ||
+        continuation == SIZE_MAX ||
+        !minic_multi_direct_dynamic_stack_alloc_shape(fn, ins,
+            sel->ctx->machine_frame->has_dynamic_stack) ||
+        !loong_load_value(sel, ins->value.operand, LOONG_T0, true) ||
+        !loong_rri(b, MINIC_LOONG_MACHINE_ADDI_D,
+            LOONG_T1, LOONG_T0, 15) ||
+        !loong_rrr(b, MINIC_LOONG_MACHINE_SLTU,
+            LOONG_T2, LOONG_T1, LOONG_T0) ||
+        !loong_selected(b, MINIC_LOONG_MACHINE_BEQZ, branch, 2U) ||
+        !minic_machine_builder_add_successor(b, continuation) ||
+        !minic_machine_builder_set_fallthrough(b, trap) ||
+        !minic_machine_builder_position_at(b, trap) ||
+        !loong_selected(b, MINIC_LOONG_MACHINE_BREAK, NULL, 0U) ||
+        !minic_machine_builder_position_at(b, continuation) ||
+        !loong_ri(b, MINIC_LOONG_MACHINE_LI_D, LOONG_T2, -16) ||
+        !loong_rrr(b, MINIC_LOONG_MACHINE_AND, LOONG_T1, LOONG_T1,
+            LOONG_T2) ||
+        !loong_rrr(b, MINIC_LOONG_MACHINE_SUB_D, LOONG_SP, LOONG_SP,
+            LOONG_T1) ||
+        !loong_rr(b, MINIC_LOONG_MACHINE_MOVE, LOONG_T0, LOONG_SP))
+        return false;
+    return loong_store_value(sel, ins, LOONG_T0, true);
+}
+
 static bool loong_branch(LoongSelector *sel, uint32_t opcode,
     size_t target_block, bool condition, bool condition_zero) {
     MinicMachineOperand operands[2] = {{0}};
@@ -1330,7 +1529,7 @@ static bool loong_source_symbol(LoongSelector *sel,
 }
 
 static bool loong_select_core(LoongSelector *sel,
-    const MinicCoreInstruction *ins) {
+    const MinicCoreInstruction *ins, MinicCoreInstructionId ins_id) {
     const MinicCoreFunction *fn = sel->ctx->fn;
     size_t offset, bytes;
     MinicCoreValueId base;
@@ -1387,6 +1586,9 @@ static bool loong_select_core(LoongSelector *sel,
     case MINIC_CORE_INSTRUCTION_FLOAT_MULTIPLY:
     case MINIC_CORE_INSTRUCTION_FLOAT_DIVIDE:
         return loong_select_float(sel, ins);
+    case MINIC_CORE_INSTRUCTION_INTEGER_TO_DOUBLE:
+    case MINIC_CORE_INSTRUCTION_DOUBLE_TO_INTEGER:
+        return loong_select_float_integer_cast(sel, ins, ins_id);
     case MINIC_CORE_INSTRUCTION_GLOBAL_ADDRESS:
     case MINIC_CORE_INSTRUCTION_FUNCTION_ADDRESS:
         return loong_source_symbol(sel, ins);
@@ -1433,6 +1635,8 @@ static bool loong_select_core(LoongSelector *sel,
         return loong_select_fixed_register(sel, ins);
     case MINIC_CORE_INSTRUCTION_VARIADIC_ARGUMENT_ADDRESS:
         return loong_select_variadic_address(sel, ins);
+    case MINIC_CORE_INSTRUCTION_DYNAMIC_STACK_ALLOC:
+        return loong_select_dynamic_alloc(sel, ins);
     case MINIC_CORE_INSTRUCTION_CALL_FRAME_ADDRESS:
         if (sel->ctx->machine_frame->has_dynamic_stack) return false;
         if (minic_multi_direct_call_frame_level0_shape(fn, ins,
@@ -1559,7 +1763,7 @@ bool minic_loongarch64_select_machine(MinicMachineFunction *machine,
     LoongSelector sel = {0};
     const MinicCoreFunction *fn;
     const MinicMachineLP64FrameContract *frame;
-    size_t prologue_id, first_core = SIZE_MAX;
+    size_t prologue_id;
     size_t i, count;
     bool success = false;
     if (machine == NULL || ctx == NULL || ctx->module == NULL ||
@@ -1572,6 +1776,7 @@ bool minic_loongarch64_select_machine(MinicMachineFunction *machine,
     frame = ctx->machine_frame;
     count = fn->block_count;
     if (count == 0U || count > SIZE_MAX / sizeof(*sel.block_ids) ||
+        fn->instruction_count > SIZE_MAX / sizeof(*sel.alloc_trap) ||
         !minic_machine_function_initialize(machine, ctx->target, ctx->name,
             minic_loongarch64_target_soft_float_abi(ctx->target)
                 ? MINIC_LOONG_MACHINE_FEATURE_BASE
@@ -1586,13 +1791,30 @@ bool minic_loongarch64_select_machine(MinicMachineFunction *machine,
     sel.block_ids = malloc(count * sizeof(*sel.block_ids));
     sel.aux_true = malloc(count * sizeof(*sel.aux_true));
     sel.aux_false = malloc(count * sizeof(*sel.aux_false));
+    sel.alloc_trap = malloc((fn->instruction_count != 0U
+        ? fn->instruction_count : 1U) * sizeof(*sel.alloc_trap));
+    sel.alloc_continue = malloc((fn->instruction_count != 0U
+        ? fn->instruction_count : 1U) * sizeof(*sel.alloc_continue));
+    sel.u64_high = malloc((fn->instruction_count != 0U
+        ? fn->instruction_count : 1U) * sizeof(*sel.u64_high));
+    sel.u64_low = malloc((fn->instruction_count != 0U
+        ? fn->instruction_count : 1U) * sizeof(*sel.u64_low));
+    sel.u64_done = malloc((fn->instruction_count != 0U
+        ? fn->instruction_count : 1U) * sizeof(*sel.u64_done));
     sel.reachable = calloc(count, sizeof(*sel.reachable));
     if (sel.block_ids == NULL || sel.aux_true == NULL ||
-        sel.aux_false == NULL || sel.reachable == NULL ||
+        sel.aux_false == NULL || sel.alloc_trap == NULL ||
+        sel.alloc_continue == NULL || sel.u64_high == NULL ||
+        sel.u64_low == NULL || sel.u64_done == NULL ||
+        sel.reachable == NULL ||
         !minic_machine_builder_initialize(&sel.builder, machine))
         goto cleanup;
     for (i = 0U; i < count; ++i)
         sel.block_ids[i] = sel.aux_true[i] = sel.aux_false[i] = SIZE_MAX;
+    for (i = 0U; i < fn->instruction_count; ++i) {
+        sel.alloc_trap[i] = sel.alloc_continue[i] = SIZE_MAX;
+        sel.u64_high[i] = sel.u64_low[i] = sel.u64_done[i] = SIZE_MAX;
+    }
     if (minic_core_function_facts_verified(ctx->core_facts, fn) &&
         ctx->core_facts->reachable_blocks != NULL)
         memcpy(sel.reachable, ctx->core_facts->reachable_blocks,
@@ -1604,10 +1826,11 @@ bool minic_loongarch64_select_machine(MinicMachineFunction *machine,
      * computed-goto to Core block0 must NEVER repeat callee saves / SP
      * adjustment. Preserve physical block adjacency for cond fallthrough. */
     if (!minic_machine_builder_create_block(&sel.builder,
-            NULL, false, false, &prologue_id) || prologue_id != 0U)
+            NULL, false, true, &prologue_id) || prologue_id != 0U)
         goto cleanup;
     for (i = 0U; i < count; ++i) {
         const MinicCoreBlock *block;
+        size_t ordinal;
         if (!sel.reachable[i]) continue;
         block = &fn->blocks[i];
         if (block->local_label_symbol != NULL &&
@@ -1616,7 +1839,32 @@ bool minic_loongarch64_select_machine(MinicMachineFunction *machine,
         if (!minic_machine_builder_create_block(&sel.builder,
                 block->local_label_symbol, block->indirect_entry, false,
                 &sel.block_ids[i])) goto cleanup;
-        if (first_core == SIZE_MAX) first_core = sel.block_ids[i];
+        for (ordinal = 0U; ordinal < block->instruction_count; ++ordinal) {
+            MinicCoreInstructionId id;
+            const MinicCoreInstruction *ins;
+            if (!minic_core_block_instruction_at(fn, block, ordinal,
+                    &id, &ins)) goto cleanup;
+            if (id >= fn->instruction_count) goto cleanup;
+            if (ins->kind == MINIC_CORE_INSTRUCTION_DYNAMIC_STACK_ALLOC) {
+                if (!minic_machine_builder_create_block(&sel.builder,
+                        NULL, false, true, &sel.alloc_trap[id]) ||
+                    !minic_machine_builder_create_block(&sel.builder,
+                        NULL, false, true, &sel.alloc_continue[id]))
+                    goto cleanup;
+            } else if (ins->kind ==
+                       MINIC_CORE_INSTRUCTION_DOUBLE_TO_INTEGER) {
+                size_t width;
+                bool sign;
+                if (minic_multi_direct_floating_shape(
+                        fn, ins, &width, &sign) && width == 8U && !sign &&
+                    (!minic_machine_builder_create_block(&sel.builder,
+                        NULL, false, true, &sel.u64_high[id]) ||
+                     !minic_machine_builder_create_block(&sel.builder,
+                        NULL, false, true, &sel.u64_low[id]) ||
+                     !minic_machine_builder_create_block(&sel.builder,
+                        NULL, false, true, &sel.u64_done[id]))) goto cleanup;
+            }
+        }
         if (block->terminator.kind == MINIC_CORE_TERMINATOR_CONDITIONAL_BRANCH) {
             if (count > 256U &&
                 !minic_machine_builder_create_block(&sel.builder,
@@ -1625,11 +1873,13 @@ bool minic_loongarch64_select_machine(MinicMachineFunction *machine,
                 NULL, false, true, &sel.aux_false[i])) goto cleanup;
         }
     }
-    if (first_core == SIZE_MAX ||
+    if (fn->entry_block >= count ||
+        !sel.reachable[fn->entry_block] ||
+        sel.block_ids[fn->entry_block] == SIZE_MAX ||
         !minic_machine_builder_position_at(&sel.builder, prologue_id) ||
         !minic_loongarch64_machine_select_prologue(&sel.builder, frame) ||
         !loong_branch(&sel, MINIC_LOONG_MACHINE_B,
-            first_core, false, false)) goto cleanup;
+            sel.block_ids[fn->entry_block], false, false)) goto cleanup;
 
     for (i = 0U; i < count; ++i) {
         const MinicCoreBlock *block;
@@ -1637,14 +1887,16 @@ bool minic_loongarch64_select_machine(MinicMachineFunction *machine,
         if (!sel.reachable[i]) continue;
         block = &fn->blocks[i];
         if (!minic_machine_builder_position_at(
-                &sel.builder, sel.block_ids[i])) goto cleanup;
+                &sel.builder, sel.block_ids[i]) ||
+            !minic_machine_builder_mark_core_block(&sel.builder, i))
+            goto cleanup;
         for (ordinal = 0U; ordinal < block->instruction_count; ++ordinal) {
             MinicCoreInstructionId ins_id;
             const MinicCoreInstruction *ins;
             if (!minic_core_block_instruction_at(fn, block, ordinal,
                     &ins_id, &ins)) goto cleanup;
             minic_machine_builder_set_origin(&sel.builder, i, ins_id);
-            if (!loong_select_core(&sel, ins)) goto cleanup;
+            if (!loong_select_core(&sel, ins, ins_id)) goto cleanup;
             minic_machine_builder_clear_origin(&sel.builder);
         }
         if (!loong_select_terminator(&sel, i)) goto cleanup;
@@ -1654,6 +1906,11 @@ cleanup:
     free(sel.block_ids);
     free(sel.aux_true);
     free(sel.aux_false);
+    free(sel.alloc_trap);
+    free(sel.alloc_continue);
+    free(sel.u64_high);
+    free(sel.u64_low);
+    free(sel.u64_done);
     free(sel.reachable);
     return success;
 }

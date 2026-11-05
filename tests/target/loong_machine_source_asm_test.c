@@ -3,17 +3,6 @@
 #include <stdio.h>
 #include <string.h>
 
-/* In this standalone MIR-policy test the historical Core direct emitter is
- * intentionally absent. This stub models the independently sealed *exact*
- * hardware descriptor and tests binding/serializer behavior after sealing. */
-bool minic_loongarch64_typed_scalar_form_matches_template(
-    uint32_t id, uint32_t variant, const char *text, size_t length) {
-    static const char dbar[] = "dbar %0";
-    return id == MINIC_LOONG_MACHINE_ASM_HINT_DBAR && variant == 1U &&
-           length == sizeof(dbar) - 1U &&
-           memcmp(text, dbar, sizeof(dbar) - 1U) == 0;
-}
-
 #define REQUIRE(value) do { if (!(value)) { \
     fprintf(stderr, "loong source ASM test:%d failed: %s\n", \
         __LINE__, #value); return 1; } } while (0)

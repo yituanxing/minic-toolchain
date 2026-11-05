@@ -5,6 +5,7 @@
 #include "target/common/direct_block_context.h"
 #include "target/common/direct_program_emit.h"
 #include "target/common/module_global_emit.h"
+#include "target/common/machine_core_coverage.h"
 #include "target/common/machine_gnu_asm.h"
 #include <stdint.h>
 #include <stdio.h>
@@ -111,6 +112,8 @@ static inline bool minic_multi_direct_lp64_emit_function(
             machine.frame_alignment != plan.machine_frame.frame_alignment ||
             machine.has_dynamic_stack !=
                 plan.machine_frame.has_dynamic_stack ||
+            !minic_machine_core_coverage_verify(
+                fn, facts->reachable_blocks, &machine) ||
             !config->initialize_machine_asm_policy(target, &machine_policy) ||
             !minic_machine_gnu_asm_preflight(&machine, &machine_policy)) {
             (void)minic_multi_direct_machine_reject(fn,

@@ -1,4 +1,5 @@
 #include "target/loongarch64/asm_contract_internal.h"
+#include "target/loongarch64/machine_asm_form.h"
 #include "target/loongarch64/simd_asm.h"
 #include "target/common/direct_linux_bug_asm.h"
 #include "target/common/linux_jump_label_asm.h"
@@ -170,29 +171,6 @@ bool minic_loongarch64_qualified_opaque_asm(const MinicCoreInlineAsm *a) {
 
 
 
-LoongLinuxClockAsm loong_linux_clock_form(
-    const char *text, size_t length) {
-    static const char *const forms[] = {
-        "rdtime.d%0,%1", "rdtime.d%[val],%[tid]",
-        "la.pcrel%0,_start", "rdtime.d$zero,%0",
-        "rdtime.d%0,$zero"
-    };
-    char compact[96];
-    size_t i, n = 0U;
-    if (!text || !length || length >= sizeof(compact)) return LOONG_CLOCK_NONE;
-    for (i = 0U; i < length; ++i) {
-        const char c = text[i];
-        if (c == ' ' || c == '\t' || c == '\r' || c == '\n') continue;
-        if (c == ';' || c == '\0' || n + 1U >= sizeof(compact))
-            return LOONG_CLOCK_NONE;
-        compact[n++] = c;
-    }
-    compact[n] = '\0';
-    for (i = 0U; i < sizeof(forms) / sizeof(forms[0]); ++i)
-        if (strcmp(compact, forms[i]) == 0)
-            return (LoongLinuxClockAsm)(i + 1U);
-    return LOONG_CLOCK_NONE;
-}
 
 
 
@@ -246,20 +224,6 @@ static bool loong_linux_clock_emit(
  * GNU template itself has no textual %operand placeholders. Bind exact
  * physical a7/a0/a1 operands here: treating them as generic scalar inputs
  * would make a convincing .s file that silently passed wrong syscall args. */
-bool loong_linux_vdso_syscall_form(const char *text, size_t length) {
-    char compact[32];
-    size_t i, n = 0U;
-    if (!text || !length || length >= sizeof(compact)) return false;
-    for (i = 0U; i < length; ++i) {
-        const char c = text[i];
-        if (c == ' ' || c == '\t' || c == '\n' || c == '\r') continue;
-        if (c == ';' || c == '\0' || n + 1U >= sizeof(compact))
-            return false;
-        compact[n++] = c;
-    }
-    compact[n] = '\0';
-    return strcmp(compact, "syscall0") == 0;
-}
 
 static bool loong_linux_vdso_clobbers(
     const MinicCoreInlineAsmRegisterClobber *regs, size_t count) {
@@ -332,42 +296,11 @@ static bool loong_linux_vdso_emit(
  * unsigned 12-bit hint; hardware semantics are encoded by that hint.
  * Only one exact operand/template family is admitted, never arbitrary GNU
  * instruction-string passthrough. */
-bool loongarch64_dbar_hint(int64_t hint) {
-    return hint >= 0 && hint <= 2047;
-}
-bool loongarch64_dbar_template(const char *text, size_t length) {
-    static const char prefix[] = "dbar %0";
-    size_t i, n;
-    if (text == NULL || length < sizeof(prefix) - 1U)
-        return false;
-    n = sizeof(prefix) - 1U;
-    if (memcmp(text, prefix, n) != 0) return false;
-    for (i = n; i < length; ++i) {
-        if (text[i] != ' ' && text[i] != '\t')
-            return false;
-    }
-    return true;
-}
 
 /* Linux's cache flush uses an immediate cache opcode and a GNU ZC memory
  * address. The memory operand provides the ADDRESS of the byte lvalue; the
  * hardware CACOP, not a byte load or an ordinary compiler barrier, performs
  * the cache operation. Refuse any additional instruction or modifier. */
-bool loong_linux_cacop_form(const char *text, size_t length) {
-    static const char exact[] = "cacop%0,%1";
-    char compact[sizeof(exact)];
-    size_t i, n = 0U;
-    if (!text || !length) return false;
-    for (i = 0U; i < length; ++i) {
-        const char c = text[i];
-        if (c == ' ' || c == '\t' || c == '\n' || c == '\r') continue;
-        if (c == ';' || c == '\0' || n + 1U >= sizeof(compact))
-            return false;
-        compact[n++] = c;
-    }
-    compact[n] = '\0';
-    return strcmp(compact, exact) == 0;
-}
 
 
 
@@ -376,65 +309,12 @@ bool loong_linux_cacop_form(const char *text, size_t length) {
 /* Original GNU no-operand DBAR is a literal hardware barrier. This is
  * independent from the existing "dbar %0" I-constraint immediate input.
  * Avoid treating arbitrary templates or unknown DBAR hints as executable. */
-const char *loongarch64_literal_dbar(const char *text,size_t length){
-    static const char *const allowed[]={"dbar 0","dbar 0x700"};
-    char norm[48];size_t i,n=0U;
-    if(!text||!length||length>=sizeof(norm))return NULL;
-    for(i=0U;i<length;++i){
-        const char c=text[i];
-        if(c==9||c==10||c==13||c==';')return NULL;
-        if(n+1U>=sizeof(norm))return NULL;
-        norm[n++]=c;
-    }
-    while(n!=0U&&norm[n-1U]==' ')--n;
-    norm[n]=0;
-    for(i=0U;i<sizeof(allowed)/sizeof(allowed[0]);++i)
-        if(strcmp(norm,allowed[i])==0)return allowed[i];
-    return NULL;
-}
 
 /* Typed GNU LoongArch AMO store-only operations from Linux atomic.h.
  * No target-neutral Core opcode is added: the existing structured ASM roles
  * carry the memory address and scalar input, target-owned machine code
  * determines atomicity/ordering. This exact family cannot be dispatched
  * by the generic text-substitution ASM path. */
-const struct MinicLoongAtomicTemplate loong_atomic[] = {
-    {"amand_db.w$zero,%1,%0", "amand_db.w", 4U},
-    {"amor_db.w$zero,%1,%0", "amor_db.w", 4U},
-    {"amxor_db.w$zero,%1,%0", "amxor_db.w", 4U},
-    {"amadd_db.w$zero,%1,%0", "amadd_db.w", 4U},
-    {"amand_db.d$zero,%1,%0", "amand_db.d", 8U},
-    {"amor_db.d$zero,%1,%0", "amor_db.d", 8U},
-    {"amxor_db.d$zero,%1,%0", "amxor_db.d", 8U},
-    {"amadd_db.d$zero,%1,%0", "amadd_db.d", 8U}
-};
-const struct MinicLoongAtomicTemplate *loong_atomic_template(
-    const char *text, size_t length, bool fetch_old_value) {
-    char compact[96];
-    size_t i, used = 0U;
-    if (text == NULL || length == 0U || length >= sizeof(compact))
-        return NULL;
-    for (i = 0U; i < length; ++i) {
-        const char c = text[i];
-        if (c == ' ' || c == '\t' || c == '\r' || c == '\n')
-            continue;
-        if (used + 1U >= sizeof(compact)) return NULL;
-        compact[used++] = c;
-    }
-    compact[used] = '\0';
-    for (i = 0U; i < sizeof(loong_atomic) / sizeof(loong_atomic[0]); ++i) {
-        char expected[64];
-        if (fetch_old_value) {
-            const int count = snprintf(expected, sizeof(expected),
-                                       "%s%%1,%%2,%%0", loong_atomic[i].instruction);
-            if (count <= 0 || (size_t)count >= sizeof(expected)) return NULL;
-            if (strcmp(compact, expected) == 0) return &loong_atomic[i];
-        } else if (strcmp(compact, loong_atomic[i].text) == 0) {
-            return &loong_atomic[i];
-        }
-    }
-    return NULL;
-}
 
 
 
@@ -444,26 +324,6 @@ const struct MinicLoongAtomicTemplate *loong_atomic_template(
  * privileged operation, never an ordinary C load, barrier or passthrough.
  * Match exact GNU named operands and normalized numeric Core templates.
  * The two forms share the existing Core address/scalar constant roles. */
-unsigned int loong_csr_template(const char *text, size_t length) {
-    static const char *const forms[] = {
-        "csrrd%[val],%[reg]", "csrrd%0,%1",
-        "csrxchg%[val],%[mask],%[reg]", "csrxchg%0,%1,%2"
-    };
-    char compact[96];
-    size_t i, n = 0U;
-    if (!text || length == 0U || length >= sizeof(compact)) return 0U;
-    for (i = 0U; i < length; ++i) {
-        char c = text[i];
-        if (c == ';') return 0U;
-        if (c == ' ' || c == '\t' || c == '\n' || c == '\r') continue;
-        if (n + 1U >= sizeof(compact)) return 0U;
-        compact[n++] = c;
-    }
-    compact[n] = '\0';
-    for (i = 0U; i < sizeof(forms) / sizeof(forms[0]); ++i)
-        if (strcmp(compact, forms[i]) == 0) return i < 2U ? 1U : 2U;
-    return 0U;
-}
 
 
 
@@ -478,21 +338,6 @@ unsigned int loong_csr_template(const char *text, size_t length) {
 /* lsdc_probe.c reads a hardware CPUCFG register through GNU register operands.
  * Keep the input register value (rather than substituting a fixed constant),
  * and explicitly lower the native instruction from typed structured roles. */
-bool loong_linux_cpucfg_form(const char *text, size_t length) {
-    static const char form[] = "cpucfg%0,%1";
-    char compact[64];
-    size_t i, size = 0U;
-    if (!text || !length || length >= sizeof(compact)) return false;
-    for (i = 0U; i < length; ++i) {
-        const char c = text[i];
-        if (c == ' ' || c == '\t' || c == '\n' || c == '\r') continue;
-        if (c == '\0' || c == ';' || size + 1U >= sizeof(compact))
-            return false;
-        compact[size++] = c;
-    }
-    compact[size] = '\0';
-    return strcmp(compact, form) == 0;
-}
 
 
 
@@ -533,25 +378,6 @@ static bool loong_linux_cpucfg_emit(
 
 /* Authentic GNU Linux 6.6.143 LoongArch set_pte global-bit buddy LL/SC.
  * One exact source/machine ISA template; no Core architecture switches. */
-bool loong_pte_form(const char *text,size_t len) {
-    static const char named[]=
-        "1:ll.d%[tmp],%[buddy]bnez%[tmp],2for%[tmp],%[tmp],%[global]"
-        "sc.d%[tmp],%[buddy]beqz%[tmp],1bnop2:dbar0x700";
-    static const char numeric[]=
-        "1:ll.d%1,%0bnez%1,2for%1,%1,%2"
-        "sc.d%1,%0beqz%1,1bnop2:dbar0x700";
-    char compact[240];
-    size_t i,n=0U;
-    if(!text||!len||len>=sizeof(compact))return false;
-    for(i=0U;i<len;++i){
-        char ch=text[i];
-        if(ch==' '||ch=='\t'||ch=='\n'||ch=='\r')continue;
-        if(n+1U>=sizeof(compact))return false;
-        compact[n++]=ch;
-    }
-    compact[n]='\0';
-    return strcmp(compact,named)==0||strcmp(compact,numeric)==0;
-}
 
 
 /* Linux arch_atomic{,64}_fetch_{and,or,xor,add}_relaxed:
@@ -565,24 +391,6 @@ bool loong_pte_form(const char *text,size_t len) {
 /* GNU Linux 6.6.143 cmpxchg.h: exact LL/SC hardware shapes. Keep
  * target-only constraint/type qualification separate from Common Core
  * operand address lowering; no C load/store emulation of atomics. */
-unsigned loong_linux_cmpxchg_form(const char *text,size_t length) {
-    static const char *const exact[]={
-        "1:ll.w%0,%2#__cmpxchg_asmbne%0,%z3,2fmove$t0,%z4sc.w$t0,%1beqz$t0,1b2:dbar0x700",
-        "1:ll.d%0,%2#__cmpxchg_asmbne%0,%z3,2fmove$t0,%z4sc.d$t0,%1beqz$t0,1b2:dbar0x700",
-        "1:ll.w%0,%3and%1,%0,%z4bne%1,%z5,2fandn%1,%0,%z4or%1,%1,%z6sc.w%1,%2beqz%1,1bb3f2:dbar0x7003:"
-    };
-    char compact[256];size_t i,n=0U;
-    if(!text||!length||length>=sizeof(compact))return 0U;
-    for(i=0U;i<length;++i){
-        const char c=text[i];
-        if(c==' '||c=='\t'||c=='\r'||c=='\n')continue;
-        if(c=='\0'||c==';'||n+1U>=sizeof(compact))return 0U;
-        compact[n++]=c;
-    }
-    compact[n]='\0';
-    for(i=0U;i<3U;++i)if(strcmp(compact,exact[i])==0)return (unsigned)i+1U;
-    return 0U;
-}
 
 
 
@@ -593,40 +401,6 @@ unsigned loong_linux_cmpxchg_form(const char *text,size_t length) {
  * memory value in a GPR and writes a replacement atomically with a
  * hardware DB fence. Common Core carries the same typed structured
  * memory/read-write, register-output and scalar-input operands. */
-unsigned loong_linux_xchg_form(const char *text,size_t length){
-    static const char *const forms[]={
-        /* arch/loongarch/include/asm/cmpxchg.h __xchg_asm */
-        "amswap_db.w%1,%z2,%0","amswap_db.d%1,%z2,%0",
-        /* arch/loongarch/include/asm/barrier.h __smp_store_mb.
-         * The GNU named form has an unsigned-long scratch and NO explicit
-         * clobber; Core supplies the implicit +ZB memory effect. */
-        "amswap_db.w%[tmp],%[val],%[mem]",
-        "amswap_db.d%[tmp],%[val],%[mem]",
-        /* Checked numeric representation after Core name resolution. */
-        "amswap_db.w%1,%2,%0","amswap_db.d%1,%2,%0",
-        /* Linux relaxed xchg is an atomic swap without the DB fence. */
-        "amswap.w%1,%z2,%0","amswap.d%1,%z2,%0",
-        /* The local atomic fetch operations have the SAME Core operand
-         * roles as xchg: +ZB memory, old GPR output, scalar input. Only
-         * the hardware AMO operation differs; never emulate a RMW in C. */
-        "amadd.w%1,%2,%0","amadd.d%1,%2,%0",
-        "amand.w%1,%2,%0","amand.d%1,%2,%0",
-        "amor.w%1,%2,%0","amor.d%1,%2,%0",
-        "amxor.w%1,%2,%0","amxor.d%1,%2,%0"
-    };
-    char compact[96];size_t n=0U,i;
-    if(!text||!length||length>=sizeof(compact))return 0U;
-    for(i=0U;i<length;++i){
-        const char c=text[i];
-        if(c==' '||c=='\t'||c=='\r'||c=='\n')continue;
-        if(c=='\0'||c==';'||n+1U>=sizeof(compact))return 0U;
-        compact[n++]=c;
-    }
-    compact[n]='\0';
-    for(i=0U;i<sizeof(forms)/sizeof(forms[0]);++i)
-        if(strcmp(compact,forms[i])==0)return (unsigned)i+1U;
-    return 0U;
-}
 
 
 
@@ -635,20 +409,6 @@ unsigned loong_linux_xchg_form(const char *text,size_t length){
  * subword. Match its exact GNU LL/SC template and three independent early
  * clobber / memory outputs. A change in the mask, branch, or LL/SC status
  * choreography is a different program and must be rejected. */
-bool loong_linux_xchg_small_form(const char *text,size_t length){
-    static const char exact[]=
-        "1:ll.w%0,%3andn%1,%0,%z4or%1,%1,%z5sc.w%1,%2beqz%1,1b";
-    char compact[160];size_t i,n=0U;
-    if(!text||!length||length>=sizeof(compact))return false;
-    for(i=0U;i<length;++i){
-        const char ch=text[i];
-        if(ch==' '||ch=='\t'||ch=='\r'||ch=='\n')continue;
-        if(ch=='\0'||ch==';'||n+1U>=sizeof(compact))return false;
-        compact[n++]=ch;
-    }
-    compact[n]='\0';
-    return strcmp(compact,exact)==0;
-}
 
 
 
@@ -657,23 +417,6 @@ bool loong_linux_xchg_small_form(const char *text,size_t length){
  * GCC GNU constraints =r, r, r are transported as Core operand roles.
  * The compare computes the unsigned flag; sub.d produces the 0/~0 mask.
  * No invented portable instruction or open-ended inline ASM passthrough. */
-bool loong_mask_nospec_form(const char *text, size_t length) {
-    static const char exact[] = "sltu%0,%1,%2sub.d%0,$zero,%0";
-    char compact[128];
-    size_t i, used = 0U;
-    if (text == NULL || length == 0U || length >= sizeof(compact))
-        return false;
-    for (i = 0U; i < length; ++i) {
-        const char c = text[i];
-        if (c == ' ' || c == '\t' || c == '\n' || c == '\r')
-            continue;
-        if (c == ';' || c == '\0' || used + 1U >= sizeof(compact))
-            return false;
-        compact[used++] = c;
-    }
-    compact[used] = '\0';
-    return strcmp(compact, exact) == 0;
-}
 
 
 
@@ -722,42 +465,6 @@ static bool loong_mask_nospec_emit(
  * All forms are exact qualified target contracts, NEVER a raw text escape.
  * The Core representation remains typed output-lvalue and scalar inputs.
  * $r21 is the kernel per-CPU base register, not a generic C pointer. */
-MinicLoongPerCpuIndexedForm loong_percpu_indexed_form(
-    const char *text, size_t length) {
-    static const char *const words[] = {
-        "ldx.b%[ret],$r21,%[ptr]", "ldx.h%[ret],$r21,%[ptr]",
-        "ldx.w%[ret],$r21,%[ptr]", "ldx.d%[ret],$r21,%[ptr]",
-        "stx.b%[val],$r21,%[ptr]", "stx.h%[val],$r21,%[ptr]",
-        "stx.w%[val],$r21,%[ptr]", "stx.d%[val],$r21,%[ptr]"
-    };
-    char compact[96];
-    size_t i, n = 0U;
-    if (!text || length == 0U || length >= sizeof(compact)) return LOONG_PERCPU_NONE;
-    for (i = 0U; i < length; ++i) {
-        const char c = text[i];
-        if (c == ' ' || c == '\t' || c == '\n' || c == '\r') continue;
-        if (c == ';' || c == '\0' || n + 1U >= sizeof(compact))
-            return LOONG_PERCPU_NONE;
-        compact[n++] = c;
-    }
-    compact[n] = '\0';
-    /* Shared Core canonicalizes GNU named slots to %0/%1, but the
-     * target must also qualify ORIGINAL named source templates. Both
-     * forms name exactly the same two typed operand roles. */
-    for (i = 0U; i < sizeof(words)/sizeof(words[0]); ++i) {
-        char numeric[48];
-        const char *const name = i < 4U ?
-            (i == 0U ? "ldx.b" : i == 1U ? "ldx.h" :
-             i == 2U ? "ldx.w" : "ldx.d") :
-            (i == 4U ? "stx.b" : i == 5U ? "stx.h" :
-             i == 6U ? "stx.w" : "stx.d");
-        if (strcmp(compact, words[i]) == 0) return (MinicLoongPerCpuIndexedForm)(i + 1U);
-        if (snprintf(numeric,sizeof(numeric), "%s%%0,$r21,%%1",name) > 0 &&
-            strcmp(compact,numeric) == 0)
-            return (MinicLoongPerCpuIndexedForm)(i + 1U);
-    }
-    return LOONG_PERCPU_NONE;
-}
 
 
 static bool loong_percpu_indexed_emit(
@@ -812,40 +519,6 @@ static bool loong_percpu_indexed_emit(
  * memory, second +ZB output is updated memory, third argument is VAL.
  * Unlike _db forms this is intentionally non-barrier and GNU declares
  * no memory clobber. A spelling or operand-order mismatch must reject. */
-static const struct { const char *compact, *mnemonic; size_t width; }
-loong_percpu_amo[] = {
-    {"amadd.w%[ret],%[val],%[ptr]", "amadd.w", 4U},
-    {"amadd.d%[ret],%[val],%[ptr]", "amadd.d", 8U},
-    {"amand.w%[ret],%[val],%[ptr]", "amand.w", 4U},
-    {"amand.d%[ret],%[val],%[ptr]", "amand.d", 8U},
-    {"amor.w%[ret],%[val],%[ptr]", "amor.w", 4U},
-    {"amor.d%[ret],%[val],%[ptr]", "amor.d", 8U}
-};
-size_t loong_percpu_amo_width(size_t form) {
-    if (form >= sizeof(loong_percpu_amo) / sizeof(loong_percpu_amo[0]))
-        return 0U;
-    return loong_percpu_amo[form].width;
-}
-size_t loong_percpu_amo_form(const char *text, size_t length) {
-    char compact[96];
-    size_t i,n=0U;
-    if (!text || !length || length >= sizeof(compact)) return SIZE_MAX;
-    for(i=0U;i<length;++i) {
-        const char c=text[i];
-        if(c==' '||c=='\n'||c=='\r'||c=='\t')continue;
-        if(c==';'||c=='\0'||n+1U>=sizeof(compact))return SIZE_MAX;
-        compact[n++]=c;
-    }
-    compact[n]='\0';
-    for (i=0U;i<sizeof(loong_percpu_amo)/sizeof(loong_percpu_amo[0]);++i) {
-        char numeric[64];
-        if(strcmp(compact,loong_percpu_amo[i].compact)==0)return i;
-        if(snprintf(numeric,sizeof(numeric),"%s%%0,%%2,%%1",
-                    loong_percpu_amo[i].mnemonic)>0 &&
-           strcmp(compact,numeric)==0)return i;
-    }
-    return SIZE_MAX;
-}
 
 
 
@@ -894,19 +567,6 @@ static bool loong_percpu_amo_emit(
              out,fn,b[0].value,
              8U,"$t2","$t1","$t3");
 }
-bool loong_fcsr0_write_form(const char *text,size_t len){
-    static const char exact[]="movgr2fcsr$fcsr0,%0";
-    char norm[64];size_t i,n=0U;
-    if(!text||len==0U||len>=sizeof(norm))return false;
-    for(i=0U;i<len;++i) {
-        const char c=text[i];
-        if(c==' '||c=='\n'||c=='\r'||c=='\t')continue;
-        if(c==';'||c=='\0'||n+1U>=sizeof(norm))return false;
-        norm[n++]=c;
-    }
-    norm[n]='\0';
-    return strcmp(norm,exact)==0;
-}
 
 
 static bool loong_fcsr0_write_emit(
@@ -938,31 +598,6 @@ static bool loong_fcsr0_write_emit(
  * runtime. The GNU transfer is a 64-bit bit-preserving FP/GPR move, not
  * numeric floating-point conversion; recognize all F0..F31 in both
  * directions with one register-indexed target contract. */
-unsigned int loong_linux_fpr_transfer_form(
-    const char *text, size_t length) {
-    char compact[96], expected[96];
-    size_t i, n = 0U, reg;
-    if (!text || !length || length >= sizeof(compact)) return 0U;
-    for (i = 0U; i < length; ++i) {
-        const char c = text[i];
-        if (c == ' ' || c == '\t' || c == '\r' || c == '\n') continue;
-        if (c == '\0' || c == ';' || n + 1U >= sizeof(compact))
-            return 0U;
-        compact[n++] = c;
-    }
-    compact[n] = '\0';
-    for (reg = 0U; reg < 32U; ++reg) {
-        int written = snprintf(expected, sizeof(expected),
-            "movfr2gr.d%%0,$f%zu", reg);
-        if (written > 0 && (size_t)written < sizeof(expected) &&
-            strcmp(compact, expected) == 0) return (unsigned int)reg + 1U;
-        written = snprintf(expected, sizeof(expected),
-            "movgr2fr.d$f%zu,%%0", reg);
-        if (written > 0 && (size_t)written < sizeof(expected) &&
-            strcmp(compact, expected) == 0) return (unsigned int)reg + 33U;
-    }
-    return 0U;
-}
 
 
 
@@ -1015,25 +650,6 @@ static bool loong_linux_fpr_transfer_emit(
  * and ASID-only. Both zero-register variants are real TLB operations, not
  * CPU fences. Keep the immediate opcode range and Linux-defined encodings
  * in this target instead of allowing an arbitrary textual instruction. */
-unsigned int loong_linux_invtlb_form(const char *text, size_t length) {
-    static const char *const forms[] = {
-        "invtlb%0,%1,%2", "invtlb%0,$zero,%1",
-        "invtlb%0,%1,$zero", "invtlb%0,$zero,$zero"
-    };
-    char compact[90];
-    size_t i, n = 0U;
-    if (!text || !length || length >= sizeof(compact)) return 0U;
-    for (i = 0U; i < length; ++i) {
-        const char c = text[i];
-        if (c == ' ' || c == '\t' || c == '\r' || c == '\n') continue;
-        if (c == '\0' || n + 1U >= sizeof(compact)) return 0U;
-        compact[n++] = c;
-    }
-    compact[n] = '\0';
-    for (i = 0U; i < sizeof(forms) / sizeof(forms[0]); ++i)
-        if (strcmp(compact, forms[i]) == 0) return (unsigned int)i + 1U;
-    return 0U;
-}
 
 static bool loong_linux_invtlb_opcode(int64_t value) {
     return (value >= 0 && value <= 6) ||
@@ -1089,28 +705,6 @@ static bool loong_linux_invtlb_emit(
  * semantic family. Their memory output is marked =ZB by GNU, although the
  * hardware both reads and writes that address. Core must retain the actual
  * RMW effect; the target owns branch, reservation and barrier sequencing. */
-unsigned int loong_linux_add_unless_form(
-    const char *text, size_t length) {
-    static const char *const forms[] = {
-        "0:ll.w%[p],%[c]beq%[p],%[u],1fadd.w%[rc],%[p],%[a]sc.w%[rc],%[c]beqz%[rc],0bb2f1:dbar0x7002:",
-        "0:ll.d%[p],%[c]beq%[p],%[u],1fadd.d%[rc],%[p],%[a]sc.d%[rc],%[c]beqz%[rc],0bb2f1:dbar0x7002:",
-        "0:ll.w%0,%2beq%0,%4,1fadd.w%1,%0,%3sc.w%1,%2beqz%1,0bb2f1:dbar0x7002:",
-        "0:ll.d%0,%2beq%0,%4,1fadd.d%1,%0,%3sc.d%1,%2beqz%1,0bb2f1:dbar0x7002:"
-    };
-    char compact[260];
-    size_t i, n = 0U;
-    if (!text || !length || length >= sizeof(compact)) return 0U;
-    for (i = 0U; i < length; ++i) {
-        const char c = text[i];
-        if (c == ' ' || c == '\t' || c == '\n' || c == '\r') continue;
-        if (c == '\0' || n + 1U >= sizeof(compact)) return 0U;
-        compact[n++] = c;
-    }
-    compact[n] = '\0';
-    for (i = 0U; i < sizeof(forms) / sizeof(forms[0]); ++i)
-        if (strcmp(compact, forms[i]) == 0) return (unsigned int)(i % 2U) + 1U;
-    return 0U;
-}
 
 
 
@@ -1174,36 +768,6 @@ static bool loong_linux_add_unless_emit(
  * GNU input I holds the negated decrement (ADD); r holds the positive
  * decrement (SUB). Preserve that distinction in a target-owned descriptor. */
 
-bool loong_linux_sub_positive_form(
-    const char *text, size_t length, LoongLinuxSubPositive *result) {
-    static const struct {
-        const char *compact;
-        size_t width;
-        bool add_negated;
-    } forms[] = {
-        {"1:ll.w%1,%2#atomic_sub_if_positiveaddi.w%0,%1,%3move%1,%0bltz%0,2fsc.w%1,%2beqz%1,1b2:dbar0x700",4U,true},
-        {"1:ll.w%1,%2#atomic_sub_if_positivesub.w%0,%1,%3move%1,%0bltz%0,2fsc.w%1,%2beqz%1,1b2:dbar0x700",4U,false},
-        {"1:ll.d%1,%2#atomic64_sub_if_positiveaddi.d%0,%1,%3move%1,%0bltz%0,2fsc.d%1,%2beqz%1,1b2:dbar0x700",8U,true},
-        {"1:ll.d%1,%2#atomic64_sub_if_positivesub.d%0,%1,%3move%1,%0bltz%0,2fsc.d%1,%2beqz%1,1b2:dbar0x700",8U,false}
-    };
-    char compact[260];
-    size_t i, n = 0U;
-    if (!text || !length || !result || length >= sizeof(compact)) return false;
-    for (i = 0U; i < length; ++i) {
-        const char c = text[i];
-        if (c == ' ' || c == '\t' || c == '\n' || c == '\r') continue;
-        if (c == '\0' || n + 1U >= sizeof(compact)) return false;
-        compact[n++] = c;
-    }
-    compact[n] = '\0';
-    for (i = 0U; i < sizeof(forms) / sizeof(forms[0]); ++i)
-        if (strcmp(compact, forms[i].compact) == 0) {
-            result->width = forms[i].width;
-            result->add_negated = forms[i].add_negated;
-            return true;
-        }
-    return false;
-}
 
 
 
@@ -1262,129 +826,16 @@ static bool loong_linux_sub_positive_emit(
 /* This register numbering is the Linux LoongArch exception-table ABI. It is
  * shared by user access and futex atomic LL/SC, so recognize it once rather
  * than relaxing each operation to an unrestricted `.irp` assembler escape. */
-static const char loong_linux_exception_gpr_map[] =
-    ".equ.L__gpr_num_zero,0"
-    ".irpnum,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31"
-    ".equ.L__gpr_num_$r\\num,\\num"
-    ".endr"
-    ".equ.L__gpr_num_$ra,1"
-    ".equ.L__gpr_num_$tp,2"
-    ".equ.L__gpr_num_$sp,3"
-    ".irpnum,0,1,2,3,4,5,6,7"
-    ".equ.L__gpr_num_$a\\num,4+\\num"
-    ".endr"
-    ".irpnum,0,1,2,3,4,5,6,7,8"
-    ".equ.L__gpr_num_$t\\num,12+\\num"
-    ".endr"
-    ".equ.L__gpr_num_$s9,22"
-    ".equ.L__gpr_num_$fp,22"
-    ".irpnum,0,1,2,3,4,5,6,7,8"
-    ".equ.L__gpr_num_$s\\num,23+\\num"
-    ".endr";
 
 
 /* All five futex operations use one precise GNU template family. In
  * particular, .short (2) is the LoongArch EX_TYPE_UACCESS_ERR_ZERO exception
  * handler, not a passive note. Both LL and SC have distinct fault entries;
  * their fixup register must hold -EFAULT on failure. */
-LoongLinuxFutexRmw loong_linux_futex_rmw_form(
-    const char *text, size_t length) {
-    static const char *const operations[] = {
-        "move$t0,%z5", "add.w$t0,%1,%z5", "or$t0,%1,%z5",
-        "and$t0,%1,%z5", "xor$t0,%1,%z5"
-    };
-    static const char first[] = "1:ll.w%1,%4#__futex_atomic_op";
-    static const char loop[] = "2:sc.w$t0,%2beqz$t0,1b3:";
-    static const char exception_prefix[] =
-        ".pushsection__ex_table,\"a\".balign4";
-    static const char exception_suffix[] =
-        ".long((3b)-.).short(2)"
-        ".short((((.L__gpr_num_%0)<<0)|((.L__gpr_num_zero)<<5)))"
-        ".popsection";
-    char compact[3600];
-    size_t n = 0U, i, form;
-    const char *cursor;
-    if (!text || length == 0U || length >= sizeof(compact))
-        return LOONG_FUTEX_NONE;
-    for (i = 0U; i < length; ++i) {
-        const char ch = text[i];
-        if (ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n') continue;
-        if (ch == '\0' || n + 1U >= sizeof(compact)) return LOONG_FUTEX_NONE;
-        compact[n++] = ch;
-    }
-    compact[n] = '\0';
-    if (strncmp(compact, first, sizeof(first) - 1U) != 0)
-        return LOONG_FUTEX_NONE;
-    for (form = 0U; form < sizeof(operations) / sizeof(operations[0]); ++form) {
-        const size_t op_len = strlen(operations[form]);
-        cursor = compact + sizeof(first) - 1U;
-        if (strncmp(cursor, operations[form], op_len) != 0) continue;
-        cursor += op_len;
-        if (strncmp(cursor, loop, sizeof(loop) - 1U) != 0) continue;
-        cursor += sizeof(loop) - 1U;
-        for (i = 0U; i < 2U; ++i) {
-            const size_t map_len = sizeof(loong_linux_exception_gpr_map) - 1U;
-            if (strncmp(cursor, loong_linux_exception_gpr_map, map_len) != 0)
-                break;
-            cursor += map_len;
-            if (strncmp(cursor, exception_prefix,
-                        sizeof(exception_prefix) - 1U) != 0) break;
-            cursor += sizeof(exception_prefix) - 1U;
-            if (strncmp(cursor, i == 0U ? ".long((1b)-.)" : ".long((2b)-.)",
-                        sizeof(".long((1b)-.)") - 1U) != 0) break;
-            cursor += sizeof(".long((1b)-.)") - 1U;
-            if (strncmp(cursor, exception_suffix,
-                        sizeof(exception_suffix) - 1U) != 0) break;
-            cursor += sizeof(exception_suffix) - 1U;
-        }
-        if (i == 2U && *cursor == '\0')
-            return (LoongLinuxFutexRmw)(form + 1U);
-    }
-    return LOONG_FUTEX_NONE;
-}
 
 /* The original futex compare/exchange uses the same fault-table encoding as
  * futex RMW, but a distinct comparison branch and three GNU outputs. Do not
  * admit arbitrary .irp / .short assembler text under this template. */
-bool loong_linux_futex_cmpxchg_form(const char *text, size_t length) {
-    static const char prefix[] =
-        "#futex_atomic_cmpxchg_inatomic"
-        "1:ll.w%1,%3bne%1,%z4,3fmove$t0,%z5"
-        "2:sc.w$t0,%2beqz$t0,1b3:dbar0x700";
-    static const char section[] = ".pushsection__ex_table,\"a\".balign4";
-    static const char suffix[] =
-        ".long((3b)-.).short(2)"
-        ".short((((.L__gpr_num_%0)<<0)|((.L__gpr_num_zero)<<5)))"
-        ".popsection";
-    char compact[3600];
-    const char *cursor;
-    size_t i, n = 0U;
-    if (!text || !length || length >= sizeof(compact)) return false;
-    for (i = 0U; i < length; ++i) {
-        const char c = text[i];
-        if (c == ' ' || c == '\t' || c == '\n' || c == '\r') continue;
-        if (c == '\0' || n + 1U >= sizeof(compact)) return false;
-        compact[n++] = c;
-    }
-    compact[n] = '\0';
-    if (strncmp(compact, prefix, sizeof(prefix) - 1U) != 0) return false;
-    cursor = compact + sizeof(prefix) - 1U;
-    for (i = 0U; i < 2U; ++i) {
-        const size_t map_len = sizeof(loong_linux_exception_gpr_map) - 1U;
-        const char *site = i == 0U ? ".long((1b)-.)" : ".long((2b)-.)";
-        if (strncmp(cursor, loong_linux_exception_gpr_map, map_len) != 0)
-            return false;
-        cursor += map_len;
-        if (strncmp(cursor, section, sizeof(section) - 1U) != 0)
-            return false;
-        cursor += sizeof(section) - 1U;
-        if (strncmp(cursor, site, strlen(site)) != 0) return false;
-        cursor += strlen(site);
-        if (strncmp(cursor, suffix, sizeof(suffix) - 1U) != 0) return false;
-        cursor += sizeof(suffix) - 1U;
-    }
-    return *cursor == '\0';
-}
 
 
 
@@ -1392,65 +843,6 @@ bool loong_linux_futex_cmpxchg_form(const char *text, size_t length) {
 
 
 
-bool loong_linux_uaccess_form(
-    const char *text, size_t length, LoongLinuxUaccess *result) {
-    static const struct {
-        const char *prefix;
-        bool load;
-        unsigned int width;
-        const char *opcode;
-    } forms[] = {
-        {"1:ld.b%1,%22:", true, 1U, "ld.b"},
-        {"1:ld.h%1,%22:", true, 2U, "ld.h"},
-        {"1:ld.w%1,%22:", true, 4U, "ld.w"},
-        {"1:ld.d%1,%22:", true, 8U, "ld.d"},
-        {"1:st.b%z2,%1#__put_user_asm2:", false, 1U, "st.b"},
-        {"1:st.h%z2,%1#__put_user_asm2:", false, 2U, "st.h"},
-        {"1:st.w%z2,%1#__put_user_asm2:", false, 4U, "st.w"},
-        {"1:st.d%z2,%1#__put_user_asm2:", false, 8U, "st.d"}
-    };
-    static const char common_tail[] =
-        ".pushsection__ex_table,\"a\""
-        ".balign4"
-        ".long((1b)-.)"
-        ".long((2b)-.)"
-        ".short(2)";
-    static const char load_tail[] =
-        ".short((((.L__gpr_num_%0)<<0)|((.L__gpr_num_%1)<<5)))"
-        ".popsection";
-    static const char store_tail[] =
-        ".short((((.L__gpr_num_%0)<<0)|((.L__gpr_num_zero)<<5)))"
-        ".popsection";
-    char compact[1500];
-    size_t i, n = 0U;
-
-    if (!text || !length || length >= sizeof(compact) || !result) return false;
-    for (i = 0U; i < length; ++i) {
-        const char c = text[i];
-        if (c == ' ' || c == '\t' || c == '\r' || c == '\n') continue;
-        if (c == '\0' || n + 1U >= sizeof(compact)) return false;
-        compact[n++] = c;
-    }
-    compact[n] = '\0';
-    for (i = 0U; i < sizeof(forms) / sizeof(forms[0]); ++i) {
-        const size_t prefix = strlen(forms[i].prefix);
-        const size_t map_len = sizeof(loong_linux_exception_gpr_map) - 1U;
-        const size_t middle = sizeof(common_tail) - 1U;
-        const char *tail = forms[i].load ? load_tail : store_tail;
-        const size_t suffix = strlen(tail);
-        if (n != prefix + map_len + middle + suffix ||
-            memcmp(compact, forms[i].prefix, prefix) != 0 ||
-            memcmp(compact + prefix, loong_linux_exception_gpr_map, map_len) != 0 ||
-            memcmp(compact + prefix + map_len, common_tail, middle) != 0 ||
-            memcmp(compact + prefix + map_len + middle, tail, suffix) != 0)
-            continue;
-        result->load = forms[i].load;
-        result->width = forms[i].width;
-        result->opcode = forms[i].opcode;
-        return true;
-    }
-    return false;
-}
 
 /* The faulting ld/st opcode names the *user memory width*, while the GNU
  * output/input register may use a wider C carrier (e.g. an unsigned long
@@ -1778,48 +1170,7 @@ static bool loong_linux_futex_cmpxchg_emit(
  * not reserve $s0: our lowering explicitly saves both $s0 and $ra around
  * the nested BL, independent of the ordinary C-call scanner. Also, no
  * stack-frame access is allowed between changing SP and restoring it. */
-bool loong_linux_irq_switch_template(
-    const char *text, size_t length, bool numeric) {
-    static const char source_form[] =
-        "move$s0,$spmove$sp,%[stk]move$a0,%[regs]"
-        "blhandle_loongarch_irqmove$sp,$s0";
-    static const char core_form[] =
-        "move$s0,$spmove$sp,%0move$a0,%1"
-        "blhandle_loongarch_irqmove$sp,$s0";
-    const char *const expected = numeric ? core_form : source_form;
-    char compact[256];
-    size_t i, n = 0U;
-    if (!text || !length || length >= sizeof(compact)) return false;
-    for (i = 0U; i < length; ++i) {
-        const char c = text[i];
-        if (c == '\n' || c == '\r' || c == '\t' || c == ' ')
-            continue;
-        if (c == '\0' || c == ';' || n + 1U >= sizeof(compact))
-            return false;
-        compact[n++] = c;
-    }
-    compact[n] = '\0';
-    return strcmp(compact, expected) == 0;
-}
 
-bool loong_linux_irq_switch_clobber(
-    const char *name, size_t length, size_t index) {
-    char kind;
-    unsigned int number;
-    if (!name || length != 3U || name[0] != '$' || index >= 18U)
-        return false;
-    if (index < 8U) {
-        kind = 'a';
-        number = (unsigned int)index;
-    } else if (index == 8U) {
-        kind = 's';
-        number = 0U;
-    } else {
-        kind = 't';
-        number = (unsigned int)(index - 9U);
-    }
-    return name[1] == kind && name[2] == (char)('0' + number);
-}
 
 
 
@@ -1882,35 +1233,6 @@ static bool loong_linux_irq_switch_emit(
  * and restore. The template recognizer reconstructs all 30 register stores
  * and their exact offsets, so a dropped register, different stride or
  * inserted executable opcode cannot be silently compiled. */
-bool loong_linux_frametrace_template(
-    const char *text, size_t length) {
-    char expected[2048];
-    char normalized[2048];
-    size_t n = 0U, i, j;
-    int count;
-    if (!text || !length || length >= sizeof(normalized)) return false;
-    for (i = 0U; i < length; ++i) {
-        const char c = text[i];
-        if (c == ' ' || c == '\t' || c == '\r' || c == '\n')
-            continue;
-        if (c == '\0' || c == ';' || n + 1U >= sizeof(normalized))
-            return false;
-        normalized[n++] = c;
-    }
-    normalized[n] = '\0';
-    count = snprintf(expected, sizeof(expected),
-        "st.d$r1,%%1,8*1pcaddi$ra,0st.d$ra,%%0ld.d$ra,%%1,8");
-    if (count < 0 || (size_t)count >= sizeof(expected)) return false;
-    j = (size_t)count;
-    for (i = 2U; i <= 31U; ++i) {
-        count = snprintf(expected + j, sizeof(expected) - j,
-                         "st.d$r%zu,%%1,8*%zu", i, i);
-        if (count < 0 || (size_t)count >= sizeof(expected) - j)
-            return false;
-        j += (size_t)count;
-    }
-    return strcmp(normalized, expected) == 0;
-}
 
 
 
@@ -1961,31 +1283,6 @@ static bool loong_linux_frametrace_emit(
  * indices, not the irqflags CSR_CRMD named GNU immediate-zero template.
  * Read the real privileged CSR before storing each corresponding pt_regs
  * member; preserve the source's exact set of indices and output width. */
-unsigned int loong_linux_frametrace_csr_form(
-    const char *text, size_t length) {
-    static const struct { const char *text; unsigned int csr; } forms[] = {
-        {"csrrd%0,0x7", 7U},   /* CSR_BADV */
-        {"csrrd%0,0x0", 0U},   /* CSR_CRMD */
-        {"csrrd%0,0x1", 1U},   /* CSR_PRMD */
-        {"csrrd%0,0x2", 2U},   /* CSR_EUEN */
-        {"csrrd%0,0x4", 4U},   /* CSR_ECFG */
-        {"csrrd%0,0x5", 5U}    /* CSR_ESTAT */
-    };
-    char compact[64];
-    size_t i, n = 0U;
-    if (!text || !length || length >= sizeof(compact)) return UINT32_MAX;
-    for (i = 0U; i < length; ++i) {
-        const char c = text[i];
-        if (c == ' ' || c == '\t' || c == '\n' || c == '\r') continue;
-        if (c == '\0' || c == ';' || n + 1U >= sizeof(compact))
-            return UINT32_MAX;
-        compact[n++] = c;
-    }
-    compact[n] = '\0';
-    for (i = 0U; i < sizeof(forms)/sizeof(forms[0]); ++i)
-        if (strcmp(compact, forms[i].text) == 0) return forms[i].csr;
-    return UINT32_MAX;
-}
 
 
 
@@ -2474,161 +1771,37 @@ static bool loong_linux_cacop_emit(
  * Forms carrying a parsed instruction payload (clock, AMO, futex RMW, etc.)
  * remain in the explicitly typed paths below until that payload is stored
  * by a persistent machine-ASM plan. */
-typedef bool (*LoongLinuxTemplateMatch)(const char *, size_t);
 typedef bool (*LoongLinuxStructuredEmit)(
     FILE *, const MinicDirectLP64BlockContext *,
     const MinicCoreInstruction *, const MinicCoreInlineAsm *);
 
 typedef struct LoongLinuxStructuredForm {
-    LoongLinuxTemplateMatch matches;
     LoongLinuxStructuredEmit emit;
 } LoongLinuxStructuredForm;
 
-static bool loong_match_frametrace_csr(const char *text, size_t length) {
-    return loong_linux_frametrace_csr_form(text, length) != UINT32_MAX;
-}
-
-static bool loong_match_fpr_transfer(const char *text, size_t length) {
-    return loong_linux_fpr_transfer_form(text, length) != 0U;
-}
-
-static bool loong_match_percpu_indexed(const char *text, size_t length) {
-    return loong_percpu_indexed_form(text, length) != LOONG_PERCPU_NONE;
-}
-
-static bool loong_match_cmpxchg(const char *text, size_t length) {
-    return loong_linux_cmpxchg_form(text, length) != 0U;
-}
-
-static bool loong_match_xchg(const char *text, size_t length) {
-    return loong_linux_xchg_form(text, length) != 0U;
-}
-
-/* One registry couples source type qualification to exact-template machine
- * ownership. Crucially, the emitter never interprets unknown text as one of
- * these families merely because its operand count resembles a known form. */
+/* Legacy emission dispatch retains only target native emitters. The exact
+ * source-form matcher registry and typed IDs belong to machine_asm_form.c,
+ * which both this emitter and typed MachineIR consume as a strong contract. */
 static const LoongLinuxStructuredForm loong_linux_structured_forms[] = {
-    {loong_linux_cacop_form, loong_linux_cacop_emit},
-    {loong_linux_vdso_syscall_form, loong_linux_vdso_emit},
-    {loong_linux_frametrace_template, loong_linux_frametrace_emit},
-    {loong_match_frametrace_csr, loong_linux_frametrace_csr_emit},
-    {loong_linux_cpucfg_form, loong_linux_cpucfg_emit},
-    {loong_match_fpr_transfer, loong_linux_fpr_transfer_emit},
-    {loong_linux_futex_cmpxchg_form, loong_linux_futex_cmpxchg_emit},
-    {loong_fcsr0_write_form, loong_fcsr0_write_emit},
-    {loong_match_percpu_indexed, loong_percpu_indexed_emit},
-    {loong_match_cmpxchg, loong_linux_cmpxchg_emit},
-    {loong_match_xchg, loong_linux_xchg_emit},
-    {loong_linux_xchg_small_form, loong_linux_xchg_small_emit},
-    {loong_mask_nospec_form, loong_mask_nospec_emit},
-    {loong_pte_form, loong_pte_emit}
+    {loong_linux_cacop_emit},
+    {loong_linux_vdso_emit},
+    {loong_linux_frametrace_emit},
+    {loong_linux_frametrace_csr_emit},
+    {loong_linux_cpucfg_emit},
+    {loong_linux_fpr_transfer_emit},
+    {loong_linux_futex_cmpxchg_emit},
+    {loong_fcsr0_write_emit},
+    {loong_percpu_indexed_emit},
+    {loong_linux_cmpxchg_emit},
+    {loong_linux_xchg_emit},
+    {loong_linux_xchg_small_emit},
+    {loong_mask_nospec_emit},
+    {loong_pte_emit}
 };
 _Static_assert(sizeof(loong_linux_structured_forms) /
                    sizeof(loong_linux_structured_forms[0]) ==
                    MINIC_LOONG_MACHINE_ASM_CLOCK - 1U,
                "Loong typed scalar IDs must not overlap descriptor ordinals");
-
-static const LoongLinuxStructuredForm *loong_linux_form_for_template(
-    const char *text, size_t length) {
-    size_t i;
-    if (text == NULL) return NULL;
-    for (i = 0U; i < sizeof(loong_linux_structured_forms) /
-                         sizeof(loong_linux_structured_forms[0]); ++i)
-        if (loong_linux_structured_forms[i].matches(text, length))
-            return &loong_linux_structured_forms[i];
-    return NULL;
-}
-
-
-
-
-bool minic_loongarch64_descriptor_template_requires_typed_id(
-    const char *text, size_t length) {
-    return loong_linux_form_for_template(text, length) != NULL;
-}
-
-
-
-
-bool minic_loongarch64_typed_descriptor_matches_template(
-    uint32_t id, uint32_t variant, const char *text, size_t length) {
-    size_t index;
-    if (id == 0U || variant != 0U || text == NULL)
-        return false;
-    index = (size_t)(id - 1U);
-    return index < sizeof(loong_linux_structured_forms) /
-                       sizeof(loong_linux_structured_forms[0]) &&
-           loong_linux_structured_forms[index].matches(text, length);
-}
-
-bool minic_loongarch64_typed_scalar_form_matches_template(
-    uint32_t id, uint32_t variant, const char *text, size_t length) {
-    LoongLinuxSubPositive sub;
-    LoongLinuxUaccess uaccess;
-    const struct MinicLoongAtomicTemplate *atom;
-    const char *literal;
-    size_t percpu;
-    if (text == NULL || variant == 0U) return false;
-    switch ((MinicLoongLinuxMachineAsmForm)id) {
-    case MINIC_LOONG_MACHINE_ASM_CLOCK:
-        return variant == (uint32_t)loong_linux_clock_form(text, length);
-    case MINIC_LOONG_MACHINE_ASM_IRQ_SWITCH:
-        return variant == 1U && loong_linux_irq_switch_template(
-            text, length, true);
-    case MINIC_LOONG_MACHINE_ASM_INVTLB:
-        return variant == loong_linux_invtlb_form(text, length);
-    case MINIC_LOONG_MACHINE_ASM_ADD_UNLESS:
-        return variant == loong_linux_add_unless_form(text, length);
-    case MINIC_LOONG_MACHINE_ASM_FUTEX_RMW:
-        return variant == (uint32_t)loong_linux_futex_rmw_form(text, length);
-    case MINIC_LOONG_MACHINE_ASM_LITERAL_DBAR:
-        literal = loongarch64_literal_dbar(text, length);
-        return literal != NULL && variant ==
-            (strcmp(literal, "dbar 0") == 0 ? 1U : 2U);
-    case MINIC_LOONG_MACHINE_ASM_HINT_DBAR:
-        return variant == 1U && loongarch64_dbar_template(text, length);
-    case MINIC_LOONG_MACHINE_ASM_SUB_POSITIVE:
-        return loong_linux_sub_positive_form(text, length, &sub) &&
-            variant == (sub.width == 8U ? 2U : 0U) +
-                       (sub.add_negated ? 1U : 2U);
-    case MINIC_LOONG_MACHINE_ASM_UACCESS:
-        return loong_linux_uaccess_form(text, length, &uaccess) &&
-            variant == (uaccess.load ? 0U : 4U) +
-                (uint32_t)(uaccess.width == 1U ? 1U :
-                    uaccess.width == 2U ? 2U : uaccess.width == 4U ? 3U : 4U);
-    case MINIC_LOONG_MACHINE_ASM_PERCPU_AMO:
-        percpu = loong_percpu_amo_form(text, length);
-        return percpu != SIZE_MAX && variant == (uint32_t)percpu + 1U;
-    case MINIC_LOONG_MACHINE_ASM_CSR:
-        return variant == loong_csr_template(text, length);
-    case MINIC_LOONG_MACHINE_ASM_AMO_STORE:
-    case MINIC_LOONG_MACHINE_ASM_AMO_FETCH:
-        atom = loong_atomic_template(text, length,
-                    id == MINIC_LOONG_MACHINE_ASM_AMO_FETCH);
-        return atom != NULL &&
-            variant == (uint32_t)(atom - loong_atomic) + 1U;
-    default:
-        return false;
-    }
-}
-
-static bool loong_linux_scalar_template_requires_typed_id(
-    const char *text, size_t length) {
-    return loong_linux_clock_form(text, length) != LOONG_CLOCK_NONE ||
-        loong_linux_irq_switch_template(text, length, true) ||
-        loong_linux_invtlb_form(text, length) != 0U ||
-        loong_linux_add_unless_form(text, length) != 0U ||
-        loong_linux_futex_rmw_form(text, length) != LOONG_FUTEX_NONE ||
-        loongarch64_literal_dbar(text, length) != NULL ||
-        loongarch64_dbar_template(text, length) ||
-        loong_linux_sub_positive_form(text, length,
-                                     &(LoongLinuxSubPositive){0}) ||
-        loong_linux_uaccess_form(text, length, &(LoongLinuxUaccess){0}) ||
-        loong_percpu_amo_form(text, length) != SIZE_MAX ||
-        loong_csr_template(text, length) != 0U ||
-        loong_atomic_template(text, length, false) != NULL ||
-        loong_atomic_template(text, length, true) != NULL;
-}
 
 static bool loong_linux_descriptor_emit(
     FILE *out, const MinicDirectLP64BlockContext *ctx,
@@ -2727,7 +1900,7 @@ bool minic_loongarch64_emit_qualified_structured_asm(
      * guard, never machine-side family classification or emission. */
     if (minic_loongarch64_descriptor_template_requires_typed_id(
             info->template_text, info->template_length) ||
-        loong_linux_scalar_template_requires_typed_id(
+        minic_loongarch64_scalar_template_requires_typed_id(
             info->template_text, info->template_length) ||
         minic_loongarch64_simd_structured_template_requires_typed_id(
             info->template_text, info->template_length))

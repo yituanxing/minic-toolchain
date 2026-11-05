@@ -103,8 +103,10 @@ src/target/common/direct_function_plan.c
 src/target/common/core_function_plan.c
 src/target/common/machine_ir.c
 src/target/common/machine_builder.c
+src/target/common/machine_core_coverage.c
 src/target/common/machine_ir_verify.c
 src/target/common/machine_gnu_asm.c
+src/target/common/machine_source_asm_template.c
 src/target/common/core_function_facts.c
 src/target/common/core_object_storage.c
 src/target/common/core_call_view.c
@@ -120,6 +122,7 @@ src/target/riscv/isa_resolve.c
 src/target/riscv/machine_opcode.c
 src/target/riscv/machine_gnu_asm.c
 src/target/riscv/machine_frame_select.c
+src/target/riscv/machine_core_select.c
 src/target/riscv64/isa.c
 src/target/riscv64/machine_register.c
 src/target/riscv32/rv32_emit.c
@@ -163,6 +166,7 @@ src/target/x86_64/codegen.c
 src/target/x86_64/machine_opcode.c
 src/target/x86_64/machine_gnu_asm.c
 src/target/x86_64/machine_frame_select.c
+src/target/x86_64/machine_core_select.c
 src/target/x86_64/machine_register.c
 src/target/x86_64/machine_emit.c
 src/target/x86_64/asm_contract.c
@@ -196,6 +200,7 @@ src/target/aarch64/fp_emit.c
 src/target/loongarch64/codegen.c
 src/target/loongarch64/machine_opcode.c
 src/target/loongarch64/machine_gnu_asm.c
+src/target/loongarch64/machine_asm_form.c
 src/target/loongarch64/machine_source_asm.c
 src/target/loongarch64/machine_select.c
 src/target/loongarch64/machine_register.c

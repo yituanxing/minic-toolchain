@@ -1,33 +1,13 @@
 #include "target/loongarch64/machine_source_asm.h"
 #include "target/loongarch64/machine_opcode.h"
 #include "target/loongarch64/machine_target_state.h"
+#include "target/loongarch64/machine_asm_form.h"
 #include "target/common/core_machine_asm.h"
+#include "target/common/machine_source_asm_template.h"
 #include <ctype.h>
 #include <inttypes.h>
 #include <stdint.h>
 #include <string.h>
-
-/* The exact Linux descriptor decoders still live in asm_contract.c while the
- * old direct backend exists. They consume no frontend types. The standalone
- * target-MIR contract executable does not link that legacy backend; missing
- * decoders must therefore FAIL CLOSED, never silently admit a forged ID. */
-#if defined(__GNUC__) || defined(__clang__)
-#define LOONG_OPTIONAL_CONTRACT __attribute__((weak))
-#else
-#define LOONG_OPTIONAL_CONTRACT
-#endif
-extern bool minic_loongarch64_typed_descriptor_matches_template(
-    uint32_t, uint32_t, const char *, size_t) LOONG_OPTIONAL_CONTRACT;
-extern bool minic_loongarch64_typed_scalar_form_matches_template(
-    uint32_t, uint32_t, const char *, size_t) LOONG_OPTIONAL_CONTRACT;
-
-static bool loong_source_name(const char *name) {
-    const unsigned char *it = (const unsigned char *)name;
-    if (it == NULL || !(*it == '_' || isalpha(*it))) return false;
-    for (++it; *it != '\0'; ++it)
-        if (*it != '_' && !isalnum(*it)) return false;
-    return true;
-}
 
 /* A zero-ID source form is deliberately restricted to the already qualified
  * operand-free hardware spellings. GNU directives, local labels, arbitrary
@@ -61,16 +41,14 @@ static bool loong_source_form(const MinicMachineInstruction *ins) {
     const uint32_t id = ins->source_asm_machine_form_id;
     if (id == 0U) return loong_source_opaque(ins);
     if (id <= 14U)
-        return minic_loongarch64_typed_descriptor_matches_template != NULL &&
-            minic_loongarch64_typed_descriptor_matches_template(id,
+        return minic_loongarch64_typed_descriptor_matches_template(id,
                 ins->source_asm_machine_form_variant,
                 ins->source_asm_template, ins->source_asm_length);
     /* ID 20 is LSX/LASX and requires its own typed SIMD register grammar;
      * do not misinterpret vector operands as general-purpose registers. */
     if (id == 20U) return false;
     if (id <= 28U)
-        return minic_loongarch64_typed_scalar_form_matches_template != NULL &&
-            minic_loongarch64_typed_scalar_form_matches_template(id,
+        return minic_loongarch64_typed_scalar_form_matches_template(id,
                 ins->source_asm_machine_form_variant,
                 ins->source_asm_template, ins->source_asm_length);
     return false;
@@ -185,8 +163,10 @@ static bool loong_source_print_reg(FILE *out,
 static bool loong_source_operand(FILE *out,
     const MinicMachineFunction *fn, const MinicMachineInstruction *ins,
     const MinicMachineGNUAsmLabels *labels, size_t id,
-    bool label_operand, unsigned char modifier) {
+    unsigned char modifier, void *context) {
     const MinicMachineOperand *operand;
+    const bool label_operand = modifier == 'l';
+    (void)context;
     if (id >= ins->operand_count || ins->operands == NULL) return false;
     operand = &ins->operands[id];
     if (label_operand) {
@@ -200,6 +180,9 @@ static bool loong_source_operand(FILE *out,
             fputs(labels->names[operand->value.block_id], out) >= 0;
     }
     if (!loong_source_constraint(fn->target, ins, operand) ||
+        (modifier != 0U && modifier != 'c' && modifier != 'n' &&
+         modifier != 'z') ||
+        (modifier == 'c' && operand->kind != MINIC_MACHINE_OPERAND_INTEGER) ||
         (modifier == 'n' && operand->kind != MINIC_MACHINE_OPERAND_INTEGER) ||
         (modifier == 'z' && operand->kind != MINIC_MACHINE_OPERAND_REGISTER &&
          operand->kind != MINIC_MACHINE_OPERAND_INTEGER)) return false;
@@ -227,110 +210,34 @@ static bool loong_source_operand(FILE *out,
     }
 }
 
-/* The validator and emitter share this *one* GNU placeholder parser. The
- * verified machine form is exact, including newlines, local labels, CSR
- * numbers and atomic instruction sequences. Only the typed operands expand. */
-static bool loong_source_expand(FILE *out, const MinicMachineFunction *fn,
-    const MinicMachineInstruction *ins,
-    const MinicMachineGNUAsmLabels *labels) {
-    size_t i;
-    if (fn == NULL || fn->target == NULL || ins == NULL ||
-        ins->kind != MINIC_MACHINE_INSTRUCTION_SOURCE_ASM ||
-        ins->source_asm_template == NULL || ins->source_asm_length == 0U ||
-        ins->source_asm_length > 1048576U ||
-        ins->operand_count > MINIC_MACHINE_MAX_OPERANDS ||
-        (ins->operand_count != 0U && ins->operands == NULL) ||
-        !loong_source_form(ins)) return false;
-    for (i = 0U; i < ins->operand_count; ++i) {
-        const MinicMachineOperand *op = &ins->operands[i];
-        size_t previous;
-        if (op->asm_name != NULL && !loong_source_name(op->asm_name))
-            return false;
-        for (previous = 0U; previous < i; ++previous)
-            if (op->asm_name != NULL &&
-                ins->operands[previous].asm_name != NULL &&
-                strcmp(op->asm_name,
-                       ins->operands[previous].asm_name) == 0) return false;
-        if (op->kind == MINIC_MACHINE_OPERAND_BLOCK) {
-            if (op->asm_constraint != NULL ||
-                !ins->source_asm_terminates_block ||
-                (ins->effects & MINIC_MACHINE_EFFECT_BRANCH) == 0U)
-                return false;
-        } else if (!loong_source_constraint(fn->target, ins, op)) {
-            return false;
-        }
-    }
-    for (i = 0U; i < ins->source_asm_length; ++i) {
-        const unsigned char ch =
-            (unsigned char)ins->source_asm_template[i];
-        if (ch == '\0' || ch == '\r') return false;
-        if (ch != '%') {
-            if (out != NULL && fputc(ch, out) == EOF) return false;
-            continue;
-        }
-        if (++i >= ins->source_asm_length) return false;
-        if (ins->source_asm_template[i] == '%') {
-            if (out != NULL && fputc('%', out) == EOF) return false;
-            continue;
-        }
-        if (ins->source_asm_template[i] == '=') {
-            if (!ins->has_source_asm_unique_id ||
-                ins->source_asm_unique_id == 0U) return false;
-            if (out != NULL && fprintf(out, "%" PRIu64,
-                       ins->source_asm_unique_id) < 0) return false;
-            continue;
-        }
-        {
-            bool label_operand = false;
-            unsigned char modifier = 0U;
-            size_t id = SIZE_MAX;
-            const unsigned char first =
-                (unsigned char)ins->source_asm_template[i];
-            if (first == 'l' || first == 'c' || first == 'n' ||
-                first == 'z') {
-                modifier = first;
-                label_operand = first == 'l';
-                if (++i >= ins->source_asm_length) return false;
-            }
-            if (ins->source_asm_template[i] == '[') {
-                const size_t start = i + 1U;
-                size_t end = start, j;
-                while (end < ins->source_asm_length &&
-                       ins->source_asm_template[end] != ']') ++end;
-                if (end == ins->source_asm_length || end == start) return false;
-                for (j = 0U; j < ins->operand_count; ++j) {
-                    const char *name = ins->operands[j].asm_name;
-                    if (name != NULL && strlen(name) == end - start &&
-                        memcmp(name, ins->source_asm_template + start,
-                               end - start) == 0) {
-                        if (id != SIZE_MAX) return false;
-                        id = j;
-                    }
-                }
-                i = end;
-            } else if (ins->source_asm_template[i] >= '0' &&
-                       ins->source_asm_template[i] <= '9') {
-                id = 0U;
-                do {
-                    const unsigned digit =
-                        (unsigned)(ins->source_asm_template[i] - '0');
-                    if (id > (SIZE_MAX - digit) / 10U) return false;
-                    id = id * 10U + digit;
-                    if (i + 1U == ins->source_asm_length ||
-                        ins->source_asm_template[i + 1U] < '0' ||
-                        ins->source_asm_template[i + 1U] > '9') break;
-                    ++i;
-                } while (true);
-            } else return false;
-            if (id == SIZE_MAX || id >= ins->operand_count ||
-                (modifier == 'c' &&
-                 ins->operands[id].kind != MINIC_MACHINE_OPERAND_INTEGER) ||
-                !loong_source_operand(out, fn, ins, labels, id,
-                    label_operand, modifier)) return false;
-        }
-    }
-    return true;
+static bool loong_source_validate_form(const MinicMachineFunction *fn,
+    const MinicMachineInstruction *ins, void *context) {
+    (void)context;
+    return fn != NULL && fn->target != NULL && ins != NULL &&
+        fn->target->architecture == MINIC_TARGET_ARCH_LOONGARCH64 &&
+        loong_source_form(ins);
 }
+
+static bool loong_source_validate_binding(const MinicMachineFunction *fn,
+    const MinicMachineInstruction *ins, size_t id, void *context) {
+    const MinicMachineOperand *op;
+    (void)context;
+    if (fn == NULL || fn->target == NULL || id >= ins->operand_count ||
+        ins->operands == NULL) return false;
+    op = &ins->operands[id];
+    if (op->kind == MINIC_MACHINE_OPERAND_BLOCK)
+        return op->asm_constraint == NULL &&
+            ins->source_asm_terminates_block &&
+            (ins->effects & MINIC_MACHINE_EFFECT_BRANCH) != 0U;
+    return loong_source_constraint(fn->target, ins, op);
+}
+
+static const MinicMachineSourceAsmTemplatePolicy loong_asm_policy = {
+    loong_source_validate_form,
+    loong_source_validate_binding,
+    loong_source_operand,
+    NULL
+};
 
 bool minic_loongarch64_machine_validate_source_asm(
     const MinicTargetInfo *target, const MinicMachineInstruction *ins,
@@ -341,7 +248,8 @@ bool minic_loongarch64_machine_validate_source_asm(
         target->architecture != MINIC_TARGET_ARCH_LOONGARCH64)
         return false;
     probe.target = target;
-    return loong_source_expand(NULL, &probe, ins, NULL);
+    return minic_machine_source_asm_template_preflight(
+        &probe, ins, &loong_asm_policy);
 }
 
 bool minic_loongarch64_machine_emit_source_asm(
@@ -350,9 +258,11 @@ bool minic_loongarch64_machine_emit_source_asm(
     const MinicMachineGNUAsmLabels *labels, void *context) {
     (void)context;
     if (out == NULL || fn == NULL || labels == NULL ||
-        !loong_source_expand(NULL, fn, ins, labels) ||
+        !minic_machine_source_asm_template_preflight(
+            fn, ins, &loong_asm_policy) ||
         fputs("# MINIC_SOURCE_INLINE_ASM_BEGIN\n  ", out) < 0 ||
-        !loong_source_expand(out, fn, ins, labels)) return false;
+        !minic_machine_source_asm_template_emit(
+            out, fn, ins, labels, &loong_asm_policy)) return false;
     return fputs("\n# MINIC_SOURCE_INLINE_ASM_END\n", out) >= 0;
 }
 

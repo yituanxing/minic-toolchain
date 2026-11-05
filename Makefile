@@ -193,8 +193,10 @@ MINIC_SOURCES := \
 	src/target/common/core_function_plan.c \
 	src/target/common/machine_ir.c \
 	src/target/common/machine_builder.c \
+	src/target/common/machine_core_coverage.c \
 	src/target/common/machine_ir_verify.c \
 	src/target/common/machine_gnu_asm.c \
+	src/target/common/machine_source_asm_template.c \
 	src/target/common/core_function_facts.c \
 	src/target/common/core_numeric_shape.c \
 	src/target/common/core_value_slots.c \
@@ -212,6 +214,7 @@ MINIC_SOURCES := \
 	src/target/riscv/machine_opcode.c \
 	src/target/riscv/machine_gnu_asm.c \
 	src/target/riscv/machine_frame_select.c \
+	src/target/riscv/machine_core_select.c \
 	src/target/riscv64/isa.c \
 	src/target/riscv32/rv32_emit.c \
 	src/target/riscv32/rv32_integer_emit.c \
@@ -253,6 +256,7 @@ MINIC_SOURCES := \
 	src/target/x86_64/machine_opcode.c \
 	src/target/x86_64/machine_gnu_asm.c \
 	src/target/x86_64/machine_frame_select.c \
+	src/target/x86_64/machine_core_select.c \
 	src/target/x86_64/machine_emit.c \
 	src/target/x86_64/asm_contract.c \
 	src/target/x86_64/asm_contract_source.c \
@@ -286,6 +290,7 @@ MINIC_SOURCES := \
 	src/target/loongarch64/codegen.c \
 	src/target/loongarch64/machine_opcode.c \
 	src/target/loongarch64/machine_gnu_asm.c \
+	src/target/loongarch64/machine_asm_form.c \
 	src/target/loongarch64/machine_select.c \
 	src/target/loongarch64/machine_source_asm.c \
 	src/target/loongarch64/asm_contract.c \
@@ -2325,6 +2330,28 @@ check-machine-ir-contract:
 
 check-fast: check-machine-ir-contract
 
+.PHONY: check-machine-core-coverage
+check-machine-core-coverage:
+	mkdir -p "$(BUILD_DIR)/tests"
+	$(CC) -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror $(MINIC_INCLUDES) \
+	  tests/target/machine_core_coverage_test.c \
+	  src/target/common/machine_core_coverage.c \
+	  -o "$(BUILD_DIR)/tests/machine-core-coverage"
+	"$(BUILD_DIR)/tests/machine-core-coverage"
+
+check-fast: check-machine-core-coverage
+
+.PHONY: check-machine-source-asm-template
+check-machine-source-asm-template:
+	mkdir -p "$(BUILD_DIR)/tests"
+	$(CC) -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror $(MINIC_INCLUDES) \
+	  tests/target/machine_source_asm_template_test.c \
+	  src/target/common/machine_source_asm_template.c \
+	  -o "$(BUILD_DIR)/tests/machine-source-asm-template"
+	"$(BUILD_DIR)/tests/machine-source-asm-template"
+
+check-fast: check-machine-source-asm-template
+
 .PHONY: check-machine-gnu-asm
 check-machine-gnu-asm:
 	mkdir -p "$(BUILD_DIR)/tests"
@@ -2367,22 +2394,26 @@ check-direct-machine-gnu-asm:
 	  src/target/common/machine_builder.c \
 	  src/target/common/machine_ir_verify.c \
 	  src/target/common/machine_gnu_asm.c \
+	  src/target/common/machine_source_asm_template.c \
 	  src/target/aarch64/machine_opcode.c \
 	  src/target/aarch64/machine_gnu_asm.c \
 	  src/target/aarch64/machine_source_asm.c \
 	  src/target/loongarch64/machine_opcode.c \
 	  src/target/loongarch64/machine_gnu_asm.c \
+	  src/target/loongarch64/machine_asm_form.c \
 	  src/target/loongarch64/machine_source_asm.c \
 	  -o "$(BUILD_DIR)/tests/direct-machine-gnu-asm"
 	"$(BUILD_DIR)/tests/direct-machine-gnu-asm"
 
 check-fast: check-direct-machine-gnu-asm
 
-# A64/Loong Core->GNU migration: strict pre-MIR golden A/B is safe on current
-# HEAD. The separate opt-in production gate also traps the actual invocation
-# of the typed MachineIR serializer in the running minic-cc process; do NOT
-# attach it to check-fast until both full selectors are switched over.
-.PHONY: check-a64-loong-mir-golden check-a64-loong-mir-production check-five-machine-mir-golden
+# Five Linux-target Core->MachineIR migration: strict pre-MIR golden A/B
+# spans ABI/FP/packed/indirect control and source ASM. The independent opt-in
+# production gates must see the typed serializer called for the actual output
+# file. Never attach them to check-fast before all selectors are switched.
+.PHONY: check-a64-loong-mir-golden check-a64-loong-mir-production \
+        check-five-machine-mir-golden check-five-machine-mir-production \
+        check-x86-machine-runtime
 check-a64-loong-mir-golden: $(MINIC_CC_BINARY)
 	python3 tests/compiler/mir-migration/probe_machine_ir.py \
 	  --mode golden --minic-cc "$(abspath $(MINIC_CC_BINARY))" \
@@ -2396,6 +2427,19 @@ check-five-machine-mir-golden: $(MINIC_CC_BINARY)
 check-a64-loong-mir-production: $(MINIC_CC_BINARY)
 	python3 tests/compiler/mir-migration/probe_machine_ir.py \
 	  --mode production --minic-cc "$(abspath $(MINIC_CC_BINARY))" \
+	  --build-dir "$(abspath $(BUILD_DIR))" --host-cc "$(CC)"
+
+check-five-machine-mir-production: $(MINIC_CC_BINARY)
+	python3 tests/compiler/mir-migration/probe_machine_ir.py \
+	  --mode production --targets five \
+	  --minic-cc "$(abspath $(MINIC_CC_BINARY))" \
+	  --build-dir "$(abspath $(BUILD_DIR))" --host-cc "$(CC)"
+
+# Small executable oracle: compare GCC's native binary to MiniC assembly
+# linked by that same GCC. This is not a five-target or Linux runtime claim.
+check-x86-machine-runtime: $(MINIC_CC_BINARY)
+	python3 tests/compiler/mir-migration/probe_x86_native.py \
+	  --minic-cc "$(abspath $(MINIC_CC_BINARY))" \
 	  --build-dir "$(abspath $(BUILD_DIR))" --host-cc "$(CC)"
 
 .PHONY: check-a64-machine-mir-frame-select
@@ -2428,8 +2472,10 @@ check-loong-machine-mir-select:
 	  src/target/common/machine_builder.c \
 	  src/target/common/machine_ir_verify.c \
 	  src/target/common/machine_gnu_asm.c \
+	  src/target/common/machine_source_asm_template.c \
 	  src/target/loongarch64/machine_opcode.c \
 	  src/target/loongarch64/machine_gnu_asm.c \
+	  src/target/loongarch64/machine_asm_form.c \
 	  src/target/loongarch64/machine_source_asm.c \
 	  src/target/loongarch64/machine_select.c \
 	  -o "$(BUILD_DIR)/tests/loong-machine-mir-select"
@@ -2444,14 +2490,18 @@ check-a64-machine-core-select:
 	  src/core/core_ir.c src/core/core_type.c \
 	  src/core/core_ir_verify.c src/core/module_ir.c \
 	  src/target/data_layout.c \
+	  src/target/target_info.c \
 	  src/target/common/machine_ir.c \
 	  src/target/common/machine_builder.c \
 	  src/target/common/machine_ir_verify.c \
 	  src/target/common/machine_gnu_asm.c \
+	  src/target/common/machine_core_coverage.c \
 	  src/target/common/lp64_scalar.c \
 	  src/target/common/lp64_frame.c \
 	  src/target/common/core_numeric_shape.c \
 	  src/target/common/direct_instruction_semantics.c \
+	  src/target/common/direct_call_plan.c \
+	  src/target/common/core_call_index.c \
 	  src/target/common/direct_residual_plan.c \
 	  src/target/common/elf_module_symbol_info.c \
 	  src/target/aarch64/machine_opcode.c \
@@ -2460,6 +2510,7 @@ check-a64-machine-core-select:
 	  src/target/aarch64/machine_frame_select.c \
 	  src/target/aarch64/machine_core_select.c \
 	  src/target/aarch64/frame_emit.c \
+	  src/target/aarch64/neon_emit.c \
 	  -o "$(BUILD_DIR)/tests/a64-machine-core-select"
 	"$(BUILD_DIR)/tests/a64-machine-core-select"
 
@@ -2467,12 +2518,46 @@ check-a64-machine-core-select:
 check-loong-machine-source-asm:
 	mkdir -p "$(BUILD_DIR)/tests"
 	$(CC) -std=c11 -Wall -Wextra -Wpedantic -Werror $(MINIC_INCLUDES) \
+	  -ffunction-sections -fdata-sections -Wl,--gc-sections \
 	  tests/target/loong_machine_source_asm_test.c \
 	  src/target/loongarch64/machine_source_asm.c \
+	  src/target/loongarch64/machine_asm_form.c \
+	  src/target/common/machine_source_asm_template.c \
 	  src/target/common/machine_ir.c \
 	  src/target/common/machine_builder.c \
 	  -o "$(BUILD_DIR)/tests/loong-machine-source-asm"
 	"$(BUILD_DIR)/tests/loong-machine-source-asm"
+
+.PHONY: check-loong-machine-core-select
+check-loong-machine-core-select:
+	mkdir -p "$(BUILD_DIR)/tests"
+	$(CC) -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Wstrict-prototypes -Wmissing-prototypes -Werror $(MINIC_INCLUDES) \
+	  -ffunction-sections -fdata-sections -Wl,--gc-sections \
+	  tests/target/loongarch64/machine_core_select_test.c \
+	  src/core/core_ir.c src/core/core_type.c src/core/core_ir_verify.c \
+	  src/core/module_ir.c src/target/data_layout.c \
+	  src/target/target_info.c \
+	  src/target/common/machine_ir.c \
+	  src/target/common/machine_builder.c \
+	  src/target/common/machine_ir_verify.c \
+	  src/target/common/machine_gnu_asm.c \
+	  src/target/common/machine_source_asm_template.c \
+	  src/target/common/machine_core_coverage.c \
+	  src/target/common/lp64_scalar.c \
+	  src/target/common/lp64_frame.c \
+	  src/target/common/core_numeric_shape.c \
+	  src/target/common/direct_instruction_semantics.c \
+	  src/target/common/direct_residual_plan.c \
+	  src/target/common/direct_call_plan.c \
+	  src/target/common/core_call_index.c \
+	  src/target/common/elf_module_symbol_info.c \
+	  src/target/loongarch64/machine_opcode.c \
+	  src/target/loongarch64/machine_gnu_asm.c \
+	  src/target/loongarch64/machine_asm_form.c \
+	  src/target/loongarch64/machine_source_asm.c \
+	  src/target/loongarch64/machine_select.c \
+	  -o "$(BUILD_DIR)/tests/loong-machine-core-select"
+	"$(BUILD_DIR)/tests/loong-machine-core-select"
 
 .PHONY: check-a64-machine-source-asm
 check-a64-machine-source-asm:
@@ -2514,6 +2599,45 @@ check-riscv-machine-frame-select:
 	  src/target/common/machine_gnu_asm.c \
 	  -o "$(BUILD_DIR)/tests/riscv-machine-frame-select"
 	"$(BUILD_DIR)/tests/riscv-machine-frame-select"
+
+.PHONY: check-riscv-machine-core-select
+check-riscv-machine-core-select:
+	mkdir -p "$(BUILD_DIR)/tests"
+	$(CC) -std=c11 -Wall -Wextra -Wpedantic -Werror $(MINIC_INCLUDES) \
+	  -ffunction-sections -fdata-sections -Wl,--gc-sections \
+	  tests/target/riscv_machine_core_select_test.c \
+	  src/core/core_ir.c src/core/core_type.c src/core/core_ir_verify.c \
+	  src/target/common/machine_ir.c \
+	  src/target/common/machine_builder.c \
+	  src/target/common/machine_ir_verify.c \
+	  src/target/common/machine_gnu_asm.c \
+	  src/target/common/machine_core_coverage.c \
+	  src/target/riscv/machine_core_select.c \
+	  src/target/riscv/machine_frame_select.c \
+	  src/target/riscv/machine_opcode.c \
+	  src/target/riscv/machine_gnu_asm.c \
+	  -o "$(BUILD_DIR)/tests/riscv-machine-core-select"
+	"$(BUILD_DIR)/tests/riscv-machine-core-select"
+
+.PHONY: check-x86-machine-core-select
+check-x86-machine-core-select:
+	mkdir -p "$(BUILD_DIR)/tests"
+	$(CC) -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Wstrict-prototypes -Wmissing-prototypes -Werror $(MINIC_INCLUDES) \
+	  -ffunction-sections -fdata-sections -Wl,--gc-sections \
+	  tests/target/x86_64/machine_core_select_test.c \
+	  src/core/core_ir.c src/core/core_type.c src/core/core_ir_verify.c \
+	  src/core/module_ir.c src/target/data_layout.c \
+	  src/target/common/machine_ir.c \
+	  src/target/common/machine_builder.c \
+	  src/target/common/machine_ir_verify.c \
+	  src/target/common/machine_gnu_asm.c \
+	  src/target/common/machine_core_coverage.c \
+	  src/target/x86_64/machine_opcode.c \
+	  src/target/x86_64/machine_gnu_asm.c \
+	  src/target/x86_64/machine_frame_select.c \
+	  src/target/x86_64/machine_core_select.c \
+	  -o "$(BUILD_DIR)/tests/x86-machine-core-select"
+	"$(BUILD_DIR)/tests/x86-machine-core-select"
 
 .PHONY: check-x86-machine-gnu-asm
 check-x86-machine-gnu-asm:

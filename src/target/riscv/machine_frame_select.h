@@ -3,6 +3,12 @@
 
 #include "target/common/machine_builder.h"
 
+/* Canonical target-owned opcode admission shared by the physical frame and
+ * Core selectors. The verifier contract supplies implicit register effects;
+ * neither selector may invent an instruction effect or bypass legalization. */
+bool minic_riscv_machine_emit_selected(MinicMachineBuilder *,
+    uint32_t opcode, const MinicMachineOperand *, size_t operand_count);
+
 /* Already-finalized physical psABI frame, independent of the source language.
  * RV32 ILP32 and RV64 LP64 use the SAME native selection algorithm, while
  * their planners remain responsible for all offsets and value locations.

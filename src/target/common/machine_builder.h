@@ -20,6 +20,8 @@ bool minic_machine_builder_initialize(MinicMachineBuilder *,
 bool minic_machine_builder_create_block(MinicMachineBuilder *,
     const char *exported_label, bool indirect_entry, bool auxiliary,
     size_t *block_id);
+bool minic_machine_builder_mark_core_block(MinicMachineBuilder *,
+    size_t core_block_id);
 bool minic_machine_builder_position_at(MinicMachineBuilder *, size_t block_id);
 bool minic_machine_builder_add_alias_label(MinicMachineBuilder *,
     const char *alias_label);

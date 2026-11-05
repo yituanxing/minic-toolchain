@@ -22,10 +22,22 @@ import sys
 
 
 ROOT = Path(__file__).resolve().parents[3]
-CASES = ("arith_call_frame", "cfg_global", "entry_backedge", "inline_positive")
+CASES = (
+    "arith_call_frame", "cfg_global", "entry_backedge",
+    "aggregate_abi", "fp_scalar_abi", "packed_memory", "indirect_control",
+    "variadic_calls", "wide_integer", "inline_positive",
+)
 TARGETS = ("aarch64", "loongarch64")
 FIVE = ("riscv32", "riscv64", "x86_64", "aarch64", "loongarch64")
 TRACED_FUNCTION = "minic_machine_gnu_asm_emit_body"
+# The legacy direct code generators demonstrably reject these combinations.
+# Golden mode checks that refusal (including no partial output), while a
+# production pass MUST compile and route them through the real MachineIR writer.
+LEGACY_UNSUPPORTED = {
+    ("x86_64", "inline_positive"): "source-ASM Core instruction",
+    ("riscv32", "wide_integer"): "ILP32 128-bit frame allocation",
+    ("loongarch64", "wide_integer"): "128-bit Core operation/ABI",
+}
 
 
 class Failure(Exception):
@@ -47,6 +59,9 @@ def read_goldens():
     for raw in (Path(__file__).with_name("golden.sha256")).read_text().splitlines():
         if raw and not raw.startswith("#"):
             digest, case = raw.split()
+            demand(len(digest) == 64 and all(c in "0123456789abcdef" for c in digest),
+                   f"malformed SHA-256 baseline: {case}")
+            demand(case not in hashes, f"duplicate SHA-256 baseline: {case}")
             hashes[case] = digest
     return hashes
 
@@ -80,10 +95,37 @@ def check_functional_shapes(asm, arch, case):
         demand("mir_backedge:" in asm, f"{key}: missing loop function")
         demand(len(re.findall(r"(?m)^\.L\w+:", asm)) >= 2,
                f"{key}: loop labels unexpectedly absent")
-    else:
+    elif case == "aggregate_abi":
+        for marker in ("mir_make_record:", "mir_use_record:",
+                       "mir_aggregate_sink:", "main:"):
+            demand(marker in asm, f"{key}: aggregate ABI symbol missing: {marker}")
+    elif case == "fp_scalar_abi":
+        for marker in ("mir_fp_callee:", "mir_fp_bridge:",
+                       "mir_fp_sink:", "main:"):
+            demand(marker in asm, f"{key}: floating ABI symbol missing: {marker}")
+    elif case == "packed_memory":
+        for marker in ("mir_packed_update:", "mir_packed_global:",
+                       "mir_packed_sink:", "main:"):
+            demand(marker in asm, f"{key}: packed access symbol missing: {marker}")
+    elif case == "indirect_control":
+        for marker in ("mir_dispatch:", "mir_indirect_target:", "main:"):
+            demand(marker in asm, f"{key}: indirect branch symbol missing: {marker}")
+        demand(len(re.findall(r"(?m)^\.L\w+:", asm)) >= 4,
+               f"{key}: computed goto labels missing")
+    elif case == "variadic_calls":
+        for marker in ("mir_variadic_sum:", "mir_variadic_bridge:",
+                       "mir_variadic_sink:", "main:"):
+            demand(marker in asm, f"{key}: variadic ABI symbol missing: {marker}")
+    elif case == "wide_integer":
+        for marker in ("mir_wide_mul:", "mir_wide_compare:",
+                       "mir_wide_sink:", "main:"):
+            demand(marker in asm, f"{key}: 128-bit integer symbol missing: {marker}")
+    elif case == "inline_positive":
         demand("mir_inline:" in asm, f"{key}: missing mir_inline")
         demand(len(re.findall(r"(?m)^\s*nop\s*$", asm)) == 1,
                f"{key}: source-owned inline ASM must appear exactly once")
+    else:
+        raise Failure(f"unknown MIR test fixture {case}")
     check_label_integrity(asm, key)
 
 
@@ -123,6 +165,8 @@ def main():
     parser.add_argument("--host-cc", default="cc")
     parser.add_argument("--baseline-cc", type=Path,
                         help="optional old compiler: generate and show unified diff on mismatch")
+    parser.add_argument("--case", action="append", choices=CASES,
+                        help="run only these named fixture(s) for an incremental regression")
     args = parser.parse_args()
     binary = args.minic_cc.resolve(strict=True)
     baseline = args.baseline_cc.resolve(strict=True) if args.baseline_cc else None
@@ -130,8 +174,7 @@ def main():
     work.mkdir(parents=True, exist_ok=True)
     golden = read_goldens()
     archs = FIVE if args.targets == "five" else TARGETS
-    demand(not (args.mode == "production" and args.targets == "five"),
-           "MIR production gate currently covers only AArch64 and LoongArch64")
+    cases = tuple(args.case) if args.case else CASES
     witness = None
     function_start = None
     function_size = None
@@ -140,18 +183,17 @@ def main():
         witness = build_witness(args.host_cc, work)
     calls = 0
     positives = 0
-    for case in CASES:
+    unsupported = 0
+    for case in cases:
         source = Path(__file__).with_name(case + ".c")
         preprocessed = work / (case + ".i")
         proc = run([args.host_cc, "-E", "-P", "-std=gnu11", "-x", "c",
                     str(source), "-o", str(preprocessed)])
         demand(proc.returncode == 0, f"GNU preprocess {case}: {proc.stderr}")
         for arch in archs:
-            # x86 direct codegen has not admitted this source ASM shape.
-            if arch == "x86_64" and case == "inline_positive":
-                continue
             key = f"{arch}/{case}"
             output = work / f"{arch}-{case}.s"
+            output.unlink(missing_ok=True)
             command = [f"--target={arch}-linux", "-S", str(preprocessed),
                        "-o", str(output)]
             env = None
@@ -165,6 +207,15 @@ def main():
                             "MINIC_MIR_WITNESS_PATH": str(marker),
                             "MINIC_MIR_OUTPUT_PATH": str(output)})
             proc = run([str(binary)] + command, env=env)
+            if args.mode == "golden" and (arch, case) in LEGACY_UNSUPPORTED:
+                demand(proc.returncode != 0 and not output.exists() and
+                       "error:" in proc.stderr,
+                       f"{key}: legacy gap admitted or left partial output: "
+                       f"{proc.stderr}")
+                print(f"MIR_LEGACY_UNSUPPORTED=PASS target={arch} "
+                      f"case={case} gap={LEGACY_UNSUPPORTED[(arch, case)]}")
+                unsupported += 1
+                continue
             demand(proc.returncode == 0 and output.is_file(),
                    f"{key}: MiniC failed ({proc.returncode}): {proc.stderr}")
             if args.mode == "production":
@@ -178,8 +229,14 @@ def main():
             asm = payload.decode("utf-8")
             check_functional_shapes(asm, arch, case)
             digest = hashlib.sha256(payload).hexdigest()
-            demand(key in golden, f"{key}: missing committed baseline golden")
-            if digest != golden[key]:
+            # No legacy golden can exist for a capability the legacy backend
+            # refused. New MachineIR support is judged by a real body witness
+            # and semantic checks; a separate reference/runtime proof remains
+            # required before calling that feature Linux-ready.
+            demand(key in golden or (args.mode == "production" and
+                   (arch, case) in LEGACY_UNSUPPORTED),
+                   f"{key}: missing committed baseline golden")
+            if key in golden and digest != golden[key]:
                 detail = ""
                 if baseline is not None:
                     old = work / f"baseline-{arch}-{case}.s"
@@ -192,7 +249,11 @@ def main():
                     detail = "\n" + "\n".join(list(delta)[:60])
                 raise Failure(f"{key}: golden divergence expected={golden[key]} "
                               f"actual={digest}, output={output}{detail}")
-            print(f"MIR_AB_GOLDEN=PASS target={arch} case={case} bytes={len(payload)} sha256={digest}")
+            if key in golden:
+                print(f"MIR_AB_GOLDEN=PASS target={arch} case={case} bytes={len(payload)} sha256={digest}")
+            else:
+                print(f"MIR_NEW_CAPABILITY=PASS target={arch} case={case} bytes={len(payload)} "
+                      f"sha256={digest} reference=unavailable")
             positives += 1
 
     negative = Path(__file__).with_name("inline_negative.c")
@@ -200,7 +261,7 @@ def main():
     proc = run([args.host_cc, "-E", "-P", "-std=gnu11", "-x", "c",
                 str(negative), "-o", str(neg_i)])
     demand(proc.returncode == 0, f"GNU preprocess negative: {proc.stderr}")
-    for arch in TARGETS:
+    for arch in archs:
         output = work / f"negative-{arch}.s"
         output.unlink(missing_ok=True)
         proc = run([str(binary), f"--target={arch}-linux", "-S", str(neg_i),
@@ -210,7 +271,8 @@ def main():
         demand("error:" in proc.stderr and "Segmentation fault" not in proc.stderr,
                f"{arch}: bad negative diagnostic: {proc.stderr}")
         print(f"MIR_ASM_NEGATIVE=PASS target={arch} rejected=unbound_operand")
-    print(f"MIR_MIGRATION={args.mode.upper()}_PASS targets={len(archs)} positive={positives} negative=2 "
+    print(f"MIR_MIGRATION={args.mode.upper()}_PASS targets={len(archs)} positive={positives} "
+          f"legacy_unsupported={unsupported} negative={len(archs)} "
           f"typed_emitter_calls={calls}")
 
 
