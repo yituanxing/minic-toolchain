@@ -11,7 +11,7 @@ trap 'rm -rf "$work"' EXIT
 
 "$host" -E -P -std=gnu11 -DMINIC_AARCH64_CURSOR "$src" \
     -o "$work/stack.i"
-"$mini" --target=aarch64-linux -S "$work/stack.i" -o "$work/stack.s"
+MINIC_M1_TRACE=1 MINIC_ASM_OPERAND_PLAN_TRACE=1 "$mini" --target=aarch64-linux -S "$work/stack.i" -o "$work/stack.s"
 "$host" -std=gnu11 -O0 -Wno-unused-parameter "$src" -o "$work/host-oracle"
 "$work/host-oracle" || {
     echo 'AARCH64_VA_INCOMING=FAIL host-semantics' >&2; exit 1;
@@ -20,12 +20,27 @@ trap 'rm -rf "$work"' EXIT
 check_static_stack_cursor() {
     local function=$1 named_bytes=$2 frame first_arg_offset
     frame=$(sed -n "/^${function}:/,/^\\.size ${function}/p" \
-        "$work/stack.s" | sed -n 's/^  movz x12, #\([0-9]*\)$/\1/p' | head -n 1)
+        "$work/stack.s" | awk '
+            /^  movz x12, #[0-9]+, lsl #0$/ {
+                part=$0; sub(/^  movz x12, #/, "", part)
+                sub(/, lsl #0$/, "", part)
+                frame=part+0; have=1
+            }
+            have && /^  movk x12, #[0-9]+, lsl #16$/ {
+                part=$0; sub(/^  movk x12, #/, "", part)
+                sub(/, lsl #16$/, "", part)
+                frame+=(part+0)*65536
+            }
+            have && /^  sub sp, sp, x12$/ {
+                if (frame>0) print frame
+                exit
+            }
+        ')
     test -n "$frame"
     first_arg_offset=$((frame + 16 + named_bytes))
     sed -n "/^${function}:/,/^\\.size ${function}/p" \
         "$work/stack.s" | awk -v expected="  add x10, sp, #$first_arg_offset" '
-            $0 == "  str x10, [x9]" && previous == expected {found=1}
+            $0 == "  str x10, [x9, #0]" && previous == expected {found=1}
             {previous=$0}
             END {if (!found) exit 1}
         ' || {
@@ -39,7 +54,7 @@ check_dynamic_stack_cursor() {
     first_arg_offset=$((16 + named_bytes))
     sed -n "/^${function}:/,/^\\.size ${function}/p" \
         "$work/stack.s" | awk -v expected="  add x10, x17, #$first_arg_offset" '
-            $0 == "  str x10, [x9]" && previous == expected &&
+            $0 == "  str x10, [x9, #0]" && previous == expected &&
               previous2 ~ /^  ldr x17, \[x19, #[0-9]+\]$/ {found=1}
             {previous2=previous; previous=$0}
             END {if (!found) exit 1}
@@ -60,12 +75,15 @@ check_static_stack_cursor named_gp_stack_cursor 8
 check_static_stack_cursor named_mixed_stack_cursor 16
 
 # Two named 16-byte GP records use x0..x3 (four registers, not two
-# parameters), so the saved GPR cursor starts at offset -32. movn #31
-# materializes the exact 32-bit two's-complement value -32.
+# parameters), so the saved GPR cursor starts at offset -32. The native
+# selector may use MOVZ+MOVK for the exact 32-bit -32 encoding (or MOVN).
 sed -n '/^named_record_gp_cursor:/,/^\.size named_record_gp_cursor/p' \
     "$work/stack.s" | awk '
-        $0 == "  str w10, [x9, #24]" && previous == "  movn w10, #31" {found=1}
-        {previous=$0}
+        $0 == "  str w10, [x9, #24]" &&
+            ((previous == "  movn w10, #31, lsl #0") ||
+             (previous == "  movk w10, #65535, lsl #16" &&
+              previous2 == "  movz w10, #65504, lsl #0")) {found=1}
+        {previous2=previous; previous=$0}
         END {if (!found) exit 1}
     ' || {
     echo 'AARCH64_VA_INCOMING=FAIL named-record-two-registers-per-parameter' >&2
@@ -81,7 +99,7 @@ check_dynamic_stack_cursor named_aligned_dynamic_stack_cursor 8
 # offsets __gr_offs and __vr_offs must each be zero, never underflow.
 sed -n '/^named_mixed_stack_cursor:/,/^\.size named_mixed_stack_cursor/p' \
     "$work/stack.s" | awk '
-        $0 == "  movz w10, #0" {zero=1; next}
+        $0 == "  movz w10, #0, lsl #0" {zero=1; next}
         $0 == "  str w10, [x9, #24]" && zero {gp=1; zero=0; next}
         $0 == "  str w10, [x9, #28]" && zero {fp=1; zero=0; next}
         {zero=0}

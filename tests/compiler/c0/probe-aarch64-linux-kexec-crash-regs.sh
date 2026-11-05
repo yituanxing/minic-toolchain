@@ -8,7 +8,7 @@ trap 'rm -rf "$work"' EXIT HUP INT TERM
 src="$root/tests/compiler/c0/aarch64_linux_kexec_crash_regs.c"
 
 "$host" -E -P -std=gnu11 "$src" -o "$work/crash.i"
-"$mini" --target=aarch64-linux -S "$work/crash.i" -o "$work/crash.s"
+MINIC_M1_TRACE=1 "$mini" --target=aarch64-linux -S "$work/crash.i" -o "$work/crash.s"
 
 # The original GNU 675-byte template snapshots 31 GPRs, SP, synthetic
 # PSTATE, and local-label PC. Verify the real target instructions, not a
@@ -53,10 +53,10 @@ fi
 # compiler-generated temporaries earlier in the function may use x17.
 "$host" -E -P -std=gnu11 -DMINIC_CRASH_LARGE_SSA "$src" \
     -o "$work/crash-large.i"
-"$mini" --target=aarch64-linux -S "$work/crash-large.i" \
+MINIC_M1_TRACE=1 "$mini" --target=aarch64-linux -S "$work/crash-large.i" \
     -o "$work/crash-large.s"
 awk '
-    /^  movz x12, #[0-9]+$/ {split($0, fields, "#"); frame_candidate=fields[2]+0}
+    /^  movz x12, #[0-9]+(, lsl #0)?$/ {split($0, fields, "#"); frame_candidate=fields[2]+0}
     /^  sub sp, sp, x12$/ {if (frame_candidate > 4095) large_frame=frame_candidate}
     /^  stp x0, x1, \[x0, #0\]$/ {
         found++
@@ -65,7 +65,7 @@ awk '
             split(before2, fields, "#")
             if (fields[2]+0 > 4095 || fields[2]+8 > large_frame) bad=1
         } else if (before2 != "  add x0, sp, x0" ||
-                   before3 !~ /^  movz x0, #[0-9]+$/) bad=1
+                   before3 !~ /^  movz x0, #[0-9]+(, lsl #0)?$/) bad=1
     }
     {before3=before2; before2=before; before=$0}
     END {if (found != 1 || !large_frame || bad) exit 1}

@@ -25,7 +25,7 @@ lines.extend([' frame_anchor[0] = (unsigned char)x;',
  'int main(void) { return heavy(17UL) == %dUL ? 42 : 1; }' % v])
 open(out,'w').write('\n'.join(lines)+'\n')
 PY
-  "$minic" --target=aarch64-linux -S "$d/large-$updates.i" -o "$d/large-$updates.s"
+  MINIC_M1_TRACE=1 MINIC_ASM_OPERAND_PLAN_TRACE=1 "$minic" --target=aarch64-linux -S "$d/large-$updates.i" -o "$d/large-$updates.s"
   grep -Fq 'stlr x9, [x10]' "$d/large-$updates.s"
   if command -v aarch64-linux-gnu-as >/dev/null 2>&1; then
     aarch64-linux-gnu-as "$d/large-$updates.s" -o "$d/large-$updates.o"
@@ -42,7 +42,7 @@ with open(sys.argv[1], encoding='utf-8') as stream:
     assembly = stream.read()
 updates = int(sys.argv[2])
 heavy = assembly.split('heavy:\n', 1)[1].split('.globl main', 1)[0]
-match = re.search(r'\bmovz x(\d+), #(\d+)\s*\n\s*sub sp, sp, x\1\b', heavy)
+match = re.search(r'(?m)^[ \t]*movz x(\d+), #(\d+), lsl #0[ \t]*\n[ \t]*sub sp, sp, x\1[ \t]*$', heavy)
 if not match:
     raise SystemExit('missing real AArch64 heavy() stack allocation')
 frame_bytes = int(match.group(2))
