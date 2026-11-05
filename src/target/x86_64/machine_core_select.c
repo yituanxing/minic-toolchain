@@ -4077,6 +4077,107 @@ static bool x86_source_counter(X86CoreSelector *sel,
  * forms together: RDPKRU writes EAX and EDX after reading ECX; WRPKRU
  * reads EAX, ECX and EDX. These are CPU protection-key state operations,
  * not memory aliases or normal arithmetic with FLAGS side effects. */
+/* Linux rdrand_long/rdseed_long have two independent outputs: the CPU
+ * Carry Flag reports success while the 64-bit sampled value is in a GPR.
+ * Keep the output status as a real FLAGS MachineIR binding; selecting a
+ * nonzero test of RAX would silently change retry-loop semantics. */
+static bool x86_asm_bool_lvalue(const X86CoreSelector *sel,
+    MinicCoreValueId value) {
+    MinicCoreTypeId pointee;
+    const MinicCoreType *type;
+    return value < sel->core->value_count &&
+        minic_lp64_core_pointer_pointee(sel->core->type_context,
+            sel->core->values[value].core_type_id,&pointee) &&
+        (type = x86_type(sel,pointee)) != NULL &&
+        type->kind == MINIC_CORE_TYPE_INTEGER && type->has_layout &&
+        type->size == 1U && type->value.integer.is_bool;
+}
+
+static bool x86_source_random_seed(X86CoreSelector *sel,
+    const MinicCoreInstruction *ins) {
+    const MinicCoreInlineAsm *source;
+    const MinicCoreStructuredInlineAsmOperand *roles;
+    MinicMachineOperand bindings[2];
+    MinicMachineRegisterEffect flags = {0};
+    unsigned int form;
+    bool named;
+    size_t i;
+    if (sel == NULL || ins == NULL ||
+        ins->kind != MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM ||
+        ins->result != MINIC_CORE_VALUE_INVALID ||
+        ins->value.structured_inline_asm.inline_asm_id >=
+            sel->core->inline_asm_count ||
+        sel->core->inline_asms == NULL)
+        return false;
+    source = &sel->core->inline_asms[
+        ins->value.structured_inline_asm.inline_asm_id];
+    roles = ins->value.structured_inline_asm.operands;
+    form = minic_x86_64_linux_random_seed_form(
+        source->template_text,source->template_length);
+    if (source->target_machine_form_id != MINIC_X86_MACHINE_ASM_RANDOM_SEED ||
+        (form != 1U && form != 2U) ||
+        source->target_machine_form_variant != form ||
+        source->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
+        source->source_asm_unique_id == 0U ||
+        !source->is_volatile || source->is_goto ||
+        source->has_memory_clobber || source->explicit_memory_clobber ||
+        source->resolved_immediate_count != 0U ||
+        source->goto_second_target != MINIC_CORE_BLOCK_INVALID ||
+        source->register_clobber_count != 0U ||
+        ins->value.structured_inline_asm.operand_count != 2U ||
+        roles == NULL ||
+        !minic_x86_64_typed_machine_form_matches_template(
+            source->target_machine_form_id,
+            source->target_machine_form_variant,
+            source->template_text,source->template_length))
+        return false;
+    for (i = 0U; i < 2U; ++i) {
+        if (roles[i].operand_index != i ||
+            roles[i].kind !=
+                MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT ||
+            roles[i].has_fixed_register_binding || roles[i].early_clobber ||
+            roles[i].physical_early_clobber ||
+            roles[i].physical_read_write || roles[i].has_tied_output)
+            return false;
+    }
+    if (!x86_asm_bool_lvalue(sel,roles[0].value) ||
+        !x86_asm_u64_lvalue(sel,roles[1].value))
+        return false;
+    /* Both exact Linux templates have the same six-character opcode and
+     * either a named %[out] or numbered %1 output reference. */
+    named = source->template_length > 8U &&
+        source->template_text[7] == '%' &&
+        source->template_text[8] == '[';
+    bindings[0] = x86_reg(0U,64U);
+    bindings[0].value.physical.reg.bank = MINIC_MACHINE_REGISTER_FLAGS;
+    bindings[0].value.physical.access = MINIC_MACHINE_REGISTER_WRITE;
+    bindings[0].asm_constraint = "=@ccc";
+    bindings[1] = x86_reg(MINIC_X86_REG_RAX,64U);
+    bindings[1].value.physical.access = MINIC_MACHINE_REGISTER_WRITE;
+    bindings[1].asm_constraint = "=r";
+    bindings[1].asm_name = named ? "out" : NULL;
+    flags.reg = (MinicMachineRegister){
+        0U,64U,MINIC_MACHINE_REGISTER_FLAGS};
+    flags.access = MINIC_MACHINE_REGISTER_CLOBBER;
+    if (!minic_machine_builder_emit_core_source_asm(&sel->builder,source,
+            0U,bindings,2U,&flags,1U,false,false) ||
+        !x86_1(sel,MINIC_X86_MI_SETC8_R,
+            x86_reg(MINIC_X86_REG_R11,8U)))
+        return false;
+    /* Neither address calculation nor the value store modifies CF before
+     * SETC; after SETC, the one-byte boolean stays live in R11B. */
+    if (!x86_core_load(sel,roles[1].value,MINIC_X86_REG_R10) ||
+        !x86_2(sel,MINIC_X86_MI_MOV64_RA,
+            x86_reg(MINIC_X86_REG_RAX,64U),
+            x86_addr(MINIC_X86_REG_R10,0)) ||
+        !x86_core_load(sel,roles[0].value,MINIC_X86_REG_R10) ||
+        !x86_2(sel,MINIC_X86_MI_MOV8_RA,
+            x86_reg(MINIC_X86_REG_R11,8U),
+            x86_addr(MINIC_X86_REG_R10,0)))
+        return false;
+    return true;
+}
+
 static bool x86_source_pkru(X86CoreSelector *sel,
     const MinicCoreInstruction *ins) {
     static const unsigned int read_registers[3] = {
@@ -5500,6 +5601,7 @@ static bool x86_core_instruction(X86CoreSelector *sel,
             x86_source_cmpxchg128(sel, ins) ||
             x86_source_crash_register(sel, ins) ||
             x86_source_futex_extable(sel, ins) ||
+            x86_source_random_seed(sel, ins) ||
             x86_source_pkru(sel, ins) ||
             x86_source_msr(sel, ins) ||
             x86_source_hweight(sel, ins) ||

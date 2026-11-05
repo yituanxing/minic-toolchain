@@ -628,6 +628,15 @@ static bool x86_emit_source_asm(FILE *out,
                 writes[index] : exchanges[index],out) != EOF;
     }
     if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_RANDOM_SEED) {
+        /* The source operand name is sealed to RAX by MachineIR; RDRAND/
+         * RDSEED update CF in hardware and the selected SETC reads it. */
+        const unsigned int form = instruction->source_asm_machine_form_variant;
+        if (form != 1U && form != 2U) return false;
+        return fputs(form == 1U ? "  rdrandq %rax\n" :
+            "  rdseedq %rax\n",out) != EOF;
+    }
+    if (instruction->source_asm_machine_form_id ==
             MINIC_X86_MACHINE_ASM_PKRU) {
         /* Source and MachineIR validate the exact byte sequence and
          * EAX/ECX/EDX roles. Print only the two known CPU-state opcodes. */

@@ -1842,11 +1842,17 @@ static bool x86_source_carry_xadd_contract(const MinicTargetInfo *target,
         ins->source_asm_machine_form_variant != 0U ||
         ins->source_asm_terminates_block ||
         ins->source_asm_permits_fallthrough ||
-        ins->effects != (MINIC_MACHINE_EFFECT_SOURCE_ASM |
-            MINIC_MACHINE_EFFECT_MEMORY_READ |
-            MINIC_MACHINE_EFFECT_MEMORY_WRITE |
-            MINIC_MACHINE_EFFECT_COMPILER_BARRIER |
-            (csum ? 0U : MINIC_MACHINE_EFFECT_VOLATILE)) ||
+        /* Keep the Source-owned volatile bit for ip_fast_csum. GNU
+         * permits both asm and asm volatile for this fixed checksum
+         * template; the Core source emitter copies that bit unchanged.
+         * GS SMP lock XADD, by contrast, is always volatile. */
+        (ins->effects & ~(unsigned int)MINIC_MACHINE_EFFECT_VOLATILE) !=
+            (MINIC_MACHINE_EFFECT_SOURCE_ASM |
+             MINIC_MACHINE_EFFECT_MEMORY_READ |
+             MINIC_MACHINE_EFFECT_MEMORY_WRITE |
+             MINIC_MACHINE_EFFECT_COMPILER_BARRIER) ||
+        (!csum &&
+         (ins->effects & MINIC_MACHINE_EFFECT_VOLATILE) == 0U) ||
         ins->operand_count != count || ins->operands == NULL ||
         ins->implicit_count != 1U || ins->implicit == NULL ||
         ins->implicit[0].reg.bank != MINIC_MACHINE_REGISTER_FLAGS ||
@@ -2072,6 +2078,55 @@ static bool x86_source_counter_contract(const MinicMachineInstruction *ins) {
 /* Exact Linux PKRU byte forms have three fixed 32-bit GPR operands;
  * neither form modifies FLAGS or directly reads/writes a C memory operand.
  * The verifier independently rejects a missing, wider or swapped binding. */
+/* Real Linux RDRAND/RDSEED returns status in CF and data in a 64-bit GPR.
+ * The status output is a FLAGS register, never a fabricated data register. */
+static bool x86_source_random_seed_contract(
+    const MinicMachineInstruction *ins) {
+    const unsigned int form = minic_x86_64_linux_random_seed_form(
+        ins->source_asm_template,ins->source_asm_length);
+    const bool named = ins->source_asm_length > 8U &&
+        ins->source_asm_template[7] == '%' &&
+        ins->source_asm_template[8] == '[';
+    const MinicMachineOperand *flags, *data;
+    if (ins->source_asm_machine_form_id !=
+            MINIC_X86_MACHINE_ASM_RANDOM_SEED ||
+        (form != 1U && form != 2U) ||
+        ins->source_asm_machine_form_variant != form ||
+        ins->operand_count != 2U || ins->operands == NULL ||
+        ins->source_asm_terminates_block ||
+        ins->source_asm_permits_fallthrough ||
+        ins->effects != (MINIC_MACHINE_EFFECT_SOURCE_ASM |
+            MINIC_MACHINE_EFFECT_VOLATILE) ||
+        ins->implicit_count != 1U || ins->implicit == NULL ||
+        ins->implicit[0].reg.bank != MINIC_MACHINE_REGISTER_FLAGS ||
+        ins->implicit[0].reg.number != 0U ||
+        ins->implicit[0].reg.width_bits != 64U ||
+        ins->implicit[0].access != MINIC_MACHINE_REGISTER_CLOBBER ||
+        !minic_x86_64_typed_machine_form_matches_template(
+            ins->source_asm_machine_form_id,
+            ins->source_asm_machine_form_variant,
+            ins->source_asm_template,ins->source_asm_length))
+        return false;
+    flags = &ins->operands[0];
+    data = &ins->operands[1];
+    return flags->kind == MINIC_MACHINE_OPERAND_REGISTER &&
+        flags->asm_name == NULL && flags->asm_constraint != NULL &&
+        strcmp(flags->asm_constraint,"=@ccc") == 0 &&
+        flags->value.physical.reg.bank == MINIC_MACHINE_REGISTER_FLAGS &&
+        flags->value.physical.reg.number == 0U &&
+        flags->value.physical.reg.width_bits == 64U &&
+        flags->value.physical.access == MINIC_MACHINE_REGISTER_WRITE &&
+        data->kind == MINIC_MACHINE_OPERAND_REGISTER &&
+        data->asm_constraint != NULL &&
+        strcmp(data->asm_constraint,"=r") == 0 &&
+        (named ? (data->asm_name != NULL &&
+            strcmp(data->asm_name,"out") == 0) : data->asm_name == NULL) &&
+        data->value.physical.reg.bank == MINIC_MACHINE_REGISTER_GENERAL &&
+        data->value.physical.reg.number == MINIC_X86_REG_RAX &&
+        data->value.physical.reg.width_bits == 64U &&
+        data->value.physical.access == MINIC_MACHINE_REGISTER_WRITE;
+}
+
 static bool x86_source_pkru_contract(const MinicMachineInstruction *ins) {
     static const unsigned int read_registers[3] = {
         MINIC_X86_REG_RAX, MINIC_X86_REG_RDX, MINIC_X86_REG_RCX
@@ -2406,6 +2461,9 @@ bool minic_x86_64_machine_validate_source_asm(const MinicTargetInfo *target,
     if (instruction->source_asm_machine_form_id ==
             MINIC_X86_MACHINE_ASM_IP_HERE)
         return x86_source_ip_here_contract(instruction);
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_RANDOM_SEED)
+        return x86_source_random_seed_contract(instruction);
     if (instruction->source_asm_machine_form_id ==
             MINIC_X86_MACHINE_ASM_PKRU)
         return x86_source_pkru_contract(instruction);

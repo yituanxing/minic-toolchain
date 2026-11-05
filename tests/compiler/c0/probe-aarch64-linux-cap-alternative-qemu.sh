@@ -10,11 +10,8 @@ work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 source="$root/tests/compiler/c0/aarch64-linux-cap-alternative.c"
 cc -E -P -x c "$source" -o "$work/original.i"
-set -x # precise first-positive A64 cap acceptance diagnostic
-MINIC_M1_TRACE=1 "$minic" --target=aarch64-linux -S "$work/original.i" -o "$work/mini.s"
+"$minic" --target=aarch64-linux -S "$work/original.i" -o "$work/mini.s"
 test -s "$work/mini.s"
-# Temporary single-run evidence for silent shape assertions.
-grep -nE 'altinstructions|hword|alt_cb_patch_nops|Lmini_arm_f|subsection|\.org' "$work/mini.s" || true
 
 # Preserve the Linux boot-time patch table, actual feature ID and real CFG
 # edge. A fallthrough NOP is not an equivalent replacement for asm goto.
@@ -28,11 +25,11 @@ grep -Fq ' .byte 662b-661b' "$work/mini.s"
 grep -Fq ' .byte 664f-663f' "$work/mini.s"
 grep -Fq '.subsection 1' "$work/mini.s"
 grep -Fq '.org' "$work/mini.s"
-grep -Eq 'b[[:space:]]+\.Lmini_arm_f[0-9]+_b[0-9]+' "$work/mini.s"
+grep -Eq $'^\tb\t\\.Lminic_mir_linux_has_cap_unlikely_[0-9]+$' "$work/mini.s"
+grep -Eq $'^\tb\t\\.Lminic_mir_linux_has_cap_likely_[0-9]+$' "$work/mini.s"
 test "$(grep -Fc '.pushsection .altinstructions' "$work/mini.s")" -eq 2
-test "$(grep -Ec $'^\tb\t\\.Lmini_arm_f[0-9]+_b[0-9]+' "$work/mini.s")" -eq 2
+test "$(grep -Ec $'^\tb\t\\.Lminic_mir_linux_has_cap_(un)?likely_[0-9]+$' "$work/mini.s")" -eq 2
 
-set +x
 # Neither an unknown alternative instruction nor changed GNU constraints
 # may silently fall back into a generic Core opaque instruction.
 while IFS='|' read -r label before after; do

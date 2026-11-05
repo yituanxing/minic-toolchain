@@ -109,7 +109,18 @@ jobs:
               RV32I_QEMU_TIMEOUT_SECONDS=120 \
               bash tools/ci/linux-rv32i-qemu-p0-v1.sh >"$ev/$mode.log" 2>&1
           }
-          oracle gnu || { echo 'RV32_GPU_DIFF=BLOCKED GNU_GPU_baseline_failed'; exit 4; }
+          oracle gnu || {
+            echo 'RV32_GPU_DIFF=BLOCKED GNU_GPU_baseline_failed'
+            echo 'RV32_GPU_DIFF_GNU_LOG_BEGIN'
+            tail -n 160 "$ev/gnu.log" || true
+            echo 'RV32_GPU_DIFF_GNU_LOG_END'
+            if [[ -f "$ev/gnu/qemu-serial.log" ]]; then
+              echo 'RV32_GPU_DIFF_GNU_GUEST_BEGIN'
+              tail -n 100 "$ev/gnu/qemu-serial.log" || true
+              echo 'RV32_GPU_DIFF_GNU_GUEST_END'
+            fi
+            exit 4
+          }
           echo 'RV32_GPU_DIFF_BASELINE=PASS GNU_kernel=true' >"$ev/results.txt"
           make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
             KBUILD_NOCMDDEP=1 -j4 prepare >"$ev/kbuild-prepare.log" 2>&1
@@ -146,6 +157,7 @@ jobs:
               echo "RV32_GPU_DIFF_MODE=$mode GPU=PASS" | tee -a "$ev/results.txt"
             else
               echo "RV32_GPU_DIFF_MODE=$mode GPU=FAIL" | tee -a "$ev/results.txt"
+              tail -n 80 "$ev/$mode.log" || true
             fi
           done
           test "$(wc -l <"$ev/results.txt")" -eq 4
