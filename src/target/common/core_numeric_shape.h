@@ -13,6 +13,12 @@ bool minic_core_integer_overflow_shape(
 bool minic_core_integer_overflow_mixed_add_i32_shape(
     const MinicCoreFunction *, const MinicCoreInstruction *,
     bool *signed_left);
+/* Exact GNU checked add of one signed i32 and one unsigned u32 into i32.
+ * Both inputs are promoted to their mathematical values before range check;
+ * target code owns physical zero/sign extension and overflow detection. */
+bool minic_core_integer_overflow_i32_u32_to_i32_shape(
+    const MinicCoreFunction *, const MinicCoreInstruction *,
+    bool *signed_left);
 /* GNU add computes the exact unsigned-65-bit mathematical value for
  * u64 + u32 before storing to an i32 result. UDF's checked allocation
  * length uses this shape, distinct from mixed signed i32/u64 addition. */

@@ -21,7 +21,8 @@
 enum {
     LOONG_ZERO = 0U, LOONG_RA = 1U, LOONG_SP = 3U,
     LOONG_A0 = 4U, LOONG_T0 = 12U, LOONG_T1 = 13U,
-    LOONG_T2 = 14U, LOONG_T3 = 15U, LOONG_S0 = 23U
+    LOONG_T2 = 14U, LOONG_T3 = 15U, LOONG_T4 = 16U,
+    LOONG_T5 = 17U, LOONG_S0 = 23U
 };
 
 typedef struct LoongSelector {
@@ -46,6 +47,7 @@ typedef struct LoongSelector {
 static bool loong_local_frame_address(LoongSelector *,
     unsigned int reg, size_t offset);
 static bool loong_branch(LoongSelector *, uint32_t, size_t, bool, bool);
+static bool loong_bstrpick_d(MinicMachineBuilder *, unsigned int, unsigned int);
 
 static MinicMachineRegister loong_reg(unsigned int number) {
     return (MinicMachineRegister){number, 64U,
@@ -503,6 +505,205 @@ static bool loong_normalize_integer(MinicMachineBuilder *b,
     default:
         return false;
     }
+}
+
+/* Exact physical lowering of existing GNU checked-arithmetic Core: the
+ * result-address pointer receives the truncated value, and the returned SSA
+ * boolean signals loss of mathematical representability. Common performs
+ * the operand/result shape proofs; no C type interpretation occurs here. */
+static bool loong_overflow_store(LoongSelector *sel,
+    const MinicCoreInstruction *ins, bool wide, unsigned int result_reg,
+    unsigned int flag_reg) {
+    MinicMachineBuilder *b = &sel->builder;
+    return loong_memory(b, wide ? MINIC_LOONG_MACHINE_ST_D :
+        MINIC_LOONG_MACHINE_ST_W, result_reg, LOONG_T2, 0,
+        MINIC_LOONG_ADDRESS_IMM12, false) &&
+        loong_rr(b, MINIC_LOONG_MACHINE_MOVE, LOONG_T0, flag_reg) &&
+        loong_store_value(sel, ins, LOONG_T0, false);
+}
+
+static bool loong_overflow_inputs(LoongSelector *sel,
+    const MinicCoreInstruction *ins, bool wide_left, bool wide_right) {
+    return loong_load_value(sel, ins->value.integer_overflow.left,
+               LOONG_T0, wide_left) &&
+           loong_load_value(sel, ins->value.integer_overflow.right,
+               LOONG_T1, wide_right) &&
+           loong_load_value(sel,
+               ins->value.integer_overflow.result_address, LOONG_T2, true);
+}
+
+static bool loong_select_integer_overflow(LoongSelector *sel,
+    const MinicCoreInstruction *ins) {
+    const MinicCoreFunction *fn = sel->ctx->fn;
+    MinicMachineBuilder *b = &sel->builder;
+    const int op = ins->value.integer_overflow.operator_kind;
+    size_t width;
+    bool is_signed;
+    if (!minic_core_integer_overflow_shape(fn, ins, &width, &is_signed)) {
+        bool signed_left, signed_right, signed_result;
+        bool wide_left;
+        if (minic_core_integer_overflow_i32_u32_to_i32_shape(
+                fn, ins, &signed_left)) {
+            if (!loong_overflow_inputs(sel, ins, false, false) ||
+                !(signed_left ? loong_bstrpick_d(b, LOONG_T1, 31U) :
+                               loong_bstrpick_d(b, LOONG_T0, 31U)) ||
+                !loong_rrr(b, MINIC_LOONG_MACHINE_ADD_D,
+                    LOONG_T3, LOONG_T0, LOONG_T1) ||
+                !loong_rrr(b, MINIC_LOONG_MACHINE_ADD_W,
+                    LOONG_T0, LOONG_T3, LOONG_ZERO) ||
+                !loong_rrr(b, MINIC_LOONG_MACHINE_XOR,
+                    LOONG_T4, LOONG_T3, LOONG_T0) ||
+                !loong_rrr(b, MINIC_LOONG_MACHINE_SLTU,
+                    LOONG_T4, LOONG_ZERO, LOONG_T4)) return false;
+            return loong_overflow_store(sel, ins, false,
+                LOONG_T0, LOONG_T4);
+        }
+        if (minic_core_integer_overflow_mixed_multiply_i32_shape(fn, ins,
+                &signed_left, &signed_right, &signed_result)) {
+            if (!loong_overflow_inputs(sel, ins, false, false) ||
+                (!signed_left && !loong_bstrpick_d(b, LOONG_T0, 31U)) ||
+                (!signed_right && !loong_bstrpick_d(b, LOONG_T1, 31U)) ||
+                !loong_rrr(b, MINIC_LOONG_MACHINE_MUL_D,
+                    LOONG_T3, LOONG_T0, LOONG_T1) ||
+                !loong_rrr(b, MINIC_LOONG_MACHINE_ADD_W,
+                    LOONG_T0, LOONG_T3, LOONG_ZERO) ||
+                !(signed_result
+                    ? loong_rrr(b, MINIC_LOONG_MACHINE_XOR,
+                        LOONG_T4, LOONG_T3, LOONG_T0)
+                    : loong_rri(b, MINIC_LOONG_MACHINE_SRLI_D,
+                        LOONG_T4, LOONG_T3, 32)) ||
+                !loong_rrr(b, MINIC_LOONG_MACHINE_SLTU,
+                    LOONG_T4, LOONG_ZERO, LOONG_T4)) return false;
+            return loong_overflow_store(sel, ins, false,
+                LOONG_T0, LOONG_T4);
+        }
+        if (minic_core_integer_overflow_u64_u32_to_i32_shape(
+                fn, ins, &wide_left)) {
+            if (!loong_overflow_inputs(sel, ins, wide_left, !wide_left) ||
+                !(wide_left ? loong_bstrpick_d(b, LOONG_T1, 31U) :
+                               loong_bstrpick_d(b, LOONG_T0, 31U)) ||
+                !loong_rr(b, MINIC_LOONG_MACHINE_MOVE,
+                    LOONG_T3, LOONG_T0) ||
+                !loong_rrr(b, MINIC_LOONG_MACHINE_ADD_D,
+                    LOONG_T0, LOONG_T0, LOONG_T1) ||
+                !loong_rrr(b, MINIC_LOONG_MACHINE_SLTU,
+                    LOONG_T3, LOONG_T0, LOONG_T3) ||
+                !loong_rrr(b, MINIC_LOONG_MACHINE_ADD_W,
+                    LOONG_T4, LOONG_T0, LOONG_ZERO) ||
+                !loong_rrr(b, MINIC_LOONG_MACHINE_XOR,
+                    LOONG_T5, LOONG_T4, LOONG_T0) ||
+                !loong_rrr(b, MINIC_LOONG_MACHINE_SLTU,
+                    LOONG_T5, LOONG_ZERO, LOONG_T5) ||
+                !loong_rrr(b, MINIC_LOONG_MACHINE_OR,
+                    LOONG_T3, LOONG_T3, LOONG_T5)) return false;
+            return loong_overflow_store(sel, ins, false,
+                LOONG_T4, LOONG_T3);
+        }
+        if (minic_core_integer_overflow_mixed_add_i32_shape(
+                fn, ins, &signed_left)) {
+            if (!loong_overflow_inputs(sel, ins, true, true) ||
+                !(signed_left
+                    ? loong_rrr(b, MINIC_LOONG_MACHINE_ADD_W,
+                          LOONG_T0, LOONG_T0, LOONG_ZERO) &&
+                      loong_rri(b, MINIC_LOONG_MACHINE_SRAI_D,
+                          LOONG_T3, LOONG_T0, 63)
+                    : loong_rrr(b, MINIC_LOONG_MACHINE_ADD_W,
+                          LOONG_T1, LOONG_T1, LOONG_ZERO) &&
+                      loong_rri(b, MINIC_LOONG_MACHINE_SRAI_D,
+                          LOONG_T3, LOONG_T1, 63)) ||
+                !loong_rr(b, MINIC_LOONG_MACHINE_MOVE,
+                    LOONG_T4, LOONG_T0) ||
+                !loong_rrr(b, MINIC_LOONG_MACHINE_ADD_D,
+                    LOONG_T0, LOONG_T0, LOONG_T1) ||
+                !loong_rrr(b, MINIC_LOONG_MACHINE_SLTU,
+                    LOONG_T5, LOONG_T0, LOONG_T4) ||
+                !loong_rrr(b, MINIC_LOONG_MACHINE_ADD_D,
+                    LOONG_T3, LOONG_T3, LOONG_T5) ||
+                !loong_rrr(b, MINIC_LOONG_MACHINE_ADD_W,
+                    LOONG_T4, LOONG_T0, LOONG_ZERO) ||
+                !loong_rrr(b, MINIC_LOONG_MACHINE_XOR,
+                    LOONG_T5, LOONG_T4, LOONG_T0) ||
+                !loong_rrr(b, MINIC_LOONG_MACHINE_SLTU,
+                    LOONG_T5, LOONG_ZERO, LOONG_T5) ||
+                !loong_rri(b, MINIC_LOONG_MACHINE_SRAI_D,
+                    LOONG_T4, LOONG_T4, 63) ||
+                !loong_rrr(b, MINIC_LOONG_MACHINE_XOR,
+                    LOONG_T3, LOONG_T3, LOONG_T4) ||
+                !loong_rrr(b, MINIC_LOONG_MACHINE_SLTU,
+                    LOONG_T3, LOONG_ZERO, LOONG_T3) ||
+                !loong_rrr(b, MINIC_LOONG_MACHINE_OR,
+                    LOONG_T3, LOONG_T3, LOONG_T5)) return false;
+            return loong_overflow_store(sel, ins, false,
+                LOONG_T0, LOONG_T3);
+        }
+        return false;
+    }
+    if (width != 4U && width != 8U) return false;
+    if (!loong_overflow_inputs(sel, ins, width == 8U, width == 8U) ||
+        (width == 4U && !is_signed &&
+         (!loong_bstrpick_d(b, LOONG_T0, 31U) ||
+          !loong_bstrpick_d(b, LOONG_T1, 31U)))) return false;
+    if (op == MINIC_CORE_INTEGER_OVERFLOW_ADD ||
+        op == MINIC_CORE_INTEGER_OVERFLOW_SUBTRACT) {
+        const bool sub = op == MINIC_CORE_INTEGER_OVERFLOW_SUBTRACT;
+        if (!loong_rr(b, MINIC_LOONG_MACHINE_MOVE, LOONG_T3, LOONG_T0) ||
+            !loong_rrr(b, width == 8U ?
+                (sub ? MINIC_LOONG_MACHINE_SUB_D : MINIC_LOONG_MACHINE_ADD_D) :
+                (!is_signed && !sub ? MINIC_LOONG_MACHINE_ADD_D :
+                    sub ? MINIC_LOONG_MACHINE_SUB_W : MINIC_LOONG_MACHINE_ADD_W),
+                LOONG_T0, LOONG_T0, LOONG_T1)) return false;
+        if (is_signed) {
+            if (!(sub
+                    ? loong_rrr(b, MINIC_LOONG_MACHINE_XOR,
+                          LOONG_T4, LOONG_T3, LOONG_T1)
+                    : loong_rrr(b, MINIC_LOONG_MACHINE_XOR,
+                          LOONG_T4, LOONG_T1, LOONG_T0)) ||
+                !loong_rrr(b, MINIC_LOONG_MACHINE_XOR,
+                    LOONG_T3, LOONG_T3, LOONG_T0) ||
+                !loong_rrr(b, MINIC_LOONG_MACHINE_AND,
+                    LOONG_T4, LOONG_T3, LOONG_T4) ||
+                (width == 4U && !loong_rri(b,
+                    MINIC_LOONG_MACHINE_SLLI_W, LOONG_T4, LOONG_T4, 0)) ||
+                !loong_rrr(b, MINIC_LOONG_MACHINE_SLT,
+                    LOONG_T4, LOONG_T4, LOONG_ZERO)) return false;
+        } else if (!(sub
+                ? loong_rrr(b, MINIC_LOONG_MACHINE_SLTU,
+                      LOONG_T4, LOONG_T3, LOONG_T1)
+                : width == 8U
+                    ? loong_rrr(b, MINIC_LOONG_MACHINE_SLTU,
+                          LOONG_T4, LOONG_T0, LOONG_T3)
+                    : loong_rri(b, MINIC_LOONG_MACHINE_SRLI_D,
+                          LOONG_T4, LOONG_T0, 32))) return false;
+    } else if (op == MINIC_CORE_INTEGER_OVERFLOW_MULTIPLY) {
+        if (width == 8U) {
+            if (!loong_rrr(b, is_signed ? MINIC_LOONG_MACHINE_MULH_D :
+                    MINIC_LOONG_MACHINE_MULH_DU,
+                    LOONG_T3, LOONG_T0, LOONG_T1) ||
+                !loong_rrr(b, MINIC_LOONG_MACHINE_MUL_D,
+                    LOONG_T0, LOONG_T0, LOONG_T1) ||
+                (is_signed &&
+                 (!loong_rri(b, MINIC_LOONG_MACHINE_SRAI_D,
+                      LOONG_T4, LOONG_T0, 63) ||
+                  !loong_rrr(b, MINIC_LOONG_MACHINE_XOR,
+                      LOONG_T3, LOONG_T3, LOONG_T4))) ||
+                !loong_rrr(b, MINIC_LOONG_MACHINE_SLTU,
+                    LOONG_T4, LOONG_ZERO, LOONG_T3)) return false;
+        } else {
+            if (!loong_rrr(b, MINIC_LOONG_MACHINE_MUL_D,
+                    LOONG_T3, LOONG_T0, LOONG_T1) ||
+                !loong_rrr(b, MINIC_LOONG_MACHINE_ADD_W,
+                    LOONG_T0, LOONG_T3, LOONG_ZERO) ||
+                !(is_signed
+                    ? loong_rrr(b, MINIC_LOONG_MACHINE_XOR,
+                          LOONG_T4, LOONG_T3, LOONG_T0)
+                    : loong_rri(b, MINIC_LOONG_MACHINE_SRLI_D,
+                          LOONG_T4, LOONG_T3, 32)) ||
+                !loong_rrr(b, MINIC_LOONG_MACHINE_SLTU,
+                    LOONG_T4, LOONG_ZERO, LOONG_T4)) return false;
+        }
+    } else return false;
+    return loong_overflow_store(sel, ins, width == 8U,
+        LOONG_T0, LOONG_T4);
 }
 
 static bool loong_bstrpick_w(MinicMachineBuilder *b,
@@ -1958,8 +2159,13 @@ static bool loong_select_core(LoongSelector *sel,
     size_t offset, bytes;
     MinicCoreValueId base;
     switch (ins->kind) {
-    case MINIC_CORE_INSTRUCTION_COMPILER_BARRIER:
-        return true;
+    case MINIC_CORE_INSTRUCTION_COMPILER_BARRIER: {
+        MinicDirectMachineInstructionShape shape = {0};
+        return minic_multi_direct_machine_instruction_shape(fn, ins,
+                   false, &shape) &&
+            shape.family == MINIC_DIRECT_MACHINE_COMPILER_BARRIER &&
+            minic_machine_builder_emit_compiler_barrier(&sel->builder);
+    }
     case MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM:
     case MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM:
         return minic_loongarch64_select_core_source_asm(
@@ -1984,6 +2190,8 @@ static bool loong_select_core(LoongSelector *sel,
     case MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_LEFT:
     case MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_RIGHT:
         return loong_select_integer(sel, ins);
+    case MINIC_CORE_INSTRUCTION_INTEGER_OVERFLOW:
+        return loong_select_integer_overflow(sel, ins);
     case MINIC_CORE_INSTRUCTION_LOAD:
     case MINIC_CORE_INSTRUCTION_STORE:
     case MINIC_CORE_INSTRUCTION_ATOMIC_LOAD:

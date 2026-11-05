@@ -101,6 +101,45 @@ bool minic_core_integer_overflow_mixed_add_i32_shape(
     return false;
 }
 
+bool minic_core_integer_overflow_i32_u32_to_i32_shape(
+    const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
+    bool *signed_left) {
+    MinicCoreValueId left, right;
+    MinicCoreTypeId result_id;
+    const MinicCoreType *result_type, *left_type, *right_type;
+    if (fn == NULL || ins == NULL || signed_left == NULL ||
+        ins->kind != MINIC_CORE_INSTRUCTION_INTEGER_OVERFLOW ||
+        ins->value.integer_overflow.operator_kind !=
+            MINIC_CORE_INTEGER_OVERFLOW_ADD ||
+        !core_numeric_overflow_result(fn, ins, &result_id))
+        return false;
+    left = ins->value.integer_overflow.left;
+    right = ins->value.integer_overflow.right;
+    result_type = core_numeric_base(fn, result_id);
+    left_type = core_numeric_base(fn, fn->values[left].core_type_id);
+    right_type = core_numeric_base(fn, fn->values[right].core_type_id);
+    if (result_type == NULL || left_type == NULL || right_type == NULL ||
+        result_type->kind != MINIC_CORE_TYPE_INTEGER ||
+        left_type->kind != MINIC_CORE_TYPE_INTEGER ||
+        right_type->kind != MINIC_CORE_TYPE_INTEGER ||
+        !result_type->has_layout || !left_type->has_layout ||
+        !right_type->has_layout ||
+        result_type->size != 4U || left_type->size != 4U ||
+        right_type->size != 4U ||
+        result_type->value.integer.bit_width != 32U ||
+        left_type->value.integer.bit_width != 32U ||
+        right_type->value.integer.bit_width != 32U ||
+        !result_type->value.integer.is_signed ||
+        result_type->value.integer.is_bool ||
+        left_type->value.integer.is_bool ||
+        right_type->value.integer.is_bool ||
+        left_type->value.integer.is_signed ==
+            right_type->value.integer.is_signed)
+        return false;
+    *signed_left = left_type->value.integer.is_signed;
+    return true;
+}
+
 bool minic_core_integer_overflow_u64_u32_to_i32_shape(
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
     bool *wide_left) {

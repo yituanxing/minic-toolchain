@@ -246,6 +246,47 @@ static int check_cfg_edges(void) {
     return 0;
 }
 
+static int check_compiler_barrier_origin(void) {
+    MinicCoreInstruction core_instruction = {0};
+    MinicCoreInstructionId instruction_id = 0U;
+    MinicCoreBlock core_block = {0};
+    MinicCoreFunction core = {0};
+    MinicMachineInstruction machine_instruction = {0};
+    MinicMachineBlock machine_blocks[2] = {0};
+    MinicMachineFunction machine = {0};
+    bool reachable[] = {true};
+    core_instruction.kind = MINIC_CORE_INSTRUCTION_COMPILER_BARRIER;
+    core_block.instructions = &instruction_id;
+    core_block.instruction_count = 1U;
+    core_block.has_terminator = true;
+    core_block.terminator.kind = MINIC_CORE_TERMINATOR_RETURN;
+    core.blocks = &core_block;
+    core.block_count = 1U;
+    core.instructions = &core_instruction;
+    core.instruction_count = 1U;
+    machine_instruction.kind = MINIC_MACHINE_INSTRUCTION_COMPILER_BARRIER;
+    machine_instruction.has_core_origin = true;
+    machine_instruction.effects = MINIC_MACHINE_EFFECT_COMPILER_BARRIER;
+    machine_blocks[0].machine_auxiliary = true;
+    machine_blocks[0].has_fallthrough = true;
+    machine_blocks[0].fallthrough_target = 1U;
+    machine_blocks[1].has_core_block_origin = true;
+    machine_blocks[1].instructions = &machine_instruction;
+    machine_blocks[1].instruction_count = 1U;
+    machine.blocks = machine_blocks;
+    machine.block_count = 2U;
+    if (!minic_machine_core_coverage_verify(&core, reachable, &machine))
+        return 1;
+    core_instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
+    if (minic_machine_core_coverage_verify(&core, reachable, &machine))
+        return 2;
+    core_instruction.kind = MINIC_CORE_INSTRUCTION_COMPILER_BARRIER;
+    machine_instruction.effects = 0U;
+    if (minic_machine_core_coverage_verify(&core, reachable, &machine))
+        return 3;
+    return 0;
+}
+
 int main(void) {
     int error = check();
     if (error != 0) {
@@ -257,6 +298,11 @@ int main(void) {
         fprintf(stderr, "MACHINE_CORE_COVERAGE=FAIL cfg_case=%d\n", error);
         return 1;
     }
-    puts("MACHINE_CORE_COVERAGE=PASS effect_origin=1 no_dropped_core=1 cfg_edges=1 asm_goto=1 unreachable_effects=1");
+    error = check_compiler_barrier_origin();
+    if (error != 0) {
+        fprintf(stderr, "MACHINE_CORE_COVERAGE=FAIL barrier_case=%d\n", error);
+        return 1;
+    }
+    puts("MACHINE_CORE_COVERAGE=PASS effect_origin=1 no_dropped_core=1 cfg_edges=1 asm_goto=1 unreachable_effects=1 compiler_barrier=1");
     return 0;
 }

@@ -722,6 +722,276 @@ done:
     return ok;
 }
 
+/* Parameterized Core overflow fixture: the same three input/value-pointer
+ * locations exercise all previously supported Loong checked-arithmetic
+ * classes without source C inference. Mode 0/1/2 are uniform signed ADD,
+ * unsigned SUB and signed MUL; modes 3..6 are preexisting mixed forms. */
+static bool test_integer_overflow(unsigned int mode) {
+    MinicCoreTypeContext types;
+    MinicCoreFunction core = {0};
+    MinicCoreModule module = {0};
+    MinicTargetInfo target = {0};
+    MinicCoreType t = {0};
+    MinicCoreTypeId void_ty, bool_ty, s32, u32, s64, u64, pointer_ty;
+    MinicCoreTypeId formals[3], result_ty;
+    MinicCoreInstruction ins = {0};
+    MinicCoreTerminator term = {0};
+    MinicCoreBlockId block;
+    MinicCoreValueId ids[4];
+    MinicMachineFunction machine = {0};
+    MinicMachineGNUAsmPolicy policy = {0};
+    MinicMachineLP64FrameContract frame = {0};
+    MinicLP64FramePlan plan = {0};
+    MinicLP64ArgumentPlan incoming = {0};
+    MinicDirectLP64BlockContext ctx = {0};
+    const bool reachable[1] = {true};
+    size_t value_offsets[4] = {16U, 24U, 32U, 40U};
+    size_t i, j, writes = 0U;
+    FILE *assembly = NULL;
+    char assembly_text[8192];
+    size_t text_length;
+    bool ok = false;
+    const char *stage = "setup";
+    minic_core_type_context_initialize(&types);
+    minic_core_function_initialize(&core);
+    core.name = malloc(sizeof("loong_checked_overflow"));
+    if (core.name == NULL) goto done;
+    memcpy(core.name, "loong_checked_overflow",
+        sizeof("loong_checked_overflow"));
+    core.name_length = sizeof("loong_checked_overflow") - 1U;
+    t.kind = MINIC_CORE_TYPE_VOID;
+    if (!minic_core_type_register(&types, &t, &void_ty)) goto done;
+    t = (MinicCoreType){0};
+    t.kind = MINIC_CORE_TYPE_INTEGER;
+    t.has_layout = true;
+    t.size = t.alignment = 1U;
+    t.value.integer.bit_width = 8U;
+    t.value.integer.is_bool = true;
+    if (!minic_core_type_register(&types, &t, &bool_ty)) goto done;
+    t.size = t.alignment = 4U;
+    t.value.integer.bit_width = 32U;
+    t.value.integer.is_bool = false;
+    t.value.integer.is_signed = true;
+    if (!minic_core_type_register(&types, &t, &s32)) goto done;
+    t.value.integer.is_signed = false;
+    if (!minic_core_type_register(&types, &t, &u32)) goto done;
+    t.size = t.alignment = 8U;
+    t.value.integer.bit_width = 64U;
+    t.value.integer.is_signed = true;
+    if (!minic_core_type_register(&types, &t, &s64)) goto done;
+    t.value.integer.is_signed = false;
+    if (!minic_core_type_register(&types, &t, &u64)) goto done;
+    formals[0] = mode == 8U ? s64 : mode == 9U ? u64 :
+        mode == 0U || mode == 2U || mode == 3U || mode == 7U ? s32 :
+        mode == 4U || mode == 5U ? u64 : u32;
+    formals[1] = mode == 8U ? s64 : mode == 9U ? u64 :
+        mode == 0U || mode == 2U ? s32 :
+        mode == 1U || mode == 3U || mode == 4U || mode == 7U ? u32 :
+        mode == 5U ? s32 : u64;
+    result_ty = mode == 1U ? u32 : mode == 8U ? s64 :
+        mode == 9U ? u64 : s32;
+    t = (MinicCoreType){0};
+    t.kind = MINIC_CORE_TYPE_POINTER;
+    t.has_layout = true;
+    t.size = t.alignment = 8U;
+    t.value.pointer.pointee = result_ty;
+    if (!minic_core_type_register(&types, &t, &pointer_ty)) goto done;
+    formals[2] = pointer_ty;
+    if (!minic_core_function_define_signature(&core, &types, bool_ty,
+            formals, 3U, MINIC_CALLING_CONVENTION_DEFAULT, false) ||
+        !minic_core_function_add_block(&core, &block)) goto done;
+    for (i = 0U; i < 3U; ++i) {
+        ins = (MinicCoreInstruction){0};
+        ins.kind = MINIC_CORE_INSTRUCTION_PARAMETER;
+        ins.core_type_id = formals[i];
+        ins.value.parameter_index = i;
+        if (!minic_core_function_append_value_instruction(&core,
+                block, &ins, &ids[i])) goto done;
+    }
+    ins = (MinicCoreInstruction){0};
+    ins.kind = MINIC_CORE_INSTRUCTION_INTEGER_OVERFLOW;
+    ins.core_type_id = bool_ty;
+    ins.value.integer_overflow.operator_kind = mode == 1U ?
+        MINIC_CORE_INTEGER_OVERFLOW_SUBTRACT :
+        mode == 2U || mode == 7U || mode == 9U ?
+            MINIC_CORE_INTEGER_OVERFLOW_MULTIPLY :
+        MINIC_CORE_INTEGER_OVERFLOW_ADD;
+    ins.value.integer_overflow.left = ids[0];
+    ins.value.integer_overflow.right = ids[1];
+    ins.value.integer_overflow.result_address = ids[2];
+    stage = "append-overflow";
+    if (!minic_core_function_append_value_instruction(&core,
+            block, &ins, &ids[3])) goto done;
+    term.kind = MINIC_CORE_TERMINATOR_RETURN;
+    term.return_value = ids[3];
+    if (!minic_core_function_set_terminator(&core, block, &term) ||
+        !minic_core_function_attach_type_context(&core, &types)) goto done;
+    target.architecture = MINIC_TARGET_ARCH_LOONGARCH64;
+    target.data_layout = minic_loongarch64_linux_data_layout();
+    module.type_context = &types;
+    frame.frame_size = 128U;
+    frame.frame_alignment = 16U;
+    frame.saved_entry_sp_offset = SIZE_MAX;
+    plan.value_count = 4U;
+    plan.value_offsets = value_offsets;
+    incoming.argument_count = 3U;
+    for (i = 0U; i < 3U; ++i) {
+        incoming.arguments[i].kind = MINIC_LP64_ARGUMENT_GP;
+        incoming.arguments[i].gp_first = i;
+        incoming.arguments[i].gp_registers = 1U;
+        incoming.arguments[i].size_bytes = i == 2U ? 8U :
+            formals[i] == u64 || formals[i] == s64 ? 8U : 4U;
+    }
+    ctx = (MinicDirectLP64BlockContext){
+        .fn = &core, .module = &module, .target = &target,
+        .machine_frame = &frame, .frame_plan = &plan,
+        .incoming_plan = &incoming, .name = core.name
+    };
+    stage = "machine";
+    if (!minic_loongarch64_select_machine(&machine, &ctx) ||
+        !minic_machine_core_coverage_verify(&core, reachable, &machine) ||
+        !minic_loongarch64_machine_gnu_asm_policy_initialize(
+            &target, &policy) ||
+        !minic_machine_gnu_asm_preflight(&machine, &policy)) goto done;
+    for (i = 0U; i < machine.block_count; ++i) {
+        const MinicMachineBlock *b = &machine.blocks[i];
+        for (j = 0U; j < b->instruction_count; ++j)
+            if (b->instructions[j].has_core_origin &&
+                b->instructions[j].core_instruction_id == 3U &&
+                (b->instructions[j].effects &
+                    MINIC_MACHINE_EFFECT_MEMORY_WRITE) != 0U) ++writes;
+    }
+    stage = "GNU-emission";
+    assembly = tmpfile();
+    if (assembly == NULL ||
+        !minic_machine_gnu_asm_emit_body(assembly, &machine, &policy) ||
+        fflush(assembly) != 0 || fseek(assembly, 0L, SEEK_SET) != 0)
+        goto done;
+    text_length = fread(assembly_text, 1U,
+        sizeof(assembly_text) - 1U, assembly);
+    assembly_text[text_length] = '\0';
+    if (strstr(assembly_text, mode == 9U ? "mulh.du" :
+            mode == 2U || mode == 7U ? "mul.d" :
+            mode == 1U ? "sub.w" : mode == 0U ? "add.w" :
+                "add.d") == NULL ||
+        (strstr(assembly_text, "st.w") == NULL &&
+            mode != 9U && mode != 8U))
+        goto done;
+    stage = "provenance";
+    /* One store publishes the truncated result through Core's address,
+     * another writes the boolean Core SSA spill into its frame slot. */
+    ok = writes == 2U;
+    if (!ok) goto done;
+    minic_machine_function_destroy(&machine);
+    stage = "poison";
+    core.instructions[3].value.integer_overflow.operator_kind = 99;
+    ok = !minic_loongarch64_select_machine(&machine, &ctx);
+done:
+    if (!ok) fprintf(stderr,
+        "LOONG_CORE_OVERFLOW=FAIL stage=%s mode=%u\n", stage, mode);
+    if (assembly != NULL) fclose(assembly);
+    minic_machine_function_destroy(&machine);
+    minic_core_function_destroy(&core);
+    minic_core_type_context_destroy(&types);
+    return ok;
+}
+
+/* The compiler barrier is a Core memory-ordering effect, not an ISA fence.
+ * Its exact Core origin survives as a zero-byte typed Machine instruction. */
+static bool test_compiler_barrier(void) {
+    MinicCoreTypeContext types;
+    MinicCoreFunction core = {0};
+    MinicCoreModule module = {0};
+    MinicCoreType type = {0};
+    MinicCoreTypeId void_type;
+    MinicCoreBlockId entry;
+    MinicCoreInstruction ins = {0};
+    MinicCoreTerminator term = {0};
+    MinicTargetInfo target = {0};
+    MinicMachineLP64FrameContract frame = {0};
+    MinicLP64FramePlan plan = {0};
+    MinicDirectLP64BlockContext ctx = {0};
+    MinicMachineFunction machine = {0};
+    MinicMachineGNUAsmPolicy policy = {0};
+    const bool reachable[1] = {true};
+    FILE *assembly = NULL;
+    char text[2048];
+    size_t i, j, barriers = 0U, bytes;
+    bool ok = false;
+    const char *stage = "setup";
+    minic_core_type_context_initialize(&types);
+    minic_core_function_initialize(&core);
+    core.name = malloc(sizeof("loong_core_compiler_barrier"));
+    if (core.name == NULL) goto done;
+    memcpy(core.name, "loong_core_compiler_barrier",
+        sizeof("loong_core_compiler_barrier"));
+    core.name_length = sizeof("loong_core_compiler_barrier") - 1U;
+    type.kind = MINIC_CORE_TYPE_VOID;
+    if (!minic_core_type_register(&types, &type, &void_type) ||
+        !minic_core_function_define_signature(&core, &types, void_type,
+            NULL, 0U, MINIC_CALLING_CONVENTION_DEFAULT, false) ||
+        !minic_core_function_add_block(&core, &entry)) goto done;
+    ins.kind = MINIC_CORE_INSTRUCTION_COMPILER_BARRIER;
+    ins.core_type_id = void_type;
+    if (!minic_core_function_append_effect_instruction(&core,
+            entry, &ins)) goto done;
+    term.kind = MINIC_CORE_TERMINATOR_RETURN;
+    term.return_value = MINIC_CORE_VALUE_INVALID;
+    if (!minic_core_function_set_terminator(&core, entry, &term) ||
+        !minic_core_function_attach_type_context(&core, &types)) goto done;
+    target.architecture = MINIC_TARGET_ARCH_LOONGARCH64;
+    target.data_layout = minic_loongarch64_linux_data_layout();
+    module.type_context = &types;
+    frame.frame_alignment = 16U;
+    frame.saved_entry_sp_offset = SIZE_MAX;
+    ctx = (MinicDirectLP64BlockContext){
+        .fn = &core, .module = &module, .target = &target,
+        .machine_frame = &frame, .frame_plan = &plan, .name = core.name
+    };
+    stage = "select";
+    if (!minic_loongarch64_select_machine(&machine, &ctx) ||
+        !minic_machine_core_coverage_verify(&core, reachable, &machine) ||
+        !minic_loongarch64_machine_gnu_asm_policy_initialize(
+            &target, &policy) ||
+        !minic_machine_gnu_asm_preflight(&machine, &policy)) goto done;
+    for (i = 0U; i < machine.block_count; ++i) {
+        const MinicMachineBlock *b = &machine.blocks[i];
+        for (j = 0U; j < b->instruction_count; ++j) {
+            const MinicMachineInstruction *m = &b->instructions[j];
+            if (m->kind != MINIC_MACHINE_INSTRUCTION_COMPILER_BARRIER)
+                continue;
+            if (!m->has_core_origin || m->core_instruction_id != 0U ||
+                m->effects != MINIC_MACHINE_EFFECT_COMPILER_BARRIER)
+                goto done;
+            ++barriers;
+        }
+    }
+    stage = "gnu-no-bytes";
+    assembly = tmpfile();
+    if (assembly == NULL ||
+        !minic_machine_gnu_asm_emit_body(assembly, &machine, &policy) ||
+        fflush(assembly) != 0 || fseek(assembly, 0L, SEEK_SET) != 0)
+        goto done;
+    bytes = fread(text, 1U, sizeof(text) - 1U, assembly);
+    text[bytes] = '\0';
+    if (barriers != 1U ||
+        strstr(text, "MINIC_SOURCE_INLINE_ASM") != NULL ||
+        strstr(text, "dbar") != NULL || strstr(text, "nop") != NULL)
+        goto done;
+    minic_machine_function_destroy(&machine);
+    stage = "reject-malformed";
+    core.instructions[0].core_type_id = MINIC_CORE_TYPE_INVALID;
+    ok = !minic_loongarch64_select_machine(&machine, &ctx);
+done:
+    if (!ok) fprintf(stderr,
+        "LOONG_CORE_COMPILER_BARRIER=FAIL stage=%s\n", stage);
+    if (assembly != NULL) fclose(assembly);
+    minic_machine_function_destroy(&machine);
+    minic_core_function_destroy(&core);
+    minic_core_type_context_destroy(&types);
+    return ok;
+}
+
 int main(void) {
     if (!test_nonzero_core_entry() ||
         !test_record_transfer(4U, 0U) ||
@@ -735,7 +1005,18 @@ int main(void) {
         !test_record_call(2U) ||
         !test_record_return(0U) ||
         !test_record_return(1U) ||
-        !test_record_return(2U)) return 1;
-    puts("LOONG_CORE_MIR_NONZERO_ENTRY=PASS prologue_targets_declared_entry=1 record_copy=1 record_load=1 vector_storage=1 volatile=1 byte_loop=1 record_param=2 record_call=3 record_return=3 bad_abi_reject=6");
+        !test_record_return(2U) ||
+        !test_integer_overflow(0U) ||
+        !test_integer_overflow(1U) ||
+        !test_integer_overflow(2U) ||
+        !test_integer_overflow(3U) ||
+        !test_integer_overflow(4U) ||
+        !test_integer_overflow(5U) ||
+        !test_integer_overflow(6U) ||
+        !test_integer_overflow(7U) ||
+        !test_integer_overflow(8U) ||
+        !test_integer_overflow(9U) ||
+        !test_compiler_barrier()) return 1;
+    puts("LOONG_CORE_MIR_NONZERO_ENTRY=PASS prologue_targets_declared_entry=1 record_copy=1 record_load=1 vector_storage=1 volatile=1 byte_loop=1 record_param=2 record_call=3 record_return=3 overflow=10 compiler_barrier=1 bad_abi_reject=17");
     return 0;
 }

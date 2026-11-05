@@ -9,6 +9,7 @@
 #include "target/common/core_block_walk.h"
 #include "target/common/machine_gnu_asm.h"
 #include "target/common/direct_instruction_semantics.h"
+#include "target/common/elf_module_symbol_info.h"
 #include "target/common/lp64_scalar.h"
 
 #include <limits.h>
@@ -541,7 +542,7 @@ static bool x86_scalar_memory(X86CoreSelector *sel,
         (!floating && !x86_scalar_shape(sel, load ? ins->core_type_id :
             sel->core->values[payload].core_type_id,
             &bytes, &sign, &is_bool)) ||
-        !x86_core_load(sel, address, MINIC_X86_REG_R11)) return false;
+        !x86_record_pointer(sel, address, MINIC_X86_REG_R11)) return false;
     if (floating) bytes = fp_double ? 8U : 4U;
     memory = x86_addr(MINIC_X86_REG_R11, 0);
     if (load) {
@@ -1042,6 +1043,108 @@ static bool x86_vector_storage_copy(X86CoreSelector *sel,
             x86_addr(MINIC_X86_REG_R10, 8));
 }
 
+/* Move precisely the old ELF/PIC policy into the physical selector. The
+ * module's finalized symbol facts are a read-only query, never an inferred
+ * linkage classification from Core value types or source declarations. */
+static bool x86_symbol_address(X86CoreSelector *sel,
+    const MinicCoreInstruction *ins) {
+    const char *name;
+    MinicElfModuleSymbolKind kind;
+    MinicElfModuleSymbolFacts facts;
+    MinicX86MachineOpcode opcode;
+    uint32_t relocation;
+    const MinicCoreType *type = x86_type(sel, ins->core_type_id);
+    if (ins->result >= sel->core->value_count || type == NULL ||
+        type->kind != MINIC_CORE_TYPE_POINTER ||
+        !type->has_layout || type->size != 8U) return false;
+    if (ins->kind == MINIC_CORE_INSTRUCTION_GLOBAL_ADDRESS) {
+        if (ins->value.global_id >= sel->core->global_count ||
+            sel->core->globals == NULL) return false;
+        name = sel->core->globals[ins->value.global_id].name;
+        kind = MINIC_ELF_MODULE_SYMBOL_OBJECT;
+        /* The early head exception uses a signed 32-bit absolute `movq
+         * $sym,%rax` relocation. ABS64 is not a byte-identical substitute,
+         * so fail closed until that physical symbol opcode is migrated. */
+        if (sel->frame->kernel_head_link_addresses &&
+            (sel->frame->kernel_head_direct_data_globals == NULL ||
+             !sel->frame->kernel_head_direct_data_globals[
+                 ins->value.global_id])) return false;
+    } else if (ins->kind == MINIC_CORE_INSTRUCTION_FUNCTION_ADDRESS) {
+        if (ins->value.function_symbol_id >=
+                sel->core->function_symbol_count ||
+            sel->core->function_symbols == NULL) return false;
+        name = sel->core->function_symbols[
+            ins->value.function_symbol_id].name;
+        kind = MINIC_ELF_MODULE_SYMBOL_FUNCTION;
+    } else return false;
+    if (!minic_core_inline_asm_symbol_valid(name)) return false;
+    facts = minic_multi_elf_module_symbol_facts(
+        sel->frame->module, name, kind);
+    if (!sel->target->position_independent ||
+        (facts.nonpreemptible && !facts.undefined_weak)) {
+        opcode = MINIC_X86_MI_LEA64_RIP_SYMBOL_R;
+        relocation = MINIC_X86_MACHINE_RELOC_PC32;
+    } else {
+        opcode = MINIC_X86_MI_MOV64_GOTPCREL_R;
+        relocation = MINIC_X86_MACHINE_RELOC_GOTPCREL;
+    }
+    return x86_2(sel, opcode, x86_symbol(name, relocation),
+            x86_reg(MINIC_X86_REG_RAX, 64U)) &&
+        x86_result(sel, ins);
+}
+
+/* These are the same aligned, relaxed scalar MOVs as the proven native
+ * backend; ordering levels that need stronger instructions remain rejected.
+ * Reuse the existing scalar selector only after Core's atomic pointee is
+ * checked through x86 ABI and Common LP64 type metadata. */
+static bool x86_atomic_scalar(X86CoreSelector *sel,
+    const MinicCoreInstruction *ins) {
+    const bool load = ins->kind == MINIC_CORE_INSTRUCTION_ATOMIC_LOAD;
+    const MinicCoreValueId address = load ?
+        ins->value.atomic_load.address : ins->value.atomic_store.address;
+    const MinicCoreValueId payload = load ? ins->result :
+        ins->value.atomic_store.stored_value;
+    const unsigned int order = load ? ins->value.atomic_load.memory_order :
+        ins->value.atomic_store.memory_order;
+    MinicCoreTypeId pointee;
+    const MinicCoreType *element;
+    MinicCoreInstruction mapped = *ins;
+    size_t bytes;
+    bool sign;
+    if (order != 0U || address >= sel->core->value_count ||
+        payload >= sel->core->value_count ||
+        !minic_lp64_core_pointer_pointee(sel->core->type_context,
+            sel->core->values[address].core_type_id, &pointee) ||
+        (element = x86_type(sel, pointee)) == NULL ||
+        (element->kind != MINIC_CORE_TYPE_INTEGER &&
+         element->kind != MINIC_CORE_TYPE_POINTER) ||
+        !minic_x86_64_core_storage_width(sel->core->type_context,
+            pointee, &bytes, &sign) || bytes == 0U || bytes > 8U)
+        return false;
+    if (load) {
+        mapped.kind = MINIC_CORE_INSTRUCTION_LOAD;
+        mapped.value.load.address = address;
+        mapped.value.load.is_volatile = false;
+    } else {
+        mapped.kind = MINIC_CORE_INSTRUCTION_STORE;
+        mapped.value.store.address = address;
+        mapped.value.store.stored_value = payload;
+        mapped.value.store.is_volatile = false;
+    }
+    return x86_scalar_memory(sel, &mapped);
+}
+
+/* Migrate the native zero-byte compiler ordering constraint into Common's
+ * dedicated typed MachineIR effect. It is neither inline ASM nor an ISA
+ * hardware fence, and retains the exact originating Core instruction. */
+static bool x86_compiler_barrier(X86CoreSelector *sel,
+    const MinicCoreInstruction *ins) {
+    const MinicCoreType *type = x86_type(sel, ins->core_type_id);
+    return ins->result == MINIC_CORE_VALUE_INVALID &&
+        type != NULL && type->kind == MINIC_CORE_TYPE_VOID &&
+        minic_machine_builder_emit_compiler_barrier(&sel->builder);
+}
+
 static bool x86_core_instruction(X86CoreSelector *sel,
     const MinicCoreInstruction *ins, size_t instruction_id) {
     size_t bytes;
@@ -1058,6 +1161,14 @@ static bool x86_core_instruction(X86CoreSelector *sel,
         return x86_record_copy(sel, ins);
     case MINIC_CORE_INSTRUCTION_VECTOR_STORAGE_COPY:
         return x86_vector_storage_copy(sel, ins);
+    case MINIC_CORE_INSTRUCTION_GLOBAL_ADDRESS:
+    case MINIC_CORE_INSTRUCTION_FUNCTION_ADDRESS:
+        return x86_symbol_address(sel, ins);
+    case MINIC_CORE_INSTRUCTION_ATOMIC_LOAD:
+    case MINIC_CORE_INSTRUCTION_ATOMIC_STORE:
+        return x86_atomic_scalar(sel, ins);
+    case MINIC_CORE_INSTRUCTION_COMPILER_BARRIER:
+        return x86_compiler_barrier(sel, ins);
     case MINIC_CORE_INSTRUCTION_CALL:
     case MINIC_CORE_INSTRUCTION_INDIRECT_CALL:
         return x86_scalar_call(sel, ins, instruction_id);
@@ -1102,7 +1213,13 @@ static bool x86_core_instruction(X86CoreSelector *sel,
         return x86_unary(sel, ins);
     case MINIC_CORE_INSTRUCTION_INTEGER_CONVERSION:
     case MINIC_CORE_INSTRUCTION_SCALAR_BITCAST:
-        return ins->value.operand < sel->core->value_count &&
+        return (ins->kind != MINIC_CORE_INSTRUCTION_SCALAR_BITCAST ||
+            !sel->frame->kernel_head_link_addresses ||
+            sel->frame->kernel_head_vma_cast_globals == NULL ||
+            ins->result >= sel->core->value_count ||
+            sel->frame->kernel_head_vma_cast_globals[ins->result] ==
+                MINIC_CORE_GLOBAL_INVALID) &&
+            ins->value.operand < sel->core->value_count &&
             x86_scalar_shape(sel, ins->core_type_id,
                 &bytes, &sign, &is_bool) &&
             x86_core_load(sel, ins->value.operand, MINIC_X86_REG_RAX) &&

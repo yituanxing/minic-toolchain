@@ -172,6 +172,18 @@ bool minic_machine_builder_emit_selected(MinicMachineBuilder *builder,
     return machine_builder_append(builder, &instruction);
 }
 
+bool minic_machine_builder_emit_compiler_barrier(
+    MinicMachineBuilder *builder) {
+    MinicMachineInstruction instruction = {0};
+    if (builder == NULL || !builder->has_core_origin) return false;
+    instruction.kind = MINIC_MACHINE_INSTRUCTION_COMPILER_BARRIER;
+    instruction.effects = MINIC_MACHINE_EFFECT_COMPILER_BARRIER;
+    instruction.has_core_origin = true;
+    instruction.core_block_id = builder->origin_block;
+    instruction.core_instruction_id = builder->origin_instruction;
+    return machine_builder_append(builder, &instruction);
+}
+
 bool minic_machine_builder_emit_source_asm(MinicMachineBuilder *builder,
     const char *source_bytes, size_t byte_length, unsigned int effects,
     const MinicMachineOperand *bindings, size_t binding_count,

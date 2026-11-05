@@ -515,15 +515,15 @@ done:
     minic_core_type_context_destroy(&types);
     return ok;
 }
-static bool run_indirect_call(unsigned xlen) {
+static bool run_indirect_call(unsigned xlen, bool stack_case) {
     MinicCoreFunction fn = {0};
     MinicCoreTypeContext types;
     MinicCoreType type = {0};
-    MinicCoreTypeId int_t, function_t, callback_t, args[2];
+    MinicCoreTypeId int_t, function_t, callback_t, args[10], params[9];
     MinicCoreValueId callee, argument, result;
     MinicCoreBlockId entry;
     MinicCoreInstruction ins = {0};
-    MinicCoreCallArgument call_arg = {0};
+    MinicCoreCallArgument call_args[9] = {{0}};
     MinicCoreTerminator term = {0};
     MinicRiscvCoreMachinePlan plan = {0};
     Rv32FunctionAbiPlan abi32 = {0};
@@ -536,7 +536,8 @@ static bool run_indirect_call(unsigned xlen) {
     MinicDataLayout layout = {0};
     MinicMachineGNUAsmPolicy policy = {0};
     const bool reachable[] = {true};
-    size_t offsets[3], call_begin = SIZE_MAX, i;
+    size_t offsets[11], call_begin = SIZE_MAX, i, argument_count =
+        stack_case ? 9U : 1U;
     FILE *out = NULL;
     char text[4096];
     size_t n;
@@ -557,8 +558,9 @@ static bool run_indirect_call(unsigned xlen) {
     type = (MinicCoreType){0};
     type.kind = MINIC_CORE_TYPE_FUNCTION;
     type.value.function.return_type = int_t;
-    type.value.function.parameters = &int_t;
-    type.value.function.parameter_count = 1U;
+    for (i = 0U; i < argument_count; ++i) params[i] = int_t;
+    type.value.function.parameters = params;
+    type.value.function.parameter_count = argument_count;
     type.value.function.calling_convention = MINIC_CALLING_CONVENTION_DEFAULT;
     if (!minic_core_type_register(&types, &type, &function_t)) goto done;
     type = (MinicCoreType){0};
@@ -568,9 +570,10 @@ static bool run_indirect_call(unsigned xlen) {
     type.value.pointer.pointee = function_t;
     if (!minic_core_type_register(&types, &type, &callback_t)) goto done;
     args[0] = callback_t;
-    args[1] = int_t;
+    for (i = 0U; i < argument_count; ++i) args[i + 1U] = int_t;
     if (!minic_core_function_define_signature(&fn, &types, int_t,
-            args, 2U, MINIC_CALLING_CONVENTION_DEFAULT, false) ||
+            args, argument_count + 1U,
+            MINIC_CALLING_CONVENTION_DEFAULT, false) ||
         !minic_core_function_add_block(&fn, &entry)) goto done;
     stage = "Core";
     ins.kind = MINIC_CORE_INSTRUCTION_PARAMETER;
@@ -578,14 +581,16 @@ static bool run_indirect_call(unsigned xlen) {
     ins.value.parameter_index = 0U;
     if (!minic_core_function_append_value_instruction(&fn,
         entry, &ins, &callee)) goto done;
-    ins.core_type_id = int_t;
-    ins.value.parameter_index = 1U;
-    if (!minic_core_function_append_value_instruction(&fn,
-        entry, &ins, &argument)) goto done;
-    call_arg.kind = MINIC_CORE_CALL_ARGUMENT_VALUE;
-    call_arg.value.value_id = argument;
+    for (i = 0U; i < argument_count; ++i) {
+        ins.core_type_id = int_t;
+        ins.value.parameter_index = i + 1U;
+        if (!minic_core_function_append_value_instruction(&fn,
+            entry, &ins, &argument)) goto done;
+        call_args[i].kind = MINIC_CORE_CALL_ARGUMENT_VALUE;
+        call_args[i].value.value_id = argument;
+    }
     if (!minic_core_function_append_call_arguments(&fn,
-        &call_arg, 1U, &call_begin)) goto done;
+        call_args, argument_count, &call_begin)) goto done;
     fn.call_signatures = calloc(1U, sizeof(*fn.call_signatures));
     if (fn.call_signatures == NULL) goto done;
     fn.call_signature_count = fn.call_signature_capacity = 1U;
@@ -596,7 +601,7 @@ static bool run_indirect_call(unsigned xlen) {
     ins.value.indirect_call.callee = callee;
     ins.value.indirect_call.signature_id = 0U;
     ins.value.indirect_call.argument_begin = call_begin;
-    ins.value.indirect_call.argument_count = 1U;
+    ins.value.indirect_call.argument_count = argument_count;
     ins.value.indirect_call.result_object = MINIC_CORE_OBJECT_INVALID;
     if (!minic_core_function_append_value_instruction(&fn,
         entry, &ins, &result)) goto done;
@@ -605,7 +610,8 @@ static bool run_indirect_call(unsigned xlen) {
     term.return_object = MINIC_CORE_OBJECT_INVALID;
     if (!minic_core_function_set_terminator(&fn, entry, &term) ||
         !minic_core_function_attach_type_context(&fn, &types) ||
-        !minic_core_function_verify(&fn) || fn.value_count != 3U) goto done;
+        !minic_core_function_verify(&fn) ||
+        fn.value_count != argument_count + 2U) goto done;
     stage = "Machine";
     layout.byte_order = MINIC_BYTE_ORDER_LITTLE;
     layout.pointer_size = layout.pointer_alignment = xlen / 8U;
@@ -616,16 +622,18 @@ static bool run_indirect_call(unsigned xlen) {
     isa.abi = xlen == 32U ? MINIC_RISCV_ABI_ILP32 : MINIC_RISCV_ABI_LP64;
     isa.strict_isa = true;
     if (!minic_riscv_target_isa_store(&target, &isa)) goto done;
-    frame.frame_size = 128U;
+    frame.frame_size = stack_case ? 256U : 128U;
     frame.stack_alignment = 16U;
     frame.saves_return_address = true;
-    frame.return_address_offset = 112U;
-    for (i = 0U; i < 3U; ++i) offsets[i] = i * (xlen / 8U);
+    frame.return_address_offset = frame.frame_size - 16U;
+    frame.outgoing_size = stack_case ? 16U : 0U;
+    for (i = 0U; i < argument_count + 2U; ++i)
+        offsets[i] = (stack_case ? 32U : 0U) + i * (xlen / 8U);
     plan.target = &target;
     plan.core = &fn;
     plan.frame = &frame;
     plan.value_offsets = offsets;
-    plan.value_offset_count = 3U;
+    plan.value_offset_count = argument_count + 2U;
     if (!prepare_old_rv_abi(&fn, xlen, 1U, &abi32, &abi64,
             &calls64, &plan)) goto done;
     if (!minic_riscv_machine_select_core_subset(&machine, &plan) ||
@@ -640,7 +648,12 @@ static bool run_indirect_call(unsigned xlen) {
     text[n] = '\0';
     stage = "assembly";
     ok = strstr(text, "  jalr ra, 0(x5)") != NULL &&
-         strstr(text, "  ret") != NULL;
+         strstr(text, "  ret") != NULL &&
+         (!stack_case ||
+          (strstr(text, xlen == 32U ? "  sw x5, 0(x2)" :
+              "  sd x5, 0(x2)") != NULL &&
+           strstr(text, xlen == 32U ? "  lw x5, 260(x2)" :
+              "  ld x5, 264(x2)") != NULL));
     if (ok) {
         /* A missing old final psABI plan MUST NOT silently fall back to
          * instruction-local a0+i placement, even for a simple CALL. */
@@ -677,8 +690,283 @@ static bool run_indirect_call(unsigned xlen) {
         }
         ok = !minic_riscv_machine_select_core_subset(&machine, &plan);
     }
+    if (ok && stack_case) {
+        minic_machine_function_destroy(&machine);
+        stage = "outgoing-stack-underreservation-reject";
+        if (xlen == 32U)
+            abi32.parameters[1].location.register_begin = 1U;
+        else
+            abi64.parameter_locations[1].integer_register_begin = 1U;
+        frame.outgoing_size = 0U;
+        ok = !minic_riscv_machine_select_core_subset(&machine, &plan);
+    }
 done:
-    if (!ok) fprintf(stderr, "RV%u indirect-call failure at %s\n", xlen, stage);
+    if (!ok) fprintf(stderr, "RV%u indirect-call stack=%d failure at %s\n", xlen, stack_case, stage);
+    if (out != NULL) fclose(out);
+    minic_machine_function_destroy(&machine);
+    rv32_function_abi_plan_destroy(&abi32);
+    minic_riscv64_function_abi_plan_destroy(&abi64);
+    minic_core_call_index_destroy(&calls64);
+    minic_core_function_destroy(&fn);
+    minic_core_type_context_destroy(&types);
+    return ok;
+}
+
+static bool run_record_parameter(unsigned xlen, size_t bytes,
+    bool incoming_stack, bool relay_call) {
+    MinicCoreFunction fn = {0};
+    MinicCoreTypeContext types;
+    MinicCoreType type = {0};
+    MinicCoreTypeId void_t, int_t, record_t, params[9];
+    MinicCoreBlockId entry;
+    MinicCoreInstruction ins = {0};
+    MinicCoreCallArgument argument = {0};
+    MinicCoreTerminator term = {0};
+    MinicMachineFunction machine = {0};
+    MinicRiscvCoreMachinePlan plan = {0};
+    Rv32FunctionAbiPlan abi32 = {0};
+    MinicRiscv64FunctionAbiPlan abi64 = {0};
+    MinicCoreCallIndex calls64 = {0};
+    MinicRiscvPhysicalFrame frame = {0};
+    MinicTargetInfo target = {0};
+    MinicDataLayout layout = {0};
+    MinicRiscvIsa isa = {0};
+    MinicMachineGNUAsmPolicy policy = {0};
+    const bool reachable[1] = {true};
+    size_t object_offsets[1] = {32U}, i, writes = 0U, reads = 0U;
+    bool ok = false;
+    const char *stage = "setup";
+    minic_core_type_context_initialize(&types);
+    minic_core_function_initialize(&fn);
+    fn.name = malloc(sizeof("rv_record_parameter"));
+    if (fn.name == NULL) goto done;
+    memcpy(fn.name, "rv_record_parameter", sizeof("rv_record_parameter"));
+    fn.name_length = sizeof("rv_record_parameter") - 1U;
+    type.kind = MINIC_CORE_TYPE_VOID;
+    if (!minic_core_type_register(&types, &type, &void_t)) goto done;
+    type = (MinicCoreType){0};
+    type.kind = MINIC_CORE_TYPE_INTEGER;
+    type.has_layout = true;
+    type.size = type.alignment = 4U;
+    type.value.integer.bit_width = 32U;
+    type.value.integer.is_signed = true;
+    if (!minic_core_type_register(&types, &type, &int_t)) goto done;
+    type = (MinicCoreType){0};
+    type.kind = MINIC_CORE_TYPE_RECORD;
+    type.has_layout = true;
+    type.size = bytes;
+    type.alignment = 1U;
+    type.value.record.is_complete = true;
+    if (!minic_core_type_register(&types, &type, &record_t)) goto done;
+    for (i = 0U; i < (incoming_stack ? 8U : 0U); ++i) params[i] = int_t;
+    params[incoming_stack ? 8U : 0U] = record_t;
+    if (!minic_core_function_define_signature(&fn, &types, void_t,
+            params, incoming_stack ? 9U : 1U,
+            MINIC_CALLING_CONVENTION_DEFAULT, false) ||
+        !minic_core_function_add_block(&fn, &entry)) goto done;
+    fn.objects = calloc(1U, sizeof(*fn.objects));
+    if (fn.objects == NULL) goto done;
+    fn.objects[0].core_type_id = record_t;
+    fn.object_count = fn.object_capacity = 1U;
+    ins.kind = MINIC_CORE_INSTRUCTION_PARAMETER_OBJECT;
+    ins.core_type_id = void_t;
+    ins.value.parameter_object.parameter_index = incoming_stack ? 8U : 0U;
+    ins.value.parameter_object.object_id = 0U;
+    if (!minic_core_function_append_effect_instruction(&fn,
+            entry, &ins)) goto done;
+    if (relay_call) {
+        size_t argument_begin;
+        MinicCoreType function_type = {0};
+        MinicCoreTypeId sink_type;
+        function_type.kind = MINIC_CORE_TYPE_FUNCTION;
+        function_type.value.function.return_type = void_t;
+        function_type.value.function.parameters = &record_t;
+        function_type.value.function.parameter_count = 1U;
+        function_type.value.function.calling_convention =
+            MINIC_CALLING_CONVENTION_DEFAULT;
+        if (!minic_core_type_register(&types, &function_type, &sink_type))
+            goto done;
+        fn.callees = calloc(1U, sizeof(*fn.callees));
+        if (fn.callees == NULL) goto done;
+        fn.callee_count = fn.callee_capacity = 1U;
+        fn.callees[0].name = malloc(sizeof("rv_record_sink"));
+        if (fn.callees[0].name == NULL) goto done;
+        memcpy(fn.callees[0].name, "rv_record_sink",
+            sizeof("rv_record_sink"));
+        fn.callees[0].name_length = sizeof("rv_record_sink") - 1U;
+        fn.callees[0].core_function_type_id = sink_type;
+        argument.kind = MINIC_CORE_CALL_ARGUMENT_OBJECT;
+        argument.value.object_id = 0U;
+        if (!minic_core_function_append_call_arguments(&fn,
+            &argument, 1U, &argument_begin)) goto done;
+        ins = (MinicCoreInstruction){0};
+        ins.kind = MINIC_CORE_INSTRUCTION_CALL;
+        ins.core_type_id = void_t;
+        ins.result = MINIC_CORE_VALUE_INVALID;
+        ins.value.call.callee_id = 0U;
+        ins.value.call.argument_begin = argument_begin;
+        ins.value.call.argument_count = 1U;
+        ins.value.call.result_object = MINIC_CORE_OBJECT_INVALID;
+        if (!minic_core_function_append_effect_instruction(&fn,
+                entry, &ins)) goto done;
+    }
+    term.kind = MINIC_CORE_TERMINATOR_RETURN;
+    term.return_value = MINIC_CORE_VALUE_INVALID;
+    term.return_object = MINIC_CORE_OBJECT_INVALID;
+    if (!minic_core_function_set_terminator(&fn, entry, &term) ||
+        !minic_core_function_attach_type_context(&fn, &types) ||
+        !minic_core_function_verify(&fn)) goto done;
+    stage = "select";
+    layout.byte_order = MINIC_BYTE_ORDER_LITTLE;
+    layout.pointer_size = layout.pointer_alignment = xlen / 8U;
+    target.architecture = xlen == 32U ?
+        MINIC_TARGET_ARCH_RISCV32 : MINIC_TARGET_ARCH_RISCV64;
+    target.data_layout = &layout;
+    isa.xlen = xlen;
+    isa.abi = xlen == 32U ? MINIC_RISCV_ABI_ILP32 : MINIC_RISCV_ABI_LP64;
+    isa.strict_isa = true;
+    if (!minic_riscv_target_isa_store(&target, &isa)) goto done;
+    frame.frame_size = 256U;
+    frame.stack_alignment = 16U;
+    frame.saves_return_address = relay_call;
+    frame.return_address_offset = 240U;
+    plan.target = &target;
+    plan.core = &fn;
+    plan.frame = &frame;
+    plan.object_offsets = object_offsets;
+    plan.object_offset_count = 1U;
+    if (!prepare_old_rv_abi(&fn, xlen, relay_call ? 1U : 0U,
+            &abi32, &abi64,
+            &calls64, &plan) ||
+        !minic_riscv_machine_select_core_subset(&machine, &plan) ||
+        !minic_machine_core_coverage_verify(&fn, reachable, &machine) ||
+        !minic_riscv_machine_gnu_asm_policy(&target, &policy) ||
+        !minic_machine_gnu_asm_preflight(&machine, &policy)) goto done;
+    stage = "effects";
+    for (i = 0U; i < machine.block_count; ++i) {
+        size_t j;
+        const MinicMachineBlock *block = &machine.blocks[i];
+        for (j = 0U; j < block->instruction_count; ++j) {
+            const MinicMachineInstruction *m = &block->instructions[j];
+            if (!m->has_core_origin || m->core_instruction_id != 0U) continue;
+            if ((m->effects & MINIC_MACHINE_EFFECT_MEMORY_WRITE) != 0U)
+                ++writes;
+            if ((m->effects & MINIC_MACHINE_EFFECT_MEMORY_READ) != 0U)
+                ++reads;
+        }
+    }
+    ok = writes != 0U && (bytes <= 2U * (xlen / 8U) || reads != 0U);
+done:
+    if (!ok) fprintf(stderr,
+        "RV%u record bytes=%zu stack=%d relay=%d failed stage=%s\n",
+        xlen, bytes, incoming_stack, relay_call, stage);
+    minic_machine_function_destroy(&machine);
+    rv32_function_abi_plan_destroy(&abi32);
+    minic_riscv64_function_abi_plan_destroy(&abi64);
+    minic_core_call_index_destroy(&calls64);
+    minic_core_function_destroy(&fn);
+    minic_core_type_context_destroy(&types);
+    return ok;
+}
+static bool run_wide_parameter(unsigned xlen, bool split_register_stack) {
+    MinicCoreFunction fn = {0};
+    MinicCoreTypeContext types;
+    MinicCoreType type = {0};
+    MinicCoreTypeId int_t, wide_t, params[8];
+    MinicCoreBlockId entry;
+    MinicCoreValueId wide_value;
+    MinicCoreInstruction ins = {0};
+    MinicCoreTerminator term = {0};
+    MinicRiscvCoreMachinePlan plan = {0};
+    Rv32FunctionAbiPlan abi32 = {0};
+    MinicRiscv64FunctionAbiPlan abi64 = {0};
+    MinicCoreCallIndex calls64 = {0};
+    MinicRiscvPhysicalFrame frame = {0};
+    MinicMachineFunction machine = {0};
+    MinicTargetInfo target = {0};
+    MinicDataLayout layout = {0};
+    MinicRiscvIsa isa = {0};
+    MinicMachineGNUAsmPolicy policy = {0};
+    const bool reachable[] = {true};
+    size_t value_offsets[] = {32U}, i;
+    FILE *out = NULL;
+    char assembly[8192];
+    size_t n;
+    bool ok = false;
+    const char *stage = "setup";
+    minic_core_type_context_initialize(&types);
+    minic_core_function_initialize(&fn);
+    fn.name = malloc(sizeof("rv_wide_parameter"));
+    if (fn.name == NULL) goto done;
+    memcpy(fn.name, "rv_wide_parameter", sizeof("rv_wide_parameter"));
+    fn.name_length = sizeof("rv_wide_parameter") - 1U;
+    type.kind = MINIC_CORE_TYPE_INTEGER;
+    type.has_layout = true;
+    type.size = type.alignment = 4U;
+    type.value.integer.bit_width = 32U;
+    if (!minic_core_type_register(&types, &type, &int_t)) goto done;
+    type.size = type.alignment = xlen == 32U ? 8U : 16U;
+    type.value.integer.bit_width = 2U * xlen;
+    if (!minic_core_type_register(&types, &type, &wide_t)) goto done;
+    for (i = 0U; i < 7U; ++i) params[i] = int_t;
+    params[split_register_stack ? 7U : 0U] = wide_t;
+    if (!minic_core_function_define_signature(&fn, &types, wide_t,
+            params, split_register_stack ? 8U : 1U,
+            MINIC_CALLING_CONVENTION_DEFAULT, false) ||
+        !minic_core_function_add_block(&fn, &entry)) goto done;
+    ins.kind = MINIC_CORE_INSTRUCTION_PARAMETER;
+    ins.core_type_id = wide_t;
+    ins.value.parameter_index = split_register_stack ? 7U : 0U;
+    if (!minic_core_function_append_value_instruction(&fn,
+            entry, &ins, &wide_value)) goto done;
+    term.kind = MINIC_CORE_TERMINATOR_RETURN;
+    term.return_value = wide_value;
+    term.return_object = MINIC_CORE_OBJECT_INVALID;
+    if (!minic_core_function_set_terminator(&fn, entry, &term) ||
+        !minic_core_function_attach_type_context(&fn, &types) ||
+        !minic_core_function_verify(&fn)) goto done;
+    stage = "selector";
+    layout.byte_order = MINIC_BYTE_ORDER_LITTLE;
+    layout.pointer_size = layout.pointer_alignment = xlen / 8U;
+    target.architecture = xlen == 32U ?
+        MINIC_TARGET_ARCH_RISCV32 : MINIC_TARGET_ARCH_RISCV64;
+    target.data_layout = &layout;
+    isa.xlen = xlen;
+    isa.abi = xlen == 32U ? MINIC_RISCV_ABI_ILP32 : MINIC_RISCV_ABI_LP64;
+    isa.strict_isa = true;
+    if (!minic_riscv_target_isa_store(&target, &isa)) goto done;
+    frame.frame_size = 128U;
+    frame.stack_alignment = 16U;
+    plan.target = &target;
+    plan.core = &fn;
+    plan.frame = &frame;
+    plan.value_offsets = value_offsets;
+    plan.value_offset_count = 1U;
+    if (!prepare_old_rv_abi(&fn, xlen, 0U, &abi32, &abi64,
+            &calls64, &plan) ||
+        !minic_riscv_machine_select_core_subset(&machine, &plan) ||
+        !minic_machine_core_coverage_verify(&fn, reachable, &machine) ||
+        !minic_riscv_machine_gnu_asm_policy(&target, &policy) ||
+        !minic_machine_gnu_asm_preflight(&machine, &policy)) goto done;
+    stage = "assembly";
+    out = tmpfile();
+    if (out == NULL || !minic_machine_gnu_asm_emit_body(out,
+        &machine, &policy) || fflush(out) != 0 ||
+        fseek(out, 0L, SEEK_SET) != 0) goto done;
+    n = fread(assembly, 1U, sizeof(assembly) - 1U, out);
+    assembly[n] = '\0';
+    ok = strstr(assembly, xlen == 32U ? "  sw x5, 32(x2)" :
+        "  sd x5, 32(x2)") != NULL &&
+        strstr(assembly, xlen == 32U ? "  sw x5, 36(x2)" :
+        "  sd x5, 40(x2)") != NULL &&
+        strstr(assembly, "  ret") != NULL;
+    if (ok && split_register_stack)
+        ok = strstr(assembly, xlen == 32U ? "  lw x5, 128(x2)" :
+            "  ld x5, 128(x2)") != NULL;
+done:
+    if (!ok) fprintf(stderr,
+        "RV%u wide split=%d failure at %s\n",
+        xlen, split_register_stack, stage);
     if (out != NULL) fclose(out);
     minic_machine_function_destroy(&machine);
     rv32_function_abi_plan_destroy(&abi32);
@@ -695,10 +983,21 @@ int main(void) {
         !run_scalar(32U, false) || !run_scalar(64U, false) ||
         !run_scalar(32U, true) || !run_scalar(64U, true) ||
         !run_memory_family(32U) || !run_memory_family(64U) ||
-        !run_indirect_call(32U) || !run_indirect_call(64U)) {
+        !run_indirect_call(32U, false) || !run_indirect_call(64U, false) ||
+        !run_indirect_call(32U, true) || !run_indirect_call(64U, true) ||
+        !run_record_parameter(32U, 5U, false, false) ||
+        !run_record_parameter(64U, 5U, false, false) ||
+        !run_record_parameter(32U, 17U, false, true) ||
+        !run_record_parameter(64U, 17U, false, true) ||
+        !run_record_parameter(32U, 17U, true, true) ||
+        !run_record_parameter(64U, 17U, true, true) ||
+        !run_wide_parameter(32U, false) ||
+        !run_wide_parameter(64U, false) ||
+        !run_wide_parameter(32U, true) ||
+        !run_wide_parameter(64U, true)) {
         fprintf(stderr, "RV_CORE_MIR_CFG=FAIL\n");
         return 1;
     }
-    puts("RV_CORE_MIR_CFG=PASS architectures=2 prologue_isolated=1 exported_reachability=1 core_scalar=1 memory_effects=1 indirect_call=1 abi_plan_reject=1 fail_closed=1");
+    puts("RV_CORE_MIR_CFG=PASS architectures=2 prologue_isolated=1 exported_reachability=1 core_scalar=1 memory_effects=1 indirect_call=1 stack_marshalling=1 wide_split=1 aggregate_parameter=1 aggregate_call=1 abi_plan_reject=1 fail_closed=1");
     return 0;
 }

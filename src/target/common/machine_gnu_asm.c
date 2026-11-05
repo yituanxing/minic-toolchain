@@ -240,6 +240,8 @@ bool minic_machine_gnu_asm_emit_body(FILE *output,
         for (j = 0U; j < block->instruction_count; ++j) {
             const MinicMachineInstruction *instruction =
                 &block->instructions[j];
+            if (instruction->kind ==
+                MINIC_MACHINE_INSTRUCTION_COMPILER_BARRIER) continue;
             /* Effect-only source ASM remains in MIR for scheduling/barrier
              * correctness but produces no target instruction text. */
             if (instruction->kind == MINIC_MACHINE_INSTRUCTION_SOURCE_ASM &&

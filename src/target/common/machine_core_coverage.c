@@ -344,6 +344,10 @@ bool minic_machine_core_coverage_verify(const MinicCoreFunction *core,
                         core, &core->instructions[id], ins)) goto cleanup;
                 seen_source_asm[id] = 1U;
             }
+            if (ins->kind == MINIC_MACHINE_INSTRUCTION_COMPILER_BARRIER &&
+                core->instructions[id].kind !=
+                    MINIC_CORE_INSTRUCTION_COMPILER_BARRIER)
+                goto cleanup;
             seen[id] = 1U;
             effects[id] |= ins->effects;
         }

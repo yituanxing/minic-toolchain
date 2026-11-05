@@ -1,6 +1,7 @@
 /* Real owned Machine IR contract: independent of the current direct-text
  * backends. All five target identities exercise one fail-closed verifier. */
 #include "target/common/machine_ir.h"
+#include "target/common/machine_builder.h"
 #include "target/common/machine_ir_verify.h"
 
 #include <stdio.h>
@@ -234,6 +235,7 @@ static bool exercise_target(MinicTargetArchitecture arch) {
     MinicMachineVerifyPolicy policy = {0};
     ProbePolicyState state = {true};
     MinicMachineInstruction ins = {0};
+    MinicMachineBuilder builder = {0};
     MinicMachineOperand input_operands[MINIC_MACHINE_MAX_OPERANDS];
     MinicMachineRegisterEffect input_implicit[MINIC_MACHINE_MAX_REGISTER_EFFECTS];
     MinicMachineFrameObject frame = {0};
@@ -243,6 +245,7 @@ static bool exercise_target(MinicTargetArchitecture arch) {
     char *saved_string;
     size_t entry, exit_block, auxiliary_block, frame_id;
     size_t saved_count;
+    size_t barrier_index;
     uint32_t saved_opcode;
     uint64_t saved_features;
     bool result = false;
@@ -619,10 +622,28 @@ static bool exercise_target(MinicTargetArchitecture arch) {
         }
     }
     REQUIRE(add_generated(&fn, entry, &ins));
+    /* Core compiler ordering must survive MachineIR without a fake native
+     * fence, source-ASM escape or emitted bytes. The marker is not admitted
+     * without exact Core provenance. */
+    REQUIRE(minic_machine_builder_initialize(&builder, &fn));
+    REQUIRE(minic_machine_builder_position_at(&builder, entry));
+    REQUIRE(!minic_machine_builder_emit_compiler_barrier(&builder));
+    minic_machine_builder_set_origin(&builder, 0U, 17U);
+    barrier_index = fn.blocks[entry].instruction_count;
+    REQUIRE(minic_machine_builder_emit_compiler_barrier(&builder));
     reset_input(&ins, input_operands, input_implicit);
     ins.opcode = PROBE_RETURN;
     ins.effects = MINIC_MACHINE_EFFECT_RETURN;
     REQUIRE(add_generated(&fn, entry, &ins));
+    REQUIRE(minic_machine_function_verify(&fn, &policy));
+    fn.blocks[entry].instructions[barrier_index].effects |=
+        MINIC_MACHINE_EFFECT_MEMORY_WRITE;
+    REQUIRE(!minic_machine_function_verify(&fn, &policy));
+    fn.blocks[entry].instructions[barrier_index].effects =
+        MINIC_MACHINE_EFFECT_COMPILER_BARRIER;
+    fn.blocks[entry].instructions[barrier_index].has_core_origin = false;
+    REQUIRE(!minic_machine_function_verify(&fn, &policy));
+    fn.blocks[entry].instructions[barrier_index].has_core_origin = true;
     REQUIRE(minic_machine_function_verify(&fn, &policy));
     result = true;
 fail:
@@ -637,6 +658,7 @@ int main(void) {
         if (!exercise_target(architecture)) return 1;
     }
     puts("MACHINE_IR_CONTRACT=PASS five_architectures=5 typed_opcode=PASS "
-         "forged_negatives=PASS source_asm=PASS indirect_branch=PASS");
+         "forged_negatives=PASS source_asm=PASS indirect_branch=PASS "
+         "compiler_barrier=PASS");
     return 0;
 }

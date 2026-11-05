@@ -2509,12 +2509,16 @@ check-a64-machine-core-select:
 	  src/target/common/machine_core_coverage.c \
 	  src/target/common/lp64_scalar.c \
 	  src/target/common/lp64_frame.c \
+	  src/target/common/lp64_aggregate.c \
+	  src/target/common/aggregate_shape.c \
 	  src/target/common/core_numeric_shape.c \
 	  src/target/common/direct_instruction_semantics.c \
 	  src/target/common/direct_call_plan.c \
+	  src/target/common/core_call_view.c \
 	  src/target/common/core_call_index.c \
 	  src/target/common/direct_residual_plan.c \
 	  src/target/common/elf_module_symbol_info.c \
+	  src/target/aarch64/abi.c \
 	  src/target/aarch64/machine_opcode.c \
 	  src/target/aarch64/machine_gnu_asm.c \
 	  src/target/aarch64/machine_source_asm.c \
@@ -2660,6 +2664,7 @@ check-x86-machine-core-select:
 	  src/target/common/aggregate_shape.c \
 	  src/target/common/core_numeric_shape.c \
 	  src/target/common/direct_instruction_semantics.c \
+	  src/target/common/elf_module_symbol_info.c \
 	  src/target/x86_64/abi.c \
 	  src/target/x86_64/machine_opcode.c \
 	  src/target/x86_64/machine_gnu_asm.c \

@@ -144,7 +144,10 @@ typedef enum MinicMachineInstructionKind {
     /* A typed, target-independent position marker. This is not an opcode,
      * opaque assembly escape hatch or a machine-CFG block boundary. */
     MINIC_MACHINE_INSTRUCTION_LOCAL_LABEL,
-    MINIC_MACHINE_INSTRUCTION_DIRECTIVE
+    MINIC_MACHINE_INSTRUCTION_DIRECTIVE,
+    /* Core compiler-ordering effect, not a native opcode or source ASM.
+     * It intentionally prints no GNU bytes and carries exact Core origin. */
+    MINIC_MACHINE_INSTRUCTION_COMPILER_BARRIER
 } MinicMachineInstructionKind;
 
 /* The only assembler-side operations inside a machine function are typed

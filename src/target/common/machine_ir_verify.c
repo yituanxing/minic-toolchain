@@ -266,6 +266,21 @@ static bool machine_validate_instruction(
         *permits_fallthrough = false;
         return true;
     }
+    if (ins->kind == MINIC_MACHINE_INSTRUCTION_COMPILER_BARRIER) {
+        if (ins->opcode != 0U ||
+            ins->effects != MINIC_MACHINE_EFFECT_COMPILER_BARRIER ||
+            ins->operand_count != 0U || ins->implicit_count != 0U ||
+            !ins->has_core_origin || ins->source_asm_template != NULL ||
+            ins->source_asm_length != 0U ||
+            ins->source_asm_terminates_block ||
+            ins->source_asm_permits_fallthrough ||
+            ins->local_label_name != NULL || ins->directive != NULL)
+            return false;
+        *terminates = false;
+        *indirect_successors = false;
+        *permits_fallthrough = false;
+        return true;
+    }
     if (ins->kind == MINIC_MACHINE_INSTRUCTION_SOURCE_ASM) {
         if (ins->opcode != 0U || ins->source_asm_template == NULL ||
             ins->local_label_name != NULL || ins->directive != NULL ||

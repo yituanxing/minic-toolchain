@@ -2,6 +2,7 @@
 #include "target/aarch64/machine_frame_select.h"
 #include "target/aarch64/machine_opcode.h"
 #include "target/aarch64/machine_source_asm.h"
+#include "target/aarch64/abi.h"
 #include "target/aarch64/neon_emit.h"
 #include "target/common/core_block_walk.h"
 #include "target/common/core_numeric_shape.h"
@@ -10,6 +11,7 @@
 #include "target/common/direct_residual_plan.h"
 #include "target/common/elf_module_symbol_info.h"
 #include "target/common/lp64_scalar.h"
+#include "target/common/lp64_aggregate.h"
 #include <limits.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -36,6 +38,8 @@ static bool a64_normalize(A64CoreSelection *, size_t, bool, unsigned int);
 static bool a64_symbol_materialize(A64CoreSelection *, const char *,
     MinicElfModuleSymbolKind);
 static bool a64_branch(A64CoreSelection *, size_t);
+static bool a64_memory_register(A64CoreSelection *, uint32_t, bool,
+    unsigned int, unsigned int, unsigned int, size_t, bool, bool);
 
 static MinicMachineOperand a64_gp(unsigned int reg, unsigned int bits,
     unsigned int access) {
@@ -588,6 +592,226 @@ static bool a64_parameter(A64CoreSelection *sel,
     return a64_core_value_transfer(sel, ins->result, &sel->view, reg, true);
 }
 
+/* Calls consume sealed Common argument locations.  These routines perform
+ * only the native AAPCS64 transport previously owned by call_emit.c. */
+static bool a64_call_wide_argument(A64CoreSelection *sel,
+    MinicCoreValueId value, const MinicLP64ArgumentLocation *location,
+    const MinicA64FrameView *live) {
+    const MinicCoreFunction *fn = sel->ctx->fn;
+    const MinicCoreTypeId type_id = fn->values[value].core_type_id;
+    const bool integer = a64_wide_integer(fn, type_id);
+    const bool floating = a64_wide_float(fn, type_id);
+    size_t at, limb;
+    if ((!integer && !floating) ||
+        location->kind != MINIC_LP64_ARGUMENT_WIDE ||
+        !a64_wide_core_slot(sel, value, &at)) return false;
+    if (integer) {
+        if ((location->gp_registers == 2U) ==
+                (location->stack_slots == 2U) ||
+            location->fp_registers != 0U ||
+            (location->gp_registers == 2U &&
+             (location->gp_first > 6U ||
+              (location->gp_first & 1U) != 0U ||
+              location->stack_slots != 0U)) ||
+            (location->stack_slots == 2U &&
+             (location->gp_registers != 0U ||
+              location->stack_first > SIZE_MAX / 8U - 1U))) return false;
+        for (limb = 0U; limb < 2U; ++limb) {
+            const unsigned int reg = location->gp_registers == 2U ?
+                (unsigned int)(location->gp_first + limb) : A64_T0;
+            if (!minic_a64_machine_emit_frame_load(&sel->builder, live,
+                    minic_a64_owned_slot(at + limb * 8U),
+                    (MinicA64FrameRegister){MINIC_A64_REG_X, reg},
+                    (MinicA64ScratchPolicy){0U, 0U})) return false;
+            if (location->stack_slots == 2U &&
+                !minic_a64_machine_emit_frame_store(&sel->builder, live,
+                    (MinicA64FrameRef){MINIC_A64_FRAME_OUTGOING,
+                        (location->stack_first + limb) * 8U},
+                    (MinicA64FrameRegister){MINIC_A64_REG_X, reg},
+                    (MinicA64ScratchPolicy){0U, 0U})) return false;
+        }
+        return true;
+    }
+    if ((location->fp_registers == 1U) ==
+            (location->stack_slots == 2U) ||
+        location->gp_registers != 0U ||
+        (location->fp_registers == 1U &&
+         (location->fp_first >= 8U || location->stack_slots != 0U)) ||
+        (location->stack_slots == 2U &&
+         (location->fp_registers != 0U ||
+          location->stack_first > SIZE_MAX / 8U - 1U))) return false;
+    {
+        const unsigned int reg = location->fp_registers == 1U ?
+            (unsigned int)location->fp_first : 9U;
+        if (!minic_a64_machine_emit_frame_load(&sel->builder, live,
+                minic_a64_owned_slot(at),
+                (MinicA64FrameRegister){MINIC_A64_REG_Q, reg},
+                (MinicA64ScratchPolicy){0U, 0U})) return false;
+        return location->fp_registers == 1U ||
+            minic_a64_machine_emit_frame_store(&sel->builder, live,
+                (MinicA64FrameRef){MINIC_A64_FRAME_OUTGOING,
+                    location->stack_first * 8U},
+                (MinicA64FrameRegister){MINIC_A64_REG_Q, reg},
+                (MinicA64ScratchPolicy){0U, 0U});
+    }
+}
+
+/* Assemble one exactly bounded aggregate eightbyte from the source object.
+ * x9 is byte scratch, x10 address, x11 accumulated GP word.  The destination
+ * x0..x7/stack is written only after the entire chunk has been assembled. */
+static bool a64_pack_record_chunk(A64CoreSelection *sel,
+    const MinicA64FrameView *live, size_t offset, size_t payload,
+    unsigned int destination, size_t stack_offset, bool in_register) {
+    size_t byte;
+    if (payload == 0U || payload > 8U ||
+        (in_register && destination >= 8U) ||
+        !minic_a64_machine_emit_frame_address(&sel->builder, live,
+            minic_a64_owned_slot(offset), A64_T1,
+            (MinicA64ScratchPolicy){0U, 0U}) ||
+        !a64_load_constant(sel, A64_T2, 0U)) return false;
+    for (byte = 0U; byte < payload; ++byte) {
+        if (!a64_memory_register(sel, MINIC_A64_MACHINE_LDRB, false,
+                A64_T0, 32U, A64_T1, byte, false, false) ||
+            (byte != 0U &&
+             !a64_rri(sel, MINIC_A64_MACHINE_LSL_IMM, 64U,
+                 A64_T0, A64_T0, (int64_t)(byte * 8U))) ||
+            !a64_rrr(sel, MINIC_A64_MACHINE_ORR, 64U,
+                A64_T2, A64_T2, A64_T0)) return false;
+    }
+    if (in_register)
+        return a64_rr(sel, MINIC_A64_MACHINE_MOV, 64U,
+            destination, A64_T2);
+    return minic_a64_machine_emit_frame_store(&sel->builder, live,
+        (MinicA64FrameRef){MINIC_A64_FRAME_OUTGOING, stack_offset},
+        (MinicA64FrameRegister){MINIC_A64_REG_X, A64_T2},
+        (MinicA64ScratchPolicy){0U, 0U});
+}
+
+/* Move an ABI GP chunk into private object storage, byte-precisely.  This
+ * is the reverse of a64_pack_record_chunk, reused for call results. */
+static bool a64_unpack_record_chunk(A64CoreSelection *sel,
+    size_t offset, size_t payload, unsigned int source) {
+    size_t byte;
+    if (payload == 0U || payload > 8U || source >= 8U ||
+        !minic_a64_machine_emit_frame_address(&sel->builder, &sel->view,
+            minic_a64_owned_slot(offset), A64_T1,
+            (MinicA64ScratchPolicy){0U, 0U}) ||
+        !a64_rr(sel, MINIC_A64_MACHINE_MOV, 64U, A64_T0, source))
+        return false;
+    for (byte = 0U; byte < payload; ++byte)
+        if (!a64_memory_register(sel, MINIC_A64_MACHINE_STRB, false,
+                A64_T0, 32U, A64_T1, byte, true, false) ||
+            (byte + 1U < payload &&
+             !a64_rri(sel, MINIC_A64_MACHINE_LSR_IMM,
+                 64U, A64_T0, A64_T0, 8))) return false;
+    return true;
+}
+
+static bool a64_call_record_argument(A64CoreSelection *sel,
+    MinicCoreObjectId id, const MinicLP64ArgumentLocation *location,
+    const MinicA64FrameView *live) {
+    const MinicCoreFunction *fn = sel->ctx->fn;
+    const MinicCoreTypeId type = id < fn->object_count && fn->objects != NULL ?
+        fn->objects[id].core_type_id : MINIC_CORE_TYPE_INVALID;
+    size_t at, bytes = 0U, chunks = 0U, chunk;
+    if (id >= fn->object_count || fn->objects == NULL ||
+        fn->type_context == NULL) return false;
+    if (location->kind == MINIC_LP64_ARGUMENT_EMPTY_RECORD)
+        return location->size_bytes == 0U && location->chunks == 0U &&
+            location->gp_registers == 0U &&
+            location->fp_registers == 0U &&
+            location->stack_slots == 0U &&
+            minic_multi_empty_record_core(fn->type_context, type);
+    if (!minic_lp64_frame_plan_object(sel->ctx->frame_plan, id, &at))
+        return false;
+    if (location->kind == MINIC_LP64_ARGUMENT_INDIRECT_RECORD) {
+        if (!minic_aarch64_indirect_record_core(fn->type_context,
+                type, &bytes) || location->size_bytes != bytes ||
+            location->fp_registers != 0U ||
+            ((location->gp_registers == 1U) ==
+             (location->stack_slots == 1U)) ||
+            (location->gp_registers == 1U &&
+             (location->gp_first >= 8U || location->stack_slots != 0U)) ||
+            (location->stack_slots == 1U &&
+             (location->gp_registers != 0U ||
+              location->stack_first > SIZE_MAX / 8U))) return false;
+        if (!minic_a64_machine_emit_frame_address(&sel->builder, live,
+                minic_a64_owned_slot(at), A64_T0,
+                (MinicA64ScratchPolicy){0U, 0U})) return false;
+        if (location->gp_registers == 1U)
+            return a64_rr(sel, MINIC_A64_MACHINE_MOV, 64U,
+                (unsigned int)location->gp_first, A64_T0);
+        return minic_a64_machine_emit_frame_store(&sel->builder, live,
+            (MinicA64FrameRef){MINIC_A64_FRAME_OUTGOING,
+                location->stack_first * 8U},
+            (MinicA64FrameRegister){MINIC_A64_REG_X, A64_T0},
+            (MinicA64ScratchPolicy){0U, 0U});
+    }
+    if (location->kind != MINIC_LP64_ARGUMENT_RECORD ||
+        !minic_multi_gp_record_core(fn->type_context, type,
+            &bytes, &chunks) ||
+        location->size_bytes != bytes || location->chunks != chunks ||
+        location->fp_registers != 0U ||
+        !((location->gp_registers == chunks &&
+           location->stack_slots == 0U) ||
+          (location->gp_registers == 0U &&
+           location->stack_slots == chunks)) ||
+        (location->gp_registers != 0U &&
+         (location->gp_first >= 8U ||
+          chunks > 8U - location->gp_first)) ||
+        (location->stack_slots != 0U &&
+         location->stack_first > SIZE_MAX / 8U - chunks)) return false;
+    for (chunk = 0U; chunk < chunks; ++chunk) {
+        const size_t payload = bytes - chunk * 8U >= 8U ?
+            8U : bytes - chunk * 8U;
+        if (!a64_pack_record_chunk(sel, live, at + chunk * 8U, payload,
+                location->gp_registers != 0U ?
+                    (unsigned int)(location->gp_first + chunk) : 0U,
+                location->stack_slots != 0U ?
+                    (location->stack_first + chunk) * 8U : 0U,
+                location->gp_registers != 0U)) return false;
+    }
+    return true;
+}
+
+static bool a64_call_record_result(A64CoreSelection *sel,
+    const MinicCoreInstruction *ins, MinicCoreObjectId id) {
+    const MinicCoreFunction *fn = sel->ctx->fn;
+    const MinicCoreTypeId type = ins->core_type_id;
+    size_t at, bytes, chunks, fp_count, fp_width, i;
+    if (fn->type_context == NULL || id >= fn->object_count ||
+        fn->objects == NULL ||
+        minic_core_type_unqualified(fn->type_context, type) !=
+        minic_core_type_unqualified(fn->type_context,
+            fn->objects[id].core_type_id)) return false;
+    if (minic_multi_empty_record_core(fn->type_context, type)) return true;
+    if (!minic_lp64_frame_plan_object(sel->ctx->frame_plan, id, &at))
+        return false;
+    if (minic_aarch64_indirect_record_core(fn->type_context,
+            type, &bytes)) return bytes > 16U;
+    if (minic_multi_fp_return_record_core(fn->type_context,
+            type, &fp_count, &fp_width)) {
+        for (i = 0U; i < fp_count; ++i)
+            if (!minic_a64_machine_emit_frame_store(&sel->builder,
+                    &sel->view,
+                    minic_a64_owned_slot(at + i * fp_width),
+                    (MinicA64FrameRegister){fp_width == 4U ?
+                        MINIC_A64_REG_S : MINIC_A64_REG_D,
+                        (unsigned int)i},
+                    (MinicA64ScratchPolicy){0U, 0U})) return false;
+        return true;
+    }
+    if (!minic_multi_gp_record_core(fn->type_context, type,
+            &bytes, &chunks)) return false;
+    for (i = 0U; i < chunks; ++i) {
+        const size_t payload = bytes - i * 8U >= 8U ?
+            8U : bytes - i * 8U;
+        if (!a64_unpack_record_chunk(sel, at + i * 8U,
+                payload, (unsigned int)i)) return false;
+    }
+    return true;
+}
+
 static bool a64_call(A64CoreSelection *sel,
     const MinicCoreInstruction *ins) {
     const MinicCoreFunction *fn = sel->ctx->fn;
@@ -596,6 +820,8 @@ static bool a64_call(A64CoreSelection *sel,
         ins->value.call.argument_begin;
     const size_t count = indirect ? ins->value.indirect_call.argument_count :
         ins->value.call.argument_count;
+    const MinicCoreObjectId result_object = indirect ?
+        ins->value.indirect_call.result_object : ins->value.call.result_object;
     const MinicLP64PreparedCall *planned;
     MinicCoreAbiValueShape result;
     MinicA64FrameView live = sel->view;
@@ -603,7 +829,11 @@ static bool a64_call(A64CoreSelection *sel,
     if (fn->instructions == NULL || ins < fn->instructions ||
         ins >= fn->instructions + fn->instruction_count ||
         sel->ctx->outgoing_calls == NULL ||
-        !a64_scalar_abi(fn, ins->core_type_id, &result) ||
+        !minic_core_abi_value_shape(fn, ins->core_type_id, &result) ||
+        (result.kind != MINIC_CORE_TYPE_RECORD &&
+         !a64_wide_integer(fn, ins->core_type_id) &&
+         !a64_wide_float(fn, ins->core_type_id) &&
+         !a64_scalar_abi(fn, ins->core_type_id, &result)) ||
         begin > fn->call_argument_count ||
         count > fn->call_argument_count - begin ||
         (!indirect && ins->value.call.extended_float_operation !=
@@ -624,8 +854,22 @@ static bool a64_call(A64CoreSelection *sel,
         MinicCoreAbiValueShape shape;
         MinicA64FrameRegister reg;
         bool in_register;
+        if (arg->kind == MINIC_CORE_CALL_ARGUMENT_OBJECT) {
+            if (!a64_call_record_argument(sel, arg->value.object_id,
+                    location, &live)) return false;
+            continue;
+        }
         if (arg->kind != MINIC_CORE_CALL_ARGUMENT_VALUE ||
-            arg->value.value_id >= fn->value_count ||
+            arg->value.value_id >= fn->value_count) return false;
+        if (a64_wide_integer(fn,
+                fn->values[arg->value.value_id].core_type_id) ||
+            a64_wide_float(fn,
+                fn->values[arg->value.value_id].core_type_id)) {
+            if (!a64_call_wide_argument(sel, arg->value.value_id,
+                    location, &live)) return false;
+            continue;
+        }
+        if (
             !a64_scalar_abi(fn,
                 fn->values[arg->value.value_id].core_type_id, &shape) ||
             shape.kind == MINIC_CORE_TYPE_VOID) return false;
@@ -648,6 +892,22 @@ static bool a64_call(A64CoreSelection *sel,
                 (MinicA64FrameRef){MINIC_A64_FRAME_OUTGOING,
                     location->stack_first * 8U}, reg,
                 (MinicA64ScratchPolicy){0U, 0U})) return false;
+    }
+    if (result.kind == MINIC_CORE_TYPE_RECORD) {
+        size_t bytes;
+        /* AAPCS64 x8 is independent of x0..x7.  Set it AFTER explicit
+         * parameters, before the branch-and-link; nested callees write
+         * directly to the caller's planned result object. */
+        if (minic_aarch64_indirect_record_core(fn->type_context,
+                ins->core_type_id, &bytes)) {
+            size_t at;
+            if (bytes <= 16U || result_object >= fn->object_count ||
+                !minic_lp64_frame_plan_object(sel->ctx->frame_plan,
+                    result_object, &at) ||
+                !minic_a64_machine_emit_frame_address(&sel->builder,
+                    &live, minic_a64_owned_slot(at), 8U,
+                    (MinicA64ScratchPolicy){0U, 0U})) return false;
+        }
     }
     if (indirect) {
         const MinicMachineOperand op[] = {
@@ -688,6 +948,22 @@ static bool a64_call(A64CoreSelection *sel,
             MINIC_A64_MACHINE_SP, MINIC_A64_MACHINE_SP,
             (int64_t)planned->stack_bytes)) return false;
     if (result.kind == MINIC_CORE_TYPE_VOID) return true;
+    if (result.kind == MINIC_CORE_TYPE_RECORD)
+        return a64_call_record_result(sel, ins, result_object);
+    if (a64_wide_integer(fn, ins->core_type_id)) {
+        size_t at;
+        return a64_wide_core_slot(sel, ins->result, &at) &&
+            a64_store_wide_half(sel, at, 0U) &&
+            a64_store_wide_half(sel, at + 8U, 1U);
+    }
+    if (a64_wide_float(fn, ins->core_type_id)) {
+        size_t at;
+        return a64_wide_core_slot(sel, ins->result, &at) &&
+            minic_a64_machine_emit_frame_store(&sel->builder, &sel->view,
+                minic_a64_owned_slot(at),
+                (MinicA64FrameRegister){MINIC_A64_REG_Q, 0U},
+                (MinicA64ScratchPolicy){0U, 0U});
+    }
     if (result.kind == MINIC_CORE_TYPE_FLOAT)
         return a64_core_value_transfer(sel, ins->result, &sel->view,
             a64_abi_register(&result, 0U), true);

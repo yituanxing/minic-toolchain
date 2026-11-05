@@ -42,6 +42,10 @@ bool minic_machine_builder_emit_selected(MinicMachineBuilder *,
     const MinicMachineOperand *operands, size_t operand_count,
     const MinicMachineRegisterEffect *implicit, size_t implicit_count);
 
+/* A Core-origin compiler barrier has no physical bytes. It is deliberately
+ * distinct from both ISA fences and user-authored empty source ASM. */
+bool minic_machine_builder_emit_compiler_barrier(MinicMachineBuilder *);
+
 /* A position marker between two actual selected instructions. Local labels
  * must use symbolic names and are uniqueness-checked function-wide. */
 bool minic_machine_builder_emit_local_label(MinicMachineBuilder *,

@@ -112,54 +112,6 @@ bool minic_loongarch64_integer_rhs_immediate(
     return true;
 }
 
-/* GNU checked-addition uses the original *mathematical* operand values,
- * then converts to the destination type. Linux fs/udf/inode.c passes a
- * compile-time sizeof that Core legally narrows to a signed i32 constant,
- * and le32_to_cpu() supplies u32. The i32+u32 sum fits signed i64, while
- * the signed i32 destination can overflow. Keep this contract explicit:
- * never treat the u32 as signed or infer overflow from add.w alone. */
-static bool loong_checked_add_i32_u32_shape(
-    const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
-    bool *signed_left) {
-    MinicCoreValueId left, right, address;
-    if (fn == NULL || ins == NULL || signed_left == NULL ||
-        fn->type_context == NULL || fn->values == NULL ||
-        ins->kind != MINIC_CORE_INSTRUCTION_INTEGER_OVERFLOW ||
-        ins->value.integer_overflow.operator_kind !=
-            MINIC_CORE_INTEGER_OVERFLOW_ADD)
-        return false;
-    left = ins->value.integer_overflow.left;
-    right = ins->value.integer_overflow.right;
-    address = ins->value.integer_overflow.result_address;
-    if (left >= fn->value_count || right >= fn->value_count ||
-        address >= fn->value_count)
-        return false;
-    MinicCoreTypeId pointee;
-    const MinicCoreType *result_type, *lhs_type, *rhs_type;
-    if (!minic_lp64_core_pointer_pointee(fn->type_context,
-            fn->values[address].core_type_id, &pointee)) return false;
-    result_type = loong_integer_core_type(fn, pointee);
-    lhs_type = loong_integer_core_type(fn, fn->values[left].core_type_id);
-    rhs_type = loong_integer_core_type(fn, fn->values[right].core_type_id);
-    if (result_type == NULL || lhs_type == NULL || rhs_type == NULL ||
-        result_type->kind != MINIC_CORE_TYPE_INTEGER ||
-        !result_type->has_layout || result_type->size != 4U ||
-        result_type->value.integer.bit_width != 32U ||
-        !result_type->value.integer.is_signed ||
-        result_type->value.integer.is_bool ||
-        lhs_type->kind != MINIC_CORE_TYPE_INTEGER ||
-        !lhs_type->has_layout || lhs_type->size != 4U ||
-        lhs_type->value.integer.bit_width != 32U ||
-        rhs_type->kind != MINIC_CORE_TYPE_INTEGER ||
-        !rhs_type->has_layout || rhs_type->size != 4U ||
-        rhs_type->value.integer.bit_width != 32U ||
-        lhs_type->value.integer.is_bool || rhs_type->value.integer.is_bool ||
-        lhs_type->value.integer.is_signed == rhs_type->value.integer.is_signed)
-        return false;
-    *signed_left = lhs_type->value.integer.is_signed;
-    return true;
-}
-
 /* Keep dynamic-stack addressing behind the target frame helper. */
 #define emit_sp_mem(_out, _op, _reg, _offset) \
     minic_loongarch64_emit_frame_mem((_out), (_op), (_reg), (_offset), dynamic_frame)
@@ -360,8 +312,8 @@ bool minic_loongarch64_emit_integer_instruction(
                 bool multiply_signed_left, multiply_signed_right;
                 bool multiply_signed_result;
                 bool add_signed_left;
-                if (loong_checked_add_i32_u32_shape(fn, ins,
-                                                    &add_signed_left)) {
+                if (minic_core_integer_overflow_i32_u32_to_i32_shape(
+                        fn, ins, &add_signed_left)) {
                     if (!emit_sp_mem(out, "ld.w", "$t0",
                                      minic_lp64_frame_value_offset(frame_plan, lhs)) ||
                         !emit_sp_mem(out, "ld.w", "$t1",

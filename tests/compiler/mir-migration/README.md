@@ -33,9 +33,10 @@ actual host-native program exit codes/output with binaries linked from MiniC
 GNU assembly using that same host GCC; legacy x86 source ASM stays explicitly
 unsupported. Both production gates are **intentionally
 expected to fail** until the selected targets replace the old Core→FILE*
-path. In five-target production mode, none of the three unsupported legacy
-cases are skipped: the new compiler must handle x86 source ASM and RV32/
-LoongArch64 128-bit Core IR. Keep production out of
+path. In five-target production mode, the same 47 legacy-supported cases
+must reach the real typed writer and retain their semantic shapes. The three
+legacy-unsupported cases must still reject cleanly; extending them is not
+a prerequisite for migrating the old backend. Keep production out of
 `check-fast` until then. A Linux host, GNU C preprocessor, `nm`, and
 `LD_PRELOAD` suffice; neither cross compiler nor QEMU is required.
 
@@ -54,16 +55,17 @@ Cases cover:
   are **verified rejection cases**, not silent missing test rows.
 - Accepted source ASM/empty memory barriers (RV32/RV64/A64/Loong) and an
   operand-less forged `%0` template rejected on *all five* architectures.
-  The old x86 backend similarly rejects the positive source ASM case, but
-  production must support it.
+  The old x86 backend also rejects the positive source ASM case, so the
+  migration gate preserves that refusal until a separate enhancement.
 
 Each fixture is preprocessed once with the host GNU C preprocessor, then
-compiled by the same `minic-cc` for each target. Complete output hashes are
-checked along with semantic-shape markers and dangling-label detection.
-For the three cases with no valid old output, GOLDEN requires a clean failure
-and no partial file, while PRODUCTION requires a real typed-emitter call and
-valid output. There can be no old byte baseline for an instruction the old
-backend never accepted; later runtime/reference proof remains necessary.
+compiled by the same `minic-cc` for each target. GOLDEN checks byte-for-byte
+hashes, semantic-shape markers and dangling labels. PRODUCTION requires
+the real typed writer for all 47 supported cases, plus semantic-shape/CFG
+checks; a different valid machine instruction sequence need not hash to the
+old textual output. Both modes demand a clean failure with no partial file
+for the three legacy-unsupported cases. Typed output still needs GNU
+assembly/linking and target runtime/reference proof before Linux signoff.
 
 Golden hashes are SHA-256 of complete `.s` bytes (not whitespace-normalized).
 To investigate an intentional output change, build the old compiler separately
