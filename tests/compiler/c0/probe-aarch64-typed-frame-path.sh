@@ -6,6 +6,21 @@ test -x "$minic"
 repo="$(cd "$(dirname "$0")/../../.." && pwd)"
 scratch="$(mktemp -d)"
 trap 'rm -rf "$scratch"' EXIT
+# Keep every original grep/awk rejection strict.  Report the first failing
+# predicate and the already-emitted physical GNU assembly before cleanup.
+a64_frame_diagnose_failure() {
+    local status="$1" line="$2" command="$3" asm
+    printf 'AARCH64_TYPED_FRAME_DIAG status=%s line=%s command=%s\n' \
+        "$status" "$line" "$command" >&2
+    for asm in "$scratch"/*.s; do
+        [[ -f "$asm" ]] || continue
+        printf 'AARCH64_TYPED_FRAME_DIAG assembly=%s\n' "$asm" >&2
+        grep -nE 'fadd|fmul|fdiv|ldr|str|mov|add|sub|bl|\.size|^[[:alpha:]_].*:' \
+            "$asm" | sed -n '1,240p' >&2 || :
+    done
+    exit "$status"
+}
+trap 'a64_frame_diagnose_failure "$?" "$LINENO" "$BASH_COMMAND"' ERR
 
 # Native typed MachineIR tests verify width encoding, live scratch masking,
 # stable x19 versus outgoing SP, incoming aligned frame SP, overflow rejection

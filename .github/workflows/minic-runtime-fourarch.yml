@@ -618,7 +618,7 @@ jobs:
           gnu_actual=$?
           set -e
           test "$gnu_actual" -eq 42 || { echo 'FAIL GNU NZCV oracle'; exit 1; }
-          "$cc" --target=aarch64-linux -S "$source" -o build/aarch64-nzcv/minic.s
+          MINIC_M1_TRACE=1 MINIC_ASM_OPERAND_PLAN_TRACE=1 "$cc" --target=aarch64-linux -S "$source" -o build/aarch64-nzcv/minic.s
           grep -F '  cmp x10, x11' build/aarch64-nzcv/minic.s
           grep -F '  sbc x9, xzr, xzr' build/aarch64-nzcv/minic.s
           grep -F '  mov x9, sp' build/aarch64-nzcv/minic.s
@@ -660,7 +660,7 @@ jobs:
           "$cc" --target=aarch64-linux -S build/aarch64-nzcv/sysreg.i \
             -o build/aarch64-nzcv/sysreg.s
           for reg in sp_el0 tpidr_el1 tpidr_el2; do
-            grep -F "  mrs x9, $reg" build/aarch64-nzcv/sysreg.s
+            grep -E "^[[:space:]]*mrs x9, $reg[[:space:]]*$" build/aarch64-nzcv/sysreg.s
           done
           aarch64-linux-gnu-gcc -c -x assembler build/aarch64-nzcv/sysreg.s \
             -o build/aarch64-nzcv/sysreg.mini.o
