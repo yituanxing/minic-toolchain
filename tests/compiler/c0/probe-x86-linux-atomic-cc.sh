@@ -61,8 +61,11 @@ int main(void) {
 }
 EOF
 "$minic" --target=x86_64-linux -S "$work/atomic.i" -o "$work/atomic.s"
-for op in 'lock; decl' 'lock; incl' 'lock; decq' 'lock; incq' 'sete %al'; do
- grep -Fq "$op" "$work/atomic.s"
+for op in 'lock; decl' 'lock; incl' 'lock; decq' 'lock; incq' 'sete %r9b'; do
+ if ! grep -Fq "$op" "$work/atomic.s"; then
+  echo "FAIL x86 Linux atomic ZF missing exact physical opcode: $op" >&2
+  exit 1
+ fi
 done
 cc -O0 -no-pie "$work/main.c" "$work/gnu.c" -x assembler "$work/atomic.s" -o "$work/oracle"
 set +e
