@@ -22,6 +22,8 @@ verify_identity() {
   grep -Fxq 'CONFIG_EFI_STUB=y' "$out/.config" || die 'EFI_STUB_disabled'
   grep -Fxq 'CONFIG_EFI_ZBOOT=y' "$out/.config" || die 'EFI_ZBOOT_disabled'
   grep -Fxq 'CONFIG_KALLSYMS=y' "$out/.config" || die 'KALLSYMS_disabled'
+  grep -Fxq 'CONFIG_BUILDTIME_TABLE_SORT=y' "$out/.config" ||
+    die 'unexpected_Kbuild_sorttable_configuration'
   grep -q 'scripts/link-vmlinux.sh' "$out/.vmlinux.cmd" || die 'no_Kbuild_link_vmlinux_record'
   grep -q -- '-m elf64loongarch' "$out/.vmlinux.cmd" || die 'wrong_GNU_final_emulation'
   readelf -W -h "$out/vmlinux" | grep -Eq 'Machine:.*LoongArch' || die 'wrong_GNU_kernel_machine'
@@ -33,6 +35,7 @@ freeze_inputs() {
   (cd "$out" && sha256sum \
     .config .vmlinux.cmd vmlinux vmlinux.a .vmlinux.export.o \
     init/version-timestamp.o .tmp_vmlinux.kallsyms2.o \
+    scripts/sorttable \
     drivers/firmware/efi/libstub/lib.a \
     arch/loongarch/kernel/vmlinux.lds \
     arch/loongarch/boot/vmlinux.efi arch/loongarch/boot/vmlinux.bin \
@@ -52,18 +55,18 @@ verify_inputs() {
     die 'frozen_Kbuild_inputs_mutated'
 }
 
-extract_rela_dyn() {
-  local elf=$1 output=$2 offset_hex size_hex
+extract_section() {
+  local elf=$1 section=$2 output=$3 offset_hex size_hex
   # readelf fields are stable relative to the section name even when its
   # numbered prefix is printed as `[ 23]` rather than `[23]`.
   read -r offset_hex size_hex < <(
     readelf -W -S "$elf" |
-      awk '{for (i=1;i<=NF;i++) if ($i==".rela.dyn") {
+      awk -v section="$section" '{for (i=1;i<=NF;i++) if ($i==section) {
         print $(i+3), $(i+4); exit
       }}')
   [[ $offset_hex =~ ^[[:xdigit:]]+$ && $size_hex =~ ^[[:xdigit:]]+$ ]] ||
-    die "missing_rela_dyn=$elf"
-  (( 16#$size_hex > 0 )) || die 'empty_rela_dyn'
+    die "missing_section=$elf:$section"
+  (( 16#$size_hex > 0 )) || die "empty_section=$section"
   dd if="$elf" of="$output" bs=1M iflag=skip_bytes,count_bytes \
     skip="$((16#$offset_hex))" count="$((16#$size_hex))" status=none
 }
@@ -103,25 +106,54 @@ link_final() {
   printf '%s\t%s\n' "$elapsed" "$rc" >"$ev/final-vmlinux-timing.tsv"
   [[ $rc == 0 ]] || { tail -n 60 "$ev/final-vmlinux.stderr" >&2; die "final_link_rc=$rc"; }
   need "$ev/vmlinux.minild"
+  # Linux scripts/link-vmlinux.sh runs scripts/sorttable after the last LD
+  # invocation when CONFIG_BUILDTIME_TABLE_SORT=y. It sorts __ex_table and
+  # clears main_extable_sort_needed. The frozen GNU final vmlinux has this
+  # post-link processing; omitting it creates a one-byte .init.data diff
+  # and an unsorted __ex_table, even though MiniLD emitted correct bytes.
+  # Reuse the SHA-frozen original *host tool* (not a GNU linker or compiler).
+  need_exec "$out/scripts/sorttable"
+  sha256sum "$ev/vmlinux.minild" >"$ev/final-vmlinux-before-sorttable.sha256"
+  "$out/scripts/sorttable" "$ev/vmlinux.minild" \
+    >"$ev/sorttable.stdout" 2>"$ev/sorttable.stderr" || {
+      cat "$ev/sorttable.stderr" >&2
+      die 'original_GNU_Kbuild_sorttable_failed'
+    }
+  sha256sum "$ev/vmlinux.minild" >"$ev/final-vmlinux-after-sorttable.sha256"
   python3 "$repo/tools/ci/minild-final-elf-audit.py" \
     "$out/vmlinux" "$ev/vmlinux.minild" \
     >"$ev/final-vmlinux-audit.stdout" 2>"$ev/final-vmlinux-audit.stderr" || {
       cat "$ev/final-vmlinux-audit.stderr" >&2
       die 'GNU_vs_MiniLD_final_ELF_geometry'
     }
-  # The LoongArch PIE kernel consumes its relocation payload at boot. A
-  # correct .rela.dyn size/address is insufficient: compare *all* 2.7 MiB
-  # of real relocations with GNU byte for byte, not just sampled entries.
-  extract_rela_dyn "$out/vmlinux" "$ev/rela.dyn.gnu.bin"
-  extract_rela_dyn "$ev/vmlinux.minild" "$ev/rela.dyn.minild.bin"
-  cmp -s "$ev/rela.dyn.gnu.bin" "$ev/rela.dyn.minild.bin" ||
-    die 'GNU_vs_MiniLD_rela_dyn_byte_mismatch'
-  sha256sum "$ev/rela.dyn.gnu.bin" "$ev/rela.dyn.minild.bin" \
-    >"$ev/rela-dyn-byte-exact.sha256"
+  # Beyond addresses/sizes, verify all relocation bytes and both GNU
+  # Kbuild-sorttable-affected sections against the real final GNU vmlinux.
+  # .notes build-id/order may legitimately differ, and is not a boot oracle.
+  local section label
+  for section in .rela.dyn __ex_table .init.data; do
+    label=${section#.}
+    extract_section "$out/vmlinux" "$section" "$ev/$label.gnu.bin"
+    extract_section "$ev/vmlinux.minild" "$section" "$ev/$label.minild.bin"
+    cmp -s "$ev/$label.gnu.bin" "$ev/$label.minild.bin" ||
+      die "GNU_vs_MiniLD_section_byte_mismatch=$section"
+    sha256sum "$ev/$label.gnu.bin" "$ev/$label.minild.bin" \
+      >"$ev/$label-byte-exact.sha256"
+  done
+  # GNU and MiniLD currently place the GNU build-id note in a different
+  # order inside .notes, and SHA-1 build IDs need not match. The two Linux
+  # notes (func and OPEN) *must* retain their identical ABI payloads.
+  readelf -W -n "$out/vmlinux" >"$ev/notes.gnu.txt"
+  readelf -W -n "$ev/vmlinux.minild" >"$ev/notes.minild.txt"
+  grep -E '^[[:space:]]*Linux[[:space:]]' "$ev/notes.gnu.txt" |
+    sort >"$ev/linux-notes.gnu.txt"
+  grep -E '^[[:space:]]*Linux[[:space:]]' "$ev/notes.minild.txt" |
+    sort >"$ev/linux-notes.minild.txt"
+  cmp -s "$ev/linux-notes.gnu.txt" "$ev/linux-notes.minild.txt" ||
+    die 'GNU_vs_MiniLD_Linux_note_semantics'
   verify_inputs "$out" "$ev"
   sha256sum "$ev/vmlinux.minild" >"$ev/final-vmlinux.sha256"
   cat "$ev/final-vmlinux-audit.stdout"
-  echo "MINILD_LOONG_FINAL=PASS frozen_GNU_Kbuild=true linker=MiniLD elapsed_ms=$elapsed GNU_exact_ALLOC_geometry=true GNU_rela_dyn_byte_exact=true runtime=NOT_RUN"
+  echo "MINILD_LOONG_FINAL=PASS frozen_GNU_Kbuild=true linker=MiniLD original_Kbuild_sorttable=true elapsed_ms=$elapsed GNU_exact_ALLOC_geometry=true GNU_rela_dyn_ex_table_init_data_byte_exact=true GNU_Linux_note_semantics=exact runtime=NOT_RUN"
 }
 
 image() {
@@ -136,6 +168,7 @@ image() {
   verify_inputs "$out" "$ev"
   sha256sum --quiet --check "$ev/final-vmlinux.sha256" || die 'MiniLD_vmlinux_changed'
   command -v loongarch64-linux-gnu-objcopy >/dev/null || die 'missing_Loong_GNU_objcopy'
+  command -v loongarch64-linux-gnu-ld >/dev/null || die 'missing_Loong_GNU_ld_oracle'
   command -v gzip >/dev/null || die 'missing_gzip'
   command -v truncate >/dev/null || die 'missing_truncate'
   # The recorded Kbuild commands are the oracle for each binary stage.
@@ -172,6 +205,19 @@ image() {
     "$out/drivers/firmware/efi/libstub/lib.a"
     -o arch/loongarch/boot/vmlinuz.efi.elf
   )
+  # Before attributing a zboot failure to MiniLD, link the *same* newly
+  # compressed input object, original GNU zboot-header.o and libstub archive
+  # with the target GNU BFD linker. No new C or assembly is built here.
+  local gnu_zboot=("${zboot[@]}") gnu_rc=0
+  gnu_zboot[${#gnu_zboot[@]}-1]=arch/loongarch/boot/vmlinuz.efi.gnu.elf
+  printf '%s\0' "${gnu_zboot[@]}" >"$ev/zboot.gnu-argv0"
+  (cd "$staging" && timeout 240s loongarch64-linux-gnu-ld "${gnu_zboot[@]}") \
+    >"$ev/zboot.gnu.stdout" 2>"$ev/zboot.gnu.stderr" || gnu_rc=$?
+  [[ $gnu_rc == 0 ]] || {
+    tail -n 80 "$ev/zboot.gnu.stderr" >&2
+    die "GNU_zboot_control_link_rc=$gnu_rc"
+  }
+  need "$staging/arch/loongarch/boot/vmlinuz.efi.gnu.elf"
   printf '%s\0' "${zboot[@]}" >"$ev/zboot.minild-argv0"
   started=$(date +%s%3N)
   (cd "$staging" && timeout 240s "$mini" "${zboot[@]}") \
@@ -180,18 +226,41 @@ image() {
   printf '%s\t%s\n' "$elapsed" "$rc" >"$ev/zboot-timing.tsv"
   [[ $rc == 0 ]] || { tail -n 80 "$ev/zboot.stderr" >&2; die "MiniLD_zboot_link_rc=$rc"; }
   need "$staging/arch/loongarch/boot/vmlinuz.efi.elf"
+  if ! python3 "$repo/tools/ci/minild-final-elf-audit.py" \
+      "$staging/arch/loongarch/boot/vmlinuz.efi.gnu.elf" \
+      "$staging/arch/loongarch/boot/vmlinuz.efi.elf" \
+      >"$ev/zboot-gnu-vs-minild-audit.stdout" \
+      2>"$ev/zboot-gnu-vs-minild-audit.stderr"; then
+    cat "$ev/zboot-gnu-vs-minild-audit.stderr" >&2
+    die 'GNU_vs_MiniLD_same_input_zboot_ELF_geometry'
+  fi
+  cat "$ev/zboot-gnu-vs-minild-audit.stdout"
   loongarch64-linux-gnu-objcopy -O binary \
     "$staging/arch/loongarch/boot/vmlinuz.efi.elf" \
     "$staging/arch/loongarch/boot/vmlinuz.efi"
+  loongarch64-linux-gnu-objcopy -O binary \
+    "$staging/arch/loongarch/boot/vmlinuz.efi.gnu.elf" \
+    "$staging/arch/loongarch/boot/vmlinuz.efi.gnu"
   need "$staging/arch/loongarch/boot/vmlinuz.efi"
+  need "$staging/arch/loongarch/boot/vmlinuz.efi.gnu"
   readelf -W -h "$staging/arch/loongarch/boot/vmlinuz.efi.elf" \
     >"$ev/zboot-elf-header.txt"
   grep -Eq 'Machine:.*LoongArch' "$ev/zboot-elf-header.txt" || die 'wrong_zboot_machine'
-  sha256sum "$staging/arch/loongarch/boot/"{vmlinux.efi,vmlinux.bin,vmlinuz,vmlinuz.o,vmlinuz.efi.elf,vmlinuz.efi} \
+  sha256sum "$staging/arch/loongarch/boot/"{vmlinux.efi,vmlinux.bin,vmlinuz,vmlinuz.o,vmlinuz.efi.gnu.elf,vmlinuz.efi.elf,vmlinuz.efi.gnu,vmlinuz.efi} \
     >"$ev/minild-image-stage.sha256"
+  local byte_equal=false
+  if cmp -s "$staging/arch/loongarch/boot/vmlinuz.efi.gnu" \
+            "$staging/arch/loongarch/boot/vmlinuz.efi"; then
+    byte_equal=true
+  fi
+  printf 'GNU_zboot_same_input=true\nGNU_vs_MiniLD_elf_geometry=exact\nGNU_vs_MiniLD_EFI_binary_byte_equal=%s\nGNU_EFI_bytes=%s\nMiniLD_EFI_bytes=%s\n' \
+    "$byte_equal" \
+    "$(stat -c %s "$staging/arch/loongarch/boot/vmlinuz.efi.gnu")" \
+    "$(stat -c %s "$staging/arch/loongarch/boot/vmlinuz.efi")" \
+    >"$ev/zboot-same-input-differential.txt"
   sha256sum "$source/drivers/firmware/efi/libstub/zboot.lds" >"$ev/zboot-script.sha256"
   verify_inputs "$out" "$ev"
-  echo "MINILD_LOONG_IMAGE=PASS final_vmlinux=MiniLD EFI_zboot=MiniLD GNU_objcopy=true kernel_C_compiles=0 kernel_AS_compiles=0 zboot_ms=$elapsed image=$staging/arch/loongarch/boot/vmlinuz.efi QEMU=NOT_RUN"
+  echo "MINILD_LOONG_IMAGE=PASS final_vmlinux=MiniLD EFI_zboot=MiniLD GNU_same_input_zboot_ELF_geometry=exact EFI_binary_byte_equal=$byte_equal GNU_objcopy=true kernel_C_compiles=0 kernel_AS_compiles=0 zboot_ms=$elapsed image=$staging/arch/loongarch/boot/vmlinuz.efi QEMU=NOT_RUN"
 }
 
 [[ $# -ge 1 ]] || die 'usage=link_or_image'

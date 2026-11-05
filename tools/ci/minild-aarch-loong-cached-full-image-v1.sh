@@ -140,6 +140,23 @@ guard_ld() {
     tail -n 50 "$MINILD_TWO_EV/$out.stderr" >&2 || true
     die "minild_link_failed=$out status=$rc"
   fi
+  if [[ $MINILD_TWO_ARCH == aarch64 && $out == .tmp_vmlinux.kallsyms1 ]]; then
+    # Only the frozen first pass shares GNU's exact symbol inputs. Once
+    # MiniLD regenerates kallsyms, five BFD-specific e843419@ names are
+    # absent and a smaller, valid compressed symbol table changes layout.
+    sha256sum --quiet -c "$MINILD_TWO_EV/GNU-first-A53-golden.sha256" ||
+      die AArch_original_GNU_firstlink_or_map_changed
+    python3 "$repo/tools/ci/minild-final-elf-audit.py" \
+      "$MINILD_TWO_EV/GNU-original-kallsyms1" "$MINILD_TWO_OUT/$out" \
+      >"$MINILD_TWO_EV/AArch-first-GNU-Mini-ELF-audit.txt" ||
+      die AArch_frozen_firstlink_GNU_structural_differential
+    python3 "$repo/tools/ci/minild-aarch64-a53-843419-semantic-oracle.py" \
+      "$MINILD_TWO_EV/GNU-original-kallsyms1" "$MINILD_TWO_OUT/$out" \
+      "$MINILD_TWO_EV/GNU-original-System.map" \
+      >"$MINILD_TWO_EV/AArch-first-A53-semantic-audit.txt" ||
+      die AArch_Cortex_A53_patch_semantics_mismatch
+    tail -n 1 "$MINILD_TWO_EV/AArch-first-A53-semantic-audit.txt"
+  fi
   echo "$out" >>"$MINILD_TWO_EV/link-guard.log"
   sha256sum "$MINILD_TWO_OUT/$out" >"$MINILD_TWO_EV/$out.sha256"
 }
@@ -162,7 +179,10 @@ verify_golden() {
     file "$line"
   done
   case "$arch" in
-    aarch64) file "$out/arch/arm64/boot/Image" ;;
+    aarch64)
+      file "$out/arch/arm64/boot/Image"
+      file "$out/.tmp_vmlinux.kallsyms1"
+      file "$out/System.map" ;;
     loongarch64)
       file "$out/arch/loongarch/boot/vmlinuz.efi"
       file "$out/arch/loongarch/boot/zboot-header.o"
@@ -197,6 +217,16 @@ PY
   sed '/  \.\/\.tmp_vmlinux\.kallsyms[123]\.o$/d' "$manifest" \
     >"$ev/immutable-gnu-objects.sha256"
   cp "$capture/first-kallsyms1.argv0" "$ev/frozen-first-kallsyms1.argv0"
+  if [[ $arch == aarch64 ]]; then
+    # Original link-vmlinux.sh overwrites both paths. Preserve the authentic
+    # GNU firstpass ELF and named A53 islands for the MiniLD-first comparison.
+    cp --reflink=auto "$out/.tmp_vmlinux.kallsyms1" \
+      "$ev/GNU-original-kallsyms1"
+    cp "$out/System.map" "$ev/GNU-original-System.map"
+    sha256sum "$ev/GNU-original-kallsyms1" \
+      "$ev/GNU-original-System.map" \
+      >"$ev/GNU-first-A53-golden.sha256"
+  fi
   (cd "$out" && sha256sum init/version-timestamp.o) >"$ev/version-timestamp.sha256"
   sha256sum "$out/vmlinux.a" "$out/$target_lds" \
     "$out/drivers/firmware/efi/libstub/lib.a" >"$ev/immutable-extra-inputs.sha256"
@@ -306,6 +336,41 @@ full_link() {
   "$prefix-readelf" -W -h "$out/vmlinux" >"$ev/MiniLD-vmlinux-elf-header.txt"
   grep -q "Machine:.*$machine" "$ev/MiniLD-vmlinux-elf-header.txt" ||
     die final_image_wrong_architecture
+  # The GNU final contains an architecture-specific kallsyms symbol blob.
+  # GNU's five locally named AArch e843419 stubs intentionally produce a
+  # different symbol list from MiniLD's equally valid unnamed stubs, so
+  # exact final SHF_ALLOC byte geometry is not a meaningful QEMU gate.
+  # Preserve independent strict ELF validation: entrypoint, PT_LOAD backing,
+  # VMA/file congruence, section-to-LOAD coverage, ABI flags and code owners.
+  python3 - "$repo/tools/ci/minild-final-elf-audit.py" \
+    "$out/vmlinux" "$arch" >"$ev/final-ELF-safety-audit.txt" <<'PY' ||
+    die final_MiniLD_ELF_mapping_or_ABI_invalid
+import runpy
+import sys
+
+api = runpy.run_path(sys.argv[1])
+identity, sections, loads, entry = api['read_elf'](sys.argv[2])
+expected = {
+    'aarch64': (2, 1, 3, 183, 0, 0xffff800080000000),
+    'loongarch64': (2, 1, 2, 258, 65, 0x90000000011e0000),
+}[sys.argv[3]]
+if identity != expected:
+    raise SystemExit('MINILD_TWOARCH_ELF_SAFETY=FAIL wrong_GNU_pinned_identity '
+                     f'got={identity!r} expected={expected!r}')
+alloc = list(sections.elements())
+if len(alloc) < 20:
+    raise SystemExit('MINILD_TWOARCH_ELF_SAFETY=FAIL incomplete_ALLOC_sections')
+for section_name in ('.head.text', '.text'):
+    matches = [s for s in alloc if s[0] == section_name]
+    if len(matches) != 1 or matches[0][1] != 1 or not matches[0][2] & 4:
+        raise SystemExit('MINILD_TWOARCH_ELF_SAFETY=FAIL invalid_executable_section '
+                         + section_name)
+print('MINILD_TWOARCH_ELF_SAFETY=PASS '
+      f'arch={sys.argv[3]} alloc={len(alloc)} PT_LOAD={loads} '
+      'ABI_and_entry=exact independently_mapped_alloc_sections=true '
+      'GNU_final_byte_identity=NOT_REQUIRED QEMU=NOT_RUN')
+PY
+  cat "$ev/final-ELF-safety-audit.txt"
   sha256sum "$out/vmlinux" "$out/System.map" >"$ev/minild-final-vmlinux.sha256"
   printf 'mini_sha=%s\nlinux_sha=%s\n' "$(digest "$mini")" "$kernel_sha" \
     >"$ev/full-link.ok"

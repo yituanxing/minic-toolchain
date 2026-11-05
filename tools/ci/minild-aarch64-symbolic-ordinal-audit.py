@@ -11,6 +11,7 @@ from the final .symtab, which has unrelated indices.
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 import pathlib
 import struct
 
@@ -73,6 +74,19 @@ def dynsym(path: pathlib.Path):
     return result
 
 
+def allocated_ranges(path: pathlib.Path):
+    _blob, _sections, named = elf_sections(path)
+    return [(name, section[3], section[3] + section[5])
+            for name, section in named.items()
+            if section[2] & 2 and section[5] and section[3]]
+
+
+def allocated_owner(ranges, address):
+    address &= (1 << 64) - 1
+    return next((name for name, start, end in ranges
+                 if start <= address < end), "[outside-alloc]")
+
+
 def bfd_link_hash(name: str):
     """BFD's symbol-name hash (bfd/hash.c), including its length mix."""
     mask = (1 << 64) - 1
@@ -93,11 +107,13 @@ def main():
     parser.add_argument("--mini", type=pathlib.Path)
     parser.add_argument("--require-mini-parity", action="store_true",
                         help="fail until MiniLD symbolic r_sym/type matches GNU exactly")
+    parser.add_argument("--require-got-parity", action="store_true",
+                        help="fail if the kernel GOT RELATIVE slots differ")
     parser.add_argument("--bfd-buckets", type=int,
                         help="BFD's link-hash table bucket count, if proven from the input")
     args = parser.parse_args()
-    if args.require_mini_parity and args.mini is None:
-        parser.error("--require-mini-parity requires --mini")
+    if (args.require_mini_parity or args.require_got_parity) and args.mini is None:
+        parser.error("parity requirements need --mini")
     baseline = [record for record in rela(args.gnu_baseline) if record[1]]
     shadow = [record for record in rela(args.gnu_shadow) if record[1]]
     symbols = dynsym(args.gnu_shadow)
@@ -140,12 +156,68 @@ def main():
         print(f"AARCH64_BFD_HASH_ORDER=PASS buckets={args.bfd_buckets} "
               f"symbols={len(observed)}")
     if args.mini is not None:
-        mini = [record for record in rela(args.mini) if record[1]]
+        gnu_rela = rela(args.gnu_baseline)
+        mini_rela = rela(args.mini)
+        mini = [record for record in mini_rela if record[1]]
         identity = [(sym, typ) for _place, sym, typ, _a in baseline]
         observed = [(sym, typ) for _place, sym, typ, _a in mini]
         status = "PASS" if identity == observed else "DIFF"
         print(f"AARCH64_MINILD_SYMBOLIC_ORDINAL={status} "
               f"gnu={len(identity)} mini={len(observed)}")
+        if len(gnu_rela) == len(mini_rela):
+            mismatches = [index for index, (left, right) in enumerate(
+                zip(gnu_rela, mini_rela)) if left != right]
+            print(f"AARCH64_MINILD_RELA_DIFFERENCES total={len(gnu_rela)} "
+                  f"mismatches={len(mismatches)} "
+                  f"first={mismatches[0] if mismatches else 'none'} "
+                  f"last={mismatches[-1] if mismatches else 'none'}")
+            fields = ("place", "dynindex", "kind", "addend")
+            counts = [sum(left[k] != right[k] for left, right in
+                          zip(gnu_rela, mini_rela)) for k in range(4)]
+            print("AARCH64_MINILD_RELA_FIELD_DIFF " +
+                  " ".join(f"{field}={count}" for field, count in zip(fields, counts)))
+            for index in mismatches[:5]:
+                print(f"AARCH64_MINILD_RELA_SAMPLE index={index} "
+                      f"gnu={gnu_rela[index]} mini={mini_rela[index]}")
+            addend_deltas = Counter(left[3] - right[3] for left, right in
+                                    zip(gnu_rela, mini_rela) if left[3] != right[3])
+            print("AARCH64_MINILD_RELA_ADDEND_DELTAS " +
+                  ",".join(f"{delta}:{count}" for delta, count in
+                           addend_deltas.most_common(12)))
+            gnu_sections = allocated_ranges(args.gnu_baseline)
+            mini_sections = allocated_ranges(args.mini)
+            gnu_got = [(place, addend) for place, sym, kind, addend in gnu_rela
+                       if sym == 0 and kind == 1027 and
+                       allocated_owner(gnu_sections, place) == ".got"]
+            mini_got = [(place, addend) for place, sym, kind, addend in mini_rela
+                        if sym == 0 and kind == 1027 and
+                        allocated_owner(mini_sections, place) == ".got"]
+            got_parity = gnu_got == mini_got
+            print(f"AARCH64_MINILD_GOT_RELATIVE_PARITY="
+                  f"{'PASS' if got_parity else 'DIFF'} "
+                  f"gnu={len(gnu_got)} mini={len(mini_got)}")
+            if args.require_got_parity and not got_parity:
+                raise ValueError("MiniLD GOT RELATIVE slots differ from GNU")
+            addend_owners = Counter((allocated_owner(gnu_sections, left[3]),
+                                     allocated_owner(mini_sections, right[3]),
+                                     left[3] - right[3])
+                                    for left, right in zip(gnu_rela, mini_rela)
+                                    if left[3] != right[3])
+            for (gnu_section, mini_section, delta), count in addend_owners.most_common(12):
+                print(f"AARCH64_MINILD_ADDEND_OWNER gnu={gnu_section} "
+                      f"mini={mini_section} delta={delta} count={count}")
+            for index, (left, right) in enumerate(zip(gnu_rela, mini_rela)):
+                if left[0] != right[0]:
+                    print(f"AARCH64_MINILD_PLACE_DIFF index={index} "
+                          f"gnu=0x{left[0]:x} "
+                          f"gnu_owner={allocated_owner(gnu_sections, left[0])} "
+                          f"mini=0x{right[0]:x} "
+                          f"mini_owner={allocated_owner(mini_sections, right[0])}")
+        else:
+            print(f"AARCH64_MINILD_RELA_DIFFERENCES gnu={len(gnu_rela)} "
+                  f"mini={len(mini_rela)}")
+            if args.require_got_parity:
+                raise ValueError("GNU/MiniLD RELA lengths differ; cannot certify GOT parity")
         if args.require_mini_parity and identity != observed:
             raise ValueError("MiniLD symbolic r_sym/type differs from GNU")
     print("AARCH64_GNU_SHADOW_ORDINAL=PASS")
