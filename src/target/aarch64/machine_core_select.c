@@ -2158,6 +2158,92 @@ static bool a64_linux_scalar_lse_source(A64CoreSelection *sel,
             9U, bits, 12U, 0U, true, false);
 }
 
+/* Linux __ll_sc__cmpxchg_case_* is one sixteen-member LL/SC family.
+ * Each source-qualified form retains its original retry loop, ordering,
+ * physical status register and GNU 8/16/32/64-bit register spellings.
+ * Source operands: tmp/oldval outputs, +Q memory, expected old, new.
+ * No legacy direct assembler path is involved. */
+static bool a64_linux_cmpxchg_source(A64CoreSelection *sel,
+    const MinicCoreInstruction *ins, const MinicCoreInlineAsm *source) {
+    static const char *const names[5] = {
+        "tmp", "oldval", "v", "old", "new"
+    };
+    static const unsigned int regs[5] = {13U, 9U, 10U, 11U, 12U};
+    static const uint32_t stores[4] = {
+        MINIC_A64_MACHINE_STRB, MINIC_A64_MACHINE_STRH,
+        MINIC_A64_MACHINE_STR_W, MINIC_A64_MACHINE_STR_X
+    };
+    const MinicCoreFunction *fn = sel->ctx->fn;
+    const MinicCoreStructuredInlineAsmOperand *ops =
+        ins->value.structured_inline_asm.operands;
+    const unsigned int form = aarch64_linux_cmpxchg_form(
+        source->template_text, source->template_length, true) ?
+        aarch64_linux_cmpxchg_form(source->template_text,
+            source->template_length, true) :
+        aarch64_linux_cmpxchg_form(source->template_text,
+            source->template_length, false);
+    const size_t width = aarch64_linux_cmpxchg_width(form);
+    const unsigned int mode = form == 0U ? 0U : (form - 1U) % 4U;
+    const unsigned int bits = width == 8U ? 64U : 32U;
+    MinicMachineOperand bindings[5];
+    size_t i;
+    if (source->target_machine_form_id != AARCH64_MACHINE_ASM_CMPXCHG ||
+        form == 0U || source->target_machine_form_variant != form ||
+        source->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
+        !source->is_volatile || source->is_goto ||
+        source->has_memory_clobber != (mode != 0U) ||
+        source->register_clobber_count != 0U ||
+        source->resolved_immediate_count != 0U ||
+        source->symbol_reference_count != 0U ||
+        source->deferred_immediate_symbol != NULL ||
+        ins->result != MINIC_CORE_VALUE_INVALID ||
+        !minic_core_function_type_is_kind(fn, ins->core_type_id,
+            MINIC_CORE_TYPE_VOID) ||
+        ins->value.structured_inline_asm.operand_count != 5U ||
+        ops == NULL || sel->ctx->machine_frame->has_dynamic_stack ||
+        !aarch64_asm_core_integer(fn, ops[0].value, true, 8U, -1) ||
+        !aarch64_asm_core_integer(fn, ops[1].value, true, width, -1) ||
+        !aarch64_asm_core_integer(fn, ops[2].value, true, width, -1) ||
+        !aarch64_asm_core_integer(fn, ops[3].value, false, 8U, -1) ||
+        !aarch64_asm_core_integer(fn, ops[4].value, false, width, -1))
+        return false;
+    for (i = 0U; i < 5U; ++i) {
+        const MinicCoreStructuredInlineAsmOperandKind kind =
+            i < 2U ? MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
+            i == 2U ? MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE :
+                      MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+        const unsigned int access = i < 2U ?
+            MINIC_MACHINE_REGISTER_WRITE : MINIC_MACHINE_REGISTER_READ;
+        if (ops[i].operand_index != i || ops[i].value >= fn->value_count ||
+            ops[i].kind != kind || ops[i].has_fixed_register_binding ||
+            ops[i].has_tied_output || ops[i].physical_read_write)
+            return false;
+        bindings[i] = a64_gp(regs[i], 64U, access);
+        bindings[i].asm_name = (char *)names[i];
+        bindings[i].asm_constraint = i < 2U ? "=&r" :
+            i == 2U ? "+Q" :
+            i == 3U ? (width == 8U ? "Lr" : "Kr") : "r";
+    }
+    /* Materialize every input before the exclusive loop so its physical
+     * registers cannot be overwritten during Core-address resolution. */
+    if (!a64_load_core(sel, ops[2].value, 10U, 64U) ||
+        !a64_load_core(sel, ops[3].value, 11U, 64U) ||
+        !a64_load_core(sel, ops[4].value, 12U, bits) ||
+        !minic_machine_builder_emit_core_source_asm(&sel->builder, source,
+            MINIC_MACHINE_EFFECT_MEMORY_READ |
+            MINIC_MACHINE_EFFECT_MEMORY_WRITE,
+            bindings, 5U, NULL, 0U, false, false))
+        return false;
+    /* Early-clobber tmp is a true unsigned-long output; oldval is exactly
+     * the operand's C width, including byte/halfword stores. */
+    return a64_load_core(sel, ops[0].value, 11U, 64U) &&
+        a64_memory_register(sel, MINIC_A64_MACHINE_STR_X, false,
+            13U, 64U, 11U, 0U, true, false) &&
+        a64_load_core(sel, ops[1].value, 11U, 64U) &&
+        a64_memory_register(sel, stores[(form - 1U) / 4U], false,
+            9U, bits, 11U, 0U, true, false);
+}
+
 /* Signed decrement-unless-negative is an indivisible GNU CASAL retry loop,
  * not a single pseudo-instruction. Keep the original 1b/2f local labels,
  * physical condition-code clobber and distinct +Q/ret/tmp operands. */
@@ -3367,6 +3453,8 @@ static bool a64_core_instruction(A64CoreSelection *sel,
         if (source->target_machine_form_id == AARCH64_MACHINE_ASM_RAW_IO_READ ||
             source->target_machine_form_id == AARCH64_MACHINE_ASM_RAW_IO_STORE)
             return a64_linux_raw_io_source(sel, ins, source);
+        if (source->target_machine_form_id == AARCH64_MACHINE_ASM_CMPXCHG)
+            return a64_linux_cmpxchg_source(sel, ins, source);
         if (source->target_machine_form_id == AARCH64_MACHINE_ASM_LSE_CASP128)
             return a64_linux_casp128_source(sel, ins, source);
         if (source->target_machine_form_id == AARCH64_MACHINE_ASM_LSE)

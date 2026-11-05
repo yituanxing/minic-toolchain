@@ -628,6 +628,15 @@ static bool x86_emit_source_asm(FILE *out,
                 writes[index] : exchanges[index],out) != EOF;
     }
     if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_PKRU) {
+        /* Source and MachineIR validate the exact byte sequence and
+         * EAX/ECX/EDX roles. Print only the two known CPU-state opcodes. */
+        const unsigned int form = instruction->source_asm_machine_form_variant;
+        if (form != 1U && form != 2U) return false;
+        return fputs(form == 1U ? "  .byte 0x0f,0x01,0xee\n" :
+            "  .byte 0x0f,0x01,0xef\n",out) != EOF;
+    }
+    if (instruction->source_asm_machine_form_id ==
             MINIC_X86_MACHINE_ASM_COUNTER) {
         const unsigned int form = minic_x86_64_linux_counter_form(
             instruction->source_asm_template,instruction->source_asm_length);

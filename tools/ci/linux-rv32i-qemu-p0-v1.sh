@@ -22,6 +22,7 @@ p1=${RV32I_QEMU_P1:-0}
 p2=${RV32I_QEMU_P2:-0}
 c11=${RV32I_QEMU_P2_CANONICAL11:-0}
 f18=${RV32I_QEMU_P2_FULL18:-0}
+gpu_diag=${RV32I_QEMU_GPU_DIAG:-0}
 shell=${RV32I_QEMU_SHELL:-0}
 [[ "$p2" == 0 || "$p2" == 1 ]] || {
   echo 'RV32I_QEMU_P2=FAIL invalid_p2_mode' >&2; exit 2;
@@ -47,6 +48,12 @@ fast=${RV32I_QEMU_FAST:-0}
 }
 [[ "$fast" == 0 || ( "$p1" == 1 && "$shell" == 0 ) ]] || {
   echo 'RV32I_QEMU=FAIL fast_requires_separate_p1_userspace_without_shell' >&2; exit 2;
+}
+[[ "$gpu_diag" == 0 || "$gpu_diag" == 1 ]] || {
+  echo 'RV32I_GPU_FEATURE_DIAG=FAIL invalid_mode' >&2; exit 2;
+}
+[[ "$gpu_diag" == 0 || ( "$p1" == 1 && "$p2" == 0 && "$c11" == 0 && "$f18" == 0 && "$shell" == 0 ) ]] || {
+  echo 'RV32I_GPU_FEATURE_DIAG=FAIL require_disjoint_p1_debug_profile' >&2; exit 2;
 }
 [[ "$shell" == 0 || "$shell" == 1 ]] || {
   echo 'RV32I_QEMU=FAIL invalid_shell_mode' >&2; exit 2;
@@ -76,11 +83,15 @@ if [[ "$p1" == 1 ]]; then
   # 1741/1741 MiniC Linux C-object Image is never recompiled or relinked.
   build_guest() {
     local source="$1" target="$2"
+    local extra_cflags=()
+    if [[ "$gpu_diag" == 1 && "$target" == runtime-gpu-feature ]]; then
+      extra_cflags=(-DRV32_GPU_ONLY)
+    fi
     riscv64-linux-gnu-gcc -S -O1 -march=rv32i -mabi=ilp32 \
       -nostdinc -nostdlib -ffreestanding -fno-builtin -fno-pic -fno-pie \
       -fno-stack-protector -fno-tree-loop-distribute-patterns \
       -fno-asynchronous-unwind-tables -fno-unwind-tables \
-      "$source" -o "$work/$target.S"
+      "${extra_cflags[@]}" "$source" -o "$work/$target.S"
     riscv64-linux-gnu-as -march=rv32i -mabi=ilp32 \
       "$work/$target.S" -o "$work/$target.o"
     # CRT-less _start intentionally has no GP initializer. GNU RISC-V
@@ -104,6 +115,9 @@ if [[ "$p1" == 1 ]]; then
   build_guest tests/external/linux/runtime_initramfs/rv32-init-raw.c init
   build_guest tests/external/linux/runtime_initramfs/rv32-p1-raw.c runtime-probe
   build_guest tests/external/linux/runtime_initramfs/rv32-sh-raw.c sh
+  if [[ "$gpu_diag" == 1 ]]; then
+    build_guest tests/external/linux/runtime_initramfs/rv32-p2-full18-raw.c runtime-gpu-feature
+  fi
   if [[ "$p2" == 1 ]]; then
     build_guest tests/external/linux/runtime_initramfs/rv32-p2-raw.c runtime-p2
     # Exact guest PC -> function proof, no host recompilation of the Image.
@@ -196,6 +210,9 @@ install -m 755 "$work/init" "$work/guest/init"
 if [[ "$p1" == 1 ]]; then
   install -m 755 "$work/runtime-probe" "$work/guest/bin/runtime-probe"
   install -m 755 "$work/sh" "$work/guest/bin/sh"
+  if [[ "$gpu_diag" == 1 ]]; then
+    install -m 755 "$work/runtime-gpu-feature" "$work/guest/bin/runtime-gpu-feature"
+  fi
   if [[ "$p2" == 1 ]]; then
     install -m 755 "$work/runtime-p2" "$work/guest/bin/runtime-p2"
     if [[ "$c11" == 1 ]]; then
@@ -286,6 +303,20 @@ if [[ "$p1" == 1 ]]; then
         echo "RV32I_QEMU_F18_MODULE=STAGED name=$name real_GNU_ELF32=true"
       done
     fi
+  if [[ "$gpu_diag" == 1 ]]; then
+    : "${RV32I_QEMU_GPU_MODULE_DIR:?gpu_diag requires exact-config GNU ELF32 virtio-gpu dependencies}"
+    gpu_dir=$(realpath "$RV32I_QEMU_GPU_MODULE_DIR")
+    mkdir -p "$work/guest/lib/modules"
+    for name in i2c-core backlight drm_panel_orientation_quirks drm \
+      drm_kms_helper drm_shmem_helper virtio_dma_buf virtio-gpu; do
+      src="$gpu_dir/$name.ko"
+      [[ -s "$src" ]] || { echo "RV32I_GPU_FEATURE_DIAG=FAIL missing_module=$name" >&2; exit 3; }
+      riscv64-linux-gnu-readelf -h "$src" | grep -Eq 'Class:[[:space:]]+ELF32'
+      riscv64-linux-gnu-readelf -p .modinfo "$src" |
+        grep -Eq 'vermagic=6\.6\.143 mod_unload riscv([[:space:]]|$)'
+      install -m 644 "$src" "$work/guest/lib/modules/$name.ko"
+    done
+    echo 'RV32I_GPU_FEATURE_DIAG=STAGED GNU_ELF32_modules=8'
   fi
 fi
 if [[ ! -e "$work/guest/dev/console" ]]; then
@@ -347,10 +378,14 @@ if [[ "$p1" == 1 && "$fast" != 1 ]]; then
   else append_p1=' minic_runtime=p1'; fi
 fi
 if [[ "$shell" == 1 ]]; then rdinit=/bin/sh; append_p1=; fi
+if [[ "$gpu_diag" == 1 ]]; then rdinit=/bin/runtime-gpu-feature; append_p1=; fi
 qemu_args=(qemu-system-riscv32 -M virt -cpu max -m 512M -smp 1
   -nographic -no-reboot -bios "$bios" -kernel "$image" -dtb "$dtb"
   -device "loader,file=$work/initramfs.cpio.gz,addr=$initrd_addr,force-raw=on"
   -append "console=ttyS0 earlycon=${RV32I_QEMU_EARLYCON:-sbi} loglevel=8 panic=-1 rdinit=$rdinit$append_p1")
+if [[ "$gpu_diag" == 1 ]]; then
+  qemu_args+=( -device virtio-gpu-pci )
+fi
 if [[ "$c11" == 1 ]]; then
   : "${RV32I_QEMU_P2_EXT4_IMAGE:?canonical11 requires a real ext4 disk fixture}"
   disk=$(realpath "$RV32I_QEMU_P2_EXT4_IMAGE")
@@ -450,6 +485,20 @@ elif [[ "$status" != 124 ]]; then
   tail -n 100 "$work/qemu-uart-serial.log" >&2
   tail -n 80 "$work/qemu-debug.log" >&2
   exit 1
+fi
+if [[ "$gpu_diag" == 1 ]]; then
+  grep -Fq 'RV32I_GPU_FEATURE_DIAG_BEGIN original_kernel_config=true' "$work/qemu-serial.log" || {
+    echo 'RV32I_GPU_FEATURE_DIAG=FAIL missing_real_guest_start' >&2
+    tail -n 80 "$work/qemu-serial.log" >&2
+    exit 1
+  }
+  grep -Fxq 'RV32I_GPU_FEATURE_DIAG=PASS' "$work/qemu-serial.log" || {
+    echo 'RV32I_GPU_FEATURE_DIAG=FAIL kernel_negotiation_or_real_module_binding' >&2
+    tail -n 80 "$work/qemu-serial.log" >&2
+    exit 1
+  }
+  echo "RV32I_GPU_FEATURE_DIAG=PASS image_sha256=$image_sha GNU_modules=8 guest_virtio_feature32=1 real_QEMU=1"
+  exit 0
 fi
 for pattern in \
     'Linux version 6\.6\.143' \

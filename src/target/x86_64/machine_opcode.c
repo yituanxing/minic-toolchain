@@ -2069,6 +2069,55 @@ static bool x86_source_counter_contract(const MinicMachineInstruction *ins) {
     return true;
 }
 
+/* Exact Linux PKRU byte forms have three fixed 32-bit GPR operands;
+ * neither form modifies FLAGS or directly reads/writes a C memory operand.
+ * The verifier independently rejects a missing, wider or swapped binding. */
+static bool x86_source_pkru_contract(const MinicMachineInstruction *ins) {
+    static const unsigned int read_registers[3] = {
+        MINIC_X86_REG_RAX, MINIC_X86_REG_RDX, MINIC_X86_REG_RCX
+    };
+    static const unsigned int write_registers[3] = {
+        MINIC_X86_REG_RAX, MINIC_X86_REG_RCX, MINIC_X86_REG_RDX
+    };
+    static const char *const read_constraints[3] = {"=a", "=d", "c"};
+    static const char *const write_constraints[3] = {"a", "c", "d"};
+    const unsigned int form = minic_x86_64_linux_pkru_form(
+        ins->source_asm_template,ins->source_asm_length);
+    const unsigned int *registers = form == 1U ?
+        read_registers : write_registers;
+    const char *const *constraints = form == 1U ?
+        read_constraints : write_constraints;
+    const size_t outputs = form == 1U ? 2U : 0U;
+    size_t i;
+    if (ins->source_asm_machine_form_id != MINIC_X86_MACHINE_ASM_PKRU ||
+        form < 1U || form > 2U ||
+        ins->source_asm_machine_form_variant != form ||
+        ins->operand_count != 3U || ins->operands == NULL ||
+        ins->implicit_count != 0U || ins->implicit != NULL ||
+        ins->source_asm_terminates_block ||
+        ins->source_asm_permits_fallthrough ||
+        ins->effects != (MINIC_MACHINE_EFFECT_SOURCE_ASM |
+            MINIC_MACHINE_EFFECT_VOLATILE) ||
+        !minic_x86_64_typed_machine_form_matches_template(
+            ins->source_asm_machine_form_id,
+            ins->source_asm_machine_form_variant,
+            ins->source_asm_template,ins->source_asm_length))
+        return false;
+    for (i = 0U; i < 3U; ++i) {
+        const MinicMachineOperand *op = &ins->operands[i];
+        if (op->kind != MINIC_MACHINE_OPERAND_REGISTER ||
+            op->asm_name != NULL || op->asm_constraint == NULL ||
+            strcmp(op->asm_constraint,constraints[i]) != 0 ||
+            op->value.physical.reg.bank != MINIC_MACHINE_REGISTER_GENERAL ||
+            op->value.physical.reg.number != registers[i] ||
+            op->value.physical.reg.width_bits != 32U ||
+            op->value.physical.access != (i < outputs ?
+                MINIC_MACHINE_REGISTER_WRITE : MINIC_MACHINE_REGISTER_READ))
+            return false;
+    }
+    return true;
+}
+
 static bool x86_source_msr_contract(const MinicMachineInstruction *ins) {
     unsigned int registers[4] = {0};
     const char *constraints[4] = {NULL};
@@ -2357,6 +2406,9 @@ bool minic_x86_64_machine_validate_source_asm(const MinicTargetInfo *target,
     if (instruction->source_asm_machine_form_id ==
             MINIC_X86_MACHINE_ASM_IP_HERE)
         return x86_source_ip_here_contract(instruction);
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_PKRU)
+        return x86_source_pkru_contract(instruction);
     if (instruction->source_asm_machine_form_id ==
             MINIC_X86_MACHINE_ASM_MSR)
         return x86_source_msr_contract(instruction);

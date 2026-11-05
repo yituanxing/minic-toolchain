@@ -30,6 +30,10 @@ typedef unsigned long long u64;
 #define SETSOCKOPT 208
 #define FINIT_MODULE 273
 #define EXIT 93
+#ifdef RV32_GPU_ONLY
+#define MOUNT 40
+#define REBOOT 142
+#endif
 #define AF_INET 2
 #define AF_NETLINK 16
 #define SOCK_DGRAM 2
@@ -458,6 +462,65 @@ static void device_tests(void){
  mark("nvme",bound_device("/sys/bus/pci/drivers/nvme",
        "/sys/bus/pci/devices","","nvme","nvme",0),-19);
 }
+#ifdef RV32_GPU_ONLY
+/* Diagnostic-only target: a real GNU virtio-gpu module and the original
+ * system's dev->features, without 11+7 unrelated P2 operations. */
+static int gpu_modules_only(void) {
+ static const char *const names[]={
+  "i2c-core","backlight","drm_panel_orientation_quirks",
+  "drm","drm_kms_helper","drm_shmem_helper","virtio_dma_buf","virtio-gpu"
+ };
+ for(word i=0;i<sizeof(names)/sizeof(names[0]);++i)
+  if(!load_module(names[i]))return 0;
+ return 1;
+}
+static int gpu_feature32(void) {
+ /* Full18 has virtio-blk before the GPU (virtio1), but this isolated GPU
+  * boot does not. Select the real GPU by its sysfs device ID 0x0010:
+  * hard-coding virtio1 would falsely reject a healthy GNU baseline. */
+ char device[]="/sys/bus/virtio/devices/virtio0/device";
+ char features[]="/sys/bus/virtio/devices/virtio0/features";
+ const word digit=sizeof("/sys/bus/virtio/devices/virtio")-1;
+ char data[80];
+ for(int i=0;i<10;i++) {
+  device[digit]=(char)('0'+i);
+  features[digit]=(char)('0'+i);
+  long fd=S4(OPENAT,AT_FDCWD,device,O_RDONLY,0);
+  if(bad(fd))continue;
+  long n=S3(READ,fd,data,sizeof(data));closefd(fd);
+  if(n<6 || data[0]!='0' || data[1]!='x' ||
+     data[2]!='0' || data[3]!='0' ||
+     data[4]!='1' || data[5]!='0')continue;
+  say("RV32I_GPU_FEATURE_DEVICE=");say(device);say("\n");
+  fd=S4(OPENAT,AT_FDCWD,features,O_RDONLY,0);
+  if(bad(fd))return -1;
+  n=S3(READ,fd,data,sizeof(data));closefd(fd);
+  say("RV32I_GPU_FEATURE_SYSFS=");say(features);say("\n");
+  if(n<33)return -1;
+  /* Linux sysfs virtio.c::features_show emits bit 0 before bit 63. */
+  return data[32]=='1' ? 1 : 0;
+ }
+ return -1;
+}
+__attribute__((noreturn,used)) void _start(void){
+ say("RV32I_GPU_FEATURE_DIAG_BEGIN original_kernel_config=true\n");
+ long p=S5(MOUNT,"proc","/proc","proc",0,0);
+ long s=S5(MOUNT,"sysfs","/sys","sysfs",0,0);
+ int loaded=(p==0||p==-16)&&(s==0||s==-16)&&gpu_modules_only();
+ int version=gpu_feature32();
+ int bound=bound_device("/sys/bus/virtio/drivers/virtio_gpu",
+    "/sys/bus/virtio/devices","virtio","drm","card",1);
+ say("RV32I_GPU_FEATURE_DIAG bit32=");
+ show_num(version);
+ say(" modules=");show_num(loaded);
+ say(" bound=");show_num(bound);
+ say("\n");
+ if(loaded&&version==1&&bound) say("RV32I_GPU_FEATURE_DIAG=PASS\n");
+ else say("RV32I_GPU_FEATURE_DIAG=FAIL\n");
+ (void)S4(REBOOT,0xfee1deadL,672274793L,0x4321fedcL,0);
+ for(;;)__asm__ volatile("nop");
+}
+#else
 __attribute__((noreturn,used)) void _start(void){
  say("RV32I_P2_F18_BEGIN canonical_remaining=7\n");
  if(!modules()){
@@ -473,3 +536,5 @@ __attribute__((noreturn,used)) void _start(void){
  (void)S1(EXIT,(passed==7&&failed==0)?0:1);
  for(;;)__asm__ volatile("nop");
 }
+
+#endif /* RV32_GPU_ONLY */

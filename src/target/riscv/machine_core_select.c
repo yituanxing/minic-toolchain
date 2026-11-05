@@ -2010,11 +2010,21 @@ static bool rv_core_pointer_offset(RvCoreSelection *sel,
     bool index_signed, index_pointer;
     if (!minic_riscv_plan_pointer_scale(stride, &scale) ||
         (sel->xlen == 32U && stride > (size_t)UINT32_MAX) ||
-        ins->value.pointer_offset.index >= fn->value_count ||
-        !rv_type(sel,
+        ins->value.pointer_offset.index >= fn->value_count) return false;
+    /* Pointer arithmetic is an XLEN-sized address operation. For a Core
+     * integer index wider than XLEN, its low word fully determines the
+     * scaled byte displacement modulo 2^XLEN, including negative indices.
+     * Use the existing 2*XLEN integer SSA representation without narrowing
+     * the Core type or enabling a target-specific C conversion path. */
+    if (!rv_type(sel,
             fn->values[ins->value.pointer_offset.index].core_type_id,
-            &index_bytes, &index_signed, &index_pointer) || index_pointer ||
-        !rv_load(sel, ins->value.pointer_offset.base, RV_T0)) return false;
+            &index_bytes, &index_signed, &index_pointer)) {
+        bool wide_signed;
+        if (!rv_wide_integer(sel,
+                fn->values[ins->value.pointer_offset.index].core_type_id,
+                &wide_signed)) return false;
+    } else if (index_pointer) return false;
+    if (!rv_load(sel, ins->value.pointer_offset.base, RV_T0)) return false;
     if (scale.kind == MINIC_RISCV_POINTER_SCALE_ZERO)
         return rv_store(sel, ins->result, RV_T0);
     if (!rv_load(sel, ins->value.pointer_offset.index, RV_T1)) return false;

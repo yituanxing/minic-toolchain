@@ -596,6 +596,86 @@ static const MinicMachineSourceAsmTemplatePolicy a64_source_goto_policy = {
 };
 
 
+/* Linux arm64's exact 16-form CMPXCHG retry loop: five typed operands,
+ * source-owned memory ordering, exclusive status and GNU local labels. */
+static bool a64_cmpxchg_form(const MinicMachineFunction *fn,
+    const MinicMachineInstruction *ins, void *context) {
+    unsigned int form, effects;
+    (void)context;
+    if (fn == NULL || fn->target == NULL ||
+        fn->target->architecture != MINIC_TARGET_ARCH_AARCH64 ||
+        ins == NULL || ins->kind != MINIC_MACHINE_INSTRUCTION_SOURCE_ASM ||
+        ins->source_asm_machine_form_id != AARCH64_MACHINE_ASM_CMPXCHG ||
+        ins->source_asm_template == NULL ||
+        ins->operand_count != 5U || ins->operands == NULL ||
+        ins->implicit_count != 0U || ins->source_asm_terminates_block ||
+        ins->source_asm_permits_fallthrough) return false;
+    form = aarch64_linux_cmpxchg_form(ins->source_asm_template,
+        ins->source_asm_length, true);
+    if (!form) form = aarch64_linux_cmpxchg_form(ins->source_asm_template,
+        ins->source_asm_length, false);
+    effects = MINIC_MACHINE_EFFECT_SOURCE_ASM |
+        MINIC_MACHINE_EFFECT_VOLATILE |
+        MINIC_MACHINE_EFFECT_MEMORY_READ |
+        MINIC_MACHINE_EFFECT_MEMORY_WRITE |
+        (form && (form - 1U) % 4U != 0U ?
+            MINIC_MACHINE_EFFECT_COMPILER_BARRIER : 0U);
+    return form != 0U && ins->source_asm_machine_form_variant == form &&
+        ins->effects == effects;
+}
+
+static bool a64_cmpxchg_binding(const MinicMachineFunction *fn,
+    const MinicMachineInstruction *ins, size_t index, void *context) {
+    static const unsigned int regs[5] = {13U, 9U, 10U, 11U, 12U};
+    static const char *const names[5] = {
+        "tmp", "oldval", "v", "old", "new"
+    };
+    const MinicMachineOperand *op;
+    const size_t width = aarch64_linux_cmpxchg_width(
+        ins != NULL ? ins->source_asm_machine_form_variant : 0U);
+    const char *constraint;
+    (void)context;
+    if (!a64_cmpxchg_form(fn, ins, NULL) ||
+        index >= 5U || ins->operands == NULL) return false;
+    constraint = index < 2U ? "=&r" : index == 2U ? "+Q" :
+        index == 3U ? (width == 8U ? "Lr" : "Kr") : "r";
+    op = &ins->operands[index];
+    return op->kind == MINIC_MACHINE_OPERAND_REGISTER &&
+        op->asm_name != NULL &&
+        strcmp(op->asm_name, names[index]) == 0 &&
+        op->asm_constraint != NULL &&
+        strcmp(op->asm_constraint, constraint) == 0 &&
+        op->value.physical.reg.bank == MINIC_MACHINE_REGISTER_GENERAL &&
+        op->value.physical.reg.number == regs[index] &&
+        op->value.physical.reg.width_bits == 64U &&
+        op->value.physical.access == (index < 2U ?
+            MINIC_MACHINE_REGISTER_WRITE : MINIC_MACHINE_REGISTER_READ);
+}
+
+static bool a64_cmpxchg_operand(FILE *output,
+    const MinicMachineFunction *fn, const MinicMachineInstruction *ins,
+    const MinicMachineGNUAsmLabels *labels, size_t index,
+    unsigned char modifier, void *context) {
+    static const unsigned int regs[5] = {13U, 9U, 10U, 11U, 12U};
+    const size_t width = aarch64_linux_cmpxchg_width(
+        ins != NULL ? ins->source_asm_machine_form_variant : 0U);
+    (void)labels;
+    if (!a64_cmpxchg_binding(fn, ins, index, context))
+        return false;
+    if (index == 2U) return modifier == 0U &&
+        (output == NULL || fputs("[x10]", output) >= 0);
+    if ((width == 8U && modifier != 0U &&
+         !(index == 0U && modifier == 'w')) ||
+        (width != 8U && modifier != 'w'))
+        return false;
+    return output == NULL || fprintf(output, "%c%u",
+        width == 8U && modifier != 'w' ? 'x' : 'w', regs[index]) >= 0;
+}
+
+static const MinicMachineSourceAsmTemplatePolicy a64_cmpxchg_policy = {
+    a64_cmpxchg_form, a64_cmpxchg_binding, a64_cmpxchg_operand, NULL
+};
+
 static bool a64_machine_pstate_alternative(
     const MinicMachineInstruction *ins) {
     const Aarch64LinuxPstateAlternative form = ins != NULL &&
@@ -683,6 +763,8 @@ bool minic_aarch64_machine_source_asm_validate(
         (a64_machine_opaque_hint(instruction) ||
          a64_machine_pstate_alternative(instruction) ||
          a64_machine_extra_source_form(instruction) ||
+         minic_machine_source_asm_template_preflight(&function,
+             instruction, &a64_cmpxchg_policy) ||
          minic_machine_source_asm_template_preflight(&function,
              instruction, &a64_source_goto_policy) ||
          minic_machine_source_asm_template_preflight(&function,
@@ -816,6 +898,13 @@ bool minic_aarch64_machine_source_asm_emit(
                 form.mnemonic, form.exception_type,
                 form.is_load ? 10U : 31U) >= 0;
     }
+    if (instruction->source_asm_machine_form_id == AARCH64_MACHINE_ASM_CMPXCHG)
+        return minic_machine_source_asm_template_emit(output, function,
+            instruction, labels, &a64_cmpxchg_policy) &&
+            ((instruction->source_asm_length != 0U &&
+              instruction->source_asm_template[
+                  instruction->source_asm_length - 1U] == '\n') ||
+             fputc('\n', output) != EOF);
     if (instruction->source_asm_machine_form_id ==
             AARCH64_MACHINE_ASM_LSE_CASP128)
         return minic_aarch64_machine_lse_casp128_emit(output,

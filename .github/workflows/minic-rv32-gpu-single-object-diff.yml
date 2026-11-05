@@ -1,0 +1,161 @@
+# Diagnostic: reuse frozen GNU Kbuild objects and MiniC's seven frozen ELF32 shards.
+name: RV32 virtio GPU source-owner differential
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/minic-rv32-gpu-single-object-diff.yml
+permissions:
+  contents: read
+  actions: read
+jobs:
+  single-object:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      KBUILD_BUILD_USER: minic
+      KBUILD_BUILD_HOST: minic-ci
+      KBUILD_BUILD_TIMESTAMP: Thu Jan  1 00:00:00 UTC 1970
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Install original toolchain and QEMU
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get -o Acquire::Retries=3 update -qq
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu qemu-system-misc opensbi \
+            cpio device-tree-compiler bc bison flex libssl-dev libelf-dev make python3 xz-utils
+      - uses: ./.github/actions/linux-runtime-restore-fixture
+        with:
+          fixture: source
+      - name: Restore byte-authenticated GNU original Image and C objects
+        id: golden
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            build/rv32i-linux-entry/out
+            build/rv32i-linux-entry/provenance
+          key: linux-gnu-golden-rv32i-v1-6.6.143-4c6c19f79741a8a31ec52ad57b1a6bc56b81dd6996cbf5e1bdc63f587d85244c-0c2a199ea3ae14d3-0703113036a30806-d072447ef15a2074
+      - name: Refuse cache miss and tool drift (never rebuild 1741)
+        run: |
+          set -Eeuo pipefail
+          test '${{ steps.golden.outputs.cache-hit }}' = true || { echo 'RV32_GPU_DIFF=BLOCKED GNU_cache_miss'; exit 2; }
+          test "$(sha256sum "$(command -v riscv64-linux-gnu-gcc)" | cut -c1-16)" = 0c2a199ea3ae14d3
+          test "$(sha256sum "$(command -v riscv64-linux-gnu-ld)" | cut -c1-16)" = 0703113036a30806
+          test "$(sha256sum "$(command -v riscv64-linux-gnu-as)" | cut -c1-16)" = d072447ef15a2074
+          base=build/rv32i-linux-entry
+          test "$(sha256sum "$base/out/.config" | cut -d' ' -f1)" = 4c6c19f79741a8a31ec52ad57b1a6bc56b81dd6996cbf5e1bdc63f587d85244c
+          (cd "$base/out" && sha256sum --quiet -c ../provenance/gcc-objects.sha256)
+          echo 'RV32_GPU_GNU=PASS original_1741_objects_sha_verified=true'
+      - name: Restore 7 frozen MiniC shards from exact original Image run
+        uses: actions/download-artifact@v4
+        with:
+          repository: yituanxing/minic-toolchain
+          run-id: '41212514498'
+          pattern: shard-*
+          merge-multiple: false
+          github-token: ${{ github.token }}
+          path: build/rv32-gpu-diff/shards
+      - name: Attest just two source-owner MiniC candidates
+        run: |
+          set -Eeuo pipefail
+          root=build/rv32-gpu-diff
+          mkdir -p "$root/objects" "$root/evidence"
+          for name in virtio_pci_modern_dev virtio; do
+            mapfile -t files < <(find "$root/shards" -type f -path "*/minic/drivers/virtio/$name.o")
+            test "${#files[@]}" -eq 1 || { echo "RV32_GPU_DIFF=BLOCKED MiniC_owner=$name"; exit 3; }
+            riscv64-linux-gnu-readelf -h "${files[0]}" | grep -Eq 'Class:[[:space:]]+ELF32'
+            cp "${files[0]}" "$root/objects/$name.o"
+          done
+      - name: Build 8 exact-config GNU DRM/GPU modules once
+        timeout-minutes: 9
+        run: |
+          set -Eeuo pipefail
+          src="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0/linux-6.6.143"
+          root="$GITHUB_WORKSPACE/build/rv32-gpu-diff"
+          out="$root/modules-kbuild"
+          mkdir -p "$out" "$root/modules"
+          cp build/rv32i-linux-entry/out/.config "$out/.config"
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- -j4 modules_prepare >"$root/evidence/modules-prepare.log" 2>&1
+          for target in drivers/i2c/i2c-core.ko drivers/video/backlight/backlight.ko \
+            drivers/gpu/drm/drm_panel_orientation_quirks.ko drivers/gpu/drm/drm.ko \
+            drivers/gpu/drm/drm_kms_helper.ko drivers/gpu/drm/drm_shmem_helper.ko \
+            drivers/virtio/virtio_dma_buf.ko drivers/gpu/drm/virtio/virtio-gpu.ko; do
+            KBUILD_MODPOST_WARN=1 make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+              -j4 "$target" >>"$root/evidence/modules-build.log" 2>&1
+            test -s "$out/$target"
+            install -m 644 "$out/$target" "$root/modules/$(basename "$target")"
+          done
+          test "$(find "$root/modules" -name '*.ko' | wc -l)" -eq 8
+      - name: Real GPU-only QEMU baseline + three targeted original-Kbuild object swaps
+        timeout-minutes: 12
+        run: |
+          set -Eeuo pipefail
+          src="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0/linux-6.6.143"
+          out="$GITHUB_WORKSPACE/build/rv32i-linux-entry/out"
+          root="$GITHUB_WORKSPACE/build/rv32-gpu-diff"
+          ev="$root/evidence"
+          for owner in virtio_pci_modern_dev virtio; do
+            cp "$out/drivers/virtio/$owner.o" "$root/gnu-$owner.o"
+          done
+          oracle() {
+            local mode="$1"
+            mkdir -p "$ev/$mode"
+            RV32I_QEMU_IMAGE="$out/arch/riscv/boot/Image" \
+              RV32I_QEMU_WORK="$ev/$mode" RV32I_QEMU_P1=1 \
+              RV32I_QEMU_GPU_DIAG=1 RV32I_QEMU_GPU_MODULE_DIR="$root/modules" \
+              RV32I_QEMU_TIMEOUT_SECONDS=120 \
+              bash tools/ci/linux-rv32i-qemu-p0-v1.sh >"$ev/$mode.log" 2>&1
+          }
+          oracle gnu || { echo 'RV32_GPU_DIFF=BLOCKED GNU_GPU_baseline_failed'; exit 4; }
+          echo 'RV32_GPU_DIFF_BASELINE=PASS GNU_kernel=true' >"$ev/results.txt"
+          make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+            KBUILD_NOCMDDEP=1 -j4 prepare >"$ev/kbuild-prepare.log" 2>&1
+          bash tests/compiler/c0/build-rv32-gcc-runtime.sh "$root/runtime" >"$ev/softarith.log" 2>&1
+          mapfile -t softobjs < "$root/runtime/rv32-runtime-objects.rsp"
+          test "${#softobjs[@]}" -ge 17
+          riscv64-linux-gnu-ar rcsD "$root/softarith.a" "${softobjs[@]}"
+          for mode in pci core both; do
+            for owner in virtio_pci_modern_dev virtio; do
+              install -m 644 "$root/gnu-$owner.o" "$out/drivers/virtio/$owner.o"
+            done
+            if [[ "$mode" == pci || "$mode" == both ]]; then
+              install -m 644 "$root/objects/virtio_pci_modern_dev.o" "$out/drivers/virtio/virtio_pci_modern_dev.o"
+            fi
+            if [[ "$mode" == core || "$mode" == both ]]; then
+              install -m 644 "$root/objects/virtio.o" "$out/drivers/virtio/virtio.o"
+            fi
+            touch "$out/drivers/virtio/virtio.o" "$out/drivers/virtio/virtio_pci_modern_dev.o"
+            for owner in virtio_pci_modern_dev virtio; do
+              sha256sum "$out/drivers/virtio/$owner.o" | cut -d' ' -f1 >"$ev/$mode.$owner.sha"
+            done
+            make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+              KBUILD_NOCMDDEP=1 -j4 \
+              --eval="vmlinux: KBUILD_VMLINUX_LIBS += $root/softarith.a" Image \
+              >"$ev/$mode.relink.log" 2>&1 || { echo "RV32_GPU_DIFF=BLOCKED Kbuild_link=$mode"; exit 5; }
+            for owner in virtio_pci_modern_dev virtio; do
+              test "$(sha256sum "$out/drivers/virtio/$owner.o" | cut -d' ' -f1)" = "$(cat "$ev/$mode.$owner.sha")" || {
+                echo "RV32_GPU_DIFF=BLOCKED Kbuild_overwrote_MiniC=$owner"; exit 5;
+              }
+            done
+            rebuilt=$(grep -Ec '^[[:space:]]+CC[[:space:]]+' "$ev/$mode.relink.log" || true)
+            ((rebuilt<=5)) || { echo "RV32_GPU_DIFF=BLOCKED unexpected_rebuild=$rebuilt"; exit 5; }
+            if oracle "$mode"; then
+              echo "RV32_GPU_DIFF_MODE=$mode GPU=PASS" | tee -a "$ev/results.txt"
+            else
+              echo "RV32_GPU_DIFF_MODE=$mode GPU=FAIL" | tee -a "$ev/results.txt"
+            fi
+          done
+          test "$(wc -l <"$ev/results.txt")" -eq 4
+          cat "$ev/results.txt"
+          echo 'RV32_GPU_DIFF=COMPLETE no_1741_rebuild=true QEMU_GPU_only=4 not_full_P2=true'
+      - name: Preserve exact swap and guest evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rv32-gpu-object-diff-${{ github.sha }}
+          path: build/rv32-gpu-diff/evidence/
+          retention-days: 30
+          if-no-files-found: warn

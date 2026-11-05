@@ -2,6 +2,7 @@
 #include "core/symbol_identity.h"
 
 #include <ctype.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -331,7 +332,18 @@ static bool machine_validate_instruction(
         }
         if (policy->validate_source_asm == NULL ||
             !policy->validate_source_asm(
-                function->target, ins, policy->context)) return false;
+                function->target, ins, policy->context)) {
+            if (getenv("MINIC_X86_TYPED_REJECT_TRACE") != NULL)
+                fprintf(stderr,
+                    "machine source asm policy reject: function=%s origin=%zu:%zu form=%u variant=%u effects=0x%x operands=%zu implicit=%zu source_length=%zu\n",
+                    function->name, ins->core_block_id,
+                    ins->core_instruction_id,
+                    (unsigned int)ins->source_asm_machine_form_id,
+                    (unsigned int)ins->source_asm_machine_form_variant,
+                    ins->effects, ins->operand_count, ins->implicit_count,
+                    ins->source_asm_length);
+            return false;
+        }
         for (i = 0U; i < ins->operand_count; ++i) {
             const MinicMachineOperand *operand = &ins->operands[i];
             size_t other;
@@ -539,8 +551,20 @@ bool minic_machine_function_verify(const MinicMachineFunction *function,
                  ins->kind != MINIC_MACHINE_INSTRUCTION_LOCAL_LABEL) ||
                 !machine_validate_instruction(
                     function, policy, ins, &is_terminator, &indirect,
-                    &permits_fallthrough))
+                    &permits_fallthrough)) {
+                if (getenv("MINIC_X86_TYPED_REJECT_TRACE") != NULL)
+                    fprintf(stderr,
+                        "machine verify instruction reject: function=%s machine_block=%zu instruction=%zu kind=%u opcode=%u origin=%zu:%zu form=%u variant=%u effects=0x%x operands=%zu implicit=%zu source_length=%zu terminated=%u\n",
+                        function->name, i, j, (unsigned int)ins->kind,
+                        (unsigned int)ins->opcode, ins->core_block_id,
+                        ins->core_instruction_id,
+                        (unsigned int)ins->source_asm_machine_form_id,
+                        (unsigned int)ins->source_asm_machine_form_variant,
+                        ins->effects, ins->operand_count,
+                        ins->implicit_count, ins->source_asm_length,
+                        (unsigned int)terminated);
                 goto cleanup;
+            }
             if (ins->kind == MINIC_MACHINE_INSTRUCTION_DIRECTIVE) {
                 if (ins->directive->kind ==
                     MINIC_MACHINE_DIRECTIVE_PUSH_SECTION) {
@@ -560,7 +584,15 @@ bool minic_machine_function_verify(const MinicMachineFunction *function,
                 size_t earlier;
                 for (earlier = 0U; earlier < source_unique_count; ++earlier)
                     if (source_unique_ids[earlier] ==
-                        ins->source_asm_unique_id) goto cleanup;
+                        ins->source_asm_unique_id) {
+                        if (getenv("MINIC_X86_TYPED_REJECT_TRACE") != NULL)
+                            fprintf(stderr,
+                                "machine verify duplicate source asm ID: function=%s machine_block=%zu instruction=%zu origin=%zu:%zu unique_id=%llu\n",
+                                function->name, i, j, ins->core_block_id,
+                                ins->core_instruction_id,
+                                (unsigned long long)ins->source_asm_unique_id);
+                        goto cleanup;
+                    }
                 source_unique_ids[source_unique_count++] =
                     ins->source_asm_unique_id;
             }
@@ -613,6 +645,10 @@ bool minic_machine_function_verify(const MinicMachineFunction *function,
         if (strcmp(labels[i - 1U], labels[i]) == 0) goto cleanup;
     valid = true;
 cleanup:
+    if (!valid && getenv("MINIC_X86_TYPED_REJECT_TRACE") != NULL)
+        fprintf(stderr,
+            "machine verify reject: function=%s reached_block=%zu total_blocks=%zu\n",
+            function->name, i, function->block_count);
     free(labels);
     free(referenced);
     free(visited);
