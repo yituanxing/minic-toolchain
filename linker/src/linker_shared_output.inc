@@ -384,29 +384,3 @@ done:
     minild_script_destroy(&layout_script);
     return ok ? 0 : 1;
 }
-
-int minild_link_shared_elf64_riscv_inputs(const char *output_path,
-                                          const MiniLdInput *inputs,
-                                          size_t input_count,
-                                          const char *soname,
-                                          const char *entry_symbol,
-                                          FILE *diagnostics) {
-    MiniLdSharedOptions options;
-
-    options.soname = soname;
-    options.entry_symbol = entry_symbol;
-    options.dynamic_list_path = NULL;
-    options.version_script_path = NULL;
-    options.script_path = NULL;
-    options.needed_name = NULL;
-    options.interpreter_path = NULL;
-    options.strip_debug = false;
-    options.hash_style_both = false;
-    options.eh_frame_hdr = false;
-    options.pie = false;
-    return minild_link_shared_elf64_riscv_inputs_options(output_path,
-                                                          inputs,
-                                                          input_count,
-                                                          &options,
-                                                          diagnostics);
-}

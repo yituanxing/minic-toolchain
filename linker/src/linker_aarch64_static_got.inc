@@ -387,7 +387,8 @@ static bool minild_aarch64_kernel_emit_weak_dynrels(
     qsort(dyn_symbols, dynamic_count, sizeof(*dyn_symbols),
           minild_aarch64_got_order_compare);
     for (i = 0U; i < dynamic_count; ++i) {
-        if (local_count > SIZE_MAX - i - 1U) goto out;
+        if (i >= UINT32_MAX ||
+            local_count > (size_t)UINT32_MAX - i - 1U) goto out;
         dynamic_index[dyn_symbols[i].symbol] = local_count + i + 1U;
     }
     if (got->present && got->section < state->work.count) {

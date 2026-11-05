@@ -234,6 +234,22 @@ if re.search(r'\(uint32_t\s*\*\)\s*\(void\s*\*\)', fin):
 # shared-link hooks.  i386's REL implicit-addend owner is unrelated to them.
 target_profile = (src / 'linker_target_elf.inc').read_text(encoding='utf-8')
 linker_entry = (src / 'linker.c').read_text(encoding='utf-8')
+final_symbols = (src / 'linker_final_symbols.inc').read_text(encoding='utf-8')
+public_api = (repo / 'linker/include/minild.h').read_text(encoding='utf-8')
+cli_driver = (repo / 'tools/minic-ld/main_core.inc').read_text(encoding='utf-8')
+if re.search(r'\bEM_(?:AARCH64|X86_64)\b', linker_entry) or \
+        re.search(r'\b(?:EM_X86_64|R_X86_64_\w+)\b', final_symbols) or \
+        'target->final_reloc_kind(' not in final_symbols or \
+        'target->supports_cortex_a53_fix' not in linker_entry:
+    raise SystemExit('MINILD_SHARED_PHASE_STRUCTURE=FAIL '
+                     'common_target_policy_leak')
+if 'minild_link_static_inputs_target' not in public_api or \
+        'minild_link_static_inputs_target' not in cli_driver or \
+        'minild_link_static_elf64_inputs_target' in public_api or \
+        re.search(r'minild_link_(?:static|relocatable)_elf64_riscv', public_api) or \
+        'minild_link_shared_elf64_riscv_inputs(' in public_api:
+    raise SystemExit('MINILD_SHARED_PHASE_STRUCTURE=FAIL '
+                     'legacy_target_api_or_elf64_assumption')
 for name, code in (('target_profile', target_profile),
                    ('shared_abi', shared_abi),
                    ('linker_entry', linker_entry)):
@@ -257,7 +273,7 @@ if len(re.findall(r'\bbool\s+separate_code_default\s*;', target_profile)) != 1 o
 profile_rows = {
     row_name: row_body
     for row_name, row_body in re.findall(
-        r'\{"([^"]+)"(.*?)\}(?:,|\s*$)',
+        r'\{\s*\.emulation\s*=\s*"([^"]+)"(.*?)\}(?:,|\s*$)',
         target_profile.split('static const MiniLdTargetProfile minild_target_profiles[] = {', 1)[1]
                       .split('\n};', 1)[0], re.S)
 }
@@ -265,13 +281,28 @@ if set(profile_rows) != {'elf64lriscv', 'elf32lriscv', 'elf_x86_64',
                          'elf_i386', 'aarch64linux', 'elf64loongarch'}:
     raise SystemExit('MINILD_SHARED_PHASE_STRUCTURE=FAIL '
                      f'target_profile_count={sorted(profile_rows)}')
-# The final initializer fields have eight independent owners: shared-ABI
-# callback, shared-link callback, psABI e_flags validator, target BFD
-# separate-code default, ELF-header mapping policy, REL addend reader,
-# kernel-shared rebase policy and --emit-relocs policy. Validate ALL eight
-# descriptors so adding a field cannot silently shift hooks/flags by one slot.
-# AArch64 defaults to noseparate-code (GNU Linux kernel); the others use
-# separate-code.  Neither policy grants ET_DYN shared hooks to x86/AArch/LA.
+# Named descriptors are the contract: adding a field cannot shift a
+# positional tail or accidentally install another target's ABI callback.
+# None means the field must be absent (zero-initialized).
+expected_policies = {
+    'elf64lriscv': ('minild_riscv_shared_target_abi',
+                    'minild_link_shared_elf64_riscv_inputs_options',
+                    None, 'true', 'true', None, None, None),
+    'elf32lriscv': (None, 'minild_link_elf32_compat_vdso',
+                    None, 'true', 'true', None, None, None),
+    'elf_x86_64': (None, None, 'minild_zero_elf_flags',
+                   'true', 'true', None, None, 'minild_x86_final_reloc_kind'),
+    'elf_i386': (None, None, 'minild_zero_elf_flags',
+                 'true', 'true', 'minild_i386_implicit_addend', None, None),
+    'aarch64linux': (None, None, 'minild_zero_elf_flags',
+                     None, 'true', None, 'true', None),
+    'elf64loongarch': (None, None, 'minild_loongarch_v1_elf_flags',
+                       'true', 'true', None, None, None),
+}
+policy_names = ('shared_abi', 'link_shared', 'valid_elf_flags',
+                'separate_code_default', 'map_static_elf_headers',
+                'implicit_reloc_addend', 'supports_cortex_a53_fix',
+                'final_reloc_kind')
 kernel_field = re.search(r'bool\s*\(\*kernel_shared_rebase_invariant\)\s*'
                          r'\(uint32_t\s+type\)\s*;', target_profile)
 final_field = re.search(r'MiniLdFinalRelocKind\s*'
@@ -281,44 +312,22 @@ if kernel_field is None or final_field is None or \
         kernel_field.end() >= final_field.start():
     raise SystemExit('MINILD_SHARED_PHASE_STRUCTURE=FAIL '
                      'target_relocation_policy_fields')
-expected_profile_tails = {
-    'elf64lriscv': (
-        'minild_riscv_shared_target_abi',
-        'minild_link_shared_elf64_riscv_inputs_options',
-        'NULL', 'true', 'true', 'NULL', 'NULL', 'NULL',
-    ),
-    'elf32lriscv': (
-        'NULL', 'minild_link_elf32_compat_vdso',
-        'NULL', 'true', 'true', 'NULL', 'NULL', 'NULL',
-    ),
-    'elf_x86_64': (
-        'NULL', 'NULL', 'minild_zero_elf_flags',
-        'true', 'true', 'NULL', 'NULL', 'minild_x86_final_reloc_kind',
-    ),
-    'elf_i386': (
-        'NULL', 'NULL', 'minild_zero_elf_flags',
-        'true', 'true', 'minild_i386_implicit_addend', 'NULL', 'NULL',
-    ),
-    'aarch64linux': (
-        'NULL', 'NULL', 'minild_zero_elf_flags',
-        'false', 'true', 'NULL', 'minild_aarch64_kernel_rebase_invariant',
-        'NULL',
-    ),
-    'elf64loongarch': (
-        'NULL', 'NULL', 'minild_loongarch_v1_elf_flags',
-        'true', 'true', 'NULL', 'NULL', 'NULL',
-    ),
-}
-for emulation, fields in expected_profile_tails.items():
-    tail_pattern = r',\s*'.join(re.escape(field) for field in fields)
-    if not re.search(tail_pattern + r'\s*$', profile_rows[emulation].strip()):
-        raise SystemExit('MINILD_SHARED_PHASE_STRUCTURE=FAIL '
-                         f'target_profile_tail={emulation}')
-# The policy leaves own the two new ISA-number tables; Common must only
-# dispatch and preserve canonical symbol/section/output-membership decisions.
+for emulation, values in expected_policies.items():
+    body = profile_rows[emulation]
+    for field, expected in zip(policy_names, values):
+        found = re.search(r'\.' + field + r'\s*=\s*(\w+)\b', body)
+        actual = found.group(1) if found else None
+        if actual != expected:
+            raise SystemExit('MINILD_SHARED_PHASE_STRUCTURE=FAIL '
+                             f'target_policy={emulation}:{field}:{actual}')
+if not re.search(r'\.kernel_shared_rebase_invariant\s*=\s*'
+                 r'minild_aarch64_kernel_rebase_invariant\b',
+                 profile_rows['aarch64linux']):
+    raise SystemExit('MINILD_SHARED_PHASE_STRUCTURE=FAIL '
+                     'aarch64_kernel_rebase_target_callback')
+# Both ISA-number classifiers live in target leaves; Common merely dispatches.
 kernel_leaf = (src / 'linker_aarch64_static_fixup.inc').read_text(encoding='utf-8')
 x86_leaf = (src / 'linker_x86_static_fixup.inc').read_text(encoding='utf-8')
-final_symbols = (src / 'linker_final_symbols.inc').read_text(encoding='utf-8')
 if len(re.findall(r'\bstatic\s+bool\s+'
                   r'minild_aarch64_kernel_rebase_invariant\s*\(',
                   kernel_leaf)) != 1 or \
@@ -379,7 +388,6 @@ functions = {
         'shared_strip_debug_preflight',
         'shared_script_validate_discarded_alloc',
         'minild_link_shared_elf64_riscv_inputs_options',
-        'minild_link_shared_elf64_riscv_inputs',
     ),
     'linker_shared_reloc_apply.inc': (
         'shared_fill_relocations',

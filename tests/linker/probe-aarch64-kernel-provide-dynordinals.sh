@@ -85,7 +85,7 @@ from pathlib import Path
 import struct
 import sys
 
-def extract(path, expected_index):
+def extract(path):
     image=Path(path).read_bytes()
     assert image[:6]==b'\x7fELF\x02\x01'
     shoff=struct.unpack_from('<Q',image,40)[0]
@@ -103,7 +103,6 @@ def extract(path, expected_index):
     glob=[rec for rec in records if (rec[1]&0xffffffff)==1025]
     relative=[rec for rec in records if (rec[1]&0xffffffff)==1027]
     assert len(glob)==1,(path,records)
-    assert (glob[0][1]>>32)==expected_index,(path,glob,expected_index)
     assert len(records)==3 and len(relative)==2,(path,records)
     assert sorted(rec[2] for rec in relative)==[0x11223344,0x55667788],(
         path,relative)
@@ -111,20 +110,25 @@ def extract(path, expected_index):
     assert relative==[(sections['.got'][3]+16,1027,0x11223344),
                      (sections['.got'][3]+24,1027,0x55667788)],(
         path,relative)
-    return records
+    return records, glob[0][1]>>32
 
-single=extract(sys.argv[1],4)
-repeated=extract(sys.argv[2],3)
-print('MINILD_AARCH64_PROVIDE_DYNORDINAL=PASS '
-      'script_hidden_single=1 duplicate=excluded '
-      'weak_global_dynindex=single:4 repeated:3')
+single, single_index=extract(sys.argv[1])
+repeated, repeated_index=extract(sys.argv[2])
 if len(sys.argv)>3:
-    gnu_single=extract(sys.argv[3],4)
-    gnu_repeated=extract(sys.argv[4],3)
+    gnu_single, gnu_single_index=extract(sys.argv[3])
+    gnu_repeated, gnu_repeated_index=extract(sys.argv[4])
     assert single==gnu_single,('GNU single',gnu_single,single)
     assert repeated==gnu_repeated,('GNU repeated',gnu_repeated,repeated)
+    assert single_index==gnu_single_index,('GNU single ordinal',single_index,gnu_single_index)
+    assert repeated_index==gnu_repeated_index,('GNU repeated ordinal',repeated_index,gnu_repeated_index)
     print('MINILD_AARCH64_PROVIDE_DYNORDINAL_GNU=PASS '
           'exact_rela_records_with_discarded_dynsym')
 else:
+    # Synthetic GOT work bytes are not a BFD source-section local prefix.
+    # The GNU branch above is the authoritative CI oracle; this fallback
+    # maintains a useful local guard without a cross linker installed.
+    assert (single_index,repeated_index)==(4,3), (single_index,repeated_index)
     print('MINILD_AARCH64_PROVIDE_DYNORDINAL_GNU=SKIP missing_cross_binutils')
+print('MINILD_AARCH64_PROVIDE_DYNORDINAL=PASS '
+      f'weak_global_dynindex=single:{single_index} repeated:{repeated_index}')
 PY

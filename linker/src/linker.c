@@ -6,18 +6,6 @@
 #include "minild_elf32_vdso.h"
 #include "linker_core.inc"
 
-int minild_link_static_elf64_riscv_inputs_options(
-    const char *output_path,
-    const MiniLdInput *inputs,
-    size_t input_count,
-    const MiniLdStaticOptions *options,
-    FILE *diagnostics);
-int minild_link_static_elf64_riscv_inputs(const char *output_path,
-                                          const MiniLdInput *inputs,
-                                          size_t input_count,
-                                          const char *entry_symbol,
-                                          FILE *diagnostics);
-
 #include "linker_input_projection.inc"
 #include "linker_script_input_selection.inc"
 #include "linker_input_gc.inc"
@@ -63,7 +51,7 @@ static int minild_link_static_pipeline(
         return 2;
     }
     if (options != NULL && options->fix_cortex_a53_843419 &&
-        target->machine != EM_AARCH64) {
+        !target->supports_cortex_a53_fix) {
         fprintf(diagnostics,
                 "minic-ld: --fix-cortex-a53-843419-requires-aarch64\n");
         return 2;
@@ -244,7 +232,7 @@ done:
     return ok ? 0 : 1;
 }
 
-int minild_link_static_elf64_inputs_target(
+int minild_link_static_inputs_target(
     const char *output_path,
     const MiniLdInput *inputs,
     size_t input_count,
@@ -289,44 +277,4 @@ int minild_link_shared_inputs_target(
             "minic-ld: unimplemented-target-shared-backend:%s\n",
             emulation);
     return 2;
-}
-
-int minild_link_static_elf64_riscv_inputs_options(
-    const char *output_path,
-    const MiniLdInput *inputs,
-    size_t input_count,
-    const MiniLdStaticOptions *options,
-    FILE *diagnostics) {
-    return minild_link_static_elf64_inputs_target(
-        output_path, inputs, input_count, options, "elf64lriscv",
-        diagnostics);
-}
-
-int minild_link_static_elf64_riscv_inputs(const char *output_path,
-                                          const MiniLdInput *inputs,
-                                          size_t input_count,
-                                          const char *entry_symbol,
-                                          FILE *diagnostics) {
-    MiniLdStaticOptions options;
-
-    options.entry_symbol = entry_symbol;
-    options.script_path = NULL;
-    options.forced_undefined_symbols = NULL;
-    options.forced_undefined_count = 0U;
-    options.gc_sections = false;
-    options.nmagic = false;
-    options.discard_locals = false;
-    options.output_et_dyn = false;
-    options.static_pie_requested = false;
-    options.fix_cortex_a53_843419 = false;
-    options.max_page_size = 0U;
-    options.orphan_handling_error = false;
-    options.build_id_sha1 = false;
-    options.kernel_shared_no_dynamic_relocations = false;
-    options.emit_relocs = false;
-    return minild_link_static_elf64_riscv_inputs_options(output_path,
-                                                          inputs,
-                                                          input_count,
-                                                          &options,
-                                                          diagnostics);
 }

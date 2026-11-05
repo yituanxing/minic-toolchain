@@ -269,9 +269,9 @@ static bool minild_final_symbols_build(const MiniLdState *state,
 }
 
 /* Final-link SHT_RELA data is indexed by final OutputSection, never by the
- * input section or an as-time work-fragment identity.  Restrict the first
- * x86 admission to untransformed relocations; GOT/IFUNC/TLS and relaxation
- * require a target-provided post-fixup relocation projection. */
+ * input section or an as-time work-fragment identity.  Target classifies
+ * admitted post-fixup relocations; GOT/IFUNC/TLS transformations continue to
+ * fail closed without a dedicated relocation projection. */
 typedef struct MiniLdFinalRelocSection {
     MiniElfRela *entries;
     size_t count;

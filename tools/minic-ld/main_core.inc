@@ -758,7 +758,7 @@ int main(int argc, char **argv) {
         options.kernel_shared_no_dynamic_relocations = kernel_shared_image;
         options.emit_relocs = emit_relocs;
         options.build_id_sha1 = build_id_sha1;
-        return minild_link_static_elf64_inputs_target(
+        return minild_link_static_inputs_target(
             output, inputs, input_count, &options, emulation, stderr);
     }
 }
