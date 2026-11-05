@@ -621,7 +621,7 @@ jobs:
           MINIC_M1_TRACE=1 MINIC_ASM_OPERAND_PLAN_TRACE=1 "$cc" --target=aarch64-linux -S "$source" -o build/aarch64-nzcv/minic.s
           grep -F '  cmp x10, x11' build/aarch64-nzcv/minic.s
           grep -F '  sbc x9, xzr, xzr' build/aarch64-nzcv/minic.s
-          grep -F '  mov x9, sp' build/aarch64-nzcv/minic.s
+          grep -E '^  (add x9, sp, #0|mov x9, sp)$' build/aarch64-nzcv/minic.s
           grep -F '  ldr x9, [sp, #' build/aarch64-nzcv/minic.s
           aarch64-linux-gnu-gcc -static -x assembler build/aarch64-nzcv/minic.s \
             -o build/aarch64-nzcv/minic.elf

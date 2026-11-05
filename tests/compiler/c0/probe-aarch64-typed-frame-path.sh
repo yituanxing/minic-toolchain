@@ -151,10 +151,58 @@ awk '
     reloaded && /^  strb w11, \[x10, #0\]$/ { copied=1 }
     END { exit !(complete && anchored && saved && invoked && reloaded && copied) }
 ' "$scratch/record.s"
-# A >4 KiB owned frame uses typed scratch materialization, never a silent
-# truncation to an A64 immediate or an x12/x17 string postpass guess.
-grep -Eq '^  movz x17, #[4-9][0-9]{3,}$' "$scratch/record.s"
-grep -Fq '  str x8, [x17]' "$scratch/record.s"
+# The 2048-byte nested record creates a >4 KiB owned frame.  Check the
+# physical prologue's real MOVZ/MOVK frame size (not a textual x17 guess),
+# then ensure the caller's incoming x8 is saved before the GNU call and
+# recovered through the SAME owned slot afterward.  An offset <=4095 may
+# use a direct [sp,#N] operation even when the total frame exceeds 4 KiB;
+# larger offsets use x17 as a typed materialized address.
+awk '
+    $0 == "minic_nested_2048:" { inside=1; next }
+    inside && /^\.size minic_nested_2048,/ {
+        complete=1; inside=0; exit
+    }
+    !inside { next }
+    /^  movz x12, #[0-9]+, lsl #0$/ {
+        part=$0
+        sub(/^  movz x12, #/, "", part)
+        sub(/, lsl #0$/, "", part)
+        frame=part+0; have_frame=1; next
+    }
+    have_frame && /^  movk x12, #[0-9]+, lsl #16$/ {
+        part=$0
+        sub(/^  movk x12, #/, "", part)
+        sub(/, lsl #16$/, "", part)
+        frame+=(part+0)*65536; next
+    }
+    have_frame && /^  sub sp, sp, x12$/ {
+        large=(frame>=4096); have_frame=0; next
+    }
+    !large { next }
+    # When the address is materialized, verify x17 is SP/frame relative
+    # before accepting it as an owned frame slot.
+    /^  add x17, (sp|x19), x17$/ { x17_owned=1; next }
+    !invoked && /^  str x8, \[(sp|x19), #[0-9]+\]$/ {
+        saved_slot=$0; sub(/^  str x8, \[/, "", saved_slot)
+        sub(/\]$/, "", saved_slot)
+        saved=1; next
+    }
+    !invoked && x17_owned && /^  str x8, \[x17, #0\]$/ {
+        saved_slot="x17, #0"; saved=1; next
+    }
+    saved && /^  bl gnu_make_2048$/ { invoked=1; x17_owned=0; next }
+    invoked && /^  ldr x10, \[(sp|x19), #[0-9]+\]$/ {
+        slot=$0; sub(/^  ldr x10, \[/, "", slot)
+        sub(/\]$/, "", slot)
+        if (slot==saved_slot) reloaded=1
+        next
+    }
+    invoked && x17_owned && /^  ldr x10, \[x17, #0\]$/ {
+        if (saved_slot=="x17, #0") reloaded=1
+        next
+    }
+    END { exit !(complete && large && saved && invoked && reloaded) }
+' "$scratch/record.s"
 if command -v aarch64-linux-gnu-gcc >/dev/null 2>&1; then
     aarch64-linux-gnu-gcc -c -x assembler "$scratch/real.s" \
         -o "$scratch/real.o"

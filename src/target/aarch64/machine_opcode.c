@@ -957,8 +957,16 @@ static bool a64_selected_source_asm(const MinicMachineFunction *function,
             store[0].value.physical.reg.number != 9U ||
             store[1].kind != MINIC_MACHINE_OPERAND_ADDRESS ||
             !store[1].value.address.has_base ||
+            store[1].value.address.has_index ||
+            store[1].value.address.has_segment ||
+            store[1].value.address.has_symbol ||
+            store[1].value.address.target_mode !=
+                MINIC_A64_ADDRESS_UNSIGNED ||
+            store[1].value.address.displacement != 0 ||
+            store[1].value.address.scale != 1U ||
             store[1].value.address.base.bank !=
                 MINIC_MACHINE_REGISTER_GENERAL ||
+            store[1].value.address.base.width_bits != 64U ||
             store[1].value.address.base.number != 11U)
             return false;
         for (i = 0U; i < function->block_count; ++i) {
@@ -1001,8 +1009,53 @@ static bool a64_selected_source_asm(const MinicMachineFunction *function,
                         c[1].value.physical.reg.width_bits == 64U &&
                         s[0].value.physical.reg.width_bits == 64U &&
                         s[1].value.physical.reg.width_bits == 64U &&
-                        s[2].value.physical.reg.width_bits == 64U)
+                        s[2].value.physical.reg.width_bits == 64U) {
+                        size_t middle_index, operand_index;
+                        /* The scratch result must not be overwritten by any
+                         * intervening selected instruction, even if a bogus
+                         * seal reused the exact CMP/SBC prefix. */
+                        for (middle_index = k + 1U; middle_index < j;
+                                ++middle_index) {
+                            const MinicMachineInstruction *middle =
+                                &block->instructions[middle_index];
+                            if (middle->kind !=
+                                    MINIC_MACHINE_INSTRUCTION_SELECTED ||
+                                !middle->has_core_origin ||
+                                middle->core_instruction_id !=
+                                    ins->core_instruction_id ||
+                                middle->core_block_id != ins->core_block_id)
+                                return false;
+                            for (operand_index = 0U;
+                                    operand_index < middle->operand_count;
+                                    ++operand_index) {
+                                const MinicMachineOperand *operand =
+                                    &middle->operands[operand_index];
+                                if (operand->kind ==
+                                        MINIC_MACHINE_OPERAND_REGISTER &&
+                                    operand->value.physical.reg.bank ==
+                                        MINIC_MACHINE_REGISTER_GENERAL &&
+                                    operand->value.physical.reg.number == 9U &&
+                                    (operand->value.physical.access &
+                                        (MINIC_MACHINE_REGISTER_WRITE |
+                                         MINIC_MACHINE_REGISTER_CLOBBER)) != 0U)
+                                    return false;
+                            }
+                            for (operand_index = 0U;
+                                    operand_index < middle->implicit_count;
+                                    ++operand_index) {
+                                const MinicMachineRegisterEffect *effect =
+                                    &middle->implicit[operand_index];
+                                if (effect->reg.bank ==
+                                        MINIC_MACHINE_REGISTER_GENERAL &&
+                                    effect->reg.number == 9U &&
+                                    (effect->access &
+                                        (MINIC_MACHINE_REGISTER_WRITE |
+                                         MINIC_MACHINE_REGISTER_CLOBBER)) != 0U)
+                                    return false;
+                            }
+                        }
                         return true;
+                    }
                 }
                 return false;
             }
