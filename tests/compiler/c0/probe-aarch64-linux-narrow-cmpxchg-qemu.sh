@@ -25,7 +25,7 @@ for opcode in \
         exit 1
     fi
 done
-case "$(grep -Fc '  prfm pstl1strm, [x10]' "$work/narrow.minic.s")" in
+case "$(grep -Ec '^[[:space:]]*prfm pstl1strm, \[x10\][[:space:]]*$' "$work/narrow.minic.s" || true)" in
     16) ;;
     *) echo 'AArch64 LL/SC must emit exactly 16 ISA-contract instances' >&2; exit 1 ;;
 esac
