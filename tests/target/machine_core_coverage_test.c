@@ -118,6 +118,26 @@ static int check(void) {
     source_asm.is_volatile = false;
     source_asm.has_memory_clobber = false;
     machine_instructions[2].effects = MINIC_MACHINE_EFFECT_SOURCE_ASM;
+    /* A verified typed extended-float numerical intrinsic reuses Core CALL's
+     * argument carrier, but may lower directly to x87/target arithmetic.
+     * It must keep its Core origin without inventing a physical CALL effect.
+     * An ordinary CALL must still have the real machine CALL effect. */
+    core_instructions[2].value.call.extended_float_operation =
+        MINIC_CORE_EXT_FLOAT_ADD;
+    machine_instructions[1].effects = 0U;
+    if (!minic_machine_core_coverage_verify(&core, reachable, &machine))
+        return 20;
+    machine_instructions[1].has_core_origin = false;
+    if (minic_machine_core_coverage_verify(&core, reachable, &machine))
+        return 21;
+    machine_instructions[1].has_core_origin = true;
+    core_instructions[2].value.call.extended_float_operation =
+        MINIC_CORE_EXT_FLOAT_NONE;
+    if (minic_machine_core_coverage_verify(&core, reachable, &machine))
+        return 22;
+    machine_instructions[1].effects = MINIC_MACHINE_EFFECT_CALL;
+    if (!minic_machine_core_coverage_verify(&core, reachable, &machine))
+        return 23;
     machine_instructions[1].core_block_id = 1U;
     if (minic_machine_core_coverage_verify(&core, reachable, &machine)) return 6;
     machine_instructions[1].core_block_id = 0U;

@@ -14,7 +14,7 @@
 #include "target/x86_64/frame.h"
 #include "target/aarch64/codegen.h"
 #include "target/aarch64/asm_contract.h"
-#include "target/aarch64/block_emit.h"
+#include "target/aarch64/machine_core_select.h"
 #include "target/loongarch64/codegen.h"
 #include "target/loongarch64/asm_contract.h"
 #include "target/loongarch64/machine_select.h"

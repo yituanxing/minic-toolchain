@@ -1,14 +1,20 @@
 # MiniC thin Machine IR contract (2026-11-05)
 
-Status: **owned model, common builder, independent verifier and five target
-ISA opcode/serializer foundations implemented; production migration pending**.
+Status: **five production entrypoints cut over to owned MachineIR;
+whole-function preflight and GNU serialization structurally sealed;
+remaining ISA/source-ASM families and Linux runtime parity not yet certified**.
 `src/target/common/machine_ir.{h,c}`, `machine_builder.{h,c}`,
 `machine_ir_verify.{h,c}` and `machine_gnu_asm.{h,c}` own and independently
 verify typed physical machine objects before any machine-body emission. The
 five target-specific physical opcode contracts have standalone positive and
-forged-negative full-function serializer probes. The current *production*
-target emitters still write assembly directly and do not consume this model,
-so the complete target handoff below remains future migration work.
+forged-negative full-function serializer probes. The current production
+writers select complete functions into typed MachineIR and reject unsupported
+forms before emitting any machine-body bytes. The structural
+`tests/compiler/mir-migration/check-production-seal.sh --final` gate confirms
+that legacy direct Core-to-`FILE*` instruction callbacks and the retired
+x86/AArch/Loong direct emit families are absent. It does **not** certify that
+every original Linux GNU inline-ASM form is accepted or that a current Image
+boots under QEMU. Those remain independent original-input runtime gates.
 This decision supersedes older "defer MIR" notes written while Core was
 shadow-only or before the five production targets consumed sealed Core.
 
@@ -23,13 +29,12 @@ shadow-only or before the five production targets consumed sealed Core.
   `SOURCE_ASM` node. It is validated without a target opcode or assembler
   printer and emits no bytes, preserving the Core barrier without a text
   escape or changing existing production output.
-- AArch64 and LoongArch64 now calculate their physical LP64 frame facts once
-  in `MinicMachineLP64FrameContract`. Both existing target emitters borrow the
-  same immutable contract through `DirectLP64BlockContext`, with no shadow
-  copies of frame size, alignment, varargs, save slots or dynamic-stack state.
-  ABI planning and ISA register decisions are unchanged. The complete
-  instruction selectors still need conversion to MachineBuilder; these
-  ownership changes are not a claim of production MIR migration.
+- AArch64 and LoongArch64 calculate physical LP64 frame facts once in
+  `MinicMachineLP64FrameContract`. Their typed whole-function selectors borrow
+  that immutable contract through `DirectLP64BlockContext`; the shared old
+  `emit_prologue`/`emit_core_blocks` callback branch has been deleted.
+  Frame/ABI planning remains unchanged while source-ASM form coverage is
+  validated against original GNU inputs.
 
 ## Placement and owners
 
@@ -112,11 +117,13 @@ machine jumps, and are **not** equivalent to the existing unbounded
 expansion needs selected address materialization and an explicit indirect
 machine CFG edge before the verifier, not a hidden serializer rewrite.
 
-These are **production prerequisites, not completed target migrations**.
-Prologue/epilogue, all emitted instruction families, runtime helper lowering,
-Linux inline ASM and target-specific outlined machine regions still need to
-be selected into one owned `MachineFunction` per function, with no old direct
-Core-to-text instruction path after conversion.
+The **structural production migration is complete**, with one owned
+`MachineFunction` per accepted function and no old direct Core-to-text
+instruction fallback. Behavioral acceptance is deliberately separate: genuine
+Linux source-ASM families, ABI corner cases, generated-ISA constraints, GNU
+AS/LD relocations and per-target QEMU P0/P1 must all pass against the frozen
+original inputs. Unsupported forms fail closed; they are not evidence of a
+successful Linux migration and must be fixed as whole semantic families.
 
 ## Explicit non-goals
 

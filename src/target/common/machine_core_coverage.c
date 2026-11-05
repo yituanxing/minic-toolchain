@@ -1,6 +1,7 @@
 #include "target/common/machine_core_coverage.h"
 
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -10,7 +11,8 @@ typedef struct CoreMachineDemand {
     unsigned int required_effects;
 } CoreMachineDemand;
 
-static CoreMachineDemand core_machine_demand(MinicCoreInstructionKind kind) {
+static CoreMachineDemand core_machine_demand(
+    const MinicCoreInstruction *instruction) {
     const CoreMachineDemand pure = {true, false, 0U};
     const CoreMachineDemand origin = {true, true, 0U};
     const CoreMachineDemand read = {true, true,
@@ -19,7 +21,8 @@ static CoreMachineDemand core_machine_demand(MinicCoreInstructionKind kind) {
         MINIC_MACHINE_EFFECT_MEMORY_WRITE};
     const CoreMachineDemand read_write = {true, true,
         MINIC_MACHINE_EFFECT_MEMORY_READ | MINIC_MACHINE_EFFECT_MEMORY_WRITE};
-    switch (kind) {
+    if (instruction == NULL) return (CoreMachineDemand){0};
+    switch (instruction->kind) {
     case MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT:
     case MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT:
     case MINIC_CORE_INSTRUCTION_INTEGER_ADD:
@@ -91,6 +94,16 @@ static CoreMachineDemand core_machine_demand(MinicCoreInstructionKind kind) {
     case MINIC_CORE_INSTRUCTION_VARIADIC_ARGUMENT_ADDRESS:
         return write;
     case MINIC_CORE_INSTRUCTION_CALL:
+        /* Core represents a validated extended-float numerical intrinsic
+         * using CALL's operand/signature carrier. Physical x87 or target
+         * native arithmetic is not a machine CALL. Demand provenance so
+         * the operation cannot disappear, but never fabricate CALL effects
+         * for instructions that do not perform a branch or runtime call.
+         * Plain calls and all indirect calls still require real CALL. */
+        if (instruction->value.call.extended_float_operation !=
+            MINIC_CORE_EXT_FLOAT_NONE)
+            return origin;
+        return (CoreMachineDemand){true, true, MINIC_MACHINE_EFFECT_CALL};
     case MINIC_CORE_INSTRUCTION_INDIRECT_CALL:
         return (CoreMachineDemand){true, true, MINIC_MACHINE_EFFECT_CALL};
     case MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM:
@@ -304,8 +317,14 @@ static bool machine_core_edges_match(const MinicCoreFunction *core,
         if (!reachable[core_id]) continue;
         memset(expected, 0, core->block_count * sizeof(*expected));
         memset(actual, 0, core->block_count * sizeof(*actual));
-        if (!core_expected_successors(core, reachable, core_id, expected))
+        if (!core_expected_successors(core, reachable, core_id, expected)) {
+            if (getenv("MINIC_RV_MACHINE_TRACE") != NULL)
+                (void)fprintf(stderr,
+                    "MACHINE_CORE_COVERAGE_EDGE_REJECT function=%s "
+                    "core_block=%zu stage=core_expected\n",
+                    core->name, core_id);
             return false;
+        }
         queue[0] = primary[core_id];
         visit_stamps[primary[core_id]] = core_id + 1U;
         while (head < tail) {
@@ -318,10 +337,26 @@ static bool machine_core_edges_match(const MinicCoreFunction *core,
                 const size_t to = edge < block->successor_count
                     ? block->successors[edge] : block->fallthrough_target;
                 const MinicMachineBlock *next;
-                if (to >= machine->block_count || to == 0U) return false;
+                if (to >= machine->block_count || to == 0U) {
+                    if (getenv("MINIC_RV_MACHINE_TRACE") != NULL)
+                        (void)fprintf(stderr,
+                            "MACHINE_CORE_COVERAGE_EDGE_REJECT function=%s "
+                            "core_block=%zu stage=invalid_machine_edge "
+                            "machine_from=%zu machine_to=%zu\n",
+                            core->name, core_id, queue[head - 1U], to);
+                    return false;
+                }
                 next = &machine->blocks[to];
                 if (next->has_core_block_origin) {
-                    if (next->core_block_id >= core->block_count) return false;
+                    if (next->core_block_id >= core->block_count) {
+                        if (getenv("MINIC_RV_MACHINE_TRACE") != NULL)
+                            (void)fprintf(stderr,
+                                "MACHINE_CORE_COVERAGE_EDGE_REJECT function=%s "
+                                "core_block=%zu stage=invalid_core_owner "
+                                "machine_to=%zu\n",
+                                core->name, core_id, to);
+                        return false;
+                    }
                     actual[next->core_block_id] = 1U;
                 } else if (visit_stamps[to] != core_id + 1U) {
                     visit_stamps[to] = core_id + 1U;
@@ -330,8 +365,20 @@ static bool machine_core_edges_match(const MinicCoreFunction *core,
             }
         }
         if (memcmp(expected, actual,
-                   core->block_count * sizeof(*expected)) != 0)
+                   core->block_count * sizeof(*expected)) != 0) {
+            if (getenv("MINIC_RV_MACHINE_TRACE") != NULL)
+                for (size_t dest = 0U; dest < core->block_count; ++dest)
+                    if (expected[dest] != actual[dest]) {
+                        (void)fprintf(stderr,
+                            "MACHINE_CORE_COVERAGE_EDGE_REJECT function=%s "
+                            "core_block=%zu stage=successor_mismatch "
+                            "core_dest=%zu expected=%u actual=%u\n",
+                            core->name, core_id, dest,
+                            (unsigned)expected[dest], (unsigned)actual[dest]);
+                        break;
+                    }
             return false;
+        }
     }
     return true;
 }
@@ -351,6 +398,10 @@ bool minic_machine_core_coverage_verify_with_policy(
     unsigned char *expected = NULL;
     unsigned char *actual = NULL;
     size_t i;
+    const char *failure_stage = "input";
+    size_t failure_core_block = SIZE_MAX;
+    size_t failure_core_instruction = SIZE_MAX;
+    size_t failure_machine_block = SIZE_MAX;
     bool valid = false;
     if (core == NULL || reachable_blocks == NULL || machine == NULL ||
         core->block_count == 0U ||
@@ -383,6 +434,7 @@ bool minic_machine_core_coverage_verify_with_policy(
         seen_source_asm == NULL || primary == NULL || queue == NULL ||
         visited == NULL || visit_stamps == NULL || expected == NULL ||
         actual == NULL) goto cleanup;
+    failure_stage = "core_instruction_ownership";
     for (i = 0U; i < core->instruction_count; ++i) owner[i] = SIZE_MAX;
     for (i = 0U; i < core->block_count; ++i) primary[i] = SIZE_MAX;
     for (i = 0U; i < core->block_count; ++i) {
@@ -390,17 +442,23 @@ bool minic_machine_core_coverage_verify_with_policy(
         size_t j;
         if (block->instruction_count != 0U && block->instructions == NULL)
             goto cleanup;
+        failure_core_block = i;
         for (j = 0U; j < block->instruction_count; ++j) {
             const size_t id = block->instructions[j];
+            failure_core_instruction = id;
             if (id >= core->instruction_count || owner[id] != SIZE_MAX ||
-                !core_machine_demand(core->instructions[id].kind).recognized)
+                !core_machine_demand(&core->instructions[id]).recognized)
                 goto cleanup;
             owner[id] = i;
         }
     }
+    failure_stage = "machine_instruction_identity_effects";
+    failure_core_block = SIZE_MAX;
+    failure_core_instruction = SIZE_MAX;
     for (i = 0U; i < machine->block_count; ++i) {
         const MinicMachineBlock *block = &machine->blocks[i];
         size_t j;
+        failure_machine_block = i;
         if ((block->instruction_count != 0U && block->instructions == NULL) ||
             (block->successor_count != 0U && block->successors == NULL) ||
             (block->has_fallthrough &&
@@ -408,6 +466,7 @@ bool minic_machine_core_coverage_verify_with_policy(
             goto cleanup;
         if (block->has_core_block_origin) {
             const size_t id = block->core_block_id;
+            failure_core_block = id;
             if (block->machine_auxiliary || id >= core->block_count ||
                 !reachable_blocks[id] || primary[id] != SIZE_MAX ||
                 block->indirect_entry != core->blocks[id].indirect_entry)
@@ -421,6 +480,8 @@ bool minic_machine_core_coverage_verify_with_policy(
             size_t id;
             if (!ins->has_core_origin) continue;
             id = ins->core_instruction_id;
+            failure_core_instruction = id;
+            failure_core_block = ins->core_block_id;
             if (ins->core_block_id >= core->block_count ||
                 !reachable_blocks[ins->core_block_id] ||
                 (block->has_core_block_origin &&
@@ -454,10 +515,19 @@ bool minic_machine_core_coverage_verify_with_policy(
     }
     /* The native function entry is ABI code, never a Core entry alias.  In
      * particular, a backedge to the first Core block must bypass prologue. */
+    failure_stage = "machine_entry_not_core_alias";
+    failure_core_block = SIZE_MAX;
+    failure_core_instruction = SIZE_MAX;
+    failure_machine_block = 0U;
     if (!machine->blocks[0].machine_auxiliary ||
         machine->blocks[0].has_core_block_origin) goto cleanup;
+    failure_stage = "missing_primary_core_block";
     for (i = 0U; i < core->block_count; ++i)
-        if (reachable_blocks[i] && primary[i] == SIZE_MAX) goto cleanup;
+        if (reachable_blocks[i] && primary[i] == SIZE_MAX) {
+            failure_core_block = i;
+            goto cleanup;
+        }
+    failure_stage = "entry_auxiliary_closure";
     /* First Core destination reached by walking only ABI/branch-island
      * auxiliary blocks must be the actual Core entry (which need not be 0). */
     {
@@ -490,6 +560,7 @@ bool minic_machine_core_coverage_verify_with_policy(
     }
     /* Every reachable Core block must also be physically reachable through
      * the selected Machine CFG, including the opaque indirect entries. */
+    failure_stage = "physical_machine_reachability";
     memset(visited, 0, machine->block_count * sizeof(*visited));
     {
         size_t head = 0U, tail = 1U;
@@ -513,22 +584,36 @@ bool minic_machine_core_coverage_verify_with_policy(
         }
     }
     for (i = 0U; i < core->block_count; ++i)
-        if (reachable_blocks[i] && !visited[primary[i]]) goto cleanup;
+        if (reachable_blocks[i] && !visited[primary[i]]) {
+            failure_core_block = i;
+            failure_machine_block = primary[i];
+            goto cleanup;
+        }
     for (i = 0U; i < machine->block_count; ++i) {
         const MinicMachineBlock *block = &machine->blocks[i];
         size_t j;
         if (visited[i]) continue;
         /* An unreachable physical island cannot prove a live Core effect. */
         for (j = 0U; j < block->instruction_count; ++j)
-            if (block->instructions[j].has_core_origin) goto cleanup;
+            if (block->instructions[j].has_core_origin) {
+                failure_machine_block = i;
+                failure_core_block = block->instructions[j].core_block_id;
+                failure_core_instruction =
+                    block->instructions[j].core_instruction_id;
+                goto cleanup;
+            }
     }
+    failure_stage = "exact_core_cfg_edges";
     if (!machine_core_edges_match(core, reachable_blocks, machine, primary,
                                   queue, visit_stamps, expected, actual))
         goto cleanup;
+    failure_stage = "observable_core_effects";
     for (i = 0U; i < core->instruction_count; ++i) {
         CoreMachineDemand demand;
         if (owner[i] == SIZE_MAX || !reachable_blocks[owner[i]]) continue;
-        demand = core_machine_demand(core->instructions[i].kind);
+        failure_core_instruction = i;
+        failure_core_block = owner[i];
+        demand = core_machine_demand(&core->instructions[i]);
         if (demand.requires_origin &&
             (!seen[i] || (effects[i] & demand.required_effects) !=
                           demand.required_effects))
@@ -565,6 +650,13 @@ bool minic_machine_core_coverage_verify_with_policy(
     }
     valid = true;
 cleanup:
+    if (!valid && getenv("MINIC_RV_MACHINE_TRACE") != NULL)
+        (void)fprintf(stderr,
+            "MACHINE_CORE_COVERAGE_REJECT function=%s stage=%s "
+            "core_block=%zu core_instruction=%zu machine_block=%zu\n",
+            core != NULL && core->name != NULL ? core->name : "<unknown>",
+            failure_stage, failure_core_block, failure_core_instruction,
+            failure_machine_block);
     free(owner);
     free(effects);
     free(seen);

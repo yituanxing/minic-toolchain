@@ -8,6 +8,6 @@ trap 'rm -rf "$temp"' EXIT
     -I"$root/include" -I"$root/src" \
     "$root/tests/target/x86_64_typed_asm_form_test.c" \
     "$root/src/target/x86_64/asm_contract.c" \
-    "$root/src/target/x86_64/raid6_simd.c" \
+    "$root/src/target/x86_64/machine_raid6_source_policy.c" \
     -Wl,--gc-sections -o "$temp/form-test"
 "$temp/form-test"

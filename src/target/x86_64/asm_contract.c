@@ -15,6 +15,19 @@ bool minic_x86_64_typed_machine_form_matches_template(
     size_t percpu_width = 0U;
     if (!text) return false;
     switch ((MinicX86MachineAsmForm)form_id) {
+    case MINIC_X86_MACHINE_ASM_CPUID_MATCHED:
+        return (variant == 6U || variant == 8U) && length == 5U &&
+            memcmp(text, "cpuid", 5U) == 0;
+    case MINIC_X86_MACHINE_ASM_MULACC_MATCHED:
+        return variant == 1U &&
+            minic_x86_64_asm_mulacc_template(text, length);
+    case MINIC_X86_MACHINE_ASM_BITSCAN_MATCHED:
+        return variant != 0U && variant ==
+            (uint32_t)minic_x86_64_asm_bit_scan_form(text, length);
+    case MINIC_X86_MACHINE_ASM_MATCHED_MEMORY:
+        return (variant == 2U || variant == 5U || variant == 7U) &&
+            minic_x86_64_asm_matched_template(text, length,
+                variant == 7U ? 4U : variant == 5U ? 3U : 1U);
     case MINIC_X86_MACHINE_ASM_ZSTD_CPUID:
         return variant == 0U && length == 5U &&
             memcmp(text, "cpuid", 5U) == 0;

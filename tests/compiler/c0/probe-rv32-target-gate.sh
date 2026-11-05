@@ -214,14 +214,69 @@ int linux_ctzll(unsigned long long value) {
 SRC
 "$MINIC_CC" --target=riscv32-linux -march=rv32i -mabi=ilp32 \
   -S "$work/kernel-clzll.i" -o "$work/kernel-clzll.s"
-grep -Fq '_rv32_clz64_high_' "$work/kernel-clzll.s"
-grep -Fq '_rv32_ctz64_start_' "$work/kernel-clzll.s"
-grep -Fq 'add t1, t1, t4' "$work/kernel-clzll.s"
+# Typed MachineIR uses a branchless two-limb selector.  The retired
+# FILE*-emitter's private label names are deliberately not an interface.
+# Check the actual base-I selection primitives, then prove both 64-bit
+# halves and boundary values by executing the emitted ELF32 under QEMU
+# whenever GNU cross/QEMU are installed (mandatory in the RV32 matrix).
+grep -Eq '^[[:space:]]+snez x[0-9]+, x[0-9]+' "$work/kernel-clzll.s"
+grep -Eq '^[[:space:]]+srl x[0-9]+, x[0-9]+, x[0-9]+' "$work/kernel-clzll.s"
+grep -Eq '^[[:space:]]+add x[0-9]+, x[0-9]+, x[0-9]+' "$work/kernel-clzll.s"
 if grep -Eq '^[[:space:]]+(clz|ctz|clzw|ctzw|mul|mulw|div)[[:space:]]' "$work/kernel-clzll.s"; then
   echo 'RV32I_CLZLL=FAIL extension_opcodes_leaked' >&2
   exit 1
 fi
-echo 'RV32I_CLZLL=PASS two_word_64bit_I_only=1 zero_half_offset=1'
+if command -v riscv64-linux-gnu-gcc >/dev/null 2>&1 &&
+   command -v qemu-riscv32 >/dev/null 2>&1; then
+    cat > "$work/kernel-clzll-oracle.c" <<'SRC'
+extern int linux_clzll(unsigned long long);
+extern int linux_ctzll(unsigned long long);
+static volatile unsigned long long probes[] = {
+    1ULL, 2ULL, 0x80000000ULL, 0x100000000ULL,
+    0x8000000000000000ULL, 0x0000000100000001ULL,
+    0x00000000f0000000ULL, 0xf000000000000000ULL,
+    0x123456789abcdef0ULL, 0xffffffffffffffffULL
+};
+static const int leading[] = {63, 62, 32, 31, 0, 31, 32, 0, 3, 0};
+static const int trailing[] = {0, 1, 31, 32, 63, 0, 28, 60, 4, 0};
+int rv32_bitscan_oracle(void) {
+    unsigned int i;
+    for (i = 0; i < sizeof(probes) / sizeof(probes[0]); ++i) {
+        unsigned long long value = probes[i];
+        if (linux_clzll(value) != leading[i]) return 1 + (int)i;
+        if (linux_ctzll(value) != trailing[i]) return 21 + (int)i;
+    }
+    return 0;
+}
+SRC
+    cat > "$work/kernel-clzll-start.S" <<'SRC'
+    .option norvc
+    .globl _start
+    .type _start, @function
+_start:
+    call rv32_bitscan_oracle
+    li a7, 93
+    ecall
+SRC
+    riscv64-linux-gnu-gcc -march=rv32i -mabi=ilp32 -c \
+        "$work/kernel-clzll.s" -o "$work/kernel-clzll.o"
+    riscv64-linux-gnu-gcc -march=rv32i -mabi=ilp32 -O0 \
+        -ffreestanding -fno-builtin -c "$work/kernel-clzll-oracle.c" \
+        -o "$work/kernel-clzll-oracle.o"
+    riscv64-linux-gnu-gcc -march=rv32i -mabi=ilp32 -c \
+        "$work/kernel-clzll-start.S" -o "$work/kernel-clzll-start.o"
+    riscv64-linux-gnu-gcc -march=rv32i -mabi=ilp32 -static -nostdlib \
+        -Wl,-e,_start -Wl,--no-relax \
+        "$work/kernel-clzll-start.o" "$work/kernel-clzll-oracle.o" \
+        "$work/kernel-clzll.o" -o "$work/kernel-clzll.elf"
+    qemu-riscv32 "$work/kernel-clzll.elf" || {
+        echo 'RV32I_CLZLL=FAIL QEMU_two_limb_runtime_semantics' >&2
+        exit 1
+    }
+    echo 'RV32I_CLZLL=PASS two_word_64bit_I_only=1 GNU_ELF32=1 QEMU_values=10 CLZ=1 CTZ=1'
+else
+    echo 'RV32I_CLZLL=PASS two_word_64bit_I_only=1 typed_base_I=1 QEMU=NOT_AVAILABLE'
+fi
 cat > "$work/kernel-structured-atomic.i" <<'SRC'
 unsigned int linux_amo_fetch_add(volatile unsigned int *ptr, unsigned int delta) {
     unsigned int old;

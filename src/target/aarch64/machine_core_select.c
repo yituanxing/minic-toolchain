@@ -2,6 +2,7 @@
 #include "target/aarch64/machine_frame_select.h"
 #include "target/aarch64/machine_opcode.h"
 #include "target/aarch64/machine_source_asm.h"
+#include "target/aarch64/machine_lse_source_select.h"
 #include "target/aarch64/asm_contract_internal.h"
 #include "target/aarch64/abi.h"
 #include "target/aarch64/neon_emit.h"
@@ -1492,6 +1493,334 @@ static bool a64_linux_one_gp_source(A64CoreSelection *sel,
         &binding, 1U, NULL, 0U, false, false);
 }
 
+/* Original Linux read_sysreg()/write_sysreg() and the encoded MSR_S/MRS_S
+ * macro wrappers are one audited family: a sealed finite ISA system-register
+ * grammar, one physical x9 operand, and a typed Core lvalue store for reads.
+ * GNU assembles the original named register or macro, never an invented
+ * string-valued Machine opcode. */
+static bool a64_linux_sysreg_source(A64CoreSelection *sel,
+    const MinicCoreInstruction *ins, const MinicCoreInlineAsm *source) {
+    const MinicCoreFunction *fn = sel->ctx->fn;
+    const MinicCoreStructuredInlineAsmOperand *operand =
+        ins->value.structured_inline_asm.operands;
+    const uint32_t form = source->target_machine_form_id;
+    const bool read = form == AARCH64_MACHINE_ASM_MRS ||
+        form == AARCH64_MACHINE_ASM_ENCODED_SYSREG_READ;
+    const uint32_t variant = form == AARCH64_MACHINE_ASM_ENCODED_SYSREG_READ ?
+        aarch64_linux_encoded_sysreg_form(source->template_text,
+            source->template_length) :
+        form == AARCH64_MACHINE_ASM_ENCODED_SYSREG_WRITE ?
+        aarch64_linux_encoded_sysreg_write_form(source->template_text,
+            source->template_length) : 0U;
+    MinicMachineOperand binding = a64_gp(A64_T0, 64U,
+        read ? MINIC_MACHINE_REGISTER_WRITE : MINIC_MACHINE_REGISTER_READ);
+    if ((form != AARCH64_MACHINE_ASM_MRS &&
+         form != AARCH64_MACHINE_ASM_MSR &&
+         form != AARCH64_MACHINE_ASM_ENCODED_SYSREG_READ &&
+         form != AARCH64_MACHINE_ASM_ENCODED_SYSREG_WRITE) ||
+        (form == AARCH64_MACHINE_ASM_MRS &&
+         aarch64_linux_mrs_register(source->template_text,
+             source->template_length) == NULL) ||
+        (form == AARCH64_MACHINE_ASM_MSR &&
+         aarch64_linux_msr_register(source->template_text,
+             source->template_length) == NULL) ||
+        ((form == AARCH64_MACHINE_ASM_ENCODED_SYSREG_READ ||
+          form == AARCH64_MACHINE_ASM_ENCODED_SYSREG_WRITE) &&
+         variant == 0U) ||
+        source->target_machine_form_variant != variant ||
+        source->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
+        !source->is_volatile || source->is_goto ||
+        source->has_memory_clobber || source->register_clobber_count != 0U ||
+        source->resolved_immediate_count != 0U ||
+        source->symbol_reference_count != 0U ||
+        source->deferred_immediate_symbol != NULL ||
+        ins->result != MINIC_CORE_VALUE_INVALID ||
+        !minic_core_function_type_is_kind(fn, ins->core_type_id,
+            MINIC_CORE_TYPE_VOID) ||
+        ins->value.structured_inline_asm.operand_count != 1U ||
+        sel->ctx->machine_frame->has_dynamic_stack || operand == NULL ||
+        operand->operand_index != 0U ||
+        operand->kind != (read ?
+            MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
+            MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT) ||
+        operand->has_fixed_register_binding || operand->early_clobber ||
+        operand->physical_early_clobber || operand->physical_read_write ||
+        operand->has_tied_output || operand->value >= fn->value_count ||
+        !aarch64_asm_core_integer(fn, operand->value, read, 8U, 0))
+        return false;
+    binding.asm_constraint = read ? "=r" :
+        form == AARCH64_MACHINE_ASM_MSR &&
+        strcmp(aarch64_linux_msr_register(source->template_text,
+            source->template_length), "s3_0_c15_c0_4") == 0 ? "r" : "rZ";
+    if (!read && !a64_load_core(sel, operand->value, A64_T0, 64U))
+        return false;
+    if (!minic_machine_builder_emit_core_source_asm(&sel->builder,
+            source, 0U, &binding, 1U, NULL, 0U, false, false)) return false;
+    if (!read) return true;
+    return a64_load_core(sel, operand->value, A64_T1, 64U) &&
+        a64_memory_register(sel, MINIC_A64_MACHINE_STR_X, false,
+            A64_T0, 64U, A64_T1, 0U, true, false);
+}
+
+/* Kernel CASP128 keeps the original GNU source template, including
+ * .arch_extension, GNU named operands and the observable x0/x1 fixed pair.
+ * The memory carrier and seven scalar operands are materialized BEFORE the
+ * sealed MachineIR ASM; only the two read/write lvalues are written back. */
+static bool a64_linux_casp128_source(A64CoreSelection *sel,
+    const MinicCoreInstruction *ins, const MinicCoreInlineAsm *source) {
+    static const char *const names[] = {
+        "old1", "old2", "v", "new1", "new2", "ptr", "oldval1", "oldval2"
+    };
+    static const char *const constraints[] = {
+        "+&r", "+&r", "+Q", "r", "r", "r", "r", "r"
+    };
+    static const unsigned int registers[] = {0U, 1U, 10U, 2U, 3U, 4U, 11U, 12U};
+    const MinicCoreFunction *fn = sel->ctx->fn;
+    const MinicCoreStructuredInlineAsmOperand *ops =
+        ins->value.structured_inline_asm.operands;
+    const unsigned int form = aarch64_linux_lse_casp128_form(
+        source->template_text, source->template_length);
+    MinicMachineOperand machine[8];
+    size_t i;
+    if (form == 0U ||
+        source->target_machine_form_id != AARCH64_MACHINE_ASM_LSE_CASP128 ||
+        source->target_machine_form_variant != form ||
+        source->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
+        ins->result != MINIC_CORE_VALUE_INVALID ||
+        !minic_core_function_type_is_kind(fn, ins->core_type_id,
+            MINIC_CORE_TYPE_VOID) ||
+        !source->is_volatile || source->is_goto ||
+        !source->has_memory_clobber ||
+        source->register_clobber_count != 0U ||
+        source->resolved_immediate_count != 0U ||
+        source->symbol_reference_count != 0U ||
+        source->deferred_immediate_symbol != NULL ||
+        ins->value.structured_inline_asm.operand_count != 8U ||
+        ops == NULL || sel->ctx->machine_frame->has_dynamic_stack)
+        return false;
+    for (i = 0U; i < 8U; ++i) {
+        const bool fixed = i < 2U || (i >= 3U && i <= 5U);
+        const MinicCoreFixedRegisterBinding *binding;
+        if (ops[i].operand_index != i || ops[i].value >= fn->value_count ||
+            ops[i].has_fixed_register_binding != fixed ||
+            ops[i].early_clobber || ops[i].has_tied_output ||
+            ops[i].kind != (i == 2U ?
+                MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE :
+                i < 2U ? MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE :
+                MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT) ||
+            !aarch64_asm_core_integer(fn, ops[i].value, i <= 2U,
+                i == 2U ? 16U : 8U, -1)) return false;
+        if (fixed) {
+            if (ops[i].fixed_register_binding_id >=
+                fn->fixed_register_binding_count) return false;
+            binding = &fn->fixed_register_bindings[
+                ops[i].fixed_register_binding_id];
+            if (!binding->is_local || binding->register_name == NULL ||
+                binding->register_name_length != 2U ||
+                (binding->register_name[0] != 'x' &&
+                 binding->register_name[0] != 'r') ||
+                binding->register_name[1] !=
+                    (char)('0' + (i < 2U ? i : i - 1U))) return false;
+        }
+        machine[i] = a64_gp(registers[i], 64U,
+            i < 2U ? MINIC_MACHINE_REGISTER_READ |
+                MINIC_MACHINE_REGISTER_WRITE : MINIC_MACHINE_REGISTER_READ);
+        machine[i].asm_constraint = (char *)constraints[i];
+        machine[i].asm_name = (char *)names[i];
+    }
+    if (!a64_load_core(sel, ops[2].value, 10U, 64U) ||
+        !a64_load_core(sel, ops[0].value, 11U, 64U) ||
+        !a64_memory_register(sel, MINIC_A64_MACHINE_LDR_X, false,
+            0U, 64U, 11U, 0U, false, false) ||
+        !a64_load_core(sel, ops[1].value, 11U, 64U) ||
+        !a64_memory_register(sel, MINIC_A64_MACHINE_LDR_X, false,
+            1U, 64U, 11U, 0U, false, false) ||
+        !a64_load_core(sel, ops[3].value, 2U, 64U) ||
+        !a64_load_core(sel, ops[4].value, 3U, 64U) ||
+        !a64_load_core(sel, ops[5].value, 4U, 64U) ||
+        !a64_load_core(sel, ops[6].value, 11U, 64U) ||
+        !a64_load_core(sel, ops[7].value, 12U, 64U) ||
+        !minic_machine_builder_emit_core_source_asm(&sel->builder, source,
+            MINIC_MACHINE_EFFECT_MEMORY_READ | MINIC_MACHINE_EFFECT_MEMORY_WRITE,
+            machine, 8U, NULL, 0U, false, false) ||
+        !a64_load_core(sel, ops[0].value, 11U, 64U) ||
+        !a64_memory_register(sel, MINIC_A64_MACHINE_STR_X, false,
+            0U, 64U, 11U, 0U, true, false) ||
+        !a64_load_core(sel, ops[1].value, 11U, 64U) ||
+        !a64_memory_register(sel, MINIC_A64_MACHINE_STR_X, false,
+            1U, 64U, 11U, 0U, true, false)) return false;
+    return true;
+}
+
+/* One selected physical path for the complete scalar LSE family:
+ * st{clr,set,eor,add}, their fetched counterparts and CAS{b,h,w,x}.
+ * The front end has already sealed GNU input/output constraints; x10 is
+ * the true +Q address while x9 is the hardware old-value result. */
+static bool a64_linux_scalar_lse_source(A64CoreSelection *sel,
+    const MinicCoreInstruction *ins, const MinicCoreInlineAsm *source) {
+    const MinicCoreFunction *fn = sel->ctx->fn;
+    const MinicCoreStructuredInlineAsmOperand *ops =
+        ins->value.structured_inline_asm.operands;
+    Aarch64LseForm form = {0};
+    MinicMachineOperand machine[3];
+    static const uint32_t store[4] = {
+        MINIC_A64_MACHINE_STRB, MINIC_A64_MACHINE_STRH,
+        MINIC_A64_MACHINE_STR_W, MINIC_A64_MACHINE_STR_X
+    };
+    static const uint32_t load[4] = {
+        MINIC_A64_MACHINE_LDRB, MINIC_A64_MACHINE_LDRH,
+        MINIC_A64_MACHINE_LDR_W, MINIC_A64_MACHINE_LDR_X
+    };
+    size_t index, count, i;
+    unsigned int bits;
+    if (source->target_machine_form_id != AARCH64_MACHINE_ASM_LSE ||
+        source->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
+        source->template_text == NULL ||
+        !(aarch64_lse_form(source->template_text, source->template_length,
+            false, &form) ||
+          aarch64_lse_form(source->template_text, source->template_length,
+            true, &form)) ||
+        ins->result != MINIC_CORE_VALUE_INVALID ||
+        !minic_core_function_type_is_kind(fn, ins->core_type_id,
+            MINIC_CORE_TYPE_VOID) ||
+        !source->is_volatile || source->is_goto ||
+        !source->has_memory_clobber || source->register_clobber_count != 0U ||
+        source->resolved_immediate_count != 0U ||
+        source->deferred_immediate_symbol != NULL ||
+        ops == NULL || sel->ctx->machine_frame->has_dynamic_stack)
+        return false;
+    if (source->target_machine_form_variant !=
+            (((uint32_t)form.kind << 16) | ((uint32_t)form.width << 8) |
+             form.mode)) return false;
+    count = form.kind == AARCH64_LSE_STORE ? 2U : 3U;
+    index = form.width == 1U ? 0U : form.width == 2U ? 1U :
+        form.width == 4U ? 2U : 3U;
+    if (ins->value.structured_inline_asm.operand_count != count ||
+        (form.width != 1U && form.width != 2U &&
+         form.width != 4U && form.width != 8U) || form.mode > 3U)
+        return false;
+    bits = form.width == 8U ? 64U : 32U;
+    for (i = 0U; i < count; ++i) {
+        const MinicCoreStructuredInlineAsmOperandKind kind = i == 0U ?
+            MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE :
+            (i == 1U && form.kind == AARCH64_LSE_FETCH) ?
+                MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
+            (i == 1U && form.kind == AARCH64_LSE_CAS) ?
+                MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE :
+                MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+        if (ops[i].operand_index != i || ops[i].kind != kind ||
+            ops[i].value >= fn->value_count || ops[i].early_clobber ||
+            ops[i].has_fixed_register_binding || ops[i].has_tied_output ||
+            !aarch64_asm_core_integer(fn, ops[i].value,
+                i != count - 1U, form.width, -1)) return false;
+    }
+    machine[0] = a64_gp(10U, 64U, MINIC_MACHINE_REGISTER_READ);
+    machine[0].asm_constraint = "+Q";
+    machine[0].asm_name = "v";
+    if (!a64_load_core(sel, ops[0].value, 10U, 64U)) return false;
+    if (form.kind == AARCH64_LSE_STORE) {
+        machine[1] = a64_gp(11U, 64U, MINIC_MACHINE_REGISTER_READ);
+        machine[1].asm_constraint = "r";
+        machine[1].asm_name = "i";
+        if (!a64_load_core(sel, ops[1].value, 11U, bits)) return false;
+    } else {
+        machine[1] = a64_gp(9U, 64U, form.kind == AARCH64_LSE_CAS ?
+            MINIC_MACHINE_REGISTER_READ | MINIC_MACHINE_REGISTER_WRITE :
+            MINIC_MACHINE_REGISTER_WRITE);
+        machine[1].asm_constraint = form.kind == AARCH64_LSE_CAS ? "+r" : "=r";
+        machine[1].asm_name = "old";
+        machine[2] = a64_gp(11U, 64U, MINIC_MACHINE_REGISTER_READ);
+        machine[2].asm_constraint = form.kind == AARCH64_LSE_CAS ? "rZ" : "r";
+        machine[2].asm_name = form.kind == AARCH64_LSE_CAS ? "new" : "i";
+        if (form.kind == AARCH64_LSE_CAS) {
+            if (!a64_load_core(sel, ops[1].value, 12U, 64U) ||
+                !a64_memory_register(sel, load[index], false,
+                    9U, bits, 12U, 0U, false, false)) return false;
+        }
+        if (!a64_load_core(sel, ops[2].value, 11U, bits)) return false;
+    }
+    if (!minic_machine_builder_emit_core_source_asm(&sel->builder, source,
+        MINIC_MACHINE_EFFECT_MEMORY_READ | MINIC_MACHINE_EFFECT_MEMORY_WRITE,
+        machine, count, NULL, 0U, false, false)) return false;
+    if (form.kind == AARCH64_LSE_STORE) return true;
+    return a64_load_core(sel, ops[1].value, 12U, 64U) &&
+        a64_memory_register(sel, store[index], false,
+            9U, bits, 12U, 0U, true, false);
+}
+
+/* Signed decrement-unless-negative is an indivisible GNU CASAL retry loop,
+ * not a single pseudo-instruction. Keep the original 1b/2f local labels,
+ * physical condition-code clobber and distinct +Q/ret/tmp operands. */
+static bool a64_linux_lse_dec_positive_source(A64CoreSelection *sel,
+    const MinicCoreInstruction *ins, const MinicCoreInlineAsm *source) {
+    const MinicCoreFunction *fn = sel->ctx->fn;
+    const MinicCoreStructuredInlineAsmOperand *ops =
+        ins->value.structured_inline_asm.operands;
+    MinicMachineRegisterEffect flags = {
+        {0U, 4U, MINIC_MACHINE_REGISTER_FLAGS},
+        MINIC_MACHINE_REGISTER_CLOBBER
+    };
+    MinicMachineOperand machine[3];
+    size_t i;
+    if (source->target_machine_form_id !=
+            AARCH64_MACHINE_ASM_LSE_DEC_POSITIVE ||
+        source->target_machine_form_variant != 0U ||
+        !aarch64_linux_lse_dec_positive_form(
+            source->template_text, source->template_length) ||
+        source->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
+        ins->result != MINIC_CORE_VALUE_INVALID ||
+        !minic_core_function_type_is_kind(fn, ins->core_type_id,
+            MINIC_CORE_TYPE_VOID) ||
+        !source->is_volatile || source->is_goto ||
+        !source->has_memory_clobber ||
+        source->register_clobber_count != 1U ||
+        source->register_clobbers == NULL ||
+        source->register_clobbers[0].name == NULL ||
+        source->register_clobbers[0].name_length != 2U ||
+        memcmp(source->register_clobbers[0].name, "cc", 2U) != 0 ||
+        source->resolved_immediate_count != 0U ||
+        source->symbol_reference_count != 0U ||
+        source->deferred_immediate_symbol != NULL ||
+        ins->value.structured_inline_asm.operand_count != 3U ||
+        ops == NULL || sel->ctx->machine_frame->has_dynamic_stack)
+        return false;
+    for (i = 0U; i < 3U; ++i)
+        if (ops[i].operand_index != i || ops[i].value >= fn->value_count ||
+            ops[i].has_fixed_register_binding || ops[i].early_clobber ||
+            ops[i].has_tied_output ||
+            ops[i].kind != (i == 0U ?
+                MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE :
+                i == 1U ? MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE :
+                MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT) ||
+            !(i == 0U ? aarch64_asm_core_pointer(fn, ops[i].value, true) :
+                aarch64_asm_core_integer(fn, ops[i].value, true, 8U, -1)))
+            return false;
+    machine[0] = a64_gp(9U, 64U,
+        MINIC_MACHINE_REGISTER_READ | MINIC_MACHINE_REGISTER_WRITE);
+    machine[0].asm_name = "ret";
+    machine[0].asm_constraint = "+&r";
+    machine[1] = a64_gp(10U, 64U, MINIC_MACHINE_REGISTER_READ);
+    machine[1].asm_name = "v";
+    machine[1].asm_constraint = "+Q";
+    machine[2] = a64_gp(12U, 64U, MINIC_MACHINE_REGISTER_WRITE);
+    machine[2].asm_name = "tmp";
+    machine[2].asm_constraint = "=&r";
+    if (!a64_load_core(sel, ops[1].value, 10U, 64U) ||
+        !a64_load_core(sel, ops[0].value, 11U, 64U) ||
+        !a64_memory_register(sel, MINIC_A64_MACHINE_LDR_X, false,
+            9U, 64U, 11U, 0U, false, false) ||
+        !minic_machine_builder_emit_core_source_asm(&sel->builder, source,
+            MINIC_MACHINE_EFFECT_MEMORY_READ | MINIC_MACHINE_EFFECT_MEMORY_WRITE,
+            machine, 3U, &flags, 1U, false, false) ||
+        !a64_load_core(sel, ops[0].value, 11U, 64U) ||
+        !a64_memory_register(sel, MINIC_A64_MACHINE_STR_X, false,
+            9U, 64U, 11U, 0U, true, false) ||
+        !a64_load_core(sel, ops[2].value, 11U, 64U) ||
+        !a64_memory_register(sel, MINIC_A64_MACHINE_STR_X, false,
+            12U, 64U, 11U, 0U, true, false)) return false;
+    return true;
+}
+
 /* Physical source-ASM seals require two independent proofs. machine_opcode.c
  * checks the exact hardware opcode, size and effects; this target callback
  * checks the corresponding sealed Core address/scalar roles and native type
@@ -2565,6 +2894,17 @@ static bool a64_core_instruction(A64CoreSelection *sel,
             source->target_machine_form_id == AARCH64_MACHINE_ASM_CACHE_OP ||
             source->target_machine_form_id == AARCH64_MACHINE_ASM_PREFETCH)
             return a64_linux_one_gp_source(sel, ins, source);
+        if (source->target_machine_form_id == AARCH64_MACHINE_ASM_MRS ||
+            source->target_machine_form_id == AARCH64_MACHINE_ASM_MSR ||
+            source->target_machine_form_id == AARCH64_MACHINE_ASM_ENCODED_SYSREG_READ ||
+            source->target_machine_form_id == AARCH64_MACHINE_ASM_ENCODED_SYSREG_WRITE)
+            return a64_linux_sysreg_source(sel, ins, source);
+        if (source->target_machine_form_id == AARCH64_MACHINE_ASM_LSE_CASP128)
+            return a64_linux_casp128_source(sel, ins, source);
+        if (source->target_machine_form_id == AARCH64_MACHINE_ASM_LSE)
+            return a64_linux_scalar_lse_source(sel, ins, source);
+        if (source->target_machine_form_id == AARCH64_MACHINE_ASM_LSE_DEC_POSITIVE)
+            return a64_linux_lse_dec_positive_source(sel, ins, source);
         if (ins->result != MINIC_CORE_VALUE_INVALID ||
             ins->value.structured_inline_asm.operand_count != 0U ||
             !minic_core_function_type_is_kind(fn, ins->core_type_id,
@@ -3152,10 +3492,22 @@ bool minic_aarch64_machine_select_core_subset(
             if (!minic_core_block_instruction_at(fn, block, index,
                     &ins_id, &ins)) goto cleanup;
             minic_machine_builder_set_origin(&sel.builder, i, ins_id);
-            if (!a64_core_instruction(&sel, ins, ins_id)) goto cleanup;
+            if (!a64_core_instruction(&sel, ins, ins_id)) {
+                if (getenv("MINIC_M1_TRACE") != NULL)
+                    (void)fprintf(stderr,
+                        "MINIC_A64_MIR_REJECT function=%s block=%zu instruction=%zu kind=%d phase=core_selection\n",
+                        ctx->name, i, (size_t)ins_id, (int)ins->kind);
+                goto cleanup;
+            }
         }
         minic_machine_builder_clear_origin(&sel.builder);
-        if (!a64_terminate(&sel, i)) goto cleanup;
+        if (!a64_terminate(&sel, i)) {
+            if (getenv("MINIC_M1_TRACE") != NULL)
+                (void)fprintf(stderr,
+                    "MINIC_A64_MIR_REJECT function=%s block=%zu phase=terminator kind=%d\n",
+                    ctx->name, i, (int)block->terminator.kind);
+            goto cleanup;
+        }
     }
     ok = a64_derive_generated_features(&sel) &&
          minic_machine_gnu_asm_preflight(machine, &sel.policy);

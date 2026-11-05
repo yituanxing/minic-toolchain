@@ -8,11 +8,19 @@ work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT HUP INT TERM
 "${HOST_CC:-cc}" -std=gnu11 -E -P "$src" -o "$work/positive.i"
 "$mini" --target=aarch64-linux -S "$work/positive.i" -o "$work/positive.s"
-for mnemonic in casp caspal casal; do
-    grep -Eq "^  $mnemonic " "$work/positive.s"
+# MachineIR emits the original GNU template (including its whitespace),
+# rather than the removed direct FILE* emitter's two-space presentation.
+# Keep the ISA, fixed-register pair, memory base and retry target exact.
+for mnemonic in casp caspal; do
+    grep -Eq "^[[:space:]]*$mnemonic[[:space:]]+x0,[[:space:]]*x1,[[:space:]]*x2,[[:space:]]*x3,[[:space:]]*\\[x10\\][[:space:]]*$" \
+        "$work/positive.s"
 done
-grep -Fq '  .arch_extension lse' "$work/positive.s"
-grep -Fq '  cbnz x12, 1b' "$work/positive.s"
+grep -Eq '^[[:space:]]*casal[[:space:]]+x12,[[:space:]]*x9,[[:space:]]*\[x10\][[:space:]]*$' \
+    "$work/positive.s"
+grep -Eq '^[[:space:]]*\.arch_extension[[:space:]]+lse[[:space:]]*$' \
+    "$work/positive.s"
+grep -Eq '^[[:space:]]*cbnz[[:space:]]+x12,[[:space:]]*1b[[:space:]]*$' \
+    "$work/positive.s"
 for target in x86_64 loongarch64; do
     if "$mini" --target="$target-linux" -S "$work/positive.i" \
          -o "$work/foreign.s" >/dev/null 2>&1; then

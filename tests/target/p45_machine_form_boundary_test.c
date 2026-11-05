@@ -1,3 +1,4 @@
+#define _POSIX_C_SOURCE 200809L
 /* P45: a GNU C source form is not itself permission to emit an opcode.
  * SourceBackend proves the GNU operand/effect contract, Core transports
  * machine form + variant, and the ISA backend checks the form again.
@@ -14,7 +15,7 @@
 #include "target/aarch64/asm_contract.h"
 #include "target/aarch64/asm_contract_internal.h"
 #include "target/x86_64/asm_contract.h"
-#include "target/x86_64/machine_internal.h"
+#include "x86_64/typed_source_asm_probe.h"
 
 #ifdef NDEBUG
 #undef NDEBUG
@@ -22,6 +23,7 @@
 #include <assert.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 typedef enum ProbeArch { PROBE_X86, PROBE_A64 } ProbeArch;
@@ -119,14 +121,14 @@ static bool emit_one(ProbeArch arch, const MinicCoreFunction *function,
     MinicDirectLP64BlockContext a64 = {0};
     MinicLP64FramePlan a64_frame = {0};
     MinicMachineLP64FrameContract a64_machine_frame = {0};
-    MinicX86Frame x86_frame = {0};
-    MinicCoreModule module = {.finalized = true};
-    MinicTargetInfo target = {0};
     size_t offsets[2] = {16U, 24U};
-    FILE *stream = tmpfile();
-    size_t size;
+    FILE *stream;
+    char *buffer = NULL;
+    size_t length = 0U;
     bool result;
-    assert(output != NULL && capacity > 1U && stream != NULL);
+    assert(output != NULL && capacity > 1U);
+    stream = open_memstream(&buffer, &length);
+    assert(stream != NULL);
     output[0] = '\0';
     a64_frame.value_count = 2U;
     a64_frame.value_offsets = offsets;
@@ -134,18 +136,15 @@ static bool emit_one(ProbeArch arch, const MinicCoreFunction *function,
     a64.frame_plan = &a64_frame;
     a64_machine_frame.frame_size = 64U;
     a64.machine_frame = &a64_machine_frame;
-    x86_frame.value_count = 2U;
-    x86_frame.value_offsets = offsets;
     result = arch == PROBE_A64
         ? minic_aarch64_emit_qualified_structured_asm(stream, &a64, instruction)
-        : minic_x86_64_emit_structured_asm(stream, &module, &target,
-            function, &x86_frame, instruction, 0U);
-    assert(fflush(stream) == 0 && fseek(stream, 0L, SEEK_SET) == 0);
-    size = fread(output, 1U, capacity - 1U, stream);
-    assert(!ferror(stream));
-    assert(size < capacity - 1U || fgetc(stream) == EOF);
-    output[size] = '\0';
+        : minic_test_x86_typed_source_asm_emit(stream, function,
+            instruction);
+    assert(fflush(stream) == 0 && length < capacity);
+    memcpy(output, buffer, length);
+    output[length] = '\0';
     assert(fclose(stream) == 0);
+    free(buffer);
     return result;
 }
 
@@ -192,6 +191,9 @@ static void check_machine_boundary(ProbeArch arch) {
     form.template_length = strlen(text);
     form.is_volatile = true;
     form.has_memory_clobber = true;
+    form.source_asm_unique_id = 45U;
+    form.goto_target = MINIC_CORE_BLOCK_INVALID;
+    form.goto_second_target = MINIC_CORE_BLOCK_INVALID;
     form.operand_plan_owner = proof.owner;
     form.target_machine_form_id = proof.target_machine_form_id;
     form.target_machine_form_variant = proof.target_machine_form_variant;
@@ -304,13 +306,25 @@ static void check_machine_boundary(ProbeArch arch) {
         form.template_length = strlen(form.template_text);
         ins.value.structured_inline_asm.operand_count = 0U;
     }
-    if (!emit_one(arch, &function, &ins, positive, sizeof(positive))) {
-        fprintf(stderr, "P45 GENERIC STRUCTURED REJECTED arch=%s asm=%s\n",
-                arch == PROBE_X86 ? "x86_64" : "aarch64", positive);
-        assert(0 && "pre-existing generic structured ISA form must survive");
+    if (arch == PROBE_X86) {
+        /* Known production feature gap after the FILE* cutover: the old
+         * generic ID0 register-to-memory MOVQ was a positive.  MachineIR
+         * currently fails it closed.  Keep the original spell and role
+         * here so this explicit unresolved migration gap cannot be erased
+         * by replacing the test with an unrelated accepted opcode. */
+        must_reject(arch, "TYPED_GAP_GENERIC_MOVQ_MEM_OUTPUT",
+                    &function, &ins);
+        fputs("P45_TYPED_REGRESSION=FAIL unsupported-positive="
+              "generic_movq_memory_output\n", stderr);
+        assert(0 && "restore x86 generic MOVQ positive in typed MachineIR");
+    } else {
+        if (!emit_one(arch, &function, &ins, positive, sizeof(positive))) {
+            fprintf(stderr, "P45 GENERIC STRUCTURED REJECTED aarch64 asm=%s\n",
+                    positive);
+            assert(0 && "pre-existing generic structured ISA form must survive");
+        }
+        assert(strstr(positive, "  dmb oshst\n") != NULL);
     }
-    assert(strstr(positive, arch == PROBE_X86
-        ? "  movq %rbx, (%r11)\n" : "  dmb oshst\n") != NULL);
 
     /* Missing ownership is not a supported third machine-ASM dialect;
      * Core's ID0 invariant also forbids an orphan nonzero variant. Even

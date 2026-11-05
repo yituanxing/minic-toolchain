@@ -171,7 +171,14 @@ typedef enum MinicX86MachineAsmForm {
     MINIC_X86_MACHINE_ASM_GS_ATOMIC,
     MINIC_X86_MACHINE_ASM_REP_STOS,
     MINIC_X86_MACHINE_ASM_LOCK_BITCC,
-    MINIC_X86_MACHINE_ASM_CSUM_PARTIAL
+    MINIC_X86_MACHINE_ASM_CSUM_PARTIAL,
+    /* Original Linux/BusyBox GNU register-matched patterns. These used to
+     * reach the machine backend under an untyped form ID zero; every shape
+     * now has a distinct Source-owned, machine-revalidated identity. */
+    MINIC_X86_MACHINE_ASM_CPUID_MATCHED,
+    MINIC_X86_MACHINE_ASM_MULACC_MATCHED,
+    MINIC_X86_MACHINE_ASM_BITSCAN_MATCHED,
+    MINIC_X86_MACHINE_ASM_MATCHED_MEMORY
 } MinicX86MachineAsmForm;
 
 /* RAID6's fixed XMM/YMM/ZMM and opmask-register GNU templates. Every

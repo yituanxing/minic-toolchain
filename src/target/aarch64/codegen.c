@@ -1,11 +1,10 @@
 #include "target/aarch64/codegen.h"
-#include "target/aarch64/block_emit.h"
+#include "target/aarch64/machine_core_select.h"
+#include "target/aarch64/machine_opcode.h"
 #include "target/aarch64/abi.h"
 #include "target/aarch64/asm_contract.h"
-#include "target/aarch64/frame_emit.h"
 #include "target/common/direct_function_emit.h"
 #include "target/common/direct_program_emit.h"
-#include <stdint.h>
 #include <stdio.h>
 
 /* AAPCS64's physical placement is a target-owned value. Shared planners
@@ -31,106 +30,6 @@ static const MinicDirectLP64AbiPolicy aarch64_abi_policy = {
     .core_indirect_return = minic_aarch64_indirect_record_core
 };
 
-/* Only native AAPCS64 prologue policy lives here. Symbol metadata,
- * Core-to-ABI planning, dynamic rewrite lifecycle, BlockContext ownership
- * and ELF completion are shared with the other direct LP64 backend. */
-static bool aarch64_emit_prologue(
-    FILE *out, const MinicDirectLP64BlockContext *ctx) {
-    const MinicCoreFunction *fn = ctx->fn;
-    const char *name = ctx->name;
-    const size_t frame = ctx->machine_frame->frame_size;
-    const size_t save_offset = ctx->machine_frame->save_offset;
-    const bool has_calls = ctx->machine_frame->has_calls;
-    const bool dynamic_frame = ctx->machine_frame->has_dynamic_stack;
-    const bool realigned = ctx->machine_frame->frame_alignment > 16U;
-    const MinicA64FrameView view = {
-        dynamic_frame, frame, 0U, ctx->machine_frame->saved_entry_sp_offset
-    };
-    const MinicA64ScratchPolicy scratch = {0U, 0U};
-    size_t i;
-    if (realigned && (!dynamic_frame ||
-        ctx->machine_frame->frame_alignment > 256U ||
-        (ctx->machine_frame->frame_alignment & (ctx->machine_frame->frame_alignment - 1U)) != 0U ||
-        ctx->machine_frame->saved_entry_sp_offset == SIZE_MAX))
-        goto fail;
-    /* Linux arm64 stack unwinding requires an AAPCS64 frame record even
-     * for leaf functions. The 16B record lives ABOVE all Core-local frame
-     * slots: [x29] is the caller's x29 and [x29+8] its return PC. Preserve
-     * that exact chain while independently aligning the owned local frame.
-     * The saved entry SP for over-aligned locals is the record's SP, not
-     * the raw incoming SP, so the epilogue can pop the record once. */
-    if (realigned && fputs("  mov x14, x19\n", out) == EOF)
-        goto fail;
-    if (fputs("  stp x29, x30, [sp, #-16]!\n"
-              "  mov x29, sp\n", out) == EOF)
-        goto fail;
-    if (realigned && fputs("  mov x15, sp\n", out) == EOF)
-        goto fail;
-    if (frame != 0U &&
-        (fprintf(out, "  movz x12, #%zu\n", frame & 65535U) < 0 ||
-         (frame > 65535U &&
-          fprintf(out, "  movk x12, #%zu, lsl #16\n", frame >> 16U) < 0) ||
-         fputs("  sub sp, sp, x12\n", out) == EOF))
-        goto fail;
-    if (realigned) {
-        if (fprintf(out, "  add x9, sp, #%zu\n"
-                         "  and x9, x9, #-%zu\n"
-                         "  mov x19, x9\n",
-                    ctx->machine_frame->frame_alignment - 1U,
-                    ctx->machine_frame->frame_alignment) < 0 ||
-            !minic_a64_emit_frame_store(out, &view,
-                minic_a64_owned_slot(save_offset + (has_calls ? 8U : 0U)),
-                (MinicA64FrameRegister){MINIC_A64_REG_X, 14U}, scratch) ||
-            !minic_a64_emit_frame_store(out, &view,
-                minic_a64_owned_slot(ctx->machine_frame->saved_entry_sp_offset),
-                (MinicA64FrameRegister){MINIC_A64_REG_X, 15U}, scratch) ||
-            (has_calls && !minic_a64_emit_frame_store(out, &view,
-                minic_a64_owned_slot(save_offset),
-                (MinicA64FrameRegister){MINIC_A64_REG_X, 30U}, scratch)))
-            goto fail;
-    } else if (has_calls && !minic_a64_emit_frame_store(out, &view,
-            (MinicA64FrameRef){MINIC_A64_FRAME_PHYSICAL_SP, save_offset},
-            (MinicA64FrameRegister){MINIC_A64_REG_X, 30U}, scratch))
-        goto fail;
-    /* x19 is the AAPCS64 callee-saved stable frame anchor when alloca
-     * moves sp. Call arguments still use the live outgoing sp area. */
-    if (dynamic_frame && !realigned &&
-        (!minic_a64_emit_frame_store(out, &view,
-            (MinicA64FrameRef){MINIC_A64_FRAME_PHYSICAL_SP,
-                save_offset + (has_calls ? 8U : 0U)},
-            (MinicA64FrameRegister){MINIC_A64_REG_X, 19U}, scratch) ||
-         fputs("  mov x19, sp\n", out) == EOF))
-        goto fail;
-    if (ctx->machine_frame->variadic_count != 0U) {
-        for (i = 0U; i < 8U; ++i) {
-            if (!minic_a64_emit_frame_store(out, &view,
-                    minic_a64_owned_slot(ctx->machine_frame->variadic_save_base + 32U + i * 8U),
-                    (MinicA64FrameRegister){MINIC_A64_REG_X,
-                                            (unsigned int)i}, scratch) ||
-                !minic_a64_emit_frame_store(out, &view,
-                    minic_a64_owned_slot(ctx->machine_frame->variadic_save_base + 96U + i * 16U),
-                    (MinicA64FrameRegister){MINIC_A64_REG_Q,
-                                            (unsigned int)i}, scratch))
-                return minic_multi_direct_machine_reject(
-                    fn, "aarch64", name, "variadic_save", SIZE_MAX,
-                    SIZE_MAX, __LINE__);
-        }
-    }
-    if (ctx->machine_frame->has_indirect_return) {
-        const size_t slot = ctx->machine_frame->indirect_return_offset;
-        /* AAPCS64 x8 carries the caller-owned result buffer. It is not
-         * call-preserved: save it in our own frame before any nested BL. */
-        if (!minic_a64_emit_frame_store(out, &view,
-                minic_a64_owned_slot(slot),
-                (MinicA64FrameRegister){MINIC_A64_REG_X, 8U}, scratch))
-            goto fail;
-    }
-    return true;
-fail:
-    return minic_multi_direct_machine_reject(
-        fn, "aarch64", name, "frame_finalization", SIZE_MAX,
-        SIZE_MAX, __LINE__);
-}
 
 static bool aarch64_emit_function(
     FILE *out, const MinicTargetInfo *target, const MinicCoreModule *module,
@@ -145,14 +44,12 @@ static bool aarch64_emit_function(
         .elf_function_type = "%function",
         .init_array_type = "%init_array",
         .init_word_directive = "xword",
-        .emit_prologue = aarch64_emit_prologue,
-        .emit_core_blocks = minic_aarch64_emit_core_blocks,
         .qualify_opaque_asm = minic_aarch64_qualified_opaque_asm,
-        /* Full-Core instruction selection and sealed Linux source-ASM
-         * admission are not migrated yet; keep this function on its proven
-         * legacy path instead of mixing partial Machine IR with FILE*. */
-        .select_machine = NULL,
-        .initialize_machine_asm_policy = NULL
+        .select_machine = minic_aarch64_machine_select_core_subset,
+        .initialize_machine_asm_policy =
+            minic_aarch64_machine_gnu_asm_policy_initialize,
+        .prove_selected_source_asm =
+            minic_aarch64_machine_prove_selected_source_asm
     };
     return minic_multi_direct_lp64_emit_function(
         out, target, module, module_decl, fn, facts, storage,

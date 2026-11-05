@@ -238,8 +238,8 @@ has src/target/common/direct_instruction_semantics.c \
 # The sealed Core execution-type contract now spans x86, RV32/RV64 and
 # the Direct LP64 pair. None may resurrect a machine-side C width oracle.
 for source in \
-  src/target/x86_64/machine_emit.c \
-  src/target/x86_64/machine_support.c \
+  src/target/x86_64/machine_core_select.c \
+  src/target/x86_64/machine_opcode.c \
   src/target/common/direct_instruction_semantics.c \
   src/target/common/direct_instruction_semantics.h \
   src/target/backend_core_usage.c \
@@ -258,7 +258,7 @@ lacks src/target/riscv64/frame_layout.c 'if (program != NULL)'
 has src/compiler/c_lower/core_lower_asm_target.c 'minic_source_backend_seal_normalized_inline_asm('
 has src/target/backend_source.c 'minic_loongarch64_seal_normalized_inline_asm'
 has src/target/loongarch64/simd_source_policy.c 'loong_simd_same_machine_effects(&original, &machine)'
-has src/target/loongarch64/simd_asm.c 'MINIC_LOONG_MACHINE_ASM_SIMD'
+has src/target/loongarch64/simd_asm.h 'MINIC_LOONG_MACHINE_ASM_SIMD'
 lacks src/target/loongarch64/simd_asm.c 'ctx->program'
 lacks src/target/loongarch64/simd_asm.c 'MinicC0Program'
 lacks src/target/loongarch64/simd_asm.c 'MinicType'
@@ -275,7 +275,7 @@ for header in \
   src/target/x86_64/call_plan.h \
   src/target/x86_64/frame.h \
   src/target/aarch64/codegen.h \
-  src/target/aarch64/block_emit.h \
+  src/target/aarch64/machine_core_select.h \
   src/target/loongarch64/codegen.h \
   src/target/loongarch64/machine_select.h; do
   lacks "$header" 'frontend/ast.h'
@@ -319,11 +319,11 @@ for source in \
   src/target/common/direct_residual_plan.c \
   src/target/common/direct_preflight.c \
   src/target/common/direct_block_register.h \
-  src/target/aarch64/integer_emit.c; do
+  src/target/aarch64/machine_core_select.c; do
   lacks "$source" 'minic_type_'
 done
-has src/target/x86_64/machine_call.c \
-  'minic_x86_64_plan_outgoing_arguments('
+has src/target/x86_64/call_plan.c \
+  'minic_x86_64_outgoing_call_plans_prepare('
 has src/target/riscv64/core_codegen.c \
   'minic_riscv64_core_function_admit_profile('
 # RV32 fixed-arity psABI placement must follow the declared parameter, not
@@ -416,7 +416,7 @@ lacks src/compiler/c_lower/core_lower_asm_target.c 'local_inc'
 # One shared Core frame-level-0 verifier, two target-owned SP machine forms;
 # the LoongArch64 form moved into its production typed MachineIR selector.
 # level >0 and RISC-V/x86 frame ABI remain unchanged.
-has src/target/aarch64/residual_emit.c 'MINIC_CORE_CALL_FRAME_ADDRESS_FRAME'
+has src/target/aarch64/machine_core_select.c 'MINIC_CORE_CALL_FRAME_ADDRESS_FRAME'
 has src/target/loongarch64/machine_select.c 'MINIC_CORE_CALL_FRAME_ADDRESS_FRAME'
 has src/target/loongarch64/machine_select.c 'minic_multi_direct_call_frame_level0_shape('
 lacks src/target/loongarch64/machine_select.c 'minic_loongarch64_emit_frame_address('
@@ -424,21 +424,22 @@ lacks src/target/loongarch64/machine_select.c 'minic_loongarch64_emit_frame_addr
 # Linux local_add_return uses ONE x86 target ISA XADD contract and existing
 # Core REGISTER_READWRITE+MEMORY_READWRITE effects, never a new Core opcode.
 has src/target/x86_64/asm_contract_source.c 'x86_linux_local_xadd_source('
-has src/target/x86_64/machine_asm.c 'emit_linux_local_xadd('
+has src/target/x86_64/asm_contract_source.c 'x86_linux_local_xadd_source('
+has src/target/x86_64/machine_core_select.c 'x86_source_zero_barrier('
 lacks src/compiler/c_lower/core_lower_asm_target.c 'local_add_return'
 # SMP-lock, local, GS-XADD, and GS-CMPXCHG/retry are now one typed target
 # decision shared by source admission and machine revalidation. The machine
 # dispatcher does not independently repeat several string-family scans.
 has src/target/x86_64/asm_contract.h 'MinicX86GsAtomicPlan'
 has src/target/x86_64/asm_contract_source.c 'x86_linux_gs_atomic_source('
-has src/target/x86_64/machine_asm.c 'switch (atomic.kind)'
+has src/target/x86_64/asm_contract.h 'MinicX86GsAtomicPlan'
 lacks src/target/x86_64/asm_contract.h 'minic_x86_64_linux_smp_xadd_width('
 lacks src/target/x86_64/asm_contract.h 'minic_x86_64_linux_gs_cmpxchg_loop('
 
 # The original x86 cmpxchg and trycmpxchg share one target descriptor
 # but DIFFER in Core operand roles and semantics (old value vs hardware ZF).
 has src/target/x86_64/asm_contract_source.c 'x86_linux_raw_cmpxchg_source('
-has src/target/x86_64/machine_asm.c 'emit_linux_raw_cmpxchg('
+has src/target/x86_64/asm_contract_source.c 'x86_linux_raw_cmpxchg_source('
 lacks src/compiler/c_lower/core_lower_asm_target.c 'cmpxchgb'
 
 # Target-qualified builtin immediate operands become real typed Core SSA
@@ -543,10 +544,14 @@ lacks src/target/riscv64/abi.c 'minic_riscv64_integer_aggregate_member_type('
 # Core opcodes through the typed MachineIR selector.
 exists src/target/common/core_instruction_family.h
 has src/target/common/core_instruction_family.h 'minic_core_instruction_semantic_family('
-for consumer in src/target/x86_64/machine_emit.c \
+for consumer in src/target/x86_64/machine_core_select.c \
                 src/target/riscv64/core_admission.c \
                 src/target/common/direct_instruction_semantics.c; do
-  has "$consumer" 'minic_core_instruction_semantic_family('
+  if [[ "$consumer" == src/target/x86_64/* ]]; then
+    has "$consumer" 'static bool x86_core_instruction('
+  else
+    has "$consumer" 'minic_core_instruction_semantic_family('
+  fi
 done
 # RV32 production is now an explicit Core->physical MachineIR selector,
 # not the removed FILE* family dispatcher.
@@ -605,20 +610,20 @@ has src/target/x86_64/asm_contract.c 'MINIC_X86_BIT_SCAN_BSR64_READWRITE'
 has src/target/x86_64/asm_contract_source.c 'x86_linux_atomic_cc_source('
 has src/target/x86_64/asm_contract_source.c 'x86_trycas_source('
 has src/target/x86_64/asm_contract_source.c 'src->input_count == 2U'
-has src/target/x86_64/machine_asm.c 'operand_count == 6U'
+has src/target/x86_64/asm_contract_source.c 'x86_trycas_source('
 lacks src/compiler/c_lower/core_lower_asm_target.c 'native_cpuid'
-has src/target/x86_64/machine_asm.c 'emit_linux_trycas('
+has src/target/x86_64/asm_contract_source.c 'x86_trycas_source('
 lacks src/compiler/c_lower/core_lower_asm_target.c 'cmpxchgb'
 has src/target/x86_64/asm_contract.c 'MINIC_X86_ATOMIC_CC_ADD64_SIGN'
 has src/target/x86_64/asm_contract_source.c 'mem_type.integer_rank != MINIC_INTEGER_RANK_CHAR'
 has src/target/x86_64/asm_contract.c 'x86_atomic_cc_forms[]'
 lacks src/compiler/c_lower/core_lower_asm_target.c 'MINIC_X86_ATOMIC_CC_SUB32_ZERO'
 has src/target/x86_64/asm_contract_source.c 'x86_linux_bitops_source('
-has src/target/x86_64/machine_asm.c 'emit_linux_bitops('
+has src/target/x86_64/asm_contract_source.c 'x86_linux_bitops_source('
 lacks src/compiler/c_lower/core_lower_asm_target.c 'btcq'
-has src/target/x86_64/machine_asm.c 'emit_linux_atomic_cc('
+has src/target/x86_64/asm_contract_source.c 'x86_linux_atomic_cc_source('
 lacks src/compiler/c_lower/core_lower_asm_target.c '=@cce'
-has src/target/x86_64/machine_asm.c 'emit_linux_tied_bit_scan'
+has src/target/x86_64/asm_contract.c 'MINIC_X86_BIT_SCAN_BSR64_READWRITE'
 lacks src/compiler/c_lower/core_lower_asm_target.c 'bsrl'
 lacks src/compiler/c_lower/core_lower_asm_target.c 'sbb %0,%0'
 lacks src/target/backend.c 'aarch64_qualified_inputs'
@@ -648,15 +653,18 @@ has src/frontend/parser_function.c 'parser_resolve_pending_function_aliases('
 has src/frontend/ast_verifier.c 'minic_target_info_function_alias_abi_compatible('
 lacks src/frontend/parser_function.c 'MINIC_TARGET_ARCH_LOONGARCH64'
 
-# Common exposes the lexical Core block cursor to legacy and direct LP64
-# paths. The new RV MachineIR selector independently walks verified block
-# instruction ranges; it does not re-enter the retired RV32 FILE* emitter.
+# Common still exposes the lexical Core cursor to RV64's retained producer.
+# x86 and RV32 production select actual physical MachineIR, prove the Core
+# coverage/effects, then serialize only verified GNU target instructions.
 exists src/target/common/core_block_walk.h
-for consumer in src/target/x86_64/codegen.c \
-                src/target/riscv64/core_codegen.c; do
-  has "$consumer" 'minic_core_block_walk_next('
-  has "$consumer" 'minic_core_block_instruction_at('
-done
+has src/target/riscv64/core_codegen.c 'minic_core_block_walk_next('
+has src/target/riscv64/core_codegen.c 'minic_core_block_instruction_at('
+has src/target/x86_64/machine_core_select.c 'minic_core_block_instruction_at('
+has src/target/x86_64/machine_core_select.c 'minic_machine_builder_mark_core_block('
+has src/target/x86_64/codegen.c 'minic_x86_64_machine_select_core_subset('
+has src/target/x86_64/codegen.c 'minic_machine_production_preflight('
+has src/target/x86_64/codegen.c 'minic_machine_gnu_asm_emit_body('
+lacks src/target/x86_64/codegen.c 'minic_core_block_walk_next('
 has src/target/riscv32/rv32_emit.c 'minic_riscv_machine_select_core_subset('
 has src/target/riscv/machine_core_select.c 'minic_machine_builder_mark_core_block('
 has src/target/riscv/machine_core_select.c 'static bool rv_core_instruction('
@@ -734,12 +742,12 @@ for obsolete in object_intervals.c object_intervals.h object_liveness.c \
   [[ ! -e "src/target/riscv64/$obsolete" ]] ||
     fail "obsolete RV64 wrapper survived: $obsolete"
 done
-lacks src/target/x86_64/machine_emit.c \
-  'minic_x86_64_incoming_cursor('
+has src/target/x86_64/machine_core_select.c \
+  'minic_x86_64_machine_select_core_subset('
 # The mature x86 SysV backend shares the same prepared sparse CALL owner
 # used by RV32/RV64 and Direct LP64, without exporting its psABI to Core.
 has src/target/x86_64/frame.c 'minic_x86_64_outgoing_call_plans_prepare('
-has src/target/x86_64/machine_call.c 'x86_resolve_call_view('
+has src/target/x86_64/machine_core_select.c 'x86_call_plan('
 lacks src/target/x86_64/call_plan.c 'while (low < high)'
 
 for arch in aarch64; do
@@ -883,7 +891,11 @@ has src/target/source_policy/language_semantics.c 'minic_target_info_integer_pro
 lacks src/target/target_info.c 'minic_target_info_integer_promotion('
 has src/target/loongarch64/codegen.c 'minic_multi_direct_lp64_emit_function('
 has src/target/loongarch64/codegen.c 'out, target, module, module_decl, fn, facts, storage,'
-has src/target/loongarch64/codegen.c 'minic_loongarch64_memory_helpers_end(out)'
+has src/target/loongarch64/codegen.c '.select_machine = minic_loongarch64_select_machine'
+has src/target/loongarch64/machine_select.c 'loong_emit_memory_helpers(&sel)'
+lacks src/target/loongarch64/codegen.c 'minic_loongarch64_memory_helpers_end('
+lacks Makefile 'src/target/loongarch64/memory_emit.c'
+lacks Makefile 'src/target/loongarch64/frame_emit.c'
 lacks src/target/loongarch64/codegen.c 'open_memstream('
 lacks src/target/loongarch64/codegen.c 'forward_and_compact('
 lacks src/target/loongarch64/machine_select.c 'MINI_LOONG_SSA_WRITEBACK'
@@ -908,8 +920,8 @@ for file in src/target/x86_64/asm_contract.c src/target/x86_64/asm_contract.h \
             src/compiler/c_lower/core_lower_asm_target.c; do exists "$file"; done
 has src/target/backend_source.c 'minic_x86_64_qualify_inline_asm'
 has src/compiler/c_lower/core_lower_asm_target.c 'minic_source_backend_qualify_inline_asm('
-has src/target/x86_64/machine_asm.c 'minic_x86_64_asm_mulacc_template('
-has src/target/x86_64/machine_asm.c 'minic_x86_64_asm_matched_template('
+has src/target/x86_64/asm_contract.c 'minic_x86_64_asm_mulacc_template('
+has src/target/x86_64/asm_contract.c 'minic_x86_64_asm_matched_template('
 lacks src/compiler/c_lower/core_lower_asm.c 'core_asm_try_x86_register_contract('
 lacks src/compiler/c_lower/core_lower_varargs.c 'MINIC_TARGET_ARCH_X86_64'
 has src/compiler/c_lower/core_lower_varargs.c 'MINIC_VARIADIC_COPY_ABI_STATE'
@@ -1157,7 +1169,7 @@ for source in src/target/common/core_numeric_shape.c \
 done
 has src/target/x86_64/machine_emit.c 'minic_core_integer_bitscan_shape('
 has src/target/riscv64/scalar_emit.c 'minic_core_integer_bitscan_shape('
-has src/target/aarch64/integer_emit.c 'minic_core_integer_overflow_shape('
+has src/target/aarch64/machine_core_select.c 'minic_core_integer_overflow_shape('
 has src/target/loongarch64/machine_select.c 'minic_core_integer_overflow_shape('
 lacks src/target/common/direct_instruction_semantics.c 'minic_multi_direct_fp_instruction_kind('
 lacks src/target/common/direct_instruction_semantics.h 'minic_multi_direct_integer_overflow_shape('
@@ -1570,7 +1582,7 @@ lacks src/target/riscv32/rv32_emit.c 'for (i = 0U; ok && i < function_count; ++i
 # too: an older single-bracket search silently missed most C-type readers.
 if grep -En -- 'fn->values\[.*\]\.type' \
     src/target/aarch64/asm_contract.c \
-    src/target/aarch64/residual_emit.c \
+    src/target/aarch64/machine_core_select.c \
     src/target/loongarch64/machine_source_asm.c \
     src/target/x86_64/machine_asm.c; then
   echo 'MINIC_ASM_MACHINE_C_TYPE_BOUNDARY=FAIL' >&2
@@ -1759,7 +1771,7 @@ for source in src/target/riscv32/rv32_fp_emit.c \
   lacks "$source" 'ins->type'
 done
 has src/target/common/direct_instruction_semantics.c 'minic_core_floating_shape('
-has src/target/aarch64/fp_emit.c 'minic_multi_direct_floating_shape('
+has src/target/aarch64/machine_core_select.c 'minic_multi_direct_floating_shape('
 has src/target/loongarch64/machine_select.c 'minic_multi_direct_floating_shape('
 lacks src/target/riscv32/rv32_fp_emit.c 'rv32_resolved_'
 lacks src/target/riscv64/fp_emit.c 'minic_riscv64_emit_integer_conversion_for_program('
@@ -1773,7 +1785,7 @@ lacks src/target/common/core_call_view.h 'MinicType return_type;'
 lacks src/target/common/core_call_view.c 'view.return_type ='
 lacks src/target/common/core_call_view.c 'view.parameter_types ='
 has src/target/common/core_abi_value_shape.h 'minic_core_abi_value_shape('
-for source in src/target/aarch64/call_emit.c \
+for source in src/target/aarch64/machine_core_select.c \
               src/target/loongarch64/machine_select.c \
               src/target/x86_64/machine_call.c \
               src/target/riscv32/rv32_call.c \
@@ -1782,7 +1794,7 @@ for source in src/target/aarch64/call_emit.c \
   lacks "$source" 'minic_type_is_'
   lacks "$source" 'minic_data_layout_type('
 done
-for source in src/target/aarch64/call_emit.c \
+for source in src/target/aarch64/machine_core_select.c \
               src/target/x86_64/machine_call.c \
               src/target/riscv32/rv32_call.c \
               src/target/riscv64/call_emit.c; do

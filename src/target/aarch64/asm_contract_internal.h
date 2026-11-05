@@ -330,6 +330,11 @@ typedef struct Aarch64LinuxWriteSysreg {
     unsigned int op0, op1, crn, crm, op2;
 } Aarch64LinuxWriteSysreg;
 
+/* One target-owned finite SYS_* catalog shared by source qualification,
+ * typed Machine selection and the remaining legacy-only ASM families. */
+extern const Aarch64LinuxWriteSysreg aarch64_linux_write_sysregs[];
+extern const size_t aarch64_linux_write_sysreg_count;
+
 typedef struct Aarch64LinuxVheSysregAlternative {
     bool is_read;
     unsigned int capability;

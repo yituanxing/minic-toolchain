@@ -1,16 +1,18 @@
+#define _POSIX_C_SOURCE 200809L
 /* AArch64/x86-64 GNU ASM source qualification may depend on exact C ranks,
  * but Core machine emission has no C descriptor to reopen. Check stable
  * positive emissions and reject malformed sealed Core identities. */
 #include "core/core_ir.h"
 #include "target/aarch64/asm_contract.h"
 #include "target/aarch64/asm_contract_internal.h"
-#include "target/x86_64/machine_internal.h"
+#include "x86_64/typed_source_asm_probe.h"
 
 #ifdef NDEBUG
 #undef NDEBUG
 #endif
 #include <assert.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 typedef enum PoisonMachine { POISON_AARCH64, POISON_X86_64 } PoisonMachine;
@@ -46,16 +48,14 @@ static bool emit_one(PoisonMachine machine, const MinicCoreFunction *function,
     MinicDirectLP64BlockContext a64 = {0};
     MinicLP64FramePlan a64_frame = {0};
     MinicMachineLP64FrameContract a64_machine_frame = {0};
-    MinicX86Frame x86_frame = {0};
-    MinicCoreModule module = { .finalized = true };
-    MinicTargetInfo target = {0};
     size_t offsets[1] = {16U};
     FILE *stream;
+    char *buffer = NULL;
+    size_t length = 0U;
     bool result;
-    size_t size;
     if (!output || capacity == 0U) return false;
     output[0] = '\0';
-    stream = tmpfile();
+    stream = open_memstream(&buffer, &length);
     assert(stream != NULL);
     a64_frame.value_count = 1U;
     a64_frame.value_offsets = offsets;
@@ -63,19 +63,16 @@ static bool emit_one(PoisonMachine machine, const MinicCoreFunction *function,
     a64.frame_plan = &a64_frame;
     a64_machine_frame.frame_size = 64U;
     a64.machine_frame = &a64_machine_frame;
-    x86_frame.value_count = 1U;
-    x86_frame.value_offsets = offsets;
     result = machine == POISON_AARCH64
         ? minic_aarch64_emit_qualified_structured_asm(stream, &a64, instruction)
-        : minic_x86_64_emit_structured_asm(stream, &module, &target,
-              function, &x86_frame, instruction, 0U);
+        : minic_test_x86_typed_source_asm_emit(stream, function,
+              instruction);
     assert(fflush(stream) == 0);
-    assert(fseek(stream, 0L, SEEK_SET) == 0);
-    size = fread(output, 1U, capacity - 1U, stream);
-    assert(!ferror(stream));
-    assert(size < capacity - 1U || fgetc(stream) == EOF);
-    output[size] = '\0';
+    assert(length < capacity);
+    memcpy(output, buffer, length);
+    output[length] = '\0';
     assert(fclose(stream) == 0);
+    free(buffer);
     return result;
 }
 
@@ -109,6 +106,9 @@ static void machine_core_poison(PoisonMachine machine) {
     inline_asm.template_text = (char *)template_text;
     inline_asm.template_length = strlen(template_text);
     inline_asm.is_volatile = true;
+    inline_asm.source_asm_unique_id = 46U;
+    inline_asm.goto_target = MINIC_CORE_BLOCK_INVALID;
+    inline_asm.goto_second_target = MINIC_CORE_BLOCK_INVALID;
     /* P45 closes the source-qualified-machine handshake. The AArch64 MRS
      * hardware instruction must carry its exact target-owned machine ID,
      * while x86's longstanding MOV memory-output probe exercises the
@@ -130,6 +130,23 @@ static void machine_core_poison(PoisonMachine machine) {
         machine == POISON_AARCH64
             ? MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT
             : MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT;
+
+    if (machine == POISON_X86_64) {
+        /* Known migration gap: the legacy generic ID0 MOVQ memory-output
+         * positive remains a legal source form, but production x86 typed
+         * selection cannot lower it yet.  Explicitly preserve the original
+         * template, operand and pointer identity as a fail-closed witness;
+         * restore the positive and pointee negatives once the ISA form is
+         * implemented in MachineIR. */
+        assert(!emit_one(machine, &function, &instruction,
+                         rejected, sizeof(rejected)));
+        assert(rejected[0] == '\0');
+        fputs("TYPED_ASM_CORE_POISON=FAIL unsupported-positive="
+              "x86_generic_movq_memory_output\n", stderr);
+        assert(0 && "restore x86 generic MOVQ positive in typed MachineIR");
+        minic_core_type_context_destroy(&types);
+        return;
+    }
 
     assert(emit_one(machine, &function, &instruction, normal, sizeof(normal)));
     assert(strstr(normal, machine == POISON_AARCH64

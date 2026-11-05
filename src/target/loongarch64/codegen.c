@@ -1,7 +1,6 @@
 #include "target/loongarch64/codegen.h"
 #include "target/loongarch64/machine_select.h"
 #include "target/loongarch64/machine_opcode.h"
-#include "target/loongarch64/memory_emit.h"
 #include "target/loongarch64/machine_source_asm.h"
 #include "target/loongarch64/machine_target_state.h"
 #include "target/common/direct_function_emit.h"
@@ -133,7 +132,6 @@ static bool loongarch64_emit_function(
         .initialize_machine_asm_policy =
             minic_loongarch64_machine_gnu_asm_policy_initialize
     };
-    bool success;
     if (target == NULL || fn == NULL) return false;
     if (minic_loongarch64_target_soft_float_abi(target)) {
         if (!loongarch64_lp64s_executable_supported(target, fn))
@@ -144,13 +142,11 @@ static bool loongarch64_emit_function(
         abi.name = "loongarch64-lp64s";
         abi.fp_argument_registers = 0U;
     }
-    minic_loongarch64_memory_helpers_begin(id);
     /* Entire function is selected and verified before any ELF text is
      * written. No instruction-level FILE* fallback survives this entry. */
-    success = minic_multi_direct_lp64_emit_function(
+    return minic_multi_direct_lp64_emit_function(
         out, target, module, module_decl, fn, facts, storage,
         id, function_sections, &emitter);
-    return success && minic_loongarch64_memory_helpers_end(out);
 }
 
 bool minic_loongarch64_write_core_module(

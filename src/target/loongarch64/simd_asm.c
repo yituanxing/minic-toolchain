@@ -1,10 +1,5 @@
 #include "target/loongarch64/simd_asm.h"
 #include "target/loongarch64/simd_asm_syntax.h"
-#include "target/loongarch64/frame_emit.h"
-#include "target/common/lp64_scalar.h"
-
-#include <stdint.h>
-#include <stdio.h>
 #include <string.h>
 
 /* Original Linux 6.6.143 lib/raid6/loongarch_simd.c,
@@ -63,7 +58,6 @@ static bool loong_simd_register(const char *text, bool lasx,
     *reg = value;
     return true;
 }
-
 static bool loong_simd_immediate(const char *text, int *value) {
     const char *p = text;
     int base = 10, out = 0;
@@ -259,122 +253,4 @@ bool minic_loongarch64_simd_structured_template_requires_typed_id(
     LoongSimdProgram parsed;
     return minic_loongarch64_simd_parse(text, length, &parsed) &&
            parsed.operand_count != 0U;
-}
-
-bool minic_loongarch64_simd_emit_opaque(
-    FILE *out, const MinicCoreInlineAsm *source) {
-    LoongSimdProgram parsed;
-    size_t i;
-    if (!out || !minic_loongarch64_simd_qualify_opaque(source) ||
-        !minic_loongarch64_simd_parse(source->template_text, source->template_length,
-                          &parsed)) return false;
-    for (i = 0U; i < parsed.count; ++i)
-        if (fprintf(out, "  %s\n", parsed.instructions[i].machine_line) < 0)
-            return false;
-    return true;
-}
-
-static bool loong_simd_core_pointer(const MinicCoreFunction *fn,
-                                     MinicCoreValueId value) {
-    const MinicCoreType *type;
-    if (fn == NULL || fn->type_context == NULL || fn->values == NULL ||
-        value >= fn->value_count) return false;
-    type = minic_core_type_get(fn->type_context,
-        minic_core_type_unqualified(fn->type_context,
-            fn->values[value].core_type_id));
-    return type != NULL && type->kind == MINIC_CORE_TYPE_POINTER &&
-           type->has_layout && type->size == 8U && type->alignment == 8U;
-}
-
-bool minic_loongarch64_simd_emit_structured(
-    FILE *out, const MinicDirectLP64BlockContext *ctx,
-    const MinicCoreInstruction *ins, const MinicCoreInlineAsm *source) {
-    const MinicCoreFunction *fn;
-    const MinicCoreStructuredInlineAsmOperand *operands;
-    LoongSimdProgram parsed;
-    size_t i, output_operand_count;
-    bool named, expected_memory_effect;
-    if (!out || !ctx || !(fn = ctx->fn) || !ins || !source ||
-        fn->type_context == NULL ||
-        ins->kind != MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM ||
-        ins->result != MINIC_CORE_VALUE_INVALID ||
-        !minic_lp64_core_kind(fn->type_context, ins->core_type_id,
-                             MINIC_CORE_TYPE_VOID) || !source->is_volatile ||
-        source->is_goto || source->register_clobber_count ||
-        source->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
-        source->target_machine_form_id != MINIC_LOONG_MACHINE_ASM_SIMD ||
-        (source->target_machine_form_variant != MINIC_LOONG_MACHINE_SIMD_LSX &&
-         source->target_machine_form_variant != MINIC_LOONG_MACHINE_SIMD_LASX) ||
-        !minic_loongarch64_simd_parse(source->template_text, source->template_length,
-                          &parsed) || parsed.operand_count == 0U ||
-        parsed.uses_lasx !=
-            (source->target_machine_form_variant == MINIC_LOONG_MACHINE_SIMD_LASX) ||
-        parsed.operand_count != ins->value.structured_inline_asm.operand_count ||
-        !(operands = ins->value.structured_inline_asm.operands))
-        return false;
-    if (!minic_core_asm_output_operand_count(ins, &output_operand_count))
-        return false;
-    /* The post-normalization ingress comparison sealed exact opcode,
-     * register, placeholder and offset effects. Machine emission validates
-     * the immutable typed form and Core operand/effect witness again. */
-    named = source->explicit_memory_clobber;
-    expected_memory_effect = named;
-    for (i = 0U; i < parsed.operand_count; ++i) {
-        if (operands[i].kind ==
-            MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE)
-            expected_memory_effect = true;
-    }
-    if (source->implicit_memory_effect != expected_memory_effect ||
-        source->has_memory_clobber != expected_memory_effect)
-        return false;
-    /* Core marks read/write +m as an implicit memory effect, even though
-     * the original GNU source had no literal "memory" clobber. Named r
-     * pointer forms carry that explicit source clobber. */
-    if (named && !source->has_memory_clobber) return false;
-    if (named && (output_operand_count != 0U ||
-                  parsed.operand_count < 2U || parsed.operand_count > 5U))
-        return false;
-    if (!named && output_operand_count > parsed.operand_count)
-        return false;
-    for (i = 0U; i < parsed.operand_count; ++i) {
-        const MinicCoreStructuredInlineAsmOperand *operand = &operands[i];
-        const bool read = parsed.memory_read[i];
-        const bool written = parsed.memory_written[i];
-        const MinicCoreStructuredInlineAsmOperandKind kind = operand->kind;
-        if (operand->operand_index != i || operand->early_clobber ||
-            operand->has_fixed_register_binding ||
-            !loong_simd_core_pointer(fn, operand->value) ||
-            (!read && !written)) return false;
-        if (named) {
-            if (kind != MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT)
-                return false;
-        } else if (kind == MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT) {
-            if (i < output_operand_count || !read || written) return false;
-        } else if (kind == MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT) {
-            if (i >= output_operand_count || read || !written) return false;
-        } else if (kind == MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE) {
-            if (i >= output_operand_count || !read || !written) return false;
-        } else return false;
-    }
-    /* All instructions are validated first; a new opcode cannot leak into
-     * partially generated assembler after a successful source qualifier. */
-    for (i = 0U; i < parsed.count; ++i) {
-        const LoongSimdInstruction *step = &parsed.instructions[i];
-        if (step->op == LOONG_SIMD_LOAD || step->op == LOONG_SIMD_STORE) {
-            const MinicCoreValueId value =
-                operands[step->operand_index].value;
-            const char *op = step->op == LOONG_SIMD_LOAD
-                ? (step->lasx ? "xvld" : "vld")
-                : (step->lasx ? "xvst" : "vst");
-            const char *reg = step->lasx ? "$xr" : "$vr";
-            if (!minic_loongarch64_emit_frame_mem(
-                    out, "ld.d", "$t0", minic_lp64_frame_value_offset(ctx->frame_plan, value),
-                    ctx->machine_frame->has_dynamic_stack) ||
-                fprintf(out, "  %s %s%u, $t0, %d\n", op, reg,
-                        step->registers[0], step->memory_offset) < 0)
-                return false;
-        } else if (fprintf(out, "  %s\n", step->machine_line) < 0)
-            return false;
-    }
-    return true;
 }

@@ -211,7 +211,18 @@ static bool riscv_asm_constraint(const MinicTargetInfo *target,
         ++i;
     }
     role = constraint[i];
-    if (role == '\0' || constraint[i + 1U] != '\0') return false;
+    if (role == '\0') return false;
+    /* Source-owned GNU rJ accepts either a general register or immediate
+     * zero.  The generated-ISA policy never consumes this source grammar. */
+    if (role == 'r' && constraint[i + 1U] == 'J' &&
+        constraint[i + 2U] == '\0') {
+        if (output || inout) return false;
+        if (operand->kind == MINIC_MACHINE_OPERAND_INTEGER)
+            return operand->value.integer == 0;
+        role = 'r';
+    } else if (constraint[i + 1U] != '\0') {
+        return false;
+    }
     if (output || inout) {
         if (role != 'r' && role != 'm' && role != 'g' && role != 'A')
             return false;

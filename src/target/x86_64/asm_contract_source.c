@@ -3734,19 +3734,21 @@ static bool x86_zstd_cpuid_source(const MinicTargetInvocation *invocation,
 }
 
 static bool qualified(const MinicC0Program *program,
-                      const MinicInlineAsm *src, bool *is_mulacc) {
+                      const MinicInlineAsm *src, bool *is_mulacc,
+                      MinicTargetInlineAsmContract *contract) {
     static const char *const cpuid_out[4] = {"=a","=b","=c","=d"};
     static const char *const cpuid_in[4] = {"0","1","2","3"};
     static const char *const mul_in[5] = {"0","1","2","a","m"};
     size_t i, n;
     bool generic = false;
+    bool cpuid = false;
     bool bit_scan = false;
     bool is_muldiv = false;
     MinicX86BitScanForm bit_form = MINIC_X86_BIT_SCAN_NONE;
     MinicType normalized;
     if (!program || !src || !src->template_text || !src->outputs ||
         !src->inputs || src->is_goto || src->label_count != 0U ||
-        !is_mulacc) return false;
+        !is_mulacc || !contract) return false;
     *is_mulacc = false;
     /* Original Linux native_cpuid has six operands: four register outputs
      * and only two tied inputs (EAX/ECX), plus a memory compiler barrier.
@@ -3761,6 +3763,7 @@ static bool qualified(const MinicC0Program *program,
          (!src->has_memory_clobber && src->clobber_count == 0U) :
          (src->is_volatile && src->has_memory_clobber &&
           src->clobber_count == 1U))) {
+        cpuid = true;
         n = 4U;
         for (i = 0U; i < n; ++i)
             if (!c_is(&src->outputs[i], cpuid_out[i])) return false;
@@ -3856,6 +3859,28 @@ static bool qualified(const MinicC0Program *program,
              expr->value_category != MINIC_VALUE_LVALUE))
             return false;
     }
+    /* The original family checker admitted these exact source expressions,
+     * but left a zero machine FormId.  A zero FormId cannot independently
+     * seal native CPUID/ADC/BSR or matched-memory effects.  Publish the
+     * complete family at Source, keeping semantic operand selection in the
+     * target MachineIR producer instead of creating a transitional escape. */
+    if (cpuid) {
+        contract->target_machine_form_id = MINIC_X86_MACHINE_ASM_CPUID_MATCHED;
+        contract->target_machine_form_variant =
+            (uint32_t)(src->output_count + src->input_count);
+    } else if (*is_mulacc) {
+        contract->target_machine_form_id = MINIC_X86_MACHINE_ASM_MULACC_MATCHED;
+        contract->target_machine_form_variant = 1U;
+    } else if (is_muldiv) {
+        contract->target_machine_form_id = MINIC_X86_MACHINE_ASM_MULDIV_U64;
+    } else if (bit_scan) {
+        contract->target_machine_form_id = MINIC_X86_MACHINE_ASM_BITSCAN_MATCHED;
+        contract->target_machine_form_variant = (uint32_t)bit_form;
+    } else if (generic) {
+        contract->target_machine_form_id = MINIC_X86_MACHINE_ASM_MATCHED_MEMORY;
+        contract->target_machine_form_variant =
+            (uint32_t)(src->output_count + src->input_count);
+    } else return false;
     return true;
 }
 
@@ -5436,7 +5461,7 @@ bool minic_x86_64_qualify_inline_asm(
         contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
         return true;
     }
-    if (!qualified(program, source, &is_mulacc)) return false;
+    if (!qualified(program, source, &is_mulacc, contract)) return false;
     count = source->output_count + source->input_count;
     if (count > MINIC_CORE_STRUCTURED_INLINE_ASM_OPERAND_LIMIT) return false;
     contract->operand_count = count;

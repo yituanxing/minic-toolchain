@@ -52,7 +52,7 @@ done
     "$root/tests/target/x86_64_typed_machine_qualification_test.c" \
     "$root/src/target/x86_64/asm_contract.c" \
     "$root/src/target/x86_64/asm_contract_source.c" \
-    "$root/src/target/x86_64/raid6_simd.c" \
+    "$root/src/target/x86_64/machine_raid6_source_policy.c" \
     -Wl,--gc-sections -o "$temp/form-gate"
 "$temp/form-gate"
 echo 'X86_MXCSR_UNWIND_TYPED=PASS positives=4 owner=1 negative=7 machine_gate=11 GNU_ELF=2'

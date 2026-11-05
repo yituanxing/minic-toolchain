@@ -61,12 +61,20 @@ u64 lse_cas64(u64 old, u64 updated) {
 }
 C
 "$minic" --target=aarch64-linux -S "$d/lse.i" -o "$d/lse.s"
-for needle in 'stset w11, [x10]' 'stclr x11, [x10]' \
-              'ldaddal w11, w9, [x10]' 'ldsetl x11, x9, [x10]' \
-              'casb w9, w11, [x10]' 'casah w9, w11, [x10]' \
-              'casal w9, w11, [x10]' 'casl x9, x11, [x10]'; do
-    grep -Fq "$needle" "$d/lse.s" || {
-        echo "AARCH64_LSE_MISSING=$needle" >&2
+# MachineIR serializes the original GNU source (tab indentation), whereas
+# the removed direct emitter formatted two-space hardware instructions.
+# Preserve the complete op/register/address assertion for every LSE form.
+for pattern in \
+    'stset[[:space:]]+w11,[[:space:]]*\[x10\]' \
+    'stclr[[:space:]]+x11,[[:space:]]*\[x10\]' \
+    'ldaddal[[:space:]]+w11,[[:space:]]*w9,[[:space:]]*\[x10\]' \
+    'ldsetl[[:space:]]+x11,[[:space:]]*x9,[[:space:]]*\[x10\]' \
+    'casb[[:space:]]+w9,[[:space:]]*w11,[[:space:]]*\[x10\]' \
+    'casah[[:space:]]+w9,[[:space:]]*w11,[[:space:]]*\[x10\]' \
+    'casal[[:space:]]+w9,[[:space:]]*w11,[[:space:]]*\[x10\]' \
+    'casl[[:space:]]+x9,[[:space:]]*x11,[[:space:]]*\[x10\]'; do
+    grep -Eq "^[[:space:]]*$pattern[[:space:]]*$" "$d/lse.s" || {
+        echo "AARCH64_LSE_MISSING=$pattern" >&2
         exit 1
     }
 done

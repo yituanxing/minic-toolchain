@@ -1,16 +1,8 @@
 #include "target/x86_64/asm_contract.h"
-#include "target/x86_64/machine_internal.h"
-
 #include <ctype.h>
-#include <stdio.h>
 #include <string.h>
 
-/* Linux RAID6 uses fixed SIMD registers across distinct volatile GNU asm
- * statements, bracketed by kernel_fpu_begin/end. MiniC never allocates any
- * XMM/YMM/ZMM registers for C values. This target parser is deliberately not
- * a generic 'emit arbitrary assembler' escape hatch: every opcode, operand
- * class, register number, immediate and memory placeholder is checked.
- * The emitted assembler is the actual hardware ISA, with no scalar shim. */
+/* Pure finite RAID6 source-ISA grammar, without FILE* text emission. */
 typedef enum Raid6OperandKind {
     RAID6_BAD = 0,
     RAID6_MEM,
@@ -25,19 +17,6 @@ typedef struct Raid6Operand {
     Raid6OperandKind kind;
     unsigned int number;
 } Raid6Operand;
-
-static const MinicCoreType *raid6_core_type(const MinicCoreFunction *fn,
-                                            MinicCoreTypeId id) {
-    if (fn == NULL || fn->type_context == NULL) return NULL;
-    return minic_core_type_get(fn->type_context,
-        minic_core_type_unqualified(fn->type_context, id));
-}
-
-static bool raid6_core_pointer(const MinicCoreFunction *fn,
-                                MinicCoreTypeId id) {
-    const MinicCoreType *type = raid6_core_type(fn, id);
-    return type != NULL && type->kind == MINIC_CORE_TYPE_POINTER;
-}
 
 static bool raid6_parse_operand(const char *p, size_t n, size_t count,
                                 Raid6Operand *operand, unsigned int *seen) {
@@ -196,110 +175,4 @@ bool minic_x86_64_raid6_simd_template(const char *text, size_t length,
         if (!raid6_opcodes_valid(opcode, operands, count)) return false;
     }
     return lines != 0U && seen == ((1U << memory_count) - 1U);
-}
-
-/* Recheck the typed contract and address roles against Core before emitting.
- * The true hardware instruction bytes come from GNU AS, not a byte fallback.
- * R8/R9/R10/R11 are scratch GPRs and cannot interfere with SIMD registers. */
-bool minic_x86_64_emit_raid6_simd(
-    FILE *out, const MinicCoreFunction *fn, const MinicX86Frame *frame,
-    const MinicCoreInstruction *ins, const MinicCoreInlineAsm *info) {
-    static const char *const scratch[] = {
-        "%r10", "%r11", "%r8", "%r9",
-        "%rcx", "%rdx", "%rsi", "%rdi"
-    };
-    const MinicCoreStructuredInlineAsmOperand *b;
-    const size_t count = ins ?
-        ins->value.structured_inline_asm.operand_count : 0U;
-    size_t i, output_operand_count;
-    if (!out || !fn || !frame || !ins || !info ||
-        info->target_machine_form_id != MINIC_X86_MACHINE_ASM_RAID6_SIMD ||
-        info->target_machine_form_variant != count || !info->is_volatile ||
-        info->is_goto || info->register_clobber_count ||
-        !minic_x86_64_raid6_simd_template(info->template_text,
-                                         info->template_length, count))
-        return false;
-    if (!minic_core_asm_output_operand_count(ins, &output_operand_count))
-        return false;
-    b = ins->value.structured_inline_asm.operands;
-    if (count && !b) return false;
-    for (i = 0U; i < count; ++i) {
-        if (b[i].operand_index != i || b[i].value >= fn->value_count ||
-            b[i].early_clobber || b[i].has_fixed_register_binding ||
-            b[i].kind != (i < output_operand_count
-                 ? MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT
-                 : MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT) ||
-            !raid6_core_pointer(fn, fn->values[b[i].value].core_type_id) ||
-            !x86_value_load(out, frame, b[i].value, scratch[i]))
-            return false;
-    }
-    if (fputs("  ", out) == EOF) return false;
-    for (i = 0U; i < info->template_length; ++i) {
-        const char c = info->template_text[i];
-        if (c == '%' && i + 1U < info->template_length) {
-            const char next = info->template_text[i + 1U];
-            if (next >= '0' && next <= '7') {
-                if (fprintf(out, "(%s)", scratch[next - '0']) < 0)
-                    return false;
-                ++i;
-                continue;
-            }
-            if (next == '%') {
-                if (fputc('%', out) == EOF) return false;
-                ++i;
-                continue;
-            }
-        }
-        if (fputc(c, out) == EOF) return false;
-        if (c == '\n' && fputs("  ", out) == EOF) return false;
-    }
-    return fputc('\n', out) != EOF;
-}
-
-bool minic_x86_64_emit_kvm_movdqa(
-    FILE *out, const MinicCoreFunction *fn, const MinicX86Frame *frame,
-    const MinicCoreInstruction *ins, const MinicCoreInlineAsm *info) {
-    const MinicCoreStructuredInlineAsmOperand *b;
-    const MinicCoreType *pointer_type;
-    const MinicCoreType *vector_type;
-    const MinicCoreType *element_type;
-    const unsigned int form = info ? minic_x86_64_kvm_movdqa_form(
-        info->template_text, info->template_length) : 0U;
-    const bool load = form <= 16U;
-    size_t output_operand_count;
-    if (!out || !fn || !frame || !ins || !info || !form ||
-        info->target_machine_form_id != MINIC_X86_MACHINE_ASM_KVM_MOVDQA ||
-        info->target_machine_form_variant != form || !info->is_volatile ||
-        info->is_goto || info->explicit_memory_clobber ||
-        info->has_memory_clobber != !load ||
-        info->register_clobber_count ||
-        ins->value.structured_inline_asm.operand_count != 1U ||
-        !minic_core_asm_output_operand_count(ins, &output_operand_count) ||
-        output_operand_count != (load ? 0U : 1U)) return false;
-    b = ins->value.structured_inline_asm.operands;
-    if (!b || b[0].operand_index != 0U || b[0].value >= fn->value_count ||
-        b[0].early_clobber || b[0].has_fixed_register_binding ||
-        b[0].kind != (load
-            ? MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT
-            : MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT) ||
-        fn->type_context == NULL) return false;
-    pointer_type = raid6_core_type(fn, fn->values[b[0].value].core_type_id);
-    if (pointer_type == NULL || pointer_type->kind != MINIC_CORE_TYPE_POINTER)
-        return false;
-    vector_type = raid6_core_type(fn, pointer_type->value.pointer.pointee);
-    if (vector_type == NULL || vector_type->kind != MINIC_CORE_TYPE_VECTOR ||
-        vector_type->value.vector.representation !=
-            MINIC_CORE_VECTOR_STORAGE_ONLY || !vector_type->has_layout ||
-        vector_type->size != 16U || vector_type->value.vector.element_count != 4U)
-        return false;
-    element_type = raid6_core_type(fn, vector_type->value.vector.element);
-    if (element_type == NULL || element_type->kind != MINIC_CORE_TYPE_INTEGER ||
-        element_type->value.integer.bit_width != 32U ||
-        element_type->value.integer.is_signed ||
-        !x86_value_load(out, frame, b[0].value, "%r11")) return false;
-    /* Deliberately no general vector register codegen: Linux KVM's fixed
-     * XMM load/store is an ISA-controlled 16-byte aligned memory transfer. */
-    return form <= 16U
-        ? fprintf(out, "  movdqa (%%r11), %%xmm%u\n", form - 1U) >= 0
-        : fprintf(out, "  movdqa %%xmm%u, (%%r11)\n", form - 17U) >= 0;
 }

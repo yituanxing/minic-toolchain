@@ -257,14 +257,9 @@ MINIC_SOURCES := \
 	src/target/x86_64/machine_gnu_asm.c \
 	src/target/x86_64/machine_frame_select.c \
 	src/target/x86_64/machine_core_select.c \
-	src/target/x86_64/machine_emit.c \
 	src/target/x86_64/asm_contract.c \
 	src/target/x86_64/asm_contract_source.c \
-	src/target/x86_64/raid6_simd.c \
-	src/target/x86_64/machine_asm.c \
-	src/target/x86_64/machine_support.c \
-	src/target/x86_64/machine_fp.c \
-	src/target/x86_64/machine_call.c \
+	src/target/x86_64/machine_raid6_source_policy.c \
 	src/target/x86_64/abi.c \
 	src/target/x86_64/call_plan.c \
 	src/target/x86_64/frame.c \
@@ -275,18 +270,13 @@ MINIC_SOURCES := \
 	src/target/aarch64/machine_frame_select.c \
 	src/target/aarch64/machine_core_select.c \
 	src/target/aarch64/machine_source_asm.c \
+	src/target/aarch64/machine_sysreg_contract.c \
+	src/target/aarch64/machine_lse_source_select.c \
 	src/target/aarch64/codegen.c \
 	src/target/aarch64/frame_emit.c \
 	src/target/aarch64/neon_emit.c \
-	src/target/aarch64/block_emit.c \
 	src/target/aarch64/asm_contract.c \
 	src/target/aarch64/asm_contract_source.c \
-	src/target/aarch64/residual_emit.c \
-	src/target/aarch64/scalar_normalize.c \
-	src/target/aarch64/memory_emit.c \
-	src/target/aarch64/call_emit.c \
-	src/target/aarch64/integer_emit.c \
-	src/target/aarch64/fp_emit.c \
 	src/target/loongarch64/codegen.c \
 	src/target/loongarch64/machine_opcode.c \
 	src/target/loongarch64/machine_gnu_asm.c \
@@ -303,8 +293,6 @@ MINIC_SOURCES := \
 	src/target/loongarch64/asm_contract_source.c \
 	src/target/loongarch64/simd_asm.c \
 	src/target/loongarch64/simd_source_policy.c \
-	src/target/loongarch64/memory_emit.c \
-	src/target/loongarch64/frame_emit.c \
 	tools/minic-cc/main.c
 MINIC_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(MINIC_SOURCES))
 MINIC_CC_BINARY := $(BUILD_DIR)/bin/minic-cc
@@ -2425,6 +2413,8 @@ check-direct-machine-gnu-asm:
 	  src/target/aarch64/machine_opcode.c \
 	  src/target/aarch64/machine_gnu_asm.c \
 	  src/target/aarch64/machine_source_asm.c \
+	  src/target/aarch64/machine_sysreg_contract.c \
+	  src/target/aarch64/machine_lse_source_select.c \
 	  src/target/loongarch64/machine_opcode.c \
 	  src/target/loongarch64/machine_gnu_asm.c \
 	  src/target/loongarch64/machine_asm_form.c \
@@ -2511,6 +2501,8 @@ check-a64-machine-mir-frame-select:
 	  src/target/aarch64/machine_opcode.c \
 	  src/target/aarch64/machine_gnu_asm.c \
 	  src/target/aarch64/machine_source_asm.c \
+	  src/target/aarch64/machine_sysreg_contract.c \
+	  src/target/aarch64/machine_lse_source_select.c \
 	  src/target/common/machine_source_asm_template.c \
 	  -o "$(BUILD_DIR)/tests/a64-machine-mir-frame-select"
 	"$(BUILD_DIR)/tests/a64-machine-mir-frame-select"
@@ -2594,6 +2586,8 @@ check-a64-machine-core-select:
 	  src/target/aarch64/machine_opcode.c \
 	  src/target/aarch64/machine_gnu_asm.c \
 	  src/target/aarch64/machine_source_asm.c \
+	  src/target/aarch64/machine_sysreg_contract.c \
+	  src/target/aarch64/machine_lse_source_select.c \
 	  src/target/aarch64/machine_frame_select.c \
 	  src/target/aarch64/machine_core_select.c \
 	  src/target/aarch64/frame_emit.c \
@@ -2662,6 +2656,8 @@ check-a64-machine-source-asm:
 	$(CC) -std=c11 -Wall -Wextra -Wpedantic -Werror $(MINIC_INCLUDES) \
 	  tests/target/aarch64/machine_source_asm_test.c \
 	  src/target/aarch64/machine_source_asm.c \
+	  src/target/aarch64/machine_sysreg_contract.c \
+	  src/target/aarch64/machine_lse_source_select.c \
 	  src/target/common/machine_source_asm_template.c \
 	  -o "$(BUILD_DIR)/tests/a64-machine-source-asm"
 	"$(BUILD_DIR)/tests/a64-machine-source-asm"

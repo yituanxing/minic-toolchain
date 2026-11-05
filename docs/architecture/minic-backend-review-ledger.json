@@ -13,8 +13,7 @@
   "audit_in_progress": "Core-to-physical-MachineIR migration: five targets now have production typed selection entrypoints, but complete function admission, ABI parity and full GNU AS/LD/QEMU/Linux runtime acceptance remain separate, unproven gates. LoongArch64 production has 22 typed-output fixtures and one intentionally unsupported legacy case; additional source-ASM UACCESS and LL/SC families have focused proofs. RV32 wide-integer virtio compilation and RV64 GNU source-ASM provenance have focused passing probes; upstream zlib full-TU admission and RV64 checked-overflow selector coverage remain open. Retired Loong emit modules are removed from the active inventory. New source owners are inventory-only; stale fingerprints reopen review and do not imply full-source certification.",
   "next_deep_review": [
     "src/target/aarch64/frame_emit.c",
-    "src/target/loongarch64/frame_emit.c",
-    "src/target/x86_64/machine_emit.c",
+    "src/target/x86_64/machine_core_select.c",
     "src/target/riscv64/legalize.c",
     "src/target/riscv32/rv32_frame.c"
   ],
@@ -394,30 +393,6 @@
       "review_depth": "inventory",
       "ci_touched_in": []
     },
-    "src/target/aarch64/block_emit.c": {
-      "blob": "918e6a6349b8bbd8f51099097c6f32b1ea31643f",
-      "review_depth": "inventory",
-      "ci_touched_in": [
-        666,
-        668
-      ]
-    },
-    "src/target/aarch64/block_emit.h": {
-      "blob": "fa0e3cab254ea7c167bf4f66c19449d516a700a8",
-      "review_depth": "inventory",
-      "ci_touched_in": []
-    },
-    "src/target/aarch64/call_emit.c": {
-      "blob": "0d0617925f650ff8e918d95c68951291ac061e0b",
-      "review_depth": "inventory",
-      "ci_touched_in": [],
-      "note": "2026-10-27: read complete CALL emitter with CoreCallView and target psABI planning context. Production QEMU differential remains separate acceptance evidence."
-    },
-    "src/target/aarch64/call_emit.h": {
-      "blob": "f5ff26bb982ffccf8a006d50d16c7bc5d2c6cd8a",
-      "review_depth": "inventory",
-      "ci_touched_in": []
-    },
     "src/target/aarch64/codegen.c": {
       "blob": "d17528ffedd15e9ddc4f7488a2cbc29cd67e899b",
       "review_depth": "inventory",
@@ -427,16 +402,6 @@
     },
     "src/target/aarch64/codegen.h": {
       "blob": "fab0f31c76f27e3c7589585431dde44b42905091",
-      "review_depth": "inventory",
-      "ci_touched_in": []
-    },
-    "src/target/aarch64/fp_emit.c": {
-      "blob": "35c8be17ba946938e1091713ec967b12da2232b5",
-      "review_depth": "inventory",
-      "ci_touched_in": []
-    },
-    "src/target/aarch64/fp_emit.h": {
-      "blob": "b3655844c1b50d97bd61d02ecf85d56870fba512",
       "review_depth": "inventory",
       "ci_touched_in": []
     },
@@ -451,33 +416,11 @@
       "review_depth": "inventory",
       "ci_touched_in": []
     },
-    "src/target/aarch64/integer_emit.c": {
-      "blob": "93207a95673e4dd74b28335cebaba7729d8230e7",
-      "review_depth": "inventory",
-      "ci_touched_in": [
-        665
-      ]
-    },
-    "src/target/aarch64/integer_emit.h": {
-      "blob": "abe9e0094ee03dc0defe84bffd5b2724d0db18dd",
-      "review_depth": "inventory",
-      "ci_touched_in": []
-    },
     "src/target/aarch64/machine_register.c": {
       "blob": "13eed3fb1e196061cbc098525b0deee267d31583",
       "review_depth": "targeted",
       "ci_touched_in": [],
       "note": "P33: reviewed machine-only fixed/local register grammar and source-policy reuse; no runtime recertification implied."
-    },
-    "src/target/aarch64/memory_emit.c": {
-      "blob": "04dc3994ea0e72f0586a966bfcc5f4820972c1b2",
-      "review_depth": "inventory",
-      "ci_touched_in": []
-    },
-    "src/target/aarch64/memory_emit.h": {
-      "blob": "2c5993f974f4b77cdd00068d233a3e461750323e",
-      "review_depth": "inventory",
-      "ci_touched_in": []
     },
     "src/target/aarch64/neon_emit.c": {
       "blob": "3339dbb208e097f1d795159b3b41254a808c989e",
@@ -486,26 +429,6 @@
     },
     "src/target/aarch64/neon_emit.h": {
       "blob": "401c539488c66fd8201d64757b4b2df5a0079738",
-      "review_depth": "inventory",
-      "ci_touched_in": []
-    },
-    "src/target/aarch64/residual_emit.c": {
-      "blob": "fa52bcfcd071df72046f44a583b3f92b1692d757",
-      "review_depth": "inventory",
-      "ci_touched_in": []
-    },
-    "src/target/aarch64/residual_emit.h": {
-      "blob": "7c439c0fe9442df9d2841df0fe13276d3e1f0208",
-      "review_depth": "inventory",
-      "ci_touched_in": []
-    },
-    "src/target/aarch64/scalar_normalize.c": {
-      "blob": "0da1616fc301bcb55c6b79cdf51372fb9bad0a3e",
-      "review_depth": "inventory",
-      "ci_touched_in": []
-    },
-    "src/target/aarch64/scalar_normalize.h": {
-      "blob": "57811a1ffa134c1b1f17b8d63126c7845898fd59",
       "review_depth": "inventory",
       "ci_touched_in": []
     },
@@ -1043,31 +966,11 @@
       "review_depth": "inventory",
       "ci_touched_in": []
     },
-    "src/target/loongarch64/frame_emit.c": {
-      "blob": "dcd0d8dfcf7394cbffa5b65494f3c1807165e96a",
-      "review_depth": "inventory",
-      "ci_touched_in": []
-    },
-    "src/target/loongarch64/frame_emit.h": {
-      "blob": "ba1dbe8387466b315bdd7efdecb57ed074813f30",
-      "review_depth": "inventory",
-      "ci_touched_in": []
-    },
     "src/target/loongarch64/machine_register.c": {
       "blob": "9e83f3d797cc2d7a79d8b6710ac5e6ec5113b298",
       "review_depth": "targeted",
       "ci_touched_in": [],
       "note": "P33: reviewed TP/SP/r21 write exclusion and local register admission; no runtime recertification implied."
-    },
-    "src/target/loongarch64/memory_emit.c": {
-      "blob": "397ad3b040f389d4de26588a47570036fda8e0f6",
-      "review_depth": "inventory",
-      "ci_touched_in": []
-    },
-    "src/target/loongarch64/memory_emit.h": {
-      "blob": "847274e21424f889892f62fa560bfc368a978d14",
-      "review_depth": "inventory",
-      "ci_touched_in": []
     },
     "src/target/loongarch64/machine_builtin_form.h": {
       "blob": "45b6e389ba784596ba2153ecb6a98d45b0200bb9",
@@ -1746,61 +1649,11 @@
       "review_depth": "inventory",
       "ci_touched_in": []
     },
-    "src/target/x86_64/machine_asm.c": {
-      "blob": "47cf75e4e57fb12b2e738b7c9793f8aaccf191f7",
-      "review_depth": "inventory",
-      "ci_touched_in": []
-    },
-    "src/target/x86_64/machine_call.c": {
-      "blob": "12659478ca5248a84dfe16631ca3b0a66763fa65",
-      "review_depth": "inventory",
-      "ci_touched_in": [
-        665
-      ],
-      "note": "2026-10-27: read complete CALL emitter with CoreCallView and target psABI planning context. Production QEMU differential remains separate acceptance evidence."
-    },
-    "src/target/x86_64/machine_emit.c": {
-      "blob": "0d2d4f9ffef3fd57a76c8a540f38d206b54d52d9",
-      "review_depth": "inventory",
-      "ci_touched_in": [
-        665
-      ]
-    },
-    "src/target/x86_64/machine_emit.h": {
-      "blob": "9cba384e048a1bd997d1042b3eaa39539da39260",
-      "review_depth": "inventory",
-      "ci_touched_in": [
-        665
-      ]
-    },
-    "src/target/x86_64/machine_fp.c": {
-      "blob": "706d957a09ec422dbbc9f2b6c10c222b7f3cb7fd",
-      "review_depth": "inventory",
-      "ci_touched_in": []
-    },
-    "src/target/x86_64/machine_internal.h": {
-      "blob": "1fed25e682a4847eefc30bf7c17b5e8010d97356",
-      "review_depth": "inventory",
-      "ci_touched_in": [
-        665
-      ]
-    },
     "src/target/x86_64/machine_register.c": {
       "blob": "1041454499c3433e257cf0529beb2324fba6bc9e",
       "review_depth": "targeted",
       "ci_touched_in": [],
       "note": "P33: reviewed rsp read, SysV scratch-clobber and optional percent locals; no runtime recertification implied."
-    },
-    "src/target/x86_64/machine_support.c": {
-      "blob": "bff9f09b111c2ffb690310de00c9901b696c05b2",
-      "review_depth": "inventory",
-      "ci_touched_in": []
-    },
-    "src/target/x86_64/raid6_simd.c": {
-      "blob": "7ebe816cdba9eb149a875faff18e16b64567c59b",
-      "review_depth": "inventory",
-      "ci_touched_in": [],
-      "note": "New RAID6 SIMD ISA owner inventoried, not yet deep-reviewed; real GNU/Linux compilation and execution evidence is tracked separately."
     },
     "src/target/common/machine_production_preflight.h": {
       "blob": "3ae44d1936e68015c2f550837a61e8d3252fa9b2",

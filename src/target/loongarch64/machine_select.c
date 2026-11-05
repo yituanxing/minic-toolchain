@@ -11,7 +11,6 @@
 #include "target/loongarch64/machine_scalar_source_select.h"
 #include "target/loongarch64/machine_uaccess_select.h"
 #include "target/loongarch64/machine_target_state.h"
-#include "target/loongarch64/frame_emit.h"
 #include "target/common/core_block_walk.h"
 #include "target/common/core_machine_asm.h"
 #include "target/common/core_numeric_shape.h"

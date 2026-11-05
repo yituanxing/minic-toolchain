@@ -1,10 +1,107 @@
 #include "target/x86_64/machine_opcode.h"
 #include "target/common/machine_gnu_asm.h"
+#include "target/common/machine_source_asm_template.h"
 #include "target/x86_64/asm_contract.h"
 
 #include <inttypes.h>
 #include <limits.h>
 #include <stdio.h>
+
+static bool x86_emit_register(FILE *, const MinicMachineOperand *);
+static bool x86_emit_address(FILE *, const MinicMachineAddress *);
+
+static bool x86_source_accumulator_form(
+    const MinicMachineFunction *function,
+    const MinicMachineInstruction *instruction, void *context) {
+    (void)context;
+    return function != NULL && function->target != NULL &&
+        (instruction->source_asm_machine_form_id ==
+             MINIC_X86_MACHINE_ASM_MULDIV_U64 ||
+         instruction->source_asm_machine_form_id ==
+             MINIC_X86_MACHINE_ASM_KASLR_MUL) &&
+        minic_x86_64_machine_validate_source_asm(function->target,
+            instruction, NULL);
+}
+
+static bool x86_source_accumulator_binding(
+    const MinicMachineFunction *function,
+    const MinicMachineInstruction *instruction,
+    size_t index, void *context) {
+    return index < instruction->operand_count &&
+        x86_source_accumulator_form(function, instruction, context);
+}
+
+static bool x86_source_accumulator_operand(
+    FILE *output, const MinicMachineFunction *function,
+    const MinicMachineInstruction *instruction,
+    const MinicMachineGNUAsmLabels *labels, size_t index,
+    unsigned char modifier, void *context) {
+    (void)labels;
+    if (modifier != 0U ||
+        !x86_source_accumulator_binding(function, instruction,
+            index, context)) return false;
+    return output == NULL ||
+        x86_emit_register(output, &instruction->operands[index]);
+}
+
+static const MinicMachineSourceAsmTemplatePolicy x86_accumulator_policy = {
+    x86_source_accumulator_form,
+    x86_source_accumulator_binding,
+    x86_source_accumulator_operand,
+    NULL
+};
+
+/* Matched x86 source forms are distinct from the accumulator family: CPUID
+ * uses four tied 32-bit named hardware registers, while MULACC reads a true
+ * explicit memory operand in R11 and writes three tied 64-bit registers.
+ * The target verifier independently proves every binding before this generic
+ * GNU placeholder substitution may print a source spelling. */
+static bool x86_source_matched_form(
+    const MinicMachineFunction *function,
+    const MinicMachineInstruction *instruction, void *context) {
+    (void)context;
+    return function != NULL && function->target != NULL &&
+        (instruction->source_asm_machine_form_id ==
+             MINIC_X86_MACHINE_ASM_CPUID_MATCHED ||
+         instruction->source_asm_machine_form_id ==
+             MINIC_X86_MACHINE_ASM_MULACC_MATCHED) &&
+        minic_x86_64_machine_validate_source_asm(function->target,
+            instruction, NULL);
+}
+
+static bool x86_source_matched_binding(
+    const MinicMachineFunction *function,
+    const MinicMachineInstruction *instruction,
+    size_t index, void *context) {
+    return index < instruction->operand_count &&
+        x86_source_matched_form(function, instruction, context);
+}
+
+static bool x86_source_matched_operand(
+    FILE *output, const MinicMachineFunction *function,
+    const MinicMachineInstruction *instruction,
+    const MinicMachineGNUAsmLabels *labels, size_t index,
+    unsigned char modifier, void *context) {
+    const MinicMachineOperand *operand;
+    (void)labels;
+    if (modifier != 0U ||
+        !x86_source_matched_binding(function, instruction, index, context))
+        return false;
+    operand = &instruction->operands[index];
+    if (output == NULL) return operand->kind == MINIC_MACHINE_OPERAND_REGISTER ||
+        operand->kind == MINIC_MACHINE_OPERAND_ADDRESS;
+    if (operand->kind == MINIC_MACHINE_OPERAND_REGISTER)
+        return x86_emit_register(output, operand);
+    return operand->kind == MINIC_MACHINE_OPERAND_ADDRESS &&
+        x86_emit_address(output, &operand->value.address);
+}
+
+static const MinicMachineSourceAsmTemplatePolicy x86_matched_policy = {
+    x86_source_matched_form,
+    x86_source_matched_binding,
+    x86_source_matched_operand,
+    NULL
+};
 
 /* Only the seven Source-qualified, operand-free Linux barrier forms are
  * serialized here. Variant and source text are checked independently by the
@@ -29,6 +126,26 @@ static bool x86_emit_source_asm(FILE *out,
         instruction->source_asm_machine_form_id ==
             MINIC_X86_MACHINE_ASM_GET_USER_CALL)
         return true; /* Physical opcodes already emitted this private CALL. */
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_MULDIV_U64)
+        /* GNU's exact two-instruction form has a semicolon separator;
+         * preserving a physical instruction on each line also preserves
+         * the source-level ABI test's observable instruction boundaries. */
+        return fputs("  mulq %r10\n  divq %r11\n", out) != EOF;
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_KASLR_MUL)
+        return fputs("  ", out) != EOF &&
+            minic_machine_source_asm_template_emit(out, function,
+                instruction, labels, &x86_accumulator_policy) &&
+            fputc('\n', out) != EOF;
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_CPUID_MATCHED ||
+        instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_MULACC_MATCHED)
+        return fputs("  ", out) != EOF &&
+            minic_machine_source_asm_template_emit(out, function,
+                instruction, labels, &x86_matched_policy) &&
+            fputc('\n', out) != EOF;
     variant = instruction->source_asm_machine_form_variant;
     return variant >= 1U && variant <=
             sizeof(hardware) / sizeof(hardware[0]) &&
@@ -97,6 +214,7 @@ static bool x86_emit_symbol(FILE *out, const char *name, int64_t addend,
     if (out == NULL || name == NULL || name[0] == '\0') return false;
     switch (relocation) {
     case MINIC_X86_MACHINE_RELOC_ABSOLUTE:
+    case MINIC_X86_MACHINE_RELOC_ABS32S:
     case MINIC_X86_MACHINE_RELOC_PC32: suffix=""; break;
     case MINIC_X86_MACHINE_RELOC_GOTPCREL: suffix="@GOTPCREL"; break;
     case MINIC_X86_MACHINE_RELOC_PLT32: suffix="@PLT"; break;
@@ -227,14 +345,17 @@ static bool x86_emit_selected(FILE *out,
     case MINIC_X86_MACHINE_FORMAT_FR:
     case MINIC_X86_MACHINE_FORMAT_RF:
     case MINIC_X86_MACHINE_FORMAT_SR:
-        if (ins->opcode == MINIC_X86_MI_MOVABS64_SYMBOL_R &&
+        if ((ins->opcode == MINIC_X86_MI_MOVABS64_SYMBOL_R ||
+             ins->opcode == MINIC_X86_MI_MOV64_IMM32S_SYMBOL_R) &&
             fputs(" $",out) == EOF) return false;
         if (ins->opcode != MINIC_X86_MI_MOVABS64_SYMBOL_R &&
+            ins->opcode != MINIC_X86_MI_MOV64_IMM32S_SYMBOL_R &&
             fputc(' ',out) == EOF) return false;
         if (!x86_emit_typed_operand(out,function,&ins->operands[0],opcode))
             return false;
         if (opcode->format == MINIC_X86_MACHINE_FORMAT_SR &&
             ins->opcode != MINIC_X86_MI_MOVABS64_SYMBOL_R &&
+            ins->opcode != MINIC_X86_MI_MOV64_IMM32S_SYMBOL_R &&
             fputs("(%rip)",out) == EOF) return false;
         if (fputs(", ",out) == EOF ||
             !x86_emit_typed_operand(out,function,&ins->operands[1],opcode))

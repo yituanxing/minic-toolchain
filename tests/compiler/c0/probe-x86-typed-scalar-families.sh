@@ -41,7 +41,7 @@ done
     "$root/tests/target/x86_64_typed_scalar_families_test.c" \
     "$root/src/target/x86_64/asm_contract.c" \
     "$root/src/target/x86_64/asm_contract_source.c" \
-    "$root/src/target/x86_64/raid6_simd.c" \
+    "$root/src/target/x86_64/machine_raid6_source_policy.c" \
     -Wl,--gc-sections -o "$work/machine-gate"
 "$work/machine-gate"
 echo 'X86_TYPED_SCALAR_FAMILIES=PASS source_families=6 machine_template_gates=25 source_owner=1 negative=6 ELF=2'

@@ -194,6 +194,7 @@ static const MinicX86MachineOpcodeInfo x86_opcodes[MINIC_X86_MI_LAST] = {
     SR(LEA64_RIP_SYMBOL_R,"leaq",MINIC_X86_MACHINE_RELOC_PC32,0),
     SR(MOV64_GOTPCREL_R,"movq",MINIC_X86_MACHINE_RELOC_GOTPCREL,MR),
     SR(MOVABS64_SYMBOL_R,"movabsq",MINIC_X86_MACHINE_RELOC_ABSOLUTE,0),
+    SR(MOV64_IMM32S_SYMBOL_R,"movq",MINIC_X86_MACHINE_RELOC_ABS32S,0),
 
     RR(ADD64_RR,"addq",64,64,R|W,X86_IMPLICIT_FLAGS_DEF),
     RR(ADC64_RR,"adcq",64,64,R|W,X86_IMPLICIT_FLAGS_USE_DEF),
@@ -557,6 +558,10 @@ bool minic_x86_64_machine_validate_relocation(const MinicTargetInfo *target,
     switch (reloc) {
     case MINIC_X86_MACHINE_RELOC_ABSOLUTE:
         return addend == 0;
+    case MINIC_X86_MACHINE_RELOC_ABS32S:
+        /* Only the proven early non-PIC head path may use an absolute
+         * signed-32 immediate symbol: GAS emits R_X86_64_32S. */
+        return addend == 0 && !target->position_independent;
     case MINIC_X86_MACHINE_RELOC_PC32:
         return addend >= INT32_MIN && addend <= INT32_MAX;
     case MINIC_X86_MACHINE_RELOC_GOTPCREL:
@@ -955,6 +960,170 @@ bool minic_x86_64_machine_validate_selected(const MinicMachineFunction *function
     }
 }
 
+/* The two unsigned accumulator forms share a physical GNU register
+ * contract.  The Source qualifier independently proved their C operands;
+ * here we re-prove the exact hardware template, four physical bindings,
+ * RDX status, and effects.  A forged FormId cannot authorize raw text. */
+static bool x86_source_accumulator_math_contract(
+    const MinicMachineInstruction *instruction) {
+    const bool muldiv = instruction->source_asm_machine_form_id ==
+        MINIC_X86_MACHINE_ASM_MULDIV_U64;
+    const unsigned int regs[2][4] = {
+        {MINIC_X86_REG_RAX, MINIC_X86_REG_RDX,
+         MINIC_X86_REG_RAX, MINIC_X86_REG_R10},
+        {MINIC_X86_REG_RAX, MINIC_X86_REG_RAX,
+         MINIC_X86_REG_R10, MINIC_X86_REG_R11}
+    };
+    const char *const constraints[2][4] = {
+        {"=a", "=d", "a", "rm"},
+        {"=a", "a", "rm", "rm"}
+    };
+    size_t i;
+    const unsigned int index = muldiv ? 1U : 0U;
+    if (!muldiv && instruction->source_asm_machine_form_id !=
+            MINIC_X86_MACHINE_ASM_KASLR_MUL) return false;
+    if (instruction->operand_count != 4U ||
+        instruction->operands == NULL ||
+        instruction->source_asm_terminates_block ||
+        instruction->source_asm_permits_fallthrough ||
+        instruction->effects !=
+            (MINIC_MACHINE_EFFECT_SOURCE_ASM |
+             MINIC_MACHINE_EFFECT_VOLATILE) ||
+        !minic_x86_64_typed_machine_form_matches_template(
+            instruction->source_asm_machine_form_id,
+            instruction->source_asm_machine_form_variant,
+            instruction->source_asm_template,
+            instruction->source_asm_length) ||
+        instruction->implicit_count != (muldiv ? 1U : 0U) ||
+        (muldiv && (instruction->implicit == NULL ||
+            instruction->implicit[0].reg.bank !=
+                MINIC_MACHINE_REGISTER_GENERAL ||
+            instruction->implicit[0].reg.number != MINIC_X86_REG_RDX ||
+            instruction->implicit[0].reg.width_bits != 64U ||
+            instruction->implicit[0].access !=
+                MINIC_MACHINE_REGISTER_CLOBBER))) return false;
+    for (i = 0U; i < 4U; ++i) {
+        const MinicMachineOperand *operand = &instruction->operands[i];
+        const unsigned int expected =
+            i < (muldiv ? 1U : 2U) ? MINIC_MACHINE_REGISTER_WRITE :
+                                         MINIC_MACHINE_REGISTER_READ;
+        if (operand->kind != MINIC_MACHINE_OPERAND_REGISTER ||
+            operand->asm_constraint == NULL ||
+            strcmp(operand->asm_constraint, constraints[index][i]) != 0 ||
+            operand->value.physical.reg.bank !=
+                MINIC_MACHINE_REGISTER_GENERAL ||
+            operand->value.physical.reg.number != regs[index][i] ||
+            operand->value.physical.reg.width_bits != 64U ||
+            operand->value.physical.access != expected ||
+            operand->asm_name != NULL) return false;
+    }
+    return true;
+}
+
+/* Exact physical bindings of GNU matched-register source forms. A source
+ * form ID alone grants no permission: source syntax, operand alternatives,
+ * effects, register widths, memory address and clobbers must all match the
+ * sealed hardware execution. The Source qualifier independently checks C
+ * lvalues and the original constraints; here only physical ISA is owned. */
+static bool x86_source_matched_contract(const MinicTargetInfo *target,
+    const MinicMachineInstruction *ins) {
+    static const unsigned int cpuid_regs[4] = {
+        MINIC_X86_REG_RAX, MINIC_X86_REG_RBX,
+        MINIC_X86_REG_RCX, MINIC_X86_REG_RDX
+    };
+    static const char *const cpuid_out[4] = {"=a","=b","=c","=d"};
+    static const char *const cpuid_in[4] = {"0","1","2","3"};
+    static const unsigned int mulacc_regs[7] = {
+        MINIC_X86_REG_R8, MINIC_X86_REG_R9, MINIC_X86_REG_RCX,
+        MINIC_X86_REG_R8, MINIC_X86_REG_R9, MINIC_X86_REG_RCX,
+        MINIC_X86_REG_RAX
+    };
+    static const char *const mulacc_constraints[8] = {
+        "=rm","=rm","=rm","0","1","2","a","m"
+    };
+    const bool cpuid = ins->source_asm_machine_form_id ==
+        MINIC_X86_MACHINE_ASM_CPUID_MATCHED;
+    const size_t count = cpuid ? ins->source_asm_machine_form_variant : 8U;
+    const unsigned effects = MINIC_MACHINE_EFFECT_SOURCE_ASM |
+        MINIC_MACHINE_EFFECT_VOLATILE |
+        (cpuid && count == 6U ? MINIC_MACHINE_EFFECT_COMPILER_BARRIER : 0U) |
+        (!cpuid ? MINIC_MACHINE_EFFECT_MEMORY_READ : 0U);
+    size_t i;
+    if (!cpuid && ins->source_asm_machine_form_id !=
+            MINIC_X86_MACHINE_ASM_MULACC_MATCHED) return false;
+    if ((cpuid && count != 6U && count != 8U) ||
+        (!cpuid && ins->source_asm_machine_form_variant != 1U) ||
+        ins->operand_count != count || ins->operands == NULL ||
+        ins->source_asm_terminates_block ||
+        ins->source_asm_permits_fallthrough ||
+        ins->effects != effects ||
+        !minic_x86_64_typed_machine_form_matches_template(
+            ins->source_asm_machine_form_id,
+            ins->source_asm_machine_form_variant,
+            ins->source_asm_template,
+            ins->source_asm_length) ||
+        ins->implicit_count != (cpuid ? 0U : 2U) ||
+        (cpuid && ins->implicit != NULL)) return false;
+    if (!cpuid) {
+        bool have_rdx = false, have_flags = false;
+        if (ins->implicit == NULL) return false;
+        for (i = 0U; i < 2U; ++i) {
+            const MinicMachineRegisterEffect *effect = &ins->implicit[i];
+            if (effect->access != MINIC_MACHINE_REGISTER_CLOBBER)
+                return false;
+            if (effect->reg.bank == MINIC_MACHINE_REGISTER_GENERAL &&
+                effect->reg.number == MINIC_X86_REG_RDX &&
+                effect->reg.width_bits == 64U && !have_rdx)
+                have_rdx = true;
+            else if (effect->reg.bank == MINIC_MACHINE_REGISTER_FLAGS &&
+                     effect->reg.number == 0U &&
+                     effect->reg.width_bits == 64U && !have_flags)
+                have_flags = true;
+            else return false;
+        }
+        if (!have_rdx || !have_flags) return false;
+    }
+    for (i = 0U; i < count; ++i) {
+        const MinicMachineOperand *op = &ins->operands[i];
+        unsigned int reg_number;
+        const char *constraint;
+        const unsigned int access = i < (cpuid ? 4U : 3U) ?
+            MINIC_MACHINE_REGISTER_WRITE : MINIC_MACHINE_REGISTER_READ;
+        if (op->asm_name != NULL || op->asm_constraint == NULL)
+            return false;
+        if (cpuid) {
+            reg_number = i < 4U ? cpuid_regs[i] :
+                cpuid_regs[count == 6U && i == 5U ? 2U : i-4U];
+            constraint = i < 4U ? cpuid_out[i] :
+                cpuid_in[count == 6U && i == 5U ? 2U : i-4U];
+        } else {
+            reg_number = i == 7U ? MINIC_X86_REG_R11 : mulacc_regs[i];
+            constraint = mulacc_constraints[i];
+        }
+        if (strcmp(op->asm_constraint, constraint) != 0) return false;
+        if (!cpuid && i == 7U) {
+            const MinicMachineAddress *address;
+            if (op->kind != MINIC_MACHINE_OPERAND_ADDRESS) return false;
+            address = &op->value.address;
+            if (!minic_x86_64_machine_validate_address(target, address, NULL) ||
+                address->base.bank != MINIC_MACHINE_REGISTER_GENERAL ||
+                address->base.number != MINIC_X86_REG_R11 ||
+                address->base.width_bits != 64U ||
+                address->has_index || address->has_segment ||
+                address->has_symbol || address->displacement != 0)
+                return false;
+            continue;
+        }
+        if (op->kind != MINIC_MACHINE_OPERAND_REGISTER ||
+            op->value.physical.reg.bank != MINIC_MACHINE_REGISTER_GENERAL ||
+            op->value.physical.reg.number != reg_number ||
+            op->value.physical.reg.width_bits != (cpuid ? 32U : 64U) ||
+            op->value.physical.access != access)
+            return false;
+    }
+    return true;
+}
+
 /* Machine ownership of the complete zero-operand Linux ordering family.
  * Every form has an exact Source-validated variant. No other source syntax
  * can pass this physical proof, even if its textual mnemonic looks similar. */
@@ -969,16 +1138,27 @@ bool minic_x86_64_machine_validate_source_asm(const MinicTargetInfo *target,
         !instruction->has_core_origin ||
         !instruction->has_source_asm_unique_id ||
         instruction->source_asm_unique_id == 0U ||
-        instruction->operands != NULL || instruction->operand_count != 0U ||
         instruction->source_asm_template == NULL ||
         instruction->source_asm_terminates_block ||
         instruction->source_asm_permits_fallthrough ||
         (instruction->effects & MINIC_MACHINE_EFFECT_VOLATILE) == 0U)
         return false;
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_MULDIV_U64 ||
+        instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_KASLR_MUL)
+        return x86_source_accumulator_math_contract(instruction);
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_CPUID_MATCHED ||
+        instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_MULACC_MATCHED)
+        return x86_source_matched_contract(target, instruction);
     if (instruction->source_asm_machine_form_id == 0U &&
         instruction->source_asm_machine_form_variant == 0U &&
         instruction->source_asm_length == 0U)
-        return instruction->effects ==
+        return instruction->operand_count == 0U &&
+            instruction->operands == NULL &&
+            instruction->effects ==
                 (MINIC_MACHINE_EFFECT_SOURCE_ASM |
                  MINIC_MACHINE_EFFECT_VOLATILE) &&
             instruction->implicit_count == 0U &&
@@ -992,7 +1172,9 @@ bool minic_x86_64_machine_validate_source_asm(const MinicTargetInfo *target,
         form = minic_x86_64_linux_uaccess_core_form_exact(
             instruction->source_asm_template,
             instruction->source_asm_length, put);
-        return instruction->source_asm_machine_form_variant == form &&
+        return instruction->operand_count == 0U &&
+            instruction->operands == NULL &&
+            instruction->source_asm_machine_form_variant == form &&
             (put ? form == 0x200U || form == 0x800U :
                    form == 3U || form == 4U) &&
             instruction->implicit_count == 0U &&
@@ -1004,7 +1186,8 @@ bool minic_x86_64_machine_validate_source_asm(const MinicTargetInfo *target,
                  MINIC_MACHINE_EFFECT_MEMORY_READ |
                  MINIC_MACHINE_EFFECT_MEMORY_WRITE);
     }
-    if (instruction->source_asm_machine_form_id !=
+    if (instruction->operands != NULL || instruction->operand_count != 0U ||
+        instruction->source_asm_machine_form_id !=
             MINIC_X86_MACHINE_ASM_ZERO_BARRIER ||
         (form = minic_x86_64_zero_barrier_form_exact(
             instruction->source_asm_template,

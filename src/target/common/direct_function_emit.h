@@ -9,10 +9,11 @@
 #include <stdint.h>
 #include <stdio.h>
 
-/* The direct LP64 frontend-to-native orchestration is shared once:
- * ELF metadata, verified Common-to-ABI planning, complete BlockContext,
- * cleanup/rollback and diagnostics. ABI-specific prologue, machine blocks,
- * and epilogue stay in native hooks. Typed frame references own SP offsets. */
+/* LP64 Core-to-native orchestration is shared once: ELF metadata, verified
+ * Common-to-ABI planning, BlockContext, cleanup and diagnostics. Both LP64
+ * producers select a COMPLETE typed MachineFunction before any function ELF
+ * output. Physical frame references own SP offsets; no direct FILE* native
+ * instruction callback or fallback remains in this shared boundary. */
 typedef struct MinicDirectLP64FunctionEmitter {
     const char *architecture;
     const MinicDirectLP64AbiPolicy *abi;
@@ -20,14 +21,11 @@ typedef struct MinicDirectLP64FunctionEmitter {
     const char *elf_function_type;  /* @function or %function */
     const char *init_array_type;    /* @init_array or %init_array */
     const char *init_word_directive; /* .quad or .xword */
-    bool (*emit_prologue)(FILE *, const MinicDirectLP64BlockContext *);
-    bool (*emit_core_blocks)(FILE *, const MinicDirectLP64BlockContext *);
     /* The ISA itself decides which operand-free hardware ASM is safe to
      * admit. Common merely validates one-to-one Core effect ownership. */
     MinicDirectLP64OpaqueAsmQualifier qualify_opaque_asm;
-    /* A migrated target selects the ENTIRE function before any ELF text is
-     * written. Old direct callbacks must then be NULL: no instruction-level
-     * dual dispatch or source text stored as an MIR opcode is permitted. */
+    /* Selection is mandatory for every LP64 function, not one of two paths.
+     * Source text cannot be stored as a selected machine opcode. */
     bool (*select_machine)(MinicMachineFunction *,
                            const MinicDirectLP64BlockContext *);
     bool (*initialize_machine_asm_policy)(const MinicTargetInfo *,
@@ -55,7 +53,6 @@ static inline bool minic_multi_direct_lp64_emit_function(
     const char *section;
     size_t alignment;
     bool internal, weak, constructor;
-    bool use_machine;
     bool ok = false;
 
     if (config == NULL || config->architecture == NULL ||
@@ -65,19 +62,9 @@ static inline bool minic_multi_direct_lp64_emit_function(
         config->text_section_type == NULL ||
         config->elf_function_type == NULL || config->init_array_type == NULL ||
         config->init_word_directive == NULL || out == NULL || module == NULL ||
-        module_decl == NULL)
+        module_decl == NULL || config->select_machine == NULL ||
+        config->initialize_machine_asm_policy == NULL)
         return false;
-    use_machine = config->select_machine != NULL;
-    if (use_machine) {
-        if (config->emit_prologue != NULL ||
-            config->emit_core_blocks != NULL ||
-            config->initialize_machine_asm_policy == NULL)
-            return false;
-    } else if (config->emit_prologue == NULL ||
-               config->emit_core_blocks == NULL ||
-               config->initialize_machine_asm_policy != NULL) {
-        return false;
-    }
     name = module_decl->name;
     section = module_decl->section_name;
     alignment = module_decl->explicit_alignment;
@@ -103,29 +90,26 @@ static inline bool minic_multi_direct_lp64_emit_function(
         .outgoing_calls = &plan.outgoing_calls,
         .name = name, .id = id
     };
-    if (use_machine) {
-        core_asm_policy.prove_selected_source_asm =
-            config->prove_selected_source_asm;
-        const MinicMachineProductionSource source = {
-            .core = fn,
-            .reachable_blocks = facts->reachable_blocks,
-            .target = target,
-            .symbol = name,
-            .core_asm_policy = &core_asm_policy
-        };
-        if (!config->select_machine(&machine, &ctx) ||
-            machine.frame_size != plan.machine_frame.frame_size ||
-            machine.frame_alignment != plan.machine_frame.frame_alignment ||
-            machine.has_dynamic_stack !=
-                plan.machine_frame.has_dynamic_stack ||
-            !config->initialize_machine_asm_policy(target, &machine_policy) ||
-            !minic_machine_production_preflight(
-                &source, &machine, &machine_policy)) {
-            (void)minic_multi_direct_machine_reject(fn,
-                config->architecture, name, "machine_function_preflight",
-                SIZE_MAX, SIZE_MAX, __LINE__);
-            goto cleanup;
-        }
+    core_asm_policy.prove_selected_source_asm =
+        config->prove_selected_source_asm;
+    const MinicMachineProductionSource source = {
+        .core = fn,
+        .reachable_blocks = facts->reachable_blocks,
+        .target = target,
+        .symbol = name,
+        .core_asm_policy = &core_asm_policy
+    };
+    if (!config->select_machine(&machine, &ctx) ||
+        machine.frame_size != plan.machine_frame.frame_size ||
+        machine.frame_alignment != plan.machine_frame.frame_alignment ||
+        machine.has_dynamic_stack != plan.machine_frame.has_dynamic_stack ||
+        !config->initialize_machine_asm_policy(target, &machine_policy) ||
+        !minic_machine_production_preflight(
+            &source, &machine, &machine_policy)) {
+        (void)minic_multi_direct_machine_reject(fn,
+            config->architecture, name, "machine_function_preflight",
+            SIZE_MAX, SIZE_MAX, __LINE__);
+        goto cleanup;
     }
 
     /* A GNU explicit section overrides compiler-generated function sections. */
@@ -148,13 +132,8 @@ static inline bool minic_multi_direct_lp64_emit_function(
                 name, config->elf_function_type, name) < 0)
         goto output_failed;
 
-    if (use_machine) {
-        if (!minic_machine_gnu_asm_emit_body(out, &machine, &machine_policy))
-            goto cleanup;
-    } else {
-        if (!config->emit_prologue(out, &ctx)) goto cleanup;
-        if (!config->emit_core_blocks(out, &ctx)) goto cleanup;
-    }
+    if (!minic_machine_gnu_asm_emit_body(out, &machine, &machine_policy))
+        goto cleanup;
 
     if (fprintf(out, ".size %s,.-%s\n", name, name) < 0 ||
         (constructor &&
