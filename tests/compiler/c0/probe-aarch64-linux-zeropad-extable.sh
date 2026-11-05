@@ -39,8 +39,11 @@ grep -Eq '^  \.short 4$' "$work/minic.s" ||
     fail 'kernel fixup discriminator missing'
 grep -Eq '^  \.short \(\(9 << 0\) \| \(10 << 5\)\)$' "$work/minic.s" ||
     fail 'result/address register indices differ from actual GPRs'
-grep -Eq '^  str x9, \[x12\]$' "$work/minic.s" ||
+if ! grep -Eq '^  str x9, \[x12(, #0)?\]$' "$work/minic.s"; then
+    echo 'AARCH64_ZEROPAD=DIAG hardware load emitted; output candidate:' >&2
+    grep -En '^[[:space:]]*str[[:space:]]+x9,' "$work/minic.s" >&2 || true
     fail 'GNU ASM output result lost'
+fi
 
 # Mutating ANY of the dangerous contracts must fail, without leaving
 # misleading partial assembly. The template and constraints are both typed.

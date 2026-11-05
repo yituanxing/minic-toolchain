@@ -66,12 +66,17 @@ for bad in extra wrong-constraint wrong-width wrong-memory-width;do
   wrong-width) sed 's/xaddq %0, %1;/xaddl %0, %1;/' "$d/xadd.i" >"$d/bad.i";;
   wrong-memory-width) sed 's/long long \*p)/int *p)/' "$d/xadd.i" >"$d/bad.i";;
  esac
- if "$cc" --target=x86_64-linux -S "$d/bad.i" -o "$d/bad.s" >"$d/bad.stdout" 2>"$d/bad.stderr";then
+ if MINIC_ASM_FRONTIER_TRACE=1 "$cc" --target=x86_64-linux -S "$d/bad.i" -o "$d/bad.s" >"$d/bad.stdout" 2>"$d/bad.stderr";then
    echo "FAIL unsafe xadd $bad accepted" >&2;exit 1
  fi
+ # C operand size belongs to source Target admission, not Core IR. Verify
+ # this wrong-width GNU ISA form is rejected at the qualified target gate
+ # instead of mistaking an unrelated parser or missing-tool failure for PASS.
  if [ "$bad" = wrong-memory-width ] &&
-    ! grep -Fq 'Core instruction unsupported:' "$d/bad.stderr";then
-    echo 'FAIL wrong-width xadd rejected for an unrelated frontend reason' >&2
+    { ! grep -Fq 'CORE_ASM_FRONTIER function=mini_xadd64_long_ll reason=target_required' "$d/bad.stderr" ||
+      ! grep -Fq "Core IR does not yet support function 'mini_xadd64_long_ll'" "$d/bad.stderr"; };then
+    echo 'FAIL wrong-width local XADD did not fail its source Target qualification gate' >&2
+    sed -n '1,80p' "$d/bad.stderr" >&2
     exit 1
  fi
  test ! -e "$d/bad.s"

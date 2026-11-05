@@ -87,6 +87,28 @@ static bool x86_linux_testcc_source(const MinicTargetInvocation *invocation,
     contract->implicit_memory_effect = true;
     return true;
 }
+/* A source form is private to the target only when its GNU operands actually
+ * request a memory transfer. Merely spelling e.g. "incq %0" is not proof:
+ * the valid generic +r register variant must remain available to Core.
+ * Keep the exact memory roles and ISA-form recognizers in the source owner. */
+static bool x86_atomic_rmw_has_memory_role(const MinicInlineAsm *source) {
+    size_t i;
+    if (source == NULL) return false;
+    for (i = 0U; source->outputs != NULL &&
+                  i < source->output_count; ++i)
+        if (target_constraint_is(&source->outputs[i], "+m") ||
+            target_constraint_is(&source->outputs[i], "=m") ||
+            target_constraint_is(&source->outputs[i], "m"))
+            return true;
+    for (i = 0U; source->inputs != NULL &&
+                  i < source->input_count; ++i)
+        if (target_constraint_is(&source->inputs[i], "+m") ||
+            target_constraint_is(&source->inputs[i], "=m") ||
+            target_constraint_is(&source->inputs[i], "m"))
+            return true;
+    return false;
+}
+
 /* Keep target-owned fixed-register/privileged source reserved; an output-only
  * asm is not permission for generic Core to bypass its exact GNU =a or
  * memory role when that target qualifier has rejected the constraints. */
@@ -110,6 +132,31 @@ bool minic_x86_64_requires_qualified_input_asm(const MinicInlineAsm *src) {
             }
         }
     }
+    /* A rejected C width/constraint in an exact Linux memory RMW must
+     * fail at the target source boundary, not reach generic Core ASM.
+     * The memory-role witness prevents hijacking legal register-only GNU
+     * forms that happen to share a mnemonic such as incq, xaddq or cmpxchg. */
+    if (src != NULL && src->template_text != NULL &&
+        x86_atomic_rmw_has_memory_role(src) &&
+        (minic_x86_64_gs_atomic_plan(src->template_text,
+             src->template_length).kind != MINIC_X86_GS_ATOMIC_NONE ||
+         minic_x86_64_atomic_rmw_form(src->template_text,
+             src->template_length) != MINIC_X86_ATOMIC_RMW_NONE ||
+         minic_x86_64_atomic_cc_form(src->template_text,
+             src->template_length) != MINIC_X86_ATOMIC_CC_NONE ||
+         minic_x86_64_raw_cmpxchg_form(src->template_text,
+             src->template_length) != MINIC_X86_TRYCAS_NONE ||
+         minic_x86_64_trycas_form(src->template_text,
+             src->template_length) != MINIC_X86_TRYCAS_NONE ||
+         minic_x86_64_linux_bitops_form(src->template_text,
+             src->template_length) != MINIC_X86_BITOPS_NONE ||
+         minic_x86_64_linux_lock_bitcc_form(src->template_text,
+             src->template_length) != 0U ||
+         minic_x86_64_linux_atomic_xchg_form(src->template_text,
+             src->template_length) != 0U ||
+         minic_x86_64_linux_cmpxchg128_form(src->template_text,
+             src->template_length) != 0U))
+        return true;
     if (src && src->template_text &&
         (minic_x86_64_linux_crash_segment_snapshot_form(
              src->template_text, src->template_length) != 0U ||
