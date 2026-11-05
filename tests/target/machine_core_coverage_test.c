@@ -287,6 +287,91 @@ static int check_compiler_barrier_origin(void) {
     return 0;
 }
 
+static int check_structured_scalar_asm_bindings(void) {
+    MinicCoreInstruction core_instruction = {0};
+    MinicCoreInstructionId core_id = 0U;
+    MinicCoreBlock core_block = {0};
+    MinicCoreInlineAsm source = {0};
+    MinicCoreFunction core = {0};
+    MinicMachineOperand bound[8] = {0};
+    MinicMachineInstruction selected = {0};
+    MinicMachineBlock blocks[2] = {0};
+    MinicMachineFunction machine = {0};
+    bool reachable[] = {true};
+    size_t i;
+    core_instruction.kind = MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM;
+    core_instruction.value.structured_inline_asm.operand_count = 8U;
+    for (i = 0U; i < 8U; ++i) {
+        MinicCoreStructuredInlineAsmOperand *operand =
+            &core_instruction.value.structured_inline_asm.operands[i];
+        operand->kind = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+        operand->operand_index = i;
+        operand->value = (MinicCoreValueId)i;
+        bound[i].kind = MINIC_MACHINE_OPERAND_REGISTER;
+        bound[i].value.physical.reg.number = (unsigned)(10U + i);
+        bound[i].value.physical.reg.width_bits = 32U;
+        bound[i].value.physical.reg.bank = MINIC_MACHINE_REGISTER_GENERAL;
+        bound[i].value.physical.access = MINIC_MACHINE_REGISTER_READ;
+        bound[i].asm_constraint = "r";
+    }
+    source.template_text = "nop";
+    source.template_length = 3U;
+    source.is_volatile = true;
+    source.has_memory_clobber = true;
+    source.operand_plan_owner = MINIC_ASM_OPERAND_PLAN_GENERIC_STRUCTURED;
+    source.source_asm_unique_id = 101U;
+    core_block.instructions = &core_id;
+    core_block.instruction_count = 1U;
+    core_block.has_terminator = true;
+    core_block.terminator.kind = MINIC_CORE_TERMINATOR_RETURN;
+    core.blocks = &core_block;
+    core.block_count = 1U;
+    core.instructions = &core_instruction;
+    core.instruction_count = 1U;
+    core.inline_asms = &source;
+    core.inline_asm_count = 1U;
+    selected.kind = MINIC_MACHINE_INSTRUCTION_SOURCE_ASM;
+    selected.has_core_origin = true;
+    selected.effects = MINIC_MACHINE_EFFECT_SOURCE_ASM |
+        MINIC_MACHINE_EFFECT_VOLATILE |
+        MINIC_MACHINE_EFFECT_COMPILER_BARRIER;
+    selected.operands = bound;
+    selected.operand_count = 8U;
+    selected.source_asm_template = "nop";
+    selected.source_asm_length = 3U;
+    selected.has_source_asm_unique_id = true;
+    selected.source_asm_unique_id = 101U;
+    blocks[0].machine_auxiliary = true;
+    blocks[0].has_fallthrough = true;
+    blocks[0].fallthrough_target = 1U;
+    blocks[1].has_core_block_origin = true;
+    blocks[1].instructions = &selected;
+    blocks[1].instruction_count = 1U;
+    machine.blocks = blocks;
+    machine.block_count = 2U;
+    if (!minic_machine_core_coverage_verify(&core, reachable, &machine)) return 1;
+    selected.operand_count = 7U;
+    if (minic_machine_core_coverage_verify(&core, reachable, &machine)) return 2;
+    selected.operand_count = 8U;
+    bound[7].value.physical.access = MINIC_MACHINE_REGISTER_WRITE;
+    if (minic_machine_core_coverage_verify(&core, reachable, &machine)) return 3;
+    bound[7].value.physical.access = MINIC_MACHINE_REGISTER_READ;
+    bound[7].kind = MINIC_MACHINE_OPERAND_INTEGER;
+    if (minic_machine_core_coverage_verify(&core, reachable, &machine)) return 7;
+    bound[7].kind = MINIC_MACHINE_OPERAND_REGISTER;
+    selected.effects &= ~(unsigned)MINIC_MACHINE_EFFECT_COMPILER_BARRIER;
+    if (minic_machine_core_coverage_verify(&core, reachable, &machine)) return 4;
+    selected.effects |= MINIC_MACHINE_EFFECT_COMPILER_BARRIER;
+    selected.source_asm_unique_id = 100U;
+    if (minic_machine_core_coverage_verify(&core, reachable, &machine)) return 5;
+    selected.source_asm_unique_id = 101U;
+    core_instruction.value.structured_inline_asm.operand_count =
+        MINIC_CORE_STRUCTURED_INLINE_ASM_OPERAND_LIMIT + 1U;
+    if (minic_machine_core_coverage_verify(&core, reachable, &machine)) return 8;
+    core_instruction.value.structured_inline_asm.operand_count = 8U;
+    return minic_machine_core_coverage_verify(&core, reachable, &machine) ? 0 : 6;
+}
+
 int main(void) {
     int error = check();
     if (error != 0) {
@@ -303,6 +388,11 @@ int main(void) {
         fprintf(stderr, "MACHINE_CORE_COVERAGE=FAIL barrier_case=%d\n", error);
         return 1;
     }
-    puts("MACHINE_CORE_COVERAGE=PASS effect_origin=1 no_dropped_core=1 cfg_edges=1 asm_goto=1 unreachable_effects=1 compiler_barrier=1");
+    error = check_structured_scalar_asm_bindings();
+    if (error != 0) {
+        fprintf(stderr, "MACHINE_CORE_COVERAGE=FAIL scalar_asm_case=%d\n", error);
+        return 1;
+    }
+    puts("MACHINE_CORE_COVERAGE=PASS effect_origin=1 no_dropped_core=1 cfg_edges=1 asm_goto=1 unreachable_effects=1 compiler_barrier=1 scalar_asm_bindings=8");
     return 0;
 }

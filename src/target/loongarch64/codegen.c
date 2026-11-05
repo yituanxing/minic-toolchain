@@ -2,7 +2,7 @@
 #include "target/loongarch64/machine_select.h"
 #include "target/loongarch64/machine_opcode.h"
 #include "target/loongarch64/memory_emit.h"
-#include "target/loongarch64/asm_contract.h"
+#include "target/loongarch64/machine_source_asm.h"
 #include "target/loongarch64/machine_target_state.h"
 #include "target/common/direct_function_emit.h"
 #include "target/common/lp64_aggregate.h"

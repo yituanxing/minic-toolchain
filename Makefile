@@ -300,7 +300,6 @@ MINIC_SOURCES := \
 	src/target/loongarch64/machine_scalar_source_select.c \
 	src/target/loongarch64/machine_uaccess_select.c \
 	src/target/loongarch64/machine_source_asm.c \
-	src/target/loongarch64/asm_contract.c \
 	src/target/loongarch64/asm_contract_source.c \
 	src/target/loongarch64/simd_asm.c \
 	src/target/loongarch64/simd_source_policy.c \
@@ -3017,7 +3016,6 @@ check-loong-scalar-normalized-seal: $(MINIC_CC_BINARY)
 	  -ffunction-sections -fdata-sections -Wl,--gc-sections \
 	  tests/compiler/c0/probe-loong-scalar-normalized-seal.c \
 	  src/target/loongarch64/machine_asm_form.c \
-	  src/target/loongarch64/asm_contract.c \
 	  src/target/loongarch64/asm_contract_source.c $(MINIC_LDFLAGS) \
 	  -o "$(BUILD_DIR)/tests/compiler/c0/loong-scalar-normalized-seal"
 	"$(abspath $(BUILD_DIR))/tests/compiler/c0/loong-scalar-normalized-seal"

@@ -84,6 +84,7 @@ static bool rv32_func(FILE *out, const MinicCoreModule *module,
             .core = f, .reachable_blocks = reachable, .target = target,
             .symbol = sym.symbol_name
         };
+        const char *reject_stage = "physical_frame";
         bool admitted = rv32_machine_physical_frame(&fr, &physical);
         if (admitted) {
             bridge = (MinicRiscvCoreMachinePlan){
@@ -94,11 +95,23 @@ static bool rv32_func(FILE *out, const MinicCoreModule *module,
                 .object_offsets = fr.object_offsets,
                 .object_offset_count = fr.object_count
             };
+            reject_stage = "select";
             admitted = minic_riscv_machine_select_core_subset(
-                &machine, &bridge) &&
-                minic_riscv_machine_gnu_asm_policy(target, &policy) &&
-                minic_machine_production_preflight(&source, &machine, &policy);
+                &machine, &bridge);
+            if (admitted) {
+                reject_stage = "policy";
+                admitted = minic_riscv_machine_gnu_asm_policy(target, &policy);
+            }
+            if (admitted) {
+                reject_stage = "preflight";
+                admitted = minic_machine_production_preflight(
+                    &source, &machine, &policy);
+            }
         }
+        if (!admitted && getenv("MINIC_RV_MACHINE_TRACE") != NULL)
+            (void)fprintf(stderr,
+                "RV32_TYPED_REJECT_STAGE=%s function=%s\n", reject_stage,
+                module_decl->name != NULL ? module_decl->name : "<unnamed>");
         if (!admitted)
             rv32_diag(diag, "<rv32-machine>",
                 "rv32i: complete typed MachineIR function rejected");

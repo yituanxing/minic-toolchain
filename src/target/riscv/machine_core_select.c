@@ -2279,10 +2279,62 @@ static bool rv_core_fixed_register_write(RvCoreSelection *sel,
     return rv_rr(sel, MINIC_RISCV_MACHINE_MV, reg, RV_T0);
 }
 
-/* Preserve exactly the source-owned, sealed target asm event.  The full
- * structured register allocator and asm-goto CFG binding have not yet been
- * migrated: admitting them here without real bindings would miscompile
- * Linux, so the entire Machine function fails closed instead. */
+/* The generic outputless GNU "r" form has no lvalue writeback or target
+ * instruction to select. Still materialize EVERY source value into a distinct
+ * real hardware register before preserving its original ASM effect. The
+ * eight argument GPRs are caller-saved, and the frame transfer helpers use
+ * only t-register scratch, so later input loads cannot overwrite earlier
+ * bindings. This path is shared by RV32 ILP32 and RV64 LP64. */
+static bool rv_core_scalar_input_source_asm(RvCoreSelection *sel,
+    const MinicCoreInstruction *ins, const MinicCoreInlineAsm *source) {
+    const MinicCoreFunction *fn = sel->plan->core;
+    const size_t count = ins->value.structured_inline_asm.operand_count;
+    MinicMachineOperand bindings[8];
+    size_t i;
+    if (source->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_GENERIC_STRUCTURED ||
+        source->target_machine_form_id != 0U ||
+        source->target_machine_form_variant != 0U ||
+        source->implicit_memory_effect || source->register_clobber_count != 0U ||
+        source->resolved_immediate_count != 0U ||
+        source->deferred_immediate_symbol != NULL ||
+        source->is_goto || !source->is_volatile ||
+        source->template_length == 0U ||
+        ins->result != MINIC_CORE_VALUE_INVALID ||
+        count == 0U || count > 8U) return false;
+    /* Prove the entire binding set before emitting any machine instructions.
+     * Other GNU roles, fixed/clobbered registers, 2-word RV32 inputs, and a
+     * ninth generic register input remain unimplemented, not reinterpreted. */
+    for (i = 0U; i < count; ++i) {
+        const MinicCoreStructuredInlineAsmOperand *binding =
+            &ins->value.structured_inline_asm.operands[i];
+        unsigned bytes;
+        bool sign, pointer;
+        if (binding->kind != MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT ||
+            binding->operand_index != i ||
+            binding->has_fixed_register_binding || binding->early_clobber ||
+            binding->physical_early_clobber || binding->physical_read_write ||
+            binding->has_tied_output || binding->value >= fn->value_count ||
+            !rv_type(sel, fn->values[binding->value].core_type_id,
+                     &bytes, &sign, &pointer)) return false;
+        (void)bytes;
+        (void)sign;
+        (void)pointer;
+    }
+    for (i = 0U; i < count; ++i) {
+        const MinicCoreStructuredInlineAsmOperand *binding =
+            &ins->value.structured_inline_asm.operands[i];
+        if (!rv_load(sel, binding->value, RV_A0 + (unsigned)i)) return false;
+        bindings[i] = rv_reg(sel->xlen, RV_A0 + (unsigned)i,
+            MINIC_MACHINE_REGISTER_READ);
+        bindings[i].asm_constraint = "r";
+    }
+    return minic_machine_builder_emit_core_source_asm(&sel->builder,
+        source, 0U, bindings, count, NULL, 0U, false, false);
+}
+
+/* Preserve exactly the source-owned, sealed target asm event. Structured
+ * register inputs have one narrow, fully physically bound owner above;
+ * output, memory, asm-goto, and larger forms still fail closed. */
 static bool rv_core_unbound_source_asm(RvCoreSelection *sel,
     const MinicCoreInstruction *ins) {
     const MinicCoreFunction *fn = sel->plan->core;
@@ -2291,8 +2343,6 @@ static bool rv_core_unbound_source_asm(RvCoreSelection *sel,
     if (ins->kind == MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM)
         id = ins->value.inline_asm_id;
     else if (ins->kind == MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM) {
-        if (ins->value.structured_inline_asm.operand_count != 0U)
-            return false;
         id = ins->value.structured_inline_asm.inline_asm_id;
     } else return false;
     if (id >= fn->inline_asm_count || fn->inline_asms == NULL) return false;
@@ -2302,6 +2352,9 @@ static bool rv_core_unbound_source_asm(RvCoreSelection *sel,
         source->resolved_immediate_count != 0U ||
         source->goto_second_target != MINIC_CORE_BLOCK_INVALID)
         return false;
+    if (ins->kind == MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM &&
+        ins->value.structured_inline_asm.operand_count != 0U)
+        return rv_core_scalar_input_source_asm(sel, ins, source);
     return minic_machine_builder_emit_core_source_asm(&sel->builder,
         source, 0U, NULL, 0U, NULL, 0U, false, false);
 }

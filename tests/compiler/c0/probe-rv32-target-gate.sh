@@ -59,8 +59,10 @@ unsigned long rv32_stack_pointer(void) { return current_stack_pointer; }
 SRC
 "$MINIC_CC" --target=riscv32-linux -march=rv32i -mabi=ilp32 \
     -S "$work/real-kernel-fixed.i" -o "$work/real-kernel-fixed.s"
-grep -Fq 'mv t0, tp' "$work/real-kernel-fixed.s"
-grep -Fq 'mv t0, sp' "$work/real-kernel-fixed.s"
+# The physical MachineIR printer spells GPRs as xN; legacy GAS aliases
+# are accepted only for the same two architectural source registers.
+grep -Eq 'mv (t0, tp|x5, x4)' "$work/real-kernel-fixed.s"
+grep -Eq 'mv (t0, sp|x5, x2)' "$work/real-kernel-fixed.s"
 cat > "$work/unsafe-fixed.i" <<'SRC'
 register unsigned long unsafe_argument_register __asm__("a0");
 unsigned long unsafe(void) { return unsafe_argument_register; }
@@ -78,8 +80,8 @@ void *linux_frame_origin(void) { return __builtin_frame_address(0); }
 SRC
 "$MINIC_CC" --target=riscv32-linux -march=rv32i -mabi=ilp32 \
   -S "$work/kernel-frame.i" -o "$work/kernel-frame.s"
-grep -Eq 'lw t0, [0-9]+\((s0|sp)\)' "$work/kernel-frame.s"
-grep -Eq 'mv t0, (s0|sp)' "$work/kernel-frame.s"
+grep -Eq 'lw (t0|x5), [0-9]+\((s0|sp|x8|x2)\)' "$work/kernel-frame.s"
+grep -Eq 'mv (t0, (s0|sp)|x5, (x8|x2))' "$work/kernel-frame.s"
 cat > "$work/kernel-invalid-frame.i" <<'SRC'
 void *unqualified_caller(void) { return __builtin_return_address(1); }
 SRC
@@ -101,9 +103,9 @@ SRC
 "$MINIC_CC" --target=riscv32-linux -march=rv32i -mabi=ilp32 \
     -fshort-wchar -fno-short-wchar -S "$work/kernel-wchar.i" \
     -o "$work/kernel-wchar-restored.s"
-grep -Fq 'li t0, 8' "$work/kernel-wchar-default.s"
-grep -Fq 'li t0, 4' "$work/kernel-wchar-short.s"
-grep -Fq 'li t0, 8' "$work/kernel-wchar-restored.s"
+grep -Eq 'li (t0|x5), 8' "$work/kernel-wchar-default.s"
+grep -Eq 'li (t0|x5), 4' "$work/kernel-wchar-short.s"
+grep -Eq 'li (t0|x5), 8' "$work/kernel-wchar-restored.s"
 echo 'RV32I_WCHAR_OPTION=PASS default=32 short_wchar=16 reset=32'
 cat > "$work/kernel-file-asm.i" <<'SRC'
 __asm__(".globl rv32_kernel_asm_origin\nrv32_kernel_asm_origin:\n  ebreak");
@@ -114,7 +116,7 @@ SRC
 grep -Fq '# MINIC_SOURCE_FILE_ASM_BEGIN' "$work/kernel-file-asm.s"
 grep -Fq '.globl rv32_kernel_asm_origin' "$work/kernel-file-asm.s"
 grep -Fq '# MINIC_SOURCE_FILE_ASM_END' "$work/kernel-file-asm.s"
-grep -Fq 'li t0, 42' "$work/kernel-file-asm.s"
+grep -Eq 'li (t0|x5), 42' "$work/kernel-file-asm.s"
 echo 'RV32I_FILE_ASM=PASS preserved_original_asm=true compiler_C_strict_I=true'
 cat > "$work/kernel-discard-section.i" <<'SRC'
 int kernel_system_state;

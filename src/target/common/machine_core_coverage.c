@@ -111,6 +111,7 @@ static bool machine_source_asm_matches_core(
     const MinicMachineInstruction *machine_instruction) {
     MinicCoreInlineAsmId source_id;
     const MinicCoreInlineAsm *source;
+    size_t i;
     if (instruction->kind == MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM)
         source_id = instruction->value.inline_asm_id;
     else if (instruction->kind == MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM)
@@ -119,6 +120,39 @@ static bool machine_source_asm_matches_core(
     if (source_id >= core->inline_asm_count || core->inline_asms == NULL ||
         machine_instruction->source_asm_template == NULL) return false;
     source = &core->inline_asms[source_id];
+    /* A generic source-only scalar input is a physical ASM operand even if
+     * the template never prints %N (e.g. asm volatile("nop" : : eight r's)).
+     * Do not permit a selector to erase input bindings while retaining the
+     * source-text/effect seal. All architectures share this Core invariant;
+     * each target still validates exact constraint/register legality. */
+    if (instruction->kind == MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM &&
+        source->operand_plan_owner == MINIC_ASM_OPERAND_PLAN_GENERIC_STRUCTURED) {
+        const size_t count = instruction->value.structured_inline_asm.operand_count;
+        bool all_scalar_inputs = count != 0U;
+        if (count > MINIC_CORE_STRUCTURED_INLINE_ASM_OPERAND_LIMIT)
+            return false;
+        for (i = 0U; i < count && all_scalar_inputs; ++i) {
+            const MinicCoreStructuredInlineAsmOperand *binding =
+                &instruction->value.structured_inline_asm.operands[i];
+            if (binding->kind != MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT ||
+                binding->operand_index != i) all_scalar_inputs = false;
+        }
+        if (all_scalar_inputs) {
+            if (machine_instruction->operand_count != count ||
+                machine_instruction->operands == NULL) return false;
+            for (i = 0U; i < count; ++i) {
+                const MinicMachineOperand *operand =
+                    &machine_instruction->operands[i];
+                if (operand->asm_constraint == NULL ||
+                    operand->asm_constraint[0] == '\0' ||
+                    (strcmp(operand->asm_constraint, "r") == 0 &&
+                     operand->kind != MINIC_MACHINE_OPERAND_REGISTER) ||
+                    (operand->kind == MINIC_MACHINE_OPERAND_REGISTER &&
+                     (operand->value.physical.access &
+                         MINIC_MACHINE_REGISTER_READ) == 0U)) return false;
+            }
+        }
+    }
     return source->template_text != NULL &&
         (!source->is_volatile ||
          (machine_instruction->effects & MINIC_MACHINE_EFFECT_VOLATILE) != 0U) &&

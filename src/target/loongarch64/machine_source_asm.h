@@ -5,6 +5,9 @@
 #include "target/common/direct_block_context.h"
 #include "target/common/machine_builder.h"
 
+/* Exact opaque GNU source preflight for the live Core->Machine boundary. */
+bool minic_loongarch64_qualified_opaque_asm(const MinicCoreInlineAsm *);
+
 /* Target-owned SOURCE_ASM gateway. The source bytes are never compiler-
  * selected opcodes, and the serializer must repeat the verifier's parser. */
 bool minic_loongarch64_machine_validate_source_asm(

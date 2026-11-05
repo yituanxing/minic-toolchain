@@ -230,8 +230,8 @@ has tools/minic-cc/main.c 'invocation.machine.position_independent = position_in
 has tools/minic-cc/main.c 'result = minic_compile_preprocessed_file_for_target('
 lacks tools/minic-cc/main.c 'MinicTargetInfo selected_target'
 
-has src/target/loongarch64/asm_contract.c 'loong_pte_form('
-has src/target/loongarch64/asm_contract.c 'loong_pte_emit('
+has src/target/loongarch64/machine_asm_form.c 'loong_pte_form('
+has src/target/loongarch64/machine_pte_select.c 'minic_loongarch64_machine_select_pte('
 lacks src/compiler/c_lower/core_lower_asm_target.c 'll.d'
 has src/target/common/direct_instruction_semantics.c \
   'minic_multi_direct_machine_instruction_shape('
@@ -379,9 +379,9 @@ lacks src/compiler/c_lower/core_lower_asm_target.c 'mrs x9, daif'
 
 # Original LoongArch64 Linux array_index_mask_nospec is exact target-owned
 # SLTU + SUB.D with output/register contract, not a cloned Core algorithm.
-has src/target/loongarch64/asm_contract.c 'loong_mask_nospec_form('
+has src/target/loongarch64/machine_asm_form.c 'loong_mask_nospec_form('
 has src/target/loongarch64/asm_contract_source.c 'loong_mask_nospec_source('
-has src/target/loongarch64/asm_contract.c 'loong_mask_nospec_emit('
+has src/target/loongarch64/machine_select.c 'loong_select_mask_nospec('
 lacks src/compiler/c_lower/core_lower_asm_target.c 'sltu'
 
 # All targets share one validated ELF global output plan. Section/binding
@@ -636,8 +636,11 @@ has src/target/loongarch64/machine_select.c 'loong_select_structured_asm('
 has src/target/loongarch64/machine_select.c 'minic_machine_builder_emit_core_source_asm('
 has src/compiler/c_lower/core_lower_asm_scalar_forms.c 'e->kind == MINIC_EXPRESSION_FIXED_REGISTER'
 has src/compiler/c_lower/core_lower_asm_scalar_forms.c 'minic_target_info_fixed_register_write_supported('
-has src/target/loongarch64/asm_contract.c 'loongarch64_dbar_hint'
-has src/target/loongarch64/asm_contract.c 'loongarch64_dbar_hint'
+has src/target/loongarch64/machine_asm_form.c 'loongarch64_dbar_hint'
+has src/target/loongarch64/machine_source_asm.c 'loongarch64_dbar_hint'
+has src/target/loongarch64/codegen.c 'minic_loongarch64_qualified_opaque_asm'
+has src/target/loongarch64/machine_source_asm.c 'minic_loongarch64_qualified_opaque_asm('
+lacks Makefile 'src/target/loongarch64/asm_contract.c'
 has src/target/loongarch64/codegen.c '"@function", "@object"'
 # A front-end GNU alias is bound once after the entire TU, never by a
 # per-architecture parser special case or a fabricated declaration.
@@ -1562,13 +1565,13 @@ lacks src/target/x86_64/codegen.c 'for (i = 0U; i < program->function_count && s
 lacks src/target/riscv64/codegen_function.c 'for (function_index = 0U;'
 lacks src/target/riscv32/rv32_emit.c 'for (i = 0U; ok && i < function_count; ++i)'
 
-# The GNU/C qualifier owns nominal source ranks; all three physical ASM
-# emitters consume only sealed CoreType IDs. Match nested b[i].value indexes
+# The GNU/C qualifier owns nominal source ranks; physical ASM emitters
+# consume only sealed CoreType IDs. Match nested b[i].value indexes
 # too: an older single-bracket search silently missed most C-type readers.
 if grep -En -- 'fn->values\[.*\]\.type' \
     src/target/aarch64/asm_contract.c \
     src/target/aarch64/residual_emit.c \
-    src/target/loongarch64/asm_contract.c \
+    src/target/loongarch64/machine_source_asm.c \
     src/target/x86_64/machine_asm.c; then
   echo 'MINIC_ASM_MACHINE_C_TYPE_BOUNDARY=FAIL' >&2
   exit 1
@@ -1918,11 +1921,11 @@ printf 'MINIC_BACKEND_BOUNDARY_CHECK=PASS\n'
 
 # Machine ASM's pointer/integer/void kind queries are Core-owned.
 for source in src/target/aarch64/asm_contract.c \
-              src/target/loongarch64/asm_contract.c \
+              src/target/loongarch64/machine_select.c \
               src/target/x86_64/machine_asm.c; do
   has "$source" 'minic_core_function_value_is_kind('
   lacks "$source" 'minic_type_is_pointer(fn->values['
   lacks "$source" 'minic_type_is_integer(fn->values['
 done
 lacks src/target/aarch64/asm_contract.c 'minic_type_is_void(ins->type)'
-lacks src/target/loongarch64/asm_contract.c 'minic_type_is_void(ins->type)'
+lacks src/target/loongarch64/machine_source_asm.c 'minic_type_is_void(ins->type)'

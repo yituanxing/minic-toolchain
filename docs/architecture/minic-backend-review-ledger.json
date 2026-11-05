@@ -1011,11 +1011,6 @@
       "review_depth": "inventory",
       "ci_touched_in": []
     },
-    "src/target/loongarch64/asm_contract.c": {
-      "blob": "58c41c629969c40ad7a738708feea5b8ac669e45",
-      "review_depth": "inventory",
-      "ci_touched_in": []
-    },
     "src/target/loongarch64/asm_contract.h": {
       "blob": "289205fdd3f0a41e34a0d6c31dde68b98614f7f2",
       "review_depth": "inventory",

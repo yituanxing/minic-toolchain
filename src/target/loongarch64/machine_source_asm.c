@@ -3,6 +3,7 @@
 #include "target/loongarch64/machine_target_state.h"
 #include "target/loongarch64/machine_asm_form.h"
 #include "target/loongarch64/asm_contract_internal.h"
+#include "target/loongarch64/simd_asm.h"
 #include "target/common/core_machine_asm.h"
 #include "target/common/direct_linux_bug_asm.h"
 #include "target/common/machine_source_asm_template.h"
@@ -10,6 +11,57 @@
 #include <inttypes.h>
 #include <stdint.h>
 #include <string.h>
+
+/* Core's opaque-ASM preflight is still live even when *all* instruction
+ * production has moved to typed MachineIR. Keep exactly the historical
+ * source whitelist here, next to physical SOURCE_ASM validation: Linux
+ * jump labels, BUG tables, SIMD qualification, zero-operand hardware and
+ * the fixed CPU-hotplug text barriers. Never treat arbitrary GNU source as
+ * an opaque bypass. */
+bool minic_loongarch64_qualified_opaque_asm(const MinicCoreInlineAsm *a) {
+    static const char *const allowed[] = {
+        "idle0", "tlbrd", "tlbclr", "tlbflush", "tlbsrch",
+        "tlbwr", "tlbfill", "dbar0", "dbar0x700", "ibar0", "nop"
+    };
+    static const char *const linux_newline_hardware[] = {
+        "dbar 0\n\t", "idle 0\n\t", "nop\n\t",
+        "ibar 0 \t\ndbar 0 \t\n"
+    };
+    char compact[64];
+    size_t i, n = 0U;
+    if (minic_loongarch64_linux_jump_label_asm_goto_core(a)) return true;
+    if (minic_loongarch64_simd_qualify_opaque(a)) return true;
+    if (minic_multi_direct_linux_bug_asm(
+            a, "10000", "10001", "10002", "break1", false))
+        return true;
+    if (a == NULL || a->template_text == NULL || !a->is_volatile ||
+        a->template_length == 0U || a->template_length >= sizeof(compact) ||
+        a->is_goto || a->register_clobber_count != 0U)
+        return false;
+    for (i = 0U; i < sizeof(linux_newline_hardware) /
+                    sizeof(linux_newline_hardware[0]); ++i) {
+        const size_t length = strlen(linux_newline_hardware[i]);
+        if ((i == 0U || i == 3U || !a->has_memory_clobber) &&
+            a->template_length == length &&
+            memcmp(a->template_text, linux_newline_hardware[i], length) == 0)
+            return true;
+    }
+    if (a->template_length == sizeof("\tibar 0\n") - 1U &&
+        memcmp(a->template_text, "\tibar 0\n",
+               sizeof("\tibar 0\n") - 1U) == 0)
+        return true;
+    for (i = 0U; i < a->template_length; ++i) {
+        const char c = a->template_text[i];
+        if (c == ' ' || c == '\t') continue;
+        if (c == '\n' || c == '\r' || c == ';' || c == '\0')
+            return false;
+        compact[n++] = c;
+    }
+    compact[n] = '\0';
+    for (i = 0U; i < sizeof(allowed) / sizeof(allowed[0]); ++i)
+        if (strcmp(compact, allowed[i]) == 0) return true;
+    return false;
+}
 
 /* A zero-ID source form is deliberately restricted to the already qualified
  * operand-free hardware spellings. GNU directives, local labels, arbitrary

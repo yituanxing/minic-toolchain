@@ -1,13 +1,9 @@
 #ifndef MINIC_TARGET_LOONGARCH64_ASM_CONTRACT_H
 #define MINIC_TARGET_LOONGARCH64_ASM_CONTRACT_H
 #include "target/backend.h"
-#include "target/common/direct_function_emit.h"
 
-/* Machine-only Core forms. Source GNU ASM admission is declared by
- * asm_contract_source.h, independently of the emitter interface. */
-bool minic_loongarch64_emit_qualified_structured_asm(
-    FILE *out, const MinicDirectLP64BlockContext *ctx,
-    const MinicCoreInstruction *ins);
+/* Source admission and typed MachineIR share only sealed IDs and exact
+ * template-form recognizers. No old FILE* Core physical emitter remains. */
 /* Immutable GNU template + typed descriptor ID/variant machine ingress. */
 bool minic_loongarch64_typed_descriptor_matches_template(
     uint32_t id, uint32_t variant, const char *text, size_t length);
@@ -36,15 +32,8 @@ typedef enum MinicLoongLinuxMachineAsmForm {
 } MinicLoongLinuxMachineAsmForm;
 bool minic_loongarch64_typed_scalar_form_matches_template(
     uint32_t id, uint32_t variant, const char *text, size_t length);
-bool minic_loongarch64_emit_dbar(
-    FILE *out, const MinicDirectLP64BlockContext *ctx,
-    const MinicCoreInstruction *ins);
-bool minic_loongarch64_qualified_opaque_asm(const MinicCoreInlineAsm *);
 /* Original Linux 6.6 LoongArch static-key patchpoint: source `i` key,
- * qualified Core symbolic relocation and native __jump_table emission. */
+ * qualified Core symbolic relocation and typed Machine successor. */
 bool minic_loongarch64_linux_jump_label_asm_goto_core(
     const MinicCoreInlineAsm *source);
-bool minic_loongarch64_emit_linux_jump_label_asm_goto(
-    FILE *out, const MinicCoreInlineAsm *source,
-    size_t function_id, size_t function_blocks);
 #endif

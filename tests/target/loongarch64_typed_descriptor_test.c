@@ -3,6 +3,7 @@
  * These IDs deliberately follow the single source/machine descriptor table. */
 #include "target/loongarch64/asm_contract.h"
 #include "target/loongarch64/asm_contract_source.h"
+#include "target/loongarch64/machine_source_asm.h"
 #include "frontend/ast.h"
 
 /* This is an assertion-based machine-contract test: release -DNDEBUG must
@@ -86,137 +87,80 @@ static void descriptor_source_normalized_seal(void) {
         &invocation, &program, &source, &forged));
 }
 
-/* The physical emitter consumes sealed Core execution types; no C nominal
- * rank can be recovered from the C-free CoreValue schema. Positive emission
- * fixtures catch an ownership regression that rejection tests alone miss. */
-static bool cpucfg_emit_matches(const MinicDirectLP64BlockContext *ctx,
-                                const MinicCoreInstruction *ins,
-                                bool accepted) {
+/* MachineIR itself, rather than the removed FILE* Core emitter, is the
+ * physical execution authority. Positive CPUCFG source bindings must
+ * survive the sealed template's validation and actual GNU serialization.
+ * A forged form/operand must fail before even one byte is written. */
+static void descriptor_machine_source_positive(void) {
+    const MinicTargetInfo *target =
+        minic_target_info_for_architecture(MINIC_TARGET_ARCH_LOONGARCH64);
+    MinicMachineFunction function = {0};
+    MinicMachineInstruction ins = {0};
+    MinicMachineOperand operands[2] = {{0}};
+    MinicMachineGNUAsmLabels labels = {0};
     char bytes[1024] = {0};
-    size_t length;
-    bool emitted;
     FILE *out = tmpfile();
-    assert(out != NULL);
-    emitted = minic_loongarch64_emit_qualified_structured_asm(out, ctx, ins);
-    assert(emitted == accepted);
-    assert(fflush(out) == 0);
-    assert(fseek(out, 0L, SEEK_SET) == 0);
+    size_t length;
+    assert(target && out);
+    function.target = target;
+    operands[0].kind = MINIC_MACHINE_OPERAND_REGISTER;
+    operands[0].value.physical.reg.bank = MINIC_MACHINE_REGISTER_GENERAL;
+    operands[0].value.physical.reg.number = 12U;
+    operands[0].value.physical.reg.width_bits = 64U;
+    operands[0].value.physical.access = MINIC_MACHINE_REGISTER_WRITE;
+    operands[0].asm_constraint = "=&r";
+    operands[1].kind = MINIC_MACHINE_OPERAND_REGISTER;
+    operands[1].value.physical.reg.bank = MINIC_MACHINE_REGISTER_GENERAL;
+    operands[1].value.physical.reg.number = 13U;
+    operands[1].value.physical.reg.width_bits = 64U;
+    operands[1].value.physical.access = MINIC_MACHINE_REGISTER_READ;
+    operands[1].asm_constraint = "r";
+    ins.kind = MINIC_MACHINE_INSTRUCTION_SOURCE_ASM;
+    ins.effects = MINIC_MACHINE_EFFECT_SOURCE_ASM |
+        MINIC_MACHINE_EFFECT_VOLATILE;
+    ins.source_asm_template = "cpucfg %0, %1";
+    ins.source_asm_length = strlen(ins.source_asm_template);
+    ins.source_asm_machine_form_id = 5U;
+    ins.operand_count = 2U;
+    ins.operands = operands;
+    assert(minic_loongarch64_machine_validate_source_asm(target, &ins, NULL));
+    assert(minic_loongarch64_machine_emit_source_asm(
+        out, &function, &ins, &labels, NULL));
+    assert(fflush(out) == 0 && fseek(out, 0L, SEEK_SET) == 0);
     length = fread(bytes, 1U, sizeof(bytes) - 1U, out);
+    assert(strstr(bytes, "cpucfg $t0, $t1") != NULL && length > 0U);
     assert(fclose(out) == 0);
-    if (!accepted) return length == 0U;
-    return strstr(bytes, "cpucfg $t0, $t1") != NULL &&
-        strstr(bytes, "st.w") != NULL;
-}
-
-static void descriptor_core_type_machine_positive(void) {
-    MinicCoreTypeContext types;
-    MinicCoreType type = {0};
-    MinicCoreTypeId void_id, u32_id, s32_id, ptr_u32_id, ptr_u64_id, u64_id;
-    MinicCoreValue values[2] = {0};
-    MinicCoreFunction fn = {0};
-    MinicCoreInlineAsm descriptor = {0};
-    MinicCoreStructuredInlineAsmOperand operands[2] = {{0}};
-    MinicCoreInstruction ins = {0};
-    MinicLP64FramePlan plan = {0};
-    MinicMachineLP64FrameContract machine_frame = {0};
-    MinicDirectLP64BlockContext ctx = {0};
-    size_t offsets[2] = {16U, 24U};
-    minic_core_type_context_initialize(&types);
-    type.kind = MINIC_CORE_TYPE_VOID;
-    assert(minic_core_type_register(&types, &type, &void_id));
-    type.kind = MINIC_CORE_TYPE_INTEGER;
-    type.has_layout = true;
-    type.size = 4U;
-    type.alignment = 4U;
-    type.value.integer.bit_width = 32U;
-    assert(minic_core_type_register(&types, &type, &u32_id));
-    type.value.integer.is_signed = true;
-    assert(minic_core_type_register(&types, &type, &s32_id));
-    type.value.integer.is_signed = false;
-    type.value.integer.bit_width = 64U;
-    type.size = 8U;
-    type.alignment = 8U;
-    assert(minic_core_type_register(&types, &type, &u64_id));
-    memset(&type, 0, sizeof(type));
-    type.kind = MINIC_CORE_TYPE_POINTER;
-    type.has_layout = true;
-    type.size = 8U;
-    type.alignment = 8U;
-    type.value.pointer.pointee = u32_id;
-    assert(minic_core_type_register(&types, &type, &ptr_u32_id));
-    type.value.pointer.pointee = u64_id;
-    assert(minic_core_type_register(&types, &type, &ptr_u64_id));
-    values[0].core_type_id = ptr_u32_id;
-    values[1].core_type_id = s32_id;
-    /* Machine operands have CoreType identities, not source C descriptors. */
-    descriptor.template_text = "cpucfg %0, %1";
-    descriptor.template_length = strlen(descriptor.template_text);
-    descriptor.is_volatile = true;
-    descriptor.target_machine_form_id = 5U;
-    operands[0].operand_index = 0U;
-    operands[0].value = 0U;
-    operands[0].kind = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
-    operands[1].operand_index = 1U;
-    operands[1].value = 1U;
-    operands[1].kind = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
-    ins.kind = MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM;
-    ins.result = MINIC_CORE_VALUE_INVALID;
-    ins.core_type_id = void_id;
-    ins.value.structured_inline_asm.inline_asm_id = 0U;
-    ins.value.structured_inline_asm.operand_count = 2U;
-    ins.value.structured_inline_asm.operands[0] = operands[0];
-    ins.value.structured_inline_asm.operands[1] = operands[1];
-    fn.type_context = &types;
-    fn.values = values;
-    fn.value_count = 2U;
-    fn.inline_asms = &descriptor;
-    fn.inline_asm_count = 1U;
-    plan.value_count = 2U;
-    plan.value_offsets = offsets;
-    ctx.fn = &fn;
-    ctx.frame_plan = &plan;
-    ctx.machine_frame = &machine_frame;
-    assert(cpucfg_emit_matches(&ctx, &ins, true));
-    values[0].core_type_id = u32_id;
-    assert(cpucfg_emit_matches(&ctx, &ins, false));
-    values[0].core_type_id = u64_id;
-    assert(cpucfg_emit_matches(&ctx, &ins, false));
-    values[0].core_type_id = ptr_u64_id;
-    assert(cpucfg_emit_matches(&ctx, &ins, false));
-    values[0].core_type_id = ptr_u32_id;
-    /* Invalid contexts must fail without issuing even one instruction. */
-    fn.type_context = NULL;
-    assert(cpucfg_emit_matches(&ctx, &ins, false));
-    fn.type_context = &types;
-    ins.value.structured_inline_asm.operands[0].value = 3U;
-    assert(cpucfg_emit_matches(&ctx, &ins, false));
-    minic_core_type_context_destroy(&types);
-    puts("LOONG_TYPED_DESCRIPTOR_CORETYPE=PASS machine_positive=1 poisoned_C=2 wrong_core=3 null_context=1 bad_ssa=1 partial_s=0");
+    ins.source_asm_machine_form_id = 1U;
+    assert(!minic_loongarch64_machine_validate_source_asm(target, &ins, NULL));
+    ins.source_asm_machine_form_id = 5U;
+    operands[0].value.physical.reg.number = 0U;
+    assert(!minic_loongarch64_machine_validate_source_asm(target, &ins, NULL));
+    operands[0].value.physical.reg.number = 12U;
+    ins.source_asm_template = "cpucfg %1, %0";
+    ins.source_asm_length = strlen(ins.source_asm_template);
+    assert(!minic_loongarch64_machine_validate_source_asm(target, &ins, NULL));
+    puts("LOONG_TYPED_DESCRIPTOR_MACHINE=PASS physical_cpucfg=1 forged_id=1 bad_physical=1 forged_template=1");
 }
 
 static void machine_reject(uint32_t id, uint32_t variant, const char *literal) {
-    char text[256];
-    MinicCoreInlineAsm descriptor = {0};
-    MinicCoreFunction function = {0};
-    MinicDirectLP64BlockContext ctx = {0};
-    MinicCoreInstruction ins = {0};
+    const MinicTargetInfo *target =
+        minic_target_info_for_architecture(MINIC_TARGET_ARCH_LOONGARCH64);
+    MinicMachineInstruction ins = {0};
+    MinicMachineFunction function = {0};
+    MinicMachineGNUAsmLabels labels = {0};
     FILE *out = tmpfile();
-    assert(out != NULL);
-    assert(strlen(literal) + 1U <= sizeof(text));
-    memcpy(text, literal, strlen(literal) + 1U);
-    descriptor.template_text = text;
-    descriptor.template_length = strlen(literal);
-    descriptor.target_machine_form_id = id;
-    descriptor.target_machine_form_variant = variant;
-    function.inline_asms = &descriptor;
-    function.inline_asm_count = 1U;
-    ctx.fn = &function;
-    ins.kind = MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM;
-    ins.result = MINIC_CORE_VALUE_INVALID;
-    ins.value.structured_inline_asm.inline_asm_id = 0U;
-    assert(!minic_loongarch64_emit_qualified_structured_asm(out, &ctx, &ins));
+    assert(target && out);
+    function.target = target;
+    ins.kind = MINIC_MACHINE_INSTRUCTION_SOURCE_ASM;
+    ins.source_asm_template = (char *)literal;
+    ins.source_asm_length = strlen(literal);
+    ins.source_asm_machine_form_id = id;
+    ins.source_asm_machine_form_variant = variant;
+    assert(!minic_loongarch64_machine_validate_source_asm(target, &ins, NULL));
+    assert(!minic_loongarch64_machine_emit_source_asm(
+        out, &function, &ins, &labels, NULL));
     assert(ftell(out) == 0L);
-    fclose(out);
+    assert(fclose(out) == 0);
 }
 
 #define CHECK_FORM(id, literal, corrupt) do { \
@@ -249,7 +193,7 @@ int main(void) {
         "0:ll.w %0,%2\nbeq %0,%4,1f\nadd.w %1,%0,%3\n"
         "sc.w %1,%2\nbeqz %1,0b\nb 2f\n1:dbar 0x700\n2:";
     descriptor_source_normalized_seal();
-    descriptor_core_type_machine_positive();
+    descriptor_machine_source_positive();
     CHECK_FORM(1U, "cacop %0, %1", "cacop %0, %1; break 0");
     CHECK_FORM(2U, "syscall 0", "syscall 0; break 0");
     CHECK_FORM(5U, "cpucfg %0, %1", "cpucfg %0, %1; break 0");
