@@ -216,8 +216,11 @@ static bool a64_relocation(const MinicTargetInfo *target,
     const char *symbol, uint32_t reloc, int64_t addend, void *context) {
     (void)context;
     return target != NULL && target->architecture == MINIC_TARGET_ARCH_AARCH64 &&
-        symbol != NULL && symbol[0] != '\0' && addend == 0 &&
-        reloc >= MINIC_A64_RELOC_DIRECT && reloc <= MINIC_A64_RELOC_GOT_LO12;
+        symbol != NULL && symbol[0] != '\0' &&
+        ((addend == 0 && reloc >= MINIC_A64_RELOC_DIRECT &&
+          reloc <= MINIC_A64_RELOC_GOT_LO12) ||
+         (reloc == MINIC_A64_RELOC_SOURCE_IMMEDIATE &&
+          (addend == 0 || addend == 1)));
 }
 
 static bool a64_address(const MinicTargetInfo *target,

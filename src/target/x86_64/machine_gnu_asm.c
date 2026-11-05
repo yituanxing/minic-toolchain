@@ -603,6 +603,25 @@ static bool x86_emit_source_asm(FILE *out,
             MINIC_X86_MACHINE_ASM_NOP_CONST_I)
         return fputs("  nop\n",out) != EOF;
     if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_COUNTER) {
+        const unsigned int form = minic_x86_64_linux_counter_form(
+            instruction->source_asm_template,instruction->source_asm_length);
+        static const char *const counters[] = {
+            "  rdtsc\n", "  rdpmc\n", "  rdtscp\n", NULL, "  xgetbv\n"
+        };
+        if (form < 1U || form > 5U) return false;
+        if (form == 4U) {
+            /* Byte-for-byte Linux alternatives: patch records, section
+             * boundaries and both replacement instruction bodies survive.
+             * Validation above proves this is the sole exact admitted text. */
+            return fwrite(instruction->source_asm_template,1U,
+                instruction->source_asm_length,out) ==
+                    instruction->source_asm_length &&
+                fputc('\n',out) != EOF;
+        }
+        return fputs(counters[form-1U],out) != EOF;
+    }
+    if (instruction->source_asm_machine_form_id ==
             MINIC_X86_MACHINE_ASM_MSR)
         return fputs("  ",out) != EOF &&
             minic_machine_source_asm_template_emit(out,function,
@@ -614,6 +633,49 @@ static bool x86_emit_source_asm(FILE *out,
             minic_machine_source_asm_template_emit(out,function,
                 instruction,labels,&x86_percpu_policy) &&
             fputc('\n',out) != EOF;
+
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_ADD32_CARRY)
+        return fputs("  addl %r10d, %eax\n  adcl $0, %eax\n",out) != EOF;
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_CHECKSUM)
+        return fputs("  addl %r10d, %eax\n  adcl $0xffff, %eax\n",out) != EOF;
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_TCPUDP_NOFOLD)
+        return fputs("  addl %r10d, %eax\n"
+                     "  adcl %r11d, %eax\n"
+                     "  adcl %r8d, %eax\n"
+                     "  adcl $0, %eax\n",out) != EOF;
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_CSUM_PARTIAL) {
+        const unsigned int form = minic_x86_64_linux_csum_partial_form(
+            instruction->source_asm_template,
+            instruction->source_asm_length);
+        switch (form) {
+        case 1U:
+        case 6U:
+            return fputs("  addq %r10, %rax\n"
+                         "  adcq $0, %rax\n",out) != EOF;
+        case 2U:
+            return fputs("  addq (%r10), %rax\n"
+                         "  adcq (%r11), %rax\n"
+                         "  adcq (%r8), %rax\n"
+                         "  adcq (%r9), %rax\n"
+                         "  adcq (%rcx), %rax\n"
+                         "  adcq $0, %rax\n",out) != EOF;
+        case 3U:
+        case 4U:
+        case 5U: {
+            unsigned int i, n = form == 3U ? 4U : form == 4U ? 2U : 1U;
+            for (i = 0U; i < n; ++i) {
+                if (fprintf(out,"  %sq %u*8(%%r10), %%rax\n",
+                        i == 0U ? "add" : "adc",i) < 0) return false;
+            }
+            return fputs("  adcq $0, %rax\n",out) != EOF;
+        }
+        default: return false;
+        }
+    }
     if (instruction->source_asm_machine_form_id ==
             MINIC_X86_MACHINE_ASM_IP_FAST_CSUM)
         /* The exact source checksum template and the physical RAX/R9/R11
@@ -642,7 +704,7 @@ static bool x86_emit_source_asm(FILE *out,
             instruction->source_asm_length);
         const char *suffix;
         const char *reg;
-        if (plan.kind != MINIC_X86_GS_ATOMIC_XADD_SMP) return false;
+        if (plan.kind == MINIC_X86_GS_ATOMIC_NONE) return false;
         switch (plan.width) {
         case 1U: suffix = "b"; reg = "%al"; break;
         case 2U: suffix = "w"; reg = "%ax"; break;
@@ -650,13 +712,38 @@ static bool x86_emit_source_asm(FILE *out,
         case 8U: suffix = "q"; reg = "%rax"; break;
         default: return false;
         }
-        return fputs("  .pushsection .smp_locks,\"a\"\n"
+        if (plan.kind == MINIC_X86_GS_ATOMIC_XADD_SMP)
+            return fputs("  .pushsection .smp_locks,\"a\"\n"
                      "  .balign 4\n"
                      "  .long 671f - .\n"
                      "  .popsection\n"
                      "671:\n"
                      "  lock; xadd",out) != EOF &&
             fprintf(out,"%s %s, (%%r10)\n",suffix,reg) >= 0;
+
+        if (plan.kind == MINIC_X86_GS_ATOMIC_XADD_LOCAL ||
+            plan.kind == MINIC_X86_GS_ATOMIC_XADD_PERCPU ||
+            plan.kind == MINIC_X86_GS_ATOMIC_CMPXCHG ||
+            plan.kind == MINIC_X86_GS_ATOMIC_CMPXCHG_RETRY) {
+            const char *segment = plan.kind ==
+                MINIC_X86_GS_ATOMIC_XADD_LOCAL ? "" : "%gs:";
+            const bool cmp = plan.kind == MINIC_X86_GS_ATOMIC_CMPXCHG ||
+                plan.kind == MINIC_X86_GS_ATOMIC_CMPXCHG_RETRY;
+            const bool retry = plan.kind ==
+                MINIC_X86_GS_ATOMIC_CMPXCHG_RETRY;
+            const char *value_reg = plan.width == 1U ? "%r11b" :
+                plan.width == 2U ? "%r11w" :
+                plan.width == 4U ? "%r11d" : "%r11";
+            if (retry &&
+                fprintf(out,"  mov%s %s(%%r10), %s\n1:\n",
+                    suffix,segment,reg) < 0)
+                return false;
+            return fprintf(out,"  %s%s %s, %s(%%r10)\n%s",
+                cmp ? "cmpxchg" : "xadd",suffix,
+                cmp ? value_reg : reg,segment,
+                retry ? "  jnz 1b\n" : "") >= 0;
+        }
+
     }
     variant = instruction->source_asm_machine_form_variant;
     return variant >= 1U && variant <=

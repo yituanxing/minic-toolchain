@@ -42,6 +42,8 @@ typedef struct A64CoreSelection {
     size_t *false_blocks;
     size_t *true_blocks;
     bool *reachable;
+    size_t *goto_emit;
+    size_t *goto_continue;
     A64VariadicBlocks *variadic_blocks;
     MinicA64FrameView view;
 } A64CoreSelection;
@@ -1197,6 +1199,113 @@ static bool a64_integer_conversion(A64CoreSelection *sel,
             cast.target_signed, A64_T0)) return false;
     return a64_store_core(sel, ins->result, A64_T0,
         cast.target_width == 8U ? 64U : 32U);
+}
+
+
+/* Linux static-key/capability asm-goto stays an exact source-owned section
+ * record, with a typed immediate, an actual C-label edge, and fallthrough.
+ * Place it in its own terminal Machine block so the original Core block can
+ * continue through an adjacent physical successor after the branch island. */
+static bool a64_linux_source_asm_goto(A64CoreSelection *sel,
+    const MinicCoreInstruction *ins, MinicCoreInstructionId ins_id,
+    const MinicCoreInlineAsm *source) {
+    const MinicCoreFunction *fn = sel->ctx->fn;
+    const MinicCoreInlineAsmImmediate *immediate;
+    const bool jump = minic_aarch64_linux_jump_label_asm_goto_core(source);
+    const bool cap_unlikely = aarch64_linux_cap_goto_text(
+        source->template_text, source->template_length, true, false);
+    const bool cap_likely = aarch64_linux_cap_goto_text(
+        source->template_text, source->template_length, true, true);
+    const bool cap = cap_unlikely || cap_likely;
+    const char *label_name = cap_likely ? "l_no" : "l_yes";
+    MinicMachineOperand bindings[2] = {{0}};
+    size_t emit, after, target;
+    if (ins->kind != MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM ||
+        !source->is_goto || !source->is_volatile || !(jump || cap) ||
+        source->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_NONE ||
+        source->target_machine_form_id != 0U ||
+        source->target_machine_form_variant != 0U ||
+        source->has_memory_clobber || source->implicit_memory_effect ||
+        source->register_clobber_count != 0U ||
+        source->symbol_reference_count != 0U ||
+        source->deferred_immediate_symbol != NULL ||
+        source->resolved_immediate_count != 1U ||
+        source->goto_second_target != MINIC_CORE_BLOCK_INVALID ||
+        source->template_text == NULL ||
+        ins_id >= fn->instruction_count ||
+        source->goto_target >= fn->block_count ||
+        !sel->reachable[source->goto_target] ||
+        sel->blocks[source->goto_target] == SIZE_MAX ||
+        source->goto_label_names[0] == NULL ||
+        strcmp(source->goto_label_names[0], label_name) != 0)
+        return false;
+    emit = sel->goto_emit[ins_id];
+    after = sel->goto_continue[ins_id];
+    if (emit == SIZE_MAX || after != emit + 1U) return false;
+    target = sel->blocks[source->goto_target];
+    immediate = &source->resolved_immediates[0];
+    if (cap) {
+        if (immediate->kind != MINIC_CORE_INLINE_ASM_IMMEDIATE_INTEGER ||
+            immediate->integer < 0 || immediate->integer >= (1 << 15) ||
+            immediate->symbol != NULL || immediate->byte_addend != 0 ||
+            immediate->asm_name == NULL ||
+            strcmp(immediate->asm_name, "cpucap") != 0)
+            return false;
+        bindings[0] = a64_immediate(immediate->integer);
+        bindings[0].asm_name = immediate->asm_name;
+    } else {
+        if (!minic_core_inline_asm_relocation_valid(immediate) ||
+            (immediate->byte_addend != 0 &&
+             immediate->byte_addend != 1))
+            return false;
+        bindings[0] = a64_symbol(immediate->symbol,
+            MINIC_A64_RELOC_SOURCE_IMMEDIATE);
+        bindings[0].value.symbol.addend = immediate->byte_addend;
+        bindings[0].asm_name = immediate->asm_name;
+    }
+    bindings[0].asm_constraint = "i";
+    bindings[1] = a64_block(target);
+    bindings[1].asm_name = source->goto_label_names[0];
+    if (!a64_branch(sel, emit) ||
+        !minic_machine_builder_position_at(&sel->builder, emit) ||
+        !minic_machine_builder_emit_core_source_asm(&sel->builder,
+            source, MINIC_MACHINE_EFFECT_BRANCH, bindings, 2U,
+            NULL, 0U, true, true) ||
+        !minic_machine_builder_add_successor(&sel->builder, target) ||
+        !minic_machine_builder_add_successor(&sel->builder, after) ||
+        !minic_machine_builder_set_fallthrough(&sel->builder, after) ||
+        !minic_machine_builder_position_at(&sel->builder, after))
+        return false;
+    return true;
+}
+
+
+/* The original no-operand PAN/TCO alternative is a complete, fixed Linux
+ * section+instruction record. Source qualification carries the implicit
+ * privileged memory effect; retain it without turning arbitrary .inst text
+ * into an opaque machine emission fallback. */
+static bool a64_linux_pstate_alternative_zero(A64CoreSelection *sel,
+    const MinicCoreInstruction *ins, const MinicCoreInlineAsm *source) {
+    const MinicCoreFunction *fn = sel->ctx->fn;
+    const Aarch64LinuxPstateAlternative form =
+        aarch64_linux_pstate_alternative(
+            source->template_text, source->template_length);
+    if (!form.cap || !source->is_volatile || source->is_goto ||
+        source->target_machine_form_id !=
+            AARCH64_MACHINE_ASM_PSTATE_ALTERNATIVE ||
+        source->target_machine_form_variant != 0U ||
+        source->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
+        !source->has_memory_clobber ||
+        source->register_clobber_count != 0U ||
+        source->resolved_immediate_count != 0U ||
+        source->symbol_reference_count != 0U ||
+        source->deferred_immediate_symbol != NULL ||
+        ins->result != MINIC_CORE_VALUE_INVALID ||
+        ins->value.structured_inline_asm.operand_count != 0U ||
+        !minic_core_function_type_is_kind(fn, ins->core_type_id,
+            MINIC_CORE_TYPE_VOID)) return false;
+    return minic_machine_builder_emit_core_source_asm(&sel->builder,
+        source, 0U, NULL, 0U, NULL, 0U, false, false);
 }
 
 /* Source-owned zero-operand hardware hints are carried through their exact
@@ -3100,8 +3209,15 @@ static bool a64_core_instruction(A64CoreSelection *sel,
         return a64_fixed_sp_read(sel, ins);
     case MINIC_CORE_INSTRUCTION_DYNAMIC_STACK_ALLOC:
         return a64_dynamic_stack_alloc(sel, ins);
-    case MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM:
+    case MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM: {
+        const MinicCoreInlineAsmId id = ins->value.inline_asm_id;
+        if (id >= fn->inline_asm_count || fn->inline_asms == NULL)
+            return false;
+        if (fn->inline_asms[id].is_goto)
+            return a64_linux_source_asm_goto(sel, ins, ins_id,
+                &fn->inline_asms[id]);
         return a64_opaque_hint(sel, ins);
+    }
     case MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM: {
         const MinicCoreInlineAsm *source;
         MinicMachineSourceAsmInput input = {0};
@@ -3110,6 +3226,9 @@ static bool a64_core_instruction(A64CoreSelection *sel,
             fn->inline_asm_count) return false;
         source = &fn->inline_asms[
             ins->value.structured_inline_asm.inline_asm_id];
+        if (source->target_machine_form_id ==
+                AARCH64_MACHINE_ASM_PSTATE_ALTERNATIVE)
+            return a64_linux_pstate_alternative_zero(sel, ins, source);
         if (source->target_machine_form_id == AARCH64_MACHINE_ASM_LDAR ||
             source->target_machine_form_id == AARCH64_MACHINE_ASM_STLR)
             return a64_linux_acquire_release(sel, ins, source);
@@ -3629,6 +3748,12 @@ bool minic_aarch64_machine_select_core_subset(
     sel.false_blocks = malloc(count * sizeof(*sel.false_blocks));
     sel.true_blocks = malloc(count * sizeof(*sel.true_blocks));
     sel.reachable = calloc(count, sizeof(*sel.reachable));
+    if (fn->instruction_count > SIZE_MAX / sizeof(size_t))
+        goto cleanup;
+    sel.goto_emit = malloc((fn->instruction_count != 0U ?
+        fn->instruction_count : 1U) * sizeof(*sel.goto_emit));
+    sel.goto_continue = malloc((fn->instruction_count != 0U ?
+        fn->instruction_count : 1U) * sizeof(*sel.goto_continue));
     if (fn->instruction_count > SIZE_MAX / sizeof(*sel.variadic_blocks))
         goto cleanup;
     if (fn->instruction_count != 0U)
@@ -3636,6 +3761,7 @@ bool minic_aarch64_machine_select_core_subset(
             sizeof(*sel.variadic_blocks));
     if (sel.blocks == NULL || sel.false_blocks == NULL ||
         sel.true_blocks == NULL || sel.reachable == NULL ||
+        sel.goto_emit == NULL || sel.goto_continue == NULL ||
         (fn->instruction_count != 0U && sel.variadic_blocks == NULL) ||
         !minic_aarch64_machine_gnu_asm_policy_initialize(
             ctx->target, &sel.policy) ||
@@ -3647,6 +3773,8 @@ bool minic_aarch64_machine_select_core_subset(
         sel.false_blocks[i] = SIZE_MAX;
         sel.true_blocks[i] = SIZE_MAX;
     }
+    for (i = 0U; i < fn->instruction_count; ++i)
+        sel.goto_emit[i] = sel.goto_continue[i] = SIZE_MAX;
     for (i = 0U; i < fn->instruction_count; ++i)
         sel.variadic_blocks[i] = (A64VariadicBlocks){SIZE_MAX,
             SIZE_MAX, SIZE_MAX, SIZE_MAX};
@@ -3685,6 +3813,17 @@ bool minic_aarch64_machine_select_core_subset(
               if (!minic_core_block_instruction_at(fn, block, j,
                       &ins_id, &ins) || ins_id >= fn->instruction_count)
                   goto cleanup;
+              if (ins->kind == MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM) {
+                  const MinicCoreInlineAsmId id = ins->value.inline_asm_id;
+                  if (fn->inline_asms == NULL ||
+                      id >= fn->inline_asm_count) goto cleanup;
+                  if (fn->inline_asms[id].is_goto &&
+                      (!minic_machine_builder_create_block(&sel.builder,
+                           NULL, false, true, &sel.goto_emit[ins_id]) ||
+                       !minic_machine_builder_create_block(&sel.builder,
+                           NULL, false, true,
+                           &sel.goto_continue[ins_id]))) goto cleanup;
+              }
               if (ins->kind !=
                       MINIC_CORE_INSTRUCTION_VARIADIC_NEXT_SCALAR &&
                   !((ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_LEFT ||
@@ -3762,6 +3901,8 @@ cleanup:
     free(sel.false_blocks);
     free(sel.true_blocks);
     free(sel.reachable);
+    free(sel.goto_emit);
+    free(sel.goto_continue);
     free(sel.variadic_blocks);
     if (!ok) minic_machine_function_destroy(machine);
     return ok;

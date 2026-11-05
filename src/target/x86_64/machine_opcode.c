@@ -1628,6 +1628,196 @@ static bool x86_source_ip_here_contract(const MinicMachineInstruction *ins) {
 /* Physical proof for the original Linux checksum CF loop and SMP XADD.
  * Both have exact Source-owned grammar, but independent machine proofs here
  * rule out forged register widths, ties, lock metadata and memory effects. */
+
+/* CF-sensitive checksum operands are independently sealed before the GNU
+ * serializer prints any ADD/ADC instruction.  MachineIR has no C types:
+ * only the exact physical register, memory, ties and FLAGS effects remain. */
+static bool x86_source_checksum_carry_contract(
+    const MinicTargetInfo *target, const MinicMachineInstruction *ins) {
+    static const unsigned int tcp_regs[5] = {
+        MINIC_X86_REG_RAX, MINIC_X86_REG_R10, MINIC_X86_REG_R11,
+        MINIC_X86_REG_R8, MINIC_X86_REG_RAX
+    };
+    static const unsigned int partial_regs[5] = {
+        MINIC_X86_REG_R10, MINIC_X86_REG_R11, MINIC_X86_REG_R8,
+        MINIC_X86_REG_R9, MINIC_X86_REG_RCX
+    };
+    const unsigned int form_id = ins->source_asm_machine_form_id;
+    const bool partial = form_id == MINIC_X86_MACHINE_ASM_CSUM_PARTIAL;
+    const unsigned int form = partial ?
+        minic_x86_64_linux_csum_partial_form(ins->source_asm_template,
+            ins->source_asm_length) : 0U;
+    const unsigned int bits = partial ? 64U : 32U;
+    const size_t count = partial ? (form == 1U || form == 6U ? 2U :
+        form == 2U ? 6U : 3U) :
+        form_id == MINIC_X86_MACHINE_ASM_TCPUDP_NOFOLD ? 5U : 3U;
+    size_t i;
+    if (form_id != MINIC_X86_MACHINE_ASM_ADD32_CARRY &&
+        form_id != MINIC_X86_MACHINE_ASM_TCPUDP_NOFOLD &&
+        form_id != MINIC_X86_MACHINE_ASM_CHECKSUM && !partial)
+        return false;
+    if ((partial && (form == 0U || form > 6U)) ||
+        ins->source_asm_machine_form_variant != 0U ||
+        ins->source_asm_terminates_block ||
+        ins->source_asm_permits_fallthrough ||
+        !minic_x86_64_typed_machine_form_matches_template(
+            form_id,0U,ins->source_asm_template,ins->source_asm_length) ||
+        (ins->effects &
+            ~(unsigned int)MINIC_MACHINE_EFFECT_COMPILER_BARRIER) !=
+            (MINIC_MACHINE_EFFECT_SOURCE_ASM |
+             (partial && form >= 2U && form <= 5U ?
+                 MINIC_MACHINE_EFFECT_MEMORY_READ : 0U)) ||
+        ((ins->effects & MINIC_MACHINE_EFFECT_COMPILER_BARRIER) != 0U &&
+            !(partial && form >= 2U && form <= 5U)) ||
+        ins->operand_count != count || ins->operands == NULL ||
+        ins->implicit_count != 1U || ins->implicit == NULL ||
+        ins->implicit[0].reg.bank != MINIC_MACHINE_REGISTER_FLAGS ||
+        ins->implicit[0].reg.number != 0U ||
+        ins->implicit[0].reg.width_bits != 64U ||
+        ins->implicit[0].access != MINIC_MACHINE_REGISTER_CLOBBER)
+        return false;
+    for (i = 0U; i < count; ++i) {
+        const MinicMachineOperand *op = &ins->operands[i];
+        unsigned int reg = MINIC_X86_REG_RAX;
+        const char *constraint;
+        const bool memory = partial &&
+            ((form == 2U && i > 0U) ||
+             (form >= 3U && form <= 5U && i == 2U));
+        if (partial) {
+            reg = i == 0U ? MINIC_X86_REG_RAX :
+                form == 2U ? partial_regs[i-1U] :
+                i == 1U ? MINIC_X86_REG_R10 : MINIC_X86_REG_R11;
+            constraint = i == 0U ? "+r" : memory ? "m" : "r";
+        } else if (form_id == MINIC_X86_MACHINE_ASM_TCPUDP_NOFOLD) {
+            reg = tcp_regs[i];
+            constraint = i == 0U ? "=r" : i == 4U ? "0" : "g";
+        } else if (form_id == MINIC_X86_MACHINE_ASM_ADD32_CARRY) {
+            reg = i == 2U ? MINIC_X86_REG_R10 : MINIC_X86_REG_RAX;
+            constraint = i == 0U ? "=r" : i == 1U ? "0" : "rm";
+        } else {
+            reg = i == 1U ? MINIC_X86_REG_R10 : MINIC_X86_REG_RAX;
+            constraint = i == 0U ? "=r" : i == 1U ? "r" : "0";
+        }
+        if (op->asm_name != NULL || op->asm_constraint == NULL ||
+            strcmp(op->asm_constraint,constraint) != 0)
+            return false;
+        if (memory) {
+            const MinicMachineAddress *address = &op->value.address;
+            if (op->kind != MINIC_MACHINE_OPERAND_ADDRESS ||
+                !minic_x86_64_machine_validate_address(target,address,NULL) ||
+                !address->has_base ||
+                address->base.bank != MINIC_MACHINE_REGISTER_GENERAL ||
+                address->base.number != reg ||
+                address->base.width_bits != 64U ||
+                address->has_index || address->has_segment ||
+                address->has_symbol || address->displacement != 0)
+                return false;
+        } else if (op->kind != MINIC_MACHINE_OPERAND_REGISTER ||
+            op->value.physical.reg.bank != MINIC_MACHINE_REGISTER_GENERAL ||
+            op->value.physical.reg.number != reg ||
+            op->value.physical.reg.width_bits != bits ||
+            op->value.physical.access != (i == 0U ?
+                partial ? MINIC_MACHINE_REGISTER_READ |
+                    MINIC_MACHINE_REGISTER_WRITE :
+                    MINIC_MACHINE_REGISTER_WRITE :
+                MINIC_MACHINE_REGISTER_READ))
+            return false;
+    }
+    return true;
+}
+
+
+/* Local XADD, GS XADD and both GS CMPXCHG forms share a fixed accumulator
+ * and R10 memory address, but their memory segments and GNU constraints are
+ * distinct.  This independent proof rejects all untagged source templates. */
+static bool x86_source_gs_atomic_extended_contract(
+    const MinicTargetInfo *target, const MinicMachineInstruction *ins) {
+    const MinicX86GsAtomicPlan plan = minic_x86_64_gs_atomic_plan(
+        ins->source_asm_template,ins->source_asm_length);
+    const bool cmp = plan.kind == MINIC_X86_GS_ATOMIC_CMPXCHG ||
+        plan.kind == MINIC_X86_GS_ATOMIC_CMPXCHG_RETRY;
+    const bool retry = plan.kind == MINIC_X86_GS_ATOMIC_CMPXCHG_RETRY;
+    const bool gs = plan.kind != MINIC_X86_GS_ATOMIC_XADD_LOCAL;
+    const unsigned int bits = (unsigned int)(plan.width*8U);
+    const unsigned int base_effects = MINIC_MACHINE_EFFECT_SOURCE_ASM |
+        MINIC_MACHINE_EFFECT_MEMORY_READ |
+        MINIC_MACHINE_EFFECT_MEMORY_WRITE;
+    const size_t count = cmp ? 3U : 2U;
+    const MinicMachineOperand *acc,*mem;
+    const MinicMachineAddress *address;
+    if (plan.kind != MINIC_X86_GS_ATOMIC_XADD_LOCAL &&
+        plan.kind != MINIC_X86_GS_ATOMIC_XADD_PERCPU &&
+        plan.kind != MINIC_X86_GS_ATOMIC_CMPXCHG &&
+        plan.kind != MINIC_X86_GS_ATOMIC_CMPXCHG_RETRY)
+        return false;
+    if ((bits != 8U && bits != 16U && bits != 32U && bits != 64U) ||
+        (plan.kind == MINIC_X86_GS_ATOMIC_XADD_LOCAL && bits < 32U) ||
+        ins->source_asm_machine_form_id != MINIC_X86_MACHINE_ASM_GS_ATOMIC ||
+        ins->source_asm_machine_form_variant != 0U ||
+        ins->source_asm_terminates_block ||
+        ins->source_asm_permits_fallthrough ||
+        !minic_x86_64_typed_machine_form_matches_template(
+            ins->source_asm_machine_form_id,0U,
+            ins->source_asm_template,ins->source_asm_length) ||
+        (ins->effects & ~(unsigned int)
+            (MINIC_MACHINE_EFFECT_VOLATILE |
+             MINIC_MACHINE_EFFECT_COMPILER_BARRIER)) != base_effects ||
+        (plan.kind == MINIC_X86_GS_ATOMIC_XADD_LOCAL &&
+            (ins->effects & (MINIC_MACHINE_EFFECT_VOLATILE |
+                MINIC_MACHINE_EFFECT_COMPILER_BARRIER)) !=
+                    (MINIC_MACHINE_EFFECT_VOLATILE |
+                     MINIC_MACHINE_EFFECT_COMPILER_BARRIER)) ||
+        (cmp && (ins->effects & MINIC_MACHINE_EFFECT_COMPILER_BARRIER) == 0U) ||
+        ins->operand_count != count || ins->operands == NULL ||
+        ins->implicit_count != 1U || ins->implicit == NULL ||
+        ins->implicit[0].reg.bank != MINIC_MACHINE_REGISTER_FLAGS ||
+        ins->implicit[0].reg.number != 0U ||
+        ins->implicit[0].reg.width_bits != 64U ||
+        ins->implicit[0].access != MINIC_MACHINE_REGISTER_CLOBBER)
+        return false;
+    acc = &ins->operands[0];
+    mem = &ins->operands[1];
+    if (acc->kind != MINIC_MACHINE_OPERAND_REGISTER ||
+        acc->asm_name != NULL || acc->asm_constraint == NULL ||
+        strcmp(acc->asm_constraint,retry ? "=&a" : cmp ? "+a" :
+            plan.kind == MINIC_X86_GS_ATOMIC_XADD_PERCPU && bits == 8U ?
+                "+q" : "+r") != 0 ||
+        acc->value.physical.reg.bank != MINIC_MACHINE_REGISTER_GENERAL ||
+        acc->value.physical.reg.number != MINIC_X86_REG_RAX ||
+        acc->value.physical.reg.width_bits != bits ||
+        acc->value.physical.access != (retry ?
+            MINIC_MACHINE_REGISTER_WRITE :
+            MINIC_MACHINE_REGISTER_READ | MINIC_MACHINE_REGISTER_WRITE) ||
+        mem->kind != MINIC_MACHINE_OPERAND_ADDRESS ||
+        mem->asm_name != NULL || mem->asm_constraint == NULL ||
+        strcmp(mem->asm_constraint,"+m") != 0)
+        return false;
+    address = &mem->value.address;
+    if (!minic_x86_64_machine_validate_address(target,address,NULL) ||
+        !address->has_base ||
+        address->base.bank != MINIC_MACHINE_REGISTER_GENERAL ||
+        address->base.number != MINIC_X86_REG_R10 ||
+        address->base.width_bits != 64U ||
+        address->has_index || address->has_symbol ||
+        address->displacement != 0 ||
+        address->has_segment != gs ||
+        (gs && (address->segment.bank != MINIC_MACHINE_REGISTER_SYSTEM ||
+                address->segment.number != MINIC_X86_SEG_GS)))
+        return false;
+    if (cmp) {
+        const MinicMachineOperand *value = &ins->operands[2];
+        if (value->kind != MINIC_MACHINE_OPERAND_REGISTER ||
+            value->asm_name != NULL || value->asm_constraint == NULL ||
+            strcmp(value->asm_constraint,bits == 8U ? "q" : "r") != 0 ||
+            value->value.physical.reg.bank != MINIC_MACHINE_REGISTER_GENERAL ||
+            value->value.physical.reg.number != MINIC_X86_REG_R11 ||
+            value->value.physical.reg.width_bits != bits ||
+            value->value.physical.access != MINIC_MACHINE_REGISTER_READ)
+            return false;
+    }
+    return true;
+}
+
 static bool x86_source_carry_xadd_contract(const MinicTargetInfo *target,
     const MinicMachineInstruction *ins) {
     const bool csum = ins->source_asm_machine_form_id ==
@@ -1656,7 +1846,7 @@ static bool x86_source_carry_xadd_contract(const MinicTargetInfo *target,
             MINIC_MACHINE_EFFECT_MEMORY_READ |
             MINIC_MACHINE_EFFECT_MEMORY_WRITE |
             MINIC_MACHINE_EFFECT_COMPILER_BARRIER |
-            MINIC_MACHINE_EFFECT_VOLATILE) ||
+            (csum ? 0U : MINIC_MACHINE_EFFECT_VOLATILE)) ||
         ins->operand_count != count || ins->operands == NULL ||
         ins->implicit_count != 1U || ins->implicit == NULL ||
         ins->implicit[0].reg.bank != MINIC_MACHINE_REGISTER_FLAGS ||
@@ -1701,6 +1891,62 @@ static bool x86_source_carry_xadd_contract(const MinicTargetInfo *target,
                 address->has_symbol || address->displacement != 0)
                 return false;
         }
+    }
+    return true;
+}
+
+/* Counter SOURCE_ASM carries two real register results, not an integer
+ * approximation. Validate the exact 652-byte ordered alternative grammar
+ * before the template's ELF patch sections can ever reach the GNU printer. */
+static bool x86_source_counter_contract(const MinicMachineInstruction *ins) {
+    static const unsigned int registers[3] = {
+        MINIC_X86_REG_RAX, MINIC_X86_REG_RDX, MINIC_X86_REG_RCX
+    };
+    static const char *const constraints[3] = {"=a","=d","c"};
+    const unsigned int form = minic_x86_64_linux_counter_form(
+        ins->source_asm_template,ins->source_asm_length);
+    const bool has_input = form == 2U || form == 5U;
+    const bool clobbers_rcx = form == 3U || form == 4U;
+    const size_t count = has_input ? 3U : 2U;
+    const unsigned int expected_effects =
+        MINIC_MACHINE_EFFECT_SOURCE_ASM | MINIC_MACHINE_EFFECT_VOLATILE;
+    unsigned int width;
+    size_t i;
+    if (ins->source_asm_machine_form_id != MINIC_X86_MACHINE_ASM_COUNTER ||
+        ins->source_asm_machine_form_variant != 0U ||
+        form < 1U || form > 5U ||
+        ins->source_asm_terminates_block ||
+        ins->source_asm_permits_fallthrough ||
+        ins->effects != expected_effects ||
+        ins->operand_count != count || ins->operands == NULL ||
+        ins->implicit_count != (clobbers_rcx ? 1U : 0U) ||
+        (!clobbers_rcx && ins->implicit != NULL) ||
+        !minic_x86_64_typed_machine_form_matches_template(
+            ins->source_asm_machine_form_id,
+            ins->source_asm_machine_form_variant,
+            ins->source_asm_template,ins->source_asm_length))
+        return false;
+    width = ins->operands[0].value.physical.reg.width_bits;
+    if (ins->operands[0].kind != MINIC_MACHINE_OPERAND_REGISTER ||
+        (width != 32U && width != 64U) ||
+        (clobbers_rcx &&
+         (ins->implicit == NULL ||
+          ins->implicit[0].reg.bank != MINIC_MACHINE_REGISTER_GENERAL ||
+          ins->implicit[0].reg.number != MINIC_X86_REG_RCX ||
+          ins->implicit[0].reg.width_bits != 32U ||
+          ins->implicit[0].access != MINIC_MACHINE_REGISTER_CLOBBER)))
+        return false;
+    for (i = 0U; i < count; ++i) {
+        const MinicMachineOperand *op = &ins->operands[i];
+        if (op->kind != MINIC_MACHINE_OPERAND_REGISTER ||
+            op->asm_name != NULL || op->asm_constraint == NULL ||
+            strcmp(op->asm_constraint,constraints[i]) != 0 ||
+            op->value.physical.reg.bank != MINIC_MACHINE_REGISTER_GENERAL ||
+            op->value.physical.reg.number != registers[i] ||
+            op->value.physical.reg.width_bits != (i < 2U ? width : 32U) ||
+            op->value.physical.access != (i < 2U ?
+                MINIC_MACHINE_REGISTER_WRITE : MINIC_MACHINE_REGISTER_READ))
+            return false;
     }
     return true;
 }
@@ -1996,6 +2242,24 @@ bool minic_x86_64_machine_validate_source_asm(const MinicTargetInfo *target,
     if (instruction->source_asm_machine_form_id ==
             MINIC_X86_MACHINE_ASM_MSR)
         return x86_source_msr_contract(instruction);
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_COUNTER)
+        return x86_source_counter_contract(instruction);
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_ADD32_CARRY ||
+        instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_TCPUDP_NOFOLD ||
+        instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_CHECKSUM ||
+        instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_CSUM_PARTIAL)
+        return x86_source_checksum_carry_contract(target,instruction);
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_GS_ATOMIC &&
+        minic_x86_64_gs_atomic_plan(instruction->source_asm_template,
+            instruction->source_asm_length).kind !=
+                MINIC_X86_GS_ATOMIC_XADD_SMP)
+        return x86_source_gs_atomic_extended_contract(target,instruction);
     if (instruction->source_asm_machine_form_id ==
             MINIC_X86_MACHINE_ASM_IP_FAST_CSUM ||
         instruction->source_asm_machine_form_id ==

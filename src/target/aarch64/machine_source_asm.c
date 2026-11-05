@@ -4,6 +4,7 @@
 #include "target/common/direct_linux_bug_asm.h"
 #include "target/common/machine_source_asm_template.h"
 
+#include <inttypes.h>
 #include <string.h>
 
 /* This is a deliberately closed initial MachineIR source-ASM policy.  The
@@ -458,6 +459,123 @@ static const MinicMachineSourceAsmTemplatePolicy a64_uaccess_policy = {
     NULL
 };
 
+
+/* Original Linux jump_label (PREL32/PREL64) and capability alternatives
+ * (feature-38 normal/callback PREL32) are exact, control-flow-bearing source
+ * fragments. The Core-created GNU immediate and C label are independently
+ * checked as typed Machine operands before the original section text emits. */
+static unsigned int a64_source_goto_kind(const MinicMachineInstruction *ins) {
+    if (ins == NULL || ins->source_asm_template == NULL) return 0U;
+    if (aarch64_linux_jump_label_form(ins->source_asm_template,
+            ins->source_asm_length) != 0U) return 1U;
+    if (aarch64_linux_cap_goto_text(ins->source_asm_template,
+            ins->source_asm_length, true, false)) return 2U;
+    if (aarch64_linux_cap_goto_text(ins->source_asm_template,
+            ins->source_asm_length, true, true)) return 3U;
+    return 0U;
+}
+
+static bool a64_source_goto_policy_form(const MinicMachineFunction *fn,
+    const MinicMachineInstruction *ins, void *context) {
+    const unsigned int kind = a64_source_goto_kind(ins);
+    const MinicMachineOperand *value, *label;
+    const char *const name = kind == 3U ? "l_no" : "l_yes";
+    (void)context;
+    if (fn == NULL || fn->target == NULL ||
+        fn->target->architecture != MINIC_TARGET_ARCH_AARCH64 ||
+        kind == 0U || ins->source_asm_machine_form_id != 0U ||
+        ins->source_asm_machine_form_variant != 0U ||
+        ins->operand_count != 2U || ins->operands == NULL ||
+        ins->implicit_count != 0U ||
+        !ins->source_asm_terminates_block ||
+        !ins->source_asm_permits_fallthrough ||
+        ins->effects != (MINIC_MACHINE_EFFECT_SOURCE_ASM |
+                         MINIC_MACHINE_EFFECT_VOLATILE |
+                         MINIC_MACHINE_EFFECT_BRANCH)) return false;
+    value = &ins->operands[0];
+    label = &ins->operands[1];
+    if (value->asm_constraint == NULL ||
+        strcmp(value->asm_constraint, "i") != 0 ||
+        label->kind != MINIC_MACHINE_OPERAND_BLOCK ||
+        label->asm_constraint != NULL ||
+        label->asm_name == NULL || strcmp(label->asm_name, name) != 0)
+        return false;
+    if (kind == 1U)
+        return value->kind == MINIC_MACHINE_OPERAND_SYMBOL &&
+            value->asm_name == NULL &&
+            value->value.symbol.relocation ==
+                MINIC_A64_RELOC_SOURCE_IMMEDIATE &&
+            (value->value.symbol.addend == 0 ||
+             value->value.symbol.addend == 1);
+    return value->kind == MINIC_MACHINE_OPERAND_INTEGER &&
+        value->asm_name != NULL &&
+        strcmp(value->asm_name, "cpucap") == 0 &&
+        value->value.integer >= 0 && value->value.integer < (1 << 15);
+}
+
+static bool a64_source_goto_policy_binding(const MinicMachineFunction *fn,
+    const MinicMachineInstruction *ins, size_t index, void *context) {
+    (void)context;
+    return index < 2U && a64_source_goto_policy_form(fn, ins, NULL);
+}
+
+static bool a64_source_goto_policy_operand(FILE *output,
+    const MinicMachineFunction *fn, const MinicMachineInstruction *ins,
+    const MinicMachineGNUAsmLabels *labels, size_t index,
+    unsigned char modifier, void *context) {
+    const MinicMachineOperand *op;
+    const unsigned int kind = a64_source_goto_kind(ins);
+    (void)context;
+    if (!a64_source_goto_policy_binding(fn, ins, index, NULL))
+        return false;
+    op = &ins->operands[index];
+    if (index == 1U) {
+        if (modifier != 'l') return false;
+        if (output == NULL) return true;
+        return labels != NULL && labels->names != NULL &&
+            op->value.block_id < labels->count &&
+            labels->names[op->value.block_id] != NULL &&
+            fputs(labels->names[op->value.block_id], output) >= 0;
+    }
+    if (kind == 1U) {
+        if (modifier != 'c') return false;
+        if (output == NULL) return true;
+        return op->value.symbol.addend == 0 ?
+            fprintf(output, "%s", op->value.symbol.name) >= 0 :
+            fprintf(output, "%s+1", op->value.symbol.name) >= 0;
+    }
+    if (modifier != 0U) return false;
+    return output == NULL ||
+        fprintf(output, "%" PRId64, op->value.integer) >= 0;
+}
+
+static const MinicMachineSourceAsmTemplatePolicy a64_source_goto_policy = {
+    a64_source_goto_policy_form,
+    a64_source_goto_policy_binding,
+    a64_source_goto_policy_operand,
+    NULL
+};
+
+
+static bool a64_machine_pstate_alternative(
+    const MinicMachineInstruction *ins) {
+    const Aarch64LinuxPstateAlternative form = ins != NULL &&
+        ins->source_asm_template != NULL ?
+        aarch64_linux_pstate_alternative(ins->source_asm_template,
+            ins->source_asm_length) :
+        (Aarch64LinuxPstateAlternative){0};
+    return form.cap != 0U &&
+        ins->source_asm_machine_form_id ==
+            AARCH64_MACHINE_ASM_PSTATE_ALTERNATIVE &&
+        ins->source_asm_machine_form_variant == 0U &&
+        ins->operand_count == 0U && ins->implicit_count == 0U &&
+        !ins->source_asm_terminates_block &&
+        !ins->source_asm_permits_fallthrough &&
+        ins->effects == (MINIC_MACHINE_EFFECT_SOURCE_ASM |
+                         MINIC_MACHINE_EFFECT_VOLATILE |
+                         MINIC_MACHINE_EFFECT_COMPILER_BARRIER);
+}
+
 bool minic_aarch64_machine_source_asm_validate(
     const MinicTargetInfo *target, const MinicMachineInstruction *instruction,
     void *context) {
@@ -471,6 +589,9 @@ bool minic_aarch64_machine_source_asm_validate(
         instruction->kind == MINIC_MACHINE_INSTRUCTION_SOURCE_ASM &&
         (instruction->effects & MINIC_MACHINE_EFFECT_SOURCE_ASM) != 0U &&
         (a64_machine_opaque_hint(instruction) ||
+         a64_machine_pstate_alternative(instruction) ||
+         minic_machine_source_asm_template_preflight(&function,
+             instruction, &a64_source_goto_policy) ||
          minic_machine_source_asm_template_preflight(&function,
              instruction, &a64_tlbi_template_policy) ||
          minic_machine_source_asm_template_preflight(&function,
@@ -495,6 +616,13 @@ bool minic_aarch64_machine_source_asm_emit(
         !minic_aarch64_machine_source_asm_validate(
             function->target, instruction, context))
         return false;
+    if (a64_source_goto_kind(instruction) != 0U)
+        return minic_machine_source_asm_template_emit(output, function,
+            instruction, labels, &a64_source_goto_policy) &&
+            ((instruction->source_asm_length != 0U &&
+              instruction->source_asm_template[
+                  instruction->source_asm_length - 1U] == '\n') ||
+             fputc('\n', output) != EOF);
     if (a64_machine_tlbi_form(instruction))
         return minic_machine_source_asm_template_emit(output, function,
             instruction, labels, &a64_tlbi_template_policy) &&

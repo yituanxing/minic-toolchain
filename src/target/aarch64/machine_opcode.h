@@ -26,7 +26,9 @@ typedef enum MinicA64MachineRelocation {
     MINIC_A64_RELOC_PAGE,
     MINIC_A64_RELOC_GOT_PAGE,
     MINIC_A64_RELOC_LO12,
-    MINIC_A64_RELOC_GOT_LO12
+    MINIC_A64_RELOC_GOT_LO12,
+    /* Exact Linux __jump_table GNU %%c0 symbol (+ branch flag bit). */
+    MINIC_A64_RELOC_SOURCE_IMMEDIATE
 } MinicA64MachineRelocation;
 
 typedef enum MinicA64MachineOpcode {
