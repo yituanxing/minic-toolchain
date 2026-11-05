@@ -3,7 +3,8 @@ ENTRY(_start)
 SECTIONS {
   . = 0x400000;
   .text : { *(.text.pad_trigger) }
-  .pad : { . = ALIGN(16); }
+  /* Empty before erratum planning, materialized by the full-page veneer. */
+  .pad : { . += (SIZEOF(.text) - 0x1010) / 512; }
   . = ALIGN(0x1000);
   .data : { *(.data) }
 }

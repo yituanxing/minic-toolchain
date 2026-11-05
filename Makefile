@@ -765,6 +765,10 @@ check-minild-i386-rel-static: $(MINILD_BINARY)
 check-minild-x86-frozen-manifest:
 	bash tests/linker/probe-minild-x86-frozen-manifest-v1.sh
 
+.PHONY: check-minild-x86-boot-dispatch
+check-minild-x86-boot-dispatch:
+	bash tests/linker/probe-minild-x86-boot-dispatch-v1.sh
+
 .PHONY: check-minild-script-phdrs
 check-minild-script-phdrs: $(MINILD_BINARY)
 	MINILD="$(abspath $(MINILD_BINARY))" \
@@ -808,6 +812,12 @@ check-minild-loongarch-static-pie: $(MINIAS_BINARY) $(MINILD_BINARY)
 	MINILD="$(abspath $(MINILD_BINARY))" \
 	bash tests/linker/probe-loongarch-static-pie.sh
 
+.PHONY: check-minild-loongarch-pcala-relax-fixedpoint
+check-minild-loongarch-pcala-relax-fixedpoint: $(MINIAS_BINARY) $(MINILD_BINARY)
+	MINIAS="$(abspath $(MINIAS_BINARY))" \
+	MINILD="$(abspath $(MINILD_BINARY))" \
+	bash tests/linker/probe-loongarch-pcala-relax-fixedpoint.sh
+
 .PHONY: check-minild-static-script-discard-reloc-reserve
 check-minild-static-script-discard-reloc-reserve: $(MINIAS_BINARY) $(MINILD_BINARY)
 	MINIAS="$(abspath $(MINIAS_BINARY))" \
@@ -818,6 +828,11 @@ check-minild-static-script-discard-reloc-reserve: $(MINIAS_BINARY) $(MINILD_BINA
 check-minild-script-output-entsize-coalescing: $(MINILD_BINARY)
 	MINILD="$(abspath $(MINILD_BINARY))" \
 	bash tests/linker/probe-script-output-entsize-coalescing.sh
+
+.PHONY: check-minild-script-data-width-flags
+check-minild-script-data-width-flags: $(MINILD_BINARY)
+	MINILD="$(abspath $(MINILD_BINARY))" \
+	bash tests/linker/probe-script-data-width-flags.sh
 
 .PHONY: check-minild-script-top-level-empty-statements
 check-minild-script-top-level-empty-statements: $(MINILD_BINARY)
@@ -900,8 +915,10 @@ check-minild-five-arch-linux-linker-boundary: \
 	check-minild-aarch64-cortex-a53-843419 \
 	check-minild-aarch64-static-instruction-relocs \
 	check-minild-loongarch-static-pie \
+	check-minild-loongarch-pcala-relax-fixedpoint \
 	check-minild-static-script-discard-reloc-reserve \
 	check-minild-script-output-entsize-coalescing \
+	check-minild-script-data-width-flags \
 	check-minild-script-top-level-empty-statements \
 	check-minild-script-forward-placement-fixedpoint \
 	check-minild-synthetic-byte-phdr-flags \
@@ -911,6 +928,7 @@ check-minild-five-arch-linux-linker-boundary: \
 	check-minild-x86-script-symbol-provenance-relocs \
 	check-minild-i386-rel-static \
 	check-minild-x86-frozen-manifest \
+	check-minild-x86-boot-dispatch \
 	check-minild-x86-script-info \
 	check-minild-x86-script-synthetic-nobits \
 	check-minild-static-script-pure-nobits-phdr \

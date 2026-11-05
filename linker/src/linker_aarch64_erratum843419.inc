@@ -6,13 +6,17 @@
  * This target-only phase runs AFTER addresses have been assigned, but BEFORE
  * relocations are applied.  It extends the affected executable work fragment
  * with an 8-byte island: the original unsigned-immediate load/store followed
- * by an unconditional branch back.  The original instruction is replaced by
+ * by an unconditional branch back.  GNU BFD reserves each nonempty A53 ADRP
+ * veneer section in full 4 KiB units to keep the instruction page phase
+ * unchanged when the layout is replayed.  We retain the source fragment's
+ * work-owner identity and give its veneer tail the same page-stable capacity.
+ * The original instruction is replaced by
  * a branch to the island only after the ordinary relocation pass has written
  * the relocated instruction into its new home.  Layout must be recomputed
  * whenever this phase appends an island, until it reports no change.
  *
  * A work-fragment-local island is deliberately chosen over an unselected
- * synthetic .text.patch: the former remains in the very same output-script
+ * synthetic .text.patch: the former remains in the same output-script
  * command as its owner and preserves the linker script's section policy.
  * A >128MiB branch span fails closed rather than emitting a broken image. */
 
@@ -76,35 +80,6 @@ static bool minild_aarch64_843419_is_stp(uint32_t insn) {
            opcode == UINT32_C(0x29800000);
 }
 
-static bool minild_aarch64_843419_has_writeback(uint32_t insn) {
-    uint32_t pair = insn & UINT32_C(0x3bc00000);
-    uint32_t single = insn & UINT32_C(0x3b200c00);
-    return pair == UINT32_C(0x28800000) ||
-           pair == UINT32_C(0x29800000) ||
-           single == UINT32_C(0x38000400) ||
-           single == UINT32_C(0x38000c00) ||
-           ((insn & UINT32_C(0xbfe00000)) == UINT32_C(0x0c800000) &&
-            minild_aarch64_843419_is_st1_opcode(insn)) ||
-           ((insn & UINT32_C(0xbfe00000)) == UINT32_C(0x0d800000) &&
-            minild_aarch64_843419_is_st1_single_opcode(insn));
-}
-
-static bool minild_aarch64_843419_is_load(uint32_t insn) {
-    if ((insn & UINT32_C(0x3f400000)) == UINT32_C(0x08400000) ||
-        minild_aarch64_843419_is_literal(insn)) {
-        return true;
-    }
-    if (minild_aarch64_843419_is_single(insn)) {
-        uint32_t size = (insn >> 30U) & 3U;
-        uint32_t vector = (insn >> 26U) & 1U;
-        uint32_t opcode = (insn >> 22U) & 3U;
-        return opcode != 0U &&
-               !(size == 0U && vector != 0U && opcode == 2U) &&
-               !(size == 3U && vector == 0U && opcode == 2U);
-    }
-    return false;
-}
-
 static bool minild_aarch64_843419_is_branch(uint32_t insn) {
     return (insn & UINT32_C(0xfe000000)) == UINT32_C(0xd6000000) ||
            (insn & UINT32_C(0xfe000000)) == UINT32_C(0x54000000) ||
@@ -128,12 +103,10 @@ static bool minild_aarch64_843419_sequence(uint32_t adrp, uint32_t second,
         !minild_aarch64_843419_is_st1(second)) {
         return false;
     }
-    if ((minild_aarch64_843419_is_load(second) &&
-         (second & 31U) == reg) ||
-        (minild_aarch64_843419_has_writeback(second) &&
-         ((second >> 5U) & 31U) == reg)) {
-        return false;
-    }
+    /* BFD recognizes the architectural encoding family, not the dataflow:
+     * an intervening LDR may even overwrite ADRP's destination register.
+     * AArch64 Linux drivers/firmware/efi/vars.o contains this exact pattern.
+     * Filtering such loads would miss a real Cortex-A53 843419 hazard. */
     return minild_aarch64_843419_is_unsigned(last) &&
            ((last >> 5U) & 31U) == reg;
 }
@@ -331,16 +304,46 @@ static bool minild_aarch64_843419_add_patch(
         errata->patches = next;
         errata->capacity = capacity;
     }
-    if (!align_up_size(section->size, 4U, &stub_offset)) {
+    if (!align_up_size(errata->original_sizes[section_index], 4U,
+                       &stub_offset)) {
         fprintf(state->diagnostics,
                 "minic-ld: aarch64-843419-stub-alignment-overflow\n");
         return false;
     }
+    for (i = 0U; i < errata->count; ++i) {
+        if (errata->patches[i].section == section_index &&
+            errata->patches[i].stub_offset >= stub_offset) {
+            if (errata->patches[i].stub_offset > SIZE_MAX - 8U) {
+                return false;
+            }
+            stub_offset = errata->patches[i].stub_offset + 8U;
+        }
+    }
     instruction = load_u32le(section->data + instruction_offset);
-    if (!section_append_zero(section, stub_offset - section->size) ||
-        !section_append_zero(section, 8U)) {
+    if (stub_offset > SIZE_MAX - 8U) {
+        return false;
+    }
+    if (section->size <= stub_offset) {
+        /* Allocate a separate page-sized tail logically even if this
+         * section's original payload was not page aligned.  A newly
+         * encountered erratum may not shift later instructions by 8B and
+         * create spurious new page-boundary errata on the next round. */
+        size_t to_fill;
+
+        if (stub_offset > SIZE_MAX - 4096U) {
+            return false;
+        }
+        to_fill = stub_offset - section->size;
+        if (!section_append_zero(section, to_fill) ||
+            !section_append_zero(section, 4096U)) {
+            fprintf(state->diagnostics,
+                    "minic-ld: out-of-memory:aarch64-843419-stub-page\n");
+            return false;
+        }
+    }
+    if (!range_ok(stub_offset, 8U, section->size)) {
         fprintf(state->diagnostics,
-                "minic-ld: out-of-memory:aarch64-843419-stub\n");
+                "minic-ld: aarch64-843419-stub-capacity-overflow\n");
         return false;
     }
     store_u32le(section->data + stub_offset, instruction);
@@ -523,6 +526,25 @@ static bool minild_aarch64_replan_static_layout(
                 state, layout, errata, section_index, code_start,
                 errata->original_sizes[section_index], changed)) {
             return false;
+        }
+    }
+    if (getenv("MINILD_PROFILE_AARCH64_ERRATUM") != NULL) {
+        size_t p;
+
+        fprintf(state->diagnostics,
+                "minic-ld: aarch64-843419-analysis:patches=%zu:mappings=%zu:changed=%u\n",
+                errata->count, errata->code_map_count,
+                *changed ? 1U : 0U);
+        for (p = 0U; p < errata->count; ++p) {
+            const MiniLdAarch64ErratumPatch *patch = &errata->patches[p];
+            fprintf(state->diagnostics,
+                    "minic-ld: aarch64-843419-patch:source=%zu:%s:insn=%zu:stub=%zu:base=0x%llx\n",
+                    patch->section,
+                    state->work.sections[patch->section].input_name != NULL
+                        ? state->work.sections[patch->section].input_name
+                        : state->work.sections[patch->section].name,
+                    patch->instruction_offset, patch->stub_offset,
+                    (unsigned long long)layout->work[patch->section].vaddr);
         }
     }
     return true;

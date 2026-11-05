@@ -2,6 +2,7 @@
  * PCALA's rounded high part and GOT/TLS slots belong to the target leaf. */
 
 #include "linker_loongarch_static_got.inc"
+#include "linker_loongarch_relax_plan.inc"
 
 static MiniLdNonRiscvFixup minild_loongarch_static_fixup_class(uint32_t type) {
     switch (type) {

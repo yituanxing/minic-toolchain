@@ -69,6 +69,9 @@ static bool minild_aarch64_replan_static_layout(
 static bool minild_loongarch_relax_section(MiniLdState *state,
                                           size_t section_index,
                                           uint64_t address);
+static bool minild_loongarch_replan_static_layout(
+    MiniLdState *state, const struct MiniLdLayout *layout,
+    struct MiniLdStaticTargetPlan *plan, bool *changed);
 static bool minild_riscv_synthesize_gnu_default_boundaries(
     MiniLdState *state, const struct MiniLdLayout *layout);
 
@@ -249,8 +252,8 @@ static const MiniLdTargetProfile minild_target_profiles[] = {
      65536U, 8U,
      true, true, true, true, false, false, false,
      minild_exact_merge_flags, minild_loongarch_merge_addend_plain,
-     minild_loongarch_relax_section,
      NULL,
+     minild_loongarch_replan_static_layout,
      minild_loongarch_reserve_static_relocations,
      minild_loongarch_fill_static_relocations,
      minild_loongarch_apply_static_relocations,

@@ -18,9 +18,9 @@ _start:
  * up to this point. */
     .word 0x12345678
 
-/* On the first layout this ADRP sits at +0xff0 and is safe.  The earlier
- * section's 8-byte patch moves it to +0xff8, so it must be found on the
- * NEXT layout trial.  This tests actual multi-round fixed-point behavior. */
+/* This ADRP sits at +0xff0 and is safe.  GNU BFD reserves a full 4 KiB
+ * capacity in each erratum stub section, so an earlier source's patch
+ * must NOT move this ADRP to +0xff8 and create a false cascade. */
 .section .text.cascade,"ax",@progbits
 .p2align 2
 .space 4068

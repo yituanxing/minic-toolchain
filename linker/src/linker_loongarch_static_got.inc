@@ -22,6 +22,9 @@
 #define R_LARCH_IRELATIVE 12
 #endif
 
+typedef struct MiniLdLoongRelaxPlan MiniLdLoongRelaxPlan;
+static void minild_loong_relax_plan_destroy(MiniLdLoongRelaxPlan *plan);
+
 typedef struct MiniLdLoongarchStaticGot {
     size_t section;
     size_t symbol_count;
@@ -41,6 +44,7 @@ typedef struct MiniLdLoongarchStaticGot {
      * the script discards sections, then leaves unused slots as R_LARCH_NONE.
      * Preserve this distinction rather than treating -n as a PIC request. */
     size_t relative_reserved_count;
+    MiniLdLoongRelaxPlan *relax;
     bool present;
 } MiniLdLoongarchStaticGot;
 
@@ -197,6 +201,7 @@ static void minild_loongarch_destroy_static_relocations(
     MiniLdLoongarchStaticGot *got = plan->target_data;
 
     if (got != NULL) {
+        minild_loong_relax_plan_destroy(got->relax);
         free(got->symbol_slots);
         free(got->tls_ie_slots);
         free(got->ifunc_stub_offsets);

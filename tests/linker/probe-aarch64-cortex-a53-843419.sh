@@ -117,7 +117,7 @@ data = patched.symbols['embedded_data_sequence']
 value = patched.symbols['fixture_value']
 assert site & 0xfff == 0xff8 and optional & 0xfff == 0xff8
 assert original.symbols['cascade_sequence'] & 0xfff == 0xff0
-assert cascade & 0xfff == 0xff8
+assert cascade & 0xfff == 0xff0
 assert page_last & 0xfff == 0xffc and write_destination & 0xfff == 0xff8
 assert negative & 0xfff == 0xff4 and data & 0xfff == 0xff8
 assert value & 0xfff == 24
@@ -133,15 +133,14 @@ assert patched.insn(stub) == original_load
 assert branch_target(patched, stub + 4) == site + 12
 assert stub in patched.synthetic_x, 'missing island $x mapping after $d'
 
-# The first section's island shifts this ADRP from +0xff0 to +0xff8.
-# A one-shot erratum scan misses it; a converged re-layout must patch it.
-cascade_stub = branch_target(patched, cascade + 8)
-assert patched.insn(cascade_stub) == 0xf9400003
-assert branch_target(patched, cascade_stub + 4) == cascade + 12
+# GNU reserves a full 4 KiB erratum tail, so the next source section's
+# ADRP stays at safe +0xff0; an 8B-only tail would spuriously patch it.
+assert patched.insn(cascade + 8) == 0xf9400003
 
 # The optional-middle-instruction form and last-word-in-page +0xffc form both
-# need patches.  A load that destroys the ADRP destination, an ADRP at +0xff4
-# and the identical instruction pattern marked $d must remain untouched.
+# need patches.  GNU also matches a second-instruction load that overwrites
+# ADRP's register: pattern matching must follow the encoded instruction
+# family, not presume a dataflow constraint.  +0xff4 and $d remain safe.
 assert original.insn(original.symbols['optional_sequence'] + 12) == 0xf9400003
 optional_stub = branch_target(patched, optional + 12)
 assert patched.insn(optional_stub) == 0xf9400003
@@ -149,14 +148,16 @@ assert branch_target(patched, optional_stub + 4) == optional + 16
 last_stub = branch_target(patched, page_last + 8)
 assert patched.insn(last_stub) == 0xf9400003
 assert branch_target(patched, last_stub + 4) == page_last + 12
-assert patched.insn(write_destination + 8) == 0xf9400003
+overwrite_stub = branch_target(patched, write_destination + 8)
+assert patched.insn(overwrite_stub) == 0xf9400003
+assert branch_target(patched, overwrite_stub + 4) == write_destination + 12
 assert patched.insn(negative + 8) == 0xf9400003
 assert patched.insn(data + 8) == 0xf9400003
-assert len({stub, cascade_stub, optional_stub, last_stub}) == 4
+assert len({stub, overwrite_stub, optional_stub, last_stub}) == 4
 assert original.insn(original.symbols['_start'] + 8) & 0xfc000000 != 0x14000000
 print('MINILD_AARCH64_A53_843419=PASS kernel_et_dyn=1 static_exec=1 '
-      'matched=4 fixed_point_cascade=1 unmapped_data_preserved=1 '
-      'writes_adrp_excluded=1 reloc_migrated=1 branch_roundtrip=4')
+      'matched=4 page_stable_without_false_cascade=1 unmapped_data_preserved=1 '
+      'writes_adrp_included=1 reloc_migrated=1 branch_roundtrip=4')
 PY
 
 # An allocated absolute pointer requires a runtime relocation under KASLR;
@@ -192,9 +193,9 @@ print('MINILD_AARCH64_A53_843419=PASS relative_pointer=1 deferred_slot=1')
 PY_REBASE
 
 # The script-generated .pad is absent on trial #1 and appears only AFTER the
-# target grows .text by appending an erratum island.  A fixed-point coordinator
-# must tolerate re-materializing that script-generated NOBITS tail while the
-# canonical input section IDs remain unchanged.
+# target grows .text by a full 4 KiB page-stable erratum veneer. The output
+# script scales the size difference to 8B to exercise new synthetic NOBITS
+# section materialization without invalidating Cortex-A53 page phase.
 "$MINIAS" --target=aarch64 -march=armv8-a -mabi=lp64 \
     -o "$work/pad.o" \
     "$repo/tests/linker/fixtures/aarch64-cortex-a53-843419-pad.S"
@@ -233,13 +234,13 @@ assert before['.text'][5] == 0x1010, before['.text']
 assert '.pad' not in before or before['.pad'][5] == 0, before.get('.pad')
 text = after['.text']
 pad = after['.pad']
-assert text[5] == 0x1018, text
+assert text[5] == 0x2010, text
 assert pad[1] == 8 and pad[3] == text[3] + text[5], pad
-assert pad[5] == 8 and pad[3] % 16 == 8, pad
+assert pad[5] == 8 and pad[3] % 16 == 0, pad
 assert pad[4] % 4096 == pad[3] % 4096, pad
 site_offset = text[4] + 0x1000
 branch = struct.unpack_from('<I', raw_after, site_offset)[0]
 assert branch & 0xfc000000 == 0x14000000, hex(branch)
 print('MINILD_AARCH64_A53_843419=PASS script_synthetic_nobits_cascade=1 '
-      'new_section_after_first_round=1 fixed_point_converged=1')
+      'new_section_after_first_round=1 page_stable_fixed_point=1')
 PY

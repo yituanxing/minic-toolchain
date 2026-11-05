@@ -9,6 +9,7 @@ typedef struct MiniLdLoongAlignSite {
     size_t offset;
     size_t reserved;
     size_t alignment;
+    size_t skip_limit;
     size_t relocation_index;
 } MiniLdLoongAlignSite;
 
@@ -29,7 +30,7 @@ static int minild_loong_align_site_compare(
 static bool minild_loong_align_decode(
     const MiniLdReloc *reloc, const MiniLdSection *section,
     MiniLdLoongAlignSite *site) {
-    uint64_t bytes, alignment;
+    uint64_t bytes, alignment, skip_limit = 0U;
 
     if (section->type != SHT_PROGBITS ||
         (section->flags & (SHF_ALLOC | SHF_EXECINSTR)) !=
@@ -39,16 +40,13 @@ static bool minild_loong_align_decode(
     }
     if (reloc->symbol != SIZE_MAX) {
         unsigned exponent = (unsigned)((uint64_t)reloc->addend & 0xffU);
-        uint64_t skip_limit = (uint64_t)reloc->addend >> 8U;
+        skip_limit = (uint64_t)reloc->addend >> 8U;
 
         if (exponent < 2U || exponent > 20U) {
             return false;
         }
         alignment = UINT64_C(1) << exponent;
         bytes = alignment - 4U;
-        if (skip_limit != 0U && bytes > skip_limit) {
-            return false;
-        }
     } else {
         bytes = (uint64_t)reloc->addend;
         if (bytes > UINT64_C(0x100000) || (bytes & 3U) != 0U) {
@@ -60,12 +58,14 @@ static bool minild_loong_align_decode(
         }
     }
     if (bytes > SIZE_MAX || alignment > SIZE_MAX ||
+        skip_limit > SIZE_MAX ||
         !range_ok((size_t)reloc->offset, (size_t)bytes, section->size)) {
         return false;
     }
     site->offset = (size_t)reloc->offset;
     site->reserved = (size_t)bytes;
     site->alignment = (size_t)alignment;
+    site->skip_limit = (size_t)skip_limit;
     return true;
 }
 
@@ -207,6 +207,12 @@ static bool minild_loongarch_relax_section(
         place = base_addr + (uint64_t)output_size;
         required = (size_t)((-(uint64_t)place) &
                             (uint64_t)(site->alignment - 1U));
+        /* GAS p2align's max-skip controls the required padding at this
+         * placement, not its conservative NOP reservation.  Exceeding
+         * max-skip abandons alignment and consumes the entire reserve. */
+        if (site->skip_limit != 0U && required > site->skip_limit) {
+            required = 0U;
+        }
         if (required > site->reserved || (required & 3U) != 0U ||
             !range_ok(output_size, required, section->size)) {
             fprintf(state->diagnostics,

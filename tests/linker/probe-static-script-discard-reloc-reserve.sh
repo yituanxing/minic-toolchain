@@ -80,6 +80,29 @@ ASM
     -o "$work/dead_only.o" "$work/dead_only.s"
 "$minias" --target=loongarch64 -march=loongarch64 -mabi=lp64d \
     -o "$work/absolute.o" "$work/absolute.s"
+
+# Orthogonal GNU witnesses diagnose candidate lifetime separately.  In
+# particular, an ABS relocation has a constant value, while a local symbol
+# referenced from /DISCARD/ follows a different BFD dynrel ownership path
+# from a global reference at the same place.
+for kind in abs_live global_live local_live global_dead local_dead; do
+    case "$kind" in
+        abs_live)      body='.data
+    .quad absolute_value' ;;
+        global_live)   body='.data
+    .quad _start' ;;
+        local_live)    body='.data
+    .quad .Llocal_alive' ;;
+        global_dead)   body='.section .data.dead,"aw",@progbits
+    .quad _start' ;;
+        local_dead)    body='.section .data.dead,"aw",@progbits
+    .quad .Llocal_alive' ;;
+    esac
+    printf '.text\n.globl _start\n_start:\n    nop\n.Llocal_alive:\n    nop\n%b\n' \
+        "$body" >"$work/$kind.s"
+    "$minias" --target=loongarch64 -march=loongarch64 -mabi=lp64d \
+        -o "$work/$kind.o" "$work/$kind.s"
+done
 for mode in live dead_only; do
     inputs=("$work/$mode.o")
     [[ $mode == live ]] && inputs+=("$work/absolute.o")
@@ -114,6 +137,14 @@ if [[ -n $gnu_ld ]]; then
         [[ $mode == live ]] && inputs+=("$work/absolute.o")
         "$gnu_ld" -m elf64loongarch -static -pie -n --no-dynamic-linker \
             --script="$work/image.lds" -o "$work/$mode.gnu.elf" "${inputs[@]}"
+    done
+    for kind in abs_live global_live local_live global_dead local_dead; do
+        inputs=("$work/$kind.o")
+        [[ $kind == abs_live ]] && inputs+=("$work/absolute.o")
+        "$minild" -m elf64loongarch -static -pie -n --no-dynamic-linker \
+            --script="$work/image.lds" -o "$work/$kind.mini.elf" "${inputs[@]}"
+        "$gnu_ld" -m elf64loongarch -static -pie -n --no-dynamic-linker \
+            --script="$work/image.lds" -o "$work/$kind.gnu.elf" "${inputs[@]}"
     done
 fi
 
@@ -158,10 +189,22 @@ assert '.got' not in dead or dead['.got'][5] == 0
 assert '.rela.dyn' in dead and dead['.rela.dyn'][5] == 24
 assert unused('.rela.dyn') == b'\0' * 24
 if len(sys.argv) == 5:
+    for kind in ('abs_live','global_live','local_live','global_dead','local_dead'):
+        for producer in ('mini','gnu'):
+            path = Path(sys.argv[1]).parent / f'{kind}.{producer}.elf'
+            sections, get_data = extract(str(path))
+            entries = [struct.unpack_from('<QQQ',get_data('.rela.dyn'),off)
+                       for off in range(0,sections['.rela.dyn'][5],24)] \
+                if '.rela.dyn' in sections else []
+            print(f'MINILD_LOONG_GNU_DYNREL_CLASS={kind}:{producer} '
+                  f'count={len(entries)} types={[r[1]&0xffffffff for r in entries]}',
+                  flush=True)
     for label, mini, gnu in [('live', live, extract(sys.argv[3])[0]),
                               ('dead_only', dead, extract(sys.argv[4])[0])]:
         mini_n = mini.get('.rela.dyn', (0, 0, 0, 0, 0, 0))[5] // 24
         gnu_n = gnu.get('.rela.dyn', (0, 0, 0, 0, 0, 0))[5] // 24
+        print(f'MINILD_LOONG_GNU_DYNREL_CLASS={label} '
+              f'mini={mini_n} gnu={gnu_n}',flush=True)
         assert mini_n == gnu_n, (label, 'rela.dyn slot count', mini_n, gnu_n)
         mini_bytes = extract(sys.argv[1 if label == 'live' else 2])[1]
         gnu_bytes = extract(sys.argv[3 if label == 'live' else 4])[1]

@@ -60,6 +60,7 @@ jobs:
             check-minild-x86-script-symbol-provenance-relocs \
             check-minild-i386-rel-static \
             check-minild-x86-frozen-manifest \
+            check-minild-x86-boot-dispatch \
             check-minild-rv32-static-runtime \
             check-minild-riscv-static-tls \
             check-minild-riscv-uleb-static \
@@ -68,8 +69,10 @@ jobs:
             check-minild-aarch64-static-ifunc \
             check-minild-aarch64-static-instruction-relocs \
             check-minild-loongarch-static-relocs \
+            check-minild-loongarch-pcala-relax-fixedpoint \
             check-minild-static-script-discard-reloc-reserve \
             check-minild-script-output-entsize-coalescing \
+            check-minild-script-data-width-flags \
             check-minild-script-top-level-empty-statements \
             check-minild-script-forward-placement-fixedpoint \
             check-minild-static-merge-input-pool-identity \

@@ -1,6 +1,6 @@
-/* Initial .text size = 0x1010, so an ALIGN(16) output is initially empty.
- * Moving the affected load into an 8-byte island grows .text to 0x1018;
- * the subsequent ALIGN creates an 8-byte pure SHT_NOBITS script section. */
+/* Initial .text size = 0x1010.  A real erratum allocates 0x1000 page-stable
+ * veneer bytes (GNU BFD semantics), which enables the script-generated
+ * .pad NOBITS section only after the second layout trial. */
 .section .text.pad_trigger,"ax",@progbits
 .p2align 12
 .space 4088
