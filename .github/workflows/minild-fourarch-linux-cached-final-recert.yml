@@ -216,38 +216,12 @@ jobs:
           } >"$ev/frozen-replay-identity.txt"
           echo "MINILD_FROZEN=PASS arch=$arch GNU_object_sha_verified=true cwd_exact=true"
 
-      - name: Enable four script and GC policies only in this replay runner
+      - name: Verify four script and GC target policies before frozen replay
         shell: bash
         run: |
           set -Eeuo pipefail
-          python3 - linker/src/linker_target_elf.inc <<'PY_TRIAL'
-          from pathlib import Path
-          import re
-          import sys
-
-          source = Path(sys.argv[1])
-          content = source.read_text()
-          for emulation in ('elf32lriscv', 'elf_x86_64',
-                            'aarch64linux', 'elf64loongarch'):
-              # ABI alignment scalars may follow page_size. This trial used
-              # to flip disabled flags; current profiles can already admit
-              # both features, in which case there is nothing to rewrite.
-              pattern = (r'(\{"' + re.escape(emulation) +
-                         r'"[^{}]*?4096U,\s*(?:\d+U,\s*)*true,\s*true,\s*)'
-                         r'(true|false),\s*(true|false),')
-              match = re.search(pattern, content)
-              if match is None or match.group(2) != match.group(3):
-                  raise SystemExit(
-                      f'MINILD_FROZEN=FAIL missing_trial_policy:{emulation}')
-              if match.group(2) == 'false':
-                  content = (content[:match.start()] + match.group(1) +
-                             'true, true,' + content[match.end():])
-          if not re.search(r'\{"elf64lriscv"[^{}]*?4096U,\s*(?:\d+U,\s*)*'
-                           r'true,\s*true,\s*true,\s*true,', content):
-              raise SystemExit('MINILD_FROZEN=FAIL RV64_policy_changed')
-          source.write_text(content)
-          print('MINILD_FROZEN=TRIAL_ONLY production_policy_unchanged=true')
-          PY_TRIAL
+          python3 tools/ci/minild-check-target-policies.py \
+            linker/src/linker_target_elf.inc MINILD_FROZEN
           make -j4 MODE=release CFLAGS=-Werror build/release/bin/minic-ld
 
       - name: Replay real GNU Kbuild first link on original frozen objects

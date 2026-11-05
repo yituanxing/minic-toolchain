@@ -774,6 +774,11 @@ check-minild-x86-kernel-pie-image: $(MINILD_BINARY)
 	MINILD="$(abspath $(MINILD_BINARY))" \
 	bash tests/linker/probe-minild-x86-kernel-pie-image.sh
 
+.PHONY: check-minild-force-undefined-archive
+check-minild-force-undefined-archive: $(MINILD_BINARY)
+	MINILD="$(abspath $(MINILD_BINARY))" \
+	bash tests/linker/probe-force-undefined-archive.sh
+
 .PHONY: check-minild-script-phdrs
 check-minild-script-phdrs: $(MINILD_BINARY)
 	MINILD="$(abspath $(MINILD_BINARY))" \
@@ -804,6 +809,12 @@ check-minild-aarch64-cortex-a53-843419: $(MINIAS_BINARY) $(MINILD_BINARY)
 	MINIAS="$(abspath $(MINIAS_BINARY))" \
 	MINILD="$(abspath $(MINILD_BINARY))" \
 	bash tests/linker/probe-aarch64-cortex-a53-843419.sh
+
+.PHONY: check-minild-aarch64-merge-reloc-target
+check-minild-aarch64-merge-reloc-target: $(MINIAS_BINARY) $(MINILD_BINARY)
+	MINIAS="$(abspath $(MINIAS_BINARY))" \
+	MINILD="$(abspath $(MINILD_BINARY))" \
+	bash tests/linker/probe-aarch64-merge-reloc-target.sh
 
 .PHONY: check-minild-aarch64-static-instruction-relocs
 check-minild-aarch64-static-instruction-relocs: $(MINIAS_BINARY) $(MINILD_BINARY)

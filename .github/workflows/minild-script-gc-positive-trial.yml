@@ -41,27 +41,8 @@ jobs:
           mkdir -p "$ev/tmp"
           source=linker/src/linker_target_elf.inc
           sha256sum "$source" >"$ev/checked-in-target-profile.sha256"
-          python3 - "$source" <<'PY_TRIAL'
-          from pathlib import Path
-          import re
-          import sys
-
-          text = Path(sys.argv[1]).read_text(encoding="utf-8")
-          targets = ("elf32lriscv", "elf_x86_64", "aarch64linux",
-                     "elf64loongarch")
-          for emulation in targets:
-              pattern = (r'(\{"' + re.escape(emulation) +
-                         r'"[^{}]*?4096U,\s*(?:\d+U,\s*)*true,\s*true,\s*)'
-                         r'true,\s*true,')
-              if re.search(pattern, text) is None:
-                  raise SystemExit(
-                      f'MINILD_SCRIPT_GC_TRIAL=FAIL policy_not_enabled:{emulation}')
-          if not re.search(
-                  r'\{"elf64lriscv"[^{}]*?4096U,\s*(?:\d+U,\s*)*'
-                  r'true,\s*true,\s*true,\s*true,', text):
-              raise SystemExit('MINILD_SCRIPT_GC_TRIAL=FAIL RV64_policy_changed')
-          print("MINILD_SCRIPT_GC_TRIAL=CHECKED_IN targets=5")
-          PY_TRIAL
+          python3 tools/ci/minild-check-target-policies.py \
+            "$source" MINILD_SCRIPT_GC_TRIAL
 
       - name: Build trial MiniAS and MiniLD with Werror
         run: |

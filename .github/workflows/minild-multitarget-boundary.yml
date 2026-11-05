@@ -61,6 +61,7 @@ jobs:
             check-minild-i386-rel-static \
             check-minild-x86-frozen-manifest \
             check-minild-x86-boot-dispatch \
+            check-minild-force-undefined-archive \
             check-minild-rv32-static-runtime \
             check-minild-riscv-static-tls \
             check-minild-riscv-uleb-static \
@@ -69,6 +70,7 @@ jobs:
             check-minild-aarch64-static-ifunc \
             check-minild-aarch64-static-instruction-relocs \
             check-minild-aarch64-merge-insn-relocs \
+            check-minild-aarch64-merge-reloc-target \
             check-minild-loongarch-static-relocs \
             check-minild-loongarch-pcala-relax-fixedpoint \
             check-minild-static-script-discard-reloc-reserve \

@@ -75,27 +75,8 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          python3 - linker/src/linker_target_elf.inc <<'PY_TRIAL'
-          from pathlib import Path
-          import re
-          import sys
-
-          content = Path(sys.argv[1]).read_text()
-          emulations = ("elf32lriscv", "elf_x86_64", "aarch64linux",
-                        "elf64loongarch")
-          for emulation in emulations:
-              pattern = (r'(\{"' + re.escape(emulation) +
-                         r'"[^{}]*?4096U,\s*(?:\d+U,\s*)*true,\s*true,\s*)'
-                         r'true,\s*true,')
-              if re.search(pattern, content) is None:
-                  raise SystemExit(
-                      f'MINILD_LINUX_TRIAL=FAIL script_gc_not_enabled:{emulation}')
-          if not re.search(
-                  r'\{"elf64lriscv"[^{}]*?4096U,\s*(?:\d+U,\s*)*'
-                  r'true,\s*true,\s*true,\s*true,', content):
-              raise SystemExit('MINILD_LINUX_TRIAL=FAIL RV64_policy_changed')
-          print('MINILD_LINUX_TRIAL=CHECKED_IN script_gc_targets=5')
-          PY_TRIAL
+          python3 tools/ci/minild-check-target-policies.py \
+            linker/src/linker_target_elf.inc MINILD_LINUX_TRIAL
           test "$(git rev-parse HEAD)" = '${{ github.sha }}'
           test -x "$MINILD_GNU_LD_WRAPPER"
           make -j4 MODE=release CFLAGS=-Werror \

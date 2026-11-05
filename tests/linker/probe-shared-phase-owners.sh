@@ -254,10 +254,22 @@ profile_rows = {
         target_profile.split('static const MiniLdTargetProfile minild_target_profiles[] = {', 1)[1]
                       .split('\n};', 1)[0], re.S)
 }
-if set(profile_rows) != {'elf64lriscv', 'elf32lriscv', 'elf_x86_64',
-                         'elf_i386', 'aarch64linux', 'elf64loongarch'}:
+expected_profiles = {
+    'elf64lriscv': ('ELFCLASS64', 'EM_RISCV'),
+    'elf32lriscv': ('ELFCLASS32', 'EM_RISCV'),
+    'elf_x86_64': ('ELFCLASS64', 'EM_X86_64'),
+    'elf_i386': ('ELFCLASS32', 'EM_386'),
+    'aarch64linux': ('ELFCLASS64', 'EM_AARCH64'),
+    'elf64loongarch': ('ELFCLASS64', 'EM_LOONGARCH'),
+}
+if set(profile_rows) != set(expected_profiles):
     raise SystemExit('MINILD_SHARED_PHASE_STRUCTURE=FAIL '
                      f'target_profile_count={sorted(profile_rows)}')
+for emulation, (elf_class, machine) in expected_profiles.items():
+    if not re.search(r'^\s*,\s*' + elf_class + r'\s*,\s*ELFDATA2LSB\s*,\s*' +
+                     machine + r'\s*,', profile_rows[emulation]):
+        raise SystemExit('MINILD_SHARED_PHASE_STRUCTURE=FAIL '
+                         f'target_profile_abi={emulation}')
 if not re.search(r'minild_riscv_shared_target_abi\s*,\s*'
                  r'minild_link_shared_elf64_riscv_inputs_options',
                  profile_rows['elf64lriscv']) or \
