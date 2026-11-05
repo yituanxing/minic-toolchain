@@ -12,19 +12,14 @@ typedef struct MiniLdStaticRelocOperands {
     const char *symbol_name;
 } MiniLdStaticRelocOperands;
 
-/* ET_EXEC relocations in non-ALLOC debug/metadata sections may refer to
- * local labels in other non-ALLOC sections.  Such a section has sh_addr=0,
- * so the relocated value is its final section-relative offset, not a
- * runtime virtual address.  Keep ordinary allocated relocations on the
- * strict address resolver: a text/data reference to a discarded/non-ALLOC
- * symbol must never silently become an address in unmapped memory.
- *
- * The default (unscripted) layout keeps non-ALLOC work-section VAs at zero.
- * Script-owned non-ALLOC output offsets require an output-section projection
- * and are intentionally not admitted by this fallback. */
+/* Final non-ALLOC symbol values are output-section-relative, irrespective
+ * of their ELF binding or linker-script placement.  Allocated relocations
+ * retain strict runtime VMA resolution: a text/data relocation pointing to
+ * discarded/non-ALLOC storage must never become an unmapped pointer. */
 static bool minild_static_reloc_resolve_symbol(
     MiniLdState *state, const MiniLdLayout *layout,
-    const MiniLdReloc *reloc, uint64_t *value_out) {
+    const MiniLdOutputPlan *output_plan, const MiniLdReloc *reloc,
+    uint64_t *value_out) {
     const MiniLdResolvedSymbol *symbol;
 
     if (reloc->section >= state->work.count ||
@@ -34,15 +29,18 @@ static bool minild_static_reloc_resolve_symbol(
     }
     symbol = &state->resolver.entries[reloc->symbol];
 
-    if (!layout->scripted &&
-        (state->work.sections[reloc->section].flags & SHF_ALLOC) == 0U &&
-        ELF64_ST_BIND(symbol->info) == STB_LOCAL && symbol->section >= 0 &&
+    if ((state->work.sections[reloc->section].flags & SHF_ALLOC) == 0U &&
+        symbol->section >= 0 &&
         (size_t)symbol->section < state->work.count &&
-        (state->work.sections[symbol->section].flags & SHF_ALLOC) == 0U &&
-        !state->work.sections[symbol->section].gc_discarded &&
-        !layout->work[symbol->section].discarded &&
-        layout->work[symbol->section].vaddr == 0U) {
-        *value_out = symbol->value;
+        (state->work.sections[symbol->section].flags & SHF_ALLOC) == 0U) {
+        if (!minild_output_plan_nonalloc_value(
+                state, layout, output_plan, (size_t)symbol->section,
+                symbol->value, value_out)) {
+            fprintf(state->diagnostics,
+                    "minic-ld: invalid-static-nonalloc-target:%s\n",
+                    symbol->name);
+            return false;
+        }
         return true;
     }
     return minild_layout_resolve_symbol(state, layout, reloc->symbol,
@@ -51,6 +49,7 @@ static bool minild_static_reloc_resolve_symbol(
 
 static bool minild_static_reloc_source(
     MiniLdState *state, const MiniLdLayout *layout,
+    const MiniLdOutputPlan *output_plan,
     const MiniLdReloc *reloc, const char *invalid_section_diagnostic,
     MiniLdSection **section_out, bool *live_out) {
     MiniLdSection *section;
@@ -62,14 +61,17 @@ static bool minild_static_reloc_source(
     }
     section = &state->work.sections[reloc->section];
     *section_out = section;
-    *live_out = !layout->scripted ||
-                ((section->flags & SHF_ALLOC) != 0U &&
-                 !layout->work[reloc->section].discarded);
+    *live_out = output_plan != NULL
+                    ? minild_output_shndx(output_plan, reloc->section) != 0U
+                    : (!layout->scripted ||
+                       ((section->flags & SHF_ALLOC) != 0U &&
+                        !layout->work[reloc->section].discarded));
     return true;
 }
 
 static bool minild_static_reloc_operands(
     MiniLdState *state, const MiniLdLayout *layout,
+    const MiniLdOutputPlan *output_plan,
     const MiniLdReloc *reloc, const char *place_overflow_diagnostic,
     MiniLdStaticRelocOperands *out) {
     uint64_t symbol_value = 0U;
@@ -77,18 +79,27 @@ static bool minild_static_reloc_operands(
 
     memset(out, 0, sizeof(*out));
     if (reloc->symbol != SIZE_MAX) {
-        if (!minild_static_reloc_resolve_symbol(state, layout, reloc,
+        if (!minild_static_reloc_resolve_symbol(state, layout, output_plan, reloc,
                                                 &symbol_value)) {
             return false;
         }
         out->symbol_name = state->resolver.entries[reloc->symbol].name;
     }
-    if (reloc->offset > UINT64_MAX - section_vaddr) {
+    if ((state->work.sections[reloc->section].flags & SHF_ALLOC) == 0U) {
+        if (!minild_output_plan_nonalloc_value(
+                state, layout, output_plan, reloc->section, reloc->offset,
+                &out->place)) {
+            fprintf(state->diagnostics, "minic-ld: %s\n",
+                    place_overflow_diagnostic);
+            return false;
+        }
+    } else if (reloc->offset > UINT64_MAX - section_vaddr) {
         fprintf(state->diagnostics, "minic-ld: %s\n",
                 place_overflow_diagnostic);
         return false;
+    } else {
+        out->place = section_vaddr + reloc->offset;
     }
     out->target_bits = symbol_value + (uint64_t)reloc->addend;
-    out->place = section_vaddr + reloc->offset;
     return true;
 }

@@ -71,4 +71,58 @@ expect_reject multiple_needed -shared --needed=liba.so --needed=libb.so
 expect_reject shared_build_id -shared --build-id=sha1
 expect_reject shared_nodefaultlib -shared -z nodefaultlib
 
-echo 'MINILD_CLI_OPTION_MODE=PASS stages=12 GNU_BFD=required'
+# Each optional machine-level static feature has one TargetProfile owner.
+# Probe all five Linux emulations plus the i386 boot-stage emulation without
+# requiring cross assemblers. Unsupported Target/mode combinations must fail
+# at CLI admission, before the foreign x86 input can reach ELF loading.
+expect_target_reject() {
+    local stage=$1 emulation=$2 diagnostic=$3
+    shift 3
+    if "$MINILD" -m "$emulation" -static -e _start \
+        -o "$work/$stage.elf" "$work/start.o" "$@" \
+        >"$work/$stage.log" 2>&1; then
+        echo "MINILD_CLI_OPTION_MODE=FAIL silently_accepted=$stage" >&2
+        exit 1
+    fi
+    if ! grep -Fq -- "$diagnostic" "$work/$stage.log"; then
+        echo "MINILD_CLI_OPTION_MODE=FAIL wrong_diagnostic=$stage" >&2
+        exit 1
+    fi
+    echo "MINILD_CLI_OPTION_MODE=PASS stage=$stage admission=REJECT"
+}
+
+for arch in elf32lriscv elf64lriscv aarch64linux elf64loongarch elf_i386; do
+    expect_target_reject "emit-relocs-$arch" "$arch" \
+        '--emit-relocs-requires-target-static-link' --emit-relocs
+done
+for arch in elf32lriscv elf64lriscv elf_x86_64 elf64loongarch elf_i386; do
+    expect_target_reject "cortex-a53-$arch" "$arch" \
+        '--fix-cortex-a53-843419-requires-aarch64-static-or-kernel-image' \
+        --fix-cortex-a53-843419
+done
+
+# The admitted x86 path must still link and execute; the AArch64 canonical
+# emulation and its GNU alias must pass the erratum gate and fail later for
+# the intentionally incompatible x86 ET_REL fixture, not at CLI admission.
+"$MINILD" -m elf_x86_64 -static --emit-relocs -e _start \
+    -o "$work/emit-relocs-x86.elf" "$work/start.o" \
+    >"$work/emit-relocs-x86.log" 2>&1
+"$work/emit-relocs-x86.elf"
+echo 'MINILD_CLI_OPTION_MODE=PASS stage=emit-relocs-elf_x86_64 admission=ACCEPT runtime=PASS'
+
+for arch in aarch64linux aarch64elf; do
+    stage="cortex-a53-$arch-admitted"
+    if "$MINILD" -m "$arch" -static -e _start \
+        --fix-cortex-a53-843419 -o "$work/$stage.elf" "$work/start.o" \
+        >"$work/$stage.log" 2>&1; then
+        echo "MINILD_CLI_OPTION_MODE=FAIL foreign_elf_accepted=$stage" >&2
+        exit 1
+    fi
+    if ! grep -Fq 'unsupported-elf:' "$work/$stage.log"; then
+        echo "MINILD_CLI_OPTION_MODE=FAIL target_capability_rejected=$stage" >&2
+        exit 1
+    fi
+    echo "MINILD_CLI_OPTION_MODE=PASS stage=$stage admission=ACCEPT foreign_elf=REJECT"
+done
+
+echo 'MINILD_CLI_OPTION_MODE=PASS stages=25 GNU_BFD=required target_capabilities=2'

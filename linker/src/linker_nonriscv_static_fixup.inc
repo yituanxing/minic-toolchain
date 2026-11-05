@@ -158,6 +158,7 @@ static bool minild_nonriscv_write_fixup(const MiniLdState *state,
 
 static bool minild_nonriscv_apply_with_ops(
     MiniLdState *state, const MiniLdLayout *layout,
+    const MiniLdOutputPlan *output_plan,
     const MiniLdStaticTargetPlan *plan,
     const MiniLdNonRiscvStaticOps *ops) {
     uint16_t machine;
@@ -186,7 +187,7 @@ static bool minild_nonriscv_apply_with_ops(
             continue;
         }
         if (!minild_static_reloc_source(
-                state, layout, reloc,
+                state, layout, output_plan, reloc,
                 "nonriscv-invalid-relocation-section", &section, &live)) {
             return false;
         }
@@ -194,7 +195,8 @@ static bool minild_nonriscv_apply_with_ops(
             continue;
         }
         if (!minild_static_reloc_operands(
-                state, layout, reloc, "nonriscv-relocation-place-overflow",
+                state, layout, output_plan, reloc,
+                "nonriscv-relocation-place-overflow",
                 &operands)) {
             return false;
         }

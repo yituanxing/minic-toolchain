@@ -96,6 +96,10 @@ bool minild_emulation_supports_kernel_shared_image(const char *emulation);
 /* Only expressly admitted targets may link an all-resolved freestanding
  * kernel -pie --no-dynamic-linker -T image through the static ELF pipeline. */
 bool minild_emulation_supports_kernel_pie_image(const char *emulation);
+/* Optional static-link capabilities are Target properties. The CLI must
+ * query these, not infer relocation/erratum support from an emulation name. */
+bool minild_emulation_supports_final_relocations(const char *emulation);
+bool minild_emulation_supports_cortex_a53_fix(const char *emulation);
 /* A linker -EL/-EB request selects the output byte order, which must agree
  * with the target's declared ELF encoding. The CLI never guesses from the
  * host machine or silently changes a target to an unsupported endian ABI. */

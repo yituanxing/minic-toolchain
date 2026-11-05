@@ -226,22 +226,14 @@ static bool minild_final_symbols_build_with_version(
                             return false;
                         }
                     } else {
-                        /* sh_addr is zero for non-ALLOC output sections.
-                         * An input symbol must still include the fragment's
-                         * displacement in its merged output section. */
-                        const MiniLdOutputSection *owner =
-                            &plan->sections[plan->work_shndx[section] - 1U];
-                        uint64_t start = layout->work[section].vaddr;
-                        if (start < owner->vaddr ||
-                            source->value > UINT64_MAX -
-                                (start - owner->vaddr)) {
+                        if (!minild_output_plan_nonalloc_value(
+                                state, layout, plan, section,
+                                source->value, &output->value)) {
                             fprintf(state->diagnostics,
                                     "minic-ld: invalid-nonalloc-symbol:%s\n",
                                     source->name);
                             return false;
                         }
-                        output->value = start - owner->vaddr +
-                                        source->value;
                     }
                 }
             } else {

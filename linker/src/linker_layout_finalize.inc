@@ -158,16 +158,3 @@ static void minild_layout_destroy(MiniLdLayout *layout) {
 }
 
 #include "linker_layout_symbols.inc"
-
-#include "linker_static_reloc_operands.inc"
-
-#include "linker_nonriscv_static_fixup.inc"
-#include "linker_x86_static_got.inc"
-#include "linker_x86_static_fixup.inc"
-#include "linker_i386_static_fixup.inc"
-#include "linker_aarch64_static_got.inc"
-#include "linker_aarch64_static_fixup.inc"
-#include "linker_loongarch_static_fixup.inc"
-#include "linker_riscv_static_got.inc"
-#include "linker_riscv_static_apply.inc"
-#include "linker_static_reloc_apply.inc"

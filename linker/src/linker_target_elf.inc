@@ -5,14 +5,17 @@
 #define MINILD_SHT_RISCV_ATTRIBUTES UINT32_C(0x70000003)
 
 struct MiniLdLayout;
+struct MiniLdOutputPlan;
 struct MiniLdStaticTargetPlan;
 struct MiniLdSharedTargetAbi;
 static const struct MiniLdSharedTargetAbi *minild_riscv_shared_target_abi(void);
 static bool minild_x86_apply_static_relocations(
     MiniLdState *state, const struct MiniLdLayout *layout,
+    const struct MiniLdOutputPlan *output_plan,
     const struct MiniLdStaticTargetPlan *plan);
 static bool minild_i386_apply_static_relocations(
     MiniLdState *state, const struct MiniLdLayout *layout,
+    const struct MiniLdOutputPlan *output_plan,
     const struct MiniLdStaticTargetPlan *plan);
 static bool minild_x86_reserve_static_relocations(
     MiniLdState *state, struct MiniLdStaticTargetPlan *plan);
@@ -25,6 +28,7 @@ static bool minild_x86_synthesize_default_boundaries(
     MiniLdState *state, const struct MiniLdLayout *layout);
 static bool minild_aarch64_apply_static_relocations(
     MiniLdState *state, const struct MiniLdLayout *layout,
+    const struct MiniLdOutputPlan *output_plan,
     const struct MiniLdStaticTargetPlan *plan);
 static bool minild_aarch64_reserve_static_relocations(
     MiniLdState *state, struct MiniLdStaticTargetPlan *plan);
@@ -37,6 +41,7 @@ static bool minild_aarch64_synthesize_default_boundaries(
     MiniLdState *state, const struct MiniLdLayout *layout);
 static bool minild_loongarch_apply_static_relocations(
     MiniLdState *state, const struct MiniLdLayout *layout,
+    const struct MiniLdOutputPlan *output_plan,
     const struct MiniLdStaticTargetPlan *plan);
 static bool minild_loongarch_reserve_static_relocations(
     MiniLdState *state, struct MiniLdStaticTargetPlan *plan);
@@ -54,6 +59,7 @@ static bool minild_riscv_fill_static_relocations(
     const struct MiniLdStaticTargetPlan *plan);
 static bool minild_riscv_apply_static_relocations(
     MiniLdState *state, const struct MiniLdLayout *layout,
+    const struct MiniLdOutputPlan *output_plan,
     const struct MiniLdStaticTargetPlan *plan);
 static void minild_riscv_destroy_static_relocations(
     struct MiniLdStaticTargetPlan *plan);
@@ -144,6 +150,7 @@ struct MiniLdTargetProfile {
                                      const struct MiniLdStaticTargetPlan *);
     bool (*apply_static_relocations)(MiniLdState *,
                                       const struct MiniLdLayout *,
+                                      const struct MiniLdOutputPlan *,
                                       const struct MiniLdStaticTargetPlan *);
     void (*destroy_static_relocations)(struct MiniLdStaticTargetPlan *);
     /* GNU linker-script PROVIDE symbols with psABI-specific names belong
@@ -439,6 +446,18 @@ bool minild_emulation_supports_kernel_pie_image(const char *emulation) {
     const MiniLdTargetProfile *target = minild_target_find(emulation);
 
     return target != NULL && target->supports_kernel_pie_image;
+}
+
+bool minild_emulation_supports_final_relocations(const char *emulation) {
+    const MiniLdTargetProfile *target = minild_target_find(emulation);
+
+    return target != NULL && target->final_reloc_kind != NULL;
+}
+
+bool minild_emulation_supports_cortex_a53_fix(const char *emulation) {
+    const MiniLdTargetProfile *target = minild_target_find(emulation);
+
+    return target != NULL && target->supports_cortex_a53_fix;
 }
 
 static bool minild_target_validate_kernel_shared_relocations(

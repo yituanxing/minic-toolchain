@@ -26,24 +26,12 @@ static bool shared_nonalloc_output_offset(const MiniLdState *state,
                                            size_t section,
                                            uint64_t offset,
                                            uint64_t *value_out) {
-    size_t shndx = minild_output_shndx(output_plan, section);
-    uint64_t start;
-    uint64_t base;
-
-    if (section >= state->work.count || shndx == 0U ||
-        shndx > output_plan->count) {
-        fprintf(state->diagnostics,
-                "minic-ld: invalid-shared-nonalloc-section\n");
-        return false;
-    }
-    start = layout->work[section].vaddr;
-    base = output_plan->sections[shndx - 1U].vaddr;
-    if (start < base || offset > UINT64_MAX - (start - base)) {
+    if (!minild_output_plan_nonalloc_value(
+            state, layout, output_plan, section, offset, value_out)) {
         fprintf(state->diagnostics,
                 "minic-ld: invalid-shared-nonalloc-offset\n");
         return false;
     }
-    *value_out = start - base + offset;
     return true;
 }
 

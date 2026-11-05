@@ -4,6 +4,7 @@
  * placement, and target post-layout materialization. */
 static bool static_apply_relocations(
     MiniLdState *state, const MiniLdLayout *layout,
+    const MiniLdOutputPlan *output_plan,
     const MiniLdStaticTargetPlan *plan) {
     if (state->target->apply_static_relocations == NULL) {
         fprintf(state->diagnostics,
@@ -11,5 +12,6 @@ static bool static_apply_relocations(
                 state->target->emulation);
         return false;
     }
-    return state->target->apply_static_relocations(state, layout, plan);
+    return state->target->apply_static_relocations(state, layout,
+                                                  output_plan, plan);
 }

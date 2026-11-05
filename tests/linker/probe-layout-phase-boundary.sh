@@ -54,6 +54,7 @@ names = (
     'linker_static_got.inc',
     'linker_static_reloc_scan.inc',
     'linker_static_reloc_operands.inc',
+    'linker_output_plan.inc',
     'linker_nonriscv_static_fixup.inc',
     'linker_x86_static_fixup.inc',
     'linker_aarch64_static_fixup.inc',
@@ -97,6 +98,7 @@ expected = {
     ('linker.c', 'linker_core.inc'),
     ('linker_core.inc', 'linker_common_allocation.inc'),
     ('linker_core.inc', 'linker_layout.inc'),
+    ('linker_core.inc', 'linker_output_plan.inc'),
     ('linker_layout.inc', 'linker_riscv_fixup.inc'),
     ('linker_layout.inc', 'linker_static_got.inc'),
     ('linker_layout.inc', 'linker_align_relax_common.inc'),
@@ -108,15 +110,15 @@ expected = {
     ('linker_static_got.inc', 'linker_static_reloc_scan.inc'),
     ('linker_layout_finalize.inc', 'linker_riscv_default_symbols.inc'),
     ('linker_layout_finalize.inc', 'linker_layout_symbols.inc'),
-    ('linker_layout_finalize.inc', 'linker_static_reloc_operands.inc'),
-    ('linker_layout_finalize.inc', 'linker_nonriscv_static_fixup.inc'),
-    ('linker_layout_finalize.inc', 'linker_x86_static_fixup.inc'),
-    ('linker_layout_finalize.inc', 'linker_aarch64_static_fixup.inc'),
-    ('linker_layout_finalize.inc', 'linker_loongarch_static_fixup.inc'),
-    ('linker_layout_finalize.inc', 'linker_riscv_static_got.inc'),
+    ('linker_core.inc', 'linker_static_reloc_operands.inc'),
+    ('linker_core.inc', 'linker_nonriscv_static_fixup.inc'),
+    ('linker_core.inc', 'linker_x86_static_fixup.inc'),
+    ('linker_core.inc', 'linker_aarch64_static_fixup.inc'),
+    ('linker_core.inc', 'linker_loongarch_static_fixup.inc'),
+    ('linker_core.inc', 'linker_riscv_static_got.inc'),
     ('linker_riscv_static_got.inc', 'linker_riscv_relax_plan.inc'),
-    ('linker_layout_finalize.inc', 'linker_riscv_static_apply.inc'),
-    ('linker_layout_finalize.inc', 'linker_static_reloc_apply.inc'),
+    ('linker_core.inc', 'linker_riscv_static_apply.inc'),
+    ('linker_core.inc', 'linker_static_reloc_apply.inc'),
 }
 targets = set(names) | {'linker_core.inc'}
 for source, contents in includes.items():
@@ -140,6 +142,12 @@ if not (layout.index('#include "linker_riscv_fixup.inc"') <
 if not (core.index('#include "linker_common_allocation.inc"') <
         core.index('#include "linker_admission.inc"')):
     raise SystemExit('MINILD_LAYOUT_PHASE_STRUCTURE=FAIL common_allocation_order')
+if not (core.index('#include "linker_layout.inc"') <
+        core.index('#include "linker_output_plan.inc"') <
+        core.index('#include "linker_static_reloc_operands.inc"') <
+        core.index('#include "linker_static_reloc_apply.inc"')):
+    raise SystemExit('MINILD_LAYOUT_PHASE_STRUCTURE=FAIL '
+                     'output_plan_before_static_fixup')
 
 # Prevent a second layout state/type owner from silently reappearing.
 type_owners = {
@@ -286,7 +294,7 @@ for expected_owner, functions in owners.items():
             raise SystemExit(f'MINILD_LAYOUT_PHASE_STRUCTURE=FAIL '
                              f'function={function} definitions={actual}')
 
-print('MINILD_LAYOUT_PHASE_STRUCTURE=PASS modules=21 '
+print('MINILD_LAYOUT_PHASE_STRUCTURE=PASS modules=22 '
       'single_layout_type=1 target_opaque_static_plan=1 '
       'explicit_target_owners=10 unique_phase_functions=30 '
       'include_graph=nonrecursive build=single_translation_unit')

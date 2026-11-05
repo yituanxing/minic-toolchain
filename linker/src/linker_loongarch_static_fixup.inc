@@ -523,6 +523,7 @@ static bool minild_loongarch_static_instruction_sites_valid(
 
 static bool minild_loongarch_apply_static_relocations(
     MiniLdState *state, const MiniLdLayout *layout,
+    const MiniLdOutputPlan *output_plan,
     const MiniLdStaticTargetPlan *plan) {
     static const MiniLdNonRiscvStaticOps ops = {
         minild_loongarch_static_fixup_class,
@@ -534,5 +535,6 @@ static bool minild_loongarch_apply_static_relocations(
 
     return minild_loongarch_static_validate_aligns(state, layout) &&
            minild_loongarch_static_instruction_sites_valid(state, layout) &&
-           minild_nonriscv_apply_with_ops(state, layout, plan, &ops);
+           minild_nonriscv_apply_with_ops(state, layout, output_plan,
+                                         plan, &ops);
 }

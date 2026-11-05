@@ -625,8 +625,8 @@ int main(int argc, char **argv) {
         return 2;
     }
     if (emit_relocs && (relocatable || shared_link || pie_link ||
-                        strcmp(emulation, "elf_x86_64") != 0)) {
-        fprintf(stderr, "minic-ld: --emit-relocs-requires-x86-static-link\n");
+                        !minild_emulation_supports_final_relocations(emulation))) {
+        fprintf(stderr, "minic-ld: --emit-relocs-requires-target-static-link\n");
         return 2;
     }
     if ((symbolic || no_apply_dynamic_relocs || pic_veneer) &&
@@ -635,8 +635,7 @@ int main(int argc, char **argv) {
         return 2;
     }
     if (fix_cortex_a53_843419 &&
-        ((strcmp(emulation, "aarch64linux") != 0 &&
-          strcmp(emulation, "aarch64elf") != 0) ||
+        (!minild_emulation_supports_cortex_a53_fix(emulation) ||
          relocatable || pie_link ||
          (shared_link && !kernel_shared_image))) {
         fprintf(stderr, "minic-ld: --fix-cortex-a53-843419-requires-aarch64-static-or-kernel-image\n");

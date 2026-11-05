@@ -3,6 +3,7 @@
  * classes, instruction bytes and the HI20/LO12 pairing contract. */
 static bool minild_riscv_apply_static_relocations(
     MiniLdState *state, const MiniLdLayout *layout,
+    const MiniLdOutputPlan *output_plan,
     const MiniLdStaticTargetPlan *plan) {
     const MiniLdRiscvStaticGot *got = plan->target_data;
     MiniLdTargetRelocPairs pairs;
@@ -31,7 +32,7 @@ static bool minild_riscv_apply_static_relocations(
         MiniLdTargetRelocClass kind = minild_target_reloc_class(reloc->type);
 
         if (!minild_static_reloc_source(
-                state, layout, reloc,
+                state, layout, output_plan, reloc,
                 "riscv-invalid-relocation-section", &section, &live)) {
             goto fail;
         }
@@ -41,7 +42,8 @@ static bool minild_riscv_apply_static_relocations(
             continue;
         }
         if (!minild_static_reloc_operands(
-                state, layout, reloc, "riscv-relocation-place-overflow",
+                state, layout, output_plan, reloc,
+                "riscv-relocation-place-overflow",
                 &operands)) {
             goto fail;
         }
@@ -115,12 +117,12 @@ static bool minild_riscv_apply_static_relocations(
                 }
                 sub_reloc = &state->relocations.entries[i + 1U];
                 if (!minild_static_reloc_source(
-                        state, layout, sub_reloc,
+                        state, layout, output_plan, sub_reloc,
                         "riscv-invalid-relocation-section",
                         &sub_section, &sub_live) || !sub_live ||
                     sub_section != section ||
                     !minild_static_reloc_operands(
-                        state, layout, sub_reloc,
+                        state, layout, output_plan, sub_reloc,
                         "riscv-relocation-place-overflow",
                         &sub_operands) ||
                     !minild_riscv_apply_uleb128_pair(
@@ -234,7 +236,7 @@ static bool minild_riscv_apply_static_relocations(
             continue;
         }
         if (!minild_static_reloc_source(
-                state, layout, reloc,
+                state, layout, output_plan, reloc,
                 "riscv-invalid-relocation-section", &section, &live)) {
             goto fail;
         }

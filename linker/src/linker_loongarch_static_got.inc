@@ -559,7 +559,7 @@ static bool minild_loongarch_fill_static_relocations(
                 continue;
             }
             if (!minild_static_reloc_source(
-                    state, layout, reloc,
+                    state, layout, NULL, reloc,
                     "loongarch-static-relative-source-invalid",
                     &source, &live)) {
                 free(records);
@@ -579,7 +579,7 @@ static bool minild_loongarch_fill_static_relocations(
                 continue;
             }
             if (!minild_static_reloc_operands(
-                    state, layout, reloc,
+                    state, layout, NULL, reloc,
                     "loongarch-static-relative-place-overflow", &operands) ||
                 !minild_loongarch_static_resolve_target(
                     state, layout, plan, reloc, &operands.target_bits)) {

@@ -83,6 +83,39 @@ static bool minild_output_plan_tls_symbol_value(
     return true;
 }
 
+/* Non-ALLOC ET_EXEC/ET_DYN sections have sh_addr=0.  A relocation or final
+ * symbol inside one must use the byte position within its *output* section,
+ * not a work-fragment value or a temporary linker-script dot address.
+ * Symbol projection, shared relocation and static relocation all consume
+ * this same checked ownership/offset mapping. */
+static bool minild_output_plan_nonalloc_value(
+    const MiniLdState *state,
+    const MiniLdLayout *layout,
+    const MiniLdOutputPlan *plan,
+    size_t work,
+    uint64_t input_offset,
+    uint64_t *value_out) {
+    size_t shndx;
+    uint64_t fragment_start;
+    uint64_t output_start;
+
+    if (plan == NULL || layout == NULL || layout->work == NULL ||
+        work >= state->work.count ||
+        (state->work.sections[work].flags & SHF_ALLOC) != 0U ||
+        (shndx = minild_output_shndx(plan, work)) == 0U ||
+        shndx > plan->count) {
+        return false;
+    }
+    fragment_start = layout->work[work].vaddr;
+    output_start = plan->sections[shndx - 1U].vaddr;
+    if (fragment_start < output_start ||
+        input_offset > UINT64_MAX - (fragment_start - output_start)) {
+        return false;
+    }
+    *value_out = fragment_start - output_start + input_offset;
+    return true;
+}
+
 static int minild_output_section_compare(const void *left,
                                          const void *right) {
     const MiniLdOutputSection *a = left;

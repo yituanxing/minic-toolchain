@@ -206,13 +206,14 @@ static int minild_link_static_pipeline(
 
     if (!static_synthesize_runtime_boundaries(&state, &layout) ||
         !static_fill_target_relocations(&state, &layout, &static_reloc_plan) ||
-        !static_apply_relocations(&state, &layout, &static_reloc_plan)) {
+        !minild_output_plan_build(&state, &layout, &output_plan) ||
+        !static_apply_relocations(&state, &layout, &output_plan,
+                                  &static_reloc_plan)) {
         goto done;
     }
     minild_perf_phase("relocations", &phase_start, &state, diagnostics);
 
     if (!static_entry_address(&state, &layout, entry_symbol, &entry) ||
-        !minild_output_plan_build(&state, &layout, &output_plan) ||
         !static_write_executable(&state, &layout, &output_plan,
                                  output_path, entry,
                                  options != NULL && options->output_et_dyn,

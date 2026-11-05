@@ -352,7 +352,7 @@ static bool minild_aarch64_kernel_emit_weak_dynrels(
             !minild_aarch64_kernel_undefined_weak(state, reloc->symbol)) {
             continue;
         }
-        if (!minild_static_reloc_source(state, layout, reloc,
+        if (!minild_static_reloc_source(state, layout, NULL, reloc,
                                        "aarch64-kernel-weak-source",
                                        &source, &live)) goto out;
         if (live && (source->flags & SHF_ALLOC) != 0U) {
@@ -414,14 +414,14 @@ static bool minild_aarch64_kernel_emit_weak_dynrels(
         if (reloc->type != R_AARCH64_ABS64 ||
             reloc->symbol >= got->symbol_count ||
             dynamic_index[reloc->symbol] == SIZE_MAX) continue;
-        if (!minild_static_reloc_source(state, layout, reloc,
+        if (!minild_static_reloc_source(state, layout, NULL, reloc,
                                        "aarch64-kernel-weak-source",
                                        &source, &live)) goto out;
         if (!live || (source->flags & SHF_ALLOC) == 0U) continue;
         if (source->type == SHT_NOBITS || reloc->offset > SIZE_MAX ||
             !range_ok((size_t)reloc->offset, 8U, source->size) ||
             !minild_static_reloc_operands(
-                state, layout, reloc,
+                state, layout, NULL, reloc,
                 "aarch64-kernel-weak-place", &operands) ||
             record_count >= got->kernel_relative_reserved_count) goto out;
         records[record_count].place = operands.place;
@@ -903,7 +903,7 @@ static bool minild_aarch64_fill_static_relocations(
 
             if (reloc->type != R_AARCH64_ABS32) continue;
             if (!minild_static_reloc_source(
-                    state, layout, reloc,
+                    state, layout, NULL, reloc,
                     "aarch64-kernel-abs32-invalid-source", &source, &live)) {
                 return false;
             }
@@ -948,7 +948,7 @@ static bool minild_aarch64_fill_static_relocations(
             if (!minild_aarch64_kernel_relative_target(state, reloc)) {
                 continue;
             }
-            if (!minild_static_reloc_source(state, layout, reloc,
+            if (!minild_static_reloc_source(state, layout, NULL, reloc,
                                            "aarch64-kernel-relative-source",
                                            &source, &live)) {
                 free(records);
@@ -961,7 +961,7 @@ static bool minild_aarch64_fill_static_relocations(
                 reloc->offset > SIZE_MAX ||
                 !range_ok((size_t)reloc->offset, 8U, source->size) ||
                 !minild_static_reloc_operands(
-                    state, layout, reloc,
+                    state, layout, NULL, reloc,
                     "aarch64-kernel-relative-place-overflow", &operands) ||
                 count >= got->kernel_relative_reserved_count) {
                 free(records);

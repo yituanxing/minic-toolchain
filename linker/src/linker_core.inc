@@ -629,6 +629,21 @@ static bool find_or_add_section(MiniLdState *state,
 
 #include "linker_output_plan.inc"
 
+/* All static relocation leaves consume the final output-section mapping.
+ * The model must be declared after Layout and OutputPlan, and the fixup
+ * pass only reads that projection; no target can invent a second mapping. */
+#include "linker_static_reloc_operands.inc"
+#include "linker_nonriscv_static_fixup.inc"
+#include "linker_x86_static_got.inc"
+#include "linker_x86_static_fixup.inc"
+#include "linker_i386_static_fixup.inc"
+#include "linker_aarch64_static_got.inc"
+#include "linker_aarch64_static_fixup.inc"
+#include "linker_loongarch_static_fixup.inc"
+#include "linker_riscv_static_got.inc"
+#include "linker_riscv_static_apply.inc"
+#include "linker_static_reloc_apply.inc"
+
 #include "linker_final_symbols.inc"
 
 #include "linker_program_plan.inc"

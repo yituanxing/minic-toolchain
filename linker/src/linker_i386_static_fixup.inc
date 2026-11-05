@@ -16,11 +16,13 @@ static MiniLdNonRiscvFixup minild_i386_static_fixup_class(uint32_t type) {
 
 static bool minild_i386_apply_static_relocations(
     MiniLdState *state, const MiniLdLayout *layout,
+    const MiniLdOutputPlan *output_plan,
     const MiniLdStaticTargetPlan *plan) {
     static const MiniLdNonRiscvStaticOps ops = {
         minild_i386_static_fixup_class,
         NULL, NULL, NULL, NULL
     };
 
-    return minild_nonriscv_apply_with_ops(state, layout, plan, &ops);
+    return minild_nonriscv_apply_with_ops(state, layout, output_plan,
+                                         plan, &ops);
 }

@@ -217,6 +217,7 @@ static bool minild_x86_resolve_static_got_target(
 
 static bool minild_x86_apply_static_relocations(
     MiniLdState *state, const MiniLdLayout *layout,
+    const MiniLdOutputPlan *output_plan,
     const MiniLdStaticTargetPlan *plan) {
     static const MiniLdNonRiscvStaticOps ops = {
         minild_x86_static_fixup_class,
@@ -226,5 +227,6 @@ static bool minild_x86_apply_static_relocations(
         NULL
     };
 
-    return minild_nonriscv_apply_with_ops(state, layout, plan, &ops);
+    return minild_nonriscv_apply_with_ops(state, layout, output_plan,
+                                         plan, &ops);
 }
