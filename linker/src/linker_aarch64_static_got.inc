@@ -484,6 +484,19 @@ static bool minild_aarch64_kernel_symbol_rebases(
            (state->work.sections[symbol->section].flags & SHF_ALLOC) != 0U;
 }
 
+/* AArch64 BFD emits R_RELATIVE for a non-preemptible GOT entry even when its
+ * definition is SHN_ABS (including a late linker-script PROVIDE).  Direct
+ * ABS64 data references to an absolute definition stay link-time constants;
+ * only the GOT slot needs this extra dynamic relocation. */
+static bool minild_aarch64_kernel_got_needs_relative(
+    const MiniLdState *state, size_t symbol_index) {
+    if (!state->kernel_shared_image ||
+        symbol_index >= state->resolver.count) return false;
+    return state->resolver.entries[symbol_index].section ==
+               MINILD_SECTION_ABS ||
+           minild_aarch64_kernel_symbol_rebases(state, symbol_index);
+}
+
 static bool minild_aarch64_kernel_relative_target(
     const MiniLdState *state, const MiniLdReloc *reloc) {
     return reloc->type == R_AARCH64_ABS64 &&
@@ -967,7 +980,7 @@ static bool minild_aarch64_fill_static_relocations(
                 size_t slot_offset = got->slot_offsets[i];
 
                 if (slot_offset == SIZE_MAX ||
-                    !minild_aarch64_kernel_symbol_rebases(state, i)) {
+                    !minild_aarch64_kernel_got_needs_relative(state, i)) {
                     continue;
                 }
                 if (count >= got->kernel_relative_reserved_count ||

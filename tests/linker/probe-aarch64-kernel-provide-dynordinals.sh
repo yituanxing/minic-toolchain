@@ -101,8 +101,16 @@ def extract(path, expected_index):
     records=list(struct.iter_unpack('<QQq',
                 image[rela[4]:rela[4]+rela[5]]))
     glob=[rec for rec in records if (rec[1]&0xffffffff)==1025]
+    relative=[rec for rec in records if (rec[1]&0xffffffff)==1027]
     assert len(glob)==1,(path,records)
     assert (glob[0][1]>>32)==expected_index,(path,glob,expected_index)
+    assert len(records)==3 and len(relative)==2,(path,records)
+    assert sorted(rec[2] for rec in relative)==[0x11223344,0x55667788],(
+        path,relative)
+    assert all((rec[1]>>32)==0 for rec in relative),(path,relative)
+    assert relative==[(sections['.got'][3]+16,1027,0x11223344),
+                     (sections['.got'][3]+24,1027,0x55667788)],(
+        path,relative)
     return records
 
 single=extract(sys.argv[1],4)
