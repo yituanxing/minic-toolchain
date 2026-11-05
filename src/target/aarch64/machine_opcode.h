@@ -83,6 +83,9 @@ typedef enum MinicA64MachineOpcode {
     MINIC_A64_MACHINE_LDP_POST_X,
     MINIC_A64_MACHINE_ADRP,
     MINIC_A64_MACHINE_ADD_LO12,
+    /* PC-relative address of an owned Machine block, not a CFG edge. */
+    MINIC_A64_MACHINE_ADRP_BLOCK,
+    MINIC_A64_MACHINE_ADD_LO12_BLOCK,
     MINIC_A64_MACHINE_LDR_GOT_LO12,
     MINIC_A64_MACHINE_B,
     MINIC_A64_MACHINE_B_COND,

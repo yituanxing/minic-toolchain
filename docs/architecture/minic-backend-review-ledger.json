@@ -10,7 +10,7 @@
     672,
     673
   ],
-  "audit_in_progress": "MiniC architecture consolidation: Direct LP64 ABI policies, trusted Core ASM source provenance, x86 physical register banks, and RV64 frame scratch liveness. New source owners are indexed without silently certifying stale blob reviews. Exact-head Linux .i-to-.s, GNU AS, link and QEMU are independent evidence; the four-architecture runtime has three pre-existing failures (x86 typed overflow, AArch64 x8 sret, LoongArch hidden a0).",
+  "audit_in_progress": "Core-to-physical-MachineIR migration: LoongArch64 whole-function production selection has a live typed-output inode witness for nine supported fixtures, with one historical unsupported case still rejected; GNU AS/LD/QEMU/Linux runtime acceptance is pending. RV32/RV64, x86-64 and AArch64 have additional typed selector families but retain legacy production entrypoints until whole-function coverage and ABI parity are proven. New source owners are inventory-only; stale fingerprints reopen review and do not imply full-source certification.",
   "next_deep_review": [
     "src/target/aarch64/frame_emit.c",
     "src/target/loongarch64/frame_emit.c",
@@ -19,6 +19,136 @@
     "src/target/riscv32/rv32_frame.c"
   ],
   "files": {
+    "src/target/aarch64/machine_core_select.c": {
+      "blob": "00099811420372b5751e5a6640e4954753fd39af",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/aarch64/machine_core_select.h": {
+      "blob": "7d219d15b2b3bad8a6bcdbf9426acbc14ccdc345",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/aarch64/machine_frame_select.c": {
+      "blob": "1a02c468555c67592aa9dbc67bfc1ab06b1bdbdd",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/aarch64/machine_frame_select.h": {
+      "blob": "69d4e3bcf983d633d4ab4e3bf707e2c7e2c90b38",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/aarch64/machine_source_asm.c": {
+      "blob": "27291f9fd32795bf4ad0b7f7cbaeca0d45589419",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/aarch64/machine_source_asm.h": {
+      "blob": "53e87e6835c551d67f96bc8d95245f590b2a6414",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/common/core_machine_asm.h": {
+      "blob": "dc51088101ba7eafeae6e89063d591a68536c77a",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/common/machine_core_coverage.c": {
+      "blob": "ac0633a55b9311e87704858f96a9e4c7ebb2a6e1",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/common/machine_core_coverage.h": {
+      "blob": "8ea7bd21031989e07c0407261d5a91eb7f7a50eb",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/common/machine_lp64_frame.h": {
+      "blob": "523612d2de9718fdfd64c1532b3c7380225ef2a3",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/common/machine_source_asm_template.c": {
+      "blob": "4ea2cefa8b6c4eb86a634625eedf3dd990634f41",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/common/machine_source_asm_template.h": {
+      "blob": "e10b6c524a2fe17622c9c9e178b02b976b1b05df",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/loongarch64/machine_asm_form.c": {
+      "blob": "67e91ba873ad493b7d898c39965ff4ffab999719",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/loongarch64/machine_asm_form.h": {
+      "blob": "7a267b9e3ab786eb1c5ae6c1496f70c3b048a79d",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/loongarch64/machine_select.c": {
+      "blob": "d2ef2d921b269d81bb690c82e47970d90ecae7b0",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/loongarch64/machine_select.h": {
+      "blob": "e85ab0ebe3b56981cf34d82a2dad1ccfa63ac96c",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/loongarch64/machine_source_asm.c": {
+      "blob": "d36ce669f05702428946aa4feefd37972c1d3e73",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/loongarch64/machine_source_asm.h": {
+      "blob": "c3c0b6c6f28ca900ac3aa5850b6bbecfeed7b71b",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/riscv/machine_core_select.c": {
+      "blob": "616e148186c23909b90b33203fc6dde1ca56a876",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/riscv/machine_core_select.h": {
+      "blob": "8ea89d79a87091296aac99426d10405becc8b44a",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/riscv/machine_frame_select.c": {
+      "blob": "15ff0e04e2d0be40e94a0ad85f38d36397c87c5f",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/riscv/machine_frame_select.h": {
+      "blob": "aac88eddae4e976597636bd5c0e5ad2b0f003353",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/x86_64/machine_core_select.c": {
+      "blob": "68a9f637d1ae5e56d59b5f4e4cc93c3dd67c5386",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/x86_64/machine_core_select.h": {
+      "blob": "717a29e3eab24711e83ee03332669c48cd01fac1",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/x86_64/machine_frame_select.c": {
+      "blob": "10192a8cc3f391d6362f2b90120ea3f66546dfba",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/x86_64/machine_frame_select.h": {
+      "blob": "4756b0282c394186a28c82251948bc5bfcc835ad",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
     "src/target/aarch64/machine_gnu_asm.c": {
       "blob": "b72c65f56100a59074b25cb8935bc959c85772a8",
       "review_depth": "inventory",

@@ -237,6 +237,7 @@ static bool rv_check_frame(MinicMachineBuilder *builder,
         frame->frame_size % 16U != 0U ||
         frame->outgoing_size > frame->frame_size ||
         frame->first_variadic_gpr > 8U ||
+        frame->named_stack_argument_slots > (size_t)INT32_MAX / word ||
         frame->has_dynamic_stack_alignment !=
             (frame->stack_alignment > 16U) ||
         (frame->has_dynamic_stack_alignment &&

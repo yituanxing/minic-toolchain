@@ -9,8 +9,11 @@
 #include "target/common/core_block_walk.h"
 #include "target/common/machine_gnu_asm.h"
 #include "target/common/direct_instruction_semantics.h"
+#include "target/common/core_numeric_shape.h"
+#include "target/common/direct_residual_plan.h"
 #include "target/common/elf_module_symbol_info.h"
 #include "target/common/lp64_scalar.h"
+#include "core/symbol_identity.h"
 
 #include <limits.h>
 #include <stdint.h>
@@ -20,6 +23,12 @@
 /* The physical scratch convention deliberately matches the original native
  * x86 backend. Every Core value still lives in its finalized RBP frame slot;
  * this is instruction selection, not register allocation or optimization. */
+typedef struct X86AuxBlocks {
+    size_t first;
+    size_t second;
+    size_t third;
+} X86AuxBlocks;
+
 typedef struct X86CoreSelector {
     MinicMachineBuilder builder;
     MinicMachineGNUAsmPolicy policy;
@@ -30,6 +39,7 @@ typedef struct X86CoreSelector {
     size_t *blocks;
     size_t *false_blocks;
     bool *reachable;
+    X86AuxBlocks *instruction_aux;
 } X86CoreSelector;
 
 static MinicMachineOperand x86_reg(unsigned int number, unsigned int bits) {
@@ -77,6 +87,16 @@ static MinicMachineOperand x86_addr(unsigned int base, int64_t offset) {
         base, 64U, MINIC_MACHINE_REGISTER_GENERAL};
     op.value.address.displacement = offset;
     op.value.address.scale = 1U;
+    return op;
+}
+
+static MinicMachineOperand x86_indexed_addr(unsigned int base,
+    unsigned int index, unsigned int scale) {
+    MinicMachineOperand op = x86_addr(base, 0);
+    op.value.address.has_index = true;
+    op.value.address.index = (MinicMachineRegister){
+        index, 64U, MINIC_MACHINE_REGISTER_GENERAL};
+    op.value.address.scale = scale;
     return op;
 }
 
@@ -1145,6 +1165,482 @@ static bool x86_compiler_barrier(X86CoreSelector *sel,
         minic_machine_builder_emit_compiler_barrier(&sel->builder);
 }
 
+/* Legacy integer scans deliberately use baseline BSF/BSR, not BMI1.
+ * Make their zero input defined before scanning by setting one sentinel
+ * bit. For CLZ this bit is the low bit; for CTZ it is the highest bit of
+ * the Core operand width. The captured zero flag contributes one to the
+ * result, exactly matching GNU's zero-extension fallback at widths 8..64.
+ * No target-dependent label text or speculative undefined BSF result. */
+static bool x86_integer_bitscan(X86CoreSelector *sel,
+    const MinicCoreInstruction *ins) {
+    unsigned int width;
+    const bool clz = ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_CLZ;
+    if (!minic_core_integer_bitscan_shape(sel->core, ins, &width) ||
+        ins->result >= sel->core->value_count ||
+        !x86_core_load(sel, ins->value.operand, MINIC_X86_REG_RAX) ||
+        !x86_rr(sel, MINIC_X86_MI_TEST64_RR, 64U,
+            MINIC_X86_REG_RAX, MINIC_X86_REG_RAX) ||
+        !x86_1(sel, MINIC_X86_MI_SETZ8_R,
+            x86_reg(MINIC_X86_REG_R11, 8U)) ||
+        !x86_2(sel, MINIC_X86_MI_MOVZBQ_RR,
+            x86_reg(MINIC_X86_REG_R11, 8U),
+            x86_reg(MINIC_X86_REG_R11, 64U))) return false;
+    if (clz) {
+        if (!x86_ir(sel, MINIC_X86_MI_OR64_IR, 1, 64U,
+                MINIC_X86_REG_RAX) ||
+            !x86_rr(sel, MINIC_X86_MI_BSR64_RR, 64U,
+                MINIC_X86_REG_RAX, MINIC_X86_REG_R10) ||
+            !x86_ir(sel, MINIC_X86_MI_MOV64_IR,
+                (int64_t)width - 1, 64U, MINIC_X86_REG_RAX) ||
+            !x86_rr(sel, MINIC_X86_MI_SUB64_RR, 64U,
+                MINIC_X86_REG_R10, MINIC_X86_REG_RAX)) return false;
+    } else {
+        if (!x86_ir(sel, MINIC_X86_MI_MOVABS64_IR,
+                (int64_t)(UINT64_C(1) << (width - 1U)),
+                64U, MINIC_X86_REG_R10) ||
+            !x86_rr(sel, MINIC_X86_MI_OR64_RR, 64U,
+                MINIC_X86_REG_R10, MINIC_X86_REG_RAX) ||
+            !x86_rr(sel, MINIC_X86_MI_BSF64_RR, 64U,
+                MINIC_X86_REG_RAX, MINIC_X86_REG_RAX)) return false;
+    }
+    return x86_rr(sel, MINIC_X86_MI_ADD64_RR, 64U,
+            MINIC_X86_REG_R11, MINIC_X86_REG_RAX) &&
+        x86_result(sel, ins);
+}
+
+static bool x86_integer_extend(X86CoreSelector *sel,
+    unsigned int reg, size_t width, bool sign) {
+    switch (width) {
+    case 1U:
+        return x86_2(sel, sign ? MINIC_X86_MI_MOVSBQ_RR :
+                MINIC_X86_MI_MOVZBQ_RR,
+            x86_reg(reg, 8U), x86_reg(reg, 64U));
+    case 2U:
+        return x86_2(sel, sign ? MINIC_X86_MI_MOVSWQ_RR :
+                MINIC_X86_MI_MOVZWQ_RR,
+            x86_reg(reg, 16U), x86_reg(reg, 64U));
+    case 4U:
+        return sign ? x86_2(sel, MINIC_X86_MI_MOVSLQ_RR,
+                x86_reg(reg, 32U), x86_reg(reg, 64U)) :
+            x86_rr(sel, MINIC_X86_MI_MOV32_RR, 32U, reg, reg);
+    case 8U: return true;
+    default: return false;
+    }
+}
+
+static bool x86_overflow_result_memory(X86CoreSelector *sel,
+    MinicCoreValueId pointer, size_t width) {
+    MinicX86MachineOpcode opcode;
+    switch (width) {
+    case 1U: opcode = MINIC_X86_MI_MOV8_RA; break;
+    case 2U: opcode = MINIC_X86_MI_MOV16_RA; break;
+    case 4U: opcode = MINIC_X86_MI_MOV32_RA; break;
+    case 8U: opcode = MINIC_X86_MI_MOV64_RA; break;
+    default: return false;
+    }
+    return x86_record_pointer(sel, pointer, MINIC_X86_REG_R10) &&
+        x86_2(sel, opcode,
+            x86_reg(MINIC_X86_REG_RAX, (unsigned int)(width * 8U)),
+            x86_addr(MINIC_X86_REG_R10, 0));
+}
+
+/* A matched-width overflow op fits the hardware flags directly. Preserve
+ * the low result in *result_address before the returned boolean, including
+ * the unsigned 32-bit MUL that requires EDX:EAX, not the 64-bit product. */
+static bool x86_integer_overflow_matched(X86CoreSelector *sel,
+    const MinicCoreInstruction *ins, size_t width, bool sign) {
+    MinicX86MachineOpcode opcode;
+    bool use_carry = false;
+    const unsigned int bits = (unsigned int)(width * 8U);
+    const MinicCoreValueId left = ins->value.integer_overflow.left;
+    const MinicCoreValueId right = ins->value.integer_overflow.right;
+    if (!x86_core_load(sel, left, MINIC_X86_REG_RAX) ||
+        !x86_core_load(sel, right, MINIC_X86_REG_R10)) return false;
+    switch (ins->value.integer_overflow.operator_kind) {
+    case MINIC_CORE_INTEGER_OVERFLOW_ADD:
+        opcode = width == 8U ? MINIC_X86_MI_ADD64_RR : MINIC_X86_MI_ADD32_RR;
+        use_carry = !sign;
+        break;
+    case MINIC_CORE_INTEGER_OVERFLOW_SUBTRACT:
+        opcode = width == 8U ? MINIC_X86_MI_SUB64_RR : MINIC_X86_MI_SUB32_RR;
+        use_carry = !sign;
+        break;
+    case MINIC_CORE_INTEGER_OVERFLOW_MULTIPLY:
+        opcode = sign ? (width == 8U ? MINIC_X86_MI_IMUL64_RR :
+                MINIC_X86_MI_IMUL32_RR) :
+            (width == 8U ? MINIC_X86_MI_MUL64_R : MINIC_X86_MI_MUL32_R);
+        break;
+    default: return false;
+    }
+    if (!(ins->value.integer_overflow.operator_kind ==
+            MINIC_CORE_INTEGER_OVERFLOW_MULTIPLY && !sign
+            ? x86_1(sel, opcode, x86_reg(MINIC_X86_REG_R10, bits))
+            : x86_rr(sel, opcode, bits,
+                MINIC_X86_REG_R10, MINIC_X86_REG_RAX)) ||
+        !x86_1(sel, use_carry ? MINIC_X86_MI_SETC8_R :
+            MINIC_X86_MI_SETO8_R,
+            x86_reg(MINIC_X86_REG_R11, 8U)) ||
+        !x86_overflow_result_memory(sel,
+            ins->value.integer_overflow.result_address, width) ||
+        !x86_2(sel, MINIC_X86_MI_MOVZBQ_RR,
+            x86_reg(MINIC_X86_REG_R11, 8U),
+            x86_reg(MINIC_X86_REG_RAX, 64U))) return false;
+    return x86_result(sel, ins);
+}
+
+/* The GNU mixed-type builtin uses unbounded mathematical arithmetic to
+ * decide overflow. Build an exact signed high limb for ADD/SUB/MUL rather
+ * than applying the result type to operands before computing flags. */
+static bool x86_integer_overflow_mixed(X86CoreSelector *sel,
+    const MinicCoreInstruction *ins) {
+    MinicCoreTypeId result_type;
+    const MinicCoreType *result;
+    size_t left_width, right_width, result_width;
+    bool left_sign, right_sign, result_sign;
+    const MinicCoreValueId left = ins->value.integer_overflow.left;
+    const MinicCoreValueId right = ins->value.integer_overflow.right;
+    const MinicCoreValueId address =
+        ins->value.integer_overflow.result_address;
+    if (ins->result >= sel->core->value_count ||
+        left >= sel->core->value_count ||
+        right >= sel->core->value_count ||
+        address >= sel->core->value_count ||
+        !minic_lp64_core_pointer_pointee(sel->core->type_context,
+            sel->core->values[address].core_type_id, &result_type) ||
+        (result = x86_type(sel, result_type)) == NULL ||
+        result->kind != MINIC_CORE_TYPE_INTEGER ||
+        result->value.integer.is_bool ||
+        !minic_x86_64_core_scalar_width(sel->core->type_context,
+            sel->core->values[left].core_type_id,
+            &left_width, &left_sign) ||
+        !minic_x86_64_core_scalar_width(sel->core->type_context,
+            sel->core->values[right].core_type_id,
+            &right_width, &right_sign) ||
+        !minic_x86_64_core_scalar_width(sel->core->type_context,
+            result_type, &result_width, &result_sign) ||
+        !x86_core_load(sel, left, MINIC_X86_REG_RAX) ||
+        !x86_core_load(sel, right, MINIC_X86_REG_R10) ||
+        !x86_integer_extend(sel, MINIC_X86_REG_RAX,
+            left_width, left_sign) ||
+        !x86_integer_extend(sel, MINIC_X86_REG_R10,
+            right_width, right_sign)) return false;
+    switch (ins->value.integer_overflow.operator_kind) {
+    case MINIC_CORE_INTEGER_OVERFLOW_MULTIPLY:
+        if (!x86_rr(sel, MINIC_X86_MI_MOV64_RR, 64U,
+                MINIC_X86_REG_RAX, MINIC_X86_REG_R11) ||
+            !x86_rr(sel, MINIC_X86_MI_MOV64_RR, 64U,
+                MINIC_X86_REG_RAX, MINIC_X86_REG_R8) ||
+            !(left_sign ? x86_ir(sel, MINIC_X86_MI_SAR64_IR, 63,
+                    64U, MINIC_X86_REG_R8) :
+                x86_rr(sel, MINIC_X86_MI_XOR64_RR, 64U,
+                    MINIC_X86_REG_R8, MINIC_X86_REG_R8)) ||
+            !x86_rr(sel, MINIC_X86_MI_AND64_RR, 64U,
+                MINIC_X86_REG_R10, MINIC_X86_REG_R8) ||
+            !x86_rr(sel, MINIC_X86_MI_MOV64_RR, 64U,
+                MINIC_X86_REG_R10, MINIC_X86_REG_R9) ||
+            !(right_sign ? x86_ir(sel, MINIC_X86_MI_SAR64_IR, 63,
+                    64U, MINIC_X86_REG_R9) :
+                x86_rr(sel, MINIC_X86_MI_XOR64_RR, 64U,
+                    MINIC_X86_REG_R9, MINIC_X86_REG_R9)) ||
+            !x86_rr(sel, MINIC_X86_MI_AND64_RR, 64U,
+                MINIC_X86_REG_R11, MINIC_X86_REG_R9) ||
+            !x86_1(sel, MINIC_X86_MI_MUL64_R,
+                x86_reg(MINIC_X86_REG_R10, 64U)) ||
+            !x86_rr(sel, MINIC_X86_MI_SUB64_RR, 64U,
+                MINIC_X86_REG_R8, MINIC_X86_REG_RDX) ||
+            !x86_rr(sel, MINIC_X86_MI_SUB64_RR, 64U,
+                MINIC_X86_REG_R9, MINIC_X86_REG_RDX) ||
+            !x86_rr(sel, MINIC_X86_MI_MOV64_RR, 64U,
+                MINIC_X86_REG_RDX, MINIC_X86_REG_R8)) return false;
+        break;
+    case MINIC_CORE_INTEGER_OVERFLOW_ADD:
+    case MINIC_CORE_INTEGER_OVERFLOW_SUBTRACT:
+        if (!x86_rr(sel, MINIC_X86_MI_MOV64_RR, 64U,
+                MINIC_X86_REG_RAX, MINIC_X86_REG_R8) ||
+            !(left_sign ? x86_ir(sel, MINIC_X86_MI_SAR64_IR, 63,
+                    64U, MINIC_X86_REG_R8) :
+                x86_rr(sel, MINIC_X86_MI_XOR64_RR, 64U,
+                    MINIC_X86_REG_R8, MINIC_X86_REG_R8)) ||
+            !x86_rr(sel, MINIC_X86_MI_MOV64_RR, 64U,
+                MINIC_X86_REG_R10, MINIC_X86_REG_R9) ||
+            !(right_sign ? x86_ir(sel, MINIC_X86_MI_SAR64_IR, 63,
+                    64U, MINIC_X86_REG_R9) :
+                x86_rr(sel, MINIC_X86_MI_XOR64_RR, 64U,
+                    MINIC_X86_REG_R9, MINIC_X86_REG_R9)) ||
+            !x86_rr(sel, ins->value.integer_overflow.operator_kind ==
+                MINIC_CORE_INTEGER_OVERFLOW_ADD ? MINIC_X86_MI_ADD64_RR :
+                MINIC_X86_MI_SUB64_RR, 64U,
+                MINIC_X86_REG_R10, MINIC_X86_REG_RAX) ||
+            !x86_rr(sel, ins->value.integer_overflow.operator_kind ==
+                MINIC_CORE_INTEGER_OVERFLOW_ADD ? MINIC_X86_MI_ADC64_RR :
+                MINIC_X86_MI_SBB64_RR, 64U,
+                MINIC_X86_REG_R9, MINIC_X86_REG_R8)) return false;
+        break;
+    default: return false;
+    }
+    if (!x86_overflow_result_memory(sel, address, result_width) ||
+        !x86_2(sel, result_width == 1U
+                ? (result_sign ? MINIC_X86_MI_MOVSBQ_RR :
+                    MINIC_X86_MI_MOVZBQ_RR)
+                : result_width == 2U
+                    ? (result_sign ? MINIC_X86_MI_MOVSWQ_RR :
+                        MINIC_X86_MI_MOVZWQ_RR)
+                    : result_width == 4U
+                        ? (result_sign ? MINIC_X86_MI_MOVSLQ_RR :
+                            MINIC_X86_MI_MOV32_RR)
+                        : MINIC_X86_MI_MOV64_RR,
+            x86_reg(MINIC_X86_REG_RAX,
+                (unsigned int)(result_width * 8U)),
+            x86_reg(MINIC_X86_REG_R11,
+                result_width == 4U && !result_sign ? 32U : 64U)) ||
+        !x86_rr(sel, MINIC_X86_MI_CMP64_RR, 64U,
+            MINIC_X86_REG_R11, MINIC_X86_REG_RAX) ||
+        !x86_1(sel, MINIC_X86_MI_SETNZ8_R,
+            x86_reg(MINIC_X86_REG_R9, 8U)) ||
+        !x86_rr(sel, MINIC_X86_MI_MOV64_RR, 64U,
+            MINIC_X86_REG_R11, MINIC_X86_REG_R10) ||
+        !(result_sign ? x86_ir(sel, MINIC_X86_MI_SAR64_IR, 63,
+                64U, MINIC_X86_REG_R10) :
+            x86_rr(sel, MINIC_X86_MI_XOR64_RR, 64U,
+                MINIC_X86_REG_R10, MINIC_X86_REG_R10)) ||
+        !x86_rr(sel, MINIC_X86_MI_CMP64_RR, 64U,
+            MINIC_X86_REG_R10, MINIC_X86_REG_R8) ||
+        !x86_1(sel, MINIC_X86_MI_SETNZ8_R,
+            x86_reg(MINIC_X86_REG_R10, 8U)) ||
+        !x86_rr(sel, MINIC_X86_MI_OR8_RR, 8U,
+            MINIC_X86_REG_R10, MINIC_X86_REG_R9) ||
+        !x86_2(sel, MINIC_X86_MI_MOVZBQ_RR,
+            x86_reg(MINIC_X86_REG_R9, 8U),
+            x86_reg(MINIC_X86_REG_RAX, 64U))) return false;
+    return x86_result(sel, ins);
+}
+
+static bool x86_integer_overflow(X86CoreSelector *sel,
+    const MinicCoreInstruction *ins) {
+    size_t width;
+    bool signed_result;
+    if (minic_core_integer_overflow_shape(sel->core, ins,
+            &width, &signed_result))
+        return x86_integer_overflow_matched(sel, ins, width, signed_result);
+    return x86_integer_overflow_mixed(sel, ins);
+}
+
+static bool x86_fixed_register_read(X86CoreSelector *sel,
+    const MinicCoreInstruction *ins) {
+    const MinicCoreFixedRegisterBinding *binding;
+    return minic_multi_direct_fixed_register_read_shape(
+            sel->target, sel->core, ins, &binding) &&
+        binding->register_name_length == 3U &&
+        memcmp(binding->register_name, "rsp", 3U) == 0 &&
+        x86_rr(sel, MINIC_X86_MI_MOV64_RR, 64U,
+            MINIC_X86_REG_RSP, MINIC_X86_REG_RAX) &&
+        x86_core_store(sel, ins->result, MINIC_X86_REG_RAX);
+}
+
+static bool x86_block_address(X86CoreSelector *sel,
+    const MinicCoreInstruction *ins) {
+    MinicCoreBlockId destination;
+    const char *symbol;
+    if (!minic_multi_direct_block_address_shape(sel->core, ins,
+            &destination) || !sel->reachable[destination] ||
+        (symbol = sel->core->blocks[destination].local_label_symbol) == NULL ||
+        !minic_core_label_symbol_valid(symbol)) return false;
+    /* The exported GNU &&label is bound to the same physical block used by
+     * the computed-goto CFG. No second, text-formatted local label is made. */
+    return x86_2(sel, MINIC_X86_MI_LEA64_RIP_SYMBOL_R,
+            x86_symbol(symbol, MINIC_X86_MACHINE_RELOC_PC32),
+            x86_reg(MINIC_X86_REG_RAX, 64U)) &&
+        x86_result(sel, ins);
+}
+
+static bool x86_variadic_argument_address(X86CoreSelector *sel,
+    const MinicCoreInstruction *ins) {
+    const MinicX86Frame *frame = sel->frame;
+    const MinicCoreType *type = x86_type(sel, ins->core_type_id);
+    MinicMachineOperand slot;
+    size_t i, tag_offset, overflow_offset;
+    if (type == NULL || type->kind != MINIC_CORE_TYPE_POINTER ||
+        !type->has_layout || type->size != 8U ||
+        ins->result >= sel->core->value_count ||
+        frame->varargs_count == 0U || frame->varargs_results == NULL ||
+        frame->varargs_tag_base_offset > (size_t)INT32_MAX ||
+        frame->varargs_fixed_stack_slots > (INT32_MAX - 16U) / 8U)
+        return false;
+    for (i = 0U; i < frame->varargs_count; ++i)
+        if (frame->varargs_results[i] == ins->result) break;
+    if (i == frame->varargs_count ||
+        i > (SIZE_MAX / 24U) - 1U ||
+        frame->varargs_tag_base_offset > SIZE_MAX - (i + 1U) * 24U)
+        return false;
+    tag_offset = frame->varargs_tag_base_offset + (i + 1U) * 24U;
+    overflow_offset = 16U + frame->varargs_fixed_stack_slots * 8U;
+    if (tag_offset > frame->frame_size || tag_offset > INT32_MAX ||
+        frame->varargs_regsave_offset > frame->frame_size ||
+        frame->varargs_regsave_offset > INT32_MAX ||
+        !minic_x86_64_machine_frame_slot(&sel->builder,
+            MINIC_MACHINE_FRAME_BASE_FRAME_POINTER,
+            MINIC_MACHINE_FRAME_LOCAL, 24U, 8U,
+            -(int64_t)tag_offset, &slot) ||
+        !x86_2(sel, MINIC_X86_MI_LEA64_FRBP_R, slot,
+            x86_reg(MINIC_X86_REG_RAX, 64U)) ||
+        !x86_ir(sel, MINIC_X86_MI_MOV32_IR,
+            frame->varargs_gp_offset, 32U, MINIC_X86_REG_R10) ||
+        !x86_2(sel, MINIC_X86_MI_MOV32_RA,
+            x86_reg(MINIC_X86_REG_R10, 32U),
+            x86_addr(MINIC_X86_REG_RAX, 0)) ||
+        !x86_ir(sel, MINIC_X86_MI_MOV32_IR,
+            frame->varargs_fp_offset, 32U, MINIC_X86_REG_R10) ||
+        !x86_2(sel, MINIC_X86_MI_MOV32_RA,
+            x86_reg(MINIC_X86_REG_R10, 32U),
+            x86_addr(MINIC_X86_REG_RAX, 4)) ||
+        !x86_2(sel, MINIC_X86_MI_LEA64_AR,
+            x86_addr(MINIC_X86_REG_RBP, (int64_t)overflow_offset),
+            x86_reg(MINIC_X86_REG_R10, 64U)) ||
+        !x86_2(sel, MINIC_X86_MI_MOV64_RA,
+            x86_reg(MINIC_X86_REG_R10, 64U),
+            x86_addr(MINIC_X86_REG_RAX, 8)) ||
+        !x86_2(sel, MINIC_X86_MI_LEA64_AR,
+            x86_addr(MINIC_X86_REG_RBP,
+                -(int64_t)frame->varargs_regsave_offset),
+            x86_reg(MINIC_X86_REG_R10, 64U)) ||
+        !x86_2(sel, MINIC_X86_MI_MOV64_RA,
+            x86_reg(MINIC_X86_REG_R10, 64U),
+            x86_addr(MINIC_X86_REG_RAX, 16))) return false;
+    return x86_core_store(sel, ins->result, MINIC_X86_REG_RAX);
+}
+
+static bool x86_variadic_copy(X86CoreSelector *sel,
+    const MinicCoreInstruction *ins) {
+    size_t offset;
+    const MinicCoreValueId dst = ins->value.variadic_copy.destination;
+    const MinicCoreValueId src = ins->value.variadic_copy.source;
+    const MinicCoreType *type = x86_type(sel, ins->core_type_id);
+    if (ins->result != MINIC_CORE_VALUE_INVALID || type == NULL ||
+        type->kind != MINIC_CORE_TYPE_VOID ||
+        !x86_record_pointer(sel, dst, MINIC_X86_REG_R10) ||
+        !x86_record_pointer(sel, src, MINIC_X86_REG_R11)) return false;
+    /* Preserve all three 64-bit lanes, including the two pointer fields;
+     * this is a value copy, not a va_list alias. */
+    for (offset = 0U; offset < 24U; offset += 8U)
+        if (!x86_2(sel, MINIC_X86_MI_MOV64_AR,
+                x86_addr(MINIC_X86_REG_R11, (int64_t)offset),
+                x86_reg(MINIC_X86_REG_RAX, 64U)) ||
+            !x86_2(sel, MINIC_X86_MI_MOV64_RA,
+                x86_reg(MINIC_X86_REG_RAX, 64U),
+                x86_addr(MINIC_X86_REG_R10, (int64_t)offset))) return false;
+    return true;
+}
+
+static bool x86_variadic_next_scalar(X86CoreSelector *sel,
+    const MinicCoreInstruction *ins, size_t instruction_id) {
+    const MinicCoreValueId cursor = ins->value.operand;
+    const MinicCoreType *type = x86_type(sel, ins->core_type_id);
+    MinicCoreTypeId pointee;
+    size_t width;
+    bool sign, is_bool;
+    const bool is_double = type != NULL &&
+        type->kind == MINIC_CORE_TYPE_FLOAT &&
+        type->value.floating.format == MINIC_CORE_FLOAT_BINARY64 &&
+        type->size == 8U;
+    const int64_t offset = is_double ? 4 : 0;
+    const int64_t limit = is_double ? 176 : 48;
+    const int64_t step = is_double ? 16 : 8;
+    size_t registers, stack, done;
+    if (instruction_id >= sel->core->instruction_count ||
+        sel->instruction_aux == NULL) return false;
+    registers = sel->instruction_aux[instruction_id].first;
+    stack = sel->instruction_aux[instruction_id].second;
+    done = sel->instruction_aux[instruction_id].third;
+    if (ins->result >= sel->core->value_count ||
+        cursor >= sel->core->value_count ||
+        !minic_lp64_core_pointer_pointee(sel->core->type_context,
+            sel->core->values[cursor].core_type_id, &pointee) ||
+        (!is_double && !x86_scalar_shape(sel, ins->core_type_id,
+            &width, &sign, &is_bool)) ||
+        !x86_record_pointer(sel, cursor, MINIC_X86_REG_R10) ||
+        !x86_2(sel, MINIC_X86_MI_MOV32_AR,
+            x86_addr(MINIC_X86_REG_R10, offset),
+            x86_reg(MINIC_X86_REG_RCX, 32U)) ||
+        !x86_ir(sel, MINIC_X86_MI_CMP32_IR,
+            limit, 32U, MINIC_X86_REG_RCX) ||
+        registers == SIZE_MAX || stack == SIZE_MAX || done == SIZE_MAX ||
+        !x86_1(sel, MINIC_X86_MI_JAE_B, x86_block(stack)) ||
+        !minic_machine_builder_add_successor(&sel->builder, stack) ||
+        !minic_machine_builder_add_successor(&sel->builder, registers) ||
+        !minic_machine_builder_set_fallthrough(&sel->builder, registers) ||
+        !minic_machine_builder_position_at(&sel->builder, registers) ||
+        !x86_2(sel, MINIC_X86_MI_MOV64_AR,
+            x86_addr(MINIC_X86_REG_R10, 16),
+            x86_reg(MINIC_X86_REG_R11, 64U)) ||
+        !x86_2(sel, MINIC_X86_MI_MOV64_AR,
+            x86_indexed_addr(MINIC_X86_REG_R11,
+                MINIC_X86_REG_RCX, 1U),
+            x86_reg(MINIC_X86_REG_RAX, 64U)) ||
+        !x86_ir(sel, MINIC_X86_MI_ADD32_IR,
+            step, 32U, MINIC_X86_REG_RCX) ||
+        !x86_2(sel, MINIC_X86_MI_MOV32_RA,
+            x86_reg(MINIC_X86_REG_RCX, 32U),
+            x86_addr(MINIC_X86_REG_R10, offset)) ||
+        !x86_1(sel, MINIC_X86_MI_JMP_B, x86_block(done)) ||
+        !minic_machine_builder_add_successor(&sel->builder, done) ||
+        !minic_machine_builder_position_at(&sel->builder, stack) ||
+        !x86_2(sel, MINIC_X86_MI_MOV64_AR,
+            x86_addr(MINIC_X86_REG_R10, 8),
+            x86_reg(MINIC_X86_REG_R11, 64U)) ||
+        !x86_2(sel, MINIC_X86_MI_MOV64_AR,
+            x86_addr(MINIC_X86_REG_R11, 0),
+            x86_reg(MINIC_X86_REG_RAX, 64U)) ||
+        !x86_ir(sel, MINIC_X86_MI_ADD64_IR,
+            8, 64U, MINIC_X86_REG_R11) ||
+        !x86_2(sel, MINIC_X86_MI_MOV64_RA,
+            x86_reg(MINIC_X86_REG_R11, 64U),
+            x86_addr(MINIC_X86_REG_R10, 8)) ||
+        !x86_1(sel, MINIC_X86_MI_JMP_B, x86_block(done)) ||
+        !minic_machine_builder_add_successor(&sel->builder, done) ||
+        !minic_machine_builder_position_at(&sel->builder, done)) return false;
+    return (is_double || x86_normalize(sel, ins->core_type_id)) &&
+        x86_core_store(sel, ins->result, MINIC_X86_REG_RAX);
+}
+
+static bool x86_dynamic_stack_alloc(X86CoreSelector *sel,
+    const MinicCoreInstruction *ins, size_t instruction_id) {
+    size_t count_width, safe, trap;
+    bool count_sign;
+    const MinicCoreValueId count = ins->value.operand;
+    const MinicCoreType *type = x86_type(sel, ins->core_type_id);
+    if (instruction_id >= sel->core->instruction_count ||
+        sel->instruction_aux == NULL) return false;
+    trap = sel->instruction_aux[instruction_id].first;
+    safe = sel->instruction_aux[instruction_id].second;
+    if (sel->frame->objects_from_aligned_rsp || type == NULL ||
+        type->kind != MINIC_CORE_TYPE_POINTER ||
+        ins->result >= sel->core->value_count ||
+        sel->core->values[ins->result].core_type_id != ins->core_type_id ||
+        count >= sel->core->value_count ||
+        !minic_x86_64_core_scalar_width(sel->core->type_context,
+            sel->core->values[count].core_type_id,
+            &count_width, &count_sign) || count_width != 8U || count_sign ||
+        !x86_core_load(sel, count, MINIC_X86_REG_R10) ||
+        !x86_ir(sel, MINIC_X86_MI_ADD64_IR,
+            15, 64U, MINIC_X86_REG_R10) ||
+        trap == SIZE_MAX || safe == SIZE_MAX ||
+        !x86_1(sel, MINIC_X86_MI_JNC_B, x86_block(safe)) ||
+        !minic_machine_builder_add_successor(&sel->builder, safe) ||
+        !minic_machine_builder_add_successor(&sel->builder, trap) ||
+        !minic_machine_builder_set_fallthrough(&sel->builder, trap) ||
+        !minic_machine_builder_position_at(&sel->builder, trap) ||
+        !x86_0(sel, MINIC_X86_MI_UD2) ||
+        !minic_machine_builder_position_at(&sel->builder, safe) ||
+        !x86_ir(sel, MINIC_X86_MI_AND64_IR,
+            -16, 64U, MINIC_X86_REG_R10) ||
+        !x86_rr(sel, MINIC_X86_MI_SUB64_RR, 64U,
+            MINIC_X86_REG_R10, MINIC_X86_REG_RSP) ||
+        !x86_rr(sel, MINIC_X86_MI_MOV64_RR, 64U,
+            MINIC_X86_REG_RSP, MINIC_X86_REG_RAX)) return false;
+    sel->builder.function->has_dynamic_stack = true;
+    return x86_core_store(sel, ins->result, MINIC_X86_REG_RAX);
+}
+
 static bool x86_core_instruction(X86CoreSelector *sel,
     const MinicCoreInstruction *ins, size_t instruction_id) {
     size_t bytes;
@@ -1169,6 +1665,18 @@ static bool x86_core_instruction(X86CoreSelector *sel,
         return x86_atomic_scalar(sel, ins);
     case MINIC_CORE_INSTRUCTION_COMPILER_BARRIER:
         return x86_compiler_barrier(sel, ins);
+    case MINIC_CORE_INSTRUCTION_FIXED_REGISTER_READ:
+        return x86_fixed_register_read(sel, ins);
+    case MINIC_CORE_INSTRUCTION_BLOCK_ADDRESS:
+        return x86_block_address(sel, ins);
+    case MINIC_CORE_INSTRUCTION_VARIADIC_ARGUMENT_ADDRESS:
+        return x86_variadic_argument_address(sel, ins);
+    case MINIC_CORE_INSTRUCTION_VARIADIC_NEXT_SCALAR:
+        return x86_variadic_next_scalar(sel, ins, instruction_id);
+    case MINIC_CORE_INSTRUCTION_VARIADIC_COPY:
+        return x86_variadic_copy(sel, ins);
+    case MINIC_CORE_INSTRUCTION_DYNAMIC_STACK_ALLOC:
+        return x86_dynamic_stack_alloc(sel, ins, instruction_id);
     case MINIC_CORE_INSTRUCTION_CALL:
     case MINIC_CORE_INSTRUCTION_INDIRECT_CALL:
         return x86_scalar_call(sel, ins, instruction_id);
@@ -1211,6 +1719,11 @@ static bool x86_core_instruction(X86CoreSelector *sel,
     case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_NOT:
     case MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO:
         return x86_unary(sel, ins);
+    case MINIC_CORE_INSTRUCTION_INTEGER_CLZ:
+    case MINIC_CORE_INSTRUCTION_INTEGER_CTZ:
+        return x86_integer_bitscan(sel, ins);
+    case MINIC_CORE_INSTRUCTION_INTEGER_OVERFLOW:
+        return x86_integer_overflow(sel, ins);
     case MINIC_CORE_INSTRUCTION_INTEGER_CONVERSION:
     case MINIC_CORE_INSTRUCTION_SCALAR_BITCAST:
         return (ins->kind != MINIC_CORE_INSTRUCTION_SCALAR_BITCAST ||
@@ -1399,8 +1912,12 @@ bool minic_x86_64_machine_select_core_subset(
     sel.blocks = malloc(count * sizeof(*sel.blocks));
     sel.false_blocks = malloc(count * sizeof(*sel.false_blocks));
     sel.reachable = calloc(count, sizeof(*sel.reachable));
+    if (core->instruction_count > SIZE_MAX /
+            sizeof(*sel.instruction_aux)) goto cleanup;
+    sel.instruction_aux = calloc(core->instruction_count != 0U ?
+        core->instruction_count : 1U, sizeof(*sel.instruction_aux));
     if (sel.blocks == NULL || sel.false_blocks == NULL ||
-        sel.reachable == NULL ||
+        sel.reachable == NULL || sel.instruction_aux == NULL ||
         !minic_core_function_mark_reachable_blocks(core,
             sel.reachable, count) ||
         !sel.reachable[core->entry_block] ||
@@ -1420,12 +1937,17 @@ bool minic_x86_64_machine_select_core_subset(
         sel.blocks[i] = SIZE_MAX;
         sel.false_blocks[i] = SIZE_MAX;
     }
+    for (i = 0U; i < core->instruction_count; ++i) {
+        sel.instruction_aux[i].first = SIZE_MAX;
+        sel.instruction_aux[i].second = SIZE_MAX;
+        sel.instruction_aux[i].third = SIZE_MAX;
+    }
     if (!minic_machine_builder_initialize(&sel.builder, machine) ||
         !minic_x86_64_machine_select_prologue(&sel.builder,
             &sel.frame_view, &prologue)) goto cleanup;
     for (i = 0U; i < count; ++i) {
         const MinicCoreBlock *block = &core->blocks[i];
-        size_t machine_id;
+        size_t machine_id, j;
         if (!sel.reachable[i]) continue;
         if (!minic_machine_builder_create_block(&sel.builder,
                 block->local_label_symbol, block->indirect_entry,
@@ -1433,6 +1955,33 @@ bool minic_x86_64_machine_select_core_subset(
             !minic_machine_builder_mark_core_block(&sel.builder, i))
             goto cleanup;
         sel.blocks[i] = machine_id;
+        /* Reserve all split blocks alongside the owning Core block in
+         * physical emission order. A conditional MachineIR fallthrough
+         * must be the immediately following block, not an auxiliary
+         * appended after the other Core blocks have been emitted. */
+        for (j = 0U; j < block->instruction_count; ++j) {
+            MinicCoreInstructionId id;
+            const MinicCoreInstruction *ins;
+            X86AuxBlocks *aux;
+            if (!minic_core_block_instruction_at(core, block, j,
+                    &id, &ins) || id >= core->instruction_count)
+                goto cleanup;
+            aux = &sel.instruction_aux[id];
+            if (ins->kind == MINIC_CORE_INSTRUCTION_VARIADIC_NEXT_SCALAR) {
+                if (!minic_machine_builder_create_block(&sel.builder,
+                        NULL, false, true, &aux->first) ||
+                    !minic_machine_builder_create_block(&sel.builder,
+                        NULL, false, true, &aux->second) ||
+                    !minic_machine_builder_create_block(&sel.builder,
+                        NULL, false, true, &aux->third)) goto cleanup;
+            } else if (ins->kind ==
+                    MINIC_CORE_INSTRUCTION_DYNAMIC_STACK_ALLOC) {
+                if (!minic_machine_builder_create_block(&sel.builder,
+                        NULL, false, true, &aux->first) ||
+                    !minic_machine_builder_create_block(&sel.builder,
+                        NULL, false, true, &aux->second)) goto cleanup;
+            }
+        }
         if (block->has_terminator &&
             block->terminator.kind ==
                 MINIC_CORE_TERMINATOR_CONDITIONAL_BRANCH) {
@@ -1467,6 +2016,7 @@ cleanup:
     free(sel.blocks);
     free(sel.false_blocks);
     free(sel.reachable);
+    free(sel.instruction_aux);
     if (!ok) minic_machine_function_destroy(machine);
     return ok;
 }

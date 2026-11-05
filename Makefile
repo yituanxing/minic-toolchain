@@ -2418,12 +2418,13 @@ check-direct-machine-gnu-asm:
 
 check-fast: check-direct-machine-gnu-asm
 
-# Five Linux-target Core->MachineIR migration: strict pre-MIR golden A/B
-# spans ABI/FP/packed/indirect control and source ASM. The independent opt-in
-# production gates must see the typed serializer called for the actual output
-# file. Never attach them to check-fast before all selectors are switched.
+# Five Linux-target Core->MachineIR migration: historical pre-MIR byte goldens
+# remain as an archive; each switched target must instead prove the real typed
+# output inode and semantic shapes. The current mixed-target gate separates
+# these facts explicitly, without permitting legacy fallback within a target.
 .PHONY: check-a64-loong-mir-golden check-a64-loong-mir-production \
         check-five-machine-mir-golden check-five-machine-mir-production \
+        check-loong-machine-mir-production check-mir-migration-current \
         check-x86-machine-runtime
 check-a64-loong-mir-golden: $(MINIC_CC_BINARY)
 	python3 tests/compiler/mir-migration/probe_machine_ir.py \
@@ -2445,6 +2446,25 @@ check-five-machine-mir-production: $(MINIC_CC_BINARY)
 	  --mode production --targets five \
 	  --minic-cc "$(abspath $(MINIC_CC_BINARY))" \
 	  --build-dir "$(abspath $(BUILD_DIR))" --host-cc "$(CC)"
+
+check-loong-machine-mir-production: $(MINIC_CC_BINARY)
+	python3 tests/compiler/mir-migration/probe_machine_ir.py \
+	  --mode production --targets loongarch64 \
+	  --minic-cc "$(abspath $(MINIC_CC_BINARY))" \
+	  --build-dir "$(abspath $(BUILD_DIR))" --host-cc "$(CC)"
+
+# Run each still-legacy target against its frozen bytes; LoongArch64 must
+# instead execute the live typed writer. The all-five production gate above
+# remains the final no-legacy milestone after the other four switch.
+check-mir-migration-current: $(MINIC_CC_BINARY)
+	@for arch in riscv32 riscv64 x86_64 aarch64; do \
+	  python3 tests/compiler/mir-migration/probe_machine_ir.py \
+	    --mode golden --targets "$$arch" \
+	    --minic-cc "$(abspath $(MINIC_CC_BINARY))" \
+	    --build-dir "$(abspath $(BUILD_DIR))" --host-cc "$(CC)" || exit; \
+	done
+	$(MAKE) MODE=$(MODE) BUILD_DIR=$(BUILD_DIR) \
+	  check-loong-machine-mir-production
 
 # Small executable oracle: compare GCC's native binary to MiniC assembly
 # linked by that same GCC. This is not a five-target or Linux runtime claim.
@@ -2633,6 +2653,7 @@ check-riscv-machine-core-select:
 	  src/target/common/core_call_view.c \
 	  src/target/common/core_call_index.c \
 	  src/target/common/aggregate_shape.c \
+	  src/target/common/elf_module_symbol_info.c \
 	  src/target/riscv32/rv32_abi_plan.c \
 	  src/target/riscv32/rv32_abi_cursor.c \
 	  src/target/riscv32/rv32_scalar.c \
@@ -2654,6 +2675,7 @@ check-x86-machine-core-select:
 	  tests/target/x86_64/machine_core_select_test.c \
 	  src/core/core_ir.c src/core/core_type.c src/core/core_ir_verify.c \
 	  src/core/module_ir.c src/target/data_layout.c \
+	  src/target/target_info.c \
 	  src/target/common/machine_ir.c \
 	  src/target/common/machine_builder.c \
 	  src/target/common/machine_ir_verify.c \
@@ -2664,6 +2686,7 @@ check-x86-machine-core-select:
 	  src/target/common/aggregate_shape.c \
 	  src/target/common/core_numeric_shape.c \
 	  src/target/common/direct_instruction_semantics.c \
+	  src/target/common/direct_residual_plan.c \
 	  src/target/common/elf_module_symbol_info.c \
 	  src/target/x86_64/abi.c \
 	  src/target/x86_64/machine_opcode.c \

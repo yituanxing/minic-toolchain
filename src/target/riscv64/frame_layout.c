@@ -6,10 +6,63 @@
 #include "target/common/core_spill_layout.h"
 #include "target/riscv64/record_snapshot.h"
 #include "target/riscv64/core_type_query.h"
+#include "target/riscv/register_identity.h"
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+bool minic_riscv64_machine_physical_frame(
+    const MinicRiscv64CoreFrame *frame,
+    MinicRiscvPhysicalFrame *physical,
+    MinicRiscvPhysicalCalleeSave *callee_saved, size_t capacity) {
+    const uint16_t mask = frame != NULL ? frame->asm_plan.callee_saved_mask : 0U;
+    size_t i, saved = 0U;
+    if (frame == NULL || physical == NULL ||
+        frame->frame_size == 0U ||
+        frame->has_dynamic_stack_alignment !=
+            (frame->stack_alignment > 16U) ||
+        frame->integer_parameter_count > 8U ||
+        (frame->value_count != 0U && frame->value_offsets == NULL) ||
+        (frame->object_count != 0U && frame->object_offsets == NULL) ||
+        (mask != 0U && callee_saved == NULL) ||
+        capacity < minic_riscv64_asm_callee_saved_mask_count(mask))
+        return false;
+    for (i = 0U; i < MINIC_RISCV64_ASM_CALLEE_SAVED_COUNT; ++i) {
+        const char *name;
+        unsigned physical_id;
+        if ((mask & (uint16_t)(1U << i)) == 0U) continue;
+        name = minic_riscv64_asm_callee_saved_registers[i];
+        if (!minic_riscv_gpr_id(name, strlen(name), &physical_id))
+            return false;
+        callee_saved[saved] = (MinicRiscvPhysicalCalleeSave){
+            physical_id, frame->structured_asm_callee_saved_offset + saved * 8U
+        };
+        ++saved;
+    }
+    *physical = (MinicRiscvPhysicalFrame){
+        .frame_size = frame->frame_size,
+        .stack_alignment = frame->stack_alignment,
+        .outgoing_size = frame->outgoing_argument_size,
+        .return_address_offset = frame->return_address_offset,
+        .hidden_result_pointer_offset = frame->hidden_result_pointer_offset,
+        .saved_frame_base_offset = frame->saved_frame_base_offset,
+        .entry_sp_offset = frame->entry_sp_offset,
+        .dynamic_call_area_size = frame->dynamic_call_area_size,
+        .varargs_offset = frame->varargs_offset,
+        .varargs_size = frame->varargs_size,
+        .first_variadic_gpr = frame->integer_parameter_count,
+        .named_stack_argument_slots = frame->variadic_fixed_stack_slots,
+        .saves_return_address = frame->saves_return_address,
+        .has_hidden_result_pointer = frame->has_hidden_result_pointer,
+        .has_dynamic_stack = frame->has_dynamic_stack_alloc,
+        .has_dynamic_stack_alignment = frame->has_dynamic_stack_alignment,
+        .variadic = frame->has_variadic_argument_address,
+        .callee_saved = callee_saved,
+        .callee_saved_count = saved
+    };
+    return true;
+}
 
 /* One RV64 owner of outgoing ABI, object reuse, spills and CFG planning. */
 bool minic_riscv64_core_frame_initialize_with_storage(

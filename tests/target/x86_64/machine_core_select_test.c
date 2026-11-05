@@ -1360,6 +1360,288 @@ done:
     return okay;
 }
 
+/* Exercise newly admitted Core instructions through the real x86 selector,
+ * Core-origin coverage and the GNU body writer. In particular va_arg/alloca
+ * split one Core block into multiple genuinely linked MachineIR blocks. */
+typedef enum X86NewCoreCase {
+    X86_NEW_CLZ_ZERO,
+    X86_NEW_CTZ_ZERO,
+    X86_NEW_CLZ_NONZERO,
+    X86_NEW_CTZ_NONZERO,
+    X86_NEW_OVERFLOW_32,
+    X86_NEW_OVERFLOW_64,
+    X86_NEW_VARIADIC,
+    X86_NEW_ALLOCA,
+    X86_NEW_BLOCK_ADDRESS
+} X86NewCoreCase;
+
+static bool scenario_new_core_case(X86NewCoreCase mode) {
+    MinicCoreTypeContext types;
+    MinicCoreFunction core = {0};
+    MinicCoreType t = {0};
+    MinicCoreTypeId void_id, signed32, unsigned32, signed64, unsigned64, bool_id;
+    MinicCoreTypeId pointer32, pointer64, pointervoid;
+    MinicCoreTypeId formals[1];
+    MinicCoreBlockId entry, destination = MINIC_CORE_BLOCK_INVALID;
+    MinicCoreInstruction ins = {0};
+    MinicCoreTerminator term = {0};
+    MinicCoreValueId a = MINIC_CORE_VALUE_INVALID;
+    MinicCoreValueId b = MINIC_CORE_VALUE_INVALID;
+    MinicCoreValueId cursor = MINIC_CORE_VALUE_INVALID;
+    MinicCoreValueId value = MINIC_CORE_VALUE_INVALID;
+    MinicCoreInstructionId tested = MINIC_CORE_INSTRUCTION_INVALID;
+    MinicX86Frame frame = {0};
+    MinicX86ArgLocation location = {0};
+    MinicTargetInfo target = {0};
+    MinicMachineFunction machine = {0};
+    MinicMachineGNUAsmPolicy policy = {0};
+    MinicCoreValueId variadic_result[1];
+    size_t offsets[12];
+    bool reachable[2] = {false, false};
+    bool found_expected = false, found_origin = false, okay = false;
+    size_t i, j, len;
+    MinicX86MachineOpcode expected = MINIC_X86_MI_BSR64_RR;
+    const char *assembly_witness = NULL;
+    const char *stage = "types";
+    FILE *output = NULL;
+    char body[24000];
+    const bool overflow = mode == X86_NEW_OVERFLOW_32 ||
+        mode == X86_NEW_OVERFLOW_64;
+    const bool variadic = mode == X86_NEW_VARIADIC;
+    const bool alloc = mode == X86_NEW_ALLOCA;
+    const bool block_address = mode == X86_NEW_BLOCK_ADDRESS;
+
+    minic_core_type_context_initialize(&types);
+    minic_core_function_initialize(&core);
+    core.name = malloc(sizeof("x86_new_core"));
+    if (core.name == NULL) goto done;
+    memcpy(core.name, "x86_new_core", sizeof("x86_new_core"));
+    core.name_length = sizeof("x86_new_core") - 1U;
+    t.kind = MINIC_CORE_TYPE_VOID;
+    if (!minic_core_type_register(&types, &t, &void_id)) goto done;
+    t = (MinicCoreType){0};
+    t.kind = MINIC_CORE_TYPE_INTEGER;
+    t.has_layout = true;
+    t.size = t.alignment = 4U;
+    t.value.integer.bit_width = 32U;
+    t.value.integer.is_signed = true;
+    if (!minic_core_type_register(&types, &t, &signed32)) goto done;
+    t.value.integer.is_signed = false;
+    if (!minic_core_type_register(&types, &t, &unsigned32)) goto done;
+    t.size = t.alignment = 8U;
+    t.value.integer.bit_width = 64U;
+    t.value.integer.is_signed = true;
+    if (!minic_core_type_register(&types, &t, &signed64)) goto done;
+    t.value.integer.is_signed = false;
+    if (!minic_core_type_register(&types, &t, &unsigned64)) goto done;
+    t.size = t.alignment = 1U;
+    t.value.integer.bit_width = 1U;
+    t.value.integer.is_bool = true;
+    if (!minic_core_type_register(&types, &t, &bool_id)) goto done;
+    stage = "pointer-types";
+    t = (MinicCoreType){0};
+    t.kind = MINIC_CORE_TYPE_POINTER;
+    t.has_layout = true;
+    t.size = t.alignment = 8U;
+    t.value.pointer.pointee = signed32;
+    if (!minic_core_type_register(&types, &t, &pointer32)) goto done;
+    t.value.pointer.pointee = unsigned64;
+    if (!minic_core_type_register(&types, &t, &pointer64)) goto done;
+    t.value.pointer.pointee = void_id;
+    if (!minic_core_type_register(&types, &t, &pointervoid)) goto done;
+    formals[0] = mode == X86_NEW_OVERFLOW_32 ? pointer32 : pointer64;
+    stage = "signature";
+    if (!minic_core_function_define_signature(&core, &types,
+            void_id, overflow ? formals : NULL, overflow ? 1U : 0U,
+            MINIC_CALLING_CONVENTION_DEFAULT, variadic) ||
+        !minic_core_function_add_block(&core, &entry)) goto done;
+    if (block_address) {
+        if (!minic_core_function_add_block(&core, &destination)) goto done;
+        core.blocks[destination].indirect_entry = true;
+        core.blocks[destination].local_label_symbol =
+            malloc(sizeof(".Luser_123"));
+        if (core.blocks[destination].local_label_symbol == NULL) goto done;
+        memcpy(core.blocks[destination].local_label_symbol,
+            ".Luser_123", sizeof(".Luser_123"));
+    }
+    stage = "core-instructions";
+    if (overflow) {
+        ins.kind = MINIC_CORE_INSTRUCTION_PARAMETER;
+        ins.core_type_id = formals[0];
+        ins.value.parameter_index = 0U;
+        if (!minic_core_function_append_value_instruction(&core,
+                entry, &ins, &cursor)) goto done;
+    }
+    if (variadic) {
+        ins = (MinicCoreInstruction){0};
+        ins.kind = MINIC_CORE_INSTRUCTION_VARIADIC_ARGUMENT_ADDRESS;
+        ins.core_type_id = pointervoid;
+        if (!minic_core_function_append_value_instruction(&core,
+                entry, &ins, &cursor)) goto done;
+        ins.kind = MINIC_CORE_INSTRUCTION_VARIADIC_NEXT_SCALAR;
+        ins.core_type_id = signed64;
+        ins.value.operand = cursor;
+        tested = (MinicCoreInstructionId)core.instruction_count;
+        if (!minic_core_function_append_value_instruction(&core,
+                entry, &ins, &value)) goto done;
+        expected = MINIC_X86_MI_JAE_B;
+        assembly_witness = "jae ";
+    } else if (block_address) {
+        ins.kind = MINIC_CORE_INSTRUCTION_BLOCK_ADDRESS;
+        ins.core_type_id = pointervoid;
+        ins.value.block_id = destination;
+        tested = (MinicCoreInstructionId)core.instruction_count;
+        if (!minic_core_function_append_value_instruction(&core,
+                entry, &ins, &value)) goto done;
+        expected = MINIC_X86_MI_LEA64_RIP_SYMBOL_R;
+        assembly_witness = ".Luser_123";
+    } else {
+        const bool scan = !overflow && !alloc;
+        ins.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
+        ins.core_type_id = mode == X86_NEW_OVERFLOW_32 ? signed32 :
+            mode == X86_NEW_CLZ_ZERO || mode == X86_NEW_CLZ_NONZERO ?
+            unsigned32 : unsigned64;
+        ins.value.integer_value = mode == X86_NEW_CLZ_ZERO ||
+            mode == X86_NEW_CTZ_ZERO ? 0 :
+            mode == X86_NEW_CLZ_NONZERO ||
+            mode == X86_NEW_CTZ_NONZERO ? 256 : 32;
+        if (!minic_core_function_append_value_instruction(&core,
+                entry, &ins, &a)) goto done;
+        if (overflow) {
+            ins.value.integer_value = 3;
+            if (!minic_core_function_append_value_instruction(&core,
+                    entry, &ins, &b)) goto done;
+        }
+        ins = (MinicCoreInstruction){0};
+        tested = (MinicCoreInstructionId)core.instruction_count;
+        if (scan) {
+            ins.kind = mode == X86_NEW_CLZ_ZERO ||
+                mode == X86_NEW_CLZ_NONZERO ?
+                MINIC_CORE_INSTRUCTION_INTEGER_CLZ :
+                MINIC_CORE_INSTRUCTION_INTEGER_CTZ;
+            ins.core_type_id = signed32;
+            ins.value.operand = a;
+            expected = ins.kind == MINIC_CORE_INSTRUCTION_INTEGER_CLZ ?
+                MINIC_X86_MI_BSR64_RR : MINIC_X86_MI_BSF64_RR;
+            assembly_witness = ins.kind == MINIC_CORE_INSTRUCTION_INTEGER_CLZ ?
+                "bsrq" : "bsfq";
+        } else if (overflow) {
+            ins.kind = MINIC_CORE_INSTRUCTION_INTEGER_OVERFLOW;
+            ins.core_type_id = bool_id;
+            ins.value.integer_overflow.operator_kind =
+                MINIC_CORE_INTEGER_OVERFLOW_MULTIPLY;
+            ins.value.integer_overflow.left = a;
+            ins.value.integer_overflow.right = b;
+            ins.value.integer_overflow.result_address = cursor;
+            expected = mode == X86_NEW_OVERFLOW_32 ?
+                MINIC_X86_MI_IMUL32_RR : MINIC_X86_MI_MUL64_R;
+            assembly_witness = mode == X86_NEW_OVERFLOW_32 ?
+                "imull" : "mulq";
+        } else {
+            ins.kind = MINIC_CORE_INSTRUCTION_DYNAMIC_STACK_ALLOC;
+            ins.core_type_id = pointervoid;
+            ins.value.operand = a;
+            expected = MINIC_X86_MI_UD2;
+            assembly_witness = "ud2";
+        }
+        if (!minic_core_function_append_value_instruction(&core,
+                entry, &ins, &value)) goto done;
+    }
+    term.kind = block_address ? MINIC_CORE_TERMINATOR_INDIRECT_BRANCH :
+        MINIC_CORE_TERMINATOR_RETURN;
+    term.return_value = MINIC_CORE_VALUE_INVALID;
+    if (block_address) term.indirect_target = value;
+    if (!minic_core_function_set_terminator(&core, entry, &term)) goto done;
+    if (block_address) {
+        term.kind = MINIC_CORE_TERMINATOR_RETURN;
+        term.return_value = MINIC_CORE_VALUE_INVALID;
+        if (!minic_core_function_set_terminator(
+                &core, destination, &term)) goto done;
+    }
+    stage = "core-verify";
+    if (!minic_core_function_attach_type_context(&core, &types) ||
+        !minic_core_function_verify(&core)) goto done;
+    for (i = 0U; i < core.value_count; ++i) offsets[i] = (i + 1U) * 8U;
+    target.architecture = MINIC_TARGET_ARCH_X86_64;
+    target.data_layout = minic_x86_64_linux_data_layout();
+    frame.frame_size = 512U;
+    frame.value_count = core.value_count;
+    frame.value_offsets = offsets;
+    location.kind = MINIC_X86_ARG_INTEGER;
+    location.gp_index = 0U;
+    frame.incoming_arguments.calling_convention =
+        MINIC_CALLING_CONVENTION_DEFAULT;
+    if (overflow) {
+        frame.incoming_arguments.locations = &location;
+        frame.incoming_arguments.argument_count = 1U;
+    }
+    if (variadic) {
+        variadic_result[0] = cursor;
+        frame.varargs_results = variadic_result;
+        frame.varargs_count = 1U;
+        frame.varargs_regsave_offset = 256U;
+        frame.varargs_tag_base_offset = 400U;
+        frame.varargs_gp_offset = 0U;
+        frame.varargs_fp_offset = 48U;
+    }
+    stage = "physical-selection";
+    if (!minic_x86_64_machine_select_core_subset(&machine, &target,
+            &core, &frame) ||
+        !minic_core_function_mark_reachable_blocks(&core,
+            reachable, core.block_count) ||
+        !minic_machine_core_coverage_verify(&core, reachable, &machine) ||
+        !minic_x86_64_machine_gnu_asm_policy(&target, &policy) ||
+        !minic_machine_gnu_asm_preflight(&machine, &policy)) goto done;
+    for (i = 0U; i < machine.block_count; ++i) {
+        for (j = 0U; j < machine.blocks[i].instruction_count; ++j) {
+            const MinicMachineInstruction *op =
+                &machine.blocks[i].instructions[j];
+            if (op->opcode == expected) found_expected = true;
+            if (op->has_core_origin && op->core_instruction_id == tested)
+                found_origin = true;
+        }
+    }
+    stage = "selected-opcode-and-origin";
+    if (!found_expected || !found_origin ||
+        ((variadic || alloc) && machine.block_count < 4U) ||
+        (alloc && !machine.has_dynamic_stack)) goto done;
+    stage = "gnu-assembly";
+    output = tmpfile();
+    if (output == NULL || !minic_machine_gnu_asm_emit_body(
+            output, &machine, &policy) || fflush(output) != 0 ||
+        fseek(output, 0L, SEEK_SET) != 0) goto done;
+    len = fread(body, 1U, sizeof(body) - 1U, output);
+    body[len] = '\0';
+    if (assembly_witness == NULL ||
+        strstr(body, assembly_witness) == NULL) goto done;
+    /* A malformed frame or semantic operand must reject the entire function
+     * instead of recovering through native FILE* emission. */
+    stage = "strict-reject";
+    if (variadic) frame.varargs_count = 0U;
+    else if (alloc) frame.objects_from_aligned_rsp = true;
+    else if (block_address) {
+        free(core.blocks[destination].local_label_symbol);
+        core.blocks[destination].local_label_symbol = NULL;
+    } else if (overflow)
+        core.instructions[tested].value.integer_overflow.result_address = a;
+    else core.instructions[tested].value.operand = MINIC_CORE_VALUE_INVALID;
+    {
+        MinicMachineFunction rejected = {0};
+        okay = !minic_x86_64_machine_select_core_subset(&rejected,
+            &target, &core, &frame);
+        minic_machine_function_destroy(&rejected);
+    }
+done:
+    if (!okay) fprintf(stderr,
+        "X86_CORE_MIR=FAIL new-core mode=%u stage=%s\n",
+        (unsigned int)mode, stage);
+    if (output != NULL) fclose(output);
+    minic_machine_function_destroy(&machine);
+    minic_core_function_destroy(&core);
+    minic_core_type_context_destroy(&types);
+    return okay;
+}
+
 int main(void) {
     if (!scenario(false, false) || !scenario(false, true) ||
         !scenario(true, false) || !scenario_parameter() ||
@@ -1390,7 +1672,16 @@ int main(void) {
         !scenario_symbol_address(true, true, false, false, false) ||
         !scenario_symbol_address(true, true, true, false, false) ||
         !scenario_symbol_address(false, false, false, false, true) ||
-        !scenario_relaxed_atomic()) return 1;
-    puts("X86_CORE_MIR=PASS cycle=1 physical_alu=1 parameter=1 sse2=1 direct_call=1 mixed_vararg_stack=1 indirect_call=1 ms_shadow_stack=1 record_copy=1 record_load=1 vector_storage=1 record_abi=1 volatile=1 empty_record_reject=1 rep_movsb=1 pic_symbol=1 got_weak=1 head_32s_reject=1 relaxed_atomic=1 compiler_barrier=1 origin=1 fail_closed=1");
+        !scenario_relaxed_atomic() ||
+        !scenario_new_core_case(X86_NEW_CLZ_ZERO) ||
+        !scenario_new_core_case(X86_NEW_CTZ_ZERO) ||
+        !scenario_new_core_case(X86_NEW_CLZ_NONZERO) ||
+        !scenario_new_core_case(X86_NEW_CTZ_NONZERO) ||
+        !scenario_new_core_case(X86_NEW_OVERFLOW_32) ||
+        !scenario_new_core_case(X86_NEW_OVERFLOW_64) ||
+        !scenario_new_core_case(X86_NEW_VARIADIC) ||
+        !scenario_new_core_case(X86_NEW_ALLOCA) ||
+        !scenario_new_core_case(X86_NEW_BLOCK_ADDRESS)) return 1;
+    puts("X86_CORE_MIR=PASS cycle=1 physical_alu=1 parameter=1 sse2=1 direct_call=1 mixed_vararg_stack=1 indirect_call=1 ms_shadow_stack=1 record_copy=1 record_load=1 vector_storage=1 record_abi=1 volatile=1 empty_record_reject=1 rep_movsb=1 pic_symbol=1 got_weak=1 head_32s_reject=1 relaxed_atomic=1 compiler_barrier=1 origin=1 fail_closed=1 bitscan_zero_nonzero=1 overflow_32_64=1 va_arg=1 alloca=1 block_address=1");
     return 0;
 }

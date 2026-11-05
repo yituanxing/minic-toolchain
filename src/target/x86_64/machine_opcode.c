@@ -17,6 +17,7 @@ enum X86ImplicitKind {
     X86_IMPLICIT_STACK_LEAVE,
     X86_IMPLICIT_STACK_RET,
     X86_IMPLICIT_MUL,
+    X86_IMPLICIT_MUL32,
     X86_IMPLICIT_DIV,
     X86_IMPLICIT_CQTO,
     X86_IMPLICIT_REP_MOVSB,
@@ -230,6 +231,7 @@ static const MinicX86MachineOpcodeInfo x86_opcodes[MINIC_X86_MI_LAST] = {
     IR(XOR32_IR,"xorl",32,R|W,X86_IMPLICIT_FLAGS_DEF),
     IR(CMP32_IR,"cmpl",32,R,X86_IMPLICIT_FLAGS_DEF),
     IR(TEST32_IR,"testl",32,R,X86_IMPLICIT_FLAGS_DEF),
+    IR(SAR64_IR,"sarq",64,R|W,X86_IMPLICIT_FLAGS_DEF),
     REG(NEG64_R,"negq",64,R|W,X86_IMPLICIT_FLAGS_DEF),
     REG(NOT64_R,"notq",64,R|W,X86_IMPLICIT_NONE),
     REG(NEG32_R,"negl",32,R|W,X86_IMPLICIT_FLAGS_DEF),
@@ -248,6 +250,7 @@ static const MinicX86MachineOpcodeInfo x86_opcodes[MINIC_X86_MI_LAST] = {
     RR(BSR32_RR,"bsrl",32,32,W,X86_IMPLICIT_FLAGS_DEF),
     [MINIC_X86_MI_CQTO] = { .mnemonic="cqto", .implicit_kind=X86_IMPLICIT_CQTO,
         .required_features=BASE },
+    REG(MUL32_R,"mull",32,R,X86_IMPLICIT_MUL32),
     REG(MUL64_R,"mulq",64,R,X86_IMPLICIT_MUL),
     REG(IMUL64_R,"imulq",64,R,X86_IMPLICIT_MUL),
     REG(DIV64_R,"divq",64,R,X86_IMPLICIT_DIV),
@@ -606,6 +609,9 @@ static bool x86_append_implicit(MinicMachineOpcodeContract *out,
     case X86_IMPLICIT_MUL:
         return x86_gp(out,MINIC_X86_REG_RAX,64,R|W) &&
                x86_gp(out,MINIC_X86_REG_RDX,64,W) && x86_flags(out,W);
+    case X86_IMPLICIT_MUL32:
+        return x86_gp(out,MINIC_X86_REG_RAX,32,R|W) &&
+               x86_gp(out,MINIC_X86_REG_RDX,32,W) && x86_flags(out,W);
     case X86_IMPLICIT_DIV:
         return x86_gp(out,MINIC_X86_REG_RAX,64,R|W) &&
                x86_gp(out,MINIC_X86_REG_RDX,64,R|W) && x86_flags(out,C);

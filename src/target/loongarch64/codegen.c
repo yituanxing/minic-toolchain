@@ -1,6 +1,6 @@
 #include "target/loongarch64/codegen.h"
-#include "target/loongarch64/block_emit.h"
-#include "target/loongarch64/frame_emit.h"
+#include "target/loongarch64/machine_select.h"
+#include "target/loongarch64/machine_opcode.h"
 #include "target/loongarch64/memory_emit.h"
 #include "target/loongarch64/asm_contract.h"
 #include "target/loongarch64/machine_target_state.h"
@@ -114,76 +114,6 @@ static bool loongarch64_lp64s_executable_supported(
     return true;
 }
 
-/* LoongArch64 owns every LP64D frame/ABI register action. Common code owns
- * the function envelope, checked planning, cleanup and ELF serialization. */
-static bool loongarch64_emit_prologue(
-    FILE *out, const MinicDirectLP64BlockContext *ctx) {
-    static const char *const registers[8] = {
-        "$a0", "$a1", "$a2", "$a3", "$a4", "$a5", "$a6", "$a7"
-    };
-    const MinicCoreFunction *fn = ctx->fn;
-    const char *name = ctx->name;
-    const size_t frame = ctx->machine_frame->frame_size;
-    const size_t save_offset = ctx->machine_frame->save_offset;
-    const bool has_calls = ctx->machine_frame->has_calls;
-    const bool dynamic_frame = ctx->machine_frame->has_dynamic_stack;
-    size_t i;
-    if (ctx->machine_frame->frame_alignment > 16U) {
-        /* Entry $sp is only 16-aligned. Reserve worst-case alignment slack,
-         * preserve the exact entry $sp, and round a stable callee-saved $s0
-         * frame base UP. All object slots are aligned relative to $s0;
-         * outgoing call stack space continues to use the 16-aligned $sp. */
-        if (!dynamic_frame || ctx->machine_frame->saved_entry_sp_offset == SIZE_MAX ||
-            fputs("  move $t0, $sp\n", out) == EOF ||
-            !minic_loongarch64_emit_sp_adjust(out, frame, false) ||
-            fprintf(out, "  move $t1, $s0\n"
-                         "  addi.d $s0, $sp, %zu\n"
-                         "  li.d $t3, -%zu\n"
-                         "  and $s0, $s0, $t3\n",
-                    ctx->machine_frame->frame_alignment - 1U,
-                    ctx->machine_frame->frame_alignment) < 0 ||
-            !minic_loongarch64_emit_frame_mem(
-                out, "st.d", "$t0", ctx->machine_frame->saved_entry_sp_offset, true) ||
-            !minic_loongarch64_emit_frame_mem(
-                out, "st.d", "$t1",
-                save_offset + (has_calls ? 8U : 0U), true))
-            goto fail;
-    } else if (!minic_loongarch64_emit_sp_adjust(out, frame, false) ||
-               (dynamic_frame &&
-                (!minic_loongarch64_emit_frame_mem(
-                     out, "st.d", "$s0",
-                     save_offset + (has_calls ? 8U : 0U), false) ||
-                 fputs("  move $s0, $sp\n", out) == EOF)))
-        goto fail;
-    if (has_calls &&
-        !minic_loongarch64_emit_frame_mem(
-            out, "st.d", "$ra", save_offset, dynamic_frame))
-        goto fail;
-    if (ctx->machine_frame->has_indirect_return) {
-        /* LP64D uses $a0 as a hidden first GAR, unlike AAPCS64 x8.
-         * A nested BL may destroy $a0, so pin the caller-owned buffer
-         * address in our stable local frame before any normal instruction. */
-        if (!minic_loongarch64_emit_frame_mem(
-                out, "st.d", "$a0", ctx->machine_frame->indirect_return_offset,
-                dynamic_frame))
-            goto fail;
-    }
-    if (ctx->machine_frame->variadic_count != 0U) {
-        for (i = 0U; i < 8U; ++i)
-            if (!minic_loongarch64_emit_frame_mem(
-                    out, "st.d", registers[i],
-                    ctx->machine_frame->variadic_save_base + i * 8U, dynamic_frame))
-                return minic_multi_direct_machine_reject(
-                    fn, "loongarch64", name, "variadic_save",
-                    SIZE_MAX, SIZE_MAX, __LINE__);
-    }
-    return true;
-fail:
-    return minic_multi_direct_machine_reject(
-        fn, "loongarch64", name, "frame_finalization",
-        SIZE_MAX, SIZE_MAX, __LINE__);
-}
-
 static bool loongarch64_emit_function(
     FILE *out, const MinicTargetInfo *target, const MinicCoreModule *module,
     const MinicCoreModuleFunctionSymbol *module_decl,
@@ -198,9 +128,10 @@ static bool loongarch64_emit_function(
         .elf_function_type = "@function",
         .init_array_type = "@init_array",
         .init_word_directive = "quad",
-        .emit_prologue = loongarch64_emit_prologue,
-        .emit_core_blocks = minic_loongarch64_emit_core_blocks,
-        .qualify_opaque_asm = minic_loongarch64_qualified_opaque_asm
+        .qualify_opaque_asm = minic_loongarch64_qualified_opaque_asm,
+        .select_machine = minic_loongarch64_select_machine,
+        .initialize_machine_asm_policy =
+            minic_loongarch64_machine_gnu_asm_policy_initialize
     };
     bool success;
     if (target == NULL || fn == NULL) return false;
@@ -214,9 +145,8 @@ static bool loongarch64_emit_function(
         abi.fp_argument_registers = 0U;
     }
     minic_loongarch64_memory_helpers_begin(id);
-    /* Machine decisions are made by the native Core/ABI emitters. Assembly
-     * text is the final serialization, never an optimization input. The
-     * target-owned unaligned-memory helpers follow the function's .size. */
+    /* Entire function is selected and verified before any ELF text is
+     * written. No instruction-level FILE* fallback survives this entry. */
     success = minic_multi_direct_lp64_emit_function(
         out, target, module, module_decl, fn, facts, storage,
         id, function_sections, &emitter);

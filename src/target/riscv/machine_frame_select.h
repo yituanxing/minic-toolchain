@@ -37,6 +37,9 @@ typedef struct MinicRiscvPhysicalFrame {
     size_t varargs_offset;
     size_t varargs_size;
     size_t first_variadic_gpr;
+    /* Frozen psABI named stack parameters preceding the first variadic
+     * stack argument. This comes from the finalized RV32/RV64 ABI cursor. */
+    size_t named_stack_argument_slots;
     bool saves_return_address;
     bool has_hidden_result_pointer;
     bool has_dynamic_stack;

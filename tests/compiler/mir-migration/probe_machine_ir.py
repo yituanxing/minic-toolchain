@@ -158,7 +158,7 @@ def build_witness(host_cc, work):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--mode", choices=("golden", "production"), required=True)
-    parser.add_argument("--targets", choices=("a64-loong", "five"),
+    parser.add_argument("--targets", choices=("a64-loong", "five") + FIVE,
                         default="a64-loong")
     parser.add_argument("--minic-cc", type=Path, required=True)
     parser.add_argument("--build-dir", type=Path, default=ROOT / "build/debug")
@@ -173,7 +173,8 @@ def main():
     work = args.build_dir.resolve() / "tests/mir-migration"
     work.mkdir(parents=True, exist_ok=True)
     golden = read_goldens()
-    archs = FIVE if args.targets == "five" else TARGETS
+    archs = (FIVE if args.targets == "five" else
+             TARGETS if args.targets == "a64-loong" else (args.targets,))
     cases = tuple(args.case) if args.case else CASES
     witness = None
     function_start = None
@@ -220,10 +221,15 @@ def main():
             demand(proc.returncode == 0 and output.is_file(),
                    f"{key}: MiniC failed ({proc.returncode}): {proc.stderr}")
             if args.mode == "production":
-                demand(marker.is_file() and marker.read_text() ==
-                       "typed-MIR-serializer-call\n",
-                       f"{key}: production used old direct FILE* path; "
-                       f"live stack never entered {TRACED_FUNCTION}")
+                evidence = marker.read_text().split() if marker.is_file() else []
+                published = output.stat()
+                demand(len(evidence) == 3 and
+                       evidence[0] == "typed-MIR-serializer-call" and
+                       evidence[1].isdigit() and evidence[2].isdigit() and
+                       int(evidence[1]) == published.st_dev and
+                       int(evidence[2]) == published.st_ino,
+                       f"{key}: output inode was not written by live "
+                       f"{TRACED_FUNCTION} (old FILE* path or throwaway stream)")
                 calls += 1
             payload = output.read_bytes()
             demand(bool(payload), f"{key}: empty .s")

@@ -4,6 +4,7 @@
 #include "target/riscv/machine_target_state.h"
 #include "target/riscv/instruction_select.h"
 #include "target/common/machine_core_coverage.h"
+#include "target/common/elf_module_symbol_info.h"
 #include <limits.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -233,15 +234,15 @@ static bool rv_object_offset(RvCoreSelection *sel, MinicCoreObjectId id,
     return true;
 }
 static bool rv_byte_transfer(RvCoreSelection *sel, bool load,
-                             unsigned reg, unsigned base, size_t displacement) {
+    unsigned reg, unsigned base, size_t displacement, bool is_volatile) {
     MinicMachineOperand ops[2];
     if (displacement > 2047U) return false;
     ops[0] = rv_reg(sel->xlen, reg, load ?
         MINIC_MACHINE_REGISTER_WRITE : MINIC_MACHINE_REGISTER_READ);
     ops[1] = rv_addr(sel->xlen, base);
     ops[1].value.address.displacement = (int64_t)displacement;
-    return rv_emit(sel, load ? MINIC_RISCV_MACHINE_LBU :
-        MINIC_RISCV_MACHINE_SB, ops, 2U);
+    return rv_emit_volatile(sel, load ? MINIC_RISCV_MACHINE_LBU :
+        MINIC_RISCV_MACHINE_SB, is_volatile, ops, 2U);
 }
 /* Packed aggregates and trailing partial words must not read or overwrite
  * bytes past the Core object extent. This is the existing old byte-pack
@@ -266,7 +267,7 @@ static bool rv_object_chunk(RvCoreSelection *sel, MinicCoreObjectId id,
         (load && !rv_li(sel, reg, 0))) return false;
     for (byte = 0U; byte < count; ++byte) {
         if (load) {
-            if (!rv_byte_transfer(sel, true, RV_T3, RV_T2, byte) ||
+            if (!rv_byte_transfer(sel, true, RV_T3, RV_T2, byte, false) ||
                 (byte != 0U && !rv_rri(sel, MINIC_RISCV_MACHINE_SLLI,
                     RV_T3, RV_T3, (int64_t)(byte * 8U))) ||
                 !rv_rrr(sel, MINIC_RISCV_MACHINE_OR,
@@ -275,7 +276,7 @@ static bool rv_object_chunk(RvCoreSelection *sel, MinicCoreObjectId id,
                 ? !rv_rr(sel, MINIC_RISCV_MACHINE_MV, RV_T3, reg)
                 : !rv_rri(sel, MINIC_RISCV_MACHINE_SRLI,
                     RV_T3, reg, (int64_t)(byte * 8U))) ||
-                !rv_byte_transfer(sel, false, RV_T3, RV_T2, byte))
+                !rv_byte_transfer(sel, false, RV_T3, RV_T2, byte, false))
             return false;
     }
     return true;
@@ -519,7 +520,8 @@ static bool rv_core_parameter(RvCoreSelection *sel,
     return true;
 }
 static bool rv_copy_bytes(RvCoreSelection *sel, size_t bytes,
-                           unsigned destination, unsigned source) {
+    unsigned destination, unsigned source,
+    bool destination_volatile, bool source_volatile) {
     size_t copied = 0U;
     if (destination == source || destination == RV_T2 ||
         destination == RV_T3 || source == RV_T2 || source == RV_T3)
@@ -528,8 +530,10 @@ static bool rv_copy_bytes(RvCoreSelection *sel, size_t bytes,
         size_t i, step = bytes - copied;
         if (step > 2048U) step = 2048U;
         for (i = 0U; i < step; ++i)
-            if (!rv_byte_transfer(sel, true, RV_T2, source, i) ||
-                !rv_byte_transfer(sel, false, RV_T2, destination, i))
+            if (!rv_byte_transfer(sel, true, RV_T2, source, i,
+                    source_volatile) ||
+                !rv_byte_transfer(sel, false, RV_T2, destination, i,
+                    destination_volatile))
                 return false;
         copied += step;
         if (copied != bytes &&
@@ -540,6 +544,125 @@ static bool rv_copy_bytes(RvCoreSelection *sel, size_t bytes,
                 source, source, RV_T3))) return false;
     }
     return true;
+}
+
+/* Consume the same sealed Core record extent as the direct RV32/RV64
+ * emitters. A source pointer may designate an unaligned packed member, so
+ * neither MachineIR nor its GNU writer is allowed to widen these copies to
+ * a naturally aligned word transfer. The existing typed byte-copy lowering
+ * owns both RECORD_COPY and RECORD_LOAD on both XLENs. */
+static bool rv_record_extent(const RvCoreSelection *sel,
+    MinicCoreTypeId id, size_t *extent) {
+    const MinicCoreTypeContext *types = sel->plan->core->type_context;
+    const MinicCoreType *type;
+    if (types == NULL || extent == NULL) return false;
+    type = minic_core_type_get(types, minic_core_type_unqualified(types, id));
+    if (type == NULL || type->kind != MINIC_CORE_TYPE_RECORD ||
+        !type->has_layout || type->alignment == 0U) return false;
+    *extent = type->size;
+    return true;
+}
+
+static bool rv_core_record(RvCoreSelection *sel,
+    const MinicCoreInstruction *ins) {
+    const MinicCoreFunction *fn = sel->plan->core;
+    size_t bytes, offset;
+    if (ins->kind == MINIC_CORE_INSTRUCTION_RECORD_COPY) {
+        if (!rv_record_extent(sel, ins->core_type_id, &bytes) ||
+            bytes > (size_t)INT32_MAX) return false;
+        if (bytes == 0U) return true;
+        return rv_load(sel, ins->value.record_copy.destination_address,
+                   RV_T0) &&
+            rv_load(sel, ins->value.record_copy.source_address, RV_T1) &&
+            rv_copy_bytes(sel, bytes, RV_T0, RV_T1,
+                ins->value.record_copy.destination_volatile,
+                ins->value.record_copy.source_volatile);
+    }
+    if (ins->kind != MINIC_CORE_INSTRUCTION_RECORD_LOAD ||
+        ins->value.record_load.destination_object >= fn->object_count ||
+        !rv_record_extent(sel,
+            fn->objects[ins->value.record_load.destination_object].core_type_id,
+            &bytes) || bytes > (size_t)INT32_MAX) return false;
+    if (bytes == 0U) return true;
+    return rv_object_offset(sel, ins->value.record_load.destination_object,
+               bytes, &offset) &&
+        rv_load(sel, ins->value.record_load.source_address, RV_T0) &&
+        rv_frame_address(sel, RV_T1, offset) &&
+        rv_copy_bytes(sel, bytes, RV_T1, RV_T0, false,
+            ins->value.record_load.is_volatile);
+}
+
+/* __builtin_frame_address(0) / __builtin_return_address(0) keep the
+ * existing target-owned ABI frame meanings. Other levels are intentionally
+ * not manufactured from a guessed frame-chain convention. */
+static bool rv_core_call_frame_address(RvCoreSelection *sel,
+    const MinicCoreInstruction *ins) {
+    const MinicRiscvPhysicalFrame *frame = sel->plan->frame;
+    unsigned bytes;
+    bool sign, pointer;
+    if (ins->value.call_frame_address.level != 0U ||
+        !rv_type(sel, ins->core_type_id, &bytes, &sign, &pointer) ||
+        !pointer) return false;
+    switch (ins->value.call_frame_address.kind) {
+    case MINIC_CORE_CALL_FRAME_ADDRESS_RETURN:
+        return frame->saves_return_address &&
+            minic_riscv_machine_select_frame_transfer(&sel->builder,
+                RV_T0, frame->has_dynamic_stack ? RV_S0 : RV_SP,
+                frame->return_address_offset, true, sel->xlen / 8U) &&
+            rv_store(sel, ins->result, RV_T0);
+    case MINIC_CORE_CALL_FRAME_ADDRESS_FRAME:
+        return rv_rr(sel, MINIC_RISCV_MACHINE_MV, RV_T0,
+                   frame->has_dynamic_stack ? RV_S0 : RV_SP) &&
+            rv_store(sel, ins->result, RV_T0);
+    default:
+        return false;
+    }
+}
+
+/* An RV va_list cursor is a pointer into the psABI argument stream. Keep
+ * the saved register interval and the original entry-SP anchor separate:
+ * over-aligned functions must never derive varargs from realigned SP. */
+static bool rv_core_variadic_address(RvCoreSelection *sel,
+    const MinicCoreInstruction *ins) {
+    const MinicRiscvPhysicalFrame *frame = sel->plan->frame;
+    const size_t word = sel->xlen / 8U;
+    size_t displacement;
+    unsigned bytes;
+    bool sign, pointer;
+    if (!frame->variadic ||
+        !rv_type(sel, ins->core_type_id, &bytes, &sign, &pointer) ||
+        !pointer || frame->named_stack_argument_slots > SIZE_MAX / word)
+        return false;
+    if (frame->varargs_size != 0U &&
+        !frame->has_dynamic_stack_alignment)
+        return rv_frame_address(sel, RV_T0, frame->varargs_offset) &&
+            rv_store(sel, ins->result, RV_T0);
+    displacement = frame->varargs_size != 0U ? frame->varargs_size :
+        frame->named_stack_argument_slots * word;
+    if (displacement > (size_t)INT32_MAX) return false;
+    if (frame->has_dynamic_stack_alignment) {
+        if (!minic_riscv_machine_select_frame_transfer(&sel->builder,
+                RV_T0, frame->has_dynamic_stack ? RV_S0 : RV_SP,
+                frame->entry_sp_offset, true, (unsigned)word)) return false;
+    } else if (!rv_rri(sel, MINIC_RISCV_MACHINE_ADDI, RV_T0,
+                   frame->has_dynamic_stack ? RV_S0 : RV_SP, 0)) return false;
+    if (frame->varargs_size == 0U) {
+        if (!frame->has_dynamic_stack_alignment) {
+            if (displacement > SIZE_MAX - frame->frame_size) return false;
+            displacement += frame->frame_size;
+        }
+    }
+    if (displacement != 0U) {
+        const int64_t delta = frame->varargs_size != 0U ?
+            -(int64_t)displacement : (int64_t)displacement;
+        if (delta >= -2048 && delta <= 2047) {
+            if (!rv_rri(sel, MINIC_RISCV_MACHINE_ADDI,
+                    RV_T0, RV_T0, delta)) return false;
+        } else if (!rv_li(sel, RV_T1, delta) ||
+                   !rv_rrr(sel, MINIC_RISCV_MACHINE_ADD,
+                       RV_T0, RV_T0, RV_T1)) return false;
+    }
+    return rv_store(sel, ins->result, RV_T0);
 }
 static bool rv_core_parameter_object(RvCoreSelection *sel,
     const MinicCoreInstruction *ins) {
@@ -568,7 +691,7 @@ static bool rv_core_parameter_object(RvCoreSelection *sel,
             if (!rv_incoming_word(sel, loc.stack_begin, RV_T1)) return false;
         } else return false;
         return rv_frame_address(sel, RV_T0, offset) &&
-            rv_copy_bytes(sel, loc.bytes, RV_T0, RV_T1);
+            rv_copy_bytes(sel, loc.bytes, RV_T0, RV_T1, false, false);
     }
     if (loc.words != (loc.bytes + word - 1U) / word) return false;
     for (i = 0U; i < loc.words; ++i) {
@@ -741,19 +864,27 @@ static bool rv_core_symbol(RvCoreSelection *sel,
     const MinicCoreInstruction *ins) {
     const MinicCoreFunction *fn = sel->plan->core;
     const char *symbol = NULL;
-    uint32_t reloc = sel->plan->target->position_independent ?
-        MINIC_RISCV_MACHINE_RELOC_GOT :
-        MINIC_RISCV_MACHINE_RELOC_PCREL_LOCAL;
+    MinicElfModuleSymbolKind kind;
+    uint32_t reloc;
     MinicMachineOperand ops[2] = {{0}};
     if (ins->kind == MINIC_CORE_INSTRUCTION_GLOBAL_ADDRESS) {
         if (ins->value.global_id >= fn->global_count) return false;
         symbol = fn->globals[ins->value.global_id].name;
+        kind = MINIC_ELF_MODULE_SYMBOL_OBJECT;
     } else if (ins->kind == MINIC_CORE_INSTRUCTION_FUNCTION_ADDRESS) {
         if (ins->value.function_symbol_id >=
             fn->function_symbol_count) return false;
         symbol = fn->function_symbols[ins->value.function_symbol_id].name;
+        kind = MINIC_ELF_MODULE_SYMBOL_FUNCTION;
     } else return false;
     if (symbol == NULL) return false;
+    /* The old emitters already use this exact ModuleIR ELF fact. An absent
+     * standalone Module must conservatively use GOT for PIC unknowns. */
+    reloc = sel->plan->target->position_independent &&
+        !minic_multi_elf_module_symbol_facts(
+            sel->plan->module, symbol, kind).nonpreemptible ?
+        MINIC_RISCV_MACHINE_RELOC_GOT :
+        MINIC_RISCV_MACHINE_RELOC_PCREL_LOCAL;
     ops[0] = rv_reg(sel->xlen, RV_T0, MINIC_MACHINE_REGISTER_WRITE);
     ops[1].kind = MINIC_MACHINE_OPERAND_SYMBOL;
     ops[1].value.symbol.name = (char *)symbol;
@@ -1078,6 +1209,13 @@ static bool rv_core_instruction(RvCoreSelection *sel,
     case MINIC_CORE_INSTRUCTION_ATOMIC_LOAD:
     case MINIC_CORE_INSTRUCTION_ATOMIC_STORE:
         return rv_core_memory(sel, ins);
+    case MINIC_CORE_INSTRUCTION_RECORD_COPY:
+    case MINIC_CORE_INSTRUCTION_RECORD_LOAD:
+        return rv_core_record(sel, ins);
+    case MINIC_CORE_INSTRUCTION_CALL_FRAME_ADDRESS:
+        return rv_core_call_frame_address(sel, ins);
+    case MINIC_CORE_INSTRUCTION_VARIADIC_ARGUMENT_ADDRESS:
+        return rv_core_variadic_address(sel, ins);
     case MINIC_CORE_INSTRUCTION_CALL:
         return rv_core_call(sel, instruction_id, ins);
     case MINIC_CORE_INSTRUCTION_INDIRECT_CALL:
@@ -1123,7 +1261,7 @@ static bool rv_core_terminator(RvCoreSelection *sel, size_t core_id) {
                         sel->plan->frame->hidden_result_pointer_offset,
                         true, (unsigned)word) ||
                     !rv_frame_address(sel, RV_T0, offset) ||
-                    !rv_copy_bytes(sel, size, RV_T1, RV_T0) ||
+                    !rv_copy_bytes(sel, size, RV_T1, RV_T0, false, false) ||
                     !minic_riscv_machine_select_frame_transfer(
                         &sel->builder, RV_A0,
                         sel->plan->frame->has_dynamic_stack ? RV_S0 : RV_SP,

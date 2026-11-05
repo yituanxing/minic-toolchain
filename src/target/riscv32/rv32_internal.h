@@ -8,6 +8,7 @@
 #include "target/target_info.h"
 #include "target/riscv/isa_features.h"
 #include "target/riscv32/rv32_abi_plan.h"
+#include "target/riscv/machine_frame_select.h"
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdio.h>
@@ -50,6 +51,10 @@ bool rv32_frame_init_with_storage(Rv32Frame *,
     const MinicCoreFunction *, const MinicTargetInfo *, bool,
     const MinicCoreFunctionFacts *, const MinicCoreObjectStoragePlan *);
 void rv32_frame_destroy(Rv32Frame *);
+/* Borrow the already-finalized ILP32 frame/psABI facts for physical MIR.
+ * Never run a second frame allocation or argument-register cursor here. */
+bool rv32_machine_physical_frame(const Rv32Frame *,
+                                 MinicRiscvPhysicalFrame *);
 bool rv32_stack(FILE *, const char *, const char *, size_t);
 bool rv32_fixed_stack(FILE *, const Rv32Frame *, const char *, const char *, size_t);
 bool rv32_slot(FILE *, const Rv32Frame *, MinicCoreValueId, const char *, bool);

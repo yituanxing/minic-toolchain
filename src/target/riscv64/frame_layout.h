@@ -7,6 +7,7 @@
 #include "target/riscv64/record_snapshot.h"
 #include "target/riscv64/function_abi_plan.h"
 #include "target/riscv64/frame_requirements.h"
+#include "target/riscv/machine_frame_select.h"
 #include "target/common/core_object_storage.h"
 #include "target/common/core_function_facts.h"
 #include <stdbool.h>
@@ -68,6 +69,11 @@ bool minic_riscv64_core_frame_initialize_with_storage(
     MinicRiscv64CoreFrame *, MinicRiscv64FunctionAbiPlan *, bool, bool,
     const MinicCoreFunctionFacts *, const MinicCoreObjectStoragePlan *);
 void minic_riscv64_core_frame_destroy(MinicRiscv64CoreFrame *);
+/* Adapter of existing LP64 layout, borrowing its ABI, spill and ASM-save
+ * placements. The caller owns the callee-save array for the MIR lifetime. */
+bool minic_riscv64_machine_physical_frame(
+    const MinicRiscv64CoreFrame *, MinicRiscvPhysicalFrame *,
+    MinicRiscvPhysicalCalleeSave *, size_t);
 bool minic_riscv64_core_frame_parameter_location(
     const MinicRiscv64CoreFrame *, size_t, MinicRiscv64AbiArgumentLocation *);
 bool minic_riscv64_core_frame_object_offset(

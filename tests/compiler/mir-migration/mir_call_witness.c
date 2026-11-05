@@ -10,6 +10,7 @@
 #include <dlfcn.h>
 #include <execinfo.h>
 #include <fcntl.h>
+#include <inttypes.h>
 #include <link.h>
 #include <stdarg.h>
 #include <stdint.h>
@@ -34,21 +35,20 @@ static int executable_base(struct dl_phdr_info *info, size_t size, void *context
     return 0;
 }
 
-/* When given the expected .s path, a synthetic typed-emitter call into a
- * throwaway tmpfile must not make the production gate pass. */
-static int real_output_stream(FILE *stream) {
-    const char *path = getenv("MINIC_MIR_OUTPUT_PATH");
-    struct stat actual, expected;
+/* The module writer uses mkstemp + rename for atomic publication, so the
+ * final path may not exist DURING physical instruction emission. Capture
+ * the live stream inode and let the caller compare it with the published
+ * -o file AFTER MiniC exits. A throwaway stream cannot satisfy that check. */
+static int emitted_stream_identity(FILE *stream, struct stat *identity) {
     int fd;
-    if (path == NULL) return 1; /* permits independent witness self-test */
-    if (stream == NULL || (fd = fileno(stream)) < 0 ||
-        fstat(fd, &actual) != 0 || stat(path, &expected) != 0)
-        return 0;
-    return actual.st_dev == expected.st_dev && actual.st_ino == expected.st_ino;
+    return stream != NULL && identity != NULL &&
+        (fd = fileno(stream)) >= 0 && fstat(fd, identity) == 0 &&
+        S_ISREG(identity->st_mode);
 }
 
 static void observe_machine_body(FILE *stream) {
     void *frames[64];
+    struct stat stream_identity;
     int i, count;
     if (witnessed || inspecting) return;
     inspecting = 1;
@@ -68,13 +68,18 @@ static void observe_machine_body(FILE *stream) {
     for (i = 1; i < count; ++i) {
         uintptr_t ip = (uintptr_t)frames[i];
         if (ip >= machine_begin && ip < machine_end &&
-            real_output_stream(stream)) {
+            emitted_stream_identity(stream, &stream_identity)) {
             const char *path = getenv("MINIC_MIR_WITNESS_PATH");
             if (path != NULL) {
                 int fd = open(path, O_WRONLY | O_CREAT | O_EXCL, 0600);
                 if (fd >= 0) {
-                    static const char marker[] = "typed-MIR-serializer-call\n";
-                    (void)write(fd, marker, sizeof(marker) - 1U);
+                    char marker[160];
+                    int length = snprintf(marker, sizeof(marker),
+                        "typed-MIR-serializer-call %" PRIuMAX " %" PRIuMAX "\n",
+                        (uintmax_t)stream_identity.st_dev,
+                        (uintmax_t)stream_identity.st_ino);
+                    if (length > 0 && (size_t)length < sizeof(marker))
+                        (void)write(fd, marker, (size_t)length);
                     (void)close(fd);
                 }
             }

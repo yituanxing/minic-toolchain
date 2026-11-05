@@ -2,6 +2,7 @@
 #define MINIC_TARGET_RISCV_MACHINE_CORE_SELECT_H
 
 #include "core/core_ir.h"
+#include "core/module_ir.h"
 #include "target/riscv/machine_frame_select.h"
 #include "target/riscv32/rv32_abi_plan.h"
 #include "target/riscv64/function_abi_plan.h"
@@ -12,6 +13,9 @@
  * SIZE_MAX denotes a nonmaterialized pure value or missing object slot. */
 typedef struct MinicRiscvCoreMachinePlan {
     const MinicTargetInfo *target;
+    /* Borrow the sealed TU symbol namespace for PIC preemptibility. Null is
+     * permitted only for standalone selectors without a Module owner. */
+    const MinicCoreModule *module;
     const MinicCoreFunction *core;
     const MinicRiscvPhysicalFrame *frame;
     /* Exactly one immutable, already-finalized legacy psABI plan. The Core

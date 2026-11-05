@@ -93,6 +93,13 @@ static MinicMachineOperand a64_block(size_t id) {
     return op;
 }
 
+static MinicMachineOperand a64_block_address(size_t id) {
+    MinicMachineOperand op = {0};
+    op.kind = MINIC_MACHINE_OPERAND_BLOCK_ADDRESS;
+    op.value.block_id = id;
+    return op;
+}
+
 static MinicMachineOperand a64_address(unsigned int reg) {
     MinicMachineOperand op = {0};
     op.kind = MINIC_MACHINE_OPERAND_ADDRESS;
@@ -148,6 +155,17 @@ static bool a64_rrr(A64CoreSelection *sel, uint32_t opcode,
         a64_gp(right, bits, MINIC_MACHINE_REGISTER_READ)
     };
     return a64_emit(sel, opcode, ops, 3U);
+}
+
+static bool a64_widen_mul(A64CoreSelection *sel, bool sign,
+    unsigned int dst, unsigned int left, unsigned int right) {
+    const MinicMachineOperand ops[] = {
+        a64_gp(dst, 64U, MINIC_MACHINE_REGISTER_WRITE),
+        a64_gp(left, 32U, MINIC_MACHINE_REGISTER_READ),
+        a64_gp(right, 32U, MINIC_MACHINE_REGISTER_READ)
+    };
+    return a64_emit(sel, sign ? MINIC_A64_MACHINE_SMULL :
+        MINIC_A64_MACHINE_UMULL, ops, 3U);
 }
 
 static bool a64_rri(A64CoreSelection *sel, uint32_t opcode,
@@ -1461,6 +1479,152 @@ static bool a64_record_transfer(A64CoreSelection *sel,
         destination_volatile);
 }
 
+/* Preserve the old AAPCS64 checked-builtin arithmetic exactly, but keep
+ * arithmetic, flags and the result-pointer store as independently verified
+ * physical instructions. No output text or second Core arithmetic planner. */
+static bool a64_checked_overflow(A64CoreSelection *sel,
+    const MinicCoreInstruction *ins) {
+    const MinicCoreFunction *fn = sel->ctx->fn;
+    const MinicCoreValueId lhs = ins->value.integer_overflow.left;
+    const MinicCoreValueId rhs = ins->value.integer_overflow.right;
+    const MinicCoreValueId address = ins->value.integer_overflow.result_address;
+    const int op = ins->value.integer_overflow.operator_kind;
+    size_t width;
+    bool sign;
+    uint32_t store_op;
+    if (minic_core_integer_overflow_shape(fn, ins, &width, &sign)) {
+        const unsigned int bits = width == 8U ? 64U : 32U;
+        if ((width != 4U && width != 8U) ||
+            !a64_load_core(sel, lhs, A64_T0, bits) ||
+            !a64_load_core(sel, rhs, A64_T1, bits) ||
+            !a64_load_core(sel, address, A64_T2, 64U)) return false;
+        if (op == MINIC_CORE_INTEGER_OVERFLOW_ADD ||
+            op == MINIC_CORE_INTEGER_OVERFLOW_SUBTRACT) {
+            const bool sub = op == MINIC_CORE_INTEGER_OVERFLOW_SUBTRACT;
+            if (!a64_rrr(sel, sub ? MINIC_A64_MACHINE_SUBS :
+                    MINIC_A64_MACHINE_ADDS, bits, A64_T0, A64_T0, A64_T1) ||
+                !a64_cset(sel, A64_T1, sign ? 6 : sub ? 3 : 2)) return false;
+        } else if (op == MINIC_CORE_INTEGER_OVERFLOW_MULTIPLY) {
+            if (bits == 64U) {
+                if (!a64_rrr(sel, sign ? MINIC_A64_MACHINE_SMULH :
+                        MINIC_A64_MACHINE_UMULH, 64U,
+                        A64_T3, A64_T0, A64_T1) ||
+                    !a64_rrr(sel, MINIC_A64_MACHINE_MUL, 64U,
+                        A64_T0, A64_T0, A64_T1)) return false;
+                if (sign) {
+                    if (!a64_rri(sel, MINIC_A64_MACHINE_ASR_IMM, 64U,
+                            A64_T1, A64_T0, 63) ||
+                        !a64_compare(sel, 64U, A64_T3, A64_T1)) return false;
+                } else if (!a64_cmp_zero(sel, 64U, A64_T3)) return false;
+            } else {
+                if (!a64_widen_mul(sel, sign,
+                        A64_T3, A64_T0, A64_T1)) return false;
+                if (sign) {
+                    if (!a64_extend_word(sel, A64_T1, A64_T3, true) ||
+                        !a64_compare(sel, 64U, A64_T3, A64_T1)) return false;
+                } else if (!a64_rri(sel, MINIC_A64_MACHINE_LSR_IMM,
+                    64U, A64_T1, A64_T3, 32) ||
+                    !a64_cmp_zero(sel, 64U, A64_T1)) return false;
+                if (!a64_rr(sel, MINIC_A64_MACHINE_MOV, 32U,
+                        A64_T0, A64_T3)) return false;
+            }
+            if (!a64_cset(sel, A64_T1, 1)) return false;
+        } else return false;
+        store_op = bits == 64U ? MINIC_A64_MACHINE_STR_X :
+            MINIC_A64_MACHINE_STR_W;
+        return a64_memory_register(sel, store_op, false, A64_T0,
+                   bits, A64_T2, 0U, true, false) &&
+            a64_store_core(sel, ins->result, A64_T1, 32U);
+    }
+    {
+        MinicCoreIntegerOverflowNarrowShape narrow;
+        if (minic_core_integer_overflow_narrow_result_shape(fn, ins,
+                &narrow)) {
+            const uint32_t math = op == MINIC_CORE_INTEGER_OVERFLOW_ADD ?
+                MINIC_A64_MACHINE_ADD :
+                op == MINIC_CORE_INTEGER_OVERFLOW_SUBTRACT ?
+                    MINIC_A64_MACHINE_SUB : MINIC_A64_MACHINE_MUL;
+            const uint32_t narrow_store = narrow.result_width == 1U ?
+                MINIC_A64_MACHINE_STRB : MINIC_A64_MACHINE_STRH;
+            if ((op != MINIC_CORE_INTEGER_OVERFLOW_ADD &&
+                 op != MINIC_CORE_INTEGER_OVERFLOW_SUBTRACT &&
+                 op != MINIC_CORE_INTEGER_OVERFLOW_MULTIPLY) ||
+                !a64_load_core(sel, lhs, A64_T0, 32U) ||
+                !a64_load_core(sel, rhs, A64_T1, 32U) ||
+                !a64_load_core(sel, address, A64_T2, 64U) ||
+                !a64_normalize(sel, narrow.left_width,
+                    narrow.left_signed, A64_T0) ||
+                !a64_normalize(sel, narrow.right_width,
+                    narrow.right_signed, A64_T1) ||
+                !a64_extend_word(sel, A64_T0, A64_T0,
+                    narrow.left_signed) ||
+                !a64_extend_word(sel, A64_T1, A64_T1,
+                    narrow.right_signed) ||
+                !a64_rrr(sel, math, 64U, A64_T3, A64_T0, A64_T1) ||
+                !a64_rr(sel, MINIC_A64_MACHINE_MOV, 32U,
+                    A64_T0, A64_T3) ||
+                !a64_normalize(sel, narrow.result_width,
+                    narrow.result_signed, A64_T0) ||
+                !a64_extend_word(sel, 13U, A64_T0,
+                    narrow.result_signed) ||
+                !a64_compare(sel, 64U, A64_T3, 13U) ||
+                !a64_cset(sel, A64_T1, 1)) return false;
+            return a64_memory_register(sel, narrow_store, false,
+                       A64_T0, 32U, A64_T2, 0U, true, false) &&
+                a64_store_core(sel, ins->result, A64_T1, 32U);
+        }
+    }
+    {
+        bool signed_left, signed_right, signed_result;
+        if (minic_core_integer_overflow_mixed_multiply_i32_shape(fn,
+                ins, &signed_left, &signed_right, &signed_result)) {
+            if (!a64_load_core(sel, lhs, A64_T0, 32U) ||
+                !a64_load_core(sel, rhs, A64_T1, 32U) ||
+                !a64_load_core(sel, address, A64_T2, 64U) ||
+                !a64_extend_word(sel, A64_T0, A64_T0, signed_left) ||
+                !a64_extend_word(sel, A64_T1, A64_T1, signed_right) ||
+                !a64_rrr(sel, MINIC_A64_MACHINE_MUL, 64U,
+                    A64_T3, A64_T0, A64_T1) ||
+                !a64_rr(sel, MINIC_A64_MACHINE_MOV, 32U,
+                    A64_T0, A64_T3) ||
+                !a64_extend_word(sel, 13U, A64_T0, signed_result) ||
+                !a64_compare(sel, 64U, A64_T3, 13U) ||
+                !a64_cset(sel, A64_T1, 1)) return false;
+            return a64_memory_register(sel, MINIC_A64_MACHINE_STR_W,
+                       false, A64_T0, 32U, A64_T2, 0U, true, false) &&
+                a64_store_core(sel, ins->result, A64_T1, 32U);
+        }
+    }
+    {
+        bool signed_left;
+        if (!minic_core_integer_overflow_mixed_add_i32_shape(fn,
+                ins, &signed_left) ||
+            !a64_load_core(sel, lhs, A64_T0, 64U) ||
+            !a64_load_core(sel, rhs, A64_T1, 64U) ||
+            !a64_load_core(sel, address, A64_T2, 64U) ||
+            !a64_extend_word(sel, signed_left ? A64_T0 : A64_T1,
+                signed_left ? A64_T0 : A64_T1, true) ||
+            !a64_rri(sel, MINIC_A64_MACHINE_ASR_IMM, 64U,
+                A64_T3, signed_left ? A64_T0 : A64_T1, 63) ||
+            !a64_rrr(sel, MINIC_A64_MACHINE_ADDS, 64U,
+                A64_T0, A64_T0, A64_T1) ||
+            !a64_rrr(sel, MINIC_A64_MACHINE_ADC, 64U,
+                A64_T3, A64_T3, MINIC_A64_MACHINE_ZR) ||
+            !a64_extend_word(sel, 13U, A64_T0, true) ||
+            !a64_compare(sel, 64U, A64_T0, 13U) ||
+            !a64_cset(sel, 14U, 1) ||
+            !a64_rri(sel, MINIC_A64_MACHINE_ASR_IMM, 64U,
+                13U, 13U, 63) ||
+            !a64_compare(sel, 64U, A64_T3, 13U) ||
+            !a64_cset(sel, 15U, 1) ||
+            !a64_rrr(sel, MINIC_A64_MACHINE_ORR, 32U,
+                A64_T1, 14U, 15U)) return false;
+        return a64_memory_register(sel, MINIC_A64_MACHINE_STR_W,
+                   false, A64_T0, 32U, A64_T2, 0U, true, false) &&
+            a64_store_core(sel, ins->result, A64_T1, 32U);
+    }
+}
+
 static bool a64_value_width(const MinicCoreFunction *fn,
     MinicCoreTypeId id, size_t *bytes, bool *is_signed,
     bool *is_pointer) {
@@ -1668,6 +1832,13 @@ static bool a64_core_instruction(A64CoreSelection *sel,
     size_t width;
     bool sign, ptr;
     switch (ins->kind) {
+    case MINIC_CORE_INSTRUCTION_COMPILER_BARRIER: {
+        MinicDirectMachineInstructionShape shape = {0};
+        return minic_multi_direct_machine_instruction_shape(fn, ins,
+                   false, &shape) &&
+            shape.family == MINIC_DIRECT_MACHINE_COMPILER_BARRIER &&
+            minic_machine_builder_emit_compiler_barrier(&sel->builder);
+    }
     case MINIC_CORE_INSTRUCTION_PARAMETER:
         return a64_parameter(sel, ins);
     case MINIC_CORE_INSTRUCTION_PARAMETER_OBJECT:
@@ -1718,6 +1889,8 @@ static bool a64_core_instruction(A64CoreSelection *sel,
             a64_normalize(sel, width, sign, A64_T0) &&
             a64_store_core(sel, ins->result, A64_T0,
                 width == 8U ? 64U : 32U);
+    case MINIC_CORE_INSTRUCTION_INTEGER_OVERFLOW:
+        return a64_checked_overflow(sel, ins);
     case MINIC_CORE_INSTRUCTION_INTEGER_CONVERSION: {
         return a64_integer_conversion(sel, ins);
     }
@@ -1802,6 +1975,28 @@ static bool a64_core_instruction(A64CoreSelection *sel,
                 MINIC_ELF_MODULE_SYMBOL_OBJECT :
                 MINIC_ELF_MODULE_SYMBOL_FUNCTION)) return false;
         return a64_store_core(sel, ins->result, A64_T0, 64U);
+    }
+    case MINIC_CORE_INSTRUCTION_BLOCK_ADDRESS: {
+        MinicCoreBlockId core_block;
+        const MinicMachineOperand adrp_ops[] = {
+            a64_gp(A64_T0, 64U, MINIC_MACHINE_REGISTER_WRITE),
+            a64_block_address(0U)
+        };
+        MinicMachineOperand add_ops[] = {
+            a64_gp(A64_T0, 64U, MINIC_MACHINE_REGISTER_WRITE),
+            a64_gp(A64_T0, 64U, MINIC_MACHINE_REGISTER_READ),
+            a64_block_address(0U)
+        };
+        MinicMachineOperand adrp[2];
+        if (!minic_multi_direct_block_address_shape(fn, ins, &core_block) ||
+            core_block >= fn->block_count || !sel->reachable[core_block] ||
+            sel->blocks[core_block] == SIZE_MAX) return false;
+        memcpy(adrp, adrp_ops, sizeof(adrp));
+        adrp[1] = a64_block_address(sel->blocks[core_block]);
+        add_ops[2] = a64_block_address(sel->blocks[core_block]);
+        return a64_emit(sel, MINIC_A64_MACHINE_ADRP_BLOCK, adrp, 2U) &&
+            a64_emit(sel, MINIC_A64_MACHINE_ADD_LO12_BLOCK, add_ops, 3U) &&
+            a64_store_core(sel, ins->result, A64_T0, 64U);
     }
     case MINIC_CORE_INSTRUCTION_LOAD:
     case MINIC_CORE_INSTRUCTION_STORE:

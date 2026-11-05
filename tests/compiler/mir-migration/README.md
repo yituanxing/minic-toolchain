@@ -19,16 +19,26 @@ make MODE=debug check-five-machine-mir-golden
 make MODE=debug check-a64-loong-mir-production
 make MODE=debug check-five-machine-mir-production
 make MODE=debug check-x86-machine-runtime
+make MODE=debug check-mir-migration-current
 
 # One focused fixture without a broad C/assembly recompilation:
 python3 tests/compiler/mir-migration/probe_machine_ir.py \
   --mode golden --targets five --case packed_memory \
   --minic-cc build/debug/bin/minic-cc
+
+# During per-target cutover, run the same live production witness on one
+# architecture; this does not waive the final five-target requirement.
+python3 tests/compiler/mir-migration/probe_machine_ir.py \
+  --mode production --targets loongarch64 --case arith_call_frame \
+  --minic-cc build/debug/bin/minic-cc
 ```
 
-The golden gates are safe before migration (10 fixtures × A64/Loong; across
-all five targets there are 47 exact byte-golden positives and 3 explicit
-legacy-backend rejection checks). The x86 executable gate compares nine
+The archived golden gates describe the pre-MIR compiler and are expected to
+diverge for a target once its real typed output replaces direct emission.
+`check-mir-migration-current` therefore checks the four still-legacy targets
+against their byte goldens and requires LoongArch64's live typed writer for
+all of its supported fixtures. The final five-target production gate remains
+strictly separate. The x86 executable gate compares nine
 actual host-native program exit codes/output with binaries linked from MiniC
 GNU assembly using that same host GCC; legacy x86 source ASM stays explicitly
 unsupported. Both production gates are **intentionally
@@ -49,7 +59,7 @@ Cases cover:
 - Packed unaligned word access, bit fields, volatile storage and record copy.
 - Computed goto (`&&label`, `goto *p`), function-pointer calls and switch.
 - Variadic ABI cursor (`va_start`/`va_arg`/`va_end`), nine stack/register
-  argument values, and an indirect variadic function call.
+argument values, and an indirect variadic function call.
 - Signed/unsigned 128-bit arithmetic, shifts, casts and by-value ABI;
   the direct backend's RV32 ILP32 frame and LoongArch64 Core-operation gaps
   are **verified rejection cases**, not silent missing test rows.
@@ -77,10 +87,11 @@ malformed golden entries are rejected.
 
 The MIR witness runs in the real compiler process. It observes the *live*
 call stack at libc output calls, resolves the typed writer's actual PIE base
-and symbol range, then matches the stream's file identity to the exact `-o`
-output path. A throwaway test stream is insufficient. The witness marker is a
-private file created only after the check; the script never trusts compiler
-stdout or assembly comments as evidence of a typed production path.
+and symbol range, then records the emitting stream's device/inode. After
+MiniC atomically renames its output, the verifier matches that identity to
+the final `-o` file. A throwaway test stream is insufficient. The witness
+marker is a private file created from the live stack; the script never trusts
+compiler stdout or assembly comments as evidence of a typed production path.
 
 These are **compiler assembly differential gates**, not final runtime or
 Linux-kernel proof. The additional x86 native runtime gate covers only the

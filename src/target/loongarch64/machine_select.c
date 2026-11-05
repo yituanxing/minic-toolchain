@@ -15,6 +15,7 @@
 #include "core/symbol_identity.h"
 #include <limits.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -1193,6 +1194,7 @@ static bool loong_select_memory(LoongSelector *sel,
         : (atomic ? ins->value.atomic_store.address : ins->value.store.address);
     size_t bytes;
     bool sign, pointer;
+    bool floating_transport;
     uint32_t opcode;
     unsigned int i;
     if (is_load) {
@@ -1202,12 +1204,36 @@ static bool loong_select_memory(LoongSelector *sel,
                    &bytes, &sign, &pointer)) return false;
     if (pointer) bytes = 8U;
     if (bytes != 1U && bytes != 2U && bytes != 4U && bytes != 8U) return false;
+    {
+        const MinicCoreValueId value = is_load ? ins->result :
+            (atomic ? ins->value.atomic_store.stored_value :
+                ins->value.store.stored_value);
+        const MinicCoreType *type = value < fn->value_count ?
+            minic_core_type_get(fn->type_context,
+                minic_core_type_unqualified(fn->type_context,
+                    fn->values[value].core_type_id)) : NULL;
+        if (type == NULL) return false;
+        floating_transport = type->kind == MINIC_CORE_TYPE_FLOAT &&
+            (type->value.floating.format == MINIC_CORE_FLOAT_BINARY32 ||
+             type->value.floating.format == MINIC_CORE_FLOAT_BINARY64);
+        /* FP values retain their exact IEEE payload in the owned frame slot;
+         * unaligned source pointers still use the byte-safe GP transport. */
+    }
     if (!loong_load_value(sel, address, LOONG_T1, true)) return false;
     if (!is_load) {
         const MinicCoreValueId value = atomic
             ? ins->value.atomic_store.stored_value
             : ins->value.store.stored_value;
-        if (!loong_load_value(sel, value, LOONG_T0, pointer)) return false;
+        if (floating_transport) {
+            size_t at;
+            if (!loong_value_offset(sel, value, &at) ||
+                !loong_frame_memory(&sel->builder,
+                    bytes == 8U ? MINIC_LOONG_MACHINE_LD_D :
+                                  MINIC_LOONG_MACHINE_LD_W,
+                    LOONG_T0, at,
+                    sel->ctx->machine_frame->has_dynamic_stack, true))
+                return false;
+        } else if (!loong_load_value(sel, value, LOONG_T0, pointer)) return false;
     }
     if (is_load) {
         opcode = bytes == 1U ? (sign ? MINIC_LOONG_MACHINE_LD_B :
@@ -1255,7 +1281,17 @@ static bool loong_select_memory(LoongSelector *sel,
                     LOONG_T0, LOONG_T0, 8)) return false;
         }
     }
-    return !is_load || loong_store_value(sel, ins, LOONG_T0, pointer);
+    if (!is_load) return true;
+    if (floating_transport) {
+        size_t at;
+        return loong_value_offset(sel, ins->result, &at) &&
+            loong_frame_memory(&sel->builder,
+                bytes == 8U ? MINIC_LOONG_MACHINE_ST_D :
+                              MINIC_LOONG_MACHINE_ST_W,
+                LOONG_T0, at,
+                sel->ctx->machine_frame->has_dynamic_stack, false);
+    }
+    return loong_store_value(sel, ins, LOONG_T0, pointer);
 }
 
 /* Aggregate and fixed-vector storage is address-backed Core state. Unlike
@@ -2431,7 +2467,15 @@ static bool loong_select_terminator(LoongSelector *sel,
         if (cond >= fn->value_count ||
             when_true >= fn->block_count || when_false >= fn->block_count ||
             !sel->reachable[when_true] || !sel->reachable[when_false] ||
-            !loong_load_value(sel, cond, LOONG_T0, false)) return false;
+            !loong_load_value(sel, cond, LOONG_T0, false)) {
+            if (getenv("MINIC_M1_TRACE") != NULL)
+                (void)fprintf(stderr,
+                    "MINIC_LOONG_MIR_COND_REJECT function=%s block=%zu "
+                    "stage=value cond=%u true=%u false=%u\n",
+                    sel->ctx->name, core_block_id, (unsigned int)cond,
+                    (unsigned int)when_true, (unsigned int)when_false);
+            return false;
+        }
         big = fn->block_count > 256U;
         aux = big ? sel->aux_true[core_block_id] :
                     sel->aux_false[core_block_id];
@@ -2439,12 +2483,26 @@ static bool loong_select_terminator(LoongSelector *sel,
             !loong_branch(sel, big ? MINIC_LOONG_MACHINE_BEQZ :
                     MINIC_LOONG_MACHINE_BNEZ,
                 big ? sel->aux_false[core_block_id] :
-                      sel->block_ids[when_true], true, big) ||
+                      sel->block_ids[when_true], true, big)) {
+            if (getenv("MINIC_M1_TRACE") != NULL)
+                (void)fprintf(stderr,
+                    "MINIC_LOONG_MIR_COND_REJECT function=%s block=%zu "
+                    "stage=branch aux=%zu\n", sel->ctx->name,
+                    core_block_id, aux);
+            return false;
+        }
+        if (!minic_machine_builder_add_successor(b, aux) ||
             !minic_machine_builder_set_fallthrough(b, aux) ||
             !minic_machine_builder_position_at(b, aux) ||
             !loong_branch(sel, MINIC_LOONG_MACHINE_B,
-                sel->block_ids[big ? when_true : when_false], false, false))
+                sel->block_ids[big ? when_true : when_false], false, false)) {
+            if (getenv("MINIC_M1_TRACE") != NULL)
+                (void)fprintf(stderr,
+                    "MINIC_LOONG_MIR_COND_REJECT function=%s block=%zu "
+                    "stage=fallthrough aux=%zu\n", sel->ctx->name,
+                    core_block_id, aux);
             return false;
+        }
         if (big) {
             if (!minic_machine_builder_position_at(b,
                     sel->aux_false[core_block_id]) ||
@@ -2615,10 +2673,24 @@ bool minic_loongarch64_select_machine(MinicMachineFunction *machine,
             if (!minic_core_block_instruction_at(fn, block, ordinal,
                     &ins_id, &ins)) goto cleanup;
             minic_machine_builder_set_origin(&sel.builder, i, ins_id);
-            if (!loong_select_core(&sel, ins, ins_id)) goto cleanup;
+            if (!loong_select_core(&sel, ins, ins_id)) {
+                if (getenv("MINIC_M1_TRACE") != NULL)
+                    (void)fprintf(stderr,
+                        "MINIC_LOONG_MIR_SELECT_REJECT function=%s block=%zu "
+                        "instruction=%u kind=%u\n", ctx->name, i,
+                        (unsigned int)ins_id, (unsigned int)ins->kind);
+                goto cleanup;
+            }
             minic_machine_builder_clear_origin(&sel.builder);
         }
-        if (!loong_select_terminator(&sel, i)) goto cleanup;
+        if (!loong_select_terminator(&sel, i)) {
+            if (getenv("MINIC_M1_TRACE") != NULL)
+                (void)fprintf(stderr,
+                    "MINIC_LOONG_MIR_TERMINATOR_REJECT function=%s block=%zu "
+                    "kind=%u\n", ctx->name, i,
+                    (unsigned int)block->terminator.kind);
+            goto cleanup;
+        }
     }
     success = true;
 cleanup:

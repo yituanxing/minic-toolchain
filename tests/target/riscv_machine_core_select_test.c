@@ -976,6 +976,294 @@ done:
     minic_core_type_context_destroy(&types);
     return ok;
 }
+
+/* Packed records must remain byte-exact on both ISA widths, and each
+ * independently volatile source/destination side survives Core→MIR. */
+static bool run_record_memory(unsigned xlen) {
+    MinicCoreTypeContext types;
+    MinicCoreFunction fn = {0};
+    MinicCoreType type = {0};
+    MinicCoreTypeId void_t, record_t, pointer_t, params[2];
+    MinicCoreBlockId entry;
+    MinicCoreValueId src, dst;
+    MinicCoreInstruction ins = {0};
+    MinicCoreTerminator term = {0};
+    MinicTargetInfo target = {0};
+    MinicDataLayout layout = {0};
+    MinicRiscvIsa isa = {0};
+    MinicRiscvPhysicalFrame frame = {0};
+    MinicRiscvCoreMachinePlan plan = {0};
+    Rv32FunctionAbiPlan abi32 = {0};
+    MinicRiscv64FunctionAbiPlan abi64 = {0};
+    MinicCoreCallIndex calls64 = {0};
+    MinicMachineFunction machine = {0};
+    MinicMachineGNUAsmPolicy policy = {0};
+    const bool reachable[] = {true};
+    size_t value_offsets[2] = {32U, 48U};
+    size_t object_offsets[] = {64U};
+    size_t i, j, loads = 0U, stores = 0U, volatile_loads = 0U;
+    size_t volatile_stores = 0U;
+    bool okay = false;
+    const char *stage = "setup";
+    minic_core_type_context_initialize(&types);
+    minic_core_function_initialize(&fn);
+    fn.name = malloc(sizeof("rv_record_memory"));
+    if (fn.name == NULL) goto done;
+    memcpy(fn.name, "rv_record_memory", sizeof("rv_record_memory"));
+    fn.name_length = sizeof("rv_record_memory") - 1U;
+    type.kind = MINIC_CORE_TYPE_VOID;
+    if (!minic_core_type_register(&types, &type, &void_t)) goto done;
+    type = (MinicCoreType){0};
+    type.kind = MINIC_CORE_TYPE_RECORD;
+    type.has_layout = true;
+    type.size = 5U;
+    type.alignment = 1U;
+    type.value.record.is_complete = true;
+    if (!minic_core_type_register(&types, &type, &record_t)) goto done;
+    type = (MinicCoreType){0};
+    type.kind = MINIC_CORE_TYPE_POINTER;
+    type.has_layout = true;
+    type.size = type.alignment = xlen / 8U;
+    type.value.pointer.pointee = record_t;
+    if (!minic_core_type_register(&types, &type, &pointer_t)) goto done;
+    params[0] = params[1] = pointer_t;
+    if (!minic_core_function_define_signature(&fn, &types, void_t,
+            params, 2U, MINIC_CALLING_CONVENTION_DEFAULT, false) ||
+        !minic_core_function_add_block(&fn, &entry)) goto done;
+    fn.objects = calloc(1U, sizeof(*fn.objects));
+    if (fn.objects == NULL) goto done;
+    fn.objects[0].core_type_id = record_t;
+    fn.object_count = fn.object_capacity = 1U;
+    ins.kind = MINIC_CORE_INSTRUCTION_PARAMETER;
+    ins.core_type_id = pointer_t;
+    ins.value.parameter_index = 0U;
+    if (!minic_core_function_append_value_instruction(&fn,
+            entry, &ins, &src)) goto done;
+    ins.value.parameter_index = 1U;
+    if (!minic_core_function_append_value_instruction(&fn,
+            entry, &ins, &dst)) goto done;
+    ins = (MinicCoreInstruction){0};
+    ins.kind = MINIC_CORE_INSTRUCTION_RECORD_LOAD;
+    ins.core_type_id = record_t;
+    ins.result = MINIC_CORE_VALUE_INVALID;
+    ins.value.record_load.source_address = src;
+    ins.value.record_load.destination_object = 0U;
+    ins.value.record_load.is_volatile = true;
+    if (!minic_core_function_append_effect_instruction(&fn,
+            entry, &ins)) goto done;
+    ins = (MinicCoreInstruction){0};
+    ins.kind = MINIC_CORE_INSTRUCTION_RECORD_COPY;
+    ins.core_type_id = record_t;
+    ins.result = MINIC_CORE_VALUE_INVALID;
+    ins.value.record_copy.destination_address = dst;
+    ins.value.record_copy.source_address = src;
+    ins.value.record_copy.destination_volatile = true;
+    ins.value.record_copy.source_volatile = true;
+    if (!minic_core_function_append_effect_instruction(&fn,
+            entry, &ins)) goto done;
+    term.kind = MINIC_CORE_TERMINATOR_RETURN;
+    term.return_value = MINIC_CORE_VALUE_INVALID;
+    term.return_object = MINIC_CORE_OBJECT_INVALID;
+    if (!minic_core_function_set_terminator(&fn, entry, &term) ||
+        !minic_core_function_attach_type_context(&fn, &types) ||
+        !minic_core_function_verify(&fn)) goto done;
+    stage = "machine";
+    layout.byte_order = MINIC_BYTE_ORDER_LITTLE;
+    layout.pointer_size = layout.pointer_alignment = xlen / 8U;
+    target.architecture = xlen == 32U ?
+        MINIC_TARGET_ARCH_RISCV32 : MINIC_TARGET_ARCH_RISCV64;
+    target.data_layout = &layout;
+    isa.xlen = xlen;
+    isa.abi = xlen == 32U ? MINIC_RISCV_ABI_ILP32 : MINIC_RISCV_ABI_LP64;
+    isa.strict_isa = true;
+    if (!minic_riscv_target_isa_store(&target, &isa)) goto done;
+    frame.frame_size = 128U;
+    frame.stack_alignment = 16U;
+    plan.target = &target;
+    plan.core = &fn;
+    plan.frame = &frame;
+    plan.value_offsets = value_offsets;
+    plan.value_offset_count = 2U;
+    plan.object_offsets = object_offsets;
+    plan.object_offset_count = 1U;
+    if (!prepare_old_rv_abi(&fn, xlen, 0U, &abi32, &abi64,
+            &calls64, &plan) ||
+        !minic_riscv_machine_select_core_subset(&machine, &plan) ||
+        !minic_machine_core_coverage_verify(&fn, reachable, &machine) ||
+        !minic_riscv_machine_gnu_asm_policy(&target, &policy) ||
+        !minic_machine_gnu_asm_preflight(&machine, &policy)) goto done;
+    stage = "effects";
+    for (i = 0U; i < machine.block_count; ++i)
+        for (j = 0U; j < machine.blocks[i].instruction_count; ++j) {
+            const MinicMachineInstruction *m =
+                &machine.blocks[i].instructions[j];
+            if (!m->has_core_origin ||
+                (m->core_instruction_id != 2U &&
+                 m->core_instruction_id != 3U)) continue;
+            if ((m->effects & MINIC_MACHINE_EFFECT_MEMORY_READ) != 0U) {
+                ++loads;
+                if ((m->effects & MINIC_MACHINE_EFFECT_VOLATILE) != 0U)
+                    ++volatile_loads;
+            }
+            if ((m->effects & MINIC_MACHINE_EFFECT_MEMORY_WRITE) != 0U) {
+                ++stores;
+                if ((m->effects & MINIC_MACHINE_EFFECT_VOLATILE) != 0U)
+                    ++volatile_stores;
+            }
+        }
+    okay = loads >= 10U && stores >= 10U &&
+        volatile_loads >= 10U && volatile_stores >= 5U;
+done:
+    if (!okay) fprintf(stderr,
+        "RV%u record memory failed at %s read=%zu write=%zu volatile=%zu/%zu\n",
+        xlen, stage, loads, stores, volatile_loads, volatile_stores);
+    minic_machine_function_destroy(&machine);
+    rv32_function_abi_plan_destroy(&abi32);
+    minic_riscv64_function_abi_plan_destroy(&abi64);
+    minic_core_call_index_destroy(&calls64);
+    minic_core_function_destroy(&fn);
+    minic_core_type_context_destroy(&types);
+    return okay;
+}
+
+/* Both LP64 and ILP32 consume saved return PC and the exact original-SP
+ * variadic cursor. Level-one frame chains are not invented by the selector. */
+static bool run_frame_varargs(unsigned xlen, bool realigned) {
+    MinicCoreTypeContext types;
+    MinicCoreFunction fn = {0};
+    MinicCoreType type = {0};
+    MinicCoreTypeId void_t, int_t, pointer_t;
+    MinicCoreBlockId entry;
+    MinicCoreValueId frame_value, return_value, va_value;
+    MinicCoreInstruction ins = {0};
+    MinicCoreTerminator term = {0};
+    MinicTargetInfo target = {0};
+    MinicDataLayout layout = {0};
+    MinicRiscvIsa isa = {0};
+    MinicRiscvPhysicalFrame frame = {0};
+    MinicRiscvCoreMachinePlan plan = {0};
+    Rv32FunctionAbiPlan abi32 = {0};
+    MinicRiscv64FunctionAbiPlan abi64 = {0};
+    MinicCoreCallIndex calls64 = {0};
+    MinicMachineFunction machine = {0};
+    MinicMachineGNUAsmPolicy policy = {0};
+    const bool reachable[] = {true};
+    size_t value_offsets[] = {16U, 32U, 48U};
+    size_t i, j, frame_loads = 0U, va_stores = 0U;
+    bool okay = false;
+    const char *stage = "setup";
+    minic_core_type_context_initialize(&types);
+    minic_core_function_initialize(&fn);
+    fn.name = malloc(sizeof("rv_frame_varargs"));
+    if (fn.name == NULL) goto done;
+    memcpy(fn.name, "rv_frame_varargs", sizeof("rv_frame_varargs"));
+    fn.name_length = sizeof("rv_frame_varargs") - 1U;
+    type.kind = MINIC_CORE_TYPE_VOID;
+    if (!minic_core_type_register(&types, &type, &void_t)) goto done;
+    type = (MinicCoreType){0};
+    type.kind = MINIC_CORE_TYPE_INTEGER;
+    type.has_layout = true;
+    type.size = type.alignment = 4U;
+    type.value.integer.bit_width = 32U;
+    if (!minic_core_type_register(&types, &type, &int_t)) goto done;
+    type = (MinicCoreType){0};
+    type.kind = MINIC_CORE_TYPE_POINTER;
+    type.has_layout = true;
+    type.size = type.alignment = xlen / 8U;
+    type.value.pointer.pointee = void_t;
+    if (!minic_core_type_register(&types, &type, &pointer_t) ||
+        !minic_core_function_define_signature(&fn, &types, pointer_t,
+            &int_t, 1U, MINIC_CALLING_CONVENTION_DEFAULT, true) ||
+        !minic_core_function_add_block(&fn, &entry)) goto done;
+    ins.kind = MINIC_CORE_INSTRUCTION_CALL_FRAME_ADDRESS;
+    ins.core_type_id = pointer_t;
+    ins.value.call_frame_address.kind = MINIC_CORE_CALL_FRAME_ADDRESS_FRAME;
+    if (!minic_core_function_append_value_instruction(&fn,
+            entry, &ins, &frame_value)) goto done;
+    ins.value.call_frame_address.kind = MINIC_CORE_CALL_FRAME_ADDRESS_RETURN;
+    if (!minic_core_function_append_value_instruction(&fn,
+            entry, &ins, &return_value)) goto done;
+    ins = (MinicCoreInstruction){0};
+    ins.kind = MINIC_CORE_INSTRUCTION_VARIADIC_ARGUMENT_ADDRESS;
+    ins.core_type_id = pointer_t;
+    if (!minic_core_function_append_value_instruction(&fn,
+            entry, &ins, &va_value)) goto done;
+    term.kind = MINIC_CORE_TERMINATOR_RETURN;
+    term.return_value = va_value;
+    term.return_object = MINIC_CORE_OBJECT_INVALID;
+    if (!minic_core_function_set_terminator(&fn, entry, &term) ||
+        !minic_core_function_attach_type_context(&fn, &types) ||
+        !minic_core_function_verify(&fn) || frame_value != 0U ||
+        return_value != 1U || va_value != 2U) goto done;
+    stage = "machine";
+    layout.byte_order = MINIC_BYTE_ORDER_LITTLE;
+    layout.pointer_size = layout.pointer_alignment = xlen / 8U;
+    target.architecture = xlen == 32U ?
+        MINIC_TARGET_ARCH_RISCV32 : MINIC_TARGET_ARCH_RISCV64;
+    target.data_layout = &layout;
+    isa.xlen = xlen;
+    isa.abi = xlen == 32U ? MINIC_RISCV_ABI_ILP32 : MINIC_RISCV_ABI_LP64;
+    isa.strict_isa = true;
+    if (!minic_riscv_target_isa_store(&target, &isa)) goto done;
+    frame.frame_size = 256U;
+    frame.stack_alignment = realigned ? 64U : 16U;
+    frame.has_dynamic_stack_alignment = realigned;
+    frame.entry_sp_offset = 176U;
+    frame.return_address_offset = 160U;
+    frame.saves_return_address = true;
+    frame.variadic = true;
+    frame.first_variadic_gpr = 1U;
+    frame.varargs_size = 7U * (xlen / 8U);
+    frame.varargs_offset = frame.frame_size - frame.varargs_size;
+    plan.target = &target;
+    plan.core = &fn;
+    plan.frame = &frame;
+    plan.value_offsets = value_offsets;
+    plan.value_offset_count = 3U;
+    if (!prepare_old_rv_abi(&fn, xlen, 0U, &abi32, &abi64,
+            &calls64, &plan) ||
+        !minic_riscv_machine_select_core_subset(&machine, &plan) ||
+        !minic_machine_core_coverage_verify(&fn, reachable, &machine) ||
+        !minic_riscv_machine_gnu_asm_policy(&target, &policy) ||
+        !minic_machine_gnu_asm_preflight(&machine, &policy)) goto done;
+    stage = "effects";
+    for (i = 0U; i < machine.block_count; ++i)
+        for (j = 0U; j < machine.blocks[i].instruction_count; ++j) {
+            const MinicMachineInstruction *m =
+                &machine.blocks[i].instructions[j];
+            if (m->has_core_origin && m->core_instruction_id == 1U &&
+                (m->effects & MINIC_MACHINE_EFFECT_MEMORY_READ) != 0U)
+                ++frame_loads;
+            if (m->has_core_origin && m->core_instruction_id == 2U &&
+                (m->effects & MINIC_MACHINE_EFFECT_MEMORY_WRITE) != 0U)
+                ++va_stores;
+        }
+    if (frame_loads == 0U || va_stores == 0U) goto done;
+    /* Core admits level-one frame introspection as a semantic expression,
+     * but this backend deliberately has no physical stack-chain policy. */
+    stage = "reject frame level one";
+    minic_machine_function_destroy(&machine);
+    fn.instructions[0].value.call_frame_address.level = 1U;
+    if (!minic_core_function_verify(&fn) ||
+        minic_riscv_machine_select_core_subset(&machine, &plan)) goto done;
+    fn.instructions[0].value.call_frame_address.level = 0U;
+    stage = "reject unavailable vararg state";
+    frame.variadic = false;
+    if (minic_riscv_machine_select_core_subset(&machine, &plan)) goto done;
+    okay = true;
+done:
+    if (!okay) fprintf(stderr,
+        "RV%u frame-varargs aligned=%d failed at %s\n",
+        xlen, realigned, stage);
+    minic_machine_function_destroy(&machine);
+    rv32_function_abi_plan_destroy(&abi32);
+    minic_riscv64_function_abi_plan_destroy(&abi64);
+    minic_core_call_index_destroy(&calls64);
+    minic_core_function_destroy(&fn);
+    minic_core_type_context_destroy(&types);
+    return okay;
+}
+
 int main(void) {
     if (!run(32U, false, false) || !run(64U, false, false) ||
         !run(32U, true, false) || !run(64U, true, false) ||
@@ -994,10 +1282,15 @@ int main(void) {
         !run_wide_parameter(32U, false) ||
         !run_wide_parameter(64U, false) ||
         !run_wide_parameter(32U, true) ||
-        !run_wide_parameter(64U, true)) {
+        !run_wide_parameter(64U, true) ||
+        !run_record_memory(32U) || !run_record_memory(64U) ||
+        !run_frame_varargs(32U, false) ||
+        !run_frame_varargs(64U, false) ||
+        !run_frame_varargs(32U, true) ||
+        !run_frame_varargs(64U, true)) {
         fprintf(stderr, "RV_CORE_MIR_CFG=FAIL\n");
         return 1;
     }
-    puts("RV_CORE_MIR_CFG=PASS architectures=2 prologue_isolated=1 exported_reachability=1 core_scalar=1 memory_effects=1 indirect_call=1 stack_marshalling=1 wide_split=1 aggregate_parameter=1 aggregate_call=1 abi_plan_reject=1 fail_closed=1");
+    puts("RV_CORE_MIR_CFG=PASS architectures=2 prologue_isolated=1 exported_reachability=1 core_scalar=1 memory_effects=1 record_memory=1 frame_varargs=1 indirect_call=1 stack_marshalling=1 wide_split=1 aggregate_parameter=1 aggregate_call=1 abi_plan_reject=1 fail_closed=1");
     return 0;
 }

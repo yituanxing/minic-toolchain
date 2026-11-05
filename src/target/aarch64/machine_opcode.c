@@ -10,7 +10,8 @@ typedef enum A64Form {
     A64_FORM_RI, A64_FORM_RII, A64_FORM_RRI,
     A64_FORM_CMP, A64_FORM_CMP_IMM, A64_FORM_CSET,
     A64_FORM_MEMORY, A64_FORM_MEMORY_POST_BYTE, A64_FORM_FRAME, A64_FORM_PAIR,
-    A64_FORM_ADRP, A64_FORM_ADD_LO12, A64_FORM_GOT_LOAD,
+    A64_FORM_ADRP, A64_FORM_ADD_LO12, A64_FORM_ADRP_BLOCK,
+    A64_FORM_ADD_LO12_BLOCK, A64_FORM_GOT_LOAD,
     A64_FORM_BLOCK, A64_FORM_COND_BLOCK, A64_FORM_REG_BLOCK,
     A64_FORM_REG, A64_FORM_CALL_SYMBOL, A64_FORM_NONE,
     A64_FORM_FP_RR, A64_FORM_FP_RRR, A64_FORM_FP_CMP,
@@ -98,6 +99,8 @@ static const A64Spec a64_specs[MINIC_A64_MACHINE_NOP + 1U] = {
     [MINIC_A64_MACHINE_STP_OFFSET_X] = {"stp", A64_FORM_PAIR, W, 8},
     [MINIC_A64_MACHINE_LDP_OFFSET_X] = {"ldp", A64_FORM_PAIR, R, 8},
     OP(ADRP, "adrp", ADRP, 0), OP(ADD_LO12, "add", ADD_LO12, 0),
+    OP(ADRP_BLOCK, "adrp", ADRP_BLOCK, 0),
+    OP(ADD_LO12_BLOCK, "add", ADD_LO12_BLOCK, 0),
     [MINIC_A64_MACHINE_LDR_GOT_LO12] = {"ldr", A64_FORM_GOT_LOAD, R, 8},
     [MINIC_A64_MACHINE_B] = {"b", A64_FORM_BLOCK, B, .ends_block = true},
     [MINIC_A64_MACHINE_B_COND] = {"b", A64_FORM_COND_BLOCK, B,
@@ -288,6 +291,11 @@ static bool a64_lookup(const MinicTargetInfo *target, uint32_t opcode,
     case A64_FORM_ADRP: REG(WRITE); ARG(MINIC_MACHINE_OPERAND_SYMBOL); break;
     case A64_FORM_ADD_LO12:
         REG(WRITE); REG(READ); ARG(MINIC_MACHINE_OPERAND_SYMBOL); break;
+    case A64_FORM_ADRP_BLOCK:
+        REG(WRITE); ARG(MINIC_MACHINE_OPERAND_BLOCK_ADDRESS); break;
+    case A64_FORM_ADD_LO12_BLOCK:
+        REG(WRITE); REG(READ);
+        ARG(MINIC_MACHINE_OPERAND_BLOCK_ADDRESS); break;
     case A64_FORM_GOT_LOAD:
         REG(WRITE); ARG(MINIC_MACHINE_OPERAND_ADDRESS); break;
     case A64_FORM_FP_RR:
@@ -550,10 +558,15 @@ static bool a64_legal_selected(const MinicMachineFunction *function,
         return ops[0].value.physical.reg.width_bits == 64U &&
             (ops[1].value.symbol.relocation == MINIC_A64_RELOC_PAGE ||
              ops[1].value.symbol.relocation == MINIC_A64_RELOC_GOT_PAGE);
+    case A64_FORM_ADRP_BLOCK:
+        return ops[0].value.physical.reg.width_bits == 64U;
     case A64_FORM_ADD_LO12:
         return ops[0].value.physical.reg.width_bits == 64U &&
             ops[1].value.physical.reg.width_bits == 64U &&
             ops[2].value.symbol.relocation == MINIC_A64_RELOC_LO12;
+    case A64_FORM_ADD_LO12_BLOCK:
+        return ops[0].value.physical.reg.width_bits == 64U &&
+            ops[1].value.physical.reg.width_bits == 64U;
     case A64_FORM_GOT_LOAD:
         return ops[0].value.physical.reg.width_bits == 64U &&
             ops[1].value.address.target_mode == MINIC_A64_ADDRESS_GOT_LO12;
@@ -656,7 +669,8 @@ static const char *a64_condition(int64_t id) {
 
 static bool a64_block_name(const MinicMachineOperand *op,
     const MinicMachineGNUAsmLabels *labels, const char **out) {
-    if (op->kind != MINIC_MACHINE_OPERAND_BLOCK || labels == NULL ||
+    if ((op->kind != MINIC_MACHINE_OPERAND_BLOCK &&
+         op->kind != MINIC_MACHINE_OPERAND_BLOCK_ADDRESS) || labels == NULL ||
         op->value.block_id >= labels->count || labels->names == NULL ||
         labels->names[op->value.block_id] == NULL) return false;
     *out = labels->names[op->value.block_id];
@@ -784,11 +798,20 @@ static bool a64_serialize(FILE *out, const MinicMachineFunction *function,
             fprintf(out, "  adrp %s, %s%s\n", a,
                 o[1].value.symbol.relocation == MINIC_A64_RELOC_GOT_PAGE
                     ? ":got:" : "", o[1].value.symbol.name) >= 0;
+    case A64_FORM_ADRP_BLOCK:
+        return a64_gp_text(&o[0].value.physical.reg, a, sizeof(a)) &&
+            a64_block_name(&o[1], labels, &label) &&
+            fprintf(out, "  adrp %s, %s\n", a, label) >= 0;
     case A64_FORM_ADD_LO12:
         return a64_gp_text(&o[0].value.physical.reg, a, sizeof(a)) &&
             a64_gp_text(&o[1].value.physical.reg, b, sizeof(b)) &&
             fprintf(out, "  add %s, %s, :lo12:%s\n", a, b,
                 o[2].value.symbol.name) >= 0;
+    case A64_FORM_ADD_LO12_BLOCK:
+        return a64_gp_text(&o[0].value.physical.reg, a, sizeof(a)) &&
+            a64_gp_text(&o[1].value.physical.reg, b, sizeof(b)) &&
+            a64_block_name(&o[2], labels, &label) &&
+            fprintf(out, "  add %s, %s, :lo12:%s\n", a, b, label) >= 0;
     case A64_FORM_BLOCK:
         return a64_block_name(&o[0], labels, &label) &&
             fprintf(out, "  b %s\n", label) >= 0;

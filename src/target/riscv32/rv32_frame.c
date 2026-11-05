@@ -222,6 +222,39 @@ void rv32_frame_destroy(Rv32Frame *f) {
         rv32_function_abi_plan_destroy(&f->abi);
     }
 }
+
+bool rv32_machine_physical_frame(const Rv32Frame *frame,
+    MinicRiscvPhysicalFrame *physical) {
+    if (frame == NULL || physical == NULL ||
+        frame->isa.xlen != 32U || frame->frame_size == 0U ||
+        frame->abi.named_gpr_words > 8U ||
+        frame->has_dynamic_stack_alignment !=
+            (frame->stack_alignment > 16U) ||
+        frame->outgoing_size > frame->frame_size ||
+        (frame->value_count != 0U && frame->value_offsets == NULL) ||
+        (frame->object_count != 0U && frame->object_offsets == NULL))
+        return false;
+    *physical = (MinicRiscvPhysicalFrame){
+        .frame_size = frame->frame_size,
+        .stack_alignment = frame->stack_alignment,
+        .outgoing_size = frame->outgoing_size,
+        .return_address_offset = frame->outgoing_size,
+        .hidden_result_pointer_offset = frame->sret_offset,
+        .saved_frame_base_offset = frame->saved_base_offset,
+        .entry_sp_offset = frame->entry_sp_offset,
+        .dynamic_call_area_size = 0U,
+        .varargs_offset = frame->varargs_offset,
+        .varargs_size = frame->varargs_size,
+        .first_variadic_gpr = frame->abi.named_gpr_words,
+        .named_stack_argument_slots = frame->abi.named_stack_words,
+        .saves_return_address = true,
+        .has_hidden_result_pointer = frame->abi.indirect_return,
+        .has_dynamic_stack = frame->has_dynamic_stack,
+        .has_dynamic_stack_alignment = frame->has_dynamic_stack_alignment,
+        .variadic = frame->is_variadic
+    };
+    return true;
+}
 /* Outgoing call words use moving sp. All fixed Core SSA/objects use s0
  * when dynamic alloca changes sp. t6 owns large-displacement addressing. */
 static bool rv32_stack_at(FILE *out, const char *base, const char *op,
