@@ -3665,12 +3665,13 @@ static bool x86_linux_bitops_source(const MinicTargetInvocation *invocation,
         }
     } else if(desc->has_flag) {
         contract->kinds[0]=MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
-        contract->kinds[1]=desc->writes_memory ?
-            MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE :
-            MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT;
+        /* The source constraint is input-only "m", even when the selected
+         * hardware bit operation mutates the pointed word. Memory writes
+         * remain target Machine effects, not a fabricated C read/write role. */
+        contract->kinds[1]=MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT;
         contract->kinds[2]=MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     } else {
-        contract->kinds[0]=MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE;
+        contract->kinds[0]=MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT;
         contract->kinds[1]=MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     }
     contract->target_machine_form_variant=(uint32_t)form;

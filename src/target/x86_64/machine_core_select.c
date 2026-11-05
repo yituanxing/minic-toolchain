@@ -4752,7 +4752,7 @@ static bool x86_source_scalar_bitops(X86CoreSelector *sel,
     for (i = 0U; i < count; ++i) {
         MinicCoreStructuredInlineAsmOperandKind kind =
             i == mem_index ?
-                (desc->memory_output || desc->writes_memory ?
+                (desc->memory_output ?
                     MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE :
                     MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT) :
             i == flag_index ?
