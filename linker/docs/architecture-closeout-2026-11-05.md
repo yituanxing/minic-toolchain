@@ -28,6 +28,15 @@ contract cannot silently shift positional ABI callbacks.  The public
 multi-target static API no longer says ELF64 when RV32 ELF32 is admitted, and
 unused RV64-only convenience entry points have been removed.
 
+Every frozen Linux script/GC policy preflight and the five-target runtime gate
+probe now share `tools/ci/minild-check-target-policies.py`. It reads the
+descriptor's named `.emulation`, `.page_size` and `.supports_*` fields,
+not ordinal booleans or a hardcoded structure width. Missing, duplicated,
+contradictory or invalid fields fail closed; the runtime probe additionally
+exercises an explicitly disabled target mode if a future target gates it.
+This preserves the ownership migration in CI itself, including the older
+four-architecture frozen-input workflows.
+
 ## Kernel discarded-dynsym exception
 
 AArch64 Linux links with a discarded physical .dynsym may retain dynamic

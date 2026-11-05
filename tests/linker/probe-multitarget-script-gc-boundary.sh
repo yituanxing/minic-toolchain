@@ -23,41 +23,11 @@ finish() {
 }
 trap finish EXIT
 
-# Fails closed if someone changes a target gate but leaves the acceptance
-# proof unmodified. The actual false/true flags are parsed from the C table;
-# no second hand-maintained copy of the capability matrix is trusted.
-python3 - "$repo_root/linker/src/linker_target_elf.inc" "$work/gates" <<'PY'
-import re
-import sys
-from pathlib import Path
-
-source = Path(sys.argv[1]).read_text()
-emulations = {
-    'rv32': 'elf32lriscv', 'rv64': 'elf64lriscv',
-    'x86_64': 'elf_x86_64', 'aarch64': 'aarch64linux',
-    'loongarch64': 'elf64loongarch',
-}
-lines = []
-for arch, emulation in emulations.items():
-    pattern = (r'\{"' + re.escape(emulation) +
-               # Numeric Target ABI/alignment fields may be inserted between
-               # page_size and the capability booleans. Keep reading the
-               # actual gates, without freezing positional field counts.
-               r'"[^{}]*?(\d+)U,\s*(?:\d+U,\s*)*'
-               r'(true|false),\s*(true|false),\s*'
-               r'(true|false),\s*(true|false),')
-    match = re.search(pattern, source, re.S)
-    if match is None:
-        raise SystemExit(f'MINILD_SCRIPT_GC_5ARCH=FAIL target_profile={emulation}')
-    page_size = int(match.group(1))
-    if (page_size < 4096 or page_size & (page_size - 1) or
-            match.group(2) != 'true' or match.group(3) != 'true'):
-        raise SystemExit(f'MINILD_SCRIPT_GC_5ARCH=FAIL target_profile={emulation}')
-    if match.group(4) != match.group(5):
-        raise SystemExit(f'MINILD_SCRIPT_GC_5ARCH=FAIL split_script_gc_policy={emulation}')
-    lines.append(f'{arch} {emulation} {match.group(4)}')
-Path(sys.argv[2]).write_text('\n'.join(lines) + '\n')
-PY
+# The same named-field policy reader serves every GNU Linux replay workflow
+# and this runtime gate probe. Adding hooks or rearranging target fields
+# cannot silently change or break the acceptance matrix.
+python3 "$repo_root/tools/ci/minild-check-target-policies.py" \
+    --emit-gates "$repo_root/linker/src/linker_target_elf.inc" "$work/gates"
 
 die() { echo "MINILD_SCRIPT_GC_5ARCH=FAIL arch=$arch stage=$1" >&2; exit 1; }
 have() { command -v "$1" >/dev/null 2>&1; }
