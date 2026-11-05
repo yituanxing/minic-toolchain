@@ -10,8 +10,11 @@ work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 source="$root/tests/compiler/c0/aarch64-linux-cap-alternative.c"
 cc -E -P -x c "$source" -o "$work/original.i"
+set -x
 "$minic" --target=aarch64-linux -S "$work/original.i" -o "$work/mini.s"
 test -s "$work/mini.s"
+# Temporary detailed branch/label evidence; remove after fix.
+grep -nE '(^[[:space:]]*b[[:space:]]+|Lminic_mir_|altinstructions|hword)' "$work/mini.s" || true
 
 # Preserve the Linux boot-time patch table, actual feature ID and real CFG
 # edge. A fallthrough NOP is not an equivalent replacement for asm goto.
@@ -25,11 +28,12 @@ grep -Fq ' .byte 662b-661b' "$work/mini.s"
 grep -Fq ' .byte 664f-663f' "$work/mini.s"
 grep -Fq '.subsection 1' "$work/mini.s"
 grep -Fq '.org' "$work/mini.s"
-grep -Eq $'^\tb\t\\.Lminic_mir_linux_has_cap_unlikely_[0-9]+$' "$work/mini.s"
-grep -Eq $'^\tb\t\\.Lminic_mir_linux_has_cap_likely_[0-9]+$' "$work/mini.s"
+grep -Eq '^[[:space:]]*b[[:space:]]+\.Lminic_mir_linux_has_cap_unlikely_[0-9]+$' "$work/mini.s"
+grep -Eq '^[[:space:]]*b[[:space:]]+\.Lminic_mir_linux_has_cap_likely_[0-9]+$' "$work/mini.s"
 test "$(grep -Fc '.pushsection .altinstructions' "$work/mini.s")" -eq 2
-test "$(grep -Ec $'^\tb\t\\.Lminic_mir_linux_has_cap_(un)?likely_[0-9]+$' "$work/mini.s")" -eq 2
+test "$(grep -Ec '^[[:space:]]*b[[:space:]]+\.Lminic_mir_linux_has_cap_(un)?likely_[0-9]+$' "$work/mini.s")" -eq 2
 
+# Keep xtrace active through deferred/PAN/QEMU checks for a single diagnostic CI.
 # Neither an unknown alternative instruction nor changed GNU constraints
 # may silently fall back into a generic Core opaque instruction.
 while IFS='|' read -r label before after; do

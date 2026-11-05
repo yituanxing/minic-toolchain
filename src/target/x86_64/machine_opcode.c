@@ -2080,6 +2080,55 @@ static bool x86_source_counter_contract(const MinicMachineInstruction *ins) {
  * The verifier independently rejects a missing, wider or swapped binding. */
 /* Real Linux RDRAND/RDSEED returns status in CF and data in a 64-bit GPR.
  * The status output is a FLAGS register, never a fabricated data register. */
+/* The x87 FDIV probe resets and consumes the entire hardware floating
+ * stack. All three C objects are exact typed memory operands, not GPR
+ * stand-ins; GNU output must retain FINIT/FWAIT and FISTP rounding. */
+static bool x86_source_fdiv_bug_contract(const MinicTargetInfo *target,
+    const MinicMachineInstruction *ins) {
+    static const unsigned int registers[3] = {
+        MINIC_X86_REG_R10, MINIC_X86_REG_R11, MINIC_X86_REG_RAX
+    };
+    size_t i;
+    if (ins->source_asm_machine_form_id != MINIC_X86_MACHINE_ASM_FDIV_BUG ||
+        ins->source_asm_machine_form_variant != 0U ||
+        ins->operand_count != 3U || ins->operands == NULL ||
+        ins->implicit_count != 8U || ins->implicit == NULL ||
+        ins->source_asm_terminates_block ||
+        ins->source_asm_permits_fallthrough ||
+        ins->effects != (MINIC_MACHINE_EFFECT_SOURCE_ASM |
+            MINIC_MACHINE_EFFECT_MEMORY_READ |
+            MINIC_MACHINE_EFFECT_MEMORY_WRITE) ||
+        !minic_x86_64_typed_machine_form_matches_template(
+            ins->source_asm_machine_form_id,
+            ins->source_asm_machine_form_variant,
+            ins->source_asm_template,ins->source_asm_length))
+        return false;
+    for (i = 0U; i < 3U; ++i) {
+        const MinicMachineOperand *op = &ins->operands[i];
+        const MinicMachineAddress *address = &op->value.address;
+        if (op->kind != MINIC_MACHINE_OPERAND_ADDRESS ||
+            op->asm_constraint == NULL ||
+            strcmp(op->asm_constraint,i == 0U ? "=m" : "m") != 0 ||
+            op->asm_name != NULL ||
+            !minic_x86_64_machine_validate_address(target,address,NULL) ||
+            !address->has_base ||
+            address->base.bank != MINIC_MACHINE_REGISTER_GENERAL ||
+            address->base.number != registers[i] ||
+            address->base.width_bits != 64U ||
+            address->has_index || address->has_segment ||
+            address->has_symbol || address->displacement != 0)
+            return false;
+    }
+    for (i = 0U; i < 8U; ++i) {
+        const MinicMachineRegisterEffect *op = &ins->implicit[i];
+        if (op->reg.bank != MINIC_MACHINE_REGISTER_FLOAT ||
+            op->reg.number != i || op->reg.width_bits != 80U ||
+            op->access != MINIC_MACHINE_REGISTER_CLOBBER)
+            return false;
+    }
+    return true;
+}
+
 static bool x86_source_random_seed_contract(
     const MinicMachineInstruction *ins) {
     const unsigned int form = minic_x86_64_linux_random_seed_form(
@@ -2461,6 +2510,9 @@ bool minic_x86_64_machine_validate_source_asm(const MinicTargetInfo *target,
     if (instruction->source_asm_machine_form_id ==
             MINIC_X86_MACHINE_ASM_IP_HERE)
         return x86_source_ip_here_contract(instruction);
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_FDIV_BUG)
+        return x86_source_fdiv_bug_contract(target,instruction);
     if (instruction->source_asm_machine_form_id ==
             MINIC_X86_MACHINE_ASM_RANDOM_SEED)
         return x86_source_random_seed_contract(instruction);

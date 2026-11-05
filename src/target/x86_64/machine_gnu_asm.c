@@ -628,13 +628,27 @@ static bool x86_emit_source_asm(FILE *out,
                 writes[index] : exchanges[index],out) != EOF;
     }
     if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_FDIV_BUG) {
+        /* Proven original x87 kernel test: binary64 loads, stacked DIV/MUL,
+         * FISTP store with live x87 rounding, FWAIT, and both FNINITs. */
+        return fputs("  fninit\n"
+            "  fldl (%r11)\n"
+            "  fdivl (%rax)\n"
+            "  fmull (%rax)\n"
+            "  fldl (%r11)\n"
+            "  fsubp %st, %st(1)\n"
+            "  fistpl (%r10)\n"
+            "  fwait\n"
+            "  fninit\n",out) != EOF;
+    }
+    if (instruction->source_asm_machine_form_id ==
             MINIC_X86_MACHINE_ASM_RANDOM_SEED) {
         /* The source operand name is sealed to RAX by MachineIR; RDRAND/
          * RDSEED update CF in hardware and the selected SETC reads it. */
         const unsigned int form = instruction->source_asm_machine_form_variant;
         if (form != 1U && form != 2U) return false;
-        return fputs(form == 1U ? "  rdrandq %rax\n" :
-            "  rdseedq %rax\n",out) != EOF;
+        return fputs(form == 1U ? "  rdrand %rax\n" :
+            "  rdseed %rax\n",out) != EOF;
     }
     if (instruction->source_asm_machine_form_id ==
             MINIC_X86_MACHINE_ASM_PKRU) {

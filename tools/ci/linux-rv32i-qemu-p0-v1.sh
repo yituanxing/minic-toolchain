@@ -303,6 +303,7 @@ if [[ "$p1" == 1 ]]; then
         echo "RV32I_QEMU_F18_MODULE=STAGED name=$name real_GNU_ELF32=true"
       done
     fi
+  fi
   if [[ "$gpu_diag" == 1 ]]; then
     : "${RV32I_QEMU_GPU_MODULE_DIR:?gpu_diag requires exact-config GNU ELF32 virtio-gpu dependencies}"
     gpu_dir=$(realpath "$RV32I_QEMU_GPU_MODULE_DIR")

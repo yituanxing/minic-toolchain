@@ -4093,6 +4093,88 @@ static bool x86_asm_bool_lvalue(const X86CoreSelector *sel,
         type->size == 1U && type->value.integer.is_bool;
 }
 
+/* arch/x86/kernel/fpu/bugs.c performs the historical FDIV x87 probe
+ * with exactly one int memory result and two binary64 memory inputs.
+ * The two FNINIT operations reset all x87 slots, so describe the complete
+ * floating-stack clobber instead of leaking an untyped textual fallback. */
+static bool x86_fdiv_memory_shape(const X86CoreSelector *sel,
+    MinicCoreValueId value, bool output) {
+    MinicCoreTypeId pointee;
+    const MinicCoreType *type;
+    if (value >= sel->core->value_count ||
+        !minic_lp64_core_pointer_pointee(sel->core->type_context,
+            sel->core->values[value].core_type_id,&pointee) ||
+        (type = x86_type(sel,pointee)) == NULL ||
+        !type->has_layout)
+        return false;
+    return output ? type->kind == MINIC_CORE_TYPE_INTEGER &&
+        type->size == 4U && type->value.integer.is_signed &&
+        !type->value.integer.is_bool :
+        type->kind == MINIC_CORE_TYPE_FLOAT && type->size == 8U &&
+        type->value.floating.format == MINIC_CORE_FLOAT_BINARY64;
+}
+
+static bool x86_source_fdiv_bug(X86CoreSelector *sel,
+    const MinicCoreInstruction *ins) {
+    static const unsigned int registers[3] = {
+        MINIC_X86_REG_R10, MINIC_X86_REG_R11, MINIC_X86_REG_RAX
+    };
+    const MinicCoreInlineAsm *source;
+    const MinicCoreStructuredInlineAsmOperand *roles;
+    MinicMachineOperand bindings[3];
+    MinicMachineRegisterEffect fpu[8] = {{0}};
+    size_t i;
+    if (sel == NULL || ins == NULL ||
+        ins->kind != MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM ||
+        ins->result != MINIC_CORE_VALUE_INVALID ||
+        ins->value.structured_inline_asm.inline_asm_id >=
+            sel->core->inline_asm_count ||
+        sel->core->inline_asms == NULL)
+        return false;
+    source = &sel->core->inline_asms[
+        ins->value.structured_inline_asm.inline_asm_id];
+    roles = ins->value.structured_inline_asm.operands;
+    if (source->target_machine_form_id != MINIC_X86_MACHINE_ASM_FDIV_BUG ||
+        source->target_machine_form_variant != 0U ||
+        source->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
+        source->source_asm_unique_id == 0U ||
+        source->is_volatile || source->is_goto ||
+        source->has_memory_clobber || source->explicit_memory_clobber ||
+        source->resolved_immediate_count != 0U ||
+        source->goto_second_target != MINIC_CORE_BLOCK_INVALID ||
+        source->register_clobber_count != 0U ||
+        ins->value.structured_inline_asm.operand_count != 3U ||
+        roles == NULL ||
+        !minic_x86_64_typed_machine_form_matches_template(
+            source->target_machine_form_id,
+            source->target_machine_form_variant,
+            source->template_text,source->template_length))
+        return false;
+    for (i = 0U; i < 3U; ++i) {
+        if (roles[i].operand_index != i ||
+            roles[i].kind != (i == 0U ?
+                MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT :
+                MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT) ||
+            roles[i].has_fixed_register_binding || roles[i].early_clobber ||
+            roles[i].physical_early_clobber ||
+            roles[i].physical_read_write || roles[i].has_tied_output ||
+            !x86_fdiv_memory_shape(sel,roles[i].value,i == 0U) ||
+            !x86_core_load(sel,roles[i].value,registers[i]))
+            return false;
+        bindings[i] = x86_addr(registers[i],0);
+        bindings[i].asm_constraint = i == 0U ? "=m" : "m";
+    }
+    for (i = 0U; i < 8U; ++i) {
+        fpu[i].reg = (MinicMachineRegister){
+            (unsigned int)i,80U,MINIC_MACHINE_REGISTER_FLOAT};
+        fpu[i].access = MINIC_MACHINE_REGISTER_CLOBBER;
+    }
+    return minic_machine_builder_emit_core_source_asm(&sel->builder,source,
+        MINIC_MACHINE_EFFECT_MEMORY_READ |
+            MINIC_MACHINE_EFFECT_MEMORY_WRITE,
+        bindings,3U,fpu,8U,false,false);
+}
+
 static bool x86_source_random_seed(X86CoreSelector *sel,
     const MinicCoreInstruction *ins) {
     const MinicCoreInlineAsm *source;
@@ -5601,6 +5683,7 @@ static bool x86_core_instruction(X86CoreSelector *sel,
             x86_source_cmpxchg128(sel, ins) ||
             x86_source_crash_register(sel, ins) ||
             x86_source_futex_extable(sel, ins) ||
+            x86_source_fdiv_bug(sel, ins) ||
             x86_source_random_seed(sel, ins) ||
             x86_source_pkru(sel, ins) ||
             x86_source_msr(sel, ins) ||

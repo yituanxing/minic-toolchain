@@ -20,6 +20,11 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Fail fast on RV32 QEMU diagnostic shell syntax
+        run: |
+          set -Eeuo pipefail
+          bash -n tools/ci/linux-rv32i-qemu-p0-v1.sh
+          echo 'RV32_GPU_DIFF_PREFLIGHT=PASS bash_syntax'
       - name: Install original toolchain and QEMU
         run: |
           set -Eeuo pipefail
