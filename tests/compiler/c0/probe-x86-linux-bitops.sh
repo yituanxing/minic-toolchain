@@ -94,9 +94,12 @@ int main(void) {
  } return 42;
 }
 EOF
-"$minic" --target=x86_64-linux -S "$work/bitops.i" -o "$work/bitops.s"
-for op in 'lock; btsq' 'lock; btrq' 'lock; orb %r10b' 'lock; andb %r10b' \
-          'btq %r10' 'btsq %r10' 'btrq %r10' 'btcq %r10' 'setc %al'; do
+if ! MINIC_X86_TYPED_REJECT_TRACE=1 "$minic" --target=x86_64-linux -S "$work/bitops.i" -o "$work/bitops.s"; then
+ echo "FAIL x86 Linux BITOPS typed MachineIR selection; see function/stage trace above"
+ exit 1
+fi
+for op in 'lock; btsq' 'lock; btrq' 'lock; orb %r11b' 'lock; andb %r11b' \
+          'btq %r11' 'btsq %r11' 'btrq %r11' 'btcq %r11' 'setc %r9b'; do
  grep -Fq "$op" "$work/bitops.s"
 done
 cc -O0 -no-pie "$work/main.c" "$work/gnu.c" -x assembler "$work/bitops.s" -o "$work/oracle"
