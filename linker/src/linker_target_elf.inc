@@ -109,9 +109,8 @@ struct MiniLdTargetProfile {
     /* Linux's fixed-address -shared -Bsymbolic -T kernel convention is
      * not interchangeable with a user-space DSO on other targets. */
     bool supports_kernel_shared_image;
-    /* The x86 compressed boot image is -pie --no-dynamic-linker -T, with
-     * every reference resolved before boot and no dynamic runtime loader.
-     * This is distinct from supports_pie (a user-space dynamic PIE). */
+    /* A freestanding kernel -pie --no-dynamic-linker -T image is not a
+     * general user-space PIE. Gate this separately from supports_pie. */
     bool supports_kernel_pie_image;
     MiniLdTargetFlagsMerge merge_flags;
     /* SHF_MERGE may rewrite STT_SECTION+addend only when this relocation's
@@ -182,7 +181,46 @@ static bool minild_i386_merge_addend_plain(uint32_t type) {
 }
 
 static bool minild_aarch64_merge_addend_plain(uint32_t type) {
-    return type == R_AARCH64_ABS64 || type == R_AARCH64_ABS32;
+    /* For ELF RELA, these non-GOT/non-TLS forms all use S + A as the
+     * referenced input address.  Page rounding, PC subtraction, immediate
+     * splitting and scaling happen *after* that address is resolved.  Thus
+     * an STT_SECTION relocation into SHF_MERGE can remap A to the folded
+     * atom's new coordinate, including ADRP+ADD/LDST pairs used heavily in
+     * Linux's .rodata.str1.8.  GOT/TLS forms have a different intermediate
+     * target and remain fail-closed until their owners opt in. */
+    switch (type) {
+    case R_AARCH64_ABS64:
+    case R_AARCH64_ABS32:
+    case R_AARCH64_PREL64:
+    case R_AARCH64_PREL32:
+    case R_AARCH64_MOVW_UABS_G0:
+    case R_AARCH64_MOVW_UABS_G0_NC:
+    case R_AARCH64_MOVW_UABS_G1:
+    case R_AARCH64_MOVW_UABS_G1_NC:
+    case R_AARCH64_MOVW_UABS_G2:
+    case R_AARCH64_MOVW_UABS_G2_NC:
+    case R_AARCH64_MOVW_UABS_G3:
+    case R_AARCH64_MOVW_SABS_G0:
+    case R_AARCH64_MOVW_SABS_G1:
+    case R_AARCH64_MOVW_SABS_G2:
+    case R_AARCH64_LD_PREL_LO19:
+    case R_AARCH64_ADR_PREL_LO21:
+    case R_AARCH64_ADR_PREL_PG_HI21:
+    case R_AARCH64_ADR_PREL_PG_HI21_NC:
+    case R_AARCH64_TSTBR14:
+    case R_AARCH64_CONDBR19:
+    case R_AARCH64_CALL26:
+    case R_AARCH64_JUMP26:
+    case R_AARCH64_ADD_ABS_LO12_NC:
+    case R_AARCH64_LDST8_ABS_LO12_NC:
+    case R_AARCH64_LDST16_ABS_LO12_NC:
+    case R_AARCH64_LDST32_ABS_LO12_NC:
+    case R_AARCH64_LDST64_ABS_LO12_NC:
+    case R_AARCH64_LDST128_ABS_LO12_NC:
+        return true;
+    default:
+        return false;
+    }
 }
 
 static bool minild_loongarch_merge_addend_plain(uint32_t type) {
@@ -195,8 +233,7 @@ static const MiniLdTargetProfile minild_target_profiles[] = {
     {"elf64lriscv", ELFCLASS64, ELFDATA2LSB, EM_RISCV, "riscv",
      NULL, "elf64-littleriscv", "/lib/ld-musl-riscv64.so.1", MINILD_SHT_RISCV_ATTRIBUTES,
      UINT64_C(0x10000), 4096U, 1U, 4U,
-     true, true, true, true, true, true, false, false,
-     minild_riscv_merge_flags,
+     true, true, true, true, true, true, false, false, minild_riscv_merge_flags,
      minild_riscv_merge_addend_plain,
      minild_riscv_relax_section,
      minild_riscv_replan_static_layout,
@@ -210,8 +247,7 @@ static const MiniLdTargetProfile minild_target_profiles[] = {
     {"elf32lriscv", ELFCLASS32, ELFDATA2LSB, EM_RISCV, "riscv",
      NULL, "elf32-littleriscv", NULL, MINILD_SHT_RISCV_ATTRIBUTES,
      UINT64_C(0x10000), 4096U, 1U, 4U,
-     true, true, true, true, true, false, false, false,
-     minild_riscv_merge_flags,
+     true, true, true, true, true, false, false, false, minild_riscv_merge_flags,
      minild_riscv_merge_addend_plain,
      minild_riscv_relax_section,
      minild_riscv_replan_static_layout,

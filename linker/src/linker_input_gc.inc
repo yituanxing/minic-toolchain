@@ -47,7 +47,8 @@ static bool minild_gc_mark_section(const MiniLdState *state,
 }
 
 static bool minild_gc_prune_static(MiniLdState *state,
-                                   const char *entry_symbol) {
+                                   const char *entry_symbol,
+                                   const MiniLdStaticOptions *options) {
     bool *live = NULL;
     size_t *heads = NULL;
     size_t *next = NULL;
@@ -179,6 +180,27 @@ static bool minild_gc_prune_static(MiniLdState *state,
                                 &queue_size)) {
         fprintf(state->diagnostics, "minic-ld: gc-root-overflow\n");
         goto done;
+    }
+
+    /* GNU -u roots are retained even without an incoming relocation.
+     * Absence of a definition is legal until actually referenced. */
+    if (options != NULL) {
+        for (i = 0U; i < options->forced_undefined_count; ++i) {
+            const char *name = options->forced_undefined_symbols[i];
+            size_t index = symbol_resolver_lookup(&state->resolver, name);
+
+            if (index != SIZE_MAX &&
+                state->resolver.entries[index].section >= 0 &&
+                (size_t)state->resolver.entries[index].section <
+                    state->work.count &&
+                !minild_gc_mark_section(
+                    state,
+                    (size_t)state->resolver.entries[index].section,
+                    live, queue, &queue_size)) {
+                fprintf(state->diagnostics, "minic-ld: gc-root-overflow\n");
+                goto done;
+            }
+        }
     }
 
     for (i = 0U; i < state->work.count; ++i) {

@@ -68,6 +68,7 @@ jobs:
             check-minild-aarch64-static-tls \
             check-minild-aarch64-static-ifunc \
             check-minild-aarch64-static-instruction-relocs \
+            check-minild-aarch64-merge-insn-relocs \
             check-minild-loongarch-static-relocs \
             check-minild-loongarch-pcala-relax-fixedpoint \
             check-minild-static-script-discard-reloc-reserve \

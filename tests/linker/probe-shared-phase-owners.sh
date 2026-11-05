@@ -228,9 +228,10 @@ if re.search(r'\(uint32_t\s*\*\)\s*\(void\s*\*\)', fin):
     raise SystemExit('MINILD_SHARED_PHASE_STRUCTURE=FAIL '
                      'host_endian_sysv_hash_projection')
 
-# Common must not enumerate machine-specific shared linkers.  The five
+# Common must not enumerate machine-specific shared linkers.  The six
 # immutable TargetProfiles select RV64 full ABI and RV32 compat-vDSO by
-# callbacks; the other three Linux targets deliberately lack ET_DYN hooks.
+# callbacks; x86-64, i386, AArch64 and LoongArch deliberately lack ET_DYN
+# shared-link hooks.  i386's REL implicit-addend owner is unrelated to them.
 target_profile = (src / 'linker_target_elf.inc').read_text(encoding='utf-8')
 linker_entry = (src / 'linker.c').read_text(encoding='utf-8')
 for name, code in (('target_profile', target_profile),
@@ -254,7 +255,7 @@ profile_rows = {
                       .split('\n};', 1)[0], re.S)
 }
 if set(profile_rows) != {'elf64lriscv', 'elf32lriscv', 'elf_x86_64',
-                         'aarch64linux', 'elf64loongarch'}:
+                         'elf_i386', 'aarch64linux', 'elf64loongarch'}:
     raise SystemExit('MINILD_SHARED_PHASE_STRUCTURE=FAIL '
                      f'target_profile_count={sorted(profile_rows)}')
 if not re.search(r'minild_riscv_shared_target_abi\s*,\s*'
@@ -266,10 +267,17 @@ if not re.search(r'minild_riscv_shared_target_abi\s*,\s*'
                      'riscv_shared_backend_bindings')
 for emulation in ('elf_x86_64', 'aarch64linux', 'elf64loongarch'):
     if not re.search(r'NULL\s*,\s*NULL\s*,\s*'
-                     r'minild_\w+_elf_flags\s*,\s*(?:true|false)\s*$',
+                     r'minild_\w+_elf_flags\s*,\s*(?:true|false)\s*,\s*'
+                     r'NULL\s*$',
                      profile_rows[emulation].strip()):
         raise SystemExit('MINILD_SHARED_PHASE_STRUCTURE=FAIL '
                          f'unsupported_shared_hooks={emulation}')
+if not re.search(r'NULL\s*,\s*NULL\s*,\s*'
+                 r'minild_zero_elf_flags\s*,\s*true\s*,\s*'
+                 r'minild_i386_implicit_addend\s*$',
+                 profile_rows['elf_i386'].strip()):
+    raise SystemExit('MINILD_SHARED_PHASE_STRUCTURE=FAIL '
+                     'unsupported_shared_hooks=elf_i386')
 for name in ('linker_shared_reloc_scan.inc',
              'linker_shared_reloc_apply.inc'):
     code = sources[name]

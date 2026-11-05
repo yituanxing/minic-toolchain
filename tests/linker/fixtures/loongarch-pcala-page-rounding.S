@@ -1,8 +1,10 @@
 .text
-.option norelax
 .globl _start
 .type _start,@function
 _start:
+    # Exercise the unshortened PCALA HI/LO carry semantics independently of
+    # the PCADDI relaxation tests, which deliberately use .option relax.
+    .option norelax
     la.local $r12,pcala_low_7ff
     la.local $r12,pcala_low_800
     ld.d $r13,$r12,0

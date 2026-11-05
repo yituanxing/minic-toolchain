@@ -21,6 +21,10 @@ typedef struct MiniLdInput {
 typedef struct MiniLdStaticOptions {
     const char *entry_symbol;
     const char *script_path;
+    /* GNU -u/--undefined: retain an unresolved strong reference before
+     * archive admission and treat its definition as a GC root if found. */
+    const char *const *forced_undefined_symbols;
+    size_t forced_undefined_count;
     bool gc_sections;
     /* GNU -n/--nmagic: script file layout uses section alignment rather
      * than maximum-page alignment. This is not GNU -N/--omagic. */
@@ -75,9 +79,8 @@ typedef enum MiniLdLinkMode {
 bool minild_emulation_supports_mode(const char *emulation,
                                     MiniLdLinkMode mode);
 bool minild_emulation_supports_kernel_shared_image(const char *emulation);
-/* Freestanding -pie --no-dynamic-linker -T kernel images are not ordinary
- * user-space PIE/DSO links. Only explicitly admitted targets may use the
- * static ET_DYN placement and relocation pipeline. */
+/* Only expressly admitted targets may link an all-resolved freestanding
+ * kernel -pie --no-dynamic-linker -T image through the static ELF pipeline. */
 bool minild_emulation_supports_kernel_pie_image(const char *emulation);
 /* A linker -EL/-EB request selects the output byte order, which must agree
  * with the target's declared ELF encoding. The CLI never guesses from the

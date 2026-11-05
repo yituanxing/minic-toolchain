@@ -128,8 +128,10 @@ int main(int argc, char **argv) {
     const char *interpreter_path = NULL;
     MiniLdInput inputs[4096];
     const char *library_dirs[256];
+    const char *forced_undefined_symbols[256];
     size_t input_count = 0U;
     size_t library_dir_count = 0U;
+    size_t forced_undefined_count = 0U;
     bool relocatable = false;
     bool static_link = false;
     bool shared_link = false;
@@ -202,6 +204,44 @@ int main(int argc, char **argv) {
             relocatable = true;
         } else if (strcmp(argv[i], "-static") == 0) {
             static_link = true;
+        } else if (strcmp(argv[i], "-u") == 0 ||
+                   strcmp(argv[i], "--undefined") == 0 ||
+                   (strncmp(argv[i], "-u", 2U) == 0 &&
+                    argv[i][2] != '\0') ||
+                   strncmp(argv[i], "--undefined=", 12U) == 0) {
+            const char *name;
+            size_t index;
+
+            if (strcmp(argv[i], "-u") == 0 ||
+                strcmp(argv[i], "--undefined") == 0) {
+                if (++i >= argc) {
+                    fprintf(stderr, "minic-ld: missing-forced-undefined-symbol\n");
+                    return 2;
+                }
+                name = argv[i];
+            } else if (strncmp(argv[i], "--undefined=", 12U) == 0) {
+                name = argv[i] + 12U;
+            } else {
+                name = argv[i] + 2U;
+            }
+            if (*name == '\0' || *name == '-') {
+                fprintf(stderr, "minic-ld: invalid-forced-undefined-symbol\n");
+                return 2;
+            }
+            for (index = 0U; index < forced_undefined_count; ++index) {
+                if (strcmp(forced_undefined_symbols[index], name) == 0) {
+                    break;
+                }
+            }
+            if (index == forced_undefined_count) {
+                if (forced_undefined_count ==
+                    sizeof(forced_undefined_symbols) /
+                        sizeof(forced_undefined_symbols[0])) {
+                    fprintf(stderr, "minic-ld: too-many-forced-undefined-symbols\n");
+                    return 2;
+                }
+                forced_undefined_symbols[forced_undefined_count++] = name;
+            }
         } else if (strcmp(argv[i], "-shared") == 0) {
             shared_link = true;
         } else if (strcmp(argv[i], "-pie") == 0) {
@@ -441,10 +481,11 @@ int main(int argc, char **argv) {
         } else if (strcmp(argv[i], "--no-warn-rwx-segments") == 0 ||
                    strcmp(argv[i], "--no-ld-generated-unwind-info") == 0) {
             /*
-             * MiniLD does not synthesize linker-created unwind instructions
-             * or their unwind entries, so disabling them is already the
-             * behavior. GNU's compressed x86 Linux Makefile passes this
-             * option when BFD supports it. RWX warnings are diagnostic only.
+             * The x86 compressed Linux link passes GNU's instruction not to
+             * synthesize linker-generated unwind records. MiniLD currently
+             * never synthesizes unwind records, so this is an exact no-op.
+             * --no-warn-rwx-segments only suppresses a GNU diagnostic.
+             * Neither option permits silently skipping an input/relocation.
              */
             continue;
         } else if (strcmp(argv[i], "-e") == 0) {
@@ -488,17 +529,13 @@ int main(int argc, char **argv) {
         return 2;
     }
 
-    /* GNU Kbuild uses -static -pie -n -T for a fixed-address Linux kernel.
-     * GNU's -n suppresses the PIE ELF type (ET_EXEC), even if -pie is also
-     * present. Preserve the kernel-mode permission checks separately from
-     * the actual ELF output type; this is not a user-space PIE/DSO link. */
+    /* GNU Kbuild uses -static -pie -n -T for a fixed-address kernel, but
+     * x86 compressed/vmlinux is -pie --no-dynamic-linker -T WITHOUT -static.
+     * Admit the latter only for a target expressly declaring freestanding
+     * resolved kernel PIE, never by relaxing general user-space PIE modes. */
     kernel_static_pie = static_link && pie_link && !shared_link &&
                         !relocatable && script_path != NULL &&
                         no_dynamic_linker && interpreter_path == NULL;
-    /* The x86 compressed boot image is -pie --no-dynamic-linker -T without
-     * -static. Its linker script requires fully resolved early-boot data
-     * with no runtime .rela.dyn. Keep this kernel ET_DYN capability distinct
-     * from user-space PIE and reject every dynamic-link metadata request. */
     kernel_pie_image = pie_link && !static_link && !shared_link &&
                        !relocatable && script_path != NULL &&
                        no_dynamic_linker && !nmagic &&
@@ -544,6 +581,14 @@ int main(int argc, char **argv) {
         1 ||
         (static_link && pie_link && !kernel_static_pie)) {
         fprintf(stderr, "minic-ld: incompatible-link-modes\n");
+        return 2;
+    }
+    if (forced_undefined_count != 0U &&
+        (relocatable ||
+         (shared_link && !kernel_shared_image) ||
+         (pie_link && !kernel_resolved_pie))) {
+        fprintf(stderr,
+                "minic-ld: -u-requires-final-static-link\n");
         return 2;
     }
     if (version_script_path != NULL && !shared_link) {
@@ -683,11 +728,13 @@ int main(int argc, char **argv) {
         (void)static_link;
         options.entry_symbol = entry_symbol;
         options.script_path = script_path;
+        options.forced_undefined_symbols = forced_undefined_symbols;
+        options.forced_undefined_count = forced_undefined_count;
         options.gc_sections = gc_sections;
         options.nmagic = nmagic;
         options.discard_locals = discard_locals;
         options.output_et_dyn = kernel_et_dyn;
-        options.static_pie_requested = kernel_static_pie;
+        options.static_pie_requested = kernel_resolved_pie;
         options.fix_cortex_a53_843419 = fix_cortex_a53_843419;
         options.max_page_size = max_page_size;
         options.orphan_handling_error = orphan_handling_error;

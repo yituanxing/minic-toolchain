@@ -132,6 +132,29 @@ static int minild_link_static_pipeline(
                              ? script.entry_symbol
                              : "_start";
 
+    /* Forced undefined roots must exist before archive admission: this
+     * allows the ordinary resolver/extractor to pull unreferenced members
+     * without fabricating an input object or changing archive ordering. */
+    if (options != NULL) {
+        size_t forced_index;
+
+        for (forced_index = 0U;
+             forced_index < options->forced_undefined_count;
+             ++forced_index) {
+            size_t resolved_index;
+            const char *name = options->forced_undefined_symbols[forced_index];
+
+            if (name == NULL || *name == '\0' ||
+                !symbol_resolver_merge_global(
+                    &state.resolver, diagnostics, name, MINILD_SECTION_UNDEF,
+                    0U, 0U, ELF64_ST_INFO(STB_GLOBAL, STT_NOTYPE),
+                    STV_DEFAULT, SIZE_MAX, &resolved_index)) {
+                fprintf(diagnostics,
+                        "minic-ld: invalid-forced-undefined-symbol\n");
+                goto done;
+            }
+        }
+    }
     if (!process_input_sequence(&state, inputs, input_count)) {
         goto done;
     }
@@ -152,7 +175,8 @@ static int minild_link_static_pipeline(
         (have_script && !minild_select_script_inputs(&state, &script)) ||
         (state.kernel_shared_image &&
          !minild_target_validate_kernel_shared_relocations(&state)) ||
-        (garbage_collect && !minild_gc_prune_static(&state, entry_symbol)) ||
+        (garbage_collect &&
+         !minild_gc_prune_static(&state, entry_symbol, options)) ||
         (garbage_collect && !have_script &&
          (!minild_gc_group_default_output_classes(&state) ||
           !minild_gc_sort_default_output_alignment(&state))) ||
@@ -263,6 +287,8 @@ int minild_link_static_elf64_riscv_inputs(const char *output_path,
 
     options.entry_symbol = entry_symbol;
     options.script_path = NULL;
+    options.forced_undefined_symbols = NULL;
+    options.forced_undefined_count = 0U;
     options.gc_sections = false;
     options.nmagic = false;
     options.discard_locals = false;
