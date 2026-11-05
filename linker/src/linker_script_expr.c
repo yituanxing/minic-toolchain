@@ -165,27 +165,19 @@ static bool parse_unary(ScriptParser *parser, MiniLdScriptExprId *expression_out
     if (parser->token.kind == TOKEN_PLUS) {
         return minild_script_parser_next(parser) && parse_unary(parser, expression_out);
     }
-    if (parser->token.kind == TOKEN_MINUS) {
+    if (parser->token.kind == TOKEN_MINUS ||
+        parser->token.kind == TOKEN_TILDE ||
+        parser->token.kind == TOKEN_LOGICAL_NOT) {
+        ScriptTokenKind token = parser->token.kind;
         MiniLdScriptExpr expression;
         MiniLdScriptExprId operand;
         if (!minild_script_parser_next(parser) || !parse_unary(parser, &operand)) {
             return false;
         }
         memset(&expression, 0, sizeof(expression));
-        expression.kind = MINILD_SCRIPT_EXPR_NEGATE;
-        expression.left = operand;
-        expression.right = MINILD_SCRIPT_EXPR_NONE;
-        return append_expression(parser->script, expression, expression_out) ||
-               minild_script_parser_error(parser, "out-of-memory:expression");
-    }
-    if (parser->token.kind == TOKEN_TILDE) {
-        MiniLdScriptExpr expression;
-        MiniLdScriptExprId operand;
-        if (!minild_script_parser_next(parser) || !parse_unary(parser, &operand)) {
-            return false;
-        }
-        memset(&expression, 0, sizeof(expression));
-        expression.kind = MINILD_SCRIPT_EXPR_BITWISE_NOT;
+        expression.kind = token == TOKEN_MINUS ? MINILD_SCRIPT_EXPR_NEGATE :
+                          token == TOKEN_TILDE ? MINILD_SCRIPT_EXPR_BITWISE_NOT :
+                                                 MINILD_SCRIPT_EXPR_LOGICAL_NOT;
         expression.left = operand;
         expression.right = MINILD_SCRIPT_EXPR_NONE;
         return append_expression(parser->script, expression, expression_out) ||
@@ -339,7 +331,9 @@ static bool parse_comparison(ScriptParser *parser,
         return false;
     }
     while (parser->token.kind == TOKEN_LESS ||
-           parser->token.kind == TOKEN_LESS_EQUAL) {
+           parser->token.kind == TOKEN_LESS_EQUAL ||
+           parser->token.kind == TOKEN_GREATER ||
+           parser->token.kind == TOKEN_GREATER_EQUAL) {
         ScriptTokenKind token = parser->token.kind;
         MiniLdScriptExpr expression;
         MiniLdScriptExprId right;
@@ -349,7 +343,9 @@ static bool parse_comparison(ScriptParser *parser,
         }
         memset(&expression, 0, sizeof(expression));
         expression.kind = token == TOKEN_LESS ? MINILD_SCRIPT_EXPR_LESS :
-                          MINILD_SCRIPT_EXPR_LESS_EQUAL;
+                          token == TOKEN_LESS_EQUAL ? MINILD_SCRIPT_EXPR_LESS_EQUAL :
+                          token == TOKEN_GREATER ? MINILD_SCRIPT_EXPR_GREATER :
+                          MINILD_SCRIPT_EXPR_GREATER_EQUAL;
         expression.left = left;
         expression.right = right;
         if (!append_expression(parser->script, expression, &left)) {
@@ -362,13 +358,43 @@ static bool parse_comparison(ScriptParser *parser,
 
 static bool parse_equality(ScriptParser *parser,
                            MiniLdScriptExprId *expression_out) {
-    return parse_bitwise_level(parser, parse_comparison, TOKEN_EQUAL_EQUAL,
-                               MINILD_SCRIPT_EXPR_EQUAL, expression_out);
+    MiniLdScriptExprId left;
+    if (!parse_comparison(parser, &left)) {
+        return false;
+    }
+    while (parser->token.kind == TOKEN_EQUAL_EQUAL ||
+           parser->token.kind == TOKEN_NOT_EQUAL) {
+        ScriptTokenKind token = parser->token.kind;
+        MiniLdScriptExpr expression;
+        MiniLdScriptExprId right;
+        if (!minild_script_parser_next(parser) ||
+            !parse_comparison(parser, &right)) {
+            return false;
+        }
+        memset(&expression, 0, sizeof(expression));
+        expression.kind = token == TOKEN_EQUAL_EQUAL
+                              ? MINILD_SCRIPT_EXPR_EQUAL
+                              : MINILD_SCRIPT_EXPR_NOT_EQUAL;
+        expression.left = left;
+        expression.right = right;
+        if (!append_expression(parser->script, expression, &left)) {
+            return minild_script_parser_error(parser,
+                                              "out-of-memory:expression");
+        }
+    }
+    *expression_out = left;
+    return true;
+}
+
+static bool parse_logical_and(ScriptParser *parser,
+                              MiniLdScriptExprId *expression_out) {
+    return parse_bitwise_level(parser, parse_equality, TOKEN_LOGICAL_AND,
+                               MINILD_SCRIPT_EXPR_LOGICAL_AND, expression_out);
 }
 
 bool minild_script_parse_expression(ScriptParser *parser,
                                     MiniLdScriptExprId *expression_out) {
-    return parse_bitwise_level(parser, parse_equality, TOKEN_LOGICAL_OR,
+    return parse_bitwise_level(parser, parse_logical_and, TOKEN_LOGICAL_OR,
                                MINILD_SCRIPT_EXPR_LOGICAL_OR, expression_out);
 }
 
@@ -434,6 +460,7 @@ static bool evaluate_expression(const MiniLdScript *script,
         return false;
     case MINILD_SCRIPT_EXPR_NEGATE:
     case MINILD_SCRIPT_EXPR_BITWISE_NOT:
+    case MINILD_SCRIPT_EXPR_LOGICAL_NOT:
         if (!evaluate_expression(script,
                                  expression->left,
                                  context,
@@ -443,7 +470,9 @@ static bool evaluate_expression(const MiniLdScript *script,
             return false;
         }
         *value_out = expression->kind == MINILD_SCRIPT_EXPR_NEGATE
-                         ? UINT64_C(0) - left : ~left;
+                         ? UINT64_C(0) - left :
+                     expression->kind == MINILD_SCRIPT_EXPR_LOGICAL_NOT
+                         ? (left == 0U ? 1U : 0U) : ~left;
         return true;
     case MINILD_SCRIPT_EXPR_ALIGN:
         if (!evaluate_expression(script,
@@ -504,7 +533,11 @@ static bool evaluate_expression(const MiniLdScript *script,
     case MINILD_SCRIPT_EXPR_BITWISE_OR:
     case MINILD_SCRIPT_EXPR_LESS:
     case MINILD_SCRIPT_EXPR_LESS_EQUAL:
+    case MINILD_SCRIPT_EXPR_GREATER:
+    case MINILD_SCRIPT_EXPR_GREATER_EQUAL:
     case MINILD_SCRIPT_EXPR_EQUAL:
+    case MINILD_SCRIPT_EXPR_NOT_EQUAL:
+    case MINILD_SCRIPT_EXPR_LOGICAL_AND:
     case MINILD_SCRIPT_EXPR_LOGICAL_OR:
         if (!evaluate_expression(script,
                                  expression->left,
@@ -550,8 +583,16 @@ static bool evaluate_expression(const MiniLdScript *script,
             *value_out = left < right ? 1U : 0U;
         } else if (expression->kind == MINILD_SCRIPT_EXPR_LESS_EQUAL) {
             *value_out = left <= right ? 1U : 0U;
+        } else if (expression->kind == MINILD_SCRIPT_EXPR_GREATER) {
+            *value_out = left > right ? 1U : 0U;
+        } else if (expression->kind == MINILD_SCRIPT_EXPR_GREATER_EQUAL) {
+            *value_out = left >= right ? 1U : 0U;
         } else if (expression->kind == MINILD_SCRIPT_EXPR_EQUAL) {
             *value_out = left == right ? 1U : 0U;
+        } else if (expression->kind == MINILD_SCRIPT_EXPR_NOT_EQUAL) {
+            *value_out = left != right ? 1U : 0U;
+        } else if (expression->kind == MINILD_SCRIPT_EXPR_LOGICAL_AND) {
+            *value_out = left != 0U && right != 0U ? 1U : 0U;
         } else if (expression->kind == MINILD_SCRIPT_EXPR_LOGICAL_OR) {
             *value_out = left != 0U || right != 0U ? 1U : 0U;
         } else {

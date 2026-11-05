@@ -66,6 +66,9 @@ jobs:
             check-minild-aarch64-static-instruction-relocs \
             check-minild-loongarch-static-relocs \
             check-minild-static-script-discard-reloc-reserve \
+            check-minild-script-output-entsize-coalescing \
+            check-minild-script-top-level-empty-statements \
+            check-minild-static-merge-input-pool-identity \
             check-minild-static-nonalloc-relocations \
             check-minild-x86-crt-got-relax \
             check-minild-target-default-symbols \

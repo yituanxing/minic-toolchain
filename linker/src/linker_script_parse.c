@@ -1109,6 +1109,13 @@ bool minild_script_parse_file(const char *path,
     }
 
     while (parser.token.kind != TOKEN_EOF) {
+        /* GNU linker scripts accept empty top-level statements. Linux's
+         * macro-expanded image-vars.h legitimately emits `name = value;;`
+         * for many aliases, so consuming only the first semicolon after an
+         * assignment must not turn the second into an unknown directive. */
+        if (minild_script_consume(&parser, TOKEN_SEMICOLON)) {
+            continue;
+        }
         if (minild_script_token_is(&parser, "OUTPUT_FORMAT")) {
             if (!parse_output_format(&parser, &script->output_format)) {
                 goto done;

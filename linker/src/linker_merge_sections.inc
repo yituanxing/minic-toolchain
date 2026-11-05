@@ -510,8 +510,12 @@ static bool minild_merge_live_sections(MiniLdState *state,
                 groups[j].entsize == source->entsize &&
                 (((source->flags & SHF_STRINGS) != 0U) ||
                  groups[j].align == source->align) &&
-                (script != NULL ||
-                 strcmp(leader->input_name, source->input_name) == 0)) {
+                /* A script output command owns placement, not an ELF merge
+                 * atom namespace.  GNU BFD keeps .rodata.str1.1 and
+                 * .rodata.str1.8 in distinct pools even when one script
+                 * output collects both; combining them can change all
+                 * following symbol coordinates and section lengths. */
+                strcmp(leader->input_name, source->input_name) == 0) {
                 break;
             }
         }

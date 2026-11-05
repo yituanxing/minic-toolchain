@@ -101,6 +101,12 @@ static int minild_output_section_compare(const void *left,
  * Mergeable strings/constants, meanwhile, lose their M/S/entsize identity
  * when combined with ordinary bytes.  Keep SHF_ALLOC, TLS, LINK_ORDER,
  * GROUP and unrelated section types strict: these are not permission bits.
+ * Ordinary PROGBITS/NOBITS inputs may also carry different sh_entsize values
+ * (e.g. table-like input fragments inside Linux's larger scripted .rodata).
+ * Once concatenated, the result has no uniform entry width; the output
+ * section's sh_entsize must be zero, without discarding either fragment.
+ * Structured section types such as RELA/SYMTAB still require consistent
+ * entry sizes because their consumers rely on the fixed record format.
  * A scripted output containing both initialized PROGBITS and zero-initialized
  * NOBITS becomes file-backed PROGBITS, including the NOBITS zero-filled span
  * in its sh_size. GNU uses this for Linux .init.pi.data + .init.pi.bss. */
@@ -136,7 +142,10 @@ static bool minild_output_plan_combine_attributes(
     }
     if (existing == 0U && incoming == 0U &&
         part->entsize != output->entsize) {
-        return false;
+        if (combined_type != SHT_PROGBITS && combined_type != SHT_NOBITS) {
+            return false;
+        }
+        output->entsize = 0U;
     }
     output->type = combined_type;
     output->flags |= part->flags & (SHF_WRITE | SHF_EXECINSTR);

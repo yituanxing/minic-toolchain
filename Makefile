@@ -788,6 +788,16 @@ check-minild-static-script-discard-reloc-reserve: $(MINIAS_BINARY) $(MINILD_BINA
 	MINILD="$(abspath $(MINILD_BINARY))" \
 	bash tests/linker/probe-static-script-discard-reloc-reserve.sh
 
+.PHONY: check-minild-script-output-entsize-coalescing
+check-minild-script-output-entsize-coalescing: $(MINILD_BINARY)
+	MINILD="$(abspath $(MINILD_BINARY))" \
+	bash tests/linker/probe-script-output-entsize-coalescing.sh
+
+.PHONY: check-minild-script-top-level-empty-statements
+check-minild-script-top-level-empty-statements: $(MINILD_BINARY)
+	MINILD="$(abspath $(MINILD_BINARY))" \
+	bash tests/linker/probe-script-top-level-empty-statements.sh
+
 # Linux-facing linker invariants are exercised across all five ELF targets
 # before any expensive vmlinux re-link or QEMU boot attempt.
 .PHONY: check-minild-static-build-id-sha1 check-minild-static-merge-five-target check-minild-static-merge-strings
@@ -803,6 +813,11 @@ check-minild-static-merge-five-target: $(MINIAS_BINARY) $(MINILD_BINARY)
 check-minild-static-merge-strings: $(MINILD_BINARY)
 	MINILD="$(abspath $(MINILD_BINARY))" \
 	bash tests/linker/probe-static-merge-strings.sh
+
+.PHONY: check-minild-static-merge-input-pool-identity
+check-minild-static-merge-input-pool-identity: $(MINILD_BINARY)
+	MINILD="$(abspath $(MINILD_BINARY))" \
+	bash tests/linker/probe-static-merge-input-pool-identity.sh
 
 .PHONY: check-minild-riscv-pie-relax-fixedpoint check-minild-x86-linux-kbuild-options check-minild-x86-linux-pc64 check-minild-x86-script-info check-minild-x86-script-synthetic-nobits check-minild-static-script-pure-nobits-phdr
 check-minild-riscv-pie-relax-fixedpoint: $(MINIAS_BINARY) $(MINILD_BINARY)
@@ -834,6 +849,7 @@ check-minild-static-script-pure-nobits-phdr: $(MINILD_BINARY)
 check-minild-five-arch-linux-linker-boundary: \
 	check-minild-static-merge-five-target \
 	check-minild-static-merge-strings \
+	check-minild-static-merge-input-pool-identity \
 	check-minild-static-build-id-sha1 \
 	check-minild-riscv-static-relax-fixedpoint \
 	check-minild-riscv-u-type-boundary \
@@ -842,6 +858,8 @@ check-minild-five-arch-linux-linker-boundary: \
 	check-minild-aarch64-static-instruction-relocs \
 	check-minild-loongarch-static-pie \
 	check-minild-static-script-discard-reloc-reserve \
+	check-minild-script-output-entsize-coalescing \
+	check-minild-script-top-level-empty-statements \
 	check-minild-x86-linux-kbuild-options \
 	check-minild-x86-linux-pc64 \
 	check-minild-x86-script-info \
