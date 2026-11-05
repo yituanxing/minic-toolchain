@@ -1,5 +1,6 @@
 #define _GNU_SOURCE
 #include "core/module_ir.h"
+#include "target/riscv/machine_target_state.h"
 #include "target/riscv32/rv32_global_emit.h"
 #include "target/riscv64/global_emit.h"
 #include "target/x86_64/global_emit.h"
@@ -27,7 +28,17 @@ static bool probe_emit(ProbeArch arch, const MinicCoreModule *module,
     FILE *stream = open_memstream(&output, &output_size);
     bool result, valid;
     if (stream == NULL) return false;
-    target.riscv_isa.xlen = arch == PROBE_RV32 ? 32U : 64U;
+    if (arch == PROBE_RV32 || arch == PROBE_RV64) {
+        MinicRiscvIsa isa = {0};
+        isa.xlen = arch == PROBE_RV32 ? 32U : 64U;
+        isa.abi = arch == PROBE_RV32 ? MINIC_RISCV_ABI_ILP32 :
+                                      MINIC_RISCV_ABI_LP64;
+        if (!minic_riscv_target_isa_store(&target, &isa)) {
+            (void)fclose(stream);
+            free(output);
+            return false;
+        }
+    }
     result = arch == PROBE_RV32
         ? minic_riscv32_emit_module_global(stream, &target, module, 0U)
         : arch == PROBE_RV64

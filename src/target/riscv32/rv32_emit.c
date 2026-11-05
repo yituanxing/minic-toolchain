@@ -12,6 +12,7 @@
 #include "target/common/core_instruction_family.h"
 #include "target/riscv/instruction_select.h"
 #include "target/riscv/register_identity.h"
+#include "target/riscv/machine_target_state.h"
 #include "target/riscv/typed_memory.h"
 #include "target/riscv32/rv32_abi_cursor.h"
 #include "target/riscv/function_symbol.h"
@@ -992,8 +993,8 @@ static bool rv32_write_core_program_impl(const char *path,
     bool ok;
     Rv32ProgramContext context = { diagnostic, module };
     if (path == NULL || module == NULL || target == NULL ||
-        target->riscv_isa.xlen != 32U ||
-        target->riscv_isa.abi != MINIC_RISCV_ABI_ILP32 ||
+        minic_riscv_target_isa(target).xlen != 32U ||
+        minic_riscv_target_isa(target).abi != MINIC_RISCV_ABI_ILP32 ||
         module->function_count != function_count ||
         (function_count != 0U && functions == NULL)) {
         rv32_diag(diagnostic, "<rv32-abi>",

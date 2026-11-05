@@ -1,4 +1,5 @@
 #include "target/loongarch64/machine_opcode.h"
+#include "target/loongarch64/machine_target_state.h"
 
 #include <inttypes.h>
 #include <limits.h>
@@ -9,7 +10,11 @@ typedef enum LoongForm {
     L_FORM_RR, L_FORM_RI, L_FORM_RRR, L_FORM_RRI,
     L_FORM_MEMORY, L_FORM_FRAME, L_FORM_BLOCK, L_FORM_RBLOCK,
     L_FORM_RRBLOCK, L_FORM_SYMBOL, L_FORM_RSYMBOL,
-    L_FORM_JIRL, L_FORM_NONE
+    L_FORM_JIRL, L_FORM_NONE,
+    L_FORM_RRII,
+    L_FORM_FP_RR, L_FORM_FP_RRR, L_FORM_FP_CMP,
+    L_FORM_GP_FROM_FCC, L_FORM_GP_FROM_FP, L_FORM_FP_FROM_GP,
+    L_FORM_FP_MEMORY
 } LoongForm;
 
 typedef struct LoongSpec {
@@ -37,6 +42,11 @@ typedef struct LoongSpec {
 
 static const LoongSpec loong_specs[MINIC_LOONG_MACHINE_NOP + 1U] = {
     RR(MOVE, "move"), RI(LI_D, "li.d"),
+    RI(LI_W, "li.w"),
+    RR(CLZ_D, "clz.d"), RR(CLZ_W, "clz.w"),
+    RR(CTZ_D, "ctz.d"), RR(CTZ_W, "ctz.w"),
+    [MINIC_LOONG_MACHINE_BSTRPICK_D] = {"bstrpick.d", L_FORM_RRII, 0},
+    [MINIC_LOONG_MACHINE_BSTRPICK_W] = {"bstrpick.w", L_FORM_RRII, 0},
     RRR(ADD_D, "add.d"), RRR(ADD_W, "add.w"),
     RRR(SUB_D, "sub.d"), RRR(SUB_W, "sub.w"),
     RRR(AND, "and"), RRR(OR, "or"), RRR(XOR, "xor"),
@@ -89,6 +99,37 @@ static const LoongSpec loong_specs[MINIC_LOONG_MACHINE_NOP + 1U] = {
         .ends_block = true},
     [MINIC_LOONG_MACHINE_BREAK] = {"break", L_FORM_NONE,
         MINIC_MACHINE_EFFECT_BRANCH, .ends_block = true},
+    [MINIC_LOONG_MACHINE_FADD_D] = {"fadd.d", L_FORM_FP_RRR, 0},
+    [MINIC_LOONG_MACHINE_FSUB_D] = {"fsub.d", L_FORM_FP_RRR, 0},
+    [MINIC_LOONG_MACHINE_FMUL_D] = {"fmul.d", L_FORM_FP_RRR, 0},
+    [MINIC_LOONG_MACHINE_FDIV_D] = {"fdiv.d", L_FORM_FP_RRR, 0},
+    [MINIC_LOONG_MACHINE_FNEG_D] = {"fneg.d", L_FORM_FP_RR, 0},
+    [MINIC_LOONG_MACHINE_FADD_S] = {"fadd.s", L_FORM_FP_RRR, 0},
+    [MINIC_LOONG_MACHINE_FSUB_S] = {"fsub.s", L_FORM_FP_RRR, 0},
+    [MINIC_LOONG_MACHINE_FMUL_S] = {"fmul.s", L_FORM_FP_RRR, 0},
+    [MINIC_LOONG_MACHINE_FDIV_S] = {"fdiv.s", L_FORM_FP_RRR, 0},
+    [MINIC_LOONG_MACHINE_FCMP_CEQ_D] = {"fcmp.ceq.d", L_FORM_FP_CMP, 0},
+    [MINIC_LOONG_MACHINE_FCMP_CLT_D] = {"fcmp.clt.d", L_FORM_FP_CMP, 0},
+    [MINIC_LOONG_MACHINE_FCMP_CLE_D] = {"fcmp.cle.d", L_FORM_FP_CMP, 0},
+    [MINIC_LOONG_MACHINE_FCVT_D_S] = {"fcvt.d.s", L_FORM_FP_RR, 0},
+    [MINIC_LOONG_MACHINE_FCVT_S_D] = {"fcvt.s.d", L_FORM_FP_RR, 0},
+    [MINIC_LOONG_MACHINE_MOVCF2GR] = {"movcf2gr", L_FORM_GP_FROM_FCC, 0},
+    [MINIC_LOONG_MACHINE_MOVGR2FR_D] = {"movgr2fr.d", L_FORM_FP_FROM_GP, 0},
+    [MINIC_LOONG_MACHINE_MOVGR2FR_W] = {"movgr2fr.w", L_FORM_FP_FROM_GP, 0},
+    [MINIC_LOONG_MACHINE_MOVFR2GR_D] = {"movfr2gr.d", L_FORM_GP_FROM_FP, 0},
+    [MINIC_LOONG_MACHINE_MOVFR2GR_S] = {"movfr2gr.s", L_FORM_GP_FROM_FP, 0},
+    [MINIC_LOONG_MACHINE_FFINT_D_L] = {"ffint.d.l", L_FORM_FP_RR, 0},
+    [MINIC_LOONG_MACHINE_FFINT_D_W] = {"ffint.d.w", L_FORM_FP_RR, 0},
+    [MINIC_LOONG_MACHINE_FTINTRZ_L_D] = {"ftintrz.l.d", L_FORM_FP_RR, 0},
+    [MINIC_LOONG_MACHINE_FTINTRZ_W_D] = {"ftintrz.w.d", L_FORM_FP_RR, 0},
+    [MINIC_LOONG_MACHINE_FLD_S] = {"fld.s", L_FORM_FP_MEMORY,
+        MINIC_MACHINE_EFFECT_MEMORY_READ, 4U},
+    [MINIC_LOONG_MACHINE_FLD_D] = {"fld.d", L_FORM_FP_MEMORY,
+        MINIC_MACHINE_EFFECT_MEMORY_READ, 8U},
+    [MINIC_LOONG_MACHINE_FST_S] = {"fst.s", L_FORM_FP_MEMORY,
+        MINIC_MACHINE_EFFECT_MEMORY_WRITE, 4U},
+    [MINIC_LOONG_MACHINE_FST_D] = {"fst.d", L_FORM_FP_MEMORY,
+        MINIC_MACHINE_EFFECT_MEMORY_WRITE, 8U},
     [MINIC_LOONG_MACHINE_NOP] = {"nop", L_FORM_NONE, 0}
 };
 
@@ -139,7 +180,7 @@ static bool loong_features(const MinicTargetInfo *target,
     uint64_t features, void *context) {
     (void)context;
     return target != NULL && target->architecture == MINIC_TARGET_ARCH_LOONGARCH64 &&
-        features == (target->loongarch64_soft_float_abi
+        features == (minic_loongarch64_target_soft_float_abi(target)
             ? MINIC_LOONG_MACHINE_FEATURE_BASE
             : (MINIC_LOONG_MACHINE_FEATURE_BASE | MINIC_LOONG_MACHINE_FEATURE_FP));
 }
@@ -154,10 +195,10 @@ static bool loong_register(const MinicTargetInfo *target,
         return reg->number <= 31U &&
             (reg->width_bits == 32U || reg->width_bits == 64U);
     case MINIC_MACHINE_REGISTER_FLOAT:
-        return !target->loongarch64_soft_float_abi && reg->number <= 31U &&
+        return !minic_loongarch64_target_soft_float_abi(target) && reg->number <= 31U &&
             (reg->width_bits == 32U || reg->width_bits == 64U);
     case MINIC_MACHINE_REGISTER_FLAGS:
-        return !target->loongarch64_soft_float_abi && reg->number < 8U &&
+        return !minic_loongarch64_target_soft_float_abi(target) && reg->number < 8U &&
             reg->width_bits == 1U;
     default:
         return false;
@@ -205,6 +246,11 @@ static bool loong_lookup(const MinicTargetInfo *target, uint32_t opcode,
 #define WR MINIC_MACHINE_REGISTER_WRITE
     switch (spec->form) {
     case L_FORM_RR: REG(WR); REG(RD); break;
+    case L_FORM_RRII:
+        REG(WR); REG(RD);
+        ARG(MINIC_MACHINE_OPERAND_INTEGER);
+        ARG(MINIC_MACHINE_OPERAND_INTEGER);
+        break;
     case L_FORM_RI: REG(WR); ARG(MINIC_MACHINE_OPERAND_INTEGER); break;
     case L_FORM_RRR: REG(WR); REG(RD); REG(RD); break;
     case L_FORM_RRI: REG(WR); REG(RD); ARG(MINIC_MACHINE_OPERAND_INTEGER); break;
@@ -222,6 +268,17 @@ static bool loong_lookup(const MinicTargetInfo *target, uint32_t opcode,
     case L_FORM_RSYMBOL: REG(WR); ARG(MINIC_MACHINE_OPERAND_SYMBOL); break;
     case L_FORM_JIRL:
         REG(RD); ARG(MINIC_MACHINE_OPERAND_INTEGER); break;
+    case L_FORM_FP_RR:
+    case L_FORM_GP_FROM_FCC:
+    case L_FORM_GP_FROM_FP:
+    case L_FORM_FP_FROM_GP:
+        REG(WR); REG(RD); break;
+    case L_FORM_FP_RRR:
+    case L_FORM_FP_CMP:
+        REG(WR); REG(RD); REG(RD); break;
+    case L_FORM_FP_MEMORY:
+        REG(spec->effects == MINIC_MACHINE_EFFECT_MEMORY_READ ? WR : RD);
+        ARG(MINIC_MACHINE_OPERAND_ADDRESS); break;
     case L_FORM_NONE: break;
     default: return false;
     }
@@ -231,6 +288,11 @@ static bool loong_lookup(const MinicTargetInfo *target, uint32_t opcode,
 #undef WR
     contract->operand_count = n;
     contract->required_generated_features = MINIC_LOONG_MACHINE_FEATURE_BASE;
+    if (spec->form == L_FORM_FP_RR || spec->form == L_FORM_FP_RRR ||
+        spec->form == L_FORM_FP_CMP || spec->form == L_FORM_GP_FROM_FCC ||
+        spec->form == L_FORM_GP_FROM_FP || spec->form == L_FORM_FP_FROM_GP ||
+        spec->form == L_FORM_FP_MEMORY)
+        contract->required_generated_features |= MINIC_LOONG_MACHINE_FEATURE_FP;
     contract->required_effects = spec->effects;
     contract->permitted_effects = spec->effects;
     if ((spec->effects & (MINIC_MACHINE_EFFECT_MEMORY_READ |
@@ -252,7 +314,7 @@ static bool loong_lookup(const MinicTargetInfo *target, uint32_t opcode,
             effect->access = MINIC_MACHINE_REGISTER_CLOBBER |
                 (reg <= 11U ? MINIC_MACHINE_REGISTER_READ : 0U);
         }
-        if (!target->loongarch64_soft_float_abi)
+        if (!minic_loongarch64_target_soft_float_abi(target))
             for (reg = 0U; reg <= 23U; ++reg) {
                 MinicMachineRegisterEffect *effect =
                     &contract->implicit[contract->implicit_count++];
@@ -304,11 +366,20 @@ static bool loong_legal_selected(const MinicMachineFunction *function,
     if (target == NULL || target->architecture != MINIC_TARGET_ARCH_LOONGARCH64 ||
         ins == NULL || (spec = loong_spec(ins->opcode)) == NULL) return false;
     ops = ins->operands;
-    for (i = 0U; i < ins->operand_count; ++i)
-        if (ops[i].kind == MINIC_MACHINE_OPERAND_REGISTER &&
-            (ops[i].value.physical.reg.bank != MINIC_MACHINE_REGISTER_GENERAL ||
-             ops[i].value.physical.reg.width_bits != 64U)) return false;
+    if (spec->form != L_FORM_FP_RR && spec->form != L_FORM_FP_RRR &&
+        spec->form != L_FORM_FP_CMP && spec->form != L_FORM_GP_FROM_FCC &&
+        spec->form != L_FORM_GP_FROM_FP && spec->form != L_FORM_FP_FROM_GP &&
+        spec->form != L_FORM_FP_MEMORY)
+        for (i = 0U; i < ins->operand_count; ++i)
+            if (ops[i].kind == MINIC_MACHINE_OPERAND_REGISTER &&
+                (ops[i].value.physical.reg.bank != MINIC_MACHINE_REGISTER_GENERAL ||
+                 ops[i].value.physical.reg.width_bits != 64U)) return false;
     switch (spec->form) {
+    case L_FORM_RRII:
+        return ops[3].value.integer >= 0 &&
+            ops[2].value.integer >= ops[3].value.integer &&
+            ops[2].value.integer <
+                (ins->opcode == MINIC_LOONG_MACHINE_BSTRPICK_D ? 64 : 32);
     case L_FORM_RRI:
         imm = ops[2].value.integer;
         if (ins->opcode == MINIC_LOONG_MACHINE_ANDI ||
@@ -356,6 +427,56 @@ static bool loong_legal_selected(const MinicMachineFunction *function,
         return ops[1].value.integer >= -32768 &&
             ops[1].value.integer <= 32764 &&
             (ops[1].value.integer % 4) == 0;
+    case L_FORM_FP_RR: {
+        unsigned int out_width = 64U, src_width = 64U;
+        if (ins->opcode == MINIC_LOONG_MACHINE_FCVT_D_S ||
+            ins->opcode == MINIC_LOONG_MACHINE_FFINT_D_W) src_width = 32U;
+        if (ins->opcode == MINIC_LOONG_MACHINE_FCVT_S_D ||
+            ins->opcode == MINIC_LOONG_MACHINE_FTINTRZ_W_D) out_width = 32U;
+        return ops[0].value.physical.reg.bank == MINIC_MACHINE_REGISTER_FLOAT &&
+            ops[1].value.physical.reg.bank == MINIC_MACHINE_REGISTER_FLOAT &&
+            ops[0].value.physical.reg.width_bits == out_width &&
+            ops[1].value.physical.reg.width_bits == src_width;
+    }
+    case L_FORM_FP_RRR: {
+        const unsigned int bits =
+            ins->opcode == MINIC_LOONG_MACHINE_FADD_S ||
+            ins->opcode == MINIC_LOONG_MACHINE_FSUB_S ||
+            ins->opcode == MINIC_LOONG_MACHINE_FMUL_S ||
+            ins->opcode == MINIC_LOONG_MACHINE_FDIV_S ? 32U : 64U;
+        for (i = 0U; i < 3U; ++i)
+            if (ops[i].value.physical.reg.bank != MINIC_MACHINE_REGISTER_FLOAT ||
+                ops[i].value.physical.reg.width_bits != bits) return false;
+        return true;
+    }
+    case L_FORM_FP_CMP:
+        return ops[0].value.physical.reg.bank == MINIC_MACHINE_REGISTER_FLAGS &&
+            ops[0].value.physical.reg.width_bits == 1U &&
+            ops[1].value.physical.reg.bank == MINIC_MACHINE_REGISTER_FLOAT &&
+            ops[1].value.physical.reg.width_bits == 64U &&
+            ops[2].value.physical.reg.bank == MINIC_MACHINE_REGISTER_FLOAT &&
+            ops[2].value.physical.reg.width_bits == 64U;
+    case L_FORM_GP_FROM_FCC:
+        return ops[0].value.physical.reg.bank == MINIC_MACHINE_REGISTER_GENERAL &&
+            ops[0].value.physical.reg.width_bits == 64U &&
+            ops[1].value.physical.reg.bank == MINIC_MACHINE_REGISTER_FLAGS &&
+            ops[1].value.physical.reg.width_bits == 1U;
+    case L_FORM_GP_FROM_FP:
+        return ops[0].value.physical.reg.bank == MINIC_MACHINE_REGISTER_GENERAL &&
+            ops[0].value.physical.reg.width_bits == 64U &&
+            ops[1].value.physical.reg.bank == MINIC_MACHINE_REGISTER_FLOAT &&
+            ops[1].value.physical.reg.width_bits ==
+                (ins->opcode == MINIC_LOONG_MACHINE_MOVFR2GR_S ? 32U : 64U);
+    case L_FORM_FP_FROM_GP:
+        return ops[0].value.physical.reg.bank == MINIC_MACHINE_REGISTER_FLOAT &&
+            ops[0].value.physical.reg.width_bits ==
+                (ins->opcode == MINIC_LOONG_MACHINE_MOVGR2FR_W ? 32U : 64U) &&
+            ops[1].value.physical.reg.bank == MINIC_MACHINE_REGISTER_GENERAL &&
+            ops[1].value.physical.reg.width_bits == 64U;
+    case L_FORM_FP_MEMORY:
+        return ops[0].value.physical.reg.bank == MINIC_MACHINE_REGISTER_FLOAT &&
+            ops[0].value.physical.reg.width_bits == spec->access_width * 8U &&
+            ops[1].value.address.target_mode == MINIC_LOONG_ADDRESS_IMM12;
     case L_FORM_RR:
     case L_FORM_RRR:
     case L_FORM_RBLOCK:
@@ -387,6 +508,25 @@ static bool loong_gp_text(const MinicMachineRegister *reg,
     return snprintf(buffer, capacity, "$s%u", reg->number - 23U) > 0;
 }
 
+static bool loong_fp_text(const MinicMachineRegister *reg,
+    char *buffer, size_t capacity) {
+    if (reg == NULL || reg->bank != MINIC_MACHINE_REGISTER_FLOAT ||
+        reg->number >= 32U ||
+        (reg->width_bits != 32U && reg->width_bits != 64U)) return false;
+    if (reg->number <= 7U)
+        return snprintf(buffer, capacity, "$fa%u", reg->number) > 0;
+    if (reg->number <= 23U)
+        return snprintf(buffer, capacity, "$ft%u", reg->number - 8U) > 0;
+    return snprintf(buffer, capacity, "$fs%u", reg->number - 24U) > 0;
+}
+
+static bool loong_fcc_text(const MinicMachineRegister *reg,
+    char *buffer, size_t capacity) {
+    return reg != NULL && reg->bank == MINIC_MACHINE_REGISTER_FLAGS &&
+        reg->number < 8U && reg->width_bits == 1U &&
+        snprintf(buffer, capacity, "$fcc%u", reg->number) > 0;
+}
+
 static bool loong_block_name(const MinicMachineOperand *operand,
     const MinicMachineGNUAsmLabels *labels, const char **name) {
     if (operand->kind != MINIC_MACHINE_OPERAND_BLOCK || labels == NULL ||
@@ -409,6 +549,11 @@ static bool loong_serialize(FILE *out, const MinicMachineFunction *function,
     if (out == NULL || function == NULL || spec == NULL ||
         !loong_legal_selected(function, ins, NULL)) return false;
     switch (spec->form) {
+    case L_FORM_RRII:
+        return loong_gp_text(&o[0].value.physical.reg, a, sizeof(a)) &&
+            loong_gp_text(&o[1].value.physical.reg, b, sizeof(b)) &&
+            fprintf(out, "  %s %s, %s, %" PRId64 ", %" PRId64 "\n",
+                spec->name, a, b, o[2].value.integer, o[3].value.integer) >= 0;
     case L_FORM_RR:
         return loong_gp_text(&o[0].value.physical.reg, a, sizeof(a)) &&
             loong_gp_text(&o[1].value.physical.reg, b, sizeof(b)) &&
@@ -427,6 +572,37 @@ static bool loong_serialize(FILE *out, const MinicMachineFunction *function,
             loong_gp_text(&o[1].value.physical.reg, b, sizeof(b)) &&
             fprintf(out, "  %s %s, %s, %" PRId64 "\n",
                 spec->name, a, b, o[2].value.integer) >= 0;
+    case L_FORM_FP_RR:
+        return loong_fp_text(&o[0].value.physical.reg, a, sizeof(a)) &&
+            loong_fp_text(&o[1].value.physical.reg, b, sizeof(b)) &&
+            fprintf(out, "  %s %s, %s\n", spec->name, a, b) >= 0;
+    case L_FORM_FP_RRR:
+        return loong_fp_text(&o[0].value.physical.reg, a, sizeof(a)) &&
+            loong_fp_text(&o[1].value.physical.reg, b, sizeof(b)) &&
+            loong_fp_text(&o[2].value.physical.reg, c, sizeof(c)) &&
+            fprintf(out, "  %s %s, %s, %s\n", spec->name, a, b, c) >= 0;
+    case L_FORM_FP_CMP:
+        return loong_fcc_text(&o[0].value.physical.reg, a, sizeof(a)) &&
+            loong_fp_text(&o[1].value.physical.reg, b, sizeof(b)) &&
+            loong_fp_text(&o[2].value.physical.reg, c, sizeof(c)) &&
+            fprintf(out, "  %s %s, %s, %s\n", spec->name, a, b, c) >= 0;
+    case L_FORM_GP_FROM_FCC:
+        return loong_gp_text(&o[0].value.physical.reg, a, sizeof(a)) &&
+            loong_fcc_text(&o[1].value.physical.reg, b, sizeof(b)) &&
+            fprintf(out, "  %s %s, %s\n", spec->name, a, b) >= 0;
+    case L_FORM_GP_FROM_FP:
+        return loong_gp_text(&o[0].value.physical.reg, a, sizeof(a)) &&
+            loong_fp_text(&o[1].value.physical.reg, b, sizeof(b)) &&
+            fprintf(out, "  %s %s, %s\n", spec->name, a, b) >= 0;
+    case L_FORM_FP_FROM_GP:
+        return loong_fp_text(&o[0].value.physical.reg, a, sizeof(a)) &&
+            loong_gp_text(&o[1].value.physical.reg, b, sizeof(b)) &&
+            fprintf(out, "  %s %s, %s\n", spec->name, a, b) >= 0;
+    case L_FORM_FP_MEMORY:
+        return loong_fp_text(&o[0].value.physical.reg, a, sizeof(a)) &&
+            loong_gp_text(&o[1].value.address.base, b, sizeof(b)) &&
+            fprintf(out, "  %s %s, %s, %" PRId64 "\n", spec->name,
+                a, b, o[1].value.address.displacement) >= 0;
     case L_FORM_MEMORY:
         return loong_gp_text(&o[0].value.physical.reg, a, sizeof(a)) &&
             loong_gp_text(&o[1].value.address.base, b, sizeof(b)) &&

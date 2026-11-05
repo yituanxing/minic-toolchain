@@ -1,5 +1,6 @@
 #include "target/target_info.h"
 #include "target/loongarch64/machine_builtin_form.h"
+#include "target/riscv/machine_target_state.h"
 
 #include <stdint.h>
 
@@ -8,6 +9,7 @@
 typedef struct MinicTargetMachineDescriptor {
     MinicTargetInfo target;
     const MinicDataLayout *(*layout)(void);
+    bool (*initialize_machine_state)(MinicTargetInfo *);
 } MinicTargetMachineDescriptor;
 
 static const MinicTargetMachineDescriptor minic_machine_riscv32 = {
@@ -20,10 +22,9 @@ static const MinicTargetMachineDescriptor minic_machine_riscv32 = {
         .pic_lowering_supported = true,
         .call_frame_return_address_level0 = true,
         .call_frame_frame_address_level0 = true,
-        .riscv_isa = {.xlen = 32U, .abi = MINIC_RISCV_ABI_ILP32,
-                      .strict_isa = true},
     },
     .layout = minic_riscv32_linux_data_layout,
+    .initialize_machine_state = minic_riscv32_target_state_initialize,
 };
 static const MinicTargetMachineDescriptor minic_machine_riscv64 = {
     .target = {
@@ -35,10 +36,9 @@ static const MinicTargetMachineDescriptor minic_machine_riscv64 = {
         .pic_lowering_supported = true,
         .call_frame_return_address_level0 = true,
         .call_frame_frame_address_level0 = true,
-        .riscv_isa = {.xlen = 64U, .abi = MINIC_RISCV_ABI_LP64D,
-                      .strict_isa = false},
     },
     .layout = minic_default_data_layout,
+    .initialize_machine_state = minic_riscv64_target_state_initialize,
 };
 static const MinicTargetMachineDescriptor minic_machine_x86_64 = {
     .target = {
@@ -112,7 +112,10 @@ const MinicTargetInfo *minic_target_info_for_architecture(
             MinicTargetInfo initialized = descriptor->target;
             initialized.architecture = catalog[index].architecture;
             initialized.data_layout = descriptor->layout();
-            if (initialized.data_layout == NULL) return NULL;
+            if (initialized.data_layout == NULL ||
+                (descriptor->initialize_machine_state != NULL &&
+                 !descriptor->initialize_machine_state(&initialized)))
+                return NULL;
             *target = initialized;
         }
         return target;

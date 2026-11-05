@@ -1,5 +1,6 @@
 #include "target/riscv32/rv32_internal.h"
 #include "target/riscv/register_identity.h"
+#include "target/riscv/machine_target_state.h"
 #include "target/data_layout.h"
 #include "target/common/core_function_facts.h"
 #include "target/common/core_spill_layout.h"
@@ -51,7 +52,9 @@ bool rv32_frame_init_with_storage(Rv32Frame *frame,
     if (frame == NULL || f == NULL || t == NULL || facts == NULL ||
         f->value_count > 100000U || f->object_count > 100000U)
         return false;
-    frame->isa = &t->riscv_isa;
+    if (!minic_riscv_target_isa_load(t, &frame->isa) ||
+        frame->isa.xlen != 32U)
+        return false;
     /* The ABI plan is built once; frame and call emission consume exactly
      * its precomputed stack bound and individual argument placements. */
     frame->has_dynamic_stack = facts->uses_dynamic_stack_alloc;

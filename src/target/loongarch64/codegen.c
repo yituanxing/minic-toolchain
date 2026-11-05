@@ -3,6 +3,7 @@
 #include "target/loongarch64/frame_emit.h"
 #include "target/loongarch64/memory_emit.h"
 #include "target/loongarch64/asm_contract.h"
+#include "target/loongarch64/machine_target_state.h"
 #include "target/common/direct_function_emit.h"
 #include "target/common/lp64_aggregate.h"
 #include "target/common/direct_program_emit.h"
@@ -198,7 +199,7 @@ static bool loongarch64_emit_function(
     };
     bool success;
     if (target == NULL || fn == NULL) return false;
-    if (target->loongarch64_soft_float_abi) {
+    if (minic_loongarch64_target_soft_float_abi(target)) {
         if (!loongarch64_lp64s_executable_supported(target, fn))
             return minic_multi_direct_machine_reject(
                 fn, "loongarch64", fn->name,

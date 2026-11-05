@@ -172,6 +172,10 @@ MINIC_SOURCES := \
 	src/target/target_info.c \
 	src/target/target_catalog.c \
 	src/target/target_machine_options.c \
+	src/target/machine_options/riscv.c \
+	src/target/machine_options/aarch64.c \
+	src/target/machine_options/loongarch64.c \
+	src/target/machine_options/x86_64.c \
 	$(TARGET_SOURCE_POLICY_SOURCES) \
 	$(TARGET_MACHINE_REGISTER_SOURCES) \
 	src/target/backend.c \
@@ -2417,6 +2421,25 @@ check-target-machine-header-boundary:
 	@echo "TARGET_MACHINE_HEADER_BOUNDARY=PASS c_ast=absent c_type=absent"
 
 check-fast: check-target-machine-header-boundary
+
+# Target-specific ISA/ABI/mitigation admission is dispatched exclusively
+# through the generated target registration table; generic driver code does
+# not know per-architecture option spellings.
+.PHONY: check-target-machine-options-registry
+check-target-machine-options-registry:
+	mkdir -p "$(BUILD_DIR)/tests"
+	$(CC) -std=c11 -Wall -Wextra -Wpedantic -Werror $(MINIC_INCLUDES) \
+	  tests/target/machine_options_registry_test.c \
+	  src/target/target_catalog.c src/target/target_machine_options.c \
+	  src/target/machine_options/riscv.c \
+	  src/target/machine_options/aarch64.c \
+	  src/target/machine_options/loongarch64.c \
+	  src/target/machine_options/x86_64.c \
+	  src/target/riscv/isa_resolve.c \
+	  -o "$(BUILD_DIR)/tests/target-machine-options-registry"
+	"$(BUILD_DIR)/tests/target-machine-options-registry"
+
+check-fast: check-target-machine-options-registry
 
 # x86 Linux structured ASM families retire legacy machine-side template
 # dispatch; GNU ELF/native is available on the host, no cross toolchain.

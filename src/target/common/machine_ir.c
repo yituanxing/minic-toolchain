@@ -58,10 +58,17 @@ static void machine_instruction_destroy(MinicMachineInstruction *ins) {
         if (operand->kind == MINIC_MACHINE_OPERAND_ADDRESS)
             free(operand->value.address.symbol);
         free(operand->asm_constraint);
+        free(operand->asm_name);
     }
     free(ins->operands);
     free(ins->implicit);
     free(ins->source_asm_template);
+    free(ins->local_label_name);
+    if (ins->directive != NULL) {
+        free(ins->directive->section_name);
+        free(ins->directive->link_order_symbol);
+        free(ins->directive);
+    }
     memset(ins, 0, sizeof(*ins));
 }
 
@@ -77,6 +84,9 @@ void minic_machine_function_destroy(MinicMachineFunction *function) {
         free(block->instructions);
         free(block->successors);
         free(block->exported_label);
+        for (instruction_id = 0U; instruction_id < block->alias_count;
+             ++instruction_id) free(block->alias_labels[instruction_id]);
+        free(block->alias_labels);
     }
     free(function->blocks);
     free(function->frame_objects);
@@ -137,6 +147,26 @@ bool minic_machine_function_add_block(MinicMachineFunction *function,
     block->id = *id;
     block->indirect_entry = indirect_entry;
     block->exported_label = copied_label;
+    return true;
+}
+
+bool minic_machine_block_add_alias_label(MinicMachineFunction *function,
+    size_t block_id, const char *alias_label) {
+    MinicMachineBlock *block;
+    char *copy;
+    if (function == NULL || block_id >= function->block_count ||
+        alias_label == NULL || alias_label[0] == '\0') return false;
+    copy = machine_copy_string(alias_label);
+    if (copy == NULL) return false;
+    block = &function->blocks[block_id];
+    if (block->alias_count == SIZE_MAX ||
+        !machine_reserve((void **)&block->alias_labels,
+                         &block->alias_capacity, block->alias_count + 1U,
+                         sizeof(*block->alias_labels))) {
+        free(copy);
+        return false;
+    }
+    block->alias_labels[block->alias_count++] = copy;
     return true;
 }
 
@@ -207,6 +237,8 @@ bool minic_machine_block_append_instruction(MinicMachineFunction *function,
     copy.operands = NULL;
     copy.implicit = NULL;
     copy.source_asm_template = NULL;
+    copy.local_label_name = NULL;
+    copy.directive = NULL;
     if (input->operand_count != 0U) {
         copy.operands = calloc(input->operand_count, sizeof(*copy.operands));
         if (copy.operands == NULL) goto fail;
@@ -224,6 +256,7 @@ bool minic_machine_block_append_instruction(MinicMachineFunction *function,
         MinicMachineOperand *destination = &copy.operands[i];
         *destination = *source;
         destination->asm_constraint = NULL;
+        destination->asm_name = NULL;
         if (source->kind == MINIC_MACHINE_OPERAND_SYMBOL) {
             destination->value.symbol.name = NULL;
             if (source->value.symbol.name != NULL) {
@@ -245,12 +278,37 @@ bool minic_machine_block_append_instruction(MinicMachineFunction *function,
                 machine_copy_string(source->asm_constraint);
             if (destination->asm_constraint == NULL) goto fail;
         }
+        if (source->asm_name != NULL) {
+            destination->asm_name = machine_copy_string(source->asm_name);
+            if (destination->asm_name == NULL) goto fail;
+        }
     }
     if (input->source_asm_template != NULL) {
         copy.source_asm_template =
             machine_copy_bytes(input->source_asm_template,
                                input->source_asm_length);
         if (copy.source_asm_template == NULL) goto fail;
+    }
+    if (input->local_label_name != NULL) {
+        copy.local_label_name = machine_copy_string(input->local_label_name);
+        if (copy.local_label_name == NULL) goto fail;
+    }
+    if (input->directive != NULL) {
+        copy.directive = calloc(1U, sizeof(*copy.directive));
+        if (copy.directive == NULL) goto fail;
+        *copy.directive = *input->directive;
+        copy.directive->section_name = NULL;
+        copy.directive->link_order_symbol = NULL;
+        if (input->directive->section_name != NULL) {
+            copy.directive->section_name = machine_copy_string(
+                input->directive->section_name);
+            if (copy.directive->section_name == NULL) goto fail;
+        }
+        if (input->directive->link_order_symbol != NULL) {
+            copy.directive->link_order_symbol = machine_copy_string(
+                input->directive->link_order_symbol);
+            if (copy.directive->link_order_symbol == NULL) goto fail;
+        }
     }
     block = &function->blocks[block_id];
     if (block->instruction_count == SIZE_MAX ||

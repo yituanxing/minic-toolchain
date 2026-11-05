@@ -32,6 +32,13 @@ static bool probe_frame(const MinicTargetInfo *target,
     return true;
 }
 
+static bool probe_relocation(const MinicTargetInfo *target,
+    const char *symbol, uint32_t kind, int64_t addend, void *context) {
+    (void)target;
+    (void)context;
+    return symbol != NULL && kind == 0U && addend == 0;
+}
+
 static bool probe_opcode(const MinicTargetInfo *target, uint32_t opcode,
     MinicMachineOpcodeContract *contract, void *context) {
     (void)target;
@@ -102,6 +109,7 @@ static bool build_two_block_function(MinicMachineFunction *function,
     const MinicTargetInfo *target) {
     MinicMachineBuilder builder = {0};
     MinicMachineOperand to = {0};
+    MinicMachineOperand relocation[2] = {{0}, {0}};
     size_t entry, exit_block;
     if (!minic_machine_function_initialize(function, target, "mir_probe", 0U) ||
         !minic_machine_builder_initialize(&builder, function) ||
@@ -110,16 +118,31 @@ static bool build_two_block_function(MinicMachineFunction *function,
         !minic_machine_builder_create_block(&builder, NULL, false, true,
                                             &exit_block) ||
         !minic_machine_builder_position_at(&builder, entry) ||
+        !minic_machine_builder_add_alias_label(&builder,
+                                               ".Lmir_entry_address") ||
+        !minic_machine_builder_emit_local_label(&builder,
+                                                ".Lmir_before_jump") ||
         !minic_machine_builder_add_successor(&builder, exit_block))
         return false;
     to.kind = MINIC_MACHINE_OPERAND_BLOCK;
     to.value.block_id = exit_block;
     if (!minic_machine_builder_emit_selected(&builder, PROBE_JUMP,
             MINIC_MACHINE_EFFECT_BRANCH, &to, 1U, NULL, 0U) ||
-        !minic_machine_builder_position_at(&builder, exit_block))
+        !minic_machine_builder_position_at(&builder, exit_block) ||
+        !minic_machine_builder_add_alias_label(&builder,
+                                               ".Lmir_exit_address"))
         return false;
-    return minic_machine_builder_emit_selected(&builder, PROBE_RET,
-        MINIC_MACHINE_EFFECT_RETURN, NULL, 0U, NULL, 0U);
+    if (!minic_machine_builder_emit_selected(&builder, PROBE_RET,
+            MINIC_MACHINE_EFFECT_RETURN, NULL, 0U, NULL, 0U) ||
+        !minic_machine_builder_emit_section_push(&builder,
+            "__jump_table", MINIC_MACHINE_SECTION_ALLOC |
+            MINIC_MACHINE_SECTION_WRITE, MINIC_MACHINE_SECTION_TYPE_PROGBITS,
+            NULL)) return false;
+    relocation[0].kind = MINIC_MACHINE_OPERAND_SYMBOL;
+    relocation[0].value.symbol.name = ".Lmir_entry_address";
+    relocation[1].kind = MINIC_MACHINE_OPERAND_CURRENT_LOCATION;
+    return minic_machine_builder_emit_data(&builder, 4U, relocation, 2U) &&
+        minic_machine_builder_emit_section_pop(&builder);
 }
 
 int main(void) {
@@ -131,6 +154,7 @@ int main(void) {
     MinicMachineBuilder source_builder = {0};
     FILE *output = NULL;
     FILE *rejected = NULL;
+    FILE *accepted = NULL;
     size_t only_block;
     bool success = false;
     unsigned int stage = 0U;
@@ -147,6 +171,7 @@ int main(void) {
     policy.verify.validate_generated_features = probe_features;
     policy.verify.validate_function_abi = probe_abi;
     policy.verify.validate_frame_object = probe_frame;
+    policy.verify.validate_relocation = probe_relocation;
     policy.verify.validate_selected_instruction = probe_selected;
     policy.verify.validate_source_asm = probe_source;
     policy.emit_selected = probe_emit;
@@ -155,19 +180,45 @@ int main(void) {
 
     output = tmpfile();
     if (output == NULL ||
+        !minic_machine_gnu_asm_preflight(&function, &policy) ||
         !minic_machine_gnu_asm_emit_body(output, &function, &policy) ||
         !verify_output(output,
+            ".Lmir_entry_address:\n"
+            ".Lmir_before_jump:\n"
             "\tb .Lminic_mir_mir_probe_1\n"
             ".Lminic_mir_mir_probe_1:\n"
-            "\tret\n")) goto done;
+            ".Lmir_exit_address:\n"
+            "\tret\n"
+            "\t.pushsection __jump_table,\"aw\",%progbits\n"
+            "\t.long .Lmir_entry_address - .\n"
+            "\t.popsection\n")) goto done;
     stage = 2U;
 
     rejected = tmpfile();
     if (rejected == NULL) goto done;
-    function.blocks[0].instructions[0].opcode = UINT32_MAX;
+    function.blocks[0].instructions[1].opcode = UINT32_MAX;
     if (minic_machine_gnu_asm_emit_body(rejected, &function, &policy) ||
         !verify_output(rejected, "")) goto done;
-    function.blocks[0].instructions[0].opcode = PROBE_JUMP;
+    function.blocks[0].instructions[1].opcode = PROBE_JUMP;
+    /* Target-independent layout is typed and fail-closed: malformed widths
+     * and unbalanced push/pop are rejected before the first output byte. */
+    function.blocks[1].instructions[2].directive->data_width_bytes = 3U;
+    if (minic_machine_gnu_asm_preflight(&function, &policy) ||
+        minic_machine_gnu_asm_emit_body(rejected, &function, &policy) ||
+        !verify_output(rejected, "")) goto done;
+    function.blocks[1].instructions[2].directive->data_width_bytes = 4U;
+    function.blocks[1].instruction_count = 3U;
+    if (minic_machine_gnu_asm_preflight(&function, &policy) ||
+        minic_machine_gnu_asm_emit_body(rejected, &function, &policy) ||
+        !verify_output(rejected, "")) goto done;
+    function.blocks[1].instruction_count = 4U;
+    /* A forged label alias must be rejected without writing any GNU text. */
+    if (!minic_machine_block_add_alias_label(&function, 1U,
+                                              ".Lmir_entry_address") ||
+        fseek(rejected, 0L, SEEK_SET) != 0 ||
+        minic_machine_gnu_asm_preflight(&function, &policy) ||
+        minic_machine_gnu_asm_emit_body(rejected, &function, &policy) ||
+        !verify_output(rejected, "")) goto done;
     stage = 3U;
 
     if (!minic_machine_function_initialize(&source_function, &target,
@@ -178,21 +229,32 @@ int main(void) {
                                             false, &only_block)) goto done;
     minic_machine_builder_set_origin(&source_builder, 0U, 0U);
     if (!minic_machine_builder_emit_source_asm(&source_builder,
-            "nop", 3U, MINIC_MACHINE_EFFECT_COMPILER_BARRIER,
+            "nop", 3U, MINIC_MACHINE_EFFECT_VOLATILE |
+            MINIC_MACHINE_EFFECT_COMPILER_BARRIER,
             NULL, 0U, NULL, 0U, false, false)) goto done;
     stage = 4U;
     minic_machine_builder_clear_origin(&source_builder);
     if (!minic_machine_builder_emit_selected(&source_builder, PROBE_RET,
             MINIC_MACHINE_EFFECT_RETURN, NULL, 0U, NULL, 0U)) goto done;
     if (fseek(rejected, 0L, SEEK_SET) != 0 ||
+        minic_machine_gnu_asm_preflight(&source_function, &policy) ||
         minic_machine_gnu_asm_emit_body(rejected, &source_function, &policy) ||
         !verify_output(rejected, "")) goto done;
     stage = 5U;
+
+    policy.emit_source_asm = minic_machine_gnu_asm_emit_unbound_source_asm;
+    accepted = tmpfile();
+    if (accepted == NULL ||
+        !minic_machine_gnu_asm_preflight(&source_function, &policy) ||
+        !minic_machine_gnu_asm_emit_body(accepted, &source_function, &policy) ||
+        !verify_output(accepted, "nop\n\tret\n")) goto done;
+    stage = 6U;
 
     success = true;
 done:
     if (output != NULL) fclose(output);
     if (rejected != NULL) fclose(rejected);
+    if (accepted != NULL) fclose(accepted);
     minic_machine_function_destroy(&source_function);
     minic_machine_function_destroy(&function);
     if (!success) {

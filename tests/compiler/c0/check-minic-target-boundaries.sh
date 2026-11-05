@@ -744,7 +744,9 @@ exists tests/compiler/c0/probe-target-language-abi-options.sh
 # helper fallback is retained until an ISA extension is actually qualified.
 exists src/target/riscv/isa_features.h
 has src/target/riscv64/isa.h 'target/riscv/isa_features.h'
-has src/target/target_info.h 'target/riscv/isa_features.h'
+lacks src/target/target_info.h 'target/riscv/isa_features.h'
+has src/target/riscv/machine_target_state.h 'target/riscv/isa_features.h'
+has src/target/target_info.h 'machine_state[32]'
 lacks src/target/target_info.h 'target/riscv64/isa.h'
 exists src/target/riscv/isa_resolve.h
 exists src/target/riscv/isa_resolve.c
@@ -754,7 +756,8 @@ lacks src/target/riscv64/isa.c 'bool minic_riscv_isa_resolve('
 # decoding is owned by the selected target, never the CLI.
 exists src/target/target_machine_options.h
 exists src/target/target_machine_options.c
-has src/target/target_machine_options.c 'minic_riscv_isa_resolve('
+lacks src/target/target_machine_options.c 'minic_riscv_isa_resolve('
+has src/target/machine_options/riscv.c 'minic_riscv_isa_resolve('
 has tools/minic-cc/main.c 'minic_target_machine_options_resolve('
 lacks tools/minic-cc/main.c 'target/riscv/isa_resolve.h'
 lacks tools/minic-cc/main.c '.riscv_isa'
@@ -781,7 +784,8 @@ lacks src/target/riscv64/runtime_libcall.h 'minic_riscv64_power_of_two('
 lacks src/target/riscv64/runtime_libcall.c 'minic_riscv64_log2_power_of_two('
 lacks src/target/riscv64/core_codegen.c 'minic_riscv64_power_of_two('
 
-has src/target/riscv32/rv32_frame.c 'frame->isa = &t->riscv_isa'
+lacks src/target/riscv32/rv32_frame.c 'frame->isa = &t->riscv_isa'
+lacks src/target/riscv32/rv32_internal.h 'const MinicRiscvIsa *isa;'
 has src/target/riscv32/rv32_emit.c 'rv32_emit_integer_instruction('
 # RV32/RV64 share machine-neutral ELF symbol semantics at the common owner.
 exists src/target/riscv/function_symbol.h

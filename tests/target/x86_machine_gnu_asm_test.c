@@ -1,6 +1,7 @@
 #include "target/common/machine_gnu_asm.h"
 #include "target/x86_64/machine_opcode.h"
 #include "target/x86_64/codegen_options.h"
+#include "target/x86_64/machine_target_state.h"
 
 #include <assert.h>
 #include <limits.h>
@@ -26,6 +27,25 @@ static MinicMachineOperand reg(unsigned int number, unsigned int width,
     result.kind = MINIC_MACHINE_OPERAND_REGISTER;
     result.value.physical.reg = gp(number,width);
     result.value.physical.access=access;
+    return result;
+}
+
+static MinicMachineOperand xmm(unsigned int number, unsigned int access) {
+    MinicMachineOperand result={0};
+    result.kind=MINIC_MACHINE_OPERAND_REGISTER;
+    result.value.physical.reg.bank=MINIC_MACHINE_REGISTER_VECTOR;
+    result.value.physical.reg.number=number;
+    result.value.physical.reg.width_bits=128U;
+    result.value.physical.access=access;
+    return result;
+}
+
+static MinicMachineOperand gp_address(unsigned int number) {
+    MinicMachineOperand result={0};
+    result.kind=MINIC_MACHINE_OPERAND_ADDRESS;
+    result.value.address.has_base=true;
+    result.value.address.base=gp(number,64U);
+    result.value.address.scale=1U;
     return result;
 }
 
@@ -204,6 +224,139 @@ static void build_function(MinicMachineFunction *function,
     append0(function,done,MINIC_X86_MI_RET);
 }
 
+/* This is the actual physical SSE/x87 instruction family used by the
+ * compiler's scalar FP and x87 extended80 ABI paths.  The target verifier
+ * must reject malformed XMM and disabled-feature operands before printing. */
+static void test_x86_fp_machine_contract(const MinicTargetInfo *target,
+    const MinicMachineGNUAsmPolicy *policy) {
+    MinicMachineFunction fn={0};
+    MinicMachineFrameObject fp={0};
+    size_t block_id=SIZE_MAX,slot_id=SIZE_MAX;
+    FILE *stream;
+    char textbuf[8192];
+    size_t count;
+    MinicTargetInfo copy;
+    assert(minic_machine_function_initialize(&fn,target,"mir_x86_fp",
+        minic_x86_64_machine_generated_features(target)));
+    fn.frame_size=32U;
+    fn.frame_alignment=16U;
+    fp.area=MINIC_MACHINE_FRAME_LOCAL;
+    fp.base=MINIC_MACHINE_FRAME_BASE_FRAME_POINTER;
+    fp.size_bytes=16U;
+    fp.alignment_bytes=16U;
+    fp.has_fixed_offset=true;
+    fp.fixed_offset=-32;
+    assert(minic_machine_function_add_frame_object(&fn,&fp,&slot_id));
+    assert(minic_machine_function_add_block(&fn,NULL,false,&block_id));
+    append2(&fn,block_id,MINIC_X86_MI_MOVQ_GPR_XMM,
+        reg(MINIC_X86_REG_RAX,64U,MINIC_MACHINE_REGISTER_READ),
+        xmm(0U,MINIC_MACHINE_REGISTER_WRITE));
+    append2(&fn,block_id,MINIC_X86_MI_MOVD_GPR_XMM,
+        reg(MINIC_X86_REG_R10,32U,MINIC_MACHINE_REGISTER_READ),
+        xmm(1U,MINIC_MACHINE_REGISTER_WRITE));
+    append2(&fn,block_id,MINIC_X86_MI_CVTSS2SD_XMM,
+        xmm(1U,MINIC_MACHINE_REGISTER_READ),
+        xmm(0U,MINIC_MACHINE_REGISTER_READ|MINIC_MACHINE_REGISTER_WRITE));
+    append2(&fn,block_id,MINIC_X86_MI_ADDSD_XMM,
+        xmm(1U,MINIC_MACHINE_REGISTER_READ),
+        xmm(0U,MINIC_MACHINE_REGISTER_READ|MINIC_MACHINE_REGISTER_WRITE));
+    append2(&fn,block_id,MINIC_X86_MI_UCOMISD_XMM,
+        xmm(1U,MINIC_MACHINE_REGISTER_READ),
+        xmm(0U,MINIC_MACHINE_REGISTER_READ));
+    append2(&fn,block_id,MINIC_X86_MI_CVTTSD2SIQ_XMM_GPR,
+        xmm(0U,MINIC_MACHINE_REGISTER_READ),
+        reg(MINIC_X86_REG_RAX,64U,MINIC_MACHINE_REGISTER_WRITE));
+    append2(&fn,block_id,MINIC_X86_MI_BTS64_IR,imm(63),
+        reg(MINIC_X86_REG_RAX,64U,
+            MINIC_MACHINE_REGISTER_READ|MINIC_MACHINE_REGISTER_WRITE));
+    append2(&fn,block_id,MINIC_X86_MI_AND8_RR,
+        reg(MINIC_X86_REG_R10,8U,MINIC_MACHINE_REGISTER_READ),
+        reg(MINIC_X86_REG_RAX,8U,
+            MINIC_MACHINE_REGISTER_READ|MINIC_MACHINE_REGISTER_WRITE));
+    append2(&fn,block_id,MINIC_X86_MI_OR8_RR,
+        reg(MINIC_X86_REG_R10,8U,MINIC_MACHINE_REGISTER_READ),
+        reg(MINIC_X86_REG_RAX,8U,
+            MINIC_MACHINE_REGISTER_READ|MINIC_MACHINE_REGISTER_WRITE));
+    append2(&fn,block_id,MINIC_X86_MI_MOVZBL_RR,
+        reg(MINIC_X86_REG_RAX,8U,MINIC_MACHINE_REGISTER_READ),
+        reg(MINIC_X86_REG_RAX,32U,MINIC_MACHINE_REGISTER_WRITE));
+    append2(&fn,block_id,MINIC_X86_MI_MOVDQU_XMM_FRAME_RBP,
+        xmm(0U,MINIC_MACHINE_REGISTER_READ),frame(slot_id));
+    append2(&fn,block_id,MINIC_X86_MI_MOVDQU_FRAME_RBP_XMM,
+        frame(slot_id),xmm(2U,MINIC_MACHINE_REGISTER_WRITE));
+    append2(&fn,block_id,MINIC_X86_MI_MOVDQU_ADDRESS_XMM,
+        gp_address(MINIC_X86_REG_R11),
+        xmm(3U,MINIC_MACHINE_REGISTER_WRITE));
+    append2(&fn,block_id,MINIC_X86_MI_MOVDQU_XMM_ADDRESS,
+        xmm(3U,MINIC_MACHINE_REGISTER_READ),
+        gp_address(MINIC_X86_REG_R11));
+    append1(&fn,block_id,MINIC_X86_MI_FLDT_FRAME_RBP,frame(slot_id));
+    append1(&fn,block_id,MINIC_X86_MI_FSTPT_FRAME_RBP,frame(slot_id));
+    append1(&fn,block_id,MINIC_X86_MI_FLDT_ADDRESS,
+        gp_address(MINIC_X86_REG_R10));
+    append1(&fn,block_id,MINIC_X86_MI_FSTPT_ADDRESS,
+        gp_address(MINIC_X86_REG_R10));
+    append1(&fn,block_id,MINIC_X86_MI_FLDL_FRAME_RBP,frame(slot_id));
+    append0(&fn,block_id,MINIC_X86_MI_FCHS);
+    append1(&fn,block_id,MINIC_X86_MI_FLDS_FRAME_RBP,frame(slot_id));
+    append0(&fn,block_id,MINIC_X86_MI_FADDP_ST1);
+    append1(&fn,block_id,MINIC_X86_MI_FSTPL_FRAME_RBP,frame(slot_id));
+    append1(&fn,block_id,MINIC_X86_MI_FILDQ_FRAME_RBP,frame(slot_id));
+    append1(&fn,block_id,MINIC_X86_MI_FLDL_ADDRESS,
+        gp_address(MINIC_X86_REG_R10));
+    append0(&fn,block_id,MINIC_X86_MI_FXCH_ST1);
+    append0(&fn,block_id,MINIC_X86_MI_FUCOMIP_ST1);
+    append0(&fn,block_id,MINIC_X86_MI_FSTP_ST0);
+    append1(&fn,block_id,MINIC_X86_MI_FILDQ_ADDRESS,
+        gp_address(MINIC_X86_REG_R10));
+    append1(&fn,block_id,MINIC_X86_MI_FISTTPQ_ADDRESS,
+        gp_address(MINIC_X86_REG_R10));
+    append0(&fn,block_id,MINIC_X86_MI_CLD);
+    append0(&fn,block_id,MINIC_X86_MI_RET);
+    assert(minic_machine_function_verify(&fn,&policy->verify));
+
+    stream=tmpfile();
+    assert(stream != NULL);
+    assert(minic_machine_gnu_asm_emit_body(stream,&fn,policy));
+    assert(fflush(stream)==0);
+    assert(fseek(stream,0L,SEEK_SET)==0);
+    count=fread(textbuf,1U,sizeof(textbuf)-1U,stream);
+    textbuf[count]='\0';
+    assert(fclose(stream)==0);
+    assert(strstr(textbuf,"movq %rax, %xmm0")!=NULL);
+    assert(strstr(textbuf,"addsd %xmm1, %xmm0")!=NULL);
+    assert(strstr(textbuf,"movdqu %xmm0, -32(%rbp)")!=NULL);
+    assert(strstr(textbuf,"fldt -32(%rbp)")!=NULL);
+    assert(strstr(textbuf,"fstpt (%r10)")!=NULL);
+    assert(strstr(textbuf,"fucomip %st(1), %st")!=NULL);
+    assert(strstr(textbuf,"faddp %st, %st(1)")!=NULL);
+    {
+        const char *path=getenv("MINIC_X86_MACHINE_FP_DUMP_PATH");
+        if (path != NULL && path[0] != '\0') {
+            FILE *dump=fopen(path,"w");
+            assert(dump != NULL);
+            assert(fputs(".text\n.globl mir_x86_fp\nmir_x86_fp:\n",dump)!=EOF);
+            assert(fwrite(textbuf,1U,count,dump)==count);
+            assert(fclose(dump)==0);
+        }
+    }
+    /* Independent feature check: a target with -mno-sse rejects every
+     * generated XMM instruction even if its operand shape is otherwise OK. */
+    copy=*target;
+    assert(minic_x86_64_target_codegen_options_set(&copy,
+        minic_x86_64_target_codegen_options(&copy) | MINIC_X86_CODEGEN_NO_SSE));
+    fn.target=&copy;
+    fn.generated_features=minic_x86_64_machine_generated_features(&copy);
+    assert(rejected_without_output(&fn,policy));
+    fn.target=target;
+    fn.generated_features=minic_x86_64_machine_generated_features(target);
+    fn.blocks[0].instructions[0].operands[1].value.physical.reg.number=16U;
+    assert(rejected_without_output(&fn,policy));
+    fn.blocks[0].instructions[0].operands[1].value.physical.reg.number=0U;
+    assert(minic_machine_function_verify(&fn,&policy->verify));
+    minic_machine_function_destroy(&fn);
+}
+
 int main(void) {
     MinicTargetInfo machine_target={0};
     const MinicTargetInfo *target=&machine_target;
@@ -220,6 +373,13 @@ int main(void) {
         MINIC_TARGET_CALL_MS_X64_FIXED_SCALAR;
     assert(target->data_layout != NULL);
     assert(minic_x86_64_machine_gnu_asm_policy(target,&policy));
+    for (unsigned int opcode=1U; opcode<MINIC_X86_MI_LAST; ++opcode) {
+        MinicMachineOpcodeContract contract={0};
+        assert(minic_x86_64_machine_opcode_info(opcode)!=NULL);
+        assert(minic_x86_64_machine_opcode_lookup(target,opcode,
+            &contract,NULL));
+        assert(contract.operand_count<=MINIC_MACHINE_MAX_OPERANDS);
+    }
     build_function(&function,target);
     assert(minic_machine_function_verify(&function,&policy.verify));
 
@@ -312,7 +472,8 @@ int main(void) {
         MinicMachineFunction thunk={0};
         size_t entry;
         copy=*target;
-        copy.x86_codegen_options=MINIC_X86_CODEGEN_INDIRECT_EXTERNAL_THUNK;
+        assert(minic_x86_64_target_codegen_options_set(&copy,
+            MINIC_X86_CODEGEN_INDIRECT_EXTERNAL_THUNK));
         assert(minic_machine_function_initialize(&thunk,&copy,
             "mir_x86_retpoline",minic_x86_64_machine_generated_features(&copy)));
         assert(minic_machine_function_add_block(&thunk,NULL,false,&entry));
@@ -324,7 +485,8 @@ int main(void) {
         assert(rejected_without_output(&thunk,&policy));
         minic_machine_function_destroy(&thunk);
     }
+    test_x86_fp_machine_contract(target,&policy);
     puts("X86_MACHINE_GNU_ASM=PASS typed_gpr_flags=PASS gotpcrel=PASS "
-         "sysv_call=PASS verifier_negative=PASS");
+         "sysv_call=PASS typed_sse_x87=PASS verifier_negative=PASS");
     return 0;
 }

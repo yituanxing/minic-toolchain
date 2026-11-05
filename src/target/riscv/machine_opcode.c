@@ -1,4 +1,5 @@
 #include "target/riscv/machine_opcode.h"
+#include "target/riscv/machine_target_state.h"
 
 #include "core/symbol_identity.h"
 
@@ -25,6 +26,7 @@ static const RiscvMachineDescription riscv_machine_descriptions[
     RV_OP(AUIPC, "auipc", REGISTER_IMMEDIATE),
     RV_OP(JAL_BLOCK, "jal", BLOCK),
     RV_OP(JALR_BRANCH, "jalr", REGISTER_IMMEDIATE),
+    RV_OP(JALR_BLOCK, "jalr", REGISTER_BLOCK),
     RV_OP(JALR_CALL, "jalr", REGISTER_IMMEDIATE),
     RV_OP(BEQ, "beq", REGISTER_REGISTER_BLOCK),
     RV_OP(BNE, "bne", REGISTER_REGISTER_BLOCK),
@@ -112,17 +114,19 @@ static const RiscvMachineDescription riscv_machine_descriptions[
 #undef RV64_OP
 
 static bool riscv_machine_target(const MinicTargetInfo *target, unsigned *xlen) {
+    MinicRiscvIsa isa;
     if (target == NULL || xlen == NULL) return false;
+    if (!minic_riscv_target_isa_load(target, &isa)) return false;
     if (target->architecture == MINIC_TARGET_ARCH_RISCV32 &&
-        target->riscv_isa.xlen == 32U &&
-        target->riscv_isa.abi == MINIC_RISCV_ABI_ILP32) {
+        isa.xlen == 32U &&
+        isa.abi == MINIC_RISCV_ABI_ILP32) {
         *xlen = 32U;
         return true;
     }
     if (target->architecture == MINIC_TARGET_ARCH_RISCV64 &&
-        target->riscv_isa.xlen == 64U &&
-        (target->riscv_isa.abi == MINIC_RISCV_ABI_LP64 ||
-         target->riscv_isa.abi == MINIC_RISCV_ABI_LP64D)) {
+        isa.xlen == 64U &&
+        (isa.abi == MINIC_RISCV_ABI_LP64 ||
+         isa.abi == MINIC_RISCV_ABI_LP64D)) {
         *xlen = 64U;
         return true;
     }
@@ -151,7 +155,7 @@ bool minic_riscv_machine_validate_generated_features(
     unsigned xlen;
     (void)context;
     return riscv_machine_target(target, &xlen) &&
-           generated_features == (uint64_t)target->riscv_isa.codegen_features;
+           generated_features == (uint64_t)minic_riscv_target_isa(target).codegen_features;
 }
 
 bool minic_riscv_machine_validate_function_abi(
@@ -418,6 +422,7 @@ bool minic_riscv_machine_lookup_opcode_contract(
         break;
     case MINIC_RISCV_MACHINE_JAL_BLOCK:
     case MINIC_RISCV_MACHINE_J_BLOCK:
+    case MINIC_RISCV_MACHINE_JALR_BLOCK:
     case MINIC_RISCV_MACHINE_JALR_BRANCH:
     case MINIC_RISCV_MACHINE_EBREAK:
     case MINIC_RISCV_MACHINE_UNREACHABLE:
@@ -525,6 +530,87 @@ bool minic_riscv_machine_resolve_frame_access(
     return true;
 }
 
+/* Do not allow a caller to claim an arbitrary physical CFG edge for a
+ * register-indirect jump. The immediately preceding typed LA_BLOCK must
+ * materialize precisely that destination into precisely that register.
+ * This keeps the legacy far-jump `lla; jalr` structure explicit in MIR,
+ * subject to the whole-function verifier before any GNU assembly output. */
+static bool riscv_machine_far_branch_pair_valid(
+    const MinicMachineFunction *function,
+    const MinicMachineInstruction *jump) {
+    size_t block_id;
+    if (function == NULL || jump == NULL || jump->operand_count != 2U ||
+        jump->operands == NULL || function->blocks == NULL)
+        return false;
+    for (block_id = 0U; block_id < function->block_count; ++block_id) {
+        const MinicMachineBlock *block = &function->blocks[block_id];
+        size_t instruction_id;
+        for (instruction_id = 1U;
+             instruction_id < block->instruction_count; ++instruction_id) {
+            const MinicMachineInstruction *current =
+                &block->instructions[instruction_id];
+            const MinicMachineInstruction *previous =
+                &block->instructions[instruction_id - 1U];
+            if (current != jump) continue;
+            if (previous->kind != MINIC_MACHINE_INSTRUCTION_SELECTED ||
+                previous->opcode != MINIC_RISCV_MACHINE_LA_BLOCK ||
+                previous->operand_count != 2U || previous->operands == NULL ||
+                previous->operands[0].kind != MINIC_MACHINE_OPERAND_REGISTER ||
+                previous->operands[1].kind !=
+                    MINIC_MACHINE_OPERAND_BLOCK_ADDRESS ||
+                jump->operands[0].kind != MINIC_MACHINE_OPERAND_REGISTER ||
+                jump->operands[1].kind != MINIC_MACHINE_OPERAND_BLOCK)
+                return false;
+            return previous->operands[0].value.physical.reg.number ==
+                       jump->operands[0].value.physical.reg.number &&
+                   previous->operands[0].value.physical.reg.width_bits ==
+                       jump->operands[0].value.physical.reg.width_bits &&
+                   previous->operands[1].value.block_id ==
+                       jump->operands[1].value.block_id;
+        }
+    }
+    return false;
+}
+
+/* Direct RISC-V conditional branches have a signed 4KiB reach; JAL has a
+ * signed 1MiB reach. GNU relaxation cannot legalize an arbitrary Core CFG
+ * edge after the fact. In the current thin MIR (which has no byte layout
+ * pass), accept only a provably adjacent block or a next-next block separated
+ * by at most 16 already-selected base-I operations, never source ASM. Every
+ * other edge must use target-owned auxiliary CFG blocks and explicit typed
+ * LA_BLOCK/JALR_BLOCK far materialization before whole-function verify. */
+static bool riscv_machine_short_branch_safe(
+    const MinicMachineFunction *function,
+    const MinicMachineInstruction *branch, size_t target_block) {
+    size_t block_id;
+    if (function == NULL || function->blocks == NULL || branch == NULL ||
+        target_block >= function->block_count) return false;
+    for (block_id = 0U; block_id < function->block_count; ++block_id) {
+        const MinicMachineBlock *block = &function->blocks[block_id];
+        size_t i;
+        for (i = 0U; i < block->instruction_count; ++i) {
+            if (&block->instructions[i] != branch) continue;
+            if (target_block == block_id + 1U) return true;
+            if (target_block != block_id + 2U) return false;
+            {
+                const MinicMachineBlock *between =
+                    &function->blocks[block_id + 1U];
+                size_t j;
+                if (between->instruction_count > 16U) return false;
+                for (j = 0U; j < between->instruction_count; ++j) {
+                    const MinicMachineInstruction *ins =
+                        &between->instructions[j];
+                    if (ins->kind != MINIC_MACHINE_INSTRUCTION_SELECTED &&
+                        ins->kind != MINIC_MACHINE_INSTRUCTION_LOCAL_LABEL)
+                        return false;
+                }
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 bool minic_riscv_machine_validate_selected_instruction(
     const MinicMachineFunction *fn, const MinicMachineInstruction *ins,
     void *context) {
@@ -556,7 +642,20 @@ bool minic_riscv_machine_validate_selected_instruction(
             fn, ins->opcode, &ins->operands[1],
             &base_register, &displacement);
     }
+    if (info.form == MINIC_RISCV_MACHINE_FORM_REGISTER_REGISTER_BLOCK ||
+        (info.form == MINIC_RISCV_MACHINE_FORM_REGISTER_BLOCK &&
+         ins->opcode != MINIC_RISCV_MACHINE_LA_BLOCK &&
+         ins->opcode != MINIC_RISCV_MACHINE_JALR_BLOCK) ||
+        info.form == MINIC_RISCV_MACHINE_FORM_BLOCK) {
+        const size_t branch_index = info.form ==
+            MINIC_RISCV_MACHINE_FORM_REGISTER_REGISTER_BLOCK ? 2U :
+            info.form == MINIC_RISCV_MACHINE_FORM_REGISTER_BLOCK ? 1U : 0U;
+        if (!riscv_machine_short_branch_safe(fn, ins,
+                ins->operands[branch_index].value.block_id)) return false;
+    }
     switch (ins->opcode) {
+    case MINIC_RISCV_MACHINE_JALR_BLOCK:
+        return riscv_machine_far_branch_pair_valid(fn, ins);
     case MINIC_RISCV_MACHINE_LUI:
     case MINIC_RISCV_MACHINE_AUIPC:
         return immediate_range(ins->operands[1].value.integer,

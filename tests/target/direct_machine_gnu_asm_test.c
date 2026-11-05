@@ -3,6 +3,7 @@
  * No machine assembly string or FILE* trampoline is stored in MIR. */
 #include "target/aarch64/machine_opcode.h"
 #include "target/loongarch64/machine_opcode.h"
+#include "target/loongarch64/machine_target_state.h"
 #include "target/common/machine_ir.h"
 #include "target/common/machine_ir_verify.h"
 #include "target/common/machine_gnu_asm.h"
@@ -23,6 +24,13 @@ static MinicMachineOperand reg(unsigned int number, unsigned int width,
     result.value.physical.reg = (MinicMachineRegister){number,
         (uint16_t)width, MINIC_MACHINE_REGISTER_GENERAL};
     result.value.physical.access = access;
+    return result;
+}
+
+static MinicMachineOperand fpreg(unsigned int number, unsigned int width,
+    MinicMachineRegisterBank bank, unsigned int access) {
+    MinicMachineOperand result = reg(number, width, access);
+    result.value.physical.reg.bank = bank;
     return result;
 }
 
@@ -160,6 +168,37 @@ static bool run_a64(void) {
     operands[0] = symbol("probe_callee", MINIC_A64_RELOC_DIRECT);
     CHECK(append(&function, &policy, fallthrough, MINIC_A64_MACHINE_BL,
         MINIC_MACHINE_EFFECT_CALL, operands, 1U));
+    /* Real production scalar-FP/vector instruction families are selected
+     * with physical register operands, never cached GNU asm lines. */
+    operands[0] = fpreg(9U, 64U, MINIC_MACHINE_REGISTER_FLOAT, wr);
+    operands[1] = address(10U, MINIC_A64_ADDRESS_UNSIGNED, 0);
+    CHECK(append(&function, &policy, fallthrough, MINIC_A64_MACHINE_LDR_FP_D,
+        MINIC_MACHINE_EFFECT_MEMORY_READ, operands, 2U));
+    operands[0] = fpreg(9U, 64U, MINIC_MACHINE_REGISTER_FLOAT, wr);
+    operands[1] = fpreg(9U, 64U, MINIC_MACHINE_REGISTER_FLOAT, rw);
+    operands[2] = fpreg(10U, 64U, MINIC_MACHINE_REGISTER_FLOAT, rw);
+    CHECK(append(&function, &policy, fallthrough, MINIC_A64_MACHINE_FADD,
+        0U, operands, 3U));
+    operands[0] = fpreg(9U, 64U, MINIC_MACHINE_REGISTER_FLOAT, rw);
+    CHECK(append(&function, &policy, fallthrough, MINIC_A64_MACHINE_FCMP,
+        0U, operands, 2U));
+    operands[0] = reg(9U, 32U, wr);
+    operands[1] = imm(3);
+    CHECK(append(&function, &policy, fallthrough, MINIC_A64_MACHINE_CSET,
+        0U, operands, 2U));
+    operands[0] = fpreg(10U, 64U, MINIC_MACHINE_REGISTER_FLOAT, wr);
+    operands[1] = reg(9U, 64U, rw);
+    CHECK(append(&function, &policy, fallthrough, MINIC_A64_MACHINE_UCVTF,
+        0U, operands, 2U));
+    operands[0] = reg(9U, 64U, wr);
+    operands[1] = fpreg(10U, 64U, MINIC_MACHINE_REGISTER_FLOAT, rw);
+    CHECK(append(&function, &policy, fallthrough, MINIC_A64_MACHINE_FCVTZU,
+        0U, operands, 2U));
+    operands[0] = fpreg(16U, 128U, MINIC_MACHINE_REGISTER_VECTOR, wr);
+    operands[1] = fpreg(16U, 128U, MINIC_MACHINE_REGISTER_VECTOR, rw);
+    operands[2] = fpreg(17U, 128U, MINIC_MACHINE_REGISTER_VECTOR, rw);
+    CHECK(append(&function, &policy, fallthrough, MINIC_A64_MACHINE_VECTOR_EOR_16B,
+        0U, operands, 3U));
     CHECK(append(&function, &policy, fallthrough, MINIC_A64_MACHINE_RET,
         MINIC_MACHINE_EFFECT_RETURN, NULL, 0U));
 
@@ -171,9 +210,17 @@ static bool run_a64(void) {
     CHECK(append(&function, &policy, taken, MINIC_A64_MACHINE_RET,
         MINIC_MACHINE_EFFECT_RETURN, NULL, 0U));
 
+    for (size_t bi = 0U; bi < function.block_count; ++bi)
+        for (size_t ii = 0U; ii < function.blocks[bi].instruction_count; ++ii) {
+            const MinicMachineInstruction *machine = &function.blocks[bi].instructions[ii];
+            if (machine->kind == MINIC_MACHINE_INSTRUCTION_SELECTED &&
+                !policy.verify.validate_selected_instruction(&function, machine, NULL))
+                fprintf(stderr, "a64 illegal selected block=%zu ins=%zu op=%u\n",
+                    bi, ii, machine->opcode);
+        }
     CHECK(minic_machine_function_verify(&function, &policy.verify));
     CHECK(emitted_contains(&function, &policy,
-        "movz x9, #42", "cbnz x9,", "bl probe_callee"));
+        "fadd d9, d9, d10", "fcvtzu x9, d10", "eor v16.16b, v16.16b, v17.16b"));
 
     function.generated_features = UINT64_MAX;
     CHECK(!minic_machine_function_verify(&function, &policy.verify));
@@ -188,6 +235,9 @@ static bool run_a64(void) {
     function.blocks[fallthrough].instructions[0].operands[1].value.frame.displacement = 8192;
     CHECK(!minic_machine_function_verify(&function, &policy.verify));
     function.blocks[fallthrough].instructions[0].operands[1].value.frame.displacement = 0;
+    function.blocks[fallthrough].instructions[4].operands[2].value.physical.reg.width_bits = 32U;
+    CHECK(!minic_machine_function_verify(&function, &policy.verify));
+    function.blocks[fallthrough].instructions[4].operands[2].value.physical.reg.width_bits = 64U;
     CHECK(minic_machine_function_verify(&function, &policy.verify));
     minic_machine_function_destroy(&function);
     return true;
@@ -242,6 +292,30 @@ static bool run_loong(void) {
     operands[0] = symbol("probe_callee", MINIC_LOONG_RELOC_DIRECT);
     CHECK(append(&function, &policy, fallthrough, MINIC_LOONG_MACHINE_BL,
         MINIC_MACHINE_EFFECT_CALL, operands, 1U));
+    operands[0] = fpreg(8U, 64U, MINIC_MACHINE_REGISTER_FLOAT, wr);
+    operands[1] = address(3U, MINIC_LOONG_ADDRESS_IMM12, 16);
+    CHECK(append(&function, &policy, fallthrough, MINIC_LOONG_MACHINE_FLD_D,
+        MINIC_MACHINE_EFFECT_MEMORY_READ, operands, 2U));
+    operands[0] = fpreg(8U, 64U, MINIC_MACHINE_REGISTER_FLOAT, wr);
+    operands[1] = fpreg(8U, 64U, MINIC_MACHINE_REGISTER_FLOAT, rw);
+    operands[2] = fpreg(9U, 64U, MINIC_MACHINE_REGISTER_FLOAT, rw);
+    CHECK(append(&function, &policy, fallthrough, MINIC_LOONG_MACHINE_FADD_D,
+        0U, operands, 3U));
+    operands[0] = fpreg(0U, 1U, MINIC_MACHINE_REGISTER_FLAGS, wr);
+    CHECK(append(&function, &policy, fallthrough, MINIC_LOONG_MACHINE_FCMP_CLT_D,
+        0U, operands, 3U));
+    operands[0] = reg(12U, 64U, wr);
+    operands[1] = fpreg(0U, 1U, MINIC_MACHINE_REGISTER_FLAGS, rw);
+    CHECK(append(&function, &policy, fallthrough, MINIC_LOONG_MACHINE_MOVCF2GR,
+        0U, operands, 2U));
+    operands[0] = fpreg(8U, 32U, MINIC_MACHINE_REGISTER_FLOAT, wr);
+    operands[1] = fpreg(8U, 64U, MINIC_MACHINE_REGISTER_FLOAT, rw);
+    CHECK(append(&function, &policy, fallthrough, MINIC_LOONG_MACHINE_FCVT_S_D,
+        0U, operands, 2U));
+    operands[0] = reg(12U, 64U, wr);
+    operands[1] = fpreg(8U, 32U, MINIC_MACHINE_REGISTER_FLOAT, rw);
+    CHECK(append(&function, &policy, fallthrough, MINIC_LOONG_MACHINE_MOVFR2GR_S,
+        0U, operands, 2U));
     CHECK(append(&function, &policy, fallthrough, MINIC_LOONG_MACHINE_RET,
         MINIC_MACHINE_EFFECT_RETURN, NULL, 0U));
 
@@ -255,7 +329,8 @@ static bool run_loong(void) {
 
     CHECK(minic_machine_function_verify(&function, &policy.verify));
     CHECK(emitted_contains(&function, &policy,
-        "li.d $t0, 42", "bnez $t0,", "bl probe_callee"));
+        "fld.d $ft0, $sp, 16", "fcmp.clt.d $fcc0, $ft0, $ft1",
+        "movcf2gr $t0, $fcc0"));
     function.generated_features = UINT64_MAX;
     CHECK(!minic_machine_function_verify(&function, &policy.verify));
     function.generated_features = MINIC_LOONG_MACHINE_FEATURE_BASE |
@@ -269,12 +344,15 @@ static bool run_loong(void) {
     function.blocks[fallthrough].instructions[0].operands[1].value.frame.displacement = 8192;
     CHECK(!minic_machine_function_verify(&function, &policy.verify));
     function.blocks[fallthrough].instructions[0].operands[1].value.frame.displacement = 0;
-    target.loongarch64_soft_float_abi = true;
+    function.blocks[fallthrough].instructions[5].operands[0].value.physical.reg.width_bits = 32U;
+    CHECK(!minic_machine_function_verify(&function, &policy.verify));
+    function.blocks[fallthrough].instructions[5].operands[0].value.physical.reg.width_bits = 1U;
+    CHECK(minic_loongarch64_target_soft_float_abi_set(&target, true));
     function.generated_features = MINIC_LOONG_MACHINE_FEATURE_BASE;
     /* An LP64D call's FP volatile clobbers are not physical LP64S state;
      * the target model must refuse to launder them across ABIs. */
     CHECK(!minic_machine_function_verify(&function, &policy.verify));
-    target.loongarch64_soft_float_abi = false;
+    CHECK(minic_loongarch64_target_soft_float_abi_set(&target, false));
     function.generated_features = MINIC_LOONG_MACHINE_FEATURE_BASE |
         MINIC_LOONG_MACHINE_FEATURE_FP;
     CHECK(minic_machine_function_verify(&function, &policy.verify));

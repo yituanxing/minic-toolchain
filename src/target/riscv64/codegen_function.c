@@ -8,6 +8,7 @@
 #include "target/riscv64/core_codegen.h"
 #include "target/riscv/function_symbol.h"
 #include "target/riscv64/isa.h"
+#include "target/riscv/machine_target_state.h"
 
 #include <errno.h>
 #include <inttypes.h>
@@ -73,14 +74,15 @@ static bool rv64_visit_function(
     }
     {
         MinicRiscvFunctionSymbol symbol;
+        MinicRiscvIsa isa;
         /* The machine emitter owns capability admission, not this visitor. */
         success = minic_riscv_function_symbol_from_module(module_decl, &symbol);
         symbol.function_sections = function_sections;
-        success = success &&
+        success = success && minic_riscv_target_isa_load(target, &isa) &&
             minic_riscv64_emit_core_function_with_symbol_with_storage_module_trusted(
                 file, module, core_function, &symbol, facts, storage,
                 target != NULL && target->position_independent,
-                target != NULL ? &target->riscv_isa : NULL, ctx->diagnostic);
+                &isa, ctx->diagnostic);
         if (success && is_constructor) {
             success = name != NULL && name[0] != '\0' &&
                       fprintf(file, ".section .init_array,\"aw\",@init_array\n"
@@ -140,9 +142,12 @@ static bool rv64_finalize(const char *path, const MinicTargetInfo *target,
                           void *opaque) {
     Rv64ProgramContext *ctx = opaque;
     char isa_error[240];
-    if (target == NULL || !target->riscv_isa.strict_isa) return true;
+    MinicRiscvIsa isa;
+    if (target == NULL) return true;
+    if (!minic_riscv_target_isa_load(target, &isa)) return false;
+    if (!isa.strict_isa) return true;
     if (minic_riscv64_check_isa_assembly(
-            path, &target->riscv_isa, isa_error, sizeof(isa_error)))
+            path, &isa, isa_error, sizeof(isa_error)))
         return true;
     minic_riscv64_set_diagnostic(ctx->diagnostic, path, isa_error);
     return false;

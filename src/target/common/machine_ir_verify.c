@@ -1,6 +1,7 @@
 #include "target/common/machine_ir_verify.h"
 #include "core/symbol_identity.h"
 
+#include <ctype.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -39,6 +40,15 @@ static bool machine_same_register(const MinicMachineRegister *left,
     return left->number == right->number &&
         left->bank == right->bank &&
         left->width_bits == right->width_bits;
+}
+
+static bool machine_source_binding_name_valid(const char *name) {
+    const unsigned char *cursor = (const unsigned char *)name;
+    if (cursor == NULL) return true;
+    if (!(isalpha(*cursor) || *cursor == '_')) return false;
+    for (++cursor; *cursor != '\0'; ++cursor)
+        if (!(isalnum(*cursor) || *cursor == '_')) return false;
+    return true;
 }
 
 static bool machine_validate_frames(const MinicMachineFunction *function,
@@ -115,6 +125,8 @@ static bool machine_operand_valid(const MinicMachineFunction *function,
     case MINIC_MACHINE_OPERAND_BLOCK_ADDRESS:
         return operand->value.block_id < function->block_count &&
             function->blocks[operand->value.block_id].indirect_entry;
+    case MINIC_MACHINE_OPERAND_CURRENT_LOCATION:
+        return true;
     case MINIC_MACHINE_OPERAND_ADDRESS:
         address = &operand->value.address;
         return (!address->has_base || machine_validate_register(
@@ -151,7 +163,8 @@ static bool machine_validate_instruction(
         (ins->operand_count == 0U) != (ins->operands == NULL) ||
         (ins->implicit_count == 0U) != (ins->implicit == NULL) ||
         (ins->effects & ~MACHINE_VALID_EFFECTS) != 0U ||
-        ((ins->effects & MINIC_MACHINE_EFFECT_VOLATILE) != 0U &&
+        (ins->kind != MINIC_MACHINE_INSTRUCTION_SOURCE_ASM &&
+         (ins->effects & MINIC_MACHINE_EFFECT_VOLATILE) != 0U &&
          (ins->effects & (MINIC_MACHINE_EFFECT_MEMORY_READ |
                           MINIC_MACHINE_EFFECT_MEMORY_WRITE)) == 0U))
         return false;
@@ -164,8 +177,88 @@ static bool machine_validate_instruction(
     if (!ins->has_core_origin &&
         (ins->core_block_id != 0U || ins->core_instruction_id != 0U))
         return false;
+    if (ins->kind == MINIC_MACHINE_INSTRUCTION_LOCAL_LABEL) {
+        if (ins->opcode != 0U || ins->effects != 0U ||
+            ins->operand_count != 0U || ins->implicit_count != 0U ||
+            ins->has_core_origin || ins->local_label_name == NULL ||
+            !minic_core_assembler_symbol_lexically_safe(
+                ins->local_label_name) || ins->source_asm_template != NULL ||
+            ins->source_asm_length != 0U ||
+            ins->source_asm_terminates_block ||
+            ins->source_asm_permits_fallthrough ||
+            ins->directive != NULL) return false;
+        *terminates = false;
+        *indirect_successors = false;
+        *permits_fallthrough = false;
+        return true;
+    }
+    if (ins->kind == MINIC_MACHINE_INSTRUCTION_DIRECTIVE) {
+        const MinicMachineDirective *directive = ins->directive;
+        const unsigned int valid_section_flags =
+            MINIC_MACHINE_SECTION_ALLOC | MINIC_MACHINE_SECTION_WRITE |
+            MINIC_MACHINE_SECTION_EXEC | MINIC_MACHINE_SECTION_LINK_ORDER;
+        if (directive == NULL || ins->opcode != 0U || ins->effects != 0U ||
+            ins->implicit_count != 0U || ins->source_asm_template != NULL ||
+            ins->source_asm_length != 0U || ins->local_label_name != NULL ||
+            ins->source_asm_terminates_block ||
+            ins->source_asm_permits_fallthrough) return false;
+        switch (directive->kind) {
+        case MINIC_MACHINE_DIRECTIVE_PUSH_SECTION:
+            if (ins->operand_count != 0U ||
+                !minic_core_assembler_symbol_lexically_safe(
+                    directive->section_name) ||
+                (directive->section_flags & ~valid_section_flags) != 0U ||
+                directive->section_type > MINIC_MACHINE_SECTION_TYPE_NOBITS ||
+                directive->data_width_bytes != 0U ||
+                (((directive->section_flags &
+                   MINIC_MACHINE_SECTION_LINK_ORDER) != 0U) !=
+                 (directive->link_order_symbol != NULL)) ||
+                (directive->link_order_symbol != NULL &&
+                 (!minic_core_assembler_symbol_lexically_safe(
+                     directive->link_order_symbol) ||
+                  directive->section_type ==
+                      MINIC_MACHINE_SECTION_TYPE_NONE))) return false;
+            break;
+        case MINIC_MACHINE_DIRECTIVE_POP_SECTION:
+            if (ins->operand_count != 0U || directive->section_name != NULL ||
+                directive->section_flags != 0U ||
+                directive->section_type != MINIC_MACHINE_SECTION_TYPE_NONE ||
+                directive->link_order_symbol != NULL ||
+                directive->data_width_bytes != 0U) return false;
+            break;
+        case MINIC_MACHINE_DIRECTIVE_DATA:
+            if (directive->section_name != NULL ||
+                directive->section_flags != 0U ||
+                directive->section_type != MINIC_MACHINE_SECTION_TYPE_NONE ||
+                directive->link_order_symbol != NULL ||
+                (directive->data_width_bytes != 1U &&
+                 directive->data_width_bytes != 2U &&
+                 directive->data_width_bytes != 4U &&
+                 directive->data_width_bytes != 8U) ||
+                (ins->operand_count != 1U && ins->operand_count != 2U))
+                return false;
+            for (i = 0U; i < ins->operand_count; ++i) {
+                const MinicMachineOperand *operand = &ins->operands[i];
+                if ((operand->kind != MINIC_MACHINE_OPERAND_INTEGER &&
+                     operand->kind != MINIC_MACHINE_OPERAND_SYMBOL &&
+                     operand->kind != MINIC_MACHINE_OPERAND_BLOCK &&
+                     operand->kind != MINIC_MACHINE_OPERAND_BLOCK_ADDRESS &&
+                     operand->kind != MINIC_MACHINE_OPERAND_CURRENT_LOCATION) ||
+                    operand->asm_constraint != NULL ||
+                    operand->asm_name != NULL) return false;
+            }
+            break;
+        default:
+            return false;
+        }
+        *terminates = false;
+        *indirect_successors = false;
+        *permits_fallthrough = false;
+        return true;
+    }
     if (ins->kind == MINIC_MACHINE_INSTRUCTION_SOURCE_ASM) {
         if (ins->opcode != 0U || ins->source_asm_template == NULL ||
+            ins->local_label_name != NULL || ins->directive != NULL ||
             ins->source_asm_length == 0U ||
             ins->source_asm_length == SIZE_MAX ||
             !ins->has_core_origin ||
@@ -183,6 +276,18 @@ static bool machine_validate_instruction(
                 function->target, ins, policy->context)) return false;
         for (i = 0U; i < ins->operand_count; ++i) {
             const MinicMachineOperand *operand = &ins->operands[i];
+            size_t other;
+            if (!machine_source_binding_name_valid(operand->asm_name))
+                return false;
+            if (operand->kind == MINIC_MACHINE_OPERAND_CURRENT_LOCATION)
+                return false;
+            if (operand->asm_name != NULL) {
+                for (other = 0U; other < i; ++other)
+                    if (ins->operands[other].asm_name != NULL &&
+                        strcmp(operand->asm_name,
+                               ins->operands[other].asm_name) == 0)
+                        return false;
+            }
             if (operand->kind == MINIC_MACHINE_OPERAND_BLOCK) {
                 if (operand->asm_constraint != NULL) return false;
             } else if (operand->asm_constraint == NULL ||
@@ -195,6 +300,7 @@ static bool machine_validate_instruction(
     }
     if (ins->kind != MINIC_MACHINE_INSTRUCTION_SELECTED ||
         ins->opcode == 0U || ins->source_asm_template != NULL ||
+        ins->local_label_name != NULL || ins->directive != NULL ||
         ins->source_asm_length != 0U ||
         ins->source_asm_terminates_block ||
         ins->source_asm_permits_fallthrough ||
@@ -230,6 +336,7 @@ static bool machine_validate_instruction(
         const MinicMachineOperand *operand = &ins->operands[i];
         if (operand->kind != contract.operand_kinds[i] ||
             operand->asm_constraint != NULL ||
+            operand->asm_name != NULL ||
             (operand->kind == MINIC_MACHINE_OPERAND_REGISTER &&
              operand->value.physical.access != contract.register_access[i]) ||
             (operand->kind != MINIC_MACHINE_OPERAND_REGISTER &&
@@ -259,6 +366,8 @@ bool minic_machine_function_verify(const MinicMachineFunction *function,
     size_t *referenced = NULL;
     size_t *visited = NULL;
     size_t label_count = 0U;
+    size_t label_capacity = 1U; /* the module-defined function symbol */
+    size_t section_nesting = 0U;
     size_t i;
     if (function == NULL || policy == NULL || function->target == NULL ||
         function->target->data_layout == NULL ||
@@ -269,8 +378,6 @@ bool minic_machine_function_verify(const MinicMachineFunction *function,
         function->name == NULL ||
         !minic_core_assembler_symbol_lexically_safe(function->name) ||
         function->architecture != function->target->architecture ||
-        function->architecture < MINIC_TARGET_ARCH_RISCV64 ||
-        function->architecture > MINIC_TARGET_ARCH_RISCV32 ||
         !minic_function_calling_convention_valid(
             function->calling_convention) ||
         policy->validate_function_abi == NULL ||
@@ -286,16 +393,31 @@ bool minic_machine_function_verify(const MinicMachineFunction *function,
                                               function->generated_features,
                                               policy->context) ||
         !machine_validate_frames(function, policy)) return false;
-    if ((function->architecture == MINIC_TARGET_ARCH_RISCV32 ||
-         function->architecture == MINIC_TARGET_ARCH_RISCV64) &&
-        function->target->riscv_isa.strict_isa &&
-        function->generated_features !=
-            (uint64_t)function->target->riscv_isa.codegen_features)
-        return false;
-    labels = calloc(function->block_count, sizeof(*labels));
+    for (i = 0U; i < function->block_count; ++i) {
+        const MinicMachineBlock *block = &function->blocks[i];
+        size_t j;
+        if (block->instruction_count > block->instruction_capacity ||
+            (block->instruction_count != 0U && block->instructions == NULL) ||
+            block->alias_count > block->alias_capacity ||
+            (block->alias_count != 0U && block->alias_labels == NULL) ||
+            block->alias_count >= SIZE_MAX - label_capacity)
+            return false;
+        label_capacity += block->alias_count + 1U;
+        for (j = 0U; j < block->instruction_count; ++j) {
+            if (block->instructions == NULL) return false;
+            if (block->instructions[j].kind ==
+                MINIC_MACHINE_INSTRUCTION_LOCAL_LABEL) {
+                if (label_capacity == SIZE_MAX) return false;
+                ++label_capacity;
+            }
+        }
+    }
+    if (label_capacity > SIZE_MAX / sizeof(*labels)) return false;
+    labels = calloc(label_capacity, sizeof(*labels));
     referenced = calloc(function->block_count, sizeof(*referenced));
     visited = calloc(function->block_count, sizeof(*visited));
     if (labels == NULL || referenced == NULL || visited == NULL) goto cleanup;
+    labels[label_count++] = function->name;
     for (i = 0U; i < function->block_count; ++i) {
         const MinicMachineBlock *block = &function->blocks[i];
         const size_t stamp = i + 1U;
@@ -321,18 +443,39 @@ bool minic_machine_function_verify(const MinicMachineFunction *function,
             goto cleanup;
         if (block->exported_label != NULL)
             labels[label_count++] = block->exported_label;
+        for (j = 0U; j < block->alias_count; ++j) {
+            const char *alias = block->alias_labels[j];
+            if (!minic_core_assembler_symbol_lexically_safe(alias))
+                goto cleanup;
+            labels[label_count++] = alias;
+        }
         for (j = 0U; j < block->instruction_count; ++j) {
             const MinicMachineInstruction *ins = &block->instructions[j];
             bool is_terminator = false;
             bool indirect = false;
             bool permits_fallthrough = false;
             size_t operand_id;
-            if (terminated || !machine_validate_instruction(
+            if ((terminated && ins->kind !=
+                 MINIC_MACHINE_INSTRUCTION_DIRECTIVE &&
+                 ins->kind != MINIC_MACHINE_INSTRUCTION_LOCAL_LABEL) ||
+                !machine_validate_instruction(
                     function, policy, ins, &is_terminator, &indirect,
                     &permits_fallthrough))
                 goto cleanup;
+            if (ins->kind == MINIC_MACHINE_INSTRUCTION_DIRECTIVE) {
+                if (ins->directive->kind ==
+                    MINIC_MACHINE_DIRECTIVE_PUSH_SECTION) {
+                    if (section_nesting == SIZE_MAX) goto cleanup;
+                    ++section_nesting;
+                } else if (ins->directive->kind ==
+                    MINIC_MACHINE_DIRECTIVE_POP_SECTION) {
+                    if (section_nesting == 0U) goto cleanup;
+                    --section_nesting;
+                }
+            }
+            if (ins->kind == MINIC_MACHINE_INSTRUCTION_LOCAL_LABEL)
+                labels[label_count++] = ins->local_label_name;
             if (is_terminator) {
-                if (j + 1U != block->instruction_count) goto cleanup;
                 terminated = true;
                 terminal_allows_fallthrough = permits_fallthrough;
             }
@@ -340,7 +483,8 @@ bool minic_machine_function_verify(const MinicMachineFunction *function,
             for (operand_id = 0U; operand_id < ins->operand_count;
                  ++operand_id) {
                 const MinicMachineOperand *operand = &ins->operands[operand_id];
-                if (operand->kind == MINIC_MACHINE_OPERAND_BLOCK) {
+                if (operand->kind == MINIC_MACHINE_OPERAND_BLOCK &&
+                    ins->kind != MINIC_MACHINE_INSTRUCTION_DIRECTIVE) {
                     if ((ins->effects & MINIC_MACHINE_EFFECT_BRANCH) == 0U)
                         goto cleanup;
                     if (referenced[operand->value.block_id] != stamp) {
@@ -374,6 +518,7 @@ bool minic_machine_function_verify(const MinicMachineFunction *function,
         }
         if (unmatched_edges != 0U) goto cleanup;
     }
+    if (section_nesting != 0U) goto cleanup;
     qsort(labels, label_count, sizeof(*labels), machine_compare_labels);
     for (i = 1U; i < label_count; ++i)
         if (strcmp(labels[i - 1U], labels[i]) == 0) goto cleanup;

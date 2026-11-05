@@ -256,10 +256,8 @@ static bool exercise_target(MinicTargetArchitecture arch) {
     layout.pointer_size = arch == MINIC_TARGET_ARCH_RISCV32 ? 4U : 8U;
     layout.pointer_alignment = layout.pointer_size;
     target.data_layout = &layout;
-    target.riscv_isa.strict_isa =
-        arch == MINIC_TARGET_ARCH_RISCV32 ||
-        arch == MINIC_TARGET_ARCH_RISCV64;
-    target.riscv_isa.codegen_features = 1U;
+    /* The generic contract must not know the byte shape of target-private
+     * ISA state. The target callback alone owns feature validation. */
     policy.lookup_opcode = probe_lookup;
     policy.validate_selected_instruction = probe_selected;
     policy.validate_generated_features = probe_generated_features;

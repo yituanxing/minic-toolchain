@@ -2,6 +2,7 @@
  * family, synthetic physical CFG, GNU serializer, illegal machine negatives.
  * No production Core-to-FILE* emitter is involved. */
 #include "target/riscv/machine_gnu_asm.h"
+#include "target/riscv/machine_target_state.h"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -26,6 +27,7 @@ static MinicMachineRegister gpr(unsigned xlen, unsigned id) {
 
 static bool setup_target(MinicTargetInfo *target, MinicDataLayout *layout,
                          unsigned xlen) {
+    MinicRiscvIsa isa = {0};
     if (target == NULL || layout == NULL || (xlen != 32U && xlen != 64U))
         return false;
     memset(target, 0, sizeof(*target));
@@ -36,13 +38,13 @@ static bool setup_target(MinicTargetInfo *target, MinicDataLayout *layout,
     target->architecture = xlen == 32U ?
         MINIC_TARGET_ARCH_RISCV32 : MINIC_TARGET_ARCH_RISCV64;
     target->data_layout = layout;
-    target->riscv_isa.xlen = xlen;
-    target->riscv_isa.abi = xlen == 32U ?
+    isa.xlen = xlen;
+    isa.abi = xlen == 32U ?
         MINIC_RISCV_ABI_ILP32 : MINIC_RISCV_ABI_LP64;
-    target->riscv_isa.strict_isa = true;
-    target->riscv_isa.codegen_features = 0U;
-    target->riscv_isa.features = 0U;
-    return true;
+    isa.strict_isa = true;
+    isa.codegen_features = 0U;
+    isa.features = 0U;
+    return minic_riscv_target_isa_store(target, &isa);
 }
 
 static bool append_selected(MinicMachineFunction *function, size_t block,
@@ -51,7 +53,7 @@ static bool append_selected(MinicMachineFunction *function, size_t block,
     MinicMachineInstruction ins = {0};
     MinicMachineOperand operands[MINIC_MACHINE_MAX_OPERANDS] = {{0}};
     size_t index;
-    const unsigned xlen = function->target->riscv_isa.xlen;
+    const unsigned xlen = minic_riscv_target_isa(function->target).xlen;
     if (!minic_riscv_machine_lookup_opcode_contract(
             function->target, opcode, &contract, NULL)) return false;
     ins.kind = MINIC_MACHINE_INSTRUCTION_SELECTED;
@@ -115,7 +117,7 @@ static bool make_function(MinicMachineFunction *function,
     bool has_explicit_block = false;
     bool branch_terminal;
     if (!minic_machine_function_initialize(function, target,
-            "riscv_machine_smoke", target->riscv_isa.codegen_features))
+            "riscv_machine_smoke", minic_riscv_target_isa(target).codegen_features))
         return false;
     function->frame_size = 32U;
     function->frame_alignment = 16U;
@@ -134,6 +136,10 @@ static bool make_function(MinicMachineFunction *function,
         entry != 0U || fallback != 1U || exit_block != 2U ||
         !minic_riscv_machine_lookup_opcode_contract(
             target, opcode, &contract, NULL))
+        return false;
+    if (opcode == MINIC_RISCV_MACHINE_JALR_BLOCK &&
+        !append_selected(function, entry,
+                         MINIC_RISCV_MACHINE_LA_BLOCK, exit_block))
         return false;
     if (!append_selected(function, entry, opcode, exit_block)) return false;
     branch_terminal = contract.terminates_block;
@@ -204,18 +210,18 @@ static bool run_all_selected_opcodes(const MinicTargetInfo *target,
         valid = make_function(&fn, target, opcode);
         if (!valid)
             fprintf(stderr, "rv%u opcode=%u make_function rejected\n",
-                    target->riscv_isa.xlen, (unsigned)opcode);
+                    minic_riscv_target_isa(target).xlen, (unsigned)opcode);
         if (valid) valid = verify_and_serialize(
             &fn, policy, serialized, sizeof(serialized));
         if (!valid && fn.block_count == 3U)
             fprintf(stderr, "rv%u opcode=%u verify=%d\n",
-                    target->riscv_isa.xlen, (unsigned)opcode,
+                    minic_riscv_target_isa(target).xlen, (unsigned)opcode,
                     (int)minic_machine_function_verify(&fn, &policy->verify));
         if (valid && info.mnemonic != NULL)
             valid = strstr(serialized, info.mnemonic) != NULL;
         if (!valid)
             fprintf(stderr, "rv%u opcode=%u (%s) failed\n",
-                    target->riscv_isa.xlen, (unsigned)opcode,
+                    minic_riscv_target_isa(target).xlen, (unsigned)opcode,
                     info.mnemonic != NULL ? info.mnemonic : "pseudo");
         minic_machine_function_destroy(&fn);
         if (!valid) return false;
@@ -239,7 +245,7 @@ static bool run_negative_cases(const MinicTargetInfo *target,
     CHECK(minic_machine_function_verify(&fn, &policy->verify));
     fn.generated_features = UINT64_C(1) << 31;
     CHECK(!minic_machine_function_verify(&fn, &policy->verify));
-    fn.generated_features = target->riscv_isa.codegen_features;
+    fn.generated_features = minic_riscv_target_isa(target).codegen_features;
     fn.calling_convention = MINIC_CALLING_CONVENTION_MS_X64;
     CHECK(!minic_machine_function_verify(&fn, &policy->verify));
     fn.calling_convention = MINIC_CALLING_CONVENTION_DEFAULT;
@@ -250,11 +256,50 @@ static bool run_negative_cases(const MinicTargetInfo *target,
     fn.frame_objects[0].area = MINIC_MACHINE_FRAME_LOCAL;
     fn.frame_objects[0].fixed_offset = 8;
     CHECK(minic_machine_function_verify(&fn, &policy->verify));
-    if (target->riscv_isa.xlen == 32U) {
+    if (minic_riscv_target_isa(target).xlen == 32U) {
         selected->opcode = MINIC_RISCV_MACHINE_LD;
         CHECK(!minic_machine_function_verify(&fn, &policy->verify));
         selected->opcode = opcode;
     }
+    minic_machine_function_destroy(&fn);
+
+    /* Without a machine byte-layout pass, a direct B-branch may address
+     * only a provably neighboring block. Longer Core edges must be split
+     * into a nearby auxiliary edge and typed LA_BLOCK/JALR_BLOCK. */
+    CHECK(make_function(&fn, target, MINIC_RISCV_MACHINE_BEQZ));
+    {
+        size_t fourth;
+        CHECK(minic_machine_function_add_block(&fn, NULL, false, &fourth));
+        CHECK(fourth == 3U);
+        CHECK(append_selected(&fn, fourth, MINIC_RISCV_MACHINE_RET, fourth));
+        CHECK(minic_machine_function_verify(&fn, &policy->verify));
+        fn.blocks[0].instructions[0].operands[1].value.block_id = fourth;
+        fn.blocks[0].successors[0] = fourth;
+        CHECK(!minic_machine_function_verify(&fn, &policy->verify));
+        fn.blocks[0].instructions[0].operands[1].value.block_id = 2U;
+        fn.blocks[0].successors[0] = 2U;
+        CHECK(minic_machine_function_verify(&fn, &policy->verify));
+    }
+    minic_machine_function_destroy(&fn);
+
+    /* Production RV64/RV32 long branches historically use `lla; jalr`.
+     * Both operations must be individually selected and independently
+     * verified. The CFG target must match the LA_BLOCK address materialized
+     * immediately before JALR_BLOCK; no serializer-hidden pseudo expansion. */
+    CHECK(make_function(&fn, target, MINIC_RISCV_MACHINE_JALR_BLOCK));
+    CHECK(verify_and_serialize(&fn, policy, serialized, sizeof(serialized)));
+    CHECK(strstr(serialized, "  lla x5, .Lriscv_machine_exit\n"
+                             "  jalr zero, 0(x5)\n") != NULL);
+    selected = &fn.blocks[0].instructions[1];
+    CHECK(selected->operand_count == 2U);
+    selected->operands[0].value.physical.reg.number = 6U;
+    CHECK(!minic_machine_function_verify(&fn, &policy->verify));
+    selected->operands[0].value.physical.reg.number = 5U;
+    CHECK(minic_machine_function_verify(&fn, &policy->verify));
+    fn.blocks[0].instructions[0].operands[1].value.block_id = 1U;
+    CHECK(!minic_machine_function_verify(&fn, &policy->verify));
+    fn.blocks[0].instructions[0].operands[1].value.block_id = 2U;
+    CHECK(minic_machine_function_verify(&fn, &policy->verify));
     minic_machine_function_destroy(&fn);
 
     CHECK(make_function(&fn, target, MINIC_RISCV_MACHINE_LA_PCREL));
@@ -302,8 +347,109 @@ static bool run_negative_cases(const MinicTargetInfo *target,
 
     CHECK(make_function(&fn, target, MINIC_RISCV_MACHINE_SLLI));
     selected = &fn.blocks[0].instructions[0];
-    selected->operands[2].value.integer = target->riscv_isa.xlen;
+    selected->operands[2].value.integer = minic_riscv_target_isa(target).xlen;
     CHECK(!minic_machine_function_verify(&fn, &policy->verify));
+    minic_machine_function_destroy(&fn);
+    return true;
+}
+
+/* Source-origin GNU asm is the only opaque machine operation allowed; its
+ * template is emitted by explicit, checked physical bindings. Compiler-
+ * selected instructions must use target-owned opcode identities instead. */
+static bool run_bound_source_asm(const MinicTargetInfo *target,
+                                const MinicMachineGNUAsmPolicy *policy) {
+    MinicMachineFunction fn = {0};
+    MinicMachineInstruction source = {0};
+    MinicMachineOperand bindings[5] = {{0}};
+    const char *template_text =
+        "addi %[dst], %[src], 7\n"
+        "  lr.w %[dst], %[mem]\n"
+        "  addi %[dst], %[dst], %n[neg]\n"
+        "  bnez %[src], %l[target]";
+    size_t entry, fallthrough, destination;
+    char output[8192];
+    char original;
+    char *saved_constraint;
+    CHECK(minic_machine_function_initialize(&fn, target,
+        "riscv_source_asm_smoke", minic_riscv_target_isa(target).codegen_features));
+    fn.frame_size = 16U;
+    fn.frame_alignment = 16U;
+    CHECK(minic_machine_function_add_block(&fn, NULL, false, &entry));
+    CHECK(minic_machine_function_add_block(&fn, NULL, false, &fallthrough));
+    CHECK(minic_machine_function_add_block(&fn,
+        ".Lriscv_asm_goto_destination", false, &destination));
+    bindings[0].kind = MINIC_MACHINE_OPERAND_REGISTER;
+    bindings[0].value.physical.reg = gpr(minic_riscv_target_isa(target).xlen, 5U);
+    bindings[0].value.physical.access = MINIC_MACHINE_REGISTER_WRITE;
+    bindings[0].asm_constraint = "=r";
+    bindings[0].asm_name = "dst";
+    bindings[1].kind = MINIC_MACHINE_OPERAND_REGISTER;
+    bindings[1].value.physical.reg = gpr(minic_riscv_target_isa(target).xlen, 6U);
+    bindings[1].value.physical.access = MINIC_MACHINE_REGISTER_READ;
+    bindings[1].asm_constraint = "r";
+    bindings[1].asm_name = "src";
+    bindings[2].kind = MINIC_MACHINE_OPERAND_BLOCK;
+    bindings[2].value.block_id = destination;
+    bindings[2].asm_name = "target";
+    bindings[3].kind = MINIC_MACHINE_OPERAND_ADDRESS;
+    bindings[3].value.address.target_mode =
+        MINIC_RISCV_MACHINE_ADDRESS_BASE_DISPLACEMENT;
+    bindings[3].value.address.has_base = true;
+    bindings[3].value.address.base = gpr(minic_riscv_target_isa(target).xlen, 8U);
+    bindings[3].value.address.scale = 1U;
+    bindings[3].asm_constraint = "+A";
+    bindings[3].asm_name = "mem";
+    bindings[4].kind = MINIC_MACHINE_OPERAND_INTEGER;
+    bindings[4].value.integer = -7;
+    bindings[4].asm_constraint = "i";
+    bindings[4].asm_name = "neg";
+    source.kind = MINIC_MACHINE_INSTRUCTION_SOURCE_ASM;
+    source.effects = MINIC_MACHINE_EFFECT_SOURCE_ASM |
+                     MINIC_MACHINE_EFFECT_BRANCH |
+                     MINIC_MACHINE_EFFECT_MEMORY_READ |
+                     MINIC_MACHINE_EFFECT_MEMORY_WRITE;
+    source.source_asm_template = (char *)template_text;
+    source.source_asm_length = strlen(template_text);
+    source.source_asm_terminates_block = true;
+    source.source_asm_permits_fallthrough = true;
+    source.has_core_origin = true;
+    source.core_block_id = 1U;
+    source.core_instruction_id = 17U;
+    source.operands = bindings;
+    source.operand_count = 5U;
+    CHECK(minic_machine_block_append_instruction(&fn, entry, &source));
+    CHECK(minic_machine_block_add_successor(&fn, entry, destination));
+    CHECK(minic_machine_block_add_successor(&fn, entry, fallthrough));
+    CHECK(minic_machine_block_set_fallthrough(&fn, entry, fallthrough));
+    CHECK(append_selected(&fn, fallthrough, MINIC_RISCV_MACHINE_J_BLOCK,
+                          destination));
+    CHECK(minic_machine_block_add_successor(&fn, fallthrough, destination));
+    CHECK(append_selected(&fn, destination, MINIC_RISCV_MACHINE_RET,
+                          destination));
+    CHECK(verify_and_serialize(&fn, policy, output, sizeof(output)));
+    CHECK(strstr(output, "addi x5, x6, 7\n"
+                         "  lr.w x5, (x8)") != NULL);
+    CHECK(strstr(output, "bnez x6, .Lriscv_asm_goto_destination") != NULL);
+    fn.blocks[entry].instructions[0].effects &=
+        ~MINIC_MACHINE_EFFECT_MEMORY_WRITE;
+    CHECK(!minic_machine_function_verify(&fn, &policy->verify));
+    fn.blocks[entry].instructions[0].effects |=
+        MINIC_MACHINE_EFFECT_MEMORY_WRITE;
+    CHECK(minic_machine_function_verify(&fn, &policy->verify));
+    saved_constraint = fn.blocks[entry].instructions[0].operands[0].asm_constraint;
+    fn.blocks[entry].instructions[0].operands[0].asm_constraint = "=m";
+    CHECK(!minic_machine_function_verify(&fn, &policy->verify));
+    fn.blocks[entry].instructions[0].operands[0].asm_constraint =
+        saved_constraint;
+    CHECK(minic_machine_function_verify(&fn, &policy->verify));
+    original = fn.blocks[entry].instructions[0].source_asm_template[
+        source.source_asm_length - 1U];
+    fn.blocks[entry].instructions[0].source_asm_template[
+        source.source_asm_length - 1U] = '%';
+    CHECK(!minic_machine_function_verify(&fn, &policy->verify));
+    fn.blocks[entry].instructions[0].source_asm_template[
+        source.source_asm_length - 1U] = original;
+    CHECK(minic_machine_function_verify(&fn, &policy->verify));
     minic_machine_function_destroy(&fn);
     return true;
 }
@@ -319,9 +465,11 @@ int main(void) {
         if (!setup_target(&target, &layout, widths[i]) ||
             !minic_riscv_machine_gnu_asm_policy(&target, &policy) ||
             !run_all_selected_opcodes(&target, &policy, &tested) ||
-            !run_negative_cases(&target, &policy)) return 1;
+            !run_negative_cases(&target, &policy) ||
+            !run_bound_source_asm(&target, &policy)) return 1;
         printf("RV%uI machine GNU policy: %zu selected opcodes PASS; "
-               "typed CFG, memory, PCREL/GOT, ABI and forged negatives PASS\n",
+               "typed CFG, memory, PCREL/GOT, ABI, source-asm bindings "
+               "and forged negatives PASS\n",
                widths[i], tested);
     }
     return 0;

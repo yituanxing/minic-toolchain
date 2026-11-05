@@ -45,6 +45,22 @@ static bool x86_emit_gp_operand(FILE *out, const MinicMachineOperand *operand) {
     return fputs(name,out) != EOF;
 }
 
+static bool x86_emit_register(FILE *out, const MinicMachineOperand *operand) {
+    const MinicMachineRegister *reg;
+    if (out == NULL || operand == NULL ||
+        operand->kind != MINIC_MACHINE_OPERAND_REGISTER) return false;
+    reg = &operand->value.physical.reg;
+    if (reg->bank == MINIC_MACHINE_REGISTER_GENERAL)
+        return x86_emit_gp_operand(out,operand);
+    if (reg->bank == MINIC_MACHINE_REGISTER_VECTOR &&
+        reg->number < 16U && reg->width_bits == 128U)
+        return fprintf(out,"%%xmm%u",reg->number) >= 0;
+    if (reg->bank == MINIC_MACHINE_REGISTER_FLOAT &&
+        reg->number < 8U && reg->width_bits == 80U)
+        return fprintf(out,"%%st(%u)",reg->number) >= 0;
+    return false;
+}
+
 static bool x86_emit_symbol(FILE *out, const char *name, int64_t addend,
     unsigned int relocation) {
     const char *suffix;
@@ -120,7 +136,7 @@ static bool x86_emit_typed_operand(FILE *out,
     if (operand == NULL) return false;
     switch (operand->kind) {
     case MINIC_MACHINE_OPERAND_REGISTER:
-        return x86_emit_gp_operand(out,operand);
+        return x86_emit_register(out,operand);
     case MINIC_MACHINE_OPERAND_INTEGER:
         return fprintf(out,"$%" PRId64,operand->value.integer) >= 0;
     case MINIC_MACHINE_OPERAND_ADDRESS:
@@ -153,7 +169,27 @@ static bool x86_emit_selected(FILE *out,
     }
     if (fprintf(out,"  %s",opcode->mnemonic) < 0) return false;
     switch (opcode->format) {
-    case MINIC_X86_MACHINE_FORMAT_NONE: break;
+    case MINIC_X86_MACHINE_FORMAT_NONE:
+        /* Fixed-register x87 stack encodings are target-known machine
+         * opcodes, not source ASM templates or arbitrary GNU fragments. */
+        switch (ins->opcode) {
+        case MINIC_X86_MI_FXCH_ST1:
+        case MINIC_X86_MI_FSTP_ST0:
+            if (fputs(ins->opcode == MINIC_X86_MI_FXCH_ST1
+                      ? " %st(1)" : " %st(0)",out) == EOF) return false;
+            break;
+        case MINIC_X86_MI_FUCOMIP_ST1:
+            if (fputs(" %st(1), %st",out) == EOF) return false;
+            break;
+        case MINIC_X86_MI_FADDP_ST1:
+        case MINIC_X86_MI_FSUBRP_ST1:
+        case MINIC_X86_MI_FMULP_ST1:
+        case MINIC_X86_MI_FDIVRP_ST1:
+            if (fputs(" %st, %st(1)",out) == EOF) return false;
+            break;
+        default: break;
+        }
+        break;
     case MINIC_X86_MACHINE_FORMAT_RR:
     case MINIC_X86_MACHINE_FORMAT_IR:
     case MINIC_X86_MACHINE_FORMAT_AR:
@@ -199,6 +235,12 @@ static bool x86_emit_selected(FILE *out,
             return false;
         break;
     case MINIC_X86_MACHINE_FORMAT_S:
+        if (fputc(' ',out) == EOF ||
+            !x86_emit_typed_operand(out,function,&ins->operands[0],opcode))
+            return false;
+        break;
+    case MINIC_X86_MACHINE_FORMAT_A:
+    case MINIC_X86_MACHINE_FORMAT_F:
         if (fputc(' ',out) == EOF ||
             !x86_emit_typed_operand(out,function,&ins->operands[0],opcode))
             return false;

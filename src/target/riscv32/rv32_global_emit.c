@@ -1,6 +1,7 @@
 #include "target/riscv32/rv32_global_emit.h"
 #include "target/common/global_emit.h"
 #include "target/common/module_global_emit.h"
+#include "target/riscv/machine_target_state.h"
 
 #include <stdio.h>
 
@@ -59,7 +60,7 @@ bool minic_riscv32_emit_module_global(FILE *out, const MinicTargetInfo *target,
     if (out == NULL || target == NULL ||
         target->architecture != MINIC_TARGET_ARCH_RISCV32 ||
         target->data_layout == NULL || target->data_layout->pointer_size != 4U ||
-        target->riscv_isa.xlen != 32U || module == NULL ||
+        minic_riscv_target_isa(target).xlen != 32U || module == NULL ||
         !minic_core_module_verify_global(module, ordinal) ||
         module->type_context == NULL || module->globals == NULL ||
         ordinal >= module->global_count)

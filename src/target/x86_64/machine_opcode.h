@@ -3,10 +3,10 @@
 
 #include "target/common/machine_gnu_asm.h"
 
-/* Physical x86-64 integer machine opcodes. These describe actual ISA
- * instructions, not Core operations or pre-rendered GNU assembly strings.
- * Omitted x87, SSE, privileged and Linux special-ASM families fail closed
- * until their own instruction contracts and serializers are implemented. */
+/* Selected physical x86-64 GPR, SSE2, and x87 machine opcodes. These
+ * describe actual ISA instructions, not Core operations or pre-rendered GNU
+ * assembly strings. Remaining privileged and Linux source-ASM contracts
+ * fail closed until their full target-specific binding is implemented. */
 typedef enum MinicX86MachineOpcode {
     MINIC_X86_MI_INVALID = 0,
     MINIC_X86_MI_NOP, MINIC_X86_MI_PAUSE, MINIC_X86_MI_LFENCE,
@@ -34,6 +34,7 @@ typedef enum MinicX86MachineOpcode {
     MINIC_X86_MI_MOVSBQ_RR, MINIC_X86_MI_MOVZBQ_RR,
     MINIC_X86_MI_MOVSWQ_RR, MINIC_X86_MI_MOVZWQ_RR,
     MINIC_X86_MI_MOVSLQ_RR,
+    MINIC_X86_MI_MOVZBL_RR,
     MINIC_X86_MI_MOVSBQ_AR, MINIC_X86_MI_MOVZBQ_AR,
     MINIC_X86_MI_MOVSWQ_AR, MINIC_X86_MI_MOVZWQ_AR,
     MINIC_X86_MI_MOVSLQ_AR,
@@ -73,6 +74,40 @@ typedef enum MinicX86MachineOpcode {
     MINIC_X86_MI_IMUL64_R, MINIC_X86_MI_DIV64_R,
     MINIC_X86_MI_IDIV64_R,
     MINIC_X86_MI_REP_MOVSB,
+
+    /* Physical SSE/SSE2 scalar transport and arithmetic.  Operands still
+     * identify the full 128-bit XMM registers (not Core float values). */
+    MINIC_X86_MI_MOVD_GPR_XMM, MINIC_X86_MI_MOVD_XMM_GPR,
+    MINIC_X86_MI_MOVQ_GPR_XMM, MINIC_X86_MI_MOVQ_XMM_GPR,
+    MINIC_X86_MI_ADDSS_XMM, MINIC_X86_MI_SUBSS_XMM,
+    MINIC_X86_MI_MULSS_XMM, MINIC_X86_MI_DIVSS_XMM,
+    MINIC_X86_MI_ADDSD_XMM, MINIC_X86_MI_SUBSD_XMM,
+    MINIC_X86_MI_MULSD_XMM, MINIC_X86_MI_DIVSD_XMM,
+    MINIC_X86_MI_UCOMISS_XMM, MINIC_X86_MI_UCOMISD_XMM,
+    MINIC_X86_MI_CVTSI2SDQ_GPR_XMM,
+    MINIC_X86_MI_CVTTSD2SIQ_XMM_GPR,
+    MINIC_X86_MI_CVTSS2SD_XMM, MINIC_X86_MI_CVTSD2SS_XMM,
+    MINIC_X86_MI_MOVDQU_ADDRESS_XMM, MINIC_X86_MI_MOVDQU_XMM_ADDRESS,
+    MINIC_X86_MI_MOVDQU_FRAME_RBP_XMM,
+    MINIC_X86_MI_MOVDQU_XMM_FRAME_RBP,
+    MINIC_X86_MI_MOVDQU_FRAME_RSP_XMM,
+    MINIC_X86_MI_MOVDQU_XMM_FRAME_RSP,
+    /* Two x87 stack forms used for the SysV extended80 ABI. */
+    MINIC_X86_MI_FLDT_ADDRESS, MINIC_X86_MI_FSTPT_ADDRESS,
+    MINIC_X86_MI_FLDT_FRAME_RBP, MINIC_X86_MI_FSTPT_FRAME_RBP,
+    MINIC_X86_MI_FLDS_FRAME_RBP, MINIC_X86_MI_FLDL_FRAME_RBP,
+    MINIC_X86_MI_FSTPS_FRAME_RBP, MINIC_X86_MI_FSTPL_FRAME_RBP,
+    MINIC_X86_MI_FILDL_FRAME_RBP, MINIC_X86_MI_FILDQ_FRAME_RBP,
+    MINIC_X86_MI_FISTTPQ_FRAME_RSP,
+    MINIC_X86_MI_FLDL_ADDRESS, MINIC_X86_MI_FILDQ_ADDRESS,
+    MINIC_X86_MI_FISTTPQ_ADDRESS, MINIC_X86_MI_FADDL_ADDRESS,
+    MINIC_X86_MI_FCHS, MINIC_X86_MI_FXCH_ST1,
+    MINIC_X86_MI_FUCOMIP_ST1, MINIC_X86_MI_FSTP_ST0,
+    MINIC_X86_MI_FADDP_ST1, MINIC_X86_MI_FSUBRP_ST1,
+    MINIC_X86_MI_FMULP_ST1, MINIC_X86_MI_FDIVRP_ST1,
+    MINIC_X86_MI_CLD, MINIC_X86_MI_BTS64_IR,
+    MINIC_X86_MI_AND8_RR,
+    MINIC_X86_MI_OR8_RR, MINIC_X86_MI_TEST8_RR,
 
     MINIC_X86_MI_SETZ8_R, MINIC_X86_MI_SETNZ8_R,
     MINIC_X86_MI_SETB8_R, MINIC_X86_MI_SETBE8_R,
@@ -143,7 +178,9 @@ typedef enum MinicX86MachineFormat {
     MINIC_X86_MACHINE_FORMAT_SR,
     MINIC_X86_MACHINE_FORMAT_R,
     MINIC_X86_MACHINE_FORMAT_B,
-    MINIC_X86_MACHINE_FORMAT_S
+    MINIC_X86_MACHINE_FORMAT_S,
+    MINIC_X86_MACHINE_FORMAT_A,
+    MINIC_X86_MACHINE_FORMAT_F
 } MinicX86MachineFormat;
 
 /* Read-only instruction descriptor consumed by the target GNU printer.
@@ -153,6 +190,9 @@ typedef struct MinicX86MachineOpcodeInfo {
     MinicX86MachineFormat format;
     unsigned short first_width_bits;
     unsigned short second_width_bits;
+    unsigned short memory_width_bits; /* for sole x87 memory operand */
+    MinicMachineRegisterBank first_bank; /* zero means GP for older opcodes */
+    MinicMachineRegisterBank second_bank;
     unsigned int first_access;
     unsigned int second_access;
     unsigned int effects;

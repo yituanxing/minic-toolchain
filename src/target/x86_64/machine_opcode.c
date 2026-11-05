@@ -1,5 +1,6 @@
 #include "target/x86_64/machine_opcode.h"
 #include "target/x86_64/codegen_options.h"
+#include "target/x86_64/machine_target_state.h"
 
 #include <limits.h>
 #include <string.h>
@@ -22,7 +23,13 @@ enum X86ImplicitKind {
     X86_IMPLICIT_CALL_SYSV,
     X86_IMPLICIT_CALL_MS,
     X86_IMPLICIT_CALL_SYSV_THUNK_R11,
-    X86_IMPLICIT_JMP_THUNK_RAX
+    X86_IMPLICIT_JMP_THUNK_RAX,
+    X86_IMPLICIT_X87_STACK_PUSH,
+    X86_IMPLICIT_X87_STACK_POP,
+    X86_IMPLICIT_X87_STACK_UNARY,
+    X86_IMPLICIT_X87_STACK_SWAP,
+    X86_IMPLICIT_X87_STACK_BINARY_POP,
+    X86_IMPLICIT_X87_STACK_COMPARE_POP
 };
 
 #define R MINIC_MACHINE_REGISTER_READ
@@ -36,6 +43,7 @@ enum X86ImplicitKind {
 #define BAR MINIC_MACHINE_EFFECT_COMPILER_BARRIER
 #define BASE MINIC_X86_MACHINE_GENERATED_BASE
 #define IBT MINIC_X86_MACHINE_GENERATED_IBT
+#define SSE2 MINIC_X86_MACHINE_GENERATED_SSE2
 
 /* The physical ISA descriptor is intentionally independent of a particular
  * Core operation or mutable instruction. It is never synthesized from an
@@ -86,6 +94,39 @@ enum X86ImplicitKind {
       .relocation=reloc_id, .effects=effect_bits, .implicit_kind=impl, \
       .required_features=BASE, .terminates_block=(((effect_bits) & (BR|RT)) != 0U) }
 
+#define XRR(op, word, first_bank_id, first_width, first_access_bits, \
+            second_bank_id, second_width, second_access_bits, implicit_id) \
+    [MINIC_X86_MI_##op] = { .mnemonic=word, .format=MINIC_X86_MACHINE_FORMAT_RR, \
+      .first_bank=first_bank_id, .first_width_bits=first_width, \
+      .second_bank=second_bank_id, .second_width_bits=second_width, \
+      .first_access=first_access_bits, .second_access=second_access_bits, \
+      .required_features=SSE2, .implicit_kind=implicit_id }
+#define XAR(op, word, effect_bits, access) \
+    [MINIC_X86_MI_##op] = { .mnemonic=word, .format=MINIC_X86_MACHINE_FORMAT_AR, \
+      .second_bank=MINIC_MACHINE_REGISTER_VECTOR, .second_width_bits=128, \
+      .second_access=access, .effects=effect_bits, .required_features=SSE2 }
+#define XRA(op, word, effect_bits) \
+    [MINIC_X86_MI_##op] = { .mnemonic=word, .format=MINIC_X86_MACHINE_FORMAT_RA, \
+      .first_bank=MINIC_MACHINE_REGISTER_VECTOR, .first_width_bits=128, \
+      .first_access=R, .effects=effect_bits, .required_features=SSE2 }
+#define XFR(op, word, base_id) \
+    [MINIC_X86_MI_##op] = { .mnemonic=word, .format=MINIC_X86_MACHINE_FORMAT_FR, \
+      .second_bank=MINIC_MACHINE_REGISTER_VECTOR, .second_width_bits=128, \
+      .second_access=W, .frame_base=base_id, .effects=MR, \
+      .required_features=SSE2 }
+#define XRF(op, word, base_id) \
+    [MINIC_X86_MI_##op] = { .mnemonic=word, .format=MINIC_X86_MACHINE_FORMAT_RF, \
+      .first_bank=MINIC_MACHINE_REGISTER_VECTOR, .first_width_bits=128, \
+      .first_access=R, .frame_base=base_id, .effects=MW, \
+      .required_features=SSE2 }
+#define X87M(op, word, format_id, effect_bits, implicit_id, base_id, width) \
+    [MINIC_X86_MI_##op] = { .mnemonic=word, .format=format_id, \
+      .effects=effect_bits, .frame_base=base_id, .required_features=BASE, \
+      .memory_width_bits=width, .implicit_kind=implicit_id }
+#define X87Z(op, word, implicit_id) \
+    [MINIC_X86_MI_##op] = { .mnemonic=word, .required_features=BASE, \
+      .implicit_kind=implicit_id }
+
 static const MinicX86MachineOpcodeInfo x86_opcodes[MINIC_X86_MI_LAST] = {
     Z(NOP, "nop"), Z(PAUSE, "pause"),
     [MINIC_X86_MI_LFENCE] = { .mnemonic="lfence", .effects=BAR,
@@ -132,6 +173,7 @@ static const MinicX86MachineOpcodeInfo x86_opcodes[MINIC_X86_MI_LAST] = {
     RR(MOVSWQ_RR,"movswq",16,64,W,X86_IMPLICIT_NONE),
     RR(MOVZWQ_RR,"movzwq",16,64,W,X86_IMPLICIT_NONE),
     RR(MOVSLQ_RR,"movslq",32,64,W,X86_IMPLICIT_NONE),
+    RR(MOVZBL_RR,"movzbl",8,32,W,X86_IMPLICIT_NONE),
     AR(MOVSBQ_AR,"movsbq",64,X86_IMPLICIT_NONE),
     AR(MOVZBQ_AR,"movzbq",64,X86_IMPLICIT_NONE),
     AR(MOVSWQ_AR,"movswq",64,X86_IMPLICIT_NONE),
@@ -214,6 +256,93 @@ static const MinicX86MachineOpcodeInfo x86_opcodes[MINIC_X86_MI_LAST] = {
         .implicit_kind=X86_IMPLICIT_REP_MOVSB, .effects=MR|MW,
         .required_features=BASE },
 
+    XRR(MOVD_GPR_XMM,"movd",MINIC_MACHINE_REGISTER_GENERAL,32,R,
+        MINIC_MACHINE_REGISTER_VECTOR,128,W,X86_IMPLICIT_NONE),
+    XRR(MOVD_XMM_GPR,"movd",MINIC_MACHINE_REGISTER_VECTOR,128,R,
+        MINIC_MACHINE_REGISTER_GENERAL,32,W,X86_IMPLICIT_NONE),
+    XRR(MOVQ_GPR_XMM,"movq",MINIC_MACHINE_REGISTER_GENERAL,64,R,
+        MINIC_MACHINE_REGISTER_VECTOR,128,W,X86_IMPLICIT_NONE),
+    XRR(MOVQ_XMM_GPR,"movq",MINIC_MACHINE_REGISTER_VECTOR,128,R,
+        MINIC_MACHINE_REGISTER_GENERAL,64,W,X86_IMPLICIT_NONE),
+    XRR(ADDSS_XMM,"addss",MINIC_MACHINE_REGISTER_VECTOR,128,R,
+        MINIC_MACHINE_REGISTER_VECTOR,128,R|W,X86_IMPLICIT_NONE),
+    XRR(SUBSS_XMM,"subss",MINIC_MACHINE_REGISTER_VECTOR,128,R,
+        MINIC_MACHINE_REGISTER_VECTOR,128,R|W,X86_IMPLICIT_NONE),
+    XRR(MULSS_XMM,"mulss",MINIC_MACHINE_REGISTER_VECTOR,128,R,
+        MINIC_MACHINE_REGISTER_VECTOR,128,R|W,X86_IMPLICIT_NONE),
+    XRR(DIVSS_XMM,"divss",MINIC_MACHINE_REGISTER_VECTOR,128,R,
+        MINIC_MACHINE_REGISTER_VECTOR,128,R|W,X86_IMPLICIT_NONE),
+    XRR(ADDSD_XMM,"addsd",MINIC_MACHINE_REGISTER_VECTOR,128,R,
+        MINIC_MACHINE_REGISTER_VECTOR,128,R|W,X86_IMPLICIT_NONE),
+    XRR(SUBSD_XMM,"subsd",MINIC_MACHINE_REGISTER_VECTOR,128,R,
+        MINIC_MACHINE_REGISTER_VECTOR,128,R|W,X86_IMPLICIT_NONE),
+    XRR(MULSD_XMM,"mulsd",MINIC_MACHINE_REGISTER_VECTOR,128,R,
+        MINIC_MACHINE_REGISTER_VECTOR,128,R|W,X86_IMPLICIT_NONE),
+    XRR(DIVSD_XMM,"divsd",MINIC_MACHINE_REGISTER_VECTOR,128,R,
+        MINIC_MACHINE_REGISTER_VECTOR,128,R|W,X86_IMPLICIT_NONE),
+    XRR(UCOMISS_XMM,"ucomiss",MINIC_MACHINE_REGISTER_VECTOR,128,R,
+        MINIC_MACHINE_REGISTER_VECTOR,128,R,X86_IMPLICIT_FLAGS_DEF),
+    XRR(UCOMISD_XMM,"ucomisd",MINIC_MACHINE_REGISTER_VECTOR,128,R,
+        MINIC_MACHINE_REGISTER_VECTOR,128,R,X86_IMPLICIT_FLAGS_DEF),
+    XRR(CVTSI2SDQ_GPR_XMM,"cvtsi2sdq",MINIC_MACHINE_REGISTER_GENERAL,64,R,
+        MINIC_MACHINE_REGISTER_VECTOR,128,R|W,X86_IMPLICIT_NONE),
+    XRR(CVTTSD2SIQ_XMM_GPR,"cvttsd2siq",MINIC_MACHINE_REGISTER_VECTOR,128,R,
+        MINIC_MACHINE_REGISTER_GENERAL,64,W,X86_IMPLICIT_NONE),
+    XRR(CVTSS2SD_XMM,"cvtss2sd",MINIC_MACHINE_REGISTER_VECTOR,128,R,
+        MINIC_MACHINE_REGISTER_VECTOR,128,R|W,X86_IMPLICIT_NONE),
+    XRR(CVTSD2SS_XMM,"cvtsd2ss",MINIC_MACHINE_REGISTER_VECTOR,128,R,
+        MINIC_MACHINE_REGISTER_VECTOR,128,R|W,X86_IMPLICIT_NONE),
+    XAR(MOVDQU_ADDRESS_XMM,"movdqu",MR,W),
+    XRA(MOVDQU_XMM_ADDRESS,"movdqu",MW),
+    XFR(MOVDQU_FRAME_RBP_XMM,"movdqu",1),
+    XRF(MOVDQU_XMM_FRAME_RBP,"movdqu",1),
+    XFR(MOVDQU_FRAME_RSP_XMM,"movdqu",2),
+    XRF(MOVDQU_XMM_FRAME_RSP,"movdqu",2),
+    X87M(FLDT_ADDRESS,"fldt",MINIC_X86_MACHINE_FORMAT_A,MR,
+        X86_IMPLICIT_X87_STACK_PUSH,0,80),
+    X87M(FSTPT_ADDRESS,"fstpt",MINIC_X86_MACHINE_FORMAT_A,MW,
+        X86_IMPLICIT_X87_STACK_POP,0,80),
+    X87M(FLDT_FRAME_RBP,"fldt",MINIC_X86_MACHINE_FORMAT_F,MR,
+        X86_IMPLICIT_X87_STACK_PUSH,1,80),
+    X87M(FSTPT_FRAME_RBP,"fstpt",MINIC_X86_MACHINE_FORMAT_F,MW,
+        X86_IMPLICIT_X87_STACK_POP,1,80),
+    X87M(FLDS_FRAME_RBP,"flds",MINIC_X86_MACHINE_FORMAT_F,MR,
+        X86_IMPLICIT_X87_STACK_PUSH,1,32),
+    X87M(FLDL_FRAME_RBP,"fldl",MINIC_X86_MACHINE_FORMAT_F,MR,
+        X86_IMPLICIT_X87_STACK_PUSH,1,64),
+    X87M(FSTPS_FRAME_RBP,"fstps",MINIC_X86_MACHINE_FORMAT_F,MW,
+        X86_IMPLICIT_X87_STACK_POP,1,32),
+    X87M(FSTPL_FRAME_RBP,"fstpl",MINIC_X86_MACHINE_FORMAT_F,MW,
+        X86_IMPLICIT_X87_STACK_POP,1,64),
+    X87M(FILDL_FRAME_RBP,"fildl",MINIC_X86_MACHINE_FORMAT_F,MR,
+        X86_IMPLICIT_X87_STACK_PUSH,1,32),
+    X87M(FILDQ_FRAME_RBP,"fildq",MINIC_X86_MACHINE_FORMAT_F,MR,
+        X86_IMPLICIT_X87_STACK_PUSH,1,64),
+    X87M(FISTTPQ_FRAME_RSP,"fisttpq",MINIC_X86_MACHINE_FORMAT_F,MW,
+        X86_IMPLICIT_X87_STACK_POP,2,64),
+    X87M(FLDL_ADDRESS,"fldl",MINIC_X86_MACHINE_FORMAT_A,MR,
+        X86_IMPLICIT_X87_STACK_PUSH,0,64),
+    X87M(FILDQ_ADDRESS,"fildq",MINIC_X86_MACHINE_FORMAT_A,MR,
+        X86_IMPLICIT_X87_STACK_PUSH,0,64),
+    X87M(FISTTPQ_ADDRESS,"fisttpq",MINIC_X86_MACHINE_FORMAT_A,MW,
+        X86_IMPLICIT_X87_STACK_POP,0,64),
+    X87M(FADDL_ADDRESS,"faddl",MINIC_X86_MACHINE_FORMAT_A,MR,
+        X86_IMPLICIT_X87_STACK_UNARY,0,64),
+    X87Z(FCHS,"fchs",X86_IMPLICIT_X87_STACK_UNARY),
+    X87Z(FXCH_ST1,"fxch",X86_IMPLICIT_X87_STACK_SWAP),
+    X87Z(FUCOMIP_ST1,"fucomip",X86_IMPLICIT_X87_STACK_COMPARE_POP),
+    X87Z(FSTP_ST0,"fstp",X86_IMPLICIT_X87_STACK_POP),
+    X87Z(FADDP_ST1,"faddp",X86_IMPLICIT_X87_STACK_BINARY_POP),
+    X87Z(FSUBRP_ST1,"fsubrp",X86_IMPLICIT_X87_STACK_BINARY_POP),
+    X87Z(FMULP_ST1,"fmulp",X86_IMPLICIT_X87_STACK_BINARY_POP),
+    X87Z(FDIVRP_ST1,"fdivrp",X86_IMPLICIT_X87_STACK_BINARY_POP),
+    [MINIC_X86_MI_CLD] = { .mnemonic="cld", .required_features=BASE,
+        .implicit_kind=X86_IMPLICIT_FLAGS_DEF },
+    IR(BTS64_IR,"btsq",64,R|W,X86_IMPLICIT_FLAGS_DEF),
+    RR(AND8_RR,"andb",8,8,R|W,X86_IMPLICIT_FLAGS_DEF),
+    RR(OR8_RR,"orb",8,8,R|W,X86_IMPLICIT_FLAGS_DEF),
+    RR(TEST8_RR,"testb",8,8,R,X86_IMPLICIT_FLAGS_DEF),
+
     SET(SETZ8_R,"setz"), SET(SETNZ8_R,"setnz"),
     SET(SETB8_R,"setb"), SET(SETBE8_R,"setbe"),
     SET(SETL8_R,"setl"), SET(SETLE8_R,"setle"),
@@ -271,6 +400,13 @@ static const MinicX86MachineOpcodeInfo x86_opcodes[MINIC_X86_MI_LAST] = {
 #undef SET
 #undef BRANCH
 #undef SYM
+#undef XRR
+#undef XAR
+#undef XRA
+#undef XFR
+#undef XRF
+#undef X87M
+#undef X87Z
 
 const MinicX86MachineOpcodeInfo *minic_x86_64_machine_opcode_info(
     uint32_t opcode) {
@@ -284,9 +420,9 @@ uint64_t minic_x86_64_machine_generated_features(
     uint64_t features = BASE;
     if (target == NULL || target->architecture != MINIC_TARGET_ARCH_X86_64)
         return 0U;
-    if ((target->x86_codegen_options & MINIC_X86_CODEGEN_NO_SSE) == 0U)
+    if ((minic_x86_64_target_codegen_options(target) & MINIC_X86_CODEGEN_NO_SSE) == 0U)
         features |= MINIC_X86_MACHINE_GENERATED_SSE2;
-    if ((target->x86_codegen_options & MINIC_X86_CODEGEN_IBT_ENDBR) != 0U)
+    if ((minic_x86_64_target_codegen_options(target) & MINIC_X86_CODEGEN_IBT_ENDBR) != 0U)
         features |= IBT;
     return features;
 }
@@ -476,6 +612,25 @@ static bool x86_append_implicit(MinicMachineOpcodeContract *out,
     case X86_IMPLICIT_CQTO:
         return x86_gp(out,MINIC_X86_REG_RAX,64,R) &&
                x86_gp(out,MINIC_X86_REG_RDX,64,W);
+    case X86_IMPLICIT_X87_STACK_PUSH:
+    case X86_IMPLICIT_X87_STACK_POP:
+    case X86_IMPLICIT_X87_STACK_BINARY_POP:
+    case X86_IMPLICIT_X87_STACK_COMPARE_POP:
+        /* x87 stack registers are addressed relative to TOP.  Loading or
+         * popping shifts the logical names of all eight physical slots. */
+        for (i = 0U; i < 8U; ++i)
+            if (!x86_add_effect(out,MINIC_MACHINE_REGISTER_FLOAT,i,80,
+                C|((kind != X86_IMPLICIT_X87_STACK_PUSH && i == 0U) ||
+                   ((kind == X86_IMPLICIT_X87_STACK_BINARY_POP ||
+                     kind == X86_IMPLICIT_X87_STACK_COMPARE_POP) && i == 1U)
+                    ? R : 0U)))
+                return false;
+        return kind != X86_IMPLICIT_X87_STACK_COMPARE_POP || x86_flags(out,W);
+    case X86_IMPLICIT_X87_STACK_UNARY:
+        return x86_add_effect(out,MINIC_MACHINE_REGISTER_FLOAT,0U,80,R|W);
+    case X86_IMPLICIT_X87_STACK_SWAP:
+        return x86_add_effect(out,MINIC_MACHINE_REGISTER_FLOAT,0U,80,R|W) &&
+               x86_add_effect(out,MINIC_MACHINE_REGISTER_FLOAT,1U,80,R|W);
     case X86_IMPLICIT_REP_MOVSB:
         return x86_gp(out,MINIC_X86_REG_RSI,64,R|W) &&
                x86_gp(out,MINIC_X86_REG_RDI,64,R|W) &&
@@ -591,6 +746,14 @@ bool minic_x86_64_machine_opcode_lookup(const MinicTargetInfo *target,
         out->operand_count=1U;
         out->operand_kinds[0]=MINIC_MACHINE_OPERAND_SYMBOL;
         break;
+    case MINIC_X86_MACHINE_FORMAT_A:
+        out->operand_count=1U;
+        out->operand_kinds[0]=MINIC_MACHINE_OPERAND_ADDRESS;
+        break;
+    case MINIC_X86_MACHINE_FORMAT_F:
+        out->operand_count=1U;
+        out->operand_kinds[0]=MINIC_MACHINE_OPERAND_FRAME;
+        break;
     default: return false;
     }
     out->required_generated_features=info->required_features;
@@ -603,10 +766,15 @@ bool minic_x86_64_machine_opcode_lookup(const MinicTargetInfo *target,
 }
 
 static bool x86_register_width(const MinicMachineOperand *operand,
-    unsigned int width) {
+    unsigned int width, MinicMachineRegisterBank required_bank) {
     return operand->kind == MINIC_MACHINE_OPERAND_REGISTER &&
-        operand->value.physical.reg.bank == MINIC_MACHINE_REGISTER_GENERAL &&
-        operand->value.physical.reg.number < MINIC_X86_REG_RIP &&
+        operand->value.physical.reg.bank ==
+            (required_bank == MINIC_MACHINE_REGISTER_INVALID
+                 ? MINIC_MACHINE_REGISTER_GENERAL : required_bank) &&
+        operand->value.physical.reg.number <
+            (required_bank == MINIC_MACHINE_REGISTER_VECTOR ? 16U
+             : required_bank == MINIC_MACHINE_REGISTER_FLOAT ? 8U
+             : MINIC_X86_REG_RIP) &&
         operand->value.physical.reg.width_bits == width;
 }
 
@@ -669,8 +837,8 @@ bool minic_x86_64_machine_validate_selected(const MinicMachineFunction *function
     case MINIC_X86_MACHINE_FORMAT_NONE: return instruction->operand_count == 0U;
     case MINIC_X86_MACHINE_FORMAT_RR:
         return instruction->operand_count == 2U &&
-            x86_register_width(first,info->first_width_bits) &&
-            x86_register_width(second,info->second_width_bits);
+            x86_register_width(first,info->first_width_bits,info->first_bank) &&
+            x86_register_width(second,info->second_width_bits,info->second_bank);
     case MINIC_X86_MACHINE_FORMAT_IR: {
         int64_t value;
         const unsigned int bits =
@@ -678,8 +846,10 @@ bool minic_x86_64_machine_validate_selected(const MinicMachineFunction *function
             info->second_width_bits == 64U ? 32U : info->second_width_bits;
         if (instruction->operand_count != 2U ||
             first->kind != MINIC_MACHINE_OPERAND_INTEGER ||
-            !x86_register_width(second,info->second_width_bits)) return false;
+            !x86_register_width(second,info->second_width_bits,info->second_bank)) return false;
         value = first->value.integer;
+        if (instruction->opcode == MINIC_X86_MI_BTS64_IR)
+            return value >= 0 && value <= 255;
         if (info->second_width_bits == 64U && bits == 32U)
             return value >= INT32_MIN && value <= INT32_MAX;
         return x86_imm_fits(value,bits);
@@ -689,12 +859,12 @@ bool minic_x86_64_machine_validate_selected(const MinicMachineFunction *function
             first->kind == MINIC_MACHINE_OPERAND_ADDRESS &&
             minic_x86_64_machine_validate_address(target,
                 &first->value.address,NULL) &&
-            x86_register_width(second,info->second_width_bits) &&
+            x86_register_width(second,info->second_width_bits,info->second_bank) &&
             (instruction->opcode != MINIC_X86_MI_LEA64_AR ||
              !first->value.address.has_segment);
     case MINIC_X86_MACHINE_FORMAT_RA:
         return instruction->operand_count == 2U &&
-            x86_register_width(first,info->first_width_bits) &&
+            x86_register_width(first,info->first_width_bits,info->first_bank) &&
             second->kind == MINIC_MACHINE_OPERAND_ADDRESS &&
             minic_x86_64_machine_validate_address(target,
                 &second->value.address,NULL);
@@ -702,26 +872,26 @@ bool minic_x86_64_machine_validate_selected(const MinicMachineFunction *function
     case MINIC_X86_MACHINE_FORMAT_RF:
         if (instruction->operand_count != 2U) return false;
         if (info->format == MINIC_X86_MACHINE_FORMAT_FR)
-            return x86_register_width(second,info->second_width_bits) &&
+            return x86_register_width(second,info->second_width_bits,info->second_bank) &&
                 x86_frame_encodable(function,first,info,
                     instruction->opcode == MINIC_X86_MI_LEA64_FRBP_R ||
                     instruction->opcode == MINIC_X86_MI_LEA64_FRSP_R
                     ? 0U : info->second_width_bits/8U);
-        return x86_register_width(first,info->first_width_bits) &&
+        return x86_register_width(first,info->first_width_bits,info->first_bank) &&
             x86_frame_encodable(function,second,info,
                 info->first_width_bits/8U);
     case MINIC_X86_MACHINE_FORMAT_SR:
         return instruction->operand_count == 2U &&
             first->kind == MINIC_MACHINE_OPERAND_SYMBOL &&
             first->value.symbol.relocation == info->relocation &&
-            x86_register_width(second,64U);
+            x86_register_width(second,64U,MINIC_MACHINE_REGISTER_GENERAL);
     case MINIC_X86_MACHINE_FORMAT_R:
         return instruction->operand_count == 1U &&
-            x86_register_width(first,info->first_width_bits) &&
+            x86_register_width(first,info->first_width_bits,info->first_bank) &&
             ((instruction->opcode != MINIC_X86_MI_JMP_R &&
               instruction->opcode != MINIC_X86_MI_CALL_SYSV_R &&
               instruction->opcode != MINIC_X86_MI_CALL_MS_R) ||
-             (target->x86_codegen_options &
+             (minic_x86_64_target_codegen_options(target) &
                  (MINIC_X86_CODEGEN_INDIRECT_EXTERNAL_THUNK |
                   MINIC_X86_CODEGEN_INDIRECT_INLINE_THUNK)) == 0U);
     case MINIC_X86_MACHINE_FORMAT_B:
@@ -734,18 +904,27 @@ bool minic_x86_64_machine_validate_selected(const MinicMachineFunction *function
             first->value.symbol.relocation != info->relocation)
             return false;
         if (instruction->opcode == MINIC_X86_MI_JMP_RETURN_THUNK)
-            return (target->x86_codegen_options &
+            return (minic_x86_64_target_codegen_options(target) &
                 MINIC_X86_CODEGEN_RETURN_EXTERNAL_THUNK) != 0U &&
                 strcmp(first->value.symbol.name,"__x86_return_thunk") == 0;
         if (instruction->opcode == MINIC_X86_MI_JMP_INDIRECT_THUNK_RAX)
-            return (target->x86_codegen_options &
+            return (minic_x86_64_target_codegen_options(target) &
                 MINIC_X86_CODEGEN_INDIRECT_EXTERNAL_THUNK) != 0U &&
                 strcmp(first->value.symbol.name,"__x86_indirect_thunk_rax") == 0;
         if (instruction->opcode == MINIC_X86_MI_CALL_INDIRECT_THUNK_R11)
-            return (target->x86_codegen_options &
+            return (minic_x86_64_target_codegen_options(target) &
                 MINIC_X86_CODEGEN_INDIRECT_EXTERNAL_THUNK) != 0U &&
                 strcmp(first->value.symbol.name,"__x86_indirect_thunk_r11") == 0;
         return true;
+    case MINIC_X86_MACHINE_FORMAT_A:
+        return instruction->operand_count == 1U &&
+            first->kind == MINIC_MACHINE_OPERAND_ADDRESS &&
+            minic_x86_64_machine_validate_address(target,
+                &first->value.address,NULL);
+    case MINIC_X86_MACHINE_FORMAT_F:
+        return instruction->operand_count == 1U &&
+            x86_frame_encodable(function,first,info,
+                info->memory_width_bits/8U);
     default: return false;
     }
 }
@@ -770,3 +949,4 @@ bool minic_x86_64_machine_validate_source_asm(const MinicTargetInfo *target,
 #undef BAR
 #undef BASE
 #undef IBT
+#undef SSE2

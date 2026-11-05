@@ -24,7 +24,8 @@ typedef enum MinicMachineOperandKind {
     MINIC_MACHINE_OPERAND_ADDRESS,
     /* Machine-local label materialization, e.g. la rd,.Lcomputed_goto.
      * This is not a taken branch and creates no CFG successor. */
-    MINIC_MACHINE_OPERAND_BLOCK_ADDRESS
+    MINIC_MACHINE_OPERAND_BLOCK_ADDRESS,
+    MINIC_MACHINE_OPERAND_CURRENT_LOCATION /* GNU `.` in typed data fixup */
 } MinicMachineOperandKind;
 
 typedef enum MinicMachineRegisterBank {
@@ -120,6 +121,9 @@ typedef struct MinicMachineOperand {
     /* Set only for a source-owned inline-ASM operand, never for generated
      * instructions. This is an owned C string, not parsed machine syntax. */
     char *asm_constraint;
+    /* Original named input/output or goto label (%[operand], %l[name]);
+     * optional for positional operands and owned by MachineFunction. */
+    char *asm_name;
 } MinicMachineOperand;
 
 typedef enum MinicMachineEffects {
@@ -136,8 +140,48 @@ typedef enum MinicMachineEffects {
 typedef enum MinicMachineInstructionKind {
     MINIC_MACHINE_INSTRUCTION_INVALID = 0,
     MINIC_MACHINE_INSTRUCTION_SELECTED,
-    MINIC_MACHINE_INSTRUCTION_SOURCE_ASM
+    MINIC_MACHINE_INSTRUCTION_SOURCE_ASM,
+    /* A typed, target-independent position marker. This is not an opcode,
+     * opaque assembly escape hatch or a machine-CFG block boundary. */
+    MINIC_MACHINE_INSTRUCTION_LOCAL_LABEL,
+    MINIC_MACHINE_INSTRUCTION_DIRECTIVE
 } MinicMachineInstructionKind;
+
+/* The only assembler-side operations inside a machine function are typed
+ * layout/fixup fragments. Neither arbitrary .s text nor selected opcodes
+ * may be inserted through this path. ELF section ownership remains with
+ * ModuleIR; these directives are machine-specific outlined fragments. */
+typedef enum MinicMachineDirectiveKind {
+    MINIC_MACHINE_DIRECTIVE_INVALID = 0,
+    MINIC_MACHINE_DIRECTIVE_PUSH_SECTION,
+    MINIC_MACHINE_DIRECTIVE_POP_SECTION,
+    MINIC_MACHINE_DIRECTIVE_DATA
+} MinicMachineDirectiveKind;
+
+typedef enum MinicMachineDirectiveSectionFlags {
+    MINIC_MACHINE_SECTION_ALLOC = 1U << 0,
+    MINIC_MACHINE_SECTION_WRITE = 1U << 1,
+    MINIC_MACHINE_SECTION_EXEC = 1U << 2,
+    MINIC_MACHINE_SECTION_LINK_ORDER = 1U << 3
+} MinicMachineDirectiveSectionFlags;
+
+typedef enum MinicMachineDirectiveSectionType {
+    MINIC_MACHINE_SECTION_TYPE_NONE = 0,
+    MINIC_MACHINE_SECTION_TYPE_PROGBITS,
+    MINIC_MACHINE_SECTION_TYPE_NOBITS
+} MinicMachineDirectiveSectionType;
+
+typedef struct MinicMachineDirective {
+    MinicMachineDirectiveKind kind;
+    /* PUSH_SECTION only: lexical ELF section identifier, not source asm. */
+    char *section_name;
+    unsigned int section_flags;
+    MinicMachineDirectiveSectionType section_type;
+    char *link_order_symbol;
+    /* DATA only: 1/2/4/8 bytes, a typed lhs and optional subtraction rhs
+     * in the instruction's owned operand array. */
+    unsigned int data_width_bytes;
+} MinicMachineDirective;
 
 typedef struct MinicMachineInstruction {
     MinicMachineInstructionKind kind;
@@ -159,6 +203,10 @@ typedef struct MinicMachineInstruction {
      * never use this field to bypass feature or opcode validation. */
     char *source_asm_template;
     size_t source_asm_length; /* exact source byte length, excluding final NUL */
+    /* Present only for LOCAL_LABEL. Allows labels inside the same physical
+     * block (GNU exception/fixup pairs, local FP conversion branches). */
+    char *local_label_name;
+    MinicMachineDirective *directive;
     /* Source ASM goto/branch is an explicit physical control-flow decision;
      * the target policy must independently authorize its flags and labels. */
     bool source_asm_terminates_block;
@@ -169,6 +217,11 @@ typedef struct MinicMachineBlock {
     size_t id;
     bool machine_auxiliary; /* target inserted; still obeys physical CFG */
     char *exported_label;
+    /* Several externally referenced names can resolve to one block entry,
+     * for example a Core block name and an address-taken label. */
+    char **alias_labels;
+    size_t alias_count;
+    size_t alias_capacity;
     bool indirect_entry;
     bool has_fallthrough;
     size_t fallthrough_target;
@@ -203,6 +256,8 @@ bool minic_machine_function_add_frame_object(MinicMachineFunction *,
     const MinicMachineFrameObject *, size_t *id);
 bool minic_machine_function_add_block(MinicMachineFunction *,
     const char *exported_label, bool indirect_entry, size_t *id);
+bool minic_machine_block_add_alias_label(MinicMachineFunction *,
+    size_t block_id, const char *alias_label);
 bool minic_machine_block_add_successor(MinicMachineFunction *, size_t from,
     size_t to);
 bool minic_machine_block_set_fallthrough(MinicMachineFunction *, size_t from,

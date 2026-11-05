@@ -13,6 +13,7 @@
 #include "target/x86_64/abi.h"
 #include "target/x86_64/frame.h"
 #include "target/x86_64/codegen_options.h"
+#include "target/x86_64/machine_target_state.h"
 #include "core/value_uses.h"
 #include "core/symbol_identity.h"
 
@@ -942,7 +943,7 @@ static bool x86_emit_function(FILE *out,
         x86_error(diag, path, "x86-64 cannot discover reachable Core blocks");
         goto done;
     }
-    if ((target->x86_codegen_options & MINIC_X86_CODEGEN_IBT_ENDBR) != 0U) {
+    if ((minic_x86_64_target_codegen_options(target) & MINIC_X86_CODEGEN_IBT_ENDBR) != 0U) {
         indirect_entries = calloc(fn->block_count == 0U ? 1U : fn->block_count,
                                   sizeof(*indirect_entries));
         if (indirect_entries == NULL ||
@@ -952,7 +953,7 @@ static bool x86_emit_function(FILE *out,
             goto done;
         }
     }
-    if ((target->x86_codegen_options & MINIC_X86_CODEGEN_NO_SSE) != 0U &&
+    if ((minic_x86_64_target_codegen_options(target) & MINIC_X86_CODEGEN_NO_SSE) != 0U &&
         !x86_no_sse_function_safe(fn, reachable)) {
         x86_error(diag, path,
                   "x86-64 -mno-sse rejects reachable floating ABI or operation");
@@ -1035,11 +1036,11 @@ static bool x86_emit_function(FILE *out,
         goto done;
     /* GNU Linux's 16-byte entry patch area is emitted before the function
      * symbol, and its start is 16-byte aligned for live ftrace patching. */
-    if ((target->x86_codegen_options &
+    if ((minic_x86_64_target_codegen_options(target) &
          MINIC_X86_CODEGEN_PATCHABLE_ENTRY_16_16) != 0U &&
         fputs("  .balign 16\n", out) == EOF)
         goto done;
-    if ((target->x86_codegen_options &
+    if ((minic_x86_64_target_codegen_options(target) &
          MINIC_X86_CODEGEN_PATCHABLE_ENTRY_16_16) != 0U &&
         fprintf(out,
                 "  .pushsection __patchable_function_entries,\"awo\",@progbits,.Lmini_x86_patch_%zu\n"
@@ -1053,7 +1054,7 @@ static bool x86_emit_function(FILE *out,
         goto done;
     if (fprintf(out, ".type %s,@function\n%s:\n", name, name) < 0)
         goto done;
-    if ((target->x86_codegen_options & MINIC_X86_CODEGEN_IBT_ENDBR) != 0U &&
+    if ((minic_x86_64_target_codegen_options(target) & MINIC_X86_CODEGEN_IBT_ENDBR) != 0U &&
         fputs("  endbr64\n", out) == EOF)
         goto done;
     if (fputs("  pushq %rbp\n  movq %rsp, %rbp\n", out) == EOF)
@@ -1110,7 +1111,7 @@ static bool x86_emit_function(FILE *out,
          * variadic register arguments under this ABI mode. In ordinary SysV
          * code, %al specifies the FP argument-register count, so avoid the
          * optional SSE spills altogether when its value is zero. */
-        if ((target->x86_codegen_options & MINIC_X86_CODEGEN_NO_SSE) == 0U) {
+        if ((minic_x86_64_target_codegen_options(target) & MINIC_X86_CODEGEN_NO_SSE) == 0U) {
             if (fprintf(out, "  testb %%al, %%al\n"
                              "  jz .Lmini_x86_f%zu_varargs_no_fp\n",
                         function_id) < 0) goto done;
@@ -1262,7 +1263,7 @@ static bool x86_emit_function(FILE *out,
                 goto done;
     }
     if (fputs("  leave\n", out) == EOF ||
-        ((target->x86_codegen_options & MINIC_X86_CODEGEN_RETURN_EXTERNAL_THUNK) != 0U
+        ((minic_x86_64_target_codegen_options(target) & MINIC_X86_CODEGEN_RETURN_EXTERNAL_THUNK) != 0U
              ? fputs("  jmp __x86_return_thunk\n", out) == EOF
              : fputs("  ret\n", out) == EOF) ||
         fprintf(out, ".size %s,.-%s\n", name, name) < 0)
@@ -1456,7 +1457,7 @@ static bool x86_between(
         !minic_multi_elf_emit_module_function_aliases(
             out, module, "@function"))
         return false;
-    if ((target->x86_codegen_options & MINIC_X86_CODEGEN_IBT_ENDBR) != 0U &&
+    if ((minic_x86_64_target_codegen_options(target) & MINIC_X86_CODEGEN_IBT_ENDBR) != 0U &&
         fputs(".section .note.gnu.property,\"a\"\n"
               "  .balign 8\n"
               "  .long 1f-0f\n"

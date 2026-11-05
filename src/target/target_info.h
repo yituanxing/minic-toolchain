@@ -5,7 +5,6 @@
 #include "common/calling_convention.h"
 #include "target/data_layout.h"
 #include "target/machine_register.h"
-#include "target/riscv/isa_features.h"
 #include "target/target_catalog.h"
 
 #include <stdbool.h>
@@ -57,9 +56,11 @@ typedef struct MinicTargetInfo {
     /* Machine ELF/CALL lowering, not C integer model or declaration policy. */
     bool pic_lowering_supported;
     bool position_independent;
-    unsigned int x86_codegen_options;
-    bool loongarch64_soft_float_abi;
-    MinicRiscvIsa riscv_isa;
+    /* Copy-by-value invocation-local target state. Only target-owned typed
+     * accessors may interpret this storage; generic TargetInfo, Core and the
+     * driver must never carry an ISA-specific struct or cast its bytes. Each
+     * target statically checks that its private state fits this snapshot. */
+    unsigned char machine_state[32];
 } MinicTargetInfo;
 
 const MinicTargetInfo *minic_default_target_info(void);

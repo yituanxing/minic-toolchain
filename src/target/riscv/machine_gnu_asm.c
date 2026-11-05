@@ -1,8 +1,10 @@
 #include "target/riscv/machine_gnu_asm.h"
+#include "target/riscv/machine_target_state.h"
 
 #include "core/symbol_identity.h"
 
 #include <inttypes.h>
+#include <ctype.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -133,15 +135,19 @@ static bool riscv_machine_emit_selected(FILE *output,
                fprintf(output, "  %s x%u, x%u, %s\n",
                        desc.mnemonic, r0, r1, branch_label) >= 0;
     case MINIC_RISCV_MACHINE_FORM_REGISTER_BLOCK:
+        if (ins->opcode == MINIC_RISCV_MACHINE_JALR_BLOCK)
+            return riscv_machine_block_label(fn, labels, &operand[1],
+                                              &branch_label) &&
+                   fprintf(output, "  jalr zero, 0(x%u)\n", r0) >= 0;
         return riscv_machine_block_label(fn, labels, &operand[1], &branch_label) &&
                fprintf(output, "  %s x%u, %s\n", desc.mnemonic,
                        r0, branch_label) >= 0;
     case MINIC_RISCV_MACHINE_FORM_BLOCK:
-        return riscv_machine_block_label(fn, labels, &operand[0], &branch_label) &&
-               (ins->opcode == MINIC_RISCV_MACHINE_JAL_BLOCK
-                 ? fprintf(output, "  jal zero, %s\n", branch_label)
-                 : fprintf(output, "  %s %s\n", desc.mnemonic,
-                           branch_label)) >= 0;
+        if (!riscv_machine_block_label(fn, labels, &operand[0], &branch_label))
+            return false;
+        if (ins->opcode == MINIC_RISCV_MACHINE_JAL_BLOCK)
+            return fprintf(output, "  jal zero, %s\n", branch_label) >= 0;
+        return fprintf(output, "  %s %s\n", desc.mnemonic, branch_label) >= 0;
     case MINIC_RISCV_MACHINE_FORM_REGISTER_SYMBOL:
         if (!riscv_machine_symbol(fn, &operand[1], &symbol)) return false;
         if (ins->opcode == MINIC_RISCV_MACHINE_LA_GOT)
@@ -179,15 +185,261 @@ static bool riscv_machine_emit_selected(FILE *output,
     }
 }
 
-static bool riscv_machine_reject_source_asm(
+/* A register/constant/memory operand here was selected by the Core inline
+ * asm binder, not by the compiler's normal instruction selector. The source
+ * template remains owned source data, while physical bindings are checked
+ * against a deliberately small, explicit GNU RISC-V constraint grammar. */
+static bool riscv_asm_constraint(const MinicTargetInfo *target,
+                                const MinicMachineInstruction *ins,
+                                const MinicMachineOperand *operand) {
+    const char *constraint;
+    unsigned xlen;
+    size_t i = 0U;
+    bool output = false, inout = false;
+    char role;
+    if (target == NULL || ins == NULL || operand == NULL ||
+        operand->asm_constraint == NULL ||
+        (xlen = minic_riscv_target_isa(target).xlen) == 0U) return false;
+    constraint = operand->asm_constraint;
+    if (constraint[i] == '=' || constraint[i] == '+') {
+        output = constraint[i] == '=';
+        inout = constraint[i] == '+';
+        ++i;
+    }
+    if (constraint[i] == '&') {
+        if (!output) return false;
+        ++i;
+    }
+    role = constraint[i];
+    if (role == '\0' || constraint[i + 1U] != '\0') return false;
+    if (output || inout) {
+        if (role != 'r' && role != 'm' && role != 'g' && role != 'A')
+            return false;
+    }
+    switch (operand->kind) {
+    case MINIC_MACHINE_OPERAND_REGISTER: {
+        const unsigned access = operand->value.physical.access;
+        if (role != 'r' && role != 'g') return false;
+        if (!minic_riscv_machine_validate_register(
+                target, &operand->value.physical.reg, NULL) ||
+            (output || inout ?
+             (access & MINIC_MACHINE_REGISTER_WRITE) == 0U :
+             (access & MINIC_MACHINE_REGISTER_READ) == 0U) ||
+            (inout && (access & MINIC_MACHINE_REGISTER_READ) == 0U) ||
+            ((output || inout) && operand->value.physical.reg.number == 0U) ||
+            operand->value.physical.reg.width_bits != xlen)
+            return false;
+        return true;
+    }
+    case MINIC_MACHINE_OPERAND_ADDRESS:
+        return (role == 'm' || role == 'g' || role == 'A') &&
+               (role != 'A' || operand->value.address.displacement == 0) &&
+               ((output || inout) ?
+                (ins->effects & MINIC_MACHINE_EFFECT_MEMORY_WRITE) != 0U :
+                true) &&
+               ((!output || inout) ?
+                (ins->effects & MINIC_MACHINE_EFFECT_MEMORY_READ) != 0U :
+                true) &&
+               minic_riscv_machine_validate_address(
+                   target, &operand->value.address, NULL);
+    case MINIC_MACHINE_OPERAND_INTEGER:
+        return !output && !inout &&
+               (role == 'i' || role == 'n' || role == 'g');
+    case MINIC_MACHINE_OPERAND_SYMBOL:
+        return !output && !inout && (role == 'i' || role == 'g') &&
+               minic_riscv_machine_validate_relocation(
+                   target, operand->value.symbol.name,
+                   operand->value.symbol.relocation,
+                   operand->value.symbol.addend, NULL);
+    default:
+        return false;
+    }
+}
+
+static bool riscv_asm_name(const char *name) {
+    const unsigned char *it = (const unsigned char *)name;
+    if (it == NULL || !(*it == '_' || isalpha(*it))) return false;
+    for (++it; *it != '\0'; ++it)
+        if (*it != '_' && !isalnum(*it)) return false;
+    return true;
+}
+
+static bool riscv_source_asm_operand(FILE *output,
+    const MinicMachineFunction *function,
+    const MinicMachineInstruction *ins,
+    const MinicMachineGNUAsmLabels *labels,
+    size_t id, bool label_operand, unsigned char modifier) {
+    const MinicMachineOperand *operand;
+    if (ins == NULL || id >= ins->operand_count || ins->operands == NULL)
+        return false;
+    operand = &ins->operands[id];
+    if (label_operand) {
+        const char *label;
+        if (operand->kind != MINIC_MACHINE_OPERAND_BLOCK) return false;
+        /* Common verification checks the target ID and CFG successor.
+         * The source preflight callback has no GNU label table yet. */
+        if (output == NULL) return true;
+        return riscv_machine_block_label(function, labels, operand, &label) &&
+               fputs(label, output) >= 0;
+    }
+    if (!riscv_asm_constraint(function->target, ins, operand)) return false;
+    if (modifier == 'n' &&
+        operand->kind != MINIC_MACHINE_OPERAND_INTEGER) return false;
+    if (output == NULL) return true;
+    if (modifier == 'z' &&
+        operand->kind == MINIC_MACHINE_OPERAND_INTEGER &&
+        operand->value.integer == 0) return fputs("zero", output) >= 0;
+    if (modifier == 'n') {
+        const int64_t value = operand->value.integer;
+        if (value > 0) return fprintf(output, "-%" PRId64, value) >= 0;
+        return fprintf(output, "%" PRIu64, -(uint64_t)value) >= 0;
+    }
+    switch (operand->kind) {
+    case MINIC_MACHINE_OPERAND_REGISTER:
+        return fprintf(output, "x%u",
+                       operand->value.physical.reg.number) >= 0;
+    case MINIC_MACHINE_OPERAND_ADDRESS:
+        if (strchr(operand->asm_constraint, 'A') != NULL)
+            return fprintf(output, "(x%u)",
+                           operand->value.address.base.number) >= 0;
+        return fprintf(output, "%" PRId64 "(x%u)",
+                       operand->value.address.displacement,
+                       operand->value.address.base.number) >= 0;
+    case MINIC_MACHINE_OPERAND_INTEGER:
+        return fprintf(output, "%" PRId64,
+                       operand->value.integer) >= 0;
+    case MINIC_MACHINE_OPERAND_SYMBOL:
+        return fputs(operand->value.symbol.name, output) >= 0;
+    default:
+        return false;
+    }
+}
+
+/* One parser for verifier and serializer: any source placeholder accepted by
+ * preflight will materialize from exactly the same typed machine operand.
+ * Unlike compiler-selected instructions, only genuine SOURCE_ASM may reach
+ * this path; we never interpret the source text as selected instruction IR. */
+static bool riscv_source_asm_expand(FILE *output,
+    const MinicMachineFunction *function,
+    const MinicMachineInstruction *ins,
+    const MinicMachineGNUAsmLabels *labels) {
+    size_t i;
+    if (function == NULL || ins == NULL ||
+        ins->kind != MINIC_MACHINE_INSTRUCTION_SOURCE_ASM ||
+        ins->source_asm_template == NULL || ins->source_asm_length == 0U ||
+        ins->source_asm_length > 1048576U ||
+        (ins->operand_count != 0U && ins->operands == NULL)) return false;
+    for (i = 0U; i < ins->operand_count; ++i) {
+        const MinicMachineOperand *op = &ins->operands[i];
+        size_t previous;
+        if (op->asm_name != NULL && !riscv_asm_name(op->asm_name))
+            return false;
+        if (op->asm_name != NULL)
+            for (previous = 0U; previous < i; ++previous)
+                if (ins->operands[previous].asm_name != NULL &&
+                    strcmp(op->asm_name,
+                           ins->operands[previous].asm_name) == 0)
+                    return false;
+        if (op->kind == MINIC_MACHINE_OPERAND_BLOCK) {
+            if (op->asm_constraint != NULL ||
+                (ins->effects & MINIC_MACHINE_EFFECT_BRANCH) == 0U ||
+                !ins->source_asm_terminates_block) return false;
+        } else if (!riscv_asm_constraint(function->target, ins, op)) {
+            return false;
+        }
+    }
+    for (i = 0U; i < ins->source_asm_length; ++i) {
+        const unsigned char ch =
+            (unsigned char)ins->source_asm_template[i];
+        if (ch == '\0' || ch == '\r') return false;
+        if (ch != '%') {
+            if (output != NULL && fputc(ch, output) == EOF) return false;
+            continue;
+        }
+        if (++i >= ins->source_asm_length) return false;
+        if (ins->source_asm_template[i] == '%') {
+            if (output != NULL && fputc('%', output) == EOF) return false;
+            continue;
+        }
+        {
+            bool label_operand = false;
+            size_t id = SIZE_MAX;
+            const unsigned char modifier =
+                (unsigned char)ins->source_asm_template[i];
+            if (modifier == 'l') {
+                label_operand = true;
+                if (++i >= ins->source_asm_length) return false;
+            } else if (modifier == 'c' || modifier == 'n' ||
+                       modifier == 'z') {
+                if (++i >= ins->source_asm_length) return false;
+            }
+            if (ins->source_asm_template[i] == '[') {
+                size_t name_start = i + 1U, name_end;
+                size_t j;
+                for (name_end = name_start;
+                     name_end < ins->source_asm_length &&
+                     ins->source_asm_template[name_end] != ']';
+                     ++name_end) {}
+                if (name_end == ins->source_asm_length ||
+                    name_end == name_start) return false;
+                for (j = 0U; j < ins->operand_count; ++j) {
+                    const char *name = ins->operands[j].asm_name;
+                    if (name != NULL &&
+                        strlen(name) == name_end - name_start &&
+                        memcmp(name, ins->source_asm_template + name_start,
+                               name_end - name_start) == 0) {
+                        if (id != SIZE_MAX) return false;
+                        id = j;
+                    }
+                }
+                i = name_end;
+            } else if (ins->source_asm_template[i] >= '0' &&
+                       ins->source_asm_template[i] <= '9') {
+                id = 0U;
+                do {
+                    unsigned digit =
+                        (unsigned)(ins->source_asm_template[i] - '0');
+                    if (id > (SIZE_MAX - digit) / 10U) return false;
+                    id = id * 10U + digit;
+                    if (i + 1U == ins->source_asm_length ||
+                        ins->source_asm_template[i + 1U] < '0' ||
+                        ins->source_asm_template[i + 1U] > '9') break;
+                    ++i;
+                } while (true);
+            } else {
+                return false;
+            }
+            if (id == SIZE_MAX || id >= ins->operand_count ||
+                (modifier == 'c' &&
+                 ins->operands[id].kind != MINIC_MACHINE_OPERAND_INTEGER) ||
+                !riscv_source_asm_operand(output, function, ins,
+                    labels, id, label_operand, modifier)) return false;
+        }
+    }
+    return true;
+}
+
+static bool riscv_machine_validate_source_asm(
     const MinicTargetInfo *target, const MinicMachineInstruction *ins,
     void *context) {
-    (void)target;
-    (void)ins;
+    MinicMachineFunction probe = {0};
     (void)context;
-    /* Source-owned GNU asm requires the later complete physical binding and
-     * goto/constraint emitter. Never pretend its template is selected code. */
-    return false;
+    if (target == NULL || ins == NULL) return false;
+    probe.target = target;
+    /* Validation of binding kinds, placeholders and target registers needs no
+     * labels. Actual BLOCK indices are checked by the common verifier. */
+    return riscv_source_asm_expand(NULL, &probe, ins, NULL);
+}
+
+static bool riscv_machine_emit_source_asm(FILE *output,
+    const MinicMachineFunction *function, const MinicMachineInstruction *ins,
+    const MinicMachineGNUAsmLabels *labels, void *context) {
+    (void)context;
+    if (output == NULL || function == NULL || labels == NULL ||
+        !riscv_source_asm_expand(NULL, function, ins, labels) ||
+        fputs("# MINIC_SOURCE_INLINE_ASM_BEGIN\n  ", output) < 0 ||
+        !riscv_source_asm_expand(output, function, ins, labels)) return false;
+    return fputs("\n# MINIC_SOURCE_INLINE_ASM_END\n", output) >= 0;
 }
 
 bool minic_riscv_machine_gnu_asm_policy(
@@ -208,10 +460,8 @@ bool minic_riscv_machine_gnu_asm_policy(
     policy->verify.validate_register = minic_riscv_machine_validate_register;
     policy->verify.validate_address = minic_riscv_machine_validate_address;
     policy->verify.validate_relocation = minic_riscv_machine_validate_relocation;
-    policy->verify.validate_source_asm = riscv_machine_reject_source_asm;
+    policy->verify.validate_source_asm = riscv_machine_validate_source_asm;
     policy->emit_selected = riscv_machine_emit_selected;
-    /* Fail closed until an actual source-ASM binding serializer has been
-     * migrated. The common whole-function gate rejects SOURCE_ASM. */
-    policy->emit_source_asm = NULL;
+    policy->emit_source_asm = riscv_machine_emit_source_asm;
     return true;
 }

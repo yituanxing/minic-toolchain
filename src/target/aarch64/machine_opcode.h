@@ -92,6 +92,38 @@ typedef enum MinicA64MachineOpcode {
     MINIC_A64_MACHINE_BLR,
     MINIC_A64_MACHINE_RET,
     MINIC_A64_MACHINE_BRK,
+    /* Actual production scalar, wide-integer, FP and vector families.  The
+     * selection remains physical; there is no generic "emit string" opcode. */
+    MINIC_A64_MACHINE_UXTW,
+    MINIC_A64_MACHINE_NEGS,
+    MINIC_A64_MACHINE_NGC,
+    MINIC_A64_MACHINE_MADD,
+    MINIC_A64_MACHINE_SMULH,
+    MINIC_A64_MACHINE_UMULH,
+    MINIC_A64_MACHINE_SMULL,
+    MINIC_A64_MACHINE_UMULL,
+    MINIC_A64_MACHINE_LDRSW,
+    MINIC_A64_MACHINE_FMOV,
+    MINIC_A64_MACHINE_FNEG,
+    MINIC_A64_MACHINE_FADD,
+    MINIC_A64_MACHINE_FSUB,
+    MINIC_A64_MACHINE_FMUL,
+    MINIC_A64_MACHINE_FDIV,
+    MINIC_A64_MACHINE_FCMP,
+    MINIC_A64_MACHINE_FCVT,
+    MINIC_A64_MACHINE_SCVTF,
+    MINIC_A64_MACHINE_UCVTF,
+    MINIC_A64_MACHINE_FCVTZS,
+    MINIC_A64_MACHINE_FCVTZU,
+    MINIC_A64_MACHINE_FMOV_GP_FROM_FP,
+    MINIC_A64_MACHINE_FMOV_FP_FROM_GP,
+    MINIC_A64_MACHINE_LDR_FP_S,
+    MINIC_A64_MACHINE_LDR_FP_D,
+    MINIC_A64_MACHINE_LDR_FP_Q,
+    MINIC_A64_MACHINE_STR_FP_S,
+    MINIC_A64_MACHINE_STR_FP_D,
+    MINIC_A64_MACHINE_STR_FP_Q,
+    MINIC_A64_MACHINE_VECTOR_EOR_16B,
     MINIC_A64_MACHINE_NOP
 } MinicA64MachineOpcode;
 
@@ -100,6 +132,9 @@ typedef enum MinicA64MachineOpcode {
 enum { MINIC_A64_MACHINE_ZR = 31U, MINIC_A64_MACHINE_SP = 32U };
 
 bool minic_aarch64_machine_gnu_asm_policy_initialize(
+    const MinicTargetInfo *, MinicMachineGNUAsmPolicy *);
+
+bool minic_aarch64_machine_opcode_initialize(
     const MinicTargetInfo *, MinicMachineGNUAsmPolicy *);
 
 #endif

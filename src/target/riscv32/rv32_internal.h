@@ -6,6 +6,7 @@
 #include "target/common/core_object_storage.h"
 #include "minic/compiler.h"
 #include "target/target_info.h"
+#include "target/riscv/isa_features.h"
 #include "target/riscv32/rv32_abi_plan.h"
 #include <stdbool.h>
 #include <stddef.h>
@@ -14,10 +15,9 @@
 /* RV32I/ILP32 physical-machine contract: Core IR never owns frame slots,
  * integer-register placement, scratch-register choices or ABI stack. */
 typedef struct Rv32Frame {
-    /* Per-invocation RISC-V feature profile. The emitted C operation can
-     * always fall back to the Base-I runtime helper when M is unavailable.
-     * No assembler feature ownership is inferred from these bits. */
-    const MinicRiscvIsa *isa;
+    /* ISA policy is a by-value snapshot, never a pointer into a copied
+     * target or a short-lived lowerer's configuration. */
+    MinicRiscvIsa isa;
     /* Outgoing ILP32 stack arguments are pre-reserved at sp+0 on every call.
      * This keeps sp 16-byte aligned, including nested GNU/LLVM library calls,
      * and avoids moving the Core SSA/local object frame during calls. */

@@ -6,6 +6,7 @@
 #include "target/backend.h"
 #include "frontend/ast.h"
 #include "target/riscv/instruction_select.h"
+#include "target/riscv/machine_target_state.h"
 #include "frontend/parser.h"
 #include "frontend/ast_verifier.h"
 
@@ -65,7 +66,8 @@ static int verify_rv32(void) {
     MinicType v;
     if (t == NULL || t->architecture != MINIC_TARGET_ARCH_RISCV32 ||
         !minic_target_invocation_begin(&invocation, t) ||
-        t->riscv_isa.xlen != 32U || t->riscv_isa.abi != MINIC_RISCV_ABI_ILP32 ||
+        minic_riscv_target_isa(t).xlen != 32U ||
+        minic_riscv_target_isa(t).abi != MINIC_RISCV_ABI_ILP32 ||
         !minic_data_layout_is_little_endian(t->data_layout) ||
         t->data_layout->pointer_size != 4U ||
         t->data_layout->pointer_alignment != 4U ||
@@ -438,7 +440,7 @@ static int verify_registered_target_catalog(void) {
             backend == NULL || backend->emit_module == NULL ||
             info->data_layout == NULL ||
             (entry->isa_family == MINIC_TARGET_ISA_FAMILY_RISCV) !=
-                (info->riscv_isa.xlen != 0U) ||
+                (minic_riscv_target_isa(info).xlen != 0U) ||
             !(entry->product_driver_stages &
               MINIC_TARGET_STAGE_ASSEMBLY_FROM_PREPROCESSED_C))
             return 1;

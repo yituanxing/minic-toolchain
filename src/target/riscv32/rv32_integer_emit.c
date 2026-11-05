@@ -463,7 +463,7 @@ bool rv32_emit_integer_instruction(FILE *out,
             return false;
         MinicRiscvIntegerPlan plan;
         if (!minic_riscv_plan_integer_arithmetic(
-                fr->isa, ins->kind, !is_signed, 32U, &plan))
+                &fr->isa, ins->kind, !is_signed, 32U, &plan))
             return false;
         if (plan.strategy == MINIC_RISCV_INTEGER_NATIVE_M)
             return rv32_load2(out, fr, ins) &&

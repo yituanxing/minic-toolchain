@@ -13,6 +13,10 @@ typedef enum MinicRiscvMachineOpcode {
     MINIC_RISCV_MACHINE_AUIPC,
     MINIC_RISCV_MACHINE_JAL_BLOCK,
     MINIC_RISCV_MACHINE_JALR_BRANCH,
+    /* Physical register-indirect branch to a known CFG target. The target
+     * verifier requires the immediately preceding typed LA_BLOCK to write
+     * this register and reference the same MachineBlock. */
+    MINIC_RISCV_MACHINE_JALR_BLOCK,
     MINIC_RISCV_MACHINE_JALR_CALL,
     MINIC_RISCV_MACHINE_BEQ,
     MINIC_RISCV_MACHINE_BNE,
