@@ -10,7 +10,7 @@
     672,
     673
   ],
-  "audit_in_progress": "Core-to-physical-MachineIR migration: LoongArch64 whole-function production selection has a live typed-output inode witness for nine supported fixtures, with one historical unsupported case still rejected; GNU AS/LD/QEMU/Linux runtime acceptance is pending. RV32/RV64, x86-64 and AArch64 have additional typed selector families but retain legacy production entrypoints until whole-function coverage and ABI parity are proven. New source owners are inventory-only; stale fingerprints reopen review and do not imply full-source certification.",
+  "audit_in_progress": "Core-to-physical-MachineIR migration: LoongArch64 whole-function production selection has a live typed-output inode witness for eighteen supported fixtures, with one historical unsupported case still rejected; GNU AS/LD/QEMU/Linux runtime acceptance is pending. RV32/RV64, x86-64 and AArch64 have additional typed selector families but retain legacy production entrypoints until whole-function coverage and ABI parity are proven. New source owners are inventory-only; stale fingerprints reopen review and do not imply full-source certification.",
   "next_deep_review": [
     "src/target/aarch64/frame_emit.c",
     "src/target/loongarch64/frame_emit.c",
@@ -86,6 +86,46 @@
     },
     "src/target/loongarch64/machine_asm_form.h": {
       "blob": "7a267b9e3ab786eb1c5ae6c1496f70c3b048a79d",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/loongarch64/machine_builtin_select.c": {
+      "blob": "cdaa464dabb63d493af3e5281cb8a1b15c23564c",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/loongarch64/machine_builtin_select.h": {
+      "blob": "e08848d26e7e6fc80edc7242c505b141f608edd0",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/loongarch64/machine_csr_source_select.c": {
+      "blob": "ae59c458f87db924775d74b98fc90a903c45469d",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/loongarch64/machine_csr_source_select.h": {
+      "blob": "db5a96c0692f6579bb3de770264089138aadfe51",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/loongarch64/machine_llsc_select.c": {
+      "blob": "a598f30722e980b8f55708fe3d1db5583cf7b055",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/loongarch64/machine_llsc_select.h": {
+      "blob": "91386ff61740bfdbdb73c1a92b08d724f47f84bb",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/loongarch64/machine_pte_select.c": {
+      "blob": "69b3012f6e1ff2e00fdc67a11842be3ff7d7f9c8",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/loongarch64/machine_pte_select.h": {
+      "blob": "6597dd1e0fed0db790dde60543d12af21dd58590",
       "review_depth": "inventory",
       "ci_touched_in": []
     },

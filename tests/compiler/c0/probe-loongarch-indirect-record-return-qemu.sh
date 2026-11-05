@@ -47,22 +47,24 @@ for symbol in minic_three minic_four minic_eighteen minic_nested_three \
 done
 
 # Callee preserves hidden $a0; return must copy precisely the declared
-# object extent, then leave the ORIGINAL destination in $a0.
+# object extent, then leave the ORIGINAL destination in $a0. The selected
+# MachineIR byte-copy loop uses T2=source, T1=destination, T3=count and
+# target CFG block labels; these are physical instructions, not source ASM.
 contains '^  st\.d \$a0, \$(sp|s0|t3),' "$work/mini.s"
 contains '^  ld\.d \$a0, \$(sp|s0|t3),' "$work/mini.s"
-contains '^  move \$t2, \$a0$' "$work/mini.s"
-contains '^  ld\.bu \$t4, \$t1, 0$' "$work/mini.s"
-contains '^  st\.b \$t4, \$t2, 0$' "$work/mini.s"
-contains '^  bnez \$t0, 1b$' "$work/mini.s"
-contains '^  li\.d \$t0, 17$' "$work/mini.s"
-contains '^  li\.d \$t0, 24$' "$work/mini.s"
-contains '^  li\.d \$t0, 32$' "$work/mini.s"
-contains '^  li\.d \$t0, 40$' "$work/mini.s"
-contains '^  li\.d \$t0, 64$' "$work/mini.s"
-contains '^  li\.d \$t0, 144$' "$work/mini.s"
-contains '^  li\.d \$t0, 2048$' "$work/mini.s"
-contains '^  add\.d \$a0, \$sp, \$a0$' "$work/mini.s"
-contains '^  add\.d \$a0, \$s0, \$a0$' "$work/mini.s"
+contains '^  move \$t1, \$a0$' "$work/mini.s"
+contains '^  ld\.bu \$t0, \$t2, 0$' "$work/mini.s"
+contains '^  st\.b \$t0, \$t1, 0$' "$work/mini.s"
+contains '^  bnez \$t0, \.Lminic_mir_[[:alnum:]_]+$' "$work/mini.s"
+contains '^  li\.d \$t3, 17$' "$work/mini.s"
+contains '^  li\.d \$t3, 24$' "$work/mini.s"
+contains '^  li\.d \$t3, 32$' "$work/mini.s"
+contains '^  li\.d \$t3, 40$' "$work/mini.s"
+contains '^  li\.d \$t3, 64$' "$work/mini.s"
+contains '^  li\.d \$t3, 144$' "$work/mini.s"
+contains '^  li\.d \$t3, 2048$' "$work/mini.s"
+contains '^  addi\.d \$a0, \$sp, [0-9]+$' "$work/mini.s"
+contains '^  addi\.d \$a0, \$s0, [0-9]+$' "$work/mini.s"
 contains '^  bl gnu_make_three$' "$work/mini.s"
 contains '^  bl gnu_make_eighteen$' "$work/mini.s"
 contains '^  bl gnu_tap$' "$work/mini.s"
