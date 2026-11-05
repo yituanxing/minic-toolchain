@@ -365,8 +365,15 @@ static const MinicX86MachineOpcodeInfo x86_opcodes[MINIC_X86_MI_LAST] = {
         .terminates_block=true, .indirect_successors=true },
     SYM(JMP_SYMBOL,"jmp",MINIC_X86_MACHINE_RELOC_PC32,BR,X86_IMPLICIT_NONE),
     SYM(JMP_RETURN_THUNK,"jmp",MINIC_X86_MACHINE_RELOC_PC32,RT,X86_IMPLICIT_NONE),
-    SYM(JMP_INDIRECT_THUNK_RAX,"jmp",MINIC_X86_MACHINE_RELOC_PC32,
-        BR,X86_IMPLICIT_JMP_THUNK_RAX),
+    /* The thunk tail-jumps through RAX, so its Core indirect landing
+     * pads remain genuine opaque MachineIR successors. The direct symbol
+     * relocation names the Linux-owned thunk, not a CFG destination. */
+    [MINIC_X86_MI_JMP_INDIRECT_THUNK_RAX] = {
+        .mnemonic="jmp", .format=MINIC_X86_MACHINE_FORMAT_S,
+        .relocation=MINIC_X86_MACHINE_RELOC_PC32,
+        .effects=BR, .implicit_kind=X86_IMPLICIT_JMP_THUNK_RAX,
+        .required_features=BASE, .terminates_block=true,
+        .indirect_successors=true },
     COND(JZ_B,"jz"), COND(JNZ_B,"jnz"),
     COND(JB_B,"jb"), COND(JBE_B,"jbe"),
     COND(JA_B,"ja"), COND(JAE_B,"jae"),

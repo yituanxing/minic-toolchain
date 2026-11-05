@@ -18,6 +18,27 @@ flags=(-fcf-protection=branch -mindirect-branch=thunk-extern
 "$minic" -S --target=x86_64-linux "${flags[@]}" \
     "$work/input.i" -o "$work/driver.s"
 cmp "$work/minic.s" "$work/driver.s"
+# Source has one GNU computed goto and two address-taken labels. Its thunk
+# jump is opaque to MachineIR, but the exact landing pads must retain IBT
+# ENDBR instructions and remain admitted as real indirect successors.
+# Check this inside the computed-goto function, not against unrelated
+# function-entry ENDBR instructions elsewhere in the module.
+if ! awk '
+    /^minic_x86_computed_goto:$/ { inside = 1 }
+    inside && /^  jmp __x86_indirect_thunk_rax$/ { ++thunk_jumps }
+    inside && /^  endbr64$/ { ++ibt_entries }
+    inside && /^\.size minic_x86_computed_goto,/ {
+        finished = 1
+        exit
+    }
+    END {
+        if (!inside || !finished || thunk_jumps != 1 ||
+            ibt_entries < 3) exit 1
+    }
+' "$work/minic.s"; then
+    echo 'FAIL: GNU computed-goto thunk lost sealed indirect CFG/IBT landing pads' >&2
+    exit 1
+fi
 as --64 "$work/minic.s" -o "$work/minic.o"
 readelf -rW "$work/minic.o" > "$work/relocs"
 readelf -SW "$work/minic.o" > "$work/sections"

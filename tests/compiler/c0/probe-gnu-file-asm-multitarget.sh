@@ -655,8 +655,20 @@ SRC
         -o "$work/aarch64-uaccess-bic.gnu.elf"
     "$MINIC_CC" --target=aarch64-linux -S "$work/aarch64-uaccess-bic.i" \
         -o "$work/aarch64-uaccess-bic.minic.s"
-    grep -Fq 'bic x9, x10, #0x80000000000000' \
-        "$work/aarch64-uaccess-bic.minic.s"
+    # GNU's original uaccess template separates "bic" and %0 with a TAB.
+    # The Machine template emitter preserves that spelling; the oracle must
+    # verify exact physical x9/x10 and bit55, independent of whitespace.
+    if grep -Eq '^[[:space:]]*\.error[[:space:]]' "$work/aarch64-uaccess-bic.minic.s"; then
+        grep -E '^[[:space:]]*\.error[[:space:]]' "$work/aarch64-uaccess-bic.minic.s" >&2
+        echo 'FAIL authentic arm64 uaccess BIC MachineIR rejected original Core' >&2
+        exit 1
+    fi
+    if ! grep -Eq '^[[:space:]]*bic[[:space:]]+x9,[[:space:]]*x10,[[:space:]]*#0x80000000000000[[:space:]]*$' \
+        "$work/aarch64-uaccess-bic.minic.s"; then
+        echo 'FAIL original arm64 uaccess BIC lost physical GPRs or bit55 immediate' >&2
+        grep -En '^[[:space:]]*(bic|\.error)' "$work/aarch64-uaccess-bic.minic.s" >&2 || true
+        exit 1
+    fi
     "$cross_cc" -x assembler "$work/aarch64-uaccess-bic.minic.s" \
         -o "$work/aarch64-uaccess-bic.minic.elf"
     for flavor in gnu minic; do
