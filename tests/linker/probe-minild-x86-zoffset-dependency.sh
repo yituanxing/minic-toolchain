@@ -92,7 +92,9 @@ python3 - "$work/new-header.argv0" "$work/source" "$work/new-header.o" <<'PY'
 from pathlib import Path
 import sys
 args = Path(sys.argv[1]).read_bytes().rstrip(b'\0').decode().split('\0')
-if not args or not args[0].startswith('-') or args.count('-c') != 1:\n    raise SystemExit('MINILD_X86_ZOFFSET_DEP=FAIL executable_leaked_or_compile_flag')\nif args[-1] != sys.argv[2] + '/arch/x86/boot/header.S':
+if not args or not args[0].startswith('-') or args.count('-c') != 1:
+    raise SystemExit('MINILD_X86_ZOFFSET_DEP=FAIL executable_leaked_or_compile_flag')
+if args[-1] != sys.argv[2] + '/arch/x86/boot/header.S':
     raise SystemExit('MINILD_X86_ZOFFSET_DEP=FAIL wrong_source_remap')
 if args[args.index('-o') + 1] != sys.argv[3] or '-m16' not in args:
     raise SystemExit('MINILD_X86_ZOFFSET_DEP=FAIL wrong_asm_command')
