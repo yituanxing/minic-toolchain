@@ -1822,6 +1822,52 @@ static bool a64_linux_one_gp_source(A64CoreSelection *sel,
         &binding, 1U, NULL, 0U, false, false);
 }
 
+/* GNU BRK I(imm) is a source-qualified hardware trap, not the zero-
+ * immediate BRK #0 used for compiler-generated unreachable paths. Keep its
+ * immutable Core integer fact as a typed Machine integer operand; neither a
+ * runtime GPR nor an arbitrary GNU template may substitute for that fact. */
+static bool a64_linux_brk_source(A64CoreSelection *sel,
+    const MinicCoreInstruction *ins, const MinicCoreInlineAsm *source) {
+    const MinicCoreFunction *fn = sel->ctx->fn;
+    const MinicCoreStructuredInlineAsmOperand *op =
+        ins->value.structured_inline_asm.operands;
+    const MinicCoreInstruction *literal;
+    MinicCoreInstructionId definition;
+    MinicMachineOperand binding;
+    if (source->target_machine_form_id != AARCH64_MACHINE_ASM_BRK ||
+        source->target_machine_form_variant != 0U ||
+        source->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
+        !aarch64_linux_brk_template(source->template_text,
+            source->template_length) ||
+        !source->is_volatile || source->is_goto ||
+        source->has_memory_clobber || source->register_clobber_count != 0U ||
+        source->resolved_immediate_count != 0U ||
+        source->symbol_reference_count != 0U ||
+        source->deferred_immediate_symbol != NULL ||
+        ins->result != MINIC_CORE_VALUE_INVALID ||
+        !minic_core_function_type_is_kind(fn, ins->core_type_id,
+            MINIC_CORE_TYPE_VOID) ||
+        ins->value.structured_inline_asm.operand_count != 1U ||
+        op == NULL || op->operand_index != 0U ||
+        op->kind != MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT ||
+        op->early_clobber || op->physical_early_clobber ||
+        op->physical_read_write || op->has_fixed_register_binding ||
+        op->has_tied_output || op->value >= fn->value_count ||
+        !minic_core_function_value_is_kind(fn, op->value,
+            MINIC_CORE_TYPE_INTEGER)) return false;
+    definition = fn->values[op->value].definition;
+    if (definition >= fn->instruction_count) return false;
+    literal = &fn->instructions[definition];
+    if (literal->kind != MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT ||
+        literal->result != op->value ||
+        !aarch64_linux_brk_value(literal->value.integer_value))
+        return false;
+    binding = a64_immediate(literal->value.integer_value);
+    binding.asm_constraint = "I";
+    return minic_machine_builder_emit_core_source_asm(&sel->builder,
+        source, 0U, &binding, 1U, NULL, 0U, false, false);
+}
+
 /* Original Linux arm64 io.h raw MMIO is two typed scalar operands, even
  * when the GNU form is a write through an r pointer rather than a Q lvalue.
  * The read alternative must retain both 661/663 instruction bodies and its
@@ -3837,6 +3883,8 @@ static bool a64_core_instruction(A64CoreSelection *sel,
             return a64_linux_pstate_alternative_zero(sel, ins, source);
         if (source->target_machine_form_id == AARCH64_MACHINE_ASM_KEXEC_CRASH)
             return a64_linux_kexec_crash_source(sel, ins, source);
+        if (source->target_machine_form_id == AARCH64_MACHINE_ASM_BRK)
+            return a64_linux_brk_source(sel, ins, source);
         if (source->target_machine_form_id == AARCH64_MACHINE_ASM_LDAR ||
             source->target_machine_form_id == AARCH64_MACHINE_ASM_STLR)
             return a64_linux_acquire_release(sel, ins, source);

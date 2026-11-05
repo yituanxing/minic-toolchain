@@ -107,6 +107,60 @@ static bool a64_machine_opaque_hint(const MinicMachineInstruction *instruction) 
         "14470", "14471", "14472", "brk0x800", true);
 }
 
+/* Linux BUG/TRAP has one GNU I(imm) scalar input, but no physical
+ * register, memory, label or target feature side effects. Validate the exact
+ * ISA source and the complete typed imm16/intersection encoding independently
+ * of C qualification. The regular compiler-generated BRK #0 remains separate. */
+static bool a64_brk_source_form(const MinicMachineInstruction *ins) {
+    const MinicMachineOperand *op;
+    if (ins == NULL ||
+        ins->source_asm_machine_form_id != AARCH64_MACHINE_ASM_BRK ||
+        ins->source_asm_machine_form_variant != 0U ||
+        ins->operand_count != 1U || ins->operands == NULL ||
+        ins->implicit_count != 0U || ins->source_asm_terminates_block ||
+        ins->source_asm_permits_fallthrough ||
+        ins->effects != (MINIC_MACHINE_EFFECT_SOURCE_ASM |
+                         MINIC_MACHINE_EFFECT_VOLATILE) ||
+        !aarch64_linux_brk_template(ins->source_asm_template,
+            ins->source_asm_length)) return false;
+    op = &ins->operands[0];
+    return op->kind == MINIC_MACHINE_OPERAND_INTEGER &&
+        op->asm_name == NULL && op->asm_constraint != NULL &&
+        strcmp(op->asm_constraint, "I") == 0 &&
+        aarch64_linux_brk_value(op->value.integer);
+}
+
+static bool a64_brk_policy_form(const MinicMachineFunction *fn,
+    const MinicMachineInstruction *ins, void *context) {
+    (void)context;
+    return fn != NULL && fn->target != NULL &&
+        fn->target->architecture == MINIC_TARGET_ARCH_AARCH64 &&
+        a64_brk_source_form(ins);
+}
+
+static bool a64_brk_policy_binding(const MinicMachineFunction *fn,
+    const MinicMachineInstruction *ins, size_t index, void *context) {
+    return index == 0U && a64_brk_policy_form(fn, ins, context);
+}
+
+static bool a64_brk_policy_operand(FILE *output,
+    const MinicMachineFunction *fn, const MinicMachineInstruction *ins,
+    const MinicMachineGNUAsmLabels *labels, size_t index,
+    unsigned char modifier, void *context) {
+    (void)labels;
+    return index == 0U && modifier == 0U &&
+        a64_brk_policy_binding(fn, ins, index, context) &&
+        (output == NULL ||
+         fprintf(output, "#%" PRId64, ins->operands[0].value.integer) >= 0);
+}
+
+static const MinicMachineSourceAsmTemplatePolicy a64_brk_policy = {
+    a64_brk_policy_form,
+    a64_brk_policy_binding,
+    a64_brk_policy_operand,
+    NULL
+};
+
 /* Original Linux TLBI 6.6.143 is a sealed GNU source-ASM instruction. The
  * `.arch armv8.5-a` feature directive and TLBI remain source-owned; GNU GAS
  * assembles them. Only the validated rZ physical input is substituted. */
@@ -905,6 +959,8 @@ bool minic_aarch64_machine_source_asm_validate(
         (instruction->effects & MINIC_MACHINE_EFFECT_SOURCE_ASM) != 0U &&
         (a64_machine_opaque_hint(instruction) ||
           minic_machine_source_asm_template_preflight(&function,
+              instruction, &a64_brk_policy) ||
+          minic_machine_source_asm_template_preflight(&function,
               instruction, &a64_kexec_crash_policy) ||
          a64_machine_pstate_alternative(instruction) ||
          a64_machine_extra_source_form(instruction) ||
@@ -1018,6 +1074,10 @@ bool minic_aarch64_machine_source_asm_emit(
             "  adr x10, 1f\n"
             "1: stp x10, x9, [x0, #256]\n", output) != EOF;
     }
+    if (a64_brk_source_form(instruction))
+        return minic_machine_source_asm_template_emit(output, function,
+            instruction, labels, &a64_brk_policy) &&
+            fputc('\n', output) != EOF;
     if (a64_machine_tlbi_form(instruction))
         return minic_machine_source_asm_template_emit(output, function,
             instruction, labels, &a64_tlbi_template_policy) &&

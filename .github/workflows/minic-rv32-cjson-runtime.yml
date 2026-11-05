@@ -24,6 +24,7 @@ on:
       - "tests/compiler/c0/probe-riscv-shared-word-operations.sh"
       - "tests/compiler/c0/probe-rv32-pic-gnu-elf-qemu.sh"
       - "tests/compiler/c0/probe-rv32-checked-overflow-qemu.sh"
+      - "tests/compiler/c0/probe-rv32-u64-bool-qemu.sh"
       - "tests/compiler/c0/probe-riscv-overaligned-varargs-qemu.sh"
       - "tests/compiler/c0/riscv_overaligned_varargs.c"
       - "tests/compiler/c0/elf_hidden_undefined_pic.c"
@@ -55,6 +56,7 @@ on:
       - "tests/compiler/c0/probe-rv32-zstd-picolibc-qemu.sh"
       - "tests/compiler/c0/probe-rv32-musl-busybox-kbuild.sh"
       - "tests/compiler/c0/probe-rv32-dynamic-frame-qemu.sh"
+      - "tests/compiler/c0/probe-rv32-u64-bool-qemu.sh"
       - "tests/compiler/c0/probe-rv32-pic-gnu-elf-qemu.sh"
       - "tests/compiler/c0/probe-riscv-overaligned-varargs-qemu.sh"
       - "tests/compiler/c0/riscv_overaligned_varargs.c"
@@ -109,6 +111,13 @@ jobs:
           MINIC_CC="$GITHUB_WORKSPACE/build/rv32cjson/bin/minic-cc" \
           MINIAS="$GITHUB_WORKSPACE/build/rv32cjson/bin/minic-as" \
             bash tests/compiler/c0/probe-rv32-checked-overflow-qemu.sh
+      - name: RV32I U64-to-bool VirtIO bit32/63 GNU ELF32 QEMU differential
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          MINIC_CC="$GITHUB_WORKSPACE/build/rv32cjson/bin/minic-cc" \
+          MINIAS="$GITHUB_WORKSPACE/build/rv32cjson/bin/minic-as" \
+            bash tests/compiler/c0/probe-rv32-u64-bool-qemu.sh
       - name: RISC-V ILP32 aligned(64) variadic register-to-stack GNU QEMU differential
         shell: bash
         run: |
