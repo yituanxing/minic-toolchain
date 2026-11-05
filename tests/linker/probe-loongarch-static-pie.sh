@@ -85,22 +85,25 @@ assert content('.got') == b'\0' * 8
 assert pie['.rela.dyn'][1] == 4 and pie['.rela.dyn'][9] == 24
 relocations = [struct.unpack_from('<QQQ', content('.rela.dyn'), i)
                for i in range(0, pie['.rela.dyn'][5], 24)]
-assert len(relocations) == 2, relocations
+assert len(relocations) == 3, relocations
 data_va = pie['.data'][3]
 text_va = pie['.text'][3]
 assert relocations[:2] == [
     (data_va, 3, text_va),
     (data_va + 8, 3, data_va + 8),
 ], relocations
-# GNU BFD excludes SHN_ABS constants from PIE dynamic relocation capacity;
-# the absolute pointer is linked directly without a synthetic R_NONE slot.
+assert relocations[2] == (0, 0, 0), relocations
+# GNU BFD records the global ABS reference's dynamic-relocation capacity
+# during input scan; the constant itself links directly, so the reserved
+# entry is R_NONE rather than a synthetic R_RELATIVE.
 assert struct.unpack_from('<3Q', content('.data')) == (
     text_va, data_va + 8, 0x12345678)
 assert '.rela.dyn' not in ordinary or ordinary['.rela.dyn'][5] == 0
 assert '.got' not in ordinary or ordinary['.got'][5] == 0
 assert struct.unpack_from('<3Q', old_content('.data'))[2] == 0x12345678
 print('MINILD_LOONGARCH_STATIC_PIE=PASS ET_EXEC=1 GOT=8 '
-      'RELATIVE=2 NONE=0 absolute_unchanged=1 ordinary_nmagic_unaffected=1')
+      'RELATIVE=2 NONE=1 global_abs_reservation=1 '
+      'absolute_unchanged=1 ordinary_nmagic_unaffected=1')
 PY
 
 cat >"$work/ifunc.s" <<'ASM'
@@ -136,10 +139,11 @@ rela, got, stub = (byname[x] for x in ('.rela.dyn', '.igot.plt', '.iplt'))
 assert got[5] == 8 and stub[5] == 16
 relocs = [struct.unpack_from('<QQQ', b, rela[4] + i)
           for i in range(0, rela[5], 24)]
-assert len(relocs) == 4, relocs
-assert [entry[1] for entry in relocs] == [3, 3, 3, 12], relocs
+assert len(relocs) == 5, relocs
+assert [entry[1] for entry in relocs] == [3, 3, 3, 0, 12], relocs
 assert relocs[2][2] == stub[3], ('IFUNC pointer addend is not IPLT', relocs)
-assert relocs[3][:2] == (got[3], 12)
+assert relocs[3] == (0, 0, 0), relocs
+assert relocs[4][:2] == (got[3], 12)
 sym = byname['.symtab']
 strtab = sections[sym[6]]
 strings = b[strtab[4]:strtab[4]+strtab[5]]
@@ -149,8 +153,9 @@ for i in range(sym[4], sym[4]+sym[5], 24):
     if idx:
         symbol = strings[idx:strings.index(0, idx)].decode()
         values[symbol] = addr
-assert values['__rela_iplt_start'] == rela[3] + 3 * 24
-assert values['__rela_iplt_end'] == rela[3] + 4 * 24
+assert values['__rela_iplt_start'] == rela[3] + 4 * 24
+assert values['__rela_iplt_end'] == rela[3] + 5 * 24
 print('MINILD_LOONGARCH_STATIC_PIE=PASS mixed_relative_ifunc=3+1 '
-      'iplt_bounds_exclude_relative=1 ifunc_addend_uses_stub=1')
+      'global_abs_reserve_none=1 iplt_bounds_exclude_relative=1 '
+      'ifunc_addend_uses_stub=1')
 PY

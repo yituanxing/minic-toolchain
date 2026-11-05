@@ -156,6 +156,8 @@ int main(int argc, char **argv) {
     /* 0 = default target byte order; 1 = -EL, 2 = -EB. */
     unsigned int requested_endianness = 0U;
     bool kernel_static_pie;
+    bool kernel_pie_image;
+    bool kernel_resolved_pie;
     bool kernel_shared_image;
     bool kernel_et_dyn;
     const char *emulation = "elf64lriscv";
@@ -436,11 +438,13 @@ int main(int argc, char **argv) {
         } else if (strcmp(argv[i], "-S") == 0 ||
                    strcmp(argv[i], "--strip-debug") == 0) {
             strip_debug = true;
-        } else if (strcmp(argv[i], "--no-warn-rwx-segments") == 0) {
+        } else if (strcmp(argv[i], "--no-warn-rwx-segments") == 0 ||
+                   strcmp(argv[i], "--no-ld-generated-unwind-info") == 0) {
             /*
-             * These options affect ELF metadata/debug retention or diagnostics,
-             * not the A2/A3 static load image. Accept the Linux final-link
-             * spellings now; dedicated metadata emission can refine them later.
+             * MiniLD does not synthesize linker-created unwind instructions
+             * or their unwind entries, so disabling them is already the
+             * behavior. GNU's compressed x86 Linux Makefile passes this
+             * option when BFD supports it. RWX warnings are diagnostic only.
              */
             continue;
         } else if (strcmp(argv[i], "-e") == 0) {
@@ -491,6 +495,20 @@ int main(int argc, char **argv) {
     kernel_static_pie = static_link && pie_link && !shared_link &&
                         !relocatable && script_path != NULL &&
                         no_dynamic_linker && interpreter_path == NULL;
+    /* The x86 compressed boot image is -pie --no-dynamic-linker -T without
+     * -static. Its linker script requires fully resolved early-boot data
+     * with no runtime .rela.dyn. Keep this kernel ET_DYN capability distinct
+     * from user-space PIE and reject every dynamic-link metadata request. */
+    kernel_pie_image = pie_link && !static_link && !shared_link &&
+                       !relocatable && script_path != NULL &&
+                       no_dynamic_linker && !nmagic &&
+                       minild_emulation_supports_kernel_pie_image(emulation) &&
+                       interpreter_path == NULL && soname == NULL &&
+                       version_script_path == NULL &&
+                       dynamic_list_path == NULL && needed_name == NULL &&
+                       !eh_frame_hdr && !hash_style_both && !strip_debug &&
+                       !symbolic && !no_apply_dynamic_relocs && !pic_veneer;
+    kernel_resolved_pie = kernel_static_pie || kernel_pie_image;
     /* Linux AArch64 uses -shared -Bsymbolic -T for a fully resolved kernel
      * ET_DYN, not the RV64 DSO/vDSO runtime with dynsym/DT_NEEDED. */
     kernel_shared_image = shared_link && !static_link && !pie_link &&
@@ -500,7 +518,8 @@ int main(int argc, char **argv) {
                           interpreter_path == NULL &&
                           version_script_path == NULL && soname == NULL &&
                           needed_name == NULL && dynamic_list_path == NULL;
-    kernel_et_dyn = kernel_shared_image || (kernel_static_pie && !nmagic);
+    kernel_et_dyn = kernel_shared_image ||
+                    (kernel_static_pie && !nmagic) || kernel_pie_image;
     if (emit_relocs && (relocatable || shared_link || pie_link ||
                         strcmp(emulation, "elf_x86_64") != 0)) {
         fprintf(stderr, "minic-ld: --emit-relocs-requires-x86-static-link\n");
@@ -545,7 +564,7 @@ int main(int argc, char **argv) {
     }
     if (no_dynamic_linker &&
         (relocatable || shared_link ||
-         (pie_link && !kernel_static_pie) || interpreter_path != NULL)) {
+         (pie_link && !kernel_resolved_pie) || interpreter_path != NULL)) {
         fprintf(stderr, "minic-ld: --no-dynamic-linker-requires-static-link\n");
         return 2;
     }
@@ -555,25 +574,25 @@ int main(int argc, char **argv) {
     }
     if (max_page_size != 0U && (relocatable ||
         (shared_link && !kernel_shared_image) ||
-        (pie_link && !kernel_static_pie))) {
+        (pie_link && !kernel_resolved_pie))) {
         fprintf(stderr, "minic-ld: -z max-page-size-requires-final-kernel-or-static-link\n");
         return 2;
     }
     if (discard_locals && (relocatable ||
                            (shared_link && !kernel_shared_image) ||
-                           (pie_link && !kernel_static_pie))) {
+                           (pie_link && !kernel_resolved_pie))) {
         fprintf(stderr, "minic-ld: --discard-locals-requires-static-link\n");
         return 2;
     }
     if (gc_sections && (relocatable ||
                         (shared_link && !kernel_shared_image) ||
-                        (pie_link && !kernel_static_pie))) {
+                        (pie_link && !kernel_resolved_pie))) {
         fprintf(stderr,
                 "minic-ld: --gc-sections is currently supported only for final static links\n");
         return 2;
     }
     if (nmagic && (relocatable || shared_link ||
-                   (pie_link && !kernel_static_pie) ||
+                   (pie_link && !kernel_resolved_pie) ||
                    script_path == NULL)) {
         fprintf(stderr,
                 "minic-ld: --nmagic-requires-static-script\n");
@@ -581,7 +600,7 @@ int main(int argc, char **argv) {
     }
     if (no_undefined && (relocatable ||
                          (shared_link && !kernel_shared_image) ||
-                         (pie_link && !kernel_static_pie))) {
+                         (pie_link && !kernel_resolved_pie))) {
         /*
          * Static final links already reject unresolved strong references
          * (while allowing undefined weak references to resolve to zero).
@@ -600,12 +619,12 @@ int main(int argc, char **argv) {
      * shared-script layout and symbol evaluator are fully implemented.
      * Existing static linker-script handling is unchanged.
      */
-    if (pie_link && script_path != NULL && !kernel_static_pie) {
+    if (pie_link && script_path != NULL && !kernel_resolved_pie) {
         fprintf(stderr, "minic-ld: unsupported-pie-linker-script:%s\n",
                 script_path);
         return 2;
     }
-    if (z_notext && !kernel_static_pie && !kernel_shared_image) {
+    if (z_notext && !kernel_resolved_pie && !kernel_shared_image) {
         fprintf(stderr, "minic-ld: -z notext-requires-kernel-link-mode\n");
         return 2;
     }
@@ -619,7 +638,7 @@ int main(int argc, char **argv) {
         MiniLdLinkMode mode = relocatable ? MINILD_LINK_RELOCATABLE :
                               shared_link && !kernel_shared_image
                                   ? MINILD_LINK_SHARED :
-                              pie_link && !kernel_static_pie
+                              pie_link && !kernel_resolved_pie
                                   ? MINILD_LINK_PIE : MINILD_LINK_STATIC;
         if (!minild_emulation_supports_mode(emulation, mode)) {
             fprintf(stderr, "minic-ld: unsupported-emulation-or-link-mode:%s\n",
@@ -640,7 +659,7 @@ int main(int argc, char **argv) {
             output, inputs, input_count, emulation, stderr);
     }
     if ((shared_link && !kernel_shared_image) ||
-        (pie_link && !kernel_static_pie)) {
+        (pie_link && !kernel_resolved_pie)) {
         MiniLdSharedOptions options;
 
         options.soname = soname;

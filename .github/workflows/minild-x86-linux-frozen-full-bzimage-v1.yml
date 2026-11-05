@@ -142,6 +142,13 @@ jobs:
             BUILD_DIR="$WORK/minild-build" "$WORK/minild-build/bin/minic-ld"
           test -x "$WORK/minild-build/bin/minic-ld"
 
+      - name: Prove freestanding x86 kernel PIE without admitting user-space PIE
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make MODE=release CFLAGS=-Werror BUILD_DIR="$WORK/minild-build" \
+            check-minild-x86-kernel-pie-image
+
       - name: Authenticate all GNU C-owned inputs and record GNU control bzImage
         shell: bash
         timeout-minutes: 8

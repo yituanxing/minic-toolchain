@@ -322,6 +322,8 @@ PY
 
 mini_boot_link() {
   local name=$1 cmd=$2 output=$3
+  # Under `set -u`, bash expands all assignments in one `local` command
+  # before assigning `name`; the argv path must be bound afterwards.
   local argv_file="$MINILD_X86_EV/$name.minild.argv0"
   local -a args=()
   captured_link_args "$cmd" "$output" "$argv_file"

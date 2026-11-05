@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Probe LoongArch static PIE dynamic relocation capacity against GNU BFD.
-# Global /DISCARD/ references may reserve trailing R_NONE; local references
-# use section-scoped dynrel lists.  SHN_ABS and non-ALLOC sites are constants
-# or metadata, not image-base rebasing candidates.
+# Global /DISCARD/ references and references to global SHN_ABS definitions
+# may reserve trailing R_NONE, even though neither needs an active rebasing
+# record. Local references use section-scoped dynrel lists; non-ALLOC sites
+# never reserve image-base relocation capacity.
 set -Eeuo pipefail
 
 repo=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
@@ -179,7 +180,7 @@ assert live['.got'][5] == 8
 relocs = [struct.unpack_from('<QQQ', bytes_of('.rela.dyn'), off)
           for off in range(0, live['.rela.dyn'][5], 24)]
 assert relocs == [(live['.data'][3], 3, live['.text'][3])] + \
-                 [(0, 0, 0)] * 2, relocs
+                 [(0, 0, 0)] * 3, relocs
 assert struct.unpack_from('<2Q', bytes_of('.data')) == (
     live['.text'][3], 0x12345678)
 
@@ -216,9 +217,9 @@ if len(sys.argv) == 5:
         assert mtypes == gtypes, (label, 'rela.dyn relocation types', mtypes, gtypes)
     print('MINILD_STATIC_SCRIPT_DISCARD_GNU_ORACLE=PASS modes=live,dead_only '
           'count_and_type_parity=true')
-print('MINILD_STATIC_SCRIPT_DISCARD_RESERVE=PASS mixed_relative=1 none=2 '
+print('MINILD_STATIC_SCRIPT_DISCARD_RESERVE=PASS mixed_relative=1 none=3 '
       'dead_only_relative=0 dead_only_none=1 '
       'discarded_runtime_relocs=NONE local_discard_filtered=true '
-      'absolute_and_nonalloc_no_reservation=true '
+      'global_abs_reserve_none=1 nonalloc_no_reservation=true '
       'dead_only_synthetic_got=0')
 PY

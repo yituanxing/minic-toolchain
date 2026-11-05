@@ -279,18 +279,22 @@ static bool minild_loongarch_reserve_static_relocations(
                 return false;
             }
             source = &state->work.sections[reloc->section];
-            /* Count allocated dynamic-reloc candidates before final source
-             * pruning.  GNU BFD tracks global and local symbols through
-             * distinct dynrel lists; the latter follow discarded sources.
-             * A resolved absolute symbol is a constant, not a PIE rebasing
-             * candidate, regardless of its reference site's lifetime. */
+            /* GNU BFD sizes global symbol dynrel capacity from its input
+             * R_LARCH_64 references, even when the winning definition is
+             * later found to be SHN_ABS.  The absolute value is emitted
+             * directly and that reserved slot remains R_NONE.  In contrast,
+             * local ABS symbols are constants which never need a slot.
+             * Global dynrel lists also survive source /DISCARD/ pruning;
+             * local lists follow the source section's lifetime. */
+            const bool global =
+                reloc->symbol < state->resolver.count &&
+                ELF64_ST_BIND(state->resolver.entries[reloc->symbol].info) !=
+                    STB_LOCAL;
             if (type == R_LARCH_64 && (source->flags & SHF_ALLOC) != 0U &&
                 reloc->symbol < state->resolver.count &&
-                state->resolver.entries[reloc->symbol].section !=
-                    MINILD_SECTION_ABS &&
-                (!(source->gc_discarded || source->script_discard) ||
-                 ELF64_ST_BIND(state->resolver.entries[reloc->symbol].info)
-                     != STB_LOCAL)) {
+                (state->resolver.entries[reloc->symbol].section !=
+                     MINILD_SECTION_ABS || global) &&
+                (!(source->gc_discarded || source->script_discard) || global)) {
                 if (got->relative_reserved_count == SIZE_MAX) {
                     fprintf(state->diagnostics,
                             "minic-ld: loongarch-static-relative-reserve-overflow\n");

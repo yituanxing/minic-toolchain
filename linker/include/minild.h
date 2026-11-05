@@ -75,6 +75,10 @@ typedef enum MiniLdLinkMode {
 bool minild_emulation_supports_mode(const char *emulation,
                                     MiniLdLinkMode mode);
 bool minild_emulation_supports_kernel_shared_image(const char *emulation);
+/* Freestanding -pie --no-dynamic-linker -T kernel images are not ordinary
+ * user-space PIE/DSO links. Only explicitly admitted targets may use the
+ * static ET_DYN placement and relocation pipeline. */
+bool minild_emulation_supports_kernel_pie_image(const char *emulation);
 /* A linker -EL/-EB request selects the output byte order, which must agree
  * with the target's declared ELF encoding. The CLI never guesses from the
  * host machine or silently changes a target to an unsupported endian ABI. */

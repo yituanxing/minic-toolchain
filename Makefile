@@ -769,6 +769,11 @@ check-minild-x86-frozen-manifest:
 check-minild-x86-boot-dispatch:
 	bash tests/linker/probe-minild-x86-boot-dispatch-v1.sh
 
+.PHONY: check-minild-x86-kernel-pie-image
+check-minild-x86-kernel-pie-image: $(MINILD_BINARY)
+	MINILD="$(abspath $(MINILD_BINARY))" \
+	bash tests/linker/probe-minild-x86-kernel-pie-image.sh
+
 .PHONY: check-minild-script-phdrs
 check-minild-script-phdrs: $(MINILD_BINARY)
 	MINILD="$(abspath $(MINILD_BINARY))" \

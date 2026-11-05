@@ -109,6 +109,10 @@ struct MiniLdTargetProfile {
     /* Linux's fixed-address -shared -Bsymbolic -T kernel convention is
      * not interchangeable with a user-space DSO on other targets. */
     bool supports_kernel_shared_image;
+    /* The x86 compressed boot image is -pie --no-dynamic-linker -T, with
+     * every reference resolved before boot and no dynamic runtime loader.
+     * This is distinct from supports_pie (a user-space dynamic PIE). */
+    bool supports_kernel_pie_image;
     MiniLdTargetFlagsMerge merge_flags;
     /* SHF_MERGE may rewrite STT_SECTION+addend only when this relocation's
      * addend is a plain source byte offset (no PC bias/ISA split encoding).
@@ -191,7 +195,8 @@ static const MiniLdTargetProfile minild_target_profiles[] = {
     {"elf64lriscv", ELFCLASS64, ELFDATA2LSB, EM_RISCV, "riscv",
      NULL, "elf64-littleriscv", "/lib/ld-musl-riscv64.so.1", MINILD_SHT_RISCV_ATTRIBUTES,
      UINT64_C(0x10000), 4096U, 1U, 4U,
-     true, true, true, true, true, true, false, minild_riscv_merge_flags,
+     true, true, true, true, true, true, false, false,
+     minild_riscv_merge_flags,
      minild_riscv_merge_addend_plain,
      minild_riscv_relax_section,
      minild_riscv_replan_static_layout,
@@ -205,7 +210,8 @@ static const MiniLdTargetProfile minild_target_profiles[] = {
     {"elf32lriscv", ELFCLASS32, ELFDATA2LSB, EM_RISCV, "riscv",
      NULL, "elf32-littleriscv", NULL, MINILD_SHT_RISCV_ATTRIBUTES,
      UINT64_C(0x10000), 4096U, 1U, 4U,
-     true, true, true, true, true, false, false, minild_riscv_merge_flags,
+     true, true, true, true, true, false, false, false,
+     minild_riscv_merge_flags,
      minild_riscv_merge_addend_plain,
      minild_riscv_relax_section,
      minild_riscv_replan_static_layout,
@@ -217,7 +223,7 @@ static const MiniLdTargetProfile minild_target_profiles[] = {
      NULL, minild_link_elf32_compat_vdso, NULL, true, NULL},
     {"elf_x86_64", ELFCLASS64, ELFDATA2LSB, EM_X86_64, "i386:x86-64",
      NULL, "elf64-x86-64", NULL, 0U, UINT64_C(0x400000), 4096U, 1U, 4U,
-     true, true, true, true, false, false, false,
+     true, true, true, true, false, false, false, true,
      minild_exact_merge_flags, minild_x86_merge_addend_plain, NULL,
      NULL,
      minild_x86_reserve_static_relocations,
@@ -228,7 +234,7 @@ static const MiniLdTargetProfile minild_target_profiles[] = {
      NULL, NULL, minild_zero_elf_flags, true, NULL},
     {"elf_i386", ELFCLASS32, ELFDATA2LSB, EM_386, "i386",
      NULL, "elf32-i386", NULL, 0U, UINT64_C(0x08048000), 4096U, 1U, 4U,
-     false, true, true, true, false, false, false,
+     false, true, true, true, false, false, false, false,
      minild_exact_merge_flags, minild_i386_merge_addend_plain, NULL,
      NULL,
      NULL, NULL,
@@ -238,7 +244,7 @@ static const MiniLdTargetProfile minild_target_profiles[] = {
      minild_i386_implicit_addend},
     {"aarch64linux", ELFCLASS64, ELFDATA2LSB, EM_AARCH64, "aarch64",
      NULL, "elf64-littleaarch64", NULL, 0U, UINT64_C(0x400000), 65536U, 1U, 4U,
-     true, true, true, true, false, false, true,
+     true, true, true, true, false, false, true, false,
      minild_exact_merge_flags, minild_aarch64_merge_addend_plain, NULL,
      minild_aarch64_replan_static_layout,
      minild_aarch64_reserve_static_relocations,
@@ -250,7 +256,7 @@ static const MiniLdTargetProfile minild_target_profiles[] = {
     {"elf64loongarch", ELFCLASS64, ELFDATA2LSB, EM_LOONGARCH, "loongarch64",
      "loongarch", "elf64-loongarch", NULL, 0U, UINT64_C(0x120000000), 4096U,
      65536U, 8U,
-     true, true, true, true, false, false, false,
+     true, true, true, true, false, false, false, false,
      minild_exact_merge_flags, minild_loongarch_merge_addend_plain,
      NULL,
      minild_loongarch_replan_static_layout,
@@ -312,6 +318,12 @@ bool minild_emulation_supports_kernel_shared_image(const char *emulation) {
     const MiniLdTargetProfile *target = minild_target_find(emulation);
 
     return target != NULL && target->supports_kernel_shared_image;
+}
+
+bool minild_emulation_supports_kernel_pie_image(const char *emulation) {
+    const MiniLdTargetProfile *target = minild_target_find(emulation);
+
+    return target != NULL && target->supports_kernel_pie_image;
 }
 
 /* AArch64's Linux kernel -shared -Bsymbolic -T link is not a user-space

@@ -1,4 +1,5 @@
 .text
+.option norelax
 .globl _start
 .type _start,@function
 _start:
