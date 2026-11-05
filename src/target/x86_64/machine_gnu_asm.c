@@ -1,9 +1,34 @@
 #include "target/x86_64/machine_opcode.h"
 #include "target/common/machine_gnu_asm.h"
+#include "target/x86_64/asm_contract.h"
 
 #include <inttypes.h>
 #include <limits.h>
 #include <stdio.h>
+
+/* Only the seven Source-qualified, operand-free Linux barrier forms are
+ * serialized here. Variant and source text are checked independently by the
+ * target verifier before any function output is written. */
+static bool x86_emit_source_asm(FILE *out,
+    const MinicMachineFunction *function,
+    const MinicMachineInstruction *instruction,
+    const MinicMachineGNUAsmLabels *labels, void *context) {
+    static const char *const hardware[] = {
+        "  lock; addl $0, -4(%rsp)\n", "  mfence\n", "  lfence\n",
+        "  sfence\n", "  pause\n", "  rep; nop\n", "  fninit\n"
+    };
+    unsigned int variant;
+    (void)labels;
+    if (out == NULL || function == NULL ||
+        !minic_x86_64_machine_validate_source_asm(function->target,
+            instruction, context)) return false;
+    if (instruction->source_asm_machine_form_id == 0U)
+        return true; /* Empty volatile asm has an effect but zero bytes. */
+    variant = instruction->source_asm_machine_form_variant;
+    return variant >= 1U && variant <=
+            sizeof(hardware) / sizeof(hardware[0]) &&
+        fputs(hardware[variant - 1U], out) != EOF;
+}
 
 /* The only x86 serializer for this physical integer-MIR subset. Every word
  * printed below derives from a recognized opcode plus independently verified
@@ -268,7 +293,7 @@ bool minic_x86_64_machine_gnu_asm_policy(const MinicTargetInfo *target,
     out->verify.validate_source_asm=minic_x86_64_machine_validate_source_asm;
     out->verify.context=NULL;
     out->emit_selected=x86_emit_selected;
-    out->emit_source_asm=NULL;
+    out->emit_source_asm=x86_emit_source_asm;
     out->context=NULL;
     return true;
 }

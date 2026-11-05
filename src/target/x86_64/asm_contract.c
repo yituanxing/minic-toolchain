@@ -1448,25 +1448,7 @@ bool minic_x86_64_asm_percpu_stable_template(const char *s, size_t length) {
  * 5=pause, 6=rep;nop, 7=x87 FNINIT. No unrestricted ASM text is allowed. */
 unsigned int minic_x86_64_linux_zero_barrier_form(
     const char *text, size_t length) {
-    static const char *const exact[] = {
-        "lock;addl$0,-4(%%rsp)",
-        "mfence", "lfence", "sfence", "pause", "rep;nop", "fninit"
-    };
-    char compact[64];
-    size_t i, n = 0U;
-    if (text == NULL || length == 0U || length >= sizeof(compact))
-        return 0U;
-    for (i = 0U; i < length; ++i) {
-        const char c = text[i];
-        if (c == ' ' || c == '\t') continue;
-        if (c == '\n' || c == '\r' || c == '\0') return 0U;
-        compact[n++] = c;
-    }
-    compact[n] = '\0';
-    for (i = 0U; i < sizeof(exact) / sizeof(exact[0]); ++i)
-        if (strcmp(exact[i], compact) == 0)
-            return (unsigned int)(i + 1U);
-    return 0U;
+    return minic_x86_64_zero_barrier_form_exact(text, length);
 }
 
 

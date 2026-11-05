@@ -33,6 +33,34 @@ int main(void) {
         &target, &asm_instruction, NULL));
     asm_instruction.source_asm_template = "dbar 0";
     asm_instruction.source_asm_length = 6U;
+    REQUIRE(minic_loongarch64_machine_validate_source_asm(
+        &target, &asm_instruction, NULL));
+    asm_instruction.source_asm_template = "dbar 0\n\t";
+    asm_instruction.source_asm_length = strlen(asm_instruction.source_asm_template);
+    asm_instruction.effects |= MINIC_MACHINE_EFFECT_COMPILER_BARRIER;
+    REQUIRE(minic_loongarch64_machine_validate_source_asm(
+        &target, &asm_instruction, NULL));
+    /* Actual Linux 6.6.143 BUG-table payload. The metadata and trap must
+     * be accepted together, without allowing an arbitrary ASM program. */
+    asm_instruction.effects &= ~MINIC_MACHINE_EFFECT_COMPILER_BARRIER;
+    asm_instruction.source_asm_template =
+        ".pushsection __bug_table, \"aw\"; .align 2; 10000: .long 10001f - .; "
+        ".pushsection .rodata.str, \"aMS\", @progbits, 1; 10002: .string "
+        "\"arch/loongarch/kernel/smp.c\"; .popsection; .long 10002b - .; "
+        ".short 413; .short 0; .popsection; 10001: break 1";
+    asm_instruction.source_asm_length = strlen(asm_instruction.source_asm_template);
+    REQUIRE(minic_loongarch64_machine_validate_source_asm(
+        &target, &asm_instruction, NULL));
+    asm_instruction.source_asm_template =
+        ".pushsection __bug_table, \"aw\"; .align 2; 10000: .long 10001f - .; "
+        ".pushsection .rodata.str, \"aMS\", @progbits, 1; 10002: .string "
+        "\"arch/loongarch/kernel/smp.c\"; .popsection; .long 10002b - .; "
+        ".short 413; .short 0; .popsection; 10001: break 2";
+    asm_instruction.source_asm_length = strlen(asm_instruction.source_asm_template);
+    REQUIRE(!minic_loongarch64_machine_validate_source_asm(
+        &target, &asm_instruction, NULL));
+    asm_instruction.source_asm_template = "dbar 0; evil";
+    asm_instruction.source_asm_length = strlen(asm_instruction.source_asm_template);
     REQUIRE(!minic_loongarch64_machine_validate_source_asm(
         &target, &asm_instruction, NULL));
     asm_instruction.source_asm_template = "dbar %0";
@@ -73,6 +101,6 @@ int main(void) {
     asm_instruction.source_asm_machine_form_variant = 1U;
     REQUIRE(!minic_loongarch64_machine_validate_source_asm(
         &target, &asm_instruction, NULL));
-    puts("LOONG_MACHINE_SOURCE_ASM=PASS exact_form=1 typed_constraint=1 substituted_gnu=1 forge_rejection=1");
+    puts("LOONG_MACHINE_SOURCE_ASM=PASS exact_form=1 linux_bug_table=1 typed_constraint=1 substituted_gnu=1 forge_rejection=1");
     return 0;
 }

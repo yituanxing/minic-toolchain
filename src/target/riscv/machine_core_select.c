@@ -3,6 +3,8 @@
 #include "target/riscv/machine_opcode.h"
 #include "target/riscv/machine_target_state.h"
 #include "target/riscv/instruction_select.h"
+#include "target/riscv/register_identity.h"
+#include "target/common/core_machine_asm.h"
 #include "target/common/machine_core_coverage.h"
 #include "target/common/elf_module_symbol_info.h"
 #include <limits.h>
@@ -1165,6 +1167,67 @@ static bool rv_core_indirect_call(RvCoreSelection *sel,
     return rv_core_call_result(sel, instruction_id, ins,
         ins->value.indirect_call.result_object);
 }
+
+/* A fixed register is an already-sealed, target-owned physical identity.
+ * The register-variable read is not a GNU source-asm statement: it becomes a
+ * typed MV followed by the same word-sized Core spill transport as other
+ * scalar instructions.  Alias spellings such as x4/tp are resolved once. */
+static bool rv_core_fixed_register_read(RvCoreSelection *sel,
+    const MinicCoreInstruction *ins) {
+    const MinicCoreFunction *fn = sel->plan->core;
+    const MinicCoreFixedRegisterBinding *binding;
+    unsigned reg, bytes;
+    bool sign, pointer;
+    if (ins->value.fixed_register_binding_id >=
+            fn->fixed_register_binding_count ||
+        fn->fixed_register_bindings == NULL) return false;
+    binding = &fn->fixed_register_bindings[
+        ins->value.fixed_register_binding_id];
+    if (binding->register_name == NULL ||
+        binding->core_type_id != ins->core_type_id ||
+        !minic_riscv_gpr_id(binding->register_name,
+            binding->register_name_length, &reg) ||
+        !((sel->plan->target->fixed_register_read != NULL &&
+           sel->plan->target->fixed_register_read(
+               binding->register_name, binding->register_name_length)) ||
+          (binding->is_local &&
+           sel->plan->target->local_fixed_register != NULL &&
+           sel->plan->target->local_fixed_register(
+               binding->register_name, binding->register_name_length))) ||
+        !rv_type(sel, ins->core_type_id, &bytes, &sign, &pointer) ||
+        bytes != sel->xlen / 8U || reg == RV_T0 ||
+        !rv_rr(sel, MINIC_RISCV_MACHINE_MV, RV_T0, reg)) return false;
+    (void)sign;
+    (void)pointer;
+    return rv_store(sel, ins->result, RV_T0);
+}
+
+/* Preserve exactly the source-owned, sealed target asm event.  The full
+ * structured register allocator and asm-goto CFG binding have not yet been
+ * migrated: admitting them here without real bindings would miscompile
+ * Linux, so the entire Machine function fails closed instead. */
+static bool rv_core_unbound_source_asm(RvCoreSelection *sel,
+    const MinicCoreInstruction *ins) {
+    const MinicCoreFunction *fn = sel->plan->core;
+    const MinicCoreInlineAsm *source;
+    MinicCoreInlineAsmId id;
+    if (ins->kind == MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM)
+        id = ins->value.inline_asm_id;
+    else if (ins->kind == MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM) {
+        if (ins->value.structured_inline_asm.operand_count != 0U)
+            return false;
+        id = ins->value.structured_inline_asm.inline_asm_id;
+    } else return false;
+    if (id >= fn->inline_asm_count || fn->inline_asms == NULL) return false;
+    source = &fn->inline_asms[id];
+    if (source->template_text == NULL || source->is_goto ||
+        source->register_clobber_count != 0U ||
+        source->resolved_immediate_count != 0U ||
+        source->goto_second_target != MINIC_CORE_BLOCK_INVALID)
+        return false;
+    return minic_machine_builder_emit_core_source_asm(&sel->builder,
+        source, 0U, NULL, 0U, NULL, 0U, false, false);
+}
 static bool rv_core_instruction(RvCoreSelection *sel,
     MinicCoreInstructionId instruction_id,
     const MinicCoreInstruction *ins) {
@@ -1175,6 +1238,8 @@ static bool rv_core_instruction(RvCoreSelection *sel,
         return rv_core_parameter(sel, ins);
     case MINIC_CORE_INSTRUCTION_PARAMETER_OBJECT:
         return rv_core_parameter_object(sel, ins);
+    case MINIC_CORE_INSTRUCTION_FIXED_REGISTER_READ:
+        return rv_core_fixed_register_read(sel, ins);
     case MINIC_CORE_INSTRUCTION_INTEGER_ADD:
     case MINIC_CORE_INSTRUCTION_INTEGER_SUBTRACT:
     case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND:
@@ -1220,6 +1285,9 @@ static bool rv_core_instruction(RvCoreSelection *sel,
         return rv_core_call(sel, instruction_id, ins);
     case MINIC_CORE_INSTRUCTION_INDIRECT_CALL:
         return rv_core_indirect_call(sel, instruction_id, ins);
+    case MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM:
+    case MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM:
+        return rv_core_unbound_source_asm(sel, ins);
     case MINIC_CORE_INSTRUCTION_COMPILER_BARRIER:
         return rv_emit(sel, MINIC_RISCV_MACHINE_BARRIER, NULL, 0U);
     default:

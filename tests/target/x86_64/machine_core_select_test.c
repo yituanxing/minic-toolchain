@@ -4,6 +4,7 @@
 #include "target/x86_64/machine_core_select.h"
 #include "target/x86_64/machine_target_state.h"
 #include "target/x86_64/machine_opcode.h"
+#include "target/x86_64/asm_contract.h"
 #include "target/common/machine_core_coverage.h"
 #include "target/common/machine_gnu_asm.h"
 #include "target/data_layout.h"
@@ -1828,8 +1829,123 @@ done:
     return okay;
 }
 
+/* Seven original Linux zero-binding hardware ordering forms plus the empty
+ * volatile compiler effect, with real Core origin/physical clobber coverage.
+ * No printable source line is imported into a selected machine opcode. */
+static bool scenario_source_zero_barrier(unsigned int form) {
+    static const char *const sources[] = {
+        "", "lock; addl $0, -4(%%rsp)", "mfence", "lfence",
+        "sfence", "pause", "rep; nop", "fninit"
+    };
+    static const char *const emitted[] = {
+        "", "lock; addl $0, -4(%rsp)", "mfence", "lfence",
+        "sfence", "pause", "rep; nop", "fninit"
+    };
+    MinicCoreFunction core = {0};
+    MinicCoreTypeContext types;
+    MinicCoreType void_shape = {0};
+    MinicCoreTypeId void_id;
+    MinicCoreBlockId entry;
+    MinicCoreTerminator ret = {0};
+    MinicCoreInstruction ins = {0};
+    MinicCoreInlineAsmId source_id;
+    MinicX86Frame frame = {0};
+    MinicTargetInfo target = {0};
+    MinicMachineFunction machine = {0};
+    MinicMachineGNUAsmPolicy policy = {0};
+    size_t offsets[1] = {8U};
+    bool reachable[2] = {false, false};
+    FILE *out = NULL;
+    char text[4096] = {0};
+    size_t n, block, index, source_events = 0U;
+    bool okay = false;
+    const char *stage = "core";
+    if (form > 7U) return false;
+    minic_core_type_context_initialize(&types);
+    minic_core_function_initialize(&core);
+    core.name = malloc(sizeof("x86_source_barrier"));
+    if (core.name == NULL) goto done;
+    memcpy(core.name, "x86_source_barrier", sizeof("x86_source_barrier"));
+    core.name_length = sizeof("x86_source_barrier") - 1U;
+    void_shape.kind = MINIC_CORE_TYPE_VOID;
+    if (!minic_core_type_register(&types, &void_shape, &void_id) ||
+        !minic_core_function_define_signature(&core, &types,
+            void_id, NULL, 0U, MINIC_CALLING_CONVENTION_DEFAULT, false) ||
+        !minic_core_function_add_block(&core, &entry)) goto done;
+    stage = "add-source";
+    if (!minic_core_function_add_opaque_inline_asm(&core,
+            sources[form], strlen(sources[form]), true,
+            form >= 1U && form <= 4U, &source_id)) goto done;
+    core.inline_asms[source_id].source_asm_unique_id = 700U + form;
+    core.inline_asms[source_id].target_machine_form_id = form == 0U
+        ? 0U : MINIC_X86_MACHINE_ASM_ZERO_BARRIER;
+    core.inline_asms[source_id].target_machine_form_variant = form;
+    if (form == 1U &&
+        !minic_core_function_add_inline_asm_register_clobber(
+            &core, source_id, "cc", 2U)) goto done;
+    ins.kind = MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM;
+    ins.core_type_id = void_id;
+    ins.result = MINIC_CORE_VALUE_INVALID;
+    ins.value.inline_asm_id = source_id;
+    stage = "append-source";
+    if (!minic_core_function_append_effect_instruction(&core, 0U, &ins))
+        goto done;
+    stage = "verify-core";
+    ret.kind = MINIC_CORE_TERMINATOR_RETURN;
+    ret.return_value = MINIC_CORE_VALUE_INVALID;
+    ret.return_object = MINIC_CORE_OBJECT_INVALID;
+    if (!minic_core_function_set_terminator(&core, entry, &ret) ||
+        !minic_core_function_attach_type_context(&core, &types) ||
+        !minic_core_function_verify(&core)) goto done;
+    target.architecture = MINIC_TARGET_ARCH_X86_64;
+    target.data_layout = minic_x86_64_linux_data_layout();
+    frame.value_count = core.value_count;
+    frame.value_offsets = offsets;
+    frame.frame_size = 64U;
+    stage = "machine";
+    if (!minic_x86_64_machine_select_core_subset(
+            &machine, &target, &core, &frame) ||
+        !minic_core_function_mark_reachable_blocks(&core,
+            reachable, 1U) ||
+        !minic_machine_core_coverage_verify(&core, reachable, &machine) ||
+        !minic_x86_64_machine_gnu_asm_policy(&target, &policy) ||
+        !minic_machine_gnu_asm_preflight(&machine, &policy)) goto done;
+    for (block = 0U; block < machine.block_count; ++block)
+        for (index = 0U;
+             index < machine.blocks[block].instruction_count; ++index) {
+            const MinicMachineInstruction *selected =
+                &machine.blocks[block].instructions[index];
+            if (selected->kind == MINIC_MACHINE_INSTRUCTION_SOURCE_ASM &&
+                selected->has_core_origin &&
+                selected->has_source_asm_unique_id &&
+                selected->source_asm_unique_id == 700U + form)
+                ++source_events;
+        }
+    if (source_events != 1U || (out = tmpfile()) == NULL ||
+        !minic_machine_gnu_asm_emit_body(out, &machine, &policy) ||
+        fflush(out) != 0 || fseek(out, 0L, SEEK_SET) != 0) goto done;
+    n = fread(text, 1U, sizeof(text) - 1U, out);
+    text[n] = '\0';
+    if (form != 0U && strstr(text, emitted[form]) == NULL) goto done;
+    stage = "negative";
+    minic_machine_function_destroy(&machine);
+    core.inline_asms[source_id].target_machine_form_variant = form == 0U
+        ? 1U : (form % 7U) + 1U;
+    if (minic_x86_64_machine_select_core_subset(
+            &machine, &target, &core, &frame)) goto done;
+    okay = true;
+done:
+    if (!okay) fprintf(stderr, "X86_SOURCE_ASM=FAIL form=%u stage=%s\n",
+        form, stage);
+    if (out != NULL) fclose(out);
+    minic_machine_function_destroy(&machine);
+    minic_core_function_destroy(&core);
+    minic_core_type_context_destroy(&types);
+    return okay;
+}
+
 int main(int argc, char **argv) {
-    unsigned int fp_mode;
+    unsigned int fp_mode, source_form;
     if (argc == 2 && strcmp(argv[1], "--emit-fp") == 0) {
         for (fp_mode = 0U; fp_mode < 12U; ++fp_mode)
             if (!scenario_fp_boundary(fp_mode, stdout)) return 1;
@@ -1878,6 +1994,8 @@ int main(int argc, char **argv) {
         !scenario_new_core_case(X86_NEW_BLOCK_ADDRESS)) return 1;
     for (fp_mode = 0U; fp_mode < 12U; ++fp_mode)
         if (!scenario_fp_boundary(fp_mode, NULL)) return 1;
-    puts("X86_CORE_MIR=PASS cycle=1 physical_alu=1 parameter=1 sse2=1 direct_call=1 mixed_vararg_stack=1 indirect_call=1 ms_shadow_stack=1 record_copy=1 record_load=1 vector_storage=1 record_abi=1 volatile=1 empty_record_reject=1 rep_movsb=1 pic_symbol=1 got_weak=1 head_32s_reject=1 relaxed_atomic=1 compiler_barrier=1 origin=1 fail_closed=1 bitscan_zero_nonzero=1 overflow_32_64=1 va_arg=1 alloca=1 block_address=1 fp_boundary=1");
+    for (source_form = 0U; source_form <= 7U; ++source_form)
+        if (!scenario_source_zero_barrier(source_form)) return 1;
+    puts("X86_CORE_MIR=PASS cycle=1 physical_alu=1 parameter=1 sse2=1 direct_call=1 mixed_vararg_stack=1 indirect_call=1 ms_shadow_stack=1 record_copy=1 record_load=1 vector_storage=1 record_abi=1 volatile=1 empty_record_reject=1 rep_movsb=1 pic_symbol=1 got_weak=1 head_32s_reject=1 relaxed_atomic=1 compiler_barrier=1 origin=1 fail_closed=1 bitscan_zero_nonzero=1 overflow_32_64=1 va_arg=1 alloca=1 block_address=1 fp_boundary=1 zero_asm=8/8");
     return 0;
 }

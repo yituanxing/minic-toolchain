@@ -2,12 +2,14 @@
 
 #include "target/x86_64/abi.h"
 #include "target/x86_64/codegen_options.h"
+#include "target/x86_64/asm_contract.h"
 #include "target/x86_64/machine_frame_select.h"
 #include "target/x86_64/machine_opcode.h"
 #include "target/x86_64/machine_target_state.h"
 #include "target/common/machine_builder.h"
 #include "target/common/core_block_walk.h"
 #include "target/common/machine_gnu_asm.h"
+#include "target/common/core_machine_asm.h"
 #include "target/common/direct_instruction_semantics.h"
 #include "target/common/core_numeric_shape.h"
 #include "target/common/core_floating_shape.h"
@@ -1782,6 +1784,66 @@ static bool x86_dynamic_stack_alloc(X86CoreSelector *sel,
     return x86_core_store(sel, ins->result, MINIC_X86_REG_RAX);
 }
 
+/* Preserve the Source-owned occurrence and the already sealed x86 form.
+ * This is a genuine physical MachineIR source effect, not a selected
+ * instruction whose payload is a pre-rendered assembly line. The producer
+ * must prove every declared register clobber before the builder can append
+ * the instruction. Larger Linux asm families require operand legalization. */
+static bool x86_source_zero_barrier(X86CoreSelector *sel,
+    const MinicCoreInstruction *ins) {
+    const MinicCoreInlineAsm *source;
+    MinicCoreInlineAsmId id;
+    MinicMachineRegisterEffect flags = {0};
+    const MinicMachineRegisterEffect *implicit = NULL;
+    size_t implicit_count = 0U;
+    unsigned int form, effects = 0U;
+    if (ins->kind == MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM)
+        id = ins->value.inline_asm_id;
+    else if (ins->kind == MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM) {
+        if (ins->value.structured_inline_asm.operand_count != 0U)
+            return false;
+        id = ins->value.structured_inline_asm.inline_asm_id;
+    } else return false;
+    if (id >= sel->core->inline_asm_count ||
+        sel->core->inline_asms == NULL) return false;
+    source = &sel->core->inline_asms[id];
+    if (!source->is_volatile || source->is_goto ||
+        source->source_asm_unique_id == 0U ||
+        source->resolved_immediate_count != 0U ||
+        source->goto_second_target != MINIC_CORE_BLOCK_INVALID ||
+        source->template_text == NULL) return false;
+    if (source->target_machine_form_id == 0U &&
+        source->target_machine_form_variant == 0U &&
+        source->template_length == 0U &&
+        source->register_clobber_count == 0U &&
+        !source->has_memory_clobber)
+        return minic_machine_builder_emit_core_source_asm(&sel->builder,
+            source, 0U, NULL, 0U, NULL, 0U, false, false);
+    if (source->target_machine_form_id !=
+            MINIC_X86_MACHINE_ASM_ZERO_BARRIER ||
+        (form = minic_x86_64_zero_barrier_form_exact(
+            source->template_text, source->template_length)) == 0U ||
+        source->target_machine_form_variant != form ||
+        (form <= 4U && !source->has_memory_clobber)) return false;
+    if (form == 1U) {
+        const MinicCoreInlineAsmRegisterClobber *clobber;
+        if (source->register_clobber_count != 1U ||
+            source->register_clobbers == NULL) return false;
+        clobber = &source->register_clobbers[0];
+        if (clobber->name == NULL || clobber->name_length != 2U ||
+            memcmp(clobber->name, "cc", 2U) != 0) return false;
+        flags.reg = (MinicMachineRegister){
+            0U, 64U, MINIC_MACHINE_REGISTER_FLAGS};
+        flags.access = MINIC_MACHINE_REGISTER_CLOBBER;
+        implicit = &flags;
+        implicit_count = 1U;
+        effects = MINIC_MACHINE_EFFECT_MEMORY_READ |
+            MINIC_MACHINE_EFFECT_MEMORY_WRITE;
+    } else if (source->register_clobber_count != 0U) return false;
+    return minic_machine_builder_emit_core_source_asm(&sel->builder,
+        source, effects, NULL, 0U, implicit, implicit_count, false, false);
+}
+
 static bool x86_core_instruction(X86CoreSelector *sel,
     const MinicCoreInstruction *ins, size_t instruction_id) {
     size_t bytes;
@@ -1806,6 +1868,9 @@ static bool x86_core_instruction(X86CoreSelector *sel,
         return x86_atomic_scalar(sel, ins);
     case MINIC_CORE_INSTRUCTION_COMPILER_BARRIER:
         return x86_compiler_barrier(sel, ins);
+    case MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM:
+    case MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM:
+        return x86_source_zero_barrier(sel, ins);
     case MINIC_CORE_INSTRUCTION_FIXED_REGISTER_READ:
         return x86_fixed_register_read(sel, ins);
     case MINIC_CORE_INSTRUCTION_BLOCK_ADDRESS:

@@ -3,6 +3,7 @@
 #include "target/loongarch64/machine_target_state.h"
 #include "target/loongarch64/machine_asm_form.h"
 #include "target/common/core_machine_asm.h"
+#include "target/common/direct_linux_bug_asm.h"
 #include "target/common/machine_source_asm_template.h"
 #include <ctype.h>
 #include <inttypes.h>
@@ -17,9 +18,10 @@ static bool loong_source_opaque(const MinicMachineInstruction *ins) {
     static const char *const literals[] = {
         "nop", "nop\n\t", "idle 0", "idle 0\n\t",
         "tlbrd", "tlbclr", "tlbflush", "tlbsrch", "tlbwr", "tlbfill",
-        "ibar 0", "\tibar 0\n",
-        "ibar 0 \t\ndbar 0 \t\n"
+        "dbar 0", "dbar 0x700", "dbar 0\n\t", "ibar 0",
+        "\tibar 0\n", "ibar 0 \t\ndbar 0 \t\n"
     };
+    MinicCoreInlineAsm linux_bug = {0};
     size_t i;
     if (ins->operand_count != 0U || ins->implicit_count != 0U ||
         ins->source_asm_machine_form_variant != 0U ||
@@ -29,6 +31,19 @@ static bool loong_source_opaque(const MinicMachineInstruction *ins) {
                          MINIC_MACHINE_EFFECT_BRANCH |
                          MINIC_MACHINE_EFFECT_RETURN)) != 0U)
         return false;
+    /* Core's original Linux BUG-table qualifier seals only an exact
+     * GNU metadata shape ending in `break 1`. Recheck that same shape at
+     * the physical emission boundary: accepting the whole template does
+     * not grant an arbitrary source-program or directive escape hatch. */
+    linux_bug.template_text = ins->source_asm_template;
+    linux_bug.template_length = ins->source_asm_length;
+    linux_bug.is_volatile =
+        (ins->effects & MINIC_MACHINE_EFFECT_VOLATILE) != 0U;
+    linux_bug.has_memory_clobber =
+        (ins->effects & MINIC_MACHINE_EFFECT_COMPILER_BARRIER) != 0U;
+    if (minic_multi_direct_linux_bug_asm(&linux_bug,
+            "10000", "10001", "10002", "break1", false))
+        return true;
     for (i = 0U; i < sizeof(literals) / sizeof(literals[0]); ++i)
         if (ins->source_asm_length == strlen(literals[i]) &&
             memcmp(ins->source_asm_template, literals[i],

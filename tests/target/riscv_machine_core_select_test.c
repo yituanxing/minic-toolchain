@@ -13,6 +13,10 @@
     fprintf(stderr, "RV_CORE_MIR:%d: %s\n", __LINE__, #x); \
     return false; } } while (0)
 
+static bool test_fixed_tp_register(const char *name, size_t length) {
+    return name != NULL && length == 2U && memcmp(name, "tp", 2U) == 0;
+}
+
 /* Exercise the SAME function-lifetime psABI plans consumed by proven old
  * RV32/RV64 emitters. A hand-written a0+i placement in a test would hide
  * exactly the migration regression this gate must detect. */
@@ -38,7 +42,8 @@ static bool prepare_old_rv_abi(const MinicCoreFunction *fn, unsigned xlen,
 }
 
 static bool core_cycle(MinicCoreFunction *fn, MinicCoreTypeContext *types,
-                       bool compiler_barrier) {
+                       unsigned xlen, bool compiler_barrier, bool source_asm,
+                       bool fixed_register) {
     MinicCoreType type = {0};
     MinicCoreTypeId void_type;
     MinicCoreBlockId entry, backedge;
@@ -62,6 +67,53 @@ static bool core_cycle(MinicCoreFunction *fn, MinicCoreTypeContext *types,
         CHECK(minic_core_function_append_effect_instruction(fn,
             entry, &ins));
     }
+    if (source_asm) {
+        MinicCoreInstruction ins = {0};
+        MinicCoreInlineAsmId source_id;
+        CHECK(minic_core_function_add_opaque_inline_asm(fn,
+            "addi x0, x0, 0", sizeof("addi x0, x0, 0") - 1U,
+            true, true, &source_id));
+        fn->inline_asms[source_id].source_asm_unique_id = 87U;
+        ins.kind = MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM;
+        ins.core_type_id = void_type;
+        ins.result = MINIC_CORE_VALUE_INVALID;
+        ins.value.inline_asm_id = source_id;
+        CHECK(minic_core_function_append_effect_instruction(fn, entry, &ins));
+        /* GNU asm volatile("") is an ordering event without hardware bytes;
+         * it must neither disappear nor create an invented machine opcode. */
+        CHECK(minic_core_function_add_opaque_inline_asm(fn,
+            "", 0U, true, false, &source_id));
+        fn->inline_asms[source_id].source_asm_unique_id = 88U;
+        ins.value.inline_asm_id = source_id;
+        CHECK(minic_core_function_append_effect_instruction(fn, entry, &ins));
+    }
+    if (fixed_register) {
+        MinicCoreInstruction ins = {0};
+        MinicCoreValueId result;
+        MinicCoreTypeId word_type;
+        MinicCoreFixedRegisterBinding *binding;
+        type = (MinicCoreType){0};
+        type.kind = MINIC_CORE_TYPE_INTEGER;
+        type.has_layout = true;
+        type.size = type.alignment = xlen / 8U;
+        type.value.integer.bit_width = xlen;
+        CHECK(minic_core_type_register(types, &type, &word_type));
+        fn->fixed_register_bindings = calloc(1U, sizeof(*binding));
+        CHECK(fn->fixed_register_bindings != NULL);
+        fn->fixed_register_binding_count =
+            fn->fixed_register_binding_capacity = 1U;
+        binding = &fn->fixed_register_bindings[0];
+        binding->register_name = malloc(3U);
+        CHECK(binding->register_name != NULL);
+        memcpy(binding->register_name, "tp", 3U);
+        binding->register_name_length = 2U;
+        binding->core_type_id = word_type;
+        ins.kind = MINIC_CORE_INSTRUCTION_FIXED_REGISTER_READ;
+        ins.core_type_id = word_type;
+        ins.value.fixed_register_binding_id = 0U;
+        CHECK(minic_core_function_append_value_instruction(
+            fn, entry, &ins, &result));
+    }
     term.kind = MINIC_CORE_TERMINATOR_BRANCH;
     term.branch_target = backedge;
     CHECK(minic_core_function_set_terminator(fn, entry, &term));
@@ -72,7 +124,7 @@ static bool core_cycle(MinicCoreFunction *fn, MinicCoreTypeContext *types,
 }
 
 static bool run(unsigned xlen, bool compiler_barrier,
-                bool exported_island) {
+                bool exported_island, bool source_asm, bool fixed_register) {
     MinicCoreFunction fn = {0};
     MinicCoreTypeContext types;
     MinicMachineFunction machine = {0};
@@ -86,13 +138,15 @@ static bool run(unsigned xlen, bool compiler_barrier,
     MinicMachineGNUAsmPolicy policy = {0};
     MinicDataLayout layout = {0};
     const bool reachable[] = {true, true, true};
+    const size_t fixed_value_offsets[] = {32U};
     FILE *out = NULL;
     char text[4096];
     size_t count;
     bool okay = false;
     const char *stage = "build-core";
     minic_core_type_context_initialize(&types);
-    if (!core_cycle(&fn, &types, compiler_barrier)) goto done;
+    if (!core_cycle(&fn, &types, xlen, compiler_barrier, source_asm,
+            fixed_register)) goto done;
     if (exported_island) {
         /* A disconnected exported local label is a live linker entry. The
          * legacy RV-private BFS dropped it; Core's shared closure keeps it. */
@@ -117,6 +171,7 @@ static bool run(unsigned xlen, bool compiler_barrier,
     target.architecture = xlen == 32U ?
         MINIC_TARGET_ARCH_RISCV32 : MINIC_TARGET_ARCH_RISCV64;
     target.data_layout = &layout;
+    target.fixed_register_read = test_fixed_tp_register;
     isa.xlen = xlen;
     isa.abi = xlen == 32U ? MINIC_RISCV_ABI_ILP32 : MINIC_RISCV_ABI_LP64;
     isa.strict_isa = true;
@@ -126,6 +181,10 @@ static bool run(unsigned xlen, bool compiler_barrier,
     plan.target = &target;
     plan.core = &fn;
     plan.frame = &frame;
+    if (fixed_register) {
+        plan.value_offsets = fixed_value_offsets;
+        plan.value_offset_count = 1U;
+    }
     if (!prepare_old_rv_abi(&fn, xlen, 0U, &abi32, &abi64,
             &calls64, &plan)) goto done;
     stage = "select";
@@ -172,7 +231,61 @@ static bool run(unsigned xlen, bool compiler_barrier,
         strstr(text, "  lla x31, .Lminic_mir_rv_typed_cycle_1") != NULL &&
         strstr(text, "  jalr zero, 0(x31)") != NULL &&
         strstr(text, "  ret") != NULL;
+    if (source_asm)
+        okay = okay && strstr(text, "# MINIC_SOURCE_INLINE_ASM_BEGIN") &&
+            strstr(text, "  addi x0, x0, 0") &&
+            strstr(text, "# MINIC_SOURCE_INLINE_ASM_END");
+    if (fixed_register)
+        okay = okay && strstr(text, "  mv x5, x4") &&
+            strstr(text, xlen == 32U ? "  sw x5, 32(x2)" :
+                                           "  sd x5, 32(x2)");
     if (!okay) fprintf(stderr, "RV%u asm:\n%s\n", xlen, text);
+    if (okay && source_asm) {
+        size_t block_index, instruction_index;
+        bool observed = false, observed_empty = false;
+        for (block_index = 0U; block_index < machine.block_count; ++block_index)
+            for (instruction_index = 0U;
+                 instruction_index < machine.blocks[block_index].instruction_count;
+                 ++instruction_index) {
+                const MinicMachineInstruction *m =
+                    &machine.blocks[block_index].instructions[instruction_index];
+                if (m->kind == MINIC_MACHINE_INSTRUCTION_SOURCE_ASM &&
+                    m->has_source_asm_unique_id &&
+                    m->source_asm_unique_id == 87U &&
+                    (m->effects & (MINIC_MACHINE_EFFECT_SOURCE_ASM |
+                                   MINIC_MACHINE_EFFECT_VOLATILE |
+                                   MINIC_MACHINE_EFFECT_COMPILER_BARRIER)) ==
+                    (MINIC_MACHINE_EFFECT_SOURCE_ASM |
+                     MINIC_MACHINE_EFFECT_VOLATILE |
+                     MINIC_MACHINE_EFFECT_COMPILER_BARRIER))
+                    observed = true;
+                if (m->kind == MINIC_MACHINE_INSTRUCTION_SOURCE_ASM &&
+                    m->has_source_asm_unique_id &&
+                    m->source_asm_unique_id == 88U &&
+                    m->source_asm_length == 0U &&
+                    (m->effects & (MINIC_MACHINE_EFFECT_SOURCE_ASM |
+                                   MINIC_MACHINE_EFFECT_VOLATILE)) ==
+                    (MINIC_MACHINE_EFFECT_SOURCE_ASM |
+                     MINIC_MACHINE_EFFECT_VOLATILE) &&
+                    (m->effects & MINIC_MACHINE_EFFECT_COMPILER_BARRIER) == 0U)
+                    observed_empty = true;
+            }
+        okay = observed && observed_empty;
+        /* No source identity and no unresolved physical clobber may enter
+         * MachineIR. A failed selector must not leak a partial function. */
+        minic_machine_function_destroy(&machine);
+        fn.inline_asms[0].source_asm_unique_id = 0U;
+        okay = okay && !minic_riscv_machine_select_core_subset(&machine, &plan);
+        fn.inline_asms[0].source_asm_unique_id = 87U;
+        okay = okay && minic_core_function_add_inline_asm_register_clobber(
+            &fn, 0U, "t0", 2U) && minic_core_function_verify(&fn) &&
+            !minic_riscv_machine_select_core_subset(&machine, &plan);
+    }
+    if (okay && fixed_register) {
+        minic_machine_function_destroy(&machine);
+        target.fixed_register_read = NULL;
+        okay = !minic_riscv_machine_select_core_subset(&machine, &plan);
+    }
 done:
     if (!okay) fprintf(stderr, "RV%u core-CFG exported=%d at %s\n",
         xlen, exported_island, stage);
@@ -1383,9 +1496,16 @@ done:
 }
 
 int main(void) {
-    if (!run(32U, false, false) || !run(64U, false, false) ||
-        !run(32U, true, false) || !run(64U, true, false) ||
-        !run(32U, false, true) || !run(64U, false, true) ||
+    if (!run(32U, false, false, false, false) ||
+        !run(64U, false, false, false, false) ||
+        !run(32U, true, false, false, false) ||
+        !run(64U, true, false, false, false) ||
+        !run(32U, false, true, false, false) ||
+        !run(64U, false, true, false, false) ||
+        !run(32U, false, false, true, false) ||
+        !run(64U, false, false, true, false) ||
+        !run(32U, false, false, false, true) ||
+        !run(64U, false, false, false, true) ||
         !run_scalar(32U, false) || !run_scalar(64U, false) ||
         !run_scalar(32U, true) || !run_scalar(64U, true) ||
         !run_memory_family(32U) || !run_memory_family(64U) ||
@@ -1410,6 +1530,6 @@ int main(void) {
         fprintf(stderr, "RV_CORE_MIR_CFG=FAIL\n");
         return 1;
     }
-    puts("RV_CORE_MIR_CFG=PASS architectures=2 prologue_isolated=1 exported_reachability=1 core_scalar=1 memory_effects=1 record_memory=1 frame_varargs=1 indirect_call=1 stack_marshalling=1 wide_split=1 aggregate_parameter=1 aggregate_call=1 abi_plan_reject=1 fail_closed=1");
+    puts("RV_CORE_MIR_CFG=PASS architectures=2 prologue_isolated=1 exported_reachability=1 core_scalar=1 memory_effects=1 record_memory=1 frame_varargs=1 indirect_call=1 stack_marshalling=1 wide_split=1 aggregate_parameter=1 aggregate_call=1 source_asm=1 fixed_register=1 abi_plan_reject=1 fail_closed=1");
     return 0;
 }

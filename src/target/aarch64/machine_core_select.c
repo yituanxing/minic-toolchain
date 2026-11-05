@@ -2,6 +2,7 @@
 #include "target/aarch64/machine_frame_select.h"
 #include "target/aarch64/machine_opcode.h"
 #include "target/aarch64/machine_source_asm.h"
+#include "target/aarch64/asm_contract_internal.h"
 #include "target/aarch64/abi.h"
 #include "target/aarch64/neon_emit.h"
 #include "target/common/core_block_walk.h"
@@ -1669,29 +1670,37 @@ static bool a64_binary(A64CoreSelection *sel,
     bool lhs_signed, rhs_signed, dest_signed, pointer;
     unsigned int bits;
     uint32_t opcode = 0U;
-    bool compare;
+    bool compare, shift;
     const MinicCoreValueId left = ins->value.binary.left;
     const MinicCoreValueId right = ins->value.binary.right;
     const bool pointer_less = ins->kind == MINIC_CORE_INSTRUCTION_POINTER_LESS;
     if (left >= fn->value_count || right >= fn->value_count) return false;
     compare = ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_LESS ||
         pointer_less || ins->kind == MINIC_CORE_INSTRUCTION_SCALAR_EQUAL;
+    shift = ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_LEFT ||
+        ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_RIGHT;
     if (pointer_less) {
         if (!minic_multi_direct_pointer_less_shape(fn, ins)) return false;
     } else if (compare) {
         if (!minic_multi_direct_integer_compare_shape(fn, ins,
+            &lhs_width, &rhs_width, &lhs_signed, &rhs_signed)) return false;
+    } else if (shift) {
+        if (!minic_multi_direct_integer_shift_shape(fn, ins,
             &lhs_width, &rhs_width, &lhs_signed, &rhs_signed)) return false;
     } else if (!minic_multi_direct_integer_binary_shape(fn, ins,
         &lhs_width, &rhs_width, &lhs_signed, &rhs_signed)) return false;
     if (!a64_value_width(fn, fn->values[left].core_type_id, &lhs_width,
             &lhs_signed, &pointer) ||
         !a64_value_width(fn, fn->values[right].core_type_id, &rhs_width,
-            &rhs_signed, &pointer) || lhs_width != rhs_width ||
+            &rhs_signed, &pointer) || (!shift && lhs_width != rhs_width) ||
         !a64_value_width(fn, ins->core_type_id, &dest_width,
             &dest_signed, &pointer)) return false;
     bits = lhs_width == 8U ? 64U : 32U;
     if (!a64_load_core(sel, left, A64_T0, bits) ||
-        !a64_load_core(sel, right, A64_T1, bits)) return false;
+        (shift && lhs_width < 4U &&
+         !a64_normalize(sel, lhs_width, lhs_signed, A64_T0)) ||
+        !a64_load_core(sel, right, A64_T1,
+            rhs_width == 8U ? 64U : 32U)) return false;
     if (compare) {
         const int64_t cc = ins->kind == MINIC_CORE_INSTRUCTION_SCALAR_EQUAL
             ? 0 : lhs_signed && !pointer_less ? 11 : 3;
@@ -1853,6 +1862,48 @@ static bool a64_core_instruction(A64CoreSelection *sel,
         return a64_dynamic_stack_alloc(sel, ins);
     case MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM:
         return a64_opaque_hint(sel, ins);
+    case MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM: {
+        const MinicCoreInlineAsm *source;
+        MinicMachineSourceAsmInput input = {0};
+        MinicMachineInstruction candidate = {0};
+        if (ins->result != MINIC_CORE_VALUE_INVALID ||
+            ins->value.structured_inline_asm.operand_count != 0U ||
+            ins->value.structured_inline_asm.inline_asm_id >=
+                fn->inline_asm_count ||
+            !minic_core_function_type_is_kind(fn, ins->core_type_id,
+                MINIC_CORE_TYPE_VOID)) return false;
+        source = &fn->inline_asms[
+            ins->value.structured_inline_asm.inline_asm_id];
+        if (!source->is_volatile || source->is_goto ||
+            source->register_clobber_count != 0U ||
+            source->resolved_immediate_count != 0U ||
+            source->symbol_reference_count != 0U ||
+            source->deferred_immediate_symbol != NULL ||
+            source->target_machine_form_variant != 0U ||
+            (source->target_machine_form_id != 0U &&
+             source->target_machine_form_id != AARCH64_MACHINE_ASM_BARRIER) ||
+            source->template_text == NULL) return false;
+        /* The empty GNU memory-clobber has no hardware opcode. It is still
+         * a real ordered compiler effect with this exact Core origin. */
+        if (source->template_length == 0U)
+            return minic_machine_builder_emit_compiler_barrier(&sel->builder);
+        input.source_bytes = source->template_text;
+        input.source_byte_length = source->template_length;
+        input.target_machine_form_id = source->target_machine_form_id;
+        input.effects = (source->has_memory_clobber ?
+            MINIC_MACHINE_EFFECT_COMPILER_BARRIER : 0U) |
+            MINIC_MACHINE_EFFECT_VOLATILE;
+        input.has_unique_id = source->source_asm_unique_id != 0U;
+        input.unique_id = source->source_asm_unique_id;
+        candidate.kind = MINIC_MACHINE_INSTRUCTION_SOURCE_ASM;
+        candidate.effects = input.effects | MINIC_MACHINE_EFFECT_SOURCE_ASM;
+        candidate.source_asm_template = source->template_text;
+        candidate.source_asm_length = source->template_length;
+        candidate.source_asm_machine_form_id = source->target_machine_form_id;
+        return minic_aarch64_machine_source_asm_validate(sel->ctx->target,
+            &candidate, NULL) &&
+            minic_machine_builder_emit_source_asm_typed(&sel->builder, &input);
+    }
     case MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_LOAD:
     case MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_STORE:
     case MINIC_CORE_INSTRUCTION_FIXED_VECTOR128_XOR:
@@ -2035,6 +2086,11 @@ static bool a64_core_instruction(A64CoreSelection *sel,
             minic_multi_direct_scalar_store_shape(fn, ins,
                 &width, &sign, &ptr)) ||
             !a64_load_core(sel, address, A64_T0, 64U)) return false;
+        /* The shared scalar shape deliberately leaves byte width unset for
+         * pointers: it supplies only their Core kind. AAPCS64 LP64 always
+         * transfers those values as a full X register, including volatile
+         * pointer lvalues, not a fabricated 32-bit integer access. */
+        if (ptr) width = 8U;
         switch (width) {
         case 1U: op = load ? (sign ? MINIC_A64_MACHINE_LDRSB :
             MINIC_A64_MACHINE_LDRB) : MINIC_A64_MACHINE_STRB; break;
@@ -2076,6 +2132,58 @@ static bool a64_branch(A64CoreSelection *sel, size_t to) {
     const MinicMachineOperand target[] = {a64_block(to)};
     return a64_emit(sel, MINIC_A64_MACHINE_B, target, 1U) &&
         minic_machine_builder_add_successor(&sel->builder, to);
+}
+
+/* AAPCS64 record results are ABI objects, not scalar SSA values. Their
+ * physical return classification is already shared with the direct LP64
+ * planner; only the actual x0/x1, v0..v3, or caller-owned x8 transport is
+ * selected here. The indirect result pointer was saved by the MIR prologue
+ * before calls could clobber x8. */
+static bool a64_return_record(A64CoreSelection *sel,
+    const MinicCoreTerminator *term, MinicCoreTypeId type) {
+    const MinicCoreFunction *fn = sel->ctx->fn;
+    const MinicCoreObjectId object = term->return_object;
+    size_t at, bytes, chunks, count, width, i;
+    if (object >= fn->object_count || fn->objects == NULL ||
+        !minic_lp64_core_equal_unqualified(fn->type_context,
+            type, fn->objects[object].core_type_id)) return false;
+    if (minic_multi_empty_record_core(fn->type_context, type)) return true;
+    if (!minic_lp64_frame_plan_object(sel->ctx->frame_plan, object, &at))
+        return false;
+    if (minic_multi_fp_return_record_core(fn->type_context,
+            type, &count, &width)) {
+        if (count > 4U || (width != 4U && width != 8U)) return false;
+        for (i = 0U; i < count; ++i)
+            if (!minic_a64_machine_emit_frame_load(&sel->builder, &sel->view,
+                    minic_a64_owned_slot(at + i * width),
+                    (MinicA64FrameRegister){width == 4U ?
+                        MINIC_A64_REG_S : MINIC_A64_REG_D, (unsigned int)i},
+                    (MinicA64ScratchPolicy){0U, 0U})) return false;
+        return true;
+    }
+    if (sel->ctx->machine_frame->has_indirect_return) {
+        if (!minic_aarch64_indirect_record_core(fn->type_context,
+                type, &bytes) || bytes <= 16U ||
+            !minic_a64_machine_emit_frame_address(&sel->builder, &sel->view,
+                minic_a64_owned_slot(at), A64_T0,
+                (MinicA64ScratchPolicy){0U, 0U}) ||
+            !minic_a64_machine_emit_frame_load(&sel->builder, &sel->view,
+                minic_a64_owned_slot(
+                    sel->ctx->machine_frame->indirect_return_offset),
+                (MinicA64FrameRegister){MINIC_A64_REG_X, A64_T1},
+                (MinicA64ScratchPolicy){0U, 0U})) return false;
+        return a64_copy_bytes(sel, bytes, false, false);
+    }
+    if (!minic_multi_gp_record_core(fn->type_context,
+            type, &bytes, &chunks) || chunks == 0U || chunks > 2U)
+        return false;
+    for (i = 0U; i < chunks; ++i) {
+        const size_t remaining = bytes - i * 8U;
+        if (!a64_pack_record_chunk(sel, &sel->view, at + i * 8U,
+                remaining >= 8U ? 8U : remaining,
+                (unsigned int)i, 0U, true)) return false;
+    }
+    return true;
 }
 
 static bool a64_terminate(A64CoreSelection *sel, size_t core_id) {
@@ -2145,6 +2253,14 @@ static bool a64_terminate(A64CoreSelection *sel, size_t core_id) {
     case MINIC_CORE_TERMINATOR_RETURN: {
         const MinicCoreTypeId ret_type = minic_core_function_return_type(fn);
         MinicCoreAbiValueShape shape;
+        const MinicCoreType *return_type = minic_core_type_get(
+            fn->type_context,
+            minic_core_type_unqualified(fn->type_context, ret_type));
+        if (return_type != NULL &&
+            return_type->kind == MINIC_CORE_TYPE_RECORD)
+            return a64_return_record(sel, term, ret_type) &&
+                minic_a64_machine_emit_epilogue(&sel->builder,
+                    sel->ctx->machine_frame);
         if (a64_wide_integer(fn, ret_type) ||
             a64_wide_float(fn, ret_type)) {
             size_t at;

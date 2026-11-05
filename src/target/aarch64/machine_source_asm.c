@@ -1,4 +1,5 @@
 #include "target/aarch64/machine_source_asm.h"
+#include "target/aarch64/asm_contract_internal.h"
 
 #include <string.h>
 
@@ -17,7 +18,9 @@ static bool a64_machine_opaque_hint(const MinicMachineInstruction *instruction) 
     size_t i;
     if (instruction == NULL || instruction->source_asm_template == NULL ||
         instruction->source_asm_length == 0U ||
-        instruction->source_asm_machine_form_id != 0U ||
+        (instruction->source_asm_machine_form_id != 0U &&
+         instruction->source_asm_machine_form_id !=
+             AARCH64_MACHINE_ASM_BARRIER) ||
         instruction->source_asm_machine_form_variant != 0U ||
         instruction->operand_count != 0U ||
         instruction->implicit_count != 0U ||

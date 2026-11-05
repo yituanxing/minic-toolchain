@@ -1,6 +1,32 @@
 #ifndef MINIC_TARGET_X86_64_ASM_CONTRACT_H
 #define MINIC_TARGET_X86_64_ASM_CONTRACT_H
 #include "target/backend.h"
+#include <string.h>
+
+/* One immutable seven-form grammar shared by x86 Source admission and the
+ * physical MachineIR verifier. It has no frontend or emitter dependency. */
+static inline unsigned int minic_x86_64_zero_barrier_form_exact(
+    const char *text, size_t length) {
+    static const char *const exact[] = {
+        "lock;addl$0,-4(%%rsp)",
+        "mfence", "lfence", "sfence", "pause", "rep;nop", "fninit"
+    };
+    char compact[64];
+    size_t i, n = 0U;
+    if (text == NULL || length == 0U || length >= sizeof(compact))
+        return 0U;
+    for (i = 0U; i < length; ++i) {
+        const char c = text[i];
+        if (c == ' ' || c == '\t') continue;
+        if (c == '\n' || c == '\r' || c == '\0') return 0U;
+        compact[n++] = c;
+    }
+    compact[n] = '\0';
+    for (i = 0U; i < sizeof(exact) / sizeof(exact[0]); ++i)
+        if (strcmp(exact[i], compact) == 0)
+            return (unsigned int)(i + 1U);
+    return 0U;
+}
 /* The source qualifier chooses a semantic family once. Core transports this
  * number opaquely; the machine emitter still validates native operand
  * registers/widths and hardware side effects before emitting any bytes.

@@ -1,6 +1,7 @@
 #include "target/x86_64/machine_opcode.h"
 #include "target/x86_64/codegen_options.h"
 #include "target/x86_64/machine_target_state.h"
+#include "target/x86_64/asm_contract.h"
 
 #include <limits.h>
 #include <string.h>
@@ -941,13 +942,56 @@ bool minic_x86_64_machine_validate_selected(const MinicMachineFunction *function
     }
 }
 
-/* This first x86 ISA policy deliberately does not certify a Linux inline
- * assembly template. Source qualification/operand materialization will be
- * attached only when that entire target-specific path has been migrated. */
+/* Machine ownership of the complete zero-operand Linux ordering family.
+ * Every form has an exact Source-validated variant. No other source syntax
+ * can pass this physical proof, even if its textual mnemonic looks similar. */
 bool minic_x86_64_machine_validate_source_asm(const MinicTargetInfo *target,
     const MinicMachineInstruction *instruction, void *context) {
-    (void)target; (void)instruction; (void)context;
-    return false;
+    unsigned int form;
+    unsigned int expected;
+    (void)context;
+    if (target == NULL || target->architecture != MINIC_TARGET_ARCH_X86_64 ||
+        instruction == NULL ||
+        instruction->kind != MINIC_MACHINE_INSTRUCTION_SOURCE_ASM ||
+        !instruction->has_core_origin ||
+        !instruction->has_source_asm_unique_id ||
+        instruction->source_asm_unique_id == 0U ||
+        instruction->operands != NULL || instruction->operand_count != 0U ||
+        instruction->source_asm_template == NULL ||
+        instruction->source_asm_terminates_block ||
+        instruction->source_asm_permits_fallthrough ||
+        (instruction->effects & MINIC_MACHINE_EFFECT_VOLATILE) == 0U)
+        return false;
+    if (instruction->source_asm_machine_form_id == 0U &&
+        instruction->source_asm_machine_form_variant == 0U &&
+        instruction->source_asm_length == 0U)
+        return instruction->effects ==
+                (MINIC_MACHINE_EFFECT_SOURCE_ASM |
+                 MINIC_MACHINE_EFFECT_VOLATILE) &&
+            instruction->implicit_count == 0U &&
+            instruction->implicit == NULL;
+    if (instruction->source_asm_machine_form_id !=
+            MINIC_X86_MACHINE_ASM_ZERO_BARRIER ||
+        (form = minic_x86_64_zero_barrier_form_exact(
+            instruction->source_asm_template,
+            instruction->source_asm_length)) == 0U ||
+        instruction->source_asm_machine_form_variant != form)
+        return false;
+    expected = MINIC_MACHINE_EFFECT_SOURCE_ASM |
+        MINIC_MACHINE_EFFECT_VOLATILE;
+    if (form <= 4U) expected |= MINIC_MACHINE_EFFECT_COMPILER_BARRIER;
+    if (form == 1U) {
+        const MinicMachineRegisterEffect *flags;
+        expected |= MINIC_MACHINE_EFFECT_MEMORY_READ |
+            MINIC_MACHINE_EFFECT_MEMORY_WRITE;
+        if (instruction->implicit_count != 1U ||
+            (flags = instruction->implicit) == NULL ||
+            flags->reg.bank != MINIC_MACHINE_REGISTER_FLAGS ||
+            flags->reg.number != 0U || flags->reg.width_bits != 64U ||
+            flags->access != MINIC_MACHINE_REGISTER_CLOBBER) return false;
+    } else if (instruction->implicit_count != 0U ||
+               instruction->implicit != NULL) return false;
+    return instruction->effects == expected;
 }
 
 #undef R
