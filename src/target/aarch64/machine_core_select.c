@@ -2308,7 +2308,8 @@ static bool a64_linux_cmpxchg_source(A64CoreSelection *sel,
             MINIC_MACHINE_REGISTER_WRITE : MINIC_MACHINE_REGISTER_READ;
         if (ops[i].operand_index != i || ops[i].value >= fn->value_count ||
             ops[i].kind != kind || ops[i].has_fixed_register_binding ||
-            ops[i].has_tied_output || ops[i].physical_read_write)
+            ops[i].has_tied_output ||
+            ops[i].physical_read_write != (i == 2U))
             return false;
         bindings[i] = a64_gp(regs[i], 64U, access);
         bindings[i].asm_name = (char *)names[i];
@@ -2478,7 +2479,8 @@ bool minic_aarch64_machine_prove_selected_source_asm(
                 ops[i].value >= fn->value_count ||
                 ops[i].kind != kinds[i] ||
                 ops[i].has_fixed_register_binding ||
-                ops[i].has_tied_output || ops[i].physical_read_write)
+                ops[i].has_tied_output ||
+                ops[i].physical_read_write != (i == 2U))
                 return false;
         return aarch64_asm_core_integer(fn, ops[0].value, true, 8U, -1) &&
             aarch64_asm_core_integer(fn, ops[1].value,

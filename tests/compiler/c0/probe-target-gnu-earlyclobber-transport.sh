@@ -68,7 +68,10 @@ fi
 echo "TARGET_GNU_EARLY_STAGE=rv64_generic_compile_success"
 if ! grep -Eq 'add a0, a0,' "$tmp/riscv64.s"; then
     echo "TARGET_GNU_EARLY_STAGE=rv64_generic_assembly_mismatch" >&2
-    sed -n '1,100p' "$tmp/riscv64.s" >&2
+    echo "TARGET_GNU_EARLY_DIAG=rv64_add_registers" >&2
+    grep -nE '(^|[[:space:]])add[[:space:]]' "$tmp/riscv64.s" >&2 || true
+    echo "TARGET_GNU_EARLY_DIAG=rv64_assembly_tail" >&2
+    tail -n 95 "$tmp/riscv64.s" >&2
     exit 1
 fi
 if ! grep -E 'CORE_ASM_OPERAND_PLAN owner=2 source_form=[0-9a-f]{16} .* gnu_early=3 ' \
