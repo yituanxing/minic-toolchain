@@ -199,6 +199,8 @@ static bool minild_loongarch_static_write_instruction(
     size_t i;
     bool sub;
 
+    (void)state;
+
     if (minild_loongarch_static_instruction_width(reloc->type) >= 4U) {
         instruction = load_u32le(slot);
     }
@@ -225,6 +227,23 @@ static bool minild_loongarch_static_write_instruction(
                                   UINT32_C(0x54000000)
                               ? UINT32_C(0x4c000001)
                               : UINT32_C(0x4c000000);
+            store_u32le(slot, instruction);
+            return true;
+        }
+
+        /* A locally resolved undefined weak denotes the absolute address
+         * zero, even when the output is static PIE.  GNU BFD's Dec 2024
+         * correction replaces pcaddi with addi.w rd,$zero,S+A; encoding
+         * a PC-relative delta instead would depend on the load address. */
+        if (reloc->type == R_LARCH_PCREL20_S2 && undefined_weak) {
+            if ((instruction & UINT32_C(0xfe000000)) !=
+                    UINT32_C(0x18000000) ||
+                !minild_nonriscv_signed_fits(target, 12U)) {
+                return false;
+            }
+            instruction = UINT32_C(0x02800000) |
+                          (instruction & UINT32_C(0x1f)) |
+                          (((uint32_t)target & UINT32_C(0xfff)) << 10U);
             store_u32le(slot, instruction);
             return true;
         }
@@ -289,13 +308,10 @@ static bool minild_loongarch_static_write_instruction(
                      ? UINT32_C(0x1a000000) : UINT32_C(0x14000000))) {
             return false;
         }
-        if (reloc->type == R_LARCH_PCALA_HI20 && undefined_weak &&
-            !state->static_pie_requested) {
-            /* Ordinary GNU static ET_EXEC links materialize undefined
-             * weak PCALA references as absolute S+A (usually zero),
-             * rewriting pcalau12i to lu12i.w.  Kernel static PIE under a
-             * script instead retains PCALA's PC-relative 20-bit field;
-             * see the frozen Linux weak __start/__stop references. */
+        if (reloc->type == R_LARCH_PCALA_HI20 && undefined_weak) {
+            /* An undefined weak resolved locally is zero in both ET_EXEC
+             * and static PIE.  pcalau12i must become absolute lu12i.w;
+             * retaining PCALA would make zero dependent on the image VMA. */
             if (!minild_nonriscv_signed_fits(target, 32U)) {
                 return false;
             }
@@ -306,9 +322,7 @@ static bool minild_loongarch_static_write_instruction(
             reloc->type == R_LARCH_GOT_PC_HI20 ||
             reloc->type == R_LARCH_TLS_IE_PC_HI20) {
             value = minild_loongarch_pc32_page_delta(target, place);
-            if (!minild_nonriscv_signed_fits(value, 32U) &&
-                !(reloc->type == R_LARCH_PCALA_HI20 && undefined_weak &&
-                  state->static_pie_requested)) {
+            if (!minild_nonriscv_signed_fits(value, 32U)) {
                 return false;
             }
         } else if (reloc->type == R_LARCH_TLS_LE_HI20_R) {

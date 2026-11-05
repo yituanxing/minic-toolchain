@@ -51,6 +51,29 @@ also the first check in the GitHub ELF boundary workflow, with its additional
 CI-only checks retained.  New-head full Linux/QEMU P1 remains a separate
 required recertification gate.
 
+### Versioned GNU relocation oracles
+
+The Linux CI deliberately uses its distro-provided GNU cross-linkers, while
+MiniLD must preserve the correct ABI semantics across linker versions.
+For AArch64 kernel ET_DYN, GNU's generic DSO emits a `.dynamic` anchor in
+the reserved first GOT slot whereas MiniLD's explicitly selected resolved
+kernel mode does not produce that dynamic section; compare real GOT symbol
+slots and relocations while validating each mode's reserved-slot rule.
+
+For LoongArch undefined-weak PC-relative references, Binutils corrected
+old behavior in December 2024: a locally resolved undefined weak must yield
+absolute zero even in static PIE, rather than a load-address-dependent PC
+delta.  MiniLD's static target owner applies that rule to the affected
+instruction encodings.  The GNU oracle reports an older known-broken BFD
+PCALA encoding separately, requires all unaffected instruction bytes to
+match, and requires exact output with corrected BFD.  Do not regress to a
+known historical linking error solely to get byte-for-byte equality with an
+older test toolchain.
+
+The CI boundary Make invocation uses `--keep-going`: one failing GNU oracle
+must not prevent the remaining independent target checks from reporting
+their results.  The overall step still fails if any prerequisite fails.
+
 There are six explicit ELF descriptors (RV32, RV64, x86-64, i386 setup,
 AArch64 and LoongArch64).  They use named initializers so extending a target
 contract cannot silently shift positional ABI callbacks.  The public

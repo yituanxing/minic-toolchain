@@ -50,7 +50,10 @@ jobs:
           MINILD_REQUIRE_QEMU: '1'
           MINILD_REQUIRE_GNU: '1'
         run: |
-          make MODE=release CFLAGS=-Werror \
+          # Complete independent GNU-oracle probes even if an earlier one
+          # fails, so a single CI run reports the whole correctness class.
+          # -k still exits nonzero when any prerequisite failed.
+          make --keep-going MODE=release CFLAGS=-Werror \
             check-minild-five-arch-linux-linker-boundary \
             check-minild-multitarget-relocatable \
             check-minild-multitarget-static \

@@ -6,7 +6,7 @@ set -Eeuo pipefail
 for tool in as ld python3 sed; do
     command -v "$tool" >/dev/null || exit 8
 done
-work=$(mktemp -d "/tmp/minild-static-load-page.XXXXXX")
+work=$(mktemp -d "${TMPDIR:-/tmp}/minild-static-load-page.XXXXXX")
 finish() {
     if [[ "$(printenv MINILD_LOAD_PAGE_KEEP || true)" == 1 ]]; then
         echo "MINILD_LOAD_PAGE_ARTIFACTS=$work"

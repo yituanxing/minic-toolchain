@@ -6,7 +6,7 @@ set -Eeuo pipefail
 for exe in as ld readelf objcopy python3; do
   command -v "$exe" >/dev/null
 done
-work=$(mktemp -d "/tmp/minild-i386-rel.XXXXXX")
+work=$(mktemp -d "${TMPDIR:-/tmp}/minild-i386-rel.XXXXXX")
 trap 'rm -rf -- "$work"' EXIT
 
 cat >"$work/input.s" <<'ASM'
