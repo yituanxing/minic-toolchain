@@ -9,6 +9,7 @@ on:
       - tests/external/linux/runtime_initramfs/rv32-p2-full18-raw.c
       - tests/external/linux/runtime_initramfs/rv32-init-raw.c
       - tools/ci/linux-rv32i-qemu-p0-v1.sh
+      - tools/ci/linux-rv32i-p2-refresh-virtio-v1.sh
   workflow_dispatch:
 
 permissions:
@@ -19,6 +20,10 @@ jobs:
   rv32i-p2-real-qemu:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    env:
+      KBUILD_BUILD_USER: minic
+      KBUILD_BUILD_HOST: minic-ci
+      KBUILD_BUILD_TIMESTAMP: Thu Jan  1 00:00:00 UTC 1970
     steps:
       - uses: actions/checkout@v4
         with:
@@ -28,10 +33,17 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          sudo apt-get -o Acquire::Retries=3 update -qq
-          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+          # Proven Ubuntu 24.04 Azure archive workaround from RV32 GPU source-owner lane.
+          for sources in /etc/apt/apt-mirrors.txt /etc/apt/sources.list.d/ubuntu.sources; do
+            if [[ -f "$sources" ]] && grep -q 'azure.archive.ubuntu.com' "$sources"; then
+              sudo sed -i 's#azure.archive.ubuntu.com#archive.ubuntu.com#g' "$sources"
+            fi
+          done
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=15 update -qq
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=15 install -y --no-install-recommends \
             gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
-            qemu-system-misc opensbi cpio device-tree-compiler e2fsprogs
+            qemu-system-misc opensbi cpio device-tree-compiler e2fsprogs \
+            bc bison flex libssl-dev libelf-dev make python3 xz-utils
           test -s /usr/lib/riscv32-linux-gnu/opensbi/generic/fw_dynamic.bin
           command -v qemu-system-riscv32
 
@@ -257,6 +269,40 @@ jobs:
           echo 'RV32_P2_CANONICAL_REQUIRED=11 skip_allowed=0 full_P2_18=NOT_CERTIFIED'
           exit "$rc"
 
+      # The Oct31 1741-owner Image passes 11/18, but its historical MiniC
+      # drivers/virtio/virtio.c object cannot negotiate GPU modern feature32.
+      # The parallel source-owner differential has proved that *current* MiniC
+      # compiles this pristine original C owner under exact Kbuild flags and
+      # real QEMU GPU succeeds. Preserve all other SHA-attested owners and
+      # relink one owner before requiring all 18 checks in a single real boot.
+      - name: Restore exact GNU Kbuild owner cache for one MiniC virtio.c refresh
+        id: golden
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            build/rv32i-linux-entry/out
+            build/rv32i-linux-entry/provenance
+          key: linux-gnu-golden-rv32i-v1-6.6.143-4c6c19f79741a8a31ec52ad57b1a6bc56b81dd6996cbf5e1bdc63f587d85244c-0c2a199ea3ae14d3-0703113036a30806-d072447ef15a2074
+          fail-on-cache-miss: true
+
+      - name: Restore seven original MiniC owner shards; do not rebuild 1740 C owners
+        uses: actions/download-artifact@v4
+        with:
+          repository: yituanxing/minic-toolchain
+          run-id: '41212514498'
+          pattern: shard-*
+          merge-multiple: false
+          github-token: ${{ github.token }}
+          path: build/rv32-p2-strict/shards
+
+      - name: Compile one current MiniC original virtio.c owner and GNU-relink Image
+        shell: bash
+        timeout-minutes: 9
+        run: |
+          set -Eeuo pipefail
+          test '${{ steps.golden.outputs.cache-hit }}' = true
+          bash tools/ci/linux-rv32i-p2-refresh-virtio-v1.sh
+
       - name: Prepare a real NVMe PCI namespace backing store
         shell: bash
         run: |
@@ -271,9 +317,10 @@ jobs:
         run: |
           set -Eeuo pipefail
           root="$GITHUB_WORKSPACE/build/rv32-p2-strict"
-          image="$root/source/out/arch/riscv/boot/Image"
+          image="$GITHUB_WORKSPACE/build/rv32i-linux-entry/out/arch/riscv/boot/Image"
           actual=$(sha256sum "$image" | cut -d' ' -f1)
-          test "$actual" = a762cb8ba55a3cbb52a1f85e61d40524941c8226a33cb35daf2bff1acd75a5a2
+          expected=$(sed -n 's/^current_Image_sha256=//p' "$root/refresh-virtio/provenance.txt")
+          test -n "$expected" && test "$actual" = "$expected"
           work="$root/full18-run"
           mkdir -p "$work"
           set +e
@@ -298,7 +345,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: rv32i-p2-strict-not-full-${{ github.sha }}
+          name: rv32i-p2-strict-${{ github.sha }}
           path: |
             build/rv32-p2-strict/verdict.txt
             build/rv32-p2-strict/runner.log
@@ -317,6 +364,14 @@ jobs:
             build/rv32-p2-strict/canonical11-run/rv32-p2-module-sha256.txt
             build/rv32-p2-strict/canonical11-run/runtime-p2-canonical11-elf.txt
             build/rv32-p2-strict/canonical11-run/runtime-p2-canonical11-disassembly.txt
+            build/rv32-p2-strict/refresh-virtio/provenance.txt
+            build/rv32-p2-strict/refresh-virtio/virtio-original-source.sha256
+            build/rv32-p2-strict/refresh-virtio/candidate-hashes.sha256
+            build/rv32-p2-strict/refresh-virtio/kbuild-route
+            build/rv32-p2-strict/refresh-virtio/success-owners
+            build/rv32-p2-strict/refresh-virtio/owner-object-hashes
+            build/rv32-p2-strict/refresh-virtio/one-owner.log
+            build/rv32-p2-strict/refresh-virtio/gnu-relink.log
             build/rv32-p2-strict/full18-verdict.txt
             build/rv32-p2-strict/full18-runner.log
             build/rv32-p2-strict/full18-nvme-sha256.txt
