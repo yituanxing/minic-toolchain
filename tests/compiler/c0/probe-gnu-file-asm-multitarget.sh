@@ -1362,9 +1362,12 @@ SRC
         -o "$work/loong-pte.gnu.elf"
     "$MINIC_CC" --target=loongarch64-linux -S \
         "$work/loong-pte.i" -o "$work/loong-pte.minic.s"
-    for op in 'll.d $t4' 'sc.d $t4' 'beqz $t4' 'dbar 0x700'; do
-        grep -Fq "$op" "$work/loong-pte.minic.s"
-    done
+    # MachineIR now retains the source GNU ASM's original tabs. Check the
+    # exact LL/SC operand roles and retry label, independent of whitespace.
+    grep -Eq '(^|[[:space:]]|:)ll\.d[[:space:]]+\$t4,[[:space:]]*\$t1,[[:space:]]*0([[:space:]]|$)' "$work/loong-pte.minic.s"
+    grep -Eq '(^|[[:space:]])sc\.d[[:space:]]+\$t4,[[:space:]]*\$t1,[[:space:]]*0([[:space:]]|$)' "$work/loong-pte.minic.s"
+    grep -Eq '(^|[[:space:]])beqz[[:space:]]+\$t4,[[:space:]]*1b([[:space:]]|$)' "$work/loong-pte.minic.s"
+    grep -Fq 'dbar 0x700' "$work/loong-pte.minic.s"
     "$cross_cc" -x assembler "$work/loong-pte.minic.s" \
         -o "$work/loong-pte.minic.elf"
     for flavor in gnu minic; do

@@ -414,10 +414,27 @@ static bool rv_transport_type(const RvCoreSelection *sel,
     *size = type->size;
     return true;
 }
+static bool rv_wide_integer(RvCoreSelection *sel, MinicCoreTypeId id,
+    bool *sign);
 static bool rv_core_constant(RvCoreSelection *sel,
     const MinicCoreInstruction *ins) {
     unsigned bytes;
     bool sign, pointer;
+    /* An ILP32 integer constant may occupy the finalized two-register
+     * scalar slot. Keep both words from the signed Core payload, including
+     * bit 63, rather than rejecting every uint64_t/long long constant. */
+    if (sel->xlen == 32U) {
+        bool wide_sign;
+        if (rv_wide_integer(sel, ins->core_type_id, &wide_sign)) {
+            const uint64_t bits = (uint64_t)ins->value.integer_value;
+            (void)wide_sign;
+            return rv_li(sel, RV_T0, (int64_t)(int32_t)(uint32_t)bits) &&
+                rv_value_chunk(sel, ins->result, 0U, RV_T0, false) &&
+                rv_li(sel, RV_T0,
+                    (int64_t)(int32_t)(uint32_t)(bits >> 32U)) &&
+                rv_value_chunk(sel, ins->result, 1U, RV_T0, false);
+        }
+    }
     return rv_type(sel, ins->core_type_id, &bytes, &sign, &pointer) &&
         rv_li(sel, RV_T0, ins->value.integer_value) &&
         rv_normalize(sel, RV_T0, bytes, sign) &&
@@ -1023,11 +1040,17 @@ static bool rv_core_wide_unary(RvCoreSelection *sel,
     if (ins->value.operand >= fn->value_count ||
         !rv_wide_integer(sel,
             fn->values[ins->value.operand].core_type_id, &source_sign) ||
-        !rv_wide_integer(sel, ins->core_type_id, &result_sign) ||
+        (ins->kind != MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO &&
+         !rv_wide_integer(sel, ins->core_type_id, &result_sign)) ||
         !rv_value_chunk(sel, ins->value.operand, 0U, RV_T0, true) ||
         !rv_value_chunk(sel, ins->value.operand, 1U, RV_T1, true))
         return false;
     switch (ins->kind) {
+    case MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO:
+        return rv_rrr(sel, MINIC_RISCV_MACHINE_OR,
+                RV_T0, RV_T0, RV_T1) &&
+            rv_rr(sel, MINIC_RISCV_MACHINE_SEQZ, RV_T0, RV_T0) &&
+            rv_store(sel, ins->result, RV_T0);
     case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_NOT:
         if (!rv_rr(sel, MINIC_RISCV_MACHINE_NOT, RV_T0, RV_T0) ||
             !rv_rr(sel, MINIC_RISCV_MACHINE_NOT, RV_T1, RV_T1)) return false;

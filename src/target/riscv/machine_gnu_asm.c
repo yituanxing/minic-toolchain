@@ -434,12 +434,16 @@ static bool riscv_machine_validate_source_asm(
 static bool riscv_machine_emit_source_asm(FILE *output,
     const MinicMachineFunction *function, const MinicMachineInstruction *ins,
     const MinicMachineGNUAsmLabels *labels, void *context) {
+    const bool rv64 = function != NULL && function->target != NULL &&
+        minic_riscv_target_isa(function->target).xlen == 64U;
     (void)context;
     if (output == NULL || function == NULL || labels == NULL ||
         !riscv_source_asm_expand(NULL, function, ins, labels) ||
-        fputs("# MINIC_SOURCE_INLINE_ASM_BEGIN\n  ", output) < 0 ||
+        fputs(rv64 ? "# MINIC_RV64I_ASM_BEGIN\n  " :
+            "# MINIC_SOURCE_INLINE_ASM_BEGIN\n  ", output) < 0 ||
         !riscv_source_asm_expand(output, function, ins, labels)) return false;
-    return fputs("\n# MINIC_SOURCE_INLINE_ASM_END\n", output) >= 0;
+    return fputs(rv64 ? "\n# MINIC_RV64I_ASM_END\n" :
+        "\n# MINIC_SOURCE_INLINE_ASM_END\n", output) >= 0;
 }
 
 bool minic_riscv_machine_gnu_asm_policy(

@@ -51,12 +51,22 @@ static bool rv64_emit_typed_function(
     MinicRiscvCoreMachinePlan bridge = {0};
     MinicMachineFunction machine = {0};
     MinicMachineGNUAsmPolicy policy = {0};
+    size_t source_asm_id;
     bool okay = false;
     bool frame_ready = false;
     if (out == NULL || module == NULL || target == NULL ||
         function == NULL || symbol == NULL || symbol->symbol_name == NULL ||
         facts == NULL || isa == NULL ||
         isa->abi != MINIC_RISCV_ABI_LP64) goto done;
+    /* The historical RV64I origin audit trusts these delimiters as source
+     * provenance. Validate every source template before the typed writer
+     * can emit the exact same trusted marker pair. */
+    for (source_asm_id = 0U; source_asm_id < function->inline_asm_count;
+         ++source_asm_id) {
+        const MinicCoreInlineAsm *source = &function->inline_asms[source_asm_id];
+        if (!minic_riscv64_source_asm_marker_safe(
+                source->template_text, source->template_length)) goto done;
+    }
     if (!minic_riscv64_core_function_admit_profile(
             true, function, &abi, true, facts, storage) ||
         !minic_riscv64_asm_function_plan_build(

@@ -294,7 +294,9 @@ lacks src/target/backend.h 'qualify_inline_asm'
 lacks src/target/backend.c 'frontend/ast.h'
 lacks src/target/backend.c 'minic_source_backend_'
 has src/target/target_info.c 'target->machine_builtin_form_lookup('
-lacks src/target/loongarch64/call_emit.c '"__builtin_loongarch_"'
+# Only the active Machine builtin selector may consume target-qualified
+# forms; the old Core->FILE* CALL emitter has been deleted.
+lacks src/target/loongarch64/machine_builtin_select.c '"__builtin_loongarch_"'
 has src/target/common/direct_residual_plan.c \
   'minic_multi_direct_integer_cast_plan('
 # Once attached, Common/Direct admission and AArch64 integer lowering only
@@ -414,7 +416,8 @@ lacks src/compiler/c_lower/core_lower_asm_target.c 'local_inc'
 # One shared Core frame-level-0 verifier, two target-owned SP machine forms;
 # level >0 and RISC-V/x86 frame ABI remain unchanged.
 has src/target/aarch64/residual_emit.c 'MINIC_CORE_CALL_FRAME_ADDRESS_FRAME'
-has src/target/loongarch64/residual_emit.c 'MINIC_CORE_CALL_FRAME_ADDRESS_FRAME'
+has src/target/loongarch64/machine_select.c 'MINIC_CORE_CALL_FRAME_ADDRESS_FRAME'
+has src/target/loongarch64/machine_select.c 'minic_multi_direct_call_frame_level0_shape('
 
 # Linux local_add_return uses ONE x86 target ISA XADD contract and existing
 # Core REGISTER_READWRITE+MEMORY_READWRITE effects, never a new Core opcode.
@@ -445,8 +448,9 @@ lacks src/core/core_ir.h 'constant_integer_bits;'
 has src/compiler/c_lower/core_lower_calls.c 'minic_const_eval_arithmetic_to_integer('
 has src/compiler/c_lower/core_lower_calls.c 'minic_target_info_machine_builtin_form('
 has src/compiler/c_lower/core_lower_calls.c 'MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT'
-has src/target/loongarch64/call_emit.c 'loongarch_builtin_immediate_value('
-lacks src/target/loongarch64/call_emit.c 'immediate_arg->has_constant_integer'
+has src/target/loongarch64/machine_builtin_select.c 'builtin_core_constant('
+has src/target/loongarch64/machine_builtin_select.c 'view.core_return_type_id != instruction->core_type_id'
+lacks src/target/loongarch64/machine_builtin_select.c 'immediate_arg->has_constant_integer'
 lacks src/compiler/c_lower/core_lower_calls.c '__builtin_loongarch_csrrd_w'
 
 # Genuine LoongArch C original __percpu_{read,write,add,and,or} and
@@ -535,11 +539,14 @@ lacks src/target/riscv64/abi.c 'minic_riscv64_integer_aggregate_member_type('
 exists src/target/common/core_instruction_family.h
 has src/target/common/core_instruction_family.h 'minic_core_instruction_semantic_family('
 for consumer in src/target/x86_64/machine_emit.c \
-                src/target/riscv32/rv32_emit.c \
                 src/target/riscv64/core_admission.c \
                 src/target/common/direct_instruction_semantics.c; do
   has "$consumer" 'minic_core_instruction_semantic_family('
 done
+# RV32 production is now an explicit Core->physical MachineIR selector,
+# not the removed FILE* family dispatcher.
+has src/target/riscv32/rv32_emit.c 'minic_riscv_machine_select_core_subset('
+has src/target/riscv/machine_core_select.c 'MINIC_CORE_INSTRUCTION_INTEGER_ADD'
 lacks src/target/common/direct_instruction_semantics.c 'minic_multi_direct_memory_machine_kind('
 has src/target/common/program_visit.c 'minic_program_module_function_selected('
 has src/target/common/core_function_plan.c 'minic_core_function_verify(function)'
@@ -615,7 +622,8 @@ lacks src/target/backend.h 'qualified_input_mnemonic_count'
 lacks src/compiler/c_lower/core_lower_asm_target.c 'tpidr_el1'
 lacks src/compiler/c_lower/core_lower_asm_target.c '.altinstructions'
 has src/target/backend_source.c 'minic_loongarch64_qualify_inline_asm'
-has src/target/loongarch64/residual_emit.c 'minic_loongarch64_emit_qualified_structured_asm'
+has src/target/loongarch64/machine_source_asm.c 'minic_loongarch64_select_core_source_asm('
+has src/target/loongarch64/machine_select.c 'minic_loongarch64_select_core_source_asm('
 has src/compiler/c_lower/core_lower_asm_scalar_forms.c 'e->kind == MINIC_EXPRESSION_FIXED_REGISTER'
 has src/compiler/c_lower/core_lower_asm_scalar_forms.c 'minic_target_info_fixed_register_write_supported('
 has src/target/loongarch64/asm_contract.c 'loongarch64_dbar_hint'
@@ -631,11 +639,12 @@ lacks src/frontend/parser_function.c 'MINIC_TARGET_ARCH_LOONGARCH64'
 # all five backends; only machine instruction/terminator handlers are private.
 exists src/target/common/core_block_walk.h
 for consumer in src/target/x86_64/codegen.c \
-                src/target/riscv32/rv32_emit.c \
                 src/target/riscv64/core_codegen.c; do
   has "$consumer" 'minic_core_block_walk_next('
   has "$consumer" 'minic_core_block_instruction_at('
 done
+has src/target/riscv32/rv32_emit.c 'minic_riscv_machine_select_core_subset('
+has src/target/riscv/machine_core_select.c 'minic_machine_builder_mark_core_block('
 # Direct LP64 machine dispatch now has one Common owner: each ISA supplies
 # only native family callbacks, GP transport and terminal instructions.
 exists src/target/common/direct_machine_dispatch.h
@@ -662,12 +671,24 @@ done
 # Persistent source fingerprints: reviewed code never silently falls back to
 # "already scanned" after a source change. New source owners must be indexed.
 python3 tools/ci/minic-backend-review-ledger.py --check
-for arch in aarch64 loongarch64; do
+for arch in aarch64; do
   block="src/target/$arch/block_emit.c"
   has "$block" 'minic_multi_direct_machine_dispatch('
   has "$block" "static bool ${arch}_machine_emit_family("
   lacks "$block" 'minic_core_block_walk_next('
 done
+# LoongArch64 retired the direct text emitter. Its production root selects
+# typed Machine instructions, with Core provenance checked by Common.
+has src/target/loongarch64/codegen.c \
+  '.select_machine = minic_loongarch64_select_machine'
+has src/target/loongarch64/machine_select.c \
+  'minic_machine_builder_emit_selected('
+has src/target/loongarch64/machine_select.c \
+  'minic_machine_builder_emit_core_source_asm('
+has src/target/loongarch64/machine_select.c \
+  'minic_multi_direct_integer_cast_plan('
+has src/target/loongarch64/machine_select.c \
+  'minic_loongarch64_typed_scalar_form_matches_template('
 has src/target/common/core_function_facts.c 'facts->variadic_address_results = *variadic_results;'
 has src/target/common/core_function_plan.c 'minic_core_function_facts_analyze_collect('
 lacks src/target/common/core_function_plan.c 'for (i = 0U; i < function->instruction_count;'
@@ -700,7 +721,7 @@ has src/target/x86_64/frame.c 'minic_x86_64_outgoing_call_plans_prepare('
 has src/target/x86_64/machine_call.c 'x86_resolve_call_view('
 lacks src/target/x86_64/call_plan.c 'while (low < high)'
 
-for arch in aarch64 loongarch64; do
+for arch in aarch64; do
   block="src/target/$arch/block_emit.c"
   residual="src/target/$arch/residual_emit.c"
   header="src/target/$arch/residual_emit.h"
@@ -786,7 +807,7 @@ lacks src/target/riscv64/core_codegen.c 'minic_riscv64_power_of_two('
 
 lacks src/target/riscv32/rv32_frame.c 'frame->isa = &t->riscv_isa'
 lacks src/target/riscv32/rv32_internal.h 'const MinicRiscvIsa *isa;'
-has src/target/riscv32/rv32_emit.c 'rv32_emit_integer_instruction('
+has src/target/riscv/machine_core_select.c 'MINIC_CORE_INSTRUCTION_INTEGER_ADD'
 # RV32/RV64 share machine-neutral ELF symbol semantics at the common owner.
 exists src/target/riscv/function_symbol.h
 [[ ! -e src/target/riscv64/function_symbol.h ]] || fail 'duplicate old RV64 symbol owner'
@@ -831,10 +852,10 @@ has src/target/loongarch64/codegen.c 'out, target, module, module_decl, fn, fact
 has src/target/loongarch64/codegen.c 'minic_loongarch64_memory_helpers_end(out)'
 lacks src/target/loongarch64/codegen.c 'open_memstream('
 lacks src/target/loongarch64/codegen.c 'forward_and_compact('
-lacks src/target/loongarch64/block_emit.c 'MINI_LOONG_SSA_WRITEBACK'
-lacks src/target/loongarch64/call_emit.c 'MINI_LOONG_SSA_PARAMETER'
-lacks src/target/loongarch64/residual_emit.c 'MINI_LOONG_INLINE_ASM_BEGIN'
-lacks src/target/loongarch64/residual_emit.c 'MINI_LOONG_INLINE_ASM_END'
+lacks src/target/loongarch64/machine_select.c 'MINI_LOONG_SSA_WRITEBACK'
+lacks src/target/loongarch64/machine_select.c 'MINI_LOONG_SSA_PARAMETER'
+lacks src/target/loongarch64/machine_source_asm.c 'MINI_LOONG_INLINE_ASM_BEGIN'
+lacks src/target/loongarch64/machine_source_asm.c 'MINI_LOONG_INLINE_ASM_END'
 [[ ! -e src/target/loongarch64/machine_text_opt.c ]] || fail 'Loong machine-text optimizer is still present'
 [[ ! -e src/target/loongarch64/machine_text_opt.h ]] || fail 'Loong machine-text optimizer header is still present'
 has src/frontend/parser_type.c 'minic_target_info_named_builtin_type('
@@ -967,22 +988,23 @@ lacks src/target/riscv32/rv32_abi_plan.c 'plan->call_count = function->instructi
 has src/target/riscv32/rv32_abi_plan.h 'size_t instruction_id;'
 lacks src/target/riscv32/rv32_emit.c 'rv32_scalar_storage_words(f, f->return_type, &bits)'
 has src/target/riscv32/rv32_frame.c 'varargs_offset'
-has src/target/riscv32/rv32_emit.c 'MINIC_CORE_INSTRUCTION_VARIADIC_ARGUMENT_ADDRESS'
+has src/target/riscv/machine_core_select.c 'MINIC_CORE_INSTRUCTION_VARIADIC_ARGUMENT_ADDRESS'
 has src/target/target_info.c '.variadic_linear_slot_bytes = 4U,'
 lacks src/target/riscv32/rv32_emit.c 'defining variadic functions requires ILP32 va_list ABI'
 has src/target/riscv32/rv32_frame.c 'max_outgoing_stack_words'
 lacks src/target/riscv32/rv32_frame.c 'minic_core_function_facts_analyze('
 has src/target/riscv32/rv32_frame.c 'rv32_fixed_stack('
 has src/target/riscv32/rv32_memory_emit.c 'MINIC_CORE_INSTRUCTION_DYNAMIC_STACK_ALLOC'
-has src/target/riscv32/rv32_emit.c 'fr.has_dynamic_stack'
+has src/target/riscv32/rv32_frame.c 'frame->has_dynamic_stack = facts->uses_dynamic_stack_alloc'
+has src/target/riscv/machine_core_select.c 'frame->has_dynamic_stack ? RV_S0 : RV_SP'
 has src/target/riscv32/rv32_call.c 'rv32_function_abi_call('
 lacks src/target/riscv32/rv32_frame.c 'minic_core_call_view_build('
 lacks src/target/riscv32/rv32_call.c 'minic_riscv32_abi_place('
 lacks src/target/riscv32/rv32_call.c 'minic_core_call_view_build('
 lacks src/target/riscv32/rv32_call.c 'for (size_t j = 0U; j < idx; ++j)'
-has src/target/riscv32/rv32_emit.c 'rv32_emit_integer_instruction('
-has src/target/riscv32/rv32_emit.c 'rv32_emit_fp_instruction('
-has src/target/riscv32/rv32_emit.c 'rv32_emit_memory_instruction('
+has src/target/riscv32/rv32_emit.c 'minic_riscv_machine_select_core_subset('
+has src/target/riscv/machine_core_select.c 'MINIC_CORE_INSTRUCTION_FLOAT_ADD'
+has src/target/riscv/machine_core_select.c 'MINIC_CORE_INSTRUCTION_LOAD'
 lacks src/target/riscv32/rv32_emit.c 'call __mulsi3'
 lacks src/target/riscv32/rv32_emit.c 'call __adddf3'
 lacks src/target/riscv32/rv32_emit.c 'minic_riscv_emit_record_copy_bytes('
@@ -1084,10 +1106,10 @@ done
 has src/target/x86_64/machine_emit.c 'minic_core_integer_bitscan_shape('
 has src/target/riscv64/scalar_emit.c 'minic_core_integer_bitscan_shape('
 has src/target/aarch64/integer_emit.c 'minic_core_integer_overflow_shape('
-has src/target/loongarch64/integer_emit.c 'minic_core_integer_overflow_shape('
+has src/target/loongarch64/machine_select.c 'minic_core_integer_overflow_shape('
 lacks src/target/common/direct_instruction_semantics.c 'minic_multi_direct_fp_instruction_kind('
 lacks src/target/common/direct_instruction_semantics.h 'minic_multi_direct_integer_overflow_shape('
-has src/target/riscv32/rv32_emit.c 'MINIC_CORE_FAMILY_INTEGER_SCALAR'
+has src/target/riscv/machine_core_select.c 'MINIC_CORE_INSTRUCTION_INTEGER_ADD'
 has src/target/riscv64/core_admission.c 'MINIC_CORE_FAMILY_INTEGER_SCALAR'
 has src/target/riscv64/core_codegen.c 'minic_core_instruction_is_floating_scalar(instruction->kind)'
 has src/target/common/direct_instruction_semantics.c 'MINIC_CORE_FAMILY_FLOATING_SCALAR'
@@ -1178,12 +1200,12 @@ for source in \
   src/target/riscv64/legalize.h \
   src/target/riscv64/record_snapshot.c \
   src/target/riscv64/codegen_internal.h \
-  src/target/loongarch64/integer_emit.c \
+  src/target/loongarch64/machine_select.c \
   src/target/common/direct_instruction_semantics.c \
   src/target/common/direct_instruction_semantics.h; do
   lacks "$source" 'minic_type_'
 done
-lacks src/target/loongarch64/integer_emit.c 'minic_lp64_scalar_integer_width'
+lacks src/target/loongarch64/machine_select.c 'minic_lp64_scalar_integer_width'
 has src/target/riscv32/rv32_frame.c 'minic_core_frame_reserve('
 # Entire RISC-V Core SSA frame planning now uses one pass across blocks,
 # not a peak pass followed by an identical assignment re-traversal.
@@ -1684,7 +1706,7 @@ for source in src/target/riscv32/rv32_fp_emit.c \
 done
 has src/target/common/direct_instruction_semantics.c 'minic_core_floating_shape('
 has src/target/aarch64/fp_emit.c 'minic_multi_direct_floating_shape('
-has src/target/loongarch64/fp_emit.c 'minic_multi_direct_floating_shape('
+has src/target/loongarch64/machine_select.c 'minic_multi_direct_floating_shape('
 lacks src/target/riscv32/rv32_fp_emit.c 'rv32_resolved_'
 lacks src/target/riscv64/fp_emit.c 'minic_riscv64_emit_integer_conversion_for_program('
 
@@ -1698,7 +1720,7 @@ lacks src/target/common/core_call_view.c 'view.return_type ='
 lacks src/target/common/core_call_view.c 'view.parameter_types ='
 has src/target/common/core_abi_value_shape.h 'minic_core_abi_value_shape('
 for source in src/target/aarch64/call_emit.c \
-              src/target/loongarch64/call_emit.c \
+              src/target/loongarch64/machine_select.c \
               src/target/x86_64/machine_call.c \
               src/target/riscv32/rv32_call.c \
               src/target/riscv64/call_emit.c; do
@@ -1713,10 +1735,10 @@ for source in src/target/aarch64/call_emit.c \
   lacks "$source" 'ins->type'
   lacks "$source" 'instruction->type'
 done
-has src/target/loongarch64/call_emit.c 'minic_target_info_machine_builtin_form('
-has src/target/loongarch64/call_emit.c 'ins->core_type_id != builtin_call.core_return_type_id'
-lacks src/target/loongarch64/call_emit.c 'minic_type_equal('
-lacks src/target/loongarch64/call_emit.c 'ins->type'
+has src/target/loongarch64/machine_builtin_select.c 'minic_target_info_machine_builtin_form('
+has src/target/loongarch64/machine_builtin_select.c 'view.core_return_type_id != instruction->core_type_id'
+lacks src/target/loongarch64/machine_builtin_select.c 'minic_type_equal('
+lacks src/target/loongarch64/machine_builtin_select.c 'ins->type'
 lacks src/target/riscv32/rv32_call.c 'rv32_resolved_'
 lacks src/target/riscv64/call_emit.c 'minic_riscv64_emit_integer_conversion_for_program('
 

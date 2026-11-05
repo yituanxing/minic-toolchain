@@ -241,9 +241,13 @@ static bool run(unsigned xlen, bool compiler_barrier,
         strstr(text, "  jalr zero, 0(x31)") != NULL &&
         strstr(text, "  ret") != NULL;
     if (source_asm)
-        okay = okay && strstr(text, "# MINIC_SOURCE_INLINE_ASM_BEGIN") &&
+        okay = okay && strstr(text, xlen == 64U ?
+                "# MINIC_RV64I_ASM_BEGIN" :
+                "# MINIC_SOURCE_INLINE_ASM_BEGIN") &&
             strstr(text, "  addi x0, x0, 0") &&
-            strstr(text, "# MINIC_SOURCE_INLINE_ASM_END");
+            strstr(text, xlen == 64U ?
+                "# MINIC_RV64I_ASM_END" :
+                "# MINIC_SOURCE_INLINE_ASM_END");
     if (fixed_register)
         okay = okay && strstr(text, "  mv x5, x4") &&
             strstr(text, "  mv x4, x5") &&
@@ -300,8 +304,10 @@ static bool run(unsigned xlen, bool compiler_barrier,
         okay = okay && !minic_riscv_machine_select_core_subset(&machine, &plan);
     }
 done:
-    if (!okay) fprintf(stderr, "RV%u core-CFG exported=%d at %s\n",
-        xlen, exported_island, stage);
+    if (!okay) fprintf(stderr,
+        "RV%u core-CFG exported=%d source_asm=%d fixed=%d barrier=%d at %s\n",
+        xlen, exported_island, source_asm, fixed_register,
+        compiler_barrier, stage);
     if (out != NULL) fclose(out);
     minic_machine_function_destroy(&machine);
     rv32_function_abi_plan_destroy(&abi32);
