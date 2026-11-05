@@ -473,6 +473,10 @@ static unsigned int a64_source_goto_kind(const MinicMachineInstruction *ins) {
             ins->source_asm_length, true, false)) return 2U;
     if (aarch64_linux_cap_goto_text(ins->source_asm_template,
             ins->source_asm_length, true, true)) return 3U;
+    if (aarch64_linux_cap_goto_text(ins->source_asm_template,
+            ins->source_asm_length, false, false)) return 4U;
+    if (aarch64_linux_cap_goto_text(ins->source_asm_template,
+            ins->source_asm_length, false, true)) return 5U;
     return 0U;
 }
 
@@ -480,27 +484,53 @@ static bool a64_source_goto_policy_form(const MinicMachineFunction *fn,
     const MinicMachineInstruction *ins, void *context) {
     const unsigned int kind = a64_source_goto_kind(ins);
     const MinicMachineOperand *value, *label;
-    const char *const name = kind == 3U ? "l_no" : "l_yes";
+    const bool baked = kind == 4U || kind == 5U;
+    const bool deferred = baked && ins != NULL &&
+        strstr(ins->source_asm_template, "%0") != NULL;
+    const char *const name = kind == 3U || kind == 5U ?
+        "l_no" : "l_yes";
     (void)context;
     if (fn == NULL || fn->target == NULL ||
         fn->target->architecture != MINIC_TARGET_ARCH_AARCH64 ||
         kind == 0U || ins->source_asm_machine_form_id != 0U ||
         ins->source_asm_machine_form_variant != 0U ||
-        ins->operand_count != 2U || ins->operands == NULL ||
+        ins->operand_count != (deferred ? 2U : baked ? 1U : 2U) ||
+        ins->operands == NULL ||
         ins->implicit_count != 0U ||
         !ins->source_asm_terminates_block ||
         !ins->source_asm_permits_fallthrough ||
         ins->effects != (MINIC_MACHINE_EFFECT_SOURCE_ASM |
                          MINIC_MACHINE_EFFECT_VOLATILE |
                          MINIC_MACHINE_EFFECT_BRANCH)) return false;
-    value = &ins->operands[0];
-    label = &ins->operands[1];
-    if (value->asm_constraint == NULL ||
-        strcmp(value->asm_constraint, "i") != 0 ||
-        label->kind != MINIC_MACHINE_OPERAND_BLOCK ||
+    label = &ins->operands[baked && !deferred ? 0U : 1U];
+    if (label->kind != MINIC_MACHINE_OPERAND_BLOCK ||
         label->asm_constraint != NULL ||
         label->asm_name == NULL || strcmp(label->asm_name, name) != 0)
         return false;
+    if (baked && !deferred) return true;
+    value = &ins->operands[0];
+    if (value->asm_constraint == NULL ||
+        strcmp(value->asm_constraint, "i") != 0)
+        return false;
+    if (deferred) {
+        static const char prefix[] = "__minic_deferred_asm_immediate_";
+        const char *const symbol = value->kind ==
+            MINIC_MACHINE_OPERAND_SYMBOL ?
+            value->value.symbol.name : NULL;
+        const unsigned char *digits;
+        if (value->kind != MINIC_MACHINE_OPERAND_SYMBOL ||
+            value->asm_name != NULL ||
+            value->value.symbol.relocation !=
+                MINIC_A64_RELOC_SOURCE_IMMEDIATE ||
+            value->value.symbol.addend != 0 || symbol == NULL ||
+            strncmp(symbol, prefix, sizeof(prefix) - 1U) != 0)
+            return false;
+        digits = (const unsigned char *)(symbol + sizeof(prefix) - 1U);
+        if (*digits == '\0') return false;
+        for (; *digits; ++digits)
+            if (*digits < '0' || *digits > '9') return false;
+        return true;
+    }
     if (kind == 1U)
         return value->kind == MINIC_MACHINE_OPERAND_SYMBOL &&
             value->asm_name == NULL &&
@@ -526,17 +556,25 @@ static bool a64_source_goto_policy_operand(FILE *output,
     unsigned char modifier, void *context) {
     const MinicMachineOperand *op;
     const unsigned int kind = a64_source_goto_kind(ins);
+    const bool baked = kind == 4U || kind == 5U;
+    const bool deferred = baked && ins != NULL &&
+        strstr(ins->source_asm_template, "%0") != NULL;
     (void)context;
     if (!a64_source_goto_policy_binding(fn, ins, index, NULL))
         return false;
     op = &ins->operands[index];
-    if (index == 1U) {
+    if (index == (baked && !deferred ? 0U : 1U)) {
         if (modifier != 'l') return false;
         if (output == NULL) return true;
         return labels != NULL && labels->names != NULL &&
             op->value.block_id < labels->count &&
             labels->names[op->value.block_id] != NULL &&
             fputs(labels->names[op->value.block_id], output) >= 0;
+    }
+    if (deferred) {
+        if (modifier != 0U) return false;
+        return output == NULL ||
+            fputs(op->value.symbol.name, output) >= 0;
     }
     if (kind == 1U) {
         if (modifier != 'c') return false;
@@ -577,6 +615,59 @@ static bool a64_machine_pstate_alternative(
                          MINIC_MACHINE_EFFECT_COMPILER_BARRIER);
 }
 
+/* Three exact Linux source-ASM families: exclusive compare/wait, MMIO
+ * dependency ordering and fault-recoverable unaligned zero-pad. Never accept
+ * arbitrary GNU template bytes or unbound compiler-selected registers. */
+static bool a64_machine_extra_source_form(const MinicMachineInstruction *ins) {
+    const bool cmpwait = ins != NULL &&
+        ins->source_asm_machine_form_id == AARCH64_MACHINE_ASM_CMPWAIT;
+    const bool dep = ins != NULL &&
+        ins->source_asm_machine_form_id == AARCH64_MACHINE_ASM_IO_DEPENDENCY;
+    const bool zeropad = ins != NULL &&
+        ins->source_asm_machine_form_id == AARCH64_MACHINE_ASM_ZEROPAD;
+    const unsigned int width = cmpwait ? aarch64_linux_cmpwait_form(
+        ins->source_asm_template,ins->source_asm_length) : 0U;
+    const size_t count = dep ? 2U : 3U;
+    const unsigned int effects = MINIC_MACHINE_EFFECT_SOURCE_ASM |
+        (cmpwait ? MINIC_MACHINE_EFFECT_VOLATILE |
+                   MINIC_MACHINE_EFFECT_MEMORY_READ |
+                   MINIC_MACHINE_EFFECT_MEMORY_WRITE :
+         dep ? MINIC_MACHINE_EFFECT_VOLATILE |
+               MINIC_MACHINE_EFFECT_COMPILER_BARRIER :
+               MINIC_MACHINE_EFFECT_MEMORY_READ);
+    size_t i;
+    if (!(cmpwait || dep || zeropad) ||
+        (cmpwait && (width != 1U && width != 2U &&
+                     width != 4U && width != 8U)) ||
+        (dep && !aarch64_linux_io_dependency_form(
+            ins->source_asm_template,ins->source_asm_length)) ||
+        (zeropad && !aarch64_linux_zeropad_form(
+            ins->source_asm_template,ins->source_asm_length)) ||
+        ins->source_asm_machine_form_variant != (cmpwait ? width : 0U) ||
+        ins->source_asm_terminates_block ||
+        ins->source_asm_permits_fallthrough ||
+        ins->effects != effects ||
+        ins->operand_count != count || ins->operands == NULL ||
+        ins->implicit_count != 0U)
+        return false;
+    for (i = 0U; i < count; ++i) {
+        const MinicMachineOperand *op = &ins->operands[i];
+        const char *constraint = i == 0U ? (dep ? "=r" : "=&r") :
+            (cmpwait && i == 1U ? "+Q" :
+             zeropad && i == 2U ? "Q" : "r");
+        if (op->kind != MINIC_MACHINE_OPERAND_REGISTER ||
+            op->asm_name != NULL || op->asm_constraint == NULL ||
+            strcmp(op->asm_constraint,constraint) != 0 ||
+            op->value.physical.reg.bank != MINIC_MACHINE_REGISTER_GENERAL ||
+            op->value.physical.reg.number != 9U + i ||
+            op->value.physical.reg.width_bits != 64U ||
+            op->value.physical.access != (i == 0U ?
+                MINIC_MACHINE_REGISTER_WRITE : MINIC_MACHINE_REGISTER_READ))
+            return false;
+    }
+    return true;
+}
+
 bool minic_aarch64_machine_source_asm_validate(
     const MinicTargetInfo *target, const MinicMachineInstruction *instruction,
     void *context) {
@@ -591,6 +682,7 @@ bool minic_aarch64_machine_source_asm_validate(
         (instruction->effects & MINIC_MACHINE_EFFECT_SOURCE_ASM) != 0U &&
         (a64_machine_opaque_hint(instruction) ||
          a64_machine_pstate_alternative(instruction) ||
+         a64_machine_extra_source_form(instruction) ||
          minic_machine_source_asm_template_preflight(&function,
              instruction, &a64_source_goto_policy) ||
          minic_machine_source_asm_template_preflight(&function,
@@ -617,13 +709,59 @@ bool minic_aarch64_machine_source_asm_emit(
         !minic_aarch64_machine_source_asm_validate(
             function->target, instruction, context))
         return false;
-    if (a64_source_goto_kind(instruction) != 0U)
+    if (a64_machine_extra_source_form(instruction)) {
+        if (instruction->source_asm_machine_form_id ==
+                AARCH64_MACHINE_ASM_IO_DEPENDENCY)
+            return fputs("  eor x9, x10, x10\n"
+                         "  cbnz x9, .\n",output) != EOF;
+        if (instruction->source_asm_machine_form_id ==
+                AARCH64_MACHINE_ASM_ZEROPAD)
+            return fputs(
+                "1: ldr x9, [x11]\n"
+                "2:\n"
+                "  .pushsection __ex_table, \"a\"\n"
+                "  .align 2\n"
+                "  .long (1b - .)\n"
+                "  .long (2b - .)\n"
+                "  .short 4\n"
+                "  .short ((9 << 0) | (10 << 5))\n"
+                "  .popsection\n",output) != EOF;
+        {
+            const unsigned int width =
+                instruction->source_asm_machine_form_variant;
+            const char *load = width == 1U ? "ldxrb" :
+                width == 2U ? "ldxrh" : "ldxr";
+            const char *reg = width == 8U ? "x" : "w";
+            return fprintf(output,
+                "  sevl\n"
+                "  wfe\n"
+                "  %s %s9, [x10]\n"
+                "  eor %s9, %s9, %s11\n"
+                "  cbnz %s9, 1f\n"
+                "  wfe\n"
+                "1:\n",
+                load,reg,reg,reg,reg,reg) >= 0;
+        }
+    }
+    if (a64_source_goto_kind(instruction) != 0U) {
+        const unsigned int kind = a64_source_goto_kind(instruction);
+        const bool deferred = (kind == 4U || kind == 5U) &&
+            strstr(instruction->source_asm_template, "%0") != NULL;
+        if (deferred &&
+            (instruction->operand_count != 2U ||
+             instruction->operands == NULL ||
+             fprintf(output,
+                 "# MINIC_DEFERRED_ASM_IMMEDIATE requires inline specialization\n"
+                 "  .extern %s\n",
+                 instruction->operands[0].value.symbol.name) < 0))
+            return false;
         return minic_machine_source_asm_template_emit(output, function,
             instruction, labels, &a64_source_goto_policy) &&
             ((instruction->source_asm_length != 0U &&
               instruction->source_asm_template[
                   instruction->source_asm_length - 1U] == '\n') ||
              fputc('\n', output) != EOF);
+    }
     if (a64_machine_tlbi_form(instruction))
         return minic_machine_source_asm_template_emit(output, function,
             instruction, labels, &a64_tlbi_template_policy) &&

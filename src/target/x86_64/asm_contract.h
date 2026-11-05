@@ -222,6 +222,8 @@ unsigned int minic_x86_64_linux_crash_misc_snapshot_form(const char *, size_t);
 bool minic_x86_64_linux_alt_reloc_selftest_form(const char *, size_t);
 bool minic_x86_64_linux_real_mode_far_jump_form(const char *, size_t);
 bool minic_x86_64_linux_unreachable_opaque(const char *, size_t);
+/* Shared exact GNU whitespace compaction for source/physical MMIO contracts. */
+bool minic_x86_64_compact_asm_equals(const char *, size_t, const char *);
 unsigned int minic_x86_64_linux_mmio_read_form(const char *, size_t);
 unsigned int minic_x86_64_linux_mmio_write_form(const char *, size_t);
 /* Fixed-SI/DI, fixed-CX repeated string I/O with a DX port operand. */

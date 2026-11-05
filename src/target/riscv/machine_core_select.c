@@ -1701,7 +1701,7 @@ static bool rv_core_payload_memory(RvCoreSelection *sel,
     }
     return true;
 }
-static bool rv_core_memory(RvCoreSelection *sel,
+static bool rv_core_memory_impl(RvCoreSelection *sel,
     const MinicCoreInstruction *ins) {
     const MinicCoreFunction *fn = sel->plan->core;
     const bool load = ins->kind == MINIC_CORE_INSTRUCTION_LOAD ||
@@ -1755,6 +1755,38 @@ static bool rv_core_memory(RvCoreSelection *sel,
     ops[1] = rv_addr(sel->xlen, RV_T0);
     if (!rv_emit_volatile(sel, opcode, is_volatile, ops, 2U)) return false;
     return !load || rv_store(sel, ins->result, RV_T1);
+}
+
+/* Emit a focused, failure-only type/placement diagnostic for the current
+ * RV32 Lua LOAD frontier. The trace does not relax any machine admission. */
+static bool rv_core_memory(RvCoreSelection *sel,
+    const MinicCoreInstruction *ins) {
+    const bool ok = rv_core_memory_impl(sel,ins);
+    if (!ok && sel != NULL && ins != NULL && sel->xlen == 32U &&
+        ins->kind == MINIC_CORE_INSTRUCTION_LOAD &&
+        getenv("MINIC_RV_MACHINE_TRACE") != NULL) {
+        const MinicCoreFunction *fn = sel->plan->core;
+        const MinicCoreType *type = fn->type_context == NULL ? NULL :
+            minic_core_type_get(fn->type_context,
+                minic_core_type_unqualified(fn->type_context,
+                    ins->core_type_id));
+        const MinicCoreValueId address = ins->value.load.address;
+        const size_t inferred = minic_riscv_address_alignment(fn,address);
+        size_t value_offset = SIZE_MAX;
+        const bool has_value_slot = rv_value_slot(sel,ins->result,
+            &value_offset);
+        (void)fprintf(stderr,
+            "RV32_TYPED_REJECT_LOAD type_id=%u type_kind=%d size=%zu align=%zu layout=%d address=%u address_align=%zu result=%u result_slot=%d result_offset=%zu frame_size=%zu\n",
+            (unsigned int)ins->core_type_id,
+            type == NULL ? -1 : (int)type->kind,
+            type == NULL ? 0U : type->size,
+            type == NULL ? 0U : type->alignment,
+            type != NULL && type->has_layout ? 1 : 0,
+            (unsigned int)address,inferred,
+            (unsigned int)ins->result,has_value_slot ? 1 : 0,
+            value_offset,sel->plan->frame->frame_size);
+    }
+    return ok;
 }
 
 /* Checked arithmetic has two distinct results: the C pointer's stored

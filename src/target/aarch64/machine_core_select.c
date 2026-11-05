@@ -1216,10 +1216,18 @@ static bool a64_linux_source_asm_goto(A64CoreSelection *sel,
         source->template_text, source->template_length, true, false);
     const bool cap_likely = aarch64_linux_cap_goto_text(
         source->template_text, source->template_length, true, true);
-    const bool cap = cap_unlikely || cap_likely;
-    const char *label_name = cap_likely ? "l_no" : "l_yes";
+    const bool cap_baked_unlikely = aarch64_linux_cap_goto_text(
+        source->template_text, source->template_length, false, false);
+    const bool cap_baked_likely = aarch64_linux_cap_goto_text(
+        source->template_text, source->template_length, false, true);
+    const bool cap_baked = cap_baked_unlikely || cap_baked_likely;
+    const bool cap_deferred = cap_baked &&
+        source->deferred_immediate_symbol != NULL;
+    const bool cap = cap_unlikely || cap_likely || cap_baked;
+    const char *label_name = (cap_likely || cap_baked_likely) ?
+        "l_no" : "l_yes";
     MinicMachineOperand bindings[2] = {{0}};
-    size_t emit, after, target;
+    size_t emit, after, target, binding_count;
     if (ins->kind != MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM ||
         !source->is_goto || !source->is_volatile || !(jump || cap) ||
         source->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_NONE ||
@@ -1228,23 +1236,42 @@ static bool a64_linux_source_asm_goto(A64CoreSelection *sel,
         source->has_memory_clobber || source->implicit_memory_effect ||
         source->register_clobber_count != 0U ||
         source->symbol_reference_count != 0U ||
-        source->deferred_immediate_symbol != NULL ||
-        source->resolved_immediate_count != 1U ||
+        (!cap_baked && source->deferred_immediate_symbol != NULL) ||
+        source->resolved_immediate_count != (cap_baked ? 0U : 1U) ||
         source->goto_second_target != MINIC_CORE_BLOCK_INVALID ||
         source->template_text == NULL ||
         ins_id >= fn->instruction_count ||
         source->goto_target >= fn->block_count ||
         !sel->reachable[source->goto_target] ||
         sel->blocks[source->goto_target] == SIZE_MAX ||
-        source->goto_label_names[0] == NULL ||
-        strcmp(source->goto_label_names[0], label_name) != 0)
+        (cap_baked ? source->goto_label_names[0] != NULL :
+            (source->goto_label_names[0] == NULL ||
+             strcmp(source->goto_label_names[0], label_name) != 0)))
         return false;
     emit = sel->goto_emit[ins_id];
     after = sel->goto_continue[ins_id];
     if (emit == SIZE_MAX || after != emit + 1U) return false;
     target = sel->blocks[source->goto_target];
-    immediate = &source->resolved_immediates[0];
-    if (cap) {
+    immediate = cap_baked ? NULL : &source->resolved_immediates[0];
+    if (cap_baked) {
+        /* The generic one-label Core seam either bakes a proven decimal
+         * feature or retains the exact %0 plus its deferred-symbol witness.
+         * The latter is discovery-only and intentionally cannot link. */
+        if (cap_deferred !=
+            (strstr(source->template_text, "%0") != NULL)) return false;
+        if (cap_deferred) {
+            bindings[0] = a64_symbol(source->deferred_immediate_symbol,
+                MINIC_A64_RELOC_SOURCE_IMMEDIATE);
+            bindings[0].asm_constraint = "i";
+            bindings[1] = a64_block(target);
+            bindings[1].asm_name = (char *)label_name;
+            binding_count = 2U;
+        } else {
+            bindings[0] = a64_block(target);
+            bindings[0].asm_name = (char *)label_name;
+            binding_count = 1U;
+        }
+    } else if (cap) {
         if (immediate->kind != MINIC_CORE_INLINE_ASM_IMMEDIATE_INTEGER ||
             immediate->integer < 0 || immediate->integer >= (1 << 15) ||
             immediate->symbol != NULL || immediate->byte_addend != 0 ||
@@ -1263,13 +1290,16 @@ static bool a64_linux_source_asm_goto(A64CoreSelection *sel,
         bindings[0].value.symbol.addend = immediate->byte_addend;
         bindings[0].asm_name = immediate->asm_name;
     }
-    bindings[0].asm_constraint = "i";
-    bindings[1] = a64_block(target);
-    bindings[1].asm_name = source->goto_label_names[0];
+    if (!cap_baked) {
+        bindings[0].asm_constraint = "i";
+        bindings[1] = a64_block(target);
+        bindings[1].asm_name = source->goto_label_names[0];
+        binding_count = 2U;
+    }
     if (!a64_branch(sel, emit) ||
         !minic_machine_builder_position_at(&sel->builder, emit) ||
         !minic_machine_builder_emit_core_source_asm(&sel->builder,
-            source, MINIC_MACHINE_EFFECT_BRANCH, bindings, 2U,
+            source, MINIC_MACHINE_EFFECT_BRANCH, bindings, binding_count,
             NULL, 0U, true, true) ||
         !minic_machine_builder_add_successor(&sel->builder, target) ||
         !minic_machine_builder_add_successor(&sel->builder, after) ||
@@ -1689,6 +1719,89 @@ static bool a64_linux_raw_io_source(A64CoreSelection *sel,
     return a64_load_core(sel, ops[0].value, A64_T2, 64U) &&
         a64_memory_register(sel, stores[index], false,
             A64_T0, bits, A64_T2, 0U, true, true);
+}
+
+/* The source admission catalog owns these three complete Linux ASM forms;
+ * the target owns only physical registers, memory effects and GNU emission. */
+static bool a64_linux_extra_source(A64CoreSelection *sel,
+    const MinicCoreInstruction *ins, const MinicCoreInlineAsm *source) {
+    const MinicCoreFunction *fn = sel->ctx->fn;
+    const MinicCoreStructuredInlineAsmOperand *ops =
+        ins->value.structured_inline_asm.operands;
+    const uint32_t form = source->target_machine_form_id;
+    const bool cmpwait = form == AARCH64_MACHINE_ASM_CMPWAIT;
+    const bool dep = form == AARCH64_MACHINE_ASM_IO_DEPENDENCY;
+    const bool zeropad = form == AARCH64_MACHINE_ASM_ZEROPAD;
+    const size_t width = cmpwait ? aarch64_linux_cmpwait_form(
+        source->template_text, source->template_length) : 0U;
+    const size_t count = dep ? 2U : 3U;
+    MinicMachineOperand bindings[3] = {{0}};
+    size_t i;
+    if (!(cmpwait || dep || zeropad) ||
+        (cmpwait && (width != 1U && width != 2U &&
+                     width != 4U && width != 8U)) ||
+        (dep && !aarch64_linux_io_dependency_form(
+            source->template_text, source->template_length)) ||
+        (zeropad && !aarch64_linux_zeropad_form(
+            source->template_text, source->template_length)) ||
+        source->target_machine_form_variant != (cmpwait ? width : 0U) ||
+        source->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
+        source->is_volatile != (cmpwait || dep) || source->is_goto ||
+        source->has_memory_clobber != dep ||
+        source->implicit_memory_effect != zeropad ||
+        source->register_clobber_count != 0U ||
+        source->resolved_immediate_count != 0U ||
+        source->symbol_reference_count != 0U ||
+        source->deferred_immediate_symbol != NULL ||
+        ins->result != MINIC_CORE_VALUE_INVALID ||
+        !minic_core_function_type_is_kind(fn, ins->core_type_id,
+            MINIC_CORE_TYPE_VOID) ||
+        ins->value.structured_inline_asm.operand_count != count ||
+        ops == NULL || sel->ctx->machine_frame->has_dynamic_stack ||
+        !aarch64_asm_core_integer(fn,ops[0].value,true,8U,-1) ||
+        (cmpwait &&
+         (!aarch64_asm_core_integer(fn,ops[1].value,true,width,-1) ||
+          !aarch64_asm_core_integer(fn,ops[2].value,false,8U,-1))) ||
+        (dep && !aarch64_asm_core_integer(fn,ops[1].value,false,8U,-1)) ||
+        (zeropad &&
+         (!aarch64_asm_core_pointer(fn,ops[1].value,false) ||
+          !aarch64_asm_core_integer(fn,ops[2].value,true,8U,-1))))
+        return false;
+    for (i = 0U; i < count; ++i) {
+        const MinicCoreStructuredInlineAsmOperand *op = &ops[i];
+        const MinicCoreStructuredInlineAsmOperandKind kind =
+            i == 0U ? MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
+            (cmpwait && i == 1U ?
+                MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE :
+             zeropad && i == 2U ?
+                MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT :
+                MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT);
+        if (op->operand_index != i || op->value >= fn->value_count ||
+            op->kind != kind || op->has_fixed_register_binding ||
+            op->has_tied_output) return false;
+        bindings[i] = a64_gp(A64_T0 + (unsigned int)i, 64U,
+            i == 0U ? MINIC_MACHINE_REGISTER_WRITE :
+                MINIC_MACHINE_REGISTER_READ);
+        bindings[i].asm_constraint = i == 0U ?
+            (dep ? "=r" : "=&r") :
+            (cmpwait && i == 1U ? "+Q" :
+             zeropad && i == 2U ? "Q" : "r");
+    }
+    if ((cmpwait && (!a64_load_core(sel,ops[1].value,A64_T1,64U) ||
+                     !a64_load_core(sel,ops[2].value,A64_T2,64U))) ||
+        (dep && !a64_load_core(sel,ops[1].value,A64_T1,64U)) ||
+        (zeropad && (!a64_load_core(sel,ops[1].value,A64_T1,64U) ||
+                     !a64_load_core(sel,ops[2].value,A64_T2,64U))) ||
+        !minic_machine_builder_emit_core_source_asm(&sel->builder,
+            source, cmpwait ?
+                MINIC_MACHINE_EFFECT_MEMORY_READ |
+                MINIC_MACHINE_EFFECT_MEMORY_WRITE :
+                zeropad ? MINIC_MACHINE_EFFECT_MEMORY_READ : 0U,
+            bindings, count, NULL, 0U, false, false))
+        return false;
+    return a64_load_core(sel,ops[0].value,A64_T3,64U) &&
+        a64_memory_register(sel, MINIC_A64_MACHINE_STR_X, false,
+            A64_T0,64U,A64_T3,0U,true,false);
 }
 
 /* The original Linux __get_user/__put_user contract has three independent
@@ -3245,6 +3358,10 @@ static bool a64_core_instruction(A64CoreSelection *sel,
             source->target_machine_form_id == AARCH64_MACHINE_ASM_ENCODED_SYSREG_READ ||
             source->target_machine_form_id == AARCH64_MACHINE_ASM_ENCODED_SYSREG_WRITE)
             return a64_linux_sysreg_source(sel, ins, source);
+        if (source->target_machine_form_id == AARCH64_MACHINE_ASM_CMPWAIT ||
+            source->target_machine_form_id == AARCH64_MACHINE_ASM_IO_DEPENDENCY ||
+            source->target_machine_form_id == AARCH64_MACHINE_ASM_ZEROPAD)
+            return a64_linux_extra_source(sel, ins, source);
         if (source->target_machine_form_id == AARCH64_MACHINE_ASM_UACCESS)
             return a64_linux_uaccess_source(sel, ins, source);
         if (source->target_machine_form_id == AARCH64_MACHINE_ASM_RAW_IO_READ ||

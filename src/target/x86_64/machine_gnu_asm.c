@@ -602,6 +602,31 @@ static bool x86_emit_source_asm(FILE *out,
     if (instruction->source_asm_machine_form_id ==
             MINIC_X86_MACHINE_ASM_NOP_CONST_I)
         return fputs("  nop\n",out) != EOF;
+    if (instruction->source_asm_machine_form_id == MINIC_X86_MACHINE_ASM_MMIO_READ ||
+        instruction->source_asm_machine_form_id == MINIC_X86_MACHINE_ASM_MMIO_WRITE ||
+        instruction->source_asm_machine_form_id == MINIC_X86_MACHINE_ASM_ATOMIC_XCHG) {
+        static const char *const reads[] = {
+            "  movb (%r10), %al\n", "  movw (%r10), %ax\n",
+            "  movl (%r10), %eax\n", "  movq (%r10), %rax\n"
+        };
+        static const char *const writes[] = {
+            "  movb %al, (%r10)\n", "  movw %ax, (%r10)\n",
+            "  movl %eax, (%r10)\n", "  movq %rax, (%r10)\n"
+        };
+        static const char *const exchanges[] = {
+            "  xchgb %al, (%r10)\n", "  xchgw %ax, (%r10)\n",
+            "  xchgl %eax, (%r10)\n", "  xchgq %rax, (%r10)\n"
+        };
+        const uint32_t form_id = instruction->source_asm_machine_form_id;
+        const unsigned int width = instruction->source_asm_machine_form_variant;
+        const unsigned int index = width == 1U ? 0U :
+            width == 2U ? 1U : width == 4U ? 2U : 3U;
+        if (width != 1U && width != 2U && width != 4U && width != 8U)
+            return false;
+        return fputs(form_id == MINIC_X86_MACHINE_ASM_MMIO_READ ?
+            reads[index] : form_id == MINIC_X86_MACHINE_ASM_MMIO_WRITE ?
+                writes[index] : exchanges[index],out) != EOF;
+    }
     if (instruction->source_asm_machine_form_id ==
             MINIC_X86_MACHINE_ASM_COUNTER) {
         const unsigned int form = minic_x86_64_linux_counter_form(
@@ -620,6 +645,34 @@ static bool x86_emit_source_asm(FILE *out,
                 fputc('\n',out) != EOF;
         }
         return fputs(counters[form-1U],out) != EOF;
+    }
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_HWEIGHT) {
+        const unsigned int bytes = minic_x86_64_hweight_alternative_form(
+            instruction->source_asm_template,
+            instruction->source_asm_length);
+        if (bytes != 4U && bytes != 8U) return false;
+        /* The exact admitted Linux alternative is serialized with feature
+         * 151 explicitly, retaining genuine PREL32 ELF patch records and
+         * the GNU software fallback. No arbitrary template substitution. */
+        return fputs("661:\n",out) != EOF &&
+            fprintf(out,"  call __sw_hweight%u\n",bytes*8U) >= 0 &&
+            fputs("662:\n"
+                  "  .skip -(((6651f-6641f)-(662b-661b)) > 0) * "
+                  "((6651f-6641f)-(662b-661b)), 0x90\n"
+                  "663:\n"
+                  "  .pushsection .altinstructions,\"a\"\n"
+                  "  .long 661b - .\n"
+                  "  .long 6641f - .\n"
+                  "  .4byte 151\n"
+                  "  .byte 663b-661b\n"
+                  "  .byte 6651f-6641f\n"
+                  "  .popsection\n"
+                  "  .pushsection .altinstr_replacement, \"ax\"\n"
+                  "6641:\n",out) != EOF &&
+            fputs(bytes == 4U ? "  popcntl %edi, %eax\n" :
+                "  popcntq %rdi, %rax\n",out) != EOF &&
+            fputs("6651:\n  .popsection\n",out) != EOF;
     }
     if (instruction->source_asm_machine_form_id ==
             MINIC_X86_MACHINE_ASM_MSR)

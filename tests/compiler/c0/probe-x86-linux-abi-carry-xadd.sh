@@ -72,7 +72,11 @@ int main(void){
 }
 SRC
 for kind in carry smp records;do
- "$cc" --target=x86_64-linux -S "$d/$kind.i" -o "$d/$kind.s"
+ if [ "$kind" = carry ]; then
+  MINIC_X86_TYPED_SELECT_TRACE=1 MINIC_X86_TYPED_REJECT_TRACE=1 "$cc" --target=x86_64-linux -S "$d/$kind.i" -o "$d/$kind.s"
+ else
+  "$cc" --target=x86_64-linux -S "$d/$kind.i" -o "$d/$kind.s"
+ fi
  test -s "$d/$kind.s"
  gcc -static -x assembler "$d/$kind.s" -o "$d/$kind-minic"
  gcc -static -x c "$d/$kind.i" -o "$d/$kind-gnu"
