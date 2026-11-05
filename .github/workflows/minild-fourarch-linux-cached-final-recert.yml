@@ -229,14 +229,20 @@ jobs:
           content = source.read_text()
           for emulation in ('elf32lriscv', 'elf_x86_64',
                             'aarch64linux', 'elf64loongarch'):
+              # ABI alignment scalars may follow page_size. This trial used
+              # to flip disabled flags; current profiles can already admit
+              # both features, in which case there is nothing to rewrite.
               pattern = (r'(\{"' + re.escape(emulation) +
-                         r'"[^{}]*?4096U,\s*true,\s*true,\s*)'
-                         r'false,\s*false,')
-              content, count = re.subn(pattern, r'\g<1>true, true,', content)
-              if count != 1:
+                         r'"[^{}]*?4096U,\s*(?:\d+U,\s*)*true,\s*true,\s*)'
+                         r'(true|false),\s*(true|false),')
+              match = re.search(pattern, content)
+              if match is None or match.group(2) != match.group(3):
                   raise SystemExit(
-                      f'MINILD_FROZEN=FAIL missing_trial_policy:{emulation}:{count}')
-          if not re.search(r'\{"elf64lriscv"[^{}]*?4096U,\s*'
+                      f'MINILD_FROZEN=FAIL missing_trial_policy:{emulation}')
+              if match.group(2) == 'false':
+                  content = (content[:match.start()] + match.group(1) +
+                             'true, true,' + content[match.end():])
+          if not re.search(r'\{"elf64lriscv"[^{}]*?4096U,\s*(?:\d+U,\s*)*'
                            r'true,\s*true,\s*true,\s*true,', content):
               raise SystemExit('MINILD_FROZEN=FAIL RV64_policy_changed')
           source.write_text(content)
