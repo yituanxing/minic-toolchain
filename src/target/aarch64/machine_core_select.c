@@ -2017,7 +2017,7 @@ static bool a64_linux_old_atomic_source(A64CoreSelection *sel,
             ops[i].kind != expected_kind ||
             ops[i].value >= fn->value_count ||
             ops[i].has_fixed_register_binding || ops[i].has_tied_output ||
-            ops[i].early_clobber ||
+            ops[i].early_clobber != (i < output_count) ||
             ops[i].physical_early_clobber != (i < output_count) ||
             ops[i].physical_read_write != (i == mem) ||
             (i < output_count ?
@@ -2029,7 +2029,7 @@ static bool a64_linux_old_atomic_source(A64CoreSelection *sel,
                     false, width, -1)))
             return false;
         bindings[i] = a64_gp(regs[i], 64U, access);
-        bindings[i].asm_constraint = constraints[i];
+        bindings[i].asm_constraint = (char *)constraints[i];
         bindings[i].asm_name = (char *)names[i];
     }
     /* Both inputs are loaded before the LL/SC retry loop; physical x10
