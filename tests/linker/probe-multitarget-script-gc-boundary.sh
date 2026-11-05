@@ -43,15 +43,19 @@ for arch, emulation in emulations.items():
                # Numeric Target ABI/alignment fields may be inserted between
                # page_size and the capability booleans. Keep reading the
                # actual gates, without freezing positional field counts.
-               r'"[^{}]*?4096U,\s*(?:\d+U,\s*)*'
+               r'"[^{}]*?(\d+)U,\s*(?:\d+U,\s*)*'
                r'(true|false),\s*(true|false),\s*'
                r'(true|false),\s*(true|false),')
     match = re.search(pattern, source, re.S)
-    if match is None or match.group(1) != 'true' or match.group(2) != 'true':
+    if match is None:
         raise SystemExit(f'MINILD_SCRIPT_GC_5ARCH=FAIL target_profile={emulation}')
-    if match.group(3) != match.group(4):
+    page_size = int(match.group(1))
+    if (page_size < 4096 or page_size & (page_size - 1) or
+            match.group(2) != 'true' or match.group(3) != 'true'):
+        raise SystemExit(f'MINILD_SCRIPT_GC_5ARCH=FAIL target_profile={emulation}')
+    if match.group(4) != match.group(5):
         raise SystemExit(f'MINILD_SCRIPT_GC_5ARCH=FAIL split_script_gc_policy={emulation}')
-    lines.append(f'{arch} {emulation} {match.group(3)}')
+    lines.append(f'{arch} {emulation} {match.group(4)}')
 Path(sys.argv[2]).write_text('\n'.join(lines) + '\n')
 PY
 

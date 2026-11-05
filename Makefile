@@ -761,6 +761,10 @@ check-minild-i386-rel-static: $(MINILD_BINARY)
 	MINILD="$(abspath $(MINILD_BINARY))" \
 	bash tests/linker/probe-i386-rel-static.sh
 
+.PHONY: check-minild-x86-frozen-manifest
+check-minild-x86-frozen-manifest:
+	bash tests/linker/probe-minild-x86-frozen-manifest-v1.sh
+
 .PHONY: check-minild-script-phdrs
 check-minild-script-phdrs: $(MINILD_BINARY)
 	MINILD="$(abspath $(MINILD_BINARY))" \
@@ -906,6 +910,7 @@ check-minild-five-arch-linux-linker-boundary: \
 	check-minild-x86-linux-pc64 \
 	check-minild-x86-script-symbol-provenance-relocs \
 	check-minild-i386-rel-static \
+	check-minild-x86-frozen-manifest \
 	check-minild-x86-script-info \
 	check-minild-x86-script-synthetic-nobits \
 	check-minild-static-script-pure-nobits-phdr \
