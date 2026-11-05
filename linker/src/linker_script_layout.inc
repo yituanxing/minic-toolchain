@@ -1,3 +1,8 @@
+/* The ProgramPlan owner is included after layout in the one-TU pipeline.
+ * Forward-declare its checked metadata decision for PHDR byte reservation. */
+static bool minild_program_plan_stack_flags(const MiniLdState *state,
+                                             uint32_t *flags);
+
 typedef struct MiniLdScriptSymbolProvenance {
     size_t resolver_index;
     size_t command_index;
@@ -2350,6 +2355,20 @@ static bool static_build_script_layout(MiniLdState *state,
                                        ? script->phdr_count +
                                              (have_alloc_tls ? 1U : 0U)
                                        : alloc_count;
+
+        /* Script layout precedes ProgramPlan materialization.  Account for
+         * its GNU_STACK decision now: -z noexecstack or admitted input notes
+         * synthesize one header when the script has no explicit PHDRS. */
+        uint32_t stack_flags = 0U;
+        if (script->phdr_count == 0U &&
+            minild_program_plan_stack_flags(state, &stack_flags)) {
+            if (header_phdr_count == SIZE_MAX) {
+                fprintf(state->diagnostics,
+                        "minic-ld: linker-script-header-overflow\n");
+                goto done;
+            }
+            ++header_phdr_count;
+        }
 
         if (abi.phdr == 0U ||
             header_phdr_count < script->phdr_count ||

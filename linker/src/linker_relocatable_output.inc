@@ -12,11 +12,16 @@ static bool minild_write_relocatable_output(MiniLdState *state,
     MiniElfWriteError write_error = MINIELF_WRITE_OK;
     unsigned char *image = NULL;
     size_t image_size = 0U;
+    size_t section_count = state->work.count;
     size_t i;
     FILE *file = NULL;
     bool ok = false;
 
-    sections = calloc(state->work.count == 0U ? 1U : state->work.count,
+    if (state->work.count == SIZE_MAX) {
+        fprintf(state->diagnostics, "minic-ld: too-many-relocatable-sections\n");
+        return false;
+    }
+    sections = calloc(state->work.count + 1U,
                       sizeof(*sections));
     symbols = calloc(state->resolver.count == 0U ? 1U : state->resolver.count,
                      sizeof(*symbols));
@@ -43,6 +48,30 @@ static bool minild_write_relocatable_output(MiniLdState *state,
         output->group_signature_symbol = input->group_signature_symbol;
         output->has_link_order_target = input->has_link_order_target;
         output->linked_target_section = input->link_order_target;
+    }
+
+    if (state->z_noexecstack) {
+        bool have_gnu_stack_note = false;
+
+        for (i = 0U; i < state->work.count; ++i) {
+            const MiniLdSection *input = &state->work.sections[i];
+            const char *name = input->input_name != NULL
+                                   ? input->input_name : input->name;
+
+            if (strcmp(name, ".note.GNU-stack") == 0) {
+                have_gnu_stack_note = true;
+                break;
+            }
+        }
+        if (!have_gnu_stack_note) {
+            /* GNU -r synthesizes this empty ET_REL section when absent.
+             * An existing stack note keeps its original flags unchanged. */
+            MiniElfWriteSection *stack_note = &sections[section_count++];
+
+            stack_note->name = ".note.GNU-stack";
+            stack_note->type = SHT_PROGBITS;
+            stack_note->alignment = 1U;
+        }
     }
 
     for (i = 0U; i < state->resolver.count; ++i) {
@@ -96,7 +125,7 @@ static bool minild_write_relocatable_output(MiniLdState *state,
     minild_target_set_relocatable_identity(state->target, &spec);
     spec.flags = state->elf_flags;
     spec.sections = sections;
-    spec.section_count = state->work.count;
+    spec.section_count = section_count;
     spec.symbols = symbols;
     spec.symbol_count = state->resolver.count;
     spec.relocations = relocations;

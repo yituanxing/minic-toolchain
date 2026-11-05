@@ -63,7 +63,6 @@ expect_reject() {
 expect_reject reloc_script -r -T /dev/null
 expect_reject reloc_strip -r -S
 expect_reject reloc_build_id -r --build-id=sha1
-expect_reject reloc_entry -r -e _start
 expect_reject reloc_orphans -r --orphan-handling=error
 expect_reject static_soname -static --soname=libfoo.so
 expect_reject static_needed -static --needed=libfoo.so
@@ -71,6 +70,5 @@ expect_reject static_dynamic_list -static --dynamic-list=/dev/null
 expect_reject multiple_needed -shared --needed=liba.so --needed=libb.so
 expect_reject shared_build_id -shared --build-id=sha1
 expect_reject shared_nodefaultlib -shared -z nodefaultlib
-expect_reject shared_noexecstack -shared -z noexecstack
 
-echo 'MINILD_CLI_OPTION_MODE=PASS stages=14 GNU_BFD=required'
+echo 'MINILD_CLI_OPTION_MODE=PASS stages=12 GNU_BFD=required'

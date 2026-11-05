@@ -38,7 +38,8 @@ printf '%s\n' \
     '  .rela.dyn : { *(.rela.*) }' \
     '}' >"$work/compressed.lds"
 
-ld -m elf_x86_64 -pie --no-dynamic-linker -T "$work/compressed.lds" \
+ld -m elf_x86_64 -pie --no-dynamic-linker -z noexecstack \
+    -T "$work/compressed.lds" \
     -o "$work/gnu.elf" "$work/start.o" >"$work/gnu.log" 2>&1
 "$mini" -m elf_x86_64 -pie --no-dynamic-linker \
     --no-ld-generated-unwind-info -z noexecstack \
@@ -58,6 +59,10 @@ for owner in gnu mini; do
         echo "MINILD_X86_KERNEL_PIE=FAIL unexpected_interpreter=$owner" >&2
         exit 1
     fi
+    grep -Eq 'GNU_STACK[[:space:]]' "$work/$owner.phdr" || {
+        echo "MINILD_X86_KERNEL_PIE=FAIL missing_gnu_stack=$owner" >&2
+        exit 1
+    }
     timeout 5 "$work/$owner.elf" || {
         echo "MINILD_X86_KERNEL_PIE=FAIL runtime=$owner" >&2; exit 1;
     }

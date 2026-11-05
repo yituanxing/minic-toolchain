@@ -96,16 +96,28 @@ archives, mixed ordinary objects, independent groups and unreferenced
 whole-archive members.
 
 Options parsed by the CLI but without a selected output owner must not
-silently disappear: `-r -T/-S/--build-id/-e`, static-only
+silently disappear: `-r -T/-S/--build-id`, static-only
 `--soname/--needed/--dynamic-list`, dynamic `--build-id`, duplicate
-`--needed`, dynamic `-z nodefaultlib` and dynamic `-z noexecstack` are
-rejected until implemented. In particular, `-z noexecstack` still needs a
-separate final-static `PT_GNU_STACK` audit; preserving a historical kernel
-linker's accepted flag does *not* certify this program header for ordinary
-user-space executables. The ELF relocation/group engine remains shared;
-this is command-line admission, not a second linker pipeline.
+`--needed` and dynamic `-z nodefaultlib` are rejected until implemented.
+GNU `-r -e` is a proven no-op in the admitted relocatable mode (ELF e_entry
+remains zero and `-r --gc-sections` is already rejected), so the real Linux
+purgatory sublink is admitted without invented behavior.
 
-The two targeted CLI probes run on a single assembly input and compare
+`-z noexecstack` now has a coherent ELF owner across modes. The immutable
+admitted input `.note.GNU-stack` sections determine default RW/RWE
+`PT_GNU_STACK` policy; an explicit `-z noexecstack` forces RW. Final
+ProgramPlan emits the class-neutral ELF32/ELF64 header for ET_EXEC/ET_DYN,
+while OutputPlan consumes ordinary input stack notes instead of leaking
+them as final sections; the script layout reserves the extra header slot.
+GNU explicit `PHDRS`
+suppresses the synthetic stack program header. For `-r`, the relocatable
+output owner synthesizes a non-executable `.note.GNU-stack` when none was
+present, while retaining original flags on existing input notes. These
+semantics are independently exercised on the five Linux target ELF classes.
+Explicit linker-script `PHDRS` definitions of `PT_GNU_STACK` themselves
+remain unsupported script syntax, not silently rewritten.
+
+The three targeted CLI probes run on small assembly inputs and compare
 GNU/MiniLD effects without recompiling Linux. After any output-changing
 linker patch, recertify the exact frozen Linux link and QEMU P1 for each of
 the five targets. Historic P1 success alone is not a new-head PASS.

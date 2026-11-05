@@ -240,6 +240,7 @@ int minild_link_shared_elf64_riscv_inputs_options(
         options != NULL ? options->needed_name : NULL;
     const bool pie = options != NULL && options->pie;
     const bool strip_debug = options != NULL && options->strip_debug;
+    const bool z_noexecstack = options != NULL && options->z_noexecstack;
     const bool hash_style_both = options != NULL && options->hash_style_both;
     const bool eh_frame_hdr = options != NULL && options->eh_frame_hdr;
     const char *interpreter_path =
@@ -264,6 +265,7 @@ int minild_link_shared_elf64_riscv_inputs_options(
     }
     memset(&state, 0, sizeof(state));
     state.target = minild_target_find("elf64lriscv");
+    state.z_noexecstack = z_noexecstack;
     memset(&layout, 0, sizeof(layout));
     memset(&shared, 0, sizeof(shared));
     minild_script_initialize(&version_script);

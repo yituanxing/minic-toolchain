@@ -601,7 +601,7 @@ int main(int argc, char **argv) {
      * dispatcher which has no matching Options contract.  These modes may
      * gain support later, but must never emit a misleading successful ELF. */
     if (relocatable &&
-        (entry_symbol != NULL || script_path != NULL || strip_debug ||
+        (script_path != NULL || strip_debug ||
          build_id_sha1 || orphan_handling_error)) {
         fprintf(stderr, "minic-ld: unsupported-relocatable-link-options\n");
         return 2;
@@ -622,14 +622,6 @@ int main(int argc, char **argv) {
         ((shared_link && !kernel_shared_image) ||
          (pie_link && !kernel_resolved_pie))) {
         fprintf(stderr, "minic-ld: unsupported-dynamic-nodefaultlib\n");
-        return 2;
-    }
-    if (z_noexecstack &&
-        ((shared_link && !kernel_shared_image) ||
-         (pie_link && !kernel_resolved_pie))) {
-        /* PT_GNU_STACK is currently owned by neither dynamic program plan.
-         * Do not pretend to honor an explicit non-executable-stack request. */
-        fprintf(stderr, "minic-ld: unsupported-dynamic-noexecstack\n");
         return 2;
     }
     if (emit_relocs && (relocatable || shared_link || pie_link ||
@@ -783,7 +775,7 @@ int main(int argc, char **argv) {
     }
     if (relocatable) {
         return minild_link_relocatable_inputs_target(
-            output, inputs, input_count, emulation, stderr);
+            output, inputs, input_count, emulation, z_noexecstack, stderr);
     }
     if ((shared_link && !kernel_shared_image) ||
         (pie_link && !kernel_resolved_pie)) {
@@ -797,6 +789,7 @@ int main(int argc, char **argv) {
         options.needed_name = needed_name;
         options.interpreter_path = interpreter_path;
         options.strip_debug = strip_debug;
+        options.z_noexecstack = z_noexecstack;
         options.hash_style_both = hash_style_both;
         options.eh_frame_hdr = eh_frame_hdr;
         options.pie = pie_link;
@@ -816,6 +809,7 @@ int main(int argc, char **argv) {
         options.nmagic = nmagic;
         options.discard_locals = discard_locals;
         options.strip_debug = strip_debug;
+        options.z_noexecstack = z_noexecstack;
         options.output_et_dyn = kernel_et_dyn;
         options.static_pie_requested = kernel_resolved_pie;
         options.fix_cortex_a53_843419 = fix_cortex_a53_843419;

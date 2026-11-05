@@ -49,6 +49,12 @@ static bool minild_shared_program_plan_build(
     MiniLdSharedTlsSegment tls;
     size_t phnum;
     MiniLdElfAbiSizes abi = minild_elf_abi_sizes(state->target->elf_class);
+    /* Explicit script PHDRS own their full program table.  Ordinary shared
+     * images and user-space PIE may add GNU's non-exec stack policy. */
+    uint32_t stack_flags = 0U;
+    const bool have_stack = shared->layout_script == NULL &&
+                            minild_program_plan_stack_flags(
+                                state, &stack_flags);
     size_t program_index = 0U;
     size_t i;
     MiniElfProgramHeader *programs;
@@ -66,7 +72,7 @@ static bool minild_shared_program_plan_build(
             (shared->have_interp ? 1U : 0U) +
             (layout->have_rx ? 1U : 0U) +
             (layout->have_rw ? 1U : 0U) +
-            (tls.present ? 1U : 0U) + 1U;
+            (tls.present ? 1U : 0U) + 1U + (have_stack ? 1U : 0U);
     if (abi.phdr == 0U || phnum > UINT16_MAX ||
         phnum > (SIZE_MAX - abi.ehdr) / abi.phdr) {
         fprintf(state->diagnostics, "minic-ld: too-many-shared-segments\n");
@@ -262,6 +268,10 @@ static bool minild_shared_program_plan_build(
              * disappear: 0-byte PT_GNU_EH_FRAME, no invented section. */
             ph->alignment = 8U;
         }
+    }
+    if (have_stack) {
+        minild_program_plan_set_stack(&programs[program_index++],
+                                      stack_flags);
     }
     if (program_index != phnum) {
         fprintf(state->diagnostics, "minic-ld: shared-phdr-count-mismatch\n");

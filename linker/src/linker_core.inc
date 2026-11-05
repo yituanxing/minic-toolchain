@@ -278,6 +278,7 @@ typedef struct MiniLdState {
     bool build_id_sha1;
     bool discard_locals;
     bool strip_debug;
+    bool z_noexecstack;
     FILE *diagnostics;
 } MiniLdState;
 
@@ -664,6 +665,7 @@ int minild_link_relocatable_inputs_target(const char *output_path,
                                           const MiniLdInput *inputs,
                                           size_t input_count,
                                           const char *emulation,
+                                          bool z_noexecstack,
                                           FILE *diagnostics) {
     MiniLdState state;
     const MiniLdTargetProfile *target = minild_target_find(emulation);
@@ -682,6 +684,7 @@ int minild_link_relocatable_inputs_target(const char *output_path,
     state.target = target;
     state.diagnostics = diagnostics;
     state.relocatable_output = true;
+    state.z_noexecstack = z_noexecstack;
 
     if (!process_input_sequence(&state, inputs, input_count)) {
         goto done;

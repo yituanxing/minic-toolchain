@@ -133,6 +133,9 @@ static bool minild_static_program_plan_build(
     size_t note_count = 0U;
     size_t tls_file_offset = 0U;
     uint64_t tls_paddr = 0U;
+    uint32_t stack_flags = 0U;
+    const bool have_stack = minild_program_plan_stack_flags(
+        state, &stack_flags);
     size_t i;
 
     memset(plan, 0, sizeof(*plan));
@@ -358,6 +361,13 @@ static bool minild_static_program_plan_build(
         }
         ++count;
     }
+    if (have_stack) {
+        if (count == SIZE_MAX) {
+            fprintf(state->diagnostics, "minic-ld: too-many-static-segments\n");
+            goto failed;
+        }
+        ++count;
+    }
     if (abi.phdr == 0U || count > UINT16_MAX ||
         count > (SIZE_MAX - abi.ehdr) / abi.phdr) {
         fprintf(state->diagnostics, "minic-ld: too-many-static-segments\n");
@@ -469,6 +479,9 @@ static bool minild_static_program_plan_build(
                             ? tls->file_end - tls->block_base : 0U;
         ph->memory_size = tls->memory_end - tls->block_base;
         ph->alignment = tls->alignment;
+    }
+    if (have_stack) {
+        minild_program_plan_set_stack(&plan->entries[count - 1U], stack_flags);
     }
     free(loads);
     return true;

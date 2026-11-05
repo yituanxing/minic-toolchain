@@ -37,6 +37,8 @@ typedef struct MiniLdStaticOptions {
     bool discard_locals;
     /* GNU -S: omit non-allocated debugging sections from final ELF output. */
     bool strip_debug;
+    /* Explicit GNU -z noexecstack overrides any executable input stack note. */
+    bool z_noexecstack;
     /* Kernel ET_DYN is a statically resolved image, not an ELF DSO. */
     bool output_et_dyn;
     /* Preserve the original static -pie request even when GNU -n forces
@@ -73,6 +75,7 @@ typedef struct MiniLdSharedOptions {
     const char *needed_name;
     const char *interpreter_path;
     bool strip_debug;
+    bool z_noexecstack;
     bool hash_style_both;
     bool eh_frame_hdr;
     bool pie;
@@ -103,6 +106,7 @@ int minild_link_relocatable_inputs_target(const char *output_path,
                                           const MiniLdInput *inputs,
                                           size_t input_count,
                                           const char *emulation,
+                                          bool z_noexecstack,
                                           FILE *diagnostics);
 
 int minild_link_static_inputs_target(

@@ -211,6 +211,13 @@ static bool minild_output_plan_build(const MiniLdState *state,
             (layout->scripted && layout->work[i].discarded)) {
             continue;
         }
+        /* GNU consumes ordinary .note.GNU-stack as input ELF metadata, not
+         * a final ET_EXEC/ET_DYN section.  A script that explicitly maps
+         * the note into an output section still owns that placement. */
+        if (strcmp(part->input_name != NULL ? part->input_name : part->name,
+                   ".note.GNU-stack") == 0 && command == SIZE_MAX) {
+            continue;
+        }
         if (state->strip_debug &&
             minild_is_debug_section_name(part->input_name != NULL
                                              ? part->input_name : part->name)) {
