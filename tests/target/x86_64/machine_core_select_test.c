@@ -686,13 +686,356 @@ done:
     return okay;
 }
 
+/* Record transfer comes from the old x86 emitter's exact byte transport.
+ * Its generic Core shape and the ABI object sizes are not reclassified by
+ * MachineIR. Check both volatile sides, empty record, REP MOVSB, and x86's
+ * special overlapping vector copy separately. */
+static bool scenario_record_transfer(size_t bytes, unsigned int mode,
+    bool volatile_source, bool volatile_destination) {
+    MinicCoreTypeContext types;
+    MinicCoreFunction core = {0};
+    MinicCoreType t = {0};
+    MinicCoreTypeId void_type, byte_type, record_type, pointer_type;
+    MinicCoreTypeId parameters[2];
+    MinicCoreBlockId block;
+    MinicCoreInstruction ins = {0};
+    MinicCoreTerminator term = {0};
+    MinicCoreValueId first, second;
+    MinicX86Frame frame = {0};
+    MinicX86ArgLocation locations[2] = {{0}};
+    MinicTargetInfo target = {0};
+    MinicMachineFunction machine = {0};
+    MinicMachineGNUAsmPolicy policy = {0};
+    MinicCoreObjectStorage storage = {0};
+    size_t offsets[2] = {8U, 16U};
+    size_t object_offset = 320U;
+    bool reachable[1] = {false};
+    FILE *output = NULL;
+    char assembly[32768];
+    size_t output_bytes;
+    size_t reads = 0U, writes = 0U, volatile_reads = 0U;
+    size_t volatile_writes = 0U, rep = 0U, i;
+    bool okay = false;
+    const char *stage = "setup";
+    minic_core_type_context_initialize(&types);
+    minic_core_function_initialize(&core);
+    core.name = malloc(sizeof("x86_record_transfer"));
+    if (core.name == NULL) goto done;
+    memcpy(core.name, "x86_record_transfer", sizeof("x86_record_transfer"));
+    core.name_length = sizeof("x86_record_transfer") - 1U;
+    t.kind = MINIC_CORE_TYPE_VOID;
+    if (!minic_core_type_register(&types, &t, &void_type)) goto done;
+    t = (MinicCoreType){0};
+    t.kind = MINIC_CORE_TYPE_INTEGER;
+    t.has_layout = true;
+    t.size = 1U;
+    t.alignment = 1U;
+    t.value.integer.bit_width = 8U;
+    if (!minic_core_type_register(&types, &t, &byte_type)) goto done;
+    t = (MinicCoreType){0};
+    t.kind = mode == 2U ? MINIC_CORE_TYPE_VECTOR : MINIC_CORE_TYPE_RECORD;
+    t.has_layout = true;
+    t.size = bytes;
+    t.alignment = mode == 2U ? 16U : 1U;
+    if (mode == 2U) {
+        t.value.vector.element = byte_type;
+        t.value.vector.element_count = 16U;
+        t.value.vector.representation = MINIC_CORE_VECTOR_STORAGE_ONLY;
+    } else t.value.record.is_complete = true;
+    if (!minic_core_type_register(&types, &t, &record_type)) goto done;
+    t = (MinicCoreType){0};
+    t.kind = MINIC_CORE_TYPE_POINTER;
+    t.has_layout = true;
+    t.size = 8U;
+    t.alignment = 8U;
+    t.value.pointer.pointee = record_type;
+    if (!minic_core_type_register(&types, &t, &pointer_type)) goto done;
+    parameters[0] = pointer_type;
+    parameters[1] = pointer_type;
+    if (!minic_core_function_define_signature(&core, &types, void_type,
+            parameters, 2U, MINIC_CALLING_CONVENTION_DEFAULT, false) ||
+        !minic_core_function_add_block(&core, &block)) goto done;
+    ins.kind = MINIC_CORE_INSTRUCTION_PARAMETER;
+    ins.core_type_id = pointer_type;
+    ins.value.parameter_index = 0U;
+    if (!minic_core_function_append_value_instruction(&core,
+            block, &ins, &first)) goto done;
+    ins.value.parameter_index = 1U;
+    if (!minic_core_function_append_value_instruction(&core,
+            block, &ins, &second)) goto done;
+    ins = (MinicCoreInstruction){0};
+    ins.core_type_id = record_type;
+    if (mode == 0U) {
+        ins.kind = MINIC_CORE_INSTRUCTION_RECORD_COPY;
+        ins.value.record_copy.source_address = first;
+        ins.value.record_copy.destination_address = second;
+        ins.value.record_copy.source_volatile = volatile_source;
+        ins.value.record_copy.destination_volatile = volatile_destination;
+    } else if (mode == 1U) {
+        ins.kind = MINIC_CORE_INSTRUCTION_RECORD_LOAD;
+        ins.value.record_load.source_address = first;
+        ins.value.record_load.destination_object = 0U;
+        ins.value.record_load.is_volatile = volatile_source;
+        core.objects = calloc(1U, sizeof(*core.objects));
+        if (core.objects == NULL) goto done;
+        core.objects[0].core_type_id = record_type;
+        core.object_count = core.object_capacity = 1U;
+    } else {
+        ins.kind = MINIC_CORE_INSTRUCTION_VECTOR_STORAGE_COPY;
+        ins.value.vector_storage_copy.source_address = first;
+        ins.value.vector_storage_copy.destination_address = second;
+        ins.value.vector_storage_copy.source_volatile = volatile_source;
+        ins.value.vector_storage_copy.destination_volatile =
+            volatile_destination;
+    }
+    if (!minic_core_function_append_effect_instruction(&core,
+            block, &ins)) {
+        /* Existing Core admission already rejects volatile storage-only
+         * vector snapshots: it must never reach x86 machine selection. */
+        if (mode == 2U && (volatile_source || volatile_destination))
+            okay = true;
+        goto done;
+    }
+    term.kind = MINIC_CORE_TERMINATOR_RETURN;
+    term.return_value = MINIC_CORE_VALUE_INVALID;
+    if (!minic_core_function_set_terminator(&core, block, &term) ||
+        !minic_core_function_attach_type_context(&core, &types)) goto done;
+    target.architecture = MINIC_TARGET_ARCH_X86_64;
+    target.data_layout = minic_x86_64_linux_data_layout();
+    frame.value_offsets = offsets;
+    frame.value_count = core.value_count;
+    frame.object_count = core.object_count;
+    frame.object_offsets = core.object_count != 0U ? &object_offset : NULL;
+    frame.frame_size = 512U;
+    if (core.object_count != 0U) {
+        storage.extent = bytes;
+        storage.alignment = 1U;
+        frame.object_storage.objects = &storage;
+        frame.object_storage.count = 1U;
+    }
+    for (i = 0U; i < 2U; ++i) {
+        locations[i].kind = MINIC_X86_ARG_INTEGER;
+        locations[i].gp_index = i;
+    }
+    frame.incoming_arguments.locations = locations;
+    frame.incoming_arguments.argument_count = 2U;
+    frame.incoming_arguments.calling_convention =
+        MINIC_CALLING_CONVENTION_DEFAULT;
+    stage = "select";
+    if (mode == 2U && (volatile_source || volatile_destination)) {
+        okay = !minic_x86_64_machine_select_core_subset(
+            &machine, &target, &core, &frame);
+        goto done;
+    }
+    if (bytes == 0U) {
+        okay = !minic_x86_64_machine_select_core_subset(
+            &machine, &target, &core, &frame);
+        goto done;
+    }
+    if (!minic_x86_64_machine_select_core_subset(
+            &machine, &target, &core, &frame) ||
+        !minic_core_function_mark_reachable_blocks(&core,
+            reachable, 1U) ||
+        !minic_machine_core_coverage_verify(&core,
+            reachable, &machine) ||
+        !minic_x86_64_machine_gnu_asm_policy(&target, &policy)) goto done;
+    stage = "machine-effects";
+    for (i = 0U; i < machine.blocks[1].instruction_count; ++i) {
+        const MinicMachineInstruction *op =
+            &machine.blocks[1].instructions[i];
+        if (op->opcode == MINIC_X86_MI_REP_MOVSB) ++rep;
+        if (op->effects & MINIC_MACHINE_EFFECT_MEMORY_READ) {
+            ++reads;
+            if (op->effects & MINIC_MACHINE_EFFECT_VOLATILE)
+                ++volatile_reads;
+        }
+        if (op->effects & MINIC_MACHINE_EFFECT_MEMORY_WRITE) {
+            ++writes;
+            if (op->effects & MINIC_MACHINE_EFFECT_VOLATILE)
+                ++volatile_writes;
+        }
+    }
+    if (bytes != 0U && (reads == 0U || writes == 0U ||
+         (bytes > 128U) != (rep == 1U) ||
+         (volatile_source && volatile_reads == 0U) ||
+         (volatile_destination && volatile_writes == 0U))) goto done;
+    stage = "gnu-assembly";
+    output = tmpfile();
+    if (output == NULL ||
+        !minic_machine_gnu_asm_emit_body(output, &machine, &policy) ||
+        fflush(output) != 0 || fseek(output, 0L, SEEK_SET) != 0)
+        goto done;
+    output_bytes = fread(assembly, 1U, sizeof(assembly) - 1U, output);
+    assembly[output_bytes] = '\0';
+    okay = bytes == 0U ? rep == 0U : mode == 2U ?
+        strstr(assembly, "movq 8(%r11), %rdx") != NULL :
+        bytes > 128U ? strstr(assembly, "rep movsb") != NULL :
+        strstr(assembly, "movzbq") != NULL;
+done:
+    if (!okay) fprintf(stderr,
+        "X86_CORE_MIR=FAIL record bytes=%zu mode=%u vs=%d vd=%d stage=%s\n",
+        bytes, mode, volatile_source ? 1 : 0,
+        volatile_destination ? 1 : 0, stage);
+    if (output != NULL) fclose(output);
+    minic_machine_function_destroy(&machine);
+    minic_core_function_destroy(&core);
+    minic_core_type_context_destroy(&types);
+    return okay;
+}
+
+/* Four existing SysV record-parameter classes from call_plan.c. Typed
+ * selection must read their sealed incoming positions and preserve odd
+ * payload tails, stack-memory structs, and the empty-record fail-closed
+ * policy without inventing a second ABI classifier. */
+static bool scenario_parameter_object(size_t bytes,
+    MinicX86ArgClass kind, bool stack, bool forge) {
+    MinicCoreTypeContext types;
+    MinicCoreFunction core = {0};
+    MinicCoreType type = {0};
+    MinicCoreTypeId void_id, record_id;
+    MinicCoreBlockId block;
+    MinicCoreInstruction ins = {0};
+    MinicCoreTerminator term = {0};
+    MinicCoreObjectStorage storage = {0};
+    MinicX86ArgLocation location = {0};
+    MinicX86Frame frame = {0};
+    MinicTargetInfo target = {0};
+    MinicMachineFunction machine = {0};
+    MinicMachineGNUAsmPolicy policy = {0};
+    size_t unused_offset = 8U, object_offset = 320U;
+    bool reachable[1] = {false};
+    FILE *output = NULL;
+    char assembly[22000];
+    size_t length, writes = 0U, rep = 0U, rcx_preserved = 0U, i;
+    bool okay = false;
+    const char *stage = "setup";
+    minic_core_type_context_initialize(&types);
+    minic_core_function_initialize(&core);
+    core.name = malloc(sizeof("x86_parameter_record"));
+    if (core.name == NULL) goto done;
+    memcpy(core.name, "x86_parameter_record",
+        sizeof("x86_parameter_record"));
+    core.name_length = sizeof("x86_parameter_record") - 1U;
+    type.kind = MINIC_CORE_TYPE_VOID;
+    if (!minic_core_type_register(&types, &type, &void_id)) goto done;
+    type = (MinicCoreType){0};
+    type.kind = MINIC_CORE_TYPE_RECORD;
+    type.has_layout = true;
+    type.size = bytes;
+    type.alignment = 1U;
+    type.value.record.is_complete = true;
+    if (!minic_core_type_register(&types, &type, &record_id) ||
+        !minic_core_function_define_signature(&core, &types,
+            void_id, &record_id, 1U,
+            MINIC_CALLING_CONVENTION_DEFAULT, false) ||
+        !minic_core_function_add_block(&core, &block)) goto done;
+    core.objects = calloc(1U, sizeof(*core.objects));
+    if (core.objects == NULL) goto done;
+    core.objects[0].core_type_id = record_id;
+    core.object_count = core.object_capacity = 1U;
+    ins.kind = MINIC_CORE_INSTRUCTION_PARAMETER_OBJECT;
+    ins.core_type_id = void_id;
+    ins.value.parameter_object.parameter_index = 0U;
+    ins.value.parameter_object.object_id = 0U;
+    if (!minic_core_function_append_effect_instruction(&core,
+            block, &ins)) goto done;
+    term.kind = MINIC_CORE_TERMINATOR_RETURN;
+    term.return_value = MINIC_CORE_VALUE_INVALID;
+    if (!minic_core_function_set_terminator(&core, block, &term) ||
+        !minic_core_function_attach_type_context(&core, &types)) goto done;
+    target.architecture = MINIC_TARGET_ARCH_X86_64;
+    target.data_layout = minic_x86_64_linux_data_layout();
+    frame.value_offsets = &unused_offset;
+    frame.value_count = core.value_count;
+    frame.object_count = 1U;
+    frame.object_offsets = &object_offset;
+    frame.frame_size = 512U;
+    storage.extent = bytes;
+    storage.alignment = 1U;
+    frame.object_storage.objects = &storage;
+    frame.object_storage.count = 1U;
+    location.kind = kind;
+    location.record_bytes = forge ? bytes + 1U : bytes;
+    location.on_stack = stack;
+    location.gp_index = 0U;
+    location.stack_index = 0U;
+    frame.incoming_arguments.locations = &location;
+    frame.incoming_arguments.argument_count = 1U;
+    frame.incoming_arguments.calling_convention =
+        MINIC_CALLING_CONVENTION_DEFAULT;
+    stage = "select";
+    if (kind == MINIC_X86_ARG_RECORD_EMPTY || forge) {
+        okay = !minic_x86_64_machine_select_core_subset(
+            &machine, &target, &core, &frame);
+        goto done;
+    }
+    if (!minic_x86_64_machine_select_core_subset(
+            &machine, &target, &core, &frame) ||
+        !minic_core_function_mark_reachable_blocks(&core,
+            reachable, 1U) ||
+        !minic_machine_core_coverage_verify(&core,
+            reachable, &machine) ||
+        !minic_x86_64_machine_gnu_asm_policy(&target, &policy)) goto done;
+    stage = "machine-effects";
+    for (i = 0U; i < machine.blocks[1].instruction_count; ++i) {
+        const MinicMachineInstruction *op =
+            &machine.blocks[1].instructions[i];
+        if (op->effects & MINIC_MACHINE_EFFECT_MEMORY_WRITE) ++writes;
+        if (op->opcode == MINIC_X86_MI_REP_MOVSB) ++rep;
+        if (op->opcode == MINIC_X86_MI_POP64_R &&
+            op->operands[0].value.physical.reg.number ==
+                MINIC_X86_REG_RCX) ++rcx_preserved;
+    }
+    if (writes == 0U || (kind == MINIC_X86_ARG_RECORD_MEMORY &&
+        bytes > 128U && rep != 1U) ||
+        ((bytes == 7U || bytes == 15U) && rcx_preserved == 0U))
+        goto done;
+    stage = "gnu-asm";
+    output = tmpfile();
+    if (output == NULL ||
+        !minic_machine_gnu_asm_emit_body(output, &machine, &policy) ||
+        fflush(output) != 0 || fseek(output, 0L, SEEK_SET) != 0)
+        goto done;
+    length = fread(assembly, 1U, sizeof(assembly) - 1U, output);
+    assembly[length] = '\0';
+    okay = kind == MINIC_X86_ARG_RECORD_MEMORY ?
+        strstr(assembly, "rep movsb") != NULL :
+        strstr(assembly, "movb %al, 6(%r10)") != NULL ||
+        strstr(assembly, "movb %al, 14(%r10)") != NULL;
+done:
+    if (!okay) fprintf(stderr,
+        "X86_CORE_MIR=FAIL parameter-object bytes=%zu class=%d stack=%d "
+        "forge=%d stage=%s\n", bytes, (int)kind, stack ? 1 : 0,
+        forge ? 1 : 0, stage);
+    if (output != NULL) fclose(output);
+    minic_machine_function_destroy(&machine);
+    minic_core_function_destroy(&core);
+    minic_core_type_context_destroy(&types);
+    return okay;
+}
+
 int main(void) {
     if (!scenario(false, false) || !scenario(false, true) ||
         !scenario(true, false) || !scenario_parameter() ||
         !scenario_float() || !scenario_direct_call() ||
         !scenario_planned_scalar_call(false, false) ||
         !scenario_planned_scalar_call(true, false) ||
-        !scenario_planned_scalar_call(false, true)) return 1;
-    puts("X86_CORE_MIR=PASS cycle=1 physical_alu=1 parameter=1 sse2=1 direct_call=1 mixed_vararg_stack=1 indirect_call=1 ms_shadow_stack=1 origin=1 fail_closed=1");
+        !scenario_planned_scalar_call(false, true) ||
+        !scenario_record_transfer(0U, 0U, false, false) ||
+        !scenario_record_transfer(7U, 0U, true, true) ||
+        !scenario_record_transfer(129U, 0U, false, false) ||
+        !scenario_record_transfer(32U, 1U, true, false) ||
+        !scenario_record_transfer(16U, 2U, false, false) ||
+        !scenario_parameter_object(7U,
+            MINIC_X86_ARG_RECORD_ONE_GP, false, false) ||
+        !scenario_parameter_object(15U,
+            MINIC_X86_ARG_RECORD_TWO_GP, false, false) ||
+        !scenario_parameter_object(256U,
+            MINIC_X86_ARG_RECORD_MEMORY, true, false) ||
+        !scenario_parameter_object(0U,
+            MINIC_X86_ARG_RECORD_EMPTY, false, false) ||
+        !scenario_parameter_object(7U,
+            MINIC_X86_ARG_RECORD_ONE_GP, false, true)) return 1;
+    puts("X86_CORE_MIR=PASS cycle=1 physical_alu=1 parameter=1 sse2=1 direct_call=1 mixed_vararg_stack=1 indirect_call=1 ms_shadow_stack=1 record_copy=1 record_load=1 vector_storage=1 record_abi=1 volatile=1 empty_record_reject=1 rep_movsb=1 origin=1 fail_closed=1");
     return 0;
 }

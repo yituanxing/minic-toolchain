@@ -3,6 +3,7 @@
 #include "target/riscv/machine_opcode.h"
 #include "target/riscv/machine_target_state.h"
 #include "target/riscv/instruction_select.h"
+#include "target/common/machine_core_coverage.h"
 #include <limits.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -284,10 +285,34 @@ static bool rv_core_parameter(RvCoreSelection *sel,
     const MinicCoreInstruction *ins) {
     unsigned bytes;
     bool sign, pointer;
-    const size_t reg = ins->value.parameter_index +
-        (sel->plan->frame->has_hidden_result_pointer ? 1U : 0U);
-    return reg < 8U &&
-        rv_type(sel, ins->core_type_id, &bytes, &sign, &pointer) &&
+    const size_t index = ins->value.parameter_index;
+    size_t reg;
+    if (sel->xlen == 32U) {
+        const Rv32FunctionAbiPlan *plan = sel->plan->abi32;
+        const Rv32AbiWordLocation *loc;
+        if (plan == NULL || index >= plan->parameter_count ||
+            plan->parameters == NULL) return false;
+        loc = &plan->parameters[index];
+        if (loc->words != 1U || loc->indirect_record ||
+            loc->location.register_count != 1U ||
+            loc->location.stack_count != 0U ||
+            loc->location.register_begin >= 8U) return false;
+        reg = loc->location.register_begin;
+    } else {
+        const MinicRiscv64FunctionAbiPlan *plan = sel->plan->abi64;
+        const MinicRiscv64AbiArgumentLocation *loc;
+        if (plan == NULL || index >= plan->parameter_location_count ||
+            plan->parameter_locations == NULL) return false;
+        loc = &plan->parameter_locations[index];
+        if (loc->value.kind != MINIC_RISCV64_ABI_VALUE_INTEGER ||
+            loc->value.slot_count != 1U ||
+            loc->integer_register_count != 1U ||
+            loc->floating_register_count != 0U ||
+            loc->stack_slot_count != 0U ||
+            loc->integer_register_begin >= 8U) return false;
+        reg = loc->integer_register_begin;
+    }
+    return rv_type(sel, ins->core_type_id, &bytes, &sign, &pointer) &&
         rv_rr(sel, MINIC_RISCV_MACHINE_MV, RV_T0, RV_A0 + (unsigned)reg) &&
         rv_normalize(sel, RV_T0, bytes, sign) &&
         rv_store(sel, ins->result, RV_T0);
@@ -480,47 +505,103 @@ static bool rv_core_block_address(RvCoreSelection *sel,
     return rv_emit(sel, MINIC_RISCV_MACHINE_LA_BLOCK, ops, 2U) &&
         rv_store(sel, ins->result, RV_T0);
 }
-static bool rv_core_call(RvCoreSelection *sel,
-    const MinicCoreInstruction *ins) {
+/* This is a consumer of the EXACT final psABI placements built for the old
+ * RV32/RV64 emitter. It deliberately does not count, align, or assign a0-a7.
+ * A not-yet-migrated placement rejects the entire MachineIR function. */
+static bool rv_core_call_arguments(RvCoreSelection *sel,
+    MinicCoreInstructionId instruction_id, size_t start, size_t count,
+    bool has_scalar_result) {
     const MinicCoreFunction *fn = sel->plan->core;
-    const size_t start = ins->value.call.argument_begin;
-    const size_t count = ins->value.call.argument_count;
-    MinicMachineOperand op;
+    const Rv32CallAbiPlan *call32 = NULL;
+    const MinicRiscv64PreparedCall *call64 = NULL;
+    const MinicCoreCallView *view;
+    size_t ordinal;
     size_t i;
-    const MinicCoreCallee *callee;
-    const MinicCoreType *signature;
-    unsigned result_bytes;
-    bool result_sign, result_pointer;
-    if (!sel->plan->frame->saves_return_address ||
-        ins->value.call.extended_float_operation !=
-            MINIC_CORE_EXT_FLOAT_NONE ||
-        ins->value.call.result_object != MINIC_CORE_OBJECT_INVALID ||
-        ins->value.call.callee_id >= fn->callee_count ||
-        count > 8U || start > fn->call_argument_count ||
-        count > fn->call_argument_count - start) return false;
-    callee = &fn->callees[ins->value.call.callee_id];
-    if (callee->name == NULL || fn->type_context == NULL) return false;
-    signature = minic_core_type_get(fn->type_context,
-        minic_core_type_unqualified(fn->type_context,
-            callee->core_function_type_id));
-    if (signature == NULL || signature->kind != MINIC_CORE_TYPE_FUNCTION ||
-        signature->value.function.is_variadic ||
-        signature->value.function.calling_convention !=
-            MINIC_CALLING_CONVENTION_DEFAULT ||
-        (ins->result != MINIC_CORE_VALUE_INVALID &&
-         !rv_type(sel, ins->core_type_id, &result_bytes,
-             &result_sign, &result_pointer))) return false;
+    if (start > fn->call_argument_count ||
+        count > fn->call_argument_count - start ||
+        !sel->plan->frame->saves_return_address) return false;
+    if (sel->xlen == 32U) {
+        call32 = rv32_function_abi_call(sel->plan->abi32, instruction_id);
+        if (call32 == NULL || call32->view.argument_begin != start ||
+            call32->view.argument_count != count ||
+            call32->indirect_return ||
+            call32->view.return_form == MINIC_CORE_CALL_RETURN_OBJECT ||
+            (has_scalar_result &&
+             call32->view.return_form != MINIC_CORE_CALL_RETURN_VALUE) ||
+            (count != 0U && call32->arguments == NULL)) return false;
+    } else {
+        if (sel->plan->semantic_calls64 == NULL ||
+            sel->plan->abi64 == NULL ||
+            (view = minic_core_call_index_find(sel->plan->semantic_calls64,
+                instruction_id, &ordinal)) == NULL ||
+            view->argument_begin != start ||
+            view->argument_count != count ||
+            view->return_form == MINIC_CORE_CALL_RETURN_OBJECT ||
+            (has_scalar_result &&
+             view->return_form != MINIC_CORE_CALL_RETURN_VALUE) ||
+            ordinal >= sel->plan->abi64->outgoing_calls.count ||
+            sel->plan->abi64->outgoing_calls.sites == NULL ||
+            (call64 = sel->plan->abi64->outgoing_calls.sites[ordinal]) == NULL ||
+            call64->instruction_id != instruction_id ||
+            call64->argument_count != count ||
+            (call64->return_value.kind != MINIC_RISCV64_ABI_VALUE_VOID &&
+             call64->return_value.kind != MINIC_RISCV64_ABI_VALUE_INTEGER) ||
+            (has_scalar_result &&
+             (call64->return_value.kind != MINIC_RISCV64_ABI_VALUE_INTEGER ||
+              call64->return_value.slot_count != 1U))) return false;
+    }
     for (i = 0U; i < count; ++i) {
         const MinicCoreCallArgument *arg = &fn->call_arguments[start + i];
         unsigned bytes;
         bool sign, pointer;
+        size_t reg;
         if (arg->kind != MINIC_CORE_CALL_ARGUMENT_VALUE ||
             arg->value.value_id >= fn->value_count ||
             !rv_type(sel, fn->values[arg->value.value_id].core_type_id,
-                &bytes, &sign, &pointer) ||
-            !rv_load(sel, arg->value.value_id, RV_A0 + (unsigned)i))
+                &bytes, &sign, &pointer)) return false;
+        if (call32 != NULL) {
+            const Rv32AbiWordLocation *loc = &call32->arguments[i];
+            if (loc->words != 1U || loc->indirect_record ||
+                loc->location.register_count != 1U ||
+                loc->location.stack_count != 0U ||
+                loc->location.register_begin >= 8U) return false;
+            reg = loc->location.register_begin;
+        } else {
+            const MinicRiscv64AbiArgumentLocation *loc = &call64->arguments[i];
+            if (loc->value.kind != MINIC_RISCV64_ABI_VALUE_INTEGER ||
+                loc->value.slot_count != 1U ||
+                loc->integer_register_count != 1U ||
+                loc->floating_register_count != 0U ||
+                loc->stack_slot_count != 0U ||
+                loc->integer_register_begin >= 8U) return false;
+            reg = loc->integer_register_begin;
+        }
+        if (!rv_load(sel, arg->value.value_id, RV_A0 + (unsigned)reg))
             return false;
     }
+    return true;
+}
+
+static bool rv_core_call(RvCoreSelection *sel,
+    MinicCoreInstructionId instruction_id,
+    const MinicCoreInstruction *ins) {
+    const MinicCoreFunction *fn = sel->plan->core;
+    const MinicCoreCallee *callee;
+    MinicMachineOperand op = {0};
+    unsigned result_bytes = 0U;
+    bool result_sign = false, result_pointer = false;
+    if (ins->value.call.extended_float_operation !=
+            MINIC_CORE_EXT_FLOAT_NONE ||
+        ins->value.call.result_object != MINIC_CORE_OBJECT_INVALID ||
+        ins->value.call.callee_id >= fn->callee_count) return false;
+    callee = &fn->callees[ins->value.call.callee_id];
+    if (callee->name == NULL ||
+        (ins->result != MINIC_CORE_VALUE_INVALID &&
+         !rv_type(sel, ins->core_type_id, &result_bytes,
+             &result_sign, &result_pointer)) ||
+        !rv_core_call_arguments(sel, instruction_id,
+            ins->value.call.argument_begin, ins->value.call.argument_count,
+            ins->result != MINIC_CORE_VALUE_INVALID)) return false;
     op.kind = MINIC_MACHINE_OPERAND_SYMBOL;
     op.value.symbol.name = callee->name;
     op.value.symbol.relocation = MINIC_RISCV_MACHINE_RELOC_CALL;
@@ -531,43 +612,22 @@ static bool rv_core_call(RvCoreSelection *sel,
          rv_store(sel, ins->result, RV_A0));
 }
 static bool rv_core_indirect_call(RvCoreSelection *sel,
+    MinicCoreInstructionId instruction_id,
     const MinicCoreInstruction *ins) {
     const MinicCoreFunction *fn = sel->plan->core;
-    const size_t start = ins->value.indirect_call.argument_begin;
-    const size_t count = ins->value.indirect_call.argument_count;
     MinicMachineOperand callee;
-    const MinicCoreType *signature;
-    unsigned result_bytes;
-    bool result_sign, result_pointer;
-    size_t i;
-    if (!sel->plan->frame->saves_return_address ||
-        ins->value.indirect_call.result_object != MINIC_CORE_OBJECT_INVALID ||
-        count > 8U || start > fn->call_argument_count ||
-        count > fn->call_argument_count - start ||
+    unsigned result_bytes = 0U;
+    bool result_sign = false, result_pointer = false;
+    if (ins->value.indirect_call.result_object != MINIC_CORE_OBJECT_INVALID ||
         ins->value.indirect_call.signature_id >= fn->call_signature_count ||
-        !rv_load(sel, ins->value.indirect_call.callee, RV_T0)) return false;
-    signature = minic_core_type_get(fn->type_context,
-        minic_core_type_unqualified(fn->type_context,
-            fn->call_signatures[ins->value.indirect_call.signature_id]
-                .core_function_type_id));
-    if (signature == NULL || signature->kind != MINIC_CORE_TYPE_FUNCTION ||
-        signature->value.function.is_variadic ||
-        signature->value.function.calling_convention !=
-            MINIC_CALLING_CONVENTION_DEFAULT ||
         (ins->result != MINIC_CORE_VALUE_INVALID &&
          !rv_type(sel, ins->core_type_id, &result_bytes,
-             &result_sign, &result_pointer))) return false;
-    for (i = 0U; i < count; ++i) {
-        const MinicCoreCallArgument *arg = &fn->call_arguments[start + i];
-        unsigned bytes;
-        bool sign, pointer;
-        if (arg->kind != MINIC_CORE_CALL_ARGUMENT_VALUE ||
-            arg->value.value_id >= fn->value_count ||
-            !rv_type(sel, fn->values[arg->value.value_id].core_type_id,
-                &bytes, &sign, &pointer) ||
-            !rv_load(sel, arg->value.value_id, RV_A0 + (unsigned)i))
-            return false;
-    }
+             &result_sign, &result_pointer)) ||
+        !rv_core_call_arguments(sel, instruction_id,
+            ins->value.indirect_call.argument_begin,
+            ins->value.indirect_call.argument_count,
+            ins->result != MINIC_CORE_VALUE_INVALID) ||
+        !rv_load(sel, ins->value.indirect_call.callee, RV_T0)) return false;
     callee = rv_reg(sel->xlen, RV_T0, MINIC_MACHINE_REGISTER_READ);
     if (!rv_emit(sel, MINIC_RISCV_MACHINE_CALL_INDIRECT, &callee, 1U))
         return false;
@@ -576,6 +636,7 @@ static bool rv_core_indirect_call(RvCoreSelection *sel,
          rv_store(sel, ins->result, RV_A0));
 }
 static bool rv_core_instruction(RvCoreSelection *sel,
+    MinicCoreInstructionId instruction_id,
     const MinicCoreInstruction *ins) {
     switch (ins->kind) {
     case MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT:
@@ -617,9 +678,9 @@ static bool rv_core_instruction(RvCoreSelection *sel,
     case MINIC_CORE_INSTRUCTION_ATOMIC_STORE:
         return rv_core_memory(sel, ins);
     case MINIC_CORE_INSTRUCTION_CALL:
-        return rv_core_call(sel, ins);
+        return rv_core_call(sel, instruction_id, ins);
     case MINIC_CORE_INSTRUCTION_INDIRECT_CALL:
-        return rv_core_indirect_call(sel, ins);
+        return rv_core_indirect_call(sel, instruction_id, ins);
     case MINIC_CORE_INSTRUCTION_COMPILER_BARRIER:
         return rv_emit(sel, MINIC_RISCV_MACHINE_BARRIER, NULL, 0U);
     default:
@@ -681,56 +742,6 @@ static bool rv_core_terminator(RvCoreSelection *sel, size_t core_id) {
     }
 }
 
-/* Reachability belongs to Core control flow, independent of target labels.
- * Never manufacture a primary Machine block for dead Core code: the common
- * effect/provenance gate requires precisely the reachable Core blocks. */
-static bool rv_compute_reachable(const MinicCoreFunction *fn,
-    bool *reachable) {
-    size_t *queue, head = 0U, tail = 0U, i;
-    if (fn->block_count > SIZE_MAX / sizeof(*queue) ||
-        fn->entry_block >= fn->block_count) return false;
-    queue = malloc(fn->block_count * sizeof(*queue));
-    if (queue == NULL) return false;
-    reachable[fn->entry_block] = true;
-    queue[tail++] = fn->entry_block;
-    while (head < tail) {
-        const MinicCoreBlock *block = &fn->blocks[queue[head++]];
-        const MinicCoreTerminator *term = &block->terminator;
-        size_t targets[2], count = 0U;
-        if (!block->has_terminator) { free(queue); return false; }
-        switch (term->kind) {
-        case MINIC_CORE_TERMINATOR_BRANCH:
-            targets[count++] = term->branch_target;
-            break;
-        case MINIC_CORE_TERMINATOR_CONDITIONAL_BRANCH:
-            targets[count++] = term->conditional.when_true;
-            targets[count++] = term->conditional.when_false;
-            break;
-        case MINIC_CORE_TERMINATOR_INDIRECT_BRANCH:
-            for (i = 0U; i < fn->block_count; ++i)
-                if (fn->blocks[i].indirect_entry && !reachable[i]) {
-                    reachable[i] = true;
-                    queue[tail++] = i;
-                }
-            break;
-        case MINIC_CORE_TERMINATOR_RETURN:
-        case MINIC_CORE_TERMINATOR_UNREACHABLE:
-            break;
-        default: free(queue); return false;
-        }
-        for (i = 0U; i < count; ++i)
-            if (targets[i] >= fn->block_count) {
-                free(queue);
-                return false;
-            } else if (!reachable[targets[i]]) {
-                reachable[targets[i]] = true;
-                queue[tail++] = targets[i];
-            }
-    }
-    free(queue);
-    return true;
-}
-
 bool minic_riscv_machine_select_core_subset(MinicMachineFunction *machine,
     const MinicRiscvCoreMachinePlan *plan) {
     RvCoreSelection sel = {0};
@@ -749,6 +760,26 @@ bool minic_riscv_machine_select_core_subset(MinicMachineFunction *machine,
         !minic_core_function_verify(core) ||
         !minic_riscv_target_isa_load(target, &isa) ||
         (isa.xlen != 32U && isa.xlen != 64U) ||
+        (isa.xlen == 32U
+            ? (plan->abi32 == NULL || plan->abi64 != NULL ||
+               plan->semantic_calls64 != NULL ||
+               plan->abi32->semantic_calls.index == NULL ||
+               plan->abi32->parameter_count !=
+                   minic_core_function_parameter_count(core) ||
+               plan->frame->has_hidden_result_pointer !=
+                   plan->abi32->indirect_return)
+            : (plan->abi64 == NULL || plan->abi32 != NULL ||
+               !plan->abi64->prepared ||
+               !plan->abi64->named_parameter_cursor.lp64_soft_float ||
+               plan->abi64->parameter_location_count !=
+                   minic_core_function_parameter_count(core) ||
+               plan->frame->has_hidden_result_pointer !=
+                   (plan->abi64->return_value.kind ==
+                    MINIC_RISCV64_ABI_VALUE_INDIRECT) ||
+               (plan->semantic_calls64 == NULL
+                   ? plan->abi64->outgoing_calls.count != 0U
+                   : plan->semantic_calls64->count !=
+                     plan->abi64->outgoing_calls.count))) ||
         target->data_layout->pointer_size != isa.xlen / 8U ||
         (frame = plan->frame)->frame_size > (size_t)INT32_MAX ||
         frame->frame_size % 16U != 0U ||
@@ -778,7 +809,8 @@ bool minic_riscv_machine_select_core_subset(MinicMachineFunction *machine,
         sel.conditional_fallthroughs == NULL ||
         sel.conditional_others == NULL)
         goto done;
-    if (!rv_compute_reachable(core, sel.reachable)) goto done;
+    if (!minic_core_function_mark_reachable_blocks(
+            core, sel.reachable, core->block_count)) goto done;
     if (!minic_machine_builder_create_block(&sel.builder,
         NULL, false, true, &id) || id != 0U) goto done;
     /* Core entry first (the physical ABI prologue falls through to block1),
@@ -822,7 +854,7 @@ bool minic_riscv_machine_select_core_subset(MinicMachineFunction *machine,
                 block->instructions[j];
             if (instruction_id >= core->instruction_count) goto done;
             minic_machine_builder_set_origin(&sel.builder, i, instruction_id);
-            if (!rv_core_instruction(&sel,
+            if (!rv_core_instruction(&sel, instruction_id,
                     &core->instructions[instruction_id])) goto done;
             minic_machine_builder_clear_origin(&sel.builder);
         }
@@ -830,7 +862,11 @@ bool minic_riscv_machine_select_core_subset(MinicMachineFunction *machine,
     }
     if (!minic_riscv_machine_select_epilogue(&sel.builder, frame,
             sel.epilogue_block)) goto done;
-    if (!minic_riscv_machine_gnu_asm_policy(target, &policy) ||
+    /* External/local-label and asm-goto entry roots belong to Core's common
+     * closure. A not-yet-migrated multi-entry MachineCFG must be rejected as
+     * a whole, never silently drop or falsely accept its reachable blocks. */
+    if (!minic_machine_core_coverage_verify(core, sel.reachable, machine) ||
+        !minic_riscv_machine_gnu_asm_policy(target, &policy) ||
         !minic_machine_gnu_asm_preflight(machine, &policy)) goto done;
     success = true;
 done:

@@ -2556,10 +2556,13 @@ check-loong-machine-core-select:
 	  src/target/common/machine_core_coverage.c \
 	  src/target/common/lp64_scalar.c \
 	  src/target/common/lp64_frame.c \
+	  src/target/common/lp64_aggregate.c \
+	  src/target/common/aggregate_shape.c \
 	  src/target/common/core_numeric_shape.c \
 	  src/target/common/direct_instruction_semantics.c \
 	  src/target/common/direct_residual_plan.c \
 	  src/target/common/direct_call_plan.c \
+	  src/target/common/core_call_view.c \
 	  src/target/common/core_call_index.c \
 	  src/target/common/elf_module_symbol_info.c \
 	  src/target/loongarch64/machine_opcode.c \
@@ -2623,6 +2626,15 @@ check-riscv-machine-core-select:
 	  src/target/common/machine_ir_verify.c \
 	  src/target/common/machine_gnu_asm.c \
 	  src/target/common/machine_core_coverage.c \
+	  src/target/common/core_call_view.c \
+	  src/target/common/core_call_index.c \
+	  src/target/common/aggregate_shape.c \
+	  src/target/riscv32/rv32_abi_plan.c \
+	  src/target/riscv32/rv32_abi_cursor.c \
+	  src/target/riscv32/rv32_scalar.c \
+	  src/target/riscv64/abi.c \
+	  src/target/riscv64/function_abi_plan.c \
+	  src/target/riscv64/frame_requirements.c \
 	  src/target/riscv/machine_core_select.c \
 	  src/target/riscv/machine_frame_select.c \
 	  src/target/riscv/machine_opcode.c \
@@ -2643,6 +2655,12 @@ check-x86-machine-core-select:
 	  src/target/common/machine_ir_verify.c \
 	  src/target/common/machine_gnu_asm.c \
 	  src/target/common/machine_core_coverage.c \
+	  src/target/common/lp64_scalar.c \
+	  src/target/common/lp64_frame.c \
+	  src/target/common/aggregate_shape.c \
+	  src/target/common/core_numeric_shape.c \
+	  src/target/common/direct_instruction_semantics.c \
+	  src/target/x86_64/abi.c \
 	  src/target/x86_64/machine_opcode.c \
 	  src/target/x86_64/machine_gnu_asm.c \
 	  src/target/x86_64/machine_frame_select.c \

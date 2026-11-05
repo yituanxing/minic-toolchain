@@ -8,6 +8,8 @@
 #include "target/common/machine_builder.h"
 #include "target/common/core_block_walk.h"
 #include "target/common/machine_gnu_asm.h"
+#include "target/common/direct_instruction_semantics.h"
+#include "target/common/lp64_scalar.h"
 
 #include <limits.h>
 #include <stdint.h>
@@ -160,6 +162,107 @@ static bool x86_core_store(X86CoreSelector *sel, MinicCoreValueId value,
             x86_reg(reg, 64U), slot);
 }
 
+/* Reuse the sealed x86 frame's object geometry. These are physical addresses
+ * consumed by existing Core record transfers, never a new object layout. */
+static bool x86_object_address(X86CoreSelector *sel,
+    MinicCoreObjectId object, unsigned int reg) {
+    MinicMachineOperand slot;
+    size_t offset;
+    const bool rsp_based = sel->frame->objects_from_aligned_rsp;
+    if (object >= sel->frame->object_count ||
+        sel->frame->object_offsets == NULL) return false;
+    offset = sel->frame->object_offsets[object];
+    if (offset > INT32_MAX ||
+        !minic_x86_64_machine_frame_slot(&sel->builder,
+            rsp_based ? MINIC_MACHINE_FRAME_BASE_STACK_POINTER :
+                MINIC_MACHINE_FRAME_BASE_FRAME_POINTER,
+            MINIC_MACHINE_FRAME_LOCAL, 1U, 1U,
+            rsp_based ? (int64_t)offset : -(int64_t)offset, &slot))
+        return false;
+    return x86_2(sel, rsp_based ? MINIC_X86_MI_LEA64_FRSP_R :
+        MINIC_X86_MI_LEA64_FRBP_R, slot, x86_reg(reg, 64U));
+}
+
+/* A memory address that came from head's integer-link-VMA cast requires
+ * special physical rebasing in the legacy backend. Until the module-symbol
+ * view is wired into typed selection, reject precisely that case. */
+static bool x86_record_pointer(X86CoreSelector *sel,
+    MinicCoreValueId value, unsigned int reg) {
+    if (value >= sel->core->value_count ||
+        (sel->frame->kernel_head_link_addresses &&
+         sel->frame->kernel_head_memory_rebase_globals != NULL &&
+         sel->frame->kernel_head_memory_rebase_globals[value] !=
+             MINIC_CORE_GLOBAL_INVALID)) return false;
+    return x86_core_load(sel, value, reg);
+}
+
+/* This byte transporter is migrated from the old x86_emit_record_move_bytes:
+ * <=128 bytes use exact unrolled memory accesses; larger objects preserve
+ * the SysV outgoing argument registers while using CLD/REP MOVSB. Core owns
+ * the extent; this routine owns only the x86 physical byte traffic. */
+static bool x86_record_move_bytes(X86CoreSelector *sel,
+    unsigned int src_base, size_t src_offset,
+    unsigned int dst_base, size_t dst_offset,
+    size_t bytes, bool bytewise, bool volatile_source,
+    bool volatile_destination) {
+    size_t i = 0U;
+    if (src_offset > SIZE_MAX - bytes ||
+        dst_offset > SIZE_MAX - bytes ||
+        src_offset > INT32_MAX || dst_offset > INT32_MAX ||
+        bytes > (16U * 1024U * 1024U)) return false;
+    if (bytes == 0U) return true;
+    if (bytes <= 128U) {
+        if (!bytewise) {
+            for (; i + 8U <= bytes; i += 8U) {
+                if (!x86_2_volatile(sel, MINIC_X86_MI_MOV64_AR,
+                        x86_addr(src_base, (int64_t)(src_offset + i)),
+                        x86_reg(MINIC_X86_REG_RAX, 64U),
+                        volatile_source) ||
+                    !x86_2_volatile(sel, MINIC_X86_MI_MOV64_RA,
+                        x86_reg(MINIC_X86_REG_RAX, 64U),
+                        x86_addr(dst_base, (int64_t)(dst_offset + i)),
+                        volatile_destination)) return false;
+            }
+        }
+        for (; i < bytes; ++i)
+            if (!x86_2_volatile(sel, MINIC_X86_MI_MOVZBQ_AR,
+                    x86_addr(src_base, (int64_t)(src_offset + i)),
+                    x86_reg(MINIC_X86_REG_RAX, 64U),
+                    volatile_source) ||
+                !x86_2_volatile(sel, MINIC_X86_MI_MOV8_RA,
+                    x86_reg(MINIC_X86_REG_RAX, 8U),
+                    x86_addr(dst_base, (int64_t)(dst_offset + i)),
+                    volatile_destination)) return false;
+        return true;
+    }
+    if (src_offset > INT32_MAX - bytes ||
+        dst_offset > INT32_MAX - bytes) return false;
+    return x86_1(sel, MINIC_X86_MI_PUSH64_R,
+            x86_reg(MINIC_X86_REG_RDI, 64U)) &&
+        x86_1(sel, MINIC_X86_MI_PUSH64_R,
+            x86_reg(MINIC_X86_REG_RSI, 64U)) &&
+        x86_1(sel, MINIC_X86_MI_PUSH64_R,
+            x86_reg(MINIC_X86_REG_RCX, 64U)) &&
+        x86_2(sel, MINIC_X86_MI_LEA64_AR,
+            x86_addr(src_base, (int64_t)src_offset),
+            x86_reg(MINIC_X86_REG_RSI, 64U)) &&
+        x86_2(sel, MINIC_X86_MI_LEA64_AR,
+            x86_addr(dst_base, (int64_t)dst_offset),
+            x86_reg(MINIC_X86_REG_RDI, 64U)) &&
+        x86_ir(sel, MINIC_X86_MI_MOVABS64_IR,
+            (int64_t)bytes, 64U, MINIC_X86_REG_RCX) &&
+        x86_0(sel, MINIC_X86_MI_CLD) &&
+        x86_emit(sel, MINIC_X86_MI_REP_MOVSB, NULL, 0U,
+            volatile_source || volatile_destination ?
+                MINIC_MACHINE_EFFECT_VOLATILE : 0U) &&
+        x86_1(sel, MINIC_X86_MI_POP64_R,
+            x86_reg(MINIC_X86_REG_RCX, 64U)) &&
+        x86_1(sel, MINIC_X86_MI_POP64_R,
+            x86_reg(MINIC_X86_REG_RSI, 64U)) &&
+        x86_1(sel, MINIC_X86_MI_POP64_R,
+            x86_reg(MINIC_X86_REG_RDI, 64U));
+}
+
 static const MinicCoreType *x86_type(const X86CoreSelector *sel,
     MinicCoreTypeId id) {
     if (sel == NULL || sel->core->type_context == NULL) return NULL;
@@ -171,20 +274,13 @@ static bool x86_scalar_shape(const X86CoreSelector *sel,
     MinicCoreTypeId id, size_t *bytes, bool *is_signed, bool *is_bool) {
     const MinicCoreType *type = x86_type(sel, id);
     if (bytes == NULL || is_signed == NULL || is_bool == NULL ||
-        type == NULL || !type->has_layout) return false;
+        type == NULL || !type->has_layout ||
+        !minic_x86_64_core_scalar_width(sel->core->type_context, id,
+            bytes, is_signed) || *bytes == 0U || *bytes > 8U ||
+        (*bytes != 1U && *bytes != 2U &&
+         *bytes != 4U && *bytes != 8U)) return false;
     *is_bool = type->kind == MINIC_CORE_TYPE_INTEGER &&
         type->value.integer.is_bool;
-    if (type->kind == MINIC_CORE_TYPE_POINTER && type->size == 8U) {
-        *bytes = 8U;
-        *is_signed = false;
-        return true;
-    }
-    if (type->kind != MINIC_CORE_TYPE_INTEGER || type->size == 0U ||
-        type->size > 8U ||
-        (type->size != 1U && type->size != 2U &&
-         type->size != 4U && type->size != 8U)) return false;
-    *bytes = type->size;
-    *is_signed = type->value.integer.is_signed;
     return true;
 }
 
@@ -246,6 +342,28 @@ static bool x86_float_shape(const X86CoreSelector *sel,
         *is_double = true;
         return true;
     }
+    return false;
+}
+
+/* Physical register names remain owned by the established x86 ABI bank.
+ * The selector only resolves those names to MachineIR register numbers. */
+static bool x86_abi_gp_register(MinicFunctionCallingConvention convention,
+    size_t index, unsigned int *reg) {
+    static const struct { const char *name; unsigned int number; } names[] = {
+        {"%rdi", MINIC_X86_REG_RDI}, {"%rsi", MINIC_X86_REG_RSI},
+        {"%rdx", MINIC_X86_REG_RDX}, {"%rcx", MINIC_X86_REG_RCX},
+        {"%r8", MINIC_X86_REG_R8}, {"%r9", MINIC_X86_REG_R9}
+    };
+    const MinicX86AbiRegisters *abi =
+        minic_x86_64_abi_registers(convention);
+    size_t i;
+    if (abi == NULL || index >= abi->gp_argument_count ||
+        reg == NULL) return false;
+    for (i = 0U; i < sizeof(names) / sizeof(names[0]); ++i)
+        if (strcmp(abi->gp_arguments[index], names[i].name) == 0) {
+            *reg = names[i].number;
+            return true;
+        }
     return false;
 }
 
@@ -461,16 +579,10 @@ static bool x86_scalar_memory(X86CoreSelector *sel,
  * from the Core parameter index or infer the calling convention from ISA. */
 static bool x86_parameter(X86CoreSelector *sel,
     const MinicCoreInstruction *ins) {
-    static const unsigned int sysv_gp[6] = {
-        MINIC_X86_REG_RDI, MINIC_X86_REG_RSI, MINIC_X86_REG_RDX,
-        MINIC_X86_REG_RCX, MINIC_X86_REG_R8, MINIC_X86_REG_R9};
-    static const unsigned int ms_gp[4] = {
-        MINIC_X86_REG_RCX, MINIC_X86_REG_RDX,
-        MINIC_X86_REG_R8, MINIC_X86_REG_R9};
     const MinicX86ArgumentPlan *plan = &sel->frame->incoming_arguments;
     const MinicX86ArgLocation *where;
-    const unsigned int *regs;
-    size_t gp_count, bytes, offset;
+    unsigned int physical_gp;
+    size_t bytes, offset;
     bool sign = false, is_bool = false, ms, float_double = false, floating;
     const size_t position = ins->value.parameter_index;
     floating = x86_float_shape(sel, ins->core_type_id, &float_double);
@@ -486,8 +598,6 @@ static bool x86_parameter(X86CoreSelector *sel,
     if (where->kind != (floating ? MINIC_X86_ARG_SSE :
             MINIC_X86_ARG_INTEGER)) return false;
     ms = plan->calling_convention == MINIC_CALLING_CONVENTION_MS_X64;
-    regs = ms ? ms_gp : sysv_gp;
-    gp_count = ms ? 4U : 6U;
     if (floating && !where->on_stack) {
         if (where->fp_index >= 8U ||
             (ms && where->fp_index >= 4U)) return false;
@@ -502,7 +612,8 @@ static bool x86_parameter(X86CoreSelector *sel,
                 x86_addr(MINIC_X86_REG_RBP, (int64_t)offset),
                 x86_reg(MINIC_X86_REG_RAX, 64U))) return false;
     } else {
-        if (where->gp_index >= gp_count) return false;
+        if (!x86_abi_gp_register(plan->calling_convention,
+                where->gp_index, &physical_gp)) return false;
         if (sel->frame->saves_incoming_gp) {
             MinicMachineOperand save;
             if (where->gp_index > (SIZE_MAX -
@@ -518,7 +629,7 @@ static bool x86_parameter(X86CoreSelector *sel,
                 !x86_2(sel, MINIC_X86_MI_MOV64_FRBP_R, save,
                     x86_reg(MINIC_X86_REG_RAX, 64U))) return false;
         } else if (!x86_rr(sel, MINIC_X86_MI_MOV64_RR, 64U,
-                regs[where->gp_index], MINIC_X86_REG_RAX)) return false;
+                physical_gp, MINIC_X86_REG_RAX)) return false;
     }
     return floating ? x86_core_store(sel, ins->result,
         MINIC_X86_REG_RAX) : x86_result(sel, ins);
@@ -549,14 +660,9 @@ static bool x86_call_argument(X86CoreSelector *sel,
     const MinicCoreCallArgument *arg, MinicCoreTypeId declared_type,
     const MinicX86ArgLocation *where, size_t stack_bytes,
     MinicFunctionCallingConvention convention) {
-    static const unsigned int sysv_gp[6] = {
-        MINIC_X86_REG_RDI, MINIC_X86_REG_RSI, MINIC_X86_REG_RDX,
-        MINIC_X86_REG_RCX, MINIC_X86_REG_R8, MINIC_X86_REG_R9};
-    static const unsigned int ms_gp[4] = {
-        MINIC_X86_REG_RCX, MINIC_X86_REG_RDX,
-        MINIC_X86_REG_R8, MINIC_X86_REG_R9};
     const bool ms = convention == MINIC_CALLING_CONVENTION_MS_X64;
     const MinicCoreType *actual;
+    unsigned int physical_gp;
     size_t bytes, stack_offset;
     bool sign, is_bool, fp_double, floating;
     if (arg == NULL || where == NULL ||
@@ -597,12 +703,12 @@ static bool x86_call_argument(X86CoreSelector *sel,
         return x86_float_load_xmm(sel, arg->value.value_id,
             (unsigned int)where->fp_index, MINIC_X86_REG_RAX, fp_double);
     }
-    if (where->gp_index >= (ms ? 4U : 6U) ||
+    if (!x86_abi_gp_register(convention, where->gp_index,
+            &physical_gp) ||
         !x86_core_load(sel, arg->value.value_id, MINIC_X86_REG_RAX))
         return false;
     return x86_rr(sel, MINIC_X86_MI_MOV64_RR, 64U,
-        MINIC_X86_REG_RAX,
-        (ms ? ms_gp : sysv_gp)[where->gp_index]);
+        MINIC_X86_REG_RAX, physical_gp);
 }
 
 static bool x86_scalar_call(X86CoreSelector *sel,
@@ -730,6 +836,212 @@ static bool x86_scalar_call(X86CoreSelector *sel,
     return x86_result(sel, ins);
 }
 
+/* The old x86_one_gp_store writes exactly 1..8 ABI payload bytes, including
+ * packed odd tails. CL is preserved because a later Core PARAMETER_OBJECT
+ * may still consume the incoming SysV RCX argument. */
+static bool x86_store_record_gp(X86CoreSelector *sel,
+    size_t bytes, size_t offset) {
+    MinicX86MachineOpcode opcode;
+    if (bytes == 0U || bytes > 8U || offset > INT32_MAX - bytes)
+        return false;
+    switch (bytes) {
+    case 1U: opcode = MINIC_X86_MI_MOV8_RA; break;
+    case 2U: opcode = MINIC_X86_MI_MOV16_RA; break;
+    case 4U: opcode = MINIC_X86_MI_MOV32_RA; break;
+    case 8U: opcode = MINIC_X86_MI_MOV64_RA; break;
+    default: opcode = MINIC_X86_MI_INVALID; break;
+    }
+    if (opcode != MINIC_X86_MI_INVALID)
+        return x86_2(sel, opcode,
+            x86_reg(MINIC_X86_REG_RAX, (unsigned int)(bytes * 8U)),
+            x86_addr(MINIC_X86_REG_R10, (int64_t)offset));
+    if (!x86_1(sel, MINIC_X86_MI_PUSH64_R,
+            x86_reg(MINIC_X86_REG_RCX, 64U)) ||
+        !x86_ir(sel, MINIC_X86_MI_MOV8_IR, 8, 8U,
+            MINIC_X86_REG_RCX)) return false;
+    for (size_t i = 0U; i < bytes; ++i) {
+        if (!x86_2(sel, MINIC_X86_MI_MOV8_RA,
+                x86_reg(MINIC_X86_REG_RAX, 8U),
+                x86_addr(MINIC_X86_REG_R10, (int64_t)(offset + i))) ||
+            (i + 1U < bytes && !x86_1(sel, MINIC_X86_MI_SHR64_CL_R,
+                x86_reg(MINIC_X86_REG_RAX, 64U)))) return false;
+    }
+    return x86_1(sel, MINIC_X86_MI_POP64_R,
+        x86_reg(MINIC_X86_REG_RCX, 64U));
+}
+
+/* A real SysV aggregate parameter is transported using the exact incoming
+ * plan already classified in call_plan.c and ABI compatibility in abi.c. */
+static bool x86_parameter_object(X86CoreSelector *sel,
+    const MinicCoreInstruction *ins) {
+    const MinicX86ArgumentPlan *plan = &sel->frame->incoming_arguments;
+    const size_t position = ins->value.parameter_object.parameter_index;
+    const MinicCoreObjectId object = ins->value.parameter_object.object_id;
+    const MinicX86ArgLocation *loc;
+    const MinicCoreType *record;
+    unsigned int first, second;
+    size_t stack_offset, payload;
+    if (ins->result != MINIC_CORE_VALUE_INVALID ||
+        plan->calling_convention != MINIC_CALLING_CONVENTION_DEFAULT ||
+        plan->calling_convention !=
+            minic_core_function_calling_convention(sel->core) ||
+        position >= plan->argument_count || plan->locations == NULL ||
+        position >= minic_core_function_parameter_count(sel->core) ||
+        minic_core_function_parameter_types(sel->core) == NULL ||
+        object >= sel->core->object_count ||
+        sel->core->objects == NULL ||
+        sel->frame->object_storage.objects == NULL ||
+        !minic_x86_64_core_record_abi_compatible(
+            sel->core->type_context,
+            sel->core->objects[object].core_type_id,
+            minic_core_function_parameter_types(sel->core)[position]) ||
+        (record = x86_type(sel,
+            sel->core->objects[object].core_type_id)) == NULL ||
+        record->kind != MINIC_CORE_TYPE_RECORD || !record->has_layout ||
+        record->size > sel->frame->object_storage.objects[object].extent)
+        return false;
+    loc = &plan->locations[position];
+    payload = loc->record_bytes;
+    /* Empty GNU records legitimately have no physical write; the current
+     * Machine coverage contract cannot mark a zero-byte write as an effect.
+     * Reject explicitly rather than fabricate a store. */
+    if (loc->kind == MINIC_X86_ARG_RECORD_EMPTY)
+        return false;
+    if (payload != record->size || payload == 0U ||
+        (loc->kind != MINIC_X86_ARG_RECORD_ONE_GP &&
+         loc->kind != MINIC_X86_ARG_RECORD_TWO_GP &&
+         loc->kind != MINIC_X86_ARG_RECORD_MEMORY) ||
+        !x86_object_address(sel, object, MINIC_X86_REG_R10))
+        return false;
+    if (loc->on_stack) {
+        if (loc->stack_index > (INT32_MAX - 16U) / 8U)
+            return false;
+        stack_offset = 16U + loc->stack_index * 8U;
+        if (stack_offset > INT32_MAX - payload) return false;
+    } else stack_offset = 0U;
+    if (loc->kind == MINIC_X86_ARG_RECORD_MEMORY)
+        return loc->on_stack && x86_record_move_bytes(sel,
+            MINIC_X86_REG_RBP, stack_offset,
+            MINIC_X86_REG_R10, 0U, payload, false, false, false);
+    if (loc->kind == MINIC_X86_ARG_RECORD_ONE_GP) {
+        if (payload > 8U) return false;
+        if (loc->on_stack) {
+            if (!x86_2(sel, MINIC_X86_MI_MOV64_AR,
+                    x86_addr(MINIC_X86_REG_RBP, (int64_t)stack_offset),
+                    x86_reg(MINIC_X86_REG_RAX, 64U))) return false;
+        } else if (!x86_abi_gp_register(plan->calling_convention,
+                loc->gp_index, &first) ||
+            !x86_rr(sel, MINIC_X86_MI_MOV64_RR, 64U,
+                first, MINIC_X86_REG_RAX)) return false;
+        return x86_store_record_gp(sel, payload, 0U);
+    }
+    if (payload < 9U || payload > 16U) return false;
+    if (loc->on_stack) {
+        if (stack_offset > INT32_MAX - 16U ||
+            !x86_2(sel, MINIC_X86_MI_MOV64_AR,
+                x86_addr(MINIC_X86_REG_RBP, (int64_t)stack_offset),
+                x86_reg(MINIC_X86_REG_RAX, 64U))) return false;
+    } else if (!x86_abi_gp_register(plan->calling_convention,
+            loc->gp_index, &first) ||
+        !x86_abi_gp_register(plan->calling_convention,
+            loc->gp_index + 1U, &second) ||
+        !x86_rr(sel, MINIC_X86_MI_MOV64_RR, 64U,
+            first, MINIC_X86_REG_RAX)) return false;
+    if (!x86_store_record_gp(sel, 8U, 0U)) return false;
+    if (loc->on_stack) {
+        if (!x86_2(sel, MINIC_X86_MI_MOV64_AR,
+                x86_addr(MINIC_X86_REG_RBP, (int64_t)(stack_offset + 8U)),
+                x86_reg(MINIC_X86_REG_RAX, 64U))) return false;
+    } else if (!x86_rr(sel, MINIC_X86_MI_MOV64_RR, 64U,
+            second, MINIC_X86_REG_RAX)) return false;
+    return x86_store_record_gp(sel, payload - 8U, 8U);
+}
+
+static bool x86_record_copy(X86CoreSelector *sel,
+    const MinicCoreInstruction *ins) {
+    size_t bytes;
+    /* A zero-byte Core copy has no physical R/W effects. Existing coverage
+     * requires both, so reject until the zero-size coverage rule is sealed;
+     * never invent a memory access for an empty GNU record. */
+    if (!minic_multi_direct_record_copy_extent(sel->core, ins, &bytes) ||
+        bytes == 0U ||
+        !x86_record_pointer(sel,
+            ins->value.record_copy.destination_address, MINIC_X86_REG_R10) ||
+        !x86_record_pointer(sel,
+            ins->value.record_copy.source_address, MINIC_X86_REG_R11))
+        return false;
+    return x86_record_move_bytes(sel, MINIC_X86_REG_R11, 0U,
+        MINIC_X86_REG_R10, 0U, bytes, true,
+        ins->value.record_copy.source_volatile,
+        ins->value.record_copy.destination_volatile);
+}
+
+static bool x86_record_load(X86CoreSelector *sel,
+    const MinicCoreInstruction *ins) {
+    MinicLP64FramePlan plan = {0};
+    MinicCoreValueId source;
+    size_t offset, bytes;
+    const MinicCoreObjectId destination =
+        ins->value.record_load.destination_object;
+    plan.object_count = sel->frame->object_count;
+    plan.object_offsets = sel->frame->object_offsets;
+    if (!minic_multi_direct_record_load_extent(sel->core, ins,
+            &plan, &source, &offset, &bytes) ||
+        sel->frame->object_storage.objects == NULL ||
+        bytes > sel->frame->object_storage.objects[destination].extent ||
+        !x86_record_pointer(sel, source, MINIC_X86_REG_R11) ||
+        !x86_object_address(sel, destination, MINIC_X86_REG_R10))
+        return false;
+    (void)offset; /* Actual RBP/RSP choice belongs to the x86 frame view. */
+    return x86_record_move_bytes(sel, MINIC_X86_REG_R11, 0U,
+        MINIC_X86_REG_R10, 0U, bytes, true,
+        ins->value.record_load.is_volatile, false);
+}
+
+static bool x86_vector_storage_copy(X86CoreSelector *sel,
+    const MinicCoreInstruction *ins) {
+    const MinicCoreType *vector = x86_type(sel, ins->core_type_id);
+    MinicCoreTypeId source_type, destination_type;
+    const MinicCoreValueId source =
+        ins->value.vector_storage_copy.source_address;
+    const MinicCoreValueId destination =
+        ins->value.vector_storage_copy.destination_address;
+    if (ins->result != MINIC_CORE_VALUE_INVALID || vector == NULL ||
+        vector->kind != MINIC_CORE_TYPE_VECTOR ||
+        vector->value.vector.representation !=
+            MINIC_CORE_VECTOR_STORAGE_ONLY ||
+        !vector->has_layout || vector->size != 16U ||
+        vector->alignment != 16U ||
+        source >= sel->core->value_count ||
+        destination >= sel->core->value_count ||
+        ins->value.vector_storage_copy.source_volatile ||
+        ins->value.vector_storage_copy.destination_volatile ||
+        !minic_lp64_core_pointer_pointee(sel->core->type_context,
+            sel->core->values[source].core_type_id, &source_type) ||
+        !minic_lp64_core_pointer_pointee(sel->core->type_context,
+            sel->core->values[destination].core_type_id, &destination_type) ||
+        !minic_lp64_core_equal_unqualified(sel->core->type_context,
+            source_type, ins->core_type_id) ||
+        !minic_lp64_core_equal_unqualified(sel->core->type_context,
+            destination_type, ins->core_type_id) ||
+        !x86_record_pointer(sel, destination, MINIC_X86_REG_R10) ||
+        !x86_record_pointer(sel, source, MINIC_X86_REG_R11)) return false;
+    /* Migrate the original two-load/two-store sequence verbatim in
+     * physical meaning: overlapping storage snapshots both halves first. */
+    return x86_2(sel, MINIC_X86_MI_MOV64_AR,
+            x86_addr(MINIC_X86_REG_R11, 0),
+            x86_reg(MINIC_X86_REG_RAX, 64U)) &&
+        x86_2(sel, MINIC_X86_MI_MOV64_AR,
+            x86_addr(MINIC_X86_REG_R11, 8),
+            x86_reg(MINIC_X86_REG_RDX, 64U)) &&
+        x86_2(sel, MINIC_X86_MI_MOV64_RA,
+            x86_reg(MINIC_X86_REG_RAX, 64U),
+            x86_addr(MINIC_X86_REG_R10, 0)) &&
+        x86_2(sel, MINIC_X86_MI_MOV64_RA,
+            x86_reg(MINIC_X86_REG_RDX, 64U),
+            x86_addr(MINIC_X86_REG_R10, 8));
+}
+
 static bool x86_core_instruction(X86CoreSelector *sel,
     const MinicCoreInstruction *ins, size_t instruction_id) {
     size_t bytes;
@@ -738,6 +1050,14 @@ static bool x86_core_instruction(X86CoreSelector *sel,
     switch (ins->kind) {
     case MINIC_CORE_INSTRUCTION_PARAMETER:
         return x86_parameter(sel, ins);
+    case MINIC_CORE_INSTRUCTION_PARAMETER_OBJECT:
+        return x86_parameter_object(sel, ins);
+    case MINIC_CORE_INSTRUCTION_RECORD_LOAD:
+        return x86_record_load(sel, ins);
+    case MINIC_CORE_INSTRUCTION_RECORD_COPY:
+        return x86_record_copy(sel, ins);
+    case MINIC_CORE_INSTRUCTION_VECTOR_STORAGE_COPY:
+        return x86_vector_storage_copy(sel, ins);
     case MINIC_CORE_INSTRUCTION_CALL:
     case MINIC_CORE_INSTRUCTION_INDIRECT_CALL:
         return x86_scalar_call(sel, ins, instruction_id);

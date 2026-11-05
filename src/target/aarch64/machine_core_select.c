@@ -487,6 +487,68 @@ static bool a64_core_value_transfer(A64CoreSelection *sel,
             (MinicA64ScratchPolicy){0U, 0U});
 }
 
+/* Existing AAPCS64 named i128/binary128 parameter locations are already
+ * selected by Common.  Keep their complete 16-byte payload in the planned
+ * wide SSA slot; no implicit narrowing to a scalar GP/FP register. */
+static bool a64_wide_parameter(A64CoreSelection *sel,
+    const MinicCoreInstruction *ins,
+    const MinicLP64ArgumentLocation *location) {
+    const MinicCoreFunction *fn = sel->ctx->fn;
+    const bool integer = a64_wide_integer(fn, ins->core_type_id);
+    const bool floating = a64_wide_float(fn, ins->core_type_id);
+    size_t offset, limb;
+    if ((!integer && !floating) ||
+        location->kind != MINIC_LP64_ARGUMENT_WIDE ||
+        !a64_wide_core_slot(sel, ins->result, &offset)) return false;
+    if (integer) {
+        if ((location->gp_registers == 2U) ==
+            (location->stack_slots == 2U) ||
+            location->fp_registers != 0U ||
+            (location->gp_registers == 2U && location->stack_slots != 0U) ||
+            (location->stack_slots == 2U && location->gp_registers != 0U) ||
+            (location->gp_registers == 2U &&
+             (location->gp_first > 6U || (location->gp_first & 1U) != 0U)) ||
+            (location->stack_slots == 2U &&
+             location->stack_first > SIZE_MAX / 8U - 1U)) return false;
+        for (limb = 0U; limb < 2U; ++limb) {
+            const unsigned int reg = location->gp_registers == 2U ?
+                (unsigned int)(location->gp_first + limb) : A64_T0;
+            if (location->stack_slots == 2U &&
+                !minic_a64_machine_emit_frame_load(&sel->builder,
+                    &sel->view,
+                    (MinicA64FrameRef){MINIC_A64_FRAME_INCOMING,
+                        (location->stack_first + limb) * 8U},
+                    (MinicA64FrameRegister){MINIC_A64_REG_X, A64_T0},
+                    (MinicA64ScratchPolicy){0U, 0U})) return false;
+            if (!a64_store_wide_half(sel, offset + limb * 8U, reg))
+                return false;
+        }
+        return true;
+    }
+    if ((location->fp_registers == 1U) ==
+        (location->stack_slots == 2U) ||
+        location->gp_registers != 0U ||
+        (location->fp_registers == 1U && location->stack_slots != 0U) ||
+        (location->stack_slots == 2U && location->fp_registers != 0U) ||
+        (location->fp_registers == 1U && location->fp_first >= 8U) ||
+        (location->stack_slots == 2U &&
+         location->stack_first > SIZE_MAX / 8U - 1U)) return false;
+    {
+        const unsigned int reg = location->fp_registers == 1U ?
+            (unsigned int)location->fp_first : 9U;
+        if (location->stack_slots == 2U &&
+            !minic_a64_machine_emit_frame_load(&sel->builder, &sel->view,
+                (MinicA64FrameRef){MINIC_A64_FRAME_INCOMING,
+                    location->stack_first * 8U},
+                (MinicA64FrameRegister){MINIC_A64_REG_Q, reg},
+                (MinicA64ScratchPolicy){0U, 0U})) return false;
+        return minic_a64_machine_emit_frame_store(&sel->builder, &sel->view,
+            minic_a64_owned_slot(offset),
+            (MinicA64FrameRegister){MINIC_A64_REG_Q, reg},
+            (MinicA64ScratchPolicy){0U, 0U});
+    }
+}
+
 /* AAPCS64's immutable Common-planned locations are the authority.  This
  * selector handles actual physical moves; it does not recalculate AAPCS64
  * register/stack assignment or reopen a frontend C function signature. */
@@ -498,8 +560,11 @@ static bool a64_parameter(A64CoreSelection *sel,
     MinicA64FrameRegister reg;
     if (sel->ctx->incoming_plan == NULL ||
         !minic_multi_direct_scalar_parameter_location(fn, ins,
-            sel->ctx->incoming_plan, &location) ||
-        !a64_scalar_abi(fn, ins->core_type_id, &shape) ||
+            sel->ctx->incoming_plan, &location)) return false;
+    if (a64_wide_integer(fn, ins->core_type_id) ||
+        a64_wide_float(fn, ins->core_type_id))
+        return a64_wide_parameter(sel, ins, location);
+    if (!a64_scalar_abi(fn, ins->core_type_id, &shape) ||
         shape.kind == MINIC_CORE_TYPE_VOID) return false;
     if (shape.kind == MINIC_CORE_TYPE_FLOAT) {
         if ((location->fp_registers != 0U) ==
@@ -1006,6 +1071,89 @@ static bool a64_copy_bytes(A64CoreSelection *sel,
     }
 }
 
+/* Transfer an already-planned AAPCS64 record parameter into its owned
+ * addressable Core object.  The source backend's byte-exact ingress logic
+ * is retained, but the locations and object bounds remain Common-owned and
+ * all output uses the existing typed Machine/frame emitters.  A partial
+ * final eightbyte must not overwrite a neighbouring frame object. */
+static bool a64_parameter_object(A64CoreSelection *sel,
+    const MinicCoreInstruction *ins) {
+    const MinicLP64ArgumentLocation *location;
+    size_t offset, chunk, size;
+    if (sel->ctx->incoming_plan == NULL ||
+        !minic_multi_direct_parameter_object_location(sel->ctx->fn, ins,
+            sel->ctx->incoming_plan, sel->ctx->frame_plan,
+            &location, &offset)) return false;
+    size = location->size_bytes;
+    if (location->kind == MINIC_LP64_ARGUMENT_INDIRECT_RECORD) {
+        if (size == 0U || size > 2048U ||
+            ((location->gp_registers == 1U) ==
+             (location->stack_slots == 1U)) ||
+            (location->gp_registers == 1U && location->stack_slots != 0U) ||
+            (location->stack_slots == 1U && location->gp_registers != 0U) ||
+            location->fp_registers != 0U ||
+            (location->gp_registers != 0U && location->gp_first >= 8U) ||
+            (location->stack_slots != 0U &&
+             location->stack_first > SIZE_MAX / 8U)) return false;
+        /* x9: caller's record address; x10: our owned record address. */
+        if (location->gp_registers != 0U) {
+            if (!a64_rr(sel, MINIC_A64_MACHINE_MOV, 64U,
+                    A64_T0, (unsigned int)location->gp_first)) return false;
+        } else if (!minic_a64_machine_emit_frame_load(&sel->builder,
+                &sel->view, (MinicA64FrameRef){MINIC_A64_FRAME_INCOMING,
+                    location->stack_first * 8U},
+                (MinicA64FrameRegister){MINIC_A64_REG_X, A64_T0},
+                (MinicA64ScratchPolicy){0U, 0U})) return false;
+        return minic_a64_machine_emit_frame_address(&sel->builder,
+                &sel->view, minic_a64_owned_slot(offset), A64_T1,
+                (MinicA64ScratchPolicy){0U, 0U}) &&
+            a64_copy_bytes(sel, size, false, false);
+    }
+    if (location->kind != MINIC_LP64_ARGUMENT_RECORD ||
+        size == 0U || size > 16U ||
+        location->fp_registers != 0U ||
+        location->chunks != (size + 7U) / 8U ||
+        location->gp_registers > location->chunks ||
+        location->stack_slots !=
+            location->chunks - location->gp_registers ||
+        (location->gp_registers != 0U &&
+         (location->gp_first >= 8U ||
+          location->gp_registers > 8U - location->gp_first)) ||
+        (location->stack_slots != 0U &&
+         location->stack_first > SIZE_MAX / 8U -
+             (location->stack_slots - 1U))) return false;
+    for (chunk = 0U; chunk < location->chunks; ++chunk) {
+        const bool in_register = chunk < location->gp_registers;
+        const size_t payload = size - chunk * 8U >= 8U ?
+            8U : size - chunk * 8U;
+        size_t byte;
+        /* x10 is the exact destination byte address; x9 carries one
+         * little-endian AAPCS64 argument eightbyte. */
+        if (offset > SIZE_MAX - chunk * 8U ||
+            !minic_a64_machine_emit_frame_address(&sel->builder,
+                &sel->view, minic_a64_owned_slot(offset + chunk * 8U),
+                A64_T1, (MinicA64ScratchPolicy){0U, 0U})) return false;
+        if (in_register) {
+            if (!a64_rr(sel, MINIC_A64_MACHINE_MOV, 64U,
+                    A64_T0,
+                    (unsigned int)(location->gp_first + chunk))) return false;
+        } else if (!minic_a64_machine_emit_frame_load(&sel->builder,
+                &sel->view, (MinicA64FrameRef){MINIC_A64_FRAME_INCOMING,
+                    (location->stack_first + chunk -
+                     location->gp_registers) * 8U},
+                (MinicA64FrameRegister){MINIC_A64_REG_X, A64_T0},
+                (MinicA64ScratchPolicy){0U, 0U})) return false;
+        for (byte = 0U; byte < payload; ++byte) {
+            if (!a64_memory_register(sel, MINIC_A64_MACHINE_STRB,
+                    false, A64_T0, 32U, A64_T1, byte, true, false) ||
+                (byte + 1U < payload &&
+                 !a64_rri(sel, MINIC_A64_MACHINE_LSR_IMM,
+                     64U, A64_T0, A64_T0, 8))) return false;
+        }
+    }
+    return true;
+}
+
 static bool a64_record_transfer(A64CoreSelection *sel,
     const MinicCoreInstruction *ins) {
     const MinicCoreFunction *fn = sel->ctx->fn;
@@ -1246,6 +1394,8 @@ static bool a64_core_instruction(A64CoreSelection *sel,
     switch (ins->kind) {
     case MINIC_CORE_INSTRUCTION_PARAMETER:
         return a64_parameter(sel, ins);
+    case MINIC_CORE_INSTRUCTION_PARAMETER_OBJECT:
+        return a64_parameter_object(sel, ins);
     case MINIC_CORE_INSTRUCTION_SCALAR_BITCAST:
         return a64_scalar_bitcast(sel, ins);
     case MINIC_CORE_INSTRUCTION_CALL_FRAME_ADDRESS:
@@ -1524,6 +1674,21 @@ static bool a64_terminate(A64CoreSelection *sel, size_t core_id) {
     case MINIC_CORE_TERMINATOR_RETURN: {
         const MinicCoreTypeId ret_type = minic_core_function_return_type(fn);
         MinicCoreAbiValueShape shape;
+        if (a64_wide_integer(fn, ret_type) ||
+            a64_wide_float(fn, ret_type)) {
+            size_t at;
+            if (!a64_wide_core_slot(sel, term->return_value, &at))
+                return false;
+            if (a64_wide_integer(fn, ret_type)) {
+                if (!a64_load_wide_half(sel, at, 0U) ||
+                    !a64_load_wide_half(sel, at + 8U, 1U)) return false;
+            } else if (!minic_a64_machine_emit_frame_load(&sel->builder,
+                    &sel->view, minic_a64_owned_slot(at),
+                    (MinicA64FrameRegister){MINIC_A64_REG_Q, 0U},
+                    (MinicA64ScratchPolicy){0U, 0U})) return false;
+            return minic_a64_machine_emit_epilogue(&sel->builder,
+                sel->ctx->machine_frame);
+        }
         if (!a64_scalar_abi(fn, ret_type, &shape)) return false;
         if (shape.kind == MINIC_CORE_TYPE_FLOAT) {
             if (term->return_value >= fn->value_count ||

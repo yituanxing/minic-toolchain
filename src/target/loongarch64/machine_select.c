@@ -1290,9 +1290,212 @@ static bool loong_call_load_fp(LoongSelector *sel,
         true);
 }
 
-/* Scalar LP64 call ABI, including a0 hidden-reserve-adjusted locations,
- * 8-byte stack argument carriers, dynamic frame anchors, FP registers and
- * indirect JIRL. Non-scalar aggregates/builtin forms fail closed. */
+/* Reuse the already-planned LP64D locations: this layer only transports
+ * physical bytes. Core's record layout and wide scalar storage remain owned
+ * by the Common planners, including the split-register-and-stack decision. */
+static bool loong_call_frame_offset(LoongSelector *sel,
+    size_t local_offset, size_t outgoing_bytes, size_t *adjusted) {
+    const bool dynamic = sel->ctx->machine_frame->has_dynamic_stack;
+    if (adjusted == NULL ||
+        (!dynamic && local_offset > SIZE_MAX - outgoing_bytes))
+        return false;
+    *adjusted = local_offset + (dynamic ? 0U : outgoing_bytes);
+    return true;
+}
+
+static bool loong_call_record_chunk(LoongSelector *sel,
+    size_t src_offset, size_t payload, bool in_register,
+    size_t gp_index, size_t stack_index) {
+    const bool dynamic = sel->ctx->machine_frame->has_dynamic_stack;
+    MinicMachineBuilder *b = &sel->builder;
+    const unsigned int dst = in_register
+        ? LOONG_A0 + (unsigned int)gp_index : LOONG_T1;
+    size_t byte;
+    if (payload == 0U || payload > 8U ||
+        (in_register && gp_index >= 8U) ||
+        (!in_register && stack_index > SIZE_MAX / 8U)) return false;
+    if (payload == 8U && (src_offset & 7U) == 0U) {
+        if (!loong_frame_memory(b, MINIC_LOONG_MACHINE_LD_D,
+                dst, src_offset, dynamic, true)) return false;
+    } else {
+        if (!loong_rr(b, MINIC_LOONG_MACHINE_MOVE,
+                LOONG_T1, LOONG_ZERO)) return false;
+        for (byte = 0U; byte < payload; ++byte) {
+            if (src_offset > SIZE_MAX - byte ||
+                !loong_frame_memory(b, MINIC_LOONG_MACHINE_LD_BU,
+                    LOONG_T0, src_offset + byte, dynamic, true) ||
+                (byte != 0U && !loong_rri(b,
+                    MINIC_LOONG_MACHINE_SLLI_D, LOONG_T0,
+                    LOONG_T0, (int64_t)(8U * byte))) ||
+                !loong_rrr(b, MINIC_LOONG_MACHINE_OR,
+                    LOONG_T1, LOONG_T1, LOONG_T0)) return false;
+        }
+        if (in_register && !loong_rr(b, MINIC_LOONG_MACHINE_MOVE,
+                dst, LOONG_T1)) return false;
+    }
+    return in_register || loong_frame_memory(b,
+        MINIC_LOONG_MACHINE_ST_D, dst,
+        stack_index * 8U, false, false);
+}
+
+static bool loong_call_record_argument(LoongSelector *sel,
+    MinicCoreObjectId object, const MinicLP64ArgumentLocation *loc,
+    size_t outgoing_bytes) {
+    const MinicCoreFunction *fn = sel->ctx->fn;
+    size_t bytes, chunks, offset, chunk;
+    if (object >= fn->object_count || loc == NULL) return false;
+    if (loc->kind == MINIC_LP64_ARGUMENT_EMPTY_RECORD)
+        return minic_multi_empty_record_core(fn->type_context,
+            fn->objects[object].core_type_id) && loc->size_bytes == 0U &&
+            loc->chunks == 0U && loc->gp_registers == 0U &&
+            loc->fp_registers == 0U && loc->stack_slots == 0U;
+    if (!minic_lp64_frame_plan_object(sel->ctx->frame_plan,
+            object, &offset) ||
+        !loong_call_frame_offset(sel, offset, outgoing_bytes, &offset))
+        return false;
+    if (loc->kind == MINIC_LP64_ARGUMENT_INDIRECT_RECORD) {
+        if (!minic_multi_indirect_record_core(fn->type_context,
+                fn->objects[object].core_type_id, &bytes) ||
+            bytes != loc->size_bytes || loc->gp_registers > 1U ||
+            loc->stack_slots > 1U ||
+            loc->gp_registers + loc->stack_slots != 1U ||
+            !loong_local_frame_address(sel, LOONG_T0, offset))
+            return false;
+        if (loc->gp_registers != 0U)
+            return loc->gp_first < 8U &&
+                loong_rr(&sel->builder, MINIC_LOONG_MACHINE_MOVE,
+                    LOONG_A0 + (unsigned int)loc->gp_first, LOONG_T0);
+        return loc->stack_first <= SIZE_MAX / 8U &&
+            loong_frame_memory(&sel->builder, MINIC_LOONG_MACHINE_ST_D,
+                LOONG_T0, loc->stack_first * 8U, false, false);
+    }
+    if (loc->kind != MINIC_LP64_ARGUMENT_RECORD ||
+        !minic_multi_gp_record_core(fn->type_context,
+            fn->objects[object].core_type_id, &bytes, &chunks) ||
+        loc->size_bytes != bytes || loc->chunks != chunks ||
+        loc->gp_registers + loc->stack_slots != chunks ||
+        loc->fp_registers != 0U) return false;
+    for (chunk = 0U; chunk < chunks; ++chunk) {
+        const bool in_reg = chunk < loc->gp_registers;
+        const size_t payload = bytes - chunk * 8U >= 8U
+            ? 8U : bytes - chunk * 8U;
+        if (offset > SIZE_MAX - chunk * 8U ||
+            (!in_reg && loc->stack_first >
+                SIZE_MAX - (chunk - loc->gp_registers)) ||
+            !loong_call_record_chunk(sel, offset + chunk * 8U,
+                payload, in_reg, in_reg ? loc->gp_first + chunk : 0U,
+                in_reg ? 0U : loc->stack_first + chunk - loc->gp_registers))
+            return false;
+    }
+    return true;
+}
+
+static bool loong_call_wide_argument(LoongSelector *sel,
+    MinicCoreValueId value, const MinicLP64ArgumentLocation *loc,
+    size_t outgoing_bytes) {
+    const MinicCoreFunction *fn = sel->ctx->fn;
+    const MinicCoreType *type;
+    size_t offset, chunk;
+    if (value >= fn->value_count ||
+        !minic_core_abi_wide_scalar(fn,
+            fn->values[value].core_type_id)) return false;
+    type = minic_core_type_get(fn->type_context,
+        minic_core_type_unqualified(fn->type_context,
+            fn->values[value].core_type_id));
+    /* The shared ABI planner's float128 WIDE location records one semantic
+     * value (chunks=1), while integer128 records two integer eightbytes.
+     * Both physically move two 64-bit carriers on LoongArch LP64D. */
+    if (type == NULL || loc->kind != MINIC_LP64_ARGUMENT_WIDE ||
+        (type->kind == MINIC_CORE_TYPE_INTEGER
+            ? loc->chunks != 2U || loc->size_bytes != 16U
+            : type->kind != MINIC_CORE_TYPE_FLOAT ||
+              type->value.floating.format != MINIC_CORE_FLOAT_BINARY128 ||
+              loc->chunks != 1U) ||
+        loc->gp_registers + loc->stack_slots != 2U ||
+        loc->fp_registers != 0U ||
+        !minic_lp64_frame_plan_wide_slot(sel->ctx->frame_plan,
+            value, &offset) ||
+        !loong_call_frame_offset(sel, offset, outgoing_bytes, &offset))
+        return false;
+    for (chunk = 0U; chunk < 2U; ++chunk) {
+        const bool in_reg = chunk < loc->gp_registers;
+        size_t stack_index = 0U;
+        const unsigned int dst = in_reg
+            ? LOONG_A0 + (unsigned int)(loc->gp_first + chunk) : LOONG_T0;
+        if (!in_reg) {
+            if (loc->stack_first >
+                SIZE_MAX - (chunk - loc->gp_registers)) return false;
+            stack_index = loc->stack_first + chunk - loc->gp_registers;
+        }
+        if (offset > SIZE_MAX - chunk * 8U ||
+            (in_reg && loc->gp_first + chunk >= 8U) ||
+            (!in_reg && stack_index > SIZE_MAX / 8U) ||
+            !loong_frame_memory(&sel->builder, MINIC_LOONG_MACHINE_LD_D,
+                dst, offset + chunk * 8U,
+                sel->ctx->machine_frame->has_dynamic_stack, true) ||
+            (!in_reg && !loong_frame_memory(&sel->builder,
+                MINIC_LOONG_MACHINE_ST_D, dst,
+                stack_index * 8U, false, false))) return false;
+    }
+    return true;
+}
+
+static bool loong_call_record_result(LoongSelector *sel,
+    MinicCoreObjectId object, MinicCoreTypeId type) {
+    const MinicCoreFunction *fn = sel->ctx->fn;
+    size_t offset, bytes, chunks, chunk, fp_elements, fp_width;
+    if (object >= fn->object_count ||
+        !minic_lp64_frame_plan_object(sel->ctx->frame_plan,
+            object, &offset)) return false;
+    if (minic_multi_empty_record_core(fn->type_context, type)) return true;
+    if (minic_multi_indirect_record_core(fn->type_context, type, &bytes))
+        return true; /* The callee filled caller-owned object storage. */
+    if (minic_multi_fp_return_record_core(fn->type_context,
+            type, &fp_elements, &fp_width)) {
+        for (chunk = 0U; chunk < fp_elements; ++chunk)
+            if (offset > SIZE_MAX - chunk * fp_width ||
+                !loong_frame_float(&sel->builder,
+                    fp_width == 4U ? MINIC_LOONG_MACHINE_FST_S :
+                        MINIC_LOONG_MACHINE_FST_D,
+                    (unsigned int)chunk, (unsigned int)(fp_width * 8U),
+                    offset + chunk * fp_width,
+                    sel->ctx->machine_frame->has_dynamic_stack, false))
+                return false;
+        return true;
+    }
+    if (!minic_multi_gp_record_core(fn->type_context,
+            type, &bytes, &chunks)) return false;
+    for (chunk = 0U; chunk < chunks; ++chunk) {
+        const size_t payload = bytes - chunk * 8U >= 8U
+            ? 8U : bytes - chunk * 8U;
+        size_t byte;
+        if (offset > SIZE_MAX - chunk * 8U ||
+            !loong_rr(&sel->builder, MINIC_LOONG_MACHINE_MOVE,
+                LOONG_T1, LOONG_A0 + (unsigned int)chunk)) return false;
+        if (payload == 8U && ((offset + chunk * 8U) & 7U) == 0U) {
+            if (!loong_frame_memory(&sel->builder,
+                    MINIC_LOONG_MACHINE_ST_D, LOONG_T1,
+                    offset + chunk * 8U,
+                    sel->ctx->machine_frame->has_dynamic_stack, false))
+                return false;
+            continue;
+        }
+        for (byte = 0U; byte < payload; ++byte)
+            if (offset + chunk * 8U > SIZE_MAX - byte ||
+                !loong_frame_memory(&sel->builder,
+                    MINIC_LOONG_MACHINE_ST_B, LOONG_T1,
+                    offset + chunk * 8U + byte,
+                    sel->ctx->machine_frame->has_dynamic_stack, false) ||
+                (byte + 1U < payload &&
+                 !loong_rri(&sel->builder, MINIC_LOONG_MACHINE_SRLI_D,
+                     LOONG_T1, LOONG_T1, 8))) return false;
+    }
+    return true;
+}
+
+/* Calls and returns are one migration family: the existing Common LP64D
+ * plan is authoritative for scalar, split-record, indirect-record and wide
+ * carriers. Native builtins still fail closed until their typed forms land. */
 static bool loong_select_call(LoongSelector *sel,
     const MinicCoreInstruction *ins) {
     const MinicCoreFunction *fn = sel->ctx->fn;
@@ -1301,6 +1504,8 @@ static bool loong_select_call(LoongSelector *sel,
         ins->value.call.argument_begin;
     const size_t count = indirect ? ins->value.indirect_call.argument_count :
         ins->value.call.argument_count;
+    const MinicCoreObjectId result_object = indirect
+        ? ins->value.indirect_call.result_object : ins->value.call.result_object;
     const size_t call_id = (size_t)(ins - fn->instructions);
     const MinicLP64PreparedCall *call;
     const MinicCoreType *result;
@@ -1319,6 +1524,11 @@ static bool loong_select_call(LoongSelector *sel,
         const MinicLP64ArgumentLocation *loc = &call->arguments[j];
         const MinicCoreType *type;
         MinicCoreAbiValueShape shape;
+        if (arg->kind == MINIC_CORE_CALL_ARGUMENT_OBJECT) {
+            if (!loong_call_record_argument(sel, arg->value.object_id,
+                    loc, call->stack_bytes)) return false;
+            continue;
+        }
         if (arg->kind != MINIC_CORE_CALL_ARGUMENT_VALUE ||
             arg->value.value_id >= fn->value_count ||
             !minic_core_abi_value_shape(fn,
@@ -1327,8 +1537,14 @@ static bool loong_select_call(LoongSelector *sel,
         type = minic_core_type_get(fn->type_context,
             minic_core_type_unqualified(fn->type_context,
                 fn->values[arg->value.value_id].core_type_id));
-        if (type == NULL || shape.bytes == 0U || shape.bytes > 8U)
-            return false;
+        if (type == NULL || shape.bytes == 0U) return false;
+        if (minic_core_abi_wide_scalar(fn,
+                fn->values[arg->value.value_id].core_type_id)) {
+            if (!loong_call_wide_argument(sel, arg->value.value_id,
+                    loc, call->stack_bytes)) return false;
+            continue;
+        }
+        if (shape.bytes > 8U) return false;
         if (loc->fp_registers != 0U) {
             unsigned int width;
             if (type->kind != MINIC_CORE_TYPE_FLOAT ||
@@ -1352,6 +1568,20 @@ static bool loong_select_call(LoongSelector *sel,
                     MINIC_LOONG_MACHINE_ST_D, LOONG_T0,
                     loc->stack_first * 8U, false, false)) return false;
         } else return false;
+    }
+    if (minic_lp64_core_kind(fn->type_context, ins->core_type_id,
+            MINIC_CORE_TYPE_RECORD)) {
+        size_t bytes, offset;
+        if (minic_multi_indirect_record_core(fn->type_context,
+                ins->core_type_id, &bytes)) {
+            if (result_object >= fn->object_count ||
+                !minic_lp64_frame_plan_object(sel->ctx->frame_plan,
+                    result_object, &offset) ||
+                !loong_call_frame_offset(sel, offset, call->stack_bytes,
+                    &offset) ||
+                !loong_local_frame_address(sel, LOONG_A0, offset))
+                return false;
+        }
     }
     if (indirect) {
         if (!loong_call_load_value(sel, ins->value.indirect_call.callee,
@@ -1407,8 +1637,22 @@ static bool loong_select_call(LoongSelector *sel,
         minic_core_type_unqualified(fn->type_context, ins->core_type_id));
     if (result == NULL) return false;
     if (result->kind == MINIC_CORE_TYPE_VOID) return true;
-    if (result->kind == MINIC_CORE_TYPE_RECORD ||
-        (result->kind == MINIC_CORE_TYPE_INTEGER && result->size > 8U))
+    if (result->kind == MINIC_CORE_TYPE_RECORD)
+        return loong_call_record_result(sel, result_object,
+            ins->core_type_id);
+    if (minic_core_abi_wide_scalar(fn, ins->core_type_id)) {
+        size_t offset;
+        return minic_lp64_frame_plan_wide_slot(sel->ctx->frame_plan,
+                   ins->result, &offset) &&
+            loong_frame_memory(&sel->builder, MINIC_LOONG_MACHINE_ST_D,
+                LOONG_A0, offset,
+                sel->ctx->machine_frame->has_dynamic_stack, false) &&
+            offset <= SIZE_MAX - 8U &&
+            loong_frame_memory(&sel->builder, MINIC_LOONG_MACHINE_ST_D,
+                LOONG_A0 + 1U, offset + 8U,
+                sel->ctx->machine_frame->has_dynamic_stack, false);
+    }
+    if (result->kind == MINIC_CORE_TYPE_INTEGER && result->size > 8U)
         return false;
     if (result->kind == MINIC_CORE_TYPE_FLOAT) {
         const unsigned int width = result->value.floating.format ==
@@ -1862,10 +2106,91 @@ static bool loong_select_terminator(LoongSelector *sel,
                 MINIC_CORE_TYPE_VOID)) {
             const MinicCoreType *core = minic_core_type_get(fn->type_context,
                 minic_core_type_unqualified(fn->type_context, type));
-            if (core == NULL || core->kind == MINIC_CORE_TYPE_RECORD ||
-                (core->kind == MINIC_CORE_TYPE_INTEGER && core->size > 8U))
+            if (core == NULL) return false;
+            if (core->kind == MINIC_CORE_TYPE_RECORD) {
+                size_t offset, bytes, chunks, fp_elements, fp_width, chunk;
+                const MinicCoreObjectId object = t->return_object;
+                const bool indirect_return =
+                    minic_multi_indirect_record_core(fn->type_context,
+                        type, &bytes);
+                if (object >= fn->object_count ||
+                    frame->has_indirect_return != indirect_return ||
+                    !minic_lp64_frame_plan_object(sel->ctx->frame_plan,
+                        object, &offset)) return false;
+                if (minic_multi_empty_record_core(fn->type_context, type)) {
+                    /* Zero-sized aggregates have no physical return. */
+                } else if (minic_multi_fp_return_record_core(
+                        fn->type_context, type, &fp_elements, &fp_width)) {
+                    for (chunk = 0U; chunk < fp_elements; ++chunk)
+                        if (offset > SIZE_MAX - chunk * fp_width ||
+                            !loong_frame_float(b, fp_width == 4U ?
+                                MINIC_LOONG_MACHINE_FLD_S :
+                                MINIC_LOONG_MACHINE_FLD_D,
+                                (unsigned int)chunk,
+                                (unsigned int)(fp_width * 8U),
+                                offset + chunk * fp_width,
+                                frame->has_dynamic_stack, true)) return false;
+                } else if (indirect_return) {
+                    if (!loong_local_frame_address(sel, LOONG_T2, offset) ||
+                        !loong_frame_memory(b, MINIC_LOONG_MACHINE_LD_D,
+                            LOONG_A0, frame->indirect_return_offset,
+                            frame->has_dynamic_stack, true) ||
+                        !loong_rr(b, MINIC_LOONG_MACHINE_MOVE,
+                            LOONG_T1, LOONG_A0) ||
+                        !loong_copy_record_bytes(sel, bytes, false, false))
+                        return false;
+                } else {
+                    if (!minic_multi_gp_record_core(fn->type_context,
+                            type, &bytes, &chunks)) return false;
+                    for (chunk = 0U; chunk < chunks; ++chunk) {
+                        const size_t payload = bytes - chunk * 8U >= 8U
+                            ? 8U : bytes - chunk * 8U;
+                        size_t byte;
+                        if (offset > SIZE_MAX - chunk * 8U) return false;
+                        if (payload == 8U &&
+                            ((offset + chunk * 8U) & 7U) == 0U) {
+                            if (!loong_frame_memory(b,
+                                    MINIC_LOONG_MACHINE_LD_D,
+                                    LOONG_A0 + (unsigned int)chunk,
+                                    offset + chunk * 8U,
+                                    frame->has_dynamic_stack, true))
+                                return false;
+                            continue;
+                        }
+                        if (!loong_rr(b, MINIC_LOONG_MACHINE_MOVE,
+                                LOONG_T1, LOONG_ZERO)) return false;
+                        for (byte = 0U; byte < payload; ++byte)
+                            if (offset + chunk * 8U > SIZE_MAX - byte ||
+                                !loong_frame_memory(b,
+                                    MINIC_LOONG_MACHINE_LD_BU, LOONG_T0,
+                                    offset + chunk * 8U + byte,
+                                    frame->has_dynamic_stack, true) ||
+                                (byte != 0U && !loong_rri(b,
+                                    MINIC_LOONG_MACHINE_SLLI_D, LOONG_T0,
+                                    LOONG_T0, (int64_t)(8U * byte))) ||
+                                !loong_rrr(b, MINIC_LOONG_MACHINE_OR,
+                                    LOONG_T1, LOONG_T1, LOONG_T0))
+                                return false;
+                        if (!loong_rr(b, MINIC_LOONG_MACHINE_MOVE,
+                                LOONG_A0 + (unsigned int)chunk,
+                                LOONG_T1)) return false;
+                    }
+                }
+            } else if (minic_core_abi_wide_scalar(fn, type)) {
+                size_t offset;
+                if (!minic_lp64_frame_plan_wide_slot(sel->ctx->frame_plan,
+                        t->return_value, &offset) ||
+                    offset > SIZE_MAX - 8U ||
+                    !loong_frame_memory(b, MINIC_LOONG_MACHINE_LD_D,
+                        LOONG_A0, offset, frame->has_dynamic_stack, true) ||
+                    !loong_frame_memory(b, MINIC_LOONG_MACHINE_LD_D,
+                        LOONG_A0 + 1U, offset + 8U,
+                        frame->has_dynamic_stack, true)) return false;
+            } else if ((core->kind == MINIC_CORE_TYPE_INTEGER ||
+                        core->kind == MINIC_CORE_TYPE_FLOAT) &&
+                       core->size > 8U) {
                 return false;
-            if (core->kind == MINIC_CORE_TYPE_FLOAT) {
+            } else if (core->kind == MINIC_CORE_TYPE_FLOAT) {
                 size_t offset;
                 unsigned int width;
                 uint32_t opcode;

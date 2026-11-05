@@ -633,13 +633,298 @@ cleanup:
     return ok;
 }
 
+/* Port of the proven A64 block_emit parameter_object ingress: both the
+ * register/stack eightbyte route and by-reference record copying now use
+ * typed Machine operations, with Common ABI/object placement unmodified. */
+static bool run_record_parameter_case(size_t bytes, bool indirect,
+    bool incoming_stack) {
+    MinicCoreTypeContext types;
+    MinicCoreFunction core = {0};
+    MinicCoreModule module = {0};
+    MinicCoreType type = {0};
+    MinicCoreTypeId void_type, record_type;
+    MinicCoreInstruction ins = {0};
+    MinicCoreBlockId entry;
+    MinicCoreTerminator ret = {0};
+    MinicTargetInfo target = {0};
+    MinicMachineLP64FrameContract abi = {0};
+    MinicLP64FramePlan plan = {0};
+    MinicLP64ArgumentPlan incoming = {0};
+    MinicDirectLP64BlockContext ctx = {0};
+    MinicMachineFunction machine = {0};
+    MinicMachineGNUAsmPolicy policy = {0};
+    const bool reachable[1] = {true};
+    size_t object_offset[1] = {32U};
+    size_t writes = 0U, reads = 0U, auxiliary = 0U, i, j;
+    FILE *out = NULL;
+    char assembly[16384];
+    size_t length;
+    bool ok = false;
+    const char *stage = "setup";
+    minic_core_type_context_initialize(&types);
+    minic_core_function_initialize(&core);
+    core.name = malloc(sizeof("a64_record_parameter"));
+    if (core.name == NULL) goto done;
+    memcpy(core.name, "a64_record_parameter",
+        sizeof("a64_record_parameter"));
+    core.name_length = sizeof("a64_record_parameter") - 1U;
+    type.kind = MINIC_CORE_TYPE_VOID;
+    if (!minic_core_type_register(&types, &type, &void_type)) goto done;
+    type = (MinicCoreType){0};
+    type.kind = MINIC_CORE_TYPE_RECORD;
+    type.has_layout = true;
+    type.size = bytes;
+    type.alignment = 1U;
+    type.value.record.is_complete = true;
+    if (!minic_core_type_register(&types, &type, &record_type) ||
+        !minic_core_function_define_signature(&core, &types, void_type,
+            &record_type, 1U, MINIC_CALLING_CONVENTION_DEFAULT, false) ||
+        !minic_core_function_add_block(&core, &entry)) goto done;
+    core.objects = calloc(1U, sizeof(*core.objects));
+    if (core.objects == NULL) goto done;
+    core.objects[0].core_type_id = record_type;
+    core.object_count = core.object_capacity = 1U;
+    ins.kind = MINIC_CORE_INSTRUCTION_PARAMETER_OBJECT;
+    ins.core_type_id = void_type;
+    ins.value.parameter_object.parameter_index = 0U;
+    ins.value.parameter_object.object_id = 0U;
+    if (!minic_core_function_append_effect_instruction(&core, entry, &ins))
+        goto done;
+    ret.kind = MINIC_CORE_TERMINATOR_RETURN;
+    ret.return_value = MINIC_CORE_VALUE_INVALID;
+    if (!minic_core_function_set_terminator(&core, entry, &ret) ||
+        !minic_core_function_attach_type_context(&core, &types)) goto done;
+    target.architecture = MINIC_TARGET_ARCH_AARCH64;
+    target.data_layout = minic_aarch64_linux_data_layout();
+    module.type_context = &types;
+    abi.frame_size = 256U;
+    abi.frame_alignment = 16U;
+    abi.saved_entry_sp_offset = SIZE_MAX;
+    plan.object_count = 1U;
+    plan.object_offsets = object_offset;
+    incoming.argument_count = 1U;
+    incoming.arguments[0].kind = indirect ?
+        MINIC_LP64_ARGUMENT_INDIRECT_RECORD : MINIC_LP64_ARGUMENT_RECORD;
+    incoming.arguments[0].size_bytes = bytes;
+    incoming.arguments[0].chunks = indirect ? 1U : (bytes + 7U) / 8U;
+    if (incoming_stack) {
+        incoming.arguments[0].stack_first = 0U;
+        incoming.arguments[0].stack_slots = indirect ? 1U :
+            incoming.arguments[0].chunks;
+    } else {
+        incoming.arguments[0].gp_first = 0U;
+        incoming.arguments[0].gp_registers = indirect ? 1U :
+            incoming.arguments[0].chunks;
+    }
+    ctx = (MinicDirectLP64BlockContext){
+        .fn = &core, .module = &module, .target = &target,
+        .machine_frame = &abi, .frame_plan = &plan,
+        .incoming_plan = &incoming, .name = core.name
+    };
+    stage = "selection";
+    if (!minic_aarch64_machine_select_core_subset(&machine, &ctx)) goto done;
+    stage = "coverage";
+    if (!minic_machine_core_coverage_verify(&core, reachable, &machine))
+        goto done;
+    stage = "gnu-preflight";
+    if (!minic_aarch64_machine_gnu_asm_policy_initialize(&target, &policy) ||
+        !minic_machine_gnu_asm_preflight(&machine, &policy)) goto done;
+    for (i = 0U; i < machine.block_count; ++i) {
+        const MinicMachineBlock *block = &machine.blocks[i];
+        if (block->machine_auxiliary && i != 0U) ++auxiliary;
+        for (j = 0U; j < block->instruction_count; ++j) {
+            const MinicMachineInstruction *m = &block->instructions[j];
+            if (!m->has_core_origin || m->core_instruction_id != 0U) continue;
+            if (m->opcode == MINIC_A64_MACHINE_STRB) ++writes;
+            if (m->opcode == MINIC_A64_MACHINE_LDRB) ++reads;
+        }
+    }
+    stage = "physical-serialization";
+    out = tmpfile();
+    if (out == NULL ||
+        !minic_machine_gnu_asm_emit_body(out, &machine, &policy) ||
+        fflush(out) != 0 || fseek(out, 0L, SEEK_SET) != 0) goto done;
+    length = fread(assembly, 1U, sizeof(assembly) - 1U, out);
+    assembly[length] = '\0';
+    stage = "physical-invariants";
+    ok = writes == (bytes > 64U ? 1U : bytes) &&
+        reads == (indirect ? (bytes > 64U ? 1U : bytes) : 0U) &&
+        (bytes > 64U ? auxiliary >= 2U : auxiliary == 0U) &&
+        strstr(assembly, indirect ? "  strb w11, [x10, #0]\n" :
+            "  strb w9, [x10, #0]\n") != NULL &&
+        (incoming_stack ||
+         strstr(assembly, "  mov x9, x0\n") != NULL) &&
+        strstr(assembly, "  ret\n") != NULL;
+    if (ok) {
+        MinicMachineFunction invalid = {0};
+        stage = "invalid-abi-rejected";
+        if (indirect) {
+            if (incoming_stack) incoming.arguments[0].stack_slots = 2U;
+            else incoming.arguments[0].gp_registers = 2U;
+        } else incoming.arguments[0].chunks += 1U;
+        ok = !minic_aarch64_machine_select_core_subset(&invalid, &ctx);
+        minic_machine_function_destroy(&invalid);
+    }
+done:
+    if (!ok) fprintf(stderr,
+        "A64 record ingress failed at %s bytes=%zu indirect=%d stack=%d\n",
+        stage, bytes, (int)indirect, (int)incoming_stack);
+    if (out != NULL) fclose(out);
+    minic_machine_function_destroy(&machine);
+    minic_core_function_destroy(&core);
+    minic_core_type_context_destroy(&types);
+    return ok;
+}
+
+/* The old AArch64 ABI moves i128 through even xN/xN+1 pairs, binary128
+ * through qN, and either wide class through a 16-byte incoming stack slot.
+ * This is an ABI migration fixture, not a new Core language feature. */
+static bool run_wide_abi_parameter_case(bool floating, bool stack) {
+    MinicCoreTypeContext types;
+    MinicCoreFunction core = {0};
+    MinicCoreModule module = {0};
+    MinicCoreType type = {0};
+    MinicCoreTypeId wide_type;
+    MinicCoreBlockId entry;
+    MinicCoreValueId argument;
+    MinicCoreInstruction ins = {0};
+    MinicCoreTerminator ret = {0};
+    MinicTargetInfo target = {0};
+    MinicMachineLP64FrameContract abi = {0};
+    MinicLP64FramePlan plan = {0};
+    MinicLP64ArgumentPlan incoming = {0};
+    MinicDirectLP64BlockContext ctx = {0};
+    MinicMachineFunction machine = {0};
+    MinicMachineGNUAsmPolicy policy = {0};
+    const bool reachable[1] = {true};
+    size_t value_offsets[1] = {SIZE_MAX};
+    size_t wide_offsets[1] = {16U};
+    FILE *out = NULL;
+    char assembly[8192];
+    size_t length;
+    bool ok = false;
+    const char *stage = "setup";
+    minic_core_type_context_initialize(&types);
+    minic_core_function_initialize(&core);
+    type.kind = floating ? MINIC_CORE_TYPE_FLOAT : MINIC_CORE_TYPE_INTEGER;
+    type.has_layout = true;
+    type.size = type.alignment = 16U;
+    if (floating) type.value.floating.format = MINIC_CORE_FLOAT_BINARY128;
+    else type.value.integer.bit_width = 128U;
+    if (!minic_core_type_register(&types, &type, &wide_type)) goto done;
+    core.name = malloc(sizeof("a64_wide_abi"));
+    if (core.name == NULL) goto done;
+    memcpy(core.name, "a64_wide_abi", sizeof("a64_wide_abi"));
+    core.name_length = sizeof("a64_wide_abi") - 1U;
+    if (!minic_core_function_define_signature(&core, &types, wide_type,
+            &wide_type, 1U, MINIC_CALLING_CONVENTION_DEFAULT, false) ||
+        !minic_core_function_add_block(&core, &entry)) goto done;
+    ins.kind = MINIC_CORE_INSTRUCTION_PARAMETER;
+    ins.core_type_id = wide_type;
+    ins.value.parameter_index = 0U;
+    if (!minic_core_function_append_value_instruction(&core, entry, &ins,
+            &argument)) goto done;
+    ret.kind = MINIC_CORE_TERMINATOR_RETURN;
+    ret.return_value = argument;
+    if (!minic_core_function_set_terminator(&core, entry, &ret) ||
+        !minic_core_function_attach_type_context(&core, &types) ||
+        !minic_core_function_verify(&core)) goto done;
+    target.architecture = MINIC_TARGET_ARCH_AARCH64;
+    target.data_layout = minic_aarch64_linux_data_layout();
+    module.type_context = &types;
+    abi.frame_size = 64U;
+    abi.frame_alignment = 16U;
+    abi.saved_entry_sp_offset = SIZE_MAX;
+    plan.value_count = 1U;
+    plan.value_offsets = value_offsets;
+    plan.wide_offsets = wide_offsets;
+    incoming.argument_count = 1U;
+    incoming.arguments[0].kind = MINIC_LP64_ARGUMENT_WIDE;
+    incoming.arguments[0].size_bytes = 16U;
+    incoming.arguments[0].chunks = floating ? 1U : 2U;
+    if (stack) {
+        incoming.arguments[0].stack_first = 0U;
+        incoming.arguments[0].stack_slots = 2U;
+    } else if (floating) {
+        incoming.arguments[0].fp_first = 0U;
+        incoming.arguments[0].fp_registers = 1U;
+    } else {
+        incoming.arguments[0].gp_first = 0U;
+        incoming.arguments[0].gp_registers = 2U;
+    }
+    ctx = (MinicDirectLP64BlockContext){
+        .fn = &core, .module = &module, .target = &target,
+        .machine_frame = &abi, .frame_plan = &plan,
+        .incoming_plan = &incoming, .name = core.name
+    };
+    stage = "selection";
+    if (!minic_aarch64_machine_select_core_subset(&machine, &ctx)) goto done;
+    stage = "coverage-and-gnu";
+    if (!minic_machine_core_coverage_verify(&core, reachable, &machine) ||
+        !minic_aarch64_machine_gnu_asm_policy_initialize(&target, &policy) ||
+        !minic_machine_gnu_asm_preflight(&machine, &policy)) goto done;
+    stage = "serialize";
+    out = tmpfile();
+    if (out == NULL ||
+        !minic_machine_gnu_asm_emit_body(out, &machine, &policy) ||
+        fflush(out) != 0 || fseek(out, 0L, SEEK_SET) != 0) goto done;
+    length = fread(assembly, 1U, sizeof(assembly) - 1U, out);
+    assembly[length] = '\0';
+    stage = "physical-abi-shape";
+    if (floating)
+        ok = machine.generated_features ==
+                (MINIC_A64_MACHINE_FEATURE_BASE |
+                 MINIC_A64_MACHINE_FEATURE_FP_SIMD) &&
+            strstr(assembly, stack ? "  str q9, [sp, #16]\n" :
+                "  str q0, [sp, #16]\n") != NULL &&
+            strstr(assembly, "  ldr q0, [sp, #16]\n") != NULL;
+    else
+        ok = machine.generated_features == MINIC_A64_MACHINE_FEATURE_BASE &&
+            strstr(assembly, stack ? "  str x9, [sp, #16]\n" :
+                "  str x0, [sp, #16]\n") != NULL &&
+            strstr(assembly, stack ? "  str x9, [sp, #24]\n" :
+                "  str x1, [sp, #24]\n") != NULL &&
+            strstr(assembly, "  ldr x0, [sp, #16]\n") != NULL &&
+            strstr(assembly, "  ldr x1, [sp, #24]\n") != NULL;
+    if (ok) {
+        MinicMachineFunction invalid = {0};
+        stage = "invalid-wide-abi-rejected";
+        if (stack) incoming.arguments[0].stack_slots = 1U;
+        else if (floating) incoming.arguments[0].fp_registers = 2U;
+        else incoming.arguments[0].gp_registers = 1U;
+        ok = !minic_aarch64_machine_select_core_subset(&invalid, &ctx);
+        minic_machine_function_destroy(&invalid);
+    }
+done:
+    if (!ok) {
+        fprintf(stderr,
+            "A64 wide ABI failed at %s float=%d stack=%d\n",
+            stage, (int)floating, (int)stack);
+        if (strcmp(stage, "physical-abi-shape") == 0)
+            fprintf(stderr, "%s\n", assembly);
+    }
+    if (out != NULL) fclose(out);
+    minic_machine_function_destroy(&machine);
+    minic_core_function_destroy(&core);
+    minic_core_type_context_destroy(&types);
+    return ok;
+}
+
 int main(void) {
     if (!run_case(false) || !run_case(true) ||
         !run_fp_case() || !run_wide_case() || !run_residual_case() ||
-        !run_record_loop_case()) {
+        !run_record_loop_case() ||
+        !run_record_parameter_case(13U, false, false) ||
+        !run_record_parameter_case(13U, false, true) ||
+        !run_record_parameter_case(32U, true, false) ||
+        !run_record_parameter_case(128U, true, true) ||
+        !run_wide_abi_parameter_case(false, false) ||
+        !run_wide_abi_parameter_case(false, true) ||
+        !run_wide_abi_parameter_case(true, false) ||
+        !run_wide_abi_parameter_case(true, true)) {
         fprintf(stderr, "A64_CORE_MIR_CFG=FAIL\n");
         return 1;
     }
-    puts("A64_CORE_MIR_CFG=PASS prologue_isolated=1 backedge_to_core0=1 fail_closed=1 fp64=1 i128=1 i128_cast=1 dynamic_alloca=1 record_loop=1");
+    puts("A64_CORE_MIR_CFG=PASS prologue_isolated=1 backedge_to_core0=1 fail_closed=1 fp64=1 i128=1 i128_cast=1 dynamic_alloca=1 record_loop=1 record_parameter=4 wide_abi=4");
     return 0;
 }

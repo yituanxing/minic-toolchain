@@ -4,6 +4,8 @@
 #include "target/loongarch64/machine_opcode.h"
 #include "target/common/machine_gnu_asm.h"
 #include "target/common/machine_core_coverage.h"
+#include "target/common/direct_call_plan.h"
+#include "target/common/lp64_aggregate.h"
 #include "target/data_layout.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -399,6 +401,327 @@ done:
     return ok;
 }
 
+/* Manufacture real Core storage shapes: the ABI test cannot pretend that a
+ * 13-byte record with no fields is an integer-class aggregate. */
+static bool test_record_type(MinicCoreTypeContext *types, size_t bytes,
+    MinicCoreTypeId *record_id) {
+    MinicCoreType type = {0};
+    MinicCoreTypeId byte_id, array_id;
+    MinicCoreRecordField field = {0};
+    if (bytes == 0U) {
+        type.kind = MINIC_CORE_TYPE_RECORD;
+        type.has_layout = true;
+        type.alignment = 1U;
+        type.value.record.is_complete = true;
+        return minic_core_type_register(types, &type, record_id);
+    }
+    type.kind = MINIC_CORE_TYPE_INTEGER;
+    type.has_layout = true;
+    type.size = type.alignment = 1U;
+    type.value.integer.bit_width = 8U;
+    if (!minic_core_type_register(types, &type, &byte_id)) return false;
+    type = (MinicCoreType){0};
+    type.kind = MINIC_CORE_TYPE_ARRAY;
+    type.has_layout = true;
+    type.size = bytes;
+    type.alignment = 1U;
+    type.value.array.element = byte_id;
+    type.value.array.count = bytes;
+    type.value.array.is_complete = true;
+    if (!minic_core_type_register(types, &type, &array_id)) return false;
+    field.type_id = array_id;
+    type = (MinicCoreType){0};
+    type.kind = MINIC_CORE_TYPE_RECORD;
+    type.has_layout = true;
+    type.size = bytes;
+    type.alignment = 1U;
+    type.value.record.is_complete = true;
+    type.value.record.fields = &field;
+    type.value.record.field_count = 1U;
+    return minic_core_type_register(types, &type, record_id);
+}
+
+static const MinicDirectLP64AbiPolicy loong_call_test_abi = {
+    .name = "loongarch64-lp64d",
+    .gp_argument_registers = 8U,
+    .fp_argument_registers = 8U,
+    .stack_slot_bytes = 8U,
+    .stack_alignment = 16U,
+    .indirect_result_argument_registers = 1U,
+    .core_indirect_record = minic_multi_indirect_record_core,
+    .core_indirect_return = minic_multi_indirect_record_core,
+    .record_registers = MINIC_DIRECT_LP64_RECORD_SPLIT_WITH_STACK,
+    .wide_registers = MINIC_DIRECT_LP64_WIDE_SPLIT_WITH_STACK,
+    .variadic_align_wide_gp_pair = true,
+    .variadic_cursor = MINIC_DIRECT_LP64_VARIADIC_LINEAR_GP,
+    .variadic_save_bytes = 64U,
+    .variadic_save_alignment = 8U,
+    .variadic_requires_public_stack_alignment = true
+};
+
+/* mode=0: a7 + stack split a 13-byte record. mode=1: a hidden a0
+ * return-buffer reservation pushes the eighth explicit, indirect-record
+ * argument onto the stack. mode=2: zero-byte argument and result transport.
+ * All plans come from the production Common
+ * planner, never a hand-written per-target offset sketch. */
+static bool test_record_call(unsigned int mode) {
+    const bool hidden_return = mode == 1U;
+    const bool empty = mode == 2U;
+    MinicCoreTypeContext types;
+    MinicCoreFunction core = {0};
+    MinicCoreModule module = {0};
+    MinicTargetInfo target = {0};
+    MinicCoreType type = {0};
+    MinicCoreTypeId void_id, int_id, record_id, result_id, signature_id;
+    MinicCoreTypeId parameter_ids[8];
+    MinicCoreCallArgument args[8] = {{0}};
+    MinicCoreInstruction ins = {0};
+    MinicCoreTerminator term = {0};
+    MinicCoreBlockId entry;
+    MinicCoreValueId value;
+    MinicMachineFunction machine = {0};
+    MinicMachineGNUAsmPolicy policy = {0};
+    MinicMachineLP64FrameContract frame = {0};
+    MinicLP64FramePlan plan = {0};
+    MinicLP64CallPlanCache calls = {0};
+    MinicDirectLP64BlockContext ctx = {0};
+    const bool reachable[1] = {true};
+    size_t value_offsets[7], object_offsets[2] = {160U, 192U};
+    size_t begin, failed = SIZE_MAX, i;
+    bool preflight, has_calls, ok = false;
+    const char *stage = "setup";
+    FILE *assembly = NULL;
+    char text[12000];
+    size_t read_count, call_effects = 0U;
+    minic_core_type_context_initialize(&types);
+    minic_core_function_initialize(&core);
+    core.name = malloc(sizeof("loong_record_call"));
+    if (core.name == NULL) goto done;
+    memcpy(core.name, "loong_record_call", sizeof("loong_record_call"));
+    core.name_length = sizeof("loong_record_call") - 1U;
+    type.kind = MINIC_CORE_TYPE_VOID;
+    if (!minic_core_type_register(&types, &type, &void_id)) goto done;
+    type = (MinicCoreType){0};
+    type.kind = MINIC_CORE_TYPE_INTEGER;
+    type.has_layout = true;
+    type.size = type.alignment = 8U;
+    type.value.integer.bit_width = 64U;
+    type.value.integer.is_signed = true;
+    if (!minic_core_type_register(&types, &type, &int_id) ||
+        !test_record_type(&types, hidden_return ? 32U : empty ? 0U : 13U,
+            &record_id) ||
+        !minic_core_function_define_signature(&core, &types, void_id,
+            NULL, 0U, MINIC_CALLING_CONVENTION_DEFAULT, false) ||
+        !minic_core_function_add_block(&core, &entry)) goto done;
+    result_id = (hidden_return || empty) ? record_id : void_id;
+    for (i = 0U; i < 7U; ++i) parameter_ids[i] = int_id;
+    parameter_ids[7] = record_id;
+    type = (MinicCoreType){0};
+    type.kind = MINIC_CORE_TYPE_FUNCTION;
+    type.value.function.return_type = result_id;
+    type.value.function.parameters = parameter_ids;
+    type.value.function.parameter_count = 8U;
+    type.value.function.calling_convention = MINIC_CALLING_CONVENTION_DEFAULT;
+    if (!minic_core_type_register(&types, &type, &signature_id)) goto done;
+    core.callees = calloc(1U, sizeof(*core.callees));
+    core.objects = calloc(2U, sizeof(*core.objects));
+    if (core.callees == NULL || core.objects == NULL) goto done;
+    core.callee_count = core.callee_capacity = 1U;
+    core.object_count = core.object_capacity = 2U;
+    core.callees[0].name = malloc(sizeof("external_record_call"));
+    if (core.callees[0].name == NULL) goto done;
+    memcpy(core.callees[0].name, "external_record_call",
+        sizeof("external_record_call"));
+    core.callees[0].name_length = sizeof("external_record_call") - 1U;
+    core.callees[0].core_function_type_id = signature_id;
+    core.objects[0].core_type_id = record_id;
+    core.objects[1].core_type_id = record_id;
+    for (i = 0U; i < 7U; ++i) {
+        ins = (MinicCoreInstruction){0};
+        ins.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
+        ins.core_type_id = int_id;
+        ins.value.integer_value = (int64_t)(i + 1U);
+        if (!minic_core_function_append_value_instruction(&core,
+                entry, &ins, &value)) goto done;
+        args[i].kind = MINIC_CORE_CALL_ARGUMENT_VALUE;
+        args[i].value.value_id = value;
+        value_offsets[i] = i * 8U + 16U;
+    }
+    args[7].kind = MINIC_CORE_CALL_ARGUMENT_OBJECT;
+    args[7].value.object_id = 1U;
+    stage = "call";
+    if (!minic_core_function_append_call_arguments(&core, args, 8U, &begin))
+        goto done;
+    ins = (MinicCoreInstruction){0};
+    ins.kind = MINIC_CORE_INSTRUCTION_CALL;
+    ins.core_type_id = result_id;
+    ins.result = MINIC_CORE_VALUE_INVALID;
+    ins.value.call.callee_id = 0U;
+    ins.value.call.argument_begin = begin;
+    ins.value.call.argument_count = 8U;
+    ins.value.call.result_object = (hidden_return || empty) ? 0U :
+        MINIC_CORE_OBJECT_INVALID;
+    if (!minic_core_function_append_effect_instruction(&core,
+            entry, &ins)) goto done;
+    term.kind = MINIC_CORE_TERMINATOR_RETURN;
+    term.return_value = MINIC_CORE_VALUE_INVALID;
+    if (!minic_core_function_set_terminator(&core, entry, &term) ||
+        !minic_core_function_attach_type_context(&core, &types)) goto done;
+    stage = "planner";
+    if (!minic_lp64_plan_function_calls(&core, NULL,
+            &loong_call_test_abi, "loongarch64", core.name,
+            &failed, &preflight, &has_calls, &calls) ||
+        !has_calls || calls.call_count != 1U ||
+        calls.sites[0]->argument_count != 8U ||
+        (empty ? calls.sites[0]->arguments[7].kind !=
+            MINIC_LP64_ARGUMENT_EMPTY_RECORD :
+            calls.sites[0]->arguments[7].stack_slots == 0U) ||
+        (!hidden_return && !empty &&
+            calls.sites[0]->arguments[7].gp_registers != 1U)) goto done;
+    target.architecture = MINIC_TARGET_ARCH_LOONGARCH64;
+    target.data_layout = minic_loongarch64_linux_data_layout();
+    module.type_context = &types;
+    frame.frame_size = 320U;
+    frame.frame_alignment = 16U;
+    frame.saved_entry_sp_offset = SIZE_MAX;
+    frame.has_calls = true;
+    plan.value_count = 7U;
+    plan.value_offsets = value_offsets;
+    plan.object_count = 2U;
+    plan.object_offsets = object_offsets;
+    ctx = (MinicDirectLP64BlockContext){
+        .fn = &core, .module = &module, .target = &target,
+        .machine_frame = &frame, .frame_plan = &plan,
+        .outgoing_calls = &calls, .name = core.name
+    };
+    stage = "select";
+    if (!minic_loongarch64_select_machine(&machine, &ctx) ||
+        !minic_machine_core_coverage_verify(&core, reachable, &machine) ||
+        !minic_loongarch64_machine_gnu_asm_policy_initialize(
+            &target, &policy) ||
+        !minic_machine_gnu_asm_preflight(&machine, &policy)) goto done;
+    stage = "GNU";
+    assembly = tmpfile();
+    if (assembly == NULL ||
+        !minic_machine_gnu_asm_emit_body(assembly, &machine, &policy) ||
+        fflush(assembly) != 0 || fseek(assembly, 0L, SEEK_SET) != 0)
+        goto done;
+    read_count = fread(text, 1U, sizeof(text) - 1U, assembly);
+    text[read_count] = '\0';
+    for (i = 0U; i < machine.block_count; ++i) {
+        const MinicMachineBlock *b = &machine.blocks[i];
+        size_t j;
+        for (j = 0U; j < b->instruction_count; ++j)
+            if (b->instructions[j].has_core_origin &&
+                b->instructions[j].core_instruction_id == 7U &&
+                (b->instructions[j].effects &
+                    MINIC_MACHINE_EFFECT_CALL) != 0U) ++call_effects;
+    }
+    stage = "semantics";
+    ok = call_effects == 1U &&
+        strstr(text, "  bl external_record_call") != NULL &&
+        strstr(text, "st.d") != NULL &&
+        (hidden_return ? strstr(text, "addi.d $a0") != NULL :
+            empty ? strstr(text, "ld.bu") == NULL :
+                strstr(text, "ld.bu") != NULL);
+    if (!ok) goto done;
+    /* Corrupt the prepared plan: the typed selector must reject an ABI
+     * mismatch instead of emitting a partially plausible legacy fallback. */
+    minic_machine_function_destroy(&machine);
+    stage = "reject-bad-location";
+    calls.sites[0]->arguments[7].kind = MINIC_LP64_ARGUMENT_GP;
+    ok = !minic_loongarch64_select_machine(&machine, &ctx);
+done:
+    if (!ok) fprintf(stderr,
+        "LOONG_CORE_RECORD_CALL=FAIL stage=%s mode=%u failed=%zu preflight=%d\n",
+        stage, mode, failed, (int)preflight);
+    if (assembly != NULL) fclose(assembly);
+    minic_machine_function_destroy(&machine);
+    minic_lp64_call_plan_cache_destroy(&calls);
+    minic_core_function_destroy(&core);
+    minic_core_type_context_destroy(&types);
+    return ok;
+}
+
+/* Object-backed aggregate return uses the exact same Core storage layout
+ * but the opposite ABI transport direction. Test both register and hidden
+ * pointer paths, including an auxiliary byte-copy CFG for the latter. */
+static bool test_record_return(unsigned int mode) {
+    const bool indirect = mode == 1U;
+    MinicCoreTypeContext types;
+    MinicCoreFunction core = {0};
+    MinicCoreModule module = {0};
+    MinicTargetInfo target = {0};
+    MinicCoreTypeId record_id;
+    MinicCoreBlockId entry;
+    MinicCoreTerminator term = {0};
+    MinicMachineFunction machine = {0};
+    MinicMachineGNUAsmPolicy policy = {0};
+    MinicMachineLP64FrameContract frame = {0};
+    MinicLP64FramePlan plan = {0};
+    MinicDirectLP64BlockContext ctx = {0};
+    const bool reachable[1] = {true};
+    size_t object_offset = 32U, i, auxiliary = 0U;
+    bool ok = false;
+    const char *stage = "setup";
+    minic_core_type_context_initialize(&types);
+    minic_core_function_initialize(&core);
+    core.name = malloc(sizeof("loong_record_return"));
+    if (core.name == NULL) goto done;
+    memcpy(core.name, "loong_record_return", sizeof("loong_record_return"));
+    core.name_length = sizeof("loong_record_return") - 1U;
+    if (!test_record_type(&types,
+            indirect ? 32U : mode == 2U ? 0U : 13U, &record_id) ||
+        !minic_core_function_define_signature(&core, &types, record_id,
+            NULL, 0U, MINIC_CALLING_CONVENTION_DEFAULT, false) ||
+        !minic_core_function_add_block(&core, &entry)) goto done;
+    core.objects = calloc(1U, sizeof(*core.objects));
+    if (core.objects == NULL) goto done;
+    core.objects[0].core_type_id = record_id;
+    core.object_count = core.object_capacity = 1U;
+    term.kind = MINIC_CORE_TERMINATOR_RETURN;
+    term.return_object = 0U;
+    term.return_value = MINIC_CORE_VALUE_INVALID;
+    if (!minic_core_function_set_terminator(&core, entry, &term) ||
+        !minic_core_function_attach_type_context(&core, &types)) goto done;
+    target.architecture = MINIC_TARGET_ARCH_LOONGARCH64;
+    target.data_layout = minic_loongarch64_linux_data_layout();
+    module.type_context = &types;
+    frame.frame_size = 128U;
+    frame.frame_alignment = 16U;
+    frame.saved_entry_sp_offset = SIZE_MAX;
+    frame.has_indirect_return = indirect;
+    frame.indirect_return_offset = 16U;
+    plan.object_count = 1U;
+    plan.object_offsets = &object_offset;
+    ctx = (MinicDirectLP64BlockContext){
+        .fn = &core, .module = &module, .target = &target,
+        .machine_frame = &frame, .frame_plan = &plan, .name = core.name
+    };
+    stage = "select";
+    if (!minic_loongarch64_select_machine(&machine, &ctx) ||
+        !minic_machine_core_coverage_verify(&core, reachable, &machine) ||
+        !minic_loongarch64_machine_gnu_asm_policy_initialize(
+            &target, &policy) ||
+        !minic_machine_gnu_asm_preflight(&machine, &policy)) goto done;
+    for (i = 0U; i < machine.block_count; ++i)
+        if (machine.blocks[i].machine_auxiliary && i != 0U) ++auxiliary;
+    ok = indirect ? auxiliary >= 2U : auxiliary == 0U;
+    if (!ok) goto done;
+    minic_machine_function_destroy(&machine);
+    frame.has_indirect_return = !indirect;
+    stage = "reject-bad-return-abi";
+    ok = !minic_loongarch64_select_machine(&machine, &ctx);
+done:
+    if (!ok) fprintf(stderr,
+        "LOONG_CORE_RECORD_RETURN=FAIL stage=%s mode=%u\n",
+        stage, mode);
+    minic_machine_function_destroy(&machine);
+    minic_core_function_destroy(&core);
+    minic_core_type_context_destroy(&types);
+    return ok;
+}
+
 int main(void) {
     if (!test_nonzero_core_entry() ||
         !test_record_transfer(4U, 0U) ||
@@ -406,7 +729,13 @@ int main(void) {
         !test_record_transfer(32U, 1U) ||
         !test_record_transfer(16U, 2U) ||
         !test_record_parameter(false) ||
-        !test_record_parameter(true)) return 1;
-    puts("LOONG_CORE_MIR_NONZERO_ENTRY=PASS prologue_targets_declared_entry=1 record_copy=1 record_load=1 vector_storage=1 volatile=1 byte_loop=1 record_param=2");
+        !test_record_parameter(true) ||
+        !test_record_call(0U) ||
+        !test_record_call(1U) ||
+        !test_record_call(2U) ||
+        !test_record_return(0U) ||
+        !test_record_return(1U) ||
+        !test_record_return(2U)) return 1;
+    puts("LOONG_CORE_MIR_NONZERO_ENTRY=PASS prologue_targets_declared_entry=1 record_copy=1 record_load=1 vector_storage=1 volatile=1 byte_loop=1 record_param=2 record_call=3 record_return=3 bad_abi_reject=6");
     return 0;
 }

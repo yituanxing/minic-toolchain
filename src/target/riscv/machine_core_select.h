@@ -3,6 +3,8 @@
 
 #include "core/core_ir.h"
 #include "target/riscv/machine_frame_select.h"
+#include "target/riscv32/rv32_abi_plan.h"
+#include "target/riscv64/function_abi_plan.h"
 
 /* A source-neutral, immutable bridge from each target's FINAL ABI layout to
  * the same RV32I/RV64I native instruction selector. No Core type or C rank
@@ -12,6 +14,12 @@ typedef struct MinicRiscvCoreMachinePlan {
     const MinicTargetInfo *target;
     const MinicCoreFunction *core;
     const MinicRiscvPhysicalFrame *frame;
+    /* Exactly one immutable, already-finalized legacy psABI plan. The Core
+     * selector only consumes locations; it never computes register cursors.
+     * RV64's outgoing cache shares the Common sparse CALL index ordinal. */
+    const Rv32FunctionAbiPlan *abi32;
+    const MinicRiscv64FunctionAbiPlan *abi64;
+    const MinicCoreCallIndex *semantic_calls64;
     const size_t *value_offsets;
     size_t value_offset_count;
     const size_t *object_offsets;

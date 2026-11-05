@@ -13,6 +13,28 @@
     fprintf(stderr, "RV_CORE_MIR:%d: %s\n", __LINE__, #x); \
     return false; } } while (0)
 
+/* Exercise the SAME function-lifetime psABI plans consumed by proven old
+ * RV32/RV64 emitters. A hand-written a0+i placement in a test would hide
+ * exactly the migration regression this gate must detect. */
+static bool prepare_old_rv_abi(const MinicCoreFunction *fn, unsigned xlen,
+    size_t expected_calls, Rv32FunctionAbiPlan *abi32,
+    MinicRiscv64FunctionAbiPlan *abi64, MinicCoreCallIndex *calls64,
+    MinicRiscvCoreMachinePlan *bridge) {
+    if (xlen == 32U) {
+        if (!rv32_function_abi_plan_build(fn, NULL, abi32)) return false;
+        bridge->abi32 = abi32;
+        return true;
+    }
+    if (xlen != 64U ||
+        !minic_riscv64_function_abi_plan_build_profile(fn, abi64, true) ||
+        !minic_core_call_index_build(fn, expected_calls, calls64) ||
+        !minic_riscv64_call_plan_cache_build(fn, true, calls64,
+            &abi64->outgoing_calls)) return false;
+    bridge->abi64 = abi64;
+    bridge->semantic_calls64 = calls64;
+    return true;
+}
+
 static bool core_cycle(MinicCoreFunction *fn, MinicCoreTypeContext *types,
                        bool compiler_barrier) {
     MinicCoreType type = {0};
@@ -47,23 +69,46 @@ static bool core_cycle(MinicCoreFunction *fn, MinicCoreTypeContext *types,
     return minic_core_function_verify(fn);
 }
 
-static bool run(unsigned xlen, bool compiler_barrier) {
+static bool run(unsigned xlen, bool compiler_barrier,
+                bool exported_island) {
     MinicCoreFunction fn = {0};
     MinicCoreTypeContext types;
     MinicMachineFunction machine = {0};
     MinicRiscvCoreMachinePlan plan = {0};
+    Rv32FunctionAbiPlan abi32 = {0};
+    MinicRiscv64FunctionAbiPlan abi64 = {0};
+    MinicCoreCallIndex calls64 = {0};
     MinicRiscvPhysicalFrame frame = {0};
     MinicTargetInfo target = {0};
     MinicRiscvIsa isa = {0};
     MinicMachineGNUAsmPolicy policy = {0};
     MinicDataLayout layout = {0};
-    const bool reachable[] = {true, true};
+    const bool reachable[] = {true, true, true};
     FILE *out = NULL;
     char text[4096];
     size_t count;
     bool okay = false;
+    const char *stage = "build-core";
     minic_core_type_context_initialize(&types);
     if (!core_cycle(&fn, &types, compiler_barrier)) goto done;
+    if (exported_island) {
+        /* A disconnected exported local label is a live linker entry. The
+         * legacy RV-private BFS dropped it; Core's shared closure keeps it. */
+        MinicCoreBlockId island;
+        MinicCoreTerminator ret = {0};
+        if (!minic_core_function_add_block(&fn, &island) || island != 2U)
+            goto done;
+        fn.blocks[island].local_label_symbol = malloc(sizeof(".Luser_123"));
+        if (fn.blocks[island].local_label_symbol == NULL) goto done;
+        memcpy(fn.blocks[island].local_label_symbol, ".Luser_123",
+            sizeof(".Luser_123"));
+        ret.kind = MINIC_CORE_TERMINATOR_RETURN;
+        ret.return_value = MINIC_CORE_VALUE_INVALID;
+        ret.return_object = MINIC_CORE_OBJECT_INVALID;
+        if (!minic_core_function_set_terminator(&fn, island, &ret) ||
+            !minic_core_function_verify(&fn)) goto done;
+    }
+    stage = "build-target";
     layout.byte_order = MINIC_BYTE_ORDER_LITTLE;
     layout.pointer_size = xlen / 8U;
     layout.pointer_alignment = xlen / 8U;
@@ -79,6 +124,19 @@ static bool run(unsigned xlen, bool compiler_barrier) {
     plan.target = &target;
     plan.core = &fn;
     plan.frame = &frame;
+    if (!prepare_old_rv_abi(&fn, xlen, 0U, &abi32, &abi64,
+            &calls64, &plan)) goto done;
+    stage = "select";
+    if (exported_island) {
+        bool live[3] = {false, false, false};
+        /* The shared Core closure recognizes this externally reachable
+         * entry. Until MachineIR multi-entry coverage can prove it, the
+         * selector must reject the WHOLE function, never discard it. */
+        okay = minic_core_function_mark_reachable_blocks(
+            &fn, live, 3U) && live[0] && live[1] && live[2] &&
+            !minic_riscv_machine_select_core_subset(&machine, &plan);
+        goto done;
+    }
     if (!minic_riscv_machine_select_core_subset(&machine, &plan)) {
         fprintf(stderr, "RV%u: selector rejected basic CFG\n", xlen);
         goto done;
@@ -100,6 +158,7 @@ static bool run(unsigned xlen, bool compiler_barrier) {
         goto done;
     }
     out = tmpfile();
+    stage = "assembly";
     if (out == NULL || !minic_machine_gnu_asm_emit_body(out,
         &machine, &policy) || fflush(out) != 0 ||
         fseek(out, 0L, SEEK_SET) != 0) goto done;
@@ -113,8 +172,13 @@ static bool run(unsigned xlen, bool compiler_barrier) {
         strstr(text, "  ret") != NULL;
     if (!okay) fprintf(stderr, "RV%u asm:\n%s\n", xlen, text);
 done:
+    if (!okay) fprintf(stderr, "RV%u core-CFG exported=%d at %s\n",
+        xlen, exported_island, stage);
     if (out != NULL) fclose(out);
     minic_machine_function_destroy(&machine);
+    rv32_function_abi_plan_destroy(&abi32);
+    minic_riscv64_function_abi_plan_destroy(&abi64);
+    minic_core_call_index_destroy(&calls64);
     minic_core_function_destroy(&fn);
     minic_core_type_context_destroy(&types);
     return okay;
@@ -130,6 +194,9 @@ static bool run_scalar(unsigned xlen, bool unsupported_multiply) {
     MinicCoreTerminator term = {0};
     MinicMachineFunction machine = {0};
     MinicRiscvCoreMachinePlan plan = {0};
+    Rv32FunctionAbiPlan abi32 = {0};
+    MinicRiscv64FunctionAbiPlan abi64 = {0};
+    MinicCoreCallIndex calls64 = {0};
     MinicRiscvPhysicalFrame frame = {0};
     MinicTargetInfo target = {0};
     MinicRiscvIsa isa = {0};
@@ -201,6 +268,8 @@ static bool run_scalar(unsigned xlen, bool unsupported_multiply) {
     plan.frame = &frame;
     plan.value_offsets = offsets;
     plan.value_offset_count = 4U;
+    if (!prepare_old_rv_abi(&fn, xlen, 0U, &abi32, &abi64,
+            &calls64, &plan)) goto done;
     stage = "select";
     if (unsupported_multiply) {
         ok = !minic_riscv_machine_select_core_subset(&machine, &plan);
@@ -233,6 +302,9 @@ done:
     if (!ok) fprintf(stderr, "RV%u scalar Core selection failed at %s\n", xlen, stage);
     if (out != NULL) fclose(out);
     minic_machine_function_destroy(&machine);
+    rv32_function_abi_plan_destroy(&abi32);
+    minic_riscv64_function_abi_plan_destroy(&abi64);
+    minic_core_call_index_destroy(&calls64);
     minic_core_function_destroy(&fn);
     minic_core_type_context_destroy(&types);
     return ok;
@@ -250,6 +322,9 @@ static bool run_memory_family(unsigned xlen) {
     MinicCoreInstruction ins = {0};
     MinicCoreTerminator term = {0};
     MinicRiscvCoreMachinePlan plan = {0};
+    Rv32FunctionAbiPlan abi32 = {0};
+    MinicRiscv64FunctionAbiPlan abi64 = {0};
+    MinicCoreCallIndex calls64 = {0};
     MinicRiscvPhysicalFrame frame = {0};
     MinicMachineFunction machine = {0};
     MinicTargetInfo target = {0};
@@ -371,6 +446,8 @@ static bool run_memory_family(unsigned xlen) {
     plan.frame = &frame;
     plan.value_offsets = offsets;
     plan.value_offset_count = 6U;
+    if (!prepare_old_rv_abi(&fn, xlen, 0U, &abi32, &abi64,
+            &calls64, &plan)) goto done;
     if (!minic_riscv_machine_select_core_subset(&machine, &plan) ||
         !minic_machine_core_coverage_verify(&fn, reachable, &machine) ||
         !minic_riscv_machine_gnu_asm_policy(&target, &policy) ||
@@ -431,6 +508,9 @@ done:
     if (!ok) fprintf(stderr, "RV%u memory family failure at %s\n", xlen, stage);
     if (out != NULL) fclose(out);
     minic_machine_function_destroy(&machine);
+    rv32_function_abi_plan_destroy(&abi32);
+    minic_riscv64_function_abi_plan_destroy(&abi64);
+    minic_core_call_index_destroy(&calls64);
     minic_core_function_destroy(&fn);
     minic_core_type_context_destroy(&types);
     return ok;
@@ -446,6 +526,9 @@ static bool run_indirect_call(unsigned xlen) {
     MinicCoreCallArgument call_arg = {0};
     MinicCoreTerminator term = {0};
     MinicRiscvCoreMachinePlan plan = {0};
+    Rv32FunctionAbiPlan abi32 = {0};
+    MinicRiscv64FunctionAbiPlan abi64 = {0};
+    MinicCoreCallIndex calls64 = {0};
     MinicRiscvPhysicalFrame frame = {0};
     MinicMachineFunction machine = {0};
     MinicTargetInfo target = {0};
@@ -543,6 +626,8 @@ static bool run_indirect_call(unsigned xlen) {
     plan.frame = &frame;
     plan.value_offsets = offsets;
     plan.value_offset_count = 3U;
+    if (!prepare_old_rv_abi(&fn, xlen, 1U, &abi32, &abi64,
+            &calls64, &plan)) goto done;
     if (!minic_riscv_machine_select_core_subset(&machine, &plan) ||
         !minic_machine_core_coverage_verify(&fn, reachable, &machine) ||
         !minic_riscv_machine_gnu_asm_policy(&target, &policy) ||
@@ -556,17 +641,57 @@ static bool run_indirect_call(unsigned xlen) {
     stage = "assembly";
     ok = strstr(text, "  jalr ra, 0(x5)") != NULL &&
          strstr(text, "  ret") != NULL;
+    if (ok) {
+        /* A missing old final psABI plan MUST NOT silently fall back to
+         * instruction-local a0+i placement, even for a simple CALL. */
+        minic_machine_function_destroy(&machine);
+        stage = "missing-final-abi-reject";
+        if (xlen == 32U) plan.abi32 = NULL;
+        else plan.abi64 = NULL;
+        ok = !minic_riscv_machine_select_core_subset(&machine, &plan);
+        plan.abi32 = xlen == 32U ? &abi32 : NULL;
+        plan.abi64 = xlen == 64U ? &abi64 : NULL;
+    }
+    if (ok) {
+        /* Neither incoming nor outgoing placements may be reconstructed
+         * from Core parameter ordinal when the old psABI plan disagrees. */
+        minic_machine_function_destroy(&machine);
+        stage = "invalid-register-placement-reject";
+        if (xlen == 32U)
+            abi32.calls[0].arguments[0].location.register_begin = 8U;
+        else
+            abi64.outgoing_calls.sites[0]->arguments[0]
+                .integer_register_begin = 8U;
+        ok = !minic_riscv_machine_select_core_subset(&machine, &plan);
+    }
+    if (ok) {
+        minic_machine_function_destroy(&machine);
+        stage = "invalid-incoming-parameter-reject";
+        if (xlen == 32U) {
+            abi32.calls[0].arguments[0].location.register_begin = 0U;
+            abi32.parameters[1].location.register_begin = 8U;
+        } else {
+            abi64.outgoing_calls.sites[0]->arguments[0]
+                .integer_register_begin = 0U;
+            abi64.parameter_locations[1].integer_register_begin = 8U;
+        }
+        ok = !minic_riscv_machine_select_core_subset(&machine, &plan);
+    }
 done:
     if (!ok) fprintf(stderr, "RV%u indirect-call failure at %s\n", xlen, stage);
     if (out != NULL) fclose(out);
     minic_machine_function_destroy(&machine);
+    rv32_function_abi_plan_destroy(&abi32);
+    minic_riscv64_function_abi_plan_destroy(&abi64);
+    minic_core_call_index_destroy(&calls64);
     minic_core_function_destroy(&fn);
     minic_core_type_context_destroy(&types);
     return ok;
 }
 int main(void) {
-    if (!run(32U, false) || !run(64U, false) ||
-        !run(32U, true) || !run(64U, true) ||
+    if (!run(32U, false, false) || !run(64U, false, false) ||
+        !run(32U, true, false) || !run(64U, true, false) ||
+        !run(32U, false, true) || !run(64U, false, true) ||
         !run_scalar(32U, false) || !run_scalar(64U, false) ||
         !run_scalar(32U, true) || !run_scalar(64U, true) ||
         !run_memory_family(32U) || !run_memory_family(64U) ||
@@ -574,6 +699,6 @@ int main(void) {
         fprintf(stderr, "RV_CORE_MIR_CFG=FAIL\n");
         return 1;
     }
-    puts("RV_CORE_MIR_CFG=PASS architectures=2 prologue_isolated=1 core_scalar=1 memory_effects=1 indirect_call=1 fail_closed=1");
+    puts("RV_CORE_MIR_CFG=PASS architectures=2 prologue_isolated=1 exported_reachability=1 core_scalar=1 memory_effects=1 indirect_call=1 abi_plan_reject=1 fail_closed=1");
     return 0;
 }
