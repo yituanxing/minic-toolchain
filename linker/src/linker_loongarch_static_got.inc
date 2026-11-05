@@ -234,24 +234,40 @@ static bool minild_loongarch_reserve_static_relocations(
         got->ifunc_slot_offsets[i] = SIZE_MAX;
     }
     if (state->static_pie_requested) {
-        MiniLdSection *section;
+        bool needs_got = false;
 
-        /* GNU creates the initial reserved GOT word even when all ordinary
-         * references are PC-relative.  Actual GOT symbols follow this word. */
-        if (!find_or_add_section(state, ".got", SHT_PROGBITS,
-                                 SHF_ALLOC | SHF_WRITE, 16U, 0U,
-                                 &got->section)) {
-            return false;
-        }
-        section = &state->work.sections[got->section];
-        section->gc_discarded = false;
-        got->present = true;
-        if (!section_append_zero(section, 8U)) {
-            return false;
-        }
+        /* Scan all actual relocation consumers before creating synthetic
+         * allocated sections.  A kernel-mode probe whose script contains
+         * only .text has no .got output rule and must remain linkable when
+         * its input needs neither absolute pointer rebasing nor GOT/TLS IE.
+         * GNU's reserved zero GOT word is needed for nontrivial static PIE
+         * images, not a reason to inject an unplaceable section into every
+         * static-PIE linker script. */
         for (i = 0U; i < state->relocations.count; ++i) {
-            if (state->relocations.entries[i].type == R_LARCH_64) {
+            uint32_t type = state->relocations.entries[i].type;
+
+            if (type == R_LARCH_64) {
                 ++got->relative_reserved_count;
+            }
+            if (type == R_LARCH_64 ||
+                minild_loongarch_static_uses_got(type) ||
+                minild_loongarch_static_uses_tls_ie(type)) {
+                needs_got = true;
+            }
+        }
+        if (needs_got) {
+            MiniLdSection *section;
+
+            if (!find_or_add_section(state, ".got", SHT_PROGBITS,
+                                     SHF_ALLOC | SHF_WRITE, 16U, 0U,
+                                     &got->section)) {
+                return false;
+            }
+            section = &state->work.sections[got->section];
+            section->gc_discarded = false;
+            got->present = true;
+            if (!section_append_zero(section, 8U)) {
+                return false;
             }
         }
         if (got->relative_reserved_count != 0U) {

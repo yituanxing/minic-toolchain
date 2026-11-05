@@ -49,6 +49,7 @@ names = (
     'linker_riscv_fixup.inc',
     'linker_align_relax_common.inc',
     'linker_riscv_align_relax.inc',
+    'linker_riscv_relax_plan.inc',
     'linker_loongarch_align_relax.inc',
     'linker_static_got.inc',
     'linker_static_reloc_scan.inc',
@@ -113,6 +114,7 @@ expected = {
     ('linker_layout_finalize.inc', 'linker_aarch64_static_fixup.inc'),
     ('linker_layout_finalize.inc', 'linker_loongarch_static_fixup.inc'),
     ('linker_layout_finalize.inc', 'linker_riscv_static_got.inc'),
+    ('linker_riscv_static_got.inc', 'linker_riscv_relax_plan.inc'),
     ('linker_layout_finalize.inc', 'linker_riscv_static_apply.inc'),
     ('linker_layout_finalize.inc', 'linker_static_reloc_apply.inc'),
 }
@@ -143,7 +145,8 @@ if not (core.index('#include "linker_common_allocation.inc"') <
 type_owners = {
     'MiniLdLayout': 'linker_layout.inc',
     'MiniLdPcrelSlot': 'linker_riscv_fixup.inc',
-    'MiniLdAlignSite': 'linker_riscv_align_relax.inc',
+    'MiniLdRiscvRelaxSite': 'linker_riscv_relax_plan.inc',
+    'MiniLdRiscvRelaxPlan': 'linker_riscv_relax_plan.inc',
     'MiniLdRelaxEvent': 'linker_align_relax_common.inc',
     'MiniLdStaticTargetPlan': 'linker_static_got.inc',
     'MiniLdStaticRelocOperands': 'linker_static_reloc_operands.inc',
@@ -212,7 +215,11 @@ owners = {
         'shared_build_layout', 'minild_target_relax_section',
     ),
     'linker_riscv_align_relax.inc': (
-        'static_relax_align_section', 'minild_riscv_relax_section',
+        'minild_riscv_relax_section',
+    ),
+    'linker_riscv_relax_plan.inc': (
+        'minild_riscv_replan_image_layout',
+        'minild_riscv_replan_static_layout',
     ),
     'linker_riscv_fixup.inc': (
         'minild_target_reloc_class',
