@@ -53,6 +53,18 @@ require_saved_x8_copy_slot() {
     require_contains '^  add x9, x9, #1$' "$body"
     require_contains '^  add x10, x10, #1$' "$body"
 }
+# Short AAPCS64 results (<=64 bytes) lower to a literal four-op copy per
+# byte, with no x12 copy-length constant. Prove each source record's
+# complete return bound by counting the exact typed STRB machine template
+# inside its own callee, independent of unrelated C initialization code.
+require_unrolled_return_copy() {
+    local name=$1 expected=$2 body="$work/${1}.body" observed
+    function_assembly "$name" >"$body"
+    observed=$(grep -Ec '^  strb w11, \[x10(, #0)?\]$' "$body") || true
+    [[ "$observed" =~ ^[0-9]+$ ]] || fail "$name missing typed byte-copy count"
+    (( observed >= expected )) ||
+        fail "$name copied fewer than ${expected} literal result bytes: ${observed}"
+}
 require_rejected() {
     local target=$1 source=$2 name=$3
     if "$minic_cc" --target="$target" -S "$source" \
@@ -113,11 +125,13 @@ require_contains '^  add x10, x10, #1$' "$work/aarch64.s"
 require_contains '^  sub x12, x12, #1$' "$work/aarch64.s"
 require_contains '^  cbnz x12, [^[:space:]]+$' "$work/aarch64.s"
 require_contains '^  movz x12, #144(, lsl #0)?$' "$work/aarch64.s"
-require_contains '^  movz x12, #40(, lsl #0)?$' "$work/aarch64.s"
-require_contains '^  movz x12, #24(, lsl #0)?$' "$work/aarch64.s"
-require_contains '^  movz x12, #32(, lsl #0)?$' "$work/aarch64.s"
-require_contains '^  movz x12, #17(, lsl #0)?$' "$work/aarch64.s"
-require_contains '^  movz x12, #64(, lsl #0)?$' "$work/aarch64.s"
+# Sizes up to 64 never need x12: demand a complete byte-copy chain in
+# each callee, including the 17-byte and exact 64-byte classification edges.
+require_unrolled_return_copy minic_seventeen 17
+require_unrolled_return_copy minic_three 24
+require_unrolled_return_copy minic_four 32
+require_unrolled_return_copy minic_nested_record 40
+require_unrolled_return_copy minic_sixty_four 64
 require_contains '^  movz x12, #2048(, lsl #0)?$' "$work/aarch64.s"
 # Alloca moves the stack pointer; the return-object and saved x8 slot must
 # still be addressed relative to the stable AAPCS64 callee-saved x19.

@@ -36,16 +36,16 @@ jobs:
           cp "${new[0]}" finalizer-diff/current-finalizer.dis
           echo 'RV32_FINALIZER_ARCHIVE=PASS exact_p2_18_of_18_run=42090175196'
           echo '==== OLD OCT31 vp_finalize_features ====='
-          sed -n '1,240p' "${old[0]}"
+          tail -n 220 "${old[0]}"
           echo '==== CURRENT vp_finalize_features ====='
-          sed -n '1,240p' "${new[0]}"
+          tail -n 220 "${new[0]}"
           if diff -u "${old[0]}" "${new[0]}" > finalizer-diff/old-vs-new.diff; then
             echo 'RV32_FINALIZER_DIFF=IDENTICAL'
           else
             rc=$?
             test "$rc" -eq 1
             echo 'RV32_FINALIZER_DIFF=CHANGED'
-            sed -n '1,260p' finalizer-diff/old-vs-new.diff
+            tail -n 220 finalizer-diff/old-vs-new.diff
           fi
       - name: Preserve machine-code comparison
         if: always()

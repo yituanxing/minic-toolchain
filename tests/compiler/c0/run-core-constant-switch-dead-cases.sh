@@ -98,13 +98,16 @@ for target in riscv32-linux riscv64-linux x86_64-linux aarch64-linux loongarch64
         exit 1
     fi
 done
-# The direct LP64 emitters must consume the same source-label-aware Core
-# reachable-block set as RV64. Counting actual emitted block labels guards
-# against silently restoring unreachable machine bodies (including cloned
-# function bodies), while source LABEL roots above retain external reentry.
-rv64_blocks=$(grep -Ec '^\.L[^:]+_core_bb[0-9]+:' "$work/riscv64-linux.s")
-aarch64_blocks=$(grep -Ec '^\.Lmini_arm_f[0-9]+_b[0-9]+:' "$work/aarch64-linux.s")
-loongarch64_blocks=$(grep -Ec '^\.Lmini_loong_f[0-9]+_b[0-9]+:' "$work/loongarch64-linux.s")
+# All three LP64 MachineIR printers now use the shared target-neutral
+# .Lminic_mir_<function>_<block> spelling from machine_internal_label()
+# (src/target/common/machine_gnu_asm.c). Compare *actual machine CFG*
+# blocks across the three targets: retain external C goto reentry, exclude
+# unreachable constant-switch arms, and reject wrong/missing block counts.
+# grep returns 1 for zero matches; allow the explicit equality check below
+# to emit an actionable FAIL rather than silently stopping under set -e.
+rv64_blocks=$(grep -Ec '^\.Lminic_mir_[^:]+_[0-9]+:' "$work/riscv64-linux.s" || :)
+aarch64_blocks=$(grep -Ec '^\.Lminic_mir_[^:]+_[0-9]+:' "$work/aarch64-linux.s" || :)
+loongarch64_blocks=$(grep -Ec '^\.Lminic_mir_[^:]+_[0-9]+:' "$work/loongarch64-linux.s" || :)
 if [ "$rv64_blocks" -eq 0 ] || [ "$aarch64_blocks" -ne "$rv64_blocks" ] ||
    [ "$loongarch64_blocks" -ne "$rv64_blocks" ]; then
     printf 'FAIL direct LP64 unreachable Core block emission rv64=%s aarch64=%s loongarch64=%s\n' \
