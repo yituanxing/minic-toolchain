@@ -1,4 +1,5 @@
 #include "target/aarch64/machine_source_asm.h"
+#include "target/aarch64/machine_opcode.h"
 #include "target/aarch64/asm_contract_internal.h"
 #include "target/aarch64/machine_lse_source_select.h"
 #include "target/common/direct_linux_bug_asm.h"

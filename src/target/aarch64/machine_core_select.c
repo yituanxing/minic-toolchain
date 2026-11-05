@@ -3814,10 +3814,11 @@ bool minic_aarch64_machine_select_core_subset(
                       &ins_id, &ins) || ins_id >= fn->instruction_count)
                   goto cleanup;
               if (ins->kind == MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM) {
-                  const MinicCoreInlineAsmId id = ins->value.inline_asm_id;
+                  const MinicCoreInlineAsmId source_id =
+                      ins->value.inline_asm_id;
                   if (fn->inline_asms == NULL ||
-                      id >= fn->inline_asm_count) goto cleanup;
-                  if (fn->inline_asms[id].is_goto &&
+                      source_id >= fn->inline_asm_count) goto cleanup;
+                  if (fn->inline_asms[source_id].is_goto &&
                       (!minic_machine_builder_create_block(&sel.builder,
                            NULL, false, true, &sel.goto_emit[ins_id]) ||
                        !minic_machine_builder_create_block(&sel.builder,
