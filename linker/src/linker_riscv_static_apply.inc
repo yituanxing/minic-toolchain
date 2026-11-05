@@ -1,6 +1,43 @@
 /* RISC-V ET_EXEC final relocation pass.  The common driver owns admission,
  * section selection and placement; the machine leaf owns the relocation
  * classes, instruction bytes and the HI20/LO12 pairing contract. */
+static bool minild_riscv_zero_discarded_scalar(
+    const MiniLdState *state, MiniLdSection *section,
+    const MiniLdReloc *reloc) {
+    size_t width;
+
+    switch (reloc->type) {
+    case R_RISCV_32:
+    case R_RISCV_32_PCREL:
+        width = 4U;
+        break;
+    case R_RISCV_64:
+        if (state->target->elf_class == ELFCLASS32) {
+            fprintf(state->diagnostics,
+                    "minic-ld: rv32-unsupported-R_RISCV_64\n");
+            return false;
+        }
+        width = 8U;
+        break;
+    default:
+        /* Instruction bitfields, paired CALL/HI/LO, ULEB and ADD/SUB
+         * arithmetic are not interchangeable with full scalar bytes. */
+        fprintf(state->diagnostics,
+                "minic-ld: unsupported-discarded-target-relocation:%u:%u\n",
+                (unsigned)state->target->machine, (unsigned)reloc->type);
+        return false;
+    }
+    if (section->type == SHT_NOBITS || reloc->offset > SIZE_MAX ||
+        !range_ok((size_t)reloc->offset, width, section->size)) {
+        fprintf(state->diagnostics,
+                "minic-ld: riscv-discarded-relocation-offset-out-of-range:%u\n",
+                (unsigned)reloc->type);
+        return false;
+    }
+    memset(section->data + (size_t)reloc->offset, 0, width);
+    return true;
+}
+
 static bool minild_riscv_apply_static_relocations(
     MiniLdState *state, const MiniLdLayout *layout,
     const MiniLdOutputPlan *output_plan,
@@ -46,6 +83,13 @@ static bool minild_riscv_apply_static_relocations(
                 "riscv-relocation-place-overflow",
                 &operands)) {
             goto fail;
+        }
+        if (operands.disposition ==
+            MINILD_STATIC_RELOC_ZERO_DISCARDED_TARGET) {
+            if (!minild_riscv_zero_discarded_scalar(state, section, reloc)) {
+                goto fail;
+            }
+            continue;
         }
         target = minild_target_signed_bits(operands.target_bits);
 

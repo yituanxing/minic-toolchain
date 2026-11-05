@@ -70,6 +70,16 @@ static MiniLdNonRiscvFixup minild_loongarch_static_fixup_class(uint32_t type) {
     }
 }
 
+static size_t minild_loongarch_discarded_scalar_width(uint32_t type) {
+    switch (type) {
+    case R_LARCH_64:
+    case R_LARCH_64_PCREL: return 8U;
+    case R_LARCH_32:
+    case R_LARCH_32_PCREL: return 4U;
+    default: return 0U;
+    }
+}
+
 static size_t minild_loongarch_static_instruction_width(uint32_t type) {
     switch (type) {
     case R_LARCH_ADD6:
@@ -530,7 +540,8 @@ static bool minild_loongarch_apply_static_relocations(
         minild_loongarch_static_resolve_target,
         minild_loongarch_static_instruction_width,
         minild_loongarch_static_write_instruction,
-        NULL
+        NULL,
+        minild_loongarch_discarded_scalar_width
     };
 
     return minild_loongarch_static_validate_aligns(state, layout) &&

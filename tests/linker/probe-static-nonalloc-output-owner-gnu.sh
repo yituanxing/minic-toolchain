@@ -70,6 +70,54 @@ for filename in (gnu_elf, mini_elf):
 PY
 done
 
+# GNU BFD keeps the non-ALLOC source but zeroes an entire relocation field
+# when its definition belonged to an explicitly /DISCARD/ed ALLOC section.
+# This is *not* resolution of symbol S=0: +7, +9, +13 and +17 addends must
+# vanish too, for absolute and PC-relative scalar relocations alike.
+printf '.text\n.globl _start\n_start: ret\n.section .text.drop,"ax",@progbits\n.Ldead: .quad 42\n.globl gone\ngone: .quad 43\n.section .debug_info,"",@progbits\n.quad .Ldead+7\n.long .Ldead - . + 9\n.quad gone+13\n.long gone - . + 17\n' |
+    as -o "$work/discarded-ref.o" -
+cat > "$work/discard.lds" <<'LDS'
+SECTIONS {
+  . = 0x10000;
+  .text : { *(.text) }
+  .debug_info 0 : { *(.debug_info) }
+  /DISCARD/ : { *(.text.drop) }
+}
+LDS
+for strip in keep strip; do
+    flags=()
+    if [[ $strip == strip ]]; then
+        flags=(-S)
+    fi
+    "$gnu_ld" -m elf_x86_64 -static -T "$work/discard.lds" "${flags[@]}" \
+        -o "$work/discard.$strip.gnu.elf" "$work/discarded-ref.o"
+    "$MINILD" -m elf_x86_64 -static -T "$work/discard.lds" "${flags[@]}" \
+        -o "$work/discard.$strip.mini.elf" "$work/discarded-ref.o"
+    if [[ $strip == keep ]]; then
+        for flavor in gnu mini; do
+            objcopy --dump-section \
+                ".debug_info=$work/discard.$strip.$flavor.info" \
+                "$work/discard.$strip.$flavor.elf"
+        done
+        cmp "$work/discard.$strip.gnu.info" "$work/discard.$strip.mini.info"
+        python3 - "$work/discard.$strip.gnu.info" <<'PY'
+from pathlib import Path
+import sys
+payload = Path(sys.argv[1]).read_bytes()
+if len(payload) != 24 or any(payload):
+    raise SystemExit('discarded-target ABS/PCREL fields not wholly zero')
+PY
+    else
+        for flavor in gnu mini; do
+            if readelf -SW "$work/discard.$strip.$flavor.elf" |
+                    grep -q '\.debug_info'; then
+                echo "MINILD_STATIC_NONALLOC_OUTPUT_GNU=FAIL stripped_debug_kept" >&2
+                exit 1
+            fi
+        done
+    fi
+done
+
 # The source is ALLOC here; treating a non-ALLOC target as an absolute VMA
 # would leak an unmapped address into runtime data.  Preserve fail-closed.
 printf '.text\n.globl _start\n_start: ret\n.data\n.quad debug_global\n.section .debug_owned,"",@progbits\n.globl debug_global\ndebug_global: .quad 4\n' |
@@ -82,4 +130,4 @@ fi
 grep -Fq 'unsupported-static-symbol:debug_global' "$work/invalid.log"
 test ! -e "$work/invalid.elf"
 
-echo 'MINILD_STATIC_NONALLOC_OUTPUT_GNU=PASS GNU_BFD=2 modes=default_scripted global_symbols=2 cross_fragment=8 pcrel=0 allocated_to_nonalloc=rejected'
+echo 'MINILD_STATIC_NONALLOC_OUTPUT_GNU=PASS GNU_BFD=4 modes=default_scripted_discarded_keep_discarded_strip global_symbols=2 cross_fragment=8 pcrel=0 discarded_ABS_PCREL=zero allocated_to_nonalloc=rejected'

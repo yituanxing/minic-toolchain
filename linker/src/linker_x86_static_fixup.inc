@@ -43,6 +43,18 @@ static MiniLdNonRiscvFixup minild_x86_static_fixup_class(uint32_t type) {
     }
 }
 
+static size_t minild_x86_discarded_scalar_width(uint32_t type) {
+    switch (type) {
+    case R_X86_64_64:
+    case R_X86_64_PC64: return 8U;
+    case R_X86_64_32:
+    case R_X86_64_32S:
+    case R_X86_64_PC32:
+    case R_X86_64_PLT32: return 4U;
+    default: return 0U;
+    }
+}
+
 /* GNU AS emits GOTPCRELX on both relaxable and non-relaxable RIP-relative
  * operands. Only transform the encodings whose semantics are proven; every
  * other input retains the original machine instruction and uses a real GOT
@@ -224,7 +236,8 @@ static bool minild_x86_apply_static_relocations(
         minild_x86_resolve_static_got_target,
         NULL,
         NULL,
-        NULL
+        NULL,
+        minild_x86_discarded_scalar_width
     };
 
     return minild_nonriscv_apply_with_ops(state, layout, output_plan,

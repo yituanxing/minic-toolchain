@@ -37,6 +37,10 @@ typedef struct MiniLdNonRiscvStaticOps {
      * relocation whose fully resolved RELA record was already emitted by
      * its post-layout writer (e.g. AArch64 --no-apply-dynamic-relocs). */
     bool (*defer_fixup)(const MiniLdState *, const MiniLdReloc *);
+    /* Only fixed-width, plain ABS/PCREL scalar fields are eligible for
+     * GNU's non-ALLOC -> discarded-target zero-field disposition. GOT,
+     * TLS, compound and instruction relocations must fail closed. */
+    size_t (*discarded_scalar_width)(uint32_t type);
 } MiniLdNonRiscvStaticOps;
 
 static size_t minild_nonriscv_word_instruction_width(uint32_t type) {
@@ -62,6 +66,7 @@ static bool minild_nonriscv_write_fixup(const MiniLdState *state,
                                         uint64_t target,
                                         uint64_t place,
                                         bool undefined_weak,
+                                        bool zero_discarded_target,
                                         FILE *diagnostics) {
     size_t width =
         kind == MINILD_NONRISCV_ABS8 ||
@@ -90,6 +95,21 @@ static bool minild_nonriscv_write_fixup(const MiniLdState *state,
         return false;
     }
     slot = section->data + (size_t)reloc->offset;
+
+    if (zero_discarded_target) {
+        size_t scalar_width = ops->discarded_scalar_width != NULL
+                                  ? ops->discarded_scalar_width(reloc->type)
+                                  : 0U;
+        if (kind == MINILD_NONRISCV_TARGET_INSTRUCTION ||
+            scalar_width != width) {
+            fprintf(diagnostics,
+                    "minic-ld: unsupported-discarded-target-relocation:%u:%u\n",
+                    (unsigned)machine, (unsigned)reloc->type);
+            return false;
+        }
+        memset(slot, 0, width);
+        return true;
+    }
 
     switch (kind) {
     case MINILD_NONRISCV_ABS8:
@@ -200,7 +220,8 @@ static bool minild_nonriscv_apply_with_ops(
                 &operands)) {
             return false;
         }
-        if (ops->resolve_target != NULL &&
+        if (operands.disposition != MINILD_STATIC_RELOC_ZERO_DISCARDED_TARGET &&
+            ops->resolve_target != NULL &&
             !ops->resolve_target(state, layout, plan, reloc,
                                  &operands.target_bits)) {
             return false;
@@ -212,13 +233,16 @@ static bool minild_nonriscv_apply_with_ops(
             undefined_weak = symbol->section == MINILD_SECTION_UNDEF &&
                 ELF64_ST_BIND(symbol->info) == STB_WEAK;
         }
-        if (ops->defer_fixup != NULL &&
+        if (operands.disposition != MINILD_STATIC_RELOC_ZERO_DISCARDED_TARGET &&
+            ops->defer_fixup != NULL &&
             ops->defer_fixup(state, reloc)) {
             continue;
         }
         if (!minild_nonriscv_write_fixup(state, section, reloc, machine, kind, ops,
                                          operands.target_bits, operands.place,
                                          undefined_weak,
+                                         operands.disposition ==
+                                             MINILD_STATIC_RELOC_ZERO_DISCARDED_TARGET,
                                          state->diagnostics)) {
             return false;
         }

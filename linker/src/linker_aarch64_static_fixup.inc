@@ -121,6 +121,16 @@ static MiniLdNonRiscvFixup minild_aarch64_static_fixup_class(uint32_t type) {
     }
 }
 
+static size_t minild_aarch64_discarded_scalar_width(uint32_t type) {
+    switch (type) {
+    case R_AARCH64_ABS64:
+    case R_AARCH64_PREL64: return 8U;
+    case R_AARCH64_ABS32:
+    case R_AARCH64_PREL32: return 4U;
+    default: return 0U;
+    }
+}
+
 /* Encode the complete A64 MOVW family: checking relocations select MOVZ
  * (positive) or MOVN (negative), whereas _NC forms must retain MOVK. */
 static bool minild_aarch64_static_write_tls_movw(
@@ -469,7 +479,8 @@ static bool minild_aarch64_apply_static_relocations(
         minild_aarch64_static_resolve_target,
         minild_nonriscv_word_instruction_width,
         minild_aarch64_static_write_instruction,
-        minild_aarch64_kernel_relative_target
+        minild_aarch64_kernel_relative_target,
+        minild_aarch64_discarded_scalar_width
     };
 
     return minild_nonriscv_apply_with_ops(state, layout, output_plan,

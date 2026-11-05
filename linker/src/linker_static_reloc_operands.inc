@@ -6,10 +6,19 @@
  * Keep S+A as a 64-bit bit pattern: legitimate high-half kernel addresses
  * and negative ELF addends may wrap, while P must name a concrete byte in
  * the already-placed output and therefore cannot silently overflow. */
+typedef enum MiniLdStaticRelocDisposition {
+    MINILD_STATIC_RELOC_APPLY,
+    /* GNU BFD zeroes the complete scalar relocation *field* when a kept
+     * non-ALLOC source refers to a discarded input definition.  This is
+     * not S=0: any ELF addend and PC-relative P must also be ignored. */
+    MINILD_STATIC_RELOC_ZERO_DISCARDED_TARGET
+} MiniLdStaticRelocDisposition;
+
 typedef struct MiniLdStaticRelocOperands {
     uint64_t target_bits;
     uint64_t place;
     const char *symbol_name;
+    MiniLdStaticRelocDisposition disposition;
 } MiniLdStaticRelocOperands;
 
 /* Final non-ALLOC symbol values are output-section-relative, irrespective
@@ -79,11 +88,31 @@ static bool minild_static_reloc_operands(
 
     memset(out, 0, sizeof(*out));
     if (reloc->symbol != SIZE_MAX) {
+        const MiniLdResolvedSymbol *symbol;
+
+        if (reloc->symbol >= state->resolver.count) {
+            fprintf(state->diagnostics,
+                    "minic-ld: invalid-static-reloc-symbol\n");
+            return false;
+        }
+        symbol = &state->resolver.entries[reloc->symbol];
+        out->symbol_name = symbol->name;
+        /* Resolve the final section *identity* first, before VMA or
+         * target-specific GOT/PLT transformations. Only a surviving
+         * non-ALLOC source receives BFD's discarded-target treatment.
+         * A genuine SHN_ABS zero remains a regular S+A relocation. */
+        if (output_plan != NULL &&
+            (state->work.sections[reloc->section].flags & SHF_ALLOC) == 0U &&
+            symbol->section >= 0 &&
+            (size_t)symbol->section < state->work.count &&
+            minild_output_shndx(output_plan, (size_t)symbol->section) == 0U) {
+            out->disposition = MINILD_STATIC_RELOC_ZERO_DISCARDED_TARGET;
+            return true;
+        }
         if (!minild_static_reloc_resolve_symbol(state, layout, output_plan, reloc,
                                                 &symbol_value)) {
             return false;
         }
-        out->symbol_name = state->resolver.entries[reloc->symbol].name;
     }
     if ((state->work.sections[reloc->section].flags & SHF_ALLOC) == 0U) {
         if (!minild_output_plan_nonalloc_value(
