@@ -911,6 +911,61 @@ static size_t script_layout_output_anchor(
     return anchor;
 }
 
+/* GNU BFD's section_for_dot() excludes TLS when selecting a location-counter
+ * section. If the next live output is TLS, prefer the last preceding ALLOC
+ * non-TLS section; with none before it, use the following non-TLS output.
+ * Numeric VMA ordering cannot select provenance (the next .data..percpu
+ * output in x86 Linux intentionally has a zero VMA). */
+static size_t script_layout_dot_anchor_after(
+    const MiniLdScriptLayoutState *script_state, size_t first_command) {
+    size_t i, j;
+
+    for (i = first_command; i < script_state->script->command_count; ++i) {
+        size_t anchor;
+
+        if (script_state->script->commands[i].kind !=
+                MINILD_SCRIPT_OUTPUT_SECTION) {
+            continue;
+        }
+        anchor = script_layout_output_anchor(script_state, i);
+        if (anchor != SIZE_MAX) {
+            if ((script_state->state->work.sections[anchor].flags &
+                 SHF_TLS) == 0U) {
+                return anchor;
+            }
+            break;
+        }
+    }
+    for (j = i; j > 0U; --j) {
+        size_t anchor;
+
+        if (script_state->script->commands[j - 1U].kind !=
+                MINILD_SCRIPT_OUTPUT_SECTION) {
+            continue;
+        }
+        anchor = script_layout_output_anchor(script_state, j - 1U);
+        if (anchor != SIZE_MAX &&
+            (script_state->state->work.sections[anchor].flags & SHF_TLS) == 0U) {
+            return anchor;
+        }
+    }
+    for (j = i + (i < script_state->script->command_count ? 1U : 0U);
+         j < script_state->script->command_count; ++j) {
+        size_t anchor;
+
+        if (script_state->script->commands[j].kind !=
+                MINILD_SCRIPT_OUTPUT_SECTION) {
+            continue;
+        }
+        anchor = script_layout_output_anchor(script_state, j);
+        if (anchor != SIZE_MAX &&
+            (script_state->state->work.sections[anchor].flags & SHF_TLS) == 0U) {
+            return anchor;
+        }
+    }
+    return SIZE_MAX;
+}
+
 static bool script_layout_bind_output_symbols(
     MiniLdScriptLayoutState *script_state,
     const MiniLdScriptOutputSection *output,
@@ -1389,9 +1444,12 @@ static bool script_layout_process_output(MiniLdScriptLayoutState *script_state,
                                            command_index)) {
         return false;
     }
-    if (script_layout_output_anchor(script_state, command_index) != SIZE_MAX) {
-        script_state->dot_output_command = command_index;
-    }
+    /* An empty output definition ends the previous section's dot ownership.
+     * BFD gives symbols that follow the unmaterialized output to the next
+     * materialized section, even when that successor has an explicit VMA. */
+    script_state->dot_output_command =
+        script_layout_output_anchor(script_state, command_index) != SIZE_MAX
+            ? command_index : SIZE_MAX;
     return true;
 }
 
@@ -1405,8 +1463,6 @@ static bool script_layout_finalize_top_symbol_provenance(
         MiniLdResolvedSymbol *symbol;
         size_t owner = binding->output_command;
         size_t anchor;
-        size_t j;
-
         if (!binding->active) {
             continue;
         }
@@ -1416,44 +1472,15 @@ static bool script_layout_finalize_top_symbol_provenance(
              * before its start.  GNU x86 Linux uses this for __end_rodata
              * preceding a 2 MiB boundary; its symbol remains section-
              * relative to the subsequent .data output. */
-            for (j = binding->command_index + 1U;
-                 j < script_state->script->command_count; ++j) {
-                const MiniLdScriptCommand *cmd =
-                    &script_state->script->commands[j];
-
-                if (cmd->kind == MINILD_SCRIPT_OUTPUT_SECTION &&
-                    script_state->layout->script_outputs[j].defined &&
-                    script_state->layout->script_outputs[j].start >=
-                        binding->value &&
-                    script_layout_output_anchor(script_state, j) != SIZE_MAX) {
-                    owner = j;
-                    break;
-                }
-            }
-            if (owner == SIZE_MAX) {
-                /* A dot anchor after the last materialized output has no
-                 * successor.  GNU retains the preceding section as its
-                 * provenance (e.g. arm64's init_pg_dir and _end after
-                 * a .bss alignment/size extension). */
-                for (j = binding->command_index; j > 0U; --j) {
-                    size_t preceding = j - 1U;
-                    const MiniLdScriptCommand *cmd =
-                        &script_state->script->commands[preceding];
-
-                    if (cmd->kind == MINILD_SCRIPT_OUTPUT_SECTION &&
-                        script_state->layout->script_outputs[preceding].defined &&
-                        script_state->layout->script_outputs[preceding].start <=
-                            binding->value &&
-                        script_layout_output_anchor(script_state, preceding) !=
-                            SIZE_MAX) {
-                        owner = preceding;
-                        break;
-                    }
-                }
+            anchor = script_layout_dot_anchor_after(
+                script_state, binding->command_index + 1U);
+        } else {
+            anchor = script_layout_output_anchor(script_state, owner);
+            if (anchor != SIZE_MAX &&
+                (script_state->state->work.sections[anchor].flags & SHF_TLS) != 0U) {
+                anchor = script_layout_dot_anchor_after(script_state, owner);
             }
         }
-        anchor = owner == SIZE_MAX ? SIZE_MAX :
-                     script_layout_output_anchor(script_state, owner);
         symbol = &script_state->state->resolver.entries[
             binding->resolver_index];
         if (anchor == SIZE_MAX ||
@@ -1471,10 +1498,11 @@ static bool script_layout_finalize_top_symbol_provenance(
     }
 
     /* BFD does not materialize a section that contains only assignments
-     * and no emitted data.  Its dot-relative boundary symbols nevertheless
-     * inherit the next live output at the same address.  Resolve this after
-     * placement: a following owner is not known while visiting an empty
-     * output in source order. */
+     * and no emitted data. Its dot-relative symbols belong to the next
+     * materialized output, regardless of that output's explicitly selected
+     * VMA (x86 Linux's zero-VMA .data..percpu follows .init.begin). With
+     * no successor, BFD retains the preceding section as their owner.
+     * Resolve this after placement, when both anchors are known. */
     for (i = 0U; i < script_state->script->command_count; ++i) {
         const MiniLdScriptCommand *command = &script_state->script->commands[i];
         size_t j;
@@ -1487,7 +1515,7 @@ static bool script_layout_finalize_top_symbol_provenance(
             const MiniLdScriptSectionItem *item =
                 &command->value.section.items[j];
             MiniLdResolvedSymbol *symbol;
-            size_t symbol_index, next;
+            size_t symbol_index, anchor;
 
             if (item->kind != MINILD_SCRIPT_SECTION_DEFINE_SYMBOL ||
                 item->value.symbol.expression >=
@@ -1506,26 +1534,11 @@ static bool script_layout_finalize_top_symbol_provenance(
             if (symbol->section != MINILD_SECTION_ABS) {
                 continue;
             }
-            for (next = i + 1U;
-                 next < script_state->script->command_count; ++next) {
-                const MiniLdScriptCommand *successor =
-                    &script_state->script->commands[next];
-                size_t anchor;
-
-                if (successor->kind != MINILD_SCRIPT_OUTPUT_SECTION ||
-                    !script_state->layout->script_outputs[next].defined ||
-                    script_state->layout->script_outputs[next].start !=
-                        symbol->value) {
-                    continue;
-                }
-                anchor = script_layout_output_anchor(script_state, next);
-                if (anchor != SIZE_MAX) {
-                    if (!script_layout_bind_symbol_to_anchor(
-                            script_state, symbol, anchor, symbol->value)) {
-                        return false;
-                    }
-                    break;
-                }
+            anchor = script_layout_dot_anchor_after(script_state, i + 1U);
+            if (anchor != SIZE_MAX &&
+                !script_layout_bind_symbol_to_anchor(
+                    script_state, symbol, anchor, symbol->value)) {
+                return false;
             }
         }
     }

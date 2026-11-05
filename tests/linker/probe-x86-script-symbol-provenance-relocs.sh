@@ -128,3 +128,7 @@ for name, expected in NAMES.items():
         raise SystemExit(f"MINILD_X86_SCRIPT_PROVENANCE=FAIL symbol:{name}:gnu={gnu[name]}:mini={mini[name]}")
 print("MINILD_X86_SCRIPT_PROVENANCE=PASS GNU_section_binding=10/10 ABS=2/2 final_R_X86_64_32S=4")
 PY
+
+# The same script-symbol ownership model must also handle elided output
+# sections with explicit VMA discontinuities and TLS-only successors.
+bash tests/linker/probe-script-empty-output-successor-gnu.sh

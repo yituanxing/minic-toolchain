@@ -417,7 +417,7 @@ if (not args or Path(args[0]).name != 'gcc' or
 old_source = args[-1][:-len(suffix)]
 if not old_source.startswith('/') or old_source == new_source:
     raise SystemExit('MINILD_X86_HEADER=FAIL invalid_original_source_root')
-rewritten = [arg.replace(old_source, new_source) for arg in args]
+# The saved Kbuild argv[0] is the compiler executable, already validated\n# above.  The caller invokes gcc itself; only original arguments belong in\n# the NUL-delimited vector, otherwise it executes `gcc gcc -c ...`.\nrewritten = [arg.replace(old_source, new_source) for arg in args[1:]]
 if rewritten[-1] != new_source + suffix:
     raise SystemExit('MINILD_X86_HEADER=FAIL source_path_remap_failed')
 rewritten[rewritten.index('-o') + 1] = output
