@@ -26,7 +26,9 @@ static unsigned long static_stack_cursor(unsigned long named, ...) {
  * The over-aligned case must recover the saved entry-SP value, not derive
  * incoming arguments from the post-realignment frame anchor. */
 static unsigned long aligned_dynamic_stack_cursor(unsigned long named, ...) {
-    struct __attribute__((aligned(64))) Aligned {
+    /* Exercise the ABI's maximum supported local realignment while the
+     * sibling named-stack cursor below still covers the 64-byte boundary. */
+    struct __attribute__((aligned(256))) Aligned {
         volatile unsigned char bytes[64];
     } local;
     volatile unsigned char *dynamic =

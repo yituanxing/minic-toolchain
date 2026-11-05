@@ -706,6 +706,16 @@ jobs:
         run: |
           set -Eeuo pipefail
           bash tests/compiler/c0/probe-aarch64-linux-volatile-mrs.sh "$GITHUB_WORKSPACE/build/runtime-ci/bin/minic-cc"
+      - name: AArch64 AAPCS64 64B/256B variadic incoming stack GNU/QEMU differential
+        if: matrix.target == 'aarch64'
+        shell: bash
+        env:
+          MINIC_CC: ${{ github.workspace }}/build/runtime-ci/bin/minic-cc
+        run: |
+          set -Eeuo pipefail
+          command -v aarch64-linux-gnu-gcc
+          command -v qemu-aarch64
+          bash tests/compiler/c0/probe-aarch64-variadic-incoming-stack.sh
       - name: Real AArch64 GNU/QEMU large structured-ASM spill boundaries
         if: matrix.target == 'aarch64'
         shell: bash

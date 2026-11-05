@@ -372,6 +372,8 @@ jobs:
             build/rv32-p2-strict/refresh-virtio/owner-object-hashes
             build/rv32-p2-strict/refresh-virtio/one-owner.log
             build/rv32-p2-strict/refresh-virtio/gnu-relink.log
+            build/rv32-p2-strict/refresh-virtio/pre-repair-*.audit
+            build/rv32-p2-strict/refresh-virtio/gnu-relink-repair-*.log
             build/rv32-p2-strict/full18-verdict.txt
             build/rv32-p2-strict/full18-runner.log
             build/rv32-p2-strict/full18-nvme-sha256.txt

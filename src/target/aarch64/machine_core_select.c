@@ -1417,6 +1417,56 @@ static bool a64_ordered_trace_stage(bool success, const char *stage) {
     return success;
 }
 
+/* C operand liveness references are not GNU inline-ASM relocation syntax.
+ * Admit them only when every retained Core symbol is independently bound to
+ * a symbol already declared by this same Core function. Exact LDAR/STLR
+ * source templates and typed Q-memory roles are still checked separately. */
+static bool a64_ordered_core_symbol_roots(
+    const MinicCoreFunction *fn, const MinicCoreInlineAsm *source) {
+    size_t i, j;
+    if (fn == NULL || source == NULL ||
+        (source->symbol_reference_count != 0U &&
+         source->symbol_references == NULL)) return false;
+    for (i = 0U; i < source->symbol_reference_count; ++i) {
+        const MinicCoreInlineAsmSymbolReference *ref =
+            &source->symbol_references[i];
+        bool bound = false;
+        if (ref->name == NULL || ref->name_length == 0U)
+            return false;
+        if (ref->kind == MINIC_CORE_INLINE_ASM_SYMBOL_OBJECT) {
+            for (j = 0U; j < fn->global_count; ++j)
+                if (fn->globals[j].name != NULL &&
+                    fn->globals[j].name_length == ref->name_length &&
+                    memcmp(fn->globals[j].name, ref->name,
+                        ref->name_length) == 0) {
+                    bound = true;
+                    break;
+                }
+        } else if (ref->kind == MINIC_CORE_INLINE_ASM_SYMBOL_FUNCTION) {
+            for (j = 0U; j < fn->function_symbol_count; ++j)
+                if (fn->function_symbols[j].name != NULL &&
+                    fn->function_symbols[j].name_length == ref->name_length &&
+                    memcmp(fn->function_symbols[j].name, ref->name,
+                        ref->name_length) == 0) {
+                    bound = true;
+                    break;
+                }
+            for (j = 0U; !bound && j < fn->callee_count; ++j)
+                if (fn->callees[j].name != NULL &&
+                    strlen(fn->callees[j].name) == ref->name_length &&
+                    memcmp(fn->callees[j].name, ref->name,
+                        ref->name_length) == 0) {
+                    bound = true;
+                    break;
+                }
+        } else {
+            return false;
+        }
+        if (!bound) return false;
+    }
+    return true;
+}
+
 /* Original Linux smp_load_acquire/smp_store_release are sealed two-role GNU
  * forms. Keep C operand admission upstream; recheck the native Core pointee
  * width and emit actual acquire/release opcodes with typed address operands.
@@ -1505,7 +1555,7 @@ static bool a64_linux_acquire_release(A64CoreSelection *sel,
         !source->has_memory_clobber ||
         source->register_clobber_count != 0U ||
         source->resolved_immediate_count != 0U ||
-        source->symbol_reference_count != 0U ||
+        !a64_ordered_core_symbol_roots(fn, source) ||
         source->deferred_immediate_symbol != NULL ||
         ops[0].operand_index != 0U || ops[1].operand_index != 1U ||
         ops[0].value >= fn->value_count ||
