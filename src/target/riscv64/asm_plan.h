@@ -30,8 +30,6 @@ bool minic_riscv64_asm_instruction_plan_build(
     MinicRiscv64AsmInstructionPlan *);
 bool minic_riscv64_asm_function_plan_build(
     const MinicCoreFunction *, MinicRiscv64AsmFunctionPlan *);
-const MinicRiscv64AsmInstructionPlan *minic_riscv64_asm_function_plan_get(
-    const MinicRiscv64AsmFunctionPlan *, size_t instruction_id);
 void minic_riscv64_asm_function_plan_destroy(MinicRiscv64AsmFunctionPlan *);
 size_t minic_riscv64_asm_callee_saved_mask_count(uint16_t);
 

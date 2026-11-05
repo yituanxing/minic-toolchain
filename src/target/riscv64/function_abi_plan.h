@@ -34,8 +34,5 @@ bool minic_riscv64_function_abi_view_from_prepared(
 bool minic_riscv64_function_abi_plan_build_profile(
     const MinicCoreFunction *,
     MinicRiscv64FunctionAbiPlan *, bool lp64_soft_float);
-bool minic_riscv64_function_abi_plan_build(
-    const MinicCoreFunction *,
-    MinicRiscv64FunctionAbiPlan *);
 void minic_riscv64_function_abi_plan_destroy(MinicRiscv64FunctionAbiPlan *);
 #endif

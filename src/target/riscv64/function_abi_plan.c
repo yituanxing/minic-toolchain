@@ -176,11 +176,6 @@ bool minic_riscv64_function_abi_plan_build_profile(
     }
     return true;
 }
-bool minic_riscv64_function_abi_plan_build(
-    const MinicCoreFunction *fn,
-    MinicRiscv64FunctionAbiPlan *plan) {
-    return minic_riscv64_function_abi_plan_build_profile(fn, plan, false);
-}
 void minic_riscv64_function_abi_plan_destroy(
     MinicRiscv64FunctionAbiPlan *plan) {
     size_t i;

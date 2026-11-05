@@ -8,15 +8,6 @@
 /* Existing production RV64 instruction and calling-convention legal gates.
  * Moved from core_codegen.c. Executable type admission is Core-only.
  * ISA emission and actual register/stack placement remain target-owned. */
-bool minic_riscv64_core_integer_type_is_signed(const MinicCoreFunction *function,
-                                        MinicCoreTypeId type_id,
-                                        bool *is_signed) {
-    const MinicCoreType *type = minic_riscv64_core_base_type(function, type_id);
-    if (is_signed == NULL || type == NULL ||
-        type->kind != MINIC_CORE_TYPE_INTEGER) return false;
-    *is_signed = type->value.integer.is_signed;
-    return true;
-}
 
 bool minic_riscv64_core_field_address_supported(const MinicCoreInstruction *instruction,
                                          size_t *field_offset) {

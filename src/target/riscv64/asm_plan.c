@@ -370,13 +370,6 @@ void minic_riscv64_asm_function_plan_destroy(MinicRiscv64AsmFunctionPlan *plan) 
     memset(plan, 0, sizeof(*plan));
 }
 
-const MinicRiscv64AsmInstructionPlan *minic_riscv64_asm_function_plan_get(
-    const MinicRiscv64AsmFunctionPlan *plan, size_t instruction_id) {
-    if (plan == NULL || plan->instructions == NULL ||
-        instruction_id >= plan->instruction_count ||
-        !plan->instructions[instruction_id].valid) return NULL;
-    return &plan->instructions[instruction_id];
-}
 
 bool minic_riscv64_asm_function_plan_build(
     const MinicCoreFunction *function, MinicRiscv64AsmFunctionPlan *plan) {

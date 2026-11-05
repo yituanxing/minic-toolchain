@@ -114,5 +114,23 @@ int main(void) {
 SRC
 gcc -std=gnu11 -O0 -fno-pic -no-pie \
     "$work/driver.c" "$work/minic.o" "$work/gnu.o" -o "$work/run"
-"$work/run"
+status=0
+"$work/run" || status=$?
+if [ "$status" -ne 0 ]; then
+    case "$status" in
+        11) context=return_unsigned ;;
+        12) context=return_signed ;;
+        13) context=implicit_assignment ;;
+        14) context=explicit_cast ;;
+        15) context=direct_if ;;
+        16) context=ternary_condition ;;
+        17) context=logical_not ;;
+        18) context=double_logical_not ;;
+        19) context=and_mask_bit64 ;;
+        20) context=and_mask_bit127 ;;
+        *) context=unexpected_runtime_failure ;;
+    esac
+    echo "X86_I128_BOOL=FAIL context=$context guest_exit=$status" >&2
+    exit 1
+fi
 echo 'X86_I128_BOOL=PASS x86_64=ELF64 GNU_GCC_GAS_LINK=1 MiniC_GAS=1 native_pairs=90 values=zero,low,bit63,bit64,bit96,bit127,highlow,multi conversions=return,assign,cast,if,ternary,logical,mask'

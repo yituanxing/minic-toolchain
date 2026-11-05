@@ -491,40 +491,8 @@ void minic_riscv64_core_frame_destroy(MinicRiscv64CoreFrame *frame) {
     frame->reachable_blocks = NULL;
 }
 
-bool minic_riscv64_core_frame_parameter_location(
-    const MinicRiscv64CoreFrame *frame, size_t parameter_index,
-    MinicRiscv64AbiArgumentLocation *location) {
-    if (frame == NULL || location == NULL || !frame->has_named_parameter_cursor ||
-        parameter_index >= frame->parameter_location_count ||
-        frame->parameter_locations == NULL)
-        return false;
-    *location = frame->parameter_locations[parameter_index];
-    return true;
-}
 
-bool minic_riscv64_core_frame_object_offset(const MinicCoreFunction *function,
-                               const MinicRiscv64CoreFrame *frame,
-                               MinicCoreObjectId object_id,
-                               size_t *offset) {
-    if (function == NULL || frame == NULL || offset == NULL ||
-        frame->object_count != function->object_count ||
-        object_id >= frame->object_count ||
-        (frame->object_count != 0U && frame->object_offsets == NULL)) {
-        return false;
-    }
-    *offset = frame->object_offsets[object_id];
-    return true;
-}
 
-bool
-minic_riscv64_core_frame_value_offset(const MinicRiscv64CoreFrame *frame, MinicCoreValueId value_id, size_t *offset) {
-    if (frame == NULL || offset == NULL || value_id >= frame->value_count ||
-        frame->value_offsets == NULL || frame->value_offsets[value_id] == SIZE_MAX) {
-        return false;
-    }
-    *offset = frame->value_offsets[value_id];
-    return true;
-}
 
 bool minic_riscv64_core_frame_mark_reachable_blocks(
     const MinicCoreFunction *function, const MinicCoreFunctionFacts *facts,

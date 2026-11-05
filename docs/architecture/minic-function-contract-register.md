@@ -670,7 +670,7 @@
 | `F5-R20` `...:minic_riscv64_emit_overflow_instruction` | R Core result-width/ISA，选择 strict-I libcall 或 native-M。 | R2/U2/E1 |
 | `F5-R21` `riscv64/function_abi_plan.c:minic_riscv64_function_abi_plan_qualified` | R profile/params/returns，W caller ABI GPR/FPR/stack placements。 | R2/U2/E1 |
 | `F5-R22` `...:minic_riscv64_function_abi_plan_build_profile` | R ISA-resolved ABI profile，OWN complete plan，Core admission consumer。 | R2/U2/E1 |
-| `F5-R23` `...:minic_riscv64_function_abi_plan_build` | standalone frame fallback 默认 lp64d，不是 production LP64 的第二 ABI。 | R2/U2/E1 · 排误报 |
+| `F5-R23` **已退役** `...:minic_riscv64_function_abi_plan_build` | 历史默认 LP64D ABI 包装入口，仓内无调用；已从代码和私有声明移除。真正的生产 ABI plan 由 `...:minic_riscv64_function_abi_plan_build_profile` 提供，不存在第二条 frame fallback。 | RETIRED · 历史记录 |
 | `F5-R24` `...:minic_riscv64_function_abi_plan_destroy` | OWN plan resources；admission/frame/core codegen 的清理出口共用。 | R2/U2/E1 |
 | `F5-R25` `riscv64/legalize.c:minic_riscv64_scalar_type` | R wide/long double scalar shape，machine admission 与 call consume。 | R2/U2/E1 |
 | `F5-R26` `...:rv64_wide_call_argument_supported` | R 128-bit argument，校验两 GPR 或 stack 位置。 | R2/U2/E1 |

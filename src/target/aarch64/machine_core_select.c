@@ -2017,7 +2017,7 @@ static bool a64_linux_old_atomic_source(A64CoreSelection *sel,
             ops[i].kind != expected_kind ||
             ops[i].value >= fn->value_count ||
             ops[i].has_fixed_register_binding || ops[i].has_tied_output ||
-            ops[i].early_clobber != (i < output_count) ||
+            ops[i].early_clobber ||
             ops[i].physical_early_clobber != (i < output_count) ||
             ops[i].physical_read_write != (i == mem) ||
             (i < output_count ?

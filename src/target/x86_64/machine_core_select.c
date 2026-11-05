@@ -6605,6 +6605,21 @@ static bool x86_core_instruction(X86CoreSelector *sel,
     }
 }
 
+/* A Core branch can consume a raw 128-bit SSA value without first
+ * converting it to _Bool. Fold both limbs before the physical TEST/JNZ:
+ * a high-half-only value is true even when its low 64 bits are zero. */
+static bool x86_core_condition_value(X86CoreSelector *sel,
+    MinicCoreValueId condition) {
+    if (condition >= sel->core->value_count) return false;
+    if (x86_i128_type(sel,
+            sel->core->values[condition].core_type_id, NULL))
+        return x86_i128_load(sel, condition,
+                   MINIC_X86_REG_RAX, MINIC_X86_REG_RDX) &&
+            x86_rr(sel, MINIC_X86_MI_OR64_RR, 64U,
+                MINIC_X86_REG_RDX, MINIC_X86_REG_RAX);
+    return x86_core_load(sel, condition, MINIC_X86_REG_RAX);
+}
+
 static bool x86_jump(X86CoreSelector *sel, size_t machine_target) {
     return machine_target != SIZE_MAX &&
         x86_1(sel, MINIC_X86_MI_JMP_B, x86_block(machine_target)) &&
@@ -6623,8 +6638,8 @@ static bool x86_core_terminator(X86CoreSelector *sel, size_t core_id) {
             term->conditional.when_true >= sel->core->block_count ||
             term->conditional.when_false >= sel->core->block_count ||
             sel->false_blocks[core_id] == SIZE_MAX ||
-            !x86_core_load(sel, term->conditional.condition,
-                MINIC_X86_REG_RAX) ||
+            !x86_core_condition_value(sel,
+                term->conditional.condition) ||
             !x86_rr(sel, MINIC_X86_MI_TEST64_RR, 64U,
                 MINIC_X86_REG_RAX, MINIC_X86_REG_RAX) ||
             !x86_1(sel, MINIC_X86_MI_JNZ_B,
