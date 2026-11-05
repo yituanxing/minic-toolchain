@@ -380,6 +380,16 @@ static bool rv_normalize(RvCoreSelection *sel, unsigned reg,
             MINIC_RISCV_MACHINE_SRLI, reg, reg, (int64_t)shift);
 }
 
+/* Core keeps unsigned i32 values zero-extended.  At the RISC-V physical
+ * register ABI boundary, however, RV64 requires BOTH signed and unsigned
+ * 32-bit scalars to be sign-extended; signed i8/i16 similarly inherit their
+ * sign bit. Do not apply this convention on the Core ingress path. */
+static bool rv_abi_scalar_normalize(RvCoreSelection *sel, unsigned reg,
+    unsigned bytes, bool sign) {
+    return rv_normalize(sel, reg, bytes,
+        sign || (sel->xlen == 64U && bytes == 4U));
+}
+
 typedef struct RvFinalPlacement {
     size_t register_begin, register_count;
     size_t floating_register_begin, floating_register_count;
@@ -2713,7 +2723,10 @@ static bool rv_core_call_arguments(RvCoreSelection *sel,
                     (pass == 1U && !in_register)) continue;
                 if (arg->kind == MINIC_CORE_CALL_ARGUMENT_VALUE) {
                     if (!rv_value_chunk(sel, arg->value.value_id,
-                        j, RV_T0, true)) return false;
+                        j, RV_T0, true) ||
+                        (integer && loc.words == 1U &&
+                         !rv_abi_scalar_normalize(sel, RV_T0,
+                             (unsigned)bytes, sign))) return false;
                 } else if (loc.indirect) {
                     if (j != 0U || !rv_frame_address(sel,
                         RV_T0, object_offset)) return false;
@@ -2967,6 +2980,8 @@ static bool rv_core_scalar_input_source_asm(RvCoreSelection *sel,
     const MinicCoreFunction *fn = sel->plan->core;
     const size_t count = ins->value.structured_inline_asm.operand_count;
     MinicMachineOperand bindings[8];
+    unsigned widths[8] = {0};
+    bool signs[8] = {false};
     size_t i;
     if (source->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_GENERIC_STRUCTURED ||
         source->target_machine_form_id != 0U ||
@@ -2984,23 +2999,22 @@ static bool rv_core_scalar_input_source_asm(RvCoreSelection *sel,
     for (i = 0U; i < count; ++i) {
         const MinicCoreStructuredInlineAsmOperand *binding =
             &ins->value.structured_inline_asm.operands[i];
-        unsigned bytes;
-        bool sign, pointer;
+        bool pointer;
         if (binding->kind != MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT ||
             binding->operand_index != i ||
             binding->has_fixed_register_binding || binding->early_clobber ||
             binding->physical_early_clobber || binding->physical_read_write ||
             binding->has_tied_output || binding->value >= fn->value_count ||
             !rv_type(sel, fn->values[binding->value].core_type_id,
-                     &bytes, &sign, &pointer)) return false;
-        (void)bytes;
-        (void)sign;
+                     &widths[i], &signs[i], &pointer)) return false;
         (void)pointer;
     }
     for (i = 0U; i < count; ++i) {
         const MinicCoreStructuredInlineAsmOperand *binding =
             &ins->value.structured_inline_asm.operands[i];
-        if (!rv_load(sel, binding->value, RV_A0 + (unsigned)i)) return false;
+        if (!rv_load(sel, binding->value, RV_A0 + (unsigned)i) ||
+            !rv_abi_scalar_normalize(sel, RV_A0 + (unsigned)i,
+                widths[i], signs[i])) return false;
         bindings[i] = rv_reg(sel->xlen, RV_A0 + (unsigned)i,
             MINIC_MACHINE_REGISTER_READ);
         bindings[i].asm_constraint = "r";
@@ -3032,7 +3046,7 @@ static bool rv_core_asm_lvalue(RvCoreSelection *sel,
         rv_type(sel, pointer->value.pointer.pointee, bytes, sign, &ptr);
 }
 static bool rv_core_asm_lvalue_transfer(RvCoreSelection *sel,
-    MinicCoreValueId address, unsigned bytes, bool load) {
+    MinicCoreValueId address, unsigned bytes, bool sign, bool load) {
     unsigned i;
     if (bytes == 0U || bytes > sel->xlen / 8U ||
         !rv_load(sel, address, RV_T2) ||
@@ -3051,7 +3065,7 @@ static bool rv_core_asm_lvalue_transfer(RvCoreSelection *sel,
             !rv_byte_transfer(sel, false, RV_T1, RV_T2, i, false))
             return false;
     }
-    return true;
+    return !load || rv_abi_scalar_normalize(sel, RV_T0, bytes, sign);
 }
 
 static bool rv_core_asm_has_z_operand(const MinicCoreInlineAsm *source,
@@ -3142,8 +3156,11 @@ static bool rv_core_scalar_output_source_asm(RvCoreSelection *sel,
     /* The output destination is materialized only after SOURCE_ASM. A
      * read/write output carries its pre-ASM value in the SAME register. */
     if ((readwrite && !rv_core_asm_lvalue_transfer(sel,
-            roles[0].value, bytes, true)) ||
-        (count == 2U && !rv_load(sel, roles[1].value, RV_T1))) return false;
+            roles[0].value, bytes, sign, true)) ||
+        (count == 2U &&
+         (!rv_load(sel, roles[1].value, RV_T1) ||
+          !rv_abi_scalar_normalize(sel, RV_T1, input_bytes,
+              input_sign)))) return false;
     bindings[0] = rv_reg(sel->xlen, RV_T0,
         MINIC_MACHINE_REGISTER_WRITE |
             (readwrite ? MINIC_MACHINE_REGISTER_READ : 0U));
@@ -3158,7 +3175,8 @@ static bool rv_core_scalar_output_source_asm(RvCoreSelection *sel,
             source, 0U, bindings, count, NULL, 0U, false, false) ||
         !rv_normalize(sel, RV_T0, bytes, sign)) return false;
     return ssa ? rv_store(sel, ins->result, RV_T0) :
-        rv_core_asm_lvalue_transfer(sel, roles[0].value, bytes, false);
+        rv_core_asm_lvalue_transfer(sel, roles[0].value, bytes,
+            sign, false);
 }
 
 /* One physical GNU source-ASM binder for mixed memory/register forms and
@@ -3348,7 +3366,7 @@ static bool rv_core_mixed_source_asm(RvCoreSelection *sel,
             break;
         case MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE:
             if (!rv_core_asm_lvalue_transfer(sel, role->value,
-                    widths[i], true) ||
+                    widths[i], signs[i], true) ||
                 !rv_rr(sel, MINIC_RISCV_MACHINE_MV, physical, RV_T0))
                 return false;
             bindings[i] = rv_reg(sel->xlen, physical,
@@ -3364,7 +3382,9 @@ static bool rv_core_mixed_source_asm(RvCoreSelection *sel,
                 if (!(widths[i] > sel->xlen / 8U
                         ? rv_value_chunk(sel, role->value, 0U,
                             physical, true)
-                        : rv_load(sel, role->value, physical))) return false;
+                        : (rv_load(sel, role->value, physical) &&
+                           rv_abi_scalar_normalize(sel, physical,
+                               widths[i], signs[i])))) return false;
                 bindings[i] = rv_reg(sel->xlen, physical,
                     MINIC_MACHINE_REGISTER_READ);
                 bindings[i].asm_constraint = "r";
@@ -3389,7 +3409,7 @@ static bool rv_core_mixed_source_asm(RvCoreSelection *sel,
             if (role->kind == MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_RESULT) {
                 if (!rv_store(sel, ins->result, RV_T0)) return false;
             } else if (!rv_core_asm_lvalue_transfer(sel, role->value,
-                       widths[i], false)) return false;
+                       widths[i], signs[i], false)) return false;
         }
     }
     return true;
@@ -3709,7 +3729,10 @@ static bool rv_core_terminator(RvCoreSelection *sel, size_t core_id) {
             if (chunks == 0U || chunks > 2U) return false;
             for (i = 0U; i < chunks; ++i)
                 if (!rv_value_chunk(sel, value, i,
-                    RV_A0 + (unsigned)i, true)) return false;
+                        RV_A0 + (unsigned)i, true) ||
+                    (integer && chunks == 1U &&
+                     !rv_abi_scalar_normalize(sel, RV_A0 + (unsigned)i,
+                         (unsigned)size, sign))) return false;
             if (sel->xlen == 64U &&
                 minic_riscv_target_isa(sel->plan->target).abi ==
                     MINIC_RISCV_ABI_LP64D &&

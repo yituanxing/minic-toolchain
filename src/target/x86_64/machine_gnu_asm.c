@@ -1119,6 +1119,37 @@ static bool x86_emit_selected(FILE *out,
         (opcode=minic_x86_64_machine_opcode_info(ins->opcode)) == NULL ||
         !minic_x86_64_machine_validate_selected(function,ins,NULL))
         return false;
+    /* Both retpolines are physical MachineIR instructions with an exact
+     * target-owned nested-call structure. Numeric local labels are scoped by
+     * GNU's nearest-forward/backward rules, so multiple sites never alias.
+     * CALL's outer call retains the real callee return address; JMP keeps
+     * the current stack and its indirect Core successors intact. */
+    if (ins->opcode == MINIC_X86_MI_CALL_INLINE_THUNK_R11)
+        return fputs(
+            "  call 2f\n"
+            "  jmp 3f\n"
+            "1:\n"
+            "  movq %r11, (%rsp)\n"
+            "  ret\n"
+            "2:\n"
+            "  call 1b\n"
+            "1:\n"
+            "  pause\n"
+            "  lfence\n"
+            "  jmp 1b\n"
+            "3:\n", out) != EOF;
+    if (ins->opcode == MINIC_X86_MI_JMP_INLINE_THUNK_RAX)
+        return fputs(
+            "  jmp 2f\n"
+            "1:\n"
+            "  movq %rax, (%rsp)\n"
+            "  ret\n"
+            "2:\n"
+            "  call 1b\n"
+            "1:\n"
+            "  pause\n"
+            "  lfence\n"
+            "  jmp 1b\n", out) != EOF;
     if (ins->opcode == MINIC_X86_MI_SHLD64_CL_RR ||
         ins->opcode == MINIC_X86_MI_SHRD64_CL_RR) {
         if (fprintf(out,"  %s %%cl, ",opcode->mnemonic) < 0 ||

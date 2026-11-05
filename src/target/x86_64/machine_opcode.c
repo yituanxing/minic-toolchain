@@ -374,6 +374,15 @@ static const MinicX86MachineOpcodeInfo x86_opcodes[MINIC_X86_MI_LAST] = {
         .effects=BR, .implicit_kind=X86_IMPLICIT_JMP_THUNK_RAX,
         .required_features=BASE, .terminates_block=true,
         .indirect_successors=true },
+    /* A single verified physical jump bundles the local retpoline. The
+     * nested call/RET only redirects the target register; it preserves the
+     * caller's stack pointer and all genuine computed-goto successors. */
+    [MINIC_X86_MI_JMP_INLINE_THUNK_RAX] = {
+        .mnemonic="jmp", .format=MINIC_X86_MACHINE_FORMAT_R,
+        .first_width_bits=64U, .first_access=R,
+        .effects=BR, .implicit_kind=X86_IMPLICIT_JMP_THUNK_RAX,
+        .required_features=BASE, .terminates_block=true,
+        .indirect_successors=true },
     COND(JZ_B,"jz"), COND(JNZ_B,"jnz"),
     COND(JB_B,"jb"), COND(JBE_B,"jbe"),
     COND(JA_B,"ja"), COND(JAE_B,"jae"),
@@ -395,6 +404,14 @@ static const MinicX86MachineOpcodeInfo x86_opcodes[MINIC_X86_MI_LAST] = {
         CA|MR|MW,X86_IMPLICIT_CALL_UACCESS),
     SYM(CALL_INDIRECT_THUNK_R11,"call",MINIC_X86_MACHINE_RELOC_PC32,
         CA|MR|MW,X86_IMPLICIT_CALL_SYSV_THUNK_R11),
+    /* The nested-call retpoline is one machine-owned SysV call with a
+     * concrete R11 callee input. Its internal trap labels cannot escape. */
+    [MINIC_X86_MI_CALL_INLINE_THUNK_R11] = {
+        .mnemonic="call", .format=MINIC_X86_MACHINE_FORMAT_R,
+        .first_width_bits=64U, .first_access=R,
+        .effects=CA|MR|MW,
+        .implicit_kind=X86_IMPLICIT_CALL_SYSV_THUNK_R11,
+        .required_features=BASE },
     [MINIC_X86_MI_CALL_SYSV_R] = { .mnemonic="call",
         .format=MINIC_X86_MACHINE_FORMAT_R, .first_width_bits=64,
         .first_access=R, .effects=CA|MR|MW, .required_features=BASE,
@@ -927,6 +944,20 @@ bool minic_x86_64_machine_validate_selected(const MinicMachineFunction *function
             first->value.symbol.relocation == info->relocation &&
             x86_register_width(second,64U,MINIC_MACHINE_REGISTER_GENERAL);
     case MINIC_X86_MACHINE_FORMAT_R:
+        if (instruction->opcode == MINIC_X86_MI_JMP_INLINE_THUNK_RAX ||
+            instruction->opcode == MINIC_X86_MI_CALL_INLINE_THUNK_R11) {
+            const unsigned int options =
+                minic_x86_64_target_codegen_options(target);
+            const uint32_t reg = instruction->opcode ==
+                MINIC_X86_MI_JMP_INLINE_THUNK_RAX ?
+                MINIC_X86_REG_RAX : MINIC_X86_REG_R11;
+            return instruction->operand_count == 1U &&
+                x86_register_width(first, 64U,
+                    MINIC_MACHINE_REGISTER_GENERAL) &&
+                first->value.physical.reg.number == reg &&
+                (options & MINIC_X86_CODEGEN_INDIRECT_INLINE_THUNK) != 0U &&
+                (options & MINIC_X86_CODEGEN_INDIRECT_EXTERNAL_THUNK) == 0U;
+        }
         return instruction->operand_count == 1U &&
             x86_register_width(first,info->first_width_bits,info->first_bank) &&
             ((instruction->opcode != MINIC_X86_MI_JMP_R &&

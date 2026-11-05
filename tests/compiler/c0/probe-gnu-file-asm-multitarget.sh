@@ -899,6 +899,121 @@ SRC
     done
     echo 'MINIC_AARCH64_LINUX_PERCPU_ALTERNATIVE_GNU_AS=PASS real_frozen=1 patchtable=12B relocations=2 feature=47 negative=6 privileged_only=1'
 
+    # The distinct original Linux WRITE-side TPIDR alternative has one
+    # unsigned-long "r" INPUT and a real GNU "memory" clobber: it is not
+    # the READ =r/Q contract. Both MSR instructions are privileged and must
+    # only be compiled/assembled, never executed by QEMU EL0.
+    cat > "$work/aarch64-percpu-write-alternative.i" <<'SRC'
+void linux_percpu_write_cpu_offset(unsigned long off) {
+    asm volatile(".if ""1"" == 1\n" "661:\n\t"
+        "msr tpidr_el1, %0" "\n" "662:\n"
+        ".pushsection .altinstructions,\"a\"\n"
+        " .word 661b - .\n" " .word 663f - .\n"
+        " .hword " "47" "\n" " .byte 662b-661b\n"
+        " .byte 664f-663f\n" ".popsection\n"
+        ".subsection 1\n" "663:\n\t"
+        "msr tpidr_el2, %0" "\n" "664:\n\t"
+        ".org\t. - (664b-663b) + (662b-661b)\n\t"
+        ".org\t. - (662b-661b) + (664b-663b)\n\t"
+        ".previous\n" ".endif\n"
+        :
+        : "r" (off)
+        : "memory");
+}
+int main(void) { return 0; }
+SRC
+    "$cross_cc" -O0 -c -x c "$work/aarch64-percpu-write-alternative.i" \
+        -o "$work/aarch64-percpu-write-alternative.gnu.o"
+    MINIC_M1_TRACE=1 "$MINIC_CC" --target=aarch64-linux -S \
+        "$work/aarch64-percpu-write-alternative.i" \
+        -o "$work/aarch64-percpu-write-alternative.minic.s"
+    if grep -Eq '^[[:space:]]*\.error[[:space:]]' \
+        "$work/aarch64-percpu-write-alternative.minic.s"; then
+        grep -E '^[[:space:]]*\.error[[:space:]]' \
+            "$work/aarch64-percpu-write-alternative.minic.s" >&2
+        echo 'FAIL authentic Linux AArch64 WRITE alternative rejected by MachineIR' >&2
+        exit 1
+    fi
+    for instruction in 'msr tpidr_el1, x9' 'msr tpidr_el2, x9' \
+                       '.pushsection .altinstructions' '.hword 47' \
+                       '.org . - (664b-663b) + (662b-661b)'; do
+        if ! grep -Fq "$instruction" \
+            "$work/aarch64-percpu-write-alternative.minic.s"; then
+            printf 'FAIL original arm64 WRITE alternative missing %s\n' \
+                "$instruction" >&2
+            exit 1
+        fi
+    done
+    "$cross_cc" -c -x assembler "$work/aarch64-percpu-write-alternative.minic.s" \
+        -o "$work/aarch64-percpu-write-alternative.minic.o"
+    for flavor in gnu minic; do
+        file="$work/aarch64-percpu-write-alternative.$flavor.o"
+        aarch64-linux-gnu-readelf -SW "$file" |
+            grep -Fq '.altinstructions'
+        aarch64-linux-gnu-readelf -rW "$file" |
+            grep -Fq '.rela.altinstructions'
+        aarch64-linux-gnu-readelf -SW "$file" |
+            grep -E '[[:space:]]\.altinstructions[[:space:]]' |
+            grep -q '00000c'
+        # .rela.eh_frame may itself contain PREL32: count ONLY the exact
+        # .rela.altinstructions section, and reject extra relocation kinds.
+        [ "$(aarch64-linux-gnu-readelf -rW "$file" |
+             awk -v section="'.rela.altinstructions'" '
+                 /^Relocation section / {
+                     in_alt = ($3 == section)
+                     next
+                 }
+                 in_alt && $1 ~ /^[[:xdigit:]]+$/ {
+                     entries++
+                     if ($3 == "R_AARCH64_PREL32") prel32++
+                 }
+                 END {printf "%d:%d\n", entries, prel32}
+             ')" = "2:2" ]
+        aarch64-linux-gnu-objdump -d "$file" |
+            grep -Eq 'msr[[:space:]]+tpidr_el1,[[:space:]]*x[0-9]+'
+        aarch64-linux-gnu-objdump -d "$file" |
+            grep -Eq 'msr[[:space:]]+tpidr_el2,[[:space:]]*x[0-9]+'
+        aarch64-linux-gnu-objcopy \
+            --dump-section ".altinstructions=$work/aarch64-percpu-write-$flavor.alt" \
+            "$file"
+        [ "$(wc -c < "$work/aarch64-percpu-write-$flavor.alt")" -eq 12 ]
+    done
+    # Compare all 12 original GNU vs MiniC patch-table bytes, in addition
+    # to exact two relocations per object at the cross-section labels.
+    cmp -s "$work/aarch64-percpu-write-gnu.alt" \
+        "$work/aarch64-percpu-write-minic.alt"
+    for bad in feature replacement input_constraint missing_memory extra_cc patch_injection; do
+        case "$bad" in
+            feature)
+                sed 's/"47"/"48"/' \
+                    "$work/aarch64-percpu-write-alternative.i" ;;
+            replacement)
+                sed 's/msr tpidr_el2, %0/msr tpidr_el3, %0/' \
+                    "$work/aarch64-percpu-write-alternative.i" ;;
+            input_constraint)
+                sed 's/: "r" (off)/: "m" (off)/' \
+                    "$work/aarch64-percpu-write-alternative.i" ;;
+            missing_memory)
+                sed 's/: "memory");/);/' \
+                    "$work/aarch64-percpu-write-alternative.i" ;;
+            extra_cc)
+                sed 's/: "memory");/: "memory", "cc");/' \
+                    "$work/aarch64-percpu-write-alternative.i" ;;
+            patch_injection)
+                sed 's/\.previous\\n" "\.endif/\.previous\\n" "svc #0\\n" "\.endif/' \
+                    "$work/aarch64-percpu-write-alternative.i" ;;
+        esac > "$work/aarch64-percpu-write-bad-$bad.i"
+        if "$MINIC_CC" --target=aarch64-linux -S \
+            "$work/aarch64-percpu-write-bad-$bad.i" \
+            -o "$work/aarch64-percpu-write-bad-$bad.s" \
+            >"$work/aarch64-percpu-write-bad-$bad.out" \
+            2>"$work/aarch64-percpu-write-bad-$bad.err"; then
+            echo "FAIL unqualified AArch64 WRITE alternative admitted: $bad" >&2
+            exit 1
+        fi
+    done
+    echo 'MINIC_AARCH64_LINUX_PERCPU_WRITE_ALT_GNU_AS=PASS real_frozen=1 two_MSR=1 patchtable=12B relocations=2 feature=47 negative=6 privileged_only=1'
+
 
 
     # Frozen 6.6.143 atomic_ll_sc.h ADD/SUB return: both widths × four

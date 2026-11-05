@@ -1818,12 +1818,12 @@ static bool x86_scalar_call(X86CoreSelector *sel,
             minic_x86_64_target_codegen_options(sel->target);
         const bool external = (options &
             MINIC_X86_CODEGEN_INDIRECT_EXTERNAL_THUNK) != 0U;
-        /* The external register-specific thunk is already represented as a
-         * verified symbol-call opcode. Inline thunk expansion needs a
-         * corresponding local physical CFG, and remains fail-closed. */
-        if ((!external && (options &
-                 MINIC_X86_CODEGEN_INDIRECT_INLINE_THUNK) != 0U) ||
-            (external && plan->calling_convention ==
+        const bool inlined = !external && (options &
+            MINIC_X86_CODEGEN_INDIRECT_INLINE_THUNK) != 0U;
+        /* Both Linux thunk modes retain the real target register as MachineIR
+         * input. The inline nested-call/RET sequence is a sealed target
+         * opcode, never a string synthesized by the C frontend. */
+        if (((external || inlined) && plan->calling_convention ==
                  MINIC_CALLING_CONVENTION_MS_X64) ||
             !x86_core_load(sel, ins->value.indirect_call.callee,
                 MINIC_X86_REG_R11) ||
@@ -1831,6 +1831,9 @@ static bool x86_scalar_call(X86CoreSelector *sel,
                 x86_1(sel, MINIC_X86_MI_CALL_INDIRECT_THUNK_R11,
                     x86_symbol("__x86_indirect_thunk_r11",
                         MINIC_X86_MACHINE_RELOC_PC32)) :
+              inlined ?
+                x86_1(sel, MINIC_X86_MI_CALL_INLINE_THUNK_R11,
+                    x86_reg(MINIC_X86_REG_R11, 64U)) :
                 x86_1(sel, plan->calling_convention ==
                     MINIC_CALLING_CONVENTION_MS_X64 ?
                         MINIC_X86_MI_CALL_MS_R :
@@ -6653,19 +6656,23 @@ static bool x86_core_terminator(X86CoreSelector *sel, size_t core_id) {
             !minic_machine_builder_position_at(&sel->builder,
                 sel->false_blocks[core_id])) return false;
         return x86_jump(sel, sel->blocks[term->conditional.when_false]);
-    case MINIC_CORE_TERMINATOR_INDIRECT_BRANCH:
+    case MINIC_CORE_TERMINATOR_INDIRECT_BRANCH: {
+        const unsigned int options =
+            minic_x86_64_target_codegen_options(sel->target);
+        const bool external = (options &
+            MINIC_X86_CODEGEN_INDIRECT_EXTERNAL_THUNK) != 0U;
+        const bool inlined = !external && (options &
+            MINIC_X86_CODEGEN_INDIRECT_INLINE_THUNK) != 0U;
         if (term->indirect_target >= sel->core->value_count ||
-            ((minic_x86_64_target_codegen_options(sel->target) &
-                MINIC_X86_CODEGEN_INDIRECT_INLINE_THUNK) != 0U &&
-             (minic_x86_64_target_codegen_options(sel->target) &
-                MINIC_X86_CODEGEN_INDIRECT_EXTERNAL_THUNK) == 0U) ||
             !x86_core_load(sel, term->indirect_target,
                 MINIC_X86_REG_RAX) ||
-            !((minic_x86_64_target_codegen_options(sel->target) &
-                   MINIC_X86_CODEGEN_INDIRECT_EXTERNAL_THUNK) != 0U ?
+            !(external ?
                 x86_1(sel, MINIC_X86_MI_JMP_INDIRECT_THUNK_RAX,
                     x86_symbol("__x86_indirect_thunk_rax",
                         MINIC_X86_MACHINE_RELOC_PC32)) :
+              inlined ?
+                x86_1(sel, MINIC_X86_MI_JMP_INLINE_THUNK_RAX,
+                    x86_reg(MINIC_X86_REG_RAX, 64U)) :
                 x86_1(sel, MINIC_X86_MI_JMP_R,
                     x86_reg(MINIC_X86_REG_RAX, 64U)))) return false;
         for (i = 0U; i < sel->core->block_count; ++i)
@@ -6673,6 +6680,7 @@ static bool x86_core_terminator(X86CoreSelector *sel, size_t core_id) {
                 !minic_machine_builder_add_successor(&sel->builder,
                     sel->blocks[i])) return false;
         return true;
+    }
     case MINIC_CORE_TERMINATOR_RETURN: {
         const MinicCoreTypeId id =
             minic_core_function_return_type(sel->core);
