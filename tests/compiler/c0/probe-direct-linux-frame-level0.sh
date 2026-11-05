@@ -11,6 +11,19 @@ case "$target" in
   *) echo "unexpected ISA $target" >&2; exit 1 ;;
 esac
 d=$(mktemp -d); trap 'rm -rf "$d"' EXIT
+mini_frame_fail() {
+    local rc="$1" line="$2" command="$3"
+    trap - ERR
+    printf 'MINIC_FRAME_LEVEL0=FAIL target=%s line=%s command=%s rc=%s\n' \
+        "$target" "$line" "$command" "$rc" >&2
+    if [[ -f "$d/frame.s" ]]; then
+        # Diagnostics only: the exact GNU register/ABI oracles still decide.
+        grep -nE '^[[:space:]]*(mov|ldr|stp|ldp|add|sub)[[:space:]]|^mini_|^[.]size' \
+            "$d/frame.s" | head -n 60 >&2 || true
+    fi
+    exit "$rc"
+}
+trap 'mini_frame_fail "$?" "$LINENO" "$BASH_COMMAND"' ERR
 cat > "$d/frame.i" <<'SRC'
 void *mini_frame_address(void) { return __builtin_frame_address(0); }
 unsigned long mini_frame_alignment(void) {
@@ -38,7 +51,8 @@ fi
 grep -Fq "$expected" "$d/frame.s"
 if [[ "$target" == aarch64 ]]; then
     grep -Fq 'stp x29, x30, [sp, #-16]!' "$d/frame.s"
-    grep -Fq 'ldr x9, [x29]' "$d/frame.s"
+    # The same parent frame-link load admits explicit zero displacement.
+    grep -Eq '^  ldr x9, \[x29(, #0)?\]$' "$d/frame.s"
     grep -Fq 'ldp x29, x30, [sp], #16' "$d/frame.s"
 fi
 cat > "$d/bad.i" <<'SRC'

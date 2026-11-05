@@ -17,7 +17,11 @@ void mini_dec32(int *v) { asm volatile(" decl %0" : "+m"(*v)); }
 SRC
 "$cc" --target=x86_64-linux -S "$d/local.i" -o "$d/mini.s"
 for ins in incq decq addq subq incl decl; do
-    grep -Eq "^  $ins .*\\(%r11\\)" "$d/mini.s"
+    if ! grep -Eq "^  $ins .*\\(%r10\\)" "$d/mini.s"; then
+        echo "FAIL: $ins missing original x86 MachineIR R10-relative memory RMW" >&2
+        sed -n '1,160p' "$d/mini.s" >&2
+        exit 1
+    fi
 done
 if grep -Eq '^  lock; (incq|decq|addq|subq|incl|decl) ' "$d/mini.s"; then
   echo 'FAIL: local non-atomic RMW acquired SMP LOCK' >&2; exit 1

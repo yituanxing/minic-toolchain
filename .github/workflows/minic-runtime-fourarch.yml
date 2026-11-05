@@ -739,6 +739,12 @@ jobs:
         run: |
           set -Eeuo pipefail
           bash tests/compiler/c0/probe-linux-global-section-reloc.sh "$GITHUB_WORKSPACE/build/runtime-ci/bin/minic-cc" "${{ matrix.target }}"
+      - name: Original Linux arm64 kexec 675-byte GPR/PSTATE/PC hardware GNU GAS
+        if: matrix.target == 'aarch64'
+        run: |
+          set -Eeuo pipefail
+          command -v aarch64-linux-gnu-gcc
+          MINIC_CC="$GITHUB_WORKSPACE/build/runtime-ci/bin/minic-cc" bash tests/compiler/c0/probe-aarch64-linux-kexec-crash-regs.sh
       - name: Original Linux level-zero frame builtin GNU QEMU actual stack ABI
         if: matrix.target == 'aarch64' || matrix.target == 'loongarch64'
         run: |
