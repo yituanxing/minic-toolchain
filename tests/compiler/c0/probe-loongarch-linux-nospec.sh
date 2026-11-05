@@ -17,8 +17,11 @@ unsigned long mini_nospec(unsigned long index, unsigned long size) {
 }
 SRC
 "$mini" --target=loongarch64-linux -S "$d/nospec.i" -o "$d/mini.s"
-grep -Fq '  sltu $t2, $t0, $t1' "$d/mini.s"
-grep -Fq '  sub.d $t2, $zero, $t2' "$d/mini.s"
+# Source-authored GNU inline ASM preserves tabs from the original template;
+# the old direct emitter normalized them to spaces. Prove the same physical
+# register roles and operations without depending on that whitespace choice.
+grep -Eq '^[[:space:]]*sltu[[:space:]]+\$t2,[[:space:]]*\$t0,[[:space:]]*\$t1[[:space:]]*$' "$d/mini.s"
+grep -Eq '^[[:space:]]*sub\.d[[:space:]]+\$t2,[[:space:]]*\$zero,[[:space:]]*\$t2[[:space:]]*$' "$d/mini.s"
 for bad in extra mnemonic constraint volatile clobber width; do
     case "$bad" in
         extra) sed 's/sub.d\\t%0, \$zero, %0/sub.d\\t%0, $zero, %0; nop/' "$d/nospec.i" > "$d/bad.i" ;;

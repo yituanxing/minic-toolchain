@@ -211,7 +211,20 @@ static bool loong_source_operand(FILE *out,
     case MINIC_MACHINE_OPERAND_REGISTER:
         return loong_source_print_reg(out, &operand->value.physical.reg);
     case MINIC_MACHINE_OPERAND_ADDRESS:
-        return loong_source_print_gp(out, operand->value.address.base.number) &&
+        /* GNU LoongArch +ZB atomic operands expand to the base GPR alone:
+         * AMO instructions take rd,rk,rj (not a base+offset addressing
+         * form). LL/SC `m`/`ZC` operands instead need rj,imm12. The Core
+         * source ID is sealed against the exact instruction grammar, so
+         * this distinction remains target-owned and non-heuristic. */
+        if (ins->source_asm_machine_form_id == 11U ||
+            ins->source_asm_machine_form_id == 25U ||
+            ins->source_asm_machine_form_id == 27U ||
+            ins->source_asm_machine_form_id == 28U)
+            return operand->value.address.displacement == 0 &&
+                loong_source_print_gp(out,
+                    operand->value.address.base.number);
+        return loong_source_print_gp(out,
+                   operand->value.address.base.number) &&
             fprintf(out, ", %" PRId64,
                     operand->value.address.displacement) >= 0;
     case MINIC_MACHINE_OPERAND_INTEGER:

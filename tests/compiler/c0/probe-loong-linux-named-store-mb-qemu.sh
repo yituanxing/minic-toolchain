@@ -10,9 +10,9 @@ cc -E -P -x c "$source" -o "$work/original.i"
 
 "$minic" --target=loongarch64-linux -S "$work/original.i" -o "$work/mini.s"
 test -s "$work/mini.s"
-grep -Fq 'amswap_db.w $t2, $t0, $t1' "$work/mini.s"
-grep -Fq 'amswap_db.d $t2, $t0, $t1' "$work/mini.s"
-grep -Fq 'st.d $t2, $t1, 0' "$work/mini.s"
+grep -Eq '^[[:space:]]*amswap_db\.w[[:space:]]+\$t2,[[:space:]]*\$t0,[[:space:]]*\$t1[[:space:]]*$' "$work/mini.s"
+grep -Eq '^[[:space:]]*amswap_db\.d[[:space:]]+\$t2,[[:space:]]*\$t0,[[:space:]]*\$t1[[:space:]]*$' "$work/mini.s"
+grep -Eq '^[[:space:]]*st\.d[[:space:]]+\$t2,[[:space:]]*\$t1,[[:space:]]*0[[:space:]]*$' "$work/mini.s"
 if [[ "$(grep -Fc 'amswap_db.' "$work/mini.s")" != 3 ]];then
     echo 'LoongArch Linux store-mb must emit exactly three hardware AMDB stores' >&2
     exit 1

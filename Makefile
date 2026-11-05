@@ -292,6 +292,10 @@ MINIC_SOURCES := \
 	src/target/loongarch64/machine_gnu_asm.c \
 	src/target/loongarch64/machine_asm_form.c \
 	src/target/loongarch64/machine_select.c \
+	src/target/loongarch64/machine_builtin_select.c \
+	src/target/loongarch64/machine_llsc_select.c \
+	src/target/loongarch64/machine_pte_select.c \
+	src/target/loongarch64/machine_csr_source_select.c \
 	src/target/loongarch64/machine_source_asm.c \
 	src/target/loongarch64/asm_contract.c \
 	src/target/loongarch64/asm_contract_source.c \
@@ -2509,8 +2513,33 @@ check-loong-machine-mir-select:
 	  src/target/loongarch64/machine_asm_form.c \
 	  src/target/loongarch64/machine_source_asm.c \
 	  src/target/loongarch64/machine_select.c \
+	  src/target/loongarch64/machine_builtin_select.c \
+	  src/target/loongarch64/machine_llsc_select.c \
+	  src/target/loongarch64/machine_pte_select.c \
+	  src/target/loongarch64/machine_csr_source_select.c \
 	  -o "$(BUILD_DIR)/tests/loong-machine-mir-select"
 	"$(BUILD_DIR)/tests/loong-machine-mir-select"
+
+# The 25 sealed LoongArch source builtins map to 22 *native* typed opcodes.
+# Check physical operands, CSR imm14 and GNU printing without a CALL/BL shim.
+.PHONY: check-loong-machine-builtin-opcode
+check-loong-machine-builtin-opcode:
+	mkdir -p "$(BUILD_DIR)/tests"
+	$(CC) -std=c11 -Wall -Wextra -Wpedantic -Werror $(MINIC_INCLUDES) \
+	  -ffunction-sections -fdata-sections -Wl,--gc-sections \
+	  tests/target/loongarch64/machine_builtin_opcode_test.c \
+	  src/target/data_layout.c \
+	  src/target/common/machine_ir.c \
+	  src/target/common/machine_builder.c \
+	  src/target/common/machine_ir_verify.c \
+	  src/target/common/machine_gnu_asm.c \
+	  src/target/common/machine_source_asm_template.c \
+	  src/target/loongarch64/machine_opcode.c \
+	  src/target/loongarch64/machine_gnu_asm.c \
+	  src/target/loongarch64/machine_asm_form.c \
+	  src/target/loongarch64/machine_source_asm.c \
+	  -o "$(BUILD_DIR)/tests/loong-machine-builtin-opcode"
+	"$(BUILD_DIR)/tests/loong-machine-builtin-opcode"
 
 .PHONY: check-a64-machine-core-select
 check-a64-machine-core-select:
@@ -2594,6 +2623,10 @@ check-loong-machine-core-select:
 	  src/target/loongarch64/machine_asm_form.c \
 	  src/target/loongarch64/machine_source_asm.c \
 	  src/target/loongarch64/machine_select.c \
+	  src/target/loongarch64/machine_builtin_select.c \
+	  src/target/loongarch64/machine_llsc_select.c \
+	  src/target/loongarch64/machine_pte_select.c \
+	  src/target/loongarch64/machine_csr_source_select.c \
 	  -o "$(BUILD_DIR)/tests/loong-machine-core-select"
 	"$(BUILD_DIR)/tests/loong-machine-core-select"
 
@@ -2707,7 +2740,8 @@ check-x86-machine-core-select:
 check-five-machine-core-select: check-machine-ir-contract \
 	check-machine-core-coverage check-machine-source-asm-template \
 	check-riscv-machine-core-select check-x86-machine-core-select \
-	check-a64-machine-core-select check-loong-machine-core-select
+	check-a64-machine-core-select check-loong-machine-core-select \
+	check-loong-machine-builtin-opcode
 
 .PHONY: check-x86-machine-gnu-asm
 check-x86-machine-gnu-asm:

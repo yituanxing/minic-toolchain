@@ -142,8 +142,37 @@ typedef enum MinicLoongMachineOpcode {
     MINIC_LOONG_MACHINE_FLD_D,
     MINIC_LOONG_MACHINE_FST_S,
     MINIC_LOONG_MACHINE_FST_D,
-    MINIC_LOONG_MACHINE_NOP
+    MINIC_LOONG_MACHINE_NOP,
+    /* Sealed target builtins select real LoongArch instructions.  Keep this
+     * separate from SOURCE_ASM and from ordinary ABI function calls. */
+    MINIC_LOONG_MACHINE_CPUCFG,
+    MINIC_LOONG_MACHINE_ASRTLE_D,
+    MINIC_LOONG_MACHINE_ASRTGT_D,
+    MINIC_LOONG_MACHINE_CRC_W_B_W,
+    MINIC_LOONG_MACHINE_CRC_W_H_W,
+    MINIC_LOONG_MACHINE_CRC_W_W_W,
+    MINIC_LOONG_MACHINE_CRC_W_D_W,
+    MINIC_LOONG_MACHINE_CRCC_W_B_W,
+    MINIC_LOONG_MACHINE_CRCC_W_H_W,
+    MINIC_LOONG_MACHINE_CRCC_W_W_W,
+    MINIC_LOONG_MACHINE_CRCC_W_D_W,
+    MINIC_LOONG_MACHINE_IOCSRRD_B,
+    MINIC_LOONG_MACHINE_IOCSRRD_H,
+    MINIC_LOONG_MACHINE_IOCSRRD_W,
+    MINIC_LOONG_MACHINE_IOCSRRD_D,
+    MINIC_LOONG_MACHINE_IOCSRWR_B,
+    MINIC_LOONG_MACHINE_IOCSRWR_H,
+    MINIC_LOONG_MACHINE_IOCSRWR_W,
+    MINIC_LOONG_MACHINE_IOCSRWR_D,
+    MINIC_LOONG_MACHINE_CSRRD,
+    MINIC_LOONG_MACHINE_CSRWR,
+    MINIC_LOONG_MACHINE_CSRXCHG
 } MinicLoongMachineOpcode;
+
+/* Maps the sealed TargetInfo machine-form mnemonic (never a C source name)
+ * to a native selected opcode.  Unknown mnemonics must fail closed. */
+bool minic_loongarch64_machine_builtin_opcode(
+    const char *mnemonic, uint32_t *opcode);
 
 bool minic_loongarch64_machine_gnu_asm_policy_initialize(
     const MinicTargetInfo *, MinicMachineGNUAsmPolicy *);

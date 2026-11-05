@@ -13,14 +13,14 @@ cc -E -P -x c "$source_file" -o "$work/xchg.i"
 # Core ASM operands, then emitted using LoongArch's physical LL.W / SC.W.
 "$minic" --target=loongarch64-linux -S "$work/xchg.i" -o "$work/mini.s"
 test -s "$work/mini.s"
-grep -Fq 'll.w $t5, $t4, 0' "$work/mini.s"
-grep -Fq 'andn $t6, $t5, $t0' "$work/mini.s"
-grep -Fq 'or $t6, $t6, $t1' "$work/mini.s"
-grep -Fq 'sc.w $t6, $t7, 0' "$work/mini.s"
-grep -Fq 'beqz $t6, 1b' "$work/mini.s"
-grep -Fq 'st.w $t5, $t7, 0' "$work/mini.s"
-grep -Fq 'st.w $t6, $t7, 0' "$work/mini.s"
-if [[ "$(grep -Fc 'll.w $t5, $t4, 0' "$work/mini.s")" != 1 ]]; then
+grep -Eq '^[[:space:]]*1:[[:space:]]*ll\.w[[:space:]]+\$t5,[[:space:]]*\$t4,[[:space:]]*0[[:space:]]*$' "$work/mini.s"
+grep -Eq '^[[:space:]]*andn[[:space:]]+\$t6,[[:space:]]*\$t5,[[:space:]]*\$t0[[:space:]]*$' "$work/mini.s"
+grep -Eq '^[[:space:]]*or[[:space:]]+\$t6,[[:space:]]*\$t6,[[:space:]]*\$t1[[:space:]]*$' "$work/mini.s"
+grep -Eq '^[[:space:]]*sc\.w[[:space:]]+\$t6,[[:space:]]*\$t7,[[:space:]]*0[[:space:]]*$' "$work/mini.s"
+grep -Eq '^[[:space:]]*beqz[[:space:]]+\$t6,[[:space:]]*1b[[:space:]]*$' "$work/mini.s"
+grep -Eq '^[[:space:]]*st\.w[[:space:]]+\$t5,[[:space:]]*\$t7,[[:space:]]*0[[:space:]]*$' "$work/mini.s"
+grep -Eq '^[[:space:]]*st\.w[[:space:]]+\$t6,[[:space:]]*\$t7,[[:space:]]*0[[:space:]]*$' "$work/mini.s"
+if [[ "$(grep -Ec '^[[:space:]]*1:[[:space:]]*ll\.w[[:space:]]+\$t5,[[:space:]]*\$t4,[[:space:]]*0[[:space:]]*$' "$work/mini.s")" != 1 ]]; then
     echo 'LoongArch subword helper must retain a single reusable LL/SC engine' >&2
     exit 1
 fi

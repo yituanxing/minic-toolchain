@@ -15,7 +15,15 @@ typedef enum LoongForm {
     L_FORM_RRII,
     L_FORM_FP_RR, L_FORM_FP_RRR, L_FORM_FP_CMP,
     L_FORM_GP_FROM_FCC, L_FORM_GP_FROM_FP, L_FORM_FP_FROM_GP,
-    L_FORM_FP_MEMORY
+    L_FORM_FP_MEMORY,
+    /* Privileged/native target builtin forms.  These preserve the sealed
+     * call's $a0/$a1 physical convention without emitting a BL. */
+    L_FORM_BUILTIN_RR_WR,
+    L_FORM_BUILTIN_RR_RD,
+    L_FORM_BUILTIN_RRR,
+    L_FORM_BUILTIN_CSR_RD,
+    L_FORM_BUILTIN_CSR_RW,
+    L_FORM_BUILTIN_CSR_XCHG
 } LoongForm;
 
 typedef struct LoongSpec {
@@ -40,8 +48,9 @@ typedef struct LoongSpec {
 #define FRAME_STORE(op, name, width) [MINIC_LOONG_MACHINE_##op] = {name, L_FORM_FRAME, MINIC_MACHINE_EFFECT_MEMORY_WRITE, width}
 #define RBLOCK(op, name) [MINIC_LOONG_MACHINE_##op] = {name, L_FORM_RBLOCK, MINIC_MACHINE_EFFECT_BRANCH, .ends_block = true, .permits_fallthrough = true}
 #define RRBLOCK(op, name) [MINIC_LOONG_MACHINE_##op] = {name, L_FORM_RRBLOCK, MINIC_MACHINE_EFFECT_BRANCH, .ends_block = true, .permits_fallthrough = true}
+#define BUILTIN(op, name, form) [MINIC_LOONG_MACHINE_##op] = {name, form, MINIC_MACHINE_EFFECT_CALL}
 
-static const LoongSpec loong_specs[MINIC_LOONG_MACHINE_NOP + 1U] = {
+static const LoongSpec loong_specs[MINIC_LOONG_MACHINE_CSRXCHG + 1U] = {
     RR(MOVE, "move"), RI(LI_D, "li.d"),
     RI(LI_W, "li.w"),
     RR(CLZ_D, "clz.d"), RR(CLZ_W, "clz.w"),
@@ -134,7 +143,29 @@ static const LoongSpec loong_specs[MINIC_LOONG_MACHINE_NOP + 1U] = {
         MINIC_MACHINE_EFFECT_MEMORY_WRITE, 4U},
     [MINIC_LOONG_MACHINE_FST_D] = {"fst.d", L_FORM_FP_MEMORY,
         MINIC_MACHINE_EFFECT_MEMORY_WRITE, 8U},
-    [MINIC_LOONG_MACHINE_NOP] = {"nop", L_FORM_NONE, 0}
+    [MINIC_LOONG_MACHINE_NOP] = {"nop", L_FORM_NONE, 0},
+    BUILTIN(CPUCFG, "cpucfg", L_FORM_BUILTIN_RR_WR),
+    BUILTIN(ASRTLE_D, "asrtle.d", L_FORM_BUILTIN_RR_RD),
+    BUILTIN(ASRTGT_D, "asrtgt.d", L_FORM_BUILTIN_RR_RD),
+    BUILTIN(CRC_W_B_W, "crc.w.b.w", L_FORM_BUILTIN_RRR),
+    BUILTIN(CRC_W_H_W, "crc.w.h.w", L_FORM_BUILTIN_RRR),
+    BUILTIN(CRC_W_W_W, "crc.w.w.w", L_FORM_BUILTIN_RRR),
+    BUILTIN(CRC_W_D_W, "crc.w.d.w", L_FORM_BUILTIN_RRR),
+    BUILTIN(CRCC_W_B_W, "crcc.w.b.w", L_FORM_BUILTIN_RRR),
+    BUILTIN(CRCC_W_H_W, "crcc.w.h.w", L_FORM_BUILTIN_RRR),
+    BUILTIN(CRCC_W_W_W, "crcc.w.w.w", L_FORM_BUILTIN_RRR),
+    BUILTIN(CRCC_W_D_W, "crcc.w.d.w", L_FORM_BUILTIN_RRR),
+    BUILTIN(IOCSRRD_B, "iocsrrd.b", L_FORM_BUILTIN_RR_WR),
+    BUILTIN(IOCSRRD_H, "iocsrrd.h", L_FORM_BUILTIN_RR_WR),
+    BUILTIN(IOCSRRD_W, "iocsrrd.w", L_FORM_BUILTIN_RR_WR),
+    BUILTIN(IOCSRRD_D, "iocsrrd.d", L_FORM_BUILTIN_RR_WR),
+    BUILTIN(IOCSRWR_B, "iocsrwr.b", L_FORM_BUILTIN_RR_RD),
+    BUILTIN(IOCSRWR_H, "iocsrwr.h", L_FORM_BUILTIN_RR_RD),
+    BUILTIN(IOCSRWR_W, "iocsrwr.w", L_FORM_BUILTIN_RR_RD),
+    BUILTIN(IOCSRWR_D, "iocsrwr.d", L_FORM_BUILTIN_RR_RD),
+    BUILTIN(CSRRD, "csrrd", L_FORM_BUILTIN_CSR_RD),
+    BUILTIN(CSRWR, "csrwr", L_FORM_BUILTIN_CSR_RW),
+    BUILTIN(CSRXCHG, "csrxchg", L_FORM_BUILTIN_CSR_XCHG)
 };
 
 #undef RR
@@ -147,11 +178,27 @@ static const LoongSpec loong_specs[MINIC_LOONG_MACHINE_NOP + 1U] = {
 #undef FRAME_STORE
 #undef RBLOCK
 #undef RRBLOCK
+#undef BUILTIN
 
 static const LoongSpec *loong_spec(uint32_t opcode) {
     if (opcode == 0U || opcode >= sizeof(loong_specs) / sizeof(loong_specs[0]) ||
         loong_specs[opcode].name == NULL) return NULL;
     return &loong_specs[opcode];
+}
+
+bool minic_loongarch64_machine_builtin_opcode(
+    const char *mnemonic, uint32_t *opcode) {
+    uint32_t candidate;
+    if (mnemonic == NULL || opcode == NULL) return false;
+    for (candidate = MINIC_LOONG_MACHINE_CPUCFG;
+         candidate <= MINIC_LOONG_MACHINE_CSRXCHG; ++candidate) {
+        const LoongSpec *spec = loong_spec(candidate);
+        if (spec != NULL && strcmp(spec->name, mnemonic) == 0) {
+            *opcode = candidate;
+            return true;
+        }
+    }
+    return false;
 }
 
 static bool loong_abi(const MinicTargetInfo *target,
@@ -248,8 +295,16 @@ static bool loong_lookup(const MinicTargetInfo *target, uint32_t opcode,
 #define ARG(kind) do { contract->operand_kinds[n++] = (kind); } while (0)
 #define RD MINIC_MACHINE_REGISTER_READ
 #define WR MINIC_MACHINE_REGISTER_WRITE
+#define RW (MINIC_MACHINE_REGISTER_READ | MINIC_MACHINE_REGISTER_WRITE)
     switch (spec->form) {
     case L_FORM_RR: REG(WR); REG(RD); break;
+    case L_FORM_BUILTIN_RR_WR: REG(WR); REG(RD); break;
+    case L_FORM_BUILTIN_RR_RD: REG(RD); REG(RD); break;
+    case L_FORM_BUILTIN_RRR: REG(WR); REG(RD); REG(RD); break;
+    case L_FORM_BUILTIN_CSR_RD: REG(WR); ARG(MINIC_MACHINE_OPERAND_INTEGER); break;
+    case L_FORM_BUILTIN_CSR_RW: REG(RW); ARG(MINIC_MACHINE_OPERAND_INTEGER); break;
+    case L_FORM_BUILTIN_CSR_XCHG:
+        REG(RW); REG(RD); ARG(MINIC_MACHINE_OPERAND_INTEGER); break;
     case L_FORM_RRII:
         REG(WR); REG(RD);
         ARG(MINIC_MACHINE_OPERAND_INTEGER);
@@ -294,6 +349,7 @@ static bool loong_lookup(const MinicTargetInfo *target, uint32_t opcode,
 #undef ARG
 #undef RD
 #undef WR
+#undef RW
     contract->operand_count = n;
     contract->required_generated_features = MINIC_LOONG_MACHINE_FEATURE_BASE;
     if (spec->form == L_FORM_FP_RR || spec->form == L_FORM_FP_RRR ||
@@ -383,6 +439,27 @@ static bool loong_legal_selected(const MinicMachineFunction *function,
                 (ops[i].value.physical.reg.bank != MINIC_MACHINE_REGISTER_GENERAL ||
                  ops[i].value.physical.reg.width_bits != 64U)) return false;
     switch (spec->form) {
+    case L_FORM_BUILTIN_RR_WR:
+        /* CPUCFG/IOCSRRD read a0 and replace a0.  Repeated register operands
+         * are intentional and carry different access contracts. */
+        return ops[0].value.physical.reg.number == 4U &&
+            ops[1].value.physical.reg.number == 4U;
+    case L_FORM_BUILTIN_RR_RD:
+        /* ASRT and IOCSRWR do not write their source registers. */
+        return ops[0].value.physical.reg.number == 4U &&
+            ops[1].value.physical.reg.number == 5U;
+    case L_FORM_BUILTIN_RRR:
+        return ops[0].value.physical.reg.number == 4U &&
+            ops[1].value.physical.reg.number == 4U &&
+            ops[2].value.physical.reg.number == 5U;
+    case L_FORM_BUILTIN_CSR_RD:
+    case L_FORM_BUILTIN_CSR_RW:
+        return ops[0].value.physical.reg.number == 4U &&
+            ops[1].value.integer >= 0 && ops[1].value.integer <= 16383;
+    case L_FORM_BUILTIN_CSR_XCHG:
+        return ops[0].value.physical.reg.number == 4U &&
+            ops[1].value.physical.reg.number == 5U &&
+            ops[2].value.integer >= 0 && ops[2].value.integer <= 16383;
     case L_FORM_RRII:
         return ops[3].value.integer >= 0 &&
             ops[2].value.integer >= ops[3].value.integer &&
@@ -562,6 +639,26 @@ static bool loong_serialize(FILE *out, const MinicMachineFunction *function,
     if (out == NULL || function == NULL || spec == NULL ||
         !loong_legal_selected(function, ins, NULL)) return false;
     switch (spec->form) {
+    case L_FORM_BUILTIN_RR_WR:
+    case L_FORM_BUILTIN_RR_RD:
+        return loong_gp_text(&o[0].value.physical.reg, a, sizeof(a)) &&
+            loong_gp_text(&o[1].value.physical.reg, b, sizeof(b)) &&
+            fprintf(out, "  %s %s, %s\n", spec->name, a, b) >= 0;
+    case L_FORM_BUILTIN_RRR:
+        return loong_gp_text(&o[0].value.physical.reg, a, sizeof(a)) &&
+            loong_gp_text(&o[1].value.physical.reg, b, sizeof(b)) &&
+            loong_gp_text(&o[2].value.physical.reg, c, sizeof(c)) &&
+            fprintf(out, "  %s %s, %s, %s\n", spec->name, a, b, c) >= 0;
+    case L_FORM_BUILTIN_CSR_RD:
+    case L_FORM_BUILTIN_CSR_RW:
+        return loong_gp_text(&o[0].value.physical.reg, a, sizeof(a)) &&
+            fprintf(out, "  %s %s, %" PRId64 "\n",
+                spec->name, a, o[1].value.integer) >= 0;
+    case L_FORM_BUILTIN_CSR_XCHG:
+        return loong_gp_text(&o[0].value.physical.reg, a, sizeof(a)) &&
+            loong_gp_text(&o[1].value.physical.reg, b, sizeof(b)) &&
+            fprintf(out, "  %s %s, %s, %" PRId64 "\n",
+                spec->name, a, b, o[2].value.integer) >= 0;
     case L_FORM_RRII:
         return loong_gp_text(&o[0].value.physical.reg, a, sizeof(a)) &&
             loong_gp_text(&o[1].value.physical.reg, b, sizeof(b)) &&

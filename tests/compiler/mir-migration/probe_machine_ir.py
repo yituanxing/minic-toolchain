@@ -30,8 +30,21 @@ CASES = (
 LOONG_PRODUCTION_EXTRAS = {
     "record_copy_aux_layout": ROOT / "tests/target/loongarch64/record_copy_aux_layout.c",
     "int128_pair_semantics": ROOT / "tests/target/loongarch64/int128_pair_semantics.c",
+    "opaque_source_isa_family": ROOT / "tests/target/loongarch64/opaque_source_isa_family.c",
+    "nospec_structured_mir": ROOT / "tests/target/loongarch64/nospec_structured_mir.c",
+    "machine_builtin_family": ROOT / "tests/target/loongarch64/machine_builtin_family.c",
+    "small_xchg_structured": ROOT / "tests/compiler/c0/loong-linux-small-xchg.c",
+    "named_store_mb_structured": ROOT / "tests/compiler/c0/loong-linux-named-store-mb.c",
+    "packed_hardware_results": ROOT / "tests/compiler/c0/loongarch64_packed_hardware_asm_results.c",
+    "percpu_structured_source": ROOT / "tests/target/loongarch64/percpu_structured_source.c",
 }
 LOONG_LEGACY_NEGATIVE = ROOT / "tests/target/loongarch64/int128_pair_legacy_unsupported.c"
+LOONG_SOURCE_NEGATIVES = (
+    ("opaque_native_multi", ROOT / "tests/target/loongarch64/opaque_source_isa_negative.c", None),
+    ("bug_bad_path", ROOT / "tests/target/loongarch64/opaque_bugtable_negative.c", "MINIC_BAD_BUG_PATH"),
+    ("bug_bad_label", ROOT / "tests/target/loongarch64/opaque_bugtable_negative.c", "MINIC_BAD_BUG_LABEL"),
+    ("bug_bad_opcode", ROOT / "tests/target/loongarch64/opaque_bugtable_negative.c", "MINIC_BAD_BUG_NATIVE"),
+)
 TARGETS = ("aarch64", "loongarch64")
 FIVE = ("riscv32", "riscv64", "x86_64", "aarch64", "loongarch64")
 TRACED_FUNCTION = "minic_machine_gnu_asm_emit_body"
@@ -138,6 +151,69 @@ def check_functional_shapes(asm, arch, case):
         for marker in ("loong_u128_pair_arithmetic:", "loong_u128_pair_compare:",
                        "loong_i128_arithmetic_shift:", "loong_i128_signed_less:"):
             demand(marker in asm, f"{key}: missing {marker}")
+    elif case == "opaque_source_isa_family":
+        for marker in ("loong_opaque_idle:", "loong_opaque_tlbrd:",
+                       "loong_opaque_barrier:", "loong_opaque_hotplug:",
+                       "dbar 0x700", "ibar 0"):
+            demand(marker in asm, f"{key}: missing {marker}")
+    elif case == "nospec_structured_mir":
+        demand("loong_nospec_mir:" in asm,
+               f"{key}: missing source-owned GNU nospec function")
+        for opcode in (r"sltu\s+\$t2,\s*\$t0,\s*\$t1",
+                       r"sub\.d\s+\$t2,\s*\$zero,\s*\$t2"):
+            demand(bool(re.search(opcode, asm)),
+                   f"{key}: sealed source register binding missing: {opcode}")
+    elif case == "machine_builtin_family":
+        for marker in ("loong_builtin_cpucfg:", "loong_builtin_assertions:",
+                       "loong_builtin_crc_w_b_w:", "loong_builtin_iocsrrd_b:",
+                       "loong_builtin_csrrd_w:", "loong_builtin_csrxchg_d:"):
+            demand(marker in asm, f"{key}: missing {marker}")
+        for opcode in ("cpucfg", "asrtle.d", "crcc.w.", "iocsrrd.", "csrxchg"):
+            demand(opcode in asm, f"{key}: lost typed builtin instruction {opcode}")
+        demand(not re.search(r"(?m)^\s*bl\s+__minic_target_builtin_", asm),
+               f"{key}: compiler builtin was emitted as an external call")
+    elif case == "small_xchg_structured":
+        demand("linux_xchg_small:" in asm, f"{key}: missing LL/SC helper")
+        for opcode in (r"1:\s*ll\.w\s+\$t5,\s*\$t4,\s*0",
+                       r"sc\.w\s+\$t6,\s*\$t7,\s*0",
+                       r"st\.w\s+\$t5,\s*\$t7,\s*0",
+                       r"st\.w\s+\$t6,\s*\$t7,\s*0"):
+            demand(bool(re.search(opcode, asm)),
+                   f"{key}: structured physical ASM/writeback missing {opcode}")
+    elif case == "named_store_mb_structured":
+        for marker in ("linux_store_mb32:", "linux_store_mb64:",
+                       "linux_store_mb_guarded:"):
+            demand(marker in asm, f"{key}: missing {marker}")
+        for opcode in (r"amswap_db\.w\s+\$t2,\s*\$t0,\s*\$t1",
+                       r"amswap_db\.d\s+\$t2,\s*\$t0,\s*\$t1",
+                       r"st\.d\s+\$t2,\s*\$t1,\s*0"):
+            demand(bool(re.search(opcode, asm)),
+                   f"{key}: sealed atomic store/native writeback missing {opcode}")
+    elif case == "packed_hardware_results":
+        for symbol in ("packed_pte_result:", "packed_amo_fetch:",
+                       "packed_xchg:", "packed_csr_xchg:"):
+            demand(symbol in asm, f"{key}: missing {symbol}")
+        for opcode in ("ll.d $t4, $t1, 0", "sc.d $t4, $t1, 0",
+                       "amadd_db.d $t2, $t0, $t1",
+                       "amswap_db.d $t2, $t0, $t1",
+                       "csrxchg $t1, $t0, 0"):
+            demand(opcode in asm, f"{key}: native sealed ASM missing {opcode}")
+        demand(len(re.findall(r"\bandi\s+\$t3,\s*\$t[12],\s*7", asm)) >= 5,
+               f"{key}: packed read/write runtime alignment checks missing")
+    elif case == "percpu_structured_source":
+        for symbol in ("percpu_read_b:", "percpu_read_d:",
+                       "percpu_write_b:", "percpu_write_d:",
+                       "percpu_amo_add_w:", "percpu_amo_and_d:",
+                       "percpu_amo_or_d:", "percpu_reset_fcsr:",
+                       "percpu_packed_read:", "percpu_packed_amo:"):
+            demand(symbol in asm, f"{key}: missing {symbol}")
+        for opcode in ("ldx.b", "ldx.h", "ldx.w", "ldx.d",
+                       "stx.b", "stx.h", "stx.w", "stx.d",
+                       "amadd.w", "amadd.d", "amand.w", "amand.d",
+                       "amor.w", "amor.d", "movgr2fcsr"):
+            demand(opcode in asm, f"{key}: sealed perCPU ISA missing {opcode}")
+        demand(len(re.findall(r"\bandi\s+\$t3,\s+\$t1,\s+7", asm)) >= 2,
+               f"{key}: packed perCPU native/byte stores missing alignment guards")
     else:
         raise Failure(f"unknown MIR test fixture {case}")
     check_label_integrity(asm, key)
@@ -292,19 +368,23 @@ def main():
             positives += 1
 
     if loong_only_production:
-        unsupported_i = work / "loong_int128_unsupported.i"
-        unsupported_s = work / "loong_int128_unsupported.s"
-        unsupported_s.unlink(missing_ok=True)
-        proc = run([args.host_cc, "-E", "-P", "-std=gnu11", "-x", "c",
-                    str(LOONG_LEGACY_NEGATIVE), "-o", str(unsupported_i)])
-        demand(proc.returncode == 0,
-               f"GNU preprocess old unsupported Loong i128 multiply: {proc.stderr}")
-        proc = run([str(binary), "--target=loongarch64-linux", "-S",
-                    str(unsupported_i), "-o", str(unsupported_s)])
-        demand(proc.returncode != 0 and not unsupported_s.exists() and
-               "error:" in proc.stderr,
-               "Loong i128 multiply lost old fail-closed contract")
-        print("MIR_LOONG_LEGACY_NEGATIVE=PASS operation=i128_multiply")
+        loong_negatives = (("i128_multiply", LOONG_LEGACY_NEGATIVE, None),) + LOONG_SOURCE_NEGATIVES
+        for name, negative_source, macro in loong_negatives:
+            unsupported_i = work / f"loong_{name}_unsupported.i"
+            unsupported_s = work / f"loong_{name}_unsupported.s"
+            unsupported_s.unlink(missing_ok=True)
+            preprocess = [args.host_cc, "-E", "-P", "-std=gnu11", "-x", "c"]
+            if macro is not None:
+                preprocess.append(f"-D{macro}=1")
+            proc = run(preprocess + [str(negative_source), "-o", str(unsupported_i)])
+            demand(proc.returncode == 0,
+                   f"GNU preprocess old unsupported Loong {name}: {proc.stderr}")
+            proc = run([str(binary), "--target=loongarch64-linux", "-S",
+                        str(unsupported_i), "-o", str(unsupported_s)])
+            demand(proc.returncode != 0 and not unsupported_s.exists() and
+                   "error:" in proc.stderr,
+                   f"Loong {name} lost old fail-closed contract")
+            print(f"MIR_LOONG_LEGACY_NEGATIVE=PASS operation={name}")
     negative = Path(__file__).with_name("inline_negative.c")
     neg_i = work / "inline_negative.i"
     proc = run([args.host_cc, "-E", "-P", "-std=gnu11", "-x", "c",
@@ -321,7 +401,7 @@ def main():
                f"{arch}: bad negative diagnostic: {proc.stderr}")
         print(f"MIR_ASM_NEGATIVE=PASS target={arch} rejected=unbound_operand")
     print(f"MIR_MIGRATION={args.mode.upper()}_PASS targets={len(archs)} positive={positives} "
-          f"legacy_unsupported={unsupported} negative={len(archs) + int(loong_only_production)} "
+          f"legacy_unsupported={unsupported} negative={len(archs) + (1 + len(LOONG_SOURCE_NEGATIVES) if loong_only_production else 0)} "
           f"typed_emitter_calls={calls} changed_assembly={changed_assembly}")
 
 
