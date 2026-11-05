@@ -547,6 +547,7 @@ int main(void) {
         size_t tested;
         if (!setup_target(&target, &layout, widths[i]) ||
             !minic_riscv_machine_gnu_asm_policy(&target, &policy) ||
+            policy.section_type_marker != MINIC_MACHINE_GNU_SECTION_TYPE_AT ||
             !run_all_selected_opcodes(&target, &policy, &tested) ||
             !run_negative_cases(&target, &policy) ||
             !run_bound_source_asm(&target, &policy)) return 1;

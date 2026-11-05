@@ -22,7 +22,16 @@ typedef bool (*MinicMachineGNUAsmEmitInstruction)(
     const MinicMachineInstruction *instruction,
     const MinicMachineGNUAsmLabels *labels, void *context);
 
+/* GAS ELF section type sigil is an assembler dialect policy, never a
+ * Common-side architecture switch. The zero value preserves GNU @ for
+ * standalone policy builders; targets assign their exact sigil explicitly. */
+typedef enum MinicMachineGNUSectionTypeMarker {
+    MINIC_MACHINE_GNU_SECTION_TYPE_AT = 0,
+    MINIC_MACHINE_GNU_SECTION_TYPE_PERCENT
+} MinicMachineGNUSectionTypeMarker;
+
 typedef struct MinicMachineGNUAsmPolicy {
+    MinicMachineGNUSectionTypeMarker section_type_marker;
     /* Target policies must independently recognize the selected opcode,
      * generated ISA features, all machine operands and implicit effects. */
     MinicMachineVerifyPolicy verify;

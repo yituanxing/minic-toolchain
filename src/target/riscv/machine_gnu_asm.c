@@ -538,6 +538,7 @@ bool minic_riscv_machine_gnu_asm_policy(
     if (policy == NULL || !minic_riscv_machine_opcode_info(
             target, MINIC_RISCV_MACHINE_ADD, &probe)) return false;
     memset(policy, 0, sizeof(*policy));
+    policy->section_type_marker = MINIC_MACHINE_GNU_SECTION_TYPE_AT;
     policy->verify.lookup_opcode = minic_riscv_machine_lookup_opcode_contract;
     policy->verify.validate_selected_instruction =
         minic_riscv_machine_validate_selected_instruction;

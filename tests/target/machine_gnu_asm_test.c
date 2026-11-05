@@ -184,6 +184,7 @@ int main(void) {
     MinicMachineSourceAsmInput typed_asm = {0};
     MinicCoreInlineAsm sealed_empty_asm = {0};
     FILE *output = NULL;
+    FILE *at_output = NULL;
     FILE *rejected = NULL;
     FILE *accepted = NULL;
     FILE *accepted_typed = NULL;
@@ -208,6 +209,7 @@ int main(void) {
     policy.verify.validate_selected_instruction = probe_selected;
     policy.verify.validate_source_asm = probe_source;
     policy.emit_selected = probe_emit;
+    policy.section_type_marker = MINIC_MACHINE_GNU_SECTION_TYPE_PERCENT;
     if (!build_two_block_function(&function, &target)) goto done;
     stage = 1U;
 
@@ -226,6 +228,26 @@ int main(void) {
             "\t.long .Lmir_entry_address - .\n"
             "\t.popsection\n")) goto done;
     stage = 2U;
+    /* The very same synthetic AArch64 MachineFunction must use the
+     * target-supplied policy, never an architecture branch in Common. */
+    policy.section_type_marker = MINIC_MACHINE_GNU_SECTION_TYPE_AT;
+    at_output = probe_stream();
+    if (at_output == NULL ||
+        !minic_machine_gnu_asm_preflight(&function, &policy) ||
+        !minic_machine_gnu_asm_emit_body(at_output, &function, &policy) ||
+        !verify_output(at_output,
+            ".Lmir_entry_address:\n"
+            ".Lmir_before_jump:\n"
+            "\tb .Lminic_mir_mir_probe_1\n"
+            ".Lminic_mir_mir_probe_1:\n"
+            ".Lmir_exit_address:\n"
+            "\tret\n"
+            "\t.pushsection __jump_table,\"aw\",@progbits\n"
+            "\t.long .Lmir_entry_address - .\n"
+            "\t.popsection\n")) goto done;
+    policy.section_type_marker = (MinicMachineGNUSectionTypeMarker)2U;
+    if (minic_machine_gnu_asm_preflight(&function, &policy)) goto done;
+    policy.section_type_marker = MINIC_MACHINE_GNU_SECTION_TYPE_PERCENT;
 
     rejected = probe_stream();
     if (rejected == NULL) goto done;
@@ -366,6 +388,7 @@ int main(void) {
     success = true;
 done:
     if (output != NULL) fclose(output);
+    if (at_output != NULL) fclose(at_output);
     if (rejected != NULL) fclose(rejected);
     if (accepted != NULL) fclose(accepted);
     if (accepted_typed != NULL) fclose(accepted_typed);

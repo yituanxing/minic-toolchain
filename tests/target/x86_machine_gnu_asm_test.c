@@ -397,6 +397,7 @@ int main(void) {
         MINIC_TARGET_CALL_MS_X64_FIXED_SCALAR;
     assert(target->data_layout != NULL);
     assert(minic_x86_64_machine_gnu_asm_policy(target,&policy));
+    assert(policy.section_type_marker==MINIC_MACHINE_GNU_SECTION_TYPE_AT);
     for (unsigned int opcode=1U; opcode<MINIC_X86_MI_LAST; ++opcode) {
         MinicMachineOpcodeContract contract={0};
         assert(minic_x86_64_machine_opcode_info(opcode)!=NULL);

@@ -118,7 +118,7 @@ static bool machine_emit_data_reference(FILE *output,
 }
 
 static bool machine_emit_directive(FILE *output,
-    const MinicMachineFunction *function,
+    const MinicMachineGNUAsmPolicy *policy,
     const MinicMachineInstruction *instruction,
     const MinicMachineGNUAsmLabels *labels) {
     const MinicMachineDirective *directive = instruction->directive;
@@ -126,8 +126,9 @@ static bool machine_emit_directive(FILE *output,
     if (directive->kind == MINIC_MACHINE_DIRECTIVE_PUSH_SECTION) {
         char flags[5];
         size_t count = 0U;
-        char type_marker = function->architecture == MINIC_TARGET_ARCH_AARCH64
-            ? '%' : '@';
+        const char type_marker =
+            policy->section_type_marker == MINIC_MACHINE_GNU_SECTION_TYPE_PERCENT
+                ? '%' : '@';
         if (directive->section_flags & MINIC_MACHINE_SECTION_ALLOC)
             flags[count++] = 'a';
         if (directive->section_flags & MINIC_MACHINE_SECTION_WRITE)
@@ -193,6 +194,8 @@ static bool machine_gnu_asm_prepare(const MinicMachineFunction *function,
     const MinicMachineGNUAsmPolicy *policy, MachineOwnedLabels *owned) {
     size_t i;
     if (function == NULL || policy == NULL || policy->emit_selected == NULL ||
+        (policy->section_type_marker != MINIC_MACHINE_GNU_SECTION_TYPE_AT &&
+         policy->section_type_marker != MINIC_MACHINE_GNU_SECTION_TYPE_PERCENT) ||
         !minic_machine_function_verify(function, &policy->verify) ||
         !machine_owned_labels_initialize(owned, function)) return false;
     if (policy->emit_source_asm == NULL) {
@@ -252,7 +255,7 @@ bool minic_machine_gnu_asm_emit_body(FILE *output,
                 continue;
             }
             if (instruction->kind == MINIC_MACHINE_INSTRUCTION_DIRECTIVE) {
-                if (!machine_emit_directive(output, function, instruction,
+                if (!machine_emit_directive(output, policy, instruction,
                                             &view)) goto done;
                 continue;
             }

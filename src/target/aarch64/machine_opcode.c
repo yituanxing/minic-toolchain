@@ -971,6 +971,7 @@ static bool a64_selected_source_asm(const MinicMachineFunction *function,
 bool minic_aarch64_machine_opcode_initialize(
     const MinicTargetInfo *target, MinicMachineGNUAsmPolicy *destination) {
     static const MinicMachineGNUAsmPolicy policy = {
+        .section_type_marker = MINIC_MACHINE_GNU_SECTION_TYPE_PERCENT,
         .verify = {
             .lookup_opcode = a64_lookup,
             .validate_generated_features = a64_features,

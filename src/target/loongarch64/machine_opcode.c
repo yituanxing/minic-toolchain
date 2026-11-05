@@ -766,6 +766,7 @@ static bool loong_serialize(FILE *out, const MinicMachineFunction *function,
 bool minic_loongarch64_machine_opcode_initialize(
     const MinicTargetInfo *target, MinicMachineGNUAsmPolicy *destination) {
     static const MinicMachineGNUAsmPolicy policy = {
+        .section_type_marker = MINIC_MACHINE_GNU_SECTION_TYPE_AT,
         .verify = {
             .lookup_opcode = loong_lookup,
             .validate_generated_features = loong_features,

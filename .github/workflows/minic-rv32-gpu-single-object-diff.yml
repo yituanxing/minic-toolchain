@@ -441,6 +441,7 @@ jobs:
               RV32I_QEMU_TIMEOUT_SECONDS=120 \
               bash tools/ci/linux-rv32i-qemu-p0-v1.sh >"$ev/$mode.log" 2>&1
           }
+          pristine_failures=0
           for mode in pristine-manual pristine-kbuild; do
             cp "$root/$mode-virtio.o" "$out/drivers/virtio/virtio.o"
             cp "$root/gnu-virtio_pci_modern_dev.o" "$out/drivers/virtio/virtio_pci_modern_dev.o"
@@ -464,6 +465,7 @@ jobs:
               result=PASS
             else
               result=FAIL
+              pristine_failures=$((pristine_failures + 1))
               tail -n 80 "$ev/$mode.log" || true
             fi
             echo "RV32_GPU_CURRENT_PRISTINE_MODE=$mode GPU=$result" | tee -a "$ev/pristine-results.txt"
@@ -472,8 +474,14 @@ jobs:
                 | tail -n 45 >"$ev/$mode.gpu-tail" || true
             fi
           done
-          echo 'RV32_GPU_PRISTINE=COMPLETE original_source=true current_minic=true manual_and_exact_Kbuild_flags_separate=true frozen_1740_GNU_other_objects=true 2_GPU_oracles=true diagnostic_not_P2=true'
           cat "$ev/pristine-results.txt"
+          # Both *current* uninstrumented C paths are a non-regression gate.
+          # A frozen Oct31 failed object is historical negative evidence only.
+          if ((pristine_failures != 0)); then
+            echo "RV32_GPU_CURRENT_PRISTINE_GATE=FAIL failures=$pristine_failures manual_and_Kbuild_required=true" | tee -a "$ev/pristine-results.txt"
+            exit 8
+          fi
+          echo 'RV32_GPU_CURRENT_PRISTINE_GATE=PASS manual_and_Kbuild_required=true same_original_source=true exact_Kbuild_flags=true frozen_1740_GNU_objects=true two_QEMU_GPU_oracles=true diagnostic_not_full_P2=true' | tee -a "$ev/pristine-results.txt"
       - name: Preserve exact swap and guest evidence
         if: always()
         uses: actions/upload-artifact@v4

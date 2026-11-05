@@ -149,6 +149,7 @@ static bool run_a64(void) {
     target.architecture = MINIC_TARGET_ARCH_AARCH64;
     target.data_layout = minic_aarch64_linux_data_layout();
     CHECK(minic_aarch64_machine_gnu_asm_policy_initialize(&target, &policy));
+    CHECK(policy.section_type_marker == MINIC_MACHINE_GNU_SECTION_TYPE_PERCENT);
     CHECK(minic_machine_function_initialize(&function, &target, "a64_probe",
         MINIC_A64_MACHINE_FEATURE_BASE | MINIC_A64_MACHINE_FEATURE_FP_SIMD));
     function.frame_alignment = 16U;
@@ -273,6 +274,7 @@ static bool run_loong(void) {
     target.architecture = MINIC_TARGET_ARCH_LOONGARCH64;
     target.data_layout = minic_loongarch64_linux_data_layout();
     CHECK(minic_loongarch64_machine_gnu_asm_policy_initialize(&target, &policy));
+    CHECK(policy.section_type_marker == MINIC_MACHINE_GNU_SECTION_TYPE_AT);
     CHECK(minic_machine_function_initialize(&function, &target, "loong_probe",
         MINIC_LOONG_MACHINE_FEATURE_BASE | MINIC_LOONG_MACHINE_FEATURE_FP));
     function.frame_alignment = 16U;

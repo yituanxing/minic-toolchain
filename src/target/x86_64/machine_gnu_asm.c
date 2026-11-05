@@ -1217,6 +1217,7 @@ bool minic_x86_64_machine_gnu_asm_policy(const MinicTargetInfo *target,
     MinicMachineGNUAsmPolicy *out) {
     if (target == NULL || target->architecture != MINIC_TARGET_ARCH_X86_64 ||
         out == NULL) return false;
+    out->section_type_marker=MINIC_MACHINE_GNU_SECTION_TYPE_AT;
     out->verify.lookup_opcode=minic_x86_64_machine_opcode_lookup;
     out->verify.validate_selected_instruction=
         minic_x86_64_machine_validate_selected;
