@@ -40,7 +40,10 @@ emulations = {
 lines = []
 for arch, emulation in emulations.items():
     pattern = (r'\{"' + re.escape(emulation) +
-               r'"[^{}]*?4096U,\s*'
+               # Numeric Target ABI/alignment fields may be inserted between
+               # page_size and the capability booleans. Keep reading the
+               # actual gates, without freezing positional field counts.
+               r'"[^{}]*?4096U,\s*(?:\d+U,\s*)*'
                r'(true|false),\s*(true|false),\s*'
                r'(true|false),\s*(true|false),')
     match = re.search(pattern, source, re.S)
